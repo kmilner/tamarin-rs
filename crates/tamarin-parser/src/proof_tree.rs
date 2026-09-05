@@ -30,34 +30,8 @@
 //! it does in HS.
 
 use crate::ast::{ParsedMethod, ParsedProofTree};
-use crate::lexer::{is_ident_char, Lexer, Pos};
+use crate::lexer::{is_ident_char, Lexer};
 use crate::parser::{Message, ParseError, Parser};
-
-#[derive(Debug, Clone)]
-pub struct ProofTreeParseError {
-    pub offset: usize,
-    pub line: u32,
-    pub col: u32,
-    pub msg: String,
-    inner: Option<ParseError>,
-}
-
-impl std::fmt::Display for ProofTreeParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "proof-tree parse error at line {} col {}: {}",
-            self.line, self.col, self.msg
-        )
-    }
-}
-impl std::error::Error for ProofTreeParseError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.inner
-            .as_ref()
-            .map(|error| error as &(dyn std::error::Error + 'static))
-    }
-}
 
 /// Parse the raw skeleton text into a [`ParsedProofTree`]. Returns `Err` if
 /// the complete token stream does not conform to the HS grammar.
@@ -69,7 +43,7 @@ impl std::error::Error for ProofTreeParseError {
 pub fn parse_proof_tree<'a>(
     raw: &'a str,
     parent: &'a Parser<'a>,
-) -> Result<ParsedProofTree, ProofTreeParseError> {
+) -> Result<ParsedProofTree, ParseError> {
     let mut p = TreeParser {
         lx: Lexer::new(raw),
         parent,
@@ -89,7 +63,7 @@ pub fn parse_proof_tree<'a>(
 pub(crate) fn validate_diff_proof_tree<'a>(
     raw: &'a str,
     parent: &'a Parser<'a>,
-) -> Result<(), ProofTreeParseError> {
+) -> Result<(), ParseError> {
     let mut p = TreeParser {
         lx: Lexer::new(raw),
         parent,
@@ -108,31 +82,12 @@ struct TreeParser<'a> {
 }
 
 impl<'a> TreeParser<'a> {
-    fn err(&self, msg: impl Into<String>) -> ProofTreeParseError {
-        let pos = self.lx.pos();
-        ProofTreeParseError {
-            offset: pos.offset,
-            line: pos.line,
-            col: pos.col,
-            msg: msg.into(),
-            inner: None,
-        }
-    }
-
-    fn nested_error(&self, error: ParseError, base: Pos) -> ProofTreeParseError {
-        let error = error.shifted(base.offset, self.lx.src());
-        let (line, col) = error.line_column();
-        ProofTreeParseError {
-            offset: error.span().start as usize,
-            line,
-            col,
-            msg: format!("in solve( ... ): {}", error.diagnostic_message()),
-            inner: Some(error),
-        }
+    fn err(&self, msg: impl Into<String>) -> ParseError {
+        ParseError::at(self.lx.pos(), vec![Message::Message(msg.into())])
     }
 
     /// HS `proofSkeleton` (Theory/Text/Parser/Proof.hs:98-115).
-    fn proof_skeleton(&mut self) -> Result<ParsedProofTree, ProofTreeParseError> {
+    fn proof_skeleton(&mut self) -> Result<ParsedProofTree, ParseError> {
         self.lx.skip_ws();
         // solvedProof: `SOLVED`
         if self.try_kw("SOLVED") {
@@ -188,7 +143,7 @@ impl<'a> TreeParser<'a> {
 
     /// HS `oneCase` (Theory/Text/Parser/Proof.hs:98-115, see line 115):
     ///   `(,) <$> ("case" *> identifier) <*> proofSkeleton`
-    fn one_case(&mut self) -> Result<(String, ParsedProofTree), ProofTreeParseError> {
+    fn one_case(&mut self) -> Result<(String, ParsedProofTree), ParseError> {
         self.require_kw("case")?;
         let name = self.identifier_extended()?;
         let sub = self.proof_skeleton()?;
@@ -196,7 +151,7 @@ impl<'a> TreeParser<'a> {
     }
 
     /// HS `proofMethod` (Theory/Text/Parser/Proof.hs:76-85).
-    fn proof_method(&mut self) -> Result<ParsedMethod, ProofTreeParseError> {
+    fn proof_method(&mut self) -> Result<ParsedMethod, ParseError> {
         self.lx.skip_ws();
         if self.try_kw("sorry") {
             return Ok(ParsedMethod::Sorry);
@@ -230,7 +185,7 @@ impl<'a> TreeParser<'a> {
             self.lx.skip_ws();
             let start = self.lx.pos();
             let (spec, len) = crate::parser::parse_parens_goal(self.lx.rest(), self.parent)
-                .map_err(|error| self.nested_error(error, start))?;
+                .map_err(|error| error.shifted(start, self.lx.src()))?;
             let end = start.offset + len;
             while self.lx.pos().offset < end {
                 self.lx.bump();
@@ -243,7 +198,7 @@ impl<'a> TreeParser<'a> {
     }
 
     /// HS `diffProofSkeleton` (Theory/Text/Parser/Proof.hs:128-144).
-    fn diff_proof_skeleton(&mut self) -> Result<(), ProofTreeParseError> {
+    fn diff_proof_skeleton(&mut self) -> Result<(), ParseError> {
         self.lx.skip_ws();
         if self.try_kw("MIRRORED") {
             return Ok(());
@@ -265,7 +220,7 @@ impl<'a> TreeParser<'a> {
         self.diff_proof_skeleton()
     }
 
-    fn diff_one_case(&mut self) -> Result<(), ProofTreeParseError> {
+    fn diff_one_case(&mut self) -> Result<(), ParseError> {
         self.require_kw("case")?;
         self.identifier_extended()?;
         self.diff_proof_skeleton()
@@ -273,7 +228,7 @@ impl<'a> TreeParser<'a> {
 
     /// HS `diffProofMethod` (Theory/Text/Parser/Proof.hs:118-126). A `step`
     /// wraps one ordinary proof method, not an ordinary proof skeleton.
-    fn diff_proof_method(&mut self) -> Result<(), ProofTreeParseError> {
+    fn diff_proof_method(&mut self) -> Result<(), ParseError> {
         self.lx.skip_ws();
         if self.try_kw("sorry")
             || self.try_kw("rule-equivalence")
@@ -309,7 +264,7 @@ impl<'a> TreeParser<'a> {
         self.lx.peek_symbol(kw)
     }
 
-    fn require_kw(&mut self, kw: &str) -> Result<(), ProofTreeParseError> {
+    fn require_kw(&mut self, kw: &str) -> Result<(), ParseError> {
         if self.try_kw(kw) {
             Ok(())
         } else {
@@ -320,7 +275,7 @@ impl<'a> TreeParser<'a> {
     /// Identifier with extended chars: HS's `identifier` accepts
     /// alphanum + `_` (Token.hs:214-230, see line 224 `identLetter = alphaNum <|> oneOf "_"`)
     /// and emits names like `Server_ReceiveOTP_NewSession_case_1`.
-    fn identifier_extended(&mut self) -> Result<String, ProofTreeParseError> {
+    fn identifier_extended(&mut self) -> Result<String, ParseError> {
         self.lx.skip_ws();
         let mut s = String::new();
         match self.lx.peek() {
@@ -340,17 +295,6 @@ impl<'a> TreeParser<'a> {
         }
         self.lx.skip_ws();
         Ok(s)
-    }
-}
-
-impl ProofTreeParseError {
-    pub(crate) fn into_parse_error(self, base_offset: usize, source: &str) -> ParseError {
-        if let Some(error) = self.inner {
-            return error.shifted(base_offset, source);
-        }
-        let offset = base_offset.saturating_add(self.offset);
-        let (line, col) = crate::parse_error::line_column(source, offset);
-        ParseError::at(Pos { offset, line, col }, vec![Message::Message(self.msg)])
     }
 }
 

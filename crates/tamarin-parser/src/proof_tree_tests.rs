@@ -408,7 +408,8 @@ fn nested_case_block() {
 fn unparseable_goal_fails_the_tree_parse() {
     let error = parse_proof_tree("solve( garbage_no_marker ) by sorry", &bare_parser())
         .expect_err("invalid nested goal must fail");
-    assert!(std::error::Error::source(&error).is_some());
+    assert!(error.span().start > 0);
+    assert_eq!(error.line_column().0, 1);
 }
 
 /// HS `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) is an `asum` of seven

@@ -1,5 +1,7 @@
 //! Diagnostics for signature-driven function application parsing.
 
+mod common;
+
 use tamarin_parser::{parse_theory, ParseErrorKind};
 
 #[track_caller]
@@ -12,7 +14,7 @@ fn assert_undeclared(source: &str, name: &str, line_column: (u32, u32)) {
         }
     );
     assert_eq!(error.line_column(), line_column);
-    assert_eq!(&source[error.span().as_range()], name);
+    common::assert_span(&error, source, name);
 }
 
 #[track_caller]
@@ -33,7 +35,7 @@ fn assert_wrong_arity(
         }
     );
     assert_eq!(error.line_column(), line_column);
-    assert_eq!(&source[error.span().as_range()], name);
+    common::assert_span(&error, source, name);
 }
 
 #[test]
@@ -75,7 +77,7 @@ fn nested_wrong_arity_keeps_the_inner_application_span() {
             used: 1,
         }
     );
-    assert_eq!(&source[error.span().as_range()], "g");
+    common::assert_span(&error, source, "g");
 }
 
 #[test]
@@ -86,7 +88,7 @@ fn nested_reserved_builtin_keeps_the_inner_application_span() {
         error.kind(),
         ParseErrorKind::ReservedBuiltin { name, .. } if name == "exp"
     ));
-    assert_eq!(&source[error.span().as_range()], "exp");
+    common::assert_span(&error, source, "exp");
 }
 
 #[test]
@@ -151,5 +153,5 @@ fn equation_reserved_builtin_has_a_semantic_error() {
         error.kind(),
         ParseErrorKind::ReservedBuiltin { name, .. } if name == "exp"
     ));
-    assert_eq!(&source[error.span().as_range()], "exp");
+    common::assert_span(&error, source, "exp");
 }

@@ -2187,7 +2187,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let parsed = match tamarin_parser::parse_theory_with_base(&src, &parser_flags, base_dir) {
             Ok(thy) => thy,
             Err(e) => {
-                report_parser_error(e.with_source(in_file.clone()));
+                report_parser_error(e, in_file, &src);
                 return Ok(1);
             }
         };
@@ -2724,22 +2724,31 @@ fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {
 }
 
 /// Render the parser's semantic diagnostic with source-labelled spans.
-fn report_parser_error(err: tamarin_parser::ParseError) {
+fn report_parser_error(err: tamarin_parser::ParseError, root_name: &str, root_source: &str) {
     use codespan_reporting::term::termcolor::{ColorChoice, StandardStream};
+    use std::io::{IsTerminal, Write};
 
-    let writer = StandardStream::stderr(ColorChoice::Auto);
-    emit_parser_error(&mut writer.lock(), &err).expect("write parser diagnostic");
+    let color = if std::io::stderr().is_terminal() {
+        ColorChoice::Auto
+    } else {
+        ColorChoice::Never
+    };
+    let writer = StandardStream::stderr(color);
+    let mut writer = writer.lock();
+    if emit_parser_error(&mut writer, &err, root_name, root_source).is_err() {
+        let _ = writeln!(
+            writer,
+            "{}",
+            err.render_plain_with_source(root_name, root_source)
+        );
+    }
 }
 
-struct ParserDiagnosticFile<'a> {
-    inner: codespan_reporting::files::SimpleFile<&'a str, &'a str>,
-}
+struct ParserDiagnosticFile<'a>(codespan_reporting::files::SimpleFile<&'a str, &'a str>);
 
 impl<'a> ParserDiagnosticFile<'a> {
     fn new(name: &'a str, source: &'a str) -> Self {
-        Self {
-            inner: codespan_reporting::files::SimpleFile::new(name, source),
-        }
+        Self(codespan_reporting::files::SimpleFile::new(name, source))
     }
 }
 
@@ -2748,79 +2757,76 @@ impl<'a> codespan_reporting::files::Files<'a> for ParserDiagnosticFile<'a> {
     type Name = &'a str;
     type Source = &'a str;
 
-    fn name(&'a self, id: ()) -> Result<Self::Name, codespan_reporting::files::Error> {
-        codespan_reporting::files::Files::name(&self.inner, id)
+    fn name(&'a self, (): ()) -> Result<Self::Name, codespan_reporting::files::Error> {
+        Ok(*self.0.name())
     }
 
-    fn source(&'a self, id: ()) -> Result<Self::Source, codespan_reporting::files::Error> {
-        codespan_reporting::files::Files::source(&self.inner, id)
+    fn source(&'a self, (): ()) -> Result<Self::Source, codespan_reporting::files::Error> {
+        Ok(*self.0.source())
     }
 
     fn line_index(
         &'a self,
-        id: (),
+        (): (),
         byte_index: usize,
     ) -> Result<usize, codespan_reporting::files::Error> {
-        codespan_reporting::files::Files::line_index(&self.inner, id, byte_index)
+        codespan_reporting::files::Files::line_index(&self.0, (), byte_index)
     }
 
     fn line_range(
         &'a self,
-        id: (),
+        (): (),
         line_index: usize,
     ) -> Result<std::ops::Range<usize>, codespan_reporting::files::Error> {
-        codespan_reporting::files::Files::line_range(&self.inner, id, line_index)
+        codespan_reporting::files::Files::line_range(&self.0, (), line_index)
     }
 
     fn column_number(
         &'a self,
-        id: (),
+        (): (),
         line_index: usize,
         byte_index: usize,
     ) -> Result<usize, codespan_reporting::files::Error> {
-        let source = codespan_reporting::files::Files::source(&self.inner, id)?;
-        let line = codespan_reporting::files::Files::line_range(&self.inner, id, line_index)?;
-        let mut column = 1usize;
-        for ch in source[line.start..byte_index.clamp(line.start, line.end)].chars() {
-            if ch == '\t' {
-                column += 8 - ((column - 1) % 8);
-            } else {
-                column += 1;
-            }
-        }
-        Ok(column)
+        let line = self.line_range((), line_index)?;
+        let source = *self.0.source();
+        let offset = byte_index.clamp(line.start, line.end);
+        Ok(
+            tamarin_parser::parse_error::line_column(&source[line.clone()], offset - line.start).1
+                as usize,
+        )
     }
 }
 
 fn emit_parser_error(
     writer: &mut impl codespan_reporting::term::termcolor::WriteColor,
     err: &tamarin_parser::ParseError,
+    root_name: &str,
+    root_source: &str,
 ) -> Result<(), codespan_reporting::files::Error> {
     use codespan_reporting::diagnostic::{Diagnostic, Label};
     use codespan_reporting::term;
 
-    let source_name = err.source_name().unwrap_or("<input>");
-    let source_text = err.source_text().unwrap_or("");
+    let source_name = err.source_name().unwrap_or(root_name);
+    let source_text = err.source_text().unwrap_or(root_source);
+    let mut diagnostic_labels = err.diagnostic_labels_with_source(root_source).into_iter();
+    let primary = diagnostic_labels
+        .next()
+        .expect("parser diagnostics have a primary label");
     let files = ParserDiagnosticFile::new(source_name, source_text);
     let file_id = ();
-    let labels = err
-        .diagnostic_labels()
-        .into_iter()
-        .map(|label| {
-            let range = label.span.as_range();
-            if label.primary {
-                Label::primary(file_id, range).with_message(label.message)
-            } else {
-                Label::secondary(file_id, range).with_message(label.message)
-            }
-        })
+    let message = primary.message;
+    let labels = std::iter::once(Label::primary(file_id, primary.span))
+        .chain(
+            diagnostic_labels
+                .map(|label| Label::secondary(file_id, label.span).with_message(label.message)),
+        )
         .collect();
     let diagnostic = Diagnostic::error()
-        .with_message(err.diagnostic_message())
+        .with_message(message)
         .with_labels(labels)
         .with_notes(err.diagnostic_notes());
     let config = term::Config {
-        tab_width: 8,
+        tab_width: tamarin_parser::parse_error::PARSEC_TAB_WIDTH as usize,
         ..term::Config::default()
     };
     term::emit_to_write_style(writer, &config, &files, &diagnostic)
@@ -2853,10 +2859,11 @@ mod tests {
             .expect_err("unknown builtin must fail")
             .with_source("bad.spthy");
         let mut buffer = Buffer::no_color();
-        emit_parser_error(&mut buffer, &error).expect("render diagnostic");
+        emit_parser_error(&mut buffer, &error, "bad.spthy", source).expect("render diagnostic");
         let rendered = std::str::from_utf8(buffer.as_slice()).expect("UTF-8 diagnostic");
 
         assert!(rendered.contains("error: Unknown builtin `hasing`"));
+        assert_eq!(rendered.matches("Unknown builtin `hasing`").count(), 1);
         assert!(rendered.contains("bad.spthy:2:11"));
         assert!(rendered.contains("hasing"));
     }
@@ -2870,7 +2877,7 @@ mod tests {
             .expect_err("unknown item must fail")
             .with_source("bad.spthy");
         let mut buffer = Buffer::no_color();
-        emit_parser_error(&mut buffer, &error).expect("render diagnostic");
+        emit_parser_error(&mut buffer, &error, "bad.spthy", source).expect("render diagnostic");
         let rendered = std::str::from_utf8(buffer.as_slice()).expect("UTF-8 diagnostic");
 
         assert!(rendered.contains("bad.spthy:2:9"), "{rendered}");

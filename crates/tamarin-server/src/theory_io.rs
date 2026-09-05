@@ -76,7 +76,7 @@ pub(crate) fn load_from_source(
         _ => None,
     };
     let parsed = parse_theory_with_base(src, &flags, base_dir)
-        .map_err(|e| LoadError::Parse(e.with_source(source_name).render_plain()))?;
+        .map_err(|e| LoadError::Parse(e.render_plain_with_source(&source_name, src)))?;
 
     // HS lifecycle markers, stderr via `traceM`: "Theory loaded" right
     // after parsing (TheoryLoader.hs:449-452, see line 451).

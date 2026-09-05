@@ -53,11 +53,7 @@ fn duplicate_rule_prints_a_diagnostic_and_exits_1() {
          end\n",
     );
     assert_eq!(code, 1);
-    assert!(
-        stderr.contains("error: Conflicting rule")
-            && stderr.contains("`R1` was already declared incompatibly"),
-        "unexpected stderr:\n{stderr}"
-    );
+    common::assert_diagnostic(&stderr, &["error: Conflicting rule", "duplicate rule: R1"]);
 }
 
 /// An identical duplicate loads with exit 0 and renders BOTH copies.

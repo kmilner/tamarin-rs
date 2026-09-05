@@ -56,10 +56,6 @@ impl<'a> Lexer<'a> {
         self.pos.offset >= self.src.len()
     }
 
-    pub fn line_col(&self) -> (u32, u32) {
-        (self.pos.line, self.pos.col)
-    }
-
     /// Peek the next char without advancing.
     pub fn peek(&self) -> Option<char> {
         self.rest().chars().next()
@@ -86,14 +82,7 @@ impl<'a> Lexer<'a> {
         let c = self.peek()?;
         let len = c.len_utf8();
         self.pos.offset += len;
-        match c {
-            '\n' => {
-                self.pos.line += 1;
-                self.pos.col = 1;
-            }
-            '\t' => self.pos.col += 8 - ((self.pos.col - 1) % 8),
-            _ => self.pos.col += 1,
-        }
+        crate::parse_error::advance_line_column(&mut self.pos.line, &mut self.pos.col, c);
         Some(c)
     }
 
@@ -241,6 +230,10 @@ impl<'a> Lexer<'a> {
     /// keyword/symbol (HS `diffOp = symbol "diff" *> parens ...`,
     /// Parser/Term.hs:123-125).
     pub fn identifier(&mut self) -> Option<String> {
+        self.identifier_spanned().map(|(identifier, _)| identifier)
+    }
+
+    pub(crate) fn identifier_spanned(&mut self) -> Option<(String, Pos)> {
         self.skip_ws();
         let save = self.pos;
         let mut s = String::new();
@@ -267,7 +260,7 @@ impl<'a> Lexer<'a> {
             return None;
         }
         self.skip_ws();
-        Some(s)
+        Some((s, save))
     }
 
     /// Peek an identifier without consuming.
@@ -360,7 +353,7 @@ impl<'a> Lexer<'a> {
 
     /// Parse a string literal and also return its exact half-open source range,
     /// including the quotes but excluding trailing whitespace.
-    pub fn string_literal_spanned(&mut self) -> Option<(String, std::ops::Range<usize>)> {
+    pub(crate) fn string_literal_spanned(&mut self) -> Option<(String, std::ops::Range<usize>)> {
         self.quoted_spanned(Self::string_escape)
     }
 

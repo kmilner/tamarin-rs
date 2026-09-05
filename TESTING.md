@@ -140,20 +140,28 @@ but none of them proves.
 
 ### Parser-error diagnostics
 
-Parser failures intentionally do not preserve Haskell's parsec/GHC exception
-text. The parser classifies known failures (for example unknown applications,
-wrong arity, reserved names, malformed attributes and include errors), records
-compact byte spans, and attaches source text only when parsing returns an
-error. Batch mode renders these with `codespan-reporting`; the web loader uses
-the same message, labels and notes in a plain-text form. An error inside an
-included file must retain that file's path and contents rather than being
-relabeled as the root theory.
+Rust's user-facing parser diagnostics intentionally do not reproduce Haskell's
+parsec/GHC exception text. The compact error still retains legacy parsec state
+for its compatibility `Display` implementation and GHC call-site metadata for
+oracle inspection. Batch and web surfaces instead render semantic failure
+classifications (for example unknown applications, wrong arity, reserved names,
+malformed attributes and include errors) with compact byte spans. They borrow
+the root source rather than copying the whole input into each error value. An
+error inside an included file retains that file's path and contents, because
+the root source cannot render its labels correctly.
+
+Unknown names in a `builtins:` block are rejected. This intentionally follows
+the upstream builtin table rather than the port's former accept-and-ignore
+fallback, so a Tamarin submodule update that adds a builtin must update the
+Rust table and its parser tests in the same change.
 
 The focused regression suites are:
 
 ```bash
 cargo test -p tamarin-parser --test structured_errors --test lookup_arity_errors
 cargo test -p tamarin-prover parser_diagnostic_ --lib
+cargo test -p tamarin-server theory_io::tests::web_parse_diagnostics_have_an_independent_response_limit --lib
+cargo test -p tamarin-server --test routes_upload
 ```
 
 The parity gates still require matching acceptance, exit status, and successful

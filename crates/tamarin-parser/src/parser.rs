@@ -25,7 +25,10 @@ use tamarin_term::maude_sig::{
 
 use crate::ast::*;
 use crate::lexer::{is_ident_char, is_reserved_name, Lexer, Pos};
-use crate::parse_error::{DiagnosticSource, ParseContext, ParseErrorKind, Span};
+use crate::parse_error::{
+    bound_owned_text, bounded_diagnostic_text, DiagnosticInfo, IllegalDiffReason, ParseContext,
+    ParseErrorKind, MAX_DIAGNOSTIC_MESSAGE_CHARS, MAX_DIAGNOSTIC_NAME_CHARS,
+};
 use crate::proof_tree::{parse_proof_tree, validate_diff_proof_tree};
 
 // =============================================================================
@@ -41,7 +44,8 @@ use crate::proof_tree::{parse_proof_tree, validate_diff_proof_tree};
 /// `SysUnExpect`=0 … `Message`=3), and `errorMessages = sort msgs` stable-sorts
 /// by that rank before rendering, so the groups always appear in this order.
 #[derive(Debug, Clone)]
-pub enum Message {
+#[allow(clippy::enum_variant_names)] // Names mirror Parsec's constructors exactly.
+pub(crate) enum Message {
     /// Library-generated "unexpected" (parsec `SysUnExpect`): the token found
     /// where the grammar could not continue.  Rendered `unexpected <tok>`, or
     /// `unexpected end of input` when the string is empty.
@@ -55,6 +59,21 @@ pub enum Message {
 }
 
 impl Message {
+    fn bound(&mut self) {
+        let text = match self {
+            Self::SysUnExpect(text)
+            | Self::UnExpect(text)
+            | Self::Expect(text)
+            | Self::Message(text) => text,
+        };
+        bound_owned_text(text, MAX_DIAGNOSTIC_MESSAGE_CHARS);
+    }
+
+    fn bounded(mut self) -> Self {
+        self.bound();
+        self
+    }
+
     /// parsec `fromEnum :: Message -> Int` (`Text.Parsec.Error`).
     fn rank(&self) -> u8 {
         match self {
@@ -75,6 +94,64 @@ impl Message {
     }
 }
 
+const MAX_DIAGNOSTIC_MESSAGES: usize = 64;
+const OMITTED_MESSAGES: &str = "additional parser messages omitted";
+
+fn replaceable_message(messages: &[Message]) -> Option<usize> {
+    messages
+        .iter()
+        .rposition(|message| matches!(message, Message::Expect(_)))
+        .or_else(|| {
+            messages
+                .iter()
+                .rposition(|message| matches!(message, Message::SysUnExpect(_)))
+        })
+        .or_else(|| {
+            messages
+                .iter()
+                .rposition(|message| matches!(message, Message::UnExpect(_)))
+        })
+        .or_else(|| {
+            messages
+                .iter()
+                .rposition(|message| matches!(message, Message::Message(_)))
+        })
+}
+
+fn insert_bounded_message(
+    messages: &mut Vec<Message>,
+    messages_truncated: &mut bool,
+    index: usize,
+    message: Message,
+) {
+    let message = message.bounded();
+    if messages.len() < MAX_DIAGNOSTIC_MESSAGES {
+        messages.insert(index.min(messages.len()), message);
+        return;
+    }
+
+    *messages_truncated = true;
+    if matches!(message, Message::Expect(_)) {
+        return;
+    }
+
+    // Preserve non-expectation failures, which generally carry the useful
+    // cause, by displacing the least useful retained message.
+    if let Some(position) = replaceable_message(messages) {
+        messages.remove(position);
+        messages.insert(index.min(messages.len()), message);
+    }
+}
+
+fn push_bounded_message(
+    messages: &mut Vec<Message>,
+    messages_truncated: &mut bool,
+    message: Message,
+) {
+    let index = messages.len();
+    insert_bounded_message(messages, messages_truncated, index, message);
+}
+
 /// One of the GHC `error` calls the HS parser raises from inside a parser
 /// action, e.g. `macro`'s two rejections (Theory/Text/Parser/Macro.hs:34-38).
 ///
@@ -85,7 +162,8 @@ impl Message {
 /// `displayException` (the message plus the `HasCallStack` frame) and exits 1.
 #[derive(Debug, Clone)]
 pub struct GhcError {
-    /// The string the `error` call is applied to.
+    /// A diagnostic excerpt of the string the `error` call is applied to.
+    /// Values longer than 512 characters end in `…`.
     pub message: String,
     /// The `error, called at <call_site>` location of the `HasCallStack` frame:
     /// `src/<path>:<line>:<column> in <package-id>:<module>`.
@@ -93,9 +171,10 @@ pub struct GhcError {
 }
 
 impl GhcError {
-    /// GHC's `displayException` of the raised `ErrorCall`: the message, then
-    /// the one-frame `HasCallStack` block.  Batch mode's stderr is this text
-    /// prefixed by `tamarin-prover: `.
+    /// GHC's `displayException` shape for the raised `ErrorCall`: the bounded
+    /// message excerpt, then the one-frame `HasCallStack` block. Haskell batch
+    /// mode's stderr is this text prefixed by `tamarin-prover: `; Rust surfaces
+    /// render the structured diagnostic instead.
     pub fn display_exception(&self) -> String {
         format!(
             "{}\nCallStack (from HasCallStack):\n  error, called at {}",
@@ -114,9 +193,12 @@ impl std::fmt::Display for GhcError {
 
 /// A parser failure with a compact semantic classification and source span.
 ///
-/// The source position and [`Message`] list retain the old parsec-compatible
-/// representation for internal error merging and compatibility callers. The
-/// [`Display`] implementation therefore still produces the legacy frame:
+/// Its representation is deliberately opaque: callers should use the
+/// structured accessors such as [`ParseError::kind`], [`ParseError::span`],
+/// and [`ParseError::diagnostic_notes`]. The [`std::fmt::Display`]
+/// implementation still produces the legacy parsec-compatible frame. To keep
+/// diagnostics bounded under hostile input, individual messages longer than
+/// 512 characters and sets larger than 64 messages are abbreviated:
 ///
 /// ```text
 /// "path/file.spthy" (line 2, column 5):
@@ -124,95 +206,64 @@ impl std::fmt::Display for GhcError {
 /// expecting letter or "{*"
 /// ```
 ///
-/// User-facing surfaces use the structured API in `parse_error` instead. Line
-/// and column values for that API are derived from the attached source only
-/// when the diagnostic is rendered.
-#[derive(Debug, Clone)]
+/// User-facing surfaces use the structured API in `parse_error` instead.
+#[derive(Debug)]
 pub struct ParseError {
-    pub line: u32,
-    pub col: u32,
-    pub offset: usize,
+    pub(crate) pos: Pos,
     /// parsec `SourcePos` name (file path printed in the header).  Empty until
     /// a surface injects it, in which case the header omits the quoted name
     /// exactly as parsec's null-name `show SourcePos` branch does.
-    pub source: String,
+    pub(crate) source: String,
     /// Unsorted parsec-style messages; [`Display`] sorts + dedups them exactly
     /// as parsec's `errorMessages` + `showErrorMessages` do.
-    pub messages: Vec<Message>,
-    /// Set when the parse aborted through a GHC `error` raised inside a parser
-    /// action rather than through a parsec failure (see [`GhcError`]).  The
-    /// position then only records where the parser stood, `messages` is empty,
-    /// and [`Display`] renders the raw message instead of a parsec frame.
-    pub ghc_error: Option<GhcError>,
-    pub(crate) kind: ParseErrorKind,
-    pub(crate) span: Span,
-    pub(crate) diagnostic_source: Option<DiagnosticSource>,
+    pub(crate) messages: Vec<Message>,
+    pub(crate) messages_truncated: bool,
+    /// Structured details, including the rare GHC-error payload. Ordinary
+    /// syntax failures leave this unallocated.
+    pub(crate) diagnostic: Option<Box<DiagnosticInfo>>,
 }
 
 impl ParseError {
     /// A parsec failure carrying `messages` at `pos`.
-    pub(crate) fn at(pos: Pos, messages: Vec<Message>) -> ParseError {
-        let custom = messages
-            .iter()
-            .any(|message| matches!(message, Message::Message(_)));
+    pub(crate) fn at(pos: Pos, mut messages: Vec<Message>) -> ParseError {
+        let mut messages_truncated = false;
+        if messages.len() <= MAX_DIAGNOSTIC_MESSAGES {
+            for message in &mut messages {
+                message.bound();
+            }
+        } else {
+            let original = std::mem::take(&mut messages);
+            messages.reserve(MAX_DIAGNOSTIC_MESSAGES);
+            for message in original {
+                push_bounded_message(&mut messages, &mut messages_truncated, message);
+            }
+        }
         ParseError {
-            line: pos.line,
-            col: pos.col,
-            offset: pos.offset,
+            pos,
             source: String::new(),
             messages,
-            ghc_error: None,
-            kind: if custom {
-                ParseErrorKind::Custom
-            } else {
-                ParseErrorKind::Expected {
-                    context: ParseContext::Theory,
-                }
-            },
-            span: Span::point(pos.offset),
-            diagnostic_source: None,
+            messages_truncated,
+            diagnostic: None,
         }
     }
 
-    /// Anchor a semantic diagnostic to the token that caused it. The legacy
-    /// parsec position and messages remain available to compatibility callers.
-    fn with_location(mut self, pos: Pos, len: usize) -> Self {
-        self.span = Span {
-            start: u32::try_from(pos.offset).unwrap_or(u32::MAX),
-            end: u32::try_from(pos.offset.saturating_add(len)).unwrap_or(u32::MAX),
-        };
-        self
+    fn push_message(&mut self, message: Message) {
+        push_bounded_message(&mut self.messages, &mut self.messages_truncated, message);
     }
 
-    /// Add grammar context to an otherwise generic expected-token failure.
-    /// More specific inner parsers win as the error propagates outward.
-    fn with_context(mut self, context: ParseContext) -> Self {
-        if matches!(
-            self.kind,
-            ParseErrorKind::Expected {
-                context: ParseContext::Theory
-            }
-        ) {
-            self.kind = ParseErrorKind::Expected { context };
-        }
-        self
+    fn insert_message(&mut self, index: usize, message: Message) {
+        insert_bounded_message(
+            &mut self.messages,
+            &mut self.messages_truncated,
+            index,
+            message,
+        );
     }
 
-    /// Attach the source-file name parsec prints in the header.  Each surface
-    /// injects the path it knows (batch: the CLI arg; server eager-load: the
-    /// on-disk path; web upload: the uploaded filename) — the same value HS
-    /// passes as `inFile` to `parseString`.
-    pub fn with_source(mut self, name: impl Into<String>) -> Self {
-        let name = name.into();
-        if self.source.is_empty() {
-            self.source = name.clone();
+    fn extend_messages(&mut self, messages: impl IntoIterator<Item = Message>) {
+        for message in messages {
+            self.push_message(message);
         }
-        if let Some(source) = &mut self.diagnostic_source
-            && source.name.is_empty()
-        {
-            source.name = name;
-        }
-        self
     }
 
     /// Port of parsec's `showErrorMessages` (`Text.Parsec.Error`) instantiated
@@ -260,7 +311,12 @@ impl ParseError {
             show_expect.as_str(),
             show_messages.as_str(),
         ]);
-        parts.iter().map(|p| format!("\n{p}")).collect()
+        let mut rendered: String = parts.iter().map(|p| format!("\n{p}")).collect();
+        if self.messages_truncated {
+            rendered.push('\n');
+            rendered.push_str(OMITTED_MESSAGES);
+        }
+        rendered
     }
 }
 
@@ -268,13 +324,13 @@ impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // A GHC `error` never became a parsec `ParseError` in HS, so there is
         // no frame to show — only the message the `error` was applied to.
-        if let Some(g) = &self.ghc_error {
+        if let Some(g) = self.ghc_error() {
             return write!(f, "{g}");
         }
         // Port of parsec `instance Show ParseError` (`show pos ++ ":" ++ …`)
         // and `instance Show SourcePos` (`Text.Parsec.Pos`): the quoted name is
         // omitted when empty, and there is a single space before "(line …".
-        let line_col = format!("(line {}, column {})", self.line, self.col);
+        let line_col = format!("(line {}, column {})", self.pos.line, self.pos.col);
         if self.source.is_empty() {
             write!(f, "{}:{}", line_col, self.show_error_messages())
         } else {
@@ -502,6 +558,10 @@ const TYPEP_EXPECTS: &[&str] = &["\"Any\"", "identifier"];
 /// (node), `%` (nat).
 const SORTED_LVAR_NO_SUFFIX_EXPECTS: &[&str] = &["\"$\"", "\"~\"", "identifier", "\"#\"", "\"%\""];
 
+fn diagnostic_lexeme(text: &str) -> String {
+    bounded_diagnostic_text(text, MAX_DIAGNOSTIC_NAME_CHARS)
+}
+
 // =============================================================================
 // Parser entry points
 // =============================================================================
@@ -513,7 +573,7 @@ const SORTED_LVAR_NO_SUFFIX_EXPECTS: &[&str] = &["\"$\"", "\"~\"", "identifier",
 /// also tolerates.
 pub fn parse_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseError> {
     let mut p = Parser::new(input, flags, false);
-    p.theory().map_err(|e| e.with_input(input))
+    p.theory()
 }
 
 /// Parse a diff theory, enabling both the `diff(a, b)` term and the diff-only
@@ -521,7 +581,7 @@ pub fn parse_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseError> {
 /// `parseOpenDiffTheoryString` (`Theory/Text/Parser.hs:84-86`).
 pub fn parse_diff_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseError> {
     let mut p = Parser::new(input, flags, true);
-    p.theory().map_err(|e| e.with_input(input))
+    p.theory()
 }
 
 /// Like [`parse_theory`], but threads the **including file's directory** so that
@@ -540,7 +600,7 @@ pub fn parse_theory_with_base(
 ) -> Result<Theory, ParseError> {
     let mut p = Parser::new(input, flags, false);
     p.base_dir = base_dir;
-    p.theory().map_err(|e| e.with_input(input))
+    p.theory()
 }
 
 /// Like [`parse_diff_theory`], but resolves includes relative to `base_dir`.
@@ -551,7 +611,7 @@ pub fn parse_diff_theory_with_base(
 ) -> Result<Theory, ParseError> {
     let mut p = Parser::new(input, flags, true);
     p.base_dir = base_dir;
-    p.theory().map_err(|e| e.with_input(input))
+    p.theory()
 }
 
 /// One parser-selected source input and the path it must have when staged
@@ -626,7 +686,7 @@ pub fn parse_intruder_rules(msig: &MaudeSig, input: &str) -> Result<Vec<Rule>, P
         // (Theory/Text/Parser/Rule.hs:156-161, see line 159) — i.e. requires the
         // `rule (modulo AC) name:` head.
         // `parse_rule_ac` enforces the same shape.
-        let r = p.parse_rule_ac().map_err(|e| e.with_input(input))?;
+        let r = p.parse_rule_ac()?;
         rules.push(r);
     }
     Ok(rules)
@@ -1237,23 +1297,12 @@ impl<'a> Parser<'a> {
     }
 
     /// The error value for a GHC `error` raised inside a parser action (see
-    /// [`GhcError`]).  The position is where the parser stood when it aborted —
-    /// HS discards it, since the exception bypasses parsec's error machinery
-    /// altogether, and so does every rendering of this error.
+    /// [`GhcError`]). Haskell and this type's compatibility
+    /// [`std::fmt::Display`] discard the parser position; callers attach the
+    /// relevant token location for structured diagnostics.
     fn err_ghc(&self, message: String, call_site: String) -> ParseError {
-        let mut error = ParseError {
-            ghc_error: Some(GhcError { message, call_site }),
-            ..ParseError::at(self.lx.pos(), Vec::new())
-        };
-        error.set_kind(ParseErrorKind::Abort {
-            message: error
-                .ghc_error
-                .as_ref()
-                .expect("abort error")
-                .message
-                .clone(),
-        });
-        error
+        let message = bounded_diagnostic_text(&message, MAX_DIAGNOSTIC_MESSAGE_CHARS);
+        ParseError::at(self.lx.pos(), Vec::new()).with_ghc_error(GhcError { message, call_site })
     }
 
     /// [`Self::err_fail`] as an enclosing `<?>` label rewrites it.
@@ -1268,8 +1317,16 @@ impl<'a> Parser<'a> {
     /// <msg>`.
     fn err_fail_labelled(&mut self, msg: impl Into<String>, label: &str) -> ParseError {
         let mut e = self.err_fail(msg);
-        e.messages.push(Message::Expect(label.to_string()));
+        e.push_message(Message::Expect(label.to_string()));
         e
+    }
+
+    fn in_context<T>(
+        &mut self,
+        context: ParseContext,
+        parse: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        parse(self).map_err(|error| error.with_context(context))
     }
 
     /// Byte offset just past `name`'s characters for the identifier lexeme
@@ -1333,6 +1390,7 @@ impl<'a> Parser<'a> {
             labels.push(Message::Expect("\".\"".to_string()));
         }
         for name in self.state.ac_fun_syms.iter().rev() {
+            let name = diagnostic_lexeme(name);
             labels.push(Message::Expect(format!("\"{name}\"")));
         }
         if !eqn {
@@ -1408,13 +1466,15 @@ impl<'a> Parser<'a> {
         }
         if saw_letter {
             let pos = self.lx.pos();
-            let item_len = self.lx.src()[start.offset..]
+            let prefix_len = pos.offset - start.offset;
+            let suffix_len = self.lx.src()[pos.offset..]
                 .char_indices()
                 .take_while(|(_, c)| is_ident_char(*c) || *c == '-')
                 .map(|(offset, c)| offset + c.len_utf8())
                 .last()
                 .unwrap_or(0);
-            let item = self.lx.src()[start.offset..start.offset + item_len].to_string();
+            let item_len = prefix_len + suffix_len;
+            let item = diagnostic_lexeme(&self.lx.src()[start.offset..start.offset + item_len]);
             return ParseError::at(
                 pos,
                 vec![
@@ -1438,17 +1498,19 @@ impl<'a> Parser<'a> {
         // ended in a term (a `macros:` body, an equation's right-hand side),
         // the term's own hangovers ([`Parser::term_carry`]) were accumulated
         // even earlier and render first.
-        let mut prefix: Vec<Message> = self.term_carry_labels(e.offset);
+        let mut prefix: Vec<Message> = self.term_carry_labels(e.pos.offset);
         if let Some((at, labels)) = self.item_hangover
-            && at == e.offset
+            && at == e.pos.offset
         {
             prefix.extend(labels.iter().map(|l| Message::Expect((*l).to_string())));
         }
         if !prefix.is_empty() {
-            let mut messages = vec![e.messages.remove(0)];
-            messages.append(&mut prefix);
-            messages.append(&mut e.messages);
-            e.messages = messages;
+            let mut suffix = std::mem::take(&mut e.messages).into_iter();
+            if let Some(unexpected) = suffix.next() {
+                e.push_message(unexpected);
+            }
+            e.extend_messages(prefix);
+            e.extend_messages(suffix);
         }
         e
     }
@@ -1589,11 +1651,6 @@ impl<'a> Parser<'a> {
     }
 
     fn ident(&mut self) -> Result<String, ParseError> {
-        self.ident_inner()
-            .map_err(|error| error.with_context(ParseContext::Identifier))
-    }
-
-    fn ident_inner(&mut self) -> Result<String, ParseError> {
         if let Some(id) = self.lx.identifier() {
             return Ok(id);
         }
@@ -1781,61 +1838,61 @@ impl<'a> Parser<'a> {
 
         // Try keyword-led items in priority order.
         if self.at_keyword("builtins") {
-            return self.builtins();
+            return self.in_context(ParseContext::Builtin, Self::builtins);
         }
         if self.at_keyword("options") {
-            return self.options();
+            return self.in_context(ParseContext::Options, Self::options);
         }
         if self.at_keyword("functions") || self.at_keyword("function") {
-            return self.functions();
+            return self.in_context(ParseContext::FunctionDeclaration, Self::functions);
         }
         if self.at_keyword("equations") {
-            return self.equations();
+            return self.in_context(ParseContext::Equation, Self::equations);
         }
         if self.at_keyword("macros") || self.at_keyword("macro") {
-            return self.macros();
+            return self.in_context(ParseContext::Macro, Self::macros);
         }
         if self.at_keyword("predicates") || self.at_keyword("predicate") {
-            return self.predicates();
+            return self.in_context(ParseContext::Predicate, Self::predicates);
         }
         if self.at_keyword("heuristic") {
-            return self.heuristic();
+            return self.in_context(ParseContext::Heuristic, Self::heuristic);
         }
         if self.at_keyword("tactic") {
-            return self.tactic();
+            return self.in_context(ParseContext::Tactic, Self::tactic);
         }
         if self.at_keyword("restriction") {
-            return self.restriction_item();
+            return self.in_context(ParseContext::Restriction, Self::restriction_item);
         }
         if self.at_keyword("axiom") {
-            return self.legacy_axiom();
+            return self.in_context(ParseContext::Restriction, Self::legacy_axiom);
         }
         if self.at_keyword("rule") {
-            return self.rule_item();
+            return self.in_context(ParseContext::Rule, Self::rule_item);
         }
         if self.at_keyword("lemma") {
-            return self.lemma_item();
+            return self.in_context(ParseContext::Lemma, Self::lemma_item);
         }
         if self.at_keyword("diffLemma") {
-            return self.diff_lemma_item();
+            return self.in_context(ParseContext::Lemma, Self::diff_lemma_item);
         }
         if self.at_keyword("test") {
-            return self.case_test_item();
+            return self.in_context(ParseContext::CaseTest, Self::case_test_item);
         }
         if self.at_keyword("equivLemma") {
-            return self.equiv_lemma(false);
+            return self.in_context(ParseContext::Lemma, |parser| parser.equiv_lemma(false));
         }
         if self.at_keyword("diffEquivLemma") {
-            return self.equiv_lemma(true);
+            return self.in_context(ParseContext::Lemma, |parser| parser.equiv_lemma(true));
         }
         if self.at_keyword("export") {
-            return self.export_item();
+            return self.in_context(ParseContext::Export, Self::export_item);
         }
         if self.at_keyword("process") {
-            return self.toplevel_process();
+            return self.in_context(ParseContext::Process, Self::toplevel_process);
         }
         if self.at_keyword("let") {
-            return self.process_def();
+            return self.in_context(ParseContext::Process, Self::process_def);
         }
 
         // Accountability: `lemma X [accountability_attrs] ...` is matched by lemma_item.
@@ -1945,8 +2002,7 @@ impl<'a> Parser<'a> {
     /// — which threads parser state both ways (signature / known funcs / flags),
     /// matching HS's `getState`/`putState` round-trip and `sig st'` merge.
     fn expand_include(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
-        self.expand_include_inner()
-            .map_err(|error| error.with_context(ParseContext::Include))
+        self.in_context(ParseContext::Include, Self::expand_include_inner)
     }
 
     fn expand_include_inner(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
@@ -2090,11 +2146,6 @@ impl<'a> Parser<'a> {
     // -------------------- Builtins / options / heuristic / tactic --------------------
 
     fn builtins(&mut self) -> Result<TheoryItem, ParseError> {
-        self.builtins_inner()
-            .map_err(|error| error.with_context(ParseContext::Builtin))
-    }
-
-    fn builtins_inner(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("builtins")?;
         self.require_punct(":")?;
         let mut names = Vec::new();
@@ -2102,10 +2153,11 @@ impl<'a> Parser<'a> {
             self.skip_ws();
             let (name, name_start, name_len) = self.hyphen_identifier_spanned()?;
             if !is_builtin_name(&name) {
+                let diagnostic_name = diagnostic_lexeme(&name);
                 return Err(self
-                    .err(format!("unknown builtin `{name}`"))
+                    .err(format!("unknown builtin `{diagnostic_name}`"))
                     .with_kind(ParseErrorKind::UnknownItem {
-                        item: name.clone(),
+                        item: diagnostic_name,
                         context: ParseContext::Builtin,
                     })
                     .with_location(name_start, name_len));
@@ -2730,11 +2782,6 @@ impl<'a> Parser<'a> {
     // -------------------- functions / equations / macros / predicates --------------------
 
     fn functions(&mut self) -> Result<TheoryItem, ParseError> {
-        self.functions_inner()
-            .map_err(|error| error.with_context(ParseContext::FunctionDeclaration))
-    }
-
-    fn functions_inner(&mut self) -> Result<TheoryItem, ParseError> {
         // `functions:` or `function:`
         if !self.try_kw("functions") {
             self.require_kw("function")?;
@@ -2769,13 +2816,12 @@ impl<'a> Parser<'a> {
     fn sep_end_by<T>(
         &mut self,
         opening: Pos,
-        opening_text: &str,
         close: &str,
         elem: impl FnMut(&mut Self) -> Result<T, ParseError>,
     ) -> Result<Vec<T>, ParseError> {
         let close_char = close.chars().next().expect("non-empty closing delimiter");
         self.list_closers.push(close_char);
-        let result = self.sep_end_by_inner(opening, opening_text, close, elem);
+        let result = self.sep_end_by_inner(opening, close, elem);
         self.list_closers.pop();
         result
     }
@@ -2783,7 +2829,6 @@ impl<'a> Parser<'a> {
     fn sep_end_by_inner<T>(
         &mut self,
         opening: Pos,
-        opening_text: &str,
         close: &str,
         mut elem: impl FnMut(&mut Self) -> Result<T, ParseError>,
     ) -> Result<Vec<T>, ParseError> {
@@ -2796,7 +2841,7 @@ impl<'a> Parser<'a> {
                     Ok(value) => v.push(value),
                     Err(mut error) => {
                         if missing_delimiter {
-                            Self::mark_unclosed_delimiter(&mut error, opening, opening_text, close);
+                            Self::mark_unclosed_delimiter(&mut error, opening, close);
                         }
                         return Err(error);
                     }
@@ -2821,7 +2866,7 @@ impl<'a> Parser<'a> {
                 let close_label = format!("\"{close}\"");
                 let mut error = self.err_expect_after_term(&["\",\"", &close_label]);
                 if unclosed {
-                    Self::mark_unclosed_delimiter(&mut error, opening, opening_text, close);
+                    Self::mark_unclosed_delimiter(&mut error, opening, close);
                 }
                 return Err(error);
             }
@@ -2840,20 +2885,16 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn mark_unclosed_delimiter(
-        error: &mut ParseError,
-        opening: Pos,
-        opening_text: &str,
-        close: &str,
-    ) {
+    fn mark_unclosed_delimiter(error: &mut ParseError, opening: Pos, close: &str) {
+        let (opening_char, closing_char) = match close {
+            ")" => ('(', ')'),
+            "]" => ('[', ']'),
+            _ => unreachable!("unsupported list delimiter: {close}"),
+        };
         error.set_kind(ParseErrorKind::UnclosedDelimiter {
-            opening: opening_text.to_string(),
-            opening_span: Span {
-                start: u32::try_from(opening.offset).unwrap_or(u32::MAX),
-                end: u32::try_from(opening.offset.saturating_add(opening_text.len()))
-                    .unwrap_or(u32::MAX),
-            },
-            closing: close.to_string(),
+            opening: opening_char,
+            opening_span: opening.offset..opening.offset.saturating_add(opening_char.len_utf8()),
+            closing: closing_char,
         });
     }
 
@@ -3000,11 +3041,6 @@ impl<'a> Parser<'a> {
     /// `fail`s below need it because parsec merges the `Expect "\"[\""` that
     /// `option [] $ list functionAttribute` leaves behind into them.
     fn function_decl(&mut self) -> Result<(FunctionDecl, bool), ParseError> {
-        self.function_decl_inner()
-            .map_err(|error| error.with_context(ParseContext::FunctionDeclaration))
-    }
-
-    fn function_decl_inner(&mut self) -> Result<(FunctionDecl, bool), ParseError> {
         self.skip_ws();
         let name_pos = self.lx.pos();
         let name_start = name_pos.offset;
@@ -3049,7 +3085,7 @@ impl<'a> Parser<'a> {
         let fail = |p: &mut Self, msg: String| {
             let mut e = p.err_fail(msg);
             if !had_attrs {
-                e.messages.push(Message::Expect("\"[\"".to_string()));
+                e.push_message(Message::Expect("\"[\"".to_string()));
             }
             e
         };
@@ -3066,6 +3102,7 @@ impl<'a> Parser<'a> {
                 .find(|(n, _)| *n == name)
                 .map(|(_, o)| *o);
             if let Some(b) = builtin.filter(|b| *b != requested) {
+                let diagnostic_name = diagnostic_lexeme(&name);
                 // `conflictingBuiltins` (Theory/Text/Parser/Signature.hs:203)
                 // scans the WHOLE
                 // static table, not just the builtins this theory enabled.
@@ -3078,14 +3115,14 @@ impl<'a> Parser<'a> {
                     self,
                     format!(
                         "`{}` conflicts with builtin(s) {} (builtin: {}, requested: {})",
-                        name,
+                        diagnostic_name,
                         show_string_list(&conflicting),
                         b.show(),
                         requested.show()
                     ),
                 )
                 .with_kind(ParseErrorKind::ConflictingDeclaration {
-                    name: name.clone(),
+                    name: diagnostic_name,
                     context: ParseContext::FunctionDeclaration,
                 })
                 .with_location(name_pos, name.len());
@@ -3101,6 +3138,7 @@ impl<'a> Parser<'a> {
             // projections' own shape, tested by name, arity and privacy only.
             let pair_proj = (name == "fst" || name == "snd") && requested.arity == 1 && !private;
             if prev != requested && !pair_proj {
+                let diagnostic_name = diagnostic_lexeme(&name);
                 let error = fail(
                     self,
                     format!(
@@ -3108,11 +3146,11 @@ impl<'a> Parser<'a> {
                          different name for this function.",
                         prev.show(),
                         requested.show(),
-                        name
+                        diagnostic_name
                     ),
                 )
                 .with_kind(ParseErrorKind::ConflictingDeclaration {
-                    name: name.clone(),
+                    name: diagnostic_name,
                     context: ParseContext::FunctionDeclaration,
                 })
                 .with_location(name_pos, name.len());
@@ -3232,11 +3270,6 @@ impl<'a> Parser<'a> {
     }
 
     fn equations(&mut self) -> Result<TheoryItem, ParseError> {
-        self.equations_inner()
-            .map_err(|error| error.with_context(ParseContext::Equation))
-    }
-
-    fn equations_inner(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("equations")?;
         // HS `equations` (Theory/Text/Parser/Signature.hs:234-239): `convergent`
         // is set only when
@@ -3291,11 +3324,6 @@ impl<'a> Parser<'a> {
     }
 
     fn macros(&mut self) -> Result<TheoryItem, ParseError> {
-        self.macros_inner()
-            .map_err(|error| error.with_context(ParseContext::Macro))
-    }
-
-    fn macros_inner(&mut self) -> Result<TheoryItem, ParseError> {
         if !self.try_kw("macros") {
             self.require_kw("macro")?;
         }
@@ -3322,13 +3350,9 @@ impl<'a> Parser<'a> {
             // HS `parens $ commaSep lvar` (Theory/Text/Parser/Macro.hs:29-49, see
             // line 36): trailing comma OK.
             let mut arg_positions = Vec::new();
-            let args = self.sep_end_by(opening, "(", ")", |p| {
-                p.skip_ws();
-                let mut name_start = p.save();
-                let argument = p.var_spec()?;
-                let name_end = p.last_ident_end.expect("variable parser records name end");
-                name_start.offset = name_end - argument.name.len();
-                arg_positions.push(name_start);
+            let args = self.sep_end_by(opening, ")", |parser| {
+                let (argument, position) = parser.var_spec_spanned()?;
+                arg_positions.push(position);
                 Ok(argument)
             })?;
             // HS `unless (length args == length (nub args)) $ error …`
@@ -3341,7 +3365,7 @@ impl<'a> Parser<'a> {
                 return Err(self
                     .macro_duplicate_arg_error(&name)
                     .with_kind(ParseErrorKind::DuplicateMacroArgument {
-                        argument: argument.name.clone(),
+                        argument: diagnostic_lexeme(&argument.name),
                     })
                     .with_location(arg_positions[index], argument.name.len()));
             }
@@ -3426,6 +3450,7 @@ impl<'a> Parser<'a> {
     /// interpolates wraps it in its own double quotes INSIDE those backticks.
     /// A macro name is a plain identifier, so it needs no escaping.
     fn macro_reserved_name_error(&self, name: &str) -> ParseError {
+        let name = diagnostic_lexeme(name);
         self.err_ghc(
             format!("`\"{name}\"` is a reserved function name for builtins."),
             Self::macro_error_call_site(Self::MACRO_RESERVED_NAME_SITE),
@@ -3441,6 +3466,7 @@ impl<'a> Parser<'a> {
     /// `ByteString`
     /// name supplies the double quotes.
     fn macro_duplicate_arg_error(&self, name: &str) -> ParseError {
+        let name = diagnostic_lexeme(name);
         self.err_ghc(
             format!("\"{name}\" have two arguments with the same name."),
             Self::macro_error_call_site(Self::MACRO_DUPLICATE_ARG_SITE),
@@ -3496,12 +3522,14 @@ impl<'a> Parser<'a> {
     /// alternatives, Token.hs:555-556), `%+` (`natterm`), and `++` `+`
     /// (`msetterm`, both `opUnion` alternatives, Token.hs:551-552).
     fn macro_conflict_error(&mut self, name: &str) -> ParseError {
+        let name = diagnostic_lexeme(name);
         let mut e = self.err_fail(format!("Conflicting name for macro {name}"));
         let mut expects: Vec<Message> = Vec::new();
         if self.var_dot_hangover {
             expects.push(Message::Expect("\".\"".to_string()));
         }
         for sym in self.state.ac_fun_syms.iter().rev() {
+            let sym = diagnostic_lexeme(sym);
             expects.push(Message::Expect(format!("\"{sym}\"")));
         }
         let mut ops: Vec<&str> = Vec::new();
@@ -3517,12 +3545,14 @@ impl<'a> Parser<'a> {
         if self.state.sig_enable_mset {
             ops.extend(["++", "+"]);
         }
-        expects.extend(ops.into_iter().map(|o| Message::Expect(format!("\"{o}\""))));
+        for operator in ops {
+            expects.push(Message::Expect(format!("\"{operator}\"")));
+        }
         // `Display` stable-sorts by constructor rank, so appending keeps the
         // `Expect`s ahead of the raw `Message` and in accumulation order.
-        e.messages.extend(expects);
+        e.extend_messages(expects);
         e.set_kind(ParseErrorKind::ConflictingDeclaration {
-            name: name.to_string(),
+            name,
             context: ParseContext::Macro,
         });
         e
@@ -3545,8 +3575,7 @@ impl<'a> Parser<'a> {
             let f = self.fact().map_err(|mut e| {
                 if self.save() == start {
                     e.messages.retain(|m| !matches!(m, Message::Expect(_)));
-                    e.messages
-                        .push(Message::Expect("predicate declaration".to_string()));
+                    e.push_message(Message::Expect("predicate declaration".to_string()));
                 }
                 e
             })?;
@@ -3586,7 +3615,7 @@ impl<'a> Parser<'a> {
     /// (Theory/Text/Parser/Formula.hs:82-104) and `commaSep1`'s `","`.
     fn predicate_dup_fail(&mut self, fact: &Fact) -> ParseError {
         let mut e = self.err_fail(format!("duplicate predicate: {}", pred_fact_text(fact)));
-        let mut labels = self.term_carry_labels(e.offset);
+        let mut labels = self.term_carry_labels(e.pos.offset);
         if labels.is_empty() && self.var_dot_hangover {
             // The dot-index attempt stands at the failure position only when
             // the variable was the last token consumed — a later lexeme (a
@@ -3594,7 +3623,7 @@ impl<'a> Parser<'a> {
             // it and drops the label.
             let since_var = self
                 .var_hangover_ident_end
-                .map(|ie| &self.lx.src()[ie..e.offset]);
+                .map(|ie| &self.lx.src()[ie..e.pos.offset]);
             if since_var.is_some_and(|s| remove_comments(s).chars().all(char::is_whitespace)) {
                 labels.push(Message::Expect("\".\"".to_string()));
             }
@@ -3605,7 +3634,7 @@ impl<'a> Parser<'a> {
             labels.push(Message::Expect(l.to_string()));
         }
         for (k, l) in labels.into_iter().enumerate() {
-            e.messages.insert(1 + k, l);
+            e.insert_message(1 + k, l);
         }
         e
     }
@@ -3638,11 +3667,6 @@ impl<'a> Parser<'a> {
     }
 
     fn restriction(&mut self, kw: &str) -> Result<Restriction, ParseError> {
-        self.restriction_inner(kw)
-            .map_err(|error| error.with_context(ParseContext::Restriction))
-    }
-
-    fn restriction_inner(&mut self, kw: &str) -> Result<Restriction, ParseError> {
         self.require_kw(kw)?;
         self.skip_ws();
         let name_start = self.save();
@@ -3692,13 +3716,13 @@ impl<'a> Parser<'a> {
             && attributes.is_empty()
             && self.state.seen_restriction_names.contains(&name)
         {
-            return Err(self
-                .item_fail(format!("duplicate restriction: {name}"))
-                .with_kind(ParseErrorKind::DuplicateDeclaration {
-                    name,
-                    context: ParseContext::Restriction,
-                })
-                .with_location(name_start, name_len));
+            return Err(self.duplicate_declaration(
+                "restriction",
+                name,
+                ParseContext::Restriction,
+                name_start,
+                name_len,
+            ));
         }
         // Feed the restriction-name set the `_restrict` guard consults
         // ([`Parser::guard_duplicate_rule`] step 1): HS `addRestriction`
@@ -3823,13 +3847,13 @@ impl<'a> Parser<'a> {
             // `restrPrefix = "Restr_"` (Model/Restriction.hs:129-149).
             let rstr_name = format!("Restr_{}_{}", r.name, i);
             if self.state.seen_restriction_names.contains(&rstr_name) {
-                return Err(self
-                    .item_fail(format!("duplicate restriction: {rstr_name}"))
-                    .with_kind(ParseErrorKind::DuplicateDeclaration {
-                        name: rstr_name,
-                        context: ParseContext::Restriction,
-                    })
-                    .with_location(name_start, r.name.len()));
+                return Err(self.duplicate_declaration(
+                    "restriction",
+                    rstr_name,
+                    ParseContext::Restriction,
+                    name_start,
+                    r.name.len(),
+                ));
             }
         }
         if let Some(first) = self.state.seen_rules.iter().find(|p| p.name == r.name) {
@@ -3841,6 +3865,7 @@ impl<'a> Parser<'a> {
                 || first.variants != r.variants
                 || first.left_right != r.left_right;
             if differs {
+                let diagnostic_name = diagnostic_lexeme(&r.name);
                 // `"duplicate rule: " ++ render (prettyRuleName …)`
                 // (Theory/Text/Parser/Exceptions.hs:38).  `prettyProtoRuleName` is
                 // `prefixIfReserved` (Model/Rule.hs:1287-1290), which only
@@ -3848,9 +3873,9 @@ impl<'a> Parser<'a> {
                 // here (`protoRule` rejects reserved rule names and
                 // identifiers cannot start with `_`), so the name is verbatim.
                 return Err(self
-                    .item_fail(format!("duplicate rule: {}", r.name))
+                    .item_fail(format!("duplicate rule: {diagnostic_name}"))
                     .with_kind(ParseErrorKind::ConflictingDeclaration {
-                        name: r.name.clone(),
+                        name: diagnostic_name,
                         context: ParseContext::Rule,
                     })
                     .with_location(name_start, r.name.len()));
@@ -3874,13 +3899,27 @@ impl<'a> Parser<'a> {
     fn item_fail(&mut self, msg: String) -> ParseError {
         let mut e = self.err_fail(msg);
         if let Some((at, labels)) = self.item_hangover
-            && at == e.offset
+            && at == e.pos.offset
         {
             for (k, l) in labels.iter().enumerate() {
-                e.messages.insert(1 + k, Message::Expect((*l).to_string()));
+                e.insert_message(1 + k, Message::Expect((*l).to_string()));
             }
         }
         e
+    }
+
+    fn duplicate_declaration(
+        &mut self,
+        label: &str,
+        name: String,
+        context: ParseContext,
+        position: Pos,
+        span_len: usize,
+    ) -> ParseError {
+        let name = diagnostic_lexeme(&name);
+        self.item_fail(format!("duplicate {label}: {name}"))
+            .with_kind(ParseErrorKind::DuplicateDeclaration { name, context })
+            .with_location(position, span_len)
     }
 
     /// Parse the middle arrow of a rule: either the `-->` shortcut (no
@@ -3953,7 +3992,7 @@ impl<'a> Parser<'a> {
             Ok(msg)
         })() {
             Ok(msg) => return Ok((None, msg)),
-            Err(e) if e.ghc_error.is_some() => return Err(e),
+            Err(e) if e.ghc_error().is_some() => return Err(e),
             Err(e) => e,
         };
         self.restore(probe);
@@ -3971,15 +4010,16 @@ impl<'a> Parser<'a> {
     /// positions the two message lists concatenate.  A GHC `error` in the
     /// second branch escapes unmerged.
     fn merge_alt_errors(e1: ParseError, e2: ParseError) -> ParseError {
-        if e2.ghc_error.is_some() {
+        if e2.ghc_error().is_some() {
             return e2;
         }
-        match e2.offset.cmp(&e1.offset) {
+        match e2.pos.offset.cmp(&e1.pos.offset) {
             std::cmp::Ordering::Greater => e2,
             std::cmp::Ordering::Less => e1,
             std::cmp::Ordering::Equal => {
                 let mut e = e1;
-                e.messages.extend(e2.messages);
+                e.messages_truncated |= e2.messages_truncated;
+                e.extend_messages(e2.messages);
                 e
             }
         }
@@ -3990,8 +4030,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_rule_located(&mut self) -> Result<(Rule, Pos), ParseError> {
-        self.parse_rule_located_inner()
-            .map_err(|error| error.with_context(ParseContext::Rule))
+        self.in_context(ParseContext::Rule, Self::parse_rule_located_inner)
     }
 
     fn parse_rule_located_inner(&mut self) -> Result<(Rule, Pos), ParseError> {
@@ -4043,9 +4082,9 @@ impl<'a> Parser<'a> {
         // This port relaxes that: `try_modulo` returns `None` when the
         // `(modulo AC)` head is absent and parsing proceeds. (More lenient than
         // Haskell, but still accepts all valid Haskell input.)
-        self.rule_after_kw(usize::MAX)
-            .map(|(rule, _)| rule)
-            .map_err(|error| error.with_context(ParseContext::Rule))
+        self.in_context(ParseContext::Rule, |parser| {
+            parser.rule_after_kw(usize::MAX).map(|(rule, _)| rule)
+        })
     }
 
     /// The rule header and body that follow the `rule` keyword, shared by
@@ -4285,8 +4324,7 @@ impl<'a> Parser<'a> {
         if code.len() != 6 {
             let mut e = self.err_fail(format!("Color code \"{code}\" could not be parsed to RGB"));
             if pending_hexdigit {
-                e.messages
-                    .insert(1, Message::Expect("hexadecimal digit".to_string()));
+                e.insert_message(1, Message::Expect("hexadecimal digit".to_string()));
             }
             e.set_kind(ParseErrorKind::MalformedHexColor {
                 reason: format!(
@@ -4429,9 +4467,9 @@ impl<'a> Parser<'a> {
             return Err(e);
         }
         let mut e = self.err_expect(&["\"(\"", "identifier"]);
-        if e.offset == kw_end_offset {
-            e.messages.push(Message::Expect("letter".to_string()));
-            e.messages.push(Message::Expect("\"{*\"".to_string()));
+        if e.pos.offset == kw_end_offset {
+            e.push_message(Message::Expect("letter".to_string()));
+            e.push_message(Message::Expect("\"{*\"".to_string()));
         }
         Err(e)
     }
@@ -4448,10 +4486,9 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let probe_offset = self.lx.pos().offset;
         self.fact_list().map_err(|mut e| {
-            if e.offset == probe_offset {
+            if e.pos.offset == probe_offset {
                 let at = usize::from(matches!(e.messages.first(), Some(Message::SysUnExpect(_))));
-                e.messages
-                    .insert(at, Message::Expect("\"let\"".to_string()));
+                e.insert_message(at, Message::Expect("\"let\"".to_string()));
             }
             e
         })
@@ -4465,7 +4502,7 @@ impl<'a> Parser<'a> {
         // 207,212) = `brackets . commaSep`
         // (Token.hs:362-363) with `commaSep = sepEndBy comma`: the list may
         // be empty and a trailing comma before `]` is OK.
-        self.sep_end_by(opening, "[", "]", |p| p.fact())
+        self.sep_end_by(opening, "]", |p| p.fact())
     }
 
     fn fact_or_restr(&mut self) -> Result<FactOrRestr, ParseError> {
@@ -4483,11 +4520,6 @@ impl<'a> Parser<'a> {
     // -------------------- Lemma --------------------
 
     fn lemma_item(&mut self) -> Result<TheoryItem, ParseError> {
-        self.lemma_item_inner()
-            .map_err(|error| error.with_context(ParseContext::Lemma))
-    }
-
-    fn lemma_item_inner(&mut self) -> Result<TheoryItem, ParseError> {
         // HS `protoLemma` captures `start <- getInput` BEFORE `symbol "lemma"`;
         // the enclosing item loop has already consumed leading whitespace, so
         // the cursor sits exactly at `lemma` here (`Theory/Text/Parser/Lemma.hs:78-88, see line 80`).
@@ -4568,13 +4600,13 @@ impl<'a> Parser<'a> {
                     || self.state.seen_diff_left_lemma_names.contains(&name)
             };
             if duplicate {
-                return Err(self
-                    .item_fail(format!("duplicate lemma: {name}"))
-                    .with_kind(ParseErrorKind::DuplicateDeclaration {
-                        name,
-                        context: ParseContext::Lemma,
-                    })
-                    .with_location(name_start, name_len));
+                return Err(self.duplicate_declaration(
+                    "lemma",
+                    name,
+                    ParseContext::Lemma,
+                    name_start,
+                    name_len,
+                ));
             }
             if left {
                 self.state.seen_diff_left_lemma_names.push(name.clone());
@@ -4586,13 +4618,13 @@ impl<'a> Parser<'a> {
             }
         } else {
             if self.state.seen_lemma_names.iter().any(|n| n == &name) {
-                return Err(self
-                    .item_fail(format!("duplicate lemma: {name}"))
-                    .with_kind(ParseErrorKind::DuplicateDeclaration {
-                        name,
-                        context: ParseContext::Lemma,
-                    })
-                    .with_location(name_start, name_len));
+                return Err(self.duplicate_declaration(
+                    "lemma",
+                    name,
+                    ParseContext::Lemma,
+                    name_start,
+                    name_len,
+                ));
             }
             self.state.seen_lemma_names.push(name.clone());
         }
@@ -4663,11 +4695,6 @@ impl<'a> Parser<'a> {
     }
 
     fn diff_lemma_item(&mut self) -> Result<TheoryItem, ParseError> {
-        self.diff_lemma_item_inner()
-            .map_err(|error| error.with_context(ParseContext::Lemma))
-    }
-
-    fn diff_lemma_item_inner(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("diffLemma")?;
         self.skip_ws();
         let name_start = self.save();
@@ -4677,13 +4704,13 @@ impl<'a> Parser<'a> {
         self.require_punct(":")?;
         let proof = self.try_diff_proof_skeleton()?;
         if self.state.seen_diff_lemma_names.contains(&name) {
-            return Err(self
-                .item_fail(format!("duplicate Diff Lemma: {name}"))
-                .with_kind(ParseErrorKind::DuplicateDeclaration {
-                    name,
-                    context: ParseContext::Lemma,
-                })
-                .with_location(name_start, name_len));
+            return Err(self.duplicate_declaration(
+                "Diff Lemma",
+                name,
+                ParseContext::Lemma,
+                name_start,
+                name_len,
+            ));
         }
         self.state.seen_diff_lemma_names.push(name.clone());
         Ok(TheoryItem::DiffLemma(DiffLemma {
@@ -4698,11 +4725,6 @@ impl<'a> Parser<'a> {
     }
 
     fn case_test_item(&mut self) -> Result<TheoryItem, ParseError> {
-        self.case_test_item_inner()
-            .map_err(|error| error.with_context(ParseContext::Lemma))
-    }
-
-    fn case_test_item_inner(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("test")?;
         let name = self.ident()?;
         self.require_punct(":")?;
@@ -4742,7 +4764,7 @@ impl<'a> Parser<'a> {
                 // HS `list constructorp` (Theory/Text/Parser/Lemma.hs:39-53, see
                 // line 49) = `brackets . commaSep`:
                 // trailing comma before `]` is permitted.
-                let outs = self.sep_end_by(opening, "[", "]", |p| p.ident())?;
+                let outs = self.sep_end_by(opening, "]", |p| p.ident())?;
                 attrs.push(LemmaAttr::Output(outs));
             } else if self.try_kw("left") {
                 attrs.push(LemmaAttr::Left);
@@ -4761,10 +4783,11 @@ impl<'a> Parser<'a> {
                 if raw.is_empty() {
                     break;
                 }
+                let item = diagnostic_lexeme(&raw);
                 return Err(self
-                    .err(format!("unknown lemma attribute: {raw}"))
+                    .err(format!("unknown lemma attribute: {item}"))
                     .with_kind(ParseErrorKind::UnknownItem {
-                        item: raw.clone(),
+                        item,
                         context: ParseContext::LemmaAttribute,
                     })
                     .with_location(attribute_start, raw.len()));
@@ -4857,7 +4880,7 @@ impl<'a> Parser<'a> {
         // controls termination.
         //
         let tree = parse_proof_tree(&raw, self)
-            .map_err(|error| error.into_parse_error(proof_start.offset, self.lx.src()))?;
+            .map_err(|error| error.shifted(proof_start, self.lx.src()))?;
         Ok(Some(ProofSkeleton {
             raw,
             tree: Some(tree),
@@ -4890,7 +4913,7 @@ impl<'a> Parser<'a> {
         let proof_start = self.lx.pos();
         let raw = self.read_until_next_top_level();
         validate_diff_proof_tree(&raw, self)
-            .map_err(|error| error.into_parse_error(proof_start.offset, self.lx.src()))?;
+            .map_err(|error| error.shifted(proof_start, self.lx.src()))?;
         Ok(Some(ProofSkeleton { raw, tree: None }))
     }
 
@@ -4931,7 +4954,7 @@ impl<'a> Parser<'a> {
     fn diagnostic_item(&mut self) -> (String, usize) {
         if let Some(item) = self.peek_hyphen_identifier() {
             let len = item.len();
-            return (item, len);
+            return (diagnostic_lexeme(&item), len);
         }
         self.skip_ws();
         match self.lx.peek() {
@@ -4943,11 +4966,6 @@ impl<'a> Parser<'a> {
     // -------------------- Top-level process / processDef --------------------
 
     fn toplevel_process(&mut self) -> Result<TheoryItem, ParseError> {
-        self.toplevel_process_inner()
-            .map_err(|error| error.with_context(ParseContext::Process))
-    }
-
-    fn toplevel_process_inner(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("process")?;
         self.require_punct(":")?;
         let p = self.process()?;
@@ -4955,11 +4973,6 @@ impl<'a> Parser<'a> {
     }
 
     fn process_def(&mut self) -> Result<TheoryItem, ParseError> {
-        self.process_def_inner()
-            .map_err(|error| error.with_context(ParseContext::Process))
-    }
-
-    fn process_def_inner(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("let")?;
         let name = self.ident()?;
         self.skip_ws();
@@ -4969,8 +4982,7 @@ impl<'a> Parser<'a> {
             // see line 69): trailing comma OK.
             // `sapicvar`, so a `:` here types the parameter (see
             // [`Parser::sapic_var_types`]).
-            let r =
-                self.with_sapic_var_types(|p| p.sep_end_by(opening, "(", ")", |p| p.var_spec()));
+            let r = self.with_sapic_var_types(|p| p.sep_end_by(opening, ")", |p| p.var_spec()));
             Some(r?)
         } else {
             None
@@ -4981,11 +4993,6 @@ impl<'a> Parser<'a> {
     }
 
     fn equiv_lemma(&mut self, diff: bool) -> Result<TheoryItem, ParseError> {
-        self.equiv_lemma_inner(diff)
-            .map_err(|error| error.with_context(ParseContext::Lemma))
-    }
-
-    fn equiv_lemma_inner(&mut self, diff: bool) -> Result<TheoryItem, ParseError> {
         if diff {
             self.require_kw("diffEquivLemma")?;
         } else {
@@ -5057,8 +5064,9 @@ impl<'a> Parser<'a> {
     /// A SAPIC process.  Every variable inside is HS `sapicvar`, so a trailing
     /// `:` names a type rather than a sort — see [`Parser::sapic_var_types`].
     fn process(&mut self) -> Result<Process, ParseError> {
-        self.with_sapic_var_types(|p| p.process_body())
-            .map_err(|error| error.with_context(ParseContext::Process))
+        self.in_context(ParseContext::Process, |parser| {
+            parser.with_sapic_var_types(|parser| parser.process_body())
+        })
     }
 
     /// Left-associative parallel / NDC composition.
@@ -5207,7 +5215,7 @@ impl<'a> Parser<'a> {
                 // HS `parens $ commaSep (msetterm ...)`
                 // (Theory/Text/Parser/Sapic.hs:224-312, see line 296):
                 // trailing comma before `)` is permitted.
-                self.sep_end_by(opening, "(", ")", |p| p.term(false))?
+                self.sep_end_by(opening, ")", |p| p.term(false))?
             } else {
                 vec![]
             };
@@ -5320,8 +5328,7 @@ impl<'a> Parser<'a> {
             self.restore(after);
             let mut e = self.err_fail("facts must start with upper-case letters");
             if ident_end == after.offset {
-                e.messages
-                    .insert(1, Message::Expect("letter or digit".to_string()));
+                e.insert_message(1, Message::Expect("letter or digit".to_string()));
             }
             let len = name.len();
             e.set_kind(ParseErrorKind::InvalidFactName { name });
@@ -5332,7 +5339,7 @@ impl<'a> Parser<'a> {
         self.require_punct("(")?;
         // HS `parens (commaSep pterm)` (Theory/Text/Parser/Fact.hs:39-63, see
         // line 47): trailing comma OK.
-        let args = self.sep_end_by(opening, "(", ")", |p| p.term(false))?;
+        let args = self.sep_end_by(opening, ")", |p| p.term(false))?;
         let mut annotations = Vec::new();
         // `option [] $ list factAnnotation` (Theory/Text/Parser/Fact.hs:48): when
         // no annotation
@@ -5411,14 +5418,15 @@ impl<'a> Parser<'a> {
             // `singleTerm`: special facts have arity one
             // (Theory/Text/Parser/Fact.hs:52-54).
             if args.len() != 1 {
+                let diagnostic_name = diagnostic_lexeme(&name);
                 return Err(self
                     .err(format!(
                         "fact '{}' used with arity {} instead of arity one",
-                        name,
+                        diagnostic_name,
                         args.len()
                     ))
                     .with_kind(ParseErrorKind::FactArity {
-                        name: name.clone(),
+                        name: diagnostic_name,
                         arity: args.len(),
                     })
                     .with_location(name_start, name.len()));
@@ -5443,8 +5451,7 @@ impl<'a> Parser<'a> {
     // =========================================================================
 
     fn formula(&mut self) -> Result<Formula, ParseError> {
-        self.iff()
-            .map_err(|error| error.with_context(ParseContext::Formula))
+        self.in_context(ParseContext::Formula, Self::iff)
     }
 
     fn iff(&mut self) -> Result<Formula, ParseError> {
@@ -5619,7 +5626,9 @@ impl<'a> Parser<'a> {
                     return Ok(Formula::Atom(Atom::Pred(fact)));
                 }
                 return Err(match fact_error {
-                    Some(fact_error) if fact_error.offset >= term_error.offset => fact_error,
+                    Some(fact_error) if fact_error.pos.offset >= term_error.pos.offset => {
+                        fact_error
+                    }
                     _ => term_error,
                 });
             }
@@ -5774,7 +5783,6 @@ impl<'a> Parser<'a> {
     /// in HS's `acterm True llitNoPub`.
     fn term(&mut self, eqn: bool) -> Result<Term, ParseError> {
         self.tupleterm(eqn)
-            .map_err(|error| error.with_context(ParseContext::Term))
     }
 
     /// HS `tupleterm`'s `chainr1 (msetterm …) (… <$ comma)`
@@ -6329,19 +6337,17 @@ impl<'a> Parser<'a> {
                 if eqn {
                     return Err(self
                         .err_fail_labelled("diff operator not allowed in equations", "term")
-                        .with_kind(ParseErrorKind::IllegalDiffOperator {
-                            diff_enabled: self.state.enable_diff,
-                            in_equation: true,
-                        })
+                        .with_kind(ParseErrorKind::IllegalDiffOperator(
+                            IllegalDiffReason::InEquation,
+                        ))
                         .with_location(diff_start, "diff".len()));
                 }
                 if !self.state.enable_diff {
                     return Err(self
                         .err_fail_labelled("diff operator found, but flag diff not set", "term")
-                        .with_kind(ParseErrorKind::IllegalDiffOperator {
-                            diff_enabled: false,
-                            in_equation: false,
-                        })
+                        .with_kind(ParseErrorKind::IllegalDiffOperator(
+                            IllegalDiffReason::DiffModeDisabled,
+                        ))
                         .with_location(diff_start, "diff".len()));
                 }
                 let mut args = ts.into_iter();
@@ -6380,13 +6386,16 @@ impl<'a> Parser<'a> {
             // call site (Term.hs:92:9) can surface, since `application` tries
             // it first for every identifier.
             if eqn && Self::RESERVED_BUILTINS.contains(&id.as_str()) {
+                let diagnostic_name = diagnostic_lexeme(&id);
                 return Err(self
                     .err_ghc(
-                        format!("`\"{id}\"` is a reserved function name for builtins."),
+                        format!(
+                            "`\"{diagnostic_name}\"` is a reserved function name for builtins."
+                        ),
                         Self::term_reserved_name_call_site(),
                     )
                     .with_kind(ParseErrorKind::ReservedBuiltin {
-                        name: id.clone(),
+                        name: diagnostic_name,
                         context: ParseContext::Term,
                     })
                     .with_location(save_id, id.len()));
@@ -6417,9 +6426,10 @@ impl<'a> Parser<'a> {
                     if let Some(res) = self.lookup_arity(&id) {
                         return self.prefix_app_args(&id, res, eqn, save_id);
                     } else {
+                        let name = diagnostic_lexeme(&id);
                         return Err(self
-                            .err(format!("unknown operator `{id}`"))
-                            .with_kind(ParseErrorKind::UndeclaredFunction { name: id.clone() })
+                            .err(format!("unknown operator `{name}`"))
+                            .with_kind(ParseErrorKind::UndeclaredFunction { name })
                             .with_location(save_id, id.len()));
                     }
                 } else {
@@ -6448,9 +6458,10 @@ impl<'a> Parser<'a> {
                     if let Some(res) = self.lookup_arity(&id) {
                         return self.binary_alg_app(&id, res, eqn, save_id);
                     } else {
+                        let name = diagnostic_lexeme(&id);
                         return Err(self
-                            .err(format!("unknown operator `{id}`"))
-                            .with_kind(ParseErrorKind::UndeclaredFunction { name: id.clone() })
+                            .err(format!("unknown operator `{name}`"))
+                            .with_kind(ParseErrorKind::UndeclaredFunction { name })
                             .with_location(save_id, id.len()));
                     }
                 } else {
@@ -6580,15 +6591,16 @@ impl<'a> Parser<'a> {
             }
             ArityRes::NoEq { opts } => {
                 let arity = opts.arity;
-                let ts = self.sep_end_by(opening, "(", ")", |p| p.msetterm(eqn))?;
+                let ts = self.sep_end_by(opening, ")", |p| p.msetterm(eqn))?;
                 if ts.len() != arity {
+                    let diagnostic_name = diagnostic_lexeme(id);
                     return Err(self
                         .err(format!(
-                            "operator `{id}' has arity {arity}, but here it is used with arity {}",
+                            "operator `{diagnostic_name}' has arity {arity}, but here it is used with arity {}",
                             ts.len()
                         ))
                         .with_kind(ParseErrorKind::WrongFunctionArity {
-                            name: id.to_string(),
+                            name: diagnostic_name,
                             declared: arity,
                             used: ts.len(),
                         })
@@ -6603,7 +6615,7 @@ impl<'a> Parser<'a> {
                 Ok(Term::App(id.to_string(), ts))
             }
             ArityRes::Ac => {
-                let ts = self.sep_end_by(opening, "(", ")", |p| p.msetterm(eqn))?;
+                let ts = self.sep_end_by(opening, ")", |p| p.msetterm(eqn))?;
                 Ok(self.ac_prefix_app(id, ts))
             }
         }
@@ -6672,14 +6684,17 @@ impl<'a> Parser<'a> {
                 }
                 Ok(Term::AlgApp(id.to_string(), Box::new(arg1), Box::new(arg2)))
             }
-            ArityRes::NoEq { opts } => Err(self
-                .err("only operators of arity 2 can be written using the `op{t1}t2' notation")
-                .with_kind(ParseErrorKind::WrongFunctionArity {
-                    name: id.to_string(),
-                    declared: opts.arity,
-                    used: 2,
-                })
-                .with_location(head, id.len())),
+            ArityRes::NoEq { opts } => {
+                let diagnostic_name = diagnostic_lexeme(id);
+                Err(self
+                    .err("only operators of arity 2 can be written using the `op{t1}t2' notation")
+                    .with_kind(ParseErrorKind::WrongFunctionArity {
+                        name: diagnostic_name,
+                        declared: opts.arity,
+                        used: 2,
+                    })
+                    .with_location(head, id.len()))
+            }
         }
     }
 
@@ -6742,6 +6757,10 @@ impl<'a> Parser<'a> {
     /// Parse a variable specification. Returns None if no var sigil/identifier
     /// is present.
     fn try_var_spec(&mut self) -> Result<Option<VarSpec>, ParseError> {
+        Ok(self.try_var_spec_spanned()?.map(|(variable, _)| variable))
+    }
+
+    fn try_var_spec_spanned(&mut self) -> Result<Option<(VarSpec, Pos)>, ParseError> {
         self.skip_ws();
         let save = self.save();
         let sort = match self.lx.peek() {
@@ -6785,31 +6804,38 @@ impl<'a> Parser<'a> {
             Some(c) if c.is_alphabetic() => LSort::Msg,
             _ => return Ok(None),
         };
-        let pre_ident = self.save();
-        let id = match self.lx.identifier() {
-            Some(s) => s,
+        let (id, name_start) = match self.lx.identifier_spanned() {
+            Some(result) => result,
             None => {
                 self.restore(save);
                 return Ok(None);
             }
         };
-        self.last_ident_end = Some(self.ident_end_from(pre_ident, &id));
+        self.last_ident_end = Some(self.ident_end_from(name_start, &id));
         let idx = self.try_dot_index();
-        Ok(Some(VarSpec {
-            name: id,
-            idx,
-            sort,
-            typ: None,
-        }))
+        Ok(Some((
+            VarSpec {
+                name: id,
+                idx,
+                sort,
+                typ: None,
+            },
+            name_start,
+        )))
     }
 
     fn var_spec(&mut self) -> Result<VarSpec, ParseError> {
-        let v = self
-            .try_var_spec()?
+        self.var_spec_spanned().map(|(variable, _)| variable)
+    }
+
+    fn var_spec_spanned(&mut self) -> Result<(VarSpec, Pos), ParseError> {
+        let (variable, position) = self
+            .try_var_spec_spanned()?
             .ok_or_else(|| self.err("expected variable"))?;
         // Allow `: msg | pub | fresh | node | nat` sort suffix or a SAPIC
         // type annotation after the variable.
-        self.attach_sort_suffix(v)
+        self.attach_sort_suffix(variable)
+            .map(|variable| (variable, position))
     }
 
     /// Parse a quantifier's binder list (`All`/`Ex` share this): a sequence of
@@ -7477,10 +7503,10 @@ pub fn parse_formula_str(s: &str, msig: &MaudeSig) -> Result<Formula, ParseError
     // Rendered formula text carries applications of symbols this fresh
     // parser has no declarations for — accept them structurally.
     p.resolve_prefix_apps = false;
-    let f = p.formula().map_err(|error| error.with_input(s))?;
+    let f = p.formula()?;
     p.skip_ws();
     if !p.lx.is_eof() {
-        return Err(p.err("trailing garbage in formula string").with_input(s));
+        return Err(p.err("trailing garbage in formula string"));
     }
     Ok(f)
 }

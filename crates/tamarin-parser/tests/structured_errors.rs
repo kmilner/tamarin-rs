@@ -1,4 +1,9 @@
-use tamarin_parser::{parse_theory, parse_theory_with_base, ParseContext, ParseErrorKind};
+mod common;
+
+use tamarin_parser::{
+    parse_theory, parse_theory_with_base, IllegalDiffReason, ParseContext, ParseError,
+    ParseErrorKind,
+};
 use tamarin_term::maude_sig::pair_maude_sig;
 
 #[test]
@@ -23,35 +28,145 @@ fn semantic_errors_keep_the_offending_token_span() {
         };
         assert_eq!(item, expected_item);
         assert_eq!(*context, expected_context);
-        assert_eq!(&source[error.span().as_range()], expected_item);
+        common::assert_span(&error, source, expected_item);
     }
 }
 
 #[test]
-fn standalone_formula_errors_attach_their_source() {
+fn theory_item_errors_name_their_construct() {
+    let cases = [
+        ("options:\n", ParseContext::Options),
+        ("predicates\n", ParseContext::Predicate),
+        ("heuristic\n", ParseContext::Heuristic),
+        ("tactic: t presort: ?\n", ParseContext::Tactic),
+        ("test t = x\n", ParseContext::CaseTest),
+        ("export tag\n", ParseContext::Export),
+    ];
+
+    for (item, expected) in cases {
+        let source = format!("theory T begin\n{item}end\n");
+        let error = parse_theory(&source, &[]).expect_err("malformed item must fail");
+        assert_eq!(
+            error.kind(),
+            &ParseErrorKind::Expected { context: expected },
+            "{item:?}: {error:?}",
+        );
+    }
+}
+
+#[test]
+fn long_unknown_items_have_bounded_diagnostic_payloads() {
+    let identifier = "a".repeat(10_000);
+    let source = format!("theory T begin\n{identifier}: x\nend\n");
+    let error = parse_theory(&source, &[]).expect_err("unknown item must fail");
+    let ParseErrorKind::UnknownItem { item, .. } = error.kind() else {
+        panic!("expected unknown-item error, got {error:?}");
+    };
+    assert!(item.ends_with('…'));
+    assert!(item.chars().count() <= 81);
+    assert_eq!(error.span().len(), identifier.len());
+    assert!(error.render_plain().len() < 1_000);
+}
+
+#[test]
+fn standalone_formula_errors_do_not_retain_their_source() {
     for (source, offending) in [("P(x) & ?", "?"), ("P(x) garbage", "g")] {
         let error = tamarin_parser::parser::parse_formula_str(source, &pair_maude_sig())
             .expect_err("invalid formula must fail");
-        assert_eq!(error.source_text(), Some(source));
-        assert_eq!(&source[error.span().as_range()], offending);
+        assert_eq!(error.source_text(), None);
+        common::assert_span(&error, source, offending);
     }
+}
+
+#[test]
+fn source_text_can_be_attached_explicitly_without_being_replaced() {
+    let source = "not a theory";
+    let error = parse_theory(source, &[])
+        .expect_err("invalid theory must fail")
+        .with_source_text("", source)
+        .with_source_text("named.spthy", "different");
+    assert_eq!(error.source_name(), Some("named.spthy"));
+    assert_eq!(error.source_text(), Some(source));
+}
+
+#[test]
+fn attaching_source_does_not_change_the_semantic_span() {
+    let source = "?";
+    let error = parse_theory(source, &[]).expect_err("junk must fail");
+    let span = error.span();
+
+    let error = error.with_source_text("bad.spthy", source);
+
+    assert_eq!(error.span(), span);
+    assert_eq!(span, 0..0);
+    assert_eq!(
+        error.diagnostic_labels_with_source(source)[0].span.clone(),
+        0..1
+    );
+}
+
+#[test]
+fn owned_source_text_moves_into_an_error_without_copying() {
+    let contents = String::from("included source");
+    let allocation = contents.as_ptr();
+    let error = parse_theory("not a theory", &[])
+        .expect_err("invalid theory must fail")
+        .with_source_text("include.spthy", contents);
+    assert_eq!(error.source_text().unwrap().as_ptr(), allocation);
+}
+
+#[test]
+fn parse_errors_keep_the_result_payload_compact() {
+    assert!(
+        std::mem::size_of::<ParseError>() <= 128,
+        "ParseError grew to {} bytes",
+        std::mem::size_of::<ParseError>()
+    );
+}
+
+#[test]
+fn source_names_are_first_write_wins() {
+    let error = parse_theory("not a theory", &[])
+        .expect_err("invalid theory must fail")
+        .with_source("upload.spthy")
+        .with_source("root.spthy");
+    assert_eq!(error.source_name(), Some("upload.spthy"));
+    assert!(error.to_string().starts_with("\"upload.spthy\""));
+}
+
+#[test]
+fn conflicting_functions_retain_their_option_details() {
+    let source = "theory T begin\nfunctions: f/1, f/2\nend\n";
+    let error = parse_theory(source, &[]).expect_err("conflicting functions must fail");
+    assert!(matches!(
+        error.kind(),
+        ParseErrorKind::ConflictingDeclaration { .. }
+    ));
+    let notes = error.diagnostic_notes();
+    assert_eq!(notes.len(), 1);
+    assert!(
+        notes[0].contains("conflicting arities/options"),
+        "{notes:?}"
+    );
+    assert!(
+        notes[0].contains("(1,Public,Constructor,NotNDC)"),
+        "{notes:?}"
+    );
+    assert!(
+        notes[0].contains("(2,Public,Constructor,NotNDC)"),
+        "{notes:?}"
+    );
 }
 
 #[test]
 fn applications_report_the_real_failure() {
-    let undeclared = parse_theory(
-        "theory T begin\nrule R: [ ] --> [ Out(g('a')) ]\nend\n",
-        &[],
-    )
-    .expect_err("undeclared application must fail");
+    let source = "theory T begin\nrule R: [ ] --> [ Out(g('a')) ]\nend\n";
+    let undeclared = parse_theory(source, &[]).expect_err("undeclared application must fail");
     assert_eq!(
         undeclared.kind(),
         &ParseErrorKind::UndeclaredFunction { name: "g".into() }
     );
-    assert_eq!(
-        &undeclared.source_text().unwrap()[undeclared.span().as_range()],
-        "g"
-    );
+    common::assert_span(&undeclared, source, "g");
 
     let source = "theory T begin\nfunctions: g/3\nrule R: [ ] --> [ Out(g('a','b')) ]\nend\n";
     let wrong_arity = parse_theory(source, &[]).expect_err("wrong arity must fail");
@@ -63,10 +178,7 @@ fn applications_report_the_real_failure() {
             used: 2,
         }
     );
-    assert_eq!(
-        &wrong_arity.source_text().unwrap()[wrong_arity.span().as_range()],
-        "g"
-    );
+    common::assert_span(&wrong_arity, source, "g");
 }
 
 #[test]
@@ -77,7 +189,7 @@ fn formula_facts_preserve_nested_and_arity_errors() {
         error.kind(),
         &ParseErrorKind::UndeclaredFunction { name: "g".into() }
     );
-    assert_eq!(&source[error.span().as_range()], "g");
+    assert_eq!(&source[error.span()], "g");
 
     let source = "theory T begin\nlemma L: \"All #i. Out() @ #i\"\nend\n";
     let error = parse_theory(source, &[]).expect_err("wrong fact arity must fail");
@@ -88,7 +200,7 @@ fn formula_facts_preserve_nested_and_arity_errors() {
             arity: 0,
         }
     );
-    assert_eq!(&source[error.span().as_range()], "Out");
+    assert_eq!(&source[error.span()], "Out");
 }
 
 #[test]
@@ -100,26 +212,28 @@ fn proof_errors_keep_their_exact_nested_and_tabbed_spans() {
         error.kind(),
         &ParseErrorKind::UndeclaredFunction { name: "g".into() }
     );
-    assert_eq!(&source[error.span().as_range()], "g");
+    assert_eq!(&source[error.span()], "g");
 
     let source = "theory T begin\nlemma L: \"T\"\nby\t?\nend\n";
     let error = parse_theory(source, &[]).expect_err("invalid proof method must fail");
     assert_eq!(error.line_column(), (3, 9));
-    assert_eq!(&source[error.span().as_range()], "?");
+    common::assert_span(&error, source, "?");
 
     let source = "theory T begin\nlemma L: \"T\"\n    by\t?\nend\n";
     let error = parse_theory(source, &[]).expect_err("indented invalid proof method must fail");
     assert_eq!(error.line_column(), (3, 9));
+    common::assert_span(&error, source, "?");
 
     let source = "theory T begin\nfunctions: Foo/1\nlemma L: \"T\"\n    by solve(\tFoo(g('a')) @ #i )\nend\n";
     let error = parse_theory(source, &[]).expect_err("indented solve goal must fail");
     assert_eq!(error.line_column(), (4, 21));
-    assert_eq!(&source[error.span().as_range()], "g");
+    common::assert_span(&error, source, "g");
 
     let source = "theory D begin\ndiffLemma E:\n    rule-equivalence\n    case R\n    by step(\t? )\n    qed\nend\n";
     let error = tamarin_parser::parse_diff_theory(source, &[])
         .expect_err("indented invalid diff proof method must fail");
     assert_eq!(error.line_column(), (5, 17));
+    common::assert_span(&error, source, "?");
 }
 
 #[test]
@@ -146,7 +260,7 @@ fn unknown_attributes_report_their_context() {
             ParseErrorKind::UnknownItem { item, context }
                 if item == "bogus" && *context == expected_context
         ));
-        assert_eq!(&source[error.span().as_range()], "bogus");
+        common::assert_span(&error, source, "bogus");
     }
 }
 
@@ -160,18 +274,15 @@ fn invalid_fact_and_diff_errors_are_classified() {
             name: "lower".into()
         }
     );
-    assert_eq!(&fact_source[fact.span().as_range()], "lower");
+    common::assert_span(&fact, fact_source, "lower");
 
     let diff_source = "theory T begin\nrule R: [ ] --> [ Out(diff(a,b)) ]\nend\n";
     let diff = parse_theory(diff_source, &[]).expect_err("diff without flag must fail");
     assert_eq!(
         diff.kind(),
-        &ParseErrorKind::IllegalDiffOperator {
-            diff_enabled: false,
-            in_equation: false,
-        }
+        &ParseErrorKind::IllegalDiffOperator(IllegalDiffReason::DiffModeDisabled)
     );
-    assert_eq!(&diff_source[diff.span().as_range()], "diff");
+    common::assert_span(&diff, diff_source, "diff");
     assert_eq!(
         diff.diagnostic_notes(),
         ["the `diff` operator requires diff mode"]
@@ -182,10 +293,7 @@ fn invalid_fact_and_diff_errors_are_classified() {
         .expect_err("diff in an equation must fail even in diff mode");
     assert_eq!(
         equation.kind(),
-        &ParseErrorKind::IllegalDiffOperator {
-            diff_enabled: true,
-            in_equation: true,
-        }
+        &ParseErrorKind::IllegalDiffOperator(IllegalDiffReason::InEquation)
     );
     assert_eq!(
         equation.diagnostic_notes(),
@@ -201,16 +309,48 @@ fn an_unclosed_list_labels_both_ends() {
         opening,
         opening_span,
         closing,
+        ..
     } = error.kind()
     else {
         panic!("expected delimiter error, got {error:?}");
     };
-    assert_eq!((opening.as_str(), closing.as_str()), ("(", ")"));
-    assert_eq!(&source[opening_span.as_range()], "(");
+    assert_eq!((*opening, *closing), ('(', ')'));
+    assert_eq!(&source[opening_span.clone()], "(");
     let labels = error.diagnostic_labels();
     assert_eq!(labels.len(), 2);
-    assert!(labels.iter().any(|label| !label.primary));
-    assert!(error.render_plain().contains("`(` opened here"));
+    assert_eq!(labels[1].message, "`(` opened here");
+    assert!(error
+        .render_plain_with_source("input.spthy", source)
+        .contains("`(` opened here"));
+    assert!(!error.render_plain().contains("opened here"));
+}
+
+#[test]
+fn long_undeclared_functions_have_bounded_diagnostic_payloads() {
+    let name = "f".repeat(10_000);
+    let source = format!("theory T begin\nrule R: [ ] --> [ Out({name}('a')) ]\nend\n");
+    let error = parse_theory(&source, &[]).expect_err("undeclared function must fail");
+    let ParseErrorKind::UndeclaredFunction { name } = error.kind() else {
+        panic!("expected undeclared-function error, got {error:?}");
+    };
+    assert!(name.ends_with('…'));
+    assert!(name.chars().count() <= 81);
+    assert!(error.to_string().len() < 1_000);
+    assert!(error.render_plain().len() < 1_000);
+}
+
+#[test]
+fn all_semantic_error_payloads_have_a_central_bound() {
+    let name = "f".repeat(10_000);
+    let source = format!("theory T begin\nfunctions: {name}/1, {name}/2\nend\n");
+    let error = parse_theory(&source, &[]).expect_err("conflicting declarations must fail");
+    let ParseErrorKind::ConflictingDeclaration { name, .. } = error.kind() else {
+        panic!("expected conflicting declaration, got {error:?}");
+    };
+    assert!(name.ends_with('…'));
+    assert!(name.chars().count() <= 81);
+    assert!(error.to_string().len() < 2_000);
+    assert!(error.render_plain().len() < 2_000);
 }
 
 #[test]
@@ -228,7 +368,7 @@ fn punctuation_attributes_use_the_source_character_span() {
         error.kind(),
         ParseErrorKind::UnknownItem { item, .. } if item == "?"
     ));
-    assert_eq!(&source[error.span().as_range()], "?");
+    common::assert_span(&error, source, "?");
 }
 
 #[test]
@@ -246,7 +386,7 @@ fn delayed_semantic_errors_point_at_the_declaration() {
             error.kind(),
             ParseErrorKind::DuplicateDeclaration { .. }
         ));
-        assert_eq!(&source[error.span().as_range()], name);
+        common::assert_span(&error, source, name);
         assert_eq!(
             error.diagnostic_notes(),
             [format!("`{name}` was already declared")]
@@ -260,7 +400,7 @@ fn delayed_semantic_errors_point_at_the_declaration() {
         error.kind(),
         ParseErrorKind::ConflictingDeclaration { .. }
     ));
-    assert_eq!(&source[error.span().as_range()], "R");
+    common::assert_span(&error, source, "R");
 }
 
 #[test]
@@ -271,7 +411,7 @@ fn malformed_colors_point_at_the_hex_code() {
         error.kind(),
         ParseErrorKind::MalformedHexColor { .. }
     ));
-    assert_eq!(&source[error.span().as_range()], "f0f");
+    common::assert_span(&error, source, "f0f");
 }
 
 #[test]
@@ -291,11 +431,14 @@ fn included_file_errors_keep_the_included_source() {
         error.source_name(),
         Some(included.to_string_lossy().as_ref())
     );
-    assert_eq!(error.source_text(), Some("unknown_item: x\n"));
-    assert_eq!(
-        &error.source_text().unwrap()[error.span().as_range()],
-        "unknown_item"
+    assert!(
+        error
+            .to_string()
+            .starts_with(&format!("\"{}\"", included.display())),
+        "legacy and structured source names diverged: {error}"
     );
+    assert_eq!(error.source_text(), Some("unknown_item: x\n"));
+    common::assert_span(&error, error.source_text().unwrap(), "unknown_item");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -305,7 +448,7 @@ fn missing_includes_point_at_the_path() {
     let error = parse_theory_with_base(source, &[], Some(std::env::temp_dir()))
         .expect_err("missing include must fail");
     assert!(matches!(error.kind(), ParseErrorKind::IncludeIo { .. }));
-    assert_eq!(&source[error.span().as_range()], "\"does-not-exist.spthy\"");
+    common::assert_span(&error, source, "\"does-not-exist.spthy\"");
 }
 
 #[test]
@@ -314,10 +457,7 @@ fn escaped_include_paths_use_the_literal_source_span() {
     let error = parse_theory_with_base(source, &[], Some(std::env::temp_dir()))
         .expect_err("missing include must fail");
     assert!(matches!(error.kind(), ParseErrorKind::IncludeIo { .. }));
-    assert_eq!(
-        &source[error.span().as_range()],
-        "\"no\\x2dsuch-\\&é.spthy\""
-    );
+    common::assert_span(&error, source, "\"no\\x2dsuch-\\&é.spthy\"");
 }
 
 #[test]
@@ -354,12 +494,13 @@ fn empty_and_trailing_comma_lists_report_the_opening_delimiter() {
             opening,
             opening_span,
             closing,
+            ..
         } = error.kind()
         else {
             panic!("expected delimiter error, got {error:?}");
         };
-        assert_eq!((opening.as_str(), closing.as_str()), ("[", "]"));
-        assert_eq!(&source[opening_span.as_range()], "[");
+        assert_eq!((*opening, *closing), ('[', ']'));
+        assert_eq!(&source[opening_span.clone()], "[");
     }
 }
 
@@ -377,18 +518,22 @@ fn stray_closers_are_not_reported_as_unclosed_lists() {
 fn builtin_spans_preserve_whitespace_before_hyphens() {
     let source = "theory T begin\nbuiltins: diffie -helman\nend\n";
     let error = parse_theory(source, &[]).expect_err("misspelled builtin must fail");
-    assert_eq!(&source[error.span().as_range()], "diffie -helman");
+    common::assert_span(&error, source, "diffie -helman");
 }
 
 #[test]
 fn duplicate_macro_arguments_point_at_the_name_after_a_sigil() {
-    let source = "theory T begin\nmacros: m($foobar, $foobar) = $foobar\nend\n";
+    let source = "theory T begin\nmacros: m($foobar, $   foobar) = $foobar\nend\n";
     let error = parse_theory(source, &[]).expect_err("duplicate argument must fail");
     assert!(matches!(
         error.kind(),
         ParseErrorKind::DuplicateMacroArgument { argument } if argument == "foobar"
     ));
-    assert_eq!(&source[error.span().as_range()], "foobar");
+    common::assert_span(&error, source, "foobar");
+    assert_eq!(
+        error.span().start,
+        source.find("foobar) =").expect("second argument name"),
+    );
 }
 
 #[test]
@@ -414,11 +559,11 @@ fn parenthesized_formulas_preserve_inner_failures() {
                 "{error:?}"
             );
         }
-        assert_eq!(&source[error.span().as_range()], token);
+        common::assert_span(&error, &source, token);
     }
     let source = "theory T begin lemma L: \"(P(x) & ?)\" end";
     let error = parse_theory(source, &[]).expect_err("missing formula operand");
-    assert!((error.span().start as usize) >= source.find('?').unwrap(), "{error:?}");
+    assert!(error.span().start >= source.find('?').unwrap(), "{error:?}");
 }
 
 #[test]
@@ -429,10 +574,11 @@ fn malformed_equation_split_preserves_its_cause() {
         error.diagnostic_message().contains("expected a split id"),
         "{error:?}"
     );
-    assert_eq!(&source[error.span().as_range()], "x");
+    common::assert_span(&error, source, "x");
     parse_theory(
         "theory T begin lemma L: \"T\" by solve(splitEqs(1)) end",
         &[],
     )
     .expect("numeric split id remains valid");
 }
+
