@@ -75,8 +75,15 @@ class ParserDiagnosticNormalization(unittest.TestCase):
     @staticmethod
     def normalize(stderr):
         return subprocess.run(
-            ["bash", "-c", ". scripts/sweep_common.sh; nerr"],
-            cwd=HERE.parent, env=clean_environment(), input=stderr,
+            ["bash", "-c", ". scripts/gate_common.sh; nerr"],
+            cwd=HERE.parent,
+            # Normalization must not preflight installed provers or Maude.
+            env=clean_environment({
+                "HS_PATH": "/nonexistent/haskell-oracle",
+                "RS_BIN": "/nonexistent/tamarin-rs",
+                "MAUDE_PATH": "/nonexistent/maude",
+            }),
+            input=stderr,
             text=True, capture_output=True, check=True,
         ).stdout
 

@@ -62,53 +62,7 @@ row() { local IFS=$'\t'; printf '%s\n' "$*" >> "$OUT"; }
 # four lines the gates' strip_env deletes, kept as position evidence here
 # because nonempty_compared distinguishes blanked from deleted.
 
-# Normalize the two known pre-existing stderr divergences (NEITHER is any
-# flag's — both reproduce on a plain `tamarin-prover <file>` run, and both are
-# byte-identical between the current binary and a pre-branch build):
-#
-#   [Open Chains]        RS's derivation-check stage emits the "Too many chain
-#                        constraints" warning twice where HS emits it once;
-#                        consecutive duplicates of that exact line collapse.
-#   [Saturating Sources] Both sides trace saturation progress on every CLI
-#                        close (showSaturation = True), but the SEQUENCE COUNTS
-#                        still differ structurally: HS traces once per force of
-#                        a ClosedRuleCache thunk, RS once per saturation it
-#                        actually runs — one extra sequence on a theory with a
-#                        [sources] lemma, one where HS emits none on a theory
-#                        whose proofs never consult a source case, and counts
-#                        differing both ways under --auto-sources (run.rs's
-#                        close_translated_theory enumerates all three). 282 of
-#                        the 372 case-studies-regression theories differ by
-#                        these lines alone.
-#
-# Dropping them is the only way the stderr axis can police ANYTHING else: left
-# in, the class alone paints the corpus red and a genuinely new warning hides
-# in the noise. It is a real port gap, not an accepted divergence — closing it
-# retires this filter.
-#
-# What that costs, measured by injecting lines into the RS side: a stderr line
-# beginning "[Saturating Sources]" is invisible to every sweep whatever it says,
-# and so is any difference in how many times the [Open Chains] warning repeats
-# CONSECUTIVELY (the ledger's stderr-open-chains rows are the non-consecutive
-# count differences, which do still surface). The parser-frame exception follows.
-# Parser presentation differs deliberately. Only consume recognized frame lines;
-# unexpected stderr, even after a parser error, must still reach the comparison.
-# The Rust diagnostic code is emitted exclusively by report_parser_error.
-nerr() {
-  awk '
-    { duplicate_open = /^\[Open Chains\] Too many chain constraints/ && $0 == previous; previous = $0 }
-    duplicate_open || /^\[Saturating Sources\]/ { next }
-    rs_parser && /^$/ { rs_parser = 0; next }
-    rs_parser && /^[[:space:]]*([[:digit:]]+[[:space:]]*)?(┌─|│|·|= )/ { next }
-    hs_parser && /^(unexpected|expecting) / { next }
-    { rs_parser = 0; hs_parser = 0 }
-    /^error\[parse\]: / { print "<parser diagnostic>"; rs_parser = 1; next }
-    /^".*" \(line [[:digit:]]+, column [[:digit:]]+\):$/ {
-      print "<parser diagnostic>"; hs_parser = 1; next
-    }
-    { print }
-  '
-}
+# nerr is also provided by gate_common.sh.
 
 # io_diff <workdir>
 #   Echoes the first of stdout/stderr that differs between <workdir>/hs.* and
