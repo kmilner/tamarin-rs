@@ -2705,7 +2705,7 @@ impl<'a> Parser<'a> {
             "export",
             "let",
         ];
-        let mut s = String::new();
+        let start = self.lx.pos().offset;
         // Track whether the previous character was an identifier char. If so,
         // we are in the middle of a word and should not match keywords here.
         let mut prev_was_ident = false;
@@ -2753,7 +2753,6 @@ impl<'a> Parser<'a> {
                 let Some(c) = self.lx.peek() else {
                     break;
                 };
-                s.push(c);
                 self.lx.bump();
                 // Tamarin public literals have no escape syntax: a backslash
                 // is ordinary data and every quote closes the literal.
@@ -2768,9 +2767,6 @@ impl<'a> Parser<'a> {
             let pre_ws = self.lx.pos();
             self.lx.skip_ws();
             if self.lx.pos() != pre_ws {
-                // Capture skipped whitespace/comments verbatim.
-                let skipped = &self.lx.src()[pre_ws.offset..self.lx.pos().offset];
-                s.push_str(skipped);
                 prev_was_ident = false;
             }
             if self.lx.is_eof() {
@@ -2811,7 +2807,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            // Append next char.
+            // Advance past the next character.
             match self.lx.peek() {
                 Some(c) => {
                     prev_was_ident = is_ident_char(c) || c == '-';
@@ -2826,13 +2822,17 @@ impl<'a> Parser<'a> {
                         '\'' => in_public_literal = true,
                         _ => {}
                     }
-                    s.push(c);
                     self.lx.bump();
+                    if c == '\'' {
+                        // Like single_quoted, consume the opening quote's
+                        // trailing whitespace/comments before the literal body.
+                        self.lx.skip_ws();
+                    }
                 }
                 None => break,
             }
         }
-        s
+        self.lx.src()[start..self.lx.pos().offset].to_owned()
     }
 
     // -------------------- functions / equations / macros / predicates --------------------

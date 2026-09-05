@@ -897,3 +897,19 @@ fn long_duplicate_names_keep_the_original_declaration_label() {
         assert!(labels[1].span.start < labels[0].span.start);
     }
 }
+
+#[test]
+fn proof_literals_preserve_leading_comments_and_raw_text() {
+    for proof in [
+        "by solve( G(' /* ' )) rule */ x') @ #i)\n",
+        "by solve( G(' // ' )) rule\n x') @ #i)\n",
+    ] {
+        let source = format!("theory T\nbegin\nlemma L: \"T\"\n{proof}end\n");
+        let theory =
+            parse_theory(&source, &[]).expect("comments after the opening quote are whitespace");
+        let tamarin_parser::ast::TheoryItem::Lemma(lemma) = &theory.items[0] else {
+            panic!("expected lemma");
+        };
+        assert_eq!(lemma.proof.as_ref().unwrap().raw, proof);
+    }
+}
