@@ -1005,6 +1005,9 @@ fn compound_function_operands_use_the_complete_term_grammar() {
         ("builtins: diffie-hellman", "*"),
         ("builtins: multiset", "++"),
         ("builtins: xor", "⊕"),
+        ("builtins: xor", "XOR"),
+        ("builtins: multiset", "+"),
+        ("builtins: natural-numbers", "%+"),
         ("functions: X/2 [AC]", "X"),
     ] {
         for name in ["g", "G"] {
@@ -1116,4 +1119,155 @@ fn fact_fallback_preserves_consumed_comments() {
     let labels = error.diagnostic_labels_with_source(root);
     assert_eq!(&source[labels[1].span.clone()], "/*");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn malformed_compound_operands_keep_application_errors() {
+    for (signature, operator) in [
+        ("builtins: diffie-hellman", "^"),
+        ("builtins: diffie-hellman", "*"),
+        ("builtins: multiset", "++"),
+        ("builtins: xor", "⊕"),
+        ("builtins: xor", "XOR"),
+        ("builtins: multiset", "+"),
+        ("builtins: natural-numbers", "%+"),
+        ("functions: X/2 [AC]", "X"),
+    ] {
+        for operand in ["G(x)", "(G(x))", "((G(x)))"] {
+            let source = format!("theory T begin {signature} functions: G/2 lemma L: \"{operand} {operator} y = z\" end");
+            let error = parse_theory(&source, &[]).unwrap_err();
+            assert!(
+                matches!(error.kind(), ParseErrorKind::WrongFunctionArity { .. }),
+                "{source}: {error:?}"
+            );
+            assert_eq!(error.diagnostic_labels_with_source(&source).len(), 2);
+        }
+        let source = format!("theory T begin {signature} functions: G/1 lemma L: \"G(x) {operator} missing(y) = z\" end");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::UndeclaredFunction { name } if name == "missing"),
+            "{source}: {error:?}"
+        );
+    }
+    // A successful continuation or closure discards the failed interpretation.
+    for formula in [
+        "G(x)",
+        "(G(x))",
+        "G(x) @ #i",
+        "G(x) ==> G(x)",
+        "(G(x)) & T",
+        "G()",
+    ] {
+        parse_theory(
+            &format!("theory T begin functions: G/2 lemma L: \"{formula}\" end"),
+            &[],
+        )
+        .unwrap();
+    }
+    let source = "theory T begin functions: G/2 lemma L: \"G(x)\" functions: h/0 end";
+    parse_theory(source, &[]).unwrap();
+    let source = "theory T begin functions: G/2 lemma L: \"G(x) & missing(x) = y\" end";
+    let error = parse_theory(source, &[]).unwrap_err();
+    assert!(
+        matches!(error.kind(), ParseErrorKind::UndeclaredFunction { name } if name == "missing"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn predicate_syntax_errors_do_not_become_function_errors() {
+    for signature in ["", "functions: G/2"] {
+        let prefix = format!("theory T begin {signature} predicates: G(x) <=> T lemma L: \"");
+        for formula in ["G(x)", "(G(x))", "((G(x)))"] {
+            parse_theory(&format!("{prefix}{formula}\" end"), &[]).unwrap();
+
+            let source = format!("{prefix}{formula} garbage\" end");
+            let error = parse_theory(&source, &[]).unwrap_err();
+            assert_eq!(
+                error.span().start,
+                source.find("garbage").unwrap(),
+                "{error:?}"
+            );
+            assert!(
+                matches!(error.kind(), ParseErrorKind::Expected { .. }),
+                "{error:?}"
+            );
+
+            let source = format!("{prefix}{formula} /* unfinished");
+            let error = parse_theory(&source, &[]).unwrap_err();
+            assert!(
+                matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+                "{error:?}"
+            );
+            assert_eq!(error.span().start, source.len());
+            let labels = error.diagnostic_labels_with_source(&source);
+            assert_eq!(&source[labels[1].span.clone()], "/*");
+        }
+        for formula in ["(G(x)", "((G(x))"] {
+            let source = format!("{prefix}{formula}\" end");
+            let error = parse_theory(&source, &[]).unwrap_err();
+            assert!(
+                matches!(error.kind(), ParseErrorKind::Expected { .. }),
+                "{error:?}"
+            );
+            assert_eq!(error.span().start, source.rfind('"').unwrap());
+            assert!(
+                error
+                    .diagnostic_notes()
+                    .iter()
+                    .any(|note| note.contains(')')),
+                "{error:?}"
+            );
+        }
+        // Disabled term operators and their token prefixes are unrelated input.
+        for trailing in [
+            "^ y = z",
+            "* y = z",
+            "++ y = z",
+            "%+ y = z",
+            "⊕ y = z",
+            "XOR y = z",
+            "XORsuffix",
+        ] {
+            let source = format!("{prefix}G(x) {trailing}\" end");
+            let error = parse_theory(&source, &[]).unwrap_err();
+            assert!(
+                matches!(error.kind(), ParseErrorKind::Expected { .. }),
+                "{source}: {error:?}"
+            );
+            assert_eq!(error.span().start, source.find(trailing).unwrap());
+        }
+    }
+}
+
+#[test]
+fn term_operator_prefixes_keep_the_predicate_error() {
+    for (signature, trailing) in [
+        ("builtins: xor", "XORsuffix"),
+        ("functions: X/2 [AC]", "Xsuffix"),
+        ("builtins: multiset", "+>"),
+        ("builtins: diffie-hellman", "*}"),
+    ] {
+        let source = format!("theory T begin {signature} functions: G/2 predicates: G(x) <=> T lemma L: \"G(x) {trailing}\" end");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::Expected { .. }),
+            "{source}: {error:?}"
+        );
+        assert_eq!(error.span().start, source.find(trailing).unwrap());
+    }
+}
+
+#[test]
+fn incomplete_term_continuations_preserve_application_errors() {
+    for formula in ["G(x)^y =", "(G(x))^missing(y)", "G(x) = missing("] {
+        let source = format!(
+            "theory T begin builtins: diffie-hellman functions: G/2 lemma L: \"{formula}\" end"
+        );
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::WrongFunctionArity { .. }),
+            "{source}: {error:?}"
+        );
+    }
 }

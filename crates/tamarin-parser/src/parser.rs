@@ -1635,31 +1635,6 @@ impl<'a> Parser<'a> {
         m
     }
 
-    /// Non-consuming lookahead for a term-relational operator that `fatom`'s
-    /// term-level atom path handles: `=` (opEqual), `<<`/`⊏` (opSubterm),
-    /// `(<)` (opLessTerm), or `<` (opLess). Used to mirror HS `blatom`
-    /// (Theory/Text/Parser/Formula.hs:45-57), where Subterm/Less/smallerp/EqE
-    /// come before the
-    /// bare-fact `Pred` alternative. Guards against the logical operators that
-    /// share a prefix: `==>` (opImplies) and `<=>` (opLEquiv) must NOT count as
-    /// `=` or `<`, nor must `<-`.
-    fn peek_atom_relop(&mut self) -> bool {
-        self.skip_ws();
-        let r = self.lx.rest();
-        if r.starts_with("<<") || r.starts_with('⊏') || r.starts_with("(<)") {
-            return true;
-        }
-        // `=` but not `==`/`=>` (no real `==`/`=>` token, but `==>` is opImplies).
-        if let Some(after) = r.strip_prefix('=') {
-            return !after.starts_with('=') && !after.starts_with('>');
-        }
-        // `<` (opLess) but not `<<`/`<=`/`<-` (handled above / opLEquiv / arrow).
-        if let Some(after) = r.strip_prefix('<') {
-            return !after.starts_with('=') && !after.starts_with('-');
-        }
-        false
-    }
-
     fn ident(&mut self) -> Result<String, ParseError> {
         if let Some(id) = self.lx.identifier() {
             return Ok(id);
@@ -5708,6 +5683,43 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// A successful predicate/group cannot be used as a term operand. Only
+    /// an actual term or relation operator makes the failed relational parse
+    /// relevant; a closer, comment or unrelated token keeps its own error.
+    fn at_term_continuation(&mut self) -> bool {
+        let lexer = self.lx.clone();
+        self.skip_ws();
+        let rest = self.lx.rest();
+        let relation = rest.starts_with("<<")
+            || rest.starts_with('⊏')
+            || rest.starts_with("(<)")
+            || rest
+                .strip_prefix('=')
+                .is_some_and(|r| !r.starts_with(['=', '>']))
+            || rest
+                .strip_prefix('<')
+                .is_some_and(|r| !r.starts_with(['=', '-']));
+        let continuation = relation
+            || [
+                (self.state.sig_enable_dh, BinOp::Exp),
+                (self.state.sig_enable_dh, BinOp::Mult),
+                (self.state.sig_enable_mset, BinOp::Union),
+                (self.state.sig_enable_xor, BinOp::Xor),
+                (self.state.sig_enable_nat, BinOp::NatPlus),
+            ]
+            .into_iter()
+            .any(|(enabled, op)| enabled && self.try_term_operator(op).is_some())
+            || {
+                let symbols = self.state.ac_fun_syms.clone();
+                symbols.iter().any(|name| {
+                    self.try_term_operator(BinOp::AcFct(tamarin_term::intern::intern_str(name)))
+                        .is_some()
+                })
+            };
+        self.lx = lexer;
+        continuation
+    }
+
     fn formula_checkpoint(&self) -> FormulaCheckpoint<'a> {
         FormulaCheckpoint {
             lx: self.lx.clone(),
@@ -5761,17 +5773,24 @@ impl<'a> Parser<'a> {
         };
         self.restore_formula(start);
         if self.try_punct("(") {
-            let grouped = self.iff().and_then(|formula| {
-                self.require_punct(")")?;
-                Ok(formula)
-            });
-            return match grouped {
-                // A predicate prefix before a relation cannot rescue a
-                // failed application in that relation.
-                Ok(_) if self.peek_atom_relop() => Err(atom_error),
-                Ok(formula) => Ok(formula),
-                Err(error) => Err(Self::merge_alt_errors(atom_error, error)),
+            let formula = match self.iff() {
+                Ok(formula) => formula,
+                Err(error) => return Err(Self::merge_alt_errors(atom_error, error)),
             };
+            // Prefer the formula's closer on ties. A relational parse that
+            // progressed further can still explain a truncated formula prefix
+            // (for example, `F` parsed as false before an application).
+            if let Err(error) = self.require_punct(")") {
+                return Err(if atom_error.pos.offset > error.pos.offset {
+                    atom_error
+                } else {
+                    error
+                });
+            }
+            if self.at_term_continuation() {
+                return Err(atom_error);
+            }
+            return Ok(formula);
         }
         Err(atom_error)
     }
@@ -5802,8 +5821,8 @@ impl<'a> Parser<'a> {
         };
         self.restore_formula(fact_end);
         match fact {
-            Ok(fact) if !self.peek_atom_relop() => Ok(Formula::Atom(Atom::Pred(fact))),
-            Ok(_) => Err(term_error),
+            Ok(_) if self.at_term_continuation() => Err(term_error),
+            Ok(fact) => Ok(Formula::Atom(Atom::Pred(fact))),
             // On ties, an application error is more useful than a rejected
             // lowercase fact head. Deeper fact errors still retain their cause.
             Err(fact_error) if fact_error.pos.offset > term_error.pos.offset => Err(fact_error),
@@ -5991,6 +6010,27 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    /// Shared token recognition for term parsing and ambiguous formula operands.
+    /// Callers select the operator levels enabled by the current signature.
+    fn try_term_operator(&mut self, op: BinOp) -> Option<BinOp> {
+        self.skip_ws();
+        let matched = match op {
+            BinOp::Exp => self.try_punct("^"),
+            BinOp::Mult => {
+                // `*}` closes a formal comment, rather than multiplying.
+                self.lx.peek2() != Some('}') && self.try_punct("*")
+            }
+            BinOp::Union => {
+                // `+>` belongs to process syntax, not multiset union.
+                !self.lx.rest().starts_with("+>") && (self.try_punct("++") || self.try_punct("+"))
+            }
+            BinOp::Xor => self.try_kw("XOR") || self.try_punct("⊕"),
+            BinOp::NatPlus => self.try_punct("%+"),
+            BinOp::AcFct(name) => self.try_kw(name),
+        };
+        matched.then_some(op)
+    }
+
     /// HS `msetterm` (Theory/Text/Parser/Term.hs:195-200): the union level runs
     /// only under `enableMSet && not eqn`, otherwise the parser drops straight
     /// to [`Self::natterm`] and `++`/`+` are not term operators at all.
@@ -6000,25 +6040,7 @@ impl<'a> Parser<'a> {
         }
         self.chainl1(
             |p| p.natterm(eqn),
-            |p| {
-                p.skip_ws();
-                // `++` or `+` (as multiset union); careful with `+` for NDC
-                // and `%+` for nat plus, which are handled separately.
-                if p.lx.rest().starts_with("++") {
-                    p.lx.bump();
-                    p.lx.bump();
-                    p.skip_ws();
-                    Some(BinOp::Union)
-                } else if p.lx.rest().starts_with('+') && !p.lx.rest().starts_with("+>") {
-                    // Avoid `+` that's part of process NDC. At term level
-                    // we always treat `+` as union.
-                    p.lx.bump();
-                    p.skip_ws();
-                    Some(BinOp::Union)
-                } else {
-                    None
-                }
-            },
+            |p| p.try_term_operator(BinOp::Union),
             Self::bin_op_term,
         )
     }
@@ -6031,7 +6053,7 @@ impl<'a> Parser<'a> {
         }
         self.chainl1(
             |p| p.xorterm(eqn),
-            |p| p.try_punct("%+").then_some(BinOp::NatPlus),
+            |p| p.try_term_operator(BinOp::NatPlus),
             Self::bin_op_term,
         )
     }
@@ -6044,7 +6066,7 @@ impl<'a> Parser<'a> {
         }
         self.chainl1(
             |p| p.multterm(eqn),
-            |p| (p.try_kw("XOR") || p.try_punct("⊕")).then_some(BinOp::Xor),
+            |p| p.try_term_operator(BinOp::Xor),
             Self::bin_op_term,
         )
     }
@@ -6058,18 +6080,7 @@ impl<'a> Parser<'a> {
         }
         self.chainl1(
             |p| p.expterm(eqn),
-            |p| {
-                p.skip_ws();
-                // Multiplication is `*`, except for the `*}` that closes a
-                // formal comment.
-                if p.lx.peek() == Some('*') && p.lx.peek2() != Some('}') {
-                    p.lx.bump();
-                    p.skip_ws();
-                    Some(BinOp::Mult)
-                } else {
-                    None
-                }
-            },
+            |p| p.try_term_operator(BinOp::Mult),
             Self::bin_op_term,
         )
     }
@@ -6079,7 +6090,7 @@ impl<'a> Parser<'a> {
     fn expterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
         self.chainl1(
             |p| p.acterm(eqn),
-            |p| p.try_punct("^").then_some(BinOp::Exp),
+            |p| p.try_term_operator(BinOp::Exp),
             Self::bin_op_term,
         )
     }
@@ -6135,10 +6146,7 @@ impl<'a> Parser<'a> {
             // the following token (`f(x) fg(y)` parsing as `f(f(x), g(y))` for
             // an AC symbol `f`); such input is not valid syntax in any theory
             // and errors here instead.
-            |p| {
-                p.try_kw(&op)
-                    .then(|| BinOp::AcFct(tamarin_term::intern::intern_str(&op)))
-            },
+            |p| p.try_term_operator(BinOp::AcFct(tamarin_term::intern::intern_str(&op))),
             Self::bin_op_term,
         )
     }
