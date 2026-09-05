@@ -6,34 +6,23 @@ on:
   pull_request:
 
 jobs:
-  msrv:
+  checks:
     runs-on: ubuntu-latest
     steps:
-      # Keep Cargo.toml's compatibility claim honest. The submodule supplies
-      # data embedded by tamarin-theory at compile time.
-      - uses: actions/checkout@v7
-        with:
-          submodules: true
-      - run: rustup toolchain install 1.88.0 --profile minimal --no-self-update
-      - run: cargo +1.88.0 check --workspace --all-targets
-
-  fmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: rustup update stable --no-self-update && rustup default stable
-      - run: cargo fmt --all --check
-
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-      # The submodule is needed to build: tamarin-theory include_str!'s the
-      # intruder-variant data files from tamarin-prover/data/.
+      # The submodule supplies data embedded by tamarin-theory at compile time.
       - uses: actions/checkout@v7
         with:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # Keep Cargo.toml's compatibility claim honest without another runner.
+      - name: Install MSRV toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --no-self-update
+      - name: MSRV check
+        run: cargo +1.88.0 check --workspace --all-targets
       # Every HS line cite in crates/ comments must resolve against the pinned
       # submodule (scripts/check_hs_cites.py — MISSING/AMBIGUOUS/RANGE/BLANK/
       # COMMENT/SEELINE).  Ordinary PRs edit cites too, not just bumps, and
