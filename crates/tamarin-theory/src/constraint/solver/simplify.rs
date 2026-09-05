@@ -110,7 +110,7 @@ pub(crate) fn simplify_system_with_fanout_seeded(
     Ok(
         simplify_system_with_fanout_seeded_with_counters(ctx, sys, seed)?
             .into_iter()
-            .map(|(sys, _)| sys)
+            .map(|branch| branch.sys)
             .collect(),
     )
 }
@@ -120,7 +120,7 @@ pub(crate) fn simplify_system_with_fanout_seeded_with_counters(
     ctx: &crate::constraint::solver::context::ProofContext,
     sys: crate::constraint::system::System,
     seed: u64,
-) -> Result<Vec<(crate::constraint::system::System, u64)>, crate::prove::ProveError> {
+) -> Result<Vec<SystemBranch>, crate::prove::ProveError> {
     use crate::constraint::solver::reduction::Reduction;
     // `new_inheriting` consults the `REFINE_FLOOR` thread-local so this
     // sub-reduction inherits the source precompute's `avoid th` seed (HS
@@ -139,14 +139,14 @@ pub(crate) fn simplify_system_with_fanout_seeded_with_counters(
 /// including allocations that are no longer visible in the system.
 fn simplify_system_fan_out_inner(
     red: &mut Reduction,
-) -> Result<Vec<(crate::constraint::system::System, u64)>, crate::prove::ProveError> {
+) -> Result<Vec<SystemBranch>, crate::prove::ProveError> {
     simplify_system_fan_out_inner_with_passes(red, SIMPLIFY_PASSES)
 }
 
 fn simplify_system_fan_out_inner_with_passes(
     red: &mut Reduction,
     passes: &[Pass],
-) -> Result<Vec<(crate::constraint::system::System, u64)>, crate::prove::ProveError> {
+) -> Result<Vec<SystemBranch>, crate::prove::ProveError> {
     // Explicit fixpoint loop so we can break out on fan-out.
     // HS-faithful (Simplify.hs:73-77): no iteration cap — the loop
     // terminates only when a full pass reports `Unchanged`.
@@ -162,10 +162,10 @@ fn simplify_system_fan_out_inner_with_passes(
     }
     // Post-loop steps — same as `simplify_system`.
     simp_post_loop_steps(red);
-    Ok(vec![(
-        std::mem::replace(&mut red.sys, crate::constraint::system::System::empty()),
-        red.maude.fresh_counter_peek(),
-    )])
+    Ok(vec![SystemBranch {
+        sys: std::mem::replace(&mut red.sys, crate::constraint::system::System::empty()),
+        counter: red.maude.fresh_counter_peek(),
+    }])
 }
 
 /// Continue from the operation immediately after a split. Haskell's DisjT
@@ -176,7 +176,7 @@ fn continue_simplify_iteration(
     red: &mut Reduction,
     passes: &[Pass],
     mut next_pass: usize,
-) -> Result<Option<Vec<(crate::constraint::system::System, u64)>>, crate::prove::ProveError> {
+) -> Result<Option<Vec<SystemBranch>>, crate::prove::ProveError> {
     while let Some(pass) = passes.get(next_pass) {
         let outcome = pass.run(red)?;
         next_pass += 1;
@@ -199,7 +199,7 @@ fn continue_simplify_branches(
     passes: &[Pass],
     next_pass: usize,
     changed: ChangeIndicator,
-) -> Result<Vec<(crate::constraint::system::System, u64)>, crate::prove::ProveError> {
+) -> Result<Vec<SystemBranch>, crate::prove::ProveError> {
     let mut out = Vec::new();
     for arm in arms {
         let mut branch_out = continue_simplify_branch(arm, ctx, passes, next_pass, changed)?;
@@ -214,7 +214,7 @@ fn continue_simplify_branch(
     passes: &[Pass],
     next_pass: usize,
     changed: ChangeIndicator,
-) -> Result<Vec<(crate::constraint::system::System, u64)>, crate::prove::ProveError> {
+) -> Result<Vec<SystemBranch>, crate::prove::ProveError> {
     if arm.sys.eq_store().is_false() {
         return Ok(Vec::new());
     }
@@ -227,7 +227,10 @@ fn continue_simplify_branch(
         }
         None => {
             simp_post_loop_steps(&mut branch);
-            Ok(vec![(branch.sys, branch.maude.fresh_counter_peek())])
+            Ok(vec![SystemBranch {
+                sys: branch.sys,
+                counter: branch.maude.fresh_counter_peek(),
+            }])
         }
     }
 }

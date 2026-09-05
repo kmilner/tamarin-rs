@@ -175,9 +175,9 @@ fn adopt_singleton_once(
     Ok(outcome)
 }
 
-fn assert_continuation_order(systems: Vec<(System, u64)>) {
+fn assert_continuation_order(systems: Vec<SystemBranch>) {
     assert_eq!(systems.len(), 2);
-    for (sys, _) in systems {
+    for SystemBranch { sys, .. } in systems {
         let nr = |name, idx| {
             let goal = continuation_marker_goal(name, idx);
             sys.goals
@@ -219,7 +219,7 @@ fn split_arms_resume_with_their_own_fresh_counters() {
     let systems = simplify_system_fan_out_inner_with_passes(&mut red, &passes)
         .expect("infallible test passes");
     assert_eq!(systems.len(), 2);
-    for (sys, counter) in systems {
+    for SystemBranch { sys, counter } in systems {
         let arm = sys.last_atom.expect("split arm").idx;
         let expected = match arm {
             30 => 100,
@@ -378,7 +378,7 @@ fn singleton_system_case_is_adopted_as_a_linear_continuation() {
         .expect("infallible test passes");
 
     assert_eq!(systems.len(), 1);
-    let (sys, counter) = systems.pop().unwrap();
+    let SystemBranch { sys, counter } = systems.pop().unwrap();
     assert_eq!(sys.last_atom.expect("adopted branch marker").idx, 30);
     assert_eq!(counter, 41);
     let nr = |name, idx| {

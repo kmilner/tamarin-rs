@@ -20,6 +20,7 @@
 //! Alongside the full machinery it also exposes the public data shapes
 //! and the `IntegerParameters` config used by the rest of the solver.
 
+use crate::constraint::solver::reduction::SystemBranch;
 use crate::constraint::system::System;
 use tamarin_term::bind::Bindings;
 use tamarin_term::lterm::frees;
@@ -375,7 +376,7 @@ pub(crate) fn initial_source_cases(
                 ctx, sys, counter,
             )?
             .into_iter()
-            .filter_map(|(s, _)| {
+            .filter_map(|SystemBranch { sys: s, .. }| {
                 if s.eq_store().is_false()
                     || !crate::constraint::solver::contradictions::contradictions(ctx, &s)
                         .is_empty()
@@ -1544,14 +1545,21 @@ fn run_solve_all_safe_goals_disj_with_progress(
         // later processing.  Match HS's Disj-monad insertion order:
         // first sibling processed first (LIFO worklist → push tail
         // reversed so the head pops next).
-        let (sys, fresh_counter) = match post_simp.len() {
+        let SystemBranch {
+            sys,
+            counter: fresh_counter,
+        } = match post_simp.len() {
             0 => continue, // all siblings contradictory / dropped
             1 => post_simp.into_iter().next().unwrap(),
             _ => {
                 let mut iter = post_simp.into_iter();
                 let head = iter.next().unwrap();
                 let tail: Vec<_> = iter.collect();
-                for (sib, sibling_counter) in tail.into_iter().rev() {
+                for SystemBranch {
+                    sys: sib,
+                    counter: sibling_counter,
+                } in tail.into_iter().rev()
+                {
                     worklist.push(Entry {
                         sys: sib,
                         name: name.clone(),
