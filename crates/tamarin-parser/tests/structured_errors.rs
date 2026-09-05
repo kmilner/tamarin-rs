@@ -1080,3 +1080,40 @@ fn literal_comment_failures_keep_the_consumed_position() {
     );
     assert_eq!(error.span().start, source.find('\n').unwrap());
 }
+
+#[test]
+fn failed_formula_alternatives_do_not_leak_identifier_offsets() {
+    for (fact, arity) in [("Q(x)", 1), ("Q()", 0)] {
+        let source = format!("theory T begin builtins: diffie-hellman functions: Q/{arity} predicates: P(x) <=> T, P(x) <=> {fact} ^ z end");
+        parse_theory(&source, &[]).expect_err("malformed predicate must return an error");
+    }
+}
+
+#[test]
+fn fact_fallback_preserves_consumed_comments() {
+    for formula in ["G(x)", "G()", "(G(x))"] {
+        let source = format!("{formula} /* unfinished");
+        let error =
+            tamarin_parser::parser::parse_formula_str(&source, &pair_maude_sig()).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+            "{error:?}"
+        );
+        assert_eq!(error.span().start, source.len());
+    }
+    let dir = std::env::temp_dir().join(format!("tamarin_fact_comment_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = "predicates: P(x) <=> G(x) /* unfinished";
+    std::fs::write(dir.join("bad.inc"), source).unwrap();
+    let root = "theory T begin\n#include \"bad.inc\"\nend";
+    let error = parse_theory_with_base(root, &[], Some(dir.clone())).unwrap_err();
+    assert!(
+        matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.source_text(), Some(source));
+    assert_eq!(error.span().start, source.len());
+    let labels = error.diagnostic_labels_with_source(root);
+    assert_eq!(&source[labels[1].span.clone()], "/*");
+    std::fs::remove_dir_all(dir).unwrap();
+}

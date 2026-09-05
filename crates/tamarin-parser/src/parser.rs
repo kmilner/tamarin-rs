@@ -1051,6 +1051,18 @@ struct FunctionSite {
     builtin: bool,
 }
 
+// Formula alternatives change lexer and expectation state, but not declarations.
+struct FormulaCheckpoint<'a> {
+    lx: Lexer<'a>,
+    var_dot_hangover: bool,
+    dot_index_consumed: bool,
+    sort_suffix_consumed: bool,
+    last_ident_end: Option<usize>,
+    var_hangover_ident_end: Option<usize>,
+    term_carry: Option<(usize, bool, bool, bool)>,
+    fact_annot_hangover: Option<usize>,
+}
+
 pub struct Parser<'a> {
     lx: Lexer<'a>,
     // These positions belong to this parser's source, not the shared include state.
@@ -5696,6 +5708,30 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn formula_checkpoint(&self) -> FormulaCheckpoint<'a> {
+        FormulaCheckpoint {
+            lx: self.lx.clone(),
+            var_dot_hangover: self.var_dot_hangover,
+            dot_index_consumed: self.dot_index_consumed,
+            sort_suffix_consumed: self.sort_suffix_consumed,
+            last_ident_end: self.last_ident_end,
+            var_hangover_ident_end: self.var_hangover_ident_end,
+            term_carry: self.term_carry,
+            fact_annot_hangover: self.fact_annot_hangover,
+        }
+    }
+
+    fn restore_formula(&mut self, checkpoint: FormulaCheckpoint<'a>) {
+        self.lx = checkpoint.lx;
+        self.var_dot_hangover = checkpoint.var_dot_hangover;
+        self.dot_index_consumed = checkpoint.dot_index_consumed;
+        self.sort_suffix_consumed = checkpoint.sort_suffix_consumed;
+        self.last_ident_end = checkpoint.last_ident_end;
+        self.var_hangover_ident_end = checkpoint.var_hangover_ident_end;
+        self.term_carry = checkpoint.term_carry;
+        self.fact_annot_hangover = checkpoint.fact_annot_hangover;
+    }
+
     fn fatom(&mut self) -> Result<Formula, ParseError> {
         self.skip_ws();
         if self.try_kw("F") || self.try_punct("⊥") {
@@ -5718,12 +5754,12 @@ impl<'a> Parser<'a> {
         // Try a complete atom before grouping a formula. A grouped term can
         // continue through any of the term grammar's operators before reaching
         // its relation, so inspecting just the next operator is insufficient.
-        let start = self.save();
+        let start = self.formula_checkpoint();
         let atom_error = match self.formula_atom() {
             Ok(formula) => return Ok(formula),
             Err(error) => error,
         };
-        self.restore(start);
+        self.restore_formula(start);
         if self.try_punct("(") {
             let grouped = self.iff().and_then(|formula| {
                 self.require_punct(")")?;
@@ -5750,7 +5786,7 @@ impl<'a> Parser<'a> {
         }
         // An action commits after @. A bare fact remains a candidate until
         // the complete relational-term alternative has been tried.
-        let start = self.save();
+        let start = self.formula_checkpoint();
         let fact = match self.fact() {
             Ok(fact) if self.try_punct("@") => {
                 let node = self.term(false)?;
@@ -5758,13 +5794,13 @@ impl<'a> Parser<'a> {
             }
             result => result,
         };
-        let fact_end = self.save();
-        self.restore(start);
+        let fact_end = self.formula_checkpoint();
+        self.restore_formula(start);
         let term_error = match self.relational_atom() {
             Ok(formula) => return Ok(formula),
             Err(error) => error,
         };
-        self.restore(fact_end);
+        self.restore_formula(fact_end);
         match fact {
             Ok(fact) if !self.peek_atom_relop() => Ok(Formula::Atom(Atom::Pred(fact))),
             Ok(_) => Err(term_error),
