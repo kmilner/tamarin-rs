@@ -14,26 +14,15 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use tamarin_parser::{parse_theory, Message};
+use tamarin_parser::parse_theory;
 use walkdir::WalkDir;
 
 mod common;
 use common::corpus_root;
 
-/// A representative message string for failure-category bucketing.  The
-/// `ParseError` holds a parsec-style message list, so join the message
-/// strings for classification purposes.
+/// A semantic failure category for corpus-level bucketing.
 fn error_key_source(e: &tamarin_parser::ParseError) -> String {
-    e.messages
-        .iter()
-        .map(|m| match m {
-            Message::SysUnExpect(s)
-            | Message::UnExpect(s)
-            | Message::Expect(s)
-            | Message::Message(s) => s.as_str(),
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    e.diagnostic_message()
 }
 
 fn main() {

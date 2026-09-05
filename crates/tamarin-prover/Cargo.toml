@@ -27,6 +27,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 mimalloc = { version = "0.1", default-features = false }
 rayon = { workspace = true }
 clap = { workspace = true }
+codespan-reporting = "0.13.1"
 
 [dev-dependencies]
 tamarin-test-support = { workspace = true }

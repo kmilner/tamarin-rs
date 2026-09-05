@@ -101,17 +101,14 @@ async fn test_post_index_with_garbage_source_shows_alert() {
         .expect("send");
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("read");
-    // The banner carries the failure from the loader word for word.  These
-    // are the bytes of the parsec error itself.  The port escapes them for
-    // HTML and keeps their newlines (see `handlers::root::html_escape`).  The
-    // banner shows them under the name of the uploaded file.
+    // The banner carries the plain structured diagnostic. The port escapes it
+    // for HTML and keeps its newlines (see `handlers::root::html_escape`).
     assert!(
-        body.contains(
-            "<body><p class=\"message\">Theory loading failed:\n\
-             &quot;garbage.spthy&quot; (line 1, column 1):\n\
-             unexpected &quot;t&quot;\n\
-             expecting &quot;theory&quot;</p>"
-        ),
+        body.contains(concat!(
+            "<body><p class=\"message\">Theory loading failed:\n",
+            "garbage.spthy:1:1: Unexpected input while parsing theory\n",
+            "  = note: expected &quot;theory&quot;; found &quot;t&quot;</p>"
+        )),
         "expected the parse error in the upload banner; body=\n{}",
         body
     );

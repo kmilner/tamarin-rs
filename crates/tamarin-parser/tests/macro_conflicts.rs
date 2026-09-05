@@ -29,7 +29,7 @@ fn err(src: &str, file: &str) -> String {
 /// the message plus the `HasCallStack` block.
 fn ghc(src: &str) -> String {
     let e = parse_theory(src, &[]).unwrap_err();
-    match &e.ghc_error {
+    match e.ghc_error() {
         Some(g) => g.display_exception(),
         None => panic!("{src:?} failed as a parsec error, not a GHC error: {e}"),
     }

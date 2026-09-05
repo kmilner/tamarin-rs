@@ -131,15 +131,54 @@ fn ghc_call_sites_name_the_pinned_error_tokens() {
 // ---- parsec frame-rendering port (Text.Parsec.Error) ----
 
 fn pe(source: &str, line: u32, col: u32, messages: Vec<Message>) -> String {
-    ParseError {
-        line,
-        col,
-        offset: 0,
-        source: source.to_string(),
+    ParseError::at(
+        crate::lexer::Pos {
+            offset: 0,
+            line,
+            col,
+        },
         messages,
-        ghc_error: None,
-    }
+    )
+    .with_source(source)
     .to_string()
+}
+
+#[test]
+fn structured_expected_notes_prefer_user_tokens_and_deduplicate() {
+    let error = ParseError::at(
+        crate::lexer::Pos {
+            offset: 0,
+            line: 1,
+            col: 1,
+        },
+        vec![
+            Message::SysUnExpect("\"{\"".into()),
+            Message::UnExpect("reserved word \"diff\"".into()),
+            Message::Expect("term".into()),
+            Message::Expect("term".into()),
+        ],
+    )
+    .with_context(ParseContext::Term);
+
+    assert_eq!(
+        error.diagnostic_notes(),
+        ["expected term; found reserved word \"diff\"".to_string()]
+    );
+}
+
+#[test]
+fn custom_context_does_not_allocate_structured_storage() {
+    let error = ParseError::at(
+        crate::lexer::Pos {
+            offset: 0,
+            line: 1,
+            col: 1,
+        },
+        vec![Message::Message("custom".into())],
+    )
+    .with_context(ParseContext::Term);
+
+    assert!(error.diagnostic.is_none());
 }
 
 #[test]
@@ -1046,6 +1085,20 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
     }
 }
 
+#[test]
+fn relational_application_errors_outweigh_predicate_prefixes() {
+    let source = "theory T begin\nlemma L: \"Foo(x) = y\"\nend\n";
+    let error = parse_theory(source, &[]).expect_err("a relation requires a declared function");
+    assert!(
+        matches!(
+            error.kind(),
+            ParseErrorKind::UndeclaredFunction { name } if name == "Foo"
+        ),
+        "{error:?}"
+    );
+    assert_eq!(&source[error.span()], "Foo");
+}
+
 // HS `typep` (Token.hs:471-473) maps only the literal `Any` to the default
 // (Nothing); lowercase `any` is `Just "any"`. Verified against
 // tamarin-prover 1.13.0: `new x:any` renders with `:any` preserved.
@@ -1154,11 +1207,140 @@ fn lemma_proof_raw(thy: &Theory) -> &str {
 fn malformed_stored_proof_fails_theory_parse() {
     let src = "theory T begin\nlemma L: \"T\"\nsimplify\nend";
     let err = parse_theory(src, &[]).expect_err("a bare intermediate method needs a child");
-    assert_eq!((err.line, err.col), (4, 1));
+    assert_eq!((err.pos.line, err.pos.col), (4, 1));
 
     let src = "theory T begin\nlemma L: \"T\"\nby sorry trailing\nend";
     let err = parse_theory(src, &[]).expect_err("trailing proof text must not be discarded");
     assert!(err.to_string().contains("unexpected trailing proof text"));
+}
+
+#[test]
+fn stored_proof_stops_before_top_level_process_definition() {
+    let source = r#"theory T begin
+lemma L: "T"
+by sorry
+let P = 0
+process: P
+end"#;
+    parse_theory(source, &[]).expect("top-level let after a proof must remain a theory item");
+}
+
+#[test]
+fn stored_proof_ignores_structure_inside_public_literals() {
+    let source = r#"theory T begin
+lemma L: "T"
+by solve( Foo('a)) rule') @ #i )
+end"#;
+    let theory = parse_theory(source, &[]).expect("literal punctuation cannot truncate a proof");
+    assert!(lemma_proof_raw(&theory).contains("'a)) rule'"));
+}
+
+#[test]
+fn stored_proof_treats_backslashes_as_public_literal_data() {
+    let source = r#"theory T begin
+lemma L: "T"
+by solve( Foo('a\') @ #i )
+end"#;
+    let theory = parse_theory(source, &[]).expect("backslash does not escape a public quote");
+    assert!(lemma_proof_raw(&theory).contains("'a\\'"));
+}
+
+#[test]
+fn parser_messages_are_bounded_after_construction() {
+    let declarations = (0..200)
+        .map(|index| format!("f{index}/2 [AC]"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source =
+        format!("theory T begin\nfunctions: {declarations}\nmacros: m(x) = x, m(y) = y\nend");
+    let error = parse_theory(&source, &[]).expect_err("the second macro conflicts");
+    assert!(error.messages.len() <= MAX_DIAGNOSTIC_MESSAGES);
+    assert!(error.messages_truncated);
+    assert!(error
+        .diagnostic_notes()
+        .iter()
+        .any(|note| note == OMITTED_MESSAGES));
+    assert!(!error
+        .diagnostic_notes()
+        .iter()
+        .any(|note| note.starts_with("expected ") && note.contains(OMITTED_MESSAGES)));
+    let rendered = error.to_string();
+    assert!(rendered.contains(OMITTED_MESSAGES), "{rendered}");
+    assert!(
+        rendered.contains("Conflicting name for macro m"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn short_parser_messages_reuse_their_allocations() {
+    let text = String::from("short expectation");
+    let text_allocation = text.as_ptr();
+    let messages = vec![Message::Expect(text)];
+    let messages_allocation = messages.as_ptr();
+
+    let error = ParseError::at(Pos::ZERO, messages);
+
+    assert_eq!(error.messages.as_ptr(), messages_allocation);
+    let Message::Expect(text) = &error.messages[0] else {
+        panic!("expected the original expectation");
+    };
+    assert_eq!(text.as_ptr(), text_allocation);
+}
+
+#[test]
+fn item_position_hangovers_respect_the_message_limit() {
+    let declarations = (0..200)
+        .map(|index| format!("f{index}/2 [AC]"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!("theory T begin\nfunctions: {declarations}\nequations: x = y\n@\nend");
+
+    let error = parse_theory(&source, &[]).expect_err("junk at item position must fail");
+
+    assert!(error.messages.len() <= MAX_DIAGNOSTIC_MESSAGES);
+    assert!(error.messages_truncated);
+    assert!(error.to_string().contains(OMITTED_MESSAGES), "{error}");
+}
+
+#[test]
+fn message_overflow_keeps_a_late_cause_and_records_the_omission() {
+    let mut messages = (0..MAX_DIAGNOSTIC_MESSAGES)
+        .map(|index| Message::Expect(format!("alternative {index}")))
+        .collect::<Vec<_>>();
+    let mut truncated = false;
+
+    push_bounded_message(
+        &mut messages,
+        &mut truncated,
+        Message::Message("specific cause".to_string()),
+    );
+
+    assert_eq!(messages.len(), MAX_DIAGNOSTIC_MESSAGES);
+    assert!(truncated);
+    assert!(messages
+        .iter()
+        .any(|message| matches!(message, Message::Message(text) if text == "specific cause")));
+}
+
+#[test]
+fn message_overflow_is_recorded_without_expectations_to_displace() {
+    let mut messages = (0..MAX_DIAGNOSTIC_MESSAGES)
+        .map(|index| Message::UnExpect(format!("cause {index}")))
+        .collect::<Vec<_>>();
+    let mut truncated = false;
+
+    push_bounded_message(
+        &mut messages,
+        &mut truncated,
+        Message::Message("latest cause".to_string()),
+    );
+
+    assert_eq!(messages.len(), MAX_DIAGNOSTIC_MESSAGES);
+    assert!(truncated);
+    assert!(messages
+        .iter()
+        .any(|message| matches!(message, Message::Message(text) if text == "latest cause")));
 }
 
 /// Reports whether the parser split a top-level `test` CaseTest item out of

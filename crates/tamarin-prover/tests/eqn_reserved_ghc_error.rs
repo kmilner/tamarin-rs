@@ -2,15 +2,12 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! End-to-end stderr / exit-code parity for `naryOpApp`'s reserved-builtin
+//! End-to-end diagnostics for `naryOpApp`'s reserved-builtin
 //! rejection inside `equations:` (Theory/Text/Parser/Term.hs:90-92).
 //!
-//! The rejection is a GHC `error`, not a parsec failure: the exception
-//! escapes the parser run, GHC's top-level handler prints `tamarin-prover: `
-//! plus the message and the `HasCallStack` frame, and the process exits 1
-//! with no stdout.  The pinned oracle (Git revision ef3f0468) produces
-//! exactly the bytes below (probes p22/p47 of the lookup-arity matrix),
-//! after its machine-local `maude tool:` banner.
+//! Haskell raises a GHC exception here. The port converts it into the same
+//! semantic parser-error surface used for ordinary failures, without exposing
+//! a compiler-version-specific call stack.
 
 mod common;
 
@@ -35,37 +32,37 @@ fn run_binary(stem: &str, src: &str) -> (i32, String, usize) {
     (code, strip_maude_banner(&stderr), stdout.len())
 }
 
-/// The GHC top-level handler's stderr for the Term.hs:92:9 `error`.
-fn ghc_stderr(name: &str) -> String {
-    format!(
-        "tamarin-prover: `\"{name}\"` is a reserved function name for builtins.\n\
-         CallStack (from HasCallStack):\n  error, called at \
-         src/Theory/Text/Parser/Term.hs:92:9 in \
-         tamarin-prover-theory-1.13.0-8wixYaxm5uHCGl2uEzaKzP:Theory.Text.Parser.Term\n"
-    )
+fn assert_reserved_diagnostic(code: i32, stderr: &str, stdout_len: usize, name: &str) {
+    assert_eq!(code, 1);
+    assert_eq!(stdout_len, 0, "no stdout on a parser error");
+    assert!(
+        stderr.contains("error[parse]: Reserved builtin used in term")
+            && stderr.contains(&format!("builtin function `{name}` is reserved")),
+        "unexpected stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("CallStack"),
+        "unexpected GHC details:\n{stderr}"
+    );
 }
 
 /// `exp` applied inside an equation (probe p22).
 #[test]
-fn applied_reserved_name_in_equations_dies_with_callstack() {
+fn applied_reserved_name_in_equations_has_a_diagnostic() {
     let (code, stderr, stdout_len) = run_binary(
         "p22_eqn_reserved",
         "theory T\nbegin\n\nequations: exp(x, y) = x\n\nend\n",
     );
-    assert_eq!(code, 1);
-    assert_eq!(stderr, ghc_stderr("exp"));
-    assert_eq!(stdout_len, 0, "no stdout on a GHC error");
+    assert_reserved_diagnostic(code, &stderr, stdout_len, "exp");
 }
 
 /// A BARE reserved name in an equation operand aborts too — `naryOpApp`'s
 /// check runs on the identifier before anything else (probe p47).
 #[test]
-fn bare_reserved_name_in_equations_dies_with_callstack() {
+fn bare_reserved_name_in_equations_has_a_diagnostic() {
     let (code, stderr, stdout_len) = run_binary(
         "p47_eqn_bare_reserved",
         "theory T\nbegin\n\nfunctions: f/1\n\nequations: f(x) = mun\n\nend\n",
     );
-    assert_eq!(code, 1);
-    assert_eq!(stderr, ghc_stderr("mun"));
-    assert_eq!(stdout_len, 0, "no stdout on a GHC error");
+    assert_reserved_diagnostic(code, &stderr, stdout_len, "mun");
 }

@@ -182,14 +182,14 @@ fn eq_on_an_application_is_rejected_at_the_open_paren() {
     let e = parse_err(
         "theory T begin\nfunctions: h/1\nprocess:\n  in('c', =h(x)); out('c', 'ok')\nend\n",
     );
-    assert_eq!((e.line, e.col), (4, 13));
+    assert_eq!(e.line_column(), (4, 13));
 
     // Oracle frame (let): `(line 4, column 21): unexpected "(" /
     // expecting letter or digit, ".", ":" or "="`.
     let e = parse_err(
         "theory T begin\nfunctions: h/1\nprocess:\n  in('c', y); let =h(x) = y in out('c', 'ok')\nend\n",
     );
-    assert_eq!((e.line, e.col), (4, 21));
+    assert_eq!(e.line_column(), (4, 21));
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +206,8 @@ fn eq_starts_no_term_outside_pattern_positions() {
     // above).  Before the `allow_pat` gate the port PARSED these and died
     // later inside translation/elaboration with an unrelated message.
     let e = parse_err("theory T begin\nprocess:\n  in('c', x); out('c', =x)\nend\n");
-    assert_eq!((e.line, e.col), (3, 24));
+    assert_eq!(e.line_column(), (3, 24));
 
     let e = parse_err("theory T begin\nrule R: [ In(=x) ] --> [ Out(x) ]\nend\n");
-    assert_eq!((e.line, e.col), (2, 14));
+    assert_eq!(e.line_column(), (2, 14));
 }

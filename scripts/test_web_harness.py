@@ -71,6 +71,44 @@ def run_shell(script, *, temp_dir=None, env=None, check=True):
     return result
 
 
+class ParserDiagnosticNormalization(unittest.TestCase):
+    @staticmethod
+    def normalize(stderr):
+        return subprocess.run(
+            ["bash", "-c", ". scripts/gate_common.sh; nerr"],
+            cwd=HERE.parent,
+            # Normalization must not preflight installed provers or Maude.
+            env=clean_environment({
+                "HS_PATH": "/nonexistent/haskell-oracle",
+                "RS_BIN": "/nonexistent/tamarin-rs",
+                "MAUDE_PATH": "/nonexistent/maude",
+            }),
+            input=stderr,
+            text=True, capture_output=True, check=True,
+        ).stdout
+
+    def test_syntax_frames_agree(self):
+        hs = '\"bad.spthy\" (line 2, column 1):\nunexpected \"?\"\nexpecting \"end\"\n'
+        rs = "error[parse]: Unexpected input\n  ┌─ bad.spthy:2:1\n  │\n2 │ ?\n  │ ^\n  = expected end\n\n"
+        self.assertEqual(self.normalize(hs), "<parser diagnostic>\n")
+        self.assertEqual(self.normalize(rs), self.normalize(hs))
+
+    def test_runtime_errors_remain_visible(self):
+        for message in ["error: oracle failed\n", "tamarin-prover: runtime failure\n", "unknown diagnostic format\n"]:
+            self.assertEqual(self.normalize(message), message)
+            rs = "error[parse]: Bad syntax\n  │ ^\n\n"
+            self.assertEqual(self.normalize(message + rs + message), message + "<parser diagnostic>\n" + message)
+            self.assertEqual(self.normalize(rs.rstrip() + "\n" + message), "<parser diagnostic>\n" + message)
+
+    def test_unrecognized_haskell_messages_are_not_suppressed(self):
+        hs = '\"bad.spthy\" (line 2, column 1):\nunexpected \"?\"\nsemantic detail\nerror: oracle failed\n'
+        self.assertEqual(self.normalize(hs), "<parser diagnostic>\nsemantic detail\nerror: oracle failed\n")
+
+    def test_existing_warning_rules_still_apply(self):
+        stderr = "[Open Chains] Too many chain constraints\n" * 2 + "[Saturating Sources] noise\nother warning\n"
+        self.assertEqual(self.normalize(stderr), "[Open Chains] Too many chain constraints\nother warning\n")
+
+
 class DiffArtifactNames(unittest.TestCase):
     def test_long_urls_with_the_same_prefix_do_not_collide(self):
         prefix = "/thy/trace/1/main/proof/" + "case/" * 50

@@ -26,12 +26,10 @@ impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LoadError::Io(s) => write!(f, "IO error: {}", s),
-            // `Parse` already holds the fully-rendered parsec frame (HS `show
-            // err` = `show (ParserError e) = show e`, TheoryLoader.hs:439), so
-            // it is emitted verbatim — no `parse error:` prefix, which HS never
-            // prints.  This is what lands inside the eager-load dashed block
-            // (Dispatch.hs:194-201 `show err`) and after the web upload's
-            // "Theory loading failed:\n" banner (Handler.hs:809).
+            // `Parse` already holds the complete plain-text diagnostic, so it
+            // is emitted verbatim without adding another prefix. This is what
+            // lands inside the eager-load block and the web upload failure
+            // banner.
             LoadError::Parse(s) => write!(f, "{}", s),
             LoadError::Elaborate(s) => write!(f, "elaboration error: {}", s),
         }
@@ -60,21 +58,10 @@ pub(crate) fn load_from_source(
     origin: TheoryOrigin,
     cfg: &crate::ServerConfig,
 ) -> Result<TheoryEntry, LoadError> {
-    // Inject the parsec `SourcePos` name (the path HS prints in the frame
-    // header) from the origin: a local file's on-disk path, or the uploaded
-    // filename — the same value HS passes as `inFile`/`filename` to
-    // `parseString` (Dispatch.hs:170 `thLoad srcThy path`; Handler.hs:806
-    // `loadAndCloseTheory srcContent filename`).  `LoadError::Parse` then holds
-    // the byte-for-byte parsec frame.
+    // Attach the local path or uploaded filename to the structured diagnostic.
+    // Errors originating in an included file already carry that file's path
+    // and source text, which `with_source` deliberately leaves unchanged.
     let source_name = origin.label();
-    // Deliberate divergence, same policy as the other web error surfaces: a
-    // theory that trips one of the GHC `error`s inside HS's parser (`macro`'s
-    // reserved name / duplicate argument, Theory/Text/Parser/Macro.hs:34-38)
-    // takes down the HS web handler with an uncaught exception.  Here the
-    // failure travels as an ordinary `LoadError::Parse` and reaches the user
-    // through the normal parse-error surface — `Display for ParseError` renders
-    // a GHC `error` as its bare message, without the parsec frame the position
-    // would fake or the `HasCallStack` block that only the CLI reproduces.
     // Parser flags (`-D` defines + the `quit-on-warning` element) come from
     // the server configuration. `#include` paths resolve against the theory
     // file's own directory — HS threads `Just inFile`
@@ -89,7 +76,7 @@ pub(crate) fn load_from_source(
         _ => None,
     };
     let parsed = parse_theory_with_base(src, &flags, base_dir)
-        .map_err(|e| LoadError::Parse(e.with_source(source_name).to_string()))?;
+        .map_err(|e| LoadError::Parse(e.render_plain_with_source(&source_name, src)))?;
 
     // HS lifecycle markers, stderr via `traceM`: "Theory loaded" right
     // after parsing (TheoryLoader.hs:449-452, see line 451).
