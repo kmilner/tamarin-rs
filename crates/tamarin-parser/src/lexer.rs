@@ -54,7 +54,9 @@ impl<'a> Lexer<'a> {
         result: Result<T, crate::parser::ParseError>,
     ) -> Result<T, crate::parser::ParseError> {
         if let (Some(opening), Err(error)) = (self.unterminated_comment, &result)
-            && error.pos.offset < opening.offset
+            // An attached source belongs to an included file; its offsets
+            // cannot be ordered against this lexer's comment opener.
+            && (error.source_text().is_some() || error.pos.offset < opening.offset)
         {
             return result;
         }

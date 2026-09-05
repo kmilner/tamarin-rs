@@ -913,3 +913,38 @@ fn proof_literals_preserve_leading_comments_and_raw_text() {
         assert_eq!(lemma.proof.as_ref().unwrap().raw, proof);
     }
 }
+
+#[test]
+fn included_arity_errors_label_their_local_declaration() {
+    let dir = std::env::temp_dir().join(format!("tamarin_include_arity_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = "functions: f/2\nrule R: [] --> [Out(f(x))]\n";
+    std::fs::write(dir.join("bad.inc"), source).unwrap();
+    let root = "theory T begin\n#include \"bad.inc\"\nend";
+    let error = parse_theory_with_base(root, &[], Some(dir.clone())).unwrap_err();
+    let labels = error.diagnostic_labels_with_source(root);
+    assert_eq!(labels.len(), 2, "{error:?}");
+    assert_eq!(&source[labels[1].span.clone()], "f");
+    assert_eq!(labels[1].span.start, source.find("f/2").unwrap());
+    assert_eq!(error.source_text(), Some(source));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn included_errors_take_precedence_over_root_comments_regardless_of_padding() {
+    let dir = std::env::temp_dir().join(format!("tamarin_include_padding_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = "theory T begin\n#include \"bad.inc\" /* unfinished";
+    for padding in [0, 100] {
+        let source = format!("{}bogus", "\n".repeat(padding));
+        std::fs::write(dir.join("bad.inc"), &source).unwrap();
+        let error = parse_theory_with_base(root, &[], Some(dir.clone())).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::UnknownItem { item, .. } if item == "bogus"),
+            "{error:?}"
+        );
+        assert_eq!(error.source_text(), Some(source.as_str()));
+        assert_eq!(error.span().start, padding);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

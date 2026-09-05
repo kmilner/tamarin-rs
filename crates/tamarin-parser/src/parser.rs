@@ -2114,11 +2114,14 @@ impl<'a> Parser<'a> {
             Ok(items)
         })();
 
-        // Thread parser state BACK (HS `putState st'` + `sig st'` merge).
-        self.swap_include_state(&mut sub);
-        sub.lx
+        let result = sub
+            .lx
             .finish(result)
-            .map_err(|error| sub.with_arity_site(error))
+            .map_err(|error| sub.with_arity_site(error));
+        // Annotate while the included signature is still available, then
+        // thread parser state BACK (HS `putState st'` + `sig st'` merge).
+        self.swap_include_state(&mut sub);
+        result
     }
 
     fn skip_until(&mut self, terminator: &str) {
