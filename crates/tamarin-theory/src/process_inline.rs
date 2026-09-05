@@ -199,13 +199,14 @@ fn apply_m_action(
             msg,
             match_vars,
         } => {
-            if let VTerm::Lit(Lit::Var(v)) = msg {
-                if in_domain(subst, v) && !v.var.name.starts_with("pat_") {
-                    return Err(ConvertError::new(format!(
-                        "captured variable {} in process call (in)",
-                        v.var.name
-                    )));
-                }
+            if let VTerm::Lit(Lit::Var(v)) = msg
+                && in_domain(subst, v)
+                && !v.var.name.starts_with("pat_")
+            {
+                return Err(ConvertError::new(format!(
+                    "captured variable {} in process call (in)",
+                    v.var.name
+                )));
             }
             Ok(SapicAction::ChIn {
                 chan: chan.as_ref().map(|t| subst_term(subst, t)),

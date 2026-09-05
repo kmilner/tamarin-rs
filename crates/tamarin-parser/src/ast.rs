@@ -74,7 +74,10 @@ pub enum TheoryItem {
     Macros(Vec<Macro>),
     Predicates(Vec<Predicate>),
     Options(Vec<String>),
-    Heuristic(String),
+    Heuristic {
+        raw: String,
+        source_file: Option<String>,
+    },
     Tactic(Tactic),
     Restriction(Restriction),
     LegacyAxiom(Restriction),
@@ -204,6 +207,9 @@ pub enum RuleAttr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lemma {
     pub name: String,
+    /// Included fragment that declared this lemma. `None` denotes the root
+    /// theory, whose filename is supplied by the loading surface.
+    pub source_file: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
     pub formula: Formula,
@@ -221,6 +227,8 @@ pub struct Lemma {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiffLemma {
     pub name: String,
+    /// Included fragment that declared this diff lemma.
+    pub source_file: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub proof: Option<ProofSkeleton>,
 }
@@ -228,6 +236,8 @@ pub struct DiffLemma {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccLemma {
     pub name: String,
+    /// Included fragment that declared this accountability lemma.
+    pub source_file: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub formula: Formula,
     pub case_test_idents: Vec<String>,

@@ -1,5 +1,3 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-
 //! Diagnostics for signature-driven function application parsing.
 
 use tamarin_parser::{parse_theory, ParseErrorKind};

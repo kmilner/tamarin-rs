@@ -36,12 +36,7 @@ async fn test_graph_returns_image_or_dot() {
     // A proof node — the paths `thyPathSystem` draws.  A lemma / help / rules
     // path is its catch-all `error` instead (see `routes_graph.rs`).
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/graph/proof/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/graph/proof/debug").await;
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     let body = res.text().await.expect("text");
@@ -72,12 +67,7 @@ async fn test_graph_returns_image_or_dot() {
 async fn test_edit_stub_returns_alert() {
     // Still stubbed — needs the parser-mutation pipeline.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .post(s.url("/thy/trace/1/edit/lemma/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.post("/thy/trace/1/edit/lemma/debug").await;
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
     assert_eq!(json_top_keys(&v), one_key_set("alert"));
@@ -95,12 +85,7 @@ async fn test_edit_stub_returns_alert() {
 #[tokio::test]
 async fn test_del_path_lemma_returns_redirect_envelope() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/del/path/lemma/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/del/path/lemma/debug").await;
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
 
@@ -114,17 +99,59 @@ async fn test_del_path_lemma_returns_redirect_envelope() {
     );
 
     let redir = v.get("redirect").and_then(|t| t.as_str()).unwrap_or("");
-    // Same SHAPE as Haskell: /thy/trace/<NEW>/overview/lemma/<name>
-    assert!(
-        redir.contains("/overview/lemma/debug"),
-        "del/path should redirect to lemma view; got {:?}",
-        redir
-    );
     // And new idx — must NOT reuse the source idx.
     assert!(
         !redir.starts_with("/thy/trace/1/"),
         "del/path must allocate a fresh idx; got {:?}",
         redir
+    );
+    let idx = redirect_idx(&v, "overview/lemma/debug");
+    let source = s
+        .get(&format!("/thy/trace/{idx}/source"))
+        .await
+        .text()
+        .await
+        .expect("source body");
+    assert!(!source.contains("lemma debug"), "lemma must be removed");
+}
+
+#[tokio::test]
+async fn deleting_a_reuse_lemma_invalidates_later_live_proofs() {
+    let s = start_server_with_theory("hide_reuse_lemma.spthy").await;
+    let removed_step: serde_json::Value = s
+        .get("/thy/trace/1/del/path/proof/keeps_helper")
+        .await
+        .json()
+        .await
+        .expect("proof redirect");
+    let edited_idx = redirect_idx(&removed_step, "overview/proof/keeps_helper");
+
+    let deleted: serde_json::Value = s
+        .get(&format!("/thy/trace/{edited_idx}/del/path/lemma/helper"))
+        .await
+        .json()
+        .await
+        .expect("lemma redirect");
+    let final_idx = redirect_idx(&deleted, "overview/lemma/helper");
+    let source = s
+        .get(&format!("/thy/trace/{final_idx}/source"))
+        .await
+        .text()
+        .await
+        .expect("source body");
+    assert!(!source.contains("lemma helper [reuse]"));
+    assert!(source.contains("proof may have been invalidated by editing a reuse lemma above"));
+    assert!(source.contains("sorry /* removed */"));
+}
+
+#[tokio::test]
+async fn deleting_a_source_lemma_is_rejected() {
+    let s = start_server_with_theory("source_lemma.spthy").await;
+    let response = s.get("/thy/trace/1/del/path/lemma/typing").await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"alert": "Can't edit or remove source lemmas for now"})
     );
 }
 
@@ -133,12 +160,7 @@ async fn test_del_path_unsupported_returns_alert() {
     // Haskell returns {"alert":"Can't delete the given theory path!"}
     // for paths that aren't `lemma` or `proof`.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/del/path/rules"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/del/path/rules").await;
     assert_eq!(res.status(), 200);
     // This is the oracle's body, byte for byte.  The alert allocates no
     // theory, so its bytes do not depend on the capture session's history.
@@ -146,6 +168,46 @@ async fn test_del_path_unsupported_returns_alert() {
         res.text().await.expect("text"),
         haskell_capture("del_path_bad.json")
     );
+
+    let missing = s.get("/thy/trace/999/del/path/rules").await;
+    assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test]
+async fn test_del_path_missing_targets_return_canonical_alerts() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let missing_lemma = s.get("/thy/trace/1/del/path/lemma/notALemma").await;
+    assert_eq!(missing_lemma.status(), 200);
+    assert_eq!(
+        missing_lemma.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"alert": "Sorry, but removing the selected lemma failed!"})
+    );
+
+    let missing_step = s.get("/thy/trace/1/del/path/proof/debug/_missing").await;
+    assert_eq!(missing_step.status(), 200);
+    assert_eq!(
+        missing_step.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"alert": "Sorry, but removing the selected proof step failed!"})
+    );
+}
+
+#[tokio::test]
+async fn test_del_path_proof_marks_removed() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let response: serde_json::Value = s
+        .get("/thy/trace/1/del/path/proof/debug")
+        .await
+        .json()
+        .await
+        .expect("redirect JSON");
+    let idx = redirect_idx(&response, "overview/proof/debug");
+    let source = s
+        .get(&format!("/thy/trace/{idx}/source"))
+        .await
+        .text()
+        .await
+        .expect("source body");
+    assert!(source.contains("sorry /* removed */"));
 }
 
 // ---------------------------------------------------------------------
@@ -162,12 +224,7 @@ async fn test_next_main_lemma_matches_haskell() {
     // `_ -> const id` fallthrough, so the URL stays at `lemma/debug`.
     // Captured Haskell response: `/thy/trace/1/main/lemma/debug`.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/next/main/lemma/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/next/main/lemma/debug").await;
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
@@ -180,12 +237,7 @@ async fn test_next_main_lemma_matches_haskell() {
 async fn test_prev_main_lemma_matches_haskell() {
     // Same property: section "main" is a no-op for prev too.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/prev/main/lemma/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/prev/main/lemma/debug").await;
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("read body");
     assert_eq!(body, haskell_capture("prev.txt"));
@@ -198,13 +250,13 @@ async fn test_next_normal_help_to_message_matches_haskell() {
     // `next _ = const id` (`src/Web/Handler.hs:1546-1549`).  This
     // test exercises the `normal` arm; the `main` no-op is covered
     // by `test_next_main_help_is_noop_matches_haskell`.
-    let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/next/normal/help"))
-        .send()
-        .await
-        .expect("send");
+    // Navigation only inspects the loaded theory; a missing post-load Maude
+    // proves that this route does not start the prover as a side effect.
+    let s = start_server_with_theory_and("issue193.spthy", |cfg| {
+        cfg.maude_path = "/definitely/missing/maude".to_string();
+    })
+    .await;
+    let res = s.get("/thy/trace/1/next/normal/help").await;
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("read");
     assert_eq!(
@@ -218,12 +270,7 @@ async fn test_next_main_help_is_noop_matches_haskell() {
     // Haskell's `next "main"` is the `_ -> const id` arm — same path.
     // Captured Haskell response confirms this.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/next/main/help"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/next/main/help").await;
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("read");
     assert_eq!(body, haskell_capture("next_help.txt"));
@@ -239,12 +286,7 @@ async fn test_next_main_help_is_noop_matches_haskell() {
 #[tokio::test]
 async fn test_verify_lemma_returns_html_envelope() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/verify/lemma/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/verify/lemma/debug").await;
     assert_eq!(res.status(), 200);
     // `verify/lemma` falls through to the help view.  The envelope is
     // therefore the oracle's `main/help` envelope.  The test compares the
@@ -259,12 +301,7 @@ async fn test_verify_lemma_returns_html_envelope() {
 #[tokio::test]
 async fn test_verify_proof_returns_redirect_envelope() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/verify/proof/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/verify/proof/debug").await;
     assert_eq!(res.status(), 200);
     // This is the oracle's body, byte for byte.  `editProof` uses
     // `replaceTheory` at the same idx, so the redirect names theory 1.  There
@@ -277,6 +314,13 @@ async fn test_verify_proof_returns_redirect_envelope() {
 }
 
 #[tokio::test]
+async fn malformed_verify_path_is_not_found_before_theory_lookup() {
+    let s = start_server_with_theory("issue193.spthy").await;
+    let res = s.get("/thy/trace/999/verify/not-a-path").await;
+    assert_eq!(res.status(), 404);
+}
+
+#[tokio::test]
 async fn test_equiv_overview_stub_returns_alert() {
     // The port does not support diff theories, because that needs
     // `ClosedDiffTheory`.  Haskell answers its Not Found page.  The capture of
@@ -285,12 +329,7 @@ async fn test_equiv_overview_stub_returns_alert() {
     // instead.  That is a documented divergence, to align when diff support
     // lands.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/equiv/1/overview/help"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/equiv/1/overview/help").await;
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
     assert_eq!(json_top_keys(&v), one_key_set("alert"));
@@ -302,12 +341,7 @@ async fn test_get_and_append_returns_appended_alert() {
     // doesn't yet track that flag), Haskell's branch returns
     // `{alert: "Appended lemmas to <path>"}`.  We mirror exactly.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .post(s.url("/thy/trace/1/get_and_append/whatever"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.post("/thy/trace/1/get_and_append/whatever").await;
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
     assert_eq!(json_top_keys(&v), one_key_set("alert"));

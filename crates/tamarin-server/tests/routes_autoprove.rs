@@ -46,11 +46,8 @@ async fn test_autoprove_redirect_bodies_match_haskell() {
 
     // The `debug` lemma is exists-trace and trivial.
     let res = s
-        .client
-        .get(s.url("/thy/trace/1/autoprove/idfs/0/False/proof/debug"))
-        .send()
-        .await
-        .expect("send autoprove");
+        .get("/thy/trace/1/autoprove/idfs/0/False/proof/debug")
+        .await;
     assert_eq!(res.status(), 200, "autoprove should return 200");
     let ct = content_type(&res);
     assert!(
@@ -73,7 +70,7 @@ async fn test_autoprove_redirect_bodies_match_haskell() {
             "autoprove_all.json",
         ),
     ] {
-        let res = s.client.get(s.url(url)).send().await.expect("send");
+        let res = s.get(url).await;
         assert_eq!(res.status(), 200, "{url}");
         assert_eq!(
             res.text().await.expect("text"),
@@ -84,23 +81,38 @@ async fn test_autoprove_redirect_bodies_match_haskell() {
 }
 
 #[tokio::test]
-async fn test_autoprove_url_with_lowercase_quit_returns_404() {
+async fn test_autoprove_route_path_pieces_match_haskell() {
     // Haskell's Yesod `PathPiece Bool` parser rejects lowercase
     // `true`/`false`.  We MUST mirror that — if our router accepted
     // lowercase silently the same frontend URL builder would emit URLs
-    // that don't work against Haskell.
+    // that don't work against Haskell.  The same table pins integer-bound
+    // parsing, autoproveAll's theory-path decoder, and the accepted negative
+    // bound that means "unbounded".
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/autoprove/idfs/0/false/proof/debug"))
-        .send()
-        .await
-        .expect("send autoprove with lowercase quit");
-    assert_eq!(
-        res.status(),
-        404,
-        "lowercase quit must 404 (matches Haskell PathPiece Bool)"
-    );
+    for (path, expected, case) in [
+        (
+            "/thy/trace/1/autoprove/idfs/0/false/proof/debug",
+            404,
+            "lowercase Bool",
+        ),
+        (
+            "/thy/trace/1/autoprove/idfs/nope/False/proof/debug",
+            404,
+            "malformed bound",
+        ),
+        (
+            "/thy/trace/1/autoproveAll/idfs/0/not-a-path",
+            404,
+            "malformed autoproveAll path",
+        ),
+        (
+            "/thy/trace/1/autoprove/idfs/-1/False/proof/debug",
+            200,
+            "negative bound means unbounded",
+        ),
+    ] {
+        assert_eq!(s.get(path).await.status(), expected, "{case}: {path}");
+    }
 }
 
 #[tokio::test]
@@ -108,13 +120,7 @@ async fn test_autoprove_on_bad_path_returns_alert() {
     let s = start_server_with_theory("issue193.spthy").await;
     // `rules` is not a valid path target for autoprove (it's not a
     // lemma / proof / method); Haskell returns alert, ours does too.
-    let url = s.url("/thy/trace/1/autoprove/idfs/0/False/rules");
-    let res = s
-        .client
-        .get(&url)
-        .send()
-        .await
-        .expect("send autoprove-rules");
+    let res = s.get("/thy/trace/1/autoprove/idfs/0/False/rules").await;
     assert_eq!(res.status(), 200);
     // This is the oracle's body, byte for byte.  The alert allocates no
     // theory, so its bytes do not depend on the capture session's history.
@@ -122,6 +128,9 @@ async fn test_autoprove_on_bad_path_returns_alert() {
         res.text().await.expect("text"),
         haskell_capture("autoprove_on_rules.json"),
     );
+
+    let missing = s.get("/thy/trace/99/autoprove/idfs/0/False/rules").await;
+    assert_eq!(missing.status(), 404);
 }
 
 // ---------------------------------------------------------------------
@@ -148,8 +157,8 @@ async fn test_method_out_of_range_index_alerts_match_haskell() {
     // index past the end; `9999` is the same answer, as are the non-positive
     // ones and `Int` minBound.
     for nr in ["0", "-1", "-9223372036854775808", "3", "9999"] {
-        let url = s.url(&format!("/thy/trace/1/main/method/debug/{nr}"));
-        let res = s.client.get(&url).send().await.expect("send method");
+        let path = format!("/thy/trace/1/main/method/debug/{nr}");
+        let res = s.get(&path).await;
         assert_eq!(res.status(), 200, "method/{nr} must be a 200");
         assert_eq!(
             res.text().await.expect("text"),
@@ -159,12 +168,7 @@ async fn test_method_out_of_range_index_alerts_match_haskell() {
     }
 
     // The accept side of the very same guard: method `1` applies and redirects.
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/main/method/debug/1"))
-        .send()
-        .await
-        .expect("send method/1");
+    let res = s.get("/thy/trace/1/main/method/debug/1").await;
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
     assert_eq!(
@@ -179,8 +183,9 @@ async fn test_autoprove_with_missing_idx_returns_404_html() {
     // Match Haskell: bad theory idx returns 404 HTML (see
     // `withTheory` / `notFound` in `src/Web/Handler.hs:662-672`).
     let s = start_server_with_theory("issue193.spthy").await;
-    let url = s.url("/thy/trace/99/autoprove/idfs/0/False/proof/debug");
-    let res = s.client.get(&url).send().await.expect("send");
+    let res = s
+        .get("/thy/trace/99/autoprove/idfs/0/False/proof/debug")
+        .await;
     assert_eq!(res.status(), 404);
     let ct = content_type(&res);
     assert!(
@@ -197,8 +202,9 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
     // `modifyTheory`'s `Right Nothing` arm — the prover-name part is
     // empty for the default `getProverR` instantiation.  We mirror.
     let s = start_server_with_theory("issue193.spthy").await;
-    let url = s.url("/thy/trace/1/autoprove/idfs/0/False/proof/notALemma");
-    let res = s.client.get(&url).send().await.expect("send");
+    let res = s
+        .get("/thy/trace/1/autoprove/idfs/0/False/proof/notALemma")
+        .await;
     assert_eq!(res.status(), 200);
     // These bytes come from a probe against the oracle.  No capture holds
     // them, because the capture script never asks for a lemma that does not
@@ -211,35 +217,21 @@ async fn test_autoprove_on_unknown_lemma_returns_alert() {
 // Web-parity regression: after autoprove, `main/proof/<lemma>` must render
 // the "Applicable Proof Methods" + sequent snippet from the grown tree's
 // retained per-node systems — not an empty "Constraint System is Solved".
-// Guards the `SysRetention::KeepAll` that `tamarin_server::init_process_globals`
-// applies for every server, the harness's included.
+// Guards the `SysRetention::KeepAll` applied to every web prover session,
+// including the harness's.
 #[tokio::test]
 async fn test_autoprove_proof_view_retains_systems() {
     let s = start_server_with_theory("Tutorial.spthy").await;
     let v: serde_json::Value = s
-        .client
-        .get(s.url("/thy/trace/1/autoprove/idfs/0/False/proof/Client_auth"))
-        .send()
+        .get("/thy/trace/1/autoprove/idfs/0/False/proof/Client_auth")
         .await
-        .expect("send")
         .json()
         .await
         .expect("decode");
-    let redir = v
-        .get("redirect")
-        .and_then(|x| x.as_str())
-        .expect("redirect");
-    let idx: usize = redir
-        .split('/')
-        .nth(3)
-        .and_then(|x| x.parse().ok())
-        .expect("idx");
+    let idx = redirect_idx(&v, "overview/proof/Client_auth_injective");
     let pv: serde_json::Value = s
-        .client
-        .get(s.url(&format!("/thy/trace/{}/main/proof/Client_auth", idx)))
-        .send()
+        .get(&format!("/thy/trace/{idx}/main/proof/Client_auth"))
         .await
-        .expect("send")
         .json()
         .await
         .expect("decode");
@@ -259,24 +251,41 @@ async fn test_autoprove_proof_view_retains_systems() {
 // that forced the ranking, exactly as HS's `readProcess` exception is
 // caught by the Warp request thread — the server process must survive.
 // The fixture's `heuristic=o` execs `./oracle` relative to the theory
-// dir and no such script exists, so the first ranking call fails
-// (`ORACLE_ERROR_UNWINDS` panics instead of `exit(1)`); the autoprove
-// handler's spawn_blocking boundary absorbs the unwind.
+// dir and no such script exists, so the interactive search API returns a
+// typed ranking failure to the route.
 #[tokio::test]
 async fn test_autoprove_missing_oracle_keeps_server_alive() {
     let s = start_server_with_theory("oracle_missing.spthy").await;
-    let auto = s.url("/thy/trace/1/autoprove/idfs/0/False/proof/test");
-    let res = s.client.get(&auto).send().await.expect("request completes");
+    let res = s
+        .get("/thy/trace/1/autoprove/idfs/0/False/proof/test")
+        .await;
     assert_eq!(
         res.status(),
         200,
         "failure surfaces as an alert, not a dead socket"
     );
-    let root = s
-        .client
-        .get(s.url("/"))
-        .send()
-        .await
-        .expect("server still serving");
-    assert_eq!(root.status(), 200, "server must survive the oracle failure");
+    let unpublished = s.get("/thy/trace/2/main/help").await;
+    assert_eq!(
+        unpublished.status(),
+        404,
+        "a failed search must not publish a new theory version"
+    );
+}
+
+#[tokio::test]
+async fn terminal_proof_view_does_not_force_its_heuristic() {
+    let s = start_server_with_theory("terminal_bad_heuristic.spthy").await;
+    let res = s.get("/thy/trace/1/main/proof/done").await;
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.expect("JSON response");
+    let html = body["html"].as_str().expect("HTML body");
+    assert!(
+        html.contains("contradiction") && html.contains("Constraint system"),
+        "terminal node should render without resolving the unused missing tactic: {html}"
+    );
+    assert!(
+        html.contains("the tactic written in the theory file: missing"),
+        "the view should retain the selected, lazily-invalid ranking: {html}"
+    );
+    assert!(!html.contains("No such lemma or proof path"));
 }

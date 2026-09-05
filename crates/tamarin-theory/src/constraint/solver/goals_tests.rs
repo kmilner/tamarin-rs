@@ -73,9 +73,8 @@ fn dispatch_solve_goal_marks_solved_then_routes() {
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    let path = match require_maude_path() {
-        Some(p) => p,
-        None => return,
+    let Some(path) = require_maude_path() else {
+        return;
     };
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let ctx = ProofContext::new(h, Vec::new());
@@ -87,7 +86,7 @@ fn dispatch_solve_goal_marks_solved_then_routes() {
     sys.add_goal(g.clone());
     let mut r = Reduction::new(&ctx, sys);
     let out = dispatch_solve_goal(&mut r, &g);
-    assert!(matches!(out, GoalCases::Contradictory));
+    assert!(matches!(out, Ok(GoalCases::Contradictory)));
     assert!(
         r.sys.goals.iter().any(|(gg, st)| gg == &g && st.solved),
         "the goal must be marked solved even on the contradictory route"
@@ -217,7 +216,9 @@ fn it_ranking_prio_nonranked_deprio_order() {
     };
 
     let sys = System::empty();
-    let out = it_ranking(&tactic, ags, false, None, &sys).unwrap();
+    let out = it_ranking(&tactic, ags, false, None, &sys)
+        .unwrap()
+        .expect("ordinary ranking");
     let seqs: Vec<u64> = out.iter().map(|a| a.seq).collect();
     // rankedPrio = [~r (block0), ~skS (block1)]; nonRanked = []
     // (every goal matched a prio or deprio); rankedDeprio = [~x].
@@ -263,11 +264,27 @@ fn it_ranking_nonranked_preserved() {
         deprios: vec![],
     };
     let sys = System::empty();
-    let out = it_ranking(&tactic, vec![g_b, g_c, g_a], false, None, &sys).unwrap();
+    let out = it_ranking(&tactic, vec![g_b, g_c, g_a], false, None, &sys)
+        .unwrap()
+        .expect("ordinary ranking");
     let seqs: Vec<u64> = out.iter().map(|a| a.seq).collect();
     // ~'a' (prio, seq 2) first, then nonRanked [~'b'=0, ~'c'=1] in
     // presort order.
     assert_eq!(seqs, vec![2, 0, 1]);
+}
+
+#[test]
+fn an_empty_quitting_tactic_is_a_normal_stop() {
+    let tactic = crate::tactic::Tactic {
+        name: "empty".to_string(),
+        presort: 'C',
+        prios: vec![],
+        deprios: vec![],
+    };
+    assert_eq!(
+        it_ranking(&tactic, vec![], true, None, &System::empty()).unwrap(),
+        None
+    );
 }
 
 // -- moveNatToEnd / isNatSubtermSplit (ProofMethod.hs:1064-1066) ----------
@@ -451,7 +468,90 @@ fn an_unknown_tactic_fails_when_its_ranking_is_selected() {
     let mut ctx = ProofContext::new(handle, Vec::new());
     ctx.heuristic = Some(ranking);
     let err = rank_goals_with(&System::empty(), Some(&ctx), 0).unwrap_err();
-    assert_eq!(err.0, "No tactic has been written in the theory file");
+    assert_eq!(
+        err.to_string(),
+        "goal ranking: No tactic has been written in the theory file"
+    );
+}
+
+#[test]
+fn runtime_fallibility_scans_the_whole_round_robin_heuristic() {
+    use std::sync::Arc;
+
+    let tactic = Arc::new(crate::tactic::Tactic {
+        name: "resolved".into(),
+        presort: 's',
+        prios: Vec::new(),
+        deprios: Vec::new(),
+    });
+    assert!(!rankings_may_fail(&[
+        GoalRanking::Smart(false),
+        GoalRanking::Tactic {
+            quit_on_empty: false,
+            tactic: Arc::clone(&tactic),
+            resolution_error: None,
+        },
+    ]));
+    assert!(rankings_may_fail(&[
+        GoalRanking::Smart(false),
+        GoalRanking::Oracle {
+            quit_on_empty: false,
+            oracle_path: "oracle".into(),
+        },
+    ]));
+    assert!(rankings_may_fail(&[GoalRanking::Tactic {
+        quit_on_empty: false,
+        tactic,
+        resolution_error: Some("missing".into()),
+    }]));
+}
+
+#[test]
+fn smart_oracle_stops_before_launch_when_source_materialisation_fails() {
+    use crate::constraint::solver::context::{ProofContext, SourceProvider};
+    use crate::constraint::solver::sources::Source;
+    use crate::fact::ku_fact;
+    use std::sync::Arc;
+    use tamarin_term::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::maude_sig::pair_maude_sig;
+    use tamarin_term::term::Term;
+
+    #[derive(Debug)]
+    struct FailingProvider;
+    impl SourceProvider for FailingProvider {
+        fn materialize(&self, _ctx: &ProofContext) -> Result<(), crate::prove::ProveError> {
+            Err(crate::prove::ProveError::Guarded("bad source".into()))
+        }
+    }
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let handle = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let mut ctx = ProofContext::new(handle, Vec::new());
+    let f = FunSym::NoEq(NoEqSym::new(
+        b"f".to_vec(),
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    ));
+    let term = Term::App(f, vec![pub_term("x")].into());
+    let goal = Goal::Action(LVar::new("i", LSort::Node, 0), ku_fact(term));
+    ctx.full_sources = Arc::new(vec![Source::lazy(goal.clone())]);
+    ctx.set_source_provider(Arc::new(FailingProvider));
+    assert!(ctx.proving_may_fail());
+    ctx.heuristic = Some(vec![GoalRanking::OracleSmart {
+        quit_on_empty: false,
+        oracle_path: "/definitely/missing/oracle".into(),
+    }]);
+    let mut sys = System::empty();
+    sys.add_goal(goal);
+
+    assert!(matches!(
+        rank_goals_with(&sys, Some(&ctx), 0),
+        Err(crate::prove::ProveError::Guarded(message)) if message == "bad source"
+    ));
 }
 
 /// `pretty_goal_rankings` writes back the token each stored ranking parsed
@@ -467,4 +567,11 @@ fn parsed_heuristic_renders_back_to_its_tokens() {
     let rankings = parse_heuristic_str_with_tactics(s, "t.spthy", &[]);
     assert_eq!(rankings.len(), 11);
     assert_eq!(crate::pretty_theory::pretty_goal_rankings(&rankings), s);
+}
+
+#[test]
+fn compact_and_standalone_default_oracles_parse_identically() {
+    let compact = parse_heuristic_str_with_tactics(r#"o so O "y" sO"#, "t.spthy", &[]);
+    let spaced = parse_heuristic_str_with_tactics(r#"o s o O "y" s O"#, "t.spthy", &[]);
+    assert_eq!(compact, spaced);
 }

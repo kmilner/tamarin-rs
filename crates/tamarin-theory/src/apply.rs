@@ -109,14 +109,14 @@ impl<'a> SystemSubst<'a> {
     /// decision it checks.
     fn verify_fact_unchanged(&self, fa: &LNFact) {
         for t in fa.terms.iter() {
-            if let Some(c) = self.view.apply_changed(t) {
-                if c != *t {
-                    panic!(
-                        "TAM_RS_VERIFY_FP: bloom-skip dropped a real change \
+            if let Some(c) = self.view.apply_changed(t)
+                && c != *t
+            {
+                panic!(
+                    "TAM_RS_VERIFY_FP: bloom-skip dropped a real change \
                             (fact contained a domain var the fingerprint missed) \
                             — unsound bit assignment"
-                    );
-                }
+                );
             }
         }
     }

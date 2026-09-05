@@ -156,19 +156,23 @@ pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
 /// web-crawl timeouts.  Also more faithful on the deadline: HS never
 /// drops a SolveGoal at render; the eager exec's deadline entry-guard
 /// could.
-pub fn is_applicable_for_display(ctx: &ProofContext, method: &ProofMethod, sys: &System) -> bool {
-    match method {
+pub fn is_applicable_for_display(
+    ctx: &ProofContext,
+    method: &ProofMethod,
+    sys: &System,
+) -> std::result::Result<bool, crate::prove::ProveError> {
+    Ok(match method {
         // `return tracedCases` — unconditionally `Just` in HS; do NOT
         // call exec_proof_method (that forces the fan-out).
         ProofMethod::SolveGoal(_) => true,
         // Forced by HS at render too; cheap and can legitimately drop
         // the method (no-op Simplify / non-initial Induction).
         ProofMethod::Simplify | ProofMethod::Induction => {
-            exec_proof_method(ctx, method, sys).is_some()
+            exec_proof_method(ctx, method, sys)?.is_some()
         }
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => true,
         ProofMethod::Invalidated => false,
-    }
+    })
 }
 
 /// HS `uniqueListBy (comparing fst) id distinguish` (ProofMethod.hs:90-102,
@@ -254,7 +258,7 @@ fn simp_noop_stat(hit: bool) {
         HITS.fetch_add(1, Relaxed);
     }
     let calls = CALLS.fetch_add(1, Relaxed) + 1;
-    if calls % 1_000 == 0 {
+    if calls.is_multiple_of(1_000) {
         let h = HITS.load(Relaxed);
         eprintln!(
             "[SIMP_NOOP_STATS] simplify_execs={} noop_hits={} ({:.1}%)",
@@ -281,7 +285,7 @@ pub fn exec_proof_method(
     ctx: &ProofContext,
     method: &ProofMethod,
     sys: &System,
-) -> Option<Vec<(CaseName, System)>> {
+) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
 
     // Deadline short-circuit (entry-guard).  Without this, a single
@@ -297,7 +301,7 @@ pub fn exec_proof_method(
     // Combined, this bounds the post-deadline runtime to O(depth) rather
     // than O(remaining-work-in-current-method).
     if crate::constraint::solver::search::deadline_reached() {
-        return None;
+        return Ok(None);
     }
 
     // HS-faithful per-step Maude counter reset (ProofMethod.hs):
@@ -317,7 +321,7 @@ pub fn exec_proof_method(
     let avoid = crate::constraint::solver::reduction::avoid_fresh_state(sys);
     ctx.maude.reset_counter_to(avoid);
 
-    match method {
+    let result = match method {
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => Some(Vec::new()),
         ProofMethod::Invalidated => None,
         ProofMethod::Simplify => {
@@ -337,7 +341,7 @@ pub fn exec_proof_method(
             // `slightly_weaker_invariant`), because `solve_action_goal`'s
             // Cases outcome would be discarded.
             let case_systems: Vec<System> =
-                crate::constraint::solver::simplify::simplify_system_with_fanout(ctx, sys.clone());
+                crate::constraint::solver::simplify::simplify_system_with_fanout(ctx, sys.clone())?;
             // No-op shortcut: mid-proof, every case system was already
             // simplified+cleaned at production, so `simplifySystem` usually
             // fixpoints immediately — one output case value-equal to the
@@ -359,11 +363,11 @@ pub fn exec_proof_method(
                 && case_systems[0] == *sys
             {
                 simp_noop_stat(true);
-                return if sys.eq_store.is_false() {
+                return Ok(if sys.eq_store().is_false() {
                     Some(Vec::new())
                 } else {
                     None
-                };
+                });
             }
             simp_noop_stat(false);
             // HS-faithful filter: cases whose eq_store is false were
@@ -372,7 +376,7 @@ pub fn exec_proof_method(
             // reasons surface as explicit Finished(Contradictory) leaves.)
             let cleaned: Vec<System> = case_systems
                 .into_iter()
-                .filter(|s| !s.eq_store.is_false())
+                .filter(|s| !s.eq_store().is_false())
                 .map(|s| {
                     // HS-faithful `cleanup` (ProofMethod.hs) applied in
                     // place: `case_systems` is owned here (from
@@ -412,7 +416,7 @@ pub fn exec_proof_method(
             // drop Simplify from the ranked list and let `Induction` win —
             // the divergence this arm must avoid.
             if cleaned.is_empty() {
-                return Some(Vec::new());
+                return Ok(Some(Vec::new()));
             }
             let cleaned_input = sys.clone().cleanup();
             if cleaned.len() == 1 {
@@ -421,9 +425,12 @@ pub fn exec_proof_method(
                 // input — if so, the method "failed" and we return None.
                 // Multi-case fan-out trivially can't satisfy that condition.
                 if cleaned[0] == cleaned_input {
-                    return None;
+                    return Ok(None);
                 }
-                return Some(vec![("".to_string(), cleaned.into_iter().next().unwrap())]);
+                return Ok(Some(vec![(
+                    "".to_string(),
+                    cleaned.into_iter().next().unwrap(),
+                )]));
             }
             // HS-faithful naming: `distinguish n` (ProofMethod.hs)
             // with empty case name renders as `show i` ("1", "2", "3", ...)
@@ -444,19 +451,11 @@ pub fn exec_proof_method(
             Some(out)
         }
         ProofMethod::SolveGoal(g) => {
-            // State snapshot BEFORE dispatch — paired with HS's
-            // `[STATE]` line in `Theory.Constraint.Solver.ProofMethod.solve`.
-            // Emits the canonical open-goal / node set so we can see what
-            // ranking decision was available at this proof step.
-            crate::constraint::solver::trace::trace_state(sys);
+            // The node-driving search/replay/interactive caller emits the
+            // state; record the selected goal without duplicating that line.
             crate::constraint::solver::trace::trace_pick(g);
             let mut r = Reduction::new(ctx, sys.clone());
-            let outcome = crate::constraint::solver::goals::dispatch_solve_goal(&mut r, g);
-            // HS FreshT-threading: per-case branch counters for
-            // the post-solve simplify continuation.  Single-case adoptions
-            // already reset `r.maude`; multi-case outcomes recorded their
-            // per-branch counters in `last_case_counters`.
-            let goal_case_counters = std::mem::take(&mut r.last_case_counters);
+            let outcome = crate::constraint::solver::goals::dispatch_solve_goal(&mut r, g)?;
             let adopted_counter = r.maude.fresh_counter_peek();
             // Run simplify after every goal-solving step — mirrors
             // Haskell's `m <* simplifySystem` pattern in `process`
@@ -478,17 +477,20 @@ pub fn exec_proof_method(
             // the case once per arm.  Our `simplify_system_with_fanout`
             // mirrors that, returning N systems.  Each is then cleaned
             // (renamePrecise + clear subst) per HS's `cleanup`.
-            let simplify = |sys: System, seed: u64| -> Vec<System> {
-                let raw_systems: Vec<System> =
-                    crate::constraint::solver::simplify::simplify_system_with_fanout_seeded(
-                        ctx, sys, seed,
-                    );
-                // Cleanup each surviving system per HS
-                // `cleanup` (ProofMethod.hs):
-                //   cleanup s = L.set sSubst emptySubst
-                //                       (renamePrecise s)
-                raw_systems.into_iter().map(|s| s.cleanup()).collect()
-            };
+            let simplify =
+                |sys: System,
+                 seed: u64|
+                 -> std::result::Result<Vec<System>, crate::prove::ProveError> {
+                    let raw_systems: Vec<System> =
+                        crate::constraint::solver::simplify::simplify_system_with_fanout_seeded(
+                            ctx, sys, seed,
+                        )?;
+                    // Cleanup each surviving system per HS
+                    // `cleanup` (ProofMethod.hs):
+                    //   cleanup s = L.set sSubst emptySubst
+                    //                       (renamePrecise s)
+                    Ok(raw_systems.into_iter().map(|s| s.cleanup()).collect())
+                };
             // Filter cases the same way Haskell's `runReduction` does:
             // when a CR-rule called `contradictoryIf` during simplify
             // (solveFactEqs / solveRuleEqs / solveSubstEqs hitting an
@@ -499,13 +501,13 @@ pub fn exec_proof_method(
             // pruned on here.
             //
             // Cases with *other* contradictions (FormulasFalse, Cyclic,
-            // NodeAfterLast, sort-conflation, edge-fact-tag mismatch, …)
+            // NodeAfterLast, edge-fact-tag mismatch, …)
             // survive `runReduction` in Haskell and are picked up by the
             // next iteration's contradictions check as explicit
             // `Finished(Contradictory(_))` leaves.  Do *not* filter those
             // here, or the proof tree loses siblings whose contradiction
             // reason Haskell renders.
-            let keep = |sys: &System| -> bool { !sys.eq_store.is_false() };
+            let keep = |sys: &System| -> bool { !sys.eq_store().is_false() };
             // HS-faithful: `process` (ProofMethod.hs:301-307) treats
             // EVERY `solveGoal` result UNIFORMLY — the solve yields ONE
             // `CaseName`, then `runReduction (m <* simplifySystem)` fans the
@@ -529,16 +531,9 @@ pub fn exec_proof_method(
                 GoalCases::LinearNamed(name) => vec![(name, r.sys, adopted_counter)],
                 GoalCases::Cases(cases) => cases
                     .into_iter()
-                    .enumerate()
-                    .map(|(ci, (n, s))| {
-                        let seed = goal_case_counters
-                            .get(ci)
-                            .copied()
-                            .unwrap_or(adopted_counter);
-                        (n, s, seed)
-                    })
+                    .map(|branch| (branch.name, branch.sys, branch.counter))
                     .collect(),
-                GoalCases::Contradictory => return Some(Vec::new()),
+                GoalCases::Contradictory => return Ok(Some(Vec::new())),
             };
             {
                 // De-duplicate identical case names by appending
@@ -561,18 +556,15 @@ pub fn exec_proof_method(
                 // which matches Haskell's `disjunctionOfList`
                 // iteration order (rule order in `joinAllRules`).
                 // simplify can fan out per case — flat-map.
-                let kept_raw: Vec<(String, System)> = cases
-                    .into_iter()
-                    .flat_map(|(name, sys, seed)| {
-                        let systems = simplify(sys, seed);
-                        let out: Vec<(String, System)> = systems
+                let mut kept_raw = Vec::new();
+                for (name, sys, seed) in cases {
+                    kept_raw.extend(
+                        simplify(sys, seed)?
                             .into_iter()
                             .filter(|s| keep(s))
-                            .map(|s| (name.clone(), s))
-                            .collect();
-                        out
-                    })
-                    .collect();
+                            .map(|s| (name.clone(), s)),
+                    );
+                }
                 // No unconditional exact-(name, system) dedup: same-named
                 // survivors are renamed, never dropped.  Variant
                 // enumeration is threaded through SplitG by
@@ -583,10 +575,12 @@ pub fn exec_proof_method(
         }
         ProofMethod::Induction => {
             // Take the first formula and try `ginduct`.
-            let fm = sys.formulas.first()?.clone();
+            let Some(fm) = sys.formulas.first().cloned() else {
+                return Ok(None);
+            };
             let (base, step) = match crate::guarded::ginduct(&fm) {
                 Ok(p) => p,
-                Err(_) => return None,
+                Err(_) => return Ok(None),
             };
             // HS-faithful: mirror Haskell's `induction` (ProofMethod.hs):
             //   induction (baseCase, stepCase) = do
@@ -633,15 +627,16 @@ pub fn exec_proof_method(
                 // write, NOT `insertFormula` (see the `insert_formula`
                 // rationale above).
                 let mut case_sys = sys.clone();
-                case_sys.invalidate_max_var_idx_cache();
-                case_sys.formulas_mut().clear();
-                case_sys.formulas_mut().push(std::sync::Arc::new(fm_case));
+                case_sys.clear_formulas();
+                case_sys.insert_open_formula(fm_case);
                 let sub_systems: Vec<System> =
-                    crate::constraint::solver::simplify::simplify_system_with_fanout(ctx, case_sys);
+                    crate::constraint::solver::simplify::simplify_system_with_fanout(
+                        ctx, case_sys,
+                    )?;
                 for s in sub_systems {
                     // mzero'd branches (eq-store false) don't survive HS's
                     // Disj — same filter as the Simplify/SolveGoal arms.
-                    if s.eq_store.is_false() {
+                    if s.eq_store().is_false() {
                         continue;
                     }
                     // HS-faithful `cleanup` (ProofMethod.hs `process`):
@@ -661,7 +656,8 @@ pub fn exec_proof_method(
             // induction case names are non-empty.)
             Some(process_cases(ctx, named))
         }
-    }
+    };
+    Ok(result)
 }
 
 /// `checkAndExecProofMethod`: structurally validates the method
@@ -677,12 +673,14 @@ pub fn check_and_exec_proof_method(
     ctx: &ProofContext,
     method: &ProofMethod,
     sys: &System,
-) -> Option<Vec<(CaseName, System)>> {
+) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
     match method {
         ProofMethod::Finished(r) => {
-            let actual = is_finished(ctx, sys)?;
+            let Some(actual) = is_finished(ctx, sys) else {
+                return Ok(None);
+            };
             if !same_kind(r, &actual) {
-                return None;
+                return Ok(None);
             }
         }
         ProofMethod::Induction => {
@@ -692,21 +690,21 @@ pub fn check_and_exec_proof_method(
             // i.e. no nodes, no solved formulas, no open goals, exactly one
             // formula.  No gfalse check (do NOT call is_initial_system here).
             if !sys.nodes.is_empty() {
-                return None;
+                return Ok(None);
             }
             if !sys.solved_formulas.is_empty() {
-                return None;
+                return Ok(None);
             }
             if !sys.goals.is_empty() {
-                return None;
+                return Ok(None);
             }
             if sys.formulas.len() != 1 {
-                return None;
+                return Ok(None);
             }
         }
         ProofMethod::SolveGoal(g) => {
             if !sys.goals.iter().any(|(existing, _)| existing == g) {
-                return None;
+                return Ok(None);
             }
         }
         ProofMethod::Simplify | ProofMethod::Sorry(_) | ProofMethod::Invalidated => {}
@@ -826,7 +824,9 @@ mod tests {
             None => return,
         };
         let s = System::empty();
-        let cases = exec_proof_method(&ctx, &ProofMethod::Sorry(None), &s).unwrap();
+        let cases = exec_proof_method(&ctx, &ProofMethod::Sorry(None), &s)
+            .unwrap()
+            .unwrap();
         assert!(cases.is_empty());
     }
 
@@ -838,7 +838,7 @@ mod tests {
         };
         let s = System::empty();
         // No formula → ginduct can't run.
-        let r = exec_proof_method(&ctx, &ProofMethod::Induction, &s);
+        let r = exec_proof_method(&ctx, &ProofMethod::Induction, &s).unwrap();
         assert!(r.is_none());
     }
 
@@ -872,7 +872,9 @@ mod tests {
         );
         let mut s = System::empty();
         s.formulas_mut().push(std::sync::Arc::new(fm));
-        let r = exec_proof_method(&ctx, &ProofMethod::Induction, &s).expect("induction");
+        let r = exec_proof_method(&ctx, &ProofMethod::Induction, &s)
+            .expect("source materialisation")
+            .expect("induction");
         // Two case names: empty_trace and non_empty_trace.
         assert_eq!(r.len(), 2);
         assert!(r.iter().any(|(n, _)| n == "empty_trace"));
@@ -890,7 +892,7 @@ mod tests {
         let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0);
         let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
         let g = Goal::Action(v, f);
-        let r = check_and_exec_proof_method(&ctx, &ProofMethod::SolveGoal(g), &s);
+        let r = check_and_exec_proof_method(&ctx, &ProofMethod::SolveGoal(g), &s).unwrap();
         assert!(r.is_none());
     }
 }

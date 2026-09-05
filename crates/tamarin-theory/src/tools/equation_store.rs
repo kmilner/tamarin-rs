@@ -774,6 +774,24 @@ impl std::fmt::Display for AddEqsError {
 }
 impl std::error::Error for AddEqsError {}
 
+fn subst_domain_range_overlap(asubst: &LNSubst) -> bool {
+    let mut dom_range_overlap = false;
+    {
+        use tamarin_term::lterm::HasFrees;
+        for t in asubst.range() {
+            t.for_each_free(&mut |v| {
+                if !dom_range_overlap && asubst.image_of(v).is_some() {
+                    dom_range_overlap = true;
+                }
+            });
+            if dom_range_overlap {
+                break;
+            }
+        }
+    }
+    dom_range_overlap
+}
+
 // =============================================================================
 // Rule variants
 // =============================================================================
@@ -956,22 +974,23 @@ impl EquationStore {
     }
 
     /// Compose `factor` into the free substitution, re-unifying remaining
-    /// disjs via `apply_eq_store` when a Maude handle is present.  On
-    /// `apply_eq_store` `Err` (e.g. dom/range overlap), or when no handle
-    /// is available (test-only path), fall back to a direct compose.
+    /// disjs via `apply_eq_store` when its domain/range precondition holds
+    /// and a Maude handle is present. Otherwise compose directly. Transport
+    /// failures propagate; they never select the compose fallback.
     /// Shared HS-faithful `foreachDisj` tail (EquationStore.hs).
     fn apply_factor_or_compose(
         &mut self,
         factor: &LNSubst,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) {
-        if let Some(m) = maude {
-            if self.apply_eq_store(m, factor).is_err() {
-                self.subst = factor.compose(&self.subst);
-            }
+    ) -> Result<(), AddEqsError> {
+        if let Some(m) = maude
+            && !subst_domain_range_overlap(factor)
+        {
+            self.apply_eq_store(m, factor)?;
         } else {
             self.subst = factor.compose(&self.subst);
         }
+        Ok(())
     }
 
     /// Shared tail of the `simp_abstract_*`/`simp_identify` passes: replace
@@ -984,10 +1003,10 @@ impl EquationStore {
         new_substs: Vec<LNSubstVFresh>,
         factor: &LNSubst,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> bool {
+    ) -> Result<bool, AddEqsError> {
         self.conj[idx].substs = new_substs;
-        self.apply_factor_or_compose(factor, maude);
-        true
+        self.apply_factor_or_compose(factor, maude)?;
+        Ok(true)
     }
 
     /// `simpAbstractName`: if every substitution in a disjunction maps
@@ -995,6 +1014,7 @@ impl EquationStore {
     /// c}` out into the free substitution and drop those mappings.
     pub fn simp_abstract_name(&mut self) -> bool {
         self.simp_abstract_name_with_maude(None)
+            .expect("Maude-free simplification")
     }
 
     /// HS-faithful variant of `simp_abstract_name` that takes a Maude
@@ -1004,7 +1024,7 @@ impl EquationStore {
     pub fn simp_abstract_name_with_maude(
         &mut self,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> bool {
+    ) -> Result<bool, AddEqsError> {
         // Walk each disjunction and look for a common (v, const)
         // mapping.
         let mut common_mapping: Option<(LVar, LNTerm, usize)> = None;
@@ -1035,7 +1055,7 @@ impl EquationStore {
         }
         let (v, t, idx) = match common_mapping {
             Some(p) => p,
-            None => return false,
+            None => return Ok(false),
         };
         // Compose `{v → t}` into the free substitution and drop `v`
         // from every subst in disjunction `idx`.
@@ -1067,13 +1087,14 @@ impl EquationStore {
     /// that would conflict with the new free subst stay around.
     pub fn simp_identify(&mut self) -> bool {
         self.simp_identify_with_maude(None)
+            .expect("Maude-free simplification")
     }
 
     /// Maude-using variant of `simp_identify` (HS-faithful).
     pub fn simp_identify_with_maude(
         &mut self,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> bool {
+    ) -> Result<bool, AddEqsError> {
         let mut to_apply: Option<(LVar, LVar, usize)> = None;
         for (idx, d) in self.conj.iter().enumerate() {
             if d.substs.is_empty() {
@@ -1112,14 +1133,14 @@ impl EquationStore {
         }
         let (v, v2, idx) = match to_apply {
             Some(p) => p,
-            None => return false,
+            None => return Ok(false),
         };
         // Decide which to keep: the variable with the larger sort
         // (Tamarin says "GT means keep first"; we use the same rule).
         let (keep, remove) = match sort_compare(v.sort, v2.sort) {
             Some(std::cmp::Ordering::Greater) => (v2, v),
             Some(_) => (v, v2),
-            None => return false, // incomparable sorts; bail
+            None => return Ok(false), // incomparable sorts; bail
         };
         let factor = LNSubst::from_list(vec![(
             remove,
@@ -1187,7 +1208,7 @@ impl EquationStore {
         &mut self,
         alloc: &mut F,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> bool {
+    ) -> Result<bool, AddEqsError> {
         use tamarin_term::lterm::LVar;
         use tamarin_term::term::Term;
         use tamarin_term::vterm::Lit;
@@ -1233,7 +1254,7 @@ impl EquationStore {
         }
         let (v, s, lvs, idx) = match to_apply {
             Some(p) => p,
-            None => return false,
+            None => return Ok(false),
         };
         // Allocate a fresh witness fv with the narrower sort `s`.
         let new_idx = alloc(1);
@@ -1286,7 +1307,7 @@ impl EquationStore {
         &mut self,
         alloc: &mut F,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> bool {
+    ) -> Result<bool, AddEqsError> {
         use tamarin_term::function_symbols::FunSym;
         use tamarin_term::lterm::{LSort, LVar};
         use tamarin_term::term::Term;
@@ -1328,7 +1349,7 @@ impl EquationStore {
         }
         let (idx, v, op, argss) = match to_apply {
             Some(p) => p,
-            None => return false,
+            None => return Ok(false),
         };
 
         // For non-AC operators, all argss MUST have the same length
@@ -1337,7 +1358,7 @@ impl EquationStore {
         let first_arity = argss[0].len();
         let same_arity = argss.iter().all(|a| a.len() == first_arity);
 
-        if !op.is_ac() || same_arity {
+        Ok(if !op.is_ac() || same_arity {
             // Abstract ALL arguments.  Allocate `first_arity` fresh
             // Msg-sort vars.
             let mut fvars: Vec<LVar> = Vec::with_capacity(first_arity);
@@ -1394,7 +1415,7 @@ impl EquationStore {
                     LNSubstVFresh::from_list(kept)
                 })
                 .collect();
-            self.replace_disj_and_apply(idx, new_substs, &factor, maude)
+            self.replace_disj_and_apply(idx, new_substs, &factor, maude)?
         } else {
             // AC operator with varying arity: factor first two args.
             let fv1_idx = alloc(1);
@@ -1449,8 +1470,8 @@ impl EquationStore {
                     LNSubstVFresh::from_list(kept)
                 })
                 .collect();
-            self.replace_disj_and_apply(idx, new_substs, &factor, maude)
-        }
+            self.replace_disj_and_apply(idx, new_substs, &factor, maude)?
+        })
     }
 
     /// Variant of `simp` that also runs `simp_singleton` — converts
@@ -1468,7 +1489,7 @@ impl EquationStore {
         is_contr: F,
         mut alloc: G,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> Self
+    ) -> Result<Self, AddEqsError>
     where
         F: Fn(&LNSubst, &LNSubstVFresh) -> bool,
         G: FnMut(u64) -> u64,
@@ -1492,7 +1513,7 @@ impl EquationStore {
         self.sort_disj_substs();
         loop {
             if self.is_false() {
-                return self;
+                return Ok(self);
             }
             let mut changed = false;
             let subst_snapshot = self.subst.clone();
@@ -1511,28 +1532,28 @@ impl EquationStore {
             // every disj (EquationStore.hs `simp1`), with NO precompute guard;
             // `simpSingleton [subst0]` folds a singleton disj via
             // `freshToFree` into the free subst (EquationStore.hs `simpSingleton`).
-            if self.simp_singleton_avoiding(&mut alloc, maude) {
+            if self.simp_singleton_avoiding(&mut alloc, maude)? {
                 changed = true;
                 self.sort_disj_substs();
             }
-            if self.simp_abstract_sorted_var_with_maude(&mut alloc, maude) {
+            if self.simp_abstract_sorted_var_with_maude(&mut alloc, maude)? {
                 changed = true;
                 self.sort_disj_substs();
             }
-            if self.simp_identify_with_maude(maude) {
+            if self.simp_identify_with_maude(maude)? {
                 changed = true;
                 self.sort_disj_substs();
             }
-            if self.simp_abstract_fun_with_maude(&mut alloc, maude) {
+            if self.simp_abstract_fun_with_maude(&mut alloc, maude)? {
                 changed = true;
                 self.sort_disj_substs();
             }
-            if self.simp_abstract_name_with_maude(maude) {
+            if self.simp_abstract_name_with_maude(maude)? {
                 changed = true;
                 self.sort_disj_substs();
             }
             if !changed {
-                return self;
+                return Ok(self);
             }
         }
     }
@@ -1568,11 +1589,11 @@ impl EquationStore {
         &mut self,
         alloc: &mut F,
         maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> bool {
+    ) -> Result<bool, AddEqsError> {
         // Find the first singleton disjunction (1 subst).
         let pos = self.conj.iter().position(|d| d.substs.len() == 1);
         let Some(pos) = pos else {
-            return false;
+            return Ok(false);
         };
         let subst_vf = self.conj[pos].substs[0].clone();
         // Drop the singleton disjunction.
@@ -1596,11 +1617,9 @@ impl EquationStore {
             // semantic no-ops for an empty subst, so skip straight to the
             // apply_eq_store round.
             if let Some(m) = maude {
-                // Err is impossible for the empty subst (dom ∩ range = ∅);
-                // the compose fallback would be a no-op anyway.
-                let _ = self.apply_eq_store(m, &LNSubst::empty());
+                self.apply_eq_store(m, &LNSubst::empty())?;
             }
-            return true;
+            return Ok(true);
         }
         // HS-faithful witness-freshening floor for the already-folded free
         // subst.  `simpSingleton` folds this disj via `freshToFree`, which in
@@ -1665,11 +1684,10 @@ impl EquationStore {
         // re-unifying apply_eq_store path is the faithful one.
         // apply_factor_or_compose does: compose new_subst into self.subst +
         // re-unify all remaining conj disjs when a Maude handle is present.
-        // On Err (e.g. dom/range overlap), or on the no-handle test-only
-        // path, fall back to direct compose (no re-unify) for malformed
-        // factors.
-        self.apply_factor_or_compose(&new_subst, maude);
-        true
+        // Factors with overlapping domain/range, and the no-handle
+        // test-only path, use direct compose without re-unification.
+        self.apply_factor_or_compose(&new_subst, maude)?;
+        Ok(true)
     }
 
     /// HS-faithful `simpDisjunction` (EquationStore.hs).  HS's
@@ -1692,20 +1710,20 @@ impl EquationStore {
         substs: Vec<LNSubstVFresh>,
         is_contr: F,
         maude: &tamarin_term::maude_proc::MaudeHandle,
-    ) -> (LNSubst, Option<Vec<LNSubstVFresh>>) {
+    ) -> Result<(LNSubst, Option<Vec<LNSubstVFresh>>), AddEqsError> {
         let mut store = EquationStore::empty();
         let _ = store.add_disj(substs);
         let alloc = |n: u64| maude.reserve_idxs(n);
-        let store = store.simp_with_fresh_avoiding(is_contr, alloc, Some(maude));
+        let store = store.simp_with_fresh_avoiding(is_contr, alloc, Some(maude))?;
         let free = store.subst.clone();
-        match store.conj.as_slice() {
+        Ok(match store.conj.as_slice() {
             [] => (free, None),
             [d] => (free, Some(d.substs.clone())),
             _ => (
                 free,
                 Some(store.conj.into_iter().flat_map(|d| d.substs).collect()),
             ),
-        }
+        })
     }
 
     /// `applyEqStore`: apply a free substitution to the store, going
@@ -1742,21 +1760,7 @@ impl EquationStore {
         // dom-set ∩ range-var-set intersection, without materialising two
         // `BTreeSet`s (plus a `vars_vterm` Vec per range term) per call on
         // the common disjoint path.
-        let mut dom_range_overlap = false;
-        {
-            use tamarin_term::lterm::HasFrees;
-            for t in asubst.range() {
-                t.for_each_free(&mut |v| {
-                    if !dom_range_overlap && asubst.image_of(v).is_some() {
-                        dom_range_overlap = true;
-                    }
-                });
-                if dom_range_overlap {
-                    break;
-                }
-            }
-        }
-        if dom_range_overlap {
+        if subst_domain_range_overlap(asubst) {
             return Err(AddEqsError::Maude(
                 "applyEqStore: dom and vrange not disjoint".into(),
             ));

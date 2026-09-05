@@ -1,5 +1,3 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-
 use tamarin_parser::{parse_theory, parse_theory_with_base, ParseContext, ParseErrorKind};
 use tamarin_term::maude_sig::pair_maude_sig;
 

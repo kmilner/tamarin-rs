@@ -130,13 +130,12 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // Special case: a single child with empty key is a "Linear"
     // continuation (no branching). Haskell prints these inline, with
     // no `case`/`next`/`qed` wrapper.
-    if node.children.len() == 1 {
-        if let Some((name, child)) = node.children.iter().next() {
-            if name.is_empty() {
-                render_node(child, indent, out);
-                return;
-            }
-        }
+    if node.children.len() == 1
+        && let Some((name, child)) = node.children.iter().next()
+        && name.is_empty()
+    {
+        render_node(child, indent, out);
+        return;
     }
     // On exists-trace lemmas only the trace-found path survives: when a
     // node's status rolls up to Solved (TraceFound), siblings that closed

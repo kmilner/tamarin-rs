@@ -1,0 +1,2 @@
+# Keep formatting changes separate from language-edition migrations.
+style_edition = "2021"

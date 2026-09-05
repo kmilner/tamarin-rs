@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare two web-crawl manifests (HS oracle vs RS) at the semantic level.
 
+The manifests' recorded work directories are normalized before comparison.
 For each idx-normalized URL in the union of both manifests:
   - only in HS  -> MISSING_RS  (RS never produced/visited this URL)
   - only in RS  -> MISSING_HS  (RS produced an extra URL)
@@ -52,6 +53,7 @@ def main():
     rs_doc = load(sys.argv[2])
     hs = hs_doc["manifest"]
     rs = rs_doc["manifest"]
+    workdirs = (hs_doc.get("workdir"), rs_doc.get("workdir"))
     out_tsv = sys.argv[3]
     diffdir = sys.argv[4] if len(sys.argv) > 4 else None
     if diffdir:
@@ -100,8 +102,8 @@ def main():
             counts[status] = counts.get(status, 0) + 1
             continue
         kind = h["kind"]  # oracle kind
-        ch = canon(kind, h["body"])
-        cr = canon(kind, r["body"])
+        ch = canon(kind, h["body"], workdirs)
+        cr = canon(kind, r["body"], workdirs)
         kind_mismatch = h["kind"] != r["kind"]
         status_mismatch = h["status"] != r["status"]
         if ch == cr and not kind_mismatch and not status_mismatch:

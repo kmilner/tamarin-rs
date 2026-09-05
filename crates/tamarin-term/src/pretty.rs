@@ -32,7 +32,7 @@ use std::fmt;
 use std::fmt::Write as _;
 use std::sync::{OnceLock, RwLock};
 
-use tamarin_utils::pretty_hpj::{fcat, fsep, punctuate, Doc, HtmlDocGuard, FLAT_WIDTH};
+use tamarin_utils::pretty_hpj::{fcat, fsep, parens, punctuate, Doc, HtmlDocGuard, FLAT_WIDTH};
 use tamarin_utils::FastMap;
 
 use crate::function_symbols::{
@@ -148,6 +148,9 @@ pub fn pretty_term<L>(pp_lit: &dyn Fn(&L) -> Doc, t: &Term<L>) -> Doc {
         Term::App(FunSym::Ac(AcSym::AcFct(sym)), ts) if ts.is_empty() => {
             Doc::text(String::from_utf8_lossy(sym.name))
         }
+        Term::App(FunSym::Ac(o @ AcSym::AcFct(_)), ts) => {
+            pp_user_ac_terms(pp_lit, ac_op_symbol(*o), ts)
+        }
         Term::App(FunSym::Ac(o), ts) => {
             pp_terms(pp_lit, ac_op_symbol(*o), 1, "(", ")", ts.iter().collect())
         }
@@ -221,6 +224,10 @@ fn pp_terms<L>(
     ts: Vec<&Term<L>>,
 ) -> Doc {
     let docs: Vec<Doc> = ts.into_iter().map(|t| pretty_term(pp_lit, t)).collect();
+    pp_docs(sepa, n, lead, finish, docs)
+}
+
+fn pp_docs(sepa: &str, n: isize, lead: &str, finish: &str, docs: Vec<Doc>) -> Doc {
     let items = punctuate(Doc::text(sepa), docs);
     let mut all: Vec<Doc> = Vec::with_capacity(items.len() + 2);
     all.push(Doc::text(lead));
@@ -229,6 +236,25 @@ fn pp_terms<L>(
     }
     all.push(Doc::text(finish));
     fcat(all)
+}
+
+/// User-defined AC operators bind more tightly than exponentiation in the
+/// parser. Parenthesise a direct exponent argument so pretty-printed terms
+/// reparse with the same tree (tamarin-prover#919).
+fn pp_user_ac_terms<L>(pp_lit: &dyn Fn(&L) -> Doc, separator: &str, terms: &[Term<L>]) -> Doc {
+    let docs = terms
+        .iter()
+        .map(|term| {
+            let doc = pretty_term(pp_lit, term);
+            if matches!(term, Term::App(FunSym::NoEq(sym), args) if *sym == exp_sym() && args.len() == 2)
+            {
+                parens(doc)
+            } else {
+                doc
+            }
+        })
+        .collect();
+    pp_docs(separator, 1, "(", ")", docs)
 }
 
 /// HS `ppFun f ts` (Term/Term.hs:326-327):
@@ -439,6 +465,16 @@ mod tests {
         let x = var("x", LSort::Msg);
         let t = f_app_no_eq(exp_sym(), vec![g, x]);
         assert_eq!(pretty_lnterm(&t), "g^x");
+    }
+
+    #[test]
+    fn pretty_user_ac_parenthesizes_exponent_arguments() {
+        let g = var("g", LSort::Msg);
+        let x = var("x", LSort::Msg);
+        let rest = var("rest", LSort::Msg);
+        let exponent = f_app_no_eq(exp_sym(), vec![g, x]);
+        let t = f_app_ac(user_ac(b"add"), vec![rest, exponent]);
+        assert_eq!(pretty_lnterm(&t), "(rest add (g^x))");
     }
 
     /// `diff(a, b)` keeps its prefix spelling, with a space after the comma.

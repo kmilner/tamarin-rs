@@ -77,7 +77,7 @@ use common::*;
 #[tokio::test]
 async fn test_get_index_returns_html_with_theory_listed() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s.client.get(s.url("/")).send().await.expect("send /");
+    let res = s.get("/").await;
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(
@@ -102,12 +102,7 @@ async fn test_get_index_returns_html_with_theory_listed() {
 #[tokio::test]
 async fn test_favicon_redirects_to_static_image() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/favicon.ico"))
-        .send()
-        .await
-        .expect("send favicon");
+    let res = s.get("/favicon.ico").await;
     let status = res.status();
     let loc = header(&res, reqwest::header::LOCATION);
 
@@ -129,12 +124,7 @@ async fn test_favicon_redirects_to_static_image() {
 #[tokio::test]
 async fn test_robots_txt() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/robots.txt"))
-        .send()
-        .await
-        .expect("send robots");
+    let res = s.get("/robots.txt").await;
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
@@ -156,12 +146,7 @@ async fn test_kill_without_path_returns_400() {
     // "Invalid Arguments / No path to kill specified!".
     // See `getKillThreadR` in `src/Web/Handler.hs:1517-1525`.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/kill"))
-        .send()
-        .await
-        .expect("send /kill");
+    let res = s.get("/kill").await;
     assert_eq!(
         res.status(),
         400,
@@ -192,12 +177,7 @@ async fn test_kill_without_path_returns_400() {
 async fn test_kill_with_path_returns_canceled_request() {
     // Haskell: `/kill?path=foo` returns 200 + "Canceled request!".
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/kill?path=some-key"))
-        .send()
-        .await
-        .expect("send /kill with path");
+    let res = s.get("/kill?path=some-key").await;
     assert_eq!(res.status(), 200);
     assert!(content_type(&res).starts_with("text/plain"));
     // The test compares the body with the oracle's body exactly.
@@ -214,12 +194,7 @@ async fn test_kill_with_path_returns_canceled_request() {
 #[tokio::test]
 async fn test_overview_help_html_structure() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/overview/help"))
-        .send()
-        .await
-        .expect("send overview");
+    let res = s.get("/thy/trace/1/overview/help").await;
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(ct.starts_with("text/html"), "got CT={}", ct);
@@ -248,12 +223,7 @@ async fn test_overview_help_html_structure() {
 #[tokio::test]
 async fn test_main_help_envelope_matches_haskell() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/main/help"))
-        .send()
-        .await
-        .expect("send main/help");
+    let res = s.get("/thy/trace/1/main/help").await;
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(
@@ -275,12 +245,7 @@ async fn test_main_help_envelope_matches_haskell() {
 #[tokio::test]
 async fn test_main_rules_envelope() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/main/rules"))
-        .send()
-        .await
-        .expect("send main/rules");
+    let res = s.get("/thy/trace/1/main/rules").await;
     assert_eq!(res.status(), 200);
     // The rules view carries no load stamp.  The test therefore compares the
     // complete envelope with the oracle's, byte for byte.  The envelope holds
@@ -294,12 +259,7 @@ async fn test_main_rules_envelope() {
 #[tokio::test]
 async fn test_main_message_envelope() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/main/message"))
-        .send()
-        .await
-        .expect("send main/message");
+    let res = s.get("/thy/trace/1/main/message").await;
     assert_eq!(res.status(), 200);
     // HS `messageSnippet` (Web/Theory.hs:926-937) emits the Signature section
     // and the Construction/Deconstruction rule sections.  It does not emit the
@@ -314,12 +274,7 @@ async fn test_main_message_envelope() {
 #[tokio::test]
 async fn test_main_lemma_envelope() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/main/lemma/debug"))
-        .send()
-        .await
-        .expect("send main/lemma");
+    let res = s.get("/thy/trace/1/main/lemma/debug").await;
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("text");
     // HS `htmlThyPath` renders `TheoryLemma _ -> text "this is a mistake"`
@@ -349,12 +304,7 @@ async fn test_main_with_missing_idx_returns_404_html() {
     // the frontend's loading-dialog dismiss / global error handler
     // distinguishes 404 from a JSON envelope.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/99/main/help"))
-        .send()
-        .await
-        .expect("send main with bad idx");
+    let res = s.get("/thy/trace/99/main/help").await;
     assert_eq!(
         res.status(),
         404,
@@ -398,12 +348,7 @@ async fn test_not_found_page_escapes_the_request_path() {
     assert_not_found_capture(&s, "/a&b'c%3Cd", "not_found_escaped_path.html").await;
 
     // Percent-encoded bytes stay encoded, and `?…` is not part of the path.
-    let res = s
-        .client
-        .get(s.url("/caf%C3%A9?q=1"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/caf%C3%A9?q=1").await;
     assert_eq!(res.status(), 404);
     assert!(
         res.text()
@@ -434,7 +379,7 @@ async fn test_unusable_theory_index_is_not_found() {
     }
     // `01` and `+1` are theory 1 — `PathPiece Int` reads both.
     for path in ["/thy/trace/01/overview/help", "/thy/trace/+1/overview/help"] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
+        let res = s.get(path).await;
         assert_eq!(res.status(), 200, "{path} must resolve to theory 1");
     }
 }
@@ -446,12 +391,7 @@ async fn test_unusable_theory_index_is_not_found() {
 #[tokio::test]
 async fn test_percent_encoded_theory_index_resolves() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let plain = s
-        .client
-        .get(s.url("/thy/trace/1/overview/help"))
-        .send()
-        .await
-        .expect("send");
+    let plain = s.get("/thy/trace/1/overview/help").await;
     assert_eq!(plain.status(), 200);
     let plain = plain.text().await.expect("text");
     for path in [
@@ -459,7 +399,7 @@ async fn test_percent_encoded_theory_index_resolves() {
         "/thy/trace/%30%31/overview/help",
         "/thy/trace/%2B1/overview/help",
     ] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
+        let res = s.get(path).await;
         assert_eq!(res.status(), 200, "{path} must resolve to theory 1");
         assert_eq!(res.text().await.expect("text"), plain, "{path}");
     }
@@ -480,12 +420,7 @@ async fn test_percent_encoded_theory_index_resolves() {
 #[tokio::test]
 async fn test_missing_static_asset_matches_haskell() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/static/js/does-not-exist.js"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/static/js/does-not-exist.js").await;
     assert_eq!(res.status(), 404);
     assert_eq!(content_type(&res), "text/plain");
     assert_eq!(
@@ -501,12 +436,7 @@ async fn test_missing_static_asset_matches_haskell() {
 #[tokio::test]
 async fn test_source_returns_plain_text() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/source"))
-        .send()
-        .await
-        .expect("send source");
+    let res = s.get("/thy/trace/1/source").await;
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
@@ -520,12 +450,7 @@ async fn test_source_returns_plain_text() {
 #[tokio::test]
 async fn test_message_deduction_returns_plain_text() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/message"))
-        .send()
-        .await
-        .expect("send message");
+    let res = s.get("/thy/trace/1/message").await;
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
@@ -539,12 +464,7 @@ async fn test_message_deduction_returns_plain_text() {
 #[tokio::test]
 async fn test_download_for_local_theory_returns_source_file() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/download/x.spthy"))
-        .send()
-        .await
-        .expect("send download");
+    let res = s.get("/thy/trace/1/download/x.spthy").await;
     assert_eq!(res.status(), 200);
 
     // Haskell uses `application/octet-stream` (see
@@ -579,12 +499,7 @@ async fn test_download_for_local_theory_returns_source_file() {
 async fn test_download_for_missing_idx_returns_404_html() {
     // Haskell `withTheory` notFound for `/download/...` too.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/99/download/x.spthy"))
-        .send()
-        .await
-        .expect("send download with bad idx");
+    let res = s.get("/thy/trace/99/download/x.spthy").await;
     assert_eq!(res.status(), 404);
 }
 
@@ -595,12 +510,7 @@ async fn test_download_for_missing_idx_returns_404_html() {
 #[tokio::test]
 async fn test_unload_redirects_to_root() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/unload"))
-        .send()
-        .await
-        .expect("send unload");
+    let res = s.get("/thy/trace/1/unload").await;
     assert!(
         res.status().is_redirection(),
         "expected redirect, got {}",
@@ -621,12 +531,7 @@ async fn test_unload_redirects_to_root() {
 #[tokio::test]
 async fn test_reload_returns_redirect_json_same_idx() {
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .post(s.url("/thy/trace/1/reload"))
-        .send()
-        .await
-        .expect("send reload");
+    let res = s.post("/thy/trace/1/reload").await;
     assert_eq!(res.status(), 200);
     let v: serde_json::Value = res.json().await.expect("decode");
     let rust_keys = json_top_keys(&v);

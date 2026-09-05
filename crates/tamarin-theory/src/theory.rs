@@ -45,18 +45,16 @@ pub struct OpenProtoRule {
     /// `variant_substs` disjunction is keyed by those fresh vars,
     /// so applying any picked variant subst yields a fully-narrowed
     /// rule.  `None` when no reducible-headed sub-terms exist
-    /// (canonical rule equals raw rule).  Populated by
-    /// `ProofContext::new` for every rule with reducible-headed
-    /// conclusions — this is the Haskell-faithful `someRuleACInst`
-    /// path (always on).
+    /// (canonical rule equals raw rule). Populated while closing the theory,
+    /// or by a standalone `ProofContext` on demand.
     pub abstracted_rule: Option<ProtoRuleE>,
     /// Premise indices marked as loop breakers by the dataflow
     /// analysis (`useAutoLoopBreakersAC`).  In Haskell these live on
     /// `praciLoopBreakers` of `ProtoRuleACInfo`; we attach them to
     /// the parent `OpenProtoRule` so both the E-rule and any AC
     /// variants share a single source of truth.  The field is
-    /// populated by `ProofContext::new`'s `annotate_loop_breakers`
-    /// pass.
+    /// populated while closing the theory, or by a standalone
+    /// `ProofContext` on demand.
     pub loop_breakers: Vec<crate::rule::PremIdx>,
     /// HS's `cprRuleE` half (`ClosedProtoRule`, Items/RuleItem.hs:56-59),
     /// stored only where it differs from `rule`: **`None` iff `rule` IS that
@@ -172,6 +170,9 @@ pub enum TranslationElement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lemma {
     pub name: String,
+    /// File whose parser context supplied a lemma-local heuristic. Empty for
+    /// generated lemmas and lemmas without such an attribute.
+    pub heuristic_in_file: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
     /// `_lFormula` (Items/LemmaItem.hs:53) — the macro- and predicate-expanded
@@ -188,6 +189,17 @@ pub struct Lemma {
     /// (`Items/LemmaItem.hs:48-58, see line 50`).  Carried through elaboration for the
     /// interactive web server's Edit-lemma form; never used by `--prove`.
     pub plaintext: String,
+}
+
+impl Lemma {
+    /// Only universal source lemmas can refine source cases.
+    pub(crate) fn is_source_assumption(&self) -> bool {
+        self.trace_quantifier == TraceQuantifier::AllTraces
+            && self
+                .attributes
+                .iter()
+                .any(|attr| matches!(attr, LemmaAttr::Sources))
+    }
 }
 
 /// HS `applyMacroInLemma` (lib/theory/src/Lemma.hs:83-88): the theory's macros
@@ -209,6 +221,8 @@ pub fn apply_macro_in_lemma(macros: &[LNMacro], lemma: Lemma) -> Lemma {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccLemma {
     pub name: String,
+    /// File whose parser context supplied an accountability heuristic.
+    pub heuristic_in_file: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     /// HS `_aFormula` (Items/AccLemmaItem.hs:32).  The `Pred` sugar stays:
     /// `liftedAddAccLemma` adds the lemma verbatim
@@ -368,6 +382,8 @@ pub struct Theory<R = OpenProtoRule> {
     /// [GoalRanking ProofContext]`, TheoryObject.hs:185), parsed when the
     /// theory is built.
     pub heuristic: Vec<crate::constraint::solver::goals::GoalRanking>,
+    /// File whose parser context supplied the top-level heuristic header.
+    pub heuristic_in_file: Option<String>,
     pub tactic: Vec<crate::tactic::Tactic>,
     pub signature: MaudeSig,
     /// Intruder rules declared as top-level `rule (modulo AC)` blocks. HS
@@ -383,6 +399,7 @@ impl<R> Theory<R> {
             name: name.into(),
             in_file: String::new(),
             heuristic: Vec::new(),
+            heuristic_in_file: None,
             tactic: Vec::new(),
             signature,
             intruder_rules: Vec::new(),
@@ -433,6 +450,14 @@ impl<R> Theory<R> {
     /// Look up a lemma by name.
     pub fn lookup_lemma(&self, name: &str) -> Option<&Lemma> {
         self.lemmas().find(|l| l.name == name)
+    }
+
+    /// Remove the named lemma while preserving the order of every other item.
+    pub fn remove_lemma(&mut self, name: &str) -> bool {
+        let len = self.items.len();
+        self.items
+            .retain(|item| !matches!(item, TheoryItem::Lemma(lemma) if lemma.name == name));
+        self.items.len() != len
     }
 
     /// Look up a restriction by name (HS `lookupRestriction`,
@@ -708,6 +733,7 @@ mod tests {
     fn lemma(name: &str) -> Lemma {
         Lemma {
             name: name.to_string(),
+            heuristic_in_file: None,
             attributes: Vec::new(),
             trace_quantifier: TraceQuantifier::AllTraces,
             formula: crate::formula::ProtoFormula::ltrue(),

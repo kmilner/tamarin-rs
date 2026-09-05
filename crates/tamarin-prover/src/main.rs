@@ -82,11 +82,15 @@ fn main() -> ExitCode {
     match tamarin_prover::run(&args) {
         Ok(0) => ExitCode::SUCCESS,
         Ok(n) => ExitCode::from(n.try_into().unwrap_or(1)),
-        Err(e) => {
+        Err(tamarin_prover::run::RunError::Regular(message)) => {
             // rc=1 for runtime errors (matching the oracle, whose run
             // failures also exit 1 — this is output the run-parity
             // differentials do compare).
-            eprintln!("error: {}", e);
+            eprintln!("error: {message}");
+            ExitCode::from(1)
+        }
+        Err(tamarin_prover::run::RunError::GhcException(message)) => {
+            eprintln!("tamarin-prover: {message}");
             ExitCode::from(1)
         }
     }

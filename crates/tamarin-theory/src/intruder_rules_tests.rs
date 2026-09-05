@@ -65,10 +65,7 @@ fn is_subset_of_ignores_multiplicity() {
 #[test]
 fn minimize_drops_set_subsumed_rule() {
     use tamarin_term::vterm::var_term;
-    let maude = match maude_handle() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(maude) = maude_handle() else { return };
     let x = var_term(LVar::new("x", LSort::Msg, 0));
     let y = var_term(LVar::new("y", LSort::Msg, 0));
     let z = var_term(LVar::new("z", LSort::Msg, 1));
@@ -118,10 +115,7 @@ fn minimize_drops_set_subsumed_rule() {
 #[test]
 fn equal_duplicate_early_reject_agrees_with_unfiltered_check() {
     use tamarin_term::vterm::var_term;
-    let maude = match maude_handle() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(maude) = maude_handle() else { return };
     let constr = ku_pair_rule_with_var("a", 0);
     let x = var_term(LVar::new("x", LSort::Msg, 0));
     let y = var_term(LVar::new("y", LSort::Msg, 0));
@@ -171,10 +165,7 @@ fn equal_duplicate_early_reject_agrees_with_unfiltered_check() {
 #[test]
 fn equal_subset_early_rejects_are_necessary() {
     use tamarin_term::vterm::var_term;
-    let maude = match maude_handle() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(maude) = maude_handle() else { return };
     let x = var_term(LVar::new("x", LSort::Msg, 0));
     let y = var_term(LVar::new("y", LSort::Msg, 0));
     let name = b"_subset_reject_test".to_vec();
@@ -287,10 +278,7 @@ fn minimize_keeps_order_across_differing_and_colliding_fingerprints() {
     use tamarin_term::builtin::pair;
     use tamarin_term::function_symbols::fst_dest_sym;
     use tamarin_term::term::f_app_no_eq;
-    let maude = match maude_handle() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(maude) = maude_handle() else { return };
     // Fingerprint differs from the pair-shaped rules (top symbol `fst`).
     let fst_rule = ku_rule_over_var("d", |a| f_app_no_eq(fst_dest_sym(), vec![a]));
     // Fingerprint COLLIDES with the pair-shaped rules (conclusion is a
@@ -499,9 +487,8 @@ fn construction_rules_emit_one_rule_per_public_constructor() {
 #[test]
 fn subterm_constructor_rules_emits_only_constructors() {
     let sig = tamarin_term::maude_sig::sym_enc_maude_sig();
-    let maude = match maude_handle_for(sig.clone()) {
-        Some(m) => m,
-        None => return,
+    let Some(maude) = maude_handle_for(sig.clone()) else {
+        return;
     };
     let rules = subterm_constructor_rules(false, &maude, &sig);
     assert!(
@@ -699,10 +686,7 @@ fn ku_pair_rule_with_var(var_name: &str, idx: u64) -> IntrRuleAC {
 /// vs `{y.7}`) is a renaming, so `isRenamingPerRule` holds.
 #[test]
 fn equal_rule_up_to_renaming_alpha_equivalent_pair_rules() {
-    let maude = match maude_handle() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(maude) = maude_handle() else { return };
     let r1 = ku_pair_rule_with_var("x", 0);
     let r2 = ku_pair_rule_with_var("y", 7);
     assert!(
@@ -731,10 +715,7 @@ fn equal_rule_up_to_renaming_alpha_equivalent_pair_rules() {
 #[test]
 fn equal_rule_up_to_renaming_structurally_different_rules_diverge() {
     use tamarin_term::lterm::{LSort, LVar};
-    let maude = match maude_handle() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(maude) = maude_handle() else { return };
     let r1 = ku_pair_rule_with_var("x", 0);
     // r2 has a single KU premise but a DIFFERENT conclusion shape:
     // it concludes KU(x) (the variable directly) instead of
@@ -790,10 +771,7 @@ fn equal_rule_up_to_renaming_structurally_different_rules_diverge() {
 /// enumeration), but `len() >= 1` is invariant.
 #[test]
 fn variants_intruder_emits_at_least_the_identity_variant() {
-    let maude = match maude_handle() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(maude) = maude_handle() else { return };
     // The pair-construction rule from the basic sig.  Apply
     // `variants_intruder` to it; Maude should produce at least the
     // identity variant.  More may appear depending on the
@@ -837,10 +815,7 @@ fn variants_intruder_emits_at_least_the_identity_variant() {
 /// this is the `false` path's only behavioural coverage.
 #[test]
 fn variants_intruder_without_filters_keeps_a_premise_covered_conclusion() {
-    let maude = match maude_handle() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(maude) = maude_handle() else { return };
     let x = var_term(LVar::new("x", LSort::Msg, 0));
     // `[ KD(x) ] --> [ KD(x) ]`: `rConcs \\ rPrems == []`, and the
     // identity variant is the rule itself, so `ruvariant == ru` too.
@@ -975,9 +950,8 @@ fn bp_maude_handle() -> Option<tamarin_term::maude_proc::MaudeHandle> {
 /// (as HS does), so this count applies to the generator only.
 #[test]
 fn bp_intruder_rules_yields_74() {
-    let maude = match bp_maude_handle() {
-        Some(m) => m,
-        None => return,
+    let Some(maude) = bp_maude_handle() else {
+        return;
     };
     let rules = bp_intruder_rules(false, &maude);
     assert_eq!(
@@ -1020,9 +994,8 @@ fn rule_name(info: &IntrRuleACInfo) -> Option<&[u8]> {
 /// constr + 45 d_exp + 1 d_inv = 51 rules total).
 #[test]
 fn dh_intruder_rules_emits_five_constructors_and_some_destructors() {
-    let maude = match dh_maude_handle() {
-        Some(m) => m,
-        None => return,
+    let Some(maude) = dh_maude_handle() else {
+        return;
     };
     let rules = dh_intruder_rules(false, &maude);
 
@@ -1147,9 +1120,8 @@ fn dh_intruder_rules_emits_five_constructors_and_some_destructors() {
 /// (mkAction concfact) []` where `concfact = kudFact conc`.
 #[test]
 fn dh_intruder_rules_constructors_have_expected_shape() {
-    let maude = match dh_maude_handle() {
-        Some(m) => m,
-        None => return,
+    let Some(maude) = dh_maude_handle() else {
+        return;
     };
     let rules = dh_intruder_rules(false, &maude);
     let find = |name: &[u8]| -> &IntrRuleAC {
@@ -1235,9 +1207,8 @@ fn dh_intruder_rules_constructors_have_expected_shape() {
 /// diff=false (the diff filter is weaker).
 #[test]
 fn dh_intruder_rules_diff_mode_is_at_least_as_large() {
-    let maude = match dh_maude_handle() {
-        Some(m) => m,
-        None => return,
+    let Some(maude) = dh_maude_handle() else {
+        return;
     };
     let rules_no_diff = dh_intruder_rules(false, &maude);
     let rules_diff = dh_intruder_rules(true, &maude);
@@ -1271,9 +1242,8 @@ fn dh_intruder_rules_diff_mode_is_at_least_as_large() {
 /// for destructors).
 #[test]
 fn dh_intruder_rules_destructors_have_kd_shape() {
-    let maude = match dh_maude_handle() {
-        Some(m) => m,
-        None => return,
+    let Some(maude) = dh_maude_handle() else {
+        return;
     };
     let rules = dh_intruder_rules(false, &maude);
     let destrs: Vec<&IntrRuleAC> = rules

@@ -56,26 +56,16 @@ pub enum GoalRanking {
     /// `OracleRanking quitOnEmpty oracle` (rankGoals dispatch ProofMethod.hs:479-502, see line 482).
     /// preSort = `const goalNrRanking`.
     /// `oracle_path` is the resolved filesystem path of the oracle script
-    /// (what gets exec'd).  `display_path`, when set, is what
-    /// [`Self::ranking_name`] prints instead: an `o`/`O` inside a COMPACT
-    /// letter run (HS `regularRanking`, Text/Parser/Signature.hs:308-326,
-    /// see line 311) carries the
-    /// bare `defaultOracle` with `workDir = Nothing`, so `printOracle`
-    /// (System.hs:703-706) shows the `"."`-joined name (`./oracle`);
-    /// only a STANDALONE `o`/`O` token keeps the parse-time workDir and
-    /// displays the resolved path. `defaultOracleNames` fills the relative
-    /// path without changing that workDir.
+    /// (what gets exec'd and what [`Self::ranking_name`] prints).
     Oracle {
         quit_on_empty: bool,
         oracle_path: String,
-        display_path: Option<String>,
     },
     /// `OracleSmartRanking quitOnEmpty oracle` (rankGoals dispatch ProofMethod.hs:479-502, see line 483).
     /// preSort = `smartRanking ctxt False`.  Fields as in [`Self::Oracle`].
     OracleSmart {
         quit_on_empty: bool,
         oracle_path: String,
-        display_path: Option<String>,
     },
     /// `InternalTacticRanking quitOnEmpty (Tactic …)` (rankGoals dispatch ProofMethod.hs:479-502, see line 490).
     /// The resolved per-lemma tactic (presort + prio/deprio selectors).
@@ -117,13 +107,11 @@ impl GoalRanking {
             'o' => GoalRanking::Oracle {
                 quit_on_empty: false,
                 oracle_path: oracle_path.to_string(),
-                display_path: None,
             },
             // HS `OracleSmartRanking False defaultOracle` (System.hs:586-599, see line 591)
             'O' => GoalRanking::OracleSmart {
                 quit_on_empty: false,
                 oracle_path: oracle_path.to_string(),
-                display_path: None,
             },
             _ => GoalRanking::Smart(false),
         }
@@ -150,22 +138,12 @@ impl GoalRanking {
                 "heuristics adapted to stateful injective protocols{}",
                 loop_status(*lb)
             ),
-            GoalRanking::Oracle {
-                oracle_path,
-                display_path,
-                ..
-            } => format!(
-                "an oracle for ranking, located at {}",
-                display_path.as_deref().unwrap_or(oracle_path)
-            ),
-            GoalRanking::OracleSmart {
-                oracle_path,
-                display_path,
-                ..
-            } => format!(
+            GoalRanking::Oracle { oracle_path, .. } => {
+                format!("an oracle for ranking, located at {oracle_path}")
+            }
+            GoalRanking::OracleSmart { oracle_path, .. } => format!(
                 "an oracle for ranking based on 'smart' heuristic, \
-                         located at {}",
-                display_path.as_deref().unwrap_or(oracle_path)
+                         located at {oracle_path}"
             ),
             GoalRanking::Tactic { tactic, .. } => {
                 format!("the tactic written in the theory file: {}", tactic.name)
@@ -173,6 +151,17 @@ impl GoalRanking {
         };
         format!("Goals sorted according to {}", body)
     }
+}
+
+/// Whether selecting any of these round-robin rankings can fail at runtime.
+pub(crate) fn rankings_may_fail(rankings: &[GoalRanking]) -> bool {
+    rankings.iter().any(|ranking| match ranking {
+        GoalRanking::Oracle { .. } | GoalRanking::OracleSmart { .. } => true,
+        GoalRanking::Tactic {
+            resolution_error, ..
+        } => resolution_error.is_some(),
+        _ => false,
+    })
 }
 
 /// HS `goalRankingName`'s `loopStatus` (System.hs:687-706, see line 702).
@@ -203,7 +192,7 @@ pub fn parse_heuristic_str_with_tactics(
     theory_file: &str,
     tactics: &[crate::tactic::Tactic],
 ) -> Vec<GoalRanking> {
-    let default_oracle = crate::pretty_theory::oracle_name_for_theory(theory_file);
+    let mut default_oracle = None;
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
     let mut out = Vec::new();
@@ -287,19 +276,16 @@ pub fn parse_heuristic_str_with_tactics(
             });
             continue;
         }
-        // Standalone oracle ranking with optional quoted path.  HS's
-        // `goalRanking` (Text/Parser/Signature.hs:293-311) tries `oracleRanking` FIRST
-        // at each token position, so an `o`/`O` that BEGINS a token is
-        // parsed alone and its Oracle keeps the parse-time workDir —
-        // `printOracle` (System.hs:703-706) then shows the workDir-joined
-        // (resolved) path.
+        // An oracle followed by a quoted path is one token. Bare `o`/`O`
+        // uses the ordinary compact-letter path below, just like every other
+        // ranking now that default oracle resolution is token-form agnostic.
         if c == 'o' || c == 'O' {
-            i += 1;
-            while i < chars.len() && chars[i] == ' ' {
-                i += 1;
+            let mut quote = i + 1;
+            while quote < chars.len() && chars[quote] == ' ' {
+                quote += 1;
             }
-            let explicit_path: Option<String> = if i < chars.len() && chars[i] == '"' {
-                i += 1;
+            if quote < chars.len() && chars[quote] == '"' {
+                i = quote + 1;
                 let start = i;
                 while i < chars.len() && chars[i] != '"' && chars[i] != '\n' {
                     i += 1;
@@ -308,44 +294,27 @@ pub fn parse_heuristic_str_with_tactics(
                 if i < chars.len() && chars[i] == '"' {
                     i += 1;
                 }
-                Some(name)
-            } else {
-                None
-            };
-            let oracle_path = explicit_path.as_deref().unwrap_or(&default_oracle);
-            out.push(GoalRanking::from_char_with_oracle(c, oracle_path));
-            continue;
+                out.push(GoalRanking::from_char_with_oracle(c, &name));
+                continue;
+            }
         }
         // Compact letter run: HS's `regularRanking` (`many1 letter` →
-        // `filterHeuristic`) consumes a MAXIMAL run of letters as one
-        // token, mapping each via `goalRankingIdentifiers` — so an `o`/`O`
-        // INSIDE a run (e.g. the middle of `soioo`) gets the bare
-        // `defaultOracle` (workDir = Nothing) and displays as the
-        // `"."`-joined name (`./oracle`), unlike the standalone form
-        // above.  The exec path is still resolved later
-        // (`prepend_theory_dir_to_oracle_paths`) using its absent workDir;
-        // `display_path` records that distinction from a standalone oracle.
+        // `filterHeuristic`) consumes a maximal run of letters as one token.
+        // `defaultOracleNames` later gives any oracle in it the same default
+        // workDir and relative path as a standalone default oracle.
         if c.is_ascii_alphabetic() {
             while i < chars.len() && chars[i].is_ascii_alphabetic() {
-                let mut r = GoalRanking::from_char_with_oracle(chars[i], &default_oracle);
-                if let GoalRanking::Oracle {
-                    display_path,
-                    oracle_path,
-                    ..
-                }
-                | GoalRanking::OracleSmart {
-                    display_path,
-                    oracle_path,
-                    ..
-                } = &mut r
-                {
-                    *display_path = Some(if oracle_path.starts_with('/') {
-                        oracle_path.clone()
-                    } else {
-                        format!("./{}", oracle_path)
-                    });
-                }
-                out.push(r);
+                let ranking = chars[i];
+                let oracle = if matches!(ranking, 'o' | 'O') {
+                    default_oracle
+                        .get_or_insert_with(|| {
+                            crate::pretty_theory::oracle_name_for_theory(theory_file)
+                        })
+                        .as_str()
+                } else {
+                    "oracle"
+                };
+                out.push(GoalRanking::from_char_with_oracle(ranking, oracle));
                 i += 1;
             }
             continue;
@@ -417,15 +386,15 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
 /// whole tamarin-prover invocation dies (ProofMethod.hs:604-620, see line 607,
 /// `readProcess` throws on non-zero exit or spawn failure).  RS
 /// mirrors this with a hard error that propagates to the top level.
-#[derive(Debug)]
-pub struct OracleError(pub String);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankingError(pub String);
 
-impl std::fmt::Display for OracleError {
+impl std::fmt::Display for RankingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        f.write_str(&self.0)
     }
 }
-impl std::error::Error for OracleError {}
+impl std::error::Error for RankingError {}
 
 // =============================================================================
 // smartRanking — port of `Theory.Constraint.Solver.ProofMethod.smartRanking`
@@ -452,17 +421,87 @@ impl std::error::Error for OracleError {}
 /// Takes a proof context for source-cache predicates and the current proof
 /// depth for round-robin heuristic scheduling.
 ///
-/// Returns `Err(OracleError)` when an oracle script cannot be
-/// executed — callers must propagate this as a hard abort.
+/// `Ok(None)` is the ranking's normal `ApplySorry` instruction;
+/// `ProveError` means the ranking or a lazily forced source could not be
+/// evaluated.
 ///
 /// `depth` mirrors HS's `useHeuristic (Heuristic rankings) depth =
 /// rankings !! (depth mod n)` (ProofMethod.hs:578-589).
-pub fn rank_goals_with(
+pub(crate) fn rank_goals_with(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     depth: usize,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
-    rank_goals_with_inner(sys, ctx, depth)
+) -> Result<Option<Vec<AnnotatedGoal>>, crate::prove::ProveError> {
+    let ranking = ranking_at_depth(ctx, depth);
+    let ranked = match ranking {
+        GoalRanking::Inj(use_loop_breakers) => Ok(Some(inj_ranking(sys, ctx, use_loop_breakers)?)),
+        GoalRanking::Smart(use_loop_breakers) => {
+            Ok(Some(smart_ranking(sys, ctx, use_loop_breakers)?))
+        }
+        GoalRanking::Sapic => {
+            // HS `SapicRanking -> plainRanking (sapicRanking ctxt sys ags)`
+            // (ProofMethod.hs:694-711, see line 697).
+            Ok(Some(sapic_ranking(sys, ctx, false)?))
+        }
+        GoalRanking::SapicPKCS11 => {
+            // HS `SapicPKCS11Ranking -> plainRanking (sapicPKCS11Ranking …)`
+            // (ProofMethod.hs:694-711, see line 698).
+            Ok(Some(sapic_ranking(sys, ctx, true)?))
+        }
+        GoalRanking::GoalNr => {
+            // HS `goalNrRanking = sortOn (fst . snd)` (ProofMethod.hs:591-593).
+            // `open_goals` already sorts by creation nr.
+            Ok(Some(open_goals(sys)))
+        }
+        GoalRanking::UsefulGoalNr => {
+            // HS `UsefulGoalNrRanking -> plainRanking . sortOn (\(_, (nr,
+            // useless)) -> (useless, nr))` (ProofMethod.hs:479-502, see line 484).  This
+            // sorts on the DERIVED `Ord Usefulness` (declaration order
+            // Useful<LoopBreaker<ProbablyConstructible<CurrentlyDeducible,
+            // AnnotatedGoals.hs:18-27), NOT `tagUsefulness` (which collapses
+            // LoopBreaker and ProbablyConstructible).  Rust's `Usefulness`
+            // derives Ord in the same declaration order.
+            let mut ags = open_goals(sys);
+            sort_useful_goal_nr(&mut ags);
+            Ok(Some(ags))
+        }
+        GoalRanking::Tactic {
+            quit_on_empty,
+            tactic,
+            resolution_error,
+        } => {
+            // HS `InternalTacticRanking quitOnEmpty tactic ->
+            //   internalTacticRanking (chosenTactic ..) quitOnEmpty ..`
+            // (ProofMethod.hs:479-502, see line 490; ProofMethod.hs:694).
+            if let Some(message) = resolution_error {
+                return Err(RankingError(message.to_string()).into());
+            }
+            internal_tactic_ranking(&tactic, quit_on_empty, ctx, sys)
+        }
+        GoalRanking::Oracle {
+            quit_on_empty,
+            oracle_path,
+            ..
+        } => {
+            // HS `oracleRanking (const goalNrRanking) oracle quitOnEmpty ctxt sys ags`
+            // (ProofMethod.hs:479-502, see line 482): preSort = goalNrRanking (open_goals is already nr-sorted)
+            let ags = open_goals(sys);
+            oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
+                .map_err(crate::prove::ProveError::from)
+        }
+        GoalRanking::OracleSmart {
+            quit_on_empty,
+            oracle_path,
+            ..
+        } => {
+            // HS `oracleRanking (smartRanking ctxt False) oracle quitOnEmpty ctxt sys ags`
+            // (ProofMethod.hs:479-502, see line 483): preSort = smartRanking ctxt False
+            let ags = smart_ranking(sys, ctx, false)?;
+            oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
+                .map_err(crate::prove::ProveError::from)
+        }
+    }?;
+    Ok(ranked)
 }
 
 /// `goalNrRanking = sortOn (fst . snd)` (ProofMethod.hs:591-593): stable
@@ -506,78 +545,6 @@ pub fn ranking_at_depth(
         .unwrap_or(GoalRanking::Smart(false))
 }
 
-fn rank_goals_with_inner(
-    sys: &System,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
-    depth: usize,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
-    let ranking = ranking_at_depth(ctx, depth);
-    match ranking {
-        GoalRanking::Inj(use_loop_breakers) => Ok(inj_ranking(sys, ctx, use_loop_breakers)),
-        GoalRanking::Smart(use_loop_breakers) => Ok(smart_ranking(sys, ctx, use_loop_breakers)),
-        GoalRanking::Sapic => {
-            // HS `SapicRanking -> plainRanking (sapicRanking ctxt sys ags)`
-            // (ProofMethod.hs:694-711, see line 697).
-            Ok(sapic_ranking(sys, ctx, false))
-        }
-        GoalRanking::SapicPKCS11 => {
-            // HS `SapicPKCS11Ranking -> plainRanking (sapicPKCS11Ranking …)`
-            // (ProofMethod.hs:694-711, see line 698).
-            Ok(sapic_ranking(sys, ctx, true))
-        }
-        GoalRanking::GoalNr => {
-            // HS `goalNrRanking = sortOn (fst . snd)` (ProofMethod.hs:591-593).
-            // `open_goals` already sorts by creation nr.
-            Ok(open_goals(sys))
-        }
-        GoalRanking::UsefulGoalNr => {
-            // HS `UsefulGoalNrRanking -> plainRanking . sortOn (\(_, (nr,
-            // useless)) -> (useless, nr))` (ProofMethod.hs:479-502, see line 484).  This
-            // sorts on the DERIVED `Ord Usefulness` (declaration order
-            // Useful<LoopBreaker<ProbablyConstructible<CurrentlyDeducible,
-            // AnnotatedGoals.hs:18-27), NOT `tagUsefulness` (which collapses
-            // LoopBreaker and ProbablyConstructible).  Rust's `Usefulness`
-            // derives Ord in the same declaration order.
-            let mut ags = open_goals(sys);
-            sort_useful_goal_nr(&mut ags);
-            Ok(ags)
-        }
-        GoalRanking::Tactic {
-            quit_on_empty,
-            tactic,
-            resolution_error,
-        } => {
-            // HS `InternalTacticRanking quitOnEmpty tactic ->
-            //   internalTacticRanking (chosenTactic ..) quitOnEmpty ..`
-            // (ProofMethod.hs:479-502, see line 490; ProofMethod.hs:694).
-            if let Some(message) = resolution_error {
-                return Err(OracleError(message.to_string()));
-            }
-            internal_tactic_ranking(&tactic, quit_on_empty, ctx, sys)
-        }
-        GoalRanking::Oracle {
-            quit_on_empty,
-            oracle_path,
-            ..
-        } => {
-            // HS `oracleRanking (const goalNrRanking) oracle quitOnEmpty ctxt sys ags`
-            // (ProofMethod.hs:479-502, see line 482): preSort = goalNrRanking (open_goals is already nr-sorted)
-            let ags = open_goals(sys);
-            oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
-        }
-        GoalRanking::OracleSmart {
-            quit_on_empty,
-            oracle_path,
-            ..
-        } => {
-            // HS `oracleRanking (smartRanking ctxt False) oracle quitOnEmpty ctxt sys ags`
-            // (ProofMethod.hs:479-502, see line 483): preSort = smartRanking ctxt False
-            let ags = smart_ranking(sys, ctx, false);
-            oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
-        }
-    }
-}
-
 /// Port of HS `oracleRanking` (ProofMethod.hs:595-622).
 ///
 /// Protocol:
@@ -588,18 +555,18 @@ fn rank_goals_with_inner(
 ///    out-of-range indices skipped.
 /// 5. Result = `ranked ++ (ags \\ ranked)` in original order.
 /// 6. If `quit_on_empty && !inp.is_empty() && ranked.is_empty()` →
-///    signal ApplySorry. We encode this as the `OracleError`
-///    `"__ORACLE_QUIT_ON_EMPTY__"` sentinel (matched in search.rs).
+///    `Ok(None)`, the ApplySorry instruction.
 ///
-/// On any exec failure (spawn error / non-zero exit) → `Err(OracleError)`,
-/// propagated as a hard abort (mirrors HS's uncaught IO exception).
+/// On any exec failure (spawn error / non-zero exit) →
+/// `RankingError`, propagated to the caller (mirrors HS's uncaught IO
+/// exception at the batch boundary).
 fn oracle_ranking(
     ags: Vec<AnnotatedGoal>,
     oracle_path: &str,
     quit_on_empty: bool,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     _sys: &System,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
+) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -626,21 +593,21 @@ fn oracle_ranking(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
-        .map_err(|e| OracleError(format!("oracle exec error: {}: {}", oracle_path, e)))?;
+        .map_err(|e| RankingError(format!("oracle exec error: {}: {}", oracle_path, e)))?;
 
     // Write stdin and close pipe
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(inp.as_bytes())
-            .map_err(|e| OracleError(format!("oracle stdin write error: {}", e)))?;
+            .map_err(|e| RankingError(format!("oracle stdin write error: {}", e)))?;
     }
 
     let output = child
         .wait_with_output()
-        .map_err(|e| OracleError(format!("oracle wait error: {}", e)))?;
+        .map_err(|e| RankingError(format!("oracle wait error: {}", e)))?;
 
     if !output.status.success() {
-        return Err(OracleError(format!(
+        return Err(RankingError(format!(
             "oracle process exited with status {}: {}",
             output.status, oracle_path
         )));
@@ -684,12 +651,12 @@ fn oracle_ranking(
     // The `guard` in the IO monad returns `mzero` when condition is True,
     // which causes the sorry instruction to fire (ProofMethod.hs:595-622, see line 620).
     if quit_on_empty && !inp.is_empty() && ranked.is_empty() {
-        return Err(OracleError("__ORACLE_QUIT_ON_EMPTY__".to_string()));
+        return Ok(None);
     }
 
     let mut result = ranked;
     result.extend(remaining);
-    Ok(result)
+    Ok(Some(result))
 }
 
 // =============================================================================
@@ -715,8 +682,8 @@ fn apply_presort(
     ags: Vec<AnnotatedGoal>,
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
-) -> Vec<AnnotatedGoal> {
-    match presort {
+) -> Result<Vec<AnnotatedGoal>, crate::prove::ProveError> {
+    Ok(match presort {
         GoalRanking::GoalNr => {
             // sortOn (fst . snd) — ags from open_goals are already nr-sorted.
             let mut a = ags;
@@ -734,9 +701,9 @@ fn apply_presort(
             // smartRanking re-derives the open-goal list from `sys`; the
             // tactic presort 's' is the default. We re-run smart_ranking
             // over the full system (it internally calls open_goals).
-            smart_ranking(sys, ctx, *use_loop_breakers)
+            smart_ranking(sys, ctx, *use_loop_breakers)?
         }
-        GoalRanking::Inj(use_loop_breakers) => inj_ranking(sys, ctx, *use_loop_breakers),
+        GoalRanking::Inj(use_loop_breakers) => inj_ranking(sys, ctx, *use_loop_breakers)?,
         // A tactic presort can only be one of the plain rankings above
         // (Tactics.hs `goalRankingPresort` parses with `noOracle`, so an
         // oracle/tactic presort is unreachable).  Fall back to nr order.
@@ -745,7 +712,7 @@ fn apply_presort(
             sort_goal_nr(&mut a);
             a
         }
-    }
+    })
 }
 
 /// Port of HS `internalTacticRanking` (ProofMethod.hs:694-711):
@@ -757,11 +724,11 @@ fn internal_tactic_ranking(
     quit_on_empty: bool,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     sys: &System,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
+) -> Result<Option<Vec<AnnotatedGoal>>, crate::prove::ProveError> {
     let presort = presort_ranking(tactic.presort);
     let ags0 = open_goals(sys);
-    let ags = apply_presort(&presort, ags0, sys, ctx);
-    it_ranking(tactic, ags, quit_on_empty, ctx, sys)
+    let ags = apply_presort(&presort, ags0, sys, ctx)?;
+    it_ranking(tactic, ags, quit_on_empty, ctx, sys).map_err(Into::into)
 }
 
 /// Port of HS `itRanking` (ProofMethod.hs:626-687) — the core tactic
@@ -784,7 +751,7 @@ fn it_ranking(
     quit_on_empty: bool,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     sys: &System,
-) -> Result<Vec<AnnotatedGoal>, OracleError> {
+) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
     let ranked_prio = rank_by_blocks(&tactic.prios, &ags, ctx, sys);
     let ranked_deprio = rank_by_blocks(&tactic.deprios, &ags, ctx, sys);
 
@@ -802,14 +769,14 @@ fn it_ranking(
     // quitOnEmpty: `guard (quitOnEmpty && null rankedPrioGoals &&
     //   null rankedDeprioGoals) *> Just ApplySorry` (ProofMethod.hs:626-687, see line 628).
     if quit_on_empty && ranked_prio.is_empty() && ranked_deprio.is_empty() {
-        return Err(OracleError("__ORACLE_QUIT_ON_EMPTY__".to_string()));
+        return Ok(None);
     }
 
     // result = rankedPrioGoals ++ nonRanked ++ rankedDeprioGoals
     let mut result = ranked_prio;
     result.extend(non_ranked);
     result.extend(ranked_deprio);
-    Ok(result)
+    Ok(Some(result))
 }
 
 /// Compute `rankedPrioGoals` (or `rankedDeprioGoals`) for one block list.
@@ -1174,7 +1141,7 @@ fn smart_ranking(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     allow_premise_g_loop_breakers: bool,
-) -> Vec<AnnotatedGoal> {
+) -> Result<Vec<AnnotatedGoal>, crate::prove::ProveError> {
     let mut goals = open_goals(sys);
     // 1. goalNrRanking — already in seq order from `open_goals`.
     // 2. sortDecisionTree solveFirst — multi-pass partitions.
@@ -1184,7 +1151,7 @@ fn smart_ranking(
     type Pred<'a> = Box<dyn Fn(&AnnotatedGoal) -> bool + 'a>;
     // HS-faithful lazy `oneCaseOnly` — only force the source-case analysis
     // when a KU action goal is present (see `lazy_one_case_syms`).
-    let one_case_syms = lazy_one_case_syms(&goals, ctx);
+    let one_case_syms = lazy_one_case_syms(&goals, ctx)?;
     let solve_first: Vec<Pred> = vec![
         Box::new(is_chain_goal),
         Box::new(is_disj_goal),
@@ -1247,7 +1214,7 @@ fn smart_ranking(
     // Re-sorting breaks HS-faithfulness for Device_Init_Use_Set
     // (case-content swap caused by Rust picking the structurally-
     // smaller induction Disj before HS's lemma-negation Disj).
-    goals
+    Ok(goals)
 }
 
 /// Port of HS `sapicRanking` (ProofMethod.hs:769-846, heuristic `p`) and
@@ -1280,11 +1247,11 @@ fn sapic_ranking(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     pkcs11: bool,
-) -> Vec<AnnotatedGoal> {
+) -> Result<Vec<AnnotatedGoal>, crate::prove::ProveError> {
     let mut goals = open_goals(sys);
     // HS-faithful lazy `oneCaseOnly` (see `lazy_one_case_syms`): only force
     // the source-case analysis when a KU action goal is present.
-    let one_case_syms = lazy_one_case_syms(&goals, ctx);
+    let one_case_syms = lazy_one_case_syms(&goals, ctx)?;
     type Pred<'a> = Box<dyn Fn(&AnnotatedGoal) -> bool + 'a>;
     let solve_first: Vec<Pred> = if pkcs11 {
         vec![
@@ -1356,7 +1323,7 @@ fn sapic_ranking(
     }
     // sortOnUsefulness — stable sort by usefulness tag.  NO moveNatToEnd.
     goals.sort_by_key(|a| tag_usefulness(a.usefulness));
-    goals
+    Ok(goals)
 }
 
 /// `sortDecisionTreeLast ps xs` (ProofMethod.hs:174-178): like
@@ -1404,13 +1371,13 @@ fn inj_ranking(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     allow_loop_breakers: bool,
-) -> Vec<AnnotatedGoal> {
+) -> Result<Vec<AnnotatedGoal>, crate::prove::ProveError> {
     let mut goals = open_goals(sys);
     type Pred<'a> = Box<dyn Fn(&AnnotatedGoal) -> bool + 'a>;
     // Lazy one-case-syms exactly as in smart_ranking (see
     // `lazy_one_case_syms`): only force the source-cache thunk when a KU
     // action goal is present.
-    let one_case_syms = lazy_one_case_syms(&goals, ctx);
+    let one_case_syms = lazy_one_case_syms(&goals, ctx)?;
     // solveFirst — four priority classes.  Within each class the
     // relative order from goalNrRanking (insertion / nr order) is
     // preserved by the stable partition.
@@ -1446,7 +1413,7 @@ fn inj_ranking(
     // sortOnUsefulness — stable sort by usefulness tag.  (injRanking has
     // NO moveNatToEnd step — that's smartRanking-only.)
     goals.sort_by_key(|a| tag_usefulness(a.usefulness));
-    goals
+    Ok(goals)
 }
 
 /// Stable partition for closure-based predicate list.
@@ -1468,7 +1435,7 @@ fn is_split_goal_small(a: &AnnotatedGoal, sys: &System) -> bool {
     const SMALL_SPLIT_GOAL_SIZE: usize = 3;
     match &a.goal {
         Goal::Split(id) => sys
-            .eq_store
+            .eq_store()
             .split_size(*id)
             .map(|n| n <= SMALL_SPLIT_GOAL_SIZE)
             .unwrap_or(false),
@@ -1497,7 +1464,7 @@ fn is_no_large_split_goal(a: &AnnotatedGoal, sys: &System) -> bool {
 /// in the one-case set.
 fn collect_one_case_syms(
     ctx: &crate::constraint::solver::context::ProofContext,
-) -> std::collections::BTreeSet<&'static [u8]> {
+) -> Result<std::collections::BTreeSet<&'static [u8]>, crate::prove::ProveError> {
     use crate::constraint::constraints::Goal as G;
     use crate::fact::FactTag;
     use tamarin_term::function_symbols::FunSym;
@@ -1537,13 +1504,13 @@ fn collect_one_case_syms(
         // the disjunct COUNT here, so force once (idempotent) and read
         // the cell length in O(1) instead of deep-cloning every case
         // `System`.
-        src.ensure_cases(ctx);
+        ctx.ensure_saturated()?;
         if src.cases_len() != 1 {
             continue;
         }
         out.insert(s.name);
     }
-    out
+    Ok(out)
 }
 
 /// HS-faithful lazy `oneCaseOnly` shared by all three rankings.
@@ -1562,7 +1529,7 @@ fn collect_one_case_syms(
 fn lazy_one_case_syms(
     goals: &[AnnotatedGoal],
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
-) -> std::collections::BTreeSet<&'static [u8]> {
+) -> Result<std::collections::BTreeSet<&'static [u8]>, crate::prove::ProveError> {
     use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
     let any_ku_action_goal = goals
@@ -1571,10 +1538,10 @@ fn lazy_one_case_syms(
     if any_ku_action_goal {
         match ctx {
             Some(c) => collect_one_case_syms(c),
-            None => Default::default(),
+            None => Ok(Default::default()),
         }
     } else {
-        Default::default()
+        Ok(Default::default())
     }
 }
 
@@ -2231,7 +2198,7 @@ fn is_open_in_sys(g: &Goal, sys: &System, ab_adj: &crate::constraint::system::Pr
         // A Split goal is only open if its split-id still exists
         // in the eq-store.  Without this, stale split-ids appear
         // as open goals after a split has been performed elsewhere.
-        Goal::Split(id) => sys.eq_store.split_exists(*id),
+        Goal::Split(id) => sys.eq_store().split_exists(*id),
         // Haskell parity (Goals.hs:66-182, see line 106):
         //   SubtermG st -> st `elem` posSubterms . sSubtermStore $ sys
         // A Subterm goal is only open if its (small, big) pair is
@@ -2376,18 +2343,18 @@ pub(crate) fn goal_useful_annotation(
     if gs_loop_breaker {
         return " (loop breaker)";
     }
-    if let Goal::Action(i, fa) = g {
-        if fa.is_ku() {
-            if has_ku_guards {
-                return " (useful1)";
+    if let Goal::Action(i, fa) = g
+        && fa.is_ku()
+    {
+        if has_ku_guards {
+            return " (useful1)";
+        }
+        if let Some(m) = fa.terms.first() {
+            if currently_deducible(sys, adj, i, m) {
+                return " (currently deducible)";
             }
-            if let Some(m) = fa.terms.first() {
-                if currently_deducible(sys, adj, i, m) {
-                    return " (currently deducible)";
-                }
-                if probably_constructible(m) {
-                    return " (probably constructible)";
-                }
+            if probably_constructible(m) {
+                return " (probably constructible)";
             }
         }
     }
@@ -2406,28 +2373,28 @@ fn goal_usefulness_with_adj(
     if looping {
         return Usefulness::LoopBreaker;
     }
-    if let Goal::Action(i, fa) = g {
-        if fa.is_ku() {
-            // Haskell `hasKUGuards` (Goals.hs): if ANY system
-            // formula has a `KUFact`-tagged action atom in its guards
-            // (`KU(?) @ ?` quantifier-binding), every KU goal is
-            // **Useful** regardless of `currentlyDeducible` /
-            // `probablyConstructible` — those tests are SHORT-CIRCUITED.
-            // Typing-class IHs (`All m j. KU(m,j) ⇒ ...`) always have
-            // such guards; the order matters for proof-search bias.
-            if has_ku_guards {
-                return Usefulness::Useful;
+    if let Goal::Action(i, fa) = g
+        && fa.is_ku()
+    {
+        // Haskell `hasKUGuards` (Goals.hs): if ANY system
+        // formula has a `KUFact`-tagged action atom in its guards
+        // (`KU(?) @ ?` quantifier-binding), every KU goal is
+        // **Useful** regardless of `currentlyDeducible` /
+        // `probablyConstructible` — those tests are SHORT-CIRCUITED.
+        // Typing-class IHs (`All m j. KU(m,j) ⇒ ...`) always have
+        // such guards; the order matters for proof-search bias.
+        if has_ku_guards {
+            return Usefulness::Useful;
+        }
+        if let Some(m) = fa.terms.first() {
+            // Order matters — `currentlyDeducible` subsumes
+            // `probablyConstructible` for Pub/Nat-only terms but
+            // also catches the `extractible` case.
+            if currently_deducible(sys, adj, i, m) {
+                return Usefulness::CurrentlyDeducible;
             }
-            if let Some(m) = fa.terms.first() {
-                // Order matters — `currentlyDeducible` subsumes
-                // `probablyConstructible` for Pub/Nat-only terms but
-                // also catches the `extractible` case.
-                if currently_deducible(sys, adj, i, m) {
-                    return Usefulness::CurrentlyDeducible;
-                }
-                if probably_constructible(m) {
-                    return Usefulness::ProbablyConstructible;
-                }
+            if probably_constructible(m) {
+                return Usefulness::ProbablyConstructible;
             }
         }
     }
@@ -2460,10 +2427,10 @@ pub(crate) fn has_ku_guards(sys: &System) -> bool {
             // KU action atom must NOT count — only a `GGuarded`'s guards.
             Guarded::GGuarded { guards, body, .. } => {
                 for atom in guards.iter() {
-                    if let ProtoAtom::Action(_, fa) = atom {
-                        if fa.is_ku() {
-                            return true;
-                        }
+                    if let ProtoAtom::Action(_, fa) = atom
+                        && fa.is_ku()
+                    {
+                        return true;
                     }
                 }
                 walk_guards(body)
@@ -2676,10 +2643,10 @@ fn lit_sort_contains(t: &tamarin_term::lterm::LNTerm, target: tamarin_term::lter
 /// Dispatch a goal to the appropriate `solve_*_goal` primitive on a
 /// `Reduction`. Mirrors the case dispatch at the top of Haskell's
 /// `solveGoal`. Returns the corresponding `GoalCases` outcome.
-pub fn dispatch_solve_goal(
+pub(crate) fn dispatch_solve_goal(
     red: &mut crate::constraint::solver::reduction::Reduction<'_>,
     g: &Goal,
-) -> crate::constraint::solver::reduction::GoalCases {
+) -> Result<crate::constraint::solver::reduction::GoalCases, crate::prove::ProveError> {
     // Haskell-faithful: mark the goal as solved BEFORE delegating to
     // the specific solver.  Mirrors `solveGoal` (Goals.hs:201-213):
     //   solveGoal goal = do
@@ -2702,30 +2669,34 @@ pub fn dispatch_solve_goal(
     // trigger: Minimal_HashChain Loop_Start source-case Check0 left
     // its abstract Loop goal open, which then triggered another graft
     // iteration adding a duplicate Check0 node.
-    red.mark_goal_as_solved(g);
     // HS-faithful `solve goal = maybe (solveGoal goal) ...
     // (solveWithSource ctxt ths goal)` (ProofMethod.hs:315-319).
     // HS tries source-case dispatch FIRST; only if it returns
     // `Nothing` does it fall back to `solveGoal` (which emits the
     // `traceExecM ("solveGoal " ++ goalKind goal)` line).  Mirror
-    // here for `Premise` goals: try `solve_with_source_cases_ctx`,
+    // here for source-backed goals: try the source application once,
     // and if it returns `Some(cases)`, return them directly without
     // emitting the `solveGoal kind=Premise fact=...` trace.
     //
-    // Limited to `Premise` goals for now (HS uses `solveWithSource`
-    // for both Action-KU and Premise; we leave Action to its
-    // existing inner source-case path pending further audit).
-    if let Goal::Premise(p, fa) = g {
-        // HS-faithful (Sources.hs:201-205): `solveAllSafeGoals` only
-        // calls `solveWithSourceAndReturn` on "useful" goals (KU
-        // actions), routing safe goals (Premise) through `solveGoal`
-        // directly.  At runtime (`ProofMethod.solve` line 315-319),
-        // dispatch fires for any goal.  Gate Premise dispatch on
-        // `!in_precompute_mode()` so saturate skips it.
-        if !crate::constraint::solver::sources::in_precompute_mode()
-            && !red.ctx.full_sources.is_empty()
-        {
-            if let Some(case_pairs) =
+    // During saturation only KU source picks use `solveWithSource`; safe
+    // premise goals go directly through `solveGoal`.
+    if !crate::constraint::solver::sources::in_precompute_mode() && !red.ctx.full_sources.is_empty()
+    {
+        use crate::constraint::solver::reduction::GoalCases;
+        use crate::constraint::solver::sources::SourceMatch;
+        let source_result = match g {
+            Goal::Action(i, fa) => {
+                crate::constraint::solver::sources::solve_with_source_cases_action(
+                    red.ctx,
+                    &red.ctx.full_sources,
+                    &red.sys,
+                    i,
+                    fa,
+                    &red.maude,
+                    None,
+                )
+            }
+            Goal::Premise(p, fa) => {
                 crate::constraint::solver::sources::solve_with_source_cases_ctx(
                     red.ctx,
                     &red.ctx.full_sources,
@@ -2735,55 +2706,35 @@ pub fn dispatch_solve_goal(
                     fa,
                     Some(&red.maude),
                 )
-            {
-                use crate::constraint::solver::reduction::GoalCases;
-                if case_pairs.len() == 1 {
-                    let (name, sys, branch_counter) = case_pairs.into_iter().next().unwrap();
-                    red.sys = sys;
-                    // HS FreshT-threading: single-case adoption continues
-                    // THIS branch's counter thread (fork + its own
-                    // someInst/conjoin draws), not the shared handle's
-                    // post-all-cases position.
-                    red.maude.reset_counter_to(branch_counter);
-                    return GoalCases::LinearNamed(name);
-                }
-                if !case_pairs.is_empty() {
-                    // Multi-case: record per-branch continuation
-                    // counters for the post-solve simplify (consumed
-                    // via `last_case_counters`, parallel to the Cases
-                    // vec — same contract as the action-path source
-                    // adoption in `solve_action_goal`).
-                    let mut out: Vec<(String, crate::constraint::system::System)> =
-                        Vec::with_capacity(case_pairs.len());
-                    let mut out_counters: Vec<u64> = Vec::with_capacity(case_pairs.len());
-                    for (name, sys, branch_counter) in case_pairs {
-                        out.push((name, sys));
-                        out_counters.push(branch_counter);
-                    }
-                    red.last_case_counters = out_counters;
-                    return GoalCases::Cases(out);
-                }
-                // HS-faithful: `solveWithSource` returned `Just` (the
-                // abstract `matchToGoal` matched) but every case was
-                // contradictory at conjoin → zero surviving cases.  HS
-                // renders this `by` (no children, Theory/Proof.hs:1062-1071,
-                // see line 1065); the
-                // node is contradictory.  Return `Contradictory` instead
-                // of falling through to runtime `solve_premise_goal`,
-                // which would re-introduce a shallow producer case HS
-                // never explores.
-                return GoalCases::Contradictory;
             }
+            _ => Ok(SourceMatch::NoMatch),
+        }?;
+        if let SourceMatch::Matched(case_pairs) = source_result {
+            if case_pairs.is_empty() {
+                return Ok(GoalCases::Contradictory);
+            }
+            if case_pairs.len() == 1 {
+                let (name, sys, branch_counter) = case_pairs.into_iter().next().unwrap();
+                red.sys = sys;
+                red.maude.reset_counter_to(branch_counter);
+                return Ok(GoalCases::LinearNamed(name));
+            }
+            let mut out = Vec::with_capacity(case_pairs.len());
+            for (name, sys, counter) in case_pairs {
+                out.push(crate::constraint::solver::reduction::GoalBranch { name, sys, counter });
+            }
+            return Ok(GoalCases::Cases(out));
         }
     }
-    match g {
-        Goal::Action(i, fa) => red.solve_action_goal(i, fa),
-        Goal::Premise(p, fa) => red.solve_premise_goal(p, fa),
-        Goal::Chain(c, p) => red.solve_chain_goal(c, p),
-        Goal::Split(id) => red.solve_split_goal(*id),
-        Goal::Disj(d) => red.solve_disj_goal(d),
-        Goal::Subterm(st) => red.solve_subterm_goal(st),
-    }
+    red.mark_goal_as_solved(g);
+    Ok(match g {
+        Goal::Action(i, fa) => red.solve_action_goal(i, fa)?,
+        Goal::Premise(p, fa) => red.solve_premise_goal(p, fa)?,
+        Goal::Chain(c, p) => red.solve_chain_goal(c, p)?,
+        Goal::Split(id) => red.solve_split_goal(*id)?,
+        Goal::Disj(d) => red.solve_disj_goal(d)?,
+        Goal::Subterm(st) => red.solve_subterm_goal(st)?,
+    })
 }
 
 #[cfg(test)]

@@ -95,12 +95,11 @@ fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
 /// HS `getFormulaTerms` (Tactics.hs:203-205): the fact terms of the single
 /// top-level guard, when the formula is exactly `GGuarded _ _ [Action _ fa] _`.
 fn formula_action_fact(g: &Guarded) -> Option<&Fact<BLNTerm>> {
-    if let Guarded::GGuarded { guards, .. } = g {
-        if guards.len() == 1 {
-            if let ProtoAtom::Action(_, fa) = &guards[0] {
-                return Some(fa);
-            }
-        }
+    if let Guarded::GGuarded { guards, .. } = g
+        && guards.len() == 1
+        && let ProtoAtom::Action(_, fa) = &guards[0]
+    {
+        return Some(fa);
     }
     None
 }
@@ -190,10 +189,10 @@ pub(crate) fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal
 pub(crate) fn action_goal_single_term(
     goal: &crate::constraint::constraints::Goal,
 ) -> Option<&LNTerm> {
-    if let crate::constraint::constraints::Goal::Action(_, fa) = goal {
-        if fa.terms.len() == 1 {
-            return Some(&fa.terms[0]);
-        }
+    if let crate::constraint::constraints::Goal::Action(_, fa) = goal
+        && fa.terms.len() == 1
+    {
+        return Some(&fa.terms[0]);
     }
     None
 }

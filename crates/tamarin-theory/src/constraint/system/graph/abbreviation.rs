@@ -434,7 +434,7 @@ pub fn compute_abbreviations(repr: &GraphRepr, opts: &AbbreviationOptions) -> Ab
         let mut best: Option<(&LNTerm, i64)> = None;
         for (t, (occs, legend_occs)) in term_occs.iter() {
             let w = judge_term(&abbrevs, t, *occs, legend_occs);
-            if w > 0 && best.map_or(true, |(_, bw)| w > bw) {
+            if w > 0 && best.is_none_or(|(_, bw)| w > bw) {
                 best = Some((t, w));
             }
         }

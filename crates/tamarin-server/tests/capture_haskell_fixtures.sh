@@ -16,11 +16,10 @@
 #
 # Output: writes each captured response into
 #   tests/fixtures/haskell-responses/
-# plus `oracle_rev`, the submodule revision they were captured from.  The
-# `haskell_captures_match_the_submodule_pin` test in tests/common/mod.rs goes
-# red when that stamp is not the current pin, so a submodule bump that forgets
-# to re-run this script fails the suite instead of silently pinning the port to
-# a stale oracle.
+# plus `oracle_rev`, the submodule revision and patch series they were captured
+# from.  `tests/capture_provenance.rs` checks both identities, so a source
+# change that forgets to re-run this script fails the suite instead of silently
+# pinning the port to a stale oracle.
 #
 # Re-run this whenever Haskell behaviour changes.  The Rust port tests in
 # `tests/routes_*.rs` compare against these captures several ways: byte
@@ -43,6 +42,12 @@ FIXTURE="${SCRIPT_DIR}/fixtures/issue193.spthy"
 }
 # shellcheck source=../../../scripts/gate_common.sh
 . "$ROOT/scripts/gate_common.sh"
+[ -r "$ROOT/scripts/web_cache.sh" ] || {
+  echo "error: missing scripts/web_cache.sh" >&2
+  exit 2
+}
+# shellcheck source=../../../scripts/web_cache.sh
+. "$ROOT/scripts/web_cache.sh"
 HS_PATH=$(resolve_hs_oracle "$ROOT") || exit 2
 MAUDE=$(resolve_maude) || exit 2
 maude_on_path "$MAUDE"
@@ -51,6 +56,12 @@ maude_on_path "$MAUDE"
 # series, not an arbitrary binary that happens to have the same base commit.
 oracle_rev_check "$HS_PATH" "$MAUDE" "$ROOT"
 pin="$(git -C "$ROOT" rev-parse :tamarin-prover)"
+patch_series="$(patch_series_fingerprint "$ROOT")" || exit 2
+
+if ! web_port_free "$PORT"; then
+  echo "error: port $PORT is already occupied; refusing to capture another service" >&2
+  exit 2
+fi
 
 if [[ ! -f "$FIXTURE" ]]; then
   echo "error: fixture $FIXTURE missing" >&2
@@ -62,7 +73,21 @@ mkdir -p "$RES_DIR"
 # Poll the just-launched $SERVER_PID until it serves the root page; dump its
 # log and give up otherwise.  Optional $1 names the theory it is serving.
 wait_for_server() {
+  local state
   for _ in {1..40}; do
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+      echo "error: Haskell server exited before becoming ready (log: /tmp/haskell-server.log)" >&2
+      cat /tmp/haskell-server.log >&2
+      exit 1
+    fi
+    state=$(ps -o stat= -p "$SERVER_PID" 2>/dev/null || true)
+    case "$state" in
+      ''|*Z*)
+        echo "error: Haskell server exited before becoming ready (log: /tmp/haskell-server.log)" >&2
+        cat /tmp/haskell-server.log >&2
+        exit 1
+        ;;
+    esac
     if curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
       return
     fi
@@ -209,6 +234,10 @@ fetch equiv_overview.json       "/thy/equiv/1/overview/help"
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
+if ! web_wait_port_free "$PORT"; then
+  echo "error: port $PORT did not become free after stopping the first server" >&2
+  exit 1
+fi
 
 # ---------------- Backend abbreviation (second theory, second server) -------
 # `abbrevInBackend` replaces every premise/conclusion term of `size >= 30` with
@@ -228,11 +257,11 @@ rm -rf "$BIGDIR"
 # then atomically exchange the complete capture with the committed directory.
 # After the exchange CAPTURE_DIR names the old fixtures, which the EXIT trap
 # removes. A failure or interruption before the exchange leaves them untouched;
-# one after it leaves the complete new generation in place. The stamp has no
-# trailing newline (the same shape scripts/divergence_fixtures/ uses).
-printf '%s' "$pin" > "${CAPTURE_DIR}/oracle_rev"
+# one after it leaves the complete new generation in place.
+printf 'pin=%s\npatch_series_sha256=%s\n' "$pin" "$patch_series" \
+  > "${CAPTURE_DIR}/oracle_rev"
 mv --exchange --no-copy --no-target-directory "$CAPTURE_DIR" "$RES_DIR"
 
-echo "done.  Captures live under: ${RES_DIR} (oracle_rev: $pin)"
+echo "done.  Captures live under: ${RES_DIR} (pin: $pin, patches: $patch_series)"
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true

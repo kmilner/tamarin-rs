@@ -231,6 +231,29 @@ fn duplicate_across_include_is_rejected() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn diff_right_lemma_namespace_crosses_include_boundary() {
+    let dir = std::env::temp_dir().join(format!(
+        "tamarin_parser_diff_include_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(
+        dir.join("frag.spthy"),
+        "lemma l [right]: exists-trace \"Ex #i. A() @ #i\"\n",
+    )
+    .expect("write fragment");
+    let src = "theory T begin\n\
+               #include \"frag.spthy\"\n\
+               lemma l [right]: exists-trace \"Ex #i. A() @ #i\"\n\
+               end\n";
+    let error = tamarin_parser::parse_diff_theory_with_base(src, &[], Some(dir.clone()))
+        .expect_err("the included right-side lemma occupies the namespace")
+        .to_string();
+    assert!(error.contains("duplicate lemma: l"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A second lemma with a reused name dies at `addLemma`'s name guard
 /// (TheoryObject.hs:462-465, reached through `liftedAddLemma`,
 /// Theory/Text/Parser.hs:280-282).  Neither lemma carries a proof, so the

@@ -36,7 +36,7 @@ fn loaded(mp: &str) -> (Theory, MaudeHandle) {
     let parsed = parse_theory(SRC, &[]).expect("parse");
     let mut elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
     let maude = MaudeHandle::start(mp, elaborated.signature.clone()).expect("start maude");
-    populate_rule_variants(&mut elaborated, &maude, None);
+    populate_rule_variants(&mut elaborated, &maude, None).expect("populate variants");
     (elaborated, maude)
 }
 
@@ -70,6 +70,20 @@ fn no_maude_reports_nothing() {
     };
     let (thy, _maude) = loaded(&mp);
     assert!(rule_variants_report(&thy, None).is_empty());
+}
+
+#[test]
+fn variant_transport_failure_is_not_reported_as_no_variants() {
+    let Some(mp) = require_maude_path() else {
+        return;
+    };
+    let parsed = parse_theory(SRC, &[]).expect("parse");
+    let mut elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
+    let maude = MaudeHandle::start(&mp, elaborated.signature.clone()).expect("start maude");
+    maude.kill_subprocess();
+
+    assert!(populate_rule_variants(&mut elaborated, &maude, None).is_err());
+    assert_eq!(elaborated.rules().count(), 2);
 }
 
 /// HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86) drops a rule with no

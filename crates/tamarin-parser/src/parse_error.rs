@@ -209,12 +209,12 @@ impl ParseError {
 
     pub fn span(&self) -> Span {
         let mut span = self.span;
-        if span.start == span.end {
-            if let Some(source) = &self.diagnostic_source {
-                let start = span.start as usize;
-                if let Some(ch) = source.contents.get(start..).and_then(|s| s.chars().next()) {
-                    span.end = span.start.saturating_add(ch.len_utf8() as u32);
-                }
+        if span.start == span.end
+            && let Some(source) = &self.diagnostic_source
+        {
+            let start = span.start as usize;
+            if let Some(ch) = source.contents.get(start..).and_then(|s| s.chars().next()) {
+                span.end = span.start.saturating_add(ch.len_utf8() as u32);
             }
         }
         span

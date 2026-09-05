@@ -16,6 +16,7 @@ mod common;
 
 use common::{fixture, maude_arg, maude_available, normalize_stdout, run_binary};
 use std::path::{Path, PathBuf};
+use tamarin_prover::run::RunError;
 use tamarin_prover::{parse_args, run};
 
 fn args_from(args: &[&str]) -> tamarin_prover::Args {
@@ -29,6 +30,13 @@ fn run_cli(extra: &[&str]) -> i32 {
     let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
     argv.extend_from_slice(extra);
     run(&args_from(&argv)).expect("run")
+}
+
+fn run_error(extra: &[&str]) -> RunError {
+    let maude = maude_arg();
+    let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
+    argv.extend_from_slice(extra);
+    run(&args_from(&argv)).expect_err("run should fail")
 }
 
 #[test]
@@ -119,6 +127,141 @@ fn prove_lemma_filter_excludes_other_lemmas() {
         body.contains("lemma chain") && body.contains("by sorry"),
         "filtered-out lemma should remain `by sorry` in the output; got:\n{}",
         body
+    );
+}
+
+#[test]
+fn missing_oracle_fails_without_emitting_the_failed_theory() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    let theory = fixture("oracle_missing.spthy");
+    let (code, stdout, stderr) = run_binary(&["--prove=test"], &[&theory]);
+    assert_eq!(code, 1, "missing oracle must be a handled batch failure");
+    assert!(stdout.is_empty(), "failed proof leaked stdout:\n{stdout}");
+    assert!(
+        stderr.contains("oracle exec error:"),
+        "failure should identify the oracle:\n{stderr}"
+    );
+}
+
+#[test]
+fn precompute_guarded_failures_use_the_ghc_exception_boundary() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    for fixture_name in ["guarded_restriction.spthy", "guarded_source.spthy"] {
+        let theory = fixture(fixture_name);
+        let (code, stdout, stderr) = run_binary(&["--precompute-only"], &[&theory]);
+        assert_eq!(code, 1, "{fixture_name} must be a handled batch failure");
+        assert!(stdout.is_empty(), "{fixture_name} leaked stdout:\n{stdout}");
+        assert!(
+            stderr.contains("tamarin-prover: unguarded variable")
+                && !stderr.contains("error: guarded conversion:"),
+            "wrong error boundary for {fixture_name}:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn auto_sources_does_not_use_existential_source_lemmas_as_assumptions() {
+    if !maude_available() {
+        return;
+    }
+    let theory = fixture("guarded_existential_source.spthy");
+    let (code, stdout, stderr) = run_binary(&["--auto-sources"], &[&theory]);
+    assert_eq!(
+        code, 0,
+        "existential source annotation must not abort loading: {stderr}"
+    );
+    assert!(
+        stdout.contains("typing"),
+        "loaded theory was not rendered: {stdout}"
+    );
+}
+
+#[test]
+fn stored_terminal_replay_emits_a_state_for_each_node() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
+    if let Some(maude) = maude_arg() {
+        cmd.arg(maude);
+    }
+    let output = cmd
+        .env("TAM_RS_TRACE_STATE", "1")
+        .arg(fixture("terminal_replay.spthy"))
+        .output()
+        .expect("spawn tamarin-rs");
+    assert!(output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("utf-8 stderr");
+    let (_, replay_trace) = stderr
+        .split_once("[Theory TerminalReplay] Theory closed\n")
+        .expect("closed marker before replay trace");
+    let states: Vec<_> = replay_trace
+        .lines()
+        .filter(|line| line.starts_with("[STATE]"))
+        .collect();
+    assert_eq!(states.len(), 2, "{stderr}");
+    assert_ne!(states[0], states[1], "replay emitted the same state twice");
+    assert!(
+        states[0].contains("nodes=[]"),
+        "unexpected root state: {stderr}"
+    );
+    assert!(
+        states[1].contains("nodes=[A,Fresh]"),
+        "unexpected child state: {stderr}"
+    );
+}
+
+#[test]
+fn library_returns_batch_failures_instead_of_exiting() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    for (fixture_name, lemma, expected) in [
+        ("oracle_missing.spthy", "test", "oracle exec error:"),
+        ("guarded_lemma.spthy", "bad", "unguarded variable"),
+        ("guarded_restriction.spthy", "ok", "unguarded variable"),
+    ] {
+        let theory = fixture(fixture_name);
+        let error = run_error(&[
+            &format!("--prove={lemma}"),
+            theory.to_str().expect("fixture path"),
+        ]);
+        assert!(
+            matches!(error, RunError::GhcException(ref message) if message.contains(expected)),
+            "unexpected error for {fixture_name}: {error:?}"
+        );
+    }
+
+    for fixture_name in ["guarded_restriction.spthy", "guarded_source.spthy"] {
+        let theory = fixture(fixture_name);
+        let error = run_error(&["--precompute-only", theory.to_str().expect("fixture path")]);
+        assert!(
+            matches!(error, RunError::GhcException(ref message) if message.starts_with("unguarded variable")),
+            "unexpected precompute error for {fixture_name}: {error:?}"
+        );
+    }
+
+    let theory = fixture("single_recv.spthy");
+    let error = run_error(&[
+        "--prove=chain",
+        "--heuristic=z",
+        theory.to_str().expect("fixture path"),
+    ]);
+    assert!(
+        matches!(error, RunError::Regular(ref message) if message.contains("unknown goal ranking")),
+        "unexpected heuristic error: {error:?}"
     );
 }
 
@@ -1069,4 +1212,52 @@ fn cli_ref_cases_files_and_manifest_are_in_sync() {
             src_path.display()
         );
     }
+}
+
+#[test]
+fn input_manifest_lemma_metadata_uses_preprocessed_theory() {
+    let dir = std::env::temp_dir().join(format!("tamarin_lemma_metadata_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let theory = dir.join("root.spthy");
+    std::fs::write(dir.join("fragment.inc"), "lemma included: \"T\" by sorry\n").unwrap();
+    for (source, flags, expected) in [
+        (
+            "theory T begin\n#include \"fragment.inc\"\nend",
+            vec![],
+            "1",
+        ),
+        (
+            "theory T begin lemma inline: \"T\" by sorry end",
+            vec![],
+            "1",
+        ),
+        (
+            "theory T begin\n/*\nlemma commented: \"T\"\n*/\nend",
+            vec![],
+            "0",
+        ),
+        (
+            "theory T begin\n#ifdef ACTIVE\nlemma active: \"T\"\n#endif\nend",
+            vec![],
+            "0",
+        ),
+        (
+            "theory T begin\n#ifdef ACTIVE\nlemma active: \"T\"\n#endif\nend",
+            vec!["-D=ACTIVE"],
+            "1",
+        ),
+    ] {
+        std::fs::write(&theory, source).unwrap();
+        let mut args = flags;
+        args.push("input-manifest");
+        let (code, stdout, stderr) = run_binary(&args, &[&theory]);
+        assert_eq!(code, 0, "{stderr}");
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line == format!("M\thas_lemmas\t{expected}")),
+            "{stdout}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
 }

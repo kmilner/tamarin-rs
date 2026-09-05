@@ -58,7 +58,12 @@ fn elaborated(pt: &tamarin_parser::ast::Theory) -> crate::theory::Theory {
 fn prove_lemma_unknown_name_is_error() {
     let Some(h) = maude() else { return };
     let parser_theory = tamarin_parser::parse_theory("theory T begin end", &[]).expect("parse");
-    let r = prove_lemma(&elaborated(&parser_theory), "nonexistent", h, 5);
+    let r = prove_lemma(
+        std::sync::Arc::new(elaborated(&parser_theory)),
+        "nonexistent",
+        h,
+        5,
+    );
     assert!(matches!(r, Err(ProveError::LemmaNotFound(_))));
 }
 
@@ -114,7 +119,13 @@ fn injectivity_corpus_example_is_contradictory() {
     ))
     .expect("read features/injectivity/injectivity.spthy");
     let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
-    let root = prove_lemma(&elaborated(&pt), "injectivity_check", h, 200).expect("prove");
+    let root = prove_lemma(
+        std::sync::Arc::new(elaborated(&pt)),
+        "injectivity_check",
+        h,
+        200,
+    )
+    .expect("prove");
     assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
@@ -135,7 +146,7 @@ fn cr_external_recentalive_converges_and_holds() {
         return;
     };
     let t0 = std::time::Instant::now();
-    let root = prove_lemma(&elab, "recentalive", h, 200).expect("prove");
+    let root = prove_lemma(std::sync::Arc::new(elab), "recentalive", h, 200).expect("prove");
     let dt = t0.elapsed();
     assert_eq!(root.status, NodeStatus::Contradictory);
     assert!(
@@ -157,7 +168,7 @@ fn sig_minimal_tautology_is_contradictory() {
     let Some(h) = maude_with(elab.signature.clone()) else {
         return;
     };
-    let root = prove_lemma(&elab, "a_self", h, 50).expect("prove");
+    let root = prove_lemma(std::sync::Arc::new(elab), "a_self", h, 50).expect("prove");
     assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
@@ -167,7 +178,8 @@ fn sig_minimal_tautology_is_contradictory() {
 fn two_fresh_premises_in_one_rule_reach_solved() {
     let Some(h) = maude() else { return };
     let pt = fixture_theory("needs_constructor_simple.spthy");
-    let root = prove_lemma(&elaborated(&pt), "sent_exists", h, 200).expect("prove");
+    let root =
+        prove_lemma(std::sync::Arc::new(elaborated(&pt)), "sent_exists", h, 200).expect("prove");
     assert_eq!(root.status, NodeStatus::Solved);
 }
 
@@ -179,7 +191,13 @@ fn two_fresh_premises_in_one_rule_reach_solved() {
 fn intruder_pair_construction_reaches_solved() {
     let Some(h) = maude() else { return };
     let pt = fixture_theory("needs_constructor.spthy");
-    let root = prove_lemma(&elaborated(&pt), "pair_arrives", h, 2000).expect("prove");
+    let root = prove_lemma(
+        std::sync::Arc::new(elaborated(&pt)),
+        "pair_arrives",
+        h,
+        2000,
+    )
+    .expect("prove");
     assert_eq!(root.status, NodeStatus::Solved);
 }
 
@@ -215,8 +233,15 @@ fn gather_reusable_lemmas_matches_hs_guards() {
     );
     let pt = tamarin_parser::parse_theory(&src, &[]).expect("parse");
     let thy = crate::elaborate::elaborate(&pt).expect("elaborate");
+    let prepared: Vec<_> = thy
+        .lemmas()
+        .map(|lemma| PreparedLemma {
+            guarded: guarded_or_error(&lemma.formula).map(std::sync::Arc::new),
+            heuristic: None,
+        })
+        .collect();
     let gathered = |name: &str| {
-        gather_reusable_lemmas(&thy, name, SourceKind::RefinedSources)
+        gather_reusable_lemmas(&thy, &prepared, name, SourceKind::RefinedSources)
             .expect("gather")
             .len()
     };
@@ -261,16 +286,18 @@ lemma always_A:
   "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
 end
 "#;
-    // The policy is process-wide; hold the lock its other writer takes so
-    // no concurrent test stores a lower one mid-search.
-    let _guard = crate::constraint::solver::search::SYS_RETENTION_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    crate::constraint::solver::search::set_sys_retention(
-        crate::constraint::solver::search::SysRetention::KeepAll,
-    );
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    let root = prove_lemma(&elaborated(&pt), "always_A", h, 200).expect("prove");
+    let session = ProverSession::build(
+        std::sync::Arc::new(elaborated(&pt)),
+        h,
+        ProverSessionOptions {
+            sys_retention: crate::constraint::solver::search::SysRetention::KeepAll,
+            show_saturation_steps: true,
+            ..Default::default()
+        },
+    )
+    .expect("session");
+    let root = prove_lemma_in_session(&session, "always_A", 200).expect("prove");
     // Root = the initial constraint system (the negated goal formula),
     // with the lemma's refined source kind — NOT an empty default.
     assert!(
@@ -292,64 +319,32 @@ end
     }
 }
 
-/// Drive the tiny_setup proof and inspect the proof-tree shape: the root
-/// takes one of the three methods `rankProofMethods` can rank first here,
-/// the `Ex` decomposes into a `Goal::Action(Setup(_))`, solving it
-/// instantiates the `Setup` rule via its `Fr(~k)` premise, and the search
-/// reaches `Solved`.
-#[test]
-fn prove_lemma_tiny_setup_drives_through_action_goal() {
-    let Some(h) = maude() else { return };
-    let src = r#"
-theory TinySetup begin
-rule Setup:
-  [ Fr(~k) ] --[ Setup(~k) ]-> [ Out(~k) ]
-lemma trivial:
-  exists-trace
-  "Ex k #i. Setup(k) @ #i"
-end
-"#;
-    let parser_theory = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    let root = prove_lemma(&elaborated(&parser_theory), "trivial", h, 100)
-        .expect("prove_lemma should not error");
-
-    // Root method: under the `AvoidInduction` default (exists-trace
-    // lemmas), Haskell's `rankProofMethods` tries Simplify first.
-    // If Simplify produces non-empty cases (decomposes the formula
-    // into goals), that's picked; otherwise we fall through to
-    // Induction.  For this trivial existence lemma the Ex is
-    // reducible, so Simplify is the root method.  Either is
-    // structurally acceptable as long as the proof reaches Solved.
-    use crate::constraint::solver::proof_method::ProofMethod;
-    assert!(
-        matches!(
-            root.method,
-            ProofMethod::Induction | ProofMethod::Simplify | ProofMethod::SolveGoal(_)
-        ),
-        "expected Simplify/Induction/SolveGoal at root, got {:?}",
-        root.method
-    );
-    assert_eq!(
-        root.status,
-        NodeStatus::Solved,
-        "expected Solved on tiny_setup, got {:?}",
-        root.status
-    );
-}
-
 /// Build a `ProverSession` from theory source for the pre-pass tests.
 fn session_from(src: &str) -> Option<ProverSession> {
     let h = maude()?;
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
-    ProverSession::build_with_heuristic(
-        std::sync::Arc::new(elaborated(&pt)),
-        h,
-        None,
-        CliHeuristic::default(),
-        crate::constraint::solver::context::CutStrategy::Dfs,
-        None,
+    Some(
+        ProverSession::build(
+            std::sync::Arc::new(elaborated(&pt)),
+            h,
+            ProverSessionOptions::default(),
+        )
+        .expect("build test session"),
     )
-    .ok()
+}
+
+fn session_with_malformed_sources(goal: &str) -> Option<ProverSession> {
+    session_from(&format!(
+        "theory T begin\n\
+         rule R: [] --[ A() ]-> []\n\
+         lemma typing [sources]: \"All x #i. A() @ #i ==> x = x\"\n\
+         {goal}\n\
+         end"
+    ))
+}
+
+fn assert_guarded_error<T>(result: Result<T, ProveError>) {
+    assert!(matches!(result, Err(ProveError::Guarded(_))));
 }
 
 #[test]
@@ -367,7 +362,10 @@ end",
         session.template_context().use_induction,
         crate::constraint::solver::context::UseInduction::AvoidInduction
     );
+    assert!(!session.guarded_lemmas_may_fail());
+    assert!(!session.lemma_ranking_may_fail("inductive"));
     let ctx = session.context_for_lemma("inductive").expect("context");
+    assert!(!ctx.proving_may_fail());
     assert!(std::sync::Arc::ptr_eq(
         &session.template_context().shared,
         &ctx.shared
@@ -387,147 +385,389 @@ end",
     ));
 }
 
-/// HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84) builds
-/// `ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd ruE)`, so a
-/// rule with no variants yields NO closed rule: it is in neither the closed
-/// theory nor the proof search.  The canonical case is a rule carrying both
-/// `Fr(~x)` and `In(~x)`, where `~x` cannot be sent before it is generated.
-/// `run.rs` drops such a rule from the internal theory before the session is
-/// built, and the session's rules are that theory's, so the drop reaches the
-/// proof context.
 #[test]
-fn a_no_variant_rule_is_absent_from_the_session() {
-    let Some(h) = maude() else { return };
-    let pt = tamarin_parser::parse_theory(
+fn ranking_fallibility_stays_local_to_its_lemma() {
+    let Some(session) = session_from(
         "theory T begin\n\
-rule Contradictory: [ Fr(~x), In(~x) ] --[ C(~x) ]-> [ Out(~x) ]\n\
-rule Setup: [ Fr(~k) ] --[ Setup(~k) ]-> [ Out(~k) ]\n\
-lemma trivial: exists-trace \"Ex k #i. Setup(k) @ #i\"\n\
-end",
-        &[],
-    )
-    .expect("parse");
-    let mut theory = elaborated(&pt);
-    let no_variant: Vec<String> = theory
-        .rules()
-        .filter(|r| {
-            crate::tools::rule_variants::rule_has_no_variants_for_wf_with(&h, &r.rule, None)
-        })
-        .map(|r| r.name().to_string())
-        .collect();
-    assert_eq!(no_variant, vec!["Contradictory".to_string()]);
-    theory.items.retain(|i| match i {
-        crate::theory::TheoryItem::Rule(r) => !no_variant.iter().any(|n| n == r.name()),
-        _ => true,
-    });
+         lemma safe: \"T\"\n\
+         lemma external [heuristic=o \"oracle\"]: \"T\"\n\
+         end",
+    ) else {
+        return;
+    };
 
-    let session = ProverSession::build_with_heuristic(
-        std::sync::Arc::new(theory),
-        h,
-        None,
-        CliHeuristic::default(),
-        crate::constraint::solver::context::CutStrategy::Dfs,
-        None,
-    )
-    .expect("session");
-    let names: Vec<&str> = session.theory.rules().map(|r| r.name()).collect();
-    assert_eq!(names, vec!["Setup"]);
-    assert!(
-        !session
-            .template_ctx
-            .rules
-            .iter()
-            .any(|r| r.name() == "Contradictory"),
-        "the dropped rule must not reach the template proof context"
+    assert!(!session.guarded_lemmas_may_fail());
+    assert!(!session.lemma_ranking_may_fail("safe"));
+    assert!(session.lemma_ranking_may_fail("external"));
+    assert!(!session
+        .context_for_lemma("safe")
+        .expect("safe context")
+        .proving_may_fail());
+    assert!(session
+        .context_for_lemma("external")
+        .expect("oracle context")
+        .proving_may_fail());
+}
+
+const RAW_AND_REFINED_LEMMAS: &str = "theory T begin\n\
+rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
+lemma typing [sources]: \"All k #i. A(k) @ #i ==> A(k) @ #i\"\n\
+lemma goal: \"All k #i. A(k) @ #i ==> A(k) @ #i\"\n\
+end";
+
+fn source_cache_disabled() -> bool {
+    tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE")
+}
+
+#[test]
+fn source_cache_is_lazy() {
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
+    };
+    assert!(session.source_cache.is_empty());
+
+    let (lemma, prepared) = session.lemma_and_prepared("goal").expect("goal lemma");
+    let ctx = session.setup_per_lemma_ctx(lemma, prepared);
+    let second_ctx = session.setup_per_lemma_ctx(lemma, prepared);
+    assert!(!std::sync::Arc::ptr_eq(
+        &ctx.full_sources,
+        &second_ctx.full_sources
+    ));
+    assert!(session.source_cache.is_empty());
+}
+
+#[test]
+fn source_materialization_preserves_maude_failures() {
+    let source = "theory T begin\n\
+        builtins: multiset\n\
+        rule R: [In(<x,y,z,w>)] --[A(x,y,z,w)]-> [F(x)]\n\
+        restriction Eq: \"All x y z w #i. A(x,y,z,w) @i ==> x ++ y = z ++ w\"\n\
+        lemma goal: \"Ex x y z w #i. A(x,y,z,w) @i\"\n\
+        end";
+    let theory = std::sync::Arc::new(elaborated(
+        &tamarin_parser::parse_theory(source, &[]).unwrap(),
+    ));
+    let build = || {
+        let maude = maude_with(theory.signature.clone())?;
+        Some(ProverSession::build(theory.clone(), maude, ProverSessionOptions::default()).unwrap())
+    };
+    let Some(healthy) = build() else {
+        return;
+    };
+    assert!(healthy.context_for_sources(SourceKind::RawSources).is_ok());
+    let mut session = build().unwrap();
+    // Preparation also queries Maude. Replace its warmed handle so source
+    // materialization must consult the failed backend rather than that cache.
+    let failed = maude_with(theory.signature.clone()).unwrap();
+    failed.kill_subprocess();
+    std::sync::Arc::get_mut(&mut session.template_ctx)
+        .unwrap()
+        .maude = failed;
+    for kind in [SourceKind::RawSources, SourceKind::RefinedSources] {
+        for _ in 0..2 {
+            assert!(matches!(
+                session.context_for_sources(kind),
+                Err(ProveError::Maude(_))
+            ));
+        }
+    }
+    let stats = session.source_stats();
+    assert!(matches!(stats.raw, Err(ProveError::Maude(_))));
+    assert!(matches!(stats.refined, Err(ProveError::Maude(_))));
+}
+
+#[test]
+fn terminal_system_does_not_force_sources() {
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
+    };
+    let mut terminal = crate::constraint::system::System::default();
+    terminal
+        .formulas_mut()
+        .push(std::sync::Arc::new(crate::guarded::gfalse()));
+
+    prove_system_in_session(&session, "goal", terminal, usize::MAX)
+        .expect("terminal system bypasses sources");
+    assert!(session.source_cache.is_empty());
+}
+
+#[test]
+fn interactive_source_views_use_the_session_provider() {
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
+    };
+
+    session
+        .context_for_sources(SourceKind::RawSources)
+        .expect("raw source view");
+    if !source_cache_disabled() {
+        assert!(session.source_cache.raw.get().is_some());
+        assert!(session.source_cache.refined.get().is_none());
+    }
+
+    session
+        .context_for_sources(SourceKind::RefinedSources)
+        .expect("refined source view");
+    assert!(session.source_stats().refined.is_ok());
+    assert_eq!(
+        session.source_cache.len(),
+        if source_cache_disabled() { 0 } else { 2 }
     );
 }
 
-const SHARED_KEY_TWO_LEMMAS: &str = "theory T begin\n\
-rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
-lemma a: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\"\n\
-lemma b: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\"\n\
-end";
-
-/// Two lemmas with the same (empty) `source_key` saturate ONCE in the
-/// pre-pass, seed one cache entry, and a same-key lemma then restores it.
 #[test]
-fn presaturate_dedups_shared_source_key() {
-    let session = match session_from(SHARED_KEY_TWO_LEMMAS) {
-        Some(s) => s,
-        None => return,
+fn interactive_refined_source_errors_cross_the_provider_boundary() {
+    let Some(session) = session_with_malformed_sources("lemma goal: \"Ex #i. A() @ #i\"") else {
+        return;
     };
-    // Both lemmas are RefinedSource with no prior `[sources]` lemma, so
-    // both carry the identical empty key — one saturation covers both.
-    let n = session.presaturate_shared_sources(false, |_| true);
-    assert_eq!(n, 1, "two lemmas sharing a key must saturate once");
-    assert_eq!(
-        session.source_cache.lock().unwrap().len(),
-        1,
-        "exactly one refined-source set is cached"
+
+    assert_guarded_error(session.context_for_sources(SourceKind::RefinedSources));
+}
+
+#[test]
+fn lazy_source_consumers_report_deferred_source_errors() {
+    let Some(session) = session_with_malformed_sources("lemma goal: \"Ex #i. A() @ #i\"") else {
+        return;
+    };
+    let (lemma, prepared) = session.lemma_and_prepared("goal").expect("goal lemma");
+    let mut ctx = session.setup_per_lemma_ctx(lemma, prepared);
+    assert!(session.guarded_lemmas_may_fail());
+    assert!(ctx.proving_may_fail());
+    ctx.heuristic = Some(
+        crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
+            "{missing}",
+            "test.spthy",
+            &[],
+        ),
     );
-    // A fan-out lemma of the same key restores from the pre-seeded cache.
-    let lemma_b = session.theory.lookup_lemma("b").expect("lemma b");
-    let kind = lemma_source_kind(lemma_b);
-    let (mut ctx, key) = session
-        .setup_per_lemma_ctx(lemma_b, "b", kind)
-        .expect("ctx");
-    let hit = session.restore_or_saturate_sources(&mut ctx, key, false);
-    assert!(
-        hit,
-        "lemma b must restore from the pre-seeded shared-key cache"
-    );
-    let cache = session.source_cache.lock().unwrap();
-    let cached = cache
-        .values()
-        .next()
-        .and_then(|entry| entry.sources.first())
-        .expect("cached source");
-    let restored = ctx
-        .full_sources
-        .iter()
-        .find(|source| source.goal == cached.0)
-        .expect("restored source");
+    assert_guarded_error(ctx.ensure_saturated());
+    assert_guarded_error(ctx.source_cases());
+}
+
+#[test]
+fn simplify_only_proof_does_not_force_malformed_source_assumption() {
+    let Some(session) =
+        session_with_malformed_sources("lemma done: \"All #i. A() @ #i ==> A() @ #i\"")
+    else {
+        return;
+    };
+    let typing = session.theory.lookup_lemma("typing").expect("typing lemma");
+    assert!(guarded_or_error(&typing.formula).is_err());
+
+    let proof = prove_lemma_in_session(&session, "done", usize::MAX)
+        .expect("simplification must not force unrelated sources");
+    assert_eq!(proof.status, NodeStatus::Contradictory);
+    assert!(session.source_cache.is_empty());
+}
+
+#[test]
+fn refined_slot_derives_from_the_single_raw_slot() {
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
+    };
+    let (lemma, prepared) = session.lemma_and_prepared("goal").expect("goal lemma");
+    let ctx = session.setup_per_lemma_ctx(lemma, prepared);
+    ctx.ensure_saturated().expect("valid source assumptions");
+
+    if source_cache_disabled() {
+        assert!(session.source_cache.is_empty());
+        return;
+    }
+    assert!(session.source_cache.raw.get().is_some());
+    assert!(session.source_cache.refined.get().is_some());
+    assert_eq!(session.source_cache.len(), 2);
+
+    let cached = session
+        .source_cache
+        .refined
+        .get()
+        .and_then(|result| result.as_ref().ok())
+        .and_then(|sources| sources.first())
+        .expect("cached refined source");
+    let restored = ctx.full_sources.iter().next().expect("restored source");
     assert!(std::sync::Arc::ptr_eq(
-        &cached.1,
+        cached,
         &restored.cases_shared_or_empty()
     ));
 }
 
-/// A lemma that would emit a bare `sorry` (not a `--prove` target and with
-/// no stored proof tree) never saturates in the fan-out, so the pre-pass
-/// must skip it — the spdm121 `--prove=<no match>` regression precedent.
 #[test]
-fn presaturate_skips_bare_sorry_lemmas() {
-    let session = match session_from(SHARED_KEY_TWO_LEMMAS) {
-        Some(s) => s,
-        None => return,
+fn empty_refinement_still_labels_source_systems_refined() {
+    let Some(session) = session_from(
+        "theory T begin\n\
+         rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
+         lemma goal: \"All k #i. A(k) @ #i ==> A(k) @ #i\"\n\
+         end",
+    ) else {
+        return;
     };
-    // Freshly parsed lemmas have no stored proof tree; with no target
-    // selected they emit a bare sorry and never consult a source.
-    let n = session.presaturate_shared_sources(false, |_| false);
-    assert_eq!(n, 0, "bare-sorry lemmas must not be pre-saturated");
-    assert!(
-        session.source_cache.lock().unwrap().is_empty(),
-        "no key is seeded for bare-sorry lemmas"
-    );
-    // The SAME lemmas do saturate once they are `--prove` targets.
-    let n2 = session.presaturate_shared_sources(false, |_| true);
-    assert_eq!(n2, 1, "targeted lemmas saturate their shared key once");
+    let refined = session
+        .context_for_sources(SourceKind::RefinedSources)
+        .expect("refined sources");
+    let mut systems = 0;
+    for source in refined.full_sources.iter() {
+        let cases = source.cases_shared_or_empty();
+        for (_, system) in cases
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+        {
+            systems += 1;
+            assert_eq!(system.source_kind, Some(SourceKind::RefinedSources));
+        }
+    }
+    assert!(systems > 0, "fixture must produce source cases");
 }
 
-/// `cache_disabled` (`TAM_RS_NO_SOURCE_CACHE`) bypasses the pre-pass
-/// entirely, falling back to the per-lemma compute path.
 #[test]
-fn presaturate_disabled_is_noop() {
-    let session = match session_from(SHARED_KEY_TWO_LEMMAS) {
-        Some(s) => s,
-        None => return,
+fn concurrent_raw_and_refined_consumers_share_each_materialisation() {
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
     };
-    let n = session.presaturate_shared_sources(true, |_| true);
-    assert_eq!(n, 0, "the disabled pre-pass saturates nothing");
+    let barrier = std::sync::Barrier::new(4);
+    let shared = std::thread::scope(|scope| {
+        let workers: Vec<_> = [
+            SourceKind::RawSources,
+            SourceKind::RefinedSources,
+            SourceKind::RawSources,
+            SourceKind::RefinedSources,
+        ]
+        .into_iter()
+        .map(|kind| {
+            let session = &session;
+            let barrier = &barrier;
+            scope.spawn(move || {
+                barrier.wait();
+                let ctx = session.context_for_sources(kind).expect("source context");
+                let cases = ctx
+                    .full_sources
+                    .iter()
+                    .next()
+                    .expect("source")
+                    .cases_shared_or_empty();
+                (kind, cases)
+            })
+        })
+        .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("source worker"))
+            .collect::<Vec<_>>()
+    });
+
+    for kind in [SourceKind::RawSources, SourceKind::RefinedSources] {
+        let mut matching = shared
+            .iter()
+            .filter(|(candidate, _)| *candidate == kind)
+            .map(|(_, cases)| cases);
+        let first = matching.next().expect("first consumer");
+        assert_eq!(
+            matching.all(|cases| std::sync::Arc::ptr_eq(first, cases)),
+            !source_cache_disabled()
+        );
+    }
+    assert_eq!(
+        session.source_cache.len(),
+        if source_cache_disabled() { 0 } else { 2 }
+    );
+}
+
+#[test]
+fn source_pool_work_returns_to_a_lemma_pool_worker() {
+    use rayon::prelude::*;
+
+    assert!((1..=4).contains(&source_pool().current_num_threads()));
+    let lemma_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .expect("lemma pool");
+    let sums = lemma_pool.install(|| {
+        (0..2)
+            .into_par_iter()
+            .map(|_| in_source_pool(|| (0..8).into_par_iter().sum::<usize>()))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(sums, vec![28, 28]);
+}
+
+#[test]
+fn restoring_cached_sources_does_not_publish_completion() {
+    #[derive(Debug)]
+    struct CountingProvider(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl crate::constraint::solver::context::SourceProvider for CountingProvider {
+        fn materialize(&self, _ctx: &ProofContext) -> Result<(), ProveError> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    let Some(h) = maude() else { return };
+    let mut ctx = ProofContext::new(h, Vec::new());
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    ctx.set_source_provider(std::sync::Arc::new(CountingProvider(
+        std::sync::Arc::clone(&calls),
+    )));
+    let cached = ctx
+        .full_sources
+        .iter()
+        .map(|_| std::sync::Arc::new(std::sync::Mutex::new(Vec::new())))
+        .collect();
+
+    restore_sources(&ctx, &cached);
+    ctx.ensure_saturated().expect("valid source assumptions");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+}
+
+const STORED_TERMINAL_LEMMAS: &str = "theory T begin\n\
+rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
+lemma open: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\" by sorry\n\
+lemma terminal: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\" by contradiction\n\
+end";
+
+#[test]
+fn parallel_replay_of_terminal_roots_leaves_sources_lazy() {
+    use rayon::prelude::*;
+
+    let Some(session) = session_from(STORED_TERMINAL_LEMMAS) else {
+        return;
+    };
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .expect("lemma pool");
+    pool.install(|| {
+        ["open", "terminal"].par_iter().try_for_each(|name| {
+            check_and_extend_lemma_in_session(&session, name, usize::MAX).map(drop)
+        })
+    })
+    .expect("parallel replay");
+
+    assert!(session.source_cache.is_empty());
+}
+
+#[test]
+fn replacing_stored_sorry_reports_unresolved_ranking() {
+    let Some(session) = session_from(
+        "theory T begin\n\
+heuristic: {missing}\n\
+rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
+lemma open: exists-trace \"Ex k #i. A(k) @ #i\" by sorry\n\
+end",
+    ) else {
+        return;
+    };
+
+    let error = prove_lemma_in_session(&session, "open", usize::MAX)
+        .expect_err("auto-proving the stored sorry must resolve its ranking");
     assert!(
-        session.source_cache.lock().unwrap().is_empty(),
-        "the disabled pre-pass seeds no cache entries"
+        matches!(
+            &error,
+        ProveError::Ranking(
+            crate::constraint::solver::goals::RankingError(message)
+        ) if message == "No tactic has been written in the theory file"
+        ),
+        "unexpected error: {error:?}"
     );
 }
 
@@ -626,6 +866,9 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
         validate_cli_heuristic(&CliHeuristic::default(), &[]),
         Ok(())
     );
+    assert!(validate_cli_heuristic(&cli(""), &[])
+        .unwrap_err()
+        .contains("at least one ranking"));
     // HS rejects whitespace, digits and quotes as unknown rankings —
     // matching the acceptance set is what keeps a typo from silently
     // proving under the smart fallback.
@@ -650,7 +893,26 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
 }
 
 #[test]
-fn cli_oracles_are_cwd_relative() {
+fn prover_session_rejects_an_unvalidated_cli_heuristic() {
+    let Some(h) = maude() else { return };
+    let parsed = tamarin_parser::parse_theory("theory T begin end", &[]).expect("parse");
+    let theory = std::sync::Arc::new(elaborated(&parsed));
+    let result = ProverSession::build(
+        theory.clone(),
+        h.clone(),
+        ProverSessionOptions {
+            cli_heuristic: CliHeuristic {
+                raw: Some("unknown".to_string()),
+                ..CliHeuristic::default()
+            },
+            ..Default::default()
+        },
+    );
+    assert!(matches!(result, Err(ProveError::InvalidHeuristic(_))));
+}
+
+#[test]
+fn default_cli_oracles_are_resolved_beside_the_theory() {
     use crate::constraint::solver::goals::GoalRanking;
 
     let root = std::env::temp_dir().join(format!(
@@ -662,6 +924,7 @@ fn cli_oracles_are_cwd_relative() {
     let theory = root.join("protocol.spthy");
     std::fs::write(&theory, "theory T begin end").unwrap();
     std::fs::write(root.join("protocol.oracle"), "#!/bin/sh\n").unwrap();
+    let default_oracle = root.join("protocol.oracle").to_string_lossy().into_owned();
 
     let cli = CliHeuristic {
         raw: Some("o".to_string()),
@@ -671,7 +934,7 @@ fn cli_oracles_are_cwd_relative() {
     assert!(matches!(
         &rankings[0],
         GoalRanking::Oracle { oracle_path, .. }
-            if oracle_path == "./oracle"
+            if oracle_path == &default_oracle
     ));
 
     let explicit = CliHeuristic {
@@ -685,38 +948,21 @@ fn cli_oracles_are_cwd_relative() {
         GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./chosen.oracle"
     ));
 
-    let compact = CliHeuristic {
-        raw: Some("so".to_string()),
-        oracle_name: Some("chosen.oracle".to_string()),
-        ..CliHeuristic::default()
-    };
-    let rankings = resolve_cli_heuristic(&compact, theory.to_str().unwrap(), &[]).unwrap();
-    assert!(matches!(
-        &rankings[1],
-        GoalRanking::Oracle {
-            oracle_path,
-            display_path: Some(display_path),
-            ..
-        } if oracle_path == "./chosen.oracle" && display_path == "./chosen.oracle"
-    ));
-
-    std::fs::remove_dir_all(root).unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
-fn in_file_oracle_work_dir_depends_on_token_form() {
+fn all_in_file_oracles_are_resolved_beside_the_theory() {
     use crate::constraint::solver::goals::GoalRanking;
 
     let mut rankings = vec![
         GoalRanking::Oracle {
             quit_on_empty: false,
             oracle_path: "oracle".to_string(),
-            display_path: None,
         },
         GoalRanking::Oracle {
             quit_on_empty: false,
             oracle_path: "oracle".to_string(),
-            display_path: Some("./oracle".to_string()),
         },
     ];
     prepend_theory_dir_to_oracle_paths(&mut rankings, "dir/theory.spthy");
@@ -727,6 +973,137 @@ fn in_file_oracle_work_dir_depends_on_token_form() {
     ));
     assert!(matches!(
         &rankings[1],
-        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "./oracle"
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "dir/oracle"
     ));
+    assert_eq!(
+        resolve_oracle_path("/tmp/./nested//rank", Some("ignored")),
+        "/tmp/nested/rank"
+    );
+}
+
+#[test]
+fn included_oracle_locations_are_preserved_and_frozen() {
+    use crate::constraint::solver::goals::GoalRanking;
+
+    let root =
+        std::env::temp_dir().join(format!("tamarin_rs_included_oracle_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    let theory_file = root.join("root.spthy");
+    let include_file = root.join("sub/inc.spthy");
+    std::fs::write(
+        &theory_file,
+        "theory T begin\n#include \"sub/inc.spthy\"\nend\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &include_file,
+        "heuristic: o\n\
+         lemma header: \"T\"\n\
+         lemma local [heuristic=o \"rank\"]: \"T\"\n\
+         lemma local_default [heuristic=o, heuristic=o]: \"T\"\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("sub/inc.oracle"), "").unwrap();
+    std::fs::write(root.join("sub/rank"), "").unwrap();
+
+    let source = std::fs::read_to_string(&theory_file).unwrap();
+    let parsed = tamarin_parser::parse_theory_with_base(&source, &[], Some(root.clone())).unwrap();
+    let theory =
+        crate::elaborate::elaborate_with_in_file(&parsed, theory_file.to_str().unwrap()).unwrap();
+    assert!(matches!(
+        &theory.heuristic[0],
+        GoalRanking::Oracle { oracle_path, .. } if oracle_path == "inc.oracle"
+    ));
+    let local_default = theory.lookup_lemma("local_default").unwrap();
+    assert_eq!(
+        local_default
+            .attributes
+            .iter()
+            .filter_map(|attribute| match attribute {
+                crate::theory::LemmaAttr::Heuristic(raw) => Some(raw.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        ["o \"inc.oracle\"", "o \"inc.oracle\""]
+    );
+
+    // Changing the filesystem after elaboration must not switch either the
+    // header or lemma-local default to the fallback `oracle` executable.
+    std::fs::remove_file(root.join("sub/inc.oracle")).unwrap();
+    std::fs::write(root.join("sub/oracle"), "").unwrap();
+    let Some(maude) = maude_with(theory.signature.clone()) else {
+        std::fs::remove_dir_all(root).unwrap();
+        return;
+    };
+    let session = ProverSession::build(
+        std::sync::Arc::new(theory),
+        maude,
+        ProverSessionOptions::default(),
+    )
+    .unwrap();
+    let oracle_path = |lemma: &str| {
+        let ctx = session.context_for_lemma(lemma).unwrap();
+        match &ctx.heuristic.as_ref().unwrap()[0] {
+            GoalRanking::Oracle { oracle_path, .. } => oracle_path.clone(),
+            other => panic!("expected oracle ranking, got {other:?}"),
+        }
+    };
+    assert_eq!(
+        oracle_path("header"),
+        root.join("sub/inc.oracle").to_string_lossy()
+    );
+    assert_eq!(
+        oracle_path("local"),
+        root.join("sub/rank").to_string_lossy()
+    );
+    assert_eq!(
+        oracle_path("local_default"),
+        root.join("sub/inc.oracle").to_string_lossy()
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn scratch_proof_checks_return_backend_errors() {
+    use crate::constraint::solver::sources::IntegerParameters;
+    let theory = elaborated(
+        &tamarin_parser::parse_theory("theory T begin rule R: [In(x)] --> [F(x)] end", &[])
+            .unwrap(),
+    );
+    for failed in [false, true] {
+        for derivation in [false, true] {
+            let Some(h) = maude_with(theory.signature.clone()) else {
+                return;
+            };
+            if failed {
+                h.kill_subprocess();
+            }
+            let result = if derivation {
+                crate::deriv_check::check_message_derivation(
+                    &theory,
+                    &h,
+                    1,
+                    None,
+                    IntegerParameters::default(),
+                )
+                .map(|warnings| assert!(warnings.is_empty()))
+            } else {
+                crate::auto_sources::apply_auto_sources(
+                    &mut theory.clone(),
+                    h,
+                    None,
+                    None,
+                    IntegerParameters::default(),
+                )
+                .map(|changed| assert!(!changed))
+            };
+            if failed {
+                assert!(matches!(result, Err(ProveError::Maude(_))));
+            } else {
+                result.unwrap();
+            }
+        }
+    }
 }

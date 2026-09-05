@@ -19,9 +19,9 @@ tamarin-parser = { workspace = true }
 tamarin-sapic = { workspace = true }
 tamarin-accountability = { workspace = true }
 
-axum = { version = "0.7", default-features = false, features = ["http1", "json", "tokio", "matched-path", "tracing", "form", "query", "multipart"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "matched-path", "tracing", "form", "query", "multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "sync", "time", "fs"] }
-tower-http = { version = "0.5", features = ["fs", "trace", "cors"] }
+tower-http = { version = "0.7", features = ["fs", "trace", "cors"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 parking_lot = "0.12"
@@ -32,7 +32,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 tamarin-test-support = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "multipart"] }
 
 [lints]
 workspace = true

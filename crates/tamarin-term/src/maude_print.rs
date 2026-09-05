@@ -333,7 +333,7 @@ fn pp_list(args: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
         buf.push(b',');
     }
     buf.extend_from_slice(b"nil");
-    buf.extend(std::iter::repeat(b')').take(args.len()));
+    buf.extend(std::iter::repeat_n(b')', args.len()));
 }
 
 // =============================================================================

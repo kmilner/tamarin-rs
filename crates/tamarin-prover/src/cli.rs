@@ -95,6 +95,8 @@ pub enum Subcommand {
     Variants,
     /// `test` — self-test.
     Test,
+    /// Internal parser-backed dependency manifest used by test harnesses.
+    InputManifest,
 }
 
 /// Image format used for graph rendering in interactive mode.  Accepted for
@@ -487,6 +489,13 @@ enum Cmd {
         #[arg(value_name = "FILES")]
         files: Vec<String>,
     },
+
+    /// Print parser-selected source and oracle inputs as tagged TSV.
+    #[command(hide = true)]
+    InputManifest {
+        #[arg(value_name = "FILE")]
+        file: String,
+    },
 }
 
 /// Positive-integer parser for `--processors` / `--maude-processes`.
@@ -513,7 +522,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, clap::Error> {
     // them BEFORE a subcommand word — and would then silently drop them
     // (the subcommands never read them).  A parsed flag must never be
     // discarded, so reject the combination instead.
-    if cli.cmd.is_some() {
+    if cli.cmd.is_some() && !matches!(&cli.cmd, Some(Cmd::InputManifest { .. })) {
         let offending = [
             (cli.batch.no_compress, "--no-compress"),
             (cli.batch.parse_only, "--parse-only"),
@@ -603,6 +612,10 @@ pub fn parse_args(raw: &[String]) -> Result<Args, clap::Error> {
         Some(Cmd::Test { files }) => {
             args.subcommand = Subcommand::Test;
             args.in_files = files;
+        }
+        Some(Cmd::InputManifest { file }) => {
+            args.subcommand = Subcommand::InputManifest;
+            args.in_files = vec![file];
         }
     }
     Ok(args)

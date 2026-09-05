@@ -227,25 +227,26 @@ pub fn translate(thy: &mut Theory) -> Result<(), AccError> {
                 })
                 .collect(),
         };
-        for gen in generate_accountability_lemmas(&acc_data) {
+        for generated in generate_accountability_lemmas(&acc_data) {
             // HS `liftedAddLemma` first predicate-expands the lemma
             // (`expandLemma`, throws `UndefinedPredicate`), then rejects
             // duplicate names (`DuplicateItem`).
-            if let Some(tag) = undefined_predicate(&gen.formula, &defined_preds) {
+            if let Some(tag) = undefined_predicate(&generated.formula, &defined_preds) {
                 return Err(AccError::UndefinedPredicate(tag));
             }
-            if lemma_names.iter().any(|n| n == &gen.name) {
-                return Err(AccError::DuplicateLemma(gen.name));
+            if lemma_names.iter().any(|n| n == &generated.name) {
+                return Err(AccError::DuplicateLemma(generated.name));
             }
-            lemma_names.push(gen.name.clone());
+            lemma_names.push(generated.name.clone());
             inject_lemma(
                 thy,
                 &declared_preds,
                 &declared_macros,
                 &acc.attributes,
-                &gen.name,
-                gen.quantifier,
-                &gen.formula,
+                acc.heuristic_in_file.as_deref(),
+                &generated.name,
+                generated.quantifier,
+                &generated.formula,
             );
         }
     }
@@ -339,6 +340,7 @@ fn inject_lemma(
     predicates: &[Predicate],
     macros: &[LNMacro],
     attributes: &[t::LemmaAttr],
+    heuristic_in_file: Option<&str>,
     name: &str,
     quantifier: t::TraceQuantifier,
     formula: &SyntacticLNFormula,
@@ -348,6 +350,7 @@ fn inject_lemma(
     };
     let expanded = tamarin_theory::formula::apply_macro_in_formula(macros, original.clone());
     let lemma = t::Lemma {
+        heuristic_in_file: heuristic_in_file.map(str::to_owned),
         name: name.to_string(),
         attributes: attributes.to_vec(),
         trace_quantifier: quantifier,
@@ -627,6 +630,58 @@ end\n";
             shown.iter().any(|s| s.contains("a = 'bad'")),
             "the predicate body is inlined: {shown:?}"
         );
+    }
+
+    #[test]
+    fn included_accountability_heuristic_keeps_its_oracle_origin() {
+        let root =
+            std::env::temp_dir().join(format!("tamarin_rs_acc_oracle_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        let theory_file = root.join("root.spthy");
+        let include_file = root.join("sub/inc.spthy");
+        std::fs::write(
+            &theory_file,
+            "theory T begin\n#include \"sub/inc.spthy\"\nend\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &include_file,
+            "rule L: [ In(<x,a>) ] --[ Log(x,a) ]-> []\n\
+             test badLog: \"Ex #i. Log(x,a)@i\"\n\
+             lemma acc [heuristic=o, heuristic=o]:\n\
+               badLog account for \"All x a #i. Log(x,a)@i ==> not(a = 'ok')\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("sub/inc.oracle"), "").unwrap();
+
+        let source = std::fs::read_to_string(&theory_file).unwrap();
+        let parsed = tamarin_parser::parse_theory_with_base(&source, &[], Some(root.clone()))
+            .expect("theory parses");
+        let mut elaborated = tamarin_theory::elaborate::elaborate_with_in_file(
+            &parsed,
+            theory_file.to_str().unwrap(),
+        )
+        .expect("theory elaborates");
+        translate(&mut elaborated).expect("translation");
+
+        let generated: Vec<_> = elaborated.lemmas().collect();
+        assert!(!generated.is_empty());
+        for lemma in generated {
+            assert_eq!(lemma.heuristic_in_file.as_deref(), include_file.to_str());
+            assert_eq!(
+                lemma
+                    .attributes
+                    .iter()
+                    .filter_map(|attribute| match attribute {
+                        t::LemmaAttr::Heuristic(raw) => Some(raw.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                ["o \"inc.oracle\"", "o \"inc.oracle\""]
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A case test whose formula calls a macro, so every lemma

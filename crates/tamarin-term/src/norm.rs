@@ -119,15 +119,14 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                 return args.iter().all(|a| go_nf(a, msig, maude));
             }
             // 2. Nullary constants in NF (One, DHNeutral, Zero, NatOne).
-            if let FunSym::NoEq(s) = sym {
-                if args.is_empty()
-                    && (s.name == ONE_SYM_STRING
-                        || s.name == DH_NEUTRAL_SYM_STRING
-                        || s.name == ZERO_SYM_STRING
-                        || s.name == crate::function_symbols::NAT_ONE_SYM_STRING)
-                {
-                    return true;
-                }
+            if let FunSym::NoEq(s) = sym
+                && args.is_empty()
+                && (s.name == ONE_SYM_STRING
+                    || s.name == DH_NEUTRAL_SYM_STRING
+                    || s.name == ZERO_SYM_STRING
+                    || s.name == crate::function_symbols::NAT_ONE_SYM_STRING)
+            {
+                return true;
             }
             // 3. Subterm-rule LHS match → reducible.  Both of HS's st-rule
             //    arms are guarded on the top symbol's KIND — `FAppNoEq _ _`
@@ -176,18 +175,18 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                         // never raises `NeedsAC` in `match_raw`, so this pure
                         // path is exactly HS's `solveMatchLNTerm` (no Maude
                         // involved).
-                        if let Term::App(lhs_head, lhs_args) = &rule.lhs {
-                            if lhs_head != sym || lhs_args.len() != args.len() {
-                                continue;
-                            }
+                        if let Term::App(lhs_head, lhs_args) = &rule.lhs
+                            && (lhs_head != sym || lhs_args.len() != args.len())
+                        {
+                            continue;
                         }
                         if rule_applies(t, &rule.lhs, &rule.rhs) {
                             return false;
                         }
-                    } else if let Some(hnd) = maude {
-                        if rule_applies_ac(hnd, t, &rule.lhs, &rule.rhs) {
-                            return false;
-                        }
+                    } else if let Some(hnd) = maude
+                        && rule_applies_ac(hnd, t, &rule.lhs, &rule.rhs)
+                    {
+                        return false;
                     }
                     // Ac-/C-containing LHS with no handle (pure
                     // `nf_via_haskell`): the no-AC matcher could never match
@@ -198,10 +197,10 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             if let FunSym::NoEq(s) = sym {
                 if s.name == EXP_SYM_STRING && args.len() == 2 {
                     // (a ^ b) ^ c → reducible
-                    if let Term::App(FunSym::NoEq(s2), _) = &args[0] {
-                        if s2.name == EXP_SYM_STRING {
-                            return false;
-                        }
+                    if let Term::App(FunSym::NoEq(s2), _) = &args[0]
+                        && s2.name == EXP_SYM_STRING
+                    {
+                        return false;
                     }
                     // a ^ 1 → reducible
                     if is_nullary(&args[1], ONE_SYM_STRING) {
@@ -216,16 +215,16 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                 }
                 if s.name == INV_SYM_STRING && args.len() == 1 {
                     // inv(inv(_)) → reducible
-                    if let Term::App(FunSym::NoEq(s2), _) = &args[0] {
-                        if s2.name == INV_SYM_STRING {
-                            return false;
-                        }
+                    if let Term::App(FunSym::NoEq(s2), _) = &args[0]
+                        && s2.name == INV_SYM_STRING
+                    {
+                        return false;
                     }
                     // inv(mult(...)) where any factor is inverse → reducible
-                    if let Term::App(FunSym::Ac(AcSym::Mult), inner_args) = &args[0] {
-                        if inner_args.iter().any(crate::term::is_inverse) {
-                            return false;
-                        }
+                    if let Term::App(FunSym::Ac(AcSym::Mult), inner_args) = &args[0]
+                        && inner_args.iter().any(crate::term::is_inverse)
+                    {
+                        return false;
                     }
                     // inv(one) → reducible
                     if is_nullary(&args[0], ONE_SYM_STRING) {
@@ -235,10 +234,10 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                 }
                 if s.name == crate::function_symbols::PMULT_SYM_STRING && args.len() == 2 {
                     // pmult(_, pmult(_,_)) → reducible
-                    if let Term::App(FunSym::NoEq(s2), _) = &args[1] {
-                        if s2.name == crate::function_symbols::PMULT_SYM_STRING {
-                            return false;
-                        }
+                    if let Term::App(FunSym::NoEq(s2), _) = &args[1]
+                        && s2.name == crate::function_symbols::PMULT_SYM_STRING
+                    {
+                        return false;
                     }
                     // pmult(one, _) → reducible
                     if is_nullary(&args[0], ONE_SYM_STRING) {
@@ -288,15 +287,15 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             if let FunSym::C(_) = sym {
                 // em(_, pmult(_,_)) or em(pmult(_,_), _) → reducible
                 if args.len() == 2 {
-                    if let Term::App(FunSym::NoEq(s2), _) = &args[0] {
-                        if s2.name == crate::function_symbols::PMULT_SYM_STRING {
-                            return false;
-                        }
+                    if let Term::App(FunSym::NoEq(s2), _) = &args[0]
+                        && s2.name == crate::function_symbols::PMULT_SYM_STRING
+                    {
+                        return false;
                     }
-                    if let Term::App(FunSym::NoEq(s2), _) = &args[1] {
-                        if s2.name == crate::function_symbols::PMULT_SYM_STRING {
-                            return false;
-                        }
+                    if let Term::App(FunSym::NoEq(s2), _) = &args[1]
+                        && s2.name == crate::function_symbols::PMULT_SYM_STRING
+                    {
+                        return false;
                     }
                 }
                 return args.iter().all(|a| go_nf(a, msig, maude));

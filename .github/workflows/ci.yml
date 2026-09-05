@@ -6,23 +6,23 @@ on:
   pull_request:
 
 jobs:
-  fmt:
+  checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - run: rustup update stable --no-self-update && rustup default stable
-      - run: cargo fmt --all --check
-
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-      # The submodule is needed to build: tamarin-theory include_str!'s the
-      # intruder-variant data files from tamarin-prover/data/.
+      # The submodule supplies data embedded by tamarin-theory at compile time.
       - uses: actions/checkout@v7
         with:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # Keep Cargo.toml's compatibility claim honest without another runner.
+      - name: Install MSRV toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal --no-self-update
+      - name: MSRV check
+        run: cargo +1.88.0 check --workspace --all-targets
       # Every HS line cite in crates/ comments must resolve against the pinned
       # submodule (scripts/check_hs_cites.py — MISSING/AMBIGUOUS/RANGE/BLANK/
       # COMMENT/SEELINE).  Ordinary PRs edit cites too, not just bumps, and
@@ -84,6 +84,14 @@ jobs:
       - run: export PATH="/opt/maude:$PATH" && cargo test --profile ci --workspace
         env:
           MAUDE_PATH: /opt/maude/maude
+      # The bypass path deliberately recomputes sources per context. Keep it
+      # in a separate process: environment-gate changes are not thread-safe
+      # inside the parallel Rust test harness.
+      - name: Source-cache bypass
+        run: export PATH="/opt/maude:$PATH" && cargo test --profile ci -p tamarin-theory prove::tests --lib
+        env:
+          MAUDE_PATH: /opt/maude/maude
+          TAM_RS_NO_SOURCE_CACHE: "1"
       # Wellformedness fixture roster, port side (~2s; the step above has
       # already built this example). `cargo test` runs the same 18 fixtures
       # through tamarin-theory's wellformedness fixture tests. The one thing
@@ -128,6 +136,10 @@ jobs:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
+      # The focused harness tests fingerprint Graphviz as part of web-cache
+      # producer identity; keep that dependency explicit in this job too.
+      - name: Install Graphviz
+        run: command -v dot >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq graphviz)
       # Pinned Maude — must match the '# maude:' header in
       # scripts/ci_ref_fast.tsv (rs_ref_check.sh enforces this; unifier
       # enumeration order can change between Maude versions).  The release zip
@@ -140,6 +152,8 @@ jobs:
           sudo chmod +x /opt/maude/maude
           echo /opt/maude >> "$GITHUB_PATH"
       - run: cargo build --release
+      - name: Parity harness regression tests
+        run: python3 scripts/test_web_harness.py
       # Prove-output parity: this branch's binary vs the committed reference
       # of main's outputs (scripts/ci_ref_fast.tsv over
       # scripts/parity_corpus_fast.txt).  On DIFF: reproduce locally with

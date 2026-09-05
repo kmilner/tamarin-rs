@@ -12,16 +12,15 @@
 //! live prover session from, what the web renderers print, and what the
 //! accessor helpers (lemma list, restriction count, …) read.
 //!
-//! Concurrency: `parking_lot::Mutex` — interactive single-user UI, no
-//! need for an async lock.  Only the autoprover (`autoprove` /
-//! `autoprove_all`) offloads its work onto `tokio::task::spawn_blocking`;
-//! interactive single-step applies and proof-state materialization run
-//! inline on the async handler thread.
+//! Concurrency: `parking_lot::Mutex` protects only short store operations;
+//! proof mutations and other blocking prover work run outside it through
+//! `tokio::task::spawn_blocking`.
 
 use parking_lot::Mutex;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Local};
 
@@ -44,7 +43,7 @@ pub struct TheoryEntry {
     /// state is part of its Maude operator name, while the signature's rewrite
     /// rules and the theory's terms keep their untagged symbols, so a module
     /// built from the joined signature declares operators nothing else names.
-    pub prover_maude_sig: tamarin_term::maude_sig::MaudeSig,
+    pub prover_maude_sig: Arc<tamarin_term::maude_sig::MaudeSig>,
     /// Where the theory came from.
     pub origin: TheoryOrigin,
     /// Load time for the UI.
@@ -58,7 +57,7 @@ pub struct TheoryEntry {
     /// the `source`/`message` routes (`format_wf_block`) and the
     /// `<div class="wf-warning">` header banner in the `help`/`overview` routes
     /// (`errors_html`).  Empty ⇒ no warnings (theory is well-formed).
-    pub wf_report: Vec<tamarin_theory::wellformedness::WfError>,
+    pub wf_report: Arc<[tamarin_theory::wellformedness::WfError]>,
     /// HTML for the wellformedness warning banner shown in the theory
     /// page header (HS `errorsHtml`, rendered raw via
     /// `preEscapedToMarkup info.errorsHtml` at `src/Web/Theory.hs`).
@@ -67,19 +66,27 @@ pub struct TheoryEntry {
     /// `renderHtmlDoc (htmlDoc $ prettyWfErrorReport report)` of the
     /// *closed* theory's wellformedness report in a `<div class="wf-warning">`.
     /// Empty string when the report is empty (HS `makeWfErrorsHtml [] = ""`).
-    pub errors_html: String,
+    pub errors_html: Arc<str>,
     /// The theory's once-per-load NDC-checked intruder cache
     /// (`close_rule::check_close_intr_rule`, run in `theory_io` before
     /// the derivation checks). Injected into the lazily built prover session,
     /// whose context factory reuses it for every operation. `None` when the
     /// load-time Maude boot failed.
-    pub ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>>,
-    /// Live proof state — built lazily on first request that needs it
-    /// (theory load → only kept-around-but-empty until `ensure_proof_state`
-    /// is asked for).  `None` here means "not yet built"; on first
-    /// access we boot Maude and precompute theory-wide sources. Per-lemma
-    /// systems remain lazy until their proof is visited or edited.
+    pub ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache>,
+    /// A detached/materialized proof state. Stored entries always keep this
+    /// `None`: their generation cell is the sole authoritative proof owner.
+    /// Materialized snapshots attach that generation's state here so existing
+    /// rendering and detached-edit code can consume one self-contained value.
     pub proof_state: Option<Arc<ProofState>>,
+}
+
+/// Lightweight data needed by the theory index page.
+pub struct TheorySummary {
+    pub idx: usize,
+    pub name: String,
+    pub origin: String,
+    pub loaded_at: DateTime<Local>,
+    pub primary: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -111,12 +118,89 @@ pub struct TheoryStore {
 
 #[derive(Default)]
 struct TheoryStoreInner {
-    by_idx: BTreeMap<usize, TheoryEntry>,
+    by_idx: BTreeMap<usize, StoredTheory>,
 }
 
-/// Next free store index: Haskell's `M.findMax + 1` (empty → 1).  Single
-/// spelling shared by `insert` and `clone_at_new_idx_with` so they cannot
-/// drift; `next_back()` is O(log n) (unlike `keys().last()`, which walks).
+struct StoredTheory {
+    generation: Arc<StoredGeneration>,
+    entry: TheoryEntry,
+}
+
+/// A store operation failed without conflating absence, prover startup, and a
+/// concurrent replacement of the theory being operated on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StoreError {
+    NotFound(usize),
+    Build(String),
+    Stale(usize),
+}
+
+impl fmt::Display for StoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound(idx) => write!(f, "theory index {idx} not found"),
+            Self::Build(error) => f.write_str(error),
+            Self::Stale(idx) => write!(f, "theory index {idx} changed during the operation"),
+        }
+    }
+}
+
+impl std::error::Error for StoreError {}
+
+/// A consistent theory generation.  The generation token is deliberately
+/// private: callers can inspect the entry and pass the whole snapshot back to
+/// [`TheoryStore::replace_if_current`], but cannot forge a comparison token.
+#[derive(Clone)]
+pub struct TheorySnapshot {
+    pub entry: TheoryEntry,
+    idx: usize,
+    generation: Arc<StoredGeneration>,
+}
+
+struct StoredGeneration {
+    proof: RetryCell<Arc<ProofState>, StoreError>,
+}
+
+/// One single-flight attempt at a time. Callers which observed the same slot
+/// share its result; a failed slot is replaced so the next request can retry.
+struct RetryCell<T, E> {
+    attempt: Mutex<Arc<OnceLock<Result<T, E>>>>,
+}
+
+impl<T: Clone, E: Clone> RetryCell<T, E> {
+    fn new(value: Option<T>) -> Self {
+        let attempt = Arc::new(match value {
+            Some(value) => OnceLock::from(Ok(value)),
+            None => OnceLock::new(),
+        });
+        Self {
+            attempt: Mutex::new(attempt),
+        }
+    }
+
+    fn get_or_try_init(&self, build: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+        let attempt = self.attempt.lock().clone();
+        self.run_attempt(attempt, build)
+    }
+
+    fn run_attempt(
+        &self,
+        attempt: Arc<OnceLock<Result<T, E>>>,
+        build: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
+        let result = attempt.get_or_init(build).clone();
+        if result.is_err() {
+            let mut current = self.attempt.lock();
+            if Arc::ptr_eq(&current, &attempt) {
+                *current = Arc::new(OnceLock::new());
+            }
+        }
+        result
+    }
+}
+
+/// Next free store index: Haskell's `M.findMax + 1` (empty → 1).
+/// `next_back()` is O(log n) (unlike `keys().last()`, which walks).
 fn next_free_idx(inner: &TheoryStoreInner) -> usize {
     inner.by_idx.keys().next_back().map_or(1, |k| k + 1)
 }
@@ -128,28 +212,38 @@ impl TheoryStore {
         // Match Haskell's `M.findMax + 1` (BTreeMap max key); empty → 1.
         let idx = next_free_idx(&inner);
         entry.idx = idx;
-        inner.by_idx.insert(idx, entry);
+        entry.loaded_at = Local::now();
+        let generation = Arc::new(StoredGeneration::new(entry.proof_state.take()));
+        inner.by_idx.insert(idx, StoredTheory { generation, entry });
         idx
     }
 
-    pub fn get(&self, idx: usize) -> Option<TheoryEntry> {
-        self.inner.lock().by_idx.get(&idx).cloned()
+    /// Capture an entry together with its unforgeable store-generation token.
+    pub fn snapshot(&self, idx: usize) -> Result<TheorySnapshot, StoreError> {
+        let inner = self.inner.lock();
+        let stored = inner.by_idx.get(&idx).ok_or(StoreError::NotFound(idx))?;
+        Ok(TheorySnapshot {
+            entry: stored.entry.clone(),
+            idx,
+            generation: stored.generation.clone(),
+        })
     }
 
-    /// Whether a theory is stored at `idx`.  This is the existence probe the
-    /// handlers run before they parse a theory path (Haskell `withTheory`'s
-    /// theory-map lookup, `src/Web/Handler.hs:662-672`); unlike [`get`] it
-    /// does not clone the entry.
-    ///
-    /// [`get`]: Self::get
-    pub fn contains(&self, idx: usize) -> bool {
+    pub fn get(&self, idx: usize) -> Option<TheoryEntry> {
+        self.inner
+            .lock()
+            .by_idx
+            .get(&idx)
+            .map(|stored| stored.entry.clone())
+    }
+
+    pub(crate) fn contains(&self, idx: usize) -> bool {
         self.inner.lock().by_idx.contains_key(&idx)
     }
 
     /// The stored theory's name at `idx`, or `None` when no theory is stored
-    /// there.  This is what the handlers that only label a page with the name
-    /// take instead of [`get`], whose clone deep-copies `wf_report` and
-    /// `errors_html`.
+    /// there. This avoids cloning the rest of the entry when only its label is
+    /// needed.
     ///
     /// [`get`]: Self::get
     pub fn name(&self, idx: usize) -> Option<String> {
@@ -157,143 +251,149 @@ impl TheoryStore {
             .lock()
             .by_idx
             .get(&idx)
-            .map(|e| e.typed_theory.name.clone())
+            .map(|stored| stored.entry.typed_theory.name.clone())
     }
 
-    pub fn list(&self) -> Vec<TheoryEntry> {
-        self.inner.lock().by_idx.values().cloned().collect()
+    pub fn list(&self) -> Vec<TheorySummary> {
+        self.inner
+            .lock()
+            .by_idx
+            .values()
+            .map(|stored| TheorySummary {
+                idx: stored.entry.idx,
+                name: stored.entry.typed_theory.name.clone(),
+                origin: stored.entry.origin.label(),
+                loaded_at: stored.entry.loaded_at,
+                primary: stored.entry.primary,
+            })
+            .collect()
     }
 
     pub fn remove(&self, idx: usize) -> Option<TheoryEntry> {
-        self.inner.lock().by_idx.remove(&idx)
+        self.inner
+            .lock()
+            .by_idx
+            .remove(&idx)
+            .map(|stored| stored.entry)
     }
 
-    /// Clone the entry at `src_idx` into a fresh `idx`, marking the
-    /// clone as non-primary (Haskell `primary = False` for modified
-    /// theories — see `putTheory` in `src/Web/Handler.hs`).  Updates
-    /// the clone's `loaded_at`.  Returns the new idx.
-    ///
-    /// Used by `autoprove`, `autoproveAll`, `del/path` — mirrors
-    /// Haskell's `modifyTheory` which always allocates a new idx.
-    ///
-    /// The `proof_state` is dropped on clone: each idx version should
-    /// have its own proof tree so mutations on one don't leak to the
-    /// other (Haskell's `IncrementalProof` is value-typed, not shared).
-    /// The new idx rebuilds proof state on first `ensure_proof_state`
-    /// — that's a ~1s cost (Maude boot + source precompute) but
-    /// preserves the version-fork semantics.
-    pub fn clone_at_new_idx(&self, src_idx: usize) -> Option<usize> {
-        // Drop the shared proof state — clone gets its own (rebuilt
-        // lazily).  See doc comment above.
-        self.clone_at_new_idx_with(src_idx, |_| None)
-    }
-
-    /// Shared body of [`clone_at_new_idx`] and
-    /// [`clone_at_new_idx_forking_proof_state`]: lock, clone the source
-    /// entry, allocate a fresh idx, mark it non-primary, and re-derive its
-    /// `proof_state` via `fork_proof` (the only line that differs between
-    /// the two public methods).
-    fn clone_at_new_idx_with(
+    /// Fork a version without publishing it. Callers can perform fallible
+    /// proof work on the detached value and insert it only after success.
+    pub fn detached_fork(
         &self,
         src_idx: usize,
-        fork_proof: impl FnOnce(&Option<Arc<ProofState>>) -> Option<Arc<ProofState>>,
-    ) -> Option<usize> {
-        let mut inner = self.inner.lock();
-        let mut clone = inner.by_idx.get(&src_idx).cloned()?;
-        let new_idx = next_free_idx(&inner);
-        clone.idx = new_idx;
+        cfg: &crate::ServerConfig,
+    ) -> Result<TheoryEntry, StoreError> {
+        let mut clone = self.materialized_snapshot(src_idx, cfg)?;
+        let proof = clone
+            .proof_state
+            .clone()
+            .expect("materialized_snapshot always has a proof state");
+        clone.proof_state = Some(Arc::new(proof.fork()));
+        clone.idx = 0;
         clone.primary = false;
-        clone.loaded_at = Local::now();
-        clone.proof_state = fork_proof(&clone.proof_state);
-        inner.by_idx.insert(new_idx, clone);
-        Some(new_idx)
+        Ok(clone)
     }
 
-    /// Like [`clone_at_new_idx`] but, when the source idx has a
-    /// materialised `proof_state`, also fork it into the clone — share
-    /// the prover session but deep-copy the already-materialised per-lemma
-    /// trees so subsequent mutations on the
-    /// clone don't leak back into the source.  Used by the method-apply
-    /// route so the post-step proof tree contains the SAME tree shape
-    /// as the source idx (i.e. retains all children produced by prior
-    /// applied steps), rather than rebuilding a bare initial-state
-    /// tree.  This mirrors Haskell's `modifyTheory` semantics, where
-    /// `putTheory` puts the *modified* `ClosedTheory` (with its full
-    /// `IncrementalProof`) at the new idx — not a fresh one.
-    pub fn clone_at_new_idx_forking_proof_state(&self, src_idx: usize) -> Option<usize> {
-        // Fork the proof state if present — preserves the source tree's
-        // shape under a new Arc.  If the source never materialised a
-        // proof state, the clone starts from scratch (`None`).
-        self.clone_at_new_idx_with(src_idx, |ps| ps.as_ref().map(|p| Arc::new(p.fork())))
-    }
-
-    /// Replace the entry at `idx` in place, keeping the idx the same.
-    /// Mirrors Haskell `replaceTheory` (`src/Web/Handler.hs` —
-    /// used by `reload` and `editProof`).  Like `replaceTheory`'s
-    /// `M.insert idx newThy theories`, this inserts unconditionally
-    /// (creating the entry if `idx` is currently absent), and forces
-    /// `primary = false` to match `replaceTheory`'s hard-coded `False`
-    /// for the `primary` field (so a reloaded theory shows as
-    /// "Modified", not "Original").  Always returns `Some(idx)`.
-    pub fn replace_at(&self, idx: usize, mut entry: TheoryEntry) -> Option<usize> {
-        let mut inner = self.inner.lock();
-        entry.idx = idx;
-        entry.primary = false;
-        inner.by_idx.insert(idx, entry);
-        Some(idx)
-    }
-
-    /// Get-or-build the live [`ProofState`] for `idx`. Builds it
-    /// lazily on first call and stores it in the entry so subsequent
-    /// requests reuse the same proof tree.
-    pub fn ensure_proof_state(
+    /// Return one internally consistent, materialised generation of a theory.
+    pub fn materialized_snapshot(
         &self,
         idx: usize,
         cfg: &crate::ServerConfig,
-    ) -> Result<Arc<ProofState>, String> {
-        // Fast path: already materialised.  Clone out the `Arc<Theory>`
-        // we need, then release the store lock before the ~1s
-        // `ProofState::new` (Maude boot + source precompute) so unrelated
-        // handlers — and other tokio workers — aren't blocked for its
-        // duration.
-        let (typed_theory, prover_maude_sig, ndc_cache) = {
-            let inner = self.inner.lock();
-            let entry = inner
-                .by_idx
-                .get(&idx)
-                .ok_or_else(|| format!("theory index {} not found", idx))?;
-            if let Some(ps) = &entry.proof_state {
-                return Ok(ps.clone());
+    ) -> Result<TheoryEntry, StoreError> {
+        loop {
+            let mut snapshot = self.snapshot(idx)?;
+            let proof = self.ensure_snapshot_proof(&snapshot, cfg);
+            match proof {
+                Ok(proof) => {
+                    snapshot.entry.proof_state = Some(proof);
+                    return Ok(snapshot.entry);
+                }
+                Err(StoreError::Stale(_)) => continue,
+                Err(error) => return Err(error),
             }
-            (
-                entry.typed_theory.clone(),
-                entry.prover_maude_sig.clone(),
-                entry.ndc_cache.clone(),
-            )
-        };
-        // The entry's `Arc` becomes the session's cache handle directly.
-        let ndc_cache =
-            ndc_cache.map(tamarin_theory::constraint::solver::context::IntrRuleCache::from);
-        let ps = Arc::new(ProofState::new(
-            &typed_theory,
-            prover_maude_sig,
-            &cfg.maude_path,
-            cfg.stop_on_trace,
-            ndc_cache.as_ref(),
-        )?);
-        // Re-lock and double-check: another thread may have built (and
-        // stored) the proof state while we held no lock.  If so, prefer
-        // the already-stored one so all callers share a single instance.
-        let mut inner = self.inner.lock();
-        let entry = inner
-            .by_idx
-            .get_mut(&idx)
-            .ok_or_else(|| format!("theory index {} not found", idx))?;
-        if let Some(existing) = &entry.proof_state {
-            return Ok(existing.clone());
         }
-        entry.proof_state = Some(ps.clone());
-        Ok(ps)
+    }
+
+    /// Replace a snapshotted entry in place if it is still the current
+    /// generation.  Slow reload work can therefore happen without the store
+    /// lock while still being unable to overwrite an unloaded/reused index.
+    /// Mirrors Haskell `replaceTheory` (`src/Web/Handler.hs`), but rejects a
+    /// concurrent removal/replacement rather than recreating or overwriting
+    /// the index.  It forces `primary = false` to match `replaceTheory`'s
+    /// hard-coded `False`, so a reloaded theory shows as "Modified".
+    pub fn replace_if_current(
+        &self,
+        snapshot: &TheorySnapshot,
+        mut entry: TheoryEntry,
+    ) -> Result<usize, StoreError> {
+        let idx = snapshot.idx;
+        let mut inner = self.inner.lock();
+        let is_current = inner
+            .by_idx
+            .get(&idx)
+            .is_some_and(|stored| Arc::ptr_eq(&stored.generation, &snapshot.generation));
+        if !is_current {
+            return Err(StoreError::Stale(idx));
+        }
+        entry.idx = idx;
+        entry.primary = false;
+        let generation = Arc::new(StoredGeneration::new(entry.proof_state.take()));
+        inner.by_idx.insert(idx, StoredTheory { generation, entry });
+        Ok(idx)
+    }
+
+    fn validate_generation(
+        &self,
+        idx: usize,
+        generation: &Arc<StoredGeneration>,
+    ) -> Result<(), StoreError> {
+        let inner = self.inner.lock();
+        match inner.by_idx.get(&idx) {
+            Some(stored) if Arc::ptr_eq(&stored.generation, generation) => Ok(()),
+            _ => Err(StoreError::Stale(idx)),
+        }
+    }
+
+    fn ensure_snapshot_proof(
+        &self,
+        snapshot: &TheorySnapshot,
+        cfg: &crate::ServerConfig,
+    ) -> Result<Arc<ProofState>, StoreError> {
+        let idx = snapshot.idx;
+        let generation = snapshot.generation.clone();
+        generation.proof.get_or_try_init(|| {
+            // A waiter may reach this closure after an earlier builder
+            // discovered that reload/removal made the generation stale.
+            // Reject it before booting another Maude process; the caller
+            // will retry from a fresh snapshot. The post-build check below
+            // still closes the race with replacement during the build.
+            self.validate_generation(idx, &generation)?;
+            let built = ProofState::new(
+                &snapshot.entry.typed_theory,
+                (*snapshot.entry.prover_maude_sig).clone(),
+                snapshot.entry.ndc_cache.as_ref(),
+                cfg,
+            );
+
+            // Publish only into the exact generation that elected this
+            // builder.  Removal, reload, and index reuse all replace the Arc.
+            let inner = self.inner.lock();
+            let stored = inner.by_idx.get(&idx).ok_or(StoreError::Stale(idx))?;
+            if !Arc::ptr_eq(&stored.generation, &generation) {
+                return Err(StoreError::Stale(idx));
+            }
+            let proof = Arc::new(built.map_err(StoreError::Build)?);
+            Ok(proof)
+        })
+    }
+}
+
+impl StoredGeneration {
+    fn new(proof: Option<Arc<ProofState>>) -> Self {
+        Self {
+            proof: RetryCell::new(proof),
+        }
     }
 }
 
@@ -301,4 +401,192 @@ impl TheoryStore {
 pub struct AppState {
     pub cfg: crate::ServerConfig,
     pub store: TheoryStore,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tamarin_term::maude_sig::minimal_maude_sig;
+    use tamarin_theory::theory::OpenProtoRule;
+
+    fn entry(name: &str) -> TheoryEntry {
+        let prover_maude_sig = minimal_maude_sig(false);
+        let typed_theory = TypedTheory::<OpenProtoRule>::new(name, prover_maude_sig.clone());
+        TheoryEntry {
+            idx: 0,
+            typed_theory: Arc::new(typed_theory),
+            prover_maude_sig: Arc::new(prover_maude_sig),
+            origin: TheoryOrigin::Interactive,
+            loaded_at: Local::now(),
+            primary: true,
+            wf_report: Arc::default(),
+            errors_html: Arc::default(),
+            ndc_cache: None,
+            proof_state: None,
+        }
+    }
+
+    #[test]
+    fn stale_snapshot_cannot_replace_reused_index() {
+        let store = TheoryStore::default();
+        let idx = store.insert(entry("first"));
+        let snapshot = store.snapshot(idx).unwrap();
+
+        store.remove(idx);
+        assert_eq!(store.insert(entry("second")), idx);
+
+        assert_eq!(
+            store.replace_if_current(&snapshot, entry("stale")),
+            Err(StoreError::Stale(idx))
+        );
+        assert_eq!(store.name(idx).as_deref(), Some("second"));
+        assert_eq!(
+            store.validate_generation(idx, &snapshot.generation),
+            Err(StoreError::Stale(idx))
+        );
+    }
+
+    #[test]
+    fn current_snapshot_replaces_in_place_as_modified() {
+        let store = TheoryStore::default();
+        let idx = store.insert(entry("first"));
+        let snapshot = store.snapshot(idx).unwrap();
+
+        assert_eq!(
+            store.replace_if_current(&snapshot, entry("replacement")),
+            Ok(idx)
+        );
+        let replacement = store.get(idx).unwrap();
+        assert_eq!(replacement.typed_theory.name, "replacement");
+        assert!(!replacement.primary);
+        assert_eq!(
+            store.validate_generation(idx, &snapshot.generation),
+            Err(StoreError::Stale(idx))
+        );
+    }
+
+    #[test]
+    fn failed_single_flight_build_can_be_retried() {
+        let cell = RetryCell::<usize, &str>::new(None);
+        let attempts = AtomicUsize::new(0);
+
+        assert_eq!(
+            cell.get_or_try_init(|| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err::<usize, _>("transient")
+            }),
+            Err("transient")
+        );
+        assert_eq!(
+            cell.get_or_try_init(|| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, &str>(7)
+            }),
+            Ok(7)
+        );
+        assert_eq!(
+            cell.get_or_try_init(|| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, &str>(8)
+            }),
+            Ok(7)
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn seeded_single_flight_value_skips_build() {
+        let cell = RetryCell::<usize, ()>::new(Some(7));
+        assert_eq!(
+            cell.get_or_try_init(|| panic!("seeded cell rebuilt")),
+            Ok(7)
+        );
+    }
+
+    #[test]
+    fn concurrent_successful_build_is_single_flight() {
+        use std::sync::mpsc;
+
+        let cell = Arc::new(RetryCell::<usize, ()>::new(None));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        let first_cell = cell.clone();
+        let first_attempts = attempts.clone();
+        let first = std::thread::spawn(move || {
+            first_cell
+                .get_or_try_init(|| {
+                    first_attempts.fetch_add(1, Ordering::SeqCst);
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(7)
+                })
+                .unwrap()
+        });
+        started_rx.recv().unwrap();
+
+        let second_cell = cell.clone();
+        let second_attempts = attempts.clone();
+        let second = std::thread::spawn(move || {
+            second_cell
+                .get_or_try_init(|| {
+                    second_attempts.fetch_add(1, Ordering::SeqCst);
+                    Ok(8)
+                })
+                .unwrap()
+        });
+
+        release_tx.send(()).unwrap();
+        assert_eq!(first.join().unwrap(), 7);
+        assert_eq!(second.join().unwrap(), 7);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn concurrent_callers_share_a_failed_attempt_before_retry() {
+        use std::sync::mpsc;
+
+        let cell = Arc::new(RetryCell::<usize, &str>::new(None));
+        let attempt = cell.attempt.lock().clone();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        let first_cell = cell.clone();
+        let first_attempt = attempt.clone();
+        let first_attempts = attempts.clone();
+        let first = std::thread::spawn(move || {
+            first_cell.run_attempt(first_attempt, || {
+                first_attempts.fetch_add(1, Ordering::SeqCst);
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Err("transient")
+            })
+        });
+        started_rx.recv().unwrap();
+
+        let second_cell = cell.clone();
+        let second_attempts = attempts.clone();
+        let second = std::thread::spawn(move || {
+            second_cell.run_attempt(attempt, || {
+                second_attempts.fetch_add(1, Ordering::SeqCst);
+                Ok(8)
+            })
+        });
+
+        release_tx.send(()).unwrap();
+        assert_eq!(first.join().unwrap(), Err("transient"));
+        assert_eq!(second.join().unwrap(), Err("transient"));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            cell.get_or_try_init(|| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Ok(7)
+            }),
+            Ok(7)
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
 }

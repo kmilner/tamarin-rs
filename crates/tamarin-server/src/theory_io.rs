@@ -6,7 +6,6 @@
 
 use chrono::Local;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tamarin_parser::parse_theory_with_base;
@@ -38,109 +37,14 @@ impl std::fmt::Display for LoadError {
 }
 impl std::error::Error for LoadError {}
 
-// =============================================================================
-// `--no-ndc` (HS `TheoryLoadOptions.ndcCheck`)
-// =============================================================================
-
-/// The no-deconstruction-chain switch every web load applies to the theory it
-/// loads.
-///
-/// HS partially applies the interactive mode's `TheoryLoadOptions` into the
-/// `loadTheory thyLoadOptions` closure handed to `withWebUI`
-/// (Interactive.hs:135), so every load the server performs — startup, upload,
-/// reload — carries the CLI value.  `loadTheory` ends in `addParamsOptions`
-/// (TheoryLoader.hs:449-452), whose `addNdcOption` (TheoryLoader.hs:821-826)
-/// writes `opt.ndcCheck` into the theory's own
-/// `_thyOptions._deductionChainCheck`, overwriting whatever the theory carried;
-/// `checkCloseIntrRule` then reads that field back (TheoryLoader.hs:513-519).
-/// `ndcCheck` is `not (argExists "no-ndc")` (TheoryLoader.hs:365-366) and
-/// defaults to `True` (TheoryLoader.hs:279) — hence the initial value here.
-///
-/// Process-wide, mirroring the single `thyLoadOptions` HS captures once per
-/// interactive run: `run_interactive` sets it from the CLI flag before the
-/// first load, and all three load sites (startup, upload, reload) read it
-/// through [`load_from_source`].
-static NDC_CHECK: AtomicBool = AtomicBool::new(true);
-
-/// Set the NDC-check switch [`load_from_source`] applies (`true` = run the
-/// check, i.e. `--no-ndc` absent).
-pub fn set_ndc_check(on: bool) {
-    NDC_CHECK.store(on, Ordering::Relaxed);
-}
-
-/// The NDC-check switch [`load_from_source`] applies to each loaded theory.
-pub fn ndc_check() -> bool {
-    NDC_CHECK.load(Ordering::Relaxed)
-}
-
-/// The `--prove`/`--lemma` selection every web load applies to the theory it
-/// loads.
-///
-/// `addLemmaToProve` (TheoryLoader.hs:835-838) is the `addNdcOption` sibling
-/// inside the same `addParamsOptions` (TheoryLoader.hs:821), so the values
-/// `mkTheoryLoadOptions` collects — `findArg "prove" as ++ findArg "lemma" as`
-/// (TheoryLoader.hs:326) — land in the loaded theory's `_lemmasToProve`, which
-/// `checkIfLemmasInTheory` reads back (Wellformedness.hs:1168).  Those flags
-/// come from `theoryLoadFlags` (TheoryLoader.hs:94-107), which the interactive
-/// mode carries too (Interactive.hs:70).
-///
-/// Process-wide, like [`NDC_CHECK`]: `run_interactive` sets it from the CLI
-/// before the first load, and all three load sites read it through
-/// [`load_from_source`].
-static LEMMAS_TO_PROVE: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
-
-/// Set the `--prove`/`--lemma` selection [`load_from_source`] applies.
-pub fn set_lemmas_to_prove(names: Vec<String>) {
-    *LEMMAS_TO_PROVE.write().expect("LEMMAS_TO_PROVE poisoned") = names;
-}
-
-/// The `--prove`/`--lemma` selection [`load_from_source`] applies to each
-/// loaded theory.
-pub fn lemmas_to_prove() -> Vec<String> {
-    LEMMAS_TO_PROVE
-        .read()
-        .expect("LEMMAS_TO_PROVE poisoned")
-        .clone()
-}
-
-/// The parser flags every web load parses with — HS `toParserFlags
-/// thyOpts` (TheoryLoader.hs:285-291) inside the same captured
-/// `loadTheory thyLoadOptions` closure as [`NDC_CHECK`] above, so the
-/// interactive CLI's `-D/--defines` (and `--quit-on-warning` element)
-/// reach `#ifdef` evaluation on startup loads, uploads, and reloads
-/// alike.  Empty until `run_interactive` sets it; library/test embedders
-/// that never call [`set_parser_flags`] parse flag-free.
-static PARSER_FLAGS: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
-
-/// Set the parser flags [`load_from_source`] passes to `parse_theory`
-/// (the port of HS `toParserFlags`, minus the `["diff" | diffMode]`
-/// element — see `run_interactive`'s call site).
-pub fn set_parser_flags(flags: Vec<String>) {
-    *PARSER_FLAGS.write().expect("PARSER_FLAGS poisoned") = flags;
-}
-
-/// The parser flags [`load_from_source`] applies to each loaded theory.
-pub fn parser_flags() -> Vec<String> {
-    PARSER_FLAGS.read().expect("PARSER_FLAGS poisoned").clone()
-}
-
 /// Read the file, parse it, elaborate it, and return a [`TheoryEntry`].
 ///
 /// `entry.idx` is left as `0`; [`TheoryStore::insert`] assigns the
 /// real index.
-pub fn load_from_path(
-    path: &Path,
-    maude_path: &str,
-    derivcheck_timeout: u32,
-) -> Result<TheoryEntry, LoadError> {
+pub fn load_from_path(path: &Path, cfg: &crate::ServerConfig) -> Result<TheoryEntry, LoadError> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| LoadError::Io(format!("{}: {}", path.display(), e)))?;
-    load_from_source(
-        &src,
-        TheoryOrigin::Local(PathBuf::from(path)),
-        maude_path,
-        derivcheck_timeout,
-    )
+    load_from_source(&src, TheoryOrigin::Local(PathBuf::from(path)), cfg)
 }
 
 /// Parse + elaborate from a string (for the upload path), then "close"
@@ -152,23 +56,21 @@ pub fn load_from_path(
 pub(crate) fn load_from_source(
     src: &str,
     origin: TheoryOrigin,
-    maude_path: &str,
-    derivcheck_timeout: u32,
+    cfg: &crate::ServerConfig,
 ) -> Result<TheoryEntry, LoadError> {
     // Attach the local path or uploaded filename to the structured diagnostic.
     // Errors originating in an included file already carry that file's path
     // and source text, which `with_source` deliberately leaves unchanged.
     let source_name = origin.label();
-    // Parser flags (`-D` defines + the `quit-on-warning` element) from the
-    // interactive CLI, via [`PARSER_FLAGS`]; `#include` paths resolve
-    // against the theory file's own directory — HS threads `Just inFile`
+    // Parser flags (`-D` defines + the `quit-on-warning` element) come from
+    // the server configuration. `#include` paths resolve against the theory
+    // file's own directory — HS threads `Just inFile`
     // into the `theory` parser (`loadTheory`, TheoryLoader.hs:449-458) and
     // `include` resolves against `takeDirectory <$> inFile0`
     // (Theory/Text/Parser.hs:306-343).  An upload has no on-disk home
     // (HS's bare filename gives `takeDirectory = "."`), so it resolves
     // CWD-relative, the no-base default.
-    let flags_owned = parser_flags();
-    let flags: Vec<&str> = flags_owned.iter().map(String::as_str).collect();
+    let flags: Vec<&str> = cfg.parser_flags.iter().map(String::as_str).collect();
     let base_dir = match &origin {
         TheoryOrigin::Local(p) => p.parent().map(|d| d.to_path_buf()),
         _ => None,
@@ -199,13 +101,12 @@ pub(crate) fn load_from_source(
     // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826), the last
     // step of `loadTheory` (TheoryLoader.hs:449-452): the CLI's `ndcCheck`
     // becomes the loaded theory's `_deductionChainCheck`, which the NDC pass in
-    // the maude block below reads back.  [`NDC_CHECK`] carries the flag here.
-    typed.options.deduction_chain_check = ndc_check();
+    // the maude block below reads back.
+    typed.options.deduction_chain_check = cfg.ndc_check;
     // The `addLemmaToProve` sibling of that same `addParamsOptions`
     // (TheoryLoader.hs:835-838): the CLI's `--prove`/`--lemma` selection
-    // becomes the loaded theory's `_lemmasToProve`.  [`LEMMAS_TO_PROVE`]
-    // carries it here.
-    typed.options.lemmas_to_prove = lemmas_to_prove();
+    // becomes the loaded theory's `_lemmasToProve`.
+    typed.options.lemmas_to_prove = cfg.lemmas_to_prove.clone();
 
     // SAPIC `process:` translation — mirror `run_batch`'s CLI-side pass so
     // the web load path renders SAPIC theories exactly like `--prove`.  Runs
@@ -255,30 +156,18 @@ pub(crate) fn load_from_source(
     // (`check_close_intr_rule` below).  Stored on the `TheoryEntry` so
     // `ProofState::new` injects it into the web session / shared context
     // instead of re-running the check per context build.
-    let mut ndc_cache: Option<Arc<Vec<tamarin_theory::rule::IntrRuleAC>>> = None;
+    let mut ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache> = None;
     // The signature every Maude process for this theory loads its module
     // from, taken before the NDC join below — see
     // `TheoryEntry::prover_maude_sig` for why the join must not reach it.
     let prover_maude_sig = typed.signature.clone();
-    if let Ok(maude) = MaudeHandle::start(maude_path, prover_maude_sig.clone()) {
-        tamarin_theory::tools::rule_variants::populate_rule_variants(&mut typed, &maude, None);
-        // `checkTranslatedTheory` reports contradictory zero-variant rules,
-        // then `closeTheory` drops them from the closed theory. Keep that
-        // order: filtering first would erase the warning as well as the rule.
-        wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(
-            &typed,
-            Some(&maude),
-        ));
-        tamarin_theory::tools::rule_variants::retain_rules_with_variants(&mut typed, &maude);
-        // Annotate per-rule loop breakers on the stored theory so the web
-        // rules / source / message renderers emit HS's `// loop breaker: [<n>]`
-        // comments — HS `prettyClosedProtoRule` reads them from the
-        // `ProtoRuleACInfo` baked into every closed rule.  Our prover computes
-        // them inside `ProofContext::new` on a local copy; run the same
-        // whole-theory pass `run.rs` runs on the CLI side so the
-        // byte-faithful `web_proto_rules` printer has them.
-        tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers(
-            &mut typed, &maude,
+    let started_maude = MaudeHandle::start(&cfg.maude_path, prover_maude_sig.clone());
+    if let Ok(maude) = started_maude {
+        wf_report.extend(
+            tamarin_theory::tools::rule_variants::prepare_theory_rules(
+                &mut typed, &maude, None, true,
+            )
+            .map_err(|error| LoadError::Elaborate(error.to_string()))?,
         );
 
         // Once-per-theory NDC pass (HS `checkCloseIntrRule` inside
@@ -294,7 +183,9 @@ pub(crate) fn load_from_source(
             Some(&typed.name),
             typed.options.deduction_chain_check,
             &typed.intruder_rules,
-        );
+            cfg.solver_parameters,
+        )
+        .map_err(|error| LoadError::Elaborate(error.to_string()))?;
         if !checked.ndc_funs.is_empty() {
             let mut sig = std::mem::take(&mut typed.signature);
             for f in &checked.ndc_funs {
@@ -302,7 +193,7 @@ pub(crate) fn load_from_source(
             }
             typed.signature = sig;
         }
-        ndc_cache = Some(Arc::new(checked.cache));
+        ndc_cache = Some(checked.cache.into());
 
         // Dynamic Message Derivation Checks (as in `run_batch`): HS
         // `checkVariableDeducability`, gated by `--derivcheck-timeout` (HS
@@ -318,19 +209,19 @@ pub(crate) fn load_from_source(
         // (TheoryLoader.hs:578-594, see line 581,594) — emitted for every close (initial
         // load, upload, reload), and only when derivChecks != 0
         // (TheoryLoader.hs:578-579 skips the whole block on EQ).
-        if derivcheck_timeout > 0 {
+        if cfg.derivcheck_timeout > 0 {
             eprintln!("[Theory {}] Derivation checks started", typed.name);
         }
         let extra = tamarin_theory::deriv_check::check_message_derivation(
             &typed,
             &maude,
-            derivcheck_timeout,
-            ndc_cache
-                .clone()
-                .map(tamarin_theory::constraint::solver::context::IntrRuleCache::from),
-        );
+            cfg.derivcheck_timeout,
+            ndc_cache.clone(),
+            cfg.solver_parameters,
+        )
+        .map_err(|error| LoadError::Elaborate(error.to_string()))?;
         wf_report.extend(extra);
-        if derivcheck_timeout > 0 {
+        if cfg.derivcheck_timeout > 0 {
             eprintln!("[Theory {}] Derivation checks ended", typed.name);
         }
     } else {
@@ -352,12 +243,12 @@ pub(crate) fn load_from_source(
     Ok(TheoryEntry {
         idx: 0,
         typed_theory: Arc::new(typed),
-        prover_maude_sig,
+        prover_maude_sig: Arc::new(prover_maude_sig),
         origin,
         loaded_at: Local::now(),
         primary: true,
-        wf_report,
-        errors_html,
+        wf_report: wf_report.into(),
+        errors_html: errors_html.into(),
         ndc_cache,
         proof_state: None,
     })
@@ -418,13 +309,21 @@ mod tests {
     use super::*;
     use tamarin_test_support::require_maude_path;
 
+    fn test_config(maude: &str) -> crate::ServerConfig {
+        let mut cfg = crate::ServerConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            PathBuf::new(),
+            maude.to_string(),
+        );
+        cfg.derivcheck_timeout = 0;
+        cfg
+    }
+
     /// The interactive `TheoryLoadOptions` plumbing added for HS parity:
-    /// `-D` defines reach `#ifdef` evaluation via [`set_parser_flags`]
+    /// `-D` defines reach `#ifdef` evaluation through the load configuration
     /// (HS `toParserFlags`, TheoryLoader.hs:285-291), and a local file's
     /// `#include` resolves against ITS OWN directory
-    /// (`takeDirectory <$> inFile`, Theory/Text/Parser.hs:306-343).  One
-    /// test on purpose: `PARSER_FLAGS` is process-global, so the
-    /// set/observe/reset sequence must not interleave with itself.
+    /// (`takeDirectory <$> inFile`, Theory/Text/Parser.hs:306-343).
     /// `maude_path` is a nonexistent binary so the best-effort Maude block
     /// is skipped and the test stays hermetic.
     #[test]
@@ -438,18 +337,16 @@ mod tests {
                 .count()
         };
         let src = "theory T begin\n#ifdef FOO\nrule R: [ ] --> [ ]\n#endif\nend";
-        let load = |src: &str, origin: TheoryOrigin| {
-            load_from_source(src, origin, "/nonexistent/maude-for-test", 0)
-                .expect("tiny theory loads")
-        };
+        let mut cfg = test_config("/nonexistent/maude-for-test");
 
         // Flag absent: the #ifdef block is dropped.
-        let entry = load(src, TheoryOrigin::Upload("t.spthy".into()));
+        let entry = load_from_source(src, TheoryOrigin::Upload("t.spthy".into()), &cfg)
+            .expect("tiny theory loads");
         assert_eq!(rule_count(&entry), 0);
         // Flag set: the block parses, exactly as batch `-D=FOO`.
-        set_parser_flags(vec!["FOO".to_string()]);
-        let entry = load(src, TheoryOrigin::Upload("t.spthy".into()));
-        set_parser_flags(Vec::new());
+        cfg.parser_flags.push("FOO".to_string());
+        let entry = load_from_source(src, TheoryOrigin::Upload("t.spthy".into()), &cfg)
+            .expect("tiny theory loads");
         assert_eq!(rule_count(&entry), 1);
 
         // #include next to the theory file resolves against that file's
@@ -459,8 +356,7 @@ mod tests {
         std::fs::write(dir.join("inc.spthy"), "rule Inc: [ ] --> [ ]\n").expect("write include");
         let main = dir.join("main.spthy");
         std::fs::write(&main, "theory M begin\n#include \"inc.spthy\"\nend").expect("write main");
-        let entry = load_from_path(&main, "/nonexistent/maude-for-test", 0)
-            .expect("include resolves against the theory's dir");
+        let entry = load_from_path(&main, &cfg).expect("include resolves against the theory's dir");
         assert_eq!(rule_count(&entry), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -479,8 +375,7 @@ mod tests {
         let entry = load_from_source(
             src,
             TheoryOrigin::Upload("no-variants.spthy".into()),
-            &maude,
-            0,
+            &test_config(&maude),
         )
         .expect("theory loads");
 

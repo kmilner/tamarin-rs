@@ -81,12 +81,12 @@ fn add_progress_to<F: Fn(&[i64]) -> Option<Pos>>(
                     && matches!(kind, StateKind::PState | StateKind::LState)
         )
     };
-    if r.iter().any(is_target_state) {
-        if let Some(pos_from) = inv_pf(child) {
-            let mut na = vec![TransAction::ProgressTo(child.clone(), pos_from)];
-            na.extend(a);
-            return (l, na, r, res);
-        }
+    if r.iter().any(is_target_state)
+        && let Some(pos_from) = inv_pf(child)
+    {
+        let mut na = vec![TransAction::ProgressTo(child.clone(), pos_from)];
+        na.extend(a);
+        return (l, na, r, res);
     }
     (l, a, r, res)
 }

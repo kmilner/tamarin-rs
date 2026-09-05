@@ -174,12 +174,11 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         if let Some(prev) = thy.items.iter().find_map(|i| match i {
             TheoryItem::Rule(r) if r.name() == rname => Some(r),
             _ => None,
-        }) {
-            if prev.rule_e() != &lifted || !prev.rule_ac.is_empty() {
-                return Err(ElabError {
-                    message: format!("duplicate rule: {rname}"),
-                });
-            }
+        }) && (prev.rule_e() != &lifted || !prev.rule_ac.is_empty())
+        {
+            return Err(ElabError {
+                message: format!("duplicate rule: {rname}"),
+            });
         }
 
         // The restrictions precede the rule (Theory/Text/Parser.hs:179-180).

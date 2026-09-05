@@ -341,13 +341,13 @@ pub fn is_trivial_ac_fun_sym_term(t: &LNTerm) -> bool {
 pub fn flattened_ac_terms<A>(sym: AcSym, t: &Term<A>) -> Vec<&Term<A>> {
     let mut out = Vec::new();
     fn go<'b, A>(sym: AcSym, t: &'b Term<A>, out: &mut Vec<&'b Term<A>>) {
-        if let Term::App(FunSym::Ac(s), args) = t {
-            if *s == sym {
-                for a in args.iter() {
-                    go(sym, a, out);
-                }
-                return;
+        if let Term::App(FunSym::Ac(s), args) = t
+            && *s == sym
+        {
+            for a in args.iter() {
+                go(sym, a, out);
             }
+            return;
         }
         out.push(t);
     }

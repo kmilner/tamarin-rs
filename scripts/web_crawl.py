@@ -16,7 +16,8 @@ Deterministic click-through crawl:
 
 Writes a JSON manifest {norm_url: {kind, status, body}} keyed by
 idx-normalized URL, for web_diff.py to compare across HS and RS, stamped with
-the `PLAN_VERSION` of the crawl plan that produced it.
+the `PLAN_VERSION` and work directory of the crawl that produced it. The latter
+lets comparison remove exact staged paths even when WEB_WORK_ROOT is custom.
 
 Pure stdlib (urllib, json, re).  Usage:
   web_crawl.py BASE_URL OUT_MANIFEST.json [--max-nodes N]
@@ -30,7 +31,7 @@ import urllib.request
 import urllib.error
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from web_normalize import norm_url_key  # noqa: E402
+from web_url_key import norm_url_key  # noqa: E402
 
 # Per-request timeout.  60s was too small for legitimately-slow autoproves
 # (Yubikey slightly_weaker_invariant, eccDAA, opc_ua) — a capped autoprove
@@ -246,7 +247,9 @@ def main():
         sys.exit(3)
 
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"base": base, "lemmas": lemmas, "log": log,
+        json.dump({"base": base,
+                   "workdir": os.path.dirname(os.path.abspath(out_path)),
+                   "lemmas": lemmas, "log": log,
                    "capped": capped, PLAN_VERSION_KEY: PLAN_VERSION,
                    "manifest": manifest}, f)
     print(f"crawled {len(manifest)} urls, {len(proof_nodes)} proof nodes"
