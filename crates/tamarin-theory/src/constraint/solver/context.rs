@@ -631,30 +631,17 @@ impl ProofContext {
                     &saturation_ctx,
                 )?
             };
-            // Match saturated sources back to originals BY GOAL.  Saturate
-            // may drop sources whose cases all `mzero` during `refineSource`
-            // (HS's `runReduction proofStep ctxt se fs` returns Disj.empty),
-            // so the saturated list can be SHORTER than `full_sources`.  HS
-            // keeps `cdGoal` stable across saturate iters (only `cdCases`
-            // changes), so `cdGoal` is the join key.
-            for orig in self.full_sources.iter() {
-                let sat = refined.iter().find(|s| s.goal == orig.goal);
-                // HS-faithful: `saturateSources` maps `refineSource` over its
-                // input one-for-one (Sources.hs:379) and `refineSource` returns
-                // `set cdCases newCases th` (Sources.hs:113-120, see line 120),
-                // so it keeps ONE source per input and every
-                // `orig.goal` has a match in `refined` — including sources whose
-                // refine produced ZERO cases (the case list is just empty).  We
-                // overwrite the cell with the refined cases (possibly empty),
-                // matching HS's `cdCases = []` for goals with no source (e.g. the
-                // builtin destructors `check_rep`/`get_rep`).  The `if let Some`
-                // remains a defensive guard: should a future refine path ever
-                // drop a source from the list, we leave the initial cases rather
-                // than blanking an unrelated cell — but on the HS-faithful path
-                // the match always succeeds.
-                if let Some(s) = sat {
-                    orig.cases_set_shared(s.cases_shared_or_empty());
-                }
+            // Saturation and refinement preserve one source per input, even
+            // when its case list becomes empty. Check that contract before
+            // publishing any of the refined cells.
+            assert_eq!(self.full_sources.len(), refined.len());
+            assert!(self
+                .full_sources
+                .iter()
+                .zip(&refined)
+                .all(|(original, refined)| original.goal == refined.goal));
+            for (original, refined) in self.full_sources.iter().zip(&refined) {
+                original.cases_set_shared(refined.cases_shared_or_empty());
             }
             // Restore the fresh counter to its pre-saturation value (see the
             // HS-FAITHFUL PURITY note above): the refine consumed idxs only for
