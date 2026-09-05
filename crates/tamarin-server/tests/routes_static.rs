@@ -23,9 +23,8 @@ fn data_dir() -> PathBuf {
 /// crate renders links to the two assets below.
 ///
 /// A missing `data/` is a misconfiguration.  It is not a reason to skip the
-/// test.  The directory belongs to the submodule, and the test
-/// `haskell_captures_match_the_submodule_pin` already fails without it.
-/// Every test binary here carries that test.
+/// test.  The directory belongs to the submodule, whose checkout is validated
+/// separately by `capture_provenance`.
 #[tokio::test]
 async fn test_static_assets_are_served_from_the_data_dir() {
     let s = start_server_with_theory("issue193.spthy").await;
@@ -49,7 +48,7 @@ async fn test_static_assets_are_served_from_the_data_dir() {
                 data_dir().join(rel).display()
             )
         });
-        let res = s.client.get(s.url(url)).send().await.expect("send");
+        let res = s.get(url).await;
         assert_eq!(res.status(), 200, "{url}");
         let ct = content_type(&res);
         assert!(ct.contains(mime), "{url}: expected {mime} mime, got {ct}");
@@ -94,12 +93,7 @@ async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
     assert_eq!(dist_response.status(), 206);
     assert_eq!(dist_response.bytes().await.unwrap(), &b"contents"[..]);
 
-    let fallback = s
-        .client
-        .get(s.url("/static/js/ordinary.js"))
-        .send()
-        .await
-        .unwrap();
+    let fallback = s.get("/static/js/ordinary.js").await;
     assert_eq!(fallback.status(), 200);
     assert_eq!(fallback.bytes().await.unwrap(), &b"ordinary-data"[..]);
 

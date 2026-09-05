@@ -25,7 +25,7 @@ fn main() {
 
     let (elaborated, maude) = common::load_theory_with_maude(theory_path);
 
-    let root = prove_lemma(&elaborated, lemma, maude, 500).expect("prove");
+    let root = prove_lemma(std::sync::Arc::new(elaborated), lemma, maude, 500).expect("prove");
     let steps = count_steps(&root);
     eprintln!(
         "=== {} proof tree (status={:?}, children={}, steps={}) ===",

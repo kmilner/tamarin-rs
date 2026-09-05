@@ -18,10 +18,11 @@ own trailing spaces in the theory echo, are divergences the gate must see.
 
 Used by web_diff.py.  Pure stdlib (html.parser, json, re).
 """
-import html
 import json
 import re
 from html.parser import HTMLParser
+
+from web_url_key import norm_indices
 
 # ---------------------------------------------------------------------------
 # Env-field normalization (applied to every raw body + to URL keys)
@@ -30,9 +31,6 @@ from html.parser import HTMLParser
 # The theory idx increments on every server-side mutation (HS modifyTheory /
 # RS clone) and is embedded in every link.  It is a server-internal handle,
 # not user-meaningful, so we canonicalize it everywhere.
-_IDX_RE = re.compile(r"/thy/trace/\d+/")
-# Same for diff theories, for completeness.
-_EQUIV_IDX_RE = re.compile(r"/thy/equiv/\d+/")
 # The only wall-clock stamp the crawled routes carry is the help page's
 # `Loaded at <%T> from <origin>` parenthetical, handled as one unit in
 # _VOLATILE below.  There is deliberately no blanket HH:MM:SS rule: it would
@@ -62,28 +60,20 @@ _VOLATILE = [
     # too, so a side that somehow omits the paren erases the rest of one line
     # instead of running on through the markup to whatever `)` comes next.
     (re.compile(r"Loaded at [^)\n]*"), "Loaded at #"),
-    # web_parity.sh stages each theory in a fresh `mktemp -d` workdir, and the
-    # cached HS manifest generally comes from a DIFFERENT run (different
-    # tmpdir) than the live RS crawl.  Absolute paths under it leak into the
-    # sequent pane's oracle banner ("Goals sorted according to an oracle …
-    # located at /tmp/tmp.XXXX/thy/oracle-…"), so canonicalise the random
-    # tmpdir component on both sides.
+    # Compatibility for unsafe legacy manifests, which predate the explicit
+    # top-level workdir stamp consumed by canon(). New profiles replace their
+    # exact configurable roots before reaching this fallback.
     (re.compile(r"/tmp/tmp\.[A-Za-z0-9]+/"), "/tmp/tmp.#/"),
 ]
 
 
-def norm_env(s: str) -> str:
-    s = _IDX_RE.sub("/thy/trace/#/", s)
-    s = _EQUIV_IDX_RE.sub("/thy/equiv/#/", s)
+def norm_env(s: str, workdirs=()) -> str:
+    for workdir in sorted(set(filter(None, workdirs)), key=len, reverse=True):
+        s = s.replace(workdir, "/WEB-WORKDIR")
+    s = norm_indices(s)
     for rx, rep in _VOLATILE:
         s = rx.sub(rep, s)
     return s
-
-
-def norm_url_key(url: str) -> str:
-    """Normalize a URL for use as a manifest key (idx-agnostic)."""
-    return norm_env(url)
-
 
 # ---------------------------------------------------------------------------
 # HTML canonicalization
@@ -122,8 +112,9 @@ class _Canon(HTMLParser):
       collapse to a single space; whitespace-only text between tags dropped
     """
 
-    def __init__(self):
+    def __init__(self, workdirs=()):
         super().__init__(convert_charrefs=True)
+        self.workdirs = workdirs
         self.tokens = []          # list of ('t', text) | ('o', tag, attrs) | ('c', tag)
         self._stack = []          # (tag, emitted_bool)
         self._pending_text = []
@@ -133,6 +124,7 @@ class _Canon(HTMLParser):
             return
         text = "".join(self._pending_text)
         self._pending_text = []
+        text = norm_env(text, self.workdirs)
         # &nbsp; -> normal space (parser gives us \xa0), collapse runs
         text = text.replace("\xa0", " ")
         text = re.sub(r"\s+", " ", text)
@@ -155,7 +147,7 @@ class _Canon(HTMLParser):
                 continue
             if v is None:
                 v = ""
-            v = norm_env(v)
+            v = norm_env(v, self.workdirs)
             if k == "class":
                 v = " ".join(sorted(v.split()))
             out.append((k, v))
@@ -246,17 +238,16 @@ class _Canon(HTMLParser):
         return "\n".join(parts)
 
 
-def canon_html(body: str) -> str:
-    # Normalize volatile/env tokens (theory idx, version strings, the RS
-    # `(Rust port)` identity suffix) across the WHOLE document — including
-    # text nodes, which the per-attribute `norm_env` pass does not reach.
-    body = norm_env(body)
-    p = _Canon()
+def canon_html(body: str, workdirs=()) -> str:
+    # HTMLParser decodes character references before handing us text and
+    # attributes. Normalize those semantic values instead of trying to predict
+    # whether a serializer chose &apos;, &#39;, &#x27;, or another legal spelling.
+    p = _Canon(workdirs)
     try:
         p.feed(body)
         p.close()
     except Exception as e:
-        return "HTML_PARSE_ERROR: " + repr(e) + "\n" + norm_env(body)
+        return "HTML_PARSE_ERROR: " + repr(e) + "\n" + norm_env(body, workdirs)
     return p.result()
 
 
@@ -267,7 +258,7 @@ def canon_html(body: str) -> str:
 _HTMLISH = re.compile(r"<[a-zA-Z/!]")
 
 
-def _canon_json_val(v, key=None):
+def _canon_json_val(v, key=None, workdirs=()):
     if isinstance(v, str):
         # The `html` and `title` fields are ALWAYS canonicalized as HTML
         # (even when the fragment happens to be tag-free, e.g.
@@ -279,22 +270,27 @@ def _canon_json_val(v, key=None):
         # plain text; forcing both through `canon_html` makes them compare
         # equal (the spans unwrap to the same text).
         if key in ("html", "title") or _HTMLISH.search(v):
-            return canon_html(v)
-        return norm_env(v)
+            return canon_html(v, workdirs)
+        return norm_env(v, workdirs)
     if isinstance(v, dict):
-        return {k: _canon_json_val(x, k) for k, x in sorted(v.items())}
+        return {k: _canon_json_val(x, k, workdirs) for k, x in sorted(v.items())}
     if isinstance(v, list):
-        return [_canon_json_val(x) for x in v]
+        return [_canon_json_val(x, workdirs=workdirs) for x in v]
     return v
 
 
-def canon_json(body: str) -> str:
+def canon_json(body: str, workdirs=()) -> str:
     try:
         v = json.loads(body)
     except Exception:
         # not valid JSON — fall back to text
-        return canon_text(body)
-    return json.dumps(_canon_json_val(v), sort_keys=True, ensure_ascii=False, indent=1)
+        return canon_text(body, workdirs)
+    return json.dumps(
+        _canon_json_val(v, workdirs=workdirs),
+        sort_keys=True,
+        ensure_ascii=False,
+        indent=1,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +308,7 @@ def canon_json(body: str) -> str:
 _SVG_GENERATOR = re.compile(r"Generated by graphviz version [^\n]*")
 
 
-def canon_dot(body: str) -> str:
+def canon_dot(body: str, workdirs=()) -> str:
     """Canonicalize a graph-route response.
 
     The port serialises through the same `Text.Dot` `showDot` upstream does
@@ -333,14 +329,14 @@ def canon_dot(body: str) -> str:
     """
     if body.lstrip().startswith(("<?xml", "<svg")):
         body = _SVG_GENERATOR.sub("Generated by graphviz version X", body)
-    return norm_env(body)
+    return norm_env(body, workdirs)
 
 
 # ---------------------------------------------------------------------------
 # Plain text canonicalization (source / message / next/prev URL / robots)
 # ---------------------------------------------------------------------------
 
-def canon_text(body: str) -> str:
+def canon_text(body: str, workdirs=()) -> str:
     """Canonicalize a text/plain response.
 
     The `source` and `message` routes serve the pretty-printed theory verbatim,
@@ -351,21 +347,25 @@ def canon_text(body: str) -> str:
     spelled as four spaces, and a per-line rstrip would make reproducing them
     optional.
     """
-    return norm_env(body)
+    return norm_env(body, workdirs)
 
 
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
-def canon(kind: str, body: str) -> str:
+def canon(kind: str, body: str, workdirs=()) -> str:
+    # A cached HS manifest and the live RS crawl normally come from different
+    # mktemp directories. The crawler records those exact configurable roots;
+    # replace them before parsing so paths in text, HTML attributes and JSON
+    # strings all receive the same treatment without guessing their prefix.
     if kind == "html":
-        return canon_html(body)
+        return canon_html(body, workdirs)
     if kind == "json":
-        return canon_json(body)
+        return canon_json(body, workdirs)
     if kind == "dot":
-        return canon_dot(body)
-    return canon_text(body)
+        return canon_dot(body, workdirs)
+    return canon_text(body, workdirs)
 
 
 if __name__ == "__main__":

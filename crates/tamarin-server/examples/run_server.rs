@@ -44,9 +44,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         frontend_dist,
         maude_path,
         derivcheck_timeout: 5,
+        solver_parameters: Default::default(),
         stop_on_trace: None,
         dot_path: "dot".to_string(),
         json_path: None,
+        ndc_check: true,
+        lemmas_to_prove: Vec::new(),
+        parser_flags: Vec::new(),
     };
     tamarin_server::serve(cfg, theories).await
 }

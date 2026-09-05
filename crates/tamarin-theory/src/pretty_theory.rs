@@ -90,33 +90,23 @@ pub struct ProvedLemma {
 
 /// Compute the default oracle name for a theory file.
 ///
-/// Mirrors HS `defaultOracleNames` (System.hs:550-560) exactly: take the
-/// prefix before the first dot in the complete input path, then the final
-/// slash-delimited group (including its leading slash), and probe that name
-/// from the process CWD. This intentionally preserves upstream's surprising
-/// behavior for paths containing directories or multiple dots.
+/// Mirrors HS `defaultOracleNames` (System.hs:550-560): derive the candidate
+/// from `takeBaseName`, probe it beside the theory, and retain only its
+/// relative name in the ranking.
 pub(crate) fn oracle_name_for_theory(in_file: &str) -> String {
-    let candidate = oracle_candidate_for_theory(in_file);
-    if std::path::Path::new(&candidate).is_file() {
-        candidate
-    } else {
-        "oracle".to_string()
-    }
-}
-
-fn oracle_candidate_for_theory(in_file: &str) -> String {
-    // `head (groupBy (\_ b -> b /= '.') inFile)` always keeps the first
-    // character, even when it is itself a dot.  Only a later dot terminates
-    // the group (`.foo.spthy` -> `.foo`, `./foo.spthy` -> `./foo`).
-    let before_dot = in_file
-        .char_indices()
-        .skip(1)
-        .find(|(_, ch)| *ch == '.')
-        .map_or(in_file, |(i, _)| &in_file[..i]);
-    let final_group = before_dot
-        .rfind('/')
-        .map_or(before_dot, |slash| &before_dot[slash..]);
-    format!("{final_group}.oracle")
+    let path = std::path::Path::new(in_file);
+    let candidate = path.file_stem().map(|stem| {
+        let mut name = stem.to_os_string();
+        name.push(".oracle");
+        path.with_file_name(name)
+    });
+    candidate
+        .as_deref()
+        .filter(|candidate| candidate.is_file())
+        .and_then(std::path::Path::file_name)
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("oracle")
+        .to_string()
 }
 
 /// Render one `GoalRanking` as the heuristic token that names it, mirroring
@@ -153,11 +143,12 @@ pub fn pretty_goal_rankings(rankings: &[GoalRanking]) -> String {
 /// Render the verbatim text of a `heuristic=` lemma attribute in HS style.
 ///
 /// HS stores that attribute as the `[GoalRanking ProofContext]` its parser
-/// built (`LemmaHeuristic`, lib/theory/src/Lemma.hs:103); the port keeps the
-/// source text, so it is parsed here — with the theory's `in_file` for the
-/// default oracle name — and rendered through [`pretty_goal_rankings`].  A
-/// `{name}` ranking prints its name whether or not the theory declares that
-/// tactic, so the tactic list is not needed.
+/// built (`LemmaHeuristic`, lib/theory/src/Lemma.hs:103). The port retains a
+/// textual representation in the typed theory, but elaboration first freezes
+/// any filesystem-dependent default oracle selection into that text. This
+/// helper parses and renders the stored spelling; a `{name}` ranking prints
+/// its name whether or not the theory declares that tactic, so the tactic
+/// list is not needed.
 pub fn pretty_heuristic_str(raw: &str, in_file: &str) -> String {
     pretty_goal_rankings(
         &crate::constraint::solver::goals::parse_heuristic_str_with_tactics(raw, in_file, &[]),
@@ -580,7 +571,10 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
             let header = if al.attributes.is_empty() {
                 kw.beside_sp(name_doc).beside(Doc::text(":"))
             } else {
-                let attr_docs = lemma_attr_docs(&al.attributes, in_file);
+                let attr_docs = lemma_attr_docs(
+                    &al.attributes,
+                    al.heuristic_in_file.as_deref().unwrap_or(in_file),
+                );
                 let attrs_fsep = hpj::fsep(hpj::punctuate(Doc::text(","), attr_docs));
                 let brackets = Doc::text("[").beside(attrs_fsep).beside(Doc::text("]"));
                 kw.beside_sp(name_doc)
@@ -1847,7 +1841,11 @@ fn is_safety_formula(f: &crate::formula::LNFormula) -> bool {
 /// - Multiple children                   → `<step>\n  case A\n  ...\nnext\n  case B\n  ...\nqed`
 ///
 /// Mirrors `Theory.Proof.prettyProofWith` (Theory/Proof.hs:1054-1075).
-pub fn pretty_proof_body(node: &crate::constraint::solver::search::ProofNode) -> String {
+pub fn pretty_proof_body<T: ProofBody>(node: &T) -> String {
+    // A proof body is source text even when a web caller happens to render it
+    // while an HTML document guard is active. Keep that ambient mode from
+    // leaking markup into cached/downloaded theory source.
+    let _plain = crate::pretty_hpj::HtmlDocGuard::disable();
     let mut out = String::new();
     pp_proof(node, &mut out, 0);
     out
@@ -1857,7 +1855,7 @@ pub fn pretty_proof_body(node: &crate::constraint::solver::search::ProofNode) ->
 /// and the tree a lemma's stored skeleton elaborated into.  HS prints both
 /// with `prettyProofWith` over a `Proof a = LTree CaseName (ProofStep a)`
 /// (Theory/Proof.hs:1054-1075).
-trait ProofBody {
+pub trait ProofBody {
     fn method(&self) -> &crate::constraint::solver::proof_method::ProofMethod;
 
     /// False for a step whose constraint system is HS's `Nothing`, which
@@ -2999,16 +2997,30 @@ mod heuristic_header_tests {
 
     #[test]
     fn default_oracle_name_matches_haskell_path_splitting() {
-        assert_eq!(oracle_candidate_for_theory("thy.spthy"), "thy.oracle");
-        assert_eq!(oracle_candidate_for_theory("a.b.spthy"), "a.oracle");
-        assert_eq!(oracle_candidate_for_theory("dir/thy.spthy"), "/thy.oracle");
-        assert_eq!(oracle_candidate_for_theory("./thy.spthy"), "/thy.oracle");
-        assert_eq!(oracle_candidate_for_theory(".thy.spthy"), ".thy.oracle");
-        assert_eq!(
-            oracle_candidate_for_theory("dir.v2/foo.spthy"),
-            "dir.oracle"
-        );
         assert_eq!(oracle_name_for_theory("missing.spthy"), "oracle");
+
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tamarin-prover/examples/regression/trace/defaultoracle.spthy"
+        );
+        assert_eq!(oracle_name_for_theory(fixture), "defaultoracle.oracle");
+
+        let dir =
+            std::env::temp_dir().join(format!("tamarin_rs_oracle_basename_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (theory, oracle) in [
+            (".foo", ".foo.oracle"),
+            ("..foo", "..oracle"),
+            ("...foo", "...oracle"),
+        ] {
+            std::fs::write(dir.join(oracle), "").unwrap();
+            assert_eq!(
+                oracle_name_for_theory(dir.join(theory).to_str().unwrap()),
+                oracle
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// The `heuristic:` header prints the theory's stored rankings (HS `text

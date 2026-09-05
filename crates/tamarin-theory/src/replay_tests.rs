@@ -3,6 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use crate::constraint::solver::search::run_proof_search;
 use crate::constraint::system::System;
 use crate::theory::ProofTree;
 use tamarin_term::lterm::{LSort, LVar};
@@ -52,18 +53,16 @@ fn past_initial_system() -> System {
 /// vacuously between two `Sorry`s.
 #[test]
 fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
-    let h = match maude() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     let ctx = ProofContext::new(h, Vec::new());
     // Skeleton = `by sorry`.
     let skel = ProofTree {
         method: ProofMethod::Sorry(None),
         cases: Vec::new(),
     };
-    let replayed = replace_sorry_prove(&ctx, past_initial_system(), &skel, 50);
-    let direct = run_proof_search(&ctx, past_initial_system(), 50);
+    let replayed =
+        replace_sorry_prove(&ctx, past_initial_system(), &skel, 50).expect("proof search");
+    let direct = run_proof_search(&ctx, past_initial_system(), 50).expect("default ranking");
     assert_eq!(replayed.status, direct.status);
     assert_eq!(replayed.method, direct.method);
     assert_eq!(
@@ -73,7 +72,7 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
          Sorry-equals-Sorry tautology"
     );
 
-    let kept = check_and_extend(&ctx, past_initial_system(), &skel, 50);
+    let kept = check_and_extend(&ctx, past_initial_system(), &skel, 50).expect("proof replay");
     assert_eq!(
         kept.status,
         NodeStatus::Sorry,
@@ -91,7 +90,8 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
             cases: Vec::new(),
         },
         50,
-    );
+    )
+    .expect("proof replay");
     assert_eq!(explained.method, ProofMethod::Sorry(Some(reason)));
 }
 
@@ -108,11 +108,12 @@ fn sorry_with_children_is_replaced_as_one_node() {
         cases: vec![("kept".into(), child)],
     };
 
-    let replayed = replace_sorry_prove(&ctx, past_initial_system(), &skel, 50);
+    let replayed =
+        replace_sorry_prove(&ctx, past_initial_system(), &skel, 50).expect("proof search");
     assert_eq!(replayed.status, NodeStatus::Solved);
     assert!(replayed.children.is_empty(), "the old subtree is replaced");
 
-    let checked = check_and_extend(&ctx, past_initial_system(), &skel, 50);
+    let checked = check_and_extend(&ctx, past_initial_system(), &skel, 50).expect("proof replay");
     assert_eq!(checked.method, ProofMethod::Sorry(Some("stale".into())));
     assert!(checked.annotated);
     let kept = &checked.children["kept"];
@@ -137,17 +138,14 @@ fn sorry_with_children_is_replaced_as_one_node() {
 /// here is `status != Contradictory`.
 #[test]
 fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
-    let h = match maude() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     let ctx = ProofContext::new(h, Vec::new());
     let sys = past_initial_system();
     let skel = ProofTree {
         method: ProofMethod::Finished(MethodResult::Contradictory(None)),
         cases: Vec::new(),
     };
-    let result = replace_sorry_prove(&ctx, sys, &skel, 50);
+    let result = replace_sorry_prove(&ctx, sys, &skel, 50).expect("proof search");
     // No goals, no contradictions → auto-prover recognises Solved. The
     // contract is "fall back to auto-prover, never fabricate
     // Contradictory".
@@ -213,10 +211,7 @@ fn match_goal_includes_a_solved_goal() {
 /// `exec_proof_method` can apply `ginduct` to a remaining formula.
 #[test]
 fn replay_checks_induction_applicability() {
-    let h = match maude() {
-        Some(m) => m,
-        None => return,
-    };
+    let Some(h) = maude() else { return };
     let ctx = ProofContext::new(h, Vec::new());
     let mut sys = System::empty();
     sys.formulas_mut()
@@ -224,7 +219,9 @@ fn replay_checks_induction_applicability() {
     sys.solved_formulas_mut()
         .push(std::sync::Arc::new(crate::guarded::gtrue()));
 
-    assert!(exec_method_for(&ProofMethod::Induction, &sys, &ctx).is_none());
+    assert!(exec_method_for(&ProofMethod::Induction, &sys, &ctx)
+        .expect("method check")
+        .is_none());
 }
 
 /// Two same-fact-name Action goals at different timepoints: the stored goal

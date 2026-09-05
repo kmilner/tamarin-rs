@@ -97,20 +97,21 @@ pub fn check_close_intr_rule(
     theory_name: Option<&str>,
     deduction_chain_check: bool,
     initial: &[IntrRuleAC],
-) -> NdcCheckedCache {
+    parameters: crate::constraint::solver::sources::IntegerParameters,
+) -> Result<NdcCheckedCache, crate::prove::ProveError> {
     let assembled = crate::constraint::solver::context::ProofContext::assemble_intruder_rules(
         &maude.maude_sig(),
         maude,
         initial,
     );
     if !deduction_chain_check {
-        return NdcCheckedCache {
+        return Ok(NdcCheckedCache {
             cache: assembled,
             ndc_funs: Vec::new(),
-        };
+        });
     }
-    let (ndc_funs, cache) = pretty_ndc_check(maude, theory_name, assembled);
-    NdcCheckedCache { cache, ndc_funs }
+    let (ndc_funs, cache) = pretty_ndc_check(maude, theory_name, assembled, parameters)?;
+    Ok(NdcCheckedCache { cache, ndc_funs })
 }
 
 // =============================================================================
@@ -507,29 +508,34 @@ fn prove_deduction_theory(
     s: &[LNFact],
     fact_term: &LNTerm,
     with_only_once_d: bool,
-) -> bool {
-    use crate::constraint::solver::context::ProofContext;
+    parameters: crate::constraint::solver::sources::IntegerParameters,
+) -> Result<bool, crate::prove::ProveError> {
+    use crate::constraint::solver::context::{ProofContext, ProofContextOptions};
     use crate::constraint::solver::search::{proof_status, run_proof_search, ProofStatus};
     use crate::constraint::system::{formula_to_system, SourceKind};
 
     let rules = vec![deduction_rule(s)];
     let restrictions = deduction_restrictions(with_only_once_d);
     let g = deduction_lemma_guarded(s, fact_term);
-    let ctx = ProofContext::new_with_injected_intruder_rules(
+    let ctx = ProofContext::try_with_options(
         maude.clone(),
         rules,
-        restrictions.clone(),
-        intr_modified.clone(),
-    );
-    ctx.ensure_saturated();
+        ProofContextOptions {
+            restrictions: restrictions.clone(),
+            intruder_rules: Some(intr_modified.clone()),
+            parameters,
+            ..Default::default()
+        },
+    )?;
+    ctx.ensure_saturated()?;
     let sys = formula_to_system(
         restrictions,
         SourceKind::RefinedSources,
         crate::theory::TraceQuantifier::AllTraces,
         &g,
     );
-    let root = run_proof_search(&ctx, sys, usize::MAX);
-    proof_status(&root) == ProofStatus::TraceFound
+    let root = run_proof_search(&ctx, sys, usize::MAX)?;
+    Ok(proof_status(&root) == ProofStatus::TraceFound)
 }
 
 /// HS `deductionCheck` (CloseRule.hs:215): can `fact` be derived from
@@ -537,10 +543,10 @@ fn prove_deduction_theory(
 /// cache injected into every decomposition's theory.
 fn deduction_check(
     maude: &MaudeHandle,
-    intr_modified: &IntrRuleCache,
+    intr_modified: &BoundToOneCache<'_>,
     fact: &LNFact,
     facts: &[LNFact],
-) -> bool {
+) -> Result<bool, crate::prove::ProveError> {
     let fact_term = fact
         .terms
         .first()
@@ -553,17 +559,27 @@ fn deduction_check(
         })
         .collect();
     if set_d.is_empty() {
-        return true;
+        return Ok(true);
     }
     // `checkProofd tabProof1 || checkProofd tabProof2`: every
     // decomposition's proof must find a trace; theory-1 carries both
     // restrictions, theory-2 only `OnlyOnce`.
-    let all_traces_found = |with_ood: bool| -> bool {
-        set_d
-            .iter()
-            .all(|s| prove_deduction_theory(maude, intr_modified, s, fact_term, with_ood))
+    let all_traces_found = |with_ood: bool| -> Result<bool, crate::prove::ProveError> {
+        for s in &set_d {
+            if !prove_deduction_theory(
+                maude,
+                intr_modified.modified(),
+                s,
+                fact_term,
+                with_ood,
+                intr_modified.parameters,
+            )? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     };
-    all_traces_found(true) || all_traces_found(false)
+    Ok(all_traces_found(true)? || all_traces_found(false)?)
 }
 
 // =============================================================================
@@ -614,14 +630,20 @@ struct BoundToOneCache<'a> {
     intr_r: &'a [IntrRuleAC],
     checked_fun: Option<FunSym>,
     modified: std::cell::OnceCell<IntrRuleCache>,
+    parameters: crate::constraint::solver::sources::IntegerParameters,
 }
 
 impl<'a> BoundToOneCache<'a> {
-    fn new(intr_r: &'a [IntrRuleAC], checked_fun: Option<FunSym>) -> Self {
+    fn new(
+        intr_r: &'a [IntrRuleAC],
+        checked_fun: Option<FunSym>,
+        parameters: crate::constraint::solver::sources::IntegerParameters,
+    ) -> Self {
         Self {
             intr_r,
             checked_fun,
             modified: std::cell::OnceCell::new(),
+            parameters,
         }
     }
 
@@ -648,7 +670,7 @@ fn chained_rules_deduction_test(
     intr_modified: &BoundToOneCache<'_>,
     inst_sigma: &IntrRuleAC,
     inst1_sigma: &IntrRuleAC,
-) -> bool {
+) -> Result<bool, crate::prove::ProveError> {
     let mut facts: Vec<LNFact> = Vec::new();
     facts.extend_from_slice(get_deconstr_rule_prems_tail(inst_sigma));
     facts.extend_from_slice(get_deconstr_rule_prems_tail(inst1_sigma));
@@ -661,9 +683,9 @@ fn chained_rules_deduction_test(
         );
     }
     if ded_naive(&fact_to_deduce.terms[0], &terms) {
-        return true;
+        return Ok(true);
     }
-    deduction_check(maude, intr_modified.modified(), fact_to_deduce, &facts)
+    deduction_check(maude, intr_modified, fact_to_deduce, &facts)
 }
 
 /// Shape guard of HS `ndcCheck`'s first clause: a deconstruction rule with
@@ -702,9 +724,9 @@ fn ndc_check_prepare<'a>(
     maude: &MaudeHandle,
     r: &'a IntrRuleAC,
     r1: &IntrRuleAC,
-) -> Option<ChainablePair<'a>> {
+) -> Result<Option<ChainablePair<'a>>, crate::prove::ProveError> {
     if !(ndc_checkable(r) && ndc_checkable(r1)) {
-        return None;
+        return Ok(None);
     }
     // `r1 `renameAvoiding` r` — same idiom as
     // `equal_duplicate_rule_up_to_renaming`.
@@ -718,9 +740,9 @@ fn ndc_check_prepare<'a>(
             rhs: kd_prem1,
         }],
     )
-    .unwrap_or_default();
+    .map_err(|error| crate::prove::ProveError::Maude(error.to_string()))?;
     if unifs.is_empty() {
-        return None;
+        return Ok(None);
     }
     // The fresh supply `applySubsts` threads across the unifier list,
     // avoiding both rules.
@@ -728,12 +750,12 @@ fn ndc_check_prepare<'a>(
     let mut track = |v: &LVar| counter = counter.max(v.idx + 1);
     r.for_each_free(&mut track);
     fresh_inst1.for_each_free(&mut track);
-    Some(ChainablePair {
+    Ok(Some(ChainablePair {
         r,
         fresh_inst1,
         unifs,
         counter,
-    })
+    }))
 }
 
 /// Deduction phase of HS `ndcCheck` (`checkDeduction`): every unifier-
@@ -744,14 +766,14 @@ fn ndc_check_eval(
     maude: &MaudeHandle,
     intr_modified: &BoundToOneCache<'_>,
     pair: ChainablePair<'_>,
-) -> bool {
+) -> Result<bool, crate::prove::ProveError> {
     let ChainablePair {
         r,
         fresh_inst1,
         unifs,
         mut counter,
     } = pair;
-    unifs.into_iter().all(|u_pairs| {
+    for u_pairs in unifs {
         // `applySubsts subst r freshInst1` — freshToFree this unifier off
         // the pair's supply, which the whole list shares in order.
         let s_fresh = LNSubstVFresh::from_list(u_pairs);
@@ -760,13 +782,16 @@ fn ndc_check_eval(
             counter += n;
             b
         });
-        chained_rules_deduction_test(
+        if !chained_rules_deduction_test(
             maude,
             intr_modified,
             &apply_subst_rule(&sigma, r),
             &apply_subst_rule(&sigma, &fresh_inst1),
-        )
-    })
+        )? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 // =============================================================================
@@ -782,7 +807,8 @@ fn apply_ndc_check(
     maude: &MaudeHandle,
     intr_r: &[IntrRuleAC],
     groups: Vec<Vec<IntrRuleAC>>,
-) -> (Vec<FunSym>, Vec<IntrRuleAC>) {
+    parameters: crate::constraint::solver::sources::IntegerParameters,
+) -> Result<(Vec<FunSym>, Vec<IntrRuleAC>), crate::prove::ProveError> {
     let mut tagged: Vec<FunSym> = Vec::new();
     let mut out: Vec<IntrRuleAC> = Vec::new();
     for group in groups {
@@ -794,7 +820,7 @@ fn apply_ndc_check(
         .expect("applyNDCcheck: checked groups are destructor groups");
         // `boundToOne` maps the cache against this group's head function, so
         // one mapping serves every pair below.
-        let intr_modified = BoundToOneCache::new(intr_r, Some(f));
+        let intr_modified = BoundToOneCache::new(intr_r, Some(f), parameters);
         // `checkChainReductionIter [(x,y) | x <- t1, y <- t1]` is a
         // `foldr` whose lazy `&&` chain runs the cheap per-pair
         // unifications in FORWARD pair order but forces the expensive
@@ -803,16 +829,21 @@ fn apply_ndc_check(
         // pair's own result — short-circuiting the remaining (earlier)
         // pairs once one fails.  Verdict `== (True, False)`: at least
         // one pair chains AND every forced deduction test passed.
-        let chainable: Vec<ChainablePair<'_>> = group
-            .iter()
-            .flat_map(|x| group.iter().map(move |y| (x, y)))
-            .filter_map(|(x, y)| ndc_check_prepare(maude, x, y))
-            .collect();
-        let is_ndc = !chainable.is_empty()
-            && chainable
-                .into_iter()
-                .rev()
-                .all(|pair| ndc_check_eval(maude, &intr_modified, pair));
+        let mut chainable = Vec::new();
+        for x in &group {
+            for y in &group {
+                if let Some(pair) = ndc_check_prepare(maude, x, y)? {
+                    chainable.push(pair);
+                }
+            }
+        }
+        let mut is_ndc = !chainable.is_empty();
+        for pair in chainable.into_iter().rev() {
+            if !ndc_check_eval(maude, &intr_modified, pair)? {
+                is_ndc = false;
+                break;
+            }
+        }
         let fun_name = crate::intruder_rules::show_fun_sym_name(&f);
         if is_ndc {
             eprintln!("Function {} has the NDC property.", fun_name);
@@ -830,7 +861,7 @@ fn apply_ndc_check(
             out.extend(group);
         }
     }
-    (tagged, out)
+    Ok((tagged, out))
 }
 
 /// HS `prettyNDCcheck` (trace mode): run the NDC property check over the
@@ -845,7 +876,8 @@ pub fn pretty_ndc_check(
     maude: &MaudeHandle,
     theory_name: Option<&str>,
     init_rules: Vec<IntrRuleAC>,
-) -> (Vec<FunSym>, Vec<IntrRuleAC>) {
+    parameters: crate::constraint::solver::sources::IntegerParameters,
+) -> Result<(Vec<FunSym>, Vec<IntrRuleAC>), crate::prove::ProveError> {
     let (builtin_or_constr_or_ndc, checked_groups, all_subterm) =
         partition_for_ndc(init_rules.clone());
     let marker = |suffix: &str| {
@@ -862,13 +894,14 @@ pub fn pretty_ndc_check(
     // restore the counter — mirroring the `ensure_saturated` purity
     // bracket.
     let cnt_before = maude.fresh_counter_peek();
-    let (tagged, checked_rules) = apply_ndc_check(maude, &init_rules, checked_groups);
+    let result = apply_ndc_check(maude, &init_rules, checked_groups, parameters);
     maude.reset_counter_to(cnt_before);
     marker("ended");
-    (
+    let (tagged, checked_rules) = result?;
+    Ok((
         tagged,
         ndc_cache_order(checked_rules, builtin_or_constr_or_ndc, all_subterm),
-    )
+    ))
 }
 
 // =============================================================================

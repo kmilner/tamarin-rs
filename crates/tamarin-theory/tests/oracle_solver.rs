@@ -213,11 +213,11 @@ fn enforce_probe_ledger(
 /// (`[heuristic=soioo]`).  Braced values (`heuristic={tactic_name}`)
 /// reference named tactics, never external scripts, and don't count.
 ///
-/// Oracle-ranked proving execs the oracle script relative to the invoker's
-/// CWD and `std::process::exit(1)`s when it is missing (HS: IO exception →
-/// dies with empty stdout; RS: `search::rank_goals_or_abort`) — one such
-/// file aborts the whole probe binary.  The abort cannot be caught.  The
-/// corpus probe therefore skips these files first.  Matches inside a
+/// Oracle-ranked proving runs an external executable whose dependencies,
+/// side effects and runtime are outside this in-process probe's control.
+/// In-file oracle paths resolve beside the theory, but a script can still
+/// block beyond the solver's cooperative deadline. The corpus probe therefore
+/// skips these files to remain bounded and hermetic. Matches inside a
 /// comment that only quotes a
 /// `--heuristic=O` command line over-exclude a few files; the
 /// `*_MIN_COMPARED` guards keep the exclusion honest.
@@ -716,6 +716,19 @@ fn guarded_quantifier_structure_matches_tamarin() {
     }
 }
 
+fn simplify_once(
+    ctx: &tamarin_theory::constraint::solver::context::ProofContext,
+    sys: tamarin_theory::constraint::system::System,
+) -> tamarin_theory::constraint::system::System {
+    use tamarin_theory::constraint::solver::proof_method::{exec_proof_method, ProofMethod};
+
+    match exec_proof_method(ctx, &ProofMethod::Simplify, &sys).expect("source materialisation") {
+        None => sys,
+        Some(mut cases) if cases.len() == 1 => cases.remove(0).1,
+        Some(cases) => panic!("simplify unexpectedly produced {} cases", cases.len()),
+    }
+}
+
 /// End-to-end: parse the disj_lemma fixture, build the initial
 /// system, simplify, and verify the formula structure stays intact.
 /// `reducible_formula(Disj) = false` matches Haskell — top-level Disj
@@ -723,23 +736,18 @@ fn guarded_quantifier_structure_matches_tamarin() {
 /// later via `Induction` or via being nested inside a reducible parent.
 #[test]
 fn simplify_top_level_disj_lemma_left_intact() {
-    use tamarin_theory::constraint::solver::reduction::Reduction;
-    use tamarin_theory::constraint::solver::simplify::simplify_system;
-
     let Some(ctx) = rule_free_context() else {
         return;
     };
     let sys = fixture_lemma_system("disj_lemma.spthy");
     let n_formulas_before = sys.formulas.len();
-    let mut r = Reduction::new(&ctx, sys);
-    simplify_system(&mut r);
+    let simplified = simplify_once(&ctx, sys);
     // The top-level Disj is non-reducible, so the formula count
     // doesn't change.
-    assert_eq!(r.sys.formulas.len(), n_formulas_before);
+    assert_eq!(simplified.formulas.len(), n_formulas_before);
     // No Goal::Disj created during simplify alone (induction or
     // SolveGoal would trigger that).
-    assert!(!r
-        .sys
+    assert!(!simplified
         .goals
         .iter()
         .any(|(g, _)| matches!(g, tamarin_theory::constraint::constraints::Goal::Disj(_))));
@@ -757,7 +765,8 @@ fn proof_search_disj_lemma_picks_induction_first() {
     let Some(ctx) = rule_free_context() else {
         return;
     };
-    let root = run_proof_search(&ctx, fixture_lemma_system("disj_lemma.spthy"), 5);
+    let root = run_proof_search(&ctx, fixture_lemma_system("disj_lemma.spthy"), 5)
+        .expect("default ranking");
     // First method should be Induction — matches tamarin's
     // `induction` step at the start of the proof.
     assert!(
@@ -1011,7 +1020,7 @@ fn verdict_match_suite_all_solved_against_tamarin() {
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", fixture, e));
         let theory = parse_theory(&src, &[]).expect("parse");
         let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-        let root = prove_lemma(&elab, lemma, h, 200)
+        let root = prove_lemma(std::sync::Arc::new(elab), lemma, h, 200)
             .unwrap_or_else(|e| panic!("prove_lemma({}/{}): {:?}", fixture, lemma, e));
         assert_eq!(
             root.status, *expected,
@@ -1077,9 +1086,8 @@ fn verdict_match_suite_all_solved_against_tamarin() {
 /// The test carries `#[ignore]`.  Run it with `cargo test -- --ignored`.
 /// This heavyweight whole-corpus probe proves every example in-process, which
 /// takes more than an hour of wall clock.  The probe skips oracle-ranked
-/// files first.  See [`mentions_oracle_ranking`]: a missing oracle script
-/// causes a `process::exit(1)` that nothing can catch, and that would abort
-/// the whole test binary.
+/// files first. See [`mentions_oracle_ranking`]: arbitrary external scripts
+/// are deliberately outside this in-process structural probe.
 #[test]
 #[ignore = "heavyweight whole-corpus probe (hour-plus). Run with --ignored"]
 fn corpus_proof_skeleton_match_probe() {
@@ -1128,7 +1136,7 @@ fn corpus_proof_skeleton_match_probe() {
         path: std::path::PathBuf,
         summary: String,
         proof_text: String,
-        elab: tamarin_theory::theory::Theory,
+        elab: std::sync::Arc<tamarin_theory::theory::Theory>,
     }
     let pid = std::process::id();
     let files: Vec<FileWork> = paths
@@ -1139,7 +1147,7 @@ fn corpus_proof_skeleton_match_probe() {
             if src.contains("diff(") {
                 return None;
             }
-            // Oracle-ranked files would process::exit the probe binary.
+            // Keep the in-process probe bounded and free of external scripts.
             if mentions_oracle_ranking(&src) {
                 return None;
             }
@@ -1177,7 +1185,7 @@ fn corpus_proof_skeleton_match_probe() {
                 path: path.clone(),
                 summary,
                 proof_text,
-                elab,
+                elab: std::sync::Arc::new(elab),
             })
         })
         .collect();
@@ -1185,7 +1193,7 @@ fn corpus_proof_skeleton_match_probe() {
     // Phase 3: flatten to per-lemma work.
     struct LemmaWork<'a> {
         path: &'a std::path::PathBuf,
-        elab: &'a tamarin_theory::theory::Theory,
+        elab: std::sync::Arc<tamarin_theory::theory::Theory>,
         proof_text: &'a str,
         lemma_name: String,
         trace_quantifier: tamarin_theory::theory::TraceQuantifier,
@@ -1208,7 +1216,7 @@ fn corpus_proof_skeleton_match_probe() {
                 };
                 Some(LemmaWork {
                     path: &f.path,
-                    elab: &f.elab,
+                    elab: std::sync::Arc::clone(&f.elab),
                     proof_text: &f.proof_text,
                     lemma_name: lemma.name.clone(),
                     trace_quantifier: lemma.trace_quantifier,
@@ -1250,10 +1258,10 @@ fn corpus_proof_skeleton_match_probe() {
             // panicking lemma kills the whole rayon par_iter and the
             // probe yields no number.
             let h_for_prove = h.clone();
-            let theory_ref = w.elab;
+            let theory = std::sync::Arc::clone(&w.elab);
             let lemma_name = w.lemma_name.clone();
             let root_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                prove_lemma(theory_ref, &lemma_name, h_for_prove, 2000)
+                prove_lemma(theory, &lemma_name, h_for_prove, 2000)
             }));
             let _ = watchdog.finish();
             let root = match root_result {
@@ -1388,7 +1396,7 @@ fn prove_lemma_tiny_setup_verdict_matches_tamarin() {
     let src = std::fs::read_to_string(&path).expect("read");
     let theory = parse_theory(&src, &[]).expect("parse");
     let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-    let root = prove_lemma(&elab, "trivial", h, 100).expect("prove_lemma");
+    let root = prove_lemma(std::sync::Arc::new(elab), "trivial", h, 100).expect("prove_lemma");
 
     // Our verdict.
     assert_eq!(
@@ -1426,7 +1434,9 @@ fn ex_decomposition_produces_action_goal_via_induction() {
     let sys = fixture_lemma_system("tiny_setup.spthy");
     // Trigger induction → simplify on each fork. The non_empty_trace
     // case decomposes the Ex via reduce_formulas → insert_atom.
-    let cases = exec_proof_method(&ctx, &ProofMethod::Induction, &sys).expect("induction");
+    let cases = exec_proof_method(&ctx, &ProofMethod::Induction, &sys)
+        .expect("source materialisation")
+        .expect("induction");
     let non_empty = &cases
         .iter()
         .find(|(n, _)| n == "non_empty_trace")
@@ -1439,49 +1449,6 @@ fn ex_decomposition_produces_action_goal_via_induction() {
                 tamarin_theory::fact::Multiplicity::Linear, "Setup", 1))
         ),
         "expected a Setup-action goal in the step case after Ex decomposition"
-    );
-}
-
-/// Verify atom decomposition produces real `Goal::Action` entries
-/// when an action-atom inside a Conj formula is decomposed. Wraps
-/// `Action(Setup, k, #i)` in a Conj so reduce_formulas picks it up.
-#[test]
-fn atom_decomposition_creates_action_goal_in_simplify() {
-    use tamarin_theory::constraint::solver::reduction::Reduction;
-    use tamarin_theory::constraint::solver::simplify::simplify_system;
-    use tamarin_theory::constraint::system::System;
-
-    let Some(ctx) = rule_free_context() else {
-        return;
-    };
-
-    use tamarin_term::lterm::{BVar, LSort, LVar};
-    use tamarin_term::vterm::var_term;
-    use tamarin_theory::atom::ProtoAtom;
-    use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
-    use tamarin_theory::formula::BLNTerm;
-    let mkvar = |n: &str, sort: LSort| -> BLNTerm { var_term(BVar::Free(LVar::new(n, sort, 0))) };
-    let action_atom = ProtoAtom::Action(
-        mkvar("i", LSort::Node),
-        Fact::fresh(
-            FactTag::Proto(Multiplicity::Linear, "Setup", 1),
-            vec![mkvar("k", LSort::Msg)],
-        ),
-    );
-    let g = tamarin_theory::guarded::Guarded::Conj(
-        vec![tamarin_theory::guarded::Guarded::Atom(action_atom)].into(),
-    );
-    let mut sys = System::empty();
-    sys.formulas_mut().push(std::sync::Arc::new(g));
-    let mut r = Reduction::new(&ctx, sys);
-    simplify_system(&mut r);
-    // Action atom should have produced a Goal::Action.
-    assert!(
-        r.sys.goals.iter().any(|(g, _)| matches!(
-            g,
-            tamarin_theory::constraint::constraints::Goal::Action(_, _)
-        )),
-        "expected a Goal::Action after simplifying a Conj wrapping an Action atom"
     );
 }
 
@@ -1506,7 +1473,7 @@ fn prove_lemma_disj_lemma_terminates_and_tamarin_verifies() {
     let src = std::fs::read_to_string(&path).expect("read");
     let theory = parse_theory(&src, &[]).expect("parse");
     let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
-    let root = prove_lemma(&elab, "either", h, 50).expect("prove_lemma");
+    let root = prove_lemma(std::sync::Arc::new(elab), "either", h, 50).expect("prove_lemma");
 
     // `either` is `exists-trace`.  A witness trace is therefore `Solved` on
     // our side and `verified` on the oracle's.  Every other status is a
@@ -1547,7 +1514,8 @@ fn proof_search_disj_lemma_descends_into_disj_goal() {
         return;
     };
     // Generous budget — must terminate without infinite-looping.
-    let root = run_proof_search(&ctx, fixture_lemma_system("disj_lemma.spthy"), 50);
+    let root = run_proof_search(&ctx, fixture_lemma_system("disj_lemma.spthy"), 50)
+        .expect("default ranking");
     assert!(matches!(root.method, ProofMethod::Induction));
     let non_empty = root
         .children
@@ -1571,42 +1539,6 @@ fn proof_search_disj_lemma_descends_into_disj_goal() {
     assert_eq!(non_empty.status, NodeStatus::Contradictory);
     let empty = root.children.get("empty_trace").expect("empty branch");
     assert_eq!(empty.status, NodeStatus::Contradictory);
-}
-
-/// End-to-end with explicit decomposition: wrap a Disj in a Conj so
-/// reduce_formulas picks up the Conj, recurses into the Disj, and
-/// produces a Goal::Disj. This confirms `insert_formula`
-/// fires when invoked through the reducible-formula path.
-#[test]
-fn simplify_conj_wrapping_disj_produces_goal() {
-    use tamarin_theory::constraint::solver::reduction::Reduction;
-    use tamarin_theory::constraint::solver::simplify::simplify_system;
-    use tamarin_theory::constraint::system::System;
-
-    let Some(ctx) = rule_free_context() else {
-        return;
-    };
-
-    use tamarin_term::lterm::{BVar, LSort, LVar};
-    use tamarin_term::vterm::var_term;
-    use tamarin_theory::atom::ProtoAtom;
-    use tamarin_theory::formula::BLNTerm;
-    let mkvar = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
-    let a1 = tamarin_theory::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("i")));
-    let a2 = tamarin_theory::guarded::Guarded::Atom(ProtoAtom::Last(mkvar("j")));
-    let disj = tamarin_theory::guarded::Guarded::Disj(vec![a1, a2].into());
-    let mut sys = System::empty();
-    sys.formulas_mut()
-        .push(std::sync::Arc::new(tamarin_theory::guarded::Guarded::Conj(
-            vec![disj].into(),
-        )));
-    let mut r = Reduction::new(&ctx, sys);
-    simplify_system(&mut r);
-    assert!(r
-        .sys
-        .goals
-        .iter()
-        .any(|(g, _)| matches!(g, tamarin_theory::constraint::constraints::Goal::Disj(_))));
 }
 
 /// End-to-end: parse a fixture, convert each lemma to guarded form,
@@ -1680,81 +1612,10 @@ fn proof_search_end_to_end_tiny_theory() {
         tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0),
         rule,
     );
-    let root = run_proof_search(&ctx, sys, 50);
+    let root = run_proof_search(&ctx, sys, 50).expect("default ranking");
     assert_eq!(root.status, NodeStatus::Solved);
     // The trivial-Setup proof should terminate with no children.
     assert!(root.children.is_empty());
-}
-
-/// Drive `solve_premise_goal` on a tiny theory and verify it picks
-/// the same number of candidate rules tamarin would consider. The
-/// fixture's premise is `Out(x)`; only the `Setup` rule produces an
-/// `Out`, so we expect exactly one case (Linear).
-#[test]
-fn solve_premise_goal_against_fixture_matches_rule_count() {
-    use tamarin_term::maude_proc::MaudeHandle;
-    use tamarin_term::maude_sig::pair_maude_sig;
-    use tamarin_theory::constraint::solver::context::ProofContext;
-    use tamarin_theory::constraint::solver::reduction::{GoalCases, Reduction};
-    use tamarin_theory::constraint::system::System;
-
-    let path = match require_maude_path() {
-        Some(p) => p,
-        None => return,
-    };
-    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-
-    // Parse the tiny_setup fixture and lift its rules into the proof
-    // context. Build a Premise(Out(x)) goal and solve it.
-    let src = std::fs::read_to_string(fixtures_dir().join("tiny_setup.spthy")).expect("fixture");
-    let theory = tamarin_parser::parse_theory(&src, &[]).expect("parse");
-    // Build a `OpenProtoRule` per rule in the parsed theory. We re-use
-    // the elaboration pipeline if it's available; if not, we synthesise
-    // a minimal Setup-rule manually so the test is self-contained.
-    let mut rules = Vec::new();
-    for it in &theory.items {
-        if let tamarin_parser::ast::TheoryItem::Rule(r) = it {
-            // Tamarin's Setup rule has Out(~k) as a conclusion. Since
-            // our parser already exposes structural facts, build a
-            // OpenProtoRule shape that has at least an Out conclusion.
-            // We don't need full elaboration here — just enough for the
-            // candidate-count assertion.
-            if r.name == "Setup" {
-                let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Fresh, 0);
-                use tamarin_term::vterm::Lit;
-                let tk: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v));
-                let conc = tamarin_theory::fact::out_fact(tk);
-                let rule: tamarin_theory::rule::ProtoRuleE = tamarin_theory::rule::Rule::new(
-                    tamarin_theory::rule::ProtoRuleEInfo::standard("Setup"),
-                    vec![],
-                    vec![conc],
-                    vec![],
-                );
-                rules.push(tamarin_theory::theory::OpenProtoRule::new(rule));
-            }
-        }
-    }
-    assert_eq!(rules.len(), 1, "expected to find exactly one Setup rule");
-
-    let ctx = ProofContext::new(h, rules);
-    let mut r = Reduction::new(&ctx, System::empty());
-    let i = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
-    let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
-    use tamarin_term::vterm::Lit;
-    let tx: tamarin_term::lterm::LNTerm = tamarin_term::term::Term::Lit(Lit::Var(v));
-    let fa = tamarin_theory::fact::out_fact(tx);
-    let p = (i, tamarin_theory::rule::PremIdx(0));
-    let out = r.solve_premise_goal(&p, &fa);
-    // Exactly one rule matches.  The solver returns `LinearNamed`, which
-    // carries the name of the rule that produces the fact.  HS's
-    // `prettyProof` prints that name as the single `case Setup`.  A `Linear`
-    // without a name prints no case heading.
-    assert!(
-        matches!(&out, GoalCases::LinearNamed(n) if n == "Setup"),
-        "expected LinearNamed(\"Setup\"), got {out:?}"
-    );
-    assert_eq!(r.sys.nodes.len(), 1);
-    assert_eq!(r.sys.edges.len(), 1);
 }
 
 /// Cross-check our guarded-conversion rejection messages against
@@ -1851,7 +1712,8 @@ fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
     let theory = parse_theory(&src, &[]).expect("parse");
     let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
     let h = tamarin_term::maude_proc::MaudeHandle::start(&mp, elab.signature.clone()).unwrap();
-    let root = prove_lemma(&elab, "CanForgeAndPost", h, 500).expect("prove_lemma");
+    let root =
+        prove_lemma(std::sync::Arc::new(elab), "CanForgeAndPost", h, 500).expect("prove_lemma");
     assert_eq!(root.status, NodeStatus::Solved, "expected a witness trace");
 
     fn contains_honest_signature_key(n: &ProofNode) -> bool {

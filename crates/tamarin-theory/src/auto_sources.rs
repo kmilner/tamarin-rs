@@ -563,6 +563,7 @@ pub(crate) fn add_auto_sources_lemma(
 pub(crate) fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theory::Lemma {
     use crate::theory::{Lemma, LemmaAttr, TraceQuantifier};
     Lemma {
+        heuristic_in_file: None,
         name: name.to_string(),
         attributes: vec![LemmaAttr::Sources],
         trace_quantifier: TraceQuantifier::AllTraces,
@@ -789,47 +790,53 @@ pub fn apply_auto_sources(
     maude: MaudeHandle,
     pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
     ndc_cache: Option<&crate::constraint::solver::context::IntrRuleCache>,
-) -> bool {
-    use crate::constraint::solver::context::ProofContext;
+    parameters: crate::constraint::solver::sources::IntegerParameters,
+) -> Result<bool, crate::prove::ProveError> {
+    use crate::constraint::solver::context::{ProofContext, ProofContextOptions};
     use crate::guarded::formula_to_guarded;
 
     // Both scratch contexts below share the caller's one rule list.
     let ndc_cache = ndc_cache.cloned();
 
-    // Restrictions → guarded (mirrors ProverSession::build; skip on failure).
-    let mut restrictions = Vec::new();
-    for r in elaborated.restrictions() {
-        if let Ok(g) = formula_to_guarded(&r.formula) {
-            restrictions.push(g);
-        }
-    }
+    let restrictions = elaborated
+        .restrictions()
+        .map(|r| formula_to_guarded(&r.formula))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| crate::prove::ProveError::Guarded(error.to_string()))?;
     let rules: Vec<OpenProtoRule> = elaborated.rules().cloned().collect();
 
     // collect open destruction chains across a context's (saturated) source
     // cases.
-    fn collect_chains(ctx: &ProofContext) -> Vec<((NodeConc, NodePrem), System)> {
+    fn collect_chains(
+        ctx: &ProofContext,
+    ) -> Result<Vec<((NodeConc, NodePrem), System)>, crate::prove::ProveError> {
         let mut chains = Vec::new();
         for src in ctx.full_sources.iter() {
-            for (_name, sys) in src.cases(ctx).iter() {
+            for (_name, sys) in src.cases(ctx)?.iter() {
                 for ch in sys.unsolved_chains() {
                     chains.push((ch, sys.clone()));
                 }
             }
         }
-        chains
+        Ok(chains)
     }
 
     // GENERATION chains: the RAW (saturated, unrefined) sources — HS
     // `addAutoSourcesLemma` uses `crcRawSources` (RuleItem.hs:64-70, see line 66).
-    let ctx_raw = ProofContext::new_with_restrictions_pool_forced(
+    let ctx_raw = ProofContext::try_with_options(
         maude.clone(),
-        pool.clone(),
         rules.clone(),
-        restrictions.clone(),
-        &[],
-        ndc_cache.clone(),
-    );
-    let raw_chains = collect_chains(&ctx_raw);
+        ProofContextOptions {
+            maude_pool: pool.clone(),
+            restrictions: restrictions.clone(),
+            intruder_rules: ndc_cache.clone(),
+            parameters,
+            show_saturation_steps: true,
+            loop_breakers_prepared: true,
+            ..Default::default()
+        },
+    )?;
+    let raw_chains = collect_chains(&ctx_raw)?;
 
     // TRIGGER: HS `containsPartialDeconstructions` checks the REFINED sources
     // (crcRefinedSources, field 3) — those refined by the theory's existing
@@ -839,30 +846,32 @@ pub fn apply_auto_sources(
     // context whose typing assumptions are those lemmas and check ITS chains.
     let typing_asms: Vec<crate::guarded::Guarded> = elaborated
         .lemmas()
-        .filter(|l| {
-            l.attributes
-                .iter()
-                .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
-        })
-        .filter_map(|l| formula_to_guarded(&l.formula).ok())
-        .collect();
+        .filter(|l| l.is_source_assumption())
+        .map(|l| formula_to_guarded(&l.formula))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| crate::prove::ProveError::Guarded(error.to_string()))?;
     let trigger = if typing_asms.is_empty() {
         // refined == raw
         !raw_chains.is_empty()
     } else {
-        let mut ctx_ref = ProofContext::new_with_restrictions_pool_forced(
+        let mut ctx_ref = ProofContext::try_with_options(
             maude.clone(),
-            pool.clone(),
             rules.clone(),
-            restrictions.clone(),
-            &[],
-            ndc_cache.clone(),
-        );
-        ctx_ref.typing_assumptions = typing_asms;
-        !collect_chains(&ctx_ref).is_empty()
+            ProofContextOptions {
+                maude_pool: pool.clone(),
+                restrictions: restrictions.clone(),
+                intruder_rules: ndc_cache.clone(),
+                parameters,
+                show_saturation_steps: true,
+                loop_breakers_prepared: true,
+                ..Default::default()
+            },
+        )?;
+        ctx_ref.typing_assumptions = typing_asms.into_iter().map(std::sync::Arc::new).collect();
+        !collect_chains(&ctx_ref)?.is_empty()
     };
     if !trigger {
-        return false;
+        return Ok(false);
     }
 
     // `itemsModAC = unfoldRules items` (CloseRule.hs:106-110): once the
@@ -878,15 +887,20 @@ pub fn apply_auto_sources(
     // original context's chains (and its saturation trace count).
     let (rules, gen_chains) = if unfolded {
         let rules: Vec<OpenProtoRule> = elaborated.rules().cloned().collect();
-        let ctx_mod = ProofContext::new_with_restrictions_pool_forced(
+        let ctx_mod = ProofContext::try_with_options(
             maude.clone(),
-            pool,
             rules.clone(),
-            restrictions,
-            &[],
-            ndc_cache,
-        );
-        let chains = collect_chains(&ctx_mod);
+            ProofContextOptions {
+                maude_pool: pool,
+                restrictions,
+                intruder_rules: ndc_cache,
+                parameters,
+                show_saturation_steps: true,
+                loop_breakers_prepared: true,
+                ..Default::default()
+            },
+        )?;
+        let chains = collect_chains(&ctx_mod)?;
         (rules, chains)
     } else {
         (rules, raw_chains)
@@ -918,7 +932,7 @@ pub fn apply_auto_sources(
             result.formula,
         )));
     }
-    true
+    Ok(true)
 }
 
 #[cfg(test)]

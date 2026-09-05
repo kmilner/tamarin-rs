@@ -59,12 +59,8 @@ pub async fn post(State(state): State<Arc<AppState>>, mut mp: Multipart) -> Resp
                 break;
             }
         };
-        match theory_io::load_from_source(
-            &src,
-            TheoryOrigin::Upload(filename.clone()),
-            &state.cfg.maude_path,
-            state.cfg.derivcheck_timeout,
-        ) {
+        match theory_io::load_from_source(&src, TheoryOrigin::Upload(filename.clone()), &state.cfg)
+        {
             Ok(entry) => {
                 let idx = state.store.insert(entry);
                 tracing::info!(idx, file = %filename, "uploaded theory");
@@ -182,8 +178,8 @@ fn render_index(state: &AppState) -> String {
             rows.push_str(&format!(
                 "<tr><td><a href=\"{link}\">{name}</a></td><td>{time}</td>{primary}<td>{origin}</td></tr>",
                 link = html_escape(&link),
-                name = html_escape(&t.typed_theory.name),
-                origin = html_escape(&t.origin.label()),
+                name = html_escape(&t.name),
+                origin = html_escape(&t.origin),
             ));
         }
         format!(

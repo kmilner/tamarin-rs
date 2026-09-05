@@ -31,6 +31,7 @@ use crate::state::AppState;
 
 use tamarin_theory::constraint::solver::search::NodeStatus;
 use tamarin_theory::constraint::system::graph::{GraphOptions, SimplificationLevel};
+use tamarin_theory::prove::SearchOptions;
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -56,12 +57,6 @@ fn not_found() -> Response {
     StatusCode::NOT_FOUND.into_response()
 }
 
-/// The theory at `idx`, or `None` for an index naming no theory — HS
-/// `withTheory`'s `notFound` (`src/Web/Handler.hs:662-672`).
-fn load_theory(state: &AppState, idx: usize) -> Option<crate::state::TheoryEntry> {
-    state.store.get(idx)
-}
-
 // ---------------------------------------------------------------------
 // Overview / main view
 // ---------------------------------------------------------------------
@@ -71,9 +66,6 @@ pub async fn interactive_overview(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
-    if !state.store.contains(idx) {
-        return not_found();
-    }
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
@@ -84,13 +76,19 @@ pub async fn interactive_overview(
     // time for every page; RS builds the context lazily, so we must ensure it
     // here regardless of the center path — otherwise a frame whose center
     // needs no proof state (help/edit/add/delete) would show `(0 cases)` and a
-    // proto-only rule count.  Best-effort: a Maude failure leaves the counts
-    // as-is.
-    let _ = state.store.ensure_proof_state(idx, &state.cfg);
-    let Some(entry) = load_theory(&state, idx) else {
-        return not_found();
-    };
-    html_response(theory_html::overview_page(&entry, &path))
+    // proto-only rule count. Build and render together on a blocking worker:
+    // both source materialisation and the pretty-printers may block.
+    match tokio::task::spawn_blocking(move || {
+        let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
+        theory_html::overview_page(&entry, &path).map_err(crate::state::StoreError::Build)
+    })
+    .await
+    {
+        Ok(Ok(html)) => html_response(html),
+        Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
+        Ok(Err(error)) => internal_server_error(&error.to_string()),
+        Err(error) => internal_server_error(&format!("internal error: {error}")),
+    }
 }
 
 /// `GET /thy/trace/<idx>/main/*path` — AJAX-only JsonHtml content
@@ -106,9 +104,6 @@ pub async fn theory_path_main(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
-    if !state.store.contains(idx) {
-        return not_found();
-    }
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
@@ -119,15 +114,45 @@ pub async fn theory_path_main(
         sub,
     } = &path
     {
-        return apply_method_and_redirect(&state, idx, lemma, *method_nr, sub).into_response();
+        let worker_state = state.clone();
+        let lemma = lemma.clone();
+        let sub = sub.clone();
+        let method_nr = *method_nr;
+        return match tokio::task::spawn_blocking(move || {
+            apply_method(&worker_state, idx, &lemma, method_nr, &sub)
+        })
+        .await
+        {
+            Ok(Ok((detached, target))) => {
+                let new_idx = state.store.insert(detached);
+                match target {
+                    path_parse::TheoryPath::Proof { lemma, sub } => {
+                        json_resp::redirect(overview_proof_url(new_idx, &lemma, &sub))
+                            .into_response()
+                    }
+                    _ => json_resp::alert("proof navigation returned a non-proof path")
+                        .into_response(),
+                }
+            }
+            Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
+            Ok(Err(error)) => json_resp::alert(error.to_string()).into_response(),
+            Err(error) => json_resp::alert(format!("internal error: {error}")).into_response(),
+        };
     }
-    materialise_proof_state_if_needed(&state, idx, &path);
-    let Some(entry) = load_theory(&state, idx) else {
-        return not_found();
-    };
-    let title = title_for(&entry, &path);
-    let body = theory_html::path_html(&entry, &path);
-    json_resp::html(title, body).into_response()
+    match tokio::task::spawn_blocking(move || {
+        let entry = entry_for_path(&state, idx, &path)?;
+        let body =
+            theory_html::path_html(&entry, &path).map_err(crate::state::StoreError::Build)?;
+        let title = title_for(&entry, &path).map_err(crate::state::StoreError::Build)?;
+        Ok::<_, crate::state::StoreError>(json_resp::html(title, body))
+    })
+    .await
+    {
+        Ok(Ok(response)) => response.into_response(),
+        Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
+        Ok(Err(error)) => json_resp::alert(error.to_string()).into_response(),
+        Err(error) => json_resp::alert(format!("internal error: {error}")).into_response(),
+    }
 }
 
 /// Build the `overview/proof` redirect URL for lemma `lemma` at proof
@@ -146,28 +171,39 @@ fn overview_proof_url(idx: usize, lemma: &str, sub: &[String]) -> String {
 }
 
 /// Apply ranked method `method_nr` (1-based) at proof path `sub` in
-/// lemma `lemma`'s tree.  Allocates a fresh idx for the post-step
-/// state and returns a JsonRedirect pointing at the resulting
-/// `overview/proof/<lemma>/<sub>` URL.  Mirrors Haskell's
+/// lemma `lemma`'s tree. Returns the unpublished post-step state and redirect
+/// target; the async handler publishes it only after the worker completes.
+/// Mirrors Haskell's
 /// `applyMethodAtPath` + `modifyTheory` flow in
 /// `src/Web/Handler.hs:1078-1081` and `src/Web/Theory.hs:86-100`.
-fn apply_method_and_redirect(
+fn apply_method(
     state: &AppState,
     idx: usize,
     lemma: &str,
     method_nr: i64,
     sub: &[String],
-) -> axum::Json<Value> {
-    // Ensure the proof state at the *source* idx is built (so we can
-    // navigate to the sub-path and rank candidate methods there).
-    let src_ps = match state.store.ensure_proof_state(idx, &state.cfg) {
-        Ok(p) => p,
-        Err(e) => return json_resp::alert(format!("proof state init failed: {}", e)),
-    };
+) -> Result<(crate::state::TheoryEntry, path_parse::TheoryPath), crate::state::StoreError> {
+    // Fork first, then derive every input to the transaction from that
+    // detached snapshot. This prevents a concurrent reload from mixing a
+    // system or ranking from one theory generation with another generation's
+    // proof tree.
+    let detached = state.store.detached_fork(idx, &state.cfg)?;
+    let src_ps = detached
+        .proof_state
+        .clone()
+        .expect("detached_fork always materialises a proof state");
     // Look up the system at the requested path.
-    let sys_at_path = match src_ps.get_system_at(lemma, sub) {
+    let sys_at_path = match src_ps
+        .get_system_at(lemma, sub)
+        .map_err(crate::state::StoreError::Build)?
+    {
         Some(s) => s,
-        None => return json_resp::alert(format!("no system at path {:?} in lemma {}", sub, lemma)),
+        None => {
+            return Err(crate::state::StoreError::Build(format!(
+                "no system at path {:?} in lemma {}",
+                sub, lemma
+            )))
+        }
     };
     // Pick the N-th ranked method (1-based).  Filter to only those
     // methods whose `exec_proof_method` succeeds — matches Haskell's
@@ -179,30 +215,37 @@ fn apply_method_and_redirect(
     let method = {
         let ctx = match src_ps.context_for_lemma(lemma) {
             Ok(ctx) => ctx,
-            Err(e) => return json_resp::alert(e),
+            Err(e) => return Err(crate::state::StoreError::Build(e)),
         };
         // Haskell `applyMethodAtPath` ranks with `useHeuristic heuristic
         // (length proofPath)` (Web/Theory.hs:96); the depth selects
         // which ranking of a multi-ranking heuristic is active
         // (`rankings !! (depth mod n)`, ProofMethod.hs:580-589).  Pass
         // the proof-path length, not a hardcoded 0.
-        let methods: Vec<_> = tamarin_theory::constraint::solver::search::candidate_methods(
+        let candidates = match tamarin_theory::constraint::solver::search::candidate_methods(
             &sys_at_path,
             &ctx,
             sub.len(),
-        )
-        .into_iter()
+        ) {
+            Ok(methods) => methods,
+            Err(error) => return Err(crate::state::StoreError::Build(error.to_string())),
+        };
+        let mut methods = Vec::new();
         // WHNF-depth applicability — MUST match the render pane's
         // filter (write_applicable_methods) so the clicked index
         // selects the same method the user saw.
-        .filter(|m| {
-            tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
-                &ctx,
-                m,
-                &sys_at_path,
-            )
-        })
-        .collect();
+        for method in candidates {
+            let applicable =
+                tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
+                    &ctx,
+                    &method,
+                    &sys_at_path,
+                )
+                .map_err(|error| crate::state::StoreError::Build(error.to_string()))?;
+            if applicable {
+                methods.push(method);
+            }
+        }
         // The method index is read signed (`safeRead` at `ReadS Int`,
         // `src/Web/Types.hs:443`), so every `i` a client can type reaches
         // here.  Upstream guards it with `length methods >= i` alone and then
@@ -221,69 +264,46 @@ fn apply_method_and_redirect(
         {
             Some(m) => m,
             None => {
-                return json_resp::alert("Sorry, but the prover failed on the selected method!")
+                return Err(crate::state::StoreError::Build(
+                    "Sorry, but the prover failed on the selected method!".to_string(),
+                ));
             }
         }
     };
-    // Allocate a fresh theory idx so the post-step state doesn't
-    // overwrite the source (matches Haskell's `modifyTheory` →
-    // `putTheory` allocating a new idx).  We FORK the source's proof
-    // state so the post-step state retains the SAME tree shape as the
-    // source (preserving any prior applied steps' children), then
-    // apply the step in the fork.  Mirrors Haskell where `putTheory`
-    // installs the modified `ClosedTheory` value (which contains its
-    // full `IncrementalProof`) at the new idx.
-    let new_idx = match state.store.clone_at_new_idx_forking_proof_state(idx) {
-        Some(n) => n,
-        None => return json_resp::alert(format!("theory index {} not found", idx)),
-    };
-    let new_ps = match state.store.ensure_proof_state(new_idx, &state.cfg) {
-        Ok(p) => p,
-        Err(e) => return json_resp::alert(format!("proof state init failed on fresh idx: {}", e)),
-    };
-    if let Err(e) = new_ps.apply_at_path(lemma, sub, method) {
-        return json_resp::alert(format!("proof step failed: {}", e));
+    if let Err(e) = src_ps.apply_at_path(lemma, sub, method) {
+        return Err(crate::state::StoreError::Build(format!(
+            "proof step failed: {e}"
+        )));
     }
     // Build the redirect URL.  Haskell's `getTheoryPathMR` for
     // `TheoryMethod` (`src/Web/Handler.hs:1078-1081`) advances the target
     // via `nextSmartThyPath newThy (TheoryProof lemma proofPath)`, i.e. it
     // walks INTO the freshly created child case of the grown tree.  We do
-    // the same: re-fetch the entry at `new_idx` (its `proof_state` Arc is
-    // the one `apply_at_path` just grew) and run the shared
-    // `next_thy_path_inner` (smart) over it.  For a `TheoryProof` input that
+    // the same by running `next_thy_path_inner` (smart) over the detached
+    // entry. For a `TheoryProof` input that
     // arm always yields another `TheoryProof` (child path, next-lemma root,
     // or same path when nothing follows), so we render the `overview/proof`
     // URL from its `(lemma, sub)`.  The URL SHAPE matches Haskell's
     // `renderTheoryPath` (`src/Web/Types.hs:371-384, see line 373`): lemma root (sub=[]) →
     // `proof/<lemma>`; each sub segment is `prefixWithUnderscore`d.
-    let Some(new_entry) = state.store.get(new_idx) else {
-        return json_resp::alert(format!("theory index {} vanished", new_idx));
-    };
     let src_path = path_parse::TheoryPath::Proof {
         lemma: lemma.to_string(),
         sub: sub.to_vec(),
     };
-    let (target_lemma, target_sub) = match next_thy_path_inner(&src_path, &new_entry, true) {
-        path_parse::TheoryPath::Proof { lemma, sub } => (lemma, sub),
-        // `nextSmartThyPath` of a `TheoryProof` never leaves the proof arm;
-        // fall back to the applied node if that invariant ever breaks.
-        _ => (lemma.to_string(), sub.to_vec()),
-    };
-    let url = overview_proof_url(new_idx, &target_lemma, &target_sub);
-    json_resp::redirect(url)
+    let target = next_thy_path_inner(&src_path, &detached, true)?;
+    Ok((detached, target))
 }
 
-/// Build the per-theory `ProofState` when the path is a Proof / Method
-/// / Lemma so the renderer can show the initial constraint system +
-/// applicable proof methods. Best-effort: silent failure leaves
-/// `entry.proof_state = None` (renderer falls back to the static
-/// "sorry /* initial */" line).
-fn materialise_proof_state_if_needed(state: &AppState, idx: usize, path: &path_parse::TheoryPath) {
+/// Return one consistent theory snapshot, materialising its proof state for
+/// paths whose renderer depends on it.
+fn entry_for_path(
+    state: &AppState,
+    idx: usize,
+    path: &path_parse::TheoryPath,
+) -> Result<crate::state::TheoryEntry, crate::state::StoreError> {
     let needs = matches!(
         path,
         path_parse::TheoryPath::Proof { .. }
-        | path_parse::TheoryPath::Method { .. }
-        | path_parse::TheoryPath::Lemma(_)
         // Message / Rules pages need the closed-theory intruder-rule
         // classification + injective facts; Source pages need the
         // precomputed raw/refined source cases.  All live in the
@@ -292,18 +312,25 @@ fn materialise_proof_state_if_needed(state: &AppState, idx: usize, path: &path_p
         | path_parse::TheoryPath::Rules
         | path_parse::TheoryPath::Source { .. }
     );
-    if !needs {
-        return;
+    if needs {
+        state.store.materialized_snapshot(idx, &state.cfg)
+    } else {
+        state
+            .store
+            .get(idx)
+            .ok_or(crate::state::StoreError::NotFound(idx))
     }
-    let _ = state.store.ensure_proof_state(idx, &state.cfg);
 }
 
 /// Mirror Haskell `titleThyPath` (`src/Web/Theory.hs:1679-1700`).
 /// Titles are independent of the theory name EXCEPT `TheoryHelp`.
-fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -> String {
+fn title_for(
+    entry: &crate::state::TheoryEntry,
+    path: &path_parse::TheoryPath,
+) -> Result<String, String> {
     use path_parse::SourceKind;
     use path_parse::TheoryPath::*;
-    match path {
+    Ok(match path {
         // TheoryHelp -> "Theory: " ++ thy._thyName
         Help => format!("Theory: {}", entry.typed_theory.name),
         // TheoryRules -> "Multiset rewriting rules and restrictions"
@@ -352,23 +379,22 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
                 let name = entry
                     .proof_state
                     .as_ref()
-                    .and_then(|ps| ps.get_root(lemma))
-                    .and_then(|root| {
-                        crate::handlers::proof_tree::navigate_at(&root, sub).map(|n| {
-                            // HS `methodName` = `renderHtmlDoc .
-                            // prettyProofMethod` — the HtmlDoc LAYOUT
-                            // (100/67, entity fill-widths, col 0): a
-                            // long method title WRAPS at the same
-                            // positions as HS's (the gate collapses
-                            // the newline to a space; the break
-                            // position is what must match).
-                            let _guard = tamarin_theory::pretty_hpj::HtmlEntityWidthGuard::enable();
-                            tamarin_theory::pretty_theory::pretty_proof_method_doc(&n.method)
-                                .render_with(
-                                    tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
-                                    tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
-                                )
-                        })
+                    .map(|ps| ps.get_method_at(lemma, sub))
+                    .transpose()?
+                    .flatten()
+                    .map(|method| {
+                        // HS `methodName` = `renderHtmlDoc .
+                        // prettyProofMethod` — the HtmlDoc LAYOUT
+                        // (100/67, entity fill-widths, col 0): a
+                        // long method title WRAPS at the same
+                        // positions as HS's (the gate collapses
+                        // the newline to a space; the break
+                        // position is what must match).
+                        let _guard = tamarin_theory::pretty_hpj::HtmlEntityWidthGuard::enable();
+                        tamarin_theory::pretty_theory::pretty_proof_method_doc(&method).render_with(
+                            tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
+                            tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
+                        )
                     })
                     .unwrap_or_else(|| "None".to_string());
                 // HS `methodName` = `renderHtmlDoc . prettyProofMethod` and
@@ -393,7 +419,7 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
         Method { .. } => {
             "Method Path: This title should not be shown. Please file a bug".to_string()
         }
-    }
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -411,9 +437,9 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
 /// `/* unannotated */` markers).  Mirror that by rendering each lemma's
 /// proof body from the live [`ProofState`] root via the byte-faithful
 /// CLI printer (`pretty_proof_body` — same call the `--prove` output
-/// path uses, run.rs).  A lemma with no live root (or no proof state at
-/// all, e.g. Maude unavailable) falls back to `by sorry`, which equals
-/// the printed form of the fresh `sorry Nothing` root.
+/// path uses, run.rs). The source/download handlers supply a materialised
+/// snapshot, so replay failures are returned rather than silently printed as
+/// `by sorry`.
 ///
 /// The `Generated from:` version/build lines are placeholders
 /// (the interactive server does not carry the CLI build constants — the
@@ -422,7 +448,7 @@ fn title_for(entry: &crate::state::TheoryEntry, path: &path_parse::TheoryPath) -
 /// block is rendered from the theory's stored `wf_report` — computed at load
 /// by the same pipeline `--prove` runs — via the shared `format_wf_block`,
 /// so it matches HS byte-for-byte (empty report ⇒ the "all successful" block).
-fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
+fn render_theory_source(entry: &crate::state::TheoryEntry) -> Result<String, String> {
     let build = tamarin_theory::pretty_theory::BuildInfo {
         tamarin_version: env!("CARGO_PKG_VERSION").to_string(),
         maude_version: String::new(),
@@ -433,20 +459,23 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
     let wf_block = tamarin_theory::pretty_theory::format_wf_block(&entry.wf_report);
     // Live proof bodies (HS `prettyClosedTheory` prints the stored
     // `IncrementalProof` of every lemma; see doc comment above).
-    let proved: Vec<tamarin_theory::pretty_theory::ProvedLemma> = match &entry.proof_state {
-        Some(ps) => entry
-            .typed_theory
-            .lemmas()
-            .filter_map(|l| {
-                ps.get_root(&l.name)
-                    .map(|root| tamarin_theory::pretty_theory::ProvedLemma {
-                        name: l.name.clone(),
-                        proof_body: Some(tamarin_theory::pretty_theory::pretty_proof_body(&root)),
-                    })
+    let proof = entry
+        .proof_state
+        .as_ref()
+        .expect("materialized_snapshot always has a proof state");
+    let proved: Vec<tamarin_theory::pretty_theory::ProvedLemma> = entry
+        .typed_theory
+        .lemmas()
+        .map(|lemma| {
+            proof.proof_body(&lemma.name).map(|body| {
+                let body = body.expect("iterated lemma exists in the proof session");
+                tamarin_theory::pretty_theory::ProvedLemma {
+                    name: lemma.name.clone(),
+                    proof_body: Some(body.to_string()),
+                }
             })
-            .collect(),
-        None => Vec::new(),
-    };
+        })
+        .collect::<Result<_, _>>()?;
     let mut body = tamarin_theory::pretty_theory::pretty_closed_theory(
         &entry.typed_theory,
         &proved,
@@ -473,25 +502,62 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> String {
     // `tests/fixtures/haskell-responses/source.txt`).  The batch BINARY is
     // the one that differs: its `renderDoc` pins 110/73 (Console.hs:243,
     // 398-399) via its own width install.
-    body
+    Ok(body)
 }
 
 pub async fn source_(State(state): State<Arc<AppState>>, Path(idx): Path<usize>) -> Response {
     // HS renders the CLOSED theory, whose per-lemma proofs exist from
     // theory-close time.  RS materialises the proof state lazily, so
-    // ensure it here (best-effort — a Maude failure falls back to the
-    // `by sorry` bodies).  Mirrors the framed-page
-    // handler's unconditional `ensure_proof_state`.
-    let _ = state.store.ensure_proof_state(idx, &state.cfg);
-    let Some(entry) = load_theory(&state, idx) else {
-        return not_found();
-    };
-    text_response(render_theory_source(&entry))
+    // ensure it here. Mirrors the framed-page handler's unconditional
+    // materialisation. Rendering can also be expensive, so keep the whole
+    // operation on a blocking worker.
+    match tokio::task::spawn_blocking(move || {
+        let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
+        render_theory_source(&entry).map_err(crate::state::StoreError::Build)
+    })
+    .await
+    {
+        Ok(Ok(source)) => text_response(source),
+        Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
+        Ok(Err(error)) => internal_server_error(&error.to_string()),
+        Err(error) => internal_server_error(&format!("internal error: {error}")),
+    }
 }
 
 // ---------------------------------------------------------------------
 // Autoprove
 // ---------------------------------------------------------------------
+
+/// Translate one web autoprover invocation into the values which differ from
+/// the theory-wide session defaults. HS adapts `AutoProver` at each route;
+/// neither the extractor nor `quitOnEmpty` is persistent session state.
+fn web_search_options(
+    extractor: &str,
+    bound: usize,
+    quit_on_empty: bool,
+    ranking_depth_offset: usize,
+) -> Option<SearchOptions> {
+    use tamarin_theory::constraint::solver::context::CutStrategy;
+    let extractor_cut = match extractor {
+        "characterize" => CutStrategy::Nothing,
+        "idfs" => CutStrategy::Dfs,
+        "bfs" => CutStrategy::Bfs,
+        "seqdfs" => CutStrategy::SeqDfs,
+        "sorry" => CutStrategy::AfterSorry,
+        _ => return None,
+    };
+    let cut = if quit_on_empty {
+        CutStrategy::AfterSorry
+    } else {
+        extractor_cut
+    };
+    Some(SearchOptions {
+        proof_bound: if bound == 0 { usize::MAX } else { bound },
+        ranking_depth_offset,
+        cut,
+        oracle_only: quit_on_empty,
+    })
+}
 
 /// `GET /thy/trace/<idx>/autoprove/<ext>/<bound>/<quit>/*path`
 ///
@@ -505,8 +571,17 @@ pub async fn source_(State(state): State<Arc<AppState>>, Path(idx): Path<usize>)
 /// `path`'s first segment is typically `proof/<lemma-name>`.
 pub async fn autoprove(
     State(state): State<Arc<AppState>>,
-    Path((idx, extractor, bound, quit, raw_path)): Path<(usize, String, usize, String, String)>,
+    Path((idx, extractor, raw_bound, quit, raw_path)): Path<(
+        usize,
+        String,
+        String,
+        String,
+        String,
+    )>,
 ) -> Response {
+    let Some(bound) = parse_web_bound(&raw_bound) else {
+        return not_found();
+    };
     // Match Haskell's Yesod `PathPiece SolutionExtractor`
     // (`src/Web/Types.hs:639-651`): only the five known extractor names
     // parse; any other value makes `fromPathPiece` return `Nothing`, so
@@ -518,33 +593,24 @@ pub async fn autoprove(
     };
     // Match Haskell's Yesod `PathPiece Bool`: only "True" / "False"
     // are valid.  Anything else 404s.
-    if parse_bool_path_piece(&quit).is_none() {
-        return not_found();
-    }
-    let Some(entry) = state.store.get(idx) else {
-        // Haskell: notFound from `withTheory`.  The handler returns
-        // JSON in the success branch but 404 HTML when the theory is
-        // missing.  We mirror that.
+    let Some(quit_on_empty) = parse_bool_path_piece(&quit) else {
         return not_found();
     };
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
-    // Haskell `getProverR` handles ONLY the `TheoryProof lemma proofPath`
-    // arm (`src/Web/Handler.hs:1130-1135`); we additionally tolerate
-    // Method/Lemma paths (pre-existing leniency — the UI only emits
-    // `proof/...` autoprove links), treating them as the lemma root.
+    // Haskell `getProverR` handles only `TheoryProof lemma proofPath`.
     let (lemma_name, sub): (String, Vec<String>) = match &path {
         path_parse::TheoryPath::Proof { lemma, sub } => (lemma.clone(), sub.clone()),
-        path_parse::TheoryPath::Method { lemma, .. } | path_parse::TheoryPath::Lemma(lemma) => {
-            (lemma.clone(), Vec::new())
-        }
         // Haskell `getProverR` non-`TheoryProof` arm
         // (`src/Web/Handler.hs:1137-1138`):
         //   JsonAlert $ "Can't run " <> name <> " on the given theory path!"
         _ => {
+            if !state.store.contains(idx) {
+                return not_found();
+            }
             return json_resp::alert(format!("Can't run {} on the given theory path!", name))
-                .into_response()
+                .into_response();
         }
     };
 
@@ -555,7 +621,8 @@ pub async fn autoprove(
     // these routes and 0 means unbounded, not "fall back to a default".
     // The solver applies it as `boundProofDepth` (Theory/Proof.hs:336-344):
     // nodes at that depth become `sorry /* bound N hit */` leaves.
-    let proof_bound = if bound > 0 { bound } else { usize::MAX };
+    let search_options = web_search_options(&extractor, bound, quit_on_empty, sub.len())
+        .expect("extractor was validated by autoprover_name");
     // HS `getProverR` → `applyProverAtPath` (`src/Web/Theory.hs:146-149`)
     // → `focus proofPath prover` (`lib/theory/src/Theory/Proof.hs:602-612`):
     // navigate to the URL's proof path, take THAT subproof's root system
@@ -570,69 +637,59 @@ pub async fn autoprove(
     // replayed into the tree at `ProofState::new` time) is simply REPLACED
     // at the focused path: we search from the path node's stored system via
     // `run_proof_search` and never consult the skeleton.
-    let src_ps = match state.store.ensure_proof_state(idx, &state.cfg) {
-        Ok(p) => p,
-        Err(e) => {
-            return json_resp::alert(format!("proof state init failed: {}", e)).into_response()
-        }
-    };
-    let Some(sys_at_path) = src_ps.get_system_at(&lemma_name, &sub) else {
-        // Nonexistent lemma or proof path: HS `focus`'s `modifyAtPath`
-        // returns `Nothing`, so `modifyTheory` emits the failure alert
-        // (`src/Web/Handler.hs:1121-1138, see line 1133`):
-        //   JsonAlert $ "Sorry, but " <> name <> " failed!"
-        // where `name` is the `fullName` built by `getAutoProverR` from
-        // the extractor + bound (see `autoprover_name`).
-        return json_resp::alert(format!("Sorry, but {} failed!", name)).into_response();
-    };
-    // Mirror Haskell `modifyTheory` (`src/Web/Handler.hs:736-753, see line 748`): allocate a
-    // fresh theory idx for the post-autoprove state.  Use the FORKING
-    // clone so the new idx PRESERVES the source idx's proof trees (HS
-    // `modifyTheory` puts the modified `ClosedTheory` — with its full
-    // `IncrementalProof` — at the new idx, so proving accumulates and
-    // SIBLING branches outside the focused path keep their prior state).
-    let new_idx = state
-        .store
-        .clone_at_new_idx_forking_proof_state(idx)
-        .unwrap_or(idx);
-    let new_ps = match state.store.ensure_proof_state(new_idx, &state.cfg) {
-        Ok(p) => p,
-        Err(e) => {
-            return json_resp::alert(format!("proof state init failed on fresh idx: {}", e))
-                .into_response()
-        }
-    };
-
-    // Run the search on a blocking thread so we don't block the runtime.
-    //
-    // The search runs under the lemma's OWN per-lemma `ProofContext`,
-    // built by `prove_system_in_session` from the retained
-    // `ProverSession` (see `ProofState::session`): HS's prover runs
-    // under `getProofContext l thy` — with the `typing_assumptions`-
-    // refined source cases gated on `lemmaSourceKind`, per-lemma
-    // `is_exists_trace` / heuristic / `use_induction`.
+    // Keep the complete detached transaction on one blocking worker. Besides
+    // keeping Maude/source work off Tokio, this means cancellation can only
+    // discard an unpublished value; publication happens below after await.
+    let worker_state = state.clone();
     let lemma_owned = lemma_name.clone();
     let sub_owned = sub.clone();
-    let ps_for_search = new_ps.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<NodeStatus, String> {
-        let session = ps_for_search.session.clone();
-        let subtree = tamarin_theory::prove::prove_system_in_session(
+    let result = tokio::task::spawn_blocking(move || -> Result<_, crate::state::StoreError> {
+        let detached = worker_state.store.detached_fork(idx, &worker_state.cfg)?;
+        let proof = detached
+            .proof_state
+            .clone()
+            .expect("detached_fork always materialises a proof state");
+        let sys_at_path = proof
+            .get_system_at(&lemma_owned, &sub_owned)
+            .map_err(crate::state::StoreError::Build)?
+            .ok_or_else(|| {
+                crate::state::StoreError::Build("proof path did not resolve".to_string())
+            })?;
+        let session = proof.session.clone();
+        let subtree = tamarin_theory::prove::prove_system_in_session_with_options(
             &session,
             &lemma_owned,
             sys_at_path,
-            proof_bound,
+            search_options,
         )
-        .map_err(|e| format!("prove failed: {}", e))?;
-        let status = subtree.status.clone();
+        .map_err(|e| crate::state::StoreError::Build(format!("prove failed: {e}")))?;
+        let status = subtree.status;
         // Graft the search result back at the URL's proof path (HS
         // `focus` → `modifyAtPath`; siblings untouched).
-        ps_for_search.graft_at_path(&lemma_owned, &sub_owned, subtree)?;
-        Ok(status)
+        proof
+            .graft_at_path(&lemma_owned, &sub_owned, subtree)
+            .map_err(crate::state::StoreError::Build)?;
+        let is_exists = detached
+            .typed_theory
+            .lookup_lemma(&lemma_owned)
+            .is_some_and(|lemma| {
+                matches!(
+                    lemma.trace_quantifier,
+                    tamarin_theory::theory::TraceQuantifier::ExistsTrace
+                )
+            });
+        let source = path_parse::TheoryPath::Proof {
+            lemma: lemma_owned,
+            sub: sub_owned,
+        };
+        let target = next_thy_path_inner(&source, &detached, true)?;
+        Ok((detached, status, is_exists, target))
     })
     .await;
 
     match result {
         Err(join_err) => json_resp::alert(format!("internal error: {}", join_err)).into_response(),
+        Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
         Ok(Err(_)) => {
             // Prover failure (missing session, prove error) or a graft
             // whose lemma/path vanished between the fork and the graft —
@@ -640,7 +697,8 @@ pub async fn autoprove(
             // (`src/Web/Handler.hs:1121-1138, see line 1133`), same as the bad-path arm above.
             json_resp::alert(format!("Sorry, but {} failed!", name)).into_response()
         }
-        Ok(Ok(status)) => {
+        Ok(Ok((detached, status, is_exists, target))) => {
+            let new_idx = state.store.insert(detached);
             tracing::info!(idx, lemma = %lemma_name, ?status, "autoprove completed");
             // Map our internal NodeStatus to Tamarin's per-lemma
             // verdict relative to the lemma's trace-quantifier:
@@ -655,17 +713,7 @@ pub async fn autoprove(
             //
             // Sorry / Unfinishable / Open all mean the search did
             // not produce a definitive answer.
-            let is_exists = entry
-                .typed_theory
-                .lookup_lemma(&lemma_name)
-                .map(|l| {
-                    matches!(
-                        l.trace_quantifier,
-                        tamarin_theory::theory::TraceQuantifier::ExistsTrace
-                    )
-                })
-                .unwrap_or(false);
-            let verdict = match (status.clone(), is_exists) {
+            let verdict = match (status, is_exists) {
                 (NodeStatus::Solved, false) => "falsified (attack found)",
                 (NodeStatus::Solved, true) => "verified (witness found)",
                 (NodeStatus::Contradictory, false) => "verified",
@@ -680,23 +728,14 @@ pub async fn autoprove(
             // freshly autoproved tree.  For a fully-proved all-traces lemma
             // (no interesting `Sorry`/`Finished Solved`/`Unfinishable` step)
             // that walks to the NEXT lemma's root; for an exists-trace lemma
-            // it lands on the `Finished Solved` witness node.  Re-fetch the
-            // entry at `new_idx` (its `proof_state` Arc is the fork the
-            // grafted tree lives in) and run the shared smart traversal from
-            // the proof path the autoprover was invoked at.
-            let redir = match state.store.get(new_idx) {
-                Some(new_entry) => {
-                    let src_path = path_parse::TheoryPath::Proof {
-                        lemma: lemma_name.clone(),
-                        sub: sub.clone(),
-                    };
-                    let (tl, ts) = match next_thy_path_inner(&src_path, &new_entry, true) {
-                        path_parse::TheoryPath::Proof { lemma, sub } => (lemma, sub),
-                        _ => (lemma_name.clone(), Vec::new()),
-                    };
-                    overview_proof_url(new_idx, &tl, &ts)
+            // it lands on the `Finished Solved` witness node. The worker ran
+            // that traversal against the grafted detached tree before
+            // returning it for publication.
+            let redir = match target {
+                path_parse::TheoryPath::Proof { lemma, sub } => {
+                    overview_proof_url(new_idx, &lemma, &sub)
                 }
-                None => overview_proof_url(new_idx, &lemma_name, &[]),
+                _ => overview_proof_url(new_idx, &lemma_name, &[]),
             };
             json_resp::redirect(redir).into_response()
         }
@@ -712,6 +751,11 @@ pub fn parse_bool_path_piece(s: &str) -> Option<bool> {
         "False" => Some(false),
         _ => None,
     }
+}
+
+fn parse_web_bound(raw: &str) -> Option<usize> {
+    let bound = raw.parse::<i64>().ok()?;
+    Some(usize::try_from(bound).unwrap_or(0))
 }
 
 /// Build the prover display name exactly as Haskell `getAutoProverR` /
@@ -772,8 +816,11 @@ fn autoprover_name(extractor: &str, bound: usize) -> Option<String> {
 /// and `run_proof_search` + `graft_at_path` at `[]` per lemma.
 pub async fn autoprove_all(
     State(state): State<Arc<AppState>>,
-    Path((idx, extractor, bound, _raw_path)): Path<(usize, String, usize, String)>,
+    Path((idx, extractor, raw_bound, raw_path)): Path<(usize, String, String, String)>,
 ) -> Response {
+    let Some(bound) = parse_web_bound(&raw_bound) else {
+        return not_found();
+    };
     // Match Haskell's Yesod `PathPiece SolutionExtractor`
     // (`src/Web/Types.hs:639-651`): an unrecognised extractor makes
     // `fromPathPiece` return `Nothing`, so Yesod routing 404s before
@@ -783,88 +830,81 @@ pub async fn autoprove_all(
     if autoprover_name(&extractor, bound).is_none() {
         return not_found();
     }
-    let Some(entry) = state.store.get(idx) else {
+    if parse_path(&raw_path).is_none() {
         return not_found();
-    };
-    let lemma_names: Vec<String> = entry
-        .typed_theory
-        .lemmas()
-        .map(|l| l.name.clone())
-        .collect();
-    let last_lemma = lemma_names.last().cloned();
+    }
     // URL-only proof-depth bound, exactly as `autoprove` above (HS
     // `getAutoProverAllR`'s identical `actualBound`, Web/Handler.hs:1265-1276).
-    let proof_bound = if bound > 0 { bound } else { usize::MAX };
+    let search_options = web_search_options(&extractor, bound, false, 0)
+        .expect("extractor was validated by autoprover_name");
 
-    // Materialise the SOURCE idx's proof state, then fork it at a fresh
-    // idx (HS `modifyTheory`; forking preserves prior proof trees — see
-    // `autoprove`).  Each lemma is then proved from its root system into
-    // the fork.
-    if let Err(e) = state.store.ensure_proof_state(idx, &state.cfg) {
-        return json_resp::alert(format!("proof state init failed: {}", e)).into_response();
-    }
-    let new_idx = state
-        .store
-        .clone_at_new_idx_forking_proof_state(idx)
-        .unwrap_or(idx);
-    let new_ps = match state.store.ensure_proof_state(new_idx, &state.cfg) {
-        Ok(p) => p,
-        Err(e) => {
-            return json_resp::alert(format!("proof state init failed on fresh idx: {}", e))
-                .into_response()
-        }
-    };
-    let ps_for_search = new_ps.clone();
-    let lemma_names_owned = lemma_names.clone();
-    let _ = tokio::task::spawn_blocking(move || {
+    let worker_state = state.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<_, crate::state::StoreError> {
+        let detached = worker_state.store.detached_fork(idx, &worker_state.cfg)?;
+        let lemma_names: Vec<String> = detached
+            .typed_theory
+            .lemmas()
+            .map(|lemma| lemma.name.clone())
+            .collect();
+        let proof = detached
+            .proof_state
+            .clone()
+            .expect("detached_fork always materialises a proof state");
         // Per-lemma contexts from the retained session, exactly as
         // `autoprove` (HS runs each fold step under `getProofContext`).
-        let session = ps_for_search.session.clone();
-        for lname in &lemma_names_owned {
+        let session = proof.session.clone();
+        for lname in &lemma_names {
             // Root system for this lemma — path `[]` is HS's
             // `focus [] prover = prover`, run on `psInfo (root prf)`.
-            // A lemma whose formula failed guarded conversion has no
-            // proof-tree entry; skip it best-effort and continue.
-            let Some(sys) = ps_for_search.get_system_at(lname, &[]) else {
-                continue;
-            };
-            match tamarin_theory::prove::prove_system_in_session(&session, lname, sys, proof_bound)
-            {
-                Ok(subtree) => {
-                    let _ = ps_for_search.graft_at_path(lname, &[], subtree);
-                }
-                Err(e) => {
-                    // HS's fold would fail the whole `modifyTheory`; we
-                    // keep the remaining lemmas best-effort and
-                    // continue with the next lemma.
-                    tracing::warn!(lemma = %lname, error = %e,
-                        "autoproveAll: prove failed; lemma keeps prior tree");
-                }
-            }
+            // Any missing or invalid lemma aborts the detached transaction.
+            let sys = proof
+                .get_system_at(lname, &[])
+                .map_err(crate::state::StoreError::Build)?
+                .ok_or_else(|| {
+                    crate::state::StoreError::Build(format!(
+                        "missing root system for lemma {lname}"
+                    ))
+                })?;
+            let subtree = tamarin_theory::prove::prove_system_in_session_with_options(
+                &session,
+                lname,
+                sys,
+                search_options,
+            )
+            .map_err(|error| crate::state::StoreError::Build(format!("prove {lname}: {error}")))?;
+            proof
+                .graft_at_path(lname, &[], subtree)
+                .map_err(crate::state::StoreError::Build)?;
         }
+        let target = match lemma_names.last() {
+            Some(last) => {
+                let source = path_parse::TheoryPath::Proof {
+                    lemma: last.clone(),
+                    sub: Vec::new(),
+                };
+                next_thy_path_inner(&source, &detached, true)?
+            }
+            None => path_parse::TheoryPath::Help,
+        };
+        Ok((detached, target))
     })
     .await;
+    let (detached, target) = match result {
+        Ok(Ok(result)) => result,
+        Ok(Err(crate::state::StoreError::NotFound(_))) => return not_found(),
+        Ok(Err(error)) => return json_resp::alert(error.to_string()).into_response(),
+        Err(error) => return json_resp::alert(format!("internal error: {error}")).into_response(),
+    };
+    let new_idx = state.store.insert(detached);
 
     // HS `getProverAllR` (`src/Web/Handler.hs:1141-1155, see line 1150`) advances the target
     // via `nextSmartThyPath thy (TheoryProof (last names) [])` over the
     // NEW theory — the same smart traversal as `autoprove`, seeded at
     // the LAST lemma's root.  Now that the fork holds the freshly
     // proved trees, we can run it faithfully.
-    let redir = match (state.store.get(new_idx), last_lemma) {
-        (Some(new_entry), Some(last)) => {
-            let src_path = path_parse::TheoryPath::Proof {
-                lemma: last.clone(),
-                sub: Vec::new(),
-            };
-            let (tl, ts) = match next_thy_path_inner(&src_path, &new_entry, true) {
-                path_parse::TheoryPath::Proof { lemma, sub } => (lemma, sub),
-                _ => (last, Vec::new()),
-            };
-            overview_proof_url(new_idx, &tl, &ts)
-        }
-        // No lemmas at all: nothing to prove or point at.
-        (_, None) => format!("/thy/trace/{}/overview/help", new_idx),
-        (None, Some(last)) => overview_proof_url(new_idx, &last, &[]),
+    let redir = match target {
+        path_parse::TheoryPath::Proof { lemma, sub } => overview_proof_url(new_idx, &lemma, &sub),
+        _ => format!("/thy/trace/{}/overview/help", new_idx),
     };
     json_resp::redirect(redir).into_response()
 }
@@ -886,12 +926,12 @@ pub async fn verify(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
-    let Some(entry) = load_theory(&state, idx) else {
-        return json_resp::alert(format!("theory index {} not found", idx)).into_response();
-    };
     // Unparseable path → routing-level 404 (see `parse_path`).
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
+    };
+    let Some(entry) = state.store.get(idx) else {
+        return json_resp::alert(format!("theory index {} not found", idx)).into_response();
     };
     match path {
         // The success branch: re-point navigation at the same idx and
@@ -903,10 +943,7 @@ pub async fn verify(
             // same node.  Mirrors Haskell `JsonRedirect` target
             // `/thy/trace/<idx>/overview/proof/<lemma>/...`, which goes
             // through Yesod `getUrlRender` and so percent-encodes each
-            // path segment.  Use the shared helpers, identical to
-            // `apply_method_and_redirect` (this file): `url_path_escape`
-            // on the lemma, `prefixWithUnderscore` + `url_path_escape`
-            // on each sub segment.
+            // path segment. Use the shared `overview_proof_url` helper.
             let url = overview_proof_url(idx, &lemma, &sub);
             json_resp::redirect(url).into_response()
         }
@@ -917,8 +954,10 @@ pub async fn verify(
         _ => {
             let help_path = path_parse::TheoryPath::Help;
             let title = format!("Theory: {}", entry.typed_theory.name);
-            let body = crate::handlers::theory_html::path_html(&entry, &help_path);
-            json_resp::html(title, body).into_response()
+            match crate::handlers::theory_html::path_html(&entry, &help_path) {
+                Ok(body) => json_resp::html(title, body).into_response(),
+                Err(error) => json_resp::alert(error).into_response(),
+            }
         }
     }
 }
@@ -943,7 +982,7 @@ pub async fn reload(
     State(state): State<Arc<AppState>>,
     Path(idx): Path<usize>,
 ) -> axum::Json<Value> {
-    let Some(entry) = state.store.get(idx) else {
+    let Ok(snapshot) = state.store.snapshot(idx) else {
         // Haskell prefers a JSON alert here (`JsonAlert "Theory not
         // found"`) rather than 404, since `reload` is a POST from a
         // form/button — surfacing through the standard alert UI.
@@ -951,31 +990,37 @@ pub async fn reload(
     };
     // Mirror Haskell `checkReloadOrigin` (`src/Web/Handler.hs:391-394`):
     // two distinct JsonAlert strings for the two non-Local origins.
-    let path = match &entry.origin {
+    let path = match &snapshot.entry.origin {
         crate::state::TheoryOrigin::Local(p) => p.clone(),
         crate::state::TheoryOrigin::Upload(_) => {
-            return json_resp::alert("Cannot reload: theory was uploaded (no file path)")
+            return json_resp::alert("Cannot reload: theory was uploaded (no file path)");
         }
         crate::state::TheoryOrigin::Interactive => {
             return json_resp::alert(
                 "Cannot reload: theory was created interactively (no file path)",
-            )
+            );
         }
     };
-    match crate::theory_io::load_from_path(
-        &path,
-        &state.cfg.maude_path,
-        state.cfg.derivcheck_timeout,
-    ) {
-        Ok(new_entry) => {
+    let worker_state = state.clone();
+    let load = tokio::task::spawn_blocking(move || {
+        crate::theory_io::load_from_path(&path, &worker_state.cfg).map_err(|error| (path, error))
+    })
+    .await;
+    match load {
+        Err(error) => json_resp::alert(format!("internal error: {error}")),
+        Ok(Ok(new_entry)) => {
             // Replace at the SAME idx — matches Haskell's
             // `replaceTheory` (used by `postReloadTheoryR` and
             // `editProof`).  URLs that referenced this theory stay
             // valid.
-            let kept_idx = state.store.replace_at(idx, new_entry).unwrap_or(idx);
-            json_resp::redirect(format!("/thy/trace/{}/overview/help", kept_idx))
+            match state.store.replace_if_current(&snapshot, new_entry) {
+                Ok(kept_idx) => {
+                    json_resp::redirect(format!("/thy/trace/{}/overview/help", kept_idx))
+                }
+                Err(error) => json_resp::alert(error.to_string()),
+            }
         }
-        Err(e) => match e {
+        Ok(Err((path, error))) => match error {
             // HS `reloadTheoryFromFile` (Handler.hs:413-414): a parse failure
             // becomes a JsonAlert
             //   "Parse error while reloading file:\n\n" ++ filePath
@@ -1004,9 +1049,16 @@ pub async fn download(
     // modifications (applied proof steps, autoprove results) are
     // reflected in the saved file.  Same body as the `source_` handler,
     // different content-type/disposition.
-    let _ = state.store.ensure_proof_state(idx, &state.cfg);
-    let Some(entry) = load_theory(&state, idx) else {
-        return not_found();
+    let source = match tokio::task::spawn_blocking(move || {
+        let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
+        render_theory_source(&entry).map_err(crate::state::StoreError::Build)
+    })
+    .await
+    {
+        Ok(Ok(source)) => source,
+        Ok(Err(crate::state::StoreError::NotFound(_))) => return not_found(),
+        Ok(Err(error)) => return internal_server_error(&error.to_string()),
+        Err(error) => return internal_server_error(&format!("internal error: {error}")),
     };
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -1020,7 +1072,7 @@ pub async fn download(
     if let Ok(disposition) = format!("attachment; filename=\"{name}\"").parse() {
         headers.insert(header::CONTENT_DISPOSITION, disposition);
     }
-    (StatusCode::OK, headers, render_theory_source(&entry)).into_response()
+    (StatusCode::OK, headers, source).into_response()
 }
 
 // ---------------------------------------------------------------------
@@ -1052,15 +1104,27 @@ pub async fn next_path(
     State(state): State<Arc<AppState>>,
     Path((idx, section, raw_path)): Path<(usize, String, String)>,
 ) -> Response {
-    let Some(entry) = state.store.get(idx) else {
-        return not_found();
-    };
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
-    let new_path = next_theory_path(&path, &section, &entry);
-    let url = render_main_url(idx, &new_path);
-    text_response(url)
+    match tokio::task::spawn_blocking(move || {
+        let entry = if matches!(section.as_str(), "normal" | "smart")
+            && matches!(&path, path_parse::TheoryPath::Proof { .. })
+        {
+            state.store.materialized_snapshot(idx, &state.cfg)?
+        } else {
+            state.store.snapshot(idx)?.entry
+        };
+        let new_path = next_theory_path(&path, &section, &entry)?;
+        Ok::<_, crate::state::StoreError>(render_main_url(idx, &new_path))
+    })
+    .await
+    {
+        Ok(Ok(url)) => text_response(url),
+        Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
+        Ok(Err(error)) => internal_server_error(&error.to_string()),
+        Err(error) => internal_server_error(&format!("internal error: {error}")),
+    }
 }
 
 /// `GET /thy/trace/<idx>/prev/<section>/*path` — symmetric to `next`.
@@ -1068,15 +1132,29 @@ pub async fn prev_path(
     State(state): State<Arc<AppState>>,
     Path((idx, section, raw_path)): Path<(usize, String, String)>,
 ) -> Response {
-    let Some(entry) = state.store.get(idx) else {
-        return not_found();
-    };
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
-    let new_path = prev_theory_path(&path, &section, &entry);
-    let url = render_main_url(idx, &new_path);
-    text_response(url)
+    match tokio::task::spawn_blocking(move || {
+        let entry = if matches!(section.as_str(), "normal" | "smart")
+            && matches!(
+                &path,
+                path_parse::TheoryPath::Proof { .. } | path_parse::TheoryPath::Lemma(_)
+            ) {
+            state.store.materialized_snapshot(idx, &state.cfg)?
+        } else {
+            state.store.snapshot(idx)?.entry
+        };
+        let new_path = prev_theory_path(&path, &section, &entry)?;
+        Ok::<_, crate::state::StoreError>(render_main_url(idx, &new_path))
+    })
+    .await
+    {
+        Ok(Ok(url)) => text_response(url),
+        Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
+        Ok(Err(error)) => internal_server_error(&error.to_string()),
+        Err(error) => internal_server_error(&format!("internal error: {error}")),
+    }
 }
 
 /// Haskell `nextThyPath`/`nextSmartThyPath`.
@@ -1091,14 +1169,14 @@ fn next_theory_path(
     p: &path_parse::TheoryPath,
     section: &str,
     entry: &crate::state::TheoryEntry,
-) -> path_parse::TheoryPath {
+) -> Result<path_parse::TheoryPath, crate::state::StoreError> {
     // HS `getNextTheoryPathR` (`Handler.hs:1546-1549`): `next "normal" =
     // nextThyPath`, `next "smart" = nextSmartThyPath`, everything else
     // `const id` (no-op).  The two differ ONLY in the `TheoryProof` arm.
     match section {
         "normal" => next_thy_path_inner(p, entry, false),
         "smart" => next_thy_path_inner(p, entry, true),
-        _ => p.clone(),
+        _ => Ok(p.clone()),
     }
 }
 
@@ -1106,11 +1184,11 @@ fn next_thy_path_inner(
     p: &path_parse::TheoryPath,
     entry: &crate::state::TheoryEntry,
     smart: bool,
-) -> path_parse::TheoryPath {
+) -> Result<path_parse::TheoryPath, crate::state::StoreError> {
     use path_parse::SourceKind;
     use path_parse::TheoryPath as T;
     let lemmas = lemma_names(entry);
-    match p {
+    Ok(match p {
         T::Help => T::Message,
         T::Message => T::Rules,
         T::Rules => T::Tactic,
@@ -1151,7 +1229,7 @@ fn next_thy_path_inner(
         //   | Just nextLemma <- getNextLemma l -> TheoryProof nextLemma []
         //   | otherwise                        -> TheoryProof l p
         T::Proof { lemma, sub } => {
-            let paths = lemma_proof_paths(entry, lemma);
+            let paths = lemma_proof_paths(entry, lemma)?;
             let next = if smart {
                 next_smart_path(&paths, sub)
             } else {
@@ -1173,18 +1251,18 @@ fn next_thy_path_inner(
         }
         // HS `path@TheoryMethod{} -> path` (no-op).
         T::Method { .. } => p.clone(),
-    }
+    })
 }
 
 fn prev_theory_path(
     p: &path_parse::TheoryPath,
     section: &str,
     entry: &crate::state::TheoryEntry,
-) -> path_parse::TheoryPath {
+) -> Result<path_parse::TheoryPath, crate::state::StoreError> {
     match section {
         "normal" => prev_thy_path_inner(p, entry, false),
         "smart" => prev_thy_path_inner(p, entry, true),
-        _ => p.clone(),
+        _ => Ok(p.clone()),
     }
 }
 
@@ -1192,7 +1270,7 @@ fn prev_thy_path_inner(
     p: &path_parse::TheoryPath,
     entry: &crate::state::TheoryEntry,
     smart: bool,
-) -> path_parse::TheoryPath {
+) -> Result<path_parse::TheoryPath, crate::state::StoreError> {
     use path_parse::SourceKind;
     use path_parse::TheoryPath as T;
     let lemmas = lemma_names(entry);
@@ -1201,7 +1279,7 @@ fn prev_thy_path_inner(
         src_idx: 0,
         case_idx: 0,
     };
-    match p {
+    Ok(match p {
         T::Help => T::Help,
         T::Message => T::Help,
         T::Rules => T::Message,
@@ -1224,7 +1302,7 @@ fn prev_thy_path_inner(
         //                 | otherwise -> TheorySource RefinedSource 0 0
         T::Lemma(n) => match prev_before(&lemmas, n) {
             Some(pl) => {
-                let sub = last_path(&lemma_proof_paths(entry, &pl));
+                let sub = last_path(&lemma_proof_paths(entry, &pl)?);
                 T::Proof { lemma: pl, sub }
             }
             None => refined_root(),
@@ -1237,7 +1315,7 @@ fn prev_thy_path_inner(
         //         TheoryProof prevLemma (lastPath prevLemma)
         //   | otherwise                        -> TheorySource RefinedSource 0 0
         T::Proof { lemma, sub } => {
-            let paths = lemma_proof_paths(entry, lemma);
+            let paths = lemma_proof_paths(entry, lemma)?;
             let prev = if smart {
                 prev_smart_path(&paths, sub)
             } else {
@@ -1250,7 +1328,7 @@ fn prev_thy_path_inner(
                 },
                 None => match prev_before(&lemmas, lemma) {
                     Some(pl) => {
-                        let sub = last_path(&lemma_proof_paths(entry, &pl));
+                        let sub = last_path(&lemma_proof_paths(entry, &pl)?);
                         T::Proof { lemma: pl, sub }
                     }
                     None => refined_root(),
@@ -1259,7 +1337,7 @@ fn prev_thy_path_inner(
         }
         // HS `path@TheoryMethod{} -> path` (no-op).
         T::Method { .. } => p.clone(),
-    }
+    })
 }
 
 /// Lemma names in declaration order (HS `getLemmas thy`).
@@ -1279,17 +1357,24 @@ fn lemma_names(entry: &crate::state::TheoryEntry) -> Vec<String> {
 fn lemma_proof_paths(
     entry: &crate::state::TheoryEntry,
     lemma: &str,
-) -> Vec<(
-    Vec<String>,
-    tamarin_theory::constraint::solver::proof_method::ProofMethod,
-)> {
+) -> Result<
+    Vec<(
+        Vec<String>,
+        tamarin_theory::constraint::solver::proof_method::ProofMethod,
+    )>,
+    crate::state::StoreError,
+> {
     use tamarin_theory::constraint::solver::proof_method::ProofMethod;
-    entry
-        .proof_state
-        .as_ref()
-        .and_then(|ps| ps.get_root(lemma))
-        .map(|root| crate::handlers::proof_tree::get_proof_paths(&root))
-        .unwrap_or_else(|| vec![(Vec::new(), ProofMethod::Sorry(None))])
+    let Some(proof) = entry.proof_state.as_ref() else {
+        return Ok(vec![(Vec::new(), ProofMethod::Sorry(None))]);
+    };
+    proof
+        .proof_index_root(lemma)
+        .map(|root| {
+            root.map(|root| crate::handlers::proof_tree::get_proof_index_paths(&root))
+                .unwrap_or_else(|| vec![(Vec::new(), ProofMethod::Sorry(None))])
+        })
+        .map_err(crate::state::StoreError::Build)
 }
 
 type PathList = [(
@@ -1373,20 +1458,22 @@ fn render_main_url(idx: usize, p: &path_parse::TheoryPath) -> String {
 /// system (help / message / etc.).
 ///
 /// Live proof state is materialised on first access via
-/// [`TheoryStore::ensure_proof_state`].
+/// [`TheoryStore::materialized_snapshot`].
 fn resolve_system_for_path(
-    state: &AppState,
-    idx: usize,
+    entry: &crate::state::TheoryEntry,
     path: &path_parse::TheoryPath,
-) -> Option<tamarin_theory::constraint::system::System> {
+) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
     let (lemma_name, sub) = match path {
         path_parse::TheoryPath::Proof { lemma, sub } => (lemma.clone(), sub.clone()),
         path_parse::TheoryPath::Method { lemma, sub, .. } => (lemma.clone(), sub.clone()),
         path_parse::TheoryPath::Lemma(n) => (n.clone(), Vec::new()),
-        _ => return None,
+        _ => return Ok(None),
     };
-    let ps = state.store.ensure_proof_state(idx, &state.cfg).ok()?;
-    ps.get_system_at(&lemma_name, &sub)
+    let proof = entry
+        .proof_state
+        .as_ref()
+        .expect("materialized_snapshot always has a proof state");
+    proof.get_system_at(&lemma_name, &sub)
 }
 
 /// `GET /thy/trace/<idx>/intdot/*path` — the interactive graph shell page.
@@ -1500,12 +1587,6 @@ pub async fn graph(
     Path((idx, raw_path)): Path<(usize, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    // Held for the whole handler: the theory's user-fn sets stay installed
-    // until it drops (see [`LoadedTheory`]); the `OutJSON` branch also reads
-    // the theory name its `jsonLabel` carries.
-    let Some(theory) = load_theory(&state, idx) else {
-        return not_found();
-    };
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
@@ -1513,10 +1594,6 @@ pub async fn graph(
     // `imgThyPath`'s `Nothing` with a generic `notFound`; there is no
     // placeholder SVG.  The label `imgThyPath` carries is for its `OutJSON`
     // branch, taken below only when `--with-json` was given.
-    let resolved = match thy_path_system(&state, idx, &path, GRAPH_UNHANDLED_SITE) {
-        Ok(r) => r,
-        Err(message) => return internal_server_error(&message),
-    };
     let opts = graph_options_from_map(&query);
     // `--with-json` switches this route to HS's `OutJSON` render branch
     // (`imgThyPath` picks `toJSON jsonLabel system`, Web/Theory.hs:1404-1412,
@@ -1526,37 +1603,46 @@ pub async fn graph(
     // written to a file, and `<json-cmd> <img> <json>` is spawned to produce
     // the image.  There is no `fdp` retry on this branch (`_ -> return
     // False`), and a failure is `Nothing` → HS's generic `notFound`.
-    if let Some(json_cmd) = state.cfg.json_path.clone() {
-        let label = resolved.json_label(&theory.typed_theory.name);
-        let Some(sys) = resolved.into_system() else {
-            return not_found();
-        };
-        let rsys = tamarin_theory::constraint::system::graph::RenderSystem::from_prover(sys);
-        let json = tamarin_theory::constraint::system::json::sequents_to_json_pretty(
-            &opts,
-            &[(label, &rsys)],
-        );
-        return render_img_via_json_cmd(&json_cmd, &json);
-    }
-    let Some(sys) = resolved.into_system() else {
-        return not_found();
-    };
-    // Try to render with dot; fall back to DOT-as-text when
-    // unavailable.
-    match crate::handlers::dot::render_svg_or_dot_with(&sys, &opts, &state.cfg.dot_path) {
-        crate::handlers::dot::RenderResult::Svg(bytes) => {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                header::CONTENT_TYPE,
-                header::HeaderValue::from_static("image/svg+xml"),
-            );
-            (StatusCode::OK, headers, bytes).into_response()
-        }
-        crate::handlers::dot::RenderResult::Dot(dot) => {
-            // Fallback: send the DOT as text/plain so the user (or
-            // frontend's viz.js) can pick it up.
-            text_response(dot)
-        }
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<Option<Response>, crate::state::StoreError> {
+            let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
+            let resolved = thy_path_system(&entry, &path, GRAPH_UNHANDLED_SITE)
+                .map_err(crate::state::StoreError::Build)?;
+            let label = resolved.json_label(&entry.typed_theory.name);
+            let Some(sys) = resolved.into_system() else {
+                return Ok(None);
+            };
+            if let Some(json_cmd) = state.cfg.json_path.as_deref() {
+                let rsys =
+                    tamarin_theory::constraint::system::graph::RenderSystem::from_prover(sys);
+                let json = tamarin_theory::constraint::system::json::sequents_to_json_pretty(
+                    &opts,
+                    &[(label, &rsys)],
+                );
+                return Ok(Some(render_img_via_json_cmd(json_cmd, &json)));
+            }
+            Ok(Some(
+                match crate::handlers::dot::render_svg_or_dot_with(&sys, &opts, &state.cfg.dot_path)
+                {
+                    crate::handlers::dot::RenderResult::Svg(bytes) => {
+                        let mut headers = HeaderMap::new();
+                        headers.insert(
+                            header::CONTENT_TYPE,
+                            header::HeaderValue::from_static("image/svg+xml"),
+                        );
+                        (StatusCode::OK, headers, bytes).into_response()
+                    }
+                    crate::handlers::dot::RenderResult::Dot(dot) => text_response(dot),
+                },
+            ))
+        },
+    )
+    .await;
+    match result {
+        Ok(Ok(Some(response))) => response,
+        Ok(Ok(None) | Err(crate::state::StoreError::NotFound(_))) => not_found(),
+        Ok(Err(error)) => internal_server_error(&error.to_string()),
+        Err(error) => internal_server_error(&format!("internal error: {error}")),
     }
 }
 
@@ -1567,26 +1653,30 @@ pub async fn interactive_graph_def(
     Path((idx, raw_path)): Path<(usize, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    // See [`graph`]: the binding keeps the user-fn sets installed.
-    let Some(_theory) = load_theory(&state, idx) else {
-        return not_found();
-    };
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
     // HS `getTheoryInteractiveGraphR` (`src/Web/Handler.hs:1464-1470`) answers
     // `dotGraphString`'s `Nothing` with `notFound`.  `dotGraphString` discards
     // the label its `thyPathSystem` returns (`(_, system) <- thyPathSystem …`).
-    let sys = match thy_path_system(&state, idx, &path, INTERACTIVE_DOT_UNHANDLED_SITE) {
-        Ok(resolved) => match resolved.into_system() {
-            Some(s) => s,
-            None => return not_found(),
-        },
-        Err(message) => return internal_server_error(&message),
-    };
     let opts = graph_options_from_map(&query);
-    let dot = tamarin_theory::constraint::system::dot::system_to_dot_with(&sys, &opts);
-    text_response(dot)
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<Option<String>, crate::state::StoreError> {
+            let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
+            let resolved = thy_path_system(&entry, &path, INTERACTIVE_DOT_UNHANDLED_SITE)
+                .map_err(crate::state::StoreError::Build)?;
+            Ok(resolved.into_system().map(|sys| {
+                tamarin_theory::constraint::system::dot::system_to_dot_with(&sys, &opts)
+            }))
+        },
+    )
+    .await;
+    match result {
+        Ok(Ok(Some(dot))) => text_response(dot),
+        Ok(Ok(None) | Err(crate::state::StoreError::NotFound(_))) => not_found(),
+        Ok(Err(error)) => internal_server_error(&error.to_string()),
+        Err(error) => internal_server_error(&format!("internal error: {error}")),
+    }
 }
 
 /// `GET /thy/trace/<idx>/json/*path` — the constraint system at `path`
@@ -1613,57 +1703,63 @@ pub async fn graph_json(
     Path((idx, raw_path)): Path<(usize, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    // See [`graph`]: held for the whole handler, and the source of the theory
-    // name the `jsonLabel`s carry.
-    let Some(theory) = load_theory(&state, idx) else {
-        return not_found();
-    };
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
     let opts = graph_options_from_map(&query);
-    let resolved = match thy_path_system(&state, idx, &path, JSON_UNHANDLED_SITE) {
-        Ok(r) => r,
-        Err(message) => return internal_server_error(&message),
-    };
-    let label = resolved.json_label(&theory.typed_theory.name);
-    match resolved {
-        // HS `proofPathCode`: `fromMaybe BL.empty`, i.e. an unresolvable proof
-        // path is a 200 with an empty body.
-        PathSystem::Proof { system, .. } => {
-            let Some(sys) = system else {
-                return json_graph_response(String::new());
-            };
-            // `Web.Utils.abbrev abbreviate 30 sequent`, with `abbreviate` set
-            // by the mere PRESENCE of `abbrevInBackend`.  This is the one
-            // route that abbreviates, and — as upstream — only on this arm.
-            let abbreviate = query.contains_key("abbrevInBackend");
-            let sys = crate::web_utils_abbrev::abbrev(
-                abbreviate,
-                crate::web_utils_abbrev::MIN_ABBREV_SIZE,
-                sys,
-            );
-            json_graph_response(
-                tamarin_theory::constraint::system::json::sequents_to_json_pretty(
-                    &opts,
-                    &[(label, &sys)],
-                ),
-            )
-        }
-        PathSystem::Source { system, .. } => {
-            let Some(sys) = system else {
-                return not_found();
-            };
-            // No backend abbreviation on this arm; the serialiser takes a
-            // `RenderSystem`, which the proof arm gets back from `abbrev`.
-            let sys = tamarin_theory::constraint::system::graph::RenderSystem::from_prover(sys);
-            json_graph_response(
-                tamarin_theory::constraint::system::json::sequents_to_json_pretty(
-                    &opts,
-                    &[(label, &sys)],
-                ),
-            )
-        }
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<Option<String>, crate::state::StoreError> {
+            let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
+            let resolved = thy_path_system(&entry, &path, JSON_UNHANDLED_SITE)
+                .map_err(crate::state::StoreError::Build)?;
+            let label = resolved.json_label(&entry.typed_theory.name);
+            Ok(match resolved {
+                // HS `proofPathCode`: `fromMaybe BL.empty`, i.e. an unresolvable proof
+                // path is a 200 with an empty body.
+                PathSystem::Proof { system, .. } => {
+                    let Some(sys) = system else {
+                        return Ok(Some(String::new()));
+                    };
+                    // `Web.Utils.abbrev abbreviate 30 sequent`, with `abbreviate` set
+                    // by the mere PRESENCE of `abbrevInBackend`.  This is the one
+                    // route that abbreviates, and — as upstream — only on this arm.
+                    let abbreviate = query.contains_key("abbrevInBackend");
+                    let sys = crate::web_utils_abbrev::abbrev(
+                        abbreviate,
+                        crate::web_utils_abbrev::MIN_ABBREV_SIZE,
+                        sys,
+                    );
+                    Some(
+                        tamarin_theory::constraint::system::json::sequents_to_json_pretty(
+                            &opts,
+                            &[(label, &sys)],
+                        ),
+                    )
+                }
+                PathSystem::Source { system, .. } => {
+                    let Some(sys) = system else {
+                        return Ok(None);
+                    };
+                    // No backend abbreviation on this arm; the serialiser takes a
+                    // `RenderSystem`, which the proof arm gets back from `abbrev`.
+                    let sys =
+                        tamarin_theory::constraint::system::graph::RenderSystem::from_prover(sys);
+                    Some(
+                        tamarin_theory::constraint::system::json::sequents_to_json_pretty(
+                            &opts,
+                            &[(label, &sys)],
+                        ),
+                    )
+                }
+            })
+        },
+    )
+    .await;
+    match result {
+        Ok(Ok(Some(json))) => json_graph_response(json),
+        Ok(Ok(None) | Err(crate::state::StoreError::NotFound(_))) => not_found(),
+        Ok(Err(error)) => internal_server_error(&error.to_string()),
+        Err(error) => internal_server_error(&format!("internal error: {error}")),
     }
 }
 
@@ -1790,7 +1886,7 @@ fn source_case_system(
     kind: &path_parse::SourceKind,
     src_idx: i64,
     case_idx: i64,
-) -> Option<tamarin_theory::constraint::system::System> {
+) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
     let want_refined = matches!(kind, path_parse::SourceKind::Refined);
     theory_html::source_list_case(entry, want_refined, src_idx, case_idx)
 }
@@ -1860,8 +1956,7 @@ impl PathSystem {
 /// miss — a `None` system, which every route answers with [`not_found`], the
 /// same answer upstream gives an unresolvable proof path.
 fn thy_path_system(
-    state: &AppState,
-    idx: usize,
+    entry: &crate::state::TheoryEntry,
     path: &path_parse::TheoryPath,
     unhandled_site: &str,
 ) -> Result<PathSystem, String> {
@@ -1871,13 +1966,7 @@ fn thy_path_system(
             src_idx,
             case_idx,
         } => {
-            // The source cases live on the materialised proof state, so the
-            // entry is re-read afterwards (as the `main` handler does).
-            materialise_proof_state_if_needed(state, idx, path);
-            let system = state
-                .store
-                .get(idx)
-                .and_then(|entry| source_case_system(&entry, kind, *src_idx, *case_idx));
+            let system = source_case_system(entry, kind, *src_idx, *case_idx)?;
             Ok(PathSystem::Source {
                 src_idx: *src_idx,
                 case_idx: *case_idx,
@@ -1886,95 +1975,10 @@ fn thy_path_system(
         }
         path_parse::TheoryPath::Proof { lemma, .. } => Ok(PathSystem::Proof {
             lemma: lemma.clone(),
-            system: resolve_system_for_path(state, idx, path),
+            system: resolve_system_for_path(entry, path)?,
         }),
         _ => Err(unhandled_theory_path(unhandled_site)),
     }
-}
-
-/// `GET /thy/trace/<idx>/proof-step/<lemma>/<path...>/<method>` —
-/// apply a single proof method at the given path and return a
-/// `{html, title}` JsonHtml envelope with the updated proof tree
-/// rendered for `/main/proof/<lemma>`.
-///
-/// URL parsing:
-///   - The first segment after `<idx>/proof-step/` is the lemma name.
-///   - The LAST 1 or 2 segments are the method (e.g. `simplify`,
-///     `induction`, `sorry`, `solve/<id>`).
-///   - Everything in between is the proof-tree path (case names).
-pub async fn proof_step(
-    State(state): State<Arc<AppState>>,
-    Path((idx, raw_path)): Path<(usize, String)>,
-) -> axum::Json<Value> {
-    if !state.store.contains(idx) {
-        return json_resp::alert(format!("theory index {} not found", idx));
-    }
-    // Parse the path: `<lemma>/<case>/.../<method>` or
-    // `<lemma>/<case>/.../<method>/<arg>`.  The shared decoder reverses
-    // the Haskell `prefixWithUnderscore` invariant per segment.
-    let segs: Vec<String> = path_parse::decode_segments(&raw_path);
-    if segs.is_empty() {
-        return json_resp::alert("missing lemma name");
-    }
-    let lemma = segs[0].clone();
-    // Identify the method head — the last segment is the method
-    // unless the second-to-last segment is `solve` (then `solve/<id>`
-    // is the method).
-    let n = segs.len();
-    if n < 2 {
-        return json_resp::alert("missing proof method");
-    }
-    let method_start = if n >= 3 && segs[n - 2] == "solve" {
-        n - 2
-    } else {
-        n - 1
-    };
-    let case_path: Vec<String> = segs[1..method_start].to_vec();
-    let method_segs = &segs[method_start..];
-    let ps = match state.store.ensure_proof_state(idx, &state.cfg) {
-        Ok(p) => p,
-        Err(e) => return json_resp::alert(format!("proof state init failed: {}", e)),
-    };
-    let sys_at_path = match ps.get_system_at(&lemma, &case_path) {
-        Some(s) => s,
-        None => {
-            return json_resp::alert(format!(
-                "no system at path {:?} in lemma {}",
-                case_path, lemma
-            ))
-        }
-    };
-    let method = match crate::handlers::proof_tree::parse_method(method_segs, &sys_at_path) {
-        Some(m) => m,
-        None => return json_resp::alert(format!("unknown proof method: {:?}", method_segs)),
-    };
-    if let Err(e) = ps.apply_at_path(&lemma, &case_path, method) {
-        return json_resp::alert(format!("proof step failed: {e}"));
-    }
-    // Re-render the updated proof tree.  Use the sub-proof snippet
-    // for the node at `case_path` so the response shows Applicable
-    // Proof Methods + Constraint System + N sub-case(s) just like
-    // Haskell does.  Append the full proof tree below for navigation.
-    let root = match ps.get_root(&lemma) {
-        Some(r) => r,
-        None => return json_resp::alert("proof tree disappeared"),
-    };
-    let node = match crate::handlers::proof_tree::navigate_at(&root, &case_path) {
-        Some(n) => n,
-        None => return json_resp::alert(format!("no node at path {:?} after step", case_path)),
-    };
-    let ctx = match ps.context_for_lemma(&lemma) {
-        Ok(ctx) => ctx,
-        Err(e) => return json_resp::alert(e),
-    };
-    let mut html =
-        crate::handlers::proof_tree::render_sub_proof_snippet(idx, &lemma, &case_path, node, &ctx);
-    html.push_str("<hr><h3>Proof tree</h3>\n");
-    html.push_str(&crate::handlers::proof_tree::render_proof_tree_html(
-        idx, &lemma, &root,
-    ));
-    let title = format!("Proof of {}", lemma);
-    json_resp::html(title, html)
 }
 
 /// `POST /thy/trace/<idx>/edit/*path` — STUB.
@@ -1997,15 +2001,12 @@ pub async fn edit_stub(_: State<Arc<AppState>>, _: Path<(usize, String)>) -> axu
 /// `getDeleteStepR` in `src/Web/Handler.hs:1681-1698`.
 ///
 /// Haskell uses `modifyTheory` which allocates a fresh idx for the
-/// post-delete state.  We do the same (clone the snapshot) — full
-/// proof-tree mutation lands later.
+/// post-delete state. We likewise publish a detached snapshot only after the
+/// requested deletion succeeds.
 pub async fn delete_step(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
-    if !state.store.contains(idx) {
-        return json_resp::alert(format!("theory index {} not found", idx)).into_response();
-    }
     // Unparseable path → routing-level 404 (see `parse_path`).
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
@@ -2013,13 +2014,76 @@ pub async fn delete_step(
     match &path {
         // Haskell `removeLemma`-branch.
         path_parse::TheoryPath::Lemma(name) => {
-            let new_idx = state.store.clone_at_new_idx(idx).unwrap_or(idx);
+            let delete_state = state.clone();
+            let name_owned = name.clone();
+            let detached = match tokio::task::spawn_blocking(move || {
+                let mut detached = delete_state
+                    .store
+                    .materialized_snapshot(idx, &delete_state.cfg)?;
+                detached.idx = 0;
+                detached.primary = false;
+                let lemmas: Vec<_> = detached.typed_theory.lemmas().collect();
+                let Some((removed_idx, removed_lemma)) = lemmas
+                    .iter()
+                    .enumerate()
+                    .find(|(_, lemma)| lemma.name == name_owned)
+                else {
+                    return Err(crate::state::StoreError::Build(
+                        "Sorry, but removing the selected lemma failed!".to_string(),
+                    ));
+                };
+                if removed_lemma.attributes.iter().any(|attribute| {
+                    matches!(attribute, tamarin_theory::theory::LemmaAttr::Sources)
+                }) {
+                    return Err(crate::state::StoreError::Build(
+                        "Can't edit or remove source lemmas for now".to_string(),
+                    ));
+                }
+                let invalidated: std::collections::BTreeSet<String> =
+                    if removed_lemma.attributes.iter().any(|attribute| {
+                        matches!(attribute, tamarin_theory::theory::LemmaAttr::Reuse)
+                    }) {
+                        lemmas[removed_idx + 1..]
+                            .iter()
+                            .map(|lemma| lemma.name.clone())
+                            .collect()
+                    } else {
+                        std::collections::BTreeSet::new()
+                    };
+                let mut theory = (*detached.typed_theory).clone();
+                let removed = theory.remove_lemma(&name_owned);
+                debug_assert!(removed);
+                detached.typed_theory = Arc::new(theory);
+                if let Some(previous) = detached.proof_state.take() {
+                    detached.proof_state = Some(Arc::new(
+                        previous
+                            .rebase_onto(
+                                &detached.typed_theory,
+                                detached.ndc_cache.as_ref(),
+                                &delete_state.cfg,
+                                &invalidated,
+                            )
+                            .map_err(crate::state::StoreError::Build)?,
+                    ));
+                }
+                Ok(detached)
+            })
+            .await
+            {
+                Ok(Ok(entry)) => entry,
+                Ok(Err(crate::state::StoreError::NotFound(_))) => return not_found(),
+                Ok(Err(error)) => return json_resp::alert(error.to_string()).into_response(),
+                Err(error) => {
+                    return json_resp::alert(format!("internal error: {error}")).into_response();
+                }
+            };
+            let new_idx = state.store.insert(detached);
             // Haskell `modifyTheory` passes `(const path)` as fpath,
             // i.e. the redirect target is the same path that was
             // deleted (a `TheoryLemma name`).  Render shape:
             // `/thy/trace/<newIdx>/overview/lemma/<name>`.  The URL goes
-            // through Yesod `getUrlRender`, so percent-encode the name
-            // exactly like `apply_method_and_redirect`'s lemma segment.
+            // through Yesod `getUrlRender`, so percent-encode the name with
+            // the shared `url_path_escape` helper.
             json_resp::redirect(format!(
                 "/thy/trace/{}/overview/lemma/{}",
                 new_idx,
@@ -2031,13 +2095,43 @@ pub async fn delete_step(
         // the targeted proof step `sorry`.  Redirect target = same
         // proof path.
         path_parse::TheoryPath::Proof { lemma, sub } => {
-            let new_idx = state.store.clone_at_new_idx(idx).unwrap_or(idx);
+            let delete_state = state.clone();
+            let lemma_owned = lemma.clone();
+            let sub_owned = sub.clone();
+            let detached =
+                match tokio::task::spawn_blocking(move || -> Result<_, crate::state::StoreError> {
+                    let detached = delete_state.store.detached_fork(idx, &delete_state.cfg)?;
+                    let proof = detached
+                        .proof_state
+                        .clone()
+                        .expect("detached_fork always materialises a proof state");
+                    if !proof
+                        .mark_removed_at_path(&lemma_owned, &sub_owned)
+                        .map_err(crate::state::StoreError::Build)?
+                    {
+                        return Err(crate::state::StoreError::Build(
+                            "Sorry, but removing the selected proof step failed!".to_string(),
+                        ));
+                    }
+                    Ok(detached)
+                })
+                .await
+                {
+                    Ok(Ok(entry)) => entry,
+                    Ok(Err(crate::state::StoreError::NotFound(_))) => return not_found(),
+                    Ok(Err(error)) => return json_resp::alert(error.to_string()).into_response(),
+                    Err(error) => {
+                        return json_resp::alert(format!("internal error: {error}"))
+                            .into_response();
+                    }
+                };
+            let new_idx = state.store.insert(detached);
             // URL goes through Yesod `getUrlRender`; percent-encode each
-            // segment via the shared helpers, identical to
-            // `apply_method_and_redirect` (this file).
+            // segment via the shared `overview_proof_url` helper.
             let url = overview_proof_url(new_idx, lemma, sub);
             json_resp::redirect(url).into_response()
         }
+        _ if !state.store.contains(idx) => not_found(),
         _ => json_resp::alert("Can't delete the given theory path!").into_response(),
     }
 }
@@ -2086,6 +2180,35 @@ pub async fn diff_stub(_: State<Arc<AppState>>, _: Path<(usize, String)>) -> axu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_search_options_are_per_invocation() {
+        use tamarin_theory::constraint::solver::context::CutStrategy;
+
+        for (extractor, expected) in [
+            ("idfs", CutStrategy::Dfs),
+            ("bfs", CutStrategy::Bfs),
+            ("seqdfs", CutStrategy::SeqDfs),
+            ("sorry", CutStrategy::AfterSorry),
+            ("characterize", CutStrategy::Nothing),
+        ] {
+            let nested = web_search_options(extractor, 5, false, 3).expect(extractor);
+            assert_eq!(nested.proof_bound, 5);
+            assert_eq!(nested.ranking_depth_offset, 3);
+            assert_eq!(nested.cut, expected);
+            assert!(!nested.oracle_only);
+        }
+
+        let unbounded = web_search_options("characterize", 0, false, 0).expect("all");
+        assert_eq!(unbounded.proof_bound, usize::MAX);
+        assert_eq!(unbounded.cut, CutStrategy::Nothing);
+
+        let quit = web_search_options("characterize", 0, true, 0).expect("quit");
+        assert_eq!(quit.cut, CutStrategy::AfterSorry);
+        assert!(quit.oracle_only);
+        assert!(web_search_options("unknown", 0, false, 0).is_none());
+        assert!(web_search_options("unknown", 0, true, 0).is_none());
+    }
 
     /// The pinned submodule's `src/Web/Theory.hs`, embedded at build time: a
     /// submodule bump recompiles this module against the new source, so the

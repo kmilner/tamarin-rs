@@ -1,0 +1,13 @@
+theory GuardedSource
+begin
+
+rule A:
+  [] --[ A() ]-> []
+
+lemma typing [sources]:
+  "All x #i. A() @ #i ==> x = x"
+
+lemma ok: exists-trace
+  "Ex #i. A() @ #i"
+
+end

@@ -37,6 +37,58 @@ fn empty_store_is_consistent() {
 }
 
 #[test]
+fn singleton_and_factor_simplification_propagate_transport_failure() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let maude = tamarin_term::maude_proc::MaudeHandle::start(
+        &path,
+        tamarin_term::maude_sig::mset_maude_sig(),
+    )
+    .unwrap();
+    let mut store = EquationStore::empty();
+    store.add_disj(vec![LNSubstVFresh::empty()]);
+    let union = |a, b| {
+        tamarin_term::term::Term::App(
+            tamarin_term::function_symbols::FunSym::Ac(
+                tamarin_term::function_symbols::AcSym::Union,
+            ),
+            vec![
+                tamarin_term::vterm::var_term(LVar::new(a, LSort::Msg, 0)),
+                tamarin_term::vterm::var_term(LVar::new(b, LSort::Msg, 0)),
+            ]
+            .into(),
+        )
+    };
+    let x = LVar::new("x", LSort::Msg, 0);
+    store.subst = LNSubst::from_list(vec![(x, union("a", "b"))]);
+    store.add_disj(vec![
+        LNSubstVFresh::from_list(vec![(x, union("c", "d"))]),
+        LNSubstVFresh::from_list(vec![(x, union("e", "f"))]),
+    ]);
+    let mut healthy = store.clone();
+    assert!(healthy
+        .simp_singleton_avoiding(&mut |n| maude.reserve_idxs(n), Some(&maude))
+        .unwrap());
+    let maude = tamarin_term::maude_proc::MaudeHandle::start(
+        &path,
+        tamarin_term::maude_sig::mset_maude_sig(),
+    )
+    .unwrap();
+    maude.kill_subprocess();
+    assert!(matches!(
+        store
+            .clone()
+            .simp_singleton_avoiding(&mut |n| maude.reserve_idxs(n), Some(&maude)),
+        Err(AddEqsError::Maude(_))
+    ));
+    assert!(matches!(
+        store.apply_factor_or_compose(&LNSubst::empty(), Some(&maude)),
+        Err(AddEqsError::Maude(_))
+    ));
+}
+
+#[test]
 fn empty_disj_makes_store_false() {
     let mut s = EquationStore::empty();
     let id = s.add_disj(vec![]);

@@ -1,0 +1,10 @@
+theory GuardedLemma
+begin
+
+rule R:
+    [] --[ A() ]-> []
+
+lemma bad:
+    "All x #i. A() @ #i ==> x = x"
+
+end

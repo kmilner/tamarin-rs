@@ -17,8 +17,8 @@
 //! The Rust port carries all of these, split across two structs: the
 //! per-lemma / post-construction-mutable fields owned directly by
 //! [`ProofContext`], and the immutable-after-build bundle
-//! ([`ProofContextShared`]) held behind an `Arc` so a Maude-swap clone is
-//! a refcount bump rather than a deep copy.
+//! ([`ProofContextShared`]) held behind an `Arc` so a context with a swapped
+//! Maude handle is a refcount bump rather than a deep copy.
 
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool};
 
@@ -50,15 +50,6 @@ impl From<Vec<IntrRuleAC>> for IntrRuleCache {
     }
 }
 
-/// Adopt an already-shared rule list without copying it.  The web
-/// `TheoryEntry` keeps its load-time cache as `Arc<Vec<IntrRuleAC>>`, so
-/// every `ProofState` built from that entry reuses the one allocation.
-impl From<std::sync::Arc<Vec<IntrRuleAC>>> for IntrRuleCache {
-    fn from(rules: std::sync::Arc<Vec<IntrRuleAC>>) -> Self {
-        IntrRuleCache(rules)
-    }
-}
-
 impl std::ops::Deref for IntrRuleCache {
     type Target = [IntrRuleAC];
     fn deref(&self) -> &[IntrRuleAC] {
@@ -79,7 +70,7 @@ impl<'a> IntoIterator for &'a IntrRuleCache {
 /// These fields are computed once at theory-load time and shared unchanged by
 /// every lemma and proof-search worker. Mutable source materialisation lives
 /// directly on [`ProofContext`], outside this bundle.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ProofContextShared {
     /// Protocol rules after loop-breaker and variant annotation. They become
     /// immutable before source precomputation and are shared by every lemma
@@ -96,6 +87,10 @@ pub struct ProofContextShared {
     /// shared [`IntrRuleCache`] handle, so cloning the bundle shares the
     /// rule list instead of copying it.
     pub intruder_rules: IntrRuleCache,
+    /// Action `(tag, arity)` shapes that occur in exactly one protocol or
+    /// intruder rule. `solveUniqueActions` consults this on every simplify
+    /// iteration, so derive it once with the immutable rule bundle.
+    pub(crate) unique_action_shapes: std::collections::BTreeSet<(crate::fact::FactTag, usize)>,
     /// Theory-level restrictions (safety formulas), in guarded form.
     /// Mirrors Haskell's `pcRestrictions` — passed to `initialSource`
     /// so each precomputed source-case starts from a system with the
@@ -104,7 +99,15 @@ pub struct ProofContextShared {
     /// leaving spurious cases (e.g. Responder for `KU(senc)` in
     /// Pattern_matching::Responder_secrecy) that Haskell would have
     /// dropped via the restriction's implied-formula propagation.
-    pub restrictions: Vec<crate::guarded::Guarded>,
+    pub safety_restrictions: Vec<std::sync::Arc<crate::guarded::Guarded>>,
+    /// Non-safety restrictions conjoined into each lemma's initial formula.
+    pub other_restrictions: Vec<std::sync::Arc<crate::guarded::Guarded>>,
+    /// Fact tags whose instances are uniquely identified by their first
+    /// argument. Computed once from the theory and immutable thereafter.
+    pub injective_fact_insts: std::collections::BTreeMap<
+        crate::fact::FactTag,
+        Vec<Vec<crate::tools::injective_fact_instances::MonotonicBehaviour>>,
+    >,
     /// `pcTrueSubterm` — True iff every destructor rule has its
     /// RHS as a proper subterm of its LHS (`all isSubtermRule $
     /// filter isDestrRule $ intruder_rules`).  Mirrors Haskell's
@@ -115,9 +118,9 @@ pub struct ProofContextShared {
     /// when False, all possible subterm syms of the chain-end are
     /// checked for intersection (a more LENIENT test).
     pub pc_true_subterm: bool,
-    /// Cached saturation limit (from `IntegerParameters::current()` — the
-    /// HS default 5 unless `-s/--saturation` overrode it).
-    pub(crate) saturation_limit: usize,
+    /// Solver limits fixed when the context is built, matching Haskell's
+    /// explicit `IntegerParameters` threading.
+    pub(crate) parameters: crate::constraint::solver::sources::IntegerParameters,
 }
 
 /// Minimum-viable context for the solver loop.
@@ -137,18 +140,14 @@ pub struct ProofContext {
     /// pool member's `with_fresh_counter_from(avoid_max)` still gives
     /// HS-faithful per-call witness allocation.
     pub maude_pool: Option<std::sync::Arc<MaudePool>>,
+    /// Which expanded proof nodes retain their constraint systems.
+    pub(crate) sys_retention: crate::constraint::solver::search::SysRetention,
+    /// Emit Haskell-compatible source-saturation progress messages.
+    pub(crate) show_saturation_steps: bool,
     /// Whether the solver should attempt induction at the start of a
     /// proof. Mirrors Haskell's `pcUseInduction` flag.  Set per-lemma
     /// (`force_induction`), so owned rather than shared.
     pub use_induction: UseInduction,
-    /// Set of fact tags whose instances we know to be uniquely
-    /// identified by their first argument (the "injective" facts).
-    /// Mirrors Haskell's `pcInjectiveFactInsts`.  Owned (not shared)
-    /// because a few unit tests replace it after construction.
-    pub injective_fact_insts: Vec<(
-        crate::fact::FactTag,
-        Vec<Vec<crate::tools::injective_fact_instances::MonotonicBehaviour>>,
-    )>,
     /// Set when the current proof is for an exists-trace lemma.
     /// Used by `is_finished` to decide whether the Fresh-conflation
     /// case-drop should convert Contradictory→Unfinishable: for
@@ -172,7 +171,7 @@ pub struct ProofContext {
     /// (HS-faithful: `refineWithSourceAsms` operates on lazy `Source`
     /// thunks; its work only fires when a downstream consumer forces
     /// a `cdCases` thunk).  Per-lemma, so owned.
-    pub typing_assumptions: Vec<crate::guarded::Guarded>,
+    pub typing_assumptions: Vec<std::sync::Arc<crate::guarded::Guarded>>,
     /// The goal ranking list for this lemma, mirroring HS's
     /// `Heuristic ProofContext = Heuristic [GoalRanking ProofContext]`
     /// (System.hs:521-522).  `None` ⇒ HS's `defaultHeuristic False`
@@ -183,6 +182,9 @@ pub struct ProofContext {
     /// Round-robin scheduling: depth d → `rankings[d % n]`
     /// (ProofMethod.hs).  Per-lemma, so owned.
     pub heuristic: Option<Vec<crate::constraint::solver::goals::GoalRanking>>,
+    /// Whether lazily refining this context's sources can fail. Fallible
+    /// searches stay serial so an error cannot be hidden behind an unbounded
+    /// sibling running in parallel.
     /// The name of the lemma being proved.  Passed as `argv[1]` to
     /// the oracle script (HS `L.get pcLemmaName ctxt`, ProofMethod.hs).
     /// Per-lemma, so owned.
@@ -192,16 +194,45 @@ pub struct ProofContext {
     /// (HS Theory/Text/Parser.hs:309, System.hs:575-576).  Stored as the absolute
     /// path passed to `--prove`.  Per-lemma, so owned.
     pub theory_file: String,
-    /// Per-lemma source cells. Their materialised case vectors are immutable
-    /// `Arc`s, so context clones share the heavy systems while keeping their
-    /// own lazy cell.
-    pub full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
+    /// Source-cell layout for this context. Session-backed contexts own these
+    /// lightweight cells while sharing their materialised case vectors.
+    pub(crate) full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
+    /// Optional session-level source materialiser. Batch/web contexts install
+    /// this so the first actual `pcSources` access can populate the shared
+    /// raw/refined cache; standalone contexts saturate themselves directly.
+    pub(crate) source_provider: Option<std::sync::Arc<dyn SourceProvider>>,
     /// Per-context lazy saturation gate.
     pub(crate) saturate_gate: SaturateGate,
     /// Read-only theory data (`intruder_rules`, `restrictions`, …), shared
     /// behind an `Arc`. Field reads are
     /// transparent through the [`std::ops::Deref`] implementation below.
     pub shared: std::sync::Arc<ProofContextShared>,
+}
+
+/// Theory-wide inputs used to build a proof context.
+#[derive(Default)]
+pub struct ProofContextOptions {
+    pub maude_pool: Option<std::sync::Arc<MaudePool>>,
+    pub restrictions: Vec<crate::guarded::Guarded>,
+    pub forced_injective_facts: Vec<crate::fact::FactTag>,
+    pub intruder_rules: Option<IntrRuleCache>,
+    pub parameters: crate::constraint::solver::sources::IntegerParameters,
+    pub sys_retention: crate::constraint::solver::search::SysRetention,
+    pub show_saturation_steps: bool,
+    /// The caller already annotated loop breakers while closing the theory.
+    /// Standalone contexts leave this false. Variant preparation is completed
+    /// here in either case because raw AC queries are phase-sensitive.
+    pub loop_breakers_prepared: bool,
+}
+
+pub(crate) trait SourceProvider: std::fmt::Debug + Send + Sync {
+    /// Whether materialisation can fail for this provider. Unknown
+    /// implementations are conservatively fallible.
+    fn may_fail(&self) -> bool {
+        true
+    }
+
+    fn materialize(&self, ctx: &ProofContext) -> Result<(), crate::prove::ProveError>;
 }
 
 /// Transparent read access to immutable theory data.
@@ -212,11 +243,11 @@ impl std::ops::Deref for ProofContext {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SaturateState {
     Pending,
     InProgress(std::thread::ThreadId),
-    Done,
+    Done(Result<(), crate::prove::ProveError>),
 }
 
 #[derive(Debug)]
@@ -234,49 +265,81 @@ impl SaturateGate {
     }
 }
 
-impl Clone for ProofContext {
-    fn clone(&self) -> Self {
-        let current_thread = std::thread::current().id();
-        let mut state = self
-            .saturate_gate
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cloned_state = loop {
-            match *state {
-                SaturateState::Pending => break SaturateState::Pending,
-                SaturateState::Done => break SaturateState::Done,
-                SaturateState::InProgress(owner) if owner == current_thread => {
-                    // A same-thread clone can only be used by saturation's
-                    // recursive machinery. Its source cells are a coherent
-                    // snapshot of the previous fix-point iteration.
-                    break SaturateState::Done;
-                }
-                SaturateState::InProgress(_) => {
-                    state = self
-                        .saturate_gate
-                        .ready
-                        .wait(state)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                }
-            }
-        };
-        drop(state);
-        ProofContext {
+impl ProofContext {
+    pub(crate) fn proving_may_fail(&self) -> bool {
+        self.source_provider
+            .as_ref()
+            .is_some_and(|provider| provider.may_fail())
+            || self
+                .heuristic
+                .as_deref()
+                .is_some_and(crate::constraint::solver::goals::rankings_may_fail)
+    }
+
+    /// Materialise this context's sources and return independent working
+    /// copies. Source forcing belongs here so a caller cannot accidentally
+    /// pair a lazy source cell with a different context.
+    pub fn source_cases(
+        &self,
+    ) -> Result<
+        Vec<(
+            crate::constraint::constraints::Goal,
+            Vec<crate::constraint::solver::sources::SourceCase>,
+        )>,
+        crate::prove::ProveError,
+    > {
+        self.ensure_saturated()?;
+        Ok(self
+            .full_sources
+            .iter()
+            .map(|source| (source.goal.clone(), source.cases_or_empty()))
+            .collect())
+    }
+
+    /// Return one materialised source-case system by zero-based indices.
+    pub fn source_case_system_at(
+        &self,
+        source: usize,
+        case: usize,
+    ) -> Result<Option<crate::constraint::system::System>, crate::prove::ProveError> {
+        self.ensure_saturated()?;
+        Ok(self
+            .full_sources
+            .get(source)
+            .and_then(|source| source.case_system_at(case)))
+    }
+
+    fn copy_with_sources(
+        &self,
+        full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
+        saturate_state: SaturateState,
+    ) -> Self {
+        Self {
             maude: self.maude.clone(),
             maude_pool: self.maude_pool.clone(),
+            sys_retention: self.sys_retention,
+            show_saturation_steps: self.show_saturation_steps,
             use_induction: self.use_induction,
-            injective_fact_insts: self.injective_fact_insts.clone(),
             is_exists_trace: self.is_exists_trace,
             cut: self.cut,
             typing_assumptions: self.typing_assumptions.clone(),
             heuristic: self.heuristic.clone(),
             lemma_name: self.lemma_name.clone(),
             theory_file: self.theory_file.clone(),
-            full_sources: std::sync::Arc::new(self.full_sources.iter().cloned().collect()),
-            saturate_gate: SaturateGate::new(cloned_state),
+            full_sources,
+            source_provider: self.source_provider.clone(),
+            saturate_gate: SaturateGate::new(saturate_state),
             shared: std::sync::Arc::clone(&self.shared),
         }
+    }
+
+    /// Build an independent context around a fresh set of lazy source cells.
+    /// Materialised cases may still be shared by a session source provider.
+    pub(crate) fn fresh_with_sources(
+        &self,
+        full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
+    ) -> Self {
+        self.copy_with_sources(full_sources, SaturateState::Pending)
     }
 }
 
@@ -298,14 +361,14 @@ impl<'a> SaturationRun<'a> {
         }
     }
 
-    fn finish(mut self) {
+    fn finish(mut self, result: Result<(), crate::prove::ProveError>) {
         self.ctx.maude.reset_counter_to(self.counter_before);
         *self
             .ctx
             .saturate_gate
             .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Done;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Done(result);
         self.completed = true;
         self.ctx.saturate_gate.ready.notify_all();
     }
@@ -336,7 +399,7 @@ pub enum UseInduction {
 /// How the auto-prover cuts the proof tree around solved leaves,
 /// mirroring HS `SolutionExtractor` (Theory/Proof.hs:693-694) as selected
 /// by `runAutoProver` (Theory/Proof.hs:730-739).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum CutStrategy {
     /// HS `CutDFS` → `cutOnSolvedDFS` (Theory/Proof.hs:845-884): parallel
     /// iterative-deepening DFS, doubling `dMax` from 4.  Selects the leftmost
@@ -346,6 +409,7 @@ pub enum CutStrategy {
     /// right, so this is NOT globally-shallowest.  The default when
     /// `--stop-on-trace` is absent
     /// (HS `constructAutoProver`: `fromMaybe CutDFS`, TheoryLoader.hs:802-810, see line 809).
+    #[default]
     Dfs,
     /// HS `CutSingleThreadDFS` → `cutOnSolvedSingleThreadDFS`
     /// (Theory/Proof.hs:788-814): single-thread depth-first with NO depth
@@ -381,7 +445,7 @@ pub enum CutStrategy {
 
 impl ProofContext {
     pub fn new(maude: MaudeHandle, rules: Vec<OpenProtoRule>) -> Self {
-        Self::new_with_restrictions(maude, rules, Vec::new())
+        Self::with_options(maude, rules, ProofContextOptions::default())
     }
 
     /// Cheap clone with `maude` replaced.  Used at the rayon parallel
@@ -389,9 +453,10 @@ impl ProofContext {
     /// `maude_pool`) for the duration of one task, so workers don't
     /// serialise on a single Maude's IPC mutex.
     ///
-    /// Immutable theory data remains shared through `Arc`. Completed or
-    /// active source snapshots are shared with workers; a defensive call
-    /// before saturation instead gives the worker independent source cells.
+    /// Immutable theory data remains shared through `Arc`. Completed source
+    /// snapshots are shared with workers; an ordinary worker waits for an
+    /// active saturation pass, while a defensive call before saturation gets
+    /// independent source cells.
     ///
     /// The new context drops `maude_pool` (set to None): the worker
     /// already owns a per-task subprocess for the task's duration, and
@@ -400,40 +465,40 @@ impl ProofContext {
     /// what prevents deadlock when the pool is smaller than the rayon
     /// worker count.
     pub fn with_swapped_maude(&self, maude: MaudeHandle) -> Self {
-        let parent_state = *self
-            .saturate_gate
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let parent_state = {
+            let mut state = self
+                .saturate_gate
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            while matches!(*state, SaturateState::InProgress(_)) {
+                state = self
+                    .saturate_gate
+                    .ready
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            state.clone()
+        };
         let (full_sources, worker_state) = match parent_state {
             SaturateState::Pending => (
                 std::sync::Arc::new(self.full_sources.iter().cloned().collect()),
                 SaturateState::Pending,
             ),
-            SaturateState::InProgress(_) | SaturateState::Done => (
+            SaturateState::InProgress(_) => unreachable!("in-progress saturation was awaited"),
+            SaturateState::Done(result) => (
                 std::sync::Arc::clone(&self.full_sources),
-                SaturateState::Done,
+                SaturateState::Done(result),
             ),
         };
-        ProofContext {
-            maude,
-            maude_pool: None,
-            use_induction: self.use_induction,
-            injective_fact_insts: self.injective_fact_insts.clone(),
-            is_exists_trace: self.is_exists_trace,
-            cut: self.cut,
-            typing_assumptions: self.typing_assumptions.clone(),
-            heuristic: self.heuristic.clone(),
-            lemma_name: self.lemma_name.clone(),
-            theory_file: self.theory_file.clone(),
-            full_sources,
-            // Saturation workers read the previous iteration's source cells;
-            // proof-search workers inherit an already-complete set. Both are
-            // O(1) refcount bumps. A defensive pre-saturation call instead
-            // receives independent lazy cells and remains Pending.
-            saturate_gate: SaturateGate::new(worker_state),
-            shared: std::sync::Arc::clone(&self.shared),
-        }
+        // Saturation workers read the previous iteration's source cells;
+        // proof-search workers inherit an already-complete set. Both are O(1)
+        // refcount bumps. A defensive pre-saturation call instead receives
+        // independent lazy cells and remains Pending.
+        let mut worker = self.copy_with_sources(full_sources, worker_state);
+        worker.maude = maude;
+        worker.maude_pool = None;
+        worker
     }
 
     /// HS-faithful lazy `saturateSources` (Sources.hs:355-384, see line 373).  Runs at
@@ -447,8 +512,7 @@ impl ProofContext {
     /// cases (e.g. Var-headed `KU(t:Fresh)` source on an existence
     /// lemma) never call this, so zero saturate-time `[EXEC]` lines
     /// fire — matching HS's lazy-thunk behaviour.
-    pub fn ensure_saturated(&self) {
-        let saturate_cnt_before = self.maude.fresh_counter_peek();
+    pub(crate) fn ensure_saturated(&self) -> Result<(), crate::prove::ProveError> {
         {
             let current_thread = std::thread::current().id();
             let mut state = self
@@ -457,15 +521,15 @@ impl ProofContext {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             loop {
-                match *state {
-                    SaturateState::Done => return,
-                    SaturateState::InProgress(owner) if owner == current_thread => {
+                match &*state {
+                    SaturateState::Done(result) => return result.clone(),
+                    SaturateState::InProgress(owner) if *owner == current_thread => {
                         // Re-entrant call from inside saturate's own
                         // source-case grafting.  Return without re-running
                         // — the caller sees the partially-populated cells,
                         // matching HS's lazy fix-point semantics where
                         // iteration N forces iteration N-1's cached value.
-                        return;
+                        return Ok(());
                     }
                     SaturateState::InProgress(_) => {
                         state = self
@@ -481,7 +545,17 @@ impl ProofContext {
                 }
             }
         }
+        // Snapshot only after this thread owns the saturation run. A waiter
+        // may observe the shared Maude counter while the owner is using it;
+        // taking the snapshot before the gate would then restore that
+        // transient value instead of the caller's counter.
+        let saturate_cnt_before = self.maude.fresh_counter_peek();
         let run = SaturationRun::new(self, saturate_cnt_before);
+        if let Some(provider) = &self.source_provider {
+            let result = provider.materialize(self);
+            run.finish(result.clone());
+            return result;
+        }
         // HS-FAITHFUL PURITY: source refinement (`precomputeSources` /
         // `saturateSources` / `refineWithSourceAsms`, Sources.hs) is a PURE
         // `[Source] -> [Source]` computation with LOCAL `evalFresh (avoid
@@ -511,77 +585,79 @@ impl ProofContext {
                 src.cases_set(Vec::new());
             }
         }
-        for src in self.full_sources.iter() {
-            let init =
-                crate::constraint::solver::sources::initial_source_cases_pub(&src.goal, self);
-            src.cases_set(init);
-        }
-        // HS-faithful `saturate_sources_with_simp` (mirrors HS's
-        // `saturateSources` driven by `solveAllSafeGoals` as the
-        // proofStep): each iteration performs HS's per-step
-        // `insertEdges`/`solveTermEqs`/`exploitPrems` work, so the
-        // emitted trace matches HS's saturation rather than collapsing
-        // it into a single graft operation.
-        let raw: Vec<crate::constraint::solver::sources::Source> = self.full_sources.to_vec();
-        let saturated = crate::constraint::solver::sources::saturate_sources_with_simp(
-            raw,
-            self.saturation_limit,
-            self,
+        // Saturation's own solver calls must see the previous iteration's
+        // partially populated source cells without recursively entering (or
+        // waiting on) this gate. Giving the whole pass one completed view
+        // makes that invariant structural; ordinary contexts still wait for
+        // the real result in `with_swapped_maude`.
+        let saturation_ctx = self.copy_with_sources(
+            std::sync::Arc::clone(&self.full_sources),
+            SaturateState::Done(Ok(())),
         );
-        // HS-faithful: apply `refineWithSourceAsms` AFTER saturate.
-        // HS does this lazily — `refineWithSourceAsms` produces
-        // updated `Source` thunks that only fire their inner saturate
-        // when forced.  We approximate by running both inside
-        // `ensure_saturated` (which itself is lazy at the first
-        // `cases(ctx)` call), so the refinement traces still
-        // interleave with the lemma proof's first source-case access
-        // rather than firing during `prove_lemma` setup.
-        let refined = if self.typing_assumptions.is_empty() {
-            saturated
-        } else {
-            crate::constraint::solver::sources::refine_with_source_asms(
-                saturated,
-                &self.typing_assumptions,
-                self,
-            )
-        };
-        // Match saturated sources back to originals BY GOAL.  Saturate
-        // may drop sources whose cases all `mzero` during `refineSource`
-        // (HS's `runReduction proofStep ctxt se fs` returns Disj.empty),
-        // so the saturated list can be SHORTER than `full_sources`.  HS
-        // keeps `cdGoal` stable across saturate iters (only `cdCases`
-        // changes), so `cdGoal` is the join key.
-        for orig in self.full_sources.iter() {
-            let sat = refined.iter().find(|s| s.goal == orig.goal);
-            // HS-faithful: `saturateSources` maps `refineSource` over its
-            // input one-for-one (Sources.hs:379) and `refineSource` returns
-            // `set cdCases newCases th` (Sources.hs:113-120, see line 120),
-            // so it keeps ONE source per input and every
-            // `orig.goal` has a match in `refined` — including sources whose
-            // refine produced ZERO cases (the case list is just empty).  We
-            // overwrite the cell with the refined cases (possibly empty),
-            // matching HS's `cdCases = []` for goals with no source (e.g. the
-            // builtin destructors `check_rep`/`get_rep`).  The `if let Some`
-            // remains a defensive guard: should a future refine path ever
-            // drop a source from the list, we leave the initial cases rather
-            // than blanking an unrelated cell — but on the HS-faithful path
-            // the match always succeeds.
-            if let Some(s) = sat {
-                orig.cases_set_shared(s.cases_shared_or_empty());
+        let result = (|| {
+            for src in self.full_sources.iter() {
+                let init = crate::constraint::solver::sources::initial_source_cases(
+                    &src.goal,
+                    &saturation_ctx,
+                )?;
+                src.cases_set(init);
             }
-        }
-        // Restore the fresh counter to its pre-saturation value (see the
-        // HS-FAITHFUL PURITY note above): the refine consumed idxs only for
-        // the stored cases, which are re-freshened from `avoid(live_sys)` on
-        // every apply, so the global counter must not retain the advance.
-        self.dump_sources();
-        run.finish();
+            // HS-faithful `saturate_sources_with_simp` (mirrors HS's
+            // `saturateSources` driven by `solveAllSafeGoals` as the
+            // proofStep): each iteration performs HS's per-step
+            // `insertEdges`/`solveTermEqs`/`exploitPrems` work, so the
+            // emitted trace matches HS's saturation rather than collapsing
+            // it into a single graft operation.
+            let raw: Vec<crate::constraint::solver::sources::Source> = self.full_sources.to_vec();
+            let saturated = crate::constraint::solver::sources::saturate_sources_with_simp(
+                raw,
+                self.parameters.saturation_limit(),
+                &saturation_ctx,
+            )?;
+            // HS-faithful: apply `refineWithSourceAsms` AFTER saturate.
+            // HS does this lazily — `refineWithSourceAsms` produces
+            // updated `Source` thunks that only fire their inner saturate
+            // when forced.  We approximate by running both inside
+            // `ensure_saturated` (which itself is lazy at the first
+            // `cases(ctx)` call), so the refinement traces still
+            // interleave with the lemma proof's first source-case access
+            // rather than firing during `prove_lemma` setup.
+            let refined = if self.typing_assumptions.is_empty() {
+                saturated
+            } else {
+                crate::constraint::solver::sources::refine_with_source_asms(
+                    saturated,
+                    &self.typing_assumptions,
+                    &saturation_ctx,
+                )?
+            };
+            // Saturation and refinement preserve one source per input, even
+            // when its case list becomes empty. Check that contract before
+            // publishing any of the refined cells.
+            assert_eq!(self.full_sources.len(), refined.len());
+            assert!(self
+                .full_sources
+                .iter()
+                .zip(&refined)
+                .all(|(original, refined)| original.goal == refined.goal));
+            for (original, refined) in self.full_sources.iter().zip(&refined) {
+                original.cases_set_shared(refined.cases_shared_or_empty());
+            }
+            // Restore the fresh counter to its pre-saturation value (see the
+            // HS-FAITHFUL PURITY note above): the refine consumed idxs only for
+            // the stored cases, which are re-freshened from `avoid(live_sys)` on
+            // every apply, so the global counter must not retain the advance.
+            self.dump_sources();
+            Ok(())
+        })();
+        run.finish(result.clone());
+        result
     }
 
     /// Mark this context's sources as already saturated, bypassing the
-    /// `ensure_saturated` pass.  Used by the session-level refined-source
-    /// cache (lever #3): when the cases have been restored from a sibling
-    /// lemma's identical computation, set the state to `Done` so later
+    /// `ensure_saturated` pass. Used by the session-level refined-source
+    /// cache: when raw cases are restored into its internal refinement
+    /// context, set the state to `Done` so later
     /// `cases(ctx)` calls read the restored cells directly instead of
     /// re-running the (expensive) `saturate_sources_with_simp` pass.
     pub(crate) fn mark_saturated_done(&self) {
@@ -589,42 +665,12 @@ impl ProofContext {
             .saturate_gate
             .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Done;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Done(Ok(()));
         self.saturate_gate.ready.notify_all();
     }
 
-    /// Variant that accepts the theory-level restrictions.  Mirrors
-    /// Haskell's `precomputeSources parameters ctxt restrictions`
-    /// which threads restrictions into each `initialSource`'s system
-    /// via `insertLemmas`.  Restrictions then fire on rule actions
-    /// during saturate, dropping cases that violate them — e.g.
-    /// `True_is_true` on Responder's `IsTrue(z)` action drops the
-    /// Responder case for `KU(senc(...))` in Pattern_matching.
-    pub fn new_with_restrictions(
-        maude: MaudeHandle,
-        rules: Vec<OpenProtoRule>,
-        restrictions: Vec<crate::guarded::Guarded>,
-    ) -> Self {
-        Self::new_with_restrictions_and_pool(maude, None, rules, restrictions)
-    }
-
-    /// Like [`new_with_restrictions`] but also installs a
-    /// `MaudePool` on the constructed context so the precompute /
-    /// saturate phase (which happens INSIDE this constructor via
-    /// `precompute_full_sources`) can dispatch work across the pool
-    /// rather than serialising on the single shared Maude.
-    ///
-    /// Callers without a pool should keep calling
-    /// `new_with_restrictions` — the precompute will use the single
-    /// `maude` for every parallel task, which is correct (just
-    /// contended).
-    pub fn new_with_restrictions_and_pool(
-        maude: MaudeHandle,
-        maude_pool: Option<std::sync::Arc<MaudePool>>,
-        rules: Vec<OpenProtoRule>,
-        restrictions: Vec<crate::guarded::Guarded>,
-    ) -> Self {
-        Self::new_with_restrictions_pool_forced(maude, maude_pool, rules, restrictions, &[], None)
+    pub(crate) fn set_source_provider(&mut self, provider: std::sync::Arc<dyn SourceProvider>) {
+        self.source_provider = Some(provider);
     }
 
     /// HS-faithful assembly of the intruder-rule cache
@@ -886,69 +932,42 @@ impl ProofContext {
         )
     }
 
-    /// Like [`new_with_restrictions_and_pool`] but also unions the FORCED
-    /// injective fact tags into `injective_fact_insts` BEFORE source
-    /// precomputation — mirroring HS `closeRuleCache` (CloseRule.hs:402-427,
-    /// see line 419), where `injFactInstances` (forced ∪ simple) seeds
-    /// `ctxt0`, which then drives `precomputeSources`.  Used for the SAPIC
-    /// state-channel optimisation
-    /// (`setforcedInjectiveFacts {L_PureState, L_CellLocked}`,
-    /// lib/sapic/src/Sapic.hs:84).
-    ///
-    /// `intr_override`: the theory's once-per-load NDC-checked intruder
-    /// cache (`close_rule::check_close_intr_rule`), injected so this
-    /// context reuses the tagged+permuted rules instead of re-assembling —
-    /// HS `closeRuleCache` consumes `_thyCache` verbatim.  `None`
-    /// assembles from the signature with the cache permutation applied
-    /// (no property check).  A `Some` argument shares the caller's rule
-    /// list rather than copying it.
-    pub fn new_with_restrictions_pool_forced(
+    /// Build a context with explicit theory-wide options.
+    pub fn with_options(
         maude: MaudeHandle,
-        maude_pool: Option<std::sync::Arc<MaudePool>>,
         rules: Vec<OpenProtoRule>,
-        restrictions: Vec<crate::guarded::Guarded>,
-        forced_injective_facts: &[crate::fact::FactTag],
-        intr_override: Option<IntrRuleCache>,
+        options: ProofContextOptions,
     ) -> Self {
-        Self::new_impl(
-            maude,
+        Self::try_with_options(maude, rules, options)
+            .expect("prepare protocol-rule variants for proof context")
+    }
+
+    /// Build a context while preserving Maude failures from protocol-rule
+    /// variant preparation. Frontends use this form so a broken transport
+    /// cannot be mistaken for a rule with no variants.
+    pub fn try_with_options(
+        maude: MaudeHandle,
+        rules: Vec<OpenProtoRule>,
+        options: ProofContextOptions,
+    ) -> Result<Self, crate::tools::rule_variants::VariantsError> {
+        let ProofContextOptions {
             maude_pool,
-            rules,
             restrictions,
             forced_injective_facts,
-            intr_override,
-        )
-    }
-
-    /// Build a context whose intruder-rule cache is INJECTED rather than
-    /// assembled from the signature.  Used by the NDC deduction check's
-    /// synthetic theories (cache = the parent's pre-check cache mapped
-    /// through `boundToOne`; HS `closeTheoryWithMaude sig t` with
-    /// `thyCache = intrRmodified`, CloseRule.hs) and by the
-    /// message-derivation probe contexts (cache = the parent theory's
-    /// checked `_thyCache`, which HS probes inherit verbatim,
-    /// MessageDerivationChecks.hs).  No NDC pass runs on the injected
-    /// cache (HS's re-closing never re-checks).
-    /// Both callers build many contexts off ONE cache (one per probe rule,
-    /// one per decomposition of a checked rule pair), so the handle is
-    /// shared rather than copied per context.
-    pub fn new_with_injected_intruder_rules(
-        maude: MaudeHandle,
-        rules: Vec<OpenProtoRule>,
-        restrictions: Vec<crate::guarded::Guarded>,
-        intruder_rules: IntrRuleCache,
-    ) -> Self {
-        Self::new_impl(maude, None, rules, restrictions, &[], Some(intruder_rules))
-    }
-
-    fn new_impl(
-        maude: MaudeHandle,
-        maude_pool: Option<std::sync::Arc<MaudePool>>,
-        mut rules: Vec<OpenProtoRule>,
-        restrictions: Vec<crate::guarded::Guarded>,
-        forced_injective_facts: &[crate::fact::FactTag],
-        intr_override: Option<IntrRuleCache>,
-    ) -> Self {
+            intruder_rules: intr_override,
+            mut parameters,
+            mut sys_retention,
+            show_saturation_steps,
+            loop_breakers_prepared,
+        } = options;
+        let mut rules = rules;
+        if std::env::var_os("TAM_RS_KEEP_SYS").is_some() {
+            sys_retention = crate::constraint::solver::search::SysRetention::KeepAll;
+        }
+        let (safety_restrictions, other_restrictions) = restrictions
+            .into_iter()
+            .map(std::sync::Arc::new)
+            .partition(|restriction| crate::guarded::is_safety_formula(restriction));
         // Inherit the maude signature from the handle so we can
         // synthesise per-symbol construction rules.
         let sig = maude.maude_sig();
@@ -980,195 +999,51 @@ impl ProofContext {
             injective_fact_insts =
                 crate::tools::injective_fact_instances::union_forced_injective_fact_instances(
                     injective_fact_insts,
-                    forced_injective_facts,
+                    &forced_injective_facts,
                 );
         }
-        // Compute loop-breakers and annotate the protocol rules in
-        // place — direct port of Haskell's `useAutoLoopBreakersAC`
-        // (`Theory.Tools.LoopBreakers`).  Edge `R_from → R_to.prem`
-        // exists iff some conclusion of `R_from` is Maude AC-unifiable
-        // with `R_to.prem`.  Loop-breaker analysis runs on
-        // `(rule_name, prem_idx)` pairs.
-        annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &maude);
-        // Compute rule variants — direct port of Haskell's
-        // `variantsProtoRule` over every protocol rule.  For rules
-        // containing reducible (destructor) sub-terms, Maude produces
-        // multiple narrowing variants; we pre-apply each variant's
-        // substitution to the rule's facts so the solver can enumerate
-        // destructor-narrowed instances without further Maude calls.
-        //
-        // Without this, chain-fold for `KU(t:Fresh)` over a rule like
-        // `Responder: ... --[ ]-> [Out(snd(sdec(msg, key)))]` cannot
-        // find the narrowed instance `msg → senc(pair(_, t), key)`
-        // ⇒ `Out(t)`, leaving exists-trace lemmas that need this path
-        // unprovable (e.g. T&D::Public_part_public).
-        // `rule_has_reducible` (below) only SELECTS which path a rule
-        // takes in the loop at the end of this block — rules carrying a
-        // *reducible* (destructor) function symbol in some fact term go
-        // through `abstract_rule_and_variants`, the rest through
-        // `rename_precise_rule_if_changed` / `variant_substs_for_rule`.
-        // No rule is skipped; see the HS-faithfulness note on that loop
-        // for why skipping one would desynchronise `sNextGoalNr`.
-        let term_has_reducible = |t: &tamarin_term::lterm::LNTerm| -> bool {
-            t.any_fun_sym(|f| sig.reducible_fun_syms_fast.contains(f))
-        };
-        // Rules with destructors anywhere — conclusions, premises,
-        // ACTIONS, or new_vars — benefit from rule-variant plumbing.
-        // Haskell's `variantsProtoRule` abstracts every reducible-
-        // headed subterm in `prems ++ concs ++ acts ++ nvs` into a
-        // fresh `z` var and computes the disjunction of
-        // substitutions Maude returns from its variant narrowing
-        // (RuleVariants.hs:92-98).
-        //
-        // A conclusions-only filter is insufficient: rules like
-        // `--[ Equality(verify(sig, ...), true) ]->` (issue193,
-        // TLS_Handshake) have reducible terms in their ACTIONS:
-        // without variant expansion, the equality restriction
-        // `All x y. Equality(x,y) ⇒ x=y` instantiates to
-        // `Eq(verify(sig:Msg, ...), true)` which Maude
-        // `unify in MSG` (AC-only, no [variant] eqs) reports as
-        // unifiable-free → `eq_store.is_false` → false contradiction.
-        // With variants, the action is abstracted to
-        // `Equality(z, true)` and the variant subst {z → true,
-        // sig → revealSign(...)} provides the closing witness case.
-        let rule_has_reducible = |r: &crate::rule::ProtoRuleE| -> bool {
-            r.conclusions
-                .iter()
-                .chain(r.premises.iter())
-                .chain(r.actions.iter())
-                .any(|f| f.terms.iter().any(&term_has_reducible))
-                || r.new_vars.iter().any(&term_has_reducible)
-        };
-        // Rule-variant plumbing: matches Haskell's `variantsProtoRule`
-        // behaviour. Broadens search for protocols with destructors in
-        // conclusions (e.g. T&D::Responder), which is required to find
-        // destructor-narrowed exists-trace witnesses (e.g.
-        // T&D::Public_part_public).
-        // Compute the variants up front; they are installed onto
-        // `ctx.rules` BEFORE source precomputation so that
-        // `precompute_full_sources` sees the variant-expanded rule set,
-        // matching HS (whose precompute runs
-        // over `cprRuleAC` = the variant-expanded AC rules;
-        // Items/RuleItem.hs:56-59, see line 58).
-        let mut computed_variant_substs: Vec<(
-            usize,
-            Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
-        )> = Vec::new();
-        let mut computed_abstracted_rules: Vec<(
-            usize,
-            crate::rule::ProtoRuleE,
-            Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
-        )> = Vec::new();
-        // SplitG variants is the Haskell-faithful path
-        // (`someRuleACInst` + `solveRuleConstraints` from
-        // Theory/Model/Rule.hs:1013-1028 / Reduction.hs:788-797).  Always on.
-        //
-        // HS-faithful (RuleVariants.hs:60-133): `variantsProtoRule` runs
-        // UNCONDITIONALLY for every closed protocol rule.  For rules with no
-        // reducible-headed sub-terms, the variant disjunction collapses to
-        // `Disj [emptySubstVFresh]` (the `trueDisj` constant at
-        // RuleVariants.hs:60-133, see line 119); `someRuleACInst` then
-        // returns `Just (Disj [emptySubstVFresh])` for EVERY ProtoRule, so
-        // `solveRuleConstraints (Just trueDisj)` (Reduction.hs:788-797) still
-        // calls `insertGoal (SplitG splitId) False` — bumping `sNextGoalNr`
-        // by 1 at every `labelNodeId` call regardless of whether the rule has
-        // any destructors.  Skipping the variant-substs computation for
-        // non-destructor rules would under-bump that counter and desynchronise
-        // RS's gsNr trace from HS's at every destructor-free `labelNodeId`
-        // (e.g. Yubikey.spthy::Server, Yubikey.spthy::Setup), which the
-        // smart-rank tie-breaker would then resolve differently.
-        for (idx, o) in rules.iter().enumerate() {
-            // The constraint solver reads only `abstracted_rule` +
-            // `variant_substs` (`canonical_rule_inst` /
-            // `rule_insts_with_constrs` in reduction.rs), so the RAW
-            // `get variants` Maude query (the single biggest Maude cost on
-            // bilinear protocols) is skipped and only the abstracted form +
-            // substs are computed.
-            //
-            // The variant substitutions and the abstracted rule are computed
-            // ONCE, HS-faithfully, by `abstract_rule_and_variants` (the
-            // `abstrRule` port: it abstracts each reducible-headed sub-term to
-            // a fresh `z_i`, queries Maude on the SMALL abstracted form, and
-            // composes the variant substs back via `composeVFresh vsubst
-            // abstractionSubst`, mirroring RuleVariants.hs:66-90, see line 74).  This is
-            // exactly what `populate_rule_variants` (run.rs) already ran during
-            // theory elaboration, so when those fields are present we REUSE
-            // them rather than re-querying Maude.
-            let has_reducible = rule_has_reducible(&o.rule);
-            if has_reducible {
-                // Reuse the pass-1 (`populate_rule_variants`) result when it
-                // already populated this rule; otherwise compute it here (e.g.
-                // when `ProofContext::new` is driven on rules that never went
-                // through elaboration's variant pass).  Either way the
-                // abstracted form is computed AT MOST ONCE — no RAW query.
-                if o.abstracted_rule.is_none()
-                    && o.variant_substs.is_empty()
-                    && let Ok(Some((abstr, av_substs))) =
-                        crate::tools::rule_variants::abstract_rule_and_variants(&maude, &o.rule)
-                {
-                    computed_abstracted_rules.push((idx, abstr, av_substs));
-                }
-            } else {
-                // Non-reducible rule: HS's `variantsProtoRule` still runs and
-                // collapses to the trivial disjunction `[emptySubstVFresh]`
-                // (`trueDisj`, RuleVariants.hs:60-133, see line 119), BUT it FIRST applies
-                // `renamePrecise` (RuleVariants.hs:60-133, see line 63) to the rule — re-indexing
-                // every variable to a PER-NAME fresh index.  This packs
-                // distinct-named rule variables (e.g. a SAPiC `lock` + `v`) onto
-                // the same low index (`lock.0` + `v.0`, not `lock.0` + `v.1`).
-                // We must reproduce BOTH effects:
-                //   (1) the renamePrecise packing → set `abstracted_rule` when
-                //       it rewrites a var (the disjunction stays `[empty]`, whose
-                //       empty domain cannot misalign the packed rule body); and
-                //   (2) the trivial variant disjunction → `variant_substs =
-                //       [empty]` so `solve_rule_constraints` still bumps
-                //       `next_goal_nr` (matching HS's `insertGoal (SplitG _)`).
-                // Applying only (2) left rule vars at their translation indices,
-                // which spread the source-case fresh-var seed (`avoid th`, one
-                // index per extra span) so saturated raw/refined source cases
-                // rendered `#vr`/`~n` node ids off-by-N from HS.
-                if o.abstracted_rule.is_none() && o.variant_substs.is_empty() {
-                    if let Some(packed) =
-                        crate::tools::rule_variants::rename_precise_rule_if_changed(&o.rule)
-                    {
-                        computed_abstracted_rules.push((
-                            idx,
-                            packed,
-                            vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()],
-                        ));
-                    } else if let Ok(substs) =
-                        crate::tools::rule_variants::variant_substs_for_rule(&maude, &o.rule)
-                        && !substs.is_empty()
-                    {
-                        computed_variant_substs.push((idx, substs));
-                    }
-                }
-            }
+        let injective_fact_insts = injective_fact_insts.into_iter().collect();
+        if !loop_breakers_prepared {
+            annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &maude);
         }
-        // `pcTrueSubterm` — `all isSubtermRule $ filter isDestrRule $
-        // intruder_rules`.  Mirrors `ClosedTheory.getProofContext`
-        // (`lib/theory/src/ClosedTheory.hs:96-139, see line 112`).  When the destructor
-        // set contains only subterm-rules (sdec / fst / snd / etc., as
-        // opposed to constant-RHS rules like `isPair → true`), the
-        // strict variant of `hasImpossibleChain` applies.
+        for rule in &mut rules {
+            crate::tools::rule_variants::prepare_open_rule_variant(rule, &maude)?;
+        }
+        // `pcTrueSubterm` — all destructor rules are subterm rules.
         let pc_true_subterm = intruder_rules
             .iter()
             .filter(|r| crate::rule::is_destr_rule(&r.info))
             .all(|r| crate::rule::is_subterm_rule_info(&r.info));
-        // Finish annotating the local rule vector before sharing it. Solver
-        // contexts never mutate rules after construction.
-        for (idx, substs) in computed_variant_substs {
-            rules[idx].variant_substs = substs;
-        }
-        for (idx, abstr, av_substs) in computed_abstracted_rules {
-            rules[idx].abstracted_rule = Some(abstr);
-            rules[idx].variant_substs = av_substs;
+        let unique_action_shapes = {
+            let mut counts = std::collections::BTreeMap::new();
+            for action in rules
+                .iter()
+                .flat_map(|rule| &rule.rule.actions)
+                .chain(intruder_rules.iter().flat_map(|rule| &rule.actions))
+            {
+                *counts
+                    .entry((action.tag, action.terms.len()))
+                    .or_insert(0usize) += 1;
+            }
+            counts
+                .into_iter()
+                .filter_map(|(shape, count)| (count == 1).then_some(shape))
+                .collect()
+        };
+        // The diagnostic environment knob deliberately outranks the frontend
+        // value, but is still snapshotted with the rest of this context.
+        if let Some(limit) = std::env::var("TAM_SATURATION_LIMIT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+        {
+            parameters = parameters.with_saturation_limit(limit);
         }
         let mut ctx = ProofContext {
             maude,
             maude_pool,
+            sys_retention,
+            show_saturation_steps,
             use_induction: UseInduction::AvoidInduction,
-            injective_fact_insts,
             is_exists_trace: false,
             cut: CutStrategy::Dfs,
             typing_assumptions: Vec::new(),
@@ -1176,22 +1051,17 @@ impl ProofContext {
             lemma_name: String::new(),
             theory_file: String::new(),
             full_sources: std::sync::Arc::new(Vec::new()),
+            source_provider: None,
             saturate_gate: SaturateGate::new(SaturateState::Pending),
             shared: std::sync::Arc::new(ProofContextShared {
                 rules,
                 intruder_rules,
-                restrictions,
+                unique_action_shapes,
+                safety_restrictions,
+                other_restrictions,
+                injective_fact_insts,
                 pc_true_subterm,
-                // The debug env knob outranks the CLI `-s` (a developer
-                // setting it mid-bisect expects it to win); `current()`
-                // folds the CLI override over the HS default.
-                saturation_limit: std::env::var("TAM_SATURATION_LIMIT")
-                    .ok()
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .unwrap_or_else(|| {
-                        crate::constraint::solver::sources::IntegerParameters::current()
-                            .saturation_limit as usize
-                    }),
+                parameters,
             }),
         };
         // Precompute full source-case enumerations.  Runs *after*
@@ -1238,7 +1108,7 @@ impl ProofContext {
         // Haskell relies on saturate-time `contradictoryIf` inside
         // `solveAllSafeGoals` (Sources.hs:174-178, see line 178) + runtime
         // contradiction detection during proof search.
-        ctx
+        Ok(ctx)
     }
 }
 
@@ -1533,19 +1403,8 @@ mod tests {
         assert_eq!(shared.len(), n);
     }
 
-    /// `From<Arc<Vec<_>>>` adopts the caller's allocation — this is what
-    /// lets the web `TheoryEntry`'s stored cache reach a `ProofContext`
-    /// without a copy.
     #[test]
-    fn intr_rule_cache_from_arc_adopts_the_same_allocation() {
-        let shared = std::sync::Arc::new(sample_rules());
-        let cache = IntrRuleCache::from(shared.clone());
-        assert_eq!(cache.as_ptr(), shared.as_ptr());
-        assert_eq!(&*cache, shared.as_slice());
-    }
-
-    #[test]
-    fn worker_snapshot_shares_sources_but_normal_clone_does_not() {
+    fn worker_snapshot_shares_sources() {
         let Some(path) = require_maude_path() else {
             return;
         };
@@ -1559,55 +1418,83 @@ mod tests {
         );
         ctx.mark_saturated_done();
         let worker = ctx.with_swapped_maude(ctx.maude.clone());
-        let independent = ctx.clone();
-
         assert!(std::sync::Arc::ptr_eq(
             &ctx.full_sources,
             &worker.full_sources
         ));
-        assert!(!std::sync::Arc::ptr_eq(
-            &ctx.full_sources,
-            &independent.full_sources
-        ));
         assert_eq!(
             *worker.saturate_gate.state.lock().unwrap(),
-            SaturateState::Done
+            SaturateState::Done(Ok(()))
         );
     }
 
     #[test]
-    fn clone_waits_for_another_threads_saturation() {
+    fn ordinary_worker_waits_for_saturation_and_inherits_its_error() {
         let Some(path) = require_maude_path() else {
             return;
         };
-        let ctx = std::sync::Arc::new(ProofContext::new(
+        let ctx = ProofContext::new(
             tamarin_term::maude_proc::MaudeHandle::start(
                 &path,
                 tamarin_term::maude_sig::pair_maude_sig(),
             )
             .unwrap(),
             Vec::new(),
-        ));
+        );
         *ctx.saturate_gate.state.lock().unwrap() =
             SaturateState::InProgress(std::thread::current().id());
 
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let other = std::sync::Arc::clone(&ctx);
-        let join = std::thread::spawn(move || {
-            ready_tx.send(()).unwrap();
-            let cloned = other.as_ref().clone();
-            done_tx
-                .send(*cloned.saturate_gate.state.lock().unwrap())
-                .unwrap();
+        std::thread::scope(|scope| {
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let ctx_ref = &ctx;
+            scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                let worker = ctx_ref.with_swapped_maude(ctx_ref.maude.clone());
+                done_tx
+                    .send(worker.saturate_gate.state.lock().unwrap().clone())
+                    .unwrap();
+            });
+            started_rx.recv().unwrap();
+            assert!(matches!(
+                done_rx.recv_timeout(std::time::Duration::from_millis(25)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+
+            *ctx.saturate_gate.state.lock().unwrap() = SaturateState::Done(Err(
+                crate::prove::ProveError::Guarded("conversion failed".into()),
+            ));
+            ctx.saturate_gate.ready.notify_all();
+            assert_eq!(
+                done_rx.recv().unwrap(),
+                SaturateState::Done(Err(crate::prove::ProveError::Guarded(
+                    "conversion failed".into()
+                )))
+            );
         });
-        ready_rx.recv().unwrap();
-        assert!(done_rx
-            .recv_timeout(std::time::Duration::from_millis(25))
-            .is_err());
-        ctx.mark_saturated_done();
-        assert_eq!(done_rx.recv().unwrap(), SaturateState::Done);
-        join.join().unwrap();
+    }
+
+    #[test]
+    fn fresh_session_layout_resets_saturation_result() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let ctx = ProofContext::new(
+            tamarin_term::maude_proc::MaudeHandle::start(
+                &path,
+                tamarin_term::maude_sig::pair_maude_sig(),
+            )
+            .unwrap(),
+            Vec::new(),
+        );
+        *ctx.saturate_gate.state.lock().unwrap() =
+            SaturateState::Done(Err(crate::prove::ProveError::Guarded("old".into())));
+
+        let fresh = ctx.fresh_with_sources(std::sync::Arc::clone(&ctx.full_sources));
+        assert_eq!(
+            *fresh.saturate_gate.state.lock().unwrap(),
+            SaturateState::Pending
+        );
     }
 
     #[test]

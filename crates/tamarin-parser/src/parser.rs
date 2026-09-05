@@ -529,6 +529,39 @@ pub fn parse_diff_theory_with_base(
     Ok(thy)
 }
 
+/// One parser-selected source input and the path it must have when staged
+/// beside the root theory. `None` denotes an absolute input outside that tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputAlias {
+    pub physical: PathBuf,
+    pub staged: Option<PathBuf>,
+}
+
+/// Parse a theory while recording the root and every active include. This is
+/// the dependency authority for cache keys and web staging: inactive branches,
+/// comments and text after `end` are interpreted by the real grammar rather
+/// than a second scanner.
+pub fn parse_theory_with_manifest(
+    input: &str,
+    flags: &[&str],
+    root: PathBuf,
+    is_diff: bool,
+) -> Result<(Theory, Vec<InputAlias>), ParseError> {
+    let staged = root.file_name().map(PathBuf::from);
+    let inputs = vec![InputAlias {
+        physical: root.clone(),
+        staged: staged.clone(),
+    }];
+    let mut parser = Parser::new(input, flags, is_diff);
+    parser.base_dir = root.parent().map(PathBuf::from);
+    parser.source_file = Some(root);
+    parser.staged_file = staged;
+    parser.state.input_aliases = inputs;
+    parser.state.emit_warnings = false;
+    let theory = parser.theory()?;
+    Ok((theory, parser.state.input_aliases))
+}
+
 /// Parse a stream of intruder-rule declarations of the form
 ///     `rule (modulo AC) <name>[<limit>]: [..] --[..]-> [..]`
 /// (with no surrounding `theory ... begin ... end` wrapper).
@@ -851,29 +884,6 @@ fn theory_noeq_syms() -> &'static TheoryNoEqSyms {
     })
 }
 
-/// Intern an AC-symbol name for the `'static` borrow [`BinOp::AcFct`]
-/// carries.  Names are deduplicated process-wide, so re-parses leak at most
-/// one allocation per distinct `[AC]` symbol name.  Equality on the variant is
-/// by string VALUE (`str: PartialEq`), so entries interned here compare equal
-/// to ones other crates intern for the same name.
-fn intern_ac_name(name: &str) -> &'static str {
-    use std::collections::BTreeSet;
-    use std::sync::{Mutex, OnceLock};
-    static INTERNED: OnceLock<Mutex<BTreeSet<&'static str>>> = OnceLock::new();
-    let mut set = INTERNED
-        .get_or_init(|| Mutex::new(BTreeSet::new()))
-        .lock()
-        .expect("AC-name interner poisoned");
-    match set.get(name) {
-        Some(s) => s,
-        None => {
-            let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
-            set.insert(leaked);
-            leaked
-        }
-    }
-}
-
 /// Resolution of a prefix-application head — see [`Parser::lookup_arity`].
 #[derive(Clone, Copy, Debug)]
 enum ArityRes {
@@ -914,107 +924,50 @@ impl ArityRes {
     }
 }
 
-pub struct Parser<'a> {
-    lx: Lexer<'a>,
-    /// Defined preprocessor flags. Mutated by `#define` directives.
-    // parsed flag-name set; membership only, never iterated into output;
-    // std kept (byte-inert) — iteration order never reaches output.
+/// Parser state inherited by an included file and returned to its parent.
+/// Lexer position, source identity, and diagnostic carry remain file-local on
+/// [`Parser`]. Keeping the inherited state in one value makes that boundary
+/// structural instead of maintaining a parallel field list.
+struct ParserState {
     #[allow(clippy::disallowed_types)]
     flags: HashSet<String>,
-    /// Whether we're parsing a diff theory. Set only from the `Parser::new`
-    /// argument supplied by the caller and echoed into `Theory::is_diff`;
-    /// `theory()` does not derive it from `flags` or a `#define diff` preamble.
-    is_diff: bool,
-    /// HS `enableDiff . sig` — the signature bit that makes the `diff(a, b)`
-    /// term operator legal (Theory/Text/Parser/Term.hs:123-135, see line 128).
-    ///
-    /// Three sites set it, and they are the only ones:
-    ///   * `theory` when the CLI-defined flag set contains `diff`
-    ///     (Theory/Text/Parser.hs:232-237, see line 234) — i.e. `-D=diff`;
-    ///   * `diffTheory`, unconditionally (Theory/Text/Parser.hs:399-410, see line 401);
-    ///   * `diffEquivLemma`, right after its colon, for the rest of the parse
-    ///     (Theory/Text/Parser/Sapic.hs:212-217, see line 215).
-    ///
-    /// It is deliberately NOT read off [`Parser::flags`]: that set is mutated by
-    /// `#define`, whereas HS reads `flags0` once at `theory`'s entry.  (`#define
-    /// diff` cannot define it anyway — `diff` is a reserved name, so the
-    /// directive's `identifier` rejects it.)
     enable_diff: bool,
-    /// Directory of the file currently being parsed (`takeDirectory inFile0` in
-    /// HS).  `#include "file"` resolves relative to this; `None` (no source
-    /// file) means includes are taken verbatim, mirroring HS's `Nothing` case.
-    base_dir: Option<PathBuf>,
-    /// Names of the user-declared AC function symbols (`functions:` entries
-    /// carrying the `[AC]` attribute), which `acterm` turns into infix
-    /// operators.  This is the parse-time signature state HS reads as
-    /// `stACFunSyms . sig <$> getState` (Theory/Text/Parser/Term.hs:165-174):
-    /// only symbols declared EARLIER in the file are infix operators for the
-    /// terms that follow.
-    ///
-    /// Held ascending by name (and deduplicated), matching the
-    /// `S.toList (stACFunSyms sig)` order HS's nested `parseACSym` recursion
-    /// consumes — `ACfctSym`'s `Ord` compares the name first, so set order is
-    /// name order.  The order is load-bearing: the LAST symbol in the list binds
-    /// tightest.
+    input_aliases: Vec<InputAlias>,
+    emit_warnings: bool,
     ac_fun_syms: Arc<Vec<String>>,
-    /// The free function symbols known at this point of the parse, the
-    /// parse-time slice of HS's `stFunSyms . sig <$> getState` that
-    /// `function`'s conflict check reads (Theory/Text/Parser/Signature.hs:212).
-    ///
-    /// Seeded with `pairFunSig` (`fst/1`, `pair/2`, `snd/1`, all
-    /// `Public, Constructor, NotNDC` — Term/Term/FunctionSymbols.hs:247-261) in
-    /// `S.toList` order, because `parseFile` starts from `sig = pairMaudeSig`
-    /// (Token.hs:260-261).  A `builtins:` item merges the row of
-    /// [`builtin_st_fun_sym_table`] it names; user `functions:` declarations add
-    /// their own symbol, except `[AC]` ones (HS files those under
-    /// `stACFunSyms` via `ACfctUser`, Term/Maude/Signature.hs:170-173).
-    ///
-    /// Held as an ordered set — ascending by name, then by
-    /// [`FunOptions::ord_key`] — because HS's `lookup f (S.toList …)` takes the
-    /// FIRST match, and one name can carry two entries (e.g. `builtins:
-    /// symmetric-encryption, dest-symmetric-encryption` leaves both the
-    /// constructor and the destructor `sdec`).
     fun_syms: Arc<Vec<(String, FunOptions)>>,
-    /// The macro names known at this point of the parse (HS `macroNames`),
-    /// each registered as `(k, Private, Destructor, NotNDC)`
-    /// (Theory/Text/Parser/Macro.hs:46).  Searched after [`Parser::fun_syms`],
-    /// matching HS's `lookup f (S.toList (stFunSyms sign) ++ S.toList
-    /// (macroNames sign))` (Theory/Text/Parser/Signature.hs:212).
     macro_syms: Arc<Vec<(String, FunOptions)>>,
-    /// HS `reservedBuiltinNames` (Theory/Text/Parser/Token.hs parser state):
-    /// the names of the `stFunSyms` of every builtin a `builtins:` item has
-    /// enabled so far, appended by `extendSig`
-    /// (Theory/Text/Parser/Signature.hs:132-134).
-    ///
-    /// Only the non-diff `builtins` parser fills it; `diffbuiltins`
-    /// (Theory/Text/Parser/Signature.hs:141-148) merges the signature without
-    /// touching it, so a
-    /// diff theory reserves nothing and `function`'s builtin pre-check can
-    /// never fire there.
     reserved_builtin_names: Vec<String>,
-    /// The `enableDH`/`enableBP`/`enableXor`/`enableMSet`/`enableNat` bits of
-    /// HS's parse-time `MaudeSig` (Term/Maude/Signature.hs:90-108), flipped by
-    /// the `builtins:` names whose signatures carry only these flags
-    /// (Term/Maude/Signature.hs:200-205).
-    ///
-    /// Each one opens its own term chain level: `*` and `^`
-    /// ([`Parser::multterm`], [`Parser::expterm`]), `XOR`/`⊕`
-    /// ([`Parser::xorterm`]), `%+` ([`Parser::natterm`]) and `++`/`+`
-    /// ([`Parser::msetterm_inner`]), each level falling through to the next one
-    /// down while its bit is clear (Theory/Text/Parser/Term.hs:179-208).  They
-    /// also select the theory-level function symbols `funSyms` contributes to
-    /// the macro-name conflict check (Theory/Text/Parser/Macro.hs:43,
-    /// Term/Maude/Signature.hs:110-125,163-164) and the operator `expecting`
-    /// labels the open levels leave behind ([`Parser::term_carry_labels`]).
-    ///
-    /// `sig_enable_dh` covers `enableBP` too: the `maudeSig` smart constructor
-    /// sets `enableDH = enableDH || enableBP` (Term/Maude/Signature.hs:110-112),
-    /// so `builtins: bilinear-pairing` sets both bits here.
     sig_enable_dh: bool,
     sig_enable_bp: bool,
     sig_enable_xor: bool,
     sig_enable_mset: bool,
     sig_enable_nat: bool,
+    seen_rules: Vec<Rule>,
+    seen_restriction_names: Vec<String>,
+    seen_lemma_names: Vec<String>,
+    seen_diff_left_lemma_names: Vec<String>,
+    seen_diff_right_lemma_names: Vec<String>,
+    seen_diff_lemma_names: Vec<String>,
+    seen_predicates: Vec<(bool, String, usize)>,
+}
+
+pub struct Parser<'a> {
+    lx: Lexer<'a>,
+    state: ParserState,
+    /// Whether we're parsing a diff theory. Set only from the `Parser::new`
+    /// argument supplied by the caller and echoed into `Theory::is_diff`.
+    is_diff: bool,
+    /// Directory of the file currently being parsed (`takeDirectory inFile0` in
+    /// HS).  `#include "file"` resolves relative to this; `None` (no source
+    /// file) means includes are taken verbatim, mirroring HS's `Nothing` case.
+    base_dir: Option<PathBuf>,
+    /// Exact included fragment currently being parsed. Root entry points only
+    /// receive a base directory, so `None` there falls back to the loader's
+    /// source filename during elaboration.
+    source_file: Option<PathBuf>,
+    /// Staged spelling of [`Self::source_file`] relative to the root input.
+    staged_file: Option<PathBuf>,
     /// Whether the last atomic term consumed was a variable whose optional
     /// dot-index attempt failed at the position the parse now stands at.
     ///
@@ -1112,43 +1065,6 @@ pub struct Parser<'a> {
     /// their labels to the next item-position error.  Consumed by
     /// [`Parser::item_position_error`].
     item_hangover: Option<(usize, &'static [&'static str])>,
-    /// First occurrence of each protocol-rule name parsed so far, in item
-    /// order — the lookup set HS `lookupOpenProtoRule` (OpenTheory.hs:679-682,
-    /// a `find` over `theoryRules`, hence first occurrence wins) consults when
-    /// `addOpenProtoRule` (OpenTheory.hs:691-702) guards a newly parsed rule.
-    /// Fed and read by [`Parser::guard_duplicate_rule`]; threaded through
-    /// `#include` sub-parsers like the signature state (HS runs one `addItems`
-    /// accumulation across included files).
-    seen_rules: Vec<Rule>,
-    /// Names of the restrictions in the theory so far: user
-    /// `restriction:`/`axiom:` items plus the `Restr_<rule>_<i>` restrictions
-    /// that `_restrict` expansion mints per rule (HS `fromRuleRestriction`,
-    /// Model/Restriction.hs:141-149, `restrPrefix = "Restr_"`).  This is the
-    /// name set `addRestriction` (TheoryObject.hs:453-456) guards against when
-    /// `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) inserts a rule's
-    /// expanded restrictions — checked BEFORE the rule-name guard itself.
-    seen_restriction_names: Vec<String>,
-    /// Names of the lemmas parsed so far — the set `addLemma`
-    /// (TheoryObject.hs:462-465, a name lookup via `lookupLemma`) guards
-    /// against when `liftedAddLemma` (Theory/Text/Parser.hs:141-147) inserts
-    /// a newly parsed lemma; a reused name fails as `duplicate lemma: <name>`
-    /// (Theory/Text/Parser/Exceptions.hs:39).  Threaded through `#include`
-    /// sub-parsers like [`Parser::seen_rules`].
-    seen_lemma_names: Vec<String>,
-    /// Per-side regular-lemma namespaces used only by a true diff-theory
-    /// parse (`addLemmaDiff LHS/RHS`). An unsided lemma occupies both.
-    seen_diff_left_lemma_names: Vec<String>,
-    seen_diff_right_lemma_names: Vec<String>,
-    /// The separate `diffLemma` namespace (`addDiffLemma`).
-    seen_diff_lemma_names: Vec<String>,
-    /// `(persistent, name, arity)` — the fact-tag key `lookupPredicate`
-    /// compares (Theory/Syntactic/Predicate.hs:77-80, `sameName` is tag
-    /// equality) — of each predicate declared so far, seeded with the builtin
-    /// `Smaller/2` (Theory/Syntactic/Predicate.hs:58-67), which the lookup
-    /// list always appends.  `addPredicate` (TheoryObject.hs:540-543) guards
-    /// a new declaration against this set; a collision fails as
-    /// `duplicate predicate: <fact>` (Theory/Text/Parser/Exceptions.hs:43).
-    seen_predicates: Vec<(bool, String, usize)>,
 }
 
 impl<'a> Parser<'a> {
@@ -1162,23 +1078,36 @@ impl<'a> Parser<'a> {
         }
         Parser {
             lx: Lexer::new(src),
-            enable_diff: is_diff || flags_set.contains("diff"),
-            flags: flags_set,
+            state: ParserState {
+                enable_diff: is_diff || flags_set.contains("diff"),
+                flags: flags_set,
+                input_aliases: Vec::new(),
+                emit_warnings: true,
+                ac_fun_syms: Arc::new(Vec::new()),
+                fun_syms: Arc::new(vec![
+                    ("fst".to_string(), FunOptions::plain(1)),
+                    ("pair".to_string(), FunOptions::plain(2)),
+                    ("snd".to_string(), FunOptions::plain(1)),
+                ]),
+                macro_syms: Arc::new(Vec::new()),
+                reserved_builtin_names: Vec::new(),
+                sig_enable_dh: false,
+                sig_enable_bp: false,
+                sig_enable_xor: false,
+                sig_enable_mset: false,
+                sig_enable_nat: false,
+                seen_rules: Vec::new(),
+                seen_restriction_names: Vec::new(),
+                seen_lemma_names: Vec::new(),
+                seen_diff_left_lemma_names: Vec::new(),
+                seen_diff_right_lemma_names: Vec::new(),
+                seen_diff_lemma_names: Vec::new(),
+                seen_predicates: vec![(false, "Smaller".to_string(), 2)],
+            },
             is_diff,
             base_dir: None,
-            ac_fun_syms: Arc::new(Vec::new()),
-            fun_syms: Arc::new(vec![
-                ("fst".to_string(), FunOptions::plain(1)),
-                ("pair".to_string(), FunOptions::plain(2)),
-                ("snd".to_string(), FunOptions::plain(1)),
-            ]),
-            macro_syms: Arc::new(Vec::new()),
-            reserved_builtin_names: Vec::new(),
-            sig_enable_dh: false,
-            sig_enable_bp: false,
-            sig_enable_xor: false,
-            sig_enable_mset: false,
-            sig_enable_nat: false,
+            source_file: None,
+            staged_file: None,
             var_dot_hangover: false,
             dot_index_consumed: false,
             sort_suffix_consumed: false,
@@ -1190,14 +1119,14 @@ impl<'a> Parser<'a> {
             sapic_var_types: false,
             allow_pat: false,
             item_hangover: None,
-            seen_rules: Vec::new(),
-            seen_restriction_names: Vec::new(),
-            seen_lemma_names: Vec::new(),
-            seen_diff_left_lemma_names: Vec::new(),
-            seen_diff_right_lemma_names: Vec::new(),
-            seen_diff_lemma_names: Vec::new(),
-            seen_predicates: vec![(false, "Smaller".to_string(), 2)],
         }
+    }
+
+    /// Exchange the parse state that an included fragment inherits and
+    /// returns. File-local lexer and diagnostic carry state deliberately stay
+    /// with each parser.
+    fn swap_include_state(&mut self, other: &mut Parser<'_>) {
+        std::mem::swap(&mut self.state, &mut other.state);
     }
 
     // -------- Error helpers --------
@@ -1361,22 +1290,22 @@ impl<'a> Parser<'a> {
         if dot {
             labels.push(Message::Expect("\".\"".to_string()));
         }
-        for name in self.ac_fun_syms.iter().rev() {
+        for name in self.state.ac_fun_syms.iter().rev() {
             labels.push(Message::Expect(format!("\"{name}\"")));
         }
         if !eqn {
-            if self.sig_enable_dh {
+            if self.state.sig_enable_dh {
                 labels.push(Message::Expect("\"^\"".to_string()));
                 labels.push(Message::Expect("\"*\"".to_string()));
             }
-            if self.sig_enable_xor {
+            if self.state.sig_enable_xor {
                 labels.push(Message::Expect("\"XOR\"".to_string()));
                 labels.push(Message::Expect("\"⊕\"".to_string()));
             }
-            if self.sig_enable_nat {
+            if self.state.sig_enable_nat {
                 labels.push(Message::Expect("\"%+\"".to_string()));
             }
-            if self.sig_enable_mset {
+            if self.state.sig_enable_mset {
                 labels.push(Message::Expect("\"++\"".to_string()));
                 labels.push(Message::Expect("\"+\"".to_string()));
             }
@@ -1875,7 +1804,7 @@ impl<'a> Parser<'a> {
             "define" => {
                 self.skip_ws();
                 let id = self.ident()?;
-                self.flags.insert(id.clone());
+                self.state.flags.insert(id.clone());
                 Ok(Some(TheoryItem::Define(id)))
             }
             "include" => {
@@ -1968,6 +1897,20 @@ impl<'a> Parser<'a> {
             Some(dir) => dir.join(&raw_path),
             None => PathBuf::from(&raw_path),
         };
+        let staged = if PathBuf::from(&raw_path).is_absolute() {
+            None
+        } else {
+            self.staged_file.as_ref().map(|source| {
+                source
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new(""))
+                    .join(&raw_path)
+            })
+        };
+        self.state.input_aliases.push(InputAlias {
+            physical: resolved.clone(),
+            staged: staged.clone(),
+        });
 
         let content = std::fs::read_to_string(&resolved).map_err(|e| {
             self.err(format!(
@@ -1980,7 +1923,7 @@ impl<'a> Parser<'a> {
         // Nested includes in the fragment resolve relative to ITS directory
         // (HS recurses: `takeDirectory filepath`).
         let sub_base = resolved.parent().map(|p| p.to_path_buf());
-        self.parse_include_fragment(&content, sub_base)
+        self.parse_include_fragment(&content, sub_base, resolved, staged)
     }
 
     /// Parse a header-less theory-item fragment (an included file body — no
@@ -1996,62 +1939,30 @@ impl<'a> Parser<'a> {
         &mut self,
         content: &str,
         sub_base: Option<PathBuf>,
+        source_file: PathBuf,
+        staged_file: Option<PathBuf>,
     ) -> Result<Vec<TheoryItem>, ParseError> {
         let mut sub = Parser::new(content, &[], self.is_diff);
         // Thread parser state IN (HS `getState` before `parseFileWState`).
-        sub.flags = self.flags.clone();
-        sub.enable_diff = self.enable_diff;
-        sub.ac_fun_syms = self.ac_fun_syms.clone();
-        sub.fun_syms = self.fun_syms.clone();
-        sub.macro_syms = self.macro_syms.clone();
-        sub.reserved_builtin_names = self.reserved_builtin_names.clone();
-        sub.sig_enable_dh = self.sig_enable_dh;
-        sub.sig_enable_bp = self.sig_enable_bp;
-        sub.sig_enable_xor = self.sig_enable_xor;
-        sub.sig_enable_mset = self.sig_enable_mset;
-        sub.sig_enable_nat = self.sig_enable_nat;
+        self.swap_include_state(&mut sub);
         sub.base_dir = sub_base;
-        // The duplicate-rule / duplicate-restriction guards run over the whole
-        // accumulated theory (HS: one `addItems` fold spans included files), so
-        // the registries thread in and back out with the rest of the state.
-        sub.seen_rules = std::mem::take(&mut self.seen_rules);
-        sub.seen_restriction_names = std::mem::take(&mut self.seen_restriction_names);
-        sub.seen_lemma_names = std::mem::take(&mut self.seen_lemma_names);
-        sub.seen_diff_left_lemma_names = std::mem::take(&mut self.seen_diff_left_lemma_names);
-        sub.seen_diff_right_lemma_names = std::mem::take(&mut self.seen_diff_right_lemma_names);
-        sub.seen_diff_lemma_names = std::mem::take(&mut self.seen_diff_lemma_names);
-        sub.seen_predicates = std::mem::take(&mut self.seen_predicates);
+        sub.source_file = Some(source_file);
+        sub.staged_file = staged_file;
 
         // Parse the header-less item stream: same loop as a theory body, but it
         // terminates at EOF (there is no `end` keyword in a fragment).
-        let items = sub.theory_items_until_end()?;
-        sub.skip_ws();
-        if !sub.lx.is_eof() {
-            return Err(sub.err("unexpected trailing input in included file"));
-        }
+        let result = (|| {
+            let items = sub.theory_items_until_end()?;
+            sub.skip_ws();
+            if !sub.lx.is_eof() {
+                return Err(sub.err("unexpected trailing input in included file"));
+            }
+            Ok(items)
+        })();
 
-        // Thread parser state BACK (HS `putState st'` + `sig st'` merge): pick up
-        // any new flags and AC function symbols the included file declared.
-        self.flags = sub.flags;
-        self.enable_diff = sub.enable_diff;
-        self.ac_fun_syms = sub.ac_fun_syms;
-        self.fun_syms = sub.fun_syms;
-        self.macro_syms = sub.macro_syms;
-        self.reserved_builtin_names = sub.reserved_builtin_names;
-        self.sig_enable_dh = sub.sig_enable_dh;
-        self.sig_enable_bp = sub.sig_enable_bp;
-        self.sig_enable_xor = sub.sig_enable_xor;
-        self.sig_enable_mset = sub.sig_enable_mset;
-        self.sig_enable_nat = sub.sig_enable_nat;
-        self.seen_rules = sub.seen_rules;
-        self.seen_restriction_names = sub.seen_restriction_names;
-        self.seen_lemma_names = sub.seen_lemma_names;
-        self.seen_diff_left_lemma_names = sub.seen_diff_left_lemma_names;
-        self.seen_diff_right_lemma_names = sub.seen_diff_right_lemma_names;
-        self.seen_diff_lemma_names = sub.seen_diff_lemma_names;
-        self.seen_predicates = sub.seen_predicates;
-
-        Ok(items)
+        // Thread parser state BACK (HS `putState st'` + `sig st'` merge).
+        self.swap_include_state(&mut sub);
+        result
     }
 
     fn skip_until(&mut self, terminator: &str) {
@@ -2147,16 +2058,16 @@ impl<'a> Parser<'a> {
         // which merge signatures identically
         // (Theory/Text/Parser/Signature.hs:102-148).
         match name {
-            "diffie-hellman" => self.sig_enable_dh = true,
+            "diffie-hellman" => self.state.sig_enable_dh = true,
             // `maudeSig` sets `enableDH = enableDH || enableBP`
             // (Term/Maude/Signature.hs:110-112).
             "bilinear-pairing" => {
-                self.sig_enable_bp = true;
-                self.sig_enable_dh = true;
+                self.state.sig_enable_bp = true;
+                self.state.sig_enable_dh = true;
             }
-            "xor" => self.sig_enable_xor = true,
-            "multiset" => self.sig_enable_mset = true,
-            "natural-numbers" => self.sig_enable_nat = true,
+            "xor" => self.state.sig_enable_xor = true,
+            "multiset" => self.state.sig_enable_mset = true,
+            "natural-numbers" => self.state.sig_enable_nat = true,
             _ => {}
         }
         if !self.is_diff {
@@ -2172,7 +2083,7 @@ impl<'a> Parser<'a> {
                 let mut clashes: Vec<&str> = Vec::new();
                 for s in syms {
                     let want = FunOptions::of_no_eq(s);
-                    for (n, o) in self.fun_syms.iter() {
+                    for (n, o) in self.state.fun_syms.iter() {
                         if n.as_bytes() == s.name && *o != want {
                             clashes.push(sym_name(s));
                         }
@@ -2195,7 +2106,11 @@ impl<'a> Parser<'a> {
             let mut macro_clashes: Vec<&str> = Vec::new();
             for s in syms {
                 let want = FunOptions::of_no_eq(s);
-                if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n.as_bytes() == s.name)
+                if let Some((_, o)) = self
+                    .state
+                    .macro_syms
+                    .iter()
+                    .find(|(n, _)| n.as_bytes() == s.name)
                     && *o != want
                 {
                     macro_clashes.push(sym_name(s));
@@ -2208,7 +2123,8 @@ impl<'a> Parser<'a> {
                     show_string_list(&macro_clashes)
                 )));
             }
-            self.reserved_builtin_names
+            self.state
+                .reserved_builtin_names
                 .extend(syms.iter().map(|s| sym_name(s).to_string()));
         }
         // `modifyStateSig (mappend msig)`, whose `unionExceptPairSym`
@@ -2223,7 +2139,8 @@ impl<'a> Parser<'a> {
                     destructor: !opts.destructor,
                     ..opts
                 };
-                Arc::make_mut(&mut self.fun_syms).retain(|(n, o)| !(n == fname && *o == evicted));
+                Arc::make_mut(&mut self.state.fun_syms)
+                    .retain(|(n, o)| !(n == fname && *o == evicted));
             }
             self.insert_fun_sym(fname, FunOptions::of_no_eq(s));
         }
@@ -2236,11 +2153,14 @@ impl<'a> Parser<'a> {
     fn insert_fun_sym(&mut self, name: &str, opts: FunOptions) {
         let key = (name.as_bytes(), opts.ord_key());
         match self
+            .state
             .fun_syms
             .binary_search_by(|(n, o)| (n.as_bytes(), o.ord_key()).cmp(&key))
         {
             Ok(_) => {}
-            Err(idx) => Arc::make_mut(&mut self.fun_syms).insert(idx, (name.to_string(), opts)),
+            Err(idx) => {
+                Arc::make_mut(&mut self.state.fun_syms).insert(idx, (name.to_string(), opts))
+            }
         }
     }
 
@@ -2257,20 +2177,20 @@ impl<'a> Parser<'a> {
     /// symbols come with the enable flags, as they do in HS's `funSyms`
     /// (Term/Maude/Signature.hs:110-125).
     pub(crate) fn seed_signature(&mut self, sig: &MaudeSig) {
-        Arc::make_mut(&mut self.fun_syms).clear();
+        Arc::make_mut(&mut self.state.fun_syms).clear();
         for f in &sig.st_fun_syms {
             self.insert_fun_sym(&String::from_utf8_lossy(f.name), FunOptions::of_no_eq(f));
         }
-        self.ac_fun_syms = Arc::new(
+        self.state.ac_fun_syms = Arc::new(
             sig.st_ac_fun_syms
                 .iter()
                 .map(|a| String::from_utf8_lossy(a.name).into_owned())
                 .collect(),
         );
-        let ac_fun_syms = Arc::make_mut(&mut self.ac_fun_syms);
+        let ac_fun_syms = Arc::make_mut(&mut self.state.ac_fun_syms);
         ac_fun_syms.sort();
         ac_fun_syms.dedup();
-        self.macro_syms = Arc::new(
+        self.state.macro_syms = Arc::new(
             sig.macro_names
                 .iter()
                 .map(|m| {
@@ -2281,11 +2201,11 @@ impl<'a> Parser<'a> {
                 })
                 .collect(),
         );
-        self.sig_enable_dh = sig.enable_dh || sig.enable_bp;
-        self.sig_enable_bp = sig.enable_bp;
-        self.sig_enable_xor = sig.enable_xor;
-        self.sig_enable_mset = sig.enable_mset;
-        self.sig_enable_nat = sig.enable_nat;
+        self.state.sig_enable_dh = sig.enable_dh || sig.enable_bp;
+        self.state.sig_enable_bp = sig.enable_bp;
+        self.state.sig_enable_xor = sig.enable_xor;
+        self.state.sig_enable_mset = sig.enable_mset;
+        self.state.sig_enable_nat = sig.enable_nat;
     }
 
     /// Copy the symbol state a sub-parser reads from the parser whose text
@@ -2294,15 +2214,15 @@ impl<'a> Parser<'a> {
     /// symbols (Theory/Text/Parser/Term.hs:166-172), `nullaryApp` the arity-0
     /// constants (Theory/Text/Parser/Term.hs:158-163) and `diff` its gate.
     fn seed_from(&mut self, parent: &Parser<'_>) {
-        self.fun_syms = parent.fun_syms.clone();
-        self.ac_fun_syms = parent.ac_fun_syms.clone();
-        self.macro_syms = parent.macro_syms.clone();
-        self.sig_enable_dh = parent.sig_enable_dh;
-        self.sig_enable_bp = parent.sig_enable_bp;
-        self.sig_enable_xor = parent.sig_enable_xor;
-        self.sig_enable_mset = parent.sig_enable_mset;
-        self.sig_enable_nat = parent.sig_enable_nat;
-        self.enable_diff = parent.enable_diff;
+        self.state.fun_syms = parent.state.fun_syms.clone();
+        self.state.ac_fun_syms = parent.state.ac_fun_syms.clone();
+        self.state.macro_syms = parent.state.macro_syms.clone();
+        self.state.sig_enable_dh = parent.state.sig_enable_dh;
+        self.state.sig_enable_bp = parent.state.sig_enable_bp;
+        self.state.sig_enable_xor = parent.state.sig_enable_xor;
+        self.state.sig_enable_mset = parent.state.sig_enable_mset;
+        self.state.sig_enable_nat = parent.state.sig_enable_nat;
+        self.state.enable_diff = parent.state.enable_diff;
     }
 
     /// Whether the lexer sits on the `-` of a hyphenated identifier: a dash
@@ -2367,7 +2287,13 @@ impl<'a> Parser<'a> {
         // Read until newline as raw text. Heuristic rankings are flexible; we
         // take everything up to next newline / `\n` boundary.
         let raw = self.read_to_eol();
-        Ok(TheoryItem::Heuristic(raw.trim().to_string()))
+        Ok(TheoryItem::Heuristic {
+            raw: raw.trim().to_string(),
+            source_file: self
+                .source_file
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+        })
     }
 
     fn read_to_eol(&mut self) -> String {
@@ -2754,9 +2680,10 @@ impl<'a> Parser<'a> {
     /// sign))` (Theory/Text/Parser/Signature.hs:212), which takes the FIRST
     /// match — free symbols before macros.
     fn lookup_fun_options(&self, name: &str) -> Option<FunOptions> {
-        self.fun_syms
+        self.state
+            .fun_syms
             .iter()
-            .chain(self.macro_syms.iter())
+            .chain(self.state.macro_syms.iter())
             .find(|(n, _)| n == name)
             .map(|(_, o)| *o)
     }
@@ -2943,8 +2870,9 @@ impl<'a> Parser<'a> {
         // reserved must be re-declared at EXACTLY the builtin's options tuple.
         // It runs BEFORE the general conflict check, has no `fst`/`snd`
         // exemption, and consults `stFunSyms` only — never the macro names.
-        if self.reserved_builtin_names.contains(&name) {
+        if self.state.reserved_builtin_names.contains(&name) {
             let builtin = self
+                .state
                 .fun_syms
                 .iter()
                 .find(|(n, _)| *n == name)
@@ -3029,8 +2957,8 @@ impl<'a> Parser<'a> {
             // A binary `[AC]` symbol also becomes an infix operator for the terms
             // that follow, mirroring HS's `modifyStateSig $ addFunSym (ACfctUser
             // ...)`, which likewise runs only in the `IsAC` branch.
-            if !self.ac_fun_syms.contains(&name) {
-                let names = Arc::make_mut(&mut self.ac_fun_syms);
+            if !self.state.ac_fun_syms.contains(&name) {
+                let names = Arc::make_mut(&mut self.state.ac_fun_syms);
                 names.push(name.clone());
                 names.sort();
             }
@@ -3202,7 +3130,7 @@ impl<'a> Parser<'a> {
             // (Theory/Text/Parser/Macro.hs:46), which
             // `function`'s conflict check then sees
             // (Theory/Text/Parser/Signature.hs:212).
-            Arc::make_mut(&mut self.macro_syms).push((
+            Arc::make_mut(&mut self.state.macro_syms).push((
                 name.clone(),
                 FunOptions {
                     arity: args.len(),
@@ -3306,9 +3234,9 @@ impl<'a> Parser<'a> {
     /// Theory/Text/Parser/Macro.hs:34-35 fires
     /// first).
     fn macro_name_conflicts(&self, name: &str) -> bool {
-        self.fun_syms.iter().any(|(n, _)| n == name)
-            || self.ac_fun_syms.iter().any(|n| n == name)
-            || self.macro_syms.iter().any(|(n, _)| n == name)
+        self.state.fun_syms.iter().any(|(n, _)| n == name)
+            || self.state.ac_fun_syms.iter().any(|n| n == name)
+            || self.state.macro_syms.iter().any(|(n, _)| n == name)
             || self
                 .enabled_theory_noeq_syms()
                 .any(|s| s.name == name.as_bytes())
@@ -3332,20 +3260,20 @@ impl<'a> Parser<'a> {
         if self.var_dot_hangover {
             expects.push(Message::Expect("\".\"".to_string()));
         }
-        for sym in self.ac_fun_syms.iter().rev() {
+        for sym in self.state.ac_fun_syms.iter().rev() {
             expects.push(Message::Expect(format!("\"{sym}\"")));
         }
         let mut ops: Vec<&str> = Vec::new();
-        if self.sig_enable_dh {
+        if self.state.sig_enable_dh {
             ops.extend(["^", "*"]);
         }
-        if self.sig_enable_xor {
+        if self.state.sig_enable_xor {
             ops.extend(["XOR", "⊕"]);
         }
-        if self.sig_enable_nat {
+        if self.state.sig_enable_nat {
             ops.push("%+");
         }
-        if self.sig_enable_mset {
+        if self.state.sig_enable_mset {
             ops.extend(["++", "+"]);
         }
         expects.extend(ops.into_iter().map(|o| Message::Expect(format!("\"{o}\""))));
@@ -3395,10 +3323,10 @@ impl<'a> Parser<'a> {
         // stand.
         for p in &ps {
             let key = (p.fact.persistent, p.fact.name.clone(), p.fact.args.len());
-            if self.seen_predicates.contains(&key) {
+            if self.state.seen_predicates.contains(&key) {
                 return Err(self.predicate_dup_fail(&p.fact));
             }
-            self.seen_predicates.push(key);
+            self.state.seen_predicates.push(key);
         }
         Ok(TheoryItem::Predicates(ps))
     }
@@ -3453,12 +3381,14 @@ impl<'a> Parser<'a> {
         // and it is only forced once a COMPLETE `axiom` item has been built —
         // an axiom whose formula fails to parse prints nothing.
         static AXIOM_DEPRECATION: std::sync::Once = std::sync::Once::new();
-        AXIOM_DEPRECATION.call_once(|| {
-            eprintln!(
-                "Deprecation Warning: using 'axiom' is retired notation, replace all uses of \
-                 'axiom' by 'restriction'."
-            );
-        });
+        if self.state.emit_warnings {
+            AXIOM_DEPRECATION.call_once(|| {
+                eprintln!(
+                    "Deprecation Warning: using 'axiom' is retired notation, replace all uses of \
+                     'axiom' by 'restriction'."
+                );
+            });
+        }
         Ok(TheoryItem::LegacyAxiom(r))
     }
 
@@ -3494,14 +3424,17 @@ impl<'a> Parser<'a> {
         // through `liftedAddRestriction'` (Theory/Text/Parser.hs:433-435,546),
         // splitting the sides instead of comparing names; the guard leaves
         // those items, and every item of a diff parse, alone.
-        if !self.is_diff && attributes.is_empty() && self.seen_restriction_names.contains(&name) {
+        if !self.is_diff
+            && attributes.is_empty()
+            && self.state.seen_restriction_names.contains(&name)
+        {
             return Err(self.item_fail(format!("duplicate restriction: {name}")));
         }
         // Feed the restriction-name set the `_restrict` guard consults
         // ([`Parser::guard_duplicate_rule`] step 1): HS `addRestriction`
         // checks new `Restr_<rule>_<i>` names against ALL restrictions,
         // user-declared ones included (TheoryObject.hs:453-456).
-        self.seen_restriction_names.push(name.clone());
+        self.state.seen_restriction_names.push(name.clone());
         Ok(Restriction {
             name,
             formula: phi,
@@ -3619,11 +3552,11 @@ impl<'a> Parser<'a> {
             // HS `fromRuleRestriction (rname ++ "_" ++ show i)` with
             // `restrPrefix = "Restr_"` (Model/Restriction.hs:129-149).
             let rstr_name = format!("Restr_{}_{}", r.name, i);
-            if self.seen_restriction_names.contains(&rstr_name) {
+            if self.state.seen_restriction_names.contains(&rstr_name) {
                 return Err(self.item_fail(format!("duplicate restriction: {rstr_name}")));
             }
         }
-        if let Some(first) = self.seen_rules.iter().find(|p| p.name == r.name) {
+        if let Some(first) = self.state.seen_rules.iter().find(|p| p.name == r.name) {
             let differs = first.attributes != r.attributes
                 || first.premises != r.premises
                 || first.actions != r.actions
@@ -3641,10 +3574,11 @@ impl<'a> Parser<'a> {
                 return Err(self.item_fail(format!("duplicate rule: {}", r.name)));
             }
         } else {
-            self.seen_rules.push(r.clone());
+            self.state.seen_rules.push(r.clone());
         }
         for i in 1..=r.embedded_restrictions.len() {
-            self.seen_restriction_names
+            self.state
+                .seen_restriction_names
                 .push(format!("Restr_{}_{}", r.name, i));
         }
         Ok(())
@@ -4301,32 +4235,36 @@ impl<'a> Parser<'a> {
             let left = attrs.contains(&LemmaAttr::Left);
             let right = attrs.contains(&LemmaAttr::Right);
             let duplicate = if left {
-                self.seen_diff_left_lemma_names.contains(&name)
+                self.state.seen_diff_left_lemma_names.contains(&name)
             } else if right {
-                self.seen_diff_right_lemma_names.contains(&name)
+                self.state.seen_diff_right_lemma_names.contains(&name)
             } else {
-                self.seen_diff_right_lemma_names.contains(&name)
-                    || self.seen_diff_left_lemma_names.contains(&name)
+                self.state.seen_diff_right_lemma_names.contains(&name)
+                    || self.state.seen_diff_left_lemma_names.contains(&name)
             };
             if duplicate {
                 return Err(self.item_fail(format!("duplicate lemma: {name}")));
             }
             if left {
-                self.seen_diff_left_lemma_names.push(name.clone());
+                self.state.seen_diff_left_lemma_names.push(name.clone());
             } else if right {
-                self.seen_diff_right_lemma_names.push(name.clone());
+                self.state.seen_diff_right_lemma_names.push(name.clone());
             } else {
-                self.seen_diff_right_lemma_names.push(name.clone());
-                self.seen_diff_left_lemma_names.push(name.clone());
+                self.state.seen_diff_right_lemma_names.push(name.clone());
+                self.state.seen_diff_left_lemma_names.push(name.clone());
             }
         } else {
-            if self.seen_lemma_names.iter().any(|n| n == &name) {
+            if self.state.seen_lemma_names.iter().any(|n| n == &name) {
                 return Err(self.item_fail(format!("duplicate lemma: {name}")));
             }
-            self.seen_lemma_names.push(name.clone());
+            self.state.seen_lemma_names.push(name.clone());
         }
         Ok(TheoryItem::Lemma(Lemma {
             name,
+            source_file: self
+                .source_file
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
             attributes: attrs,
             trace_quantifier,
             formula,
@@ -4377,6 +4315,10 @@ impl<'a> Parser<'a> {
         let formula = self.double_quoted_formula()?;
         Ok(Some(AccLemma {
             name: name.to_string(),
+            source_file: self
+                .source_file
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
             attributes: attrs.to_vec(),
             formula,
             case_test_idents: idents,
@@ -4389,12 +4331,16 @@ impl<'a> Parser<'a> {
         let attributes = self.lemma_attributes()?;
         self.require_punct(":")?;
         let proof = self.try_diff_proof_skeleton()?;
-        if self.seen_diff_lemma_names.contains(&name) {
+        if self.state.seen_diff_lemma_names.contains(&name) {
             return Err(self.item_fail(format!("duplicate Diff Lemma: {name}")));
         }
-        self.seen_diff_lemma_names.push(name.clone());
+        self.state.seen_diff_lemma_names.push(name.clone());
         Ok(TheoryItem::DiffLemma(DiffLemma {
             name,
+            source_file: self
+                .source_file
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
             attributes,
             proof,
         }))
@@ -4679,7 +4625,7 @@ impl<'a> Parser<'a> {
             // HS `diffEquivLemma` turns the signature's diff bit on right after
             // the colon and leaves it on for the rest of the parse
             // (Theory/Text/Parser/Sapic.hs:211-217, see line 215).
-            self.enable_diff = true;
+            self.state.enable_diff = true;
         }
         let p1 = self.process()?;
         if diff {
@@ -5287,7 +5233,7 @@ impl<'a> Parser<'a> {
             return Ok(Formula::Atom(Atom::Subterm(lhs, rhs)));
         }
         if self.try_punct("(<)") {
-            if !self.sig_enable_mset {
+            if !self.state.sig_enable_mset {
                 return Err(
                     self.err("Need builtins: multiset to use multiset comparison operator.")
                 );
@@ -5389,7 +5335,7 @@ impl<'a> Parser<'a> {
         }
         self.restore(after_lhs);
         let mut labels: Vec<&str> = vec!["subterm predicate"];
-        if self.sig_enable_mset {
+        if self.state.sig_enable_mset {
             labels.push("multiset comparisson");
         }
         labels.push("term equality");
@@ -5455,7 +5401,7 @@ impl<'a> Parser<'a> {
     /// only under `enableMSet && not eqn`, otherwise the parser drops straight
     /// to [`Self::natterm`] and `++`/`+` are not term operators at all.
     fn msetterm_inner(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        if !self.sig_enable_mset || eqn {
+        if !self.state.sig_enable_mset || eqn {
             return self.natterm(eqn);
         }
         self.chainl1(
@@ -5486,7 +5432,7 @@ impl<'a> Parser<'a> {
     /// HS `natterm` (Theory/Text/Parser/Term.hs:203-208): `%+` needs
     /// `enableNat && not eqn`.
     fn natterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        if !self.sig_enable_nat || eqn {
+        if !self.state.sig_enable_nat || eqn {
             return self.xorterm(eqn);
         }
         self.chainl1(
@@ -5499,7 +5445,7 @@ impl<'a> Parser<'a> {
     /// HS `xorterm` (Theory/Text/Parser/Term.hs:187-192): `XOR`/`⊕` need
     /// `enableXor && not eqn`.
     fn xorterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        if !self.sig_enable_xor || eqn {
+        if !self.state.sig_enable_xor || eqn {
             return self.multterm(eqn);
         }
         self.chainl1(
@@ -5513,7 +5459,7 @@ impl<'a> Parser<'a> {
     /// `enableDH && not eqn` the parser skips BOTH this level and
     /// [`Self::expterm`], so neither `*` nor `^` is a term operator.
     fn multterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        if !self.sig_enable_dh || eqn {
+        if !self.state.sig_enable_dh || eqn {
             return self.acterm(eqn);
         }
         self.chainl1(
@@ -5584,7 +5530,7 @@ impl<'a> Parser<'a> {
     /// Term/Term/FunctionSymbols.hs:146-147).  The AST node therefore has to
     /// carry which spelling was written for the readers to resolve it.
     fn ac_chain(&mut self, level: usize, eqn: bool) -> Result<Term, ParseError> {
-        let Some(op) = self.ac_fun_syms.get(level).cloned() else {
+        let Some(op) = self.state.ac_fun_syms.get(level).cloned() else {
             return self.atom_term(eqn);
         };
         self.chainl1(
@@ -5595,7 +5541,10 @@ impl<'a> Parser<'a> {
             // the following token (`f(x) fg(y)` parsing as `f(f(x), g(y))` for
             // an AC symbol `f`); such input is not valid syntax in any theory
             // and errors here instead.
-            |p| p.try_kw(&op).then(|| BinOp::AcFct(intern_ac_name(&op))),
+            |p| {
+                p.try_kw(&op)
+                    .then(|| BinOp::AcFct(tamarin_term::intern::intern_str(&op)))
+            },
             Self::bin_op_term,
         )
     }
@@ -5683,7 +5632,7 @@ impl<'a> Parser<'a> {
                 best = Some(o);
             }
         };
-        for (n, o) in self.fun_syms.iter() {
+        for (n, o) in self.state.fun_syms.iter() {
             if n == op {
                 consider(*o);
             }
@@ -5696,10 +5645,10 @@ impl<'a> Parser<'a> {
         if let Some(opts) = best {
             return Some(ArityRes::NoEq { opts });
         }
-        if self.ac_fun_syms.iter().any(|n| n == op) {
+        if self.state.ac_fun_syms.iter().any(|n| n == op) {
             return Some(ArityRes::Ac);
         }
-        if let Some((_, o)) = self.macro_syms.iter().find(|(n, _)| n == op) {
+        if let Some((_, o)) = self.state.macro_syms.iter().find(|(n, _)| n == op) {
             return Some(ArityRes::NoEq { opts: *o });
         }
         if op == "em" {
@@ -5720,9 +5669,10 @@ impl<'a> Parser<'a> {
     /// parses via `symbol` — searched over `funSyms maudeSig` (the subterm
     /// signature plus the enabled theories' symbols) and `macroNames`.
     fn is_nullary_sym(&self, name: &str) -> bool {
-        self.fun_syms
+        self.state
+            .fun_syms
             .iter()
-            .chain(self.macro_syms.iter())
+            .chain(self.state.macro_syms.iter())
             .any(|(n, o)| n == name && o.arity == 0)
             || self
                 .enabled_theory_noeq_syms()
@@ -5734,10 +5684,10 @@ impl<'a> Parser<'a> {
     fn enabled_theory_noeq_syms(&self) -> impl Iterator<Item = &'static NoEqSym> + use<> {
         let syms = theory_noeq_syms();
         [
-            (self.sig_enable_dh, &syms.dh),
-            (self.sig_enable_bp, &syms.bp),
-            (self.sig_enable_xor, &syms.xor),
-            (self.sig_enable_nat, &syms.nat),
+            (self.state.sig_enable_dh, &syms.dh),
+            (self.state.sig_enable_bp, &syms.bp),
+            (self.state.sig_enable_xor, &syms.xor),
+            (self.state.sig_enable_nat, &syms.nat),
         ]
         .into_iter()
         .filter(|(enabled, _)| *enabled)
@@ -5816,7 +5766,7 @@ impl<'a> Parser<'a> {
             return Ok(Term::DhNeutral);
         }
         if self.lx.try_symbol("1:nat") {
-            if !self.sig_enable_nat {
+            if !self.state.sig_enable_nat {
                 return Err(self.err_unexpected_message(
                     "natural-number literal 1:nat requires the natural-numbers builtin",
                 ));
@@ -5824,7 +5774,7 @@ impl<'a> Parser<'a> {
             return Ok(Term::NatOne);
         }
         if self.lx.try_symbol("%1") {
-            if !self.sig_enable_nat {
+            if !self.state.sig_enable_nat {
                 return Err(self.err_unexpected_message(
                     "natural-number literal %1 requires the natural-numbers builtin",
                 ));
@@ -5865,7 +5815,7 @@ impl<'a> Parser<'a> {
             probe.bump();
             match probe.peek() {
                 Some('\'') => {
-                    if !self.sig_enable_nat {
+                    if !self.state.sig_enable_nat {
                         self.lx.bump();
                         return Err(self.err_unexpected_message(
                             "nat names requires the natural-numbers builtin",
@@ -5879,7 +5829,7 @@ impl<'a> Parser<'a> {
                     return Ok(Term::NatLit(s));
                 }
                 Some(c) if c.is_alphanumeric() => {
-                    if !self.sig_enable_nat {
+                    if !self.state.sig_enable_nat {
                         self.lx.bump();
                         return Err(
                             self.err("nat-sorted variables requires the natural-numbers builtin")
@@ -5954,7 +5904,7 @@ impl<'a> Parser<'a> {
                         self.err_fail_labelled("diff operator not allowed in equations", "term")
                     );
                 }
-                if !self.enable_diff {
+                if !self.state.enable_diff {
                     return Err(self
                         .err_fail_labelled("diff operator found, but flag diff not set", "term"));
                 }
@@ -6219,7 +6169,7 @@ impl<'a> Parser<'a> {
     /// (`fAppAC _ [a] = a`, Term/Term/Raw.hs:121), and an empty list leaves
     /// the plain application.
     fn ac_prefix_app(&mut self, id: &str, ts: Vec<Term>) -> Term {
-        let sym = intern_ac_name(id);
+        let sym = tamarin_term::intern::intern_str(id);
         let mut it = ts.into_iter();
         match (it.next(), it.next()) {
             (None, _) => Term::App(id.to_string(), Vec::new()),
@@ -6256,7 +6206,7 @@ impl<'a> Parser<'a> {
         let arg2 = self.atom_term(eqn)?;
         match res {
             ArityRes::Ac => Ok(Term::BinOp(
-                BinOp::AcFct(intern_ac_name(id)),
+                BinOp::AcFct(tamarin_term::intern::intern_str(id)),
                 Box::new(arg1),
                 Box::new(arg2),
             )),
@@ -6307,7 +6257,7 @@ impl<'a> Parser<'a> {
                 ("nat", LSort::Nat),
             ] {
                 if self.try_kw(kw) {
-                    if sort == LSort::Nat && !self.sig_enable_nat {
+                    if sort == LSort::Nat && !self.state.sig_enable_nat {
                         return Err(self.err_unexpected_message(
                             "nat-sorted variables requires the natural-numbers builtin",
                         ));
@@ -6358,7 +6308,7 @@ impl<'a> Parser<'a> {
                 match probe.peek() {
                     Some('\'') => return Ok(None), // handled by the literal/atom path
                     Some(c) if c.is_alphanumeric() => {
-                        if !self.sig_enable_nat {
+                        if !self.state.sig_enable_nat {
                             self.lx.bump();
                             return Err(self
                                 .err("nat-sorted variables requires the natural-numbers builtin"));
@@ -6713,7 +6663,7 @@ impl<'a> Parser<'a> {
 
     fn eval_flagformula(&self, f: &FlagFormula) -> bool {
         match f {
-            FlagFormula::Atom(s) => self.flags.contains(s),
+            FlagFormula::Atom(s) => self.state.flags.contains(s),
             FlagFormula::Not(g) => !self.eval_flagformula(g),
             FlagFormula::And(a, b) => self.eval_flagformula(a) && self.eval_flagformula(b),
             FlagFormula::Or(a, b) => self.eval_flagformula(a) || self.eval_flagformula(b),

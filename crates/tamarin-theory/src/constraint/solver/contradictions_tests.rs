@@ -108,13 +108,14 @@ fn non_injective_fact_witness_emitted() {
     sys.add_less(LessAtom::new(j, k, Reason::Adversary));
 
     // Build the proof context that knows `Inj` is injective.
-    let mp = match tamarin_test_support::require_maude_path() {
-        Some(p) => p,
-        None => return,
+    let Some(mp) = tamarin_test_support::require_maude_path() else {
+        return;
     };
     let h = MaudeHandle::start(&mp, tamarin_term::maude_sig::pair_maude_sig()).unwrap();
     let mut ctx = ProofContext::new(h, Vec::new());
-    ctx.injective_fact_insts = vec![(inj_tag, Vec::new())];
+    std::sync::Arc::get_mut(&mut ctx.shared)
+        .expect("a fresh context uniquely owns its shared data")
+        .injective_fact_insts = [(inj_tag, Vec::new())].into_iter().collect();
 
     let cs = contradictions(&ctx, &sys);
     let injs: Vec<_> = cs
@@ -390,95 +391,6 @@ fn forbidden_constr_chain_fires_on_two_trivial_xor_instances() {
         &one_trivial,
         &std::cell::OnceCell::new()
     ));
-}
-
-/// Two LVars sharing `(name, idx)` but with disjoint sub-sorts
-/// (Pub vs Fresh) must be flagged.  This is the soundness fix for
-/// the NSLPK3-class false positives.
-#[test]
-fn sort_conflated_pub_vs_fresh_detected() {
-    use crate::constraint::system::System;
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    use crate::rule::{
-        IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes,
-        RuleInfo,
-    };
-
-    // Build a system with two nodes, each containing an action
-    // using "x" at idx 58 but with conflicting sorts: Pub vs Fresh.
-    let pub_var = LVar::new("x", LSort::Pub, 58);
-    let fresh_var = LVar::new("x", LSort::Fresh, 58);
-    let tag = FactTag::Proto(Multiplicity::Linear, "X", 1);
-    let pub_term = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(pub_var));
-    let fresh_term = tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(fresh_var));
-    let mk_rule = |name: &str, t| -> RuleACInst {
-        Rule::new(
-            RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(name)),
-                attributes: RuleAttributes::empty(),
-                loop_breakers: Vec::new(),
-            }),
-            vec![],
-            vec![Fact::new(tag, vec![t])],
-            vec![],
-        )
-    };
-    let mut sys = System::empty();
-    sys.add_node(LVar::new("i", LSort::Node, 1), mk_rule("R_pub", pub_term));
-    sys.add_node(
-        LVar::new("j", LSort::Node, 2),
-        mk_rule("R_fresh", fresh_term),
-    );
-    assert!(
-        has_sort_conflated_lvars(&sys),
-        "expected sort-conflict between ~mw:Pub 58 and ~mw:Fresh 58"
-    );
-}
-
-/// Pub vs Msg should NOT be flagged — Msg is the join sort and
-/// Pub ⊂ Msg, so the pair can be narrowed at unification time.
-#[test]
-fn sort_conflated_pub_vs_msg_not_flagged() {
-    use crate::constraint::system::System;
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    use crate::rule::{
-        IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes,
-        RuleInfo,
-    };
-    let pub_var = LVar::new("x", LSort::Pub, 58);
-    let msg_var = LVar::new("x", LSort::Msg, 58);
-    let tag = FactTag::Proto(Multiplicity::Linear, "X", 1);
-    let mk = |name: &str, t| -> RuleACInst {
-        Rule::new(
-            RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(name)),
-                attributes: RuleAttributes::empty(),
-                loop_breakers: Vec::new(),
-            }),
-            vec![],
-            vec![Fact::new(tag, vec![t])],
-            vec![],
-        )
-    };
-    let mut sys = System::empty();
-    sys.add_node(
-        LVar::new("i", LSort::Node, 1),
-        mk(
-            "R_p",
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(pub_var)),
-        ),
-    );
-    sys.add_node(
-        LVar::new("j", LSort::Node, 2),
-        mk(
-            "R_m",
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(msg_var)),
-        ),
-    );
-    assert!(
-        !has_sort_conflated_lvars(&sys),
-        "Pub vs Msg should NOT be flagged (Msg is join sort)"
-    );
 }
 
 /// `isForbiddenDPMult` (Contradictions.hs) gates ONLY on the

@@ -148,9 +148,8 @@ cat <<EOF
 staged (not committed): $staged_outputs
 review: $remap_report and any Haskell cite rewrites
 
-The rebuilt oracle has a new fingerprint, so old cache entries are safe but
-will miss; run scripts/migrate_hs_cache_fp.sh when preserving a compatible
-local cache generation. Re-certify the new source/cache generation:
+The rebuilt oracle has a new fingerprint, so old cache entries stay isolated
+for old checkouts while current gates refill their own generation. Re-certify:
   1. scripts/divergence_fixtures/capture.sh && git diff -- scripts/divergence_fixtures/expected
   2. scripts/capture_cli_refs.sh && cargo test -p tamarin-prover --test cli_e2e
   3. scripts/corpus_file_diff.sh 2>&1 | tee /tmp/fullgate.log

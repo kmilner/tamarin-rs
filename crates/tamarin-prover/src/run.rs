@@ -36,7 +36,6 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
-use tamarin_theory::constraint::solver::context::annotate_theory_loop_breakers;
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::elaborate::elaborate_with_in_file;
 use tamarin_theory::module::ModuleType;
@@ -65,16 +64,42 @@ pub fn take_deferred_hs_error_markers() -> Option<String> {
     DEFERRED_HS_ERROR_MARKERS.take()
 }
 
-#[derive(Debug)]
-pub struct RunError(pub String);
+#[derive(Debug, PartialEq, Eq)]
+pub enum RunError {
+    /// An ordinary CLI/runtime error, rendered with the port's `error:` prefix.
+    Regular(String),
+    /// An exception which escapes to Haskell's top-level runtime handler.
+    GhcException(String),
+}
 
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        match self {
+            Self::Regular(message) | Self::GhcException(message) => f.write_str(message),
+        }
     }
 }
 
 impl std::error::Error for RunError {}
+
+impl From<tamarin_theory::prove::ProveError> for RunError {
+    fn from(error: tamarin_theory::prove::ProveError) -> Self {
+        match error {
+            tamarin_theory::prove::ProveError::Guarded(message) => Self::GhcException(message),
+            tamarin_theory::prove::ProveError::Ranking(error) => {
+                Self::GhcException(error.to_string())
+            }
+            tamarin_theory::prove::ProveError::InvalidHeuristic(message) => Self::Regular(message),
+            other => Self::Regular(other.to_string()),
+        }
+    }
+}
+
+impl From<tamarin_theory::tools::rule_variants::VariantsError> for RunError {
+    fn from(error: tamarin_theory::tools::rule_variants::VariantsError) -> Self {
+        Self::Regular(error.to_string())
+    }
+}
 
 /// Outcome of proving a single lemma. Mirrors the columns of Haskell's
 /// `summary of summaries:` block.
@@ -99,7 +124,6 @@ pub(crate) enum LemmaVerdict {
     Skipped,
     /// Lemma was filtered out by `--prove=FOO` / `--lemma=FOO`.
     Filtered,
-    Error(String),
 }
 
 /// HS-faithful per-lemma summary line, mirroring `prettyClosedSummary`
@@ -139,7 +163,6 @@ fn format_lemma_summary_line(r: &LemmaResult) -> String {
         LemmaVerdict::Invalidated => {
             format!("proof has been invalidated ({} steps)", r.proof_steps)
         }
-        LemmaVerdict::Error(msg) => format!("error: {}", msg),
     };
     format!("{} ({}): {}", r.name, quantifier, body)
 }
@@ -208,7 +231,170 @@ pub fn run(args: &Args) -> Result<i32, RunError> {
         Subcommand::Interactive => run_interactive(args),
         Subcommand::Variants => run_variants(args),
         Subcommand::Test => run_test(args),
+        Subcommand::InputManifest => run_input_manifest(args),
     }
+}
+
+fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
+    use std::collections::BTreeSet;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+    use tamarin_parser::ast::TheoryItem;
+    use tamarin_parser::LemmaAttr;
+
+    // Manifest rows are line-oriented, so raw paths cannot safely contain a
+    // tab or newline. Prefix a byte-for-byte hex encoding with `x:`; the shared
+    // shell reader decodes it only when a path is actually consumed. Besides
+    // making the delimiters unambiguous, this avoids `Path::display()`'s lossy
+    // replacement of non-UTF-8 Unix path bytes.
+    let path_field = |path: &Path| {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let bytes = path.as_os_str().as_bytes();
+        let mut encoded = String::with_capacity(2 + bytes.len() * 2);
+        encoded.push_str("x:");
+        for &byte in bytes {
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        encoded
+    };
+
+    let root = PathBuf::from(
+        args.in_files
+            .first()
+            .ok_or_else(|| RunError::Regular("input-manifest requires one file".into()))?,
+    );
+    let source = fs::read_to_string(&root)
+        .map_err(|error| RunError::Regular(format!("{}: {error}", root.display())))?;
+    let flags: Vec<&str> = args.defines.iter().map(String::as_str).collect();
+    let (theory, aliases) =
+        tamarin_parser::parse_theory_with_manifest(&source, &flags, root.clone(), args.diff)
+            .map_err(|error| RunError::Regular(error.to_string()))?;
+
+    let has_lemmas = theory.items.iter().any(|item| {
+        matches!(
+            item,
+            TheoryItem::Lemma(_)
+                | TheoryItem::DiffLemma(_)
+                | TheoryItem::AccLemma(_)
+                | TheoryItem::EquivLemma(_, _)
+                | TheoryItem::DiffEquivLemma(_)
+        )
+    });
+    println!("M\thas_lemmas\t{}", u8::from(has_lemmas));
+
+    let mut seen_sources = BTreeSet::new();
+    for alias in &aliases {
+        let row = format!(
+            "S\t{}\t{}",
+            path_field(&alias.physical),
+            alias
+                .staged
+                .as_deref()
+                .map_or_else(String::new, &path_field)
+        );
+        if seen_sources.insert(row.clone()) {
+            println!("{row}");
+        }
+    }
+
+    let mut oracle_rows = BTreeSet::new();
+    let mut add_heuristic = |raw: &str, source_file: Option<&str>| {
+        let source_file = source_file.unwrap_or_else(|| root.to_str().unwrap_or_default());
+        for oracle in tamarin_theory::prove::oracle_paths_for_heuristic(raw, source_file, None) {
+            let oracle = PathBuf::from(oracle);
+            if !oracle.is_file() {
+                continue;
+            }
+            let source_aliases = aliases
+                .iter()
+                .filter(|alias| alias.physical == Path::new(source_file));
+            for alias in source_aliases {
+                let staged = staged_oracle_path(alias, &oracle);
+                oracle_rows.insert(format!(
+                    "O\t{}\t{}",
+                    path_field(&oracle),
+                    staged.as_deref().map_or_else(String::new, &path_field)
+                ));
+            }
+        }
+    };
+    if args.heuristic.is_none() {
+        for item in &theory.items {
+            match item {
+                TheoryItem::Heuristic { raw, source_file } => {
+                    add_heuristic(raw, source_file.as_deref())
+                }
+                TheoryItem::Lemma(lemma) => {
+                    for attr in &lemma.attributes {
+                        if let LemmaAttr::Heuristic(raw) = attr {
+                            add_heuristic(raw, lemma.source_file.as_deref());
+                        }
+                    }
+                }
+                TheoryItem::DiffLemma(lemma) => {
+                    for attr in &lemma.attributes {
+                        if let LemmaAttr::Heuristic(raw) = attr {
+                            add_heuristic(raw, lemma.source_file.as_deref());
+                        }
+                    }
+                }
+                TheoryItem::AccLemma(lemma) => {
+                    for attr in &lemma.attributes {
+                        if let LemmaAttr::Heuristic(raw) = attr {
+                            add_heuristic(raw, lemma.source_file.as_deref());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(raw) = args.heuristic.as_deref() {
+        let root_alias = aliases.first();
+        let has_oracle_override = args
+            .oracle_name
+            .as_deref()
+            .is_some_and(|name| !name.is_empty());
+        for oracle in tamarin_theory::prove::oracle_paths_for_heuristic(
+            raw,
+            root.to_str().unwrap_or_default(),
+            args.oracle_name.as_deref(),
+        ) {
+            let oracle = PathBuf::from(oracle);
+            if oracle.is_file() {
+                let staged = if has_oracle_override {
+                    None
+                } else {
+                    root_alias.and_then(|alias| staged_oracle_path(alias, &oracle))
+                };
+                oracle_rows.insert(format!(
+                    "O\t{}\t{}",
+                    path_field(&oracle),
+                    staged.as_deref().map_or_else(String::new, &path_field)
+                ));
+            }
+        }
+    }
+    for row in oracle_rows {
+        println!("{row}");
+    }
+    Ok(0)
+}
+
+fn staged_oracle_path(
+    source: &tamarin_parser::InputAlias,
+    oracle: &std::path::Path,
+) -> Option<PathBuf> {
+    let staged = source.staged.as_ref()?;
+    let source_dir = source.physical.parent()?;
+    let relative = oracle.strip_prefix(source_dir).ok()?;
+    Some(
+        staged
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .join(relative),
+    )
 }
 
 /// `tamarin-prover test` — mirror HS's installation self-test
@@ -280,7 +466,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     let _ = ensure_maude(args, &maude_path);
     let start_maude = |sig| {
         MaudeHandle::start(&maude_path, sig).map_err(|e| {
-            RunError(format!(
+            RunError::Regular(format!(
                 "failed to start maude at {:?}: {:?}",
                 maude_path, e
             ))
@@ -353,7 +539,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     if args.in_files.is_empty() {
-        return Err(RunError(
+        return Err(RunError::Regular(
             "no working directory specified — pass a directory of .spthy \
              files or one or more .spthy paths"
                 .to_string(),
@@ -363,17 +549,14 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // path should fail fast, not after the maude banner).
     for f in &args.in_files {
         if !std::path::Path::new(f).exists() {
-            return Err(RunError(format!("directory '{}' does not exist", f)));
+            return Err(RunError::Regular(format!(
+                "directory '{}' does not exist",
+                f
+            )));
         }
     }
 
-    init_process_globals(args);
-
-    // Oracle exec failures must not kill the server: HS confines the
-    // `readProcess` exception to the Warp request thread, so only the
-    // triggering request fails.  Batch keeps the `exit(1)` parity path.
-    tamarin_theory::constraint::solver::search::ORACLE_ERROR_UNWINDS
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    init_rayon_pool(args);
 
     // Haskell defaults: 3001 on 127.0.0.1.  clap has already parsed
     // `--port` as a `u16` (an unreadable value is a usage error).
@@ -389,7 +572,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
         "*" | "*4" => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         "*6" => IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
         other => other.parse::<IpAddr>().map_err(|e| {
-            RunError(format!(
+            RunError::Regular(format!(
                 "could not parse --interface={:?} as an IP address: {}\n\
                  Use --interface=\"*4\" to bind to all IPv4 interfaces.",
                 other, e,
@@ -417,6 +600,11 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // `-d/--derivcheck-timeout` — same default expression as the batch
     // path's derivation-check block (default 5).
     cfg.derivcheck_timeout = args.derivcheck_timeout.unwrap_or(5);
+    cfg.solver_parameters =
+        tamarin_theory::constraint::solver::sources::IntegerParameters::with_overrides(
+            args.open_chains,
+            args.saturation,
+        );
     // CLI `--stop-on-trace` — merged with each theory's `configuration:`
     // block at load time (`ProofState::new`), HS `closeTheory` precedence.
     cfg.stop_on_trace = cli_cut(args);
@@ -433,13 +621,13 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // (Interactive.hs:135); `addNdcOption` (TheoryLoader.hs:821-826) then writes
     // `ndcCheck` = `not (--no-ndc)` (TheoryLoader.hs:365-366) into each loaded
     // theory's `_deductionChainCheck`.  Set before the eager load below.
-    tamarin_server::theory_io::set_ndc_check(!args.no_ndc);
+    cfg.ndc_check = !args.no_ndc;
     // `--prove` / `--lemma` — `addLemmaToProve` (TheoryLoader.hs:835-838) is
     // the `addNdcOption` sibling in that same `addParamsOptions`, and
     // `theoryLoadFlags` (TheoryLoader.hs:94-107) is part of this mode's flag
     // set (Interactive.hs:70), so the selection reaches every web load's
     // `_lemmasToProve`.
-    tamarin_server::theory_io::set_lemmas_to_prove(args.lemma_names.clone());
+    cfg.lemmas_to_prove = args.lemma_names.clone();
     // `-D/--defines` + `--quit-on-warning` — the rest of `toParserFlags
     // thyOpts` (TheoryLoader.hs:285-291) in that same captured closure, so
     // every web load (startup, upload, reload) evaluates `#ifdef` blocks
@@ -451,7 +639,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     if args.quit_on_warning {
         parser_flags.push("quit-on-warning".to_string());
     }
-    tamarin_server::theory_io::set_parser_flags(parser_flags);
+    cfg.parser_flags = parser_flags;
 
     // Positional args are theory files (Haskell uses a working
     // directory, but we accept either: a single dir arg, or one-or-more
@@ -521,10 +709,10 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
         .enable_all()
         .thread_stack_size(64 * 1024 * 1024)
         .build()
-        .map_err(|e| RunError(format!("failed to build tokio runtime: {}", e)))?;
+        .map_err(|e| RunError::Regular(format!("failed to build tokio runtime: {}", e)))?;
     runtime
         .block_on(tamarin_server::serve(cfg, theory_paths))
-        .map_err(|e| RunError(format!("server error: {}", e)))?;
+        .map_err(|e| RunError::Regular(format!("server error: {}", e)))?;
     Ok(0)
 }
 
@@ -538,7 +726,7 @@ fn collect_theory_paths(in_files: &[String]) -> Result<Vec<std::path::PathBuf>, 
         let p = PathBuf::from(f);
         if p.is_dir() {
             let entries = std::fs::read_dir(&p).map_err(|e| {
-                RunError(format!("could not read directory {}: {}", p.display(), e))
+                RunError::Regular(format!("could not read directory {}: {}", p.display(), e))
             })?;
             for e in entries.flatten() {
                 let ep = e.path();
@@ -583,7 +771,7 @@ fn effective_cut(
         Some(s) => Ok(stop_on_trace_cut(s)),
         None => match block.stop_on_trace.as_deref() {
             Some(raw) => tamarin_theory::prove::parse_stop_on_trace(raw)
-                .map_err(|e| RunError(format!("configuration block: {}", e))),
+                .map_err(|e| RunError::Regular(format!("configuration block: {}", e))),
             None => Ok(CutStrategy::Dfs),
         },
     }
@@ -944,8 +1132,7 @@ enum TranslateModule {
 /// construction and the end of the batch run stay on [`Args`]:
 /// `proofBound` (`--bound`, read directly by the prove loop),
 /// `verboseMode`, `maudePath` (the banner needs the raw
-/// user-supplied/None distinction), `diffMode`, `openChain`/`saturation`
-/// (read before the maude banner), and the ProVerif/DeepSec export knobs
+/// user-supplied/None distinction), `diffMode`, and the ProVerif/DeepSec export knobs
 /// (backends unported).
 #[derive(Debug, Clone)]
 struct TheoryLoadOptions {
@@ -984,6 +1171,8 @@ struct TheoryLoadOptions {
     /// HS `ndcCheck` — enabled by default, `--no-ndc` clears it
     /// (TheoryLoader.hs:365-366).
     ndc_check: bool,
+    /// HS `openChain`/`saturation`, carried into each prover context.
+    parameters: tamarin_theory::constraint::solver::sources::IntegerParameters,
 }
 
 /// Port of HS `mkTheoryLoadOptions` (TheoryLoader.hs:295-395): assemble the
@@ -994,7 +1183,7 @@ fn mk_theory_load_options(args: &Args) -> Result<TheoryLoadOptions, RunError> {
     // A bare `--heuristic` records the default `s` in `parse_args`; only an
     // explicit `--heuristic=` reaches this with an empty ranking list.
     if args.heuristic.as_deref() == Some("") {
-        return Err(RunError(
+        return Err(RunError::Regular(
             "--heuristic: at least one ranking must be given".to_string(),
         ));
     }
@@ -1018,6 +1207,10 @@ fn mk_theory_load_options(args: &Args) -> Result<TheoryLoadOptions, RunError> {
         precompute_only_mode: args.precompute_only,
         derivation_checks: args.derivcheck_timeout.unwrap_or(5),
         ndc_check: !args.no_ndc,
+        parameters: tamarin_theory::constraint::solver::sources::IntegerParameters::with_overrides(
+            args.open_chains,
+            args.saturation,
+        ),
     })
 }
 
@@ -1146,9 +1339,9 @@ impl TheoryPipeline<'_> {
     /// stage reports.  `file_maude` is `Some` whenever the per-file spawn in
     /// [`Self::check_translated_theory`] succeeded.
     fn require_maude(&self) -> Result<MaudeHandle, RunError> {
-        self.file_maude
-            .clone()
-            .ok_or_else(|| RunError(format!("failed to start maude at {:?}", self.maude_path)))
+        self.file_maude.clone().ok_or_else(|| {
+            RunError::Regular(format!("failed to start maude at {:?}", self.maude_path))
+        })
     }
 
     /// The CLI half of HS `constructAutoProver` (TheoryLoader.hs:802-810).
@@ -1172,14 +1365,25 @@ impl TheoryPipeline<'_> {
     fn build_prover_session(
         &self,
         maude: MaudeHandle,
+        cli_heuristic: tamarin_theory::prove::CliHeuristic,
     ) -> Result<tamarin_theory::prove::ProverSession, tamarin_theory::prove::ProveError> {
-        tamarin_theory::prove::ProverSession::build_with_heuristic(
+        tamarin_theory::prove::ProverSession::build(
             self.elaborated.clone(),
             maude,
-            self.file_maude_pool.clone(),
-            self.cli_heuristic(),
-            self.cut,
-            self.ndc_cache.as_ref(),
+            tamarin_theory::prove::ProverSessionOptions {
+                maude_pool: self.file_maude_pool.clone(),
+                cli_heuristic,
+                cut: self.cut,
+                ndc_cache: self.ndc_cache.clone(),
+                parameters: self.opts.parameters,
+                sys_retention: if wants_trace_output(self.args) {
+                    tamarin_theory::constraint::solver::search::SysRetention::KeepSolved
+                } else {
+                    tamarin_theory::constraint::solver::search::SysRetention::DropAll
+                },
+                show_saturation_steps: true,
+                loop_breakers_prepared: true,
+            },
         )
     }
 
@@ -1349,7 +1553,7 @@ impl TheoryPipeline<'_> {
     ///
     /// [`Self::translate_module`] gates only the loop-breaker annotation —
     /// see the comment at that block.
-    fn check_translated_theory(&mut self) {
+    fn check_translated_theory(&mut self) -> Result<(), RunError> {
         // Spawn a single Maude handle for this file.  Used by:
         //   - the rule-variants computation that populates each rule's
         //     `variant_substs` + `abstracted_rule` (so the pretty-printer
@@ -1416,73 +1620,25 @@ impl TheoryPipeline<'_> {
             None
         };
 
-        // Populate variant_substs + abstracted_rule for each protocol
-        // rule whose RHS contains reducible-headed sub-terms.  Without
-        // this the pretty-printer always emits `/* has exactly the
-        // trivial AC variant */` even when the signature carries
-        // destructors (e.g. `aenc/adec`).  HS-faithful: matches
-        // `closeTheoryWithMaude`'s variant pre-computation
-        // (ClosedTheory.hs `closeTheory`).
-        if let Some(m) = self.file_maude.as_ref() {
-            tamarin_theory::tools::rule_variants::populate_rule_variants(
-                std::sync::Arc::make_mut(&mut self.elaborated),
-                m,
-                self.file_maude_pool.as_deref(),
-            );
-        }
-
-        // HS `postReport`: the full `checkWellformedness` over the TRANSLATED
-        // theory (TheoryLoader.hs:553-565, `checkTranslatedTheory`), i.e. after
-        // SAPIC `translate` injected the generated rules and `Acc.translate`
-        // the generated lemmas, and after the `-m msr` lemma filter.  The pass
-        // is shared with the web load path — see
-        // `tamarin_theory::wellformedness`.  Its `ruleVariantsReport` member
-        // reads the variants `populate_rule_variants` recorded above, so the
-        // pass sits between that call and the three stages below.  That is the
-        // HS Maude call ORDER: the variant queries first, then the loop-breaker
-        // annotation, the NDC pass and the derivation checks, all of which
-        // consume `file_maude`'s shared fresh-variable counter.
-        self.wf_report
-            .extend(tamarin_theory::wellformedness::check_wellformedness(
-                &self.elaborated,
-                self.file_maude.as_ref(),
-            ));
-
-        // HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84):
-        // `ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd ruE)` — a
-        // rule with NO variants produces NO closed rule.  It is dropped from
-        // the closed theory entirely: it participates in neither rendering nor
-        // proof search.  The drop reads the same verdict
-        // `wellformedness::rules::rule_variants_report` reports on, and runs
-        // after it, because HS warns on the OPEN theory and drops while
-        // closing.
-        if let Some(wf_maude) = self.file_maude.as_ref() {
-            tamarin_theory::tools::rule_variants::retain_rules_with_variants(
-                std::sync::Arc::make_mut(&mut self.elaborated),
-                wf_maude,
-            );
-        }
-
-        // Annotate per-rule loop breakers on the OUTER theory so
-        // `pretty_closed_theory` can render HS's `// loop breaker:
-        // [<idx>]` comments at the rule output.  HS faithfulness:
-        // `prettyClosedProtoRule` (ClosedTheory.hs:332-366, see line 337,353) reads
-        // `prettyLoopBreakers` from the `ProtoRuleACInfo` baked into
-        // every closed rule by `closeTheoryWithMaude`.  Our prover
-        // computes them inside `ProofContext::new` on a LOCAL copy
-        // of the rules — so we re-run the same `annotate_loop_breakers`
-        // pass on the outer theory to mirror the closed-theory
-        // structure HS persists.  HS does this work in
-        // `closeTheoryWithMaude`, but the pass stays HERE, anchored before
-        // the NDC and derivation stages: all three consume `file_maude`'s
-        // shared fresh-variable counter, so re-ordering them could renumber
-        // later allocations.  Translate mode never closes the theory
-        // (`translateAndCheckTheory` skips `closeTranslatedTheory`,
-        // TheoryLoader.hs:768-781) and the open renderer prints no
-        // loop-breaker comments, so the pass is skipped there.
+        // Close protocol rules in the same shared order as the web loader:
+        // variants, post-translation wellformedness, zero-variant filtering,
+        // then loop breakers. Translate mode runs the first three but does not
+        // persist breaker annotations on its open theory.
         let translate_mode = self.translate_module.is_some();
-        if let Some(m) = self.file_maude.as_ref().filter(|_| !translate_mode) {
-            annotate_theory_loop_breakers(std::sync::Arc::make_mut(&mut self.elaborated), m);
+        if let Some(m) = self.file_maude.as_ref() {
+            self.wf_report
+                .extend(tamarin_theory::tools::rule_variants::prepare_theory_rules(
+                    std::sync::Arc::make_mut(&mut self.elaborated),
+                    m,
+                    self.file_maude_pool.as_deref(),
+                    !translate_mode,
+                )?);
+        } else {
+            self.wf_report
+                .extend(tamarin_theory::wellformedness::check_wellformedness(
+                    &self.elaborated,
+                    None,
+                ));
         }
 
         // `showSaturation` is the last argument of `closeTheoryWithMaude`
@@ -1491,9 +1647,8 @@ impl TheoryPipeline<'_> {
         // CloseRule.hs:246,251) and the message-derivation check
         // (`closeTheoryWithMaude sig t sources False`,
         // MessageDerivationChecks.hs:42). Both are what this method runs, so
-        // the trace is silent across it; `close_translated_theory` re-arms it
+        // the trace is silent across it; the close contexts below enable it
         // for the close proper.
-        tamarin_theory::constraint::solver::sources::set_show_saturation_steps(false);
 
         // Once-per-theory NDC pass (HS `checkCloseIntrRule` inside
         // `checkTranslatedTheory`, TheoryLoader.hs — BEFORE the
@@ -1519,7 +1674,8 @@ impl TheoryPipeline<'_> {
                 Some(self.elaborated.name.as_str()),
                 self.elaborated.options.deduction_chain_check,
                 &self.elaborated.intruder_rules,
-            );
+                self.opts.parameters,
+            )?;
             self.ndc_funs = checked.ndc_funs;
             self.ndc_cache = Some(checked.cache.into());
         }
@@ -1540,11 +1696,13 @@ impl TheoryPipeline<'_> {
                     m,
                     deriv_timeout,
                     self.ndc_cache.clone(),
-                );
+                    self.opts.parameters,
+                )?;
                 self.wf_report.extend(extra);
             }
             self.marker("Derivation checks ended");
         }
+        Ok(())
     }
 
     /// HS `closeTranslatedTheory` (TheoryLoader.hs:668-715) plus the parts of
@@ -1567,30 +1725,6 @@ impl TheoryPipeline<'_> {
         // `--precompute-only` forcing that runs after the per-file loop —
         // traces.
         //
-        // KNOWN RESIDUAL DIVERGENCES. HS traces once per FORCE of one of the
-        // two `ClosedRuleCache` thunks (`crcRawSources`, `crcRefinedSources =
-        // refineWithSourceAsms … crcRawSources`, CloseRule.hs:426-427), and
-        // this port's source lifecycle neither shares nor defers identically:
-        //  1. A theory with a `[sources]` lemma emits one EXTRA sequence. HS
-        //     forces the single shared `crcRawSources` thunk once and the
-        //     refine reuses it; the port saturates the raw set once per
-        //     distinct `source_key`
-        //     (`ProverSession::presaturate_shared_sources`), so the raw pass
-        //     runs for the `[]` key and again inside the refined key's
-        //     `ensure_saturated`.
-        //  2. A theory whose proofs never consult a source case emits one
-        //     sequence where HS emits none: HS never forces the thunk, while
-        //     `presaturate_shared_sources` saturates eagerly for every lemma
-        //     carrying a stored skeleton.
-        //  3. Under `--auto-sources` the counts differ both ways. HS closes the
-        //     rule cache up to three times (`cache items` for the trigger
-        //     check, `cache itemsModAC` inside `addAutoSourcesLemma`, then
-        //     `cache items'`, CloseRule.hs:56-112) where `apply_auto_sources`
-        //     builds one probe context, plus one more per non-empty typing-
-        //     assumption trigger and one per non-identity unfold, and the
-        //     port's probe saturation lands BEFORE the `Theory closed` marker
-        //     instead of after it.
-        tamarin_theory::constraint::solver::sources::set_show_saturation_steps(true);
 
         // Adopt the NDC verdicts into the printed signature
         // (`joinNDCinSigWMaude`): `check_translated_theory` stashed the
@@ -1629,7 +1763,8 @@ impl TheoryPipeline<'_> {
                 m,
                 self.file_maude_pool.clone(),
                 self.ndc_cache.as_ref(),
-            );
+                self.opts.parameters,
+            )?;
         }
 
         // `--partial-evaluation` (HS `closeTranslatedTheory`,
@@ -1662,7 +1797,9 @@ impl TheoryPipeline<'_> {
                 m,
                 style,
             )
-            .map_err(|e| RunError(format!("partial evaluation of {} failed: {}", in_file, e)))?;
+            .map_err(|e| {
+                RunError::Regular(format!("partial evaluation of {} failed: {}", in_file, e))
+            })?;
 
             // HS's second `closeTheoryWithMaude` (Prover.hs:237-264, see line 240).  The refined
             // rules come back as fresh open rules with empty `variant_substs`
@@ -1678,16 +1815,11 @@ impl TheoryPipeline<'_> {
             // `closeProtoRule`, so refined rules whose own variant set is
             // empty must be dropped independently even when several refined
             // items share a name.
-            tamarin_theory::tools::rule_variants::populate_rule_variants(
+            tamarin_theory::tools::rule_variants::reprepare_theory_rules(
                 std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.as_deref(),
-            );
-            tamarin_theory::tools::rule_variants::retain_rules_with_variants(
-                std::sync::Arc::make_mut(&mut self.elaborated),
-                m,
-            );
-            annotate_theory_loop_breakers(std::sync::Arc::make_mut(&mut self.elaborated), m);
+            )?;
 
             // HS's re-close passes `autoSources` again
             // (`applyPartialEvaluation style autoSources`, TheoryLoader.hs:684-688;
@@ -1702,7 +1834,8 @@ impl TheoryPipeline<'_> {
                     m2,
                     self.file_maude_pool.clone(),
                     self.ndc_cache.as_ref(),
-                );
+                    self.opts.parameters,
+                )?;
             }
         }
 
@@ -1759,17 +1892,21 @@ impl TheoryPipeline<'_> {
             // `usize::MAX` (unbounded, HS `Nothing`).
             let target_bound: usize = self.args.bound.map_or(usize::MAX, |b| b as usize);
 
-            // Each lemma clones the session's cheap template and runs only
-            // the per-lemma `ensure_saturated` refinement against its own
-            // typing assumptions.
-            //
-            // Fall-through path: if `build_prover_session` errors we
-            // fall back to the per-lemma
-            // `prove_lemma_with_pool_file_heuristic` path, which re-runs
-            // the same setup for each lemma.  Almost never hits in
-            // practice.
-            let cli_heuristic = self.cli_heuristic();
-            let session = self.build_prover_session(maude.clone()).ok();
+            // Each lemma clones the session's cheap template and shares its
+            // raw/refined source materialisation.
+            let has_target = prove_anything
+                && self
+                    .elaborated
+                    .lemmas()
+                    .any(|lemma| lemma_matches(lemma_filter, &lemma.name));
+            let cli_heuristic = if has_target {
+                self.cli_heuristic()
+            } else {
+                tamarin_theory::prove::CliHeuristic::default()
+            };
+            let session = self
+                .build_prover_session(maude, cli_heuristic)
+                .map_err(RunError::from)?;
 
             // HS prints "[Theory X] Theory closed" right after `closeTheory`
             // (TheoryLoader.hs:668-715, see line 696) and BEFORE the proof search, which it
@@ -1782,15 +1919,14 @@ impl TheoryPipeline<'_> {
 
             let elaborated = &self.elaborated;
             let theory_name = self.elaborated.name.as_str();
-            let cut = self.cut;
-            let ndc_cache = self.ndc_cache.as_ref();
-            let file_maude_pool = &self.file_maude_pool;
-
-            let run_lemma = |l: &tamarin_theory::theory::Lemma| -> (
-                tamarin_theory::pretty_theory::ProvedLemma,
-                LemmaResult,
-                Vec<(String, System)>,
-            ) {
+            let run_lemma = |l: &tamarin_theory::theory::Lemma| -> Result<
+                (
+                    tamarin_theory::pretty_theory::ProvedLemma,
+                    LemmaResult,
+                    Vec<(String, System)>,
+                ),
+                RunError,
+            > {
                 let lemma_name = l.name.clone();
                 let exists_trace = matches!(
                     l.trace_quantifier,
@@ -1814,46 +1950,21 @@ impl TheoryPipeline<'_> {
                 // so stored skeletons replay (check_and_extend) but no
                 // open leaf is auto-proved.
                 let is_target = prove_anything && lemma_matches(lemma_filter, &lemma_name);
-                // A `--heuristic` value HS would refuse must not silently
-                // prove under the smart fallback and print a verdict (see
-                // `validate_cli_heuristic`).  Gated on is_target because the
-                // string only matters when a target lemma consumes it —
-                // replays and `--prove=<no match>` runs are unaffected, as
-                // in HS.  The wording and rc are ours (plain error, exit 1),
-                // not the oracle's GHC shapes: invalid-usage output is
-                // outside the parity contract.
-                if is_target
-                    && let Err(msg) = tamarin_theory::prove::validate_cli_heuristic(
-                        &cli_heuristic,
-                        &elaborated.tactic,
-                    )
-                {
-                    eprintln!("error: {msg}");
-                    std::process::exit(1);
-                }
                 // HS does NOT print a per-lemma "proving lemma X ..."
                 // marker; the only progress lines are the `[Theory X]
                 // ...` set above.  Stay quiet here for HS-faithful stderr.
-                let outcome = match (session.as_ref(), is_target) {
-                    (Some(s), true) => {
-                        tamarin_theory::prove::prove_lemma_in_session(s, &lemma_name, target_bound)
-                    }
-                    (Some(s), false) => tamarin_theory::prove::check_and_extend_lemma_in_session(
-                        s,
+                let outcome = if is_target {
+                    tamarin_theory::prove::prove_lemma_in_session(
+                        &session,
+                        &lemma_name,
+                        target_bound,
+                    )
+                } else {
+                    tamarin_theory::prove::check_and_extend_lemma_in_session(
+                        &session,
                         &lemma_name,
                         usize::MAX,
-                    ),
-                    (None, _) => tamarin_theory::prove::prove_lemma_with_pool_file_heuristic(
-                        elaborated,
-                        &lemma_name,
-                        maude.clone(),
-                        file_maude_pool.clone(),
-                        if is_target { target_bound } else { usize::MAX },
-                        &in_file,
-                        &cli_heuristic,
-                        cut,
-                        ndc_cache,
-                    ),
+                    )
                 };
                 // HS `systemsWithMetadata` (Batch.hs:274-280) reads the proof
                 // tree of every lemma, so the collection has to happen here —
@@ -1863,48 +1974,33 @@ impl TheoryPipeline<'_> {
                 // `check_and_extend_lemma_in_session`, which is why
                 // `_analyzed` theories carry traces without `--prove`.
                 let mut lemma_traces: Vec<(String, System)> = Vec::new();
-                let (verdict, proof_steps, proof_body) = match outcome {
-                    Ok(root) => {
-                        let steps = count_proof_steps(&root);
-                        // HS lemma verdict = `getProofStatus` (Proof.hs)
-                        // folded over the WHOLE tree, NOT the root's
-                        // per-node `NodeStatus`.  This matters for
-                        // part-replayed proofs: a stale stored-proof branch
-                        // kept verbatim is `Undetermined`, which the
-                        // Semigroup absorbs into the `Complete` of the
-                        // freshly-proved siblings (e.g. KCL07-manualproof —
-                        // `verified` not `analysis incomplete`).  For a
-                        // fully-fresh proof the fold yields the same verdict
-                        // as `root.status` did.
-                        let v = lemma_verdict(
-                            tamarin_theory::constraint::solver::search::proof_status(&root),
-                            exists_trace,
-                        );
-                        let body = tamarin_theory::pretty_theory::pretty_proof_body(&root);
-                        if want_traces {
-                            for (path, sys) in
-                                tamarin_theory::constraint::solver::search::into_solved_systems(
-                                    root,
-                                )
-                            {
-                                lemma_traces.push((
-                                    trace_output_label(theory_name, &lemma_name, &path),
-                                    sys,
-                                ));
-                            }
+                let root = outcome.map_err(RunError::from)?;
+                let (verdict, proof_steps, proof_body) = {
+                    let steps = count_proof_steps(&root);
+                    // HS lemma verdict = `getProofStatus` (Proof.hs)
+                    // folded over the WHOLE tree, NOT the root's
+                    // per-node `NodeStatus`.  This matters for
+                    // part-replayed proofs: a stale stored-proof branch
+                    // kept verbatim is `Undetermined`, which the
+                    // Semigroup absorbs into the `Complete` of the
+                    // freshly-proved siblings (e.g. KCL07-manualproof —
+                    // `verified` not `analysis incomplete`).  For a
+                    // fully-fresh proof the fold yields the same verdict
+                    // as `root.status` did.
+                    let v = lemma_verdict(
+                        tamarin_theory::constraint::solver::search::proof_status(&root),
+                        exists_trace,
+                    );
+                    let body = tamarin_theory::pretty_theory::pretty_proof_body(&root);
+                    if want_traces {
+                        for (path, sys) in
+                            tamarin_theory::constraint::solver::search::into_solved_systems(root)
+                        {
+                            lemma_traces
+                                .push((trace_output_label(theory_name, &lemma_name, &path), sys));
                         }
-                        (v, steps, Some(body))
                     }
-                    Err(tamarin_theory::prove::ProveError::Guarded(msg)) => {
-                        // HS `formulaToGuarded_ = either (error . render) id`
-                        // (Guarded.hs:466-467): a proven lemma whose formula
-                        // cannot be converted to a guarded formula kills the
-                        // whole run — message on stderr, exit 1, and NO
-                        // theory output on stdout (HS renders lazily after
-                        // proving, so the abort precedes all stdout output).
-                        std::process::exit(ghc_exception(&msg));
-                    }
-                    Err(e) => (LemmaVerdict::Error(format!("{}", e)), 0, None),
+                    (v, steps, Some(body))
                 };
                 let pl = tamarin_theory::pretty_theory::ProvedLemma {
                     name: lemma_name.clone(),
@@ -1916,90 +2012,38 @@ impl TheoryPipeline<'_> {
                     proof_steps,
                     exists_trace,
                 };
-                (pl, lr, lemma_traces)
+                Ok((pl, lr, lemma_traces))
             };
 
-            if let Some(sess) = &session {
-                use rayon::prelude::*;
-                // Single-flight per-source-key saturation: compute each
-                // distinct refined-source key ONCE and seed the session cache
-                // before the lemma fan-out below, so its concurrent workers all
-                // hit the restore path rather than each recomputing the
-                // identical saturation (HS computes `_crcRefinedSources` once
-                // per `ClosedRuleCache`, RuleItem.hs:64-69).  The predicate mirrors
-                // `run_lemma`'s `is_target`; the session skips lemmas that would
-                // emit a bare sorry (they never saturate).
-                let cache_disabled = tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE");
-                sess.presaturate_shared_sources(cache_disabled, |name| {
-                    prove_anything && lemma_matches(lemma_filter, name)
+            // Fallible theories stay ordered so an oracle/guarded error cannot
+            // be trapped behind other unbounded work. Fully internal,
+            // guardable theories retain the indexed parallel fast path; Rayon
+            // preserves declaration order when collecting this iterator.
+            let lemmas: Vec<_> = elaborated.lemmas().collect();
+            let ordered = session.guarded_lemmas_may_fail()
+                || lemmas.iter().any(|lemma| {
+                    prove_anything
+                        && lemma_matches(lemma_filter, &lemma.name)
+                        && session.lemma_ranking_may_fail(&lemma.name)
                 });
-                let specs: Vec<&tamarin_theory::theory::Lemma> = elaborated.lemmas().collect();
-                let mut out: Vec<(
-                    usize,
-                    tamarin_theory::pretty_theory::ProvedLemma,
-                    LemmaResult,
-                    Vec<(String, System)>,
-                )> = specs
-                    .par_iter()
-                    .enumerate()
-                    .map(|(i, l)| {
-                        let (pl, lr, tr) = run_lemma(l);
-                        (i, pl, lr, tr)
-                    })
-                    .collect();
-                // Reassemble in DECLARATION order so output is identical to the
-                // sequential loop regardless of which worker finished first.
-                // That order is also HS `getLemmas thy`'s (Batch.hs:278), which
-                // is what `outputTraces` serialises the graphs in.
-                out.sort_by_key(|(i, _, _, _)| *i);
-                for (_, pl, lr, tr) in out {
-                    proved_lemmas.push(pl);
-                    results.push(lr);
-                    trace_systems.extend(tr);
-                }
-            } else if !prove_anything {
-                // The plain-load check pass needs the session's
-                // check_and_extend arm; the pool fallback below always
-                // auto-proves.  If the session failed to build, keep the
-                // no-solver behaviour instead of launching searches nobody
-                // asked for.
-                results = skipped_results(elaborated, lemma_filter);
+            let lemma_results: Vec<_> = if ordered {
+                lemmas
+                    .into_iter()
+                    .map(run_lemma)
+                    .collect::<Result<Vec<_>, RunError>>()?
             } else {
-                // Session-build failure under --prove.  The pool fallback has
-                // no check-and-extend arm, so it must not launch searches on
-                // lemmas the selector excludes: HS `proveTheory` applies the
-                // prover only to selector matches (CloseRule.hs:142-163, see line 158) and
-                // leaves the rest their stored/sorry proofs.  Excluded lemmas
-                // keep the parsed skeleton (rendered verbatim via the
-                // `proof_body: None` fall-through) and report the sorry
-                // placeholder's status — a stored COMPLETE proof therefore
-                // reads "analysis incomplete" here where the session path
-                // would replay it to "verified", but this path only runs
-                // when the session itself failed to build.
-                for l in elaborated.lemmas() {
-                    if lemma_matches(lemma_filter, &l.name) {
-                        let (pl, lr, tr) = run_lemma(l);
-                        proved_lemmas.push(pl);
-                        results.push(lr);
-                        trace_systems.extend(tr);
-                    } else {
-                        proved_lemmas.push(tamarin_theory::pretty_theory::ProvedLemma {
-                            name: l.name.clone(),
-                            proof_body: None,
-                        });
-                        results.push(LemmaResult {
-                            name: l.name.clone(),
-                            verdict: LemmaVerdict::Filtered,
-                            // The sorry placeholder counts as 1 step (see
-                            // `skipped_results`).
-                            proof_steps: 1,
-                            exists_trace: matches!(
-                                l.trace_quantifier,
-                                tamarin_theory::theory::TraceQuantifier::ExistsTrace,
-                            ),
-                        });
-                    }
-                }
+                // Source saturation uses its own pool, so workers can wait on
+                // the shared lazy cache without starving its nested work.
+                use rayon::prelude::*;
+                lemmas
+                    .par_iter()
+                    .map(|lemma| run_lemma(lemma))
+                    .collect::<Result<Vec<_>, RunError>>()?
+            };
+            for (pl, lr, tr) in lemma_results {
+                proved_lemmas.push(pl);
+                results.push(lr);
+                trace_systems.extend(tr);
             }
         }
 
@@ -2012,9 +2056,9 @@ impl TheoryPipeline<'_> {
 }
 
 fn run_batch(args: &Args) -> Result<i32, RunError> {
-    init_process_globals(args);
+    init_rayon_pool(args);
     if args.diff {
-        return Err(RunError(
+        return Err(RunError::Regular(
             "--diff (observational equivalence) is not yet ported to the Rust prover.".to_string(),
         ));
     }
@@ -2025,23 +2069,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // so the effective strategy is resolved inside the file loop by
     // `effective_cut` once the theory is parsed.
 
-    // `--output-json` / `--output-dot`: HS `outputTraces` (Batch.hs:249-317)
-    // serialises the constraint system of every `Finished Solved` proof node.
-    // The solver drops each node's `System` after expansion unless told
-    // otherwise, so the retention policy has to be raised for the whole
-    // process BEFORE the first lemma is proved.  `KeepSolved` (not
-    // `KeepAll`) is scoped to solved nodes, so a run without these flags
-    // pays nothing and a run with them retains only the systems
-    // `outputTraces` actually reads.
-    if wants_trace_output(args) {
-        tamarin_theory::constraint::solver::search::set_sys_retention(
-            tamarin_theory::constraint::solver::search::SysRetention::KeepSolved,
-        );
-    }
     if args.in_files.is_empty() {
-        return Err(RunError("no input files given".to_string()));
+        return Err(RunError::Regular("no input files given".to_string()));
     }
-    let mut overall_status = 0i32;
     let mut file_results: Vec<FileResult> = Vec::new();
     // `--parse-only` docs, buffered and printed AFTER the file loop: HS
     // (Batch.hs:91-95) runs `mapM (processThy "") inFiles` to completion
@@ -2114,7 +2144,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         Some(
             m @ (ModuleType::ProVerifEquivalence | ModuleType::ProVerif | ModuleType::DeepSec),
         ) => {
-            return Err(RunError(format!(
+            return Err(RunError::Regular(format!(
                 "--output-module={}: the ProVerif / DeepSec export backends are not yet ported to \
                  the Rust prover.",
                 m.as_str()
@@ -2202,7 +2232,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // fold set — elaboration is RS's signature-construction step
             // (HS builds the same pure signature during parsing).
             let elaborated = elaborate_with_in_file(&parsed, in_file).map_err(|e| {
-                RunError(format!("elaboration error in {}: {}", in_file, e.message))
+                RunError::Regular(format!("elaboration error in {}: {}", in_file, e.message))
             })?;
             let body = tamarin_theory::pretty_theory::pretty_open_theory(&elaborated);
             parse_only_docs.push(body);
@@ -2241,7 +2271,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             tamarin_theory::prove::ConfigBlock::default()
         };
         if let Some(msg) = &config_block.flag_error {
-            return Err(RunError(format!("configuration block: {}", msg)));
+            return Err(RunError::Regular(format!("configuration block: {}", msg)));
         }
         let auto_sources = opts.auto_sources || config_block.auto_sources;
         let cut = effective_cut(&opts, &config_block)?;
@@ -2263,8 +2293,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             }
             lines
         }));
-        let mut elaborated = elaborate_with_in_file(&parsed, in_file)
-            .map_err(|e| RunError(format!("elaboration error in {}: {}", in_file, e.message)))?;
+        let mut elaborated = elaborate_with_in_file(&parsed, in_file).map_err(|e| {
+            RunError::Regular(format!("elaboration error in {}: {}", in_file, e.message))
+        })?;
         DEFERRED_HS_ERROR_MARKERS.take();
 
         // Everything downstream of `elaborate` reads the internal theory; the
@@ -2275,8 +2306,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         //
         // HS applies it inside `loadTheory` (TheoryLoader.hs:449-452), which both
         // modes call; the interactive path reaches it through
-        // `tamarin_server::theory_io::set_ndc_check` (wired in
-        // `run_interactive`), which writes the same field on every web load.
+        // the server load configuration, which writes the same field on every
+        // web load.
         if !opts.ndc_check {
             elaborated.options.deduction_chain_check = false;
         }
@@ -2285,7 +2316,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // become the theory's own
         // `_lemmasToProve`, which `checkIfLemmasInTheory` reads back
         // (Wellformedness.hs:1168).  The interactive path writes the same
-        // field through `tamarin_server::theory_io::set_lemmas_to_prove`.
+        // field through the server load configuration.
         elaborated.options.lemmas_to_prove = opts.lemma_names.clone();
         let maude_sig = elaborated.signature.clone();
 
@@ -2312,7 +2343,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             return Ok(code);
         }
 
-        st.check_translated_theory();
+        st.check_translated_theory()?;
 
         // `--quit-on-warning` (HS `withVersionAndReport`, TheoryLoader.hs:
         // 643-660, see line 656): a non-empty report throws `WarningError`
@@ -2382,16 +2413,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             None => {
                 let closed = st.close_translated_theory()?;
 
-                // HS-faithful: rc=0 regardless of verdict.  Falsified is a
-                // valid analysis outcome — the prover ran successfully and
-                // found a counter-example trace.  Only true errors (parse
-                // failures, Maude crashes, IO errors) escalate to non-zero.
-                for r in &closed.results {
-                    if matches!(r.verdict, LemmaVerdict::Error(_)) {
-                        overall_status = overall_status.max(1);
-                    }
-                }
-
                 if opts.precompute_only_mode {
                     // HS `--precompute-only` (Batch.hs:96-100, 201-206): the file's
                     // doc is `ppWf report $--$ prettyPrecomputation thy''` — the
@@ -2403,8 +2424,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // phase below, where HS's lazy renderDoc forces them.
                     let maude = st.require_maude()?;
                     let session = st
-                        .build_prover_session(maude)
-                        .map_err(|e| RunError(e.to_string()))?;
+                        .build_prover_session(maude, tamarin_theory::prove::CliHeuristic::default())
+                        .map_err(RunError::from)?;
                     let wf_len = st.wf_report.len();
                     precompute_pending.push((session, wf_len));
                 } else {
@@ -2486,9 +2507,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // The trace is already armed: each file's `close_translated_theory`
             // left it on, matching HS, where this forcing happens inside the
             // same `showSaturation = True` close.
-            let stats = session
-                .precomputation_stats()
-                .map_err(|e| RunError(e.to_string()))?;
+            let stats = session.precomputation_stats().map_err(RunError::from)?;
             // HS `casesInfo` (ClosedTheory.hs:563-570).
             let chain_info = |n: usize| -> String {
                 if n == 0 {
@@ -2570,20 +2589,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         print_overall_summary(&file_results, opts.prove_mode);
     }
 
-    Ok(overall_status)
-}
-
-/// Once-per-process globals every mode installs before theory work: the
-/// rayon worker pool and the `-c/--open-chains` / `-s/--saturation` limits
-/// (HS `TheoryLoadOptions` openChainsLimit/saturationLimit, threaded into
-/// every close; one helper for both modes because HS shares one
-/// `TheoryLoadOptions` across them).
-fn init_process_globals(args: &Args) {
-    init_rayon_pool(args);
-    tamarin_theory::constraint::solver::sources::set_cli_solver_limits(
-        args.open_chains,
-        args.saturation,
-    );
+    // Every analysis verdict is a successful invocation. Parse, I/O, Maude,
+    // guarded-conversion and ranking failures have already returned above.
+    Ok(0)
 }
 
 /// HS-equivalent: GHC's `+RTS -N RTS_FLAG` sets the worker capacity for
@@ -2905,7 +2913,13 @@ mod tests {
 
     #[test]
     fn mk_theory_load_options_accepts_valid_values() {
-        let a = parse(&["--partial-evaluation=Verbose", "-m=msr", "x.spthy"]);
+        let a = parse(&[
+            "--partial-evaluation=Verbose",
+            "-m=msr",
+            "-c=7",
+            "-s=3",
+            "x.spthy",
+        ]);
         let o = mk_theory_load_options(&a).expect("valid values");
         assert_eq!(o.partial_evaluation, Some(crate::cli::PartialEval::Verbose),);
         assert_eq!(o.output_module, Some(ModuleType::Msr));
@@ -2913,6 +2927,8 @@ mod tests {
         // the record; `ndcCheck` defaults on.
         assert_eq!(o.derivation_checks, 5);
         assert!(o.ndc_check);
+        assert_eq!(o.parameters.open_chains_limit(), 7);
+        assert_eq!(o.parameters.saturation_limit(), 3);
         let a = parse(&["--no-ndc", "-d=0", "x.spthy"]);
         let o = mk_theory_load_options(&a).expect("valid values");
         assert_eq!(o.derivation_checks, 0);
@@ -2929,7 +2945,9 @@ mod tests {
     #[test]
     fn diff_flag_errors_cleanly() {
         let a = parse(&["--diff", "/nonexistent/in.spthy"]);
-        let RunError(msg) = run(&a).expect_err("--diff must not run");
+        let RunError::Regular(msg) = run(&a).expect_err("--diff must not run") else {
+            panic!("expected a regular error");
+        };
         assert!(msg.contains("--diff"), "{msg}");
         assert!(msg.contains("not yet ported"), "{msg}");
     }
@@ -2941,7 +2959,9 @@ mod tests {
         // one the mode errors out before it looks at `--interface`.  That is
         // why this test asserts the message, not only that an error occurs.
         let a = parse(&["interactive", "--interface=not-an-ip", "/tmp"]);
-        let RunError(msg) = run(&a).expect_err("expected interface parse error");
+        let RunError::Regular(msg) = run(&a).expect_err("expected interface parse error") else {
+            panic!("expected a regular error");
+        };
         assert!(msg.contains("--interface=\"not-an-ip\""), "{msg}");
         assert!(msg.contains("--interface=\"*4\""), "{msg}");
     }

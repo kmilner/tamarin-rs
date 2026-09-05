@@ -22,6 +22,6 @@ pub mod proof_tree;
 pub use ast::*;
 pub use parser::{
     parse_diff_theory, parse_diff_theory_with_base, parse_intruder_rules, parse_theory,
-    parse_theory_with_base, GhcError, Message, ParseError,
+    parse_theory_with_base, parse_theory_with_manifest, GhcError, InputAlias, Message, ParseError,
 };
 pub use proof_tree::parse_proof_tree;

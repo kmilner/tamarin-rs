@@ -51,6 +51,13 @@ impl std::fmt::Display for VariantsError {
     }
 }
 impl std::error::Error for VariantsError {}
+impl From<crate::tools::equation_store::AddEqsError> for VariantsError {
+    fn from(error: crate::tools::equation_store::AddEqsError) -> Self {
+        let crate::tools::equation_store::AddEqsError::Maude(message) = error;
+        Self::Maude(message)
+    }
+}
+
 impl From<MaudeError> for VariantsError {
     fn from(e: MaudeError) -> Self {
         VariantsError::Maude(format!("{}", e))
@@ -108,7 +115,7 @@ pub fn variants_proto_rule(
             substs,
             |_, _| false,
             maude,
-        );
+        )?;
     // HS `trueDisj = [emptySubstVFresh]` (RuleVariants.hs:61-133, see line 119).
     let fresh_substs = residual.unwrap_or_else(|| vec![LNSubstVFresh::empty()]);
     Ok(Some(make_proto_rule_ac(rule, &common_subst, fresh_substs)))
@@ -261,9 +268,11 @@ pub fn variant_substs_for_rule(
 /// Returns `Ok(None)` when no reducible-headed sub-terms exist, in
 /// which case `rule` is already canonical and needs no variants.
 ///
-/// Populate each protocol rule's `abstracted_rule` + `variant_substs`
-/// via Maude, mirroring HS `closeTheoryWithMaude`'s variant
-/// pre-computation (`ClosedTheory.hs` `closeTheory`).  Both the CLI
+/// Populate the AC representation returned by [`abstract_rule_and_variants`],
+/// mirroring HS `closeTheoryWithMaude`'s variant pre-computation
+/// (`ClosedTheory.hs` `closeTheory`). Rules whose unchanged form still needs a
+/// raw AC query are deliberately left for [`prepare_open_rule_variant`] after
+/// loop-breaker annotation. Both the CLI
 /// (`--prove`) and the interactive server call this so a theory is
 /// "closed" identically on both paths.
 ///
@@ -277,56 +286,133 @@ pub fn populate_rule_variants(
     elaborated: &mut Theory,
     maude: &MaudeHandle,
     pool: Option<&MaudePool>,
-) {
-    // HS-faithful: skip variant computation if the signature has NO
-    // reducible function symbols — there's nothing to narrow.
+) -> Result<(), VariantsError> {
     if maude.maude_sig().reducible_fun_syms.is_empty() {
-        return;
+        return Ok(());
     }
-    let outs: Vec<Option<(ProtoRuleE, Vec<LNSubstVFresh>)>> = if let Some(pool) = pool {
-        use rayon::prelude::*;
-        elaborated
-            .items
-            .par_iter()
-            .map(|item| {
-                let TheoryItem::Rule(opr) = item else {
-                    return None;
-                };
-                // Per-task Maude from the pool: each rule's variant
-                // computation runs on its own subprocess (no IPC mutex
-                // contention).
-                let pooled = pool.acquire();
-                match abstract_rule_and_variants(&pooled, &opr.rule) {
-                    Ok(Some(pair)) => Some(pair),
-                    _ => None,
-                }
-            })
-            .collect()
-    } else {
-        elaborated
-            .items
-            .iter()
-            .map(|item| {
-                let TheoryItem::Rule(opr) = item else {
-                    return None;
-                };
-                match abstract_rule_and_variants(maude, &opr.rule) {
-                    Ok(Some(pair)) => Some(pair),
-                    _ => None,
-                }
-            })
-            .collect()
-    };
+    let outs: Result<Vec<Option<(ProtoRuleE, Vec<LNSubstVFresh>)>>, VariantsError> =
+        if let Some(pool) = pool {
+            use rayon::prelude::*;
+            elaborated
+                .items
+                .par_iter()
+                .map(|item| -> Result<_, VariantsError> {
+                    let TheoryItem::Rule(opr) = item else {
+                        return Ok(None);
+                    };
+                    // Per-task Maude from the pool: each rule's variant
+                    // computation runs on its own subprocess (no IPC mutex
+                    // contention).
+                    let pooled = pool.acquire();
+                    abstract_rule_and_variants(&pooled, &opr.rule)
+                })
+                .collect()
+        } else {
+            elaborated
+                .items
+                .iter()
+                .map(|item| -> Result<_, VariantsError> {
+                    let TheoryItem::Rule(opr) = item else {
+                        return Ok(None);
+                    };
+                    abstract_rule_and_variants(maude, &opr.rule)
+                })
+                .collect()
+        };
     // Sequential writeback in source order.
-    for (item, out) in elaborated.items.iter_mut().zip(outs) {
+    for (item, out) in elaborated.items.iter_mut().zip(outs?) {
         let TheoryItem::Rule(opr) = item else {
             continue;
         };
-        if let Some((abstr, substs)) = out {
-            opr.abstracted_rule = Some(abstr);
-            opr.variant_substs = substs;
+        if let Some((abstracted, variants)) = out {
+            opr.abstracted_rule = Some(abstracted);
+            opr.variant_substs = variants;
         }
     }
+    Ok(())
+}
+
+/// Close the protocol-rule portion of a theory in Haskell's order: compute
+/// variants, report wellformedness while zero-variant rules are still present,
+/// remove those rules, then optionally annotate loop breakers for a closed
+/// theory. Both frontends use this sequence.
+pub fn prepare_theory_rules(
+    theory: &mut Theory,
+    maude: &MaudeHandle,
+    pool: Option<&MaudePool>,
+    annotate_breakers: bool,
+) -> Result<crate::wellformedness::WfReport, VariantsError> {
+    populate_rule_variants(theory, maude, pool)?;
+    let report = crate::wellformedness::check_wellformedness(theory, Some(maude));
+    finish_theory_rules(theory, maude, annotate_breakers);
+    Ok(report)
+}
+
+/// Re-close rules produced by partial evaluation. Unlike the initial close,
+/// this phase has no additional wellformedness report, but filtering and loop
+/// breaker annotation must retain the same ordering.
+pub fn reprepare_theory_rules(
+    theory: &mut Theory,
+    maude: &MaudeHandle,
+    pool: Option<&MaudePool>,
+) -> Result<(), VariantsError> {
+    populate_rule_variants(theory, maude, pool)?;
+    finish_theory_rules(theory, maude, true);
+    Ok(())
+}
+
+fn finish_theory_rules(theory: &mut Theory, maude: &MaudeHandle, annotate_breakers: bool) {
+    retain_rules_with_variants(theory, maude);
+    if annotate_breakers {
+        crate::constraint::solver::context::annotate_theory_loop_breakers(theory, maude);
+    }
+}
+
+fn prepared_rule_variant(
+    maude: &MaudeHandle,
+    rule: &ProtoRuleE,
+) -> Result<Option<(Option<ProtoRuleE>, Vec<LNSubstVFresh>)>, VariantsError> {
+    let reducible = &maude.maude_sig().reducible_fun_syms_fast;
+    let has_reducible = rule
+        .premises
+        .iter()
+        .chain(&rule.actions)
+        .chain(&rule.conclusions)
+        .flat_map(|fact| fact.terms.iter())
+        .chain(rule.new_vars.iter())
+        .any(|term| term.any_fun_sym(|symbol| reducible.contains(symbol)));
+    if !has_reducible {
+        if let Some(renamed) = rename_precise_rule_if_changed(rule) {
+            return Ok(Some((Some(renamed), vec![LNSubstVFresh::empty()])));
+        }
+        let variants = variant_substs_for_rule(maude, rule)?;
+        return Ok((!variants.is_empty()).then_some((None, variants)));
+    }
+    match abstract_rule_and_variants(maude, rule) {
+        Ok(Some((abstracted, variants))) => Ok(Some((Some(abstracted), variants))),
+        // A reducible rule with no variants is deliberately left empty;
+        // the frontend reports and removes it while closing the theory.
+        Ok(None) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Complete one rule for a solver context. Whole-theory closing precomputes
+/// reducible variants, but the raw AC query for an otherwise unchanged rule
+/// deliberately stays here: moving it before loop-breaker annotation changes
+/// variant/case canonicalization in AC theories.
+pub fn prepare_open_rule_variant(
+    rule: &mut OpenProtoRule,
+    maude: &MaudeHandle,
+) -> Result<(), VariantsError> {
+    if rule.abstracted_rule.is_some() || !rule.variant_substs.is_empty() {
+        return Ok(());
+    }
+    if let Some((abstracted, variants)) = prepared_rule_variant(maude, &rule.rule)? {
+        rule.abstracted_rule = abstracted;
+        rule.variant_substs = variants;
+    }
+    Ok(())
 }
 
 pub fn abstract_rule_and_variants(
@@ -804,7 +890,7 @@ pub fn abstract_rule_and_variants(
             composed_substs,
             |_, _| false,
             maude,
-        );
+        )?;
 
     // Apply common_subst to the abstracted rule's terms.
     let abstracted_rule = if common_subst.is_empty() {
@@ -1111,10 +1197,9 @@ pub fn rule_has_no_variants_for_wf_with(
 /// verdict is read off the [`OpenProtoRule`], so no rule costs a second
 /// `get variants` query.
 ///
-/// `populate_rule_variants` returns before touching any rule when the
-/// signature has no reducible function symbols; the verdict is then absent
-/// and the syntactic path of [`rule_has_no_variants_for_wf_with`] answers on
-/// its own.
+/// The whole-theory pass leaves destructor-free rules untouched; the
+/// syntactic path of [`rule_has_no_variants_for_wf_with`] answers their
+/// fresh-redundancy condition directly.
 pub fn open_rule_has_no_variants(maude: &MaudeHandle, opr: &OpenProtoRule) -> bool {
     let reducible_has_no_variants = (!maude.maude_sig().reducible_fun_syms.is_empty())
         .then(|| opr.abstracted_rule.is_none() && opr.variant_substs.is_empty());
@@ -1221,6 +1306,46 @@ mod tests {
 
         assert_eq!(renamed_substs[0].to_list(), vec![(mvar(0), mterm(7))]);
         assert_eq!(renamed.premises[0].terms[0], mterm(1));
+    }
+
+    #[test]
+    fn whole_theory_pass_defers_unchanged_rules_to_the_context() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+        let rule = empty_rule("R");
+        let mut theory = Theory::new("T", pair_maude_sig());
+        theory
+            .items
+            .push(TheoryItem::Rule(OpenProtoRule::new(rule)));
+
+        populate_rule_variants(&mut theory, &h, None).expect("populate variants");
+
+        let TheoryItem::Rule(rule) = &theory.items[0] else {
+            panic!("expected rule")
+        };
+        assert!(rule.abstracted_rule.is_none());
+        assert!(rule.variant_substs.is_empty());
+    }
+
+    #[test]
+    fn open_rule_preparation_propagates_transport_failure() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+        let mut rule = empty_rule("R");
+        rule.premises.push(Fact::new(
+            FactTag::Out,
+            vec![Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 0)))],
+        ));
+        let mut rule = OpenProtoRule::new(rule);
+        h.kill_subprocess();
+
+        assert!(prepare_open_rule_variant(&mut rule, &h).is_err());
+        assert!(rule.abstracted_rule.is_none());
+        assert!(rule.variant_substs.is_empty());
     }
 
     #[test]
