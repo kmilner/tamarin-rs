@@ -781,11 +781,13 @@ pub(crate) fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+pub(crate) const RESERVED_NAMES: [&str; 4] = ["in", "let", "rule", "diff"];
+
 /// Reserved names that `T.identifier spthy` rejects (Token.hs:214-230, see line 225). A word equal
 /// to one of these is not a valid identifier.
 #[inline]
 pub(crate) fn is_reserved_name(s: &str) -> bool {
-    matches!(s, "in" | "let" | "rule" | "diff")
+    RESERVED_NAMES.contains(&s)
 }
 
 #[cfg(test)]

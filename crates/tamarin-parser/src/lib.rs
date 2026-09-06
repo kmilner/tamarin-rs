@@ -13,6 +13,9 @@
 //! `_restrict` expansion, macro expansion, scope analysis) is deferred to
 //! a later elaboration pass. The goal is to recognise every well-formed
 //! `.spthy` file that Tamarin's Haskell parser accepts.
+//!
+//! Diagnostics use Rust source spans and semantic error kinds. Exact Parsec
+//! expectation lists and GHC exception call stacks are not a compatibility goal.
 
 pub mod ast;
 pub mod lexer;
@@ -24,6 +27,6 @@ pub use ast::*;
 pub use parse_error::{DiagnosticLabel, IllegalDiffReason, ParseContext, ParseErrorKind};
 pub use parser::{
     parse_diff_theory, parse_diff_theory_with_base, parse_intruder_rules, parse_theory,
-    parse_theory_with_base, parse_theory_with_manifest, GhcError, InputAlias, ParseError,
+    parse_theory_with_base, parse_theory_with_manifest, InputAlias, ParseError,
 };
 pub use proof_tree::parse_proof_tree;

@@ -131,7 +131,7 @@ fn source_names_are_first_write_wins() {
         .with_source("upload.spthy")
         .with_source("root.spthy");
     assert_eq!(error.source_name(), Some("upload.spthy"));
-    assert!(error.to_string().starts_with("\"upload.spthy\""));
+    assert!(error.to_string().starts_with("upload.spthy:"));
 }
 
 #[test]
@@ -142,20 +142,10 @@ fn conflicting_functions_retain_their_option_details() {
         error.kind(),
         ParseErrorKind::ConflictingDeclaration { .. }
     ));
-    let notes = error.diagnostic_notes();
-    assert_eq!(notes.len(), 1);
-    assert!(
-        notes[0].contains("conflicting arities/options"),
-        "{notes:?}"
-    );
-    assert!(
-        notes[0].contains("(1,Public,Constructor,NotNDC)"),
-        "{notes:?}"
-    );
-    assert!(
-        notes[0].contains("(2,Public,Constructor,NotNDC)"),
-        "{notes:?}"
-    );
+    assert!(error
+        .diagnostic_notes()
+        .iter()
+        .any(|note| note.contains("arity 2 requested, previously 1")));
 }
 
 #[test]
@@ -434,8 +424,8 @@ fn included_file_errors_keep_the_included_source() {
     assert!(
         error
             .to_string()
-            .starts_with(&format!("\"{}\"", included.display())),
-        "legacy and structured source names diverged: {error}"
+            .starts_with(&format!("{}:", included.display())),
+        "Display lost the included source name: {error}"
     );
     assert_eq!(error.source_text(), Some("unknown_item: x\n"));
     common::assert_span(&error, error.source_text().unwrap(), "unknown_item");

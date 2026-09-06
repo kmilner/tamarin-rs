@@ -36,8 +36,7 @@ pub(crate) fn bounded_diagnostic_text(text: &str, max_chars: usize) -> String {
 
 pub(crate) fn bound_owned_text(text: &mut String, max_chars: usize) {
     if let Some((end, _)) = text.char_indices().nth(max_chars) {
-        text.truncate(end);
-        text.push('…');
+        *text = format!("{}…", &text[..end]);
     }
 }
 
@@ -193,7 +192,6 @@ pub(crate) struct DiagnosticInfo {
     span: Option<Range<usize>>,
     location: Option<(u32, u32)>,
     source: Option<String>,
-    ghc_error: Option<crate::parser::GhcError>,
     related: Option<DiagnosticLabel>,
 }
 
@@ -288,11 +286,6 @@ impl ParseError {
         self
     }
 
-    pub(crate) fn with_ghc_error(mut self, error: crate::parser::GhcError) -> Self {
-        self.diagnostic_mut().ghc_error = Some(error);
-        self
-    }
-
     pub fn kind(&self) -> &ParseErrorKind {
         static EXPECTED_THEORY: ParseErrorKind = ParseErrorKind::Expected {
             context: ParseContext::Theory,
@@ -315,8 +308,7 @@ impl ParseError {
             })
     }
 
-    /// Anchor a semantic diagnostic to the token that caused it. The legacy
-    /// parsec position and messages remain internally available to `Display`.
+    /// Anchor a diagnostic to its cause while retaining the parse progress position.
     pub(crate) fn with_location(mut self, pos: Pos, len: usize) -> Self {
         let diagnostic = self.diagnostic_mut();
         diagnostic.span = Some(pos.offset..pos.offset.saturating_add(len));
@@ -461,14 +453,6 @@ impl ParseError {
             .unwrap_or((self.pos.line, self.pos.col))
     }
 
-    /// The upstream GHC exception represented by this failure, when parsing
-    /// aborted through an `error` call rather than an ordinary parsec error.
-    pub fn ghc_error(&self) -> Option<&crate::parser::GhcError> {
-        self.diagnostic
-            .as_ref()
-            .and_then(|diagnostic| diagnostic.ghc_error.as_ref())
-    }
-
     pub fn diagnostic_message(&self) -> String {
         if matches!(self.kind(), ParseErrorKind::Custom) {
             // Message order is parsec's stable merge order and therefore also
@@ -589,20 +573,16 @@ impl ParseError {
         };
 
         if matches!(self.kind(), ParseErrorKind::Expected { .. }) {
-            let unexpected = |want_user| {
-                self.messages.iter().find_map(|message| match message {
-                    Message::UnExpect(s) if want_user && !s.is_empty() => Some(s.as_str()),
-                    Message::SysUnExpect(s) if !want_user && !s.is_empty() => Some(s.as_str()),
-                    _ => None,
-                })
-            };
-            let found = unexpected(true).or_else(|| unexpected(false));
+            let found = self.messages.iter().find_map(|message| match message {
+                Message::SysUnExpect(s) => Some(s.as_str()),
+                _ => None,
+            });
             let mut expected = Vec::new();
             for message in &self.messages {
                 let Message::Expect(value) = message else {
                     continue;
                 };
-                if !value.is_empty() && !expected.contains(&value.as_str()) {
+                if !value.is_empty() {
                     expected.push(value.as_str());
                 }
             }

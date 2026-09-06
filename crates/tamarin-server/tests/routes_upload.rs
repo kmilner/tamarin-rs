@@ -107,7 +107,7 @@ async fn test_post_index_with_garbage_source_shows_alert() {
         body.contains(concat!(
             "<body><p class=\"message\">Theory loading failed:\n",
             "garbage.spthy:1:1: Unexpected input while parsing theory\n",
-            "  = note: expected &quot;theory&quot;; found &quot;t&quot;</p>"
+            "  = note: expected &quot;theory&quot;; found &#39;t&#39;</p>"
         )),
         "expected the parse error in the upload banner; body=\n{}",
         body
