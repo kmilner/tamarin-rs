@@ -2114,3 +2114,23 @@ fn diff_probe(args: &str) -> String {
              [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff({args}) ) ]\n\nend\n"
     )
 }
+
+#[test]
+fn lemma_comment_stripping_preserves_textarea_newline_rules() {
+    for (source, expected) in [
+        ("α/β*γ", "α/β*γ"),
+        ("a\n// comment\nb", "a\nb"),
+        ("a\n/* comment */\nb", "ab"),
+        ("a\n\n/* comment */\n\nb", "a\n\nb"),
+        ("a// tail", "a"),
+        ("a\n/* tail", "a"),
+        ("a/* outer /* inner */b */c", "ab */c"),
+        ("a// one\n// two\nb", "a\nb"),
+        ("a\n/* one *//* two */\nb", "ab"),
+        ("a\r\n/* comment */\r\nb", "a\r\r\nb"),
+        ("\"a//quoted\"\nb", "\"a\nb"),
+        ("a/**/é/**/雪", "aé雪"),
+    ] {
+        assert_eq!(remove_comments(source), expected, "{source:?}");
+    }
+}

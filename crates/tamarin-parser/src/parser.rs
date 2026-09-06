@@ -363,61 +363,31 @@ pub fn parse_intruder_rules(msig: &MaudeSig, input: &str) -> Result<Vec<Rule>, P
 /// comment's closing `*/\n` consumes the trailing newline.  This determines the
 /// textarea's `rows` count in the web Edit form (HS `textHeight = 2 + number of
 /// '\n'`), so it must match char-for-char.
-pub(crate) fn remove_comments(s: &str) -> String {
-    let cs: Vec<char> = s.chars().collect();
-    let n = cs.len();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < n {
-        // '\n' : '/' : '/'  — drop the leading newline + the comment body,
-        //                     keeping the terminating newline (dropWhile /= '\n').
-        if cs[i] == '\n' && i + 2 < n && cs[i + 1] == '/' && cs[i + 2] == '/' {
-            i += 3;
-            while i < n && cs[i] != '\n' {
-                i += 1;
-            }
-            continue;
-        }
-        // '/' : '/'  — drop up to (not including) the next newline.
-        if cs[i] == '/' && i + 1 < n && cs[i + 1] == '/' {
-            i += 2;
-            while i < n && cs[i] != '\n' {
-                i += 1;
-            }
-            continue;
-        }
-        // '\n' : '/' : '*'  — drop the leading newline, enter block-comment mode.
-        if cs[i] == '\n' && i + 2 < n && cs[i + 1] == '/' && cs[i + 2] == '*' {
-            i = remove_comment_block(&cs, i + 3);
-            continue;
-        }
-        // '/' : '*'  — enter block-comment mode.
-        if cs[i] == '/' && i + 1 < n && cs[i + 1] == '*' {
-            i = remove_comment_block(&cs, i + 2);
-            continue;
-        }
-        out.push(cs[i]);
-        i += 1;
+pub(crate) fn remove_comments(mut source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    while let Some((start, line_comment)) =
+        source
+            .match_indices('/')
+            .find_map(|(start, _)| match source.as_bytes().get(start + 1) {
+                Some(b'/') => Some((start, true)),
+                Some(b'*') => Some((start, false)),
+                _ => None,
+            })
+    {
+        let prefix = &source[..start];
+        out.push_str(prefix.strip_suffix('\n').unwrap_or(prefix));
+        source = &source[start + 2..];
+        source = if line_comment {
+            source.find('\n').map_or("", |end| &source[end..])
+        } else {
+            source.find("*/").map_or("", |end| {
+                let tail = &source[end + 2..];
+                tail.strip_prefix('\n').unwrap_or(tail)
+            })
+        };
     }
+    out.push_str(source);
     out
-}
-
-/// Consume a `/* ... */` block comment body starting at `i`, returning the
-/// index just past the closing `*/` (and its trailing `\n` if present).
-/// Mirrors HS `removeCommentBlock`.
-fn remove_comment_block(cs: &[char], mut i: usize) -> usize {
-    let n = cs.len();
-    while i < n {
-        if cs[i] == '*' && i + 1 < n && cs[i + 1] == '/' {
-            // '*' : '/' : '\n'  swallows the newline; otherwise stop after '*/'.
-            if i + 2 < n && cs[i + 2] == '\n' {
-                return i + 3;
-            }
-            return i + 2;
-        }
-        i += 1;
-    }
-    n
 }
 
 // =============================================================================
