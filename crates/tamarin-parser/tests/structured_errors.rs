@@ -1472,3 +1472,26 @@ fn trailing_input_has_structured_boundary_expectations() {
     assert_eq!(error.span().start, 0);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn explicit_sorts_do_not_leak_between_formula_operands() {
+    for prefix in ["", "(x:msg = y) & ", "(Seen(x:msg) | T) & "] {
+        for (operand, accepted) in [
+            ("i", true),
+            ("i:msg", false),
+            ("(i)", true),
+            ("(i:msg)", false),
+            ("<i>", true),
+            ("<i:msg>", false),
+            ("join(i)", true),
+            ("join(i:msg)", false),
+            ("c", true),
+        ] {
+            let source = format!(
+                "theory T begin functions: join/2 [AC], c/0                  lemma L: \"{prefix}{operand} < #j\" end"
+            );
+            let result = parse_theory(&source, &[]);
+            assert_eq!(result.is_ok(), accepted, "{source}: {result:?}");
+        }
+    }
+}

@@ -608,13 +608,6 @@ struct FunctionSite {
     builtin: bool,
 }
 
-// Formula alternatives change lexer and term state, but not declarations.
-struct FormulaCheckpoint<'a> {
-    lx: Lexer<'a>,
-    /// Whether the last variable had an explicit sort suffix.
-    sort_suffix_consumed: bool,
-}
-
 pub struct Parser<'a> {
     lx: Lexer<'a>,
     // These positions belong to this parser's source, not the shared include state.
@@ -634,7 +627,8 @@ pub struct Parser<'a> {
     source_file: Option<PathBuf>,
     /// Staged spelling of [`Self::source_file`] relative to the root input.
     staged_file: Option<PathBuf>,
-    /// Whether the last variable had an explicit sort suffix.
+    /// Set by every successful variable parse; only consulted for variable operands.
+    /// Formula alternatives need not restore it: the next variable overwrites it.
     sort_suffix_consumed: bool,
     /// Whether prefix applications resolve through [`Self::lookup_arity`]
     /// (HS `naryOpApp`/`binaryAlgApp`, Theory/Text/Parser/Term.hs:88-121).  True
@@ -4377,18 +4371,6 @@ impl<'a> Parser<'a> {
         continuation
     }
 
-    fn formula_checkpoint(&self) -> FormulaCheckpoint<'a> {
-        FormulaCheckpoint {
-            lx: self.lx.clone(),
-            sort_suffix_consumed: self.sort_suffix_consumed,
-        }
-    }
-
-    fn restore_formula(&mut self, checkpoint: FormulaCheckpoint<'a>) {
-        self.lx = checkpoint.lx;
-        self.sort_suffix_consumed = checkpoint.sort_suffix_consumed;
-    }
-
     fn fatom(&mut self) -> Result<Formula, ParseError> {
         self.skip_ws();
         if self.try_kw("F") || self.try_punct("⊥") {
@@ -4411,14 +4393,14 @@ impl<'a> Parser<'a> {
         // Try a complete atom before grouping a formula. A grouped term can
         // continue through any of the term grammar's operators before reaching
         // its relation, so inspecting just the next operator is insufficient.
-        let start = self.formula_checkpoint();
+        let start = self.lx.clone();
         let atom = self.formula_atom();
         // Capture lexer diagnostics as well as grammar errors before restoring.
         let atom_error = match self.lx.finish(atom) {
             Ok(formula) => return Ok(formula),
             Err(error) => error,
         };
-        self.restore_formula(start);
+        self.lx = start;
         if self.try_punct("(") {
             let formula = match self.iff() {
                 Ok(formula) => formula,
@@ -4448,7 +4430,7 @@ impl<'a> Parser<'a> {
         }
         // An action commits after @. A bare fact remains a candidate until
         // the complete relational-term alternative has been tried.
-        let start = self.formula_checkpoint();
+        let start = self.lx.clone();
         let fact = match self.fact() {
             Ok(fact) if self.try_punct("@") => {
                 let node = self.term(false)?;
@@ -4456,14 +4438,14 @@ impl<'a> Parser<'a> {
             }
             result => result,
         };
-        let fact_end = self.formula_checkpoint();
-        self.restore_formula(start);
+        let fact_end = self.lx.clone();
+        self.lx = start;
         let relation = self.relational_atom();
         let term_error = match self.lx.finish(relation) {
             Ok(formula) => return Ok(formula),
             Err(error) => error,
         };
-        self.restore_formula(fact_end);
+        self.lx = fact_end;
         match fact {
             Ok(_) if self.at_term_continuation() => Err(term_error),
             Ok(fact) => Ok(Formula::Atom(Atom::Pred(fact))),
@@ -4485,8 +4467,6 @@ impl<'a> Parser<'a> {
             // (Theory/Text/Parser/Formula.hs:51,56): `nodevarTerm` on both
             // sides, which reads a bare right operand as a timepoint.
             if matches!(&lhs, Term::Var(v) if v.sort == LSort::Node) {
-                let lhs = Self::node_operand(lhs, lhs_explicit_sort)
-                    .ok_or_else(|| self.err("expected node variable before `=`"))?;
                 let rhs = Self::node_operand(rhs, rhs_explicit_sort)
                     .ok_or_else(|| self.err("expected node variable after `=`"))?;
                 return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
