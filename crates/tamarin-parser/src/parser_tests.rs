@@ -149,6 +149,31 @@ fn alternative_selection_prioritizes_progress_and_keeps_stable_ties() {
 }
 
 #[test]
+fn fact_goal_heads_backtrack_but_node_failures_commit() {
+    for source in ["G(x) ▶ #i", "G(x) ▶x #i", "G(x) ∥ H(x))"] {
+        let mut parser = Parser::new(source, &[], false);
+        let mut head_error = None;
+        assert!(parser.fact_goal(&mut head_error).unwrap().is_none());
+        assert_eq!(parser.save().offset, 0);
+        assert!(head_error.is_some());
+        if source.contains('∥') {
+            assert!(matches!(parser.goal().unwrap(), GoalSpec::Disj(parts) if parts.len() == 2));
+        }
+    }
+    for separator in ["@", "▶₀"] {
+        for node in ["~i", "i:msg"] {
+            let source = format!("G(x) {separator} {node} ∥ H(x))");
+            let mut parser = Parser::new(&source, &[], false);
+            let mut head_error = None;
+            let error = parser.fact_goal(&mut head_error).unwrap_err();
+            assert!(head_error.is_none());
+            assert_eq!(error.span().start, source.find(node).unwrap());
+            assert!(error.diagnostic_message().contains("timepoint variable"));
+        }
+    }
+}
+
+#[test]
 fn incomplete_goals_do_not_blame_speculative_fact_names() {
     for (goal, found) in [("splitEqs", ')'), ("x", ')'), ("x @ #i", '@')] {
         let source = format!(r#"theory T begin lemma L: "T" by solve( {goal} ) end"#);

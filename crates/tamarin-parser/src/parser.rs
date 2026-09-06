@@ -5496,10 +5496,10 @@ impl<'a> Parser<'a> {
     ///     , chainGoal, disjSplitGoal, eqSplitGoal ]
     /// ```
     ///
-    /// Each of the first four alternatives wraps only its LEADING operator in
-    /// a `try`, so once that operator is read the alternative is committed and
-    /// a failure after it fails the whole goal; [`Parser::goal_after`] preserves
-    /// that commitment while retaining failed heads for error selection.
+    /// The first four HS alternatives backtrack over their leading operand and
+    /// complete separator (including a premise index), then commit to the tail.
+    /// The two fact alternatives share a head here; [`Parser::goal_after`]
+    /// preserves commitment while retaining failed heads for error selection.
     /// `disjSplitGoal` backtracks on its own because HS's `plainFormula`
     /// (Theory/Text/Parser/Formula.hs:112-117) is `try`-wrapped whole, and
     /// `eqSplitGoal` is `try $ do ...`.
@@ -5510,12 +5510,7 @@ impl<'a> Parser<'a> {
     /// [`Parser::formula`] reads a lower-case predicate-shaped atom.
     fn goal(&mut self) -> Result<GoalSpec, ParseError> {
         let mut head_error = None;
-        for parse in [
-            Self::subterm_goal,
-            Self::premise_goal,
-            Self::action_goal,
-            Self::chain_goal,
-        ] {
+        for parse in [Self::subterm_goal, Self::fact_goal, Self::chain_goal] {
             if let Some(goal) = parse(self, &mut head_error)? {
                 return Ok(goal);
             }
@@ -5616,47 +5611,39 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// HS `premiseGoal` (Theory/Text/Parser/Proof.hs:54-57): a `fact llit`
-    /// followed by `opRequires` (`▶` and a subscript natural,
-    /// Token.hs:618-619), both under the `try`, then a `nodevar`.
-    fn premise_goal(
+    /// HS `premiseGoal` (Theory/Text/Parser/Proof.hs:54-57) and `actionGoal`
+    /// (Theory/Text/Parser/Proof.hs:49-52) share `fact llit`. Select `opRequires`
+    /// (`▶` plus a subscript natural, Token.hs:618-619) or `opAt` (`@`,
+    /// Token.hs:566-568) after parsing the fact once. The complete separator,
+    /// including a premise index, remains under `try`; node-variable failures commit.
+    fn fact_goal(
         &mut self,
         head_error: &mut Option<ParseError>,
     ) -> Result<Option<GoalSpec>, ParseError> {
         self.goal_after(
             head_error,
             |p| {
-                let fa = p.fact()?;
+                let fact = p.fact()?;
                 p.skip_ws();
-                if !p.lx.eat_str("\u{25B6}") {
-                    return Err(p.err("expected `▶`"));
-                }
-                let v =
-                    p.lx.natural_subscript()
-                        .ok_or_else(|| p.err("expected a subscript premise index"))?;
-                Ok((fa, v))
+                let premise = if p.lx.eat_str("▶") {
+                    Some(
+                        p.lx.natural_subscript()
+                            .ok_or_else(|| p.err("expected a subscript premise index"))?,
+                    )
+                } else if p.try_punct("@") {
+                    None
+                } else {
+                    return Err(p.err("expected `▶` or `@`"));
+                };
+                Ok((fact, premise))
             },
-            |p, (fa, v)| Ok(GoalSpec::Premise((p.nodevar()?, v), fa)),
-        )
-    }
-
-    /// HS `actionGoal` (Theory/Text/Parser/Proof.hs:49-52): a `fact llit`
-    /// followed by `opAt` (`@`, Token.hs:566-568) under the `try`, then a
-    /// `nodevar`.
-    fn action_goal(
-        &mut self,
-        head_error: &mut Option<ParseError>,
-    ) -> Result<Option<GoalSpec>, ParseError> {
-        self.goal_after(
-            head_error,
-            |p| {
-                let fa = p.fact()?;
-                if !p.try_punct("@") {
-                    return Err(p.err("expected `@`"));
-                }
-                Ok(fa)
+            |p, (fact, premise)| {
+                let node = p.nodevar()?;
+                Ok(match premise {
+                    Some(index) => GoalSpec::Premise((node, index), fact),
+                    None => GoalSpec::Action(node, fact),
+                })
             },
-            |p, fa| Ok(GoalSpec::Action(p.nodevar()?, fa)),
         )
     }
 
