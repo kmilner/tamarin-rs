@@ -288,7 +288,7 @@ hs_fingerprint() {
 #   Ask the real parser which include/preprocessor/oracle inputs are active.
 #   Tagged TSV rows are `S<TAB>x:<hex-source><TAB>x:<hex-staged>` and `O<...>`.
 #   Encoding keeps arbitrary Unix path bytes out of the delimiters. Missing
-#   active inputs are fatal. Other syntax errors fall back to the
+#   active inputs are fatal (exit 1). Syntax rejection (exit 3) falls back to the
 #   independent conservative scanner in input_manifest: malformed theories
 #   are part of the parity corpus too, and must remain comparable.
 parser_input_manifest() {
@@ -369,11 +369,13 @@ input_manifest() {
     error=$(mktemp) || return 1
     if exact=$(parser_input_manifest "$theory" "$flags" 2>"$error"); then
         exact=$(manifest_normalize <<< "$exact") || { rm -f "$error"; return 1; }
-    elif grep -q '^failed to read included file ' "$error"; then
-        cat "$error" >&2
-        rm -f "$error"
-        return 1
     else
+        local status=$?
+        if [ "$status" -ne 3 ]; then
+            cat "$error" >&2
+            rm -f "$error"
+            return 1
+        fi
         # The gate still runs both provers and compares their parse failure.
         # Key the attempt on every existing dependency the grammar-independent
         # scanner can see, rather than making malformed corpus fixtures

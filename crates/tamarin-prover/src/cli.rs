@@ -491,6 +491,7 @@ enum Cmd {
     },
 
     /// Print parser-selected source and oracle inputs as tagged TSV.
+    /// Exit 3 permits conservative scanning after syntax rejection; other failures are fatal.
     #[command(hide = true)]
     InputManifest {
         #[arg(value_name = "FILE")]

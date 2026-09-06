@@ -240,7 +240,7 @@ fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
     use tamarin_parser::ast::TheoryItem;
-    use tamarin_parser::LemmaAttr;
+    use tamarin_parser::{LemmaAttr, ParseErrorKind};
 
     // Manifest rows are line-oriented, so raw paths cannot safely contain a
     // tab or newline. Prefix a byte-for-byte hex encoding with `x:`; the shared
@@ -267,9 +267,27 @@ fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
     let source = fs::read_to_string(&root)
         .map_err(|error| RunError::Regular(format!("{}: {error}", root.display())))?;
     let flags: Vec<&str> = args.defines.iter().map(String::as_str).collect();
-    let (theory, aliases) =
-        tamarin_parser::parse_theory_with_manifest(&source, &flags, root.clone(), args.diff)
-            .map_err(|error| RunError::Regular(error.to_string()))?;
+    let (theory, aliases) = match tamarin_parser::parse_theory_with_manifest(
+        &source,
+        &flags,
+        root.clone(),
+        args.diff,
+    ) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            eprintln!(
+                "error: {}",
+                error.render_plain_with_source(&root.to_string_lossy(), &source)
+            );
+            // The cache harness may conservatively scan rejected syntax (3),
+            // but missing/unreadable active inputs (1) must stop cache creation.
+            // Keep this protocol in sync with scripts/gate_common.sh.
+            return Ok(match error.kind() {
+                ParseErrorKind::IncludeIo { .. } => 1,
+                _ => 3,
+            });
+        }
+    };
 
     let has_lemmas = theory.items.iter().any(|item| {
         matches!(
