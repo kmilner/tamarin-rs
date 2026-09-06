@@ -31,7 +31,7 @@
 
 use crate::ast::{ParsedMethod, ParsedProofTree};
 use crate::lexer::{is_ident_char, Lexer};
-use crate::parser::{Message, ParseError, Parser};
+use crate::parser::{ParseError, Parser};
 
 /// Parse the raw skeleton text into a [`ParsedProofTree`]. Returns `Err` if
 /// the complete token stream does not conform to the HS grammar.
@@ -89,7 +89,7 @@ struct TreeParser<'a> {
 
 impl<'a> TreeParser<'a> {
     fn err(&self, msg: impl Into<String>) -> ParseError {
-        ParseError::at(self.lx.pos(), vec![Message::Message(msg.into())])
+        ParseError::custom(self.lx.pos(), msg.into())
     }
 
     /// HS `proofSkeleton` (Theory/Text/Parser/Proof.hs:98-115).

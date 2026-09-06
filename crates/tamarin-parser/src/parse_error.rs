@@ -4,7 +4,7 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::lexer::Pos;
-use crate::parser::{Message, ParseError};
+use crate::parser::{ErrorDetails, ParseError};
 
 /// Width of the tab stops used by Parsec source positions.
 pub const PARSEC_TAB_WIDTH: u32 = 8;
@@ -175,7 +175,7 @@ pub enum ParseErrorKind {
         path: String,
         reason: String,
     },
-    /// A raw parsec message. The canonical text remains in `ParseError::messages`
+    /// A custom cause. The canonical text remains in `ParseError::details`
     /// so constructing speculative failures does not clone it into this layer.
     Custom,
 }
@@ -296,11 +296,7 @@ impl ParseError {
             .as_ref()
             .and_then(|diagnostic| diagnostic.kind.as_ref())
             .unwrap_or_else(|| {
-                if self
-                    .messages
-                    .iter()
-                    .any(|message| matches!(message, Message::Message(_)))
-                {
+                if self.raw_message().is_some() {
                     &CUSTOM
                 } else {
                     &EXPECTED_THEORY
@@ -319,11 +315,7 @@ impl ParseError {
     /// Add grammar context to an otherwise generic expected-token failure.
     /// More specific inner parsers win as the error propagates outward.
     pub(crate) fn with_context(mut self, context: ParseContext) -> Self {
-        if self
-            .messages
-            .iter()
-            .any(|message| matches!(message, Message::Message(_)))
-        {
+        if self.raw_message().is_some() {
             return self;
         }
         let diagnostic = self.diagnostic_mut();
@@ -455,9 +447,6 @@ impl ParseError {
 
     pub fn diagnostic_message(&self) -> String {
         if matches!(self.kind(), ParseErrorKind::Custom) {
-            // Message order is parsec's stable merge order and therefore also
-            // defines which raw failure is primary. Keep one owned copy until
-            // the diagnostic is actually rendered.
             self.raw_message()
                 .map(str::to_owned)
                 .unwrap_or_else(|| self.kind().headline())
@@ -467,10 +456,10 @@ impl ParseError {
     }
 
     fn raw_message(&self) -> Option<&str> {
-        self.messages.iter().find_map(|message| match message {
-            Message::Message(message) => Some(message.as_str()),
+        match &self.details {
+            Some(ErrorDetails::Custom(cause)) => Some(cause),
             _ => None,
-        })
+        }
     }
 
     pub fn diagnostic_labels(&self) -> Vec<DiagnosticLabel> {
@@ -511,7 +500,7 @@ impl ParseError {
     }
 
     pub fn diagnostic_notes(&self) -> Vec<String> {
-        let mut notes = match self.kind() {
+        match self.kind() {
             ParseErrorKind::ReservedKeyword { keyword } => vec![format!(
                 "`{keyword}` is reserved and cannot be used as an identifier"
             )],
@@ -569,35 +558,15 @@ impl ParseError {
             ParseErrorKind::IncludeIo { path, reason } => {
                 vec![format!("failed to read `{path}`: {reason}")]
             }
-            ParseErrorKind::Custom | ParseErrorKind::Expected { .. } => Vec::new(),
-        };
-
-        if matches!(self.kind(), ParseErrorKind::Expected { .. }) {
-            let found = self.messages.iter().find_map(|message| match message {
-                Message::SysUnExpect(s) => Some(s.as_str()),
-                _ => None,
-            });
-            let mut expected = Vec::new();
-            for message in &self.messages {
-                let Message::Expect(value) = message else {
-                    continue;
-                };
-                if !value.is_empty() {
-                    expected.push(value.as_str());
-                }
-            }
-            if !expected.is_empty() {
-                let expected = expected.join(", ");
-                notes.push(match found {
-                    Some(found) => format!("expected {expected}; found {found}"),
-                    None => format!("expected {expected}"),
-                });
-            }
+            ParseErrorKind::Custom => Vec::new(),
+            ParseErrorKind::Expected { .. } => match &self.details {
+                Some(ErrorDetails::Expected { expected, found }) => vec![match found {
+                    Some(found) => format!("expected {expected}; found {found:?}"),
+                    None => format!("expected {expected}; found end of input"),
+                }],
+                _ => Vec::new(),
+            },
         }
-        if self.messages_truncated {
-            notes.push("additional parser messages omitted".into());
-        }
-        notes
     }
 
     pub fn render_plain(&self) -> String {

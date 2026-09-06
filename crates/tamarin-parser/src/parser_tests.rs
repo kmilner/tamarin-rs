@@ -67,40 +67,129 @@ fn goal_term(src: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<Term
 }
 
 #[test]
-fn structured_expected_notes_include_the_token_and_deduplicate() {
-    let error = ParseError::at(
-        crate::lexer::Pos {
-            offset: 0,
-            line: 1,
-            col: 1,
-        },
-        vec![
-            Message::SysUnExpect("\"{\"".into()),
-            Message::Expect("term".into()),
-            Message::Expect("term".into()),
-        ],
-    )
-    .with_context(ParseContext::Term);
-
-    assert_eq!(
-        error.diagnostic_notes(),
-        ["expected term; found \"{\"".to_string()]
-    );
+fn structured_expected_notes_include_the_token() {
+    let error = ParseError::expected(Pos::ZERO, "term", Some('{')).with_context(ParseContext::Term);
+    assert_eq!(error.diagnostic_notes(), ["expected term; found '{'"]);
 }
 
 #[test]
 fn custom_context_does_not_allocate_structured_storage() {
-    let error = ParseError::at(
-        crate::lexer::Pos {
-            offset: 0,
-            line: 1,
-            col: 1,
-        },
-        vec![Message::Message("custom".into())],
-    )
-    .with_context(ParseContext::Term);
-
+    let error = ParseError::custom(Pos::ZERO, "custom".into()).with_context(ParseContext::Term);
     assert!(error.diagnostic.is_none());
+}
+
+#[test]
+fn alternative_selection_preserves_the_complete_furthest_error() {
+    let progress = Pos {
+        offset: 20,
+        line: 2,
+        col: 10,
+    };
+    let cause = Pos {
+        offset: 3,
+        line: 1,
+        col: 4,
+    };
+    for semantic_first in [false, true] {
+        let generic = ParseError::expected(Pos::ZERO, "term", Some(')'));
+        let mut semantic = ParseError::at(progress)
+            .with_kind(ParseErrorKind::PersistentFreshFact)
+            .with_location(cause, 2);
+        semantic.source = "included.spthy".into();
+        let selected = if semantic_first {
+            Parser::select_alt_error(semantic, generic)
+        } else {
+            Parser::select_alt_error(generic, semantic)
+        };
+        assert!(matches!(
+            selected.kind(),
+            ParseErrorKind::PersistentFreshFact
+        ));
+        assert_eq!(selected.span(), 3..5);
+        assert_eq!(selected.line_column(), (1, 4));
+        assert_eq!(selected.source, "included.spthy");
+        assert_eq!(selected.pos.offset, 20);
+        assert_eq!(
+            selected.diagnostic_notes(),
+            ["the builtin `Fr` fact cannot be persistent"]
+        );
+    }
+}
+
+#[test]
+fn alternative_selection_prioritizes_progress_and_keeps_stable_ties() {
+    let later = Pos {
+        offset: 9,
+        line: 1,
+        col: 10,
+    };
+    let semantic = ParseError::at(Pos::ZERO).with_kind(ParseErrorKind::PersistentFreshFact);
+    let generic = ParseError::expected(later, "term", Some(')'));
+    let selected = Parser::select_alt_error(semantic, generic);
+    assert_eq!(selected.pos.offset, 9);
+    assert!(matches!(selected.kind(), ParseErrorKind::Expected { .. }));
+    let first = ParseError::expected(later, "term", Some(')'));
+    let second = ParseError::expected(later, "fact", Some(')'));
+    assert_eq!(
+        Parser::select_alt_error(first, second).diagnostic_notes(),
+        ["expected term; found ')'"]
+    );
+    let first = ParseError::expected(later, "term", Some(')'));
+    let second = ParseError::at(later).with_kind(ParseErrorKind::PersistentFreshFact);
+    assert!(matches!(
+        Parser::select_alt_error(first, second).kind(),
+        ParseErrorKind::Expected { .. }
+    ));
+    let first = ParseError::custom(later, "first cause".into());
+    let second = ParseError::custom(later, "second cause".into());
+    assert_eq!(
+        Parser::select_alt_error(first, second).diagnostic_message(),
+        "first cause"
+    );
+}
+
+#[test]
+fn incomplete_goals_do_not_blame_speculative_fact_names() {
+    for (goal, found) in [("splitEqs", ')'), ("x", ')'), ("x @ #i", '@')] {
+        let source = format!(r#"theory T begin lemma L: "T" by solve( {goal} ) end"#);
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(
+            !matches!(error.kind(), ParseErrorKind::InvalidFactName { .. }),
+            "{error}"
+        );
+        assert!(source[error.span().start..].starts_with(found));
+    }
+    for goal in ["splitEqs(1)", "x ⊏ y"] {
+        parse_theory(
+            &format!(r#"theory T begin lemma L: "T" by solve( {goal} ) end"#),
+            &[],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn tied_input_failures_keep_one_alternatives_expectation() {
+    let source = "theory T begin process: in(x @) end";
+    let error = parse_theory(source, &[]).unwrap_err();
+    assert_eq!(error.span().start, source.find('@').unwrap());
+    assert_eq!(error.diagnostic_notes(), ["expected \")\"; found '@'"]);
+    for input in ["in(x)", "in(x, y)"] {
+        parse_theory(&format!("theory T begin process: {input} end"), &[]).unwrap();
+    }
+}
+
+#[test]
+fn diagnostic_details_bound_owned_text() {
+    let long = "é".repeat(100_000);
+    let error = ParseError::custom(Pos::ZERO, long.clone());
+    assert!(error.diagnostic_message().chars().count() <= MAX_DIAGNOSTIC_MESSAGE_CHARS + 1);
+    let error = ParseError::expected(Pos::ZERO, long, None);
+    let Some(ErrorDetails::Expected { expected, .. }) = error.details else {
+        panic!()
+    };
+    assert!(expected.chars().count() <= MAX_DIAGNOSTIC_MESSAGE_CHARS + 1);
+    assert!(expected.capacity() < 4096);
 }
 
 #[test]
@@ -636,7 +725,7 @@ end"#;
 }
 
 #[test]
-fn parser_messages_are_bounded_after_construction() {
+fn declaration_errors_do_not_collect_operator_expectations() {
     let declarations = (0..200)
         .map(|index| format!("f{index}/2 [AC]"))
         .collect::<Vec<_>>()
@@ -644,38 +733,12 @@ fn parser_messages_are_bounded_after_construction() {
     let source =
         format!("theory T begin\nfunctions: {declarations}\nmacros: m(x) = x, m(y) = y\nend");
     let error = parse_theory(&source, &[]).expect_err("the second macro conflicts");
-    assert!(error.messages.len() <= MAX_DIAGNOSTIC_MESSAGES);
-    assert!(!error.messages_truncated);
-    assert!(!error
-        .diagnostic_notes()
-        .iter()
-        .any(|note| note == "additional parser messages omitted"));
     let rendered = error.to_string();
-    assert!(
-        !rendered.contains("additional parser messages omitted"),
-        "{rendered}"
-    );
     assert!(
         rendered.contains("Conflicting macro")
             && rendered.contains("`m` was already declared incompatibly"),
         "{rendered}"
     );
-}
-
-#[test]
-fn short_parser_messages_reuse_their_allocations() {
-    let text = String::from("short expectation");
-    let text_allocation = text.as_ptr();
-    let messages = vec![Message::Expect(text)];
-    let messages_allocation = messages.as_ptr();
-
-    let error = ParseError::at(Pos::ZERO, messages);
-
-    assert_eq!(error.messages.as_ptr(), messages_allocation);
-    let Message::Expect(text) = &error.messages[0] else {
-        panic!("expected the original expectation");
-    };
-    assert_eq!(text.as_ptr(), text_allocation);
 }
 
 #[test]
@@ -688,54 +751,10 @@ fn item_errors_do_not_collect_unrelated_operator_names() {
 
     let error = parse_theory(&source, &[]).expect_err("junk at item position must fail");
 
-    assert!(error.messages.len() <= MAX_DIAGNOSTIC_MESSAGES);
-    assert!(!error.messages_truncated);
-    assert!(
-        !error
-            .to_string()
-            .contains("additional parser messages omitted"),
-        "{error}"
+    assert_eq!(
+        error.diagnostic_notes(),
+        ["expected theory item, \"end\"; found '@'"]
     );
-}
-
-#[test]
-fn message_overflow_keeps_a_late_cause_and_records_the_omission() {
-    let mut messages = (0..MAX_DIAGNOSTIC_MESSAGES)
-        .map(|index| Message::Expect(format!("alternative {index}")))
-        .collect::<Vec<_>>();
-    let mut truncated = false;
-
-    push_bounded_message(
-        &mut messages,
-        &mut truncated,
-        Message::Message("specific cause".to_string()),
-    );
-
-    assert_eq!(messages.len(), MAX_DIAGNOSTIC_MESSAGES);
-    assert!(truncated);
-    assert!(messages
-        .iter()
-        .any(|message| matches!(message, Message::Message(text) if text == "specific cause")));
-}
-
-#[test]
-fn message_overflow_is_recorded_without_expectations_to_displace() {
-    let mut messages = (0..MAX_DIAGNOSTIC_MESSAGES)
-        .map(|index| Message::Message(format!("cause {index}")))
-        .collect::<Vec<_>>();
-    let mut truncated = false;
-
-    push_bounded_message(
-        &mut messages,
-        &mut truncated,
-        Message::Message("latest cause".to_string()),
-    );
-
-    assert_eq!(messages.len(), MAX_DIAGNOSTIC_MESSAGES);
-    assert!(truncated);
-    assert!(messages
-        .iter()
-        .any(|message| matches!(message, Message::Message(text) if text == "latest cause")));
 }
 
 /// Reports whether the parser split a top-level `test` CaseTest item out of
@@ -1876,7 +1895,7 @@ fn oversized_diagnostics_release_large_allocations() {
         ParseErrorKind::MalformedHexColor { .. }
     ));
     assert_eq!(error.span().len(), huge.len());
-    assert!(error.messages.is_empty());
+    assert!(error.details.is_none());
     assert!(error.diagnostic_notes()[0].contains("100000"));
 
     let source = format!("theory T begin rule R: [{huge}()] --> [] end");
@@ -2046,25 +2065,11 @@ fn show_lit_string_escapes_like_haskell() {
 }
 
 #[test]
-fn repeated_failures_do_not_exhaust_the_message_budget() {
+fn repeated_failures_keep_one_expectation() {
     let formula = format!("{}☃{}", "(".repeat(40), ")".repeat(40));
     let source = format!("theory T begin lemma L: \"{formula}\" end");
     let error = parse_theory(&source, &[]).unwrap_err();
-    assert!(!error.messages_truncated, "{error}");
     assert_eq!(error.diagnostic_notes(), ["expected term; found '☃'"]);
-}
-
-#[test]
-fn diagnostic_messages_are_deduplicated_after_bounding() {
-    for count in [3, MAX_DIAGNOSTIC_MESSAGES + 10] {
-        let messages = (0..count)
-            .map(|i| Message::Expect(format!("{}{i}", "x".repeat(MAX_DIAGNOSTIC_MESSAGE_CHARS))))
-            .collect();
-        let mut error = ParseError::at(Pos::ZERO, messages);
-        error.extend_messages(error.messages.clone());
-        assert_eq!(error.messages.len(), 1);
-        assert!(!error.messages_truncated);
-    }
 }
 
 #[test]
@@ -2078,8 +2083,13 @@ fn expected_diagnostics_distinguish_eof_and_escape_controls() {
     );
     let error = parse_theory("theory T begin tactic: t presort: 1 end", &[]).unwrap_err();
     assert_eq!(error.diagnostic_notes(), ["expected letter; found '1'"]);
-    let parser = Parser::new("\0", &[], false);
-    assert_eq!(parser.unexpected_token(), "'\\0'");
+    for (input, found) in [("\0", "'\\0'"), ("☃", "'☃'"), ("'", "'\\''")] {
+        let mut parser = Parser::new(input, &[], false);
+        assert_eq!(
+            parser.err_expect("term").diagnostic_notes(),
+            [format!("expected term; found {found}")]
+        );
+    }
 }
 
 #[test]

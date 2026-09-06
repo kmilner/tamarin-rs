@@ -61,13 +61,11 @@ impl<'a> Lexer<'a> {
             return result;
         }
         match self.unterminated_comment {
-            Some(opening) => Err(
-                crate::parser::ParseError::at(self.pos, Vec::new()).with_kind(
-                    crate::parse_error::ParseErrorKind::UnclosedBlockComment {
-                        opening_span: opening.offset..opening.offset + 2,
-                    },
-                ),
-            ),
+            Some(opening) => Err(crate::parser::ParseError::at(self.pos).with_kind(
+                crate::parse_error::ParseErrorKind::UnclosedBlockComment {
+                    opening_span: opening.offset..opening.offset + 2,
+                },
+            )),
             None => result,
         }
     }

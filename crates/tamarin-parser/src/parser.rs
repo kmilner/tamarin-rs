@@ -35,75 +35,14 @@ use crate::proof_tree::{parse_proof_tree, validate_diff_proof_tree};
 // Errors
 // =============================================================================
 
-/// Expected-token details and custom causes, retained in first-occurrence order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(clippy::enum_variant_names)]
-pub(crate) enum Message {
-    /// The token found where the grammar could not continue, or `end of input`.
-    SysUnExpect(String),
-    /// An expected token or grammar construct.
-    Expect(String),
-    /// A custom diagnostic cause.
-    Message(String),
-}
-
-impl Message {
-    fn bound(&mut self) {
-        let text = match self {
-            Self::SysUnExpect(text) | Self::Expect(text) | Self::Message(text) => text,
-        };
-        bound_owned_text(text, MAX_DIAGNOSTIC_MESSAGE_CHARS);
-    }
-
-    fn bounded(mut self) -> Self {
-        self.bound();
-        self
-    }
-}
-
-const MAX_DIAGNOSTIC_MESSAGES: usize = 64;
-
-fn replaceable_message(messages: &[Message]) -> Option<usize> {
-    messages
-        .iter()
-        .rposition(|message| matches!(message, Message::Expect(_)))
-        .or_else(|| {
-            messages
-                .iter()
-                .rposition(|message| matches!(message, Message::SysUnExpect(_)))
-        })
-        .or_else(|| {
-            messages
-                .iter()
-                .rposition(|message| matches!(message, Message::Message(_)))
-        })
-}
-
-fn push_bounded_message(
-    messages: &mut Vec<Message>,
-    messages_truncated: &mut bool,
-    message: Message,
-) {
-    let message = message.bounded();
-    if messages.contains(&message) {
-        return;
-    }
-    if messages.len() < MAX_DIAGNOSTIC_MESSAGES {
-        messages.push(message);
-        return;
-    }
-
-    *messages_truncated = true;
-    if matches!(message, Message::Expect(_)) {
-        return;
-    }
-
-    // Preserve non-expectation failures, which generally carry the useful
-    // cause, by displacing the least useful retained message.
-    if let Some(position) = replaceable_message(messages) {
-        messages.remove(position);
-        messages.push(message);
-    }
+/// Details belonging to one failed parse, never combined across alternatives.
+#[derive(Debug)]
+pub(crate) enum ErrorDetails {
+    Expected {
+        expected: String,
+        found: Option<char>,
+    },
+    Custom(String),
 }
 
 /// A parser failure with a compact semantic classification and source span.
@@ -111,58 +50,42 @@ fn push_bounded_message(
 /// Callers use structured accessors such as [`ParseError::kind`],
 /// [`ParseError::span`], and [`ParseError::diagnostic_notes`].
 /// [`std::fmt::Display`] renders the same details as [`ParseError::render_plain`].
-/// Individual messages are limited to 512 characters and each error retains
-/// at most 64 distinct messages.
+/// Individual diagnostic strings are limited to 512 characters.
 #[derive(Debug)]
 pub struct ParseError {
     pub(crate) pos: Pos,
     /// Source name, supplied by the caller or an included file.
     pub(crate) source: String,
-    /// Bounded, distinct messages in first-occurrence order.
-    pub(crate) messages: Vec<Message>,
-    pub(crate) messages_truncated: bool,
+    pub(crate) details: Option<ErrorDetails>,
     /// Structured classification, source spans, and related declarations.
     /// Ordinary syntax failures leave this unallocated.
     pub(crate) diagnostic: Option<Box<DiagnosticInfo>>,
 }
 
 impl ParseError {
-    /// Normalize diagnostic details at the parse progress position.
-    pub(crate) fn at(pos: Pos, mut messages: Vec<Message>) -> ParseError {
-        let mut messages_truncated = false;
-        if messages.len() <= MAX_DIAGNOSTIC_MESSAGES {
-            let mut i = 0;
-            while i < messages.len() {
-                messages[i].bound();
-                if messages[..i].contains(&messages[i]) {
-                    messages.remove(i);
-                } else {
-                    i += 1;
-                }
-            }
-        } else {
-            let original = std::mem::take(&mut messages);
-            messages.reserve(MAX_DIAGNOSTIC_MESSAGES);
-            for message in original {
-                push_bounded_message(&mut messages, &mut messages_truncated, message);
-            }
-        }
-        ParseError {
+    pub(crate) fn at(pos: Pos) -> Self {
+        Self {
             pos,
             source: String::new(),
-            messages,
-            messages_truncated,
+            details: None,
             diagnostic: None,
         }
     }
 
-    fn push_message(&mut self, message: Message) {
-        push_bounded_message(&mut self.messages, &mut self.messages_truncated, message);
+    pub(crate) fn custom(pos: Pos, mut cause: String) -> Self {
+        bound_owned_text(&mut cause, MAX_DIAGNOSTIC_MESSAGE_CHARS);
+        Self {
+            details: Some(ErrorDetails::Custom(cause)),
+            ..Self::at(pos)
+        }
     }
 
-    fn extend_messages(&mut self, messages: impl IntoIterator<Item = Message>) {
-        for message in messages {
-            self.push_message(message);
+    fn expected(pos: Pos, expected: impl Into<String>, found: Option<char>) -> Self {
+        let mut expected = expected.into();
+        bound_owned_text(&mut expected, MAX_DIAGNOSTIC_MESSAGE_CHARS);
+        Self {
+            details: Some(ErrorDetails::Expected { expected, found }),
+            ..Self::at(pos)
         }
     }
 }
@@ -804,35 +727,20 @@ impl<'a> Parser<'a> {
 
     /// Report a custom cause at the current parse position.
     fn err(&self, msg: impl Into<String>) -> ParseError {
-        ParseError::at(self.lx.pos(), vec![Message::Message(msg.into())])
+        ParseError::custom(self.lx.pos(), msg.into())
     }
 
     /// A semantic error keeps parse progress separate from its primary label.
     fn semantic_error(&self, kind: ParseErrorKind, position: Pos, len: usize) -> ParseError {
-        ParseError::at(self.lx.pos(), Vec::new())
+        ParseError::at(self.lx.pos())
             .with_kind(kind)
             .with_location(position, len)
     }
 
-    /// Describe the next character, escaping controls but retaining visible Unicode.
-    fn unexpected_token(&self) -> String {
-        match self.lx.peek() {
-            Some(c) => format!("{c:?}"),
-            None => "end of input".into(),
-        }
-    }
-
     /// Report expected constructs at the next token, consuming leading whitespace/comments.
-    fn err_expect(&mut self, expects: &[&str]) -> ParseError {
+    fn err_expect(&mut self, expected: impl Into<String>) -> ParseError {
         self.skip_ws();
-        let pos = self.lx.pos();
-        let unexpected = self.unexpected_token();
-        let mut messages = Vec::with_capacity(expects.len() + 1);
-        messages.push(Message::SysUnExpect(unexpected));
-        for e in expects {
-            messages.push(Message::Expect((*e).to_string()));
-        }
-        ParseError::at(pos, messages)
+        ParseError::expected(self.lx.pos(), expected, self.lx.peek())
     }
 
     fn in_context<T>(
@@ -857,7 +765,7 @@ impl<'a> Parser<'a> {
                 len,
             );
         }
-        self.err_expect(&["theory item", "\"end\""])
+        self.err_expect("theory item, \"end\"")
     }
 
     fn save(&self) -> Pos {
@@ -924,7 +832,7 @@ impl<'a> Parser<'a> {
             Ok(())
         } else {
             let label = format!("\"{kw}\"");
-            Err(self.err_expect(&[&label]))
+            Err(self.err_expect(label))
         }
     }
 
@@ -937,7 +845,7 @@ impl<'a> Parser<'a> {
             // HS `symbol p` labels the failure with the quoted punctuation
             // (Token.hs:272-273).
             let label = format!("\"{p}\"");
-            Err(self.err_expect(&[&label]))
+            Err(self.err_expect(label))
         }
     }
 
@@ -988,7 +896,7 @@ impl<'a> Parser<'a> {
             ..start
         };
         Some(
-            ParseError::at(progress, Vec::new())
+            ParseError::at(progress)
                 .with_kind(ParseErrorKind::ReservedKeyword {
                     keyword: word.into(),
                 })
@@ -1004,10 +912,8 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let opening = self.save();
         self.lx.string_literal_spanned().map_err(|failure| {
-            let error = ParseError::at(
-                failure.position,
-                vec![Message::Message("expected a valid string literal".into())],
-            );
+            let error =
+                ParseError::custom(failure.position, "expected a valid string literal".into());
             if failure.unterminated {
                 error.with_kind(ParseErrorKind::UnclosedDelimiter {
                     opening: '"',
@@ -1052,7 +958,7 @@ impl<'a> Parser<'a> {
             // see line 238) — the whole
             // choice is relabelled, so the failure Expect is the single custom
             // label, not the two quoted keywords.
-            return Err(self.err_expect(&["configuration or begin"]));
+            return Err(self.err_expect("configuration or begin"));
         }
         let items = self.theory_items_until_end()?;
         // HS `addItems … <* symbol_ "end"` (Theory/Text/Parser.hs:230-393, see
@@ -1725,7 +1631,7 @@ impl<'a> Parser<'a> {
                 }
             }
             let Some(name) = found else {
-                return Err(self.err_expect(&["theory option"]));
+                return Err(self.err_expect("theory option"));
             };
             names.push(name);
             if !self.try_punct(",") {
@@ -1772,7 +1678,7 @@ impl<'a> Parser<'a> {
             self.require_punct(":")?;
             let word = self.lx.ascii_alpha_run();
             if word.is_empty() {
-                return Err(self.err_expect(&["letter"]));
+                return Err(self.err_expect("letter"));
             }
             self.skip_ws();
             let allowed = if self.is_diff { "sScC" } else { "sSpPcCiI" };
@@ -1821,7 +1727,7 @@ impl<'a> Parser<'a> {
             selectors.push(selector);
         }
         if selectors.is_empty() {
-            return Err(self.err_expect(&["tactic selector with a quoted argument"]));
+            return Err(self.err_expect("tactic selector with a quoted argument"));
         }
         Ok(PrioBlock { ranking, selectors })
     }
@@ -2135,8 +2041,7 @@ impl<'a> Parser<'a> {
             if !self.try_punct(close) {
                 self.skip_ws();
                 let unclosed = self.at_unclosed_list_boundary(close);
-                let close_label = format!("\"{close}\"");
-                let mut error = self.err_expect(&["\",\"", &close_label]);
+                let mut error = self.err_expect(format!("\",\", \"{close}\""));
                 if unclosed {
                     Self::mark_unclosed_delimiter(&mut error, opening, close);
                 }
@@ -2194,7 +2099,7 @@ impl<'a> Parser<'a> {
                 .take_while(u8::is_ascii_digit)
                 .count();
             let Some(k) = self.lx.natural() else {
-                return Err(self.err_expect(&["natural"]));
+                return Err(self.err_expect("natural"));
             };
             let arity = usize::try_from(k).map_err(|_| {
                 self.err("function arity is too large for this platform")
@@ -2212,7 +2117,7 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let opening = self.save();
         if !self.try_punct("(") {
-            return Err(self.err_expect(&["\"/\"", "\"(\""]));
+            return Err(self.err_expect("\"/\", \"(\""));
         }
         let args = self.sep_end_by(opening, ")", Self::type_p)?;
         self.require_punct(":")?;
@@ -2458,7 +2363,7 @@ impl<'a> Parser<'a> {
         // valid identifier (a parse failure, matching HS).
         match self.type_p_element() {
             Some(t) => Ok(t),
-            None => Err(self.err_expect(&["type"])),
+            None => Err(self.err_expect("type")),
         }
     }
 
@@ -2499,7 +2404,7 @@ impl<'a> Parser<'a> {
             // unchanged on all valid theories.
             let lhs = self.acterm(true)?;
             if !self.try_punct("=") {
-                return Err(self.err_expect(&["\"=\""]));
+                return Err(self.err_expect("\"=\""));
             }
             let rhs = self.acterm(true)?;
             eqs.push(Equation { lhs, rhs });
@@ -2813,7 +2718,7 @@ impl<'a> Parser<'a> {
         self.require_punct("\"")?;
         let f = self.formula()?;
         if !self.try_punct("\"") {
-            return Err(self.err_expect(&["closing quote or formula operator"]));
+            return Err(self.err_expect("closing quote or formula operator"));
         }
         Ok(f)
     }
@@ -3037,8 +2942,8 @@ impl<'a> Parser<'a> {
     /// MESSAGE term takes `=v` patterns and the channel does not, so the two
     /// HS alternatives (Parser/Sapic.hs:96-116) cannot fold into one parse:
     /// `try` the one-argument `(msg)` form with pattern literals first, then
-    /// `(chan, msg)` with a plain channel.  When both fail, the errors merge
-    /// parsec-style ([`Parser::merge_alt_errors`]).
+    /// `(chan, msg)` with a plain channel. When both fail, select one complete
+    /// diagnostic with [`Parser::select_alt_error`].
     fn parse_in_chan_msg(&mut self) -> Result<(Option<Term>, Term), ParseError> {
         self.require_punct("(")?;
         let probe = self.save();
@@ -3058,21 +2963,16 @@ impl<'a> Parser<'a> {
             self.require_punct(")")?;
             Ok((Some(chan), msg))
         })()
-        .map_err(|e2| Self::merge_alt_errors(e1, e2))
+        .map_err(|e2| Self::select_alt_error(e1, e2))
     }
 
-    /// parsec `mergeError`: the failure at the further position wins; at equal
-    /// positions the two message lists concatenate.
-    fn merge_alt_errors(e1: ParseError, e2: ParseError) -> ParseError {
-        match e2.pos.offset.cmp(&e1.pos.offset) {
-            std::cmp::Ordering::Greater => e2,
-            std::cmp::Ordering::Less => e1,
-            std::cmp::Ordering::Equal => {
-                let mut e = e1;
-                e.messages_truncated |= e2.messages_truncated;
-                e.extend_messages(e2.messages);
-                e
-            }
+    /// Keep the furthest failure intact, preserving grammar order on ties.
+    /// A structured cause can still belong to an unrelated speculative alternative.
+    fn select_alt_error(e1: ParseError, e2: ParseError) -> ParseError {
+        if e2.pos.offset > e1.pos.offset {
+            e2
+        } else {
+            e1
         }
     }
 
@@ -3294,10 +3194,10 @@ impl<'a> Parser<'a> {
         }
         let code_len = self.lx.pos().offset - code_start.offset;
         if code_len == 0 {
-            return Err(self.err_expect(&["hexadecimal digit"]));
+            return Err(self.err_expect("hexadecimal digit"));
         }
         if quoted && !self.lx.eat_str("'") {
-            return Err(self.err_expect(&["closing single quote"]));
+            return Err(self.err_expect("closing single quote"));
         }
         self.skip_ws();
         if code_len != 6 {
@@ -3316,7 +3216,7 @@ impl<'a> Parser<'a> {
         let result = self
             .lx
             .single_quoted_checked()
-            .map_err(|position| ParseError::at(position, vec![Message::Message(message.into())]));
+            .map_err(|position| ParseError::custom(position, message.into()));
         // Publish consumed comments before enclosing alternatives rewind.
         self.lx.finish(result)
     }
@@ -3396,7 +3296,7 @@ impl<'a> Parser<'a> {
         let v = self.attach_sort_suffix(v)?;
         if !matches!(v.sort, LSort::Msg | LSort::Nat) {
             self.restore(start);
-            return Err(self.err_expect(&["identifier", "\"%\""]));
+            return Err(self.err_expect("identifier, \"%\""));
         }
 
         Ok(Some(v))
@@ -3424,7 +3324,7 @@ impl<'a> Parser<'a> {
             bs.push((lhs, rhs));
         }
         if bs.is_empty() {
-            return Err(self.err_expect(&["identifier", "\"%\""]));
+            return Err(self.err_expect("identifier, \"%\""));
         }
         self.require_kw("in")?;
         Ok(bs)
@@ -4542,17 +4442,13 @@ impl<'a> Parser<'a> {
         if self.try_punct("(") {
             let formula = match self.iff() {
                 Ok(formula) => formula,
-                Err(error) => return Err(Self::merge_alt_errors(atom_error, error)),
+                Err(error) => return Err(Self::select_alt_error(atom_error, error)),
             };
             // Prefer the formula's closer on ties. A relational parse that
             // progressed further can still explain a truncated formula prefix
             // (for example, `F` parsed as false before an application).
             if let Err(error) = self.require_punct(")") {
-                return Err(if atom_error.pos.offset > error.pos.offset {
-                    atom_error
-                } else {
-                    error
-                });
+                return Err(Self::select_alt_error(error, atom_error));
             }
             if self.at_term_continuation() {
                 return Err(atom_error);
@@ -4592,8 +4488,7 @@ impl<'a> Parser<'a> {
             Ok(fact) => Ok(Formula::Atom(Atom::Pred(fact))),
             // On ties, an application error is more useful than a rejected
             // lowercase fact head. Deeper fact errors still retain their cause.
-            Err(fact_error) if fact_error.pos.offset > term_error.pos.offset => Err(fact_error),
-            Err(_) => Err(term_error),
+            Err(fact_error) => Err(Self::select_alt_error(term_error, fact_error)),
         }
     }
 
@@ -4663,7 +4558,7 @@ impl<'a> Parser<'a> {
                 .ok_or_else(|| self.err("expected node variable after `<`"))?;
             return Ok(Formula::Atom(Atom::Less(lhs, rhs)));
         }
-        Err(self.err_expect(&["term relation"]))
+        Err(self.err_expect("term relation"))
     }
 
     // =========================================================================
@@ -4964,7 +4859,7 @@ impl<'a> Parser<'a> {
         if self.try_punct("(") {
             let t = self.msetterm(eqn)?;
             if !self.try_punct(")") {
-                return Err(self.err_expect(&["\")\""]));
+                return Err(self.err_expect("\")\""));
             }
 
             return Ok(t);
@@ -4987,7 +4882,7 @@ impl<'a> Parser<'a> {
                 // collapses to `a`.
                 let t = self.tuple_contents(eqn)?;
                 if !self.try_punct(">") {
-                    return Err(self.err_expect(&["\",\"", "\">\""]));
+                    return Err(self.err_expect("\",\", \">\""));
                 }
 
                 return Ok(t);
@@ -5170,7 +5065,7 @@ impl<'a> Parser<'a> {
             return Ok(Term::AlgApp(id, Box::new(arg1), Box::new(arg2)));
         }
         self.restore(save_id);
-        Err(self.err_expect(&["term"]).with_context(ParseContext::Term))
+        Err(self.err_expect("term").with_context(ParseContext::Term))
     }
 
     /// The term a BARE identifier (no sigil) denotes once its optional
@@ -5208,7 +5103,7 @@ impl<'a> Parser<'a> {
             let v = self.attach_sort_suffix(v)?;
             return Ok(Term::Var(v));
         }
-        Err(self.err_expect(&["pattern variable"]))
+        Err(self.err_expect("pattern variable"))
     }
 
     /// HS `naryOpApp`'s argument parse after `lookupArity` succeeded
@@ -5627,7 +5522,7 @@ impl<'a> Parser<'a> {
         };
         self.restore(save);
         let error = match head_error {
-            Some(head_error) => Self::merge_alt_errors(head_error, error),
+            Some(head_error) => Self::select_alt_error(head_error, error),
             None => error,
         };
         self.disj_split_goal()
@@ -5641,7 +5536,7 @@ impl<'a> Parser<'a> {
                     Err(self.err("expected `)` after the goal"))
                 }
             })
-            .map_err(|alternate| Self::merge_alt_errors(error, alternate))
+            .map_err(|alternate| Self::select_alt_error(error, alternate))
     }
 
     /// HS `try` over `f`: on failure the input is restored and nothing is
@@ -5675,7 +5570,7 @@ impl<'a> Parser<'a> {
             Err(error) => {
                 self.restore(save);
                 *head_error = Some(match head_error.take() {
-                    Some(previous) => Self::merge_alt_errors(previous, error),
+                    Some(previous) => Self::select_alt_error(previous, error),
                     None => error,
                 });
                 Ok(None)
