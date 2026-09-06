@@ -910,19 +910,28 @@ impl<'a> Parser<'a> {
     fn string_literal_spanned(&mut self) -> Result<(String, std::ops::Range<usize>), ParseError> {
         self.skip_ws();
         let opening = self.save();
-        self.lx.string_literal_spanned().map_err(|failure| {
-            let error =
-                ParseError::custom(failure.position, "expected a valid string literal".into());
-            if failure.unterminated {
-                error.with_kind(ParseErrorKind::UnclosedDelimiter {
-                    opening: '"',
-                    opening_span: opening.offset..opening.offset + 1,
-                    closing: '"',
-                })
-            } else {
-                error
-            }
-        })
+        self.lx
+            .string_literal_spanned()
+            .map_err(|failure| self.quoted_error(opening, failure, "a valid string literal"))
+    }
+
+    fn quoted_error(
+        &self,
+        opening: Pos,
+        failure: crate::lexer::QuotedError,
+        expected: &str,
+    ) -> ParseError {
+        let found = self.lx.src()[failure.position.offset..].chars().next();
+        let error = ParseError::expected(failure.position, expected, found);
+        if failure.unterminated {
+            error.with_kind(ParseErrorKind::UnclosedDelimiter {
+                opening: '"',
+                opening_span: opening.offset..opening.offset + 1,
+                closing: '"',
+            })
+        } else {
+            error
+        }
     }
 
     // =========================================================================
@@ -3188,11 +3197,14 @@ impl<'a> Parser<'a> {
         Ok(self.lx.src()[code_start.offset..code_start.offset + code_len].to_owned())
     }
 
-    fn single_quoted(&mut self, message: &str) -> Result<String, ParseError> {
-        let result = self
-            .lx
-            .single_quoted_checked()
-            .map_err(|position| ParseError::custom(position, message.into()));
+    fn single_quoted(&mut self, expected: &str) -> Result<String, ParseError> {
+        let result = self.lx.single_quoted().map_err(|position| {
+            ParseError::expected(
+                position,
+                expected,
+                self.lx.src()[position.offset..].chars().next(),
+            )
+        });
         // Publish consumed comments before enclosing alternatives rewind.
         self.lx.finish(result)
     }
@@ -3202,7 +3214,7 @@ impl<'a> Parser<'a> {
         if self.lx.peek() == Some('"') {
             self.string_literal()
         } else {
-            self.single_quoted("expected quoted string")
+            self.single_quoted("a valid single-quoted string")
         }
     }
 
@@ -3844,10 +3856,11 @@ impl<'a> Parser<'a> {
         self.require_punct(":")?;
         // Export bodies use the strict `bodyChar` grammar (Parser/Signature.hs:297-302),
         // NOT the general string-literal escape decoding.
+        let opening = self.save();
         let body = self
             .lx
             .export_body()
-            .ok_or_else(|| self.err("expected export body string"))?;
+            .map_err(|failure| self.quoted_error(opening, failure, "a valid export body string"))?;
         Ok(TheoryItem::Export { tag, body })
     }
 
@@ -4883,7 +4896,7 @@ impl<'a> Parser<'a> {
             probe.bump();
             if c == '~' && probe.peek() == Some('\'') {
                 self.lx.bump();
-                let s = self.single_quoted("bad fresh literal")?;
+                let s = self.single_quoted("a valid fresh literal")?;
                 return Ok(Term::FreshLit(s));
             }
             // Otherwise: variable.
@@ -4902,7 +4915,7 @@ impl<'a> Parser<'a> {
                         .err("nat names requires the natural-numbers builtin")
                         .with_location(literal_start, 1));
                 }
-                let s = self.single_quoted("bad nat literal")?;
+                let s = self.single_quoted("a valid natural-number literal")?;
                 return Ok(Term::NatLit(s));
             }
             if let Some(v) = self.try_var_spec()? {
@@ -4912,7 +4925,7 @@ impl<'a> Parser<'a> {
         }
         // Literal `'foo'` is a public name term.
         if self.lx.peek() == Some('\'') {
-            let s = self.single_quoted("bad public literal")?;
+            let s = self.single_quoted("a valid public literal")?;
             return Ok(Term::PubLit(s));
         }
         // diff(a, b) — HS `diffOp = symbol "diff" *> parens ...`

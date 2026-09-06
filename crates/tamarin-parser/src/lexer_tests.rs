@@ -44,14 +44,18 @@ fn double_quoted_with_escape() {
     // The leading whitespace is a lexeme boundary.  `string_literal` skips
     // that whitespace before it looks for the opening quote.
     let mut l = Lexer::new(r#" "abc \"x\" def" "#);
-    assert_eq!(l.string_literal().as_deref(), Some(r#"abc "x" def"#));
+    assert_eq!(
+        l.string_literal_spanned().map(|(text, _)| text).as_deref(),
+        Ok(r#"abc "x" def"#)
+    );
 
-    // The literal fails and the lexer backtracks when the input ends
+    // The literal fails at EOF when the input ends
     // before the closing quote.  The lexer must not read `"abc` as the
     // string `abc`.
     let mut l = Lexer::new("\"abc");
-    assert_eq!(l.string_literal(), None);
-    assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure");
+    let error = l.string_literal_spanned().unwrap_err();
+    assert_eq!(l.pos(), error.position);
+    assert!(l.is_eof());
 }
 
 #[test]
@@ -59,18 +63,21 @@ fn single_quoted_basic() {
     // The leading whitespace is a lexeme boundary.  `single_quoted` skips
     // that whitespace before it looks for the opening quote.
     let mut l = Lexer::new(" 'foo'  ");
-    assert_eq!(l.single_quoted().as_deref(), Some("foo"));
+    assert_eq!(l.single_quoted().as_deref(), Ok("foo"));
 
     // `singleQuotedString = singleQuoted $ many1 (noneOf "'\n")`
     // (Token.hs:452-453).  `many1` needs one body character, so `''`
     // fails.  A newline or the end of the input before the closing quote
-    // leaves the literal unclosed.  Every failure backtracks.  Parsec
-    // wraps the lexeme in `try`, so the lexeme must leave the cursor for
-    // the enclosing alternative.
+    // leaves the literal unclosed.  Failures retain their position;
+    // the enclosing parser owns backtracking.
     for src in ["''", "'unterminated", "'no\nclose'"] {
         let mut l = Lexer::new(src);
-        assert_eq!(l.single_quoted(), None, "must reject {src:?}");
-        assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure: {src:?}");
+        let failure = l.single_quoted().expect_err("invalid public literal");
+        assert_eq!(failure, l.pos());
+        assert!(
+            failure.offset > 0,
+            "failure position was discarded: {src:?}"
+        );
     }
 }
 
@@ -88,35 +95,47 @@ fn formal_comment_basic() {
 fn string_literal_decodes_char_escapes() {
     // HS `T.stringLiteral` decodes `\n`->LF, `\t`->TAB, `\\`->`\`, `\"`->`"`.
     let mut l = Lexer::new("\"a\\nb\\tc\\\\d\\\"e\"");
-    assert_eq!(l.string_literal().as_deref(), Some("a\nb\tc\\d\"e"));
+    assert_eq!(
+        l.string_literal_spanned().map(|(text, _)| text).as_deref(),
+        Ok("a\nb\tc\\d\"e")
+    );
 }
 
 #[test]
 fn string_literal_decodes_numeric_escapes() {
     // \65 (dec) = 'A', \o101 (oct) = 'A', \x41 (hex) = 'A'.
     let mut l = Lexer::new("\"\\65 \\o101 \\x41\"");
-    assert_eq!(l.string_literal().as_deref(), Some("A A A"));
+    assert_eq!(
+        l.string_literal_spanned().map(|(text, _)| text).as_deref(),
+        Ok("A A A")
+    );
 }
 
 #[test]
 fn string_literal_ascii_name_and_control() {
     // \BEL = 0x07, \^A = 0x01, \NUL = 0x00.
     let mut l = Lexer::new("\"\\BEL\\^A\\NUL\"");
-    assert_eq!(l.string_literal().as_deref(), Some("\u{07}\u{01}\u{00}"));
+    assert_eq!(
+        l.string_literal_spanned().map(|(text, _)| text).as_deref(),
+        Ok("\u{07}\u{01}\u{00}")
+    );
 }
 
 #[test]
 fn string_literal_empty_and_gap_escapes() {
     // `\&` empty escape joins `A`+`B`; `\   \` gap is dropped.
     let mut l = Lexer::new("\"A\\&B\\   \\C\"");
-    assert_eq!(l.string_literal().as_deref(), Some("ABC"));
+    assert_eq!(
+        l.string_literal_spanned().map(|(text, _)| text).as_deref(),
+        Ok("ABC")
+    );
 }
 
 #[test]
 fn string_literal_rejects_bad_escape() {
     // `\q` is not a valid escape; HS fails the whole literal.
     let mut l = Lexer::new("\"a\\qb\"");
-    assert_eq!(l.string_literal(), None);
+    assert!(l.string_literal_spanned().is_err());
 }
 
 // --- export_body: strict grammar ---
@@ -125,13 +144,13 @@ fn string_literal_rejects_bad_escape() {
 fn export_body_accepts_only_backslash_and_quote_escapes() {
     // HS export `bodyChar`: `\\`->`\`, `\"`->`"`.
     let mut l = Lexer::new("\"a\\\\b\\\"c\"");
-    assert_eq!(l.export_body().as_deref(), Some("a\\b\"c"));
+    assert_eq!(l.export_body().as_deref(), Ok("a\\b\"c"));
 }
 
 #[test]
 fn export_body_preserves_leading_whitespace_and_comments() {
     let mut l = Lexer::new("\"  // body text\nnext\"  tail");
-    assert_eq!(l.export_body().as_deref(), Some("  // body text\nnext"));
+    assert_eq!(l.export_body().as_deref(), Ok("  // body text\nnext"));
     assert_eq!(l.rest(), "tail");
 }
 
@@ -141,15 +160,17 @@ fn export_body_rejects_newline_escape() {
     // Confirmed against tamarin-prover v1.13.0:
     //   `export foo: "a\nb"` => "unexpected n, expecting \"\\\\\" or \"\\\"\"".
     let mut l = Lexer::new("\"a\\nb\"");
-    assert_eq!(l.export_body(), None);
-    assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure");
+    let error = l.export_body().unwrap_err();
+    assert_eq!(l.pos(), error.position);
+    assert_eq!(l.peek(), Some('n'));
 
     // `many bodyChar` never finds the closing `"` when the input ends.
     // An escaped final quote also does not close the body.
     for src in ["\"abc", "\"abc\\\""] {
         let mut l = Lexer::new(src);
-        assert_eq!(l.export_body(), None, "must reject {src:?}");
-        assert_eq!(l.pos(), Pos::ZERO, "cursor moved on failure: {src:?}");
+        let error = l.export_body().unwrap_err();
+        assert_eq!(l.pos(), error.position);
+        assert!(l.is_eof());
     }
 }
 
@@ -213,9 +234,9 @@ fn single_quoted_strips_leading_ws_keeps_trailing() {
     // HS `singleQuoted` opens with `symbol "'"` (lexeme), dropping leading ws;
     // the body `many1 (noneOf "'\n")` keeps trailing ws.
     let mut a = Lexer::new("' n'");
-    assert_eq!(a.single_quoted().as_deref(), Some("n"));
+    assert_eq!(a.single_quoted().as_deref(), Ok("n"));
     let mut b = Lexer::new("'n '");
-    assert_eq!(b.single_quoted().as_deref(), Some("n "));
+    assert_eq!(b.single_quoted().as_deref(), Ok("n "));
 }
 
 // --- identifier: rejects reserved names ---

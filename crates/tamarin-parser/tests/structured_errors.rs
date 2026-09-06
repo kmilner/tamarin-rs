@@ -1212,8 +1212,8 @@ fn role_strings_keep_checked_literal_failures() {
     let error = parse_theory(source, &[]).unwrap_err();
     assert_eq!(error.span().start, source.find("\\q").unwrap() + 1);
     assert_eq!(
-        error.diagnostic_message(),
-        "expected a valid string literal"
+        error.diagnostic_notes(),
+        ["expected a valid string literal; found 'q'"]
     );
 
     let source = "theory T begin rule R [role=\"unfinished";
@@ -1494,4 +1494,76 @@ fn explicit_sorts_do_not_leak_between_formula_operands() {
             assert_eq!(result.is_ok(), accepted, "{source}: {result:?}");
         }
     }
+}
+
+#[test]
+fn export_errors_keep_the_lexers_failure_position() {
+    for (source, token) in [
+        (r#"theory T begin export e: "bad\q" end"#, 'q'),
+        ("theory T begin export e: ?", '?'),
+    ] {
+        let error = parse_theory(source, &[]).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            &ParseErrorKind::Expected {
+                context: ParseContext::Export
+            }
+        );
+        assert_eq!(error.span().start, source.find(token).unwrap());
+        assert_eq!(
+            error.diagnostic_notes(),
+            [format!(
+                "expected a valid export body string; found {token:?}"
+            )]
+        );
+    }
+    for body in ["\"unfinished", "\"escaped\\\""] {
+        let source = format!("theory T begin export e: {body}");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        let opening = source.find('"').unwrap();
+        assert_eq!(
+            error.kind(),
+            &ParseErrorKind::UnclosedDelimiter {
+                opening: '"',
+                opening_span: opening..opening + 1,
+                closing: '"'
+            }
+        );
+        assert_eq!(error.span().start, source.len());
+        let labels = error.diagnostic_labels_with_source(&source);
+        assert_eq!(&source[labels[1].span.clone()], "\"");
+    }
+}
+
+#[test]
+fn single_quoted_syntax_errors_are_structured() {
+    for (sigil, expected) in [
+        ("", "a valid public literal"),
+        ("~", "a valid fresh literal"),
+        ("%", "a valid natural-number literal"),
+    ] {
+        for (body, found) in [("''", Some('\'')), ("'é\n", Some('\n')), ("'é", None)] {
+            let source = format!(
+                "theory T begin builtins: natural-numbers rule R: [] --> [Out({sigil}{body}"
+            );
+            let error = parse_theory(&source, &[]).unwrap_err();
+            assert!(
+                matches!(error.kind(), ParseErrorKind::Expected { .. }),
+                "{error:?}"
+            );
+            let offset = source.len() - found.map_or(0, char::len_utf8);
+            assert_eq!(error.span().start, offset);
+            let found = found.map_or_else(|| "end of input".to_string(), |c| format!("{c:?}"));
+            assert_eq!(
+                error.diagnostic_notes(),
+                [format!("expected {expected}; found {found}")]
+            );
+        }
+    }
+    let source = "theory T begin rule R: [] --> [Out(' /* unfinished";
+    let error = parse_theory(source, &[]).unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        ParseErrorKind::UnclosedBlockComment { .. }
+    ));
 }

@@ -33,6 +33,7 @@ pub struct Lexer<'a> {
     unterminated_comment: Option<Pos>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct QuotedError {
     pub position: Pos,
     pub unterminated: bool,
@@ -384,10 +385,7 @@ impl<'a> Lexer<'a> {
     ///
     /// Note: export bodies use a *different*, stricter character grammar — see
     /// [`Lexer::export_body`].
-    pub fn string_literal(&mut self) -> Option<String> {
-        self.quoted(Self::string_escape)
-    }
-
+    ///
     /// Parse a string literal and also return its exact half-open source range,
     /// including the quotes but excluding trailing whitespace.
     pub(crate) fn string_literal_spanned(
@@ -400,18 +398,9 @@ impl<'a> Lexer<'a> {
     /// verbatim except `\`, which is consumed and the rest of the escape
     /// handed to `escape`.  `escape` returns `Some(Some(c))` for a produced
     /// char, `Some(None)` for an escape that produces nothing, and `None` to
-    /// fail the whole literal. A failure — an unterminated run included —
-    /// restores the position, so the caller can offer another alternative.
+    /// fail the whole literal. Failures leave the cursor at the failure position;
+    /// enclosing parser alternatives own backtracking.
     /// Trailing whitespace after the closing quote is always consumed.
-    fn quoted<F>(&mut self, mut escape: F) -> Option<String>
-    where
-        F: FnMut(&mut Self) -> Option<Option<char>>,
-    {
-        self.quoted_spanned(&mut escape)
-            .ok()
-            .map(|(value, _)| value)
-    }
-
     fn quoted_spanned<F>(
         &mut self,
         mut escape: F,
@@ -422,7 +411,6 @@ impl<'a> Lexer<'a> {
         self.skip_ws();
         let save = self.pos;
         if !self.eat('"') {
-            self.pos = save;
             return Err(QuotedError {
                 position: save,
                 unterminated: false,
@@ -433,7 +421,6 @@ impl<'a> Lexer<'a> {
             match self.peek() {
                 None => {
                     let position = self.pos;
-                    self.pos = save;
                     return Err(QuotedError {
                         position,
                         unterminated: true,
@@ -452,7 +439,6 @@ impl<'a> Lexer<'a> {
                         Some(None) => {}
                         None => {
                             let position = self.pos;
-                            self.pos = save;
                             return Err(QuotedError {
                                 position,
                                 unterminated: false,
@@ -637,31 +623,20 @@ impl<'a> Lexer<'a> {
     /// `\`, which must be followed by `\` or `"` (the second char is returned and
     /// the backslash dropped); a bare `"` terminates the body and any other `\x`
     /// fails the whole parse. Used for `export <tag>: "..."` blocks.
-    pub fn export_body(&mut self) -> Option<String> {
-        self.quoted(|lexer| match lexer.peek() {
+    pub(crate) fn export_body(&mut self) -> Result<String, QuotedError> {
+        self.quoted_spanned(|lexer| match lexer.peek() {
             Some(c @ ('\\' | '"')) => {
                 lexer.bump();
                 Some(Some(c))
             }
             _ => None,
         })
+        .map(|(body, _)| body)
     }
 
     /// Single-quoted string literal — not allowing single-quote or newline inside.
-    pub fn single_quoted(&mut self) -> Option<String> {
-        self.skip_ws();
-        let save = self.clone();
-        match self.single_quoted_checked() {
-            Ok(text) => Some(text),
-            Err(_) => {
-                *self = save;
-                None
-            }
-        }
-    }
-
     /// Preserve the real failure position for callers that report diagnostics.
-    pub(crate) fn single_quoted_checked(&mut self) -> Result<String, Pos> {
+    pub fn single_quoted(&mut self) -> Result<String, Pos> {
         self.skip_ws();
         if !self.eat('\'') {
             return Err(self.pos);
