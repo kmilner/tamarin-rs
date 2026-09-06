@@ -700,3 +700,44 @@ fn existential_binder_keeps_ac_operand_order() {
          ∧\n  (#i < #j) ∧ (∀ dif. (seq2 = (dif++seq1)) ⇒ ⊥)\""
     );
 }
+
+#[test]
+fn wrapped_conditional_node_names_round_trip() {
+    use crate::formula::from_parser;
+    use tamarin_parser::parser::{parse_formula_str, parse_theory};
+    let signature = crate::elaborate::elaborate(&parse_theory("theory T begin end", &[]).unwrap())
+        .unwrap()
+        .signature;
+    for reserved in ["ifdef", "else", "endif"] {
+        let names = [
+            "xxxxxxxxxxxxxxxxxxx0",
+            "xxxxxxxxxxxxxxxxxxx1",
+            "xxxxxxxxxxxxxxxxxxx2",
+            reserved,
+            "xxxxxxxxxxxxxxxxxxx3",
+            "xxxxxxxxxxxxxxxxxxx4",
+        ];
+        let binders = names
+            .iter()
+            .map(|name| format!("#{name}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let atoms = names
+            .iter()
+            .map(|name| format!("Seen() @ #{name}"))
+            .collect::<Vec<_>>()
+            .join(" & ");
+        let formula = parse_formula_str(&format!("All {binders}. {atoms}"), &signature).unwrap();
+        let original = from_parser(&formula, &signature).unwrap();
+        for width in [24, 40, 80] {
+            let rendered = syntactic_lnformula_doc(&original).render_with(width, width);
+            let source = format!("theory T begin\nlemma L: \"{rendered}\"\nend");
+            let reparsed =
+                parse_theory(&source, &[]).unwrap_or_else(|error| panic!("{source}: {error}"));
+            let p::TheoryItem::Lemma(lemma) = &reparsed.items[0] else {
+                panic!("missing lemma")
+            };
+            assert_eq!(from_parser(&lemma.formula, &signature).unwrap(), original);
+        }
+    }
+}

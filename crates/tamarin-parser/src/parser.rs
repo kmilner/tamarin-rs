@@ -984,66 +984,105 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse items until we encounter `end` (top-level) or `#endif` / `#else`.
+    /// Parse a flat item stream, evaluating conditionals with an explicit stack.
+    /// Active syntax owns comments and item contents; inactive text is opaque.
     fn theory_items_until_end(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
         let mut items = Vec::new();
+        // Each frame holds the parent's activity and whether #else has occurred.
+        let mut branches: Vec<(bool, bool)> = Vec::new();
+        let mut active = true;
         loop {
-            self.skip_ws();
+            if active {
+                self.skip_ws();
+            } else {
+                while self
+                    .lx
+                    .peek()
+                    .is_some_and(|c| c != '\n' && c.is_whitespace())
+                {
+                    self.lx.bump();
+                }
+            }
+            if let Some(directive) = self.conditional_directive() {
+                match directive {
+                    "ifdef" => {
+                        let condition = self
+                            .consume_conditional("ifdef")?
+                            .expect("ifdef has a condition");
+                        branches.push((active, false));
+                        active &= condition;
+                    }
+                    "else" => {
+                        let Some((parent_active, seen_else)) = branches.last_mut() else {
+                            break;
+                        };
+                        if *seen_else {
+                            return Err(self.err_expect_here("\"#endif\""));
+                        }
+                        self.consume_conditional("else")?;
+                        *seen_else = true;
+                        active = *parent_active && !active;
+                    }
+                    "endif" => {
+                        let Some((parent_active, _)) = branches.pop() else {
+                            break;
+                        };
+                        self.consume_conditional("endif")?;
+                        active = parent_active;
+                    }
+                    _ => unreachable!("only conditional keywords are recognized"),
+                }
+                continue;
+            }
             if self.lx.is_eof() {
                 break;
+            }
+            if !active {
+                while let Some(c) = self.lx.bump() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+                continue;
             }
             if self.at_keyword("end") {
                 break;
             }
-            // Pre-processor: #ifdef, #endif, #else terminate or extend.
+            // Expand directives here so every consumer sees the same flat item stream.
             let save = self.save();
             if self.lx.eat_str("#") {
-                // peek directive name
-                let mut probe = self.lx.clone();
-                let buf = probe.ascii_alpha_run();
-                let directive = buf.as_str();
-                if directive == "endif" || directive == "else" {
-                    self.restore(save);
-                    break;
+                let directive = self.lx.ascii_alpha_run();
+                match directive.as_str() {
+                    "ifdef" | "else" | "endif" => {
+                        return Err(ParseError::expected(
+                            save,
+                            "a standalone conditional directive line",
+                            Some('#'),
+                        )
+                        .with_context(ParseContext::Theory));
+                    }
+                    "include" => items.extend(self.expand_include()?),
+                    "define" => {
+                        let id = self.ident()?;
+                        self.state.flags.insert(id);
+                    }
+                    other => {
+                        return Err(self.err(format!("unknown preprocessor directive `#{other}`")))
+                    }
                 }
-                if directive == "include" {
-                    // HS `include` (Theory/Text/Parser.hs:328-348): consume the
-                    // directive,
-                    // resolve the path relative to the including file's dir,
-                    // recursively parse the header-less fragment with the SAME
-                    // parser state, and SPLICE its items in place (no `Include`
-                    // node survives).  Item order = directive position.
-                    self.restore(save);
-                    let included = self.expand_include()?;
-                    items.extend(included);
-                    continue;
-                }
-                if directive == "ifdef" {
-                    // HS `ifdef` (Parser.hs): evaluate the flag formula at
-                    // parse time and add the live branch's items inline, so
-                    // they are ordinary top-level items.  Splice the same way
-                    // (no preprocessor node survives; every downstream
-                    // consumer of `Theory::items` sees the flat live stream).
-                    self.restore(save);
-                    let live = self.expand_ifdef()?;
-                    items.extend(live);
-                    continue;
-                }
-                self.restore(save);
+                continue;
             }
             let item = self.theory_item()?;
             items.push(item);
+        }
+        if !branches.is_empty() {
+            return Err(self.err_expect_here("\"#endif\""));
         }
         Ok(items)
     }
 
     fn theory_item(&mut self) -> Result<TheoryItem, ParseError> {
         self.skip_ws();
-
-        // Try preprocessor directives (start with `#`).
-        if let Some(item) = self.try_preproc()? {
-            return Ok(item);
-        }
 
         // Try formal comment first (header `{* body *}`)
         let save = self.save();
@@ -1122,77 +1161,7 @@ impl<'a> Parser<'a> {
 
     // -------------------- Preprocessor --------------------
 
-    fn try_preproc(&mut self) -> Result<Option<TheoryItem>, ParseError> {
-        let save = self.save();
-        self.skip_ws();
-        if !self.lx.eat_str("#") {
-            self.restore(save);
-            return Ok(None);
-        }
-        // Read directive name.
-        let name = self.lx.ascii_alpha_run();
-        match name.as_str() {
-            "define" => {
-                self.skip_ws();
-                let id = self.ident()?;
-                self.state.flags.insert(id.clone());
-                Ok(Some(TheoryItem::Define(id)))
-            }
-            "include" => {
-                self.skip_ws();
-                let path = self.string_literal()?;
-                Ok(Some(TheoryItem::Include(path)))
-            }
-            "endif" | "else" => {
-                // Should have been handled by the matching #ifdef. We restore.
-                self.restore(save);
-                Ok(None)
-            }
-            other => Err(self.err(format!("unknown preprocessor directive `#{}`", other))),
-        }
-    }
-
-    /// `#ifdef <flag-formula>` … `[#else …] #endif`: evaluate the condition
-    /// against the active flag set and return the LIVE branch's items; the
-    /// dead branch's text is skipped without parsing (so a `#define` inside
-    /// it never fires).  Mirrors HS `ifdef` (Parser.hs), which evaluates the
-    /// formula at parse time and `addItems`-splices the live items inline —
-    /// the caller extends the surrounding item stream with the result, so no
-    /// preprocessor structure survives in the AST.
-    fn expand_ifdef(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
-        self.skip_ws();
-        if !self.lx.eat_str("#") {
-            return Err(self.err("expected `#ifdef`"));
-        }
-        if self.lx.ascii_alpha_run() != "ifdef" {
-            return Err(self.err("expected `#ifdef`"));
-        }
-        self.skip_ws();
-        let cond = self.flag_disjuncts()?;
-        if self.eval_flagformula(&cond) {
-            let items = self.theory_items_until_end()?;
-            if self.try_punct("#else") {
-                // Else branch text is skipped.
-                self.skip_until("#endif");
-            } else if !self.try_punct("#endif") {
-                return Err(self.err_expect_here("#endif or #else"));
-            }
-            Ok(items)
-        } else {
-            // Skip then-branch.
-            match self.skip_until_branch_terminator() {
-                BranchEnd::Else => {
-                    let items = self.theory_items_until_end()?;
-                    self.require_punct("#endif")?;
-                    Ok(items)
-                }
-                BranchEnd::Endif => Ok(Vec::new()),
-                BranchEnd::Eof => Err(self.err("unterminated #ifdef")),
-            }
-        }
-    }
-
-    /// Expand a `#include "file"` directive at the current position into the
+    /// Expand an already-consumed `#include` keyword and its following path into the
     /// sequence of theory items declared in the referenced file.
     ///
     /// HS `include` (Theory/Text/Parser.hs:323-343):
@@ -1208,7 +1177,7 @@ impl<'a> Parser<'a> {
     ///        Nothing -> doubleQuoted filePath
     ///        Just s  -> (s </>) <$> doubleQuoted filePath
     /// ```
-    /// The `#include` token + double-quoted path are consumed here; the path is
+    /// The double-quoted path is consumed here; the path is
     /// resolved against `self.base_dir` (HS `takeDirectory inFile0`); the file
     /// is read and its header-less fragment parsed by [`parse_include_fragment`]
     /// — which threads parser state both ways (signature / known funcs / flags),
@@ -1218,11 +1187,6 @@ impl<'a> Parser<'a> {
     }
 
     fn expand_include_inner(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
-        // Consume `#include`.
-        self.skip_ws();
-        if !self.lx.eat_str("#include") {
-            return Err(self.err("expected `#include`"));
-        }
         self.skip_ws();
         let path_start = self.save();
         let (raw_path, path_span) = self.string_literal_spanned()?;
@@ -1313,48 +1277,57 @@ impl<'a> Parser<'a> {
         result
     }
 
-    fn skip_until(&mut self, terminator: &str) {
-        loop {
-            self.skip_ws();
-            if self.lx.is_eof() {
-                return;
-            }
-            if self.try_punct(terminator) {
-                return;
-            }
-            self.lx.bump();
-        }
+    /// A conditional keyword at the start of a physical line, after indentation.
+    /// Indexed node names such as `#endif.0` are ordinary tokens.
+    fn conditional_directive(&self) -> Option<&'static str> {
+        let rest = self.lx.rest().strip_prefix('#')?;
+        let directive = ["ifdef", "else", "endif"].into_iter().find(|directive| {
+            rest.strip_prefix(directive).is_some_and(|tail| {
+                !tail
+                    .chars()
+                    .next()
+                    .is_some_and(|c| is_ident_char(c) || c == '.')
+            })
+        })?;
+        let before = &self.lx.src()[..self.save().offset];
+        before
+            .rsplit('\n')
+            .next()
+            .unwrap()
+            .chars()
+            .all(char::is_whitespace)
+            .then_some(directive)
     }
 
-    fn skip_until_branch_terminator(&mut self) -> BranchEnd {
-        let mut depth = 0u32;
-        loop {
-            self.skip_ws();
-            if self.lx.is_eof() {
-                return BranchEnd::Eof;
-            }
-            if self.lx.peek() == Some('#') {
-                self.lx.bump();
-                let name = self.lx.ascii_alpha_run();
-                match name.as_str() {
-                    "ifdef" => {
-                        depth += 1;
-                    }
-                    "endif" => {
-                        if depth == 0 {
-                            return BranchEnd::Endif;
-                        }
-                        depth -= 1;
-                    }
-                    "else" if depth == 0 => {
-                        return BranchEnd::Else;
-                    }
-                    _ => {}
-                }
+    /// Parse only the directive's physical line, leaving the next line untouched.
+    /// The caller has recognized the directive without consuming it.
+    fn consume_conditional(&mut self, expected: &str) -> Result<Option<bool>, ParseError> {
+        self.lx.eat_str(&format!("#{expected}"));
+        let payload_start = self.save();
+        let line_len = self.lx.rest().find('\n').unwrap_or(self.lx.rest().len());
+        let mut line = Parser::new(&self.lx.rest()[..line_len], &[], false);
+        let result = (|| {
+            let condition = if expected == "ifdef" {
+                Some(line.flag_disjuncts(&self.state.flags)?)
             } else {
-                self.lx.bump();
+                None
+            };
+            line.skip_ws();
+            if !line.lx.is_eof() {
+                return Err(line.err_expect_here("end of conditional directive line"));
+            }
+            Ok(condition)
+        })();
+        let condition = line
+            .lx
+            .finish(result)
+            .map_err(|error| error.shifted(payload_start, self.lx.src()))?;
+        while let Some(c) = self.lx.bump() {
+            if c == '\n' {
+                break;
             }
         }
+        Ok(condition)
     }
 
     // -------------------- Builtins / options / heuristic / tactic --------------------
@@ -4359,9 +4332,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Accept the shapes HS `nodevarTerm` can read after a relational
-    /// alternative backtracks: a node/bare variable, or a bare identifier
-    /// that the ordinary term parser had resolved as a nullary symbol.
+    /// Accept a node/bare variable or a bare identifier resolved as a nullary symbol.
     fn node_operand(t: Term, explicit_sort: bool) -> Option<Term> {
         match t {
             Term::Var(v) if v.sort == LSort::Node || (v.sort == LSort::Msg && !explicit_sort) => {
@@ -5453,39 +5424,43 @@ impl<'a> Parser<'a> {
     // Flag formulas (for #ifdef)
     // =========================================================================
 
-    fn flag_disjuncts(&mut self) -> Result<FlagFormula, ParseError> {
+    #[allow(clippy::disallowed_types)]
+    fn flag_disjuncts(&mut self, flags: &HashSet<String>) -> Result<bool, ParseError> {
         self.chainl1(
-            |p| p.flag_conjuncts(),
+            |p| p.flag_conjuncts(flags),
             |p| (p.try_punct("|") || p.try_punct("∨")).then_some(()),
-            |(), lhs, rhs| FlagFormula::Or(Box::new(lhs), Box::new(rhs)),
+            |(), lhs, rhs| lhs || rhs,
         )
     }
 
-    fn flag_conjuncts(&mut self) -> Result<FlagFormula, ParseError> {
+    #[allow(clippy::disallowed_types)]
+    fn flag_conjuncts(&mut self, flags: &HashSet<String>) -> Result<bool, ParseError> {
         self.chainl1(
-            |p| p.flag_negation(),
+            |p| p.flag_negation(flags),
             |p| (p.try_punct("&") || p.try_punct("∧")).then_some(()),
-            |(), lhs, rhs| FlagFormula::And(Box::new(lhs), Box::new(rhs)),
+            |(), lhs, rhs| lhs && rhs,
         )
     }
 
-    fn flag_negation(&mut self) -> Result<FlagFormula, ParseError> {
+    #[allow(clippy::disallowed_types)]
+    fn flag_negation(&mut self, flags: &HashSet<String>) -> Result<bool, ParseError> {
         if self.try_kw("not") || self.try_punct("¬") {
-            let f = self.flag_atom()?;
-            Ok(FlagFormula::Not(Box::new(f)))
+            let f = self.flag_atom(flags)?;
+            Ok(!f)
         } else {
-            self.flag_atom()
+            self.flag_atom(flags)
         }
     }
 
-    fn flag_atom(&mut self) -> Result<FlagFormula, ParseError> {
+    #[allow(clippy::disallowed_types)]
+    fn flag_atom(&mut self, flags: &HashSet<String>) -> Result<bool, ParseError> {
         if self.try_punct("(") {
-            let f = self.flag_disjuncts()?;
+            let f = self.flag_disjuncts(flags)?;
             self.require_punct(")")?;
             return Ok(f);
         }
         let id = self.ident()?;
-        Ok(FlagFormula::Atom(id))
+        Ok(flags.contains(&id))
     }
 
     // =========================================================================
@@ -5726,15 +5701,6 @@ impl<'a> Parser<'a> {
             sort: LSort::Node,
             typ: None,
         })
-    }
-
-    fn eval_flagformula(&self, f: &FlagFormula) -> bool {
-        match f {
-            FlagFormula::Atom(s) => self.state.flags.contains(s),
-            FlagFormula::Not(g) => !self.eval_flagformula(g),
-            FlagFormula::And(a, b) => self.eval_flagformula(a) && self.eval_flagformula(b),
-            FlagFormula::Or(a, b) => self.eval_flagformula(a) || self.eval_flagformula(b),
-        }
     }
 }
 
@@ -6024,13 +5990,6 @@ fn subst_let_atom(a: &mut Atom, key: &Term, val: &Term) {
         Atom::Last(t) => *t = subst_let_term(t, key, val),
         Atom::Pred(f) => subst_let_fact(f, key, val),
     }
-}
-
-#[derive(Debug)]
-enum BranchEnd {
-    Else,
-    Endif,
-    Eof,
 }
 
 /// One attribute of a `functions:` declaration.  Mirrors HS `FctAttr`

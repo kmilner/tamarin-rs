@@ -12,7 +12,12 @@
 //! enrichment the Haskell parser does inline (arity validation,
 //! `_restrict` expansion, macro expansion, scope analysis) is deferred to
 //! a later elaboration pass. The goal is to recognise every well-formed
-//! `.spthy` file that Tamarin's Haskell parser accepts.
+//! `.spthy` file that Tamarin's Haskell parser accepts, with one deliberate
+//! preprocessor restriction: `#ifdef`, `#else`, and `#endif` occupy standalone
+//! physical lines (indentation and trailing comments are allowed). Active code
+//! parses comments and quoted contents normally. In inactive branches, every
+//! conditional line is structural and all other text is opaque, including
+//! malformed declarations and unmatched quotes/brackets.
 //!
 //! Diagnostics use Rust source spans and semantic error kinds. Exact Parsec
 //! expectation lists and GHC exception call stacks are not a compatibility goal.
