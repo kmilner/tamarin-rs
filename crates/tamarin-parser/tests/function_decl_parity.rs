@@ -149,3 +149,52 @@ fn theory_end_ignores_trailing_content_but_needs_a_word_boundary() {
         assert_eq!(error.span().start, body.len());
     }
 }
+
+#[test]
+fn huge_numeric_arities_report_errors_without_panicking() {
+    let huge = usize::MAX;
+    for (prefix, declaration, conflict) in [
+        ("", format!("f/{huge} [AC]"), false),
+        ("functions: f/1", format!("f/{huge} [AC]"), true),
+        ("builtins: hashing", format!("h/{huge} [AC]"), true),
+    ] {
+        let source = format!("theory T begin {prefix} functions: {declaration} end");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        if conflict {
+            assert!(
+                matches!(error.kind(), ParseErrorKind::ConflictingDeclaration { .. }),
+                "{error}"
+            );
+        } else {
+            assert!(
+                matches!(error.kind(), ParseErrorKind::NonBinaryAcFunction { arity, .. } if *arity == huge),
+                "{error}"
+            );
+        }
+        assert_eq!(error.span().len(), 1);
+    }
+    let digits = format!("00{huge}");
+    let source = format!("theory T begin functions: f/{digits} /* comment */ end");
+    let error = parse_theory(&source, &[]).unwrap_err();
+    assert!(
+        error
+            .diagnostic_message()
+            .contains("cannot allocate arguments for function arity"),
+        "{error}"
+    );
+    assert_eq!(&source[error.span()], digits);
+}
+
+#[test]
+fn numeric_arities_materialize_the_same_types_as_explicit_any_arguments() {
+    for (numeric, typed) in [
+        ("f/0", "f():Any"),
+        ("f/1", "f(Any):Any"),
+        ("f/3", "f(Any,Any,Any):Any"),
+        ("f/2 [AC]", "f(Any,Any):Any [AC]"),
+        ("fst/1 [AC]", "fst(Any):Any [AC]"),
+    ] {
+        let declarations = |decl: &str| parse_theory(&decl_theory(decl), &[]).unwrap().items;
+        assert_eq!(declarations(numeric), declarations(typed), "{numeric}");
+    }
+}

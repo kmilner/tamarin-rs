@@ -424,6 +424,16 @@ fn remove_comment_block(cs: &[char], mut i: usize) -> usize {
 // Parser state
 // =============================================================================
 
+/// Numeric declarations defer their placeholder allocation until validation.
+enum FunctionArgs {
+    Untyped {
+        arity: usize,
+        position: Pos,
+        len: usize,
+    },
+    Typed(Vec<Option<String>>),
+}
+
 /// The `(arity, Privacy, Constructability, NDCstate)` options tuple HS carries
 /// per free function symbol (HS `NoEqSym`, Term/Term/FunctionSymbols.hs:132).
 ///
@@ -2204,13 +2214,30 @@ impl<'a> Parser<'a> {
     }
 
     /// A numeric arity or a parenthesized argument-type list and result type.
-    #[allow(clippy::type_complexity)]
-    fn function_type(&mut self) -> Result<(Vec<Option<String>>, Option<String>), ParseError> {
+    fn function_type(&mut self) -> Result<(FunctionArgs, Option<String>), ParseError> {
         if self.try_punct("/") {
+            let position = self.save();
+            let len = self
+                .lx
+                .rest()
+                .bytes()
+                .take_while(u8::is_ascii_digit)
+                .count();
             let Some(k) = self.lx.natural() else {
                 return Err(self.err_expect(&["natural"]));
             };
-            return Ok((vec![None; k as usize], None));
+            let arity = usize::try_from(k).map_err(|_| {
+                self.err("function arity is too large for this platform")
+                    .with_location(position, len)
+            })?;
+            return Ok((
+                FunctionArgs::Untyped {
+                    arity,
+                    position,
+                    len,
+                },
+                None,
+            ));
         }
         self.skip_ws();
         let opening = self.save();
@@ -2220,7 +2247,31 @@ impl<'a> Parser<'a> {
         let args = self.sep_end_by(opening, ")", Self::type_p)?;
         self.require_punct(":")?;
         let out_type = self.type_p()?;
-        Ok((args, out_type))
+        Ok((FunctionArgs::Typed(args), out_type))
+    }
+
+    fn materialize_function_args(
+        &self,
+        args: FunctionArgs,
+    ) -> Result<Vec<Option<String>>, ParseError> {
+        match args {
+            FunctionArgs::Typed(types) => Ok(types),
+            FunctionArgs::Untyped {
+                arity,
+                position,
+                len,
+            } => {
+                let mut types = Vec::new();
+                types.try_reserve_exact(arity).map_err(|e| {
+                    self.err(format!(
+                        "cannot allocate arguments for function arity {arity}: {e}"
+                    ))
+                    .with_location(position, len)
+                })?;
+                types.resize(arity, None);
+                Ok(types)
+            }
+        }
     }
 
     /// `Any` denotes an unspecified type; other identifiers name a type.
@@ -2235,7 +2286,11 @@ impl<'a> Parser<'a> {
         let name_start = name_pos.offset;
         let name = self.ident()?;
         let name_end = name_start + name.len();
-        let (arg_types, out_type) = self.function_type()?;
+        let (args, out_type) = self.function_type()?;
+        let arity = match &args {
+            FunctionArgs::Untyped { arity, .. } => *arity,
+            FunctionArgs::Typed(types) => types.len(),
+        };
         // Optional attributes `[private, destructor, AC, NDC, NDC-diff, ...]`
         // (HS `option [] $ list functionAttribute`).
         let mut atts = Vec::new();
@@ -2261,7 +2316,7 @@ impl<'a> Parser<'a> {
         let ndc = atts.contains(&FctAttr::Ndc);
         let ndc_diff = atts.contains(&FctAttr::NdcDiff);
         let requested = FunOptions {
-            arity: arg_types.len(),
+            arity,
             private,
             destructor,
             ndc,
@@ -2328,7 +2383,7 @@ impl<'a> Parser<'a> {
                 // open theory's typing lines (TheoryObject.hs:820-838).
                 return Ok(FunctionDecl {
                     name,
-                    arg_types,
+                    arg_types: self.materialize_function_args(args)?,
                     out_type,
                     private: prev.private,
                     destructor: prev.destructor,
@@ -2343,23 +2398,24 @@ impl<'a> Parser<'a> {
             .fun_syms
             .iter()
             .any(|(n, opts)| n == &name && *opts == requested);
+        // HS rejects a non-binary `[AC]` symbol outright
+        // (Theory/Text/Parser/Signature.hs:220)
+        // in the `_` case of the conflict check, so check (2) above wins for
+        // a name already in the signature.
+        if ac && requested.arity != 2 {
+            self.skip_ws();
+            let error = self.semantic_error(
+                ParseErrorKind::NonBinaryAcFunction {
+                    name: diagnostic_lexeme(&name),
+                    arity: requested.arity,
+                },
+                name_pos,
+                name.len(),
+            );
+            return Err(error);
+        }
+        let arg_types = self.materialize_function_args(args)?;
         if ac {
-            // HS rejects a non-binary `[AC]` symbol outright
-            // (Theory/Text/Parser/Signature.hs:220)
-            // in the `_` case of the conflict check, so check (2) above wins for
-            // a name already in the signature.
-            if requested.arity != 2 {
-                self.skip_ws();
-                let error = self.semantic_error(
-                    ParseErrorKind::NonBinaryAcFunction {
-                        name: diagnostic_lexeme(&name),
-                        arity: requested.arity,
-                    },
-                    name_pos,
-                    name.len(),
-                );
-                return Err(error);
-            }
             // A binary `[AC]` symbol also becomes an infix operator for the terms
             // that follow, mirroring HS's `modifyStateSig $ addFunSym (ACfctUser
             // ...)`, which likewise runs only in the `IsAC` branch.
