@@ -80,7 +80,7 @@ impl ParseError {
         }
     }
 
-    fn expected(pos: Pos, expected: impl Into<String>, found: Option<char>) -> Self {
+    pub(crate) fn expected(pos: Pos, expected: impl Into<String>, found: Option<char>) -> Self {
         let mut expected = expected.into();
         bound_owned_text(&mut expected, MAX_DIAGNOSTIC_MESSAGE_CHARS);
         Self {
@@ -740,6 +740,11 @@ impl<'a> Parser<'a> {
     /// Report expected constructs at the next token, consuming leading whitespace/comments.
     fn err_expect(&mut self, expected: impl Into<String>) -> ParseError {
         self.skip_ws();
+        self.err_expect_here(expected)
+    }
+
+    /// Report an expectation without advancing past the failure position.
+    fn err_expect_here(&self, expected: impl Into<String>) -> ParseError {
         ParseError::expected(self.lx.pos(), expected, self.lx.peek())
     }
 
@@ -876,7 +881,7 @@ impl<'a> Parser<'a> {
         if let Some(e) = self.err_reserved_word() {
             return Err(e);
         }
-        Err(self.err("expected identifier"))
+        Err(self.err_expect_here("identifier"))
     }
 
     /// Diagnose a reserved identifier without rescanning or moving the lexer.
@@ -1170,7 +1175,7 @@ impl<'a> Parser<'a> {
                 // Else branch text is skipped.
                 self.skip_until("#endif");
             } else if !self.try_punct("#endif") {
-                return Err(self.err("expected #endif or #else"));
+                return Err(self.err_expect_here("#endif or #else"));
             }
             Ok(items)
         } else {
@@ -1291,7 +1296,9 @@ impl<'a> Parser<'a> {
             let items = sub.theory_items_until_end()?;
             sub.skip_ws();
             if !sub.lx.is_eof() {
-                return Err(sub.err("unexpected trailing input in included file"));
+                return Err(sub
+                    .err_expect_here("end of included file")
+                    .with_context(ParseContext::Include));
             }
             Ok(items)
         })();
@@ -1738,7 +1745,7 @@ impl<'a> Parser<'a> {
         };
         while self.try_punct("|") || self.try_punct("∨") {
             let Some(right) = self.tactic_conjunction()? else {
-                return Err(self.err("expected tactic selector after disjunction"));
+                return Err(self.err_expect_here("tactic selector after disjunction"));
             };
             expr = SelectorExpr::Or(Box::new(expr), Box::new(right));
         }
@@ -1751,7 +1758,7 @@ impl<'a> Parser<'a> {
         };
         while self.try_punct("&") || self.try_punct("∧") {
             let Some(right) = self.tactic_negation()? else {
-                return Err(self.err("expected tactic selector after conjunction"));
+                return Err(self.err_expect_here("tactic selector after conjunction"));
             };
             expr = SelectorExpr::And(Box::new(expr), Box::new(right));
         }
@@ -1761,7 +1768,7 @@ impl<'a> Parser<'a> {
     fn tactic_negation(&mut self) -> Result<Option<SelectorExpr>, ParseError> {
         if self.try_kw("not") || self.try_punct("¬") {
             let Some(expr) = self.tactic_function()? else {
-                return Err(self.err("expected tactic selector after negation"));
+                return Err(self.err_expect_here("tactic selector after negation"));
             };
             Ok(Some(SelectorExpr::Not(Box::new(expr))))
         } else {
@@ -3122,7 +3129,7 @@ impl<'a> Parser<'a> {
                 // SAPIC-translation-generated rules (via `ruleProcess`, not this
                 // parser).  Mirror that: read and drop the value, push nothing.
                 self.require_punct("=")?;
-                let _ = self.read_balanced_token()?;
+                let _ = self.read_attribute_token()?;
             } else if self.try_kw("no_derivcheck") {
                 attrs.push(RuleAttr::NoDerivCheck);
             } else if self.try_kw("role") {
@@ -3136,7 +3143,7 @@ impl<'a> Parser<'a> {
                 let save = self.save();
                 if let Some(ext) = self.lx.ext_identifier() {
                     let val = if self.try_punct("=") {
-                        Some(self.read_balanced_token()?)
+                        Some(self.read_attribute_token()?)
                     } else {
                         None
                     };
@@ -3232,8 +3239,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Read an identifier or a balanced parenthesised token (for `process=...`).
-    fn read_balanced_token(&mut self) -> Result<String, ParseError> {
+    /// Read an identifier or a single-level delimited attribute value.
+    fn read_attribute_token(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
         // HS `parseAndIgnore = betweenMatching (\(l,r) -> manyCharsExcept [l,r] ...)`
         // (Theory/Text/Parser/Rule.hs:69-95, see line 87). `betweenMatching`
@@ -3253,29 +3260,27 @@ impl<'a> Parser<'a> {
         if let Some(c) = self.lx.peek() {
             for (l, r) in pairs.iter() {
                 if c == *l {
+                    let opening = self.save();
                     self.lx.bump();
-                    let mut s = String::new();
-                    loop {
-                        match self.lx.peek() {
-                            None => return Err(self.err("unterminated bracketed value")),
-                            // Stop at the first `l` or `r` (matches
-                            // `manyCharsExcept`, which does not nest); the closer
-                            // `r` is then consumed by `between`.
-                            Some(ch) if ch == *r || ch == *l => {
-                                if ch != *r {
-                                    return Err(self.err("unterminated bracketed value"));
-                                }
-                                self.lx.bump();
-                                break;
-                            }
-                            Some(ch) => {
-                                s.push(ch);
-                                self.lx.bump();
-                            }
-                        }
+                    let start = self.save().offset;
+                    while self.lx.peek().is_some_and(|ch| ch != *l && ch != *r) {
+                        self.lx.bump();
+                    }
+                    let end = self.save().offset;
+                    if !self.lx.eat(*r) {
+                        let error = self.err_expect_here(format!("{r:?}"));
+                        return Err(if self.lx.is_eof() {
+                            error.with_kind(ParseErrorKind::UnclosedDelimiter {
+                                opening: *l,
+                                opening_span: opening.offset..opening.offset + 1,
+                                closing: *r,
+                            })
+                        } else {
+                            error
+                        });
                     }
                     self.skip_ws();
-                    return Ok(s);
+                    return Ok(self.lx.src()[start..end].to_owned());
                 }
             }
         }
@@ -4074,7 +4079,7 @@ impl<'a> Parser<'a> {
             return Ok(Process::Call { name: id, args });
         }
         self.restore(save2);
-        Err(self.err("expected process"))
+        Err(self.err_expect_here("process"))
     }
 
     fn else_process(&mut self) -> Result<Process, ParseError> {
@@ -5386,7 +5391,7 @@ impl<'a> Parser<'a> {
     fn var_spec_spanned(&mut self) -> Result<(VarSpec, Pos), ParseError> {
         let (variable, position) = self
             .try_var_spec_spanned()?
-            .ok_or_else(|| self.err("expected variable"))?;
+            .ok_or_else(|| self.err_expect_here("variable"))?;
         // Allow `: msg | pub | fresh | node | nat` sort suffix or a SAPIC
         // type annotation after the variable.
         self.attach_sort_suffix(variable)
@@ -5533,7 +5538,7 @@ impl<'a> Parser<'a> {
                 if self.lx.peek_symbol(")") {
                     Ok(goal)
                 } else {
-                    Err(self.err("expected `)` after the goal"))
+                    Err(self.err_expect_here("`)` after the goal"))
                 }
             })
             .map_err(|alternate| Self::select_alt_error(error, alternate))
@@ -5565,7 +5570,8 @@ impl<'a> Parser<'a> {
         tail: impl FnOnce(&mut Self, H) -> Result<GoalSpec, ParseError>,
     ) -> Result<Option<GoalSpec>, ParseError> {
         let save = self.save();
-        match head(self) {
+        let result = head(self);
+        match self.lx.finish(result) {
             Ok(h) => tail(self, h).map(Some),
             Err(error) => {
                 self.restore(save);
@@ -5603,7 +5609,7 @@ impl<'a> Parser<'a> {
             |p| {
                 let t = p.msetterm(false)?;
                 if !p.try_punct("<<") && !p.try_punct("\u{228F}") {
-                    return Err(p.err("expected `⊏`"));
+                    return Err(p.err_expect_here("`⊏`"));
                 }
                 Ok(t)
             },
@@ -5628,12 +5634,12 @@ impl<'a> Parser<'a> {
                 let premise = if p.lx.eat_str("▶") {
                     Some(
                         p.lx.natural_subscript()
-                            .ok_or_else(|| p.err("expected a subscript premise index"))?,
+                            .ok_or_else(|| p.err_expect_here("a subscript premise index"))?,
                     )
                 } else if p.try_punct("@") {
                     None
                 } else {
-                    return Err(p.err("expected `▶` or `@`"));
+                    return Err(p.err_expect_here("`▶` or `@`"));
                 };
                 Ok((fact, premise))
             },
@@ -5660,7 +5666,7 @@ impl<'a> Parser<'a> {
             |p| {
                 let conc = p.node_idx_pair()?;
                 if !p.try_punct("~~>") {
-                    return Err(p.err("expected `~~>`"));
+                    return Err(p.err_expect_here("`~~>`"));
                 }
                 Ok(conc)
             },
@@ -5677,7 +5683,7 @@ impl<'a> Parser<'a> {
         let n = self
             .lx
             .natural()
-            .ok_or_else(|| self.err("expected a node index"))?;
+            .ok_or_else(|| self.err_expect_here("a node index"))?;
         self.require_punct(")")?;
         Ok((v, n))
     }
@@ -5686,13 +5692,13 @@ impl<'a> Parser<'a> {
     /// `symbol_ "splitEqs"` then `parens natural`.
     fn eq_split_goal(&mut self) -> Result<GoalSpec, ParseError> {
         if !self.try_kw("splitEqs") {
-            return Err(self.err("expected `splitEqs`"));
+            return Err(self.err_expect_here("`splitEqs`"));
         }
         self.require_punct("(")?;
         let n = self
             .lx
             .natural()
-            .ok_or_else(|| self.err("expected a split id"))?;
+            .ok_or_else(|| self.err_expect_here("a split id"))?;
         self.require_punct(")")?;
         Ok(GoalSpec::Split(n as i64))
     }
@@ -6080,7 +6086,9 @@ pub fn parse_formula_str(s: &str, msig: &MaudeSig) -> Result<Formula, ParseError
         let f = p.formula()?;
         p.skip_ws();
         if !p.lx.is_eof() {
-            return Err(p.err("trailing garbage in formula string"));
+            return Err(p
+                .err_expect_here("end of formula")
+                .with_context(ParseContext::Formula));
         }
         Ok(f)
     })();
@@ -6111,11 +6119,12 @@ pub(crate) fn parse_parens_goal(
         let g = p.goal()?;
         p.skip_ws();
         if !p.lx.eat_str(")") {
-            return Err(p.err("expected `)` after the goal"));
+            return Err(p.err_expect_here("`)` after the goal"));
         }
         Ok((g, p.lx.pos().offset))
     })();
     p.lx.finish(result)
+        .map_err(|error| error.with_context(ParseContext::Proof))
 }
 
 #[cfg(test)]

@@ -31,6 +31,7 @@
 
 use crate::ast::{ParsedMethod, ParsedProofTree};
 use crate::lexer::{is_ident_char, Lexer};
+use crate::parse_error::ParseContext;
 use crate::parser::{ParseError, Parser};
 
 /// Parse the raw skeleton text into a [`ParsedProofTree`]. Returns `Err` if
@@ -52,11 +53,12 @@ pub fn parse_proof_tree<'a>(
         let tree = p.proof_skeleton()?;
         p.lx.skip_ws();
         if !p.lx.is_eof() {
-            return Err(p.err("unexpected trailing proof text"));
+            return Err(p.err_expect("end of proof"));
         }
         Ok(tree)
     })();
     p.lx.finish(result)
+        .map_err(|error| error.with_context(ParseContext::Proof))
 }
 
 /// Validate a stored diff-proof skeleton against HS `diffProofSkeleton`
@@ -75,11 +77,12 @@ pub(crate) fn validate_diff_proof_tree<'a>(
         p.diff_proof_skeleton()?;
         p.lx.skip_ws();
         if !p.lx.is_eof() {
-            return Err(p.err("unexpected trailing proof text"));
+            return Err(p.err_expect("end of proof"));
         }
         Ok(())
     })();
     p.lx.finish(result)
+        .map_err(|error| error.with_context(ParseContext::Proof))
 }
 
 struct TreeParser<'a> {
@@ -88,8 +91,8 @@ struct TreeParser<'a> {
 }
 
 impl<'a> TreeParser<'a> {
-    fn err(&self, msg: impl Into<String>) -> ParseError {
-        ParseError::custom(self.lx.pos(), msg.into())
+    fn err_expect(&self, expected: impl Into<String>) -> ParseError {
+        ParseError::expected(self.lx.pos(), expected, self.lx.peek())
     }
 
     /// HS `proofSkeleton` (Theory/Text/Parser/Proof.hs:98-115).
@@ -200,7 +203,7 @@ impl<'a> TreeParser<'a> {
         }
         // HS `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) has no
         // catch-all alternative, so any other token fails the skeleton parse.
-        Err(self.err("expected proof method"))
+        Err(self.err_expect("proof method"))
     }
 
     /// HS `diffProofSkeleton` (Theory/Text/Parser/Proof.hs:128-144).
@@ -246,15 +249,15 @@ impl<'a> TreeParser<'a> {
         }
         if self.try_kw("step") {
             if !self.lx.try_symbol("(") {
-                return Err(self.err("expected `(`"));
+                return Err(self.err_expect("`(`"));
             }
             self.proof_method()?;
             if !self.lx.try_symbol(")") {
-                return Err(self.err("expected `)`"));
+                return Err(self.err_expect("`)`"));
             }
             return Ok(());
         }
-        Err(self.err("expected diff proof method"))
+        Err(self.err_expect("diff proof method"))
     }
 
     // -------- helpers --------
@@ -274,7 +277,7 @@ impl<'a> TreeParser<'a> {
         if self.try_kw(kw) {
             Ok(())
         } else {
-            Err(self.err(format!("expected `{}`", kw)))
+            Err(self.err_expect(format!("`{}`", kw)))
         }
     }
 
@@ -289,7 +292,7 @@ impl<'a> TreeParser<'a> {
                 s.push(c);
                 self.lx.bump();
             }
-            _ => return Err(self.err("expected identifier")),
+            _ => return Err(self.err_expect("identifier")),
         }
         while let Some(c) = self.lx.peek() {
             if is_ident_char(c) {

@@ -895,7 +895,10 @@ fn malformed_equation_split_preserves_its_cause() {
     let source = "theory T begin lemma L: \"T\" by solve(splitEqs(x)) end";
     let error = parse_theory(source, &[]).expect_err("split id must be numeric");
     assert!(
-        error.diagnostic_message().contains("expected a split id"),
+        error
+            .diagnostic_notes()
+            .iter()
+            .any(|note| note.contains("expected a split id")),
         "{error:?}"
     );
     common::assert_span(&error, source, "x");
@@ -1004,7 +1007,10 @@ fn malformed_goal_heads_preserve_the_furthest_failure() {
         let source = format!("theory T begin lemma L: \"T\" by solve({goal}) end");
         let error = parse_theory(&source, &[]).expect_err("invalid goal head");
         assert!(
-            error.diagnostic_message().contains(message),
+            error
+                .diagnostic_notes()
+                .iter()
+                .any(|note| note.contains(message)),
             "{goal}: {error:?}"
         );
         assert_eq!(error.span().start, source.rfind('x').unwrap());
@@ -1325,4 +1331,144 @@ fn incomplete_term_continuations_preserve_application_errors() {
             "{source}: {error:?}"
         );
     }
+}
+
+#[test]
+fn syntax_expectations_report_context_and_found_token() {
+    for (source, context, expected, token) in [
+        (
+            "theory T begin rule : [] --> [] end",
+            ParseContext::Rule,
+            "identifier",
+            ':',
+        ),
+        (
+            "theory T begin process: ? end",
+            ParseContext::Process,
+            "process",
+            '?',
+        ),
+        (
+            "theory T begin lemma L: \"T\" by wobble end",
+            ParseContext::Proof,
+            "proof method",
+            'w',
+        ),
+        (
+            "theory T begin lemma L: \"T\" by solve(splitEqs(x)) end",
+            ParseContext::Proof,
+            "a split id",
+            'x',
+        ),
+    ] {
+        let error = parse_theory(source, &[]).expect_err("invalid syntax");
+        assert_eq!(error.kind(), &ParseErrorKind::Expected { context });
+        assert_eq!(
+            error.diagnostic_notes(),
+            [format!("expected {expected}; found {token:?}")]
+        );
+        assert_eq!(source[error.span().start..].chars().next(), Some(token));
+    }
+}
+
+#[test]
+fn standalone_proof_errors_have_proof_context() {
+    let parent = tamarin_parser::parser::Parser::new("", &[], false);
+    for (source, expected, found) in [
+        ("by", "proof method", "end of input"),
+        ("by sorry trailing", "end of proof", "'t'"),
+    ] {
+        let error = tamarin_parser::parse_proof_tree(source, &parent).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            &ParseErrorKind::Expected {
+                context: ParseContext::Proof
+            }
+        );
+        assert_eq!(
+            error.diagnostic_notes(),
+            [format!("expected {expected}; found {found}")]
+        );
+    }
+}
+
+#[test]
+fn raw_attribute_values_report_the_required_delimiter() {
+    for attribute in ["process", "x-demo"] {
+        let source = format!("theory T begin rule R [{attribute}=(abc(def))] : [] --> [] end");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(matches!(error.kind(), ParseErrorKind::Expected { .. }));
+        assert_eq!(error.span().start, source.find("(def").unwrap());
+        assert_eq!(error.diagnostic_notes(), ["expected ')'; found '('"]);
+        let source = format!("theory T begin rule R [{attribute}=(abc");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        let opening = source.find('(').unwrap();
+        assert_eq!(
+            error.kind(),
+            &ParseErrorKind::UnclosedDelimiter {
+                opening: '(',
+                opening_span: opening..opening + 1,
+                closing: ')'
+            }
+        );
+        assert_eq!(error.span().start, source.len());
+    }
+}
+
+#[test]
+fn proof_goal_heads_preserve_consumed_comment_errors() {
+    let parent = tamarin_parser::parser::Parser::new("", &[], false);
+    for head in ["!G(x)[no_precomp]", "G(x) ▶", "G(x) @", "(#i, 0) ~~>"] {
+        let source = format!("by solve({head} /* unfinished)");
+        let error = tamarin_parser::parse_proof_tree(&source, &parent).unwrap_err();
+        let opening = source.find("/*").unwrap();
+        assert_eq!(
+            error.kind(),
+            &ParseErrorKind::UnclosedBlockComment {
+                opening_span: opening..opening + 2
+            },
+            "{source}: {error:?}"
+        );
+        let labels = error.diagnostic_labels_with_source(&source);
+        assert_eq!(&source[labels[1].span.clone()], "/*");
+    }
+}
+
+#[test]
+fn trailing_input_has_structured_boundary_expectations() {
+    let error = tamarin_parser::parser::parse_formula_str("T ?", &pair_maude_sig()).unwrap_err();
+    assert_eq!(
+        error.kind(),
+        &ParseErrorKind::Expected {
+            context: ParseContext::Formula
+        }
+    );
+    assert_eq!(
+        error.diagnostic_notes(),
+        ["expected end of formula; found '?'"]
+    );
+    assert_eq!(error.span().start, 2);
+
+    let dir = std::env::temp_dir().join(format!("tamarin_trailing_include_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("fragment.spthy"), "end").unwrap();
+    let error = parse_theory_with_base(
+        "theory T begin #include \"fragment.spthy\" end",
+        &[],
+        Some(dir.clone()),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        &ParseErrorKind::Expected {
+            context: ParseContext::Include
+        }
+    );
+    assert_eq!(
+        error.diagnostic_notes(),
+        ["expected end of included file; found 'e'"]
+    );
+    assert_eq!(error.source_text(), Some("end"));
+    assert_eq!(error.span().start, 0);
+    std::fs::remove_dir_all(dir).unwrap();
 }

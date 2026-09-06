@@ -715,7 +715,10 @@ fn malformed_stored_proof_fails_theory_parse() {
 
     let src = "theory T begin\nlemma L: \"T\"\nby sorry trailing\nend";
     let err = parse_theory(src, &[]).expect_err("trailing proof text must not be discarded");
-    assert!(err.to_string().contains("unexpected trailing proof text"));
+    assert!(err
+        .diagnostic_notes()
+        .iter()
+        .any(|note| note.contains("expected end of proof")));
 }
 
 #[test]
