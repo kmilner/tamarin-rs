@@ -2947,11 +2947,13 @@ impl<'a> Parser<'a> {
     fn parse_in_chan_msg(&mut self) -> Result<(Option<Term>, Term), ParseError> {
         self.require_punct("(")?;
         let probe = self.save();
-        let e1 = match (|| -> Result<Term, ParseError> {
+        let message = (|| -> Result<Term, ParseError> {
             let msg = self.with_patterns(|p| p.term(false))?;
             self.require_punct(")")?;
             Ok(msg)
-        })() {
+        })();
+        // Retain consumed comment failures before the next alternative rewinds.
+        let e1 = match self.lx.finish(message) {
             Ok(msg) => return Ok((None, msg)),
             Err(e) => e,
         };
@@ -4434,7 +4436,9 @@ impl<'a> Parser<'a> {
         // continue through any of the term grammar's operators before reaching
         // its relation, so inspecting just the next operator is insufficient.
         let start = self.formula_checkpoint();
-        let atom_error = match self.formula_atom() {
+        let atom = self.formula_atom();
+        // Capture lexer diagnostics as well as grammar errors before restoring.
+        let atom_error = match self.lx.finish(atom) {
             Ok(formula) => return Ok(formula),
             Err(error) => error,
         };
@@ -4478,7 +4482,8 @@ impl<'a> Parser<'a> {
         };
         let fact_end = self.formula_checkpoint();
         self.restore_formula(start);
-        let term_error = match self.relational_atom() {
+        let relation = self.relational_atom();
+        let term_error = match self.lx.finish(relation) {
             Ok(formula) => return Ok(formula),
             Err(error) => error,
         };

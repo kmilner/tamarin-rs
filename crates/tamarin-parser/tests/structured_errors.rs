@@ -603,6 +603,37 @@ fn pipe_delimited_process_attributes_do_not_panic() {
 }
 
 #[test]
+fn backtracked_comment_errors_keep_their_cause_and_spans() {
+    for (prefix, suffix) in [
+        ("theory T begin process: in(=x", ") end"),
+        ("theory T begin lemma L: \"x =", "y\" end"),
+        ("theory T begin lemma L: \"last(", "#i)\" end"),
+        ("theory T begin functions: f/1 lemma L: \"f(x)", "= x\" end"),
+        ("theory T begin lemma L: \"((x =", "y))\" end"),
+        ("theory T begin lemma L: \"G(x) @", "#i\" end"),
+    ] {
+        let source = format!("{prefix} /* unfinished");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        let opening = source.find("/*").unwrap();
+        assert_eq!(
+            error.kind(),
+            &ParseErrorKind::UnclosedBlockComment {
+                opening_span: opening..opening + 2
+            },
+            "{source}: {error}"
+        );
+        assert_eq!(error.span(), source.len()..source.len());
+        let labels = error.diagnostic_labels_with_source(&source);
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels[0].span, source.len()..source.len());
+        assert_eq!(labels[1].span, opening..opening + 2);
+
+        let closed = format!("{source} */ {suffix}");
+        parse_theory(&closed, &[]).unwrap_or_else(|error| panic!("{closed}: {error}"));
+    }
+}
+
+#[test]
 fn unterminated_comments_have_their_own_diagnostic() {
     for source in [
         "theory T begin /* unfinished",
@@ -1096,18 +1127,23 @@ fn fact_fallback_preserves_consumed_comments() {
     }
     let dir = std::env::temp_dir().join(format!("tamarin_fact_comment_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let source = "predicates: P(x) <=> G(x) /* unfinished";
-    std::fs::write(dir.join("bad.inc"), source).unwrap();
-    let root = "theory T begin\n#include \"bad.inc\"\nend";
-    let error = parse_theory_with_base(root, &[], Some(dir.clone())).unwrap_err();
-    assert!(
-        matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
-        "{error:?}"
-    );
-    assert_eq!(error.source_text(), Some(source));
-    assert_eq!(error.span().start, source.len());
-    let labels = error.diagnostic_labels_with_source(root);
-    assert_eq!(&source[labels[1].span.clone()], "/*");
+    for source in [
+        "predicates: P(x) <=> G(x) /* unfinished",
+        "lemma L: \"x = /* unfinished",
+        "process: in(=x /* unfinished",
+    ] {
+        std::fs::write(dir.join("bad.inc"), source).unwrap();
+        let root = "theory T begin\n#include \"bad.inc\"\nend";
+        let error = parse_theory_with_base(root, &[], Some(dir.clone())).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+            "{error:?}"
+        );
+        assert_eq!(error.source_text(), Some(source));
+        assert_eq!(error.span().start, source.len());
+        let labels = error.diagnostic_labels_with_source(root);
+        assert_eq!(&source[labels[1].span.clone()], "/*");
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
