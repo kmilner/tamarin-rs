@@ -42,15 +42,12 @@ from web_url_key import norm_url_key  # noqa: E402
 TIMEOUT = int(os.environ.get("WEB_CRAWL_TIMEOUT", "120"))
 MAX_NODES_DEFAULT = int(os.environ.get("WEB_CRAWL_MAX_NODES", "400"))
 
-# Version of the URL PLAN below, stamped into every manifest under
-# PLAN_VERSION_KEY (a top-level sibling of "manifest", never a URL row).
+# Capture contract, stamped into each manifest under PLAN_VERSION_KEY.
 # v2 = statics + source cases + per-lemma roots/next/prev + autoprove + sitemap ×4 variants.
-# web_parity.sh includes this value in its HS cache profile. Bump it whenever
-# the plan adds URLs; the new plan then selects a distinct profile instead of
-# mistaking an old manifest's unvisited URL families for MISSING_HS rows.
-# Dropping URLs from the plan needs no bump: a cached manifest is then a
-# superset, and web_diff.py drops the unpaired rows (the graph-route 0/0
-# probes) before pairing.
+# Bump for changes to captured content: routes, decoding, redirect/error handling,
+# or ordering of stateful requests. Timing and scheduling of independent reads
+# do not require a bump. The web cache uses this version rather than source
+# bytes; live source fingerprints still reject edits during an active gate.
 PLAN_VERSION = 2
 PLAN_VERSION_KEY = "__plan_version__"
 

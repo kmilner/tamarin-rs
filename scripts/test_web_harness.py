@@ -368,9 +368,31 @@ one_file() {
     printf '%s\t%s\t%s\n' "$1" "$HS_PORT" "$RS_PORT"
 }
 (web_run_files "$HARNESS_TMP/out" 'a file' b c d)
-sort "$HARNESS_TMP/out" > "$HARNESS_TMP/sorted"
-printf 'a file\t3021\t3022\nb\t3023\t3024\nc\t3021\t3022\nd\t3023\t3024\n' > "$HARNESS_TMP/expected"
+cut -f1 "$HARNESS_TMP/out" | sort > "$HARNESS_TMP/sorted"
+printf 'a file\nb\nc\nd\n' > "$HARNESS_TMP/expected"
 cmp "$HARNESS_TMP/sorted" "$HARNESS_TMP/expected"
+awk -F '\t' 'NF != 3 || !(($2 == 3021 && $3 == 3022) || ($2 == 3023 && $3 == 3024)) { exit 1 }' "$HARNESS_TMP/out"
+''')
+
+    def test_idle_worker_takes_next_theory(self):
+        run_shell(r'''
+set -e
+. scripts/web_cache.sh
+HS_PORT=3021 RS_PORT=3022 JOBS=2
+one_file() {
+    if [ "$1" = slow ]; then
+        for ((attempt=0; attempt<200; attempt++)); do
+            [ -f "$HARNESS_TMP/finished" ] && break
+            sleep 0.01
+        done
+        [ "$attempt" -lt 200 ] || return 1
+    elif [ "$1" = third ]; then
+        touch "$HARNESS_TMP/finished"
+    fi
+    echo "$1"
+}
+(web_run_files "$HARNESS_TMP/out" slow second third)
+test "$(wc -l < "$HARNESS_TMP/out")" = 3
 ''')
 
     def test_worker_failure_and_invalid_ports_fail_the_run(self):
@@ -522,6 +544,55 @@ grep -F 'different patch series' "$t/error"
 printf '\n# replaced binary\n' >> "$t/hs"
 if (oracle_rev_check "$t/hs" "$t/backend" "$PWD") 2>"$t/error"; then exit 1; fi
 grep -F 'does not match any available setup.sh source attestation' "$t/error"
+''')
+
+    def test_summary_uses_recorded_input_identity(self):
+        run_shell(r'''
+set -e
+CACHE=$HARNESS_TMP
+RESULTS_TSV=$HARNESS_TMP/results
+EXEC_FP_SALT=exec HS_FP_SALT=oracle
+printf 'deleted.spthy\tMATCH\t1\t1\t0\tinput1\toutput1\nmissing.spthy\tRC_DIFF\t1\t1\t0\tinput2\toutput2\nskipped.spthy\tSKIP_NO_HS\t0\t0\t0\t-\t-\n' > "$RESULTS_TSV"
+touch "$CACHE/input1__eexec__boracle.rc"
+ckey() { echo 'summary unexpectedly rebuilt an input key' >&2; return 1; }
+source <(sed -n '/^rc_unknown=0$/,/^done < "$RESULTS_TSV"$/p' scripts/corpus_file_diff.sh)
+test "$rc_unknown" = 1
+''')
+
+    def test_binary_metadata_fast_path_and_replacements(self):
+        run_shell(r'''
+set -e
+. scripts/gate_common.sh
+p=$HARNESS_TMP/binary
+printf original > "$p"
+capture_binary_identity "$p" digest_value state_value
+# An unchanged executable requires no content read.
+binary_sha256() { echo hashed >> "$HARNESS_TMP/hashes"; file_sha256 "$1"; }
+binary_identity_unchanged "$p" "$digest_value" "$state_value"
+test ! -e "$HARNESS_TMP/hashes"
+# Metadata-only changes and callers without metadata still verify the bytes.
+touch -d '2001-01-01' "$p"
+binary_identity_unchanged "$p" "$digest_value" "$state_value"
+binary_identity_unchanged "$p" "$digest_value"
+test "$(wc -l < "$HARNESS_TMP/hashes")" = 2
+capture_binary_identity "$p" digest_value state_value
+cp -p "$p" "$HARNESS_TMP/timestamps"
+printf modified > "$p"
+touch -r "$HARNESS_TMP/timestamps" "$p"
+if binary_identity_unchanged "$p" "$digest_value" "$state_value"; then exit 1; fi
+# Replacing a target with the same size/mtime must also be detected.
+cp -p "$HARNESS_TMP/timestamps" "$p"
+capture_binary_identity "$p" digest_value state_value
+printf replaced > "$HARNESS_TMP/new"
+touch -r "$p" "$HARNESS_TMP/new"
+mv "$HARNESS_TMP/new" "$p"
+if binary_identity_unchanged "$p" "$digest_value" "$state_value"; then exit 1; fi
+ln -s "$HARNESS_TMP/timestamps" "$HARNESS_TMP/link"
+capture_binary_identity "$HARNESS_TMP/link" digest_value state_value
+ln -sfn "$p" "$HARNESS_TMP/link"
+if binary_identity_unchanged "$HARNESS_TMP/link" "$digest_value" "$state_value"; then exit 1; fi
+rm "$p"
+if binary_identity_unchanged "$p" "$digest_value" "$state_value"; then exit 1; fi
 ''')
 
     def test_producer_and_comparison_identities_detect_their_own_tools(self):
@@ -1513,14 +1584,22 @@ unset CACHE
 web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
 test "$first_cache" != "$CACHE"
 
-# Crawler implementation bytes are producer identity, independently of the
-# manually maintained route-plan version.
+# Crawler edits invalidate an active run, but harmless edits between runs
+# preserve captures. Semantic capture changes require a plan-version bump.
 crawler_cache=$CACHE
 printf '\n# changed crawler\n' >> "$t/scripts/web_crawl.py"
 if web_harness_identity_unchanged; then exit 1; fi
 unset CACHE
 web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
+test "$crawler_cache" = "$CACHE"
+unset CACHE
+WEB_FETCH_JOBS=1 web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
+test "$crawler_cache" = "$CACHE"
+unset CACHE
+web_cache_init "$PWD" "$t/scripts" "$t/hs" 3
 test "$crawler_cache" != "$CACHE"
+unset CACHE
+web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
 
 url_key_cache=$CACHE
 printf '\n# changed URL key\n' >> "$t/scripts/web_url_key.py"

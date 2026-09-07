@@ -284,13 +284,12 @@ awk -F'\t' '{c[$2]++} END{for(k in c) printf "  %-18s %d\n", k, c[k]}' "$RESULTS
 # the .rc channel existed looks like, and each such entry backfills the first
 # time Phase 1 refills it.  Reported so the number cannot quietly be 432.
 rc_unknown=0
-while IFS=$'\t' read -r rel st _; do
+while IFS=$'\t' read -r rel st _ _ _ input_key _; do
     case "$st" in MATCH|DIFF|RC_DIFF) ;; *) continue;; esac
-    [ -f "$CORPUS_ROOT/$rel" ] || continue
-    if ! key=$(ckey "$rel" "$CORPUS_ROOT/$rel"); then
-        rc_unknown=$((rc_unknown+1))
-        continue
-    fi
+    # Column 6 already records the exact input identity used by rs_one.
+    # Reattach this run's execution/oracle salts, rather than parse and hash
+    # every theory again just to locate its exit-status sidecar.
+    key="${input_key}__e${EXEC_FP_SALT}__b${HS_FP_SALT}"
     [ -f "$CACHE/$key.rc" ] || rc_unknown=$((rc_unknown+1))
 done < "$RESULTS_TSV"
 printf '  %-18s %d\n' "RC_UNKNOWN" "$rc_unknown"

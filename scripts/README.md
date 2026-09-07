@@ -25,7 +25,7 @@ Five, all gitignored, none keyed alike:
 |---|---|---|
 | `.gate_cache/proof/` | `corpus_file_diff.sh` | theory inputs + flags hash + **oracle/execution fingerprints**; the oracle's exit status sits beside each entry as `.rc` |
 | `.gate_cache/load/` | `pretty_gate.sh` and `wf_gate.sh` | theory inputs + flags hash + **oracle/execution fingerprints** |
-| `.gate_cache/web/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | profile = **oracle + execution + Graphviz/crawler/URL-key + shell producer protocol SHA-256 + crawl plan/settings**; entry = theory inputs |
+| `.gate_cache/web/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | profile = **oracle + execution + Graphviz/URL-key + shell producer protocol SHA-256 + crawl plan/settings**; entry = theory inputs |
 | `.gate_cache/raw/` | `diff_proof_raw.sh` and `corpus_raw_diff.sh` | theory inputs + lemma + cache version + **oracle/execution fingerprints** |
 | `.gate_cache/sweep/` | the three flag sweeps | theory inputs + flags + **oracle/execution fingerprints** |
 
@@ -34,10 +34,15 @@ series, the Maude version and derivation-check timeout, and (for web crawls)
 the Graphviz version. Rebuilding the same tool version on another platform
 does not invalidate cached output. Executable hashes are retained only for
 source-attestation checks and detecting replacement during a running gate.
-The web cache also fingerprints the crawler and its small URL-key
-helper and loaded staging/invocation protocol because they determine which
-response bytes enter the manifest. The protocol hash covers producer functions,
-not unrelated comments, cache plumbing, or comparison code. It
+Unchanged executable metadata avoids repeated hashing during a run; changed
+metadata triggers a content check. The web cache uses the crawler's explicit
+`PLAN_VERSION` capture contract. Bump it for changes to routes, captured bytes,
+or ordering of stateful requests; timing-only edits do not invalidate captures.
+Full crawler source hashes still detect edits during an active run. The cache
+also fingerprints the URL-key helper and loaded staging/invocation protocol
+because they determine which response bytes enter the manifest. The protocol
+hash covers producer functions, not unrelated comments, cache plumbing, or
+comparison code. It
 deliberately excludes the HTTP request deadline: a successful complete manifest
 is independent of how long the caller was willing to wait. Thus the harness preserves
 and automatically reselects caches for alternating Tamarin builds.
@@ -166,12 +171,13 @@ walks the RS test harness's ladder because its captures must use the maude
   reserve ports 3021–3024. Increase `JOBS` cautiously: each server has its own
   memory cap, and large response manifests can exceed a GiB. Results are
   collected per worker before applying the ledger once to the whole run.
+  Each free worker takes the next theory from a shared queue.
   `WEB_FETCH_JOBS=2` overlaps read-only proof/graph requests within each theory
   after autoproving and sitemap discovery; other links (including proof-method
   applications) remain sequential. Set it to `1` for serial fetching (range
-  1–16). Results retain sitemap order. The setting participates in the Haskell
-  cache profile; changing it selects another profile without deleting old
-  captures. `TIMING web`, `TIMING crawl`, and `TIMING compare` lines report
+  1–16). Results retain sitemap order. Fetch concurrency does not change the
+  capture contract and therefore shares the same Haskell cache profile.
+  `TIMING web`, `TIMING crawl`, and `TIMING compare` lines report
   startup, initial pages, autoproving, sitemap discovery, final page fetching,
   manifest writing/loading, and comparison. Times are milliseconds.
   Run on server changes. `ALLOWLIST=` is REQUIRED (one

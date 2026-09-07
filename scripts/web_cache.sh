@@ -14,7 +14,7 @@
 # CACHE overrides the exact directory, with the same producer-profile checks.
 web_cache_init() {
     local repo=$1 scripts=$2 hs=$3 plan=$4 profile_text marker
-    local dot_path dot_sha dot_version crawl_path="$scripts/web_crawl.py" url_key_path="$scripts/web_url_key.py"
+    local dot_path dot_version crawl_path="$scripts/web_crawl.py" url_key_path="$scripts/web_url_key.py"
     WEB_FETCH_JOBS=${WEB_FETCH_JOBS:-2}
     if [[ ! $WEB_FETCH_JOBS =~ ^([1-9]|1[0-6])$ ]]; then
         echo "WEB_FETCH_JOBS must be within 1..16" >&2; return 2
@@ -29,9 +29,8 @@ web_cache_init() {
     fi
     execution_fingerprint "$MAUDE_PATH" "${DERIVCHECK_TIMEOUT:-30}" || return 1
     if dot_path=$(command -v dot 2>/dev/null) && [ -n "$dot_path" ]; then
-        dot_sha=$(binary_sha256 "$dot_path") || return 1
+        capture_binary_identity "$dot_path" DOT_FP DOT_FILE_STATE || return 1
         DOT_FP_PATH=$dot_path
-        DOT_FP=$dot_sha
         dot_version=$("$dot_path" -V 2>&1) || return 1
         [ -n "$dot_version" ] || return 1
         dot_version=${dot_version%% (*}
@@ -54,16 +53,14 @@ web_cache_init() {
         return 2
     }
     profile_text=$(printf '%s\n' \
-        "format=3" \
+        "format=4" \
         "oracle_sha256=$WEB_ORACLE_SHA256" \
         "plan_version=$plan" \
         "execution_sha256=$EXEC_FP" \
         "graphviz_version=$dot_version" \
-        "crawler_sha256=$WEB_CRAWL_FP" \
         "url_key_sha256=$WEB_URL_KEY_FP" \
         "producer_protocol_sha256=$WEB_PRODUCER_PROTOCOL_FP" \
-        "max_nodes=${MAX_NODES:-400}" \
-        "fetch_jobs=$WEB_FETCH_JOBS")
+        "max_nodes=${MAX_NODES:-400}")
     WEB_CACHE_PROFILE=$(printf '%s' "$profile_text" | sha256sum | cut -c1-16)
 
     if [ -z "${WEB_CACHE_ROOT:-}" ]; then
@@ -463,7 +460,7 @@ web_cache_snapshot() {
 # Call in the background so its PID directly owns the workers and signal traps.
 web_run_files() {
     local output=$1; shift
-    local files=("$@") pids=() worker i rc=0 scratch
+    local files=("$@") pids=() worker i rc=0 scratch queue_fd
     local jobs=${JOBS:-2}
     if [[ ! $jobs =~ ^[1-9][0-9]{0,4}$ ]] || [ "$jobs" -gt 32767 ]; then
         echo "JOBS must be a positive integer below 32768" >&2; exit 2
@@ -484,12 +481,24 @@ web_run_files() {
     scratch=$(mktemp -d) || exit 2
     trap 'for worker in "${pids[@]}"; do kill -TERM "$worker" 2>/dev/null || :; done; wait; rm -rf "$scratch"' EXIT
     trap 'exit 130' HUP INT TERM
+    echo 0 > "$scratch/next" || exit 2
     for ((worker=0; worker<jobs; worker++)); do
         (
             trap 'web_abort_active_boot; [ -z "${WEB_ACTIVE_WORKDIR:-}" ] || rm -rf -- "$WEB_ACTIVE_WORKDIR"; exit 130' HUP INT TERM
             HS_PORT=$((HS_PORT + 2 * worker))
             RS_PORT=$((RS_PORT + 2 * worker))
-            for ((i=worker; i<${#files[@]}; i+=jobs)); do
+            # Each worker opens its own lock, claiming only an array index.
+            # Crawls and result writing never hold the queue lock.
+            exec {queue_fd}>"$scratch/queue.lock" || exit 1
+            while :; do
+                flock -x "$queue_fd" || exit 1
+                read -r i < "$scratch/next" || exit 1
+                if [ "$i" -ge "${#files[@]}" ]; then
+                    flock -u "$queue_fd" || exit 1
+                    break
+                fi
+                echo "$((i+1))" > "$scratch/next" || exit 1
+                flock -u "$queue_fd" || exit 1
                 echo "[$((i+1))/${#files[@]}] ${files[i]}" >&2
                 one_file "${files[i]}" || exit 1
             done
