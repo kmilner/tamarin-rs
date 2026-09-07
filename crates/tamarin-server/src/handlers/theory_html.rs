@@ -634,20 +634,19 @@ fn edit_lemma_html(entry: &TheoryEntry, name: &str) -> String {
 <p></p>\n\
 <h3> Introduction to Lemma Edit:</h3>\n\
 {noscript}\n\
-<p><ul class=\"wrap-text\">\
-<li>Modifying the lemma in the box above and clicking the submit button will attempt to modify the lemma in the current theory.\n<br>&zwnj;</br>\n</li>\n\
-<li>Failures in parsing the lemma or verifying its well-formedness will result in an error, and the lemma will NOT be modified.\nHowever, your changes will be kept on this page until you leave this right panel.\n<br>&zwnj;</br>\n</li>\n\
-<li>Editing a lemma will NOT modify the file it was loaded from, but clicking on \"Append modified lemmas to file\" in the Actions menu adds all modified lemmas as a comment at the end of the file on disk they were loaded from.\n<br>&zwnj;</br>\n</li>\n\
-<li>Clicking on \"Download source\" in the Actions menu will download the modified version of the theory (including the modified lemmas), but not modify the file on disk.\n<br>&zwnj;</br>\n</li>\n\
-<li>Modifying a reuse lemma will invalidate all subsequent proofs.\n<br>&zwnj;</br>\n</li>\n\
+<div><ul class=\"wrap-text\">\
+<li>Modifying the lemma in the box above and clicking the submit button will attempt to modify the lemma in the current theory.\n<br>\n &zwnj;</li>\n\
+<li>Failures in parsing the lemma or verifying its well-formedness will result in an error, and the lemma will NOT be modified.\nHowever, your changes will be kept on this page until you leave this right panel.\n<br>\n &zwnj;</li>\n\
+<li>Editing a lemma will NOT modify the file it was loaded from, but clicking on \"Append modified lemmas to file\" in the Actions menu adds all modified lemmas as a comment at the end of the file on disk they were loaded from.\n<br>\n &zwnj;</li>\n\
+<li>Clicking on \"Download source\" in the Actions menu will download the modified version of the theory (including the modified lemmas), but not modify the file on disk.\n<br>\n &zwnj;</li>\n\
+<li>Modifying a reuse lemma will invalidate all subsequent proofs.\n<br>\n &zwnj;</li>\n\
 <li>Modifying a sources lemma is not supported and will result in an error.</li>\n\
-</ul>\n{wrap_style}\n</p>\n</form>\n",
+</ul>\n</div>\n</form>\n",
         action = esc_name,
         name = esc_name,
         rows = rows,
         plaintext = html_escape(&plaintext),
         noscript = NOSCRIPT_WARNING,
-        wrap_style = WRAP_TEXT_STYLE,
     )
 }
 
@@ -666,14 +665,13 @@ fn add_lemma_html(name: &str) -> String {
 <p></p>\n\
 <h3> Introduction to Adding Lemmas:</h3>\n\
 {noscript}\n\
-<p><ul class=\"wrap-text\">\
-<li>Adds the lemma in the current position in the theory, but will throw an error if a lemma with the same name exists, the parsing fails, or the lemma isn't well-formed.\n<br>&zwnj;</br>\n</li>\n\
-<li>Adding a lemma will NOT modify the loaded source file, but clicking on \"Append modified lemmas to file\" in the Actions menu appends all added lemmas as a comment at the end of the current theory file.\n<br>&zwnj;</br>\n</li>\n\
+<div><ul class=\"wrap-text\">\
+<li>Adds the lemma in the current position in the theory, but will throw an error if a lemma with the same name exists, the parsing fails, or the lemma isn't well-formed.\n<br>\n &zwnj;</li>\n\
+<li>Adding a lemma will NOT modify the loaded source file, but clicking on \"Append modified lemmas to file\" in the Actions menu appends all added lemmas as a comment at the end of the current theory file.\n<br>\n &zwnj;</li>\n\
 <li>Clicking on \"Download source\" in the Actions menu will download the modified version of the theory (including the added lemmas).</li>\n\
-</ul>\n{wrap_style}\n</p>\n</form>\n",
+</ul>\n</div>\n</form>\n",
         action = esc_name,
         noscript = NOSCRIPT_WARNING,
-        wrap_style = WRAP_TEXT_STYLE,
     )
 }
 
@@ -687,29 +685,22 @@ fn delete_lemma_html(name: &str) -> String {
 <p></p>\n\
 <h3> Introduction to Lemma Delete:</h3>\n\
 {noscript}\n\
-<p><ul class=\"wrap-text\">\
-<li>Clicking on the button above will delete the lemma from the loaded theory.\n<br>&zwnj;</br>\n</li>\n\
-<li>Deleting a lemma will NOT modify the file it was loaded from, but clicking on \"Download source\" in the Actions menu will download the modified version of the theory (so without the deleted lemmas).\n<br>&zwnj;</br>\n</li>\n\
-<li>Deleting a reuse lemma will invalidate all subsequent proofs.\n<br>&zwnj;</br>\n</li>\n\
+<div><ul class=\"wrap-text\">\
+<li>Clicking on the button above will delete the lemma from the loaded theory.\n<br>\n &zwnj;</li>\n\
+<li>Deleting a lemma will NOT modify the file it was loaded from, but clicking on \"Download source\" in the Actions menu will download the modified version of the theory (so without the deleted lemmas).\n<br>\n &zwnj;</li>\n\
+<li>Deleting a reuse lemma will invalidate all subsequent proofs.\n<br>\n &zwnj;</li>\n\
 <li>Deleting a source lemma is not supported and will result in an error.</li>\n\
-{wrap_style}\n</ul>\n</p>\n</form>\n",
+</ul>\n</div>\n</form>\n",
         name = esc_name,
         action = esc_name,
         noscript = NOSCRIPT_WARNING,
-        wrap_style = WRAP_TEXT_STYLE,
     )
 }
 
-/// HS's shared `<noscript>` JavaScript-required warning (the `<span
-/// class="tamarin">Tamarin</span>` Hamlet-emits a stray extra `</span>` the
-/// parity normalizer drops; we emit a single well-formed span).
+/// Shared JavaScript-required warning.
 const NOSCRIPT_WARNING: &str =
     "<noscript><div class=\"warning\">Warning: JavaScript must be enabled for the\n\
 <span class=\"tamarin\">Tamarin</span>\nprover GUI to function properly.</div>\n</noscript>";
-
-/// HS's shared `.wrap-text li` inline `<style>` block.
-const WRAP_TEXT_STYLE: &str =
-    "<style>.wrap-text li {white-space: normal;\nword-wrap: break-word;}</style>";
 
 /// HS `helpHtml` (`src/Web/Theory.hs:1193-1291`): the static Quick-introduction
 /// and keyboard-shortcut help page, prefixed by the `Theory: NAME (Loaded at TIME
@@ -730,10 +721,9 @@ fn help_html(entry: &TheoryEntry) -> String {
     // template returned directly as `Html` (NOT through `renderHtmlDoc`), so it
     // emits a single line with no `<br/>`.  The env line carries the theory
     // name + load time/origin + wellformedness banner; the rest is a fixed
-    // static block reproduced byte-for-byte from HS (including the stray extra
-    // `</span>` after the Tamarin span that HS's Hamlet emits).
+    // static block reproduced byte-for-byte from the patched oracle.
     let env_line = format!(
-        "<p>Theory: {name} (Loaded at {time} from {origin}) {errors}</p>",
+        "<p>Theory: {name} (Loaded at {time} from {origin})</p> {errors}",
         name = html_escape(&entry.typed_theory.name),
         time = html_escape(&time),
         origin = html_escape(&origin),
@@ -744,9 +734,8 @@ fn help_html(entry: &TheoryEntry) -> String {
 
 /// The static remainder of HS `helpHtml` (everything after the env-line `</p>`),
 /// reproduced byte-for-byte from the HS interactive server (`$newline never`
-/// Hamlet, so a single line with the stray `</span>` quirk after the Tamarin
-/// span).
-const HELP_STATIC: &str = r#"<div id="help"><h3>Quick introduction</h3><noscript><div class="warning">Warning: JavaScript must be enabled for the<span class="tamarin">Tamarin</span></span>prover GUI to function properly.</div></noscript><p><em>Left pane: Proof scripts display.</em><ul><li>When a theory is initially loaded, there will be a line at the end of each theorem stating <tt>"by sorry // not yet proven"</tt>.  Click on <tt>sorry</tt> to inspect the proof state.</li><li>Right-click to show further options, such as autoprove.</li></ul></p><p><em>Right pane: Visualization.</em><ul><li>Visualization and information display relating to the currently selected item.</li></ul></p></div><h3>Keyboard shortcuts</h3><p><div id="shortcuts"><table><tr><td><span class="keys">j/k</span></td><td>Jump to the next/previous proof path within the currently focused lemma.</td></tr><tr><td><span class="keys">J/K</span></td><td>Jump to the next/previous open constraint within the currently focused lemma, or to the next/previous lemma if there are no more <tt>sorry</tt> steps in the proof of the current lemma.</td></tr><tr><td><span class="keys">1-9</span></td><td>Apply the proof method with the given number as shown in the applicable proof method section in the main view.</td></tr><tr><td><span class="keys">a/A</span></td><td>Apply the autoprove method to the focused proof step. <span class="keys">a</span> stops after finding a solution, and <span class="keys">A</span> searches for all solutions. Needs to have a <tt>sorry</tt> selected to work.</td></tr><tr><td><span class="keys">b/B</span></td><td>Apply a bounded-depth version of the autoprove method to the focused proof step. <span class="keys">b</span> stops after finding a solution, and <span class="keys">B</span> searches for all solutions. Needs to have a <tt>sorry</tt> selected to work.</td></tr><tr><td><span class="keys">s/S</span></td><td>Apply the autoprove method to all lemmas. <span class="keys">s</span> stops after finding a solution, and <span class="keys">S</span> searches for all solutions.</td></tr><tr><td><span class="keys">?</span></td><td>Display this help message.</td></tr></table></div></p>"#;
+/// Hamlet, so a single line).
+const HELP_STATIC: &str = r#"<div id="help"><h3>Quick introduction</h3><noscript><div class="warning">Warning: JavaScript must be enabled for the<span class="tamarin">Tamarin</span>prover GUI to function properly.</div></noscript><p><em>Left pane: Proof scripts display.</em></p><ul><li>When a theory is initially loaded, there will be a line at the end of each theorem stating <code>"by sorry // not yet proven"</code>.  Click on <code>sorry</code> to inspect the proof state.</li><li>Right-click to show further options, such as autoprove.</li></ul><p><em>Right pane: Visualization.</em></p><ul><li>Visualization and information display relating to the currently selected item.</li></ul></div><h3>Keyboard shortcuts</h3><div id="shortcuts"><table><tr><td><span class="keys">j/k</span></td><td>Jump to the next/previous proof path within the currently focused lemma.</td></tr><tr><td><span class="keys">J/K</span></td><td>Jump to the next/previous open constraint within the currently focused lemma, or to the next/previous lemma if there are no more <code>sorry</code> steps in the proof of the current lemma.</td></tr><tr><td><span class="keys">1-9</span></td><td>Apply the proof method with the given number as shown in the applicable proof method section in the main view.</td></tr><tr><td><span class="keys">a/A</span></td><td>Apply the autoprove method to the focused proof step. <span class="keys">a</span> stops after finding a solution, and <span class="keys">A</span> searches for all solutions. Needs to have a <code>sorry</code> selected to work.</td></tr><tr><td><span class="keys">b/B</span></td><td>Apply a bounded-depth version of the autoprove method to the focused proof step. <span class="keys">b</span> stops after finding a solution, and <span class="keys">B</span> searches for all solutions. Needs to have a <code>sorry</code> selected to work.</td></tr><tr><td><span class="keys">s/S</span></td><td>Apply the autoprove method to all lemmas. <span class="keys">s</span> stops after finding a solution, and <span class="keys">S</span> searches for all solutions.</td></tr><tr><td><span class="keys">?</span></td><td>Display this help message.</td></tr></table></div>"#;
 
 /// Render the proof tree pane for a lemma at a given sub-path.
 /// If a live [`ProofState`] is already built, use the actual tree;

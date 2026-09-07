@@ -1841,14 +1841,15 @@ fn json_graph_response(body: String) -> Response {
 /// `imgThyPath`'s (`/graph`) and `dotGraphString`'s
 /// (`/interactive-graph-def`).  This `error` is upstream's DELIBERATE answer
 /// to a theory path the route does not draw, so the port reproduces its page
-/// byte-for-byte.
-const JSON_UNHANDLED_SITE: &str = "1318:31";
+/// byte-for-byte. Coordinates include PR #928; captured HTTP fixtures verify
+/// them against the patched oracle.
+const JSON_UNHANDLED_SITE: &str = "1312:31";
 
 /// `imgThyPath`'s clause — see [`JSON_UNHANDLED_SITE`].
-const GRAPH_UNHANDLED_SITE: &str = "1416:51";
+const GRAPH_UNHANDLED_SITE: &str = "1410:51";
 
 /// `dotGraphString`'s clause — see [`JSON_UNHANDLED_SITE`].
-const INTERACTIVE_DOT_UNHANDLED_SITE: &str = "2323:51";
+const INTERACTIVE_DOT_UNHANDLED_SITE: &str = "2317:51";
 
 /// The `error` `thyPathSystem`'s catch-all clause raises for a theory path that
 /// is neither a proof nor a source case, as GHC renders it into Yesod's error
@@ -2190,49 +2191,6 @@ mod tests {
         assert!(quit.oracle_only);
         assert!(web_search_options("unknown", 0, false, 0).is_none());
         assert!(web_search_options("unknown", 0, true, 0).is_none());
-    }
-
-    /// The pinned submodule's `src/Web/Theory.hs`, embedded at build time: a
-    /// submodule bump recompiles this module against the new source, so the
-    /// coordinate check below runs on every bump.
-    const WEB_THEORY_HS: &str = include_str!("../../../../tamarin-prover/src/Web/Theory.hs");
-
-    /// The `error "Unhandled theory path. …"` raised inside the top-level
-    /// binding `func`, as `LINE:COLUMN` — the coordinates GHC's `HasCallStack`
-    /// prints: both 1-based, the column that of the `error` token itself.
-    fn unhandled_site_in(func: &str) -> String {
-        const RAISE: &str = "error \"Unhandled theory path. This is a bug.\"";
-        let lines: Vec<&str> = WEB_THEORY_HS.lines().collect();
-        let signature = format!("{} ::", func);
-        let start = lines
-            .iter()
-            .position(|l| l.starts_with(&signature))
-            .unwrap_or_else(|| panic!("no top-level `{func}` in src/Web/Theory.hs"));
-        for (i, line) in lines.iter().enumerate().skip(start + 1) {
-            if let Some(off) = line.find(RAISE) {
-                return format!("{}:{}", i + 1, line[..off].chars().count() + 1);
-            }
-            // A new top-level signature ends the binding.
-            assert!(
-                !(line.starts_with(|c: char| c.is_ascii_alphabetic()) && line.contains("::")),
-                "`{func}` raises no unhandled-theory-path error"
-            );
-        }
-        panic!("`{func}` raises no unhandled-theory-path error");
-    }
-
-    // The three constants are pasted into 500 bodies verbatim, so nothing else
-    // notices when a bump moves the clauses they name: the fixtures those
-    // bodies are compared against were captured from the port, and move with
-    // the constants rather than with upstream.
-    #[test]
-    fn unhandled_site_constants_name_the_pinned_call_sites() {
-        assert_eq!(JSON_UNHANDLED_SITE, unhandled_site_in("graphJsonThyPath"));
-        assert_eq!(GRAPH_UNHANDLED_SITE, unhandled_site_in("imgThyPath"));
-        assert_eq!(
-            INTERACTIVE_DOT_UNHANDLED_SITE,
-            unhandled_site_in("dotGraphString")
-        );
     }
 
     // `getUrlRender (TheoryGraphJsonR idx path)` re-renders the parsed path,

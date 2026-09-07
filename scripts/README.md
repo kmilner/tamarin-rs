@@ -184,12 +184,12 @@ walks the RS test harness's ladder because its captures must use the maude
   including setup and bookkeeping. The proof gate likewise reports
   `TIMING proof total_ms`. Times are milliseconds. Server lifecycle checks
   poll every 100 ms; timeout settings remain in seconds.
-  HTML comparison retains opening-tag spelling (including attribute quoting
-  and void tags), entity spelling, attribute/class order, and all text
-  whitespace. Malformed or omitted Haskell closing tags are still repaired.
-  JSON responses compare fields individually, skipping HTML parsing for equal
-  strings. Only `html`, `title`, and the UI's HTML `alert` messages are parsed
-  as markup; other strings remain text. Work-directory normalization uses
+  HTML comparison preserves the original bytes, including comments, doctypes,
+  closing-tag spelling, and malformed markup. The parser only locates text
+  for version/timestamp normalization; it never repairs or reserializes HTML.
+  JSON responses compare fields individually, skipping normalization for equal
+  strings. Only `html`, `title`, and `alert` fields receive HTML-aware environment
+  normalization; other strings remain text. Work-directory normalization uses
   each manifest's recorded root, without guessing legacy temporary paths.
   Run on server changes. `ALLOWLIST=` is REQUIRED (one
   corpus-relative path per line; `ALLOWLIST=seed` is the built-in 2-file smoke
@@ -309,8 +309,8 @@ walks the RS test harness's ladder because its captures must use the maude
   flat entries remain separate because their producer identity is incomplete.
 - **`web_crawl.py`** — crawls a running server into a response manifest.
 - **`web_diff.py`** / **`web_normalize.py`** — semantic manifest diff and the
-  normalizer it uses. Markup routes compare structurally; the `dot` and
-  `text` routes compare byte for byte bar the env-volatile tokens, because
+  normalizer it uses. HTML, `dot`, and `text` routes compare byte for byte
+  bar the env-volatile tokens, because
   the port serialises both verbatim and whitespace is content there — the
   `source`/`message` panes carry the pretty printer's own trailing spaces.
 

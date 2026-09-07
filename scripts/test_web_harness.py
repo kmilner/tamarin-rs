@@ -82,7 +82,7 @@ class DiffArtifactNames(unittest.TestCase):
         def canonical(value):
             return WEB_DIFF.canon("json", json.dumps(value))
         self.assertNotEqual(canonical({"path": "<b>x</b>"}), canonical({"path": "<b >x</b>"}))
-        self.assertEqual(canonical({"alert": "<b>x</b>\ny"}),
+        self.assertNotEqual(canonical({"alert": "<b>x</b>\ny"}),
                          canonical({"alert": "<b>x</b><br>y"}))
         self.assertNotEqual(canonical({"alert": "x\ny"}), canonical({"alert": "x y"}))
 
@@ -101,11 +101,23 @@ class DiffArtifactNames(unittest.TestCase):
         self.assertEqual(normalizer.canon_json_pair("not JSON", "null"),
                          (normalizer.canon_json("not JSON"), normalizer.canon_json("null")))
 
-    def test_ignored_closing_tags_and_comments_do_not_split_text(self):
+    def test_closing_tags_comments_and_doctypes_are_significant(self):
         for body in ["one<!-- comment --> two", "one</stray> two", "one</br> two"]:
-            self.assertEqual(WEB_DIFF.canon("html", body), "T:one two")
-        self.assertEqual(WEB_DIFF.canon("html", "<div><b>x</div>"),
-                         WEB_DIFF.canon("html", "<div><b>x</b></div>"))
+            self.assertNotEqual(WEB_DIFF.canon("html", body), WEB_DIFF.canon("html", "one two"))
+        for a, b in [("<div><b>x</div>", "<div><b>x</b></div>"),
+                     ("<b>x", "<b>x</b>"),
+                     ("<!DOCTYPE html><html></html>", "<html></html>")]:
+            self.assertNotEqual(WEB_DIFF.canon("html", a), WEB_DIFF.canon("html", b))
+
+    def test_html_source_is_preserved_even_when_the_parser_ignores_it(self):
+        for body in ["<script>x", "<style>y", "<b>x</B >", "&amp", "&#39",
+                     "<?instruction x?>", "<![unknown]>", "<!-- unfinished",
+                     "α\r\n<b>x</b>\n尾", "<b/>tail"]:
+            self.assertEqual(WEB_DIFF.canon("html", body), body)
+        self.assertEqual(
+            WEB_DIFF.canon("html", '<p>Loaded at 12:34 from &quot;file&quot;)</p>'),
+            '<p>Loaded at #)</p>',
+        )
 
     def test_workdir_preparation_and_legacy_literal_paths(self):
         import web_normalize as normalizer
@@ -144,7 +156,7 @@ class DiffArtifactNames(unittest.TestCase):
         self.assertNotEqual(canonical("a<br>b"), canonical("a<br/>b"))
         self.assertNotEqual(canonical("a<br>b"), canonical("a b"))
         self.assertNotEqual(canonical("<pre>a</pre>"), canonical("a"))
-        self.assertEqual(
+        self.assertNotEqual(
             canonical('<html><head><script src="x"></script></head><body>x</body></html>'),
             canonical('<html><head><script src="x"></script></script></head><body>x</body></html>'),
         )
@@ -262,7 +274,7 @@ class DiffArtifactNames(unittest.TestCase):
             f"{escaped(rs_root)}</a>",
             roots,
         )
-        self.assertEqual(hs, '<a href="/WEB-WORKDIR/x">\nT:/WEB-WORKDIR\n</a>')
+        self.assertEqual(hs, '<a href="/WEB-WORKDIR/x">/WEB-WORKDIR</a>')
         self.assertEqual(rs, hs)
         self.assertNotEqual(
             WEB_DIFF.canon(

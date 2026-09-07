@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """Semantic normalizers for the web-parity gate (RS interactive UI vs HS).
 
-The parity bar is *structural / semantic* equivalence for the markup routes,
-NOT byte-identity: we normalize malformed closing tags, JSON key order,
-and the nondeterministic env fields (theory idx, timestamps,
-temp/cache-dir prefixes, absolute load paths).  What survives must match:
-element structure (including syntax/status highlighting), attributes (including
-inline styles and attribute/class order), all text whitespace, visible
-text, link hrefs + text, form actions, embedded resource
-URLs and JSON values.
+HTML is compared byte for byte except for nondeterministic environment fields
+(theory indices, timestamps, version metadata and work-directory paths).
+JSON envelopes additionally normalize key order and encoding. HTML parsing
+only locates text for environment normalization; original markup is retained.
 
 The graph routes and the text/plain routes are held to byte-identity — the port
 emits `Text.Dot`'s bytes through the same `showDot` upstream uses, and serves
@@ -104,93 +100,63 @@ def norm_env(s: str, workdirs=()) -> str:
 # HTML canonicalization
 # ---------------------------------------------------------------------------
 
-# HTML void elements have no closing tag, regardless of whether the serializer
-# spells their opening tag as <br> or <br/>. Those spellings are compared
-# exactly; this set only prevents synthesizing invalid closing tags.
-_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input",
-              "link", "meta", "param", "source", "track", "wbr"}
+class _HtmlEnv(HTMLParser):
+    """Locate text fields to normalize without reserializing or repairing HTML."""
 
-
-class _Canon(HTMLParser):
-    """Build a canonical token stream from an HTML fragment/page.
-
-    - element structure retained, with HTML void tags represented once
-    - original opening tags retained, including quoting and void-tag spelling
-    - all text whitespace and character-reference spellings retained
-    """
-
-    def __init__(self, workdirs=()):
+    def __init__(self, body, workdirs):
         super().__init__(convert_charrefs=False)
-        self.workdirs = prepare_html_workdirs(tuple(workdirs))
+        self.body = norm_paths(body, prepare_html_workdirs(tuple(workdirs)))
+        self.lines = [0] + [m.end() for m in re.finditer("\n", self.body)]
         self.parts = []
-        self._stack = []          # open non-void tags
-        self._pending_text = []
+        self.cursor = 0
+        self.text_start = None
 
-    def _flush_text(self):
-        if not self._pending_text:
-            return
-        text = "".join(self._pending_text)
-        self._pending_text = []
-        text = norm_env(text, self.workdirs)
-        if text:
-            self.parts.append("T:" + text)
-
-    def handle_starttag(self, tag, attrs):
-        self._flush_text()
-        self.parts.append(norm_paths(self.get_starttag_text(), self.workdirs))
-        if tag not in _VOID_TAGS:
-            self._stack.append(tag)
-
-    def handle_endtag(self, tag):
-        if tag in _VOID_TAGS:
-            return
-        # Find the nearest matching open tag WITHOUT mutating the stack.
-        idx = None
-        for i in range(len(self._stack) - 1, -1, -1):
-            if self._stack[i] == tag:
-                idx = i
-                break
-        if idx is None:
-            # Stray close with no matching open (e.g. HS's malformed doubled
-            # `</script></script>`) — ignore it, leaving the stack intact.
-            return
-        # Pop down to and including the match.  Intermediate emitted tags that
-        # were left open (improper nesting / omitted closes, e.g. HS's Hamlet
-        # leaving the contextMenu `<ul><li>` unclosed before `</body>`) are
-        # implicitly closed by this ancestor, so emit their close tokens too —
-        # matching a backend that closes them explicitly.
-        self._flush_text()
-        while len(self._stack) > idx:
-            self.parts.append(f"</{self._stack.pop()}>")
+    def _offset(self):
+        line, column = self.getpos()
+        return self.lines[line - 1] + column
 
     def handle_data(self, data):
-        self._pending_text.append(data)
+        if self.text_start is None:
+            self.text_start = self._offset()
 
-    def handle_entityref(self, name):
-        self.handle_data(f"&{name};")
+    # Entities are part of the surrounding text. Use their original source
+    # spelling, including an omitted semicolon, when flushing that text.
+    handle_entityref = handle_data
+    handle_charref = handle_data
 
-    def handle_charref(self, name):
-        self.handle_data(f"&#{name};")
+    def _flush_text(self, end):
+        if self.text_start is not None:
+            self.parts.append(self.body[self.cursor:self.text_start])
+            self.parts.append(norm_env(self.body[self.text_start:end]))
+            self.cursor = end
+            self.text_start = None
+
+    def _markup(self, *args):
+        self._flush_text(self._offset())
+
+    handle_starttag = _markup
+    handle_endtag = _markup
+    handle_comment = _markup
+    handle_decl = _markup
+    handle_pi = _markup
+    unknown_decl = _markup
 
     def result(self):
-        self._flush_text()
-        # Close any tags still open at EOF (implicit end-of-document close), so
-        # a document that omits trailing closes compares equal to one that
-        # spells them out.
-        while self._stack:
-            self.parts.append(f"</{self._stack.pop()}>")
-        return "\n".join(self.parts)
+        self._flush_text(len(self.body))
+        self.parts.append(self.body[self.cursor:])
+        return "".join(self.parts)
 
 
 def canon_html(body: str, workdirs=()) -> str:
-    # Parse only to repair unmatched/omitted closes. Original opening tags,
-    # text and entity spellings are retained for strict serializer comparison.
-    p = _Canon(workdirs)
+    # Parsing only locates text: every other byte survives, even markup that
+    # HTMLParser ignores. Version/timestamp rules must not swallow attributes.
+    p = _HtmlEnv(body, workdirs)
     try:
-        p.feed(body)
+        p.feed(p.body)
         p.close()
-    except Exception as e:
-        return "HTML_PARSE_ERROR: " + repr(e) + "\n" + norm_env(body, workdirs)
+    except AssertionError:
+        # HTMLParser rejects some malformed declarations. Keep their bytes.
+        return p.body
     return p.result()
 
 
@@ -204,11 +170,8 @@ def _canon_json_val(v, key=None, workdirs=()):
         # (even when the fragment happens to be tag-free, e.g.
         # "this is a mistake" or "Lemma: X"). Both servers render proof-method
         # titles as HTML, including syntax highlighting and line breaks.
-        if key in ("html", "title"):
+        if key in ("html", "title", "alert"):
             return canon_html(v, workdirs)
-        if key == "alert":
-            # The UI's showDialog inserts HTML after turning newlines into br.
-            return canon_html(v.replace("\n", "<br>"), workdirs)
         return norm_env(v, workdirs)
     if isinstance(v, dict):
         return {k: _canon_json_val(x, k, workdirs) for k, x in v.items()}
