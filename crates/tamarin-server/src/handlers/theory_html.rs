@@ -16,7 +16,7 @@ use crate::state::TheoryEntry;
 
 use tamarin_theory::constraint::solver::proof_method::{ProofMethod, Result as MethodResult};
 use tamarin_theory::constraint::solver::search::ProofStatus;
-use tamarin_theory::theory::{LemmaAttr, TraceQuantifier};
+use tamarin_theory::theory::TraceQuantifier;
 
 /// Full overview/framing page (the one served at `/thy/trace/<idx>/overview/...`).
 pub(crate) fn overview_page(entry: &TheoryEntry, path: &TheoryPath) -> Result<String, String> {
@@ -181,7 +181,9 @@ fn proof_state(entry: &TheoryEntry) -> Result<String, String> {
         lemma_index(&mut block, entry, l)?;
         lemma_blocks.push(block);
     }
-    elems.push(lemma_blocks.join("\n\n"));
+    if !lemma_blocks.is_empty() {
+        elems.push(lemma_blocks.join("\n\n"));
+    }
     elems.push(String::new());
     // `kwEnd`.
     elems.push(kw("end"));
@@ -243,7 +245,6 @@ fn lemma_index(
         TraceQuantifier::AllTraces => "all-traces",
         TraceQuantifier::ExistsTrace => "exists-trace",
     };
-    let attrs = render_attrs(&l.attributes, &entry.typed_theory.in_file);
     // HS renders the quantifier + formula as `nest 2 (sep [tq, doubleQuotes
     // (prettyLNFormula l._lFormula)])` (Web/Theory.hs:309-313) through the
     // HtmlDoc/HughesPJ engine: (1) AC argument lists (`++`/`*`/xor) are
@@ -272,12 +273,17 @@ fn lemma_index(
     // `editLink <-> " or " <-> deleteLink` renders `…edit</a>  or  <a…` (two
     // spaces around "or").
     out.push_str(open);
-    out.push_str(&format!(
-        "{lemma} {name}{attrs}:\n",
-        lemma = hpj::keyword_("lemma").render(),
-        name = html_escape(&l.name),
-        attrs = html_escape(&attrs)
-    ));
+    out.push_str(
+        &tamarin_theory::pretty_theory::lemma_title_doc(
+            &l.name,
+            tamarin_theory::pretty_theory::lemma_attr_docs(
+                &l.attributes,
+                &entry.typed_theory.in_file,
+            ),
+        )
+        .render(),
+    );
+    out.push('\n');
     out.push_str(&formula_hdr);
     out.push('\n');
     out.push_str(&format!(
@@ -567,34 +573,6 @@ fn pp_step(
     }
 }
 
-fn render_attrs(attrs: &[LemmaAttr], in_file: &str) -> String {
-    if attrs.is_empty() {
-        return String::new();
-    }
-    let parts: Vec<String> = attrs
-        .iter()
-        .map(|a| match a {
-            LemmaAttr::Sources => "sources".into(),
-            LemmaAttr::Reuse => "reuse".into(),
-            LemmaAttr::DiffReuse => "diff_reuse".into(),
-            LemmaAttr::UseInduction => "use_induction".into(),
-            LemmaAttr::HideLemma(s) => format!("hide_lemma={}", s),
-            // HS prints the stored ranking value with its oracle name resolved;
-            // render the parsed syntax with the oracle name expanded — the same
-            // `pretty_heuristic` the batch printer's `lemma_attr_docs` uses
-            // (`heuristic=O` alone would drop the oracle file name).
-            LemmaAttr::Heuristic(s) => format!(
-                "heuristic={}",
-                tamarin_theory::pretty_theory::pretty_heuristic_str(s, in_file)
-            ),
-            LemmaAttr::Output(xs) => format!("output={}", xs.join(",")),
-            LemmaAttr::Left => "left".into(),
-            LemmaAttr::Right => "right".into(),
-        })
-        .collect();
-    format!(" [{}]", parts.join(", "))
-}
-
 /// Main pane: render the content for a given path.
 pub(crate) fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> Result<String, String> {
     let typed = &entry.typed_theory;
@@ -603,25 +581,11 @@ pub(crate) fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> Result<String
         TheoryPath::Rules => Ok(rules_html(entry)),
         TheoryPath::Message => Ok(message_html(entry)),
         TheoryPath::Tactic => {
-            // HS `tacticSnippet` (Web/Theory.hs:940-946) =
-            //   ppSection "Tactic(s)" (prettyTactic <$> _thyTactic)
-            // ppSection h s = withTag "h2" [] (text h) $$ withTag "p"
-            //   [("class","monospace rules")] (vcat (intersperse (text "") s))
-            // rendered through the `HtmlDoc Doc` transformer + postprocess,
-            // which entity-escapes every text node.  `Tactic::render` builds a
-            // plain String that never passes through `Doc::text`, so escape it
-            // here — a literal '<' inside a tactic (e.g. the noise theories'
-            // regex lookbehind `(?<!'g'^)`) must reach the pane as `&lt;`, not
-            // as a pseudo-tag the browser (and the parity normalizer) eats.
-            // `vcat (intersperse (text "") s)` = tactics joined by a blank line.
+            let _html = tamarin_theory::pretty_hpj::HtmlDocGuard::enable();
             let body = typed
                 .tactic
                 .iter()
-                .map(|t| {
-                    tamarin_theory::pretty_hpj::escape_html_entities(
-                        &tamarin_theory::tactic::render(t),
-                    )
-                })
+                .map(tamarin_theory::tactic::render)
                 .collect::<Vec<_>>()
                 .join("\n\n");
             Ok(assemble_pane(vec![Some(section_fragment(
@@ -1268,6 +1232,19 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tamarin_test_support::require_maude_path;
+
+    #[test]
+    fn long_lemma_attributes_wrap_in_the_shared_header() {
+        use tamarin_theory::{pretty_hpj::HtmlDocGuard, pretty_theory, theory::LemmaAttr};
+        let _html = HtmlDocGuard::enable();
+        let header = pretty_theory::lemma_title_doc(
+            "otp_decode_does_not_help_adv_use_induction",
+            pretty_theory::lemma_attr_docs(&[LemmaAttr::Reuse, LemmaAttr::UseInduction], ""),
+        )
+        .render_with(100, 67);
+        assert!(header.contains("[reuse,\n"), "{header}");
+        assert!(header.trim_end().ends_with("use_induction]:"), "{header}");
+    }
 
     #[test]
     fn long_source_names_use_the_html_line_width() {
