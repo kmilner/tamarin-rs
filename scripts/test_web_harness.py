@@ -73,6 +73,16 @@ def run_shell(script, *, temp_dir=None, env=None, check=True):
 
 
 class DiffArtifactNames(unittest.TestCase):
+    def test_layout_is_preserved_and_void_tag_spellings_agree(self):
+        canonical = lambda s: WEB_DIFF.canon("html", s)
+        self.assertEqual(canonical("a<br>b"), canonical("a<br/>b"))
+        self.assertNotEqual(canonical("a<br>b"), canonical("a b"))
+        self.assertNotEqual(canonical("<pre>a</pre>"), canonical("a"))
+        self.assertEqual(
+            canonical('<html><head><script src="x"></script></head><body>x</body></html>'),
+            canonical('<html><head><script src="x"></script></script></head><body>x</body></html>'),
+        )
+
     def test_highlighting_and_proof_status_are_significant(self):
         for kind in ("html", "json"):
             def canonical(body):

@@ -3,8 +3,7 @@
 
 The parity bar is *structural / semantic* equivalence for the markup routes,
 NOT byte-identity: we canonicalize away whitespace, attribute order, JSON key
-order, `<br/>`/`<pre>` cosmetic
-markup, and the genuinely nondeterministic env fields (theory idx, timestamps,
+order, and the genuinely nondeterministic env fields (theory idx, timestamps,
 temp/cache-dir prefixes, absolute load paths).  What survives must match:
 element structure (including syntax/status highlighting), attributes (including
 inline styles), visible text, link hrefs + text, form actions, embedded resource
@@ -87,22 +86,16 @@ def norm_env(s: str, workdirs=()) -> str:
 # HTML canonicalization
 # ---------------------------------------------------------------------------
 
-# Tags whose open/close markup is dropped entirely (children kept) — purely
-# cosmetic layout that the two backends emit differently.  The structural
-# container tags `html`/`head`/`body` are unwrapped because HS emits malformed
-# doubled `</script></script>` closes that shift the parser's head/body
-# boundary; their children (title/links/scripts, then page content) appear in
-# the same document order on both sides, so dropping the boundary markers keeps
-# real content diffs visible while eliminating the serialization artifact.
-_UNWRAP_TAGS = {"pre", "html", "head", "body"}
-# Void/among tags treated as a whitespace break (dropped, contribute a space).
-_BREAK_TAGS = {"br"}
+# HTML void elements have no closing tag, regardless of whether the serializer
+# spells their opening tag as <br> or <br/>.
+_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input",
+              "link", "meta", "param", "source", "track", "wbr"}
 
 
 class _Canon(HTMLParser):
     """Build a canonical token stream from an HTML fragment/page.
 
-    - <pre> unwrapped, <br> -> space
+    - element structure retained, with HTML void tags represented once
     - attributes sorted, values idx-normalized, `class` tokens sorted,
       boolean attrs represented by empty values
     - runs of whitespace (incl. &nbsp;, already unescaped by the parser)
@@ -113,7 +106,7 @@ class _Canon(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.workdirs = workdirs
         self.tokens = []          # list of ('t', text) | ('o', tag, attrs) | ('c', tag)
-        self._stack = []          # (tag, emitted_bool)
+        self._stack = []          # open non-void tags
         self._pending_text = []
 
     def _flush_text(self):
@@ -122,9 +115,6 @@ class _Canon(HTMLParser):
         text = "".join(self._pending_text)
         self._pending_text = []
         text = norm_env(text, self.workdirs)
-        # &nbsp; -> normal space (parser gives us \xa0), collapse runs
-        text = text.replace("\xa0", " ")
-        text = re.sub(r"\s+", " ", text)
         if text.strip() == "":
             # keep a single separating space token so adjacent inline text
             # doesn't get glued, but only if the previous token is text.
@@ -151,34 +141,23 @@ class _Canon(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         self._flush_text()
-        if tag in _BREAK_TAGS:
-            # treat as whitespace
-            self._pending_text.append(" ")
-            return
-        if tag in _UNWRAP_TAGS:
-            self._stack.append((tag, False))
-            return
         self.tokens.append(("o", tag, self._canon_attrs(attrs)))
-        self._stack.append((tag, True))
+        if tag not in _VOID_TAGS:
+            self._stack.append(tag)
 
     def handle_startendtag(self, tag, attrs):
-        self._flush_text()
-        if tag in _BREAK_TAGS:
-            self._pending_text.append(" ")
-            return
-        if tag in _UNWRAP_TAGS:
-            return
-        self.tokens.append(("o", tag, self._canon_attrs(attrs)))
-        self.tokens.append(("c", tag))
+        self.handle_starttag(tag, attrs)
+        if tag not in _VOID_TAGS:
+            self.handle_endtag(tag)
 
     def handle_endtag(self, tag):
         self._flush_text()
-        if tag in _BREAK_TAGS:
+        if tag in _VOID_TAGS:
             return
         # Find the nearest matching open tag WITHOUT mutating the stack.
         idx = None
         for i in range(len(self._stack) - 1, -1, -1):
-            if self._stack[i][0] == tag:
+            if self._stack[i] == tag:
                 idx = i
                 break
         if idx is None:
@@ -191,9 +170,7 @@ class _Canon(HTMLParser):
         # implicitly closed by this ancestor, so emit their close tokens too —
         # matching a backend that closes them explicitly.
         while len(self._stack) > idx:
-            t, e = self._stack.pop()
-            if e:
-                self.tokens.append(("c", t))
+            self.tokens.append(("c", self._stack.pop()))
 
     def handle_data(self, data):
         self._pending_text.append(data)
@@ -204,22 +181,11 @@ class _Canon(HTMLParser):
         # a document that omits trailing closes compares equal to one that
         # spells them out.
         while self._stack:
-            t, e = self._stack.pop()
-            if e:
-                self.tokens.append(("c", t))
+            self.tokens.append(("c", self._stack.pop()))
         parts = []
         for tok in self.tokens:
             if tok[0] == "t":
-                # Collapse any multi-space runs that arose from merging text
-                # across break/whitespace boundaries.  HS renders the sequent
-                # with `<br/><br/>` blank lines between goals (each break
-                # contributes a space, so a blank line leaks a double space at
-                # the join); RS renders the same block as `<pre>` text with
-                # `\n\n`, which collapses to a single space.  Both are the same
-                # block text semantically — canonicalize the whitespace so the
-                # `<pre>`+`\n` and `<br/>`-postprocessed forms compare equal
-                # (see the parity-definition "canonicalize … to the same block
-                # text").
+                # Collapse whitespace once, after adjacent text is merged.
                 s = re.sub(r"\s+", " ", tok[1]).strip()
                 if s:
                     parts.append("T:" + s)

@@ -282,15 +282,8 @@ async fn test_main_lemma_envelope() {
     // `main/lemma/<name>` path is one that the frontend never uses.  The
     // frontend always links to `main/proof/<name>` instead.
     //
-    // The test compares the body with the oracle's envelope exactly, with one
-    // exception.  The oracle's `renderHtmlDoc` appends a `<br/>` and a newline
-    // to the line (`postprocessHtmlDoc`, Text/PrettyPrint/Html.hs:157-162).
-    // The port does not emit them here.  The test removes them from the
-    // capture, so the test fails on the day the port emits them.
-    assert_eq!(
-        body,
-        haskell_capture("main_lemma.json").replace("<br/>\\n", "")
-    );
+    // Includes renderHtmlDoc's final line break, without altering the capture.
+    assert_eq!(body, haskell_capture("main_lemma.json"));
 }
 
 // ---------------------------------------------------------------------

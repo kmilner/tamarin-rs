@@ -633,7 +633,9 @@ pub(crate) fn path_html(entry: &TheoryEntry, path: &TheoryPath) -> Result<String
         // HS renders `text "this is a mistake"` for the bare lemma path
         // (`htmlThyPath` `TheoryLemma _`, Web/Theory.hs:1011-1150, see line 1074) — the UI never
         // navigates here (it uses the proof path); mirror it verbatim.
-        TheoryPath::Lemma(_) => Ok("this is a mistake".into()),
+        TheoryPath::Lemma(_) => Ok(tamarin_theory::pretty_hpj::postprocess_html(
+            "this is a mistake",
+        )),
         TheoryPath::Proof { lemma, sub } => proof_html(entry, lemma, sub),
         TheoryPath::Method { lemma, sub, .. } => proof_html(entry, lemma, sub),
         TheoryPath::Source { kind, .. } => sources_html(entry, kind),
@@ -1196,7 +1198,7 @@ fn render_html_source(
     goal: &tamarin_theory::constraint::constraints::Goal,
     cases: &[(String, tamarin_theory::constraint::system::System)],
 ) -> String {
-    use tamarin_theory::pretty_hpj::escape_html_entities;
+    use tamarin_theory::pretty_hpj::{self as hpj, Doc};
     let n_cases = cases.len();
     // `withTag "p" [] ppPrem` — the per-case premise paragraph, built as ONE
     // Doc so the goal wraps (continuation `&nbsp;`/`<br/>`) exactly as HS.
@@ -1230,12 +1232,18 @@ fn render_html_source(
         // ` / named ` text keeps its own surrounding spaces (→ double spaces),
         // and the trailing (possibly empty) `partial` element is preceded by an
         // `fsep` space (→ trailing space even when not partial).
+        let case_header = hpj::fsep(vec![
+            Doc::text("Source"),
+            Doc::text(ii.to_string()),
+            Doc::text("of"),
+            Doc::text(n_cases.to_string()),
+            Doc::text(" / named "),
+            Doc::text(format!("\"{name}\"")),
+            Doc::text_hs(partial),
+        ]);
         parts.push(format!(
-            "<h3>Source {i} of {n}  / named  &quot;{name}&quot; {partial}</h3>",
-            i = ii,
-            n = n_cases,
-            name = escape_html_entities(name),
-            partial = partial,
+            "<h3>{}</h3>",
+            case_header.render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON)
         ));
         // `refDotInteractiveStaticPath = withTag "static-graph"
         // [("graphSrc", srcPath)] (text "")` — note the capital-S `graphSrc`.
@@ -1260,6 +1268,36 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tamarin_test_support::require_maude_path;
+
+    #[test]
+    fn long_source_names_use_the_html_line_width() {
+        use tamarin_theory::constraint::{constraints::Goal, system::System};
+        use tamarin_theory::pretty_hpj::HtmlDocGuard;
+        use tamarin_theory::tools::equation_store::SplitId;
+
+        let _html = HtmlDocGuard::enable();
+        let name = "insertstateprogripfststlistipfststsuccsndst_0_1111111111111";
+        let rendered = render_html_source(
+            1,
+            "raw",
+            1,
+            &Goal::Split(SplitId(0)),
+            &[(name.into(), System::empty())],
+        );
+        let heading = rendered
+            .split("<h3>")
+            .nth(1)
+            .unwrap()
+            .split("</h3>")
+            .next()
+            .unwrap();
+        assert!(heading.contains('\n'), "long name must wrap: {heading}");
+        assert!(heading.contains(&format!("&quot;{name}&quot;")));
+        assert!(
+            heading.ends_with('\n'),
+            "the empty final field retains its break: {heading}"
+        );
+    }
 
     fn test_config(maude: &str) -> crate::ServerConfig {
         let mut cfg = crate::ServerConfig::new(
