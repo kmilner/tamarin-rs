@@ -15,6 +15,11 @@
 web_cache_init() {
     local repo=$1 scripts=$2 hs=$3 plan=$4 profile_text marker
     local dot_path dot_sha dot_version crawl_path="$scripts/web_crawl.py" url_key_path="$scripts/web_url_key.py"
+    WEB_FETCH_JOBS=${WEB_FETCH_JOBS:-2}
+    if [[ ! $WEB_FETCH_JOBS =~ ^([1-9]|1[0-6])$ ]]; then
+        echo "WEB_FETCH_JOBS must be within 1..16" >&2; return 2
+    fi
+    export WEB_FETCH_JOBS
 
     if [ "${HS_FP_PATH:-}" = "$hs" ] && [ -n "${HS_FP:-}" ]; then
         WEB_ORACLE_SHA256=$HS_FP
@@ -57,7 +62,8 @@ web_cache_init() {
         "crawler_sha256=$WEB_CRAWL_FP" \
         "url_key_sha256=$WEB_URL_KEY_FP" \
         "producer_protocol_sha256=$WEB_PRODUCER_PROTOCOL_FP" \
-        "max_nodes=${MAX_NODES:-400}")
+        "max_nodes=${MAX_NODES:-400}" \
+        "fetch_jobs=$WEB_FETCH_JOBS")
     WEB_CACHE_PROFILE=$(printf '%s' "$profile_text" | sha256sum | cut -c1-16)
 
     if [ -z "${WEB_CACHE_ROOT:-}" ]; then
@@ -359,6 +365,8 @@ web_stop_group() {
 _web_boot_crawl() {
     local bin=$1 port=$2 wd=$3 out=$4 kind=$5 theory_flags=$6 crawl_flags=$7
     local log="$wd/${kind}_server.log" pid= ok= i rc
+    local started ready finished
+    started=$(gate_now_ms)
     trap 'web_stop_group "$pid"; rm -rf "$wd"; exit 130' HUP INT TERM
     web_wait_port_free "$port" || {
         echo "  port $port not free before $kind server boot" >&2
@@ -385,10 +393,15 @@ _web_boot_crawl() {
         web_stop_group "$pid"
         return 1
     fi
+    ready=$(gate_now_ms)
     ( [ -z "${WEB_CACHE_LOCK_FD:-}" ] || exec {WEB_CACHE_LOCK_FD}>&-
       web_exec_crawler "$port" "$wd" "$out" "$kind" "$crawl_flags"
     ) 2>>"$log"
     rc=$?
+    finished=$(gate_now_ms)
+    printf 'TIMING web %s %s startup_ms=%s crawl_ms=%s\n' "$kind" "$wd" \
+        "$((ready-started))" "$((finished-ready))" >&2
+    grep '^TIMING crawl ' "$log" >&2 || true
     web_stop_group "$pid"
     pid=
     if [ "$rc" -ne 0 ]; then

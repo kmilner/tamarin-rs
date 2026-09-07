@@ -9,6 +9,7 @@ import pathlib
 import socket
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -22,6 +23,10 @@ URL_SPEC = importlib.util.spec_from_file_location("web_url_key", HERE / "web_url
 WEB_URL_KEY = importlib.util.module_from_spec(URL_SPEC)
 assert URL_SPEC.loader is not None
 URL_SPEC.loader.exec_module(WEB_URL_KEY)
+CRAWL_SPEC = importlib.util.spec_from_file_location("web_crawl", HERE / "web_crawl.py")
+WEB_CRAWL = importlib.util.module_from_spec(CRAWL_SPEC)
+assert CRAWL_SPEC.loader is not None
+CRAWL_SPEC.loader.exec_module(WEB_CRAWL)
 
 # Gate configuration is explicit test input, never ambient process state.
 # Keep ordinary tool discovery (notably PATH), but prevent a developer's cache
@@ -36,7 +41,7 @@ GATE_ENV_KEYS = set("""
     RS_FP RS_PATH RS_PORT SERVER_MEM_KB SERVER_STOP_TIMEOUT TAMARIN_RS_CACHE_ROOT
     TAM_RS_NO_AUTO_BUILD TIMEOUT WEB_CACHE_ROOT WEB_CRAWL_TIMEOUT WEB_FLAGS_MAP
     WEB_LEDGER WEB_ORACLE_SHA256 WEB_PRODUCER_PROTOCOL_FP WEB_TEST_PORT
-    WEB_WORK_ROOT
+    WEB_WORK_ROOT WEB_FETCH_JOBS
 """.split())
 
 
@@ -234,6 +239,85 @@ class DiffArtifactNames(unittest.TestCase):
             ),
             hs,
         )
+
+
+class PageFetching(unittest.TestCase):
+    def test_fetches_overlap_but_results_keep_plan_order_and_http_failures(self):
+        barrier = threading.Barrier(2)
+        def fetch(base, path):
+            barrier.wait(timeout=5)
+            return (404 if path == "missing" else 200, "text/plain", path)
+        paths = ["one", "missing", "three", "four"]
+        with mock.patch.object(WEB_CRAWL, "http_get", side_effect=fetch):
+            results = list(WEB_CRAWL.fetch_pages("http://localhost", paths, 2))
+        self.assertEqual([p for p, _ in results], paths)
+        self.assertEqual(results[1][1], (404, "text/plain", "missing"))
+
+    def test_serial_and_parallel_crawls_record_the_same_plan(self):
+        def fetch(base, path):
+            if "/overview/help" in path:
+                return 200, "text/html", '<a href="/thy/trace/1/main/proof/demo">demo</a>'
+            if "/autoprove/" in path:
+                return 200, "application/json", '{"redirect":"/thy/trace/2/overview/proof/demo"}'
+            if "/overview/proof/" in path:
+                return 200, "text/html", (
+                    '<a href="/thy/trace/2/main/proof/demo/_">step</a>'
+                    '<a href="/thy/trace/2/main/method/demo/1">method</a>')
+            if "/main/method/" in path:
+                self.assertIs(threading.current_thread(), threading.main_thread())
+            return 200, "text/plain", path
+        with tempfile.TemporaryDirectory() as td:
+            output = pathlib.Path(td) / "crawl.json"
+            docs = []
+            for workers in (1, 2):
+                with mock.patch.object(WEB_CRAWL, "http_get", side_effect=fetch), \
+                        mock.patch.dict(os.environ, {"WEB_FETCH_JOBS": str(workers)}), \
+                        mock.patch("sys.argv", ["crawl", "http://localhost", str(output)]), \
+                        mock.patch("builtins.print"):
+                    WEB_CRAWL.main()
+                docs.append(json.loads(output.read_text()))
+            self.assertEqual(docs[0], docs[1])
+            urls = list(docs[0]["manifest"])
+            prove = next(i for i, url in enumerate(urls) if "/autoprove/" in url)
+            step = urls.index("/thy/trace/#/main/proof/demo/_")
+            self.assertLess(prove, step)
+            self.assertLess(urls.index("/thy/trace/#/main/method/demo/1"), step)
+
+
+class ProofCacheReads(unittest.TestCase):
+    def test_truncated_gzip_is_rejected_before_running_rust(self):
+        run_shell(r'''
+set -e
+. scripts/gate_common.sh
+source <(sed -n '/^rs_result()/p; /^rs_one() {/,/^}/p' scripts/corpus_file_diff.sh)
+CACHE=$HARNESS_TMP CORPUS_ROOT=$HARNESS_TMP
+printf theory > "$HARNESS_TMP/input.spthy"
+ckey() { echo key; }
+flags_for() { :; }
+comparison_identity_unchanged() { return 0; }
+printf 'proof\n' | gzip > "$CACHE/key.full.gz"
+printf '0\n' > "$CACHE/key.rc"
+cat > "$HARNESS_TMP/rs" <<'EOF'
+#!/bin/sh
+printf 'proof\n'
+EOF
+chmod +x "$HARNESS_TMP/rs"
+RS_PATH=$HARNESS_TMP/rs MAUDE=unused FILE_TIMEOUT=10 DERIVCHECK_TIMEOUT=0
+rs_one input.spthy > "$HARNESS_TMP/result"
+grep $'\tMATCH\t' "$HARNESS_TMP/result"
+printf '1\n' > "$CACHE/key.rc"
+rs_one input.spthy > "$HARNESS_TMP/result"
+grep $'\tRC_DIFF\t' "$HARNESS_TMP/result"
+printf '0\n' > "$CACHE/key.rc"
+printf 'different\n' | gzip > "$CACHE/key.full.gz"
+rs_one input.spthy > "$HARNESS_TMP/result"
+grep $'\tDIFF\t' "$HARNESS_TMP/result"
+head -c -8 "$CACHE/key.full.gz" > "$CACHE/broken.gz"
+mv "$CACHE/broken.gz" "$CACHE/key.full.gz"
+RS_PATH=/must/not/be/run
+rs_one input.spthy > "$HARNESS_TMP/result"
+grep $'\tSKIP_NO_HS\t' "$HARNESS_TMP/result"
+''')
 
 
 class WebWorkers(unittest.TestCase):

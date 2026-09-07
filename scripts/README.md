@@ -120,6 +120,10 @@ walks the RS test harness's ladder because its captures must use the maude
   exits 2 when nothing resolves; the selected path is passed explicitly to
   both provers. Empty unexplained oracle runs are not cached. Lower `JOBS` on
   a constrained box rather than raising it.
+  `TIMING proof` lines on stderr report input hashing, cache decompression,
+  Rust proving, normalization/input rechecks, and comparison in milliseconds;
+  phase totals include the Haskell cache-validation/fill pass. Per-file timings
+  describe work across concurrent workers, so their sum is not wall time.
   `ALLOWLIST` defaults to `scripts/parity_corpus.txt`, falling back to
   `$PREV_TSV`'s first column only when that file is missing too.
 - **`wf_gate.sh`** — fast (~45 s over the whole corpus on 24 cores)
@@ -162,6 +166,14 @@ walks the RS test harness's ladder because its captures must use the maude
   reserve ports 3021–3024. Increase `JOBS` cautiously: each server has its own
   memory cap, and large response manifests can exceed a GiB. Results are
   collected per worker before applying the ledger once to the whole run.
+  `WEB_FETCH_JOBS=2` overlaps read-only proof/graph requests within each theory
+  after autoproving and sitemap discovery; other links (including proof-method
+  applications) remain sequential. Set it to `1` for serial fetching (range
+  1–16). Results retain sitemap order. The setting participates in the Haskell
+  cache profile; changing it selects another profile without deleting old
+  captures. `TIMING web`, `TIMING crawl`, and `TIMING compare` lines report
+  startup, initial pages, autoproving, sitemap discovery, final page fetching,
+  manifest writing/loading, and comparison. Times are milliseconds.
   Run on server changes. `ALLOWLIST=` is REQUIRED (one
   corpus-relative path per line; `ALLOWLIST=seed` is the built-in 2-file smoke
   list, and the full cached set is the milestone sweep) — it used to fall back

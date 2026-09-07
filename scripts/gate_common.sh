@@ -13,6 +13,16 @@
 # This file defines functions and GATE_COMMON_DIR only — it runs nothing and
 # sources nothing, so sweep_common.sh can source it without cycles.
 
+# Millisecond wall-clock timestamps for stage timings (GNU/uutils/BSD date).
+gate_now_ms() {
+    local ns
+    ns=$(date +%s%N 2>/dev/null)
+    case "$ns" in
+        ''|*[!0-9]*) python3 -c 'import time; print(time.time_ns() // 1_000_000)' ;;
+        *) printf '%s\n' "$((ns / 1000000))" ;;
+    esac
+}
+
 GATE_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- OOM prologue ------------------------------------------------------------

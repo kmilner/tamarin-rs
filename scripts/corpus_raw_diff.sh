@@ -97,7 +97,7 @@ execution_fingerprint "$MAUDE" "$DERIVCHECK_TIMEOUT" || exit 2
 # --- strip_env_lines (gate_common.sh): delete the only lines that
 # legitimately differ between the two binaries, keeping `analyzed:` visible
 # (the cache hit rewrites its path to this invocation's).
-export -f file_sha256 proof_now_ms proof_cache_key proof_cache_result proof_lemmas_of parser_input_manifest \
+export -f file_sha256 gate_now_ms proof_cache_key proof_cache_result proof_lemmas_of parser_input_manifest \
     manifest_encode manifest_normalize manifest_decode_into input_manifest _include_shas_from_manifest _oracle_shas_from_manifest \
     input_content_key strip_env_lines cache_entry_lock cache_entry_unlock \
     cache_publish_text cache_publish_gzip cache_publish_proof cache_gzip_valid binary_sha256 \
@@ -157,10 +157,10 @@ worker() {
     elif [ "$hs_ready" -eq 0 ]; then
         # A payload without status is a legacy partial result, not a cache hit.
         [ -z "$key" ] || rm -f "$key_full" "$key_rc"
-        local hs_t0; hs_t0=$(proof_now_ms)
+        local hs_t0; hs_t0=$(gate_now_ms)
         timeout "$TIMEOUT" "$HS_PATH" +RTS $HS_RTS -RTS --with-maude="$MAUDE" --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$f" 2>/dev/null > "$hs_out"
         hs_rc=$?
-        hs_ms=$(( $(proof_now_ms) - hs_t0 ))
+        hs_ms=$(( $(gate_now_ms) - hs_t0 ))
         if [ -n "$key" ]; then
             local checked_id
             if ! checked_id=$(proof_cache_key "$f" "$lemma") \
@@ -191,10 +191,10 @@ worker() {
         return 0
     fi
 
-    local rs_t0; rs_t0=$(proof_now_ms)
+    local rs_t0; rs_t0=$(gate_now_ms)
     timeout "$RS_TIMEOUT" env $EXTRA_ENV "$RS_PATH" --with-maude="$MAUDE" --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$f" 2>/dev/null > "$tmp/rs.out"
     local rs_rc=$?
-    local rs_ms=$(( $(proof_now_ms) - rs_t0 ))
+    local rs_ms=$(( $(gate_now_ms) - rs_t0 ))
 
     if ! checked_id=$(proof_cache_key "$f" "$lemma") \
             || [ "$checked_id" != "$cache_id" ] \

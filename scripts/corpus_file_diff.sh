@@ -82,7 +82,7 @@ export HS_FP HS_FP_PATH HS_FP_SALT EXEC_FP EXEC_FP_SALT MAUDE_FP MAUDE_FP_PATH
 
 # strip_env (gate_common.sh): DELETE the four volatile header lines.
 # Stripping `analyzed:` on BOTH sides means no cache path-rewrite is needed.
-export -f strip_env
+export -f strip_env gate_now_ms
 
 # --- per-file canonical flags (see file_flags.tsv) ---------------------------
 # flags_for / ckey come from gate_common.sh: ckey salts the content-hash with
@@ -198,6 +198,8 @@ export -f duration_seconds hs_one
 rs_result() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 rs_one() {
     local rel="$1" f="$CORPUS_ROOT/$1" key checked_key input_key hs rs d rc fl out_sha
+    local started keyed cached proved checked finished
+    started=$(gate_now_ms)
     [ -f "$f" ] || { rs_result "$rel" SKIP_NO_HS 0 0 0 - -; return 0; }
     if ! key=$(ckey "$rel" "$f"); then
         rs_result "$rel" SKIP_INPUT_MANIFEST 0 0 0 - -
@@ -205,12 +207,19 @@ rs_one() {
     fi
     input_key=${key%%__e*}
     fl=$(flags_for "$rel")
+    keyed=$(gate_now_ms)
     if [ -f "$CACHE/$key.timeout" ]; then rs_result "$rel" SKIP_HS_TIMEOUT 0 0 0 "$input_key" -; return 0; fi
-    if ! cache_gzip_valid "$CACHE/$key.full.gz"; then rs_result "$rel" SKIP_NO_HS 0 0 0 "$input_key" -; return 0; fi
+    # Decompression validates the gzip checksum too. Capture its status and
+    # reuse the bytes, rather than validating and then reading them again.
+    if ! hs=$(gzip -dc "$CACHE/$key.full.gz" 2>/dev/null); then
+        rs_result "$rel" SKIP_NO_HS 0 0 0 "$input_key" -; return 0
+    fi
+    cached=$(gate_now_ms)
     # shellcheck disable=SC2086  # $fl must word-split into separate flags
     local tmp; tmp=$(mktemp)
     timeout "$FILE_TIMEOUT" "$RS_PATH" --with-maude="$MAUDE" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$f" >"$tmp" 2>/dev/null
     rc=$?
+    proved=$(gate_now_ms)
     rs=$(strip_env < "$tmp"); rm -f "$tmp"
     if ! checked_key=$(ckey "$rel" "$f") || [ "$checked_key" != "$key" ] \
             || ! comparison_identity_unchanged; then
@@ -218,17 +227,24 @@ rs_one() {
         return 0
     fi
     if [ "$rc" = "124" ]; then rs_result "$rel" SKIP_RS_TIMEOUT 0 0 0 "$input_key" -; return 0; fi
+    checked=$(gate_now_ms)
     out_sha=$(printf '%s\n' "$rs" | sha256sum | cut -d' ' -f1)
-    hs=$(zcat "$CACHE/$key.full.gz")
-    local hsn rsn
+    local hsn rsn comparison=MATCH
     hsn=$(printf '%s\n' "$hs" | wc -l)
+    rsn=$hsn
+    d=0
     if [ "$hs" != "$rs" ]; then
+        comparison=DIFF
         rsn=$(printf '%s\n' "$rs" | wc -l)
         d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')
-        rs_result "$rel" DIFF "$hsn" "$rsn" "$d" "$input_key" "$out_sha"
-        return 0
     fi
-    rsn=$hsn
+    finished=$(gate_now_ms)
+    printf 'TIMING proof %s input_ms=%s cache_ms=%s prove_ms=%s normalize_check_ms=%s compare_ms=%s\n' \
+        "$rel" "$((keyed-started))" "$((cached-keyed))" "$((proved-cached))" \
+        "$((checked-proved))" "$((finished-checked))" >&2
+    if [ "$comparison" = DIFF ]; then
+        rs_result "$rel" DIFF "$hsn" "$rsn" "$d" "$input_key" "$out_sha"; return 0
+    fi
     # Byte-identical stdout still leaves the EXIT STATUS uncompared, and a
     # caller that scripts either binary sees that status, not the bytes.
     # Entries filled before the .rc channel existed have no file: those count
@@ -252,9 +268,14 @@ N=${#FILES[@]}
 claim_output "$RESULTS_TSV" RESULTS_LOCK_FD || exit 2
 echo "corpus_file_diff: $N files, JOBS=$JOBS, -N$HS_N, FILE_TIMEOUT=$FILE_TIMEOUT, cache=$CACHE"
 echo "=== PHASE 1: Haskell (all files first, no RS) ==="
+phase_started=$(gate_now_ms)
 printf '%s\n' "${FILES[@]}" | xargs -P "$JOBS" -I{} bash -c 'hs_one "$@"' _ {}
+echo "TIMING proof hs_phase_ms=$(( $(gate_now_ms) - phase_started ))" >&2
 echo "=== PHASE 2: Rust + diff ==="
+phase_started=$(gate_now_ms)
 printf '%s\n' "${FILES[@]}" | xargs -P "$JOBS" -I{} bash -c 'rs_one "$@"' _ {} >> "$RESULTS_TSV"
+echo "TIMING proof rs_phase_ms=$(( $(gate_now_ms) - phase_started ))" >&2
+summary_started=$(gate_now_ms)
 sort -o "$RESULTS_TSV" "$RESULTS_TSV"
 echo "=== SUMMARY ==="
 awk -F'\t' '{c[$2]++} END{for(k in c) printf "  %-18s %d\n", k, c[k]}' "$RESULTS_TSV"
@@ -297,5 +318,6 @@ proof_sha=$(awk -F'\t' '$2 !~ /^SKIP/ {print $1 "\t" $6 "\t" $7}' "$RESULTS_TSV"
 # files= is the count whose bytes were actually COMPARED (MATCH/DIFF/RC_DIFF;
 # SKIP_* rows compared nothing). rs_ref_check.sh generate requires this exact
 # scope and proof digest. Trailing fields preserve verdict-token consumers.
+echo "TIMING proof summary_ms=$(( $(gate_now_ms) - summary_started ))" >&2
 echo "DONE_CORPUS_FILE_DIFF verdict=${bad:-OK} files=$((rows - skips)) scope_sha256=$scope_sha proof_outputs_sha256=$proof_sha oracle_sha256=$HS_FP execution_sha256=$EXEC_FP"
 [ -z "$bad" ]

@@ -281,11 +281,14 @@ one_file() {
     fi
     if ! web_python_isolated "$wd/diff-pycache" \
             python3 "$script_dir/web_diff.py" "$wd/hs.json" "$rs_manifest" \
-            "$wd/parity.tsv" "$wd/diffs" >/dev/null 2>&1 \
+            "$wd/parity.tsv" "$wd/diffs" >/dev/null 2>"$wd/compare.log" \
             || [ ! -s "$wd/parity.tsv" ]; then
         rm -rf "$wd"
         printf '%s\t-\tSKIP_DIFF_FAIL\t-\t-\t-\n' "$rel"; return 0
     fi
+    while IFS= read -r diagnostics; do
+        printf '%s %s\n' "$rel" "$diagnostics" >&2
+    done < "$wd/compare.log"
     if ! checked_key=$(web_cache_key "$rel" "$f" "$theory_flags") \
             || [ "$checked_key" != "$key" ] || ! web_comparison_identity_unchanged; then
         rm -rf "$wd"
