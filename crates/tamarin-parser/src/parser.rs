@@ -3293,7 +3293,7 @@ impl<'a> Parser<'a> {
     /// `in`, folded into an `LNSubst`.  The left side is a VARIABLE, so a
     /// bare identifier that names an arity-0 function symbol binds the
     /// like-named variable and leaves the body's `nullaryApp` constant alone.
-    fn let_bindings(&mut self) -> Result<Vec<(Term, Term)>, ParseError> {
+    fn let_bindings(&mut self) -> Result<Vec<(VarSpec, Term)>, ParseError> {
         self.require_kw("let")?;
         let mut bs = Vec::new();
         loop {
@@ -3302,7 +3302,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             let lhs = match self.let_binder()? {
-                Some(v) => Term::Var(v),
+                Some(v) => v,
                 None => break,
             };
             self.require_punct("=")?;
@@ -5712,7 +5712,7 @@ impl<'a> Parser<'a> {
 /// puts `h(~k)` in the body), while a reference to a LATER binding survives as
 /// a free variable (`let a = h(b)  b = ~k` puts `h(b)` in the body).
 fn apply_let_bindings(
-    bindings: &[(Term, Term)],
+    bindings: &[(VarSpec, Term)],
     premises: &mut [Fact],
     actions: &mut [Fact],
     conclusions: &mut [Fact],
@@ -5732,14 +5732,20 @@ fn apply_let_bindings(
     }
 }
 
-fn subst_let_fact(f: &mut Fact, key: &Term, val: &Term) {
+/// Rule elaboration identifies variables by name, sort and index. Type
+/// annotations are retained in the AST but do not affect rule-let substitution.
+fn same_rule_var(a: &VarSpec, b: &VarSpec) -> bool {
+    a.name == b.name && a.sort == b.sort && a.idx == b.idx
+}
+
+fn subst_let_fact(f: &mut Fact, key: &VarSpec, val: &Term) {
     for a in f.args.iter_mut() {
         *a = subst_let_term(a, key, val);
     }
 }
 
-fn subst_let_term(t: &Term, key: &Term, val: &Term) -> Term {
-    if t == key {
+fn subst_let_term(t: &Term, key: &VarSpec, val: &Term) -> Term {
+    if matches!(t, Term::Var(v) if same_rule_var(v, key)) {
         return val.clone();
     }
     match t {
@@ -5774,7 +5780,7 @@ fn subst_let_term(t: &Term, key: &Term, val: &Term) -> Term {
     }
 }
 
-fn subst_let_formula(phi: &mut Formula, key: &Term, val: &Term) {
+fn subst_let_formula(phi: &mut Formula, key: &VarSpec, val: &Term) {
     match phi {
         Formula::False | Formula::True => {}
         Formula::Atom(a) => subst_let_atom(a, key, val),
@@ -5784,13 +5790,9 @@ fn subst_let_formula(phi: &mut Formula, key: &Term, val: &Term) {
             subst_let_formula(b, key, val);
         }
         Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
-            let Term::Var(key_var) = key else {
-                subst_let_formula(body, key, val);
-                return;
-            };
             // A rule-let substitution is a free-variable substitution. A
             // quantifier for its domain shadows every occurrence below it.
-            if vars.contains(key_var) {
+            if vars.iter().any(|v| same_rule_var(v, key)) {
                 return;
             }
 
@@ -5802,15 +5804,15 @@ fn subst_let_formula(phi: &mut Formula, key: &Term, val: &Term) {
             let mut used_vars = replacement_vars.clone();
             collect_formula_vars(body, &mut used_vars);
             for var in vars.iter() {
-                if !used_vars.contains(var) {
+                if !used_vars.iter().any(|v| same_rule_var(v, var)) {
                     used_vars.push(var.clone());
                 }
             }
-            if !used_vars.contains(key_var) {
-                used_vars.push(key_var.clone());
+            if !used_vars.iter().any(|v| same_rule_var(v, key)) {
+                used_vars.push(key.clone());
             }
             for var in vars.iter_mut() {
-                if replacement_vars.contains(var) {
+                if replacement_vars.iter().any(|v| same_rule_var(v, var)) {
                     let old = var.clone();
                     let fresh = fresh_formula_var(&used_vars, &old);
                     rename_bound_formula(body, &old, &fresh);
@@ -5826,7 +5828,7 @@ fn subst_let_formula(phi: &mut Formula, key: &Term, val: &Term) {
 fn collect_term_vars(term: &Term, out: &mut Vec<VarSpec>) {
     match term {
         Term::Var(v) => {
-            if !out.contains(v) {
+            if !out.iter().any(|used| same_rule_var(used, v)) {
                 out.push(v.clone());
             }
         }
@@ -5861,7 +5863,7 @@ fn collect_formula_vars(formula: &Formula, out: &mut Vec<VarSpec>) {
         }
         Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
             for var in vars {
-                if !out.contains(var) {
+                if !out.iter().any(|used| same_rule_var(used, var)) {
                     out.push(var.clone());
                 }
             }
@@ -5896,11 +5898,7 @@ fn fresh_formula_var(used: &[VarSpec], old: &VarSpec) -> VarSpec {
     // Search from zero so an existing u64::MAX index cannot pin the search.
     // A finite in-memory list cannot occupy every u64 index.
     fresh.idx = 0;
-    // Rule-formula elaboration erases type annotations from variable identity.
-    while used
-        .iter()
-        .any(|v| v.name == fresh.name && v.sort == fresh.sort && v.idx == fresh.idx)
-    {
+    while used.iter().any(|v| same_rule_var(v, &fresh)) {
         fresh.idx += 1;
     }
     fresh
@@ -5918,7 +5916,7 @@ fn rename_bound_formula(formula: &mut Formula, old: &VarSpec, new: &VarSpec) {
             rename_bound_formula(b, old, new);
         }
         Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
-            if !vars.contains(old) {
+            if !vars.iter().any(|v| same_rule_var(v, old)) {
                 rename_bound_formula(body, old, new);
             }
         }
@@ -5948,7 +5946,7 @@ fn rename_atom_var(atom: &mut Atom, old: &VarSpec, new: &VarSpec) {
 
 fn rename_term_var(term: &mut Term, old: &VarSpec, new: &VarSpec) {
     match term {
-        Term::Var(v) if v == old => *v = new.clone(),
+        Term::Var(v) if same_rule_var(v, old) => v.idx = new.idx,
         Term::App(_, args) | Term::Pair(args) => {
             for arg in args {
                 rename_term_var(arg, old, new);
@@ -5970,7 +5968,7 @@ fn rename_term_var(term: &mut Term, old: &VarSpec, new: &VarSpec) {
     }
 }
 
-fn subst_let_atom(a: &mut Atom, key: &Term, val: &Term) {
+fn subst_let_atom(a: &mut Atom, key: &VarSpec, val: &Term) {
     match a {
         Atom::Eq(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y) | Atom::Subterm(x, y) => {
             *x = subst_let_term(x, key, val);
