@@ -78,6 +78,42 @@ def run_shell(script, *, temp_dir=None, env=None, check=True):
 
 
 class DiffArtifactNames(unittest.TestCase):
+    def test_json_html_fields_follow_the_response_schema(self):
+        def canonical(value):
+            return WEB_DIFF.canon("json", json.dumps(value))
+        self.assertNotEqual(canonical({"path": "<b>x</b>"}), canonical({"path": "<b >x</b>"}))
+        self.assertEqual(canonical({"alert": "<b>x</b>\ny"}),
+                         canonical({"alert": "<b >x</b><br/>y"}))
+        self.assertNotEqual(canonical({"alert": "x\ny"}), canonical({"alert": "x y"}))
+
+    def test_json_pair_skips_equal_html_and_preserves_scalar_distinctions(self):
+        import web_normalize as normalizer
+        left = {"html": "<b>same</b>", "title": "Title", "redirect": "/thy/trace/1/main"}
+        right = {**left, "redirect": "/thy/trace/2/main"}
+        with mock.patch.object(normalizer, "canon_html", wraps=normalizer.canon_html) as html:
+            a, b = normalizer.canon_json_pair(json.dumps(left), json.dumps(right))
+            self.assertEqual(a, b)
+            html.assert_not_called()
+        for a, b in [(True, 1), (1, 1.0), (0.0, -0.0), ({"x": 1}, {"y": 1}),
+                     ([1], [1, 2]), ({"html": "<b>x</b>"}, {"html": "<i>x</i>"})]:
+            left, right = normalizer.canon_json_pair(json.dumps(a), json.dumps(b))
+            self.assertNotEqual(left, right)
+        self.assertEqual(normalizer.canon_json_pair("not JSON", "null"),
+                         (normalizer.canon_json("not JSON"), normalizer.canon_json("null")))
+
+    def test_ignored_closing_tags_and_comments_do_not_split_text(self):
+        for body in ["one<!-- comment --> two", "one</stray> two", "one</br> two"]:
+            self.assertEqual(WEB_DIFF.canon("html", body), "T:one two")
+        self.assertEqual(WEB_DIFF.canon("html", "<div><b>x</div>"),
+                         WEB_DIFF.canon("html", "<div><b>x</b></div>"))
+
+    def test_workdir_preparation_and_legacy_literal_paths(self):
+        import web_normalize as normalizer
+        roots = ("/outer", "/outer/inner", "/outer", None)
+        self.assertEqual(WEB_DIFF.canon("text", "/outer/inner/x", roots), "/WEB-WORKDIR/x")
+        self.assertEqual(WEB_DIFF.canon("text", "/tmp/tmp.literal/x"), "/tmp/tmp.literal/x")
+        self.assertEqual(normalizer.prepare_workdirs(roots), ("/outer/inner", "/outer"))
+
     def test_layout_is_preserved_and_void_tag_spellings_agree(self):
         canonical = lambda s: WEB_DIFF.canon("html", s)
         self.assertEqual(canonical("a<br>b"), canonical("a<br/>b"))

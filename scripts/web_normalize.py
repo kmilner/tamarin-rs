@@ -20,6 +20,7 @@ Used by web_diff.py.  Pure stdlib (html.parser, json, re).
 """
 import json
 import re
+from functools import lru_cache
 from html.parser import HTMLParser
 
 from web_url_key import norm_indices
@@ -60,10 +61,6 @@ _VOLATILE = [
     # too, so a side that somehow omits the paren erases the rest of one line
     # instead of running on through the markup to whatever `)` comes next.
     (re.compile(r"Loaded at [^)\n]*"), "Loaded at #"),
-    # Compatibility for unsafe legacy manifests, which predate the explicit
-    # top-level workdir stamp consumed by canon(). New profiles replace their
-    # exact configurable roots before reaching this fallback.
-    (re.compile(r"/tmp/tmp\.[A-Za-z0-9]+/"), "/tmp/tmp.#/"),
 ]
 
 # Most HTML text/attributes contain none of these fields. One search avoids
@@ -73,8 +70,15 @@ _VOLATILE = [
 _HAS_VOLATILE = re.compile("|".join(rx.pattern for rx, _ in _VOLATILE))
 
 
+@lru_cache(maxsize=16)
+def prepare_workdirs(workdirs):
+    """Resolve the two immutable roots once, longest first for nested paths."""
+    return tuple(sorted(set(filter(None, workdirs)), key=len, reverse=True))
+
+
 def norm_env(s: str, workdirs=()) -> str:
-    for workdir in sorted(set(filter(None, workdirs)), key=len, reverse=True):
+    # Callers pass prepare_workdirs() output, not arbitrary path prefixes.
+    for workdir in workdirs:
         s = s.replace(workdir, "/WEB-WORKDIR")
     s = norm_indices(s)
     if len(s) > 512 or _HAS_VOLATILE.search(s):
@@ -104,8 +108,8 @@ class _Canon(HTMLParser):
 
     def __init__(self, workdirs=()):
         super().__init__(convert_charrefs=True)
-        self.workdirs = workdirs
-        self.tokens = []          # list of ('t', text) | ('o', tag, attrs) | ('c', tag)
+        self.workdirs = prepare_workdirs(tuple(workdirs))
+        self.parts = []
         self._stack = []          # open non-void tags
         self._pending_text = []
 
@@ -114,18 +118,9 @@ class _Canon(HTMLParser):
             return
         text = "".join(self._pending_text)
         self._pending_text = []
-        text = norm_env(text, self.workdirs)
-        if text.strip() == "":
-            # keep a single separating space token so adjacent inline text
-            # doesn't get glued, but only if the previous token is text.
-            if self.tokens and self.tokens[-1][0] == "t" and not self.tokens[-1][1].endswith(" "):
-                self.tokens[-1] = ("t", self.tokens[-1][1] + " ")
-            return
-        # merge with a preceding text token
-        if self.tokens and self.tokens[-1][0] == "t":
-            self.tokens[-1] = ("t", (self.tokens[-1][1] + text))
-        else:
-            self.tokens.append(("t", text))
+        text = " ".join(norm_env(text, self.workdirs).split())
+        if text:
+            self.parts.append("T:" + text)
 
     def _canon_attrs(self, attrs):
         out = []
@@ -137,21 +132,16 @@ class _Canon(HTMLParser):
                 v = " ".join(sorted(v.split()))
             out.append((k, v))
         out.sort()
-        return tuple(out)
+        return out
 
     def handle_starttag(self, tag, attrs):
         self._flush_text()
-        self.tokens.append(("o", tag, self._canon_attrs(attrs)))
+        attrs = ",".join(f"{k}={v}" for k, v in self._canon_attrs(attrs))
+        self.parts.append(f"<{tag} {attrs}>")
         if tag not in _VOID_TAGS:
             self._stack.append(tag)
 
-    def handle_startendtag(self, tag, attrs):
-        self.handle_starttag(tag, attrs)
-        if tag not in _VOID_TAGS:
-            self.handle_endtag(tag)
-
     def handle_endtag(self, tag):
-        self._flush_text()
         if tag in _VOID_TAGS:
             return
         # Find the nearest matching open tag WITHOUT mutating the stack.
@@ -169,8 +159,9 @@ class _Canon(HTMLParser):
         # leaving the contextMenu `<ul><li>` unclosed before `</body>`) are
         # implicitly closed by this ancestor, so emit their close tokens too —
         # matching a backend that closes them explicitly.
+        self._flush_text()
         while len(self._stack) > idx:
-            self.tokens.append(("c", self._stack.pop()))
+            self.parts.append(f"</{self._stack.pop()}>")
 
     def handle_data(self, data):
         self._pending_text.append(data)
@@ -181,20 +172,8 @@ class _Canon(HTMLParser):
         # a document that omits trailing closes compares equal to one that
         # spells them out.
         while self._stack:
-            self.tokens.append(("c", self._stack.pop()))
-        parts = []
-        for tok in self.tokens:
-            if tok[0] == "t":
-                # Collapse whitespace once, after adjacent text is merged.
-                s = re.sub(r"\s+", " ", tok[1]).strip()
-                if s:
-                    parts.append("T:" + s)
-            elif tok[0] == "o":
-                a = ",".join(f"{k}={v}" for k, v in tok[2])
-                parts.append(f"<{tok[1]} {a}>")
-            else:
-                parts.append(f"</{tok[1]}>")
-        return "\n".join(parts)
+            self.parts.append(f"</{self._stack.pop()}>")
+        return "\n".join(self.parts)
 
 
 def canon_html(body: str, workdirs=()) -> str:
@@ -214,17 +193,17 @@ def canon_html(body: str, workdirs=()) -> str:
 # JSON canonicalization (the {title,html} / {alert} / {redirect} envelopes)
 # ---------------------------------------------------------------------------
 
-_HTMLISH = re.compile(r"<[a-zA-Z/!]")
-
-
 def _canon_json_val(v, key=None, workdirs=()):
     if isinstance(v, str):
         # The `html` and `title` fields are ALWAYS canonicalized as HTML
         # (even when the fragment happens to be tag-free, e.g.
         # "this is a mistake" or "Lemma: X"). Both servers render proof-method
         # titles as HTML, including syntax highlighting and line breaks.
-        if key in ("html", "title") or _HTMLISH.search(v):
+        if key in ("html", "title"):
             return canon_html(v, workdirs)
+        if key == "alert":
+            # The UI's showDialog inserts HTML after turning newlines into br.
+            return canon_html(v.replace("\n", "<br>"), workdirs)
         return norm_env(v, workdirs)
     if isinstance(v, dict):
         return {k: _canon_json_val(x, k, workdirs) for k, x in v.items()}
@@ -245,6 +224,33 @@ def canon_json(body: str, workdirs=()) -> str:
         ensure_ascii=False,
         indent=1,
     )
+
+
+def canon_json_pair(left, right, workdirs=()):
+    """Normalize differing fields once; identical strings need no HTML parse."""
+    try:
+        left, right = json.loads(left), json.loads(right)
+    except ValueError:
+        return canon_json(left, workdirs), canon_json(right, workdirs)
+    workdirs = prepare_workdirs(tuple(workdirs))
+
+    def pair(a, b, key=None):
+        if isinstance(a, str) and isinstance(b, str) and a == b:
+            return a, b
+        if isinstance(a, dict) and isinstance(b, dict) and a.keys() == b.keys():
+            fields = {k: pair(v, b[k], k) for k, v in a.items()}
+            return ({k: v[0] for k, v in fields.items()},
+                    {k: v[1] for k, v in fields.items()})
+        if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+            items = [pair(x, y) for x, y in zip(a, b)]
+            return [x for x, _ in items], [y for _, y in items]
+        return _canon_json_val(a, key, workdirs), _canon_json_val(b, key, workdirs)
+
+    left, right = pair(left, right)
+    # Serialization retains the existing distinction between true, 1, 1.0,
+    # and -0.0, which Python object equality would lose.
+    return tuple(json.dumps(v, sort_keys=True, ensure_ascii=False, indent=1)
+                 for v in (left, right))
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +319,7 @@ def canon(kind: str, body: str, workdirs=()) -> str:
     # mktemp directories. The crawler records those exact configurable roots;
     # replace them before parsing so paths in text, HTML attributes and JSON
     # strings all receive the same treatment without guessing their prefix.
+    workdirs = prepare_workdirs(tuple(workdirs))
     if kind == "html":
         return canon_html(body, workdirs)
     if kind == "json":
