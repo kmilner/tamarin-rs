@@ -1824,6 +1824,36 @@ fn let_inlining_avoids_capture_by_quantifiers() {
 }
 
 #[test]
+fn let_inlining_avoids_capture_with_maximum_variable_index() {
+    let r = only_rule(
+        r#"theory T begin
+            rule R: let x = y.18446744073709551615 in []
+              --[ _restrict(Ex y.18446744073709551615 #i.
+                A(x,y.18446744073709551615,y.0,y.1) @ i) ]-> []
+        end"#,
+    );
+    let Formula::Exists(vars, body) = &r.embedded_restrictions[0] else {
+        panic!("expected an existential");
+    };
+    let bound_y = vars.iter().find(|v| v.name == "y").unwrap();
+    let Formula::Atom(Atom::Action(fact, _)) = body.as_ref() else {
+        panic!("expected an action atom");
+    };
+    let [Term::Var(inserted), Term::Var(renamed), Term::Var(zero), Term::Var(one)] =
+        fact.args.as_slice()
+    else {
+        panic!("expected four variable arguments");
+    };
+    assert_eq!(inserted.idx, u64::MAX);
+    assert_eq!(zero.idx, 0);
+    assert_eq!(one.idx, 1);
+    assert_eq!(renamed, bound_y);
+    for free in [inserted, zero, one] {
+        assert_ne!(free, bound_y, "free variable was captured");
+    }
+}
+
+#[test]
 fn rule_let_requires_a_binding_and_in_terminator() {
     for src in [
         "theory T begin rule R: let in [] --[]-> [] end",

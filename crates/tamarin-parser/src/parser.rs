@@ -5893,15 +5893,15 @@ fn collect_atom_vars(atom: &Atom, out: &mut Vec<VarSpec>) {
 
 fn fresh_formula_var(used: &[VarSpec], old: &VarSpec) -> VarSpec {
     let mut fresh = old.clone();
-    fresh.idx = used
+    // Search from zero so an existing u64::MAX index cannot pin the search.
+    // A finite in-memory list cannot occupy every u64 index.
+    fresh.idx = 0;
+    // Rule-formula elaboration erases type annotations from variable identity.
+    while used
         .iter()
-        .filter(|v| v.name == old.name && v.sort == old.sort)
-        .map(|v| v.idx)
-        .max()
-        .unwrap_or(old.idx)
-        .saturating_add(1);
-    while used.contains(&fresh) {
-        fresh.idx = fresh.idx.saturating_add(1);
+        .any(|v| v.name == fresh.name && v.sort == fresh.sort && v.idx == fresh.idx)
+    {
+        fresh.idx += 1;
     }
     fresh
 }
