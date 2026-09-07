@@ -66,13 +66,20 @@ _VOLATILE = [
     (re.compile(r"/tmp/tmp\.[A-Za-z0-9]+/"), "/tmp/tmp.#/"),
 ]
 
+# Most HTML text/attributes contain none of these fields. One search avoids
+# running every substitution on each of those small strings. Keep the ordered
+# substitutions below for values that do need normalization. Large bodies
+# bypass the search: another full scan costs more than it saves there.
+_HAS_VOLATILE = re.compile("|".join(rx.pattern for rx, _ in _VOLATILE))
+
 
 def norm_env(s: str, workdirs=()) -> str:
     for workdir in sorted(set(filter(None, workdirs)), key=len, reverse=True):
         s = s.replace(workdir, "/WEB-WORKDIR")
     s = norm_indices(s)
-    for rx, rep in _VOLATILE:
-        s = rx.sub(rep, s)
+    if len(s) > 512 or _HAS_VOLATILE.search(s):
+        for rx, rep in _VOLATILE:
+            s = rx.sub(rep, s)
     return s
 
 # ---------------------------------------------------------------------------
@@ -273,7 +280,7 @@ def _canon_json_val(v, key=None, workdirs=()):
             return canon_html(v, workdirs)
         return norm_env(v, workdirs)
     if isinstance(v, dict):
-        return {k: _canon_json_val(x, k, workdirs) for k, x in sorted(v.items())}
+        return {k: _canon_json_val(x, k, workdirs) for k, x in v.items()}
     if isinstance(v, list):
         return [_canon_json_val(x, workdirs=workdirs) for x in v]
     return v

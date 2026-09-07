@@ -222,9 +222,13 @@ rs_one() {
     hs=$(zcat "$CACHE/$key.full.gz")
     local hsn rsn
     hsn=$(printf '%s\n' "$hs" | wc -l)
-    rsn=$(printf '%s\n' "$rs" | wc -l)
-    d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')
-    if [ "$d" != "0" ]; then rs_result "$rel" DIFF "$hsn" "$rsn" "$d" "$input_key" "$out_sha"; return 0; fi
+    if [ "$hs" != "$rs" ]; then
+        rsn=$(printf '%s\n' "$rs" | wc -l)
+        d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')
+        rs_result "$rel" DIFF "$hsn" "$rsn" "$d" "$input_key" "$out_sha"
+        return 0
+    fi
+    rsn=$hsn
     # Byte-identical stdout still leaves the EXIT STATUS uncompared, and a
     # caller that scripts either binary sees that status, not the bytes.
     # Entries filled before the .rc channel existed have no file: those count

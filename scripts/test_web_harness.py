@@ -10,6 +10,7 @@ import socket
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -72,6 +73,27 @@ def run_shell(script, *, temp_dir=None, env=None, check=True):
 
 
 class DiffArtifactNames(unittest.TestCase):
+    def test_equal_bodies_skip_canonicalization_but_metadata_still_matters(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            row = {"kind": "html", "status": 200, "body": "<b>same</b>"}
+            for changed, expected in (({}, "MATCH"), ({"status": 404}, "DIFF"),
+                                      ({"kind": "text"}, "DIFF")):
+                for side, value in (("hs", row), ("rs", {**row, **changed})):
+                    (root / f"{side}.json").write_text(json.dumps({
+                        "manifest": {"/page": value}, "capped": True,
+                    }))
+                args = ["web_diff.py", str(root / "hs.json"),
+                        str(root / "rs.json"), str(root / "out.tsv")]
+                with mock.patch("sys.argv", args), \
+                        mock.patch("builtins.print"), \
+                        mock.patch.object(WEB_DIFF, "canon", wraps=WEB_DIFF.canon) as canon:
+                    WEB_DIFF.main()
+                self.assertEqual(canon.call_count, 0 if not changed else 2)
+                rows = (root / "out.tsv").read_text().splitlines()
+                self.assertEqual(len(rows), 3)  # both caps survive the shortcut
+                self.assertEqual(rows[-1].split("\t")[1], expected)
+
     def test_long_urls_with_the_same_prefix_do_not_collide(self):
         prefix = "/thy/trace/1/main/proof/" + "case/" * 50
         left = WEB_DIFF.safe_name(prefix + "left")
@@ -183,6 +205,79 @@ class DiffArtifactNames(unittest.TestCase):
             ),
             hs,
         )
+
+
+class WebWorkers(unittest.TestCase):
+    def test_interrupt_stops_active_crawls_and_removes_workdirs(self):
+        run_shell(r'''
+set -e
+. scripts/web_cache.sh
+HS_PORT=3021 RS_PORT=3022 JOBS=2
+_web_boot_crawl() {
+    trap 'touch "$HARNESS_TMP/stopped-$HS_PORT"; exit 130' TERM
+    touch "$HARNESS_TMP/started-$HS_PORT"
+    while :; do sleep 0.01; done
+}
+one_file() {
+    WEB_ACTIVE_WORKDIR="$HARNESS_TMP/work-$HS_PORT"
+    mkdir "$WEB_ACTIVE_WORKDIR"
+    web_boot_crawl
+}
+web_run_files "$HARNESS_TMP/out" a b & pool=$!
+trap 'kill -TERM "$pool" 2>/dev/null || :; wait "$pool" || :' EXIT
+for ((attempt=0; attempt<200; attempt++)); do
+    [ -f "$HARNESS_TMP/started-3021" ] && [ -f "$HARNESS_TMP/started-3023" ] && break
+    sleep 0.01
+done
+test "$attempt" -lt 200
+kill -TERM "$pool"
+if wait "$pool"; then exit 1; fi
+trap - EXIT
+for port in 3021 3023; do
+    test -f "$HARNESS_TMP/stopped-$port"
+    test ! -d "$HARNESS_TMP/work-$port"
+done
+''')
+
+    def test_workers_use_distinct_ports_and_keep_rows_whole(self):
+        run_shell(r'''
+set -e
+. scripts/web_cache.sh
+HS_PORT=3021 RS_PORT=3022 JOBS=2
+one_file() {
+    # Rendezvous: both workers must run before either can finish.
+    touch "$HARNESS_TMP/$HS_PORT"
+    for ((attempt=0; attempt<100; attempt++)); do
+        [ -f "$HARNESS_TMP/3021" ] && [ -f "$HARNESS_TMP/3023" ] && break
+        sleep 0.01
+    done
+    [ "$attempt" -lt 100 ] || return 1
+    printf '%s\t%s\t%s\n' "$1" "$HS_PORT" "$RS_PORT"
+}
+(web_run_files "$HARNESS_TMP/out" 'a file' b c d)
+sort "$HARNESS_TMP/out" > "$HARNESS_TMP/sorted"
+printf 'a file\t3021\t3022\nb\t3023\t3024\nc\t3021\t3022\nd\t3023\t3024\n' > "$HARNESS_TMP/expected"
+cmp "$HARNESS_TMP/sorted" "$HARNESS_TMP/expected"
+''')
+
+    def test_worker_failure_and_invalid_ports_fail_the_run(self):
+        run_shell(r'''
+set -e
+. scripts/web_cache.sh
+HS_PORT=3021 RS_PORT=3022 JOBS=2
+one_file() { [ "$1" != bad ] || return 1; echo "$1"; }
+if (web_run_files "$HARNESS_TMP/out" good bad); then exit 1; fi
+for JOBS in 0 -1 junk 999999999999999999999; do
+    if (web_run_files "$HARNESS_TMP/out" good bad); then exit 1; fi
+done
+JOBS=2 RS_PORT=3023
+if (web_run_files "$HARNESS_TMP/out" good bad); then exit 1; fi
+RS_PORT=65535
+if (web_run_files "$HARNESS_TMP/out" good bad); then exit 1; fi
+JOBS=1 RS_PORT=3022
+(web_run_files "$HARNESS_TMP/serial" good another)
+test "$(cat "$HARNESS_TMP/serial")" = "$(printf 'good\nanother')"
+''')
 
 
 class CacheProfiles(unittest.TestCase):

@@ -157,7 +157,12 @@ walks the RS test harness's ladder because its captures must use the maude
   over an empty histogram would otherwise read as a pass.
 - **`web_parity.sh`** — interactive-mode gate: crawls both web servers per
   theory and diffs the responses — pane/JSON semantically, graph routes
-  byte-for-byte. Run on server changes. `ALLOWLIST=` is REQUIRED (one
+  byte-for-byte. Runs two theories concurrently by default (`JOBS=1` for
+  serial execution). Each worker adds 2 to `HS_PORT`/`RS_PORT`, so the defaults
+  reserve ports 3021–3024. Increase `JOBS` cautiously: each server has its own
+  memory cap, and large response manifests can exceed a GiB. Results are
+  collected per worker before applying the ledger once to the whole run.
+  Run on server changes. `ALLOWLIST=` is REQUIRED (one
   corpus-relative path per line; `ALLOWLIST=seed` is the built-in 2-file smoke
   list, and the full cached set is the milestone sweep) — it used to fall back
   to the seed list whenever it was unset or misspelt, which turned a

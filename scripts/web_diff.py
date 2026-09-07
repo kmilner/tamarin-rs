@@ -102,10 +102,14 @@ def main():
             counts[status] = counts.get(status, 0) + 1
             continue
         kind = h["kind"]  # oracle kind
-        ch = canon(kind, h["body"], workdirs)
-        cr = canon(kind, r["body"], workdirs)
         kind_mismatch = h["kind"] != r["kind"]
         status_mismatch = h["status"] != r["status"]
+        # Equal raw bodies necessarily canonicalize equally. Still compare
+        # their HTTP status and kind, even when the bytes already match.
+        ch, cr = h["body"], r["body"]
+        if ch != cr or kind_mismatch or status_mismatch:
+            ch = canon(kind, ch, workdirs)
+            cr = canon(kind, cr, workdirs)
         if ch == cr and not kind_mismatch and not status_mismatch:
             status = "MATCH"
         else:

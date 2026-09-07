@@ -354,7 +354,9 @@ web_stop_group() {
 # web_boot_crawl <bin> <port> <workdir> <manifest> <kind> <theory-flags> <crawl-flags>
 # Run one guarded server lifecycle. Explicit flags prevent the two web gates'
 # callers from communicating through dynamically scoped shell variables.
-_web_boot_crawl() (
+# web_boot_crawl backgrounds this function; no second subshell should sit
+# between its recorded PID and the lifecycle's signal handler.
+_web_boot_crawl() {
     local bin=$1 port=$2 wd=$3 out=$4 kind=$5 theory_flags=$6 crawl_flags=$7
     local log="$wd/${kind}_server.log" pid= ok= i rc
     trap 'web_stop_group "$pid"; rm -rf "$wd"; exit 130' HUP INT TERM
@@ -401,7 +403,7 @@ _web_boot_crawl() (
         return 1
     fi
     return "$rc"
-)
+}
 
 web_abort_active_boot() {
     [ -n "${WEB_BOOT_PID:-}" ] || return 0
@@ -440,6 +442,51 @@ web_cache_unlock() {
 web_cache_snapshot() {
     local source=$1 target=$2
     ln -L -- "$source" "$target" 2>/dev/null || cp -- "$source" "$target"
+}
+
+# Independent theories share no server state. Each worker owns a pair of
+# ports and a result file; only the parent publishes rows and applies the
+# ledger. Keep the default small: individual manifests can exceed a GiB.
+# Call in the background so its PID directly owns the workers and signal traps.
+web_run_files() {
+    local output=$1; shift
+    local files=("$@") pids=() worker i rc=0 scratch
+    local jobs=${JOBS:-2}
+    if [[ ! $jobs =~ ^[1-9][0-9]{0,4}$ ]] || [ "$jobs" -gt 32767 ]; then
+        echo "JOBS must be a positive integer below 32768" >&2; exit 2
+    fi
+    [ "$jobs" -le "${#files[@]}" ] || jobs=${#files[@]}
+    [ "$jobs" -gt 0 ] || { echo "no web files to compare" >&2; exit 2; }
+    for i in "$HS_PORT" "$RS_PORT"; do
+        if [[ ! $i =~ ^[1-9][0-9]{0,4}$ ]] || [ "$i" -gt $((65535 - 2 * (jobs - 1))) ]; then
+            echo "web worker ports must fit within 1..65535" >&2; exit 2
+        fi
+    done
+    # Each base advances by two per worker. Reject overlapping port ranges
+    # when the two bases have the same parity.
+    i=$((HS_PORT - RS_PORT)); [ "$i" -ge 0 ] || i=$((-i))
+    if [ $((i % 2)) -eq 0 ] && [ "$i" -lt $((2 * jobs)) ]; then
+        echo "HS_PORT and RS_PORT overlap across web workers" >&2; exit 2
+    fi
+    scratch=$(mktemp -d) || exit 2
+    trap 'for worker in "${pids[@]}"; do kill -TERM "$worker" 2>/dev/null || :; done; wait; rm -rf "$scratch"' EXIT
+    trap 'exit 130' HUP INT TERM
+    for ((worker=0; worker<jobs; worker++)); do
+        (
+            trap 'web_abort_active_boot; [ -z "${WEB_ACTIVE_WORKDIR:-}" ] || rm -rf -- "$WEB_ACTIVE_WORKDIR"; exit 130' HUP INT TERM
+            HS_PORT=$((HS_PORT + 2 * worker))
+            RS_PORT=$((RS_PORT + 2 * worker))
+            for ((i=worker; i<${#files[@]}; i+=jobs)); do
+                echo "[$((i+1))/${#files[@]}] ${files[i]}" >&2
+                one_file "${files[i]}" || exit 1
+            done
+        ) > "$scratch/$worker.tsv" &
+        pids+=("$!")
+    done
+    for worker in "${pids[@]}"; do wait "$worker" || rc=1; done
+    pids=()
+    cat "$scratch/"*.tsv >> "$output" || exit 2
+    exit "$rc"
 }
 
 # Publish the manifest before its commit marker, with both renames occurring
