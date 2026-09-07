@@ -396,17 +396,29 @@ class WebWorkers(unittest.TestCase):
     def test_interrupt_stops_active_crawls_and_removes_workdirs(self):
         run_shell(r'''
 set -e
+. scripts/gate_common.sh
 . scripts/web_cache.sh
 HS_PORT=3021 RS_PORT=3022 JOBS=2
-_web_boot_crawl() {
-    trap 'touch "$HARNESS_TMP/stopped-$HS_PORT"; exit 130' TERM
-    touch "$HARNESS_TMP/started-$HS_PORT"
-    while :; do sleep 0.01; done
-}
+WEB_CACHE_SCRIPTS=$HARNESS_TMP
+web_wait_port_free() { return 0; }
+curl() { return 0; }
+web_exec_server() { exec setsid sleep 60; }
+cat > "$HARNESS_TMP/web_crawl.py" <<'PYTHON'
+import os, signal, sys, time
+from pathlib import Path
+root = Path(os.environ["HARNESS_TMP"])
+port = sys.argv[1].rsplit(":", 1)[1]
+def stop(*_):
+    (root / ("stopped-" + port)).touch()
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stop)
+(root / ("started-" + port)).touch()
+time.sleep(60)
+PYTHON
 one_file() {
     WEB_ACTIVE_WORKDIR="$HARNESS_TMP/work-$HS_PORT"
     mkdir "$WEB_ACTIVE_WORKDIR"
-    web_boot_crawl
+    web_boot_crawl unused "$HS_PORT" "$WEB_ACTIVE_WORKDIR" unused hs '' ''
 }
 web_run_files "$HARNESS_TMP/out" a b & pool=$!
 trap 'kill -TERM "$pool" 2>/dev/null || :; wait "$pool" || :' EXIT
@@ -415,8 +427,10 @@ for ((attempt=0; attempt<200; attempt++)); do
     sleep 0.01
 done
 test "$attempt" -lt 200
+started=$(gate_now_ms)
 kill -TERM "$pool"
 if wait "$pool"; then exit 1; fi
+test "$(( $(gate_now_ms) - started ))" -lt 3000
 trap - EXIT
 for port in 3021 3023; do
     test -f "$HARNESS_TMP/stopped-$port"

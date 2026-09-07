@@ -262,8 +262,8 @@ web_exec_crawler() {
     local port=$1 wd=$2 out=$3 kind=$4 crawl_flags=$5
     local -a crawl_args=()
     [ -z "$crawl_flags" ] || read -r -a crawl_args <<< "$crawl_flags"
-    web_python_isolated "$wd/${kind}-pycache" \
-        timeout "${FILE_TIMEOUT:-300}" python3 "$WEB_CACHE_SCRIPTS/web_crawl.py" \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX="$wd/${kind}-pycache" \
+        exec setsid timeout "${FILE_TIMEOUT:-300}" python3 "$WEB_CACHE_SCRIPTS/web_crawl.py" \
         "http://127.0.0.1:$port" "$out" --max-nodes "${MAX_NODES:-400}" \
         "${crawl_args[@]}"
 }
@@ -344,7 +344,7 @@ web_wait_port_free() {
 web_stop_group() {
     local pid=$1 deadline
     [ -n "$pid" ] || return 0
-    kill -TERM -- -"$pid" 2>/dev/null || true
+    kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
     deadline=$(( $(gate_now_ms) + 1000 * ${SERVER_STOP_TIMEOUT:-5} ))
     while [ "$(gate_now_ms)" -lt "$deadline" ]; do
         kill -0 -- -"$pid" 2>/dev/null || break
@@ -363,10 +363,19 @@ web_stop_group() {
 # between its recorded PID and the lifecycle's signal handler.
 _web_boot_crawl() {
     local bin=$1 port=$2 wd=$3 out=$4 kind=$5 theory_flags=$6 crawl_flags=$7
-    local log="$wd/${kind}_server.log" pid= ok= deadline remaining probe_timeout rc
+    local log="$wd/${kind}_server.log" pid= crawler= probe= ok= deadline remaining probe_timeout rc
     local started ready finished stopped
     started=$(gate_now_ms)
-    trap 'web_stop_group "$pid"; rm -rf "$wd"; exit 130' HUP INT TERM
+    trap '
+        if [ -n "$probe" ]; then
+            kill "$probe" 2>/dev/null || true
+            wait "$probe" 2>/dev/null || true
+        fi
+        web_stop_group "$crawler"
+        web_stop_group "$pid"
+        rm -rf "$wd"
+        exit 130
+    ' HUP INT TERM
     web_wait_port_free "$port" || {
         echo "  port $port not free before $kind server boot" >&2
         return 1
@@ -381,7 +390,11 @@ _web_boot_crawl() {
     deadline=$(( $(gate_now_ms) + 1000 * ${READY_TIMEOUT:-90} ))
     while remaining=$((deadline - $(gate_now_ms))); [ "$remaining" -gt 0 ]; do
         printf -v probe_timeout '%d.%03d' "$((remaining / 1000))" "$((remaining % 1000))"
-        if curl --max-time "$probe_timeout" -sf -o /dev/null "http://127.0.0.1:$port/"; then ok=1; break; fi
+        curl --max-time "$probe_timeout" -sf -o /dev/null "http://127.0.0.1:$port/" &
+        probe=$!
+        rc=0; wait "$probe" || rc=$?
+        probe=
+        if [ "$rc" -eq 0 ]; then ok=1; break; fi
         kill -0 "$pid" 2>/dev/null || break
         sleep 0.1
     done
@@ -397,8 +410,10 @@ _web_boot_crawl() {
     ready=$(gate_now_ms)
     ( [ -z "${WEB_CACHE_LOCK_FD:-}" ] || exec {WEB_CACHE_LOCK_FD}>&-
       web_exec_crawler "$port" "$wd" "$out" "$kind" "$crawl_flags"
-    ) 2>>"$log"
-    rc=$?
+    ) 2>>"$log" &
+    crawler=$!
+    rc=0; wait "$crawler" || rc=$?
+    crawler=
     finished=$(gate_now_ms)
     web_stop_group "$pid"
     pid=
