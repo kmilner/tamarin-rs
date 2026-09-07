@@ -2,11 +2,12 @@
 """Semantic normalizers for the web-parity gate (RS interactive UI vs HS).
 
 The parity bar is *structural / semantic* equivalence for the markup routes,
-NOT byte-identity: we canonicalize away whitespace, attribute order, JSON key
-order, and the genuinely nondeterministic env fields (theory idx, timestamps,
+NOT byte-identity: we normalize text-node boundaries, JSON key order,
+and the nondeterministic env fields (theory idx, timestamps,
 temp/cache-dir prefixes, absolute load paths).  What survives must match:
 element structure (including syntax/status highlighting), attributes (including
-inline styles), visible text, link hrefs + text, form actions, embedded resource
+inline styles and attribute/class order), interior text whitespace, visible
+text, link hrefs + text, form actions, embedded resource
 URLs and JSON values.
 
 The graph routes and the text/plain routes are held to byte-identity — the port
@@ -100,10 +101,10 @@ class _Canon(HTMLParser):
     """Build a canonical token stream from an HTML fragment/page.
 
     - element structure retained, with HTML void tags represented once
-    - attributes sorted, values idx-normalized, `class` tokens sorted,
-      boolean attrs represented by empty values
-    - runs of whitespace (incl. &nbsp;, already unescaped by the parser)
-      collapse to a single space; whitespace-only text between tags dropped
+    - attribute/class order and values retained, apart from environment fields
+      and boolean attrs represented by empty values
+    - interior text whitespace retained; text-node edges trimmed and
+      whitespace-only text between tags dropped
     """
 
     def __init__(self, workdirs=()):
@@ -118,25 +119,13 @@ class _Canon(HTMLParser):
             return
         text = "".join(self._pending_text)
         self._pending_text = []
-        text = " ".join(norm_env(text, self.workdirs).split())
+        text = norm_env(text, self.workdirs).strip()
         if text:
             self.parts.append("T:" + text)
 
-    def _canon_attrs(self, attrs):
-        out = []
-        for k, v in attrs:
-            if v is None:
-                v = ""
-            v = norm_env(v, self.workdirs)
-            if k == "class":
-                v = " ".join(sorted(v.split()))
-            out.append((k, v))
-        out.sort()
-        return out
-
     def handle_starttag(self, tag, attrs):
         self._flush_text()
-        attrs = ",".join(f"{k}={v}" for k, v in self._canon_attrs(attrs))
+        attrs = ",".join(f"{k}={norm_env(v or '', self.workdirs)}" for k, v in attrs)
         self.parts.append(f"<{tag} {attrs}>")
         if tag not in _VOID_TAGS:
             self._stack.append(tag)

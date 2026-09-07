@@ -114,6 +114,19 @@ class DiffArtifactNames(unittest.TestCase):
         self.assertEqual(WEB_DIFF.canon("text", "/tmp/tmp.literal/x"), "/tmp/tmp.literal/x")
         self.assertEqual(normalizer.prepare_workdirs(roots), ("/outer/inner", "/outer"))
 
+    def test_attribute_class_order_and_interior_whitespace_are_significant(self):
+        for a, b in [
+            ('<a href="x" class="link">x</a>', '<a class="link" href="x">x</a>'),
+            ('<b class="one two">x</b>', '<b class="two one">x</b>'),
+            ('<b class="one two">x</b>', '<b class="one  two">x</b>'),
+            ('<b>one two</b>', '<b>one  two</b>'),
+            ('<b>one two</b>', '<b>one\ntwo</b>'),
+        ]:
+            for kind in ('html', 'json'):
+                left, right = (a, b) if kind == 'html' else (json.dumps({'html': a}), json.dumps({'html': b}))
+                self.assertNotEqual(WEB_DIFF.canon(kind, left), WEB_DIFF.canon(kind, right))
+        self.assertEqual(WEB_DIFF.canon('html', '<b> one </b>'), WEB_DIFF.canon('html', '<b>one</b>'))
+
     def test_layout_is_preserved_and_void_tag_spellings_agree(self):
         canonical = lambda s: WEB_DIFF.canon("html", s)
         self.assertEqual(canonical("a<br>b"), canonical("a<br/>b"))
