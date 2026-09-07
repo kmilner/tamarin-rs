@@ -50,6 +50,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # server, with their own SERVER_MEM_KB cap.)
 [ -r "$script_dir/gate_common.sh" ] || { echo "web_parity: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+gate_started=$(gate_now_ms)
+trap 'echo "TIMING web_gate total_ms=$(( $(gate_now_ms) - gate_started ))" >&2' EXIT
 [ -r "$script_dir/web_cache.sh" ] || { echo "web_parity: missing $script_dir/web_cache.sh" >&2; exit 2; }
 . "$script_dir/web_cache.sh"
 

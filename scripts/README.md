@@ -179,7 +179,11 @@ walks the RS test harness's ladder because its captures must use the maude
   capture contract and therefore shares the same Haskell cache profile.
   `TIMING web`, `TIMING crawl`, and `TIMING compare` lines report
   startup, initial pages, autoproving, sitemap discovery, final page fetching,
-  manifest writing/loading, and comparison. Times are milliseconds.
+  manifest writing/loading, comparison, and shutdown. Each server lifecycle
+  reports its total; `TIMING web_gate total_ms` reports the whole invocation,
+  including setup and bookkeeping. The proof gate likewise reports
+  `TIMING proof total_ms`. Times are milliseconds. Server lifecycle checks
+  poll every 100 ms; timeout settings remain in seconds.
   Run on server changes. `ALLOWLIST=` is REQUIRED (one
   corpus-relative path per line; `ALLOWLIST=seed` is the built-in 2-file smoke
   list, and the full cached set is the milestone sweep) — it used to fall back

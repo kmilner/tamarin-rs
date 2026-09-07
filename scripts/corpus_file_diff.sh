@@ -42,6 +42,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # maude resolver.
 [ -r "$script_dir/gate_common.sh" ] || { echo "corpus_file_diff: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+gate_started=$(gate_now_ms)
+trap 'echo "TIMING proof total_ms=$(( $(gate_now_ms) - gate_started ))" >&2' EXIT
 # Heavy-subprocess guard, the same discipline wf_gate.sh / pretty_gate.sh use:
 # every HS/RS child inherits its own 24 GiB ceiling (verified: GHC's RTS falls
 # back to a smaller reservation rather than failing to start under the cap).

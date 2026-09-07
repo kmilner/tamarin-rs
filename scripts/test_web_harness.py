@@ -644,10 +644,30 @@ test -s "$t/cache/PROFILE"
 '''
         )
 
+    def test_port_polling_uses_short_sleeps_and_elapsed_deadline(self):
+        run_shell(r'''
+set -e
+. scripts/web_cache.sh
+# Model 100 ms sleeps and 200 ms probes without a wall-clock-sensitive test.
+echo 0 > "$HARNESS_TMP/clock"
+gate_now_ms() { cat "$HARNESS_TMP/clock"; }
+sleep() {
+    test "$1" = 0.1
+    echo "$(( $(gate_now_ms) + 100 ))" > "$HARNESS_TMP/clock"
+}
+web_port_free() {
+    echo "$(( $(gate_now_ms) + 200 ))" > "$HARNESS_TMP/clock"
+    return 1
+}
+if PORT_FREE_TIMEOUT=1 web_wait_port_free 3021; then exit 1; fi
+test "$(gate_now_ms)" = 1200
+''')
+
     def test_web_shutdown_waits_for_the_complete_process_group(self):
         run_shell(
             r'''
 set -e
+. scripts/gate_common.sh
 . scripts/web_cache.sh
 setsid bash -c 'trap "" TERM; sleep 30 & echo $! > "$1/child"' _ "$HARNESS_TMP" &
 leader=$!

@@ -331,22 +331,24 @@ finally:
 PY
 }
 
+# Poll at 100 ms; timeout settings remain in seconds.
 web_wait_port_free() {
-    local port=$1 i
-    for ((i=0; i<${PORT_FREE_TIMEOUT:-30}; i++)); do
+    local port=$1 deadline=$(( $(gate_now_ms) + 1000 * ${PORT_FREE_TIMEOUT:-30} ))
+    while [ "$(gate_now_ms)" -lt "$deadline" ]; do
         web_port_free "$port" && return 0
-        sleep 1
+        sleep 0.1
     done
     return 1
 }
 
 web_stop_group() {
-    local pid=$1 i
+    local pid=$1 deadline
     [ -n "$pid" ] || return 0
     kill -TERM -- -"$pid" 2>/dev/null || true
-    for ((i=0; i<${SERVER_STOP_TIMEOUT:-5}; i++)); do
+    deadline=$(( $(gate_now_ms) + 1000 * ${SERVER_STOP_TIMEOUT:-5} ))
+    while [ "$(gate_now_ms)" -lt "$deadline" ]; do
         kill -0 -- -"$pid" 2>/dev/null || break
-        sleep 1
+        sleep 0.1
     done
     if kill -0 -- -"$pid" 2>/dev/null; then
         kill -KILL -- -"$pid" 2>/dev/null || true
@@ -361,8 +363,8 @@ web_stop_group() {
 # between its recorded PID and the lifecycle's signal handler.
 _web_boot_crawl() {
     local bin=$1 port=$2 wd=$3 out=$4 kind=$5 theory_flags=$6 crawl_flags=$7
-    local log="$wd/${kind}_server.log" pid= ok= i rc
-    local started ready finished
+    local log="$wd/${kind}_server.log" pid= ok= deadline remaining probe_timeout rc
+    local started ready finished stopped
     started=$(gate_now_ms)
     trap 'web_stop_group "$pid"; rm -rf "$wd"; exit 130' HUP INT TERM
     web_wait_port_free "$port" || {
@@ -376,10 +378,12 @@ _web_boot_crawl() {
       web_exec_server "$bin" "$port" "$wd" "$theory_flags"
     ) >"$log" 2>&1 &
     pid=$!
-    for ((i=0; i<${READY_TIMEOUT:-90}; i++)); do
-        if curl -sf -o /dev/null "http://127.0.0.1:$port/"; then ok=1; break; fi
+    deadline=$(( $(gate_now_ms) + 1000 * ${READY_TIMEOUT:-90} ))
+    while remaining=$((deadline - $(gate_now_ms))); [ "$remaining" -gt 0 ]; do
+        printf -v probe_timeout '%d.%03d' "$((remaining / 1000))" "$((remaining % 1000))"
+        if curl --max-time "$probe_timeout" -sf -o /dev/null "http://127.0.0.1:$port/"; then ok=1; break; fi
         kill -0 "$pid" 2>/dev/null || break
-        sleep 1
+        sleep 0.1
     done
     if [ -z "$ok" ]; then
         echo "  $kind server not ready ($wd)" >&2
@@ -396,9 +400,6 @@ _web_boot_crawl() {
     ) 2>>"$log"
     rc=$?
     finished=$(gate_now_ms)
-    printf 'TIMING web %s %s startup_ms=%s crawl_ms=%s\n' "$kind" "$wd" \
-        "$((ready-started))" "$((finished-ready))" >&2
-    grep '^TIMING crawl ' "$log" >&2 || true
     web_stop_group "$pid"
     pid=
     if [ "$rc" -ne 0 ]; then
@@ -410,8 +411,12 @@ _web_boot_crawl() {
     fi
     if ! web_wait_port_free "$port"; then
         echo "  port $port still occupied after $kind server shutdown" >&2
-        return 1
+        rc=1
     fi
+    stopped=$(gate_now_ms)
+    printf 'TIMING web %s %s startup_ms=%s crawl_ms=%s shutdown_ms=%s total_ms=%s\n' "$kind" "$wd" \
+        "$((ready-started))" "$((finished-ready))" "$((stopped-finished))" "$((stopped-started))" >&2
+    grep '^TIMING crawl ' "$log" >&2 || true
     return "$rc"
 }
 
