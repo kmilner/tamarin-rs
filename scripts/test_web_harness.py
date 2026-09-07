@@ -83,7 +83,7 @@ class DiffArtifactNames(unittest.TestCase):
             return WEB_DIFF.canon("json", json.dumps(value))
         self.assertNotEqual(canonical({"path": "<b>x</b>"}), canonical({"path": "<b >x</b>"}))
         self.assertEqual(canonical({"alert": "<b>x</b>\ny"}),
-                         canonical({"alert": "<b >x</b><br/>y"}))
+                         canonical({"alert": "<b>x</b><br>y"}))
         self.assertNotEqual(canonical({"alert": "x\ny"}), canonical({"alert": "x y"}))
 
     def test_json_pair_skips_equal_html_and_preserves_scalar_distinctions(self):
@@ -125,11 +125,23 @@ class DiffArtifactNames(unittest.TestCase):
             for kind in ('html', 'json'):
                 left, right = (a, b) if kind == 'html' else (json.dumps({'html': a}), json.dumps({'html': b}))
                 self.assertNotEqual(WEB_DIFF.canon(kind, left), WEB_DIFF.canon(kind, right))
-        self.assertEqual(WEB_DIFF.canon('html', '<b> one </b>'), WEB_DIFF.canon('html', '<b>one</b>'))
+        self.assertNotEqual(WEB_DIFF.canon('html', '<b> one </b>'), WEB_DIFF.canon('html', '<b>one</b>'))
 
-    def test_layout_is_preserved_and_void_tag_spellings_agree(self):
+    def test_html_serialization_and_boundary_whitespace_are_significant(self):
+        for a, b in [
+            ('<input disabled>', '<input disabled="">'),
+            ("<a href='x'>x</a>", '<a href="x">x</a>'),
+            ('<b>x</b>', '<b >x</b>'),
+            ('<b>x</b>', ' <b>x</b> '),
+            ('<b>x</b><i>y</i>', '<b>x</b> <i>y</i>'),
+            ('&#39;', '&apos;'), ('&gt;', '>'),
+            ('<a title="Tamarin version x" href="one">', '<a title="Tamarin version x" href="two">'),
+        ]:
+            self.assertNotEqual(WEB_DIFF.canon('html', a), WEB_DIFF.canon('html', b))
+
+    def test_layout_and_void_tag_spellings_are_preserved(self):
         canonical = lambda s: WEB_DIFF.canon("html", s)
-        self.assertEqual(canonical("a<br>b"), canonical("a<br/>b"))
+        self.assertNotEqual(canonical("a<br>b"), canonical("a<br/>b"))
         self.assertNotEqual(canonical("a<br>b"), canonical("a b"))
         self.assertNotEqual(canonical("<pre>a</pre>"), canonical("a"))
         self.assertEqual(
@@ -235,32 +247,31 @@ class DiffArtifactNames(unittest.TestCase):
         rs_root = '/cache/web&oracle"rs\'branch'
         roots = (hs_root, rs_root)
 
-        def escaped(root, apostrophe):
-            return html.escape(root, quote=True).replace("&#x27;", apostrophe)
+        def escaped(root):
+            return html.escape(root, quote=True).replace("&#x27;", "&#39;")
 
-        for apostrophe in ("&#x27;", "&#39;", "&apos;"):
-            hs = WEB_DIFF.canon(
+        hs = WEB_DIFF.canon(
+            "html",
+            f'<a href="{escaped(hs_root)}/x">'
+            f"{escaped(hs_root)}</a>",
+            roots,
+        )
+        rs = WEB_DIFF.canon(
+            "html",
+            f'<a href="{escaped(rs_root)}/x">'
+            f"{escaped(rs_root)}</a>",
+            roots,
+        )
+        self.assertEqual(hs, '<a href="/WEB-WORKDIR/x">\nT:/WEB-WORKDIR\n</a>')
+        self.assertEqual(rs, hs)
+        self.assertNotEqual(
+            WEB_DIFF.canon(
                 "html",
-                f'<a href="{escaped(hs_root, apostrophe)}/x">'
-                f"{escaped(hs_root, apostrophe)}</a>",
+                f'<a href="{escaped(rs_root)}/x">changed</a>',
                 roots,
-            )
-            rs = WEB_DIFF.canon(
-                "html",
-                f'<a href="{escaped(rs_root, apostrophe)}/x">'
-                f"{escaped(rs_root, apostrophe)}</a>",
-                roots,
-            )
-            self.assertEqual(hs, "<a href=/WEB-WORKDIR/x>\nT:/WEB-WORKDIR\n</a>")
-            self.assertEqual(rs, hs)
-            self.assertNotEqual(
-                WEB_DIFF.canon(
-                    "html",
-                    f'<a href="{escaped(rs_root, apostrophe)}/x">changed</a>',
-                    roots,
-                ),
-                hs,
-            )
+            ),
+            hs,
+        )
 
         hs_json_root = '/cache/web\\oracle"hs'
         rs_json_root = '/cache/web\\oracle"rs'

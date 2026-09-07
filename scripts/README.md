@@ -184,8 +184,9 @@ walks the RS test harness's ladder because its captures must use the maude
   including setup and bookkeeping. The proof gate likewise reports
   `TIMING proof total_ms`. Times are milliseconds. Server lifecycle checks
   poll every 100 ms; timeout settings remain in seconds.
-  HTML comparison retains attribute order, class order and interior text
-  whitespace. Only text-node edges and whitespace-only nodes are trimmed.
+  HTML comparison retains opening-tag spelling (including attribute quoting
+  and void tags), entity spelling, attribute/class order, and all text
+  whitespace. Malformed or omitted Haskell closing tags are still repaired.
   JSON responses compare fields individually, skipping HTML parsing for equal
   strings. Only `html`, `title`, and the UI's HTML `alert` messages are parsed
   as markup; other strings remain text. Work-directory normalization uses

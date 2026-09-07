@@ -2,11 +2,11 @@
 """Semantic normalizers for the web-parity gate (RS interactive UI vs HS).
 
 The parity bar is *structural / semantic* equivalence for the markup routes,
-NOT byte-identity: we normalize text-node boundaries, JSON key order,
+NOT byte-identity: we normalize malformed closing tags, JSON key order,
 and the nondeterministic env fields (theory idx, timestamps,
 temp/cache-dir prefixes, absolute load paths).  What survives must match:
 element structure (including syntax/status highlighting), attributes (including
-inline styles and attribute/class order), interior text whitespace, visible
+inline styles and attribute/class order), all text whitespace, visible
 text, link hrefs + text, form actions, embedded resource
 URLs and JSON values.
 
@@ -19,6 +19,7 @@ own trailing spaces in the theory echo, are divergences the gate must see.
 
 Used by web_diff.py.  Pure stdlib (html.parser, json, re).
 """
+import html
 import json
 import re
 from functools import lru_cache
@@ -77,11 +78,23 @@ def prepare_workdirs(workdirs):
     return tuple(sorted(set(filter(None, workdirs)), key=len, reverse=True))
 
 
-def norm_env(s: str, workdirs=()) -> str:
-    # Callers pass prepare_workdirs() output, not arbitrary path prefixes.
+@lru_cache(maxsize=16)
+def prepare_html_workdirs(workdirs):
+    # Both renderers use Blaze's &#39; spelling for apostrophes. Normalize
+    # exact roots in both raw script text and escaped HTML text/attributes.
+    roots = prepare_workdirs(workdirs)
+    escaped = tuple(html.escape(root, quote=True).replace("&#x27;", "&#39;") for root in roots)
+    return prepare_workdirs(roots + escaped)
+
+
+def norm_paths(s: str, workdirs=()) -> str:
     for workdir in workdirs:
         s = s.replace(workdir, "/WEB-WORKDIR")
-    s = norm_indices(s)
+    return norm_indices(s)
+
+
+def norm_env(s: str, workdirs=()) -> str:
+    s = norm_paths(s, workdirs)
     if len(s) > 512 or _HAS_VOLATILE.search(s):
         for rx, rep in _VOLATILE:
             s = rx.sub(rep, s)
@@ -92,7 +105,8 @@ def norm_env(s: str, workdirs=()) -> str:
 # ---------------------------------------------------------------------------
 
 # HTML void elements have no closing tag, regardless of whether the serializer
-# spells their opening tag as <br> or <br/>.
+# spells their opening tag as <br> or <br/>. Those spellings are compared
+# exactly; this set only prevents synthesizing invalid closing tags.
 _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input",
               "link", "meta", "param", "source", "track", "wbr"}
 
@@ -101,15 +115,13 @@ class _Canon(HTMLParser):
     """Build a canonical token stream from an HTML fragment/page.
 
     - element structure retained, with HTML void tags represented once
-    - attribute/class order and values retained, apart from environment fields
-      and boolean attrs represented by empty values
-    - interior text whitespace retained; text-node edges trimmed and
-      whitespace-only text between tags dropped
+    - original opening tags retained, including quoting and void-tag spelling
+    - all text whitespace and character-reference spellings retained
     """
 
     def __init__(self, workdirs=()):
-        super().__init__(convert_charrefs=True)
-        self.workdirs = prepare_workdirs(tuple(workdirs))
+        super().__init__(convert_charrefs=False)
+        self.workdirs = prepare_html_workdirs(tuple(workdirs))
         self.parts = []
         self._stack = []          # open non-void tags
         self._pending_text = []
@@ -119,14 +131,13 @@ class _Canon(HTMLParser):
             return
         text = "".join(self._pending_text)
         self._pending_text = []
-        text = norm_env(text, self.workdirs).strip()
+        text = norm_env(text, self.workdirs)
         if text:
             self.parts.append("T:" + text)
 
     def handle_starttag(self, tag, attrs):
         self._flush_text()
-        attrs = ",".join(f"{k}={norm_env(v or '', self.workdirs)}" for k, v in attrs)
-        self.parts.append(f"<{tag} {attrs}>")
+        self.parts.append(norm_paths(self.get_starttag_text(), self.workdirs))
         if tag not in _VOID_TAGS:
             self._stack.append(tag)
 
@@ -155,6 +166,12 @@ class _Canon(HTMLParser):
     def handle_data(self, data):
         self._pending_text.append(data)
 
+    def handle_entityref(self, name):
+        self.handle_data(f"&{name};")
+
+    def handle_charref(self, name):
+        self.handle_data(f"&#{name};")
+
     def result(self):
         self._flush_text()
         # Close any tags still open at EOF (implicit end-of-document close), so
@@ -166,9 +183,8 @@ class _Canon(HTMLParser):
 
 
 def canon_html(body: str, workdirs=()) -> str:
-    # HTMLParser decodes character references before handing us text and
-    # attributes. Normalize those semantic values instead of trying to predict
-    # whether a serializer chose &apos;, &#39;, &#x27;, or another legal spelling.
+    # Parse only to repair unmatched/omitted closes. Original opening tags,
+    # text and entity spellings are retained for strict serializer comparison.
     p = _Canon(workdirs)
     try:
         p.feed(body)
