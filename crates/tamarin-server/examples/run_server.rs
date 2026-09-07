@@ -48,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         stop_on_trace: None,
         dot_path: "dot".to_string(),
         json_path: None,
+        auto_sources: false,
         ndc_check: true,
         lemmas_to_prove: Vec::new(),
         parser_flags: Vec::new(),

@@ -1194,13 +1194,14 @@ set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
 t=$HARNESS_TMP
-printf 'auto.spthy\t--auto-sources\ndefine.spthy\t-D=A --stop-on-trace=seqdfs\n' \
+printf 'diff.spthy\t--diff\nauto.spthy\t--auto-sources\ndefine.spthy\t-D=A --stop-on-trace=seqdfs\n' \
     > "$t/flags.tsv"
 WEB_FLAGS_MAP="$t/flags.tsv"
-if web_flags_for auto.spthy 2>"$t/error"; then
+if web_flags_for diff.spthy 2>"$t/error"; then
     exit 1
 fi
-grep -F 'unsupported interactive flag for auto.spthy: --auto-sources' "$t/error"
+grep -F 'unsupported interactive flag for diff.spthy: --diff' "$t/error"
+test "$(web_flags_for auto.spthy)" = '--auto-sources'
 test "$(web_flags_for define.spthy)" = '-D=A --stop-on-trace=seqdfs'
 WEB_FLAGS_MAP="$t/missing.tsv"
 if web_flags_for define.spthy 2>"$t/error"; then

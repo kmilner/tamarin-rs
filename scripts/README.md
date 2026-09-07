@@ -608,8 +608,8 @@ then upstream behaviour moving under them.
   `testParser/define.spthy` and three `thesis-LaraSchmid-evoting` theories in
   front of every gate that reads this file — and take their bare branch out of
   reach in exchange. Web gates use the separate `web_flags.tsv` contract, so
-  batch-only `--auto-sources` and `--diff` recipes never leak into one
-  interactive server while the other runs bare. The other 28 still prove one
+  `--auto-sources` reaches both interactive loaders, while batch-only
+  `--diff` recipes cannot leak into one server while the other runs bare. The other 28 still prove one
   branch only. The value must
   be ATTACHED (`-D=A`, never `-D A`): `-D` is a cmdargs `flagOpt` in the
   Haskell binary, which reads a detached value as a positional input file,

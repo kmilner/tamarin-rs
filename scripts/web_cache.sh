@@ -580,7 +580,7 @@ web_flags_for() {
     [ -z "$raw" ] || read -r -a words <<< "$raw"
     for word in "${words[@]}"; do
         case "$word" in
-            -D=*|--stop-on-trace=*|--no-ndc|--quit-on-warning) kept+=("$word");;
+            -D=*|--stop-on-trace=*|--no-ndc|--quit-on-warning|--auto-sources) kept+=("$word");;
             *) echo "web_flags_for: unsupported interactive flag for $1: $word" >&2; return 1;;
         esac
     done
