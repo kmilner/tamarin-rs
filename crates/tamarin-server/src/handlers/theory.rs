@@ -369,10 +369,8 @@ fn title_for(
         // i.e. render the proof method stored at the node the path resolves
         // to.  `resolveProofPath` here == `navigate_at` on the live tree;
         // `psMethod . root` == that node's `.method`; `prettyProofMethod`
-        // == `method_label`.  (`renderHtmlDoc` wraps operators in `hl_*`
-        // spans the parity gate unwraps, so plain `method_label` compares
-        // equal.)  Falls back to "None" when the tree/path is unresolvable,
-        // exactly as HS's `Nothing` arm does.
+        // renders through HtmlDoc. Falls back to "None" for an unresolvable
+        // tree/path, exactly as HS's `Nothing` arm does.
         Proof { lemma, sub } => match sub.last() {
             // null (last p): "Method: " ++ methodName l p
             Some(s) if s.is_empty() => {
@@ -383,33 +381,17 @@ fn title_for(
                     .transpose()?
                     .flatten()
                     .map(|method| {
-                        // HS `methodName` = `renderHtmlDoc .
-                        // prettyProofMethod` — the HtmlDoc LAYOUT
-                        // (100/67, entity fill-widths, col 0): a
-                        // long method title WRAPS at the same
-                        // positions as HS's (the gate collapses
-                        // the newline to a space; the break
-                        // position is what must match).
-                        let _guard = tamarin_theory::pretty_hpj::HtmlEntityWidthGuard::enable();
-                        tamarin_theory::pretty_theory::pretty_proof_method_doc(&method).render_with(
-                            tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
-                            tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
+                        use tamarin_theory::pretty_hpj::{
+                            postprocess_html, HtmlDocGuard, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON,
+                        };
+                        let _html = HtmlDocGuard::enable();
+                        postprocess_html(
+                            &tamarin_theory::pretty_theory::pretty_proof_method_doc(&method)
+                                .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON),
                         )
                     })
                     .unwrap_or_else(|| "None".to_string());
-                // HS `methodName` = `renderHtmlDoc . prettyProofMethod` and
-                // `renderHtmlDoc` (`Text/PrettyPrint/Html.hs:151-153`) escapes HTML
-                // entities in every text token via the `Document (HtmlDoc d)`
-                // instance (`Text/PrettyPrint/Html.hs:102-105`, whose `char`,
-                // `text` and `zeroWidthText` route through
-                // `escapeHtmlEntities`, Html.hs:140-149), so a
-                // method that mentions a tuple renders `&lt;B, A, …&gt;` in the
-                // JSON `title`, not a raw `<…>` (which the semantic canonicalizer
-                // would otherwise parse as a bogus HTML element).  Mirror that
-                // escaping here; the operator `hl_*` spans / `<br/>` that
-                // `renderHtmlDoc` also adds are unwrapped by the parity gate, so
-                // entity escaping is the only load-bearing part.
-                format!("Method: {}", crate::handlers::root::html_escape(&name))
+                format!("Method: {name}")
             }
             // otherwise: "Case: " ++ last p
             Some(s) => format!("Case: {}", s),

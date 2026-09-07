@@ -73,6 +73,25 @@ def run_shell(script, *, temp_dir=None, env=None, check=True):
 
 
 class DiffArtifactNames(unittest.TestCase):
+    def test_highlighting_and_proof_status_are_significant(self):
+        for kind in ("html", "json"):
+            def canonical(body):
+                if kind == "json":
+                    body = json.dumps({"title": body})
+                return WEB_DIFF.canon(kind, body)
+
+            plain = canonical("lemma example")
+            highlighted = canonical('<span class="hl_keyword">lemma</span> example')
+            self.assertNotEqual(plain, highlighted)
+            self.assertNotEqual(
+                canonical('<span class="hl_good">lemma example</span>'),
+                canonical('<span class="hl_bad">lemma example</span>'),
+            )
+            self.assertNotEqual(
+                canonical('<span style="color: red">example</span>'),
+                canonical('<span style="color: green">example</span>'),
+            )
+
     def test_equal_bodies_skip_canonicalization_but_metadata_still_matters(self):
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)

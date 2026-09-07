@@ -3,11 +3,12 @@
 
 The parity bar is *structural / semantic* equivalence for the markup routes,
 NOT byte-identity: we canonicalize away whitespace, attribute order, JSON key
-order, highlight `<span class="hl_*">` wrappers, `<br/>`/`<pre>` cosmetic
+order, `<br/>`/`<pre>` cosmetic
 markup, and the genuinely nondeterministic env fields (theory idx, timestamps,
 temp/cache-dir prefixes, absolute load paths).  What survives must match:
-element structure, visible text, link hrefs + text, form actions, embedded
-resource URLs and JSON values.
+element structure (including syntax/status highlighting), attributes (including
+inline styles), visible text, link hrefs + text, form actions, embedded resource
+URLs and JSON values.
 
 The graph routes and the text/plain routes are held to byte-identity — the port
 emits `Text.Dot`'s bytes through the same `showDot` upstream uses, and serves
@@ -96,25 +97,14 @@ def norm_env(s: str, workdirs=()) -> str:
 _UNWRAP_TAGS = {"pre", "html", "head", "body"}
 # Void/among tags treated as a whitespace break (dropped, contribute a space).
 _BREAK_TAGS = {"br"}
-# Attributes ignored during comparison (volatile / cosmetic only).
-_IGNORE_ATTRS = {"style"}
-
-
-def _is_hl_span(tag, attrs_dict):
-    if tag != "span":
-        return False
-    cls = attrs_dict.get("class", "")
-    toks = cls.split()
-    return bool(toks) and all(t.startswith("hl_") for t in toks)
 
 
 class _Canon(HTMLParser):
     """Build a canonical token stream from an HTML fragment/page.
 
-    - highlight `<span class="hl_*">` wrappers are unwrapped (text kept)
     - <pre> unwrapped, <br> -> space
     - attributes sorted, values idx-normalized, `class` tokens sorted,
-      `style` and empty attrs dropped
+      boolean attrs represented by empty values
     - runs of whitespace (incl. &nbsp;, already unescaped by the parser)
       collapse to a single space; whitespace-only text between tags dropped
     """
@@ -150,8 +140,6 @@ class _Canon(HTMLParser):
     def _canon_attrs(self, attrs):
         out = []
         for k, v in attrs:
-            if k in _IGNORE_ATTRS:
-                continue
             if v is None:
                 v = ""
             v = norm_env(v, self.workdirs)
@@ -163,12 +151,11 @@ class _Canon(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         self._flush_text()
-        ad = {k: (v or "") for k, v in attrs}
         if tag in _BREAK_TAGS:
             # treat as whitespace
             self._pending_text.append(" ")
             return
-        if tag in _UNWRAP_TAGS or _is_hl_span(tag, ad):
+        if tag in _UNWRAP_TAGS:
             self._stack.append((tag, False))
             return
         self.tokens.append(("o", tag, self._canon_attrs(attrs)))
@@ -179,8 +166,7 @@ class _Canon(HTMLParser):
         if tag in _BREAK_TAGS:
             self._pending_text.append(" ")
             return
-        ad = {k: (v or "") for k, v in attrs}
-        if tag in _UNWRAP_TAGS or _is_hl_span(tag, ad):
+        if tag in _UNWRAP_TAGS:
             return
         self.tokens.append(("o", tag, self._canon_attrs(attrs)))
         self.tokens.append(("c", tag))
@@ -269,13 +255,8 @@ def _canon_json_val(v, key=None, workdirs=()):
     if isinstance(v, str):
         # The `html` and `title` fields are ALWAYS canonicalized as HTML
         # (even when the fragment happens to be tag-free, e.g.
-        # "this is a mistake" or "Lemma: X"), otherwise a tag-free value
-        # would canon differently from a `<br/>`-postprocessed / highlighted
-        # one and diverge spuriously.  HS builds the `title` for a proof
-        # method via `renderHtmlDoc . prettyProofMethod` — it carries `hl_*`
-        # operator spans — whereas the Rust server emits the same title as
-        # plain text; forcing both through `canon_html` makes them compare
-        # equal (the spans unwrap to the same text).
+        # "this is a mistake" or "Lemma: X"). Both servers render proof-method
+        # titles as HTML, including syntax highlighting and line breaks.
         if key in ("html", "title") or _HTMLISH.search(v):
             return canon_html(v, workdirs)
         return norm_env(v, workdirs)

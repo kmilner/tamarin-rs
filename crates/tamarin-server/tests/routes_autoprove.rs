@@ -60,6 +60,20 @@ async fn test_autoprove_redirect_bodies_match_haskell() {
         haskell_capture("autoprove.json"),
     );
 
+    let method = s.get("/thy/trace/2/main/proof/debug/_").await;
+    assert_eq!(method.status(), 200);
+    let body: serde_json::Value = method.json().await.expect("JSON response");
+    let title = body["title"].as_str().expect("method title");
+    assert!(
+        title.starts_with("Method: <span class=\"hl_keyword\">"),
+        "method titles must retain syntax highlighting: {title}"
+    );
+    assert!(title.ends_with("<br/>\n"));
+
+    let overview = s.get("/thy/trace/2/overview/proof/debug").await;
+    let html = overview.text().await.expect("overview HTML");
+    assert!(html.contains("<span class=\"hl_good\"><span class=\"hl_keyword\">lemma</span> debug"));
+
     for (url, capture) in [
         (
             "/thy/trace/2/autoprove/idfs/0/False/proof/debug",

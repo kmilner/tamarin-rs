@@ -220,14 +220,25 @@ fn cases_info(n_cases: usize, n_chains: usize) -> String {
 /// HS `lemmaIndex` (`src/Web/Theory.hs:302-335`): the lemma header
 /// (`lemma Name [attrs]: <tq> "<formula>"`), the `edit lemma`/`delete lemma`
 /// links, the `proofIndex` tree, then a trailing `add lemma`.  The header +
-/// edit/delete are wrapped by HS in `markStatus (root color)` — a `hl_*` span
-/// the normalizer unwraps, so we emit them plain.
+/// edit/delete share the proof root's status highlighting.
 fn lemma_index(
     out: &mut String,
     entry: &TheoryEntry,
     l: &tamarin_theory::theory::Lemma,
 ) -> Result<(), String> {
     let idx = entry.idx;
+    let index_root = entry
+        .proof_state
+        .as_ref()
+        .map_or(Ok(None), |proof| proof.proof_index_root(&l.name))?;
+    let cx = PpCtx {
+        idx,
+        lemma: &l.name,
+        tq: l.trace_quantifier,
+    };
+    let (open, close) = index_root
+        .as_ref()
+        .map_or(("", ""), |root| mark_wrap(&cx, root));
     let tq = match l.trace_quantifier {
         TraceQuantifier::AllTraces => "all-traces",
         TraceQuantifier::ExistsTrace => "exists-trace",
@@ -260,6 +271,7 @@ fn lemma_index(
     // `bold`/name text is entity-escaped; `<->` contributes a single space, so
     // `editLink <-> " or " <-> deleteLink` renders `…edit</a>  or  <a…` (two
     // spaces around "or").
+    out.push_str(open);
     out.push_str(&format!(
         "{lemma} {name}{attrs}:\n",
         lemma = hpj::keyword_("lemma").render(),
@@ -270,25 +282,18 @@ fn lemma_index(
     out.push('\n');
     out.push_str(&format!(
         "<a class=\"internal-link edit\" href=\"/thy/trace/{idx}/main/edit/{n_url}\">edit lemma</a>  or  \
-         <a class=\"internal-link delete\" href=\"/thy/trace/{idx}/main/delete/{n_url}\">delete lemma</a>\n",
+         <a class=\"internal-link delete\" href=\"/thy/trace/{idx}/main/delete/{n_url}\">delete lemma</a>",
         idx = idx, n_url = n_url));
+    out.push_str(close);
+    out.push('\n');
     // `proofIndex l._lName tidx renderUrl mkRoute annPrf` — the annotated
     // proof tree, rendered by `prettyProofWith ppStep ppCase . insertPaths`.
-    let index_root = entry
-        .proof_state
-        .as_ref()
-        .map_or(Ok(None), |proof| proof.proof_index_root(&l.name));
     match index_root {
-        Ok(Some(root)) => {
-            let cx = PpCtx {
-                idx,
-                lemma: &l.name,
-                tq: l.trace_quantifier,
-            };
+        Some(root) => {
             let path: Vec<String> = Vec::new();
             pp_prf(out, &cx, &path, &root, 0);
         }
-        Ok(None) => {
+        None => {
             // No live proof state yet (lazily built): the lemma's root is a
             // fresh `Sorry Nothing`.  HS `proofIndex` of such a proof is
             // `ppCases (Sorry) [] = kwBy <> " " <> stepLink ["sorry-step"]`
@@ -303,7 +308,6 @@ fn lemma_index(
                 n_url = n_url
             ));
         }
-        Err(error) => return Err(error),
     }
     // `$-$ text "" $-$ addLink`.
     out.push_str("\n\n");
