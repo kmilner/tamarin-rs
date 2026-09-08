@@ -19,7 +19,7 @@ fn data_dir() -> PathBuf {
 }
 
 /// Each `/static/<p>` must serve `data/<p>`.  It must serve the exact bytes
-/// on disk, under the mime type that `ServeDir` infers.  Every page this
+/// on disk, plus PR #928’s lemma CSS until the submodule includes it. Every page this
 /// crate renders links to the two assets below.
 ///
 /// A missing `data/` is a misconfiguration.  It is not a reason to skip the
@@ -42,21 +42,47 @@ async fn test_static_assets_are_served_from_the_data_dir() {
             "javascript",
         ),
     ] {
-        let on_disk = std::fs::read_to_string(data_dir().join(rel)).unwrap_or_else(|e| {
+        let mut on_disk = std::fs::read_to_string(data_dir().join(rel)).unwrap_or_else(|e| {
             panic!(
                 "read {}: {e} — run ./setup.sh to initialise the submodule",
                 data_dir().join(rel).display()
             )
         });
+        if rel == "css/tamarin-prover-ui.css" {
+            on_disk.push_str(include_str!("../src/handlers/lemma_instructions.css"));
+        }
         let res = s.get(url).await;
         assert_eq!(res.status(), 200, "{url}");
         let ct = content_type(&res);
         assert!(ct.contains(mime), "{url}: expected {mime} mime, got {ct}");
+        let modified = res.headers()["last-modified"].clone();
         assert_eq!(
             res.text().await.expect("read"),
             on_disk,
-            "{url} must serve data/{rel} verbatim"
+            "{url} must serve data/{rel} with the upstream CSS fix"
         );
+        let cached = s
+            .client
+            .get(s.url(url))
+            .header("if-modified-since", modified)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(cached.status(), 304);
+        assert!(cached.bytes().await.unwrap().is_empty());
+        let head = s.client.head(s.url(url)).send().await.unwrap();
+        assert_eq!(head.status(), 200);
+        assert_eq!(head.headers()["content-length"], on_disk.len().to_string());
+        assert!(head.bytes().await.unwrap().is_empty());
+        let range = s
+            .client
+            .get(s.url(url))
+            .header("range", "bytes=0-5")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(range.status(), 206);
+        assert_eq!(range.bytes().await.unwrap(), &on_disk.as_bytes()[..6]);
     }
 }
 
@@ -77,6 +103,12 @@ async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
     std::fs::write(data.join("js/intdot-graph.es.js"), b"data-contents").unwrap();
     std::fs::write(data.join("js/ordinary.js"), b"ordinary-data").unwrap();
 
+    let patched_css = format!(
+        "custom {{ color: blue; }}{}",
+        include_str!("../src/handlers/lemma_instructions.css")
+    );
+    std::fs::write(data.join("css/tamarin-prover-ui.css"), &patched_css).unwrap();
+
     let s = start_server_with_theory_and("issue193.spthy", |cfg| {
         cfg.data_dir = data;
         cfg.frontend_dist = Some(dist);
@@ -96,6 +128,10 @@ async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
     let fallback = s.get("/static/js/ordinary.js").await;
     assert_eq!(fallback.status(), 200);
     assert_eq!(fallback.bytes().await.unwrap(), &b"ordinary-data"[..]);
+
+    let css = s.get("/static/css/tamarin-prover-ui.css").await;
+    assert_eq!(css.status(), 200);
+    assert_eq!(css.text().await.unwrap(), patched_css);
 
     drop(s);
     std::fs::remove_dir_all(root).unwrap();

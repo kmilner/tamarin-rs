@@ -101,6 +101,8 @@ pub struct ServerConfig {
     /// (`imgThyPath` → `renderGraphCode`, Web/Theory.hs:1404-1412, 1484-1491).
     /// `None` = flag absent, the `dot` pipeline above.
     pub json_path: Option<String>,
+    /// Generate a sources lemma when partial deconstructions remain.
+    pub auto_sources: bool,
     /// Run the no-deconstruction-chain check.
     pub ndc_check: bool,
     /// CLI `--prove`/`--lemma` selections copied into each theory.
@@ -122,6 +124,7 @@ impl ServerConfig {
             stop_on_trace: None,
             dot_path: "dot".to_string(),
             json_path: None,
+            auto_sources: false,
             ndc_check: true,
             lemmas_to_prove: Vec::new(),
             parser_flags: Vec::new(),

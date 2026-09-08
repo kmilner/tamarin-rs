@@ -9,7 +9,9 @@ import pathlib
 import socket
 import subprocess
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -21,6 +23,10 @@ URL_SPEC = importlib.util.spec_from_file_location("web_url_key", HERE / "web_url
 WEB_URL_KEY = importlib.util.module_from_spec(URL_SPEC)
 assert URL_SPEC.loader is not None
 URL_SPEC.loader.exec_module(WEB_URL_KEY)
+CRAWL_SPEC = importlib.util.spec_from_file_location("web_crawl", HERE / "web_crawl.py")
+WEB_CRAWL = importlib.util.module_from_spec(CRAWL_SPEC)
+assert CRAWL_SPEC.loader is not None
+CRAWL_SPEC.loader.exec_module(WEB_CRAWL)
 
 # Gate configuration is explicit test input, never ambient process state.
 # Keep ordinary tool discovery (notably PATH), but prevent a developer's cache
@@ -35,7 +41,7 @@ GATE_ENV_KEYS = set("""
     RS_FP RS_PATH RS_PORT SERVER_MEM_KB SERVER_STOP_TIMEOUT TAMARIN_RS_CACHE_ROOT
     TAM_RS_NO_AUTO_BUILD TIMEOUT WEB_CACHE_ROOT WEB_CRAWL_TIMEOUT WEB_FLAGS_MAP
     WEB_LEDGER WEB_ORACLE_SHA256 WEB_PRODUCER_PROTOCOL_FP WEB_TEST_PORT
-    WEB_WORK_ROOT
+    WEB_WORK_ROOT WEB_FETCH_JOBS
 """.split())
 
 
@@ -141,6 +147,129 @@ class ParserDiagnosticNormalization(unittest.TestCase):
 
 
 class DiffArtifactNames(unittest.TestCase):
+    def test_json_html_fields_follow_the_response_schema(self):
+        def canonical(value):
+            return WEB_DIFF.canon("json", json.dumps(value))
+        self.assertNotEqual(canonical({"path": "<b>x</b>"}), canonical({"path": "<b >x</b>"}))
+        self.assertNotEqual(canonical({"alert": "<b>x</b>\ny"}),
+                         canonical({"alert": "<b>x</b><br>y"}))
+        self.assertNotEqual(canonical({"alert": "x\ny"}), canonical({"alert": "x y"}))
+
+    def test_json_pair_skips_equal_html_and_preserves_scalar_distinctions(self):
+        import web_normalize as normalizer
+        left = {"html": "<b>same</b>", "title": "Title", "redirect": "/thy/trace/1/main"}
+        right = {**left, "redirect": "/thy/trace/2/main"}
+        with mock.patch.object(normalizer, "canon_html", wraps=normalizer.canon_html) as html:
+            a, b = normalizer.canon_json_pair(json.dumps(left), json.dumps(right))
+            self.assertEqual(a, b)
+            html.assert_not_called()
+        for a, b in [(True, 1), (1, 1.0), (0.0, -0.0), ({"x": 1}, {"y": 1}),
+                     ([1], [1, 2]), ({"html": "<b>x</b>"}, {"html": "<i>x</i>"})]:
+            left, right = normalizer.canon_json_pair(json.dumps(a), json.dumps(b))
+            self.assertNotEqual(left, right)
+        self.assertEqual(normalizer.canon_json_pair("not JSON", "null"),
+                         (normalizer.canon_json("not JSON"), normalizer.canon_json("null")))
+
+    def test_closing_tags_comments_and_doctypes_are_significant(self):
+        for body in ["one<!-- comment --> two", "one</stray> two", "one</br> two"]:
+            self.assertNotEqual(WEB_DIFF.canon("html", body), WEB_DIFF.canon("html", "one two"))
+        for a, b in [("<div><b>x</div>", "<div><b>x</b></div>"),
+                     ("<b>x", "<b>x</b>"),
+                     ("<!DOCTYPE html><html></html>", "<html></html>")]:
+            self.assertNotEqual(WEB_DIFF.canon("html", a), WEB_DIFF.canon("html", b))
+
+    def test_html_source_is_preserved_even_when_the_parser_ignores_it(self):
+        for body in ["<script>x", "<style>y", "<b>x</B >", "&amp", "&#39",
+                     "<?instruction x?>", "<![unknown]>", "<!-- unfinished",
+                     "α\r\n<b>x</b>\n尾", "<b/>tail"]:
+            self.assertEqual(WEB_DIFF.canon("html", body), body)
+        self.assertEqual(
+            WEB_DIFF.canon("html", '<p>Loaded at 12:34 from &quot;file&quot;)</p>'),
+            '<p>Loaded at #)</p>',
+        )
+
+    def test_workdir_preparation_and_legacy_literal_paths(self):
+        import web_normalize as normalizer
+        roots = ("/outer", "/outer/inner", "/outer", None)
+        self.assertEqual(WEB_DIFF.canon("text", "/outer/inner/x", roots), "/WEB-WORKDIR/x")
+        self.assertEqual(WEB_DIFF.canon("text", "/tmp/tmp.literal/x"), "/tmp/tmp.literal/x")
+        self.assertEqual(normalizer.prepare_workdirs(roots), ("/outer/inner", "/outer"))
+
+    def test_attribute_class_order_and_interior_whitespace_are_significant(self):
+        for a, b in [
+            ('<a href="x" class="link">x</a>', '<a class="link" href="x">x</a>'),
+            ('<b class="one two">x</b>', '<b class="two one">x</b>'),
+            ('<b class="one two">x</b>', '<b class="one  two">x</b>'),
+            ('<b>one two</b>', '<b>one  two</b>'),
+            ('<b>one two</b>', '<b>one\ntwo</b>'),
+        ]:
+            for kind in ('html', 'json'):
+                left, right = (a, b) if kind == 'html' else (json.dumps({'html': a}), json.dumps({'html': b}))
+                self.assertNotEqual(WEB_DIFF.canon(kind, left), WEB_DIFF.canon(kind, right))
+        self.assertNotEqual(WEB_DIFF.canon('html', '<b> one </b>'), WEB_DIFF.canon('html', '<b>one</b>'))
+
+    def test_html_serialization_and_boundary_whitespace_are_significant(self):
+        for a, b in [
+            ('<input disabled>', '<input disabled="">'),
+            ("<a href='x'>x</a>", '<a href="x">x</a>'),
+            ('<b>x</b>', '<b >x</b>'),
+            ('<b>x</b>', ' <b>x</b> '),
+            ('<b>x</b><i>y</i>', '<b>x</b> <i>y</i>'),
+            ('&#39;', '&apos;'), ('&gt;', '>'),
+            ('<a title="Tamarin version x" href="one">', '<a title="Tamarin version x" href="two">'),
+        ]:
+            self.assertNotEqual(WEB_DIFF.canon('html', a), WEB_DIFF.canon('html', b))
+
+    def test_layout_and_void_tag_spellings_are_preserved(self):
+        canonical = lambda s: WEB_DIFF.canon("html", s)
+        self.assertNotEqual(canonical("a<br>b"), canonical("a<br/>b"))
+        self.assertNotEqual(canonical("a<br>b"), canonical("a b"))
+        self.assertNotEqual(canonical("<pre>a</pre>"), canonical("a"))
+        self.assertNotEqual(
+            canonical('<html><head><script src="x"></script></head><body>x</body></html>'),
+            canonical('<html><head><script src="x"></script></script></head><body>x</body></html>'),
+        )
+
+    def test_highlighting_and_proof_status_are_significant(self):
+        for kind in ("html", "json"):
+            def canonical(body):
+                if kind == "json":
+                    body = json.dumps({"title": body})
+                return WEB_DIFF.canon(kind, body)
+
+            plain = canonical("lemma example")
+            highlighted = canonical('<span class="hl_keyword">lemma</span> example')
+            self.assertNotEqual(plain, highlighted)
+            self.assertNotEqual(
+                canonical('<span class="hl_good">lemma example</span>'),
+                canonical('<span class="hl_bad">lemma example</span>'),
+            )
+            self.assertNotEqual(
+                canonical('<span style="color: red">example</span>'),
+                canonical('<span style="color: green">example</span>'),
+            )
+
+    def test_equal_bodies_skip_canonicalization_but_metadata_still_matters(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            row = {"kind": "html", "status": 200, "body": "<b>same</b>"}
+            for changed, expected in (({}, "MATCH"), ({"status": 404}, "DIFF"),
+                                      ({"kind": "text"}, "DIFF")):
+                for side, value in (("hs", row), ("rs", {**row, **changed})):
+                    (root / f"{side}.json").write_text(json.dumps({
+                        "manifest": {"/page": value}, "capped": True,
+                    }))
+                args = ["web_diff.py", str(root / "hs.json"),
+                        str(root / "rs.json"), str(root / "out.tsv")]
+                with mock.patch("sys.argv", args), \
+                        mock.patch("builtins.print"), \
+                        mock.patch.object(WEB_DIFF, "canon", wraps=WEB_DIFF.canon) as canon:
+                    WEB_DIFF.main()
+                self.assertEqual(canon.call_count, 0 if not changed else 2)
+                rows = (root / "out.tsv").read_text().splitlines()
+                self.assertEqual(len(rows), 3)  # both caps survive the shortcut
+                self.assertEqual(rows[-1].split("\t")[1], expected)
+
     def test_long_urls_with_the_same_prefix_do_not_collide(self):
         prefix = "/thy/trace/1/main/proof/" + "case/" * 50
         left = WEB_DIFF.safe_name(prefix + "left")
@@ -199,32 +328,31 @@ class DiffArtifactNames(unittest.TestCase):
         rs_root = '/cache/web&oracle"rs\'branch'
         roots = (hs_root, rs_root)
 
-        def escaped(root, apostrophe):
-            return html.escape(root, quote=True).replace("&#x27;", apostrophe)
+        def escaped(root):
+            return html.escape(root, quote=True).replace("&#x27;", "&#39;")
 
-        for apostrophe in ("&#x27;", "&#39;", "&apos;"):
-            hs = WEB_DIFF.canon(
+        hs = WEB_DIFF.canon(
+            "html",
+            f'<a href="{escaped(hs_root)}/x">'
+            f"{escaped(hs_root)}</a>",
+            roots,
+        )
+        rs = WEB_DIFF.canon(
+            "html",
+            f'<a href="{escaped(rs_root)}/x">'
+            f"{escaped(rs_root)}</a>",
+            roots,
+        )
+        self.assertEqual(hs, '<a href="/WEB-WORKDIR/x">/WEB-WORKDIR</a>')
+        self.assertEqual(rs, hs)
+        self.assertNotEqual(
+            WEB_DIFF.canon(
                 "html",
-                f'<a href="{escaped(hs_root, apostrophe)}/x">'
-                f"{escaped(hs_root, apostrophe)}</a>",
+                f'<a href="{escaped(rs_root)}/x">changed</a>',
                 roots,
-            )
-            rs = WEB_DIFF.canon(
-                "html",
-                f'<a href="{escaped(rs_root, apostrophe)}/x">'
-                f"{escaped(rs_root, apostrophe)}</a>",
-                roots,
-            )
-            self.assertEqual(hs, "<a href=/WEB-WORKDIR/x>\nT:/WEB-WORKDIR\n</a>")
-            self.assertEqual(rs, hs)
-            self.assertNotEqual(
-                WEB_DIFF.canon(
-                    "html",
-                    f'<a href="{escaped(rs_root, apostrophe)}/x">changed</a>',
-                    roots,
-                ),
-                hs,
-            )
+            ),
+            hs,
+        )
 
         hs_json_root = '/cache/web\\oracle"hs'
         rs_json_root = '/cache/web\\oracle"rs'
@@ -252,6 +380,194 @@ class DiffArtifactNames(unittest.TestCase):
             ),
             hs,
         )
+
+
+class PageFetching(unittest.TestCase):
+    def test_fetches_overlap_but_results_keep_plan_order_and_http_failures(self):
+        barrier = threading.Barrier(2)
+        def fetch(base, path):
+            barrier.wait(timeout=5)
+            return (404 if path == "missing" else 200, "text/plain", path)
+        paths = ["one", "missing", "three", "four"]
+        with mock.patch.object(WEB_CRAWL, "http_get", side_effect=fetch):
+            results = list(WEB_CRAWL.fetch_pages("http://localhost", paths, 2))
+        self.assertEqual([p for p, _ in results], paths)
+        self.assertEqual(results[1][1], (404, "text/plain", "missing"))
+
+    def test_serial_and_parallel_crawls_record_the_same_plan(self):
+        def fetch(base, path):
+            if "/overview/help" in path:
+                return 200, "text/html", '<a href="/thy/trace/1/main/proof/demo">demo</a>'
+            if "/autoprove/" in path:
+                return 200, "application/json", '{"redirect":"/thy/trace/2/overview/proof/demo"}'
+            if "/overview/proof/" in path:
+                return 200, "text/html", (
+                    '<a href="/thy/trace/2/main/proof/demo/_">step</a>'
+                    '<a href="/thy/trace/2/main/method/demo/1">method</a>')
+            if "/main/method/" in path:
+                self.assertIs(threading.current_thread(), threading.main_thread())
+            return 200, "text/plain", path
+        with tempfile.TemporaryDirectory() as td:
+            output = pathlib.Path(td) / "crawl.json"
+            docs = []
+            for workers in (1, 2):
+                with mock.patch.object(WEB_CRAWL, "http_get", side_effect=fetch), \
+                        mock.patch.dict(os.environ, {"WEB_FETCH_JOBS": str(workers)}), \
+                        mock.patch("sys.argv", ["crawl", "http://localhost", str(output)]), \
+                        mock.patch("builtins.print"):
+                    WEB_CRAWL.main()
+                docs.append(json.loads(output.read_text()))
+            self.assertEqual(docs[0], docs[1])
+            urls = list(docs[0]["manifest"])
+            prove = next(i for i, url in enumerate(urls) if "/autoprove/" in url)
+            step = urls.index("/thy/trace/#/main/proof/demo/_")
+            self.assertLess(prove, step)
+            self.assertLess(urls.index("/thy/trace/#/main/method/demo/1"), step)
+
+
+class ProofCacheReads(unittest.TestCase):
+    def test_truncated_gzip_is_rejected_before_running_rust(self):
+        run_shell(r'''
+set -e
+. scripts/gate_common.sh
+source <(sed -n '/^rs_result()/p; /^rs_one() {/,/^}/p' scripts/corpus_file_diff.sh)
+CACHE=$HARNESS_TMP CORPUS_ROOT=$HARNESS_TMP
+printf theory > "$HARNESS_TMP/input.spthy"
+ckey() { echo key; }
+flags_for() { :; }
+comparison_identity_unchanged() { return 0; }
+printf 'proof\n' | gzip > "$CACHE/key.full.gz"
+printf '0\n' > "$CACHE/key.rc"
+cat > "$HARNESS_TMP/rs" <<'EOF'
+#!/bin/sh
+printf 'proof\n'
+EOF
+chmod +x "$HARNESS_TMP/rs"
+RS_PATH=$HARNESS_TMP/rs MAUDE=unused FILE_TIMEOUT=10 DERIVCHECK_TIMEOUT=0
+rs_one input.spthy > "$HARNESS_TMP/result"
+grep $'\tMATCH\t' "$HARNESS_TMP/result"
+printf '1\n' > "$CACHE/key.rc"
+rs_one input.spthy > "$HARNESS_TMP/result"
+grep $'\tRC_DIFF\t' "$HARNESS_TMP/result"
+printf '0\n' > "$CACHE/key.rc"
+printf 'different\n' | gzip > "$CACHE/key.full.gz"
+rs_one input.spthy > "$HARNESS_TMP/result"
+grep $'\tDIFF\t' "$HARNESS_TMP/result"
+head -c -8 "$CACHE/key.full.gz" > "$CACHE/broken.gz"
+mv "$CACHE/broken.gz" "$CACHE/key.full.gz"
+RS_PATH=/must/not/be/run
+rs_one input.spthy > "$HARNESS_TMP/result"
+grep $'\tSKIP_NO_HS\t' "$HARNESS_TMP/result"
+''')
+
+
+class WebWorkers(unittest.TestCase):
+    def test_interrupt_stops_active_crawls_and_removes_workdirs(self):
+        run_shell(r'''
+set -e
+. scripts/gate_common.sh
+. scripts/web_cache.sh
+HS_PORT=3021 RS_PORT=3022 JOBS=2
+WEB_CACHE_SCRIPTS=$HARNESS_TMP
+web_wait_port_free() { return 0; }
+curl() { return 0; }
+web_exec_server() { exec setsid sleep 60; }
+cat > "$HARNESS_TMP/web_crawl.py" <<'PYTHON'
+import os, signal, sys, time
+from pathlib import Path
+root = Path(os.environ["HARNESS_TMP"])
+port = sys.argv[1].rsplit(":", 1)[1]
+def stop(*_):
+    (root / ("stopped-" + port)).touch()
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stop)
+(root / ("started-" + port)).touch()
+time.sleep(60)
+PYTHON
+one_file() {
+    WEB_ACTIVE_WORKDIR="$HARNESS_TMP/work-$HS_PORT"
+    mkdir "$WEB_ACTIVE_WORKDIR"
+    web_boot_crawl unused "$HS_PORT" "$WEB_ACTIVE_WORKDIR" unused hs '' ''
+}
+web_run_files "$HARNESS_TMP/out" a b & pool=$!
+trap 'kill -TERM "$pool" 2>/dev/null || :; wait "$pool" || :' EXIT
+for ((attempt=0; attempt<200; attempt++)); do
+    [ -f "$HARNESS_TMP/started-3021" ] && [ -f "$HARNESS_TMP/started-3023" ] && break
+    sleep 0.01
+done
+test "$attempt" -lt 200
+started=$(gate_now_ms)
+kill -TERM "$pool"
+if wait "$pool"; then exit 1; fi
+test "$(( $(gate_now_ms) - started ))" -lt 3000
+trap - EXIT
+for port in 3021 3023; do
+    test -f "$HARNESS_TMP/stopped-$port"
+    test ! -d "$HARNESS_TMP/work-$port"
+done
+''')
+
+    def test_workers_use_distinct_ports_and_keep_rows_whole(self):
+        run_shell(r'''
+set -e
+. scripts/web_cache.sh
+HS_PORT=3021 RS_PORT=3022 JOBS=2
+one_file() {
+    # Rendezvous: both workers must run before either can finish.
+    touch "$HARNESS_TMP/$HS_PORT"
+    for ((attempt=0; attempt<100; attempt++)); do
+        [ -f "$HARNESS_TMP/3021" ] && [ -f "$HARNESS_TMP/3023" ] && break
+        sleep 0.01
+    done
+    [ "$attempt" -lt 100 ] || return 1
+    printf '%s\t%s\t%s\n' "$1" "$HS_PORT" "$RS_PORT"
+}
+(web_run_files "$HARNESS_TMP/out" 'a file' b c d)
+cut -f1 "$HARNESS_TMP/out" | sort > "$HARNESS_TMP/sorted"
+printf 'a file\nb\nc\nd\n' > "$HARNESS_TMP/expected"
+cmp "$HARNESS_TMP/sorted" "$HARNESS_TMP/expected"
+awk -F '\t' 'NF != 3 || !(($2 == 3021 && $3 == 3022) || ($2 == 3023 && $3 == 3024)) { exit 1 }' "$HARNESS_TMP/out"
+''')
+
+    def test_idle_worker_takes_next_theory(self):
+        run_shell(r'''
+set -e
+. scripts/web_cache.sh
+HS_PORT=3021 RS_PORT=3022 JOBS=2
+one_file() {
+    if [ "$1" = slow ]; then
+        for ((attempt=0; attempt<200; attempt++)); do
+            [ -f "$HARNESS_TMP/finished" ] && break
+            sleep 0.01
+        done
+        [ "$attempt" -lt 200 ] || return 1
+    elif [ "$1" = third ]; then
+        touch "$HARNESS_TMP/finished"
+    fi
+    echo "$1"
+}
+(web_run_files "$HARNESS_TMP/out" slow second third)
+test "$(wc -l < "$HARNESS_TMP/out")" = 3
+''')
+
+    def test_worker_failure_and_invalid_ports_fail_the_run(self):
+        run_shell(r'''
+set -e
+. scripts/web_cache.sh
+HS_PORT=3021 RS_PORT=3022 JOBS=2
+one_file() { [ "$1" != bad ] || return 1; echo "$1"; }
+if (web_run_files "$HARNESS_TMP/out" good bad); then exit 1; fi
+for JOBS in 0 -1 junk 999999999999999999999; do
+    if (web_run_files "$HARNESS_TMP/out" good bad); then exit 1; fi
+done
+JOBS=2 RS_PORT=3023
+if (web_run_files "$HARNESS_TMP/out" good bad); then exit 1; fi
+RS_PORT=65535
+if (web_run_files "$HARNESS_TMP/out" good bad); then exit 1; fi
+JOBS=1 RS_PORT=3022
+(web_run_files "$HARNESS_TMP/serial" good another)
+test "$(cat "$HARNESS_TMP/serial")" = "$(printf 'good\nanother')"
+''')
 
 
 class CacheProfiles(unittest.TestCase):
@@ -385,6 +701,55 @@ if (oracle_rev_check "$t/hs" "$t/backend" "$PWD") 2>"$t/error"; then exit 1; fi
 grep -F 'does not match any available setup.sh source attestation' "$t/error"
 ''')
 
+    def test_summary_uses_recorded_input_identity(self):
+        run_shell(r'''
+set -e
+CACHE=$HARNESS_TMP
+RESULTS_TSV=$HARNESS_TMP/results
+EXEC_FP_SALT=exec HS_FP_SALT=oracle
+printf 'deleted.spthy\tMATCH\t1\t1\t0\tinput1\toutput1\nmissing.spthy\tRC_DIFF\t1\t1\t0\tinput2\toutput2\nskipped.spthy\tSKIP_NO_HS\t0\t0\t0\t-\t-\n' > "$RESULTS_TSV"
+touch "$CACHE/input1__eexec__boracle.rc"
+ckey() { echo 'summary unexpectedly rebuilt an input key' >&2; return 1; }
+source <(sed -n '/^rc_unknown=0$/,/^done < "$RESULTS_TSV"$/p' scripts/corpus_file_diff.sh)
+test "$rc_unknown" = 1
+''')
+
+    def test_binary_metadata_fast_path_and_replacements(self):
+        run_shell(r'''
+set -e
+. scripts/gate_common.sh
+p=$HARNESS_TMP/binary
+printf original > "$p"
+capture_binary_identity "$p" digest_value state_value
+# An unchanged executable requires no content read.
+binary_sha256() { echo hashed >> "$HARNESS_TMP/hashes"; file_sha256 "$1"; }
+binary_identity_unchanged "$p" "$digest_value" "$state_value"
+test ! -e "$HARNESS_TMP/hashes"
+# Metadata-only changes and callers without metadata still verify the bytes.
+touch -d '2001-01-01' "$p"
+binary_identity_unchanged "$p" "$digest_value" "$state_value"
+binary_identity_unchanged "$p" "$digest_value"
+test "$(wc -l < "$HARNESS_TMP/hashes")" = 2
+capture_binary_identity "$p" digest_value state_value
+cp -p "$p" "$HARNESS_TMP/timestamps"
+printf modified > "$p"
+touch -r "$HARNESS_TMP/timestamps" "$p"
+if binary_identity_unchanged "$p" "$digest_value" "$state_value"; then exit 1; fi
+# Replacing a target with the same size/mtime must also be detected.
+cp -p "$HARNESS_TMP/timestamps" "$p"
+capture_binary_identity "$p" digest_value state_value
+printf replaced > "$HARNESS_TMP/new"
+touch -r "$p" "$HARNESS_TMP/new"
+mv "$HARNESS_TMP/new" "$p"
+if binary_identity_unchanged "$p" "$digest_value" "$state_value"; then exit 1; fi
+ln -s "$HARNESS_TMP/timestamps" "$HARNESS_TMP/link"
+capture_binary_identity "$HARNESS_TMP/link" digest_value state_value
+ln -sfn "$p" "$HARNESS_TMP/link"
+if binary_identity_unchanged "$HARNESS_TMP/link" "$digest_value" "$state_value"; then exit 1; fi
+rm "$p"
+if binary_identity_unchanged "$p" "$digest_value" "$state_value"; then exit 1; fi
+''')
+
     def test_producer_and_comparison_identities_detect_their_own_tools(self):
         run_shell(
             r'''
@@ -434,10 +799,30 @@ test -s "$t/cache/PROFILE"
 '''
         )
 
+    def test_port_polling_uses_short_sleeps_and_elapsed_deadline(self):
+        run_shell(r'''
+set -e
+. scripts/web_cache.sh
+# Model 100 ms sleeps and 200 ms probes without a wall-clock-sensitive test.
+echo 0 > "$HARNESS_TMP/clock"
+gate_now_ms() { cat "$HARNESS_TMP/clock"; }
+sleep() {
+    test "$1" = 0.1
+    echo "$(( $(gate_now_ms) + 100 ))" > "$HARNESS_TMP/clock"
+}
+web_port_free() {
+    echo "$(( $(gate_now_ms) + 200 ))" > "$HARNESS_TMP/clock"
+    return 1
+}
+if PORT_FREE_TIMEOUT=1 web_wait_port_free 3021; then exit 1; fi
+test "$(gate_now_ms)" = 1200
+''')
+
     def test_web_shutdown_waits_for_the_complete_process_group(self):
         run_shell(
             r'''
 set -e
+. scripts/gate_common.sh
 . scripts/web_cache.sh
 setsid bash -c 'trap "" TERM; sleep 30 & echo $! > "$1/child"' _ "$HARNESS_TMP" &
 leader=$!
@@ -913,13 +1298,14 @@ set -e
 . scripts/gate_common.sh
 . scripts/web_cache.sh
 t=$HARNESS_TMP
-printf 'auto.spthy\t--auto-sources\ndefine.spthy\t-D=A --stop-on-trace=seqdfs\n' \
+printf 'diff.spthy\t--diff\nauto.spthy\t--auto-sources\ndefine.spthy\t-D=A --stop-on-trace=seqdfs\n' \
     > "$t/flags.tsv"
 WEB_FLAGS_MAP="$t/flags.tsv"
-if web_flags_for auto.spthy 2>"$t/error"; then
+if web_flags_for diff.spthy 2>"$t/error"; then
     exit 1
 fi
-grep -F 'unsupported interactive flag for auto.spthy: --auto-sources' "$t/error"
+grep -F 'unsupported interactive flag for diff.spthy: --diff' "$t/error"
+test "$(web_flags_for auto.spthy)" = '--auto-sources'
 test "$(web_flags_for define.spthy)" = '-D=A --stop-on-trace=seqdfs'
 WEB_FLAGS_MAP="$t/missing.tsv"
 if web_flags_for define.spthy 2>"$t/error"; then
@@ -1396,14 +1782,22 @@ unset CACHE
 web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
 test "$first_cache" != "$CACHE"
 
-# Crawler implementation bytes are producer identity, independently of the
-# manually maintained route-plan version.
+# Crawler edits invalidate an active run, but harmless edits between runs
+# preserve captures. Semantic capture changes require a plan-version bump.
 crawler_cache=$CACHE
 printf '\n# changed crawler\n' >> "$t/scripts/web_crawl.py"
 if web_harness_identity_unchanged; then exit 1; fi
 unset CACHE
 web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
+test "$crawler_cache" = "$CACHE"
+unset CACHE
+WEB_FETCH_JOBS=1 web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
+test "$crawler_cache" = "$CACHE"
+unset CACHE
+web_cache_init "$PWD" "$t/scripts" "$t/hs" 3
 test "$crawler_cache" != "$CACHE"
+unset CACHE
+web_cache_init "$PWD" "$t/scripts" "$t/hs" 2
 
 url_key_cache=$CACHE
 printf '\n# changed URL key\n' >> "$t/scripts/web_url_key.py"

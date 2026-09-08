@@ -13,6 +13,16 @@
 # This file defines functions and GATE_COMMON_DIR only — it runs nothing and
 # sources nothing, so sweep_common.sh can source it without cycles.
 
+# Millisecond wall-clock timestamps for stage timings (GNU/uutils/BSD date).
+gate_now_ms() {
+    local ns
+    ns=$(date +%s%N 2>/dev/null)
+    case "$ns" in
+        ''|*[!0-9]*) python3 -c 'import time; print(time.time_ns() // 1_000_000)' ;;
+        *) printf '%s\n' "$((ns / 1000000))" ;;
+    esac
+}
+
 GATE_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- OOM prologue ------------------------------------------------------------
@@ -141,6 +151,19 @@ file_sha256() {
 # binary_sha256 <file> — the one executable-content fingerprint recipe.
 binary_sha256() { file_sha256 "$1"; }
 
+# Capture metadata around the hash so a concurrent replacement cannot attach
+# new metadata to old bytes. ctime detects edits even if mtime is restored.
+capture_binary_identity() {
+    local path=$1 hash_var=$2 state_var=$3 before digest after
+    before=$(stat -Lc '%d:%i:%s:%f:%y:%z' -- "$path") || return 1
+    digest=$(binary_sha256 "$path") || return 1
+    after=$(stat -Lc '%d:%i:%s:%f:%y:%z' -- "$path") || return 1
+    [ "$before" = "$after" ] || return 1
+    printf -v "$hash_var" '%s' "$digest"
+    printf -v "$state_var" '%s' "$after"
+    export "$hash_var" "$state_var"
+}
+
 # Capture the Rust binary used by the comparison half of a gate.  Its hash is
 # deliberately not part of any Haskell cache key: rebuilding the port must not
 # invalidate an expensive oracle cache, but a comparison already in flight
@@ -148,19 +171,22 @@ binary_sha256() { file_sha256 "$1"; }
 rs_fingerprint() {
     RS_FP_PATH=$1
     [ -x "$RS_FP_PATH" ] || return 1
-    RS_FP=$(binary_sha256 "$RS_FP_PATH") || return 1
+    capture_binary_identity "$RS_FP_PATH" RS_FP RS_FILE_STATE || return 1
     export RS_FP_PATH RS_FP
 }
 
 binary_identity_unchanged() {
-    local path=$1 expected=$2 current
+    local path=$1 expected=$2 state=${3:-} before after current
+    before=$(stat -Lc '%d:%i:%s:%f:%y:%z' -- "$path") || return 1
+    [ -z "$state" ] || [ "$before" != "$state" ] || return 0
     current=$(binary_sha256 "$path") || return 1
-    [ "$current" = "$expected" ]
+    after=$(stat -Lc '%d:%i:%s:%f:%y:%z' -- "$path") || return 1
+    [ "$before" = "$after" ] && [ "$current" = "$expected" ]
 }
 
 rs_identity_unchanged() {
     [ -n "${RS_FP_PATH:-}" ] && [ -n "${RS_FP:-}" ] || return 1
-    binary_identity_unchanged "$RS_FP_PATH" "$RS_FP"
+    binary_identity_unchanged "$RS_FP_PATH" "$RS_FP" "${RS_FILE_STATE:-}"
 }
 
 # execution_fingerprint <maude-binary> <derivcheck-timeout>
@@ -173,7 +199,7 @@ execution_fingerprint() {
         echo "execution_fingerprint: maude '$maude' is not executable" >&2
         return 1
     }
-    MAUDE_FP=$(binary_sha256 "$maude") || return 1
+    capture_binary_identity "$maude" MAUDE_FP MAUDE_FILE_STATE || return 1
     MAUDE_FP_PATH=$maude
     version=$("$maude" --version) || return 1
     [ -n "$version" ] || return 1
@@ -184,26 +210,21 @@ execution_fingerprint() {
 }
 
 # producer_identity_unchanged
-# Rehash the executables captured at startup.
+# Check the executables captured at startup; rehash only if metadata changed.
 # This guard detects a tool replaced during the run, independently of the
 # portable versions used to select persistent cache entries.
 execution_identity_unchanged() {
-    local current
     [ -n "${MAUDE_FP_PATH:-}" ] && [ -n "${MAUDE_FP:-}" ] || return 1
-    current=$(binary_sha256 "$MAUDE_FP_PATH") || return 1
-    [ "$current" = "$MAUDE_FP" ] || return 1
+    binary_identity_unchanged "$MAUDE_FP_PATH" "$MAUDE_FP" "${MAUDE_FILE_STATE:-}" || return 1
     if [ -n "${DOT_FP_PATH:-}" ]; then
-        current=$(binary_sha256 "$DOT_FP_PATH") || return 1
-        [ "$current" = "${DOT_FP:-}" ] || return 1
+        binary_identity_unchanged "$DOT_FP_PATH" "${DOT_FP:-}" "${DOT_FILE_STATE:-}" || return 1
     fi
 }
 
 producer_identity_unchanged() {
-    local current
     execution_identity_unchanged || return 1
     [ -n "${HS_FP_PATH:-}" ] && [ -n "${HS_FP:-}" ] || return 1
-    current=$(binary_sha256 "$HS_FP_PATH") || return 1
-    [ "$current" = "$HS_BINARY_FP" ]
+    binary_identity_unchanged "$HS_FP_PATH" "$HS_BINARY_FP" "${HS_FILE_STATE:-}"
 }
 
 # Use after a Rust invocation has contributed to a verdict.  The oracle and
@@ -247,7 +268,7 @@ hs_fingerprint() {
     local hs=$1 repo=${3:-$GATE_COMMON_DIR/..} output main stamp key value
     local stamp_binary stamp_pin stamp_series
     local -a maude_args=()
-    HS_BINARY_FP=$(binary_sha256 "$hs") || return 1
+    capture_binary_identity "$hs" HS_BINARY_FP HS_FILE_STATE || return 1
     [ -z "${2:-}" ] || maude_args=("--with-maude=$2")
     output=$(timeout 60 "$hs" "${maude_args[@]}" --version 2>/dev/null) || return 1
     HS_VERSION=$(printf '%s\n' "$output" | head -1)

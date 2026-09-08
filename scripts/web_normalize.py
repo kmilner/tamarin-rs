@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """Semantic normalizers for the web-parity gate (RS interactive UI vs HS).
 
-The parity bar is *structural / semantic* equivalence for the markup routes,
-NOT byte-identity: we canonicalize away whitespace, attribute order, JSON key
-order, highlight `<span class="hl_*">` wrappers, `<br/>`/`<pre>` cosmetic
-markup, and the genuinely nondeterministic env fields (theory idx, timestamps,
-temp/cache-dir prefixes, absolute load paths).  What survives must match:
-element structure, visible text, link hrefs + text, form actions, embedded
-resource URLs and JSON values.
+HTML is compared byte for byte except for nondeterministic environment fields
+(theory indices, timestamps, version metadata and work-directory paths).
+JSON envelopes additionally normalize key order and encoding. HTML parsing
+only locates text for environment normalization; original markup is retained.
 
 The graph routes and the text/plain routes are held to byte-identity — the port
 emits `Text.Dot`'s bytes through the same `showDot` upstream uses, and serves
@@ -18,8 +15,10 @@ own trailing spaces in the theory echo, are divergences the gate must see.
 
 Used by web_diff.py.  Pure stdlib (html.parser, json, re).
 """
+import html
 import json
 import re
+from functools import lru_cache
 from html.parser import HTMLParser
 
 from web_url_key import norm_indices
@@ -60,194 +59,104 @@ _VOLATILE = [
     # too, so a side that somehow omits the paren erases the rest of one line
     # instead of running on through the markup to whatever `)` comes next.
     (re.compile(r"Loaded at [^)\n]*"), "Loaded at #"),
-    # Compatibility for unsafe legacy manifests, which predate the explicit
-    # top-level workdir stamp consumed by canon(). New profiles replace their
-    # exact configurable roots before reaching this fallback.
-    (re.compile(r"/tmp/tmp\.[A-Za-z0-9]+/"), "/tmp/tmp.#/"),
 ]
+
+# Most HTML text/attributes contain none of these fields. One search avoids
+# running every substitution on each of those small strings. Keep the ordered
+# substitutions below for values that do need normalization. Large bodies
+# bypass the search: another full scan costs more than it saves there.
+_HAS_VOLATILE = re.compile("|".join(rx.pattern for rx, _ in _VOLATILE))
+
+
+@lru_cache(maxsize=16)
+def prepare_workdirs(workdirs):
+    """Resolve the two immutable roots once, longest first for nested paths."""
+    return tuple(sorted(set(filter(None, workdirs)), key=len, reverse=True))
+
+
+@lru_cache(maxsize=16)
+def prepare_html_workdirs(workdirs):
+    # Both renderers use Blaze's &#39; spelling for apostrophes. Normalize
+    # exact roots in both raw script text and escaped HTML text/attributes.
+    roots = prepare_workdirs(workdirs)
+    escaped = tuple(html.escape(root, quote=True).replace("&#x27;", "&#39;") for root in roots)
+    return prepare_workdirs(roots + escaped)
+
+
+def norm_paths(s: str, workdirs=()) -> str:
+    for workdir in workdirs:
+        s = s.replace(workdir, "/WEB-WORKDIR")
+    return norm_indices(s)
 
 
 def norm_env(s: str, workdirs=()) -> str:
-    for workdir in sorted(set(filter(None, workdirs)), key=len, reverse=True):
-        s = s.replace(workdir, "/WEB-WORKDIR")
-    s = norm_indices(s)
-    for rx, rep in _VOLATILE:
-        s = rx.sub(rep, s)
+    s = norm_paths(s, workdirs)
+    if len(s) > 512 or _HAS_VOLATILE.search(s):
+        for rx, rep in _VOLATILE:
+            s = rx.sub(rep, s)
     return s
 
 # ---------------------------------------------------------------------------
 # HTML canonicalization
 # ---------------------------------------------------------------------------
 
-# Tags whose open/close markup is dropped entirely (children kept) — purely
-# cosmetic layout that the two backends emit differently.  The structural
-# container tags `html`/`head`/`body` are unwrapped because HS emits malformed
-# doubled `</script></script>` closes that shift the parser's head/body
-# boundary; their children (title/links/scripts, then page content) appear in
-# the same document order on both sides, so dropping the boundary markers keeps
-# real content diffs visible while eliminating the serialization artifact.
-_UNWRAP_TAGS = {"pre", "html", "head", "body"}
-# Void/among tags treated as a whitespace break (dropped, contribute a space).
-_BREAK_TAGS = {"br"}
-# Attributes ignored during comparison (volatile / cosmetic only).
-_IGNORE_ATTRS = {"style"}
+class _HtmlEnv(HTMLParser):
+    """Locate text fields to normalize without reserializing or repairing HTML."""
 
+    def __init__(self, body, workdirs):
+        super().__init__(convert_charrefs=False)
+        self.body = norm_paths(body, prepare_html_workdirs(tuple(workdirs)))
+        self.lines = [0] + [m.end() for m in re.finditer("\n", self.body)]
+        self.parts = []
+        self.cursor = 0
+        self.text_start = None
 
-def _is_hl_span(tag, attrs_dict):
-    if tag != "span":
-        return False
-    cls = attrs_dict.get("class", "")
-    toks = cls.split()
-    return bool(toks) and all(t.startswith("hl_") for t in toks)
-
-
-class _Canon(HTMLParser):
-    """Build a canonical token stream from an HTML fragment/page.
-
-    - highlight `<span class="hl_*">` wrappers are unwrapped (text kept)
-    - <pre> unwrapped, <br> -> space
-    - attributes sorted, values idx-normalized, `class` tokens sorted,
-      `style` and empty attrs dropped
-    - runs of whitespace (incl. &nbsp;, already unescaped by the parser)
-      collapse to a single space; whitespace-only text between tags dropped
-    """
-
-    def __init__(self, workdirs=()):
-        super().__init__(convert_charrefs=True)
-        self.workdirs = workdirs
-        self.tokens = []          # list of ('t', text) | ('o', tag, attrs) | ('c', tag)
-        self._stack = []          # (tag, emitted_bool)
-        self._pending_text = []
-
-    def _flush_text(self):
-        if not self._pending_text:
-            return
-        text = "".join(self._pending_text)
-        self._pending_text = []
-        text = norm_env(text, self.workdirs)
-        # &nbsp; -> normal space (parser gives us \xa0), collapse runs
-        text = text.replace("\xa0", " ")
-        text = re.sub(r"\s+", " ", text)
-        if text.strip() == "":
-            # keep a single separating space token so adjacent inline text
-            # doesn't get glued, but only if the previous token is text.
-            if self.tokens and self.tokens[-1][0] == "t" and not self.tokens[-1][1].endswith(" "):
-                self.tokens[-1] = ("t", self.tokens[-1][1] + " ")
-            return
-        # merge with a preceding text token
-        if self.tokens and self.tokens[-1][0] == "t":
-            self.tokens[-1] = ("t", (self.tokens[-1][1] + text))
-        else:
-            self.tokens.append(("t", text))
-
-    def _canon_attrs(self, attrs):
-        out = []
-        for k, v in attrs:
-            if k in _IGNORE_ATTRS:
-                continue
-            if v is None:
-                v = ""
-            v = norm_env(v, self.workdirs)
-            if k == "class":
-                v = " ".join(sorted(v.split()))
-            out.append((k, v))
-        out.sort()
-        return tuple(out)
-
-    def handle_starttag(self, tag, attrs):
-        self._flush_text()
-        ad = {k: (v or "") for k, v in attrs}
-        if tag in _BREAK_TAGS:
-            # treat as whitespace
-            self._pending_text.append(" ")
-            return
-        if tag in _UNWRAP_TAGS or _is_hl_span(tag, ad):
-            self._stack.append((tag, False))
-            return
-        self.tokens.append(("o", tag, self._canon_attrs(attrs)))
-        self._stack.append((tag, True))
-
-    def handle_startendtag(self, tag, attrs):
-        self._flush_text()
-        if tag in _BREAK_TAGS:
-            self._pending_text.append(" ")
-            return
-        ad = {k: (v or "") for k, v in attrs}
-        if tag in _UNWRAP_TAGS or _is_hl_span(tag, ad):
-            return
-        self.tokens.append(("o", tag, self._canon_attrs(attrs)))
-        self.tokens.append(("c", tag))
-
-    def handle_endtag(self, tag):
-        self._flush_text()
-        if tag in _BREAK_TAGS:
-            return
-        # Find the nearest matching open tag WITHOUT mutating the stack.
-        idx = None
-        for i in range(len(self._stack) - 1, -1, -1):
-            if self._stack[i][0] == tag:
-                idx = i
-                break
-        if idx is None:
-            # Stray close with no matching open (e.g. HS's malformed doubled
-            # `</script></script>`) — ignore it, leaving the stack intact.
-            return
-        # Pop down to and including the match.  Intermediate emitted tags that
-        # were left open (improper nesting / omitted closes, e.g. HS's Hamlet
-        # leaving the contextMenu `<ul><li>` unclosed before `</body>`) are
-        # implicitly closed by this ancestor, so emit their close tokens too —
-        # matching a backend that closes them explicitly.
-        while len(self._stack) > idx:
-            t, e = self._stack.pop()
-            if e:
-                self.tokens.append(("c", t))
+    def _offset(self):
+        line, column = self.getpos()
+        return self.lines[line - 1] + column
 
     def handle_data(self, data):
-        self._pending_text.append(data)
+        if self.text_start is None:
+            self.text_start = self._offset()
+
+    # Entities are part of the surrounding text. Use their original source
+    # spelling, including an omitted semicolon, when flushing that text.
+    handle_entityref = handle_data
+    handle_charref = handle_data
+
+    def _flush_text(self, end):
+        if self.text_start is not None:
+            self.parts.append(self.body[self.cursor:self.text_start])
+            self.parts.append(norm_env(self.body[self.text_start:end]))
+            self.cursor = end
+            self.text_start = None
+
+    def _markup(self, *args):
+        self._flush_text(self._offset())
+
+    handle_starttag = _markup
+    handle_endtag = _markup
+    handle_comment = _markup
+    handle_decl = _markup
+    handle_pi = _markup
+    unknown_decl = _markup
 
     def result(self):
-        self._flush_text()
-        # Close any tags still open at EOF (implicit end-of-document close), so
-        # a document that omits trailing closes compares equal to one that
-        # spells them out.
-        while self._stack:
-            t, e = self._stack.pop()
-            if e:
-                self.tokens.append(("c", t))
-        parts = []
-        for tok in self.tokens:
-            if tok[0] == "t":
-                # Collapse any multi-space runs that arose from merging text
-                # across break/whitespace boundaries.  HS renders the sequent
-                # with `<br/><br/>` blank lines between goals (each break
-                # contributes a space, so a blank line leaks a double space at
-                # the join); RS renders the same block as `<pre>` text with
-                # `\n\n`, which collapses to a single space.  Both are the same
-                # block text semantically — canonicalize the whitespace so the
-                # `<pre>`+`\n` and `<br/>`-postprocessed forms compare equal
-                # (see the parity-definition "canonicalize … to the same block
-                # text").
-                s = re.sub(r"\s+", " ", tok[1]).strip()
-                if s:
-                    parts.append("T:" + s)
-            elif tok[0] == "o":
-                a = ",".join(f"{k}={v}" for k, v in tok[2])
-                parts.append(f"<{tok[1]} {a}>")
-            else:
-                parts.append(f"</{tok[1]}>")
-        return "\n".join(parts)
+        self._flush_text(len(self.body))
+        self.parts.append(self.body[self.cursor:])
+        return "".join(self.parts)
 
 
 def canon_html(body: str, workdirs=()) -> str:
-    # HTMLParser decodes character references before handing us text and
-    # attributes. Normalize those semantic values instead of trying to predict
-    # whether a serializer chose &apos;, &#39;, &#x27;, or another legal spelling.
-    p = _Canon(workdirs)
+    # Parsing only locates text: every other byte survives, even markup that
+    # HTMLParser ignores. Version/timestamp rules must not swallow attributes.
+    p = _HtmlEnv(body, workdirs)
     try:
-        p.feed(body)
+        p.feed(p.body)
         p.close()
-    except Exception as e:
-        return "HTML_PARSE_ERROR: " + repr(e) + "\n" + norm_env(body, workdirs)
+    except AssertionError:
+        # HTMLParser rejects some malformed declarations. Keep their bytes.
+        return p.body
     return p.result()
 
 
@@ -255,25 +164,17 @@ def canon_html(body: str, workdirs=()) -> str:
 # JSON canonicalization (the {title,html} / {alert} / {redirect} envelopes)
 # ---------------------------------------------------------------------------
 
-_HTMLISH = re.compile(r"<[a-zA-Z/!]")
-
-
 def _canon_json_val(v, key=None, workdirs=()):
     if isinstance(v, str):
         # The `html` and `title` fields are ALWAYS canonicalized as HTML
         # (even when the fragment happens to be tag-free, e.g.
-        # "this is a mistake" or "Lemma: X"), otherwise a tag-free value
-        # would canon differently from a `<br/>`-postprocessed / highlighted
-        # one and diverge spuriously.  HS builds the `title` for a proof
-        # method via `renderHtmlDoc . prettyProofMethod` — it carries `hl_*`
-        # operator spans — whereas the Rust server emits the same title as
-        # plain text; forcing both through `canon_html` makes them compare
-        # equal (the spans unwrap to the same text).
-        if key in ("html", "title") or _HTMLISH.search(v):
+        # "this is a mistake" or "Lemma: X"). Both servers render proof-method
+        # titles as HTML, including syntax highlighting and line breaks.
+        if key in ("html", "title", "alert"):
             return canon_html(v, workdirs)
         return norm_env(v, workdirs)
     if isinstance(v, dict):
-        return {k: _canon_json_val(x, k, workdirs) for k, x in sorted(v.items())}
+        return {k: _canon_json_val(x, k, workdirs) for k, x in v.items()}
     if isinstance(v, list):
         return [_canon_json_val(x, workdirs=workdirs) for x in v]
     return v
@@ -291,6 +192,33 @@ def canon_json(body: str, workdirs=()) -> str:
         ensure_ascii=False,
         indent=1,
     )
+
+
+def canon_json_pair(left, right, workdirs=()):
+    """Normalize differing fields once; identical strings need no HTML parse."""
+    try:
+        left, right = json.loads(left), json.loads(right)
+    except ValueError:
+        return canon_json(left, workdirs), canon_json(right, workdirs)
+    workdirs = prepare_workdirs(tuple(workdirs))
+
+    def pair(a, b, key=None):
+        if isinstance(a, str) and isinstance(b, str) and a == b:
+            return a, b
+        if isinstance(a, dict) and isinstance(b, dict) and a.keys() == b.keys():
+            fields = {k: pair(v, b[k], k) for k, v in a.items()}
+            return ({k: v[0] for k, v in fields.items()},
+                    {k: v[1] for k, v in fields.items()})
+        if isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+            items = [pair(x, y) for x, y in zip(a, b)]
+            return [x for x, _ in items], [y for _, y in items]
+        return _canon_json_val(a, key, workdirs), _canon_json_val(b, key, workdirs)
+
+    left, right = pair(left, right)
+    # Serialization retains the existing distinction between true, 1, 1.0,
+    # and -0.0, which Python object equality would lose.
+    return tuple(json.dumps(v, sort_keys=True, ensure_ascii=False, indent=1)
+                 for v in (left, right))
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +287,7 @@ def canon(kind: str, body: str, workdirs=()) -> str:
     # mktemp directories. The crawler records those exact configurable roots;
     # replace them before parsing so paths in text, HTML attributes and JSON
     # strings all receive the same treatment without guessing their prefix.
+    workdirs = prepare_workdirs(tuple(workdirs))
     if kind == "html":
         return canon_html(body, workdirs)
     if kind == "json":

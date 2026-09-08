@@ -626,6 +626,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // CLI `--stop-on-trace` — merged with each theory's `configuration:`
     // block at load time (`ProofState::new`), HS `closeTheory` precedence.
     cfg.stop_on_trace = cli_cut(args);
+    cfg.auto_sources = args.auto_sources;
     // `--with-dot` / `--with-json` — HS stores `readOutputCommand as`
     // (Environment.hs:41-45) as `WebUI.outputCmd` (Interactive.hs:138,
     // Web/Types.hs:152); the graph route then spawns `ocGraphCommand` —

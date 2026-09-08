@@ -1492,6 +1492,34 @@ fn pretty_lemma_formulas(
     out
 }
 
+/// The shared `lemma NAME [attrs]:` document, including attribute wrapping.
+pub fn lemma_title_doc(
+    name: &str,
+    attr_docs: Vec<crate::pretty_hpj::Doc>,
+) -> crate::pretty_hpj::Doc {
+    use crate::pretty_hpj::{self as hpj, Doc};
+    // HS `prettyLemmaName` (lib/theory/src/Lemma.hs:91-95):
+    //   `text name <-> brackets (fsep (punctuate comma attrs))`
+    // The whole header line is:
+    //   `kwLemma <-> prettyLemmaName lem <> colon`
+    // Rendered via HughesPJ so `fsep` wraps the attributes list when the
+    // line is long (e.g. `[heuristic={…}, use_induction,\n<col>reuse]`).
+    let kw = hpj::keyword_("lemma");
+    let name_doc = Doc::text(name);
+    if attr_docs.is_empty() {
+        kw.beside_sp(name_doc).beside(Doc::text(":"))
+    } else {
+        // `brackets (fsep (punctuate comma attrs))` — no space after `[`
+        // (beside, not beside_sp) so fsep's continuation aligns with the
+        // first attr character (i.e. right after `[`).
+        let attrs_fsep = hpj::fsep(hpj::punctuate(Doc::text(","), attr_docs));
+        let brackets = Doc::text("[").beside(attrs_fsep).beside(Doc::text("]"));
+        kw.beside_sp(name_doc)
+            .beside_sp(brackets)
+            .beside(Doc::text(":"))
+    }
+}
+
 /// Everything of HS `prettyLemma` (lib/theory/src/Lemma.hs:116-141) BEFORE the
 /// proof body: the `lemma <name> [attrs]:` header, the `<quant> "<formula>"`
 /// line, and the `/* guarded formula ... */` comment block.  `formula_doc` is
@@ -1504,28 +1532,8 @@ fn lemma_head(
     formula_doc: crate::pretty_hpj::Doc,
     guarded_block: &str,
 ) -> String {
-    use crate::pretty_hpj::{self as hpj, Doc};
     let mut out = String::new();
-    // HS `prettyLemmaName` (lib/theory/src/Lemma.hs:91-95):
-    //   `text name <-> brackets (fsep (punctuate comma attrs))`
-    // The whole header line is:
-    //   `kwLemma <-> prettyLemmaName lem <> colon`
-    // Rendered via HughesPJ so `fsep` wraps the attributes list when the
-    // line is long (e.g. `[heuristic={…}, use_induction,\n<col>reuse]`).
-    let kw = Doc::text("lemma");
-    let name_doc = Doc::text(name);
-    let header_doc = if attr_docs.is_empty() {
-        kw.beside_sp(name_doc).beside(Doc::text(":"))
-    } else {
-        // `brackets (fsep (punctuate comma attrs))` — no space after `[`
-        // (beside, not beside_sp) so fsep's continuation aligns with the
-        // first attr character (i.e. right after `[`).
-        let attrs_fsep = hpj::fsep(hpj::punctuate(Doc::text(","), attr_docs));
-        let brackets = Doc::text("[").beside(attrs_fsep).beside(Doc::text("]"));
-        kw.beside_sp(name_doc)
-            .beside_sp(brackets)
-            .beside(Doc::text(":"))
-    };
+    let header_doc = lemma_title_doc(name, attr_docs);
     out.push_str(&header_doc.render());
     out.push('\n');
 
@@ -1545,7 +1553,7 @@ fn lemma_head(
 
 /// HS `prettyLemmaAttribute` (lib/theory/src/Lemma.hs:97-106) over the
 /// theory's own attribute type.
-fn lemma_attr_docs(
+pub fn lemma_attr_docs(
     attrs: &[crate::theory::LemmaAttr],
     in_file: &str,
 ) -> Vec<crate::pretty_hpj::Doc> {

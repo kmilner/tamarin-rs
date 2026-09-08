@@ -52,7 +52,8 @@ pub fn load_from_path(path: &Path, cfg: &crate::ServerConfig) -> Result<TheoryEn
 /// Maude (HS `closeTheory`), so the source / rules / overview renderers
 /// can emit the `variants (modulo AC)` blocks byte-for-byte.  Variant
 /// computation is best-effort: if Maude can't be started the theory is
-/// still usable (rules just render without their variants block).
+/// still usable (rules just render without their variants block), unless
+/// auto-sources was requested, which requires Maude.
 pub(crate) fn load_from_source(
     src: &str,
     origin: TheoryOrigin,
@@ -94,6 +95,18 @@ pub(crate) fn load_from_source(
     // uploaded theory has no on-disk home).
     let mut typed = elaborate_with_in_file(&parsed, &origin.label())
         .map_err(|e| LoadError::Elaborate(e.message))?;
+
+    let config_block = parsed
+        .configuration
+        .as_deref()
+        .map(tamarin_theory::prove::parse_config_block)
+        .unwrap_or_default();
+    if let Some(message) = config_block.flag_error {
+        return Err(LoadError::Elaborate(format!(
+            "configuration block: {message}"
+        )));
+    }
+    let auto_sources = cfg.auto_sources || config_block.auto_sources;
 
     // Everything downstream of `elaborate` reads the internal theory; the
     // parser AST ends here.
@@ -162,6 +175,11 @@ pub(crate) fn load_from_source(
     // `TheoryEntry::prover_maude_sig` for why the join must not reach it.
     let prover_maude_sig = typed.signature.clone();
     let started_maude = MaudeHandle::start(&cfg.maude_path, prover_maude_sig.clone());
+    if auto_sources {
+        started_maude.as_ref().map_err(|error| {
+            LoadError::Elaborate(format!("auto-sources requires Maude: {error}"))
+        })?;
+    }
     if let Ok(maude) = started_maude {
         wf_report.extend(
             tamarin_theory::tools::rule_variants::prepare_theory_rules(
@@ -223,6 +241,16 @@ pub(crate) fn load_from_source(
         wf_report.extend(extra);
         if cfg.derivcheck_timeout > 0 {
             eprintln!("[Theory {}] Derivation checks ended", typed.name);
+        }
+        if auto_sources {
+            tamarin_theory::auto_sources::apply_auto_sources(
+                &mut typed,
+                maude,
+                None,
+                ndc_cache.as_ref(),
+                cfg.solver_parameters,
+            )
+            .map_err(|error| LoadError::Elaborate(error.to_string()))?;
         }
     } else {
         // Loading remains best-effort when Maude is unavailable. All
@@ -387,3 +415,7 @@ mod tests {
         assert_eq!(names, vec!["Ok"]);
     }
 }
+
+#[cfg(test)]
+#[path = "theory_io_auto_sources_tests.rs"]
+mod auto_sources_tests;

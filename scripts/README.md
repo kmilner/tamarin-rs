@@ -25,7 +25,7 @@ Five, all gitignored, none keyed alike:
 |---|---|---|
 | `.gate_cache/proof/` | `corpus_file_diff.sh` | theory inputs + flags hash + **oracle/execution fingerprints**; the oracle's exit status sits beside each entry as `.rc` |
 | `.gate_cache/load/` | `pretty_gate.sh` and `wf_gate.sh` | theory inputs + flags hash + **oracle/execution fingerprints** |
-| `.gate_cache/web/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | profile = **oracle + execution + Graphviz/crawler/URL-key + shell producer protocol SHA-256 + crawl plan/settings**; entry = theory inputs |
+| `.gate_cache/web/` | `web_parity.sh` writes; `pane_byte_check.sh` reads | profile = **oracle + execution + Graphviz/URL-key + shell producer protocol SHA-256 + crawl plan/settings**; entry = theory inputs |
 | `.gate_cache/raw/` | `diff_proof_raw.sh` and `corpus_raw_diff.sh` | theory inputs + lemma + cache version + **oracle/execution fingerprints** |
 | `.gate_cache/sweep/` | the three flag sweeps | theory inputs + flags + **oracle/execution fingerprints** |
 
@@ -34,10 +34,15 @@ series, the Maude version and derivation-check timeout, and (for web crawls)
 the Graphviz version. Rebuilding the same tool version on another platform
 does not invalidate cached output. Executable hashes are retained only for
 source-attestation checks and detecting replacement during a running gate.
-The web cache also fingerprints the crawler and its small URL-key
-helper and loaded staging/invocation protocol because they determine which
-response bytes enter the manifest. The protocol hash covers producer functions,
-not unrelated comments, cache plumbing, or comparison code. It
+Unchanged executable metadata avoids repeated hashing during a run; changed
+metadata triggers a content check. The web cache uses the crawler's explicit
+`PLAN_VERSION` capture contract. Bump it for changes to routes, captured bytes,
+or ordering of stateful requests; timing-only edits do not invalidate captures.
+Full crawler source hashes still detect edits during an active run. The cache
+also fingerprints the URL-key helper and loaded staging/invocation protocol
+because they determine which response bytes enter the manifest. The protocol
+hash covers producer functions, not unrelated comments, cache plumbing, or
+comparison code. It
 deliberately excludes the HTTP request deadline: a successful complete manifest
 is independent of how long the caller was willing to wait. Thus the harness preserves
 and automatically reselects caches for alternating Tamarin builds.
@@ -120,6 +125,10 @@ walks the RS test harness's ladder because its captures must use the maude
   exits 2 when nothing resolves; the selected path is passed explicitly to
   both provers. Empty unexplained oracle runs are not cached. Lower `JOBS` on
   a constrained box rather than raising it.
+  `TIMING proof` lines on stderr report input hashing, cache decompression,
+  Rust proving, normalization/input rechecks, and comparison in milliseconds;
+  phase totals include the Haskell cache-validation/fill pass. Per-file timings
+  describe work across concurrent workers, so their sum is not wall time.
   `ALLOWLIST` defaults to `scripts/parity_corpus.txt`, falling back to
   `$PREV_TSV`'s first column only when that file is missing too.
 - **`wf_gate.sh`** — fast (~45 s over the whole corpus on 24 cores)
@@ -157,7 +166,32 @@ walks the RS test harness's ladder because its captures must use the maude
   over an empty histogram would otherwise read as a pass.
 - **`web_parity.sh`** — interactive-mode gate: crawls both web servers per
   theory and diffs the responses — pane/JSON semantically, graph routes
-  byte-for-byte. Run on server changes. `ALLOWLIST=` is REQUIRED (one
+  byte-for-byte. Runs two theories concurrently by default (`JOBS=1` for
+  serial execution). Each worker adds 2 to `HS_PORT`/`RS_PORT`, so the defaults
+  reserve ports 3021–3024. Increase `JOBS` cautiously: each server has its own
+  memory cap, and large response manifests can exceed a GiB. Results are
+  collected per worker before applying the ledger once to the whole run.
+  Each free worker takes the next theory from a shared queue.
+  `WEB_FETCH_JOBS=2` overlaps read-only proof/graph requests within each theory
+  after autoproving and sitemap discovery; other links (including proof-method
+  applications) remain sequential. Set it to `1` for serial fetching (range
+  1–16). Results retain sitemap order. Fetch concurrency does not change the
+  capture contract and therefore shares the same Haskell cache profile.
+  `TIMING web`, `TIMING crawl`, and `TIMING compare` lines report
+  startup, initial pages, autoproving, sitemap discovery, final page fetching,
+  manifest writing/loading, comparison, and shutdown. Each server lifecycle
+  reports its total; `TIMING web_gate total_ms` reports the whole invocation,
+  including setup and bookkeeping. The proof gate likewise reports
+  `TIMING proof total_ms`. Times are milliseconds. Server lifecycle checks
+  poll every 100 ms; timeout settings remain in seconds.
+  HTML comparison preserves the original bytes, including comments, doctypes,
+  closing-tag spelling, and malformed markup. The parser only locates text
+  for version/timestamp normalization; it never repairs or reserializes HTML.
+  JSON responses compare fields individually, skipping normalization for equal
+  strings. Only `html`, `title`, and `alert` fields receive HTML-aware environment
+  normalization; other strings remain text. Work-directory normalization uses
+  each manifest's recorded root, without guessing legacy temporary paths.
+  Run on server changes. `ALLOWLIST=` is REQUIRED (one
   corpus-relative path per line; `ALLOWLIST=seed` is the built-in 2-file smoke
   list, and the full cached set is the milestone sweep) — it used to fall back
   to the seed list whenever it was unset or misspelt, which turned a
@@ -275,8 +309,8 @@ walks the RS test harness's ladder because its captures must use the maude
   flat entries remain separate because their producer identity is incomplete.
 - **`web_crawl.py`** — crawls a running server into a response manifest.
 - **`web_diff.py`** / **`web_normalize.py`** — semantic manifest diff and the
-  normalizer it uses. Markup routes compare structurally; the `dot` and
-  `text` routes compare byte for byte bar the env-volatile tokens, because
+  normalizer it uses. HTML, `dot`, and `text` routes compare byte for byte
+  bar the env-volatile tokens, because
   the port serialises both verbatim and whitespace is content there — the
   `source`/`message` panes carry the pretty printer's own trailing spaces.
 
@@ -574,8 +608,8 @@ then upstream behaviour moving under them.
   `testParser/define.spthy` and three `thesis-LaraSchmid-evoting` theories in
   front of every gate that reads this file — and take their bare branch out of
   reach in exchange. Web gates use the separate `web_flags.tsv` contract, so
-  batch-only `--auto-sources` and `--diff` recipes never leak into one
-  interactive server while the other runs bare. The other 28 still prove one
+  `--auto-sources` reaches both interactive loaders, while batch-only
+  `--diff` recipes cannot leak into one server while the other runs bare. The other 28 still prove one
   branch only. The value must
   be ATTACHED (`-D=A`, never `-D A`): `-D` is a cmdargs `flagOpt` in the
   Haskell binary, which reads a detached value as a positional input file,

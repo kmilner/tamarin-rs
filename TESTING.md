@@ -205,7 +205,7 @@ fast gates do need the oracle binary present to address it.**
 |---|---|
 | `scripts/corpus_file_diff.sh` | the ground-truth batch gate: 432-file `--prove` byte parity (~30–60 min cold) |
 | `scripts/pe_sweep.sh` / `module_sweep.sh` / `json_sweep.sh` | the same sweeps over their full corpora |
-| `ALLOWLIST=<filelist> scripts/web_parity.sh` | interactive-mode gate: crawl + semantic diff |
+| `ALLOWLIST=<filelist> scripts/web_parity.sh` | interactive-mode gate: crawl + HTML byte comparison |
 | `scripts/bench.sh` | performance tables (see README) |
 
 **CI enforces `cargo fmt`, clippy, HS citation integrity, licence headers,
@@ -458,6 +458,9 @@ per line; unset uses `scripts/parity_corpus.txt`, set-but-unreadable is
 resolves. The resolved Maude path is passed explicitly to both provers, and an
 unexplained empty oracle run is not cached.
 
+`TIMING proof` lines report input-key calculation, cache reads, Rust proving,
+normalization/checking and comparison, plus phase and whole-gate totals.
+
 **Budget for it.** `JOBS=4` is a memory bound, not a leftover: four
 concurrent oracles at `-N4 -M11g` plus four Rust provers is up to ~44 GB of
 GHC heap. It carries the shared `oom_prologue` — `oom_score_adj=1000` plus a
@@ -491,22 +494,24 @@ commit. When the generated source tree and attested binary are already current,
 setup skips the timestamp-changing relink entirely.
 
 **Older cache generations stay safe and separate.** Current Haskell-output
-keys cover the oracle release/revision and patch series, Maude version and derivation-check
-timeout; web profiles additionally cover Graphviz, the crawler, its URL-key
-helper, and the loaded shell protocol that stages and invokes a crawl. Older entries did not
-record all of that producer identity, so the harness leaves them on disk for
-old checkouts but does not promote them. The first current run refills once
-under the complete identity. Historical generations remain available to old
-checkouts, but are not promoted into current keys.
+keys cover the oracle release/revision and patch series, Maude version and
+derivation-check timeout. Format-4 web profiles additionally cover Graphviz,
+the crawler's explicit `PLAN_VERSION`, its URL-key helper's source hash, and
+the loaded shell protocol that stages and invokes a crawl.
 
-In particular, format-2 web profiles predate crawler-source identity. They stay
-available to older checkouts rather than being deleted, but cannot be adopted
-automatically without asserting which unrecorded script produced them. The
-format-3 profile therefore requires one safe refill. Later changes confined to
-`web_diff.py` or response canonicalization reuse that refill: those files guard
-the comparison verdict but are not cache producers. The shell protocol hash is
-computed from the producer functions themselves, so unrelated cache plumbing,
-comments, and comparison-only edits do not strand the manifests either.
+Unlike format 3, format 4 does not use the crawler's entire source hash to
+select persistent entries. Bump `PLAN_VERSION` when routes, decoding,
+redirect/error handling or stateful request ordering change; timing and
+scheduling changes to independent reads do not require a bump. The full
+crawler source hash still detects edits during an active run. Older profiles
+remain on disk for older checkouts and are not promoted automatically; any
+manual migration must establish that the completed captures remain compatible.
+
+Changes confined to `web_diff.py` or response normalization reuse the same
+captures: those files guard the comparison verdict but are not cache
+producers. The shell protocol hash is computed from producer functions, so
+unrelated comments, cache plumbing and comparison-only edits do not strand
+manifests either.
 
 All current gate caches live under the main/common worktree's gitignored
 `scripts/.gate_cache/`, in `proof`, `load`, `raw`, `sweep`, and `web`
@@ -522,8 +527,10 @@ The raw, web, proof, load and sweep caches, plus `rs_ref_check.sh`
 references, all digest included files transitively and executable oracle
 inputs. Tool identities use versions (plus the Haskell revision and patch
 series), so platform-specific rebuilds do not invalidate the cache. Executable
-hashes only guard in-flight replacement and source attestations. The web cache stages both
-dependency classes through one helper shared by both consumers.
+hashes only guard in-flight replacement and source attestations. Unchanged
+executable metadata avoids repeated hashing; a metadata change triggers a
+content check. The web cache stages both dependency classes through one helper
+shared by both consumers.
 
 Dependency discovery unions the hidden parser-backed `tamarin-rs input-manifest`
 mode with a conservative parser-independent scan of every existing lexical
@@ -716,6 +723,7 @@ sweep that compared nothing.
 
 ```bash
 ALLOWLIST=seed              RESULTS_TSV=/tmp/web.tsv scripts/web_parity.sh   # 2-file smoke
+ALLOWLIST=scripts/websweep_residual.txt RESULTS_TSV=/tmp/web.tsv scripts/web_parity.sh  # milestone corpus
 ALLOWLIST=<filelist>        RESULTS_TSV=/tmp/web.tsv scripts/web_parity.sh
 ```
 
@@ -723,18 +731,38 @@ ALLOWLIST=<filelist>        RESULTS_TSV=/tmp/web.tsv scripts/web_parity.sh
 literal `seed` for the built-in 2-file smoke list. Unset or unreadable is
 `exit 2`, not a fall-through to a default corpus.
 
-Boots both servers on the same theory (HS on port 3021, RS on 3022), crawls
-every proof-tree / constraint-system / graph / source page — autoproving
-each lemma along the way — and diffs the pages semantically
-(`web_crawl.py` / `web_normalize.py` / `web_diff.py`). HS crawl manifests are
-cached in profiles under `scripts/.gate_cache/web/`. `web_cache.sh` selects a
+Runs two independent theories concurrently by default (`JOBS=2`). Each worker
+owns a pair of ports: the defaults use 3021/3022 and 3023/3024 for HS/RS.
+Within each theory, the Haskell crawl finishes before Rust starts. Workers
+claim the next theory as they become free; use `JOBS=1` to reduce memory use.
+
+The crawler autoproves each lemma and visits proof-tree, constraint-system,
+graph and source pages up to the configured proof-node cap. Autoprove and
+other state-changing requests stay sequential. Read-only proof/graph pages
+use `WEB_FETCH_JOBS=2` concurrent requests per server (allowed range 1–16),
+with results recorded in crawl-plan order.
+
+HTML is compared byte for byte, including tag spelling, attribute order,
+highlighting and whitespace. Only environment fields such as versions,
+timestamps, theory indices and work-directory paths are normalized; malformed
+markup is preserved rather than repaired. JSON envelopes additionally allow
+different key order and encoding. Graph and plain-text responses retain their
+byte comparisons apart from environment fields.
+
+Both engines receive the per-theory interactive recipe from
+`scripts/web_flags.tsv` (`WEB_FLAGS_MAP` overrides it), and those flags are
+part of the input key. The auto-sources examples use `--auto-sources`, as
+upstream's interactive instructions require; Rust also honors the equivalent
+in-file configuration block. Unsupported flags fail explicitly.
+
+HS crawl manifests are cached in profiles under `scripts/.gate_cache/web/`.
+`web_cache.sh` selects a
 profile from oracle, Maude and Graphviz versions (including the oracle revision
-and patch series), the
-crawler and its small URL-key helper's source SHA-256, the loaded shell
-producer protocol, plus the derivation
-timeout, crawl plan and node cap (not the HTTP request deadline,
-which cannot alter a successful complete manifest); entry keys cover the theory, transitive
-includes, and executable oracle inputs. Linked worktrees share the main
+and patch series), the URL-key helper's source SHA-256, the loaded shell
+producer protocol, plus the derivation timeout, crawl-plan version and node cap
+(not the HTTP request deadline, which cannot alter a successful complete
+manifest); entry keys cover the theory, flags, transitive includes and
+executable oracle inputs. Linked worktrees share the main
 checkout's pool, so switching Tamarin versions automatically reselects the
 corresponding cache instead of overwriting it. Per-entry locks and atomic
 publication let background fills and readers safely use that shared pool at
@@ -760,9 +788,11 @@ executes. Old flat `.web_hs_cache*` entries do not attest Maude,
 derivation or Graphviz identity, so they remain available to old checkouts but
 are not promoted into current profiles. Both consumers use one guarded server
 lifecycle that refuses an occupied port before boot and waits for release after
-shutdown; they also reject a source whose input key changes while it is being
-staged. Env knobs:
-`FILE_TIMEOUT`, `READY_TIMEOUT`, `HS_PORT`, `RS_PORT`, `MAX_NODES` (400
+shutdown. Cancellation stops active probes, crawlers and servers and removes
+their work directories. Both gates also reject a source whose input key changes
+while it is being staged. Env knobs:
+`JOBS` (2, `web_parity.sh` only), `WEB_FETCH_JOBS` (2), `WEB_FLAGS_MAP`,
+`FILE_TIMEOUT`, `WEB_CRAWL_TIMEOUT`, `READY_TIMEOUT`, `HS_PORT`, `RS_PORT`, `MAX_NODES` (400
 proof-node visits per theory), `WEB_CACHE_ROOT`, `CACHE` (exact-directory
 override; existing manifests require a matching `PROFILE`), `WEB_WORK_ROOT` (large per-run manifests; defaults
 under `target/`, not a size-limited `/tmp`),
@@ -772,6 +802,11 @@ cap, 24 GiB), `HS_PATH`, `RS_PATH`, `MAUDE_PATH`, `CORPUS_ROOT`,
 gate), `WEB_LEDGER` (default `scripts/websweep_ledger.tsv`; the literal `none`
 runs without one, which makes every DIFF undocumented by definition) and
 `FAIL_ON_CAPPED`.
+
+`TIMING` lines report server startup, crawl and shutdown, crawler phases,
+comparison work and total gate time. Use these to distinguish proving/fetching
+cost from comparison overhead; totals depend on the corpus, cache warmth and
+worker settings.
 
 **Its exit status reports divergence as well as vacuity.** DIFF and
 `MISSING_*` rows are matched mechanically against the residue ledger
@@ -803,8 +838,10 @@ re-crawl, so a manifest from another oracle is `SKIP_STALE_CACHE`; it needs
 the oracle binary present to select and check that profile, even though it only
 boots the port.
 
-The focused harness regression checks require no server (but do use the
-parser-backed Rust binary described above). CI runs the same command:
+The focused harness regression checks do not need a running Tamarin server,
+but start a local HTTP fixture and require permission to bind loopback sockets.
+They also use the parser-backed Rust binary described above. CI runs the same
+command:
 
 ```bash
 python3 scripts/test_web_harness.py

@@ -3,7 +3,7 @@
 # server between HS (oracle) and the Rust port, across a corpus of theory
 # files.  The web analogue of corpus_file_diff.sh.
 #
-# Per file, two strictly-sequential phases so HS and RS never contend:
+# Per file, two strictly-sequential phases, with JOBS independent files:
 #   Phase 1 (HS): boot `HS tamarin-prover interactive` on a temp workdir with
 #                 the one theory, crawl it (web_crawl.py), cache the response
 #                 manifest under an oracle/settings profile; source identity
@@ -20,7 +20,8 @@
 #      RS_PATH, MAUDE_PATH, DERIVCHECK_TIMEOUT
 #      (both servers, 30s), SERVER_MEM_KB (per-server address-space cap,
 #      24 GiB), TAM_RS_NO_AUTO_BUILD, WEB_LEDGER (residue ledger, or the
-#      literal `none`), FAIL_ON_CAPPED.
+#      literal `none`), FAIL_ON_CAPPED, JOBS (2; each worker advances the base
+#      HS_PORT and RS_PORT by 2, so the defaults use 3021..3024).
 # Output TSV (7 col): file  url  status  hs_http  rs_http  kind  class
 #   status ∈ MATCH | LEDGERED | DIFF | MISSING_RS | MISSING_HS | CAPPED_* | SKIP_*
 #   class  = the ledger class of a LEDGERED row, `-` on every other row
@@ -49,6 +50,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # server, with their own SERVER_MEM_KB cap.)
 [ -r "$script_dir/gate_common.sh" ] || { echo "web_parity: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+gate_started=$(gate_now_ms)
+trap 'echo "TIMING web_gate total_ms=$(( $(gate_now_ms) - gate_started ))" >&2' EXIT
 [ -r "$script_dir/web_cache.sh" ] || { echo "web_parity: missing $script_dir/web_cache.sh" >&2; exit 2; }
 . "$script_dir/web_cache.sh"
 
@@ -91,7 +94,8 @@ web_cache_init "$repo_root" "$script_dir" "$HS_PATH" "$PLAN_VERSION" \
 web_comparator_init "$script_dir" \
     || { echo "web_parity: cannot capture web comparator identity" >&2; exit 2; }
 WEB_ACTIVE_WORKDIR=
-trap 'web_abort_active_boot; [ -z "$WEB_ACTIVE_WORKDIR" ] || rm -rf -- "$WEB_ACTIVE_WORKDIR"; exit 130' HUP INT TERM
+WEB_WORKERS_PID=
+trap '[ -z "$WEB_WORKERS_PID" ] || { kill -TERM "$WEB_WORKERS_PID" 2>/dev/null; wait "$WEB_WORKERS_PID"; }; exit 130' HUP INT TERM
 
 # Auto-build RS (opt out with TAM_RS_NO_AUTO_BUILD=1).
 if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
@@ -279,11 +283,14 @@ one_file() {
     fi
     if ! web_python_isolated "$wd/diff-pycache" \
             python3 "$script_dir/web_diff.py" "$wd/hs.json" "$rs_manifest" \
-            "$wd/parity.tsv" "$wd/diffs" >/dev/null 2>&1 \
+            "$wd/parity.tsv" "$wd/diffs" >/dev/null 2>"$wd/compare.log" \
             || [ ! -s "$wd/parity.tsv" ]; then
         rm -rf "$wd"
         printf '%s\t-\tSKIP_DIFF_FAIL\t-\t-\t-\n' "$rel"; return 0
     fi
+    while IFS= read -r diagnostics; do
+        printf '%s %s\n' "$rel" "$diagnostics" >&2
+    done < "$wd/compare.log"
     if ! checked_key=$(web_cache_key "$rel" "$f" "$theory_flags") \
             || [ "$checked_key" != "$key" ] || ! web_comparison_identity_unchanged; then
         rm -rf "$wd"
@@ -380,17 +387,19 @@ echo "web_parity: HS=$HS_PATH  fp=$HS_FP" >&2
 echo "web_parity: RS=$RS_PATH  maude=$MAUDE_PATH" >&2
 echo "web_parity: HS-cache=$CACHE  mode=$WEB_CACHE_MODE" >&2
 echo "web_parity: ledger=$LEDGER" >&2
-N=$(filelist | grep -c .)
+mapfile -t FILES < <(filelist | grep .)
+N=${#FILES[@]}
 # Zero files is the whole-run form of comparing nothing: no rows, an empty
 # summary, and a DONE line that looks exactly like a clean sweep.
 [ "$N" -gt 0 ] || { echo "ALLOWLIST '$ALLOWLIST' has no entries — nothing to crawl" >&2; exit 2; }
 claim_output "$RESULTS_TSV" RESULTS_LOCK_FD || exit 2
-i=0
-while IFS= read -r rel; do
-    [ -n "$rel" ] || continue
-    i=$((i+1)); echo "[$i/$N] $rel" >&2
-    one_file "$rel" >> "$RESULTS_TSV"
-done < <(filelist | grep .)
+web_run_files "$RESULTS_TSV" "${FILES[@]}" &
+WEB_WORKERS_PID=$!
+wait "$WEB_WORKERS_PID" || {
+    echo "web_parity: worker failed — incomplete results in $RESULTS_TSV" >&2
+    exit 2
+}
+WEB_WORKERS_PID=
 
 apply_web_ledger "$RESULTS_TSV"
 

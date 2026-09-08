@@ -1,6 +1,9 @@
-# Canonical per-file flags for interactive parity. This is deliberately
-# separate from file_flags.tsv: batch-only --auto-sources/--diff recipes do
-# not define how the corresponding theory is opened in the web interface.
+# Canonical per-file flags for interactive parity, separate from batch recipes.
+# The auto-sources examples follow examples/features/auto-sources/README.
+features/auto-sources/spore/SpliceAS.spthy	--auto-sources
+features/auto-sources/tamarin-repo/loops/RFID_Simple-without-SL.spthy	--auto-sources
+features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/Envelope.spthy	--auto-sources
+features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	--auto-sources
 regression/trace/seqdfsneeded.spthy	--stop-on-trace=seqdfs
 accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-1.spthy	--stop-on-trace=seqdfs
 accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-2.spthy	--stop-on-trace=seqdfs

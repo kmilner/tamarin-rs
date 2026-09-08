@@ -40,9 +40,9 @@ See [License](#license) if you are interested in future prospects for redistribu
   `tamarin-prover/examples/` plus one repo-local regression fixture. Stored
   proofs replay and validate across provers in both directions, and the
   interactive web UI agrees page-for-page with the Haskell server except for
-  a small documented cosmetic residue, enumerated theory-by-theory in
-  `scripts/websweep_residual.txt` (77 files) and re-checked by a ≈69,600-page
-  crawl sweep — see [Parity status](#parity-status).
+  a small documented cosmetic residue in `scripts/websweep_ledger.tsv`.
+  The 77-theory milestone crawl uses `scripts/websweep_residual.txt`, with
+  explicit proof-node caps — see [Parity status](#parity-status).
 - **Performance:** 4.6–116× faster than the most recent Tamarin release
   (1.12.0) across 1–16 cores (median 23×). At one core, peak process-tree
   memory is 2.1–21× lower; at sixteen cores it ranges from 25% higher on
@@ -144,12 +144,16 @@ file replays every stored step against a freshly derived constraint system,
 and proof files are cross-compatible in both directions with byte-identical
 analysis output from either loader.
 
-The interactive web UI (`interactive` subcommand) is verified by a semantic
-crawl gate (`scripts/web_parity.sh`): both servers are booted on the same
-theory, every proof-tree, constraint-system, graph and source page is
-crawled — autoproving each lemma along the way — and compared after
-normalisation. The two UIs agree page-for-page except for a small documented
-residue that renders *identical* proof states with different internal
+The interactive web UI (`interactive` subcommand) is verified by a crawl
+gate (`scripts/web_parity.sh`): both servers load the same theory with the
+same flags, autoprove each lemma, and compare proof-tree, constraint-system,
+graph and source pages. HTML is compared byte for byte, including highlighting,
+markup and whitespace, except for environment fields such as timestamps and
+work-directory paths. JSON envelopes also allow different key order and
+encoding. Proof-node visits are capped at 400 per theory by default; truncated
+crawls are reported, and `FAIL_ON_CAPPED=1` makes them fail the gate. Within
+that coverage, the two UIs agree except for a small documented residue that
+renders *identical* proof states with different internal
 counter values (fresh-variable witness indices, goal-creation numbers,
 term-abbreviation picks on a few AC-heavy theories); these never appear in
 proof scripts, proof structure, or verdicts.
@@ -285,7 +289,8 @@ refined sources are computed once and shared across lemmas.
   induction, stored-proof replay with plain-load proof validation, and
   AC-modulo unification via pooled Maude.
 - **`--auto-sources`:** automatic sources-lemma generation
-  (HS `addAutoSourcesLemma`).
+  (HS `addAutoSourcesLemma`) in batch and interactive mode, also enabled by
+  an in-file `configuration: "--auto-sources"` block.
 - **SAPiC `process:`** — the process-calculus frontend, byte-identical to HS
   `Sapic.translate`: core constructs, mutable state, locks, `let`
   bindings/destructors, secret/private channels, progress and

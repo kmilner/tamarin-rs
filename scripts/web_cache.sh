@@ -14,7 +14,12 @@
 # CACHE overrides the exact directory, with the same producer-profile checks.
 web_cache_init() {
     local repo=$1 scripts=$2 hs=$3 plan=$4 profile_text marker
-    local dot_path dot_sha dot_version crawl_path="$scripts/web_crawl.py" url_key_path="$scripts/web_url_key.py"
+    local dot_path dot_version crawl_path="$scripts/web_crawl.py" url_key_path="$scripts/web_url_key.py"
+    WEB_FETCH_JOBS=${WEB_FETCH_JOBS:-2}
+    if [[ ! $WEB_FETCH_JOBS =~ ^([1-9]|1[0-6])$ ]]; then
+        echo "WEB_FETCH_JOBS must be within 1..16" >&2; return 2
+    fi
+    export WEB_FETCH_JOBS
 
     if [ "${HS_FP_PATH:-}" = "$hs" ] && [ -n "${HS_FP:-}" ]; then
         WEB_ORACLE_SHA256=$HS_FP
@@ -24,9 +29,8 @@ web_cache_init() {
     fi
     execution_fingerprint "$MAUDE_PATH" "${DERIVCHECK_TIMEOUT:-30}" || return 1
     if dot_path=$(command -v dot 2>/dev/null) && [ -n "$dot_path" ]; then
-        dot_sha=$(binary_sha256 "$dot_path") || return 1
+        capture_binary_identity "$dot_path" DOT_FP DOT_FILE_STATE || return 1
         DOT_FP_PATH=$dot_path
-        DOT_FP=$dot_sha
         dot_version=$("$dot_path" -V 2>&1) || return 1
         [ -n "$dot_version" ] || return 1
         dot_version=${dot_version%% (*}
@@ -49,12 +53,11 @@ web_cache_init() {
         return 2
     }
     profile_text=$(printf '%s\n' \
-        "format=3" \
+        "format=4" \
         "oracle_sha256=$WEB_ORACLE_SHA256" \
         "plan_version=$plan" \
         "execution_sha256=$EXEC_FP" \
         "graphviz_version=$dot_version" \
-        "crawler_sha256=$WEB_CRAWL_FP" \
         "url_key_sha256=$WEB_URL_KEY_FP" \
         "producer_protocol_sha256=$WEB_PRODUCER_PROTOCOL_FP" \
         "max_nodes=${MAX_NODES:-400}")
@@ -259,8 +262,8 @@ web_exec_crawler() {
     local port=$1 wd=$2 out=$3 kind=$4 crawl_flags=$5
     local -a crawl_args=()
     [ -z "$crawl_flags" ] || read -r -a crawl_args <<< "$crawl_flags"
-    web_python_isolated "$wd/${kind}-pycache" \
-        timeout "${FILE_TIMEOUT:-300}" python3 "$WEB_CACHE_SCRIPTS/web_crawl.py" \
+    PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX="$wd/${kind}-pycache" \
+        exec setsid timeout "${FILE_TIMEOUT:-300}" python3 "$WEB_CACHE_SCRIPTS/web_crawl.py" \
         "http://127.0.0.1:$port" "$out" --max-nodes "${MAX_NODES:-400}" \
         "${crawl_args[@]}"
 }
@@ -328,22 +331,24 @@ finally:
 PY
 }
 
+# Poll at 100 ms; timeout settings remain in seconds.
 web_wait_port_free() {
-    local port=$1 i
-    for ((i=0; i<${PORT_FREE_TIMEOUT:-30}; i++)); do
+    local port=$1 deadline=$(( $(gate_now_ms) + 1000 * ${PORT_FREE_TIMEOUT:-30} ))
+    while [ "$(gate_now_ms)" -lt "$deadline" ]; do
         web_port_free "$port" && return 0
-        sleep 1
+        sleep 0.1
     done
     return 1
 }
 
 web_stop_group() {
-    local pid=$1 i
+    local pid=$1 deadline
     [ -n "$pid" ] || return 0
-    kill -TERM -- -"$pid" 2>/dev/null || true
-    for ((i=0; i<${SERVER_STOP_TIMEOUT:-5}; i++)); do
+    kill -TERM -- -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    deadline=$(( $(gate_now_ms) + 1000 * ${SERVER_STOP_TIMEOUT:-5} ))
+    while [ "$(gate_now_ms)" -lt "$deadline" ]; do
         kill -0 -- -"$pid" 2>/dev/null || break
-        sleep 1
+        sleep 0.1
     done
     if kill -0 -- -"$pid" 2>/dev/null; then
         kill -KILL -- -"$pid" 2>/dev/null || true
@@ -354,10 +359,23 @@ web_stop_group() {
 # web_boot_crawl <bin> <port> <workdir> <manifest> <kind> <theory-flags> <crawl-flags>
 # Run one guarded server lifecycle. Explicit flags prevent the two web gates'
 # callers from communicating through dynamically scoped shell variables.
-_web_boot_crawl() (
+# web_boot_crawl backgrounds this function; no second subshell should sit
+# between its recorded PID and the lifecycle's signal handler.
+_web_boot_crawl() {
     local bin=$1 port=$2 wd=$3 out=$4 kind=$5 theory_flags=$6 crawl_flags=$7
-    local log="$wd/${kind}_server.log" pid= ok= i rc
-    trap 'web_stop_group "$pid"; rm -rf "$wd"; exit 130' HUP INT TERM
+    local log="$wd/${kind}_server.log" pid= crawler= probe= ok= deadline remaining probe_timeout rc
+    local started ready finished stopped
+    started=$(gate_now_ms)
+    trap '
+        if [ -n "$probe" ]; then
+            kill "$probe" 2>/dev/null || true
+            wait "$probe" 2>/dev/null || true
+        fi
+        web_stop_group "$crawler"
+        web_stop_group "$pid"
+        rm -rf "$wd"
+        exit 130
+    ' HUP INT TERM
     web_wait_port_free "$port" || {
         echo "  port $port not free before $kind server boot" >&2
         return 1
@@ -369,10 +387,16 @@ _web_boot_crawl() (
       web_exec_server "$bin" "$port" "$wd" "$theory_flags"
     ) >"$log" 2>&1 &
     pid=$!
-    for ((i=0; i<${READY_TIMEOUT:-90}; i++)); do
-        if curl -sf -o /dev/null "http://127.0.0.1:$port/"; then ok=1; break; fi
+    deadline=$(( $(gate_now_ms) + 1000 * ${READY_TIMEOUT:-90} ))
+    while remaining=$((deadline - $(gate_now_ms))); [ "$remaining" -gt 0 ]; do
+        printf -v probe_timeout '%d.%03d' "$((remaining / 1000))" "$((remaining % 1000))"
+        curl --max-time "$probe_timeout" -sf -o /dev/null "http://127.0.0.1:$port/" &
+        probe=$!
+        rc=0; wait "$probe" || rc=$?
+        probe=
+        if [ "$rc" -eq 0 ]; then ok=1; break; fi
         kill -0 "$pid" 2>/dev/null || break
-        sleep 1
+        sleep 0.1
     done
     if [ -z "$ok" ]; then
         echo "  $kind server not ready ($wd)" >&2
@@ -383,10 +407,14 @@ _web_boot_crawl() (
         web_stop_group "$pid"
         return 1
     fi
+    ready=$(gate_now_ms)
     ( [ -z "${WEB_CACHE_LOCK_FD:-}" ] || exec {WEB_CACHE_LOCK_FD}>&-
       web_exec_crawler "$port" "$wd" "$out" "$kind" "$crawl_flags"
-    ) 2>>"$log"
-    rc=$?
+    ) 2>>"$log" &
+    crawler=$!
+    rc=0; wait "$crawler" || rc=$?
+    crawler=
+    finished=$(gate_now_ms)
     web_stop_group "$pid"
     pid=
     if [ "$rc" -ne 0 ]; then
@@ -398,10 +426,14 @@ _web_boot_crawl() (
     fi
     if ! web_wait_port_free "$port"; then
         echo "  port $port still occupied after $kind server shutdown" >&2
-        return 1
+        rc=1
     fi
+    stopped=$(gate_now_ms)
+    printf 'TIMING web %s %s startup_ms=%s crawl_ms=%s shutdown_ms=%s total_ms=%s\n' "$kind" "$wd" \
+        "$((ready-started))" "$((finished-ready))" "$((stopped-finished))" "$((stopped-started))" >&2
+    grep '^TIMING crawl ' "$log" >&2 || true
     return "$rc"
-)
+}
 
 web_abort_active_boot() {
     [ -n "${WEB_BOOT_PID:-}" ] || return 0
@@ -440,6 +472,63 @@ web_cache_unlock() {
 web_cache_snapshot() {
     local source=$1 target=$2
     ln -L -- "$source" "$target" 2>/dev/null || cp -- "$source" "$target"
+}
+
+# Independent theories share no server state. Each worker owns a pair of
+# ports and a result file; only the parent publishes rows and applies the
+# ledger. Keep the default small: individual manifests can exceed a GiB.
+# Call in the background so its PID directly owns the workers and signal traps.
+web_run_files() {
+    local output=$1; shift
+    local files=("$@") pids=() worker i rc=0 scratch queue_fd
+    local jobs=${JOBS:-2}
+    if [[ ! $jobs =~ ^[1-9][0-9]{0,4}$ ]] || [ "$jobs" -gt 32767 ]; then
+        echo "JOBS must be a positive integer below 32768" >&2; exit 2
+    fi
+    [ "$jobs" -le "${#files[@]}" ] || jobs=${#files[@]}
+    [ "$jobs" -gt 0 ] || { echo "no web files to compare" >&2; exit 2; }
+    for i in "$HS_PORT" "$RS_PORT"; do
+        if [[ ! $i =~ ^[1-9][0-9]{0,4}$ ]] || [ "$i" -gt $((65535 - 2 * (jobs - 1))) ]; then
+            echo "web worker ports must fit within 1..65535" >&2; exit 2
+        fi
+    done
+    # Each base advances by two per worker. Reject overlapping port ranges
+    # when the two bases have the same parity.
+    i=$((HS_PORT - RS_PORT)); [ "$i" -ge 0 ] || i=$((-i))
+    if [ $((i % 2)) -eq 0 ] && [ "$i" -lt $((2 * jobs)) ]; then
+        echo "HS_PORT and RS_PORT overlap across web workers" >&2; exit 2
+    fi
+    scratch=$(mktemp -d) || exit 2
+    trap 'for worker in "${pids[@]}"; do kill -TERM "$worker" 2>/dev/null || :; done; wait; rm -rf "$scratch"' EXIT
+    trap 'exit 130' HUP INT TERM
+    echo 0 > "$scratch/next" || exit 2
+    for ((worker=0; worker<jobs; worker++)); do
+        (
+            trap 'web_abort_active_boot; [ -z "${WEB_ACTIVE_WORKDIR:-}" ] || rm -rf -- "$WEB_ACTIVE_WORKDIR"; exit 130' HUP INT TERM
+            HS_PORT=$((HS_PORT + 2 * worker))
+            RS_PORT=$((RS_PORT + 2 * worker))
+            # Each worker opens its own lock, claiming only an array index.
+            # Crawls and result writing never hold the queue lock.
+            exec {queue_fd}>"$scratch/queue.lock" || exit 1
+            while :; do
+                flock -x "$queue_fd" || exit 1
+                read -r i < "$scratch/next" || exit 1
+                if [ "$i" -ge "${#files[@]}" ]; then
+                    flock -u "$queue_fd" || exit 1
+                    break
+                fi
+                echo "$((i+1))" > "$scratch/next" || exit 1
+                flock -u "$queue_fd" || exit 1
+                echo "[$((i+1))/${#files[@]}] ${files[i]}" >&2
+                one_file "${files[i]}" || exit 1
+            done
+        ) > "$scratch/$worker.tsv" &
+        pids+=("$!")
+    done
+    for worker in "${pids[@]}"; do wait "$worker" || rc=1; done
+    pids=()
+    cat "$scratch/"*.tsv >> "$output" || exit 2
+    exit "$rc"
 }
 
 # Publish the manifest before its commit marker, with both renames occurring
@@ -506,7 +595,7 @@ web_flags_for() {
     [ -z "$raw" ] || read -r -a words <<< "$raw"
     for word in "${words[@]}"; do
         case "$word" in
-            -D=*|--stop-on-trace=*|--no-ndc|--quit-on-warning) kept+=("$word");;
+            -D=*|--stop-on-trace=*|--no-ndc|--quit-on-warning|--auto-sources) kept+=("$word");;
             *) echo "web_flags_for: unsupported interactive flag for $1: $word" >&2; return 1;;
         esac
     done
