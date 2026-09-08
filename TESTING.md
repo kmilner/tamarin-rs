@@ -141,11 +141,11 @@ but none of them proves.
 ### Parser-error diagnostics
 
 Rust's user-facing parser diagnostics intentionally do not reproduce Haskell's
-parsec/GHC exception text. The compact error still retains legacy parsec state
-for its compatibility `Display` implementation and GHC call-site metadata for
-oracle inspection. Batch and web surfaces instead render semantic failure
-classifications (for example unknown applications, wrong arity, reserved names,
-malformed attributes and include errors) with compact byte spans. They borrow
+parsec/GHC exception text. Errors retain semantic failure classifications and
+source spans; legacy Parsec state and GHC call-site metadata have been removed.
+`Display` uses the plain-text diagnostic renderer. Batch and web surfaces render
+these classifications (for example unknown applications, wrong arity, reserved
+names, malformed attributes and include errors) with compact byte spans. They borrow
 the root source rather than copying the whole input into each error value. An
 error inside an included file retains that file's path and contents, because
 the root source cannot render its labels correctly.
