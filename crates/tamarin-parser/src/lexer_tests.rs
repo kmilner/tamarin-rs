@@ -19,6 +19,65 @@ fn nested_block_comment() {
 }
 
 #[test]
+fn whitespace_fast_path_preserves_unicode_and_positions() {
+    for ch in (0..=255).filter_map(char::from_u32).chain([
+        '\u{1680}', '\u{2000}', '\u{2003}', '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}',
+        '\u{3000}', '\u{200b}', 'λ',
+    ]) {
+        let source = format!("{ch}x");
+        let mut lexer = Lexer::new(&source);
+        lexer.skip_ws();
+        let expected = if ch.is_whitespace() {
+            let mut cursor = Lexer::new(&source);
+            cursor.bump();
+            cursor.pos()
+        } else {
+            Pos::ZERO
+        };
+        assert_eq!(lexer.pos(), expected, "{ch:?}");
+        lexer.skip_ws();
+        assert_eq!(lexer.pos(), expected, "repeated probe for {ch:?}");
+    }
+    let mut lexer = Lexer::new(" \t/* λ /* inner */ */\n\u{2003}x");
+    lexer.skip_ws();
+    assert_eq!(
+        (lexer.peek(), lexer.pos().line, lexer.pos().col),
+        (Some('x'), 2, 2)
+    );
+}
+
+#[test]
+fn identifier_spans_preserve_unicode_and_reserved_word_backtracking() {
+    let source = " \tλong_identifier_123é /* trailing */ next";
+    let mut lexer = Lexer::new(source);
+    let (name, pos) = lexer.identifier_spanned().unwrap();
+    assert_eq!(name, "λong_identifier_123é");
+    assert_eq!(
+        pos,
+        Pos {
+            offset: 2,
+            line: 1,
+            col: 9
+        }
+    );
+    assert_eq!(&source[pos.offset..pos.offset + name.len()], name);
+    assert_eq!(lexer.identifier().as_deref(), Some("next"));
+
+    let mut lexer = Lexer::new("  rule /* comment */");
+    assert_eq!(lexer.identifier(), None);
+    assert_eq!(
+        lexer.pos(),
+        Pos {
+            offset: 2,
+            line: 1,
+            col: 3
+        }
+    );
+    assert!(lexer.symbol("rule"));
+    assert!(lexer.is_eof());
+}
+
+#[test]
 fn identifier_then_symbol() {
     let mut l = Lexer::new("foo  bar123");
     assert_eq!(l.identifier().as_deref(), Some("foo"));

@@ -163,7 +163,17 @@ impl<'a> Lexer<'a> {
 
     /// Skip Whitespace, line comments `//...`, and nested block comments `/* ... */`.
     /// `#`-prefixed preprocessor directives are NOT skipped (they're tokens).
+    #[inline]
     pub fn skip_ws(&mut self) {
+        // Most token probes are already at a token. Avoid entering the full
+        // comment/Unicode scanner for those calls. Include vertical tab, which
+        // char::is_whitespace accepts but u8::is_ascii_whitespace does not.
+        if let Some(b' ' | b'\t'..=b'\r' | b'/' | 0x80..=0xff) = self.rest().as_bytes().first() {
+            self.skip_ws_slow();
+        }
+    }
+
+    fn skip_ws_slow(&mut self) {
         loop {
             match self.peek() {
                 Some(c) if c.is_whitespace() => {
@@ -274,10 +284,8 @@ impl<'a> Lexer<'a> {
     pub(crate) fn identifier_spanned(&mut self) -> Option<(String, Pos)> {
         self.skip_ws();
         let save = self.pos;
-        let mut s = String::new();
         match self.peek() {
             Some(c) if c.is_alphanumeric() => {
-                s.push(c);
                 self.bump();
             }
             _ => {
@@ -287,18 +295,18 @@ impl<'a> Lexer<'a> {
         }
         while let Some(c) = self.peek() {
             if is_ident_char(c) {
-                s.push(c);
                 self.bump();
             } else {
                 break;
             }
         }
-        if is_reserved_name(&s) {
+        let s = &self.src[save.offset..self.pos.offset];
+        if is_reserved_name(s) {
             self.pos = save;
             return None;
         }
         self.skip_ws();
-        Some((s, save))
+        Some((s.to_owned(), save))
     }
 
     /// Peek an identifier without consuming.
