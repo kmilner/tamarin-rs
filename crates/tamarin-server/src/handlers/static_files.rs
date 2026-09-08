@@ -18,6 +18,7 @@
 //! We wire the dist-hoisting routes BEFORE the catch-all ServeDir so
 //! they take precedence.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -42,7 +43,34 @@ pub fn serve(state: Arc<AppState>) -> axum::Router<Arc<AppState>> {
             .route("/css/{name}", axum::routing::get(intdot_css_or_data));
     }
 
+    match patched_ui_css(&state.cfg.data_dir) {
+        Ok(Some(file)) => {
+            let service = ServeFile::new(file.path());
+            router = router.route(
+                "/css/tamarin-prover-ui.css",
+                axum::routing::get_service(service).layer(axum::Extension(Arc::new(file))),
+            );
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(%error, "Could not prepare lemma CSS; serving original assets")
+        }
+    }
     router.fallback_service(serve_data)
+}
+
+/// Until the submodule includes PR #928, prepare its CSS addition once.
+/// The route owns the temporary file and ServeFile supplies normal HTTP caching.
+fn patched_ui_css(data_dir: &Path) -> std::io::Result<Option<tempfile::NamedTempFile>> {
+    let css = std::fs::read(data_dir.join("css/tamarin-prover-ui.css"))?;
+    let instructions = include_bytes!("lemma_instructions.css");
+    if css.ends_with(instructions) {
+        return Ok(None);
+    }
+    let mut file = tempfile::Builder::new().suffix(".css").tempfile()?;
+    file.write_all(&css)?;
+    file.write_all(instructions)?;
+    Ok(Some(file))
 }
 
 /// `/static/js/<name>` — if the name is `intdot-*.es.js`, serve from

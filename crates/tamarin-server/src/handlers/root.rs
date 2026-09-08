@@ -158,13 +158,12 @@ fn render_index(state: &AppState) -> String {
     let theories = state.store.list();
     // HS `theoriesTpl` (Web/Hamlet.hs:84-101): the `<table>…</table><br>` (or
     // the empty-branch `<strong>No theories loaded!</strong><br>`) that fills
-    // the second `intropage` `<p>` of `rootTpl`.
+    // the second `intropage` of `rootTpl`.
     let theories_content = if theories.is_empty() {
         "<strong>No theories loaded!</strong><br>".to_string()
     } else {
         // HS `theoryTpl` (Web/Hamlet.hs:116-134): one `<tr>` per theory.  The
-        // `<thead>` emits four bare `<th>…</th>` (no `<tr>`), exactly as hamlet
-        // renders it.
+        // header row follows upstream PR #928’s corrected table structure.
         let mut rows = String::new();
         for t in &theories {
             let link = format!("/thy/trace/{}/overview/help", t.idx);
@@ -183,7 +182,7 @@ fn render_index(state: &AppState) -> String {
             ));
         }
         format!(
-            "<table><thead><th>Theory name</th><th>Time</th><th>Version</th><th>Origin</th></thead>{rows}</table><br>"
+            "<table><thead><tr><th>Theory name</th><th>Time</th><th>Version</th><th>Origin</th></tr></thead>{rows}</table><br>"
         )
     };
     // Byte-faithful port of `rootTpl` + `introTpl` (Web/Hamlet.hs), the widget
@@ -194,7 +193,7 @@ fn render_index(state: &AppState) -> String {
     default_layout(
         "Welcome to the Tamarin prover",
         &format!(
-            r##"<div class="ui-layout-container"><div class="ui-layout-north"><div class="ui-layout-pane"><div class="layout-pane-north"><div class="ui-layout-pane-north"><div id="introbar"><div id="header-info">Running <a href=/><span class="tamarin">Tamarin</span></a> {version}</div></div></div></div></div></div></div><div id="logo"><p><img src="/static/img/tamarin-logo-3-0-0.png"></p></div><noscript><div class="warning">Warning: JavaScript must be enabled for the <span class="tamarin">Tamarin</span> prover GUI to function properly.</div></noscript><div class="intropage"><p>Core team: <a href="https://www.inf.ethz.ch/personal/basin/">David Basin</a>, <a href="https://cispa.saarland/group/cremers/">Cas Cremers</a>, <a href="https://www.jannikdreier.net">Jannik Dreier</a>, <a href="mailto:iridcode@gmail.com">Simon Meier</a>, <a href="https://people.inf.ethz.ch/rsasse/">Ralf Sasse</a>, <a href="https://beschmi.net">Benedikt Schmidt</a><br>Tamarin is a collaborative effort: see the <a href="https://tamarin-prover.com/manual/index.html">manual</a> for a more extensive overview of its development and additional contributors.</p><p>This program comes with ABSOLUTELY NO WARRANTY. It is free software, and you are welcome to redistribute it according to its <a href="/static/LICENSE" type="text/plain">LICENSE.</a></p><p>More information about Tamarin and technical papers describing the underlying theory can be found on the <a href="https://tamarin-prover.com"><span class="tamarin">Tamarin</span> webpage</a>.</p></div><div class="intropage"><p>{theories_content}</p><h2>Loading a new theory</h2><p>You can load a new theory file from disk in order to work with it.</p><form class="root-form" enctype="multipart/form-data" action="/" method="POST">Filename:<input type="file" name="uploadedTheory"><div class="submit-form"><input type="submit" value="Load new theory"></div></form><p>Note: You can save a theory by downloading the source from the Actions menu.</p></div>"##,
+            r##"<div class="ui-layout-container"><div class="ui-layout-north"><div class="ui-layout-pane"><div class="layout-pane-north"><div class="ui-layout-pane-north"><div id="introbar"><div id="header-info">Running <a href=/><span class="tamarin">Tamarin</span></a> {version}</div></div></div></div></div></div></div><div id="logo"><p><img src="/static/img/tamarin-logo-3-0-0.png"></p></div><noscript><div class="warning">Warning: JavaScript must be enabled for the <span class="tamarin">Tamarin</span> prover GUI to function properly.</div></noscript><div class="intropage"><p>Core team: <a href="https://www.inf.ethz.ch/personal/basin/">David Basin</a>, <a href="https://cispa.saarland/group/cremers/">Cas Cremers</a>, <a href="https://www.jannikdreier.net">Jannik Dreier</a>, <a href="mailto:iridcode@gmail.com">Simon Meier</a>, <a href="https://people.inf.ethz.ch/rsasse/">Ralf Sasse</a>, <a href="https://beschmi.net">Benedikt Schmidt</a><br>Tamarin is a collaborative effort: see the <a href="https://tamarin-prover.com/manual/index.html">manual</a> for a more extensive overview of its development and additional contributors.</p><p>This program comes with ABSOLUTELY NO WARRANTY. It is free software, and you are welcome to redistribute it according to its <a href="/static/LICENSE" type="text/plain">LICENSE.</a></p><p>More information about Tamarin and technical papers describing the underlying theory can be found on the <a href="https://tamarin-prover.com"><span class="tamarin">Tamarin</span> webpage</a>.</p></div><div class="intropage">{theories_content}<h2>Loading a new theory</h2><p>You can load a new theory file from disk in order to work with it.</p><form class="root-form" enctype="multipart/form-data" action="/" method="POST">Filename:<input type="file" name="uploadedTheory"><div class="submit-form"><input type="submit" value="Load new theory"></div></form><p>Note: You can save a theory by downloading the source from the Actions menu.</p></div>"##,
             version = env!("CARGO_PKG_VERSION"),
             theories_content = theories_content,
         ),

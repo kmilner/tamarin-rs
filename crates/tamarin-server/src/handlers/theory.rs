@@ -369,10 +369,8 @@ fn title_for(
         // i.e. render the proof method stored at the node the path resolves
         // to.  `resolveProofPath` here == `navigate_at` on the live tree;
         // `psMethod . root` == that node's `.method`; `prettyProofMethod`
-        // == `method_label`.  (`renderHtmlDoc` wraps operators in `hl_*`
-        // spans the parity gate unwraps, so plain `method_label` compares
-        // equal.)  Falls back to "None" when the tree/path is unresolvable,
-        // exactly as HS's `Nothing` arm does.
+        // renders through HtmlDoc. Falls back to "None" for an unresolvable
+        // tree/path, exactly as HS's `Nothing` arm does.
         Proof { lemma, sub } => match sub.last() {
             // null (last p): "Method: " ++ methodName l p
             Some(s) if s.is_empty() => {
@@ -383,33 +381,17 @@ fn title_for(
                     .transpose()?
                     .flatten()
                     .map(|method| {
-                        // HS `methodName` = `renderHtmlDoc .
-                        // prettyProofMethod` — the HtmlDoc LAYOUT
-                        // (100/67, entity fill-widths, col 0): a
-                        // long method title WRAPS at the same
-                        // positions as HS's (the gate collapses
-                        // the newline to a space; the break
-                        // position is what must match).
-                        let _guard = tamarin_theory::pretty_hpj::HtmlEntityWidthGuard::enable();
-                        tamarin_theory::pretty_theory::pretty_proof_method_doc(&method).render_with(
-                            tamarin_theory::pretty_hpj::DEFAULT_LINE_LENGTH,
-                            tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
+                        use tamarin_theory::pretty_hpj::{
+                            postprocess_html, HtmlDocGuard, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON,
+                        };
+                        let _html = HtmlDocGuard::enable();
+                        postprocess_html(
+                            &tamarin_theory::pretty_theory::pretty_proof_method_doc(&method)
+                                .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON),
                         )
                     })
                     .unwrap_or_else(|| "None".to_string());
-                // HS `methodName` = `renderHtmlDoc . prettyProofMethod` and
-                // `renderHtmlDoc` (`Text/PrettyPrint/Html.hs:151-153`) escapes HTML
-                // entities in every text token via the `Document (HtmlDoc d)`
-                // instance (`Text/PrettyPrint/Html.hs:102-105`, whose `char`,
-                // `text` and `zeroWidthText` route through
-                // `escapeHtmlEntities`, Html.hs:140-149), so a
-                // method that mentions a tuple renders `&lt;B, A, …&gt;` in the
-                // JSON `title`, not a raw `<…>` (which the semantic canonicalizer
-                // would otherwise parse as a bogus HTML element).  Mirror that
-                // escaping here; the operator `hl_*` spans / `<br/>` that
-                // `renderHtmlDoc` also adds are unwrapped by the parity gate, so
-                // entity escaping is the only load-bearing part.
-                format!("Method: {}", crate::handlers::root::html_escape(&name))
+                format!("Method: {name}")
             }
             // otherwise: "Case: " ++ last p
             Some(s) => format!("Case: {}", s),
@@ -1859,14 +1841,15 @@ fn json_graph_response(body: String) -> Response {
 /// `imgThyPath`'s (`/graph`) and `dotGraphString`'s
 /// (`/interactive-graph-def`).  This `error` is upstream's DELIBERATE answer
 /// to a theory path the route does not draw, so the port reproduces its page
-/// byte-for-byte.
-const JSON_UNHANDLED_SITE: &str = "1318:31";
+/// byte-for-byte. Coordinates include PR #928; captured HTTP fixtures verify
+/// them against the patched oracle.
+const JSON_UNHANDLED_SITE: &str = "1312:31";
 
 /// `imgThyPath`'s clause — see [`JSON_UNHANDLED_SITE`].
-const GRAPH_UNHANDLED_SITE: &str = "1416:51";
+const GRAPH_UNHANDLED_SITE: &str = "1410:51";
 
 /// `dotGraphString`'s clause — see [`JSON_UNHANDLED_SITE`].
-const INTERACTIVE_DOT_UNHANDLED_SITE: &str = "2323:51";
+const INTERACTIVE_DOT_UNHANDLED_SITE: &str = "2317:51";
 
 /// The `error` `thyPathSystem`'s catch-all clause raises for a theory path that
 /// is neither a proof nor a source case, as GHC renders it into Yesod's error
@@ -2208,49 +2191,6 @@ mod tests {
         assert!(quit.oracle_only);
         assert!(web_search_options("unknown", 0, false, 0).is_none());
         assert!(web_search_options("unknown", 0, true, 0).is_none());
-    }
-
-    /// The pinned submodule's `src/Web/Theory.hs`, embedded at build time: a
-    /// submodule bump recompiles this module against the new source, so the
-    /// coordinate check below runs on every bump.
-    const WEB_THEORY_HS: &str = include_str!("../../../../tamarin-prover/src/Web/Theory.hs");
-
-    /// The `error "Unhandled theory path. …"` raised inside the top-level
-    /// binding `func`, as `LINE:COLUMN` — the coordinates GHC's `HasCallStack`
-    /// prints: both 1-based, the column that of the `error` token itself.
-    fn unhandled_site_in(func: &str) -> String {
-        const RAISE: &str = "error \"Unhandled theory path. This is a bug.\"";
-        let lines: Vec<&str> = WEB_THEORY_HS.lines().collect();
-        let signature = format!("{} ::", func);
-        let start = lines
-            .iter()
-            .position(|l| l.starts_with(&signature))
-            .unwrap_or_else(|| panic!("no top-level `{func}` in src/Web/Theory.hs"));
-        for (i, line) in lines.iter().enumerate().skip(start + 1) {
-            if let Some(off) = line.find(RAISE) {
-                return format!("{}:{}", i + 1, line[..off].chars().count() + 1);
-            }
-            // A new top-level signature ends the binding.
-            assert!(
-                !(line.starts_with(|c: char| c.is_ascii_alphabetic()) && line.contains("::")),
-                "`{func}` raises no unhandled-theory-path error"
-            );
-        }
-        panic!("`{func}` raises no unhandled-theory-path error");
-    }
-
-    // The three constants are pasted into 500 bodies verbatim, so nothing else
-    // notices when a bump moves the clauses they name: the fixtures those
-    // bodies are compared against were captured from the port, and move with
-    // the constants rather than with upstream.
-    #[test]
-    fn unhandled_site_constants_name_the_pinned_call_sites() {
-        assert_eq!(JSON_UNHANDLED_SITE, unhandled_site_in("graphJsonThyPath"));
-        assert_eq!(GRAPH_UNHANDLED_SITE, unhandled_site_in("imgThyPath"));
-        assert_eq!(
-            INTERACTIVE_DOT_UNHANDLED_SITE,
-            unhandled_site_in("dotGraphString")
-        );
     }
 
     // `getUrlRender (TheoryGraphJsonR idx path)` re-renders the parsed path,

@@ -20,14 +20,12 @@ use super::html_with_status;
 /// `setTitle` text and its widget markup.  The standalone graph shell is the
 /// one page with a frame of its own ([`intdot_shell_html`], HS `intdotLayout`).
 ///
-/// The hamlet quirks are verbatim (unquoted URL attrs, doubled
-/// `</script></script>` closes, the `<p class="loading">` banner, the doubled
-/// `</a>` in the context menu).  `title` and `body` are spliced as given —
-/// every caller escapes what needs escaping.
+/// Includes upstream PR #928’s HTML fixes. `title` and `body` are spliced
+/// as given; every caller escapes what needs escaping.
 pub(crate) fn default_layout(title: &str, body: &str) -> String {
     format!(
         r##"<!DOCTYPE html>
-<html><head><title>{title}</title><link rel="stylesheet" href="/static/css/intdot-style.css"><link rel="stylesheet" href="/static/css/tamarin-prover-ui.css"><link rel="stylesheet" href="/static/css/jquery-contextmenu.css"><link rel="stylesheet" href="/static/css/smoothness/jquery-ui.css"><script src="/static/js/jquery.js"></script></script><script src="/static/js/jquery-ui.js"></script></script><script src="/static/js/jquery-layout.js"></script></script><script src="/static/js/jquery-cookie.js"></script></script><script src="/static/js/jquery-superfish.js"></script></script><script src="/static/js/jquery-contextmenu.js"></script></script><script src="/static/js/tamarin-prover-ui.js"></script></script><script type="module" src="/static/js/intdot-graph.es.js"></script></script><script type="module" src="/static/js/intdot-staticgraph.es.js"></script></script><script type="module" src="/static/js/intdot-dynamicgraph.es.js"></script></script></head><body><p class="loading">Analyzing, please wait...  <a id=cancel href='#'>Cancel</a></p>{body}<div id="dialog"></div><div id="confirm-dialog"></div><ul id="contextMenu"><li class="autoprove"><a href="#autoprove">Autoprove</a></a></li></ul></body></html>"##
+<html lang="en"><head><title>{title}</title><link rel="stylesheet" href="/static/css/intdot-style.css"><link rel="stylesheet" href="/static/css/tamarin-prover-ui.css"><link rel="stylesheet" href="/static/css/jquery-contextmenu.css"><link rel="stylesheet" href="/static/css/smoothness/jquery-ui.css"><script src="/static/js/jquery.js"></script><script src="/static/js/jquery-ui.js"></script><script src="/static/js/jquery-layout.js"></script><script src="/static/js/jquery-cookie.js"></script><script src="/static/js/jquery-superfish.js"></script><script src="/static/js/jquery-contextmenu.js"></script><script src="/static/js/tamarin-prover-ui.js"></script><script type="module" src="/static/js/intdot-graph.es.js"></script><script type="module" src="/static/js/intdot-staticgraph.es.js"></script><script type="module" src="/static/js/intdot-dynamicgraph.es.js"></script></head><body><p class="loading">Analyzing, please wait...  <a id=cancel href='#'>Cancel</a></p>{body}<div id="dialog"></div><div id="confirm-dialog"></div><ul id="contextMenu"><li class="autoprove"><a href="#autoprove">Autoprove</a></li></ul></body></html>"##
     )
 }
 
@@ -65,24 +63,21 @@ pub(crate) const OPTIONS_MENU_ITEMS: &str =
 /// wrapping `popoutOptionsTpl True` (`src/Web/Types.hs:769-777`) and
 /// `optionsMenuItemTpl True` (`src/Web/Types.hs:749-763`).
 ///
-/// The doubled `</script></script>` end tags are Hamlet's, and the stray tags
-/// shift DOM nesting — matching them verbatim is what makes the semantic gate
-/// see the same tree.
 pub(crate) fn intdot_shell_html(title: &str, dotsrc: &str) -> String {
     format!(
-        "<!DOCTYPE html>\n<html><head>\
+        "<!DOCTYPE html>\n<html lang=\"en\"><head>\
          <meta charset=\"UTF-8\" />\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\
          <title>{title}</title>\
          <style> body,html{{width: 100%; height: 100%; overflow: hidden; margin: 0; padding: 0; }}</style>\
          <link rel=\"stylesheet\" href=\"/static/css/intdot-style.css\">\
          <link rel=\"stylesheet\" href=\"/static/css/tamarin-prover-ui.css\">\
-         <script src=\"/static/js/jquery.js\"></script></script>\
-         <script src=\"/static/js/jquery-cookie.js\"></script></script>\
-         <script src=\"/static/js/jquery-superfish.js\"></script></script>\
-         <script>window.tamarinPopoutGraph = (window.self === window.top); if (!window.tamarinPopoutGraph) {{ document.documentElement.classList.add(\"graph-embedded\"); }}</script></script>\
-         <script src=\"/static/js/tamarin-prover-ui.js\"></script></script>\
-         <script type=\"module\" src=\"/static/js/intdot-graph.es.js\"></script></script>\
+         <script src=\"/static/js/jquery.js\"></script>\
+         <script src=\"/static/js/jquery-cookie.js\"></script>\
+         <script src=\"/static/js/jquery-superfish.js\"></script>\
+         <script>window.tamarinPopoutGraph = (window.self === window.top); if (!window.tamarinPopoutGraph) {{ document.documentElement.classList.add(\"graph-embedded\"); }}</script>\
+         <script src=\"/static/js/tamarin-prover-ui.js\"></script>\
+         <script type=\"module\" src=\"/static/js/intdot-graph.es.js\"></script>\
          </head><body><div class=\"graph-page\">\
          <div id=\"popout-options\"><ul id=\"navigation\">\
          {options}</ul></div>\
@@ -95,16 +90,15 @@ pub(crate) fn intdot_shell_html(title: &str, dotsrc: &str) -> String {
 mod tests {
     use super::*;
 
-    // The interactive-graph shell is a fixed template around the escaped
-    // theory title and the JSON graph URL; the fixture is the Haskell
-    // oracle's response for NSPK3 at
-    // `/thy/trace/2/intdot/proof/injective_agree/_`.
     #[test]
     fn intdot_shell_matches_haskell_layout() {
-        let html = intdot_shell_html("Theory: NSPK3", "/thy/trace/2/json/proof/injective_agree/_");
+        let html = intdot_shell_html(
+            "Theory: RevealingSignatures",
+            "/thy/trace/1/json/lemma/debug",
+        );
         assert_eq!(
             html,
-            include_str!("../../tests/assets/hsjson_intdot_shell.html")
+            include_str!("../../tests/fixtures/haskell-responses/intdot.html")
         );
     }
 }

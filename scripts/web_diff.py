@@ -23,9 +23,10 @@ import hashlib
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from web_normalize import canon  # noqa: E402
+from web_normalize import canon, canon_json_pair, prepare_workdirs  # noqa: E402
 
 
 def load(p):
@@ -43,6 +44,7 @@ def safe_name(url):
 
 
 def main():
+    started = time.perf_counter()
     if len(sys.argv) < 4:
         print("usage: web_diff.py HS.json RS.json OUT.tsv [DIFFDIR]", file=sys.stderr)
         sys.exit(2)
@@ -51,9 +53,10 @@ def main():
     # union below never sees it and cannot report it as a MISSING_* row.
     hs_doc = load(sys.argv[1])
     rs_doc = load(sys.argv[2])
+    loaded = time.perf_counter()
     hs = hs_doc["manifest"]
     rs = rs_doc["manifest"]
-    workdirs = (hs_doc.get("workdir"), rs_doc.get("workdir"))
+    workdirs = prepare_workdirs((hs_doc.get("workdir"), rs_doc.get("workdir")))
     out_tsv = sys.argv[3]
     diffdir = sys.argv[4] if len(sys.argv) > 4 else None
     if diffdir:
@@ -102,10 +105,16 @@ def main():
             counts[status] = counts.get(status, 0) + 1
             continue
         kind = h["kind"]  # oracle kind
-        ch = canon(kind, h["body"], workdirs)
-        cr = canon(kind, r["body"], workdirs)
         kind_mismatch = h["kind"] != r["kind"]
         status_mismatch = h["status"] != r["status"]
+        # Equal raw bodies necessarily canonicalize equally. Still compare
+        # their HTTP status and kind, even when the bytes already match.
+        ch, cr = h["body"], r["body"]
+        if kind == "json" and ch != cr and not kind_mismatch and not status_mismatch:
+            ch, cr = canon_json_pair(ch, cr, workdirs)
+        elif ch != cr or kind_mismatch or status_mismatch:
+            ch = canon(kind, ch, workdirs)
+            cr = canon(kind, cr, workdirs)
         if ch == cr and not kind_mismatch and not status_mismatch:
             status = "MATCH"
         else:
@@ -145,6 +154,8 @@ def main():
           + ("   (TRUNCATED CRAWL — the rows below the cap were never fetched)"
              if capped_rows else ""))
     print(f"  tsv: {out_tsv}" + (f"  diffs: {diffdir}" if diffdir else ""))
+    print(f"TIMING compare load_ms={(loaded-started)*1000:.0f} "
+          f"compare_write_ms={(time.perf_counter()-loaded)*1000:.0f}", file=sys.stderr)
 
 
 if __name__ == "__main__":

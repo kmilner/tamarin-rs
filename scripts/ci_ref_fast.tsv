@@ -1,13 +1,13 @@
 # rs_ref_check reference — regenerate with: scripts/rs_ref_check.sh generate --certified-by <gate-results>
 # maude: 3.5.1
-# oracle: a86c0b1ff4a33e0d5aa8e61e6de598cc7fb436d367355bb12ba77ce6826c245f
+# oracle: 63af2583c7ddf1d4e4a3b36a797f95d13e359fc6bf47e74d2e889380dfb89c2a
 # oracle-pin: 573a43953195d83e62fdbe32fc98253031bca60f
-# oracle-patch-series: c715d2a8238b9010afb2608a1829e9c8a159ffad868209e6a689465d909c0efc
+# oracle-patch-series: a17caa659828403e44c8df22523770ccf0396697835dc7d5949398901664d198
 # execution: 6e74ba20726f8db225806f9c535dad06e21157386621e0cec28925bdbeda1f45
 # certified-gate: DONE_CORPUS_FILE_DIFF
 # certified-scope-sha256: 2e5a2a6e3df8bdb71651ddbe260e3c4d9471d7ccdac5796a1345e4c1cf5ad47c
 # certified-proof-outputs-sha256: 1faea10248747d80f88ebcc4e2d3801663c9a5d33eb46fd3e311ad0519c7dcbd
-# certified-by: /tmp/tamarin-proof-fast.log (verdict=OK)
+# certified-by: /tmp/pr26-fast-proof.log (verdict=OK)
 ../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy	50bb0c14ecb57f839ed5373234c6ab741df7f46bc933472c57e04ab003dc1e39	73520d97b5ec41a7ac4ee28fc0c6f66af921a02e8987b33716aa3b4f47dc72e7	365
 Tutorial.spthy	ee3d199704de42032182abd4950d4b21fb579f32ddf18a8f73b932d058066733	b9fab5015c9e53842852b10491a2568e4fbfa8d09471cf375cc93df2ff221b43	250
 accountability/csf21-acc-unbounded/previous/ocsps-msr-untrusted.spthy	8bbc3995c2bdd548ae0a50b812e092699bdd00b10f3c6d42a76b6a84173b15f9	d5cc265681006f55b743c3f062ff8d5019ce144e40412fac81bae84d3781c989	573
