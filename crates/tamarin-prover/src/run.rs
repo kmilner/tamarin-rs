@@ -913,19 +913,20 @@ fn write_io_exception(path: &str, op: &str, e: &std::io::Error) -> String {
 /// `ErrorKind` classifications (for example EROFS and ELOOP).
 fn io_exception_reason(e: &std::io::Error) -> String {
     let errno = e.raw_os_error();
+    // Named constants rather than literals: ENAMETOOLONG, ELOOP and EDQUOT
+    // have different numbers on Linux and the BSDs (36/40/122 against 63/62/69
+    // on macOS), so a literal table silently stops matching off-Linux and the
+    // reason falls back to Rust's own message instead of GHC's.  GHC resolves
+    // the same names through the platform's `errno.h`.
     let ioe_type = match errno {
-        // EPERM, EACCES, EROFS
-        Some(1) | Some(13) | Some(30) => Some("permission denied"),
-        // ENOENT
-        Some(2) => Some("does not exist"),
-        // EEXIST
-        Some(17) => Some("already exists"),
-        // ENOTDIR, EISDIR
-        Some(20) | Some(21) => Some("inappropriate type"),
-        // EINVAL, ENAMETOOLONG, ELOOP
-        Some(22) | Some(36) | Some(40) => Some("invalid argument"),
-        // ENOSPC, EMLINK, EDQUOT
-        Some(28) | Some(31) | Some(122) => Some("resource exhausted"),
+        Some(libc::EPERM) | Some(libc::EACCES) | Some(libc::EROFS) => Some("permission denied"),
+        Some(libc::ENOENT) => Some("does not exist"),
+        Some(libc::EEXIST) => Some("already exists"),
+        Some(libc::ENOTDIR) | Some(libc::EISDIR) => Some("inappropriate type"),
+        Some(libc::EINVAL) | Some(libc::ENAMETOOLONG) | Some(libc::ELOOP) => {
+            Some("invalid argument")
+        }
+        Some(libc::ENOSPC) | Some(libc::EMLINK) | Some(libc::EDQUOT) => Some("resource exhausted"),
         _ => None,
     };
     let rust = e.to_string();
@@ -2888,12 +2889,18 @@ mod tests {
     // an input path reaches.
     #[test]
     fn open_file_reasons_follow_errno_to_io_error() {
+        // The errnos come from libc for the same reason the table does.  The
+        // `strerror` halves are spelled identically by glibc and by the BSD
+        // libc, so the expected bytes stay exact.
         let cases = [
-            (2, "does not exist (No such file or directory)"),
-            (13, "permission denied (Permission denied)"),
-            (20, "inappropriate type (Not a directory)"),
-            (36, "invalid argument (File name too long)"),
-            (40, "invalid argument (Too many levels of symbolic links)"),
+            (libc::ENOENT, "does not exist (No such file or directory)"),
+            (libc::EACCES, "permission denied (Permission denied)"),
+            (libc::ENOTDIR, "inappropriate type (Not a directory)"),
+            (libc::ENAMETOOLONG, "invalid argument (File name too long)"),
+            (
+                libc::ELOOP,
+                "invalid argument (Too many levels of symbolic links)",
+            ),
         ];
         for (errno, expected) in cases {
             assert_eq!(
