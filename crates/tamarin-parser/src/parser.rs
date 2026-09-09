@@ -1260,14 +1260,16 @@ impl<'a> Parser<'a> {
 
         // Parse the header-less item stream: same loop as a theory body, but it
         // terminates at EOF (there is no `end` keyword in a fragment).
-        let result = {
-            let items = sub.in_context(ParseContext::Theory, |p| p.theory_items_until_end())?;
-            sub.skip_ws();
-            if !sub.lx.is_eof() {
-                Err(sub.err_expect_here("end of included file"))
-            } else {
-                Ok(items)
+        let result = match sub.in_context(ParseContext::Theory, |p| p.theory_items_until_end()) {
+            Ok(items) => {
+                sub.skip_ws();
+                if !sub.lx.is_eof() {
+                    Err(sub.err_expect_here("end of included file"))
+                } else {
+                    Ok(items)
+                }
             }
+            e => e,
         };
 
         let result = sub
