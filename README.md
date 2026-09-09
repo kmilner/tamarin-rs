@@ -55,6 +55,12 @@ See [License](#license) if you are interested in future prospects for redistribu
   ladder and divergence-debugging tools.
 
 
+Conditional directives (`#ifdef`, `#else`, `#endif`) must occupy their own
+physical lines, with optional indentation and same-line trailing comments.
+The condition must stay on the `#ifdef` line. Active code parses comments and
+quoted text normally. In inactive branches, every conditional line is structural;
+all other text is ignored, including incomplete declarations, quotes, and brackets.
+
 ## Repository layout
 
 ```

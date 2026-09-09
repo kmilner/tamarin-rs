@@ -5,17 +5,6 @@
 use super::*;
 
 #[test]
-fn predicate_diagnostics_space_multiple_annotations() {
-    let fact = Fact {
-        persistent: false,
-        name: "P".into(),
-        args: Vec::new(),
-        annotations: vec![FactAnnotation::SolveLast, FactAnnotation::SolveFirst],
-    };
-    assert_eq!(pred_fact_text(&fact), "P( )[+, -]");
-}
-
-#[test]
 fn diff_theory_validates_but_does_not_lower_diff_proofs() {
     let src = "theory D begin
         diffLemma observational_equivalence:
@@ -77,387 +66,312 @@ fn goal_term(src: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<Term
     })
 }
 
-// ---- GHC call-site coordinates, read back out of the pinned source --------
-//
-// The three `*_SITE` constants below are pasted verbatim into `HasCallStack`
-// frames the port must emit byte-for-byte.  Every other test of those frames
-// compares the port against bytes captured FROM the port, so all of them agree
-// with a stale coordinate; only reading the pinned Haskell notices when a bump
-// moves an `error`.
-
-const MACRO_HS: &str =
-    include_str!("../../../tamarin-prover/lib/theory/src/Theory/Text/Parser/Macro.hs");
-const TERM_HS: &str =
-    include_str!("../../../tamarin-prover/lib/theory/src/Theory/Text/Parser/Term.hs");
-
-/// `LINE:COLUMN` of the `error` token on the first line of `hs` holding
-/// `needle`, as GHC's `HasCallStack` prints it: both 1-based, the column that
-/// of the token itself.
-fn error_site(hs: &str, needle: &str) -> String {
-    let (idx, line) = hs
-        .lines()
-        .enumerate()
-        .find(|(_, l)| l.contains(needle))
-        .unwrap_or_else(|| panic!("no line of the pinned source holds {needle:?}"));
-    let col = line
-        .match_indices("error")
-        .find(|(i, _)| {
-            !line[..*i]
-                .chars()
-                .next_back()
-                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '\'')
-        })
-        .map(|(i, _)| line[..i].chars().count() + 1)
-        .expect("no `error` token on that line");
-    format!("{}:{}", idx + 1, col)
+#[test]
+fn structured_expected_notes_include_the_token() {
+    let error = ParseError::expected(Pos::ZERO, "term", Some('{')).with_context(ParseContext::Term);
+    assert_eq!(error.diagnostic_notes(), ["expected term; found '{'"]);
 }
 
 #[test]
-fn ghc_call_sites_name_the_pinned_error_tokens() {
-    assert_eq!(
-        Parser::MACRO_RESERVED_NAME_SITE,
-        error_site(MACRO_HS, "is a reserved function name for builtins.")
-    );
-    assert_eq!(
-        Parser::MACRO_DUPLICATE_ARG_SITE,
-        error_site(MACRO_HS, "have two arguments with the same name.")
-    );
-    assert_eq!(
-        Parser::TERM_RESERVED_NAME_SITE,
-        error_site(TERM_HS, "is a reserved function name for builtins.")
-    );
-}
-
-// ---- parsec frame-rendering port (Text.Parsec.Error) ----
-
-fn pe(source: &str, line: u32, col: u32, messages: Vec<Message>) -> String {
-    ParseError {
-        line,
-        col,
-        offset: 0,
-        source: source.to_string(),
-        messages,
-        ghc_error: None,
-    }
-    .to_string()
+fn custom_context_does_not_allocate_structured_storage() {
+    let error = ParseError::custom(Pos::ZERO, "custom".into()).with_context(ParseContext::Term);
+    assert!(error.diagnostic.is_none());
 }
 
 #[test]
-fn frame_sysunexpect_and_expect() {
-    // parsec: `unexpected "t"` / `expecting "theory"`.
-    let s = pe(
-        "f.spthy",
-        1,
-        1,
-        vec![
-            Message::SysUnExpect("\"t\"".into()),
-            Message::Expect("\"theory\"".into()),
-        ],
-    );
-    assert_eq!(
-        s,
-        "\"f.spthy\" (line 1, column 1):\nunexpected \"t\"\nexpecting \"theory\""
-    );
-}
-
-#[test]
-fn frame_eof_is_end_of_input() {
-    // Empty SysUnExpect string renders as "unexpected end of input".
-    let s = pe(
-        "f",
-        5,
-        1,
-        vec![
-            Message::SysUnExpect(String::new()),
-            Message::Expect("\"end\"".into()),
-        ],
-    );
-    assert_eq!(
-        s,
-        "\"f\" (line 5, column 1):\nunexpected end of input\nexpecting \"end\""
-    );
-}
-
-#[test]
-fn frame_expecting_commas_or() {
-    // showMany: `a, b or c` (comma-separated, "or" before the last).
-    let s = pe(
-        "f",
-        4,
-        7,
-        vec![
-            Message::SysUnExpect("\"]\"".into()),
-            Message::Expect("\".\"".into()),
-            Message::Expect("\",\"".into()),
-            Message::Expect("\")\"".into()),
-        ],
-    );
-    assert_eq!(
-        s,
-        "\"f\" (line 4, column 7):\nunexpected \"]\"\nexpecting \".\", \",\" or \")\""
-    );
-}
-
-/// A non-binary `[AC]` declaration is HS `function`'s `fail "conflicting
-/// arity : AC function must be binary"`
-/// (Theory/Text/Parser/Signature.hs:220), raised at the
-/// position `lexeme` left after the attribute list.  Byte-pinned to the
-/// pinned oracle (ef3f0468), which prints for the two theories below:
-///
-/// ```text
-/// "ac3.spthy" (line 5, column 1):
-/// unexpected "r"
-/// conflicting arity : AC function must be binary
-/// ```
-/// ```text
-/// "ac5.spthy" (line 3, column 20):
-/// unexpected ","
-/// conflicting arity : AC function must be binary
-/// ```
-#[test]
-fn non_binary_ac_declaration_is_a_parse_error() {
-    let err = parse_theory(
-        "theory AC3 begin\n\nfunctions: f/3 [AC]\n\nrule R: [ ] --[ ]-> [ ]\n\nend\n",
-        &[],
-    )
-    .unwrap_err()
-    .with_source("ac3.spthy");
-    assert_eq!(
-        err.to_string(),
-        "\"ac3.spthy\" (line 5, column 1):\nunexpected \"r\"\n\
-             conflicting arity : AC function must be binary"
-    );
-
-    let err = parse_theory("theory AC5 begin\n\nfunctions: f/3 [AC], g/1\n\nend\n", &[])
-        .unwrap_err()
-        .with_source("ac5.spthy");
-    assert_eq!(
-        err.to_string(),
-        "\"ac5.spthy\" (line 3, column 20):\nunexpected \",\"\n\
-             conflicting arity : AC function must be binary"
-    );
-
-    // Arity 2 is accepted (and only then does the symbol become infix).
-    assert!(parse_theory("theory AC begin\n\nfunctions: f/2 [AC]\n\nend\n", &[]).is_ok());
-}
-
-/// A `theory <NAME> begin … end` around a two-line body, the shape of the
-/// byte-pinned `builtins:`/`functions:` probes: the body occupies lines 3
-/// and 4, so every diagnostic below lands on `end` at line 6, column 1.
-fn decl_probe_err(name: &str, body: &str) -> String {
-    parse_theory(&format!("theory {name} begin\n\n{body}\n\nend\n"), &[])
-        .unwrap_err()
-        .with_source("p.spthy")
-        .to_string()
-}
-
-/// HS `function`'s check (1) (Theory/Text/Parser/Signature.hs:200-209): a
-/// name an enabled `builtins:` item reserved must be re-declared at exactly
-/// the builtin's `(arity, Privacy, Constructability, NDCstate)` tuple.  It
-/// runs BEFORE the conflicting-arities check
-/// (Theory/Text/Parser/Signature.hs:212) and before the `[AC]` arity check
-/// (Theory/Text/Parser/Signature.hs:220), so its message wins over both.
-/// Byte-pinned to the pinned oracle (ef3f0468).
-#[test]
-fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
-    // ```text
-    // "b1.spthy" (line 6, column 1):
-    // unexpected "e"
-    // `h` conflicts with builtin(s) ["hashing"] (builtin: (1,Public,Constructor,NotNDC), requested: (3,Public,Constructor,NotNDC))
-    // ```
-    // `[AC]` + arity 3 would otherwise be "AC function must be binary".
-    assert_eq!(
-        decl_probe_err("B1", "builtins: hashing\nfunctions: h/3 [AC]"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\n\
-             `h` conflicts with builtin(s) [\"hashing\"] \
-             (builtin: (1,Public,Constructor,NotNDC), requested: (3,Public,Constructor,NotNDC))"
-    );
-    // Same name declared twice would otherwise be "conflicting arities".
-    assert_eq!(
-        decl_probe_err("B7", "builtins: hashing\nfunctions: h/1, h/3 [AC]"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\n\
-             `h` conflicts with builtin(s) [\"hashing\"] \
-             (builtin: (1,Public,Constructor,NotNDC), requested: (3,Public,Constructor,NotNDC))"
-    );
-    // `fst` has no exemption in check (1): `dest-pairing` reserves it at
-    // the DESTRUCTOR shape, so re-declaring the constructor is an error
-    // even though check (2) would wave it through
-    // (Theory/Text/Parser/Signature.hs:213).
-    assert_eq!(
-        decl_probe_err("E1", "builtins: dest-pairing\nfunctions: fst/1 [AC]"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\n\
-             `fst` conflicts with builtin(s) [\"dest-pairing\"] \
-             (builtin: (1,Public,Destructor,NotNDC), requested: (1,Public,Constructor,NotNDC))"
-    );
-    // Every attribute reaches `requested`, including the two NDC flags.
-    for (attr, shown) in [
-        ("private", "(1,Private,Constructor,NotNDC)"),
-        ("destructor", "(1,Public,Destructor,NotNDC)"),
-        ("NDC", "(1,Public,Constructor,IsNDC)"),
-        ("NDC-diff", "(1,Public,Constructor,IsNDCDiff)"),
-    ] {
+fn alternative_selection_preserves_the_complete_furthest_error() {
+    let progress = Pos {
+        offset: 20,
+        line: 2,
+        col: 10,
+    };
+    let cause = Pos {
+        offset: 3,
+        line: 1,
+        col: 4,
+    };
+    for semantic_first in [false, true] {
+        let generic = ParseError::expected(Pos::ZERO, "term", Some(')'));
+        let mut semantic = ParseError::at(progress)
+            .with_kind(ParseErrorKind::PersistentFreshFact)
+            .with_location(cause, 2);
+        semantic.source = "included.spthy".into();
+        let selected = if semantic_first {
+            Parser::select_alt_error(semantic, generic)
+        } else {
+            Parser::select_alt_error(generic, semantic)
+        };
+        assert!(matches!(
+            selected.kind(),
+            ParseErrorKind::PersistentFreshFact
+        ));
+        assert_eq!(selected.span(), 3..5);
+        assert_eq!(selected.line_column(), (1, 4));
+        assert_eq!(selected.source, "included.spthy");
+        assert_eq!(selected.pos.offset, 20);
         assert_eq!(
-            decl_probe_err("P", &format!("builtins: hashing\nfunctions: h/1 [{attr}]")),
-            format!(
-                "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\n\
-                     `h` conflicts with builtin(s) [\"hashing\"] \
-                     (builtin: (1,Public,Constructor,NotNDC), requested: {shown})"
-            ),
-            "attribute {attr}"
+            selected.diagnostic_notes(),
+            ["the builtin `Fr` fact cannot be persistent"]
         );
     }
-    // `conflictingBuiltins` (Theory/Text/Parser/Signature.hs:203) scans the
-    // WHOLE table in
-    // `builtinsNames` order, not just the builtins this theory enabled.
-    assert_eq!(
-        decl_probe_err("P6", "builtins: asymmetric-encryption\nfunctions: pk/2"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\nexpecting \"[\"\n\
-             `pk` conflicts with builtin(s) [\"asymmetric-encryption\",\"signing\",\
-             \"dest-asymmetric-encryption\",\"dest-signing\",\"revealing-signing\"] \
-             (builtin: (1,Public,Constructor,NotNDC), requested: (2,Public,Constructor,NotNDC))"
-    );
-    // The builtin tuple comes from the ENABLED signature, so the two
-    // `dest-*` rows report their destructor variants.
-    assert_eq!(
-        decl_probe_err(
-            "P12",
-            "builtins: dest-symmetric-encryption\nfunctions: sdec/2"
-        ),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\nexpecting \"[\"\n\
-             `sdec` conflicts with builtin(s) [\"symmetric-encryption\",\
-             \"dest-symmetric-encryption\"] (builtin: (2,Public,Destructor,NotNDC), \
-             requested: (2,Public,Constructor,NotNDC))"
-    );
-    // `locations-report` is the only row with a private symbol and the only
-    // one HS lists first.
-    assert_eq!(
-        decl_probe_err("P9", "builtins: locations-report\nfunctions: rep/2"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\nexpecting \"[\"\n\
-             `rep` conflicts with builtin(s) [\"locations-report\"] \
-             (builtin: (2,Private,Constructor,NotNDC), requested: (2,Public,Constructor,NotNDC))"
-    );
 }
 
-/// `option [] $ list functionAttribute`
-/// (Theory/Text/Parser/Signature.hs:187) leaves an
-/// `Expect "\"[\""` behind when the declaration carries no attribute list,
-/// and parsec merges it into the `fail` that follows — so the same
-/// diagnostic gains or loses an `expecting "["` line with the brackets.
-/// An EMPTY `[]` counts as present.  Byte-pinned to the pinned oracle.
 #[test]
-fn declaration_diagnostics_carry_the_attribute_bracket_expectation() {
+fn alternative_selection_prioritizes_progress_and_keeps_stable_ties() {
+    let later = Pos {
+        offset: 9,
+        line: 1,
+        col: 10,
+    };
+    let semantic = ParseError::at(Pos::ZERO).with_kind(ParseErrorKind::PersistentFreshFact);
+    let generic = ParseError::expected(later, "term", Some(')'));
+    let selected = Parser::select_alt_error(semantic, generic);
+    assert_eq!(selected.pos.offset, 9);
+    assert!(matches!(selected.kind(), ParseErrorKind::Expected { .. }));
+    let first = ParseError::expected(later, "term", Some(')'));
+    let second = ParseError::expected(later, "fact", Some(')'));
     assert_eq!(
-        decl_probe_err("B2", "builtins: hashing\nfunctions: h/1, h/2"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\nexpecting \"[\"\n\
-             `h` conflicts with builtin(s) [\"hashing\"] \
-             (builtin: (1,Public,Constructor,NotNDC), requested: (2,Public,Constructor,NotNDC))"
+        Parser::select_alt_error(first, second).diagnostic_notes(),
+        ["expected term; found ')'"]
     );
+    let first = ParseError::expected(later, "term", Some(')'));
+    let second = ParseError::at(later).with_kind(ParseErrorKind::PersistentFreshFact);
+    assert!(matches!(
+        Parser::select_alt_error(first, second).kind(),
+        ParseErrorKind::Expected { .. }
+    ));
+    let first = ParseError::custom(later, "first cause".into());
+    let second = ParseError::custom(later, "second cause".into());
     assert_eq!(
-        decl_probe_err("P24", "builtins: hashing\nfunctions: h/3 []"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\n\
-             `h` conflicts with builtin(s) [\"hashing\"] \
-             (builtin: (1,Public,Constructor,NotNDC), requested: (3,Public,Constructor,NotNDC))"
+        Parser::select_alt_error(first, second).diagnostic_message(),
+        "first cause"
     );
 }
 
-/// HS `function`'s check (2) (Theory/Text/Parser/Signature.hs:212-216) is a
-/// parse error too,
-/// not something a later stage reports.  The macro row it can also match
-/// registers as `(k, Private, Destructor, NotNDC)`
-/// (Theory/Text/Parser/Macro.hs:46).
-/// Byte-pinned to the pinned oracle.
+#[test]
+fn fact_goal_heads_backtrack_but_node_failures_commit() {
+    for source in ["G(x) ▶ #i", "G(x) ▶x #i", "G(x) ∥ H(x))"] {
+        let mut parser = Parser::new(source, &[], false);
+        let mut head_error = None;
+        assert!(parser.fact_goal(&mut head_error).unwrap().is_none());
+        assert_eq!(parser.save().offset, 0);
+        assert!(head_error.is_some());
+        if source.contains('∥') {
+            assert!(matches!(parser.goal().unwrap(), GoalSpec::Disj(parts) if parts.len() == 2));
+        }
+    }
+    for separator in ["@", "▶₀"] {
+        for node in ["~i", "i:msg"] {
+            let source = format!("G(x) {separator} {node} ∥ H(x))");
+            let mut parser = Parser::new(&source, &[], false);
+            let mut head_error = None;
+            let error = parser.fact_goal(&mut head_error).unwrap_err();
+            assert!(head_error.is_none());
+            assert_eq!(error.span().start, source.find(node).unwrap());
+            assert!(error.diagnostic_message().contains("timepoint variable"));
+        }
+    }
+}
+
+#[test]
+fn incomplete_goals_do_not_blame_speculative_fact_names() {
+    for (goal, found) in [("splitEqs", ')'), ("x", ')'), ("x @ #i", '@')] {
+        let source = format!(r#"theory T begin lemma L: "T" by solve( {goal} ) end"#);
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(
+            !matches!(error.kind(), ParseErrorKind::InvalidFactName { .. }),
+            "{error}"
+        );
+        assert!(source[error.span().start..].starts_with(found));
+    }
+    for goal in ["splitEqs(1)", "x ⊏ y"] {
+        parse_theory(
+            &format!(r#"theory T begin lemma L: "T" by solve( {goal} ) end"#),
+            &[],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn tied_input_failures_keep_one_alternatives_expectation() {
+    let source = "theory T begin process: in(x @) end";
+    let error = parse_theory(source, &[]).unwrap_err();
+    assert_eq!(error.span().start, source.find('@').unwrap());
+    assert_eq!(error.diagnostic_notes(), ["expected \")\"; found '@'"]);
+    for input in ["in(x)", "in(x, y)"] {
+        parse_theory(&format!("theory T begin process: {input} end"), &[]).unwrap();
+    }
+}
+
+#[test]
+fn diagnostic_details_bound_owned_text() {
+    let long = "é".repeat(100_000);
+    let error = ParseError::custom(Pos::ZERO, long.clone());
+    assert!(error.diagnostic_message().chars().count() <= MAX_DIAGNOSTIC_MESSAGE_CHARS + 1);
+    let error = ParseError::expected(Pos::ZERO, long, None);
+    let Some(ErrorDetails::Expected { expected, .. }) = error.details else {
+        panic!()
+    };
+    assert!(expected.chars().count() <= MAX_DIAGNOSTIC_MESSAGE_CHARS + 1);
+    assert!(expected.capacity() < 4096);
+}
+
+#[test]
+fn non_binary_ac_declaration_is_a_parse_error() {
+    for tail in ["rule R: [] --> []", ", g/1", ""] {
+        let source = format!("theory T begin functions: f/3 [AC]{tail} end");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::NonBinaryAcFunction { name, arity: 3 } if name == "f")
+        );
+        assert_eq!(&source[error.span()], "f");
+    }
+    parse_theory("theory T begin functions: f/2 [AC] end", &[]).unwrap();
+}
+
+#[test]
+fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
+    for (body, name, details) in [
+        (
+            "builtins: hashing functions: h/3 [AC]",
+            "h",
+            "arity 3 requested, previously 1",
+        ),
+        (
+            "builtins: hashing functions: h/1, h/3 [AC]",
+            "h",
+            "arity 3 requested, previously 1",
+        ),
+        (
+            "builtins: dest-pairing functions: fst/1 [AC]",
+            "fst",
+            "destructor removed",
+        ),
+        (
+            "builtins: asymmetric-encryption functions: pk/2",
+            "pk",
+            "arity 2 requested, previously 1",
+        ),
+        (
+            "builtins: dest-symmetric-encryption functions: sdec/2",
+            "sdec",
+            "destructor removed",
+        ),
+        (
+            "builtins: locations-report functions: rep/2",
+            "rep",
+            "private removed",
+        ),
+    ] {
+        let error = function_conflict(body, name);
+        assert!(
+            error
+                .diagnostic_notes()
+                .iter()
+                .any(|note| note.contains(details)),
+            "{body}: {error:?}"
+        );
+    }
+    for attribute in ["private", "destructor", "NDC", "NDC-diff"] {
+        let error = function_conflict(
+            &format!("builtins: hashing functions: h/1 [{attribute}]"),
+            "h",
+        );
+        assert!(error
+            .diagnostic_notes()
+            .iter()
+            .any(|note| note.contains(&format!("{attribute} added"))));
+    }
+}
+
+#[test]
+fn conflicting_declarations_fail_with_or_without_attributes() {
+    for decl in ["h/1, h/2", "h/3 []"] {
+        function_conflict(&format!("builtins: hashing functions: {decl}"), "h");
+    }
+}
+
+fn function_conflict(body: &str, name: &str) -> ParseError {
+    let source = format!("theory T begin {body} end");
+    let error = parse_theory(&source, &[]).unwrap_err();
+    assert!(
+        matches!(error.kind(), ParseErrorKind::ConflictingDeclaration { name: n, context: ParseContext::FunctionDeclaration } if n == name),
+        "{source}: {error:?}"
+    );
+    let start = source.rfind(&format!("{name}/")).unwrap();
+    assert_eq!(error.span(), start..start + name.len());
+    error
+}
+
 #[test]
 fn conflicting_arities_is_a_parse_error() {
-    // ```text
-    // "conf1.spthy" (line 5, column 1):
-    // unexpected "e"
-    // expecting "["
-    // conflicting arities/options (1,Public,Constructor,NotNDC) and (3,Public,Constructor,NotNDC) for `f`. Please choose a different name for this function.
-    // ```
-    let err = parse_theory("theory CONF1 begin\n\nfunctions: f/1, f/3\n\nend\n", &[])
-        .unwrap_err()
-        .with_source("conf1.spthy");
-    assert_eq!(
-        err.to_string(),
-        "\"conf1.spthy\" (line 5, column 1):\nunexpected \"e\"\nexpecting \"[\"\n\
-             conflicting arities/options (1,Public,Constructor,NotNDC) and \
-             (3,Public,Constructor,NotNDC) for `f`. Please choose a different name \
-             for this function."
-    );
-    // `reliable-channel` has no MaudeSig, so it reserves nothing and the
-    // clash between the two user declarations is check (2)'s to report.
-    assert_eq!(
-        decl_probe_err("P22", "builtins: reliable-channel\nfunctions: h/1, h/2"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\nexpecting \"[\"\n\
-             conflicting arities/options (1,Public,Constructor,NotNDC) and \
-             (2,Public,Constructor,NotNDC) for `h`. Please choose a different name \
-             for this function."
-    );
-    assert_eq!(
-        decl_probe_err("P29", "macros: mh(x, y) = x\nfunctions: mh/2"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\nexpecting \"[\"\n\
-             conflicting arities/options (2,Private,Destructor,NotNDC) and \
-             (2,Public,Constructor,NotNDC) for `mh`. Please choose a different name \
-             for this function."
-    );
+    for (body, name, reason) in [
+        (
+            "functions: f/1, f/3",
+            "f",
+            "arity 3 requested, previously 1",
+        ),
+        (
+            "builtins: reliable-channel functions: h/1, h/2",
+            "h",
+            "arity 2 requested, previously 1",
+        ),
+        (
+            "macros: mh(x, y) = x functions: mh/2",
+            "mh",
+            "private removed, destructor removed",
+        ),
+    ] {
+        let error = function_conflict(body, name);
+        assert!(
+            error
+                .diagnostic_notes()
+                .iter()
+                .any(|note| note.contains(reason)),
+            "{error}"
+        );
+    }
 }
 
 /// HS `extendSig`'s own two checks
 /// (Theory/Text/Parser/Signature.hs:107-119), raised at the
-/// position the builtin's `symbol` lexeme reached.  Byte-pinned to the
-/// pinned oracle.
+/// position the builtin's `symbol` lexeme reached.
 #[test]
 fn builtins_item_rejects_conflicting_functions_and_macros() {
-    assert_eq!(
-        decl_probe_err("P17", "functions: h/2\nbuiltins: hashing"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\n\
-             Builtin 'hashing' conflicts with existing function(s) (same name, different \
-             arity or function options): [\"h\"]. Please remove these function definitions \
-             or use different names."
-    );
-    assert_eq!(
-        decl_probe_err("P28", "macros: h(x) = x\nbuiltins: hashing"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\n\
-             Builtin 'hashing' conflicts with existing macro '[\"h\"]'"
-    );
-    // Per-name, in list order: the SECOND builtin sees what the first
-    // merged, and the frame sits at the end of that name's lexeme.
-    let err = parse_theory(
-        "theory P26 begin\n\nbuiltins: symmetric-encryption, dest-symmetric-encryption\n\
-             functions: sdec/2\n\nend\n",
-        &[],
-    )
-    .unwrap_err()
-    .with_source("p26.spthy");
-    assert_eq!(
-        err.to_string(),
-        "\"p26.spthy\" (line 4, column 1):\nunexpected \"f\"\n\
-             Builtin 'dest-symmetric-encryption' conflicts with existing function(s) \
-             (same name, different arity or function options): [\"sdec\"]. Please remove \
-             these function definitions or use different names."
-    );
-    // A `dest-*` builtin therefore cannot follow its constructor twin.
-    assert_eq!(
-        decl_probe_err(
-            "P30",
-            "builtins: symmetric-encryption, dest-symmetric-encryption\n"
+    for (body, builtin, cause) in [
+        (
+            "functions: h/2 builtins: hashing",
+            "hashing",
+            "function `h`",
         ),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\n\
-             Builtin 'dest-symmetric-encryption' conflicts with existing function(s) \
-             (same name, different arity or function options): [\"sdec\"]. Please remove \
-             these function definitions or use different names."
-    );
-    assert_eq!(
-        decl_probe_err("P31", "builtins: signing, dest-signing\n"),
-        "\"p.spthy\" (line 6, column 1):\nunexpected \"e\"\n\
-             Builtin 'dest-signing' conflicts with existing function(s) (same name, \
-             different arity or function options): [\"verify\"]. Please remove these \
-             function definitions or use different names."
-    );
-    // `dest-pairing` is exempt (Theory/Text/Parser/Signature.hs:121):
-    // replacing the seeded
-    // `fst`/`snd` constructors with the destructor variants is its job.
-    assert!(parse_theory("theory OK begin\n\nbuiltins: dest-pairing\n\nend\n", &[]).is_ok());
+        ("macros: h(x) = x builtins: hashing", "hashing", "macro `h`"),
+        (
+            "builtins: symmetric-encryption, dest-symmetric-encryption functions: sdec/2",
+            "dest-symmetric-encryption",
+            "function `sdec`",
+        ),
+        (
+            "builtins: symmetric-encryption, dest-symmetric-encryption",
+            "dest-symmetric-encryption",
+            "function `sdec`",
+        ),
+        (
+            "builtins: signing, dest-signing",
+            "dest-signing",
+            "function `verify`",
+        ),
+    ] {
+        let error = parse_theory(&format!("theory T begin {body} end"), &[]).unwrap_err();
+        let message = error.diagnostic_message();
+        let notes = error.diagnostic_notes().join("; ");
+        let details = format!("{message}; {notes}");
+        assert!(
+            details.contains(builtin) && details.contains(cause),
+            "{body}: {details}"
+        );
+    }
+    parse_theory("theory T begin builtins: dest-pairing end", &[]).unwrap();
 }
 
 /// The declarations HS accepts around the same two checks — a
@@ -493,405 +407,34 @@ fn theory_options_are_limited_to_the_shared_declarable_set() {
 
     let err = parse_theory("theory P begin\noptions: unknown-option\nend", &[])
         .expect_err("unknown option must fail");
-    assert_eq!(
-        err.to_string(),
-        "(line 2, column 10):\nunexpected \"u\"\nexpecting \
-         \"translation-progress\", \"translation-allow-pattern-lookups\", \
-         \"translation-state-optimisation\", \"translation-asynchronous-channels\" or \
-         \"translation-compress-events\""
-    );
+    assert_eq!(err.line_column(), (2, 10));
+    assert!(err
+        .diagnostic_notes()
+        .iter()
+        .any(|note| note.contains("theory option")));
 
     let err = parse_theory("theory P begin\noptions: translation-progressx\nend", &[])
         .expect_err("a valid option prefix must leave its suffix to the outer parser");
-    assert_eq!(
-        err.to_string(),
-        "(line 2, column 31):\nunexpected \"\\n\"\nexpecting letter or \"{*\""
-    );
-}
-
-/// HS `T.identifier` (Token.hs:393-394) rejects the reserved names
-/// `["in","let","rule","diff"]` (Token.hs:214-230, see line 225) with an
-/// `unexpected reserved word "…"` whose position is the word's end — the
-/// lexeme's trailing whitespace never runs — merged with the
-/// `Expect "letter or digit"` `ident`'s `many identLetter` left there.
-/// Byte-pinned to the pinned oracle on each declaration position below.
-#[test]
-fn reserved_word_at_a_declaration_position() {
-    // ```text
-    // "d5.spthy" (line 4, column 16):
-    // unexpected reserved word "diff"
-    // expecting letter or digit
-    // ```
-    for (src, line, col, word) in [
-        (
-            "theory D5\nbegin\n\nfunctions: diff/2\n\nend\n",
-            4,
-            16,
-            "diff",
-        ),
-        ("theory D9\nbegin\n\n#define diff\n\nend\n", 4, 13, "diff"),
-        (
-            "theory R1\nbegin\n\nfunctions: let/2\n\nend\n",
-            4,
-            15,
-            "let",
-        ),
-        ("theory R2\nbegin\n\nfunctions: in/2\n\nend\n", 4, 14, "in"),
-        (
-            "theory R3\nbegin\n\nfunctions: rule/2\n\nend\n",
-            4,
-            16,
-            "rule",
-        ),
-        ("theory diff\nbegin\n\nend\n", 1, 12, "diff"),
-        (
-            "theory R6\nbegin\n\nrule diff:\n  [ ] --> [ ]\n\nend\n",
-            4,
-            10,
-            "diff",
-        ),
-        (
-            "theory R7\nbegin\n\nlemma diff:\n  exists-trace \"Ex #i. F() @ #i\"\n\nend\n",
-            4,
-            11,
-            "diff",
-        ),
-    ] {
-        let err = parse_theory(src, &[]).unwrap_err().with_source("r.spthy");
-        assert_eq!(
-            err.to_string(),
-            format!(
-                "\"r.spthy\" (line {line}, column {col}):\n\
-                     unexpected reserved word \"{word}\"\nexpecting letter or digit"
-            ),
-            "source: {src:?}"
-        );
-    }
-    // A word that merely STARTS with a reserved name is an identifier.
-    assert!(parse_theory("theory D\nbegin\n\nfunctions: diffuse/2\n\nend\n", &[]).is_ok());
-
-    // An enclosing `<?>` on a non-consuming failure keeps the `UnExpect`
-    // and swaps the `Expect`s for its own label — HS `predicate … <?>
-    // "predicate declaration"` (Theory/Text/Parser/Signature.hs:270-275):
-    // ```text
-    // "r8.spthy" (line 3, column 17):
-    // unexpected reserved word "diff"
-    // expecting predicate declaration
-    // ```
-    let err = parse_theory(
-        "theory R8 begin\n\npredicates: diff(x) <=> x = x\n\nend\n",
-        &[],
-    )
-    .unwrap_err()
-    .with_source("r8.spthy");
-    assert_eq!(
-        err.to_string(),
-        "\"r8.spthy\" (line 3, column 17):\nunexpected reserved word \"diff\"\n\
-             expecting predicate declaration"
-    );
-}
-
-/// Parsec carries a consumed-ok parse's error forward and merges it
-/// into whatever the continuation reports at the same position, so the
-/// trailing optional parsers of the item just parsed PREPEND their labels
-/// to the item-position error.  Byte-pinned to the pinned oracle on the
-/// three items this port tracks.
-#[test]
-fn item_position_error_carries_the_previous_items_trailing_labels() {
-    let base = "\"pe.spthy\" (line 5, column 1):\nunexpected end of input\nexpecting ";
-    let items = "\"heuristic\", \"tactic\", \"builtins\", \"options\", \"functions\", \
-                     \"function\", \"equations\", \"macros\", \"restriction\", \"axiom\", \
-                     \"test\", \"lemma\", \"rule\", letter, top-level process, \"let\", \
-                     \"equivLemma\", \"diffEquivLemma\", predicate block, export block, \
-                     \"#ifdef\", \"#define\", \"#include\" or \"end\"";
-    let err = |body: &str| {
-        parse_theory(&format!("theory PE begin\n\n{body}\n\n"), &[])
-            .unwrap_err()
-            .with_source("pe.spthy")
-            .to_string()
-    };
-    // `protoRule`'s `option [] $ symbol "variants" *> …`
-    // (Theory/Text/Parser/Rule.hs:134).
-    assert_eq!(
-        err("rule R: [ ] --[ ]-> [ ]"),
-        format!("{base}\"variants\", {items}")
-    );
-    // `commaSep1`'s trailing `comma` after a `builtins:` list.
-    assert_eq!(err("builtins: hashing"), format!("{base}\",\", {items}"));
-    // Both `option [] $ list functionAttribute` and the trailing `comma`
-    // after a `functions:` list — unless the last declaration bracketed
-    // its attributes, which consumes the `[`.
-    assert_eq!(
-        err("functions: f/2, g/1"),
-        format!("{base}\"[\", \",\", {items}")
-    );
-    assert_eq!(
-        err("functions: f/2, g/2 [AC]"),
-        format!("{base}\",\", {items}")
-    );
-    // The labels are pinned to the offset the item stopped at: a following
-    // item resets them, and `formalComment`'s `many1 letter` moves the
-    // error past them.
-    assert_eq!(
-        parse_theory(
-            "theory PE begin\n\nrule R: [ ] --[ ]-> [ ]\nbuiltins: hashing\n\n",
-            &[]
-        )
-        .unwrap_err()
-        .with_source("pe.spthy")
-        .to_string(),
-        "\"pe.spthy\" (line 6, column 1):\nunexpected end of input\nexpecting \",\", ".to_string()
-            + items
-    );
-}
-
-/// The theory of the byte-pinned `diff` probes: a `diff(a, b)` in a rule's
-/// conclusion.  `$ARGS` is substituted with the argument list under test.
-fn diff_probe(args: &str) -> String {
-    format!(
-        "theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  \
-             [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff({args}) ) ]\n\nend\n"
-    )
-}
-
-fn diff_probe_err(args: &str, flags: &[&str]) -> String {
-    parse_theory(&diff_probe(args), flags)
-        .unwrap_err()
-        .with_source("d.spthy")
-        .to_string()
-}
-
-/// HS `diffOp` (Theory/Text/Parser/Term.hs:123-135) parses `diff(...)`
-/// unconditionally and then
-/// `fail`s unless the signature's diff bit is on, so a `diff` term in a
-/// theory parsed without the flag is a parse error — not an ordinary user
-/// function.  Byte-pinned to the pinned oracle (ef3f0468) on the probes in
-/// this test; the three `fail`s fire in HS's order (arity, then equations,
-/// then flag), and `term`'s `<?> "term"`
-/// (Theory/Text/Parser/Term.hs:138-163, see line 154)
-/// supplies the `expecting term` line.
-#[test]
-fn diff_operator_without_the_diff_flag_is_a_parse_error() {
-    // ```text
-    // "d.spthy" (line 7, column 65):
-    // unexpected ")"
-    // expecting term
-    // diff operator found, but flag diff not set
-    // ```
-    assert_eq!(
-        diff_probe_err("(~a*~b), ~a", &[]),
-        "\"d.spthy\" (line 7, column 65):\nunexpected \")\"\nexpecting term\n\
-             diff operator found, but flag diff not set"
-    );
-
-    // The arity check runs FIRST and hides the flag diagnostic, with or
-    // without the flag.  `commaSep = flip sepEndBy comma` (Token.hs:353-355)
-    // parses the empty and the over-long list happily, so all three counts
-    // reach the same `fail`.
-    for args in ["~a", "~a, ~b, ~a", ""] {
-        let expected_col = 47 + args.len() + 7;
-        for flags in [&[][..], &["diff"][..]] {
-            assert_eq!(
-                diff_probe_err(args, flags),
-                format!(
-                    "\"d.spthy\" (line 7, column {expected_col}):\nunexpected \")\"\n\
-                         expecting term\nthe diff operator requires exactly 2 arguments"
-                ),
-                "args = {args:?}, flags = {flags:?}"
-            );
-        }
-    }
-
-    // Nested: the INNER `diff` fails first, and its position (after the inner
-    // closing paren, at the outer comma) is the one parsec reports.
-    assert_eq!(
-        diff_probe_err("diff(~a, ~b), ~b", &[]),
-        "\"d.spthy\" (line 7, column 64):\nunexpected \",\"\nexpecting term\n\
-             diff operator found, but flag diff not set"
-    );
-}
-
-/// `equations:` parses with HS's `eqn` flag set, where `diffOp`'s second
-/// `fail` fires ahead of the flag check — again with or without the flag.
-#[test]
-fn diff_operator_is_rejected_in_equations() {
-    for flags in [&[][..], &["diff"][..]] {
-        let err = parse_theory(
-            "theory D\nbegin\n\nfunctions: f/1, g/1\nequations: diff(x, x) = x\n\n\
-                 rule RA:\n  [ Fr(~a) ] --> [ Out( ~a ) ]\n\nend\n",
-            flags,
-        )
-        .unwrap_err()
-        .with_source("d.spthy");
-        assert_eq!(
-            err.to_string(),
-            "\"d.spthy\" (line 5, column 23):\nunexpected \"=\"\nexpecting term\n\
-                 diff operator not allowed in equations",
-            "flags = {flags:?}"
-        );
-    }
-}
-
-/// `diff` not followed by `(`: `diffOp`'s `parens` fails and no other `term`
-/// alternative accepts a reserved word.  The reserved-word `UnExpect` of
-/// `identifier` (Token.hs:393-394) sits before the lexeme's trailing
-/// whitespace and the `parens` `SysUnExpect` after it, so parsec reports
-/// only the latter when they are separated and both when they coincide.
-#[test]
-fn bare_diff_token_is_a_parse_error() {
-    let err = parse_theory(
-        "theory D\nbegin\n\nrule RA:\n  [ Fr(~a) ] --> [ Out( diff ) ]\n\nend\n",
-        &[],
-    )
-    .unwrap_err()
-    .with_source("d.spthy");
-    assert_eq!(
-        err.to_string(),
-        "\"d.spthy\" (line 5, column 30):\nunexpected \")\"\nexpecting term"
-    );
-
-    let err = parse_theory(
-        "theory D\nbegin\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --> [ Out( diff{~a}~b ) ]\n\nend\n",
-        &[],
-    )
-    .unwrap_err()
-    .with_source("d.spthy");
-    assert_eq!(
-        err.to_string(),
-        "\"d.spthy\" (line 5, column 37):\nunexpected reserved word \"diff\"\nexpecting term"
-    );
-}
-
-/// The guard is flag-gated, not an unconditional reject: HS `theory` turns
-/// the signature bit on when the CLI-defined flags contain `diff`
-/// (Theory/Text/Parser.hs:232-237, see line 234), and the pinned oracle then
-/// parses the same probe.  `Term::Diff` stays constructible on that path.
-#[test]
-fn diff_operator_is_accepted_with_the_diff_flag() {
-    let thy = parse_theory(&diff_probe("(~a*~b), ~a"), &["diff"]).expect("diff flag enables it");
-    let mut seen = false;
-    for item in &thy.items {
-        if let TheoryItem::Rule(r) = item {
-            for f in &r.conclusions {
-                for t in &f.args {
-                    if matches!(t, Term::Diff(_, _)) {
-                        seen = true;
-                    }
-                }
-            }
-        }
-    }
-    assert!(seen, "expected a Term::Diff in the rule conclusion");
-
-    // The word boundary keeps `diffuse(...)` an ordinary function application
-    // even without the flag (HS routes it through `naryOpApp`).
-    assert!(parse_theory(
-        "theory D\nbegin\n\nfunctions: diffuse/2\n\nrule RA:\n  \
-             [ Fr(~a), Fr(~b) ] --> [ Out( diffuse(~a, ~b) ) ]\n\nend\n",
-        &[]
-    )
-    .is_ok());
+    assert_eq!(err.line_column(), (2, 30));
+    assert!(matches!(err.kind(), ParseErrorKind::UnknownItem { item, .. } if item == "x"));
 }
 
 #[test]
-fn frame_dedup_and_message_ordering() {
-    // clean = nub . filter (not . null): duplicate/empty Expects collapse,
-    // and sort orders SysUnExpect < Expect < Message regardless of input.
-    let s = pe(
-        "f",
-        2,
-        3,
-        vec![
-            Message::Message("raw note".into()),
-            Message::Expect("\"a\"".into()),
-            Message::Expect("\"a\"".into()),
-            Message::Expect(String::new()),
-            Message::SysUnExpect("\"x\"".into()),
-        ],
-    );
-    assert_eq!(
-        s,
-        "\"f\" (line 2, column 3):\nunexpected \"x\"\nexpecting \"a\"\nraw note"
-    );
+fn misspelled_theory_keyword_reports_the_expected_construct() {
+    let error = parse_theory("theary Foo\nbegin\nend\n", &[]).unwrap_err();
+    assert_eq!(error.span().start, 0);
+    assert!(error
+        .diagnostic_notes()
+        .iter()
+        .any(|note| note.contains("theory")));
 }
 
 #[test]
-fn frame_sysunexpect_suppressed_by_unexpect() {
-    // showSysUnExpect = "" when a user UnExpect is present.
-    let s = pe(
-        "f",
-        1,
-        1,
-        vec![
-            Message::SysUnExpect("\"z\"".into()),
-            Message::UnExpect("something".into()),
-            Message::Expect("\"a\"".into()),
-        ],
-    );
-    assert_eq!(
-        s,
-        "\"f\" (line 1, column 1):\nunexpected something\nexpecting \"a\""
-    );
-}
-
-#[test]
-fn frame_empty_messages_is_unknown() {
-    // parsec: `| null msgs = msgUnknown` — no leading newline.
-    let s = pe("f", 1, 1, vec![]);
-    assert_eq!(s, "\"f\" (line 1, column 1):unknown parse error");
-}
-
-#[test]
-fn frame_null_source_omits_quoted_name() {
-    // `instance Show SourcePos`: null name → no `"name" ` prefix.
-    let s = pe("", 3, 2, vec![Message::Message("m".into())]);
-    assert_eq!(s, "(line 3, column 2):\nm");
-}
-
-#[test]
-fn show_char_token_escapes_like_haskell() {
-    assert_eq!(show_char_token('t'), "\"t\"");
-    assert_eq!(show_char_token(' '), "\" \"");
-    assert_eq!(show_char_token('"'), "\"\\\"\"");
-    assert_eq!(show_char_token('\n'), "\"\\n\"");
-    assert_eq!(show_char_token('\t'), "\"\\t\"");
-}
-
-/// GHC `show :: String -> String` over a whole string: the named control
-/// escapes, a decimal escape for a character above `\DEL`, and the `\&`
-/// separator before a digit that would otherwise extend that escape.
-#[test]
-fn show_lit_string_escapes_like_haskell() {
-    assert_eq!(show_lit_string("ab"), "\"ab\"");
-    assert_eq!(
-        show_lit_string("\u{0B}\u{0C}\u{07}\u{08}"),
-        "\"\\v\\f\\a\\b\""
-    );
-    assert_eq!(show_lit_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
-    assert_eq!(show_lit_string("\u{100}"), "\"\\256\"");
-    assert_eq!(show_lit_string("\u{100}7"), "\"\\256\\&7\"");
-}
-
-#[test]
-fn theory_keyword_error_matches_parsec() {
-    // End-to-end: the top-level `theory` keyword mismatch renders exactly
-    // like HS's `symbol_ "theory"` failure.
-    let e = parse_theory("theary Foo\nbegin\nend\n", &[]).unwrap_err();
-    assert_eq!(
-        e.with_source("f.spthy").to_string(),
-        "\"f.spthy\" (line 1, column 1):\nunexpected \"t\"\nexpecting \"theory\""
-    );
-}
-
-#[test]
-fn item_position_letters_expect_letter_or_comment() {
-    // Garbage identifier at item position → `letter or "{*"` after the
-    // consumed letters (formalComment `many1 letter <* string "{*"`).
-    let e = parse_theory("theory Foo\nbegin\nrul R:\n[]-->[]\nend\n", &[]).unwrap_err();
-    assert_eq!(
-        e.with_source("f").to_string(),
-        "\"f\" (line 3, column 4):\nunexpected \" \"\nexpecting letter or \"{*\""
-    );
+fn unknown_item_points_at_its_name() {
+    let source = "theory T begin rul R: [] --> [] end";
+    let error = parse_theory(source, &[]).unwrap_err();
+    assert!(matches!(error.kind(), ParseErrorKind::UnknownItem { item, .. } if item == "rul"));
+    assert_eq!(&source[error.span()], "rul");
 }
 
 #[test]
@@ -1046,6 +589,20 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
     }
 }
 
+#[test]
+fn relational_application_errors_outweigh_predicate_prefixes() {
+    let source = "theory T begin\nlemma L: \"Foo(x) = y\"\nend\n";
+    let error = parse_theory(source, &[]).expect_err("a relation requires a declared function");
+    assert!(
+        matches!(
+            error.kind(),
+            ParseErrorKind::UndeclaredFunction { name } if name == "Foo"
+        ),
+        "{error:?}"
+    );
+    assert_eq!(&source[error.span()], "Foo");
+}
+
 // HS `typep` (Token.hs:471-473) maps only the literal `Any` to the default
 // (Nothing); lowercase `any` is `Just "any"`. Verified against
 // tamarin-prover 1.13.0: `new x:any` renders with `:any` preserved.
@@ -1154,11 +711,78 @@ fn lemma_proof_raw(thy: &Theory) -> &str {
 fn malformed_stored_proof_fails_theory_parse() {
     let src = "theory T begin\nlemma L: \"T\"\nsimplify\nend";
     let err = parse_theory(src, &[]).expect_err("a bare intermediate method needs a child");
-    assert_eq!((err.line, err.col), (4, 1));
+    assert_eq!((err.pos.line, err.pos.col), (4, 1));
 
     let src = "theory T begin\nlemma L: \"T\"\nby sorry trailing\nend";
     let err = parse_theory(src, &[]).expect_err("trailing proof text must not be discarded");
-    assert!(err.to_string().contains("unexpected trailing proof text"));
+    assert!(err
+        .diagnostic_notes()
+        .iter()
+        .any(|note| note.contains("expected end of proof")));
+}
+
+#[test]
+fn stored_proof_stops_before_top_level_process_definition() {
+    let source = r#"theory T begin
+lemma L: "T"
+by sorry
+let P = 0
+process: P
+end"#;
+    parse_theory(source, &[]).expect("top-level let after a proof must remain a theory item");
+}
+
+#[test]
+fn stored_proof_ignores_structure_inside_public_literals() {
+    let source = r#"theory T begin
+lemma L: "T"
+by solve( Foo('a)) rule') @ #i )
+end"#;
+    let theory = parse_theory(source, &[]).expect("literal punctuation cannot truncate a proof");
+    assert!(lemma_proof_raw(&theory).contains("'a)) rule'"));
+}
+
+#[test]
+fn stored_proof_treats_backslashes_as_public_literal_data() {
+    let source = r#"theory T begin
+lemma L: "T"
+by solve( Foo('a\') @ #i )
+end"#;
+    let theory = parse_theory(source, &[]).expect("backslash does not escape a public quote");
+    assert!(lemma_proof_raw(&theory).contains("'a\\'"));
+}
+
+#[test]
+fn declaration_errors_do_not_collect_operator_expectations() {
+    let declarations = (0..200)
+        .map(|index| format!("f{index}/2 [AC]"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source =
+        format!("theory T begin\nfunctions: {declarations}\nmacros: m(x) = x, m(y) = y\nend");
+    let error = parse_theory(&source, &[]).expect_err("the second macro conflicts");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("Conflicting macro")
+            && rendered.contains("`m` was already declared incompatibly"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn item_errors_do_not_collect_unrelated_operator_names() {
+    let declarations = (0..200)
+        .map(|index| format!("f{index}/2 [AC]"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!("theory T begin\nfunctions: {declarations}\nequations: x = y\n@\nend");
+
+    let error = parse_theory(&source, &[]).expect_err("junk at item position must fail");
+
+    assert_eq!(
+        error.diagnostic_notes(),
+        ["expected theory item, \"end\"; found '@'"]
+    );
 }
 
 /// Reports whether the parser split a top-level `test` CaseTest item out of
@@ -1312,13 +936,24 @@ end"#;
 }
 
 #[test]
-fn tactic_blocks_require_a_selector() {
-    for block in ["prio:", "deprio: {id}"] {
-        let src = format!("theory T begin\ntactic: rank\n{block}\nrule R: [ ] --> [ ]\nend");
-        let err = parse_theory(&src, &[]).expect_err("empty tactic block must fail");
-        assert_eq!(
-            err.to_string(),
-            "(line 4, column 5):\nunexpected reserved word \"rule\"\nexpecting letter or digit"
+fn tactic_blocks_require_a_selector_without_consuming_the_next_token() {
+    for (block, tail) in [
+        ("prio:", "rule R: [] --> [] end"),
+        ("deprio: {id}", "rule R: [] --> [] end"),
+        ("prio:", "foo"),
+        ("prio:", "deprio:"),
+        ("prio:", ""),
+    ] {
+        let prefix = format!("theory T begin\ntactic: rank\n{block}\n");
+        let source = format!("{prefix}{tail}");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert_eq!(error.span().start, prefix.len(), "{source}: {error:?}");
+        assert!(
+            error
+                .diagnostic_notes()
+                .iter()
+                .any(|note| note.contains("tactic selector with a quoted argument")),
+            "{error:?}"
         );
     }
 }
@@ -2189,6 +1824,36 @@ fn let_inlining_avoids_capture_by_quantifiers() {
 }
 
 #[test]
+fn let_inlining_avoids_capture_with_maximum_variable_index() {
+    let r = only_rule(
+        r#"theory T begin
+            rule R: let x = y.18446744073709551615 in []
+              --[ _restrict(Ex y.18446744073709551615 #i.
+                A(x,y.18446744073709551615,y.0,y.1) @ i) ]-> []
+        end"#,
+    );
+    let Formula::Exists(vars, body) = &r.embedded_restrictions[0] else {
+        panic!("expected an existential");
+    };
+    let bound_y = vars.iter().find(|v| v.name == "y").unwrap();
+    let Formula::Atom(Atom::Action(fact, _)) = body.as_ref() else {
+        panic!("expected an action atom");
+    };
+    let [Term::Var(inserted), Term::Var(renamed), Term::Var(zero), Term::Var(one)] =
+        fact.args.as_slice()
+    else {
+        panic!("expected four variable arguments");
+    };
+    assert_eq!(inserted.idx, u64::MAX);
+    assert_eq!(zero.idx, 0);
+    assert_eq!(one.idx, 1);
+    assert_eq!(renamed, bound_y);
+    for free in [inserted, zero, one] {
+        assert_ne!(free, bound_y, "free variable was captured");
+    }
+}
+
+#[test]
 fn rule_let_requires_a_binding_and_in_terminator() {
     for src in [
         "theory T begin rule R: let in [] --[]-> [] end",
@@ -2235,4 +1900,305 @@ fn a_let_binder_is_a_variable_not_a_nullary_constant() {
         rule.actions[0].args,
         vec![Term::App("c".to_string(), vec![])]
     );
+}
+
+#[test]
+fn display_uses_structured_causes_and_primary_locations() {
+    for (source, cause, location) in [
+        ("theory T begin /*", "Unclosed block comment", (1, 18)),
+        (
+            "theory T begin functions: f/1, f/3 end",
+            "Conflicting function declaration",
+            (1, 32),
+        ),
+    ] {
+        let error = parse_theory(source, &[])
+            .unwrap_err()
+            .with_source("test.spthy");
+        assert_eq!(error.to_string(), error.render_plain());
+        assert!(error.to_string().contains(cause), "{error}");
+        assert_eq!(error.line_column(), location);
+    }
+}
+
+#[test]
+fn invalid_term_reports_its_expectation_and_token() {
+    let source = "theory T begin rule R: [A(☃)] --> [] end";
+    let error = parse_theory(source, &[]).unwrap_err();
+    assert_eq!(
+        &source[error.diagnostic_labels_with_source(source)[0].span.clone()],
+        "☃"
+    );
+    assert!(
+        error
+            .diagnostic_notes()
+            .iter()
+            .any(|note| note.contains("expected term") && note.contains("found")),
+        "{error}"
+    );
+}
+
+#[test]
+fn oversized_diagnostics_release_large_allocations() {
+    let huge = "a".repeat(100_000);
+    let mut owned = huge.clone();
+    crate::parse_error::bound_owned_text(&mut owned, 80);
+    assert_eq!(owned.chars().count(), 81);
+    assert!(owned.capacity() < 1024);
+
+    let source = format!("theory T begin rule R[color={huge}]: [] --> [] end");
+    let error = parse_theory(&source, &[]).unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        ParseErrorKind::MalformedHexColor { .. }
+    ));
+    assert_eq!(error.span().len(), huge.len());
+    assert!(error.details.is_none());
+    assert!(error.diagnostic_notes()[0].contains("100000"));
+
+    let source = format!("theory T begin rule R: [{huge}()] --> [] end");
+    let error = parse_theory(&source, &[]).unwrap_err();
+    let ParseErrorKind::InvalidFactName { name } = error.kind() else {
+        panic!("{error}");
+    };
+    assert!(name.capacity() < 1024);
+    assert_eq!(error.span().len(), huge.len());
+}
+
+#[test]
+fn reserved_names_have_their_own_kind_and_keyword_span() {
+    for word in RESERVED_NAMES {
+        for template in [
+            "theory T begin functions: NAME/2 end",
+            "theory T begin #define NAME end",
+            "theory NAME begin end",
+            "theory T begin rule NAME: [] --> [] end",
+            "theory T begin lemma NAME: \"T\" end",
+            "theory T begin predicates: NAME(x) <=> T end",
+        ] {
+            let start = template.find("NAME").unwrap();
+            let source = template.replace("NAME", word);
+            let error = parse_theory(&source, &[]).unwrap_err();
+            assert!(
+                matches!(error.kind(), ParseErrorKind::ReservedKeyword { keyword } if keyword == word),
+                "{source}: {error:?}"
+            );
+            assert_eq!(error.span(), start..start + word.len());
+        }
+        for suffix in ["x", "_", "0", "é"] {
+            parse_theory(
+                &format!("theory T begin functions: {word}{suffix}/2 end"),
+                &[],
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn missing_theory_end_is_independent_of_previous_item() {
+    for body in [
+        "rule R: [] --> []",
+        "builtins: hashing",
+        "functions: f/2,g/1",
+        "functions: f/2,g/2 [AC]",
+    ] {
+        let source = format!("theory T begin {body}");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert_eq!(error.span().start, source.len());
+        assert!(
+            error.diagnostic_notes().iter().any(|n| n.contains("end")),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn diff_validation_preserves_priority_and_source_spans() {
+    for args in ["(~a*~b), ~a", "diff(~a, ~b), ~b"] {
+        let source = diff_probe(args);
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::IllegalDiffOperator(IllegalDiffReason::DiffModeDisabled)
+        ));
+        let start = if args.starts_with("diff") {
+            source.rfind("diff(").unwrap()
+        } else {
+            source.find("diff(").unwrap()
+        };
+        assert_eq!(error.span(), start..start + 4);
+    }
+    for args in ["~a", "~a, ~b, ~a", "", "~a,"] {
+        for flags in [&[][..], &["diff"][..]] {
+            let error = parse_theory(&diff_probe(args), flags).unwrap_err();
+            assert!(
+                matches!(
+                    error.kind(),
+                    ParseErrorKind::WrongFunctionArity { declared: 2, .. }
+                ),
+                "{args}: {error:?}"
+            );
+        }
+    }
+    for flags in [&[][..], &["diff"][..]] {
+        for (args, wrong_arity) in [("x, x", false), ("x", true)] {
+            let source = format!("theory D begin equations: diff({args}) = x end");
+            let error = parse_theory(&source, flags).unwrap_err();
+            if wrong_arity {
+                assert!(matches!(
+                    error.kind(),
+                    ParseErrorKind::WrongFunctionArity { .. }
+                ));
+            } else {
+                assert!(matches!(
+                    error.kind(),
+                    ParseErrorKind::IllegalDiffOperator(IllegalDiffReason::InEquation)
+                ));
+            }
+            let start = source.find("diff").unwrap();
+            assert_eq!(error.span(), start..start + 4);
+        }
+    }
+    parse_theory(&diff_probe("~a, ~b,"), &["diff"]).unwrap();
+}
+
+#[test]
+fn bare_diff_token_requires_an_argument_list() {
+    for (term, unexpected) in [
+        ("diff", ")"),
+        ("diff{~a}~b", "{"),
+        ("diff /* comment */", ")"),
+    ] {
+        let source = format!("theory D begin rule R: [] --> [Out({term})] end");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(source[error.span().start..].starts_with(unexpected));
+        assert!(
+            error
+                .diagnostic_notes()
+                .iter()
+                .any(|note| note.contains('(')),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn diff_operator_is_accepted_with_the_diff_flag() {
+    let thy = parse_theory(&diff_probe("(~a*~b), ~a"), &["diff"]).expect("diff flag enables it");
+    let mut seen = false;
+    for item in &thy.items {
+        if let TheoryItem::Rule(r) = item {
+            for f in &r.conclusions {
+                for t in &f.args {
+                    if matches!(t, Term::Diff(_, _)) {
+                        seen = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(seen, "expected a Term::Diff in the rule conclusion");
+
+    // The word boundary keeps `diffuse(...)` an ordinary function application
+    // even without the flag (HS routes it through `naryOpApp`).
+    assert!(parse_theory(
+        "theory D\nbegin\n\nfunctions: diffuse/2\n\nrule RA:\n  \
+             [ Fr(~a), Fr(~b) ] --> [ Out( diffuse(~a, ~b) ) ]\n\nend\n",
+        &[]
+    )
+    .is_ok());
+}
+
+#[test]
+fn show_lit_string_escapes_like_haskell() {
+    assert_eq!(show_lit_string("ab"), "\"ab\"");
+    assert_eq!(
+        show_lit_string("\u{0B}\u{0C}\u{07}\u{08}"),
+        "\"\\v\\f\\a\\b\""
+    );
+    assert_eq!(show_lit_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    assert_eq!(show_lit_string("\u{100}"), "\"\\256\"");
+    assert_eq!(show_lit_string("\u{100}7"), "\"\\256\\&7\"");
+}
+
+#[test]
+fn repeated_failures_keep_one_expectation() {
+    let formula = format!("{}☃{}", "(".repeat(40), ")".repeat(40));
+    let source = format!("theory T begin lemma L: \"{formula}\" end");
+    let error = parse_theory(&source, &[]).unwrap_err();
+    assert_eq!(error.diagnostic_notes(), ["expected term; found '☃'"]);
+}
+
+#[test]
+fn expected_diagnostics_distinguish_eof_and_escape_controls() {
+    let eof = parse_theory("theory T", &[]).unwrap_err();
+    assert!(
+        eof.diagnostic_notes()
+            .iter()
+            .any(|n| n.contains("found end of input")),
+        "{eof}"
+    );
+    let error = parse_theory("theory T begin tactic: t presort: 1 end", &[]).unwrap_err();
+    assert_eq!(error.diagnostic_notes(), ["expected letter; found '1'"]);
+    for (input, found) in [("\0", "'\\0'"), ("☃", "'☃'"), ("'", "'\\''")] {
+        let mut parser = Parser::new(input, &[], false);
+        assert_eq!(
+            parser.err_expect("term").diagnostic_notes(),
+            [format!("expected term; found {found}")]
+        );
+    }
+}
+
+#[test]
+fn conflict_progress_includes_trailing_comments() {
+    for body in [
+        "functions: f/1, f/2",
+        "functions: f/1, f/1 [private]",
+        "functions: h/2 builtins: hashing",
+        "macros: h(x) = x builtins: hashing",
+        "macros: m(x) = x, m(y) = y",
+        "rule R: [] --> [] rule R: [] --> [A()]",
+    ] {
+        let source = format!("theory T begin {body} /* trailing */ end");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert_eq!(
+            error.pos.offset,
+            source.rfind("end").unwrap(),
+            "{body}: {error:?}"
+        );
+        let source = format!("theory T begin {body} /* unclosed");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(
+            matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
+            "{body}: {error:?}"
+        );
+    }
+}
+
+fn diff_probe(args: &str) -> String {
+    format!(
+        "theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  \
+             [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff({args}) ) ]\n\nend\n"
+    )
+}
+
+#[test]
+fn lemma_comment_stripping_preserves_textarea_newline_rules() {
+    for (source, expected) in [
+        ("α/β*γ", "α/β*γ"),
+        ("a\n// comment\nb", "a\nb"),
+        ("a\n/* comment */\nb", "ab"),
+        ("a\n\n/* comment */\n\nb", "a\n\nb"),
+        ("a// tail", "a"),
+        ("a\n/* tail", "a"),
+        ("a/* outer /* inner */b */c", "ab */c"),
+        ("a// one\n// two\nb", "a\nb"),
+        ("a\n/* one *//* two */\nb", "ab"),
+        ("a\r\n/* comment */\r\nb", "a\r\r\nb"),
+        ("\"a//quoted\"\nb", "\"a\nb"),
+        ("a/**/é/**/雪", "aé雪"),
+    ] {
+        assert_eq!(remove_comments(source), expected, "{source:?}");
+    }
 }

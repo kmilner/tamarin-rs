@@ -31,25 +31,8 @@
 
 use crate::ast::{ParsedMethod, ParsedProofTree};
 use crate::lexer::{is_ident_char, Lexer};
-use crate::parser::Parser;
-
-#[derive(Debug, Clone)]
-pub struct ProofTreeParseError {
-    pub line: u32,
-    pub col: u32,
-    pub msg: String,
-}
-
-impl std::fmt::Display for ProofTreeParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "proof-tree parse error at line {} col {}: {}",
-            self.line, self.col, self.msg
-        )
-    }
-}
-impl std::error::Error for ProofTreeParseError {}
+use crate::parse_error::ParseContext;
+use crate::parser::{ParseError, Parser};
 
 /// Parse the raw skeleton text into a [`ParsedProofTree`]. Returns `Err` if
 /// the complete token stream does not conform to the HS grammar.
@@ -61,17 +44,21 @@ impl std::error::Error for ProofTreeParseError {}
 pub fn parse_proof_tree<'a>(
     raw: &'a str,
     parent: &'a Parser<'a>,
-) -> Result<ParsedProofTree, ProofTreeParseError> {
+) -> Result<ParsedProofTree, ParseError> {
     let mut p = TreeParser {
         lx: Lexer::new(raw),
         parent,
     };
-    let tree = p.proof_skeleton()?;
-    p.lx.skip_ws();
-    if !p.lx.is_eof() {
-        return Err(p.err("unexpected trailing proof text"));
-    }
-    Ok(tree)
+    let result = (|| {
+        let tree = p.proof_skeleton()?;
+        p.lx.skip_ws();
+        if !p.lx.is_eof() {
+            return Err(p.err_expect("end of proof"));
+        }
+        Ok(tree)
+    })();
+    p.lx.finish(result)
+        .map_err(|error| error.with_context(ParseContext::Proof))
 }
 
 /// Validate a stored diff-proof skeleton against HS `diffProofSkeleton`
@@ -81,17 +68,21 @@ pub fn parse_proof_tree<'a>(
 pub(crate) fn validate_diff_proof_tree<'a>(
     raw: &'a str,
     parent: &'a Parser<'a>,
-) -> Result<(), ProofTreeParseError> {
+) -> Result<(), ParseError> {
     let mut p = TreeParser {
         lx: Lexer::new(raw),
         parent,
     };
-    p.diff_proof_skeleton()?;
-    p.lx.skip_ws();
-    if !p.lx.is_eof() {
-        return Err(p.err("unexpected trailing proof text"));
-    }
-    Ok(())
+    let result = (|| {
+        p.diff_proof_skeleton()?;
+        p.lx.skip_ws();
+        if !p.lx.is_eof() {
+            return Err(p.err_expect("end of proof"));
+        }
+        Ok(())
+    })();
+    p.lx.finish(result)
+        .map_err(|error| error.with_context(ParseContext::Proof))
 }
 
 struct TreeParser<'a> {
@@ -100,17 +91,12 @@ struct TreeParser<'a> {
 }
 
 impl<'a> TreeParser<'a> {
-    fn err(&self, msg: impl Into<String>) -> ProofTreeParseError {
-        let (line, col) = self.lx.line_col();
-        ProofTreeParseError {
-            line,
-            col,
-            msg: msg.into(),
-        }
+    fn err_expect(&self, expected: impl Into<String>) -> ParseError {
+        ParseError::expected(self.lx.pos(), expected, self.lx.peek())
     }
 
     /// HS `proofSkeleton` (Theory/Text/Parser/Proof.hs:98-115).
-    fn proof_skeleton(&mut self) -> Result<ParsedProofTree, ProofTreeParseError> {
+    fn proof_skeleton(&mut self) -> Result<ParsedProofTree, ParseError> {
         self.lx.skip_ws();
         // solvedProof: `SOLVED`
         if self.try_kw("SOLVED") {
@@ -166,7 +152,7 @@ impl<'a> TreeParser<'a> {
 
     /// HS `oneCase` (Theory/Text/Parser/Proof.hs:98-115, see line 115):
     ///   `(,) <$> ("case" *> identifier) <*> proofSkeleton`
-    fn one_case(&mut self) -> Result<(String, ParsedProofTree), ProofTreeParseError> {
+    fn one_case(&mut self) -> Result<(String, ParsedProofTree), ParseError> {
         self.require_kw("case")?;
         let name = self.identifier_extended()?;
         let sub = self.proof_skeleton()?;
@@ -174,7 +160,7 @@ impl<'a> TreeParser<'a> {
     }
 
     /// HS `proofMethod` (Theory/Text/Parser/Proof.hs:76-85).
-    fn proof_method(&mut self) -> Result<ParsedMethod, ProofTreeParseError> {
+    fn proof_method(&mut self) -> Result<ParsedMethod, ParseError> {
         self.lx.skip_ws();
         if self.try_kw("sorry") {
             return Ok(ParsedMethod::Sorry);
@@ -206,10 +192,10 @@ impl<'a> TreeParser<'a> {
             // is and this lexer walks to the offset it stopped at, character
             // by character to keep its line and column right.
             self.lx.skip_ws();
-            let start = self.lx.pos().offset;
+            let start = self.lx.pos();
             let (spec, len) = crate::parser::parse_parens_goal(self.lx.rest(), self.parent)
-                .map_err(|e| self.err(format!("in solve( ... ): {}", e)))?;
-            let end = start + len;
+                .map_err(|error| error.shifted(start, self.lx.src()))?;
+            let end = start.offset + len;
             while self.lx.pos().offset < end {
                 self.lx.bump();
             }
@@ -217,11 +203,11 @@ impl<'a> TreeParser<'a> {
         }
         // HS `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) has no
         // catch-all alternative, so any other token fails the skeleton parse.
-        Err(self.err("expected proof method"))
+        Err(self.err_expect("proof method"))
     }
 
     /// HS `diffProofSkeleton` (Theory/Text/Parser/Proof.hs:128-144).
-    fn diff_proof_skeleton(&mut self) -> Result<(), ProofTreeParseError> {
+    fn diff_proof_skeleton(&mut self) -> Result<(), ParseError> {
         self.lx.skip_ws();
         if self.try_kw("MIRRORED") {
             return Ok(());
@@ -243,7 +229,7 @@ impl<'a> TreeParser<'a> {
         self.diff_proof_skeleton()
     }
 
-    fn diff_one_case(&mut self) -> Result<(), ProofTreeParseError> {
+    fn diff_one_case(&mut self) -> Result<(), ParseError> {
         self.require_kw("case")?;
         self.identifier_extended()?;
         self.diff_proof_skeleton()
@@ -251,7 +237,7 @@ impl<'a> TreeParser<'a> {
 
     /// HS `diffProofMethod` (Theory/Text/Parser/Proof.hs:118-126). A `step`
     /// wraps one ordinary proof method, not an ordinary proof skeleton.
-    fn diff_proof_method(&mut self) -> Result<(), ProofTreeParseError> {
+    fn diff_proof_method(&mut self) -> Result<(), ParseError> {
         self.lx.skip_ws();
         if self.try_kw("sorry")
             || self.try_kw("rule-equivalence")
@@ -263,15 +249,15 @@ impl<'a> TreeParser<'a> {
         }
         if self.try_kw("step") {
             if !self.lx.try_symbol("(") {
-                return Err(self.err("expected `(`"));
+                return Err(self.err_expect("`(`"));
             }
             self.proof_method()?;
             if !self.lx.try_symbol(")") {
-                return Err(self.err("expected `)`"));
+                return Err(self.err_expect("`)`"));
             }
             return Ok(());
         }
-        Err(self.err("expected diff proof method"))
+        Err(self.err_expect("diff proof method"))
     }
 
     // -------- helpers --------
@@ -287,18 +273,18 @@ impl<'a> TreeParser<'a> {
         self.lx.peek_symbol(kw)
     }
 
-    fn require_kw(&mut self, kw: &str) -> Result<(), ProofTreeParseError> {
+    fn require_kw(&mut self, kw: &str) -> Result<(), ParseError> {
         if self.try_kw(kw) {
             Ok(())
         } else {
-            Err(self.err(format!("expected `{}`", kw)))
+            Err(self.err_expect(format!("`{}`", kw)))
         }
     }
 
     /// Identifier with extended chars: HS's `identifier` accepts
     /// alphanum + `_` (Token.hs:214-230, see line 224 `identLetter = alphaNum <|> oneOf "_"`)
     /// and emits names like `Server_ReceiveOTP_NewSession_case_1`.
-    fn identifier_extended(&mut self) -> Result<String, ProofTreeParseError> {
+    fn identifier_extended(&mut self) -> Result<String, ParseError> {
         self.lx.skip_ws();
         let mut s = String::new();
         match self.lx.peek() {
@@ -306,7 +292,7 @@ impl<'a> TreeParser<'a> {
                 s.push(c);
                 self.lx.bump();
             }
-            _ => return Err(self.err("expected identifier")),
+            _ => return Err(self.err_expect("identifier")),
         }
         while let Some(c) = self.lx.peek() {
             if is_ident_char(c) {

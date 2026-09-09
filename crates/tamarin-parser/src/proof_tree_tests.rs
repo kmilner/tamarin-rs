@@ -135,6 +135,15 @@ fn goal(src: &str) -> GoalSpec {
     parse_goal_str(src, &bare_parser()).unwrap_or_else(|e| panic!("{src}: {e}"))
 }
 
+#[test]
+fn fact_goals_preserve_annotations_and_comments_around_the_separator() {
+    for (separator, commented_separator) in [("@", "@"), ("▶₁₂", "▶ /* index */ ₁₂")] {
+        let plain = format!("!Pk(x)[no_precomp] {separator} #i.2");
+        let commented = format!("/* fact */ !Pk(x) /* annotation */ [no_precomp] /* separator */ {commented_separator} /* node */ #i.2 /* end */");
+        assert_eq!(goal(&commented), goal(&plain));
+    }
+}
+
 /// HS `actionGoal` (Theory/Text/Parser/Proof.hs:49-52) keeps the whole
 /// timepoint `LVar` in `ActionG i fa`, index included, so `#vk.6` must not
 /// collapse to `#vk`.
@@ -406,7 +415,10 @@ fn nested_case_block() {
 /// accepts fails the whole skeleton parse.
 #[test]
 fn unparseable_goal_fails_the_tree_parse() {
-    assert!(parse_proof_tree("solve( garbage_no_marker ) by sorry", &bare_parser()).is_err());
+    let error = parse_proof_tree("solve( garbage_no_marker ) by sorry", &bare_parser())
+        .expect_err("invalid nested goal must fail");
+    assert!(error.span().start > 0);
+    assert_eq!(error.line_column().0, 1);
 }
 
 /// HS `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) is an `asum` of seven

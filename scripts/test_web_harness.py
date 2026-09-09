@@ -62,8 +62,17 @@ def run_shell(script, *, temp_dir=None, env=None, check=True):
 
     run_env = clean_environment(env)
     run_env["HARNESS_TMP"] = str(temp_dir)
+    # Source a real scenario file so failures in it and in sourced helpers
+    # report their actual filenames and line numbers, without full Bash tracing.
+    scenario = pathlib.Path(temp_dir) / "scenario.sh"
+    scenario.write_text(script)
+    report_failure = (
+        r'''trap 'printf "Scenario failed at %s:%s: %s (exit %s)\n" '''
+        r'''"${BASH_SOURCE[0]}" "$LINENO" "$BASH_COMMAND" "$?" >&2' ERR; '''
+        'source "$1"'
+    )
     result = subprocess.run(
-        ["bash", "-x", "-c", script],
+        ["bash", "-E", "-c", report_failure, "harness", str(scenario)],
         cwd=HERE.parent,
         env=run_env,
         capture_output=True,
@@ -75,6 +84,66 @@ def run_shell(script, *, temp_dir=None, env=None, check=True):
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return result
+
+
+class ShellScenarioDiagnostics(unittest.TestCase):
+    def test_reports_the_failed_command_without_shell_trace_noise(self):
+        with self.assertRaises(AssertionError) as failure:
+            run_shell('set -e\nprintf "useful output\\n"\nfalse\n')
+        message = str(failure.exception)
+        self.assertIn("scenario.sh:3: false (exit 1)", message)
+        self.assertIn("useful output", message)
+        self.assertNotIn("+ printf", message)
+
+    def test_reports_failures_inside_shell_functions(self):
+        result = run_shell('set -e\nfailing_helper() { false; }\nfailing_helper\n', check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("scenario.sh:2: false (exit 1)", result.stderr)
+
+    def test_reports_the_source_file_for_a_failing_helper(self):
+        with tempfile.TemporaryDirectory() as td:
+            (pathlib.Path(td) / "helper.sh").write_text("false\n")
+            result = run_shell('set -e\n. "$HARNESS_TMP/helper.sh"\n', temp_dir=td, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("helper.sh:1: false (exit 1)", result.stderr)
+
+
+class ParserDiagnosticNormalization(unittest.TestCase):
+    @staticmethod
+    def normalize(stderr):
+        return subprocess.run(
+            ["bash", "-c", ". scripts/gate_common.sh; nerr"],
+            cwd=HERE.parent,
+            # Normalization must not preflight installed provers or Maude.
+            env=clean_environment({
+                "HS_PATH": "/nonexistent/haskell-oracle",
+                "RS_BIN": "/nonexistent/tamarin-rs",
+                "MAUDE_PATH": "/nonexistent/maude",
+            }),
+            input=stderr,
+            text=True, capture_output=True, check=True,
+        ).stdout
+
+    def test_syntax_frames_agree(self):
+        hs = '\"bad.spthy\" (line 2, column 1):\nunexpected \"?\"\nexpecting \"end\"\n'
+        rs = "error[parse]: Unexpected input\n  ┌─ bad.spthy:2:1\n  │\n2 │ ?\n  │ ^\n  = expected end\n\n"
+        self.assertEqual(self.normalize(hs), "<parser diagnostic>\n")
+        self.assertEqual(self.normalize(rs), self.normalize(hs))
+
+    def test_runtime_errors_remain_visible(self):
+        for message in ["error: oracle failed\n", "tamarin-prover: runtime failure\n", "unknown diagnostic format\n"]:
+            self.assertEqual(self.normalize(message), message)
+            rs = "error[parse]: Bad syntax\n  │ ^\n\n"
+            self.assertEqual(self.normalize(message + rs + message), message + "<parser diagnostic>\n" + message)
+            self.assertEqual(self.normalize(rs.rstrip() + "\n" + message), "<parser diagnostic>\n" + message)
+
+    def test_unrecognized_haskell_messages_are_not_suppressed(self):
+        hs = '\"bad.spthy\" (line 2, column 1):\nunexpected \"?\"\nsemantic detail\nerror: oracle failed\n'
+        self.assertEqual(self.normalize(hs), "<parser diagnostic>\nsemantic detail\nerror: oracle failed\n")
+
+    def test_existing_warning_rules_still_apply(self):
+        stderr = "[Open Chains] Too many chain constraints\n" * 2 + "[Saturating Sources] noise\nother warning\n"
+        self.assertEqual(self.normalize(stderr), "[Open Chains] Too many chain constraints\nother warning\n")
 
 
 class DiffArtifactNames(unittest.TestCase):
@@ -918,11 +987,32 @@ test "$k3" != "$k4"
 
 # Syntax-invalid parity fixtures still get a conservative, content-sensitive
 # identity instead of becoming permanently uncacheable.
-parser_input_manifest() { echo 'syntax error' >&2; return 1; }
+parser_input_manifest() { echo 'syntax error' >&2; return 3; }
 k5=$(input_content_key "$t/root.spthy")
 printf 'third\n' > "$t/sub/hidden.spthy"
 k6=$(input_content_key "$t/root.spthy")
 test "$k5" != "$k6"
+'''
+        )
+
+    def test_manifest_fallback_uses_exit_status_not_diagnostic_text(self):
+        run_shell(
+            r'''
+set -e
+. scripts/gate_common.sh
+t=$HARNESS_TMP
+printf 'theory T begin end\n' > "$t/root.spthy"
+parser_input_manifest() { echo 'arbitrary diagnostic wording' >&2; return "$status"; }
+for status in 1 2 127 139; do
+    if input_manifest "$t/root.spthy" 2>"$t/error"; then
+        echo "expected fatal manifest status $status to prevent caching" >&2
+        exit 1
+    fi
+    grep -Fq 'arbitrary diagnostic wording' "$t/error"
+done
+status=3
+input_manifest "$t/root.spthy" > "$t/manifest"
+test -s "$t/manifest"
 '''
         )
 
@@ -1278,6 +1368,7 @@ done
 ! grep -F 'commented-missing' <<< "$sources"
 ! grep -F 'trailing-missing' <<< "$sources"
 if input_manifest "$t/corpus/t.spthy" '-D=ACTIVE --diff' 2>"$t/error"; then
+    echo 'expected input_manifest to reject active-missing.spthy, but it succeeded' >&2
     exit 1
 fi
 grep -F 'active-missing.spthy' "$t/error"
@@ -1576,10 +1667,10 @@ CACHE_VERSION=test
 
 expect_failure() {
     if "$@" 2>"$t/error"; then
-        echo "unexpected success: $*" >&2
+        echo "expected $* to reject missing.spthy, but it succeeded" >&2
         exit 1
     fi
-    grep -F "failed to read included file $t/corpus/missing.spthy" "$t/error"
+    grep -Fq "$t/corpus/missing.spthy" "$t/error"
 }
 expect_failure ckey t.spthy "$t/corpus/t.spthy"
 expect_failure proof_cache_key "$t/corpus/t.spthy" x

@@ -769,9 +769,6 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 out.items
                     .push(TheoryItem::Text((header.clone(), body.clone())));
             }
-            p::TheoryItem::Define(_) | p::TheoryItem::Include(_) => {
-                // Already handled by the parser preprocessor.
-            }
         }
     }
     Ok(())
