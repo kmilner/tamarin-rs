@@ -2841,7 +2841,6 @@ fn emit_parser_error(
         )
         .collect();
     let diagnostic = Diagnostic::error()
-        .with_code("parse")
         .with_message(message)
         .with_labels(labels)
         .with_notes(err.diagnostic_notes());
