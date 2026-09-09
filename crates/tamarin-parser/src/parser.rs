@@ -8,7 +8,7 @@
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tamarin_term::function_symbols::{
@@ -928,12 +928,75 @@ impl ArityRes {
 /// Lexer position, source identity, and diagnostic carry remain file-local on
 /// [`Parser`]. Keeping the inherited state in one value makes that boundary
 /// structural instead of maintaining a parallel field list.
+/// One open `#include`, as seen by the cycle check in [`Parser::expand_include`].
+///
+/// What an include does is a function of exactly three things: the bytes it
+/// reads (`file`), the directory its own nested includes resolve against
+/// (`dir` — HS `takeDirectory filepath`, Theory/Text/Parser.hs:342, the directory of the
+/// path AS WRITTEN, so a symlink resolves from where the link sits, not where
+/// it points), and the preprocessor flags in force when it is entered
+/// (`flags`).  Flags are the only parser state an `#ifdef` consults
+/// (`evalformula`, Theory/Text/Parser.hs:223), a dead branch is skipped unparsed, and
+/// `#define` only ever ADDS a flag (Theory/Text/Parser.hs:312 — there is no `#undef`).
+/// So re-entering a frame with all three equal replays the same parse and
+/// recurses forever, while re-entering with a grown flag set is what
+/// include guards (`#ifdef not X` / `#define X`) rely on and must pass.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IncludeFrame {
+    /// The path as resolved, for the error message.
+    shown: PathBuf,
+    /// Canonical directory that nested includes resolve against.
+    dir: PathBuf,
+    /// Canonical path of the file itself, so aliases (a symlink, `a/../a`)
+    /// are one file.
+    file: PathBuf,
+    /// The flag set on entry, sorted so two equal sets compare equal and the
+    /// error message lists them in a fixed order.
+    flags: Vec<String>,
+}
+
+impl IncludeFrame {
+    /// Build the frame for `resolved`, which has already been read.  Both
+    /// canonicalisations therefore only fail for an exotic reason (permission
+    /// on a parent, a race), and then fall back to the path as written rather
+    /// than losing the check.
+    fn new<'f>(resolved: &Path, flags: impl Iterator<Item = &'f String>) -> Self {
+        let dir = match resolved.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d,
+            _ => Path::new("."),
+        };
+        IncludeFrame {
+            shown: resolved.to_path_buf(),
+            dir: std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()),
+            file: std::fs::canonicalize(resolved).unwrap_or_else(|_| resolved.to_path_buf()),
+            flags: {
+                let mut flags: Vec<String> = flags.cloned().collect();
+                flags.sort();
+                flags
+            },
+        }
+    }
+
+    /// Would entering `other` replay this frame's parse?
+    fn re_enters(&self, other: &IncludeFrame) -> bool {
+        self.file == other.file && self.dir == other.dir && self.flags == other.flags
+    }
+}
+
 struct ParserState {
     #[allow(clippy::disallowed_types)]
     flags: HashSet<String>,
     enable_diff: bool,
     input_aliases: Vec<InputAlias>,
     emit_warnings: bool,
+    /// The `#include` files currently being parsed, outermost first, each with
+    /// the state that decides how its parse goes.  Re-entering a frame that is
+    /// still open is a cycle: without this the recursion in `expand_include`
+    /// is unbounded and the process dies with a stack overflow (the Haskell
+    /// prover simply hangs instead).  It rides in [`ParserState`] so it
+    /// threads into and back out of the sub-parser with the rest of the
+    /// inherited state.
+    include_stack: Vec<IncludeFrame>,
     ac_fun_syms: Arc<Vec<String>>,
     fun_syms: Arc<Vec<(String, FunOptions)>>,
     macro_syms: Arc<Vec<(String, FunOptions)>>,
@@ -1079,6 +1142,7 @@ impl<'a> Parser<'a> {
         Parser {
             lx: Lexer::new(src),
             state: ParserState {
+                include_stack: Vec::new(),
                 enable_diff: is_diff || flags_set.contains("diff"),
                 flags: flags_set,
                 input_aliases: Vec::new(),
@@ -1920,10 +1984,43 @@ impl<'a> Parser<'a> {
             ))
         })?;
 
+        // Cycle check, after the read (so a missing file still reports as a
+        // read failure) and before the recursion that would blow the stack.
+        // A cycle is re-entering an OPEN frame with nothing changed that could
+        // make the parse go differently — see [`IncludeFrame`] for why file,
+        // directory and flag set are exactly that.  Include guards pass
+        // because the guard's `#define` grows the flag set before the
+        // re-entry; a diamond passes because nothing is re-entered while open.
+        let frame = IncludeFrame::new(&resolved, self.state.flags.iter());
+        if let Some(at) = self
+            .state
+            .include_stack
+            .iter()
+            .position(|open| open.re_enters(&frame))
+        {
+            let mut chain: Vec<String> = self.state.include_stack[at..]
+                .iter()
+                .map(|open| open.shown.display().to_string())
+                .collect();
+            chain.push(frame.shown.display().to_string());
+            let with = if frame.flags.is_empty() {
+                "no `#define` flags set".to_string()
+            } else {
+                format!("the same `#define` flags set ({})", frame.flags.join(", "))
+            };
+            return Err(self.err(format!(
+                "`#include` cycle: {}, re-entered with {with}",
+                chain.join(" -> ")
+            )));
+        }
+
         // Nested includes in the fragment resolve relative to ITS directory
         // (HS recurses: `takeDirectory filepath`).
         let sub_base = resolved.parent().map(|p| p.to_path_buf());
-        self.parse_include_fragment(&content, sub_base, resolved, staged)
+        self.state.include_stack.push(frame);
+        let result = self.parse_include_fragment(&content, sub_base, resolved, staged);
+        self.state.include_stack.pop();
+        result
     }
 
     /// Parse a header-less theory-item fragment (an included file body — no
