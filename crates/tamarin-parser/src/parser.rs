@@ -968,7 +968,7 @@ impl<'a> Parser<'a> {
             // label, not the two quoted keywords.
             return Err(self.err_expect("configuration or begin"));
         }
-        let items = self.theory_items_until_end()?;
+        let items = self.in_context(ParseContext::Theory, |p| p.theory_items_until_end())?;
         // HS `addItems … <* symbol_ "end"` (Theory/Text/Parser.hs:230-393, see
         // line 243,245): when `end` is
         // absent the trailing-`end` failure merges with the item alternation's
@@ -1061,8 +1061,7 @@ impl<'a> Parser<'a> {
                             save,
                             "a standalone conditional directive line",
                             Some('#'),
-                        )
-                        .with_context(ParseContext::Theory));
+                        ));
                     }
                     "include" => items.extend(self.expand_include()?),
                     "define" => {
@@ -1230,8 +1229,10 @@ impl<'a> Parser<'a> {
         // (HS recurses: `takeDirectory filepath`).
         let sub_base = resolved.parent().map(|p| p.to_path_buf());
         let source_name = resolved.display().to_string();
-        self.parse_include_fragment(&content, sub_base, resolved, staged)
-            .map_err(|e| e.with_source_text(source_name, content))
+        self.in_context(ParseContext::Include, |p| {
+            p.parse_include_fragment(&content, sub_base, resolved, staged)
+                .map_err(|e| e.with_source_text(source_name, content))
+        })
     }
 
     /// Parse a header-less theory-item fragment (an included file body — no
@@ -1259,16 +1260,15 @@ impl<'a> Parser<'a> {
 
         // Parse the header-less item stream: same loop as a theory body, but it
         // terminates at EOF (there is no `end` keyword in a fragment).
-        let result = (|| {
-            let items = sub.theory_items_until_end()?;
+        let result = {
+            let items = sub.in_context(ParseContext::Theory, |p| p.theory_items_until_end())?;
             sub.skip_ws();
             if !sub.lx.is_eof() {
-                return Err(sub
-                    .err_expect_here("end of included file")
-                    .with_context(ParseContext::Include));
+                Err(sub.err_expect_here("end of included file"))
+            } else {
+                Ok(items)
             }
-            Ok(items)
-        })();
+        };
 
         let result = sub
             .lx
@@ -4811,8 +4811,12 @@ impl<'a> Parser<'a> {
         .flat_map(|(_, syms)| syms.iter())
     }
 
-    /// One atomic term.
     fn atom_term(&mut self, eqn: bool) -> Result<Term, ParseError> {
+        self.in_context(ParseContext::Term, |p| p.atom_term_inner(eqn))
+    }
+
+    /// One atomic term.
+    fn atom_term_inner(&mut self, eqn: bool) -> Result<Term, ParseError> {
         self.skip_ws();
         // SAPIC pattern-match prefix `=v` — legal only in pattern positions
         // ([`Parser::allow_pat`]).  Elsewhere no term alternative starts with
@@ -5039,7 +5043,7 @@ impl<'a> Parser<'a> {
             return Ok(Term::AlgApp(id, Box::new(arg1), Box::new(arg2)));
         }
         self.restore(save_id);
-        Err(self.err_expect("term").with_context(ParseContext::Term))
+        Err(self.err_expect("term"))
     }
 
     /// The term a BARE identifier (no sigil) denotes once its optional
