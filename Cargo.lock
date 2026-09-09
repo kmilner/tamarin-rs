@@ -1195,6 +1195,7 @@ name = "tamarin-prover"
 version = "1.13.0"
 dependencies = [
  "clap",
+ "libc",
  "mimalloc",
  "rayon",
  "tamarin-accountability",
