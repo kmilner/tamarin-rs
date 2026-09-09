@@ -2236,3 +2236,152 @@ fn a_let_binder_is_a_variable_not_a_nullary_constant() {
         vec![Term::App("c".to_string(), vec![])]
     );
 }
+
+// =========================================================================
+// `#include` cycles
+// =========================================================================
+
+/// A scratch directory that removes itself, so a failing assertion cannot
+/// leave files behind for the next run to trip over. These tests need real
+/// files because `#include` resolves through the filesystem.
+struct IncludeDir(std::path::PathBuf);
+
+impl IncludeDir {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("tamarin_rs_include_{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        IncludeDir(dir)
+    }
+
+    fn write(&self, name: &str, body: &str) -> std::path::PathBuf {
+        let p = self.0.join(name);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir parent");
+        }
+        std::fs::write(&p, body).expect("write");
+        p
+    }
+
+    fn parse(&self, entry: &std::path::Path) -> Result<crate::ast::Theory, crate::ParseError> {
+        let body = std::fs::read_to_string(entry).expect("read entry");
+        crate::parser::parse_theory_with_base(&body, &[], Some(self.0.clone()))
+    }
+}
+
+impl Drop for IncludeDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A mutual `#include` cycle is an ERROR naming the chain, not a crash.
+///
+/// Before the cycle check this recursed without bound: the Rust parser died
+/// with a stack overflow (SIGABRT) and the Haskell prover hung until killed.
+/// Neither said why, which is the whole point of the message.
+#[test]
+fn include_cycle_is_reported_with_the_chain() {
+    let d = IncludeDir::new("cycle");
+    d.write("x.spthyi", "#include \"y.spthyi\"\n");
+    d.write("y.spthyi", "#include \"x.spthyi\"\n");
+    let entry = d.write(
+        "main.spthy",
+        "theory C\nbegin\n#include \"x.spthyi\"\nend\n",
+    );
+
+    let err = d.parse(&entry).expect_err("a cycle must not parse");
+    let msg = format!("{err}");
+    assert!(msg.contains("`#include` cycle"), "{msg}");
+    // The chain names both files, so the reader can see which edge to cut.
+    assert!(
+        msg.contains("x.spthyi") && msg.contains("y.spthyi"),
+        "{msg}"
+    );
+}
+
+/// A file that includes itself is the degenerate cycle, caught the same way.
+#[test]
+fn self_include_is_a_cycle() {
+    let d = IncludeDir::new("self");
+    d.write("loop.spthyi", "#include \"loop.spthyi\"\n");
+    let entry = d.write(
+        "main.spthy",
+        "theory S\nbegin\n#include \"loop.spthyi\"\nend\n",
+    );
+
+    let msg = format!(
+        "{}",
+        d.parse(&entry).expect_err("self-include must not parse")
+    );
+    assert!(msg.contains("`#include` cycle"), "{msg}");
+}
+
+/// The SAME file included twice along different paths is a diamond, NOT a
+/// cycle: nothing is re-entered while still open, so it must still parse.
+/// This is the false positive a naive "have I seen this path" check produces.
+#[test]
+fn diamond_include_is_not_a_cycle() {
+    let d = IncludeDir::new("diamond");
+    d.write(
+        "core.spthyi",
+        "rule Core: [ Fr(~n) ] --[ Core(~n) ]-> [ ]\n",
+    );
+    d.write("a.spthyi", "#include \"core.spthyi\"\n");
+    d.write("b.spthyi", "#include \"core.spthyi\"\n");
+    let entry = d.write(
+        "main.spthy",
+        "theory D\nbegin\n#include \"a.spthyi\"\n#include \"b.spthyi\"\nend\n",
+    );
+
+    // Parsing succeeds; the duplicate-rule guard is a separate concern and is
+    // whatever it was before this change.
+    let _ = d.parse(&entry);
+}
+
+/// A cycle reached only through a nested include is still caught: the check
+/// walks the whole open chain, not just the immediate parent.
+#[test]
+fn deep_include_cycle_is_reported() {
+    let d = IncludeDir::new("deep");
+    d.write("one.spthyi", "#include \"two.spthyi\"\n");
+    d.write("two.spthyi", "#include \"three.spthyi\"\n");
+    d.write("three.spthyi", "#include \"one.spthyi\"\n");
+    let entry = d.write(
+        "main.spthy",
+        "theory Deep\nbegin\n#include \"one.spthyi\"\nend\n",
+    );
+
+    let msg = format!(
+        "{}",
+        d.parse(&entry).expect_err("deep cycle must not parse")
+    );
+    assert!(msg.contains("`#include` cycle"), "{msg}");
+    assert!(
+        msg.contains("three.spthyi"),
+        "the chain names the closing edge: {msg}"
+    );
+}
+
+/// An acyclic include still works, so the check is not simply refusing
+/// everything. The included rule reaches the item stream.
+#[test]
+fn acyclic_include_still_parses() {
+    let d = IncludeDir::new("ok");
+    d.write(
+        "core.spthyi",
+        "rule Core: [ Fr(~n) ] --[ Core(~n) ]-> [ ]\n",
+    );
+    let entry = d.write(
+        "main.spthy",
+        "theory OK\nbegin\n#include \"core.spthyi\"\nend\n",
+    );
+
+    let thy = d.parse(&entry).expect("acyclic include parses");
+    assert!(
+        thy.items
+            .iter()
+            .any(|i| matches!(i, crate::ast::TheoryItem::Rule(r) if r.name == "Core")),
+        "the included rule is spliced into the item stream"
+    );
+}
