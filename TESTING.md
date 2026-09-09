@@ -636,7 +636,9 @@ under their own `== n row(s) UNCOMPARED ==` block and counted on the DONE
 sentinel, `== DONE <sweep> <ts> verdict=<...> UNCOMPARED=<n> files=<n> ==` —
 both fields are always present, and neither fails the verdict (`files=` is
 the distinct compared-file count `rs_ref_check.sh generate` reads). On
-today's ledger that is 23 rows (pe 19, json 3, module 1). Read `verdict=OK
+today's ledger that is 23 rows (pe 19, module 3, json 1). The three module
+rows are one input tested in `spthy`, `spthytyped`, and `msr` output modes.
+Read `verdict=OK
 UNCOMPARED=19` as "the rows it compared agree, and 19 were not compared".
 An *undocumented* timeout is still a plain ERROR and still fails.
 

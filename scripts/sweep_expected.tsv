@@ -174,7 +174,6 @@ module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_timeliness
 module	examples/sapic/manual-proofs/fairexchange-gjm/GJMLocks_fakepcs_timelinessB.spthy	stderr-open-chains	rs prints the warning during deriv checks, hs never does		stderr
 module	examples/thesis-LaraSchmid-evoting/chapter3_Alethea/aletheaD_sel_ShHh.spthy	stderr-open-chains	hs prints the warning 2x, rs 0x		stderr
 module	examples/sapic/export/States/scytl-voting-system.spthy	hs-derivcheck-timeout	same stdout at --derivcheck-timeout=300		stdout
-module	examples/sapic/export/SSH/ssh-with-forwarding-bounded.spthy	hs-derivcheck-timeout	same stdout at --derivcheck-timeout=300	msr	stdout
 module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy	hs-parse-rejects	hs stops at line 193 col 42, rs translates	spthy	rc
 module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy	hs-parse-rejects	hs stops at line 193 col 42, rs translates	spthytyped	stderr
 module	examples/sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy	hs-parse-rejects	hs stops at line 193 col 42, rs translates	msr	stderr
