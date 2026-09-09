@@ -403,10 +403,10 @@ fn resolve_cli_heuristic(
     for r in rankings.iter_mut() {
         match r {
             GoalRanking::Oracle { quit_on_empty, .. }
-            | GoalRanking::OracleSmart { quit_on_empty, .. } => {
-                if cli.oracle_only {
-                    *quit_on_empty = true;
-                }
+            | GoalRanking::OracleSmart { quit_on_empty, .. }
+                if cli.oracle_only =>
+            {
+                *quit_on_empty = true;
             }
             // Step 5: --oracle-only also sets quitOnEmpty on tactic rankings
             // (HS `aux (InternalTacticRanking _ t) = InternalTacticRanking

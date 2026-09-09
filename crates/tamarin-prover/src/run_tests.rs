@@ -30,7 +30,7 @@ fn parser_diagnostic_renders_the_source_span_and_note() {
     emit_parser_error(&mut buffer, &error, "bad.spthy", source).expect("render diagnostic");
     let rendered = std::str::from_utf8(buffer.as_slice()).expect("UTF-8 diagnostic");
 
-    assert!(rendered.contains("error[parse]: Unknown builtin `hasing`"));
+    assert!(rendered.contains("error: Unknown builtin `hasing`"));
     assert_eq!(rendered.matches("Unknown builtin `hasing`").count(), 1);
     assert!(rendered.contains("bad.spthy:2:11"));
     assert!(rendered.contains("hasing"));

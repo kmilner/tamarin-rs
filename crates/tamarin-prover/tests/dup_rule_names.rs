@@ -56,7 +56,7 @@ fn duplicate_rule_prints_a_diagnostic_and_exits_1() {
     common::assert_diagnostic(
         &stderr,
         &[
-            "error[parse]: Conflicting rule",
+            "error: Conflicting rule",
             "`R1` was already declared incompatibly",
         ],
     );
