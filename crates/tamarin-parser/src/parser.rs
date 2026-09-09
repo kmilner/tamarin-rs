@@ -934,6 +934,13 @@ struct ParserState {
     enable_diff: bool,
     input_aliases: Vec<InputAlias>,
     emit_warnings: bool,
+    /// Canonical paths of the `#include` files currently being parsed, outermost
+    /// first.  A path already in this chain is a cycle: without this the
+    /// recursion in `expand_include` is unbounded and the process dies with a
+    /// stack overflow (the Haskell prover simply hangs instead).  It rides in
+    /// [`ParserState`] so it threads into and back out of the sub-parser with
+    /// the rest of the inherited state.
+    include_stack: Vec<PathBuf>,
     ac_fun_syms: Arc<Vec<String>>,
     fun_syms: Arc<Vec<(String, FunOptions)>>,
     macro_syms: Arc<Vec<(String, FunOptions)>>,
@@ -1079,6 +1086,7 @@ impl<'a> Parser<'a> {
         Parser {
             lx: Lexer::new(src),
             state: ParserState {
+                include_stack: Vec::new(),
                 enable_diff: is_diff || flags_set.contains("diff"),
                 flags: flags_set,
                 input_aliases: Vec::new(),
@@ -1920,10 +1928,34 @@ impl<'a> Parser<'a> {
             ))
         })?;
 
+        // Cycle check, after the read (so a missing file still reports as a
+        // read failure) and before the recursion that would blow the stack.
+        // Canonicalise so `a/../a/core.spthyi` and `a/core.spthyi` are one
+        // path; the file is known to exist here, so this cannot fail for that
+        // reason, and if it fails for any other we fall back to the resolved
+        // path rather than losing the check.
+        let canonical = std::fs::canonicalize(&resolved).unwrap_or_else(|_| resolved.clone());
+        if let Some(at) = self
+            .state
+            .include_stack
+            .iter()
+            .position(|p| *p == canonical)
+        {
+            let mut chain: Vec<String> = self.state.include_stack[at..]
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            chain.push(canonical.display().to_string());
+            return Err(self.err(format!("`#include` cycle: {}", chain.join(" -> "))));
+        }
+
         // Nested includes in the fragment resolve relative to ITS directory
         // (HS recurses: `takeDirectory filepath`).
         let sub_base = resolved.parent().map(|p| p.to_path_buf());
-        self.parse_include_fragment(&content, sub_base, resolved, staged)
+        self.state.include_stack.push(canonical);
+        let result = self.parse_include_fragment(&content, sub_base, resolved, staged);
+        self.state.include_stack.pop();
+        result
     }
 
     /// Parse a header-less theory-item fragment (an included file body — no
