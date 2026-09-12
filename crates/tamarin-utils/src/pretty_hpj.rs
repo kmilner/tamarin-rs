@@ -316,10 +316,62 @@ enum Input {
     Lazy(Rc<LazyRight>),
 }
 
+/// A cursor into shared input documents. Lazy alternatives retain only the
+/// cursor, rather than copying every remaining document at each break.
+#[derive(Clone)]
+struct DocList {
+    storage: Rc<DocListStorage>,
+    start: usize,
+}
+
+struct DocListStorage(Vec<Doc>);
+
+impl Drop for DocListStorage {
+    fn drop(&mut self) {
+        if !self.0.is_empty() {
+            release(Release::Docs(std::mem::take(&mut self.0)));
+        }
+    }
+}
+
+impl DocList {
+    fn new(docs: Vec<Doc>) -> Self {
+        Self {
+            storage: Rc::new(DocListStorage(docs)),
+            start: 0,
+        }
+    }
+
+    fn as_slice(&self) -> &[Doc] {
+        &self.storage.0[self.start..]
+    }
+
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn pop_front(&mut self) -> Option<Doc> {
+        if self.is_empty() {
+            return None;
+        }
+        let doc = if let Some(storage) = Rc::get_mut(&mut self.storage) {
+            std::mem::replace(&mut storage.0[self.start], Doc::Empty)
+        } else {
+            self.storage.0[self.start].clone()
+        };
+        self.start += 1;
+        Some(doc)
+    }
+}
+
 enum Tail {
     Doc(Doc),
-    Sep(Vec<Doc>),
-    Fill(bool, Vec<Doc>),
+    Sep(DocList),
+    Fill(bool, DocList),
 }
 
 enum Build {
@@ -336,7 +388,7 @@ enum LazyState {
     FillBreak {
         g: bool,
         k: isize,
-        items: Box<(Doc, Vec<Doc>)>,
+        items: DocList,
     },
     Layout(Layout, DocRef),
     #[cfg(test)]
@@ -389,6 +441,8 @@ impl Drop for LazyRight {
 
 enum Release {
     Doc(Doc),
+    Docs(Vec<Doc>),
+    List(DocList),
     Node(DocRef),
     Lazy(Rc<LazyRight>),
     State(LazyState),
@@ -400,6 +454,23 @@ fn release(mut item: Release) {
     let mut pending = Vec::new();
     loop {
         match item {
+            Release::Docs(mut docs) => {
+                if let Some(doc) = docs.pop() {
+                    // Reuse the existing vector rather than copying its remaining
+                    // entries into the release queue (including consumed empties).
+                    if !docs.is_empty() {
+                        pending.push(Release::Docs(docs));
+                    }
+                    item = Release::Doc(doc);
+                    continue;
+                }
+            }
+            Release::List(list) => {
+                if let Ok(mut storage) = Rc::try_unwrap(list.storage) {
+                    item = Release::Docs(std::mem::take(&mut storage.0));
+                    continue;
+                }
+            }
             Release::Node(node) => {
                 if let Ok(node) = Rc::try_unwrap(node) {
                     // Transfer the sole field rather than calling Drop again
@@ -444,9 +515,7 @@ fn release(mut item: Release) {
                     continue;
                 }
                 LazyState::FillBreak { items, .. } => {
-                    let (first, rest) = *items;
-                    pending.extend(rest.into_iter().map(Release::Doc));
-                    item = Release::Doc(first);
+                    item = Release::List(items);
                     continue;
                 }
                 LazyState::Build(input, build) => {
@@ -455,7 +524,7 @@ fn release(mut item: Release) {
                             pending.push(Release::Doc(doc));
                         }
                         Build::Above(_, _, Tail::Sep(docs) | Tail::Fill(_, docs)) => {
-                            pending.extend(docs.into_iter().map(Release::Doc));
+                            pending.push(Release::List(docs));
                         }
                         Build::NilAbove(..) | Build::NilBeside(_) => {}
                     }
@@ -1203,29 +1272,33 @@ pub fn nest_short_doc(lead: &str, finish: &str, body: Doc) -> Doc {
 /// Empty) builds a structurally different RDoc whose `Nest`/`Union`
 /// accumulation diverges from HS for 3+ items (NSPK3 GGuarded inner sep).
 pub fn hsep(ds: Vec<Doc>) -> Doc {
-    foldr_beside(true, ds)
+    foldr_beside(true, ds.into_iter())
 }
 
 /// HS `hcat = foldr (\p q -> Beside p False q) empty` (HughesPJ.hs:496).
 pub fn hcat(ds: Vec<Doc>) -> Doc {
-    foldr_beside(false, ds)
+    foldr_beside(false, ds.into_iter())
 }
 
 /// HS `vcat = foldr (\p q -> Above p False q) empty` (HughesPJ.hs:504).
 /// RIGHT fold.
 pub fn vcat(ds: Vec<Doc>) -> Doc {
+    vcat_iter(ds.into_iter())
+}
+
+fn vcat_iter(ds: impl DoubleEndedIterator<Item = Doc>) -> Doc {
     // foldr Above empty ds  →  d0 $$ (d1 $$ (... $$ empty))
     let mut acc = Doc::Empty;
-    for d in ds.into_iter().rev() {
+    for d in ds.rev() {
         acc = above_g(d, false, acc);
     }
     acc
 }
 
 /// HS `foldr (\p q -> Beside p g q) empty` (the hsep/hcat shape).
-fn foldr_beside(g: bool, ds: Vec<Doc>) -> Doc {
+fn foldr_beside(g: bool, ds: impl DoubleEndedIterator<Item = Doc>) -> Doc {
     let mut acc = Doc::Empty;
-    for d in ds.into_iter().rev() {
+    for d in ds.rev() {
         // `beside_ d g acc`: Empty operands collapse (Class/HughesPJ
         // `beside_ p _ Empty = p; beside_ Empty _ q = q`).
         acc = if matches!(d, Doc::Empty) {
@@ -1241,17 +1314,18 @@ fn foldr_beside(g: bool, ds: Vec<Doc>) -> Doc {
     acc
 }
 
-fn sep_x(x: bool, mut ds: Vec<Doc>) -> Doc {
+fn sep_x(x: bool, ds: Vec<Doc>) -> Doc {
     if ds.is_empty() {
         return Doc::Empty;
     }
-    let first = ds.remove(0);
+    let mut ds = DocList::new(ds);
+    let first = ds.pop_front().unwrap();
     sep1(x, reduce_doc(first), 0, ds)
 }
 
 /// HS `sep1` / `sepNB`. The inline state elides nests after text;
 /// other constructors resume sep1. Both walks share one continuation stack.
-fn sep1(g: bool, mut p: Doc, mut k: isize, mut ys: Vec<Doc>) -> Doc {
+fn sep1(g: bool, mut p: Doc, mut k: isize, mut ys: DocList) -> Doc {
     let mut prefixes = Vec::new();
     let mut inline = false;
     let tail = loop {
@@ -1264,13 +1338,13 @@ fn sep1(g: bool, mut p: Doc, mut k: isize, mut ys: Vec<Doc>) -> Doc {
                 Doc::Empty => {
                     // HS sepNB (pretty-1.1.3.6 HughesPJ.hs:760-766):
                     // retain its False flag and the right-folded rest.
-                    let rest = if g {
-                        hsep(ys.clone())
-                    } else {
-                        hcat(ys.clone())
-                    };
+                    let rest = foldr_beside(g, ys.as_slice().iter().cloned());
                     let left = one_liner(nil_beside(g, reduce_doc(rest)));
-                    let right = nil_above_nest(false, k, reduce_doc(vcat(ys)));
+                    let right = nil_above_nest(
+                        false,
+                        k,
+                        reduce_doc(vcat_iter(ys.as_slice().iter().cloned())),
+                    );
                     break mk_union(left, right);
                 }
                 _ => inline = false,
@@ -1301,9 +1375,13 @@ fn sep1(g: bool, mut p: Doc, mut k: isize, mut ys: Vec<Doc>) -> Doc {
                 if ys.is_empty() {
                     break Doc::Empty;
                 }
-                prefixes.push(Prefix::NormalizedNest(k));
+                // One zero nest must remain to normalize raw Nest constructors,
+                // but repeating that normalization has no further effect.
+                if k != 0 || !matches!(prefixes.last(), Some(Prefix::NormalizedNest(0))) {
+                    prefixes.push(Prefix::NormalizedNest(k));
+                }
                 k = 0;
-                reduce_doc(ys.remove(0))
+                reduce_doc(ys.pop_front().unwrap())
             }
             Doc::Nest(n, inner) => {
                 prefixes.push(Prefix::Nest(n));
@@ -1311,7 +1389,12 @@ fn sep1(g: bool, mut p: Doc, mut k: isize, mut ys: Vec<Doc>) -> Doc {
                 (*inner).clone()
             }
             Doc::NilAbove(p) => {
-                break nil_above_(above_nest((*p).clone(), false, k, reduce_doc(vcat(ys))));
+                break nil_above_(above_nest(
+                    (*p).clone(),
+                    false,
+                    k,
+                    reduce_doc(vcat_iter(ys.as_slice().iter().cloned())),
+                ));
             }
             Doc::TextBeside(s, w, p) => {
                 prefixes.push(Prefix::Text(s, w));
@@ -1360,14 +1443,23 @@ fn fill(g: bool, mut ds: Vec<Doc>) -> Doc {
     if ds.len() == 1 {
         return ds.pop().unwrap();
     }
-    let first = ds.remove(0);
+    fill_list(g, DocList::new(ds))
+}
+
+fn fill_list(g: bool, mut ds: DocList) -> Doc {
+    let Some(first) = ds.pop_front() else {
+        return Doc::Empty;
+    };
+    if ds.is_empty() {
+        return first;
+    }
     fill1(g, reduce_doc(first), 0, ds)
 }
 
 /// HS `fill1` / `fillNB` / `fillNBE` (pretty-1.1.3.6 HughesPJ.hs:824+).
 /// Like sep1, the inline state elides nests after text. Continuations also
 /// retain the operations awaiting a fill of the remaining list.
-fn fill1(g: bool, mut p: Doc, mut k: isize, mut ys: Vec<Doc>) -> Doc {
+fn fill1(g: bool, mut p: Doc, mut k: isize, mut ys: DocList) -> Doc {
     let mut prefixes = Vec::new();
     let mut inline = false;
     let tail = loop {
@@ -1378,24 +1470,21 @@ fn fill1(g: bool, mut p: Doc, mut k: isize, mut ys: Vec<Doc>) -> Doc {
                     continue;
                 }
                 Doc::Empty => {
-                    let mut iter = ys.into_iter();
-                    let y = loop {
-                        match iter.next() {
-                            None => break None,
-                            Some(Doc::Empty) => continue,
-                            Some(doc) => break Some(doc),
-                        }
-                    };
-                    let Some(y) = y else { break Doc::Empty };
-                    ys = iter.collect();
-                    p = elide_nest(one_liner(reduce_doc(y.clone())));
+                    while matches!(ys.as_slice().first(), Some(Doc::Empty)) {
+                        ys.pop_front();
+                    }
+                    if ys.is_empty() {
+                        break Doc::Empty;
+                    }
                     let right_items = ys.clone();
+                    let y = ys.pop_front().unwrap();
+                    p = elide_nest(one_liner(reduce_doc(y)));
                     // fillNBE's right branch re-fills (y:ys). Keep it lazy:
                     // evaluating it now constructs unused layout alternatives.
                     prefixes.push(Prefix::Choice(LazyRight::op(LazyState::FillBreak {
                         g,
                         k,
-                        items: Box::new((y, right_items)),
+                        items: right_items,
                     })));
                     prefixes.push(Prefix::BesideGap(g));
                     k -= isize::from(g);
@@ -1437,7 +1526,11 @@ fn fill1(g: bool, mut p: Doc, mut k: isize, mut ys: Vec<Doc>) -> Doc {
             }
             terminal => {
                 match terminal {
-                    Doc::Empty => prefixes.push(Prefix::NormalizedNest(k)),
+                    Doc::Empty => {
+                        if k != 0 || !matches!(prefixes.last(), Some(Prefix::NormalizedNest(0))) {
+                            prefixes.push(Prefix::NormalizedNest(k));
+                        }
+                    }
                     Doc::NilAbove(rest) => {
                         prefixes.push(Prefix::Line);
                         prefixes.push(Prefix::Above(Box::new((*rest).clone()), k));
@@ -1447,10 +1540,10 @@ fn fill1(g: bool, mut p: Doc, mut k: isize, mut ys: Vec<Doc>) -> Doc {
                 // Resume fill(g, ys), preserving its empty/singleton cases.
                 match ys.len() {
                     0 => break Doc::Empty,
-                    1 => break ys.pop().unwrap(),
+                    1 => break ys.pop_front().unwrap(),
                     _ => {
                         k = 0;
-                        reduce_doc(ys.remove(0))
+                        reduce_doc(ys.pop_front().unwrap())
                     }
                 }
             }
@@ -1589,10 +1682,7 @@ fn evaluate(task: Task) -> Value {
                         }
                     }
                     LazyState::FillBreak { g, k, items } => {
-                        let (first, rest) = *items;
-                        let mut items = vec![first];
-                        items.extend(rest);
-                        value = Value::Doc(rc(nil_above_nest(false, k, fill(g, items))));
+                        value = Value::Doc(rc(nil_above_nest(false, k, fill_list(g, items))));
                     }
                     LazyState::Layout(layout, doc) => tasks.push(Task::Layout(layout, doc)),
                     #[cfg(test)]
@@ -1611,8 +1701,10 @@ fn evaluate(task: Task) -> Value {
                     Build::Above(g, k, tail) => {
                         let right = match tail {
                             Tail::Doc(doc) => doc,
-                            Tail::Sep(items) => reduce_doc(vcat(items)),
-                            Tail::Fill(g, items) => fill(g, items),
+                            Tail::Sep(items) => {
+                                reduce_doc(vcat_iter(items.as_slice().iter().cloned()))
+                            }
+                            Tail::Fill(g, items) => fill_list(g, items),
                         };
                         above_nest(doc, g, k, right)
                     }

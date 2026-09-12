@@ -635,3 +635,161 @@ fn unforced_lazy_graph_drops_captures_without_evaluating_them() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn long_empty_runs_preserve_nests_and_nonempty_zero_width_documents() {
+    fn items(empty_run: usize) -> Vec<Doc> {
+        let mut docs = vec![Doc::Empty; empty_run];
+        for doc in [
+            nest_(3, Doc::Empty),
+            Doc::text("first").nest(2),
+            Doc::text_hs(""),
+            nest_(-2, nest_(5, Doc::Empty)),
+            Doc::text("second").above(Doc::text("line")).nest(3),
+            Doc::text_w("<marker>", 0),
+            Doc::text("last"),
+        ] {
+            docs.push(doc);
+            docs.extend(std::iter::repeat_n(Doc::Empty, empty_run));
+        }
+        docs
+    }
+
+    // Empty runs may be skipped, but a raw Nest, text_hs("") or zero-width
+    // marker is still a document with its own layout behavior.
+    for combine in [sep, fsep, fcat] {
+        let compact = combine(items(1));
+        let expanded = combine(items(4096));
+        for (width, ribbon) in [(0, 0), (7, 4), (80, 73)] {
+            assert_eq!(
+                expanded.clone().render_with(width, ribbon),
+                compact.clone().render_with(width, ribbon),
+            );
+            assert_eq!(
+                expanded.clone().render_at(width, ribbon, 3),
+                compact.clone().render_at(width, ribbon, 3),
+            );
+        }
+        assert_eq!(expanded.one_line_render(), compact.one_line_render());
+        assert_eq!(combine(vec![Doc::Empty; 32_768]).render(), "");
+    }
+}
+
+#[test]
+fn wide_fill_wraps_every_item_and_can_be_rendered_again_at_another_width() {
+    // The retained alternatives previously copied every remaining input vector.
+    // Keep this wide enough to exercise suffix sharing, without timing asserts.
+    let count = 4096;
+    for (combine, token, separator, width) in [
+        (fsep as fn(Vec<Doc>) -> Doc, "x", " ", 63),
+        (fcat as fn(Vec<Doc>) -> Doc, "xx", "", 64),
+    ] {
+        let doc = combine(vec![Doc::text(token); count]);
+        for per_line in [32, 16, 32] {
+            let line = vec![token; per_line].join(separator);
+            let expected = vec![line; count / per_line].join("\n");
+            let width = if per_line == 32 { width } else { width / 2 };
+            assert_eq!(doc.clone().render_with(width, width), expected);
+        }
+        assert_eq!(
+            doc.clone().render_with(FLAT_WIDTH, FLAT_WIDTH),
+            vec![token; count].join(separator),
+        );
+    }
+}
+
+#[test]
+fn fill_alternatives_retain_a_linear_number_of_token_references() {
+    for combine in [fsep, fcat] {
+        let token = Doc::text("x");
+        let Doc::TextBeside(text, _, _) = &token else {
+            unreachable!()
+        };
+        let observed = text.clone();
+        let count = 512;
+        let doc = combine(vec![token; count]);
+        // A wide paragraph needs alternatives for later breaks, but retaining
+        // one copied token vector per suffix used over 131,000 references here.
+        // Permit a generous linear budget independent of the exact layout graph.
+        assert!(Rc::strong_count(&observed) <= 16 * count);
+        drop(doc);
+        assert_eq!(Rc::strong_count(&observed), 1);
+    }
+}
+
+#[test]
+fn shared_fill_suffixes_release_deep_unforced_captures_on_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            struct Capture(Rc<std::cell::Cell<usize>>);
+            impl Drop for Capture {
+                fn drop(&mut self) {
+                    self.0.set(self.0.get() + 1);
+                }
+            }
+
+            for render_first in [false, true] {
+                let released = Rc::new(std::cell::Cell::new(0));
+                let capture = Capture(released.clone());
+                let mut right = LazyRight::new(move || {
+                    drop(capture);
+                    panic!("unused right branches must not be forced by cleanup");
+                });
+                for _ in 0..20_000 {
+                    right = LazyRight::build(
+                        Input::Lazy(right),
+                        Build::Beside(false, Doc::text("unused")),
+                    );
+                }
+                let mut items = vec![Doc::text("x"); 512];
+                items.push(Doc::LazyUnion(rc(Doc::text("end")), right));
+                let doc = fsep(items);
+                let retained = doc.clone();
+                if render_first {
+                    let expected = "x ".repeat(512) + "end";
+                    assert_eq!(doc.clone().render_with(FLAT_WIDTH, FLAT_WIDTH), expected);
+                }
+                drop(doc);
+                assert_eq!(released.get(), 0);
+                drop(retained);
+                assert_eq!(released.get(), 1);
+            }
+
+            // Exercise the new list owner at every level, not just one list
+            // containing a deep ordinary Doc/LazyRight chain.
+            let released = Rc::new(std::cell::Cell::new(0));
+            let capture = Capture(released.clone());
+            let mut lazy = LazyRight::new(move || {
+                drop(capture);
+                panic!("dropping nested input lists must not force them");
+            });
+            for i in 0..20_000 {
+                let items = DocList::new(vec![Doc::Deferred(lazy)]);
+                lazy = match i % 3 {
+                    0 => LazyRight::op(LazyState::FillBreak {
+                        g: true,
+                        k: 0,
+                        items,
+                    }),
+                    kind => LazyRight::build(
+                        Input::Ready(rc(Doc::Empty)),
+                        Build::Above(
+                            false,
+                            0,
+                            if kind == 1 {
+                                Tail::Sep(items)
+                            } else {
+                                Tail::Fill(false, items)
+                            },
+                        ),
+                    ),
+                };
+            }
+            drop(lazy);
+            assert_eq!(released.get(), 1);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
