@@ -251,7 +251,7 @@ fn translate_inner(thy: &mut Theory) -> Result<(), AccError> {
                 &generated.name,
                 generated.quantifier,
                 &generated.formula,
-            )?;
+            );
         }
     }
 
@@ -348,9 +348,9 @@ fn inject_lemma(
     name: &str,
     quantifier: t::TraceQuantifier,
     formula: &SyntacticLNFormula,
-) -> Result<(), AccError> {
+) {
     let Ok(original) = tamarin_theory::predicate::expand_formula(predicates, formula) else {
-        return Ok(());
+        return;
     };
     let expanded = tamarin_theory::formula::apply_macro_in_formula(macros, original.clone());
     let lemma = t::Lemma {
@@ -366,7 +366,6 @@ fn inject_lemma(
         plaintext: "generation".to_string(),
     };
     thy.items.push(TheoryItem::Lemma(lemma));
-    Ok(())
 }
 
 // =============================================================================

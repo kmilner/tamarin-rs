@@ -41,14 +41,12 @@ type LNSubst = Subst<Name, LVar>;
 #[derive(Debug, Clone)]
 pub enum VariantsError {
     Maude(String),
-    Nesting(String),
 }
 
 impl std::fmt::Display for VariantsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VariantsError::Maude(s) => write!(f, "Maude error: {}", s),
-            VariantsError::Nesting(s) => f.write_str(s),
         }
     }
 }
@@ -63,12 +61,6 @@ impl From<crate::tools::equation_store::AddEqsError> for VariantsError {
 impl From<MaudeError> for VariantsError {
     fn from(e: MaudeError) -> Self {
         VariantsError::Maude(format!("{}", e))
-    }
-}
-
-impl From<crate::elaborate::ElabError> for VariantsError {
-    fn from(error: crate::elaborate::ElabError) -> Self {
-        Self::Nesting(error.to_string())
     }
 }
 

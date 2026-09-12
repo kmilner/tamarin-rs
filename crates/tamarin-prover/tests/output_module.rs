@@ -504,6 +504,11 @@ fn deep_terms_survive_the_cli_lifecycle() {
         run_translate("deep_terms", &theory, &["-m=spthy", "--processors=1"]);
     assert_eq!(code, 0, "stderr: {stderr}");
     assert!(stdout.contains("rule (modulo E) R"));
+    assert_eq!(
+        stdout.matches("f(").count(),
+        wrappers,
+        "translation must preserve every nested function application"
+    );
     let (code, reparsed, stderr) = run_translate(
         "deep_terms_roundtrip",
         &stdout,

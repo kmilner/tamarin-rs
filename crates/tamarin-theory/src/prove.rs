@@ -32,7 +32,6 @@ pub enum ProveError {
     InvalidHeuristic(String),
     Ranking(RankingError),
     Maude(String),
-    Nesting(String),
 }
 
 impl From<crate::tools::equation_store::AddEqsError> for ProveError {
@@ -50,10 +49,8 @@ impl From<RankingError> for ProveError {
 
 impl From<crate::tools::rule_variants::VariantsError> for ProveError {
     fn from(error: crate::tools::rule_variants::VariantsError) -> Self {
-        match error {
-            crate::tools::rule_variants::VariantsError::Maude(message) => Self::Maude(message),
-            crate::tools::rule_variants::VariantsError::Nesting(message) => Self::Nesting(message),
-        }
+        let crate::tools::rule_variants::VariantsError::Maude(message) = error;
+        Self::Maude(message)
     }
 }
 
@@ -89,7 +86,6 @@ impl std::fmt::Display for ProveError {
             ProveError::InvalidHeuristic(m) => f.write_str(m),
             ProveError::Ranking(m) => write!(f, "goal ranking: {m}"),
             ProveError::Maude(m) => write!(f, "Maude error: {m}"),
-            ProveError::Nesting(m) => f.write_str(m),
         }
     }
 }
@@ -101,8 +97,7 @@ impl std::error::Error for ProveError {
             ProveError::LemmaNotFound(_)
             | ProveError::Guarded(_)
             | ProveError::InvalidHeuristic(_)
-            | ProveError::Maude(_)
-            | ProveError::Nesting(_) => None,
+            | ProveError::Maude(_) => None,
         }
     }
 }
