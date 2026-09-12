@@ -394,3 +394,244 @@ fn html_mode_is_one_engine_flag() {
     assert!(!html_mode());
     assert_eq!(Doc::text("<a>").render(), "<a>");
 }
+
+#[test]
+fn singleton_fill_preserves_existing_layouts() {
+    let docs = [
+        Doc::empty(),
+        Doc::text_hs(""),
+        Doc::text("abc").nest(3),
+        Doc::text("abc").nest(-2),
+        Doc::text("a").above(Doc::text("bc").nest(2)),
+        sep(vec![Doc::text("abcd"), Doc::text("efgh")]),
+        fsep(vec![Doc::text("a"), Doc::text("bbbb"), Doc::text("cc")]),
+    ];
+    for doc in docs {
+        for width in [1, 5, 20] {
+            for initial in [0, 3] {
+                let expected = doc.clone().render_at(width, width, initial);
+                assert_eq!(
+                    fsep(vec![doc.clone()]).render_at(width, width, initial),
+                    expected
+                );
+                assert_eq!(
+                    fcat(vec![doc.clone()]).render_at(width, width, initial),
+                    expected
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn document_spine_walks_use_bounded_stack() {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let mut doc = Doc::empty();
+            for i in 0..100_000 {
+                doc = text_beside_(Rc::from("x"), 1, doc);
+                if i % 13 == 0 {
+                    doc = nest_(1, doc);
+                }
+            }
+            assert!(fits(100_000, &doc));
+            assert!(!fits(99_999, &doc));
+            let joined = doc.clone().beside(Doc::text("!"));
+            assert_eq!(joined.one_line_render(), "x".repeat(100_000) + "!");
+            drop(joined);
+            let flat = one_liner(doc.clone());
+            assert_eq!(flat.one_line_render(), "x".repeat(100_000));
+            drop(flat);
+            let singleton = fsep(vec![doc.clone()]);
+            assert_eq!(singleton.one_line_render(), "x".repeat(100_000));
+            drop(singleton);
+            let separated = sep(vec![doc.clone(), Doc::text("!")]);
+            assert_eq!(separated.one_line_render(), "x".repeat(100_000) + " !");
+            drop(separated);
+            let filled = fsep(vec![doc.clone(), Doc::empty()]);
+            assert_eq!(filled.one_line_render(), "x".repeat(100_000));
+            drop(filled);
+            let stacked = doc.clone().above(Doc::text("!"));
+            assert_eq!(stacked.one_line_render(), "x".repeat(100_000) + " !");
+            drop(stacked);
+            for _ in 0..100_000 {
+                doc = nest_(1, doc);
+            }
+            // Full layout forces the memoised text/nest tails, unlike the
+            // one-line renderer. Exercise both line-start and in-line entry.
+            assert_eq!(
+                doc.clone().render_with(200_000, 200_000),
+                " ".repeat(100_000) + &"x".repeat(100_000)
+            );
+            assert_eq!(
+                doc.clone().render_at(200_000, 200_000, 1),
+                "x".repeat(100_000)
+            );
+            let normalized = doc.clone().nest(1);
+            assert_eq!(normalized.one_line_render(), "x".repeat(100_000));
+            drop(normalized);
+            drop(doc);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn construction_and_fits_keep_unused_alternatives_lazy() {
+    let calls = Rc::new(std::cell::Cell::new(0));
+    let right_calls = calls.clone();
+    let doc = lazy_union(
+        Doc::text("wide"),
+        LazyRight::new(move || {
+            right_calls.set(right_calls.get() + 1);
+            Doc::text("w")
+        }),
+    )
+    .beside(Doc::text("!"));
+    assert_eq!(calls.get(), 0);
+    assert_eq!(one_liner(doc.clone()).render(), "wide!");
+    assert_eq!(doc.clone().render_with(10, 10), "wide!");
+    assert_eq!(calls.get(), 0);
+    for _ in 0..2 {
+        assert_eq!(doc.clone().render_with(2, 2), "w!");
+        assert_eq!(calls.get(), 1);
+    }
+
+    let forces = Rc::new(std::cell::Cell::new(0));
+    let tail_forces = forces.clone();
+    let doc = text_beside_(
+        Rc::from("x"),
+        1,
+        defer(move || {
+            tail_forces.set(tail_forces.get() + 1);
+            nil_above_(defer(|| panic!("fits must stop at a line break")))
+        }),
+    );
+    assert!(!fits(0, &doc));
+    assert_eq!(forces.get(), 0);
+    assert!(fits(1, &doc));
+    assert!(fits(1, &doc));
+    assert_eq!(forces.get(), 1);
+}
+
+#[test]
+fn construction_elides_only_empty_choice_branches() {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let unused = LazyRight::new(|| panic!("empty choices must not force the right branch"));
+            for above in [false, true] {
+                let mut doc = Doc::Empty;
+                for _ in 0..100_000 {
+                    doc = Doc::LazyUnion(rc(doc), unused.clone());
+                }
+                let result = if above {
+                    above_nest(doc, false, 0, Doc::Empty)
+                } else {
+                    beside_inner(doc, false, Doc::Empty)
+                };
+                assert!(matches!(result, Doc::Empty));
+
+                // A raw Nest constructor is not Empty, even if its child is.
+                // Keep the choice so OneLineMode still selects its right side.
+                let doc = Doc::LazyUnion(
+                    rc(nest_(1, Doc::Empty)),
+                    LazyRight::new(|| Doc::text("right")),
+                );
+                let original = doc.clone();
+                let result = if above {
+                    above_nest(doc, false, 0, Doc::Empty)
+                } else {
+                    beside_inner(doc, false, Doc::Empty)
+                };
+                assert!(matches!(result, Doc::LazyUnion(_, _)));
+                assert_eq!(result.one_line_render(), "right");
+                assert_eq!(original.one_line_render(), "right");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn lazy_dependencies_and_layout_choices_use_bounded_stack() {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let calls = Rc::new(std::cell::Cell::new(0));
+            let observed = calls.clone();
+            let mut lazy = LazyRight::new(move || {
+                observed.set(observed.get() + 1);
+                Doc::text("x")
+            });
+            for _ in 0..100_000 {
+                lazy = LazyRight::build(Input::Lazy(lazy), Build::NilBeside(false));
+            }
+            assert_eq!((*lazy.force()).clone().render(), "x");
+            assert_eq!((*lazy.force()).clone().render(), "x");
+            assert_eq!(calls.get(), 1);
+            drop(lazy);
+
+            // Two edges to the same child are not two independent owners. Their
+            // last release must still drain a deep shared DAG iteratively.
+            let mut dag = Doc::text("x");
+            for _ in 0..100_000 {
+                let child = rc(dag);
+                dag = Doc::Union(child.clone(), child);
+            }
+            drop(dag);
+
+            // The retained side is nested in both directions: first-line selection
+            // must handle both a successful left chain and repeated right fallback.
+            for take_left in [true, false] {
+                let mut doc = Doc::text("x");
+                for _ in 0..100_000 {
+                    doc = if take_left {
+                        Doc::Union(rc(doc), rc(Doc::NoDoc))
+                    } else {
+                        Doc::Union(rc(Doc::NoDoc), rc(doc))
+                    };
+                }
+                assert_eq!(doc.clone().render_with(10, 10), "x");
+                assert_eq!(doc.clone().render_at(10, 10, 1), "x");
+                drop(doc);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn unforced_lazy_graph_drops_captures_without_evaluating_them() {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            struct Count(Rc<std::cell::Cell<usize>>);
+            impl Drop for Count {
+                fn drop(&mut self) {
+                    self.0.set(self.0.get() + 1);
+                }
+            }
+            let dropped = Rc::new(std::cell::Cell::new(0));
+            let capture = Count(dropped.clone());
+            let mut lazy = LazyRight::new(move || {
+                drop(capture);
+                panic!("destruction must not evaluate unused alternatives")
+            });
+            for _ in 0..100_000 {
+                lazy = LazyRight::build(Input::Lazy(lazy), Build::Beside(false, Doc::text("x")));
+            }
+            let shared = lazy.clone();
+            drop(lazy);
+            assert_eq!(dropped.get(), 0);
+            drop(shared);
+            assert_eq!(dropped.get(), 1);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
