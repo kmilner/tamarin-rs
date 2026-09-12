@@ -262,10 +262,22 @@ fn for_each_bound_guarded_term(
     binders: &[(u64, LVar)],
     f: &mut dyn FnMut(&LNTerm),
 ) {
+    let map = crate::guarded::bound_atom_mapper(binders);
+    for_each_bound_guarded_term_with(guarded, binders, &map, f);
+}
+
+fn for_each_bound_guarded_term_with(
+    guarded: &crate::guarded::Guarded,
+    binders: &[(u64, LVar)],
+    map: &dyn Fn(
+        &crate::atom::Atom<crate::formula::BLNTerm>,
+    ) -> crate::atom::Atom<crate::formula::BLNTerm>,
+    f: &mut dyn FnMut(&LNTerm),
+) {
     use crate::guarded::Guarded;
     match guarded {
         Guarded::Atom(atom) => {
-            let atom = crate::guarded::subst_bound_atom(binders, atom);
+            let atom = map(atom);
             crate::atom::fold_atom(&atom, &mut |term| {
                 let term = crate::guarded::bterm_to_lterm(term);
                 f(&term);
@@ -273,7 +285,7 @@ fn for_each_bound_guarded_term(
         }
         Guarded::Disj(items) | Guarded::Conj(items) => {
             for item in items.iter() {
-                for_each_bound_guarded_term(item, binders, f);
+                for_each_bound_guarded_term_with(item, binders, map, f);
             }
         }
         Guarded::GGuarded { vars, body, .. } => {

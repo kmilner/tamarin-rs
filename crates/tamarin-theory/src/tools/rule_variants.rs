@@ -41,12 +41,14 @@ type LNSubst = Subst<Name, LVar>;
 #[derive(Debug, Clone)]
 pub enum VariantsError {
     Maude(String),
+    Nesting(String),
 }
 
 impl std::fmt::Display for VariantsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VariantsError::Maude(s) => write!(f, "Maude error: {}", s),
+            VariantsError::Nesting(s) => f.write_str(s),
         }
     }
 }
@@ -61,6 +63,12 @@ impl From<crate::tools::equation_store::AddEqsError> for VariantsError {
 impl From<MaudeError> for VariantsError {
     fn from(e: MaudeError) -> Self {
         VariantsError::Maude(format!("{}", e))
+    }
+}
+
+impl From<crate::elaborate::ElabError> for VariantsError {
+    fn from(error: crate::elaborate::ElabError) -> Self {
+        Self::Nesting(error.to_string())
     }
 }
 
@@ -343,6 +351,7 @@ pub fn prepare_theory_rules(
     annotate_breakers: bool,
 ) -> Result<crate::wellformedness::WfReport, VariantsError> {
     populate_rule_variants(theory, maude, pool)?;
+
     let report = crate::wellformedness::check_wellformedness(theory, Some(maude));
     finish_theory_rules(theory, maude, annotate_breakers);
     Ok(report)
@@ -357,6 +366,7 @@ pub fn reprepare_theory_rules(
     pool: Option<&MaudePool>,
 ) -> Result<(), VariantsError> {
     populate_rule_variants(theory, maude, pool)?;
+
     finish_theory_rules(theory, maude, true);
     Ok(())
 }
@@ -405,13 +415,14 @@ pub fn prepare_open_rule_variant(
     rule: &mut OpenProtoRule,
     maude: &MaudeHandle,
 ) -> Result<(), VariantsError> {
-    if rule.abstracted_rule.is_some() || !rule.variant_substs.is_empty() {
-        return Ok(());
-    }
-    if let Some((abstracted, variants)) = prepared_rule_variant(maude, &rule.rule)? {
+    if rule.abstracted_rule.is_none()
+        && rule.variant_substs.is_empty()
+        && let Some((abstracted, variants)) = prepared_rule_variant(maude, &rule.rule)?
+    {
         rule.abstracted_rule = abstracted;
         rule.variant_substs = variants;
     }
+
     Ok(())
 }
 

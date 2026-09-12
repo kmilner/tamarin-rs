@@ -37,164 +37,314 @@ use tamarin_term::lterm::{LNTerm, LVar, Name};
 use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::subterm_rule::CtxtStRule;
 use tamarin_term::vterm::{Lit, VTerm};
-use tamarin_theory::formula::apply_subst;
 use tamarin_theory::sapic::{
-    apply_match_vars, map_process, map_terms_action, map_terms_comb, subst_term, Process,
-    ProcessCombinator, SapicLVar, SapicTerm,
+    map_terms_action, map_terms_comb, Process, ProcessCombinator, SapicLVar, SapicTerm,
 };
+#[cfg(test)]
+use tamarin_theory::{formula::apply_subst, sapic::subst_term};
 
 use crate::annotation::{AnnotatedProcess, ProcessAnnotation};
 
-/// `translateLetDestr rules p` (LetDestructors.hs:98-100) — the entry point.
-pub(crate) fn translate_let_destr(
-    st_rules: &std::collections::BTreeSet<CtxtStRule>,
-    p: AnnotatedProcess<LVar>,
-) -> AnnotatedProcess<LVar> {
-    map_proc(st_rules, p)
+trait LetSubstitution {
+    fn term(&self, term: &SapicTerm) -> SapicTerm;
+    fn formula(
+        &self,
+        formula: &tamarin_theory::sapic::SapicFormula,
+    ) -> tamarin_theory::sapic::SapicFormula;
+    fn match_vars(
+        &self,
+        vars: &std::collections::BTreeSet<SapicLVar>,
+    ) -> std::collections::BTreeSet<SapicLVar> {
+        tamarin_theory::sapic::apply_match_vars_with(
+            |v| self.term(&tamarin_term::vterm::var_term(v.clone())),
+            vars,
+        )
+    }
 }
 
-fn map_proc(
-    rules: &std::collections::BTreeSet<CtxtStRule>,
-    p: AnnotatedProcess<LVar>,
-) -> AnnotatedProcess<LVar> {
-    match p {
-        Process::Null(ann) => Process::Null(ann),
-        // `ProcessAction ac ann p'` (LetDestructors.hs:29-31): descend.
-        Process::Action(ac, ann, body) => {
-            let body1 = map_proc(rules, *body);
-            Process::Action(ac, ann, Box::new(body1))
+#[cfg(test)]
+impl LetSubstitution for Subst<Name, SapicLVar> {
+    fn term(&self, term: &SapicTerm) -> SapicTerm {
+        subst_term(self, term)
+    }
+    fn formula(
+        &self,
+        formula: &tamarin_theory::sapic::SapicFormula,
+    ) -> tamarin_theory::sapic::SapicFormula {
+        apply_subst(self, formula.clone())
+    }
+}
+
+/// Ordered substitutions, with a variable index and lazy range composition.
+/// An image receives only substitutions introduced AFTER its binding; this
+/// preserves simultaneous typed/untyped bindings and self-referential images.
+/// Branch restoration removes entries rather than copying the entire scope.
+#[derive(Default)]
+struct LetSubsts {
+    entries: Vec<(SapicLVar, SapicTerm, usize)>,
+    variables: std::collections::BTreeMap<SapicLVar, Vec<usize>>,
+    resolved: std::cell::RefCell<std::collections::BTreeMap<usize, SapicTerm>>,
+}
+
+impl LetSubsts {
+    fn extend(&mut self, subst: &Subst<Name, SapicLVar>) {
+        self.resolved.get_mut().clear();
+        let end = self.entries.len() + subst.len();
+        for (var, term) in subst.to_list() {
+            self.variables
+                .entry(var.clone())
+                .or_default()
+                .push(self.entries.len());
+            self.entries.push((var, term, end));
         }
-        // `ProcessComb c@(Let t1 t2 mv) _ pl pr` (LetDestructors.hs:33-66) —
-        // HS discards the node's annotation here (the `_`), and so do we; see
-        // `map_let` for why re-using it would over-propagate process names.
-        Process::Comb(
+    }
+
+    fn restore(&mut self, len: usize) {
+        if self.entries.len() == len {
+            return;
+        }
+        self.resolved.get_mut().clear();
+        while self.entries.len() > len {
+            let (var, _, _) = self.entries.pop().unwrap();
+            let indices = self.variables.get_mut(&var).unwrap();
+            indices.pop();
+            if indices.is_empty() {
+                self.variables.remove(&var);
+            }
+        }
+    }
+
+    fn image(&self, var: &SapicLVar, after: usize) -> Option<SapicTerm> {
+        let indices = self.variables.get(var)?;
+        let index = *indices.get(indices.partition_point(|index| *index < after))?;
+        if let Some(term) = self.resolved.borrow().get(&index) {
+            return Some(term.clone());
+        }
+        let (_, term, next) = &self.entries[index];
+        let resolved =
+            tamarin_utils::stack::ensure_sufficient_stack(|| self.apply_after(term, *next));
+        self.resolved.borrow_mut().insert(index, resolved.clone());
+        Some(resolved)
+    }
+
+    fn apply_after(&self, term: &SapicTerm, after: usize) -> SapicTerm {
+        if after == self.entries.len() {
+            return term.clone();
+        }
+        tamarin_term::term::bind_lits_cow(term, &mut |lit| match lit {
+            Lit::Var(var) => self.image(var, after),
+            Lit::Con(_) => None,
+        })
+        .unwrap_or_else(|| term.clone())
+    }
+}
+
+impl LetSubstitution for LetSubsts {
+    fn term(&self, term: &SapicTerm) -> SapicTerm {
+        self.apply_after(term, 0)
+    }
+    fn formula(
+        &self,
+        formula: &tamarin_theory::sapic::SapicFormula,
+    ) -> tamarin_theory::sapic::SapicFormula {
+        // Only materialize images of variables this formula actually mentions.
+        let local = Subst::from_list(
+            tamarin_theory::formula::formula_frees(formula)
+                .into_iter()
+                .filter_map(|v| self.image(&v, 0).map(|t| (v, t))),
+        );
+        tamarin_theory::formula::map_atoms_ref(formula, &mut |_, atom| {
+            tamarin_theory::atom::map_atom(atom, &mut |term| {
+                tamarin_term::subst::apply_bvterm(&local, term)
+            })
+        })
+    }
+}
+
+/// `translateLetDestr rules p` (LetDestructors.hs:98-100) — the entry point.
+pub(crate) fn translate_let_destr(
+    rules: &std::collections::BTreeSet<CtxtStRule>,
+    mut p: AnnotatedProcess<LVar>,
+) -> AnnotatedProcess<LVar> {
+    enum Work<'a> {
+        Visit(&'a mut AnnotatedProcess<LVar>),
+        Restore(usize),
+    }
+    let mut inherited = LetSubsts::default();
+    let mut pending = vec![Work::Visit(&mut p)];
+    while let Some(work) = pending.pop() {
+        let node = match work {
+            Work::Visit(node) => node,
+            Work::Restore(len) => {
+                inherited.restore(len);
+                continue;
+            }
+        };
+        loop {
+            if !inherited.entries.is_empty() {
+                subst_node(&inherited, node);
+            }
+            let Process::Comb(
+                ProcessCombinator::Let {
+                    left,
+                    right,
+                    match_vars,
+                },
+                ann,
+                _,
+                pr,
+            ) = node
+            else {
+                break;
+            };
+            // Eliminating a let exposes a new root, which must be processed before
+            // descending. Kept lets retain the upstream fresh-annotation policy.
+            let elsebranch = !matches!(**pr, Process::Null(_));
+            if let VTerm::Lit(Lit::Var(_)) = left
+                && let Some(funsym) = destructor_head(right)
+            {
+                let t1_ln = crate::base_translation::to_ln_term(left);
+                let t2_ln = crate::base_translation::to_ln_term(right);
+                let VTerm::App(_, rightterms) = &t2_ln else {
+                    unreachable!()
+                };
+                if let Some((leftterms, outvar)) = find_rule(&funsym, rules) {
+                    let subst = Subst::from_list(vec![(outvar, t1_ln.clone())]);
+                    *ann = ProcessAnnotation::with_destructor_equation(
+                        apply_vterm(&subst, to_pairs(&leftterms)),
+                        to_pairs(rightterms),
+                        elsebranch,
+                    );
+                    let comb = rebuild_let_comb(&t1_ln, &funsym, rightterms);
+                    let Process::Comb(c, _, _, _) = node else {
+                        unreachable!()
+                    };
+                    *c = comb;
+                    break;
+                }
+                // A destructor without a rule can only take the else branch.
+                let old = std::mem::replace(node, Process::Null(ProcessAnnotation::empty()));
+                let Process::Comb(_, _, left, right) = old else {
+                    unreachable!()
+                };
+                *node = right.into_inner();
+                drop(left);
+            } else if let VTerm::Lit(Lit::Var(svar)) = left
+                && !match_vars.contains(svar)
+            {
+                let subst = make_let_subst(svar, right);
+                let old = std::mem::replace(node, Process::Null(ProcessAnnotation::empty()));
+                let Process::Comb(_, _, left, right) = old else {
+                    unreachable!()
+                };
+                *node = left.into_inner();
+                drop(right);
+                inherited.extend(&subst);
+            } else {
+                *ann = ProcessAnnotation::with_else_branch(elsebranch);
+                break;
+            }
+        }
+        match node {
+            Process::Null(_) => {}
+            Process::Action(_, _, body) => pending.push(Work::Visit(body)),
+            Process::Comb(_, _, left, right) => {
+                let checkpoint = inherited.entries.len();
+                pending.push(Work::Restore(checkpoint));
+                pending.push(Work::Visit(right));
+                pending.push(Work::Restore(checkpoint));
+                pending.push(Work::Visit(left));
+            }
+        }
+    }
+    p
+}
+
+// Type erasure preserves the head except for singleton AC wrappers, which
+// map_lits normalizes away. Inspect just that spine before converting terms.
+fn destructor_head(mut term: &SapicTerm) -> Option<tamarin_term::function_symbols::NoEqSym> {
+    loop {
+        match term {
+            VTerm::App(FunSym::Ac(_), args) if args.len() == 1 => term = &args[0],
+            VTerm::App(FunSym::NoEq(sym), _)
+                if sym.constructability == Constructability::Destructor =>
+            {
+                return Some(*sym)
+            }
+            _ => return None,
+        }
+    }
+}
+
+#[cfg(test)]
+fn translate_let_destr_reference(
+    rules: &std::collections::BTreeSet<CtxtStRule>,
+    mut p: AnnotatedProcess<LVar>,
+) -> AnnotatedProcess<LVar> {
+    crate::process_walk::walk_mut(&mut p, (), |node, _| {
+        // Eliminating a let exposes a new root, which must be processed before
+        // descending. Kept lets retain the upstream fresh-annotation policy.
+        while let Process::Comb(
             ProcessCombinator::Let {
                 left,
                 right,
                 match_vars,
             },
-            _ann,
-            pl,
+            ann,
+            _,
             pr,
-        ) => map_let(rules, left, right, match_vars, *pl, *pr),
-        // `ProcessComb c ann pl pr` (LetDestructors.hs:82-85): non-Let comb.
-        Process::Comb(c, ann, pl, pr) => {
-            let pl1 = map_proc(rules, *pl);
-            let pr1 = map_proc(rules, *pr);
-            Process::Comb(c, ann, Box::new(pl1), Box::new(pr1))
+        ) = node
+        {
+            let elsebranch = !matches!(**pr, Process::Null(_));
+            if let VTerm::Lit(Lit::Var(_)) = left
+                && let Some(funsym) = destructor_head(right)
+            {
+                let t1_ln = crate::base_translation::to_ln_term(left);
+                let t2_ln = crate::base_translation::to_ln_term(right);
+                let VTerm::App(_, rightterms) = &t2_ln else {
+                    unreachable!()
+                };
+                if let Some((leftterms, outvar)) = find_rule(&funsym, rules) {
+                    let subst = Subst::from_list(vec![(outvar, t1_ln.clone())]);
+                    *ann = ProcessAnnotation::with_destructor_equation(
+                        apply_vterm(&subst, to_pairs(&leftterms)),
+                        to_pairs(rightterms),
+                        elsebranch,
+                    );
+                    let comb = rebuild_let_comb(&t1_ln, &funsym, rightterms);
+                    let Process::Comb(c, _, _, _) = node else {
+                        unreachable!()
+                    };
+                    *c = comb;
+                    break;
+                }
+                // A destructor without a rule can only take the else branch.
+                let old = std::mem::replace(node, Process::Null(ProcessAnnotation::empty()));
+                let Process::Comb(_, _, left, right) = old else {
+                    unreachable!()
+                };
+                *node = right.into_inner();
+                drop(left);
+            } else if let VTerm::Lit(Lit::Var(svar)) = left
+                && !match_vars.contains(svar)
+            {
+                let subst = make_let_subst(svar, right);
+                let old = std::mem::replace(node, Process::Null(ProcessAnnotation::empty()));
+                let Process::Comb(_, _, left, right) = old else {
+                    unreachable!()
+                };
+                *node = left.into_inner();
+                drop(right);
+                apply_subst_process_mut(&subst, node);
+            } else {
+                *ann = ProcessAnnotation::with_else_branch(elsebranch);
+                break;
+            }
         }
-    }
-}
-
-fn map_let(
-    rules: &std::collections::BTreeSet<CtxtStRule>,
-    left: SapicTerm,
-    right: SapicTerm,
-    match_vars: std::collections::BTreeSet<SapicLVar>,
-    pl: AnnotatedProcess<LVar>,
-    pr: AnnotatedProcess<LVar>,
-) -> AnnotatedProcess<LVar> {
-    // `t1' = toLNTerm t1`, `t2' = toLNTerm t2` (LetDestructors.hs:68-69).
-    let t1_ln = crate::base_translation::to_ln_term(&left);
-    let t2_ln = crate::base_translation::to_ln_term(&right);
-
-    // `elsebranch = case pr of ProcessNull _ -> False; _ -> True`
-    // (LetDestructors.hs:74-76).
-    let elsebranch = !matches!(pr, Process::Null(_));
-
-    // Dispatch on the shape of (t1, viewTerm t1', viewTerm t2') — Case A first
-    // (LetDestructors.hs:34-58): t1 a var AND t2 a Destructor application.
-    if let VTerm::Lit(Lit::Var(_)) = &left
-        && let VTerm::App(FunSym::NoEq(funsym), rightterms) = &t2_ln
-        && funsym.constructability == Constructability::Destructor
-    {
-        return case_destructor(rules, &t1_ln, *funsym, rightterms, pl, pr, elsebranch);
-    }
-
-    // Case B (LetDestructors.hs:59-61): t1 a plain variable NOT in match-vars.
-    if let VTerm::Lit(Lit::Var(svar)) = &left
-        && !match_vars.contains(svar)
-    {
-        // `applyM (substFromList ((,t2) <$> make_untyped_variant svar)) pl`.
-        let subst = make_let_subst(svar, &right);
-        let pl1 = apply_subst_process(&subst, pl);
-        return map_proc(rules, pl1);
-    }
-
-    // Case C (LetDestructors.hs:62-65): keep the Let, annotate `annElse
-    // elsebranch`.  HS `annElse b = mempty {elseBranch = b}`
-    // (sapic/src/Sapic/Annotation.hs:132-133)
-    // builds a FRESH `mempty`-based annotation, REPLACING the existing one — so
-    // every other field (incl. the propagated `processnames`) is dropped back to
-    // its default.  The node's incoming annotation must NOT be carried over
-    // here, else the role/color would over-propagate the enclosing
-    // sub-process name onto these let rules.
-    let ann2 = ProcessAnnotation::with_else_branch(elsebranch);
-    let pl1 = map_proc(rules, pl);
-    let pr1 = map_proc(rules, pr);
-    Process::Comb(
-        ProcessCombinator::Let {
-            left,
-            right,
-            match_vars,
-        },
-        ann2,
-        Box::new(pl1),
-        Box::new(pr1),
-    )
-}
-
-/// Case A — destructor let (LetDestructors.hs:35-58).
-fn case_destructor(
-    rules: &std::collections::BTreeSet<CtxtStRule>,
-    t1_ln: &LNTerm,
-    funsym: tamarin_term::function_symbols::NoEqSym,
-    rightterms: &[LNTerm],
-    pl: AnnotatedProcess<LVar>,
-    pr: AnnotatedProcess<LVar>,
-    elsebranch: bool,
-) -> AnnotatedProcess<LVar> {
-    match find_rule(&funsym, rules) {
-        // No rule: the destructor never succeeds — replace the Let by its
-        // else-branch (LetDestructors.hs:38-39).
-        None => map_proc(rules, pr),
-        // `Just (leftterms, outvar)` (LetDestructors.hs:40-57).
-        Some((leftterms, outvar)) => {
-            // `subst = substFromList [(outvar, t1')]`
-            // `leftermssubst = apply subst $ toPairs leftterms`
-            let subst: Subst<Name, LVar> = Subst::from_list(vec![(outvar, t1_ln.clone())]);
-            let leftterms_pairs = to_pairs(&leftterms);
-            let leftterms_subst = apply_vterm(&subst, leftterms_pairs);
-            let rightterms_pairs = to_pairs(rightterms);
-            // `new_an = annDestructorEquation leftermssubst (toPairs rightterms) elsebranch`
-            // — HS `annDestructorEquation v1 v2 b = mempty { destructorEquation =
-            // Just (v1, v2), elseBranch = b }`
-            // (sapic/src/Sapic/Annotation.hs:129-130) builds a
-            // FRESH `mempty`-based annotation, REPLACING the existing one.  Every
-            // other field (incl. the propagated `processnames`) is therefore reset
-            // to default, so the node's incoming annotation is dropped (Case C
-            // above explains what re-using it would break).
-            let new_an = ProcessAnnotation::with_destructor_equation(
-                leftterms_subst,
-                rightterms_pairs,
-                elsebranch,
-            );
-            let pl1 = map_proc(rules, pl);
-            let pr1 = map_proc(rules, pr);
-            // The Let combinator `c` is preserved unchanged.  Reconstruct it
-            // from the original terms — t1 is a var; we reuse `t1_ln` (already
-            // type-erased) lifted back into a SAPIC term, and the original
-            // `right`/`match_vars` carried by the destructor case.  HS keeps the
-            // ORIGINAL `c` (`ProcessComb c new_an npl npr`), so we must keep the
-            // SAPIC-typed left/right/match_vars; they are threaded through.
-            Process::Comb(
-                rebuild_let_comb(t1_ln, &funsym, rightterms),
-                new_an,
-                Box::new(pl1),
-                Box::new(pr1),
-            )
-        }
-    }
+        Ok::<_, std::convert::Infallible>(true)
+    })
+    .unwrap();
+    p
 }
 
 /// Reconstruct the original `Let` combinator for the destructor case.  HS keeps
@@ -245,14 +395,12 @@ fn find_rule(
 /// `toPairs` (LetDestructors.hs:71-73): fold a list of terms into a
 /// right-nested pair.  `[] -> fAppOne`, `[s] -> s`, `(p:q) -> <p, toPairs q>`.
 fn to_pairs(ts: &[LNTerm]) -> LNTerm {
-    match ts {
-        [] => tamarin_term::term::f_app_no_eq(tamarin_term::function_symbols::one_sym(), vec![]),
-        [s] => s.clone(),
-        [head, tail @ ..] => {
-            let rest = to_pairs(tail);
-            tamarin_term::builtin::pair(head.clone(), rest)
-        }
-    }
+    let Some((last, prefix)) = ts.split_last() else {
+        return tamarin_term::term::f_app_no_eq(tamarin_term::function_symbols::one_sym(), vec![]);
+    };
+    prefix.iter().rev().fold(last.clone(), |rest, head| {
+        tamarin_term::builtin::pair(head.clone(), rest)
+    })
 }
 
 /// `make_untyped_variant` + `substFromList` (LetDestructors.hs:78-80, :60): the
@@ -273,33 +421,45 @@ fn make_let_subst(svar: &SapicLVar, t2: &SapicTerm) -> Subst<Name, SapicLVar> {
 /// (fixed upstream in #922). Case B only substitutes a `let`-bound variable
 /// that, by typing, does not occur as an inner binder of `pl` — so a plain
 /// substitution is faithful for the in-scope cases.
-fn apply_subst_process(
-    subst: &Subst<Name, SapicLVar>,
-    p: AnnotatedProcess<LVar>,
-) -> AnnotatedProcess<LVar> {
-    map_process(
-        &p,
-        &mut |action| subst_action(subst, action),
-        &mut |comb| subst_comb(subst, comb),
-        &mut |ann| subst_annotation(subst, ann.clone()),
-    )
+#[cfg(test)]
+fn apply_subst_process_mut(subst: &Subst<Name, SapicLVar>, p: &mut AnnotatedProcess<LVar>) {
+    crate::process_walk::walk_mut(p, (), |node, _| {
+        subst_node(subst, node);
+        Ok::<_, std::convert::Infallible>(true)
+    })
+    .unwrap();
+}
+
+fn subst_node(subst: &impl LetSubstitution, node: &mut AnnotatedProcess<LVar>) {
+    let ann = match node {
+        Process::Null(ann) => ann,
+        Process::Action(ac, ann, _) => {
+            *ac = subst_action(subst, ac);
+            ann
+        }
+        Process::Comb(c, ann, _, _) => {
+            *c = subst_comb(subst, c);
+            ann
+        }
+    };
+    *ann = subst_annotation(subst, std::mem::take(ann));
 }
 
 fn subst_annotation(
-    subst: &Subst<Name, SapicLVar>,
+    subst: &impl LetSubstitution,
     mut ann: ProcessAnnotation<LVar>,
 ) -> ProcessAnnotation<LVar> {
     ann.parsing_ann = ann
         .parsing_ann
-        .map_location(|location| subst_term(subst, &location));
+        .map_location(|location| subst.term(&location));
     ann
 }
 
 /// `apply subst` for a `SapicAction SapicLVar` (Sapic/Process.hs:319-321):
 /// `mapTermsAction`, with `ChIn` and `Msr` match variables rewritten by
-/// [`apply_match_vars`].
+/// [`tamarin_theory::sapic::apply_match_vars`].
 fn subst_action(
-    subst: &Subst<Name, SapicLVar>,
+    subst: &impl LetSubstitution,
     ac: &tamarin_theory::sapic::SapicAction<SapicLVar>,
 ) -> tamarin_theory::sapic::SapicAction<SapicLVar> {
     use tamarin_theory::sapic::SapicAction as A;
@@ -310,13 +470,13 @@ fn subst_action(
             match_vars,
         } => {
             return A::ChIn {
-                chan: chan.as_ref().map(|t| subst_term(subst, t)),
-                msg: subst_term(subst, msg),
+                chan: chan.as_ref().map(|t| subst.term(t)),
+                msg: subst.term(msg),
                 // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
                 // SapicLVar)` (Sapic/Process.hs:319-321) to reach this rewrite: a
                 // `let`-bound match var `=t` (where `t = <a,'test'>`) becomes the
                 // match-var set `{a}`.
-                match_vars: apply_match_vars(subst, match_vars),
+                match_vars: subst.match_vars(match_vars),
             };
         }
         A::Msr { match_vars, .. } => {
@@ -324,12 +484,8 @@ fn subst_action(
             // match variable maps to a compound term.  Keep the robust
             // `ChIn`/`Let` policy instead: collect the image's free variables
             // so a compound match pattern remains usable.
-            let mut mapped = map_terms_action(
-                |t| subst_term(subst, t),
-                |f| apply_subst(subst, f.clone()),
-                |v| v.clone(),
-                ac,
-            );
+            let mut mapped =
+                map_terms_action(|t| subst.term(t), |f| subst.formula(f), |v| v.clone(), ac);
             let A::Msr {
                 match_vars: mapped_match_vars,
                 ..
@@ -337,18 +493,18 @@ fn subst_action(
             else {
                 unreachable!("mapping an MSR action preserves its constructor")
             };
-            *mapped_match_vars = apply_match_vars(subst, match_vars);
+            *mapped_match_vars = subst.match_vars(match_vars);
             return mapped;
         }
         _ => {}
     }
     map_terms_action(
-        |t| subst_term(subst, t),
+        |t| subst.term(t),
         // A `let`-bound value that an embedded `_restrict` mentions is
         // rewritten there as it is in the fact rows.  A quantifier binder is a
         // `Bound` De Bruijn index, outside the substitution's domain, so it
         // cannot capture a variable of the image.
-        |f| apply_subst(subst, f.clone()),
+        |f| subst.formula(f),
         // The `let` pass substitutes values, not binders, so a variable the
         // action binds on its own stands for itself.
         |v| v.clone(),
@@ -358,16 +514,16 @@ fn subst_action(
 
 /// `apply subst` for a `ProcessCombinator SapicLVar` (Sapic/Process.hs:330-334).
 fn subst_comb(
-    subst: &Subst<Name, SapicLVar>,
+    subst: &impl LetSubstitution,
     c: &ProcessCombinator<SapicLVar>,
 ) -> ProcessCombinator<SapicLVar> {
     let mut mapped = map_terms_comb(
-        |t| subst_term(subst, t),
+        |t| subst.term(t),
         // A Case-B `let`-elimination (`let z = t in P`) rewrites the free
         // variable `z` inside a downstream conditional's formula too: `z` is a
         // value bound by the `let`, not a process binder, so the `Cond`
         // payload's `z` references the same value.
-        |f| apply_subst(subst, f.clone()),
+        |f| subst.formula(f),
         |v| v.clone(),
         c,
     );
@@ -379,7 +535,7 @@ fn subst_comb(
         else {
             unreachable!("mapping a Let combinator preserves its constructor")
         };
-        *mapped_match_vars = apply_match_vars(subst, match_vars);
+        *mapped_match_vars = subst.match_vars(match_vars);
     }
     mapped
 }
@@ -416,6 +572,47 @@ mod tests {
     }
 
     #[test]
+    fn singleton_ac_destructor_still_takes_the_else_branch() {
+        use tamarin_term::function_symbols::{AcSym, NoEqSym, Privacy};
+        let dest = NoEqSym::new(
+            b"missing".to_vec(),
+            1,
+            Privacy::Public,
+            Constructability::Destructor,
+        );
+        let right = tamarin_term::term::unsafe_f_app(
+            FunSym::Ac(AcSym::Mult),
+            vec![tamarin_term::term::f_app_no_eq(
+                dest,
+                vec![tamarin_term::lterm::pub_term("a")],
+            )],
+        );
+        let p = Process::Comb(
+            ProcessCombinator::Let {
+                left: tamarin_term::vterm::var_term(SapicLVar::untyped(LVar::new(
+                    "x",
+                    tamarin_term::lterm::LSort::Msg,
+                    0,
+                ))),
+                right,
+                match_vars: Default::default(),
+            },
+            ProcessAnnotation::empty(),
+            Box::new(Process::Action(
+                tamarin_theory::sapic::SapicAction::Rep,
+                ProcessAnnotation::empty(),
+                Box::new(Process::Null(ProcessAnnotation::empty())).into(),
+            ))
+            .into(),
+            Box::new(Process::Null(ProcessAnnotation::empty())).into(),
+        );
+        assert!(matches!(
+            translate_let_destr(&Default::default(), p),
+            Process::Null(_)
+        ));
+    }
+
+    #[test]
     fn case_b_eliminates_var_rhs_let() {
         // `let h = 't' in out(h)` (h not a match-var) → `out('t')`, Let gone.
         let h = svar("h");
@@ -425,7 +622,7 @@ mod tests {
                 msg: var_term(h.clone()),
             },
             ann(),
-            Box::new(Process::Null(ann())),
+            Box::new(Process::Null(ann())).into(),
         );
         let lett = Process::Comb(
             ProcessCombinator::Let {
@@ -434,8 +631,8 @@ mod tests {
                 match_vars: BTreeSet::new(),
             },
             ann(),
-            Box::new(body),
-            Box::new(Process::Null(ann())),
+            Box::new(body).into(),
+            Box::new(Process::Null(ann())).into(),
         );
         let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
         let out = translate_let_destr(&rules, lett);
@@ -462,7 +659,7 @@ mod tests {
                 msg: pub_name("payload"),
             },
             body_ann,
-            Box::new(Process::Null(ann())),
+            Box::new(Process::Null(ann())).into(),
         );
         let lett = Process::Comb(
             ProcessCombinator::Let {
@@ -471,8 +668,8 @@ mod tests {
                 match_vars: BTreeSet::new(),
             },
             ann(),
-            Box::new(body),
-            Box::new(Process::Null(ann())),
+            Box::new(body).into(),
+            Box::new(Process::Null(ann())).into(),
         );
 
         let out = translate_let_destr(&BTreeSet::new(), lett);
@@ -511,7 +708,7 @@ mod tests {
                 match_vars: BTreeSet::new(),
             },
             ann(),
-            Box::new(Process::Null(ann())),
+            Box::new(Process::Null(ann())).into(),
         );
         // `let h = 't' in <msr>` — Case B drops the Let and substitutes `'t'`.
         let lett = Process::Comb(
@@ -521,8 +718,8 @@ mod tests {
                 match_vars: BTreeSet::new(),
             },
             ann(),
-            Box::new(msr),
-            Box::new(Process::Null(ann())),
+            Box::new(msr).into(),
+            Box::new(Process::Null(ann())).into(),
         );
         let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
         let out = translate_let_destr(&rules, lett);
@@ -588,8 +785,8 @@ mod tests {
                 match_vars: BTreeSet::new(),
             },
             ann(),
-            Box::new(Process::Null(ann())),
-            Box::new(Process::Null(ann())),
+            Box::new(Process::Null(ann())).into(),
+            Box::new(Process::Null(ann())).into(),
         );
         let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
         let out = translate_let_destr(&rules, lett);
@@ -602,5 +799,131 @@ mod tests {
             }
             other => panic!("expected kept Let, got {other:?}"),
         }
+    }
+    #[test]
+    fn deferred_lets_match_eager_substitution_with_branches_and_annotations() {
+        fn build(seed: &mut u64, depth: usize) -> AnnotatedProcess<LVar> {
+            *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let n = (*seed >> 32) as usize;
+            let v = SapicLVar::new(
+                LVar::new("x", LSort::Msg, (n % 4) as u64),
+                (n.is_multiple_of(9)).then(|| "Any".to_string()),
+            );
+            let w = SapicLVar::untyped(LVar::new("x", LSort::Msg, ((n / 5) % 4) as u64));
+            let term = if n.is_multiple_of(3) {
+                pub_name("a")
+            } else if n % 3 == 1 {
+                var_term(w.clone())
+            } else {
+                tamarin_term::builtin::hash(var_term(w.clone()))
+            };
+            let mut annotation = ann();
+            annotation.parsing_ann.location = Some(var_term(v.clone()));
+            if depth == 0 {
+                return Process::Action(
+                    SapicAction::ChIn {
+                        chan: None,
+                        msg: term,
+                        match_vars: BTreeSet::from([v]),
+                    },
+                    annotation,
+                    Box::new(Process::Null(ann())).into(),
+                );
+            }
+            let left = build(seed, depth - 1);
+            match n % 5 {
+                0 => Process::Action(SapicAction::New(v), annotation, Box::new(left).into()),
+                1 => Process::Comb(
+                    ProcessCombinator::Ndc,
+                    annotation,
+                    Box::new(left).into(),
+                    Box::new(build(seed, depth - 1)).into(),
+                ),
+                2 => Process::Comb(
+                    ProcessCombinator::Cond(tamarin_theory::formula::ProtoFormula::Atom(
+                        tamarin_theory::atom::ProtoAtom::EqE(
+                            var_term(tamarin_term::lterm::BVar::Free(v)),
+                            tamarin_term::term::map_lits(&term, &mut |lit| match lit {
+                                Lit::Con(c) => Lit::Con(*c),
+                                Lit::Var(v) => Lit::Var(tamarin_term::lterm::BVar::Free(v.clone())),
+                            }),
+                        ),
+                    )),
+                    annotation,
+                    Box::new(left).into(),
+                    Box::new(build(seed, depth - 1)).into(),
+                ),
+                _ => Process::Comb(
+                    ProcessCombinator::Let {
+                        left: var_term(v.clone()),
+                        right: term,
+                        match_vars: if n.is_multiple_of(7) {
+                            BTreeSet::from([v])
+                        } else {
+                            BTreeSet::new()
+                        },
+                    },
+                    annotation,
+                    Box::new(left).into(),
+                    Box::new(build(seed, depth - 1)).into(),
+                ),
+            }
+        }
+        for seed in 0..3000 {
+            let process = build(&mut (seed + 1), 5);
+            let expected = translate_let_destr_reference(&BTreeSet::new(), process.clone());
+            assert_eq!(
+                translate_let_destr(&BTreeSet::new(), process),
+                expected,
+                "seed {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn deep_unused_and_forward_alias_lets_use_one_process_walk() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                for aliases in [false, true] {
+                    let v = |i| SapicLVar::untyped(LVar::new("x", LSort::Msg, i));
+                    let mut p = Process::Action(
+                        SapicAction::ChOut {
+                            chan: None,
+                            msg: if aliases {
+                                var_term(v(0))
+                            } else {
+                                pub_name("a")
+                            },
+                        },
+                        ann(),
+                        Box::new(Process::Null(ann())).into(),
+                    );
+                    for i in (0..8192).rev() {
+                        p = Process::Comb(
+                            ProcessCombinator::Let {
+                                left: var_term(v(i)),
+                                right: if aliases && i < 8191 {
+                                    var_term(v(i + 1))
+                                } else {
+                                    pub_name("a")
+                                },
+                                match_vars: BTreeSet::new(),
+                            },
+                            ann(),
+                            Box::new(p).into(),
+                            Box::new(Process::Null(ann())).into(),
+                        );
+                    }
+                    let result = translate_let_destr(&BTreeSet::new(), p);
+                    let Process::Action(SapicAction::ChOut { msg, .. }, _, _) = result else {
+                        panic!("expected output");
+                    };
+                    assert_eq!(msg, pub_name("a"));
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

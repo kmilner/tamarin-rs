@@ -415,3 +415,17 @@ end
         assert!(out.contains(block), "missing `{block}` in:\n{out}");
     }
 }
+
+#[test]
+fn public_typing_handles_deep_definitions_and_errors_on_small_stack() {
+    std::thread::Builder::new().stack_size(256 * 1024).spawn(|| {
+        let term = "f(".repeat(8192) + "x" + &")".repeat(8192);
+        for incompatible in [false, true] {
+            let output = if incompatible { term.replace("x", "g(x)") } else { term.clone() };
+            let source = format!("theory T begin functions: f(bitstring):bitstring, g(wrong):wrong let P(x) = (out({output})) @ 'site' process: in(x); P(x) end");
+            let mut theory = build(&source);
+            let result = type_theory_env(&mut theory);
+            assert_eq!(result.is_ok(), !incompatible);
+        }
+    }).unwrap().join().unwrap();
+}

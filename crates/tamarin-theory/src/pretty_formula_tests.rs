@@ -168,7 +168,7 @@ fn guarded_negation_shortcut() {
             bvar("j", LSort::Node),
         )]
         .into(),
-        body: std::sync::Arc::new(Guarded::Disj(vec![].into())),
+        body: crate::guarded::GuardedBody::new(Guarded::Disj(vec![].into())),
     };
     // The expected bytes come from the oracle (Git revision ef3f0468).  The
     // `∀` without binders over `⊥` prints as the negated guard alone.  It

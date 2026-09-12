@@ -1911,93 +1911,74 @@ impl ProofBody for crate::theory::ProofTree {
 
 fn pp_proof<T: ProofBody>(node: &T, out: &mut String, depth: usize) {
     use crate::constraint::solver::proof_method::{ProofMethod, Result as MR};
-    // The step's first char lands at col `depth*2` (proof body uses
-    // 2-space indent per nesting level).
-    //
-    // HS `prettyIncrementalProof` (ProofSkeleton.hs:80-84) renders each
-    // step as `sep [prettyProofMethod, if Nothing then "/* unannotated
-    // */" else empty]`.  A step whose constraint system could not be
-    // re-attached during the close-time `checkProof` replay
-    // (`annotated == false`) gets the `/* unannotated */` comment beside
-    // its method.  Fully-searched / successfully-replayed steps stay
-    // `Just System` (annotated == true) and render without it.
-    // HS `prettyIncrementalProof.ppStep` (ProofSkeleton.hs:80-84) wraps
-    // every step as `sep [prettyProofMethod, comment-or-empty]`, where
-    // `comment = multiComment_ ["unannotated"]` iff `psInfo == Nothing`
-    // (`annotated == false`).  `sep` lays method+comment inline when they
-    // fit the ribbon, else drops the comment to its OWN line at the
-    // step's base indent (`depth*2`).  We build the method as a Doc and
-    // run it through the same HughesPJ engine so the break is
-    // byte-identical to HS.
-    let base = depth * 2;
-    let annotated = node.annotated();
-    let cases = node.cases();
-
-    match (node.method(), cases.as_slice()) {
-        (ProofMethod::Finished(MR::Solved), []) => {
-            let doc = pp_step_doc(node.method(), "");
-            out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
-        }
-        (_, []) => {
-            // No children: `by <step>` form.  HS `ppCases ps [] =
-            // prettyCase ps (kwBy <> text " ") <> prettyStep ps` (non-diff
-            // `prettyProofWith`, Theory/Proof.hs:1065-1066) — `<>` is beside, so the
-            // `prettyStep` Doc is laid
-            // out BESIDE `by `.  For a `SolveGoal` step the goal can wrap, and
-            // HughesPJ counts the `by ` (3 cols) toward the ribbon when
-            // deciding the `fsep`/`sep` break — so we must render `by ` as
-            // line CONTENT, not as part of the indent (cf. the live string path;
-            // the NAXOS/KAS2 `Match( a,` / `<…>` divergence).  The `by `
-            // prefix is laid out by `step_line_with_unann` BESIDE the WHOLE
-            // `sep [method, comment]` (HS `prettyCase ps (kwBy<>" ") <>
-            // prettyStep ps`), so a dropped `/* unannotated */` aligns at
-            // `base + len("by ")` (= +3), not `base`.  `beside` still shifts
-            // the method's own wrapped continuation columns by the prefix
-            // width and counts it toward the ribbon, so the method lines
-            // stay byte-identical to HS.
-            let doc = pp_step_doc(node.method(), "");
-            out.push_str(&pf::step_line_with_unann(doc, base, annotated, "by "));
-        }
-        (_, [(label, child)]) if label.is_empty() => {
-            let doc = pp_step_doc(node.method(), "");
-            out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
-            out.push('\n');
-            // HS `ppCases ps [("", prf)] = prettyStep ps $-$ ppPrf prf`
-            // (non-diff `prettyProofWith`, Theory/Proof.hs:1054-1075, see line 1067).
-            // `$-$` is "above" — the child is rendered
-            // at the SAME indent column as the parent step.  In our output
-            // model the caller writes the indent before calling pp_proof, so
-            // we reproduce that here: write the same `depth`-level indent
-            // before recursing into the child.
-            out.push_str(&"  ".repeat(depth));
-            pp_proof(*child, out, depth);
-        }
-        (_, multi) => {
-            let doc = pp_step_doc(node.method(), "");
-            out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
-            for (i, (name, child)) in multi.iter().enumerate() {
-                if i > 0 {
-                    // HS Theory/Proof.hs:1054-1075, see line 1070 (non-diff
-                    // `prettyProofWith`): `intersperse (prettyCase ps kwNext)`
-                    // — `next` is a sibling of `solve`/`qed`, so it sits at
-                    // the parent's indent (`depth*2`), not column 0.
+    enum Task<'a, T> {
+        Node(&'a T, usize),
+        Case(&'a str, &'a T, usize, bool),
+        End(usize),
+    }
+    let mut task = Task::Node(node, depth);
+    let mut pending = Vec::new();
+    loop {
+        match task {
+            Task::Node(node, depth) => {
+                let cases = node.cases();
+                let solved = matches!(node.method(), ProofMethod::Finished(MR::Solved));
+                let prefix = if cases.is_empty() && !solved {
+                    "by "
+                } else {
+                    ""
+                };
+                let doc = pp_step_doc(node.method(), "");
+                out.push_str(&pf::step_line_with_unann(
+                    doc,
+                    depth * 2,
+                    node.annotated(),
+                    prefix,
+                ));
+                match cases.as_slice() {
+                    [] => {}
+                    [(label, child)] if label.is_empty() => {
+                        // HS Theory/Proof.hs:1054-1075, see line 1067: the
+                        // anonymous continuation stays at the same indentation.
+                        out.push('\n');
+                        out.push_str(&"  ".repeat(depth));
+                        task = Task::Node(*child, depth);
+                        continue;
+                    }
+                    _ => {
+                        // HS Theory/Proof.hs:1054-1075, see line 1070: `next`
+                        // and `qed` are siblings of the parent proof step.
+                        pending.push(Task::End(depth));
+                        for (i, (name, child)) in cases.into_iter().enumerate().rev() {
+                            pending.push(Task::Case(name, child, depth, i != 0));
+                        }
+                    }
+                }
+            }
+            Task::Case(name, child, depth, next) => {
+                if next {
                     out.push('\n');
                     out.push_str(&"  ".repeat(depth));
                     out.push_str("next");
                 }
-                out.push('\n');
                 let pad = "  ".repeat(depth + 1);
+                out.push('\n');
                 out.push_str(&pad);
                 out.push_str("case ");
                 out.push_str(name);
                 out.push('\n');
                 out.push_str(&pad);
-                pp_proof(*child, out, depth + 1);
+                task = Task::Node(child, depth + 1);
+                continue;
             }
-            out.push('\n');
-            out.push_str(&"  ".repeat(depth));
-            out.push_str("qed");
+            Task::End(depth) => {
+                out.push('\n');
+                out.push_str(&"  ".repeat(depth));
+                out.push_str("qed");
+            }
         }
+        let Some(next) = pending.pop() else { return };
+        task = next;
     }
 }
 
@@ -3055,5 +3036,119 @@ mod heuristic_header_tests {
             "{}",
             pretty_open_theory(&thy)
         );
+    }
+}
+
+#[cfg(test)]
+mod iterative_proof_tests {
+    use super::*;
+    use crate::constraint::solver::proof_method::ProofMethod;
+    use crate::theory::ProofTree;
+
+    #[test]
+    fn proof_worklist_preserves_case_order_indentation_and_leaf_forms() {
+        let leaf = |method| ProofTree {
+            method,
+            cases: vec![],
+        };
+        let mut trees = vec![
+            leaf(ProofMethod::Sorry(None)),
+            leaf(ProofMethod::Simplify),
+            leaf(ProofMethod::Finished(
+                crate::constraint::solver::proof_method::Result::Solved,
+            )),
+        ];
+        for i in 0..50 {
+            let child = trees[i % trees.len()].clone();
+            let cases = if i % 2 == 0 {
+                vec![(String::new(), child)]
+            } else {
+                vec![
+                    ("z".into(), child),
+                    ("a".into(), leaf(ProofMethod::Sorry(Some("reason".into())))),
+                ]
+            };
+            trees.push(ProofTree {
+                method: ProofMethod::Simplify,
+                cases,
+            });
+        }
+        for tree in trees {
+            let mut expected = String::new();
+            recursive_reference(&tree, &mut expected, 0);
+            assert_eq!(pretty_proof_body(&tree), expected);
+        }
+    }
+
+    #[test]
+    fn deep_proof_clone_render_and_cleanup_use_bounded_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut tree = ProofTree {
+                    method: ProofMethod::Sorry(None),
+                    cases: vec![],
+                };
+                for _ in 0..100_000 {
+                    tree = ProofTree {
+                        method: ProofMethod::Simplify,
+                        cases: vec![(String::new(), tree)],
+                    };
+                }
+                let copied = tree.clone();
+                let output = pretty_proof_body(&copied);
+                assert_eq!(output.lines().filter(|s| *s == "simplify").count(), 100_000);
+                assert!(output.ends_with("by sorry"));
+                drop((copied, tree));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+    fn recursive_reference<T: ProofBody>(node: &T, out: &mut String, depth: usize) {
+        use crate::constraint::solver::proof_method::{ProofMethod, Result as MR};
+        let base = depth * 2;
+        let annotated = node.annotated();
+        let cases = node.cases();
+
+        match (node.method(), cases.as_slice()) {
+            (ProofMethod::Finished(MR::Solved), []) => {
+                let doc = pp_step_doc(node.method(), "");
+                out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
+            }
+            (_, []) => {
+                let doc = pp_step_doc(node.method(), "");
+                out.push_str(&pf::step_line_with_unann(doc, base, annotated, "by "));
+            }
+            (_, [(label, child)]) if label.is_empty() => {
+                let doc = pp_step_doc(node.method(), "");
+                out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
+                out.push('\n');
+                out.push_str(&"  ".repeat(depth));
+                recursive_reference(*child, out, depth);
+            }
+            (_, multi) => {
+                let doc = pp_step_doc(node.method(), "");
+                out.push_str(&pf::step_line_with_unann(doc, base, annotated, ""));
+                for (i, (name, child)) in multi.iter().enumerate() {
+                    if i > 0 {
+                        out.push('\n');
+                        out.push_str(&"  ".repeat(depth));
+                        out.push_str("next");
+                    }
+                    out.push('\n');
+                    let pad = "  ".repeat(depth + 1);
+                    out.push_str(&pad);
+                    out.push_str("case ");
+                    out.push_str(name);
+                    out.push('\n');
+                    out.push_str(&pad);
+                    recursive_reference(*child, out, depth + 1);
+                }
+                out.push('\n');
+                out.push_str(&"  ".repeat(depth));
+                out.push_str("qed");
+            }
+        }
     }
 }

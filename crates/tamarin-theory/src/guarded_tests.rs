@@ -667,6 +667,29 @@ fn induction_hypothesis_skips_non_node_binders() {
     );
 }
 
+#[test]
+fn induction_hypothesis_rejects_last_in_guards_and_bodies() {
+    let last = ProtoAtom::Last(var_term(BVar::Bound(0)));
+    for qua in [Quantifier::All, Quantifier::Ex] {
+        for in_guard in [false, true] {
+            let formula = Guarded::GGuarded {
+                qua,
+                vars: vec![("i".to_string(), LSort::Node)].into(),
+                guards: if in_guard { vec![last.clone()] } else { vec![] }.into(),
+                body: GuardedBody::new(if in_guard {
+                    gtrue()
+                } else {
+                    Guarded::Atom(last.clone())
+                }),
+            };
+            assert_eq!(
+                to_induction_hypothesis(&formula).unwrap_err(),
+                "formula not last-free",
+            );
+        }
+    }
+}
+
 // =========================================================================
 // simplify_guarded_with — partial-atom-valuation rewriting
 //
@@ -744,7 +767,7 @@ fn mk_universal(vars: Vec<(String, LSort)>, guards: &[(&str, &str)]) -> Guarded 
         qua: Quantifier::All,
         vars: vars.into(),
         guards: guards.iter().map(|(a, b)| mk_gatom_eq(a, b)).collect(),
-        body: std::sync::Arc::new(mk_atom_eq("p", "q")),
+        body: crate::guarded::GuardedBody::new(mk_atom_eq("p", "q")),
     }
 }
 
@@ -1493,7 +1516,6 @@ fn open_guarded_draws_the_binder_names_the_printer_shows() {
 /// back sorted.
 #[test]
 fn open_guarded_sorts_a_commutative_argument_pair() {
-    use std::sync::Arc;
     use tamarin_utils::fresh::PreciseFreshState;
     let a = LVar::new("a", LSort::Msg, 0);
     // `em(Bound 0, a)` with `x` the binder: `Ord BVar` puts `Bound` first
@@ -1507,7 +1529,7 @@ fn open_guarded_sorts_a_commutative_argument_pair() {
         qua: Quantifier::Ex,
         vars: vec![("x".to_string(), LSort::Msg)].into(),
         guards: vec![ProtoAtom::EqE(em, bpub("z"))].into(),
-        body: Arc::new(gtrue()),
+        body: crate::guarded::GuardedBody::new(gtrue()),
     };
 
     let mut fresh = PreciseFreshState::nothing_used();
@@ -1594,7 +1616,7 @@ fn bound_leaves_are_skipped() {
             hf_leaf("y", 4, LSort::Msg),
         )]
         .into(),
-        body: std::sync::Arc::new(gtrue()),
+        body: crate::guarded::GuardedBody::new(gtrue()),
     };
 
     assert_eq!(hf_names(&g), vec!["y.4"]);
@@ -1624,7 +1646,7 @@ fn guards_visited_before_body() {
             hf_leaf("h", 2, LSort::Msg),
         )]
         .into(),
-        body: std::sync::Arc::new(Guarded::Conj(
+        body: crate::guarded::GuardedBody::new(Guarded::Conj(
             vec![Guarded::Atom(ProtoAtom::Last(hf_leaf("b", 3, LSort::Node)))].into(),
         )),
     };
@@ -1773,4 +1795,504 @@ fn guarded_store_holds_a_binary_pair_chain() {
         cur = args[1].clone();
     }
     assert_eq!(depth, 4);
+}
+
+#[test]
+fn wide_guarded_dedup_preserves_order_and_constructor_rules() {
+    fn old_smart(items: Vec<Guarded>, conjunction: bool) -> Guarded {
+        fn flatten(item: Guarded, conjunction: bool, out: &mut Vec<Guarded>) {
+            match item {
+                Guarded::Conj(xs) if conjunction => {
+                    for x in xs.iter() {
+                        flatten(x.clone(), conjunction, out);
+                    }
+                }
+                Guarded::Disj(xs) if !conjunction => {
+                    for x in xs.iter() {
+                        flatten(x.clone(), conjunction, out);
+                    }
+                }
+                other => out.push(other),
+            }
+        }
+        let mut flat = Vec::new();
+        for item in items {
+            flatten(item, conjunction, &mut flat);
+        }
+        if flat.contains(&if conjunction { gfalse() } else { gtrue() }) {
+            return if conjunction { gfalse() } else { gtrue() };
+        }
+        let before_dedup = flat.len();
+        let mut unique = Vec::new();
+        for item in flat {
+            if !unique.contains(&item) {
+                unique.push(item);
+            }
+        }
+        if (conjunction && unique.len() == 1) || (!conjunction && before_dedup == 1) {
+            return unique.pop().unwrap();
+        }
+        if conjunction {
+            Guarded::Conj(unique.into())
+        } else {
+            Guarded::Disj(unique.into())
+        }
+    }
+    let atoms: Vec<_> = (0..128)
+        .map(|i| {
+            Guarded::Atom(ProtoAtom::Last(var_term(BVar::Free(LVar::new(
+                "i",
+                LSort::Node,
+                i,
+            )))))
+        })
+        .collect();
+    for size in [0, 1, 2, 16, 17, 64, 256] {
+        let items: Vec<_> = (0..size)
+            .map(|i| atoms[(i * 17) % atoms.len()].clone())
+            .collect();
+        assert_eq!(gconj(items.clone()), old_smart(items.clone(), true));
+        assert_eq!(gdisj(items.clone()), old_smart(items.clone(), false));
+        assert_eq!(
+            gconj(vec![Guarded::Conj(items.clone().into()), gtrue()]),
+            old_smart(items.clone(), true)
+        );
+        assert_eq!(
+            gdisj(vec![Guarded::Disj(items.clone().into()), gfalse()]),
+            old_smart(items.clone(), false)
+        );
+        let mut duplicates = items.clone();
+        duplicates.extend(items);
+        let mut expected = Vec::new();
+        for item in &duplicates {
+            if !expected.contains(item) {
+                expected.push(item.clone());
+            }
+        }
+        assert_eq!(
+            flatten_dedup_disj(&[Guarded::Disj(duplicates.into())]),
+            expected
+        );
+    }
+    for value in [
+        Guarded::Conj(atoms.clone().into()),
+        Guarded::Disj(atoms.into()),
+    ] {
+        assert!(normalise_guarded_cow(&value).is_none());
+    }
+}
+
+#[test]
+fn connective_runs_preserve_structural_results_errors_and_freshening() {
+    use crate::formula::{avoid_precise_lnformula, Connective, LNFormula, ProtoFormula};
+    fn next(seed: &mut u64) -> usize {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (*seed >> 32) as usize
+    }
+    fn build(seed: &mut u64, depth: usize) -> LNFormula {
+        let n = next(seed);
+        if depth == 0 {
+            return match n % 4 {
+                0 => ProtoFormula::Tf(false),
+                1 => ProtoFormula::Tf(true),
+                _ => ProtoFormula::Atom(ProtoAtom::Last(bfree("i", (n % 3) as u64, LSort::Node))),
+            };
+        }
+        let left = build(seed, depth - 1);
+        match n % 8 {
+            0 => ProtoFormula::Not(Box::new(left).into()),
+            1 | 2 => ProtoFormula::Qua(
+                if n % 8 == 1 {
+                    Quantifier::All
+                } else {
+                    Quantifier::Ex
+                },
+                ("x".into(), LSort::Msg),
+                Box::new(left).into(),
+            ),
+            _ => ProtoFormula::Conn(
+                match n % 4 {
+                    0 => Connective::And,
+                    1 => Connective::Or,
+                    2 => Connective::Imp,
+                    _ => Connective::Iff,
+                },
+                Box::new(left).into(),
+                Box::new(build(seed, depth - 1)).into(),
+            ),
+        }
+    }
+    for seed in 0..3000 {
+        let f = build(&mut (seed + 1), 5);
+        for polarity in [false, true] {
+            let mut fresh = avoid_precise_lnformula(&f);
+            let mut old_fresh = fresh.clone();
+            let got = convert(polarity, &f, &mut fresh);
+            let want = convert_reference(polarity, &f, &mut old_fresh);
+            match (got, want) {
+                (Ok(got), Ok(want)) => {
+                    assert_eq!(got, want, "seed={seed} polarity={polarity} {f:?}")
+                }
+                (Err(got), Err(want)) => {
+                    assert_eq!(format!("{got:?}"), format!("{want:?}"), "seed={seed}")
+                }
+                (got, want) => panic!("seed={seed}: {got:?} != {want:?}"),
+            }
+            assert_eq!(
+                tamarin_term::lterm::fresh_lvar(&mut fresh, "x", LSort::Msg),
+                tamarin_term::lterm::fresh_lvar(&mut old_fresh, "x", LSort::Msg)
+            );
+        }
+    }
+}
+
+#[test]
+fn flattened_normalization_matches_bottom_up_reference() {
+    let a = Guarded::Atom(ProtoAtom::Last(bfree("i", 0, LSort::Node)));
+    let b = Guarded::Atom(ProtoAtom::Last(bfree("i", 1, LSort::Node)));
+    let mut pool = vec![gtrue(), gfalse(), a, b];
+    for i in 0..1200 {
+        let x = pool[(i * 7 + 1) % pool.len()].clone();
+        let y = pool[(i * 11 + 2) % pool.len()].clone();
+        let raw = if i % 2 == 0 {
+            Guarded::Conj(vec![x.clone(), y, x].into())
+        } else {
+            Guarded::Disj(vec![x.clone(), y, x].into())
+        };
+        let got = normalise_guarded_cow(&raw);
+        let want = normalise_guarded_reference(&raw);
+        assert_eq!(got, want, "case {i}");
+        pool.push(if i % 5 == 0 { got.unwrap_or(raw) } else { raw });
+        if pool.len() > 16 {
+            pool.truncate(4);
+        }
+    }
+}
+
+#[test]
+fn deep_connective_runs_normalize_and_convert_on_small_stacks() {
+    use crate::formula::{Connective, LNFormula, ProtoFormula};
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            for conjunction in [false, true] {
+                for right_associated in [false, true] {
+                    let atom = |i| ProtoAtom::Last(bfree("i", i, LSort::Node));
+                    let mut formula: LNFormula = ProtoFormula::Atom(atom(0));
+                    let mut guarded = Guarded::Atom(atom(0));
+                    for i in 1..8192 {
+                        let pair = if right_associated {
+                            (ProtoFormula::Atom(atom(i)), formula)
+                        } else {
+                            (formula, ProtoFormula::Atom(atom(i)))
+                        };
+                        formula = ProtoFormula::Conn(
+                            if conjunction {
+                                Connective::And
+                            } else {
+                                Connective::Or
+                            },
+                            Box::new(pair.0).into(),
+                            Box::new(pair.1).into(),
+                        );
+                        let pair = if right_associated {
+                            vec![Guarded::Atom(atom(i)), guarded]
+                        } else {
+                            vec![guarded, Guarded::Atom(atom(i))]
+                        };
+                        guarded = if conjunction {
+                            Guarded::Conj(pair.into())
+                        } else {
+                            Guarded::Disj(pair.into())
+                        };
+                    }
+                    let converted = formula_to_guarded(&formula).unwrap();
+                    let normalized = normalise_guarded_cow(&guarded).unwrap();
+                    assert_eq!(converted, normalized);
+                    assert_eq!(walk::children(&converted).len(), 8192);
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn simplify_guarded_with_reference(
+    fm: &Guarded,
+    valuation: &dyn Fn(&Atom<LNTerm>) -> Option<bool>,
+) -> Guarded {
+    let eval = |a: &Atom<BLNTerm>| unbind_atom(a).and_then(|la| valuation(&la));
+    rewrite(
+        fm,
+        &mut |d, g| {
+            Ok::<_, std::convert::Infallible>(match g {
+                Guarded::Atom(a) => Step::Done(Some(eval(a).map_or_else(|| g.clone(), gtf))),
+                Guarded::GGuarded {
+                    qua: Quantifier::All,
+                    vars,
+                    guards,
+                    ..
+                } if vars.is_empty() => {
+                    let evals: Vec<_> = guards.iter().map(eval).collect();
+                    if evals.contains(&Some(false)) {
+                        Step::Done(Some(gtrue()))
+                    } else {
+                        Step::Descend(
+                            d,
+                            Some(
+                                guards
+                                    .iter()
+                                    .zip(evals)
+                                    .filter(|(_, v)| v.is_none())
+                                    .map(|(a, _)| a.clone())
+                                    .collect::<Vec<_>>(),
+                            ),
+                        )
+                    }
+                }
+                Guarded::GGuarded { .. } => Step::Done(Some(g.clone())),
+                _ => Step::Descend(d, None),
+            })
+        },
+        &mut |g, kept, children| {
+            Ok(Some(match g {
+                Guarded::Disj(_) => gdisj(children.unwrap_or_default()),
+                Guarded::Conj(_) => gconj(children.unwrap_or_default()),
+                Guarded::GGuarded { vars, .. } => gall(
+                    vars.to_vec(),
+                    kept.unwrap(),
+                    children.unwrap().pop().unwrap(),
+                ),
+                _ => unreachable!(),
+            }))
+        },
+    )
+    .unwrap()
+    .unwrap()
+}
+
+fn gnot_reference(g: &Guarded) -> Guarded {
+    rewrite(
+        g,
+        &mut |d, _| Ok::<_, std::convert::Infallible>(Step::Descend(d, ())),
+        &mut |g, (), children| {
+            Ok(Some(match g {
+                Guarded::Atom(a) => gnot_atom(a),
+                Guarded::Disj(_) => gconj(children.unwrap_or_default()),
+                Guarded::Conj(_) => gdisj(children.unwrap_or_default()),
+                Guarded::GGuarded {
+                    qua, vars, guards, ..
+                } => {
+                    let body = children.unwrap().pop().unwrap();
+                    if *qua == Quantifier::All {
+                        gex(vars.to_vec(), guards.to_vec(), body)
+                    } else {
+                        gall(vars.to_vec(), guards.to_vec(), body)
+                    }
+                }
+            }))
+        },
+    )
+    .unwrap()
+    .unwrap()
+}
+
+fn to_induction_hypothesis_reference(g: &Guarded) -> Result<Guarded, String> {
+    rewrite(
+        g,
+        &mut |d, g| {
+            // Reject an invalid guard before rebuilding its potentially large body.
+            if matches!(g, Guarded::GGuarded { guards, .. } if guards.iter().any(Atom::is_last)) {
+                return Err("formula not last-free".to_string());
+            }
+            Ok(Step::Descend(d, ()))
+        },
+        &mut |g, (), mut children| {
+            match g {
+                Guarded::GGuarded {
+                    qua,
+                    vars,
+                    guards,
+                    body: _,
+                } => {
+                    let body2 = children.as_mut().unwrap().pop().unwrap();
+                    // Emit `Last(v)` for every node-sorted bound variable.
+                    // Mirrors Haskell's
+                    //   lastAtos = [ Last (varTerm (Bound j))
+                    //              | (j, (_, LSortNode)) <- zip [0..] (reverse ss) ]
+                    // Haskell `reverse ss` (Guarded.hs:613-616, see line 615) — node-sorted binders
+                    // emitted in REVERSE quantifier order.  For `∀ k #i #j`, ss
+                    // reversed = [#j, #i, k] → lastAtos = [Last(#j), Last(#i)].
+                    // Without `.rev()`, our disj order is [#i, #j] (matches HS
+                    // case_2 first), inverting `case_1`/`case_2` labels for the
+                    // `last`-disjunction split and breaking proof-tree shape diff.
+                    // HS `lastAtos = do (j, (_, LSortNode)) <- zip [0..] (reverse ss);
+                    //                   return $ Last (varTerm (Bound j))`.
+                    // Iterate vars inner-to-outer (rev), filter to node-sorted,
+                    // assign DeBruijn `j = 0, 1, ...` in that order.
+                    let last_atos: Vec<Guarded> = vars
+                        .iter()
+                        .rev()
+                        .enumerate()
+                        .filter(|(_, v)| v.1 == LSort::Node)
+                        .map(|(j, _)| {
+                            Guarded::Atom(ProtoAtom::Last(var_term(BVar::Bound(j as u64))))
+                        })
+                        .collect();
+                    match qua {
+                        Quantifier::All => {
+                            // gex ss as (gconj (map gnotAtom lastAtos ++ [gf']))
+                            let mut items: Vec<Guarded> =
+                                last_atos.iter().map(gnot_reference).collect();
+                            items.push(body2);
+                            Ok(gex(vars.to_vec(), guards.to_vec(), gconj(items)))
+                        }
+                        Quantifier::Ex => {
+                            // gall ss as (gdisj (map GAto lastAtos ++ [gf']))
+                            let mut items = last_atos;
+                            items.push(body2);
+                            Ok(gall(vars.to_vec(), guards.to_vec(), gdisj(items)))
+                        }
+                    }
+                }
+                Guarded::Atom(ProtoAtom::Less(i, j)) => Ok(Guarded::Disj(
+                    vec![
+                        Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
+                        Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
+                    ]
+                    .into(),
+                )),
+                Guarded::Atom(ProtoAtom::Last(_)) => Err("formula not last-free".to_string()),
+                Guarded::Atom(a) => Ok(gnot_atom(a)),
+                Guarded::Disj(_) => Ok(gconj(children.unwrap_or_default())),
+                Guarded::Conj(_) => Ok(gdisj(children.unwrap_or_default())),
+            }
+            .map(Some)
+        },
+    )
+    .map(Option::unwrap)
+}
+
+#[test]
+fn smart_rewrites_preserve_raw_connective_shapes() {
+    let a = Guarded::Atom(ProtoAtom::Less(
+        bfree("i", 0, LSort::Node),
+        bfree("i", 1, LSort::Node),
+    ));
+    let b = Guarded::Atom(ProtoAtom::Last(bfree("i", 1, LSort::Node)));
+    let mut pool = vec![gtrue(), gfalse(), a, b];
+    for i in 0..3000 {
+        let items: Vec<_> = (0..i % 5)
+            .map(|j| pool[(i * 7 + j * 3) % pool.len()].clone())
+            .collect();
+        let raw = match i % 4 {
+            0 => Guarded::Conj(items.into()),
+            1 => Guarded::Disj(items.into()),
+            _ => Guarded::GGuarded {
+                qua: if i % 4 == 2 {
+                    Quantifier::All
+                } else {
+                    Quantifier::Ex
+                },
+                vars: if i % 3 == 0 {
+                    vec![("x".into(), LSort::Node)]
+                } else {
+                    vec![]
+                }
+                .into(),
+                guards: if i % 7 == 0 {
+                    vec![ProtoAtom::Last(bfree("i", 0, LSort::Node))]
+                } else {
+                    vec![]
+                }
+                .into(),
+                body: GuardedBody::new(Guarded::Conj(items.into())),
+            },
+        };
+        assert_eq!(gnot(&raw), gnot_reference(&raw), "negate {i}");
+        assert_eq!(
+            to_induction_hypothesis(&raw),
+            to_induction_hypothesis_reference(&raw),
+            "induct {i}"
+        );
+        for answer in [None, Some(false), Some(true)] {
+            assert_eq!(
+                simplify_guarded_with(&raw, &|_| answer),
+                simplify_guarded_with_reference(&raw, &|_| answer),
+                "simplify {i}"
+            );
+        }
+        pool.push(raw);
+        if pool.len() > 16 {
+            pool.truncate(4);
+        }
+    }
+}
+
+#[test]
+fn indexed_binder_substitution_preserves_first_match_and_scope() {
+    let x = LVar::new("x", LSort::Msg, 0);
+    for size in [2, 16] {
+        let entries: Vec<_> = (0..size).map(|i| (x, i)).collect();
+        let index = IndexedSubst::new(&entries);
+        let atom = ProtoAtom::EqE(var_term(BVar::Free(x)), var_term(BVar::Bound(0)));
+        assert_eq!(
+            subst_free_atom_at(&index, 7, &atom),
+            ProtoAtom::EqE(var_term(BVar::Bound(7)), var_term(BVar::Bound(0)))
+        );
+        let entries: Vec<_> = (0..size)
+            .map(|i| (0, LVar::new("x", LSort::Msg, i)))
+            .collect();
+        let index = IndexedSubst::new(&entries);
+        let atom = ProtoAtom::EqE(var_term(BVar::Bound(7)), var_term(BVar::Bound(6)));
+        assert_eq!(
+            subst_bound_atom_at(&index, 7, &atom),
+            ProtoAtom::EqE(var_term(BVar::Free(x)), var_term(BVar::Bound(6)))
+        );
+    }
+}
+
+#[test]
+fn deep_smart_rewrites_and_wide_binders_use_small_stacks() {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            for conj in [true, false] {
+                let atom = |i| {
+                    Guarded::Atom(ProtoAtom::Less(
+                        bfree("i", i, LSort::Node),
+                        bfree("i", i + 1, LSort::Node),
+                    ))
+                };
+                let mut raw = atom(0);
+                for i in 1..8192 {
+                    let items = vec![raw, atom(i)].into();
+                    raw = if conj {
+                        Guarded::Conj(items)
+                    } else {
+                        Guarded::Disj(items)
+                    };
+                }
+                let flat = normalise_guarded_cow(&raw).unwrap();
+                assert_eq!(gnot(&raw), gnot(&flat));
+                assert_eq!(
+                    to_induction_hypothesis(&raw),
+                    to_induction_hypothesis(&flat)
+                );
+                assert_eq!(simplify_guarded_with(&raw, &|_| None), flat);
+            }
+            let vars: Vec<_> = (0..8192).map(|i| LVar::new("x", LSort::Msg, i)).collect();
+            let guards: Vec<_> = vars
+                .iter()
+                .map(|v| ProtoAtom::EqE(var_term(*v), pub_term("a")))
+                .collect();
+            let closed = close_guarded(Quantifier::Ex, vars, guards, gtrue());
+            let mut fresh = tamarin_utils::fresh::FastFreshState::nothing_used();
+            let (q, vars, guards, body) = open_guarded(&closed, &mut fresh).unwrap();
+            assert_eq!(close_guarded(q, vars, guards, body), closed);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }

@@ -480,6 +480,16 @@ pub fn apply_partial_evaluation(
     maude: &MaudeHandle,
     style: EvaluationStyle,
 ) -> Result<String, MaudeError> {
+    tamarin_utils::stack::with_compiler_stack(|| {
+        apply_partial_evaluation_inner(elaborated, maude, style)
+    })
+}
+
+fn apply_partial_evaluation_inner(
+    elaborated: &mut Theory,
+    maude: &MaudeHandle,
+    style: EvaluationStyle,
+) -> Result<String, MaudeError> {
     // HS `getProtoRuleEs` (ClosedTheory.hs:87-89) extracts `cprRuleE` — the
     // E-half that keeps the macro calls as the source writes them
     // (`closeProtoRule`, lib/theory/src/Rule.hs:82-86), that

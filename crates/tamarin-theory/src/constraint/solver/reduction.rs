@@ -3326,21 +3326,12 @@ fn premise_solving_rule_insts_with_constrs(
 // hot — called many times per proof-step).
 #[inline(always)]
 fn bm_term(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
-    use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    match t {
-        Term::Lit(Lit::Var(v)) => {
-            if v.idx > *max {
-                *max = v.idx;
-            }
+    t.for_each_lit(|lit| {
+        if let Lit::Var(v) = lit {
+            *max = (*max).max(v.idx);
         }
-        Term::Lit(Lit::Con(_)) => {}
-        Term::App(_, args) => {
-            for a in args.iter() {
-                bm_term(a, max);
-            }
-        }
-    }
+    });
 }
 
 #[inline(always)]

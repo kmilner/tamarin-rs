@@ -260,7 +260,7 @@ fn a_generated_rules_process_attribute_is_rendered_from_its_own_record() {
             match_vars: BTreeSet::new(),
         },
         ProcessParsedAnnotation::empty(),
-        Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+        Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
     );
 
     let src = "theory MrSapicShaped begin\n\

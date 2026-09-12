@@ -98,6 +98,7 @@ pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError>
             }),
         ));
     }
+
     Ok(env)
 }
 
@@ -157,7 +158,7 @@ fn type_process_def(
             match_vars: BTreeSet::new(),
         },
         ProcessParsedAnnotation::empty(),
-        Box::new(pr.clone()),
+        Box::new(pr.clone()).into(),
     );
     let renamed = type_and_rename_process_in(env, &aux).map_err(|e| ElabError {
         message: format!("SAPIC typing: {e}"),
@@ -185,7 +186,7 @@ fn type_process_def(
             }),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((Some(vars), *body))
+    Ok((Some(vars), body.into_inner()))
 }
 
 #[cfg(test)]

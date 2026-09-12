@@ -255,10 +255,47 @@ pub use tamarin_term::macro_expand::LNMacro;
 /// `cases` keeps the source order of the `case` blocks; the printer sorts by
 /// name (HS stores them in an `M.fromList`, Theory/Text/Parser/Proof.hs:113)
 /// and replay looks each case up by name.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct ProofTree {
     pub method: crate::constraint::solver::proof_method::ProofMethod,
     pub cases: Vec<(String, ProofTree)>,
+}
+
+impl Clone for ProofTree {
+    fn clone(&self) -> Self {
+        fn shallow(tree: &ProofTree) -> ProofTree {
+            ProofTree {
+                method: tree.method.clone(),
+                cases: Vec::new(),
+            }
+        }
+        let mut result = shallow(self);
+        let mut pending = Vec::new();
+        let mut next = Some((self, &mut result));
+        while let Some((source, target)) = next.take().or_else(|| pending.pop()) {
+            target.cases = source
+                .cases
+                .iter()
+                .map(|(name, child)| (name.clone(), shallow(child)))
+                .collect();
+            for ((_, source), (_, target)) in source.cases.iter().zip(target.cases.iter_mut()).rev()
+            {
+                if let Some(previous) = next.replace((source, target)) {
+                    pending.push(previous);
+                }
+            }
+        }
+        result
+    }
+}
+
+impl Drop for ProofTree {
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.cases);
+        while let Some((_, mut child)) = pending.pop() {
+            pending.append(&mut child.cases);
+        }
+    }
 }
 
 /// A lemma's stored proof.  `None` is a lemma written without one, which HS
