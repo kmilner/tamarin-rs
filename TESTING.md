@@ -290,6 +290,179 @@ harness resolved; see Prerequisites. An unresolvable maude is a panic naming
 line: it walks every `.rs` file under `crates/` and fails when any file
 outside the support crate reads `$MAUDE_PATH`.
 
+### Practical nesting target
+
+The user-facing acceptance case is an 8,192-level function application chain
+(`f(f(...))`) surviving CLI parsing, translation, printing, reparsing and cleanup.
+Run it with:
+
+```bash
+cargo test --offline --locked --profile ci -p tamarin-prover --test output_module deep_terms_survive_the_cli_lifecycle
+```
+
+This is a regression target, not a hard depth limit or a promise that arbitrary
+proof searches at that depth are practical. Larger operation-specific stress
+tests below remain useful, but do not require every downstream helper to be
+iterative. Prefer shared traversals, cheap shared ownership and efficient
+printing; use guarded recursion where a simpler implementation has acceptable
+performance and memory use.
+
+Expression, rule, selector, conditional-expression, and include stack regressions
+are covered by the parser suite.
+For focused checks:
+
+```bash
+cargo test --profile ci -p tamarin-parser --test deep_syntax
+cargo test --profile ci -p tamarin-parser iterative_terms_parse_on_a_small_native_stack
+cargo test --profile ci -p tamarin-parser iterative_formulas_and_proofs_parse_on_a_small_native_stack
+cargo test --profile ci -p tamarin-parser iterative_processes_parse_on_a_small_native_stack
+cargo test --profile ci -p tamarin-parser rule_and_flag_parsing_use_bounded_stack
+cargo test --profile ci -p tamarin-parser include_worklist_preserves_state_and_error_sources_on_a_small_stack
+cargo test --profile ci -p tamarin-parser ast_clone::tests
+cargo test --profile ci -p tamarin-parser term_walk::tests
+cargo test --profile ci -p tamarin-parser formula_walk::tests
+cargo test --profile ci -p tamarin-parser process_walk::tests
+cargo test --profile ci -p tamarin-parser deep_formula_substitution_and_renaming_use_bounded_stack
+cargo test --profile ci -p tamarin-term flat_writer
+cargo test --profile ci -p tamarin-utils pretty_hpj
+```
+
+The parsing tests check successful deep parses and error cleanup on 64 KiB
+thread stacks (128 KiB for the include driver). The lifecycle tests exercise
+100,000-level constructed trees on 256 KiB stacks, including term and formula rewriting,
+cloning, and destruction, plus balanced trees and wide proof case lists. Formula
+and process destruction clear batches of at most eight
+edges before deferring deeper branches to a worklist; native stack depth is
+independent of input depth. Debug runs check less optimised cleanup paths.
+There is no fixed nesting-depth cap. These tests cover particular operations;
+downstream time and memory still depend on the input. Circular includes are
+rejected by checking active file paths, while repeated completed includes are
+allowed. The deep include test also checks source ordering across nested files
+and file-local conditional state; all included items accumulate in one output
+vector. The flat internal-term string printer also uses a worklist; its tests
+compare composed term shapes with the document printer and print 100,000-level
+applications and tuples on a 256 KiB stack, including last-owner cleanup.
+Internal term arguments retain shared ownership; their destructor drains owned
+children iteratively. Tests cover 100,000-level trees, left-to-right literal
+destruction, shared DAGs, and concurrent last-owner release on 256 KiB stacks.
+Wrapped term traversal is iterative too. Document tests exercise 100,000-node
+construction, first-line fitting, layout choices, lazy dependency forcing, and
+last-owner destruction on 256 KiB stacks. They check memoisation, unused
+alternatives, singleton fills, and consecutive empty choices. Lazy construction
+and layout continuations are explicit operations so both their evaluation and
+the destruction of unforced captures can use worklists.
+
+Term query/mapping/replacement tests also exercise 100,000-level trees on
+256 KiB, including callback order, early exit and AC-normalization behavior.
+Nonempty solver-term substitution also has 100,000-level changed/unchanged
+and panic-cleanup tests on 256 KiB. Mixed-tree differential tests pin lookup
+order, one-time image insertion, raw identity-map change signals, and AC/C
+normalization. Flat applications need no traversal-stack allocation; deeper
+applications suspend parent frames on the heap.
+Quantified-term substitution (`apply_bvterm`) shares the iterative literal
+binding traversal with `map_lits`. Its tests substitute a 100,000-level image
+into a 100,000-level input on 256 KiB, preserving bound indices and leaving
+image variables free. Small differential tests pin eager normalization even
+for empty substitutions; callback tests cover one-time insertion and cleanup
+when a callback panics after completing a deep sibling.
+Read-only formula walks combine 100,000 formula levels and 100,000 term levels
+on 256 KiB, checking atom/free-variable order, bound-variable exclusion,
+combined depth and callback unwinding. Small mixed formulas are compared with
+the previous recursive walk, including Boolean and termless sugar leaves.
+These fixtures are dismantled explicitly. Formula rebuilding tests also cover
+200,000 levels on 256 KiB, including errors/panics after completing a deep
+replacement and owned-map panics between deep siblings. They pin binder depths,
+hint clone/callback order, one-time image insertion and payload release order.
+Child-edge owners now apply iterative cleanup to returned formulas as well as
+pending rebuild inputs/outputs. Ordinary clone, equality/order and Debug also
+use worklists; alternate Debug retains guarded stack growth. Tests convert,
+clone, compare, format and ordinarily drop 100,000-level formulas on 256 KiB.
+Parser-formula conversion and sugar removal use explicit frames.
+
+Guarded-formula tests compare ordering, hash writes and both Debug modes with
+a derived reference enum. A 20,000-binder fixture on 256 KiB covers mapping,
+normalization, negation, simplification, induction, substitution and concurrent
+last-owner release. Shared guarded edges retain cheap cloning; last-owner
+cleanup uses `Arc::into_inner`. Solver guarded queries, native structural
+matching and guard-matching continuations use worklists, preserving DFS
+matching/fresh-witness order.
+The Maude-backed `invalid_deep_proof_replay_and_searched_lifecycle_use_bounded_stack`
+test covers stale-proof replay and searched-proof clone/status/extraction/drop:
+2,030 levels include parse/elaborate/replay/render/reparse/re-elaborate, while
+8,192 levels bypass the parser through a constructed internal proof. Both use
+256 KiB. These are invalid-step retention tests, not deep valid solver searches.
+
+`valid_deep_replay_uses_guarded_stack` separately exercises 2,048 valid stored
+solve steps in both check and auto modes on 256 KiB. It repeatedly solves a
+retained singleton disjunction goal, asserting every method/annotation and the
+terminal solved result. This isolates replay traversal from solver complexity;
+it does not establish deep proof-search safety. Set `TAM_TEST_REPLAY_DEPTH=8192`
+for a deeper internal fixture. Replay traversal uses guarded recursion; stack growth depends on `stacker` target
+support, as for proof search below. Run `replay_scopes_restore_after_deep_child_error`
+with `TAM_RS_TRACE_STATE=1` to check active trace-path restoration after a real
+ranking error beneath 512 stored steps on an initially 256 KiB stack.
+
+`deep_search_uses_guarded_stack` solves 256 distinct goals on 256 KiB with
+all five search cuts and checks a deep `--bound` frontier. For the larger
+internal diagnostic, run it with `TAM_TEST_SEARCH_DEPTH=2048` and
+`TAM_TEST_SEARCH_SERIAL_ONLY=1`; the latter selects sequential DFS (plus the
+bounded DFS check). This larger fixture retains many solver systems and is
+not a lightweight default test.
+`deep_frontier_and_cut_walks_use_guarded_stack` separately exercises 8,192-level
+frontier re-expansion, BFS scan/build, solved-path pruning, and cleanup on
+256 KiB. Search expansion and frontier re-expansion use guarded recursion; proof-tree
+ownership and the other traversal helpers remain iterative. Stack growth depends
+on the targets supported by `stacker` (see `crates/tamarin-utils/src/stack.rs`);
+these search tests do not establish a portable constant-native-stack guarantee.
+Individual solver operations still have their own stack requirements.
+Run `expansion_restores_partial_root_after_child_error` with
+`TAM_RS_TRACE_STATE=1` to check trace-path restoration on a real ranking error.
+
+SAPIC's shared `try_map_process`, combined process-depth check, variable
+collection and process typing now use worklists. Their tests cover 100,000-level
+processes on 256 KiB, including annotation callback errors/panics and a typing
+error after a deep left branch has been rebuilt. Callback and typing-environment
+order are pinned separately. Generic process child owners now drain spines on
+ordinary destruction. Clone, equality/order and ordinary Debug are iterative;
+100,000-level lifecycle tests run on 256 KiB. Payloads retain their own lifecycle
+requirements, and alternate Debug retains guarded stack growth. Uniqueness renaming, name propagation,
+rule generation, lock/secret-channel passes, let lowering and progress analysis
+also use worklists. Tests compare renaming against the previous suffix-copying
+implementation on shadowed binders and annotation-only variables, and pin NDC
+rewriting and progress branch semantics. Deep annotation/typing pipelines and
+error cleanup run at 100,000 levels on 256 KiB; rule generation runs at 2,048
+and progress analysis at 8,192. State analysis, state-channel declaration,
+purity annotation, report/location rewriting, parser-process conversion and
+term typing also use worklists. Their new small-stack tests use 20,000 levels;
+state scope/pruning results and ordinary-function inference are compared with
+the previous recursive implementations on smaller fixtures. A separate purity
+annotation regression checks sibling scope, pruning of impure state-channel
+bodies, and preservation of existing annotations.
+
+SAPIC typing preserves its two-pass inference order and caches nested ordinary
+applications only when a complete visit leaves the environment unchanged.
+Effective environment changes invalidate the cache. Ordinary unary chains with
+both inferred and declared types are tested at 20,000 levels on 256 KiB, alongside
+the deep polymorphic List fixture. Differential tests compare 3,000 branching
+input/target combinations with the old implementation, including successful
+inference, errors and resulting environments. Environment-changing workloads
+may still revisit terms; this is not a general linear-time guarantee.
+
+These checks cover the tested term and document lifecycle paths, not arbitrary
+downstream processing. Internal-term equality, ordering, hashing and ordinary
+Debug formatting now use worklists; alternate Debug preserves Rust's standard
+formatting with stack growth. Tests compare structural results, hash byte
+streams and formatting flags with the previous behavior. Internal stored-proof
+cloning, rendering and destruction are tested at 100,000 steps on 256 KiB,
+including byte comparisons with the previous recursive renderer on mixed trees.
+Retained SAPIC process owners (theory translation items, process definitions,
+and shared rule processes) rely on their child-edge destructors for ordinary
+caller-stack cleanup, including errors and panics. Their tests cover
+100,000-level action/branch mixtures. These tests do not establish stack or
+resource bounds for every compiler operation. Accountability quantifier-merging/simplification still recurse;
+compiler-stack boundaries remain in place. Repeated inference, formula expansion
+and retained solver/process data can still require substantial time or memory.
+
 Whole-corpus structural audits live under one integration-test target so they
 can share expensive theory loading:
 
