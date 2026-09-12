@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 
 use crate::apply::Apply;
 use crate::lterm::{BVar, HasFrees, LVar};
-use crate::term::{f_app, map_lits, Term};
+use crate::term::{bind_lits, map_lits, Term};
 use crate::vterm::{Lit, VTerm};
 
 /// A substitution mapping variables of type `V` to terms of type
@@ -228,27 +228,23 @@ pub fn apply_bvar<V>(v: &BVar<V>, apply_free: &mut dyn FnMut(&V) -> V) -> BVar<V
 /// (SubstVFree.hs:297-302): replace every free literal in the substitution's
 /// domain by its image, lifted back into `BVar` form with `fmapTerm (fmap
 /// Free)`.  A bound index is not in the domain, so a binder cannot capture an
-/// image variable.  The rebuild goes through [`f_app`], as HS's `bindTerm`
+/// image variable.  The rebuild goes through [`crate::term::f_app`], as HS's `bindTerm`
 /// (Term/Term/Raw.hs:219-221) does, so AC argument lists are flattened and
 /// re-sorted under the images.
 pub fn apply_bvterm<C: Ord + Clone, V: Ord + Clone>(
     s: &Subst<C, V>,
     t: &VTerm<C, BVar<V>>,
 ) -> VTerm<C, BVar<V>> {
-    match t {
-        Term::Lit(Lit::Var(BVar::Free(v))) => match s.image_of(v) {
+    bind_lits(t, &mut |literal| match literal {
+        Lit::Var(BVar::Free(v)) => match s.image_of(v) {
             Some(image) => map_lits(image, &mut |l| match l {
                 Lit::Con(c) => Lit::Con(c.clone()),
                 Lit::Var(w) => Lit::Var(BVar::Free(w.clone())),
             }),
-            None => t.clone(),
+            None => Term::Lit(literal.clone()),
         },
-        Term::Lit(_) => t.clone(),
-        Term::App(fsym, args) => f_app(
-            *fsym,
-            args.iter().map(|a| apply_bvterm(s, a)).collect::<Vec<_>>(),
-        ),
-    }
+        _ => Term::Lit(literal.clone()),
+    })
 }
 
 /// Pass-invariant hashed lookup view over a [`Subst`].
@@ -321,6 +317,92 @@ mod tests {
 
     type C = u32;
     type V = &'static str;
+
+    #[test]
+    fn quantified_substitution_matches_eager_recursive_normalization() {
+        use crate::function_symbols::{CSym, FunSym};
+        use crate::term::{f_app, f_app_c, f_app_list, unsafe_f_app};
+        type T = VTerm<C, BVar<V>>;
+        fn reference(s: &Subst<C, V>, t: &T) -> T {
+            match t {
+                Term::Lit(Lit::Var(BVar::Free(v))) => s.image_of(v).map_or_else(
+                    || t.clone(),
+                    |image| {
+                        map_lits(image, &mut |l| match l {
+                            Lit::Con(c) => Lit::Con(*c),
+                            Lit::Var(v) => Lit::Var(BVar::Free(*v)),
+                        })
+                    },
+                ),
+                Term::Lit(_) => t.clone(),
+                Term::App(sym, args) => f_app(*sym, args.iter().map(|a| reference(s, a)).collect()),
+            }
+        }
+        let x = var_term(BVar::Free("x"));
+        let bound = var_term(BVar::Bound(0));
+        let raw = unsafe_f_app(
+            FunSym::Ac(AcSym::Mult),
+            vec![x.clone(), const_term(2), const_term(1)],
+        );
+        let terms = [
+            x.clone(),
+            bound.clone(),
+            f_app_list(vec![]),
+            raw,
+            f_app_c(CSym::EMap, vec![x.clone(), bound.clone()]),
+            f_app_no_eq(pair_sym(), vec![x, bound]),
+        ];
+        // An image containing its own domain variable must remain free and
+        // be inserted once. Empty substitutions must still normalize raw apps.
+        for s in [
+            Subst::empty(),
+            Subst::from_list([(
+                "x",
+                f_app_ac(AcSym::Mult, vec![var_term("x"), const_term(0)]),
+            )]),
+        ] {
+            for t in &terms {
+                assert_eq!(apply_bvterm(&s, t), reference(&s, t));
+            }
+        }
+        assert_ne!(apply_bvterm(&Subst::empty(), &terms[3]), terms[3]);
+    }
+
+    #[test]
+    fn deep_quantified_substitution_lifts_images_without_capture() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut input: VTerm<C, BVar<V>> = var_term(BVar::Free("x"));
+                let mut image: VTerm<C, V> = var_term("x");
+                for _ in 0..100_000 {
+                    input = f_app_no_eq(pair_sym(), vec![input, var_term(BVar::Bound(7))]);
+                    image = f_app_no_eq(pair_sym(), vec![image, const_term(1)]);
+                }
+                let subst = Subst::from_list([("x", image)]);
+                let result = apply_bvterm(&subst, &input);
+                let mut current = &result;
+                for _ in 0..100_000 {
+                    let Term::App(_, args) = current else {
+                        panic!("missing input level")
+                    };
+                    assert_eq!(args[1], var_term(BVar::Bound(7)));
+                    current = &args[0];
+                }
+                for _ in 0..100_000 {
+                    let Term::App(_, args) = current else {
+                        panic!("missing image level")
+                    };
+                    assert_eq!(args[1], const_term(1));
+                    current = &args[0];
+                }
+                assert_eq!(current, &var_term(BVar::Free("x")));
+                drop((result, input, subst));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     #[test]
     fn empty_substitution_is_identity() {

@@ -96,7 +96,7 @@ where
     C: Ord + Clone,
     V: Ord + Clone,
 {
-    match term {
+    tamarin_utils::stack::ensure_sufficient_stack(|| match term {
         Term::Lit(l) => Term::Lit(l),
         Term::App(fsym, args) => {
             let processed: Vec<VTerm<C, V>> = args
@@ -113,7 +113,7 @@ where
                 f_app(fsym, processed)
             }
         }
-    }
+    })
 }
 
 fn find_matching_macro<'a, C, V>(
