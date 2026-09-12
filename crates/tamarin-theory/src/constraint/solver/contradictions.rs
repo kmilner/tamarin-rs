@@ -295,18 +295,15 @@ fn any_non_nf(
     memo: &mut NfMemo,
     t: &tamarin_term::lterm::LNTerm,
 ) -> bool {
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    match t {
-        Term::Lit(Lit::Con(_)) => false,
-        // Bare variables are always in normal form (`go_nf` returns true
-        // for every `Lit`), so skip the NF-check call.
-        Term::Lit(Lit::Var(_)) => false,
-        Term::App(sym, args) if irreducible.contains(sym) => args
-            .iter()
-            .any(|a| any_non_nf(maude, msig, irreducible, memo, a)),
-        _ => !nf_memoized(msig, maude, memo, t),
-    }
+    use std::ops::ControlFlow;
+    use tamarin_term::term::{walk_terms, Term};
+    walk_terms(std::slice::from_ref(t), |node| match node {
+        Term::Lit(_) => ControlFlow::Continue(false),
+        Term::App(sym, _) if irreducible.contains(sym) => ControlFlow::Continue(true),
+        _ if !nf_memoized(msig, maude, memo, node) => ControlFlow::Break(()),
+        _ => ControlFlow::Continue(false),
+    })
+    .is_break()
 }
 
 /// `maybeNotNfSubterms` — collect subterms that might not be in
@@ -330,19 +327,19 @@ fn maybe_not_nf_subterms(
     t: &tamarin_term::lterm::LNTerm,
     out: &mut std::collections::BTreeSet<tamarin_term::lterm::LNTerm>,
 ) {
-    use tamarin_term::term::Term;
+    use std::ops::ControlFlow;
+    use tamarin_term::term::{walk_terms, Term};
     use tamarin_term::vterm::Lit;
-    match t {
-        Term::Lit(Lit::Con(_)) => {}
-        Term::App(sym, args) if irreducible.contains(sym) => {
-            for a in args.iter() {
-                maybe_not_nf_subterms(irreducible, a, out);
+    let _: ControlFlow<()> = walk_terms(std::slice::from_ref(t), |node| {
+        match node {
+            Term::Lit(Lit::Con(_)) => {}
+            Term::App(sym, _) if irreducible.contains(sym) => return ControlFlow::Continue(true),
+            _ => {
+                out.insert(node.clone());
             }
         }
-        _ => {
-            out.insert(t.clone());
-        }
-    }
+        ControlFlow::Continue(false)
+    });
 }
 
 /// Run `has_subterm_cycle` against the system's positive subterm
@@ -518,49 +515,7 @@ enum DhView<'a> {
 /// special cases (FExp/FPMult/FEMap).  Mirrors `possibleEndSyms` in
 /// Contradictions.hs (defined locally inside `hasImpossibleChain`).
 fn possible_end_syms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<RootSym>> {
-    use tamarin_term::function_symbols::{exp_sym, pmult_sym, CSym, FunSym};
-    use tamarin_term::term::Term;
-    // HS `viewTerm2` special cases first:
-    match dh_view(t) {
-        Some(DhView::Exp(base)) => {
-            // ((Right (NoEq expSym)):) <$> possibleEndSyms a
-            let mut out = vec![RootSym::Sym(FunSym::NoEq(exp_sym()))];
-            let rest = possible_end_syms(base)?;
-            out.extend(rest);
-            return Some(out);
-        }
-        Some(DhView::PMult(base)) => {
-            // ((Right <$> [NoEq expSym, NoEq pmultSym, C EMap])++) <$> possibleEndSyms a
-            let mut out = vec![
-                RootSym::Sym(FunSym::NoEq(exp_sym())),
-                RootSym::Sym(FunSym::NoEq(pmult_sym())),
-                RootSym::Sym(FunSym::C(CSym::EMap)),
-            ];
-            let rest = possible_end_syms(base)?;
-            out.extend(rest);
-            return Some(out);
-        }
-        Some(DhView::EMap) => {
-            return Some(vec![RootSym::Sym(FunSym::C(CSym::EMap))]);
-        }
-        None => {}
-    }
-    // Generic (non-DH) case.  HS:
-    //   _ -> case viewTerm t of
-    //          Lit _ -> (:[]) <$> rootSym t
-    //          FApp o args -> ((Right o):) . concat <$> mapM possibleEndSyms args
-    let head = root_sym(t)?;
-    match t {
-        Term::App(_, args) => {
-            let mut out = vec![head];
-            for a in args.iter() {
-                let sub = possible_end_syms(a)?;
-                out.extend(sub);
-            }
-            Some(out)
-        }
-        Term::Lit(_) => Some(vec![head]),
-    }
+    possible_syms(t, false)
 }
 
 /// `possibleRootSyms`: HS-faithful port using `viewTerm2` to apply DH-
@@ -570,47 +525,41 @@ fn possible_end_syms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<RootSym>> {
 /// names or private functions — equivalent to
 /// `isForbiddenDeconstruction`.
 fn possible_root_syms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<RootSym>> {
+    possible_syms(t, true)
+}
+
+fn possible_syms(t: &tamarin_term::lterm::LNTerm, prune_public: bool) -> Option<Vec<RootSym>> {
     use tamarin_term::function_symbols::{exp_sym, pmult_sym, CSym, FunSym};
     use tamarin_term::term::Term;
-    if never_contains_fresh_priv(t) {
-        return Some(Vec::new());
-    }
-    // HS `viewTerm2` special cases first:
-    match dh_view(t) {
-        Some(DhView::Exp(base)) => {
-            let mut out = vec![RootSym::Sym(FunSym::NoEq(exp_sym()))];
-            let rest = possible_root_syms(base)?;
-            out.extend(rest);
-            return Some(out);
+    let mut pending = vec![t];
+    let mut out = Vec::new();
+    while let Some(node) = pending.pop() {
+        if prune_public && never_contains_fresh_priv(node) {
+            continue;
         }
-        Some(DhView::PMult(base)) => {
-            let mut out = vec![
-                RootSym::Sym(FunSym::NoEq(exp_sym())),
-                RootSym::Sym(FunSym::NoEq(pmult_sym())),
-                RootSym::Sym(FunSym::C(CSym::EMap)),
-            ];
-            let rest = possible_root_syms(base)?;
-            out.extend(rest);
-            return Some(out);
-        }
-        Some(DhView::EMap) => {
-            return Some(vec![RootSym::Sym(FunSym::C(CSym::EMap))]);
-        }
-        None => {}
-    }
-    // Generic case.
-    let head = root_sym(t)?;
-    match t {
-        Term::App(_, args) => {
-            let mut out = vec![head];
-            for a in args.iter() {
-                let sub = possible_root_syms(a)?;
-                out.extend(sub);
+        match dh_view(node) {
+            Some(DhView::Exp(base)) => {
+                out.push(RootSym::Sym(FunSym::NoEq(exp_sym())));
+                pending.push(base);
             }
-            Some(out)
+            Some(DhView::PMult(base)) => {
+                out.extend([
+                    RootSym::Sym(FunSym::NoEq(exp_sym())),
+                    RootSym::Sym(FunSym::NoEq(pmult_sym())),
+                    RootSym::Sym(FunSym::C(CSym::EMap)),
+                ]);
+                pending.push(base);
+            }
+            Some(DhView::EMap) => out.push(RootSym::Sym(FunSym::C(CSym::EMap))),
+            None => {
+                out.push(root_sym(node)?);
+                if let Term::App(_, args) = node {
+                    pending.extend(args.iter().rev());
+                }
+            }
         }
-        Term::Lit(_) => Some(vec![head]),
     }
+    Some(out)
 }
 
 /// `hasForbiddenKD` — port of Haskell's
@@ -1110,29 +1059,21 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
     // `isSimpleTerm`: HS Term/LTerm.hs:383-386.
     // `not (containsPrivate t) && all (LSortFresh /=) (lits t)`.
     fn is_simple_term(t: &LNTerm) -> bool {
-        if contains_private(t) {
-            return false;
-        }
-        let mut ok = true;
-        let mut visit = |term: &LNTerm| match term {
-            Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh => {
-                ok = false;
-            }
-            Term::Lit(Lit::Con(c)) if sort_of_name(c) == LSort::Fresh => {
-                ok = false;
-            }
-            _ => {}
-        };
-        fn walk(t: &LNTerm, f: &mut dyn FnMut(&LNTerm)) {
-            f(t);
-            if let Term::App(_, args) = t {
-                for a in args.iter() {
-                    walk(a, f);
+        !contains_private(t)
+            && tamarin_term::term::walk_terms(std::slice::from_ref(t), |node| {
+                use std::ops::ControlFlow;
+                let fresh = match node {
+                    Term::Lit(Lit::Var(v)) => v.sort == LSort::Fresh,
+                    Term::Lit(Lit::Con(c)) => sort_of_name(c) == LSort::Fresh,
+                    _ => false,
+                };
+                if fresh {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(true)
                 }
-            }
-        }
-        walk(t, &mut visit);
-        ok
+            })
+            .is_continue()
     }
 
     // `kFactView` is shared at module scope (returns `KDir`/term).
@@ -1644,21 +1585,22 @@ fn bp_view_pmult(
 /// term.  `Mult(ts...)` → concat-map ni_factors; `Inv(t)` → ni_factors t;
 /// else `[t]`.  Shared by `has_forbidden_exp` and the BP checks.
 fn ni_factors(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::LNTerm> {
+    use std::ops::ControlFlow;
     use tamarin_term::function_symbols::{AcSym, FunSym, INV_SYM_STRING};
-    use tamarin_term::term::Term;
-    match t {
-        Term::App(FunSym::Ac(AcSym::Mult), args) => {
-            let mut out = Vec::new();
-            for a in args.iter() {
-                out.extend(ni_factors(a));
-            }
-            out
+    use tamarin_term::term::{walk_terms, Term};
+    let mut out = Vec::new();
+    let _: ControlFlow<()> = walk_terms(std::slice::from_ref(t), |node| {
+        let descend = match node {
+            Term::App(FunSym::Ac(AcSym::Mult), _) => true,
+            Term::App(FunSym::NoEq(s), args) if s.name == INV_SYM_STRING && args.len() == 1 => true,
+            _ => false,
+        };
+        if !descend {
+            out.push(node.clone());
         }
-        Term::App(FunSym::NoEq(s), args) if s.name == INV_SYM_STRING && args.len() == 1 => {
-            ni_factors(&args[0])
-        }
-        _ => vec![t.clone()],
-    }
+        ControlFlow::Continue(descend)
+    });
+    out
 }
 
 /// `niFactors c \\ niFactors b == []`: every non-inverse factor of `c`

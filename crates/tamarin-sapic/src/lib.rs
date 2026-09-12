@@ -39,6 +39,7 @@ pub mod compression;
 pub mod facts;
 pub mod let_destructors;
 pub mod locks;
+mod process_walk;
 pub mod progress_function;
 pub mod progress_translation;
 pub mod reliable_channel;

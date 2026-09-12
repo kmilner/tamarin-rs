@@ -30,27 +30,38 @@ fn term_variables(t: &SapicTerm) -> BTreeSet<LVar> {
 /// fresh `New` adds the variable as a candidate, and every `ChOut` /
 /// `Insert` whose RHS uses a candidate disqualifies it.
 fn get_secret_channels(p: &AnnotatedProc, candidates: BTreeSet<LVar>) -> BTreeSet<LVar> {
-    match p {
-        Process::Action(SapicAction::New(v), _, body) => {
-            let mut next = candidates;
-            next.insert(v.var);
-            get_secret_channels(body, next)
-        }
-        Process::Action(SapicAction::ChOut { msg, .. }, _, body)
-        | Process::Action(SapicAction::Insert(_, msg), _, body) => {
-            let used = term_variables(msg);
-            let mut next = candidates;
-            next.retain(|v| !used.contains(v));
-            get_secret_channels(body, next)
-        }
-        Process::Action(_, _, body) => get_secret_channels(body, candidates),
-        Process::Null(_) => candidates,
-        Process::Comb(_, _, l, r) => {
-            let cl = get_secret_channels(l, candidates.clone());
-            let cr = get_secret_channels(r, candidates);
-            cl.intersection(&cr).copied().collect()
+    let mut pending = vec![(p, candidates)];
+    let mut result: Option<BTreeSet<LVar>> = None;
+    while let Some((node, mut candidates)) = pending.pop() {
+        match node {
+            Process::Null(_) => {
+                // Branch joins are intersections, so intersecting leaf results
+                // directly avoids retaining a separate stack of partial joins.
+                match &mut result {
+                    None => result = Some(candidates),
+                    Some(result) => result.retain(|v| candidates.contains(v)),
+                }
+            }
+            Process::Action(ac, _, body) => {
+                match ac {
+                    SapicAction::New(v) => {
+                        candidates.insert(v.var);
+                    }
+                    SapicAction::ChOut { msg, .. } | SapicAction::Insert(_, msg) => {
+                        let used = term_variables(msg);
+                        candidates.retain(|v| !used.contains(v));
+                    }
+                    _ => {}
+                }
+                pending.push((body, candidates));
+            }
+            Process::Comb(_, _, left, right) => {
+                pending.push((right, candidates.clone()));
+                pending.push((left, candidates));
+            }
         }
     }
+    result.unwrap()
 }
 
 /// `annotateSecretChannels`: for every `ChIn` / `ChOut` whose channel is a
@@ -60,39 +71,27 @@ pub(crate) fn annotate_secret_channels(p: AnnotatedProc) -> AnnotatedProc {
     annotate_each(p, &svars)
 }
 
-fn annotate_each(p: AnnotatedProc, svars: &BTreeSet<LVar>) -> AnnotatedProc {
-    match p {
-        Process::Null(ann) => Process::Null(ann),
-        Process::Comb(c, ann, l, r) => Process::Comb(
-            c,
+fn annotate_each(mut p: AnnotatedProc, svars: &BTreeSet<LVar>) -> AnnotatedProc {
+    crate::process_walk::walk_mut(&mut p, (), |node, _| {
+        if let Process::Action(
+            SapicAction::ChIn {
+                chan: Some(chan), ..
+            }
+            | SapicAction::ChOut {
+                chan: Some(chan), ..
+            },
             ann,
-            Box::new(annotate_each(*l, svars)),
-            Box::new(annotate_each(*r, svars)),
-        ),
-        Process::Action(action, ann, body) => {
-            let inner = Box::new(annotate_each(*body, svars));
-            let new_ann = match &action {
-                SapicAction::ChIn {
-                    chan: Some(chan), ..
-                }
-                | SapicAction::ChOut {
-                    chan: Some(chan), ..
-                } => {
-                    if let Some(chan_var) = lit_var(chan) {
-                        if svars.contains(&chan_var) {
-                            ann.append(ProcessAnnotation::with_secret_channel(chan_var))
-                        } else {
-                            ann
-                        }
-                    } else {
-                        ann
-                    }
-                }
-                _ => ann,
-            };
-            Process::Action(action, new_ann, inner)
+            _,
+        ) = node
+            && let Some(v) = lit_var(chan)
+            && svars.contains(&v)
+        {
+            *ann = std::mem::take(ann).append(ProcessAnnotation::with_secret_channel(v));
         }
-    }
+        Ok::<_, std::convert::Infallible>(true)
+    })
+    .unwrap();
+    p
 }
 
 /// If `t` is exactly a single variable literal, return its inner `LVar`.
@@ -127,7 +126,7 @@ mod tests {
         let p: AnnotatedProc = Process::Action(
             SapicAction::New(c.clone()),
             ProcessAnnotation::empty(),
-            Box::new(null()),
+            Box::new(null()).into(),
         );
         let out = get_secret_channels(&p, BTreeSet::new());
         assert!(out.contains(&c.var));
@@ -144,12 +143,12 @@ mod tests {
                 msg: var_term(c.clone()),
             },
             ProcessAnnotation::empty(),
-            Box::new(null()),
+            Box::new(null()).into(),
         );
         let p: AnnotatedProc = Process::Action(
             SapicAction::New(c.clone()),
             ProcessAnnotation::empty(),
-            Box::new(body),
+            Box::new(body).into(),
         );
         let out = get_secret_channels(&p, BTreeSet::new());
         assert!(!out.contains(&c.var));
@@ -176,7 +175,7 @@ mod tests {
                     msg: var_term(c.clone()),
                 },
                 ProcessAnnotation::empty(),
-                Box::new(body),
+                Box::new(body).into(),
             )
         };
         // `new c; new e; (<l> | <r>)`.
@@ -190,10 +189,12 @@ mod tests {
                     Box::new(Process::Comb(
                         ProcessCombinator::Parallel,
                         ProcessAnnotation::empty(),
-                        Box::new(l),
-                        Box::new(r),
-                    )),
-                )),
+                        Box::new(l).into(),
+                        Box::new(r).into(),
+                    ))
+                    .into(),
+                ))
+                .into(),
             )
         };
         let only_e: BTreeSet<LVar> = [e.var].into_iter().collect();
@@ -212,10 +213,17 @@ mod tests {
         let new_a: AnnotatedProc = Process::Action(
             SapicAction::New(a.clone()),
             ProcessAnnotation::empty(),
-            Box::new(null()),
+            Box::new(null()).into(),
         );
         let joined = get_secret_channels(&with_branches(new_a, null()), BTreeSet::new());
         assert!(!joined.contains(&a.var));
         assert!(joined.contains(&c.var) && joined.contains(&e.var));
+        // Nested joins must still account for every leaf, including leaves
+        // reached after a subtree has already narrowed the candidate set.
+        let nested = with_branches(
+            with_branches(out_c(null()), null()),
+            with_branches(null(), null()),
+        );
+        assert_eq!(get_secret_channels(&nested, BTreeSet::new()), only_e);
     }
 }

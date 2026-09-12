@@ -49,6 +49,10 @@ use crate::typing::{
 /// Runs on EVERY theory — a process-free (non-SAPIC) theory still gets its
 /// `function:` items recomputed from the signature-seeded environment.
 pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError> {
+    tamarin_utils::stack::with_compiler_stack(|| type_theory_env_inner(thy))
+}
+
+fn type_theory_env_inner(thy: &mut Theory) -> Result<TypingEnvironment, ElabError> {
     let user_fun_typings = collect_user_fun_typings(thy);
     let mut env = init_te_from_sig(&thy.signature, &user_fun_typings).map_err(|e| ElabError {
         message: format!("SAPIC typing: {e}"),
@@ -98,6 +102,7 @@ pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError>
             }),
         ));
     }
+
     Ok(env)
 }
 
@@ -157,7 +162,7 @@ fn type_process_def(
             match_vars: BTreeSet::new(),
         },
         ProcessParsedAnnotation::empty(),
-        Box::new(pr.clone()),
+        Box::new(pr.clone()).into(),
     );
     let renamed = type_and_rename_process_in(env, &aux).map_err(|e| ElabError {
         message: format!("SAPIC typing: {e}"),
@@ -185,7 +190,7 @@ fn type_process_def(
             }),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((Some(vars), *body))
+    Ok((Some(vars), body.into_inner()))
 }
 
 #[cfg(test)]

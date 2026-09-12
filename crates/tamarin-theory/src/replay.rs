@@ -186,24 +186,42 @@ fn invalid_step_node(node: &ProofTree, sys: System) -> ProofNode {
 /// The `sys` placeholder is the parent's sys (unused in display but
 /// required by `ProofNode`).
 fn parsed_to_unannotated(node: &ProofTree, sys: System) -> ProofNode {
-    let method = node.method.clone();
-    let status = match &method {
-        ProofMethod::Finished(r) => node_status_of(r),
-        ProofMethod::Sorry(_) if node.cases.is_empty() => NodeStatus::Sorry,
-        _ => NodeStatus::Open,
-    };
-    let children: BTreeMap<String, ProofNode> = node
-        .cases
-        .iter()
-        .map(|(name, sub)| (name.clone(), parsed_to_unannotated(sub, sys.clone())))
-        .collect();
-    ProofNode {
-        method,
-        sys,
-        children,
-        status,
-        annotated: false,
+    fn shallow(node: &ProofTree, sys: System) -> ProofNode {
+        let status = match &node.method {
+            ProofMethod::Finished(r) => node_status_of(r),
+            ProofMethod::Sorry(_) if node.cases.is_empty() => NodeStatus::Sorry,
+            _ => NodeStatus::Open,
+        };
+        ProofNode {
+            method: node.method.clone(),
+            sys,
+            children: BTreeMap::new(),
+            status,
+            annotated: false,
+        }
     }
+    let mut result = shallow(node, sys);
+    let mut pending = Vec::new();
+    let mut next = Some((node, &mut result));
+    while let Some((source, target)) = next.take().or_else(|| pending.pop()) {
+        // Build in source order, retaining BTreeMap's last-entry-wins behavior
+        // for duplicate stored names. Populate only the surviving occurrence.
+        let sources: BTreeMap<_, _> = source
+            .cases
+            .iter()
+            .map(|(name, child)| (name, child))
+            .collect();
+        target.children = sources
+            .iter()
+            .map(|(name, child)| ((*name).clone(), shallow(child, target.sys.clone())))
+            .collect();
+        for (source, target) in sources.values().zip(target.children.values_mut()).rev() {
+            if let Some(previous) = next.replace((*source, target)) {
+                pending.push(previous);
+            }
+        }
+    }
+    result
 }
 
 /// Public root-level **annotated** `sorry` leaf (HS keeps the parsed
@@ -250,9 +268,22 @@ fn finished_leaf(
     }
 }
 
-/// Replay one node of the skeleton against `sys`.  When `auto_prove` is
-/// false, fall-throughs that would otherwise invoke the auto-prover emit
-/// unannotated `Sorry` leaves instead (HS check-and-extend semantics).
+/// Aggregate every executed visit, including children later overwritten by a
+/// duplicate stored name. Rolling up only the surviving map is not equivalent.
+fn insert_replayed_child(result: &mut ProofNode, name: String, child: ProofNode) {
+    let rank = |status| match status {
+        NodeStatus::Open => 0,
+        NodeStatus::Contradictory => 1,
+        NodeStatus::Unfinishable => 2,
+        NodeStatus::Sorry => 3,
+        NodeStatus::Solved => 4,
+    };
+    if rank(child.status) > rank(result.status) {
+        result.status = child.status;
+    }
+    result.children.insert(name, child);
+}
+
 fn replay_node(
     ctx: &ProofContext,
     sys: System,
@@ -260,6 +291,71 @@ fn replay_node(
     proof_bound: usize,
     auto_prove: bool,
 ) -> Result<ProofNode, ProveError> {
+    use crate::constraint::solver::trace::CasePathGuard;
+    // Stored-proof depth is independent of term depth. Lexical guards unwind
+    // trace scopes; returned proof nodes retain iterative destruction.
+    tamarin_utils::stack::ensure_sufficient_stack(|| {
+        let (mut result, produced) = replay_step(ctx, sys, node, proof_bound, auto_prove)?;
+        let Some(produced) = produced else {
+            return Ok(result);
+        };
+        // Preserve source order and retain the produced map: duplicate stored
+        // names can replay the same runtime case more than once.
+        for (stored_name, subtree) in &node.cases {
+            let runtime_name = if stored_name.is_empty() {
+                (produced.len() == 1).then(|| produced.keys().next().unwrap().clone())
+            } else {
+                produced
+                    .contains_key(stored_name)
+                    .then(|| stored_name.clone())
+            };
+            let Some(name) = runtime_name else {
+                // Stored-only cases contribute Sorry regardless of the retained
+                // subtree's status, unless an earlier visit already solved.
+                let child = parsed_to_unannotated(subtree, result.sys.clone());
+                if result.status != NodeStatus::Solved {
+                    result.status = NodeStatus::Sorry;
+                }
+                result.children.insert(stored_name.clone(), child);
+                continue;
+            };
+            let child_sys = produced.get(&name).unwrap().clone();
+            let child = {
+                let _path = CasePathGuard::push(&name);
+                replay_node(ctx, child_sys, subtree, proof_bound, auto_prove)?
+            };
+            insert_replayed_child(&mut result, name, child);
+        }
+        // Runtime-only cases follow in map order: annotated sorries in check
+        // mode, or auto-proved children (HS mergeMapsWith leftOnly).
+        for (name, child_sys) in produced {
+            if result.children.contains_key(&name) {
+                continue;
+            }
+            let _path = CasePathGuard::push(&name);
+            let child = if auto_prove {
+                run_proof_search_at_depth(ctx, child_sys, proof_bound, 0)?
+            } else {
+                annotated_sorry(None, child_sys)
+            };
+            insert_replayed_child(&mut result, name, child);
+        }
+        if result.status == NodeStatus::Open {
+            result.status = NodeStatus::Sorry;
+        }
+        Ok(result)
+    })
+}
+
+/// Execute one stored step, returning a completed proof or runtime cases
+/// awaiting child replay. Check-only fallbacks preserve HS annotations.
+fn replay_step(
+    ctx: &ProofContext,
+    sys: System,
+    node: &ProofTree,
+    proof_bound: usize,
+    auto_prove: bool,
+) -> Result<(ProofNode, Option<BTreeMap<String, System>>), ProveError> {
     // ---- Sorry cases first (HS `replace prf@(... Sorry ...)`). ----
     // Any `Sorry` node → invoke the auto-prover on `sys`. HS:
     //   replace prf@(LNode (ProofStep (Sorry _) (Just se)) _) =
@@ -269,13 +365,12 @@ fn replay_node(
         // preserves any children without system annotations (`sorryNode
         // reason cs`).
         if !auto_prove {
-            return Ok(annotated_sorry_with_children(
-                reason.clone(),
-                sys,
-                &node.cases,
+            return Ok((
+                annotated_sorry_with_children(reason.clone(), sys, &node.cases),
+                None,
             ));
         }
-        return run_proof_search_at_depth(ctx, sys, proof_bound, 0);
+        return run_proof_search_at_depth(ctx, sys, proof_bound, 0).map(|node| (node, None));
     }
 
     crate::constraint::solver::trace::trace_state(&sys);
@@ -296,10 +391,11 @@ fn replay_node(
     if let ProofMethod::Finished(stored) = &node.method
         && node.cases.is_empty()
     {
-        return finished_leaf(ctx, sys, node, stored, auto_prove, proof_bound);
+        return finished_leaf(ctx, sys, node, stored, auto_prove, proof_bound)
+            .map(|node| (node, None));
     }
 
-    // ---- Non-leaf nodes: pick a method, exec it, recurse. ----
+    // ---- Non-leaf nodes: pick and execute a method. ----
     // HS `oneStepProver`:
     //   cases <- execProofMethod ctxt method se
     //   return $ LNode (ProofStep method (Just se))
@@ -319,9 +415,9 @@ fn replay_node(
             // this by creating a sorry with one child "" → the original
             // stored subtree converted to unannotated ProofNodes.
             if !auto_prove {
-                return Ok(invalid_step_node(node, sys));
+                return Ok((invalid_step_node(node, sys), None));
             }
-            return run_proof_search_at_depth(ctx, sys, proof_bound, 0);
+            return run_proof_search_at_depth(ctx, sys, proof_bound, 0).map(|node| (node, None));
         }
     };
 
@@ -342,146 +438,28 @@ fn replay_node(
     if cases.is_empty() && node.cases.is_empty() {
         // Empty case-map after exec means contradictory closure —
         // mirror search.rs's contradictory-closure handling.
-        return Ok(ProofNode {
+        return Ok((
+            ProofNode {
+                method,
+                sys,
+                children: BTreeMap::new(),
+                status: NodeStatus::Contradictory,
+                annotated: true,
+            },
+            None,
+        ));
+    }
+
+    Ok((
+        ProofNode {
             method,
             sys,
             children: BTreeMap::new(),
-            status: NodeStatus::Contradictory,
+            status: NodeStatus::Open,
             annotated: true,
-        });
-    }
-
-    // Build a map from case name → System for fast lookup.
-    let produced: BTreeMap<String, System> = cases.into_iter().collect();
-
-    let mut children: BTreeMap<String, ProofNode> = BTreeMap::new();
-    let mut any_solved = false;
-    let mut any_contra = false;
-    let mut any_unfin = false;
-    let mut any_sorry = false;
-
-    // Walk the skeleton's child cases in source order.
-    for (skel_name, sub_tree) in &node.cases {
-        // Find the matching runtime case.  Two common shapes:
-        //   - Skel case is "" (no name; from Simplify or single-case
-        //     SolveGoal) → matches the single produced case.
-        //   - Skel case has a name → matches by exact name.
-        let runtime_name = if skel_name.is_empty() {
-            // Skeleton has an unnamed single-child block (Simplify
-            // produces a "" case).
-            if produced.len() == 1 {
-                Some(produced.keys().next().unwrap().clone())
-            } else {
-                None
-            }
-        } else if produced.contains_key(skel_name) {
-            Some(skel_name.clone())
-        } else {
-            None
-        };
-        let Some(runtime_name) = runtime_name else {
-            // No matching runtime case — the stored skeleton drifted
-            // from the current decomposition (a case present in the
-            // skeleton but NOT produced by re-executing the method).
-            // HS `checkAndExtendProver` (Proof.hs) handles this the
-            // SAME WAY regardless of whether sorry-leaves get extended:
-            // `mergeMapsWith` maps the stored-only case through
-            // `noSystemPrf` (= `mapProofInfo (\i -> (Just i, Nothing))`)
-            // over the WHOLE subtree; after `mapProofInfo snd` the info
-            // is `Nothing` everywhere, so the entire subtree is kept
-            // VERBATIM and renders unannotated (`/* unannotated */`).
-            // The auto-prover never runs on it (no system attached), so
-            // this is independent of `auto_prove` — both the target
-            // lemma (extend sorries) and check-only replay keep drifted
-            // cases verbatim.  (KCL07 is a stale-stored-proof theory
-            // that exercises this drifted-case path.)
-            let placeholder = parsed_to_unannotated(sub_tree, sys.clone());
-            children.insert(skel_name.clone(), placeholder);
-            any_sorry = true;
-            continue;
-        };
-        let child_sys = produced.get(&runtime_name).cloned().unwrap();
-        // Track the actual case name used in the replayed tree, including an
-        // unnamed stored child which adopted a named singleton runtime case.
-        let _path = crate::constraint::solver::trace::CasePathGuard::push(&runtime_name);
-        let child_node = replay_node(ctx, child_sys, sub_tree, proof_bound, auto_prove)?;
-        match child_node.status {
-            NodeStatus::Solved => any_solved = true,
-            NodeStatus::Contradictory => any_contra = true,
-            NodeStatus::Unfinishable => any_unfin = true,
-            NodeStatus::Sorry => any_sorry = true,
-            NodeStatus::Open => {}
-        }
-        children.insert(runtime_name, child_node);
-    }
-
-    // For runtime cases NOT covered by the skeleton (e.g. skeleton was
-    // stale and a new case appeared), invoke the auto-prover on each.
-    // This is HS-faithful: `checkProof`'s `mergeMapsWith` treats the
-    // runtime-produced cases as the LEFT map and the stored skeleton's
-    // children as the RIGHT map (Theory/Proof.hs:447-467, see line 463
-    // `mergeMapsWith
-    // unhandledCase noSystemPrf (go (d+1)) cases cs`), so a runtime-only
-    // case (present left, absent right) goes through `unhandledCase =
-    // mapProofInfo (Nothing,) . prover d` (Theory/Proof.hs:447-467, see line
-    // 462) → an annotated
-    // `sorry Nothing (Just se)`.  For a `--prove`-selected lemma
-    // `replaceSorryProver` then auto-proves that annotated sorry
-    // (CloseRule.hs:57-71, see line 71 → TheoryLoader.hs:705-707, see line 706), matching the
-    // `run_proof_search` branch below.
-    for (rt_name, rt_sys) in produced.into_iter() {
-        // A case the skeleton already consumed — including one an unnamed
-        // `""` skeleton block claimed, since the loop above re-keys such a
-        // child under the RUNTIME name.
-        if children.contains_key(&rt_name) {
-            continue;
-        }
-        let _path = crate::constraint::solver::trace::CasePathGuard::push(&rt_name);
-        let auto = if auto_prove {
-            run_proof_search_at_depth(ctx, rt_sys, proof_bound, 0)?
-        } else {
-            // HS check-and-extend, `mergeMapsWith` leftOnly branch
-            // (Proof.hs): a case PRODUCED by re-executing the method
-            // but absent from the stored skeleton is handled by
-            // `unhandledCase = mapProofInfo (Nothing,) . prover d`
-            // (Proof.hs).  `prover` there is
-            // `sorryProver Nothing` (Proof.hs, runProver), which
-            // yields `sorry Nothing (Just se)` — info `(Nothing, Just se)`.
-            // After `mapProofInfo snd` (Proof.hs) the info is
-            // `Just se`, so the leaf is ANNOTATED → plain `by sorry`
-            // (NO `/* unannotated */`).  This differs from the rightOnly
-            // branch above, which is `Nothing`.
-            annotated_sorry(None, rt_sys)
-        };
-        match auto.status {
-            NodeStatus::Solved => any_solved = true,
-            NodeStatus::Contradictory => any_contra = true,
-            NodeStatus::Unfinishable => any_unfin = true,
-            NodeStatus::Sorry => any_sorry = true,
-            NodeStatus::Open => {}
-        }
-        children.insert(rt_name, auto);
-    }
-
-    let status = if any_solved {
-        NodeStatus::Solved
-    } else if any_sorry {
-        NodeStatus::Sorry
-    } else if any_unfin {
-        NodeStatus::Unfinishable
-    } else if any_contra {
-        NodeStatus::Contradictory
-    } else {
-        NodeStatus::Sorry
-    };
-
-    Ok(ProofNode {
-        method,
-        sys,
-        children,
-        status,
-        annotated: true,
-    })
+        },
+        Some(cases.into_iter().collect()),
+    ))
 }
 
 /// Re-execute one stored proof step against `sys` and produce the

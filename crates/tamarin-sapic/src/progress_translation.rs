@@ -115,11 +115,17 @@ fn extend_vars(dom_pf: &PosSet, pos: &[i64], tx: &mut BTreeSet<LVar>) {
 }
 
 /// `progressInit anP (initrules, initTx)` (ProgressTranslation.hs:54-62).
-pub(crate) fn progress_init(
-    an_proc: &AProc,
-    init_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>>,
+pub(crate) fn progress_init<'a>(
+    an_proc: &'a AProc,
+    init_rules: Vec<AnnotatedRule<'a, ProcessAnnotation<LVar>>>,
     init_tx: BTreeSet<LVar>,
-) -> Result<(Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, BTreeSet<LVar>), String> {
+) -> Result<
+    (
+        Vec<AnnotatedRule<'a, ProcessAnnotation<LVar>>>,
+        BTreeSet<LVar>,
+    ),
+    String,
+> {
     let dom_pf = pf_from(an_proc)?;
     let empty: Pos = Vec::new();
     // `initTx' = if [] ∈ domPF then {varProgress []} else {}`
@@ -128,7 +134,7 @@ pub(crate) fn progress_init(
         new_tx.insert(var_progress(&empty));
     }
     // `initrules' = map (mapAct $ addProgressFrom domPF []) initrules`
-    let new_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>> = init_rules
+    let new_rules: Vec<AnnotatedRule<'a, ProcessAnnotation<LVar>>> = init_rules
         .into_iter()
         .map(|mut r| {
             let body: RuleBody = (r.prems, r.acts, r.concs, r.restr);
@@ -270,9 +276,13 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> Restriction {
 /// `bigOr` (ProgressTranslation.hs:174-176): right-nested disjunction.  The
 /// empty case never occurs (`tos` is always non-empty here).
 fn big_or(tos: &[&Pos], progress_to: &impl Fn(&Pos) -> LNFormula) -> LNFormula {
-    match tos {
-        [] => LNFormula::lfalse(),
-        [to] => progress_to(to),
-        [to, rest @ ..] => progress_to(to).or(big_or(rest, progress_to)),
+    // Evaluate callbacks left to right before building the right-associated tree.
+    let mut formulas: Vec<_> = tos.iter().map(|to| progress_to(to)).collect();
+    let Some(mut result) = formulas.pop() else {
+        return LNFormula::lfalse();
+    };
+    while let Some(left) = formulas.pop() {
+        result = left.or(result);
     }
+    result
 }

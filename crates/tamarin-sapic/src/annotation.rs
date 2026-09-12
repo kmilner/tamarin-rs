@@ -216,9 +216,10 @@ mod tests {
             Box::new(Process::Action(
                 tamarin_theory::sapic::SapicAction::Rep,
                 named("act"),
-                Box::new(Process::Null(named("left"))),
-            )),
-            Box::new(Process::Null(named("right"))),
+                Box::new(Process::Null(named("left"))).into(),
+            ))
+            .into(),
+            Box::new(Process::Null(named("right"))).into(),
         );
         let annotated: Process<ProcessAnnotation<V>, SapicLVar> = to_annotated(&parsed);
         // The lift wraps the parsed annotation, and does not replace it.  The

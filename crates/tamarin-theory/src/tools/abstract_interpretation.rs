@@ -480,6 +480,16 @@ pub fn apply_partial_evaluation(
     maude: &MaudeHandle,
     style: EvaluationStyle,
 ) -> Result<String, MaudeError> {
+    tamarin_utils::stack::with_compiler_stack(|| {
+        apply_partial_evaluation_inner(elaborated, maude, style)
+    })
+}
+
+fn apply_partial_evaluation_inner(
+    elaborated: &mut Theory,
+    maude: &MaudeHandle,
+    style: EvaluationStyle,
+) -> Result<String, MaudeError> {
     // HS `getProtoRuleEs` (ClosedTheory.hs:87-89) extracts `cprRuleE` — the
     // E-half that keeps the macro calls as the source writes them
     // (`closeProtoRule`, lib/theory/src/Rule.hs:82-86), that
@@ -522,14 +532,18 @@ pub fn apply_partial_evaluation(
     let macros: Vec<crate::theory::LNMacro> = elaborated.macros().cloned().collect();
     let mut inserted: Vec<TheoryItem> = Vec::with_capacity(refined.len() + 1);
     inserted.push(TheoryItem::Text(("text".to_string(), body)));
-    inserted.extend(refined.into_iter().map(|r| {
-        let expanded = crate::rule::apply_macro_in_rule(&macros, r.clone());
-        let mut opr = OpenProtoRule::new(expanded);
-        if opr.rule != r {
-            opr.rule_e = Some(Box::new(r));
-        }
-        TheoryItem::Rule(opr)
-    }));
+    let expanded_rules: Vec<_> = refined
+        .into_iter()
+        .map(|r| {
+            let expanded = crate::rule::apply_macro_in_rule(&macros, r.clone());
+            let mut opr = OpenProtoRule::new(expanded);
+            if opr.rule != r {
+                opr.rule_e = Some(Box::new(r));
+            }
+            TheoryItem::Rule(opr)
+        })
+        .collect();
+    inserted.extend(expanded_rules);
     elaborated.items = splice_refined(std::mem::take(&mut elaborated.items), anchor, inserted);
 
     Ok(trace)

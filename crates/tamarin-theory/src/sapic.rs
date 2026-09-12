@@ -22,6 +22,8 @@
 //!   `pfoldMap` and the `applyMatchVars` pair. `mapTerms`, `foldProcess`,
 //!   `foldMProcess` and `traverseProcess` are not ported.
 
+mod structure;
+
 use std::collections::BTreeSet;
 
 use tamarin_term::lterm::{BVar, LVar, Name};
@@ -242,16 +244,166 @@ pub enum ProcessCombinator<V> {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Process<Ann, V> {
     Null(Ann),
     Comb(
         ProcessCombinator<V>,
         Ann,
-        Box<Process<Ann, V>>,
-        Box<Process<Ann, V>>,
+        ProcessBox<Ann, V>,
+        ProcessBox<Ann, V>,
     ),
-    Action(SapicAction<V>, Ann, Box<Process<Ann, V>>),
+    Action(SapicAction<V>, Ann, ProcessBox<Ann, V>),
+}
+
+/// Owned process edge; ordinary destruction drains the process spine.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProcessBox<Ann, V>(Option<Box<Process<Ann, V>>>);
+impl<Ann, V> From<Box<Process<Ann, V>>> for ProcessBox<Ann, V> {
+    fn from(value: Box<Process<Ann, V>>) -> Self {
+        Self(Some(value))
+    }
+}
+impl<Ann, V> ProcessBox<Ann, V> {
+    pub fn into_inner(mut self) -> Process<Ann, V> {
+        *self.0.take().unwrap()
+    }
+}
+impl<Ann, V> std::ops::Deref for ProcessBox<Ann, V> {
+    type Target = Process<Ann, V>;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().unwrap()
+    }
+}
+impl<Ann, V> std::ops::DerefMut for ProcessBox<Ann, V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_deref_mut().unwrap()
+    }
+}
+impl<Ann, V> AsRef<Process<Ann, V>> for ProcessBox<Ann, V> {
+    fn as_ref(&self) -> &Process<Ann, V> {
+        self
+    }
+}
+impl<Ann, V> Drop for ProcessBox<Ann, V> {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            (*p).drop_iteratively();
+        }
+    }
+}
+impl<Ann: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for ProcessBox<Ann, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&**self, f)
+    }
+}
+
+#[cfg(test)]
+fn fact_depth<V>(fact: &SapicNFact<V>) -> usize {
+    1usize.saturating_add(
+        fact.terms
+            .iter()
+            .map(tamarin_term::term::term_depth)
+            .max()
+            .unwrap_or(0),
+    )
+}
+
+#[cfg(test)]
+fn action_depth<V>(action: &SapicAction<V>) -> usize {
+    let terms = |items: &[SapicNTerm<V>]| {
+        items
+            .iter()
+            .map(tamarin_term::term::term_depth)
+            .max()
+            .unwrap_or(0)
+    };
+    match action {
+        SapicAction::Rep | SapicAction::New(_) => 0,
+        SapicAction::ChIn { chan, msg, .. } | SapicAction::ChOut { chan, msg } => chan
+            .as_ref()
+            .map_or(0, tamarin_term::term::term_depth)
+            .max(tamarin_term::term::term_depth(msg)),
+        SapicAction::Insert(left, right) => {
+            tamarin_term::term::term_depth(left).max(tamarin_term::term::term_depth(right))
+        }
+        SapicAction::Delete(term) | SapicAction::Lock(term) | SapicAction::Unlock(term) => {
+            tamarin_term::term::term_depth(term)
+        }
+        SapicAction::Event(fact) => fact_depth(fact),
+        SapicAction::ProcessCall(_, args) => terms(args),
+        SapicAction::Msr {
+            prems,
+            acts,
+            concs,
+            rest,
+            ..
+        } => prems
+            .iter()
+            .chain(acts)
+            .chain(concs)
+            .map(fact_depth)
+            .max()
+            .unwrap_or(0)
+            .max(
+                rest.iter()
+                    .map(crate::formula::formula_depth)
+                    .max()
+                    .unwrap_or(0),
+            ),
+    }
+}
+
+#[cfg(test)]
+fn combinator_depth<V>(comb: &ProcessCombinator<V>) -> usize {
+    match comb {
+        ProcessCombinator::Parallel | ProcessCombinator::Ndc => 0,
+        ProcessCombinator::Cond(formula) => crate::formula::formula_depth(formula),
+        ProcessCombinator::CondEq(left, right) | ProcessCombinator::Let { left, right, .. } => {
+            tamarin_term::term::term_depth(left).max(tamarin_term::term::term_depth(right))
+        }
+        ProcessCombinator::Lookup(term, _) => tamarin_term::term::term_depth(term),
+    }
+}
+
+/// Maximum combined process, formula, and term depth on any path.
+#[cfg(test)]
+pub(crate) fn process_depth<Ann: GoodAnnotation, V>(process: &Process<Ann, V>) -> usize {
+    let mut pending = vec![(process, 1usize)];
+    let mut maximum = 0;
+    while let Some((node, depth)) = pending.pop() {
+        let payload = match node {
+            Process::Null(ann) => annotation_depth(ann),
+            Process::Action(action, ann, body) => {
+                pending.push((body, depth.saturating_add(1)));
+                action_depth(action).max(annotation_depth(ann))
+            }
+            Process::Comb(comb, ann, left, right) => {
+                let child_depth = depth.saturating_add(1);
+                pending.push((right, child_depth));
+                pending.push((left, child_depth));
+                combinator_depth(comb).max(annotation_depth(ann))
+            }
+        };
+        maximum = maximum.max(depth.saturating_add(payload));
+    }
+    maximum
+}
+
+#[cfg(test)]
+fn annotation_depth<Ann: GoodAnnotation>(ann: &Ann) -> usize {
+    let parsed = ann.parsed();
+    parsed
+        .location
+        .as_ref()
+        .map_or(0, tamarin_term::term::term_depth)
+        .max(
+            parsed
+                .back_substitution
+                .iter()
+                .map(|(_, term)| tamarin_term::term::term_depth(term))
+                .max()
+                .unwrap_or(0),
+        )
 }
 
 /// Rebuild a process while transforming every action, combinator and
@@ -263,25 +415,44 @@ pub fn try_map_process<Ann, V, Ann2, V2, E>(
     map_comb: &mut impl FnMut(&ProcessCombinator<V>) -> Result<ProcessCombinator<V2>, E>,
     map_ann: &mut impl FnMut(&Ann) -> Result<Ann2, E>,
 ) -> Result<Process<Ann2, V2>, E> {
-    match p {
-        Process::Null(ann) => Ok(Process::Null(map_ann(ann)?)),
-        Process::Action(action, ann, body) => {
-            let action = map_action(action)?;
-            let body = try_map_process(body, map_action, map_comb, map_ann)?;
-            Ok(Process::Action(action, map_ann(ann)?, Box::new(body)))
-        }
-        Process::Comb(comb, ann, left, right) => {
-            let comb = map_comb(comb)?;
-            let left = try_map_process(left, map_action, map_comb, map_ann)?;
-            let right = try_map_process(right, map_action, map_comb, map_ann)?;
-            Ok(Process::Comb(
-                comb,
-                map_ann(ann)?,
-                Box::new(left),
-                Box::new(right),
-            ))
+    enum Task<'a, Ann, V, V2> {
+        Visit(&'a Process<Ann, V>),
+        Action(SapicAction<V2>, &'a Ann),
+        Comb(ProcessCombinator<V2>, &'a Ann),
+    }
+    let mut tasks = vec![Task::Visit(p)];
+    let mut output = Vec::new();
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Visit(Process::Null(ann)) => output.push(Process::Null(map_ann(ann)?)),
+            Task::Visit(Process::Action(action, ann, body)) => {
+                tasks.push(Task::Action(map_action(action)?, ann));
+                tasks.push(Task::Visit(body));
+            }
+            Task::Visit(Process::Comb(comb, ann, left, right)) => {
+                tasks.push(Task::Comb(map_comb(comb)?, ann));
+                tasks.push(Task::Visit(right));
+                tasks.push(Task::Visit(left));
+            }
+            Task::Action(action, ann) => {
+                let ann = map_ann(ann)?;
+                let body = output.pop().expect("mapped action body");
+                output.push(Process::Action(action, ann, Box::new(body).into()));
+            }
+            Task::Comb(comb, ann) => {
+                let ann = map_ann(ann)?;
+                let right = output.pop().expect("mapped right branch");
+                let left = output.pop().expect("mapped left branch");
+                output.push(Process::Comb(
+                    comb,
+                    ann,
+                    Box::new(left).into(),
+                    Box::new(right).into(),
+                ));
+            }
         }
     }
+    Ok(output.pop().expect("mapped process"))
 }
 
 /// Infallible form of [`try_map_process`].
@@ -303,12 +474,38 @@ pub fn map_process<Ann, V, Ann2, V2>(
 pub type LProcess<Ann> = Process<Ann, SapicLVar>;
 pub type PlainProcess = LProcess<ProcessParsedAnnotation>;
 
+impl<Ann, V> Process<Ann, V> {
+    /// Release a process spine without recursively dropping its child boxes.
+    /// Payloads retain their own normal destruction behavior. This consuming
+    /// operation also works for transient processes with generic annotations.
+    pub fn drop_iteratively(self) {
+        let mut current = self;
+        let mut pending = Vec::new();
+        loop {
+            match current {
+                Process::Null(_) => {}
+                Process::Action(_, _, body) => {
+                    current = body.into_inner();
+                    continue;
+                }
+                Process::Comb(_, _, left, right) => {
+                    pending.push(right);
+                    current = left.into_inner();
+                    continue;
+                }
+            }
+            let Some(next) = pending.pop() else { return };
+            current = next.into_inner();
+        }
+    }
+}
+
 /// A [`PlainProcess`] together with its `{:?}` rendering.
 ///
 /// A SAPIC-generated rule carries the process it was generated from
 /// ([`crate::rule::RuleAttributes::process`]), and the solver renders a rule's
 /// info into an occurrence path once per node of every candidate system.  The
-/// rendering here is the process's derived
+/// rendering here is the process's structural
 /// `Debug` output, so [`Debug`](std::fmt::Debug) writes those bytes instead of
 /// walking the tree again, and [`Deref`](std::ops::Deref) hands out the process
 /// itself to the wellformedness pass and the printers.
@@ -386,13 +583,13 @@ mod shared_process_order_tests {
         let comb = SharedProcess::new(Process::Comb(
             ProcessCombinator::Parallel,
             ann("a"),
-            Box::new(Process::Null(ann("a"))),
-            Box::new(Process::Null(ann("a"))),
+            Box::new(Process::Null(ann("a"))).into(),
+            Box::new(Process::Null(ann("a"))).into(),
         ));
         let action = SharedProcess::new(Process::Action(
             SapicAction::Rep,
             ann("a"),
-            Box::new(Process::Null(ann("a"))),
+            Box::new(Process::Null(ann("a"))).into(),
         ));
 
         // Haskell derives Ord from declaration order:
@@ -724,6 +921,150 @@ mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
 
+    #[test]
+    fn process_mapping_preserves_payload_and_annotation_order() {
+        use std::cell::RefCell;
+        let input = Process::Comb(
+            ProcessCombinator::Parallel,
+            0usize,
+            Box::new(Process::Action(
+                SapicAction::New(4u32),
+                1,
+                Box::new(Process::Null(2)).into(),
+            ))
+            .into(),
+            Box::new(Process::Null(3)).into(),
+        );
+        let log = RefCell::new(Vec::new());
+        let output = try_map_process(
+            &input,
+            &mut |action| {
+                log.borrow_mut().push("action".to_string());
+                let SapicAction::New(v) = action else {
+                    unreachable!()
+                };
+                Ok::<_, ()>(SapicAction::New(v + 1))
+            },
+            &mut |comb| {
+                log.borrow_mut().push("comb".to_string());
+                Ok(comb.clone())
+            },
+            &mut |ann| {
+                log.borrow_mut().push(format!("ann{ann}"));
+                Ok(ann + 10)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            *log.borrow(),
+            ["comb", "action", "ann2", "ann1", "ann3", "ann0"]
+        );
+        assert_eq!(
+            output,
+            Process::Comb(
+                ProcessCombinator::Parallel,
+                10,
+                Box::new(Process::Action(
+                    SapicAction::New(5),
+                    11,
+                    Box::new(Process::Null(12)).into()
+                ))
+                .into(),
+                Box::new(Process::Null(13)).into(),
+            )
+        );
+    }
+
+    #[test]
+    fn deep_process_mapping_cleans_up_after_errors_and_panics() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        struct Counted(Arc<AtomicUsize>);
+        impl Drop for Counted {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let depth = 100_000;
+                let mut left: Process<usize, ()> = Process::Null(0);
+                for _ in 0..depth {
+                    left = Process::Action(SapicAction::Rep, 0, Box::new(left).into());
+                }
+                let input = Process::Comb(
+                    ProcessCombinator::Parallel,
+                    2,
+                    Box::new(left).into(),
+                    Box::new(Process::Null(1)).into(),
+                );
+                for panic in [false, true] {
+                    let drops = Arc::new(AtomicUsize::new(0));
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        try_map_process(
+                            &input,
+                            &mut |a| Ok(a.clone()),
+                            &mut |c| Ok(c.clone()),
+                            &mut |ann| {
+                                if *ann == 1 {
+                                    assert!(!panic, "test mapping callback panic");
+                                    return Err(());
+                                }
+                                Ok(Counted(drops.clone()))
+                            },
+                        )
+                    }));
+                    if panic {
+                        assert!(outcome.is_err());
+                    } else {
+                        assert!(outcome.unwrap().is_err());
+                    }
+                    assert_eq!(drops.load(Ordering::Relaxed), depth + 1);
+                }
+                let drops = Arc::new(AtomicUsize::new(0));
+                let mapped = map_process(&input, &mut Clone::clone, &mut Clone::clone, &mut |_| {
+                    Counted(drops.clone())
+                });
+                mapped.drop_iteratively();
+                assert_eq!(drops.load(Ordering::Relaxed), depth + 3);
+                input.drop_iteratively();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn deep_process_depth_includes_payload_nesting() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut ann = ProcessParsedAnnotation::empty();
+                let term = tamarin_term::builtin::pair(
+                    tamarin_term::lterm::pub_term("a"),
+                    tamarin_term::lterm::pub_term("b"),
+                );
+                let payload_depth = tamarin_term::term::term_depth(&term);
+                ann.location = Some(term);
+                let mut process: PlainProcess = Process::Null(ann);
+                for _ in 0..100_000 {
+                    process = Process::Action(
+                        SapicAction::Rep,
+                        ProcessParsedAnnotation::empty(),
+                        Box::new(process).into(),
+                    );
+                }
+                assert_eq!(process_depth(&process), 100_001 + payload_depth);
+                process.drop_iteratively();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// The whole point of [`SharedProcess`] is that its `Debug` writes what
     /// the process's own derived `Debug` writes: the occurrence paths the
     /// solver builds from a rule's info embed that rendering, so a different
@@ -733,7 +1074,7 @@ mod tests {
         let inner = Process::Action(
             SapicAction::New(SapicLVar::untyped(LVar::new("x", LSort::Msg, 0))),
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         let shared = SharedProcess::new(inner.clone());
         assert_eq!(format!("{:?}", shared), format!("{:?}", inner));
@@ -879,7 +1220,7 @@ mod tests {
         Process::Action(
             SapicAction::Lock(term),
             ProcessParsedAnnotation::empty(),
-            Box::new(null_proc()),
+            Box::new(null_proc()).into(),
         )
     }
 
@@ -964,9 +1305,10 @@ mod tests {
                 Box::new(Process::Comb(
                     ProcessCombinator::Cond(cond),
                     ProcessParsedAnnotation::empty(),
-                    Box::new(null_proc()),
-                    Box::new(null_proc()),
-                )),
+                    Box::new(null_proc()).into(),
+                    Box::new(null_proc()).into(),
+                ))
+                .into(),
             )
         };
 
@@ -975,5 +1317,54 @@ mod tests {
         assert_eq!(p, proc(eq("x", "y"), eq("a", "b")));
         assert_ne!(p, proc(eq("x", "z"), eq("a", "b")));
         assert_ne!(p, proc(eq("x", "y"), eq("a", "c")));
+    }
+}
+
+#[cfg(test)]
+mod retained_process_drop_tests {
+    use super::*;
+    use crate::theory::{ProcessDef, TranslationElement};
+
+    #[test]
+    fn retained_process_owners_release_deep_trees_on_caller_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let build = || {
+                    let mut p = Process::Null(ProcessParsedAnnotation::default());
+                    for i in 0..100_000 {
+                        p = if i % 8 == 0 {
+                            Process::Comb(
+                                ProcessCombinator::Parallel,
+                                Default::default(),
+                                Box::new(p).into(),
+                                Box::new(Process::Null(Default::default())).into(),
+                            )
+                        } else {
+                            Process::Action(
+                                SapicAction::Rep,
+                                Default::default(),
+                                Box::new(p).into(),
+                            )
+                        };
+                    }
+                    p
+                };
+                drop(TranslationElement::Process(build()));
+                drop(TranslationElement::DiffEquivLemma(build()));
+                drop(TranslationElement::EquivLemma(build(), build()));
+                drop(ProcessDef {
+                    name: "P".into(),
+                    vars: None,
+                    body: build(),
+                });
+                let shared = std::sync::Arc::new(SharedProcess::new(build()));
+                let other = shared.clone();
+                drop(shared);
+                drop(other);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

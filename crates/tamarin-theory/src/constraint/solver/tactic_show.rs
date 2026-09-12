@@ -74,22 +74,16 @@ pub fn show_fact_tag(t: &FactTag) -> String {
 /// a guarded formula.  Mirrors HS `guardFactTags` (Guarded.hs:167-174),
 /// which folds over the WHOLE structure (not just the top level).
 fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
-    match g {
-        Guarded::Atom(_) => {}
-        Guarded::Disj(xs) | Guarded::Conj(xs) => {
-            for x in xs.iter() {
-                guard_fact_tag_names(x, out);
-            }
-        }
-        Guarded::GGuarded { guards, body, .. } => {
+    let _: std::ops::ControlFlow<()> = crate::guarded::visit_guarded(g, |_, g| {
+        if let Guarded::GGuarded { guards, .. } = g {
             for a in guards.iter() {
                 if let ProtoAtom::Action(_, f) = a {
                     out.push(crate::fact::fact_tag_name(&f.tag));
                 }
             }
-            guard_fact_tag_names(body, out);
         }
-    }
+        std::ops::ControlFlow::Continue(true)
+    });
 }
 
 /// HS `getFormulaTerms` (Tactics.hs:203-205): the fact terms of the single

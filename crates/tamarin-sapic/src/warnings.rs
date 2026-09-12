@@ -93,7 +93,7 @@ mod tests {
         Process::Action(
             SapicAction::New(v),
             ProcessParsedAnnotation::empty(),
-            Box::new(body),
+            Box::new(body).into(),
         )
     }
 

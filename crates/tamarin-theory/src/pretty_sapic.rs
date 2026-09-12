@@ -387,7 +387,7 @@ mod tests {
         let p = Process::Action(
             SapicAction::New(sv("x", 1, Some("lol"))),
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         assert_eq!(pretty_sapic_top_level(&p), "new x.1:lol;");
     }
@@ -408,7 +408,7 @@ mod tests {
                 msg: ffx,
             },
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         assert_eq!(pretty_sapic_top_level(&p), "out(f(f(x.1:lol)));");
     }
@@ -423,7 +423,7 @@ mod tests {
         let p = Process::Action(
             SapicAction::Event(fact),
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         assert_eq!(pretty_sapic_top_level(&p), "event Test( x.1:lol );");
     }
@@ -471,8 +471,8 @@ mod tests {
         let proc: PlainProcess = Process::Comb(
             ProcessCombinator::Cond(crate::formula::sapic_from_parser(&f, &sig).unwrap()),
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         pretty_sapic_top_level(&proc)
     }
@@ -573,7 +573,7 @@ mod tests {
                 match_vars: std::collections::BTreeSet::new(),
             },
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         pretty_sapic_top_level(&proc)
     }
@@ -638,7 +638,7 @@ mod tests {
                 match_vars: std::collections::BTreeSet::new(),
             },
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         let got = pretty_sapic_top_level(&proc);
         assert_eq!(
@@ -704,7 +704,7 @@ mod tests {
         let p: PlainProcess = Process::Action(
             SapicAction::ChOut { chan: None, msg },
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         let _html = hpj::HtmlDocGuard::enable();
         let attr = pretty_sapic_top_level_attr(&p);

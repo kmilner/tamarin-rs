@@ -744,7 +744,7 @@ fn mk_universal(vars: Vec<(String, LSort)>, guards: &[(&str, &str)]) -> Guarded 
         qua: Quantifier::All,
         vars: vars.into(),
         guards: guards.iter().map(|(a, b)| mk_gatom_eq(a, b)).collect(),
-        body: std::sync::Arc::new(mk_atom_eq("p", "q")),
+        body: crate::guarded::GuardedBody::new(mk_atom_eq("p", "q")),
     }
 }
 
@@ -1493,7 +1493,6 @@ fn open_guarded_draws_the_binder_names_the_printer_shows() {
 /// back sorted.
 #[test]
 fn open_guarded_sorts_a_commutative_argument_pair() {
-    use std::sync::Arc;
     use tamarin_utils::fresh::PreciseFreshState;
     let a = LVar::new("a", LSort::Msg, 0);
     // `em(Bound 0, a)` with `x` the binder: `Ord BVar` puts `Bound` first
@@ -1507,7 +1506,7 @@ fn open_guarded_sorts_a_commutative_argument_pair() {
         qua: Quantifier::Ex,
         vars: vec![("x".to_string(), LSort::Msg)].into(),
         guards: vec![ProtoAtom::EqE(em, bpub("z"))].into(),
-        body: Arc::new(gtrue()),
+        body: crate::guarded::GuardedBody::new(gtrue()),
     };
 
     let mut fresh = PreciseFreshState::nothing_used();
@@ -1594,7 +1593,7 @@ fn bound_leaves_are_skipped() {
             hf_leaf("y", 4, LSort::Msg),
         )]
         .into(),
-        body: std::sync::Arc::new(gtrue()),
+        body: crate::guarded::GuardedBody::new(gtrue()),
     };
 
     assert_eq!(hf_names(&g), vec!["y.4"]);
@@ -1624,7 +1623,7 @@ fn guards_visited_before_body() {
             hf_leaf("h", 2, LSort::Msg),
         )]
         .into(),
-        body: std::sync::Arc::new(Guarded::Conj(
+        body: crate::guarded::GuardedBody::new(Guarded::Conj(
             vec![Guarded::Atom(ProtoAtom::Last(hf_leaf("b", 3, LSort::Node)))].into(),
         )),
     };

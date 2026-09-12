@@ -38,19 +38,19 @@ fn pub_name_is(t: &SapicTerm, id: &str) -> bool {
 
 /// `reliableChannelInit anP (initrules, initTx)` (ReliableChannelTranslation.hs:27-35):
 /// prepend the `MessageIDRule`.
-pub(crate) fn reliable_channel_init(
-    an_proc: &AProc,
-    init_rules: Vec<crate::facts::AnnotatedRule<ProcessAnnotation<LVar>>>,
+pub(crate) fn reliable_channel_init<'a>(
+    an_proc: &'a AProc,
+    init_rules: Vec<crate::facts::AnnotatedRule<'a, ProcessAnnotation<LVar>>>,
     init_tx: BTreeSet<LVar>,
 ) -> (
-    Vec<crate::facts::AnnotatedRule<ProcessAnnotation<LVar>>>,
+    Vec<crate::facts::AnnotatedRule<'a, ProcessAnnotation<LVar>>>,
     BTreeSet<LVar>,
 ) {
     use crate::facts::{AnnotatedRule, RulePosition, SpecialPosition};
     let empty: ProcessPosition = Vec::new();
     let message_id_rule = AnnotatedRule {
         process_name: Some("MessageIDRule".to_string()),
-        process: an_proc.clone(),
+        process: an_proc,
         position: RulePosition::Special(SpecialPosition::NoPosition),
         prems: vec![TransFact::Fr(crate::facts::var_mid(&empty))],
         acts: vec![],

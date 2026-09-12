@@ -41,7 +41,7 @@ use tamarin_term::lterm::{fresh_lvar, BVar, LNTerm, LSort, LVar, Name};
 use tamarin_term::macro_expand::{apply_macros, ln_macros_to_bn_macros, LNMacro};
 use tamarin_term::maude_sig::MaudeSig;
 use tamarin_term::subst::{apply_bvar, apply_bvterm, Subst};
-use tamarin_term::term::{map_lits, Term};
+use tamarin_term::term::map_lits;
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 use tamarin_utils::fresh::PreciseFreshState;
 
@@ -67,18 +67,219 @@ pub enum Quantifier {
 /// - `H`: name/sort hint stored at each binder
 /// - `C`: constant type for terms
 /// - `V`: free-variable type for terms
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ProtoFormula<S, H, C, V> {
     Atom(ProtoAtom<S, VTerm<C, BVar<V>>>),
     /// `true`/`false`.
     Tf(bool),
-    Not(Box<ProtoFormula<S, H, C, V>>),
-    Conn(
-        Connective,
-        Box<ProtoFormula<S, H, C, V>>,
-        Box<ProtoFormula<S, H, C, V>>,
-    ),
-    Qua(Quantifier, H, Box<ProtoFormula<S, H, C, V>>),
+    Not(FormulaBox<S, H, C, V>),
+    Conn(Connective, FormulaBox<S, H, C, V>, FormulaBox<S, H, C, V>),
+    Qua(Quantifier, H, FormulaBox<S, H, C, V>),
+}
+
+impl<S: Clone, H: Clone, C: Clone, V: Clone> Clone for ProtoFormula<S, H, C, V> {
+    fn clone(&self) -> Self {
+        traverse_formula_atom(self, &mut |a| {
+            Ok::<_, std::convert::Infallible>(Self::Atom(a.clone()))
+        })
+        .unwrap()
+    }
+}
+
+fn compare_formula<S, H, C, V>(
+    left: &ProtoFormula<S, H, C, V>,
+    right: &ProtoFormula<S, H, C, V>,
+    mut atom: impl FnMut(
+        &ProtoAtom<S, VTerm<C, BVar<V>>>,
+        &ProtoAtom<S, VTerm<C, BVar<V>>>,
+    ) -> Option<std::cmp::Ordering>,
+    mut hint: impl FnMut(&H, &H) -> Option<std::cmp::Ordering>,
+) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering::Equal;
+    fn tag<S, H, C, V>(f: &ProtoFormula<S, H, C, V>) -> u8 {
+        match f {
+            ProtoFormula::Atom(_) => 0,
+            ProtoFormula::Tf(_) => 1,
+            ProtoFormula::Not(_) => 2,
+            ProtoFormula::Conn(..) => 3,
+            ProtoFormula::Qua(..) => 4,
+        }
+    }
+    let mut current = (left, right);
+    let mut pending = Vec::new();
+    loop {
+        let (l, r) = current;
+        let order = tag(l).cmp(&tag(r));
+        if order != Equal {
+            return Some(order);
+        }
+        let order = match (l, r) {
+            (ProtoFormula::Atom(a), ProtoFormula::Atom(b)) => atom(a, b),
+            (ProtoFormula::Tf(a), ProtoFormula::Tf(b)) => Some(a.cmp(b)),
+            (ProtoFormula::Not(a), ProtoFormula::Not(b)) => {
+                current = (a, b);
+                continue;
+            }
+            (ProtoFormula::Conn(c, a, b), ProtoFormula::Conn(d, x, y)) => {
+                if c != d {
+                    return Some(c.cmp(d));
+                }
+                pending.push((&**b, &**y));
+                current = (a, x);
+                continue;
+            }
+            (ProtoFormula::Qua(q, h, a), ProtoFormula::Qua(r, j, b)) => {
+                if q != r {
+                    return Some(q.cmp(r));
+                }
+                let order = hint(h, j);
+                if order != Some(Equal) {
+                    return order;
+                }
+                current = (a, b);
+                continue;
+            }
+            _ => unreachable!(),
+        };
+        if order != Some(Equal) {
+            return order;
+        }
+        let Some(next) = pending.pop() else {
+            return Some(Equal);
+        };
+        current = next;
+    }
+}
+impl<S: PartialEq, H: PartialEq, C: PartialEq, V: PartialEq> PartialEq
+    for ProtoFormula<S, H, C, V>
+{
+    fn eq(&self, other: &Self) -> bool {
+        use std::cmp::Ordering::{Equal, Less};
+        compare_formula(
+            self,
+            other,
+            |a, b| Some(if a == b { Equal } else { Less }),
+            |a, b| Some(if a == b { Equal } else { Less }),
+        ) == Some(Equal)
+    }
+}
+impl<S: Eq, H: Eq, C: Eq, V: Eq> Eq for ProtoFormula<S, H, C, V> {}
+impl<S: PartialOrd, H: PartialOrd, C: PartialOrd, V: PartialOrd> PartialOrd
+    for ProtoFormula<S, H, C, V>
+{
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        compare_formula(
+            self,
+            other,
+            PartialOrd::partial_cmp,
+            PartialOrd::partial_cmp,
+        )
+    }
+}
+impl<S: Ord, H: Ord, C: Ord, V: Ord> Ord for ProtoFormula<S, H, C, V> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        compare_formula(self, other, |a, b| Some(a.cmp(b)), |a, b| Some(a.cmp(b))).unwrap()
+    }
+}
+impl<S: std::fmt::Debug, H: std::fmt::Debug, C: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug
+    for ProtoFormula<S, H, C, V>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if f.alternate() {
+            return tamarin_utils::stack::ensure_sufficient_stack(|| match self {
+                Self::Atom(a) => f.debug_tuple("Atom").field(a).finish(),
+                Self::Tf(b) => f.debug_tuple("Tf").field(b).finish(),
+                Self::Not(p) => f.debug_tuple("Not").field(p).finish(),
+                Self::Conn(c, p, q) => f.debug_tuple("Conn").field(c).field(p).field(q).finish(),
+                Self::Qua(q, h, p) => f.debug_tuple("Qua").field(q).field(h).field(p).finish(),
+            });
+        }
+        enum Task<'a, S, H, C, V> {
+            Node(&'a ProtoFormula<S, H, C, V>),
+            Text(&'static str),
+        }
+        let mut pending = vec![Task::Node(self)];
+        while let Some(task) = pending.pop() {
+            match task {
+                Task::Text(s) => f.write_str(s)?,
+                Task::Node(node) => match node {
+                    Self::Atom(a) => {
+                        f.debug_tuple("Atom").field(a).finish()?;
+                    }
+                    Self::Tf(b) => {
+                        f.debug_tuple("Tf").field(b).finish()?;
+                    }
+                    Self::Not(p) => {
+                        f.write_str("Not(")?;
+                        pending.push(Task::Text(")"));
+                        pending.push(Task::Node(p));
+                    }
+                    Self::Conn(c, p, q) => {
+                        f.write_str("Conn(")?;
+                        std::fmt::Debug::fmt(c, f)?;
+                        f.write_str(", ")?;
+                        pending.push(Task::Text(")"));
+                        pending.push(Task::Node(q));
+                        pending.push(Task::Text(", "));
+                        pending.push(Task::Node(p));
+                    }
+                    Self::Qua(q, h, p) => {
+                        f.write_str("Qua(")?;
+                        std::fmt::Debug::fmt(q, f)?;
+                        f.write_str(", ")?;
+                        std::fmt::Debug::fmt(h, f)?;
+                        f.write_str(", ")?;
+                        pending.push(Task::Text(")"));
+                        pending.push(Task::Node(p));
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+}
+
+/// An owned formula child with iterative destruction. Its allocation is the
+/// same single Box used by the formula tree; the Option permits safe extraction.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FormulaBox<S, H, C, V>(Option<Box<ProtoFormula<S, H, C, V>>>);
+
+impl<S: std::fmt::Debug, H: std::fmt::Debug, C: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug
+    for FormulaBox<S, H, C, V>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&**self, f)
+    }
+}
+impl<S, H, C, V> AsRef<ProtoFormula<S, H, C, V>> for FormulaBox<S, H, C, V> {
+    fn as_ref(&self) -> &ProtoFormula<S, H, C, V> {
+        self
+    }
+}
+impl<S, H, C, V> From<Box<ProtoFormula<S, H, C, V>>> for FormulaBox<S, H, C, V> {
+    fn from(value: Box<ProtoFormula<S, H, C, V>>) -> Self {
+        Self(Some(value))
+    }
+}
+impl<S, H, C, V> FormulaBox<S, H, C, V> {
+    pub fn into_inner(mut self) -> ProtoFormula<S, H, C, V> {
+        *self.0.take().unwrap()
+    }
+    fn new(formula: ProtoFormula<S, H, C, V>) -> Self {
+        Self(Some(Box::new(formula)))
+    }
+}
+impl<S, H, C, V> std::ops::Deref for FormulaBox<S, H, C, V> {
+    type Target = ProtoFormula<S, H, C, V>;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().unwrap()
+    }
+}
+impl<S, H, C, V> Drop for FormulaBox<S, H, C, V> {
+    fn drop(&mut self) {
+        if let Some(formula) = self.0.take() {
+            (*formula).drop_iteratively();
+        }
+    }
 }
 
 /// `Formula` after parsing: no syntactic sugar.
@@ -104,6 +305,29 @@ pub type SyntacticNFormula<V> =
     ProtoFormula<SyntacticSugar<VTerm<Name, BVar<V>>>, (String, LSort), Name, V>;
 
 impl<S, H, C, V> ProtoFormula<S, H, C, V> {
+    /// Release the formula spine without recursively dropping child boxes.
+    /// Atom and binder payloads retain their normal destruction behavior.
+    pub fn drop_iteratively(self) {
+        let mut current = self;
+        let mut pending = Vec::new();
+        loop {
+            match current {
+                ProtoFormula::Not(body) | ProtoFormula::Qua(_, _, body) => {
+                    current = body.into_inner();
+                    continue;
+                }
+                ProtoFormula::Conn(_, left, right) => {
+                    pending.push(right);
+                    current = left.into_inner();
+                    continue;
+                }
+                _ => {}
+            }
+            let Some(next) = pending.pop() else { return };
+            current = next.into_inner();
+        }
+    }
+
     pub fn ltrue() -> Self {
         ProtoFormula::Tf(true)
     }
@@ -112,27 +336,43 @@ impl<S, H, C, V> ProtoFormula<S, H, C, V> {
     }
 
     pub fn not(self) -> Self {
-        ProtoFormula::Not(Box::new(self))
+        ProtoFormula::Not(Box::new(self).into())
     }
 
     pub fn and(self, other: Self) -> Self {
-        ProtoFormula::Conn(Connective::And, Box::new(self), Box::new(other))
+        ProtoFormula::Conn(
+            Connective::And,
+            Box::new(self).into(),
+            Box::new(other).into(),
+        )
     }
     pub fn or(self, other: Self) -> Self {
-        ProtoFormula::Conn(Connective::Or, Box::new(self), Box::new(other))
+        ProtoFormula::Conn(
+            Connective::Or,
+            Box::new(self).into(),
+            Box::new(other).into(),
+        )
     }
     pub fn implies(self, other: Self) -> Self {
-        ProtoFormula::Conn(Connective::Imp, Box::new(self), Box::new(other))
+        ProtoFormula::Conn(
+            Connective::Imp,
+            Box::new(self).into(),
+            Box::new(other).into(),
+        )
     }
     pub fn iff(self, other: Self) -> Self {
-        ProtoFormula::Conn(Connective::Iff, Box::new(self), Box::new(other))
+        ProtoFormula::Conn(
+            Connective::Iff,
+            Box::new(self).into(),
+            Box::new(other).into(),
+        )
     }
 
     pub fn for_all(hint: H, body: Self) -> Self {
-        ProtoFormula::Qua(Quantifier::All, hint, Box::new(body))
+        ProtoFormula::Qua(Quantifier::All, hint, Box::new(body).into())
     }
     pub fn exists(hint: H, body: Self) -> Self {
-        ProtoFormula::Qua(Quantifier::Ex, hint, Box::new(body))
+        ProtoFormula::Qua(Quantifier::Ex, hint, Box::new(body).into())
     }
 }
 
@@ -187,15 +427,11 @@ where
 /// foldMap $ foldMap (: [])` (Theory/Sapic/Term.hs:131-132), whose inner
 /// `foldMap` is the `Foldable BVar` instance and so skips a bound index.
 fn for_each_free_term_var<C, V>(t: &VTerm<C, BVar<V>>, f: &mut dyn FnMut(&V)) {
-    match t {
-        Term::Lit(Lit::Var(BVar::Free(v))) => f(v),
-        Term::Lit(_) => {}
-        Term::App(_, args) => {
-            for a in args.iter() {
-                for_each_free_term_var(a, f);
-            }
+    t.for_each_lit(|literal| {
+        if let Lit::Var(BVar::Free(v)) = literal {
+            f(v);
         }
-    }
+    });
 }
 
 /// Every term of every atom, in the order the `Foldable (ProtoFormula syn s c)`
@@ -215,15 +451,64 @@ pub fn for_each_formula_atom<'a, S, H, C, V>(
     fm: &'a ProtoFormula<S, H, C, V>,
     f: &mut impl FnMut(&'a ProtoAtom<S, VTerm<C, BVar<V>>>),
 ) {
-    match fm {
-        ProtoFormula::Atom(a) => f(a),
-        ProtoFormula::Tf(_) => {}
-        ProtoFormula::Not(p) => for_each_formula_atom(p, f),
-        ProtoFormula::Conn(_, p, q) => {
-            for_each_formula_atom(p, f);
-            for_each_formula_atom(q, f);
+    let mut current = fm;
+    let mut pending = Vec::new();
+    loop {
+        match current {
+            ProtoFormula::Atom(a) => f(a),
+            ProtoFormula::Tf(_) => {}
+            ProtoFormula::Not(body) | ProtoFormula::Qua(_, _, body) => {
+                current = body;
+                continue;
+            }
+            ProtoFormula::Conn(_, left, right) => {
+                pending.push(&**right);
+                current = left;
+                continue;
+            }
         }
-        ProtoFormula::Qua(_, _, p) => for_each_formula_atom(p, f),
+        let Some(next) = pending.pop() else {
+            return;
+        };
+        current = next;
+    }
+}
+
+/// Maximum combined formula-and-term depth on any root-to-leaf path.
+#[cfg(test)]
+pub(crate) fn formula_depth<S, H, C, V>(fm: &ProtoFormula<S, H, C, V>) -> usize
+where
+    S: SugarTerms<VTerm<C, BVar<V>>>,
+{
+    let mut current = (fm, 1usize);
+    let mut pending = Vec::new();
+    let mut maximum = 1;
+    loop {
+        let (node, depth) = current;
+        match node {
+            ProtoFormula::Atom(atom) => {
+                maximum = maximum.max(depth);
+                fold_atom(atom, &mut |term| {
+                    maximum =
+                        maximum.max(depth.saturating_add(tamarin_term::term::term_depth(term)));
+                });
+            }
+            ProtoFormula::Tf(_) => maximum = maximum.max(depth),
+            ProtoFormula::Not(body) | ProtoFormula::Qua(_, _, body) => {
+                current = (body, depth.saturating_add(1));
+                continue;
+            }
+            ProtoFormula::Conn(_, left, right) => {
+                let child_depth = depth.saturating_add(1);
+                pending.push((&**right, child_depth));
+                current = (left, child_depth);
+                continue;
+            }
+        }
+        let Some(next) = pending.pop() else {
+            return maximum;
+        };
+        current = next;
     }
 }
 
@@ -253,6 +538,13 @@ pub(crate) fn formula_terms<S, H, C, V>(fm: &ProtoFormula<S, H, C, V>) -> Vec<&V
     out
 }
 
+enum FormulaFrame<I, O, H> {
+    Not,
+    Qua(Quantifier, H),
+    Left(Connective, I),
+    Right(Connective, O),
+}
+
 /// HS `traverseFormulaAtom` (Theory/Model/Formula.hs:212-219#traverseFormulaAtom):
 /// rebuild the formula with every atom replaced by the WHOLE FORMULA the
 /// callback returns, under an effect — `Result` here, the `Either FactTag`
@@ -269,19 +561,46 @@ where
     H: Clone,
 {
     match fm {
-        ProtoFormula::Atom(a) => f(a),
-        ProtoFormula::Tf(b) => Ok(ProtoFormula::Tf(*b)),
-        ProtoFormula::Not(p) => Ok(ProtoFormula::Not(Box::new(traverse_formula_atom(p, f)?))),
-        ProtoFormula::Conn(c, p, q) => {
-            let l = traverse_formula_atom(p, &mut *f)?;
-            let r = traverse_formula_atom(q, f)?;
-            Ok(ProtoFormula::Conn(*c, Box::new(l), Box::new(r)))
+        ProtoFormula::Atom(a) => return f(a),
+        ProtoFormula::Tf(b) => return Ok(ProtoFormula::Tf(*b)),
+        _ => {}
+    }
+    let mut current = fm;
+    let mut pending = Vec::new();
+    loop {
+        let mut result = FormulaBox::new(match current {
+            ProtoFormula::Atom(a) => f(a)?,
+            ProtoFormula::Tf(b) => ProtoFormula::Tf(*b),
+            ProtoFormula::Not(body) => {
+                pending.push(FormulaFrame::Not);
+                current = body;
+                continue;
+            }
+            ProtoFormula::Qua(q, h, body) => {
+                // The recursive implementation clones the hint before the body.
+                pending.push(FormulaFrame::Qua(*q, h.clone()));
+                current = body;
+                continue;
+            }
+            ProtoFormula::Conn(c, left, right) => {
+                pending.push(FormulaFrame::Left(*c, &**right));
+                current = left;
+                continue;
+            }
+        });
+        loop {
+            result = FormulaBox::new(match pending.pop() {
+                None => return Ok(result.into_inner()),
+                Some(FormulaFrame::Not) => ProtoFormula::Not(result),
+                Some(FormulaFrame::Qua(q, h)) => ProtoFormula::Qua(q, h, result),
+                Some(FormulaFrame::Left(c, right)) => {
+                    pending.push(FormulaFrame::Right(c, result));
+                    current = right;
+                    break;
+                }
+                Some(FormulaFrame::Right(c, left)) => ProtoFormula::Conn(c, left, result),
+            });
         }
-        ProtoFormula::Qua(q, h, p) => Ok(ProtoFormula::Qua(
-            *q,
-            h.clone(),
-            Box::new(traverse_formula_atom(p, f)?),
-        )),
     }
 }
 
@@ -295,24 +614,47 @@ pub fn map_atoms<S, S2, H, C, C2, V, V2>(
     fm: ProtoFormula<S, H, C, V>,
     f: &mut dyn FnMut(u64, &ProtoAtom<S, VTerm<C, BVar<V>>>) -> ProtoAtom<S2, VTerm<C2, BVar<V2>>>,
 ) -> ProtoFormula<S2, H, C2, V2> {
-    map_atoms_at(fm, f, 0)
-}
-
-fn map_atoms_at<S, S2, H, C, C2, V, V2>(
-    fm: ProtoFormula<S, H, C, V>,
-    f: &mut dyn FnMut(u64, &ProtoAtom<S, VTerm<C, BVar<V>>>) -> ProtoAtom<S2, VTerm<C2, BVar<V2>>>,
-    i: u64,
-) -> ProtoFormula<S2, H, C2, V2> {
-    match fm {
-        ProtoFormula::Atom(a) => ProtoFormula::Atom(f(i, &a)),
-        ProtoFormula::Tf(b) => ProtoFormula::Tf(b),
-        ProtoFormula::Not(p) => ProtoFormula::Not(Box::new(map_atoms_at(*p, f, i))),
-        ProtoFormula::Conn(c, p, q) => {
-            let l = map_atoms_at(*p, &mut *f, i);
-            let r = map_atoms_at(*q, &mut *f, i);
-            ProtoFormula::Conn(c, Box::new(l), Box::new(r))
+    let fm = match fm {
+        ProtoFormula::Atom(a) => return ProtoFormula::Atom(f(0, &a)),
+        ProtoFormula::Tf(b) => return ProtoFormula::Tf(b),
+        other => other,
+    };
+    let mut current = (FormulaBox::new(fm), 0u64);
+    let mut pending = Vec::new();
+    loop {
+        let (input, depth) = current;
+        let mut result = FormulaBox::new(match input.into_inner() {
+            ProtoFormula::Atom(a) => ProtoFormula::Atom(f(depth, &a)),
+            ProtoFormula::Tf(b) => ProtoFormula::Tf(b),
+            ProtoFormula::Not(body) => {
+                pending.push(FormulaFrame::Not);
+                current = (body, depth);
+                continue;
+            }
+            ProtoFormula::Qua(q, h, body) => {
+                pending.push(FormulaFrame::Qua(q, h));
+                current = (body, depth + 1);
+                continue;
+            }
+            ProtoFormula::Conn(c, left, right) => {
+                pending.push(FormulaFrame::Left(c, (right, depth)));
+                current = (left, depth);
+                continue;
+            }
+        });
+        loop {
+            result = FormulaBox::new(match pending.pop() {
+                None => return result.into_inner(),
+                Some(FormulaFrame::Not) => ProtoFormula::Not(result),
+                Some(FormulaFrame::Qua(q, h)) => ProtoFormula::Qua(q, h, result),
+                Some(FormulaFrame::Left(c, right)) => {
+                    pending.push(FormulaFrame::Right(c, result));
+                    current = right;
+                    break;
+                }
+                Some(FormulaFrame::Right(c, left)) => ProtoFormula::Conn(c, left, result),
+            });
         }
-        ProtoFormula::Qua(q, h, p) => ProtoFormula::Qua(q, h, Box::new(map_atoms_at(*p, f, i + 1))),
     }
 }
 
@@ -463,20 +805,11 @@ where
 /// HS `toLNFormula` (Theory/Model/Formula.hs:369-373): strip the sugar with
 /// `toAtom` (Atom.hs:200-206); `None` if any atom carries sugar.
 pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
-    match fm {
-        ProtoFormula::Atom(ProtoAtom::Syntactic(_)) => None,
-        ProtoFormula::Atom(a) => Some(ProtoFormula::Atom(to_atom(a.clone()))),
-        ProtoFormula::Tf(b) => Some(ProtoFormula::Tf(*b)),
-        ProtoFormula::Not(p) => Some(ProtoFormula::Not(Box::new(to_lnformula(p)?))),
-        ProtoFormula::Conn(c, p, q) => Some(ProtoFormula::Conn(
-            *c,
-            Box::new(to_lnformula(p)?),
-            Box::new(to_lnformula(q)?),
-        )),
-        ProtoFormula::Qua(q, h, p) => {
-            Some(ProtoFormula::Qua(*q, h.clone(), Box::new(to_lnformula(p)?)))
-        }
-    }
+    traverse_formula_atom(fm, &mut |a| match a {
+        ProtoAtom::Syntactic(_) => Err(()),
+        _ => Ok(ProtoFormula::Atom(to_atom(a.clone()))),
+    })
+    .ok()
 }
 
 // =============================================================================
@@ -622,33 +955,64 @@ pub fn from_parser_with<F: FormulaVars>(
     f: &p::Formula,
     sig: &MaudeSig,
 ) -> Result<SyntacticNFormula<F::Var>, ElabError> {
-    match f {
-        p::Formula::True => Ok(ProtoFormula::Tf(true)),
-        p::Formula::False => Ok(ProtoFormula::Tf(false)),
-        p::Formula::Atom(a) => Ok(ProtoFormula::Atom(atom_from_parser::<F>(a, sig)?)),
-        p::Formula::Not(q) => Ok(from_parser_with::<F>(q, sig)?.not()),
-        p::Formula::And(l, r) => {
-            Ok(from_parser_with::<F>(l, sig)?.and(from_parser_with::<F>(r, sig)?))
+    let mut current = f;
+    let mut pending = Vec::new();
+    loop {
+        let mut result = FormulaBox::new(match current {
+            p::Formula::True => ProtoFormula::Tf(true),
+            p::Formula::False => ProtoFormula::Tf(false),
+            p::Formula::Atom(a) => ProtoFormula::Atom(atom_from_parser::<F>(a, sig)?),
+            p::Formula::Not(body) => {
+                pending.push(FormulaFrame::Not);
+                current = body;
+                continue;
+            }
+            p::Formula::And(l, r)
+            | p::Formula::Or(l, r)
+            | p::Formula::Implies(l, r)
+            | p::Formula::Iff(l, r) => {
+                let c = match current {
+                    p::Formula::And(..) => Connective::And,
+                    p::Formula::Or(..) => Connective::Or,
+                    p::Formula::Implies(..) => Connective::Imp,
+                    _ => Connective::Iff,
+                };
+                pending.push(FormulaFrame::Left(c, &**r));
+                current = l;
+                continue;
+            }
+            p::Formula::Forall(vs, body) | p::Formula::Exists(vs, body) => {
+                let q = if matches!(current, p::Formula::Forall(..)) {
+                    Quantifier::All
+                } else {
+                    Quantifier::Ex
+                };
+                pending.push(FormulaFrame::Qua(q, vs.as_slice()));
+                current = body;
+                continue;
+            }
+        });
+        loop {
+            result = FormulaBox::new(match pending.pop() {
+                None => return Ok(result.into_inner()),
+                Some(FormulaFrame::Not) => ProtoFormula::Not(result),
+                Some(FormulaFrame::Qua(q, vs)) => close_binders::<F>(
+                    if q == Quantifier::All {
+                        for_all_var
+                    } else {
+                        exists_var
+                    },
+                    vs,
+                    result.into_inner(),
+                ),
+                Some(FormulaFrame::Left(c, r)) => {
+                    pending.push(FormulaFrame::Right(c, result));
+                    current = r;
+                    break;
+                }
+                Some(FormulaFrame::Right(c, l)) => ProtoFormula::Conn(c, l, result),
+            });
         }
-        p::Formula::Or(l, r) => {
-            Ok(from_parser_with::<F>(l, sig)?.or(from_parser_with::<F>(r, sig)?))
-        }
-        p::Formula::Implies(l, r) => {
-            Ok(from_parser_with::<F>(l, sig)?.implies(from_parser_with::<F>(r, sig)?))
-        }
-        p::Formula::Iff(l, r) => {
-            Ok(from_parser_with::<F>(l, sig)?.iff(from_parser_with::<F>(r, sig)?))
-        }
-        p::Formula::Forall(vs, body) => Ok(close_binders::<F>(
-            for_all_var,
-            vs,
-            from_parser_with::<F>(body, sig)?,
-        )),
-        p::Formula::Exists(vs, body) => Ok(close_binders::<F>(
-            exists_var,
-            vs,
-            from_parser_with::<F>(body, sig)?,
-        )),
     }
 }
 
@@ -868,6 +1232,238 @@ mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
 
+    #[test]
+    fn deep_read_only_formula_walks_preserve_order_and_combined_depth() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                type F = ProtoFormula<Unit2, (String, LSort), u32, u32>;
+                let mut term = var_term(BVar::Free(0));
+                for _ in 0..100_000 {
+                    term = tamarin_term::term::f_app_list(vec![term, var_term(BVar::Bound(0))]);
+                }
+                let mut formula: F = ProtoFormula::Atom(ProtoAtom::Last(term));
+                for i in 1..=100_000 {
+                    formula = match i % 3 {
+                        0 => formula.not(),
+                        1 => ProtoFormula::for_all((String::new(), LSort::Msg), formula),
+                        _ => formula
+                            .and(ProtoFormula::Atom(ProtoAtom::Last(var_term(BVar::Free(i))))),
+                    };
+                }
+                assert_eq!(formula_depth(&formula), 200_002);
+                let want: Vec<_> = std::iter::once(0)
+                    .chain((1..=100_000).filter(|i| i % 3 == 2))
+                    .collect();
+                assert_eq!(formula_frees_list(&formula), want);
+                let mut atoms = 0;
+                for_each_formula_atom(&formula, &mut |_| atoms += 1);
+                assert_eq!(atoms, want.len());
+                // Unwinding a callback only releases borrowed worklist entries.
+                assert!(std::panic::catch_unwind(|| {
+                    for_each_formula_atom(&formula, &mut |_| panic!("stop at first atom"));
+                })
+                .is_err());
+                formula.drop_iteratively();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn read_only_formula_walks_match_recursive_reference() {
+        type F = ProtoFormula<Unit2, (), u32, u32>;
+        fn reference<'a>(
+            fm: &'a F,
+            atoms: &mut Vec<&'a ProtoAtom<Unit2, VTerm<u32, BVar<u32>>>>,
+        ) -> usize {
+            match fm {
+                ProtoFormula::Atom(atom) => {
+                    atoms.push(atom);
+                    let mut depth = 0;
+                    fold_atom(atom, &mut |t| {
+                        depth = depth.max(tamarin_term::term::term_depth(t))
+                    });
+                    1 + depth
+                }
+                ProtoFormula::Tf(_) => 1,
+                ProtoFormula::Not(body) | ProtoFormula::Qua(_, _, body) => {
+                    1 + reference(body, atoms)
+                }
+                ProtoFormula::Conn(_, left, right) => {
+                    let l = reference(left, atoms);
+                    1 + l.max(reference(right, atoms))
+                }
+            }
+        }
+        let atom = || ProtoFormula::Atom(ProtoAtom::Last(var_term(BVar::Free(4))));
+        let cases: [F; 5] = [
+            ProtoFormula::Tf(false),
+            ProtoFormula::Atom(ProtoAtom::Syntactic(Unit2)),
+            atom().not().and(ProtoFormula::Tf(true).not().not().not()),
+            ProtoFormula::exists((), atom().or(atom().not())),
+            atom().and(atom()).iff(atom().implies(atom())),
+        ];
+        for formula in cases {
+            let mut expected = Vec::new();
+            assert_eq!(formula_depth(&formula), reference(&formula, &mut expected));
+            let mut actual = Vec::new();
+            for_each_formula_atom(&formula, &mut |a| actual.push(a));
+            assert_eq!(actual.len(), expected.len());
+            assert!(actual
+                .iter()
+                .zip(expected)
+                .all(|(a, b)| std::ptr::eq(*a, b)));
+        }
+    }
+
+    #[test]
+    fn deep_formula_rebuilding_and_failure_cleanup_use_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                type F = ProtoFormula<Unit2, u64, u32, u32>;
+                fn atom(n: u32) -> F {
+                    ProtoFormula::Atom(ProtoAtom::Last(var_term(BVar::Free(n))))
+                }
+                fn deep() -> F {
+                    let mut fm = atom(0);
+                    for i in 0..100_000 {
+                        fm = ProtoFormula::for_all(i, fm.not());
+                    }
+                    fm
+                }
+                let input = deep();
+                let copied = traverse_formula_atom(&input, &mut |a| {
+                    Ok::<F, ()>(ProtoFormula::Atom(a.clone()))
+                })
+                .unwrap();
+                assert_eq!(formula_depth(&copied), 200_002);
+                input.drop_iteratively();
+                let mut seen = Vec::new();
+                let mapped = map_atoms(copied.and(atom(1)), &mut |depth, a| {
+                    seen.push(depth);
+                    a.clone()
+                });
+                assert_eq!(seen, [100_000, 0]);
+                assert_eq!(formula_depth(&mapped), 200_003);
+                mapped.drop_iteratively();
+
+                // A completed deep replacement must be released when the next
+                // callback fails. Its own atoms must not be visited again.
+                let input = atom(0).and(atom(1)).and(deep());
+                let mut calls = 0;
+                let failed = traverse_formula_atom(&input, &mut |_| {
+                    calls += 1;
+                    if calls == 1 {
+                        Ok(deep())
+                    } else {
+                        Err("stop")
+                    }
+                });
+                assert!(matches!(failed, Err("stop")));
+                assert_eq!(calls, 2);
+                assert!(std::panic::catch_unwind(|| {
+                    let mut calls = 0;
+                    let _: Result<F, ()> = traverse_formula_atom(&input, &mut |_| {
+                        calls += 1;
+                        assert_eq!(calls, 1, "fail after completing a deep replacement");
+                        Ok(deep())
+                    });
+                })
+                .is_err());
+                input.drop_iteratively();
+
+                // Both the rebuilt left sibling and the unvisited right sibling
+                // are owned by pending frames at the panic site.
+                let input = deep().and(atom(1)).and(deep());
+                assert!(std::panic::catch_unwind(move || {
+                    map_atoms(input, &mut |_, a| {
+                        if matches!(a, ProtoAtom::Last(Term::Lit(Lit::Var(BVar::Free(1))))) {
+                            panic!("stop between deep siblings");
+                        }
+                        a.clone()
+                    });
+                })
+                .is_err());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn formula_rebuild_preserves_scope_hint_order_and_splices_once() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Hint(u32, Rc<RefCell<Vec<u32>>>);
+        impl Drop for Hint {
+            fn drop(&mut self) {
+                self.1.borrow_mut().push(self.0 + 10);
+            }
+        }
+        impl Clone for Hint {
+            fn clone(&self) -> Self {
+                self.1.borrow_mut().push(self.0);
+                Self(self.0, self.1.clone())
+            }
+        }
+        type F = ProtoFormula<Unit2, Hint, u32, u32>;
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let atom = || ProtoFormula::Atom(ProtoAtom::Last(var_term(BVar::Free(0))));
+        let input: F = ProtoFormula::for_all(Hint(1, events.clone()), atom().not()).iff(
+            ProtoFormula::exists(Hint(2, events.clone()), atom().and(ProtoFormula::Tf(false))),
+        );
+        let output = traverse_formula_atom(&input, &mut |_| {
+            events.borrow_mut().push(3);
+            Ok::<F, ()>(atom().implies(atom()))
+        })
+        .unwrap();
+        assert_eq!(*events.borrow(), [1, 3, 2, 3]);
+        assert!(matches!(&output, ProtoFormula::Conn(Connective::Iff, l, r)
+            if matches!(&**l, ProtoFormula::Qua(Quantifier::All, h, _) if h.0 == 1)
+            && matches!(&**r, ProtoFormula::Qua(Quantifier::Ex, h, _) if h.0 == 2)));
+        events.borrow_mut().clear();
+        let mut depths = Vec::new();
+        let output = map_atoms(output, &mut |d, a| {
+            depths.push(d);
+            a.clone()
+        });
+        assert_eq!(depths, [1, 1, 1, 1]);
+        assert!(
+            events.borrow().is_empty(),
+            "owned mapping must move, not clone hints"
+        );
+        input.drop_iteratively();
+        output.drop_iteratively();
+        assert_eq!(*events.borrow(), [11, 12, 11, 12]);
+    }
+
+    #[test]
+    fn retained_formula_lifecycle_and_conversions_use_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut parsed = p::Formula::True;
+                for _ in 0..100_000 {
+                    parsed = p::Formula::Not(Box::new(parsed));
+                }
+                let syntactic = from_parser(&parsed, &MaudeSig::default()).unwrap();
+                let formula = to_lnformula(&syntactic).unwrap();
+                let copy = formula.clone();
+                assert_eq!(formula, copy);
+                assert_eq!(formula.cmp(&copy), std::cmp::Ordering::Equal);
+                assert_eq!(format!("{formula:?}").len(), 500_008);
+                // Ordinary drops, including a formula retained in a collection,
+                // must use the child owners without caller-specific cleanup.
+                drop((parsed, syntactic, vec![formula, copy]));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     fn lftrue() -> LNFormula {
         ProtoFormula::ltrue()
     }
@@ -893,7 +1489,7 @@ mod tests {
                 ProtoFormula::Conn(c, l, r) => {
                     assert_eq!(c, want);
                     assert_eq!(
-                        (*l, *r),
+                        (l.into_inner(), r.into_inner()),
                         (lftrue(), lffalse()),
                         "operand order for {want:?}"
                     );
@@ -1243,7 +1839,8 @@ mod tests {
             panic!("expected a universal quantifier");
         };
         assert_eq!(h, hint("zero", LSort::Msg));
-        let ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(fa))) = *body else {
+        let ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(fa))) = body.into_inner()
+        else {
             panic!("expected a predicate atom");
         };
         match &fa.terms[..] {
@@ -1446,10 +2043,10 @@ mod tests {
         let ProtoFormula::Qua(_, _, inner) = closed else {
             panic!("expected the outer quantifier");
         };
-        let ProtoFormula::Qua(_, _, body) = *inner else {
+        let ProtoFormula::Qua(_, _, body) = inner.into_inner() else {
             panic!("expected the inner quantifier");
         };
-        let ProtoFormula::Atom(ProtoAtom::Last(term)) = *body else {
+        let ProtoFormula::Atom(ProtoAtom::Last(term)) = body.into_inner() else {
             panic!("expected the atom");
         };
         assert_eq!(

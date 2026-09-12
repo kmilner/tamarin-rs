@@ -40,8 +40,8 @@ fn lookup_process(v: LVar) -> crate::sapic::PlainProcess {
     Process::Comb(
         ProcessCombinator::Lookup(var_term(sv.clone()), sv),
         ProcessParsedAnnotation::default(),
-        Box::new(Process::Null(ProcessParsedAnnotation::default())),
-        Box::new(Process::Null(ProcessParsedAnnotation::default())),
+        Box::new(Process::Null(ProcessParsedAnnotation::default())).into(),
+        Box::new(Process::Null(ProcessParsedAnnotation::default())).into(),
     )
 }
 
@@ -198,7 +198,7 @@ fn bound_terms_open_outer_variables_below_nested_guards() {
                 .collect::<Vec<_>>()
                 .into(),
             guards: Vec::new().into(),
-            body: std::sync::Arc::new(body),
+            body: crate::guarded::GuardedBody::new(body),
         }
     }
 
@@ -513,7 +513,8 @@ fn fresh_names_report_walks_the_process_attribute() {
         ProcessParsedAnnotation::default(),
         Box::new(crate::sapic::Process::Null(
             ProcessParsedAnnotation::default(),
-        )),
+        ))
+        .into(),
     );
     assert!(
         fresh_names_report(&thy).is_empty(),

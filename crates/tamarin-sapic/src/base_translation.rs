@@ -881,12 +881,15 @@ fn wf_unbound(vars: impl Iterator<Item = LVar>) -> String {
 /// initial `tildex`.
 ///   `[AnnotatedRule (Just "Init") anP (Right InitPosition) [] [InitEmpty]
 ///       [State LState [] empty] [] 0]`
-pub(crate) fn base_init(
-    an_proc: &tamarin_theory::sapic::Process<ProcessAnnotation<LVar>, SapicLVar>,
-) -> (Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, BTreeSet<LVar>) {
+pub(crate) fn base_init<'a>(
+    an_proc: &'a tamarin_theory::sapic::Process<ProcessAnnotation<LVar>, SapicLVar>,
+) -> (
+    Vec<AnnotatedRule<'a, ProcessAnnotation<LVar>>>,
+    BTreeSet<LVar>,
+) {
     let rule = AnnotatedRule {
         process_name: Some("Init".to_string()),
-        process: an_proc.clone(),
+        process: an_proc,
         position: RulePosition::Special(SpecialPosition::InitPosition),
         prems: vec![],
         acts: vec![TransAction::InitEmpty],

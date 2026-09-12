@@ -49,7 +49,7 @@ use crate::constraint::system::System;
 use crate::prove::ProveError;
 
 /// One node in the proof tree.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ProofNode {
     pub method: ProofMethod,
     pub sys: System,
@@ -63,6 +63,66 @@ pub struct ProofNode {
     /// appends `/* unannotated */`.  Defaults to `true` for every
     /// freshly-searched / successfully-replayed node.
     pub annotated: bool,
+}
+
+impl Drop for ProofNode {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        // Keep iterators, not copies of the large system-bearing nodes, in
+        // the branch worklist. Linear proof chains need no worklist allocation.
+        let mut children = std::mem::take(&mut self.children).into_values();
+        let mut pending = Vec::new();
+        loop {
+            while let Some(mut child) = children.next() {
+                if !child.children.is_empty() {
+                    let next = std::mem::take(&mut child.children).into_values();
+                    if children.len() != 0 {
+                        pending.push(children);
+                    }
+                    children = next;
+                }
+            }
+            let Some(next) = pending.pop() else { return };
+            children = next;
+        }
+    }
+}
+
+impl Clone for ProofNode {
+    fn clone(&self) -> Self {
+        fn shallow(node: &ProofNode) -> ProofNode {
+            ProofNode {
+                method: node.method.clone(),
+                sys: node.sys.clone(),
+                children: BTreeMap::new(),
+                status: node.status,
+                annotated: node.annotated,
+            }
+        }
+        let mut result = shallow(self);
+        let mut pending = Vec::new();
+        let mut next = Some((self, &mut result));
+        while let Some((source, target)) = next.take().or_else(|| pending.pop()) {
+            target.children = source
+                .children
+                .iter()
+                .map(|(k, v)| (k.clone(), shallow(v)))
+                .collect();
+            for (source, target) in source
+                .children
+                .values()
+                .zip(target.children.values_mut())
+                .rev()
+            {
+                if let Some(previous) = next.replace((source, target)) {
+                    pending.push(previous);
+                }
+            }
+        }
+        result
+    }
 }
 
 /// What's the proof-tree node currently saying?
@@ -159,11 +219,13 @@ fn step_status(node: &ProofNode) -> ProofStatus {
 /// HS `getProofStatus` = `foldMap proofStepStatus` over every node in the
 /// tree.  This is the source of the lemma verdict (see `run_batch`).
 pub fn proof_status(node: &ProofNode) -> ProofStatus {
-    let mut s = step_status(node);
-    for c in node.children.values() {
-        s = s.combine(proof_status(c));
+    let mut status = ProofStatus::Undetermined;
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        status = status.combine(step_status(node));
+        pending.extend(node.children.values().rev());
     }
-    s
+    status
 }
 
 /// HS `proofSystems` (Batch.hs:284-288): every solved constraint system
@@ -195,23 +257,34 @@ pub fn proof_status(node: &ProofNode) -> ProofStatus {
 pub fn into_solved_systems(node: ProofNode) -> Vec<(Vec<String>, System)> {
     let mut out = Vec::new();
     let mut path = Vec::new();
-    collect_solved_systems_owned(node, &mut path, &mut out);
-    out
-}
-
-fn collect_solved_systems_owned(
-    node: ProofNode,
-    path: &mut Vec<String>,
-    out: &mut Vec<(Vec<String>, System)>,
-) {
-    if matches!(node.method, ProofMethod::Finished(MethodResult::Solved)) && node.annotated {
-        out.push((path.clone(), node.sys));
-        return;
-    }
-    for (case, child) in node.children {
-        path.push(case);
-        collect_solved_systems_owned(child, path, out);
-        path.pop();
+    let mut pending = Vec::new();
+    let mut current = node;
+    loop {
+        if matches!(current.method, ProofMethod::Finished(MethodResult::Solved))
+            && current.annotated
+        {
+            out.push((path.clone(), std::mem::take(&mut current.sys)));
+        } else {
+            let mut children = std::mem::take(&mut current.children).into_iter();
+            if let Some((name, child)) = children.next() {
+                pending.push((children, path.len()));
+                path.push(name);
+                current = child;
+                continue;
+            }
+        }
+        loop {
+            let Some((children, depth)) = pending.last_mut() else {
+                return out;
+            };
+            path.truncate(*depth);
+            if let Some((name, child)) = children.next() {
+                path.push(name);
+                current = child;
+                break;
+            }
+            pending.pop();
+        }
     }
 }
 
@@ -699,63 +772,83 @@ pub(crate) fn run_proof_search_at_depth(
 /// leaf is untouched.  With `build` set the transformed tree is returned
 /// (statuses re-rolled); a scan pass (`build = false`) returns `None`.
 fn bfs_check_level(
-    node: &ProofNode,
-    remaining: usize,
+    mut node: &ProofNode,
+    mut remaining: usize,
     found: &mut bool,
     incomplete: &mut bool,
     build: bool,
 ) -> Option<ProofNode> {
-    if remaining == 0 {
-        let solved_leaf = matches!(&node.method, ProofMethod::Finished(MethodResult::Solved));
-        if solved_leaf {
-            *found = true;
-            return build.then(|| node.clone());
-        }
-        let pending = !node.children.is_empty()
-            || matches!(
-                &node.method,
-                ProofMethod::Sorry(Some(msg)) if msg == "depth limit"
-            );
-        if pending {
-            let msg = if *found {
-                "ignored (attack exists)"
+    struct Parent<'a> {
+        node: &'a ProofNode,
+        remaining: usize,
+        pending: std::collections::btree_map::Iter<'a, String, ProofNode>,
+        name: &'a str,
+        children: BTreeMap<String, ProofNode>,
+    }
+    let mut parents = Vec::new();
+    'enter: loop {
+        let mut result = if remaining == 0 {
+            if matches!(&node.method, ProofMethod::Finished(MethodResult::Solved)) {
+                *found = true;
+                build.then(|| node.clone())
+            } else if !node.children.is_empty()
+                || matches!(&node.method, ProofMethod::Sorry(Some(msg)) if msg == "depth limit")
+            {
+                let msg = if *found {
+                    "ignored (attack exists)"
+                } else {
+                    *incomplete = true;
+                    "bound reached"
+                };
+                build.then(|| ProofNode {
+                    method: ProofMethod::Sorry(Some(msg.into())),
+                    sys: node.sys.clone(),
+                    children: BTreeMap::new(),
+                    status: NodeStatus::Sorry,
+                    annotated: node.annotated,
+                })
             } else {
-                *incomplete = true;
-                "bound reached"
-            };
-            return build.then(|| ProofNode {
-                method: ProofMethod::Sorry(Some(msg.into())),
-                sys: node.sys.clone(),
+                build.then(|| node.clone())
+            }
+        } else if node.children.is_empty() {
+            build.then(|| node.clone())
+        } else {
+            let mut pending = node.children.iter();
+            let (name, child) = pending.next().unwrap();
+            parents.push(Parent {
+                node,
+                remaining,
+                pending,
+                name,
                 children: BTreeMap::new(),
-                status: NodeStatus::Sorry,
-                annotated: node.annotated,
+            });
+            node = child;
+            remaining -= 1;
+            continue;
+        };
+        loop {
+            let Some(mut parent) = parents.pop() else {
+                return result;
+            };
+            if let Some(child) = result {
+                parent.children.insert(parent.name.to_owned(), child);
+            }
+            if let Some((name, child)) = parent.pending.next() {
+                parent.name = name;
+                remaining = parent.remaining - 1;
+                parents.push(parent);
+                node = child;
+                continue 'enter;
+            }
+            result = build.then(|| ProofNode {
+                method: parent.node.method.clone(),
+                sys: parent.node.sys.clone(),
+                status: rollup_status(&parent.children),
+                children: parent.children,
+                annotated: parent.node.annotated,
             });
         }
-        return build.then(|| node.clone());
     }
-    if node.children.is_empty() {
-        return build.then(|| node.clone());
-    }
-    let mut new_children: BTreeMap<String, ProofNode> = BTreeMap::new();
-    for (name, child) in &node.children {
-        let t = bfs_check_level(child, remaining - 1, found, incomplete, build);
-        if build {
-            new_children.insert(
-                name.clone(),
-                t.expect("bfs_check_level: build pass returned None"),
-            );
-        }
-    }
-    build.then(|| {
-        let status = rollup_status(&new_children);
-        ProofNode {
-            method: node.method.clone(),
-            sys: node.sys.clone(),
-            children: new_children,
-            status,
-            annotated: node.annotated,
-        }
-    })
 }
 
 /// HS-faithful `extractSolved` (Theory/Proof.hs:879-884, the non-diff
@@ -770,28 +863,36 @@ fn extract_solved_path(root: &mut ProofNode) {
 }
 
 fn find_solved_path(node: &ProofNode, path: &mut Vec<String>) -> bool {
-    if matches!(node.status, NodeStatus::Solved) && node.children.is_empty() {
-        return true;
-    }
-    for (label, child) in &node.children {
-        path.push(label.clone());
-        if find_solved_path(child, path) {
+    let mut current = node;
+    let mut parents = Vec::new();
+    loop {
+        if current.status == NodeStatus::Solved && current.children.is_empty() {
             return true;
         }
-        path.pop();
+        let mut children = current.children.iter();
+        loop {
+            if let Some((name, child)) = children.next() {
+                parents.push((children, path.len()));
+                path.push(name.clone());
+                current = child;
+                break;
+            }
+            let Some((siblings, parent_len)) = parents.pop() else {
+                return false;
+            };
+            path.truncate(parent_len);
+            children = siblings;
+        }
     }
-    false
 }
 
-fn prune_to_path(node: &mut ProofNode, path: &[String]) {
-    if path.is_empty() {
-        return;
-    }
-    let label = &path[0];
-    if let Some(mut child) = node.children.remove(label) {
-        prune_to_path(&mut child, &path[1..]);
-        node.children = BTreeMap::new();
-        node.children.insert(label.clone(), child);
+fn prune_to_path(mut node: &mut ProofNode, path: &[String]) {
+    for label in path {
+        if !node.children.contains_key(label) {
+            return;
+        }
+        node.children.retain(|name, _| name == label);
+        node = node.children.get_mut(label).unwrap();
     }
 }
 
@@ -814,6 +915,8 @@ fn prune_to_path(node: &mut ProofNode, path: &[String]) {
 /// Early-break-on-Solved: matches `expand`'s short-circuit semantics —
 /// once any sibling is Solved during re-expansion, stop traversing
 /// the remaining siblings (Haskell's `foldMap`-with-Solution semigroup).
+// Proof depth is independent of term depth. Guard recursion here rather than
+// maintaining a second continuation machine and manual trace-scope unwinding.
 fn re_expand_depth_limited(
     ctx: &ProofContext,
     node: &mut ProofNode,
@@ -821,58 +924,73 @@ fn re_expand_depth_limited(
     deadline: &std::time::Instant,
     depth: usize,
 ) -> Result<(), ProveError> {
-    // Was this node stalled at the depth limit on the previous iteration?
-    if is_depth_limited(node) {
-        // Re-expand from scratch at this depth.  The deeper `MAX_DEPTH`
-        // now lets the recursion go further before stalling again.
-        node.method = ProofMethod::Sorry(None);
-        node.children = BTreeMap::new();
-        node.status = NodeStatus::Open;
-        return expand(ctx, node, budget, deadline, depth);
-    }
-    // Already resolved — return cached subtree.
-    if matches!(
-        node.status,
-        NodeStatus::Solved | NodeStatus::Contradictory | NodeStatus::Unfinishable
-    ) {
-        return Ok(());
-    }
-    // Sorry with non-depth-limit reason and no descendants: preserve.
-    // (Budget exhausted, deadline, or no-method Sorrys are terminal.)
-    if matches!(node.status, NodeStatus::Sorry) && node.children.is_empty() {
-        return Ok(());
-    }
-    // Recurse into children.  Any depth-limited descendant gets
-    // re-expanded in place.  Match `expand`'s early-break-on-Solved —
-    // except under `Bfs`, whose level walk (like HS `checkLevel`'s
-    // `traverse`) forces every sibling regardless of solved ones.
-    let early_break = !matches!(ctx.cut, CutStrategy::Bfs);
-    let mut found_solved = false;
-    for (name, child) in node.children.iter_mut() {
-        if early_break && found_solved {
-            break;
+    tamarin_utils::stack::ensure_sufficient_stack(|| {
+        // Was this node stalled at the depth limit on the previous iteration?
+        if is_depth_limited(node) {
+            // Re-expand from scratch at this depth.  The deeper `MAX_DEPTH`
+            // now lets the recursion go further before stalling again.
+            node.method = ProofMethod::Sorry(None);
+            node.children = BTreeMap::new();
+            node.status = NodeStatus::Open;
+            return expand(ctx, node, budget, deadline, depth);
         }
-        if *budget == 0 {
-            break;
+        // Already resolved — return cached subtree.
+        if matches!(
+            node.status,
+            NodeStatus::Solved | NodeStatus::Contradictory | NodeStatus::Unfinishable
+        ) {
+            return Ok(());
         }
-        if std::time::Instant::now() >= *deadline {
-            break;
+        // Sorry with non-depth-limit reason and no descendants: preserve.
+        // (Budget exhausted, deadline, or no-method Sorrys are terminal.)
+        if matches!(node.status, NodeStatus::Sorry) && node.children.is_empty() {
+            return Ok(());
         }
-        // Preserve the full proof-tree path during iterative-deepening
-        // re-expansion and restore it even if solver work unwinds.
-        let _path = crate::constraint::solver::trace::CasePathGuard::push(name);
-        re_expand_depth_limited(ctx, child, budget, deadline, depth + 1)?;
-        if matches!(child.status, NodeStatus::Solved) {
-            found_solved = true;
+        // Recurse into children.  Any depth-limited descendant gets
+        // re-expanded in place.  Match `expand`'s early-break-on-Solved —
+        // except under `Bfs`, whose level walk (like HS `checkLevel`'s
+        // `traverse`) forces every sibling regardless of solved ones.
+        let early_break = !matches!(ctx.cut, CutStrategy::Bfs);
+        let mut found_solved = false;
+        for (name, child) in node.children.iter_mut() {
+            if early_break && found_solved {
+                break;
+            }
+            if *budget == 0 {
+                break;
+            }
+            if std::time::Instant::now() >= *deadline {
+                break;
+            }
+            // Preserve the full proof-tree path during iterative-deepening
+            // re-expansion and restore it even if solver work unwinds.
+            let _path = crate::constraint::solver::trace::CasePathGuard::push(name);
+            re_expand_depth_limited(ctx, child, budget, deadline, depth + 1)?;
+            if matches!(child.status, NodeStatus::Solved) {
+                found_solved = true;
+            }
         }
+        // Re-roll up the parent's status from current children — mirrors
+        // `expand_inner`'s `node.status = if any_solved ...` rollup
+        // (the `Semigroup ProofStatus` port below).
+        if !node.children.is_empty() {
+            node.status = rollup_status(&node.children);
+        }
+        Ok(())
+    })
+}
+
+fn merge_status(aggregate: &mut NodeStatus, child: NodeStatus) {
+    let rank = |status| match status {
+        NodeStatus::Open => 0,
+        NodeStatus::Contradictory => 1,
+        NodeStatus::Unfinishable => 2,
+        NodeStatus::Sorry => 3,
+        NodeStatus::Solved => 4,
+    };
+    if rank(child) > rank(*aggregate) {
+        *aggregate = child;
     }
-    // Re-roll up the parent's status from current children — mirrors
-    // `expand_inner`'s `node.status = if any_solved ...` rollup
-    // (the `Semigroup ProofStatus` port below).
-    if !node.children.is_empty() {
-        node.status = rollup_status(&node.children);
-    }
-    Ok(())
 }
 
 /// Roll a node's children up into its status, mirroring Haskell's
@@ -882,32 +1000,30 @@ fn re_expand_depth_limited(
 /// callers); a caller that must leave `status` untouched on
 /// empty children guards the call itself.
 pub fn rollup_status(children: &BTreeMap<String, ProofNode>) -> NodeStatus {
-    let mut any_solved = false;
-    let mut any_contra = false;
-    let mut any_unfin = false;
-    let mut any_sorry = false;
+    let mut status = NodeStatus::Open;
     for child in children.values() {
-        match child.status {
-            NodeStatus::Solved => any_solved = true,
-            NodeStatus::Contradictory => any_contra = true,
-            NodeStatus::Unfinishable => any_unfin = true,
-            NodeStatus::Sorry => any_sorry = true,
-            NodeStatus::Open => {}
-        }
+        merge_status(&mut status, child.status);
     }
-    if any_solved {
-        NodeStatus::Solved
-    } else if any_sorry {
+    if status == NodeStatus::Open {
         NodeStatus::Sorry
-    } else if any_unfin {
-        NodeStatus::Unfinishable
-    } else if any_contra {
-        NodeStatus::Contradictory
     } else {
-        NodeStatus::Sorry
+        status
     }
 }
 
+#[cfg(test)]
+fn open_node(sys: System) -> ProofNode {
+    ProofNode {
+        method: ProofMethod::Sorry(None),
+        sys,
+        children: BTreeMap::new(),
+        status: NodeStatus::Open,
+        annotated: true,
+    }
+}
+
+// Each serial child and parallel worker enters through this guard. Returned
+// proof nodes retain iterative destruction, independent of this stack segment.
 fn expand(
     ctx: &ProofContext,
     node: &mut ProofNode,
@@ -915,23 +1031,25 @@ fn expand(
     deadline: &std::time::Instant,
     depth: usize,
 ) -> Result<(), ProveError> {
-    expand_inner(ctx, node, budget, deadline, depth)?;
-    // After expansion, `sys` is no longer read EXCEPT on
-    // `Sorry: depth limit` leaves, which `re_expand_depth_limited`
-    // (defined below in this file) re-runs `expand` on during the next
-    // ID-DFS iteration — those need their sys — and on `Finished(Solved)`
-    // leaves when batch trace output asked for them via
-    // `SysRetention::KeepSolved`.  Everything else (other resolved leaves,
-    // interior nodes, terminal Sorrys) can drop.  See
-    // `drop_sys_after_expand`.
-    // Profile: csf17::injectivity 1010-step proof tree holds ~200 MB
-    // peak; this drain reduces peak RSS to ~14 MB (~ same as small
-    // lemmas — most of HS's residue is the closed branches we can
-    // now free).
-    if drop_sys_after_expand(node, ctx.sys_retention) {
-        node.sys = crate::constraint::system::System::default();
-    }
-    Ok(())
+    tamarin_utils::stack::ensure_sufficient_stack(|| {
+        expand_inner(ctx, node, budget, deadline, depth)?;
+        // After expansion, `sys` is no longer read EXCEPT on
+        // `Sorry: depth limit` leaves, which `re_expand_depth_limited`
+        // (defined below in this file) re-runs `expand` on during the next
+        // ID-DFS iteration — those need their sys — and on `Finished(Solved)`
+        // leaves when batch trace output asked for them via
+        // `SysRetention::KeepSolved`.  Everything else (other resolved leaves,
+        // interior nodes, terminal Sorrys) can drop.  See
+        // `drop_sys_after_expand`.
+        // Profile: csf17::injectivity 1010-step proof tree holds ~200 MB
+        // peak; this drain reduces peak RSS to ~14 MB (~ same as small
+        // lemmas — most of HS's residue is the closed branches we can
+        // now free).
+        if drop_sys_after_expand(node, ctx.sys_retention) {
+            node.sys = crate::constraint::system::System::default();
+        }
+        Ok(())
+    })
 }
 
 /// The [`expand`] drop decision, as a pure predicate over the node and
@@ -1563,6 +1681,202 @@ mod tests {
                 )
             });
         Some(ProofContext::new(h, Vec::new()))
+    }
+
+    #[test]
+    fn deep_search_uses_guarded_stack() {
+        let Some(mut ctx) = ctx() else { return };
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let depth: usize = std::env::var("TAM_TEST_SEARCH_DEPTH")
+                    .ok()
+                    .map(|s| s.parse().unwrap())
+                    .unwrap_or(256);
+                let mut sys = System::empty();
+                sys.solved_formulas_mut()
+                    .push(std::sync::Arc::new(crate::guarded::gtrue()));
+                for i in 0..depth {
+                    let term = tamarin_term::lterm::pub_term(format!("goal_{i:05}"));
+                    sys.add_goal(crate::constraint::constraints::Goal::Disj(
+                        crate::constraint::constraints::Disj::new(vec![
+                            crate::guarded::Guarded::Atom(crate::atom::ProtoAtom::EqE(
+                                term.clone(),
+                                term,
+                            )),
+                        ]),
+                    ));
+                }
+                let cuts = if std::env::var_os("TAM_TEST_SEARCH_SERIAL_ONLY").is_some() {
+                    vec![CutStrategy::SeqDfs]
+                } else {
+                    vec![
+                        CutStrategy::SeqDfs,
+                        CutStrategy::Dfs,
+                        CutStrategy::Bfs,
+                        CutStrategy::Nothing,
+                        CutStrategy::AfterSorry,
+                    ]
+                };
+                for cut in cuts {
+                    ctx.cut = cut;
+                    let result = run_proof_search(&ctx, sys.clone(), usize::MAX).unwrap();
+                    assert_eq!(result.status, NodeStatus::Solved);
+                    let mut count = 0;
+                    let mut current = &result;
+                    while !current.children.is_empty() {
+                        assert_eq!(current.children.len(), 1);
+                        assert!(current.annotated);
+                        if matches!(current.method, ProofMethod::SolveGoal(_)) {
+                            count += 1;
+                        }
+                        current = current.children.values().next().unwrap();
+                    }
+                    assert_eq!(count, depth);
+                    assert_eq!(current.method, ProofMethod::Finished(MethodResult::Solved));
+                }
+                ctx.cut = CutStrategy::Dfs;
+                let bound = depth / 2;
+                let bounded = run_proof_search(&ctx, sys, bound).unwrap();
+                assert_eq!(bounded.status, NodeStatus::Sorry);
+                let mut leaf = &bounded;
+                for _ in 0..bound {
+                    assert_eq!(leaf.children.len(), 1);
+                    leaf = leaf.children.values().next().unwrap();
+                }
+                assert_eq!(
+                    leaf.method,
+                    ProofMethod::Sorry(Some(format!("bound {bound} hit")))
+                );
+                assert!(leaf.children.is_empty());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn deep_frontier_and_cut_walks_use_guarded_stack() {
+        let Some(ctx) = ctx() else { return };
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let depth = 8192;
+                let mut sys = System::empty();
+                sys.solved_formulas_mut()
+                    .push(std::sync::Arc::new(crate::guarded::gtrue()));
+                let mut root = open_node(sys);
+                root.method = ProofMethod::Sorry(Some("depth limit".into()));
+                root.status = NodeStatus::Sorry;
+                for _ in 0..depth {
+                    let mut parent = open_node(System::default());
+                    parent.method = ProofMethod::Simplify;
+                    parent.status = NodeStatus::Sorry;
+                    parent.children.insert("next".into(), root);
+                    root = parent;
+                }
+                let mut budget = usize::MAX;
+                let deadline = proof_deadline();
+                re_expand_depth_limited(&ctx, &mut root, &mut budget, &deadline, 0).unwrap();
+                assert_eq!(root.status, NodeStatus::Solved);
+                let (mut found, mut incomplete) = (false, false);
+                assert!(
+                    bfs_check_level(&root, depth, &mut found, &mut incomplete, false).is_none()
+                );
+                assert!(found && !incomplete);
+                let mut cut = bfs_check_level(&root, depth, &mut false, &mut false, true).unwrap();
+                extract_solved_path(&mut cut);
+                let mut node = &cut;
+                for _ in 0..depth {
+                    assert_eq!(node.children.len(), 1);
+                    assert_eq!(node.status, NodeStatus::Solved);
+                    node = &node.children["next"];
+                }
+                assert_eq!(node.method, ProofMethod::Finished(MethodResult::Solved));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn bfs_cut_preserves_case_order_and_status_threading() {
+        let stub = || {
+            let mut node = open_node(System::default());
+            node.method = ProofMethod::Sorry(Some("depth limit".into()));
+            node.status = NodeStatus::Sorry;
+            node
+        };
+        let mut solved = open_node(System::default());
+        solved.method = ProofMethod::Finished(MethodResult::Solved);
+        solved.status = NodeStatus::Solved;
+        let mut root = open_node(System::default());
+        let mut pending = stub();
+        // BFS recognizes the method marker independently of cached status.
+        pending.status = NodeStatus::Open;
+        root.children = BTreeMap::from([
+            ("a".into(), stub()),
+            ("b".into(), solved),
+            ("c".into(), pending),
+        ]);
+        let (mut found, mut incomplete) = (false, false);
+        let cut = bfs_check_level(&root, 1, &mut found, &mut incomplete, true).unwrap();
+        assert!(found && incomplete);
+        assert_eq!(cut.status, NodeStatus::Solved);
+        assert_eq!(
+            cut.children["a"].method,
+            ProofMethod::Sorry(Some("bound reached".into()))
+        );
+        assert_eq!(
+            cut.children["b"].method,
+            ProofMethod::Finished(MethodResult::Solved)
+        );
+        assert_eq!(
+            cut.children["c"].method,
+            ProofMethod::Sorry(Some("ignored (attack exists)".into()))
+        );
+    }
+
+    #[test]
+    fn expansion_restores_partial_root_after_child_error() {
+        let Some(mut ctx) = ctx() else { return };
+        ctx.cut = CutStrategy::SeqDfs;
+        ctx.heuristic = Some(vec![
+            crate::constraint::solver::goals::GoalRanking::Smart(false),
+            crate::constraint::solver::goals::GoalRanking::Tactic {
+                quit_on_empty: false,
+                tactic: std::sync::Arc::new(crate::tactic::Tactic {
+                    name: "missing".into(),
+                    presort: 's',
+                    prios: Vec::new(),
+                    deprios: Vec::new(),
+                }),
+                resolution_error: Some(std::sync::Arc::from("child ranking failure")),
+            },
+        ]);
+        let mut sys = System::empty();
+        sys.solved_formulas_mut()
+            .push(std::sync::Arc::new(crate::guarded::gtrue()));
+        for name in ["a", "b"] {
+            let term = tamarin_term::lterm::pub_term(name);
+            sys.add_goal(crate::constraint::constraints::Goal::Disj(
+                crate::constraint::constraints::Disj::new(vec![crate::guarded::Guarded::Atom(
+                    crate::atom::ProtoAtom::EqE(term.clone(), term),
+                )]),
+            ));
+        }
+        let mut root = open_node(sys);
+        let path = crate::constraint::solver::trace::case_path_snapshot();
+        let mut budget = usize::MAX;
+        let error = expand(&ctx, &mut root, &mut budget, &proof_deadline(), 0).unwrap_err();
+        assert!(format!("{error:?}").contains("child ranking failure"));
+        assert!(matches!(root.method, ProofMethod::SolveGoal(_)));
+        assert_eq!(root.sys.goals.len(), 2);
+        assert!(
+            root.children.is_empty(),
+            "the failed child was never inserted"
+        );
+        assert_eq!(crate::constraint::solver::trace::case_path_snapshot(), path);
     }
 
     /// The per-child fan-out (`expand_children`) converts terms on rayon

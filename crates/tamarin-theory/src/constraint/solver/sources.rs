@@ -3243,44 +3243,40 @@ fn var_occurrences_nodes(
         ctx: &Ctx,
         out: &mut BTreeMap<LVar, BTreeSet<Vec<Seg>>>,
     ) {
-        match t {
-            Term::Lit(Lit::Var(v)) => {
-                out.entry(*v).or_default().insert(ctx.materialize());
-            }
-            Term::Lit(Lit::Con(_)) => {}
-            Term::App(sym, args) => {
-                // HS `instance HasFrees (Term l)` `foldFreesOcc`
-                // (LTerm.hs:782-786):
-                //   FApp (NoEq o) as -> foldFreesOcc f ((opName):c) as
-                //   FApp o        as -> mconcat $ map (foldFreesOcc f (show o:c)) as
-                //                       -- AC or C symbols
-                // For a NoEq function the args are descended as a LIST, so the
-                // `HasFrees [a]` instance (LTerm.hs:877-882, see line 880) prefixes EACH arg with
-                // its positional index `show i`: arg i's context becomes
-                // `[show i, opName, ...c]`.  For AC/C symbols HS maps over the
-                // args DIRECTLY (no list instance), so they get only
-                // `[show o, ...c]` with NO per-arg index (AC args are unordered
-                // anyway).  Omitting the NoEq per-arg index would collapse
-                // structurally-distinct vars at different argument positions to the
-                // same occurrence-context set, breaking the canonical
-                // `renameDropNameHints` ordering so `removeRedundantCases` keeps
-                // alpha-equivalent split cases distinct (`split_case_1` vs `split`).
-                let sub = Ctx {
-                    seg: funsym_occ_ctx(sym),
-                    parent: Some(ctx),
-                };
-                let is_ac_or_c = sym.is_ac() || sym.is_c();
-                for (i, a) in args.iter().enumerate() {
-                    if is_ac_or_c {
-                        // AC/C: no per-arg index (HS maps directly).
-                        visit_term(a, &sub, out);
-                    } else {
-                        // NoEq: prefix the arg index (HS list instance).
-                        let arg_ctx = Ctx {
-                            seg: idx_seg(i),
-                            parent: Some(&sub),
-                        };
-                        visit_term(a, &arg_ctx, out);
+        // The mutable path has outermost segments first; scope-exit frames
+        // restore it before visiting a sibling. Only leaves materialize keys.
+        enum Work<'a> {
+            Visit(&'a tamarin_term::lterm::LNTerm),
+            Segment(Seg),
+            Restore(usize),
+        }
+        let mut path = ctx.materialize();
+        path.reverse();
+        let mut work = vec![Work::Visit(t)];
+        while let Some(task) = work.pop() {
+            match task {
+                Work::Segment(seg) => path.push(seg),
+                Work::Restore(len) => path.truncate(len),
+                Work::Visit(Term::Lit(Lit::Var(v))) => {
+                    out.entry(*v)
+                        .or_default()
+                        .insert(path.iter().rev().cloned().collect());
+                }
+                Work::Visit(Term::Lit(Lit::Con(_))) => {}
+                Work::Visit(Term::App(sym, args)) => {
+                    let len = path.len();
+                    work.push(Work::Restore(len));
+                    path.push(funsym_occ_ctx(sym));
+                    for (i, arg) in args.iter().enumerate().rev() {
+                        if sym.is_ac() || sym.is_c() {
+                            work.push(Work::Visit(arg));
+                        } else {
+                            // HS's list instance adds an index for NoEq/List,
+                            // whereas AC/C arguments share only the symbol path.
+                            work.push(Work::Restore(len + 1));
+                            work.push(Work::Visit(arg));
+                            work.push(Work::Segment(idx_seg(i)));
+                        }
                     }
                 }
             }

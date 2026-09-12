@@ -1267,7 +1267,7 @@ fn neg_less_node_universal(i_name: &str, j_name: &str) -> Guarded {
         qua: Quantifier::All,
         vars: Vec::new().into(),
         guards: vec![guard].into(),
-        body: std::sync::Arc::new(crate::guarded::gfalse()),
+        body: crate::guarded::GuardedBody::new(crate::guarded::gfalse()),
     }
 }
 

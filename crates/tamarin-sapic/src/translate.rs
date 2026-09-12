@@ -31,9 +31,7 @@ use tamarin_term::lterm::LVar;
 use tamarin_theory::formula::{LNFormula, SyntacticLNFormula};
 use tamarin_theory::restriction::Restriction;
 use tamarin_theory::rule::ProtoRuleE;
-use tamarin_theory::sapic::{
-    process_at, GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar,
-};
+use tamarin_theory::sapic::{GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar};
 use tamarin_utils::prelude_ext::nub_on;
 
 use tamarin_theory::sapic::ProcessCombinator;
@@ -66,39 +64,19 @@ struct TransCtx {
 
 /// `propagateNames` (Facts.hs:327-341): push each node's process-names down to
 /// its children so every node carries the names of all its ancestors.
-pub(crate) fn propagate_names<A: GoodAnnotation>(
-    p: Process<A, SapicLVar>,
+pub(crate) fn propagate_names<A: GoodAnnotation + Clone>(
+    mut p: Process<A, SapicLVar>,
 ) -> Process<A, SapicLVar> {
-    fn go<A: GoodAnnotation>(
-        prefix: Vec<String>,
-        p: Process<A, SapicLVar>,
-    ) -> Process<A, SapicLVar> {
-        match p {
-            Process::Null(ann) => {
-                let mut names = prefix;
-                names.extend(ann.parsed().process_names.clone());
-                Process::Null(set_names(ann, names))
-            }
-            Process::Action(a, ann, body) => {
-                let mut names = prefix;
-                names.extend(ann.parsed().process_names.clone());
-                let ann2 = set_names(ann, names.clone());
-                Process::Action(a, ann2, Box::new(go(names, *body)))
-            }
-            Process::Comb(c, ann, l, r) => {
-                let mut names = prefix;
-                names.extend(ann.parsed().process_names.clone());
-                let ann2 = set_names(ann, names.clone());
-                Process::Comb(
-                    c,
-                    ann2,
-                    Box::new(go(names.clone(), *l)),
-                    Box::new(go(names, *r)),
-                )
-            }
-        }
-    }
-    go(Vec::new(), p)
+    crate::process_walk::walk_mut(&mut p, Vec::<String>::new(), |node, names| {
+        let ann = match node {
+            Process::Null(ann) | Process::Action(_, ann, _) | Process::Comb(_, ann, _, _) => ann,
+        };
+        names.extend(ann.parsed().process_names.iter().cloned());
+        *ann = set_names(ann.clone(), names.clone());
+        Ok::<_, std::convert::Infallible>(true)
+    })
+    .unwrap();
+    p
 }
 
 fn set_names<A: GoodAnnotation>(ann: A, names: Vec<String>) -> A {
@@ -108,17 +86,17 @@ fn set_names<A: GoodAnnotation>(ann: A, names: Vec<String>) -> A {
 }
 
 /// `mapToAnnotatedRule` (sapic/src/Sapic.hs:149-150): tag each rule body with its index.
-fn map_to_annotated_rule(
-    proc: &Process<ProcessAnnotation<LVar>, SapicLVar>,
+fn map_to_annotated_rule<'a>(
+    proc: &'a Process<ProcessAnnotation<LVar>, SapicLVar>,
     p: &ProcessPosition,
     bodies: Vec<RuleBody>,
-) -> Vec<AnnotatedRule<ProcessAnnotation<LVar>>> {
+) -> Vec<AnnotatedRule<'a, ProcessAnnotation<LVar>>> {
     bodies
         .into_iter()
         .enumerate()
         .map(|(i, (prems, acts, concs, restr))| AnnotatedRule {
             process_name: None,
-            process: proc.clone(),
+            process: proc,
             position: RulePosition::Pos(p.clone()),
             prems,
             acts,
@@ -133,64 +111,87 @@ fn map_to_annotated_rule(
 /// replication action), and the `Comb` combinators in scope — `Parallel`,
 /// `NDC` (with the `substStatePos` shared-position rewrite), and `CondEq`.
 /// `Cond`-with-a-formula / `Lookup` / `Let` are rejected in `base_trans_comb`.
-fn generate_rules(
+fn generate_rules<'a>(
     ctx: &TransCtx,
-    an_proc: &Process<ProcessAnnotation<LVar>, SapicLVar>,
+    an_proc: &'a Process<ProcessAnnotation<LVar>, SapicLVar>,
     p: &ProcessPosition,
     tildex: &BTreeSet<LVar>,
-) -> Result<Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, String> {
-    let proc = process_at(an_proc, p).ok_or_else(|| format!("gen: invalid position {p:?}"))?;
-    match proc {
-        Process::Null(_) => {
-            // `trans_null` is the identity wrapper for progress/reliable.
-            let bodies = base_trans_null(p, tildex);
-            Ok(map_to_annotated_rule(proc, p, bodies))
-        }
-        Process::Action(ac, ann, _) => {
-            let (bodies, tildex2) = trans_action(ctx, ac, ann, p, tildex)?;
-            let mut here = map_to_annotated_rule(proc, p, bodies);
-            let mut child_pos = p.clone();
-            child_pos.push(1);
-            let rest = generate_rules(ctx, an_proc, &child_pos, &tildex2)?;
-            here.extend(rest);
-            Ok(here)
-        }
-        // NDC special case (sapic/src/Sapic.hs:123-127): the NDC node itself emits NO
-        // rule; its two children SHARE the parent's state position.  We
-        // translate each child at `p++[1]` / `p++[2]` (so rule names carry the
-        // correct position suffix), then rewrite the State premise of EVERY
-        // generated rule from the child position back to the parent `p`
-        // (`substStatePos`).
-        Process::Comb(ProcessCombinator::Ndc, _, _, _) => {
-            let mut pl = p.clone();
-            pl.push(1);
-            let mut pr = p.clone();
-            pr.push(2);
-            let l = generate_rules(ctx, an_proc, &pl, tildex)?;
-            let r = generate_rules(ctx, an_proc, &pr, tildex)?;
-            let mut out = subst_state_pos_rules(l, &pl, p);
-            out.extend(subst_state_pos_rules(r, &pr, p));
-            Ok(out)
-        }
-        // General combinator (sapic/src/Sapic.hs:128-134): emit this node's own rules,
-        // then recurse into the left child with `tildex'1` and (if present) the
-        // right child with `tildex'2`.
-        Process::Comb(c, ann, _, _) => {
-            let (bodies, tildex_l, tildex_r) = trans_comb(ctx, c, ann, p, tildex)?;
-            let mut here = map_to_annotated_rule(proc, p, bodies);
-            let mut pl = p.clone();
-            pl.push(1);
-            let msrs_l = generate_rules(ctx, an_proc, &pl, &tildex_l)?;
-            here.extend(msrs_l);
-            if let Some(tx_r) = tildex_r {
+) -> Result<Vec<AnnotatedRule<'a, ProcessAnnotation<LVar>>>, String> {
+    enum Task<'a> {
+        Visit(
+            &'a Process<ProcessAnnotation<LVar>, SapicLVar>,
+            ProcessPosition,
+            BTreeSet<LVar>,
+        ),
+        StartBranch(
+            &'a Process<ProcessAnnotation<LVar>, SapicLVar>,
+            ProcessPosition,
+            BTreeSet<LVar>,
+            ProcessPosition,
+        ),
+        Rewrite(usize, ProcessPosition, ProcessPosition),
+    }
+    let mut tasks = vec![Task::Visit(an_proc, p.clone(), tildex.clone())];
+    let mut out: Vec<AnnotatedRule<'a, ProcessAnnotation<LVar>>> = Vec::new();
+    while let Some(task) = tasks.pop() {
+        let (proc, p, tx) = match task {
+            Task::Visit(proc, p, tx) => (proc, p, tx),
+            Task::StartBranch(proc, p, tx, parent) => {
+                tasks.push(Task::Rewrite(out.len(), p.clone(), parent));
+                (proc, p, tx)
+            }
+            Task::Rewrite(start, old, new) => {
+                for rule in &mut out[start..] {
+                    for fact in &mut rule.prems {
+                        if let TransFact::State(kind, pos, _) = fact
+                            && *pos == old
+                            && !kind.is_semi_state()
+                        {
+                            *kind = StateKind::LState;
+                            pos.clone_from(&new);
+                        }
+                    }
+                }
+                continue;
+            }
+        };
+        match proc {
+            Process::Null(_) => {
+                out.extend(map_to_annotated_rule(proc, &p, base_trans_null(&p, &tx)))
+            }
+            Process::Action(ac, ann, body) => {
+                let (bodies, next_tx) = trans_action(ctx, ac, ann, &p, &tx)?;
+                out.extend(map_to_annotated_rule(proc, &p, bodies));
+                let mut child = p;
+                child.push(1);
+                tasks.push(Task::Visit(body, child, next_tx));
+            }
+            Process::Comb(ProcessCombinator::Ndc, _, left, right) => {
+                // Rewrite after each complete branch, innermost NDC first.
+                // Only its output suffix is touched; rule names retain their
+                // original positions and left rules still precede right rules.
+                let mut pl = p.clone();
+                pl.push(1);
                 let mut pr = p.clone();
                 pr.push(2);
-                let msrs_r = generate_rules(ctx, an_proc, &pr, &tx_r)?;
-                here.extend(msrs_r);
+                tasks.push(Task::StartBranch(right, pr, tx.clone(), p.clone()));
+                tasks.push(Task::StartBranch(left, pl, tx, p));
             }
-            Ok(here)
+            Process::Comb(c, ann, left, right) => {
+                let (bodies, tx_l, tx_r) = trans_comb(ctx, c, ann, &p, &tx)?;
+                out.extend(map_to_annotated_rule(proc, &p, bodies));
+                if let Some(tx_r) = tx_r {
+                    let mut pr = p.clone();
+                    pr.push(2);
+                    tasks.push(Task::Visit(right, pr, tx_r));
+                }
+                let mut pl = p;
+                pl.push(1);
+                tasks.push(Task::Visit(left, pl, tx_l));
+            }
         }
     }
+    Ok(out)
 }
 
 /// `trans_action` = `progressTransAct (reliableChannelTransAct baseTransAction)`
@@ -248,41 +249,6 @@ fn trans_comb(
         ))
     } else {
         Ok((bodies, tx1, tx2))
-    }
-}
-
-/// `substStatePos p_old p_new` over a list of generated rules
-/// (sapic/src/Sapic.hs:112-153, see line 124,
-/// 140-144): rewrite the position of every NON-semistate `State` PREMISE fact
-/// from `p_old` to `p_new` (leaving the actual position `p_old==p++[i]` only in
-/// the rule NAME, which was already fixed during `gen`).
-fn subst_state_pos_rules(
-    rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>>,
-    p_old: &[i64],
-    p_new: &[i64],
-) -> Vec<AnnotatedRule<ProcessAnnotation<LVar>>> {
-    rules
-        .into_iter()
-        .map(|mut r| {
-            r.prems = r
-                .prems
-                .into_iter()
-                .map(|f| subst_state_pos_fact(f, p_old, p_new))
-                .collect();
-            r
-        })
-        .collect()
-}
-
-/// `substStatePos` on a single fact (sapic/src/Sapic.hs:142-144):
-///   State s p' vs | p' == p_old, not (isSemiState s) = State LState p_new vs
-///   otherwise = fact
-fn subst_state_pos_fact(f: TransFact, p_old: &[i64], p_new: &[i64]) -> TransFact {
-    match f {
-        TransFact::State(kind, pos, vs) if pos == p_old && !kind.is_semi_state() => {
-            TransFact::State(StateKind::LState, p_new.to_vec(), vs)
-        }
-        other => other,
     }
 }
 
@@ -392,15 +358,16 @@ pub(crate) fn translate(
         an_proc_states
     };
     let an_proc_let = crate::let_destructors::translate_let_destr(st_rules, an_proc_rep);
-    let an_proc = crate::locks::annotate_locks(an_proc_let)?;
+    let an_proc_owner = crate::locks::annotate_locks(an_proc_let)?;
+    let an_proc = &an_proc_owner;
 
     // Build the translation context (gated progress/reliable/async wrappers).
     // The progress-function domain / inverse are computed once (HS recomputes
     // them per node; same result).
     let (dom_pf, inv_pf): (PosSet, Option<Box<dyn Fn(&[i64]) -> Option<Pos>>>) =
         if opts.trans_progress {
-            let dom = crate::progress_function::pf_from(&an_proc)?;
-            let inv = crate::progress_function::pf_inv(&an_proc)?;
+            let dom = crate::progress_function::pf_from(an_proc)?;
+            let inv = crate::progress_function::pf_inv(an_proc)?;
             (dom, Some(Box::new(inv)))
         } else {
             (PosSet::new(), None)
@@ -417,25 +384,25 @@ pub(crate) fn translate(
     // initial rules + initial tildex.  HS chains (right-to-left via `=<<`):
     //   baseInit → progressInit → reliableChannelInit → reportInit
     // i.e. reportInit runs LAST, prepending the `ReportRule` to the front.
-    let (mut init_rules, mut init_tx) = base_init(&an_proc);
+    let (mut init_rules, mut init_tx) = base_init(an_proc);
     if opts.trans_progress {
-        let (r, t) = crate::progress_translation::progress_init(&an_proc, init_rules, init_tx)?;
+        let (r, t) = crate::progress_translation::progress_init(an_proc, init_rules, init_tx)?;
         init_rules = r;
         init_tx = t;
     }
     if opts.trans_reliable {
-        let (r, t) = crate::reliable_channel::reliable_channel_init(&an_proc, init_rules, init_tx);
+        let (r, t) = crate::reliable_channel::reliable_channel_init(an_proc, init_rules, init_tx);
         init_rules = r;
         init_tx = t;
     }
     if opts.trans_report {
-        let (r, t) = crate::report::report_init(&an_proc, init_rules, init_tx);
+        let (r, t) = crate::report::report_init(an_proc, init_rules, init_tx);
         init_rules = r;
         init_tx = t;
     }
 
     // protocol rules
-    let proto_rules = generate_rules(&ctx, &an_proc, &Vec::new(), &init_tx)?;
+    let proto_rules = generate_rules(&ctx, an_proc, &Vec::new(), &init_tx)?;
 
     // toRule over (initRules ++ protoRules); HS then applies pathCompression
     // (gated on progress) over the ELABORATED rules, BEFORE pairing with the
@@ -493,11 +460,11 @@ pub(crate) fn translate(
             Process::Action(tamarin_theory::sapic::SapicAction::Delete(_), an, _)
                 if !an.pure_state)
     };
-    if tamarin_theory::sapic::process_contains(&an_proc, is_lookup_non_pure) {
-        let has_delete = tamarin_theory::sapic::process_contains(&an_proc, is_delete_non_pure);
+    if tamarin_theory::sapic::process_contains(an_proc, is_lookup_non_pure) {
+        let has_delete = tamarin_theory::sapic::process_contains(an_proc, is_delete_non_pure);
         restrictions.extend(state_restrictions(has_delete));
     }
-    if tamarin_theory::sapic::process_contains(&an_proc, tamarin_theory::sapic::is_eq) {
+    if tamarin_theory::sapic::process_contains(an_proc, tamarin_theory::sapic::is_eq) {
         restrictions.extend(predicate_restrictions());
     }
     restrictions.push(single_session_restriction());
@@ -511,8 +478,8 @@ pub(crate) fn translate(
     // hardcoded restrictions, in HS order:
     //   lockingWithUnlock = map (resLocking True)  (nub  getUnlockPositions)
     //   lockingOnlyLock   = map (resLocking False) (getLockPositions \\ getUnlockPositions)
-    let unlock_positions = get_unlock_positions(&an_proc); // nub'd
-    let lock_positions = get_lock_positions(&an_proc); // NOT nub'd (HS `getLockPositions`)
+    let unlock_positions = get_unlock_positions(an_proc); // nub'd
+    let lock_positions = get_lock_positions(an_proc); // NOT nub'd (HS `getLockPositions`)
     for v in &unlock_positions {
         restrictions.push(crate::base_translation::res_locking(true, v));
     }
@@ -527,10 +494,10 @@ pub(crate) fn translate(
     // HS chains (right-to-left via `=<<`):
     //   baseRestr → progressRestr (if progress) → reliableChannelRestr (if reliable)
     if opts.trans_progress {
-        restrictions = crate::progress_translation::progress_restr(&an_proc, restrictions)?;
+        restrictions = crate::progress_translation::progress_restr(an_proc, restrictions)?;
     }
     if opts.trans_reliable {
-        restrictions = crate::reliable_channel::reliable_channel_restr(&an_proc, restrictions);
+        restrictions = crate::reliable_channel::reliable_channel_restr(an_proc, restrictions);
     }
 
     Ok(Translation {
@@ -577,31 +544,51 @@ fn is_pos_neg_formula(f: &LNFormula) -> (bool, bool) {
     fn swap(a: (bool, bool)) -> (bool, bool) {
         (a.1, a.0)
     }
-    match f {
-        ProtoFormula::Tf(_) => (true, true),
-        ProtoFormula::Atom(a) => is_pos_neg_atom(a),
-        ProtoFormula::Not(p) => swap(is_pos_neg_formula(p)),
-        ProtoFormula::Conn(Connective::And | Connective::Or, p, q) => {
-            and2(is_pos_neg_formula(p), is_pos_neg_formula(q))
+    enum Frame<'a> {
+        Not,
+        Left(Connective, &'a LNFormula),
+        Right(Connective, (bool, bool)),
+    }
+    let mut current = f;
+    let mut pending = Vec::new();
+    loop {
+        let mut result = match current {
+            ProtoFormula::Tf(_) => (true, true),
+            ProtoFormula::Atom(a) => is_pos_neg_atom(a),
+            ProtoFormula::Not(p) => {
+                pending.push(Frame::Not);
+                current = p;
+                continue;
+            }
+            ProtoFormula::Qua(_, _, p) => {
+                current = p;
+                continue;
+            }
+            ProtoFormula::Conn(c, l, r) => {
+                pending.push(Frame::Left(*c, r));
+                current = l;
+                continue;
+            }
+        };
+        loop {
+            match pending.pop() {
+                None => return result,
+                Some(Frame::Not) => result = swap(result),
+                Some(Frame::Left(c, r)) => {
+                    pending.push(Frame::Right(c, result));
+                    current = r;
+                    break;
+                }
+                Some(Frame::Right(c, l)) => {
+                    result = match c {
+                        Connective::And | Connective::Or => and2(l, result),
+                        Connective::Imp => and2(swap(l), result),
+                        // Preserve the upstream Iff polarity expression and its association.
+                        Connective::Iff => and2(swap(l), and2(swap(result), l)),
+                    }
+                }
+            }
         }
-        // `Conn Imp p q -> isPosNegFormula $ Not p .||. q`, i.e. the `Or` of the
-        // `Not` case — evaluated directly rather than by rebuilding the
-        // desugared formula.
-        ProtoFormula::Conn(Connective::Imp, p, q) => {
-            and2(swap(is_pos_neg_formula(p)), is_pos_neg_formula(q))
-        }
-        // `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p` — NOT
-        // the `And` of the two `Imp` cases: `.&&.` is infixl 3 and `.==>.` is
-        // infixr 1 (Theory/Model/Formula.hs:233-235), so the expression parses
-        // as `p .==>. ((q .&&. q) .==>. p)`, whose polarity is
-        // `and2(swap(fp), and2(swap(fq), fp))`.  The two differ whenever `fq`
-        // is asymmetric (a `K(..)@t` atom in `q`): HS keeps the second
-        // component `p1 && q1 && p2`, the symmetric reading zeroes it.
-        ProtoFormula::Conn(Connective::Iff, p, q) => {
-            let (fp, fq) = (is_pos_neg_formula(p), is_pos_neg_formula(q));
-            and2(swap(fp), and2(swap(fq), fp))
-        }
-        ProtoFormula::Qua(_, _, p) => is_pos_neg_formula(p),
     }
 }
 
@@ -666,6 +653,75 @@ mod tests {
                 }),
             }),
         }
+    }
+
+    fn core_ctx() -> TransCtx {
+        TransCtx {
+            needs_in_ev_res: false,
+            async_channels: false,
+            trans_progress: false,
+            trans_reliable: false,
+            dom_pf: PosSet::new(),
+            inv_pf: None,
+        }
+    }
+
+    #[test]
+    fn nested_ndc_rewrites_complete_branches_without_changing_rule_positions() {
+        let ann = ProcessAnnotation::empty;
+        let p = Process::Comb(
+            ProcessCombinator::Ndc,
+            ann(),
+            Box::new(Process::Null(ann())).into(),
+            Box::new(Process::Comb(
+                ProcessCombinator::Ndc,
+                ann(),
+                Box::new(Process::Null(ann())).into(),
+                Box::new(Process::Null(ann())).into(),
+            ))
+            .into(),
+        );
+        let rules = generate_rules(&core_ctx(), &p, &vec![], &BTreeSet::new()).unwrap();
+        assert_eq!(
+            rules.iter().map(|r| r.position.clone()).collect::<Vec<_>>(),
+            [
+                RulePosition::Pos(vec![1]),
+                RulePosition::Pos(vec![2, 1]),
+                RulePosition::Pos(vec![2, 2])
+            ]
+        );
+        for rule in rules {
+            assert!(
+                matches!(&rule.prems[..], [TransFact::State(StateKind::LState, pos, _)] if pos.is_empty())
+            );
+        }
+    }
+
+    #[test]
+    fn deep_rule_generation_uses_bounded_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut p = Process::Null(ProcessAnnotation::empty());
+                for _ in 0..2048 {
+                    p = Process::Action(
+                        tamarin_theory::sapic::SapicAction::Rep,
+                        ProcessAnnotation::empty(),
+                        Box::new(p).into(),
+                    );
+                }
+                let rules = generate_rules(&core_ctx(), &p, &vec![], &BTreeSet::new()).unwrap();
+                assert_eq!(rules.len(), 4097);
+                assert_eq!(
+                    rules.last().unwrap().position,
+                    RulePosition::Pos(vec![1; 2048])
+                );
+                drop(rules);
+                p.drop_iteratively();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

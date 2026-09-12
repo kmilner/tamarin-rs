@@ -273,8 +273,8 @@ fn pull(
     p_: SyntacticLNFormula,
     q: SyntacticLNFormula,
 ) -> SyntacticLNFormula {
-    let combined = ProtoFormula::Conn(op, Box::new(p_), Box::new(q));
-    ProtoFormula::Qua(qua, x, Box::new(pull_quantifiers(quans, combined)))
+    let combined = ProtoFormula::Conn(op, Box::new(p_).into(), Box::new(q).into());
+    ProtoFormula::Qua(qua, x, Box::new(pull_quantifiers(quans, combined)).into())
 }
 
 /// HS `pullQuantifiers` (Generation.hs:267-287).
@@ -282,38 +282,72 @@ fn pull_quantifiers(quans: &[Quant], fm: SyntacticLNFormula) -> SyntacticLNFormu
     let ProtoFormula::Conn(c, a, b) = fm else {
         return fm;
     };
-    match (c, *a, *b) {
+    match (c, a.into_inner(), b.into_inner()) {
         (Conn::And, ProtoFormula::Qua(Quant::All, x, p_), ProtoFormula::Qua(Quant::All, x2, q))
             if x == x2 =>
         {
-            pull(quans, Quant::All, Conn::And, x, *p_, *q)
+            pull(
+                quans,
+                Quant::All,
+                Conn::And,
+                x,
+                p_.into_inner(),
+                q.into_inner(),
+            )
         }
         (Conn::Or, ProtoFormula::Qua(Quant::Ex, x, p_), ProtoFormula::Qua(Quant::Ex, x2, q))
             if x == x2 =>
         {
-            pull(quans, Quant::Ex, Conn::Or, x, *p_, *q)
+            pull(
+                quans,
+                Quant::Ex,
+                Conn::Or,
+                x,
+                p_.into_inner(),
+                q.into_inner(),
+            )
         }
-        (Conn::And, ProtoFormula::Qua(qua, x, p_), q) if quans.contains(&qua) => {
-            pull(quans, qua, Conn::And, x, *p_, shift_free_indices(1, q))
-        }
-        (Conn::And, p_, ProtoFormula::Qua(qua, x, q)) if quans.contains(&qua) => {
-            pull(quans, qua, Conn::And, x, shift_free_indices(1, p_), *q)
-        }
-        (Conn::Or, ProtoFormula::Qua(qua, x, p_), q) if quans.contains(&qua) => {
-            pull(quans, qua, Conn::Or, x, *p_, shift_free_indices(1, q))
-        }
-        (Conn::Or, p_, ProtoFormula::Qua(qua, x, q)) if quans.contains(&qua) => {
-            pull(quans, qua, Conn::Or, x, shift_free_indices(1, p_), *q)
-        }
+        (Conn::And, ProtoFormula::Qua(qua, x, p_), q) if quans.contains(&qua) => pull(
+            quans,
+            qua,
+            Conn::And,
+            x,
+            p_.into_inner(),
+            shift_free_indices(1, q),
+        ),
+        (Conn::And, p_, ProtoFormula::Qua(qua, x, q)) if quans.contains(&qua) => pull(
+            quans,
+            qua,
+            Conn::And,
+            x,
+            shift_free_indices(1, p_),
+            q.into_inner(),
+        ),
+        (Conn::Or, ProtoFormula::Qua(qua, x, p_), q) if quans.contains(&qua) => pull(
+            quans,
+            qua,
+            Conn::Or,
+            x,
+            p_.into_inner(),
+            shift_free_indices(1, q),
+        ),
+        (Conn::Or, p_, ProtoFormula::Qua(qua, x, q)) if quans.contains(&qua) => pull(
+            quans,
+            qua,
+            Conn::Or,
+            x,
+            shift_free_indices(1, p_),
+            q.into_inner(),
+        ),
         (Conn::Imp, ProtoFormula::Qua(Quant::Ex, x, p_), q) if quans.contains(&Quant::All) => pull(
             quans,
             Quant::All,
             Conn::Imp,
             x,
-            *p_,
+            p_.into_inner(),
             shift_free_indices(1, q),
         ),
-        (c, a, b) => ProtoFormula::Conn(c, Box::new(a), Box::new(b)),
+        (c, a, b) => ProtoFormula::Conn(c, Box::new(a).into(), Box::new(b).into()),
     }
 }
 
@@ -324,24 +358,28 @@ fn merge_quantifiers(fm: SyntacticLNFormula) -> SyntacticLNFormula {
 
 fn merge_quantifiers1(quans: &[Quant], fm: SyntacticLNFormula) -> SyntacticLNFormula {
     match fm {
-        ProtoFormula::Not(p_) => ProtoFormula::Not(Box::new(merge_quantifiers1(quans, *p_))),
-        ProtoFormula::Qua(qua, x, p_) => {
-            ProtoFormula::Qua(qua, x, Box::new(merge_quantifiers1(&[qua], *p_)))
+        ProtoFormula::Not(p_) => {
+            ProtoFormula::Not(Box::new(merge_quantifiers1(quans, p_.into_inner())).into())
         }
+        ProtoFormula::Qua(qua, x, p_) => ProtoFormula::Qua(
+            qua,
+            x,
+            Box::new(merge_quantifiers1(&[qua], p_.into_inner())).into(),
+        ),
         ProtoFormula::Conn(c @ (Conn::And | Conn::Or | Conn::Imp), p_, q) => pull_quantifiers(
             quans,
             ProtoFormula::Conn(
                 c,
-                Box::new(merge_quantifiers1(quans, *p_)),
-                Box::new(merge_quantifiers1(quans, *q)),
+                Box::new(merge_quantifiers1(quans, p_.into_inner())).into(),
+                Box::new(merge_quantifiers1(quans, q.into_inner())).into(),
             ),
         ),
         // HS `Conn Iff p q -> pullQuantifiers quans $ (mq p .==>. mq q) .&&.
         // (mq q .==>. mq p)` (Generation.hs:298-299): the biconditional
         // expands to the conjunction of both implications.
         ProtoFormula::Conn(Conn::Iff, p_, q) => {
-            let mp = merge_quantifiers1(quans, *p_);
-            let mq = merge_quantifiers1(quans, *q);
+            let mp = merge_quantifiers1(quans, p_.into_inner());
+            let mq = merge_quantifiers1(quans, q.into_inner());
             let inner = mp.clone().implies(mq.clone()).and(mq.implies(mp));
             pull_quantifiers(quans, inner)
         }
@@ -353,17 +391,19 @@ fn merge_quantifiers1(quans: &[Quant], fm: SyntacticLNFormula) -> SyntacticLNFor
 fn simplify_formula(fm: SyntacticLNFormula) -> SyntacticLNFormula {
     match fm {
         ProtoFormula::Atom(a) => simplify_formula1(ProtoFormula::Atom(a)),
-        ProtoFormula::Not(p_) => {
-            simplify_formula1(ProtoFormula::Not(Box::new(simplify_formula(*p_))))
-        }
+        ProtoFormula::Not(p_) => simplify_formula1(ProtoFormula::Not(
+            Box::new(simplify_formula(p_.into_inner())).into(),
+        )),
         ProtoFormula::Conn(c, p_, q) => simplify_formula1(ProtoFormula::Conn(
             c,
-            Box::new(simplify_formula(*p_)),
-            Box::new(simplify_formula(*q)),
+            Box::new(simplify_formula(p_.into_inner())).into(),
+            Box::new(simplify_formula(q.into_inner())).into(),
         )),
-        ProtoFormula::Qua(qua, x, p_) => {
-            simplify_formula1(ProtoFormula::Qua(qua, x, Box::new(simplify_formula(*p_))))
-        }
+        ProtoFormula::Qua(qua, x, p_) => simplify_formula1(ProtoFormula::Qua(
+            qua,
+            x,
+            Box::new(simplify_formula(p_.into_inner())).into(),
+        )),
         other => other,
     }
 }
@@ -379,42 +419,42 @@ fn simplify_formula1(fm: SyntacticLNFormula) -> SyntacticLNFormula {
                 ProtoFormula::Atom(ProtoAtom::EqE(l, r))
             }
         }
-        ProtoFormula::Not(p_) => match *p_ {
+        ProtoFormula::Not(p_) => match p_.into_inner() {
             ProtoFormula::Tf(b) => ProtoFormula::Tf(!b),
-            other => ProtoFormula::Not(Box::new(other)),
+            other => ProtoFormula::Not(Box::new(other).into()),
         },
-        ProtoFormula::Conn(And, p_, q) => match (*p_, *q) {
+        ProtoFormula::Conn(And, p_, q) => match (p_.into_inner(), q.into_inner()) {
             (ProtoFormula::Tf(false), _) => ProtoFormula::Tf(false),
             (_, ProtoFormula::Tf(false)) => ProtoFormula::Tf(false),
             (ProtoFormula::Tf(true), q) => q,
             (p_, ProtoFormula::Tf(true)) => p_,
-            (p_, q) => ProtoFormula::Conn(And, Box::new(p_), Box::new(q)),
+            (p_, q) => ProtoFormula::Conn(And, Box::new(p_).into(), Box::new(q).into()),
         },
-        ProtoFormula::Conn(Or, p_, q) => match (*p_, *q) {
+        ProtoFormula::Conn(Or, p_, q) => match (p_.into_inner(), q.into_inner()) {
             (ProtoFormula::Tf(false), q) => q,
             (p_, ProtoFormula::Tf(false)) => p_,
             (ProtoFormula::Tf(true), _) => ProtoFormula::Tf(true),
             (_, ProtoFormula::Tf(true)) => ProtoFormula::Tf(true),
-            (p_, q) => ProtoFormula::Conn(Or, Box::new(p_), Box::new(q)),
+            (p_, q) => ProtoFormula::Conn(Or, Box::new(p_).into(), Box::new(q).into()),
         },
-        ProtoFormula::Conn(Imp, p_, q) => match (*p_, *q) {
+        ProtoFormula::Conn(Imp, p_, q) => match (p_.into_inner(), q.into_inner()) {
             (ProtoFormula::Tf(false), _) => ProtoFormula::Tf(true),
             (ProtoFormula::Tf(true), q) => q,
             (_, ProtoFormula::Tf(true)) => ProtoFormula::Tf(true),
-            (p_, ProtoFormula::Tf(false)) => ProtoFormula::Not(Box::new(p_)),
-            (p_, q) => ProtoFormula::Conn(Imp, Box::new(p_), Box::new(q)),
+            (p_, ProtoFormula::Tf(false)) => ProtoFormula::Not(Box::new(p_).into()),
+            (p_, q) => ProtoFormula::Conn(Imp, Box::new(p_).into(), Box::new(q).into()),
         },
-        ProtoFormula::Conn(Iff, p_, q) => match (*p_, *q) {
+        ProtoFormula::Conn(Iff, p_, q) => match (p_.into_inner(), q.into_inner()) {
             (ProtoFormula::Tf(true), q) => q,
             (p_, ProtoFormula::Tf(true)) => p_,
             (ProtoFormula::Tf(false), ProtoFormula::Tf(false)) => ProtoFormula::Tf(true),
-            (ProtoFormula::Tf(false), q) => ProtoFormula::Not(Box::new(q)),
-            (p_, ProtoFormula::Tf(false)) => ProtoFormula::Not(Box::new(p_)),
-            (p_, q) => ProtoFormula::Conn(Iff, Box::new(p_), Box::new(q)),
+            (ProtoFormula::Tf(false), q) => ProtoFormula::Not(Box::new(q).into()),
+            (p_, ProtoFormula::Tf(false)) => ProtoFormula::Not(Box::new(p_).into()),
+            (p_, q) => ProtoFormula::Conn(Iff, Box::new(p_).into(), Box::new(q).into()),
         },
-        ProtoFormula::Qua(qua, x, p_) => match *p_ {
+        ProtoFormula::Qua(qua, x, p_) => match p_.into_inner() {
             ProtoFormula::Tf(b) => ProtoFormula::Tf(b),
-            body => ProtoFormula::Qua(qua, x, Box::new(body)),
+            body => ProtoFormula::Qua(qua, x, Box::new(body).into()),
         },
         other => other,
     }
@@ -477,7 +517,7 @@ mod tests {
         let ProtoFormula::Qua(Quant::All, _, body) = pulled else {
             panic!("expected a universal at the top");
         };
-        let ProtoFormula::Conn(Conn::And, l, r) = *body else {
+        let ProtoFormula::Conn(Conn::And, l, r) = body.into_inner() else {
             panic!("expected a conjunction under the binder");
         };
         assert_eq!(*l, at_bound("A", 0));

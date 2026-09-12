@@ -470,3 +470,219 @@ fn parsed_to_unannotated_marks_whole_subtree() {
         assert!(matches!(child.method, ProofMethod::Sorry(None)));
     }
 }
+
+#[test]
+fn invalid_deep_proof_replay_and_searched_lifecycle_use_bounded_stack() {
+    let Some(h) = maude() else { return };
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let ctx = ProofContext::new(h, Vec::new());
+            for (depth, roundtrip) in [(2030, true), (8192, false)] {
+                let mut stored = ProofTree {
+                    method: ProofMethod::Sorry(None),
+                    cases: Vec::new(),
+                };
+                for _ in 0..depth {
+                    stored = ProofTree {
+                        method: ProofMethod::Simplify,
+                        cases: vec![(String::new(), stored)],
+                    };
+                }
+                // An invalid step retains the entire stored subtree unannotated.
+                stored.method = ProofMethod::Induction;
+                // Keep the full textual roundtrip on the smaller fixture to bound
+                // test cost; this is not a parser depth limit. Both sizes
+                // exercise replay, rendering and ordinary owner cleanup.
+                let source = format!(
+                    "theory T begin lemma L: \"T\" {} end",
+                    crate::pretty_theory::pretty_proof_body(&stored)
+                );
+                let input = if roundtrip {
+                    let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+                    Some(crate::elaborate::elaborate(&parsed).unwrap())
+                } else {
+                    None
+                };
+                let selected = input
+                    .as_ref()
+                    .and_then(|theory| {
+                        theory.items.iter().find_map(|item| {
+                            if let crate::theory::TheoryItem::Lemma(lemma) = item {
+                                lemma.proof.as_ref()
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .unwrap_or(&stored);
+                let replayed = check_and_extend(&ctx, past_initial_system(), selected, 50).unwrap();
+                assert!(replayed.annotated);
+                let copied = replayed.clone();
+                assert_eq!(
+                    crate::constraint::solver::search::proof_status(&copied),
+                    crate::constraint::solver::search::ProofStatus::Incomplete
+                );
+                let output = crate::pretty_theory::pretty_proof_body(&copied);
+                assert_eq!(output.matches("unannotated").count(), depth + 1);
+                if roundtrip {
+                    let source = format!("theory T begin lemma L: \"T\" {output} end");
+                    let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+                    drop(crate::elaborate::elaborate(&parsed).unwrap());
+                }
+                assert!(crate::constraint::solver::search::into_solved_systems(copied).is_empty());
+                drop((replayed, stored));
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn valid_deep_replay_uses_guarded_stack() {
+    let Some(h) = maude() else { return };
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let ctx = ProofContext::new(h, Vec::new());
+            let goal = Goal::Disj(crate::constraint::constraints::Disj::new(vec![
+                crate::guarded::gtrue(),
+            ]));
+            let mut sys = past_initial_system();
+            sys.add_goal(goal.clone());
+            let depth = std::env::var("TAM_TEST_REPLAY_DEPTH")
+                .ok()
+                .map(|s| s.parse().unwrap())
+                .unwrap_or(2048);
+            let method = ProofMethod::SolveGoal(goal);
+            let mut stored = ProofTree {
+                method: ProofMethod::Finished(MethodResult::Solved),
+                cases: Vec::new(),
+            };
+            for _ in 0..depth {
+                stored = ProofTree {
+                    method: method.clone(),
+                    cases: vec![(String::new(), stored)],
+                };
+            }
+            // Solved goals remain in the system and may legally be replayed
+            // again. This deliberately redundant proof isolates replay depth
+            // from the size and cost of the individual solver steps.
+            for auto_prove in [false, true] {
+                let result = replay_node(&ctx, sys.clone(), &stored, 50, auto_prove).unwrap();
+                let mut current = &result;
+                for _ in 0..depth {
+                    assert!(current.annotated);
+                    assert_eq!(current.method, method);
+                    assert_eq!(current.status, NodeStatus::Solved);
+                    assert_eq!(current.children.len(), 1);
+                    current = current.children.get("case_1").unwrap();
+                }
+                assert!(current.annotated);
+                assert_eq!(current.method, ProofMethod::Finished(MethodResult::Solved));
+                assert!(current.children.is_empty());
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn replay_preserves_duplicate_visits_and_stored_only_cases() {
+    let Some(h) = maude() else { return };
+    let ctx = ProofContext::new(h, Vec::new());
+    let goal = Goal::Disj(crate::constraint::constraints::Disj::new(vec![
+        crate::guarded::gtrue(),
+        crate::guarded::gtrue(),
+    ]));
+    let mut sys = past_initial_system();
+    sys.add_goal(goal.clone());
+    let leaf = |method| ProofTree {
+        method,
+        cases: Vec::new(),
+    };
+    let stored = ProofTree {
+        method: ProofMethod::SolveGoal(goal),
+        cases: vec![
+            (
+                "case_2".into(),
+                leaf(ProofMethod::Finished(MethodResult::Solved)),
+            ),
+            (
+                "orphan".into(),
+                leaf(ProofMethod::Finished(MethodResult::Solved)),
+            ),
+            (
+                "case_2".into(),
+                leaf(ProofMethod::Sorry(Some("last visit".into()))),
+            ),
+        ],
+    };
+    let result = check_and_extend(&ctx, sys, &stored, 50).unwrap();
+    // The first visit still contributes Solved, although the second wins
+    // the map insertion. The absent case_1 is an annotated runtime-only sorry.
+    assert_eq!(result.status, NodeStatus::Solved);
+    assert_eq!(result.children.len(), 3);
+    assert_eq!(
+        result.children["case_2"].method,
+        ProofMethod::Sorry(Some("last visit".into()))
+    );
+    assert!(result.children["case_1"].annotated);
+    assert_eq!(result.children["case_1"].method, ProofMethod::Sorry(None));
+    assert!(!result.children["orphan"].annotated);
+}
+
+#[test]
+fn replay_scopes_restore_after_deep_child_error() {
+    use crate::constraint::solver::trace::{case_path_snapshot, CasePathGuard};
+    let Some(h) = maude() else { return };
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let mut ctx = ProofContext::new(h, Vec::new());
+            ctx.heuristic = Some(vec![
+                crate::constraint::solver::goals::GoalRanking::Tactic {
+                    quit_on_empty: false,
+                    tactic: std::sync::Arc::new(crate::tactic::Tactic {
+                        name: "missing".into(),
+                        presort: 's',
+                        prios: Vec::new(),
+                        deprios: Vec::new(),
+                    }),
+                    resolution_error: Some(std::sync::Arc::from("replay child ranking failure")),
+                },
+            ]);
+            let repeated = Goal::Disj(crate::constraint::constraints::Disj::new(vec![
+                crate::guarded::gtrue(),
+            ]));
+            let term = tamarin_term::lterm::pub_term("remaining");
+            let mut sys = past_initial_system();
+            sys.add_goal(repeated.clone());
+            sys.add_goal(Goal::Disj(crate::constraint::constraints::Disj::new(vec![
+                crate::guarded::Guarded::Atom(crate::atom::ProtoAtom::EqE(term.clone(), term)),
+            ])));
+            let mut stored = ProofTree {
+                method: ProofMethod::Sorry(None),
+                cases: Vec::new(),
+            };
+            for _ in 0..512 {
+                stored = ProofTree {
+                    method: ProofMethod::SolveGoal(repeated.clone()),
+                    cases: vec![(String::new(), stored)],
+                };
+            }
+            let _outer = CasePathGuard::set_child(Some(vec!["outer".into()]), "");
+            let before = case_path_snapshot();
+            // Stored steps replay successfully; only the final automatic
+            // search consults the failing heuristic. Run with TAM_RS_TRACE_STATE=1
+            // to check restoration of active paths across the grown stack.
+            let error = replay_node(&ctx, sys, &stored, 50, true).unwrap_err();
+            assert!(format!("{error:?}").contains("replay child ranking failure"));
+            assert_eq!(case_path_snapshot(), before);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

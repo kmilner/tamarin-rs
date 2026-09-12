@@ -1002,7 +1002,7 @@ fn binder_sorts_keep_two_systems_apart() {
             qua: Quantifier::Ex,
             vars: Arc::from(vec![("x".to_string(), sort)]),
             guards: Arc::from(Vec::new()),
-            body: Arc::new(gtrue()),
+            body: crate::guarded::GuardedBody::new(gtrue()),
         })];
         sys
     };

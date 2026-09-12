@@ -18,6 +18,11 @@
 //! innermost binder, `Bound(k-1)` the outermost — and `Free(v)` an unbound
 //! `LVar`.
 
+mod structure;
+mod walk;
+pub use structure::{GuardedBody, GuardedChildren};
+use walk::{rewrite, Step};
+
 use std::collections::BTreeSet;
 
 use crate::atom::{fold_atom, map_atom, Atom, ProtoAtom};
@@ -25,7 +30,9 @@ use crate::fact::Fact;
 use crate::formula::{lift_free, BLNTerm, Quantifier};
 use crate::tools::equation_store::LNSubst;
 use tamarin_term::lterm::{frees, BVar, HasFrees, LNTerm, LSort, LVar};
-use tamarin_term::term::{f_app, map_lits, Term};
+use tamarin_term::term::map_lits;
+#[cfg(test)]
+use tamarin_term::term::Term;
 use tamarin_term::vterm::{var_term, Lit};
 use tamarin_utils::cow::{cow_map_arc, cow_map_vec, cow_pair};
 use tamarin_utils::fresh::MonadFresh;
@@ -42,19 +49,19 @@ use tamarin_utils::fresh::MonadFresh;
 /// in the `GGuarded` binder list.  A variable leaf inside an atom is either
 /// `BVar::Bound(n)` — a De Bruijn index into that list — or `BVar::Free(v)`.
 ///
-/// The derived `Eq`/`Ord`/`Hash` are HS's own (`deriving (Eq, Ord, …)`,
+/// Structural `Eq`/`Ord`/`Hash` preserve HS's field order (`deriving (Eq, Ord, …)`,
 /// Guarded.hs:129).  `Hash` reads exactly the fields `PartialEq` compares, the
 /// consistency the implied-formula dedup's hash prefilter relies on
 /// (`insert_implied_formulas_pass`, constraint/solver/simplify.rs).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone)]
 pub enum Guarded {
     /// One atomic predicate (may contain Bound vars only when nested under
     /// a sufficient number of `GGuarded` binders).
     Atom(Atom<BLNTerm>),
     /// Disjunction of guarded sub-formulas.
-    Disj(std::sync::Arc<[Guarded]>),
+    Disj(GuardedChildren),
     /// Conjunction of guarded sub-formulas.
-    Conj(std::sync::Arc<[Guarded]>),
+    Conj(GuardedChildren),
     /// `qua xs. as ⇒ gf` (when `qua = All`) or `qua xs. as ∧ gf`
     /// (when `qua = Ex`). The `as` are the *guard* atoms, all
     /// quantified `xs` must be bound by them.
@@ -62,33 +69,59 @@ pub enum Guarded {
         qua: Quantifier,
         vars: std::sync::Arc<[(String, LSort)]>,
         guards: std::sync::Arc<[Atom<BLNTerm>]>,
-        body: std::sync::Arc<Guarded>,
+        body: GuardedBody,
     },
+}
+
+/// Visit guarded nodes left to right, including the root. The callback may
+/// prune a subtree or stop the walk; guard payloads belong to their binder node.
+pub(crate) fn visit_guarded<B>(
+    g: &Guarded,
+    f: impl FnMut(usize, &Guarded) -> std::ops::ControlFlow<B, bool>,
+) -> std::ops::ControlFlow<B> {
+    walk::visit(g, f)
+}
+
+/// Maximum combined guarded-formula and term depth on any path.
+#[cfg(test)]
+pub(crate) fn guarded_depth(guarded: &Guarded) -> usize {
+    let mut maximum = 1;
+    let _: std::ops::ControlFlow<()> = walk::visit(guarded, |depth, g| {
+        maximum = maximum.max(depth);
+        let mut atom_depth = |level: usize, a: &Atom<BLNTerm>| {
+            fold_atom(a, &mut |t| {
+                maximum = maximum.max(level.saturating_add(tamarin_term::term::term_depth(t)))
+            });
+        };
+        match g {
+            Guarded::Atom(a) => atom_depth(depth, a),
+            Guarded::GGuarded { guards, .. } => {
+                for a in guards.iter() {
+                    atom_depth(depth.saturating_add(1), a)
+                }
+            }
+            _ => {}
+        }
+        std::ops::ControlFlow::Continue(true)
+    });
+    maximum
 }
 
 /// Shared empty child slice for the boolean atoms `gtrue`/`gfalse` — cloning
 /// it is a refcount bump rather than a per-call allocation.  The empty `Conj`
 /// (`gtrue`) and empty `Disj` (`gfalse`) each clone their own static so the two
 /// hot constants never contend on a single cache line.
-static EMPTY_CONJ: std::sync::OnceLock<std::sync::Arc<[Guarded]>> = std::sync::OnceLock::new();
-static EMPTY_DISJ: std::sync::OnceLock<std::sync::Arc<[Guarded]>> = std::sync::OnceLock::new();
+static EMPTY_CONJ: std::sync::OnceLock<GuardedChildren> = std::sync::OnceLock::new();
+static EMPTY_DISJ: std::sync::OnceLock<GuardedChildren> = std::sync::OnceLock::new();
 static EMPTY_VARS: std::sync::OnceLock<std::sync::Arc<[(String, LSort)]>> =
     std::sync::OnceLock::new();
 
 /// Boolean atom helper.
 pub fn gtrue() -> Guarded {
-    Guarded::Conj(
-        EMPTY_CONJ
-            .get_or_init(|| std::sync::Arc::from(Vec::new()))
-            .clone(),
-    )
+    Guarded::Conj(EMPTY_CONJ.get_or_init(|| Vec::new().into()).clone())
 }
 pub fn gfalse() -> Guarded {
-    Guarded::Disj(
-        EMPTY_DISJ
-            .get_or_init(|| std::sync::Arc::from(Vec::new()))
-            .clone(),
-    )
+    Guarded::Disj(EMPTY_DISJ.get_or_init(|| Vec::new().into()).clone())
 }
 pub fn gtf(b: bool) -> Guarded {
     if b {
@@ -145,28 +178,14 @@ pub fn reducible_formula(fm: &Guarded) -> bool {
 /// else the runtime sees a 2-item Conj and mismatches HS's
 /// case-enumeration shape.
 pub fn gconj(items: Vec<Guarded>) -> Guarded {
-    fn flatten(item: Guarded, out: &mut Vec<Guarded>) -> bool {
-        // returns true if gfalse encountered (absorbs)
-        match item {
-            Guarded::Conj(inner) => {
-                for x in inner.iter() {
-                    if flatten(x.clone(), out) {
-                        return true;
-                    }
-                }
-                false
-            }
-            x if x == gfalse() => true,
-            x => {
-                out.push(x);
-                false
-            }
-        }
-    }
     let mut out = Vec::new();
-    for it in items {
-        if flatten(it, &mut out) {
-            return gfalse();
+    let mut pending = items;
+    pending.reverse();
+    while let Some(item) = pending.pop() {
+        match item {
+            Guarded::Conj(inner) => pending.extend(inner.iter().rev().cloned()),
+            x if x == gfalse() => return gfalse(),
+            x => out.push(x),
         }
     }
     // Port normal form: run `nub` BEFORE the `[gf] -> gf` singleton unwrap,
@@ -205,29 +224,15 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
     // 5-alt Disj goal, else the runtime sees a 2-alt Disj and mismatches
     // the case-enumeration of skeleton proofs like YubiSecure
     // slightly_weaker_invariant.
-    fn flatten(item: Guarded, out: &mut Vec<Guarded>) -> bool {
-        // returns true if gtrue encountered (absorbs)
-        match item {
-            Guarded::Disj(inner) => {
-                for x in inner.iter() {
-                    if flatten(x.clone(), out) {
-                        return true;
-                    }
-                }
-                false
-            }
-            x if x == gtrue() => true,
-            x if x == gfalse() => false,
-            x => {
-                out.push(x);
-                false
-            }
-        }
-    }
     let mut out = Vec::new();
-    for it in items {
-        if flatten(it, &mut out) {
-            return gtrue();
+    let mut pending = items;
+    pending.reverse();
+    while let Some(item) = pending.pop() {
+        match item {
+            Guarded::Disj(inner) => pending.extend(inner.iter().rev().cloned()),
+            x if x == gtrue() => return gtrue(),
+            x if x == gfalse() => {}
+            x => out.push(x),
         }
     }
     // HS-faithful: the `[gf] -> gf` singleton unwrap matches the FLATTENED,
@@ -273,7 +278,7 @@ pub fn gex(vars: Vec<(String, LSort)>, guards: Vec<Atom<BLNTerm>>, body: Guarded
         qua: Quantifier::Ex,
         vars: vars.into(),
         guards: guards.into(),
-        body: std::sync::Arc::new(body),
+        body: crate::guarded::GuardedBody::new(body),
     }
 }
 
@@ -294,7 +299,7 @@ pub fn gall(vars: Vec<(String, LSort)>, guards: Vec<Atom<BLNTerm>>, body: Guarde
         qua: Quantifier::All,
         vars: vars.into(),
         guards: guards.into(),
-        body: std::sync::Arc::new(body),
+        body: crate::guarded::GuardedBody::new(body),
     }
 }
 
@@ -317,62 +322,54 @@ pub fn simplify_guarded_with(
     fm: &Guarded,
     valuation: &dyn Fn(&Atom<LNTerm>) -> Option<bool>,
 ) -> Guarded {
-    // HS `simplifyGuardedOrReturn` calls `valuation =<< unbindAtom ato`
-    // (Guarded.hs:679), which is `Nothing` whenever any `Bound` leaf is
-    // present.
-    let eval = |a: &Atom<BLNTerm>| -> Option<bool> { unbind_atom(a).and_then(|la| valuation(&la)) };
-    match fm {
-        Guarded::Atom(a) => match eval(a) {
-            Some(true) => gtrue(),
-            Some(false) => gfalse(),
-            None => fm.clone(),
+    let eval = |a: &Atom<BLNTerm>| unbind_atom(a).and_then(|la| valuation(&la));
+    rewrite(
+        fm,
+        &mut |d, g| {
+            Ok::<_, std::convert::Infallible>(match g {
+                Guarded::Atom(a) => Step::Done(Some(eval(a).map_or_else(|| g.clone(), gtf))),
+                Guarded::GGuarded {
+                    qua: Quantifier::All,
+                    vars,
+                    guards,
+                    ..
+                } if vars.is_empty() => {
+                    let evals: Vec<_> = guards.iter().map(eval).collect();
+                    if evals.contains(&Some(false)) {
+                        Step::Done(Some(gtrue()))
+                    } else {
+                        Step::Descend(
+                            d,
+                            Some(
+                                guards
+                                    .iter()
+                                    .zip(evals)
+                                    .filter(|(_, v)| v.is_none())
+                                    .map(|(a, _)| a.clone())
+                                    .collect::<Vec<_>>(),
+                            ),
+                        )
+                    }
+                }
+                Guarded::GGuarded { .. } => Step::Done(Some(g.clone())),
+                _ => Step::Descend(d, None),
+            })
         },
-        Guarded::Disj(items) => {
-            let simplified: Vec<_> = items
-                .iter()
-                .map(|g| simplify_guarded_with(g, valuation))
-                .collect();
-            gdisj(simplified)
-        }
-        Guarded::Conj(items) => {
-            let simplified: Vec<_> = items
-                .iter()
-                .map(|g| simplify_guarded_with(g, valuation))
-                .collect();
-            gconj(simplified)
-        }
-        Guarded::GGuarded {
-            qua: Quantifier::All,
-            vars,
-            guards,
-            body,
-        } if vars.is_empty() => {
-            let evals: Vec<Option<bool>> = guards.iter().map(eval).collect();
-            // Any False guard → universal vacuously holds.
-            if evals.iter().any(|v| v == &Some(false)) {
-                return gtrue();
-            }
-            // Keep only the Unknown guards — True guards are vacuous.
-            let kept: Vec<Atom<BLNTerm>> = guards
-                .iter()
-                .zip(&evals)
-                .filter(|(_, v)| v.is_none())
-                .map(|(a, _)| a.clone())
-                .collect();
-            let body_s = simplify_guarded_with(body, valuation);
-            // HS-faithful: `simp` builds the universal via `gall [] (...) (simp
-            // gf)` (Guarded.hs:665-698, see line 689).  `gall` collapses to the body when the
-            // kept guards are empty AND collapses the whole universal to
-            // `gtrue` when the simplified body is `gtrue` (Guarded.hs:449-453, see line 452),
-            // regardless of whether guards remain.  Building `GGuarded`
-            // directly would leave a non-canonical `GGuarded{All,[],kept,
-            // gtrue}` where Haskell produces `gtrue`.
-            gall(vars.to_vec(), kept, body_s)
-        }
-        // Quantifiers with bound vars stay as-is — Haskell delays
-        // simplification past the binder.
-        Guarded::GGuarded { .. } => fm.clone(),
-    }
+        &mut |g, kept, children| {
+            Ok(Some(match g {
+                Guarded::Disj(_) => gdisj(children.unwrap_or_default()),
+                Guarded::Conj(_) => gconj(children.unwrap_or_default()),
+                Guarded::GGuarded { vars, .. } => gall(
+                    vars.to_vec(),
+                    kept.unwrap(),
+                    children.unwrap().pop().unwrap(),
+                ),
+                _ => unreachable!(),
+            }))
+        },
+    )
+    .unwrap()
+    .unwrap()
 }
 
 // =============================================================================
@@ -489,15 +486,10 @@ pub fn bterm_to_lterm(t: &BLNTerm) -> LNTerm {
 /// HS `unbindAtom` (Guarded.hs:351-352): the atom over plain `LVar`s when it
 /// carries no `Bound` leaf, `None` otherwise.
 pub(crate) fn unbind_atom(a: &Atom<BLNTerm>) -> Option<Atom<LNTerm>> {
-    fn has_bound(t: &BLNTerm) -> bool {
-        match t {
-            Term::Lit(Lit::Var(BVar::Bound(_))) => true,
-            Term::Lit(_) => false,
-            Term::App(_, args) => args.iter().any(has_bound),
-        }
-    }
     let mut bound = false;
-    fold_atom(a, &mut |t| bound |= has_bound(t));
+    fold_atom(a, &mut |t| {
+        t.for_each_lit(|l| bound |= matches!(l, Lit::Var(BVar::Bound(_))))
+    });
     if bound {
         None
     } else {
@@ -578,55 +570,58 @@ fn map_guarded_atoms<F: FnMut(u64, &Atom<BLNTerm>) -> Atom<BLNTerm>>(
     g: &Guarded,
     f: &mut F,
 ) -> Guarded {
-    fn rec<F: FnMut(u64, &Atom<BLNTerm>) -> Atom<BLNTerm>>(
-        g: &Guarded,
-        depth: u64,
-        f: &mut F,
-    ) -> Guarded {
-        match g {
-            Guarded::Atom(a) => Guarded::Atom(f(depth, a)),
-            Guarded::Disj(items) => Guarded::Disj(items.iter().map(|i| rec(i, depth, f)).collect()),
-            Guarded::Conj(items) => Guarded::Conj(items.iter().map(|i| rec(i, depth, f)).collect()),
-            Guarded::GGuarded {
-                qua,
-                vars,
-                guards,
-                body,
-            } => {
-                let new_depth = depth + vars.len() as u64;
-                Guarded::GGuarded {
+    rewrite(
+        g,
+        &mut |depth, g| {
+            Ok::<_, std::convert::Infallible>(match g {
+                Guarded::Atom(a) => Step::Done(Some(Guarded::Atom(f(depth, a)))),
+                Guarded::GGuarded { vars, guards, .. } => {
+                    let depth = depth + vars.len() as u64;
+                    Step::Descend(
+                        depth,
+                        Some(guards.iter().map(|a| f(depth, a)).collect::<Vec<_>>()),
+                    )
+                }
+                _ => Step::Descend(depth, None),
+            })
+        },
+        &mut |g, guards, children| {
+            Ok(Some(match g {
+                Guarded::Disj(_) => Guarded::Disj(children.unwrap_or_default().into()),
+                Guarded::Conj(_) => Guarded::Conj(children.unwrap_or_default().into()),
+                Guarded::GGuarded { qua, vars, .. } => Guarded::GGuarded {
                     qua: *qua,
                     vars: vars.clone(),
-                    guards: guards.iter().map(|a| f(new_depth, a)).collect(),
-                    body: std::sync::Arc::new(rec(body, new_depth, f)),
-                }
-            }
-        }
-    }
-    rec(g, 0, f)
+                    guards: guards.unwrap().into(),
+                    body: GuardedBody::new(children.unwrap().pop().unwrap()),
+                },
+                _ => unreachable!(),
+            }))
+        },
+    )
+    .unwrap()
+    .unwrap()
 }
 
 /// Returns `true` if the formula is "safety": closed (no free vars)
 /// and contains no existential quantifier in its guarded form.  HS
 /// `isSafetyFormula` (Guarded.hs:154-165).
 pub fn is_safety_formula(g: &Guarded) -> bool {
-    fn no_existential(g: &Guarded) -> bool {
-        match g {
-            Guarded::Atom(_) => true,
-            Guarded::GGuarded {
-                qua: Quantifier::Ex,
-                ..
-            } => false,
-            Guarded::GGuarded {
-                qua: Quantifier::All,
-                body,
-                ..
-            } => no_existential(body),
-            Guarded::Disj(inner) => inner.iter().all(no_existential),
-            Guarded::Conj(inner) => inner.iter().all(no_existential),
-        }
-    }
-    is_closed(g) && no_existential(g)
+    is_closed(g)
+        && walk::visit(g, |_, g| {
+            if matches!(
+                g,
+                Guarded::GGuarded {
+                    qua: Quantifier::Ex,
+                    ..
+                }
+            ) {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(true)
+            }
+        })
+        .is_continue()
 }
 
 /// Is `g` closed (no free variables)?  HS `null (frees [gf0])`
@@ -844,41 +839,46 @@ fn unguarded_error(positions: &[usize], freshened: &[LVar]) -> GuardError {
 /// allocation), `Some(rebuilt)` otherwise.  Mirrors the `subst_guarded_cow`
 /// convention (recursion returns `None` when all children are unchanged).
 pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
-    match g {
-        // An atom carries no connectives to flatten → always unchanged.
-        Guarded::Atom(_) => None,
-        Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),
-        Guarded::Conj(items) => {
-            // Normalise children first (COW), then re-run the `gconj`
-            // smart-constructor step (flatten nested Conj / absorb gfalse /
-            // dedup / singleton-unwrap).  When no child changed AND `gconj`
-            // is a structural no-op on the (already-normalised) children, the
-            // whole node is unchanged.  Otherwise the rebuild is exactly
-            // `gconj(children)`.
-            let mapped = cow_map_vec(items, normalise_guarded_cow);
-            let children: &[Guarded] = mapped.as_deref().unwrap_or(&items[..]);
-            if mapped.is_none() && gconj_is_structural_noop(children) {
-                None
+    rewrite(
+        g,
+        &mut |depth, g| {
+            Ok::<_, std::convert::Infallible>(if matches!(g, Guarded::Atom(_)) {
+                Step::Done(None)
             } else {
-                Some(gconj(children.to_vec()))
-            }
-        }
-        Guarded::GGuarded {
-            qua,
-            vars,
-            guards,
-            body,
-        } =>
-        // Only `body` can change; qua/vars/guards are cloned verbatim.
-        {
-            normalise_guarded_cow(body).map(|b| Guarded::GGuarded {
-                qua: *qua,
-                vars: vars.clone(),
-                guards: guards.clone(),
-                body: std::sync::Arc::new(b),
+                Step::Descend(depth, ())
             })
-        }
-    }
+        },
+        &mut |g, (), mapped| {
+            Ok(match g {
+                Guarded::Disj(items) => {
+                    let children = mapped.as_deref().unwrap_or(items);
+                    if mapped.is_none() && disj_flatten_is_structural_noop(children) {
+                        None
+                    } else {
+                        Some(Guarded::Disj(flatten_dedup_disj(children).into()))
+                    }
+                }
+                Guarded::Conj(items) => {
+                    let children = mapped.as_deref().unwrap_or(items);
+                    if mapped.is_none() && gconj_is_structural_noop(children) {
+                        None
+                    } else {
+                        Some(gconj(children.to_vec()))
+                    }
+                }
+                Guarded::GGuarded {
+                    qua, vars, guards, ..
+                } => mapped.map(|mut children| Guarded::GGuarded {
+                    qua: *qua,
+                    vars: vars.clone(),
+                    guards: guards.clone(),
+                    body: GuardedBody::new(children.pop().unwrap()),
+                }),
+                _ => unreachable!(),
+            })
+        },
+    )
+    .unwrap()
 }
 
 /// `gconj(items) == Guarded::Conj(items)` — i.e. the `gconj` smart
@@ -1016,135 +1016,209 @@ fn convert(
     f: &crate::formula::LNFormula,
     fresh: &mut tamarin_utils::fresh::PreciseFreshState,
 ) -> Result<Guarded, GuardError> {
-    use crate::formula::{open_formula_prefix, Connective, ProtoFormula, Quantifier};
-    match f {
-        ProtoFormula::Tf(b) => Ok(gtf(polarity != *b)),
-        ProtoFormula::Atom(a) => {
-            if polarity {
-                Ok(gnot_atom(a))
-            } else {
-                Ok(Guarded::Atom(a.clone()))
+    use crate::formula::{open_formula_prefix, Connective, LNFormula, ProtoFormula};
+    use std::borrow::Cow;
+    type Input<'a> = Cow<'a, LNFormula>;
+    type Close = (Quantifier, Vec<LVar>, Vec<Atom<LNTerm>>);
+    enum Frame<'a> {
+        Subject(Input<'a>),
+        Group {
+            todo: std::vec::IntoIter<(bool, Input<'a>)>,
+            output: Vec<Guarded>,
+            conjunction: bool,
+            close: Option<Close>,
+        },
+    }
+    fn finish(output: Vec<Guarded>, conjunction: bool, close: Option<Close>) -> Guarded {
+        let body = if conjunction {
+            gconj(output)
+        } else {
+            gdisj(output)
+        };
+        match close {
+            Some((q, xs, atoms)) => close_guarded(q, xs, atoms, body),
+            None => body,
+        }
+    }
+    fn subject(mut error: GuardError, pending: &[Frame<'_>]) -> GuardError {
+        if error.subject_formula.is_none() {
+            for frame in pending.iter().rev() {
+                if let Frame::Subject(f) = frame {
+                    error.subject_formula = Some(f.as_ref().clone());
+                    break;
+                }
             }
         }
-        ProtoFormula::Not(g) => convert(!polarity, g, fresh),
-        ProtoFormula::Conn(Connective::And, a, b) => {
-            let sub = vec![convert(polarity, a, fresh)?, convert(polarity, b, fresh)?];
-            Ok(if polarity { gdisj(sub) } else { gconj(sub) })
+        error
+    }
+    fn pair(input: Input<'_>) -> (Input<'_>, Input<'_>) {
+        match input {
+            Cow::Borrowed(ProtoFormula::Conn(_, l, r)) => (Cow::Borrowed(l), Cow::Borrowed(r)),
+            Cow::Owned(ProtoFormula::Conn(_, l, r)) => {
+                (Cow::Owned(l.into_inner()), Cow::Owned(r.into_inner()))
+            }
+            _ => unreachable!(),
         }
-        ProtoFormula::Conn(Connective::Or, a, b) => {
-            let sub = vec![convert(polarity, a, fresh)?, convert(polarity, b, fresh)?];
-            Ok(if polarity { gconj(sub) } else { gdisj(sub) })
-        }
-        ProtoFormula::Conn(Connective::Imp, a, b) => {
-            // p ⇒ q is ¬p ∨ q.
-            let nag = convert(!polarity, a, fresh)?;
-            let cag = convert(polarity, b, fresh)?;
-            let sub = vec![nag, cag];
-            Ok(if polarity { gconj(sub) } else { gdisj(sub) })
-        }
-        // p ↔ q is (p ⇒ q) ∧ (q ⇒ p), and HS conjoins the two arms at both
-        // polarities (Guarded.hs:565-566).
-        ProtoFormula::Conn(Connective::Iff, a, b) => {
-            let lhs = ProtoFormula::Conn(Connective::Imp, a.clone(), b.clone());
-            let rhs = ProtoFormula::Conn(Connective::Imp, b.clone(), a.clone());
-            Ok(gconj(vec![
-                convert(polarity, &lhs, fresh)?,
-                convert(polarity, &rhs, fresh)?,
-            ]))
-        }
-        // The quantifier decides whether the body must be a top-level
-        // implication (`convAll`) or a conjunction (`convEx`); the polarity
-        // decides which quantifier the guarded formula carries and which
-        // polarity the sub-formulas take (Guarded.hs:499-505).  The whole
-        // prefix of like quantifiers is opened at once, each binder drawn
-        // fresh and substituted into the body, so the guard check and the
-        // diagnostic name the binders HS names.
-        ProtoFormula::Qua(qua0, _, _) => {
-            let (xs, _, body) = open_formula_prefix(f, fresh);
-            let result = match qua0 {
-                Quantifier::All => {
-                    let out_qua = if polarity {
-                        Quantifier::Ex
-                    } else {
-                        Quantifier::All
-                    };
-                    convert_all(&xs, &body, polarity, out_qua, fresh)
+    }
+    let mut current = (polarity, Cow::Borrowed(f));
+    let mut pending = Vec::new();
+    loop {
+        let (polarity, input) = current;
+        let mut result = match input.as_ref() {
+            ProtoFormula::Tf(b) => gtf(polarity != *b),
+            ProtoFormula::Atom(a) => {
+                if polarity {
+                    gnot_atom(a)
+                } else {
+                    Guarded::Atom(a.clone())
                 }
-                Quantifier::Ex => {
-                    let out_qua = if polarity {
-                        Quantifier::All
-                    } else {
-                        Quantifier::Ex
-                    };
-                    convert_ex(&xs, &body, polarity, out_qua, fresh)
+            }
+            ProtoFormula::Not(_) => {
+                let next = match input {
+                    Cow::Borrowed(ProtoFormula::Not(p)) => Cow::Borrowed(&**p),
+                    Cow::Owned(ProtoFormula::Not(p)) => Cow::Owned(p.into_inner()),
+                    _ => unreachable!(),
+                };
+                current = (!polarity, next);
+                continue;
+            }
+            _ => {
+                let (children, conjunction, close) = match input.as_ref() {
+                    ProtoFormula::Conn(c, _, _) => {
+                        let c = *c;
+                        let (a, b) = pair(input);
+                        if c == Connective::Iff {
+                            let lhs = ProtoFormula::Conn(
+                                Connective::Imp,
+                                Box::new(a.clone().into_owned()).into(),
+                                Box::new(b.clone().into_owned()).into(),
+                            );
+                            let rhs = ProtoFormula::Conn(
+                                Connective::Imp,
+                                Box::new(b.into_owned()).into(),
+                                Box::new(a.into_owned()).into(),
+                            );
+                            (
+                                vec![(polarity, Cow::Owned(lhs)), (polarity, Cow::Owned(rhs))],
+                                true,
+                                None,
+                            )
+                        } else {
+                            (
+                                vec![
+                                    (
+                                        if c == Connective::Imp {
+                                            !polarity
+                                        } else {
+                                            polarity
+                                        },
+                                        a,
+                                    ),
+                                    (polarity, b),
+                                ],
+                                if c == Connective::And {
+                                    !polarity
+                                } else {
+                                    polarity
+                                },
+                                None,
+                            )
+                        }
+                    }
+                    ProtoFormula::Qua(q, _, _) => {
+                        let q = *q;
+                        let (xs, _, body) = open_formula_prefix(&input, fresh);
+                        pending.push(Frame::Subject(input));
+                        let (atoms, others) = if q == Quantifier::All {
+                            let ProtoFormula::Conn(Connective::Imp, ante, succ) = &body else {
+                                return Err(subject(
+                                    err("universal quantifier without toplevel implication"),
+                                    &pending,
+                                ));
+                            };
+                            let (atoms, others) = split_conj_actions_eqs(ante);
+                            let mut others: Vec<_> = others
+                                .into_iter()
+                                .map(|f| (!polarity, Cow::Owned(f.clone())))
+                                .collect();
+                            others.push((polarity, Cow::Owned((**succ).clone())));
+                            (atoms, others)
+                        } else {
+                            let (atoms, others) = split_conj_actions_eqs(&body);
+                            (
+                                atoms,
+                                others
+                                    .into_iter()
+                                    .map(|f| (polarity, Cow::Owned(f.clone())))
+                                    .collect(),
+                            )
+                        };
+                        let unguarded = remaining_unguarded(&xs, &atoms);
+                        if !unguarded.is_empty() {
+                            return Err(subject(unguarded_error(&unguarded, &xs), &pending));
+                        }
+                        let outq = if polarity {
+                            if q == Quantifier::All {
+                                Quantifier::Ex
+                            } else {
+                                Quantifier::All
+                            }
+                        } else {
+                            q
+                        };
+                        (
+                            others,
+                            if q == Quantifier::All {
+                                polarity
+                            } else {
+                                !polarity
+                            },
+                            Some((outq, xs, atoms)),
+                        )
+                    }
+                    _ => unreachable!(),
+                };
+                let capacity = children.len();
+                let mut todo = children.into_iter();
+                if let Some(next) = todo.next() {
+                    pending.push(Frame::Group {
+                        todo,
+                        output: Vec::with_capacity(capacity),
+                        conjunction,
+                        close,
+                    });
+                    current = next;
+                    continue;
                 }
-            };
-            // Both throws of this arm quote `ppFormula f0`, the quantifier
-            // sub-formula they were reached through (Guarded.hs:513, :562),
-            // and the exception carries that quote out unchanged — so the
-            // innermost quantifier is the one named, which the guard below
-            // reproduces by setting the field once.
-            result.map_err(|mut e| {
-                if e.subject_formula.is_none() {
-                    e.subject_formula = Some(f.clone());
+                finish(Vec::new(), conjunction, close)
+            }
+        };
+        loop {
+            match pending.pop() {
+                None => return Ok(result),
+                Some(Frame::Subject(_)) => {}
+                Some(Frame::Group {
+                    mut todo,
+                    mut output,
+                    conjunction,
+                    close,
+                }) => {
+                    output.push(result);
+                    if let Some(next) = todo.next() {
+                        pending.push(Frame::Group {
+                            todo,
+                            output,
+                            conjunction,
+                            close,
+                        });
+                        current = next;
+                        break;
+                    }
+                    result = finish(output, conjunction, close);
                 }
-                e
-            })
+            }
         }
     }
-}
-
-/// HS `convEx` (Guarded.hs:535-543): the body is a conjunction whose action
-/// and equality atoms guard the prefix.
-fn convert_ex(
-    xs: &[LVar],
-    body: &crate::formula::LNFormula,
-    polarity: bool,
-    out_qua: Quantifier,
-    fresh: &mut tamarin_utils::fresh::PreciseFreshState,
-) -> Result<Guarded, GuardError> {
-    let (atoms, others) = split_conj_actions_eqs(body);
-    let unguarded = remaining_unguarded(xs, &atoms);
-    if !unguarded.is_empty() {
-        return Err(unguarded_error(&unguarded, xs));
-    }
-    let mut converted = Vec::with_capacity(others.len());
-    for f in others {
-        converted.push(convert(polarity, f, fresh)?);
-    }
-    let body_guarded = if polarity {
-        gdisj(converted)
-    } else {
-        gconj(converted)
-    };
-    Ok(close_guarded(out_qua, xs.to_vec(), atoms, body_guarded))
-}
-
-/// HS `convAll` (Guarded.hs:546-563): the body is an implication whose
-/// antecedent guards the prefix.
-fn convert_all(
-    xs: &[LVar],
-    body: &crate::formula::LNFormula,
-    polarity: bool,
-    out_qua: Quantifier,
-    fresh: &mut tamarin_utils::fresh::PreciseFreshState,
-) -> Result<Guarded, GuardError> {
-    use crate::formula::{Connective, ProtoFormula};
-    let ProtoFormula::Conn(Connective::Imp, ante, succ) = body else {
-        return Err(err("universal quantifier without toplevel implication"));
-    };
-    let (atoms, ante_others) = split_conj_actions_eqs(ante);
-    let unguarded = remaining_unguarded(xs, &atoms);
-    if !unguarded.is_empty() {
-        return Err(unguarded_error(&unguarded, xs));
-    }
-    let mut sub = Vec::with_capacity(ante_others.len() + 1);
-    for f in ante_others {
-        sub.push(convert(!polarity, f, fresh)?);
-    }
-    sub.push(convert(polarity, succ, fresh)?);
-    let body_guarded = if polarity { gconj(sub) } else { gdisj(sub) };
-    Ok(close_guarded(out_qua, xs.to_vec(), atoms, body_guarded))
 }
 
 /// HS `conjActionsEqs` (Guarded.hs:516-519): split a conjunction into the
@@ -1156,15 +1230,14 @@ fn split_conj_actions_eqs(
     f: &crate::formula::LNFormula,
 ) -> (Vec<Atom<LNTerm>>, Vec<&crate::formula::LNFormula>) {
     use crate::formula::{Connective, ProtoFormula};
-    fn rec<'a>(
-        f: &'a crate::formula::LNFormula,
-        atoms: &mut Vec<Atom<LNTerm>>,
-        others: &mut Vec<&'a crate::formula::LNFormula>,
-    ) {
+    let mut atoms = Vec::new();
+    let mut others = Vec::new();
+    let mut pending = vec![f];
+    while let Some(f) = pending.pop() {
         match f {
             ProtoFormula::Conn(Connective::And, a, b) => {
-                rec(a, atoms, others);
-                rec(b, atoms, others);
+                pending.push(b);
+                pending.push(a);
             }
             ProtoFormula::Atom(a @ (ProtoAtom::Action(_, _) | ProtoAtom::EqE(_, _))) => {
                 atoms.push(bvar_to_lvar(a))
@@ -1172,9 +1245,6 @@ fn split_conj_actions_eqs(
             other => others.push(other),
         }
     }
-    let mut atoms = Vec::new();
-    let mut others = Vec::new();
-    rec(f, &mut atoms, &mut others);
     (atoms, others)
 }
 
@@ -1204,11 +1274,9 @@ fn split_conj_actions_eqs(
 fn gnot_atom(a: &Atom<BLNTerm>) -> Guarded {
     Guarded::GGuarded {
         qua: Quantifier::All,
-        vars: EMPTY_VARS
-            .get_or_init(|| std::sync::Arc::from(Vec::new()))
-            .clone(),
+        vars: EMPTY_VARS.get_or_init(|| Vec::new().into()).clone(),
         guards: vec![a.clone()].into(),
-        body: std::sync::Arc::new(gfalse()),
+        body: crate::guarded::GuardedBody::new(gfalse()),
     }
 }
 
@@ -1226,13 +1294,10 @@ fn gnot_atom(a: &Atom<BLNTerm>) -> Guarded {
 /// input.  A domain hit always changes the leaf, because a `Subst` drops the
 /// `x ~> x` mappings as it is built (SubstVFree.hs:163-165).
 fn subst_blnterm_cow(t: &BLNTerm, s: &LNSubst) -> Option<BLNTerm> {
-    match t {
-        Term::Lit(Lit::Var(BVar::Free(v))) => s.image_of(v).map(lift_free),
-        Term::Lit(_) => None,
-        Term::App(sym, args) => {
-            cow_map_vec(&args[..], |a| subst_blnterm_cow(a, s)).map(|new| f_app(*sym, new))
-        }
-    }
+    tamarin_term::term::bind_lits_cow(t, &mut |l| match l {
+        Lit::Var(BVar::Free(v)) => s.image_of(v).map(lift_free),
+        _ => None,
+    })
 }
 
 fn subst_gatom_cow(a: &Atom<BLNTerm>, s: &LNSubst) -> Option<Atom<BLNTerm>> {
@@ -1275,28 +1340,46 @@ pub fn subst_guarded(g: &Guarded, s: &LNSubst) -> Guarded {
 /// byte-identical to the eager rebuild (changed children rebuilt, unchanged
 /// children cloned, in positional order).
 pub fn subst_guarded_cow(g: &Guarded, s: &LNSubst) -> Option<Guarded> {
-    match g {
-        Guarded::Atom(a) => subst_gatom_cow(a, s).map(Guarded::Atom),
-        Guarded::Disj(items) => cow_map_arc(items, |i| subst_guarded_cow(i, s)).map(Guarded::Disj),
-        Guarded::Conj(items) => cow_map_arc(items, |i| subst_guarded_cow(i, s)).map(Guarded::Conj),
-        Guarded::GGuarded {
-            qua,
-            vars,
-            guards,
-            body,
-        } => cow_pair(
-            guards,
-            cow_map_arc(guards, |a| subst_gatom_cow(a, s)),
-            &**body,
-            subst_guarded_cow(body, s),
-        )
-        .map(|(guards, body)| Guarded::GGuarded {
-            qua: *qua,
-            vars: vars.clone(),
-            guards,
-            body: std::sync::Arc::new(body),
-        }),
-    }
+    rewrite(
+        g,
+        &mut |depth, g| {
+            Ok::<_, std::convert::Infallible>(match g {
+                Guarded::Atom(a) => Step::Done(subst_gatom_cow(a, s).map(Guarded::Atom)),
+                Guarded::GGuarded { guards, .. } => {
+                    Step::Descend(depth, cow_map_arc(guards, |a| subst_gatom_cow(a, s)))
+                }
+                _ => Step::Descend(depth, None),
+            })
+        },
+        &mut |g, mapped_guards, children| {
+            Ok(match g {
+                Guarded::Disj(_) => children.map(|v| Guarded::Disj(v.into())),
+                Guarded::Conj(_) => children.map(|v| Guarded::Conj(v.into())),
+                Guarded::GGuarded {
+                    qua,
+                    vars,
+                    guards,
+                    body,
+                } => {
+                    if mapped_guards.is_none() && children.is_none() {
+                        None
+                    } else {
+                        Some(Guarded::GGuarded {
+                            qua: *qua,
+                            vars: vars.clone(),
+                            guards: mapped_guards.unwrap_or_else(|| guards.clone()),
+                            body: children.map_or_else(
+                                || body.clone(),
+                                |mut v| GuardedBody::new(v.pop().unwrap()),
+                            ),
+                        })
+                    }
+                }
+                _ => unreachable!(),
+            })
+        },
+    )
+    .unwrap()
 }
 
 /// Rewrite every Maude-witness LVar named `x` (any idx) to its canonical
@@ -1358,20 +1441,18 @@ fn collect_witness_vars(g: &Guarded) -> LNSubst {
 /// under the mapped variables, whichever map mode the caller asked for.
 impl HasFrees for Guarded {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
-        match self {
-            Guarded::Atom(a) => fold_atom(a, &mut |t| t.for_each_free(f)),
-            Guarded::Disj(xs) | Guarded::Conj(xs) => {
-                for x in xs.iter() {
-                    x.for_each_free(f);
+        let _: std::ops::ControlFlow<()> = walk::visit(self, |_, g| {
+            match g {
+                Guarded::Atom(a) => fold_atom(a, &mut |t| t.for_each_free(f)),
+                Guarded::GGuarded { guards, .. } => {
+                    for a in guards.iter() {
+                        fold_atom(a, &mut |t| t.for_each_free(f));
+                    }
                 }
+                _ => {}
             }
-            Guarded::GGuarded { guards, body, .. } => {
-                for a in guards.iter() {
-                    fold_atom(a, &mut |t| t.for_each_free(f));
-                }
-                body.for_each_free(f);
-            }
-        }
+            std::ops::ControlFlow::Continue(true)
+        });
     }
 
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, _monotone: bool) -> Self {
@@ -1397,34 +1478,29 @@ impl HasFrees for Guarded {
 ///   - `All vs gs. gf` → `Ex vs. (gs ∧ ¬gf)` (i.e. `gs ∧ ¬gf` is the new body)
 ///   - `Ex vs gs. gf`  → `All vs. (gs ⇒ ¬gf)`
 pub fn gnot(g: &Guarded) -> Guarded {
-    match g {
-        Guarded::Atom(a) => gnot_atom(a),
-        Guarded::Disj(xs) => gconj(xs.iter().map(gnot).collect()),
-        Guarded::Conj(xs) => gdisj(xs.iter().map(gnot).collect()),
-        // Use the smart constructors `gex`/`gall` (NOT direct
-        // GGuarded build) so that empty-quantifier collapses fire:
-        // - `gnot(GGuarded(All, [], [Less i j], gfalse))` (== ¬(i<j))
-        //   goes through `gex [] [Less i j] gtrue` → `gconj([Less i j, gtrue])`
-        //   → `Less i j` (the atom), not a stale `GGuarded(Ex, [], [Less i j], gtrue)`.
-        // Without this collapse, `to_induction_hypothesis` sees the body
-        // as nested GGuarded and produces extra `¬(Less)` disjuncts in
-        // the IH instead of collapsing them down — leading to a much
-        // larger Disj at goal-split time. Mirrors Haskell:
-        //   go (GGuarded All ss as gf) = gex  ss as (go gf)
-        //   go (GGuarded Ex  ss as gf) = gall ss as (go gf)
-        Guarded::GGuarded {
-            qua: Quantifier::All,
-            vars,
-            guards,
-            body,
-        } => gex(vars.to_vec(), guards.to_vec(), gnot(body)),
-        Guarded::GGuarded {
-            qua: Quantifier::Ex,
-            vars,
-            guards,
-            body,
-        } => gall(vars.to_vec(), guards.to_vec(), gnot(body)),
-    }
+    rewrite(
+        g,
+        &mut |d, _| Ok::<_, std::convert::Infallible>(Step::Descend(d, ())),
+        &mut |g, (), children| {
+            Ok(Some(match g {
+                Guarded::Atom(a) => gnot_atom(a),
+                Guarded::Disj(_) => gconj(children.unwrap_or_default()),
+                Guarded::Conj(_) => gdisj(children.unwrap_or_default()),
+                Guarded::GGuarded {
+                    qua, vars, guards, ..
+                } => {
+                    let body = children.unwrap().pop().unwrap();
+                    if *qua == Quantifier::All {
+                        gex(vars.to_vec(), guards.to_vec(), body)
+                    } else {
+                        gall(vars.to_vec(), guards.to_vec(), body)
+                    }
+                }
+            }))
+        },
+    )
+    .unwrap()
+    .unwrap()
 }
 
 // =============================================================================
@@ -1435,126 +1511,124 @@ pub fn gnot(g: &Guarded) -> Guarded {
 /// trace (no actions)? Returns `Err` for atoms outside the scope of a
 /// quantifier (formula is not doubly guarded).
 pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
-    match g {
-        Guarded::Atom(_) => Err("atom outside the scope of a quantifier".to_string()),
-        Guarded::Disj(xs) => {
-            let mut any = false;
-            for x in xs.iter() {
-                if satisfied_by_empty_trace(x)? {
-                    any = true;
+    let mut current = g;
+    let mut pending = Vec::new();
+    loop {
+        let mut result = match current {
+            Guarded::Atom(_) => return Err("atom outside the scope of a quantifier".to_string()),
+            Guarded::GGuarded { qua, .. } => *qua == Quantifier::All,
+            Guarded::Conj(items) | Guarded::Disj(items) => {
+                let all = matches!(current, Guarded::Conj(_));
+                let mut iter = items.iter();
+                if let Some(first) = iter.next() {
+                    pending.push((all, all, iter));
+                    current = first;
+                    continue;
                 }
+                all
             }
-            Ok(any)
-        }
-        Guarded::Conj(xs) => {
-            // HS `liftM and . sequence . getConj` (Guarded.hs:588-594, see line 593):
-            // `sequence` forces ALL conjuncts (failing if any is `Left`)
-            // BEFORE reducing with `and`.  So we must evaluate every
-            // conjunct and propagate any error rather than short-circuiting
-            // on the first `Ok(false)`.
-            let mut all = true;
-            for x in xs.iter() {
-                if !satisfied_by_empty_trace(x)? {
-                    all = false;
-                }
+        };
+        loop {
+            let Some((all, acc, iter)) = pending.last_mut() else {
+                return Ok(result);
+            };
+            *acc = if *all { *acc && result } else { *acc || result };
+            if let Some(next) = iter.next() {
+                current = next;
+                break;
             }
-            Ok(all)
+            result = pending.pop().unwrap().1;
         }
-        Guarded::GGuarded { qua, .. } => Ok(matches!(qua, Quantifier::All)),
     }
 }
 
 /// Does the formula contain at least one action atom (anywhere)?
 /// `containsAction` from Haskell's `ginduct`.
 pub fn contains_action(g: &Guarded) -> bool {
-    match g {
-        // Haskell `containsAction = foldGuarded (const True) ...`
-        // (Guarded.hs:636-637): the bare-atom handler is `const True`, so
-        // EVERY atom (Action/Eq/Less/Last/Subterm) yields True — not
-        // only Action atoms.
-        Guarded::Atom(_) => true,
-        Guarded::Disj(xs) | Guarded::Conj(xs) => xs.iter().any(contains_action),
-        Guarded::GGuarded { guards, body, .. } => {
-            // Haskell `Guarded.hs:636-637`: `\_ _ as body -> not (null as) || body`.
-            !guards.is_empty() || contains_action(body)
+    walk::visit(g, |_, g| {
+        if matches!(g, Guarded::Atom(_))
+            || matches!(g,Guarded::GGuarded{guards,..} if !guards.is_empty())
+        {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(true)
         }
-    }
+    })
+    .is_break()
 }
 
 /// `toInductionHypothesis`: rewrite a doubly guarded formula into its
 /// induction hypothesis form. Errors out on non-last-free formulas.
 pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
-    match g {
-        Guarded::GGuarded {
-            qua,
-            vars,
-            guards,
-            body,
-        } => {
-            if guards.iter().any(Atom::is_last) {
-                return Err("formula not last-free".to_string());
-            }
-            let body2 = to_induction_hypothesis(body)?;
-            // Emit `Last(v)` for every node-sorted bound variable.
-            // Mirrors Haskell's
-            //   lastAtos = [ Last (varTerm (Bound j))
-            //              | (j, (_, LSortNode)) <- zip [0..] (reverse ss) ]
-            // Haskell `reverse ss` (Guarded.hs:613-616, see line 615) — node-sorted binders
-            // emitted in REVERSE quantifier order.  For `∀ k #i #j`, ss
-            // reversed = [#j, #i, k] → lastAtos = [Last(#j), Last(#i)].
-            // Without `.rev()`, our disj order is [#i, #j] (matches HS
-            // case_2 first), inverting `case_1`/`case_2` labels for the
-            // `last`-disjunction split and breaking proof-tree shape diff.
-            // HS `lastAtos = do (j, (_, LSortNode)) <- zip [0..] (reverse ss);
-            //                   return $ Last (varTerm (Bound j))`.
-            // Iterate vars inner-to-outer (rev), filter to node-sorted,
-            // assign DeBruijn `j = 0, 1, ...` in that order.
-            let last_atos: Vec<Guarded> = vars
-                .iter()
-                .rev()
-                .enumerate()
-                .filter(|(_, v)| v.1 == LSort::Node)
-                .map(|(j, _)| Guarded::Atom(ProtoAtom::Last(var_term(BVar::Bound(j as u64)))))
-                .collect();
-            match qua {
-                Quantifier::All => {
-                    // gex ss as (gconj (map gnotAtom lastAtos ++ [gf']))
-                    let mut items: Vec<Guarded> = last_atos.iter().map(gnot).collect();
-                    items.push(body2);
-                    Ok(gex(vars.to_vec(), guards.to_vec(), gconj(items)))
+    rewrite(
+        g,
+        &mut |d, _| Ok(Step::Descend(d, ())),
+        &mut |g, (), mut children| {
+            match g {
+                Guarded::GGuarded {
+                    qua,
+                    vars,
+                    guards,
+                    body: _,
+                } => {
+                    if guards.iter().any(Atom::is_last) {
+                        return Err("formula not last-free".to_string());
+                    }
+                    let body2 = children.as_mut().unwrap().pop().unwrap();
+                    // Emit `Last(v)` for every node-sorted bound variable.
+                    // Mirrors Haskell's
+                    //   lastAtos = [ Last (varTerm (Bound j))
+                    //              | (j, (_, LSortNode)) <- zip [0..] (reverse ss) ]
+                    // Haskell `reverse ss` (Guarded.hs:613-616, see line 615) — node-sorted binders
+                    // emitted in REVERSE quantifier order.  For `∀ k #i #j`, ss
+                    // reversed = [#j, #i, k] → lastAtos = [Last(#j), Last(#i)].
+                    // Without `.rev()`, our disj order is [#i, #j] (matches HS
+                    // case_2 first), inverting `case_1`/`case_2` labels for the
+                    // `last`-disjunction split and breaking proof-tree shape diff.
+                    // HS `lastAtos = do (j, (_, LSortNode)) <- zip [0..] (reverse ss);
+                    //                   return $ Last (varTerm (Bound j))`.
+                    // Iterate vars inner-to-outer (rev), filter to node-sorted,
+                    // assign DeBruijn `j = 0, 1, ...` in that order.
+                    let last_atos: Vec<Guarded> = vars
+                        .iter()
+                        .rev()
+                        .enumerate()
+                        .filter(|(_, v)| v.1 == LSort::Node)
+                        .map(|(j, _)| {
+                            Guarded::Atom(ProtoAtom::Last(var_term(BVar::Bound(j as u64))))
+                        })
+                        .collect();
+                    match qua {
+                        Quantifier::All => {
+                            // gex ss as (gconj (map gnotAtom lastAtos ++ [gf']))
+                            let mut items: Vec<Guarded> = last_atos.iter().map(gnot).collect();
+                            items.push(body2);
+                            Ok(gex(vars.to_vec(), guards.to_vec(), gconj(items)))
+                        }
+                        Quantifier::Ex => {
+                            // gall ss as (gdisj (map GAto lastAtos ++ [gf']))
+                            let mut items = last_atos;
+                            items.push(body2);
+                            Ok(gall(vars.to_vec(), guards.to_vec(), gdisj(items)))
+                        }
+                    }
                 }
-                Quantifier::Ex => {
-                    // gall ss as (gdisj (map GAto lastAtos ++ [gf']))
-                    let mut items = last_atos;
-                    items.push(body2);
-                    Ok(gall(vars.to_vec(), guards.to_vec(), gdisj(items)))
-                }
+                Guarded::Atom(ProtoAtom::Less(i, j)) => Ok(Guarded::Disj(
+                    vec![
+                        Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
+                        Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
+                    ]
+                    .into(),
+                )),
+                Guarded::Atom(ProtoAtom::Last(_)) => Err("formula not last-free".to_string()),
+                Guarded::Atom(a) => Ok(gnot_atom(a)),
+                Guarded::Disj(_) => Ok(gconj(children.unwrap_or_default())),
+                Guarded::Conj(_) => Ok(gdisj(children.unwrap_or_default())),
             }
-        }
-        Guarded::Atom(ProtoAtom::Less(i, j)) => Ok(Guarded::Disj(
-            vec![
-                Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
-                Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
-            ]
-            .into(),
-        )),
-        Guarded::Atom(ProtoAtom::Last(_)) => Err("formula not last-free".to_string()),
-        Guarded::Atom(a) => Ok(gnot_atom(a)),
-        Guarded::Disj(xs) => {
-            let xs2 = xs
-                .iter()
-                .map(to_induction_hypothesis)
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(gconj(xs2))
-        }
-        Guarded::Conj(xs) => {
-            let xs2 = xs
-                .iter()
-                .map(to_induction_hypothesis)
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(gdisj(xs2))
-        }
-    }
+            .map(Some)
+        },
+    )
+    .map(Option::unwrap)
 }
 
 /// `ginduct`: try to prove `g` by induction over the trace. Returns
