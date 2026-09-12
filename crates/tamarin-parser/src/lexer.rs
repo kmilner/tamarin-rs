@@ -48,6 +48,15 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Preserve cursor and deferred diagnostics when parking an include parser.
+    pub(crate) fn with_source<'b>(&self, src: &'b str) -> Lexer<'b> {
+        Lexer {
+            src,
+            pos: self.pos,
+            unterminated_comment: self.unterminated_comment,
+        }
+    }
+
     /// Whitespace parsing cannot return an error directly. Publish a consumed
     /// unterminated comment at the enclosing parser boundary.
     pub(crate) fn finish<T>(

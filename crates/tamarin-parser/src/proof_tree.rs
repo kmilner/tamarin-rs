@@ -97,66 +97,65 @@ impl<'a> TreeParser<'a> {
 
     /// HS `proofSkeleton` (Theory/Text/Parser/Proof.hs:98-115).
     fn proof_skeleton(&mut self) -> Result<ParsedProofTree, ParseError> {
-        self.lx.skip_ws();
-        // solvedProof: `SOLVED`
-        if self.try_kw("SOLVED") {
-            return Ok(ParsedProofTree {
-                method: ParsedMethod::SolvedLeaf,
-                cases: Vec::new(),
-            });
+        struct Pending {
+            tree: ParsedProofTree,
+            name: String,
+            block: bool,
         }
-        // finalProof: `by <proofMethod>`
-        if self.try_kw("by") {
-            let m = self.proof_method()?;
-            return Ok(ParsedProofTree {
-                method: m,
+        let mut pending: Vec<Pending> = Vec::new();
+        'parse: loop {
+            self.lx.skip_ws();
+            let solved = self.try_kw("SOLVED");
+            let terminal = solved || self.try_kw("by");
+            let method = if solved {
+                ParsedMethod::SolvedLeaf
+            } else {
+                self.proof_method()?
+            };
+            let mut tree = ParsedProofTree {
+                method,
                 cases: Vec::new(),
-            });
-        }
-        // interProof: <method> ( case-block | proofSkeleton )
-        let m = self.proof_method()?;
-        // HS: `cases <- (sepBy oneCase "next" <* "qed") <|>
-        //               ((return . (,) "") <$> proofSkeleton)`
-        // (Theory/Text/Parser/Proof.hs:111-112). `oneCase` starts with
-        // `case <ident>`, while `sepBy` also accepts zero cases followed
-        // immediately by `qed`. Otherwise HS
-        // *requires* a recursive `proofSkeleton` (the inline single-child
-        // subproof, named ""); there is NO childless-leaf branch — an
-        // interProof method must be followed by a child.
-        self.lx.skip_ws();
-        if self.peek_kw("case") || self.peek_kw("qed") {
-            let mut cases: Vec<(String, ParsedProofTree)> = Vec::new();
-            // HS: sepBy oneCase "next" <* "qed"
-            if self.peek_kw("case") {
-                cases.push(self.one_case()?);
-                while self.try_kw("next") {
-                    cases.push(self.one_case()?);
+            };
+            if !terminal {
+                self.lx.skip_ws();
+                let block = self.peek_kw("case") || self.peek_kw("qed");
+                if block && self.try_kw("qed") {
+                    // A case block may be empty.
+                } else {
+                    // Without a case block, an intermediate method requires
+                    // one inline child; a bare method is not a complete proof.
+                    let name = if block {
+                        self.case_name()?
+                    } else {
+                        String::new()
+                    };
+                    pending.push(Pending { tree, name, block });
+                    continue;
                 }
             }
-            self.require_kw("qed")?;
-            return Ok(ParsedProofTree { method: m, cases });
+            // Complete inline parents until a case block needs another child.
+            while let Some(mut parent) = pending.pop() {
+                if parent.block {
+                    parent.tree.cases.push((parent.name, tree));
+                    if self.try_kw("next") {
+                        parent.name = self.case_name()?;
+                        pending.push(parent);
+                        continue 'parse;
+                    }
+                    self.require_kw("qed")?;
+                } else {
+                    parent.tree.cases = vec![(parent.name, tree)];
+                }
+                tree = parent.tree;
+            }
+            return Ok(tree);
         }
-        // Inline (single-child) subproof.  HS: `(return . (,) "") <$>
-        // proofSkeleton` — this alternative ALWAYS requires a successful
-        // recursive `proofSkeleton`.  If neither a case-block nor a
-        // following proofSkeleton parses, HS `interProof` fails (verified
-        // against the v1.13.0 prover: a bare `simplify` with no child is a
-        // parse error, "expecting case/qed/by/...").  We mirror that by
-        // failing here; the containing theory parse fails as HS's does.
-        let sub = self.proof_skeleton()?;
-        Ok(ParsedProofTree {
-            method: m,
-            cases: vec![("".to_string(), sub)],
-        })
     }
 
-    /// HS `oneCase` (Theory/Text/Parser/Proof.hs:98-115, see line 115):
-    ///   `(,) <$> ("case" *> identifier) <*> proofSkeleton`
-    fn one_case(&mut self) -> Result<(String, ParsedProofTree), ParseError> {
+    /// HS `oneCase` begins with `case` and an extended identifier.
+    fn case_name(&mut self) -> Result<String, ParseError> {
         self.require_kw("case")?;
-        let name = self.identifier_extended()?;
-        let sub = self.proof_skeleton()?;
-        Ok((name, sub))
+        self.identifier_extended()
     }
 
     /// HS `proofMethod` (Theory/Text/Parser/Proof.hs:76-85).
@@ -208,31 +207,38 @@ impl<'a> TreeParser<'a> {
 
     /// HS `diffProofSkeleton` (Theory/Text/Parser/Proof.hs:128-144).
     fn diff_proof_skeleton(&mut self) -> Result<(), ParseError> {
-        self.lx.skip_ws();
-        if self.try_kw("MIRRORED") {
-            return Ok(());
-        }
-        if self.try_kw("by") {
-            return self.diff_proof_method();
-        }
-        self.diff_proof_method()?;
-        self.lx.skip_ws();
-        if self.peek_kw("case") || self.peek_kw("qed") {
-            if self.peek_kw("case") {
-                self.diff_one_case()?;
-                while self.try_kw("next") {
-                    self.diff_one_case()?;
+        // Inline continuations need no retained output. Only case blocks must
+        // remember their depth and resume after a completed child.
+        let mut blocks = 0usize;
+        'parse: loop {
+            self.lx.skip_ws();
+            if !self.try_kw("MIRRORED") {
+                if self.try_kw("by") {
+                    self.diff_proof_method()?;
+                } else {
+                    self.diff_proof_method()?;
+                    self.lx.skip_ws();
+                    if self.peek_kw("case") {
+                        self.case_name()?;
+                        blocks += 1;
+                        continue;
+                    }
+                    if !self.try_kw("qed") {
+                        continue;
+                    }
                 }
             }
-            return self.require_kw("qed");
+            while blocks > 0 {
+                blocks -= 1;
+                if self.try_kw("next") {
+                    self.case_name()?;
+                    blocks += 1;
+                    continue 'parse;
+                }
+                self.require_kw("qed")?;
+            }
+            return Ok(());
         }
-        self.diff_proof_skeleton()
-    }
-
-    fn diff_one_case(&mut self) -> Result<(), ParseError> {
-        self.require_kw("case")?;
-        self.identifier_extended()?;
-        self.diff_proof_skeleton()
     }
 
     /// HS `diffProofMethod` (Theory/Text/Parser/Proof.hs:118-126). A `step`

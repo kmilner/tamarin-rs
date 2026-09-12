@@ -11,7 +11,7 @@ fn rule_names(source: &str, diff: bool) -> Vec<String> {
         .items
         .into_iter()
         .map(|item| match item {
-            TheoryItem::Rule(rule) => rule.name,
+            TheoryItem::Rule(mut rule) => std::mem::take(&mut rule.name),
             other => panic!("unexpected active item: {other:?}"),
         })
         .collect()

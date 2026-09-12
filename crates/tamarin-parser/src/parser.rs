@@ -23,6 +23,17 @@ use tamarin_term::maude_sig::{
     sym_enc_dest_maude_sig, sym_enc_maude_sig, xor_maude_sig, MaudeSig,
 };
 
+#[path = "formula_parser.rs"]
+mod formula_parser;
+#[path = "include_parser.rs"]
+mod include_parser;
+use include_parser::ConditionalState;
+#[path = "process_parser.rs"]
+mod process_parser;
+#[path = "term_parser.rs"]
+mod term_parser;
+use term_parser::{TermHead, TermList};
+
 use crate::ast::*;
 use crate::lexer::{is_ident_char, Lexer, Pos, RESERVED_NAMES};
 use crate::parse_error::{
@@ -640,6 +651,12 @@ pub struct Parser<'a> {
     resolve_prefix_apps: bool,
     /// Grammar-owned list closers; never scan ahead to guess delimiter ownership.
     list_closers: Vec<char>,
+    /// Reuse term continuations across independent expressions.
+    term_frames: Vec<term_parser::Frame>,
+    process_frames: Vec<process_parser::Frame>,
+    process_values: Vec<process_parser::Value>,
+    formula_frames: Vec<formula_parser::Frame>,
+    formula_operands: Vec<Formula>,
     /// Whether a `:` after a variable names a SAPIC TYPE rather than a sort
     /// suffix.  Set while parsing a SAPIC process (and a process definition's
     /// parameter list), where HS uses `sapicvar` — `lvarNoSuffix` plus an
@@ -705,6 +722,11 @@ impl<'a> Parser<'a> {
             sort_suffix_consumed: false,
             resolve_prefix_apps: true,
             list_closers: Vec::new(),
+            term_frames: Vec::new(),
+            process_frames: Vec::new(),
+            process_values: Vec::new(),
+            formula_frames: Vec::new(),
+            formula_operands: Vec::new(),
             sapic_var_types: false,
             allow_pat: false,
         }
@@ -776,26 +798,6 @@ impl<'a> Parser<'a> {
 
     fn skip_ws(&mut self) {
         self.lx.skip_ws();
-    }
-
-    /// parsec `chainl1 p op` (`Text.Parsec.Combinator`): one `operand`, then
-    /// as many `op`-then-`operand` pairs as parse, folded left.  `op` consumes
-    /// the operator and names it, or returns `None` to end the chain; `build`
-    /// turns that name and the two operands into the combined value, standing
-    /// for the combining function parsec's `op` yields.
-    fn chainl1<T, O>(
-        &mut self,
-        mut operand: impl FnMut(&mut Self) -> Result<T, ParseError>,
-        mut op: impl FnMut(&mut Self) -> Option<O>,
-        build: impl Fn(O, T, T) -> T,
-    ) -> Result<T, ParseError> {
-        let mut lhs = operand(self)?;
-        loop {
-            let Some(o) = op(self) else { break };
-            let rhs = operand(self)?;
-            lhs = build(o, lhs, rhs);
-        }
-        Ok(lhs)
     }
 
     fn at_keyword(&mut self, kw: &str) -> bool {
@@ -990,10 +992,22 @@ impl<'a> Parser<'a> {
     /// Parse a flat item stream, evaluating conditionals with an explicit stack.
     /// Active syntax owns comments and item contents; inactive text is opaque.
     fn theory_items_until_end(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
+        let mut conditionals = ConditionalState::new();
         let mut items = Vec::new();
-        // Each frame holds the parent's activity and whether #else has occurred.
-        let mut branches: Vec<(bool, bool)> = Vec::new();
-        let mut active = true;
+        while self.theory_items_chunk(&mut conditionals, &mut items)? {
+            self.expand_include(&mut items)?;
+        }
+        Ok(items)
+    }
+
+    /// Stop at an include so its file can be processed by the include worklist.
+    fn theory_items_chunk(
+        &mut self,
+        conditionals: &mut ConditionalState,
+        items: &mut Vec<TheoryItem>,
+    ) -> Result<bool, ParseError> {
+        let branches = &mut conditionals.branches;
+        let mut active = conditionals.active;
         loop {
             if active {
                 self.skip_ws();
@@ -1064,13 +1078,16 @@ impl<'a> Parser<'a> {
                         )
                         .with_context(ParseContext::Theory));
                     }
-                    "include" => items.extend(self.expand_include()?),
+                    "include" => {
+                        conditionals.active = active;
+                        return Ok(true);
+                    }
                     "define" => {
                         let id = self.ident()?;
                         self.state.flags.insert(id);
                     }
                     other => {
-                        return Err(self.err(format!("unknown preprocessor directive `#{other}`")))
+                        return Err(self.err(format!("unknown preprocessor directive `#{other}`")));
                     }
                 }
                 continue;
@@ -1081,7 +1098,8 @@ impl<'a> Parser<'a> {
         if !branches.is_empty() {
             return Err(self.err_expect_here("\"#endif\""));
         }
-        Ok(items)
+        conditionals.active = active;
+        Ok(false)
     }
 
     fn theory_item(&mut self) -> Result<TheoryItem, ParseError> {
@@ -1163,122 +1181,6 @@ impl<'a> Parser<'a> {
     }
 
     // -------------------- Preprocessor --------------------
-
-    /// Expand an already-consumed `#include` keyword and its following path into the
-    /// sequence of theory items declared in the referenced file.
-    ///
-    /// HS `include` (Theory/Text/Parser.hs:323-343):
-    /// ```haskell
-    /// include inFile0 thy = do
-    ///    filepath <- try (symbol "#include") *> filePathParser
-    ///    st <- getState
-    ///    let (thy', st') = unsafePerformIO (parseFileWState st ... filepath)
-    ///    _ <- putState st'
-    ///    addItems inFile0 $ set (sigpMaudeSig . thySignature) (sig st') thy'
-    ///  where
-    ///    filePathParser = case takeDirectory <$> inFile0 of
-    ///        Nothing -> doubleQuoted filePath
-    ///        Just s  -> (s </>) <$> doubleQuoted filePath
-    /// ```
-    /// The double-quoted path is consumed here; the path is
-    /// resolved against `self.base_dir` (HS `takeDirectory inFile0`); the file
-    /// is read and its header-less fragment parsed by [`parse_include_fragment`]
-    /// — which threads parser state both ways (signature / known funcs / flags),
-    /// matching HS's `getState`/`putState` round-trip and `sig st'` merge.
-    fn expand_include(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
-        self.in_context(ParseContext::Include, Self::expand_include_inner)
-    }
-
-    fn expand_include_inner(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
-        self.skip_ws();
-        let path_start = self.save();
-        let (raw_path, path_span) = self.string_literal_spanned()?;
-
-        // HS `filePathParser`: resolve relative to the including file's dir when
-        // we know it (`Just s -> s </> path`), else verbatim (`Nothing`).
-        let resolved: PathBuf = match &self.base_dir {
-            Some(dir) => dir.join(&raw_path),
-            None => PathBuf::from(&raw_path),
-        };
-        let staged = if PathBuf::from(&raw_path).is_absolute() {
-            None
-        } else {
-            self.staged_file.as_ref().map(|source| {
-                source
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new(""))
-                    .join(&raw_path)
-            })
-        };
-        self.state.input_aliases.push(InputAlias {
-            physical: resolved.clone(),
-            staged: staged.clone(),
-        });
-
-        let content = std::fs::read_to_string(&resolved).map_err(|e| {
-            self.semantic_error(
-                ParseErrorKind::IncludeIo {
-                    path: resolved.display().to_string(),
-                    reason: e.to_string(),
-                },
-                path_start,
-                path_span.len(),
-            )
-        })?;
-
-        // Nested includes in the fragment resolve relative to ITS directory
-        // (HS recurses: `takeDirectory filepath`).
-        let sub_base = resolved.parent().map(|p| p.to_path_buf());
-        let source_name = resolved.display().to_string();
-        self.parse_include_fragment(&content, sub_base, resolved, staged)
-            .map_err(|e| e.with_source_text(source_name, content))
-    }
-
-    /// Parse a header-less theory-item fragment (an included file body — no
-    /// `theory … begin … end` wrapper) using a sub-parser that SHARES this
-    /// parser's mutable state.
-    ///
-    /// Mirrors HS `parseFileWState`: the included file is parsed as a
-    /// continuation of `addItems` (a plain item sequence terminated by EOF, not
-    /// `end`), threading the parser `State` in and back out so that signature
-    /// declarations (`functions:`/`builtins:`/`equations:`) and `#define` flags
-    /// from the included file are visible to the rest of the parse.
-    fn parse_include_fragment(
-        &mut self,
-        content: &str,
-        sub_base: Option<PathBuf>,
-        source_file: PathBuf,
-        staged_file: Option<PathBuf>,
-    ) -> Result<Vec<TheoryItem>, ParseError> {
-        let mut sub = Parser::new(content, &[], self.is_diff);
-        // Thread parser state IN (HS `getState` before `parseFileWState`).
-        self.swap_include_state(&mut sub);
-        sub.base_dir = sub_base;
-        sub.source_file = Some(source_file);
-        sub.staged_file = staged_file;
-
-        // Parse the header-less item stream: same loop as a theory body, but it
-        // terminates at EOF (there is no `end` keyword in a fragment).
-        let result = (|| {
-            let items = sub.theory_items_until_end()?;
-            sub.skip_ws();
-            if !sub.lx.is_eof() {
-                return Err(sub
-                    .err_expect_here("end of included file")
-                    .with_context(ParseContext::Include));
-            }
-            Ok(items)
-        })();
-
-        let result = sub
-            .lx
-            .finish(result)
-            .map_err(|error| sub.with_arity_site(error));
-        // Annotate while the included signature is still available, then
-        // thread parser state BACK (HS `putState st'` + `sig st'` merge).
-        self.swap_include_state(&mut sub);
-        result
-    }
 
     /// A conditional keyword at the start of a physical line, after indentation.
     /// Indexed node names such as `#endif.0` are ordinary tokens.
@@ -2951,8 +2853,9 @@ impl<'a> Parser<'a> {
         .map_err(|e2| Self::select_alt_error(e1, e2))
     }
 
-    /// Keep the furthest failure intact, preserving grammar order on ties.
-    /// A structured cause can still belong to an unrelated speculative alternative.
+    /// Keep the furthest failure intact,
+    /// preserving grammar order on ties. A structured cause can still belong to
+    /// an unrelated speculative alternative.
     fn select_alt_error(e1: ParseError, e2: ParseError) -> ParseError {
         if e2.pos.offset > e1.pos.offset {
             e2
@@ -2961,43 +2864,45 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_rule(&mut self) -> Result<Rule, ParseError> {
-        self.parse_rule_located().map(|(rule, _)| rule)
-    }
-
     fn parse_rule_located(&mut self) -> Result<(Rule, Pos), ParseError> {
-        self.in_context(ParseContext::Rule, Self::parse_rule_located_inner)
-    }
-
-    fn parse_rule_located_inner(&mut self) -> Result<(Rule, Pos), ParseError> {
-        self.skip_ws();
-        self.require_kw("rule")?;
-        let (mut rule, name_start) = self.rule_after_kw()?;
-        // Optional variants
-        rule.variants = if self.try_kw("variants") {
-            let mut vs = Vec::new();
-            loop {
-                let v = self.parse_rule_ac()?;
-                vs.push(v);
-                if !self.try_punct(",") {
-                    break;
+        self.in_context(ParseContext::Rule, |parser| {
+            // A parent awaits its left rule, then its right rule. Rule variants
+            // themselves are flat; only the left/right suffix re-enters grammar.
+            let mut pending = Vec::new();
+            'rule: loop {
+                parser.skip_ws();
+                parser.require_kw("rule")?;
+                let (mut rule, name_start) = parser.rule_after_kw()?;
+                if parser.try_kw("variants") {
+                    loop {
+                        rule.variants.push(parser.parse_rule_ac()?);
+                        if !parser.try_punct(",") {
+                            break;
+                        }
+                    }
+                } else if !parser.is_diff {
+                    parser.skip_ws();
                 }
+                if parser.try_kw("left") {
+                    pending.push((rule, name_start, None));
+                    continue;
+                }
+                let mut completed = (rule, name_start);
+                // Keep the parent in place while its right rule parses. The
+                // completed left rule already has its final boxed ownership.
+                while let Some((_, _, left)) = pending.last_mut() {
+                    if left.is_none() {
+                        parser.require_kw("right")?;
+                        *left = Some(Box::new(completed.0));
+                        continue 'rule;
+                    }
+                    let (mut parent, position, left) = pending.pop().unwrap();
+                    parent.left_right = Some((left.unwrap(), Box::new(completed.0)));
+                    completed = (parent, position);
+                }
+                return Ok(completed);
             }
-            vs
-        } else {
-            if !self.is_diff {
-                self.skip_ws();
-            }
-            vec![]
-        };
-        // Optional `left ... right ...` for diff rules
-        if self.try_kw("left") {
-            let l = self.parse_rule()?;
-            self.require_kw("right")?;
-            let r = self.parse_rule()?;
-            rule.left_right = Some((Box::new(l), Box::new(r)));
-        }
-        Ok((rule, name_start))
+        })
     }
 
     fn parse_rule_ac(&mut self) -> Result<Rule, ParseError> {
@@ -3021,7 +2926,7 @@ impl<'a> Parser<'a> {
     /// `option emptySubst letBlock`, the premises, the actions and embedded
     /// restrictions, the conclusions and the `apply subst` of the bindings.
     /// `variants` and `left_right` are empty; only `protoRule` has them, and
-    /// [`Self::parse_rule`] fills them in.
+    /// [`Self::parse_rule_located`] fills them in.
     fn rule_after_kw(&mut self) -> Result<(Rule, Pos), ParseError> {
         let modulo = self.try_modulo();
         self.skip_ws();
@@ -3902,172 +3807,8 @@ impl<'a> Parser<'a> {
     /// `:` names a type rather than a sort — see [`Parser::sapic_var_types`].
     fn process(&mut self) -> Result<Process, ParseError> {
         self.in_context(ParseContext::Process, |parser| {
-            parser.with_sapic_var_types(|parser| parser.process_body())
+            parser.with_sapic_var_types(|parser| parser.iterative_process())
         })
-    }
-
-    /// Left-associative parallel / NDC composition.
-    fn process_body(&mut self) -> Result<Process, ParseError> {
-        self.chainl1(
-            |p| p.action_process(),
-            |p| {
-                p.skip_ws();
-                if p.try_punct("||") {
-                    Some(ProcessComb::Parallel)
-                } else if p.lx.peek() == Some('|') && p.lx.peek2() != Some('|') {
-                    // Single `|` parallel
-                    p.lx.bump();
-                    p.skip_ws();
-                    Some(ProcessComb::Parallel)
-                } else if p.try_punct("+") {
-                    Some(ProcessComb::Ndc)
-                } else {
-                    None
-                }
-            },
-            |comb, left, right| Process::Comb {
-                comb,
-                left: Box::new(left),
-                right: Box::new(right),
-            },
-        )
-    }
-
-    fn action_process(&mut self) -> Result<Process, ParseError> {
-        self.skip_ws();
-        // Replication
-        if self.try_punct("!") {
-            let p = self.process()?;
-            return Ok(Process::Replication(Box::new(p)));
-        }
-        if self.try_kw("lookup") {
-            let t = self.term(false)?;
-            self.require_kw("as")?;
-            let v = self.var_spec()?;
-            self.require_kw("in")?;
-            let p = self.process()?;
-            let q = self.else_process()?;
-            return Ok(Process::Comb {
-                comb: ProcessComb::Lookup(t, v),
-                left: Box::new(p),
-                right: Box::new(q),
-            });
-        }
-        if self.try_kw("if") {
-            // Try equality: t = t else formula
-            let cond = match self.attempt(|p| {
-                let t1 = p.term(false)?;
-                p.require_punct("=")?;
-                let t2 = p.term(false)?;
-                Ok(Condition::Eq(t1, t2))
-            }) {
-                Some(c) => c,
-                None => Condition::Formula(self.formula()?),
-            };
-            self.require_kw("then")?;
-            let p = self.process()?;
-            let q = self.else_process()?;
-            return Ok(Process::Comb {
-                comb: ProcessComb::Cond(cond),
-                left: Box::new(p),
-                right: Box::new(q),
-            });
-        }
-        if self.try_kw("let") {
-            // `let pat = t [, pat = t]* in p` or with newline-separated
-            // bindings (Tamarin's `genericletBlock = many1 definition` has no
-            // separator between bindings).
-            // HS `genericletBlock = many1 definition` (Let.hs:23-26, see line 24) with
-            // `definition = sapicpatternterm <* equalSign <*> sapicterm`. There
-            // is no separator between bindings; `many1` greedily reparses a
-            // `definition` and backtracks when one fails to parse. We mirror that
-            // by attempting another `(pat = val)` binding and restoring on
-            // failure.
-            let mut bindings: Vec<(Term, Term)> = Vec::new();
-            // First binding is required.
-            bindings.push(self.let_definition()?);
-            loop {
-                let _ = self.try_punct(",");
-                self.skip_ws();
-                if self.at_keyword("in") {
-                    break;
-                }
-                // Try to parse one more binding; backtrack if it doesn't parse
-                // (matching `many1`'s greedy-with-backtrack behaviour).
-                match self.attempt(|p| p.let_definition()) {
-                    Some(b) => bindings.push(b),
-                    None => break,
-                }
-            }
-            self.require_kw("in")?;
-            let p = self.process()?;
-            let q = self.else_process()?;
-            // Right-fold the bindings into nested Let combinators.
-            let mut acc = p;
-            for (pat, val) in bindings.into_iter().rev() {
-                acc = Process::Comb {
-                    comb: ProcessComb::Let { pat, value: val },
-                    left: Box::new(acc),
-                    right: Box::new(q.clone()),
-                };
-            }
-            return Ok(acc);
-        }
-        // null process
-        if self.try_punct("0") {
-            return Ok(Process::Null);
-        }
-        // Parenthesised process — possibly with `@ term` annotation.
-        if self.try_punct("(") {
-            let p = self.process()?;
-            self.require_punct(")")?;
-            if self.try_punct("@") {
-                let m = self.term(false)?;
-                return Ok(Process::AtAnnotation(Box::new(p), m));
-            }
-            return Ok(p);
-        }
-        // Sapic action: new / insert / delete / in / out / lock / unlock / event / msr
-        let save = self.save();
-        if let Some(act) = self.try_sapic_action()? {
-            // Optional `; rest` (sequencing)
-            let body = if self.try_punct(";") {
-                self.action_process()?
-            } else {
-                Process::Null
-            };
-            return Ok(Process::Action {
-                action: act,
-                body: Box::new(body),
-            });
-        }
-        self.restore(save);
-        // Process call by name: ident or ident(args)
-        let save2 = self.save();
-        if let Some(id) = self.lx.identifier() {
-            // Heuristic: if followed by `(`, parse as call args.
-            self.skip_ws();
-            let opening = self.save();
-            let args = if self.try_punct("(") {
-                // HS `parens $ commaSep (msetterm ...)`
-                // (Theory/Text/Parser/Sapic.hs:224-312, see line 296):
-                // trailing comma before `)` is permitted.
-                self.sep_end_by(opening, ")", |p| p.term(false))?
-            } else {
-                vec![]
-            };
-            return Ok(Process::Call { name: id, args });
-        }
-        self.restore(save2);
-        Err(self.err_expect_here("process"))
-    }
-
-    fn else_process(&mut self) -> Result<Process, ParseError> {
-        if self.try_kw("else") {
-            self.process()
-        } else {
-            Ok(Process::Null)
-        }
     }
 
     fn try_sapic_action(&mut self) -> Result<Option<SapicAction>, ParseError> {
@@ -4263,53 +4004,7 @@ impl<'a> Parser<'a> {
     // =========================================================================
 
     fn formula(&mut self) -> Result<Formula, ParseError> {
-        self.in_context(ParseContext::Formula, Self::iff)
-    }
-
-    fn iff(&mut self) -> Result<Formula, ParseError> {
-        let lhs = self.implies()?;
-        if self.try_punct("<=>") || self.try_punct("⇔") {
-            let rhs = self.implies()?;
-            Ok(Formula::Iff(Box::new(lhs), Box::new(rhs)))
-        } else {
-            Ok(lhs)
-        }
-    }
-
-    fn implies(&mut self) -> Result<Formula, ParseError> {
-        let lhs = self.disjuncts()?;
-        if self.try_punct("==>") || self.try_punct("⇒") {
-            let rhs = self.implies()?;
-            Ok(Formula::Implies(Box::new(lhs), Box::new(rhs)))
-        } else {
-            Ok(lhs)
-        }
-    }
-
-    fn disjuncts(&mut self) -> Result<Formula, ParseError> {
-        self.chainl1(
-            |p| p.conjuncts(),
-            // `|` is also process parallel — but inside formulas it's OR.
-            |p| (p.try_punct("|") || p.try_punct("∨")).then_some(()),
-            |(), lhs, rhs| Formula::Or(Box::new(lhs), Box::new(rhs)),
-        )
-    }
-
-    fn conjuncts(&mut self) -> Result<Formula, ParseError> {
-        self.chainl1(
-            |p| p.negation(),
-            |p| (p.try_punct("&") || p.try_punct("∧")).then_some(()),
-            |(), lhs, rhs| Formula::And(Box::new(lhs), Box::new(rhs)),
-        )
-    }
-
-    fn negation(&mut self) -> Result<Formula, ParseError> {
-        if self.try_kw("not") || self.try_punct("¬") {
-            let f = self.fatom()?;
-            Ok(Formula::Not(Box::new(f)))
-        } else {
-            self.fatom()
-        }
+        self.in_context(ParseContext::Formula, Self::iterative_formula)
     }
 
     /// `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs:59):
@@ -4323,29 +4018,29 @@ impl<'a> Parser<'a> {
     /// elsewhere (Theory/Text/Parser/Term.hs:158-163) — the zero-argument
     /// application arm below. Callers that must enforce `nodevarTerm` syntax
     /// validate the parsed shape with [`Self::node_operand`] first.
-    fn node_sorted(t: Term) -> Term {
-        match t {
-            Term::Var(mut v) => {
-                v.sort = LSort::Node;
-                Term::Var(v)
+    fn node_sorted(mut t: Term) -> Term {
+        match &mut t {
+            Term::Var(v) => v.sort = LSort::Node,
+            Term::App(name, args) if args.is_empty() => {
+                return Term::Var(VarSpec {
+                    name: std::mem::take(name),
+                    idx: 0,
+                    sort: LSort::Node,
+                    typ: None,
+                });
             }
-            Term::App(name, args) if args.is_empty() => Term::Var(VarSpec {
-                name,
-                idx: 0,
-                sort: LSort::Node,
-                typ: None,
-            }),
-            other => other,
+            _ => {}
         }
+        t
     }
 
     /// Accept a node/bare variable or a bare identifier resolved as a nullary symbol.
     fn node_operand(t: Term, explicit_sort: bool) -> Option<Term> {
-        match t {
+        match &t {
             Term::Var(v) if v.sort == LSort::Node || (v.sort == LSort::Msg && !explicit_sort) => {
-                Some(Self::node_sorted(Term::Var(v)))
+                Some(Self::node_sorted(t))
             }
-            Term::App(_, ref args) if args.is_empty() => Some(Self::node_sorted(t)),
+            Term::App(_, args) if args.is_empty() => Some(Self::node_sorted(t)),
             _ => None,
         }
     }
@@ -4382,55 +4077,6 @@ impl<'a> Parser<'a> {
             };
         self.lx = lexer;
         continuation
-    }
-
-    fn fatom(&mut self) -> Result<Formula, ParseError> {
-        self.skip_ws();
-        if self.try_kw("F") || self.try_punct("⊥") {
-            return Ok(Formula::False);
-        }
-        if self.try_kw("T") || self.try_punct("⊤") {
-            return Ok(Formula::True);
-        }
-        // Quantifiers: All / ∀ / Ex / ∃
-        if self.try_kw("All") || self.try_punct("∀") {
-            let vs = self.quantifier_binders()?;
-            let f = self.iff()?;
-            return Ok(Formula::Forall(vs, Box::new(f)));
-        }
-        if self.try_kw("Ex") || self.try_punct("∃") {
-            let vs = self.quantifier_binders()?;
-            let f = self.iff()?;
-            return Ok(Formula::Exists(vs, Box::new(f)));
-        }
-        // Try a complete atom before grouping a formula. A grouped term can
-        // continue through any of the term grammar's operators before reaching
-        // its relation, so inspecting just the next operator is insufficient.
-        let start = self.lx.clone();
-        let atom = self.formula_atom();
-        // Capture lexer diagnostics as well as grammar errors before restoring.
-        let atom_error = match self.lx.finish(atom) {
-            Ok(formula) => return Ok(formula),
-            Err(error) => error,
-        };
-        self.lx = start;
-        if self.try_punct("(") {
-            let formula = match self.iff() {
-                Ok(formula) => formula,
-                Err(error) => return Err(Self::select_alt_error(atom_error, error)),
-            };
-            // Prefer the formula's closer on ties. A relational parse that
-            // progressed further can still explain a truncated formula prefix
-            // (for example, `F` parsed as false before an application).
-            if let Err(error) = self.require_punct(")") {
-                return Err(Self::select_alt_error(error, atom_error));
-            }
-            if self.at_term_continuation() {
-                return Err(atom_error);
-            }
-            return Ok(formula);
-        }
-        Err(atom_error)
     }
 
     fn formula_atom(&mut self) -> Result<Formula, ParseError> {
@@ -4545,28 +4191,10 @@ impl<'a> Parser<'a> {
     /// user-declared `[AC]` infix operators of [`Self::acterm`] stay open, as
     /// in HS's `acterm True llitNoPub`.
     fn term(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        self.msetterm(eqn)
+        self.iterative_term(eqn, 0)
     }
 
-    /// Parse a comma-separated term sequence and fold into a right-assoc
-    /// pair (or single term). Used inside `<...>` and `f{...}`.
-    fn tuple_contents(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        let mut items = Vec::new();
-        loop {
-            let t = self.msetterm(eqn)?;
-            items.push(t);
-            if !self.try_punct(",") {
-                break;
-            }
-        }
-        if items.len() == 1 {
-            Ok(items.into_iter().next().unwrap())
-        } else {
-            Ok(Term::Pair(items))
-        }
-    }
-
-    /// [`Self::chainl1`]'s fold for the infix term operators.
+    /// Construct an infix term after parsing both operands.
     fn bin_op_term(op: BinOp, lhs: Term, rhs: Term) -> Term {
         Term::BinOp(op, Box::new(lhs), Box::new(rhs))
     }
@@ -4592,129 +4220,8 @@ impl<'a> Parser<'a> {
         matched.then_some(op)
     }
 
-    /// HS `msetterm` (Theory/Text/Parser/Term.hs:195-200): the union level runs
-    /// only under `enableMSet && not eqn`, otherwise the parser drops straight
-    /// to [`Self::natterm`] and `++`/`+` are not term operators at all.
-    fn msetterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        let term = if !self.state.sig_enable_mset || eqn {
-            self.natterm(eqn)?
-        } else {
-            self.chainl1(
-                |p| p.natterm(eqn),
-                |p| p.try_term_operator(BinOp::Union),
-                Self::bin_op_term,
-            )?
-        };
-        self.skip_ws();
-        Ok(term)
-    }
-
-    /// HS `natterm` (Theory/Text/Parser/Term.hs:203-208): `%+` needs
-    /// `enableNat && not eqn`.
-    fn natterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        if !self.state.sig_enable_nat || eqn {
-            return self.xorterm(eqn);
-        }
-        self.chainl1(
-            |p| p.xorterm(eqn),
-            |p| p.try_term_operator(BinOp::NatPlus),
-            Self::bin_op_term,
-        )
-    }
-
-    /// HS `xorterm` (Theory/Text/Parser/Term.hs:187-192): `XOR`/`⊕` need
-    /// `enableXor && not eqn`.
-    fn xorterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        if !self.state.sig_enable_xor || eqn {
-            return self.multterm(eqn);
-        }
-        self.chainl1(
-            |p| p.multterm(eqn),
-            |p| p.try_term_operator(BinOp::Xor),
-            Self::bin_op_term,
-        )
-    }
-
-    /// HS `multterm` (Theory/Text/Parser/Term.hs:179-185): without
-    /// `enableDH && not eqn` the parser skips BOTH this level and
-    /// [`Self::expterm`], so neither `*` nor `^` is a term operator.
-    fn multterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        if !self.state.sig_enable_dh || eqn {
-            return self.acterm(eqn);
-        }
-        self.chainl1(
-            |p| p.expterm(eqn),
-            |p| p.try_term_operator(BinOp::Mult),
-            Self::bin_op_term,
-        )
-    }
-
-    /// HS `expterm` is "a left-associative sequence of exponentiations"
-    /// (`chainl1`, Parser/Term.hs:174-176).
-    fn expterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        self.chainl1(
-            |p| p.acterm(eqn),
-            |p| p.try_term_operator(BinOp::Exp),
-            Self::bin_op_term,
-        )
-    }
-
-    /// A left-associative sequence of user-defined AC operators — the infix
-    /// notation `t1 f t2` for a binary symbol declared `f/2 [AC]`.
-    ///
-    /// Port of HS `acterm` (Theory/Text/Parser/Term.hs:165-174):
-    /// ```haskell
-    /// acterm eqn plit = do
-    ///     acsyms <- stACFunSyms . sig <$> getState
-    ///     parseACSym $ S.toList acsyms
-    ///   where
-    ///     parseACSym [] = term eqn plit
-    ///     parseACSym (op:ops) = chainl1 (parseACSym ops) ((\a b -> fAppACfct op [a,b]) <$ opAC op)
-    /// ```
-    /// One `chainl1` level per declared AC symbol, nested in
-    /// `stACFunSyms`/`ac_fun_syms` order, so a later symbol in that
-    /// order binds tighter than an earlier one; the innermost level is a single
-    /// atomic term (HS `term`, here [`Self::atom_term`]).  The `eqn` flag is
-    /// only passed down: AC operators ARE accepted inside `equations:`, which is
-    /// how equational theories over AC symbols are written.
     fn acterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
-        let t = self.ac_chain(0, eqn)?;
-        self.skip_ws();
-        Ok(t)
-    }
-
-    /// The `parseACSym` recursion of [`Self::acterm`]: the `chainl1` level for
-    /// `ac_fun_syms[level]`, or the atomic-term base case once the list is
-    /// exhausted.
-    ///
-    /// The infix spelling is recorded as [`BinOp::AcFct`], never `Term::App`:
-    /// HS `acterm` builds `fAppACfct op [a,b]` — the AC symbol — even when the
-    /// same name is ALSO a `NoEq` symbol of the signature, whereas the PREFIX
-    /// spelling of such a dual-declared name resolves through `lookupArity` to
-    /// the `NoEq` symbol (its `lookup` list sorts every `NoEqUser` before
-    /// every `ACfctUser`, Theory/Text/Parser/Term.hs:62-72,
-    /// Term/Term/FunctionSymbols.hs:146-147).  The AST node therefore has to
-    /// carry which spelling was written for the readers to resolve it.
-    fn ac_chain(&mut self, level: usize, eqn: bool) -> Result<Term, ParseError> {
-        if level >= self.state.ac_fun_syms.len() {
-            return self.atom_term(eqn);
-        }
-        let symbols = Arc::clone(&self.state.ac_fun_syms);
-        let op = &symbols[level];
-        self.chainl1(
-            |p| p.ac_chain(level + 1, eqn),
-            // HS `opAC (op, _) = symbol_ (BC.unpack op)`, i.e. the symbol's own
-            // name as a plain token.  `try_kw` adds a word boundary that HS's
-            // `symbol` lacks, so HS would also accept the name as a PREFIX of
-            // the following token (`f(x) fg(y)` parsing as `f(f(x), g(y))` for
-            // an AC symbol `f`); such input is not valid syntax in any theory
-            // and errors here instead.
-            |p| {
-                p.try_kw(op)
-                    .then(|| BinOp::AcFct(tamarin_term::intern::intern_str(op)))
-            },
-            Self::bin_op_term,
-        )
+        self.iterative_term(eqn, 6)
     }
 
     /// What HS `lookupArity` (Theory/Text/Parser/Term.hs:62-72) resolves a
@@ -4812,7 +4319,10 @@ impl<'a> Parser<'a> {
     }
 
     /// One atomic term.
-    fn atom_term(&mut self, eqn: bool) -> Result<Term, ParseError> {
+    // Keep token recognition out of the continuation loop: inlining this large
+    // function increases corpus parsing cost in release benchmarks.
+    #[inline(never)]
+    fn term_head(&mut self, eqn: bool) -> Result<TermHead, ParseError> {
         self.skip_ws();
         // SAPIC pattern-match prefix `=v` — legal only in pattern positions
         // ([`Parser::allow_pat`]).  Elsewhere no term alternative starts with
@@ -4826,45 +4336,20 @@ impl<'a> Parser<'a> {
                 self.lx.bump();
                 self.skip_ws();
                 let inner = self.pattern_var_atom()?;
-                return Ok(Term::PatMatch(Box::new(inner)));
+                return Ok(TermHead::Value(Term::PatMatch(Box::new(inner))));
             }
         }
-        // Parens for grouping
         if self.try_punct("(") {
-            let t = self.msetterm(eqn)?;
-            if !self.try_punct(")") {
-                return Err(self.err_expect("\")\""));
-            }
-
-            return Ok(t);
+            return Ok(TermHead::Group);
         }
-        // Pair `<a, b, ...>` (right-associative). The `<<` subterm and
-        // `<=>` iff operators only appear at formula level — at term level a
-        // bare `<` always opens a tuple. We do refuse `<-` (process arrow).
-        if self.lx.peek() == Some('<') {
-            let r = self.lx.rest();
-            if !r.starts_with("<-") {
-                self.lx.bump(); // consume '<'
-                self.skip_ws();
-                // HS `pairing = angled (tupleterm eqn plit)`
-                // (Theory/Text/Parser/Term.hs:157) with
-                // `tupleterm = chainr1 (msetterm ...) (... <$ comma)`
-                // (Theory/Text/Parser/Term.hs:211-212). `chainr1` requires >=1
-                // operand, so [`Self::tuple_contents`] always reads one: an
-                // empty `<>` fails to parse (matching HS, where no other
-                // `term` alternative starts with `<`), and a singleton `<a>`
-                // collapses to `a`.
-                let t = self.tuple_contents(eqn)?;
-                if !self.try_punct(">") {
-                    return Err(self.err_expect("\",\", \">\""));
-                }
-
-                return Ok(t);
-            }
+        if self.lx.peek() == Some('<') && !self.lx.rest().starts_with("<-") {
+            self.lx.bump();
+            self.skip_ws();
+            return Ok(TermHead::List(TermList::Tuple(">")));
         }
         // Special tokens
         if self.lx.try_symbol("DH_neutral") {
-            return Ok(Term::DhNeutral);
+            return Ok(TermHead::Value(Term::DhNeutral));
         }
         let literal_start = self.save();
         if self.lx.try_symbol("1:nat") {
@@ -4873,7 +4358,7 @@ impl<'a> Parser<'a> {
                     .err("natural-number literal 1:nat requires the natural-numbers builtin")
                     .with_location(literal_start, 5));
             }
-            return Ok(Term::NatOne);
+            return Ok(TermHead::Value(Term::NatOne));
         }
         if self.lx.try_symbol("%1") {
             if !self.state.sig_enable_nat {
@@ -4881,13 +4366,13 @@ impl<'a> Parser<'a> {
                     .err("natural-number literal %1 requires the natural-numbers builtin")
                     .with_location(literal_start, 2));
             }
-            return Ok(Term::NatOne);
+            return Ok(TermHead::Value(Term::NatOne));
         }
         // Fixed literals use the identifier boundary of upstream's
         // `reserved`, so `1abc` remains one identifier rather than `1` plus
         // trailing garbage.
         if self.lx.try_symbol("1") {
-            return Ok(Term::NumberOne);
+            return Ok(TermHead::Value(Term::NumberOne));
         }
         // Sigil-prefixed variables: ~x, $x, #x, %x.
         if let Some(c @ ('~' | '$' | '#')) = self.lx.peek() {
@@ -4897,12 +4382,12 @@ impl<'a> Parser<'a> {
             if c == '~' && probe.peek() == Some('\'') {
                 self.lx.bump();
                 let s = self.single_quoted("a valid fresh literal")?;
-                return Ok(Term::FreshLit(s));
+                return Ok(TermHead::Value(Term::FreshLit(s)));
             }
             // Otherwise: variable.
             if let Some(v) = self.try_var_spec()? {
                 let v = self.attach_sort_suffix(v)?;
-                return Ok(Term::Var(v));
+                return Ok(TermHead::Value(Term::Var(v)));
             }
         }
         if self.lx.peek() == Some('%') {
@@ -4916,17 +4401,17 @@ impl<'a> Parser<'a> {
                         .with_location(literal_start, 1));
                 }
                 let s = self.single_quoted("a valid natural-number literal")?;
-                return Ok(Term::NatLit(s));
+                return Ok(TermHead::Value(Term::NatLit(s)));
             }
             if let Some(v) = self.try_var_spec()? {
                 let v = self.attach_sort_suffix(v)?;
-                return Ok(Term::Var(v));
+                return Ok(TermHead::Value(Term::Var(v)));
             }
         }
         // Literal `'foo'` is a public name term.
         if self.lx.peek() == Some('\'') {
             let s = self.single_quoted("a valid public literal")?;
-            return Ok(Term::PubLit(s));
+            return Ok(TermHead::Value(Term::PubLit(s)));
         }
         // diff(a, b) — HS `diffOp = symbol "diff" *> parens ...`
         // (Theory/Text/Parser/Term.hs:123-135, see line 125).
@@ -4938,37 +4423,10 @@ impl<'a> Parser<'a> {
         if self.try_kw("diff") {
             let opening = self.save();
             self.require_punct("(")?;
-            let ts = self.sep_end_by(opening, ")", |p| p.msetterm(eqn))?;
-            // Preserve validation order: arity, equation context, then diff mode.
-            if ts.len() != 2 {
-                return Err(self.semantic_error(
-                    ParseErrorKind::WrongFunctionArity {
-                        name: "diff".into(),
-                        declared: 2,
-                        used: ts.len(),
-                    },
-                    diff_start,
-                    "diff".len(),
-                ));
-            }
-            if eqn {
-                return Err(self.semantic_error(
-                    ParseErrorKind::IllegalDiffOperator(IllegalDiffReason::InEquation),
-                    diff_start,
-                    "diff".len(),
-                ));
-            }
-            if !self.state.enable_diff {
-                return Err(self.semantic_error(
-                    ParseErrorKind::IllegalDiffOperator(IllegalDiffReason::DiffModeDisabled),
-                    diff_start,
-                    "diff".len(),
-                ));
-            }
-            let mut args = ts.into_iter();
-            let a = args.next().unwrap();
-            let b = args.next().unwrap();
-            return Ok(Term::Diff(Box::new(a), Box::new(b)));
+            return Ok(TermHead::List(TermList::Diff {
+                head: diff_start,
+                opening,
+            }));
         }
         // Identifier — could be: function application f(...), algebraic
         // application f{a}b, sort-suffixed var x:msg, or a bare variable /
@@ -4998,10 +4456,10 @@ impl<'a> Parser<'a> {
                 // `(<)` belongs to the enclosing multiset comparison, not an application.
                 Some('(') if !self.lx.rest().starts_with("(<)") => '(',
                 Some('{') => '{',
-                _ => return self.bare_ident_term(id),
+                _ => return self.bare_ident_term(id).map(TermHead::Value),
             };
-            if self.resolve_prefix_apps {
-                let res = self.lookup_arity(&id).ok_or_else(|| {
+            let res = if self.resolve_prefix_apps {
+                Some(self.lookup_arity(&id).ok_or_else(|| {
                     self.semantic_error(
                         ParseErrorKind::UndeclaredFunction {
                             name: diagnostic_lexeme(&id),
@@ -5009,34 +4467,27 @@ impl<'a> Parser<'a> {
                         save_id,
                         id.len(),
                     )
-                })?;
-                return if opening == '(' {
-                    self.prefix_app_args(id, res, eqn, save_id)
-                } else {
-                    self.binary_alg_app(id, res, eqn, save_id)
-                };
-            }
-            // Structural mode leaves resolution to the caller. Its prefix
-            // argument list is strictly comma-separated (no trailing comma).
+                })?)
+            } else {
+                None
+            };
+            let position = self.save();
             self.lx.bump();
             self.skip_ws();
-            if opening == '(' {
-                let mut ts = Vec::new();
-                if !self.try_punct(")") {
-                    loop {
-                        ts.push(self.msetterm(eqn)?);
-                        if !self.try_punct(",") {
-                            break;
-                        }
-                    }
-                    self.require_punct(")")?;
+            return Ok(TermHead::List(if opening == '(' {
+                TermList::App {
+                    id,
+                    res,
+                    head: save_id,
+                    opening: position,
                 }
-                return Ok(Term::App(id, ts));
-            }
-            let arg1 = self.tuple_contents(eqn)?;
-            self.require_punct("}")?;
-            let arg2 = self.atom_term(eqn)?;
-            return Ok(Term::AlgApp(id, Box::new(arg1), Box::new(arg2)));
+            } else {
+                TermList::Alg {
+                    id,
+                    res,
+                    head: save_id,
+                }
+            }));
         }
         self.restore(save_id);
         Err(self.err_expect("term").with_context(ParseContext::Term))
@@ -5080,77 +4531,6 @@ impl<'a> Parser<'a> {
         Err(self.err_expect("pattern variable"))
     }
 
-    /// HS `naryOpApp`'s argument parse after `lookupArity` succeeded
-    /// (Theory/Text/Parser/Term.hs:93-105), starting at the opening `(`:
-    ///
-    /// ```haskell
-    /// ts <- parens $ if k == 1 then return <$> tupleterm eqn plit
-    ///                          else commaSep (msetterm eqn plit)
-    /// when (acstate == NotAC && (k /= k')) $ fail "operator `…' has arity …"
-    /// ```
-    ///
-    /// So an arity-1 symbol takes ONE `tupleterm` — surplus commas fold into
-    /// a right-associative pair (`h(a, b)` is `h(<a, b>)`) and a trailing
-    /// comma is a parse failure — while any other arity takes `commaSep`
-    /// (`sepEndBy`, Token.hs:353-355: empty list and trailing comma both OK)
-    /// followed by the `NotAC`-gated arity check.  An `IsAC` head accepts any
-    /// count: `fAppAC` flattens ≥2 arguments (built here as the same nested
-    /// [`BinOp::AcFct`] the infix spelling produces), collapses a singleton to
-    /// its argument (`fAppAC _ [a] = a`, Term/Term/Raw.hs:118-121), and
-    /// `fAppAC _ []` is a GHC `error` the empty argument list only triggers
-    /// once the theory pipeline forces the term — kept as an `App` node here
-    /// (`scripts/divergence_fixtures/ac_prefix_arities.spthy`).
-    ///
-    /// Failures are returned directly so diagnostics identify the malformed
-    /// application rather than a later token after Haskell-style backtracking.
-    fn prefix_app_args(
-        &mut self,
-        id: String,
-        res: ArityRes,
-        eqn: bool,
-        head: Pos,
-    ) -> Result<Term, ParseError> {
-        let opening = self.save();
-        self.lx.bump(); // the '(' the caller peeked
-        self.skip_ws();
-        match res {
-            ArityRes::NoEq {
-                opts: FunOptions { arity: 1, .. },
-            } => {
-                let arg = self.tuple_contents(eqn)?;
-                self.require_punct(")")?;
-                Ok(Term::App(id, vec![arg]))
-            }
-            ArityRes::NoEq { opts } => {
-                let arity = opts.arity;
-                let ts = self.sep_end_by(opening, ")", |p| p.msetterm(eqn))?;
-                if ts.len() != arity {
-                    let diagnostic_name = diagnostic_lexeme(&id);
-                    return Err(self.semantic_error(
-                        ParseErrorKind::WrongFunctionArity {
-                            name: diagnostic_name,
-                            declared: arity,
-                            used: ts.len(),
-                        },
-                        head,
-                        id.len(),
-                    ));
-                }
-                if res.is_dh_exp(&id) {
-                    let mut it = ts.into_iter();
-                    let a = it.next().expect("arity 2 checked above");
-                    let b = it.next().expect("arity 2 checked above");
-                    return Ok(Term::BinOp(BinOp::Exp, Box::new(a), Box::new(b)));
-                }
-                Ok(Term::App(id, ts))
-            }
-            ArityRes::Ac => {
-                let ts = self.sep_end_by(opening, ")", |p| p.msetterm(eqn))?;
-                Ok(Self::ac_prefix_app(id, ts))
-            }
-        }
-    }
-
     /// The argument list of a prefix application whose head the signature
     /// declares `[AC]`, as the term HS `naryOpApp` builds for it: `fAppAC
     /// (ACfct ...) ts` (Theory/Text/Parser/Term.hs:105), which the AST spells
@@ -5161,64 +4541,13 @@ impl<'a> Parser<'a> {
     fn ac_prefix_app(id: String, ts: Vec<Term>) -> Term {
         let sym = tamarin_term::intern::intern_str(&id);
         let mut it = ts.into_iter();
-        match (it.next(), it.next()) {
-            (None, _) => Term::App(id, Vec::new()),
-            (Some(a), None) => a,
-            (Some(a), Some(b)) => {
-                let mut t = Term::BinOp(BinOp::AcFct(sym), Box::new(a), Box::new(b));
-                for x in it {
-                    t = Term::BinOp(BinOp::AcFct(sym), Box::new(t), Box::new(x));
-                }
-                t
-            }
+        let Some(mut term) = it.next() else {
+            return Term::App(id, Vec::new());
+        };
+        for next in it {
+            term = Self::bin_op_term(BinOp::AcFct(sym), term, next);
         }
-    }
-
-    /// HS `binaryAlgApp` (Theory/Text/Parser/Term.hs:109-121) after
-    /// `lookupArity` succeeded,
-    /// starting at the opening `{`: `op{t1}t2` parses `braced (tupleterm …)`
-    /// then a trailing atom (`term eqn plit`), requires arity 2, and builds
-    /// `fAppNoEq`/`fAppAC` by the head's AC state.  There is no `em` special
-    /// case here (`naryOpApp`'s Theory/Text/Parser/Term.hs:103 is prefix-only).
-    fn binary_alg_app(
-        &mut self,
-        id: String,
-        res: ArityRes,
-        eqn: bool,
-        head: Pos,
-    ) -> Result<Term, ParseError> {
-        self.lx.bump(); // the '{' the caller peeked
-        self.skip_ws();
-        let arg1 = self.tuple_contents(eqn)?;
-        self.require_punct("}")?;
-        let arg2 = self.atom_term(eqn)?;
-        match res {
-            ArityRes::Ac => Ok(Term::BinOp(
-                BinOp::AcFct(tamarin_term::intern::intern_str(&id)),
-                Box::new(arg1),
-                Box::new(arg2),
-            )),
-            ArityRes::NoEq {
-                opts: FunOptions { arity: 2, .. },
-            } => {
-                if res.is_dh_exp(&id) {
-                    return Ok(Term::BinOp(BinOp::Exp, Box::new(arg1), Box::new(arg2)));
-                }
-                Ok(Term::AlgApp(id, Box::new(arg1), Box::new(arg2)))
-            }
-            ArityRes::NoEq { opts } => {
-                let diagnostic_name = diagnostic_lexeme(&id);
-                Err(self.semantic_error(
-                    ParseErrorKind::WrongFunctionArity {
-                        name: diagnostic_name,
-                        declared: opts.arity,
-                        used: 2,
-                    },
-                    head,
-                    id.len(),
-                ))
-            }
-        }
+        term
     }
 
     /// HS `sortedLVar`'s suffix arm: `indexedIdentifier <* colon` followed by
@@ -5419,41 +4748,59 @@ impl<'a> Parser<'a> {
 
     #[allow(clippy::disallowed_types)]
     fn flag_disjuncts(&mut self, flags: &HashSet<String>) -> Result<bool, ParseError> {
-        self.chainl1(
-            |p| p.flag_conjuncts(flags),
-            |p| (p.try_punct("|") || p.try_punct("∨")).then_some(()),
-            |(), lhs, rhs| lhs || rhs,
-        )
-    }
-
-    #[allow(clippy::disallowed_types)]
-    fn flag_conjuncts(&mut self, flags: &HashSet<String>) -> Result<bool, ParseError> {
-        self.chainl1(
-            |p| p.flag_negation(flags),
-            |p| (p.try_punct("&") || p.try_punct("∧")).then_some(()),
-            |(), lhs, rhs| lhs && rhs,
-        )
-    }
-
-    #[allow(clippy::disallowed_types)]
-    fn flag_negation(&mut self, flags: &HashSet<String>) -> Result<bool, ParseError> {
-        if self.try_kw("not") || self.try_punct("¬") {
-            let f = self.flag_atom(flags)?;
-            Ok(!f)
-        } else {
-            self.flag_atom(flags)
+        enum Frame {
+            Expr(u8),
+            Infix(u8),
+            Not,
+            Group,
+            Join(bool, u8),
         }
-    }
-
-    #[allow(clippy::disallowed_types)]
-    fn flag_atom(&mut self, flags: &HashSet<String>) -> Result<bool, ParseError> {
-        if self.try_punct("(") {
-            let f = self.flag_disjuncts(flags)?;
-            self.require_punct(")")?;
-            return Ok(f);
+        let mut frames = vec![Frame::Expr(1)];
+        let mut values = Vec::new();
+        while let Some(frame) = frames.pop() {
+            match frame {
+                Frame::Expr(min) => {
+                    frames.push(Frame::Infix(min));
+                    // Negation consumes exactly one atom, as in the original grammar.
+                    let negate = self.try_kw("not") || self.try_punct("¬");
+                    if negate {
+                        frames.push(Frame::Not);
+                    }
+                    if self.try_punct("(") {
+                        frames.push(Frame::Group);
+                        frames.push(Frame::Expr(1));
+                    } else {
+                        values.push(flags.contains(&self.ident()?));
+                    }
+                }
+                Frame::Infix(min) => {
+                    let op = if min <= 2 && (self.try_punct("&") || self.try_punct("∧")) {
+                        Some((true, 3))
+                    } else if min <= 1 && (self.try_punct("|") || self.try_punct("∨")) {
+                        Some((false, 2))
+                    } else {
+                        None
+                    };
+                    if let Some((and, right_min)) = op {
+                        frames.push(Frame::Join(and, min));
+                        frames.push(Frame::Expr(right_min));
+                    }
+                }
+                Frame::Join(and, min) => {
+                    let right = values.pop().unwrap();
+                    let left = values.last_mut().unwrap();
+                    if and {
+                        *left &= right;
+                    } else {
+                        *left |= right;
+                    }
+                    frames.push(Frame::Infix(min));
+                }
+                Frame::Not => *values.last_mut().unwrap() = !*values.last().unwrap(),
+                Frame::Group => self.require_punct(")")?,
+            }
         }
-        let id = self.ident()?;
-        Ok(flags.contains(&id))
+        Ok(values.pop().unwrap())
     }
 
     // =========================================================================
@@ -5512,8 +4859,8 @@ impl<'a> Parser<'a> {
             .map_err(|alternate| Self::select_alt_error(error, alternate))
     }
 
-    /// HS `try` over `f`: on failure the input is restored and nothing is
-    /// reported, so the caller can offer another alternative.
+    /// HS `try` over `f`: syntax failures restore input and permit another
+    /// alternative.
     fn attempt<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, ParseError>) -> Option<T> {
         let save = self.save();
         match f(self) {
@@ -5575,13 +4922,13 @@ impl<'a> Parser<'a> {
         self.goal_after(
             head_error,
             |p| {
-                let t = p.msetterm(false)?;
+                let t = p.term(false)?;
                 if !p.try_punct("<<") && !p.try_punct("\u{228F}") {
                     return Err(p.err_expect_here("`⊏`"));
                 }
                 Ok(t)
             },
-            |p, small| Ok(GoalSpec::Subterm(small, p.msetterm(false)?)),
+            |p, small| Ok(GoalSpec::Subterm(small, p.term(false)?)),
         )
     }
 
@@ -5740,136 +5087,85 @@ fn same_rule_var(a: &VarSpec, b: &VarSpec) -> bool {
 
 fn subst_let_fact(f: &mut Fact, key: &VarSpec, val: &Term) {
     for a in f.args.iter_mut() {
-        *a = subst_let_term(a, key, val);
+        subst_let_term(a, key, val);
     }
 }
 
-fn subst_let_term(t: &Term, key: &VarSpec, val: &Term) -> Term {
-    if matches!(t, Term::Var(v) if same_rule_var(v, key)) {
-        return val.clone();
-    }
-    match t {
-        Term::App(name, args) => Term::App(
-            name.clone(),
-            args.iter().map(|a| subst_let_term(a, key, val)).collect(),
-        ),
-        Term::AlgApp(name, a, b) => Term::AlgApp(
-            name.clone(),
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        Term::Pair(args) => Term::Pair(args.iter().map(|a| subst_let_term(a, key, val)).collect()),
-        Term::Diff(a, b) => Term::Diff(
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        Term::BinOp(op, a, b) => Term::BinOp(
-            *op,
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        Term::PatMatch(a) => Term::PatMatch(Box::new(subst_let_term(a, key, val))),
-        Term::Var(_)
-        | Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::NatOne
-        | Term::DhNeutral => t.clone(),
-    }
+fn subst_let_term(t: &mut Term, key: &VarSpec, val: &Term) {
+    t.visit_mut(|term| {
+        if matches!(term, Term::Var(v) if same_rule_var(v, key)) {
+            *term = val.clone();
+            false
+        } else {
+            true
+        }
+    });
 }
 
 fn subst_let_formula(phi: &mut Formula, key: &VarSpec, val: &Term) {
-    match phi {
-        Formula::False | Formula::True => {}
-        Formula::Atom(a) => subst_let_atom(a, key, val),
-        Formula::Not(p) => subst_let_formula(p, key, val),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
-            subst_let_formula(a, key, val);
-            subst_let_formula(b, key, val);
-        }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
-            // A rule-let substitution is a free-variable substitution. A
-            // quantifier for its domain shadows every occurrence below it.
-            if vars.iter().any(|v| same_rule_var(v, key)) {
-                return;
-            }
+    phi.visit_mut(|phi| {
+        match phi {
+            Formula::Atom(a) => subst_let_atom(a, key, val),
+            Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
+                // A rule-let substitution is a free-variable substitution. A
+                // quantifier for its domain shadows every occurrence below it.
+                if vars.iter().any(|v| same_rule_var(v, key)) {
+                    return false;
+                }
 
-            // Parser formulas still carry named variables. Alpha-rename any
-            // binder that occurs free in the replacement before descending,
-            // otherwise `let x = y in Ex y. ...x...` captures the inserted y.
-            let mut replacement_vars = Vec::new();
-            collect_term_vars(val, &mut replacement_vars);
-            let mut used_vars = replacement_vars.clone();
-            collect_formula_vars(body, &mut used_vars);
-            for var in vars.iter() {
-                if !used_vars.iter().any(|v| same_rule_var(v, var)) {
-                    used_vars.push(var.clone());
+                // Parser formulas still carry named variables. Alpha-rename any
+                // binder that occurs free in the replacement before descending,
+                // otherwise `let x = y in Ex y. ...x...` captures the inserted y.
+                let mut replacement_vars = Vec::new();
+                collect_term_vars(val, &mut replacement_vars);
+                let mut used_vars = replacement_vars.clone();
+                collect_formula_vars(body, &mut used_vars);
+                for var in vars.iter() {
+                    if !used_vars.iter().any(|v| same_rule_var(v, var)) {
+                        used_vars.push(var.clone());
+                    }
+                }
+                if !used_vars.iter().any(|v| same_rule_var(v, key)) {
+                    used_vars.push(key.clone());
+                }
+                for var in vars.iter_mut() {
+                    if replacement_vars.iter().any(|v| same_rule_var(v, var)) {
+                        let old = var.clone();
+                        let fresh = fresh_formula_var(&used_vars, &old);
+                        rename_bound_formula(body, &old, &fresh);
+                        used_vars.push(fresh.clone());
+                        *var = fresh;
+                    }
                 }
             }
-            if !used_vars.iter().any(|v| same_rule_var(v, key)) {
-                used_vars.push(key.clone());
-            }
-            for var in vars.iter_mut() {
-                if replacement_vars.iter().any(|v| same_rule_var(v, var)) {
-                    let old = var.clone();
-                    let fresh = fresh_formula_var(&used_vars, &old);
-                    rename_bound_formula(body, &old, &fresh);
-                    used_vars.push(fresh.clone());
-                    *var = fresh;
-                }
-            }
-            subst_let_formula(body, key, val);
+            _ => {}
         }
-    }
+        true
+    });
 }
 
 fn collect_term_vars(term: &Term, out: &mut Vec<VarSpec>) {
-    match term {
-        Term::Var(v) => {
-            if !out.iter().any(|used| same_rule_var(used, v)) {
-                out.push(v.clone());
-            }
+    term.visit(|term| {
+        if let Term::Var(v) = term
+            && !out.iter().any(|used| same_rule_var(used, v))
+        {
+            out.push(v.clone());
         }
-        Term::App(_, args) | Term::Pair(args) => {
-            for arg in args {
-                collect_term_vars(arg, out);
-            }
-        }
-        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
-            collect_term_vars(a, out);
-            collect_term_vars(b, out);
-        }
-        Term::PatMatch(t) => collect_term_vars(t, out),
-        Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::NatOne
-        | Term::DhNeutral => {}
-    }
+    });
 }
 
 fn collect_formula_vars(formula: &Formula, out: &mut Vec<VarSpec>) {
-    match formula {
-        Formula::False | Formula::True => {}
+    formula.visit(|formula| match formula {
         Formula::Atom(atom) => collect_atom_vars(atom, out),
-        Formula::Not(body) => collect_formula_vars(body, out),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
-            collect_formula_vars(a, out);
-            collect_formula_vars(b, out);
-        }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
+        Formula::Forall(vars, _) | Formula::Exists(vars, _) => {
             for var in vars {
                 if !out.iter().any(|used| same_rule_var(used, var)) {
                     out.push(var.clone());
                 }
             }
-            collect_formula_vars(body, out);
         }
-    }
+        _ => {}
+    });
 }
 
 fn collect_atom_vars(atom: &Atom, out: &mut Vec<VarSpec>) {
@@ -5907,20 +5203,16 @@ fn fresh_formula_var(used: &[VarSpec], old: &VarSpec) -> VarSpec {
 /// Rename occurrences bound by the current quantifier. A nested quantifier
 /// for the same variable starts a new scope and stops the traversal there.
 fn rename_bound_formula(formula: &mut Formula, old: &VarSpec, new: &VarSpec) {
-    match formula {
-        Formula::False | Formula::True => {}
-        Formula::Atom(atom) => rename_atom_var(atom, old, new),
-        Formula::Not(body) => rename_bound_formula(body, old, new),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
-            rename_bound_formula(a, old, new);
-            rename_bound_formula(b, old, new);
-        }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
-            if !vars.iter().any(|v| same_rule_var(v, old)) {
-                rename_bound_formula(body, old, new);
+    formula.visit_mut(|formula| {
+        match formula {
+            Formula::Atom(atom) => rename_atom_var(atom, old, new),
+            Formula::Forall(vars, _) | Formula::Exists(vars, _) => {
+                return !vars.iter().any(|v| same_rule_var(v, old));
             }
+            _ => {}
         }
-    }
+        true
+    });
 }
 
 fn rename_atom_var(atom: &mut Atom, old: &VarSpec, new: &VarSpec) {
@@ -5945,40 +5237,27 @@ fn rename_atom_var(atom: &mut Atom, old: &VarSpec, new: &VarSpec) {
 }
 
 fn rename_term_var(term: &mut Term, old: &VarSpec, new: &VarSpec) {
-    match term {
-        Term::Var(v) if same_rule_var(v, old) => v.idx = new.idx,
-        Term::App(_, args) | Term::Pair(args) => {
-            for arg in args {
-                rename_term_var(arg, old, new);
-            }
+    term.visit_mut(|term| {
+        if let Term::Var(v) = term
+            && same_rule_var(v, old)
+        {
+            v.idx = new.idx;
         }
-        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
-            rename_term_var(a, old, new);
-            rename_term_var(b, old, new);
-        }
-        Term::PatMatch(t) => rename_term_var(t, old, new),
-        Term::Var(_)
-        | Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::NatOne
-        | Term::DhNeutral => {}
-    }
+        true
+    });
 }
 
 fn subst_let_atom(a: &mut Atom, key: &VarSpec, val: &Term) {
     match a {
         Atom::Eq(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y) | Atom::Subterm(x, y) => {
-            *x = subst_let_term(x, key, val);
-            *y = subst_let_term(y, key, val);
+            subst_let_term(x, key, val);
+            subst_let_term(y, key, val);
         }
         Atom::Action(f, t) => {
             subst_let_fact(f, key, val);
-            *t = subst_let_term(t, key, val);
+            subst_let_term(t, key, val);
         }
-        Atom::Last(t) => *t = subst_let_term(t, key, val),
+        Atom::Last(t) => subst_let_term(t, key, val),
         Atom::Pred(f) => subst_let_fact(f, key, val),
     }
 }
