@@ -2075,6 +2075,10 @@ impl TheoryPipeline<'_> {
 }
 
 fn run_batch(args: &Args) -> Result<i32, RunError> {
+    tamarin_utils::stack::with_compiler_stack(|| run_batch_inner(args))
+}
+
+fn run_batch_inner(args: &Args) -> Result<i32, RunError> {
     init_rayon_pool(args);
     if args.diff {
         return Err(RunError::Regular(
@@ -2617,11 +2621,11 @@ fn init_rayon_pool(args: &Args) {
     // wins (which is the desired behaviour — RS runs `run_batch` once
     // per process, and tests install their own pool).
     // `stack_size`: the theory item fold renders each item as ONE HughesPJ
-    // Doc on a worker (HS `parMap rdeepseq ppItem`, TheoryObject.hs:767), and
-    // the eager Doc builders (`beside`/`above_g`) recurse along the left
-    // operand's token spine, so depth scales with the item's size.  GHC grows
-    // its stack on demand; rayon's default worker stacks do not, and overflow
-    // on equation- and formula-heavy theories (`jcs18/trace-existence.spthy`).
+    // Doc on a worker (HS `parMap rdeepseq ppItem`, TheoryObject.hs:767).
+    // Construction now walks token spines iteratively, but nested lazy
+    // alternatives, layout selection and last-owner Doc cleanup still have
+    // recursive paths. Keep the stack reserve for these remaining paths;
+    // GHC grows its stack on demand, while rayon's worker stacks are fixed.
     // 64 MiB is reserved virtual address space only, committed on use — the
     // same size the interactive server gives its tokio workers.
     let _ = rayon::ThreadPoolBuilder::new()

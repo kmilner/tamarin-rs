@@ -489,6 +489,31 @@ fn msr_module_emits_translated_rules_and_no_summary() {
 }
 
 #[test]
+fn deep_terms_survive_the_cli_lifecycle() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+    let wrappers = 8192;
+    let theory = format!(
+        "theory Deep begin functions: f/1 rule R: [] --> [Out({}'a'{})] end",
+        "f(".repeat(wrappers),
+        ")".repeat(wrappers)
+    );
+    let (code, stdout, stderr) =
+        run_translate("deep_terms", &theory, &["-m=spthy", "--processors=1"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("rule (modulo E) R"));
+    let (code, reparsed, stderr) = run_translate(
+        "deep_terms_roundtrip",
+        &stdout,
+        &["-m=spthy", "--processors=1"],
+    );
+    assert_eq!(code, 0, "reparse stderr: {stderr}");
+    assert_eq!(reparsed, stdout, "printing must preserve the nested term");
+}
+
+#[test]
 fn translate_only_stderr_has_no_theory_closed_marker() {
     if !maude_available() {
         eprintln!("skipping: maude not on path");
