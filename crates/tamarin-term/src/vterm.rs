@@ -7,9 +7,9 @@
 //! `VTerm<C, V>` is a term whose literals are either *constants* (of type
 //! `C`) or *variables* (of type `V`).
 
-use std::fmt;
+use std::{fmt, ops::ControlFlow};
 
-use crate::term::{lit, Term};
+use crate::term::{lit, walk_terms, Term};
 
 /// Literal: either a constant `Con(c)` or a variable `Var(v)`.
 ///
@@ -67,35 +67,31 @@ pub fn vars_vterm_in_order<C, V: Clone>(t: &VTerm<C, V>) -> Vec<V> {
 }
 
 fn collect_vars<C, V: Clone>(t: &VTerm<C, V>, out: &mut Vec<V>) {
-    match t {
-        Term::Lit(Lit::Var(v)) => out.push(v.clone()),
-        Term::Lit(Lit::Con(_)) => {}
-        Term::App(_, ts) => {
-            for t in ts.iter() {
-                collect_vars(t, out);
-            }
+    t.for_each_lit(|literal| {
+        if let Lit::Var(v) = literal {
+            out.push(v.clone());
         }
-    }
+    });
 }
 
 /// `True` iff `t` contains no variable literals (i.e. is ground).
-/// Non-allocating, short-circuits on the first variable found — cheaper than
-/// `vars_vterm(t).is_empty()` on the hot match path.
+/// Short-circuits on the first variable without collecting a variable list.
+/// Unary paths need no continuation allocation.
 pub fn is_ground_vterm<C, V>(t: &VTerm<C, V>) -> bool {
-    match t {
-        Term::Lit(Lit::Var(_)) => false,
-        Term::Lit(Lit::Con(_)) => true,
-        Term::App(_, ts) => ts.iter().all(is_ground_vterm),
-    }
+    walk_terms(std::slice::from_ref(t), |node| match node {
+        Term::Lit(Lit::Var(_)) => ControlFlow::Break(()),
+        _ => ControlFlow::Continue(true),
+    })
+    .is_continue()
 }
 
 /// `occursVTerm v t`: whether `v` appears anywhere in `t`.
 pub fn occurs_vterm<C, V: PartialEq>(v: &V, t: &VTerm<C, V>) -> bool {
-    match t {
-        Term::Lit(Lit::Var(w)) => w == v,
-        Term::Lit(Lit::Con(_)) => false,
-        Term::App(_, ts) => ts.iter().any(|t| occurs_vterm(v, t)),
-    }
+    walk_terms(std::slice::from_ref(t), |node| match node {
+        Term::Lit(Lit::Var(w)) if w == v => ControlFlow::Break(()),
+        _ => ControlFlow::Continue(true),
+    })
+    .is_break()
 }
 
 #[cfg(test)]
@@ -152,5 +148,36 @@ mod tests {
             ],
         );
         assert!(is_ground_vterm(&t), "constants only ⇒ ground");
+    }
+
+    #[test]
+    fn deep_variable_scans_preserve_order_and_membership() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut term: VTerm<u32, &str> = f_app_no_eq(
+                    pair_sym(),
+                    vec![
+                        var_term("y"),
+                        f_app_no_eq(pair_sym(), vec![var_term("x"), var_term("y")]),
+                    ],
+                );
+                let mut ground = const_term::<_, &str>(0u32);
+                for _ in 0..8192 {
+                    term = f_app_no_eq(crate::builtin::hash_sym(), vec![term]);
+                    ground = f_app_no_eq(crate::builtin::hash_sym(), vec![ground]);
+                }
+                assert_eq!(vars_vterm_in_order(&term), vec!["y", "x", "y"]);
+                assert_eq!(vars_vterm(&term), vec!["x", "y"]);
+                assert!(occurs_vterm(&"x", &term));
+                assert!(!occurs_vterm(&"z", &term));
+                assert!(!is_ground_vterm(&term));
+                assert!(is_ground_vterm(&ground));
+                assert!(vars_vterm(&ground).is_empty());
+                assert!(!occurs_vterm(&"x", &ground));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

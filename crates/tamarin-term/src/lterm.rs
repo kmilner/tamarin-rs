@@ -22,7 +22,6 @@ use std::cmp::Ordering;
 use crate::function_symbols::{AcSym, FunSym, Privacy};
 use crate::term::Term;
 use crate::vterm::{const_term, Lit, VTerm};
-use tamarin_utils::cow::cow_map_vec;
 use tamarin_utils::fresh::MonadFresh;
 
 // =============================================================================
@@ -575,14 +574,16 @@ where
     L: HasFreesLit,
 {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
-        match self {
-            Term::Lit(l) => l.for_each_free(f),
-            Term::App(_, args) => {
-                for a in args.iter() {
-                    a.for_each_free(f);
-                }
-            }
+        if let Term::Lit(literal) = self {
+            literal.for_each_free(f);
+            return;
         }
+        let _ = crate::term::walk_terms(std::slice::from_ref(self), |node| {
+            if let Term::Lit(l) = node {
+                l.for_each_free(f);
+            }
+            std::ops::ControlFlow::<(), bool>::Continue(true)
+        });
     }
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
         // Copy-on-write: when `f` is identity on every free leaf of a subtree,
@@ -614,25 +615,14 @@ fn map_free_term_cow<L>(
 where
     L: Clone + Ord + HasFrees + HasFreesLit,
 {
-    match t {
-        Term::Lit(l) => {
+    crate::term::bind_lits_cow_with_order(
+        t,
+        &mut |l| {
             let nl = l.clone().map_free_with(f, monotone);
-            if &nl != l {
-                Some(Term::Lit(nl))
-            } else {
-                None
-            }
-        }
-        Term::App(fsym, args) => {
-            cow_map_vec(&args[..], |a| map_free_term_cow(a, &mut *f, monotone)).map(|mapped| {
-                if monotone {
-                    crate::term::unsafe_f_app(*fsym, mapped)
-                } else {
-                    crate::term::f_app(*fsym, mapped)
-                }
-            })
-        }
-    }
+            (nl != *l).then_some(Term::Lit(nl))
+        },
+        monotone,
+    )
 }
 
 /// Marker trait so the generic `HasFrees for Term<L>` impl can resolve.
@@ -760,6 +750,66 @@ mod tests {
     use crate::function_symbols::pair_sym;
     use crate::term::f_app_no_eq;
     use crate::vterm::var_term;
+
+    #[test]
+    fn deep_free_walks_and_cow_maps_use_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let x = LVar::new("x", LSort::Msg, 0);
+                let y = LVar::new("y", LSort::Msg, 0);
+                let mut t: LNTerm = var_term(x);
+                for _ in 0..32768 {
+                    t = f_app_no_eq(pair_sym(), vec![t, var_term(y)]);
+                }
+                let seen = frees_list(&t);
+                assert_eq!(seen.len(), 32769);
+                assert_eq!(seen[0], x);
+                assert!(seen[1..].iter().all(|v| *v == y));
+                let identity = t.clone().map_free(&mut |v| v);
+                let (Term::App(_, original), Term::App(_, unchanged)) = (&t, &identity) else {
+                    unreachable!()
+                };
+                assert_eq!(original.as_ptr(), unchanged.as_ptr());
+                for monotone in [false, true] {
+                    let mapped = t
+                        .clone()
+                        .map_free_with(&mut |v| LVar::new(v.name, v.sort, v.idx + 1), monotone);
+                    let vars = frees_list(&mapped);
+                    assert_eq!(vars.len(), seen.len());
+                    assert!(vars
+                        .iter()
+                        .zip(&seen)
+                        .all(|(a, b)| a.name == b.name && a.idx == b.idx + 1));
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn free_mapping_keeps_monotone_order_and_normalizes_arbitrary_changes() {
+        use crate::function_symbols::{AcSym, FunSym};
+        let x = LVar::new("x", LSort::Msg, 0);
+        let y = LVar::new("x", LSort::Msg, 1);
+        let term: LNTerm = crate::term::f_app_ac(AcSym::Mult, vec![var_term(x), var_term(y)]);
+        let reversed = term.clone().map_free(&mut |v| if v == x { y } else { x });
+        assert_eq!(reversed, term);
+        let shifted = term
+            .clone()
+            .map_free_monotone(&mut |v| LVar::new(v.name, v.sort, v.idx + 10));
+        assert_eq!(
+            shifted,
+            crate::term::f_app(
+                FunSym::Ac(AcSym::Mult),
+                vec![
+                    var_term(LVar::new("x", LSort::Msg, 10)),
+                    var_term(LVar::new("x", LSort::Msg, 11))
+                ]
+            )
+        );
+    }
 
     /// `Name`'s derived `Ord` compares the tag before the identifier, and
     /// `NameId`'s compares its one string, as HS's declarations do.

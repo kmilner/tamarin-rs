@@ -391,3 +391,27 @@ fn go_nf_reads_each_rule_s_own_lhs_flag() {
     assert!(!nf_via_haskell(&sig, &reducible));
     assert!(nf_via_haskell(&sig, &normal));
 }
+
+#[test]
+fn deep_normal_form_walk_checks_nested_reducible_terms_on_small_stacks() {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let sig = crate::maude_sig::hash_maude_sig().merge(crate::maude_sig::dh_maude_sig());
+            for reducible in [false, true] {
+                let mut term = if reducible {
+                    crate::builtin::inv(crate::builtin::one_const())
+                } else {
+                    crate::builtin::msg_var("x", 0)
+                };
+                for _ in 0..32768 {
+                    term = crate::builtin::hash(term);
+                }
+                let term = crate::builtin::exp(term, crate::builtin::msg_var("y", 1));
+                assert_eq!(nf_via_haskell(&sig, &term), !reducible);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

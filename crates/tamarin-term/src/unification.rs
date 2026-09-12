@@ -121,6 +121,7 @@ fn unify_raw_impl<C, F>(
     sort_of_const: &F,
     acc: &mut BTreeMap<LVar, LTerm<C>>,
     mut delayed: Option<&mut Vec<Equal<LTerm<C>>>>,
+    applied_at: Option<usize>,
     lhs: LTerm<C>,
     rhs: LTerm<C>,
 ) -> Result<(), UnifyError>
@@ -130,8 +131,15 @@ where
 {
     // Apply the accumulator by borrowing it directly — avoids cloning
     // the whole map into a `Subst` on every recursion (hot path).
-    let l = apply_vterm_map(&*acc, lhs);
-    let r = apply_vterm_map(&*acc, rhs);
+    // Descendants already carry this idempotent substitution. Every successful
+    // elimination adds a fresh domain key, so length identifies its revision.
+    // Reapply only after an earlier sibling has extended the accumulator.
+    let revision = acc.len();
+    let (l, r) = if applied_at == Some(revision) {
+        (lhs, rhs)
+    } else {
+        (apply_vterm_map(&*acc, lhs), apply_vterm_map(&*acc, rhs))
+    };
 
     match (&l, &r) {
         (Term::Lit(Lit::Var(vl)), Term::Lit(Lit::Var(vr))) if vl == vr => Ok(()),
@@ -173,13 +181,31 @@ where
             if lf == rf && la.len() == ra.len() =>
         {
             for (a, b) in la.iter().cloned().zip(ra.iter().cloned()) {
-                unify_raw_impl(sort_of_const, acc, delayed.as_deref_mut(), a, b)?;
+                tamarin_utils::stack::ensure_sufficient_stack(|| {
+                    unify_raw_impl(
+                        sort_of_const,
+                        acc,
+                        delayed.as_deref_mut(),
+                        Some(revision),
+                        a,
+                        b,
+                    )
+                })?;
             }
             Ok(())
         }
         (Term::App(FunSym::List, la), Term::App(FunSym::List, ra)) if la.len() == ra.len() => {
             for (a, b) in la.iter().cloned().zip(ra.iter().cloned()) {
-                unify_raw_impl(sort_of_const, acc, delayed.as_deref_mut(), a, b)?;
+                tamarin_utils::stack::ensure_sufficient_stack(|| {
+                    unify_raw_impl(
+                        sort_of_const,
+                        acc,
+                        delayed.as_deref_mut(),
+                        Some(revision),
+                        a,
+                        b,
+                    )
+                })?;
             }
             Ok(())
         }
@@ -243,7 +269,7 @@ where
     C: Ord + Clone,
     F: Fn(&C) -> LSort,
 {
-    unify_raw_impl(sort_of_const, acc, None, lhs, rhs)
+    unify_raw_impl(sort_of_const, acc, None, None, lhs, rhs)
 }
 
 /// Haskell-faithful factored unification: same as `unify_raw` but
@@ -261,7 +287,7 @@ where
     C: Ord + Clone,
     F: Fn(&C) -> LSort,
 {
-    unify_raw_impl(sort_of_const, acc, Some(delayed), lhs, rhs)
+    unify_raw_impl(sort_of_const, acc, Some(delayed), None, lhs, rhs)
 }
 
 /// `unifyLTermFactored` port (Unification.hs:120-133).  Returns the
@@ -333,6 +359,10 @@ where
         let cur = std::mem::replace(ts, Term::Lit(Lit::Var(v)));
         *ts = apply_vterm_map(&single, cur);
     }
+    debug_assert!(
+        !acc.contains_key(&v),
+        "eliminated variables have already been substituted"
+    );
     acc.insert(v, t);
     Ok(())
 }
@@ -464,7 +494,9 @@ where
         Term::App(FunSym::NoEq(pf), pargs) => match t {
             Term::App(FunSym::NoEq(tf), targs) if tf == pf && targs.len() == pargs.len() => {
                 for (a, b) in targs.iter().cloned().zip(pargs.iter().cloned()) {
-                    match_raw(sort_of_const, mapping, a, b)?;
+                    tamarin_utils::stack::ensure_sufficient_stack(|| {
+                        match_raw(sort_of_const, mapping, a, b)
+                    })?;
                 }
                 Ok(())
             }
@@ -473,7 +505,9 @@ where
         Term::App(FunSym::List, pargs) => match t {
             Term::App(FunSym::List, targs) if targs.len() == pargs.len() => {
                 for (a, b) in targs.iter().cloned().zip(pargs.iter().cloned()) {
-                    match_raw(sort_of_const, mapping, a, b)?;
+                    tamarin_utils::stack::ensure_sufficient_stack(|| {
+                        match_raw(sort_of_const, mapping, a, b)
+                    })?;
                 }
                 Ok(())
             }
@@ -526,3 +560,7 @@ mod tests;
 #[cfg(test)]
 #[path = "unification_haskell_invariants_tests.rs"]
 mod haskell_invariants_tests;
+
+#[cfg(test)]
+#[path = "unification_reference.rs"]
+mod reference;

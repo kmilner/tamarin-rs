@@ -9,6 +9,7 @@ description = "Utility library for the Tamarin prover (Rust port)."
 
 [dependencies]
 rustc-hash = { workspace = true }
+stacker = "0.1"
 
 [lints]
 workspace = true

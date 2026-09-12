@@ -22,10 +22,9 @@ use std::collections::BTreeMap;
 
 use tamarin_utils::cow::{cow_map_vec, cow_pair};
 
-use crate::function_symbols::FunSym;
 use crate::lterm::LVar;
 use crate::subst::{Subst, SubstView};
-use crate::term::{f_app_ac, f_app_c, f_app_list, f_app_no_eq, Term};
+use crate::term::{bind_lits_cow, Term};
 use crate::vterm::{Lit, VTerm};
 
 /// What an [`Apply`] instance reads from a substitution: HS's `imageOf`
@@ -130,36 +129,13 @@ where
         if subst.is_empty() {
             return None;
         }
-        apply_term(self, subst)
+        bind_lits_cow(self, &mut |a| match a {
+            Lit::Var(v) => subst.image_of(v).cloned(),
+            Lit::Con(_) => None,
+        })
     }
 }
 
-/// The recursion behind [`Apply`] for a term, with the empty-substitution
-/// test hoisted to the entry point.  An `App` node is rebuilt — and
-/// re-normalised through the smart constructors — only when at least one
-/// child changed; an untouched subtree is already normal, so reusing it gives
-/// the same value the full rebuild would.
-fn apply_term<C, V, S>(t: &VTerm<C, V>, subst: &S) -> Option<VTerm<C, V>>
-where
-    C: Ord + Clone,
-    V: Ord + Clone,
-    S: LeafSubst<Const = C, Var = V>,
-{
-    match t {
-        Term::Lit(Lit::Var(v)) => subst.image_of(v).cloned(),
-        Term::Lit(Lit::Con(_)) => None,
-        Term::App(fsym, args) => {
-            cow_map_vec(&args[..], |a| apply_term(a, subst)).map(|mapped| match fsym {
-                FunSym::Ac(o) => f_app_ac(*o, mapped),
-                FunSym::C(o) => f_app_c(*o, mapped),
-                FunSym::NoEq(o) => f_app_no_eq(*o, mapped),
-                FunSym::List => f_app_list(mapped),
-            })
-        }
-    }
-}
-
-/// HS `Apply s a => Apply s [a]` (SubstVFree.hs:331-332).
 impl<S, T: Apply<S> + Clone> Apply<S> for Vec<T> {
     fn apply_changed(&self, subst: &S) -> Option<Self> {
         cow_map_vec(&self[..], |x| x.apply_changed(subst))
@@ -182,5 +158,148 @@ impl<S, A: Apply<S> + Clone, B: Apply<S> + Clone> Apply<S> for (A, B) {
             &self.1,
             self.1.apply_changed(subst),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::function_symbols::FunSym;
+    use crate::function_symbols::{pair_sym, AcSym, CSym};
+    use crate::term::{f_app_ac, f_app_c, f_app_list, f_app_no_eq};
+    use crate::vterm::{const_term, var_term};
+    use std::cell::RefCell;
+
+    type T = VTerm<u32, &'static str>;
+
+    // Previous recursive implementation, used only on small mixed trees.
+    fn reference(t: &T, subst: &impl LeafSubst<Const = u32, Var = &'static str>) -> Option<T> {
+        match t {
+            Term::Lit(Lit::Var(v)) => subst.image_of(v).cloned(),
+            Term::Lit(Lit::Con(_)) => None,
+            Term::App(fsym, args) => {
+                cow_map_vec(args, |a| reference(a, subst)).map(|mapped| match fsym {
+                    FunSym::Ac(o) => f_app_ac(*o, mapped),
+                    FunSym::C(o) => f_app_c(*o, mapped),
+                    FunSym::NoEq(o) => f_app_no_eq(*o, mapped),
+                    FunSym::List => f_app_list(mapped),
+                })
+            }
+        }
+    }
+
+    struct Recording {
+        map: BTreeMap<&'static str, T>,
+        visits: RefCell<Vec<&'static str>>,
+    }
+
+    impl LeafSubst for Recording {
+        type Const = u32;
+        type Var = &'static str;
+        fn is_empty(&self) -> bool {
+            self.map.is_empty()
+        }
+        fn image_of(&self, v: &&'static str) -> Option<&T> {
+            self.visits.borrow_mut().push(v);
+            self.map.get(v)
+        }
+    }
+
+    #[test]
+    fn substitution_preserves_change_signals_lookup_order_and_normalization() {
+        let mut terms = vec![
+            var_term("x"),
+            var_term("y"),
+            const_term(3),
+            f_app_list(vec![]),
+        ];
+        for i in 0..24 {
+            let children = vec![terms[i].clone(), var_term("y"), terms[i / 2].clone()];
+            terms.push(match i % 4 {
+                0 => f_app_list(children),
+                1 => f_app_ac(AcSym::Mult, children),
+                2 => f_app_c(CSym::EMap, children),
+                _ => f_app_no_eq(pair_sym(), children),
+            });
+        }
+        for map in [
+            BTreeMap::from([("missing", const_term(8))]),
+            // Raw maps may carry identity entries: keep their Some signal.
+            BTreeMap::from([("x", var_term("x"))]),
+            // Insert the image once, even though it contains a domain variable.
+            BTreeMap::from([
+                ("x", f_app_list(vec![var_term("x"), var_term("y")])),
+                ("y", const_term(1)),
+            ]),
+            BTreeMap::from([(
+                "x",
+                f_app_ac(AcSym::Mult, vec![const_term(0), const_term(2)]),
+            )]),
+        ] {
+            let subst = Recording {
+                map,
+                visits: RefCell::new(Vec::new()),
+            };
+            for t in &terms {
+                let expected = reference(t, &subst);
+                let visits = subst.visits.take();
+                assert_eq!(t.apply_changed(&subst), expected);
+                assert_eq!(subst.visits.take(), visits);
+            }
+        }
+        let empty = Recording {
+            map: BTreeMap::new(),
+            visits: RefCell::new(Vec::new()),
+        };
+        assert!(terms.last().unwrap().apply_changed(&empty).is_none());
+        assert!(empty.visits.borrow().is_empty());
+    }
+
+    #[test]
+    fn deep_substitution_and_partial_rebuild_cleanup_use_bounded_stack() {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut t: T = var_term("x");
+                for _ in 0..100_000 {
+                    t = f_app_no_eq(pair_sym(), vec![t, const_term(0)]);
+                }
+                let miss = BTreeMap::from([("other", const_term(7))]);
+                assert!(t.apply_changed(&miss).is_none());
+                let hit = BTreeMap::from([("x", const_term(7))]);
+                let result = t.apply_changed(&hit).unwrap();
+                let mut leaf = &result;
+                for _ in 0..100_000 {
+                    let Term::App(_, args) = leaf else {
+                        panic!("missing level")
+                    };
+                    assert_eq!(args[1], const_term(0));
+                    leaf = &args[0];
+                }
+                assert_eq!(leaf, &const_term(7));
+                drop(result);
+
+                struct PanicSubst(T);
+                impl LeafSubst for PanicSubst {
+                    type Const = u32;
+                    type Var = &'static str;
+                    fn is_empty(&self) -> bool {
+                        false
+                    }
+                    fn image_of(&self, v: &&'static str) -> Option<&T> {
+                        assert_ne!(*v, "panic", "fail after rebuilding the deep left child");
+                        Some(&self.0)
+                    }
+                }
+                let tree = f_app_no_eq(pair_sym(), vec![t, var_term("panic")]);
+                assert!(
+                    std::panic::catch_unwind(|| tree.apply_changed(&PanicSubst(const_term(7))))
+                        .is_err()
+                );
+                drop(tree);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }
