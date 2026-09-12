@@ -21,12 +21,19 @@
 //!
 //! Diagnostics use Rust source spans and semantic error kinds. Exact Parsec
 //! expectation lists and GHC exception call stacks are not a compatibility goal.
+//!
+//! Nested syntax and includes use explicit worklists rather than
+//! input-dependent native recursion. No fixed nesting-depth limit is imposed.
 
 pub mod ast;
+mod ast_clone;
+mod formula_walk;
 pub mod lexer;
 pub mod parse_error;
 pub mod parser;
+mod process_walk;
 pub mod proof_tree;
+mod term_walk;
 
 pub use ast::*;
 pub use parse_error::{DiagnosticLabel, IllegalDiffReason, ParseContext, ParseErrorKind};

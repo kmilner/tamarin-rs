@@ -560,6 +560,7 @@ impl ParseError {
             ParseErrorKind::IncludeIo { path, reason } => {
                 vec![format!("failed to read `{path}`: {reason}")]
             }
+
             ParseErrorKind::Custom => Vec::new(),
             ParseErrorKind::Expected { .. } => match &self.details {
                 Some(ErrorDetails::Expected { expected, found }) => vec![match found {

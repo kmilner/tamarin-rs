@@ -38,15 +38,15 @@ fn process_actions(src: &str) -> Vec<p::SapicAction> {
         .items
         .iter()
         .find_map(|it| match it {
-            p::TheoryItem::TopLevelProcess(pr) => Some(pr.clone()),
+            p::TheoryItem::TopLevelProcess(pr) => Some(pr),
             _ => None,
         })
         .expect("theory has a top-level process");
     let mut out = Vec::new();
     let mut cur = proc;
     while let p::Process::Action { action, body } = cur {
-        out.push(action);
-        cur = *body;
+        out.push(action.clone());
+        cur = body;
     }
     out
 }

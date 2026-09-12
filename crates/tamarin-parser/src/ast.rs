@@ -165,7 +165,9 @@ pub enum RestrictionAttr {
 // Rules
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+/// Clone and destruction use worklists. Borrow fields when matching this Drop
+/// type; derived Debug and PartialEq still recurse.
+#[derive(Debug, Default, PartialEq)]
 pub struct Rule {
     pub name: String,
     pub modulo: Option<String>, // E or AC
@@ -286,7 +288,8 @@ pub struct ProofSkeleton {
 /// `cases` retains the source ordering (HS uses `M.fromList` which is
 /// alphabetical, but at replay time the order doesn't matter — we look
 /// each case up by name).
-#[derive(Debug, Clone, PartialEq)]
+/// Cloning and destruction use worklists; equality and debug formatting recurse.
+#[derive(Debug, PartialEq)]
 pub struct ParsedProofTree {
     pub method: ParsedMethod,
     pub cases: Vec<(String, ParsedProofTree)>,
@@ -355,8 +358,9 @@ pub struct SelectorLeaf {
     pub params: Vec<String>,
 }
 
-/// A boolean selector expression from one line of a priority block.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A boolean selector expression from one line of a priority block. Clone and
+/// destruction use worklists; derived comparison and Debug still recurse.
+#[derive(Debug, PartialEq, Eq)]
 pub enum SelectorExpr {
     Leaf(SelectorLeaf),
     Not(Box<SelectorExpr>),
@@ -391,7 +395,10 @@ pub struct ProcessDef {
     pub body: Process,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// Clone uses an explicit worklist; destruction uses fixed-depth batches and a
+/// worklist. Borrow fields when matching this Drop type. Derived Debug and
+/// PartialEq still recurse through children.
+#[derive(Debug, PartialEq)]
 pub enum Process {
     Null,
     Action {
@@ -482,7 +489,9 @@ pub struct Fact {
 // Formulas
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+/// Cloning is iterative. Destruction uses a worklist with bounded native batches;
+/// equality and debug formatting still recurse. Match fields by reference.
+#[derive(Debug, PartialEq)]
 pub enum Formula {
     False,
     True,
@@ -514,7 +523,10 @@ pub enum Atom {
 // Terms
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+/// Surface term. Cloning and destruction use iterative traversal; derived
+/// debugging and equality still recurse. Match by reference when extracting
+/// fields, because the custom destructor prevents moving them out directly.
+#[derive(Debug, PartialEq)]
 pub enum Term {
     Var(VarSpec),
     PubLit(String),   // 'foo'
