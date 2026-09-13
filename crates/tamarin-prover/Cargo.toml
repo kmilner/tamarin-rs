@@ -25,6 +25,9 @@ tamarin-server = { workspace = true }
 tamarin-accountability = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 mimalloc = { version = "0.1", default-features = false }
+# Errno constants for the `IOException` reason table in `run.rs`: the numbers
+# differ across platforms, and libc is already in the tree via the deps above.
+libc = "0.2"
 rayon = { workspace = true }
 clap = { workspace = true }
 
