@@ -14,7 +14,7 @@
 //! always `True` here — every fact carries its `prettyLNFact` rendering and
 //! every outermost term its `show`n form.
 //!
-//! The bytes come out of `to_pretty_string`, a port of aeson-pretty's
+//! The bytes come out of `write_value`, a port of aeson-pretty's
 //! `encodePretty` at `defConfig` (4-space indent, `": "` between key and
 //! value, empty containers inline, no trailing newline) over
 //! `Data.Aeson.Text`'s string escaper — aeson-pretty's `fromValue` hands
@@ -27,9 +27,9 @@
 //! `removePseudoUnicode` can only bite payload text that itself spells out
 //! the six characters of a `\u003c` / `\u003e` escape.  Object keys are
 //! emitted in the ascending order `Data.Aeson.Object` serialises them in,
-//! which is what `serde_json::Map`'s `BTreeMap` iteration yields.
+//! which is what our `BTreeMap` iteration yields.
 
-use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 use tamarin_term::function_symbols::{plain_show_bytes, show_acfct_sym, AcSym, FunSym};
 use tamarin_term::lterm::{LNTerm, LVar, Name};
@@ -55,6 +55,17 @@ use crate::constraint::system::graph::render_system::RenderSystem;
 use crate::constraint::system::graph::repr::{Cluster, GEdge, GNode, MissingHint, NodeType};
 use crate::constraint::system::graph::{system_to_graph, Graph};
 use crate::constraint::system::NodeRuleMap;
+
+/// Graph structure is shallow. Terms retain their existing shared ownership
+/// and expand one level at a time through the same JSON writer, avoiding a
+/// second deeply nested tree with recursive construction and destruction.
+enum Json {
+    Object(BTreeMap<String, Json>),
+    Array(Vec<Json>),
+    String(String),
+    Bool(bool),
+    Term(LNTerm, bool),
+}
 
 /// HS `resolveNodePremFact` (System.hs:928-929) via Graph.hs:87-90.
 fn resolve_node_prem_fact<'a>(prem: &NodePrem, rules: &NodeRuleMap<'a>) -> Option<&'a LNFact> {
@@ -257,12 +268,12 @@ fn classify_edge(edge: &GEdge, rules: &NodeRuleMap<'_>) -> EdgeClass {
 
 /// Build a JSON object from `(key, value)` pairs inserted in the alphabetical
 /// order `Data.Aeson` emits.
-fn object<'a>(fields: impl IntoIterator<Item = (&'a str, Value)>) -> Value {
-    let mut m = Map::new();
+fn object<'a>(fields: impl IntoIterator<Item = (&'a str, Json)>) -> Json {
+    let mut m = BTreeMap::new();
     for (k, v) in fields {
         m.insert(k.to_string(), v);
     }
-    Value::Object(m)
+    Json::Object(m)
 }
 
 /// Port of `lntermToJSONGraphNodeTerm` (JSON.hs:285-302) at `pretty = True`.
@@ -272,29 +283,34 @@ fn object<'a>(fields: impl IntoIterator<Item = (&'a str, Value)>) -> Value {
 /// `jgnParams`.  Terms that are neither a literal nor a `NoEq`/`AC`
 /// application fall into HS's catch-all `Const ("unknown term type: " ++ show
 /// t)`.
-fn json_term(t: &LNTerm, outermost: bool) -> Value {
+fn json_term(t: &LNTerm, outermost: bool) -> Json {
+    Json::Term(t.clone(), outermost)
+}
+
+// Expand only this node. Child terms remain shared until the writer reaches them.
+fn term_object(t: &LNTerm, outermost: bool) -> Json {
     let params =
-        |ts: &[LNTerm]| -> Value { Value::Array(ts.iter().map(|a| json_term(a, false)).collect()) };
-    let funct = |name: String, ts: &[LNTerm]| -> Value {
-        let mut fields = vec![("jgnFunct", Value::String(name)), ("jgnParams", params(ts))];
+        |ts: &[LNTerm]| -> Json { Json::Array(ts.iter().map(|a| json_term(a, false)).collect()) };
+    let funct = |name: String, ts: &[LNTerm]| -> Json {
+        let mut fields = vec![("jgnFunct", Json::String(name)), ("jgnParams", params(ts))];
         if outermost {
-            fields.push(("jgnShow", Value::String(show_term(t))));
+            fields.push(("jgnShow", Json::String(show_term(t))));
         }
         object(fields)
     };
     match t {
-        Term::Lit(l) => object([("jgnConst", Value::String(show_lit(l)))]),
+        Term::Lit(l) => object([("jgnConst", Json::String(show_lit(l)))]),
         Term::App(FunSym::NoEq(s), ts) => funct(plain_show_bytes(s.name), ts),
         Term::App(FunSym::Ac(o), ts) => funct(show_ac_sym(o), ts),
         _ => object([(
             "jgnConst",
-            Value::String(format!("unknown term type: {}", show_term(t))),
+            Json::String(format!("unknown term type: {}", show_term(t))),
         )]),
     }
 }
 
 /// Port of `itemToJSONGraphNodeFact` (JSON.hs:305-319) at `pretty = True`.
-fn json_fact(id: String, f: &LNFact) -> Value {
+fn json_fact(id: String, f: &LNFact) -> Json {
     // `show (factTag f)` is the DERIVED Show of `FactTag`
     // (Theory/Model/Fact.hs:137-148); the `ProtoFact` constructor never reaches it
     // because `isProtoFact` short-circuits to the literal "ProtoFact".
@@ -313,28 +329,28 @@ fn json_fact(id: String, f: &LNFact) -> Value {
         Multiplicity::Persistent => "!",
     };
     object([
-        ("jgnFactId", Value::String(id)),
-        ("jgnFactMult", Value::String(mult.to_string())),
-        ("jgnFactName", Value::String(show_fact_tag(&f.tag))),
-        ("jgnFactShow", Value::String(pps(fact_doc_of(f)))),
-        ("jgnFactTag", Value::String(tag.to_string())),
+        ("jgnFactId", Json::String(id)),
+        ("jgnFactMult", Json::String(mult.to_string())),
+        ("jgnFactName", Json::String(show_fact_tag(&f.tag))),
+        ("jgnFactShow", Json::String(pps(fact_doc_of(f)))),
+        ("jgnFactTag", Json::String(tag.to_string())),
         (
             "jgnFactTerms",
-            Value::Array(f.terms.iter().map(|t| json_term(t, true)).collect()),
+            Json::Array(f.terms.iter().map(|t| json_term(t, true)).collect()),
         ),
     ])
 }
 
 /// Port of `factToJSONGraphNodeFact` (JSON.hs:325-327): premise/conclusion
 /// facts are identified by `<node>:<prefix><index>`, 0-based.
-fn json_indexed_fact(prefix: &str, n: &NodeId, idx: usize, f: &LNFact) -> Value {
+fn json_indexed_fact(prefix: &str, n: &NodeId, idx: usize, f: &LNFact) -> Json {
     json_fact(format!("{}:{}{}", n, prefix, idx), f)
 }
 
 /// `jgnActs` (JSON.hs:335 and JSON.hs:365): every action fact carries the
 /// constant id "action"; only premise/conclusion facts get a record port.
-fn json_action_facts(facts: &[LNFact]) -> Value {
-    Value::Array(
+fn json_action_facts(facts: &[LNFact]) -> Json {
+    Json::Array(
         facts
             .iter()
             .map(|f| json_fact("action".to_string(), f))
@@ -343,12 +359,12 @@ fn json_action_facts(facts: &[LNFact]) -> Value {
 }
 
 /// Port of `nodeToJSONGraphNodeMetadata` (JSON.hs:331-338).
-fn json_metadata(n: &NodeId, ru: &RuleACInst) -> Value {
+fn json_metadata(n: &NodeId, ru: &RuleACInst) -> Json {
     object([
         ("jgnActs", json_action_facts(&ru.actions)),
         (
             "jgnConcs",
-            Value::Array(
+            Json::Array(
                 ru.conclusions
                     .iter()
                     .enumerate()
@@ -358,7 +374,7 @@ fn json_metadata(n: &NodeId, ru: &RuleACInst) -> Value {
         ),
         (
             "jgnPrems",
-            Value::Array(
+            Json::Array(
                 ru.premises
                     .iter()
                     .enumerate()
@@ -371,34 +387,34 @@ fn json_metadata(n: &NodeId, ru: &RuleACInst) -> Value {
 
 /// A `JSONGraphNodeFact` with only its id set — the stub HS emits for a node
 /// referenced by an edge but absent from `sNodes` (JSON.hs:395-402/415-422).
-fn json_stub_fact(id: String) -> Value {
+fn json_stub_fact(id: String) -> Json {
     object([
-        ("jgnFactId", Value::String(id)),
-        ("jgnFactMult", Value::String(String::new())),
-        ("jgnFactName", Value::String(String::new())),
-        ("jgnFactShow", Value::String(String::new())),
-        ("jgnFactTag", Value::String(String::new())),
-        ("jgnFactTerms", Value::Array(Vec::new())),
+        ("jgnFactId", Json::String(id)),
+        ("jgnFactMult", Json::String(String::new())),
+        ("jgnFactName", Json::String(String::new())),
+        ("jgnFactShow", Json::String(String::new())),
+        ("jgnFactTag", Json::String(String::new())),
+        ("jgnFactTerms", Json::Array(Vec::new())),
     ])
 }
 
 /// Port of `graphNodeToJSONGraphNode` (JSON.hs:341-428).  `jgnMetadata` and
 /// `jgnColor` are omitted when absent (JSON.hs:201-208).
-fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
+fn json_node(node: &GNode, color_map: &NodeColorMap) -> Json {
     let nid = node.id.to_string();
     match &node.ty {
         NodeType::System(ru) => {
-            let mut fields: Vec<(&str, Value)> = Vec::with_capacity(5);
+            let mut fields: Vec<(&str, Json)> = Vec::with_capacity(5);
             if let Some(rgb) = color_map.lookup_node(&node.id) {
                 fields.push((
                     "jgnColor",
-                    Value::String(tamarin_utils::color::rgb_to_hex(rgb)),
+                    Json::String(tamarin_utils::color::rgb_to_hex(rgb)),
                 ));
             }
-            fields.push(("jgnId", Value::String(nid)));
-            fields.push(("jgnLabel", Value::String(rule_name_string(ru))));
+            fields.push(("jgnId", Json::String(nid)));
+            fields.push(("jgnLabel", Json::String(rule_name_string(ru))));
             fields.push(("jgnMetadata", json_metadata(&node.id, ru)));
-            fields.push(("jgnType", Value::String(get_rule_type(ru).to_string())));
+            fields.push(("jgnType", Json::String(get_rule_type(ru).to_string())));
             object(fields)
         }
         NodeType::UnsolvedAction(facts) => {
@@ -408,46 +424,45 @@ fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
                 facts.iter().map(fact_doc_of).collect(),
             )));
             object([
-                ("jgnId", Value::String(nid)),
-                ("jgnLabel", Value::String(label)),
+                ("jgnId", Json::String(nid)),
+                ("jgnLabel", Json::String(label)),
                 (
                     "jgnMetadata",
                     object([
                         ("jgnActs", json_action_facts(facts)),
-                        ("jgnConcs", Value::Array(Vec::new())),
-                        ("jgnPrems", Value::Array(Vec::new())),
+                        ("jgnConcs", Json::Array(Vec::new())),
+                        ("jgnPrems", Json::Array(Vec::new())),
                     ]),
                 ),
-                ("jgnType", Value::String("unsolvedActionAtom".to_string())),
+                ("jgnType", Json::String("unsolvedActionAtom".to_string())),
             ])
         }
         NodeType::LastAction => object([
-            ("jgnId", Value::String(nid.clone())),
-            ("jgnLabel", Value::String(nid)),
-            ("jgnType", Value::String("lastAtom".to_string())),
+            ("jgnId", Json::String(nid.clone())),
+            ("jgnLabel", Json::String(nid)),
+            ("jgnType", Json::String("lastAtom".to_string())),
         ]),
         NodeType::Missing(hint) => {
             // HS ignores the recorded conclusion/premise index and always
             // emits `c0` / `p0` here (the two `MissingNode` branches,
             // JSON.hs:384-428, and the `a.d. TODO` at line 385 that says so).
-            let stub =
-                |port: char| Value::Array(vec![json_stub_fact(format!("{}:{}0", nid, port))]);
+            let stub = |port: char| Json::Array(vec![json_stub_fact(format!("{}:{}0", nid, port))]);
             let (ty, concs, prems) = match hint {
-                MissingHint::Conc(_) => ("missingNodeConc", stub('c'), Value::Array(Vec::new())),
-                MissingHint::Prem(_) => ("missingNodePrem", Value::Array(Vec::new()), stub('p')),
+                MissingHint::Conc(_) => ("missingNodeConc", stub('c'), Json::Array(Vec::new())),
+                MissingHint::Prem(_) => ("missingNodePrem", Json::Array(Vec::new()), stub('p')),
             };
             object([
-                ("jgnId", Value::String(nid)),
-                ("jgnLabel", Value::String(String::new())),
+                ("jgnId", Json::String(nid)),
+                ("jgnLabel", Json::String(String::new())),
                 (
                     "jgnMetadata",
                     object([
-                        ("jgnActs", Value::Array(Vec::new())),
+                        ("jgnActs", Json::Array(Vec::new())),
                         ("jgnConcs", concs),
                         ("jgnPrems", prems),
                     ]),
                 ),
-                ("jgnType", Value::String(ty.to_string())),
+                ("jgnType", Json::String(ty.to_string())),
             ])
         }
     }
@@ -455,43 +470,43 @@ fn json_node(node: &GNode, color_map: &NodeColorMap) -> Value {
 
 /// Port of `graphEdgeToJSONGraphEdge` (JSON.hs:467-495).  Less-edges address
 /// their endpoints by bare node id; the other two kinds use record ports.
-fn json_edge(edge: &GEdge, rules: &NodeRuleMap<'_>) -> Value {
+fn json_edge(edge: &GEdge, rules: &NodeRuleMap<'_>) -> Json {
     let class = classify_edge(edge, rules);
-    let color = Value::String(class.color().to_string());
-    let relation = Value::String(class.relation().to_string());
+    let color = Json::String(class.color().to_string());
+    let relation = Json::String(class.relation().to_string());
     match edge {
         GEdge::System(src, tgt) | GEdge::UnsolvedChain(src, tgt) => object([
             ("jgeColor", color),
             ("jgeRelation", relation),
             (
                 "jgeSource",
-                Value::String(format!("{}:c{}", src.0, src.1 .0)),
+                Json::String(format!("{}:c{}", src.0, src.1 .0)),
             ),
             (
                 "jgeTarget",
-                Value::String(format!("{}:p{}", tgt.0, tgt.1 .0)),
+                Json::String(format!("{}:p{}", tgt.0, tgt.1 .0)),
             ),
         ]),
         GEdge::Less(la) => object([
             ("jgeColor", color),
             ("jgeRelation", relation),
-            ("jgeSource", Value::String(la.smaller.to_string())),
-            ("jgeTarget", Value::String(la.larger.to_string())),
+            ("jgeSource", Json::String(la.smaller.to_string())),
+            ("jgeTarget", Json::String(la.larger.to_string())),
         ]),
     }
 }
 
 /// Port of `graphClusterToJSONGraphCluster` (JSON.hs:498-506).
-fn json_cluster(cluster: &Cluster, rules: &NodeRuleMap<'_>, color_map: &NodeColorMap) -> Value {
+fn json_cluster(cluster: &Cluster, rules: &NodeRuleMap<'_>, color_map: &NodeColorMap) -> Json {
     object([
         (
             "jgcEdges",
-            Value::Array(cluster.edges.iter().map(|e| json_edge(e, rules)).collect()),
+            Json::Array(cluster.edges.iter().map(|e| json_edge(e, rules)).collect()),
         ),
-        ("jgcName", Value::String(cluster.name.clone())),
+        ("jgcName", Json::String(cluster.name.clone())),
         (
             "jgcNodes",
-            Value::Array(
+            Json::Array(
                 cluster
                     .nodes
                     .iter()
@@ -503,13 +518,13 @@ fn json_cluster(cluster: &Cluster, rules: &NodeRuleMap<'_>, color_map: &NodeColo
 }
 
 /// Port of `sequentToJSONGraph` (JSON.hs:520-539).
-fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value {
+fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Json {
     // One index over the original system's nodes for every edge of this graph.
     let rules = graph.system.node_rule_map();
     object([
         (
             "jgAbbrevs",
-            Value::Array(
+            Json::Array(
                 order_abbreviations_for_json(&graph.abbreviations)
                     .into_iter()
                     // `graphAbbrevtoJSONGraphAbbrev` (JSON.hs:509-516).
@@ -525,7 +540,7 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
         ),
         (
             "jgClusters",
-            Value::Array(
+            Json::Array(
                 graph
                     .repr
                     .clusters
@@ -534,10 +549,10 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
                     .collect(),
             ),
         ),
-        ("jgDirected", Value::Bool(true)),
+        ("jgDirected", Json::Bool(true)),
         (
             "jgEdges",
-            Value::Array(
+            Json::Array(
                 graph
                     .repr
                     .edges
@@ -546,10 +561,10 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
                     .collect(),
             ),
         ),
-        ("jgLabel", Value::String(label.to_string())),
+        ("jgLabel", Json::String(label.to_string())),
         (
             "jgNodes",
-            Value::Array(
+            Json::Array(
                 graph
                     .repr
                     .nodes
@@ -560,7 +575,7 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
         ),
         (
             "jgType",
-            Value::String("Tamarin prover constraint system".to_string()),
+            Json::String("Tamarin prover constraint system".to_string()),
         ),
     ])
 }
@@ -598,7 +613,7 @@ pub fn sequents_to_json_pretty(
 
 /// [`sequents_to_json_pretty`] streamed into a writer, one graph at a time —
 /// the batch `--output-json` path (HS `BL.writeFile`, Batch.hs:270-272),
-/// where holding every graph's `Value` tree plus the finished document would
+/// where holding every graph's `Json` tree plus the finished document would
 /// scale peak RSS with total output size instead of the largest graph.
 ///
 /// Byte-identical to rendering the whole document at once: the frame bytes
@@ -616,7 +631,7 @@ where
     R: std::borrow::Borrow<RenderSystem>,
     W: std::io::Write,
 {
-    // The frame `write_value` gives `object([("graphs", Value::Array(…))])`:
+    // The frame `write_value` gives `object([("graphs", Json::Array(…))])`:
     // root object at level 0, the array's elements at level 2.
     w.write_all(b"{\n    \"graphs\": [")?;
     let mut first = true;
@@ -658,7 +673,7 @@ const INDENT: &str = "    ";
 /// Everything at or above 0x20 is passed through verbatim, so `<`, `>`,
 /// `&`, DEL and astral-plane characters all reach the wire as themselves;
 /// `removePseudoUnicode` therefore has no encoder-produced escape to undo
-/// (see [`to_pretty_string`]).
+/// (see [`write_value`]).
 ///
 /// Escapes are rare enough in this schema that the pass-through characters are
 /// copied a run at a time: `clean` tracks the start of the verbatim span still
@@ -700,29 +715,27 @@ fn escape_into(out: &mut String, s: &str) {
 /// brackets, the closing bracket sits at the parent's indent, and an EMPTY
 /// container collapses to `[]` / `{}` with no newline inside.
 ///
-/// The schema this module builds holds only strings, arrays, objects and the
-/// single `jgDirected: true`; `null` and numbers cannot occur in it.  Their
-/// arms below (numbers through `serde_json`'s own `Display`, which is not
-/// aeson-pretty's `confNumFormat` rendering) keep the writer total over
-/// `Value`.
-fn write_value(out: &mut String, v: &Value, level: usize) {
+/// Terms expand lazily through this same writer. Guarding the term entry
+/// protects depth-dependent formatting without a separate term scheduler.
+fn write_value(out: &mut String, v: &Json, level: usize) {
     match v {
-        Value::Object(m) => {
+        Json::Object(m) => {
             write_compound(out, level, ('{', '}'), m, |out, (k, val), level| {
                 escape_into(out, k);
                 out.push_str(": ");
                 write_value(out, val, level);
             });
         }
-        Value::Array(a) => {
+        Json::Array(a) => {
             write_compound(out, level, ('[', ']'), a, |out, item, level| {
                 write_value(out, item, level);
             });
         }
-        Value::String(s) => escape_into(out, s),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Null => out.push_str("null"),
-        Value::Number(n) => out.push_str(&n.to_string()),
+        Json::String(s) => escape_into(out, s),
+        Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Json::Term(t, outermost) => tamarin_utils::stack::ensure_sufficient_stack(|| {
+            write_value(out, &term_object(t, *outermost), level);
+        }),
     }
 }
 
@@ -840,11 +853,78 @@ mod tests {
     #[test]
     fn jgn_show_only_on_outermost_term() {
         let t = f_app_no_eq(sym("pk", 1), vec![var("ltkA", LSort::Fresh)]);
-        let v = json_term(&t, true);
-        assert_eq!(v["jgnShow"], Value::String("pk(~ltkA)".into()));
+        let render = |outermost| {
+            let mut out = String::new();
+            write_value(&mut out, &json_term(&t, outermost), 0);
+            serde_json::from_str::<serde_json::Value>(&out).unwrap()
+        };
+        let v = render(true);
+        assert_eq!(v["jgnShow"], "pk(~ltkA)");
         assert_eq!(v["jgnParams"][0].get("jgnShow"), None);
-        assert_eq!(v["jgnParams"][0]["jgnConst"], Value::String("~ltkA".into()));
-        assert_eq!(json_term(&t, false).get("jgnShow"), None);
+        assert_eq!(v["jgnParams"][0]["jgnConst"], "~ltkA");
+        assert_eq!(render(false).get("jgnShow"), None);
+    }
+
+    #[test]
+    fn deep_json_export_and_write_failure_use_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            use crate::constraint::constraints::Goal;
+            use crate::constraint::system::graph::simplify::SimplificationLevel;
+            let mut term = var("x", LSort::Msg);
+            for _ in 0..512 {
+                term = f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![term]);
+            }
+            let mut sys = System::default();
+            sys.add_goal(Goal::Action(
+                LVar::new("i", LSort::Node, 0),
+                Fact::new(FactTag::Proto(Multiplicity::Linear, "Ev", 1), vec![term]),
+            ));
+            let render = RenderSystem::from_prover(sys);
+            let options = GraphOptions {
+                abbreviate: false,
+                compress: false,
+                simplification_level: SimplificationLevel::SL0,
+                ..Default::default()
+            };
+            let mut output = Vec::new();
+            write_sequents_json_pretty(&options, [("L", &render)], &mut output).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert_eq!(output.matches("\"jgnFunct\": \"h\"").count(), 512);
+            assert_eq!(output.matches("\"jgnConst\": \"x\"").count(), 1);
+            assert!(output.ends_with("\n    ]\n}"));
+
+            // Fail after the prefix, when the graph and its shared terms exist.
+            struct FailGraph(bool);
+            impl std::io::Write for FailGraph {
+                fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                    if std::mem::replace(&mut self.0, true) {
+                        Err(std::io::Error::other("graph write failed"))
+                    } else {
+                        Ok(bytes.len())
+                    }
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            let error =
+                write_sequents_json_pretty(&options, [("L", render)], &mut FailGraph(false))
+                    .unwrap_err();
+            assert_eq!(error.to_string(), "graph write failed");
+        });
+    }
+
+    #[test]
+    fn dropping_unrendered_json_uses_term_ownership() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let mut term = var("x", LSort::Msg);
+            for _ in 0..8192 {
+                term = f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![term]);
+            }
+            let value = json_term(&term, true);
+            drop(term);
+            drop(value);
+        });
     }
 
     // `jgnFactShow` is `pps (prettyLNFact f)`: the fact is rendered through
@@ -1072,7 +1152,7 @@ mod tests {
             )],
         );
         assert!(out.contains("\"jgLabel\": \"x\\<y\\>z\","), "{out}");
-        assert!(serde_json::from_str::<Value>(&out).is_err());
+        assert!(serde_json::from_str::<serde_json::Value>(&out).is_err());
     }
 
     // `roleCluster` groups a rule's nodes under `<role>_Session_<n>`, and

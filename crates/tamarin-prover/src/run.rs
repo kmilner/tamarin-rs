@@ -2689,7 +2689,7 @@ pub(crate) fn out_path_for(args: &Args, in_file: &str) -> Option<String> {
 /// `const (Sum 1)` over every ProofStep — ClosedTheory.hs:463-491, see line 484,491 via
 /// `foldProof`, Theory/Proof.hs:358-362).
 fn count_proof_steps(node: &tamarin_theory::constraint::solver::search::ProofNode) -> usize {
-    1 + node.children.values().map(count_proof_steps).sum::<usize>()
+    node.nodes().count()
 }
 
 fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {

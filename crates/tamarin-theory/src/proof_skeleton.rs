@@ -61,144 +61,146 @@ pub fn render(root: &ProofNode) -> String {
 }
 
 fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
-    let pad = "  ".repeat(indent);
-    // Terminal-method handling: Sorry/Finished and SolveGoal/Simplify
-    // /Induction with no children are leaves.  Haskell's prettyProof
-    // emits `by <method>` as a single line for every leaf except
-    // `Finished Solved`, which prints bare (Theory/Proof.hs:1064-1066), so we
-    // mirror that here — emit *just* the leaf line, skipping the separate
-    // method-keyword line.
-    if node.children.is_empty() {
-        match &node.method {
-            ProofMethod::Finished(MethodResult::Contradictory(c)) => {
-                out.push_str(&pad);
-                out.push_str("by contradiction /* ");
-                out.push_str(&contradiction_label(c));
-                out.push_str(" */\n");
-            }
-            ProofMethod::Finished(MethodResult::Solved) => {
-                // Mirror HS `prettyProofMethod` (ProofMethod.hs:1174-1186, see line 1176):
-                //   `keyword_ "SOLVED" <-> lineComment_ "trace found"`.
-                out.push_str(&pad);
-                out.push_str("SOLVED // trace found\n");
-            }
-            ProofMethod::Finished(MethodResult::Unfinishable) => {
-                out.push_str(&pad);
-                out.push_str("by UNFINISHABLE // reducible operator in subterm\n");
-            }
-            ProofMethod::Sorry(reason) => {
-                out.push_str(&pad);
-                out.push_str("by sorry");
-                if let Some(r) = reason {
-                    out.push_str(" /* ");
-                    out.push_str(r);
-                    out.push_str(" */");
+    tamarin_utils::stack::ensure_sufficient_stack(|| {
+        let pad = "  ".repeat(indent);
+        // Terminal-method handling: Sorry/Finished and SolveGoal/Simplify
+        // /Induction with no children are leaves.  Haskell's prettyProof
+        // emits `by <method>` as a single line for every leaf except
+        // `Finished Solved`, which prints bare (Theory/Proof.hs:1064-1066), so we
+        // mirror that here — emit *just* the leaf line, skipping the separate
+        // method-keyword line.
+        if node.children.is_empty() {
+            match &node.method {
+                ProofMethod::Finished(MethodResult::Contradictory(c)) => {
+                    out.push_str(&pad);
+                    out.push_str("by contradiction /* ");
+                    out.push_str(&contradiction_label(c));
+                    out.push_str(" */\n");
                 }
-                out.push('\n');
-            }
-            ProofMethod::Simplify
-            | ProofMethod::SolveGoal(_)
-            | ProofMethod::Induction
-            | ProofMethod::Invalidated => {
-                // Non-terminal method with no children — must have
-                // closed contradictorily without producing cases.
-                // Haskell renders this as `by solve(...)` / `by simplify`
-                // / `by induction`; our `extract_from_haskell` normalises
-                // those to `by contradiction /* closed */` so the diff
-                // treats both leaf-closure forms as equivalent.
-                out.push_str(&pad);
-                out.push_str(match node.status {
-                    NodeStatus::Contradictory => "by contradiction /* closed */\n",
-                    NodeStatus::Solved => "SOLVED // trace found\n",
-                    NodeStatus::Sorry => "by sorry\n",
-                    NodeStatus::Unfinishable => {
-                        "by UNFINISHABLE // reducible operator in subterm\n"
+                ProofMethod::Finished(MethodResult::Solved) => {
+                    // Mirror HS `prettyProofMethod` (ProofMethod.hs:1174-1186, see line 1176):
+                    //   `keyword_ "SOLVED" <-> lineComment_ "trace found"`.
+                    out.push_str(&pad);
+                    out.push_str("SOLVED // trace found\n");
+                }
+                ProofMethod::Finished(MethodResult::Unfinishable) => {
+                    out.push_str(&pad);
+                    out.push_str("by UNFINISHABLE // reducible operator in subterm\n");
+                }
+                ProofMethod::Sorry(reason) => {
+                    out.push_str(&pad);
+                    out.push_str("by sorry");
+                    if let Some(r) = reason {
+                        out.push_str(" /* ");
+                        out.push_str(r);
+                        out.push_str(" */");
                     }
-                    NodeStatus::Open => "by sorry /* open */\n",
-                });
+                    out.push('\n');
+                }
+                ProofMethod::Simplify
+                | ProofMethod::SolveGoal(_)
+                | ProofMethod::Induction
+                | ProofMethod::Invalidated => {
+                    // Non-terminal method with no children — must have
+                    // closed contradictorily without producing cases.
+                    // Haskell renders this as `by solve(...)` / `by simplify`
+                    // / `by induction`; our `extract_from_haskell` normalises
+                    // those to `by contradiction /* closed */` so the diff
+                    // treats both leaf-closure forms as equivalent.
+                    out.push_str(&pad);
+                    out.push_str(match node.status {
+                        NodeStatus::Contradictory => "by contradiction /* closed */\n",
+                        NodeStatus::Solved => "SOLVED // trace found\n",
+                        NodeStatus::Sorry => "by sorry\n",
+                        NodeStatus::Unfinishable => {
+                            "by UNFINISHABLE // reducible operator in subterm\n"
+                        }
+                        NodeStatus::Open => "by sorry /* open */\n",
+                    });
+                }
             }
+            return;
         }
-        return;
-    }
-    // Non-leaf: emit the method keyword line, then children.
-    let kw = method_keyword(&node.method);
-    if !kw.is_empty() {
-        out.push_str(&pad);
-        out.push_str(kw);
-        out.push('\n');
-    }
-    // Special case: a single child with empty key is a "Linear"
-    // continuation (no branching). Haskell prints these inline, with
-    // no `case`/`next`/`qed` wrapper.
-    if node.children.len() == 1
-        && let Some((name, child)) = node.children.iter().next()
-        && name.is_empty()
-    {
-        render_node(child, indent, out);
-        return;
-    }
-    // On exists-trace lemmas only the trace-found path survives: when a
-    // node's status rolls up to Solved (TraceFound), siblings that closed
-    // Contradictory are elided.  In Haskell this pruning is done *before*
-    // printing, by `cutOnSolved*` -> `extractSolved` (Theory/Proof.hs:879-882,
-    // 920-923), which rebuilds the tree keeping one label per level;
-    // `prettyProof` itself prints whatever tree it is handed.
-    //
-    // Mirror that pruning here so the skeleton diff is apples-to-apples.
-    // We keep only the FIRST Solved child and drop other
-    // Contradictory/Sorry siblings.  All-traces proofs (status =
-    // Contradictory) keep every branch.
-    let children_to_render: Vec<(&str, &ProofNode)> = if node.status == NodeStatus::Solved {
-        // Find the first Solved child; render only that one.
-        match node
-            .children
-            .iter()
-            .find(|(_, c)| c.status == NodeStatus::Solved)
+        // Non-leaf: emit the method keyword line, then children.
+        let kw = method_keyword(&node.method);
+        if !kw.is_empty() {
+            out.push_str(&pad);
+            out.push_str(kw);
+            out.push('\n');
+        }
+        // Special case: a single child with empty key is a "Linear"
+        // continuation (no branching). Haskell prints these inline, with
+        // no `case`/`next`/`qed` wrapper.
+        if node.children.len() == 1
+            && let Some((name, child)) = node.children.iter().next()
+            && name.is_empty()
         {
-            Some((name, child)) => {
-                // Haskell's `extractSolved` (`Theory/Proof.hs:880-882`)
-                // keeps the survivor's label verbatim — including any
-                // `_case_N` dedup suffix appended by `uniqueListBy`
-                // (ProofMethod.hs:90-102, applied at :307) when the goal
-                // originally had multiple cases sharing a rule name.
-                // Pass the name through unchanged.
-                vec![(name.as_str(), child)]
+            render_node(child, indent, out);
+            return;
+        }
+        // On exists-trace lemmas only the trace-found path survives: when a
+        // node's status rolls up to Solved (TraceFound), siblings that closed
+        // Contradictory are elided.  In Haskell this pruning is done *before*
+        // printing, by `cutOnSolved*` -> `extractSolved` (Theory/Proof.hs:879-882,
+        // 920-923), which rebuilds the tree keeping one label per level;
+        // `prettyProof` itself prints whatever tree it is handed.
+        //
+        // Mirror that pruning here so the skeleton diff is apples-to-apples.
+        // We keep only the FIRST Solved child and drop other
+        // Contradictory/Sorry siblings.  All-traces proofs (status =
+        // Contradictory) keep every branch.
+        let children_to_render: Vec<(&str, &ProofNode)> = if node.status == NodeStatus::Solved {
+            // Find the first Solved child; render only that one.
+            match node
+                .children
+                .iter()
+                .find(|(_, c)| c.status == NodeStatus::Solved)
+            {
+                Some((name, child)) => {
+                    // Haskell's `extractSolved` (`Theory/Proof.hs:880-882`)
+                    // keeps the survivor's label verbatim — including any
+                    // `_case_N` dedup suffix appended by `uniqueListBy`
+                    // (ProofMethod.hs:90-102, applied at :307) when the goal
+                    // originally had multiple cases sharing a rule name.
+                    // Pass the name through unchanged.
+                    vec![(name.as_str(), child)]
+                }
+                None => node.children.iter().map(|(n, c)| (n.as_str(), c)).collect(),
             }
-            None => node.children.iter().map(|(n, c)| (n.as_str(), c)).collect(),
+        } else {
+            node.children.iter().map(|(n, c)| (n.as_str(), c)).collect()
+        };
+        // After elision, a singleton empty-key child is still Linear.
+        if children_to_render.len() == 1 && children_to_render[0].0.is_empty() {
+            render_node(children_to_render[0].1, indent, out);
+            return;
         }
-    } else {
-        node.children.iter().map(|(n, c)| (n.as_str(), c)).collect()
-    };
-    // After elision, a singleton empty-key child is still Linear.
-    if children_to_render.len() == 1 && children_to_render[0].0.is_empty() {
-        render_node(children_to_render[0].1, indent, out);
-        return;
-    }
-    // Render children. BTreeMap iterates in key order, which is the
-    // stable canonical order we want for the diff.
-    //
-    // Indentation convention from Haskell's `prettyProof`:
-    //   - method (this node) at indent N
-    //   - `case X` at indent N+1
-    //   - child body at indent N+1 (same as case heading)
-    //   - `next` between siblings at indent N (method level)
-    //   - `qed` after last sibling at indent N (method level)
-    let pad_case = "  ".repeat(indent + 1);
-    let pad_method = "  ".repeat(indent);
-    let n = children_to_render.len();
-    for (i, (name, child)) in children_to_render.iter().enumerate() {
-        out.push_str(&pad_case);
-        out.push_str("case ");
-        out.push_str(name);
-        out.push('\n');
-        render_node(child, indent + 1, out);
-        if i + 1 < n {
-            out.push_str(&pad_method);
-            out.push_str("next\n");
+        // Render children. BTreeMap iterates in key order, which is the
+        // stable canonical order we want for the diff.
+        //
+        // Indentation convention from Haskell's `prettyProof`:
+        //   - method (this node) at indent N
+        //   - `case X` at indent N+1
+        //   - child body at indent N+1 (same as case heading)
+        //   - `next` between siblings at indent N (method level)
+        //   - `qed` after last sibling at indent N (method level)
+        let pad_case = "  ".repeat(indent + 1);
+        let pad_method = "  ".repeat(indent);
+        let n = children_to_render.len();
+        for (i, (name, child)) in children_to_render.iter().enumerate() {
+            out.push_str(&pad_case);
+            out.push_str("case ");
+            out.push_str(name);
+            out.push('\n');
+            render_node(child, indent + 1, out);
+            if i + 1 < n {
+                out.push_str(&pad_method);
+                out.push_str("next\n");
+            }
         }
-    }
-    out.push_str(&pad_method);
-    out.push_str("qed\n");
+        out.push_str(&pad_method);
+        out.push_str("qed\n");
+    })
 }
 
 fn method_keyword(m: &ProofMethod) -> &'static str {
