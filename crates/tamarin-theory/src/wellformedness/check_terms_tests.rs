@@ -293,3 +293,18 @@ fn bare_free_variable_under_at_keeps_its_node_sort() {
                end\n";
     one_offender(&check_terms_report(src), "`Free #i'");
 }
+
+#[test]
+fn allowed_handles_deep_irreducible_terms_on_a_small_stack() {
+    let sig = tamarin_term::maude_sig::hash_maude_sig();
+    let mut term: BLNTerm = Term::Lit(Lit::Var(BVar::Bound(0)));
+    for _ in 0..32768 {
+        term = tamarin_term::term::f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![term]);
+    }
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || assert!(allowed(&sig, &term)))
+        .unwrap()
+        .join()
+        .unwrap();
+}

@@ -16,6 +16,156 @@ fn theory_msig(src: &str) -> tamarin_term::maude_sig::MaudeSig {
         .signature
 }
 
+#[test]
+fn deeply_generated_trees_survive_parsing_elaboration_and_drop() {
+    std::thread::Builder::new()
+        .name("deep parse and elaboration".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let n = 4096;
+            let term_n = 4096;
+            let sources = [
+                format!(
+                    "theory T begin functions: f/1 rule R: [] --> [Out({}x{})] end",
+                    "f(".repeat(term_n),
+                    ")".repeat(term_n)
+                ),
+                format!("theory T begin lemma L: \"{}T\" end", "T ==> ".repeat(n)),
+                format!(
+                    "theory T begin functions: f/1 lemma L: \"All x. {}x{} = x\" end",
+                    "f(".repeat(n),
+                    ")".repeat(n)
+                ),
+                format!("theory T begin process: {}0 end", "out(x); ".repeat(n)),
+                format!(
+                    "theory T begin functions: f/1 process: let {}x{} = y in 0 end",
+                    "f(".repeat(n),
+                    ")".repeat(n)
+                ),
+                format!(
+                    "theory T begin let P(x) = {}0 process: P('a') end",
+                    "out(x); ".repeat(n)
+                ),
+                format!(
+                    "theory T begin lemma L: \"T\" {}by sorry end",
+                    "simplify ".repeat(n)
+                ),
+            ];
+
+            for source in sources {
+                let parsed = parse_theory(&source, &[]).unwrap();
+                let elaborated = elaborate(&parsed).unwrap();
+                drop(elaborated);
+                drop(parsed);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn map_formula_terms_handles_deep_branching_on_a_small_stack() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        let mut formula = p::Formula::Atom(p::Atom::Eq(p::Term::Number(1), p::Term::Number(2)));
+        for _ in 0..32768 {
+            formula = p::Formula::And(Box::new(formula), Box::new(p::Formula::True));
+        }
+        let seen = std::cell::RefCell::new(Vec::new());
+        let mapped = map_formula_terms(&formula, &|t| {
+            seen.borrow_mut().push(t.clone());
+            t.clone()
+        });
+        assert_eq!(*seen.borrow(), [p::Term::Number(1), p::Term::Number(2)]);
+        assert_eq!(mapped, formula);
+    });
+}
+
+#[test]
+fn collect_names_handles_deep_terms_on_a_small_stack() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        let name = tamarin_term::lterm::Name::new(tamarin_term::lterm::NameTag::Pub, "a");
+        let mut term: tamarin_term::lterm::LNTerm = Term::Lit(Lit::Con(name));
+        for _ in 0..32768 {
+            term = tamarin_term::term::f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![term]);
+        }
+        let mut names = Vec::new();
+        collect_names(&term, &mut names);
+        assert_eq!(names, vec![name]);
+    });
+}
+
+#[test]
+fn deep_expansions_survive_elaboration_and_drop() {
+    std::thread::Builder::new()
+        .name("deep expansion".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let wrappers = 100;
+            let links = 41;
+
+            let mut process_source = String::from("theory T begin let P0 = 0 ");
+            for i in 1..=links {
+                process_source.push_str(&format!(
+                    "let P{i} = {}P{} ",
+                    "out(x); ".repeat(wrappers),
+                    i - 1
+                ));
+            }
+            process_source.push_str(&format!("process: P{links} end"));
+
+            let mut macros = vec!["m0(x) = x".to_string()];
+            for i in 1..=links {
+                macros.push(format!(
+                    "m{i}(x) = {}m{}(x){}",
+                    "f(".repeat(wrappers),
+                    i - 1,
+                    ")".repeat(wrappers)
+                ));
+            }
+            let macro_source = format!(
+                "theory T begin functions: f/1 macros: {} lemma L: \"m{links}(x) = x\" end",
+                macros.join(", ")
+            );
+
+            let half = 2048;
+            let predicate_source = format!(
+                "theory T begin predicates: P() <=> {}T lemma L: \"{}P()\" end",
+                "T ==> ".repeat(half),
+                "T ==> ".repeat(half)
+            );
+
+            let annotated_process_source = format!(
+                "theory T begin functions: f/1 let P(x) = (0) @ {}x{} process: P({}'a'{}) end",
+                "f(".repeat(half),
+                ")".repeat(half),
+                "f(".repeat(half),
+                ")".repeat(half)
+            );
+
+            let proof_term_depth = 4096;
+            let proof_goal_source = format!(
+                "theory T begin functions: f/1 lemma L: \"T\" by solve( {}x{} = x ) end",
+                "f(".repeat(proof_term_depth),
+                ")".repeat(proof_term_depth)
+            );
+
+            for source in [
+                process_source,
+                macro_source,
+                predicate_source,
+                annotated_process_source,
+                proof_goal_source,
+            ] {
+                let parsed = parse_theory(&source, &[]).unwrap();
+                drop(elaborate(&parsed).unwrap());
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// The spellings are read from a parsed rule, because the resolution they
 /// exercise is split between the two stages: the parser lowers the prefix
 /// `[AC]` head and the bare 0-arity name (`lookupArity`/`nullaryApp`,

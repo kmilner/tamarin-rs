@@ -1613,4 +1613,153 @@ fn restriction_guard_matching_preserves_backend_errors() {
             }
         }
     }
+
+    // A completed structural sibling precedes an AC fallback in the next
+    // branch. The later backend error must retain the first emitted result.
+    let Some(h) = maude_with_sig(tamarin_term::maude_sig::mset_maude_sig()) else {
+        return;
+    };
+    h.kill_subprocess();
+    let ac = union(LVar::new("a", LSort::Msg, 0), LVar::new("b", LSort::Msg, 0));
+    let constant = tamarin_term::lterm::pub_term("a");
+    let fact = |name, term| {
+        proto_fact(
+            Multiplicity::Linear,
+            name,
+            vec![term, tamarin_term::lterm::pub_term("extra")],
+        )
+    };
+    let guards = [
+        ProtoAtom::Action(var_term(t), fact("A", var_term(x))),
+        ProtoAtom::Action(
+            var_term(t),
+            proto_fact(Multiplicity::Linear, "B", vec![var_term(x), var_term(y)]),
+        ),
+    ];
+    let actions = vec![
+        (i, fact("A", constant.clone())),
+        (i, fact("A", ac.clone())),
+        (i, fact("B", constant)),
+        (i, fact("B", ac)),
+    ];
+    let by_name = [("A".to_owned(), vec![0, 1]), ("B".to_owned(), vec![2, 3])]
+        .into_iter()
+        .collect();
+    let sys = System::empty();
+    let mut out = Vec::new();
+    let error = try_match_all_guards(
+        &h,
+        &[x, y, t],
+        &guards.iter().collect::<Vec<_>>(),
+        &actions,
+        &by_name,
+        &crate::guarded::gfalse(),
+        &ImpliedDedupTables::new(&sys),
+        &[],
+        &mut out,
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(matches!(error, crate::prove::ProveError::Maude(_)));
+    assert_eq!(out, [crate::guarded::gfalse()]);
+}
+
+#[test]
+fn multi_guard_ac_matching_keeps_prefixes_and_sibling_bindings_separate() {
+    use crate::{
+        atom::ProtoAtom,
+        fact::{proto_fact, Multiplicity},
+        guarded::{gfalse, Guarded},
+    };
+    use tamarin_term::{
+        function_symbols::{AcSym, FunSym},
+        lterm::BVar,
+        lterm::{pub_term, LSort, LVar},
+        term::{f_app, f_app_list},
+        vterm::var_term,
+    };
+    let Some(h) = maude_with_sig(tamarin_term::maude_sig::mset_maude_sig()) else {
+        return;
+    };
+    let vars: Vec<_> = (0..66).map(|i| LVar::new("x", LSort::Msg, i)).collect();
+    let time = LVar::new("t", LSort::Node, 0);
+    let node = LVar::new("i", LSort::Node, 0);
+    let fact = |t| proto_fact(Multiplicity::Linear, "A", vec![t]);
+    let union = |xs| f_app(FunSym::Ac(AcSym::Union), xs);
+    let subject = union(vec![pub_term("a"), pub_term("b"), pub_term("c")]);
+    let prefix = ProtoAtom::EqE(
+        f_app_list(vars[..64].iter().map(|v| var_term(*v)).collect()),
+        f_app_list(vec![pub_term("prefix"); 64]),
+    );
+    let pattern = union(vec![var_term(vars[64]), var_term(vars[65])]);
+    let actions = vec![(node, fact(subject.clone()))];
+    let by_name = [("A".to_owned(), vec![0])].into_iter().collect();
+    for fanout in [
+        ProtoAtom::EqE(pattern.clone(), subject),
+        ProtoAtom::Action(var_term(time), fact(pattern)),
+    ] {
+        for (selected, remaining) in [
+            ("a", vec![pub_term("b"), pub_term("c")]),
+            ("b", vec![pub_term("a"), pub_term("c")]),
+            ("absent", vec![]),
+        ] {
+            let select = ProtoAtom::EqE(var_term(vars[64]), pub_term(selected));
+            let body = Guarded::Atom(ProtoAtom::EqE(
+                var_term(BVar::Free(vars[65])),
+                tamarin_term::lterm::pub_term("marker"),
+            ));
+            let mut out = Vec::new();
+            let mut all_vars = vars.clone();
+            all_vars.push(time);
+            let sys = System::empty();
+            try_match_all_guards(
+                &h,
+                &all_vars,
+                &[&prefix, &fanout, &select],
+                &actions,
+                &by_name,
+                &body,
+                &ImpliedDedupTables::new(&sys),
+                &[],
+                &mut out,
+                &mut Vec::new(),
+            )
+            .unwrap();
+            if selected == "absent" {
+                assert!(out.is_empty());
+            } else {
+                let expected_term =
+                    tamarin_term::term::map_lits(&union(remaining), &mut |lit| match lit {
+                        tamarin_term::vterm::Lit::Con(c) => tamarin_term::vterm::Lit::Con(*c),
+                        tamarin_term::vterm::Lit::Var(v) => {
+                            tamarin_term::vterm::Lit::Var(BVar::Free(*v))
+                        }
+                    });
+                assert_eq!(
+                    out,
+                    vec![Guarded::Atom(ProtoAtom::EqE(
+                        expected_term,
+                        tamarin_term::lterm::pub_term("marker")
+                    ))]
+                );
+            }
+            // Deduplicated constant results must not require retaining every
+            // full prefix at a fanout. The DFS composes only the entered branch.
+            let mut out = Vec::new();
+            try_match_all_guards(
+                &h,
+                &all_vars,
+                &[&prefix, &fanout],
+                &actions,
+                &by_name,
+                &gfalse(),
+                &ImpliedDedupTables::new(&sys),
+                &[],
+                &mut out,
+                &mut Vec::new(),
+            )
+            .unwrap();
+            assert_eq!(out, [gfalse()]);
+        }
+    }
 }

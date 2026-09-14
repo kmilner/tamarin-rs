@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tamarin_term::function_symbols::{CSym, FunSym};
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
 use tamarin_term::pretty::{pretty_lnterm, pretty_nterm};
-use tamarin_term::term::{is_pair, Term};
+use tamarin_term::term::{is_pair, rewrite_term_cow, Term};
 use tamarin_term::vterm::Lit;
 
 use crate::pretty_hpj::{DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
@@ -84,13 +84,9 @@ pub(crate) fn lookup_abbreviation<'a>(
 ///
 /// Mirror of `applyAbbreviationsTerm`.
 pub fn apply_abbreviations_term(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, t: &LNTerm) -> LNTerm {
-    if let Some(abbrev) = lookup(t) {
-        return abbrev;
-    }
-    // No abbreviation matched at this node: recurse into the proper subterms.
-    // The Lit/App handling (with the same fast-path Arc bump and per-arg
-    // recursion via `apply_abbreviations_term`) is exactly `apply_proper_subterms`.
-    apply_proper_subterms(lookup, t)
+    rewrite_term_cow(t, &mut |term| lookup(term), &mut |sym, args| {
+        Term::App(sym, args.into())
+    })
 }
 
 /// Apply abbreviation substitution to all terms of a fact.
@@ -565,24 +561,21 @@ pub(crate) fn order_abbreviations_for_json(
         .collect()
 }
 
-/// Apply replacement to PROPER subterms only -- not to the top-level
-/// term itself.  Mirror of `replaceProperSubterm`.
+/// Apply replacement below the root while retaining top-down pruning in
+/// every proper subtree. Mirror of `replaceProperSubterm`.
 fn apply_proper_subterms(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, t: &LNTerm) -> LNTerm {
-    match t {
-        Term::Lit(_) => t.clone(),
-        Term::App(s, args) => {
-            let new_args: Vec<LNTerm> = args
-                .iter()
-                .map(|a| apply_abbreviations_term(lookup, a))
-                .collect();
-            // Fast path: if no child changed, the rebuilt App is structurally
-            // identical to `t`, so return an O(1) Arc bump.
-            if new_args.iter().zip(args.iter()).all(|(n, o)| n == o) {
-                return t.clone();
+    let mut at_root = true;
+    rewrite_term_cow(
+        t,
+        &mut |term| {
+            if std::mem::take(&mut at_root) {
+                None
+            } else {
+                lookup(term)
             }
-            Term::App(*s, new_args.into())
-        }
-    }
+        },
+        &mut |sym, args| Term::App(sym, args.into()),
+    )
 }
 
 #[cfg(test)]
@@ -632,6 +625,29 @@ mod tests {
             out,
             f_app_no_eq(senc_sym(), vec![abbrev, var("k", LSort::Msg)])
         );
+    }
+
+    #[test]
+    fn apply_abbreviations_handles_deep_terms_on_a_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let leaf = var("a", LSort::Msg);
+            let mut nested = leaf.clone();
+            for _ in 0..32768 {
+                nested = f_app_no_eq(senc_sym(), vec![nested]);
+            }
+
+            let unchanged = apply_abbreviations_term(&|_| None, &nested);
+            let (Term::App(_, original_args), Term::App(_, unchanged_args)) = (&nested, &unchanged)
+            else {
+                unreachable!()
+            };
+            assert_eq!(original_args.as_ptr(), unchanged_args.as_ptr());
+
+            let abbrev = var("SE1", LSort::Msg);
+            let replaced =
+                apply_abbreviations_term(&|term| (term == &leaf).then(|| abbrev.clone()), &nested);
+            assert!(tamarin_term::term::is_subterm(&abbrev, &replaced));
+        });
     }
 
     #[test]

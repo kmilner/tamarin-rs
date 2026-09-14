@@ -92,26 +92,26 @@ struct AbsState {
 /// carries the sub-term's sort, the variable's own name as hint (or `"z"`
 /// for non-variables), and the next per-fact index.
 fn abs_term(t: &LNTerm, st: &mut AbsState) -> LNTerm {
-    match t {
-        Term::Lit(Lit::Con(_)) => t.clone(),
-        Term::App(fsym @ FunSym::NoEq(_), args) => {
-            let new_args: Vec<LNTerm> = args.iter().map(|a| abs_term(a, st)).collect();
-            f_app(*fsym, new_args)
-        }
-        _ => {
-            if let Some((_, v)) = st.bindings.iter().find(|(k, _)| k == t) {
-                return v.clone();
+    tamarin_term::term::rewrite_term(
+        t,
+        &mut |node| match node {
+            Term::Lit(Lit::Con(_)) | Term::App(FunSym::NoEq(_), _) => None,
+            t => {
+                if let Some((_, v)) = st.bindings.iter().find(|(k, _)| k == t) {
+                    return Some(v.clone());
+                }
+                let name = match t {
+                    Term::Lit(Lit::Var(v)) => v.name,
+                    _ => "z",
+                };
+                let v = var_term(LVar::new(name, sort_of_lnterm(t), st.counter));
+                st.counter += 1;
+                st.bindings.push((t.clone(), v.clone()));
+                Some(v)
             }
-            let name = match t {
-                Term::Lit(Lit::Var(v)) => v.name,
-                _ => "z",
-            };
-            let v = var_term(LVar::new(name, sort_of_lnterm(t), st.counter));
-            st.counter += 1;
-            st.bindings.push((t.clone(), v.clone()));
-            v
-        }
-    }
+        },
+        &mut f_app,
+    )
 }
 
 /// HS `absFact` (AbstractInterpretation.hs:124-129): every `Out` fact
@@ -476,6 +476,16 @@ fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> S
 /// Returns the stderr trace bytes to emit after the "Theory closed"
 /// marker (see [`partial_evaluation`]).
 pub fn apply_partial_evaluation(
+    elaborated: &mut Theory,
+    maude: &MaudeHandle,
+    style: EvaluationStyle,
+) -> Result<String, MaudeError> {
+    tamarin_utils::stack::with_compiler_stack(|| {
+        apply_partial_evaluation_inner(elaborated, maude, style)
+    })
+}
+
+fn apply_partial_evaluation_inner(
     elaborated: &mut Theory,
     maude: &MaudeHandle,
     style: EvaluationStyle,

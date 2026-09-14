@@ -1127,3 +1127,90 @@ fn deep_freshness_comparison_preserves_repeated_variable_constraints() {
         assert!(!eq_modulo_freshness_no_ac(&a, &pair(b, msg_var("c", 0))));
     });
 }
+
+#[test]
+fn occurrence_paths_restore_sibling_scopes_and_keep_index_policy() {
+    use std::collections::{BTreeMap, BTreeSet};
+    use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
+    fn reference(t: &LNTerm, ctx: &[String], out: &mut BTreeMap<LVar, BTreeSet<Vec<String>>>) {
+        match t {
+            Term::Lit(Lit::Var(v)) => {
+                out.entry(*v).or_default().insert(ctx.to_vec());
+            }
+            Term::Lit(_) => {}
+            Term::App(sym, args) => {
+                let head = match sym {
+                    FunSym::NoEq(s) => String::from_utf8_lossy(s.name).into_owned(),
+                    FunSym::Ac(AcSym::Union) => "AC Union".into(),
+                    FunSym::C(CSym::EMap) => "C EMap".into(),
+                    FunSym::List => "List".into(),
+                    _ => unreachable!(),
+                };
+                for (i, arg) in args.iter().enumerate() {
+                    let mut child = vec![head.clone()];
+                    child.extend_from_slice(ctx);
+                    if matches!(sym, FunSym::NoEq(_) | FunSym::List) {
+                        child.insert(0, i.to_string());
+                    }
+                    reference(arg, &child, out);
+                }
+            }
+        }
+    }
+    let mut term = mterm(7);
+    for sym in [
+        FunSym::List,
+        FunSym::Ac(AcSym::Union),
+        FunSym::C(CSym::EMap),
+        FunSym::NoEq(tamarin_term::function_symbols::pair_sym()),
+    ] {
+        term = Term::App(sym, vec![term, mterm(8)].into());
+    }
+    let args = (0..18)
+        .map(|i| if i % 3 == 0 { term.clone() } else { mterm(i) })
+        .collect::<Vec<_>>();
+    let term = Term::App(FunSym::List, args.into());
+    let rule = rule_holding(term.clone());
+    let ctx = [
+        "0".into(),
+        "OutFact".into(),
+        "0".into(),
+        "0".into(),
+        format!("{:?}", rule.info),
+        "1".into(),
+    ];
+    let mut expected = BTreeMap::new();
+    reference(&term, &ctx, &mut expected);
+    let node = nvar(99);
+    expected.insert(node, [vec!["0".into()]].into());
+    let mut sys = System::empty();
+    sys.nodes_mut().push((node, rule));
+    let actual: BTreeMap<_, BTreeSet<_>> = var_occurrences_nodes(&sys)
+        .into_iter()
+        .map(|(v, paths)| {
+            (
+                v,
+                paths
+                    .into_iter()
+                    .map(|path| {
+                        path.into_iter()
+                            .map(|seg| seg.as_str().to_owned())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected);
+    tamarin_test_support::on_stack(256 * 1024, || {
+        let mut term = mterm(7);
+        for _ in 0..8192 {
+            term = tamarin_term::builtin::hash(term);
+        }
+        let mut sys = System::empty();
+        sys.nodes_mut().push((nvar(99), rule_holding(term)));
+        let renames = compute_rename_map(&sys, &BTreeSet::new());
+        assert_eq!(rn(&renames, &mvar(7)).name, "");
+        assert_eq!(rn(&renames, &mvar(7)).sort, LSort::Msg);
+    });
+}

@@ -43,7 +43,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tamarin_term::function_symbols::{AcSym, FunSym};
 use tamarin_term::lterm::{sort_of_lnterm, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::pretty::pretty_nterm;
-use tamarin_term::term::{f_app, Term};
+use tamarin_term::term::{f_app, rewrite_term, walk_terms, Term};
 use tamarin_term::vterm::Lit;
 
 use crate::fact::LNFact;
@@ -114,11 +114,16 @@ pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
 /// A `*` node terminates the descent, so nested products inside one are not
 /// reported separately.
 fn mult_terms(t: &LNTerm) -> Vec<LNTerm> {
-    match t {
-        Term::App(FunSym::Ac(AcSym::Mult), _) => vec![t.clone()],
-        Term::App(_, args) => args.iter().flat_map(mult_terms).collect(),
-        Term::Lit(_) => Vec::new(),
-    }
+    let mut out = Vec::new();
+    let _: std::ops::ControlFlow<()> = walk_terms(std::slice::from_ref(t), |term| {
+        if matches!(term, Term::App(FunSym::Ac(AcSym::Mult), _)) {
+            out.push(term.clone());
+            std::ops::ControlFlow::Continue(false)
+        } else {
+            std::ops::ControlFlow::Continue(true)
+        }
+    });
+    out
 }
 
 /// HS `unbound ru = [v | v <- frees (get rConcs ru) \\ frees (get rPrems ru),
@@ -255,44 +260,34 @@ fn abstract_term(
     bindings: &mut BTreeMap<LNTerm, LVar>,
     next_idx: &mut u64,
 ) -> LNTerm {
-    match t {
-        Term::App(f, args) if irreducible.contains(f) => {
-            let mapped = args
-                .iter()
-                .map(|a| abstract_term(a, irreducible, bindings, next_idx))
-                .collect();
-            f_app(*f, mapped)
-        }
-        Term::Lit(_) => t.clone(),
-        Term::App(..) => {
-            if let Some(v) = bindings.get(t) {
-                return Term::Lit(Lit::Var(*v));
+    rewrite_term(
+        t,
+        &mut |term| match term {
+            Term::App(f, _) if irreducible.contains(f) => None,
+            Term::Lit(_) => None,
+            Term::App(..) => {
+                if let Some(v) = bindings.get(term) {
+                    return Some(Term::Lit(Lit::Var(*v)));
+                }
+                let v = LVar::new("x", sort_of_lnterm(term), *next_idx);
+                *next_idx += 1;
+                bindings.insert(term.clone(), v);
+                Some(Term::Lit(Lit::Var(v)))
             }
-            let v = LVar::new("x", sort_of_lnterm(t), *next_idx);
-            *next_idx += 1;
-            bindings.insert(t.clone(), v);
-            Term::Lit(Lit::Var(v))
-        }
-    }
+        },
+        &mut f_app,
+    )
 }
 
 /// HS `replaceAbstracted` (Wellformedness.hs:1078-1086): substitute a term
 /// the premises already abstracted, otherwise rebuild it structurally.  The
 /// binding lookup happens FIRST, before the head symbol is inspected.
 fn replace_abstracted(t: &LNTerm, bindings: &BTreeMap<LNTerm, LVar>) -> LNTerm {
-    if let Some(v) = bindings.get(t) {
-        return Term::Lit(Lit::Var(*v));
-    }
-    match t {
-        Term::App(f, args) => {
-            let mapped = args
-                .iter()
-                .map(|a| replace_abstracted(a, bindings))
-                .collect();
-            f_app(*f, mapped)
-        }
-        Term::Lit(_) => t.clone(),
-    }
+    rewrite_term(
+        t,
+        &mut |term| bindings.get(term).map(|v| Term::Lit(Lit::Var(*v))),
+        &mut f_app,
+    )
 }
 
 // =============================================================================

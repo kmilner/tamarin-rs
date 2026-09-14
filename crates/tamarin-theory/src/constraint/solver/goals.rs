@@ -2420,25 +2420,9 @@ pub(crate) fn has_ku_guards(sys: &System) -> bool {
     use crate::atom::ProtoAtom;
     use crate::guarded::Guarded;
     fn walk_guards(g: &Guarded) -> bool {
-        match g {
-            // HS `getTags _qua _ss atos inner` inspects ONLY the guard list
-            // (`atos`) of a `GGuarded`; the bare-atom case is `fAto = mempty`,
-            // contributing NO tags (Guarded.hs:170-173).  So a bare `GAto`
-            // KU action atom must NOT count — only a `GGuarded`'s guards.
-            Guarded::GGuarded { guards, body, .. } => {
-                for atom in guards.iter() {
-                    if let ProtoAtom::Action(_, fa) = atom
-                        && fa.is_ku()
-                    {
-                        return true;
-                    }
-                }
-                walk_guards(body)
-            }
-            Guarded::Conj(items) | Guarded::Disj(items) => items.iter().any(walk_guards),
-            // `fAto = mempty`: bare atoms contribute no tags.
-            Guarded::Atom(_) => false,
-        }
+        crate::guarded::visit_guarded(g,|_,g|{
+            if matches!(g,Guarded::GGuarded{guards,..} if guards.iter().any(|a|matches!(a,ProtoAtom::Action(_,fa) if fa.is_ku()))){std::ops::ControlFlow::Break(())}else{std::ops::ControlFlow::Continue(true)}
+        }).is_break()
     }
     sys.formulas.iter().any(|f| walk_guards(f))
 }
@@ -2505,24 +2489,18 @@ fn contains_toplevel_term(
     t: &tamarin_term::lterm::LNTerm,
     needle: &tamarin_term::lterm::LNTerm,
 ) -> bool {
+    use std::ops::ControlFlow;
     use tamarin_term::function_symbols::{FunSym, NoEqSym};
-    use tamarin_term::term::Term;
-    if t == needle {
-        return true;
-    }
-    if let Term::App(FunSym::NoEq(NoEqSym { name, .. }), args) = t {
-        match &**name {
-            b"pair" if args.len() == 2 => {
-                return contains_toplevel_term(&args[0], needle)
-                    || contains_toplevel_term(&args[1], needle);
-            }
-            b"inv" if args.len() == 1 => {
-                return contains_toplevel_term(&args[0], needle);
-            }
-            _ => {}
+    use tamarin_term::term::{walk_terms, Term};
+    walk_terms(std::slice::from_ref(t), |node| {
+        if node == needle {
+            return ControlFlow::Break(());
         }
-    }
-    false
+        let descend = matches!(node, Term::App(FunSym::NoEq(NoEqSym { name, .. }), args)
+            if (&**name == b"pair" && args.len() == 2) || (&**name == b"inv" && args.len() == 1));
+        ControlFlow::Continue(descend)
+    })
+    .is_break()
 }
 
 /// The `rawLessRel` adjacency: `from -> [to]` successor lists.
@@ -2602,20 +2580,23 @@ fn check_term_lits<F: Fn(tamarin_term::lterm::LSort) -> bool>(
     t: &tamarin_term::lterm::LNTerm,
     p: F,
 ) -> bool {
-    fn walk<F: Fn(tamarin_term::lterm::LSort) -> bool>(
-        t: &tamarin_term::lterm::LNTerm,
-        p: &F,
-    ) -> bool {
-        use tamarin_term::lterm::sort_of_name;
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        match t {
+    use std::ops::ControlFlow;
+    use tamarin_term::lterm::sort_of_name;
+    use tamarin_term::term::{walk_terms, Term};
+    use tamarin_term::vterm::Lit;
+    walk_terms(std::slice::from_ref(t), |node| {
+        let accepted = match node {
             Term::Lit(Lit::Var(v)) => p(v.sort),
             Term::Lit(Lit::Con(c)) => p(sort_of_name(c)),
-            Term::App(_, args) => args.iter().all(|a| walk(a, p)),
+            Term::App(..) => true,
+        };
+        if accepted {
+            ControlFlow::Continue(true)
+        } else {
+            ControlFlow::Break(())
         }
-    }
-    walk(t, &p)
+    })
+    .is_continue()
 }
 
 /// `probablyConstructible` (Haskell):
@@ -2626,18 +2607,11 @@ fn probably_constructible(t: &tamarin_term::lterm::LNTerm) -> bool {
 }
 
 /// True iff any literal in `t` has the given sort. The Haskell source
-/// folds `sortOfLit` over every leaf; we mirror that with a recursive
+/// folds `sortOfLit` over every leaf; we mirror that with an iterative
 /// walk over `Term`, comparing `target` against `Var.sort` for variables
 /// and `sort_of_name` for constants.
 fn lit_sort_contains(t: &tamarin_term::lterm::LNTerm, target: tamarin_term::lterm::LSort) -> bool {
-    use tamarin_term::lterm::sort_of_name;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    match t {
-        Term::Lit(Lit::Var(v)) => v.sort == target,
-        Term::Lit(Lit::Con(c)) => sort_of_name(c) == target,
-        Term::App(_, args) => args.iter().any(|a| lit_sort_contains(a, target)),
-    }
+    !check_term_lits(t, |sort| sort != target)
 }
 
 /// Dispatch a goal to the appropriate `solve_*_goal` primitive on a

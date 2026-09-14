@@ -109,6 +109,22 @@ fn abs_fact_bindings_constants_and_noeq() {
         ],
     );
     assert_eq!(a, expect);
+
+    tamarin_test_support::on_stack(256 * 1024, || {
+        let mut original = msg_var("x", 9);
+        let mut expected = msg_var("x", 0);
+        for _ in 0..8192 {
+            original = tamarin_term::builtin::hash(original);
+            expected = tamarin_term::builtin::hash(expected);
+        }
+        let mut state = AbsState {
+            counter: 0,
+            bindings: Vec::new(),
+        };
+        assert_eq!(abs_term(&original, &mut state), expected);
+        assert_eq!(state.counter, 1);
+        assert_eq!(state.bindings.len(), 1);
+    });
 }
 
 /// An AC application is abstracted to a single variable with hint `"z"`
