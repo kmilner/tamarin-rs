@@ -14,6 +14,35 @@ use tamarin_term::lterm::{BVar, NameTag};
 use tamarin_term::term::Term;
 use tamarin_term::vterm::{var_term, Lit as VLit};
 
+#[test]
+fn branching_natural_sort_report_uses_small_stack() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        use crate::formula::{LNFormula, ProtoFormula};
+        use crate::restriction::Restriction;
+        let atom = |i| {
+            ProtoFormula::Atom(ProtoAtom::EqE(
+                var_term(BVar::Free(LVar::new("x", LSort::Msg, i))),
+                var_term(BVar::Free(LVar::new("y", LSort::Msg, i))),
+            ))
+        };
+        let mut formula: LNFormula = atom(0);
+        for i in 1..=8192 {
+            formula = if i % 2 == 0 {
+                formula.and(atom(i))
+            } else {
+                formula.or(atom(i))
+            };
+        }
+        let mut theory = Theory::new("Deep", tamarin_term::maude_sig::nat_maude_sig());
+        theory.items.push(TheoryItem::Restriction(Restriction {
+            name: "r".into(),
+            formula,
+            original_formula: None,
+        }));
+        assert!(nat_well_sorted_report(&theory).is_empty());
+    });
+}
+
 /// The elaborated theory for `src`, as a loader holds it before
 /// translation.
 fn elaborated(src: &str) -> Theory {
@@ -40,8 +69,8 @@ fn lookup_process(v: LVar) -> crate::sapic::PlainProcess {
     Process::Comb(
         ProcessCombinator::Lookup(var_term(sv.clone()), sv),
         ProcessParsedAnnotation::default(),
-        Box::new(Process::Null(ProcessParsedAnnotation::default())),
-        Box::new(Process::Null(ProcessParsedAnnotation::default())),
+        Box::new(Process::Null(ProcessParsedAnnotation::default())).into(),
+        Box::new(Process::Null(ProcessParsedAnnotation::default())).into(),
     )
 }
 
@@ -198,7 +227,7 @@ fn bound_terms_open_outer_variables_below_nested_guards() {
                 .collect::<Vec<_>>()
                 .into(),
             guards: Vec::new().into(),
-            body: std::sync::Arc::new(body),
+            body: crate::guarded::GuardedBody::new(body),
         }
     }
 
@@ -513,7 +542,8 @@ fn fresh_names_report_walks_the_process_attribute() {
         ProcessParsedAnnotation::default(),
         Box::new(crate::sapic::Process::Null(
             ProcessParsedAnnotation::default(),
-        )),
+        ))
+        .into(),
     );
     assert!(
         fresh_names_report(&thy).is_empty(),
@@ -566,4 +596,57 @@ fn fresh_names_report_counts_each_offending_rule() {
          rule `R1': fresh public constants are not allowed: ~'one'\n  \n  \
          rule `R2': fresh public constants are not allowed: ~'two'\n"
     );
+}
+
+#[test]
+fn bound_terms_share_the_substitution_across_a_wide_block() {
+    use crate::{
+        atom::ProtoAtom,
+        formula::Quantifier,
+        guarded::{Guarded, GuardedBody},
+    };
+    use tamarin_term::{
+        lterm::{BVar, LSort},
+        vterm::var_term,
+    };
+    let n = 8192;
+    let body = Guarded::Conj(
+        (0..n)
+            .map(|i| {
+                Guarded::Atom(ProtoAtom::EqE(
+                    var_term(BVar::Bound(i)),
+                    tamarin_term::lterm::pub_term("a"),
+                ))
+            })
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    let formula = Guarded::GGuarded {
+        qua: Quantifier::All,
+        vars: vec![("x".into(), LSort::Msg); n as usize].into(),
+        guards: vec![].into(),
+        body: GuardedBody::new(body),
+    };
+    let mut terms = 0u64;
+    for_each_bound_guarded_term(&formula, &[], &mut |term| {
+        if terms.is_multiple_of(2) {
+            assert_eq!(*term, tamarin_term::builtin::msg_var("x", 0));
+        }
+        terms += 1;
+    });
+    assert_eq!(terms, 2 * n);
+}
+
+#[test]
+fn nat_sort_scan_handles_deep_terms_on_a_small_stack() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        let invalid = tamarin_term::lterm::pub_term("a");
+        let mut term = Term::App(FunSym::Ac(AcSym::NatPlus), vec![invalid.clone()].into());
+        for _ in 0..32768 {
+            term = tamarin_term::term::f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![term]);
+        }
+        let mut offenders = Vec::new();
+        non_well_sorted(&term, &mut offenders);
+        assert_eq!(offenders, vec![&invalid]);
+    });
 }

@@ -223,17 +223,28 @@ fn disallowed_sort_show(sort: LSort) -> Option<&'static str> {
 /// nested `Qua`s, so its binders come out left to right.
 fn collect_binders<'a>(fm: &'a LNFormula, out: &mut Vec<&'a (String, LSort)>) {
     use crate::formula::ProtoFormula;
-    match fm {
-        ProtoFormula::Tf(_) | ProtoFormula::Atom(_) => {}
-        ProtoFormula::Not(f) => collect_binders(f, out),
-        ProtoFormula::Conn(_, l, r) => {
-            collect_binders(l, out);
-            collect_binders(r, out);
+    let mut current = fm;
+    let mut pending = Vec::new();
+    loop {
+        match current {
+            ProtoFormula::Tf(_) | ProtoFormula::Atom(_) => {}
+            ProtoFormula::Not(body) => {
+                current = body;
+                continue;
+            }
+            ProtoFormula::Conn(_, left, right) => {
+                pending.push(&**right);
+                current = left;
+                continue;
+            }
+            ProtoFormula::Qua(_, hint, body) => {
+                out.push(hint);
+                current = body;
+                continue;
+            }
         }
-        ProtoFormula::Qua(_, hint, body) => {
-            out.push(hint);
-            collect_binders(body, out);
-        }
+        let Some(next) = pending.pop() else { return };
+        current = next;
     }
 }
 
@@ -241,6 +252,32 @@ fn collect_binders<'a>(fm: &'a LNFormula, out: &mut Vec<&'a (String, LSort)>) {
 mod tests {
     use super::*;
     use tamarin_parser::parse_theory;
+
+    #[test]
+    fn branching_formula_reports_use_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            use crate::formula::ProtoFormula;
+            use crate::restriction::Restriction;
+            use crate::theory::TheoryItem;
+            for right_spine in [false, true] {
+                let mut formula: LNFormula = ProtoFormula::Tf(true);
+                for _ in 0..8192 {
+                    formula = if right_spine {
+                        ProtoFormula::Tf(true).and(formula)
+                    } else {
+                        formula.and(ProtoFormula::Tf(true))
+                    };
+                }
+                let mut theory = Theory::new("Deep", Default::default());
+                theory.items.push(TheoryItem::Restriction(Restriction {
+                    name: "r".into(),
+                    formula,
+                    original_formula: None,
+                }));
+                assert!(formula_reports(&theory).is_empty());
+            }
+        });
+    }
 
     fn reports(src: &str) -> Vec<WfError> {
         let thy = parse_theory(src, &[]).expect("parse");

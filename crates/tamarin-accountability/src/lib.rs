@@ -162,6 +162,10 @@ fn undefined_case_tests(acc: &AccLemma, defined_names: &[String]) -> Option<Vec<
 /// acc lemma still get their predicates appended (HS `translate` runs its
 /// `caseTestToPredicate` fold unconditionally).
 pub fn translate(thy: &mut Theory) -> Result<(), AccError> {
+    tamarin_utils::stack::with_compiler_stack(|| translate_inner(thy))
+}
+
+fn translate_inner(thy: &mut Theory) -> Result<(), AccError> {
     let (case_tests, acc_lemmas) = collect_acc_items(thy);
     if acc_lemmas.is_empty() && case_tests.is_empty() {
         return Ok(());

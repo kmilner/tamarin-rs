@@ -1002,7 +1002,7 @@ fn binder_sorts_keep_two_systems_apart() {
             qua: Quantifier::Ex,
             vars: Arc::from(vec![("x".to_string(), sort)]),
             guards: Arc::from(Vec::new()),
-            body: Arc::new(gtrue()),
+            body: crate::guarded::GuardedBody::new(gtrue()),
         })];
         sys
     };
@@ -1106,4 +1106,24 @@ fn seg_eq_and_ord_read_the_text_across_variants() {
     let xor = Seg::shared("AC Xor");
     assert_eq!(mult.cmp(&xor), "AC Mult".cmp("AC Xor"));
     assert_eq!(xor.cmp(&mult), "AC Xor".cmp("AC Mult"));
+}
+
+#[test]
+fn deep_freshness_comparison_preserves_repeated_variable_constraints() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        use tamarin_term::builtin::{hash, msg_var, pair};
+        let mut a = msg_var("a", 0);
+        let mut b = msg_var("b", 0);
+        for _ in 0..8192 {
+            a = hash(a);
+            b = hash(b);
+        }
+        assert!(eq_modulo_freshness_no_ac(&a, &b));
+        let a = pair(a, msg_var("a", 0));
+        assert!(eq_modulo_freshness_no_ac(
+            &a,
+            &pair(b.clone(), msg_var("b", 0))
+        ));
+        assert!(!eq_modulo_freshness_no_ac(&a, &pair(b, msg_var("c", 0))));
+    });
 }

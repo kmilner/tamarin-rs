@@ -1267,7 +1267,7 @@ fn neg_less_node_universal(i_name: &str, j_name: &str) -> Guarded {
         qua: Quantifier::All,
         vars: Vec::new().into(),
         guards: vec![guard].into(),
-        body: std::sync::Arc::new(crate::guarded::gfalse()),
+        body: crate::guarded::GuardedBody::new(crate::guarded::gfalse()),
     }
 }
 
@@ -1356,4 +1356,72 @@ fn insert_formula_negated_less_mark_true_pushes_solved() {
     // `mark` controls only the push into solved_formulas.  The
     // decomposition is the same on both paths.
     assert_disj_decomposition(&r);
+}
+
+#[test]
+fn substitution_keeps_collapsed_disjunction_goal_and_formula_together() {
+    use crate::atom::ProtoAtom;
+    use crate::constraint::constraints::{Disj, Goal};
+    use crate::guarded::{gconj, gdisj, lift_free_atom, Guarded};
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let Some(ctx) = ctx() else { return };
+    let i = LVar::new("i", LSort::Node, 2);
+    let j = LVar::new("j", LSort::Node, 3);
+    let action = |node| {
+        Guarded::Atom(lift_free_atom(&ProtoAtom::Action(
+            var_term(node),
+            crate::fact::ku_fact(tamarin_term::lterm::pub_term("a")),
+        )))
+    };
+    let body = |node| {
+        gconj(vec![
+            action(node),
+            Guarded::Atom(lift_free_atom(&ProtoAtom::Last(var_term(node)))),
+        ])
+    };
+    // Exercise both goal retirement paths: explicit solving and valuation.
+    for evaluate in [false, true] {
+        let mut r = Reduction::new(&ctx, System::empty());
+        assert!(matches!(
+            r.insert_formula(gdisj(vec![body(i), body(j)])).unwrap(),
+            SystemOutcome::Linear
+        ));
+        eqstore_binds_j_to_i(&mut r, i, j);
+        r.subst_system().unwrap();
+        let d = Disj::new(vec![body(i)]);
+        let formula = Guarded::Disj(d.0.clone().into());
+        assert!(crate::guarded::stores_contains(&r.sys.formulas, &formula));
+        assert!(r
+            .sys
+            .goals
+            .iter()
+            .any(|(g, s)| *g == Goal::Disj(d.clone()) && !s.solved));
+        if evaluate {
+            // The production simplifier must retire the old goal and still
+            // insert the conjunction's Last constraint and action obligation.
+            let systems =
+                crate::constraint::solver::simplify::simplify_system_with_fanout(&ctx, r.sys)
+                    .unwrap();
+            assert_eq!(systems.len(), 1);
+            r = Reduction::new(&ctx, systems.into_iter().next().unwrap());
+        } else {
+            assert!(matches!(
+                r.solve_disj_goal(&d).unwrap(),
+                crate::constraint::solver::reduction::GoalCases::LinearNamed(_)
+            ));
+        }
+        assert_eq!(r.sys.last_atom, Some(i));
+        assert!(!crate::guarded::stores_contains(&r.sys.formulas, &formula));
+        assert!(r
+            .sys
+            .goals
+            .iter()
+            .any(|(g, s)| *g == Goal::Disj(d.clone()) && s.solved));
+        assert!(r
+            .sys
+            .goals
+            .iter()
+            .any(|(g, _)| matches!(g, Goal::Action(n, _) if *n == i)));
+    }
 }

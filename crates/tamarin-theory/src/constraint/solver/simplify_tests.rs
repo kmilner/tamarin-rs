@@ -697,6 +697,100 @@ fn exploit_unique_msg_order_inserts_the_reflexive_self_edge() {
     );
 }
 
+/// Canonical instance keys use the existing open/solved stores, independent of
+/// whether a formula arrived bare, under duplicate disjuncts or inside a goal.
+#[test]
+fn canonical_implied_instances_preserve_pending_work_and_stop_refiring() {
+    use crate::constraint::constraints::{Disj, Goal};
+    use crate::guarded::{gconj, lift_free_atom, Guarded};
+    let Some(ctx) = ctx() else { return };
+    let trigger = continuation_marker_goal("trigger", 0);
+    let Goal::Action(node, fact) = &trigger else {
+        unreachable!()
+    };
+    let guard = lift_free_atom(&crate::atom::ProtoAtom::Action(
+        tamarin_term::vterm::var_term(*node),
+        fact.clone(),
+    ));
+    let goals = [
+        continuation_marker_goal("p", 1),
+        continuation_marker_goal("q", 2),
+    ];
+    let body = gconj(
+        goals
+            .iter()
+            .map(|g| {
+                let Goal::Action(node, fact) = g else {
+                    unreachable!()
+                };
+                Guarded::Atom(lift_free_atom(&crate::atom::ProtoAtom::Action(
+                    tamarin_term::vterm::var_term(*node),
+                    fact.clone(),
+                )))
+            })
+            .collect(),
+    );
+    let wrapped = Guarded::Disj(vec![body.clone(), body.clone()].into());
+    for pending_goal in [false, true] {
+        let mut r = Reduction::new(&ctx, System::empty());
+        r.insert_goal(trigger.clone());
+        // Distinct source shapes must produce one canonical instance.
+        for source in [body.clone(), wrapped.clone()] {
+            r.sys
+                .lemmas_mut()
+                .push(std::sync::Arc::new(crate::guarded::gall(
+                    vec![],
+                    vec![guard.clone()],
+                    source,
+                )));
+        }
+        if pending_goal {
+            // Models a disjunction that has shrunk to a singleton. Its goal
+            // remains responsible for decomposing the conjunction.
+            let d = Disj::new(vec![body.clone()]);
+            r.sys.insert_open_formula(Guarded::Disj(d.0.clone().into()));
+            r.insert_goal(Goal::Disj(d.clone()));
+            r.changed = ChangeIndicator::Unchanged;
+            assert!(matches!(
+                insert_implied_formulas_pass(&mut r).unwrap(),
+                SystemOutcome::Linear
+            ));
+            assert_eq!(r.changed, ChangeIndicator::Unchanged);
+            assert!(!r.sys.goals.iter().any(|(g, _)| goals.contains(g)));
+            assert!(matches!(
+                r.solve_disj_goal(&d).unwrap(),
+                crate::constraint::solver::reduction::GoalCases::LinearNamed(_)
+            ));
+            assert!(r
+                .sys
+                .goals
+                .iter()
+                .any(|(g, status)| *g == Goal::Disj(d.clone()) && status.solved));
+        } else {
+            assert!(matches!(
+                insert_implied_formulas_pass(&mut r).unwrap(),
+                SystemOutcome::Linear
+            ));
+            assert!(!r.sys.goals.iter().any(|(g, _)| matches!(g, Goal::Disj(_))));
+        }
+        for goal in &goals {
+            assert!(r.sys.goals.iter().any(|(g, _)| g == goal));
+        }
+        assert!(crate::guarded::stores_contains(
+            &r.sys.solved_formulas,
+            &body
+        ));
+        for _ in 0..2 {
+            r.changed = ChangeIndicator::Unchanged;
+            assert!(matches!(
+                insert_implied_formulas_pass(&mut r).unwrap(),
+                SystemOutcome::Linear
+            ));
+            assert_eq!(r.changed, ChangeIndicator::Unchanged);
+        }
+    }
+}
+
 #[test]
 fn simplify_decomposes_top_level_conj() {
     let Some(ctx) = ctx() else { return };
