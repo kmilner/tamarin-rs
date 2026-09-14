@@ -5,7 +5,7 @@
 //! Port of `Term.SubtermRule` from `lib/term/src/Term/SubtermRule.hs`.
 
 use crate::lterm::{frees, LNTerm};
-use crate::positions::{positions, Position};
+use crate::positions::{positions, visit_positions, Position, PositionMode};
 use crate::rewriting::RRule;
 use crate::term::Term;
 
@@ -41,22 +41,15 @@ impl CtxtStRule {
 
 /// Find every position in `haystack` where `needle` occurs.
 pub fn find_subterm(haystack: &LNTerm, needle: &LNTerm) -> Vec<Position> {
-    fn go(haystack: &LNTerm, needle: &LNTerm, prefix: &mut Vec<i64>, out: &mut Vec<Position>) {
-        if haystack == needle {
-            out.push(prefix.clone());
-            return;
-        }
-        if let Term::App(_, args) = haystack {
-            for (i, a) in args.iter().enumerate() {
-                prefix.push(i as i64);
-                go(a, needle, prefix, out);
-                prefix.pop();
-            }
-        }
-    }
     let mut out = Vec::new();
-    let mut prefix = Vec::new();
-    go(haystack, needle, &mut prefix, &mut out);
+    visit_positions(haystack, PositionMode::Nary, |node, path| {
+        if node == needle {
+            out.push(path.to_vec());
+            false
+        } else {
+            true
+        }
+    });
     out
 }
 
@@ -65,28 +58,21 @@ pub fn find_subterm(haystack: &LNTerm, needle: &LNTerm) -> Vec<Position> {
 /// appears in `l`.
 pub fn find_all_subterms(l: &LNTerm, r: &LNTerm) -> Option<Vec<Position>> {
     use crate::vterm::Lit;
-    let direct = find_subterm(l, r);
-    match r {
-        Term::App(_, args) => {
-            if !direct.is_empty() {
-                return Some(direct);
+    use std::ops::ControlFlow;
+    let mut out = Vec::new();
+    crate::term::walk_terms(std::slice::from_ref(r), |node| {
+        let direct = find_subterm(l, node);
+        match node {
+            Term::App(_, _) if direct.is_empty() => ControlFlow::Continue(true),
+            Term::App(_, _) | Term::Lit(Lit::Var(_)) if !direct.is_empty() => {
+                out.extend(direct);
+                ControlFlow::Continue(false)
             }
-            let mut out = Vec::new();
-            for sub in args.iter() {
-                let parts = find_all_subterms(l, sub)?;
-                out.extend(parts);
-            }
-            Some(out)
+            _ => ControlFlow::Break(()),
         }
-        Term::Lit(Lit::Var(_)) => {
-            if direct.is_empty() {
-                None
-            } else {
-                Some(direct)
-            }
-        }
-        Term::Lit(Lit::Con(_)) => None,
-    }
+    })
+    .is_continue()
+    .then_some(out)
 }
 
 /// `subterms args [] 1` (SubtermRule.hs:59-65, called at :69): for each top-level arg
@@ -355,5 +341,50 @@ mod tests {
         let rhs: LNTerm = f_app_no_eq(c_sym, vec![]); // ground RHS `c`
         let rule = RRule::new(lhs, rhs);
         assert!(rrule_to_ctxt_st_rule(&rule).is_none());
+    }
+}
+
+#[cfg(test)]
+#[path = "subterm_rule_reference.rs"]
+mod reference;
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use crate::builtin::{hash, msg_var, pair};
+    #[test]
+    fn occurrence_searches_and_equation_conversion_use_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let x = msg_var("x", 0);
+            let mut term = x.clone();
+            for _ in 0..8192 {
+                term = hash(term);
+            }
+            let path = vec![0; 8192];
+            assert_eq!(find_subterm(&term, &x), vec![path.clone()]);
+            assert_eq!(find_all_subterms(&term, &x), Some(vec![path.clone()]));
+            assert_eq!(find_all_subterms(&x, &term), Some(vec![vec![]]));
+            let converted = rrule_to_ctxt_st_rule(&RRule::new(term, x)).unwrap();
+            assert_eq!(converted.rhs.positions, vec![path]);
+            assert!(is_subterm_convergent(&converted));
+        });
+    }
+    #[test]
+    fn occurrence_searches_match_reference() {
+        let x = msg_var("x", 0);
+        let c = crate::lterm::pub_term("c");
+        let mut terms = vec![x.clone(), msg_var("y", 0), c];
+        for _ in 0..3 {
+            let snapshot = terms.clone();
+            for t in snapshot {
+                terms.extend([hash(t.clone()), pair(x.clone(), t)]);
+            }
+        }
+        for a in &terms {
+            for b in &terms {
+                assert_eq!(find_subterm(a, b), reference::find_subterm(a, b));
+                assert_eq!(find_all_subterms(a, b), reference::find_all_subterms(a, b));
+            }
+        }
     }
 }

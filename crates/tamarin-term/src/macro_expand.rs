@@ -96,7 +96,7 @@ where
     C: Ord + Clone,
     V: Ord + Clone,
 {
-    match term {
+    tamarin_utils::stack::ensure_sufficient_stack(|| match term {
         Term::Lit(l) => Term::Lit(l),
         Term::App(fsym, args) => {
             let processed: Vec<VTerm<C, V>> = args
@@ -113,7 +113,7 @@ where
                 f_app(fsym, processed)
             }
         }
-    }
+    })
 }
 
 fn find_matching_macro<'a, C, V>(
@@ -244,6 +244,18 @@ mod tests {
             apply_macros(&macros, invoke),
             pair(b.clone(), pair(aa.clone(), aa))
         );
+
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let x = crate::lterm::LVar::new("x", crate::lterm::LSort::Msg, 0);
+            let id: Macro<crate::lterm::Name, _> = Macro::new(b"id".to_vec(), vec![x], var_term(x));
+            let mut nested = var_term(x);
+            for _ in 0..8192 {
+                nested = crate::term::f_app(macro_to_fun_sym(&id), vec![nested]);
+            }
+            let outer = Macro::new(b"outer".to_vec(), vec![x], nested.clone());
+            let invoke = crate::term::f_app(macro_to_fun_sym(&outer), vec![nested]);
+            assert_eq!(apply_macros(&[id, outer], invoke), var_term(x));
+        });
 
         // A symbol that shares only the name is not a macro application. HS
         // compares the complete `macroToFunSym`, and that includes the arity.

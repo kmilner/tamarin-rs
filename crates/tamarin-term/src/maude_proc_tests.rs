@@ -692,3 +692,103 @@ fn match_eqs_direction_matches_hs() {
     assert!(!matches(&t_gen, &t_gen2).is_empty());
     assert!(!matches(&t_gen2, &t_gen).is_empty());
 }
+
+#[test]
+fn deep_reduction_round_trip_uses_small_caller_stack() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    tamarin_test_support::on_stack(256 * 1024, move || {
+        let sig = crate::maude_sig::hash_maude_sig().merge(crate::maude_sig::dh_maude_sig());
+        let maude = MaudeHandle::start(&path, sig).unwrap();
+        let mut expected = crate::builtin::msg_var("x", 0);
+        for _ in 0..1024 {
+            expected = crate::builtin::hash(expected);
+        }
+        let input = crate::builtin::exp(expected.clone(), crate::builtin::one_const());
+        assert_eq!(maude.reduce(&input).unwrap(), expected);
+        assert_eq!(
+            maude.stats().norm_count,
+            1,
+            "must exercise real query and reply IO"
+        );
+    });
+}
+
+#[test]
+fn skolem_walks_preserve_raw_structure_on_small_stacks() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        use crate::{
+            builtin::{hash, msg_var},
+            function_symbols::{AcSym, FunSym},
+            term::Term,
+        };
+        let x = LVar::new("x", LSort::Msg, 0);
+        let y = LVar::new("y", LSort::Fresh, 1);
+        let mut deep = msg_var("x", 0);
+        for _ in 0..8192 {
+            deep = hash(deep);
+        }
+        // Deliberately raw order: skolem renaming must not normalize AC nodes.
+        let raw = Term::App(
+            FunSym::Ac(AcSym::Mult),
+            vec![deep, Term::Lit(Lit::Var(y)), msg_var("x", 0)].into(),
+        );
+        let pattern = std::collections::BTreeSet::from([("y", 1)]);
+        let mut vars = std::collections::BTreeSet::new();
+        collect_free_non_pattern_vars(&raw, &pattern, &mut vars);
+        assert_eq!(vars, std::collections::BTreeSet::from([x]));
+        let (forward, reverse) = build_skolem_maps(&vars);
+        let rewritten = rewrite_skolem(&raw, &forward);
+        assert_eq!(unskolemize(&rewritten, &reverse), raw);
+    });
+}
+
+#[test]
+fn deep_ground_skolem_matching_uses_small_caller_stack() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let maude = MaudeHandle::start(&path, crate::maude_sig::hash_maude_sig()).unwrap();
+    tamarin_test_support::on_stack(256 * 1024, move || {
+        let mut term = crate::builtin::msg_var("x", 0);
+        for _ in 0..8192 {
+            term = crate::builtin::hash(term);
+        }
+        let result = maude
+            .match_eqs_skolemize_both(
+                &[Equal::new(term.clone(), term)],
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap();
+        assert_eq!(result, vec![vec![]]);
+    });
+}
+
+#[test]
+fn ordinary_ground_matching_uses_small_caller_stack() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let maude = MaudeHandle::start(&path, crate::maude_sig::hash_maude_sig()).unwrap();
+    tamarin_test_support::on_stack(256 * 1024, move || {
+        let mut left = crate::lterm::pub_term("a");
+        let mut right = crate::lterm::pub_term("b");
+        for _ in 0..8192 {
+            left = crate::builtin::hash(left);
+            right = crate::builtin::hash(right);
+        }
+        // The ordinary entry point checks groundness before structural
+        // equality. Both outcomes must finish without a backend query.
+        assert_eq!(
+            maude
+                .match_eqs(&[Equal::new(left.clone(), left.clone())])
+                .unwrap(),
+            vec![vec![]]
+        );
+        assert!(maude
+            .match_eqs(&[Equal::new(left, right)])
+            .unwrap()
+            .is_empty());
+    });
+}

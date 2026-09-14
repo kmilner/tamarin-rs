@@ -259,45 +259,63 @@ pub(crate) fn pp_mterm_list_into(items: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
     buf.push(b')');
 }
 
-pub(crate) fn pp_mterm_into(t: &Term<MaudeLit>, buf: &mut Vec<u8>) {
-    match t {
-        Term::Lit(MaudeLit::MaudeVar(i, sort)) => {
+fn pp_literal(lit: &MaudeLit, buf: &mut Vec<u8>) {
+    match lit {
+        MaudeLit::MaudeVar(i, sort) => {
             buf.push(b'x');
             push_u64(*i, buf);
             buf.push(b':');
             buf.extend(pp_lsort(*sort).as_bytes());
         }
-        Term::Lit(MaudeLit::MaudeConst(i, sort)) => {
+        MaudeLit::MaudeConst(i, sort) => {
             buf.extend(pp_lsort_sym(*sort).as_bytes());
             buf.push(b'(');
             push_u64(*i, buf);
             buf.push(b')');
         }
-        Term::Lit(MaudeLit::FreshVar(_, _)) => {
+        MaudeLit::FreshVar(_, _) => {
             // Should not appear in queries we send. Match Haskell's panic.
             panic!("pp_mterm: FreshVar must not appear in outgoing terms");
         }
-        Term::App(sym, args) => match sym {
-            FunSym::NoEq(s) => {
-                pp_maude_no_eq_sym_into(s, buf);
-                if !args.is_empty() {
-                    pp_args(args, buf);
+    }
+}
+
+pub(crate) fn pp_mterm_into(t: &Term<MaudeLit>, buf: &mut Vec<u8>) {
+    match t {
+        Term::Lit(lit) => pp_literal(lit, buf),
+        Term::App(sym, args) => {
+            match sym {
+                FunSym::NoEq(s) => {
+                    pp_maude_no_eq_sym_into(s, buf);
+                    if args.is_empty() {
+                        return;
+                    }
+                }
+                FunSym::C(c) => pp_maude_c_sym_into(*c, buf),
+                FunSym::Ac(op) => pp_maude_ac_sym_into(*op, buf),
+                FunSym::List => buf.extend_from_slice(b"list"),
+            }
+            buf.push(b'(');
+            if matches!(sym, FunSym::List) {
+                pp_list(args, buf);
+            } else {
+                for (i, arg) in args.iter().enumerate() {
+                    if i != 0 {
+                        buf.push(b',');
+                    }
+                    pp_child(arg, buf);
                 }
             }
-            FunSym::C(c) => {
-                pp_maude_c_sym_into(*c, buf);
-                pp_args(args, buf);
-            }
-            FunSym::Ac(op) => {
-                pp_maude_ac_sym_into(*op, buf);
-                pp_args(args, buf);
-            }
-            FunSym::List => {
-                buf.extend_from_slice(b"list(");
-                pp_list(args, buf);
-                buf.push(b')');
-            }
-        },
+            buf.push(b')');
+        }
+    }
+}
+
+// Literal arguments need no recursive stack section.
+fn pp_child(t: &Term<MaudeLit>, buf: &mut Vec<u8>) {
+    match t {
+        Term::Lit(lit) => pp_literal(lit, buf),
+        Term::App(..) => tamarin_utils::stack::ensure_sufficient_stack(|| pp_mterm_into(t, buf)),
     }
 }
 
@@ -315,21 +333,10 @@ fn push_u64(mut value: u64, buf: &mut Vec<u8>) {
     }
 }
 
-fn pp_args(args: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
-    buf.push(b'(');
-    for (i, a) in args.iter().enumerate() {
-        if i > 0 {
-            buf.push(b',');
-        }
-        pp_mterm_into(a, buf);
-    }
-    buf.push(b')');
-}
-
 fn pp_list(args: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
     for arg in args {
         buf.extend_from_slice(b"cons(");
-        pp_mterm_into(arg, buf);
+        pp_child(arg, buf);
         buf.push(b',');
     }
     buf.extend_from_slice(b"nil");
@@ -527,6 +534,118 @@ fn emit_rrule(out: &mut String, rule: &RRule<crate::lterm::LNTerm>) {
 mod tests {
     use super::*;
     use crate::maude_sig::{bp_maude_sig, dh_maude_sig, pair_maude_sig};
+
+    fn reference(t: &Term<MaudeLit>, buf: &mut Vec<u8>) {
+        match t {
+            Term::Lit(MaudeLit::MaudeVar(i, sort)) => {
+                buf.push(b'x');
+                push_u64(*i, buf);
+                buf.push(b':');
+                buf.extend(pp_lsort(*sort).as_bytes());
+            }
+            Term::Lit(MaudeLit::MaudeConst(i, sort)) => {
+                buf.extend(pp_lsort_sym(*sort).as_bytes());
+                buf.push(b'(');
+                push_u64(*i, buf);
+                buf.push(b')');
+            }
+            Term::Lit(MaudeLit::FreshVar(_, _)) => {
+                // Should not appear in queries we send. Match Haskell's panic.
+                panic!("pp_mterm: FreshVar must not appear in outgoing terms");
+            }
+            Term::App(sym, args) => match sym {
+                FunSym::NoEq(s) => {
+                    pp_maude_no_eq_sym_into(s, buf);
+                    if !args.is_empty() {
+                        reference_args(args, buf);
+                    }
+                }
+                FunSym::C(c) => {
+                    pp_maude_c_sym_into(*c, buf);
+                    reference_args(args, buf);
+                }
+                FunSym::Ac(op) => {
+                    pp_maude_ac_sym_into(*op, buf);
+                    reference_args(args, buf);
+                }
+                FunSym::List => {
+                    buf.extend_from_slice(b"list(");
+                    reference_list(args, buf);
+                    buf.push(b')');
+                }
+            },
+        }
+    }
+
+    fn reference_args(args: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
+        buf.push(b'(');
+        for (i, arg) in args.iter().enumerate() {
+            if i != 0 {
+                buf.push(b',');
+            }
+            reference(arg, buf);
+        }
+        buf.push(b')');
+    }
+    fn reference_list(args: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
+        for arg in args {
+            buf.extend_from_slice(b"cons(");
+            reference(arg, buf);
+            buf.push(b',');
+        }
+        buf.extend_from_slice(b"nil");
+        buf.extend(std::iter::repeat_n(b')', args.len()));
+    }
+    #[test]
+    fn maude_writer_matches_reference_wire_format() {
+        let mut terms = vec![
+            Term::Lit(MaudeLit::MaudeVar(u64::MAX, LSort::Msg)),
+            Term::Lit(MaudeLit::MaudeConst(17, LSort::Nat)),
+        ];
+        for depth in 0..4 {
+            let left = terms.last().unwrap().clone();
+            for sym in [
+                FunSym::NoEq(crate::builtin::hash_sym()),
+                FunSym::C(CSym::EMap),
+                FunSym::Ac(AcSym::Mult),
+                FunSym::List,
+            ] {
+                for args in [
+                    vec![],
+                    vec![left.clone()],
+                    vec![left.clone(), terms[depth].clone()],
+                ] {
+                    let term = Term::App(sym, args.into());
+                    let mut expected = Vec::new();
+                    reference(&term, &mut expected);
+                    assert_eq!(pp_mterm(&term), expected);
+                    terms.push(term);
+                }
+            }
+        }
+    }
+    #[test]
+    fn nested_maude_terms_and_borrowed_lists_use_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let mut term = Term::Lit(MaudeLit::MaudeVar(0, LSort::Msg));
+            for depth in 0..8192 {
+                let sym = if depth % 2 == 0 {
+                    FunSym::NoEq(crate::builtin::hash_sym())
+                } else {
+                    FunSym::List
+                };
+                term = Term::App(sym, vec![term].into());
+            }
+            let wire = pp_mterm(&term);
+            assert_eq!(
+                wire.iter().filter(|&&b| b == b'(').count(),
+                wire.iter().filter(|&&b| b == b')').count()
+            );
+            assert!(String::from_utf8(wire).unwrap().contains("x0:Msg"));
+            let list = pp_mterm_list(std::slice::from_ref(&term));
+            assert_eq!(list, pp_mterm(&Term::App(FunSym::List, vec![term].into())));
+        });
+    }
 
     #[test]
     fn term_writer_handles_full_width_ids_and_lists() {
