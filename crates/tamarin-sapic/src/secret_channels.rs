@@ -66,11 +66,11 @@ fn annotate_each(p: AnnotatedProc, svars: &BTreeSet<LVar>) -> AnnotatedProc {
         Process::Comb(c, ann, l, r) => Process::Comb(
             c,
             ann,
-            Box::new(annotate_each(*l, svars)),
-            Box::new(annotate_each(*r, svars)),
+            Box::new(annotate_each(l.into_inner(), svars)).into(),
+            Box::new(annotate_each(r.into_inner(), svars)).into(),
         ),
         Process::Action(action, ann, body) => {
-            let inner = Box::new(annotate_each(*body, svars));
+            let inner = Box::new(annotate_each(body.into_inner(), svars)).into();
             let new_ann = match &action {
                 SapicAction::ChIn {
                     chan: Some(chan), ..
@@ -127,7 +127,7 @@ mod tests {
         let p: AnnotatedProc = Process::Action(
             SapicAction::New(c.clone()),
             ProcessAnnotation::empty(),
-            Box::new(null()),
+            Box::new(null()).into(),
         );
         let out = get_secret_channels(&p, BTreeSet::new());
         assert!(out.contains(&c.var));
@@ -144,12 +144,12 @@ mod tests {
                 msg: var_term(c.clone()),
             },
             ProcessAnnotation::empty(),
-            Box::new(null()),
+            Box::new(null()).into(),
         );
         let p: AnnotatedProc = Process::Action(
             SapicAction::New(c.clone()),
             ProcessAnnotation::empty(),
-            Box::new(body),
+            Box::new(body).into(),
         );
         let out = get_secret_channels(&p, BTreeSet::new());
         assert!(!out.contains(&c.var));
@@ -176,7 +176,7 @@ mod tests {
                     msg: var_term(c.clone()),
                 },
                 ProcessAnnotation::empty(),
-                Box::new(body),
+                Box::new(body).into(),
             )
         };
         // `new c; new e; (<l> | <r>)`.
@@ -190,10 +190,12 @@ mod tests {
                     Box::new(Process::Comb(
                         ProcessCombinator::Parallel,
                         ProcessAnnotation::empty(),
-                        Box::new(l),
-                        Box::new(r),
-                    )),
-                )),
+                        Box::new(l).into(),
+                        Box::new(r).into(),
+                    ))
+                    .into(),
+                ))
+                .into(),
             )
         };
         let only_e: BTreeSet<LVar> = [e.var].into_iter().collect();
@@ -212,7 +214,7 @@ mod tests {
         let new_a: AnnotatedProc = Process::Action(
             SapicAction::New(a.clone()),
             ProcessAnnotation::empty(),
-            Box::new(null()),
+            Box::new(null()).into(),
         );
         let joined = get_secret_channels(&with_branches(new_a, null()), BTreeSet::new());
         assert!(!joined.contains(&a.var));

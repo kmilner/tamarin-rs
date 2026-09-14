@@ -61,16 +61,16 @@ fn annotate_each_closest_unlock(
             // (Insert t1 t2) | t1 == t -> annUnlock here AND recurse into body.
             //  (otherwise falls through to the generic action case below.)
             SapicAction::Insert(t1, _t2) if t1 == t => {
-                let body2 = annotate_each_closest_unlock(t, v, *body)?;
+                let body2 = annotate_each_closest_unlock(t, v, body.into_inner())?;
                 let a2 = a.append(ProcessAnnotation::with_unlock(*v));
-                Ok(Process::Action(ac, a2, Box::new(body2)))
+                Ok(Process::Action(ac, a2, Box::new(body2).into()))
             }
             // (Rep) -> Left WFRep
             SapicAction::Rep => Err(LockWfError::Rep),
             // generic action: recurse into body.
             _ => {
-                let body2 = annotate_each_closest_unlock(t, v, *body)?;
-                Ok(Process::Action(ac, a, Box::new(body2)))
+                let body2 = annotate_each_closest_unlock(t, v, body.into_inner())?;
+                Ok(Process::Action(ac, a, Box::new(body2).into()))
             }
         },
         // (ProcessComb Parallel _ _ _) -> Left WFPar
@@ -78,16 +78,26 @@ fn annotate_each_closest_unlock(
         Process::Comb(c, a, pl, pr) => match &c {
             // (Lookup st vt) | st == t -> annUnlock here AND recurse into BOTH children.
             ProcessCombinator::Lookup(st, _vt) if st == t => {
-                let pl2 = annotate_each_closest_unlock(t, v, *pl)?;
-                let pr2 = annotate_each_closest_unlock(t, v, *pr)?;
+                let pl2 = annotate_each_closest_unlock(t, v, pl.into_inner())?;
+                let pr2 = annotate_each_closest_unlock(t, v, pr.into_inner())?;
                 let a2 = a.append(ProcessAnnotation::with_unlock(*v));
-                Ok(Process::Comb(c, a2, Box::new(pl2), Box::new(pr2)))
+                Ok(Process::Comb(
+                    c,
+                    a2,
+                    Box::new(pl2).into(),
+                    Box::new(pr2).into(),
+                ))
             }
             // generic combinator: recurse into both children (no annotation).
             _ => {
-                let pl2 = annotate_each_closest_unlock(t, v, *pl)?;
-                let pr2 = annotate_each_closest_unlock(t, v, *pr)?;
-                Ok(Process::Comb(c, a, Box::new(pl2), Box::new(pr2)))
+                let pl2 = annotate_each_closest_unlock(t, v, pl.into_inner())?;
+                let pr2 = annotate_each_closest_unlock(t, v, pr.into_inner())?;
+                Ok(Process::Comb(
+                    c,
+                    a,
+                    Box::new(pl2).into(),
+                    Box::new(pr2).into(),
+                ))
             }
         },
     }
@@ -108,23 +118,32 @@ fn annotate_locks_go(
                 sort: LSort::Msg,
                 idx: fresh.fresh_ident(""),
             };
-            let p1 = annotate_each_closest_unlock(&t, &v, *body)?;
+            let p1 = annotate_each_closest_unlock(&t, &v, body.into_inner())?;
             let p2 = annotate_locks_go(fresh, p1)?;
             let a2 = a.append(ProcessAnnotation::with_lock(v));
-            Ok(Process::Action(SapicAction::Lock(t), a2, Box::new(p2)))
+            Ok(Process::Action(
+                SapicAction::Lock(t),
+                a2,
+                Box::new(p2).into(),
+            ))
         }
         // (ProcessAction ac an p) -> recurse into body.
         Process::Action(ac, an, body) => {
-            let p1 = annotate_locks_go(fresh, *body)?;
-            Ok(Process::Action(ac, an, Box::new(p1)))
+            let p1 = annotate_locks_go(fresh, body.into_inner())?;
+            Ok(Process::Action(ac, an, Box::new(p1).into()))
         }
         // (ProcessNull an) -> return as-is.
         Process::Null(an) => Ok(Process::Null(an)),
         // (ProcessComb comb an pl pr) -> recurse into both children.
         Process::Comb(comb, an, pl, pr) => {
-            let pl2 = annotate_locks_go(fresh, *pl)?;
-            let pr2 = annotate_locks_go(fresh, *pr)?;
-            Ok(Process::Comb(comb, an, Box::new(pl2), Box::new(pr2)))
+            let pl2 = annotate_locks_go(fresh, pl.into_inner())?;
+            let pr2 = annotate_locks_go(fresh, pr.into_inner())?;
+            Ok(Process::Comb(
+                comb,
+                an,
+                Box::new(pl2).into(),
+                Box::new(pr2).into(),
+            ))
         }
     }
 }
@@ -163,14 +182,14 @@ mod tests {
         Process::Action(
             SapicAction::Lock(t),
             ProcessAnnotation::empty(),
-            Box::new(body),
+            Box::new(body).into(),
         )
     }
     fn unlock(t: SapicTerm, body: AnnotatedProc) -> AnnotatedProc {
         Process::Action(
             SapicAction::Unlock(t),
             ProcessAnnotation::empty(),
-            Box::new(body),
+            Box::new(body).into(),
         )
     }
 
@@ -186,7 +205,7 @@ mod tests {
             assert_eq!(lv.0.idx, 0);
             assert_eq!(lv.0.sort, LSort::Msg);
             // ...and the matching unlock carries the SAME lock variable as unlock.
-            if let Process::Action(SapicAction::Unlock(_), ua, _) = *body {
+            if let Process::Action(SapicAction::Unlock(_), ua, _) = body.into_inner() {
                 let uv = ua.unlock.expect("unlock annotated");
                 assert_eq!(uv.0.idx, 0);
             } else {
@@ -214,10 +233,10 @@ mod tests {
         };
         assert_eq!(a0.lock.unwrap().0.idx, 0);
         // the inner lock gets idx 1
-        let Process::Action(SapicAction::Unlock(_), _, body1) = *body0 else {
+        let Process::Action(SapicAction::Unlock(_), _, body1) = body0.into_inner() else {
             panic!()
         };
-        let Process::Action(SapicAction::Lock(_), a1, _) = *body1 else {
+        let Process::Action(SapicAction::Lock(_), a1, _) = body1.into_inner() else {
             panic!()
         };
         assert_eq!(a1.lock.unwrap().0.idx, 1);
@@ -232,14 +251,14 @@ mod tests {
             Process::Action(
                 SapicAction::Insert(pub_const("s"), pub_const("v")),
                 ProcessAnnotation::empty(),
-                Box::new(null()),
+                Box::new(null()).into(),
             ),
         );
         let out = annotate_locks(p).unwrap();
         let Process::Action(SapicAction::Lock(_), _, body) = out else {
             panic!()
         };
-        let Process::Action(SapicAction::Insert(_, _), ia, _) = *body else {
+        let Process::Action(SapicAction::Insert(_, _), ia, _) = body.into_inner() else {
             panic!()
         };
         assert_eq!(ia.unlock.expect("insert annotated as unlock").0.idx, 0);
@@ -257,14 +276,14 @@ mod tests {
         let par = Process::Comb(
             ProcessCombinator::Parallel,
             ProcessAnnotation::empty(),
-            Box::new(null()),
-            Box::new(null()),
+            Box::new(null()).into(),
+            Box::new(null()).into(),
         );
         // lock 's'; ! 0  — WFRep
         let rep = Process::Action(
             SapicAction::Rep,
             ProcessAnnotation::empty(),
-            Box::new(null()),
+            Box::new(null()).into(),
         );
         for (body, want) in [(par, LockWfError::Par), (rep, LockWfError::Rep)] {
             let p = lock(pub_const("s"), body);
@@ -283,7 +302,7 @@ mod tests {
         let Process::Action(SapicAction::Lock(_), _, body) = out else {
             panic!()
         };
-        let Process::Action(SapicAction::Unlock(_), ua, _) = *body else {
+        let Process::Action(SapicAction::Unlock(_), ua, _) = body.into_inner() else {
             panic!()
         };
         assert!(ua.unlock.is_none());

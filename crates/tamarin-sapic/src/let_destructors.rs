@@ -61,8 +61,8 @@ fn map_proc(
         Process::Null(ann) => Process::Null(ann),
         // `ProcessAction ac ann p'` (LetDestructors.hs:29-31): descend.
         Process::Action(ac, ann, body) => {
-            let body1 = map_proc(rules, *body);
-            Process::Action(ac, ann, Box::new(body1))
+            let body1 = map_proc(rules, body.into_inner());
+            Process::Action(ac, ann, Box::new(body1).into())
         }
         // `ProcessComb c@(Let t1 t2 mv) _ pl pr` (LetDestructors.hs:33-66) —
         // HS discards the node's annotation here (the `_`), and so do we; see
@@ -76,12 +76,19 @@ fn map_proc(
             _ann,
             pl,
             pr,
-        ) => map_let(rules, left, right, match_vars, *pl, *pr),
+        ) => map_let(
+            rules,
+            left,
+            right,
+            match_vars,
+            pl.into_inner(),
+            pr.into_inner(),
+        ),
         // `ProcessComb c ann pl pr` (LetDestructors.hs:82-85): non-Let comb.
         Process::Comb(c, ann, pl, pr) => {
-            let pl1 = map_proc(rules, *pl);
-            let pr1 = map_proc(rules, *pr);
-            Process::Comb(c, ann, Box::new(pl1), Box::new(pr1))
+            let pl1 = map_proc(rules, pl.into_inner());
+            let pr1 = map_proc(rules, pr.into_inner());
+            Process::Comb(c, ann, Box::new(pl1).into(), Box::new(pr1).into())
         }
     }
 }
@@ -139,8 +146,8 @@ fn map_let(
             match_vars,
         },
         ann2,
-        Box::new(pl1),
-        Box::new(pr1),
+        Box::new(pl1).into(),
+        Box::new(pr1).into(),
     )
 }
 
@@ -190,8 +197,8 @@ fn case_destructor(
             Process::Comb(
                 rebuild_let_comb(t1_ln, &funsym, rightterms),
                 new_an,
-                Box::new(pl1),
-                Box::new(pr1),
+                Box::new(pl1).into(),
+                Box::new(pr1).into(),
             )
         }
     }
@@ -425,7 +432,7 @@ mod tests {
                 msg: var_term(h.clone()),
             },
             ann(),
-            Box::new(Process::Null(ann())),
+            Box::new(Process::Null(ann())).into(),
         );
         let lett = Process::Comb(
             ProcessCombinator::Let {
@@ -434,8 +441,8 @@ mod tests {
                 match_vars: BTreeSet::new(),
             },
             ann(),
-            Box::new(body),
-            Box::new(Process::Null(ann())),
+            Box::new(body).into(),
+            Box::new(Process::Null(ann())).into(),
         );
         let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
         let out = translate_let_destr(&rules, lett);
@@ -445,7 +452,7 @@ mod tests {
             panic!("expected Let to be eliminated to ChOut");
         };
         assert_eq!(msg, pub_name("t"), "h must be replaced by 't'");
-        assert!(matches!(*body, Process::Null(_)));
+        assert!(matches!(body.into_inner(), Process::Null(_)));
     }
 
     #[test]
@@ -462,7 +469,7 @@ mod tests {
                 msg: pub_name("payload"),
             },
             body_ann,
-            Box::new(Process::Null(ann())),
+            Box::new(Process::Null(ann())).into(),
         );
         let lett = Process::Comb(
             ProcessCombinator::Let {
@@ -471,8 +478,8 @@ mod tests {
                 match_vars: BTreeSet::new(),
             },
             ann(),
-            Box::new(body),
-            Box::new(Process::Null(ann())),
+            Box::new(body).into(),
+            Box::new(Process::Null(ann())).into(),
         );
 
         let out = translate_let_destr(&BTreeSet::new(), lett);
@@ -511,7 +518,7 @@ mod tests {
                 match_vars: BTreeSet::new(),
             },
             ann(),
-            Box::new(Process::Null(ann())),
+            Box::new(Process::Null(ann())).into(),
         );
         // `let h = 't' in <msr>` — Case B drops the Let and substitutes `'t'`.
         let lett = Process::Comb(
@@ -521,8 +528,8 @@ mod tests {
                 match_vars: BTreeSet::new(),
             },
             ann(),
-            Box::new(msr),
-            Box::new(Process::Null(ann())),
+            Box::new(msr).into(),
+            Box::new(Process::Null(ann())).into(),
         );
         let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
         let out = translate_let_destr(&rules, lett);
@@ -588,8 +595,8 @@ mod tests {
                 match_vars: BTreeSet::new(),
             },
             ann(),
-            Box::new(Process::Null(ann())),
-            Box::new(Process::Null(ann())),
+            Box::new(Process::Null(ann())).into(),
+            Box::new(Process::Null(ann())).into(),
         );
         let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
         let out = translate_let_destr(&rules, lett);

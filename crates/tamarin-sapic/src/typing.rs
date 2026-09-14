@@ -250,7 +250,7 @@ fn rename_unique_go(
             ann2.back_substitution = ann2.back_substitution.compose(&inv);
             let ac1 = rename_action(&new_subst, &ac);
             let body1 = rename_unique_go(fresh, &new_subst, &body);
-            Process::Action(ac1, ann2, Box::new(body1))
+            Process::Action(ac1, ann2, Box::new(body1).into())
         }
         Process::Comb(c, ann, l, r) => {
             let bvars = bindings_comb(&c);
@@ -260,7 +260,7 @@ fn rename_unique_go(
             let c1 = rename_comb(&new_subst, &c);
             let l1 = rename_unique_go(fresh, &new_subst, &l);
             let r1 = rename_unique_go(fresh, &new_subst, &r);
-            Process::Comb(c1, ann2, Box::new(l1), Box::new(r1))
+            Process::Comb(c1, ann2, Box::new(l1).into(), Box::new(r1).into())
         }
     }
 }
@@ -542,7 +542,7 @@ fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainPr
                 }
                 env.events.insert(f.tag, arg_types);
             }
-            Ok(Process::Action(ac1, ann.clone(), Box::new(body1)))
+            Ok(Process::Action(ac1, ann.clone(), Box::new(body1).into()))
         }
         Process::Comb(c, ann, l, r) => {
             // 1. fComb: insert bound vars.
@@ -554,7 +554,12 @@ fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainPr
             let r1 = type_process(env, r)?;
             // 3. gComb: type this node's terms with the completed `env`.
             let c1 = type_comb(env, c)?;
-            Ok(Process::Comb(c1, ann.clone(), Box::new(l1), Box::new(r1)))
+            Ok(Process::Comb(
+                c1,
+                ann.clone(),
+                Box::new(l1).into(),
+                Box::new(r1).into(),
+            ))
         }
     }
 }
@@ -795,7 +800,7 @@ mod tests {
         let new = Process::Action(
             SapicAction::New(slv("x", 0, Some("lol"))),
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         let r = rename_unique(&new);
         if let Process::Action(SapicAction::New(v), _, _) = r {
@@ -814,7 +819,7 @@ mod tests {
         let proc = Process::Action(
             SapicAction::New(slv("x", 0, None)),
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(body_ann)),
+            Box::new(Process::Null(body_ann)).into(),
         );
 
         let Process::Action(_, _, body) = rename_unique(&proc) else {
@@ -862,19 +867,19 @@ mod tests {
                 match_vars: std::collections::BTreeSet::new(),
             },
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         // `new k; <msr>` — the binder renames `k` to `k.1` throughout the body.
         let proc = Process::Action(
             SapicAction::New(slv("k", 0, None)),
             ProcessParsedAnnotation::empty(),
-            Box::new(msr),
+            Box::new(msr).into(),
         );
 
         let Process::Action(_, _, body) = rename_unique(&proc) else {
             panic!("expected New action");
         };
-        let Process::Action(SapicAction::Msr { acts, rest, .. }, _, _) = *body else {
+        let Process::Action(SapicAction::Msr { acts, rest, .. }, _, _) = body.into_inner() else {
             panic!("expected MSR action");
         };
         // The action row renamed...
@@ -908,8 +913,9 @@ mod tests {
             Box::new(Process::Action(
                 SapicAction::Event(run),
                 ProcessParsedAnnotation::empty(),
-                Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-            )),
+                Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
+            ))
+            .into(),
         );
         let mut env = TypingEnvironment {
             vars: BTreeMap::new(),

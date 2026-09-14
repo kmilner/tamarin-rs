@@ -124,7 +124,11 @@ fn report_map_terms(loc: Option<SapicTerm>, p: AnnProc) -> AnnProc {
         Process::Action(ac, ann, body) => {
             let here = opt_loc(&loc, &ann);
             let ac2 = report_map_terms_action(&here, ac);
-            Process::Action(ac2, ann, Box::new(report_map_terms(here, *body)))
+            Process::Action(
+                ac2,
+                ann,
+                Box::new(report_map_terms(here, body.into_inner())).into(),
+            )
         }
         Process::Comb(c, ann, l, r) => {
             let here = opt_loc(&loc, &ann);
@@ -132,8 +136,8 @@ fn report_map_terms(loc: Option<SapicTerm>, p: AnnProc) -> AnnProc {
             Process::Comb(
                 c2,
                 ann,
-                Box::new(report_map_terms(here.clone(), *l)),
-                Box::new(report_map_terms(here, *r)),
+                Box::new(report_map_terms(here.clone(), l.into_inner())).into(),
+                Box::new(report_map_terms(here, r.into_inner())).into(),
             )
         }
     }

@@ -583,8 +583,8 @@ fn condition_public_names_are_harvested_from_the_internal_terms() {
         let proc = Process::Comb(
             ProcessCombinator::Cond(crate::formula::sapic_from_parser(&f, &msig).unwrap()),
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
+            Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
         );
         let mut names = Vec::new();
         collect_process_names(&proc, &mut names);
@@ -633,7 +633,7 @@ fn process_pub_names_reach_an_msr_embedded_restriction() {
             match_vars: std::collections::BTreeSet::new(),
         },
         ProcessParsedAnnotation::empty(),
-        Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+        Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
     );
     let mut names = Vec::new();
     collect_process_names(&proc, &mut names);

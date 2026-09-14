@@ -190,7 +190,7 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         }
         let mut opr = OpenProtoRule::new(apply_macro_in_rule(&macros, lifted.clone()));
         if opr.rule != lifted {
-            opr.rule_e = Some(Box::new(lifted));
+            opr.rule_e = Some(Box::new(lifted).into());
         }
         thy.items.push(TheoryItem::Rule(opr));
     }

@@ -1280,3 +1280,61 @@ fn borrowed_atom_mapping_matches_owned_mapping_at_every_scope() {
     assert_eq!(got, want);
     assert_eq!(depths, old_depths);
 }
+
+#[test]
+fn generic_tree_owners_keep_field_and_sibling_drop_order_on_unwind() {
+    use crate::sapic::{Process, ProcessCombinator, SapicAction};
+    use std::sync::{Arc, Mutex};
+    struct Payload(usize, Option<usize>, Arc<Mutex<Vec<usize>>>);
+    impl Drop for Payload {
+        fn drop(&mut self) {
+            self.2.lock().unwrap().push(self.0);
+            assert_ne!(Some(self.0), self.1, "payload panic");
+        }
+    }
+    for panic_at in [None, Some(0), Some(1), Some(2), Some(3)] {
+        for process in [false, true] {
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let payload = |i| Payload(i, panic_at, log.clone());
+            let result = std::panic::catch_unwind(|| {
+                if process {
+                    let leaf = |i| Process::<_, u8>::Null(payload(i));
+                    // Two siblings remain pending when the inner payload
+                    // panics, so reversing the pending stack is observable.
+                    drop(Process::Comb(
+                        ProcessCombinator::Parallel,
+                        payload(0),
+                        Box::new(Process::Comb(
+                            ProcessCombinator::Ndc,
+                            payload(1),
+                            Box::new(Process::Action(
+                                SapicAction::Rep,
+                                payload(2),
+                                Box::new(leaf(3)).into(),
+                            ))
+                            .into(),
+                            Box::new(leaf(4)).into(),
+                        ))
+                        .into(),
+                        Box::new(leaf(5)).into(),
+                    ));
+                } else {
+                    type F = ProtoFormula<Payload, Payload, u8, u8>;
+                    let leaf = |i| F::Atom(ProtoAtom::Syntactic(payload(i)));
+                    drop(F::for_all(
+                        payload(0),
+                        F::for_all(payload(1), F::exists(payload(2), leaf(3)))
+                            .and(leaf(4))
+                            .or(leaf(5)),
+                    ));
+                }
+            });
+            assert_eq!(result.is_err(), panic_at.is_some());
+            assert_eq!(
+                *log.lock().unwrap(),
+                [0, 1, 2, 3, 4, 5],
+                "process={process}, panic={panic_at:?}"
+            );
+        }
+    }
+}

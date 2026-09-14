@@ -83,7 +83,7 @@ pub(crate) fn propagate_names<A: GoodAnnotation>(
                 let mut names = prefix;
                 names.extend(ann.parsed().process_names.clone());
                 let ann2 = set_names(ann, names.clone());
-                Process::Action(a, ann2, Box::new(go(names, *body)))
+                Process::Action(a, ann2, Box::new(go(names, body.into_inner())).into())
             }
             Process::Comb(c, ann, l, r) => {
                 let mut names = prefix;
@@ -92,8 +92,8 @@ pub(crate) fn propagate_names<A: GoodAnnotation>(
                 Process::Comb(
                     c,
                     ann2,
-                    Box::new(go(names.clone(), *l)),
-                    Box::new(go(names, *r)),
+                    Box::new(go(names.clone(), l.into_inner())).into(),
+                    Box::new(go(names, r.into_inner())).into(),
                 )
             }
         }
@@ -662,9 +662,11 @@ mod tests {
                         chan: None,
                         msg: ffx,
                     },
-                    body: Box::new(p::Process::Null),
-                }),
-            }),
+                    body: Box::new(p::Process::Null).into(),
+                })
+                .into(),
+            })
+            .into(),
         }
     }
 

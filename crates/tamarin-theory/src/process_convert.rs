@@ -234,48 +234,43 @@ fn convert_let_pattern(
     Ok((left, match_vars))
 }
 
-/// Recursively strip `PatMatch` wrappers from a pattern term, recording each
+/// Strip `PatMatch` wrappers from a pattern term, recording each
 /// matched variable.  A `=v` contributes `v` to the match-var set (HS
 /// `extractMatchingVariables` collects the `PatternMatch` variables,
 /// Pattern.hs:92-96) and unwraps to `v`; the parser only puts the marker on a
 /// variable (`pattern_var_atom`), matching HS `sapicpatternvar`.  Non-pattern
 /// subterms are returned unchanged.
 fn strip_pat_match(t: &p::Term, match_vars: &mut BTreeSet<SapicLVar>) -> p::Term {
-    match t {
+    tamarin_utils::stack::ensure_sufficient_stack(|| match t {
         p::Term::PatMatch(inner) => {
             if let p::Term::Var(v) = &**inner {
                 match_vars.insert(varspec_to_sapic(v));
             }
             strip_pat_match(inner, match_vars)
         }
-        p::Term::Pair(items) => p::Term::Pair(
-            items
-                .iter()
-                .map(|x| strip_pat_match(x, match_vars))
-                .collect(),
-        ),
-        p::Term::App(n, args) => p::Term::App(
-            n.clone(),
+        p::Term::Pair(args) => p::Term::Pair(
             args.iter()
-                .map(|x| strip_pat_match(x, match_vars))
+                .map(|t| strip_pat_match(t, match_vars))
                 .collect(),
         ),
-        p::Term::AlgApp(n, a, b) => p::Term::AlgApp(
-            n.clone(),
-            Box::new(strip_pat_match(a, match_vars)),
-            Box::new(strip_pat_match(b, match_vars)),
+        p::Term::App(name, args) => p::Term::App(
+            name.clone(),
+            args.iter()
+                .map(|t| strip_pat_match(t, match_vars))
+                .collect(),
         ),
-        p::Term::Diff(a, b) => p::Term::Diff(
-            Box::new(strip_pat_match(a, match_vars)),
-            Box::new(strip_pat_match(b, match_vars)),
-        ),
-        p::Term::BinOp(op, a, b) => p::Term::BinOp(
-            *op,
-            Box::new(strip_pat_match(a, match_vars)),
-            Box::new(strip_pat_match(b, match_vars)),
-        ),
-        other => other.clone(),
-    }
+        p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
+            let a = Box::new(strip_pat_match(a, match_vars));
+            let b = Box::new(strip_pat_match(b, match_vars));
+            match t {
+                p::Term::AlgApp(name, _, _) => p::Term::AlgApp(name.clone(), a, b),
+                p::Term::Diff(_, _) => p::Term::Diff(a, b),
+                p::Term::BinOp(op, _, _) => p::Term::BinOp(*op, a, b),
+                _ => unreachable!(),
+            }
+        }
+        _ => t.clone(),
+    })
 }
 
 /// Convert a parser process into a `PlainProcess`. Nodes start with an empty
@@ -290,7 +285,7 @@ pub fn convert_process(proc: &p::Process, sig: &MaudeSig) -> Result<PlainProcess
     })
 }
 
-/// Shared recursive parser-process conversion. Process-call policy is the
+/// Shared iterative parser-process conversion. Process-call policy is the
 /// only part that depends on the surrounding definition environment, so it is
 /// supplied by the caller rather than duplicating this complete tree walk in
 /// `process_inline`.
@@ -302,39 +297,62 @@ pub(crate) fn convert_process_with<F>(
 where
     F: FnMut(&str, &[p::Term], &MaudeSig) -> Result<PlainProcess, ConvertError>,
 {
-    let ann = ProcessParsedAnnotation::empty();
-    match proc {
-        p::Process::Null => Ok(Process::Null(ann)),
-        p::Process::Action { action: act, body } => Ok(Process::Action(
-            action(act, sig)?,
-            ann,
-            Box::new(convert_process_with(body, sig, resolve_call)?),
-        )),
-        p::Process::Comb { comb, left, right } => {
-            let l = Box::new(convert_process_with(left, sig, resolve_call)?);
-            let r = Box::new(convert_process_with(right, sig, resolve_call)?);
-            let c = combinator(comb, sig)?;
-            Ok(Process::Comb(c, ann, l, r))
-        }
-        // `!P` parses to `ProcessAction Rep mempty P` in HS
-        // (Theory.Text.Parser.Sapic, replication branch); mirror by emitting a
-        // `Rep` action whose single child is the replicated body.
-        p::Process::Replication(body) => Ok(Process::Action(
-            SapicAction::Rep,
-            ann,
-            Box::new(convert_process_with(body, sig, resolve_call)?),
-        )),
-        p::Process::Call { name, args } => resolve_call(name, args, sig),
-        p::Process::AtAnnotation(inner, location) => {
-            // HS `processAddAnnotation p (mempty { location = Just m })`:
-            // attach the converted location to the root of the parenthesised
-            // process, preserving any annotation already present there.
-            let converted = convert_process_with(inner, sig, resolve_call)?;
-            let mut location_ann = ProcessParsedAnnotation::empty();
-            location_ann.location = Some(term(location, sig)?);
-            Ok(add_root_annotation(converted, location_ann))
+    enum Work<'a> {
+        Visit(&'a p::Process),
+        Action(SapicAction<SapicLVar>),
+        Comb(&'a p::ProcessComb),
+        Location(&'a p::Term),
+    }
+    let mut work = vec![Work::Visit(proc)];
+    let mut values = Vec::new();
+    while let Some(task) = work.pop() {
+        let ann = ProcessParsedAnnotation::empty();
+        match task {
+            Work::Visit(node) => match node {
+                p::Process::Null => values.push(Process::Null(ann)),
+                p::Process::Action { action: act, body } => {
+                    work.push(Work::Action(action(act, sig)?));
+                    work.push(Work::Visit(body));
+                }
+                p::Process::Comb { comb, left, right } => {
+                    // Preserve conversion order: both children precede the combinator.
+                    work.push(Work::Comb(comb));
+                    work.push(Work::Visit(right));
+                    work.push(Work::Visit(left));
+                }
+                p::Process::Replication(body) => {
+                    work.push(Work::Action(SapicAction::Rep));
+                    work.push(Work::Visit(body));
+                }
+                p::Process::Call { name, args } => values.push(resolve_call(name, args, sig)?),
+                p::Process::AtAnnotation(inner, location) => {
+                    work.push(Work::Location(location));
+                    work.push(Work::Visit(inner));
+                }
+            },
+            Work::Action(act) => {
+                let body = values.pop().unwrap();
+                values.push(Process::Action(act, ann, Box::new(body).into()));
+            }
+            Work::Comb(comb) => {
+                let right = values.pop().unwrap();
+                let left = values.pop().unwrap();
+                values.push(Process::Comb(
+                    combinator(comb, sig)?,
+                    ann,
+                    Box::new(left).into(),
+                    Box::new(right).into(),
+                ));
+            }
+            Work::Location(location) => {
+                let converted = values.pop().unwrap();
+                let mut ann = ann;
+                ann.location = Some(term(location, sig)?);
+                values.push(add_root_annotation(converted, ann));
+            }
         }
     }
+    Ok(values.pop().unwrap())
 }
 
 pub(crate) fn add_root_annotation(
@@ -410,12 +428,12 @@ mod tests {
         };
         assert_eq!(v.var.name, "x");
         assert_eq!(v.stype.as_deref(), Some("lol"));
-        let Process::Action(SapicAction::Event(fact), _, body) = *body else {
+        let Process::Action(SapicAction::Event(fact), _, body) = body.into_inner() else {
             panic!("expected Event under the New");
         };
         assert_eq!(crate::fact::fact_tag_name(&fact.tag), "Test");
         assert_eq!(fact.terms.len(), 1);
-        let Process::Action(SapicAction::ChOut { chan, msg }, _, body) = *body else {
+        let Process::Action(SapicAction::ChOut { chan, msg }, _, body) = body.into_inner() else {
             panic!("expected ChOut under the Event");
         };
         assert!(chan.is_none(), "`out(t)` has no explicit channel");
@@ -483,7 +501,7 @@ mod tests {
         else {
             panic!("expected a Rep action");
         };
-        let Process::Action(SapicAction::Event(f), _, _) = *body else {
+        let Process::Action(SapicAction::Event(f), _, _) = body.into_inner() else {
             panic!("expected the replicated event as Rep's child");
         };
         assert_eq!(crate::fact::fact_tag_name(&f.tag), "A");
@@ -665,7 +683,7 @@ mod tests {
         assert_eq!(k, key);
         assert_eq!(v, term(&p::Term::PubLit("v".into()), &msig()).unwrap());
         // The `delete` below it also converts. It keeps its key term.
-        let Process::Action(SapicAction::Delete(dk), _, _) = *body else {
+        let Process::Action(SapicAction::Delete(dk), _, _) = body.into_inner() else {
             panic!("expected Delete under the Insert");
         };
         assert_eq!(dk, key);
@@ -929,5 +947,30 @@ mod tests {
         );
         assert_eq!(msg, term(&plain, &msig()).unwrap(), "`unpattern pt`");
         assert_eq!(match_vars, want_vars, "`extractMatchingVariables pt`");
+    }
+    #[test]
+    fn deep_process_conversion_and_pattern_stripping_use_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let mut p = p::Process::Null;
+            for _ in 0..20_000 {
+                p = p::Process::Replication(Box::new(p));
+            }
+            let converted = convert_process(&p, &msig()).unwrap();
+            drop((converted, p));
+            let var = p::VarSpec {
+                name: "x".into(),
+                idx: 0,
+                sort: LSort::Msg,
+                typ: None,
+            };
+            let mut t = p::Term::PatMatch(Box::new(p::Term::Var(var.clone())));
+            for _ in 0..20_000 {
+                t = p::Term::App("f".into(), vec![t]);
+            }
+            let mut matched = BTreeSet::new();
+            let stripped = strip_pat_match(&t, &mut matched);
+            assert_eq!(matched, [varspec_to_sapic(&var)].into());
+            drop((t, stripped));
+        });
     }
 }
