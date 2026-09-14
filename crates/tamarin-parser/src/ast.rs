@@ -165,7 +165,9 @@ pub enum RestrictionAttr {
 // Rules
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+/// Clone and destruction use worklists. Equality and debugging grow the stack
+/// at nested rule edges. Borrow fields when matching this Drop type.
+#[derive(Default)]
 pub struct Rule {
     pub name: String,
     pub modulo: Option<String>, // E or AC
@@ -176,6 +178,22 @@ pub struct Rule {
     pub embedded_restrictions: Vec<Formula>,
     pub variants: Vec<Rule>,
     pub left_right: Option<(Box<Rule>, Box<Rule>)>,
+}
+
+impl PartialEq for Rule {
+    fn eq(&self, other: &Self) -> bool {
+        tamarin_utils::stack::ensure_sufficient_stack(|| {
+            self.name == other.name
+                && self.modulo == other.modulo
+                && self.attributes == other.attributes
+                && self.premises == other.premises
+                && self.actions == other.actions
+                && self.conclusions == other.conclusions
+                && self.embedded_restrictions == other.embedded_restrictions
+                && self.variants == other.variants
+                && self.left_right == other.left_right
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -286,7 +304,8 @@ pub struct ProofSkeleton {
 /// `cases` retains the source ordering (HS uses `M.fromList` which is
 /// alphabetical, but at replay time the order doesn't matter — we look
 /// each case up by name).
-#[derive(Debug, Clone, PartialEq)]
+/// Cloning, equality and destruction use worklists; debugging grows the stack
+/// at recursive edges.
 pub struct ParsedProofTree {
     pub method: ParsedMethod,
     pub cases: Vec<(String, ParsedProofTree)>,
@@ -355,8 +374,9 @@ pub struct SelectorLeaf {
     pub params: Vec<String>,
 }
 
-/// A boolean selector expression from one line of a priority block.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A boolean selector expression from one line of a priority block. Clone,
+/// comparison and destruction use worklists; debugging grows the stack at
+/// recursive edges.
 pub enum SelectorExpr {
     Leaf(SelectorLeaf),
     Not(Box<SelectorExpr>),
@@ -391,7 +411,9 @@ pub struct ProcessDef {
     pub body: Process,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// Clone and equality use explicit worklists; destruction uses fixed-depth
+/// batches and a worklist. Debugging grows the stack at recursive edges. Borrow
+/// fields when matching this Drop type.
 pub enum Process {
     Null,
     Action {
@@ -482,7 +504,9 @@ pub struct Fact {
 // Formulas
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+/// Cloning and equality are iterative. Destruction uses a worklist with bounded
+/// native batches; debugging grows the stack at recursive edges. Match fields
+/// by reference.
 pub enum Formula {
     False,
     True,
@@ -514,7 +538,10 @@ pub enum Atom {
 // Terms
 // =============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+/// Surface term. Cloning, equality and destruction use iterative traversal;
+/// debugging grows the stack at recursive edges. Match by reference when
+/// extracting fields, because the custom destructor prevents moving them out
+/// directly.
 pub enum Term {
     Var(VarSpec),
     PubLit(String),   // 'foo'

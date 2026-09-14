@@ -6,6 +6,157 @@ use super::*;
 use crate::parse_error::{ErrorDetails, MAX_DIAGNOSTIC_MESSAGE_CHARS};
 
 #[test]
+fn rule_let_capture_data_is_lazy_and_shared_across_restrictions() {
+    let key = VarSpec {
+        name: "x".into(),
+        idx: 0,
+        sort: LSort::Msg,
+        typ: None,
+    };
+    let replacement = Term::Pair(
+        (0..8192)
+            .map(|idx| {
+                Term::Var(VarSpec {
+                    name: "y".into(),
+                    idx,
+                    sort: LSort::Msg,
+                    typ: None,
+                })
+            })
+            .collect(),
+    );
+    let cache = std::cell::OnceCell::new();
+    for mut formula in [
+        Formula::True,
+        Formula::Forall(vec![key.clone()], Box::new(Formula::True)),
+    ] {
+        subst_let_formula(&mut formula, &key, &replacement, &cache);
+        assert!(cache.get().is_none());
+    }
+    let mut binder = key.clone();
+    binder.name = "y".into();
+    let mut formula = Formula::Forall(vec![binder], Box::new(Formula::True));
+    subst_let_formula(&mut formula, &key, &replacement, &cache);
+    assert_eq!(cache.get().unwrap().len(), 8192);
+    let Formula::Forall(vars, _) = &formula else {
+        unreachable!()
+    };
+    assert_eq!(vars[0].idx, 8192);
+    // Reuse the initialized data for the next restriction of this binding.
+    let cached = cache.get().unwrap() as *const RuleVars;
+    subst_let_formula(&mut formula, &key, &replacement, &cache);
+    assert_eq!(cached, cache.get().unwrap() as *const RuleVars);
+}
+
+#[test]
+fn ground_rule_let_preserves_deep_quantifiers() {
+    let binders: String = (0..2048).map(|i| format!("All y{i}. ")).collect();
+    let rule = |binding: &str| {
+        format!("theory T begin rule R: {binding} [] --[_restrict({binders}T)]-> [] end")
+    };
+    let plain = parse_theory(&rule(""), &[]).unwrap();
+    let substituted = parse_theory(&rule("let x = 'a' in"), &[]).unwrap();
+    assert_eq!(plain, substituted);
+}
+
+#[test]
+fn formulas_and_proofs_parse_on_a_small_native_stack() {
+    tamarin_test_support::on_stack(64 * 1024, || {
+        let n = 8192;
+        for source in [
+            "T ==> ".repeat(n) + "T",
+            "All x. ".repeat(n) + "T",
+            "not (".repeat(n) + "T" + &")".repeat(n),
+        ] {
+            let parsed = Parser::new(&source, &[], false).formula().unwrap();
+            drop(parsed.clone());
+            drop(parsed);
+        }
+        for source in [
+            "T & ".repeat(n) + "?",
+            "(".to_owned() + &"T ==> ".repeat(n) + "T",
+        ] {
+            assert!(Parser::new(&source, &[], false).formula().is_err());
+        }
+        let parent = Parser::new("", &[], false);
+        let raw = "simplify ".repeat(n) + "by sorry";
+        let proof = crate::proof_tree::parse_proof_tree(&raw, &parent).unwrap();
+        drop(proof.clone());
+        drop(proof);
+        let bad = format!("induction case good {raw} next case bad simplify");
+        assert!(crate::proof_tree::parse_proof_tree(&bad, &parent).is_err());
+        let diff = "backward-search ".repeat(n) + "by sorry";
+        crate::proof_tree::validate_diff_proof_tree(&diff, &parent).unwrap();
+        let bad = format!("backward-search case good {diff} next case bad backward-search");
+        assert!(crate::proof_tree::validate_diff_proof_tree(&bad, &parent).is_err());
+    });
+}
+
+#[test]
+fn deep_formula_substitution_and_renaming_use_bounded_stack() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        let mut formula = Parser::new("x = x", &[], false).formula().unwrap();
+        let variable = |name: &str, idx| VarSpec {
+            name: name.into(),
+            idx,
+            sort: LSort::Msg,
+            typ: None,
+        };
+        for _ in 0..100_000 {
+            formula = Formula::Not(Box::new(formula));
+        }
+        formula = Formula::Forall(vec![variable("y", 0)], Box::new(formula));
+        subst_let_formula(
+            &mut formula,
+            &variable("x", 0),
+            &Term::Var(variable("y", 0)),
+            &std::cell::OnceCell::new(),
+        );
+        let mut vars = RuleVars::default();
+        collect_formula_vars(&formula, &mut vars);
+        assert_eq!(
+            vars,
+            [
+                rule_var_key(&variable("y", 0)),
+                rule_var_key(&variable("y", 1))
+            ]
+            .into_iter()
+            .collect()
+        );
+    });
+}
+
+#[test]
+fn rule_let_substitution_does_not_revisit_replacements() {
+    let parse = |src| Parser::new(src, &[], false).term(false).unwrap();
+    let mut term = parse("pair(x, fst(y))");
+    let variable = parse("x");
+    let Term::Var(key) = &variable else {
+        unreachable!()
+    };
+    // The replacement contains the domain variable itself. Rewriting must
+    // stop at the inserted tree rather than expanding x indefinitely.
+    subst_let_term(&mut term, key, &parse("fst(x)"));
+    assert_eq!(term, parse("pair(fst(x), fst(y))"));
+}
+
+#[test]
+fn iterative_terms_parse_on_a_small_native_stack() {
+    tamarin_test_support::on_stack(64 * 1024, || {
+        let depth = 8192;
+        let source = format!("{}x{}", "fst(".repeat(depth), ")".repeat(depth));
+        let mut parser = Parser::new(&source, &[], false);
+        let parsed = parser.term(false).unwrap();
+        // Both successful cleanup and a failed parse must remain safe on
+        // the same small stack as the iterative parser.
+        drop(parsed);
+        let source = format!("{}x{}", "fst(".repeat(depth), ")".repeat(depth - 1));
+        let mut parser = Parser::new(&source, &[], false);
+        assert!(parser.term(false).is_err());
+    });
+}
+
+#[test]
 fn diff_theory_validates_but_does_not_lower_diff_proofs() {
     let src = "theory D begin
         diffLemma observational_equivalence:
@@ -521,7 +672,7 @@ fn comment_handling() {
 /// two arguments.
 #[test]
 fn term_application() {
-    match goal_term("pair(<a, b>, ~k)", &pair_maude_sig()).unwrap() {
+    match &goal_term("pair(<a, b>, ~k)", &pair_maude_sig()).unwrap() {
         Term::App(name, args) => {
             assert_eq!(name, "pair");
             // The nested tuple is one argument, not two.
@@ -554,7 +705,7 @@ fn formula_string() {
 fn fatom_fact_lhs_of_relop_is_term_atom() {
     // Equality: `Foo(x) = Foo(y)` must be Atom::Eq(App,App), not Pred.
     let f = parse_formula_str_sig("Foo(x) = Foo(y)").unwrap();
-    match f {
+    match &f {
         Formula::Atom(Atom::Eq(Term::App(l, _), Term::App(r, _))) => {
             assert_eq!(l, "Foo");
             assert_eq!(r, "Foo");
@@ -563,7 +714,7 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
     }
     // Subterm: `A(x) << B(y)` must be Atom::Subterm, not Pred.
     let f = parse_formula_str_sig("A(x) << B(y)").unwrap();
-    match f {
+    match &f {
         Formula::Atom(Atom::Subterm(Term::App(l, _), Term::App(r, _))) => {
             assert_eq!(l, "A");
             assert_eq!(r, "B");
@@ -573,7 +724,7 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
     // A genuine predicate atom (no following relational op) stays Pred.
     let f = parse_formula_str_sig("P(x) & Q(y)").unwrap();
     match f {
-        Formula::And(a, _) => match *a {
+        Formula::And(ref a, _) => match **a {
             Formula::Atom(Atom::Pred(ref fa)) => assert_eq!(fa.name, "P"),
             ref other => panic!("expected Pred, got {:?}", other),
         },
@@ -582,7 +733,7 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
     // Implication after a predicate must NOT be misread as `=` (==> guard).
     let f = parse_formula_str_sig("P(x) ==> Q(y)").unwrap();
     match f {
-        Formula::Implies(a, _) => match *a {
+        Formula::Implies(ref a, _) => match **a {
             Formula::Atom(Atom::Pred(ref fa)) => assert_eq!(fa.name, "P"),
             ref other => panic!("expected Pred LHS of ==>, got {:?}", other),
         },
@@ -643,12 +794,12 @@ fn empty_tuple_is_error_singleton_collapses() {
     let term = |src: &str| goal_term(src, &pair_maude_sig());
     assert!(term("<>").is_err(), "<> must be a parse error");
     // Singleton tuple collapses to the inner term.
-    match term("<x>").unwrap() {
+    match &term("<x>").unwrap() {
         Term::Var(v) => assert_eq!(v.name, "x"),
         other => panic!("expected singleton to collapse to Var, got {:?}", other),
     }
     // Two-element tuple is a Pair.
-    match term("<x, y>").unwrap() {
+    match &term("<x, y>").unwrap() {
         Term::Pair(items) => assert_eq!(items.len(), 2),
         other => panic!("expected Pair, got {:?}", other),
     }
@@ -1247,7 +1398,7 @@ fn ac_symbol_parses_infix_left_associative() {
     // `chainl1` associates to the LEFT.
     let src = "theory T begin functions: add/2 [AC] equations: x add y add z = w end";
     match equation_lhs(src) {
-        Term::BinOp(BinOp::AcFct("add"), l, _) => match *l {
+        Term::BinOp(BinOp::AcFct("add"), ref l, _) => match l.as_ref() {
             Term::BinOp(BinOp::AcFct("add"), _, _) => {}
             other => panic!("expected a nested `add` on the LEFT, got {other:?}"),
         },
@@ -1263,7 +1414,7 @@ fn ac_symbol_parses_infix_left_associative() {
 fn ac_symbols_nest_in_name_order() {
     let src = "theory T begin functions: g/2 [AC], f/2 [AC] equations: x f y g z = w end";
     match equation_lhs(src) {
-        Term::BinOp(BinOp::AcFct("f"), _, r) => match *r {
+        Term::BinOp(BinOp::AcFct("f"), _, ref r) => match r.as_ref() {
             Term::BinOp(BinOp::AcFct("g"), _, _) => {}
             other => panic!("expected `g` to bind tighter than `f`, got {other:?}"),
         },
@@ -1431,12 +1582,12 @@ fn sort_suffix_parses_to_the_plain_sort() {
 #[test]
 fn timepoint_positions_are_node_sorted() {
     let sort_of = |src: &str| -> Vec<LSort> {
-        match parse_formula_str_sig(src).expect("parses") {
+        match &parse_formula_str_sig(src).expect("parses") {
             Formula::Atom(Atom::Action(_, t)) | Formula::Atom(Atom::Last(t)) => {
-                vec![var_of(&t).sort]
+                vec![var_of(t).sort]
             }
             Formula::Atom(Atom::Less(l, r)) | Formula::Atom(Atom::Eq(l, r)) => {
-                vec![var_of(&l).sort, var_of(&r).sort]
+                vec![var_of(l).sort, var_of(r).sort]
             }
             other => panic!("expected one atom, got {other:?}"),
         }
@@ -1492,15 +1643,15 @@ fn nullary_symbol_name_in_a_timepoint_position_is_a_variable() {
     for it in &thy.items {
         let TheoryItem::Lemma(l) = it else { continue };
         let f = match &l.formula {
-            Formula::Forall(_, body) => body.as_ref().clone(),
-            other => other.clone(),
+            Formula::Forall(_, body) => body.as_ref(),
+            other => other,
         };
         let t = match f {
             Formula::Atom(Atom::Action(_, t)) | Formula::Atom(Atom::Last(t)) => t,
             Formula::Atom(Atom::Less(_, r)) | Formula::Atom(Atom::Eq(_, r)) => r,
             other => panic!("expected one atom in {}, got {other:?}", l.name),
         };
-        let v = var_of(&t);
+        let v = var_of(t);
         assert_eq!(
             (v.name.as_str(), v.idx, v.sort),
             ("c", 0, LSort::Node),
@@ -1719,7 +1870,7 @@ fn structural_mode_resolves_nullary_names_from_the_signature() {
             tamarin_term::function_symbols::NdcState::NotNdc,
         ));
 
-    assert!(matches!(goal_term("c", &msig).unwrap(), Term::App(n, a) if n == "c" && a.is_empty()));
+    assert!(matches!(&goal_term("c", &msig).unwrap(), Term::App(n, a) if n == "c" && a.is_empty()));
     assert!(matches!(
         goal_term("(x add c)", &msig).unwrap(),
         Term::BinOp(BinOp::AcFct(_), _, _)
@@ -2579,4 +2730,224 @@ fn acyclic_include_still_parses() {
             .any(|i| matches!(i, crate::ast::TheoryItem::Rule(r) if r.name == "Core")),
         "the included rule is spliced into the item stream"
     );
+}
+
+#[test]
+fn process_let_bindings_preserve_order_and_deep_else_branches() {
+    tamarin_test_support::on_stack(64 * 1024, || {
+        let depth = 8192;
+        for bindings in [vec!["x = 'a'"], vec!["x = 'a'", "y = 'b'", "z = 'c'"]] {
+            let source = format!(
+                "let {} in out('success'); 0 else {}out('failure'); 0",
+                bindings.join(", "),
+                "!".repeat(depth)
+            );
+            let mut parser = Parser::new(&source, &[], false);
+            let process = parser.process().unwrap();
+            assert!(parser.lx.is_eof());
+            let mut current = &process;
+            for binding in bindings {
+                let Process::Comb {
+                    comb: ProcessComb::Let { pat, value },
+                    left,
+                    right,
+                } = current
+                else {
+                    panic!("expected the next let binding");
+                };
+                let (expected_pat, expected_value) =
+                    Parser::new(binding, &[], false).let_definition().unwrap();
+                assert_eq!(pat, &expected_pat);
+                assert_eq!(value, &expected_value);
+                let mut failure = right.as_ref();
+                for _ in 0..depth {
+                    let Process::Replication(body) = failure else {
+                        panic!("missing replication in the else branch");
+                    };
+                    failure = body;
+                }
+                let expected_failure = Parser::new("out('failure'); 0", &[], false)
+                    .process()
+                    .unwrap();
+                assert_eq!(failure, &expected_failure);
+                current = left;
+            }
+            let expected_success = Parser::new("out('success'); 0", &[], false)
+                .process()
+                .unwrap();
+            assert_eq!(current, &expected_success);
+        }
+    });
+}
+
+#[test]
+fn processes_parse_on_a_small_native_stack() {
+    tamarin_test_support::on_stack(64 * 1024, || {
+        let n = 8192;
+        for source in [
+            "!".repeat(n) + "0",
+            "new x; ".repeat(n) + "0",
+            "0 | ".repeat(n) + "0",
+            "if x = y then ".repeat(n) + "0",
+            "lookup x as y in ".repeat(n) + "0",
+            "let x = y in ".repeat(n) + "0",
+            format!("let x = y, z = y in 0 else {}0", "!".repeat(n)),
+            "(".repeat(n) + "0" + &")".repeat(n),
+            "(0) @ ".to_string() + &"(".repeat(n) + "x" + &")".repeat(n),
+        ] {
+            let mut parser = Parser::new(&source, &[], false);
+            let process = parser.process().unwrap();
+            drop(process.clone());
+            drop(process);
+            assert!(parser.lx.is_eof());
+        }
+        // Error cleanup includes completed deep siblings and let else-branches.
+        for source in [
+            "new x; ".repeat(n) + "?",
+            "(".repeat(n) + "0",
+            format!("(!{}0) | ?", "!".repeat(n)),
+            format!("let x = y, z = y in 0 else {}0 | ?", "!".repeat(n)),
+        ] {
+            let mut parser = Parser::new(&source, &[], false);
+            assert!(parser.process().is_err());
+            assert!(!parser.sapic_var_types);
+        }
+        let mut parser = Parser::new("?", &[], false);
+        assert!(parser.process().is_err());
+        // Error cleanup leaves the parser reusable.
+        parser.lx = Lexer::new("0");
+        assert!(parser.process().is_ok());
+    });
+}
+
+#[test]
+fn rule_and_flag_parsing_use_bounded_stack() {
+    tamarin_test_support::on_stack(64 * 1024, || {
+        let n = 8192;
+        for end in [")".repeat(n), String::new()] {
+            let source = "not (".repeat(n) + "X" + &end;
+            let mut parser = Parser::new(&source, &["X"], false);
+            let flags = parser.state.flags.clone();
+            assert_eq!(parser.flag_disjuncts(&flags).is_ok(), !end.is_empty());
+        }
+        let source = "rule R: [] --> [] left ".repeat(n)
+            + "rule R: [] --> []"
+            + &" right rule R: [] --> []".repeat(n);
+        let rule = Parser::new(&source, &[], true)
+            .parse_rule_located()
+            .unwrap()
+            .0;
+        drop(rule.clone());
+        drop(rule);
+        for end in ["?", "right ?"] {
+            let source = "rule R: [] --> [] left ".repeat(n) + "rule R: [] --> [] " + end;
+            assert!(Parser::new(&source, &[], true)
+                .parse_rule_located()
+                .is_err());
+        }
+    });
+}
+
+#[test]
+fn includes_preserve_state_and_error_sources_on_a_small_stack() {
+    let dir = std::env::temp_dir().join(format!("iterative-includes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let n = 8192;
+    for i in 0..n {
+        std::fs::write(
+            dir.join(format!("{i}.inc")),
+            format!("rule Before{i}: [] --> []\n#ifdef not MISSING\n#include \"{}.inc\"\n#endif\nrule After{i}: [] --> []", i + 1),
+        )
+        .unwrap();
+    }
+    std::fs::write(dir.join(format!("{n}.inc")), "functions: f/1\n#define X").unwrap();
+    let run_dir = dir.clone();
+    tamarin_test_support::on_stack(128 * 1024, move || {
+        let source =
+            "theory T begin\n#include \"0.inc\"\n#ifdef X\nrule R: [] --> [Out(f(x))]\n#endif\nend";
+        let parsed = parse_theory_with_base(source, &[], Some(run_dir.clone())).unwrap();
+        let names: Vec<_> = parsed
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                TheoryItem::Rule(rule) => Some(rule.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<_> = (0..n)
+            .map(|i| format!("Before{i}"))
+            .chain((0..n).rev().map(|i| format!("After{i}")))
+            .chain(std::iter::once("R".to_owned()))
+            .collect();
+        assert_eq!(names, expected);
+        drop(parsed);
+        let leaf = run_dir.join(format!("{n}.inc"));
+        std::fs::write(&leaf, "functions: f/2\nrule R: [] --> [Out(f(x))]").unwrap();
+        let error = parse_theory_with_base(source, &[], Some(run_dir.clone())).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::WrongFunctionArity { .. }
+        ));
+        assert_eq!(error.source_name(), Some(leaf.to_str().unwrap()));
+        std::fs::write(&leaf, "#include \"0.inc\"").unwrap();
+        let error = parse_theory_with_base(source, &[], Some(run_dir)).unwrap_err();
+        assert!(error.to_string().contains("`#include` cycle"));
+    });
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn deep_duplicate_rules_compare_and_report_conflicts_on_small_stack() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        for depth in [1, 8192] {
+            let nested =
+                |leaf: &str| format!("{}'{}'{}", "h(".repeat(depth), leaf, ")".repeat(depth));
+            let rule = |leaf| format!("rule R: [] --> [Out({})]", nested(leaf));
+            for leaf in ["x", "y"] {
+                let source = format!(
+                    "theory T begin builtins: hashing\n{}\n{}\nend",
+                    rule("x"),
+                    rule(leaf)
+                );
+                let result = parse_theory(&source, &[]);
+                if leaf == "x" {
+                    assert!(result.is_ok());
+                } else {
+                    let error = result.unwrap_err();
+                    assert!(
+                        matches!(error.kind(), ParseErrorKind::ConflictingDeclaration {
+                        name, context: ParseContext::Rule
+                    } if name == "R")
+                    );
+                    let start = source.rfind("rule R").unwrap() + 5;
+                    assert_eq!(error.span(), start..start + 1);
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn deep_nested_rule_equality_uses_a_small_native_stack() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        let nested = |leaf: &str| {
+            format!(
+                "{}rule {leaf}: [] --> [] {}",
+                "rule R: [] --> [] left ".repeat(8192),
+                "right rule S: [] --> [] ".repeat(8192)
+            )
+        };
+        let source = format!("theory T begin {} {} end", nested("R"), nested("R"));
+        parse_theory(&source, &[]).unwrap();
+
+        let source = format!("theory T begin {} {} end", nested("R"), nested("Different"));
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::ConflictingDeclaration {
+                name,
+                context: ParseContext::Rule
+            } if name == "R"
+        ));
+    });
 }

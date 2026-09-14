@@ -14,7 +14,7 @@ pub(crate) const MAX_DIAGNOSTIC_NAME_CHARS: usize = 80;
 pub(crate) const MAX_DIAGNOSTIC_MESSAGE_CHARS: usize = 512;
 
 /// Details belonging to one failed parse, never combined across alternatives.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum ErrorDetails {
     Expected {
         expected: String,
@@ -29,7 +29,7 @@ pub(crate) enum ErrorDetails {
 /// [`ParseError::span`], and [`ParseError::diagnostic_notes`].
 /// [`std::fmt::Display`] renders the same details as [`ParseError::render_plain`].
 /// Individual diagnostic strings are limited to 512 characters.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParseError {
     pub(crate) pos: Pos,
     /// Source name, supplied by the caller or an included file.
@@ -250,7 +250,7 @@ pub struct DiagnosticLabel {
     pub message: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct DiagnosticInfo {
     kind: Option<ParseErrorKind>,
     span: Option<Range<usize>>,
@@ -622,6 +622,7 @@ impl ParseError {
             ParseErrorKind::IncludeIo { path, reason } => {
                 vec![format!("failed to read `{path}`: {reason}")]
             }
+
             ParseErrorKind::Custom => Vec::new(),
             ParseErrorKind::Expected { .. } => match &self.details {
                 Some(ErrorDetails::Expected { expected, found }) => vec![match found {
