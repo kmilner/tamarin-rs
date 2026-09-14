@@ -26,6 +26,11 @@
 //! Nest" handling — our concrete callers always emit explicit
 //! `TextBeside " "` between items.  We also omit annotations
 //! (`AnnotStart`/`AnnotEnd`) — text output only.
+//!
+//! Construction combinators consume unreduced documents, including memoised
+//! `Suspend` continuations. Layout's `Deferred` continuations remain separate:
+//! reduced documents must not be fed back into construction. Both kinds share
+//! the iterative evaluator and last-owner cleanup.
 
 use std::rc::Rc;
 
@@ -232,15 +237,15 @@ pub enum Doc {
     /// Empty doc, length 0.
     Empty,
     /// `NilAbove p` — emit a newline, then `p` on the next line.
-    NilAbove(Rc<Doc>),
+    NilAbove(DocRef),
     /// `TextBeside s p` — emit `s` (a text run of `width` cols) then
     /// continue with `p` on the same line.  `width` is decoupled from
     /// `s.len()` to support multi-byte chars (e.g. `∧` = 1 col).
-    TextBeside(Rc<str>, usize, Rc<Doc>),
+    TextBeside(Rc<str>, usize, DocRef),
     /// `Nest n p` — add `n` to the current indent for the rest of `p`.
-    Nest(isize, Rc<Doc>),
+    Nest(isize, DocRef),
     /// `Union p q` — try `p` first; if it doesn't fit, use `q`.
-    Union(Rc<Doc>, Rc<Doc>),
+    Union(DocRef, DocRef),
     /// Lazy variant of `Union`: the left (flat) branch `p` is materialised,
     /// but the right branch is a memoised thunk forced only when `p` does
     /// not fit.  HughesPJ relies on Haskell's laziness so that the `q`
@@ -249,9 +254,12 @@ pub enum Doc {
     /// breaks there.  An eager Rust port materialises both branches at
     /// construction time, making the reduced tree O(2^depth) for deeply
     /// nested terms (e.g. TLS `Out( <senc(<..>, h(<..>)), ..> )`).  This
-    /// thunk restores HS's laziness: construction stays linear, and only
-    /// the layout path that is actually chosen forces its right branches.
-    LazyUnion(Rc<Doc>, Rc<LazyRight>),
+    /// thunk restores HS's laziness: unused right branches are not built.
+    /// Combining documents can still copy their materialised spines.
+    LazyUnion(DocRef, Rc<LazyRight>),
+    /// Memoised construction continuation. Unlike `Deferred`, this is an
+    /// unreduced document and may be composed or filled before layout.
+    Suspend(Rc<LazyRight>),
     /// Deferred reduction continuation: a memoised thunk holding the
     /// `get`/`get1` reduction of some sub-doc.  `get`/`get1` wrap each
     /// recursive position in a `Deferred` so that — exactly as in HS's
@@ -265,32 +273,353 @@ pub enum Doc {
     NoDoc,
 }
 
-/// Memoised thunk for the right branch of a `LazyUnion`.
+/// Shared document storage with iterative last-owner release, including cached
+/// layouts and the inputs of unforced alternatives.
+pub struct DocNode(Doc, std::cell::Cell<Option<bool>>);
+
+type DocRef = Rc<DocNode>;
+
+impl std::ops::Deref for DocNode {
+    type Target = Doc;
+    fn deref(&self) -> &Doc {
+        &self.0
+    }
+}
+
+fn shared_or_leaf(doc: &DocRef) -> bool {
+    Rc::strong_count(doc) > 1 || matches!(doc.0, Doc::Empty | Doc::NoDoc)
+}
+
+impl Drop for DocNode {
+    fn drop(&mut self) {
+        // Shared tails and leaves need no graph walk. Let their ordinary
+        // Rc drop run without entering the drainer.
+        match &self.0 {
+            Doc::Empty | Doc::NoDoc => return,
+            Doc::TextBeside(_, _, child) | Doc::Nest(_, child) | Doc::NilAbove(child)
+                if shared_or_leaf(child) =>
+            {
+                return
+            }
+            _ => {}
+        }
+        release(Release::Doc(std::mem::replace(&mut self.0, Doc::Empty)));
+    }
+}
+
+/// Memoised right branch or layout continuation. Production continuations are
+/// data so both evaluation and destruction can use explicit worklists.
 pub struct LazyRight {
-    thunk: std::cell::RefCell<Option<Box<dyn FnOnce() -> Doc>>>,
-    value: std::cell::RefCell<Option<Rc<Doc>>>,
+    state: std::cell::RefCell<LazyState>,
+    fill_normalized: [std::cell::Cell<Option<bool>>; 2],
+}
+
+enum Input {
+    Ready(DocRef),
+    Lazy(Rc<LazyRight>),
+}
+
+/// A cursor into shared input documents. Lazy alternatives retain only the
+/// cursor, rather than copying every remaining document at each break.
+#[derive(Clone)]
+struct DocList {
+    storage: Rc<DocListStorage>,
+    start: usize,
+}
+
+struct DocListStorage(Vec<Doc>);
+
+impl Drop for DocListStorage {
+    fn drop(&mut self) {
+        if !self.0.is_empty() {
+            release(Release::Docs(std::mem::take(&mut self.0)));
+        }
+    }
+}
+
+impl DocList {
+    fn new(docs: Vec<Doc>) -> Self {
+        Self {
+            storage: Rc::new(DocListStorage(docs)),
+            start: 0,
+        }
+    }
+
+    fn as_slice(&self) -> &[Doc] {
+        &self.storage.0[self.start..]
+    }
+
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn pop_front(&mut self) -> Option<Doc> {
+        if self.is_empty() {
+            return None;
+        }
+        let doc = if let Some(storage) = Rc::get_mut(&mut self.storage) {
+            std::mem::replace(&mut storage.0[self.start], Doc::Empty)
+        } else {
+            self.storage.0[self.start].clone()
+        };
+        self.start += 1;
+        Some(doc)
+    }
+}
+
+enum Tail {
+    Doc(Doc),
+    Sep(DocList),
+    Fill(bool, DocList),
+}
+
+enum Build {
+    Beside(bool, Doc),
+    Above(bool, isize, Tail),
+    NilAbove(bool, isize),
+    NilBeside(bool),
+    Nest(isize),
+    ElideNest,
+    OneLiner,
+    Choice(Rc<LazyRight>),
+    Sep(bool, isize, DocList, bool),
+    Fill(bool, isize, DocList, bool),
+}
+
+enum LazyState {
+    Ready(DocRef),
+    Forcing,
+    Build(Input, Box<Build>),
+    FillBreak {
+        g: bool,
+        k: isize,
+        items: DocList,
+    },
+    FillNext {
+        g: bool,
+        k: isize,
+        items: DocList,
+    },
+    Layout(Layout, DocRef),
+    #[cfg(test)]
+    Custom(Box<dyn FnOnce() -> Doc>),
 }
 
 impl LazyRight {
-    fn new(f: impl FnOnce() -> Doc + 'static) -> Rc<LazyRight> {
-        Rc::new(LazyRight {
-            thunk: std::cell::RefCell::new(Some(Box::new(f))),
-            value: std::cell::RefCell::new(None),
+    // Inspect construction plans without forcing either alternative. Cached
+    // facts survive memoization: forcing changes representation, not layout.
+    fn fill_normalized(&self, inline: bool) -> bool {
+        let cache = &self.fill_normalized[usize::from(inline)];
+        if let Some(clean) = cache.get() {
+            return clean;
+        }
+        let clean = crate::stack::ensure_sufficient_stack(|| {
+            let input_clean = |input: &Input, inline| match input {
+                Input::Ready(doc) => {
+                    if inline {
+                        fill_inline_normalized(doc)
+                    } else {
+                        fill_normalized(doc)
+                    }
+                }
+                Input::Lazy(lazy) => lazy.fill_normalized(inline),
+            };
+            match &*self.state.borrow() {
+                LazyState::Ready(doc) => {
+                    if inline {
+                        fill_inline_normalized(doc)
+                    } else {
+                        fill_normalized(doc)
+                    }
+                }
+                LazyState::FillNext { .. } | LazyState::FillBreak { .. } => true,
+                LazyState::Build(input, build) => match &**build {
+                    Build::Fill(_, _, _, already_inline) => !inline || *already_inline,
+                    Build::NilAbove(..) => true,
+                    Build::Beside(_, tail) => {
+                        input_clean(input, inline)
+                            && if inline {
+                                fill_inline_normalized(tail)
+                            } else {
+                                fill_normalized(tail)
+                            }
+                    }
+                    Build::Above(_, _, Tail::Doc(tail)) => {
+                        !inline && input_clean(input, false) && fill_normalized(tail)
+                    }
+                    Build::Nest(_) => !inline && input_clean(input, false),
+                    Build::OneLiner => input_clean(input, inline),
+                    Build::ElideNest | Build::NilBeside(_) | Build::Choice(_) => {
+                        input_clean(input, false)
+                    }
+                    _ => false,
+                },
+                _ => false,
+            }
+        });
+        cache.set(Some(clean));
+        clean
+    }
+
+    fn op(op: LazyState) -> Rc<Self> {
+        Rc::new(Self {
+            state: std::cell::RefCell::new(op),
+            fill_normalized: [const { std::cell::Cell::new(None) }; 2],
         })
     }
-    /// Force the thunk, memoising the result.
-    fn force(&self) -> Rc<Doc> {
-        if let Some(v) = self.value.borrow().as_ref() {
-            return v.clone();
+    fn build(input: Input, build: Build) -> Rc<Self> {
+        Self::op(LazyState::Build(input, Box::new(build)))
+    }
+    #[cfg(test)]
+    fn new(f: impl FnOnce() -> Doc + 'static) -> Rc<Self> {
+        Self::op(LazyState::Custom(Box::new(f)))
+    }
+    fn force(self: &Rc<Self>) -> DocRef {
+        if let LazyState::Ready(value) = &*self.state.borrow() {
+            return value.clone();
         }
-        let f = self
-            .thunk
-            .borrow_mut()
-            .take()
-            .expect("LazyRight forced while already forcing (cycle)");
-        let d = Rc::new(f());
-        *self.value.borrow_mut() = Some(d.clone());
-        d
+        if matches!(&*self.state.borrow(), LazyState::Layout(..)) {
+            let op = std::mem::replace(&mut *self.state.borrow_mut(), LazyState::Forcing);
+            let LazyState::Layout(layout, doc) = op else {
+                unreachable!()
+            };
+            let value = rc(layout.run((*doc).clone()));
+            *self.state.borrow_mut() = LazyState::Ready(value.clone());
+            return value;
+        }
+        evaluate(Task::Force(self.clone())).doc()
+    }
+}
+
+impl Drop for LazyRight {
+    fn drop(&mut self) {
+        match self.state.get_mut() {
+            LazyState::Forcing => return,
+            LazyState::Ready(doc) | LazyState::Layout(_, doc) if shared_or_leaf(doc) => return,
+            _ => {}
+        }
+        release(Release::State(std::mem::replace(
+            self.state.get_mut(),
+            LazyState::Forcing,
+        )));
+    }
+}
+
+enum Release {
+    Doc(Doc),
+    Docs(Vec<Doc>),
+    List(DocList),
+    Node(DocRef),
+    Lazy(Rc<LazyRight>),
+    State(LazyState),
+}
+
+fn release(mut item: Release) {
+    // Follow single-child spines without allocating. Only a branch needs to
+    // save another edge; extracting edges disables their ordinary Drop.
+    let mut pending = Vec::new();
+    loop {
+        match item {
+            Release::Docs(mut docs) => {
+                if let Some(doc) = docs.pop() {
+                    // Reuse the existing vector rather than copying its remaining
+                    // entries into the release queue (including consumed empties).
+                    if !docs.is_empty() {
+                        pending.push(Release::Docs(docs));
+                    }
+                    item = Release::Doc(doc);
+                    continue;
+                }
+            }
+            Release::List(list) => {
+                if let Ok(mut storage) = Rc::try_unwrap(list.storage) {
+                    item = Release::Docs(std::mem::take(&mut storage.0));
+                    continue;
+                }
+            }
+            Release::Node(node) => {
+                if let Ok(node) = Rc::try_unwrap(node) {
+                    // Transfer the sole field rather than calling Drop again
+                    // for an emptied node.
+                    let mut node = std::mem::ManuallyDrop::new(node);
+                    item = Release::Doc(std::mem::replace(&mut node.0, Doc::Empty));
+                    continue;
+                }
+            }
+            Release::Lazy(lazy) => {
+                if let Ok(mut lazy) = Rc::try_unwrap(lazy) {
+                    item =
+                        Release::State(std::mem::replace(lazy.state.get_mut(), LazyState::Forcing));
+                    continue;
+                }
+            }
+            Release::Doc(doc) => match doc {
+                Doc::Empty | Doc::NoDoc => {}
+                Doc::TextBeside(_, _, child) | Doc::Nest(_, child) | Doc::NilAbove(child) => {
+                    item = Release::Node(child);
+                    continue;
+                }
+                Doc::Union(left, right) => {
+                    pending.push(Release::Node(right));
+                    item = Release::Node(left);
+                    continue;
+                }
+                Doc::LazyUnion(left, right) => {
+                    pending.push(Release::Lazy(right));
+                    item = Release::Node(left);
+                    continue;
+                }
+                Doc::Deferred(lazy) | Doc::Suspend(lazy) => {
+                    item = Release::Lazy(lazy);
+                    continue;
+                }
+            },
+            Release::State(op) => match op {
+                LazyState::Forcing => {}
+                LazyState::Ready(doc) | LazyState::Layout(_, doc) => {
+                    item = Release::Node(doc);
+                    continue;
+                }
+                LazyState::FillBreak { items, .. } | LazyState::FillNext { items, .. } => {
+                    item = Release::List(items);
+                    continue;
+                }
+                LazyState::Build(input, build) => {
+                    match *build {
+                        Build::Beside(_, doc) | Build::Above(_, _, Tail::Doc(doc)) => {
+                            pending.push(Release::Doc(doc));
+                        }
+                        Build::Above(_, _, Tail::Sep(docs) | Tail::Fill(_, docs)) => {
+                            pending.push(Release::List(docs));
+                        }
+                        Build::Sep(_, _, items, _) | Build::Fill(_, _, items, _) => {
+                            pending.push(Release::List(items));
+                        }
+                        Build::Choice(right) => pending.push(Release::Lazy(right)),
+                        Build::NilAbove(..)
+                        | Build::NilBeside(_)
+                        | Build::Nest(_)
+                        | Build::ElideNest
+                        | Build::OneLiner => {}
+                    }
+                    item = match input {
+                        Input::Ready(doc) => Release::Node(doc),
+                        Input::Lazy(lazy) => Release::Lazy(lazy),
+                    };
+                    continue;
+                }
+                #[cfg(test)]
+                LazyState::Custom(_) => {}
+            },
+        }
+        match pending.pop() {
+            Some(next) => item = next,
+            None => break,
+        }
     }
 }
 
@@ -310,16 +639,24 @@ impl LazyRight {
 
 /// Wrap a `get`/`get1` reduction step as a memoised `Deferred` node, so
 /// it is only run when `fits`/`lay` walks into it.
+#[cfg(test)]
 fn defer(f: impl FnOnce() -> Doc + 'static) -> Doc {
     Doc::Deferred(LazyRight::new(f))
 }
 
 /// HS `mkUnion` with a lazy right branch.
-fn lazy_union(p: Doc, q: impl FnOnce() -> Doc + 'static) -> Doc {
+fn lazy_union(p: Doc, q: Rc<LazyRight>) -> Doc {
+    if let Doc::Suspend(lazy) = p {
+        return suspend_build(lazy, Build::Choice(q));
+    }
     if matches!(p, Doc::Empty) {
         return Doc::Empty;
     }
-    Doc::LazyUnion(rc(p), LazyRight::new(q))
+    Doc::LazyUnion(rc(p), q)
+}
+
+fn suspend_build(input: Rc<LazyRight>, build: Build) -> Doc {
+    Doc::Suspend(LazyRight::build(Input::Lazy(input), build))
 }
 
 impl Doc {
@@ -354,7 +691,7 @@ impl Doc {
         if s.is_empty() && width == 0 {
             Doc::Empty
         } else {
-            Doc::TextBeside(Rc::from(s), width, Rc::new(Doc::Empty))
+            Doc::TextBeside(Rc::from(s), width, rc(Doc::Empty))
         }
     }
 
@@ -367,7 +704,7 @@ impl Doc {
     pub fn text_hs<S: AsRef<str>>(s: S) -> Doc {
         let s = s.as_ref();
         if s.is_empty() {
-            Doc::TextBeside(Rc::from(""), 0, Rc::new(Doc::Empty))
+            Doc::TextBeside(Rc::from(""), 0, rc(Doc::Empty))
         } else {
             Doc::text(s)
         }
@@ -484,7 +821,7 @@ impl Doc {
                 // `easyDisplay`'s chooser for OneLineMode is `\_ y -> y`.
                 Doc::Union(_, q) => (*q).clone(),
                 Doc::LazyUnion(_, r) => (*r.force()).clone(),
-                Doc::Deferred(c) => (*c.force()).clone(),
+                Doc::Deferred(c) | Doc::Suspend(c) => (*c.force()).clone(),
             };
         }
     }
@@ -657,8 +994,8 @@ pub fn postprocess_html(s: &str) -> String {
 // Smart constructors (internal)
 // ============================================================================
 
-fn rc(d: Doc) -> Rc<Doc> {
-    Rc::new(d)
+fn rc(d: Doc) -> DocRef {
+    Rc::new(DocNode(d, std::cell::Cell::new(None)))
 }
 
 /// HS `nilAbove_`.
@@ -683,6 +1020,9 @@ fn union_(p: Doc, q: Doc) -> Doc {
 
 /// HS `mkUnion`: drop union if left is Empty.
 fn mk_union(p: Doc, q: Doc) -> Doc {
+    if matches!(p, Doc::Suspend(_)) {
+        return lazy_union(p, LazyRight::op(LazyState::Ready(rc(q))));
+    }
     if matches!(p, Doc::Empty) {
         Doc::Empty
     } else {
@@ -691,19 +1031,26 @@ fn mk_union(p: Doc, q: Doc) -> Doc {
 }
 
 /// HS `mkNest`.
-fn mk_nest(k: isize, p: Doc) -> Doc {
-    match p {
-        Doc::Nest(k1, inner) => mk_nest(k + k1, (*inner).clone()),
-        Doc::NoDoc => Doc::NoDoc,
-        Doc::Empty => Doc::Empty,
-        _ if k == 0 => p,
-        _ => nest_(k, p),
+fn mk_nest(mut k: isize, mut p: Doc) -> Doc {
+    loop {
+        match p {
+            Doc::Suspend(lazy) => return suspend_build(lazy, Build::Nest(k)),
+            Doc::Nest(k1, inner) => {
+                k += k1;
+                p = (*inner).clone();
+            }
+            Doc::NoDoc => return Doc::NoDoc,
+            Doc::Empty => return Doc::Empty,
+            _ if k == 0 => return p,
+            _ => return nest_(k, p),
+        }
     }
 }
 
 /// HS `elideNest`.
 fn elide_nest(d: Doc) -> Doc {
     match d {
+        Doc::Suspend(lazy) => suspend_build(lazy, Build::ElideNest),
         Doc::Nest(_, inner) => (*inner).clone(),
         other => other,
     }
@@ -727,57 +1074,75 @@ fn beside_text(p: Doc, q: Doc) -> Doc {
     beside_inner(reduce_doc(p), false, q)
 }
 
-fn beside_inner(p: Doc, g: bool, q: Doc) -> Doc {
-    match p {
-        // HS `beside NoDoc _ _ = NoDoc`.
-        Doc::NoDoc => Doc::NoDoc,
-        // HS `beside Empty _ q = q`.
-        Doc::Empty => q,
-        // HS `beside (Nest k p) g q = nest_ k $! beside p g q`.
-        Doc::Nest(k, inner) => nest_(k, beside_inner((*inner).clone(), g, q)),
-        // HS `beside (p1 Union p2) g q = beside p1 g q union beside p2 g q`.
-        // CRITICAL: HS's `union` is lazy in its right argument (a GHC thunk),
-        // and `best`/`fits` only forces the right branch when the left fails to
-        // fit.  Distributing `beside` over BOTH branches eagerly duplicates `q`
-        // into each branch at CONSTRUCTION time; for a doc with nested `sep`s
-        // (e.g. a large conjunction `A & B & C & …`) that builds a 2^depth tree
-        // before reduction even starts, OOMing the renderer.  Mirror HS by
-        // deferring the right branch exactly as the `LazyUnion` arm below does.
-        Doc::Union(a, b) => {
-            let q2 = q.clone();
-            lazy_union(beside_inner((*a).clone(), g, q), move || {
-                beside_inner((*b).clone(), g, q2)
-            })
-        }
-        // Lazy distribution of `beside` over a LazyUnion (keep right lazy).
-        Doc::LazyUnion(a, r) => {
-            let q2 = q.clone();
-            lazy_union(beside_inner((*a).clone(), g, q), move || {
-                beside_inner((*r.force()).clone(), g, q2)
-            })
-        }
-        // HS `beside (NilAbove p) g q = nilAbove_ $! beside p g q`.
-        Doc::NilAbove(p1) => nil_above_(beside_inner((*p1).clone(), g, q)),
-        // HS `beside (TextBeside t p) g q = TextBeside t rest
-        //       where rest = case p of { Empty -> nilBeside g q
-        //                               ; _     -> beside p g q }`.
-        // CRITICAL: when the inner doc ends (rest = Empty), HS routes the
-        // tail `q` through `nilBeside g`, which ELIDES q's leading `Nest`
-        // (`nilBeside g (Nest _ p) = nilBeside g p`).  Recursing through
-        // `beside_inner(Empty, g, q)` instead would RETAIN that leading
-        // Nest, shifting later wrap columns by the nest amount (the NSPK3
-        // GGuarded inner-sep drift).
-        Doc::TextBeside(s, w, rest) => {
-            let rest_inner = match &*rest {
-                Doc::Empty => nil_beside(g, q),
-                _ => beside_inner((*rest).clone(), g, q),
-            };
-            text_beside_(s, w, rest_inner)
-        }
-        // `Deferred` is produced only by `get`/`get1` during reduction,
-        // never by the construction combinators that feed `beside`.
-        Doc::Deferred(_) => unreachable!("Deferred only appears in reduced docs"),
+// A construction walk follows the left spine and rebuilds its prefixes in
+// reverse. Line-breaking alternatives stay memoised and unforced.
+enum Prefix {
+    Text(Rc<str>, usize),
+    Nest(isize),
+    NormalizedNest(isize),
+    BesideGap(bool),
+    Above(Box<Doc>, isize),
+    Line,
+    Choice(Rc<LazyRight>),
+}
+
+fn rebuild(mut prefixes: Vec<Prefix>, mut tail: Doc) -> Doc {
+    while let Some(prefix) = prefixes.pop() {
+        tail = match prefix {
+            Prefix::Text(text, width) => text_beside_(text, width, tail),
+            Prefix::Nest(indent) => nest_(indent, tail),
+            Prefix::NormalizedNest(indent) => mk_nest(indent, tail),
+            Prefix::BesideGap(gap) => nil_beside(gap, tail),
+            Prefix::Above(left, offset) => above_nest(*left, false, offset, tail),
+            Prefix::Line => nil_above_(tail),
+            Prefix::Choice(right) => lazy_union(tail, right),
+        };
     }
+    tail
+}
+
+// A forward cursor owns each output tail exclusively. Reuse an owned input
+// allocation, or copy a shared node without changing the original document.
+fn spine_child(node: &mut Doc) -> &mut DocRef {
+    match node {
+        Doc::TextBeside(_, _, child)
+        | Doc::Nest(_, child)
+        | Doc::NilAbove(child)
+        | Doc::LazyUnion(child, _) => child,
+        _ => unreachable!("spine prefix"),
+    }
+}
+
+fn take_spine(node: &mut Doc) -> Doc {
+    let child = spine_child(node);
+    if let Some(value) = Rc::get_mut(child) {
+        value.1.set(None);
+        std::mem::replace(&mut value.0, Doc::Empty)
+    } else {
+        let next = (**child).clone();
+        *child = rc(Doc::Empty);
+        next
+    }
+}
+
+fn append_spine(cursor: &mut Doc, node: Doc) -> &mut Doc {
+    *cursor = node;
+    let child = Rc::get_mut(spine_child(cursor)).expect("unique output tail");
+    child.1.set(None);
+    &mut child.0
+}
+
+// mkUnion elides an Empty left branch. Delay consecutive choices until we
+// know the transformed left branch has a constructor; never force the right.
+fn append_choices<'a>(mut cursor: &'a mut Doc, choices: &mut Vec<Doc>) -> &'a mut Doc {
+    for node in choices.drain(..) {
+        cursor = append_spine(cursor, node);
+    }
+    cursor
+}
+
+fn beside_inner(p: Doc, g: bool, q: Doc) -> Doc {
+    combine_spine::<false>(p, g, 0, q)
 }
 
 // ============================================================================
@@ -800,85 +1165,170 @@ fn above_g(p: Doc, g: bool, q: Doc) -> Doc {
 /// the `$+$` flag (insert single-space line filler when one side is
 /// effectively empty).
 fn above_nest(p: Doc, g: bool, k: isize, q: Doc) -> Doc {
-    match p {
-        Doc::NoDoc => Doc::NoDoc,
-        // HS `aboveNest (p Union q) g k r = aboveNest p g k r `union_`
-        // aboveNest q g k r` (pretty-1.1.3.6 HughesPJ.hs:585).  CRITICAL:
-        // under GHC's call-by-need both distributed branches are thunks —
-        // `best`/`fits` forces the right one only when the left overflows.
-        // Distributing eagerly into BOTH branches rebuilds `q` under every
-        // Union alternative at construction time; for a union-rich doc (a
-        // vcat of 18 ∃-substs over bilinear eCK terms, each a nest of
-        // sep/fsep unions) that is O(2^depth) — an 8 GB web OOM on the
-        // source-cases page (Chen_Kudla `Init_2`).  Mirror HS's
-        // laziness exactly as `beside_inner`'s Union arm does: keep the
-        // right branch a memoised thunk.
-        Doc::Union(p1, p2) => {
-            let q2 = q.clone();
-            lazy_union(above_nest((*p1).clone(), g, k, q), move || {
-                above_nest((*p2).clone(), g, k, q2)
-            })
+    combine_spine::<true>(p, g, k, q)
+}
+
+// Specialize horizontal and vertical composition without a runtime mode branch.
+// Both operations retain the same lazy choices and ownership-aware spine cursor.
+#[inline]
+fn combine_spine<const ABOVE: bool>(mut p: Doc, g: bool, mut k: isize, q: Doc) -> Doc {
+    let mut output = Doc::Empty;
+    let mut cursor = &mut output;
+    let mut choices = Vec::new();
+    let tail = loop {
+        let mut node = match p {
+            Doc::NoDoc => break Doc::NoDoc,
+            Doc::Empty => break if ABOVE { mk_nest(k, q) } else { q },
+            Doc::Union(left, right) => {
+                let q2 = q.clone();
+                let mut choice = Doc::LazyUnion(
+                    left,
+                    LazyRight::build(
+                        Input::Ready(right),
+                        if ABOVE {
+                            Build::Above(g, k, Tail::Doc(q2))
+                        } else {
+                            Build::Beside(g, q2)
+                        },
+                    ),
+                );
+                p = take_spine(&mut choice);
+                choices.push(choice);
+                continue;
+            }
+            Doc::LazyUnion(left, right) => {
+                let q2 = q.clone();
+                let mut choice = Doc::LazyUnion(
+                    left,
+                    LazyRight::build(
+                        Input::Lazy(right),
+                        if ABOVE {
+                            Build::Above(g, k, Tail::Doc(q2))
+                        } else {
+                            Build::Beside(g, q2)
+                        },
+                    ),
+                );
+                p = take_spine(&mut choice);
+                choices.push(choice);
+                continue;
+            }
+            Doc::Nest(indent, inner) => {
+                if ABOVE {
+                    k -= indent;
+                }
+                Doc::Nest(indent, inner)
+            }
+            Doc::TextBeside(s, w, rest) => {
+                if ABOVE {
+                    k -= w as isize;
+                }
+                if matches!(&**rest, Doc::Empty) {
+                    let tail = if ABOVE {
+                        nil_above_nest(g, k, q)
+                    } else {
+                        nil_beside(g, q)
+                    };
+                    break text_beside_(s, w, tail);
+                }
+                Doc::TextBeside(s, w, rest)
+            }
+            Doc::NilAbove(_) => p,
+            Doc::Deferred(_) => unreachable!("Deferred only appears in reduced docs"),
+            Doc::Suspend(lazy) => {
+                break suspend_build(
+                    lazy,
+                    if ABOVE {
+                        Build::Above(g, k, Tail::Doc(q))
+                    } else {
+                        Build::Beside(g, q)
+                    },
+                )
+            }
+        };
+        p = take_spine(&mut node);
+        if !choices.is_empty() {
+            cursor = append_choices(cursor, &mut choices);
         }
-        // Lazy distribution: keep the right branch a thunk.
-        Doc::LazyUnion(p1, r) => {
-            let q2 = q.clone();
-            lazy_union(above_nest((*p1).clone(), g, k, q), move || {
-                above_nest((*r.force()).clone(), g, k, q2)
-            })
-        }
-        Doc::Empty => mk_nest(k, q),
-        Doc::Nest(k1, inner) => nest_(k1, above_nest((*inner).clone(), g, k - k1, q)),
-        Doc::NilAbove(p1) => nil_above_(above_nest((*p1).clone(), g, k, q)),
-        Doc::TextBeside(s, w, rest) => {
-            let k1 = k - w as isize;
-            let rest_inner: Doc = (*rest).clone();
-            let rest_q = match rest_inner {
-                Doc::Empty => nil_above_nest(g, k1, q),
-                other => above_nest(other, g, k1, q),
+        cursor = append_spine(cursor, node);
+    };
+    let mut tail = tail;
+    if matches!(tail, Doc::Suspend(_)) {
+        // Its head may still become Empty. Preserve mkUnion's elimination
+        // of empty left branches even when construction has not exposed it yet.
+        while let Some(choice) = choices.pop() {
+            let Doc::LazyUnion(_, right) = choice else {
+                unreachable!("pending choice")
             };
-            text_beside_(s, w, rest_q)
+            tail = lazy_union(tail, right);
         }
-        Doc::Deferred(_) => unreachable!("Deferred only appears in reduced docs"),
+    } else if !matches!(tail, Doc::Empty) {
+        cursor = append_choices(cursor, &mut choices);
     }
+    *cursor = tail;
+    output
 }
 
 /// HS `nilAboveNest`.
-fn nil_above_nest(g: bool, k: isize, q: Doc) -> Doc {
-    match q {
-        Doc::Empty => Doc::Empty,
-        Doc::Nest(k1, inner) => nil_above_nest(g, k + k1, (*inner).clone()),
-        Doc::LazyUnion(p1, r) => lazy_union(nil_above_nest(g, k, (*p1).clone()), move || {
-            nil_above_nest(g, k, (*r.force()).clone())
-        }),
-        other => {
-            if !g && k > 0 {
-                // HS: `textBeside_ (NoAnnot (Str (indent k)) k) q` —
-                // emit `k` spaces inline.  We don't see this on the
-                // sep/fsep path we care about but include for parity.
-                let spaces: String = " ".repeat(k as usize);
-                text_beside_(Rc::from(spaces.as_str()), k as usize, other)
-            } else {
-                nil_above_(mk_nest(k, other))
+fn nil_above_nest(g: bool, mut k: isize, mut q: Doc) -> Doc {
+    let mut prefixes = Vec::new();
+    let tail = loop {
+        q = match q {
+            Doc::Suspend(lazy) => break suspend_build(lazy, Build::NilAbove(g, k)),
+            Doc::Empty => break Doc::Empty,
+            Doc::Nest(indent, inner) => {
+                k += indent;
+                (*inner).clone()
             }
-        }
-    }
+            Doc::LazyUnion(left, right) => {
+                prefixes.push(Prefix::Choice(LazyRight::build(
+                    Input::Lazy(right),
+                    Build::NilAbove(g, k),
+                )));
+                (*left).clone()
+            }
+            other => {
+                break if !g && k > 0 {
+                    // HS's inline indentation when the next line can overlap.
+                    let spaces = " ".repeat(k as usize);
+                    text_beside_(Rc::from(spaces.as_str()), k as usize, other)
+                } else {
+                    nil_above_(mk_nest(k, other))
+                };
+            }
+        };
+    };
+    rebuild(prefixes, tail)
 }
 
 // ============================================================================
 // oneLiner
 // ============================================================================
 
-fn one_liner(d: Doc) -> Doc {
-    match d {
-        Doc::NoDoc | Doc::NilAbove(_) => Doc::NoDoc,
-        Doc::Empty => Doc::Empty,
-        Doc::TextBeside(s, w, p) => text_beside_(s, w, one_liner((*p).clone())),
-        Doc::Nest(k, p) => nest_(k, one_liner((*p).clone())),
-        Doc::Union(p, _) => one_liner((*p).clone()),
-        // oneLiner takes only the left (flat) branch — never force `q`.
-        Doc::LazyUnion(p, _) => one_liner((*p).clone()),
-        Doc::Deferred(_) => unreachable!("Deferred only appears in reduced docs"),
-    }
+fn one_liner(mut d: Doc) -> Doc {
+    let mut prefixes = Vec::new();
+    let tail = loop {
+        d = match d {
+            Doc::Suspend(lazy) => break suspend_build(lazy, Build::OneLiner),
+            Doc::NoDoc | Doc::NilAbove(_) => break Doc::NoDoc,
+            Doc::Empty => break Doc::Empty,
+            Doc::TextBeside(s, w, p) => {
+                if matches!(&**p, Doc::Empty) {
+                    break Doc::TextBeside(s, w, p);
+                }
+                prefixes.push(Prefix::Text(s, w));
+                (*p).clone()
+            }
+            Doc::Nest(k, p) => {
+                prefixes.push(Prefix::Nest(k));
+                (*p).clone()
+            }
+            // oneLiner takes only the flat branch; never force q.
+            Doc::Union(p, _) | Doc::LazyUnion(p, _) => (*p).clone(),
+            Doc::Deferred(_) => unreachable!("Deferred only appears in reduced docs"),
+        };
+    };
+    rebuild(prefixes, tail)
 }
 
 // ============================================================================
@@ -918,29 +1368,33 @@ pub fn nest_short_doc(lead: &str, finish: &str, body: Doc) -> Doc {
 /// Empty) builds a structurally different RDoc whose `Nest`/`Union`
 /// accumulation diverges from HS for 3+ items (NSPK3 GGuarded inner sep).
 pub fn hsep(ds: Vec<Doc>) -> Doc {
-    foldr_beside(true, ds)
+    foldr_beside(true, ds.into_iter())
 }
 
 /// HS `hcat = foldr (\p q -> Beside p False q) empty` (HughesPJ.hs:496).
 pub fn hcat(ds: Vec<Doc>) -> Doc {
-    foldr_beside(false, ds)
+    foldr_beside(false, ds.into_iter())
 }
 
 /// HS `vcat = foldr (\p q -> Above p False q) empty` (HughesPJ.hs:504).
 /// RIGHT fold.
 pub fn vcat(ds: Vec<Doc>) -> Doc {
+    vcat_iter(ds.into_iter())
+}
+
+fn vcat_iter(ds: impl DoubleEndedIterator<Item = Doc>) -> Doc {
     // foldr Above empty ds  →  d0 $$ (d1 $$ (... $$ empty))
     let mut acc = Doc::Empty;
-    for d in ds.into_iter().rev() {
+    for d in ds.rev() {
         acc = above_g(d, false, acc);
     }
     acc
 }
 
 /// HS `foldr (\p q -> Beside p g q) empty` (the hsep/hcat shape).
-fn foldr_beside(g: bool, ds: Vec<Doc>) -> Doc {
+fn foldr_beside(g: bool, ds: impl DoubleEndedIterator<Item = Doc>) -> Doc {
     let mut acc = Doc::Empty;
-    for d in ds.into_iter().rev() {
+    for d in ds.rev() {
         // `beside_ d g acc`: Empty operands collapse (Class/HughesPJ
         // `beside_ p _ Empty = p; beside_ Empty _ q = q`).
         acc = if matches!(d, Doc::Empty) {
@@ -956,80 +1410,173 @@ fn foldr_beside(g: bool, ds: Vec<Doc>) -> Doc {
     acc
 }
 
-fn sep_x(x: bool, mut ds: Vec<Doc>) -> Doc {
+fn sep_x(x: bool, ds: Vec<Doc>) -> Doc {
     if ds.is_empty() {
         return Doc::Empty;
     }
-    let first = ds.remove(0);
+    let mut ds = DocList::new(ds);
+    let first = ds.pop_front().unwrap();
     sep1(x, reduce_doc(first), 0, ds)
 }
 
-/// HS `sep1`.
-fn sep1(g: bool, p: Doc, k: isize, ys: Vec<Doc>) -> Doc {
-    match p {
-        Doc::NoDoc => Doc::NoDoc,
-        Doc::Union(p, q) => {
-            let left = sep1(g, (*p).clone(), k, ys.clone());
-            lazy_union(left, move || {
-                above_nest((*q).clone(), false, k, reduce_doc(vcat(ys)))
-            })
-        }
-        // Keep the right branch a thunk: forcing it eagerly here would run its
-        // `aboveNest`/`beside` reconstruction even for layouts that never break —
-        // see `get`'s LazyUnion arm.
-        Doc::LazyUnion(p, rt) => {
-            let left = sep1(g, (*p).clone(), k, ys.clone());
-            lazy_union(left, move || {
-                above_nest((*rt.force()).clone(), false, k, reduce_doc(vcat(ys)))
-            })
-        }
-        Doc::Deferred(c) => sep1(g, (*c.force()).clone(), k, ys),
-        Doc::Empty => mk_nest(k, sep_x(g, ys)),
-        Doc::Nest(n, inner) => nest_(n, sep1(g, (*inner).clone(), k - n, ys)),
-        Doc::NilAbove(p) => nil_above_(above_nest((*p).clone(), false, k, reduce_doc(vcat(ys)))),
-        Doc::TextBeside(s, w, p) => text_beside_(s, w, sep_nb(g, (*p).clone(), k - w as isize, ys)),
-    }
+/// HS `sep1` / `sepNB`. The inline state elides nests after text;
+/// other constructors resume sep1. Both walks share one continuation stack.
+fn sep1(g: bool, p: Doc, k: isize, ys: DocList) -> Doc {
+    sep_resume(g, p, k, ys, false)
 }
 
-/// HS `sepNB`.
-fn sep_nb(g: bool, p: Doc, k: isize, ys: Vec<Doc>) -> Doc {
-    match p {
-        Doc::Nest(_, inner) => sep_nb(g, (*inner).clone(), k, ys),
-        Doc::Empty => {
-            // HS `sepNB g Empty k ys` (pretty-1.1.3.6 HughesPJ.hs:760-766):
-            //   = oneLiner (nilBeside g (reduceDoc rest)) `mkUnion`
-            //     nilAboveNest False k (reduceDoc (vcat ys))
-            //   where rest | g = hsep ys | otherwise = hcat ys
-            // The flag is `False` (see the XXX comment in pretty-1.1.3.6
-            // — GHC's bundled pretty settled on False).
-            let rest = if g {
-                hsep(ys.clone())
-            } else {
-                hcat(ys.clone())
-            };
-            let left = one_liner(nil_beside(g, reduce_doc(rest)));
-            let right = nil_above_nest(false, k, reduce_doc(vcat(ys)));
-            mk_union(left, right)
+fn sep_resume(g: bool, mut p: Doc, mut k: isize, mut ys: DocList, mut inline: bool) -> Doc {
+    let mut prefixes = Vec::new();
+    let tail = loop {
+        if let Doc::Suspend(lazy) = p {
+            break suspend_build(lazy, Build::Sep(g, k, ys, inline));
         }
-        _ => sep1(g, p, k, ys),
-    }
+        if inline {
+            match p {
+                Doc::Nest(_, inner) => {
+                    p = (*inner).clone();
+                    continue;
+                }
+                Doc::Empty => {
+                    // HS sepNB (pretty-1.1.3.6 HughesPJ.hs:760-766):
+                    // retain its False flag and the right-folded rest.
+                    let rest = foldr_beside(g, ys.as_slice().iter().cloned());
+                    let left = one_liner(nil_beside(g, reduce_doc(rest)));
+                    let right = nil_above_nest(
+                        false,
+                        k,
+                        reduce_doc(vcat_iter(ys.as_slice().iter().cloned())),
+                    );
+                    break mk_union(left, right);
+                }
+                _ => inline = false,
+            }
+        }
+        p = match p {
+            Doc::NoDoc => break Doc::NoDoc,
+            Doc::Union(p, q) => {
+                let right_items = ys.clone();
+                prefixes.push(Prefix::Choice(LazyRight::build(
+                    Input::Ready(q),
+                    Build::Above(false, k, Tail::Sep(right_items)),
+                )));
+                (*p).clone()
+            }
+            Doc::LazyUnion(p, rt) => {
+                let right_items = ys.clone();
+                prefixes.push(Prefix::Choice(LazyRight::build(
+                    Input::Lazy(rt),
+                    Build::Above(false, k, Tail::Sep(right_items)),
+                )));
+                (*p).clone()
+            }
+            Doc::Deferred(c) => (*c.force()).clone(),
+            Doc::Suspend(_) => unreachable!("handled above"),
+            Doc::Empty => {
+                // sep1 Empty k ys = mkNest k (sep ys). Resume that sep
+                // here too, so a run of empty items does not recurse.
+                if ys.is_empty() {
+                    break Doc::Empty;
+                }
+                // One zero nest must remain to normalize raw Nest constructors,
+                // but repeating that normalization has no further effect.
+                if k != 0 || !matches!(prefixes.last(), Some(Prefix::NormalizedNest(0))) {
+                    prefixes.push(Prefix::NormalizedNest(k));
+                }
+                k = 0;
+                reduce_doc(ys.pop_front().unwrap())
+            }
+            Doc::Nest(n, inner) => {
+                prefixes.push(Prefix::Nest(n));
+                k -= n;
+                (*inner).clone()
+            }
+            Doc::NilAbove(p) => {
+                break nil_above_(above_nest(
+                    (*p).clone(),
+                    false,
+                    k,
+                    reduce_doc(vcat_iter(ys.as_slice().iter().cloned())),
+                ));
+            }
+            Doc::TextBeside(s, w, p) => {
+                prefixes.push(Prefix::Text(s, w));
+                k -= w as isize;
+                inline = true;
+                (*p).clone()
+            }
+        };
+    };
+    rebuild(prefixes, tail)
 }
 
 /// HS `nilBeside`.
-fn nil_beside(g: bool, p: Doc) -> Doc {
-    match p {
-        Doc::Empty => Doc::Empty,
-        Doc::Nest(_, inner) => nil_beside(g, (*inner).clone()),
-        Doc::LazyUnion(p1, r) => lazy_union(nil_beside(g, (*p1).clone()), move || {
-            nil_beside(g, (*r.force()).clone())
-        }),
-        other => {
-            if g {
-                text_beside_(Rc::from(" "), 1, other)
-            } else {
-                other
+fn nil_beside(g: bool, mut p: Doc) -> Doc {
+    let mut prefixes = Vec::new();
+    let tail = loop {
+        p = match p {
+            Doc::Suspend(lazy) => break suspend_build(lazy, Build::NilBeside(g)),
+            Doc::Empty => break Doc::Empty,
+            Doc::Nest(_, inner) => (*inner).clone(),
+            Doc::LazyUnion(left, right) => {
+                prefixes.push(Prefix::Choice(LazyRight::build(
+                    Input::Lazy(right),
+                    Build::NilBeside(g),
+                )));
+                (*left).clone()
             }
+            other => {
+                break if g {
+                    text_beside_(Rc::from(" "), 1, other)
+                } else {
+                    other
+                }
+            }
+        };
+    };
+    rebuild(prefixes, tail)
+}
+
+// A sufficient (not necessary) invariant for singleton fill to be an identity:
+// no text node on the filled spine has an immediately nested tail. Fill only
+// normalizes the left choice spine: line tails and right alternatives are
+// composed above Empty, which is an identity. Construction plans certify some
+// suspended spines without forcing them; an unknown plan stays unclassified.
+// Compute the spine property once per shared node; construction cursors
+// invalidate the cache before mutation.
+fn fill_normalized(doc: &Doc) -> bool {
+    fn cached(node: &DocRef) -> bool {
+        if let Some(clean) = node.1.get() {
+            return clean;
         }
+        let clean = crate::stack::ensure_sufficient_stack(|| fill_normalized(node));
+        node.1.set(Some(clean));
+        clean
+    }
+    match doc {
+        Doc::Empty | Doc::NoDoc => true,
+        Doc::TextBeside(_, _, p) => match &***p {
+            Doc::Nest(..) => false,
+            Doc::Suspend(lazy) => lazy.fill_normalized(true),
+            _ => cached(p),
+        },
+        Doc::Nest(_, p) => cached(p),
+        Doc::NilAbove(_) => true,
+        // mkUnion removes an Empty left branch, including in raw public enum
+        // construction. Such a choice still requires normalization.
+        Doc::Union(p, _) | Doc::LazyUnion(p, _) => !matches!(&***p, Doc::Empty) && cached(p),
+        Doc::Suspend(lazy) => lazy.fill_normalized(false),
+        Doc::Deferred(_) => false,
+    }
+}
+
+// fillNB additionally removes leading nests. A suspended plan needs a separate
+// certificate here because its eventual first constructor has not been exposed.
+fn fill_inline_normalized(doc: &Doc) -> bool {
+    match doc {
+        Doc::Nest(..) => false,
+        Doc::Suspend(lazy) => lazy.fill_normalized(true),
+        _ => fill_normalized(doc),
     }
 }
 
@@ -1038,80 +1585,140 @@ fn fill(g: bool, mut ds: Vec<Doc>) -> Doc {
     if ds.is_empty() {
         return Doc::Empty;
     }
-    let first = ds.remove(0);
+    // Raw mid-line nests still need the original fill normalization. Cache
+    // the structural invariant on shared tails so repeated unary fills stay linear.
+    if ds.len() == 1 && fill_normalized(&ds[0]) {
+        return ds.pop().unwrap();
+    }
+    fill_list(g, DocList::new(ds))
+}
+
+fn fill_list(g: bool, mut ds: DocList) -> Doc {
+    let Some(first) = ds.pop_front() else {
+        return Doc::Empty;
+    };
+    if ds.is_empty() && fill_normalized(&first) {
+        return first;
+    }
     fill1(g, reduce_doc(first), 0, ds)
 }
 
-/// HS `fill1`.
-fn fill1(g: bool, p: Doc, k: isize, ys: Vec<Doc>) -> Doc {
-    match p {
-        Doc::NoDoc => Doc::NoDoc,
-        Doc::Union(p, q) => {
-            // Keep the right (line-breaking) branch lazy — it re-fills the
-            // remaining items and is only needed if the flat layout fails.
-            let left = fill1(g, (*p).clone(), k, ys.clone());
-            lazy_union(left, move || {
-                above_nest((*q).clone(), false, k, fill(g, ys))
-            })
-        }
-        // Keep the right branch a thunk (see `sep1`/`get`): forcing it eagerly
-        // here degenerates fill reduction to O(n²) on large docs.
-        Doc::LazyUnion(p, rt) => {
-            let left = fill1(g, (*p).clone(), k, ys.clone());
-            lazy_union(left, move || {
-                above_nest((*rt.force()).clone(), false, k, fill(g, ys))
-            })
-        }
-        Doc::Deferred(c) => fill1(g, (*c.force()).clone(), k, ys),
-        Doc::Empty => mk_nest(k, fill(g, ys)),
-        Doc::Nest(n, inner) => nest_(n, fill1(g, (*inner).clone(), k - n, ys)),
-        Doc::NilAbove(p) => nil_above_(above_nest((*p).clone(), false, k, fill(g, ys))),
-        Doc::TextBeside(s, w, p) => {
-            text_beside_(s, w, fill_nb(g, (*p).clone(), k - w as isize, ys))
-        }
-    }
+/// HS `fill1` / `fillNB` / `fillNBE` (pretty-1.1.3.6 HughesPJ.hs:824+).
+/// Like sep1, the inline state elides nests after text. Continuations also
+/// retain the operations awaiting a fill of the remaining list.
+fn fill1(g: bool, p: Doc, k: isize, ys: DocList) -> Doc {
+    fill_resume(g, p, k, ys, false)
 }
 
-/// HS `fillNB`.
-fn fill_nb(g: bool, p: Doc, k: isize, ys: Vec<Doc>) -> Doc {
-    match p {
-        Doc::Nest(_, inner) => fill_nb(g, (*inner).clone(), k, ys),
-        Doc::Empty => {
-            if ys.is_empty() {
-                return Doc::Empty;
-            }
-            // Skip leading Empty ys.
-            let mut iter = ys.into_iter();
-            let y_first = loop {
-                match iter.next() {
-                    None => return Doc::Empty,
-                    Some(Doc::Empty) => continue,
-                    Some(d) => break d,
+#[cfg(test)]
+thread_local! {
+    static FILL_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn fill_resume(g: bool, mut p: Doc, mut k: isize, mut ys: DocList, mut inline: bool) -> Doc {
+    let mut prefixes = Vec::new();
+    let tail = loop {
+        #[cfg(test)]
+        FILL_STEPS.set(FILL_STEPS.get() + 1);
+        if let Doc::Suspend(lazy) = p {
+            break suspend_build(lazy, Build::Fill(g, k, ys, inline));
+        }
+        if inline {
+            match p {
+                Doc::Nest(_, inner) => {
+                    p = (*inner).clone();
+                    continue;
                 }
-            };
-            let rest: Vec<Doc> = iter.collect();
-            fill_nbe(g, k, y_first, rest)
+                Doc::Empty => {
+                    while matches!(ys.as_slice().first(), Some(Doc::Empty)) {
+                        ys.pop_front();
+                    }
+                    if ys.is_empty() {
+                        break Doc::Empty;
+                    }
+                    let right_items = ys.clone();
+                    // Defer both suffixes. Building the whole flat suffix here
+                    // would repeat that work at every selected line break.
+                    let right = LazyRight::op(LazyState::FillBreak {
+                        g,
+                        k,
+                        items: right_items,
+                    });
+                    // Keep ordinary small fills on the direct path. Eagerly
+                    // finishing a bounded suffix cannot reintroduce quadratic
+                    // growth with the length of a large paragraph.
+                    if ys.len() <= 16 {
+                        let next = ys.pop_front().unwrap();
+                        p = elide_nest(one_liner(reduce_doc(next)));
+                        prefixes.push(Prefix::Choice(right));
+                        prefixes.push(Prefix::BesideGap(g));
+                        k -= isize::from(g);
+                        inline = false;
+                        continue;
+                    }
+                    let left = Doc::Suspend(LazyRight::op(LazyState::FillNext { g, k, items: ys }));
+                    break lazy_union(left, right);
+                }
+                _ => inline = false,
+            }
         }
-        other => fill1(g, other, k, ys),
-    }
-}
-
-/// HS `fillNBE` (pretty-1.1.3.6 HughesPJ.hs:824+):
-///   fillNBE g k y ys
-///     = nilBeside g (fill1 g ((elideNest . oneLiner . reduceDoc) y) k1 ys)
-///         `mkUnion` nilAboveNest False k (fill g (y:ys))
-///     where k1 | g = k - 1 | otherwise = k
-fn fill_nbe(g: bool, k: isize, y: Doc, ys: Vec<Doc>) -> Doc {
-    let k1 = if g { k - 1 } else { k };
-    let inner_y = elide_nest(one_liner(reduce_doc(y.clone())));
-    let left = nil_beside(g, fill1(g, inner_y, k1, ys.clone()));
-    // Right branch (`fill g (y:ys)`) re-fills the whole remaining list —
-    // keep it lazy so it is only built when the flat layout doesn't fit.
-    lazy_union(left, move || {
-        let mut y_and_ys = vec![y];
-        y_and_ys.extend(ys);
-        nil_above_nest(false, k, fill(g, y_and_ys))
-    })
+        p = match p {
+            Doc::NoDoc => break Doc::NoDoc,
+            Doc::Union(left, right) => {
+                let right_items = ys.clone();
+                prefixes.push(Prefix::Choice(LazyRight::build(
+                    Input::Ready(right),
+                    Build::Above(false, k, Tail::Fill(g, right_items)),
+                )));
+                (*left).clone()
+            }
+            Doc::LazyUnion(left, right) => {
+                let right_items = ys.clone();
+                prefixes.push(Prefix::Choice(LazyRight::build(
+                    Input::Lazy(right),
+                    Build::Above(false, k, Tail::Fill(g, right_items)),
+                )));
+                (*left).clone()
+            }
+            Doc::Deferred(c) => (*c.force()).clone(),
+            Doc::Suspend(_) => unreachable!("handled above"),
+            Doc::Nest(indent, inner) => {
+                prefixes.push(Prefix::Nest(indent));
+                k -= indent;
+                (*inner).clone()
+            }
+            Doc::TextBeside(text, width, rest) => {
+                prefixes.push(Prefix::Text(text, width));
+                k -= width as isize;
+                inline = true;
+                (*rest).clone()
+            }
+            terminal => {
+                match terminal {
+                    Doc::Empty => {
+                        if k != 0 || !matches!(prefixes.last(), Some(Prefix::NormalizedNest(0))) {
+                            prefixes.push(Prefix::NormalizedNest(k));
+                        }
+                    }
+                    Doc::NilAbove(rest) => {
+                        prefixes.push(Prefix::Line);
+                        prefixes.push(Prefix::Above(Box::new((*rest).clone()), k));
+                    }
+                    _ => unreachable!(),
+                }
+                // Resume fill(g, ys), preserving its empty/singleton cases.
+                match ys.len() {
+                    0 => break Doc::Empty,
+                    1 if fill_normalized(&ys.as_slice()[0]) => break ys.pop_front().unwrap(),
+                    _ => {
+                        k = 0;
+                        reduce_doc(ys.pop_front().unwrap())
+                    }
+                }
+            }
+        };
+    };
+    rebuild(prefixes, tail)
 }
 
 // ============================================================================
@@ -1123,116 +1730,261 @@ fn get_doc(w: isize, r: isize, d: &Doc) -> Doc {
     get(w, r, d.clone())
 }
 
-/// HS `get w doc` (line-start case).
-///
-/// LAZINESS (the whole point — see `Doc::Deferred`): every recursive
-/// reduction is wrapped in `defer`, so this returns only the HEAD
-/// constructor of the reduced doc; the tail is a memoised thunk forced on
-/// demand.  `fits` (which stops at the first `NilAbove`) therefore forces
-/// only the first line of a `Union`'s left branch before deciding, and the
-/// unchosen alternatives are never materialised.  This mirrors HS's
-/// call-by-need `best` and keeps reduction O(output) instead of O(2^depth).
+/// `get` and `get1` differ only in whether text has already been emitted on
+/// this line. Keep that state with each deferred reduction.
+#[derive(Clone, Copy)]
+struct Layout {
+    w: isize,
+    r: isize,
+    sl: Option<isize>,
+}
+
+impl Layout {
+    fn defer(self, doc: DocRef) -> Doc {
+        Doc::Deferred(LazyRight::op(LazyState::Layout(self, doc)))
+    }
+}
+
+impl Layout {
+    // Most reductions expose a text/line head immediately. Avoid allocating an
+    // evaluator stack for those steps; only choices/dependencies need frames.
+    fn head(self, mut doc: Doc) -> Result<Doc, Doc> {
+        let Self { w, r, sl } = self;
+        loop {
+            return Ok(match doc {
+                Doc::Empty | Doc::NoDoc => doc,
+                Doc::NilAbove(p) => nil_above_(
+                    Self {
+                        w: w - sl.unwrap_or(0),
+                        r,
+                        sl: None,
+                    }
+                    .defer(p),
+                ),
+                Doc::TextBeside(s, sw, p) => text_beside_(
+                    s,
+                    sw,
+                    Self {
+                        w,
+                        r,
+                        sl: Some(sl.unwrap_or(0) + sw as isize),
+                    }
+                    .defer(p),
+                ),
+                Doc::Nest(k, p) => {
+                    if sl.is_some() {
+                        doc = (*p).clone();
+                        continue;
+                    }
+                    nest_(
+                        k,
+                        Self {
+                            w: w - k,
+                            r,
+                            sl: None,
+                        }
+                        .defer(p),
+                    )
+                }
+                other => return Err(other),
+            });
+        }
+    }
+    fn run(self, doc: Doc) -> Doc {
+        match self.head(doc) {
+            Ok(head) => head,
+            Err(doc) => (*evaluate(Task::Layout(self, rc(doc))).doc()).clone(),
+        }
+    }
+}
+
+enum Task {
+    Force(Rc<LazyRight>),
+    Memoize(Rc<LazyRight>),
+    Build(Box<Build>),
+    Layout(Layout, DocRef),
+    LayoutForced(Layout),
+    Fits(isize, DocRef),
+    FitsForced(isize),
+    Pick(Layout, Input),
+    PickFitted(Layout, Input, DocRef),
+}
+
+enum Value {
+    Doc(DocRef),
+    Fits(bool),
+}
+
+impl Value {
+    fn doc(&mut self) -> DocRef {
+        match std::mem::replace(self, Self::Fits(false)) {
+            Self::Doc(doc) => doc,
+            Self::Fits(_) => unreachable!("expected a document"),
+        }
+    }
+}
+
+/// Evaluate only the requested head/first line. A choice saves its continuation
+/// before evaluating the left branch; its right branch stays untouched unless
+/// that line fails to fit. Lazy dependencies use this same worklist, so forcing
+/// one continuation never recursively forces another.
+fn evaluate(task: Task) -> Value {
+    let mut tasks = vec![task];
+    let mut value = Value::Fits(false);
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Force(lazy) => {
+                if let LazyState::Ready(doc) = &*lazy.state.borrow() {
+                    value = Value::Doc(doc.clone());
+                    continue;
+                }
+                let op = std::mem::replace(&mut *lazy.state.borrow_mut(), LazyState::Forcing);
+                tasks.push(Task::Memoize(lazy));
+                match op {
+                    LazyState::Forcing => panic!("LazyRight forced while already forcing (cycle)"),
+                    LazyState::Ready(_) => unreachable!("cached value handled above"),
+                    LazyState::Build(input, build) => {
+                        tasks.push(Task::Build(build));
+                        match input {
+                            Input::Ready(doc) => value = Value::Doc(doc),
+                            Input::Lazy(lazy) => tasks.push(Task::Force(lazy)),
+                        }
+                    }
+                    LazyState::FillBreak { g, k, items } => {
+                        value = Value::Doc(rc(nil_above_nest(false, k, fill_list(g, items))));
+                    }
+                    LazyState::FillNext { g, k, mut items } => {
+                        let first = items.pop_front().expect("nonempty fill suffix");
+                        let first = elide_nest(one_liner(reduce_doc(first)));
+                        value = Value::Doc(rc(nil_beside(
+                            g,
+                            fill1(g, first, k - isize::from(g), items),
+                        )));
+                    }
+                    LazyState::Layout(layout, doc) => tasks.push(Task::Layout(layout, doc)),
+                    #[cfg(test)]
+                    LazyState::Custom(f) => value = Value::Doc(rc(f())),
+                }
+            }
+            Task::Memoize(lazy) => {
+                let doc = value.doc();
+                *lazy.state.borrow_mut() = LazyState::Ready(doc.clone());
+                value = Value::Doc(doc);
+            }
+            Task::Build(build) => {
+                let doc = (*value.doc()).clone();
+                value = Value::Doc(rc(match *build {
+                    Build::Beside(g, right) => beside_inner(doc, g, right),
+                    Build::Above(g, k, tail) => {
+                        let right = match tail {
+                            Tail::Doc(doc) => doc,
+                            Tail::Sep(items) => {
+                                reduce_doc(vcat_iter(items.as_slice().iter().cloned()))
+                            }
+                            Tail::Fill(g, items) => fill_list(g, items),
+                        };
+                        above_nest(doc, g, k, right)
+                    }
+                    Build::NilAbove(g, k) => nil_above_nest(g, k, doc),
+                    Build::NilBeside(g) => nil_beside(g, doc),
+                    Build::Nest(k) => mk_nest(k, doc),
+                    Build::ElideNest => elide_nest(doc),
+                    Build::OneLiner => one_liner(doc),
+                    Build::Choice(right) => lazy_union(doc, right),
+                    Build::Sep(g, k, items, inline) => sep_resume(g, doc, k, items, inline),
+                    Build::Fill(g, k, items, inline) => fill_resume(g, doc, k, items, inline),
+                }));
+            }
+            Task::LayoutForced(layout) => tasks.push(Task::Layout(layout, value.doc())),
+            Task::Layout(layout, doc) => match layout.head((*doc).clone()) {
+                Ok(head) => {
+                    value = Value::Doc(rc(head));
+                    continue;
+                }
+                Err(doc) => match doc {
+                    Doc::Union(p, q) => {
+                        tasks.push(Task::Pick(layout, Input::Ready(q)));
+                        tasks.push(Task::Layout(layout, p));
+                    }
+                    Doc::LazyUnion(p, q) => {
+                        tasks.push(Task::Pick(layout, Input::Lazy(q)));
+                        tasks.push(Task::Layout(layout, p));
+                    }
+                    Doc::Deferred(lazy) | Doc::Suspend(lazy) => {
+                        tasks.push(Task::LayoutForced(layout));
+                        tasks.push(Task::Force(lazy));
+                    }
+                    _ => unreachable!("head handled non-choice constructors"),
+                },
+            },
+            Task::Pick(layout, right) => {
+                let left = value.doc();
+                tasks.push(Task::PickFitted(layout, right, left.clone()));
+                tasks.push(Task::Fits(
+                    layout.w.min(layout.r) - layout.sl.unwrap_or(0),
+                    left,
+                ));
+            }
+            Task::PickFitted(layout, right, left) => {
+                if matches!(value, Value::Fits(true)) {
+                    value = Value::Doc(left);
+                } else {
+                    match right {
+                        Input::Ready(doc) => tasks.push(Task::Layout(layout, doc)),
+                        Input::Lazy(lazy) => {
+                            tasks.push(Task::LayoutForced(layout));
+                            tasks.push(Task::Force(lazy));
+                        }
+                    }
+                }
+            }
+            Task::FitsForced(n) => tasks.push(Task::Fits(n, value.doc())),
+            Task::Fits(mut n, doc) => {
+                let mut current: &Doc = &doc;
+                loop {
+                    if n < 0 {
+                        value = Value::Fits(false);
+                        break;
+                    }
+                    match current {
+                        Doc::NoDoc => {
+                            value = Value::Fits(false);
+                            break;
+                        }
+                        Doc::Empty | Doc::NilAbove(_) => {
+                            value = Value::Fits(true);
+                            break;
+                        }
+                        Doc::TextBeside(_, width, p) => {
+                            n -= *width as isize;
+                            current = p;
+                        }
+                        Doc::Nest(_, p) | Doc::Union(p, _) | Doc::LazyUnion(p, _) => current = p,
+                        Doc::Deferred(lazy) | Doc::Suspend(lazy) => {
+                            tasks.push(Task::FitsForced(n));
+                            tasks.push(Task::Force(lazy.clone()));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    value
+}
+
 fn get(w: isize, r: isize, d: Doc) -> Doc {
-    match d {
-        Doc::Empty => Doc::Empty,
-        Doc::NoDoc => Doc::NoDoc,
-        Doc::NilAbove(p) => nil_above_(defer(move || get(w, r, (*p).clone()))),
-        Doc::TextBeside(s, sw, p) => {
-            let len = sw as isize;
-            text_beside_(s, sw, defer(move || get1(w, r, len, (*p).clone())))
-        }
-        Doc::Nest(k, p) => nest_(k, defer(move || get(w - k, r, (*p).clone()))),
-        Doc::Union(p, q) => {
-            // nicest1 w r 0 (get w p) (get w q): only `get` the flat branch
-            // `p` (returns its head + deferred tail); `fits` forces just its
-            // first line.  The line-breaking branch `q` is reduced ONLY when
-            // `p` overflows.
-            let p1 = get(w, r, (*p).clone());
-            let budget = std::cmp::min(w, r); // sl = 0 here
-            if fits(budget, &p1) {
-                p1
-            } else {
-                get(w, r, (*q).clone())
-            }
-        }
-        // CRITICAL (perf): a `LazyUnion` must NOT be `force()`d at
-        // the match head — that RUNS the right-branch thunk (an
-        // `aboveNest`/`fill` reconstruction over the remaining doc) even
-        // when the flat branch fits, degenerating reduction to O(n²) on
-        // large docs (the one-Doc web constraint-system pane).  HS's
-        // call-by-need `best` evaluates `q` only when `p` overflows;
-        // mirror that by forcing the thunk exclusively on the failure path.
-        Doc::LazyUnion(p, rt) => {
-            let p1 = get(w, r, (*p).clone());
-            let budget = std::cmp::min(w, r); // sl = 0 here
-            if fits(budget, &p1) {
-                p1
-            } else {
-                get(w, r, (*rt.force()).clone())
-            }
-        }
-        Doc::Deferred(c) => get(w, r, (*c.force()).clone()),
-    }
+    Layout { w, r, sl: None }.run(d)
 }
 
-/// HS `get1 w sl doc` (in-line, after `sl` cols of text).
 fn get1(w: isize, r: isize, sl: isize, d: Doc) -> Doc {
-    match d {
-        Doc::Empty => Doc::Empty,
-        Doc::NoDoc => Doc::NoDoc,
-        Doc::NilAbove(p) => {
-            // After a line break the next line's budget shrinks by `sl`.
-            nil_above_(defer(move || get(w - sl, r, (*p).clone())))
-        }
-        Doc::TextBeside(s, sw, p) => {
-            let len = sw as isize;
-            text_beside_(s, sw, defer(move || get1(w, r, sl + len, (*p).clone())))
-        }
-        // Nest is a no-op while we're already mid-line.
-        Doc::Nest(_k, p) => get1(w, r, sl, (*p).clone()),
-        Doc::Union(p, q) => {
-            let p1 = get1(w, r, sl, (*p).clone());
-            let budget = std::cmp::min(w, r) - sl;
-            if fits(budget, &p1) {
-                p1
-            } else {
-                get1(w, r, sl, (*q).clone())
-            }
-        }
-        // See `get`'s LazyUnion arm: force the right branch ONLY when the
-        // flat branch overflows (HS call-by-need).
-        Doc::LazyUnion(p, rt) => {
-            let p1 = get1(w, r, sl, (*p).clone());
-            let budget = std::cmp::min(w, r) - sl;
-            if fits(budget, &p1) {
-                p1
-            } else {
-                get1(w, r, sl, (*rt.force()).clone())
-            }
-        }
-        Doc::Deferred(c) => get1(w, r, sl, (*c.force()).clone()),
-    }
+    Layout { w, r, sl: Some(sl) }.run(d)
 }
 
-/// HS `fits`.
+/// HS `fits`: inspect only the first line of the flat branch.
+#[cfg(test)]
 fn fits(n: isize, d: &Doc) -> bool {
-    if n < 0 {
-        return false;
-    }
-    match d {
-        Doc::NoDoc => false,
-        Doc::Empty => true,
-        Doc::NilAbove(_) => true,
-        Doc::TextBeside(_, w, p) => fits(n - *w as isize, p),
-        Doc::Nest(_, p) => fits(n, p),
-        Doc::Union(p, _) => fits(n, p), // pre-reduced, but be defensive
-        // Only the left (flat) branch matters for fits; never force `q`.
-        Doc::LazyUnion(p, _) => fits(n, p),
-        // A deferred reduction tail: force it (memoised) and continue.
-        // `fits` stops at the first `NilAbove`, so this only ever forces
-        // the first line of a reduced branch.
-        Doc::Deferred(c) => fits(n, &c.force()),
-    }
+    matches!(evaluate(Task::Fits(n, rc(d.clone()))), Value::Fits(true))
 }
 
 // ============================================================================
@@ -1297,7 +2049,7 @@ fn lay_loop(k0: isize, d: &Doc, out: &mut String, line_start0: bool) {
                 line_start = false;
                 (*p).clone()
             }
-            Doc::Deferred(c) => (*c.force()).clone(),
+            Doc::Deferred(c) | Doc::Suspend(c) => (*c.force()).clone(),
             Doc::Union(_, _) => panic!("pretty_hpj::lay: Union — best did not reduce"),
             Doc::LazyUnion(_, _) => panic!("pretty_hpj::lay: LazyUnion — best did not reduce"),
         };
@@ -1399,3 +2151,7 @@ mod tests;
 #[cfg(test)]
 #[path = "pretty_hpj_sep_nb_regression_tests.rs"]
 mod sep_nb_regression_tests;
+
+#[cfg(test)]
+#[path = "pretty_hpj_fill_tests.rs"]
+mod fill_tests;
