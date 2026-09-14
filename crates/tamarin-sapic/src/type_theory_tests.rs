@@ -231,34 +231,34 @@ rule (modulo E) p_0_[color=#ffffff, process=\"|\", issapicrule,
                      role='Process']:
    [ State_( ) ] --> [ State_1( ), State_2( ) ]
 
-rule (modulo E) newxlol_0_1[color=#ffffff, process=\"new x.2:lol;\",
-                            issapicrule, role='Process']:
+rule (modulo E) newx_0_1[color=#ffffff, process=\"new x.2;\", issapicrule,
+                         role='Process']:
    [ State_1( ), Fr( x.2 ) ] --> [ State_11( x.2 ) ]
 
-rule (modulo E) outxlol_0_11[color=#ffffff, process=\"out(x.2:lol);\",
-                             issapicrule, role='Process']:
+rule (modulo E) outx_0_11[color=#ffffff, process=\"out(x.2);\",
+                          issapicrule, role='Process']:
    [ State_11( x.2 ) ] --> [ State_111( x.2 ), Out( x.2 ) ]
 
 rule (modulo E) p_0_111[color=#ffffff, process=\"0\", issapicrule,
                         role='Process']:
    [ State_111( x.2 ) ] --> [ ]
 
-rule (modulo E) newxlol_0_2[color=#ffffff, process=\"new x.3:lol;\",
-                            issapicrule, role='Process']:
+rule (modulo E) newx_0_2[color=#ffffff, process=\"new x.3;\", issapicrule,
+                         role='Process']:
    [ State_2( ), Fr( x.3 ) ] --> [ State_21( x.3 ) ]
 
-rule (modulo E) newxlol_0_21[color=#ffffff, process=\"new x.4:lol;\",
-                             issapicrule, role='Process']:
+rule (modulo E) newx_0_21[color=#ffffff, process=\"new x.4;\", issapicrule,
+                          role='Process']:
    [ State_21( x.3 ), Fr( x.4 ) ] --> [ State_211( x.3, x.4 ) ]
 
-rule (modulo E) eventRunxlolxlol_0_211[color=#ffffff,
-                                       process=\"event Run( x.3:lol, x.4:lol );\", issapicrule, role='Process']:
+rule (modulo E) eventRunxx_0_211[color=#ffffff,
+                                 process=\"event Run( x.3, x.4 );\", issapicrule, role='Process']:
    [ State_211( x.3, x.4 ) ]
   --[ Run( x.3, x.4 ) ]->
    [ State_2111( x.3, x.4 ) ]
 
-rule (modulo E) outxlolxlol_0_2111[color=#ffffff,
-                                   process=\"out(<x.3:lol, x.4:lol>);\", issapicrule, role='Process']:
+rule (modulo E) outxx_0_2111[color=#ffffff, process=\"out(<x.3, x.4>);\",
+                             issapicrule, role='Process']:
    [ State_2111( x.3, x.4 ) ]
   -->
    [ State_21111( x.3, x.4 ), Out( <x.3, x.4> ) ]
@@ -283,6 +283,94 @@ Compiled at: 2026-07-31 12:54:17.256348115 UTC
 
 end";
     assert_eq!(render_msr(&elaborated), expected);
+}
+
+const TYPED_PROCESSES: &[&str] = &[
+    "new s; lock s; out(f(s)); unlock s; event Done()",
+    "lock $s; out(<f($s), g($s)>); unlock $s; event Done()",
+    "new s; insert s,'init'; lock s; lookup s as x in (out(<f(s),f(x)>); insert s,x; unlock s; event Done())",
+    "in(x); let y = x in out(<y, f(y)>); event Done()",
+    "in(x:a); out(f(x)); in(=x:a); event Done()",
+    "in(x); if x = 'a' then (out(f(x)); event Done()) else out(x)",
+    "in(x:a); [ ] --[ Ev(x:a), _restrict(Ex y. y = x:a) ]-> [ ]; out(f(x))",
+    "in(x); out(f(x)); (out(x) | out(x))",
+    "new x; out(f(x)); (new x; out(g(x)))",
+    "new x; (out(f(x)); out(x)) @ x",
+];
+
+#[test]
+fn typed_output_resolves_bound_variables_without_changing_inference() {
+    use crate::typing::{init_te_from_sig, type_and_rename_process_in};
+    use tamarin_term::lterm::LSort;
+    use tamarin_theory::sapic::{for_each_process, frees_sapic_term};
+
+    for process in TYPED_PROCESSES {
+        let mut theory = build(&format!(
+            "theory T begin functions: f(a):a, g(b):b process: {process} end"
+        ));
+        let mut before =
+            init_te_from_sig(&theory.signature, &collect_user_fun_typings(&theory)).unwrap();
+        let raw =
+            type_and_rename_process_in(&mut before, theory.processes().next().unwrap()).unwrap();
+        let after = type_theory_env(&mut theory).unwrap();
+        assert_eq!(before.vars, after.vars);
+        assert_eq!(before.funs, after.funs);
+        assert_eq!(before.events, after.events);
+        let output = theory.processes().next().unwrap();
+        let check = |v: &SapicLVar| {
+            if v.var.sort != LSort::Pub {
+                assert_eq!(Some(&v.stype), after.vars.get(&v.var), "{process}: {v}");
+            }
+        };
+        vars_proc(output).iter().for_each(check);
+        for_each_process(output, &mut |node| {
+            if let Some(location) = &node.annotation().location {
+                frees_sapic_term(location).iter().for_each(check);
+            }
+        });
+        let publics = |p: &PlainProcess| {
+            vars_proc(p).into_iter()
+                .filter(|v| v.var.sort == LSort::Pub).collect::<Vec<_>>()
+        };
+        assert_eq!(publics(&raw), publics(output));
+        let lower = crate::annotation::lower_for_translation::<tamarin_term::lterm::LVar>;
+        assert_eq!(lower(&raw), lower(output), "{process}");
+    }
+}
+
+/// Type inference may annotate occurrences of one variable differently. MSR
+/// translation must be invariant under those annotations, including its state
+/// optimisation, pattern substitutions, formulas and generated rule names.
+#[test]
+fn msr_translation_is_independent_of_type_annotations() {
+    for process in TYPED_PROCESSES {
+        for options in ["", "options: translation-state-optimisation"] {
+            let translate = |functions| {
+                let source = format!(
+                    "theory T begin functions: {functions} {options} process: {process} end"
+                );
+                let mut theory = build(&source);
+                let lowered = crate::annotation::lower_for_translation::<tamarin_term::lterm::LVar>(
+                    theory.processes().next().unwrap(),
+                );
+                assert!(vars_proc(&lowered).iter().all(|v| v.stype.is_none()));
+                crate::apply::apply_sapic(&mut theory, false)
+                    .unwrap_or_else(|e| panic!("{source}: {e:?}"));
+                render_msr(&theory)
+            };
+            assert_eq!(
+                translate("f(a):a, g(b):b"),
+                translate("f/1, g/1"),
+                "{options}: {process}"
+            );
+        }
+    }
+
+    // Erasure follows checking: incompatible types of a bound variable must
+    // still be rejected. Public variables above remain contextually typed.
+    let mut conflict = build("theory T begin functions: f(a):a, g(b):b process: in(x); out(<f(x),g(x)>) end");
+    assert!(crate::apply::apply_sapic(&mut conflict, false)
+        .unwrap_err().message.contains("SAPIC typing"));
 }
 
 /// `examples/sapic/fast/basic/let-blocks3.spthy` shape: a parameterless
@@ -414,4 +502,32 @@ end
     ] {
         assert!(out.contains(block), "missing `{block}` in:\n{out}");
     }
+}
+
+#[test]
+fn public_typing_handles_deep_definitions_and_errors_on_small_stack() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        let term = "f(".repeat(8192) + "x" + &")".repeat(8192);
+        for formals in ["(x)", ""] {
+            for incompatible in [false, true] {
+                let output = if incompatible {
+                    term.replace("x", "g(x)")
+                } else {
+                    term.clone()
+                };
+                let source = format!("theory T begin functions: f(bitstring):bitstring, g(wrong):wrong let P{formals} = ({}out({output}); out(x)) @ 'site' process: in(x); P{formals} end", "!".repeat(8192));
+                let mut theory = build(&source);
+                let result = type_theory_env(&mut theory);
+                assert_eq!(result.is_ok(), !incompatible);
+                if result.is_ok() {
+                    let definition = theory.process_defs().next().unwrap();
+                    for v in vars_proc(&definition.body)
+                        .iter().chain(definition.vars.as_ref().unwrap())
+                    {
+                        assert_eq!(v.stype.as_deref(), Some("bitstring"));
+                    }
+                }
+            }
+        }
+    });
 }
