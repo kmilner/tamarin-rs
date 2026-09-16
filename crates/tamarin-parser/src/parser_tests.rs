@@ -3,6 +3,7 @@
 //   scripts/gen_license_headers.py --authors <this file>
 
 use super::*;
+use crate::parse_error::{ErrorDetails, MAX_DIAGNOSTIC_MESSAGE_CHARS};
 
 #[test]
 fn diff_theory_validates_but_does_not_lower_diff_proofs() {
@@ -690,13 +691,10 @@ fn fact_annotation_accepts_double_plus() {
     }
 }
 
-// ---- `read_until_next_top_level`: where a raw capture ends ----------------
+// ---- Stored proof boundaries and source preservation ---------------------
 
-/// The raw text that `read_until_next_top_level` captured for the proof
-/// skeleton of the theory.  This function also asserts that the theory holds
-/// exactly one lemma.  A capture that stops early leaves the rest of the
-/// text, and the parser then reads that rest as more theory items.  So the
-/// lemma count is part of every check below.
+/// The source text consumed by the theory's single lemma proof. Checking the
+/// lemma count also catches proof tokens accidentally parsed as theory items.
 fn lemma_proof_raw(thy: &Theory) -> &str {
     let mut lemmas = thy.items.iter().filter_map(|it| match it {
         TheoryItem::Lemma(l) => Some(l),
@@ -715,10 +713,107 @@ fn malformed_stored_proof_fails_theory_parse() {
 
     let src = "theory T begin\nlemma L: \"T\"\nby sorry trailing\nend";
     let err = parse_theory(src, &[]).expect_err("trailing proof text must not be discarded");
-    assert!(err
-        .diagnostic_notes()
-        .iter()
-        .any(|note| note.contains("expected end of proof")));
+    assert_eq!(err.span().start, src.find("trailing").unwrap());
+    assert!(matches!(
+        err.kind(),
+        ParseErrorKind::UnknownItem { item, context: ParseContext::TheoryItem }
+            if item == "trailing"
+    ));
+}
+
+#[test]
+fn stored_proof_preserves_raw_and_lemma_text_whitespace() {
+    let lemma_text = "lemma L:\t\"T\"\n  by\t sorry \n \t";
+    let source = format!("theory T begin\n{lemma_text}rule R: [] --> []\nend");
+    let theory = parse_theory(&source, &[]).expect("proof followed by a rule");
+    let TheoryItem::Lemma(lemma) = &theory.items[0] else {
+        panic!("expected lemma");
+    };
+    assert_eq!(lemma.proof.as_ref().unwrap().raw, "by\t sorry \n \t");
+    assert_eq!(lemma.plaintext, lemma_text);
+    assert!(matches!(&theory.items[1], TheoryItem::Rule(rule) if rule.name == "R"));
+}
+
+#[test]
+fn completed_proofs_keep_following_theory_items_separate() {
+    for (is_diff, declaration, proof) in [
+        (
+            false,
+            "lemma L: \"T\"\n",
+            "induction\n  case rule\n  by sorry\nqed \t/* proof tail */\n  ",
+        ),
+        (
+            true,
+            "diffLemma L:\n",
+            "rule-equivalence\n  case rule\n  MIRRORED\nqed \t/* proof tail */\n  ",
+        ),
+    ] {
+        for (following, item_kind) in [
+            ("text{* proof documentation *}\n", "comment"),
+            ("lemma Next: \"T\" by sorry\n", "lemma"),
+            ("rule Next: [] --> []\n", "rule"),
+            ("#ifdef LIVE\nrule Next: [] --> []\n#endif\n", "rule"),
+        ] {
+            let source = format!("theory T begin\n{declaration}{proof}{following}end");
+            let theory = if is_diff {
+                parse_diff_theory(&source, &["LIVE"])
+            } else {
+                parse_theory(&source, &["LIVE"])
+            }
+            .unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            assert_eq!(theory.items.len(), 2, "{source}");
+            let stored = match &theory.items[0] {
+                TheoryItem::Lemma(lemma) => lemma.proof.as_ref().unwrap(),
+                TheoryItem::DiffLemma(lemma) => lemma.proof.as_ref().unwrap(),
+                other => panic!("expected proof-bearing lemma, got {other:?}"),
+            };
+            assert_eq!(stored.raw, proof, "{source}");
+            assert_eq!(stored.tree.is_none(), is_diff);
+            match (&theory.items[1], item_kind) {
+                (TheoryItem::FormalComment { header, body }, "comment") => {
+                    assert_eq!(header, "text");
+                    assert_eq!(body, " proof documentation ");
+                }
+                (TheoryItem::Lemma(lemma), "lemma") => assert_eq!(lemma.name, "Next"),
+                (TheoryItem::Rule(rule), "rule") => assert_eq!(rule.name, "Next"),
+                (other, _) => panic!("expected {item_kind}, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn incomplete_proofs_do_not_finish_at_following_theory_items() {
+    for (is_diff, declaration, proof) in [
+        (false, "lemma L: \"T\"", "simplify"),
+        (true, "diffLemma L:", "rule-equivalence"),
+    ] {
+        for following in [
+            "text{* documentation *}",
+            "lemma Next: \"T\" by sorry",
+            "rule Next: [] --> []",
+            "#ifdef LIVE\nrule Next: [] --> []\n#endif",
+        ] {
+            let prefix = format!("theory T begin\n{declaration}\n{proof}\n");
+            let source = format!("{prefix}{following}\nend");
+            let error = if is_diff {
+                parse_diff_theory(&source, &["LIVE"])
+            } else {
+                parse_theory(&source, &["LIVE"])
+            }
+            .expect_err("an intermediate proof method still requires a child");
+            assert_eq!(error.span().start, prefix.len(), "{source}: {error:?}");
+            assert!(
+                matches!(
+                    error.kind(),
+                    ParseErrorKind::Expected {
+                        context: ParseContext::Proof
+                    }
+                ),
+                "{source}: {error:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -803,10 +898,8 @@ fn has_casetest(thy: &Theory) -> bool {
 // STRUCTURALLY (`solve <$> parens goal`, Theory/Text/Parser/Proof.hs:76-85,
 // see line 80), so a `test` inside
 // `solve( ... )` is a `parens`-nested term and can never begin a new
-// top-level item.  `read_until_next_top_level` reproduces that boundary
-// rule by only testing the top-level-keyword set at paren-depth 0; without
-// it the capture truncates at `test` and the following parse blows up with
-// `expected identifier`.
+// top-level item. Parsing the proof grammar must consume the complete goal
+// before returning to the theory-item parser.
 #[test]
 fn proof_skeleton_not_truncated_by_keyword_fact_arg() {
     let s = r#"theory T begin
@@ -831,7 +924,7 @@ end"#;
     assert!(raw.contains("qed"), "proof raw missing `qed`: {raw:?}");
 }
 
-// The paren-depth guard must cover fresh `~k`, public `$A`, and indexed
+// Goal arguments must preserve fresh `~k`, public `$A`, and indexed
 // message arguments alongside a bare identifier that collides with a
 // top-level keyword. None may truncate the capture while inside the goal.
 #[test]
@@ -855,10 +948,8 @@ end"#;
     assert!(raw.contains("qed"), "missing qed: {raw:?}");
 }
 
-// Dual check: the depth-0 boundary must still fire.  A genuine top-level
-// `test` CaseTest item following a proof (whose body also contains a `test`
-// goal argument) must be recognized as a CaseTest, and the proof must not
-// absorb it.
+// A genuine top-level `test` following a proof must be recognized as a
+// CaseTest even when the proof body also contains a `test` goal argument.
 #[test]
 fn real_casetest_after_proof_still_recognized() {
     let s = r#"theory T begin
@@ -889,14 +980,13 @@ end"#;
     assert_eq!(ct.name, "Reachable");
 }
 
-// Regression (companion to the depth guard): tactic filter regexes carry
+// Regression: tactic filter regexes carry
 // ESCAPED, UNBALANCED parens inside a double-quoted string literal —
 // e.g. `regex "cp\("` and `regex "In_A\( 'S', <'codes'"` in
 // examples/csf18-alethea/....  Those `(`s are opaque regex text (HS lexes
 // the whole thing as `stringLiteral`, Token.hs:366-367); counting them as
-// grouping would keep `depth` permanently positive so the tactic capture
-// swallows every following item.  The scanner must treat double-quoted
-// string interiors as opaque.
+// grouping would swallow every following item. The tactic grammar must
+// treat double-quoted string interiors as opaque.
 #[test]
 fn tactic_regex_with_unbalanced_paren_does_not_swallow_next_item() {
     let s = r#"theory T begin
@@ -977,10 +1067,8 @@ fn tactic_presort_requires_one_known_non_oracle_ranking() {
 // `case` is the case NAME and can be any top-level keyword — case names come
 // from rule / source-case names, and `test` is the CaseTest keyword
 // (Theory/Text/Parser/Accountability.hs:25-27, see line 26).  A rule named
-// `test` prints its solved case as
-// `case test` at paren-depth 0 (unlike Scott's `test` which was inside
-// `solve( ... )`), so the paren-depth guard alone does not suppress it —
-// the case-label suppression below is also needed.
+// `test` prints its solved case as `case test`, which must remain part of
+// the proof even though it is outside a parenthesized goal.
 #[test]
 fn proof_case_label_named_after_keyword_does_not_truncate() {
     let s = r#"theory T begin
@@ -1009,10 +1097,9 @@ end"#;
     );
 }
 
-// The suppression must fire per `case` keyword — several cases in a row, each
-// labelled after a different top-level keyword (`rule`, `lemma`, `function`),
-// separated by `next`.  None may truncate the capture, and none may be split
-// off as its own top-level item.
+// Several cases separated by `next` may be labelled after different top-level
+// keywords (`rule`, `lemma`, `function`). None may truncate the proof or become
+// a separate theory item.
 #[test]
 fn multiple_case_labels_named_after_keywords_do_not_truncate() {
     let s = r#"theory T begin
@@ -1050,12 +1137,8 @@ end"#;
     assert!(raw.contains("qed"), "proof raw missing qed: {raw:?}");
 }
 
-// Dual check: the depth-0 boundary must still fire for a REAL top-level
-// keyword that is NOT a case label.  A genuine `test` CaseTest item following
-// a proof whose body contains a `case test` label must still be recognized:
-// the case-label suppression is armed only by the preceding `case` keyword and
-// is cleared after one token, so the later bare `test` still terminates the
-// capture.
+// A genuine rule following a completed proof must remain a theory item,
+// even when the proof contains a case named after another top-level keyword.
 #[test]
 fn keyword_after_proof_still_terminates_capture() {
     let s = r#"theory T begin

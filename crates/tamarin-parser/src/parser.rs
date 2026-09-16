@@ -25,78 +25,12 @@ use tamarin_term::maude_sig::{
 
 use crate::ast::*;
 use crate::lexer::{is_ident_char, Lexer, Pos, RESERVED_NAMES};
+pub use crate::parse_error::ParseError;
 use crate::parse_error::{
-    bound_owned_text, bounded_diagnostic_text, DiagnosticInfo, IllegalDiffReason, ParseContext,
-    ParseErrorKind, MAX_DIAGNOSTIC_MESSAGE_CHARS, MAX_DIAGNOSTIC_NAME_CHARS,
+    bounded_diagnostic_text, IllegalDiffReason, ParseContext, ParseErrorKind,
+    MAX_DIAGNOSTIC_NAME_CHARS,
 };
-use crate::proof_tree::{parse_proof_tree, validate_diff_proof_tree};
-
-// =============================================================================
-// Errors
-// =============================================================================
-
-/// Details belonging to one failed parse, never combined across alternatives.
-#[derive(Debug)]
-pub(crate) enum ErrorDetails {
-    Expected {
-        expected: String,
-        found: Option<char>,
-    },
-    Custom(String),
-}
-
-/// A parser failure with a compact semantic classification and source span.
-///
-/// Callers use structured accessors such as [`ParseError::kind`],
-/// [`ParseError::span`], and [`ParseError::diagnostic_notes`].
-/// [`std::fmt::Display`] renders the same details as [`ParseError::render_plain`].
-/// Individual diagnostic strings are limited to 512 characters.
-#[derive(Debug)]
-pub struct ParseError {
-    pub(crate) pos: Pos,
-    /// Source name, supplied by the caller or an included file.
-    pub(crate) source: String,
-    pub(crate) details: Option<ErrorDetails>,
-    /// Structured classification, source spans, and related declarations.
-    /// Ordinary syntax failures leave this unallocated.
-    pub(crate) diagnostic: Option<Box<DiagnosticInfo>>,
-}
-
-impl ParseError {
-    pub(crate) fn at(pos: Pos) -> Self {
-        Self {
-            pos,
-            source: String::new(),
-            details: None,
-            diagnostic: None,
-        }
-    }
-
-    pub(crate) fn custom(pos: Pos, mut cause: String) -> Self {
-        bound_owned_text(&mut cause, MAX_DIAGNOSTIC_MESSAGE_CHARS);
-        Self {
-            details: Some(ErrorDetails::Custom(cause)),
-            ..Self::at(pos)
-        }
-    }
-
-    pub(crate) fn expected(pos: Pos, expected: impl Into<String>, found: Option<char>) -> Self {
-        let mut expected = expected.into();
-        bound_owned_text(&mut expected, MAX_DIAGNOSTIC_MESSAGE_CHARS);
-        Self {
-            details: Some(ErrorDetails::Expected { expected, found }),
-            ..Self::at(pos)
-        }
-    }
-}
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.render_plain())
-    }
-}
-
-impl std::error::Error for ParseError {}
+use crate::proof_tree::{parse_diff_proof_prefix, parse_proof_prefix};
 
 /// GHC's `show :: String -> String`: the string in double quotes, every
 /// character through [`show_lit_char`], and the `\&` separator GHC's
@@ -1798,165 +1732,6 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-    }
-
-    /// Read raw text until we see an identifier at a word boundary that is
-    /// one of the recognised top-level keywords, or a `#`-prefixed
-    /// preprocessor directive. Used to capture a proof skeleton's raw text.
-    fn read_until_next_top_level(&mut self) -> String {
-        const KW: &[&str] = &[
-            "end",
-            "rule",
-            "lemma",
-            "diffLemma",
-            "restriction",
-            "axiom",
-            "tactic",
-            "heuristic",
-            "predicates",
-            "predicate",
-            "macros",
-            "macro",
-            "functions",
-            "function",
-            "equations",
-            "builtins",
-            "options",
-            "process",
-            "test",
-            "equivLemma",
-            "diffEquivLemma",
-            "export",
-            "let",
-        ];
-        let start = self.lx.pos().offset;
-        // Track whether the previous character was an identifier char. If so,
-        // we are in the middle of a word and should not match keywords here.
-        let mut prev_was_ident = false;
-        // Parenthesis-nesting depth of the captured text.  A top-level theory
-        // item can only begin at depth 0: HS parses the proof skeleton
-        // STRUCTURALLY (`proofMethod = ... solve <$> parens goal`,
-        // Theory/Text/Parser/Proof.hs:76-85, see line 80), so the goal inside `solve( ... )`
-        // is consumed as a `parens` unit and its interior tokens can never be
-        // mistaken for a new top-level item.  Our raw-text scanner reproduces
-        // that boundary rule by only testing the top-level-keyword set (`KW`,
-        // which contains `test`, `rule`, `function`, `process`, ...) at
-        // depth 0.  Without this guard a fact argument named after a keyword —
-        // e.g. `solve( Match( test, sid ) @ #i4 )` in
-        // examples/ake/bilinear/Scott.spthy — truncates the capture and
-        // corrupts the following parse.
-        let mut depth: i32 = 0;
-        // Whether the identifier at the NEXT depth-0 word boundary is a proof
-        // CASE LABEL and must not be tested against `KW`.  HS parses the proof
-        // skeleton structurally: `oneCase = symbol "case" *> identifier`
-        // (Theory/Text/Parser/Proof.hs:98-115, see line 115; the diff variant is identical,
-        // Theory/Text/Parser/Proof.hs:129-146, see line 146), so the token
-        // immediately after the `case` keyword is
-        // consumed as the case name and can never begin a new top-level item.
-        // Case names are drawn from rule names and source-case names, so ANY
-        // top-level keyword can legally appear here — e.g. a rule named `test`
-        // prints as `case test`, and `test` is itself the CaseTest keyword
-        // (`caseTest = CaseTest <$> (symbol "test" *> identifier)`,
-        // Theory/Text/Parser/Accountability.hs:25-27, see line 26; dispatched
-        // Theory/Text/Parser.hs:230-393, see line 273).
-        // Without this suppression the bare `test` at depth 0 truncates the
-        // capture and the main parser resumes by consuming `test` as a CaseTest
-        // declaration → `expected ':'`.  This is the only in-script position
-        // where a bare keyword can sit at depth 0: every proof method is a fixed
-        // keyword or `solve( <goal> )` whose goal is paren-nested (depth > 0).
-        let mut expect_case_name = false;
-        // Parentheses and keywords inside a public literal are data, not proof
-        // structure. Track the single-quoted literal explicitly so a `)` or a
-        // word such as `rule` cannot corrupt the depth-zero boundary scan.
-        let mut in_public_literal = false;
-        loop {
-            if self.lx.is_eof() {
-                break;
-            }
-            if in_public_literal {
-                let Some(c) = self.lx.peek() else {
-                    break;
-                };
-                self.lx.bump();
-                // Tamarin public literals have no escape syntax: a backslash
-                // is ordinary data and every quote closes the literal.
-                if c == '\'' {
-                    in_public_literal = false;
-                }
-                prev_was_ident = false;
-                continue;
-            }
-            // Skip whitespace and comments. Block/line comments are entirely
-            // skipped by skip_ws; whitespace resets the prev-ident state.
-            let pre_ws = self.lx.pos();
-            self.lx.skip_ws();
-            if self.lx.pos() != pre_ws {
-                prev_was_ident = false;
-            }
-            if self.lx.is_eof() {
-                break;
-            }
-            // At a word boundary AND at the top level, check for top-level
-            // keywords.  Inside a parenthesised group (`solve( ... )`, a
-            // function application, a tuple, ...) keyword identifiers are
-            // just terms, matching HS's `parens goal`.
-            if depth == 0 && !prev_was_ident {
-                if expect_case_name {
-                    // This depth-0 identifier is a case label (see the
-                    // `expect_case_name` note above): suppress the keyword /
-                    // `#`-directive break for this one token.  The per-char
-                    // append below consumes it, and `prev_was_ident` prevents
-                    // any re-check mid-word.
-                    expect_case_name = false;
-                } else {
-                    if let Some(id) = self.peek_hyphen_identifier() {
-                        if KW.contains(&id) {
-                            break;
-                        }
-                        // Arm case-label suppression for the NEXT identifier.
-                        if id == "case" {
-                            expect_case_name = true;
-                        }
-                    }
-                    if self.lx.peek() == Some('#') {
-                        let mut probe = self.lx.clone();
-                        probe.bump();
-                        let name = probe.ascii_alpha_run();
-                        if matches!(
-                            name.as_str(),
-                            "ifdef" | "endif" | "else" | "define" | "include"
-                        ) {
-                            break;
-                        }
-                    }
-                }
-            }
-            // Advance past the next character.
-            match self.lx.peek() {
-                Some(c) => {
-                    prev_was_ident = is_ident_char(c) || c == '-';
-                    // Track parenthesis nesting so the keyword scan above only
-                    // fires at the top level.  `)` is clamped at 0 so a stray
-                    // unbalanced close (should not occur in a well-formed
-                    // proof) cannot drive the depth negative and re-enable the
-                    // scan inside a group.
-                    match c {
-                        '(' => depth += 1,
-                        ')' => depth = (depth - 1).max(0),
-                        '\'' => in_public_literal = true,
-                        _ => {}
-                    }
-                    self.lx.bump();
-                    if c == '\'' {
-                        // Like single_quoted, consume the opening quote's
-                        // trailing whitespace/comments before the literal body.
-                        self.lx.skip_ws();
-                    }
-                }
-                None => break,
-            }
-        }
-        self.lx.src()[start..self.lx.pos().offset].to_owned()
     }
 
     // -------------------- functions / equations / macros / predicates --------------------
@@ -3669,8 +3444,8 @@ impl<'a> Parser<'a> {
 
     fn try_proof_skeleton(&mut self) -> Result<Option<ProofSkeleton>, ParseError> {
         // Proofs in `.spthy` files start with one of a known set of proof
-        // method tokens. We treat the proof as raw text up to the next
-        // top-level keyword. If no proof tokens appear, return None.
+        // method tokens. The proof grammar determines its endpoint; if no
+        // proof tokens appear, return None.
         self.skip_ws();
         let save = self.save();
         // First-token set that can START a stored proof skeleton, matching HS.
@@ -3708,19 +3483,10 @@ impl<'a> Parser<'a> {
             self.restore(save);
             return Ok(None);
         }
-        let proof_start = self.lx.pos();
-        let raw = self.read_until_next_top_level();
-        // Structured parse of `raw`.  Mirrors HS's `startProofSkeleton`
-        // (Theory/Text/Parser/Proof.hs:90-95) which calls `proofSkeleton`
-        // (Theory/Text/Parser/Proof.hs:98-115) — a recursive descent over
-        // `simplify | solve(...) | induction | by <method> | SOLVED`
-        // with `case <name> ... next ... qed` blocks.  We parse over
-        // the captured raw text rather than the original lexer so the
-        // top-level boundary detection (`read_until_next_top_level`)
-        // controls termination.
-        //
-        let tree = parse_proof_tree(&raw, self)
-            .map_err(|error| error.shifted(proof_start, self.lx.src()))?;
+        let start = self.lx.pos().offset;
+        let (tree, lexer) = parse_proof_prefix(self.lx.clone(), self)?;
+        self.lx = lexer;
+        let raw = self.lx.src()[start..self.lx.pos().offset].to_owned();
         Ok(Some(ProofSkeleton {
             raw,
             tree: Some(tree),
@@ -3750,10 +3516,10 @@ impl<'a> Parser<'a> {
             self.restore(save);
             return Ok(None);
         }
-        let proof_start = self.lx.pos();
-        let raw = self.read_until_next_top_level();
-        validate_diff_proof_tree(&raw, self)
-            .map_err(|error| error.shifted(proof_start, self.lx.src()))?;
+        let start = self.lx.pos().offset;
+        let ((), lexer) = parse_diff_proof_prefix(self.lx.clone(), self)?;
+        self.lx = lexer;
+        let raw = self.lx.src()[start..self.lx.pos().offset].to_owned();
         Ok(Some(ProofSkeleton { raw, tree: None }))
     }
 

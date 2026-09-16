@@ -4,7 +4,6 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::lexer::Pos;
-use crate::parser::{ErrorDetails, ParseError};
 
 /// Width of the tab stops used by Parsec source positions.
 pub const PARSEC_TAB_WIDTH: u32 = 8;
@@ -13,6 +12,69 @@ pub const PARSEC_TAB_WIDTH: u32 = 8;
 pub(crate) const MAX_DIAGNOSTIC_NAME_CHARS: usize = 80;
 /// Maximum size of a free-form parser message retained in a diagnostic.
 pub(crate) const MAX_DIAGNOSTIC_MESSAGE_CHARS: usize = 512;
+
+/// Details belonging to one failed parse, never combined across alternatives.
+#[derive(Debug)]
+pub(crate) enum ErrorDetails {
+    Expected {
+        expected: String,
+        found: Option<char>,
+    },
+    Custom(String),
+}
+
+/// A parser failure with a compact semantic classification and source span.
+///
+/// Callers use structured accessors such as [`ParseError::kind`],
+/// [`ParseError::span`], and [`ParseError::diagnostic_notes`].
+/// [`std::fmt::Display`] renders the same details as [`ParseError::render_plain`].
+/// Individual diagnostic strings are limited to 512 characters.
+#[derive(Debug)]
+pub struct ParseError {
+    pub(crate) pos: Pos,
+    /// Source name, supplied by the caller or an included file.
+    pub(crate) source: String,
+    pub(crate) details: Option<ErrorDetails>,
+    /// Structured classification, source spans, and related declarations.
+    /// Ordinary syntax failures leave this unallocated.
+    pub(crate) diagnostic: Option<Box<DiagnosticInfo>>,
+}
+
+impl ParseError {
+    pub(crate) fn at(pos: Pos) -> Self {
+        Self {
+            pos,
+            source: String::new(),
+            details: None,
+            diagnostic: None,
+        }
+    }
+
+    pub(crate) fn custom(pos: Pos, mut cause: String) -> Self {
+        bound_owned_text(&mut cause, MAX_DIAGNOSTIC_MESSAGE_CHARS);
+        Self {
+            details: Some(ErrorDetails::Custom(cause)),
+            ..Self::at(pos)
+        }
+    }
+
+    pub(crate) fn expected(pos: Pos, expected: impl Into<String>, found: Option<char>) -> Self {
+        let mut expected = expected.into();
+        bound_owned_text(&mut expected, MAX_DIAGNOSTIC_MESSAGE_CHARS);
+        Self {
+            details: Some(ErrorDetails::Expected { expected, found }),
+            ..Self::at(pos)
+        }
+    }
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.render_plain())
+    }
+}
+
+impl std::error::Error for ParseError {}
 
 pub(crate) fn advance_line_column(line: &mut u32, col: &mut u32, ch: char) {
     match ch {

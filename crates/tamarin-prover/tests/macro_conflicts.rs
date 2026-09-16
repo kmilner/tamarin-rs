@@ -20,7 +20,7 @@
 
 mod common;
 
-use common::{maude_arg, maude_available, strip_maude_banner};
+use common::{assert_diagnostic, maude_arg, maude_available, strip_maude_banner};
 use tamarin_prover::{parse_args, run};
 
 /// The temp subdirectory this suite writes its theories to.
@@ -49,16 +49,6 @@ fn run_theory(stem: &str, src: &str) -> i32 {
 fn run_binary(stem: &str, src: &str) -> (i32, String) {
     let (code, _, stderr) = common::run_raw(TMP_DIR, stem, src, &["--quiet"]);
     (code, strip_maude_banner(&stderr))
-}
-
-fn assert_diagnostic(stderr: &str, expected: &[&str]) {
-    for text in expected {
-        assert!(stderr.contains(text), "missing {text:?} in:\n{stderr}");
-    }
-    assert!(
-        !stderr.contains("CallStack"),
-        "unexpected GHC details:\n{stderr}"
-    );
 }
 
 /// The seven `traceM` markers a theory that loads, translates and closes

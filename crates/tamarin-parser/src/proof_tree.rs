@@ -43,54 +43,68 @@ use crate::parser::{ParseError, Parser};
 /// reads the same state (Theory/Text/Parser/Proof.hs:38-72).
 pub fn parse_proof_tree<'a>(
     raw: &'a str,
-    parent: &'a Parser<'a>,
+    parent: &Parser<'a>,
 ) -> Result<ParsedProofTree, ParseError> {
-    let mut p = TreeParser {
-        lx: Lexer::new(raw),
-        parent,
-    };
-    let result = (|| {
-        let tree = p.proof_skeleton()?;
-        p.lx.skip_ws();
-        if !p.lx.is_eof() {
-            return Err(p.err_expect("end of proof"));
-        }
-        Ok(tree)
-    })();
-    p.lx.finish(result)
-        .map_err(|error| error.with_context(ParseContext::Proof))
+    let (tree, lx) = parse_proof_prefix(Lexer::new(raw), parent)?;
+    require_end_of_proof(&lx)?;
+    Ok(tree)
 }
 
 /// Validate a stored diff-proof skeleton against HS `diffProofSkeleton`
 /// (`Theory/Text/Parser/Proof.hs:128-144`). Diff proofs have their own method
 /// type and are not executable by the regular Rust replay engine, so callers
 /// retain their raw text rather than manufacturing a [`ParsedProofTree`].
-pub(crate) fn validate_diff_proof_tree<'a>(
-    raw: &'a str,
-    parent: &'a Parser<'a>,
-) -> Result<(), ParseError> {
-    let mut p = TreeParser {
-        lx: Lexer::new(raw),
-        parent,
-    };
-    let result = (|| {
-        p.diff_proof_skeleton()?;
-        p.lx.skip_ws();
-        if !p.lx.is_eof() {
-            return Err(p.err_expect("end of proof"));
-        }
+#[cfg(test)]
+fn validate_diff_proof_tree<'a>(raw: &'a str, parent: &Parser<'a>) -> Result<(), ParseError> {
+    let ((), lx) = parse_diff_proof_prefix(Lexer::new(raw), parent)?;
+    require_end_of_proof(&lx)
+}
+
+fn require_end_of_proof(lx: &Lexer<'_>) -> Result<(), ParseError> {
+    if lx.is_eof() {
         Ok(())
-    })();
-    p.lx.finish(result)
-        .map_err(|error| error.with_context(ParseContext::Proof))
+    } else {
+        Err(ParseError::expected(lx.pos(), "end of proof", lx.peek())
+            .with_context(ParseContext::Proof))
+    }
 }
 
-struct TreeParser<'a> {
+/// Parse one proof from the theory cursor, retaining absolute source positions
+/// and leaving the cursor at the next item after trailing whitespace/comments.
+pub(crate) fn parse_proof_prefix<'a>(
     lx: Lexer<'a>,
-    parent: &'a Parser<'a>,
+    parent: &Parser<'a>,
+) -> Result<(ParsedProofTree, Lexer<'a>), ParseError> {
+    TreeParser { lx, parent }.parse_prefix(TreeParser::proof_skeleton)
 }
 
-impl<'a> TreeParser<'a> {
+/// Diff proofs have their own grammar but share the same cursor boundary.
+pub(crate) fn parse_diff_proof_prefix<'a>(
+    lx: Lexer<'a>,
+    parent: &Parser<'a>,
+) -> Result<((), Lexer<'a>), ParseError> {
+    TreeParser { lx, parent }.parse_prefix(TreeParser::diff_proof_skeleton)
+}
+
+struct TreeParser<'a, 'p> {
+    lx: Lexer<'a>,
+    parent: &'p Parser<'a>,
+}
+
+impl<'a> TreeParser<'a, '_> {
+    fn parse_prefix<T>(
+        mut self,
+        parse: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<(T, Lexer<'a>), ParseError> {
+        let result = parse(&mut self);
+        self.lx.skip_ws();
+        let tree = self
+            .lx
+            .finish(result)
+            .map_err(|error| error.with_context(ParseContext::Proof))?;
+        Ok((tree, self.lx))
+    }
+
     fn err_expect(&self, expected: impl Into<String>) -> ParseError {
         ParseError::expected(self.lx.pos(), expected, self.lx.peek())
     }

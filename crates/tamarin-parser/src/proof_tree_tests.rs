@@ -23,6 +23,28 @@ fn leaf_forms() {
 }
 
 #[test]
+fn standalone_proofs_reject_input_after_a_complete_skeleton() {
+    for proof in ["by sorry", "SOLVED", "induction case rule by sorry qed"] {
+        for following in ["trailing", "text{* documentation *}", "lemma L: \"T\""] {
+            let prefix = format!("{proof} \t/* whitespace */\n");
+            let source = format!("{prefix}{following}");
+            let error = parse_proof_tree(&source, &bare_parser())
+                .expect_err("the standalone parser must consume the whole input");
+            assert_eq!(error.span().start, prefix.len(), "{source}: {error:?}");
+            assert!(
+                error
+                    .diagnostic_notes()
+                    .iter()
+                    .any(|note| note.contains("expected end of proof")),
+                "{source}: {error:?}"
+            );
+        }
+    }
+    parse_proof_tree("by sorry \t/* whitespace */\n", &bare_parser())
+        .expect("trailing whitespace and ordinary comments are allowed");
+}
+
+#[test]
 fn diff_proof_uses_its_own_methods() {
     let src = "
         rule-equivalence
