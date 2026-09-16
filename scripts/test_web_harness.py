@@ -126,16 +126,58 @@ class ParserDiagnosticNormalization(unittest.TestCase):
 
     def test_syntax_frames_agree(self):
         hs = '\"bad.spthy\" (line 2, column 1):\nunexpected \"?\"\nexpecting \"end\"\n'
-        rs = "error[parse]: Unexpected input\n  ┌─ bad.spthy:2:1\n  │\n2 │ ?\n  │ ^\n  = expected end\n\n"
+        rs = "error: Unexpected input\n  ┌─ bad.spthy:2:1\n  │\n2 │ ?\n  │ ^\n  = expected end\n\n"
         self.assertEqual(self.normalize(hs), "<parser diagnostic>\n")
         self.assertEqual(self.normalize(rs), self.normalize(hs))
 
     def test_runtime_errors_remain_visible(self):
         for message in ["error: oracle failed\n", "tamarin-prover: runtime failure\n", "unknown diagnostic format\n"]:
             self.assertEqual(self.normalize(message), message)
-            rs = "error[parse]: Bad syntax\n  │ ^\n\n"
+            rs = "error: Bad syntax\n  ┌─ bad.spthy:2:1\n  │ ^\n\n"
             self.assertEqual(self.normalize(message + rs + message), message + "<parser diagnostic>\n" + message)
             self.assertEqual(self.normalize(rs.rstrip() + "\n" + message), "<parser diagnostic>\n" + message)
+
+    def test_unframed_error_headers_remain_visible(self):
+        for stderr in [
+            "error: oracle failed\nerror: transport failed\n",
+            "error: oracle failed\n\n",
+            "error: oracle failed\n  │ runtime detail\n",
+            "error: oracle failed\n  ┌─ incomplete location\n",
+            "error: oracle failed\nother warning\n",
+        ]:
+            with self.subTest(stderr=stderr):
+                self.assertEqual(self.normalize(stderr), stderr)
+
+    def test_adjacent_frames_agree(self):
+        rs = "error: Bad syntax\n  ┌─ bad.spthy:2:1\n  │ ^\n"
+        self.assertEqual(self.normalize(rs + rs), "<parser diagnostic>\n" * 2)
+
+    def test_real_cli_diagnostics_agree(self):
+        binary = HERE.parent / "target/release/tamarin-rs"
+        sources = [
+            "theory T begin\n?\nend\n",
+            "theory T begin\nbuiltins: hasing\nend\n",
+            "theory T begin\nfunctions: f/1, f/2\nend\n",
+            "theory T begin\n/* unterminated\ncomment\n",
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            theory = pathlib.Path(td) / "bad.spthy"
+            for source in sources:
+                with self.subTest(source=source):
+                    theory.write_text(source)
+                    result = subprocess.run(
+                        [str(binary), "--parse-only", str(theory)],
+                        env=clean_environment(),
+                        text=True, capture_output=True, timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertTrue(result.stderr.startswith("error: "), result.stderr)
+                    self.assertEqual(self.normalize(result.stderr), "<parser diagnostic>\n")
+                    runtime = "error: oracle failed\n"
+                    self.assertEqual(
+                        self.normalize(runtime + result.stderr + runtime),
+                        runtime + "<parser diagnostic>\n" + runtime,
+                    )
 
     def test_unrecognized_haskell_messages_are_not_suppressed(self):
         hs = '\"bad.spthy\" (line 2, column 1):\nunexpected \"?\"\nsemantic detail\nerror: oracle failed\n'

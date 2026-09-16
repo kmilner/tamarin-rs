@@ -95,20 +95,28 @@ norm() {
 # count differences, which do still surface). The parser-frame exception follows.
 # Parser presentation differs deliberately. Only consume recognized frame lines;
 # unexpected stderr, even after a parser error, must still reach the comparison.
-# The Rust diagnostic code is emitted exclusively by report_parser_error.
+# Rust uses an uncoded error header. Require the following source location
+# before treating it as a parser frame, so ordinary runtime errors survive.
 nerr() {
   awk '
     { duplicate_open = /^\[Open Chains\] Too many chain constraints/ && $0 == previous; previous = $0 }
+    pending_error != "" {
+      if ($0 ~ /^[[:space:]]+┌─ .+:[[:digit:]]+:[[:digit:]]+$/) {
+        print "<parser diagnostic>"; rs_parser = 1; pending_error = ""; next
+      }
+      print pending_error; pending_error = ""
+    }
     duplicate_open || /^\[Saturating Sources\]/ { next }
     rs_parser && /^$/ { rs_parser = 0; next }
     rs_parser && /^[[:space:]]*([[:digit:]]+[[:space:]]*)?(┌─|│|·|= )/ { next }
     hs_parser && /^(unexpected|expecting) / { next }
     { rs_parser = 0; hs_parser = 0 }
-    /^error\[parse\]: / { print "<parser diagnostic>"; rs_parser = 1; next }
+    /^error: / { pending_error = $0; next }
     /^".*" \(line [[:digit:]]+, column [[:digit:]]+\):$/ {
       print "<parser diagnostic>"; hs_parser = 1; next
     }
     { print }
+    END { if (pending_error != "") print pending_error }
   '
 }
 

@@ -165,7 +165,8 @@ cargo test -p tamarin-server --test routes_upload
 
 The parity gates still require matching acceptance, exit status, and successful
 `--prove` output. They deliberately do not require byte-identical parser-error
-stderr. The flag sweeps normalize Rust's explicit `error[parse]` frame and
+stderr. The flag sweeps recognize Rust's `error:` header followed by a codespan
+source-location line and normalize that frame along with
 Haskell's Parsec header plus `unexpected`/`expecting` lines. They retain any
 unrecognized lines, including runtime errors before or after a diagnostic.
 Unrecognized Haskell semantic-message formats remain visible for review rather
