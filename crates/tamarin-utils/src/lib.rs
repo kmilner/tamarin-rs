@@ -6,6 +6,7 @@ pub mod color;
 pub mod cow;
 pub mod dag;
 pub mod dot;
+pub mod drop_stack;
 /// The `env_gate!` macro is exported at the crate root via
 /// `#[macro_export]`; this (private) module just holds its definition.
 mod env_gate;
@@ -13,6 +14,7 @@ pub mod fresh;
 pub mod prelude_ext;
 pub mod pretty_hpj;
 pub mod pretty_html;
+pub mod stack;
 pub mod unicode;
 
 /// Fast non-cryptographic hash map for internal *lookup-only* uses

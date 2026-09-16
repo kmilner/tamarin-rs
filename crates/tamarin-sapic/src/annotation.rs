@@ -133,6 +133,9 @@ impl<V> GoodAnnotation for ProcessAnnotation<V> {
     fn parsed(&self) -> &ProcessParsedAnnotation {
         &self.parsing_ann
     }
+    fn parsed_mut(&mut self) -> &mut ProcessParsedAnnotation {
+        &mut self.parsing_ann
+    }
     fn set_parsed(self, p: ProcessParsedAnnotation) -> Self {
         ProcessAnnotation {
             parsing_ann: p,
@@ -145,10 +148,11 @@ impl<V> GoodAnnotation for ProcessAnnotation<V> {
 /// `V` (typically `tamarin_term::lterm::LVar`).
 pub(crate) type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 
-/// `toAnProcess` (sapic/src/Sapic/Annotation.hs:136-140): lift a parsed process into a
-/// translation annotation by wrapping the parsed annotation in
-/// `ProcessAnnotation`.
-pub(crate) fn to_annotated<V>(
+/// Wrap a type-checked process in the MSR translation's annotation space.
+/// Keep occurrence type tags: generated rule names and process attributes use
+/// them, and stored proofs refer to those names. Translation passes erase types
+/// in their lookup keys instead, so tags do not affect variable identity.
+pub(crate) fn lower_for_translation<V>(
     p: &Process<ProcessParsedAnnotation, SapicLVar>,
 ) -> Process<ProcessAnnotation<V>, SapicLVar> {
     map_process(p, &mut Clone::clone, &mut Clone::clone, &mut |ann| {
@@ -160,9 +164,8 @@ pub(crate) fn to_annotated<V>(
 }
 
 /// `toProcess` (sapic/src/Sapic/Annotation.hs:142-145): drop the translation
-/// annotations and recover the parsed-stage form — the inverse of
-/// [`to_annotated`].  `facts::to_rule` erases with it for the rule name and
-/// the `process=` attribute (Facts.hs:391).
+/// annotations and recover the parsed-stage form. `facts::to_rule` uses it for
+/// the rule name and the `process=` attribute (Facts.hs:391).
 pub(crate) fn to_parsed<Ann: GoodAnnotation>(
     p: &Process<Ann, SapicLVar>,
 ) -> Process<ProcessParsedAnnotation, SapicLVar> {
@@ -175,6 +178,7 @@ pub(crate) fn to_parsed<Ann: GoodAnnotation>(
 mod tests {
     use super::*;
     use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
 
     type V = LVar;
 
@@ -197,35 +201,38 @@ mod tests {
         assert_eq!(c.lock.map(|AnVar(v)| v), Some(v2));
     }
 
-    /// `toAnProcess` / `toProcess` must carry the parsed annotation at every
-    /// node kind.  They must not set it back to the default.  Each node here
-    /// holds a distinct `ProcessParsedAnnotation` that is not the default
-    /// value.  A lift that dropped `parsing_ann` therefore shows up as an
-    /// inequality.  A `to_parsed` that read the annotation of the wrong node
-    /// shows up the same way.  Neither one can default to a match.
+    /// Preserve metadata at every node kind, including location type tags.
     #[test]
-    fn round_trip_to_annotated_and_back() {
+    fn lowering_preserves_parsed_annotations() {
         let named = |n: &str| ProcessParsedAnnotation {
             process_names: vec![n.to_string()],
             location: Some(tamarin_term::lterm::pub_term(n)),
             ..Default::default()
         };
-        let parsed: Process<ProcessParsedAnnotation, SapicLVar> = Process::Comb(
+        let mut parsed: Process<ProcessParsedAnnotation, SapicLVar> = Process::Comb(
             tamarin_theory::sapic::ProcessCombinator::Parallel,
             named("comb"),
             Box::new(Process::Action(
                 tamarin_theory::sapic::SapicAction::Rep,
                 named("act"),
-                Box::new(Process::Null(named("left"))),
-            )),
-            Box::new(Process::Null(named("right"))),
+                Box::new(Process::Null(named("left"))).into(),
+            ))
+            .into(),
+            Box::new(Process::Null(named("right"))).into(),
         );
-        let annotated: Process<ProcessAnnotation<V>, SapicLVar> = to_annotated(&parsed);
+        let annotated: Process<ProcessAnnotation<V>, SapicLVar> = lower_for_translation(&parsed);
         // The lift wraps the parsed annotation, and does not replace it.  The
         // parsed part is reachable unchanged at the root.  The translation
         // fields start at their default values.
         assert_eq!(annotated.annotation().parsing_ann, named("comb"));
         assert!(annotated.annotation().lock.is_none());
         assert_eq!(to_parsed(&annotated), parsed);
+
+        let site = LVar::new("site", LSort::Pub, 0);
+        if let Process::Comb(_, ann, _, _) = &mut parsed {
+            ann.location = Some(var_term(SapicLVar::new(site, Some("site".into()))));
+        }
+        let lowered = lower_for_translation::<V>(&parsed);
+        assert_eq!(to_parsed(&lowered), parsed);
     }
 }

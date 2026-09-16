@@ -942,15 +942,32 @@ fn proof_literals_preserve_leading_comments_and_raw_text() {
 fn included_arity_errors_label_their_local_declaration() {
     let dir = std::env::temp_dir().join(format!("tamarin_include_arity_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let source = "functions: f/2\nrule R: [] --> [Out(f(x))]\n";
-    std::fs::write(dir.join("bad.inc"), source).unwrap();
     let root = "theory T begin\n#include \"bad.inc\"\nend";
-    let error = parse_theory_with_base(root, &[], Some(dir.clone())).unwrap_err();
-    let labels = error.diagnostic_labels_with_source(root);
-    assert_eq!(labels.len(), 2, "{error:?}");
-    assert_eq!(&source[labels[1].span.clone()], "f");
-    assert_eq!(labels[1].span.start, source.find("f/2").unwrap());
-    assert_eq!(error.source_text(), Some(source));
+    for body in [
+        "rule R: [] --> [Out(f(x))]",
+        "lemma L: \"T\"\nsolve(Out(f(x,y)) @ #i)\nby solve(\tOut(f(x)) @ #i)",
+        "diffLemma L:\nstep(solve(Out(f(x,y)) @ #i))\nby step(solve(\tOut(f(x)) @ #i))",
+    ] {
+        let source = format!("functions: f/2\n{body}\n");
+        std::fs::write(dir.join("bad.inc"), &source).unwrap();
+        let error =
+            tamarin_parser::parse_diff_theory_with_base(root, &[], Some(dir.clone())).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            ParseErrorKind::WrongFunctionArity { .. }
+        ));
+        let labels = error.diagnostic_labels_with_source(root);
+        assert_eq!(labels.len(), 2, "{error:?}");
+        assert_eq!(labels[0].span.start, source.find("f(x)").unwrap());
+        assert_eq!(&source[labels[1].span.clone()], "f");
+        assert_eq!(labels[1].span.start, source.find("f/2").unwrap());
+        assert_eq!(error.source_text(), Some(source.as_str()));
+        assert_eq!(error.source_name(), dir.join("bad.inc").to_str());
+        assert_eq!(
+            error.line_column(),
+            tamarin_parser::parse_error::line_column(&source, labels[0].span.start)
+        );
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

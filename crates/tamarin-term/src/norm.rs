@@ -89,6 +89,20 @@ pub fn nf_via_haskell_maude_with_sig(msig: &MaudeSig, maude: &MaudeHandle, t: &L
 }
 
 fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
+    use std::ops::ControlFlow;
+    crate::term::walk_terms(std::slice::from_ref(t), |node| {
+        if head_is_nf(node, msig, maude) {
+            ControlFlow::Continue(true)
+        } else {
+            ControlFlow::Break(())
+        }
+    })
+    .is_continue()
+}
+
+// Check the head before visiting children, preserving the previous DFS and
+// short-circuiting order (including any Maude matching queries).
+fn head_is_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
     use crate::function_symbols::{
         AcSym, DH_NEUTRAL_SYM_STRING, EXP_SYM_STRING, INV_SYM_STRING, ONE_SYM_STRING,
         ZERO_SYM_STRING,
@@ -112,11 +126,11 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             if matches!(sym, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_)))
                 && msig.irreducible_fun_syms.contains(sym)
             {
-                return args.iter().all(|a| go_nf(a, msig, maude));
+                return true;
             }
             // FList is irreducible unconditionally (HS: `FList ts -> all go ts`).
             if matches!(sym, FunSym::List) {
-                return args.iter().all(|a| go_nf(a, msig, maude));
+                return true;
             }
             // 2. Nullary constants in NF (One, DHNeutral, Zero, NatOne).
             if let FunSym::NoEq(s) = sym
@@ -211,7 +225,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                         return false;
                     }
                     // else walk subterms
-                    return go_nf(&args[0], msig, maude) && go_nf(&args[1], msig, maude);
+                    return true;
                 }
                 if s.name == INV_SYM_STRING && args.len() == 1 {
                     // inv(inv(_)) → reducible
@@ -230,7 +244,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                     if is_nullary(&args[0], ONE_SYM_STRING) {
                         return false;
                     }
-                    return go_nf(&args[0], msig, maude);
+                    return true;
                 }
                 if s.name == crate::function_symbols::PMULT_SYM_STRING && args.len() == 2 {
                     // pmult(_, pmult(_,_)) → reducible
@@ -243,7 +257,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                     if is_nullary(&args[0], ONE_SYM_STRING) {
                         return false;
                     }
-                    return go_nf(&args[0], msig, maude) && go_nf(&args[1], msig, maude);
+                    return true;
                 }
             }
             // 5. AC-headed reducible patterns.
@@ -262,7 +276,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                         if args.iter().any(reducible_factor) || invalid_mult(args) {
                             return false;
                         }
-                        return args.iter().all(|a| go_nf(a, msig, maude));
+                        return true;
                     }
                     AcSym::Xor => {
                         // HS: `FXor ts | fAppZero `elem` ts || any isXor ts ||
@@ -274,12 +288,12 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                         {
                             return false;
                         }
-                        return args.iter().all(|a| go_nf(a, msig, maude));
+                        return true;
                     }
                     // HS's recursive catch-all section: `FUnion ts`,
                     // `FNatPlus ts` and `FAppACfct _ ts` all walk subterms.
                     AcSym::Union | AcSym::NatPlus | AcSym::AcFct(_) => {
-                        return args.iter().all(|a| go_nf(a, msig, maude));
+                        return true;
                     }
                 }
             }
@@ -298,11 +312,11 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                         return false;
                     }
                 }
-                return args.iter().all(|a| go_nf(a, msig, maude));
+                return true;
             }
             // 7. Default fallthrough: walk subterms (HS:
             //    `FAppNoEq _ ts -> all go ts`, `FAppC _ ts -> all go ts`).
-            args.iter().all(|a| go_nf(a, msig, maude))
+            true
         }
     }
 }

@@ -137,7 +137,7 @@ pub(crate) fn strict_subset_of(lhs: &[LVar], rhs: &[LVar]) -> SyntacticLNFormula
 pub(crate) fn fold_r1(op: Conn, mut fms: Vec<SyntacticLNFormula>) -> SyntacticLNFormula {
     let last = fms.pop().expect("fold_r1: empty list");
     fms.into_iter().rev().fold(last, |acc, f| {
-        ProtoFormula::Conn(op, Box::new(f), Box::new(acc))
+        ProtoFormula::Conn(op, Box::new(f).into(), Box::new(acc).into())
     })
 }
 
@@ -146,7 +146,7 @@ pub(crate) fn fold_l1(op: Conn, fms: Vec<SyntacticLNFormula>) -> SyntacticLNForm
     let mut it = fms.into_iter();
     let first = it.next().expect("fold_l1: empty list");
     it.fold(first, |acc, f| {
-        ProtoFormula::Conn(op, Box::new(acc), Box::new(f))
+        ProtoFormula::Conn(op, Box::new(acc).into(), Box::new(f).into())
     })
 }
 

@@ -36,7 +36,7 @@ use tamarin_term::function_symbols::{nat_one_sym, AcSym, FunSym};
 use tamarin_term::lterm::{frees, frees_list, sort_of_name, LNTerm, LSort, LVar, Name};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::pretty::pretty_nterm;
-use tamarin_term::term::Term;
+use tamarin_term::term::{walk_terms, Term};
 use tamarin_term::vterm::Lit;
 
 use crate::elaborate::{collect_names, collect_process_names};
@@ -169,33 +169,32 @@ fn nat_plus_operands(t: &LNTerm) -> Option<&[LNTerm]> {
 /// Everything that is neither `%1`, nor a nat variable, nor a nested `%+` is
 /// an offending operand.
 fn not_only_nat<'a>(t: &'a LNTerm, out: &mut Vec<&'a LNTerm>) {
-    if let Some(ts) = nat_plus_operands(t) {
-        for a in ts {
-            not_only_nat(a, out);
+    let _: std::ops::ControlFlow<()> = walk_terms(std::slice::from_ref(t), |term| {
+        if nat_plus_operands(term).is_some() {
+            std::ops::ControlFlow::Continue(true)
+        } else {
+            if !(is_nat_one(term) || is_nat_var(term)) {
+                out.push(term);
+            }
+            std::ops::ControlFlow::Continue(false)
         }
-    } else if !(is_nat_one(t) || is_nat_var(t)) {
-        out.push(t);
-    }
+    });
 }
 
 /// HS `nonWellSorted` (Wellformedness.hs:293-303): descend through the term
 /// and collect, for every `%+` application, the operands that are not
 /// nat-sorted.
 fn non_well_sorted<'a>(t: &'a LNTerm, out: &mut Vec<&'a LNTerm>) {
-    if let Some(ts) = nat_plus_operands(t) {
-        for a in ts {
-            not_only_nat(a, out);
+    let _: std::ops::ControlFlow<()> = walk_terms(std::slice::from_ref(t), |term| {
+        if let Some(ts) = nat_plus_operands(term) {
+            for operand in ts {
+                not_only_nat(operand, out);
+            }
+            std::ops::ControlFlow::Continue(false)
+        } else {
+            std::ops::ControlFlow::Continue(!is_nat_one(term))
         }
-        return;
-    }
-    if is_nat_one(t) {
-        return;
-    }
-    if let Term::App(_, ts) = t {
-        for a in ts.iter() {
-            non_well_sorted(a, out);
-        }
-    }
+    });
 }
 
 /// HS `getRuleTerms` (Wellformedness.hs:332-333): `concatMap factTerms` over
@@ -262,38 +261,52 @@ fn for_each_bound_guarded_term(
     binders: &[(u64, LVar)],
     f: &mut dyn FnMut(&LNTerm),
 ) {
-    use crate::guarded::Guarded;
-    match guarded {
-        Guarded::Atom(atom) => {
-            let atom = crate::guarded::subst_bound_atom(binders, atom);
-            crate::atom::fold_atom(&atom, &mut |term| {
-                let term = crate::guarded::bterm_to_lterm(term);
-                f(&term);
-            });
-        }
-        Guarded::Disj(items) | Guarded::Conj(items) => {
-            for item in items.iter() {
-                for_each_bound_guarded_term(item, binders, f);
+    let map = crate::guarded::bound_atom_mapper(binders);
+    for_each_bound_guarded_term_with(guarded, binders, &map, f);
+}
+
+fn for_each_bound_guarded_term_with(
+    guarded: &crate::guarded::Guarded,
+    binders: &[(u64, LVar)],
+    map: &dyn Fn(
+        &crate::atom::Atom<crate::formula::BLNTerm>,
+    ) -> crate::atom::Atom<crate::formula::BLNTerm>,
+    f: &mut dyn FnMut(&LNTerm),
+) {
+    tamarin_utils::stack::ensure_sufficient_stack(|| {
+        use crate::guarded::Guarded;
+        match guarded {
+            Guarded::Atom(atom) => {
+                let atom = map(atom);
+                crate::atom::fold_atom(&atom, &mut |term| {
+                    let term = crate::guarded::bterm_to_lterm(term);
+                    f(&term);
+                });
+            }
+            Guarded::Disj(items) | Guarded::Conj(items) => {
+                for item in items.iter() {
+                    for_each_bound_guarded_term_with(item, binders, map, f);
+                }
+            }
+            Guarded::GGuarded { vars, body, .. } => {
+                let inner_count = u64::try_from(vars.len()).expect("guarded binder count overflow");
+                let mut extended: Vec<(u64, LVar)> = vars
+                    .iter()
+                    .rev()
+                    .enumerate()
+                    .map(|(i, (name, sort))| (i as u64, LVar::new(name, *sort, 0)))
+                    .collect();
+                extended.extend(binders.iter().map(|(i, var)| {
+                    (
+                        i.checked_add(inner_count)
+                            .expect("guarded binder depth overflow"),
+                        *var,
+                    )
+                }));
+                for_each_bound_guarded_term(body, &extended, f);
             }
         }
-        Guarded::GGuarded { vars, body, .. } => {
-            let inner_count = u64::try_from(vars.len()).expect("guarded binder count overflow");
-            let mut extended: Vec<(u64, LVar)> = vars
-                .iter()
-                .rev()
-                .enumerate()
-                .map(|(i, (name, sort))| (i as u64, LVar::new(name, *sort, 0)))
-                .collect();
-            extended.extend(binders.iter().map(|(i, var)| {
-                (
-                    i.checked_add(inner_count)
-                        .expect("guarded binder depth overflow"),
-                    *var,
-                )
-            }));
-            for_each_bound_guarded_term(body, &extended, f);
-        }
-    }
+    });
 }
 
 // =============================================================================

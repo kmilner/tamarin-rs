@@ -255,10 +255,79 @@ pub use tamarin_term::macro_expand::LNMacro;
 /// `cases` keeps the source order of the `case` blocks; the printer sorts by
 /// name (HS stores them in an `M.fromList`, Theory/Text/Parser/Proof.hs:113)
 /// and replay looks each case up by name.
-#[derive(Debug, Clone, PartialEq)]
 pub struct ProofTree {
     pub method: crate::constraint::solver::proof_method::ProofMethod,
     pub cases: Vec<(String, ProofTree)>,
+}
+
+impl Clone for ProofTree {
+    fn clone(&self) -> Self {
+        fn shallow(tree: &ProofTree) -> ProofTree {
+            ProofTree {
+                method: tree.method.clone(),
+                cases: Vec::new(),
+            }
+        }
+        let mut result = shallow(self);
+        let mut pending = Vec::new();
+        let mut next = Some((self, &mut result));
+        while let Some((source, target)) = next.take().or_else(|| pending.pop()) {
+            target.cases = source
+                .cases
+                .iter()
+                .map(|(name, child)| (name.clone(), shallow(child)))
+                .collect();
+            for ((_, source), (_, target)) in source.cases.iter().zip(target.cases.iter_mut()).rev()
+            {
+                if let Some(previous) = next.replace((source, target)) {
+                    pending.push(previous);
+                }
+            }
+        }
+        result
+    }
+}
+
+impl PartialEq for ProofTree {
+    fn eq(&self, other: &Self) -> bool {
+        let mut pending = vec![(self, other)];
+        while let Some((left, right)) = pending.pop() {
+            if left.method != right.method || left.cases.len() != right.cases.len() {
+                return false;
+            }
+            for ((left_name, left_child), (right_name, right_child)) in
+                left.cases.iter().zip(&right.cases).rev()
+            {
+                if left_name != right_name {
+                    return false;
+                }
+                pending.push((left_child, right_child));
+            }
+        }
+        true
+    }
+}
+
+impl std::fmt::Debug for ProofTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        tamarin_utils::stack::bounded_debug(self, f, |f| {
+            tamarin_utils::stack::ensure_sufficient_stack(|| {
+                f.debug_struct("ProofTree")
+                    .field("method", &self.method)
+                    .field("cases", &self.cases)
+                    .finish()
+            })
+        })
+    }
+}
+
+impl Drop for ProofTree {
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.cases);
+        while let Some((_, mut child)) = pending.pop() {
+            pending.append(&mut child.cases);
+        }
+    }
 }
 
 /// A lemma's stored proof.  `None` is a lemma written without one, which HS
@@ -820,8 +889,45 @@ mod tests {
         assert!(o.deduction_chain_check);
         assert!(o.lemmas_to_prove.is_empty());
     }
+
+    #[test]
+    fn deep_proof_tree_comparison_and_debug_use_bounded_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let mut proof = ProofTree {
+                method: crate::constraint::solver::proof_method::ProofMethod::Sorry(None),
+                cases: Vec::new(),
+            };
+            for _ in 0..8192 {
+                proof = ProofTree {
+                    method: crate::constraint::solver::proof_method::ProofMethod::Simplify,
+                    cases: vec![(String::new(), proof)],
+                };
+            }
+            assert_eq!(proof, proof.clone());
+            assert!(format!("{proof:?}").starts_with("ProofTree {"));
+            assert_eq!(format!("{proof:#?}").matches("ProofTree {").count(), 8193);
+        });
+    }
 }
 
 #[cfg(test)]
 #[path = "stored_proof_corpus_tests.rs"]
 mod stored_proof_corpus_tests;
+
+#[cfg(test)]
+pub(crate) fn proof_chain(
+    depth: usize,
+    method: crate::constraint::solver::proof_method::ProofMethod,
+    leaf: crate::constraint::solver::proof_method::ProofMethod,
+) -> ProofTree {
+    (0..depth).fold(
+        ProofTree {
+            method: leaf,
+            cases: Vec::new(),
+        },
+        |child, _| ProofTree {
+            method: method.clone(),
+            cases: vec![(String::new(), child)],
+        },
+    )
+}

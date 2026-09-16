@@ -34,7 +34,7 @@
 use tamarin_term::function_symbols::{AcSym, FunSym};
 use tamarin_term::lterm::{BVar, NameTag};
 use tamarin_term::maude_sig::MaudeSig;
-use tamarin_term::term::{show_term, Term};
+use tamarin_term::term::{show_term, walk_terms, Term};
 use tamarin_term::vterm::Lit;
 
 use crate::formula::{BLNTerm, LNFormula};
@@ -96,15 +96,18 @@ pub fn check_terms(sig: &MaudeSig, header: &str, fm: &LNFormula) -> Option<WfErr
 /// it is allowed whether or not the signature holds it; every other head
 /// has to be a member of `irreducibleFunSyms`.
 fn allowed(sig: &MaudeSig, t: &BLNTerm) -> bool {
-    match t {
-        Term::Lit(Lit::Var(BVar::Bound(_))) => true,
-        Term::Lit(Lit::Con(n)) => n.tag == NameTag::Pub,
-        Term::Lit(_) => false,
-        Term::App(FunSym::Ac(AcSym::Union), args) => args.iter().all(|a| allowed(sig, a)),
-        Term::App(sym, args) => {
-            sig.irreducible_fun_syms_fast.contains(sym) && args.iter().all(|a| allowed(sig, a))
+    use std::ops::ControlFlow;
+
+    walk_terms(std::slice::from_ref(t), |term| match term {
+        Term::Lit(Lit::Var(BVar::Bound(_))) => ControlFlow::Continue(false),
+        Term::Lit(Lit::Con(n)) if n.tag == NameTag::Pub => ControlFlow::Continue(false),
+        Term::App(FunSym::Ac(AcSym::Union), _) => ControlFlow::Continue(true),
+        Term::App(sym, _) if sig.irreducible_fun_syms_fast.contains(sym) => {
+            ControlFlow::Continue(true)
         }
-    }
+        _ => ControlFlow::Break(()),
+    })
+    .is_continue()
 }
 
 // =============================================================================

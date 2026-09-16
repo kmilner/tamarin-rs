@@ -206,7 +206,9 @@ mod tests {
     #[test]
     fn acc_bindings_follows_pfold_map_order() {
         let ann = ProcessParsedAnnotation::empty;
-        let new = |v: SapicLVar, body| Process::Action(SapicAction::New(v), ann(), Box::new(body));
+        let new = |v: SapicLVar, body: Process<ProcessParsedAnnotation, SapicLVar>| {
+            Process::Action(SapicAction::New(v), ann(), Box::new(body).into())
+        };
         let null = || Process::null(ann());
         // The process is `new a; (new b; 0) lookup-else (new c; 0)`.  The
         // lookup binds `d`.
@@ -215,8 +217,8 @@ mod tests {
             Process::Comb(
                 ProcessCombinator::Lookup(tamarin_term::vterm::var_term(slv("cell")), slv("d")),
                 ann(),
-                Box::new(new(slv("b"), null())),
-                Box::new(new(slv("c"), null())),
+                Box::new(new(slv("b"), null())).into(),
+                Box::new(new(slv("c"), null())).into(),
             ),
         );
         let names: Vec<String> = acc_bindings(&p)

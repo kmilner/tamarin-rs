@@ -27,6 +27,7 @@ use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::sapic::{Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
+use crate::process_walk::untyped_term;
 
 type AnnotatedProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 
@@ -43,89 +44,183 @@ pub(crate) enum LockWfError {
 /// `annotateEachClosestUnlock t v p` (Locks.hs:34-59): annotate the closest
 /// occurrence of `unlock` (and `insert t _` / `lookup t _`) that has term `t`
 /// with the variable `v`.  Errors on `Rep`/`Parallel` below the lock.
+#[cfg(test)]
 fn annotate_each_closest_unlock(
     t: &SapicTerm,
     v: &LVar,
-    p: AnnotatedProc,
-) -> Result<AnnotatedProc, LockWfError> {
-    match p {
-        // ProcessNull a' -> return $ ProcessNull a'
-        Process::Null(a) => Ok(Process::Null(a)),
-        Process::Action(ac, a, body) => match &ac {
-            // (Unlock t') | t == t' -> annUnlock here, STOP (closest match).
-            //              | otherwise -> recurse into body.
-            SapicAction::Unlock(t_prime) if t == t_prime => {
-                let a2 = a.append(ProcessAnnotation::with_unlock(*v));
-                Ok(Process::Action(ac, a2, body))
+    p: &mut AnnotatedProc,
+) -> Result<(), LockWfError> {
+    let t = untyped_term(t);
+    crate::process_walk::walk_mut(p, (), |node, _| {
+        match node {
+            Process::Action(ac, ann, _) => match ac {
+                SapicAction::Unlock(other) if t == untyped_term(other) => {
+                    *ann = std::mem::take(ann).append(ProcessAnnotation::with_unlock(*v));
+                    return Ok(false);
+                }
+                SapicAction::Insert(other, _) if t == untyped_term(other) => {
+                    *ann = std::mem::take(ann).append(ProcessAnnotation::with_unlock(*v));
+                }
+                SapicAction::Rep => return Err(LockWfError::Rep),
+                _ => {}
+            },
+            Process::Comb(ProcessCombinator::Parallel, _, _, _) => return Err(LockWfError::Par),
+            Process::Comb(ProcessCombinator::Lookup(other, _), ann, _, _)
+                if t == untyped_term(other) =>
+            {
+                *ann = std::mem::take(ann).append(ProcessAnnotation::with_unlock(*v));
             }
-            // (Insert t1 t2) | t1 == t -> annUnlock here AND recurse into body.
-            //  (otherwise falls through to the generic action case below.)
-            SapicAction::Insert(t1, _t2) if t1 == t => {
-                let body2 = annotate_each_closest_unlock(t, v, *body)?;
-                let a2 = a.append(ProcessAnnotation::with_unlock(*v));
-                Ok(Process::Action(ac, a2, Box::new(body2)))
-            }
-            // (Rep) -> Left WFRep
-            SapicAction::Rep => Err(LockWfError::Rep),
-            // generic action: recurse into body.
-            _ => {
-                let body2 = annotate_each_closest_unlock(t, v, *body)?;
-                Ok(Process::Action(ac, a, Box::new(body2)))
-            }
-        },
-        // (ProcessComb Parallel _ _ _) -> Left WFPar
-        Process::Comb(ProcessCombinator::Parallel, _, _, _) => Err(LockWfError::Par),
-        Process::Comb(c, a, pl, pr) => match &c {
-            // (Lookup st vt) | st == t -> annUnlock here AND recurse into BOTH children.
-            ProcessCombinator::Lookup(st, _vt) if st == t => {
-                let pl2 = annotate_each_closest_unlock(t, v, *pl)?;
-                let pr2 = annotate_each_closest_unlock(t, v, *pr)?;
-                let a2 = a.append(ProcessAnnotation::with_unlock(*v));
-                Ok(Process::Comb(c, a2, Box::new(pl2), Box::new(pr2)))
-            }
-            // generic combinator: recurse into both children (no annotation).
-            _ => {
-                let pl2 = annotate_each_closest_unlock(t, v, *pl)?;
-                let pr2 = annotate_each_closest_unlock(t, v, *pr)?;
-                Ok(Process::Comb(c, a, Box::new(pl2), Box::new(pr2)))
-            }
-        },
+            _ => {}
+        }
+        Ok(true)
+    })
+}
+
+#[derive(Clone, Copy)]
+struct LockBinding {
+    // An outer scan runs before every inner scan, but the innermost matching
+    // lock supplies the final annotation. Both orders matter.
+    oldest: usize,
+    latest: LVar,
+}
+
+#[derive(Default)]
+struct ActiveLocks {
+    terms: std::collections::BTreeMap<SapicTerm, LockBinding>,
+    order: std::collections::BTreeSet<usize>,
+    undo: Vec<(SapicTerm, Option<LockBinding>)>,
+    checkpoints: usize,
+}
+
+impl ActiveLocks {
+    fn replace(&mut self, term: SapicTerm, binding: Option<LockBinding>) -> Option<LockBinding> {
+        let previous = match binding {
+            Some(binding) => self.terms.insert(term, binding),
+            None => self.terms.remove(&term),
+        };
+        if let Some(previous) = previous {
+            self.order.remove(&previous.oldest);
+        }
+        if let Some(binding) = binding {
+            self.order.insert(binding.oldest);
+        }
+        previous
+    }
+
+    fn set(&mut self, term: &SapicTerm, binding: Option<LockBinding>) {
+        let previous = self.replace(term.clone(), binding);
+        // Straight-line prefixes never need restoration. Retain history only
+        // while a pending sibling can still observe the old scope.
+        if self.checkpoints != 0 {
+            self.undo.push((term.clone(), previous));
+        }
+    }
+
+    fn restore(&mut self, len: usize) {
+        while self.undo.len() > len {
+            let (term, binding) = self.undo.pop().unwrap();
+            self.replace(term, binding);
+        }
     }
 }
 
-/// `annotateLocks'` (Locks.hs:74-91): at each `Lock t`, mint a fresh lock
-/// variable, annotate the closest matching unlocks under it, then recurse.
+/// Annotate in one DFS, restoring the active lock scope at branch boundaries.
 fn annotate_locks_go(
     fresh: &mut FastFreshState,
-    p: AnnotatedProc,
+    mut p: AnnotatedProc,
 ) -> Result<AnnotatedProc, LockWfError> {
-    match p {
-        // (Lock t) -> fresh v; annotateEachClosestUnlock t v body; recurse; annLock here.
-        Process::Action(SapicAction::Lock(t), a, body) => {
-            // freshLVar "lock" LSortMsg — fast counter, name ignored.
-            let v = LVar {
-                name: "lock",
-                sort: LSort::Msg,
-                idx: fresh.fresh_ident(""),
-            };
-            let p1 = annotate_each_closest_unlock(&t, &v, *body)?;
-            let p2 = annotate_locks_go(fresh, p1)?;
-            let a2 = a.append(ProcessAnnotation::with_lock(v));
-            Ok(Process::Action(SapicAction::Lock(t), a2, Box::new(p2)))
+    enum Work<'a> {
+        Visit(&'a mut AnnotatedProc),
+        Restore(usize, bool),
+    }
+    let mut scope = ActiveLocks::default();
+    let mut pending = vec![Work::Visit(&mut p)];
+    let mut next_lock = 0;
+    let mut error: Option<(usize, LockWfError)> = None;
+    while let Some(work) = pending.pop() {
+        let node = match work {
+            Work::Restore(len, finished) => {
+                scope.restore(len);
+                if finished {
+                    scope.checkpoints -= 1;
+                }
+                continue;
+            }
+            Work::Visit(node) => node,
+        };
+        // Once a lock has failed, only an earlier lock's pending branch can
+        // take precedence. New locks in this subtree would all come later.
+        if let Some((failed, _)) = &error
+            && scope.order.first().is_none_or(|active| active >= failed)
+        {
+            continue;
         }
-        // (ProcessAction ac an p) -> recurse into body.
-        Process::Action(ac, an, body) => {
-            let p1 = annotate_locks_go(fresh, *body)?;
-            Ok(Process::Action(ac, an, Box::new(p1)))
+        let failure = match node {
+            Process::Action(SapicAction::Rep, _, _) => Some(LockWfError::Rep),
+            Process::Comb(ProcessCombinator::Parallel, _, _, _) => Some(LockWfError::Par),
+            _ => None,
+        };
+        if let Some(failure) = failure
+            && let Some(&oldest) = scope.order.first()
+        {
+            // DFS gives the first error for this lock. Keep the earliest lock
+            // overall, matching the old outer-scan-before-inner-scan policy.
+            error = Some((oldest, failure));
+            continue;
         }
-        // (ProcessNull an) -> return as-is.
-        Process::Null(an) => Ok(Process::Null(an)),
-        // (ProcessComb comb an pl pr) -> recurse into both children.
-        Process::Comb(comb, an, pl, pr) => {
-            let pl2 = annotate_locks_go(fresh, *pl)?;
-            let pr2 = annotate_locks_go(fresh, *pr)?;
-            Ok(Process::Comb(comb, an, Box::new(pl2), Box::new(pr2)))
+        match node {
+            Process::Null(_) => {}
+            Process::Action(ac, ann, body) => {
+                match ac {
+                    SapicAction::Lock(term) => {
+                        let term = untyped_term(term);
+                        let v = LVar {
+                            name: "lock",
+                            sort: LSort::Msg,
+                            idx: fresh.fresh_ident(""),
+                        };
+                        let oldest = scope
+                            .terms
+                            .get(&term)
+                            .map_or(next_lock, |binding| binding.oldest);
+                        next_lock += 1;
+                        scope.set(&term, Some(LockBinding { oldest, latest: v }));
+                        *ann = std::mem::take(ann).append(ProcessAnnotation::with_lock(v));
+                    }
+                    SapicAction::Unlock(term) | SapicAction::Insert(term, _) => {
+                        let term = untyped_term(term);
+                        if let Some(binding) = scope.terms.get(&term).copied() {
+                            *ann = std::mem::take(ann)
+                                .append(ProcessAnnotation::with_unlock(binding.latest));
+                            if matches!(ac, SapicAction::Unlock(_)) {
+                                // One unlock terminates every same-term outer scan.
+                                scope.set(&term, None);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                pending.push(Work::Visit(body));
+            }
+            Process::Comb(comb, ann, left, right) => {
+                if let ProcessCombinator::Lookup(term, _) = comb
+                    && let Some(binding) = scope.terms.get(&untyped_term(term))
+                {
+                    *ann =
+                        std::mem::take(ann).append(ProcessAnnotation::with_unlock(binding.latest));
+                }
+                let checkpoint = scope.undo.len();
+                scope.checkpoints += 1;
+                pending.push(Work::Restore(checkpoint, true));
+                pending.push(Work::Visit(right));
+                pending.push(Work::Restore(checkpoint, false));
+                pending.push(Work::Visit(left));
+            }
         }
+    }
+    match error {
+        Some((_, error)) => Err(error),
+        None => Ok(p),
     }
 }
 
@@ -146,146 +241,5 @@ pub(crate) fn annotate_locks(p: AnnotatedProc) -> Result<AnnotatedProc, String> 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tamarin_term::lterm::{Name, NameTag};
-    use tamarin_term::vterm::const_term;
-
-    fn pub_const(s: &str) -> SapicTerm {
-        const_term(Name::new(NameTag::Pub, s))
-    }
-
-    fn null() -> AnnotatedProc {
-        Process::Null(ProcessAnnotation::empty())
-    }
-
-    fn lock(t: SapicTerm, body: AnnotatedProc) -> AnnotatedProc {
-        Process::Action(
-            SapicAction::Lock(t),
-            ProcessAnnotation::empty(),
-            Box::new(body),
-        )
-    }
-    fn unlock(t: SapicTerm, body: AnnotatedProc) -> AnnotatedProc {
-        Process::Action(
-            SapicAction::Unlock(t),
-            ProcessAnnotation::empty(),
-            Box::new(body),
-        )
-    }
-
-    #[test]
-    fn lock_gets_index_zero_and_matches_unlock() {
-        // lock 's'; unlock 's'; 0
-        let p = lock(pub_const("s"), unlock(pub_const("s"), null()));
-        let out = annotate_locks(p).unwrap();
-        // The lock annotation carries `lock` with idx 0.
-        if let Process::Action(SapicAction::Lock(_), a, body) = out {
-            let lv = a.lock.expect("lock annotated");
-            assert_eq!(lv.0.name, "lock");
-            assert_eq!(lv.0.idx, 0);
-            assert_eq!(lv.0.sort, LSort::Msg);
-            // ...and the matching unlock carries the SAME lock variable as unlock.
-            if let Process::Action(SapicAction::Unlock(_), ua, _) = *body {
-                let uv = ua.unlock.expect("unlock annotated");
-                assert_eq!(uv.0.idx, 0);
-            } else {
-                panic!("expected unlock under lock");
-            }
-        } else {
-            panic!("expected lock action");
-        }
-    }
-
-    #[test]
-    fn two_locks_get_indices_zero_and_one() {
-        // lock 'a'; unlock 'a'; lock 'b'; unlock 'b'; 0
-        let p = lock(
-            pub_const("a"),
-            unlock(
-                pub_const("a"),
-                lock(pub_const("b"), unlock(pub_const("b"), null())),
-            ),
-        );
-        let out = annotate_locks(p).unwrap();
-        // outer lock idx 0
-        let Process::Action(SapicAction::Lock(_), a0, body0) = out else {
-            panic!()
-        };
-        assert_eq!(a0.lock.unwrap().0.idx, 0);
-        // the inner lock gets idx 1
-        let Process::Action(SapicAction::Unlock(_), _, body1) = *body0 else {
-            panic!()
-        };
-        let Process::Action(SapicAction::Lock(_), a1, _) = *body1 else {
-            panic!()
-        };
-        assert_eq!(a1.lock.unwrap().0.idx, 1);
-    }
-
-    #[test]
-    fn insert_matching_term_annotated_as_unlock() {
-        // lock 's'; insert 's','v'; 0 — Insert with t1 == lock term is annotated
-        // as an unlock (HS Locks.hs:45-48) AND recursion continues into the body.
-        let p = lock(
-            pub_const("s"),
-            Process::Action(
-                SapicAction::Insert(pub_const("s"), pub_const("v")),
-                ProcessAnnotation::empty(),
-                Box::new(null()),
-            ),
-        );
-        let out = annotate_locks(p).unwrap();
-        let Process::Action(SapicAction::Lock(_), _, body) = out else {
-            panic!()
-        };
-        let Process::Action(SapicAction::Insert(_, _), ia, _) = *body else {
-            panic!()
-        };
-        assert_eq!(ia.unlock.expect("insert annotated as unlock").0.idx, 0);
-    }
-
-    /// `WFRep` and `WFPar` are different tags upstream (`prettyWFLockTag`,
-    /// Sapic/Exceptions.hs:32-34). They select different wording in the
-    /// `ProcessNotWellformed` error that upstream throws. The two arms must
-    /// therefore not collapse into one error. A lock whose scope stays open is
-    /// the only way to reach either tag. `annotate_locks` must refuse the
-    /// process in both cases.
-    #[test]
-    fn parallel_and_replication_below_lock_error_distinctly() {
-        // lock 's'; ( 0 | 0 )  — WFPar
-        let par = Process::Comb(
-            ProcessCombinator::Parallel,
-            ProcessAnnotation::empty(),
-            Box::new(null()),
-            Box::new(null()),
-        );
-        // lock 's'; ! 0  — WFRep
-        let rep = Process::Action(
-            SapicAction::Rep,
-            ProcessAnnotation::empty(),
-            Box::new(null()),
-        );
-        for (body, want) in [(par, LockWfError::Par), (rep, LockWfError::Rep)] {
-            let p = lock(pub_const("s"), body);
-            let mut fresh = FastFreshState::nothing_used();
-            assert_eq!(annotate_locks_go(&mut fresh, p.clone()).unwrap_err(), want);
-            assert!(annotate_locks(p).is_err());
-        }
-    }
-
-    #[test]
-    fn unmatched_term_unlock_not_annotated() {
-        // lock 's'; unlock 'other'; 0 — different term, unlock NOT annotated,
-        // recursion continues into body.
-        let p = lock(pub_const("s"), unlock(pub_const("other"), null()));
-        let out = annotate_locks(p).unwrap();
-        let Process::Action(SapicAction::Lock(_), _, body) = out else {
-            panic!()
-        };
-        let Process::Action(SapicAction::Unlock(_), ua, _) = *body else {
-            panic!()
-        };
-        assert!(ua.unlock.is_none());
-    }
-}
+#[path = "locks_tests.rs"]
+mod tests;

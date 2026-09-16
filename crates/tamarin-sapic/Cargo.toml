@@ -13,6 +13,7 @@ tamarin-term = { workspace = true }
 tamarin-theory = { workspace = true }
 
 [dev-dependencies]
+tamarin-test-support = { workspace = true }
 tamarin-parser = { workspace = true }
 
 [lints]

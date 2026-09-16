@@ -9,6 +9,7 @@ description = "Theory-file parser for the Tamarin prover (Rust port)."
 
 [dependencies]
 tamarin-term = { workspace = true }
+tamarin-utils = { workspace = true }
 
 [dev-dependencies]
 tamarin-test-support = { workspace = true }

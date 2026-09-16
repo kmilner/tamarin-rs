@@ -336,19 +336,15 @@ pub fn elem_not_below_reducible(
     inner: &LNTerm,
     outer: &LNTerm,
 ) -> bool {
-    if inner == outer {
-        return true;
-    }
-    match outer {
-        Term::App(sym, args) => {
-            if reducible.contains(sym) {
-                return false;
-            }
-            args.iter()
-                .any(|a| elem_not_below_reducible(reducible, inner, a))
+    use std::ops::ControlFlow;
+    tamarin_term::term::walk_terms(std::slice::from_ref(outer), |node| {
+        if inner == node {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(!matches!(node, Term::App(sym, _) if reducible.contains(sym)))
         }
-        _ => false,
-    }
+    })
+    .is_break()
 }
 
 /// `processACSubterm f (small, big)` — HS SubtermStore.hs:313-328.
@@ -553,7 +549,9 @@ fn recurse_subterm(
             for e in entries {
                 match e {
                     SubtermSplit::SubtermD(s, t) => {
-                        recurse_subterm(reducible, &s, &t, mk_fresh, out)
+                        tamarin_utils::stack::ensure_sufficient_stack(|| {
+                            recurse_subterm(reducible, &s, &t, mk_fresh, out)
+                        })
                     }
                     other => out.push(other),
                 }
@@ -688,20 +686,17 @@ pub fn collect_fresh_vars_not_below_reducible(
 ) {
     use tamarin_term::lterm::LSort;
     use tamarin_term::vterm::Lit;
-    match t {
-        Term::App(sym, args) => {
-            if reducible.contains(sym) {
-                return;
+    let _: std::ops::ControlFlow<()> =
+        tamarin_term::term::walk_terms(std::slice::from_ref(t), |node| {
+            if let Term::Lit(Lit::Var(v)) = node
+                && v.sort == LSort::Fresh
+            {
+                out.insert(*v);
             }
-            for a in args.iter() {
-                collect_fresh_vars_not_below_reducible(reducible, a, out);
-            }
-        }
-        Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh => {
-            out.insert(*v);
-        }
-        _ => {}
-    }
+            std::ops::ControlFlow::Continue(
+                !matches!(node, Term::App(sym, _) if reducible.contains(sym)),
+            )
+        });
 }
 
 /// `hasSubtermCycle` — port of Haskell's
@@ -1224,5 +1219,63 @@ mod tests {
         let propagated = store(true);
         assert_ne!(plain, propagated, "Rust equality includes the marker");
         assert_eq!(plain.cmp_hs(&propagated), std::cmp::Ordering::Equal);
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use tamarin_term::{
+        builtin::{hash, hash_sym, msg_var, pair},
+        lterm::LSort,
+        vterm::var_term,
+    };
+
+    #[test]
+    fn deep_pruned_queries_preserve_root_equality_and_fresh_membership() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let fresh = LVar::new("f", LSort::Fresh, 0);
+            let hidden = LVar::new("hidden", LSort::Fresh, 1);
+            let mut term = var_term(fresh);
+            for _ in 0..8192 {
+                term = hash(term);
+            }
+            let empty = FastSet::default();
+            assert!(elem_not_below_reducible(&empty, &var_term(fresh), &term));
+            assert!(!elem_not_below_reducible(&empty, &var_term(hidden), &term));
+            let mut vars = FastSet::default();
+            collect_fresh_vars_not_below_reducible(&empty, &term, &mut vars);
+            assert_eq!(vars, FastSet::from_iter([fresh]));
+            let reducible = FastSet::from_iter([FunSym::NoEq(hash_sym())]);
+            assert!(elem_not_below_reducible(&reducible, &term, &term));
+            assert!(!elem_not_below_reducible(
+                &reducible,
+                &var_term(fresh),
+                &term
+            ));
+            vars.clear();
+            let branches = pair(term, pair(var_term(hidden), var_term(hidden)));
+            collect_fresh_vars_not_below_reducible(&reducible, &branches, &mut vars);
+            assert_eq!(vars, FastSet::from_iter([hidden]));
+        });
+    }
+
+    #[test]
+    fn recursive_split_grows_stack_for_deep_unknown_relations() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let x = msg_var("x", 0);
+            let y = msg_var("y", 1);
+            let mut term = y.clone();
+            for _ in 0..512 {
+                term = hash(term);
+            }
+            let splits = split_subterm(&FastSet::default(), true, &x, &term, &mut |_| {
+                panic!("free constructors need no fresh variables")
+            });
+            assert_eq!(splits.len(), 513);
+            assert!(splits.contains(&SubtermSplit::SubtermD(x.clone(), y.clone())));
+            assert!(splits.contains(&SubtermSplit::EqualD(x, y)));
+            assert!(splits.windows(2).all(|pair| pair[0] < pair[1]));
+        });
     }
 }

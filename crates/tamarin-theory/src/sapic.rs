@@ -22,6 +22,8 @@
 //!   `pfoldMap` and the `applyMatchVars` pair. `mapTerms`, `foldProcess`,
 //!   `foldMProcess` and `traverseProcess` are not ported.
 
+mod structure;
+
 use std::collections::BTreeSet;
 
 use tamarin_term::lterm::{BVar, LVar, Name};
@@ -168,11 +170,15 @@ impl ProcessParsedAnnotation {
 /// `GoodAnnotation`: any annotation that can recover the parsed-stage info.
 pub trait GoodAnnotation: Sized {
     fn parsed(&self) -> &ProcessParsedAnnotation;
+    fn parsed_mut(&mut self) -> &mut ProcessParsedAnnotation;
     fn set_parsed(self, p: ProcessParsedAnnotation) -> Self;
 }
 
 impl GoodAnnotation for ProcessParsedAnnotation {
     fn parsed(&self) -> &ProcessParsedAnnotation {
+        self
+    }
+    fn parsed_mut(&mut self) -> &mut ProcessParsedAnnotation {
         self
     }
     fn set_parsed(self, p: ProcessParsedAnnotation) -> Self {
@@ -242,16 +248,57 @@ pub enum ProcessCombinator<V> {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Process<Ann, V> {
     Null(Ann),
     Comb(
         ProcessCombinator<V>,
         Ann,
-        Box<Process<Ann, V>>,
-        Box<Process<Ann, V>>,
+        ProcessBox<Ann, V>,
+        ProcessBox<Ann, V>,
     ),
-    Action(SapicAction<V>, Ann, Box<Process<Ann, V>>),
+    Action(SapicAction<V>, Ann, ProcessBox<Ann, V>),
+}
+
+/// Owned process edge; ordinary destruction drains the process spine.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProcessBox<Ann, V>(Option<Box<Process<Ann, V>>>);
+impl<Ann, V> From<Box<Process<Ann, V>>> for ProcessBox<Ann, V> {
+    fn from(value: Box<Process<Ann, V>>) -> Self {
+        Self(Some(value))
+    }
+}
+impl<Ann, V> ProcessBox<Ann, V> {
+    pub fn into_inner(mut self) -> Process<Ann, V> {
+        *self.0.take().unwrap()
+    }
+}
+impl<Ann, V> std::ops::Deref for ProcessBox<Ann, V> {
+    type Target = Process<Ann, V>;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().unwrap()
+    }
+}
+impl<Ann, V> std::ops::DerefMut for ProcessBox<Ann, V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_deref_mut().unwrap()
+    }
+}
+impl<Ann, V> AsRef<Process<Ann, V>> for ProcessBox<Ann, V> {
+    fn as_ref(&self) -> &Process<Ann, V> {
+        self
+    }
+}
+impl<Ann, V> Drop for ProcessBox<Ann, V> {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            (*p).drop_iteratively();
+        }
+    }
+}
+impl<Ann: std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for ProcessBox<Ann, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&**self, f)
+    }
 }
 
 /// Rebuild a process while transforming every action, combinator and
@@ -263,25 +310,44 @@ pub fn try_map_process<Ann, V, Ann2, V2, E>(
     map_comb: &mut impl FnMut(&ProcessCombinator<V>) -> Result<ProcessCombinator<V2>, E>,
     map_ann: &mut impl FnMut(&Ann) -> Result<Ann2, E>,
 ) -> Result<Process<Ann2, V2>, E> {
-    match p {
-        Process::Null(ann) => Ok(Process::Null(map_ann(ann)?)),
-        Process::Action(action, ann, body) => {
-            let action = map_action(action)?;
-            let body = try_map_process(body, map_action, map_comb, map_ann)?;
-            Ok(Process::Action(action, map_ann(ann)?, Box::new(body)))
-        }
-        Process::Comb(comb, ann, left, right) => {
-            let comb = map_comb(comb)?;
-            let left = try_map_process(left, map_action, map_comb, map_ann)?;
-            let right = try_map_process(right, map_action, map_comb, map_ann)?;
-            Ok(Process::Comb(
-                comb,
-                map_ann(ann)?,
-                Box::new(left),
-                Box::new(right),
-            ))
+    enum Task<'a, Ann, V, V2> {
+        Visit(&'a Process<Ann, V>),
+        Action(SapicAction<V2>, &'a Ann),
+        Comb(ProcessCombinator<V2>, &'a Ann),
+    }
+    let mut tasks = vec![Task::Visit(p)];
+    let mut output = Vec::new();
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Visit(Process::Null(ann)) => output.push(Process::Null(map_ann(ann)?)),
+            Task::Visit(Process::Action(action, ann, body)) => {
+                tasks.push(Task::Action(map_action(action)?, ann));
+                tasks.push(Task::Visit(body));
+            }
+            Task::Visit(Process::Comb(comb, ann, left, right)) => {
+                tasks.push(Task::Comb(map_comb(comb)?, ann));
+                tasks.push(Task::Visit(right));
+                tasks.push(Task::Visit(left));
+            }
+            Task::Action(action, ann) => {
+                let ann = map_ann(ann)?;
+                let body = output.pop().expect("mapped action body");
+                output.push(Process::Action(action, ann, Box::new(body).into()));
+            }
+            Task::Comb(comb, ann) => {
+                let ann = map_ann(ann)?;
+                let right = output.pop().expect("mapped right branch");
+                let left = output.pop().expect("mapped left branch");
+                output.push(Process::Comb(
+                    comb,
+                    ann,
+                    Box::new(left).into(),
+                    Box::new(right).into(),
+                ));
+            }
         }
     }
+    Ok(output.pop().expect("mapped process"))
 }
 
 /// Infallible form of [`try_map_process`].
@@ -303,12 +369,39 @@ pub fn map_process<Ann, V, Ann2, V2>(
 pub type LProcess<Ann> = Process<Ann, SapicLVar>;
 pub type PlainProcess = LProcess<ProcessParsedAnnotation>;
 
+impl<Ann, V> Process<Ann, V> {
+    /// Release a process spine without recursively dropping its child boxes.
+    /// Payloads retain their own normal destruction behavior. This consuming
+    /// operation also works for transient processes with generic annotations.
+    pub fn drop_iteratively(self) {
+        // Drop the current subtree before its pending siblings on unwind.
+        let mut pending = tamarin_utils::drop_stack::DropStack::from(Vec::new());
+        let mut current = self;
+        loop {
+            match current {
+                Process::Null(_) => {}
+                Process::Action(_, _, body) => {
+                    current = body.into_inner();
+                    continue;
+                }
+                Process::Comb(_, _, left, right) => {
+                    pending.push(right);
+                    current = left.into_inner();
+                    continue;
+                }
+            }
+            let Some(next) = pending.pop() else { return };
+            current = next.into_inner();
+        }
+    }
+}
+
 /// A [`PlainProcess`] together with its `{:?}` rendering.
 ///
 /// A SAPIC-generated rule carries the process it was generated from
 /// ([`crate::rule::RuleAttributes::process`]), and the solver renders a rule's
 /// info into an occurrence path once per node of every candidate system.  The
-/// rendering here is the process's derived
+/// rendering here is the process's structural
 /// `Debug` output, so [`Debug`](std::fmt::Debug) writes those bytes instead of
 /// walking the tree again, and [`Deref`](std::ops::Deref) hands out the process
 /// itself to the wellformedness pass and the printers.
@@ -386,13 +479,13 @@ mod shared_process_order_tests {
         let comb = SharedProcess::new(Process::Comb(
             ProcessCombinator::Parallel,
             ann("a"),
-            Box::new(Process::Null(ann("a"))),
-            Box::new(Process::Null(ann("a"))),
+            Box::new(Process::Null(ann("a"))).into(),
+            Box::new(Process::Null(ann("a"))).into(),
         ));
         let action = SharedProcess::new(Process::Action(
             SapicAction::Rep,
             ann("a"),
-            Box::new(Process::Null(ann("a"))),
+            Box::new(Process::Null(ann("a"))).into(),
         ));
 
         // Haskell derives Ord from declaration order:
@@ -547,7 +640,7 @@ where
 /// - `Comb`: in-order — left subtree, then self, then right subtree
 ///   (`pfoldMap pl <> f self <> pfoldMap pr` in HS).
 pub fn for_each_process<Ann, V>(p: &Process<Ann, V>, f: &mut impl FnMut(&Process<Ann, V>)) {
-    match p {
+    tamarin_utils::stack::ensure_sufficient_stack(|| match p {
         Process::Null(_) => f(p),
         Process::Action(_, _, body) => {
             f(p);
@@ -558,7 +651,7 @@ pub fn for_each_process<Ann, V>(p: &Process<Ann, V>, f: &mut impl FnMut(&Process
             f(p);
             for_each_process(r, f);
         }
-    }
+    })
 }
 
 /// `processContains`: any node in `p` for which `f` returns true.
@@ -566,45 +659,33 @@ pub fn process_contains<Ann, V, F: FnMut(&Process<Ann, V>) -> bool>(
     p: &Process<Ann, V>,
     mut f: F,
 ) -> bool {
-    let mut found = false;
-    fn walk<Ann, V, F: FnMut(&Process<Ann, V>) -> bool>(
-        p: &Process<Ann, V>,
-        f: &mut F,
-        found: &mut bool,
-    ) {
-        if *found {
-            return;
-        }
-        if f(p) {
-            *found = true;
-            return;
-        }
-        match p {
-            Process::Null(_) => {}
-            Process::Action(_, _, body) => walk(body, f, found),
-            Process::Comb(_, _, l, r) => {
-                walk(l, f, found);
-                walk(r, f, found);
+    fn walk<Ann, V>(p: &Process<Ann, V>, f: &mut impl FnMut(&Process<Ann, V>) -> bool) -> bool {
+        tamarin_utils::stack::ensure_sufficient_stack(|| {
+            f(p) || match p {
+                Process::Null(_) => false,
+                Process::Action(_, _, body) => walk(body, f),
+                Process::Comb(_, _, left, right) => walk(left, f) || walk(right, f),
             }
-        }
+        })
     }
-    walk(p, &mut f, &mut found);
-    found
+    walk(p, &mut f)
 }
 
 /// `processAt p pos`: subprocess at position `pos`. Returns `None` if the
 /// position is invalid.
-pub fn process_at<'a, Ann, V>(p: &'a Process<Ann, V>, pos: &[i64]) -> Option<&'a Process<Ann, V>> {
-    if pos.is_empty() {
-        return Some(p);
+pub fn process_at<'a, Ann, V>(
+    mut p: &'a Process<Ann, V>,
+    pos: &[i64],
+) -> Option<&'a Process<Ann, V>> {
+    for edge in pos {
+        p = match (p, edge) {
+            (Process::Action(_, _, body), 1) => body,
+            (Process::Comb(_, _, left, _), 1) => left,
+            (Process::Comb(_, _, _, right), 2) => right,
+            _ => return None,
+        };
     }
-    match (p, pos[0]) {
-        (Process::Null(_), _) => None,
-        (Process::Action(_, _, body), 1) => process_at(body, &pos[1..]),
-        (Process::Comb(_, _, l, _), 1) => process_at(l, &pos[1..]),
-        (Process::Comb(_, _, _, r), 2) => process_at(r, &pos[1..]),
-        _ => None,
-    }
+    Some(p)
 }
 
 /// `PatternSapicLVar`: pattern variables either bind a new variable
@@ -720,260 +801,51 @@ pub fn is_eq<Ann, V>(p: &Process<Ann, V>) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+#[path = "sapic_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+mod retained_process_drop_tests {
     use super::*;
-    use tamarin_term::lterm::LSort;
-
-    /// The whole point of [`SharedProcess`] is that its `Debug` writes what
-    /// the process's own derived `Debug` writes: the occurrence paths the
-    /// solver builds from a rule's info embed that rendering, so a different
-    /// spelling would reorder them.
-    #[test]
-    fn shared_process_debug_is_the_process_debug() {
-        let inner = Process::Action(
-            SapicAction::New(SapicLVar::untyped(LVar::new("x", LSort::Msg, 0))),
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        let shared = SharedProcess::new(inner.clone());
-        assert_eq!(format!("{:?}", shared), format!("{:?}", inner));
-        // The occurrence path embeds the rule attributes' derived `Debug`,
-        // which reaches the process as `Option<Arc<SharedProcess>>` — the
-        // same `Some(…)` bytes the bare process writes.
-        assert_eq!(
-            format!("{:?}", Some(std::sync::Arc::new(shared))),
-            format!("{:?}", Some(&inner))
-        );
-    }
+    use crate::theory::{ProcessDef, TranslationElement};
 
     #[test]
-    fn position_relations_and_rendering() {
-        assert!(descendant(&[1, 2, 3], &[1, 2]));
-        assert!(!descendant(&[1, 2], &[1, 2, 3]));
-        assert_eq!(pretty_position(&vec![1, 2, 1]), "121");
-    }
-
-    /// `untyped` is HS `SapicLVar v Nothing`. The type tag is absent. It does
-    /// not hold the spelling of the default type. The difference is visible in
-    /// two places. `pretty_function_typing_info` prints `defaultSapicTypeS`
-    /// ("Any") for a `None`. The SAPIC typing pass treats a `Some` as a user
-    /// declaration that it must respect. `to_lvar` drops whichever tag is
-    /// present and returns the `LVar` unchanged.
-    #[test]
-    fn sapic_lvar_untyped_has_no_type_tag_and_to_lvar_drops_it() {
-        let v = LVar::new("x", LSort::Msg, 0);
-        let sv = SapicLVar::untyped(v);
-        assert_eq!(sv.stype, None);
-        assert_eq!(sv.to_lvar(), v);
-        // A tagged variable keeps its tag. `to_lvar` still returns the `LVar`
-        // without the tag.
-        let typed = SapicLVar::new(v, default_sapic_node_type());
-        assert_eq!(typed.stype, Some("node".to_string()));
-        assert_eq!(typed.to_lvar(), v);
-        assert_ne!(typed, sv, "the type tag is part of the variable's identity");
-    }
-
-    /// `toLFormula` maps each free variable to its `LVar` through the atom,
-    /// the term, the literal and the `BVar`, so a tag disappears wherever it
-    /// sits, a bound index and its binder hint cross unchanged, and the
-    /// sugar's fact is reached like any other atom.
-    #[test]
-    fn to_lformula_drops_type_tags_and_keeps_bound_indices() {
-        use crate::atom::{ProtoAtom, SyntacticSugar};
-        use crate::fact::{Fact, FactTag};
-        use crate::formula::ProtoFormula;
-        use tamarin_term::vterm::var_term;
-
-        let y = LVar::new("y", LSort::Msg, 0);
-        let tagged = var_term(BVar::Free(SapicLVar::new(y, Some("foo".to_string()))));
-        fn pred<V>(t: VTerm<Name, BVar<V>>) -> SyntacticNFormula<V> {
-            ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::new(
-                FactTag::Term,
-                vec![t],
-            ))))
-        }
-        let hint = ("x".to_string(), LSort::Msg);
-        let fm: SapicFormula = ProtoFormula::exists(
-            hint.clone(),
-            ProtoFormula::Atom(ProtoAtom::EqE(var_term(BVar::Bound(0)), tagged.clone()))
-                .and(pred(tagged)),
-        );
-
-        let free = var_term(BVar::Free(y));
-        let want: SyntacticLNFormula = ProtoFormula::exists(
-            hint,
-            ProtoFormula::Atom(ProtoAtom::EqE(var_term(BVar::Bound(0)), free.clone()))
-                .and(pred(free)),
-        );
-        assert_eq!(to_lformula(&fm), want);
-    }
-
-    /// `<>` on the annotation works field by field, but each field behaves
-    /// differently. The names concatenate from left to right. The location
-    /// comes from the right side. An inner `at`-location therefore overrides
-    /// an outer one. Only a `None` on the right keeps the location of the
-    /// left. The back-substitutions compose.
-    #[test]
-    fn parsed_annotation_append_concats_names_and_right_biases_location() {
-        let loc = |n: &str| {
-            tamarin_term::vterm::var_term(SapicLVar::untyped(LVar::new(n, LSort::Msg, 0)))
-        };
-        let ann = |name: &str, location: Option<SapicTerm>, sub: Subst<Name, LVar>| {
-            ProcessParsedAnnotation {
-                process_names: vec![name.to_string()],
-                location,
-                back_substitution: sub,
-            }
-        };
-        let sub = |from: &str, to: &str| {
-            Subst::from_list([(
-                LVar::new(from, LSort::Msg, 0),
-                tamarin_term::vterm::var_term(LVar::new(to, LSort::Msg, 0)),
-            )])
-        };
-
-        let merged = ann("A", Some(loc("l1")), sub("y", "z")).append(ann(
-            "B",
-            Some(loc("l2")),
-            sub("x", "y"),
-        ));
-        assert_eq!(merged.process_names, vec!["A", "B"]);
-        assert_eq!(merged.location, Some(loc("l2")), "location is right-biased");
-        // The operation is `compose` (`self . other`), not a union. The left
-        // `y ~> z` rewrites the range of the right side, so `x ~> y` becomes
-        // `x ~> z`. A union keeps `x ~> y`.
-        assert_eq!(
-            merged
-                .back_substitution
-                .image_of(&LVar::new("x", LSort::Msg, 0)),
-            Some(&tamarin_term::vterm::var_term(LVar::new(
-                "z",
-                LSort::Msg,
-                0
-            )))
-        );
-
-        // A `None` on the right keeps the location of the left. A `Some` on
-        // the right wins even when the left has no location.
-        assert_eq!(
-            ann("A", Some(loc("l1")), Subst::empty())
-                .append(ann("B", None, Subst::empty()))
-                .location,
-            Some(loc("l1"))
-        );
-        assert_eq!(
-            ann("A", None, Subst::empty())
-                .append(ann("B", Some(loc("l2")), Subst::empty()))
-                .location,
-            Some(loc("l2"))
-        );
-        assert_eq!(ProcessParsedAnnotation::empty(), Default::default());
-    }
-
-    fn null_proc() -> PlainProcess {
-        Process::null(ProcessParsedAnnotation::empty())
-    }
-
-    fn lock_action(v: &str) -> PlainProcess {
-        let term = tamarin_term::vterm::var_term(SapicLVar::untyped(LVar::new(v, LSort::Msg, 0)));
-        Process::Action(
-            SapicAction::Lock(term),
-            ProcessParsedAnnotation::empty(),
-            Box::new(null_proc()),
-        )
-    }
-
-    #[test]
-    fn predicate_helpers() {
-        assert!(is_lock(&lock_action("k")));
-        assert!(!is_unlock(&lock_action("k")));
-        assert!(!is_lock(&null_proc()));
-    }
-
-    #[test]
-    fn process_at_returns_root_and_navigates() {
-        let p = lock_action("k");
-        assert!(process_at(&p, &[]).is_some());
-        // Position [1] selects the action body (a Null).
-        assert!(matches!(process_at(&p, &[1]), Some(Process::Null(_))));
-        // Going further than the body fails.
-        assert!(process_at(&p, &[1, 1]).is_none());
-    }
-
-    #[test]
-    fn process_contains_finds_locks() {
-        let p = lock_action("k");
-        assert!(process_contains(&p, is_lock));
-        assert!(!process_contains(&null_proc(), is_lock));
-    }
-
-    /// A match variable stands for whatever its image binds: a compound image
-    /// contributes all of its variables, and an image that is itself a
-    /// variable contributes that one. A variable the substitution does not
-    /// define survives. `apply_match_vars_with` reaches the same result
-    /// through a caller-supplied rewrite, which is what lets a caller resolve
-    /// a variable against a key spelling of its own.
-    #[test]
-    fn apply_match_vars_replaces_a_variable_by_the_variables_of_its_image() {
-        use tamarin_term::term::f_app_list;
-        use tamarin_term::vterm::var_term;
-
-        let v = |n: &str| SapicLVar::untyped(LVar::new(n, LSort::Msg, 0));
-        let pair: SapicTerm = f_app_list(vec![var_term(v("a")), var_term(v("b"))]);
-        let subst = SapicSubst::from_list([(v("x"), pair), (v("y"), var_term(v("c")))]);
-        let vs: BTreeSet<SapicLVar> = [v("x"), v("y"), v("z")].into_iter().collect();
-        let want: BTreeSet<SapicLVar> = [v("a"), v("b"), v("c"), v("z")].into_iter().collect();
-
-        assert_eq!(apply_match_vars(&subst, &vs), want);
-        assert_eq!(
-            apply_match_vars_with(
-                |w| subst
-                    .image_of(w)
-                    .cloned()
-                    .unwrap_or_else(|| var_term(w.clone())),
-                &vs
-            ),
-            want
-        );
-    }
-
-    /// A process tree is `Eq`, and the comparison descends into the formulas
-    /// a conditional and an embedded MSR's restrictions carry: two trees built
-    /// from equal formulas are equal, and one changed atom separates them.
-    #[test]
-    fn process_equality_is_structural_over_condition_formulas() {
-        use crate::atom::ProtoAtom;
-        use crate::formula::ProtoFormula;
-        use tamarin_term::vterm::var_term;
-
-        fn requires_eq<T: Eq>(_: &T) {}
-
-        let v = |n: &str| var_term(BVar::Free(SapicLVar::untyped(LVar::new(n, LSort::Msg, 0))));
-        let eq =
-            |l: &str, r: &str| -> SapicFormula { ProtoFormula::Atom(ProtoAtom::EqE(v(l), v(r))) };
-        let proc = |cond: SapicFormula, rest: SapicFormula| -> PlainProcess {
-            Process::Action(
-                SapicAction::Msr {
-                    prems: Vec::new(),
-                    acts: Vec::new(),
-                    concs: Vec::new(),
-                    rest: vec![rest],
-                    match_vars: BTreeSet::new(),
-                },
-                ProcessParsedAnnotation::empty(),
-                Box::new(Process::Comb(
-                    ProcessCombinator::Cond(cond),
-                    ProcessParsedAnnotation::empty(),
-                    Box::new(null_proc()),
-                    Box::new(null_proc()),
-                )),
-            )
-        };
-
-        let p = proc(eq("x", "y"), eq("a", "b"));
-        requires_eq(&p);
-        assert_eq!(p, proc(eq("x", "y"), eq("a", "b")));
-        assert_ne!(p, proc(eq("x", "z"), eq("a", "b")));
-        assert_ne!(p, proc(eq("x", "y"), eq("a", "c")));
+    fn retained_process_owners_release_deep_trees_on_caller_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let build = || {
+                let mut p = Process::Null(ProcessParsedAnnotation {
+                    location: Some(tamarin_term::builtin::pair(
+                        tamarin_term::lterm::pub_term("a"),
+                        tamarin_term::lterm::pub_term("b"),
+                    )),
+                    ..Default::default()
+                });
+                for i in 0..100_000 {
+                    p = if i % 8 == 0 {
+                        Process::Comb(
+                            ProcessCombinator::Parallel,
+                            Default::default(),
+                            Box::new(p).into(),
+                            Box::new(Process::Null(Default::default())).into(),
+                        )
+                    } else {
+                        Process::Action(SapicAction::Rep, Default::default(), Box::new(p).into())
+                    };
+                }
+                p
+            };
+            drop(TranslationElement::Process(build()));
+            drop(TranslationElement::DiffEquivLemma(build()));
+            drop(TranslationElement::EquivLemma(build(), build()));
+            drop(ProcessDef {
+                name: "P".into(),
+                vars: None,
+                body: build(),
+            });
+            let shared = std::sync::Arc::new(SharedProcess::new(build()));
+            let other = shared.clone();
+            drop(shared);
+            drop(other);
+        });
     }
 }

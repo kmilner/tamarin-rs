@@ -1186,38 +1186,24 @@ fn insert_implied_formulas_pass(
     red.insert_formulas(&new_formulas)
 }
 
-/// Canonicalising key for implied-formula dedup: AC `BinOp` permutations
-/// re-sorted, then stored normal form.  This is the SINGLE source of the dedup
-/// canon — the existing/threaded canon vectors and the per-candidate site both
-/// call it, so they cannot drift out of lock-step.  Both stages reuse their
-/// borrowed input when the transform is a structural no-op, so an
-/// already-canonical formula pays zero clones — the dedup only materialises
-/// (`into_owned`) a survivor.
+/// Compare implied instances in canonical logical form, including keys from
+/// both existing stores. Goal-backed formulas may retain a root `Disj` wrapper;
+/// that wrapper must not make an otherwise identical instance fire again.
+/// Decomposed top-level formulas are already recorded in `solved_formulas` by
+/// `insert_formula`, so no separate saturation history is needed.
 ///
-/// No bound-var canonicalisation: `Guarded` binders are DeBruijn, so `Bound`
-/// vars carry no idx and alpha-equivalent formulas already compare `==`.
+/// This key is only for saturation membership. Do not use it to skip the
+/// insertion of an alternative when solving a goal: the enclosing disjunction
+/// is marked solved before its chosen alternative's obligations are inserted.
 ///
-/// Comparison is in stored normal form (HS 150f5eba: `insertImpliedFormulas`
-/// normalises derived instances before the membership pre-check) — a raw
-/// duplicate-carrying candidate must match its normalised stored twin, or the
-/// pass re-fires it every simplifier iteration.
-///
-/// NO α-normalisation of variable idxs: HS's membership pre-check compares the
-/// (stored-normalised) instance RAW against `sFormulas`/`sSolvedFormulas`, and
-/// an implied instance is a deterministic function of (clause, matched
-/// actions) — guardedness means every opened clause var is bound by the match,
-/// so no per-call fresh mint reaches the instance.  Collapsing idxs (e.g.
-/// rewriting every `x`-named LVar to idx 0) merges instances HS keeps
-/// distinct whenever their matched action terms share a var NAME — e.g.
-/// csf26-ac counter.spthy, whose diagonal IH instances over a fresh `Inc`
-/// rule instance's `x.7`/`x.10` would merge with the iteration-1 `x`/`y.1`
-/// ones, suppressing 3 of HS's `insertGoalStatus` ticks and shifting every
-/// later goal `nr:` annotation in the web panes (batch output is unaffected).
+/// Keep free-variable identities, binder hints and alternative order. Only
+/// connective normalization is shared; this is not equivalence modulo arbitrary
+/// Boolean laws or renaming. Unchanged formulas stay borrowed.
 fn implied_apply_canon_cow(
     f: &crate::guarded::Guarded,
 ) -> std::borrow::Cow<'_, crate::guarded::Guarded> {
     use std::borrow::Cow;
-    match crate::guarded::normalise_stored_formula_cow(f) {
+    match crate::guarded::normalise_guarded_cow(f) {
         None => Cow::Borrowed(f),
         Some(g) => Cow::Owned(g),
     }
@@ -1353,178 +1339,240 @@ fn try_match_all_guards(
         out: &mut Vec<crate::guarded::Guarded>,
         out_canon: &mut Vec<(crate::guarded::Guarded, u64)>,
     ) -> Result<(), crate::prove::ProveError> {
-        if guard_idx == guards.len() {
-            // All Action guards matched.  Now decide what the implied
-            // formula looks like.  Haskell's `impliedFormulas` wraps
-            // the body so the non-Action guards become preconditions:
-            //
-            //   succedent' = gall [] otherAtoms succedent
-            //
-            // i.e. the implied formula is
-            //   "(non-Action guards under σ) ⇒ σ(body)".
-            //
-            // Haskell-faithful behaviour: carry ALL `other_guards`
-            // through the substitution and into the wrapping `gall`
-            // unconditionally — `impliedFormulas` does not do any
-            // partial-atom valuation here.  Atom valuation (dropping
-            // `Some(true)` guards, collapsing on `Some(false)`) is
-            // handled in a SEPARATE simplifier pass — `evalFormulaAtoms`
-            // — which mirrors Haskell's pass ordering exactly.
-            //
-            // Emitting `gall [] [false_atom] body` unconditionally lets
-            // `evalFormulaAtoms` short-circuit it to `gtrue` in its own
-            // pass, exposing trivially-true implications to the dedup
-            // logic — matching Haskell's separation of atom valuation
-            // into its own pass.
-            let surviving_gatoms: Vec<crate::atom::Atom<crate::formula::BLNTerm>> = other_guards
-                .iter()
-                .map(|g| {
-                    crate::guarded::lift_free_atom(&crate::atom::map_atom(g, &mut |t| {
-                        tamarin_term::subst::apply_vterm(acc, t.clone())
-                    }))
-                })
-                .collect();
-            let body_subst = subst_guarded(body, acc);
-            // Mirror Haskell's `gall [] otherAtoms succedent` smart-
-            // constructor (Guarded.hs:447-451):
-            //   gall _ []   gf              = gf
-            //   gall _ _    gf | gf == gtrue = gtrue
-            //   gall ss atos gf             = GGuarded All ss atos gf
-            let implied = crate::guarded::gall(Vec::new(), surviving_gatoms, body_subst);
-            // Maude unification mints fresh `~mw#N` witnesses on every
-            // call, so structurally-identical derivations from the
-            // same (restriction, action-node) pair would otherwise
-            // bypass `Vec::contains` (different witness idx each
-            // call) and re-fire forever — see the alive/recentalive
-            // regressions where solved_formulas grew by ~30 entries
-            // per simplify iteration.  Conservative fix: normalize
-            // ONLY `~mw#*` witness LVars to a canonical `~mw#0`
-            // before comparing.  Anything else (real protocol vars,
-            // distinct fresh-named values) keeps its identity, so
-            // dedup doesn't over-merge legitimately-distinct
-            // implications (which would unsoundly drop typing
-            // refinements on [sources] lemmas).
-            // HS-faithful dedup: HS uses bare `Eq Guarded` (structural)
-            // for the `S.member sFormulas` / `S.member sSolvedFormulas`
-            // checks in `insertFormula`.  Two HS firings whose only
-            // difference is bound-var indices ARE structurally identical
-            // because HS uses DeBruijn `BVar Bound`.  Two HS firings with
-            // different FREE-var bindings (from different action-subject
-            // matches) ARE structurally distinct, so HS keeps both.
-            //
-            // Rust's `Guarded` binders are DeBruijn as well: `BVar::Bound`
-            // carries no idx, so alpha-equivalent formulas already compare
-            // `==` without a bound-var canonicalisation step.
-            //
-            // `normalize_witness_lvars_cow` collapses Maude-minted `~mw#N`
-            // witnesses — necessary because Rust's Maude `unify` mints
-            // fresh witnesses per call, breaking structural Eq.  HS's
-            // matchAction is pure matching (no witnesses).
-            //
-            // Do NOT apply `eq_store.subst` before comparing: that would
-            // over-collapse structurally-distinct firings (eq-store
-            // bindings can unify two distinct firings to the same
-            // canonical form), whereas HS's bare structural `Eq` keeps
-            // them apart — dedup here uses witness+bound normalisation
-            // only.
-            // Per-candidate canon via the shared `implied_apply_canon_cow` —
-            // guaranteed lock-step with the `ImpliedDedupTables` entries and
-            // the threaded `out_canon` (single source of truth).  It
-            // collapses AC-`BinOp` permutations (so `Mult(ltkI, ekR)` and
-            // `Mult(ekR, ltkI)` compare equal after `rename_precise_system`
-            // reorders the LVar `Ord`, matching a freshly built `f_app_ac`
-            // form — without which `insertImpliedFormulas` re-adds a duplicate
-            // every `simplifySystem` call, breaking idempotency:
-            // wireguard::key_secrecy) and compares in stored normal form
-            // (HS 150f5eba pre-check normalisation).  Held as `Cow` so an
-            // already-canonical candidate is borrowed until it survives dedup.
-            let canon = implied_apply_canon_cow(&implied);
-            // Canonicalisation-based dedup is necessary in RS (vs HS's
-            // bare `Eq Guarded`): RS's Maude unification draws witness
-            // idxs from a GLOBAL atomic `fresh_counter` (maude_proc.rs),
-            // so every call mints fresh idxs and structurally-equal
-            // re-fires would never dedup via bare `==`, causing an
-            // infinite-fire loop on RFID_Simple etc.
-            //
-            // Dedup against the LAZILY-built canon tables (zipped 1:1 with
-            // their source stores — see `ImpliedDedupTables`), so
-            // `apply_canon` runs at most once per existing formula per pass.
-            // Each membership probe compares the u64 prefilter hash first;
-            // the deep canon-equality walk only runs on hash agreement
-            // (hash inequality proves value inequality, so the accept/
-            // reject decision is untouched).
-            //
-            // No separate raw structural check (`f == &implied`) is needed:
-            // `implied_apply_canon_cow` is a pure function of the formula
-            // value, and every table entry is the canon of its source
-            // formula, so `f == implied` forces `canon(f) == canon(implied)`
-            // — the canon comparison already answers `true` for every
-            // structurally-equal pair.
-            //
-            // Short-circuiting `||` is unobservable: the probes are pure,
-            // so evaluation order cannot change the combined boolean.
-            let canon_hash = tamarin_utils::fx_hash_one(canon.as_ref());
-            let already = dedup_tables
-                .formulas_canon()
-                .iter()
-                .any(|(_, fc, fh)| *fh == canon_hash && fc.as_ref() == canon.as_ref())
-                || dedup_tables
-                    .solved_canon()
+        tamarin_utils::stack::ensure_sufficient_stack(|| {
+            if guard_idx == guards.len() {
+                // All Action guards matched.  Now decide what the implied
+                // formula looks like.  Haskell's `impliedFormulas` wraps
+                // the body so the non-Action guards become preconditions:
+                //
+                //   succedent' = gall [] otherAtoms succedent
+                //
+                // i.e. the implied formula is
+                //   "(non-Action guards under σ) ⇒ σ(body)".
+                //
+                // Haskell-faithful behaviour: carry ALL `other_guards`
+                // through the substitution and into the wrapping `gall`
+                // unconditionally — `impliedFormulas` does not do any
+                // partial-atom valuation here.  Atom valuation (dropping
+                // `Some(true)` guards, collapsing on `Some(false)`) is
+                // handled in a SEPARATE simplifier pass — `evalFormulaAtoms`
+                // — which mirrors Haskell's pass ordering exactly.
+                //
+                // Emitting `gall [] [false_atom] body` unconditionally lets
+                // `evalFormulaAtoms` short-circuit it to `gtrue` in its own
+                // pass, exposing trivially-true implications to the dedup
+                // logic — matching Haskell's separation of atom valuation
+                // into its own pass.
+                let surviving_gatoms: Vec<crate::atom::Atom<crate::formula::BLNTerm>> =
+                    other_guards
+                        .iter()
+                        .map(|g| {
+                            crate::guarded::lift_free_atom(&crate::atom::map_atom(g, &mut |t| {
+                                tamarin_term::subst::apply_vterm(acc, t.clone())
+                            }))
+                        })
+                        .collect();
+                let body_subst = subst_guarded(body, acc);
+                // Mirror Haskell's `gall [] otherAtoms succedent` smart-
+                // constructor (Guarded.hs:447-451):
+                //   gall _ []   gf              = gf
+                //   gall _ _    gf | gf == gtrue = gtrue
+                //   gall ss atos gf             = GGuarded All ss atos gf
+                let implied = crate::guarded::gall(Vec::new(), surviving_gatoms, body_subst);
+                // Compare the same logical key against both stores and the
+                // candidates already accepted in this pass. This preserves
+                // free-variable identities and does not apply eq_store.subst.
+                let canon = implied_apply_canon_cow(&implied);
+                // Hashes only prefilter equality. Store keys are cached, and an
+                // unchanged candidate stays borrowed until it survives dedup.
+                let canon_hash = tamarin_utils::fx_hash_one(canon.as_ref());
+                let already = dedup_tables
+                    .formulas_canon()
                     .iter()
                     .any(|(_, fc, fh)| *fh == canon_hash && fc.as_ref() == canon.as_ref())
-                || out_canon
-                    .iter()
-                    .any(|(fc, fh)| *fh == canon_hash && fc == canon.as_ref());
-            if !already {
-                // Keep `out_canon` 1:1 with `out` so the `already` probe above
-                // stays correct as `out` grows across candidates.  Materialise
-                // the survivor's canon (`into_owned`) BEFORE moving `implied`.
-                let canon = canon.into_owned();
-                out.push(implied);
-                out_canon.push((canon, canon_hash));
+                    || dedup_tables
+                        .solved_canon()
+                        .iter()
+                        .any(|(_, fc, fh)| *fh == canon_hash && fc.as_ref() == canon.as_ref())
+                    || out_canon
+                        .iter()
+                        .any(|(fc, fh)| *fh == canon_hash && fc == canon.as_ref());
+                if !already {
+                    // Keep `out_canon` 1:1 with `out` so the `already` probe above
+                    // stays correct as `out` grows across candidates.  Materialise
+                    // the survivor's canon (`into_owned`) BEFORE moving `implied`.
+                    let canon = canon.into_owned();
+                    out.push(implied);
+                    out_canon.push((canon, canon_hash));
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
-        match guards[guard_idx] {
-            ProtoAtom::Action(g_time, g_fact) => {
-                // Haskell `applySkAction subst (a, fa)` (System.hs:1112-1146, see line 1135):
-                // apply the accumulated `subst` to the guard's pattern
-                // BEFORE matching, so multi-guard universals where one
-                // guard binds a variable used by a later guard propagate
-                // the binding correctly.  For single-guard universals
-                // this is a no-op (acc is empty).
-                let g_fact_subst = crate::fact::apply_subst_fact(acc, g_fact);
-                let g_time_subst = tamarin_term::subst::apply_vterm(acc, g_time.clone());
-                // Iterate only the name-equal group of the pass-invariant
-                // `actions_by_name` index (substitution never rewrites a
-                // fact NAME, so the group key is exact).  The group holds
-                // ascending `sys_actions` indices — the identical sequence
-                // an unindexed scan's name filter would visit — so match
-                // attempts, and therefore candidates, are unchanged.  A
-                // missing key means no sys_action carries this name.
-                let name_group = actions_by_name
-                    .get(&crate::fact::fact_tag_name(&g_fact_subst.tag))
-                    .map(|v| v.as_slice())
-                    .unwrap_or(&[]);
-                for &ai in name_group {
-                    let (i, fa_sys) = &sys_actions[ai as usize];
-                    if g_fact_subst.terms.len() != fa_sys.terms.len() {
-                        continue;
+            match guards[guard_idx] {
+                ProtoAtom::Action(g_time, g_fact) => {
+                    // Haskell `applySkAction subst (a, fa)` (System.hs:1112-1146, see line 1135):
+                    // apply the accumulated `subst` to the guard's pattern
+                    // BEFORE matching, so multi-guard universals where one
+                    // guard binds a variable used by a later guard propagate
+                    // the binding correctly.  For single-guard universals
+                    // this is a no-op (acc is empty).
+                    let g_fact_subst = crate::fact::apply_subst_fact(acc, g_fact);
+                    let g_time_subst = tamarin_term::subst::apply_vterm(acc, g_time.clone());
+                    // Iterate only the name-equal group of the pass-invariant
+                    // `actions_by_name` index (substitution never rewrites a
+                    // fact NAME, so the group key is exact).  The group holds
+                    // ascending `sys_actions` indices — the identical sequence
+                    // an unindexed scan's name filter would visit — so match
+                    // attempts, and therefore candidates, are unchanged.  A
+                    // missing key means no sys_action carries this name.
+                    let name_group = actions_by_name
+                        .get(&crate::fact::fact_tag_name(&g_fact_subst.tag))
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[]);
+                    for &ai in name_group {
+                        let (i, fa_sys) = &sys_actions[ai as usize];
+                        if g_fact_subst.terms.len() != fa_sys.terms.len() {
+                            continue;
+                        }
+                        // HS-faithful: AC matching can yield multiple matchers
+                        // per (sys_action, pattern) pair. HS's `candidateSubsts`
+                        // (System.hs:1133-1137) iterates them via the list monad
+                        // — each match becomes its own candidate substitution.
+                        let substs_here = match_atom_via_maude(
+                            maude,
+                            vars,
+                            pattern_vars,
+                            &g_fact_subst,
+                            &g_time_subst,
+                            i,
+                            &fa_sys.terms,
+                        )?;
+                        for subst_here in substs_here {
+                            let Some(combined) = combine_substs(acc, &subst_here) else {
+                                continue;
+                            };
+                            rec(
+                                maude,
+                                vars,
+                                pattern_vars,
+                                guards,
+                                guard_idx + 1,
+                                sys_actions,
+                                actions_by_name,
+                                &combined,
+                                body,
+                                dedup_tables,
+                                other_guards,
+                                out,
+                                out_canon,
+                            )?;
+                        }
                     }
-                    // HS-faithful: AC matching can yield multiple matchers
-                    // per (sys_action, pattern) pair. HS's `candidateSubsts`
-                    // (System.hs:1133-1137) iterates them via the list monad
-                    // — each match becomes its own candidate substitution.
-                    let substs_here = match_atom_via_maude(
-                        maude,
-                        vars,
-                        pattern_vars,
-                        &g_fact_subst,
-                        &g_time_subst,
-                        i,
-                        &fa_sys.terms,
-                    )?;
-                    for subst_here in substs_here {
+                }
+                ProtoAtom::EqE(s, t) => {
+                    // Mirrors Haskell's `candidateSubsts subst ((GEqE s' t'):as)`
+                    // (`System.hs:1138-1147`).  Apply current substitution
+                    // to both sides; pick whichever side has no remaining
+                    // pattern vars as the subject (it's "ground" wrt the
+                    // matching context); the other side is the pattern.
+                    // Match pattern against subject with the pure
+                    // structural matcher and compose substitutions.
+                    let s_subst = tamarin_term::subst::apply_vterm(acc, s.clone());
+                    let t_subst = tamarin_term::subst::apply_vterm(acc, t.clone());
+                    let s_has_pat = atom_has_unbound_pattern_var(&s_subst, vars);
+                    let t_has_pat = atom_has_unbound_pattern_var(&t_subst, vars);
+                    let (pat_term, subj_term) = match (s_has_pat, t_has_pat) {
+                        // Both ground (no pattern vars).  HS-faithful: mirrors
+                        // `matchTerm term pat` in `impliedFormulas`
+                        // (System.hs:1138-1147).  HS skolemizes universals
+                        // before matching, so system vars become SkConst —
+                        // `null $ frees s` is true and matchTerm runs on
+                        // structurally-fixed terms, returning the EMPTY subst
+                        // on syntactic equality and failing otherwise.
+                        //
+                        // Compare at the LNTerm level (not raw parser AST) so
+                        // structurally-equal terms still match.
+                        (false, false) => {
+                            if s_subst == t_subst {
+                                rec(
+                                    maude,
+                                    vars,
+                                    pattern_vars,
+                                    guards,
+                                    guard_idx + 1,
+                                    sys_actions,
+                                    actions_by_name,
+                                    acc,
+                                    body,
+                                    dedup_tables,
+                                    other_guards,
+                                    out,
+                                    out_canon,
+                                )?;
+                            }
+                            return Ok(());
+                        }
+                        // s has pattern vars → s is the pattern.
+                        (true, false) => (s_subst, t_subst),
+                        // t has pattern vars → t is the pattern.
+                        (false, true) => (t_subst, s_subst),
+                        // Both have pattern vars — Haskell errors on
+                        // this case.  We bail out: drop this assignment
+                        // rather than trying to match unbound-vs-unbound,
+                        // which can't soundly produce a unique sigma.
+                        (true, true) => return Ok(()),
+                    };
+                    // Run the structural match, with the recursion-invariant
+                    // `pattern_vars` set hoisted to `try_match_all_guards` (it
+                    // depends only on `vars`).
+                    let (pat_lnt, subj_lnt) = (pat_term, subj_term);
+                    let mut struct_subst = std::collections::BTreeMap::new();
+                    let struct_outcome =
+                        structural_match(&pat_lnt, &subj_lnt, pattern_vars, &mut struct_subst);
+                    // Use native matching unless the terms require AC matching.
+                    // Skolemize free system variables on both sides with the same
+                    // map; only universal-bound variables may receive bindings.
+                    // Each AC matcher produces a separate continuation.
+                    let candidates: Vec<
+                        std::collections::BTreeMap<
+                            tamarin_term::lterm::LVar,
+                            tamarin_term::lterm::LNTerm,
+                        >,
+                    > = match struct_outcome {
+                        StructMatch::Matched => vec![struct_subst],
+                        StructMatch::NoMatcher => return Ok(()),
+                        StructMatch::NeedsAc => {
+                            let eqs = vec![tamarin_term::rewriting::Equal {
+                                lhs: pat_lnt,
+                                rhs: subj_lnt,
+                            }];
+                            match maude.match_eqs_skolemize_both(&eqs, pattern_vars) {
+                                Ok(matches) => matches
+                                    .into_iter()
+                                    .map(|m| m.into_iter().collect())
+                                    .collect(),
+                                Err(error) => {
+                                    return Err(crate::prove::ProveError::Maude(error.to_string()))
+                                }
+                            }
+                        }
+                    };
+                    if candidates.is_empty() {
+                        return Ok(());
+                    }
+                    for struct_subst in candidates {
+                        // Keep the LVar → LNTerm bindings of the universal's own
+                        // variables.
+                        let mut subst_here: std::collections::BTreeMap<
+                            tamarin_term::lterm::LVar,
+                            tamarin_term::lterm::LNTerm,
+                        > = std::collections::BTreeMap::new();
+                        for (lv, lt) in struct_subst {
+                            if !vars.iter().any(|v| v.name == lv.name && v.idx == lv.idx) {
+                                continue;
+                            }
+                            subst_here.insert(lv, lt);
+                        }
+                        let subst_here = LNSubst::from_map(subst_here);
                         let Some(combined) = combine_substs(acc, &subst_here) else {
                             continue;
                         };
@@ -1545,135 +1593,10 @@ fn try_match_all_guards(
                         )?;
                     }
                 }
+                _ => (),
             }
-            ProtoAtom::EqE(s, t) => {
-                // Mirrors Haskell's `candidateSubsts subst ((GEqE s' t'):as)`
-                // (`System.hs:1138-1147`).  Apply current substitution
-                // to both sides; pick whichever side has no remaining
-                // pattern vars as the subject (it's "ground" wrt the
-                // matching context); the other side is the pattern.
-                // Match pattern against subject with the pure
-                // structural matcher and compose substitutions.
-                let s_subst = tamarin_term::subst::apply_vterm(acc, s.clone());
-                let t_subst = tamarin_term::subst::apply_vterm(acc, t.clone());
-                let s_has_pat = atom_has_unbound_pattern_var(&s_subst, vars);
-                let t_has_pat = atom_has_unbound_pattern_var(&t_subst, vars);
-                let (pat_term, subj_term) = match (s_has_pat, t_has_pat) {
-                    // Both ground (no pattern vars).  HS-faithful: mirrors
-                    // `matchTerm term pat` in `impliedFormulas`
-                    // (System.hs:1138-1147).  HS skolemizes universals
-                    // before matching, so system vars become SkConst —
-                    // `null $ frees s` is true and matchTerm runs on
-                    // structurally-fixed terms, returning the EMPTY subst
-                    // on syntactic equality and failing otherwise.
-                    //
-                    // Compare at the LNTerm level (not raw parser AST) so
-                    // structurally-equal terms still match.
-                    (false, false) => {
-                        if s_subst == t_subst {
-                            rec(
-                                maude,
-                                vars,
-                                pattern_vars,
-                                guards,
-                                guard_idx + 1,
-                                sys_actions,
-                                actions_by_name,
-                                acc,
-                                body,
-                                dedup_tables,
-                                other_guards,
-                                out,
-                                out_canon,
-                            )?;
-                        }
-                        return Ok(());
-                    }
-                    // s has pattern vars → s is the pattern.
-                    (true, false) => (s_subst, t_subst),
-                    // t has pattern vars → t is the pattern.
-                    (false, true) => (t_subst, s_subst),
-                    // Both have pattern vars — Haskell errors on
-                    // this case.  We bail out: drop this assignment
-                    // rather than trying to match unbound-vs-unbound,
-                    // which can't soundly produce a unique sigma.
-                    (true, true) => return Ok(()),
-                };
-                // Run the structural match, with the recursion-invariant
-                // `pattern_vars` set hoisted to `try_match_all_guards` (it
-                // depends only on `vars`).
-                let (pat_lnt, subj_lnt) = (pat_term, subj_term);
-                let mut struct_subst = std::collections::BTreeMap::new();
-                let struct_outcome =
-                    structural_match(&pat_lnt, &subj_lnt, pattern_vars, &mut struct_subst);
-                // Use native matching unless the terms require AC matching.
-                // Skolemize free system variables on both sides with the same
-                // map; only universal-bound variables may receive bindings.
-                // Each AC matcher produces a separate continuation.
-                let candidates: Vec<
-                    std::collections::BTreeMap<
-                        tamarin_term::lterm::LVar,
-                        tamarin_term::lterm::LNTerm,
-                    >,
-                > = match struct_outcome {
-                    StructMatch::Matched => vec![struct_subst],
-                    StructMatch::NoMatcher => return Ok(()),
-                    StructMatch::NeedsAc => {
-                        let eqs = vec![tamarin_term::rewriting::Equal {
-                            lhs: pat_lnt,
-                            rhs: subj_lnt,
-                        }];
-                        match maude.match_eqs_skolemize_both(&eqs, pattern_vars) {
-                            Ok(matches) => matches
-                                .into_iter()
-                                .map(|m| m.into_iter().collect())
-                                .collect(),
-                            Err(error) => {
-                                return Err(crate::prove::ProveError::Maude(error.to_string()))
-                            }
-                        }
-                    }
-                };
-                if candidates.is_empty() {
-                    return Ok(());
-                }
-                for struct_subst in candidates {
-                    // Keep the LVar → LNTerm bindings of the universal's own
-                    // variables.
-                    let mut subst_here: std::collections::BTreeMap<
-                        tamarin_term::lterm::LVar,
-                        tamarin_term::lterm::LNTerm,
-                    > = std::collections::BTreeMap::new();
-                    for (lv, lt) in struct_subst {
-                        if !vars.iter().any(|v| v.name == lv.name && v.idx == lv.idx) {
-                            continue;
-                        }
-                        subst_here.insert(lv, lt);
-                    }
-                    let subst_here = LNSubst::from_map(subst_here);
-                    let Some(combined) = combine_substs(acc, &subst_here) else {
-                        continue;
-                    };
-                    rec(
-                        maude,
-                        vars,
-                        pattern_vars,
-                        guards,
-                        guard_idx + 1,
-                        sys_actions,
-                        actions_by_name,
-                        &combined,
-                        body,
-                        dedup_tables,
-                        other_guards,
-                        out,
-                        out_canon,
-                    )?;
-                }
-            }
-            _ => (),
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     // `dedup_tables` arrives from the caller (its canon tables are built at
@@ -1724,13 +1647,14 @@ fn atom_has_unbound_pattern_var(
     t: &tamarin_term::lterm::LNTerm,
     vars: &[tamarin_term::lterm::LVar],
 ) -> bool {
-    use tamarin_term::term::Term;
+    use std::ops::ControlFlow;
+    use tamarin_term::term::{walk_terms, Term};
     use tamarin_term::vterm::Lit;
-    match t {
-        Term::Lit(Lit::Var(v)) => vars.iter().any(|p| p.name == v.name && p.idx == v.idx),
-        Term::Lit(Lit::Con(_)) => false,
-        Term::App(_, args) => args.iter().any(|a| atom_has_unbound_pattern_var(a, vars)),
-    }
+    walk_terms(std::slice::from_ref(t), |node| {
+        if matches!(node, Term::Lit(Lit::Var(v)) if vars.iter().any(|p| p.name == v.name && p.idx == v.idx)) {
+            ControlFlow::Break(())
+        } else { ControlFlow::Continue(true) }
+    }).is_break()
 }
 
 /// Outcome of `structural_match`, mirroring HS `matchRaw`'s three
@@ -1812,99 +1736,101 @@ fn structural_match(
             (LSort::Msg, LSort::Pub | LSort::Fresh | LSort::Nat)
         )
     }
-    // Pairwise left-to-right recursion shared by the `NoEq` and `List`
-    // arms (HS `sequence_ . zipWith match`): equal arity required, first
-    // non-`Matched` outcome wins.
-    fn match_args(
-        p_args: &[tamarin_term::lterm::LNTerm],
-        s_args: &[tamarin_term::lterm::LNTerm],
-        pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
-        subst: &mut std::collections::BTreeMap<
-            tamarin_term::lterm::LVar,
-            tamarin_term::lterm::LNTerm,
-        >,
+    // Delay later siblings until the current pair has matched. The first
+    // mismatch still determines whether Maude fallback is needed.
+    fn match_args<'a>(
+        p_args: &'a [tamarin_term::lterm::LNTerm],
+        s_args: &'a [tamarin_term::lterm::LNTerm],
+        pending: &mut Vec<(
+            &'a tamarin_term::lterm::LNTerm,
+            &'a tamarin_term::lterm::LNTerm,
+        )>,
     ) -> StructMatch {
         if p_args.len() != s_args.len() {
             return StructMatch::NoMatcher;
         }
-        for (pa, sa) in p_args.iter().zip(s_args.iter()) {
-            match structural_match(pa, sa, pattern_vars, subst) {
-                StructMatch::Matched => {}
-                other => return other,
-            }
-        }
+        pending.extend(p_args.iter().zip(s_args).rev());
         StructMatch::Matched
     }
-    match (pat, subj) {
-        // Pattern-bound var: bindable Maude var.  Mirrors HS
-        // `(_, Lit (Var vp))` (`Unification.hs:340-347`) — checked
-        // FIRST, so an AC-headed subject under a pattern var is bound
-        // natively (never `NeedsAc`).  After `skolemizeGuarded`
-        // (System.hs:1112-1146, see line 1123 + Guarded.hs:743-744) the universal's bound
-        // vars remain `Var`; free system vars become `SkConst`.
-        (Term::Lit(Lit::Var(pv)), _) if pattern_vars.contains(&(pv.name, pv.idx)) => {
-            let subj_sort = tamarin_term::lterm::sort_of_lnterm(subj);
-            if !sort_compatible(pv.sort, subj_sort) {
-                return StructMatch::NoMatcher;
-            }
-            if let Some(existing) = subst.get(pv) {
-                // HS `Just tp | t == tp -> () | otherwise -> NoMatcher`
-                // (Unification.hs:323-324).
-                return if existing == subj {
+    let mut pending = vec![(pat, subj)];
+    while let Some((pat, subj)) = pending.pop() {
+        let outcome = (|| {
+            match (pat, subj) {
+                // Pattern-bound var: bindable Maude var.  Mirrors HS
+                // `(_, Lit (Var vp))` (`Unification.hs:340-347`) — checked
+                // FIRST, so an AC-headed subject under a pattern var is bound
+                // natively (never `NeedsAc`).  After `skolemizeGuarded`
+                // (System.hs:1112-1146, see line 1123 + Guarded.hs:743-744) the universal's bound
+                // vars remain `Var`; free system vars become `SkConst`.
+                (Term::Lit(Lit::Var(pv)), _) if pattern_vars.contains(&(pv.name, pv.idx)) => {
+                    let subj_sort = tamarin_term::lterm::sort_of_lnterm(subj);
+                    if !sort_compatible(pv.sort, subj_sort) {
+                        return StructMatch::NoMatcher;
+                    }
+                    if let Some(existing) = subst.get(pv) {
+                        // HS `Just tp | t == tp -> () | otherwise -> NoMatcher`
+                        // (Unification.hs:323-324).
+                        return if existing == subj {
+                            StructMatch::Matched
+                        } else {
+                            StructMatch::NoMatcher
+                        };
+                    }
+                    if matches!(subj, Term::Lit(Lit::Var(sv)) if sv == pv) {
+                        return StructMatch::Matched;
+                    }
+                    subst.insert(*pv, subj.clone());
                     StructMatch::Matched
-                } else {
-                    StructMatch::NoMatcher
-                };
+                }
+                // Non-pattern LVar = SkConst-equivalent: matches only the same
+                // literal LVar on the subject side.  HS `skolemizeAtom` turns
+                // free LVars into `Con (SkConst v)`, so on the pattern side this
+                // is a constant — it falls into HS's `(Lit (Con _), Lit (Con _))`
+                // arm (Unification.hs:331-360, see line 349) which matches iff equal.
+                (Term::Lit(Lit::Var(pv)), Term::Lit(Lit::Var(sv))) => {
+                    if pv == sv {
+                        StructMatch::Matched
+                    } else {
+                        StructMatch::NoMatcher
+                    }
+                }
+                (Term::Lit(Lit::Con(pn)), Term::Lit(Lit::Con(sn))) => {
+                    if pn == sn {
+                        StructMatch::Matched
+                    } else {
+                        StructMatch::NoMatcher
+                    }
+                }
+                // HS `(FApp (NoEq tfsym) targs, FApp (NoEq pfsym) pargs)`
+                // (Unification.hs:327-329) and the `List` arm (330-332):
+                // equal head + arity ⇒ recurse pairwise.  Note: `subj` is HS's
+                // `t` (term/subject), `pat` is HS's `p` (pattern); the head/arity
+                // guard is symmetric so the order here doesn't matter.
+                (Term::App(FunSym::NoEq(pf), p_args), Term::App(FunSym::NoEq(sf), s_args)) => {
+                    if pf != sf {
+                        return StructMatch::NoMatcher;
+                    }
+                    match_args(p_args, s_args, &mut pending)
+                }
+                (Term::App(FunSym::List, p_args), Term::App(FunSym::List, s_args)) => {
+                    match_args(p_args, s_args, &mut pending)
+                }
+                // HS `(FApp (AC _) _, FApp (AC _) _) -> throwError ACProblem`
+                // and `(FApp (C _) _, FApp (C _) _) -> throwError ACProblem`
+                // (Unification.hs:333-334): ONLY when BOTH sides are AC-/C-headed.
+                (Term::App(FunSym::Ac(_), _), Term::App(FunSym::Ac(_), _))
+                | (Term::App(FunSym::C(_), _), Term::App(FunSym::C(_), _)) => StructMatch::NeedsAc,
+                // HS `_ -> throwError NoMatcher` (Unification.hs:331-360, see line 360): every
+                // other constructor pairing (incl. AC-vs-NoEq, app-vs-literal,
+                // mismatched AC vs C heads).
+                _ => StructMatch::NoMatcher,
             }
-            if matches!(subj, Term::Lit(Lit::Var(sv)) if sv == pv) {
-                return StructMatch::Matched;
-            }
-            subst.insert(*pv, subj.clone());
-            StructMatch::Matched
+        })();
+        if outcome != StructMatch::Matched {
+            return outcome;
         }
-        // Non-pattern LVar = SkConst-equivalent: matches only the same
-        // literal LVar on the subject side.  HS `skolemizeAtom` turns
-        // free LVars into `Con (SkConst v)`, so on the pattern side this
-        // is a constant — it falls into HS's `(Lit (Con _), Lit (Con _))`
-        // arm (Unification.hs:331-360, see line 349) which matches iff equal.
-        (Term::Lit(Lit::Var(pv)), Term::Lit(Lit::Var(sv))) => {
-            if pv == sv {
-                StructMatch::Matched
-            } else {
-                StructMatch::NoMatcher
-            }
-        }
-        (Term::Lit(Lit::Con(pn)), Term::Lit(Lit::Con(sn))) => {
-            if pn == sn {
-                StructMatch::Matched
-            } else {
-                StructMatch::NoMatcher
-            }
-        }
-        // HS `(FApp (NoEq tfsym) targs, FApp (NoEq pfsym) pargs)`
-        // (Unification.hs:327-329) and the `List` arm (330-332):
-        // equal head + arity ⇒ recurse pairwise.  Note: `subj` is HS's
-        // `t` (term/subject), `pat` is HS's `p` (pattern); the head/arity
-        // guard is symmetric so the order here doesn't matter.
-        (Term::App(FunSym::NoEq(pf), p_args), Term::App(FunSym::NoEq(sf), s_args)) => {
-            if pf != sf {
-                return StructMatch::NoMatcher;
-            }
-            match_args(p_args, s_args, pattern_vars, subst)
-        }
-        (Term::App(FunSym::List, p_args), Term::App(FunSym::List, s_args)) => {
-            match_args(p_args, s_args, pattern_vars, subst)
-        }
-        // HS `(FApp (AC _) _, FApp (AC _) _) -> throwError ACProblem`
-        // and `(FApp (C _) _, FApp (C _) _) -> throwError ACProblem`
-        // (Unification.hs:333-334): ONLY when BOTH sides are AC-/C-headed.
-        (Term::App(FunSym::Ac(_), _), Term::App(FunSym::Ac(_), _))
-        | (Term::App(FunSym::C(_), _), Term::App(FunSym::C(_), _)) => StructMatch::NeedsAc,
-        // HS `_ -> throwError NoMatcher` (Unification.hs:331-360, see line 360): every
-        // other constructor pairing (incl. AC-vs-NoEq, app-vs-literal,
-        // mismatched AC vs C heads).
-        _ => StructMatch::NoMatcher,
     }
+    StructMatch::Matched
 }
 
 /// Maude-backed matcher: ask Maude to match each of the universal's guard
@@ -2886,26 +2812,6 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
     let nodes_snapshot = red.sys.nodes.clone();
     let maude = red.ctx.maude.clone();
 
-    // Precompute, ONCE, the set of nodes whose rule has exactly one, LINEAR
-    // conclusion — the only rule property `plain_route` (`getRoute`/`plainRoute`,
-    // Simplify.hs) actually reads.  Membership (not the rule's contents) is
-    // all `plain_route` reads, so a precomputed set gives O(log n) lookup per
-    // recursive step instead of an O(nodes) scan; the routed chains are
-    // byte-identical either way.
-    let single_linear_conc: std::collections::BTreeSet<crate::constraint::constraints::NodeId> =
-        nodes_snapshot
-            .iter()
-            .filter(|(_, r)| r.conclusions.len() == 1 && r.conclusions[0].is_linear())
-            .map(|(id, _)| *id)
-            .collect();
-    // edge_map: NodeConc → NodeId.  A source case has at most one outgoing
-    // edge per conclusion, so `collect` never has a duplicate key to resolve.
-    // Built directly from the live edges; the resulting OWNED map decouples it
-    // from the later `red` mutation, so no `edges` snapshot clone is needed.
-    let edge_map: std::collections::BTreeMap<
-        crate::constraint::constraints::NodeConc,
-        crate::constraint::constraints::NodeId,
-    > = red.sys.edges.iter().map(|e| (e.src, e.tgt.0)).collect();
     // Collect newLesses first so we can iterate to compute enhanced.
     // Each entry: (sup_id, other_id) where sup_id < other_id was added.
     let mut new_lesses: Vec<(
@@ -3076,52 +2982,74 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
     // this step, Rust falsifies a verified lemma — confirmed against
     // Haskell `interactive`'s dot output (LessAtom `#i < #j Fresh`
     // comes from `enhancedLesses`).
-    let supplier_ids: std::collections::BTreeSet<_> = suppliers.iter().map(|(id, _)| *id).collect();
-    for (i, j) in &new_lesses {
-        if !supplier_ids.contains(i) {
-            continue;
-        } // i must be a frI
-        let rs = plain_route(*i, &single_linear_conc, &edge_map);
+    if new_lesses.is_empty() {
+        return;
+    }
+    // Precompute, ONCE, the set of nodes whose rule has exactly one, LINEAR
+    // conclusion — the only rule property `plain_route` (`getRoute`/`plainRoute`,
+    // Simplify.hs) actually reads.  Membership (not the rule's contents) is
+    // all `plain_route` reads, so a precomputed set gives O(log n) lookup per
+    // recursive step instead of an O(nodes) scan; the routed chains are
+    // byte-identical either way.
+    let single_linear_conc: std::collections::BTreeSet<crate::constraint::constraints::NodeId> =
+        nodes_snapshot
+            .iter()
+            .filter(|(_, r)| r.conclusions.len() == 1 && r.conclusions[0].is_linear())
+            .map(|(id, _)| *id)
+            .collect();
+    // edge_map: NodeConc → NodeId.  A source case has at most one outgoing
+    // edge per conclusion, so `collect` never has a duplicate key to resolve.
+    // Built directly from the live edges; the resulting OWNED map decouples it
+    // from the later `red` mutation, so no `edges` snapshot clone is needed.
+    let edge_map: std::collections::BTreeMap<
+        crate::constraint::constraints::NodeConc,
+        crate::constraint::constraints::NodeId,
+    > = red.sys.edges.iter().map(|e| (e.src, e.tgt.0)).collect();
+    // Consecutive orderings from one supplier use the same immutable route.
+    for group in new_lesses.chunk_by(|a, b| a.0 == b.0) {
+        let rs = plain_route(group[0].0, &single_linear_conc, &edge_map);
         if rs.len() <= 1 {
             continue;
         }
         // `tail rs` — all nodes after the first.
         let tail = &rs[1..];
-        // Side condition: all nodes in `tail rs` must be non-unifiable
-        // with `j`.  `nonUnifiableNodes n j = ¬ unifiableRuleACInsts
-        // rule(n) rule(j)`.
-        let j_rule = match nodes_snapshot.iter().find(|(id, _)| id == j) {
-            Some((_, r)) => r,
-            None => continue,
-        };
-        let all_non_unifiable = tail.iter().all(|t_id| {
-            let t_rule = match nodes_snapshot.iter().find(|(id, _)| id == t_id) {
+        for (_, j) in group {
+            // Side condition: all nodes in `tail rs` must be non-unifiable
+            // with `j`.  `nonUnifiableNodes n j = ¬ unifiableRuleACInsts
+            // rule(n) rule(j)`.
+            let j_rule = match nodes_snapshot.iter().find(|(id, _)| id == j) {
                 Some((_, r)) => r,
-                None => return true,
+                None => continue,
             };
-            !matches!(
-                crate::rule::unifiable_rule_ac_insts(&maude, t_rule, j_rule),
-                Ok(true)
-            )
-        });
-        if !all_non_unifiable {
-            continue;
-        }
-        let last = match rs.last() {
-            Some(l) => *l,
-            None => continue,
-        };
-        // HS-faithful insertLess (Reduction.hs:390-391).  `less_idx` stays
-        // coherent across Steps 2/3: the between-loop work (route walk,
-        // Maude unifiability queries) is read-only w.r.t. `less_atoms`.
-        if less_idx.is_none() {
-            less_idx = Some(red.sys.build_less_index());
-        }
-        if red.sys.add_less_indexed(
-            LessAtom::new(last, *j, Reason::Fresh),
-            less_idx.as_mut().unwrap(),
-        ) {
-            red.changed = ChangeIndicator::Changed;
+            let all_non_unifiable = tail.iter().all(|t_id| {
+                let t_rule = match nodes_snapshot.iter().find(|(id, _)| id == t_id) {
+                    Some((_, r)) => r,
+                    None => return true,
+                };
+                !matches!(
+                    crate::rule::unifiable_rule_ac_insts(&maude, t_rule, j_rule),
+                    Ok(true)
+                )
+            });
+            if !all_non_unifiable {
+                continue;
+            }
+            let last = match rs.last() {
+                Some(l) => *l,
+                None => continue,
+            };
+            // HS-faithful insertLess (Reduction.hs:390-391).  `less_idx` stays
+            // coherent across Steps 2/3: the between-loop work (route walk,
+            // Maude unifiability queries) is read-only w.r.t. `less_atoms`.
+            if less_idx.is_none() {
+                less_idx = Some(red.sys.build_less_index());
+            }
+            if red.sys.add_less_indexed(
+                LessAtom::new(last, *j, Reason::Fresh),
+                less_idx.as_mut().unwrap(),
+            ) {
+                red.changed = ChangeIndicator::Changed;
+            }
         }
     }
 }

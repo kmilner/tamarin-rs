@@ -310,7 +310,7 @@ mod tests {
         Process::Action(
             SapicAction::New(SapicLVar::untyped(LVar::new(name, LSort::Msg, 0))),
             ProcessParsedAnnotation::empty(),
-            Box::new(rest),
+            Box::new(rest).into(),
         )
     }
 

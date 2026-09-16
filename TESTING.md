@@ -291,6 +291,239 @@ harness resolved; see Prerequisites. An unresolvable maude is a panic naming
 line: it walks every `.rs` file under `crates/` and fails when any file
 outside the support crate reads `$MAUDE_PATH`.
 
+### Practical nesting target
+
+The user-facing acceptance case is an 8,192-level function application chain
+(`f(f(...))`) surviving CLI parsing, translation, printing, reparsing and cleanup.
+Run it with:
+
+```bash
+cargo test --offline --locked --profile ci -p tamarin-prover --test output_module deep_terms_survive_the_cli_lifecycle
+```
+
+This is a regression target, not a hard depth limit or a promise that arbitrary
+proof searches at that depth are practical. Larger operation-specific stress
+tests below remain useful, but do not require every downstream helper to be
+iterative. Prefer shared traversals, cheap shared ownership and efficient
+printing; use guarded recursion where a simpler implementation has acceptable
+performance and memory use.
+
+Expression, rule, selector, conditional-expression, and include stack regressions
+are covered by the parser suite.
+For focused checks:
+
+```bash
+cargo test --profile ci -p tamarin-parser --test deep_syntax
+cargo test --profile ci -p tamarin-parser iterative_terms_parse_on_a_small_native_stack
+cargo test --profile ci -p tamarin-parser formulas_and_proofs_parse_on_a_small_native_stack
+cargo test --profile ci -p tamarin-parser processes_parse_on_a_small_native_stack
+cargo test --profile ci -p tamarin-parser rule_and_flag_parsing_use_bounded_stack
+cargo test --profile ci -p tamarin-parser deep_duplicate_rules_compare_and_report_conflicts_on_small_stack
+cargo test --profile ci -p tamarin-parser deep_nested_rule_equality_uses_a_small_native_stack
+cargo test --profile ci -p tamarin-term depth_tests
+cargo test --profile ci -p tamarin-term subsumption::tests
+cargo test --profile ci -p tamarin-parser includes_preserve_state_and_error_sources_on_a_small_stack
+cargo test --profile ci -p tamarin-parser ast_clone::tests
+cargo test --profile ci -p tamarin-parser term_walk::tests
+cargo test --profile ci -p tamarin-parser formula_walk::tests
+cargo test --profile ci -p tamarin-parser process_walk::tests
+cargo test --profile ci -p tamarin-parser deep_formula_substitution_and_renaming_use_bounded_stack
+cargo test --profile ci -p tamarin-parser ground_rule_let_preserves_deep_quantifiers
+cargo test --profile ci -p tamarin-parser rule_let_capture_data_is_lazy_and_shared_across_restrictions
+cargo test --profile ci -p tamarin-parser rule_let_tests
+cargo test --profile ci -p tamarin-parser formula_parser::tests
+cargo test --profile ci -p tamarin-term flat_writer
+cargo test --profile ci -p tamarin-theory --lib small_stack
+cargo test --profile ci -p tamarin-theory --lib branching_formula_reports_use_small_stack
+cargo test --profile ci -p tamarin-theory --lib branching_natural_sort_report_uses_small_stack
+cargo test --profile ci -p tamarin-theory --lib deep_variant_abstraction_uses_a_bounded_stack
+cargo test --profile ci -p tamarin-theory --test mult_restricted_report deep_irreducible_rules_use_a_bounded_stack
+cargo test --profile ci -p tamarin-utils pretty_hpj
+```
+
+The parsing tests check successful deep parses and error cleanup on 64 KiB
+thread stacks (128 KiB for the include driver). The lifecycle tests exercise
+100,000-level constructed trees on 256 KiB stacks, including term and formula rewriting,
+cloning, equality of surface terms and formulas, and destruction, plus balanced trees and wide
+proof case lists. Duplicate-rule tests parse equal terms and conflicting deep
+leaves at 8,192 levels on 256 KiB, checking the conflict kind and source span.
+Nested left/right rule equality is checked independently at the same depth and
+stack size. Recursive Debug for terms, formulas, processes, rules, selectors and
+parsed proof trees grows the stack at recursive entries. Alternate Debug preserves
+derived formatting for the first 16 nested tree entries, then uses complete
+compact output for deeper subtrees to bound Rust's indentation-writer chain.
+The compact suffix uses default Debug flags, including decimal numeric output.
+Process, selector and parsed proof-tree equality use paired
+worklists; matching 8,192-level branching fixtures run on 256 KiB stacks. The
+theory suite applies the same checks to internal proof trees.
+Alternate-format tests count retained nodes, including the compact deep suffix;
+utility tests check that the pretty-depth budget resets after errors and panics.
+Public wellformedness reporting tests cover both branching formula associations
+and alternating guarded conjunction/disjunction nesting on 256 KiB stacks.
+Canonical-substitution tests cover 8,192-level range terms and pin
+the different occurrence paths used for ordered NoEq arguments and symmetric
+AC arguments.
+Small surface trees compare equality against an independent recursive reference.
+Position and occurrence helpers compare against the previous recursive algorithms,
+including noncanonical AC arities, pruning, result order and invalid paths.
+Their deep tests cover 8,192-level access, replacement, protected ancestors,
+occurrence search and equation conversion on 256 KiB; normalized AC tails use
+1,024 operands. Enumerating every position in a unary chain inherently emits
+quadratic output, so its small-stack test uses depth 512. Formula
+and process destruction clear batches of at most eight
+edges before deferring deeper branches to a worklist; native stack depth is
+independent of input depth. Debug runs check less optimised cleanup paths.
+There is no fixed nesting-depth cap. These tests cover particular operations;
+downstream time and memory still depend on the input. Circular includes are
+rejected by checking active file paths, while repeated completed includes are
+allowed. The deep include test also checks source ordering across nested files
+and file-local conditional state; all included items accumulate in one output
+vector. The flat internal-term string printer also uses a worklist; its tests
+compare composed term shapes with the document printer and print 100,000-level
+applications and tuples on a 256 KiB stack, including last-owner cleanup.
+Internal term arguments retain shared ownership; their destructor drains owned
+children iteratively. Tests cover 100,000-level trees, left-to-right literal
+destruction, shared DAGs, and concurrent last-owner release on 256 KiB stacks.
+Wrapped term traversal is iterative too. Document tests exercise 100,000-node
+construction, first-line fitting, layout choices, lazy dependency forcing, and
+last-owner destruction on 256 KiB stacks. They check memoisation, unused
+alternatives, singleton fills, and consecutive empty choices. Lazy construction
+and layout continuations are explicit operations so both their evaluation and
+the destruction of unforced captures can use worklists.
+Long `fsep`/`fcat` suffixes are suspended during construction; a bounded direct
+suffix preserves the ordinary small-paragraph path. The eager fill reference
+checks generated compositions in page, inline and one-line modes. A work-count
+regression guards fixed-width narrow filling against quadratic reconstruction;
+deep unforced construction chains separately check cleanup on 256 KiB.
+
+Term query/mapping/replacement tests also exercise 100,000-level trees on
+256 KiB, including callback order, early exit and AC-normalization behavior.
+The top-down term rewriter is tested in eager-rebuild and copy-on-write modes,
+including pruning, nullary applications and unchanged storage. Direct-caller
+regressions cover formula-term validation, name and nat-sort scans, raw AC
+flattening, graph abbreviations, multiplication reporting and Maude variant
+abstraction on 256 KiB stacks.
+Nonempty solver-term substitution also has 100,000-level changed/unchanged
+and panic-cleanup tests on 256 KiB. Mixed-tree differential tests pin lookup
+order, one-time image insertion, raw identity-map change signals, and AC/C
+normalization. Flat applications need no traversal-stack allocation; deeper
+applications suspend parent frames on the heap.
+Quantified-term substitution (`apply_bvterm`) shares the iterative literal
+binding traversal with `map_lits`. Its tests substitute a 100,000-level image
+into a 100,000-level input on 256 KiB, preserving bound indices and leaving
+image variables free. Small differential tests pin eager normalization even
+for empty substitutions; callback tests cover one-time insertion and cleanup
+when a callback panics after completing a deep sibling.
+Read-only formula walks combine 100,000 formula levels and 100,000 term levels
+on 256 KiB, checking atom/free-variable order, bound-variable exclusion,
+combined depth and callback unwinding. Small mixed formulas are compared with
+the previous recursive walk, including Boolean and termless sugar leaves.
+These fixtures are dismantled explicitly. Formula rebuilding tests also cover
+200,000 levels on 256 KiB, including errors/panics after completing a deep
+replacement and owned-map panics between deep siblings. They pin binder depths,
+hint clone/callback order, one-time image insertion and payload release order.
+Child-edge owners now apply iterative cleanup to returned formulas as well as
+pending rebuild inputs/outputs. Ordinary clone, equality/order and Debug also
+use worklists; alternate Debug uses guarded traversal and the shared pretty-depth
+budget. Tests convert,
+clone, compare, format and ordinarily drop 100,000-level formulas on 256 KiB.
+Parser-formula conversion and sugar removal use explicit frames.
+
+Guarded-formula tests compare ordering, hash writes and both Debug modes with
+a derived reference enum. A 20,000-binder fixture on 256 KiB covers mapping,
+normalization, negation, simplification, induction, substitution and concurrent
+last-owner release. Shared guarded edges retain cheap cloning; last-owner
+cleanup uses `Arc::into_inner`. Solver guarded queries, native structural
+matching and guard-matching continuations use worklists, preserving DFS
+matching/fresh-witness order.
+The Maude-backed `invalid_deep_proof_replay_and_searched_lifecycle_use_bounded_stack`
+test covers stale-proof replay and searched-proof clone/status/extraction/drop:
+2,030 levels include parse/elaborate/replay/render/reparse/re-elaborate, while
+8,192 levels bypass the parser through a constructed internal proof. Both use
+256 KiB. These are invalid-step retention tests, not deep valid solver searches.
+
+`valid_deep_replay_uses_guarded_stack` separately exercises 2,048 valid stored
+solve steps in both check and auto modes on 256 KiB. It repeatedly solves a
+retained singleton disjunction goal, asserting every method/annotation and the
+terminal solved result. This isolates replay traversal from solver complexity;
+it does not establish deep proof-search safety. Set `TAM_TEST_REPLAY_DEPTH=8192`
+for a deeper internal fixture. Replay traversal uses guarded recursion; stack growth depends on `stacker` target
+support, as for proof search below. Run `replay_scopes_restore_after_deep_child_error`
+with `TAM_RS_TRACE_STATE=1` to check active trace-path restoration after a real
+ranking error beneath 512 stored steps on an initially 256 KiB stack.
+
+`deep_search_uses_guarded_stack` solves 256 distinct goals on 256 KiB with
+all five search cuts and checks a deep `--bound` frontier. For the larger
+internal diagnostic, run it with `TAM_TEST_SEARCH_DEPTH=2048` and
+`TAM_TEST_SEARCH_SERIAL_ONLY=1`; the latter selects sequential DFS (plus the
+bounded DFS check). This larger fixture retains many solver systems and is
+not a lightweight default test.
+`deep_frontier_and_cut_walks_use_guarded_stack` separately exercises 8,192-level
+frontier re-expansion, BFS scan/build, solved-path pruning, and cleanup on
+256 KiB. Search expansion and frontier re-expansion use guarded recursion; proof-tree
+ownership and the other traversal helpers remain iterative. Stack growth depends
+on the targets supported by `stacker` (see `crates/tamarin-utils/src/stack.rs`);
+these search tests do not establish a portable constant-native-stack guarantee.
+`deep_terms_survive_search_stack_growth` combines 8,192-level terms with
+128 preceding search steps on an initially 256 KiB stack. Term `HasFrees`
+walks and copy-on-write renaming are iterative; native unification and
+matching check stack space before each recursive descent. The term tests separately exercise
+32,768-level free-variable walks and 8,192-level native unification/matching.
+Other solver operations still have their own stack requirements.
+Run `expansion_restores_partial_root_after_child_error` with
+`TAM_RS_TRACE_STATE=1` to check trace-path restoration on a real ranking error.
+
+SAPIC's shared `try_map_process`, combined process-depth check, variable
+collection and process typing now use worklists. Their tests cover 100,000-level
+processes on 256 KiB, including annotation callback errors/panics and a typing
+error after a deep left branch has been rebuilt. Callback and typing-environment
+order are pinned separately. Generic process child owners now drain spines on
+ordinary destruction. Clone, equality/order and ordinary Debug are iterative;
+100,000-level lifecycle tests run on 256 KiB. Payloads retain their own lifecycle
+requirements, and alternate Debug uses guarded traversal and the shared pretty-depth
+budget. Uniqueness renaming, name propagation,
+rule generation, lock/secret-channel passes, let lowering and progress analysis
+also use worklists. Tests compare renaming against the previous suffix-copying
+implementation on shadowed binders and annotation-only variables, and pin NDC
+rewriting and progress branch semantics. Deep annotation/typing pipelines and
+error cleanup run at 100,000 levels on 256 KiB; rule generation runs at 2,048
+and progress analysis at 8,192. Distinct matched locks and wholly blocking NDC
+chains also run at 8,192 on small stacks. Lock annotations and outer-lock error
+precedence are compared against separate subtree scans on generated processes;
+progress positions are compared against the recursive definition.
+State analysis, state-channel declaration,
+purity annotation, report/location rewriting and parser-process conversion
+use shared worklists; scalar purity uses guarded recursion. Term typing uses
+guarded cached inference. Their small-stack tests include 20,000-level cases;
+state scope/pruning results and ordinary-function inference are compared with
+the previous recursive implementations on smaller fixtures. A separate purity
+annotation regression checks sibling scope, pruning of impure state-channel
+bodies, and preservation of existing annotations.
+
+SAPIC typing preserves its two-pass inference order and caches nested ordinary
+applications only when a complete visit leaves the environment unchanged.
+Effective environment changes invalidate the cache. Ordinary unary chains with
+both inferred and declared types are tested at 20,000 levels on 256 KiB, alongside
+the deep polymorphic List fixture. Differential tests compare 3,000 branching
+input/target combinations with the old implementation, including successful
+inference, errors and resulting environments. Environment-changing workloads
+may still revisit terms; this is not a general linear-time guarantee.
+
+These checks cover the tested term and document lifecycle paths, not arbitrary
+downstream processing. Internal-term equality, ordering, hashing and ordinary
+Debug formatting now use worklists; alternate Debug preserves Rust's standard
+formatting within the shared pretty-depth budget. Tests compare structural results, hash byte
+streams and formatting flags with the previous behavior. Internal stored-proof
+cloning, rendering and destruction are tested at 100,000 steps on 256 KiB,
+including byte comparisons with the previous recursive renderer on mixed trees.
+Retained SAPIC process owners (theory translation items, process definitions,
+and shared rule processes) rely on their child-edge destructors for ordinary
+caller-stack cleanup, including errors and panics. Their tests cover
+100,000-level action/branch mixtures. These tests do not establish stack or
+resource bounds for every compiler operation. Accountability quantifier-merging/simplification still recurse;
+compiler-stack boundaries remain in place. Repeated inference, formula expansion
+and retained solver/process data can still require substantial time or memory.
+
 Whole-corpus structural audits live under one integration-test target so they
 can share expensive theory loading:
 
@@ -967,3 +1200,151 @@ exits 2 rather than running with a private fallback.
 | `bench.sh` | RS-vs-HS wall-clock + memory tables (`--write` regenerates the README block) |
 | `check_hs_cites.py` / `remap_hs_cites.py` / `extend_anchor_citations.py` | upstream line-cite validation and remapping |
 | `gen_license_headers.py` (+ `header_identities.json`) | GPL notice maintenance (`--check` for staleness) |
+
+### Combined traversal regressions
+
+The follow-up nesting tests cover whole traversal patterns as well as isolated
+wide nodes. Native unification reuses the applied substitution until a sibling
+extends it, with guarded stack growth on recursive descent. Deep tests cover both
+a nonempty initial accumulator and a fresh binding at each of 8,192 pair levels.
+Whole-image bindings (`x = h^8192(y)`) and cyclic bindings also exercise the
+iterative occurs-check, including public proof search on 256 KiB. Variable
+collection and groundness use the same bounded-stack traversal; tests preserve
+source order and duplicates and cover ordinary ground matching before backend
+work.
+Generated comparisons against an independent indexed worklist implementation
+check exact substitutions, errors and delayed AC equations, including dependent
+images and alias propagation. Very large sequences of new bindings retain
+quadratic accumulator/suffix work; ordinary proof performance takes priority
+over optimizing this extreme case. Normal-form checking now visits terms with the
+shared iterative walker; deep hash terms beneath DH exponents run through both
+normal-form checking and searched proofs, with zero and 128 preceding goals.
+A real Maude reduction of `exp(h^1024(x), one)` additionally covers the query and
+reply path on 256 KiB. The Maude writer guards nonliteral child calls, and parsing/skipping reply
+terms grows the stack on recursive descent. Nested lists and malformed replies
+are exercised independently; generated wire-format tests compare the writer
+with its recursive reference. The external Maude workload is deliberately smaller
+than the isolated 8,192-level Rust wire-format tests; deep backend processing
+can be costly independently of the Rust stack.
+Skolemized matching uses the shared iterative query and raw-order literal mapper
+for all four term walks. Tests cover 8,192-level ground matching and skolem
+round trips, plus real AC-guard proof search at 1,024 levels on 256 KiB. The
+8,192-level AC backend workload reached Maude but exceeded a 60-second probe
+budget; its completion is not an acceptance claim. Saturation's comparison
+modulo freshness is iterative and checks deep repeated-variable constraints.
+Subterm membership and fresh-variable collection use pruned iterative walks;
+root equality is checked before pruning a reducible head. Recursive negative
+subterm splitting uses guarded stack growth and retains sorted visitation and
+fresh-variable order. Public search regressions cover freshness ordering and
+positive subterm constraints at depth 8,192, and negative splitting at depth
+512, on 256 KiB stacks.
+
+Guarded conversion batches compatible connective runs in either association,
+including polarity changes. Disjunction batching retains the original singleton
+versus deduplication decisions. Generated comparisons check structural results,
+errors and fresh-variable consumption against the previous converter. Guarded
+normalization separately compares flattened child selection with the previous
+bottom-up traversal. Both paths exercise 8,192 conjunction and disjunction
+levels on 256 KiB stacks. Borrowed atom mapping is compared with the owned map
+at every binder depth. Negation, simplification and induction share batching
+for arbitrary-arity raw connective runs; generated comparisons retain empty,
+singleton and nested disjunction structure, valuation behavior and errors.
+Binder substitution indexes large blocks once across their guards and body;
+small blocks keep allocation-free lookup. The wellformedness term visitor also
+shares that lookup across each binder block rather than rebuilding it per atom. Tests cover first-match duplicate
+keys, scope offsets and 8,192-variable open/close round trips.
+
+Formula grouping indexes matching delimiters once and defers the relational
+atom alternative where appropriate. Generated valid and malformed formulas are
+compared with the previous atom-first parser, including complete diagnostics.
+Deep tests include both grouped formulas and grouped terms followed by equality.
+SAPIC let lowering resolves ordered substitution images lazily and restores its
+history at branches. Generated processes compare it with the eager suffix pass;
+8,192-level tests include unused bindings and forward aliases. Locations, typed
+variables, match variables and conditional formulas participate in comparisons.
+Lock history is retained only while a branch checkpoint needs restoration; the
+existing generated lock/error-priority comparisons cover its scope behavior.
+
+SAPIC process parsing uses guarded recursive productions and iterative
+left-associative composition. The small-stack parser test covers 8,192 nested
+actions, branches, groups and replication, including error cleanup and multi-let
+else branches. State-channel declaration reuses the mutable process walker;
+a recursive small-tree oracle checks declaration order, branch scopes, existing
+annotations and fresh-counter consumption. Formula polarity uses guarded scalar
+recursion, with the upstream asymmetric Iff semantics retained and tested at
+8,192 levels on 256 KiB. Internal-term hashing reuses the shared preorder walk;
+the structural-operation tests continue to compare exact hash byte streams.
+The public SAPIC pre-report test exercises an 8,192-level term and 2,048 process
+actions on 256 KiB without the removed compiler-stack wrapper.
+
+Formula and include parsing now use guarded recursion. Formula parsing retains
+its group-delimiter index and lazy atom alternative; the independent reference
+checks ASTs and selected diagnostics. Include expansion retains shared signature
+state, active-path cycle checks, source ordering and originating-file errors.
+SAPIC `type_with` also uses guarded recursion with its existing mutation-aware
+cache. `public_typing_handles_deep_definitions_and_errors_on_small_stack` checks
+the public typing entry without its old phase wrapper, including deep inferred
+type failures and parameterized process definitions on 256 KiB.
+
+The Doc-building term printer uses guarded child mapping while retaining pair
+flattening. Tests check callback order, early failure, and 8,192-level rendering
+and panic cleanup on 256 KiB. The separate flat writer remains iterative.
+`reveal_oracle_shows_deep_terms_on_small_stack` covers raw Haskell-style term
+rendering through the public reveal-oracle helper at 8,192 levels on 256 KiB;
+recursive child calls now grow the stack. Compact Debug and AST clone
+implementations remain unchanged after evaluating shared alternatives; see
+`docs/nesting-design.md`.
+
+JSON export retains shared terms and expands one node at a time through its
+guarded JSON writer, avoiding a second deeply owned tree.
+`deep_json_export_and_write_failure_use_small_stack` exercises the public export
+and writer-error cleanup at 512 levels on 256 KiB; the preceding exporter
+overflowed at that depth and stack size.
+`dropping_unrendered_json_uses_term_ownership` checks final ownership cleanup at
+8,192 levels on 256 KiB. Pretty JSON indentation produces quadratic output for a
+unary chain, so the export regression deliberately uses a smaller depth.
+The JSON unit snapshots and `output_traces` CLI suite check the existing wire
+format, including Haskell escaping and outermost-only `jgnShow`.
+
+
+### Further traversal simplifications
+
+`bind_lits` and SAPIC report rewriting share a postorder term fold. Original
+children are visited left to right before their application callback; replacement
+terms are inserted once. `report_rewrite_does_not_visit_inserted_locations`
+checks a location which itself contains `report`, alongside the existing deep
+report and binding tests.
+
+Pattern stripping and empty-trace evaluation use guarded recursion. Existing
+20,000-level process/pattern conversion checks still apply;
+`empty_trace_evaluation_preserves_late_errors_and_deep_connectives` checks 8,192
+alternating connective levels on 256 KiB, and errors following a Boolean result
+that would otherwise permit short-circuiting.
+
+Maude rendering shares direct list emission and guards only nonliteral child
+calls. `nested_maude_terms_and_borrowed_lists_use_small_stack` covers 8,192 mixed
+function/list levels on 256 KiB through both public wire writers; the independent
+small-term reference includes AC/C, nullary applications and full-width IDs.
+Horizontal and vertical document composition share a compile-time-specialized
+spine loop, retaining the existing ownership, lazy-choice and corpus tests.
+
+### Keeping nesting tests maintainable
+
+Use `tamarin_test_support::on_stack(bytes, || { ... })` for ordinary dedicated
+stack tests. Construct, inspect and drop the tested values inside the closure:
+returning an owner moves its final destruction back to the caller's stack.
+Keep specialized thread coordination or expected-panic setup explicit.
+
+Before adding a regression function, identify its distinct observable contract.
+If an existing test exercises the same operation and lifecycle, prefer another
+named table row or an assertion in that test. Retain separate coverage for
+borrowed versus owned inputs, width versus depth, branch order, errors and
+partial-result destruction, and concurrent last-owner release when these reach
+different paths. Fewer test functions alone is not evidence of less coverage.
+
+Share construction and thread scaffolding, but keep bounded recursive reference
+implementations independent of the production operation they check. Do not
+replace an independent oracle with a call to the new shared production helper.
+Move large inline suites into sibling `*_tests.rs` modules when they obscure the
+implementation; `use super::*` keeps private access without expanding the public
+API. Prefer a small local table to a generic fixture framework used once.

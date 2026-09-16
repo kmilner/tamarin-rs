@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::ast::{Atom, BinOp, FactAnnotation, Formula, GoalSpec, Term};
-use crate::parser::{parse_parens_goal, ParseError, Parser};
+use crate::parser::{ParseError, Parser};
 use tamarin_term::lterm::LSort;
 
 /// The three childless leaf forms that a printed proof can end in.  Each form
@@ -143,16 +143,15 @@ fn sig_parser(msig: &tamarin_term::maude_sig::MaudeSig) -> Parser<'static> {
     p
 }
 
-/// The goal grammar over bare goal text: [`parse_parens_goal`] reads the
-/// parentheses of the `solve( ... )` step, so the tests below wrap the goal
-/// in them and drop the consumed length.
+/// Exercise the goal grammar through the same `solve` method as stored proofs.
 fn parse_goal_str(src: &str, parent: &Parser<'_>) -> Result<GoalSpec, ParseError> {
-    parse_parens_goal(&format!("({src})"), parent).map(|(g, _)| g)
+    let mut tree = parse_proof_tree(&format!("by solve({src})"), parent)?;
+    match std::mem::replace(&mut tree.method, ParsedMethod::Sorry) {
+        ParsedMethod::SolveGoal(goal) => Ok(goal),
+        _ => unreachable!("solve produces a goal"),
+    }
 }
 
-/// Every goal shape below goes through the sub-parser entry point the
-/// `solve( ... )` arm uses, so the assertions pin the grammar itself rather
-/// than the framing around it.
 fn goal(src: &str) -> GoalSpec {
     parse_goal_str(src, &bare_parser()).unwrap_or_else(|e| panic!("{src}: {e}"))
 }
@@ -280,7 +279,7 @@ fn subterm_goal_accepts_both_spellings() {
 
 /// A user-declared `[AC]` symbol is written INFIX, and `acterm`
 /// (Theory/Text/Parser/Term.hs:165-174) reads it only when the symbol is in
-/// the signature the sub-parser inherits.
+/// the signature used to parse the proof.
 #[test]
 fn goal_reads_a_user_ac_argument_infix() {
     let mut msig = tamarin_term::maude_sig::pair_maude_sig();
@@ -366,7 +365,7 @@ fn goal_resolves_a_prefix_head_through_the_signature() {
 }
 
 /// `diff(a, b)` is a term only when the theory enables it, so the goal
-/// sub-parser carries the parent's `diff` bit.
+/// parser uses the enclosing theory's `diff` bit.
 #[test]
 fn goal_diff_argument_follows_the_diff_bit() {
     let g = parse_goal_str("F( diff(a, b) ) @ #i", &Parser::new("", &[], true)).expect("parse");
@@ -377,6 +376,47 @@ fn goal_diff_argument_follows_the_diff_bit() {
         other => panic!("expected an action goal, got {other:?}"),
     }
     assert!(parse_goal_str("F( diff(a, b) ) @ #i", &bare_parser()).is_err());
+}
+
+#[test]
+fn stored_proofs_share_the_theory_signature_and_leave_the_next_item() {
+    use crate::ast::TheoryItem;
+
+    let args = "wrap(x add c), exp(x, y), diff(c, x)";
+    let goal = format!("F({args}) @ #i");
+    let signature = "builtins: diffie-hellman functions: add/2 [AC], c/0 macros: wrap(x) = <x,c>";
+    for (header, proof) in [
+        (
+            "lemma L: \"T\"",
+            format!("solve({goal}) case rule by solve({goal}) qed\n/* trailing */\n"),
+        ),
+        (
+            "diffLemma L:",
+            format!("step(solve({goal})) case rule by step(solve({goal})) qed\n/* trailing */\n"),
+        ),
+    ] {
+        let source =
+            format!("theory T begin {signature}\n{header}\n{proof}rule R: [] --> [F({args})]\nend");
+        let theory = crate::parse_diff_theory(&source, &[]).unwrap();
+        let TheoryItem::Rule(rule) = theory.items.last().unwrap() else {
+            panic!("the item following the proof must remain a rule");
+        };
+        let stored = match &theory.items[theory.items.len() - 2] {
+            TheoryItem::Lemma(lemma) => lemma.proof.as_ref().unwrap(),
+            TheoryItem::DiffLemma(lemma) => lemma.proof.as_ref().unwrap(),
+            _ => panic!("expected a lemma before the rule"),
+        };
+        assert_eq!(stored.raw, proof);
+        if let Some(tree) = &stored.tree {
+            assert_eq!(tree.cases[0].0, "rule");
+            for method in [&tree.method, &tree.cases[0].1.method] {
+                let ParsedMethod::SolveGoal(GoalSpec::Action(_, fact)) = method else {
+                    panic!("expected a fact goal");
+                };
+                assert_eq!(fact, &rule.conclusions[0]);
+            }
+        }
+    }
 }
 
 /// HS reads the goal as `parens goal` (Theory/Text/Parser/Proof.hs:80), so

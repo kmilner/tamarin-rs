@@ -124,15 +124,11 @@ pub fn elaborate_with_diagnostics(
 /// type so it serves both `LNTerm` (rule facts) and `SapicTerm` (process
 /// terms).
 pub(crate) fn collect_names<V>(t: &VTerm<Name, V>, out: &mut Vec<Name>) {
-    match t {
-        Term::Lit(Lit::Con(n)) => out.push(*n),
-        Term::Lit(Lit::Var(_)) => {}
-        Term::App(_, args) => {
-            for a in args.iter() {
-                collect_names(a, out);
-            }
+    t.for_each_lit(|literal| {
+        if let Lit::Con(name) = literal {
+            out.push(*name);
         }
-    }
+    });
 }
 
 /// Walk every node of a SAPIC process (`pfoldMap`), collecting the `Name`
@@ -243,6 +239,13 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
 /// `heuristic:` header's default oracle names against it while building the
 /// theory (`defaultOracleNames`, Theory/Text/Parser.hs:249-250).
 pub fn elaborate_with_in_file(parser_thy: &p::Theory, in_file: &str) -> Result<Theory, ElabError> {
+    tamarin_utils::stack::with_compiler_stack(|| elaborate_with_in_file_inner(parser_thy, in_file))
+}
+
+fn elaborate_with_in_file_inner(
+    parser_thy: &p::Theory,
+    in_file: &str,
+) -> Result<Theory, ElabError> {
     let sig = minimal_maude_sig(parser_thy.is_diff);
     let mut thy: Theory = Theory::new(parser_thy.name.clone(), sig);
     thy.in_file = in_file.to_string();
@@ -299,6 +302,7 @@ pub fn elaborate_with_in_file(parser_thy: &p::Theory, in_file: &str) -> Result<T
             }
         }
     }
+
     Ok(thy)
 }
 
@@ -635,8 +639,8 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 // (lib/theory/src/Rule.hs:82-86).  A theory that declares no
                 // macro, or a rule whose body calls none, leaves the two
                 // identical.
-                let mut opr =
-                    OpenProtoRule::new(crate::rule::apply_macro_in_rule(&macros, e.clone()));
+                let expanded = crate::rule::apply_macro_in_rule(&macros, e.clone());
+                let mut opr = OpenProtoRule::new(expanded);
                 if opr.rule != e {
                     opr.rule_e = Some(Box::new(e));
                 }
@@ -799,9 +803,13 @@ fn elaborate_process(
     defs: &crate::process_inline::ProcessDefMap,
     sig: &MaudeSig,
 ) -> Result<crate::sapic::PlainProcess, ElabError> {
-    crate::process_inline::convert_process_with_defs(proc, defs, sig).map_err(|e| ElabError {
-        message: format!("SAPIC translation: {}", e.message),
-    })
+    let process =
+        crate::process_inline::convert_process_with_defs(proc, defs, sig).map_err(|e| {
+            ElabError {
+                message: format!("SAPIC translation: {}", e.message),
+            }
+        })?;
+    Ok(process)
 }
 
 // =============================================================================
@@ -1034,14 +1042,16 @@ pub fn proof_tree_from_parsed(
     t: &p::ParsedProofTree,
     sig: &MaudeSig,
 ) -> Result<ProofTree, ElabError> {
-    let cases: Result<Vec<_>, _> = t
-        .cases
-        .iter()
-        .map(|(name, sub)| proof_tree_from_parsed(sub, sig).map(|sub| (name.clone(), sub)))
-        .collect();
-    Ok(ProofTree {
-        method: proof_method_from_parsed(&t.method, sig)?,
-        cases: cases?,
+    tamarin_utils::stack::ensure_sufficient_stack(|| {
+        let cases: Result<Vec<_>, _> = t
+            .cases
+            .iter()
+            .map(|(name, sub)| proof_tree_from_parsed(sub, sig).map(|sub| (name.clone(), sub)))
+            .collect();
+        Ok(ProofTree {
+            method: proof_method_from_parsed(&t.method, sig)?,
+            cases: cases?,
+        })
     })
 }
 
@@ -1089,31 +1099,33 @@ pub(crate) fn map_atom_terms(a: &p::Atom, g: &dyn Fn(&p::Term) -> p::Term) -> p:
 /// `pub` (not `pub(crate)`): tamarin-sapic's `formula_unpattern` walks with it
 /// too.
 pub fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term) -> p::Formula {
-    use p::Formula::*;
-    match f {
-        False => False,
-        True => True,
-        Atom(a) => Atom(map_atom_terms(a, g)),
-        Not(x) => Not(Box::new(map_formula_terms(x, g))),
-        And(x, y) => And(
-            Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g)),
-        ),
-        Or(x, y) => Or(
-            Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g)),
-        ),
-        Implies(x, y) => Implies(
-            Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g)),
-        ),
-        Iff(x, y) => Iff(
-            Box::new(map_formula_terms(x, g)),
-            Box::new(map_formula_terms(y, g)),
-        ),
-        Forall(vs, x) => Forall(vs.clone(), Box::new(map_formula_terms(x, g))),
-        Exists(vs, x) => Exists(vs.clone(), Box::new(map_formula_terms(x, g))),
-    }
+    tamarin_utils::stack::ensure_sufficient_stack(|| {
+        use p::Formula::*;
+        match f {
+            False => False,
+            True => True,
+            Atom(a) => Atom(map_atom_terms(a, g)),
+            Not(x) => Not(Box::new(map_formula_terms(x, g))),
+            And(x, y) => And(
+                Box::new(map_formula_terms(x, g)),
+                Box::new(map_formula_terms(y, g)),
+            ),
+            Or(x, y) => Or(
+                Box::new(map_formula_terms(x, g)),
+                Box::new(map_formula_terms(y, g)),
+            ),
+            Implies(x, y) => Implies(
+                Box::new(map_formula_terms(x, g)),
+                Box::new(map_formula_terms(y, g)),
+            ),
+            Iff(x, y) => Iff(
+                Box::new(map_formula_terms(x, g)),
+                Box::new(map_formula_terms(y, g)),
+            ),
+            Forall(vs, x) => Forall(vs.clone(), Box::new(map_formula_terms(x, g))),
+            Exists(vs, x) => Exists(vs.clone(), Box::new(map_formula_terms(x, g))),
+        }
+    })
 }
 
 /// Right-fold a non-empty term list into a right-associative `pair(..)` chain:
@@ -1212,7 +1224,7 @@ where
     use tamarin_term::function_symbols::AcSym;
     use tamarin_term::term::{f_app_ac, f_app_acfct};
 
-    match t {
+    tamarin_utils::stack::ensure_sufficient_stack(|| match t {
         p::Term::Var(v) => mk_var(v),
         p::Term::PubLit(s) => {
             let n = Name::new(NameTag::Pub, s.clone());
@@ -1395,7 +1407,7 @@ where
             }
         }
         p::Term::PatMatch(_) => None,
-    }
+    })
 }
 
 pub fn term_to_lnterm(t: &p::Term, sig: &MaudeSig) -> Option<tamarin_term::lterm::LNTerm> {

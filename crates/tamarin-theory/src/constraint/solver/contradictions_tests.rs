@@ -429,3 +429,205 @@ fn forbidden_d_pmult_fires_without_pmult_rule_name() {
         "HS isForbiddenDPMult fires on the pmult shape regardless of rule name"
     );
 }
+
+#[test]
+fn decomposition_symbols_match_recursive_definition() {
+    use tamarin_term::function_symbols::{
+        exp_sym, pmult_sym, CSym, Constructability, FunSym, NoEqSym, Privacy,
+    };
+    use tamarin_term::lterm::{LNTerm, Name, NameTag};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::{const_term, var_term, Lit};
+
+    fn public(t: &LNTerm) -> bool {
+        match t {
+            Term::Lit(Lit::Var(v)) => !matches!(v.sort, LSort::Msg | LSort::Fresh),
+            Term::Lit(Lit::Con(n)) => n.tag != NameTag::Fresh,
+            Term::App(sym, args) => {
+                !matches!(sym, FunSym::NoEq(s) if s.privacy == Privacy::Private)
+                    && args.iter().all(public)
+            }
+        }
+    }
+    fn reference(t: &LNTerm, prune: bool) -> Option<Vec<RootSym>> {
+        if prune && public(t) {
+            return Some(vec![]);
+        }
+        let (mut out, children): (_, &[LNTerm]) = match dh_view(t) {
+            Some(DhView::Exp(base)) => (
+                vec![RootSym::Sym(FunSym::NoEq(exp_sym()))],
+                std::slice::from_ref(base),
+            ),
+            Some(DhView::PMult(base)) => (
+                vec![
+                    RootSym::Sym(FunSym::NoEq(exp_sym())),
+                    RootSym::Sym(FunSym::NoEq(pmult_sym())),
+                    RootSym::Sym(FunSym::C(CSym::EMap)),
+                ],
+                std::slice::from_ref(base),
+            ),
+            Some(DhView::EMap) => (vec![RootSym::Sym(FunSym::C(CSym::EMap))], &[]),
+            None => (
+                vec![root_sym(t)?],
+                match t {
+                    Term::App(_, args) => args,
+                    Term::Lit(_) => &[],
+                },
+            ),
+        };
+        for child in children {
+            out.extend(reference(child, prune)?);
+        }
+        Some(out)
+    }
+    fn next(seed: &mut u64) -> usize {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (*seed >> 32) as usize
+    }
+    fn tree(seed: &mut u64, depth: usize, symbols: &[FunSym], leaves: &[LNTerm]) -> LNTerm {
+        if depth == 0 || next(seed).is_multiple_of(4) {
+            return leaves[next(seed) % leaves.len()].clone();
+        }
+        let sym = symbols[next(seed) % symbols.len()];
+        let count = match sym {
+            FunSym::NoEq(s) => s.arity,
+            _ => 2,
+        };
+        Term::App(
+            sym,
+            (0..count)
+                .map(|_| tree(seed, depth - 1, symbols, leaves))
+                .collect(),
+        )
+    }
+    let symbols = [
+        FunSym::NoEq(NoEqSym::new(
+            b"public".to_vec(),
+            2,
+            Privacy::Public,
+            Constructability::Constructor,
+        )),
+        FunSym::NoEq(NoEqSym::new(
+            b"private".to_vec(),
+            1,
+            Privacy::Private,
+            Constructability::Constructor,
+        )),
+        FunSym::NoEq(NoEqSym::new(
+            b"constant".to_vec(),
+            0,
+            Privacy::Public,
+            Constructability::Constructor,
+        )),
+        FunSym::NoEq(exp_sym()),
+        FunSym::NoEq(pmult_sym()),
+        FunSym::C(CSym::EMap),
+        FunSym::List,
+    ];
+    let leaves: Vec<LNTerm> = [
+        LSort::Msg,
+        LSort::Fresh,
+        LSort::Pub,
+        LSort::Node,
+        LSort::Nat,
+    ]
+    .into_iter()
+    .map(|s| var_term(LVar::new("x", s, 0)))
+    .chain(
+        [
+            NameTag::Pub,
+            NameTag::Fresh,
+            NameTag::Nat,
+            NameTag::Node,
+            NameTag::Abbrev,
+        ]
+        .into_iter()
+        .map(|tag| const_term(Name::new(tag, "c"))),
+    )
+    .collect();
+    for seed in 0..2000 {
+        let t = tree(&mut (seed + 1), 5, &symbols, &leaves);
+        assert_eq!(never_contains_fresh_priv(&t), public(&t), "seed {seed}");
+        for prune in [false, true] {
+            assert!(
+                possible_syms(&t, prune) == reference(&t, prune),
+                "seed {seed}, prune {prune}"
+            );
+        }
+    }
+    // Unknown DH exponents/scalars determine publicness but do not make the
+    // symbol result unknown when the emitted base is public.
+    for (sym, args) in [
+        (
+            FunSym::NoEq(exp_sym()),
+            vec![leaves[5].clone(), leaves[0].clone()],
+        ),
+        (
+            FunSym::NoEq(pmult_sym()),
+            vec![leaves[0].clone(), leaves[5].clone()],
+        ),
+        (
+            FunSym::C(CSym::EMap),
+            vec![leaves[0].clone(), leaves[5].clone()],
+        ),
+    ] {
+        let t = Term::App(sym, args.into());
+        assert!(!possible_root_syms(&t).unwrap().is_empty());
+        assert!(possible_root_syms(&t) == reference(&t, true));
+    }
+}
+
+#[test]
+fn deep_freshness_and_symbol_checks_use_small_stack() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+        use tamarin_term::lterm::pub_term;
+        use tamarin_term::term::f_app_no_eq;
+        use tamarin_term::vterm::var_term;
+        let sym = NoEqSym::new(
+            b"h".to_vec(),
+            1,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        for (leaf, public, unknown) in [
+            (pub_term("public"), true, false),
+            (var_term(LVar::new("fresh", LSort::Fresh, 0)), false, false),
+            (var_term(LVar::new("message", LSort::Msg, 0)), false, true),
+        ] {
+            let mut t = leaf;
+            for _ in 0..32768 {
+                t = f_app_no_eq(sym, vec![t]);
+            }
+            assert_eq!(never_contains_fresh_priv(&t), public);
+            let roots = possible_root_syms(&t);
+            let ends = possible_end_syms(&t);
+            if unknown {
+                assert!(roots.is_none() && ends.is_none());
+            } else {
+                assert_eq!(roots.unwrap().len(), if public { 0 } else { 32769 });
+                assert_eq!(ends.unwrap().len(), 32769);
+            }
+        }
+    });
+}
+
+#[test]
+fn symbol_intersection_handles_duplicates_and_empty_sets() {
+    let symbols: Vec<_> = [LSort::Msg, LSort::Fresh, LSort::Pub, LSort::Node]
+        .into_iter()
+        .map(RootSym::Sort)
+        .collect();
+    for size in [0, 1, 16, 17, 1024] {
+        for offset in 0..4 {
+            let left: Vec<_> = (0..size).map(|i| symbols[i % 2].clone()).collect();
+            let right: Vec<_> = (0..size)
+                .map(|i| symbols[(i % 2 + offset) % 4].clone())
+                .collect();
+            assert_eq!(
+                root_symbols_disjoint(&left, &right),
+                left.iter().all(|s| !right.contains(s))
+            );
+        }
+    }
+}

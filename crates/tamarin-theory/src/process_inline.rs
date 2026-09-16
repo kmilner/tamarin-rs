@@ -101,12 +101,6 @@ fn inline_call(
         )));
     }
 
-    // The body was converted when its definition was read. Any calls it
-    // contains were therefore resolved against precisely the earlier
-    // definitions visible there; clone that resolved body rather than
-    // re-reading it against the caller's newer environment.
-    let body = def.body.clone();
-
     // Build the parameter substitution with HS's `extend_sup` type-erasure
     // doubling (Theory/Text/Parser/Sapic.hs:299-306): a typed formal
     // contributes both its typed and untyped keys mapping to the argument.
@@ -120,7 +114,11 @@ fn inline_call(
     let subst = SapicSubst::from_list(pairs);
 
     // `applyM (substFromList extend_sup) p` — capture-checking substitution.
-    let substituted = apply_m_process(&subst, body)?;
+    // The body was converted when its definition was read. Any calls it
+    // contains were therefore resolved against precisely the earlier
+    // definitions visible there; transform that stored body directly rather
+    // than cloning and then recursively dropping an intermediate deep tree.
+    let substituted = apply_m_process(&subst, &def.body)?;
 
     // `processAddAnnotation substP (mempty {processnames = [name]})`: tag the
     // body's root node with the call name (drives `role=` / colour).
@@ -133,7 +131,7 @@ fn inline_call(
     Ok(Process::Action(
         SapicAction::ProcessCall(name.to_string(), sapic_args),
         ProcessParsedAnnotation::empty(),
-        Box::new(annotated),
+        Box::new(annotated).into(),
     ))
 }
 
@@ -144,12 +142,12 @@ fn inline_call(
 /// HS `applyM` is capture-DETECTING (it throws `CapturedEx`), NOT
 /// capture-avoiding.  For parameterless calls (`subst` empty) this is a no-op
 /// rename and never fails.
-fn apply_m_process(subst: &SapicSubst, p: PlainProcess) -> Result<PlainProcess, ConvertError> {
+fn apply_m_process(subst: &SapicSubst, p: &PlainProcess) -> Result<PlainProcess, ConvertError> {
     if subst.is_empty() {
-        return Ok(p);
+        return Ok(p.clone());
     }
     try_map_process(
-        &p,
+        p,
         &mut |action| apply_m_action(subst, action),
         &mut |comb| apply_m_comb(subst, comb),
         &mut |ann| Ok(apply_annotation(subst, ann.clone())),
@@ -388,7 +386,7 @@ mod tests {
                 // passed.  A substitution that drops the argument, or that
                 // binds the wrong formal parameter, therefore cannot pass this
                 // check with some other constant.
-                match *body {
+                match body.into_inner() {
                     Process::Action(SapicAction::ChOut { msg, .. }, _, _) => {
                         assert_eq!(msg, args[0]);
                         assert_eq!(
@@ -446,7 +444,7 @@ mod tests {
         else {
             panic!("expected a ProcessCall action");
         };
-        let Process::Comb(got, ..) = *body else {
+        let Process::Comb(got, ..) = body.into_inner() else {
             panic!("expected a Comb node under the call marker");
         };
         assert_eq!(
@@ -491,7 +489,7 @@ mod tests {
         else {
             panic!("expected a ProcessCall action");
         };
-        let Process::Action(got, ..) = *body else {
+        let Process::Action(got, ..) = body.into_inner() else {
             panic!("expected an action under the call marker");
         };
         assert_eq!(got, convert_action(&msr_on(pub_lit("t")), &sig).unwrap());

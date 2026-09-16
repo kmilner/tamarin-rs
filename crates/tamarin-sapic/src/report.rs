@@ -53,11 +53,14 @@ type AnnProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 ///                  [Ato protFact]                              -- restr
 ///                  0
 ///   protFact = Syntactic . Pred $ protoFact Linear "Report" [varTerm x, varTerm loc]
-pub(crate) fn report_init(
-    an_proc: &AnnProc,
-    init_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>>,
+pub(crate) fn report_init<'a>(
+    an_proc: &'a AnnProc,
+    init_rules: Vec<AnnotatedRule<'a, ProcessAnnotation<LVar>>>,
     init_tx: BTreeSet<LVar>,
-) -> (Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, BTreeSet<LVar>) {
+) -> (
+    Vec<AnnotatedRule<'a, ProcessAnnotation<LVar>>>,
+    BTreeSet<LVar>,
+) {
     // `x`, `loc` :: LVar _ LSortMsg 0.
     let x = LVar::new("x", LSort::Msg, 0);
     let loc = LVar::new("loc", LSort::Msg, 0);
@@ -80,7 +83,7 @@ pub(crate) fn report_init(
 
     let report_rule = AnnotatedRule {
         process_name: Some("ReportRule".to_string()),
-        process: an_proc.clone(),
+        process: an_proc,
         position: RulePosition::Special(SpecialPosition::NoPosition),
         prems: vec![prem],
         acts: vec![],
@@ -118,25 +121,29 @@ fn opt_loc(loc: &Option<SapicTerm>, ann: &ProcessAnnotation<LVar>) -> Option<Sap
 }
 
 /// `reportMapTerms loc` (Report.hs:52-60).
-fn report_map_terms(loc: Option<SapicTerm>, p: AnnProc) -> AnnProc {
-    match p {
-        Process::Null(ann) => Process::Null(ann),
-        Process::Action(ac, ann, body) => {
-            let here = opt_loc(&loc, &ann);
-            let ac2 = report_map_terms_action(&here, ac);
-            Process::Action(ac2, ann, Box::new(report_map_terms(here, *body)))
+fn report_map_terms(loc: Option<SapicTerm>, mut p: AnnProc) -> AnnProc {
+    crate::process_walk::walk_mut(&mut p, loc, |node, loc| {
+        match node {
+            Process::Null(_) => {}
+            Process::Action(ac, ann, _) => {
+                *loc = opt_loc(loc, ann);
+                if loc.is_some() {
+                    let old = std::mem::replace(ac, SapicAction::Rep);
+                    *ac = report_map_terms_action(loc, old);
+                }
+            }
+            Process::Comb(c, ann, _, _) => {
+                *loc = opt_loc(loc, ann);
+                if loc.is_some() {
+                    let old = std::mem::replace(c, ProcessCombinator::Parallel);
+                    *c = report_map_terms_comb(loc, old);
+                }
+            }
         }
-        Process::Comb(c, ann, l, r) => {
-            let here = opt_loc(&loc, &ann);
-            let c2 = report_map_terms_comb(&here, c);
-            Process::Comb(
-                c2,
-                ann,
-                Box::new(report_map_terms(here.clone(), *l)),
-                Box::new(report_map_terms(here, *r)),
-            )
-        }
-    }
+        Ok::<_, std::convert::Infallible>(true)
+    })
+    .unwrap();
+    p
 }
 
 /// `reportMapTermsAction f loc ac` (Report.hs:61-77): apply `subst loc` to the
@@ -247,24 +254,18 @@ fn subst<V: Clone + Ord>(loc: &Option<VTerm<Name, V>>, t: &VTerm<Name, V>) -> VT
 /// The `subst (Just loc)` arm (Report.hs:94-97).
 fn subst_at<V: Clone + Ord>(loc: &VTerm<Name, V>, t: &VTerm<Name, V>) -> VTerm<Name, V> {
     use tamarin_term::function_symbols::FunSym;
-    match t {
-        // `Lit _ -> t`.
-        VTerm::Lit(_) => t.clone(),
-        // Upstream #922 makes only the actual report symbol special; another
-        // unary application falls through to generic recursion.
-        VTerm::App(FunSym::NoEq(s), args) if args.len() == 1 && s.name == b"report" => {
-            tamarin_term::term::f_app_no_eq(
-                tamarin_term::builtin::rep_sym(),
-                vec![subst_at(loc, &args[0]), loc.clone()],
-            )
-        }
-        // `FApp k as -> fApp k (map (subst loc) as)`: use smart constructors
-        // so rewriting below an AC symbol leaves its arguments normalised.
-        VTerm::App(sym, args) => {
-            let new_args = args.iter().map(|a| subst_at(loc, a)).collect();
-            tamarin_term::term::f_app(*sym, new_args)
-        }
-    }
+    tamarin_term::term::fold_term(
+        t,
+        &mut |lit| VTerm::Lit(lit.clone()),
+        &mut |sym, mut args| {
+            if matches!(sym, FunSym::NoEq(s) if args.len() == 1 && s.name == b"report") {
+                args.push(loc.clone());
+                tamarin_term::term::f_app_no_eq(tamarin_term::builtin::rep_sym(), args)
+            } else {
+                tamarin_term::term::f_app(sym, args)
+            }
+        },
+    )
 }
 
 #[cfg(test)]
@@ -273,6 +274,25 @@ mod tests {
 
     fn null() -> AnnProc {
         Process::Null(ProcessAnnotation::default())
+    }
+
+    #[test]
+    fn report_rewrite_does_not_visit_inserted_locations() {
+        use tamarin_term::{
+            builtin::{rep_sym, report_sym},
+            term::f_app_no_eq,
+        };
+        let value: SapicTerm = tamarin_term::lterm::pub_term("a");
+        let location = f_app_no_eq(report_sym(), vec![value.clone()]);
+        let input = f_app_no_eq(report_sym(), vec![location.clone()]);
+        let expected = f_app_no_eq(
+            rep_sym(),
+            vec![
+                f_app_no_eq(rep_sym(), vec![value, location.clone()]),
+                location.clone(),
+            ],
+        );
+        assert_eq!(subst_at(&location, &input), expected);
     }
 
     #[test]
@@ -296,7 +316,8 @@ mod tests {
     /// would resolve against an empty scope.
     #[test]
     fn report_init_builds_the_report_predicate_over_free_bvars() {
-        let (rules, _) = report_init(&null(), vec![], BTreeSet::new());
+        let process = null();
+        let (rules, _) = report_init(&process, vec![], BTreeSet::new());
         let ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(fa))) = &rules[0].restr[0]
         else {
             panic!("expected Syntactic (Pred …), got {:?}", rules[0].restr[0]);
@@ -402,5 +423,80 @@ mod tests {
         };
         assert_eq!(left, expected);
         assert_eq!(right, expected);
+    }
+    #[test]
+    fn report_locations_are_inherited_without_leaking_between_branches() {
+        use tamarin_term::{lterm::pub_term, term::f_app_no_eq};
+        let msg = f_app_no_eq(tamarin_term::builtin::report_sym(), vec![pub_term("m")]);
+        let output = || {
+            Process::Action(
+                SapicAction::ChOut {
+                    chan: None,
+                    msg: msg.clone(),
+                },
+                ProcessAnnotation::empty(),
+                Box::new(null()).into(),
+            )
+        };
+        let mut local = ProcessAnnotation::empty();
+        local.parsing_ann.location = Some(pub_term("local"));
+        let p = Process::Comb(
+            ProcessCombinator::Parallel,
+            ProcessAnnotation::empty(),
+            Box::new(Process::Action(
+                SapicAction::Rep,
+                local,
+                Box::new(output()).into(),
+            ))
+            .into(),
+            Box::new(output()).into(),
+        );
+        let mut result = report_map_terms(Some(pub_term("outer")), p);
+        let mut messages = Vec::new();
+        crate::process_walk::walk_mut(&mut result, (), |node, _| {
+            if let Process::Action(SapicAction::ChOut { msg, .. }, _, _) = node {
+                messages.push(msg.clone());
+            }
+            Ok::<_, std::convert::Infallible>(true)
+        })
+        .unwrap();
+        assert_eq!(
+            messages,
+            vec![
+                f_app_no_eq(
+                    tamarin_term::builtin::rep_sym(),
+                    vec![pub_term("m"), pub_term("local")]
+                ),
+                f_app_no_eq(
+                    tamarin_term::builtin::rep_sym(),
+                    vec![pub_term("m"), pub_term("outer")]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn deep_report_terms_and_processes_use_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let mut t: SapicTerm = tamarin_term::lterm::pub_term("a");
+            for _ in 0..20_000 {
+                t = tamarin_term::term::f_app_no_eq(tamarin_term::builtin::report_sym(), vec![t]);
+            }
+            let rewritten = subst(&Some(tamarin_term::lterm::pub_term("site")), &t);
+            assert!(!rewritten.any_fun_sym(|s| matches!(s, tamarin_term::function_symbols::FunSym::NoEq(n) if *n == tamarin_term::builtin::report_sym())));
+            let mut p: AnnProc = Process::Action(
+                SapicAction::ChOut { chan: None, msg: t },
+                Default::default(),
+                Box::new(Process::Null(Default::default())).into(),
+            );
+            for _ in 0..20_000 {
+                p = Process::Action(SapicAction::Rep, Default::default(), Box::new(p).into());
+            }
+            drop(report_map_terms(
+                Some(tamarin_term::lterm::pub_term("site")),
+                p,
+            ));
+            drop(rewritten);
+        });
     }
 }

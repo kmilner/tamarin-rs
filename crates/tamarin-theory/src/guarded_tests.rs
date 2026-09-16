@@ -282,6 +282,31 @@ fn satisfied_by_empty_trace_handles_quants() {
 }
 
 #[test]
+fn empty_trace_evaluation_preserves_late_errors_and_deep_connectives() {
+    tamarin_test_support::on_stack(256 * 1024, || {
+        let atom = g("last(#i)").unwrap();
+        for invalid in [
+            Guarded::Conj(vec![gfalse(), atom.clone()].into()),
+            Guarded::Disj(vec![gtrue(), atom].into()),
+        ] {
+            assert_eq!(
+                satisfied_by_empty_trace(&invalid).unwrap_err(),
+                "atom outside the scope of a quantifier"
+            );
+        }
+        let mut formula = gtrue();
+        for depth in 0..8192 {
+            formula = if depth % 2 == 0 {
+                Guarded::Conj(vec![formula, gtrue()].into())
+            } else {
+                Guarded::Disj(vec![formula, gfalse()].into())
+            };
+        }
+        assert!(satisfied_by_empty_trace(&formula).unwrap());
+    });
+}
+
+#[test]
 fn ginduct_existential_action_succeeds() {
     // Ex k #i. P(k) @ #i — closed, contains an action atom, not last-bearing.
     let gf = g("Ex k #i. P(k)@#i").expect("guarded");
@@ -667,6 +692,29 @@ fn induction_hypothesis_skips_non_node_binders() {
     );
 }
 
+#[test]
+fn induction_hypothesis_rejects_last_in_guards_and_bodies() {
+    let last = ProtoAtom::Last(var_term(BVar::Bound(0)));
+    for qua in [Quantifier::All, Quantifier::Ex] {
+        for in_guard in [false, true] {
+            let formula = Guarded::GGuarded {
+                qua,
+                vars: vec![("i".to_string(), LSort::Node)].into(),
+                guards: if in_guard { vec![last.clone()] } else { vec![] }.into(),
+                body: GuardedBody::new(if in_guard {
+                    gtrue()
+                } else {
+                    Guarded::Atom(last.clone())
+                }),
+            };
+            assert_eq!(
+                to_induction_hypothesis(&formula).unwrap_err(),
+                "formula not last-free",
+            );
+        }
+    }
+}
+
 // =========================================================================
 // simplify_guarded_with — partial-atom-valuation rewriting
 //
@@ -744,7 +792,7 @@ fn mk_universal(vars: Vec<(String, LSort)>, guards: &[(&str, &str)]) -> Guarded 
         qua: Quantifier::All,
         vars: vars.into(),
         guards: guards.iter().map(|(a, b)| mk_gatom_eq(a, b)).collect(),
-        body: std::sync::Arc::new(mk_atom_eq("p", "q")),
+        body: crate::guarded::GuardedBody::new(mk_atom_eq("p", "q")),
     }
 }
 
@@ -801,10 +849,9 @@ fn simplify_universal_with_quantifier_left_intact() {
 // =========================================================================
 // Haskell-faithfulness invariants for guarded-formula smart ctors.
 //
-// `gconj` / `gdisj` mirror Haskell's smart constructors in
-// `Theory.Constraint.System.Guarded` (gconj: Guarded.hs:415-423; gdisj:
-// Guarded.hs:426-437).  They
-// SHORT-CIRCUIT on `gtrue`/`gfalse` and dedupe via `nub`.
+// `gconj` / `gdisj` share Haskell's stable deduplication and Boolean absorption
+// (Theory.Constraint.System.Guarded, lines 415–437), but both unwrap singletons
+// after deduplication to make normalization idempotent.
 // =========================================================================
 
 /// `gtrue` is represented as `Conj []` and `gfalse` as `Disj []`.
@@ -900,15 +947,18 @@ fn gconj_dedupes_syntactic_duplicates() {
     }
 }
 
-/// Dedup happens BEFORE the singleton unwrap: `gconj([a, a])` must be
-/// `a` itself, not the non-normal singleton `Conj([a])` that only a
-/// second application would unwrap.  `normalise_guarded_cow` relies
-/// on this one-pass idempotence (mirrors HS `gconj`).
+/// Both constructors have the same idempotent singleton policy, unlike the
+/// Haskell constructors' pre-deduplication length check.
 #[test]
-fn gconj_duplicates_collapse_to_bare_item() {
+fn connective_duplicates_collapse_to_bare_item() {
     let a = g("last(#i)").unwrap();
-    let out = gconj(vec![a.clone(), a.clone()]);
-    assert_eq!(out, a, "gconj must dedupe before the singleton unwrap");
+    for constructor in [gconj, gdisj] {
+        for items in [vec![a.clone()], vec![a.clone(), a.clone()]] {
+            let out = constructor(items);
+            assert_eq!(out, a);
+            assert_eq!(constructor(vec![out.clone(), out]), a);
+        }
+    }
 }
 
 /// `gdisj` deduplicates syntactically-equal items.  Same as above,
@@ -1493,7 +1543,6 @@ fn open_guarded_draws_the_binder_names_the_printer_shows() {
 /// back sorted.
 #[test]
 fn open_guarded_sorts_a_commutative_argument_pair() {
-    use std::sync::Arc;
     use tamarin_utils::fresh::PreciseFreshState;
     let a = LVar::new("a", LSort::Msg, 0);
     // `em(Bound 0, a)` with `x` the binder: `Ord BVar` puts `Bound` first
@@ -1507,7 +1556,7 @@ fn open_guarded_sorts_a_commutative_argument_pair() {
         qua: Quantifier::Ex,
         vars: vec![("x".to_string(), LSort::Msg)].into(),
         guards: vec![ProtoAtom::EqE(em, bpub("z"))].into(),
-        body: Arc::new(gtrue()),
+        body: crate::guarded::GuardedBody::new(gtrue()),
     };
 
     let mut fresh = PreciseFreshState::nothing_used();
@@ -1594,7 +1643,7 @@ fn bound_leaves_are_skipped() {
             hf_leaf("y", 4, LSort::Msg),
         )]
         .into(),
-        body: std::sync::Arc::new(gtrue()),
+        body: crate::guarded::GuardedBody::new(gtrue()),
     };
 
     assert_eq!(hf_names(&g), vec!["y.4"]);
@@ -1624,7 +1673,7 @@ fn guards_visited_before_body() {
             hf_leaf("h", 2, LSort::Msg),
         )]
         .into(),
-        body: std::sync::Arc::new(Guarded::Conj(
+        body: crate::guarded::GuardedBody::new(Guarded::Conj(
             vec![Guarded::Atom(ProtoAtom::Last(hf_leaf("b", 3, LSort::Node)))].into(),
         )),
     };
@@ -1774,3 +1823,6 @@ fn guarded_store_holds_a_binary_pair_chain() {
     }
     assert_eq!(depth, 4);
 }
+
+#[path = "guarded_normalization_tests.rs"]
+mod normalization;

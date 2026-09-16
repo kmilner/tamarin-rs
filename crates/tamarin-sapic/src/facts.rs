@@ -508,11 +508,12 @@ pub(crate) fn color_for_process_name(names: &[String]) -> Rgb {
 // =============================================================================
 
 /// `AnnotatedRule` (Facts.hs:116-125).  `process` is the subprocess this rule
-/// was generated for (used for naming / color / `process=` attribute).
+/// was generated for (used for naming / color / `process=` attribute). The translation owns the
+/// tree; intermediate rules borrow their subprocess instead of copying suffixes.
 #[derive(Debug, Clone)]
-pub(crate) struct AnnotatedRule<Ann> {
+pub(crate) struct AnnotatedRule<'a, Ann> {
     pub process_name: Option<String>,
-    pub process: Process<Ann, SapicLVar>,
+    pub process: &'a Process<Ann, SapicLVar>,
     pub position: RulePosition,
     pub prems: Vec<TransFact>,
     pub acts: Vec<TransAction>,
@@ -555,10 +556,10 @@ fn strip_non_alphabetic(s: &str) -> String {
 }
 
 /// The HS-faithful rule name (Facts.hs:381-388).
-pub(crate) fn rule_name<Ann: GoodAnnotation>(r: &AnnotatedRule<Ann>) -> String {
+pub(crate) fn rule_name<'a, Ann: GoodAnnotation>(r: &AnnotatedRule<'a, Ann>) -> String {
     match &r.process_name {
         Some(s) => s.clone(),
-        None => generated_rule_name(&to_parsed(&r.process), r.index, &r.position),
+        None => generated_rule_name(&to_parsed(r.process), r.index, &r.position),
     }
 }
 
@@ -582,10 +583,10 @@ fn generated_rule_name(plain: &PlainProcess, index: usize, position: &RulePositi
 /// `ignoreDerivChecks = isLookup process` (Facts.hs:403-404): the lookup rules
 /// carry the `no_derivcheck` attribute so the message-derivation check skips
 /// them (the bound lookup variable is unconstrained at that point).
-pub(crate) fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE {
+pub(crate) fn to_rule<'a>(r: &AnnotatedRule<'a, ProcessAnnotation<LVar>>) -> ProtoRuleE {
     // Both the generated name and the `process=` attribute read the erased
     // process, so erase once.
-    let plain = to_parsed(&r.process);
+    let plain = to_parsed(r.process);
     let name = match &r.process_name {
         Some(s) => s.clone(),
         None => generated_rule_name(&plain, r.index, &r.position),
@@ -593,11 +594,11 @@ pub(crate) fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE 
     // HS reaches this list twice, as `getTopLevelName process` (for the colour)
     // and as `getProcessNames $ processGetAnnotation process` (for the role);
     // `getTopLevelName` IS that second expression, so one binding serves both.
-    let names = get_top_level_name(&r.process);
+    let names = get_top_level_name(r.process);
     // HS `isLookup (ProcessComb (Lookup _ _) _ _ _) = True; isLookup _ = False`
     // (Facts.hs:403-404) — the LITERAL process node this rule was generated for.
     let is_lookup_proc = matches!(
-        &r.process,
+        r.process,
         Process::Comb(
             tamarin_theory::sapic::ProcessCombinator::Lookup(_, _),
             _,
@@ -711,7 +712,7 @@ mod tests {
         let z = LVar::new("z", LSort::Msg, 0);
         let r = AnnotatedRule {
             process_name: Some("t".to_string()),
-            process: Process::Null(ProcessAnnotation::default()),
+            process: &Process::Null(ProcessAnnotation::default()),
             position: RulePosition::Pos(vec![]),
             prems: vec![TransFact::In(var_term(x))],
             acts: vec![TransAction::TamarinAct(proto_fact(

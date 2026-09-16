@@ -24,6 +24,7 @@
 use std::collections::BTreeSet;
 
 use tamarin_term::function_symbols::FunSym;
+use tamarin_term::lterm::LSort;
 use tamarin_term::term::f_app;
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 
@@ -98,14 +99,29 @@ pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError>
             }),
         ));
     }
+
     Ok(env)
 }
 
-/// Run `typeAndRenameProcess` on one process against the shared environment.
+/// Infer one process, then present each bound variable with its final inferred
+/// type. Public variables keep their contextual annotations. This output pass
+/// does not add constraints or change inference order; MSR translation instead
+/// erases tags directly and needs no intermediate presentation normalization.
 fn type_one(env: &mut TypingEnvironment, proc: &PlainProcess) -> Result<PlainProcess, ElabError> {
-    type_and_rename_process_in(env, proc).map_err(|e| ElabError {
+    let typed = type_and_rename_process_in(env, proc).map_err(|e| ElabError {
         message: format!("SAPIC typing: {e}"),
-    })
+    })?;
+    Ok(crate::process_walk::rewrite_variables(
+        &typed,
+        |v| {
+            if v.var.sort == LSort::Pub {
+                return None;
+            }
+            let final_type = env.vars.get(&v.var)?;
+            (final_type != &v.stype).then(|| SapicLVar::new(v.var, final_type.clone()))
+        },
+        Clone::clone,
+    ))
 }
 
 /// `typeAndRenameProcessDef` (Typing.hs:217-225):
@@ -157,11 +173,9 @@ fn type_process_def(
             match_vars: BTreeSet::new(),
         },
         ProcessParsedAnnotation::empty(),
-        Box::new(pr.clone()),
+        Box::new(pr.clone()).into(),
     );
-    let renamed = type_and_rename_process_in(env, &aux).map_err(|e| ElabError {
-        message: format!("SAPIC typing: {e}"),
-    })?;
+    let renamed = type_one(env, &aux)?;
     let Process::Action(
         SapicAction::ChIn {
             msg: VTerm::App(FunSym::List, t_vars),
@@ -185,7 +199,7 @@ fn type_process_def(
             }),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((Some(vars), *body))
+    Ok((Some(vars), body.into_inner()))
 }
 
 #[cfg(test)]

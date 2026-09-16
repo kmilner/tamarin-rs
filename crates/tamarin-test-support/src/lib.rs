@@ -1,4 +1,4 @@
-//! Maude resolution for the workspace's maude-gated tests.
+//! Shared fixtures and external-tool resolution for workspace tests.
 //!
 //! Every crate lists this one under `[dev-dependencies]`, so a unit-test
 //! module, an integration test and an example all reach the same probe.  That
@@ -12,6 +12,18 @@
 //! and without it, so every maude-backed pin certifies nothing.
 //! `TAM_ALLOW_NO_MAUDE=1` turns the panic back into a skip, for a machine
 //! that genuinely has no maude.
+
+/// Run a test body on an explicitly sized stack, propagating its original panic.
+/// Keep construction, assertions and destruction inside the closure when testing
+/// a complete lifecycle; values returned from it are dropped on the caller's stack.
+pub fn on_stack<R: Send + 'static>(bytes: usize, body: impl FnOnce() -> R + Send + 'static) -> R {
+    std::thread::Builder::new()
+        .stack_size(bytes)
+        .spawn(body)
+        .expect("spawn test thread")
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
 
 /// The examples corpus used by workspace tests: `$CORPUS_ROOT` when set,
 /// otherwise the `tamarin-prover` submodule's examples directory.

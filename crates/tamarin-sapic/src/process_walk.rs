@@ -1,0 +1,162 @@
+//! Shared traversal and variable rewriting for SAPIC transformation passes.
+
+use tamarin_term::term::{f_app, rewrite_term_cow, Term};
+use tamarin_term::vterm::{var_term, Lit};
+use tamarin_theory::formula::apply_rename;
+use tamarin_theory::sapic::{
+    map_process, map_terms_action, map_terms_comb, GoodAnnotation, PlainProcess, Process,
+    ProcessParsedAnnotation, SapicFormula, SapicLVar, SapicTerm,
+};
+
+/// Key for state/lock identity. Preserve the typed process itself for rendering
+/// and rule names; inference can give occurrences of one variable different tags.
+pub(crate) fn untyped_term(t: &SapicTerm) -> SapicTerm {
+    rewrite_term_cow(
+        t,
+        &mut |node| match node {
+            Term::Lit(Lit::Var(v)) if v.stype.is_some() => {
+                Some(var_term(SapicLVar::untyped(v.var)))
+            }
+            _ => None,
+        },
+        &mut f_app,
+    )
+}
+
+/// Rewrite process variables, including binders, match sets, formula frees and
+/// locations, while converting annotations. `None` retains a variable; term
+/// paths without replacements keep their shared storage. Formula-bound indices
+/// and reverse renamings are not process-variable occurrences.
+pub(crate) fn rewrite_variables<A: GoodAnnotation>(
+    p: &PlainProcess,
+    replace: impl Fn(&SapicLVar) -> Option<SapicLVar>,
+    mut annotate: impl FnMut(&ProcessParsedAnnotation) -> A,
+) -> Process<A, SapicLVar> {
+    let variable = |v: &SapicLVar| replace(v).unwrap_or_else(|| v.clone());
+    let term = |t: &SapicTerm| {
+        rewrite_term_cow(
+            t,
+            &mut |node| match node {
+                Term::Lit(Lit::Var(v)) => replace(v).map(var_term),
+                _ => None,
+            },
+            &mut f_app,
+        )
+    };
+    let formula = |f: &SapicFormula| apply_rename(f.clone(), &mut |v| variable(v));
+    map_process(
+        p,
+        &mut |a| map_terms_action(term, formula, variable, a),
+        &mut |c| map_terms_comb(term, formula, variable, c),
+        &mut |ann| {
+            let mut mapped = annotate(ann);
+            mapped.parsed_mut().location = ann.location.as_ref().map(term);
+            mapped
+        },
+    )
+}
+
+/// Visit parents before children, left before right. State changes are
+/// inherited by children, with independent copies at branch points.
+/// A false return prunes the current subtree; callbacks may replace a node.
+pub(crate) fn walk_mut<A, V, S: Clone, E>(
+    p: &mut Process<A, V>,
+    state: S,
+    mut visit: impl FnMut(&mut Process<A, V>, &mut S) -> Result<bool, E>,
+) -> Result<(), E> {
+    let mut pending = vec![(p, state)];
+    while let Some((p, mut state)) = pending.pop() {
+        if !visit(p, &mut state)? {
+            continue;
+        }
+        match p {
+            Process::Null(_) => {}
+            Process::Action(_, _, body) => pending.push((body, state)),
+            Process::Comb(_, _, left, right) => {
+                pending.push((right, state.clone()));
+                pending.push((left, state));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::annotation::ProcessAnnotation;
+    use tamarin_term::lterm::{LVar, Name, NameTag};
+    use tamarin_term::vterm::const_term;
+    use tamarin_theory::sapic::{ProcessCombinator, SapicAction, SapicLVar};
+
+    type Proc = Process<ProcessAnnotation<LVar>, SapicLVar>;
+
+    #[test]
+    fn deep_annotation_and_lowering_pipeline_and_lock_error_cleanup() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let ann = ProcessAnnotation::empty;
+            let term = const_term(Name::new(NameTag::Pub, "s"));
+            let mut p: Proc = Process::Null(ann());
+            for _ in 0..100_000 {
+                p = Process::Action(
+                    SapicAction::ChOut {
+                        chan: None,
+                        msg: term.clone(),
+                    },
+                    ann(),
+                    Box::new(p).into(),
+                );
+            }
+            p = crate::annotation::lower_for_translation(&crate::annotation::to_parsed(&p));
+            p = crate::translate::propagate_names(p);
+            p = crate::secret_channels::annotate_secret_channels(p);
+            p = crate::let_destructors::translate_let_destr(&Default::default(), p);
+            p = crate::locks::annotate_locks(p).unwrap();
+            // The left branch succeeds, then the right branch fails below a
+            // lock. All of the retained input must be released on this stack.
+            let bad = Process::Action(
+                SapicAction::Lock(term),
+                ann(),
+                Box::new(Process::Action(
+                    SapicAction::Rep,
+                    ann(),
+                    Box::new(Process::Null(ann())).into(),
+                ))
+                .into(),
+            );
+            let tree = Process::Comb(
+                ProcessCombinator::Parallel,
+                ann(),
+                Box::new(p).into(),
+                Box::new(bad).into(),
+            );
+            assert!(crate::locks::annotate_locks(tree)
+                .unwrap_err()
+                .contains("replication"));
+        });
+    }
+
+    #[test]
+    fn walk_inherits_state_and_restores_sibling_scope() {
+        let ann = ProcessAnnotation::empty;
+        let mut p: Proc = Process::Comb(
+            ProcessCombinator::Parallel,
+            ann(),
+            Box::new(Process::Action(
+                SapicAction::Rep,
+                ann(),
+                Box::new(Process::Null(ann())).into(),
+            ))
+            .into(),
+            Box::new(Process::Null(ann())).into(),
+        );
+        let mut seen = Vec::new();
+        walk_mut(&mut p, 0, |_, depth| {
+            seen.push(*depth);
+            *depth += 1;
+            Ok::<_, std::convert::Infallible>(true)
+        })
+        .unwrap();
+        assert_eq!(seen, [0, 1, 2, 1]);
+    }
+}

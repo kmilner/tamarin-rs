@@ -716,14 +716,12 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // runtime so background `spawn_blocking` proof tasks don't park the
     // single executor thread.
     //
-    // `thread_stack_size`: the web constraint-system pane is rendered as
-    // ONE HughesPJ Doc (HS `prettyNonGraphSystem = vsep …`), and the
-    // eager Doc builders (`beside`/`aboveNest`) recurse along the left
-    // operand's token spine — depth scales with the pane size.  GHC grows
-    // its stack on demand; tokio's default 2 MiB worker stacks do not, and
-    // overflowed on fact-heavy panes (UM_three_pass).  64 MiB is reserved
-    // virtual address space only (committed on use), applied to both
-    // worker and `spawn_blocking` threads.
+    // `thread_stack_size`: formula printers (`lformula_doc` and
+    // `guarded_to_doc`) still recurse over formula structure when building
+    // documents for web panes. Document construction, layout and cleanup
+    // use worklists, but these callers still need a stack reserve.
+    // 64 MiB is reserved virtual address space only (committed on use),
+    // applied to both worker and `spawn_blocking` threads.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(64 * 1024 * 1024)
@@ -2076,6 +2074,10 @@ impl TheoryPipeline<'_> {
 }
 
 fn run_batch(args: &Args) -> Result<i32, RunError> {
+    tamarin_utils::stack::with_compiler_stack(|| run_batch_inner(args))
+}
+
+fn run_batch_inner(args: &Args) -> Result<i32, RunError> {
     init_rayon_pool(args);
     if args.diff {
         return Err(RunError::Regular(
@@ -2618,11 +2620,11 @@ fn init_rayon_pool(args: &Args) {
     // wins (which is the desired behaviour — RS runs `run_batch` once
     // per process, and tests install their own pool).
     // `stack_size`: the theory item fold renders each item as ONE HughesPJ
-    // Doc on a worker (HS `parMap rdeepseq ppItem`, TheoryObject.hs:767), and
-    // the eager Doc builders (`beside`/`above_g`) recurse along the left
-    // operand's token spine, so depth scales with the item's size.  GHC grows
-    // its stack on demand; rayon's default worker stacks do not, and overflow
-    // on equation- and formula-heavy theories (`jcs18/trace-existence.spthy`).
+    // Doc on a worker (HS `parMap rdeepseq ppItem`, TheoryObject.hs:767).
+    // Formula printers (`lformula_doc` and `guarded_to_doc`) still recurse
+    // over formula structure before handing documents to the iterative
+    // construction/layout engine. Keep the reserve for these callers;
+    // document layout and last-owner cleanup themselves use worklists.
     // 64 MiB is reserved virtual address space only, committed on use — the
     // same size the interactive server gives its tokio workers.
     let _ = rayon::ThreadPoolBuilder::new()
@@ -2689,7 +2691,7 @@ pub(crate) fn out_path_for(args: &Args, in_file: &str) -> Option<String> {
 /// `const (Sum 1)` over every ProofStep — ClosedTheory.hs:463-491, see line 484,491 via
 /// `foldProof`, Theory/Proof.hs:358-362).
 fn count_proof_steps(node: &tamarin_theory::constraint::solver::search::ProofNode) -> usize {
-    1 + node.children.values().map(count_proof_steps).sum::<usize>()
+    node.nodes().count()
 }
 
 fn print_overall_summary(file_results: &[FileResult], prove_mode: bool) {

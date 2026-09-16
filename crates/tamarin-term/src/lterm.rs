@@ -22,7 +22,6 @@ use std::cmp::Ordering;
 use crate::function_symbols::{AcSym, FunSym, Privacy};
 use crate::term::Term;
 use crate::vterm::{const_term, Lit, VTerm};
-use tamarin_utils::cow::cow_map_vec;
 use tamarin_utils::fresh::MonadFresh;
 
 // =============================================================================
@@ -340,18 +339,13 @@ pub fn is_trivial_ac_fun_sym_term(t: &LNTerm) -> bool {
 /// AC operator).
 pub fn flattened_ac_terms<A>(sym: AcSym, t: &Term<A>) -> Vec<&Term<A>> {
     let mut out = Vec::new();
-    fn go<'b, A>(sym: AcSym, t: &'b Term<A>, out: &mut Vec<&'b Term<A>>) {
-        if let Term::App(FunSym::Ac(s), args) = t
-            && *s == sym
-        {
-            for a in args.iter() {
-                go(sym, a, out);
-            }
-            return;
+    let _: std::ops::ControlFlow<()> = crate::term::walk_terms(std::slice::from_ref(t), |term| {
+        let descend = matches!(term, Term::App(FunSym::Ac(found), _) if *found == sym);
+        if !descend {
+            out.push(term);
         }
-        out.push(t);
-    }
-    go(sym, t, &mut out);
+        std::ops::ControlFlow::Continue(descend)
+    });
     out
 }
 
@@ -575,14 +569,16 @@ where
     L: HasFreesLit,
 {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
-        match self {
-            Term::Lit(l) => l.for_each_free(f),
-            Term::App(_, args) => {
-                for a in args.iter() {
-                    a.for_each_free(f);
-                }
-            }
+        if let Term::Lit(literal) = self {
+            literal.for_each_free(f);
+            return;
         }
+        let _ = crate::term::walk_terms(std::slice::from_ref(self), |node| {
+            if let Term::Lit(l) = node {
+                l.for_each_free(f);
+            }
+            std::ops::ControlFlow::<(), bool>::Continue(true)
+        });
     }
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
         // Copy-on-write: when `f` is identity on every free leaf of a subtree,
@@ -614,25 +610,14 @@ fn map_free_term_cow<L>(
 where
     L: Clone + Ord + HasFrees + HasFreesLit,
 {
-    match t {
-        Term::Lit(l) => {
+    crate::term::bind_lits_cow_with_order(
+        t,
+        &mut |l| {
             let nl = l.clone().map_free_with(f, monotone);
-            if &nl != l {
-                Some(Term::Lit(nl))
-            } else {
-                None
-            }
-        }
-        Term::App(fsym, args) => {
-            cow_map_vec(&args[..], |a| map_free_term_cow(a, &mut *f, monotone)).map(|mapped| {
-                if monotone {
-                    crate::term::unsafe_f_app(*fsym, mapped)
-                } else {
-                    crate::term::f_app(*fsym, mapped)
-                }
-            })
-        }
-    }
+            (nl != *l).then_some(Term::Lit(nl))
+        },
+        monotone,
+    )
 }
 
 /// Marker trait so the generic `HasFrees for Term<L>` impl can resolve.
@@ -755,231 +740,5 @@ pub fn rename_avoiding<S: HasFrees, T: HasFrees>(s: S, avoid_in: &T) -> S {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::function_symbols::pair_sym;
-    use crate::term::f_app_no_eq;
-    use crate::vterm::var_term;
-
-    /// `Name`'s derived `Ord` compares the tag before the identifier, and
-    /// `NameId`'s compares its one string, as HS's declarations do.
-    #[test]
-    fn name_ord_compares_the_tag_before_the_id() {
-        let fresh_z = Name::new(NameTag::Fresh, "z");
-        let pub_a = Name::new(NameTag::Pub, "a");
-        assert!(fresh_z < pub_a, "the tag decides before the identifier");
-        assert!(Name::new(NameTag::Pub, "a") < Name::new(NameTag::Pub, "b"));
-        assert!(NameId::new("a") < NameId::new("b"));
-    }
-
-    /// `Bound` before `Free`, the variant order of HS's `BVar v`.
-    #[test]
-    fn bvar_ord_puts_bound_before_free() {
-        let bound: BVar<LVar> = BVar::Bound(9);
-        let free = BVar::Free(LVar::new("x", LSort::Msg, 0));
-        assert!(bound < free);
-        assert!(BVar::<LVar>::Bound(0) < BVar::Bound(1));
-    }
-
-    #[test]
-    fn name_sort_mapping() {
-        assert_eq!(sort_of_name(&Name::new(NameTag::Fresh, "k")), LSort::Fresh);
-        assert_eq!(sort_of_name(&Name::new(NameTag::Pub, "p")), LSort::Pub);
-        assert_eq!(sort_of_name(&Name::new(NameTag::Node, "n")), LSort::Node);
-        assert_eq!(sort_of_name(&Name::new(NameTag::Nat, "n")), LSort::Nat);
-        // The web abbreviation tag has no sort of its own.  It falls back to
-        // Msg (LTerm.hs:266).  It is the one tag whose sort does not carry
-        // the name of the tag.
-        assert_eq!(sort_of_name(&Name::new(NameTag::Abbrev, "a")), LSort::Msg);
-    }
-
-    #[test]
-    fn arc_walks_and_maps_the_payload() {
-        use std::sync::Arc;
-        let v = LVar::new("x", LSort::Msg, 3);
-        let shared: Arc<LNTerm> = Arc::new(var_term(v));
-        assert_eq!(frees_list(&shared), vec![v]);
-        // A second handle forces the payload to be cloned before it is
-        // mapped, and leaves the original handle's term alone.
-        let other = Arc::clone(&shared);
-        let mapped = other.map_free(&mut |w| LVar::new(w.name, w.sort, w.idx + 1));
-        assert_eq!(*mapped, var_term(LVar::new("x", LSort::Msg, 4)));
-        assert_eq!(*shared, var_term(v));
-    }
-
-    #[test]
-    fn lvar_predicates() {
-        let v = LVar::new("x", LSort::Msg, 0);
-        let t: LNTerm = var_term(v);
-        assert!(is_msg_var(&t));
-        assert!(!is_pub_var(&t));
-        assert_eq!(get_var(&t), Some(&v));
-    }
-
-    /// The `LSortNode` guard is the MinValueEq `WrongEquality` invariant: a
-    /// message variable is not a node id, so a negated equality over two of
-    /// them stays a formula instead of splitting into an ordering
-    /// disjunction.
-    #[test]
-    fn lterm_node_id_rejects_a_message_sorted_variable() {
-        let i = LVar::new("i", LSort::Node, 0);
-        let n: LNTerm = var_term(i);
-        assert_eq!(lterm_node_id(&n), Some(i));
-        let m: LNTerm = var_term(LVar::new("a", LSort::Msg, 0));
-        assert_eq!(lterm_node_id(&m), None);
-    }
-
-    #[test]
-    fn lterm_node_id_rejects_an_application() {
-        let n: LNTerm = var_term(LVar::new("i", LSort::Node, 0));
-        let t: LNTerm = f_app_no_eq(pair_sym(), vec![n.clone(), n]);
-        assert_eq!(lterm_node_id(&t), None);
-    }
-
-    #[test]
-    fn pub_const_check() {
-        let p: LNTerm = pub_term("alice");
-        assert!(is_pub_const(&p));
-        let f: LNTerm = fresh_term("k");
-        assert!(!is_pub_const(&f));
-    }
-
-    #[test]
-    fn flattened_ac_extracts_terms() {
-        use crate::function_symbols::AcSym;
-        use crate::term::f_app_ac;
-        let a: LNTerm = pub_term("a");
-        let b: LNTerm = pub_term("b");
-        let c: LNTerm = pub_term("c");
-        let inner: LNTerm = f_app_ac(AcSym::Mult, vec![a.clone(), b.clone()]);
-        let outer: LNTerm = f_app_ac(AcSym::Mult, vec![inner, c.clone()]);
-        // The children come back in their AC-sorted order, and not merely as
-        // three children.  Callers index this list by position.
-        assert_eq!(flattened_ac_terms(AcSym::Mult, &outer), vec![&a, &b, &c]);
-        // A different AC operator does not flatten the term.  The complete
-        // term comes back as the single child.
-        assert_eq!(flattened_ac_terms(AcSym::Xor, &outer), vec![&outer]);
-    }
-
-    #[test]
-    fn contains_private_detects_private_symbol() {
-        // diff is private.
-        let t: LNTerm = f_app_no_eq(
-            crate::function_symbols::diff_sym(),
-            vec![pub_term("a"), pub_term("b")],
-        );
-        assert!(contains_private(&t));
-        let t: LNTerm = f_app_no_eq(pair_sym(), vec![pub_term("a"), pub_term("b")]);
-        assert!(!contains_private(&t));
-    }
-
-    // =========================================================================
-    // Haskell-faithfulness invariants for enum declaration order.
-    //
-    // For every Haskell `data X = A | B | C deriving (Ord, ...)`, the
-    // induced `Ord` is the declaration order.  If our Rust enum reorders
-    // variants, BTreeMap/BTreeSet iteration over X-keyed maps silently
-    // sorts differently — and proof state inspection by downstream code
-    // (goal-ranking, case dedup, source-case ordering) diverges.
-    //
-    // **Pin every Ord-bearing enum's declaration order to its Haskell
-    // counterpart by checked file:line below.**
-    // =========================================================================
-
-    /// LTerm.hs:165-170:
-    ///     data LSort = LSortPub | LSortFresh | LSortMsg | LSortNode | LSortNat
-    ///                deriving( Eq, Ord, ... )
-    #[test]
-    fn lsort_ord_matches_haskell_declaration() {
-        // Pub < Fresh < Msg < Node < Nat
-        assert!(LSort::Pub < LSort::Fresh);
-        assert!(LSort::Fresh < LSort::Msg);
-        assert!(LSort::Msg < LSort::Node);
-        assert!(LSort::Node < LSort::Nat);
-        // Transitive.
-        assert!(LSort::Pub < LSort::Nat);
-    }
-
-    /// LTerm.hs:219:
-    ///     data NameTag = FreshName | PubName | NodeName | NatName | AbbrevName
-    #[test]
-    fn name_tag_ord_matches_haskell_declaration() {
-        assert!(NameTag::Fresh < NameTag::Pub);
-        assert!(NameTag::Pub < NameTag::Node);
-        assert!(NameTag::Node < NameTag::Nat);
-        assert!(NameTag::Nat < NameTag::Abbrev);
-    }
-
-    /// Haskell `sortCompare` (LTerm.hs:181-191) is a PARTIAL ORDER, NOT
-    /// the same as `Ord LSort`.  Specifically:
-    ///   - Msg is greater than every other comparable sort
-    ///   - Node is incomparable to ALL other sorts (returns Nothing)
-    ///   - Pub, Fresh, Nat are pairwise incomparable
-    ///
-    /// **Do not confuse with `Ord LSort`.** `Ord LSort` is the derived
-    /// total order from declaration order, used as BTreeMap/Set key.
-    /// `sortCompare` is the order-sorted lattice used during unification
-    /// for sort narrowing.  Mixing them up breaks unify_raw cross-sort
-    /// handling.
-    #[test]
-    fn sort_compare_is_partial_not_total() {
-        // Reflexive.
-        assert_eq!(
-            sort_compare(LSort::Fresh, LSort::Fresh),
-            Some(Ordering::Equal)
-        );
-        // Comparable: Msg dominates, in both directions.
-        assert_eq!(sort_compare(LSort::Fresh, LSort::Msg), Some(Ordering::Less));
-        assert_eq!(
-            sort_compare(LSort::Msg, LSort::Pub),
-            Some(Ordering::Greater)
-        );
-        assert_eq!(
-            sort_compare(LSort::Msg, LSort::Fresh),
-            Some(Ordering::Greater)
-        );
-        assert_eq!(
-            sort_compare(LSort::Msg, LSort::Nat),
-            Some(Ordering::Greater)
-        );
-        // Pub, Fresh, Nat are pairwise incomparable.
-        assert_eq!(sort_compare(LSort::Pub, LSort::Fresh), None);
-        assert_eq!(sort_compare(LSort::Pub, LSort::Nat), None);
-        assert_eq!(sort_compare(LSort::Fresh, LSort::Nat), None);
-        // Node is incomparable to all.
-        assert_eq!(sort_compare(LSort::Node, LSort::Msg), None);
-        assert_eq!(sort_compare(LSort::Node, LSort::Pub), None);
-        assert_eq!(sort_compare(LSort::Node, LSort::Fresh), None);
-        assert_eq!(sort_compare(LSort::Node, LSort::Nat), None);
-        // BUT `Ord LSort` total order differs!  Pub < Fresh < Msg < Node
-        // in Ord, even though Pub vs Fresh is incomparable in sortCompare.
-        assert!(
-            LSort::Pub < LSort::Fresh,
-            "Ord LSort is total — Pub < Fresh by declaration order. \
-                 (sort_compare returns None for this pair; the two \
-                 contracts are deliberately different.)"
-        );
-    }
-
-    /// LTerm.hs `sortPrefix`: sort prefixes for variable rendering.  These
-    /// show up in the proof skeleton as `~k` / `$A` / `#i` / `%n` and a parse
-    /// regression in the renderer would break corpus diffing.
-    #[test]
-    fn sort_prefixes_match_haskell() {
-        assert_eq!(sort_prefix(LSort::Fresh), "~");
-        assert_eq!(sort_prefix(LSort::Pub), "$");
-        assert_eq!(sort_prefix(LSort::Node), "#");
-        assert_eq!(sort_prefix(LSort::Nat), "%");
-        assert_eq!(sort_prefix(LSort::Msg), "");
-    }
-
-    /// LTerm.hs sort suffix strings used in maude bridge interchange.
-    #[test]
-    fn sort_suffixes_match_haskell() {
-        assert_eq!(sort_suffix(LSort::Msg), "msg");
-        assert_eq!(sort_suffix(LSort::Fresh), "fresh");
-        assert_eq!(sort_suffix(LSort::Pub), "pub");
-        assert_eq!(sort_suffix(LSort::Node), "node");
-        assert_eq!(sort_suffix(LSort::Nat), "nat");
-    }
-}
+#[path = "lterm_tests.rs"]
+mod tests;

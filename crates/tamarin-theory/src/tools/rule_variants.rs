@@ -30,7 +30,7 @@ use tamarin_term::lterm::{LNTerm, LVar, Name};
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle, MaudePool};
 use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::subst_vfresh::LNSubstVFresh;
-use tamarin_term::term::Term;
+use tamarin_term::term::{is_subterm, rewrite_term, Term};
 
 use crate::fact::Fact;
 use crate::rule::{ProtoRuleAC, ProtoRuleACInfo, ProtoRuleE};
@@ -343,6 +343,7 @@ pub fn prepare_theory_rules(
     annotate_breakers: bool,
 ) -> Result<crate::wellformedness::WfReport, VariantsError> {
     populate_rule_variants(theory, maude, pool)?;
+
     let report = crate::wellformedness::check_wellformedness(theory, Some(maude));
     finish_theory_rules(theory, maude, annotate_breakers);
     Ok(report)
@@ -357,6 +358,7 @@ pub fn reprepare_theory_rules(
     pool: Option<&MaudePool>,
 ) -> Result<(), VariantsError> {
     populate_rule_variants(theory, maude, pool)?;
+
     finish_theory_rules(theory, maude, true);
     Ok(())
 }
@@ -405,13 +407,14 @@ pub fn prepare_open_rule_variant(
     rule: &mut OpenProtoRule,
     maude: &MaudeHandle,
 ) -> Result<(), VariantsError> {
-    if rule.abstracted_rule.is_some() || !rule.variant_substs.is_empty() {
-        return Ok(());
-    }
-    if let Some((abstracted, variants)) = prepared_rule_variant(maude, &rule.rule)? {
+    if rule.abstracted_rule.is_none()
+        && rule.variant_substs.is_empty()
+        && let Some((abstracted, variants)) = prepared_rule_variant(maude, &rule.rule)?
+    {
         rule.abstracted_rule = abstracted;
         rule.variant_substs = variants;
     }
+
     Ok(())
 }
 
@@ -486,35 +489,30 @@ pub fn abstract_rule_and_variants(
         bindings: &mut std::collections::BTreeMap<LNTerm, LVar>,
         maude: &MaudeHandle,
     ) -> LNTerm {
-        // Irreducible head: recurse into args.
-        if let Term::App(f, args) = t
-            && irreducible.contains(f)
-        {
-            return Term::App(
-                *f,
-                args.iter()
-                    .map(|a| abstr_term(a, irreducible, bindings, maude))
-                    .collect(),
-            );
-        }
-        // Catch-all: import binding (handles leaf vars AND reducible-head
-        // App).  HS: `abstrTerm t = do at <- varTerm <$> importBinding ...`.
-        if let Some(v) = bindings.get(t) {
-            return Term::Lit(tamarin_term::vterm::Lit::Var(*v));
-        }
-        let new_idx = maude.reserve_idxs(1);
-        let v = LVar {
-            name: tamarin_term::intern::intern_str(&name_hint(t)),
-            // HS-faithful `abstrTerm` (RuleVariants.hs:61-134, see line 104):
-            // `importBinding (\`LVar\` sortOfLNTerm t) t (getHint t)`.
-            // `sort_of_lnterm` (lterm.rs) IS HS `sortOfLNTerm`:
-            // Con -> sort_of_name (Fresh/Pub/Node/Nat by tag), Var ->
-            // v.sort, NatPlus/NatOne -> Nat, _ -> Msg.
-            sort: tamarin_term::lterm::sort_of_lnterm(t),
-            idx: new_idx,
-        };
-        bindings.insert(t.clone(), v);
-        Term::Lit(tamarin_term::vterm::Lit::Var(v))
+        rewrite_term(
+            t,
+            &mut |term| {
+                if let Term::App(f, _) = term
+                    && irreducible.contains(f)
+                {
+                    return None;
+                }
+                // Catch-all: import binding (handles leaf vars AND
+                // reducible-head applications).
+                if let Some(v) = bindings.get(term) {
+                    return Some(Term::Lit(tamarin_term::vterm::Lit::Var(*v)));
+                }
+                let new_idx = maude.reserve_idxs(1);
+                let v = LVar {
+                    name: tamarin_term::intern::intern_str(&name_hint(term)),
+                    sort: tamarin_term::lterm::sort_of_lnterm(term),
+                    idx: new_idx,
+                };
+                bindings.insert(term.clone(), v);
+                Some(Term::Lit(tamarin_term::vterm::Lit::Var(v)))
+            },
+            &mut |sym, args| Term::App(sym, args.into()),
+        )
     }
 
     fn abstr_fact(
@@ -805,7 +803,7 @@ pub fn abstract_rule_and_variants(
                         .collect();
                     for ft in &fresh_terms {
                         for p in &premises {
-                            if contains_subterm(ft, p) {
+                            if is_subterm(ft, p) {
                                 return false;
                             }
                         }
@@ -1080,21 +1078,6 @@ fn rename_precise_rule_with_variants(
 /// `findPos`-style subterm check: returns true if `needle` appears
 /// anywhere within `haystack` (including as the whole term).  Mirrors
 /// HS's `isJust . findPos` used in `isFreshRedundant`.
-fn contains_subterm(needle: &LNTerm, haystack: &LNTerm) -> bool {
-    use tamarin_term::term::Term;
-    if needle == haystack {
-        return true;
-    }
-    if let Term::App(_, args) = haystack {
-        for a in args.iter() {
-            if contains_subterm(needle, a) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 /// WF-only check: mirrors HS `variantsCheck` (Wellformedness.hs:354-372)
 /// sub-check `guard (null recomputedVariants)`.  Returns `true` iff
 /// `variantsProtoRule hnd rule` would return `Nothing` — i.e. the rule
@@ -1179,7 +1162,7 @@ pub fn rule_has_no_variants_for_wf_with(
         // non-Fr premise (i.e. all identity variants are redundant).
         return freshly_introduced
             .iter()
-            .any(|ft| premise_terms.iter().any(|p| contains_subterm(ft, p)));
+            .any(|ft| premise_terms.iter().any(|p| is_subterm(ft, p)));
     }
 
     // Path 2: reducible rule — `abstract_rule_and_variants` returns
@@ -1287,6 +1270,24 @@ mod tests {
         // `commonSubst` is empty too, so `~k` survives verbatim in the body.
         assert_eq!(ac.premises, vec![prem]);
         assert_eq!(ac.conclusions, vec![conc]);
+    }
+
+    #[test]
+    fn deep_variant_abstraction_uses_a_bounded_stack() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        tamarin_test_support::on_stack(256 * 1024, move || {
+            let h = MaudeHandle::start(&path, tamarin_term::maude_sig::hash_maude_sig()).unwrap();
+            let mut term = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
+            for _ in 0..512 {
+                term =
+                    tamarin_term::term::f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![term]);
+            }
+            let mut rule = empty_rule("R");
+            rule.premises.push(Fact::new(FactTag::In, vec![term]));
+            abstract_rule_and_variants(&h, &rule).expect("variants");
+        });
     }
 
     /// `renamePrecise` numbers each name from zero in the order the walk

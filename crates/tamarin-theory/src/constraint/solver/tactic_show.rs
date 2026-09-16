@@ -74,22 +74,16 @@ pub fn show_fact_tag(t: &FactTag) -> String {
 /// a guarded formula.  Mirrors HS `guardFactTags` (Guarded.hs:167-174),
 /// which folds over the WHOLE structure (not just the top level).
 fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
-    match g {
-        Guarded::Atom(_) => {}
-        Guarded::Disj(xs) | Guarded::Conj(xs) => {
-            for x in xs.iter() {
-                guard_fact_tag_names(x, out);
-            }
-        }
-        Guarded::GGuarded { guards, body, .. } => {
+    let _: std::ops::ControlFlow<()> = crate::guarded::visit_guarded(g, |_, g| {
+        if let Guarded::GGuarded { guards, .. } = g {
             for a in guards.iter() {
                 if let ProtoAtom::Action(_, f) = a {
                     out.push(crate::fact::fact_tag_name(&f.tag));
                 }
             }
-            guard_fact_tag_names(body, out);
         }
-    }
+        std::ops::ControlFlow::Continue(true)
+    });
 }
 
 /// HS `getFormulaTerms` (Tactics.hs:203-205): the fact terms of the single
@@ -274,6 +268,32 @@ mod tests {
         // shows the index alone.
         assert_eq!(sorted(LSort::Fresh, "s", 3), "~s.3");
         assert_eq!(sorted(LSort::Msg, "", 7), "7");
+    }
+
+    #[test]
+    fn reveal_oracle_shows_deep_terms_on_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let mut term = f_app_no_eq(exp_sym(), vec![pub_name("g"), fresh("s")]);
+            for _ in 0..8192 {
+                term = f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![term]);
+            }
+            let fact = Fact::new(
+                FactTag::Proto(Multiplicity::Linear, "Reveal", 1),
+                vec![term],
+            );
+            let formula = crate::guarded::gall(
+                vec![],
+                vec![ProtoAtom::Action(
+                    var_term(BVar::Free(LVar::new("i", LSort::Node, 0))),
+                    fact,
+                )],
+                crate::guarded::gfalse(),
+            );
+            assert_eq!(
+                sys_reveal_shown("dh", &[std::sync::Arc::new(formula)]),
+                ["~s"]
+            );
+        });
     }
 
     #[test]

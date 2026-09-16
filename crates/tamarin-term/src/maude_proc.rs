@@ -1209,13 +1209,13 @@ impl MaudeHandle {
             pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
         ) -> bool {
             use crate::vterm::Lit;
-            match t {
-                crate::term::Term::Lit(Lit::Var(lv)) => pattern_vars.contains(&(lv.name, lv.idx)),
-                crate::term::Term::App(_, args) => {
-                    args.iter().any(|a| has_pattern_var(a, pattern_vars))
+            crate::term::walk_terms(std::slice::from_ref(t), |t| {
+                if matches!(t, crate::term::Term::Lit(Lit::Var(v)) if pattern_vars.contains(&(v.name, v.idx))) {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(true)
                 }
-                _ => false,
-            }
+            }).is_break()
         }
         if eqs.iter().all(|eq| !has_pattern_var(&eq.lhs, pattern_vars)) {
             let matched = eqs.iter().all(|eq| eq.lhs == eq.rhs);
@@ -1462,20 +1462,15 @@ fn unskolemize(
     reverse: &std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
 ) -> LNTerm {
     use crate::vterm::Lit;
-    match t {
-        crate::term::Term::Lit(Lit::Con(n)) => {
-            if let Some(lv) = reverse.get(n) {
-                crate::term::Term::Lit(Lit::Var(*lv))
-            } else {
-                t.clone()
-            }
-        }
-        crate::term::Term::App(sym, args) => {
-            let new_args: Vec<LNTerm> = args.iter().map(|a| unskolemize(a, reverse)).collect();
-            crate::term::Term::App(*sym, new_args.into())
-        }
-        _ => t.clone(),
-    }
+    crate::term::bind_lits_cow_with_order(
+        t,
+        &mut |lit| match lit {
+            Lit::Con(n) => reverse.get(n).map(|v| crate::term::Term::Lit(Lit::Var(*v))),
+            _ => None,
+        },
+        true,
+    )
+    .unwrap_or_else(|| t.clone())
 }
 
 /// Collect every free `LVar` in `t` whose `(name, idx)` is NOT in
@@ -1487,17 +1482,13 @@ fn collect_free_non_pattern_vars(
     out: &mut std::collections::BTreeSet<crate::lterm::LVar>,
 ) {
     use crate::vterm::Lit;
-    match t {
-        crate::term::Term::Lit(Lit::Var(lv)) if !pattern_vars.contains(&(lv.name, lv.idx)) => {
-            out.insert(*lv);
+    t.for_each_lit(|lit| {
+        if let Lit::Var(v) = lit
+            && !pattern_vars.contains(&(v.name, v.idx))
+        {
+            out.insert(*v);
         }
-        crate::term::Term::App(_, args) => {
-            for a in args.iter() {
-                collect_free_non_pattern_vars(a, pattern_vars, out);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 /// Rewrite `t`, replacing each `LVar` bound in `map` with its synthetic
@@ -1508,20 +1499,15 @@ fn rewrite_skolem(
     map: &std::collections::BTreeMap<crate::lterm::LVar, crate::lterm::Name>,
 ) -> LNTerm {
     use crate::vterm::Lit;
-    match t {
-        crate::term::Term::Lit(Lit::Var(lv)) => {
-            if let Some(n) = map.get(lv) {
-                crate::term::Term::Lit(Lit::Con(*n))
-            } else {
-                t.clone()
-            }
-        }
-        crate::term::Term::App(sym, args) => {
-            let new_args: Vec<LNTerm> = args.iter().map(|a| rewrite_skolem(a, map)).collect();
-            crate::term::Term::App(*sym, new_args.into())
-        }
-        _ => t.clone(),
-    }
+    crate::term::bind_lits_cow_with_order(
+        t,
+        &mut |lit| match lit {
+            Lit::Var(v) => map.get(v).map(|n| crate::term::Term::Lit(Lit::Con(*n))),
+            _ => None,
+        },
+        true,
+    )
+    .unwrap_or_else(|| t.clone())
 }
 
 /// Convert a Maude substitution `[((sort, idx), mt)]` into a list of

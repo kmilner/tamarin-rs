@@ -668,15 +668,10 @@ impl<'ctx> Reduction<'ctx> {
         // (NSLPK3_untagged::session_key_setup_possible + Destroy_charn +
         // Loop_charn).
         //
-        // Each alternative is re-substituted to a fixpoint because eq-store
-        // entries can form chains (e.g. `x:1 → x:13`, `x:13 → ~n:28`) and one
-        // application only reduces by one step; the bound defends against a
-        // degenerate cycle.  The list is then normalised in lockstep with the
-        // GDisj formula twin (HS 150f5eba substGoals DisjG arm: `DisjG
-        // (normaliseDisjList (apply subst disj))`) — a subst that identifies
-        // two variables can make two alts equal, and the twin's list is
-        // deduplicated by `normalise_stored_formula_cow`, so the goal key must
-        // be too or the twin stores desynchronise (gcm livelock class).
+        // Chase each alternative to a substitution fixpoint, then use the
+        // same normalized list as its stored formula twin. A substitution can
+        // identify alternatives and leave a singleton; retain the goal until
+        // that alternative's obligations have actually been processed.
         let disj = |alts: &[Guarded]| -> Option<Vec<Guarded>> {
             if formula_subst.is_empty() {
                 return None;
@@ -1609,12 +1604,11 @@ impl<'ctx> Reduction<'ctx> {
         &mut self,
         g: Guarded,
     ) -> Result<SystemOutcome, crate::prove::ProveError> {
-        // Normalise at the insertion boundary so the stored-formula state
-        // is ALWAYS in `normalise_stored_formula_cow` normal form — the dedup
-        // checks inside `insert_formula_inner` compare against the
-        // (post-substitution, normalised) stored sets.  Port of HS
-        // insertFormula entry normalisation (150f5eba).
-        let g = crate::guarded::normalise_stored_formula_owned(g);
+        // A new formula has no goal identity to preserve. Canonicalize it
+        // before recording/decomposing it; both smart constructors use the
+        // same idempotent form. Existing goal-backed stores are normalized
+        // separately without stripping their root wrapper.
+        let g = crate::guarded::normalise_guarded_cow(&g).unwrap_or(g);
         // Every path into the store builds its atoms through `fApp`, so the
         // AC and `C` argument lists arrive flat and sorted; a formula that
         // reached here another way would compare unequal to its own rebuild
@@ -1635,7 +1629,7 @@ impl<'ctx> Reduction<'ctx> {
         let formulas = formulas
             .iter()
             .cloned()
-            .map(crate::guarded::normalise_stored_formula_owned)
+            .map(|g| crate::guarded::normalise_guarded_cow(&g).unwrap_or(g))
             .collect::<Vec<_>>();
         self.insert_formula_sequence(&formulas, true)
     }
@@ -3049,10 +3043,10 @@ fn make_fresh_rule(m: tamarin_term::lterm::LNTerm) -> RuleACInst {
 /// `compose` is closed at insert time, but a later `restrict_*` / cleanup pass
 /// can prune intermediate entries and leave a partially applied
 /// formula-subst.  The bound defends against a degenerate cycle.  Each
-/// rewritten formula is then re-normalised — the stored-state substitution
-/// boundary of HS 150f5eba (`substFormulas = S.map (normaliseStoredFormula .
-/// apply subst)`): a subst that identifies two variables can make sibling
-/// conjuncts equal, and the raw rebuild keeps both copies.
+/// rewritten formula is then normalized: a substitution that identifies two
+/// variables can make sibling connectives equal. Haskell's `S.map (apply subst)`
+/// preserves that structure; Rust normalizes children and retains only a root
+/// disjunction wrapper to keep the formula and its existing goal in sync.
 ///
 /// `S.map` rebuilds the Set, dropping entries that collide post-substitution,
 /// which the final dedup mirrors.  Without it the `Vec` retains
@@ -3326,21 +3320,12 @@ fn premise_solving_rule_insts_with_constrs(
 // hot — called many times per proof-step).
 #[inline(always)]
 fn bm_term(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
-    use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    match t {
-        Term::Lit(Lit::Var(v)) => {
-            if v.idx > *max {
-                *max = v.idx;
-            }
+    t.for_each_lit(|lit| {
+        if let Lit::Var(v) = lit {
+            *max = (*max).max(v.idx);
         }
-        Term::Lit(Lit::Con(_)) => {}
-        Term::App(_, args) => {
-            for a in args.iter() {
-                bm_term(a, max);
-            }
-        }
-    }
+    });
 }
 
 #[inline(always)]

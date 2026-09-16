@@ -13,7 +13,7 @@
 //!   - `pf_inv`    (HS `pfInv`):   the inverse map (to → from).
 //!
 //! HS `pfRange` (the range on its own) has no RS consumer and is not ported;
-//! its helper `pfRange'` is [`pf_range_prime`], which `pf_inv` searches.
+//! `pf_inv` constructs the inverse directly without materializing `pfRange'`.
 //!
 //! Faithful to HS down to set iteration order: `S.Set ProcessPosition` is
 //! modelled as `BTreeSet<Vec<i64>>` (lexicographic position order = HS `Ord
@@ -55,64 +55,114 @@ fn is_blocking_act(ac: &SapicAction<SapicLVar>) -> bool {
 }
 
 /// `blocking` (ProgressFunction.hs:49-54).
+#[cfg(test)]
 fn blocking(p: &AProc) -> bool {
-    match p {
-        Process::Null(_) => true,
-        Process::Action(ac, _, _) => is_blocking_act(ac),
-        Process::Comb(tamarin_theory::sapic::ProcessCombinator::Ndc, _, pl, pr) => {
-            blocking(pl) && blocking(pr)
+    let mut pending = vec![p];
+    while let Some(node) = pending.pop() {
+        match node {
+            Process::Null(_) => {}
+            Process::Action(ac, _, _) if is_blocking_act(ac) => {}
+            Process::Comb(tamarin_theory::sapic::ProcessCombinator::Ndc, _, left, right) => {
+                pending.push(right);
+                pending.push(left);
+            }
+            _ => return false,
         }
-        Process::Comb(..) => false,
+    }
+    true
+}
+
+// Only NDC nodes need recursive classification. Cache them for this borrowed
+// process tree; action/null classifications require no map lookup or allocation.
+struct Blocking<'a> {
+    _root: &'a AProc,
+    ndc: tamarin_utils::FastMap<*const AProc, bool>,
+}
+
+impl<'a> Blocking<'a> {
+    fn new(root: &'a AProc) -> Self {
+        Self {
+            _root: root,
+            ndc: Default::default(),
+        }
+    }
+
+    fn known(&self, p: &AProc) -> Option<bool> {
+        match p {
+            Process::Null(_) => Some(true),
+            Process::Action(ac, _, _) => Some(is_blocking_act(ac)),
+            Process::Comb(tamarin_theory::sapic::ProcessCombinator::Ndc, ..) => {
+                self.ndc.get(&std::ptr::from_ref(p)).copied()
+            }
+            _ => Some(false),
+        }
+    }
+
+    fn get(&mut self, p: &'a AProc) -> bool {
+        if let Some(value) = self.known(p) {
+            return value;
+        }
+        let mut pending = vec![(p, false)];
+        while let Some((node, finish)) = pending.pop() {
+            if self.known(node).is_some() {
+                continue;
+            }
+            let Process::Comb(_, _, left, right) = node else {
+                unreachable!()
+            };
+            if finish {
+                self.ndc.insert(
+                    std::ptr::from_ref(node),
+                    self.known(left).unwrap() && self.known(right).unwrap(),
+                );
+            } else {
+                pending.push((node, true));
+                pending.push((right, false));
+                pending.push((left, false));
+            }
+        }
+        self.known(p).unwrap()
     }
 }
 
-/// `next` (ProgressFunction.hs:57-64): next positions to jump to.
-fn next(p: &AProc) -> PosSet {
+/// NDC descends through blocking children, retaining nonblocking children
+/// themselves. Left-first DFS yields unique positions in lexicographic order;
+/// retain their subprocesses so callers need no second walk to resolve them.
+fn next_processes<'a>(
+    p: &'a AProc,
+    include_null: bool,
+    blocking: &mut Blocking<'a>,
+) -> Vec<(Pos, &'a AProc)> {
     use tamarin_theory::sapic::ProcessCombinator as PC;
-    match p {
-        Process::Null(_) => PosSet::new(),
-        Process::Action(..) => [vec![1i64]].into_iter().collect(),
-        Process::Comb(PC::Ndc, _, pl, pr) => {
-            let mut out = next_or_child(pl, &[1]);
-            out.extend(next_or_child(pr, &[2]));
-            out
+    let mut out = Vec::new();
+    let mut pos = Pos::new();
+    let mut pending = vec![(p, 0, None, true)];
+    while let Some((node, parent_depth, edge, expand)) = pending.pop() {
+        pos.truncate(parent_depth);
+        pos.extend(edge);
+        if !expand {
+            out.push((pos.clone(), node));
+            continue;
         }
-        Process::Comb(..) => [vec![1i64], vec![2i64]].into_iter().collect(),
-    }
-}
-
-/// `nextOrChild` (ProgressFunction.hs:61-63): if the child is blocking, prefix
-/// `pos` onto its `next`; otherwise the singleton `{pos}`.
-fn next_or_child(p: &AProc, pos: &[i64]) -> PosSet {
-    if blocking(p) {
-        prefix_set(pos, &next(p))
-    } else {
-        [pos.to_vec()].into_iter().collect()
-    }
-}
-
-/// `next0` (ProgressFunction.hs:67-74): like `next` but the null process maps to
-/// the singleton of the EMPTY position.
-fn next0(p: &AProc) -> PosSet {
-    use tamarin_theory::sapic::ProcessCombinator as PC;
-    match p {
-        Process::Null(_) => [Vec::<i64>::new()].into_iter().collect(),
-        Process::Action(..) => [vec![1i64]].into_iter().collect(),
-        Process::Comb(PC::Ndc, _, pl, pr) => {
-            let mut out = next0_or_child(pl, &[1]);
-            out.extend(next0_or_child(pr, &[2]));
-            out
+        match node {
+            Process::Null(_) => {
+                if include_null {
+                    out.push((pos.clone(), node));
+                }
+            }
+            Process::Action(_, _, body) => {
+                pos.push(1);
+                out.push((pos.clone(), &**body));
+            }
+            Process::Comb(c, _, left, right) => {
+                for (i, child) in [(2, right), (1, left)] {
+                    let expand = matches!(c, PC::Ndc) && blocking.get(child);
+                    pending.push((child, pos.len(), Some(i), expand));
+                }
+            }
         }
-        Process::Comb(..) => [vec![1i64], vec![2i64]].into_iter().collect(),
     }
-}
-
-fn next0_or_child(p: &AProc, pos: &[i64]) -> PosSet {
-    if blocking(p) {
-        prefix_set(pos, &next0(p))
-    } else {
-        [pos.to_vec()].into_iter().collect()
-    }
+    out
 }
 
 /// `pfFrom` (ProgressFunction.hs:76-90): the domain of the progress function.
@@ -123,29 +173,29 @@ fn next0_or_child(p: &AProc, pos: &[i64]) -> PosSet {
 ///                 ∪ ⋃_{pos ∈ next proc} (pos <.> from' (proc@pos) (blocking proc))
 ///
 /// `pfFrom process = from' process True`.
-pub(crate) fn pf_from(process: &AProc) -> Result<PosSet, String> {
-    fn from(proc: &AProc, b: bool) -> Result<PosSet, String> {
-        if let Process::Null(_) = proc {
-            return Ok(PosSet::new());
+pub(crate) fn pf_from(process: &AProc) -> PosSet {
+    // Keep one DFS path, restoring its length before entering each sibling.
+    // Saving absolute prefixes would copy O(depth²) entries even for a
+    // nonblocking action chain whose only from-position is the root.
+    let mut blocking = Blocking::new(process);
+    let mut prefix = Pos::new();
+    let mut pending = vec![(process, 0, Pos::new(), true)];
+    let mut out = PosSet::new();
+    while let Some((node, parent_depth, relative, parent_blocking)) = pending.pop() {
+        prefix.truncate(parent_depth);
+        prefix.extend(relative);
+        if matches!(node, Process::Null(_)) {
+            continue;
         }
-        let blk = blocking(proc);
-        // `singletonOrEmpty (conditionAction proc b)`, where
-        // `conditionAction proc b = not (blocking proc) && b`.
-        let mut res = if !blk && b {
-            [Vec::<i64>::new()].into_iter().collect::<PosSet>()
-        } else {
-            PosSet::new()
-        };
-        for pos in next(proc) {
-            // `p' <- processAt proc pos; res <- from' p' (blocking proc)`
-            let p_at = process_at(proc, &pos)
-                .ok_or_else(|| format!("pfFrom: invalid position {pos:?}"))?;
-            let sub = from(p_at, blk)?;
-            res.extend(prefix_set(&pos, &sub));
+        let blk = blocking.get(node);
+        if !blk && parent_blocking {
+            out.insert(prefix.clone());
         }
-        Ok(res)
+        for (pos, child) in next_processes(node, false, &mut blocking).into_iter().rev() {
+            pending.push((child, prefix.len(), pos, blk));
+        }
     }
-    from(process, true)
+    out
 }
 
 /// `combine x y = { x_i ∪ y_i | x_i ∈ x, y_i ∈ y }` (ProgressFunction.hs:94-99).
@@ -165,73 +215,94 @@ fn combine(x: &PosSetSet, y: &PosSetSet) -> PosSetSet {
 
 /// `f` (ProgressFunction.hs:105-122): the CNF set-of-sets of positions the
 /// process `p` must go to.
-fn f(p: &AProc) -> Result<PosSetSet, String> {
+fn f(p: &AProc) -> PosSetSet {
     use tamarin_theory::sapic::ProcessCombinator as PC;
-    // `ss x = S.singleton (S.singleton x)`.
-    let ss = |x: Pos| -> PosSetSet { [[x].into_iter().collect::<PosSet>()].into_iter().collect() };
-    if blocking(p) {
-        return Ok(ss(Vec::new()));
+    enum Task<'a> {
+        Visit(&'a AProc, usize, Pos),
+        Merge(usize, bool),
     }
-    if let Process::Comb(PC::Parallel, _, pl, pr) = p {
-        let ll = f(pl)?;
-        let lr = f(pr)?;
-        let mut out = prefix_set_set(&[1], &ll);
-        out.extend(prefix_set_set(&[2], &lr));
-        return Ok(out);
+    let mut blocking = Blocking::new(p);
+    let mut prefix = Pos::new();
+    let mut tasks = vec![Task::Visit(p, 0, Pos::new())];
+    let mut results: Vec<PosSetSet> = Vec::new();
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Merge(count, parallel) => {
+                // Both union and Cartesian union leave a sole child unchanged.
+                if count == 1 {
+                    continue;
+                }
+                let start = results.len() - count;
+                let mut acc = if parallel {
+                    PosSetSet::new()
+                } else {
+                    [PosSet::new()].into_iter().collect()
+                };
+                for child in results.drain(start..) {
+                    if parallel {
+                        acc.extend(child);
+                    } else {
+                        acc = combine(&child, &acc);
+                    }
+                }
+                results.push(acc);
+            }
+            Task::Visit(node, parent_depth, relative) => {
+                // Restore the shared DFS path before visiting a sibling.
+                prefix.truncate(parent_depth);
+                prefix.extend(relative);
+                if blocking.get(node) {
+                    results.push(
+                        [[prefix.clone()].into_iter().collect()]
+                            .into_iter()
+                            .collect(),
+                    );
+                    continue;
+                }
+                if let Process::Comb(PC::Parallel, _, left, right) = node {
+                    tasks.push(Task::Merge(2, true));
+                    for (i, child) in [(2, right), (1, left)] {
+                        tasks.push(Task::Visit(child, prefix.len(), vec![i]));
+                    }
+                } else {
+                    let positions = next_processes(node, true, &mut blocking);
+                    tasks.push(Task::Merge(positions.len(), false));
+                    for (pos, child) in positions.into_iter().rev() {
+                        tasks.push(Task::Visit(child, prefix.len(), pos));
+                    }
+                }
+            }
+        }
     }
-    // `foldM combineWithRecursive (S.singleton S.empty) (next0 p)`.
-    // The accumulator starts as the singleton-of-the-empty-set (combine's unit).
-    let mut acc: PosSetSet = [PosSet::new()].into_iter().collect();
-    for pos in next0(p) {
-        let p_at = process_at(p, &pos).ok_or_else(|| format!("f: invalid position {pos:?}"))?;
-        let lpos = f(p_at)?;
-        // `combine (pos <..> lpos) acc`
-        acc = combine(&prefix_set_set(&pos, &lpos), &acc);
-    }
-    Ok(acc)
+    results.pop().unwrap()
 }
 
 /// `pf proc pos` (ProgressFunction.hs:125-128): the progress function at a
 /// position — `pos <..> f (proc@pos)`.
 pub(crate) fn pf(proc: &AProc, pos: &[i64]) -> Result<PosSetSet, String> {
     let p_at = process_at(proc, pos).ok_or_else(|| format!("pf: invalid position {pos:?}"))?;
-    let res = f(p_at)?;
+    let res = f(p_at);
     Ok(prefix_set_set(pos, &res))
-}
-
-/// `flatten = S.foldr S.union S.empty` (ProgressFunction.hs:130-131).
-fn flatten(s: &PosSetSet) -> PosSet {
-    let mut out = PosSet::new();
-    for inner in s {
-        out.extend(inner.iter().cloned());
-    }
-    out
-}
-
-/// `pfRange'` (ProgressFunction.hs:133-139): the set of `(to, from)` pairs.
-fn pf_range_prime(proc: &AProc) -> Result<BTreeSet<(Pos, Pos)>, String> {
-    let froms = pf_from(proc)?;
-    let mut acc: BTreeSet<(Pos, Pos)> = BTreeSet::new();
-    for pos in froms {
-        let flat = flatten(&pf(proc, &pos)?);
-        for to in flat {
-            acc.insert((to, pos.clone()));
-        }
-    }
-    Ok(acc)
 }
 
 /// `pfInv` (ProgressFunction.hs:146-149): the inverse of the progress function
 /// — given a "to" position, the (first matching) "from" position.
 ///
 /// HS uses `L.find` over `S.toList set` (ascending `(to, from)` pair order), so
-/// the first `from` for a `to` in lexicographic pair order wins.  The pairs are
-/// ascending in `to` first, so keeping the FIRST `from` seen per `to` in a map
-/// is that same choice, answered by lookup instead of a scan per query.
+/// the smallest `from` for each `to` wins. Visiting the domain in ascending
+/// order and retaining the first entry gives the same inverse directly.
 pub(crate) fn pf_inv(proc: &AProc) -> Result<impl Fn(&[i64]) -> Option<Pos> + use<>, String> {
     let mut inv: std::collections::BTreeMap<Pos, Pos> = std::collections::BTreeMap::new();
-    for (to, from) in pf_range_prime(proc)? {
-        inv.entry(to).or_insert(from);
+    for from in pf_from(proc) {
+        for tos in pf(proc, &from)? {
+            for to in tos {
+                inv.entry(to).or_insert_with(|| from.clone());
+            }
+        }
     }
     Ok(move |x: &[i64]| -> Option<Pos> { inv.get(x).cloned() })
 }
+
+#[cfg(test)]
+#[path = "progress_function_tests.rs"]
+mod tests;

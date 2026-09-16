@@ -68,11 +68,17 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     if !thy.is_sapic() {
         return Ok(Vec::new());
     }
+    tamarin_utils::stack::with_compiler_stack(|| apply_sapic_inner(thy, user_set_heuristic))
+}
 
+fn apply_sapic_inner(
+    thy: &mut Theory,
+    user_set_heuristic: bool,
+) -> Result<Vec<WfError>, ElabError> {
     // The single top-level process, inlined, plus its warning report — the
     // report is returned to the caller and translation proceeds regardless
     // (these are warnings, not hard errors).
-    let Some(plain) = thy.processes().next().cloned() else {
+    let Some(plain) = thy.processes().next() else {
         return Ok(Vec::new());
     };
     let wf_report = sapic_pre_report(thy);
@@ -85,7 +91,7 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     let user_fun_typings = collect_user_fun_typings(thy);
     let maude_sig = &thy.signature;
     let typed =
-        type_and_rename_process(maude_sig, &user_fun_typings, &plain).map_err(|e| ElabError {
+        type_and_rename_process(maude_sig, &user_fun_typings, plain).map_err(|e| ElabError {
             message: format!("SAPIC typing: {e}"),
         })?;
 
@@ -188,7 +194,8 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
                     &macros, restr,
                 )));
         }
-        let mut opr = OpenProtoRule::new(apply_macro_in_rule(&macros, lifted.clone()));
+        let expanded = apply_macro_in_rule(&macros, lifted.clone());
+        let mut opr = OpenProtoRule::new(expanded);
         if opr.rule != lifted {
             opr.rule_e = Some(Box::new(lifted));
         }
@@ -351,5 +358,105 @@ mod tests {
             with_call > 0,
             "no generated rule kept the process's macro call"
         );
+    }
+
+    #[test]
+    fn pre_report_handles_deep_terms_and_processes_on_small_stack() {
+        use tamarin_term::{
+            builtin::hash_sym,
+            lterm::{LSort, LVar},
+            maude_sig::hash_maude_sig,
+            term::f_app_no_eq,
+            vterm::var_term,
+        };
+        use tamarin_theory::{
+            sapic::{PlainProcess, Process, ProcessParsedAnnotation, SapicAction, SapicLVar},
+            theory::{Theory, TheoryItem, TranslationElement},
+        };
+
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let x = SapicLVar::untyped(LVar::new("x", LSort::Msg, 0));
+            let mut term = var_term(x.clone());
+            for _ in 0..8192 {
+                term = f_app_no_eq(hash_sym(), vec![term]);
+            }
+            let ann = ProcessParsedAnnotation::default();
+            let body: PlainProcess = Process::Action(
+                SapicAction::New(x.clone()),
+                ann.clone(),
+                Box::new(Process::Null(ann.clone())).into(),
+            );
+            let p = Process::Action(
+                SapicAction::ChIn {
+                    chan: None,
+                    msg: term,
+                    match_vars: Default::default(),
+                },
+                ann.clone(),
+                Box::new(body).into(),
+            );
+            let mut thy: Theory = Theory::new("Probe", hash_maude_sig());
+            thy.items
+                .push(TheoryItem::Translation(TranslationElement::Process(p)));
+            assert_eq!(sapic_pre_report(&thy).len(), 1);
+            let mut p = Process::Null(ann.clone());
+            for _ in 0..8192 {
+                p = Process::Action(SapicAction::New(x.clone()), ann.clone(), Box::new(p).into());
+            }
+            thy.items.clear();
+            thy.items
+                .push(TheoryItem::Translation(TranslationElement::Process(p)));
+            assert_eq!(sapic_pre_report(&thy).len(), 8191);
+        });
+    }
+
+    #[test]
+    fn generated_rules_accept_deep_macro_expansion() {
+        std::thread::Builder::new()
+            .name("deep SAPIC macro expansion".into())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let wrappers = 1024;
+                let links = 4;
+                let mut macros = vec!["m0(x) = x".to_string()];
+                for i in 1..=links {
+                    macros.push(format!(
+                        "m{i}(x) = {}m{}(x){}",
+                        "f(".repeat(wrappers),
+                        i - 1,
+                        ")".repeat(wrappers)
+                    ));
+                }
+                let source = format!(
+                    "theory T begin functions: f/1 macros: {} process: out(m{links}('a')); 0 end",
+                    macros.join(", ")
+                );
+                let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+                let mut theory = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+                apply_sapic(&mut theory, false).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn accepted_deep_process_survives_full_translation() {
+        std::thread::Builder::new()
+            .name("deep SAPIC translation".into())
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let actions = 1024;
+                let source = format!(
+                    "theory T begin process: {}0 end",
+                    "out('a'); ".repeat(actions)
+                );
+                let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+                let mut theory = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+                apply_sapic(&mut theory, false).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

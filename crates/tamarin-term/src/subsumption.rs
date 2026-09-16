@@ -37,8 +37,8 @@ use crate::lterm::LNTerm;
 //     `show listIdx`,
 //     a `FApp (NoEq o)` prepends `unpack (fst o)` (the symbol name),
 //     and a `FApp (AC|C) o` prepends `show o` (the Haskell `Show` of
-//     the whole `FunSym`, e.g. `"AC Mult"` / `"C EMap"`), then descends
-//     into the arg list (which prepends each arg's `show argIdx`).
+//     the whole `FunSym`, e.g. `"AC Mult"` / `"C EMap"`) before mapping
+//     directly over its arguments, without adding argument indices.
 //
 //   * `vrangeSorted = sortOn (lookup occs) (varsRangeVFresh subst)` —
 //     `varsRangeVFresh = varsVTerm . fAppList . rangeVFresh`, i.e. the
@@ -118,29 +118,46 @@ fn show_funsym_ac_c(sym: &FunSym) -> String {
 /// per-child arg index is NOT added.  AC/C operator children therefore
 /// share one context per operator occurrence (which is consistent with
 /// AC/C operands being unordered).
-fn fold_frees_occ_term(t: &LNTerm, ctx: &Occurence, out: &mut Vec<(LVar, Occurence)>) {
-    match t {
-        Term::Lit(Lit::Var(v)) => out.push((*v, ctx.clone())),
-        Term::Lit(_) => {}
-        Term::App(FunSym::NoEq(o), args) => {
-            // `FApp (NoEq o) as -> foldFreesOcc f ((unpack (fst o)):c) as`,
-            // then the `[a]` instance prepends each child's `show argIdx`.
-            let mut node_ctx = ctx.clone();
-            node_ctx.insert(0, String::from_utf8_lossy(o.name).into_owned());
-            for (i, a) in args.iter().enumerate() {
-                let mut arg_ctx = node_ctx.clone();
-                arg_ctx.insert(0, i.to_string());
-                fold_frees_occ_term(a, &arg_ctx, out);
+fn fold_frees_occ_term(
+    t: &LNTerm,
+    ctx: &mut Occurence,
+    out: &mut BTreeMap<LVar, BTreeSet<Occurence>>,
+) {
+    let mut current = t;
+    let mut pending = Vec::new();
+    loop {
+        match current {
+            Term::Lit(Lit::Var(v)) => {
+                // The traversal keeps the path outside-in so descent can
+                // append and truncate. HS stores it innermost-first.
+                out.entry(*v)
+                    .or_default()
+                    .insert(ctx.iter().rev().cloned().collect());
             }
+            Term::Lit(_) => {}
+            Term::App(sym, args) if !args.is_empty() => {
+                let (label, indexed) = match sym {
+                    FunSym::NoEq(o) => (String::from_utf8_lossy(o.name).into_owned(), true),
+                    _ => (show_funsym_ac_c(sym), false),
+                };
+                pending.push((args.iter().enumerate(), ctx.len(), label, indexed));
+            }
+            Term::App(..) => {}
         }
-        Term::App(sym, args) => {
-            // `FApp o as -> mconcat $ map (foldFreesOcc f (show o:c)) as` —
-            // direct map: prepend `show o` ONCE, NO per-child arg index.
-            let mut node_ctx = ctx.clone();
-            node_ctx.insert(0, show_funsym_ac_c(sym));
-            for a in args.iter() {
-                fold_frees_occ_term(a, &node_ctx, out);
+        loop {
+            let Some((children, depth, label, indexed)) = pending.last_mut() else {
+                return;
+            };
+            if let Some((index, child)) = children.next() {
+                ctx.truncate(*depth);
+                ctx.push(label.clone());
+                if *indexed {
+                    ctx.push(index.to_string());
+                }
+                current = child;
+                break;
             }
+            pending.pop();
         }
     }
 }
@@ -149,15 +166,13 @@ fn fold_frees_occ_term(t: &LNTerm, ctx: &Occurence, out: &mut Vec<(LVar, Occuren
 /// context paths in which it occurs.  The argument is the list of range
 /// terms in domain-key order; the outer `[VTerm]` list instance
 /// prepends `show listIdx` to each term's context (LTerm.hs:877-882, see line 880).
-fn var_occurences(range_terms: &[LNTerm]) -> BTreeMap<LVar, BTreeSet<Occurence>> {
-    let mut pairs: Vec<(LVar, Occurence)> = Vec::new();
-    for (i, t) in range_terms.iter().enumerate() {
-        let ctx = vec![i.to_string()];
-        fold_frees_occ_term(t, &ctx, &mut pairs);
-    }
-    let mut out: BTreeMap<LVar, BTreeSet<Occurence>> = BTreeMap::new();
-    for (v, c) in pairs {
-        out.entry(v).or_default().insert(c);
+fn var_occurences<'a>(
+    range_terms: impl IntoIterator<Item = &'a LNTerm>,
+) -> BTreeMap<LVar, BTreeSet<Occurence>> {
+    let mut out = BTreeMap::new();
+    for (i, t) in range_terms.into_iter().enumerate() {
+        let mut ctx = vec![i.to_string()];
+        fold_frees_occ_term(t, &mut ctx, &mut out);
     }
     out
 }
@@ -165,23 +180,16 @@ fn var_occurences(range_terms: &[LNTerm]) -> BTreeMap<LVar, BTreeSet<Occurence>>
 /// `canonizeSubst` — canonical representative modulo renaming.
 /// Faithful port of HS `canonizeSubst` (Subsumption.hs:67-76).
 pub fn canonize_subst(subst: &LNSubstVFresh) -> LNSubstVFresh {
-    // `rangeVFresh subst = M.elems . svMap` — range terms in domain-key
-    // (BTreeMap) order.
-    let range_terms: Vec<LNTerm> = subst.range().cloned().collect();
-
-    // `occs = varOccurences (rangeVFresh subst)`.
-    let occs = var_occurences(&range_terms);
-
-    // `varsRangeVFresh subst = varsVTerm . fAppList . rangeVFresh` — the
-    // sorted-nub (`Ord LVar`) list of range vars.  `subst.vars_range()`
-    // already returns exactly this.
-    let mut vrange: Vec<LVar> = subst.vars_range();
+    // Range terms arrive in domain-key order. Every range variable is a key
+    // in the occurrence map, already sorted and deduplicated by `Ord LVar`.
+    let occs = var_occurences(subst.range());
+    let mut vrange: Vec<LVar> = occs.keys().copied().collect();
 
     // `sortOn (lookup occs)` — STABLE sort by the occurrence-set key
     // (`Maybe (S.Set Occurence)`, `None < Some`), ties broken by the
-    // pre-existing `Ord LVar` order of `varsRangeVFresh`.  Rust's
-    // `sort_by_key` is stable, so it matches `sortOn`'s stability.
-    vrange.sort_by_key(|v| occs.get(v).cloned());
+    // pre-existing `Ord LVar` order of `varsRangeVFresh`.  Rust's stable
+    // slice sort preserves that order when the comparator returns equal.
+    vrange.sort_by(|a, b| occs.get(a).cmp(&occs.get(b)));
 
     // `renaming = zipWith (\lv i -> (lv, x.i)) vrangeSorted [1..]`,
     // preserving each var's sort.  The values are `var_term`s so this is the
@@ -204,9 +212,97 @@ pub fn canonize_subst(subst: &LNSubstVFresh) -> LNSubstVFresh {
     // already AC-canonical, so re-normalising it is the identity).
     LNSubstVFresh::from_list(
         subst
-            .to_list()
-            .into_iter()
-            .map(|(domv, t)| (domv, crate::subst::apply_vterm_map(&renaming, t)))
-            .collect::<Vec<_>>(),
+            .iter()
+            .map(|(domv, t)| (*domv, crate::subst::apply_vterm_map(&renaming, t.clone()))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builtin::{hash, hash_sym, msg_var};
+    use crate::lterm::LSort;
+    use crate::positions::at_pos;
+
+    #[test]
+    fn canonical_substitution_handles_deep_range_terms_on_a_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let domain = LVar::new("domain", LSort::Msg, 0);
+            let mut range = msg_var("range", 0);
+            for _ in 0..8192 {
+                range = hash(range);
+            }
+            let canonical = canonize_subst(&LNSubstVFresh::from_list([(domain, range)]));
+            let image = canonical.image_of(&domain).unwrap();
+            assert_eq!(at_pos(image, &vec![0; 8192]), Some(msg_var("x", 1)));
+        });
+    }
+
+    #[test]
+    fn canonicalization_preserves_occurrence_ties_and_domain_order() {
+        use crate::lterm::LSort;
+        let a = LVar::new("a", LSort::Msg, 4);
+        let z = LVar::new("z", LSort::Fresh, 1);
+        assert_eq!(
+            canonize_subst(&LNSubstVFresh::empty()),
+            LNSubstVFresh::empty()
+        );
+        for sym in [
+            FunSym::NoEq(crate::function_symbols::pair_sym()),
+            FunSym::Ac(AcSym::Mult),
+            FunSym::C(CSym::EMap),
+            FunSym::List,
+        ] {
+            let range = crate::term::f_app(sym, vec![var_term(z), var_term(a)]);
+            let subst =
+                LNSubstVFresh::from_list([(z, crate::lterm::pub_term("ground")), (a, range)]);
+            // Retain the previous independent variable collection as an oracle
+            // for complete coverage, initial ordering and stable occurrence ties.
+            let occs = var_occurences(subst.range());
+            let mut vars = subst.vars_range();
+            vars.sort_by(|a, b| occs.get(a).cmp(&occs.get(b)));
+            let renaming = vars
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| (v, var_term(LVar::new("x", v.sort, (i + 1) as u64))))
+                .collect();
+            let expected = LNSubstVFresh::from_list(
+                subst
+                    .to_list()
+                    .into_iter()
+                    .map(|(v, t)| (v, crate::subst::apply_vterm_map(&renaming, t))),
+            );
+            assert_eq!(canonize_subst(&subst), expected);
+        }
+    }
+
+    #[test]
+    fn occurrence_paths_preserve_noeq_indices_and_ac_symmetry() {
+        let y = LVar::new("y", LSort::Msg, 0);
+        let z = LVar::new("z", LSort::Msg, 0);
+        let term = Term::App(
+            FunSym::NoEq(hash_sym()),
+            vec![
+                var_term(y),
+                Term::App(
+                    FunSym::Ac(AcSym::Mult),
+                    vec![var_term(z), var_term(y)].into(),
+                ),
+            ]
+            .into(),
+        );
+
+        let occurrences = var_occurences(&[term]);
+        assert_eq!(
+            occurrences.get(&y).unwrap(),
+            &BTreeSet::from([
+                vec!["0".into(), "h".into(), "0".into()],
+                vec!["AC Mult".into(), "1".into(), "h".into(), "0".into()],
+            ])
+        );
+        assert_eq!(
+            occurrences.get(&z).unwrap(),
+            &BTreeSet::from([vec!["AC Mult".into(), "1".into(), "h".into(), "0".into(),]])
+        );
+    }
 }

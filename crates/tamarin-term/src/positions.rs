@@ -17,30 +17,37 @@ use crate::vterm::VTerm;
 pub type Position = Vec<i64>;
 
 /// `t @ p`: subterm of `t` at `p`. Returns `None` for invalid positions.
-pub fn at_pos<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>, p: &[i64]) -> Option<VTerm<C, V>> {
-    if p.is_empty() {
-        return Some(t.clone());
-    }
-    match t {
-        Term::Lit(_) => None,
-        Term::App(FunSym::Ac(s), args) => match (p[0], &args[..]) {
-            (_, []) => None,
-            (0, [a, ..]) => at_pos(a, &p[1..]),
-            (1, [_, only]) => at_pos(only, &p[1..]),
-            (1, [_, rest @ ..]) if !rest.is_empty() => {
-                let tail = f_app(FunSym::Ac(*s), rest.to_vec());
-                at_pos(&tail, &p[1..])
+pub fn at_pos<C: Ord + Clone, V: Ord + Clone>(
+    t: &VTerm<C, V>,
+    mut p: &[i64],
+) -> Option<VTerm<C, V>> {
+    let mut t = t;
+    let mut tail_storage;
+    while let Some((&index, rest)) = p.split_first() {
+        t = match t {
+            Term::Lit(_) => return None,
+            Term::App(FunSym::Ac(s), args) => match (index, &args[..]) {
+                (_, []) => return None,
+                (0, [a, ..]) => a,
+                (1, [_, only]) => only,
+                (1, [_, args @ ..]) if !args.is_empty() => {
+                    // The smart constructor may normalize a synthetic AC tail.
+                    // Own the current tail while borrowing descendants from it.
+                    tail_storage = f_app(FunSym::Ac(*s), args.to_vec());
+                    &tail_storage
+                }
+                _ => return None,
+            },
+            Term::App(_, args) => {
+                if index < 0 {
+                    return None;
+                }
+                args.get(index as usize)?
             }
-            _ => None,
-        },
-        Term::App(_, args) => {
-            let i = p[0] as usize;
-            if p[0] < 0 || i >= args.len() {
-                return None;
-            }
-            at_pos(&args[i], &p[1..])
-        }
+        };
+        p = rest;
     }
+    Some(t.clone())
 }
 
 /// `t.replace_pos(s, p)`: replace the subterm at `p` with `s`.
@@ -52,7 +59,7 @@ pub fn replace_pos<C: Ord + Clone, V: Ord + Clone>(
     if p.is_empty() {
         return Some(s.clone());
     }
-    match t {
+    tamarin_utils::stack::ensure_sufficient_stack(|| match t {
         Term::Lit(_) => None,
         Term::App(FunSym::Ac(sym), args) => match (p[0], &args[..]) {
             (0, [head, rest @ ..]) => {
@@ -77,7 +84,7 @@ pub fn replace_pos<C: Ord + Clone, V: Ord + Clone>(
             new[i] = replace_pos(&args[i], s, &p[1..])?;
             Some(f_app(*fsym, new))
         }
-    }
+    })
 }
 
 /// `find_pos t s`: all positions at which subterm `t` occurs inside `s`,
@@ -92,30 +99,16 @@ pub fn find_pos<C: Ord + Clone, V: Ord + Clone>(
     t: &VTerm<C, V>,
     s: &VTerm<C, V>,
 ) -> Option<Vec<Position>> {
-    if t == s {
-        return Some(vec![vec![]]);
-    }
-    match s {
-        Term::App(_, ts) => {
-            let mut acc: Option<Vec<Position>> = None;
-            // foldr over `zip [0..] ts`: process indices high→low, appending
-            // each contributing index's `(x:)`-prefixed positions.
-            for (x, sub) in ts.iter().enumerate().rev() {
-                if let Some(ps) = find_pos(t, sub) {
-                    let prefixed = ps.into_iter().map(|mut p| {
-                        p.insert(0, x as i64);
-                        p
-                    });
-                    match &mut acc {
-                        None => acc = Some(prefixed.collect()),
-                        Some(v) => v.extend(prefixed),
-                    }
-                }
-            }
-            acc
+    let mut out = Vec::new();
+    visit_positions(s, PositionMode::ReverseNary, |node, path| {
+        if node == t {
+            out.push(path.to_vec());
+            false
+        } else {
+            true
         }
-        Term::Lit(_) => None,
-    }
+    });
+    (!out.is_empty()).then_some(out)
 }
 
 /// `deepest_prot_subterm term pos`: the deepest "protected" subterm of `term`
@@ -127,82 +120,95 @@ pub fn deepest_prot_subterm<C: Ord + Clone, V: Ord + Clone>(
     term: &VTerm<C, V>,
     pos: &[i64],
 ) -> Option<VTerm<C, V>> {
-    fn f<C: Ord + Clone, V: Ord + Clone>(
-        orig: &VTerm<C, V>,
-        st: VTerm<C, V>,
-        t: &VTerm<C, V>,
-        pos: &[i64],
-    ) -> Option<VTerm<C, V>> {
-        match pos.split_first() {
-            None => {
-                if &st == orig && (is_pair(orig) || is_ac(orig)) {
-                    None
-                } else {
-                    Some(st)
-                }
-            }
-            Some((i, rest)) => match t {
-                Term::App(_, args) => {
-                    let a = args
-                        .get(*i as usize)
-                        .expect("deepest_prot_subterm: invalid position given");
-                    let new_st = if is_pair(t) || is_ac(t) {
-                        st
-                    } else {
-                        t.clone()
-                    };
-                    f(orig, new_st, a, rest)
-                }
-                Term::Lit(_) => panic!("deepest_prot_subterm: invalid position given"),
-            },
+    let mut current = term;
+    let mut protected = term.clone();
+    for &index in pos {
+        let Term::App(_, args) = current else {
+            panic!("deepest_prot_subterm: invalid position given");
+        };
+        let child = args
+            .get(index as usize)
+            .expect("deepest_prot_subterm: invalid position given");
+        if !is_pair(current) && !is_ac(current) {
+            protected = current.clone();
         }
+        current = child;
     }
-    f(term, term.clone(), term, pos)
+    if &protected == term && (is_pair(term) || is_ac(term)) {
+        None
+    } else {
+        Some(protected)
+    }
 }
 
 /// `positions t`: every position in `t` (including the empty position at
 /// the root). AC nesting follows the right-leaning binary interpretation.
 pub fn positions<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
-    collect_positions(t)
-}
-
-/// Pre-order walk emitting one position per node. AC nodes index their
-/// children through the right-leaning binary encoding ([`ac_position`]),
-/// every other node by argument index.
-fn collect_positions<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
-    fn go<C, V>(t: &VTerm<C, V>, out: &mut Vec<Position>, prefix: &mut Vec<i64>) {
-        match t {
-            Term::Lit(_) => out.push(prefix.clone()),
-            Term::App(sym, args) => {
-                out.push(prefix.clone());
-                let ac = matches!(sym, FunSym::Ac(_));
-                let len = args.len();
-                for (i, a) in args.iter().enumerate() {
-                    let saved = prefix.len();
-                    if ac {
-                        prefix.extend_from_slice(&ac_position(i, len));
-                    } else {
-                        prefix.push(i as i64);
-                    }
-                    go(a, out, prefix);
-                    prefix.truncate(saved);
-                }
-            }
-        }
-    }
     let mut out = Vec::new();
-    let mut prefix = Vec::new();
-    go(t, &mut out, &mut prefix);
+    visit_positions(t, PositionMode::BinaryAc, |_, path| {
+        out.push(path.to_vec());
+        true
+    });
     out
 }
 
-fn ac_position(i: usize, len: usize) -> Vec<i64> {
-    if i == len - 1 {
-        vec![1; i]
-    } else {
-        let mut v = vec![1; i];
-        v.push(0);
-        v
+#[derive(Clone, Copy)]
+pub(crate) enum PositionMode {
+    Nary,
+    ReverseNary,
+    BinaryAc,
+}
+
+/// Preorder position walk. The callback returns false to prune a matched
+/// subtree. Only callers emitting a position copy the shared root-to-node path.
+pub(crate) fn visit_positions<A>(
+    t: &Term<A>,
+    mode: PositionMode,
+    mut visit: impl FnMut(&Term<A>, &[i64]) -> bool,
+) {
+    let mut current = t;
+    let mut path = Vec::new();
+    let mut pending = Vec::new();
+    loop {
+        if visit(current, &path)
+            && let Term::App(sym, args) = current
+            && !args.is_empty()
+        {
+            let binary_ac = matches!(mode, PositionMode::BinaryAc) && matches!(sym, FunSym::Ac(_));
+            // A single child has no sibling continuation to save.
+            if let [child] = &args[..] {
+                if !binary_ac {
+                    path.push(0);
+                }
+                current = child;
+                continue;
+            }
+            pending.push((args.iter().enumerate(), path.len(), binary_ac, args.len()));
+        }
+        loop {
+            let Some((children, depth, binary_ac, len)) = pending.last_mut() else {
+                return;
+            };
+            let next = if matches!(mode, PositionMode::ReverseNary) {
+                children.next_back()
+            } else {
+                children.next()
+            };
+            if let Some((index, child)) = next {
+                path.truncate(*depth);
+                if *binary_ac {
+                    path.extend(std::iter::repeat_n(1, index));
+                    if index + 1 != *len {
+                        path.push(0);
+                    }
+                } else {
+                    path.push(index as i64);
+                }
+                current = child;
+                break;
+            }
+            pending.pop();
+        }
     }
 }
 
@@ -326,5 +332,126 @@ mod tests {
             replace_pos(&t, &z, &[1, 1]),
             Some(f_app_ac(AcSym::Mult, vec![a, b, z]))
         );
+    }
+}
+
+#[cfg(test)]
+#[path = "positions_reference.rs"]
+mod reference;
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use crate::builtin::{hash, msg_var, pair};
+    #[test]
+    fn position_lifecycle_uses_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let x = msg_var("x", 0);
+            let y = msg_var("y", 0);
+            let mut term = x.clone();
+            for _ in 0..8192 {
+                term = hash(term);
+            }
+            let path = vec![0; 8192];
+            assert_eq!(at_pos(&term, &path), Some(x.clone()));
+            assert_eq!(deepest_prot_subterm(&term, &path), Some(hash(x.clone())));
+            assert_eq!(
+                find_pos(&x, &pair(term.clone(), term.clone())),
+                Some(vec![
+                    [vec![1], path.clone()].concat(),
+                    [vec![0], path.clone()].concat()
+                ])
+            );
+            let replaced = replace_pos(&term, &y, &path).unwrap();
+            assert_eq!(at_pos(&replaced, &path), Some(y));
+            let invalid = [path, vec![0]].concat();
+            assert!(at_pos(&term, &invalid).is_none());
+            assert!(replace_pos(&term, &x, &invalid).is_none());
+            assert!(std::panic::catch_unwind(|| deepest_prot_subterm(&term, &invalid)).is_err());
+            // Enumerating every prefix inherently emits quadratic output.
+            let mut smaller = x;
+            for _ in 0..512 {
+                smaller = hash(smaller);
+            }
+            let all = positions(&smaller);
+            assert_eq!(all.len(), 513);
+            assert!(all
+                .iter()
+                .enumerate()
+                .all(|(depth, path)| path == &vec![0; depth]));
+        });
+    }
+
+    #[test]
+    fn synthetic_ac_tails_use_small_stack() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            use crate::function_symbols::AcSym;
+            let x = msg_var("x", 0);
+            let y = msg_var("y", 0);
+            let term = crate::term::f_app_ac(AcSym::Mult, vec![x.clone(); 1024]);
+            let path = vec![1; 1023];
+            assert_eq!(at_pos(&term, &path), Some(x));
+            let replaced = replace_pos(&term, &y, &path).unwrap();
+            assert_eq!(at_pos(&replaced, &path), Some(y));
+            assert!(at_pos(&term, &[path, vec![1]].concat()).is_none());
+        });
+    }
+
+    #[test]
+    fn position_algorithms_match_independent_reference() {
+        use crate::function_symbols::{AcSym, CSym};
+        let x = msg_var("x", 0);
+        let mut terms = vec![x.clone(), msg_var("y", 0)];
+        for depth in 0..3 {
+            let a = terms.last().unwrap().clone();
+            for sym in [
+                FunSym::NoEq(crate::builtin::hash_sym()),
+                FunSym::List,
+                FunSym::Ac(AcSym::Mult),
+                FunSym::C(CSym::EMap),
+            ] {
+                // Include noncanonical arities: normalizing a synthetic AC
+                // tail can change its shape, so direct slice indexing is wrong.
+                for args in [
+                    vec![],
+                    vec![a.clone()],
+                    vec![x.clone(), a.clone()],
+                    vec![a.clone(), x.clone(), terms[depth].clone()],
+                ] {
+                    terms.push(Term::App(sym, args.into()));
+                }
+            }
+        }
+        for term in &terms {
+            assert_eq!(positions(term), reference::positions(term));
+            for needle in &terms {
+                assert_eq!(find_pos(needle, term), reference::find_pos(needle, term));
+            }
+            let mut paths = positions(term);
+            paths.extend([
+                vec![-1],
+                vec![99],
+                vec![0, 99],
+                vec![1],
+                vec![1, 1],
+                vec![1, 0, 0],
+            ]);
+            for path in paths {
+                assert_eq!(at_pos(term, &path), reference::at_pos(term, &path));
+                assert_eq!(
+                    replace_pos(term, &x, &path),
+                    reference::replace_pos(term, &x, &path)
+                );
+            }
+            // n-ary paths are deliberately separate from binary AC positions.
+            for needle in &terms {
+                for path in find_pos(needle, term).into_iter().flatten() {
+                    assert_eq!(
+                        deepest_prot_subterm(term, &path),
+                        reference::deepest_prot_subterm(term, &path)
+                    );
+                }
+            }
+        }
     }
 }

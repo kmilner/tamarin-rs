@@ -432,7 +432,9 @@ fn parse_term(c: &mut Cursor) -> Result<MTerm, ParseError> {
         // function application: parse comma-separated arguments.
         let mut args = Vec::new();
         loop {
-            args.push(parse_term(c)?);
+            args.push(tamarin_utils::stack::ensure_sufficient_stack(|| {
+                parse_term(c)
+            })?);
             if c.eat_str(b", ") || c.eat(b',') {
                 continue;
             }
@@ -491,7 +493,7 @@ fn skip_term(c: &mut Cursor) -> Result<(), ParseError> {
             return Ok(());
         }
         loop {
-            skip_term(c)?;
+            tamarin_utils::stack::ensure_sufficient_stack(|| skip_term(c))?;
             if c.eat_str(b", ") || c.eat(b',') {
                 continue;
             }
@@ -678,6 +680,30 @@ fn flatten_cons(t: &MTerm) -> Vec<MTerm> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn deep_maude_terms_parse_skip_and_release_on_small_stacks() {
+        tamarin_test_support::on_stack(256 * 1024, || {
+            let mut term = Term::Lit(MaudeLit::MaudeVar(0, LSort::Msg));
+            for i in 0..8192 {
+                term = if i % 2 == 0 {
+                    crate::term::f_app_list(vec![term])
+                } else {
+                    crate::builtin::hash(term)
+                };
+            }
+            let wire = crate::maude_print::pp_mterm(&term);
+            let mut parsed = Cursor::new(&wire);
+            assert_eq!(parse_term(&mut parsed).unwrap(), term);
+            assert!(parsed.rest().is_empty());
+            let mut skipped = Cursor::new(&wire);
+            skip_term(&mut skipped).unwrap();
+            assert!(skipped.rest().is_empty());
+            let mut broken = wire;
+            broken.pop();
+            assert!(parse_term(&mut Cursor::new(&broken)).is_err());
+            assert!(skip_term(&mut Cursor::new(&broken)).is_err());
+        });
+    }
     #[test]
     fn skipped_terms_accept_and_consume_the_parse_term_grammar() {
         for src in [

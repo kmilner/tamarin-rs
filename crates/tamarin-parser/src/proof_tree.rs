@@ -25,157 +25,134 @@
 //!
 //! See [`crate::ast::ParsedProofTree`] / [`crate::ast::ParsedMethod`]
 //! for the shape of the structured output; the `goal` inside a
-//! `solve( ... )` step is read by [`crate::parser::parse_parens_goal`].
+//! `solve( ... )` step shares the theory parser's cursor and symbol state.
 //! A token this grammar does not accept fails the containing theory parse, as
 //! it does in HS.
 
 use crate::ast::{ParsedMethod, ParsedProofTree};
-use crate::lexer::{is_ident_char, Lexer};
+use crate::lexer::is_ident_char;
 use crate::parse_error::ParseContext;
 use crate::parser::{ParseError, Parser};
 
-/// Parse the raw skeleton text into a [`ParsedProofTree`]. Returns `Err` if
-/// the complete token stream does not conform to the HS grammar.
-///
-/// `parent` is the theory parser the skeleton text came out of, whose symbol
-/// state [`crate::parser::parse_parens_goal`] needs to read the goal inside a
-/// `solve( ... )` step; HS's proof parser runs inside the theory parser and
-/// reads the same state (Theory/Text/Parser/Proof.hs:38-72).
-pub fn parse_proof_tree<'a>(
-    raw: &'a str,
-    parent: &Parser<'a>,
-) -> Result<ParsedProofTree, ParseError> {
-    let (tree, lx) = parse_proof_prefix(Lexer::new(raw), parent)?;
-    require_end_of_proof(&lx)?;
+/// Parse a complete standalone proof using `parent`'s symbol signature.
+/// Proofs attached to theory lemmas use the same grammar directly on the
+/// enclosing parser (Theory/Text/Parser/Proof.hs:38-72).
+pub fn parse_proof_tree(raw: &str, parent: &Parser<'_>) -> Result<ParsedProofTree, ParseError> {
+    let mut parser = Parser::new(raw, &[], parent.is_diff);
+    parser.seed_from(parent);
+    let tree = parser.proof_tree()?;
+    parser.require_end_of_proof()?;
     Ok(tree)
 }
 
-/// Validate a stored diff-proof skeleton against HS `diffProofSkeleton`
-/// (`Theory/Text/Parser/Proof.hs:128-144`). Diff proofs have their own method
-/// type and are not executable by the regular Rust replay engine, so callers
-/// retain their raw text rather than manufacturing a [`ParsedProofTree`].
+/// Validate HS `diffProofSkeleton` (Theory/Text/Parser/Proof.hs:128-144).
+/// Diff proofs retain their raw text rather than an executable regular tree.
 #[cfg(test)]
-fn validate_diff_proof_tree<'a>(raw: &'a str, parent: &Parser<'a>) -> Result<(), ParseError> {
-    let ((), lx) = parse_diff_proof_prefix(Lexer::new(raw), parent)?;
-    require_end_of_proof(&lx)
+pub(crate) fn validate_diff_proof_tree(raw: &str, parent: &Parser<'_>) -> Result<(), ParseError> {
+    let mut parser = Parser::new(raw, &[], parent.is_diff);
+    parser.seed_from(parent);
+    parser.diff_proof_tree()?;
+    parser.require_end_of_proof()
 }
 
-fn require_end_of_proof(lx: &Lexer<'_>) -> Result<(), ParseError> {
-    if lx.is_eof() {
-        Ok(())
-    } else {
-        Err(ParseError::expected(lx.pos(), "end of proof", lx.peek())
-            .with_context(ParseContext::Proof))
+impl Parser<'_> {
+    fn require_end_of_proof(&self) -> Result<(), ParseError> {
+        if self.lx.is_eof() {
+            Ok(())
+        } else {
+            Err(self
+                .err_expect_here("end of proof")
+                .with_context(ParseContext::Proof))
+        }
     }
-}
 
-/// Parse one proof from the theory cursor, retaining absolute source positions
-/// and leaving the cursor at the next item after trailing whitespace/comments.
-pub(crate) fn parse_proof_prefix<'a>(
-    lx: Lexer<'a>,
-    parent: &Parser<'a>,
-) -> Result<(ParsedProofTree, Lexer<'a>), ParseError> {
-    TreeParser { lx, parent }.parse_prefix(TreeParser::proof_skeleton)
-}
+    /// Read one proof and its trailing whitespace/comments in the theory's
+    /// cursor. Goal parsing shares the signature and diagnostic declaration sites.
+    pub(super) fn proof_tree(&mut self) -> Result<ParsedProofTree, ParseError> {
+        self.proof_prefix(Self::proof_skeleton)
+    }
 
-/// Diff proofs have their own grammar but share the same cursor boundary.
-pub(crate) fn parse_diff_proof_prefix<'a>(
-    lx: Lexer<'a>,
-    parent: &Parser<'a>,
-) -> Result<((), Lexer<'a>), ParseError> {
-    TreeParser { lx, parent }.parse_prefix(TreeParser::diff_proof_skeleton)
-}
+    pub(super) fn diff_proof_tree(&mut self) -> Result<(), ParseError> {
+        self.proof_prefix(Self::diff_proof_skeleton)
+    }
 
-struct TreeParser<'a, 'p> {
-    lx: Lexer<'a>,
-    parent: &'p Parser<'a>,
-}
-
-impl<'a> TreeParser<'a, '_> {
-    fn parse_prefix<T>(
-        mut self,
+    fn proof_prefix<T>(
+        &mut self,
         parse: impl FnOnce(&mut Self) -> Result<T, ParseError>,
-    ) -> Result<(T, Lexer<'a>), ParseError> {
-        let result = parse(&mut self);
-        self.lx.skip_ws();
-        let tree = self
-            .lx
+    ) -> Result<T, ParseError> {
+        let result = parse(self);
+        self.skip_ws();
+        self.lx
             .finish(result)
-            .map_err(|error| error.with_context(ParseContext::Proof))?;
-        Ok((tree, self.lx))
-    }
-
-    fn err_expect(&self, expected: impl Into<String>) -> ParseError {
-        ParseError::expected(self.lx.pos(), expected, self.lx.peek())
+            .map_err(|error| error.with_context(ParseContext::Proof))
     }
 
     /// HS `proofSkeleton` (Theory/Text/Parser/Proof.hs:98-115).
     fn proof_skeleton(&mut self) -> Result<ParsedProofTree, ParseError> {
-        self.lx.skip_ws();
-        // solvedProof: `SOLVED`
-        if self.try_kw("SOLVED") {
-            return Ok(ParsedProofTree {
-                method: ParsedMethod::SolvedLeaf,
-                cases: Vec::new(),
-            });
+        struct Pending {
+            tree: ParsedProofTree,
+            name: String,
+            block: bool,
         }
-        // finalProof: `by <proofMethod>`
-        if self.try_kw("by") {
-            let m = self.proof_method()?;
-            return Ok(ParsedProofTree {
-                method: m,
+        let mut pending: Vec<Pending> = Vec::new();
+        'parse: loop {
+            self.skip_ws();
+            let solved = self.try_kw("SOLVED");
+            let terminal = solved || self.try_kw("by");
+            let method = if solved {
+                ParsedMethod::SolvedLeaf
+            } else {
+                self.proof_method()?
+            };
+            let mut tree = ParsedProofTree {
+                method,
                 cases: Vec::new(),
-            });
-        }
-        // interProof: <method> ( case-block | proofSkeleton )
-        let m = self.proof_method()?;
-        // HS: `cases <- (sepBy oneCase "next" <* "qed") <|>
-        //               ((return . (,) "") <$> proofSkeleton)`
-        // (Theory/Text/Parser/Proof.hs:111-112). `oneCase` starts with
-        // `case <ident>`, while `sepBy` also accepts zero cases followed
-        // immediately by `qed`. Otherwise HS
-        // *requires* a recursive `proofSkeleton` (the inline single-child
-        // subproof, named ""); there is NO childless-leaf branch — an
-        // interProof method must be followed by a child.
-        self.lx.skip_ws();
-        if self.peek_kw("case") || self.peek_kw("qed") {
-            let mut cases: Vec<(String, ParsedProofTree)> = Vec::new();
-            // HS: sepBy oneCase "next" <* "qed"
-            if self.peek_kw("case") {
-                cases.push(self.one_case()?);
-                while self.try_kw("next") {
-                    cases.push(self.one_case()?);
+            };
+            if !terminal {
+                self.skip_ws();
+                let block = self.at_keyword("case") || self.at_keyword("qed");
+                if block && self.try_kw("qed") {
+                    // A case block may be empty.
+                } else {
+                    // Without a case block, an intermediate method requires
+                    // one inline child; a bare method is not a complete proof.
+                    let name = if block {
+                        self.proof_case_name()?
+                    } else {
+                        String::new()
+                    };
+                    pending.push(Pending { tree, name, block });
+                    continue;
                 }
             }
-            self.require_kw("qed")?;
-            return Ok(ParsedProofTree { method: m, cases });
+            // Complete inline parents until a case block needs another child.
+            while let Some(mut parent) = pending.pop() {
+                if parent.block {
+                    parent.tree.cases.push((parent.name, tree));
+                    if self.try_kw("next") {
+                        parent.name = self.proof_case_name()?;
+                        pending.push(parent);
+                        continue 'parse;
+                    }
+                    self.require_kw("qed")?;
+                } else {
+                    parent.tree.cases = vec![(parent.name, tree)];
+                }
+                tree = parent.tree;
+            }
+            return Ok(tree);
         }
-        // Inline (single-child) subproof.  HS: `(return . (,) "") <$>
-        // proofSkeleton` — this alternative ALWAYS requires a successful
-        // recursive `proofSkeleton`.  If neither a case-block nor a
-        // following proofSkeleton parses, HS `interProof` fails (verified
-        // against the v1.13.0 prover: a bare `simplify` with no child is a
-        // parse error, "expecting case/qed/by/...").  We mirror that by
-        // failing here; the containing theory parse fails as HS's does.
-        let sub = self.proof_skeleton()?;
-        Ok(ParsedProofTree {
-            method: m,
-            cases: vec![("".to_string(), sub)],
-        })
     }
 
-    /// HS `oneCase` (Theory/Text/Parser/Proof.hs:98-115, see line 115):
-    ///   `(,) <$> ("case" *> identifier) <*> proofSkeleton`
-    fn one_case(&mut self) -> Result<(String, ParsedProofTree), ParseError> {
+    /// HS `oneCase` begins with `case` and an extended identifier.
+    fn proof_case_name(&mut self) -> Result<String, ParseError> {
         self.require_kw("case")?;
-        let name = self.identifier_extended()?;
-        let sub = self.proof_skeleton()?;
-        Ok((name, sub))
+        self.identifier_extended()
     }
 
     /// HS `proofMethod` (Theory/Text/Parser/Proof.hs:76-85).
     fn proof_method(&mut self) -> Result<ParsedMethod, ParseError> {
-        self.lx.skip_ws();
+        self.skip_ws();
         if self.try_kw("sorry") {
             return Ok(ParsedMethod::Sorry);
         }
@@ -200,18 +177,13 @@ impl<'a> TreeParser<'a, '_> {
         // Theory/Text/Parser/Proof.hs:102-103) — see the
         // `SOLVED` branch of `proof_skeleton`.
         if self.try_kw("solve") {
-            // `solve( <goal> )`.  HS reads `parens goal`
-            // (Theory/Text/Parser/Proof.hs:80): the parentheses belong to the
-            // goal grammar, so the term parser decides where the closing `)`
-            // is and this lexer walks to the offset it stopped at, character
-            // by character to keep its line and column right.
-            self.lx.skip_ws();
-            let start = self.lx.pos();
-            let (spec, len) = crate::parser::parse_parens_goal(self.lx.rest(), self.parent)
-                .map_err(|error| error.shifted(start, self.lx.src()))?;
-            let end = start.offset + len;
-            while self.lx.pos().offset < end {
-                self.lx.bump();
+            // HS `symbol "solve" *> parens goal` (Theory/Text/Parser/Proof.hs:80).
+            // Read directly from the shared cursor: spans are already absolute.
+            self.require_punct("(")?;
+            let spec = self.goal()?;
+            self.skip_ws();
+            if !self.try_punct(")") {
+                return Err(self.err_expect_here("`)` after the goal"));
             }
             return Ok(ParsedMethod::SolveGoal(spec));
         }
@@ -222,37 +194,44 @@ impl<'a> TreeParser<'a, '_> {
 
     /// HS `diffProofSkeleton` (Theory/Text/Parser/Proof.hs:128-144).
     fn diff_proof_skeleton(&mut self) -> Result<(), ParseError> {
-        self.lx.skip_ws();
-        if self.try_kw("MIRRORED") {
-            return Ok(());
-        }
-        if self.try_kw("by") {
-            return self.diff_proof_method();
-        }
-        self.diff_proof_method()?;
-        self.lx.skip_ws();
-        if self.peek_kw("case") || self.peek_kw("qed") {
-            if self.peek_kw("case") {
-                self.diff_one_case()?;
-                while self.try_kw("next") {
-                    self.diff_one_case()?;
+        // Inline continuations need no retained output. Only case blocks must
+        // remember their depth and resume after a completed child.
+        let mut blocks = 0usize;
+        'parse: loop {
+            self.skip_ws();
+            if !self.try_kw("MIRRORED") {
+                if self.try_kw("by") {
+                    self.diff_proof_method()?;
+                } else {
+                    self.diff_proof_method()?;
+                    self.skip_ws();
+                    if self.at_keyword("case") {
+                        self.proof_case_name()?;
+                        blocks += 1;
+                        continue;
+                    }
+                    if !self.try_kw("qed") {
+                        continue;
+                    }
                 }
             }
-            return self.require_kw("qed");
+            while blocks > 0 {
+                blocks -= 1;
+                if self.try_kw("next") {
+                    self.proof_case_name()?;
+                    blocks += 1;
+                    continue 'parse;
+                }
+                self.require_kw("qed")?;
+            }
+            return Ok(());
         }
-        self.diff_proof_skeleton()
-    }
-
-    fn diff_one_case(&mut self) -> Result<(), ParseError> {
-        self.require_kw("case")?;
-        self.identifier_extended()?;
-        self.diff_proof_skeleton()
     }
 
     /// HS `diffProofMethod` (Theory/Text/Parser/Proof.hs:118-126). A `step`
     /// wraps one ordinary proof method, not an ordinary proof skeleton.
     fn diff_proof_method(&mut self) -> Result<(), ParseError> {
-        self.lx.skip_ws();
+        self.skip_ws();
         if self.try_kw("sorry")
             || self.try_kw("rule-equivalence")
             || self.try_kw("backward-search")
@@ -262,44 +241,20 @@ impl<'a> TreeParser<'a, '_> {
             return Ok(());
         }
         if self.try_kw("step") {
-            if !self.lx.try_symbol("(") {
-                return Err(self.err_expect("`(`"));
-            }
+            self.require_punct("(")?;
             self.proof_method()?;
-            if !self.lx.try_symbol(")") {
-                return Err(self.err_expect("`)`"));
-            }
+            self.require_punct(")")?;
             return Ok(());
         }
         Err(self.err_expect("diff proof method"))
     }
 
-    // -------- helpers --------
-
-    /// Match a keyword with a word boundary.
-    fn try_kw(&mut self, kw: &str) -> bool {
-        self.lx.skip_ws();
-        self.lx.try_symbol(kw)
-    }
-
-    fn peek_kw(&mut self, kw: &str) -> bool {
-        self.lx.skip_ws();
-        self.lx.peek_symbol(kw)
-    }
-
-    fn require_kw(&mut self, kw: &str) -> Result<(), ParseError> {
-        if self.try_kw(kw) {
-            Ok(())
-        } else {
-            Err(self.err_expect(format!("`{}`", kw)))
-        }
-    }
-
+    /// Proof labels preserve generated names and reserved words (e.g. `rule`).
     /// Identifier with extended chars: HS's `identifier` accepts
     /// alphanum + `_` (Token.hs:214-230, see line 224 `identLetter = alphaNum <|> oneOf "_"`)
     /// and emits names like `Server_ReceiveOTP_NewSession_case_1`.
     fn identifier_extended(&mut self) -> Result<String, ParseError> {
-        self.lx.skip_ws();
+        self.skip_ws();
         let mut s = String::new();
         match self.lx.peek() {
             Some(c) if c.is_alphanumeric() || c == '_' => {
@@ -316,7 +271,7 @@ impl<'a> TreeParser<'a, '_> {
                 break;
             }
         }
-        self.lx.skip_ws();
+        self.skip_ws();
         Ok(s)
     }
 }

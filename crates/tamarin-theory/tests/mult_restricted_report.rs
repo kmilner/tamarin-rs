@@ -150,6 +150,24 @@ fn a_multiplication_restricted_dh_rule_stays_silent() {
     assert_eq!(block(src), None);
 }
 
+#[test]
+fn deep_irreducible_rules_use_a_bounded_stack() {
+    let depth = 8192;
+    let src = format!(
+        "theory Deep begin builtins: hashing rule R: [ In(x) ] --> [ Out({}x{}) ] end",
+        "h(".repeat(depth),
+        ")".repeat(depth)
+    );
+    let parsed = parse_theory(&src, &[]).expect("parse");
+    let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
+    std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || assert!(mult_restricted_report(&elaborated).is_empty()))
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// Every product in a conclusion is listed, in the conclusion's own term
 /// order, through `prettyLNTermList = fsep . punctuate comma . map
 /// prettyLNTerm` (Wellformedness.hs:146-147); `multTerms` stops at a `Mult`
@@ -260,7 +278,7 @@ fn a_generated_rules_process_attribute_is_rendered_from_its_own_record() {
             match_vars: BTreeSet::new(),
         },
         ProcessParsedAnnotation::empty(),
-        Box::new(Process::Null(ProcessParsedAnnotation::empty())),
+        Box::new(Process::Null(ProcessParsedAnnotation::empty())).into(),
     );
 
     let src = "theory MrSapicShaped begin\n\
