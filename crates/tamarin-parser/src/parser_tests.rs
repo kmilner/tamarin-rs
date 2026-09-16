@@ -202,7 +202,7 @@ fn parse_formula_str_sig(s: &str) -> Result<Formula, ParseError> {
 }
 
 /// A parser carrying `msig`'s symbols, standing in for the theory parser
-/// [`parse_parens_goal`] reads a stored proof's goals inside.
+/// the proof grammar reads stored goals inside.
 fn sig_parser(msig: &tamarin_term::maude_sig::MaudeSig) -> Parser<'static> {
     let mut p = Parser::new("", &[], false);
     p.seed_signature(msig);
@@ -212,10 +212,11 @@ fn sig_parser(msig: &tamarin_term::maude_sig::MaudeSig) -> Parser<'static> {
 /// The small side of the subterm goal `<src> ⊏ y`, which is where the goal
 /// grammar reads a term.
 fn goal_term(src: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<Term, ParseError> {
-    parse_parens_goal(&format!("({src} \u{228F} y)"), &sig_parser(msig)).map(|(g, _)| match g {
-        GoalSpec::Subterm(small, _) => small,
+    let tree = crate::parse_proof_tree(&format!("by solve({src} ⊏ y)"), &sig_parser(msig))?;
+    match &tree.method {
+        ParsedMethod::SolveGoal(GoalSpec::Subterm(small, _)) => Ok(small.clone()),
         other => panic!("expected a subterm goal for {src}, got {other:?}"),
-    })
+    }
 }
 
 #[test]

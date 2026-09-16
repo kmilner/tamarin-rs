@@ -30,6 +30,8 @@ mod include_parser;
 use include_parser::ConditionalState;
 #[path = "process_parser.rs"]
 mod process_parser;
+#[path = "proof_tree.rs"]
+pub mod proof_tree;
 #[path = "term_parser.rs"]
 mod term_parser;
 use term_parser::{TermHead, TermList};
@@ -41,7 +43,6 @@ use crate::parse_error::{
     bounded_diagnostic_text, IllegalDiffReason, ParseContext, ParseErrorKind,
     MAX_DIAGNOSTIC_NAME_CHARS,
 };
-use crate::proof_tree::{parse_diff_proof_prefix, parse_proof_prefix};
 
 /// GHC's `show :: String -> String`: the string in double quotes, every
 /// character through [`show_lit_char`], and the `\&` separator GHC's
@@ -629,8 +630,7 @@ pub struct Parser<'a> {
     sort_suffix_consumed: bool,
     /// Whether prefix applications resolve through [`Self::lookup_arity`]
     /// (HS `naryOpApp`/`binaryAlgApp`, Theory/Text/Parser/Term.hs:88-121).  True
-    /// for theory parsing and for [`parse_parens_goal`], which runs inside the
-    /// theory parser's symbol state; [`parse_formula_str`] and
+    /// for theory parsing, including stored proof goals; [`parse_formula_str`] and
     /// [`parse_intruder_rules`] clear it because they re-parse RENDERED text
     /// whose heads their callers resolve, where every application must be
     /// accepted structurally.
@@ -1430,8 +1430,9 @@ impl<'a> Parser<'a> {
         self.state.sig_enable_nat = sig.enable_nat;
     }
 
-    /// Copy the symbol state a sub-parser reads from the parser whose text
-    /// carried it.  HS runs a nested parse in the enclosing parser's state,
+    /// Seed the standalone proof entry point with its caller's symbol state.
+    /// Proofs in a theory already share that state. HS runs the proof grammar
+    /// in the enclosing parser's state,
     /// which supplies `acterm` the INFIX spelling of the user-declared `[AC]`
     /// symbols (Theory/Text/Parser/Term.hs:166-172), `nullaryApp` the arity-0
     /// constants (Theory/Text/Parser/Term.hs:158-163) and `diff` its gate.
@@ -3431,8 +3432,7 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         let start = self.lx.pos().offset;
-        let (tree, lexer) = parse_proof_prefix(self.lx.clone(), self)?;
-        self.lx = lexer;
+        let tree = self.proof_tree()?;
         let raw = self.lx.src()[start..self.lx.pos().offset].to_owned();
         Ok(Some(ProofSkeleton {
             raw,
@@ -3464,8 +3464,7 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         let start = self.lx.pos().offset;
-        let ((), lexer) = parse_diff_proof_prefix(self.lx.clone(), self)?;
-        self.lx = lexer;
+        self.diff_proof_tree()?;
         let raw = self.lx.src()[start..self.lx.pos().offset].to_owned();
         Ok(Some(ProofSkeleton { raw, tree: None }))
     }
@@ -5212,38 +5211,6 @@ pub fn parse_formula_str(s: &str, msig: &MaudeSig) -> Result<Formula, ParseError
         Ok(f)
     })();
     p.lx.finish(result)
-}
-
-/// Parse the `( <goal> )` of a stored `solve` step at the head of `s`, and
-/// report the byte offset just past its closing `)`.
-///
-/// HS reads the step as `symbol "solve" *> parens goal`
-/// (Theory/Text/Parser/Proof.hs:80), one parser over one input; the offset
-/// lets the proof-skeleton parser resume where this one stopped.
-///
-/// `parent` is the parser the stored text came out of, whose symbol state
-/// [`Parser::seed_from`] copies: HS's proof parser runs inside the theory
-/// parser and reads its `stSig` (Theory/Text/Parser/Proof.hs:38-72), so an
-/// application head in the goal resolves through `lookupArity`
-/// (Theory/Text/Parser/Term.hs:88-105) against the theory's symbols exactly
-/// as one in a rule does.
-pub(crate) fn parse_parens_goal(
-    s: &str,
-    parent: &Parser<'_>,
-) -> Result<(GoalSpec, usize), ParseError> {
-    let mut p = Parser::new(s, &[], false);
-    p.seed_from(parent);
-    let result = (|| {
-        p.require_punct("(")?;
-        let g = p.goal()?;
-        p.skip_ws();
-        if !p.lx.eat_str(")") {
-            return Err(p.err_expect_here("`)` after the goal"));
-        }
-        Ok((g, p.lx.pos().offset))
-    })();
-    p.lx.finish(result)
-        .map_err(|error| error.with_context(ParseContext::Proof))
 }
 
 #[cfg(test)]

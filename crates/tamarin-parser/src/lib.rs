@@ -33,11 +33,11 @@ pub mod lexer;
 pub mod parse_error;
 pub mod parser;
 mod process_walk;
-pub mod proof_tree;
 mod term_walk;
 
 pub use ast::*;
 pub use parse_error::{DiagnosticLabel, IllegalDiffReason, ParseContext, ParseErrorKind};
+pub use parser::proof_tree;
 pub use parser::{
     parse_diff_theory, parse_diff_theory_with_base, parse_intruder_rules, parse_theory,
     parse_theory_with_base, parse_theory_with_manifest, InputAlias, ParseError,

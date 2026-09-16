@@ -247,7 +247,7 @@ impl<'a> Lexer<'a> {
         true
     }
 
-    /// Like [`symbol`], but does not consume on failure.
+    /// Like [`Self::symbol`], but does not consume on failure.
     pub fn try_symbol(&mut self, s: &str) -> bool {
         let save = self.clone();
         if self.symbol(s) {
