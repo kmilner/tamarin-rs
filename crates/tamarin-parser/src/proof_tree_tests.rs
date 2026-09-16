@@ -23,6 +23,28 @@ fn leaf_forms() {
 }
 
 #[test]
+fn standalone_proofs_reject_input_after_a_complete_skeleton() {
+    for proof in ["by sorry", "SOLVED", "induction case rule by sorry qed"] {
+        for following in ["trailing", "text{* documentation *}", "lemma L: \"T\""] {
+            let prefix = format!("{proof} \t/* whitespace */\n");
+            let source = format!("{prefix}{following}");
+            let error = parse_proof_tree(&source, &bare_parser())
+                .expect_err("the standalone parser must consume the whole input");
+            assert_eq!(error.span().start, prefix.len(), "{source}: {error:?}");
+            assert!(
+                error
+                    .diagnostic_notes()
+                    .iter()
+                    .any(|note| note.contains("expected end of proof")),
+                "{source}: {error:?}"
+            );
+        }
+    }
+    parse_proof_tree("by sorry \t/* whitespace */\n", &bare_parser())
+        .expect("trailing whitespace and ordinary comments are allowed");
+}
+
+#[test]
 fn diff_proof_uses_its_own_methods() {
     let src = "
         rule-equivalence
@@ -133,6 +155,15 @@ fn parse_goal_str(src: &str, parent: &Parser<'_>) -> Result<GoalSpec, ParseError
 /// than the framing around it.
 fn goal(src: &str) -> GoalSpec {
     parse_goal_str(src, &bare_parser()).unwrap_or_else(|e| panic!("{src}: {e}"))
+}
+
+#[test]
+fn fact_goals_preserve_annotations_and_comments_around_the_separator() {
+    for (separator, commented_separator) in [("@", "@"), ("▶₁₂", "▶ /* index */ ₁₂")] {
+        let plain = format!("!Pk(x)[no_precomp] {separator} #i.2");
+        let commented = format!("/* fact */ !Pk(x) /* annotation */ [no_precomp] /* separator */ {commented_separator} /* node */ #i.2 /* end */");
+        assert_eq!(goal(&commented), goal(&plain));
+    }
 }
 
 /// HS `actionGoal` (Theory/Text/Parser/Proof.hs:49-52) keeps the whole
@@ -406,7 +437,10 @@ fn nested_case_block() {
 /// accepts fails the whole skeleton parse.
 #[test]
 fn unparseable_goal_fails_the_tree_parse() {
-    assert!(parse_proof_tree("solve( garbage_no_marker ) by sorry", &bare_parser()).is_err());
+    let error = parse_proof_tree("solve( garbage_no_marker ) by sorry", &bare_parser())
+        .expect_err("invalid nested goal must fail");
+    assert!(error.span().start > 0);
+    assert_eq!(error.line_column().0, 1);
 }
 
 /// HS `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) is an `asum` of seven

@@ -1173,6 +1173,51 @@ mod tests {
         assert_eq!(parsed("Ex ~k. Made(k)"), want);
     }
 
+    #[test]
+    fn rule_let_freshening_preserves_typed_free_variables() {
+        let theory = tamarin_parser::parse_theory(
+            "theory T begin rule R: let x = y.1 in []
+             --[_restrict(Ex y.1 #i. A(x,y.1,y:foo) @ i)]-> [] end",
+            &[],
+        )
+        .unwrap();
+        let tamarin_parser::ast::TheoryItem::Rule(rule) = &theory.items[0] else {
+            panic!("expected a rule");
+        };
+        let formula = from_parser(&rule.embedded_restrictions[0], &pair_maude_sig()).unwrap();
+        assert_eq!(
+            formula_frees(&formula),
+            vec![LVar::new("y", LSort::Msg, 0), LVar::new("y", LSort::Msg, 1)]
+        );
+        assert_eq!(formula, parsed("Ex y.2 #i. A(y.1,y.2,y:foo) @ i"));
+    }
+
+    #[test]
+    fn rule_let_substitution_uses_untyped_variable_identity() {
+        for (binding, input, expected) in [
+            ("x=y", "Ex y. A(x,y:foo)", "Ex y.1. A(y,y.1)"),
+            ("x=y:foo", "Ex y. A(x,y)", "Ex y.1. A(y,y.1)"),
+            ("x=z", "Ex x:foo. A(x)", "Ex x. A(x)"),
+            ("x=z", "A(x:foo)", "A(z)"),
+            (
+                "x=y",
+                "Ex y. A(x,y:foo) & (Ex y:foo. B(y))",
+                "Ex y.1. A(y,y.1) & (Ex y.2. B(y.2))",
+            ),
+            ("x=z", "Ex #x. A(x,x.1) @ x", "Ex #x. A(z,x.1) @ x"),
+        ] {
+            let source = format!(
+                "theory T begin rule R: let {binding} in [] --[_restrict({input})]-> [] end"
+            );
+            let theory = parse_theory(&source, &[]).unwrap();
+            let tamarin_parser::ast::TheoryItem::Rule(rule) = &theory.items[0] else {
+                panic!("expected a rule");
+            };
+            let actual = from_parser(&rule.embedded_restrictions[0], &pair_maude_sig()).unwrap();
+            assert_eq!(actual, parsed(expected), "{binding}: {input}");
+        }
+    }
+
     /// The inner binder closes the occurrence first, so the outer binder of
     /// the same name finds nothing left to close.
     #[test]

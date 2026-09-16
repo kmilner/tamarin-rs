@@ -30,6 +30,7 @@ mimalloc = { version = "0.1", default-features = false }
 libc = "0.2"
 rayon = { workspace = true }
 clap = { workspace = true }
+codespan-reporting = "0.13.1"
 
 [dev-dependencies]
 tamarin-test-support = { workspace = true }

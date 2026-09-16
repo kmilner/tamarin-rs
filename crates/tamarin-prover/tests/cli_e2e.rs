@@ -1261,3 +1261,41 @@ fn input_manifest_lemma_metadata_uses_preprocessed_theory() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn input_manifest_distinguishes_syntax_rejection_from_missing_inputs() {
+    let dir = std::env::temp_dir().join(format!("tamarin_manifest_status_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = dir.join("root.spthy");
+    std::fs::write(dir.join("fragment.inc"), "#include \"missing.spthy\"").unwrap();
+    for (source, expected) in [
+        ("theory T begin end", 0),
+        ("theory T begin ? end", 3),
+        ("theory T begin #include \"missing.spthy\" end", 1),
+        ("theory T begin #include \"fragment.inc\" end", 1),
+    ] {
+        std::fs::write(&root, source).unwrap();
+        let (code, stdout, stderr) = run_binary(&["input-manifest"], &[&root]);
+        assert_eq!(code, expected, "{source}: {stderr}");
+        if code != 0 {
+            assert!(
+                stdout.is_empty(),
+                "failed manifests must not publish rows: {stdout}"
+            );
+            assert!(!stderr.is_empty());
+        }
+        if code == 1 {
+            assert!(stderr.contains("missing.spthy"), "{stderr}");
+        }
+        if code == 3 {
+            assert!(
+                stderr.contains(&root.to_string_lossy().to_string()),
+                "{stderr}"
+            );
+        }
+    }
+    let (code, stdout, stderr) = run_binary(&["input-manifest"], &[&dir.join("absent.spthy")]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stdout.is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}

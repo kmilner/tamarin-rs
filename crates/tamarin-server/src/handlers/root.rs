@@ -53,14 +53,13 @@ pub async fn post(State(state): State<Arc<AppState>>, mut mp: Multipart) -> Resp
             break;
         }
         let src = match std::str::from_utf8(&bytes) {
-            Ok(s) => s.to_string(),
+            Ok(s) => s,
             Err(_) => {
                 alert_msg = Some("upload was not valid UTF-8".into());
                 break;
             }
         };
-        match theory_io::load_from_source(&src, TheoryOrigin::Upload(filename.clone()), &state.cfg)
-        {
+        match theory_io::load_from_source(src, TheoryOrigin::Upload(filename.clone()), &state.cfg) {
             Ok(entry) => {
                 let idx = state.store.insert(entry);
                 tracing::info!(idx, file = %filename, "uploaded theory");

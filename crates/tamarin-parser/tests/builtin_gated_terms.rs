@@ -10,21 +10,10 @@
 //! level is skipped and its operator is not a term operator at all.  `multterm`
 //! guards `expterm` as well, so `^` needs the same `enableDH` that `*` needs.
 //!
-//! Each expectation below is the pinned oracle's stderr for the same source,
-//! verbatim.
+//! Operators must be rejected when disabled and lower to the right AST when enabled.
 
 use tamarin_parser::{parse_theory, BinOp, Fact, Term, TheoryItem};
 
-/// The frame for `src`, with `t.spthy` as the `SourcePos` file name.
-fn frame(src: &str) -> String {
-    parse_theory(src, &[])
-        .expect_err("the probes below must all fail to parse")
-        .with_source("t.spthy")
-        .to_string()
-}
-
-/// A theory whose one rule sends `x <op> y`, with `builtins` in front when
-/// non-empty.
 fn theory(builtins: &str, op: &str) -> String {
     let head = if builtins.is_empty() {
         String::new()
@@ -34,7 +23,6 @@ fn theory(builtins: &str, op: &str) -> String {
     format!("theory T begin\n{head}rule R: [ In(x), In(y) ] --[ ]-> [ Out(x {op} y) ]\nend\n")
 }
 
-/// The operator at the root of that rule's single conclusion argument.
 fn conclusion_op(src: &str) -> BinOp {
     let thy = parse_theory(src, &[]).expect("the probes below must all parse");
     let rule = thy
@@ -54,31 +42,27 @@ fn conclusion_op(src: &str) -> BinOp {
     }
 }
 
-/// Without `builtins: multiset` neither `++` nor `+` is a term operator, and
-/// the frame is the one the closed `msetterm` level leaves.
 #[test]
-fn multiset_union_needs_its_builtin() {
-    for op in ["++", "+"] {
-        assert_eq!(
-            frame(&theory("", op)),
-            "\"t.spthy\" (line 2, column 42):\nunexpected \"+\"\nexpecting \".\", \",\" or \")\"",
-            "{op}"
-        );
-        assert_eq!(conclusion_op(&theory("multiset", op)), BinOp::Union);
+fn builtin_operators_require_their_signature_flags() {
+    for (signature, op, expected) in [
+        ("multiset", "++", BinOp::Union),
+        ("multiset", "+", BinOp::Union),
+        ("natural-numbers", "%+", BinOp::NatPlus),
+        ("xor", "XOR", BinOp::Xor),
+        ("xor", "⊕", BinOp::Xor),
+        ("diffie-hellman", "*", BinOp::Mult),
+        ("diffie-hellman", "^", BinOp::Exp),
+        ("bilinear-pairing", "*", BinOp::Mult),
+        ("bilinear-pairing", "^", BinOp::Exp),
+    ] {
+        let source = theory("", op);
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert_eq!(error.span().start, source.find(op).unwrap());
+        assert_eq!(conclusion_op(&theory(signature, op)), expected);
     }
-}
-
-/// `%+` needs `builtins: natural-numbers`.
-#[test]
-fn nat_plus_needs_its_builtin() {
-    assert_eq!(
-        frame(&theory("", "%+")),
-        "\"t.spthy\" (line 2, column 42):\nunexpected \"%\"\nexpecting \".\", \",\" or \")\""
-    );
-    assert_eq!(
-        conclusion_op(&theory("natural-numbers", "%+")),
-        BinOp::NatPlus
-    );
+    let source = theory("multiset", "^");
+    let error = parse_theory(&source, &[]).unwrap_err();
+    assert_eq!(error.span().start, source.find('^').unwrap());
 }
 
 #[test]
@@ -96,8 +80,6 @@ fn nat_literals_and_variables_need_their_builtin() {
     }
 }
 
-/// `reserved "%1"` backtracks at an identifier boundary, after which
-/// upstream's alphanumeric `identStart` reads `%12` as one nat variable.
 #[test]
 fn digit_initial_nat_variable_is_not_split_as_nat_one() {
     let thy = parse_theory(
@@ -122,31 +104,38 @@ fn digit_initial_nat_variable_is_not_split_as_nat_one() {
 }
 
 #[test]
-fn disabled_nat_diagnostics_match_haskell() {
-    for (term, expected) in [
-        (
-            "1:nat",
-            "\"t.spthy\" (line 2, column 28):\nunexpected \")\"\nnatural-number literal 1:nat requires the natural-numbers builtin",
-        ),
-        (
-            "%1",
-            "\"t.spthy\" (line 2, column 25):\nunexpected \")\"\nnatural-number literal %1 requires the natural-numbers builtin",
-        ),
-        (
-            "%n",
-            "\"t.spthy\" (line 2, column 24):\nnat-sorted variables requires the natural-numbers builtin",
-        ),
-        (
-            "%'n'",
-            "\"t.spthy\" (line 2, column 24):\nunexpected \"'\"\nnat names requires the natural-numbers builtin",
-        ),
-        (
-            "n:nat",
-            "\"t.spthy\" (line 2, column 28):\nunexpected \")\"\nnat-sorted variables requires the natural-numbers builtin",
-        ),
+fn disabled_nat_diagnostics_identify_the_construct() {
+    for (term, label) in [
+        ("1:nat", "1:nat"),
+        ("%1", "%1"),
+        ("%n", "%"),
+        ("%'n'", "%"),
+        ("n:nat", "nat"),
     ] {
         let src = format!("theory T begin\nrule R: [ ] --> [ Out({term}) ]\nend");
-        assert_eq!(frame(&src), expected, "{term}");
+        let error = parse_theory(&src, &[]).unwrap_err();
+        assert!(error
+            .diagnostic_message()
+            .contains("requires the natural-numbers builtin"));
+        assert_eq!(&src[error.span()], label, "{term}: {error}");
+    }
+    for body in [
+        "rule R: [] --> [Out(%n)]",
+        "lemma L: \"All %n. T\"",
+        "process: in('c', =%n)",
+    ] {
+        let source = format!("theory T begin {body} end");
+        let error = parse_theory(&source, &[]).unwrap_err();
+        assert!(error
+            .diagnostic_message()
+            .contains("requires the natural-numbers builtin"));
+        let start = source.find('%').unwrap();
+        assert_eq!(error.span(), start..start + 1, "{body}: {error}");
+        parse_theory(
+            &format!("theory T begin builtins: natural-numbers {body} end"),
+            &[],
+        )
+        .expect("enabling the builtin accepts the same construct");
     }
 }
 
@@ -157,53 +146,4 @@ fn multiset_comparison_needs_its_builtin() {
     };
     assert!(parse_theory(&body(""), &[]).is_err());
     parse_theory(&body("builtins: multiset\n"), &[]).expect("multiset comparison");
-}
-
-/// Both spellings of the xor operator (`opXor`, Token.hs:555-556) need
-/// `builtins: xor`.
-#[test]
-fn xor_needs_its_builtin() {
-    assert_eq!(
-        frame(&theory("", "XOR")),
-        "\"t.spthy\" (line 2, column 42):\nunexpected \"X\"\nexpecting \".\", \",\" or \")\""
-    );
-    assert_eq!(
-        frame(&theory("", "\u{2295}")),
-        "\"t.spthy\" (line 2, column 42):\nunexpected \"\\8853\"\nexpecting \".\", \",\" or \")\""
-    );
-    for op in ["XOR", "\u{2295}"] {
-        assert_eq!(conclusion_op(&theory("xor", op)), BinOp::Xor);
-    }
-}
-
-/// `multterm` guards `expterm` too, so `*` and `^` both need `enableDH` —
-/// which `builtins: bilinear-pairing` also sets, through `maudeSig`'s
-/// `enableDH = enableDH || enableBP` (Term/Maude/Signature.hs:110-112).
-#[test]
-fn mult_and_exp_need_the_dh_bit() {
-    assert_eq!(
-        frame(&theory("", "*")),
-        "\"t.spthy\" (line 2, column 42):\nunexpected \"*\"\nexpecting \".\", \",\" or \")\""
-    );
-    assert_eq!(
-        frame(&theory("", "^")),
-        "\"t.spthy\" (line 2, column 42):\nunexpected \"^\"\nexpecting \".\", \",\" or \")\""
-    );
-    assert_eq!(conclusion_op(&theory("diffie-hellman", "*")), BinOp::Mult);
-    assert_eq!(conclusion_op(&theory("diffie-hellman", "^")), BinOp::Exp);
-    assert_eq!(conclusion_op(&theory("bilinear-pairing", "*")), BinOp::Mult);
-    assert_eq!(conclusion_op(&theory("bilinear-pairing", "^")), BinOp::Exp);
-}
-
-/// The `expecting` set names exactly the levels that ARE open: with multiset
-/// alone, the `^` failure carries `msetterm`'s two `opUnion` spellings and
-/// nothing from the closed `multterm`/`xorterm`/`natterm` levels.
-#[test]
-fn the_frame_lists_only_the_open_levels() {
-    assert_eq!(
-        frame(&theory("multiset", "^")),
-        "\"t.spthy\" (line 3, column 42):\n\
-         unexpected \"^\"\n\
-         expecting \".\", \"++\", \"+\", \",\" or \")\""
-    );
 }

@@ -292,7 +292,9 @@ walks the RS test harness's ladder because its captures must use the maude
   `grep -oE 'verdict=[^ ]+'` still works on these logs — and it puts "the
   files it compared agree" on the DONE line rather than leaving it to be
   inferred from the ledger. Today's ledger yields 23 such
-  rows (pe 19, json 3, module 1). On the 15 `pe oracle-timeout` ones the port
+  rows (pe 19, module 3, json 1). The three module rows are one input tested
+  in `spthy`, `spthytyped`, and `msr` output modes.
+  On the 15 `pe oracle-timeout` ones the port
   is never executed at all — the sweeps return on `hs>=124` before invoking
   `$RS_BIN` — and since `hs_run` caches a timeout together with its cap and
   serves it whenever the new cap is no larger, both the parallel pass and the

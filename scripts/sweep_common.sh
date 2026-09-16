@@ -2,7 +2,7 @@
 # json_sweep.sh). Source me. Provides:
 #   grun         — OOM-guarded, memory-capped, time-capped run
 #   norm         — blank the volatile banner lines (same set as corpus_file_diff.sh)
-#   nerr         — collapse the duplicated [Open Chains] stderr line
+#   nerr         — normalize known warnings and parser diagnostic frames
 #   io_diff      — first of stdout/stderr that differs after normalization
 #   row          — append one tab-separated row to $OUT
 #   infra_abort / nocompare_check — detect a row that compared NOTHING
@@ -62,39 +62,7 @@ row() { local IFS=$'\t'; printf '%s\n' "$*" >> "$OUT"; }
 # four lines the gates' strip_env deletes, kept as position evidence here
 # because nonempty_compared distinguishes blanked from deleted.
 
-# Normalize the two known pre-existing stderr divergences (NEITHER is any
-# flag's — both reproduce on a plain `tamarin-prover <file>` run, and both are
-# byte-identical between the current binary and a pre-branch build):
-#
-#   [Open Chains]        RS's derivation-check stage emits the "Too many chain
-#                        constraints" warning twice where HS emits it once;
-#                        consecutive duplicates of that exact line collapse.
-#   [Saturating Sources] Both sides trace saturation progress on every CLI
-#                        close (showSaturation = True), but the SEQUENCE COUNTS
-#                        still differ structurally: HS traces once per force of
-#                        a ClosedRuleCache thunk, RS once per saturation it
-#                        actually runs — one extra sequence on a theory with a
-#                        [sources] lemma, one where HS emits none on a theory
-#                        whose proofs never consult a source case, and counts
-#                        differing both ways under --auto-sources (run.rs's
-#                        close_translated_theory enumerates all three). 282 of
-#                        the 372 case-studies-regression theories differ by
-#                        these lines alone.
-#
-# Dropping them is the only way the stderr axis can police ANYTHING else: left
-# in, the class alone paints the corpus red and a genuinely new warning hides
-# in the noise. It is a real port gap, not an accepted divergence — closing it
-# retires this filter.
-#
-# What that costs, measured by injecting lines into the RS side: a stderr line
-# beginning "[Saturating Sources]" is invisible to every sweep whatever it says,
-# and so is any difference in how many times the [Open Chains] warning repeats
-# CONSECUTIVELY (the ledger's stderr-open-chains rows are the non-consecutive
-# count differences, which do still surface). Any other stderr byte is caught.
-nerr() {
-  awk '!(/^\[Open Chains\] Too many chain constraints/ && $0 == prev) { print } { prev = $0 }' \
-    | grep -v '^\[Saturating Sources\]'
-}
+# nerr is also provided by gate_common.sh.
 
 # io_diff <workdir>
 #   Echoes the first of stdout/stderr that differs between <workdir>/hs.* and

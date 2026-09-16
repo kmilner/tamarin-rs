@@ -99,12 +99,6 @@ pub enum TheoryItem {
         header: String,
         body: String,
     },
-    // `#ifdef` never yields an item: the parser evaluates the flag formula
-    // and splices the live branch's items into the surrounding stream
-    // (parser.rs `expand_ifdef`), matching HS's parse-time preprocessing —
-    // so `items` is always the flat post-preprocessor stream.
-    Define(String),
-    Include(String),
 }
 
 // =============================================================================
@@ -591,18 +585,6 @@ pub struct VarSpec {
     pub idx: u64,
     pub sort: LSort,
     pub typ: Option<String>, // SAPIC type annotation
-}
-
-// =============================================================================
-// Flag formulas (for #ifdef)
-// =============================================================================
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum FlagFormula {
-    Atom(String),
-    Not(Box<FlagFormula>),
-    And(Box<FlagFormula>, Box<FlagFormula>),
-    Or(Box<FlagFormula>, Box<FlagFormula>),
 }
 
 #[cfg(test)]

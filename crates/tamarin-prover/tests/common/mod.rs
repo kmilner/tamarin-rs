@@ -119,6 +119,17 @@ pub fn joined(lines: &[&str]) -> String {
     lines.join("\n") + "\n"
 }
 
+#[track_caller]
+pub fn assert_diagnostic(stderr: &str, expected: &[&str]) {
+    for text in expected {
+        assert!(stderr.contains(text), "missing {text:?} in:\n{stderr}");
+    }
+    assert!(
+        !stderr.contains("CallStack"),
+        "unexpected GHC details:\n{stderr}"
+    );
+}
+
 /// Run the built binary on `inputs` with `extra` flags, returning
 /// `(exit code, raw stdout, raw stderr)`.  [`maude_arg`]'s `--with-maude`
 /// precedes every other argument when a maude resolved.
