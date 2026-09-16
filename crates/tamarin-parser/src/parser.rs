@@ -8,7 +8,7 @@
 // std kept (byte-inert) — iteration order never reaches output.
 #[allow(clippy::disallowed_types)]
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tamarin_term::function_symbols::{
@@ -924,6 +924,56 @@ impl ArityRes {
     }
 }
 
+/// One open `#include`, as seen by the cycle check in [`Parser::expand_include`].
+///
+/// Cycle identity combines the file, its include-resolution directory, and
+/// entry flags. Nested paths resolve from the written path's directory, even
+/// for symlinks (HS `takeDirectory filepath`, Theory/Text/Parser.hs:342).
+/// Conditions depend on flags (`evalformula`, Theory/Text/Parser.hs:223), which
+/// only grow through `#define` (Theory/Text/Parser.hs:312). A changed flag set
+/// therefore permits guarded re-entry; an identical frame indicates a cycle.
+#[derive(Debug)]
+struct IncludeFrame {
+    /// The path as resolved, for the error message.
+    shown: PathBuf,
+    /// Canonical directory that nested includes resolve against.
+    dir: PathBuf,
+    /// Canonical path of the file itself, so aliases (a symlink, `a/../a`)
+    /// are one file.
+    file: PathBuf,
+    /// The flag set on entry, sorted so two equal sets compare equal and the
+    /// error message lists them in a fixed order.
+    flags: Vec<String>,
+}
+
+impl IncludeFrame {
+    /// Build the frame for `resolved`, which has already been read.  Both
+    /// canonicalisations therefore only fail for an exotic reason (permission
+    /// on a parent, a race), and then fall back to the path as written rather
+    /// than losing the check.
+    fn new<'f>(resolved: &Path, flags: impl Iterator<Item = &'f String>) -> Self {
+        let dir = match resolved.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d,
+            _ => Path::new("."),
+        };
+        IncludeFrame {
+            shown: resolved.to_path_buf(),
+            dir: std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()),
+            file: std::fs::canonicalize(resolved).unwrap_or_else(|_| resolved.to_path_buf()),
+            flags: {
+                let mut flags: Vec<String> = flags.cloned().collect();
+                flags.sort();
+                flags
+            },
+        }
+    }
+
+    /// Would entering `other` replay this frame's parse?
+    fn re_enters(&self, other: &IncludeFrame) -> bool {
+        self.file == other.file && self.dir == other.dir && self.flags == other.flags
+    }
+}
+
 /// Parser state inherited by an included file and returned to its parent.
 /// Lexer position, source identity, and diagnostic carry remain file-local on
 /// [`Parser`]. Keeping the inherited state in one value makes that boundary
@@ -934,6 +984,8 @@ struct ParserState {
     enable_diff: bool,
     input_aliases: Vec<InputAlias>,
     emit_warnings: bool,
+    /// Active includes, outermost first, inherited by each sub-parser.
+    include_stack: Vec<IncludeFrame>,
     ac_fun_syms: Arc<Vec<String>>,
     fun_syms: Arc<Vec<(String, FunOptions)>>,
     macro_syms: Arc<Vec<(String, FunOptions)>>,
@@ -1079,6 +1131,7 @@ impl<'a> Parser<'a> {
         Parser {
             lx: Lexer::new(src),
             state: ParserState {
+                include_stack: Vec::new(),
                 enable_diff: is_diff || flags_set.contains("diff"),
                 flags: flags_set,
                 input_aliases: Vec::new(),
@@ -1920,10 +1973,38 @@ impl<'a> Parser<'a> {
             ))
         })?;
 
+        // Check before recursion, but after reading so missing files retain
+        // their read errors. Only active frames participate in the check.
+        let frame = IncludeFrame::new(&resolved, self.state.flags.iter());
+        if let Some(at) = self
+            .state
+            .include_stack
+            .iter()
+            .position(|open| open.re_enters(&frame))
+        {
+            let mut chain: Vec<String> = self.state.include_stack[at..]
+                .iter()
+                .map(|open| open.shown.display().to_string())
+                .collect();
+            chain.push(frame.shown.display().to_string());
+            let with = if frame.flags.is_empty() {
+                "no `#define` flags set".to_string()
+            } else {
+                format!("the same `#define` flags set ({})", frame.flags.join(", "))
+            };
+            return Err(self.err(format!(
+                "`#include` cycle: {}, re-entered with {with}",
+                chain.join(" -> ")
+            )));
+        }
+
         // Nested includes in the fragment resolve relative to ITS directory
         // (HS recurses: `takeDirectory filepath`).
         let sub_base = resolved.parent().map(|p| p.to_path_buf());
-        self.parse_include_fragment(&content, sub_base, resolved, staged)
+        self.state.include_stack.push(frame);
+        let result = self.parse_include_fragment(&content, sub_base, resolved, staged);
+        self.state.include_stack.pop();
+        result
     }
 
     /// Parse a header-less theory-item fragment (an included file body — no
