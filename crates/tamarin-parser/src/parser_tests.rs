@@ -2320,8 +2320,6 @@ fn self_include_is_a_cycle() {
 /// The SAME file included twice along different paths is a diamond, NOT a
 /// cycle: nothing is re-entered while still open, so it must still parse.
 /// This is the false positive a naive "have I seen this path" check produces.
-/// (The shared file declares a function rather than a rule, because a rule
-/// included twice trips the separate duplicate-rule guard.)
 #[test]
 fn diamond_include_is_not_a_cycle() {
     let d = IncludeDir::new("diamond");

@@ -924,24 +924,15 @@ impl ArityRes {
     }
 }
 
-/// Parser state inherited by an included file and returned to its parent.
-/// Lexer position, source identity, and diagnostic carry remain file-local on
-/// [`Parser`]. Keeping the inherited state in one value makes that boundary
-/// structural instead of maintaining a parallel field list.
 /// One open `#include`, as seen by the cycle check in [`Parser::expand_include`].
 ///
-/// What an include does is a function of exactly three things: the bytes it
-/// reads (`file`), the directory its own nested includes resolve against
-/// (`dir` — HS `takeDirectory filepath`, Theory/Text/Parser.hs:342, the directory of the
-/// path AS WRITTEN, so a symlink resolves from where the link sits, not where
-/// it points), and the preprocessor flags in force when it is entered
-/// (`flags`).  Flags are the only parser state an `#ifdef` consults
-/// (`evalformula`, Theory/Text/Parser.hs:223), a dead branch is skipped unparsed, and
-/// `#define` only ever ADDS a flag (Theory/Text/Parser.hs:312 — there is no `#undef`).
-/// So re-entering a frame with all three equal replays the same parse and
-/// recurses forever, while re-entering with a grown flag set is what
-/// include guards (`#ifdef not X` / `#define X`) rely on and must pass.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Cycle identity combines the file, its include-resolution directory, and
+/// entry flags. Nested paths resolve from the written path's directory, even
+/// for symlinks (HS `takeDirectory filepath`, Theory/Text/Parser.hs:342).
+/// Conditions depend on flags (`evalformula`, Theory/Text/Parser.hs:223), which
+/// only grow through `#define` (Theory/Text/Parser.hs:312). A changed flag set
+/// therefore permits guarded re-entry; an identical frame indicates a cycle.
+#[derive(Debug)]
 struct IncludeFrame {
     /// The path as resolved, for the error message.
     shown: PathBuf,
@@ -983,19 +974,17 @@ impl IncludeFrame {
     }
 }
 
+/// Parser state inherited by an included file and returned to its parent.
+/// Lexer position, source identity, and diagnostic carry remain file-local on
+/// [`Parser`]. Keeping the inherited state in one value makes that boundary
+/// structural instead of maintaining a parallel field list.
 struct ParserState {
     #[allow(clippy::disallowed_types)]
     flags: HashSet<String>,
     enable_diff: bool,
     input_aliases: Vec<InputAlias>,
     emit_warnings: bool,
-    /// The `#include` files currently being parsed, outermost first, each with
-    /// the state that decides how its parse goes.  Re-entering a frame that is
-    /// still open is a cycle: without this the recursion in `expand_include`
-    /// is unbounded and the process dies with a stack overflow (the Haskell
-    /// prover simply hangs instead).  It rides in [`ParserState`] so it
-    /// threads into and back out of the sub-parser with the rest of the
-    /// inherited state.
+    /// Active includes, outermost first, inherited by each sub-parser.
     include_stack: Vec<IncludeFrame>,
     ac_fun_syms: Arc<Vec<String>>,
     fun_syms: Arc<Vec<(String, FunOptions)>>,
@@ -1984,13 +1973,8 @@ impl<'a> Parser<'a> {
             ))
         })?;
 
-        // Cycle check, after the read (so a missing file still reports as a
-        // read failure) and before the recursion that would blow the stack.
-        // A cycle is re-entering an OPEN frame with nothing changed that could
-        // make the parse go differently — see [`IncludeFrame`] for why file,
-        // directory and flag set are exactly that.  Include guards pass
-        // because the guard's `#define` grows the flag set before the
-        // re-entry; a diamond passes because nothing is re-entered while open.
+        // Check before recursion, but after reading so missing files retain
+        // their read errors. Only active frames participate in the check.
         let frame = IncludeFrame::new(&resolved, self.state.flags.iter());
         if let Some(at) = self
             .state
