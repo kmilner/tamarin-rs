@@ -182,12 +182,18 @@ fn mk_theory_load_options_rejects_empty_heuristic() {
 // an input path reaches.
 #[test]
 fn open_file_reasons_follow_errno_to_io_error() {
+    // The errnos come from libc for the same reason the table does.  The
+    // `strerror` halves are spelled identically by glibc and by the BSD
+    // libc, so the expected bytes stay exact.
     let cases = [
-        (2, "does not exist (No such file or directory)"),
-        (13, "permission denied (Permission denied)"),
-        (20, "inappropriate type (Not a directory)"),
-        (36, "invalid argument (File name too long)"),
-        (40, "invalid argument (Too many levels of symbolic links)"),
+        (libc::ENOENT, "does not exist (No such file or directory)"),
+        (libc::EACCES, "permission denied (Permission denied)"),
+        (libc::ENOTDIR, "inappropriate type (Not a directory)"),
+        (libc::ENAMETOOLONG, "invalid argument (File name too long)"),
+        (
+            libc::ELOOP,
+            "invalid argument (Too many levels of symbolic links)",
+        ),
     ];
     for (errno, expected) in cases {
         assert_eq!(

@@ -416,8 +416,11 @@ fn read_process_captures_both_streams() {
     assert_eq!(out, "hello\n");
     assert_eq!(err, "oops\n");
 
-    let (status, _, _) = read_process_with_exit_code("/bin/true", &[], "ignored input\n")
-        .expect("/bin/true should be startable");
+    // `sh -c 'exit 0'` rather than `/bin/true`, which macOS does not ship;
+    // both exit 0 without draining stdin, which is the point of the case.
+    let (status, _, _) =
+        read_process_with_exit_code("/bin/sh", &["-c", "exit 0"], "ignored input\n")
+            .expect("/bin/sh should be startable");
     assert!(status.success());
 }
 
