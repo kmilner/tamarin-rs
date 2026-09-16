@@ -53,7 +53,7 @@ fn pure_cell_is_detected_and_annotated() {
         panic!("expected inserted `new StateChannel:channel`")
     };
     assert_eq!(chan_var.var.name, "StateChannel");
-    assert_eq!(chan_var.stype, None);
+    assert_eq!(chan_var.stype.as_deref(), Some("channel"));
     assert_eq!(chan_an.is_state_channel.as_ref(), Some(&s));
     assert!(chan_an.pure_state, "the StateChannel new is marked pure");
 

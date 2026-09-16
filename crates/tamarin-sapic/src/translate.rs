@@ -710,9 +710,9 @@ mod tests {
             names,
             [
                 "Init",
-                "newx_0_",
-                "eventTestx_0_1",
-                "outffx_0_11",
+                "newxlol_0_",
+                "eventTestxlol_0_1",
+                "outffxlol_0_11",
                 "p_0_111"
             ]
         );

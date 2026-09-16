@@ -231,34 +231,34 @@ rule (modulo E) p_0_[color=#ffffff, process=\"|\", issapicrule,
                      role='Process']:
    [ State_( ) ] --> [ State_1( ), State_2( ) ]
 
-rule (modulo E) newx_0_1[color=#ffffff, process=\"new x.2;\", issapicrule,
-                         role='Process']:
+rule (modulo E) newxlol_0_1[color=#ffffff, process=\"new x.2:lol;\",
+                            issapicrule, role='Process']:
    [ State_1( ), Fr( x.2 ) ] --> [ State_11( x.2 ) ]
 
-rule (modulo E) outx_0_11[color=#ffffff, process=\"out(x.2);\",
-                          issapicrule, role='Process']:
+rule (modulo E) outxlol_0_11[color=#ffffff, process=\"out(x.2:lol);\",
+                             issapicrule, role='Process']:
    [ State_11( x.2 ) ] --> [ State_111( x.2 ), Out( x.2 ) ]
 
 rule (modulo E) p_0_111[color=#ffffff, process=\"0\", issapicrule,
                         role='Process']:
    [ State_111( x.2 ) ] --> [ ]
 
-rule (modulo E) newx_0_2[color=#ffffff, process=\"new x.3;\", issapicrule,
-                         role='Process']:
+rule (modulo E) newxlol_0_2[color=#ffffff, process=\"new x.3:lol;\",
+                            issapicrule, role='Process']:
    [ State_2( ), Fr( x.3 ) ] --> [ State_21( x.3 ) ]
 
-rule (modulo E) newx_0_21[color=#ffffff, process=\"new x.4;\", issapicrule,
-                          role='Process']:
+rule (modulo E) newxlol_0_21[color=#ffffff, process=\"new x.4:lol;\",
+                             issapicrule, role='Process']:
    [ State_21( x.3 ), Fr( x.4 ) ] --> [ State_211( x.3, x.4 ) ]
 
-rule (modulo E) eventRunxx_0_211[color=#ffffff,
-                                 process=\"event Run( x.3, x.4 );\", issapicrule, role='Process']:
+rule (modulo E) eventRunxlolxlol_0_211[color=#ffffff,
+                                       process=\"event Run( x.3:lol, x.4:lol );\", issapicrule, role='Process']:
    [ State_211( x.3, x.4 ) ]
   --[ Run( x.3, x.4 ) ]->
    [ State_2111( x.3, x.4 ) ]
 
-rule (modulo E) outxx_0_2111[color=#ffffff, process=\"out(<x.3, x.4>);\",
-                             issapicrule, role='Process']:
+rule (modulo E) outxlolxlol_0_2111[color=#ffffff,
+                                   process=\"out(<x.3:lol, x.4:lol>);\", issapicrule, role='Process']:
    [ State_2111( x.3, x.4 ) ]
   -->
    [ State_21111( x.3, x.4 ), Out( <x.3, x.4> ) ]
@@ -335,14 +335,21 @@ fn typed_output_resolves_bound_variables_without_changing_inference() {
                 .collect::<Vec<_>>()
         };
         assert_eq!(publics(&raw), publics(output));
-        let lower = crate::annotation::lower_for_translation::<tamarin_term::lterm::LVar>;
-        assert_eq!(lower(&raw), lower(output), "{process}");
+        let erase = |p: &PlainProcess| {
+            crate::process_walk::rewrite_variables(
+                p,
+                |v| Some(SapicLVar::untyped(v.var)),
+                Clone::clone,
+            )
+        };
+        assert_eq!(erase(&raw), erase(output), "{process}");
     }
 }
 
 /// Type inference may annotate occurrences of one variable differently. MSR
 /// translation must be invariant under those annotations, including its state
-/// optimisation, pattern substitutions, formulas and generated rule names.
+/// optimisation, pattern substitutions and formulas. Names and process
+/// attributes deliberately retain the occurrence types for proof compatibility.
 #[test]
 fn msr_translation_is_independent_of_type_annotations() {
     for process in TYPED_PROCESSES {
@@ -352,13 +359,18 @@ fn msr_translation_is_independent_of_type_annotations() {
                     "theory T begin functions: {functions} {options} process: {process} end"
                 );
                 let mut theory = build(&source);
-                let lowered = crate::annotation::lower_for_translation::<tamarin_term::lterm::LVar>(
-                    theory.processes().next().unwrap(),
-                );
-                assert!(vars_proc(&lowered).iter().all(|v| v.stype.is_none()));
                 crate::apply::apply_sapic(&mut theory, false)
                     .unwrap_or_else(|e| panic!("{source}: {e:?}"));
-                render_msr(&theory)
+                let rules = theory
+                    .rules()
+                    .map(|r| {
+                        let mut rule = r.rule.clone();
+                        rule.info.name = tamarin_theory::rule::ProtoRuleName::Fresh;
+                        rule.info.attributes.process = None;
+                        rule
+                    })
+                    .collect::<Vec<_>>();
+                (rules, theory.restrictions().cloned().collect::<Vec<_>>())
             };
             assert_eq!(
                 translate("f(a):a, g(b):b"),

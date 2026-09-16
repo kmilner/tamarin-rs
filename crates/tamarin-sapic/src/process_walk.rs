@@ -8,6 +8,21 @@ use tamarin_theory::sapic::{
     ProcessParsedAnnotation, SapicFormula, SapicLVar, SapicTerm,
 };
 
+/// Key for state/lock identity. Preserve the typed process itself for rendering
+/// and rule names; inference can give occurrences of one variable different tags.
+pub(crate) fn untyped_term(t: &SapicTerm) -> SapicTerm {
+    rewrite_term_cow(
+        t,
+        &mut |node| match node {
+            Term::Lit(Lit::Var(v)) if v.stype.is_some() => {
+                Some(var_term(SapicLVar::untyped(v.var)))
+            }
+            _ => None,
+        },
+        &mut f_app,
+    )
+}
+
 /// Rewrite process variables, including binders, match sets, formula frees and
 /// locations, while converting annotations. `None` retains a variable; term
 /// paths without replacements keep their shared storage. Formula-bound indices

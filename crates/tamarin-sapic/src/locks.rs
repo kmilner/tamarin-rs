@@ -27,6 +27,7 @@ use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::sapic::{Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
+use crate::process_walk::untyped_term;
 
 type AnnotatedProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 
@@ -49,21 +50,24 @@ fn annotate_each_closest_unlock(
     v: &LVar,
     p: &mut AnnotatedProc,
 ) -> Result<(), LockWfError> {
+    let t = untyped_term(t);
     crate::process_walk::walk_mut(p, (), |node, _| {
         match node {
             Process::Action(ac, ann, _) => match ac {
-                SapicAction::Unlock(other) if t == other => {
+                SapicAction::Unlock(other) if t == untyped_term(other) => {
                     *ann = std::mem::take(ann).append(ProcessAnnotation::with_unlock(*v));
                     return Ok(false);
                 }
-                SapicAction::Insert(other, _) if t == other => {
+                SapicAction::Insert(other, _) if t == untyped_term(other) => {
                     *ann = std::mem::take(ann).append(ProcessAnnotation::with_unlock(*v));
                 }
                 SapicAction::Rep => return Err(LockWfError::Rep),
                 _ => {}
             },
             Process::Comb(ProcessCombinator::Parallel, _, _, _) => return Err(LockWfError::Par),
-            Process::Comb(ProcessCombinator::Lookup(other, _), ann, _, _) if t == other => {
+            Process::Comb(ProcessCombinator::Lookup(other, _), ann, _, _)
+                if t == untyped_term(other) =>
+            {
                 *ann = std::mem::take(ann).append(ProcessAnnotation::with_unlock(*v));
             }
             _ => {}
@@ -169,6 +173,7 @@ fn annotate_locks_go(
             Process::Action(ac, ann, body) => {
                 match ac {
                     SapicAction::Lock(term) => {
+                        let term = untyped_term(term);
                         let v = LVar {
                             name: "lock",
                             sort: LSort::Msg,
@@ -176,22 +181,20 @@ fn annotate_locks_go(
                         };
                         let oldest = scope
                             .terms
-                            .get(term)
+                            .get(&term)
                             .map_or(next_lock, |binding| binding.oldest);
                         next_lock += 1;
-                        scope.set(term, Some(LockBinding { oldest, latest: v }));
+                        scope.set(&term, Some(LockBinding { oldest, latest: v }));
                         *ann = std::mem::take(ann).append(ProcessAnnotation::with_lock(v));
                     }
                     SapicAction::Unlock(term) | SapicAction::Insert(term, _) => {
-                        if let Some(binding) = scope.terms.get(term).copied() {
+                        let term = untyped_term(term);
+                        if let Some(binding) = scope.terms.get(&term).copied() {
                             *ann = std::mem::take(ann)
                                 .append(ProcessAnnotation::with_unlock(binding.latest));
                             if matches!(ac, SapicAction::Unlock(_)) {
-                                let SapicAction::Unlock(term) = ac else {
-                                    unreachable!()
-                                };
                                 // One unlock terminates every same-term outer scan.
-                                scope.set(term, None);
+                                scope.set(&term, None);
                             }
                         }
                     }
@@ -201,7 +204,7 @@ fn annotate_locks_go(
             }
             Process::Comb(comb, ann, left, right) => {
                 if let ProcessCombinator::Lookup(term, _) = comb
-                    && let Some(binding) = scope.terms.get(term)
+                    && let Some(binding) = scope.terms.get(&untyped_term(term))
                 {
                     *ann =
                         std::mem::take(ann).append(ProcessAnnotation::with_unlock(binding.latest));

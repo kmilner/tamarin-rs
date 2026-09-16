@@ -148,22 +148,19 @@ impl<V> GoodAnnotation for ProcessAnnotation<V> {
 /// `V` (typically `tamarin_term::lterm::LVar`).
 pub(crate) type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 
-/// Lower a type-checked process to the MSR translation's annotation space.
-/// Type tags describe inference at an occurrence, not variable identity. Erase
-/// them here, before lock/state matching and substitution; retain the original
-/// typed process for typed output and exporters. Haskell's `toAnProcess` only
-/// wraps annotations, letting different type tags split the same state/lock.
+/// Wrap a type-checked process in the MSR translation's annotation space.
+/// Keep occurrence type tags: generated rule names and process attributes use
+/// them, and stored proofs refer to those names. Translation passes erase types
+/// in their lookup keys instead, so tags do not affect variable identity.
 pub(crate) fn lower_for_translation<V>(
     p: &Process<ProcessParsedAnnotation, SapicLVar>,
 ) -> Process<ProcessAnnotation<V>, SapicLVar> {
-    crate::process_walk::rewrite_variables(
-        p,
-        |v| v.stype.is_some().then(|| SapicLVar::untyped(v.var)),
-        |ann| ProcessAnnotation {
+    map_process(p, &mut Clone::clone, &mut Clone::clone, &mut |ann| {
+        ProcessAnnotation {
             parsing_ann: ann.clone(),
             ..Default::default()
-        },
-    )
+        }
+    })
 }
 
 /// `toProcess` (sapic/src/Sapic/Annotation.hs:142-145): drop the translation
@@ -204,7 +201,7 @@ mod tests {
         assert_eq!(c.lock.map(|AnVar(v)| v), Some(v2));
     }
 
-    /// Preserve metadata at every node kind, erasing only location type tags.
+    /// Preserve metadata at every node kind, including location type tags.
     #[test]
     fn lowering_preserves_parsed_annotations() {
         let named = |n: &str| ProcessParsedAnnotation {
@@ -236,9 +233,6 @@ mod tests {
             ann.location = Some(var_term(SapicLVar::new(site, Some("site".into()))));
         }
         let lowered = lower_for_translation::<V>(&parsed);
-        if let Process::Comb(_, ann, _, _) = &mut parsed {
-            ann.location = Some(var_term(SapicLVar::untyped(site)));
-        }
         assert_eq!(to_parsed(&lowered), parsed);
     }
 }

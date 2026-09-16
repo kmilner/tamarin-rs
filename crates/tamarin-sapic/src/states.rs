@@ -21,7 +21,7 @@
 //!      instead of the classical `Insert`/`IsIn`/`Lock` actions.
 //!
 //! This mirrors `annotatePureStates` (States.hs:192-196), with type tags
-//! erased at the translation boundary, including synthetic channel binders.
+//! erased only in state identity keys. Process terms retain their type tags.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -33,6 +33,7 @@ use tamarin_theory::sapic::{
 };
 
 use crate::annotation::{AnVar, ProcessAnnotation};
+use crate::process_walk::untyped_term;
 
 type AnnotatedProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 
@@ -76,7 +77,7 @@ fn bound_states(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> BTreeSet<Sap
                 if let Some(t) = state
                     && is_bound(&names, t)
                 {
-                    bound.insert(t.clone());
+                    bound.insert(untyped_term(t));
                 }
                 match p {
                     Process::Action(SapicAction::New(v), _, body) => {
@@ -182,12 +183,12 @@ fn declare_state_channel(
                     Arc::make_mut(&mut scope.bound).insert(v.var);
                 }
                 SapicAction::Insert(t, _) | SapicAction::Lock(t) | SapicAction::Unlock(t) => {
-                    ann.state_channel = scope.map.get(t).cloned();
+                    ann.state_channel = scope.map.get(&untyped_term(t)).cloned();
                 }
                 _ => {}
             },
             Process::Comb(ProcessCombinator::Lookup(t, _), ann, _, _) => {
-                ann.state_channel = scope.map.get(t).cloned();
+                ann.state_channel = scope.map.get(&untyped_term(t)).cloned();
             }
             _ => {}
         }
@@ -218,7 +219,7 @@ fn add_news(pr: AnnotatedProc, new_vars: &[(LVar, SapicTerm)]) -> AnnotatedProc 
             ..ProcessAnnotation::empty()
         };
         out = Process::Action(
-            SapicAction::New(SapicLVar::untyped(*var)),
+            SapicAction::New(SapicLVar::new(*var, Some("channel".into()))),
             ann,
             Box::new(out).into(),
         );
@@ -278,7 +279,7 @@ fn exists_attacker_unpure(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> bo
                 }
                 Process::Action(SapicAction::Insert(t, _), _, body) => {
                     if let Process::Action(SapicAction::Unlock(u), _, rest) = &**body
-                        && t == u
+                        && untyped_term(t) == untyped_term(u)
                     {
                         pending.push(Work::Visit(rest));
                         continue;
@@ -290,7 +291,7 @@ fn exists_attacker_unpure(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> bo
                 }
                 Process::Action(SapicAction::Lock(t), _, body) => {
                     if let Process::Comb(ProcessCombinator::Lookup(u, _), _, l, r) = &**body
-                        && t == u
+                        && untyped_term(t) == untyped_term(u)
                         && matches!(&**r, Process::Null(_))
                     {
                         pending.push(Work::Visit(l));
@@ -334,11 +335,11 @@ fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm, lone_insert: bool) -> (b
             // insert on the target: a second lone insert anywhere ⇒ not pure.
             Process::Action(SapicAction::Insert(t, _), _, body) => {
                 if let Process::Action(SapicAction::Unlock(t2), _, pl) = &**body
-                    && t == t2
+                    && untyped_term(t) == untyped_term(t2)
                 {
                     return is_pure_state(pl, target, lone_insert);
                 }
-                if t != target {
+                if untyped_term(t) != untyped_term(target) {
                     return is_pure_state(body, target, lone_insert);
                 }
                 let (pure_, lone) = is_pure_state(body, target, lone_insert);
@@ -352,19 +353,19 @@ fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm, lone_insert: bool) -> (b
             // Otherwise a lone lock on the target ⇒ not pure.
             Process::Action(SapicAction::Lock(t), _, body) => {
                 if let Process::Comb(ProcessCombinator::Lookup(t2, _), _, pl, r) = &**body
-                    && t == t2
+                    && untyped_term(t) == untyped_term(t2)
                     && matches!(&**r, Process::Null(_))
                 {
                     return is_pure_state(pl, target, lone_insert);
                 }
-                if t == target {
+                if untyped_term(t) == untyped_term(target) {
                     return (false, false);
                 }
                 is_pure_state(body, target, lone_insert)
             }
             // lone unlock on target ⇒ not pure.
             Process::Action(SapicAction::Unlock(t), _, body) => {
-                if t == target {
+                if untyped_term(t) == untyped_term(target) {
                     (false, false)
                 } else {
                     is_pure_state(body, target, lone_insert)
@@ -418,18 +419,20 @@ fn annotate_each_pure_states(
                         if !is_pure_state(body, cid, false).0 {
                             return Ok(false);
                         }
-                        Arc::make_mut(scope).insert(cid.clone());
+                        Arc::make_mut(scope).insert(untyped_term(cid));
                         ann.pure_state = true;
                     }
                 }
                 SapicAction::Unlock(t) | SapicAction::Lock(t) | SapicAction::Insert(t, _)
-                    if scope.contains(t) =>
+                    if scope.contains(&untyped_term(t)) =>
                 {
                     ann.pure_state = true;
                 }
                 _ => {}
             },
-            Process::Comb(ProcessCombinator::Lookup(t, _), ann, _, _) if scope.contains(t) => {
+            Process::Comb(ProcessCombinator::Lookup(t, _), ann, _, _)
+                if scope.contains(&untyped_term(t)) =>
+            {
                 ann.pure_state = true;
             }
             _ => {}

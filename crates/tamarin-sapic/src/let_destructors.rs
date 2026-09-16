@@ -40,8 +40,6 @@ use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_theory::sapic::{
     map_terms_action, map_terms_comb, Process, ProcessCombinator, SapicLVar, SapicTerm,
 };
-#[cfg(test)]
-use tamarin_theory::{formula::apply_subst, sapic::subst_term};
 
 use crate::annotation::{AnnotatedProcess, ProcessAnnotation};
 
@@ -65,24 +63,41 @@ trait LetSubstitution {
 #[cfg(test)]
 impl LetSubstitution for Subst<Name, SapicLVar> {
     fn term(&self, term: &SapicTerm) -> SapicTerm {
-        subst_term(self, term)
+        let bindings = self.to_list();
+        tamarin_term::term::bind_lits_cow(term, &mut |lit| match lit {
+            Lit::Var(v) => bindings
+                .iter()
+                .find(|(key, _)| key.var == v.var)
+                .map(|(_, image)| image.clone()),
+            Lit::Con(_) => None,
+        })
+        .unwrap_or_else(|| term.clone())
     }
     fn formula(
         &self,
         formula: &tamarin_theory::sapic::SapicFormula,
     ) -> tamarin_theory::sapic::SapicFormula {
-        apply_subst(self, formula.clone())
+        let local = Subst::from_list(
+            tamarin_theory::formula::formula_frees(formula)
+                .into_iter()
+                .map(|v| {
+                    let image = self.term(&tamarin_term::vterm::var_term(v.clone()));
+                    (v, image)
+                }),
+        );
+        tamarin_theory::formula::apply_subst(&local, formula.clone())
     }
 }
 
 /// Ordered substitutions, with a variable index and lazy range composition.
 /// An image receives only substitutions introduced AFTER its binding; this
-/// preserves simultaneous typed/untyped bindings and self-referential images.
+/// preserves simultaneous bindings and self-referential images. Type tags are
+/// retained in the images, but do not participate in variable lookup.
 /// Branch restoration removes entries rather than copying the entire scope.
 #[derive(Default)]
 struct LetSubsts {
-    entries: Vec<(SapicLVar, SapicTerm, usize)>,
-    variables: std::collections::BTreeMap<SapicLVar, Vec<usize>>,
+    entries: Vec<(LVar, SapicTerm, usize)>,
+    variables: std::collections::BTreeMap<LVar, Vec<usize>>,
     resolved: std::cell::RefCell<std::collections::BTreeMap<usize, SapicTerm>>,
 }
 
@@ -92,10 +107,10 @@ impl LetSubsts {
         let end = self.entries.len() + subst.len();
         for (var, term) in subst.to_list() {
             self.variables
-                .entry(var.clone())
+                .entry(var.var)
                 .or_default()
                 .push(self.entries.len());
-            self.entries.push((var, term, end));
+            self.entries.push((var.var, term, end));
         }
     }
 
@@ -115,7 +130,7 @@ impl LetSubsts {
     }
 
     fn image(&self, var: &SapicLVar, after: usize) -> Option<SapicTerm> {
-        let indices = self.variables.get(var)?;
+        let indices = self.variables.get(&var.var)?;
         let index = *indices.get(indices.partition_point(|index| *index < after))?;
         if let Some(term) = self.resolved.borrow().get(&index) {
             return Some(term.clone());
@@ -230,7 +245,7 @@ pub(crate) fn translate_let_destr(
                 *node = right.into_inner();
                 drop(left);
             } else if let VTerm::Lit(Lit::Var(svar)) = left
-                && !match_vars.contains(svar)
+                && !match_vars.iter().any(|v| v.var == svar.var)
             {
                 let subst = make_let_subst(svar, right);
                 let old = std::mem::replace(node, Process::Null(ProcessAnnotation::empty()));
@@ -326,7 +341,7 @@ fn translate_let_destr_reference(
                 *node = right.into_inner();
                 drop(left);
             } else if let VTerm::Lit(Lit::Var(svar)) = left
-                && !match_vars.contains(svar)
+                && !match_vars.iter().any(|v| v.var == svar.var)
             {
                 let subst = make_let_subst(svar, right);
                 let old = std::mem::replace(node, Process::Null(ProcessAnnotation::empty()));
@@ -403,8 +418,8 @@ fn to_pairs(ts: &[LNTerm]) -> LNTerm {
     })
 }
 
-/// Translation starts with erased type tags, so one key covers every
-/// occurrence. Haskell also inserts an untyped variant of each typed key.
+/// The substitution retains typed images; lookup uses the underlying variable
+/// so one binding covers every occurrence regardless of its inferred type.
 fn make_let_subst(svar: &SapicLVar, t2: &SapicTerm) -> Subst<Name, SapicLVar> {
     Subst::from_list(vec![(svar.clone(), t2.clone())])
 }
