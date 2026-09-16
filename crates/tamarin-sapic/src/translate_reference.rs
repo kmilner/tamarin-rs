@@ -1,3 +1,7 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 //! Bounded original traversal and NDC rewrite oracle. Primitive translations are shared.
 use super::*;
 fn generate_rules_reference<'a>(

@@ -1,3 +1,7 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 // Test-only indexed worklist implementation, retained as an independent
 // semantic oracle for the ordinary-workload unifier.
 #![allow(dead_code)]

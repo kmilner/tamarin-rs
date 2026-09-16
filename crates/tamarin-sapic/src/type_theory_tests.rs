@@ -329,8 +329,10 @@ fn typed_output_resolves_bound_variables_without_changing_inference() {
             }
         });
         let publics = |p: &PlainProcess| {
-            vars_proc(p).into_iter()
-                .filter(|v| v.var.sort == LSort::Pub).collect::<Vec<_>>()
+            vars_proc(p)
+                .into_iter()
+                .filter(|v| v.var.sort == LSort::Pub)
+                .collect::<Vec<_>>()
         };
         assert_eq!(publics(&raw), publics(output));
         let lower = crate::annotation::lower_for_translation::<tamarin_term::lterm::LVar>;
@@ -368,9 +370,12 @@ fn msr_translation_is_independent_of_type_annotations() {
 
     // Erasure follows checking: incompatible types of a bound variable must
     // still be rejected. Public variables above remain contextually typed.
-    let mut conflict = build("theory T begin functions: f(a):a, g(b):b process: in(x); out(<f(x),g(x)>) end");
+    let mut conflict =
+        build("theory T begin functions: f(a):a, g(b):b process: in(x); out(<f(x),g(x)>) end");
     assert!(crate::apply::apply_sapic(&mut conflict, false)
-        .unwrap_err().message.contains("SAPIC typing"));
+        .unwrap_err()
+        .message
+        .contains("SAPIC typing"));
 }
 
 /// `examples/sapic/fast/basic/let-blocks3.spthy` shape: a parameterless
@@ -522,7 +527,8 @@ fn public_typing_handles_deep_definitions_and_errors_on_small_stack() {
                 if result.is_ok() {
                     let definition = theory.process_defs().next().unwrap();
                     for v in vars_proc(&definition.body)
-                        .iter().chain(definition.vars.as_ref().unwrap())
+                        .iter()
+                        .chain(definition.vars.as_ref().unwrap())
                     {
                         assert_eq!(v.stype.as_deref(), Some("bitstring"));
                     }

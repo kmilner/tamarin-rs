@@ -1,7 +1,3 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
-
 //! Independent pre-refactor occurrence-search reference for small tests.
 use crate::{lterm::LNTerm, positions::Position, term::Term};
 /// Find every position in `haystack` where `needle` occurs.

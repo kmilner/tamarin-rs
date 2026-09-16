@@ -1,3 +1,7 @@
+// Currently GPL 3.0 until granted permission by the upstream authors
+// of the tamarin-prover sources this file cites; list them with:
+//   scripts/gen_license_headers.py --authors <this file>
+
 //! Bounded recursive conversion oracle, independent of the production scheduler.
 //! Scope primitives are shared; Boolean meaning is checked separately by truth tables.
 use super::*;
