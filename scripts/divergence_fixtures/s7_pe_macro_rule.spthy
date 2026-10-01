@@ -1,0 +1,48 @@
+/*
+ * The rules partial evaluation refines on a theory that declares `macros:`.
+ *
+ * `applyPartialEvaluation` hands `getProtoRuleEs` to the abstract
+ * interpretation (Prover.hs:238-246, see line 245); that reads `cprRuleE`
+ * (ClosedTheory.hs:87-89), the half `closeProtoRule` leaves macro-UNexpanded
+ * while it narrows `applyMacroInRule macros ruE` into the AC half
+ * (lib/theory/src/Rule.hs:82-86).  So the refined rules spliced back in front
+ * of the report carry `encrypt` and `unwrap` as the source writes them, and
+ * the second close expands them again: each `rule (modulo E)` block quotes the
+ * macro call and the `rule (modulo AC)` block below it the expansion — for
+ * `Recv` with the two `adec` variants Maude finds.
+ *
+ * The refinement renumbers the rule variables against the abstract state, so
+ * the echo carries indices (`c.2`, `~ltkS.1`) the source never wrote and the
+ * two halves of one rule read apart.
+ *
+ * No corpus theory reaches this: `--partial-evaluation` appears in no row of
+ * scripts/file_flags.tsv, and scripts/pe_sweep.sh excludes every theory that
+ * declares macros.
+ *
+ * Mode `match`: the two engines agree on this shape.
+ *
+ * Compared slice: the `theory … end` echo (see check.sh).
+ */
+theory S7PeMacroRule
+begin
+
+builtins: hashing, asymmetric-encryption
+
+macros: encrypt(x, y) = aenc(x, y), unwrap(x, y) = h(adec(x, y))
+
+rule Register:
+  [ Fr(~ltk) ] --> [ !Ltk($A, ~ltk), !Pk($A, pk(~ltk)) ]
+
+rule Send:
+  [ Fr(~k), !Pk($S, pkS) ] --> [ Out(encrypt(~k, pkS)) ]
+
+rule Recv:
+  [ !Ltk($S, ~ltkS), In(c) ]
+--[ Got($S, unwrap(c, ~ltkS)) ]->
+  [ Out(unwrap(c, ~ltkS)) ]
+
+lemma Reachable:
+  exists-trace
+  "Ex S m #i. Got(S, m) @ #i"
+
+end

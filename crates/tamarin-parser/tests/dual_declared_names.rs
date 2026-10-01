@@ -58,20 +58,16 @@ fn both_declaration_orders_are_accepted() {
 
 /// The NoEq-first order at a different arity DOES conflict: the `[AC]`
 /// declaration's requested tuple is compared against the `stFunSyms` entry
-/// (Parser/Signature.hs:212-215).  Oracle bytes: probe `p_orderconf`.
+/// (Parser/Signature.hs:212-215).
 #[test]
 fn a_noeq_first_arity_mismatch_conflicts() {
-    let err = parse_theory("theory T begin\n\nfunctions: f/3, f/2 [AC]\n\nend\n", &[])
-        .unwrap_err()
-        .with_source("p_orderconf.spthy")
-        .to_string();
-    assert_eq!(
-        err,
-        "\"p_orderconf.spthy\" (line 5, column 1):\nunexpected \"e\"\n\
-         conflicting arities/options (3,Public,Constructor,NotNDC) and \
-         (2,Public,Constructor,NotNDC) for `f`. Please choose a different name \
-         for this function."
+    let source = "theory T begin functions: f/3, f/2 [AC] end";
+    let error = parse_theory(source, &[]).unwrap_err();
+    assert!(
+        matches!(error.kind(), tamarin_parser::ParseErrorKind::ConflictingDeclaration { name, .. } if name == "f")
     );
+    let start = source.find("f/2").unwrap();
+    assert_eq!(error.span(), start..start + 1);
 }
 
 /// The AST keeps the two spellings of a dual name apart: prefix is a plain

@@ -12,7 +12,7 @@ fn main() {
     }
     let theory_path = &args[1];
     let rule_name = &args[2];
-    let (_parsed, elaborated, maude) = common::load_theory_with_maude(theory_path);
+    let (elaborated, maude) = common::load_theory_with_maude(theory_path);
     for open in elaborated.rules() {
         let r = &open.rule;
         let n = match &r.info.name {

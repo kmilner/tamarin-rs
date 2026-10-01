@@ -20,6 +20,7 @@ scripts/.hs_sweep_cache/
 scripts/.hs_pretty_cache*/
 scripts/.hs_canon_cache/
 scripts/.web_hs_cache*/
+scripts/.gate_cache/
 scripts/.corpus_full_truedl_*.txt
 scripts/__pycache__/
 scripts/results/
@@ -27,6 +28,7 @@ scripts/*.tsv
 # …except the committed CI parity reference (rs_ref_check.sh / rs-parity job).
 !scripts/ci_ref_fast.tsv
 !scripts/sweep_expected.tsv
+!scripts/web_flags.tsv
 # scratch workflow scripts dropped by tooling runs
 scripts/.wf_*.js
 

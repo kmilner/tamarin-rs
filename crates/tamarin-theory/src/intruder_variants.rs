@@ -137,37 +137,28 @@ impl std::error::Error for IntrRuleParseError {}
 /// parses `one` as a Msg-sort variable whose !KU-action unifies with
 /// every KU goal — adding a spurious `c_one` case to every source-case
 /// enumeration and falsely closing branches with `SOLVED // trace found`.
-///
-/// We mirror this here via [`MaudeSigNullaryGuard`], which pushes the
-/// 0-arity NoEq names from `msig` into the `USER_NULLARY_FUNS`
-/// thread-local (defined in elaborate.rs) read by `term_to_lnterm`'s
-/// `Var` branch, via `is_user_nullary_fun` (defined in elaborate.rs).
-/// The guard restores the prior state on drop.
+/// The port's `p::parse_intruder_rules` takes `msig` for the same reason.
 pub fn parse_intruder_rules(
     msig: &MaudeSig,
     ctxt_desc: &str,
     source: &str,
 ) -> Result<Vec<IntrRuleAC>, IntrRuleParseError> {
-    let parser_rules = p::parse_intruder_rules(source).map_err(|e| IntrRuleParseError {
+    let parser_rules = p::parse_intruder_rules(msig, source).map_err(|e| IntrRuleParseError {
         ctxt_desc: ctxt_desc.to_string(),
         message: e.to_string(),
     })?;
-
-    // Mirror HS `setState (mkStateSig msig)` — make the term-conversion
-    // pass below see the 0-arity NoEq names from `msig` so bare
-    // identifiers like `one` / `DH_neutral` are recognised as constants.
-    let _nullary_guard = elaborate::MaudeSigNullaryGuard::set(msig);
 
     // HS `knownFuns = S.toList (funSyms msig)`.
     let known_funs = KnownFuns::new(msig.fun_syms.iter().copied().collect());
 
     let mut out = Vec::with_capacity(parser_rules.len());
     for r in parser_rules {
-        let intr =
-            ast_rule_to_intr_rule_ac(&known_funs, &r).map_err(|message| IntrRuleParseError {
+        let intr = ast_rule_to_intr_rule_ac(&known_funs, msig, &r).map_err(|message| {
+            IntrRuleParseError {
                 ctxt_desc: ctxt_desc.to_string(),
                 message,
-            })?;
+            }
+        })?;
         out.push(intr);
     }
     Ok(out)
@@ -293,7 +284,11 @@ fn constr_name_func(name: &str) -> Result<Vec<&str>, String> {
 /// `True False` are HS hard-codes — see the FIXME in
 /// Theory/Text/Parser/Rule.hs ("Currently we (wrongly) always assume
 /// that we have a subterm rule").  Subterm=True / constant=False.
-fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrRuleAC, String> {
+fn ast_rule_to_intr_rule_ac(
+    known_funs: &KnownFuns,
+    msig: &MaudeSig,
+    r: &p::Rule,
+) -> Result<IntrRuleAC, String> {
     // HS `intrInfo` rejects non-c/d-prefixed names.  Mirror that here.
     let bytes = r.name.as_bytes();
     if bytes.is_empty() {
@@ -338,15 +333,9 @@ fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrR
     };
 
     // HS `genericRule msgvar nodevar` returns `(ps, as, cs, [])`.
-    // The let block, restrictions, variants, and left/right fields
-    // are all empty for intruder rules.  Surface them as elaboration
-    // errors if present (defensive).
-    if !r.let_block.is_empty() {
-        return Err(format!(
-            "intruder rule {} unexpectedly has a let-block",
-            r.name
-        ));
-    }
+    // The restrictions, variants, and left/right fields are all empty for
+    // intruder rules.  Surface them as elaboration errors if present
+    // (defensive).
     if !r.embedded_restrictions.is_empty() {
         return Err(format!(
             "intruder rule {} unexpectedly has embedded restrictions",
@@ -373,7 +362,7 @@ fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrR
         .premises
         .iter()
         .map(|f| {
-            elaborate::fact_to_lnfact(f)
+            elaborate::fact_to_lnfact(f, msig)
                 .map_err(|e| format!("intruder rule {}: premise: {}", r.name, e.message))
         })
         .collect::<Result<_, _>>()?;
@@ -381,7 +370,7 @@ fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrR
         .actions
         .iter()
         .map(|f| {
-            elaborate::fact_to_lnfact(f)
+            elaborate::fact_to_lnfact(f, msig)
                 .map_err(|e| format!("intruder rule {}: action: {}", r.name, e.message))
         })
         .collect::<Result<_, _>>()?;
@@ -389,7 +378,7 @@ fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrR
         .conclusions
         .iter()
         .map(|f| {
-            elaborate::fact_to_lnfact(f)
+            elaborate::fact_to_lnfact(f, msig)
                 .map_err(|e| format!("intruder rule {}: conclusion: {}", r.name, e.message))
         })
         .collect::<Result<_, _>>()?;
@@ -399,49 +388,15 @@ fn ast_rule_to_intr_rule_ac(known_funs: &KnownFuns, r: &p::Rule) -> Result<IntrR
     // any (all RHS vars are LHS vars), but compute it faithfully for
     // robustness.  HS reference: Theory.Model.Fact.newVariables
     // (lib/theory/src/Theory/Model/Fact.hs:524-529, see line 527).
-    let new_vars = compute_new_vars(&prems, &concs);
+    let new_vars = crate::fact::new_variables(&prems, &concs);
 
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))
 }
 
-/// Mirrors HS `newVariables` (`lib/theory/src/Theory/Model/Fact.hs:524-529, see line 527`):
-/// `S.difference concvars premvars`, returned in `S.toList` (sorted) order.
-fn compute_new_vars(prems: &[LNFact], concs: &[LNFact]) -> Vec<tamarin_term::lterm::LNTerm> {
-    use std::collections::BTreeSet;
-    use tamarin_term::lterm::LVar;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-
-    fn collect(t: &tamarin_term::lterm::LNTerm, out: &mut BTreeSet<LVar>) {
-        match t {
-            Term::Lit(Lit::Var(v)) => {
-                out.insert(*v);
-            }
-            Term::Lit(_) => {}
-            Term::App(_, args) => {
-                for a in args.iter() {
-                    collect(a, out);
-                }
-            }
-        }
-    }
-
-    let collect_all = |fs: &[LNFact]| -> BTreeSet<LVar> {
-        let mut vars = BTreeSet::new();
-        for f in fs {
-            for t in f.terms.iter() {
-                collect(t, &mut vars);
-            }
-        }
-        vars
-    };
-
-    let prem_vars = collect_all(prems);
-    collect_all(concs)
-        .into_iter()
-        .filter(|v| !prem_vars.contains(v))
-        .map(|v| Term::Lit(Lit::Var(v)))
-        .collect()
+/// Elaborate one top-level `rule (modulo AC)` parsed in an ordinary theory.
+pub(crate) fn intr_rule_from_ast(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
+    let known_funs = KnownFuns::new(msig.fun_syms.iter().copied().collect());
+    ast_rule_to_intr_rule_ac(&known_funs, msig, r)
 }
 
 // =============================================================================

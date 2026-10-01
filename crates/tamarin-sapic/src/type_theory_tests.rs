@@ -4,7 +4,9 @@
 
 use super::*;
 
-use tamarin_theory::pretty_theory::{pretty_open_theory_by_module, BuildInfo, OpenPrintOpts};
+use tamarin_theory::pretty_theory::{
+    pretty_open_theory_by_module, pretty_open_translated_theory_by_module, BuildInfo,
+};
 
 /// The pinned oracle build's `Generated from:` facts (Git revision ef3f0468),
 /// so the byte expectations below match the captured stdout verbatim.
@@ -18,36 +20,34 @@ fn oracle_build_info() -> BuildInfo {
     }
 }
 
-fn build(input: &str) -> (p::Theory, Theory) {
+fn build(input: &str) -> Theory {
     let parsed = tamarin_parser::parse_theory(input, &[]).unwrap();
-    let elaborated = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
-    (parsed, elaborated)
+    tamarin_theory::elaborate::elaborate_with_in_file(&parsed, "test.spthy").unwrap()
 }
 
-fn render(parsed: &p::Theory, elaborated: &Theory, opts: &OpenPrintOpts) -> String {
-    let process_defs = collect_process_defs(parsed);
-    let conv =
-        |proc: &p::Process| convert_process_with_defs(proc, &process_defs).map_err(|e| e.message);
-    let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(parsed);
+/// `prettyOpenTheoryByModule`'s `spthy`/`spthytyped` arm.
+fn render(thy: &Theory) -> String {
     pretty_open_theory_by_module(
-        parsed,
-        elaborated,
-        "test.spthy",
-        &conv,
-        opts,
+        thy,
         "/* All wellformedness checks were successful. */",
         &oracle_build_info(),
     )
-    .unwrap()
 }
 
-fn spthytyped_opts(parsed: &p::Theory, elaborated: &Theory) -> OpenPrintOpts {
-    let result = type_theory_env(parsed, elaborated).unwrap();
-    OpenPrintOpts {
-        typed: Some(result.overlay),
-        extra_function_items: result.fun_items,
-        drop_translation_items: false,
-    }
+/// `prettyOpenTheoryByModule`'s `msr` arm.
+fn render_msr(thy: &Theory) -> String {
+    pretty_open_translated_theory_by_module(
+        thy,
+        "/* All wellformedness checks were successful. */",
+        &oracle_build_info(),
+    )
+}
+
+/// `Sapic.typeTheory` on the theory the `spthytyped` print then renders.
+fn typed(input: &str) -> Theory {
+    let mut thy = build(input);
+    type_theory_env(&mut thy).unwrap();
+    thy
 }
 
 /// `examples/sapic/fast/basic/typing4.spthy`.
@@ -67,14 +67,12 @@ end
 "#;
 
 /// `-m spthytyped` on typing4 — oracle stdout (pinned build ef3f0468), minus
-/// `putStrLn`'s trailing newline.  Exercises: typed/renamed processes
-/// (`x.2:lol`…), source-positioned `function:` items DELETED, the six
-/// recomputed items appended after the lemma in REVERSE-alphabetical
-/// (descending `UserDefinedSym`) order, then the wf + version comments.
+/// `putStrLn`'s trailing newline, with the reparsable-output fixes applied.
+/// Exercises typed/renamed processes (`x.2:lol`…) and omission of redundant
+/// default function typings.
 #[test]
 fn spthytyped_typing4_bytes() {
-    let (parsed, elaborated) = build(TYPING4);
-    let opts = spthytyped_opts(&parsed, &elaborated);
+    let thy = typed(TYPING4);
     let expected = "theory Typing
 
 begin
@@ -85,14 +83,12 @@ builtins: multiset
 functions: f/1, fst/1, g/1, h/1, pair/2, snd/1
 equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
 
-builtin  multiset
-
 process:
-  new x.2:lol;
-  out(x.2:lol) | new x.3:lol;
-                 new x.4:lol;
-                 event Run( x.3:lol, x.4:lol );
-                 out(<x.3:lol, x.4:lol>)
+  (new x.2:lol;
+   out(x.2:lol)) | (new x.3:lol;
+                    new x.4:lol;
+                    event Run( x.3:lol, x.4:lol );
+                    out(<x.3:lol, x.4:lol>))
 
 lemma sanity:
   exists-trace \"\u{2203} x y #i. (Run( x, y ) @ #i) \u{2227} (\u{ac}(x = y))\"
@@ -102,17 +98,9 @@ guarded formula characterizing all satisfying traces:
 */
 by sorry
 
-function: snd (Any) : Any  \u{20}
+function: g (lol) : lol
 
-function: pair (Any, Any) : Any  \u{20}
-
-function: h (Any) : Any  \u{20}
-
-function: g (lol) : lol  \u{20}
-
-function: fst (Any) : Any  \u{20}
-
-function: f (bitstring) : bitstring  \u{20}
+function: f (bitstring) : bitstring
 
 /* All wellformedness checks were successful. */
 
@@ -125,7 +113,7 @@ Compiled at: 2026-07-31 12:54:17.256348115 UTC
 */
 
 end";
-    assert_eq!(render(&parsed, &elaborated, &opts), expected);
+    assert_eq!(render(&thy), expected);
 }
 
 /// `examples/sapic/fast/basic/channels4.spthy`.
@@ -153,8 +141,7 @@ end
 /// (renamed) formal `(c.1)`; bodies rename `a.1`/`x.1`.
 #[test]
 fn spthytyped_channels4_bytes() {
-    let (parsed, elaborated) = build(CHANNELS4);
-    let opts = spthytyped_opts(&parsed, &elaborated);
+    let thy = typed(CHANNELS4);
     let expected = "theory ChannelsTestOne
 
 begin
@@ -191,12 +178,6 @@ guarded formula characterizing all satisfying traces:
 */
 by sorry
 
-function: snd (Any) : Any  \u{20}
-
-function: pair (Any, Any) : Any  \u{20}
-
-function: fst (Any) : Any  \u{20}
-
 /* All wellformedness checks were successful. */
 
 /*
@@ -208,7 +189,7 @@ Compiled at: 2026-07-31 12:54:17.256348115 UTC
 */
 
 end";
-    assert_eq!(render(&parsed, &elaborated, &opts), expected);
+    assert_eq!(render(&thy), expected);
 }
 
 /// `-m msr` on typing4 — oracle stdout (pinned build ef3f0468).  The full
@@ -218,17 +199,10 @@ end";
 /// rules, and `single_session` render.
 #[test]
 fn msr_typing4_bytes() {
-    let (mut parsed, mut elaborated) = build(TYPING4);
-    {
-        let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&parsed);
-        let wf = crate::apply::apply_sapic(&mut parsed, &mut elaborated, false).unwrap();
-        assert!(wf.is_empty());
-    }
-    let opts = OpenPrintOpts {
-        typed: None,
-        extra_function_items: Vec::new(),
-        drop_translation_items: true,
-    };
+    let parsed = tamarin_parser::parse_theory(TYPING4, &[]).unwrap();
+    let mut elaborated = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+    let wf = crate::apply::apply_sapic(&mut elaborated, false).unwrap();
+    assert!(wf.is_empty());
     let expected = "theory Typing
 
 begin
@@ -308,7 +282,7 @@ Compiled at: 2026-07-31 12:54:17.256348115 UTC
 */
 
 end";
-    assert_eq!(render(&parsed, &elaborated, &opts), expected);
+    assert_eq!(render_msr(&elaborated), expected);
 }
 
 /// `examples/sapic/fast/basic/let-blocks3.spthy` shape: a parameterless
@@ -327,26 +301,20 @@ let P =
 process: P
 end
 "#;
-    let (parsed, elaborated) = build(src);
-    let result = type_theory_env(&parsed, &elaborated).unwrap();
+    let thy = typed(src);
     // The `Some(vec![])` rule (Typing.hs:224 — always `Just`).
-    assert_eq!(result.overlay.defs.len(), 1);
-    assert_eq!(result.overlay.defs[0].0, Some(Vec::new()));
+    let defs: Vec<&ProcessDef> = thy.process_defs().collect();
+    assert_eq!(defs.len(), 1);
+    assert_eq!(defs[0].vars, Some(Vec::new()));
     // Reverse-BTreeMap emission order (`foldrWithKey` + append).
-    let names: Vec<String> = result
-        .fun_items
-        .iter()
+    let names: Vec<String> = thy
+        .function_typing_infos()
         .map(|fti| String::from_utf8_lossy(fti.sym.name()).to_string())
         .collect();
     assert_eq!(names, ["snd", "pair", "hash", "fst"]);
     // Rendered def carries the empty parens and the renamed body (oracle
     // §`let-blocks3`: `let  P () = new a.1; …`).
-    let opts = OpenPrintOpts {
-        typed: Some(result.overlay),
-        extra_function_items: result.fun_items,
-        drop_translation_items: false,
-    };
-    let out = render(&parsed, &elaborated, &opts);
+    let out = render(&thy);
     assert!(
         out.contains("let  P () = new a.1;"),
         "missing typed def header in:\n{out}"
@@ -380,8 +348,7 @@ process:
 
 end
 "#;
-    let (parsed, elaborated) = build(src);
-    let opts = spthytyped_opts(&parsed, &elaborated);
+    let thy = typed(src);
     let expected = "theory T1
 
 begin
@@ -392,17 +359,10 @@ builtins: natural-numbers
 functions: fst/1, pair/2, snd/1
 equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
 
-builtin  natural-numbers
-
 process:
   in(%c.1);
-   (event E( cnext.1:nat ) let cnext.1:nat=(%c.1%+%1) 0)
-
-function: snd (Any) : Any  \u{20}
-
-function: pair (Any, Any) : Any  \u{20}
-
-function: fst (Any) : Any  \u{20}
+  let cnext.1:nat=(%c.1%+%1) in
+      event E( cnext.1:nat )
 
 /* All wellformedness checks were successful. */
 
@@ -415,5 +375,43 @@ Compiled at: 2026-07-31 12:54:17.256348115 UTC
 */
 
 end";
-    assert_eq!(render(&parsed, &elaborated, &opts), expected);
+    assert_eq!(render(&thy), expected);
+}
+
+/// A SAPIC condition's variables are `SapicLVar`s, so a process definition
+/// written without formals takes their type tags into `_pVars`
+/// (`pvars = S.toList (varsProc pr) \\ accBindings pr`, Sapic/Typing.hs:219,
+/// over `varsProc = foldMap Data.Set.singleton`,
+/// Theory/Sapic/Process.hs:361-362), and `-m=spthytyped` prints each formal
+/// with `show :: SapicLVar` (TheoryObject.hs:791-799,
+/// Theory/Sapic/Term.hs:108-110).  A timepoint operand of `<` is read by
+/// `sapicnodevar` and so carries `node`
+/// (Theory/Sapic/Term.hs:99-100#defaultSapicNodeType). Current upstream also
+/// defaults every node-sorted `sapicvar` to that type, including a predicate
+/// argument such as `#p`.
+#[test]
+fn a_process_def_formal_from_a_condition_keeps_its_type_tag() {
+    let src = r#"theory T
+begin
+
+predicates: Eq(a, b) <=> a = b, Pred(a, b) <=> a = a
+
+let P = if Eq(x:foo, 'a') then out('yes') else out('no')
+let S = if #k < #l then out('yes') else out('no')
+let V = if Pred(#p, y) then out('yes') else out('no')
+
+process:
+  out('done')
+
+end
+"#;
+    let thy = typed(src);
+    let out = render(&thy);
+    for block in [
+        "let  P (x.1:foo) = if Eq( x.1, 'a' ) then\n                       out('yes')\n                   else\n                       out('no')",
+        "let  S (#k.1:node,#l.1:node) = if #k.1 < #l.1 then\n                                   out('yes')\n                               else\n                                   out('no')",
+        "let  V (y.1,#p.1:node) = if Pred( #p.1, y.1 ) then\n                             out('yes')\n                         else\n                             out('no')",
+    ] {
+        assert!(out.contains(block), "missing `{block}` in:\n{out}");
+    }
 }

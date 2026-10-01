@@ -55,7 +55,7 @@ fn get_secret_channels(p: &AnnotatedProc, candidates: BTreeSet<LVar>) -> BTreeSe
 
 /// `annotateSecretChannels`: for every `ChIn` / `ChOut` whose channel is a
 /// single secret variable, attach a `secret_channel` annotation.
-pub fn annotate_secret_channels(p: AnnotatedProc) -> AnnotatedProc {
+pub(crate) fn annotate_secret_channels(p: AnnotatedProc) -> AnnotatedProc {
     let svars = get_secret_channels(&p, BTreeSet::new());
     annotate_each(p, &svars)
 }

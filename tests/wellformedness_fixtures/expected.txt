@@ -1,7 +1,7 @@
-# Format: <fixture-name> [ --diff ]: <comma-separated topics>
+# Format: <fixture-name> [ <oracle-flags> ]: <comma-separated topics>
 #
 # These are the wellformedness topics that `tamarin-prover` emits AND that our
-# Rust `wf::check_theory` is expected to emit. The format is intentionally
+# Rust `wf::check_wellformedness` is expected to emit. The format is intentionally
 # flat so a Rust runner can parse it as plain key/value pairs.
 #
 # Last verified: 1.13.0 @ submodule pin ef3f0468, on 2026-08-10, by loading
@@ -11,14 +11,10 @@
 #
 # `Message Derivation Checks` is intentionally OMITTED here — it is a separate
 # phase (`Theory.Tools.MessageDerivationChecks`, ported as
-# `tamarin_theory::deriv_check`), and the two sides disagree on which fixtures
-# reach it: at the pin above the oracle reports it for
-# `multiplication_in_rule_lhs` and the parser-level `wf::check_theory` does
-# not, so pinning it here would fail one harness or the other.
+# `tamarin_theory::deriv_check`), which needs Maude and which the differential
+# runner does not run. At the pin above the oracle reports it for
+# `multiplication_in_rule_lhs`, so pinning it here would fail the Rust side.
 
-diff_left_right_mismatch  --diff : Left rule
-diff_reserved_prefix       --diff : Reserved prefixes
-diff_right_rule_mismatch   --diff : Right rule
 exists_trace_reuse                 : Lemma annotations
 fact_arity_mismatch                : Fact arity issues
 fact_multiplicity_mismatch         : Fact multiplicity issues, Facts occur in the left-hand-side but not in any right-hand-side
@@ -46,22 +42,17 @@ unbound_variables                  : Unbound variables
 # checks, so they can only catch a MISSING report; these catch a FALSE
 # POSITIVE.
 #
-# They ride inside a `#`-prefixed directive on purpose: both harnesses read
-# this same file and treat every non-`#` line as positive expectations, so an
-# inline `!topic` would fail there. Both enforce them — the parser-only test
-# `crates/tamarin-parser/tests/wellformedness.rs` against `wf::check_theory`,
-# the differential runner
-# (`cargo run -p tamarin-parser --example wellformedness_fixtures`) against
-# `wf::check_theory` and the oracle.
+# They ride inside a `#`-prefixed directive on purpose: every harness that
+# reads this file treats a non-`#` line as positive expectations, so an
+# inline `!topic` would fail there. The differential runner
+# (`cargo run -p tamarin-theory --example wellformedness_fixtures`) enforces
+# them against `wf::check_wellformedness` and against the oracle.
 #
-# The three fixtures below each pin only a post-elaboration topic
-# (`Formula terms` / `Multiplication restriction of rules`), which the
-# parser-level checker cannot emit. Without these negatives their Rust-side
-# comparison would assert nothing beyond "the file parses"; both harnesses
-# fail such a fixture rather than pass it silently. What holds those three
-# .spthy files to their actual content is `reports/<fixture>.report` —
-# `cargo test -p tamarin-theory --test wellformedness_fixture_reports`, which
-# reaches the post-elaboration checks and pins the whole rendered block.
+# The three fixtures below each list a single positive topic, so a negative
+# is what keeps their comparison from narrowing to that one string. What
+# holds all three .spthy files to their actual content is
+# `reports/<fixture>.report` — `cargo test -p tamarin-theory --test
+# wellformedness_fixture_reports`, which pins the whole rendered block.
 #! formula_unguarded          : Formula guardedness, Unbound variables
 #! multiplication_in_rule_lhs : Formula terms, Unbound variables
 #! quantifier_wrong_sort      : Quantifier sorts, Unbound variables

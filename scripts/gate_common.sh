@@ -5,12 +5,23 @@
 # copies (which drifted): the OOM prologue, the three environment-line
 # strip policies, flags_for, the oracle fingerprint recipe, the `#include`
 # digest + the gate cache key, the gate file list, the maude resolver, the
-# stale-RS-binary check and the oracle-rev-vs-pin preflight. Policy DIFFERENCES between the old copies
+# Haskell-oracle and Maude resolvers, stale-RS-binary check and the
+# oracle-rev-vs-pin preflight. Policy DIFFERENCES between the old copies
 # are deliberate and stay separate named functions here (the three strip
 # policies); only drifted duplicates were unified.
 #
 # This file defines functions and GATE_COMMON_DIR only — it runs nothing and
 # sources nothing, so sweep_common.sh can source it without cycles.
+
+# Millisecond wall-clock timestamps for stage timings (GNU/uutils/BSD date).
+gate_now_ms() {
+    local ns
+    ns=$(date +%s%N 2>/dev/null)
+    case "$ns" in
+        ''|*[!0-9]*) python3 -c 'import time; print(time.time_ns() // 1_000_000)' ;;
+        *) printf '%s\n' "$((ns / 1000000))" ;;
+    esac
+}
 
 GATE_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -53,64 +64,617 @@ norm() {
         -e 's/^[[:space:]]*analyzed:.*/ANALYZED/' -e 's/^[[:space:]]*processing time:.*/PTIME/'
 }
 
+# Normalize the two known pre-existing stderr divergences (NEITHER is any
+# flag's — both reproduce on a plain `tamarin-prover <file>` run, and both are
+# byte-identical between the current binary and a pre-branch build):
+#
+#   [Open Chains]        RS's derivation-check stage emits the "Too many chain
+#                        constraints" warning twice where HS emits it once;
+#                        consecutive duplicates of that exact line collapse.
+#   [Saturating Sources] Both sides trace saturation progress on every CLI
+#                        close (showSaturation = True), but the SEQUENCE COUNTS
+#                        still differ structurally: HS traces once per force of
+#                        a ClosedRuleCache thunk, RS once per saturation it
+#                        actually runs — one extra sequence on a theory with a
+#                        [sources] lemma, one where HS emits none on a theory
+#                        whose proofs never consult a source case, and counts
+#                        differing both ways under --auto-sources (run.rs's
+#                        close_translated_theory enumerates all three). 282 of
+#                        the 372 case-studies-regression theories differ by
+#                        these lines alone.
+#
+# Dropping them is the only way the stderr axis can police ANYTHING else: left
+# in, the class alone paints the corpus red and a genuinely new warning hides
+# in the noise. It is a real port gap, not an accepted divergence — closing it
+# retires this filter.
+#
+# What that costs, measured by injecting lines into the RS side: a stderr line
+# beginning "[Saturating Sources]" is invisible to every sweep whatever it says,
+# and so is any difference in how many times the [Open Chains] warning repeats
+# CONSECUTIVELY (the ledger's stderr-open-chains rows are the non-consecutive
+# count differences, which do still surface). The parser-frame exception follows.
+# Parser presentation differs deliberately. Only consume recognized frame lines;
+# unexpected stderr, even after a parser error, must still reach the comparison.
+# Rust uses an uncoded error header. Require the following source location
+# before treating it as a parser frame, so ordinary runtime errors survive.
+nerr() {
+  awk '
+    { duplicate_open = /^\[Open Chains\] Too many chain constraints/ && $0 == previous; previous = $0 }
+    pending_error != "" {
+      if ($0 ~ /^[[:space:]]+┌─ .+:[[:digit:]]+:[[:digit:]]+$/) {
+        print "<parser diagnostic>"; rs_parser = 1; pending_error = ""; next
+      }
+      print pending_error; pending_error = ""
+    }
+    duplicate_open || /^\[Saturating Sources\]/ { next }
+    rs_parser && /^$/ { rs_parser = 0; next }
+    rs_parser && /^[[:space:]]*([[:digit:]]+[[:space:]]*)?(┌─|│|·|= )/ { next }
+    hs_parser && /^(unexpected|expecting) / { next }
+    { rs_parser = 0; hs_parser = 0 }
+    /^error: / { pending_error = $0; next }
+    /^".*" \(line [[:digit:]]+, column [[:digit:]]+\):$/ {
+      print "<parser diagnostic>"; hs_parser = 1; next
+    }
+    { print }
+    END { if (pending_error != "") print pending_error }
+  '
+}
+
 # --- per-file canonical flags (file_flags.tsv) -------------------------------
 # flags_for <relpath> — echo the extra prover flags for a corpus relpath
 #   (empty if none, or if $FLAGS_MAP is unset/absent — a missing map means "no
-#   flags", status 0). The special token `@cd` is not a prover flag: it tells
-#   the caller to run from the file's own directory with the bare filename
-#   (upstream's cwd-relative default-oracle recipe).
+#   flags", status 0).
 flags_for() {
     [ -f "${FLAGS_MAP:-}" ] || return 0
     awk -F'\t' -v r="$1" '!/^#/ && $1==r {print $2; exit}' "$FLAGS_MAP"
 }
 
-# --- oracle fingerprint + gate cache key -------------------------------------
-# hs_fingerprint <oracle-binary>
-#   Set HS_FP (the size.mtime fingerprint every cached gate keys on) and
-#   HS_FP_SALT (its 12-hex sha256, the `__b` component of ckey). Returns
-#   stat's status, so a caller that must not proceed without a fingerprint can
-#   `hs_fingerprint "$HS_PATH" || exit 2`.
-hs_fingerprint() {
-    HS_FP=$(stat -c '%s.%Y' "$1") || return 1
-    HS_FP_SALT=$(printf '%s' "$HS_FP" | sha256sum | cut -c1-12)
+# --- oracle and execution identity + gate cache key --------------------------
+# patch_series_fingerprint <repo-root>
+#   Hash the ordered patch list and every listed patch. This is the source
+#   identity that setup.sh stamps beside the binary after its controlled build.
+patch_series_fingerprint() {
+    local repo=$1 series="$1/patches/series" name patch payload= sha
+    [ -f "$series" ] || return 1
+    while IFS= read -r name || [ -n "$name" ]; do
+        case "$name" in ''|'#'*) continue ;; esac
+        [ -f "$repo/patches/$name" ] || return 1
+    done < "$series"
+    while IFS= read -r name || [ -n "$name" ]; do
+        case "$name" in ''|'#'*) continue ;; esac
+        patch="$repo/patches/$name"
+        sha=$(file_sha256 "$patch") || return 1
+        payload+="$name"$'\t'"$sha"$'\n'
+    done < "$series"
+    printf '%s' "$payload" | sha256sum | cut -d' ' -f1
 }
-# include_shas <theory> [depth]
-#   sha + name of every file the theory pulls in with `#include "..."`, depth
-#   first and transitively, resolved against the INCLUDING file's directory
-#   (the spelling upstream uses: examples/testParser/include/include1.spthy,
-#   which parity_corpus.txt carries, reaches include_2.spthy and
-#   include/include3.spthy that way). Those files are oracle inputs, so a
-#   theory sha alone cannot key its output: edit an included file and a cached
-#   entry keeps answering for the old one, and a reference row reads DIFF
-#   instead of INPUT_CHANGED. Prints NOTHING for a theory with no includes —
-#   every corpus file but three — so include-free keys (ckey below, hs_run's
-#   digest in sweep_common.sh, rs_ref_check.sh's ikey) are byte-identical to
-#   the pre-include ones and the existing entries/rows stay valid.
-include_shas() {
-    local f=$1 depth=${2:-0} dir inc
-    [ "$depth" -ge 8 ] && return 0
-    dir=$(dirname "$f")
-    while IFS= read -r inc; do
-        [ -n "$inc" ] && [ -f "$dir/$inc" ] || continue
-        printf '%s %s\n' "$(sha256sum "$dir/$inc" | cut -d' ' -f1)" "$inc"
-        include_shas "$dir/$inc" $((depth + 1))
-    done < <(grep -oE '#include[[:space:]]*"[^"]+"' "$f" 2>/dev/null \
-             | sed 's/.*"\(.*\)"/\1/')
+
+# file_sha256 <file> — hash one file without a pipeline hiding read failures.
+file_sha256() {
+    local line
+    line=$(sha256sum < "$1") || return 1
+    printf '%s\n' "${line%% *}"
+}
+
+# binary_sha256 <file> — the one executable-content fingerprint recipe.
+binary_sha256() { file_sha256 "$1"; }
+
+# Capture metadata around the hash so a concurrent replacement cannot attach
+# new metadata to old bytes. ctime detects edits even if mtime is restored.
+capture_binary_identity() {
+    local path=$1 hash_var=$2 state_var=$3 before digest after
+    before=$(stat -Lc '%d:%i:%s:%f:%y:%z' -- "$path") || return 1
+    digest=$(binary_sha256 "$path") || return 1
+    after=$(stat -Lc '%d:%i:%s:%f:%y:%z' -- "$path") || return 1
+    [ "$before" = "$after" ] || return 1
+    printf -v "$hash_var" '%s' "$digest"
+    printf -v "$state_var" '%s' "$after"
+    export "$hash_var" "$state_var"
+}
+
+# Capture the Rust binary used by the comparison half of a gate.  Its hash is
+# deliberately not part of any Haskell cache key: rebuilding the port must not
+# invalidate an expensive oracle cache, but a comparison already in flight
+# must not silently straddle two Rust executables.
+rs_fingerprint() {
+    RS_FP_PATH=$1
+    [ -x "$RS_FP_PATH" ] || return 1
+    capture_binary_identity "$RS_FP_PATH" RS_FP RS_FILE_STATE || return 1
+    export RS_FP_PATH RS_FP
+}
+
+binary_identity_unchanged() {
+    local path=$1 expected=$2 state=${3:-} before after current
+    before=$(stat -Lc '%d:%i:%s:%f:%y:%z' -- "$path") || return 1
+    [ -z "$state" ] || [ "$before" != "$state" ] || return 0
+    current=$(binary_sha256 "$path") || return 1
+    after=$(stat -Lc '%d:%i:%s:%f:%y:%z' -- "$path") || return 1
+    [ "$before" = "$after" ] && [ "$current" = "$expected" ]
+}
+
+rs_identity_unchanged() {
+    [ -n "${RS_FP_PATH:-}" ] && [ -n "${RS_FP:-}" ] || return 1
+    binary_identity_unchanged "$RS_FP_PATH" "$RS_FP" "${RS_FILE_STATE:-}"
+}
+
+# execution_fingerprint <maude-binary> <derivcheck-timeout>
+#   Set EXEC_FP and EXEC_FP_SALT for every Haskell-output cache.  The oracle
+#   version and Tamarin's derivation-check cap select reusable output across
+#   platforms. Executable hashes only detect replacement during this run.
+execution_fingerprint() {
+    local maude=$1 deriv=$2 payload version
+    [ -x "$maude" ] || {
+        echo "execution_fingerprint: maude '$maude' is not executable" >&2
+        return 1
+    }
+    capture_binary_identity "$maude" MAUDE_FP MAUDE_FILE_STATE || return 1
+    MAUDE_FP_PATH=$maude
+    version=$("$maude" --version) || return 1
+    [ -n "$version" ] || return 1
+    payload=$(printf 'format=2\nmaude_version=%s\nderivcheck_timeout=%s\n' \
+        "$version" "$deriv") || return 1
+    EXEC_FP=$(printf '%s' "$payload" | sha256sum | cut -d' ' -f1) || return 1
+    EXEC_FP_SALT=${EXEC_FP:0:12}
+}
+
+# producer_identity_unchanged
+# Check the executables captured at startup; rehash only if metadata changed.
+# This guard detects a tool replaced during the run, independently of the
+# portable versions used to select persistent cache entries.
+execution_identity_unchanged() {
+    [ -n "${MAUDE_FP_PATH:-}" ] && [ -n "${MAUDE_FP:-}" ] || return 1
+    binary_identity_unchanged "$MAUDE_FP_PATH" "$MAUDE_FP" "${MAUDE_FILE_STATE:-}" || return 1
+    if [ -n "${DOT_FP_PATH:-}" ]; then
+        binary_identity_unchanged "$DOT_FP_PATH" "${DOT_FP:-}" "${DOT_FILE_STATE:-}" || return 1
+    fi
+}
+
+producer_identity_unchanged() {
+    execution_identity_unchanged || return 1
+    [ -n "${HS_FP_PATH:-}" ] && [ -n "${HS_FP:-}" ] || return 1
+    binary_identity_unchanged "$HS_FP_PATH" "$HS_BINARY_FP" "${HS_FILE_STATE:-}"
+}
+
+# Use after a Rust invocation has contributed to a verdict.  The oracle and
+# execution identities protect the cached/reference side; the Rust identity
+# protects the side being certified without coupling it to the cache key.
+comparison_identity_unchanged() {
+    producer_identity_unchanged && rs_identity_unchanged
+}
+
+# Rust-only checks have no Haskell producer, but still depend on Maude and the
+# selected Rust executable remaining fixed for the duration of the run.
+rs_execution_identity_unchanged() {
+    execution_identity_unchanged && rs_identity_unchanged
+}
+
+# duration_seconds <GNU-timeout-duration>
+# Convert the integer s/m/h/d spellings accepted by timeout(1), for deciding
+# whether a cached timeout reached at least the cap requested by this run.
+duration_seconds() {
+    local value=$1 number unit factor
+    if [[ "$value" =~ ^([0-9]+)([smhd]?)$ ]]; then
+        number=${BASH_REMATCH[1]}
+        unit=${BASH_REMATCH[2]}
+        case $unit in
+            ''|s) factor=1 ;;
+            m) factor=60 ;;
+            h) factor=3600 ;;
+            d) factor=86400 ;;
+        esac
+        printf '%s\n' "$((number * factor))"
+    else
+        return 1
+    fi
+}
+
+# hs_fingerprint <oracle-binary> [maude-binary] [repo-root]
+# Capture version and source attestation once for both cache selection and
+# oracle_rev_check. Executable bytes only verify the attestation and detect
+# replacement during a run; persistent identities remain version-based.
+hs_fingerprint() {
+    local hs=$1 repo=${3:-$GATE_COMMON_DIR/..} output main stamp key value
+    local stamp_binary stamp_pin stamp_series
+    local -a maude_args=()
+    capture_binary_identity "$hs" HS_BINARY_FP HS_FILE_STATE || return 1
+    [ -z "${2:-}" ] || maude_args=("--with-maude=$2")
+    output=$(timeout 60 "$hs" "${maude_args[@]}" --version 2>/dev/null) || return 1
+    HS_VERSION=$(printf '%s\n' "$output" | head -1)
+    [ -n "$HS_VERSION" ] || return 1
+    HS_REVISION=$(printf '%s\n' "$output" | sed -n 's/^Git revision: \([^ ,]*\).*/\1/p')
+    HS_ATTESTATION_STATUS=missing
+    HS_ATTESTATION_PIN=
+    HS_PATCH_SERIES=unattested
+    main=$(git -C "$repo" worktree list --porcelain 2>/dev/null \
+        | awk '/^worktree/{print $2; exit}') || main=
+    for stamp in "${hs}.tamarin-rs-oracle" \
+            "$repo/tamarin-prover-testing/.stack-work/tamarin-rs-oracle" \
+            "${main:+$main/tamarin-prover-testing/.stack-work/tamarin-rs-oracle}"; do
+        [ -r "$stamp" ] || continue
+        HS_ATTESTATION_STATUS=mismatch
+        stamp_binary= stamp_pin= stamp_series=
+        while IFS='=' read -r key value || [ -n "$key" ]; do
+            case "$key" in
+                binary_sha256) stamp_binary=$value ;;
+                pin) stamp_pin=$value ;;
+                patch_series_sha256) stamp_series=$value ;;
+            esac
+        done < "$stamp"
+        if [ "$stamp_binary" = "$HS_BINARY_FP" ]; then
+            HS_ATTESTATION_STATUS=matched
+            HS_ATTESTATION_PIN=$stamp_pin
+            HS_PATCH_SERIES=$stamp_series
+            break
+        fi
+    done
+    HS_FP=$(printf 'format=2\nversion=%s\nrevision=%s\npatch_series=%s\n' \
+        "$HS_VERSION" "$HS_REVISION" "$HS_PATCH_SERIES" | sha256sum | cut -d' ' -f1) || return 1
+    HS_FP_SALT=${HS_FP:0:12}
+    HS_FP_PATH=$hs
+    export HS_BINARY_FP
+}
+# parser_input_manifest <theory> [flags]
+#   Ask the real parser which include/preprocessor/oracle inputs are active.
+#   Tagged TSV rows are `S<TAB>x:<hex-source><TAB>x:<hex-staged>` and `O<...>`.
+#   Encoding keeps arbitrary Unix path bytes out of the delimiters. Missing
+#   active inputs are fatal (exit 1). Syntax rejection (exit 3) falls back to the
+#   independent conservative scanner in input_manifest: malformed theories
+#   are part of the parity corpus too, and must remain comparable.
+parser_input_manifest() {
+    local theory flags=${2:-}
+    # NUL termination preserves trailing newlines in the filename.
+    IFS= read -r -d '' theory < <(realpath -z -- "$1") || return 1
+    local bin=${INPUT_MANIFEST_BIN:-${RS_PATH:-${RS_BIN:-${BIN:-$GATE_COMMON_DIR/../target/release/tamarin-rs}}}}
+    [ -x "$bin" ] || {
+        echo "input_manifest: no executable Rust prover at '$bin'" >&2
+        return 1
+    }
+    local -a argv=()
+    [ -z "$flags" ] || read -r -a argv <<< "$flags"
+    "$bin" "${argv[@]}" input-manifest "$theory"
+}
+
+# Manifest paths use `x:<hex bytes>` so tabs, newlines, and non-UTF-8 Unix path
+# bytes cannot corrupt the line-oriented format. Accept legacy/raw fields too:
+# this keeps test doubles and old binaries useful, while every current producer
+# emits the encoded form. The caller names the destination variable so trailing
+# newlines survive (command substitution would strip them).
+manifest_decode_into() {
+    local field=$1 var=$2 escaped= i pair
+    case "$field" in
+        x:*[!0-9a-f]*|x:?) return 1 ;;
+        x:*)
+            field=${field#x:}
+            [ $(( ${#field} % 2 )) -eq 0 ] || return 1
+            for ((i=0; i<${#field}; i+=2)); do
+                pair=${field:i:2}
+                [ "$pair" != 00 ] || return 1
+                escaped+="\\x$pair"
+            done
+            printf -v "$var" '%b' "$escaped"
+            ;;
+        *) printf -v "$var" '%s' "$field" ;;
+    esac
+}
+
+manifest_encode() {
+    printf 'x:'
+    printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n'
+}
+
+# Put legacy/raw rows from test doubles or an older binary into the current
+# representation before union/dedup. Current encoded rows pass through.
+manifest_normalize() {
+    local tag source staged
+    while IFS=$'\t' read -r tag source staged; do
+        case "$tag" in S|O) ;; *) continue;; esac
+        # Current producers encode every field together. A legacy source path
+        # is absolute, so use that field to classify the whole row; this avoids
+        # misreading an old relative path literally named `x:beef` as hex.
+        case "$source" in
+            x:*) ;;
+            *)
+                source=$(manifest_encode "$source") || return 1
+                staged=$(manifest_encode "$staged") || return 1
+                ;;
+        esac
+        printf '%s\t%s\t%s\n' "$tag" "$source" "$staged"
+    done
+}
+
+# input_manifest <theory> [flags]
+#   Union the parser's exact manifest with a deliberately conservative,
+#   parser-independent scan of existing includes and executable oracle paths.
+#   Cache correctness must not depend solely on the Rust parser being tested:
+#   if it accidentally omits an input, the independent side still invalidates
+#   the entry. The parser remains authoritative for active missing includes;
+#   other syntax failures retain the independent conservative identity.
+input_manifest() {
+    local theory=$1 flags=${2:-} exact conservative root root_field root_name_field error
+    [ -f "$theory" ] && [ -r "$theory" ] || {
+        echo "input_manifest: theory '$theory' is not a readable file" >&2
+        return 1
+    }
+    error=$(mktemp) || return 1
+    if exact=$(parser_input_manifest "$theory" "$flags" 2>"$error"); then
+        exact=$(manifest_normalize <<< "$exact") || { rm -f "$error"; return 1; }
+    else
+        local status=$?
+        if [ "$status" -ne 3 ]; then
+            cat "$error" >&2
+            rm -f "$error"
+            return 1
+        fi
+        # The gate still runs both provers and compares their parse failure.
+        # Key the attempt on every existing dependency the grammar-independent
+        # scanner can see, rather than making malformed corpus fixtures
+        # permanently uncacheable.
+        exact=
+    fi
+    rm -f "$error"
+    conservative=$(python3 "$GATE_COMMON_DIR/conservative_inputs.py" "$theory" "$flags") \
+        || return 1
+    IFS= read -r -d '' root < <(realpath -z -- "$theory") || return 1
+    root_field=$(manifest_encode "$root") || return 1
+    # Parameter expansion preserves a basename ending in newlines; command
+    # substitution around basename(1) would silently remove them.
+    root_name_field=$(manifest_encode "${root##*/}") || return 1
+    {
+        printf 'S\t%s\t%s\n' "$root_field" "$root_name_field"
+        printf '%s\n%s\n' "$exact" "$conservative" | awk -F'\t' 'NF >= 3'
+    } | LC_ALL=C awk -F'\t' '!seen[$0]++'
+}
+
+# shared_cache_root <repo-root>
+#   One cache pool under the common/main worktree, shared by linked worktrees.
+shared_cache_root() {
+    local repo=$1 common shared
+    if [ -n "${TAMARIN_RS_CACHE_ROOT:-}" ]; then
+        printf '%s\n' "$TAMARIN_RS_CACHE_ROOT"
+        return 0
+    fi
+    common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+        || common=
+    if [ -n "$common" ]; then shared=$(dirname "$common"); else shared=$repo; fi
+    printf '%s/scripts/.gate_cache\n' "$shared"
+}
+
+# shared_cache_dir <repo-root> <name> [legacy-dir]
+#   Resolve a named cache below the common root.  On first use, an old cache in
+#   the main checkout is renamed into place under a migration lock; a legacy
+#   directory in any other worktree is left untouched for manual import.
+shared_cache_dir() {
+    local repo=$1 name=$2 legacy=${3:-} root target fd common shared
+    root=$(shared_cache_root "$repo") || return 1
+    mkdir -p "$root" || return 1
+    target="$root/$name"
+    exec {fd}>"$root/.migration.lock" || return 1
+    flock "$fd" || { exec {fd}>&-; return 1; }
+    if [ ! -e "$target" ] && [ -n "$legacy" ] && [ -d "$legacy" ]; then
+        common=$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+            || common=
+        shared=${common:+$(dirname "$common")}
+        case "$legacy" in
+            "$shared"/*) mv "$legacy" "$target" || { flock -u "$fd"; exec {fd}>&-; return 1; } ;;
+            *) echo "shared_cache_dir: preserving worktree-local legacy cache $legacy; import it into $target manually" >&2 ;;
+        esac
+    fi
+    mkdir -p "$target" || { flock -u "$fd"; exec {fd}>&-; return 1; }
+    flock -u "$fd"; exec {fd}>&-
+    printf '%s\n' "$target"
+}
+
+# Non-web cache publication primitives. Callers lock one key across their
+# check/run/publish transaction; payloads are validated and atomically renamed
+# from the destination filesystem.
+cache_entry_lock() {
+    local dir=$1 key=$2 var=$3 _cache_fd
+    exec {_cache_fd}>"$dir/$key.lock" || return 1
+    flock "$_cache_fd" || { exec {_cache_fd}>&-; return 1; }
+    printf -v "$var" '%s' "$_cache_fd"
+}
+cache_entry_unlock() {
+    local fd=$1
+    flock -u "$fd"; exec {fd}>&-
+}
+
+# A nonzero run with no diagnostic or product is not reproducible evidence
+# about its input: it commonly means the process could not start or was killed
+# by its environment. Such a result must not become a durable cache entry.
+transient_silent_failure() {
+    [ "$1" -ne 0 ] && [ ! -s "$2" ] && [ ! -s "$3" ]
+}
+
+# claim_output <path> <fd-var>
+# Hold an exclusive lock beside a shared result file for the caller's lifetime.
+# Without it, two gate runs interleave rows and can manufacture both duplicate
+# evidence and misleading row-count failures.
+claim_output() {
+    local target=$1 var=$2 _output_fd
+    mkdir -p "$(dirname "$target")" || return 1
+    exec {_output_fd}>"$target.lock" || return 1
+    if ! flock -n "$_output_fd"; then
+        echo "ERROR: another gate is writing '$target'" >&2
+        exec {_output_fd}>&-
+        return 1
+    fi
+    if ! : > "$target"; then
+        exec {_output_fd}>&-
+        return 1
+    fi
+    printf -v "$var" '%s' "$_output_fd"
+}
+cache_publish_text() {
+    local target=$1 value=$2 tmp
+    tmp=$(mktemp "$(dirname "$target")/.publish.XXXXXX") || return 1
+    printf '%s' "$value" > "$tmp" && mv -f "$tmp" "$target" || { rm -f "$tmp"; return 1; }
+}
+cache_publish_gzip() {
+    local target=$1 source=$2 tmp
+    tmp=$(mktemp "$(dirname "$target")/.publish.XXXXXX") || return 1
+    gzip -c "$source" > "$tmp" && gzip -t "$tmp" && mv -f "$tmp" "$target" \
+        || { rm -f "$tmp"; return 1; }
+}
+cache_gzip_valid() { [ -f "$1" ] && gzip -t "$1" 2>/dev/null; }
+
+# Fill the shared no-prove Haskell load artifact used by pretty_gate and
+# wf_gate. The caller supplies the already-computed input key and flags; this
+# helper owns the per-entry lock and rechecks both inputs and producer bytes
+# before publishing.
+hs_load_cache_fill() {
+    local rel=$1 f=$2 key=$3 fl=$4 timeout_secs=$5
+    local lock_fd tmp normalized rc checked_key
+    cache_entry_lock "$HS_CACHE" "$key" lock_fd || return 0
+    cache_gzip_valid "$HS_CACHE/$key.load.gz" \
+        && { cache_entry_unlock "$lock_fd"; return 0; }
+    case " $fl " in *" --diff "*) cache_entry_unlock "$lock_fd"; return 0;; esac
+    tmp=$(mktemp) || { cache_entry_unlock "$lock_fd"; return 0; }
+    normalized=$(mktemp) || {
+        rm -f "$tmp"; cache_entry_unlock "$lock_fd"; return 0
+    }
+    # shellcheck disable=SC2086  # $fl must become distinct CLI arguments.
+    if timeout "$timeout_secs" "$HS_PATH" --with-maude="$MAUDE" $fl \
+            --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null; then
+        rc=0
+    else
+        rc=$?
+    fi
+    if ! strip_env < "$tmp" > "$normalized"; then
+        echo "  HS NORMALIZE FAILED  $rel — nothing cached" >&2
+        rm -f "$tmp" "$normalized"; cache_entry_unlock "$lock_fd"; return 0
+    fi
+    rm -f "$tmp"
+    # These gates cover valid loadable corpus inputs. Any nonzero status means
+    # the stdout is not a reference result, even when it looks complete.
+    if [ "$rc" -ne 0 ]; then
+        echo "  HS FAILED   $rel (rc=$rc, cap ${timeout_secs}s) — nothing cached" >&2
+        rm -f "$normalized"; cache_entry_unlock "$lock_fd"; return 0
+    fi
+    # Command substitution in the former producers stripped trailing newlines,
+    # so one or more blank lines counted as empty. Preserve that contract while
+    # streaming large outputs through a file.
+    if ! grep -q . "$normalized"; then
+        echo "  HS EMPTY!   $rel${fl:+  (flags: $fl)} — nothing cached" >&2
+        rm -f "$normalized"; cache_entry_unlock "$lock_fd"; return 0
+    fi
+    if ! checked_key=$(ckey "$rel" "$f") || [ "$checked_key" != "$key" ] \
+            || ! producer_identity_unchanged; then
+        echo "  INPUT CHANGED  $rel while Haskell was running — nothing cached" >&2
+        rm -f "$normalized"; cache_entry_unlock "$lock_fd"; return 0
+    fi
+    cache_publish_gzip "$HS_CACHE/$key.load.gz" "$normalized" || true
+    rm -f "$normalized"
+    cache_entry_unlock "$lock_fd"
+}
+
+# Publish proof stdout only after its exit status is durable. Callers hold the
+# entry lock, so an orphaned .rc after a payload failure is harmless and the
+# next fill may retry; the unsafe inverse (.full.gz without .rc) is impossible.
+cache_publish_proof() {
+    local rc_target=$1 payload_target=$2 rc=$3 source=$4
+    cache_publish_text "$rc_target" "$rc" || return 1
+    cache_publish_gzip "$payload_target" "$source"
+}
+
+_include_shas_from_manifest() {
+    local manifest=$1 first=1 tag src_field rel_field src rel identity_rel sha
+    while IFS=$'\t' read -r tag src_field rel_field; do
+        [ "$tag" = S ] || continue
+        if [ "$first" = 1 ]; then first=0; continue; fi
+        manifest_decode_into "$src_field" src || return 1
+        manifest_decode_into "$rel_field" rel || return 1
+        sha=$(file_sha256 "$src") || return 1
+        identity_rel=$rel
+        case "$rel" in *$'\t'*|*$'\n'*) identity_rel=$rel_field;; esac
+        if [ -z "$identity_rel" ]; then
+            identity_rel=$src
+            case "$src" in *$'\t'*|*$'\n'*) identity_rel=$src_field;; esac
+            identity_rel="external:$identity_rel"
+        fi
+        printf '%s %s\n' "$sha" "$identity_rel"
+    done <<< "$manifest"
+}
+
+_oracle_shas_from_manifest() {
+    local manifest=$1 src_field rel_field src rel identity_rel sha mode
+    local -a rows=()
+    while IFS=$'\t' read -r tag src_field rel_field; do
+        [ "$tag" = O ] || continue
+        manifest_decode_into "$src_field" src || return 1
+        manifest_decode_into "$rel_field" rel || return 1
+        sha=$(file_sha256 "$src") || return 1
+        mode=$(stat -Lc '%a' "$src") || return 1
+        identity_rel=$rel
+        case "$rel" in *$'\t'*|*$'\n'*) identity_rel=$rel_field;; esac
+        if [ -z "$identity_rel" ]; then
+            identity_rel=$src
+            case "$src" in *$'\t'*|*$'\n'*) identity_rel=$src_field;; esac
+            identity_rel="external:$identity_rel"
+        fi
+        rows+=("$sha $mode $identity_rel")
+    done <<< "$manifest"
+    [ "${#rows[@]}" -eq 0 ] || printf '%s\n' "${rows[@]}" | sort -u
+}
+
+# input_content_key <theory> [flags]
+#   Canonical identity for every source input seen by the parser.  Producer
+#   identity deliberately lives outside this key so the same helper can back
+#   gate caches, proof caches, web caches and reference certificates.
+input_content_key() {
+    local theory=$1 flags=${2:-} theory_sha inc ora manifest payload
+    theory_sha=$(file_sha256 "$theory") || return 1
+    manifest=$(input_manifest "$theory" "$flags") || return 1
+    inc=$(_include_shas_from_manifest "$manifest") || return 1
+    ora=$(_oracle_shas_from_manifest "$manifest") || return 1
+    payload=$(printf 'format=1\ntheory_sha256=%s\nflags_sha256=%s\nincludes:\n%s\noracles:\n%s\n' \
+        "$theory_sha" "$(printf '%s' "$flags" | sha256sum | cut -d' ' -f1)" \
+        "$inc" "$ora") || return 1
+    printf '%s' "$payload" | sha256sum | cut -d' ' -f1
+}
+
+# input_scope_fingerprint <corpus-root> <flags-map> <relpath...>
+#   Hash the exact sorted relpath/input-key pairs covered by a run.  This is a
+#   certificate identity, not just a file count: a different same-sized
+#   allowlist cannot certify a reference update.
+input_scope_fingerprint() {
+    local corpus=$1 flags_map=$2 rel key
+    shift 2
+    local tmp
+    tmp=$(mktemp) || return 1
+    local FLAGS_MAP=$flags_map
+    for rel in "$@"; do
+        key=$(input_content_key "$corpus/$rel" "$(flags_for "$rel")") || {
+            rm -f "$tmp"
+            return 1
+        }
+        printf '%s\t%s\n' "$rel" "$key" >> "$tmp" || {
+            rm -f "$tmp"
+            return 1
+        }
+    done
+    LC_ALL=C sort -u "$tmp" -o "$tmp" || { rm -f "$tmp"; return 1; }
+    file_sha256 "$tmp"
+    local rc=$?
+    rm -f "$tmp"
+    return "$rc"
 }
 # ckey <relpath> <abs-file> — the gate cache key. Uses $HS_FP_SALT (set by
-#   hs_fingerprint), include_shas and flags_for, so an entry whose included
-#   fragments changed, a flagged entry and an entry produced by a different
-#   oracle are all a MISS, never a stale hit. KEY FORMAT (shared by
-#   corpus_file_diff.sh, wf_gate.sh, pretty_gate.sh, triage_diff_vs_hs.sh,
-#   and scripts/migrate_hs_cache_fp.sh which rekeyed older entries onto it):
-#     <sha256(theory)>[__i<12 hex of sha256(include shas)>]
-#                     [__f<12 hex of sha256(flags)>]__b<12 hex of sha256(HS_FP)>
+#   hs_fingerprint), $EXEC_FP_SALT (set by execution_fingerprint),
+#   parser-selected dependencies and flags_for, so an entry whose
+#   included fragments or oracle scripts changed, a flagged entry and an entry
+#   produced by a different oracle binary are all a MISS. KEY FORMAT (shared by
+#   corpus_file_diff.sh, wf_gate.sh, pretty_gate.sh and triage_diff_vs_hs.sh):
+#     <sha256(canonical theory/include/oracle/flags identity)>
+#                     __e<first 12 hex of EXEC_FP>__b<first 12 hex of HS_FP>
 ckey() {
-    local h fl inc; h=$(sha256sum "$2" | cut -d' ' -f1); fl=$(flags_for "$1")
-    inc=$(include_shas "$2")
-    if [ -n "$inc" ]; then h="${h}__i$(printf '%s' "$inc" | sha256sum | cut -c1-12)"; fi
-    if [ -n "$fl" ]; then h="${h}__f$(printf '%s' "$fl" | sha256sum | cut -c1-12)"; fi
-    printf '%s__b%s' "$h" "$HS_FP_SALT"
+    local h fl
+    [ -n "${EXEC_FP_SALT:-}" ] || {
+        echo "ckey: execution_fingerprint has not been computed" >&2
+        return 1
+    }
+    fl=$(flags_for "$1")
+    h=$(input_content_key "$2" "$fl") || return 1
+    printf '%s__e%s__b%s' "$h" "$EXEC_FP_SALT" "$HS_FP_SALT"
 }
 
 # --- gate file list ----------------------------------------------------------
@@ -133,6 +697,35 @@ filelist() {
 }
 
 # --- maude resolver ----------------------------------------------------------
+# resolve_hs_oracle [repo-root] — print the oracle binary selected for a run.
+# An explicit HS_PATH is authoritative and a broken value is a hard failure.
+# Otherwise prefer this worktree's build, then the main worktree's shared build,
+# then tamarin-prover on PATH.
+resolve_hs_oracle() {
+    local repo=${1:-$(cd "$GATE_COMMON_DIR/.." && pwd)} main c
+    if [ -n "${HS_PATH:-}" ]; then
+        if [ -x "$HS_PATH" ]; then printf '%s\n' "$HS_PATH"; return 0; fi
+        echo "resolve_hs_oracle: HS_PATH='$HS_PATH' is not executable" >&2
+        return 2
+    fi
+    for c in "$repo"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover; do
+        if [ -x "$c" ]; then printf '%s\n' "$c"; return 0; fi
+    done
+    main=$(git -C "$repo" worktree list --porcelain 2>/dev/null \
+        | awk '/^worktree/{print $2; exit}')
+    if [ -n "$main" ] && [ "$main" != "$repo" ]; then
+        for c in "$main"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover; do
+            if [ -x "$c" ]; then printf '%s\n' "$c"; return 0; fi
+        done
+    fi
+    if c=$(command -v tamarin-prover 2>/dev/null) && [ -n "$c" ]; then
+        printf '%s\n' "$c"; return 0
+    fi
+    echo "resolve_hs_oracle: no Haskell tamarin-prover found in this worktree," \
+         "the main worktree, or PATH" >&2
+    return 2
+}
+
 # resolve_maude — print the one maude this run uses. Resolution order:
 #     1. $MAUDE_PATH when set. Set-but-unusable is a HARD FAIL, never a
 #        silent fall-through: a wrong MAUDE_PATH must not quietly become
@@ -165,35 +758,71 @@ maude_on_path() { PATH="$(dirname "$1"):$PATH"; export PATH; }
 
 # --- preflights --------------------------------------------------------------
 # oracle_rev_check <hs-bin> <maude> <repo-root>
-#   The oracle IS the specification, so it has to be the build of the submodule
-#   pin: an oracle from another revision compares the port against a different
-#   upstream and reports the result as parity. Skipped when the gitlink cannot
-#   be read or the binary prints no `Git revision:` line at all, since neither
-#   absence is evidence of a mismatch; ALLOW_ORACLE_REV_MISMATCH=1 for a
-#   deliberate cross-revision comparison. A binary built outside a git checkout
-#   stamps the literal `UNKNOWN`, and that IS evidence: the oracle is built
-#   from the pinned worktree, so anything unstamped is a packaged release
-#   rather than the specification. `--version` prints the `Git revision:` line
-#   as part of `ensureMaudeAndGetVersion`'s block (Console.hs:333-338), so the
-#   probe needs `--with-maude=<maude>`: without it the probe resolves `maude`
-#   on PATH, dies before the line, and the guard would skip on exactly the
-#   boxes that keep maude off PATH.
+#   The oracle IS the specification, so it must be the controlled setup.sh
+#   build of the submodule pin plus the current ordered patch series. setup.sh
+#   writes an attestation beside the executable containing those two source
+#   identities and the executable's SHA-256; this check rejects a manually
+#   rebuilt dirty worktree even when its base commit matches. The check is
+#   skipped only when the repo has no readable gitlink. A binary built outside
+#   a git checkout stamps `UNKNOWN`, which is rejected. Set
+#   ALLOW_ORACLE_REV_MISMATCH=1 only for a deliberate cross-source comparison.
+#   A byte-identical HS_PATH copy may use the canonical setup attestation.
+#   Fingerprinting captures the version/revision using the explicit backend,
+#   so no second process or attestation lookup is needed here.
 oracle_rev_check() {
-    local hs=$1 maude=$2 repo=$3 pin binrev
+    local hs=$1 maude=$2 repo=$3 pin expected_series reason=
+    hs_fingerprint "$hs" "$maude" "$repo" || {
+        echo "ERROR: cannot fingerprint oracle '$hs'" >&2
+        exit 2
+    }
+    ORACLE_REVISION=$HS_REVISION
+    ORACLE_SOURCE_STATUS=verified
+    ORACLE_SOURCE_NOTE=
     pin=$(git -C "$repo" rev-parse :tamarin-prover 2>/dev/null) || pin=
-    binrev=$(timeout 60 "$hs" --with-maude="$maude" --version 2>/dev/null \
-             | sed -n 's/^Git revision: \([^,]*\),.*/\1/p')
-    if [ -n "$pin" ] && [ -n "$binrev" ] && [ "$pin" != "$binrev" ]; then
-        echo "ERROR: oracle '$hs' is revision $binrev but the submodule pin is $pin" \
-             "— it would certify the port against the wrong upstream" \
-             "(rebuild with ./setup.sh testing, or ALLOW_ORACLE_REV_MISMATCH=1)" >&2
-        [ "${ALLOW_ORACLE_REV_MISMATCH:-0}" = 1 ] || exit 2
+    if [ -z "$pin" ]; then
+        ORACLE_SOURCE_STATUS=not-checked
+        ORACLE_SOURCE_NOTE="no readable tamarin-prover gitlink"
+        return 0
+    fi
+    if [ -z "$HS_REVISION" ]; then
+        reason="prints no Git revision"
+    elif [ "$HS_REVISION" != "$pin" ]; then
+        reason="is revision $HS_REVISION but the submodule pin is $pin"
+    elif [ "$HS_ATTESTATION_STATUS" = matched ]; then
+        expected_series=$(patch_series_fingerprint "$repo") || expected_series=
+        if [ "$HS_ATTESTATION_PIN" != "$pin" ]; then
+            reason="attests pin ${HS_ATTESTATION_PIN:-missing}, expected $pin"
+        elif [ -z "$expected_series" ] || [ "$HS_PATCH_SERIES" != "$expected_series" ]; then
+            reason="was built with a different patch series"
+        fi
+    elif [ "$HS_ATTESTATION_STATUS" = mismatch ]; then
+        reason="does not match any available setup.sh source attestation"
+    else
+        reason="has no setup.sh source attestation"
+    fi
+    if [ -n "$reason" ]; then
+        ORACLE_SOURCE_STATUS=failed
+        ORACLE_SOURCE_NOTE=$reason
+        echo "ERROR: oracle '$hs' $reason — it would certify the port against" \
+             "unverified Haskell sources (rebuild with ./setup.sh testing, or" \
+             "ALLOW_ORACLE_REV_MISMATCH=1)" >&2
+        if [ "${ALLOW_ORACLE_REV_MISMATCH:-0}" = 1 ]; then
+            ORACLE_SOURCE_STATUS=waived
+            ORACLE_SOURCE_NOTE="$reason (waived by ALLOW_ORACLE_REV_MISMATCH=1)"
+        else
+            exit 2
+        fi
+    else
+        ORACLE_SOURCE_NOTE="revision and setup attestation match the submodule pin"
     fi
 }
 
 # rs_stale_check [rs-bin] [repo-root]  (defaults: $RS_BIN, $REPO)
-#   Refuse to run when the release binary predates the sources — a stale binary
-#   silently certifies the wrong code (ALLOW_STALE_BIN=1 overrides).
+#   Refuse to run when an in-tree target binary predates its sources — a stale
+#   binary silently certifies the wrong code (ALLOW_STALE_BIN=1 overrides).
+#   An external/sealed binary cannot truthfully be matched to this checkout by
+#   Cargo dep-info or mtimes, so only fingerprint its contents for the run's
+#   replacement guards. Its source provenance remains the caller's concern.
 #
 #   A `crates/**/*.rs` glob is not the whole input set. The binary also bakes
 #   in files from OUTSIDE crates/ via `include_str!` — `tamarin-prover/data/
@@ -206,20 +835,46 @@ oracle_rev_check() {
 #   timestamp into `Git revision:` / `Compiled at:`, and every gate normalizes
 #   those two lines away, so a commit is not a reason to rebuild.
 rs_stale_check() {
-    local bin=${1:-$RS_BIN} repo=${2:-$REPO} newest dep p
-    newest=$(find "$repo/crates" \( -name '*.rs' -o -name 'Cargo.toml' \) -newer "$bin" -print -quit 2>/dev/null)
+    local bin=${1:-$RS_BIN} repo=${2:-$REPO} newest= dep p missing= bin_abs target_abs
+    bin_abs=$(realpath -m -- "$bin") || bin_abs=$bin
+    target_abs=$(realpath -m -- "$repo/target") || target_abs=$repo/target
+    case "$bin_abs" in
+        "$target_abs"/*) ;;
+        *)
+            rs_fingerprint "$bin" || {
+                echo "ERROR: cannot fingerprint Rust binary $bin" >&2
+                exit 2
+            }
+            return 0
+            ;;
+    esac
+    dep="$bin.d"
+    if [ -f "$dep" ]; then
+        while read -r p; do
+            case $p in '' | */.git/*) continue ;; esac
+            case $p in /*) ;; *) p="$repo/$p";; esac
+            if [ ! -e "$p" ]; then missing=$p; break; fi
+            if [ "$p" -nt "$bin" ]; then newest=$p; break; fi
+        done < <(head -1 "$dep" | cut -d: -f2- | tr ' ' '\n')
+    else
+        # Older/non-Cargo builds have no dep-info. This conservative fallback
+        # is necessarily broader, but must not replace Cargo's exact list when
+        # it is available (test-only Rust files do not rebuild this binary).
+        newest=$(find "$repo/crates" -name '*.rs' -newer "$bin" -print -quit 2>/dev/null)
+    fi
+    [ -n "$newest" ] || newest=$(find "$repo/crates" -name 'Cargo.toml' -newer "$bin" -print -quit 2>/dev/null)
     # The workspace root manifests are inputs too: a dependency bump there
     # rebuilds the binary but leaves every file under crates/ untouched.
     [ -n "$newest" ] || newest=$(find "$repo/Cargo.toml" "$repo/Cargo.lock" -newer "$bin" -print -quit 2>/dev/null)
-    dep="$bin.d"
-    if [ -z "$newest" ] && [ -f "$dep" ]; then
-        while read -r p; do
-            case $p in '' | */.git/*) continue ;; esac
-            if [ -e "$p" ] && [ "$p" -nt "$bin" ]; then newest=$p; break; fi
-        done < <(head -1 "$dep" | cut -d: -f2- | tr ' ' '\n')
-    fi
-    if [ -n "$newest" ]; then
+    if [ -n "$missing" ]; then
+        echo "ERROR: $bin dep-info names missing source $missing — rebuild first (ALLOW_STALE_BIN=1 to override)" >&2
+        [ "${ALLOW_STALE_BIN:-0}" = 1 ] || exit 2
+    elif [ -n "$newest" ]; then
         echo "ERROR: $bin is older than $newest — rebuild first (ALLOW_STALE_BIN=1 to override)" >&2
         [ "${ALLOW_STALE_BIN:-0}" = 1 ] || exit 2
     fi
+    rs_fingerprint "$bin" || {
+        echo "ERROR: cannot fingerprint Rust binary $bin" >&2
+        exit 2
+    }
 }

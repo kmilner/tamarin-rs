@@ -1,0 +1,39 @@
+// A quantifier inside a SAPIC conditional, over a bound and a free variable
+// of the same name.
+//
+// `quantify` closes a free variable into `Bound i` by comparing the whole
+// variable (Theory/Model/Formula.hs:346-352#quantify), and the printer opens
+// it again with a name `freshLVar` picks against the formula's own supply
+// (Theory/Model/Formula.hs:274-291#openFormula, reached from
+// Theory/Model/Formula.hs:474-514#prettyLFormula and seeded by `avoidPrecise`
+// at Theory/Model/Formula.hs:523-525#prettySyntacticLNFormula).  So the two
+// branches print as
+//
+//   if (∃ y. Eq( y, x.1 )) ∧ (Eq( x.1, 'a' ))
+//   if (∃ x.2. Eq( x.2, 'b' )) ∧ (Eq( x.1, 'a' ))
+//
+// — the first binder keeps its written name beside the free `x.1` of the
+// `in`, and the second binder, written with the free variable's own name, is
+// opened as `x.2` and cannot collide with it.  The rule names derived from
+// those strings (Sapic/Facts.hs:401#stripNonAlphanumerical) carry the binder
+// names as well: `ifyEqyxEqxa_0_11` and `ifxEqxbEqxa_0_12`.
+//
+// Mode `match`: the two engines agree on this shape, and the row exists so
+// that they keep agreeing.  Corpus conditions are quantifier-free, so no gate
+// row covers a bound occurrence.
+//
+// Compared slices: the wf report block, which pins the run clean, AND the
+// `theory … end` echo, which carries the `process=` attribute of each of the
+// four conditional rules and the names derived from it.
+
+theory SapicCondBinder
+begin
+
+predicates: Eq(a, b) <=> a = b
+
+process:
+  in(x);
+  ( ( if (Ex y. Eq(y, x)) & Eq(x, 'a') then out('yes') else out('no') )
+  | ( if (Ex x. Eq(x, 'b')) & Eq(x, 'a') then out('shadow') else out('free') ) )
+
+end

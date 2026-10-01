@@ -1,0 +1,49 @@
+theory SortSuffix
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset, natural-numbers
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) A:
+   [ Fr( ~n ), In( $p ) ] --[ Ev( ~n, $p, m ) ]-> [ Out( <~n, $p, m> ) ]
+
+  /* has exactly the trivial AC variant */
+
+restriction R:
+  "∀ a $b #k. (Ev( a, $b, a ) @ #k) ⇒ (#k = #k)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ a $b #k. (Ev( a, $b, a ) @ #k) ⇒ (#k = #k)"
+  */
+
+lemma l1:
+  all-traces
+  "∀ x ~y #i.
+    (Ev( ~y, x, x ) @ #i) ⇒
+    (∃ #j. (Ev( ~y, x, x ) @ #j) ∧ ((#j < #i) ∨ (#i = #j)))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ x ~y #i.
+  (Ev( ~y, x, x ) @ #i)
+ ∧
+  ∀ #j. (Ev( ~y, x, x ) @ #j) ⇒ (¬(#j < #i)) ∧ (¬(#i = #j))"
+*/
+by sorry
+
+lemma l2:
+  exists-trace "∃ %q z #i. (Ev( z, z, z ) @ #i) ∧ ((z%+%q) = z)"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ %q z #i. (Ev( z, z, z ) @ #i) ∧ ((z%+%q) = z)"
+*/
+by sorry
+
+
+
+end

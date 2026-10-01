@@ -78,14 +78,6 @@ pub fn unify_lnterm_no_ac_with_counter(
     unify_lnterm_no_ac(eqs)
 }
 
-/// `unifiableLNTermsNoAC`: shorthand for "is there a unifier?".
-///
-/// Intentionally retained for parity with HS `unifiableLNTermsNoAC`; no
-/// current Rust caller in the prover.
-pub fn unifiable_lnterms_no_ac(a: crate::lterm::LNTerm, b: crate::lterm::LNTerm) -> bool {
-    unify_lnterm_no_ac(vec![Equal::new(a, b)]).is_ok()
-}
-
 /// AC/C/nat delay decision, the sole point where `unify_raw` and
 /// `unify_raw_factored` diverge.  With a `delayed` sink present (the
 /// factored path) HS does `tell [Equal l r]`, so we push the residual

@@ -12,9 +12,12 @@
 use std::collections::BTreeSet;
 
 use crate::builtin::{
-    asym_enc_fun_dest_sig, asym_enc_fun_sig, bp_rules, dh_rules, hash_fun_sig,
-    location_report_fun_sig, mset_rules, reveal_signature_fun_sig, signature_fun_dest_sig,
-    signature_fun_sig, sym_enc_fun_dest_sig, sym_enc_fun_sig, xor_rules,
+    asym_enc_dest_rules, asym_enc_fun_dest_sig, asym_enc_fun_sig, asym_enc_rules, bp_rules,
+    dh_rules, fst_dest_rule, fst_rule, hash_fun_sig, location_report_fun_sig,
+    location_report_rules, mset_rules, pair_dest_rules, pair_rules, reveal_signature_fun_sig,
+    reveal_signature_rules, signature_dest_rules, signature_fun_dest_sig, signature_fun_sig,
+    signature_rules, snd_dest_rule, snd_rule, sym_enc_dest_rules, sym_enc_fun_dest_sig,
+    sym_enc_fun_sig, sym_enc_rules, xor_rules,
 };
 use crate::function_symbols::{
     bp_fun_sig, bp_reducible_fun_sig, dh_fun_sig, dh_reducible_fun_sig, fst_dest_sym, fst_sym,
@@ -118,6 +121,10 @@ impl FromIterator<CtxtStRule> for StRules {
     }
 }
 
+/// HS `data MaudeSig` (Term/Maude/Signature.hs:90-108); the field order is
+/// HS's declaration order, which its derived `Ord` reads off.  The trailing
+/// fields have no HS counterpart: they are lookup mirrors of the sets above
+/// them, rebuilt by [`MaudeSig::refresh`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MaudeSig {
     pub enable_dh: bool,
@@ -134,8 +141,8 @@ pub struct MaudeSig {
     /// The subterm rewrite rules, each carrying the Ac/C-freeness of its LHS
     /// (see [`StRules`]).
     pub st_rules: StRules,
-    pub macro_names: BTreeSet<NoEqSym>,
     pub eq_convergent: bool,
+    pub macro_names: BTreeSet<NoEqSym>,
     pub fun_syms: FunSig,
     pub irreducible_fun_syms: FunSig,
     pub reducible_fun_syms: FunSig,
@@ -150,6 +157,18 @@ pub struct MaudeSig {
     /// so the two are membership-identical and the output is unchanged.
     pub irreducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
     pub reducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
+    /// The symbol a NAME resolves to, in the order HS `lookupArity` searches
+    /// (Theory/Text/Parser/Term.hs:62-72): the free symbols of `fun_syms`,
+    /// then its user-defined AC symbols (together HS `userDefinedFunSyms`,
+    /// Term/Maude/Signature.hs:162-164), then `macro_names`.  The first entry
+    /// of that order wins, and the built-in AC/C/`List` symbols — which carry
+    /// no name and are not part of `userDefinedFunSyms` — are absent.  Filled
+    /// by [`MaudeSig::refresh`] and read through [`MaudeSig::fun_sym_named`].
+    pub fun_syms_by_name: tamarin_utils::FastMap<&'static [u8], FunSym>,
+    /// Exact Maude wire identifier to the symbol declared by this signature.
+    /// Reply parsing uses this to reuse interned symbols rather than decode,
+    /// rewrite and intern every occurrence returned by Maude.
+    pub(crate) fun_syms_by_wire: tamarin_utils::FastMap<&'static [u8], FunSym>,
 }
 
 impl MaudeSig {
@@ -173,8 +192,9 @@ impl MaudeSig {
         self.st_rules.all_lhs_ac_c_free()
     }
 
-    /// Refresh the cached `fun_syms` / `irreducible_fun_syms` /
-    /// `reducible_fun_syms` from the source-of-truth flags.
+    /// HS `maudeSig` (Term/Maude/Signature.hs:110-125#maudeSig): recompute the
+    /// cached `fun_syms` / `irreducible_fun_syms` / `reducible_fun_syms` from
+    /// the source-of-truth flags.
     pub fn refresh(mut self) -> Self {
         if self.enable_bp {
             self.enable_dh = true;
@@ -230,6 +250,32 @@ impl MaudeSig {
         // `.contains()` answer is identical — only the cost differs.
         self.irreducible_fun_syms_fast = irreducible.iter().copied().collect();
         self.reducible_fun_syms_fast = reducible.iter().copied().collect();
+
+        // Name index, in the order HS `lookupArity` (Theory/Text/Parser/Term.hs:62-72)
+        // searches: `userDefinedFunSyms` — the free symbols of `fun_syms`
+        // before its user-defined AC ones, each half in the symbol's own order
+        // — then the macro names.  HS `lookup` takes the first match, so an
+        // entry already in the map is never overwritten.
+        let mut by_name: tamarin_utils::FastMap<&'static [u8], FunSym> =
+            tamarin_utils::FastMap::default();
+        for sym in all_funs
+            .iter()
+            .copied()
+            .chain(self.macro_names.iter().copied().map(FunSym::NoEq))
+        {
+            if let Some(name) = user_defined_name(sym) {
+                by_name.entry(name).or_insert(sym);
+            }
+        }
+        self.fun_syms_by_name = by_name;
+        let mut by_wire = tamarin_utils::FastMap::default();
+        for sym in all_funs.iter().copied() {
+            let mut wire = Vec::new();
+            if crate::maude_print::pp_maude_sig_sym_into(sym, &mut wire) {
+                by_wire.insert(crate::intern::intern_bytes(&wire), sym);
+            }
+        }
+        self.fun_syms_by_wire = by_wire;
         self.fun_syms = all_funs;
         self.irreducible_fun_syms = irreducible;
         self.reducible_fun_syms = reducible;
@@ -282,33 +328,35 @@ impl MaudeSig {
             .collect()
     }
 
-    /// HS `userDefinedFunSyms`: every free symbol of the signature plus every
-    /// user-defined AC symbol, tagged with which kind it is.
-    ///
-    /// Intentionally retained: faithful mirror of HS `userDefinedFunSyms`
-    /// (Term/Maude/Signature.hs:163-164).  No call site in the port — HS calls
-    /// it from the parser (Theory/Text/Parser/Macro.hs:43,
-    /// Theory/Text/Parser/Term.hs:65), whereas the port resolves operator
-    /// names from tables of its own: the infix `[AC]` levels off
-    /// `parser.rs::ac_fun_syms`, and `lookupArity`'s arity / privacy /
-    /// constructability / NDC off `elaborate.rs::CollectedUserFuns`.
-    /// [`MaudeSig::user_defined_st_fun_syms`] is the variant intruder-rule
-    /// generation uses.
-    pub fn user_defined_fun_syms(&self) -> UserDefinedSig {
-        self.no_eq_fun_syms()
-            .into_iter()
-            .map(UserDefinedSym::NoEqUser)
-            .chain(
-                self.ac_user_fun_syms()
-                    .into_iter()
-                    .map(UserDefinedSym::AcFctUser),
-            )
-            .collect()
+    /// The symbol HS `lookupArity` (Theory/Text/Parser/Term.hs:62-72) resolves
+    /// `name` to, or `None` where HS fails with `unknown operator`: the first
+    /// entry of `userDefinedFunSyms` (Term/Maude/Signature.hs:162-164) —
+    /// free symbols before user-defined AC symbols — and then of the macro
+    /// names.  HS's association list ends in a hard-coded `em/2` row that
+    /// belongs to no signature, so `em` is answered here only when the
+    /// signature itself declares it.
+    pub fn fun_sym_named(&self, name: &[u8]) -> Option<FunSym> {
+        self.fun_syms_by_name.get(name).copied()
     }
 
-    /// HS `userDefinedSTFunSyms`: like [`MaudeSig::user_defined_fun_syms`], but
-    /// the free part is the SUBTERM-theory signature (`st_fun_syms`), i.e. it
-    /// excludes the symbols contributed by the built-in theories.
+    pub(crate) fn fun_sym_by_wire(&self, ident: &[u8]) -> Option<FunSym> {
+        self.fun_syms_by_wire.get(ident).copied()
+    }
+
+    /// The user-defined AC symbol of this name, read off `fun_syms` like HS
+    /// `acUserFunSyms` (Term/Maude/Signature.hs:160-161).
+    /// [`MaudeSig::fun_sym_named`] answers with the free symbol when one
+    /// shares the name, so a question about the AC symbol alone asks here.
+    pub fn ac_fct_sym_named(&self, name: &[u8]) -> Option<AcFctSym> {
+        self.fun_syms.iter().find_map(|f| match f {
+            FunSym::Ac(AcSym::AcFct(s)) if s.name == name => Some(*s),
+            _ => None,
+        })
+    }
+
+    /// HS `userDefinedSTFunSyms`: the free part is the SUBTERM-theory
+    /// signature (`st_fun_syms`), so it excludes symbols contributed by the
+    /// built-in theories, plus every user-defined AC symbol.
     pub fn user_defined_st_fun_syms(&self) -> UserDefinedSig {
         self.st_fun_syms
             .iter()
@@ -363,10 +411,8 @@ impl MaudeSig {
     /// irreducible / reducible caches keep the pre-join NDC states — no
     /// `refresh()` here either.
     pub fn join_ndc_in_sig(mut self, fun_sym: FunSym, ndc_state: NdcState) -> Self {
-        let name = match fun_sym {
-            FunSym::NoEq(s) => s.name,
-            FunSym::Ac(AcSym::AcFct(s)) => s.name,
-            _ => return self,
+        let Some(name) = user_defined_name(fun_sym) else {
+            return self;
         };
         self.st_fun_syms = self
             .st_fun_syms
@@ -511,8 +557,22 @@ impl MaudeSig {
             reducible_fun_syms: BTreeSet::new(),
             irreducible_fun_syms_fast: tamarin_utils::FastSet::default(),
             reducible_fun_syms_fast: tamarin_utils::FastSet::default(),
+            fun_syms_by_name: tamarin_utils::FastMap::default(),
+            fun_syms_by_wire: tamarin_utils::FastMap::default(),
         };
         merged.refresh()
+    }
+}
+
+/// The name a symbol carries in HS `userDefinedFunSyms`
+/// (Term/Maude/Signature.hs:162-164): free and user-defined AC symbols have
+/// one, the built-in AC operators, the C symbols and `List` have none and are
+/// not part of that signature.
+fn user_defined_name(sym: FunSym) -> Option<&'static [u8]> {
+    match sym {
+        FunSym::NoEq(s) => Some(s.name),
+        FunSym::Ac(AcSym::AcFct(s)) => Some(s.name),
+        FunSym::Ac(_) | FunSym::C(_) | FunSym::List => None,
     }
 }
 
@@ -537,67 +597,54 @@ fn show_attrs(attrs: &[&str]) -> String {
     }
 }
 
-/// HS `unionExceptPairSym` (Term/Maude/Signature.hs:143, with the
-/// `removeIfNecessary` helpers at 146-150):
-///
-///   unionExceptPairSym st1 st2 =
-///       removeIfNecessary (removeIfNecessary st1 st2 fstSym fstDestSym)
-///                         st2 sndSym sndDestSym
-///   removeIfNecessary st1 st2 x y =
-///       removeIfNecessary' (removeIfNecessary' st1 st2 x y) st2 y x
-///   removeIfNecessary' st1 st2 toAdd toRemove =
-///       if toAdd `member` st2 then union (delete toRemove st1) st2
-///                             else union st1 st2
+/// HS `removeIfNecessary'` (Term/Maude/Signature.hs:147-150): if `to_add` is a
+/// member of `st2`, drop `to_remove` from `st1` before unioning `st2` in.
+/// Union is left-biased, as `S.union` is.
+fn remove_if_necessary_prime<T: Ord + Clone>(
+    st1: &BTreeSet<T>,
+    st2: &BTreeSet<T>,
+    to_add: &T,
+    to_remove: &T,
+) -> BTreeSet<T> {
+    let mut out = st1.clone();
+    if st2.contains(to_add) {
+        out.remove(to_remove);
+    }
+    out.extend(st2.iter().cloned());
+    out
+}
+
+/// HS `removeIfNecessary` (Term/Maude/Signature.hs:146): run
+/// `removeIfNecessary'` once each way round, so `x` and `y` are mutually
+/// exclusive in the result.
+fn remove_if_necessary<T: Ord + Clone>(
+    st1: &BTreeSet<T>,
+    st2: &BTreeSet<T>,
+    x: &T,
+    y: &T,
+) -> BTreeSet<T> {
+    let s = remove_if_necessary_prime(st1, st2, x, y);
+    remove_if_necessary_prime(&s, st2, y, x)
+}
+
+/// HS `unionExceptPairSym` (Term/Maude/Signature.hs:143).
 ///
 /// The `fst`/`snd` constructor and destructor variants are mutually
 /// exclusive: whichever variant `st2` carries WINS, and the opposite
 /// variant is removed from `st1`.  This is asymmetric in `st2`, matching
 /// HS's monoid `<>` (where the right operand is the newly-added symbol).
 fn union_except_pair_sym(a: &BTreeSet<NoEqSym>, b: &BTreeSet<NoEqSym>) -> BTreeSet<NoEqSym> {
-    // removeIfNecessary' st1 st2 toAdd toRemove
-    fn remove_if_necessary_prime(
-        st1: &BTreeSet<NoEqSym>,
-        st2: &BTreeSet<NoEqSym>,
-        to_add: &NoEqSym,
-        to_remove: &NoEqSym,
-    ) -> BTreeSet<NoEqSym> {
-        if st2.contains(to_add) {
-            let mut out: BTreeSet<NoEqSym> = st1.clone();
-            out.remove(to_remove);
-            out.extend(st2.iter().copied());
-            out
-        } else {
-            st1.union(st2).copied().collect()
-        }
-    }
-    // removeIfNecessary st1 st2 x y
-    fn remove_if_necessary(
-        st1: &BTreeSet<NoEqSym>,
-        st2: &BTreeSet<NoEqSym>,
-        x: &NoEqSym,
-        y: &NoEqSym,
-    ) -> BTreeSet<NoEqSym> {
-        let s = remove_if_necessary_prime(st1, st2, x, y);
-        remove_if_necessary_prime(&s, st2, y, x)
-    }
     let after_fst = remove_if_necessary(a, b, &fst_sym(), &fst_dest_sym());
     remove_if_necessary(&after_fst, b, &snd_sym(), &snd_dest_sym())
 }
 
-/// HS `unionExceptPairRules` (Term/Maude/Signature.hs:144, with the
-/// `removeIfNecessary` helpers at 146-150):
-///
-///   unionExceptPairRules st1 st2 =
-///       removeIfNecessary (removeIfNecessary st1 st2 fstDestRule fstRule)
-///                         st2 sndRule sndDestRule
+/// HS `unionExceptPairRules` (Term/Maude/Signature.hs:144).
 ///
 /// The constructor/destructor pair REWRITE RULES are mutually exclusive
-/// exactly like the symbols (`unionExceptPairSym`): whichever variant
-/// `st2` (the right/newly-added operand) carries WINS, and the opposite
-/// variant is removed from `st1`.  Without this, merging `pairing`
-/// (`fstRule`/`sndRule`) with `dest-pairing` (`fstDestRule`/`sndDestRule`)
-/// would keep BOTH variants, emitting both `fst` rewrite variants and
-/// diverging the reducible/irreducible sets from Haskell.
+/// exactly like the symbols (`unionExceptPairSym`).  Without this, merging
+/// `pairing` (`fstRule`/`sndRule`) with `dest-pairing` (`fstDestRule`/
+/// `sndDestRule`) would keep BOTH variants, emitting both `fst` rewrite
+/// variants and diverging the reducible/irreducible sets from Haskell.
 ///
 /// Note the rule version's `removeIfNecessary` argument order differs
 /// from the symbol version: `fstDestRule fstRule` (vs `fstSym fstDestSym`)
@@ -606,254 +653,90 @@ fn union_except_pair_rules(
     a: &BTreeSet<CtxtStRule>,
     b: &BTreeSet<CtxtStRule>,
 ) -> BTreeSet<CtxtStRule> {
-    // removeIfNecessary' st1 st2 toAdd toRemove
-    fn remove_if_necessary_prime(
-        st1: &BTreeSet<CtxtStRule>,
-        st2: &BTreeSet<CtxtStRule>,
-        to_add: &CtxtStRule,
-        to_remove: &CtxtStRule,
-    ) -> BTreeSet<CtxtStRule> {
-        if st2.contains(to_add) {
-            let mut out: BTreeSet<CtxtStRule> = st1.clone();
-            out.remove(to_remove);
-            out.extend(st2.iter().cloned());
-            out
-        } else {
-            st1.union(st2).cloned().collect()
-        }
-    }
-    // removeIfNecessary st1 st2 x y
-    fn remove_if_necessary(
-        st1: &BTreeSet<CtxtStRule>,
-        st2: &BTreeSet<CtxtStRule>,
-        x: &CtxtStRule,
-        y: &CtxtStRule,
-    ) -> BTreeSet<CtxtStRule> {
-        let s = remove_if_necessary_prime(st1, st2, x, y);
-        remove_if_necessary_prime(&s, st2, y, x)
-    }
     let after_fst = remove_if_necessary(a, b, &fst_dest_rule(), &fst_rule());
     remove_if_necessary(&after_fst, b, &snd_rule(), &snd_dest_rule())
-}
-
-// The four individual constructor/destructor pair rules
-// (Term/Builtin/Rules.hs:101-104), used only by `union_except_pair_rules`.
-// `pair_rules`/`pair_dest_rules` in builtin.rs build the *sets*; these
-// reconstruct the individual `CtxtStRule`s so the union dedup can target
-// them precisely.
-fn fst_rule() -> CtxtStRule {
-    use crate::builtin::{fst, msg_var, pair};
-    use crate::subterm_rule::StRhs;
-    let x1 = msg_var("x", 1);
-    let x2 = msg_var("x", 2);
-    CtxtStRule::new(
-        fst(pair(x1.clone(), x2.clone())),
-        StRhs {
-            positions: vec![vec![0, 0]],
-            term: x1,
-        },
-    )
-}
-fn snd_rule() -> CtxtStRule {
-    use crate::builtin::{msg_var, pair, snd};
-    use crate::subterm_rule::StRhs;
-    let x1 = msg_var("x", 1);
-    let x2 = msg_var("x", 2);
-    CtxtStRule::new(
-        snd(pair(x1.clone(), x2.clone())),
-        StRhs {
-            positions: vec![vec![0, 1]],
-            term: x2,
-        },
-    )
-}
-fn fst_dest_rule() -> CtxtStRule {
-    use crate::builtin::{msg_var, pair};
-    use crate::subterm_rule::StRhs;
-    use crate::term::f_app_no_eq;
-    let x1 = msg_var("x", 1);
-    let x2 = msg_var("x", 2);
-    CtxtStRule::new(
-        f_app_no_eq(fst_dest_sym(), vec![pair(x1.clone(), x2.clone())]),
-        StRhs {
-            positions: vec![vec![0, 0]],
-            term: x1,
-        },
-    )
-}
-fn snd_dest_rule() -> CtxtStRule {
-    use crate::builtin::{msg_var, pair};
-    use crate::subterm_rule::StRhs;
-    use crate::term::f_app_no_eq;
-    let x1 = msg_var("x", 1);
-    let x2 = msg_var("x", 2);
-    CtxtStRule::new(
-        f_app_no_eq(snd_dest_sym(), vec![pair(x1.clone(), x2.clone())]),
-        StRhs {
-            positions: vec![vec![0, 1]],
-            term: x2,
-        },
-    )
 }
 
 // =============================================================================
 // Predefined signatures
 // =============================================================================
 
+/// HS writes every builtin signature as `maudeSig $ mempty {…}`
+/// (Term/Maude/Signature.hs:199-231): a record update of `mempty` handed to
+/// the smart constructor.  This macro is that shape in Rust — the named fields
+/// over `MaudeSig::default()`, then [`MaudeSig::refresh`].
+macro_rules! maude_sig {
+    ($($field:ident : $value:expr),* $(,)?) => {
+        MaudeSig { $($field: $value,)* ..MaudeSig::default() }.refresh()
+    };
+}
+
 pub fn dh_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_dh: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_dh: true)
 }
 pub fn bp_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_bp: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_bp: true)
 }
 pub fn mset_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_mset: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_mset: true)
 }
 pub fn nat_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_nat: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_nat: true)
 }
 pub fn xor_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_xor: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_xor: true)
 }
 
 pub fn pair_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: pair_fun_sig(),
-        st_rules: crate::builtin::pair_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: pair_fun_sig(), st_rules: pair_rules().into())
 }
 
 /// `pairDestMaudeSig` (Term/Maude/Signature.hs:221): the `dest-pairing` variant —
 /// fst/snd are DESTRUCTORS (`pair_fun_dest_sig`) with the destructor
 /// rewrite rules (`pair_dest_rules`), rather than constructors.
 pub fn pair_dest_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: pair_fun_dest_sig(),
-        st_rules: crate::builtin::pair_dest_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: pair_fun_dest_sig(), st_rules: pair_dest_rules().into())
 }
 
+/// Hash is one-way: no rewrite rules.
 pub fn hash_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: hash_fun_sig(),
-        // Hash is one-way: no destructor rules.
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: hash_fun_sig())
 }
 
 pub fn sym_enc_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: sym_enc_fun_sig(),
-        st_rules: crate::builtin::sym_enc_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: sym_enc_fun_sig(), st_rules: sym_enc_rules().into())
 }
 
 pub fn asym_enc_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: asym_enc_fun_sig(),
-        st_rules: crate::builtin::asym_enc_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: asym_enc_fun_sig(), st_rules: asym_enc_rules().into())
 }
 
 pub fn signature_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: signature_fun_sig(),
-        st_rules: crate::builtin::signature_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: signature_fun_sig(), st_rules: signature_rules().into())
 }
 
 pub fn reveal_signature_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: reveal_signature_fun_sig(),
-        st_rules: crate::builtin::reveal_signature_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: reveal_signature_fun_sig(), st_rules: reveal_signature_rules().into())
 }
 
 pub fn location_report_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: location_report_fun_sig(),
-        st_rules: crate::builtin::location_report_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: location_report_fun_sig(), st_rules: location_report_rules().into())
 }
 
 pub fn sym_enc_dest_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: sym_enc_fun_dest_sig(),
-        st_rules: crate::builtin::sym_enc_dest_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: sym_enc_fun_dest_sig(), st_rules: sym_enc_dest_rules().into())
 }
 
 pub fn asym_enc_dest_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: asym_enc_fun_dest_sig(),
-        st_rules: crate::builtin::asym_enc_dest_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: asym_enc_fun_dest_sig(), st_rules: asym_enc_dest_rules().into())
 }
 
 pub fn signature_dest_maude_sig() -> MaudeSig {
-    MaudeSig {
-        st_fun_syms: signature_fun_dest_sig(),
-        st_rules: crate::builtin::signature_dest_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(st_fun_syms: signature_fun_dest_sig(), st_rules: signature_dest_rules().into())
 }
 
 pub fn minimal_maude_sig(diff: bool) -> MaudeSig {
-    MaudeSig {
-        enable_diff: diff,
-        st_fun_syms: pair_fun_sig(),
-        st_rules: crate::builtin::pair_rules().into(),
-        ..MaudeSig::default()
-    }
-    .refresh()
-}
-
-pub fn enable_diff_maude_sig() -> MaudeSig {
-    MaudeSig {
-        enable_diff: true,
-        ..MaudeSig::default()
-    }
-    .refresh()
+    maude_sig!(enable_diff: diff, st_fun_syms: pair_fun_sig(), st_rules: pair_rules().into())
 }
 
 #[cfg(test)]

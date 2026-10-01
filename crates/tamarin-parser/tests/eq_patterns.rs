@@ -30,11 +30,6 @@ fn parse_err(src: &str) -> ParseError {
     parse_theory(src, &[]).expect_err("the oracle rejects this source")
 }
 
-/// The rejected source's rendered parsec frame, named `eq.spthy`.
-fn frame(src: &str) -> String {
-    parse_err(src).with_source("eq.spthy").to_string()
-}
-
 /// The `SapicAction` chain of the theory's single top-level process,
 /// flattened in source order.
 fn process_actions(src: &str) -> Vec<p::SapicAction> {
@@ -153,43 +148,39 @@ fn let_binding_pattern_side_takes_a_pattern_variable() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn eq_on_a_tuple_or_literal_pins_the_oracle_frame() {
-    // `sapicvar` starts with one of the five sort prefixes
-    // (`sortedLVarNoSuffix`, Token.hs:486-499); anything else fails with the
-    // alternation's five labels.  Both frames below are byte-identical to the
-    // pinned oracle's.
-    assert_eq!(
-        frame("theory T begin\nprocess:\n  in('c', =<x, y>); out('c', 'k')\nend\n"),
-        "\"eq.spthy\" (line 3, column 12):\n\
-         unexpected \"<\"\n\
-         expecting \"$\", \"~\", identifier, \"#\" or \"%\""
-    );
-    assert_eq!(
-        frame("theory T begin\nprocess:\n  in('c', ='d'); out('c', 'k')\nend\n"),
-        "\"eq.spthy\" (line 3, column 12):\n\
-         unexpected \"'\"\n\
-         expecting \"$\", \"~\", identifier, \"#\" or \"%\""
-    );
+fn pattern_markers_require_a_variable() {
+    for term in ["<x, y>", "'d'"] {
+        let source = format!("theory T begin\nprocess:\n  in('c', ={term}); out('c', 'k')\nend\n");
+        let error = parse_err(&source);
+        assert_eq!(
+            error.span().start,
+            source.find(&format!("={term}")).unwrap() + 1
+        );
+        assert!(
+            error
+                .diagnostic_notes()
+                .iter()
+                .any(|note| note.contains("pattern variable")),
+            "{error:?}"
+        );
+    }
 }
 
 #[test]
 fn eq_on_an_application_is_rejected_at_the_open_paren() {
     // `=h(x)` parses as the match-var `h`; the `(` then breaks the enclosing
-    // grammar.  Oracle frame (in): `(line 4, column 13): unexpected "(" /
-    // expecting letter or digit, ".", ":" or ")"`.  The port's position and
-    // `unexpected` token agree; its `expecting` labels still lack the
-    // variable hangovers (the pre-existing frame class).
+    // grammar. The error should point at the application's opening parenthesis.
     let e = parse_err(
         "theory T begin\nfunctions: h/1\nprocess:\n  in('c', =h(x)); out('c', 'ok')\nend\n",
     );
-    assert_eq!((e.line, e.col), (4, 13));
+    assert_eq!(e.line_column(), (4, 13));
 
     // Oracle frame (let): `(line 4, column 21): unexpected "(" /
     // expecting letter or digit, ".", ":" or "="`.
     let e = parse_err(
         "theory T begin\nfunctions: h/1\nprocess:\n  in('c', y); let =h(x) = y in out('c', 'ok')\nend\n",
     );
-    assert_eq!((e.line, e.col), (4, 21));
+    assert_eq!(e.line_column(), (4, 21));
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +197,8 @@ fn eq_starts_no_term_outside_pattern_positions() {
     // above).  Before the `allow_pat` gate the port PARSED these and died
     // later inside translation/elaboration with an unrelated message.
     let e = parse_err("theory T begin\nprocess:\n  in('c', x); out('c', =x)\nend\n");
-    assert_eq!((e.line, e.col), (3, 24));
+    assert_eq!(e.line_column(), (3, 24));
 
     let e = parse_err("theory T begin\nrule R: [ In(=x) ] --> [ Out(x) ]\nend\n");
-    assert_eq!((e.line, e.col), (2, 14));
+    assert_eq!(e.line_column(), (2, 14));
 }

@@ -89,10 +89,10 @@ fn main() {
     // Resolve HEAD's symbolic ref target (e.g. "refs/heads/rust-port") and
     // watch that concrete file. If HEAD is detached or unreadable, the
     // HEAD/packed-refs watches still apply.
-    if let Ok(head) = std::fs::read_to_string(format!("{git_dir}/HEAD")) {
-        if let Some(ref_path) = head.trim().strip_prefix("ref: ") {
-            println!("cargo:rerun-if-changed={git_dir}/{ref_path}");
-        }
+    if let Ok(head) = std::fs::read_to_string(format!("{git_dir}/HEAD"))
+        && let Some(ref_path) = head.trim().strip_prefix("ref: ")
+    {
+        println!("cargo:rerun-if-changed={git_dir}/{ref_path}");
     }
     println!("cargo:rerun-if-changed={git_dir}/packed-refs");
 }

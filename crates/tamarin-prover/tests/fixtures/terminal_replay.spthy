@@ -1,0 +1,12 @@
+theory TerminalReplay
+begin
+
+rule A:
+  [ Fr(x) ] --[ A(x) ]-> []
+
+lemma reflexive:
+  "All x #i. A(x) @ #i ==> x = x"
+  simplify
+by contradiction
+
+end

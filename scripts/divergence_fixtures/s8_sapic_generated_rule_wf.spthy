@@ -1,0 +1,22 @@
+// A process whose lowering mints rules that trip a rule wellformedness check.
+//
+// `checkWellformedness` (Theory/Tools/Wellformedness.hs:1270-1286) runs on the
+// translated theory (Main/TheoryLoader.hs:553-565), so `freshNamesReport`
+// (Theory/Tools/Wellformedness.hs:444-452) sees the rules the SAPIC
+// translation generates as well as the ones the source writes.  This theory
+// writes no rule at all: every rule the block names — `Init`, `newn_0_`,
+// `outnfoo_0_1` — comes from the translation.
+//
+// Mode `match`: both engines report `Fresh public constants` for the three
+// generated rules.
+//
+// Compared slice: the wf report block.
+
+
+theory S8SapicGeneratedRuleWf
+begin
+
+process:
+  new ~n; out(<~n, ~'foo'>)
+
+end

@@ -67,15 +67,11 @@ features/auto-sources/spore/CCITT_X509_3_BAN.spthy	--auto-sources
 features/auto-sources/spore/AS_Concrete_RPC.spthy	--auto-sources
 features/auto-sources/spore/Lowe_AS_Concrete_RPC.spthy	--auto-sources
 
-# ---- cwd-dependent oracle (upstream deforacle recipe cd-s into the dir,
-# ---- Makefile:199-201; the default-oracle lookup is cwd-relative) --------
-regression/trace/defaultoracle.spthy	@cd
-
 # ---- csf21-acc-unbounded DMN message-tracing (in-file header "Run with"
 # ---- note, lines 7-8). seqdfs is semantically load-bearing: step counts
 # ---- differ from the default dfs. The in-file
-# ---- `heuristic: o "./oracle-dmn-message-tracing"` needs NO flag and no
-# ---- @cd: HS resolves the ./ path relative to the theory file's directory.
+# ---- `heuristic: o "./oracle-dmn-message-tracing"` needs NO flag: HS
+# ---- resolves the ./ path relative to the theory file's directory.
 accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-1.spthy	--stop-on-trace=seqdfs
 accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-2.spthy	--stop-on-trace=seqdfs
 accountability/csf21-acc-unbounded/mixnets/message-tracing/dmn-message-tracing-all-3.spthy	--stop-on-trace=seqdfs

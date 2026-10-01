@@ -1,0 +1,46 @@
+theory TemporalPositions
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) A:
+   [ Fr( ~x ) ] --[ Alive( ~x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma pred_node_arg:
+  all-traces
+  "∀ #x.1. (Alive( 'a' ) @ #x.1) ⇒ (∃ y. (Alive( y ) @ #x.1) ∧ (¬(y = x)))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #x.1. (Alive( 'a' ) @ #x.1) ∧ ∀ y. (Alive( y ) @ #x.1) ⇒ y = x"
+*/
+by sorry
+
+lemma less_bare:
+  all-traces
+  "∀ #x y. (Alive( y ) @ #x) ⇒ (∃ z.1. (Alive( z.1 ) @ #x) ∧ (#x < #z))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #x y. (Alive( y ) @ #x) ∧ ∀ z.1. (Alive( z.1 ) @ #x) ⇒ ¬(#x < #z)"
+*/
+by sorry
+
+lemma last_bare:
+  all-traces "∀ x.1 y. (Alive( y ) @ #x) ⇒ (last(#x))"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x.1' in the subformula
+    "∀ x.1 y. (Alive( y ) @ #x) ⇒ (last(#x))"
+  in the formula
+    "∀ x.1 y. (Alive( y ) @ #x) ⇒ (last(#x))"
+*/
+by sorry
+
+
+
+end

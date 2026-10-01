@@ -1,0 +1,34 @@
+/*
+ * Every variable written with an explicit `:sort` suffix, in a rule, a
+ * restriction and two lemmas.  Upstream's suffix arm returns the same plain
+ * `LVar` its sigil arms return (Token.hs:409-433#sortedLVar) and prints it
+ * through `sortPrefix` (LTerm.hs:194-199#sortPrefix), so the sigil spelling
+ * comes back out.  No theory under tamarin-prover/examples writes a `:sort`
+ * suffix, so this row is the only guard on that spelling: the corpus gates
+ * stay green across a regression in it.
+ *
+ * Compared slices: the wf report block, which pins the run clean, and the
+ * `theory … end` echo, which carries every re-spelled variable (see
+ * check.sh).
+ */
+theory SortSuffix
+begin
+
+builtins: multiset, natural-numbers
+
+rule A:
+  [ Fr(n:fresh), In(p:pub) ] --[ Ev(n:fresh, p:pub, m:msg) ]-> [ Out(<n:fresh, p:pub, m:msg>) ]
+
+restriction R:
+  "All a:msg b:pub k:node. Ev(a:msg, b:pub, a:msg) @ k:node ==> k:node = k:node"
+
+lemma l1:
+  all-traces
+  "All x:msg y:fresh i:node. Ev(y:fresh, x:msg, x:msg) @ i:node
+     ==> Ex j:node. Ev(y:fresh, x:msg, x:msg) @ j:node & (j:node < i:node | i:node = j:node)"
+
+lemma l2:
+  exists-trace
+  "Ex q:nat z:msg i:node. Ev(z:msg, z:msg, z:msg) @ i:node & q:nat %+ z:msg = z:msg"
+
+end

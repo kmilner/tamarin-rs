@@ -10,12 +10,19 @@ use crate::rewriting::RRule;
 use crate::term::Term;
 
 /// Right-hand side of a context subterm rewrite rule.
+///
+/// HS `data StRhs = StRhs [Position] LNTerm` derives `Ord` over the positions
+/// then the term (SubtermRule.hs:40-41).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StRhs {
     pub positions: Vec<Position>,
     pub term: LNTerm,
 }
 
+/// HS `data CtxtStRule = CtxtStRule LNTerm StRhs` derives `Ord` over the
+/// left-hand side then the right-hand side (SubtermRule.hs:45-46).  A
+/// signature holds these in a `BTreeSet`, whose iteration order reaches the
+/// printed `equations:` block and the wellformedness report.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CtxtStRule {
     pub lhs: LNTerm,
@@ -196,6 +203,22 @@ pub fn is_subterm_convergent(rule: &CtxtStRule) -> bool {
 mod tests {
     use super::*;
     use crate::builtin::{msg_var, pair};
+
+    /// The two derived `Ord`s read the HS field order: a rule's LHS decides
+    /// before its RHS, and inside the RHS the positions decide before the
+    /// term.
+    #[test]
+    fn ctxt_st_rule_ord_follows_the_haskell_field_order() {
+        let x = msg_var("x", 0);
+        let y = msg_var("y", 0);
+        let rhs = |positions: Vec<Position>, term: LNTerm| StRhs { positions, term };
+        assert!(rhs(vec![vec![0]], y.clone()) < rhs(vec![vec![1]], x.clone()));
+        assert!(rhs(vec![vec![0]], x.clone()) < rhs(vec![vec![0]], y.clone()));
+        assert!(
+            CtxtStRule::new(x.clone(), rhs(vec![vec![1]], y.clone()))
+                < CtxtStRule::new(y.clone(), rhs(vec![vec![0]], x.clone()))
+        );
+    }
 
     #[test]
     fn find_subterm_finds_all_occurrences() {

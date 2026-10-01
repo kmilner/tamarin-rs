@@ -1,0 +1,622 @@
+diff --git a/lib/sapic/src/Sapic/Exceptions.hs b/lib/sapic/src/Sapic/Exceptions.hs
+index e722d592854192ae11d6fde82b8c8cea4cf67b06..3edb2eef7feec581ca6c3f4ba9acdd66f2d59726 100644
+--- a/lib/sapic/src/Sapic/Exceptions.hs
++++ b/lib/sapic/src/Sapic/Exceptions.hs
+@@ -23,7 +23,7 @@ import Data.Typeable
+ import Theory
+ import Theory.Sapic
+ import Theory.Text.Pretty
+-import Theory.Sapic.Print (prettySapic)
++import Theory.Sapic.Print (prettySapicNoLoc)
+ import Theory.Text.Pretty qualified as Pretty
+ 
+ -- two different kind of locking erros
+@@ -94,7 +94,7 @@ instance Show (SapicException an) where
+     show (InvalidPosition p) = "Invalid position:" ++ prettyPosition p
+     show (NotImplementedError s) = "This feature is not implemented yet. Sorry! " ++ s
+     show (ImplementationError s) = "You've encountered an error in the implementation: " ++ s
+-    show (ProcessNotWellformed e p) = "Process not well-formed: " ++ Pretty.render (text (show e) $-$ nest 2 (maybe emptyDoc prettySapic p))
++    show (ProcessNotWellformed e p) = "Process not well-formed: " ++ Pretty.render (text (show e) $-$ nest 2 (maybe emptyDoc prettySapicNoLoc p))
+     show ReliableTransmissionButNoProcess = "The builtin support for reliable channels currently only affects the process calculus, but you have not specified a top-level process. Please remove \"builtins: reliable-channel\" to proceed."
+     show (CannotExpandPredicate facttag rstr) = "Undefined predicate "
+                               ++ showFactTagArity facttag
+diff --git a/lib/theory/src/Items/OptionItem.hs b/lib/theory/src/Items/OptionItem.hs
+index 4ee3864b03added7de73e91888b9d33a8d57e9d6..3015ecc7cb01113469c9ac7d76cc53c9f3727faf 100644
+--- a/lib/theory/src/Items/OptionItem.hs
++++ b/lib/theory/src/Items/OptionItem.hs
+@@ -10,6 +10,8 @@ import GHC.Generics (Generic)
+ import Control.DeepSeq (NFData)
+ import Data.Binary (Binary)
+ import Data.Label as L
++import Data.Label.Mono (Lens)
++import Data.Label.Total (Total)
+ import qualified Data.Set as S
+ import Theory.Model.Fact
+ 
+@@ -37,4 +39,16 @@ data Option = Option
+         }
+         deriving( Eq, Ord, Show, Generic, NFData, Binary )
+ $(mkLabels [''Option])
+--- generate accessors for Option data structure records
+\ No newline at end of file
++-- generate accessors for Option data structure records
++
++-- | The options a theory file can set with the "options:" keyword, together
++-- with the name they are written under. Read by both the parser and the
++-- pretty-printer, so that every option that can be declared is also printed.
++declarableOptions :: [(String, Lens Total Option Bool)]
++declarableOptions =
++    [ ("translation-progress", transProgress)
++    , ("translation-allow-pattern-lookups", transAllowPatternMatchinginLookup)
++    , ("translation-state-optimisation", stateChannelOpt)
++    , ("translation-asynchronous-channels", asynchronousChannels)
++    , ("translation-compress-events", compressEvents)
++    ]
+diff --git a/lib/theory/src/OpenTheory.hs b/lib/theory/src/OpenTheory.hs
+index 59b402ea5bb5c169205df87971a534714431c909..5089a0345258e6078eec341f12432a17b989fe84 100644
+--- a/lib/theory/src/OpenTheory.hs
++++ b/lib/theory/src/OpenTheory.hs
+@@ -866,15 +866,26 @@ prettyDiffRule (DiffProtoRule ruE (Just (ruL, ruR))) =
+ prettyEitherRule :: (HighlightDocument d) => (Side, OpenProtoRule) -> d
+ prettyEitherRule (_, p) = prettyProtoRuleE $ L.get oprRuleE p
+ 
+--- | Pretty print an open theory.
++-- | Print the options a theory declares. Nothing is printed when no
++-- declarable option is set.
++prettyTheoryOptions :: (HighlightDocument d) => Option -> d
++prettyTheoryOptions opts
++    | null declared = emptyDoc
++    | otherwise = text "options" <> colon <-> fsep (punctuate comma (map text declared))
++  where
++    declared = [name | (name, l) <- declarableOptions, L.get l opts]
++
++-- | Pretty print an open theory. The declared options are printed after the
++-- signature, as they are not part of it.
+ prettyOpenTheory :: (HighlightDocument d) => OpenTheory -> d
+-prettyOpenTheory =
++prettyOpenTheory thy =
+   prettyTheory
+-    prettySignaturePure
++    (\sig -> prettySignaturePure sig $--$ prettyTheoryOptions (L.get thyOptions thy))
+     (const emptyDoc)
+     prettyOpenProtoRule
+     prettyProof
+     prettyTranslationElement
++    thy
+ 
+ -- | Pretty print an open theory.
+ prettyOpenDiffTheory :: (HighlightDocument d) => OpenDiffTheory -> d
+diff --git a/lib/theory/src/Theory.hs b/lib/theory/src/Theory.hs
+index cd0496b5e6b4e0dd6586ce63d7d8c0e4dcb2a04d..796b32a233ca788e249b277f59f5a962cd8eb8da 100644
+--- a/lib/theory/src/Theory.hs
++++ b/lib/theory/src/Theory.hs
+@@ -30,6 +30,7 @@ module Theory (
+   , clearFunctionTypingInfos
+ 
+   -- * Options
++  , declarableOptions
+   , transAllowPatternMatchinginLookup
+   , transProgress
+   , transReliable
+diff --git a/lib/theory/src/Theory/Sapic/Print.hs b/lib/theory/src/Theory/Sapic/Print.hs
+index c0529114bc7e6cafe620416c8e8a0bd96e7201f7..f7d78ec6f50abe6e63b8f9c0c5c04b465eded593 100644
+--- a/lib/theory/src/Theory/Sapic/Print.hs
++++ b/lib/theory/src/Theory/Sapic/Print.hs
+@@ -14,6 +14,7 @@ module Theory.Sapic.Print (
+     , processAddAnnotation
+     , pfoldMap
+     , prettySapic
++    , prettySapicNoLoc
+     , prettySapicAction
+     , prettySapicComb
+     , prettySapicTopLevel
+@@ -49,8 +50,13 @@ rulePrinter l a r res mv = render $ prettyRuleRestrGen ppFact ppRes l' (toPat a)
+ prettySapicAction :: LSapicAction -> String
+ prettySapicAction = prettySapicAction' rulePrinter
+ 
+-prettySapic :: (Document d) => LProcess ann -> d
+-prettySapic = prettySapic' rulePrinter
++prettySapic :: (Document d, GoodAnnotation ann) => LProcess ann -> d
++prettySapic = prettySapic' rulePrinter (location . getProcessParsedAnnotation)
++
++-- | Like 'prettySapic', but drops location annotations. For call sites whose
++-- annotation type is not a 'GoodAnnotation'.
++prettySapicNoLoc :: (Document d) => LProcess ann -> d
++prettySapicNoLoc = prettySapic' rulePrinter (const Nothing)
+ 
+ prettySapicTopLevel :: LProcess ann -> String
+ prettySapicTopLevel = prettySapicTopLevel' rulePrinter
+diff --git a/lib/theory/src/Theory/Sapic/Process.hs b/lib/theory/src/Theory/Sapic/Process.hs
+index 119581ba8b24a66c4ff5d6a3bf80a82c13bff8f5..feb7c2aceb658650655a5db7681733d8eb9b942b 100644
+--- a/lib/theory/src/Theory/Sapic/Process.hs
++++ b/lib/theory/src/Theory/Sapic/Process.hs
+@@ -488,20 +488,89 @@ prettySapic' :: (Document d) => ([SapicNFact SapicLVar]
+     -> [SapicNFormula SapicLVar]
+     -> Set SapicLVar
+     -> String)
++    -> (ann -> Maybe SapicTerm)
+     -> Process ann SapicLVar -> d
+-prettySapic' ppRR p
+-    | (ProcessNull _) <- p = text "0"
+-    | (ProcessComb c _ pl pr) <- p =  r pl <-> text (prettySapicComb c) <-> r pr
+-    | (ProcessAction Rep _ p') <- p = ppAct Rep <> parens (r p')
+-    | (ProcessAction a@ProcessCall {} _ _ ) <- p = ppAct a
+-    | (ProcessAction a _ (ProcessNull _)) <- p = ppAct a
+-    | (ProcessAction a _ p'@ProcessComb {}) <- p = ppAct a <> semi $-$ nest 1 (parens (r p'))
+-    | (ProcessAction a _ p') <- p = ppAct a <> semi $-$ r p'
++prettySapic' ppRR ppLoc = pp
+     where
+-        r = prettySapic' ppRR -- recursion shortcut
++        -- Print a process that is not followed by further tokens.
++        pp p = case ppLoc (processGetAnnotation p) of
++            Just l  -> ppLocated l p
++            Nothing -> ppForm p
++
++        -- Print a process that is followed by further tokens. The printed
++        -- form must not be able to absorb them, so any form that is not
++        -- clearly delimited is parenthesized.
++        ppDelimited p = case ppLoc (processGetAnnotation p) of
++            -- the location term could absorb a following '+'
++            Just l -> parens (ppLocated l p)
++            Nothing
++                | delimited p -> ppForm p
++                | otherwise   -> parens (ppForm p)
++
++        -- Left operands of '|' and '+' may keep their own '|' and '+'
++        -- structure without parentheses: the parser is left-associative.
++        ppLeftOp p
++            | chainNode p = ppForm p
++            | otherwise   = ppDelimited p
++
++        ppLocated l p = parens (ppForm p) <> text "@" <> prettySapicTerm l
++
++        -- A '|' or '+' node without a location annotation. Only these
++        -- print as a bare chain; an annotated node prints as "(p)@term".
++        chainNode p
++            | ProcessComb c _ _ _ <- p
++            , Nothing <- ppLoc (processGetAnnotation p) = isParOrNDC c
++            | otherwise                                 = False
++
++        isParOrNDC Parallel = True
++        isParOrNDC NDC      = True
++        isParOrNDC _        = False
++
++        -- Printed forms that neither absorb a following token nor extend to
++        -- the right. Replication is excluded on purpose: '!' takes a whole
++        -- process, so it would swallow a following '|' or '+'.
++        delimited (ProcessNull _)                     = True
++        delimited (ProcessAction ProcessCall {} _ _)  = True
++        delimited (ProcessAction a _ (ProcessNull _)) = delimitedAction a
++        delimited _                                   = False
++
++        -- Actions that do not absorb a following token. Actions ending in a
++        -- term are excluded: the term could absorb a following '+'.
++        delimitedAction (New _)   = True
++        delimitedAction ChIn {}   = True
++        delimitedAction ChOut {}  = True
++        delimitedAction (Event _) = True
++        delimitedAction _         = False
++
++        -- The keyword between the head of a branching combinator and its
++        -- first branch.
++        branchKeyword c = case c of
++            Cond _     -> "then"
++            CondEq _ _ -> "then"
++            _          -> "in"  -- Let and Lookup
++
++        ppForm (ProcessNull _) = text "0"
++        ppForm (ProcessComb c _ pl pr)
++            | isParOrNDC c = ppLeftOp pl <-> text (prettySapicComb c) <-> ppDelimited pr
++            -- if, let and lookup, with an optional else branch
++            | (ProcessNull _) <- pr = hdr $-$ nest 4 (pp pl)
++            | otherwise = hdr $-$ nest 4 (ppDelimited pl) $-$ text "else" $-$ nest 4 (pp pr)
++            where
++                hdr = text (prettySapicComb c) <-> text (branchKeyword c)
++        ppForm (ProcessAction Rep _ p') = ppAct Rep <> parens (pp p')
++        ppForm (ProcessAction a@ProcessCall {} _ _ ) = ppAct a
++        ppForm (ProcessAction a _ (ProcessNull _)) = ppAct a
++        ppForm (ProcessAction a _ p') = ppAct a <> semi $-$ ppNext p'
++
++        -- Print the process behind a ';'. The grammar only allows an action
++        -- process there, so a '|' or '+' chain needs parentheses.
++        ppNext p'
++            | chainNode p' = nest 1 (parens (ppForm p'))
++            | otherwise    = pp p'
++
+         ppAct a = text (prettySapicAction' ppRR a)
+ 
+---- >>> render $ prettySapic' undefined (ProcessNull ())
++--- >>> render $ prettySapic' undefined (const Nothing) (ProcessNull ())
+ -- "0"
+ 
+ --- >>> render $ semi <> semi
+diff --git a/lib/theory/src/Theory/Text/Parser/Signature.hs b/lib/theory/src/Theory/Text/Parser/Signature.hs
+index f89c5a2f10c44700d22807f068509ba545f95369..fa42bef3cf8866166e6fd4b8f827a05cb079f459 100644
+--- a/lib/theory/src/Theory/Text/Parser/Signature.hs
++++ b/lib/theory/src/Theory/Text/Parser/Signature.hs
+@@ -253,20 +253,11 @@ options :: OpenTheory -> Parser OpenTheory
+ options thy0 =do
+             _  <- symbol "options"
+             _  <- colon
+-            l <- commaSep1 builtinTheory -- l is list of lenses to set options to true with
+-                                         -- builtinTheory modifies signature in state.
+-            return $ foldl setOption' thy0 l
++            ls <- commaSep1 optionName -- ls is the list of lenses to set to true
++            return $ foldl (flip setOption) thy0 ls
+   where
+-    setOption' thy Nothing  = thy
+-    setOption' thy (Just l) = setOption l thy
+-    builtinTheory = asum
+-      [  try 
+-         (symbol "translation-progress") Data.Functor.$> Just transProgress
+-        , symbol "translation-allow-pattern-lookups" Data.Functor.$> Just transAllowPatternMatchinginLookup
+-        , symbol "translation-state-optimisation" Data.Functor.$> Just stateChannelOpt
+-        , symbol "translation-asynchronous-channels" Data.Functor.$> Just asynchronousChannels
+-        , symbol "translation-compress-events" Data.Functor.$> Just compressEvents
+-      ]
++    optionName = asum
++      [ symbol name Data.Functor.$> l | (name, l) <- declarableOptions ]
+ 
+ predicate :: Parser Predicate
+ predicate = do
+@@ -289,7 +280,9 @@ export thy = do
+                     _          <- try (symbol "export")
+                     tag          <- identifier
+                     _          <- colon
+-                    text       <- doubleQuoted $ many bodyChar -- TODO Gotta use some kind of text.
++                    -- The opening quote must not be a lexeme: a lexeme would
++                    -- consume whitespace and comments that belong to the text.
++                    text       <- between (char '"') (symbol "\"") (many bodyChar)
+                     let ei = ExportInfo tag text
+                     return (addExportInfo ei thy)
+                     <?> "export block"
+diff --git a/lib/theory/src/Theory/Text/Parser/Term.hs b/lib/theory/src/Theory/Text/Parser/Term.hs
+index dfccca27d6ca0cab6ea4252c2080ff539a0fe580..5a577040fd6490d0705c701561ee82d60494957e 100644
+--- a/lib/theory/src/Theory/Text/Parser/Term.hs
++++ b/lib/theory/src/Theory/Text/Parser/Term.hs
+@@ -32,7 +32,6 @@ import           Term.Substitution
+ import           Theory
+ import           Theory.Text.Parser.Token
+ import           Data.ByteString.Internal        (unpackChars)
+-import Data.Functor (($>))
+ 
+ -- | An AC operator
+ opAC :: ACfctSym -> Parser ()
+@@ -142,14 +141,14 @@ term :: Ord l => Bool -> Parser (Term l) -> Parser (Term l)
+ term eqn plit = asum
+     [ pairing       <?> "pairs"
+     , parens (msetterm eqn plit)
+-    , symbol "DH_neutral" *> pure fAppDHNeutral    
+-    , symbol "1:nat"
++    , reserved "DH_neutral" *> pure fAppDHNeutral
++    , reserved "1:nat"
+         *> requireNaturalNumbers "natural-number literal 1:nat"
+         *> pure fAppNatOne
+-    , symbol "%1"
++    , reserved "%1"
+         *> requireNaturalNumbers "natural-number literal %1"
+         *> pure fAppNatOne
+-    , symbol "1"          *> pure fAppOne
++    , reserved "1"  *> pure fAppOne
+     , application        <?> "function application"
+     , nullaryApp
+     , plit
+@@ -158,12 +157,15 @@ term eqn plit = asum
+   where
+     application = asum $ map (try . ($ plit)) [naryOpApp eqn, binaryAlgApp eqn, diffOp eqn]
+     pairing = angled (tupleterm eqn plit)
+-    nullaryApp = do
++    -- Match a full identifier, so that a nullary symbol that is a prefix of
++    -- another identifier is not taken by mistake.
++    nullaryApp = try $ do
+       maudeSig <- sig <$> getState
+-      -- FIXME: This try should not be necessary.
+-      asum [ try (symbol (BC.unpack sym)) $> fApp fs []
++      op <- BC.pack <$> identifier
++      asum [ pure (fApp fs [])
+            | fs@(NoEq (sym,(0,_,_,_))) <- S.toList $
+-               funSyms maudeSig `S.union` S.map NoEq (macroNames maudeSig) ]
++               funSyms maudeSig `S.union` S.map NoEq (macroNames maudeSig)
++           , sym == op ]
+ 
+ -- | A left-associative sequence of user-defined AC operators.
+ acterm :: Ord l => Bool -> Parser (Term l) -> Parser (Term l)
+diff --git a/lib/theory/src/Theory/Text/Parser/Token.hs b/lib/theory/src/Theory/Text/Parser/Token.hs
+index 207ec69e5ee12ac4e6a633adb61437013c3465fc..8ea44f882f1982fb99ce6080799ccb988decca50 100644
+--- a/lib/theory/src/Theory/Text/Parser/Token.hs
++++ b/lib/theory/src/Theory/Text/Parser/Token.hs
+@@ -277,8 +277,9 @@ symbol sym = try (T.symbol spthy sym) <?> ("\"" ++ sym ++ "\"")
+ symbol_ :: String -> Parser ()
+ symbol_ = void . symbol
+ 
+--- | Parse a keyword, i.e. a symbol that must not be followed by an
+--- identifier character (so @end@ does not match a prefix of @endrule@).
++-- | Parse a keyword or fixed symbol that must end at an identifier boundary,
++-- so that it does not match a prefix of a longer identifier. Identifiers may
++-- start with a digit, so this also guards number-like symbols such as "1".
+ reserved :: String -> Parser ()
+ reserved = T.reserved spthy
+ 
+diff --git a/lib/theory/src/TheoryObject.hs b/lib/theory/src/TheoryObject.hs
+index 66d3732a196220d2d652353fa0bb3cb170af0348..bec6c341d2034393852522a66f73edd3ae15be7e 100644
+--- a/lib/theory/src/TheoryObject.hs
++++ b/lib/theory/src/TheoryObject.hs
+@@ -785,62 +785,55 @@ prettyTheory ppSig ppCache ppRule ppPrf ppSap thy =
+ prettyTranslationElement :: (HighlightDocument d) => TranslationElement -> d
+ prettyTranslationElement (ProcessItem p) = text "process" <> colon $-$ (nest 2 $ prettyProcess p)
+ prettyTranslationElement (DiffEquivLemma p) = text "diffEquivLemma" <> colon $-$ (nest 2 $ prettyProcess p)
+-prettyTranslationElement (EquivLemma p1 p2) = text "equivLemma" <> colon $-$ (nest 2 $ prettyProcess p1) $$ (nest 2 $ prettyProcess p2)
++-- Both processes are parenthesized so that the first cannot absorb the second.
++prettyTranslationElement (EquivLemma p1 p2) = text "equivLemma" <> colon $-$ (nest 2 $ parens $ prettyProcess p1) $$ (nest 2 $ parens $ prettyProcess p2)
+ prettyTranslationElement (AccLemmaItem a) = prettyAccLemma a
+ prettyTranslationElement (CaseTestItem c) = prettyCaseTest c
+-prettyTranslationElement (ProcessDefItem p) =
+-  (text "let ")
+-    <-> (text (L.get pName p))
+-    <-> ( case L.get pVars p of
+-            Nothing -> emptyDoc
+-            Just l -> text ("(" ++ intercalate "," (map show l) ++ ")")
+-        )
+-    <-> (text "=")
+-    <-> nest 2 (prettyProcess $ L.get pBody p)
+-prettyTranslationElement (FunctionTypingInfo (ACfctUser (fsn,(priv,constr,ndc)), intypes, outtype)) =
++prettyTranslationElement (ProcessDefItem p) = prettyProcessDef p
++-- Typing info with only default types is not printed: the signature's
++-- function declaration already covers it.
++prettyTranslationElement (FunctionTypingInfo (_, intypes, outtype))
++  | all isNothing (outtype : intypes) = emptyDoc
++-- The attributes go into a single bracketed list, spelled the way the
++-- parser's 'functionAttribute' reads them.
++prettyTranslationElement (FunctionTypingInfo (fsym, intypes, outtype)) =
+   (text "function:")
+     <-> text (unpack fsn)
+     <-> parens (fsep $ punctuate comma $ map printType intypes)
+     <-> text ":"
+     <-> printType outtype
+-    <-> text " [AC]"
+-    <-> text (showPriv priv)
+-    <-> text (showConst constr)
+-    <-> text (showNDC ndc)
++    <> text (showAttrs attrs)
+   where
++    (fsn, attrs) = case fsym of
++      ACfctUser (f, (priv, constr, ndc)) ->
++        (f, showPriv priv ++ showConst constr ++ ["AC"] ++ showNDC ndc)
++      NoEqUser (f, (_, priv, constr, ndc)) ->
++        (f, showPriv priv ++ showConst constr ++ showNDC ndc)
+     printType = maybe (text defaultSapicTypeS) text
+-    showPriv Private = " [private]"
+-    showPriv Public = ""
+-    showConst Constructor = ""
+-    showConst Destructor = " [destructor]"
+-    showNDC NotNDC = ""
+-    showNDC IsNDC = " [NDC]"
+-    showNDC IsNDCDiff = " [NDC-Diff]"
+-    showNDC IsNDCBoth = " [NDC,NDC-Diff]"
+-prettyTranslationElement (FunctionTypingInfo (NoEqUser (fsn, (_, priv, constr, ndc)), intypes, outtype)) =
+-  (text "function:")
+-    <-> text (unpack fsn)
+-    <-> parens (fsep $ punctuate comma $ map printType intypes)
+-    <-> text ":"
+-    <-> printType outtype
+-    <-> text (showPriv priv)
+-    <-> text (showConst constr)
+-    <-> text (showNDC ndc)
+-  where
+-    printType = maybe (text defaultSapicTypeS) text
+-    showPriv Private = " [private]"
+-    showPriv Public = ""
+-    showConst Constructor = ""
+-    showConst Destructor = " [destructor]"
+-    showNDC NotNDC = ""
+-    showNDC IsNDC = " [NDC]"
+-    showNDC IsNDCDiff = " [NDC-Diff]"
+-    showNDC IsNDCBoth = " [NDC,NDC-Diff]"
++    showPriv priv = ["private" | priv == Private]
++    showConst constr = ["destructor" | constr == Destructor]
++    showNDC ndc = ["NDC" | hasNDC ndc] ++ ["NDC-diff" | hasNDCdiff ndc]
++    showAttrs [] = ""
++    showAttrs as = " [" ++ intercalate "," as ++ "]"
+ prettyTranslationElement (ExportInfoItem eInfo) =
+-  (text "export: ")
++  (text "export")
+     <-> text (L.get eTag eInfo)
+-    <-> nest 2 (doubleQuotes $ text $ L.get eText eInfo)
+-prettyTranslationElement (SignatureBuiltin s) = (text "builtin ") <-> (text s)
++    <-> colon
++    <-> nest 2 (doubleQuotes $ text $ concatMap escape $ L.get eText eInfo)
++  where
++    escape '\\' = "\\\\"
++    escape '"'  = "\\\""
++    escape c    = [c]
++-- Builtins that only consist of function symbols and equations are already
++-- printed as part of the signature. Builtins whose effect cannot be recovered
++-- from the signature must be printed: locations-report and reliable-channel
++-- set a translation option, and dest-pairing changes the attributes of the
++-- predefined fst and snd, which a function declaration cannot do.
++prettyTranslationElement (SignatureBuiltin s)
++  | s `elem` printedBuiltins = text "builtins" <> colon <-> text s
++  | otherwise                = emptyDoc
++  where
++    printedBuiltins = ["locations-report", "reliable-channel", "dest-pairing"]
+ 
+ prettyPredicate :: (HighlightDocument d) => Predicate -> d
+ prettyPredicate p = kwPredicate <> colon <-> text (factstr ++ "<=>" ++ formulastr)
+@@ -851,8 +844,18 @@ prettyPredicate p = kwPredicate <> colon <-> text (factstr ++ "<=>" ++ formulast
+ prettyProcess :: (HighlightDocument d) => PlainProcess -> d
+ prettyProcess = prettySapic
+ 
++-- | Print a process definition as @let name(v1,...,vn) = body@. The parameter
++-- list is left out for a definition that has none.
+ prettyProcessDef :: (HighlightDocument d) => ProcessDef -> d
+-prettyProcessDef pDef = text "let " <-> text (L.get pName pDef) <-> text " = " <-> prettySapic (L.get pBody pDef)
++prettyProcessDef pDef =
++  (text "let ")
++    <-> (text (L.get pName pDef))
++    <-> ( case L.get pVars pDef of
++            Nothing -> emptyDoc
++            Just l -> text ("(" ++ intercalate "," (map show l) ++ ")")
++        )
++    <-> (text "=")
++    <-> nest 2 (prettyProcess $ L.get pBody pDef)
+ 
+ -- | Pretty-print a comma, separated list of 'LVar's.
+ prettyVarList :: (Document d) => [LVar] -> d
+diff --git a/regressionTests.py b/regressionTests.py
+index 66bbb75c3d3e19eb7a0ba375c2b2ff8a81852959..b595f4140b1cc27571150a0d6cef3900b2332a00 100644
+--- a/regressionTests.py
++++ b/regressionTests.py
+@@ -1,5 +1,5 @@
+ from html import parser
+-import subprocess, sys, re, os, argparse, logging, datetime, shutil
++import subprocess, sys, re, os, argparse, logging, datetime, shutil, tempfile
+ 
+ 
+ class colors:
+@@ -241,28 +241,31 @@ def parseFile(path):
+ 	except Exception as ex:
+ 		return f"Parse error - lemmas: {path}"
+ 	
++def isDiffOutputFile(path):
++	""" Whether the generated output file belongs to a diff (equivalence) theory. """
++	return any(pattern in path for pattern in [
++		"_analyzed-diff.spthy",
++		"_analyzed-diff-noprove.spthy",
++		"_analyzed-diff-obseqonly.spthy",
++		"_analyzed-diff-bfs.spthy"
++	])
++
++def isSapicOrAccountabilityFile(path):
++	""" Whether the file is a SAPIC or accountability theory. """
++	return any(pattern in path for pattern in [
++		"sapic",
++		"accountability"
++	])
++
+ def testOutputFileParsing(path):
+ 	"""
+ 	Tests if a generated Tamarin output file can still be parsed.
+ 	"""
+ 	try:
+-		# Determine file type based on filename patterns
+-		is_diff_file = any(pattern in path for pattern in [
+-			"_analyzed-diff.spthy", 
+-			"_analyzed-diff-noprove.spthy",
+-			"_analyzed-diff-obseqonly.spthy",
+-			"_analyzed-diff-bfs.spthy"
+-		])
+-
+-		is_sapic_or_accountability_file = any(pattern in path for pattern in [
+-			"sapic",
+-			"accountability"
+-		])
+-  
+-		flags = "--diff" if is_diff_file else ""
++		flags = "--diff" if isDiffOutputFile(path) else ""
+ 		command = f"tamarin-prover --parse-only {flags} {path}"
+ 		
+-		if is_sapic_or_accountability_file and settings.no_sapic_output_parse_test:
++		if isSapicOrAccountabilityFile(path) and settings.no_sapic_output_parse_test:
+ 			logging.warning(f"Skipping output parse test for {path} since it is a SAPIC or accountability file and the flag --no-sapic-output-parse-test is set.")
+ 			return True, None
+ 
+@@ -274,6 +277,47 @@ def testOutputFileParsing(path):
+ 	except Exception as ex:
+ 		return False, str(ex)
+ 
++def sourceOfOutputFile(pathB):
++	"""
++	Returns the path in examples/ of the theory from which the output file pathB
++	was generated, or None if there is no such file.
++	"""
++	rel = pathB.split(settings.folderB, 1)[-1].lstrip("/")
++	match = re.match(r"(?:fast-tests/)?(.*)_analyzed(?:-[\w-]+)?\.spthy$", rel)
++	if match is None:
++		return None
++	source = os.path.join("examples", match.group(1) + ".spthy")
++	return source if os.path.exists(source) else None
++
++def testParseOnlyRoundTrip(source, diff):
++	"""
++	Tests if the output of 'tamarin-prover --parse-only' on the theory file source
++	can be parsed again, and if doing so prints the same theory. The second check
++	catches output that the parser accepts but that denotes a different theory,
++	e.g. because a declaration is printed twice. diff runs Tamarin in --diff mode.
++	"""
++	try:
++		if isSapicOrAccountabilityFile(source) and settings.no_sapic_output_parse_test:
++			logging.warning(f"Skipping --parse-only round-trip test for {source} since it is a SAPIC or accountability file and the flag --no-sapic-output-parse-test is set.")
++			return True, None
++
++		flags = ["--diff"] if diff else []
++		first = subprocess.run(["tamarin-prover", "--parse-only", *flags, source], capture_output=True, encoding="utf-8")
++		if first.returncode != 0:
++			return False, first.stderr
++		with tempfile.TemporaryDirectory() as tmpDir:
++			tmpPath = os.path.join(tmpDir, os.path.basename(source))
++			with open(tmpPath, "w", encoding="utf-8") as tmpFile:
++				tmpFile.write(first.stdout)
++			second = subprocess.run(["tamarin-prover", "--parse-only", *flags, tmpPath], capture_output=True, encoding="utf-8")
++		if second.returncode != 0:
++			return False, f"The printed theory cannot be parsed again:\n{second.stderr}"
++		if second.stdout != first.stdout:
++			return False, "The printed theory changes when it is parsed and printed again"
++		return True, None
++	except Exception as ex:
++		return False, str(ex)
++
+ def parseFiles(pathB):
+ 	"""
+ 	Finds the corresponding file in case-studies-regression to the file pathB which is in case-studies.
+@@ -314,6 +358,8 @@ def compare():
+ 	majorDifferences = False
+ 	stepSumA, stepSumB, timeSumA, timeSumB = 0, 0, 0, 0
+ 	parseTestsTotal, parseTestsFailed = 0, 0
++	roundTripTestsTotal, roundTripTestsFailed = 0, 0
++	roundTripTested = set()
+ 	
+ 	for pathB in iterFolder(settings.folderB):
+ 
+@@ -327,6 +373,21 @@ def compare():
+ 				majorDifferences = True
+ 				parseTestsFailed += 1		
+   
++		## Tamarin round-trip testing of --parse-only on the source theory ##
++		if not settings.no_output_parse_test:
++			source = sourceOfOutputFile(pathB)
++			diff = isDiffOutputFile(pathB)
++			# The same source theory can produce several output files, so test it once per mode.
++			if source is not None and (source, diff) not in roundTripTested:
++				roundTripTested.add((source, diff))
++				roundTripTestsTotal += 1
++				roundTripSuccess, roundTripError = testParseOnlyRoundTrip(source, diff)
++				if not roundTripSuccess:
++					logging.error(color(colors.RED + colors.BOLD, f"--parse-only round-trip test failed for {source}"))
++					logging.error(color(colors.RED, roundTripError))
++					majorDifferences = True
++					roundTripTestsFailed += 1
++
+ 		## parse file ##
+ 		parsed = parseFiles(pathB)
+ 		if type(parsed) == str:
+@@ -491,6 +552,11 @@ def compare():
+ 			logging.error(color(colors.RED + colors.BOLD, f"{parseTestsFailed} output files failed to parse!"))
+ 		else:
+ 			logging.warning("All output files successfully parsed")
++		if roundTripTestsFailed > 0:
++			logging.warning(f"--parse-only round-trip tests: {roundTripTestsTotal - roundTripTestsFailed}/{roundTripTestsTotal} successful")
++			logging.error(color(colors.RED + colors.BOLD, f"{roundTripTestsFailed} theories do not survive a --parse-only round trip!"))
++		else:
++			logging.warning("All theories survive a --parse-only round trip")
+ 		if settings.verbose >= 3:
+ 			logging.error(color(colors.RED + colors.BOLD, "There were differences in the results of the lemmas, or in the rules, or in the equations, or in the builtins, or in the functions, or in the warnings, or the files itself could not be parsed!"))
+ 		else: 
+@@ -545,7 +611,7 @@ def getArguments():
+ 			"6: show diff output if the corresponding proofs changed"
+ 			, type=int, default=3)
+ 	parser.add_argument("-p", "--parser-test", help = "Run the parser tests.", action="store_true")
+-	parser.add_argument("-nopt", "--no-output-parse-test", help="Skip testing if output files can be parsed again", action="store_true")
++	parser.add_argument("-nopt", "--no-output-parse-test", help="Skip the output parse tests and the --parse-only round-trip tests", action="store_true")
+ 	parser.add_argument("--no-sapic-output-parse-test", dest="no_sapic_output_parse_test", help="Disable SAPIC/accountability output parse tests", action="store_true")
+ 	
+ 

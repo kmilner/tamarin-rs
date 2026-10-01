@@ -1,0 +1,31 @@
+theory S6PredicateCapture
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+predicate: P( x )<=>∃ z #i. Act( x, z ) @ #i
+
+lemma cap:
+  all-traces "∀ z #j. (Start( z ) @ #j) ⇒ (∃ z.1 #i. Act( z, z.1 ) @ #i)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ z #j. (Start( z ) @ #j) ∧ ∀ z.1 #i. (Act( z, z.1 ) @ #i) ⇒ ⊥"
+*/
+by sorry
+
+lemma mset:
+  all-traces "∀ y #j. (Start( y ) @ #j) ⇒ (∃ z.1. y = (z++z.1))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ y #j. (Start( y ) @ #j) ∧ ∀ z.1. (y = (z++z.1)) ⇒ ⊥"
+*/
+by sorry
+
+
+
+end

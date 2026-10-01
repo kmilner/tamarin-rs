@@ -2,35 +2,29 @@
 //! `tests/wellformedness_fixtures/` theory, byte for byte.  The reference is
 //! the pinned oracle's own `/* WARNING … */` block.
 //!
-//! There are two parser-side harnesses: `tamarin-parser`'s
-//! `tests/wellformedness.rs` and its `examples/wellformedness_fixtures.rs`
-//! differential runner.  Both can only reach
-//! `tamarin_parser::wf::check_theory`.  They therefore compare topic names,
-//! and they must drop the two topics that exist only after elaboration
-//! (`Formula terms`, `Multiplication restriction of rules`).  Three fixtures
-//! pin nothing else: `formula_unguarded`, `multiplication_in_rule_lhs` and
-//! `quantifier_wrong_sort`.  If you replace one of those three with an empty
-//! `theory X begin end`, the parser-side harnesses still pass.  This harness
-//! closes that hole from the crate that holds the post-elaboration checks.  It
-//! also compares the full report bytes of every other fixture, rather than a
-//! subset of the topics.
+//! The `examples/wellformedness_fixtures.rs` differential runner compares
+//! topic names only, and four fixtures list a single topic:
+//! `formula_unguarded`, `multiplication_in_rule_lhs`, `non_subterm_equation`
+//! and `quantifier_wrong_sort`.  This harness compares the full report bytes
+//! of every fixture instead, so a fixture cannot be hollowed out and still
+//! pass.  It also holds that runner's `expected.txt` roster to the fixture
+//! directory, in [`expected_txt_lists_every_fixture`].
 //!
-//! The pipeline below calls the four `tamarin_theory::translated_wf` entry
-//! points in the order that both production callers call them.  Those callers
-//! are `run.rs`'s batch loop and `tamarin_server::theory_io`'s web load.  This
-//! harness is therefore a third caller of that shared module, not a hand-copy
-//! of either caller.  Two production stages are deliberately absent, and
+//! The pipeline below calls `tamarin_theory::wellformedness::check_wellformedness`
+//! the way both production callers call it.  Those callers are `run.rs`'s
+//! batch loop and `tamarin_server::theory_io`'s web load.  This harness is
+//! therefore a third caller of that shared module, not a hand-copy of either
+//! caller.  Two production stages are deliberately absent, and
 //! [`render_report`] asserts that the first one cannot apply:
 //!
-//! * the SAPIC / accountability translation that `run.rs` runs between the
-//!   `swap_subterm_convergence_report` and `splice_translated_wf_reports`
-//!   calls.  No fixture declares a process, and the render asserts this.
+//! * the SAPIC / accountability translation both drivers run before the pass.
+//!   No fixture declares a process, and the render asserts this.
 //! * the Maude-backed `Message Derivation Checks` and `Rule variants` blocks
 //!   that the batch loop splices afterwards.  Four expectation files
 //!   therefore carry an `# omits:` line.  That line names the derivation-check
 //!   section that the oracle prints and this pipeline does not.
-//!   `expected.txt` documents the same asymmetry for the topic-level
-//!   harnesses.
+//!   `expected.txt` documents the same asymmetry for the differential
+//!   runner.
 //!
 //! The expected bytes live in one file per fixture, at
 //! `tests/wellformedness_fixtures/reports/<fixture>.report`.  Each file opens
@@ -44,34 +38,6 @@ use std::path::{Path, PathBuf};
 
 use tamarin_parser::parse_theory;
 use tamarin_theory::pretty_theory::format_wf_block;
-
-/// Fixtures with no `.report` expectation, each with the reason it has none.
-///
-/// These three fixtures trip two diff-theory checks, and both checks render a
-/// deliberately best-effort body.  `wf::left_right_rule_report`
-/// (wf.rs:2562-2574) and `wf::reserved_prefix_report` (wf.rs:1489-1505) each
-/// carry a comment.  Those comments say the faithful HS bodies need
-/// `prettyProtoRuleE` and HughesPJ `wrappedText`, which the parser crate
-/// cannot reach.  They also say that no corpus input exercises the path.  The
-/// bytes of these two checks are therefore not the oracle's.  A pin here would
-/// fix a divergence in place instead of pinning upstream.  Each of the three
-/// fixtures keeps a topic in `expected.txt` that the parser side can reach
-/// (`Left rule`, `Right rule`, `Reserved prefixes`).  If you empty one of the
-/// three, the parser-side harness still fails.
-const NO_REPORT_EXPECTATION: &[(&str, &str)] = &[
-    (
-        "diff_left_right_mismatch",
-        "`Left rule` body is a documented best-effort divergence",
-    ),
-    (
-        "diff_reserved_prefix",
-        "`Reserved prefixes` body is a documented best-effort divergence",
-    ),
-    (
-        "diff_right_rule_mismatch",
-        "`Right rule` body is a documented best-effort divergence",
-    ),
-];
 
 /// The minimum number of pinned reports.  [`report_roster_is_complete`]
 /// accepts any matched pair, so it alone cannot detect a mass truncation of
@@ -119,24 +85,18 @@ fn render_report(name: &str) -> String {
     let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let parsed = parse_theory(&src, &["diff"]).unwrap_or_else(|e| panic!("{name}: parse: {e}"));
 
-    let mut report = tamarin_theory::translated_wf::pre_translation_wf_report(&parsed);
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed)
         .unwrap_or_else(|e| panic!("{name}: elaborate: {}", e.message));
     assert!(
-        !elaborated.is_sapic,
+        !elaborated.is_sapic(),
         "{name}: declares a process, but this harness omits the SAPIC/accountability \
-         translation stage `run.rs` runs before `splice_translated_wf_reports`, so its \
+         translation stage both drivers run before the wellformedness pass, so its \
          report would be missing the generated rules' findings",
     );
-    let maude_sig = elaborated.signature.maude_sig.clone();
-    tamarin_theory::translated_wf::swap_subterm_convergence_report(&mut report, &maude_sig);
-    tamarin_theory::translated_wf::splice_translated_wf_reports(
-        &parsed,
+    format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
         &elaborated,
-        &maude_sig,
-        &mut report,
-    );
-    format_wf_block(&report)
+        None,
+    ))
 }
 
 /// The leading `#` provenance lines of an expectation file.
@@ -183,45 +143,101 @@ fn every_fixture_report_matches_its_pinned_block() {
     }
 }
 
-/// Every fixture is either pinned here or listed with a reason.  Every pin and
-/// every exclusion names a fixture that exists.
+/// Every fixture pins its rendered block against the oracle, and every pin
+/// names a fixture that exists.
 #[test]
 fn report_roster_is_complete() {
     let fixtures = fixture_stems();
     let reports = report_stems();
-    let excluded: BTreeSet<String> = NO_REPORT_EXPECTATION
-        .iter()
-        .map(|(n, _)| (*n).to_string())
-        .collect();
 
-    let unpinned: Vec<_> = fixtures
-        .difference(&reports)
-        .filter(|n| !excluded.contains(*n))
-        .collect();
+    let unpinned: Vec<_> = fixtures.difference(&reports).collect();
     assert!(
         unpinned.is_empty(),
-        "{unpinned:?}.spthy have no .report expectation and no NO_REPORT_EXPECTATION entry, \
-         so their report bytes are unpinned",
+        "{unpinned:?}.spthy have no .report expectation, so their report bytes are unpinned",
     );
     let orphaned: Vec<_> = reports.difference(&fixtures).collect();
     assert!(
         orphaned.is_empty(),
         "{orphaned:?}.report pin fixtures that have no .spthy file",
     );
-    let stale: Vec<_> = excluded.difference(&fixtures).collect();
-    assert!(
-        stale.is_empty(),
-        "NO_REPORT_EXPECTATION lists {stale:?}, which have no .spthy file",
-    );
-    let both: Vec<_> = excluded.intersection(&reports).collect();
-    assert!(
-        both.is_empty(),
-        "{both:?} are both pinned and excused — drop the NO_REPORT_EXPECTATION entry",
-    );
     assert!(
         reports.len() >= MIN_REPORTS,
         "expected ≥{MIN_REPORTS} pinned reports, got {}",
         reports.len(),
+    );
+}
+
+/// The fixture names `tests/wellformedness_fixtures/expected.txt` carries:
+/// `positive` holds the names of its expectation lines, `negative` the names
+/// of its `#!` lines.
+struct ExpectedNames {
+    positive: BTreeSet<String>,
+    negative: BTreeSet<String>,
+}
+
+/// Reads the names out of `expected.txt`.  A `#!<name> [oracle-flags] :
+/// <topics>` line is a negative expectation, every other `#` line is a
+/// comment, and any other line is a positive expectation.  A line that lists
+/// no topics compares nothing in the differential runner, so it fails here.
+fn expected_names() -> ExpectedNames {
+    let path = fixtures_dir().join("expected.txt");
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let mut names = ExpectedNames {
+        positive: BTreeSet::new(),
+        negative: BTreeSet::new(),
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (body, negative) = match line.strip_prefix("#!") {
+            Some(rest) => (rest.trim(), true),
+            None if line.starts_with('#') => continue,
+            None => (line, false),
+        };
+        let Some((lhs, rhs)) = body.split_once(':') else {
+            continue;
+        };
+        let Some(name) = lhs.split_whitespace().next() else {
+            continue;
+        };
+        assert!(
+            rhs.split(',').any(|t| !t.trim().is_empty()),
+            "{name}: {} line lists no topics, so it compares nothing",
+            if negative { "`#!`" } else { "expected.txt" },
+        );
+        if negative {
+            names.negative.insert(name.to_string());
+        } else {
+            names.positive.insert(name.to_string());
+        }
+    }
+    names
+}
+
+/// The differential runner drives the fixtures from `expected.txt`.  A
+/// `.spthy` file that no line names goes unchecked there, and a `#!` negative
+/// pin whose fixture no positive line lists is enforced against nothing.
+#[test]
+fn expected_txt_lists_every_fixture() {
+    let names = expected_names();
+    let fixtures = fixture_stems();
+
+    let unlisted: Vec<_> = fixtures.difference(&names.positive).collect();
+    assert!(
+        unlisted.is_empty(),
+        "{unlisted:?}.spthy have no expected.txt line, so the differential runner skips them",
+    );
+    let missing: Vec<_> = names.positive.difference(&fixtures).collect();
+    assert!(
+        missing.is_empty(),
+        "expected.txt lists {missing:?}, which have no .spthy file",
+    );
+    let orphaned: Vec<_> = names.negative.difference(&names.positive).collect();
+    assert!(
+        orphaned.is_empty(),
+        "`#!` negative pins for fixtures expected.txt does not list: {orphaned:?}",
     );
 }
 

@@ -28,6 +28,47 @@ impl TestServer {
     pub fn url(&self, path: &str) -> String {
         format!("{}{}", self.base, path)
     }
+
+    /// Send a GET to a server-relative path, retaining the path in failures.
+    #[allow(dead_code)]
+    pub async fn get(&self, path: &str) -> reqwest::Response {
+        self.client
+            .get(self.url(path))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("GET {path}: {e}"))
+    }
+
+    /// Send a body-less POST to a server-relative path.
+    #[allow(dead_code)]
+    pub async fn post(&self, path: &str) -> reqwest::Response {
+        self.client
+            .post(self.url(path))
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("POST {path}: {e}"))
+    }
+}
+
+/// Validate a route's `{redirect}` target and extract its theory index.
+#[allow(dead_code)]
+pub fn redirect_idx(response: &serde_json::Value, expected_tail: &str) -> usize {
+    let path = response["redirect"]
+        .as_str()
+        .expect("response contains a string redirect");
+    let remainder = path
+        .strip_prefix("/thy/trace/")
+        .expect("redirect starts with /thy/trace/");
+    let (index, tail) = remainder
+        .split_once('/')
+        .expect("redirect contains a theory index and target");
+    assert!(
+        tail == expected_tail || tail.starts_with(&format!("{expected_tail}/")),
+        "redirect {path:?} does not target {expected_tail:?}"
+    );
+    index
+        .parse()
+        .expect("redirect contains a numeric theory index")
 }
 
 /// Resolve the workspace root from `CARGO_MANIFEST_DIR`
@@ -93,26 +134,27 @@ pub async fn start_server_with_theory_and(
         maude_path: maude_path.clone(),
         // Match ServerConfig::new's default (HS interactive default 5s).
         derivcheck_timeout: 5,
+        solver_parameters: Default::default(),
         stop_on_trace: None,
         // Match ServerConfig::new's defaults (HS `dotPath`,
         // Environment.hs:37-38, and an absent `--with-json`).
         dot_path: "dot".to_string(),
         json_path: None,
+        auto_sources: false,
+        ndc_check: true,
+        lemmas_to_prove: Vec::new(),
+        parser_flags: Vec::new(),
     };
     mutate(&mut cfg);
 
     // Load theory before starting server.
     let store = TheoryStore::default();
-    let entry = tamarin_server::theory_io::load_from_path(
-        &theory_path,
-        &maude_path,
-        cfg.derivcheck_timeout,
-    )
-    .expect("fixture should parse + elaborate");
+    let entry = tamarin_server::theory_io::load_from_path(&theory_path, &cfg)
+        .expect("fixture should parse + elaborate");
     let _idx = store.insert(entry);
 
     let state = Arc::new(AppState { cfg, store });
-    let app = router(state.clone());
+    let app = router(state);
 
     // Bind to an ephemeral port; remember the resolved socket addr.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap())
@@ -165,159 +207,22 @@ pub fn content_type(res: &reqwest::Response) -> String {
     header(res, reqwest::header::CONTENT_TYPE)
 }
 
-/// Absolute Maude locations probed by the test harness, in priority order.
-/// A `MAUDE_PATH` env var overrides the probe entirely (the convention the
-/// rest of the workspace's maude-gated tests follow, and what CI sets).
-/// `$PATH` and the linuxbrew prefix are probed after these — see
-/// [`resolve_maude`].
-const MAUDE_CANDIDATES: [&str; 3] = [
-    "/usr/local/bin/maude",
-    "/opt/homebrew/bin/maude",
-    "/usr/bin/maude",
-];
-
-/// Last resort, after the absolute candidates and `$PATH` both miss: the
-/// machines here install maude under linuxbrew, which is not on the `$PATH`
-/// every shell exports to `cargo test`.
-const MAUDE_LINUXBREW: &str = "/home/linuxbrew/.linuxbrew/bin/maude";
-
-/// The maude this crate's tests run against, or `None` when the machine has
-/// none: `$MAUDE_PATH`, else an absolute [`MAUDE_CANDIDATES`] entry, else a
-/// `maude` on `$PATH`, else [`MAUDE_LINUXBREW`].
-///
-/// A `MAUDE_PATH` naming a file that does not exist is a MISCONFIGURATION,
-/// not a reason to skip: answering `None` there would turn every
-/// maude-backed pin in this crate green on a CI whose image moved maude
-/// (`.github/workflows/ci.yml` sets `MAUDE_PATH=/opt/maude/maude`).  Panic
-/// instead, so the run goes red.
-fn resolve_maude() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        assert!(
-            std::path::Path::new(&p).exists(),
-            "MAUDE_PATH={p} does not exist; unset it to fall back to \
-             {MAUDE_CANDIDATES:?}, or point it at a real maude — skipping \
-             every maude-backed pin here would report green vacuously"
-        );
-        return Some(p);
-    }
-    for c in MAUDE_CANDIDATES {
-        if std::path::Path::new(c).exists() {
-            return Some(c.into());
-        }
-    }
-    let on_path = std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .map(|d| d.join("maude"))
-            .find(|c| c.is_file())
-            .map(|c| c.display().to_string())
-    });
-    if let Some(p) = on_path {
-        return Some(p);
-    }
-    std::path::Path::new(MAUDE_LINUXBREW)
-        .exists()
-        .then(|| MAUDE_LINUXBREW.to_string())
-}
-
+/// The maude the harness hands the server, with a bare `maude` as the last
+/// resort for a run that got past [`maude_available`] with none resolved
+/// (`TAM_ALLOW_NO_MAUDE=1`, or a test that boots a server without consulting
+/// the guard): let the spawn fail with the real error rather than inventing a
+/// path.
 fn detect_maude() -> String {
-    // The bare name is a last resort for a run that got past
-    // [`maude_available`] with no maude anywhere (`TAM_ALLOW_NO_MAUDE=1`, or a
-    // test that boots a server without consulting the guard): let the spawn
-    // fail with the real error rather than inventing a path.
-    resolve_maude().unwrap_or_else(|| "maude".into())
+    tamarin_test_support::maude_path().unwrap_or_else(|| "maude".into())
 }
 
-/// True when a Maude binary is available — [`resolve_maude`] answering
-/// `Some`.  Tests that boot a real `ProofContext` use this as a skip-guard.
-///
-/// With no maude anywhere this PANICS instead of answering `false`: a silent
-/// skip makes `cargo test` green identically with and without maude, which is
-/// how a maude-backed pin rots unnoticed.  Set `TAM_ALLOW_NO_MAUDE=1` to
-/// skip them deliberately.
+/// True when a Maude binary is available — the guard the tests that boot a
+/// real `ProofContext` open with.  With no maude anywhere this PANICS instead
+/// of answering `false`; `tamarin_test_support` documents why and names the
+/// opt-out.
 #[allow(dead_code)]
 pub fn maude_available() -> bool {
-    if resolve_maude().is_some() {
-        return true;
-    }
-    assert!(
-        matches!(std::env::var("TAM_ALLOW_NO_MAUDE").as_deref(), Ok("1")),
-        "no maude found: MAUDE_PATH is unset, none of {MAUDE_CANDIDATES:?} \
-         exists, $PATH has no `maude` and {MAUDE_LINUXBREW} is missing — the \
-         maude-backed pins in this crate would report green having compared \
-         nothing.  Install maude, point MAUDE_PATH at it, or set \
-         TAM_ALLOW_NO_MAUDE=1 to skip them deliberately."
-    );
-    false
-}
-
-/// The oracle revision the captures under `tests/fixtures/haskell-responses/`
-/// were taken from, written by `tests/capture_haskell_fixtures.sh` at the end
-/// of a successful capture.
-fn captured_oracle_rev() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("haskell-responses")
-        .join("oracle_rev");
-    std::fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!(
-            "read {}: {e} — the capture stamp is missing; re-run \
-             crates/tamarin-server/tests/capture_haskell_fixtures.sh",
-            path.display()
-        )
-    })
-}
-
-/// Every byte-equality assertion in `routes_*.rs` compares the port against
-/// captures of ONE oracle build.  Pin them to the submodule the tests actually
-/// run against: `tamarin-prover/`'s checked-out HEAD (the working tree, which
-/// is also where the tests read `data/` from — not the recorded gitlink, which
-/// a half-finished bump can leave it out of step with).
-///
-/// git missing, or a submodule that is not a checkout, FAILS here: skipping
-/// would leave the whole capture suite comparing against an oracle nobody can
-/// name.
-#[test]
-fn haskell_captures_match_the_submodule_pin() {
-    let sub = workspace_root().join("tamarin-prover");
-    // Without this, an uninitialised (empty) submodule directory would let
-    // `git rev-parse` search UPWARDS and answer the superproject's HEAD.
-    assert!(
-        sub.join(".git").exists(),
-        "{} is not a git checkout — run ./setup.sh to initialise the submodule",
-        sub.display()
-    );
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&sub)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .unwrap_or_else(|e| {
-            panic!(
-                "run `git -C {} rev-parse HEAD`: {e} — git and an initialised \
-                 submodule are required to validate the Haskell captures",
-                sub.display()
-            )
-        });
-    assert!(
-        out.status.success(),
-        "`git -C {} rev-parse HEAD` failed ({}): {} — run ./setup.sh to \
-         initialise the submodule",
-        sub.display(),
-        out.status,
-        String::from_utf8_lossy(&out.stderr).trim(),
-    );
-    let head = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    let stamp = captured_oracle_rev();
-    let stamped = stamp.trim();
-    assert_eq!(
-        stamped, head,
-        "tests/fixtures/haskell-responses/ was captured from oracle {stamped} \
-         but tamarin-prover/ is checked out at {head} — re-run \
-         crates/tamarin-server/tests/capture_haskell_fixtures.sh against the \
-         pinned oracle and review the diff, or ./setup.sh the submodule back \
-         onto the pin"
-    );
+    tamarin_test_support::maude_available()
 }
 
 /// Read a captured Haskell response from `tests/fixtures/haskell-responses/`.
@@ -437,7 +342,7 @@ pub fn assert_theory_source_matches_capture(body: &str, capture: &str) {
 /// and hand the body back for the caller's own assertion.
 #[allow(dead_code)]
 async fn not_found_body(s: &TestServer, path: &str) -> String {
-    let res = s.client.get(s.url(path)).send().await.expect("send");
+    let res = s.get(path).await;
     assert_eq!(res.status(), 404, "{path} must be a 404");
     assert_eq!(
         content_type(&res),

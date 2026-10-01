@@ -13,7 +13,7 @@ rule (modulo E) Gen:
 
   /*
   rule (modulo AC) Gen:
-     [ In( a ), In( y ) ] --[ D( ) ]-> [ Out( (a++y) ) ]
+     [ In( a ), In( y ) ] --[ D( ) ]-> [ Out( (y++tamXCAbar(a)) ) ]
   */
 
 lemma triv:

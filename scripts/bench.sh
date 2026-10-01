@@ -24,9 +24,8 @@
 #   - Core control: HS `+RTS -Nk -RTS`; RS `--processors=k` (its Maude pool
 #     defaults to max(1, k), a 1:1 workers:maudes ratio).  Both prove all
 #     lemmas (`--prove`).
-#   - "peak RSS" is the prover PROCESS only (/usr/bin/time -v "Maximum resident
-#     set size").  Maude runs as separate subprocess(es) on BOTH sides and is
-#     not counted — the comparison is GHC-heap vs Rust-heap.
+#   - "peak RSS" is the largest sampled SUM across the command's live process
+#     tree, so the prover, Maude workers, and re-verification phase are counted.
 #   - Single run per cell (wall-clock is noisy by ±10%; magnitudes are stable).
 set -uo pipefail
 
@@ -38,6 +37,12 @@ TIMEOUT="${TIMEOUT:-600}"
 DERIV="${DERIV:-30}"
 CORES="${CORES:-1 4 16}"
 FILES="${FILES:-classic/NSPK3.spthy ake/bilinear/Joux.spthy features/auto-sources/tamarin-repo/sapic/statVerifLeftRight/stateverif_left_right.spthy sapic/fast/Yubikey/Yubikey.spthy accountability/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session.spthy csf19-wrapping/gcm.spthy wireguard/wireguard.spthy features/auto-sources/spore/CCITT_X509_3.spthy}"
+
+case "$DERIV" in *[!0-9]*|'') echo "bench.sh: DERIV must be an integer" >&2; exit 2 ;; esac
+
+cpu_count() {
+    nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo unknown
+}
 
 WRITE=0
 for arg in "$@"; do
@@ -59,49 +64,82 @@ HS_PATH="${HS_PATH:-$(find_hs)}"
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$HS_PATH" ] || { echo "bench.sh: no HS binary (set HS_PATH)" >&2; exit 2; }
 [ -x "$RS_PATH" ] || { echo "bench.sh: no RS binary at $RS_PATH" >&2; exit 2; }
-command -v /usr/bin/time >/dev/null || { echo "bench.sh: needs GNU /usr/bin/time" >&2; exit 2; }
+if command -v gtime >/dev/null 2>&1; then
+    TIME_BIN="$(command -v gtime)"
+elif /usr/bin/time -f '%e' -o /dev/null true 2>/dev/null; then
+    TIME_BIN=/usr/bin/time
+else
+    echo "bench.sh: needs GNU time (install Homebrew's time package on macOS)" >&2
+    exit 2
+fi
 
 # Baseline identity check: the generated block's prose asserts a RELEASE
 # baseline, but find_hs() takes whatever `tamarin-prover` is first on PATH —
 # on a gate-configured machine, the develop oracle this repo pins.  The
-# binary's own `Git revision:` (`Main/Console.hs:206-216`, always the full
-# hash) equal to the submodule pin ⇒ the baseline IS that oracle.  Only that
-# exact revision is caught; a release (revision `UNKNOWN` for a tarball build,
-# otherwise a release hash) and a develop build at any other revision both
-# pass.  An unpopulated submodule or a revision-less binary leaves one side
-# empty, and the check is skipped rather than guessing.
-hs_pin="$(git -C "$repo_root/tamarin-prover" rev-parse HEAD 2>/dev/null)"
+# binary's version must be the newest numeric release tag known to the pinned
+# upstream checkout. A binary with a Git revision must additionally point at
+# that exact tag; this catches develop builds at ANY revision, not just the
+# submodule pin. Tarball releases report no revision and are certified by
+# their version.
+hs_version="$("$HS_PATH" --version 2>/dev/null | sed -nE 's/.*tamarin-prover ([0-9]+(\.[0-9]+)+).*/\1/p' | head -1)"
+latest_release="$(git -C "$repo_root/tamarin-prover" tag --list '[0-9]*' --sort=-v:refname 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+)+$' | head -1)"
 hs_rev="$("$HS_PATH" --version 2>/dev/null | grep -oE 'Git revision: [0-9a-f]{7,40}' | head -1)"
 hs_rev="${hs_rev#Git revision: }"
-if [ -n "$hs_pin" ] && [ "$hs_rev" = "$hs_pin" ]; then
+release_tagged=1
+if [ -n "$hs_rev" ] && ! git -C "$repo_root/tamarin-prover" tag --points-at "$hs_rev" 2>/dev/null | grep -Fxq "$hs_version"; then
+    release_tagged=0
+fi
+if [ -z "$latest_release" ] || [ "$hs_version" != "$latest_release" ] || [ "$release_tagged" != 1 ]; then
     if [ "$WRITE" = 1 ] && [ -z "${BENCH_ALLOW_DEVELOP:-}" ]; then
-        echo "bench.sh: REFUSING --write: the HS baseline $HS_PATH is the pinned" >&2
-        echo "  DEVELOP oracle (rev ${hs_pin:0:12}), but the block it would write says the" >&2
-        echo "  baseline is the most recent RELEASE.  Set HS_PATH to a release build, or" >&2
-        echo "  BENCH_ALLOW_DEVELOP=1 to write develop numbers under release prose anyway." >&2
+        echo "bench.sh: REFUSING --write: $HS_PATH is not certified as the latest release" >&2
+        echo "  (binary=${hs_version:-unknown}, latest-tag=${latest_release:-unknown}, tagged=$release_tagged)." >&2
+        echo "  Set HS_PATH to that release, or BENCH_ALLOW_DEVELOP=1 to override." >&2
         exit 2
     fi
-    echo "bench.sh: *** WARNING: HS baseline $HS_PATH is the pinned DEVELOP oracle" >&2
-    echo "  (rev ${hs_pin:0:12}), not a release — the block's prose says RELEASE. ***" >&2
+    echo "bench.sh: WARNING: HS baseline is not certified as the latest release" >&2
 fi
 
-# measure <cmd...> → prints "<secs>|<mb>" ("timeout|—" on cap, "fail:<rc>|—" on
-# a nonzero exit).  The exit code is carried through because cell_rv_t
-# discriminates on it: prove_and_reverify.sh exits 3 only when the HS RE-CHECK
-# rejected the proof, and 1 when the Rust side failed.
+# Sum RSS for root and every descendant present in one `ps` snapshot. Unlike
+# GNU time's `ru_maxrss`, this measures simultaneous memory across Maude
+# workers rather than the largest individual process.
+tree_rss_kb() {
+    ps -e -o pid=,ppid=,rss= 2>/dev/null | awk -v root="$1" '
+        { parent[$1]=$2; rss[$1]=$3; ids[NR]=$1 }
+        END {
+            live[root]=1
+            do {
+                changed=0
+                for (i=1; i<=NR; i++) {
+                    p=ids[i]
+                    if (!live[p] && live[parent[p]]) { live[p]=1; changed=1 }
+                }
+            } while (changed)
+            total=0
+            for (p in live) if (live[p]) total += rss[p]
+            print total+0
+        }'
+}
+
+# measure <cmd...> → prints "<secs>|<mb>" ("timeout|—" on cap, "fail:<rc>|—"
+# on a nonzero exit). Wall time comes from GNU time; memory is sampled from the
+# whole live process tree every 20 ms.
 measure() {
-    local e rc wall rss
-    e=$(mktemp)
-    timeout "$TIMEOUT" /usr/bin/time -v "$@" >/dev/null 2>"$e"; rc=$?
-    if [ "$rc" = 124 ]; then rm -f "$e"; printf 'timeout|—'; return; fi
-    if [ "$rc" != 0 ]; then rm -f "$e"; printf 'fail:%s|—' "$rc"; return; fi
-    wall=$(awk -F': ' '/Elapsed \(wall clock\)/{print $NF}' "$e")
-    rss=$(awk -F': ' '/Maximum resident set size/{print $NF}' "$e")
-    rm -f "$e"
-    awk -v w="$wall" -v k="$rss" 'BEGIN{
-        n=split(w,a,":");
-        s=(n==3)? a[1]*3600+a[2]*60+a[3] : (n==2)? a[1]*60+a[2] : w;
-        printf "%.1f|%.0f", s, k/1024 }'
+    local timing rc wall rss now pid
+    timing=$(mktemp)
+    "$TIME_BIN" -f '%e' -o "$timing" timeout "$TIMEOUT" "$@" >/dev/null 2>/dev/null &
+    pid=$!
+    rss=0
+    while kill -0 "$pid" 2>/dev/null; do
+        now=$(tree_rss_kb "$pid")
+        [ "$now" -gt "$rss" ] && rss=$now
+        sleep 0.02
+    done
+    wait "$pid"; rc=$?
+    if [ "$rc" = 124 ]; then rm -f "$timing"; printf 'timeout|—'; return; fi
+    if [ "$rc" != 0 ]; then rm -f "$timing"; printf 'fail:%s|—' "$rc"; return; fi
+    wall=$(cat "$timing")
+    rm -f "$timing"
+    awk -v w="$wall" -v k="$rss" 'BEGIN{ printf "%.1f|%.0f", w, k/1024 }'
 }
 
 cell_t() { case "$1" in timeout) printf 'timeout' ;; fail:*) printf 'fail' ;; *) printf '%s s' "$1" ;; esac; }
@@ -143,7 +181,7 @@ cell_rv_t() {
 gen_block() {
     # Static header comment.  Kept in sync with the README prose; this is the
     # single source of truth for "where do these numbers come from".
-    cat <<'HDR'
+    cat <<'HDR' | sed "s/@DERIV@/$DERIV/g"
 <!-- BENCH:START — auto-generated by scripts/bench.sh; do not edit by hand.
 
 Regenerate these three tables in place:
@@ -157,10 +195,11 @@ not the develop branch this repo's parity oracle is pinned to; develop has
 since gained performance work of its own, so the gap versus a develop build
 is smaller than these tables show.
 
-Both provers prove every lemma (--prove --derivcheck-timeout=30); HS at
+Both provers prove every lemma (--prove --derivcheck-timeout=@DERIV@); HS at
 `+RTS -Nk`, RS at `--processors=k`; wall-clock + peak RSS come from
-`/usr/bin/time -v` (the prover process only — Maude is a separate subprocess on
-both sides and is excluded). Single run per cell (wall-clock is noisy ±10%).
+GNU time plus a 20 ms process-tree sampler. Peak RSS is the largest sum across
+all simultaneously live command processes, including Maude workers. Single
+run per cell (wall-clock is noisy ±10%).
 The RS+HS columns measure ./prove_and_reverify.sh (THREADS=k): prove with RS,
 then re-CHECK the emitted proofs with HS — i.e. the total cost of a proof you
 did not have to trust the port for; its peak RSS is the max across both
@@ -172,7 +211,7 @@ the scripts/bench.sh header).
 HDR
     local hs_ver
     hs_ver="$("$HS_PATH" --version 2>/dev/null | grep -oE 'tamarin-prover [0-9]+(\.[0-9]+)*' | head -1)"
-    echo "<!-- last run: $(uname -m) Linux, $(nproc) cores; HS baseline: ${hs_ver:-unknown version} -->"
+    echo "<!-- last run: $(uname -m) $(uname -s), $(cpu_count) cores; HS baseline: ${hs_ver:-unknown version} -->"
     for k in $CORES; do
         echo
         echo "**${k} core$([ "$k" = 1 ] && echo '' || echo 's')**"

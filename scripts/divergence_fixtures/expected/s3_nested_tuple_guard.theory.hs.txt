@@ -1,0 +1,58 @@
+theory S3NestedTupleGuard
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) A:
+   [ In( <a, b, c> ) ]
+  --[
+  Flat( <a, b, c> ), Nested( <a, b, c> ), Deep( <<a, b>, c> ),
+  Chain( (a++b++c) ), Repeat( (a++a++b) ), Spliced( (a++<a, b, c>) ),
+  LeftFold( (a++b++c) ), RightFold( (a++b++c) )
+  ]->
+   [ Out( <a, b, c> ) ]
+
+  /* has exactly the trivial AC variant */
+
+lemma Guarded:
+  all-traces
+  "∀ a b c #i.
+    ((((((Flat( <a, b, c> ) @ #i) ∧ (Nested( <a, b, c> ) @ #i)) ∧
+        (Deep( <<a, b>, c> ) @ #i)) ∧
+       (Chain( (a++b++c) ) @ #i)) ∧
+      (Repeat( (a++a++b) ) @ #i)) ∧
+     (Spliced( (a++<a, b, c>) ) @ #i)) ⇒
+    (∃ #j. (LeftFold( (a++b++c) ) @ #j) ∧ (RightFold( (a++b++c) ) @ #j))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ a b c #i.
+  (Flat( <a, b, c> ) @ #i) ∧
+  (Nested( <a, b, c> ) @ #i) ∧
+  (Deep( <<a, b>, c> ) @ #i) ∧
+  (Chain( (a++b++c) ) @ #i) ∧
+  (Repeat( (a++a++b) ) @ #i) ∧
+  (Spliced( (a++<a, b, c>) ) @ #i)
+ ∧
+  ∀ #j. (LeftFold( (a++b++c) ) @ #j) ∧ (RightFold( (a++b++c) ) @ #j) ⇒ ⊥"
+*/
+by sorry
+
+lemma Existential:
+  exists-trace
+  "∃ a b c #i.
+    (Deep( <<a, b>, c> ) @ #i) ∧ (Spliced( (a++<a, b, c>) ) @ #i)"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ a b c #i.
+  (Deep( <<a, b>, c> ) @ #i) ∧ (Spliced( (a++<a, b, c>) ) @ #i)"
+*/
+by sorry
+
+
+
+end

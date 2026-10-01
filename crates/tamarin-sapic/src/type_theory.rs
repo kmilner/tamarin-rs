@@ -17,82 +17,56 @@
 //!    re-appends one per entry of the final `funs` map — `foldrWithKey` +
 //!    append ⇒ the emitted order is DESCENDING key order.
 //!
-//! RS keeps the parser AST immutable and returns the typed processes as a
-//! [`TypedOverlay`] for `pretty_theory`'s open renderer, plus the recomputed
-//! `function:` items and the final environment (whose `events` map the export
-//! backends consume).
+//! The theory's items are rewritten in place, in the order the two `mapM`s
+//! visit them; the environment is returned because its `events` map is what
+//! the export backends consume.
 
 use std::collections::BTreeSet;
 
-use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::FunSym;
 use tamarin_term::term::f_app;
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 
 use tamarin_theory::elaborate::ElabError;
-use tamarin_theory::pretty_theory::TypedOverlay;
 use tamarin_theory::sapic::{
     PlainProcess, Process, ProcessParsedAnnotation, SapicAction, SapicLVar,
 };
-use tamarin_theory::theory::{SapicFunSym, Theory};
+use tamarin_theory::theory::{ProcessDef, SapicFunSym, Theory, TheoryItem, TranslationElement};
 
-use crate::inline::{collect_process_defs, convert_process_with_defs, ProcessDefMap};
 use crate::typing::{
     collect_user_fun_typings, init_te_from_sig, type_and_rename_process_in, vars_proc,
     TypingEnvironment,
 };
 
-/// Everything `typeTheoryEnv` returns, split for the RS consumers: the typed
-/// processes/defs (renderer overlay), the recomputed `function:` items
-/// (descending key order, ready to append), and the final environment.
-pub struct TypeTheoryResult {
-    pub overlay: TypedOverlay,
-    /// One `SapicFunSym` per entry of the final `funs` map, in HS's
-    /// `Map.foldrWithKey`-append order = DESCENDING `UserDefinedSym` order.
-    pub fun_items: Vec<SapicFunSym>,
-    /// The environment the whole theory was typed against.  No RS caller
-    /// reads it: its consumers are the ProVerif / DeepSec exporters
-    /// (`loadHeaders` folds over `events`, Export.hs:2743-2754), which are
-    /// unported — see `tamarin_export`'s module doc.  Returned so the
-    /// exporters land against a complete `typeTheoryEnv`.
-    pub env: TypingEnvironment,
-}
-
-/// `typeTheoryEnv` (Typing.hs:204-226) over the parsed + elaborated theory
-/// pair.  Runs on EVERY theory — a process-free (non-SAPIC) theory still gets
-/// its `function:` items recomputed from the signature-seeded environment.
-pub fn type_theory_env(
-    parsed: &p::Theory,
-    elaborated: &Theory,
-) -> Result<TypeTheoryResult, ElabError> {
-    // Term conversion (`convert_process_with_defs`) resolves user function
-    // symbols through the thread-local bundle; install it here so callers
-    // need no separate guard (guards nest and restore on drop).
-    let _user_funs_guard = tamarin_theory::elaborate::set_user_funs_for_theory(parsed);
-
-    let user_fun_typings = collect_user_fun_typings(parsed);
-    let mut env =
-        init_te_from_sig(&elaborated.signature.maude_sig, &user_fun_typings).map_err(|e| {
-            ElabError {
-                message: format!("SAPIC typing: {e}"),
-            }
-        })?;
-
-    let defs = collect_process_defs(parsed);
+/// `typeTheoryEnv` (Typing.hs:204-226) over the elaborated theory, whose
+/// process-bearing items and `FunctionTypingInfo` items it rewrites in place —
+/// HS's first return component.  The second, the environment the whole theory
+/// was typed against, is handed back: no RS caller reads it, but its consumers
+/// are the ProVerif / DeepSec exporters (`loadHeaders` folds over `events`,
+/// Export.hs:2743-2754), which are unported.  `typeTheory`
+/// (Typing.hs:229-230) is this function with the environment discarded.
+///
+/// Runs on EVERY theory — a process-free (non-SAPIC) theory still gets its
+/// `function:` items recomputed from the signature-seeded environment.
+pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError> {
+    let user_fun_typings = collect_user_fun_typings(thy);
+    let mut env = init_te_from_sig(&thy.signature, &user_fun_typings).map_err(|e| ElabError {
+        message: format!("SAPIC typing: {e}"),
+    })?;
 
     // Pass 1 — `mapMProcesses typeAndRenameProcess` (TheoryObject.hs:279-291):
-    // one typed process per occurrence, in item order; `EquivLemma` yields two
-    // (p1 first).  Conversion inlines `P(args)` calls exactly as HS's parser
-    // did before the items were stored.
-    let mut processes: Vec<PlainProcess> = Vec::new();
-    for item in &parsed.items {
+    // every process-bearing item typed in item order; `EquivLemma` types its
+    // first process before its second.
+    for item in &mut thy.items {
         match item {
-            p::TheoryItem::TopLevelProcess(proc) | p::TheoryItem::DiffEquivLemma(proc) => {
-                processes.push(type_one(&mut env, proc, &defs)?);
+            TheoryItem::Translation(
+                TranslationElement::Process(pr) | TranslationElement::DiffEquivLemma(pr),
+            ) => {
+                *pr = type_one(&mut env, pr)?;
             }
-            p::TheoryItem::EquivLemma(p1, p2) => {
-                processes.push(type_one(&mut env, p1, &defs)?);
-                processes.push(type_one(&mut env, p2, &defs)?);
+            TheoryItem::Translation(TranslationElement::EquivLemma(p1, p2)) => {
+                *p1 = type_one(&mut env, p1)?;
+                *p2 = type_one(&mut env, p2)?;
             }
             _ => {}
         }
@@ -100,49 +74,36 @@ pub fn type_theory_env(
 
     // Pass 2 — `mapMProcessesDef typeAndRenameProcessDef`
     // (TheoryObject.hs:294-301, Typing.hs:217-225), same environment.
-    let mut typed_defs: Vec<(Option<Vec<SapicLVar>>, PlainProcess)> = Vec::new();
-    for item in &parsed.items {
-        if let p::TheoryItem::ProcessDef(pd) = item {
-            typed_defs.push(type_process_def(&mut env, pd, &defs)?);
+    for item in &mut thy.items {
+        if let TheoryItem::Translation(TranslationElement::ProcessDef(pd)) = item {
+            let (vars, body) = type_process_def(&mut env, pd)?;
+            pd.vars = vars;
+            pd.body = body;
         }
     }
 
-    // `Map.foldrWithKey addFunctionTypingInfo'` (Typing.hs:210,226):
-    // `foldrWithKey` applies the largest key innermost and each application
-    // APPENDS, so the item order is descending key order — `BTreeMap` reverse
-    // iteration (`UserDefinedSym`'s derived `Ord` matches HS's tuple order).
-    let fun_items: Vec<SapicFunSym> = env
-        .funs
-        .iter()
-        .rev()
-        .map(|(sym, (ins, out))| SapicFunSym {
-            sym: *sym,
-            arg_types: ins.clone(),
-            out_type: out.clone(),
-        })
-        .collect();
-
-    Ok(TypeTheoryResult {
-        overlay: TypedOverlay {
-            processes,
-            defs: typed_defs,
-        },
-        fun_items,
-        env,
-    })
+    // `Map.foldrWithKey addFunctionTypingInfo' (clearFunctionTypingInfos th')`
+    // (Typing.hs:210,226): every source-positioned typing item is dropped, and
+    // `foldrWithKey` applies the largest key innermost while each application
+    // APPENDS, so the re-emitted order is descending key order — `BTreeMap`
+    // reverse iteration (`UserDefinedSym`'s derived `Ord` matches HS's tuple
+    // order).
+    tamarin_theory::theory::clear_function_typing_infos(thy);
+    for (sym, (ins, out)) in env.funs.iter().rev() {
+        thy.items.push(TheoryItem::Translation(
+            TranslationElement::FunctionTypingInfo(SapicFunSym {
+                sym: *sym,
+                arg_types: ins.clone(),
+                out_type: out.clone(),
+            }),
+        ));
+    }
+    Ok(env)
 }
 
-/// Convert one parser-AST process (inlining `let`-def calls) and run
-/// `typeAndRenameProcess` on it against the shared environment.
-fn type_one(
-    env: &mut TypingEnvironment,
-    proc: &p::Process,
-    defs: &ProcessDefMap<'_>,
-) -> Result<PlainProcess, ElabError> {
-    let plain = convert_process_with_defs(proc, defs).map_err(|e| ElabError {
-        message: format!("SAPIC translation: {}", e.message),
-    })?;
-    type_and_rename_process_in(env, &plain).map_err(|e| ElabError {
+/// Run `typeAndRenameProcess` on one process against the shared environment.
+fn type_one(env: &mut TypingEnvironment, proc: &PlainProcess) -> Result<PlainProcess, ElabError> {
+    type_and_rename_process_in(env, proc).map_err(|e| ElabError {
         message: format!("SAPIC typing: {e}"),
     })
 }
@@ -166,18 +127,12 @@ fn type_one(
 /// `Just`, so a parameterless def renders `let  P () =`.
 fn type_process_def(
     env: &mut TypingEnvironment,
-    pd: &p::ProcessDef,
-    defs: &ProcessDefMap<'_>,
+    pd: &ProcessDef,
 ) -> Result<(Option<Vec<SapicLVar>>, PlainProcess), ElabError> {
-    let pr = convert_process_with_defs(&pd.body, defs).map_err(|e| ElabError {
-        message: format!("SAPIC translation: {}", e.message),
-    })?;
+    let pr = pd.body.clone();
     // The def's DECLARED formals (`_pVars`), which both the `pVars` seeding
     // below and HS's "should not be taken" fallback hand back unchanged.
-    let declared: Option<Vec<SapicLVar>> = pd
-        .vars
-        .as_ref()
-        .map(|vs| vs.iter().map(crate::convert::varspec_to_sapic).collect());
+    let declared: Option<Vec<SapicLVar>> = pd.vars.clone();
     let pvars: Vec<SapicLVar> = match &declared {
         Some(vs) => vs.clone(),
         None => {

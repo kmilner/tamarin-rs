@@ -1,0 +1,44 @@
+/*
+ * A predicate body whose binder shares a name and sort with a variable of the
+ * use site.
+ *
+ * `expandFormula` (Theory/Syntactic/Predicate.hs:82-105) splices the
+ * predicate's body under `compSubst`, which only raises the use-site terms'
+ * De Bruijn indices past the body's own binders (:96-105).  It renames
+ * nothing: the body's binder is an INDEX and the use-site `z` is a FREE
+ * variable, so the two never collide however they are spelled.  The names
+ * separate at print time instead — `prettyLNFormula` opens each binder with
+ * `freshLVar` over a supply seeded by `avoidPrecise . frees`
+ * (Theory/Model/Formula.hs:272-284, LTerm.hs:706-715), so a binder hinted `z`
+ * drawn while a free `z` is in scope comes out `z.1`.
+ *
+ * `lemma cap` is the user-predicate shape: `P(x) <=> Ex z #i. Act(x, z) @ #i`
+ * used at `P(z)`.  `lemma mset` is the built-in one: `Smaller(x, y)` expands
+ * to `∃ z. y = x ++ z` (Theory/Syntactic/Predicate.hs:58-74) at a use site
+ * whose first argument is a free `z`.  In both the binder prints `z.1`, and in
+ * `mset` the union's operands come out in index order, `z` before `z.1`,
+ * because opening the binder rebuilds the AC application through `fApp`.
+ *
+ * No corpus theory reaches this: none of the twenty-eight examples declaring
+ * predicates uses a body binder whose name and sort recur at a use site, and
+ * neither multiset `(<)` example mentions `z`.
+ *
+ * Mode `match`: the two engines agree on this shape.
+ *
+ * Compared slice: the `theory … end` echo, which carries both lemma formulas
+ * and their `guarded formula characterizing …` blocks (see check.sh).
+ */
+theory S6PredicateCapture
+begin
+
+builtins: multiset
+
+predicates: P(x) <=> Ex z #i. Act(x, z) @ #i
+
+lemma cap:
+  "All z #j. Start(z) @ #j ==> P(z)"
+
+lemma mset:
+  "All y #j. Start(y) @ #j ==> Smaller(z, y)"
+
+end

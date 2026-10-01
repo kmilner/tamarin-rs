@@ -14,10 +14,10 @@
 #
 # Two strictly-sequential phases so HS and RS never contend:
 #   Phase 1 (HS): run HS on every allowlisted file, cache stripped stdout by
-#                 ckey (theory sha + flags + ORACLE-BINARY FINGERPRINT) under
-#                 .hs_file_cache/.  JOBS concurrent, -N$HS_N cores each.
-#                 Timeout → .timeout marker; empty/no output (diff theory /
-#                 include fragment / error) → .nohs; the oracle's exit status
+#                 ckey (theory + dependency shas + flags + ORACLE-BINARY FINGERPRINT) under
+#                 .gate_cache/proof/. JOBS concurrent, -N$HS_N cores each.
+#                 Timeout → cap-aware .timeout marker; unexplained empty output
+#                 is never cached; the oracle's exit status
 #                 is recorded beside the entry as .rc.
 #   Phase 2 (RS): run RS on every file, diff against the cached HS output and
 #                 compare RS's exit status against the recorded .rc.
@@ -27,7 +27,8 @@
 #      (30), CORPUS_ROOT, RESULTS_TSV, ALLOWLIST (file with one rel-path per
 #      line; default = scripts/parity_corpus.txt, and only when that is missing
 #      too, $PREV_TSV column 1).
-# Output TSV (5 col, tab-sep): relpath  status  HS_lines  RS_lines  diffcount
+# Output TSV (7 col, tab-sep): relpath  status  HS_lines  RS_lines  diffcount
+#                              input_key  normalized_RS_sha256
 #   status ∈ MATCH | DIFF | RC_DIFF | SKIP_HS_TIMEOUT | SKIP_NO_HS
 #          | SKIP_RS_TIMEOUT
 # Exit status carries the verdict, which the DONE line repeats: nonzero on any
@@ -41,6 +42,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # maude resolver.
 [ -r "$script_dir/gate_common.sh" ] || { echo "corpus_file_diff: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+gate_started=$(gate_now_ms)
+trap 'echo "TIMING proof total_ms=$(( $(gate_now_ms) - gate_started ))" >&2' EXIT
 # Heavy-subprocess guard, the same discipline wf_gate.sh / pretty_gate.sh use:
 # every HS/RS child inherits its own 24 GiB ceiling (verified: GHC's RTS falls
 # back to a smaller reservation rather than failing to start under the cap).
@@ -53,54 +56,50 @@ HS_MAXHEAP="${HS_MAXHEAP:-11}"
 HS_RTS="${HS_RTS:--N$HS_N -M${HS_MAXHEAP}g}"
 DERIVCHECK_TIMEOUT="${DERIVCHECK_TIMEOUT:-30}"
 CORPUS_ROOT="${CORPUS_ROOT:-$repo_root/tamarin-prover/examples}"
-CACHE="${CACHE:-$script_dir/.hs_file_cache}"
+CACHE="${CACHE:-$(shared_cache_dir "$repo_root" proof "$script_dir/.hs_file_cache")}" || exit 2
 RESULTS_TSV="${RESULTS_TSV:-/tmp/corpus_file_diff.tsv}"
 PREV_TSV="${PREV_TSV:-/tmp/corpus_file_diff.PREV.tsv}"
 ALLOWLIST="${ALLOWLIST:-}"
 mkdir -p "$CACHE"
 
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-HS_PATH="${HS_PATH:-$(find_hs_bin "$repo_root")}" || { echo "no HS binary" >&2; exit 2; }
+HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 [ -x "$HS_PATH" ] || { echo "no HS binary at $HS_PATH" >&2; exit 2; }
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
-# Both provers resolve `maude` by NAME (RS probes /usr/local/bin and /usr/bin
-# first, then PATH; HS searches PATH) — and a maude-less environment turns
-# every Phase-1 oracle run into a sticky .nohs cache marker.  Resolve one
-# maude for the whole run and put its directory on PATH for the children.
+rs_stale_check "$RS_PATH" "$repo_root"
+# Resolve and fingerprint one Maude for the whole run. It is passed explicitly
+# to both provers; PATH is retained only for ancillary subprocesses.
 MAUDE=$(resolve_maude) || exit 2
 maude_on_path "$MAUDE"
-# Oracle-binary fingerprint (gate_common's hs_fingerprint), folded into every
+oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
+execution_fingerprint "$MAUDE" "$DERIVCHECK_TIMEOUT" || exit 2
+# oracle_rev_check's binary fingerprint is folded into every
 # cache key below.  Without it the key is sha256(theory)+flags, which cannot
 # see the ORACLE changing: a rebuilt oracle keeps answering out of entries the
 # previous one produced, and the gate certifies the port against an upstream
-# that is no longer checked out.  Loop-invariant, so taken once.
-hs_fingerprint "$HS_PATH"
-export HS_PATH RS_PATH FILE_TIMEOUT DERIVCHECK_TIMEOUT HS_RTS CACHE CORPUS_ROOT
-export HS_FP HS_FP_SALT
+# that is no longer checked out.
+export HS_PATH RS_PATH MAUDE FILE_TIMEOUT DERIVCHECK_TIMEOUT HS_RTS CACHE CORPUS_ROOT GATE_COMMON_DIR
+
+export HS_FP HS_FP_PATH HS_FP_SALT EXEC_FP EXEC_FP_SALT MAUDE_FP MAUDE_FP_PATH
 
 # strip_env (gate_common.sh): DELETE the four volatile header lines.
 # Stripping `analyzed:` on BOTH sides means no cache path-rewrite is needed.
-export -f strip_env
+export -f strip_env gate_now_ms
 
 # --- per-file canonical flags (see file_flags.tsv) ---------------------------
 # flags_for / ckey come from gate_common.sh: ckey salts the content-hash with
 # a flags hash, so a flagged entry is a DISTINCT cache key from the bare one,
 # and then with the oracle-binary fingerprint, so entries produced by a
 # different oracle are a MISS rather than a stale hit.
-# Special token `@cd`: not a prover flag — run the prover from the file's
-# OWN directory with the bare filename (upstream's deforacle recipe,
-# Makefile:199-201: default-oracle lookup is cwd-relative). Stripped from
-# the flag list before invocation; still salts the cache key.
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 export FLAGS_MAP
-export -f flags_for include_shas ckey
+export -f flags_for file_sha256 parser_input_manifest manifest_encode manifest_normalize manifest_decode_into \
+    input_manifest _include_shas_from_manifest \
+    _oracle_shas_from_manifest input_content_key ckey cache_entry_lock \
+    cache_entry_unlock cache_publish_text cache_publish_gzip cache_gzip_valid \
+    cache_publish_proof \
+    binary_sha256 binary_identity_unchanged execution_identity_unchanged \
+    producer_identity_unchanged rs_identity_unchanged comparison_identity_unchanged
 
 # --- file list (allowlist) ---
 # gate_common's filelist: explicit ALLOWLIST env > committed canonical corpus
@@ -118,31 +117,45 @@ filelist_fallback() {
 
 # --- Phase 1: HS ---
 hs_one() {
-    local rel="$1" f="$CORPUS_ROOT/$1" key out rc fl
+    local rel="$1" f="$CORPUS_ROOT/$1" key checked_key out rc fl old_cap old_seconds current_seconds lock_fd
     [ -f "$f" ] || return 0
-    key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
-    [ -f "$CACHE/$key.full.gz" ] && return 0
-    [ -f "$CACHE/$key.timeout" ] && return 0
-    [ -f "$CACHE/$key.nohs" ] && return 0
+    if ! key=$(ckey "$rel" "$f"); then
+        echo "  INPUT MANIFEST FAILED  $rel" >&2
+        return 0
+    fi
+    fl=$(flags_for "$rel")
+    cache_entry_lock "$CACHE" "$key" lock_fd || return 0
+    cache_gzip_valid "$CACHE/$key.full.gz" && { cache_entry_unlock "$lock_fd"; return 0; }
+    if [ -f "$CACHE/$key.timeout" ]; then
+        old_cap=$(cat "$CACHE/$key.timeout")
+        old_seconds=$(duration_seconds "$old_cap") || old_seconds=
+        current_seconds=$(duration_seconds "$FILE_TIMEOUT") || current_seconds=
+        if [ -n "$old_seconds" ] && [ -n "$current_seconds" ] \
+                && [ "$old_seconds" -ge "$current_seconds" ]; then
+            cache_entry_unlock "$lock_fd"; return 0
+        fi
+        rm -f "$CACHE/$key.timeout"
+    fi
     # Record the flags this entry was generated with, so the cache is
     # self-documenting (we don't "lose track" of what each file needs).
     # Only for flagged files — flagless entries stay clutter-free.
-    [ -n "$fl" ] && printf '%s' "$fl" > "$CACHE/$key.flags"
     # Run HS to a temp file so we capture `timeout`'s OWN exit code (124 on
     # timeout) — piping straight into strip_env would make $? reflect grep's
     # exit, misclassifying timeouts as empty (SKIP_NO_HS).
-    # `@cd` token: run from the file's directory with the bare filename.
-    local rundir="" farg="$f"
-    if [[ " $fl " == *" @cd "* || "$fl" == "@cd" ]]; then
-        fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f")
-    fi
     # shellcheck disable=SC2086  # $fl must word-split into separate flags
     local tmp; tmp=$(mktemp)
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$FILE_TIMEOUT" "$HS_PATH" +RTS $HS_RTS -RTS \
-            $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$farg" ) >"$tmp" 2>/dev/null
+    timeout "$FILE_TIMEOUT" "$HS_PATH" +RTS $HS_RTS -RTS \
+            --with-maude="$MAUDE" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$f" >"$tmp" 2>/dev/null
     rc=$?
     out=$(strip_env < "$tmp"); rm -f "$tmp"
+    # Never publish output under an identity computed before a concurrent
+    # source edit. The next gate run will retry the now-current input.
+    if ! checked_key=$(ckey "$rel" "$f") || [ "$checked_key" != "$key" ] \
+            || ! producer_identity_unchanged; then
+        echo "  INPUT CHANGED  $rel while Haskell was running — nothing cached" >&2
+        cache_entry_unlock "$lock_fd"
+        return 0
+    fi
     # A signal death (the OOM killer's 137, an abort's 134) truncates stdout
     # the same way a timeout does, but caching it — payload OR marker — would
     # diff every later run against a truncated oracle, or skip the file
@@ -151,48 +164,89 @@ hs_one() {
     # keeps its sticky .timeout marker below — same guard wf_gate.sh and
     # pretty_gate.sh apply to their load fills.)
     if [ "$rc" -ge 128 ]; then
-        echo "  HS KILLED   $rel (rc=$rc, cap ${FILE_TIMEOUT}s) — nothing cached" >&2
+        echo "  HS KILLED   $rel (rc=$rc, cap $FILE_TIMEOUT) — nothing cached" >&2
+        cache_entry_unlock "$lock_fd"
         return 0
     fi
     # Record the oracle's exit status beside the entry, BEFORE the payload, so
     # `.full.gz exists` implies `.rc exists` for everything this run fills.
     # Phase 2 compares RS's status against it (RC_DIFF).
-    printf '%s' "$rc" > "$CACHE/$key.rc"
     if [ "$rc" = "124" ]; then
-        touch "$CACHE/$key.timeout"; echo "  HS TIMEOUT  $rel" >&2
+        [ -z "$fl" ] || cache_publish_text "$CACHE/$key.flags" "$fl" || true
+        if ! cache_publish_text "$CACHE/$key.rc" "$rc" \
+                || ! cache_publish_text "$CACHE/$key.timeout" "$FILE_TIMEOUT"; then
+            echo "  CACHE WRITE FAILED  $rel — timeout not cached" >&2
+            rm -f "$CACHE/$key.rc" "$CACHE/$key.timeout"
+        fi
+        echo "  HS TIMEOUT  $rel" >&2
     elif [ -z "$out" ]; then
-        touch "$CACHE/$key.nohs"; echo "  HS EMPTY!   $rel${fl:+  (flags: $fl)}" >&2
+        echo "  HS EMPTY!   $rel${fl:+  (flags: $fl)} — nothing cached" >&2
     else
-        printf '%s' "$out" | gzip > "$CACHE/$key.full.gz"
+        local normalized; normalized=$(mktemp)
+        printf '%s' "$out" > "$normalized"
+        [ -z "$fl" ] || cache_publish_text "$CACHE/$key.flags" "$fl" || true
+        cache_publish_proof "$CACHE/$key.rc" "$CACHE/$key.full.gz" \
+            "$rc" "$normalized" \
+            || echo "  CACHE WRITE FAILED  $rel — proof not cached" >&2
+        rm -f "$normalized"
     fi
+    cache_entry_unlock "$lock_fd"
 }
-export -f hs_one
+export -f duration_seconds hs_one
 
 # --- Phase 2: RS + diff ---
+# The first five columns retain the historical results contract. The final two
+# bind a successful gate to the exact input and normalized proof bytes.
+rs_result() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 rs_one() {
-    local rel="$1" f="$CORPUS_ROOT/$1" key hs rs d rc fl
-    [ -f "$f" ] || { printf '%s\tSKIP_NO_HS\t0\t0\t0\n' "$rel"; return 0; }
-    key=$(ckey "$rel" "$f"); fl=$(flags_for "$rel")
-    if [ -f "$CACHE/$key.timeout" ]; then printf '%s\tSKIP_HS_TIMEOUT\t0\t0\t0\n' "$rel"; return 0; fi
-    if [ ! -f "$CACHE/$key.full.gz" ]; then printf '%s\tSKIP_NO_HS\t0\t0\t0\n' "$rel"; return 0; fi
-    # `@cd` token: run from the file's directory with the bare filename.
-    local rundir="" farg="$f"
-    if [[ " $fl " == *" @cd "* || "$fl" == "@cd" ]]; then
-        fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f")
+    local rel="$1" f="$CORPUS_ROOT/$1" key checked_key input_key hs rs d rc fl out_sha
+    local started keyed cached proved checked finished
+    started=$(gate_now_ms)
+    [ -f "$f" ] || { rs_result "$rel" SKIP_NO_HS 0 0 0 - -; return 0; }
+    if ! key=$(ckey "$rel" "$f"); then
+        rs_result "$rel" SKIP_INPUT_MANIFEST 0 0 0 - -
+        return 0
     fi
+    input_key=${key%%__e*}
+    fl=$(flags_for "$rel")
+    keyed=$(gate_now_ms)
+    if [ -f "$CACHE/$key.timeout" ]; then rs_result "$rel" SKIP_HS_TIMEOUT 0 0 0 "$input_key" -; return 0; fi
+    # Decompression validates the gzip checksum too. Capture its status and
+    # reuse the bytes, rather than validating and then reading them again.
+    if ! hs=$(gzip -dc "$CACHE/$key.full.gz" 2>/dev/null); then
+        rs_result "$rel" SKIP_NO_HS 0 0 0 "$input_key" -; return 0
+    fi
+    cached=$(gate_now_ms)
     # shellcheck disable=SC2086  # $fl must word-split into separate flags
     local tmp; tmp=$(mktemp)
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$FILE_TIMEOUT" "$RS_PATH" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$farg" ) >"$tmp" 2>/dev/null
+    timeout "$FILE_TIMEOUT" "$RS_PATH" --with-maude="$MAUDE" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove "$f" >"$tmp" 2>/dev/null
     rc=$?
+    proved=$(gate_now_ms)
     rs=$(strip_env < "$tmp"); rm -f "$tmp"
-    if [ "$rc" = "124" ]; then printf '%s\tSKIP_RS_TIMEOUT\t0\t0\t0\n' "$rel"; return 0; fi
-    hs=$(zcat "$CACHE/$key.full.gz")
-    local hsn rsn
+    if ! checked_key=$(ckey "$rel" "$f") || [ "$checked_key" != "$key" ] \
+            || ! comparison_identity_unchanged; then
+        rs_result "$rel" SKIP_INPUT_CHANGED 0 0 0 "$input_key" -
+        return 0
+    fi
+    if [ "$rc" = "124" ]; then rs_result "$rel" SKIP_RS_TIMEOUT 0 0 0 "$input_key" -; return 0; fi
+    checked=$(gate_now_ms)
+    out_sha=$(printf '%s\n' "$rs" | sha256sum | cut -d' ' -f1)
+    local hsn rsn comparison=MATCH
     hsn=$(printf '%s\n' "$hs" | wc -l)
-    rsn=$(printf '%s\n' "$rs" | wc -l)
-    d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')
-    if [ "$d" != "0" ]; then printf '%s\tDIFF\t%s\t%s\t%s\n' "$rel" "$hsn" "$rsn" "$d"; return 0; fi
+    rsn=$hsn
+    d=0
+    if [ "$hs" != "$rs" ]; then
+        comparison=DIFF
+        rsn=$(printf '%s\n' "$rs" | wc -l)
+        d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')
+    fi
+    finished=$(gate_now_ms)
+    printf 'TIMING proof %s input_ms=%s cache_ms=%s prove_ms=%s normalize_check_ms=%s compare_ms=%s\n' \
+        "$rel" "$((keyed-started))" "$((cached-keyed))" "$((proved-cached))" \
+        "$((checked-proved))" "$((finished-checked))" >&2
+    if [ "$comparison" = DIFF ]; then
+        rs_result "$rel" DIFF "$hsn" "$rsn" "$d" "$input_key" "$out_sha"; return 0
+    fi
     # Byte-identical stdout still leaves the EXIT STATUS uncompared, and a
     # caller that scripts either binary sees that status, not the bytes.
     # Entries filled before the .rc channel existed have no file: those count
@@ -202,22 +256,28 @@ rs_one() {
     local hsrc
     if [ -f "$CACHE/$key.rc" ] && hsrc=$(cat "$CACHE/$key.rc") && [ "$hsrc" != "$rc" ]; then
         echo "  RC DIFF     $rel  (HS exit $hsrc, RS exit $rc)" >&2
-        printf '%s\tRC_DIFF\t%s\t%s\t0\n' "$rel" "$hsn" "$rsn"; return 0
+        rs_result "$rel" RC_DIFF "$hsn" "$rsn" 0 "$input_key" "$out_sha"; return 0
     fi
-    printf '%s\tMATCH\t%s\t%s\t0\n' "$rel" "$hsn" "$rsn"
+    rs_result "$rel" MATCH "$hsn" "$rsn" 0 "$input_key" "$out_sha"
 }
-export -f rs_one
+export -f rs_result rs_one
 
-N=$(filelist | grep -c .)
+mapfile -t FILES < <(filelist | grep .)
+N=${#FILES[@]}
 # Zero files is the whole-run form of comparing nothing: no rows, an empty
 # summary, and a DONE line that reads exactly like a clean gate.
 [ "$N" -gt 0 ] || { echo "the file list resolved to 0 entries — nothing to compare" >&2; exit 2; }
-echo "corpus_file_diff: $N files, JOBS=$JOBS, -N$HS_N, FILE_TIMEOUT=${FILE_TIMEOUT}s, cache=$CACHE"
+claim_output "$RESULTS_TSV" RESULTS_LOCK_FD || exit 2
+echo "corpus_file_diff: $N files, JOBS=$JOBS, -N$HS_N, FILE_TIMEOUT=$FILE_TIMEOUT, cache=$CACHE"
 echo "=== PHASE 1: Haskell (all files first, no RS) ==="
-filelist | grep . | xargs -P "$JOBS" -I{} bash -c 'hs_one "$@"' _ {}
+phase_started=$(gate_now_ms)
+printf '%s\n' "${FILES[@]}" | xargs -P "$JOBS" -I{} bash -c 'hs_one "$@"' _ {}
+echo "TIMING proof hs_phase_ms=$(( $(gate_now_ms) - phase_started ))" >&2
 echo "=== PHASE 2: Rust + diff ==="
-: > "$RESULTS_TSV"
-filelist | grep . | xargs -P "$JOBS" -I{} bash -c 'rs_one "$@"' _ {} >> "$RESULTS_TSV"
+phase_started=$(gate_now_ms)
+printf '%s\n' "${FILES[@]}" | xargs -P "$JOBS" -I{} bash -c 'rs_one "$@"' _ {} >> "$RESULTS_TSV"
+echo "TIMING proof rs_phase_ms=$(( $(gate_now_ms) - phase_started ))" >&2
+summary_started=$(gate_now_ms)
 sort -o "$RESULTS_TSV" "$RESULTS_TSV"
 echo "=== SUMMARY ==="
 awk -F'\t' '{c[$2]++} END{for(k in c) printf "  %-18s %d\n", k, c[k]}' "$RESULTS_TSV"
@@ -226,10 +286,13 @@ awk -F'\t' '{c[$2]++} END{for(k in c) printf "  %-18s %d\n", k, c[k]}' "$RESULTS
 # the .rc channel existed looks like, and each such entry backfills the first
 # time Phase 1 refills it.  Reported so the number cannot quietly be 432.
 rc_unknown=0
-while IFS=$'\t' read -r rel st _; do
+while IFS=$'\t' read -r rel st _ _ _ input_key _; do
     case "$st" in MATCH|DIFF|RC_DIFF) ;; *) continue;; esac
-    [ -f "$CORPUS_ROOT/$rel" ] || continue
-    [ -f "$CACHE/$(ckey "$rel" "$CORPUS_ROOT/$rel").rc" ] || rc_unknown=$((rc_unknown+1))
+    # Column 6 already records the exact input identity used by rs_one.
+    # Reattach this run's execution/oracle salts, rather than parse and hash
+    # every theory again just to locate its exit-status sidecar.
+    key="${input_key}__e${EXEC_FP_SALT}__b${HS_FP_SALT}"
+    [ -f "$CACHE/$key.rc" ] || rc_unknown=$((rc_unknown+1))
 done < "$RESULTS_TSV"
 printf '  %-18s %d\n' "RC_UNKNOWN" "$rc_unknown"
 echo "  results: $RESULTS_TSV"
@@ -247,9 +310,15 @@ bad=''
 [ "$rcdiffs" = 0 ] || bad="${bad:+$bad }RC_DIFF=$rcdiffs"
 [ "$skips" = 0 ] || bad="${bad:+$bad }SKIPPED=$skips"
 [ "$rows" = "$N" ] || bad="${bad:+$bad }ROW-COUNT=$rows/$N"
+# Scope and proof digests come from the keys and normalized bytes actually used
+# by Phase 2, not from a fresh post-run read of mutable source files.
+scope_sha=$(awk -F'\t' '$2 !~ /^SKIP/ {print $1 "\t" $6}' "$RESULTS_TSV" \
+    | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
+proof_sha=$(awk -F'\t' '$2 !~ /^SKIP/ {print $1 "\t" $6 "\t" $7}' "$RESULTS_TSV" \
+    | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
 # files= is the count whose bytes were actually COMPARED (MATCH/DIFF/RC_DIFF;
-# SKIP_* rows compared nothing). rs_ref_check.sh generate reads it to refuse a
-# scoped (ALLOWLIST) log as evidence for a wider re-baseline. Trailing and
-# additive, so `grep verdict=` consumers are unchanged.
-echo "DONE_CORPUS_FILE_DIFF verdict=${bad:-OK} files=$((rows - skips))"
+# SKIP_* rows compared nothing). rs_ref_check.sh generate requires this exact
+# scope and proof digest. Trailing fields preserve verdict-token consumers.
+echo "TIMING proof summary_ms=$(( $(gate_now_ms) - summary_started ))" >&2
+echo "DONE_CORPUS_FILE_DIFF verdict=${bad:-OK} files=$((rows - skips)) scope_sha256=$scope_sha proof_outputs_sha256=$proof_sha oracle_sha256=$HS_FP execution_sha256=$EXEC_FP"
 [ -z "$bad" ]

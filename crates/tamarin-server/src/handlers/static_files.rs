@@ -12,21 +12,22 @@
 //! Strategy:
 //!   - Serve `data/<rest>` via tower-http `ServeDir`.
 //!   - For `js/intdot-*.es.js` and `css/intdot-*.css`, look the
-//!     file up in `frontend/dist/` and stream it back from a small
-//!     async handler.
+//!     file up in `frontend/dist/` and stream it with `ServeFile`.
 //!   - Everything else 404s.
 //!
 //! We wire the dist-hoisting routes BEFORE the catch-all ServeDir so
 //! they take precedence.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use axum::body::Body;
 use axum::extract::State;
 use axum::handler::HandlerWithoutStateExt;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, Method, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::state::AppState;
 
@@ -38,11 +39,38 @@ pub fn serve(state: Arc<AppState>) -> axum::Router<Arc<AppState>> {
 
     if state.cfg.frontend_dist.is_some() {
         router = router
-            .route("/js/:name", axum::routing::get(intdot_js_or_data))
-            .route("/css/:name", axum::routing::get(intdot_css_or_data));
+            .route("/js/{name}", axum::routing::get(intdot_js_or_data))
+            .route("/css/{name}", axum::routing::get(intdot_css_or_data));
     }
 
+    match patched_ui_css(&state.cfg.data_dir) {
+        Ok(Some(file)) => {
+            let service = ServeFile::new(file.path());
+            router = router.route(
+                "/css/tamarin-prover-ui.css",
+                axum::routing::get_service(service).layer(axum::Extension(Arc::new(file))),
+            );
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(%error, "Could not prepare lemma CSS; serving original assets")
+        }
+    }
     router.fallback_service(serve_data)
+}
+
+/// Until the submodule includes PR #928, prepare its CSS addition once.
+/// The route owns the temporary file and ServeFile supplies normal HTTP caching.
+fn patched_ui_css(data_dir: &Path) -> std::io::Result<Option<tempfile::NamedTempFile>> {
+    let css = std::fs::read(data_dir.join("css/tamarin-prover-ui.css"))?;
+    let instructions = include_bytes!("lemma_instructions.css");
+    if css.ends_with(instructions) {
+        return Ok(None);
+    }
+    let mut file = tempfile::Builder::new().suffix(".css").tempfile()?;
+    file.write_all(&css)?;
+    file.write_all(instructions)?;
+    Ok(Some(file))
 }
 
 /// `/static/js/<name>` — if the name is `intdot-*.es.js`, serve from
@@ -50,16 +78,20 @@ pub fn serve(state: Arc<AppState>) -> axum::Router<Arc<AppState>> {
 async fn intdot_js_or_data(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
+    method: Method,
+    headers: HeaderMap,
 ) -> Response {
-    dist_or_data(state, "js", ".es.js", "application/javascript", name).await
+    dist_or_data(state, "js", ".es.js", name, method, headers).await
 }
 
 /// `/static/css/<name>` — the [`intdot_js_or_data`] rule for `intdot-*.css`.
 async fn intdot_css_or_data(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
+    method: Method,
+    headers: HeaderMap,
 ) -> Response {
-    dist_or_data(state, "css", ".css", "text/css", name).await
+    dist_or_data(state, "css", ".css", name, method, headers).await
 }
 
 /// Serve `frontend/dist/<name>` for an `intdot-*<suffix>` asset, falling
@@ -68,23 +100,29 @@ async fn dist_or_data(
     state: Arc<AppState>,
     subdir: &str,
     suffix: &str,
-    mime: &str,
     name: String,
+    method: Method,
+    headers: HeaderMap,
 ) -> Response {
-    if name.starts_with("intdot-") && name.ends_with(suffix) {
-        if let Some(dist) = &state.cfg.frontend_dist {
-            if let Some(resp) = try_file(&dist.join(&name), mime).await {
-                return resp;
-            }
-        }
+    if name.starts_with("intdot-")
+        && name.ends_with(suffix)
+        && let Some(dist) = &state.cfg.frontend_dist
+        && let Some(resp) = try_file(&dist.join(&name), &method, &headers).await
+    {
+        return resp;
     }
-    fallback_to_data(state, subdir, &name).await
+    fallback_to_data(state, subdir, &name, &method, &headers).await
 }
 
-async fn fallback_to_data(state: Arc<AppState>, subdir: &str, name: &str) -> Response {
+async fn fallback_to_data(
+    state: Arc<AppState>,
+    subdir: &str,
+    name: &str,
+    method: &Method,
+    headers: &HeaderMap,
+) -> Response {
     let candidate = state.cfg.data_dir.join(subdir).join(name);
-    let mime = guess_mime(&candidate);
-    if let Some(resp) = try_file(&candidate, mime).await {
+    if let Some(resp) = try_file(&candidate, method, headers).await {
         return resp;
     }
     asset_not_found().await
@@ -102,38 +140,22 @@ async fn asset_not_found() -> Response {
         .into_response()
 }
 
-async fn try_file(path: &Path, mime: &str) -> Option<Response> {
-    if !path.is_file() {
+async fn try_file(path: &Path, method: &Method, headers: &HeaderMap) -> Option<Response> {
+    let mut request = Request::builder()
+        .method(method.clone())
+        .uri("/")
+        .body(Body::empty())
+        .ok()?;
+    *request.headers_mut() = headers.clone();
+    let response = ServeFile::new(path).try_call(request).await.ok()?;
+    // Match the old `fs::read(path).ok()?` fallback: a missing or unreadable
+    // preferred asset lets the data directory try the same name rather than
+    // turning the preferred path's I/O failure into the final response.
+    if response.status() == StatusCode::NOT_FOUND || response.status().is_server_error() {
         return None;
     }
-    let bytes = tokio::fs::read(path).await.ok()?;
-    Some(
-        (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, mime.to_string())],
-            bytes,
-        )
-            .into_response(),
-    )
-}
-
-fn guess_mime(path: &Path) -> &'static str {
-    match path.extension().and_then(|s| s.to_str()) {
-        Some("js") => "application/javascript",
-        Some("css") => "text/css",
-        Some("html") => "text/html; charset=utf-8",
-        Some("png") => "image/png",
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("svg") => "image/svg+xml",
-        Some("ico") => "image/x-icon",
-        Some("woff") => "font/woff",
-        Some("woff2") => "font/woff2",
-        Some("ttf") => "font/ttf",
-        Some("json") => "application/json",
-        Some("txt") => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    }
+    let (parts, body) = response.into_parts();
+    Some(Response::from_parts(parts, Body::new(body)))
 }
 
 /// Convenience: turn an optional explicit data dir into a usable path.

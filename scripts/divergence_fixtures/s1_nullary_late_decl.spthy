@@ -1,0 +1,29 @@
+/*
+ * A 0-arity function symbol used before its declaration.  A bare identifier
+ * resolves against the signature declared SO FAR
+ * (Theory/Text/Parser/Term.hs:158-163#nullaryApp,
+ * Theory/Text/Parser/Term.hs:62-72#lookupArity), so rule A's `zed` is a
+ * message variable — unbound, and ordered before `zw` in the multiset — while
+ * rule B's `zed` is the declared constant and follows `zw`.
+ *
+ * Compared slices: the wf report block, which carries the unbound-variable
+ * finding, and the `theory … end` echo, which carries the two multiset
+ * orders.
+ */
+theory NullaryLateDecl
+begin
+
+builtins: multiset
+
+rule A:
+  [ In(zw) ] --[ Seen(zed) ]-> [ Out(zed ++ zw) ]
+
+functions: zed/0
+
+rule B:
+  [ In(zw) ] --[ Seen2(zed) ]-> [ Out(zed ++ zw) ]
+
+lemma l1:
+  exists-trace "Ex x #i. Seen(x) @ i"
+
+end

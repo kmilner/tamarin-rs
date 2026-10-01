@@ -36,6 +36,11 @@ one() {
   # manufactures rather than one the flags expose.
   hs_run "$d" "$f" "json+dot-dct30" --derivcheck-timeout=30 \
     --output-json="$d/hs.json" --output-dot="$d/hs.dot"; hrc=$?
+  if [ -f "$d/input-manifest.error" ]; then
+    row "$f" ERROR "input or producer identity changed"
+    rm -rf "$d"
+    return
+  fi
   # A broken environment is diagnosed before the cap is blamed for it: an
   # unusable maude both aborts and hangs, and "timeout" would be the wrong
   # story (and a ledgerable one).
@@ -45,7 +50,8 @@ one() {
   if [ "$hrc" -ge 124 ]; then row "$f" ERROR "timeout/kill hs=$hrc rs=skipped"; rm -rf "$d"; return; fi
   grun "$RS_BIN" --with-maude="$MAUDE" --derivcheck-timeout=30 \
     --output-json="$d/rs.json" --output-dot="$d/rs.dot" "$f" > "$d/rs.out" 2> "$d/rs.err"; rrc=$?
-  if [ "$rrc" -ge 124 ]; then row "$f" ERROR "timeout/kill hs=$hrc rs=$rrc"
+  if ! comparison_identity_unchanged; then row "$f" ERROR "producer changed during comparison"
+  elif [ "$rrc" -ge 124 ]; then row "$f" ERROR "timeout/kill hs=$hrc rs=$rrc"
   # nocompare_check also fences off the both-fail branch below: a shared rc with
   # nothing printed on either side is its no-output family, not agreement.
   elif nc=$(nocompare_check "$hrc" "$rrc" "$d" "$d/hs.json" "$d/rs.json"); then row "$f" NO-COMPARE "$nc"

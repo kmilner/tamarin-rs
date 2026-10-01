@@ -17,15 +17,15 @@
 //! Expected strings are the pinned oracle's bytes (Git revision ef3f0468).
 
 use tamarin_parser::parse_theory;
-use tamarin_theory::mult_restricted::mult_restricted_report;
 use tamarin_theory::pretty_theory::format_wf_block;
+use tamarin_theory::wellformedness::mult::mult_restricted_report;
 
 /// The rendered `/* WARNING … */` block for a theory's multiplication-
 /// restriction report, or `None` when the check stays silent.
 fn block(src: &str) -> Option<String> {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let errs = mult_restricted_report(&elaborated, &elaborated.signature.maude_sig);
+    let errs = mult_restricted_report(&elaborated);
     if errs.is_empty() {
         return None;
     }
@@ -271,11 +271,13 @@ fn a_generated_rules_process_attribute_is_rendered_from_its_own_record() {
     let mut elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
     for item in &mut elaborated.items {
         if let TheoryItem::Rule(r) = item {
-            r.rule.info.attributes.process = Some(process.clone());
+            r.rule.info.attributes.process = Some(std::sync::Arc::new(
+                tamarin_theory::sapic::SharedProcess::new(process.clone()),
+            ));
         }
     }
 
-    let errs = mult_restricted_report(&elaborated, &elaborated.signature.maude_sig);
+    let errs = mult_restricted_report(&elaborated);
     assert_eq!(
         format_wf_block(&errs),
         format!(

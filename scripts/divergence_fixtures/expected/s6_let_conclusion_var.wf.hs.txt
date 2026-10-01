@@ -1,0 +1,7 @@
+WARNING: the following wellformedness checks failed!
+
+Fr facts must only use a fresh- or a msg-variable
+=================================================
+
+  rule `Reuse' fact: Fr( h(~k) )
+*/

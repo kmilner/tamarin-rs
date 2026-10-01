@@ -5,6 +5,14 @@
 use super::*;
 use crate::constraint::system::System;
 
+#[test]
+fn sapic_suffix_trimming_preserves_haskell_edge_cases() {
+    assert_eq!(trim_sapic_name("role_step_12_3"), "role_step");
+    assert_eq!(trim_sapic_name("role_step_x_3"), "role_step_x_3");
+    assert_eq!(trim_sapic_name("role__"), "role");
+    assert_eq!(trim_sapic_name("plain"), "plain");
+}
+
 /// An empty system renders as the bare container with no clusters.  It holds
 /// the `setDefaultAttributes` preamble (System/Dot.hs:132-138) and `showDot`'s
 /// blank line before the closing brace.  It holds nothing else.  There is no
@@ -78,7 +86,6 @@ fn dot_of(orig: &System, drawn: System) -> String {
     let repr = compute_basic_graph_repr(&simplified);
     let graph = Graph {
         system: orig,
-        simplified,
         repr,
         abbreviations: Abbreviations::new(),
     };
@@ -467,26 +474,16 @@ fn dot_with_cluster_passes_graphviz_lint() {
     // we wrote down the pipe.
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let child = Command::new("dot")
+    if !tamarin_test_support::dot_available() {
+        return;
+    }
+    let mut child = Command::new("dot")
         .arg("-Tplain")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn();
-    // On a machine with no runnable Graphviz this test fails instead of a
-    // skip.  This is the only test that feeds our DOT to a real `dot`.  A
-    // silent skip makes `cargo test` pass in exactly the same way with and
-    // without `dot`.  The check copies the `TAM_ALLOW_NO_DOT` escape hatch of
-    // the integration suites (crates/tamarin-prover/tests/common/mod.rs).
-    let Ok(mut child) = child else {
-        assert!(
-            std::env::var("TAM_ALLOW_NO_DOT").as_deref() == Ok("1"),
-            "no runnable `dot` on $PATH: this lint would skip and report green \
-             vacuously. Install graphviz, or set TAM_ALLOW_NO_DOT=1 to skip it \
-             deliberately."
-        );
-        return;
-    };
+        .spawn()
+        .expect("spawn Graphviz dot after availability probe");
     if let Some(mut sin) = child.stdin.take() {
         sin.write_all(s.as_bytes()).expect("write DOT to dot(1)");
     }

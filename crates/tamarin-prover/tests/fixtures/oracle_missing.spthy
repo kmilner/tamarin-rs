@@ -1,0 +1,10 @@
+theory OracleMissing
+begin
+
+rule Mark:
+    [ Fr(~x) ] --[ Marked(~x) ]-> []
+
+lemma test [heuristic=o]:
+    exists-trace "Ex x #i. Marked(x) @ #i"
+
+end

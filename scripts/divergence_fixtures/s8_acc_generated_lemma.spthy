@@ -1,0 +1,32 @@
+// A `--lemma` argument naming a lemma the accountability translation
+// generates.
+//
+// `checkIfLemmasInTheory` (Theory/Tools/Wellformedness.hs:1156-1171) matches
+// the theory's `_lemmasToProve` option against `theoryLemmas thy`.  That
+// option holds the `--prove` and `--lemma` names together
+// (Main/TheoryLoader.hs:326,836-837), so `--lemma` reaches the check without
+// starting a proof search.  `checkWellformedness` runs on the translated
+// theory (Theory/Tools/Wellformedness.hs:1270-1286,
+// Main/TheoryLoader.hs:553-565), by which point `translate` has added the
+// generated accountability lemmas (lib/accountability/src/Accountability.hs:42-47)
+// and `acc_verif_empty` is one of them, so the check stays silent.
+//
+// Mode `match`: both engines print the success line.
+//
+// Compared slice: the wf report block.
+
+
+theory S8AccGeneratedLemma
+begin
+
+process:
+  in(<$x, a>); event Log($x, a)
+
+test badLog:
+  "Ex #i. Log(x, a)@i & a = 'bad'"
+
+lemma acc:
+  badLog account for
+    "All x a #i. Log(x, a)@i ==> not(a = 'bad')"
+
+end

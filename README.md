@@ -1,9 +1,10 @@
 # tamarin-prover (Rust port)
 
 A Rust port of the [Tamarin Prover](https://tamarin-prover.github.io/) with the goal
-of reproducing the Haskell prover's output byte-for-byte. Typically
-4–33× faster than the most recent Tamarin release (up to 80×) on
-4–45× less memory.
+of reproducing the Haskell prover's output byte-for-byte. Across the README's
+representative suite it is 4.6–116× faster than the most recent Tamarin
+release (median 23×), with 2.1–21× lower peak process-tree memory at one
+core.
 
 ## Important notes
 
@@ -39,18 +40,26 @@ See [License](#license) if you are interested in future prospects for redistribu
   `tamarin-prover/examples/` plus one repo-local regression fixture. Stored
   proofs replay and validate across provers in both directions, and the
   interactive web UI agrees page-for-page with the Haskell server except for
-  a small documented cosmetic residue, enumerated theory-by-theory in
-  `scripts/websweep_residual.txt` (77 files) and re-checked by a ≈69,600-page
-  crawl sweep — see [Parity status](#parity-status).
-- **Performance:** 4.3–80× faster than the most recent Tamarin release
-  (1.12.0) across 1–16 cores (median ≈16×), with peak memory 4.3–45×
-  lower at one core — see [Performance](#performance).
+  a small documented cosmetic residue in `scripts/websweep_ledger.tsv`.
+  The 77-theory milestone crawl uses `scripts/websweep_residual.txt`, with
+  explicit proof-node caps — see [Parity status](#parity-status).
+- **Performance:** 4.6–116× faster than the most recent Tamarin release
+  (1.12.0) across 1–16 cores (median 23×). At one core, peak process-tree
+  memory is 2.1–21× lower; at sixteen cores it ranges from 25% higher on
+  tiny `NSPK3` to 12.5× lower on `CCITT_X509_3` — see
+  [Performance](#performance).
 - **Not yet ported:** observational equivalence (`--diff`) and the
   ProVerif / DeepSec export modules — see
   [Not yet ported](#not-yet-ported).
 - **Testing process:** [TESTING.md](TESTING.md) documents the parity-gate
   ladder and divergence-debugging tools.
 
+
+Conditional directives (`#ifdef`, `#else`, `#endif`) must occupy their own
+physical lines, with optional indentation and same-line trailing comments.
+The condition must stay on the `#ifdef` line. Active code parses comments and
+quoted text normally. In inactive branches, every conditional line is structural;
+all other text is ignored, including incomplete declarations, quotes, and brackets.
 
 ## Repository layout
 
@@ -59,11 +68,9 @@ crates/            the Rust port (crate breakdown below)
 scripts/           parity gates, benchmarks, and divergence-debugging harnesses
 tests/             wellformedness fixture corpus
 patches/
-  tamarin-prover-fixes.patch   local Haskell fixes not yet upstream —
-                               stored-formula normalisation / gconj
-                               idempotence, assorted solver and
-                               equation-store fixes, and the solver-trace
-                               instrumentation the diff harnesses depend on
+  series                       ordered list of one Haskell patch per
+                               not-yet-merged upstream PR
+  tamarin-prover-pr-*.patch    patches applied to the testing oracle
 tamarin-prover/    upstream submodule, pinned to a known-good commit and kept
                    PRISTINE — holds the canonical Haskell sources, the
                    examples/ corpus, and the web data/ assets
@@ -86,9 +93,9 @@ embeds `tamarin-prover/data/intruder_variants_dh.spthy` and
 submodule's `data/` assets at runtime, and the tests read the
 `tamarin-prover/examples/` corpus. The submodule working tree is never
 modified, so tracking upstream is an ordinary submodule bump —
-`scripts/bump_submodule.sh` automates it (rebases the patch onto the new pin,
-rebuilds the oracle, archives the now-stale gate caches, and prints the
-verification checklist; `--check` dry-runs the patch rebase first).
+`scripts/bump_submodule.sh` automates it (checks each PR patch against the new
+pin, rebuilds the oracle, leaves fingerprinted old cache entries safely in
+place, and prints the verification checklist; `--check` changes nothing).
 
 The release profile uses `lto = "fat"` and `codegen-units = 1`.
 
@@ -100,9 +107,12 @@ Rust build itself:
 ```
 
 This materialises a git worktree of the pinned commit at
-`tamarin-prover-testing/`, applies `patches/tamarin-prover-fixes.patch` there
-(the submodule itself stays untouched), and builds it with stack. The parity
-scripts discover that binary automatically; `HS_PATH=<binary>` overrides.
+`tamarin-prover-testing/`, applies the files in `patches/series` there (the
+submodule itself stays untouched), and builds it with stack. When needed, the
+testing worktree is reset to the current branch's pin; ignored `.stack-work/`
+artifacts remain as the compiler cache. The parity scripts discover that
+binary automatically; `HS_PATH=<binary>` overrides, and byte-identical copies
+are verified against setup's fixed `.stack-work/` attestation.
 
 ## Parity status
 
@@ -134,12 +144,16 @@ file replays every stored step against a freshly derived constraint system,
 and proof files are cross-compatible in both directions with byte-identical
 analysis output from either loader.
 
-The interactive web UI (`interactive` subcommand) is verified by a semantic
-crawl gate (`scripts/web_parity.sh`): both servers are booted on the same
-theory, every proof-tree, constraint-system, graph and source page is
-crawled — autoproving each lemma along the way — and compared after
-normalisation. The two UIs agree page-for-page except for a small documented
-residue that renders *identical* proof states with different internal
+The interactive web UI (`interactive` subcommand) is verified by a crawl
+gate (`scripts/web_parity.sh`): both servers load the same theory with the
+same flags, autoprove each lemma, and compare proof-tree, constraint-system,
+graph and source pages. HTML is compared byte for byte, including highlighting,
+markup and whitespace, except for environment fields such as timestamps and
+work-directory paths. JSON envelopes also allow different key order and
+encoding. Proof-node visits are capped at 400 per theory by default; truncated
+crawls are reported, and `FAIL_ON_CAPPED=1` makes them fail the gate. Within
+that coverage, the two UIs agree except for a small documented residue that
+renders *identical* proof states with different internal
 counter values (fresh-variable witness indices, goal-creation numbers,
 term-abbreviation picks on a few AC-heavy theories); these never appear in
 proof scripts, proof structure, or verdicts.
@@ -173,8 +187,9 @@ is smaller than these tables show.
 
 Both provers prove every lemma (--prove --derivcheck-timeout=30); HS at
 `+RTS -Nk`, RS at `--processors=k`; wall-clock + peak RSS come from
-`/usr/bin/time -v` (the prover process only — Maude is a separate subprocess on
-both sides and is excluded). Single run per cell (wall-clock is noisy ±10%).
+GNU time plus a 20 ms process-tree sampler. Peak RSS is the largest sum across
+all simultaneously live command processes, including Maude workers. Single
+run per cell (wall-clock is noisy ±10%).
 The RS+HS columns measure ./prove_and_reverify.sh (THREADS=k): prove with RS,
 then re-CHECK the emitted proofs with HS — i.e. the total cost of a proof you
 did not have to trust the port for; its peak RSS is the max across both
@@ -189,49 +204,51 @@ the scripts/bench.sh header).
 
 | Theory | HS time | RS+HS time | RS time | HS memory | RS+HS memory | RS memory |
 |--------|--------:|-----------:|--------:|----------:|-------------:|----------:|
-| `NSPK3` | 4.7 s | 2.3 s (-51%) | **0.5 s (-89%)** | 77 MB | 61 MB (-21%) | **18 MB (-77%)** |
-| `Joux` | 22.6 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **4.4 s (-81%)** | 260 MB | — | **47 MB (-82%)** |
-| `stateverif_left_right` | 46.0 s | 39.7 s (-14%) | **3.3 s (-93%)** | 957 MB | 1215 MB (+27%) | **34 MB (-96%)** |
-| `Yubikey` | 64.5 s | 49.9 s (-23%) | **4.8 s (-93%)** | 412 MB | 337 MB (-18%) | **46 MB (-89%)** |
-| `mixvote_SmHh-multi-session` | 71.9 s | 53.6 s (-25%) | **4.3 s (-94%)** | 1023 MB | 1358 MB (+33%) | **35 MB (-97%)** |
-| `gcm` | 125.6 s | 125.6 s (+0%) | **12.6 s (-90%)** | 1426 MB | 1534 MB (+8%) | **86 MB (-94%)** |
-| `wireguard` | 163.3 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **6.8 s (-96%)** | 2141 MB | — | **47 MB (-98%)** |
-| `CCITT_X509_3` | 566.3 s | 37.7 s (-93%) | **26.8 s (-95%)** | 4862 MB | 303 MB (-94%) | **302 MB (-94%)** |
+| `NSPK3` | 4.8 s | 2.2 s (-54%) | **0.4 s (-92%)** | 108 MB | 93 MB (-14%) | **51 MB (-53%)** |
+| `Joux` | 21.8 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **4.0 s (-82%)** | 299 MB | — | **85 MB (-72%)** |
+| `stateverif_left_right` | 45.3 s | 37.9 s (-16%) | **2.2 s (-95%)** | 986 MB | 1246 MB (+26%) | **64 MB (-94%)** |
+| `Yubikey` | 66.5 s | 48.0 s (-28%) | **2.8 s (-96%)** | 414 MB | 371 MB (-10%) | **95 MB (-77%)** |
+| `mixvote_SmHh-multi-session` | 71.6 s | 51.4 s (-28%) | **3.0 s (-96%)** | 1041 MB | 1356 MB (+30%) | **63 MB (-94%)** |
+| `gcm` | 131.6 s | 129.4 s (-2%) | **6.3 s (-95%)** | 1460 MB | 1568 MB (+7%) | **116 MB (-92%)** |
+| `wireguard` | 161.7 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **4.8 s (-97%)** | 2163 MB | — | **102 MB (-95%)** |
+| `CCITT_X509_3` | 562.4 s | 28.7 s (-95%) | **17.5 s (-97%)** | 4924 MB | 316 MB (-94%) | **312 MB (-94%)** |
 
 **4 cores**
 
 | Theory | HS time | RS+HS time | RS time | HS memory | RS+HS memory | RS memory |
 |--------|--------:|-----------:|--------:|----------:|-------------:|----------:|
-| `NSPK3` | 2.7 s | 1.7 s (-37%) | **0.4 s (-85%)** | 113 MB | 77 MB (-32%) | **28 MB (-75%)** |
-| `Joux` | 18.4 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **4.3 s (-77%)** | 299 MB | — | **44 MB (-85%)** |
-| `stateverif_left_right` | 26.1 s | 33.7 s (+29%) | **2.0 s (-92%)** | 991 MB | 1235 MB (+25%) | **47 MB (-95%)** |
-| `Yubikey` | 50.2 s | 42.0 s (-16%) | **2.9 s (-94%)** | 417 MB | 358 MB (-14%) | **61 MB (-85%)** |
-| `mixvote_SmHh-multi-session` | 35.7 s | 32.6 s (-9%) | **1.9 s (-95%)** | 1037 MB | 1393 MB (+34%) | **62 MB (-94%)** |
-| `gcm` | 95.4 s | 89.6 s (-6%) | **5.2 s (-95%)** | 1453 MB | 1553 MB (+7%) | **139 MB (-90%)** |
-| `wireguard` | 105.2 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **3.2 s (-97%)** | 2172 MB | — | **76 MB (-97%)** |
-| `CCITT_X509_3` | 235.5 s | 14.4 s (-94%) | **7.5 s (-97%)** | 9651 MB | 526 MB (-95%) | **633 MB (-93%)** |
+| `NSPK3` | 2.6 s | 1.5 s (-42%) | **0.3 s (-88%)** | 135 MB | 133 MB (-1%) | **125 MB (-7%)** |
+| `Joux` | 18.1 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **3.9 s (-78%)** | 336 MB | — | **150 MB (-55%)** |
+| `stateverif_left_right` | 25.9 s | 34.7 s (+34%) | **1.4 s (-95%)** | 1048 MB | 1248 MB (+19%) | **154 MB (-85%)** |
+| `Yubikey` | 48.5 s | 39.9 s (-18%) | **2.2 s (-95%)** | 436 MB | 377 MB (-14%) | **184 MB (-58%)** |
+| `mixvote_SmHh-multi-session` | 37.2 s | 29.3 s (-21%) | **1.3 s (-97%)** | 1066 MB | 1489 MB (+40%) | **156 MB (-85%)** |
+| `gcm` | 91.3 s | 83.8 s (-8%) | **3.4 s (-96%)** | 1506 MB | 1605 MB (+7%) | **229 MB (-85%)** |
+| `wireguard` | 103.7 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **2.3 s (-98%)** | 2213 MB | — | **198 MB (-91%)** |
+| `CCITT_X509_3` | 241.7 s | 12.3 s (-95%) | **5.0 s (-98%)** | 8829 MB | 553 MB (-94%) | **658 MB (-93%)** |
 
 **16 cores**
 
 | Theory | HS time | RS+HS time | RS time | HS memory | RS+HS memory | RS memory |
 |--------|--------:|-----------:|--------:|----------:|-------------:|----------:|
-| `NSPK3` | 2.6 s | 1.8 s (-31%) | **0.4 s (-85%)** | 162 MB | 125 MB (-23%) | **34 MB (-79%)** |
-| `Joux` | 19.2 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **4.3 s (-78%)** | 356 MB | — | **55 MB (-85%)** |
-| `stateverif_left_right` | 25.8 s | 34.5 s (+34%) | **1.9 s (-93%)** | 1050 MB | 1215 MB (+16%) | **67 MB (-94%)** |
-| `Yubikey` | 46.5 s | 39.6 s (-15%) | **2.7 s (-94%)** | 596 MB | 547 MB (-8%) | **83 MB (-86%)** |
-| `mixvote_SmHh-multi-session` | 27.6 s | 28.5 s (+3%) | **1.9 s (-93%)** | 1078 MB | 1476 MB (+37%) | **112 MB (-90%)** |
-| `gcm` | 75.0 s | 78.8 s (+5%) | **4.3 s (-94%)** | 1522 MB | 1632 MB (+7%) | **204 MB (-87%)** |
-| `wireguard` | 80.2 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **2.9 s (-96%)** | 2284 MB | — | **108 MB (-95%)** |
-| `CCITT_X509_3` | 222.2 s | 9.1 s (-96%) | **2.8 s (-99%)** | 11844 MB | 734 MB (-94%) | **738 MB (-94%)** |
+| `NSPK3` | 2.6 s | 1.7 s (-35%) | **0.4 s (-85%)** | 198 MB | 233 MB (+18%) | **248 MB (+25%)** |
+| `Joux` | 18.9 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **3.9 s (-79%)** | 394 MB | — | **162 MB (-59%)** |
+| `stateverif_left_right` | 25.3 s | 31.5 s (+25%) | **1.3 s (-95%)** | 1044 MB | 1279 MB (+23%) | **388 MB (-63%)** |
+| `Yubikey` | 44.5 s | 37.3 s (-16%) | **2.2 s (-95%)** | 550 MB | 417 MB (-24%) | **370 MB (-33%)** |
+| `mixvote_SmHh-multi-session` | 28.9 s | 26.8 s (-7%) | **1.2 s (-96%)** | 1102 MB | 1468 MB (+33%) | **418 MB (-62%)** |
+| `gcm` | 76.1 s | 80.4 s (+6%) | **2.2 s (-97%)** | 1590 MB | 1647 MB (+4%) | **467 MB (-71%)** |
+| `wireguard` | 79.2 s | not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below) | **2.1 s (-97%)** | 2327 MB | — | **333 MB (-86%)** |
+| `CCITT_X509_3` | 221.1 s | 8.2 s (-96%) | **1.9 s (-99%)** | 11420 MB | 891 MB (-92%) | **914 MB (-92%)** |
 
 <!-- BENCH:END -->
 
-Memory is the maximum resident set of the prover process; Maude runs as a
-separate subprocess on both sides and is excluded. Across all theories and
-core counts the Rust port is 4.3–80× faster than the 1.12.0 release
-(median ≈16×); peak memory is 4.3–45× lower at one core and 4.8–21× lower
-at sixteen. The smallest gains are on `Joux`, whose runtime is dominated
-by AC-heavy Maude queries both provers pay for equally.
+Memory in the tables above is the largest simultaneous RSS sum across the
+prover's complete process tree, sampled every 20 ms; see the methodology note
+in the generated block. Across all theories and core counts the Rust port is
+4.6–116× faster than the 1.12.0 release (median 23×). At one core, peak
+memory is 2.1–21× lower. At sixteen cores the fixed worker-pool overhead is
+visible on small theories: memory ranges from 25% higher on `NSPK3` to 12.5×
+lower on `CCITT_X509_3`. The smallest speed gains are on `Joux`, whose runtime
+is dominated by AC-heavy Maude queries both provers pay for equally.
 
 The `not supported` entries in the RS+HS column are not failures of the
 port: the emitted `Joux` and `wireguard` proofs are correct, but the
@@ -259,7 +276,7 @@ refined sources are computed once and shared across lemmas.
 - **Parser:** full `.spthy` grammar — `macros:`, `predicates:`, `equations:`,
   `restrictions:`, `tactic:`, `heuristic:`, `#define`/`#include`
   preprocessing, multi-line comments, Unicode symbols — plus the
-  wellformedness checks (`tamarin_parser::wf`).
+  wellformedness checks (`tamarin_theory::wellformedness`).
 - **Elaborator:** rule signatures, lemma formulas → guarded form, macro and
   predicate expansion, restriction insertion, source-kind classification.
 - **Builtins:** `hashing`, `symmetric-encryption`, `asymmetric-encryption`,
@@ -272,7 +289,8 @@ refined sources are computed once and shared across lemmas.
   induction, stored-proof replay with plain-load proof validation, and
   AC-modulo unification via pooled Maude.
 - **`--auto-sources`:** automatic sources-lemma generation
-  (HS `addAutoSourcesLemma`).
+  (HS `addAutoSourcesLemma`) in batch and interactive mode, also enabled by
+  an in-file `configuration: "--auto-sources"` block.
 - **SAPiC `process:`** — the process-calculus frontend, byte-identical to HS
   `Sapic.translate`: core constructs, mutable state, locks, `let`
   bindings/destructors, secret/private channels, progress and
@@ -319,12 +337,14 @@ refined sources are computed once and shared across lemmas.
 - **`diff(...)` / `--diff`** — observational-equivalence mode.
 - Export modules: `-m proverif`/`proverifequiv`/`deepsec` and their
   satellite flags (`--replication-bound`, the `--proverif-no-*`
-  family) — the HS `Export.hs` backend. The pinned upstream oracle
-  crashes on all 21 of its own `examples/sapic/export/` theories (its
-  `builtins` table has no arm for the `dest-*` or `natural-numbers`
-  names), and `-m deepsec` emits nothing anywhere in the corpus, so the
-  reference output that does exist is thin — see the
-  `tamarin-export` crate docs for the measured breakdown.
+  family) — the HS `Export.hs` backend. The three values parse; a run
+  that reaches them fails with a "not yet ported" message. The reference
+  output the pinned oracle offers is thin: over the 1042-file corpus
+  `-m proverif` and `-m proverifequiv` produce output for the same 44
+  files, none of which has an `equivLemma`; `-m deepsec` emits nothing
+  anywhere; and 38 of the 123 process-bearing files, including all 21
+  under `examples/sapic/export/`, crash the oracle, whose `builtins`
+  table has no arm for the `dest-*` or `natural-numbers` names.
 
 Diff theories are recorded with their canonical `--diff` invocation in
 `scripts/file_flags.tsv`; they join `scripts/parity_corpus.txt` once the
@@ -338,12 +358,11 @@ crate, distinct from the `tamarin-prover/` submodule at the repository root):
 ```
 tamarin-utils/          fresh-name state, pretty-printer, DAG/dot helpers, small util types
 tamarin-term/           Term/LTerm/LNTerm, MaudeSig, Maude IPC, normalisation
-tamarin-parser/         .spthy AST + lexer + parser + #include resolver + wellformedness
-tamarin-theory/         elaborator, constraint system, solver, simplify, sources, replay
+tamarin-parser/         .spthy AST + lexer + parser + #include resolver
+tamarin-theory/         elaborator, wellformedness, constraint system, solver, simplify, sources, replay
 tamarin-sapic/          SAPiC process: frontend — translation to multiset-rewrite rules
 tamarin-accountability/ accountability frontend — case tests → VC lemmas
-tamarin-export/         ProVerif / DeepSec export — headers only so far, not yet wired
-                        into the binary
+tamarin-test-support/   maude resolution shared by every crate's maude-gated tests
 tamarin-server/         interactive HTTP server (Axum)
 tamarin-prover/         the binary: CLI parser + run dispatch
 ```
@@ -398,6 +417,6 @@ So, in summary:
   granted permission for relicensing by the related authors. This is indicated
   by comments at the top of those files. THE BINARY YOU BUILD IS GPL 3.0.
 - The `tamarin-prover/` submodule is a separate upstream project licensed under
-  GPL 3.0 (see `tamarin-prover/LICENSE`). `patches/tamarin-prover-fixes.patch`
-  modifies those GPL 3 sources and is therefore itself GPL-3.
+  GPL 3.0 (see `tamarin-prover/LICENSE`). The files under `patches/` modify
+  those GPL 3 sources and are therefore themselves GPL-3.
 - None of this is legal advice, consult a lawyer.

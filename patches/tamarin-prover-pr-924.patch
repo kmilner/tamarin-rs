@@ -1,0 +1,29 @@
+diff --git a/lib/theory/src/Theory/Text/Parser/Tactics.hs b/lib/theory/src/Theory/Text/Parser/Tactics.hs
+index 801406e9abd14503f3721633dd8f00e5090c289d..9369a7fdadebc9e3aed770ba1b9f6363560e8915 100644
+--- a/lib/theory/src/Theory/Text/Parser/Tactics.hs
++++ b/lib/theory/src/Theory/Text/Parser/Tactics.hs
+@@ -44,9 +44,15 @@ tacticName = do
+ goalRankingPresort :: Bool -> Parser (GoalRanking ProofContext)
+ goalRankingPresort diff = regularRanking <?> "proof method ranking"
+    where
+-       regularRanking = toGoalRanking <$> many1 letter <* skipMany (char ' ')
++       regularRanking = do
++           name <- (:) <$> letter <*> manyTill letter (lookAhead $ notFollowedBy letter *> anyChar)
++           case toGoalRanking name of
++               Just ranking -> ranking <$ skipMany (char ' ')
++               Nothing      -> fail $ "Unknown proof method ranking '" ++ name
++                   ++ "'. Use one of the following:\n" ++ listGoalRankingsForMode
+ 
+-       toGoalRanking = if diff then stringToGoalRankingDiff True else stringToGoalRanking True
++       toGoalRanking = if diff then stringToGoalRankingDiffMay True else stringToGoalRankingMay True
++       listGoalRankingsForMode = if diff then listGoalRankingsDiff True else listGoalRankings True
+ 
+ -- Default heuristic
+ selectedPreSort :: Bool -> Parser (GoalRanking ProofContext)
+@@ -277,4 +283,4 @@ nameToRanking s = case M.lookup s rankingFunctions of
+ 
+     listRankingFunction:: String
+     listRankingFunction = M.foldMapWithKey
+-        (\k _ -> "'"++k++"': " ++ rankingFunctionName k ++ "\n") rankingFunctions
+\ No newline at end of file
++        (\k _ -> "'"++k++"': " ++ rankingFunctionName k ++ "\n") rankingFunctions

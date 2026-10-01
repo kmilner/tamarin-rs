@@ -100,11 +100,6 @@ impl DotGraph {
         self.next_id = id;
     }
 
-    /// `addElements`.
-    pub fn add_elements(&mut self, mut new: Vec<GraphElement>) {
-        self.elements.append(&mut new);
-    }
-
     pub fn elements(&self) -> &[GraphElement] {
         &self.elements
     }
@@ -216,11 +211,6 @@ impl DotGraph {
     pub fn edge_attributes(&mut self, attrs: Vec<(String, String)>) {
         self.elements
             .push(GraphElement::Node(NodeId::Generated("edge".into()), attrs));
-    }
-
-    pub fn graph_attributes(&mut self, attrs: Vec<(String, String)>) {
-        self.elements
-            .push(GraphElement::Node(NodeId::Generated("graph".into()), attrs));
     }
 }
 

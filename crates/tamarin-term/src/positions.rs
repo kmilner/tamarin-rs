@@ -11,7 +11,7 @@
 
 use crate::function_symbols::FunSym;
 use crate::term::{f_app, is_ac, is_pair, Term};
-use crate::vterm::{Lit, VTerm};
+use crate::vterm::VTerm;
 
 /// A position in a term — list of integers.
 pub type Position = Vec<i64>;
@@ -163,22 +163,15 @@ pub fn deepest_prot_subterm<C: Ord + Clone, V: Ord + Clone>(
 /// `positions t`: every position in `t` (including the empty position at
 /// the root). AC nesting follows the right-leaning binary interpretation.
 pub fn positions<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
-    collect_positions(t, false)
+    collect_positions(t)
 }
 
-/// `positionsNonVar`: like `positions` but excludes positions where the
-/// subterm is a variable.
-pub fn positions_non_var<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
-    collect_positions(t, true)
-}
-
-/// Pre-order walk emitting one position per node, skipping variable leaves
-/// when `skip_vars`.  AC nodes index their children through the right-leaning
-/// binary encoding ([`ac_position`]), every other node by argument index.
-fn collect_positions<C, V>(t: &VTerm<C, V>, skip_vars: bool) -> Vec<Position> {
-    fn go<C, V>(t: &VTerm<C, V>, skip_vars: bool, out: &mut Vec<Position>, prefix: &mut Vec<i64>) {
+/// Pre-order walk emitting one position per node. AC nodes index their
+/// children through the right-leaning binary encoding ([`ac_position`]),
+/// every other node by argument index.
+fn collect_positions<C, V>(t: &VTerm<C, V>) -> Vec<Position> {
+    fn go<C, V>(t: &VTerm<C, V>, out: &mut Vec<Position>, prefix: &mut Vec<i64>) {
         match t {
-            Term::Lit(Lit::Var(_)) if skip_vars => {}
             Term::Lit(_) => out.push(prefix.clone()),
             Term::App(sym, args) => {
                 out.push(prefix.clone());
@@ -191,7 +184,7 @@ fn collect_positions<C, V>(t: &VTerm<C, V>, skip_vars: bool) -> Vec<Position> {
                     } else {
                         prefix.push(i as i64);
                     }
-                    go(a, skip_vars, out, prefix);
+                    go(a, out, prefix);
                     prefix.truncate(saved);
                 }
             }
@@ -199,7 +192,7 @@ fn collect_positions<C, V>(t: &VTerm<C, V>, skip_vars: bool) -> Vec<Position> {
     }
     let mut out = Vec::new();
     let mut prefix = Vec::new();
-    go(t, skip_vars, &mut out, &mut prefix);
+    go(t, &mut out, &mut prefix);
     out
 }
 
@@ -333,13 +326,5 @@ mod tests {
             replace_pos(&t, &z, &[1, 1]),
             Some(f_app_ac(AcSym::Mult, vec![a, b, z]))
         );
-    }
-
-    #[test]
-    fn positions_non_var_excludes_variables() {
-        let t: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
-        let ps = positions_non_var(&t);
-        // Only the root is non-variable.
-        assert_eq!(ps, vec![Vec::<i64>::new()]);
     }
 }

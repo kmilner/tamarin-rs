@@ -25,11 +25,9 @@
 //! - [`warnings`] ← `Sapic.Warnings` (SAPIC-process wellformedness report;
 //!   bound-twice / `WFBoundTwice` arm — `checkLocks` arm deferred)
 //!
-//! Two modules have no single HS counterpart, because the Rust parser builds
-//! its own surface AST where HS's builds the process directly:
-//! - [`convert`] ← parser AST → `PlainProcess`
-//! - [`inline`] ← process-call inlining (HS does this in the parser,
-//!   `Theory.Text.Parser.Sapic.actionprocess`)
+//! The parser-AST → `PlainProcess` conversion, with the process-call
+//! inlining HS performs in its parser, lives in
+//! `tamarin_theory::{process_convert, process_inline}` beside the data layer.
 //!
 //! Not yet ported: `Sapic.Exceptions`.
 
@@ -38,15 +36,14 @@ pub mod apply;
 pub mod base_translation;
 pub mod bindings;
 pub mod compression;
-pub mod convert;
 pub mod facts;
-pub mod inline;
 pub mod let_destructors;
 pub mod locks;
 pub mod progress_function;
 pub mod progress_translation;
 pub mod reliable_channel;
 pub mod report;
+mod restriction_builder;
 pub mod secret_channels;
 pub mod states;
 pub mod translate;

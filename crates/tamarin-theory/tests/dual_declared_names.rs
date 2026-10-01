@@ -29,12 +29,8 @@ use tamarin_theory::pretty_theory::{format_wf_block, web_proto_rules, web_signat
 /// computation, not on term resolution).
 fn rule_echoes(src: &str) -> Vec<String> {
     let thy = parse_theory(src, &[]).expect("parse");
-    // The load pipelines render with the theory's user-function bundle
-    // installed (`set_user_funs_for_theory`), which the canonicalization the
-    // rule printer runs reads through.
-    let _guard = tamarin_theory::elaborate::set_user_funs_for_theory(&thy);
     let elaborated = elaborate(&thy).expect("elaborate");
-    web_proto_rules(&thy, &elaborated)
+    web_proto_rules(&elaborated)
         .into_iter()
         .map(|rule| match rule.split_once("\n\n  /*") {
             Some((echo, _annotation)) => echo.to_string(),
@@ -48,8 +44,7 @@ fn rule_echoes(src: &str) -> Vec<String> {
 fn wf_block(src: &str) -> Option<String> {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = elaborate(&thy).expect("elaborate");
-    let errs =
-        tamarin_theory::formula_reports::formula_reports(&thy, &elaborated.signature.maude_sig);
+    let errs = tamarin_theory::wellformedness::formulas::formula_reports(&elaborated);
     if errs.is_empty() {
         return None;
     }
@@ -277,7 +272,7 @@ fn an_equation_over_the_dual_name_registers_under_the_noeq_symbol() {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = elaborate(&thy).expect("elaborate");
     assert_eq!(
-        web_signature_block(&elaborated.signature.maude_sig),
+        web_signature_block(&elaborated.signature),
         "functions: f/2, fst/1, pair/2, snd/1, f/2 [AC]\n\
          equations: f(x, y) = x, fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2"
     );

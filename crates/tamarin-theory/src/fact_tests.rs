@@ -81,7 +81,7 @@ fn lvar_to_lnterm_resorts_nat_to_fresh() {
     let m = LVar::new("m", LSort::Msg, 0);
     assert_eq!(lvar_to_lnterm(&m), var_term(m));
 
-    assert_eq!(frees_to_fresh(&[n]), vec![fresh_fact(expected)]);
+    assert_eq!(fresh_fact(lvar_to_lnterm(&n)), fresh_fact(expected));
 }
 
 #[test]
@@ -289,9 +289,9 @@ fn bloom_miss_implies_no_change() {
     );
 }
 
-/// Trait regression: two facts equal-but-for-fingerprints compare `==`
-/// and `Ord`-equal.  Pins that the manual `Eq`/`Ord` stay blind to BOTH
-/// out-of-band caches (`bloom` and `max_var`; no `Hash` derive added).
+/// Trait regression: two facts equal-but-for-fingerprints compare `==`,
+/// `Ord`-equal and hash equal.  Pins that the manual `Eq`/`Ord`/`Hash` stay
+/// blind to BOTH out-of-band caches (`bloom` and `max_var`).
 #[test]
 fn fingerprints_are_invisible_to_eq_and_ord() {
     let mut a = Fact::fresh(FactTag::Out, vec![mv("x", 0)]);
@@ -307,6 +307,47 @@ fn fingerprints_are_invisible_to_eq_and_ord() {
         "Ord must ignore the bloom/max_var fields"
     );
     assert!(a.partial_cmp(&b) == Some(std::cmp::Ordering::Equal));
+    assert_eq!(
+        tamarin_utils::fx_hash_one(&a),
+        tamarin_utils::fx_hash_one(&b),
+        "Hash must ignore the bloom/max_var fields"
+    );
+}
+
+/// `Hash` reads the same fields `Eq` reads, so the annotations stay out of it
+/// (HS ignores them in `Eq`/`Ord`, Theory/Model/Fact.hs:169-174).
+#[test]
+fn fact_hash_ignores_annotations() {
+    let a = fresh_fact(msg_var("x", 0)).annotate(FactAnnotation::SolveFirst);
+    let b = fresh_fact(msg_var("x", 0));
+    assert_eq!(a, b);
+    assert_eq!(
+        tamarin_utils::fx_hash_one(&a),
+        tamarin_utils::fx_hash_one(&b)
+    );
+}
+
+/// The consistency the implied-formula dedup's hash prefilter rests on:
+/// every pair of `==` facts hashes equal, so a hash mismatch really does prove
+/// the two values differ.
+#[test]
+fn fact_equal_values_hash_equal() {
+    let mut r = Lcg(0x0FF1_CE99);
+    let mut equal_pairs = 0u64;
+    for _ in 0..2000 {
+        let a = rand_fact(&mut r);
+        // An independently built structural copy, with the annotations and the
+        // fingerprints deliberately drawn differently.
+        let b = Fact::new(a.tag, a.terms.to_vec()).annotate(FactAnnotation::SolveLast);
+        assert_eq!(a, b);
+        assert_eq!(
+            tamarin_utils::fx_hash_one(&a),
+            tamarin_utils::fx_hash_one(&b),
+            "equal facts must hash equal: {a:?}"
+        );
+        equal_pairs += 1;
+    }
+    assert!(equal_pairs > 0);
 }
 
 /// `var_bit` determinism: two INDEPENDENTLY-constructed content-equal
@@ -432,4 +473,173 @@ fn max_var_equals_the_manual_walk() {
             "cached max must equal the per-term walk — fact={fa:?}"
         );
     }
+}
+
+// =========================================================================
+// `prettyFact` (Theory/Model/Fact.hs:566-582)
+// =========================================================================
+
+/// `nestShort n lead finish body = sep [lead $$ nest n body, finish]`
+/// (Text/PrettyPrint/Class.hs:218) puts a space on each side of the argument
+/// list when the whole fact fits on one line, and the tag of a persistent
+/// fact carries the `!` prefix `showFactTag` gives it
+/// (Theory/Model/Fact.hs:549-553).
+#[test]
+fn pretty_lnfact_emits_the_nest_short_inner_spaces() {
+    let fa = ku_fact(fresh_var("ltk", 0));
+    assert_eq!(pretty_lnfact(&fa).render(), "!KU( ~ltk )");
+}
+
+/// A zero-argument fact still gets the two `nestShort` spaces: the body is
+/// the empty `fsep`, so the layout is `sep [text "F(", text ")"]`.
+#[test]
+fn pretty_lnfact_zero_arity_keeps_its_inner_space() {
+    let fa: LNFact = Fact::new(FactTag::Proto(Multiplicity::Linear, "F", 0), vec![]);
+    assert_eq!(pretty_lnfact(&fa).render(), "F( )");
+}
+
+/// `ppAnn` reads `S.toList`, i.e. `FactAnnotation`'s `Ord` order
+/// (Theory/Model/Fact.hs:573-574), which is the declaration order
+/// `SolveFirst < SolveLast < NoSources` (Theory/Model/Fact.hs:154).  The
+/// annotations go in in the opposite order, so the output can only come from
+/// the set's iteration order.
+#[test]
+fn pretty_lnfact_annotations_in_ord_order() {
+    let fa = ku_fact(fresh_var("ltk", 0))
+        .annotate(FactAnnotation::NoSources)
+        .annotate(FactAnnotation::SolveFirst);
+    assert_eq!(
+        pretty_lnfact(&fa).render(),
+        "!KU( ~ltk )[+, no_precomp]",
+        "the suffix is `brackets . fsep . punctuate comma` over the set"
+    );
+}
+
+/// A tag whose arity disagrees with the argument count prints
+/// `MALFORMED-` followed by HS's DERIVED `show tag`
+/// (Theory/Model/Fact.hs:569), which spells the constructor and quotes a
+/// protocol fact's name, and not the multiplicity-prefix spelling
+/// `show_fact_tag` gives.
+#[test]
+fn pretty_lnfact_malformed_arity() {
+    let proto: LNFact = Fact::new(
+        FactTag::Proto(Multiplicity::Persistent, "P", 2),
+        vec![mv("x", 0)],
+    );
+    assert_eq!(
+        pretty_lnfact(&proto).render(),
+        "MALFORMED-ProtoFact Persistent \"P\" 2( x )"
+    );
+    let builtin: LNFact = Fact::new(FactTag::Fresh, vec![mv("x", 0), mv("y", 0)]);
+    assert_eq!(
+        pretty_lnfact(&builtin).render(),
+        "MALFORMED-FreshFact( x, y )"
+    );
+    // The annotation suffix hangs off the malformed head as well
+    // (Theory/Model/Fact.hs:569).
+    let annotated = builtin.annotate(FactAnnotation::SolveLast);
+    assert_eq!(
+        pretty_lnfact(&annotated).render(),
+        "MALFORMED-FreshFact( x, y )[-]"
+    );
+}
+
+/// The argument printer is a parameter, exactly as `prettyFact ppTerm`
+/// (Theory/Model/Fact.hs:567) takes one, so a `Fact` over any term type
+/// prints through its own leaf renderer.
+#[test]
+fn pretty_fact_takes_the_argument_printer() {
+    let fa: Fact<&str> = Fact::new(FactTag::Proto(Multiplicity::Linear, "F", 2), vec!["a", "b"]);
+    let doc = pretty_fact(
+        &|s: &&str| crate::pretty_hpj::Doc::text(s.to_uppercase()),
+        &fa,
+    );
+    assert_eq!(doc.render(), "F( A, B )");
+}
+
+/// The `Fact arity issues` and `Fact multiplicity issues` blocks render a
+/// LEMMA's fact through HS's derived `Show`, not through `prettyLNFact`.
+/// Oracle ef3f0468, on a theory whose rules use `B` at arity 1 and at arity 2
+/// and whose lemma reads `Ex x #i. B(x, 'c') @ i`, prints the cell
+/// `Fact {factTag = ProtoFact Linear "B" 2, factAnnotations = fromList [],
+/// factTerms = [Bound 1,'c']}` — record syntax, a bare comma between the
+/// terms, and the bound variable as its De Bruijn index.
+#[test]
+fn show_bl_fact_matches_the_derived_show() {
+    use tamarin_term::lterm::{pub_term, BVar};
+    use tamarin_term::vterm::var_term;
+
+    let fa = Fact::new(
+        FactTag::Proto(Multiplicity::Linear, "B", 2),
+        vec![var_term(BVar::Bound(1)), pub_term("c")],
+    );
+    assert_eq!(
+        show_bl_fact(&fa),
+        "Fact {factTag = ProtoFact Linear \"B\" 2, factAnnotations = fromList [], \
+         factTerms = [Bound 1,'c']}"
+    );
+}
+
+/// An annotation reaches the derived `Show` as its constructor name, and the
+/// set renders in `Ord` order with a bare comma between elements.  Oracle
+/// ef3f0468, on the same shape of theory with the lemma action written
+/// `A(x)[+, no_precomp] @ i`, prints
+/// `factAnnotations = fromList [SolveFirst,NoSources]`.
+#[test]
+fn show_bl_fact_renders_a_nonempty_annotation_set() {
+    use tamarin_term::lterm::BVar;
+    use tamarin_term::vterm::var_term;
+
+    let fa = Fact::new(
+        FactTag::Proto(Multiplicity::Linear, "A", 1),
+        vec![var_term(BVar::Bound(1))],
+    )
+    .annotate(FactAnnotation::NoSources)
+    .annotate(FactAnnotation::SolveFirst);
+    assert_eq!(
+        show_bl_fact(&fa),
+        "Fact {factTag = ProtoFact Linear \"A\" 1, \
+         factAnnotations = fromList [SolveFirst,NoSources], factTerms = [Bound 1]}"
+    );
+}
+
+/// `isKLogFact` is `isProtoFact` narrowed to the name `K`
+/// (Theory/Model/Fact.hs:348-350), which is the tag [`k_log_fact`] builds.
+/// The special tags are not protocol facts at all, and `KU`/`KD` do not
+/// qualify despite their names.
+#[test]
+fn is_k_log_fact_is_the_proto_fact_named_k() {
+    let k = k_log_fact(msg_var("m", 0));
+    assert!(is_proto_fact(&k) && is_k_log_fact(&k));
+    let p = proto_fact(Multiplicity::Linear, "P", vec![msg_var("m", 0)]);
+    assert!(is_proto_fact(&p) && !is_k_log_fact(&p));
+    for f in [
+        fresh_fact(msg_var("m", 0)),
+        in_fact(msg_var("m", 0)),
+        out_fact(msg_var("m", 0)),
+        ku_fact(msg_var("m", 0)),
+        kd_fact(msg_var("m", 0)),
+    ] {
+        assert!(!is_proto_fact(&f) && !is_k_log_fact(&f), "{f:?}");
+    }
+}
+
+/// HS `newVariables prems concs` (Theory/Model/Fact.hs:524-529): the
+/// difference of the two lists' variable sets, as terms, in sorted `LVar`
+/// order.  Only the two lists given take part — the caller decides whether
+/// the actions belong in the second one (`cs ++ as` at the rule parser's
+/// sites, the conclusions alone at the SAPIC and intruder sites).
+#[test]
+fn new_variables_is_the_sorted_conc_minus_prem_difference() {
+    let x = msg_var("x", 0);
+    let y = msg_var("y", 0);
+    let z = msg_var("z", 0);
+    let prems = vec![proto_fact(Multiplicity::Linear, "P", vec![x.clone()])];
+    let concs = vec![proto_fact(
+        Multiplicity::Linear,
+        "Q",
+        vec![z.clone(), y.clone(), x.clone()],
+    )];
+    assert_eq!(new_variables(&prems, &concs), vec![y, z]);
+    assert_eq!(new_variables(&concs, &prems), Vec::<LNTerm>::new());
 }

@@ -1,0 +1,38 @@
+/*
+ * A `_restrict` action atom whose TIME POINT is free.
+ *
+ * `rewrite` (Theory/Model/Restriction.hs:90-128) abstracts every subterm of
+ * every atom that carries only free variables, and it reaches the terms of an
+ * atom through `traverse` on `ProtoAtom`, which is
+ * `Action <$> f i <*> traverse f fa` (Theory/Model/Atom.hs:139-140) — the time
+ * point BEFORE the fact's arguments.  `Foldable` folds them in the same order
+ * (Theory/Model/Atom.hs:130-131), so `freesList` of the rewritten formula, and
+ * with it the argument list of the generated `Restr_A_1` fact, carries the
+ * time point's fresh variable first.
+ *
+ * Here `#i` is free, so it is abstracted into the message-sorted `x` and
+ * `f(x, y)` into `x.1`: the restriction reads
+ * `(Restr_A_1( x, x.1 ) @ #NOW) ⇒ (B( x.1 ) @ x)` and the rule's appended
+ * action reads `Restr_A_1( #i, f(x, y) )`.
+ *
+ * No corpus theory reaches this: every `_restrict` action atom in the examples
+ * tree binds its time point, so no fresh variable is ever minted for one and
+ * the two orders coincide.
+ *
+ * Mode `match`: the two engines agree on this shape.
+ *
+ * Compared slices: the wellformedness report, which names the free `#i` as an
+ * unbound variable of the rule, and the `theory … end` echo, which carries
+ * both the generated restriction and the rewritten rule (see check.sh).
+ */
+theory S6RestrictActionTimepoint
+begin
+
+functions: f/2
+
+rule A:
+  [ Fr( ~k ), In( x ), In( y ) ]
+  --[ _restrict( B( f(x, y) ) @ #i ), S( ~k ) ]->
+  [ Out( ~k ) ]
+
+end

@@ -7,16 +7,45 @@ the pristine Haskell sources and the examples corpus live in the
 
 ## Prerequisites
 
+**Supported host.** The shell harness currently supports GNU/Linux and is
+exercised on Ubuntu in CI. macOS is not currently supported: the scripts rely
+on Bash 4.3+ and GNU/Linux utilities and interfaces including `sha256sum`,
+`stat -c`, `timeout`, `setsid`, `flock`, `nproc`, GNU `xargs`, and `/proc`.
+Installing individual GNU tools with Homebrew is therefore not yet a supported
+configuration.
+
+On Ubuntu or Debian, install the harness's system tools with:
+
+```bash
+sudo apt-get update
+sudo apt-get install bash build-essential ca-certificates coreutils curl \
+    diffutils findutils gawk git graphviz grep gzip libgmp-dev pkg-config \
+    procps python3 sed unzip util-linux zlib1g-dev
+```
+
+You also need a stable Rust toolchain (including Cargo, rustfmt and Clippy),
+Stack for `./setup.sh testing`, and Maude; Maude 3.5.1 matches CI. Set
+`MAUDE_PATH` if Maude is not installed at a location described below.
+GNU `time` is required only for `scripts/bench.sh` (`sudo apt-get install time`),
+and `lld` is an optional but substantially faster linker for the full Rust
+suite (`sudo apt-get install lld`).
+
 **The Haskell oracle.** `./setup.sh testing` materialises a patched copy of
 the prover at `tamarin-prover-testing/` (the submodule itself is never
-modified); build it with stack. Parity scripts auto-discover the binary under
+modified). That directory is disposable: when its revision differs, setup
+resets it to the current branch's submodule pin while retaining its ignored
+`.stack-work/` compiler cache. Parity scripts auto-discover the binary under
 `tamarin-prover-testing/.stack-work/`; set `HS_PATH` to point them at a
-specific binary instead.
+specific binary instead. A byte-identical copy of the setup-built binary is
+accepted using the fixed attestation retained under `.stack-work/`; a genuinely
+different binary needs its own adjacent `.tamarin-rs-oracle` attestation or the
+explicit `ALLOW_ORACLE_REV_MISMATCH=1` waiver.
 
-**A current release build.** Every gate but `web_parity.sh` uses
-`target/release/tamarin-rs` as-is and only checks that the file exists — a
-binary from an older commit gates green and says nothing. Only the three flag
-sweeps refuse a stale binary (`rs_stale_check`). Build before you gate:
+**A current release build.** Every gate refuses an in-tree `target/` binary
+that predates Cargo's recorded inputs (`rs_stale_check`). A deliberately
+external/sealed `RS_PATH` is content-fingerprinted against replacement during
+the run, but its source provenance cannot be inferred from this checkout and
+remains the caller's responsibility. Build before you gate:
 
 ```bash
 cargo build --release                          # the gates' RS side
@@ -43,11 +72,9 @@ an error:
   sweeps, `rs_ref_check.sh`, `rs_vs_rs_diff.sh`, `web_parity.sh` and
   `pane_byte_check.sh` all take that route, so an explicit `MAUDE_PATH`, or a
   `maude` on your own `PATH`, wins over the linuxbrew install instead of being
-  overridden by it. Two deliberate exceptions: `capture_cli_refs.sh` walks the
-  Rust test harness's own ladder (its captures must use the maude
-  `cli_e2e.rs` will), and `migrate_hs_cache_fp.sh` tolerates a missing maude
-  so its revision probe reports `NOT CHECKED` rather than blocking a
-  rename-only migration.
+  overridden by it. `capture_cli_refs.sh` is the deliberate exception: it walks
+  the Rust test harness's own ladder because its captures must use the maude
+  `cli_e2e.rs` will.
 
   The resolved binary's own directory is prepended to `PATH`, which is how the
   children pick it up: the flag sweeps pass `--with-maude` outright, and
@@ -58,7 +85,7 @@ an error:
 
   Two things are plain `PATH` lookups: `dot`, which the web servers
   invoke by name, and the per-lemma triage tools (`diff_proof_raw.sh`,
-  `corpus_raw_diff.sh`, `corpus_full_trace_diff.sh`, `triage_diff_vs_hs.sh`),
+  `corpus_raw_diff.sh`, `triage_diff_vs_hs.sh`),
   which run the provers on whatever they inherit. On hosts where these come
   from linuxbrew and it is *not* on `PATH` by default:
 
@@ -66,27 +93,24 @@ an error:
   export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
   ```
 
-- *The Rust suite* mostly ignores `PATH`. 28 files under `crates/` resolve
-  maude, and they do not all do it alike. 13 test sites — both
-  `tests/common/mod.rs` harnesses, `tamarin-theory`'s `oracle_solver`, and ten
-  `#[cfg(test)]` modules under `tamarin-theory` and `tamarin-server` — probe
-  `$MAUDE_PATH` → `/usr/local/bin/maude` → `/usr/bin/maude` → `$PATH` →
-  `/home/linuxbrew/.linuxbrew/bin/maude`, and **panic** when none of them
-  resolves rather than skipping. The other 15 (the remaining in-crate test
-  modules, plus the production probe in `tamarin-prover/src/run.rs` and the
-  server example) still read `$MAUDE_PATH` and the two `/usr` paths and
-  nothing else, so on a host whose maude is elsewhere they return early and
-  the run still prints `ok`. Set it — it is the one thing every probe honours:
+- *The Rust suite* resolves maude in one place: `tamarin-test-support`, a
+  dev-dependency of every crate that has a maude-gated test. Its
+  `require_maude_path` probes `$MAUDE_PATH` → `/usr/local/bin/maude` →
+  `/usr/bin/maude` → `$PATH` → `/home/linuxbrew/.linuxbrew/bin/maude` →
+  `/opt/homebrew/bin/maude`, and **panics** when none of them resolves rather
+  than skipping. A `MAUDE_PATH` that is set but names a missing file is an
+  assertion failure. The binary under test resolves its own default
+  separately, and reads no environment variable — `default_maude_path`
+  (`tamarin-prover/src/run.rs`) walks the two `/usr` paths and then a bare
+  `maude` for the OS to find on `$PATH`. Setting `MAUDE_PATH` is what makes
+  the two agree:
 
   ```bash
   MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace
   ```
 
-  `TAM_ALLOW_NO_MAUDE=1` is the escape hatch for the 13: it restores their old
-  silent skip, and is the only way a machine with no maude at all gets a green
-  run. A `MAUDE_PATH` that is set but names a missing file is an assertion
-  failure at 11 of the 13 (`rule_tests.rs` and `rule_variants.rs` still pass it
-  through unchecked) and a silent fallback everywhere else.
+  `TAM_ALLOW_NO_MAUDE=1` is the escape hatch: it turns the panic back into a
+  skip, and is the only way a machine with no maude at all gets a green run.
 
 ## The correctness criterion
 
@@ -114,6 +138,41 @@ beside its stdout and compared, so identical bytes under a different status
 are `RC_DIFF`, a failing row. The flag sweeps compare stderr as well as rc,
 but none of them proves.
 
+### Parser-error diagnostics
+
+Rust's user-facing parser diagnostics intentionally do not reproduce Haskell's
+parsec/GHC exception text. Errors retain semantic failure classifications and
+source spans; legacy Parsec state and GHC call-site metadata have been removed.
+`Display` uses the plain-text diagnostic renderer. Batch and web surfaces render
+these classifications (for example unknown applications, wrong arity, reserved
+names, malformed attributes and include errors) with compact byte spans. They borrow
+the root source rather than copying the whole input into each error value. An
+error inside an included file retains that file's path and contents, because
+the root source cannot render its labels correctly.
+
+Unknown names in a `builtins:` block are rejected. This intentionally follows
+the upstream builtin table rather than the port's former accept-and-ignore
+fallback, so a Tamarin submodule update that adds a builtin must update the
+Rust table and its parser tests in the same change.
+
+The focused regression suites are:
+
+```bash
+cargo test -p tamarin-parser --test structured_errors --test lookup_arity_errors
+cargo test -p tamarin-prover parser_diagnostic_ --lib
+cargo test -p tamarin-server --test routes_upload
+```
+
+The parity gates still require matching acceptance, exit status, and successful
+`--prove` output. They deliberately do not require byte-identical parser-error
+stderr. The flag sweeps recognize Rust's `error:` header followed by a codespan
+source-location line and normalize that frame along with
+Haskell's Parsec header plus `unexpected`/`expecting` lines. They retain any
+unrecognized lines, including runtime errors before or after a diagnostic.
+Unrecognized Haskell semantic-message formats remain visible for review rather
+than being silently treated as parser presentation. Focused normalization tests
+run as part of `python3 scripts/test_web_harness.py`.
+
 ## The verification ladder
 
 Three tiers by cost. Every gate here carries its own verdict — see "Reading a
@@ -130,7 +189,7 @@ fast gates do need the oracle binary present to address it.**
 | `cargo fmt --all --check` | formatting (CI enforces it) | seconds |
 | `cargo clippy --workspace --all-targets -- -D warnings` | lints (CI enforces it) | seconds warm |
 | `MAUDE_PATH=$(command -v maude) cargo test --profile ci --workspace` | Rust unit + integration suites | minutes |
-| `scripts/divergence_fixtures/check.sh` | 19 corner fixtures vs committed oracle captures (CI runs this too) | ~5 s |
+| `scripts/divergence_fixtures/check.sh` | 55 corner fixtures vs committed oracle captures (CI runs this too) | ~10 s |
 | `scripts/wf_gate.sh` | wellformedness block, 432 files, vs the shared load cache | ~45 s |
 | `scripts/pretty_gate.sh` | `theory … end` echo, 432 files, vs the same load cache | ~45 s |
 
@@ -147,22 +206,21 @@ fast gates do need the oracle binary present to address it.**
 |---|---|
 | `scripts/corpus_file_diff.sh` | the ground-truth batch gate: 432-file `--prove` byte parity (~30–60 min cold) |
 | `scripts/pe_sweep.sh` / `module_sweep.sh` / `json_sweep.sh` | the same sweeps over their full corpora |
-| `ALLOWLIST=<filelist> scripts/web_parity.sh` | interactive-mode gate: crawl + semantic diff |
+| `ALLOWLIST=<filelist> scripts/web_parity.sh` | interactive-mode gate: crawl + HTML byte comparison |
 | `scripts/bench.sh` | performance tables (see README) |
 
-**What CI enforces is `cargo fmt`, clippy, `cargo test --workspace`,
-`scripts/divergence_fixtures/check.sh` and `rs_ref_check.sh check`.** Only one
-of those is a comparison against Haskell bytes, and it is a frozen one: the
-`Divergence fixtures` step in the `test` job builds `--profile ci --bin
-tamarin-rs` and runs the fixture check against captures committed in-tree, so
-it catches drift on 19 corners (and a bump landing without a re-capture — see
-below) but sees nothing outside them. `rs_ref_check.sh` diffs this branch's
-output hashes against `ci_ref_fast.tsv`, a reference generated from *main's
-own binary*; it is a self-consistency check, and after a deliberate output
-change the documented fix is to regenerate the reference from the very binary
-whose output moved. `cargo test`'s oracle-backed cases skip themselves when no
-oracle is present, which is CI's state. General oracle parity is therefore a
-*local* property, established only by the gates above.
+**CI enforces `cargo fmt`, clippy, HS citation integrity, licence headers,
+`cargo test --workspace`, the 18-file wellformedness roster,
+`scripts/divergence_fixtures/check.sh`, and `rs_ref_check.sh check`.** It runs
+no live Haskell binary. The divergence step compares 55 corner cases with
+committed oracle captures (and rejects a submodule bump without a recapture),
+while wellformedness and several unit suites also pin committed oracle output.
+`rs_ref_check.sh` compares this branch's hashes with `ci_ref_fast.tsv`, whose
+proof bytes and exact input scope were certified by a successful live-oracle
+gate when the reference was generated. CI does not rerun that oracle. Tests
+requiring a live oracle skip when it is absent, as it is in CI; parity outside
+the committed fast corpus remains a local property established by the gates
+above.
 
 When a gate goes red, drop to "Debugging a divergence" below.
 
@@ -197,7 +255,6 @@ What each verdict folds in differs, so do not generalise:
 | `rs_vs_rs_diff.sh` | DIFF, `ERROR_*`, `TIMEOUT_*` (incl. `TIMEOUT_BOTH`), `NOFILE`, `EMPTY_BOTH`, missing rows |
 | `rs_ref_check.sh check` | hash mismatch, `INPUT_CHANGED`, `NOTRUN`, maude-version mismatch |
 | `capture_cli_refs.sh` | any row not captured, empty, or failing its `relation` column |
-| `migrate_hs_cache_fp.sh` | a failed rename (`verdict=FAILED`); exit 2 when the oracle is not the pin |
 
 All three corpus gates count their file list up front and fail on
 `ROW-COUNT=rows/N`, so a child killed mid-run no longer leaves its file
@@ -218,20 +275,35 @@ MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace
 MAUDE_PATH="$(command -v maude)" cargo test -p tamarin-theory --test oracle_solver
 ```
 
-The workspace holds 1566 tests. One of them carries the `#[ignore]`
-attribute, so an ordinary run reports 1565 passed. CI uses `--profile ci`,
-and it is the profile to
+The exact test inventory evolves with the workspace; use Cargo's summary as
+the authoritative count. Tests carrying `#[ignore]` are omitted by an
+ordinary run. CI uses `--profile ci`, and it is the profile to
 prefer locally: it is release optimisation without fat LTO, which the release
 profile would re-run at every one of the ~44 test-binary links. Each profile
 also gets its own target tree, so alternating between plain `cargo test`
 (dev), `--release` and `--profile ci` builds the suite three times over —
 `target/debug` alone runs to tens of gigabytes. Pick one and stay on it.
 
-`MAUDE_PATH` is not optional at the 15 sites that still probe only two `/usr`
-paths; see Prerequisites. Without it, `cargo test -p tamarin-prover --test
-output_module` prints `14 passed` in 0.02 s, the same count a real run needs
-0.43 s to produce. At the 13 widened sites an unresolvable maude is now a
-panic naming `TAM_ALLOW_NO_MAUDE=1`, so those cannot report a vacuous green.
+`MAUDE_PATH` is what points the binary under test at the same maude the
+harness resolved; see Prerequisites. An unresolvable maude is a panic naming
+`TAM_ALLOW_NO_MAUDE=1`, so no maude-gated test can report a vacuous green.
+`tamarin-test-support`'s own `maude_path_is_read_in_one_place` holds that
+line: it walks every `.rs` file under `crates/` and fails when any file
+outside the support crate reads `$MAUDE_PATH`.
+
+Whole-corpus structural audits live under one integration-test target so they
+can share expensive theory loading:
+
+```bash
+MAUDE_PATH="$(command -v maude)" cargo test --profile ci -p tamarin-theory --test corpus_audits
+```
+
+`tests/corpus_audits.rs` registers the audit modules under
+`tests/corpus_audits/`. Corpus discovery and parsing share their implementation
+with the in-crate tests; each test binary keeps a process-wide, per-path
+single-flight parse/elaboration cache, so concurrent audits elaborate each
+theory once without serialising unrelated theories. Add another whole-corpus
+audit to this target rather than creating a separate integration-test binary.
 
 The oracle-backed cases in `oracle_solver` still skip silently when no HS
 binary is reachable — the HS skip is deliberate, only the maude one was
@@ -243,7 +315,10 @@ to the submodule: `haskell_captures_match_the_submodule_pin` compares
 `tests/fixtures/haskell-responses/oracle_rev` against `git -C tamarin-prover
 rev-parse HEAD` and fails — with no skip path — when a bump lands without
 re-running `tests/capture_haskell_fixtures.sh`, which re-stamps that file on
-every successful capture.
+every successful capture. The normal `scripts/bump_submodule.sh` path runs
+that capture automatically after rebuilding the testing oracle. `SKIP_BUILD=1`
+also skips the capture and prints a warning, so that exceptional workflow must
+build the oracle and run the capture explicitly before testing or committing.
 
 `crates/tamarin-prover`'s `cli_e2e` suite byte-compares flag pins against
 committed oracle stdout under `tests/fixtures/cli_refs/`. Both sides read one
@@ -298,27 +373,22 @@ The probe prints all of these lines to stderr, so the command line includes
 ## Wellformedness fixtures (oracle-differential)
 
 ```bash
-cargo run -p tamarin-parser --example wellformedness_fixtures
+cargo run -p tamarin-theory --example wellformedness_fixtures
 ```
 
 `-- --no-tamarin` skips the oracle pass. Each fixture under
 `tests/wellformedness_fixtures/` is checked three ways: it parses, the Rust
-`wf::check_theory` emits the topics `expected.txt` claims for it, and
-`tamarin-prover` emits them too. Expectations are positive by default;
-a line beginning `#!<fixture> : <topics>` is a *negative* pin — topics that
-must NOT appear on either side — which is how a fixture whose positive
-expectations all live post-elaboration still compares something. The run ends
-in `VERDICT: PASS|FAIL (N fixture(s), M failure(s))` and exits nonzero on an
+`wellformedness::check_wellformedness` emits the topics `expected.txt`
+claims for it, and `tamarin-prover` emits them too. Expectations are
+positive by default; a line beginning `#!<fixture> : <topics>` is a
+*negative* pin — topics that must NOT appear on either side. The run ends in
+`VERDICT: PASS|FAIL (N fixture(s), M failure(s))` and exits nonzero on an
 empty roster, a `.spthy` no `expected.txt` line mentions, a line with no
-topics, a `#!` line naming an unlisted fixture, an oracle that fails to
-launch, or a fixture emptied by the two post-elaboration removals without an
-`EMPTY_RUST_EXPECTATION_ALLOWLIST` entry *and* negative pins.
-`crates/tamarin-parser/tests/wellformedness.rs` reads the same file offline,
-and it enforces the same pins. Both harnesses check the `#!` topics against
-`wf::check_theory`. Both remove the two post-elaboration topics from the
-positive expectations. Both then fail a fixture that keeps neither a
-parser-level expectation nor a negative pin. Only the example runner compares
-against the oracle.
+topics, a `#!` line naming an unlisted fixture, or an oracle that fails to
+launch. `crates/tamarin-theory/tests/wellformedness_fixture_reports.rs` reads
+the same file offline: it holds that roster to the fixture directory, and it
+pins each fixture's whole rendered `/* WARNING … */` block against an oracle
+capture under `tests/wellformedness_fixtures/reports/`.
 
 ## Single-lemma parity
 
@@ -332,13 +402,22 @@ Raw byte-for-byte diff of one lemma's `--prove` output; exit 0 = identical.
 `cargo build --release -p tamarin-prover`; pass `TAM_RS_NO_AUTO_BUILD=1` to
 diff a binary you built yourself.
 
-All three `.hs_canon_cache/` users — `diff_proof_raw.sh`,
-`corpus_raw_diff.sh` and `corpus_full_trace_diff.sh` — key on the oracle
-fingerprint, so a rebuilt oracle is a MISS rather than a stale hit, and their
+Both `.gate_cache/raw/` users — `diff_proof_raw.sh` and
+`corpus_raw_diff.sh` — key on the oracle fingerprint, so a rebuilt oracle is a
+MISS rather than a stale hit, and their
 flagless entries are exchanged (a `diff_proof_raw.sh` run under the file's
-canonical flags salts `__f` into the key and stays distinct). All three carry
-the gates' `oom_prologue` as well — as does `triage_diff_vs_hs.sh` — so a
+canonical flags salts `__f` into the key and stays distinct). Both carry the
+gates' `oom_prologue` as well — as does `triage_diff_vs_hs.sh` — so a
 prover that outgrows the 24 GiB cap dies alone.
+Their common key and nested-comment-aware lemma scanner live in
+`scripts/proof_diff_common.sh`; oracle discovery lives in `gate_common.sh`.
+
+Do **not** treat `.gate_cache/raw/` as a cache that must be exhaustively warmed
+after every oracle rebuild. It belongs to the per-lemma triage tools above and
+should be populated on demand while investigating a divergence. For the
+routine post-bump milestone gate, run `corpus_file_diff.sh`: it proves all
+lemmas once per theory, fills `.gate_cache/proof/`, and its byte-for-byte
+comparison is stronger than canonical proof-tree comparison.
 
 ## Corpus gate (the batch parity metric)
 
@@ -361,10 +440,15 @@ Whole-file `--prove` diff over the canonical 432-file corpus
 (`scripts/parity_corpus.txt` — the submodule's examples plus one repo-local
 Nat+reuse fixture listed by `../..`-relative path). Two strictly sequential phases: Haskell
 output is computed once per file-content hash and cached under
-`scripts/.hs_file_cache/`; the Rust binary is then diffed against the cache
+`scripts/.gate_cache/proof/`; the Rust binary is then diffed against the cache
 — so re-runs after Rust-only changes skip the Haskell side entirely.
 Theories whose upstream recipe needs extra arguments get them from
 `scripts/file_flags.tsv`, applied identically to both provers.
+
+Oracle timeout markers record the cap that produced them. A later run with
+the same or a lower `FILE_TIMEOUT` reuses that result; raising the cap retries
+the entry and replaces the marker or publishes the completed cache payload.
+Legacy empty markers are retried once and upgraded automatically.
 
 Env knobs (full list in the script header): `ALLOWLIST` (one relative path
 per line; unset uses `scripts/parity_corpus.txt`, set-but-unreadable is
@@ -372,8 +456,11 @@ per line; unset uses `scripts/parity_corpus.txt`, set-but-unreadable is
 `HS_MAXHEAP` (GHC `-M`, 11 g), `FILE_TIMEOUT` (300 s), `DERIVCHECK_TIMEOUT`
 (30 s), `CORPUS_ROOT`, `CACHE`, `HS_PATH`, `RS_PATH`, `FLAGS_MAP`,
 `MAUDE_PATH`. It resolves one maude up front and exits 2 when nothing
-resolves: an oracle run without maude fails at load, and Phase 1 would write
-that as a sticky `.nohs` marker the next run would honour.
+resolves. The resolved Maude path is passed explicitly to both provers, and an
+unexplained empty oracle run is not cached.
+
+`TIMING proof` lines report input-key calculation, cache reads, Rust proving,
+normalization/checking and comparison, plus phase and whole-gate totals.
 
 **Budget for it.** `JOBS=4` is a memory bound, not a leftover: four
 concurrent oracles at `-N4 -M11g` plus four Rust provers is up to ~44 GB of
@@ -383,40 +470,84 @@ the triage tools that run provers, so a runaway prover dies alone. The ceiling
 is still yours to respect: on a constrained box lower `JOBS` rather than
 raising it.
 
-**Cache keys carry the oracle.** `.hs_file_cache/` and `.hs_pretty_cache/`
+**Cache keys carry the oracle.** `.gate_cache/proof/` and `.gate_cache/load/`
 entries are named
-`<sha256(theory)>[__i<12 hex sha256(include shas)>][__f<12 hex sha256(flags)>]__b<12 hex sha256(HS_FP)>.<suffix>`
-— the `__i` component (present only on `#include`-carrying theories) digests
-every included file, transitively — where `HS_FP` is `stat -c '%s.%Y'` of the
-oracle binary — `gate_common.sh`'s
-`hs_fingerprint`, the one definition every cached gate sources. A rebuilt
-oracle, whether a bump or a
-`patches/tamarin-prover-fixes.patch` edit re-applied by `./setup.sh testing`,
-is a clean MISS per entry rather than a silently stale hit. Nothing is archived
-and nothing is wiped: `bump_submodule.sh` deliberately leaves the caches in
-place. Both fast gates therefore need the oracle binary even on a warm cache —
+`<sha256(tagged theory/include/oracle/flags identity)>__e<12 hex execution>__b<12 hex oracle>.<suffix>`.
+The full input digest covers every included file transitively plus executable
+oracle contents/modes and flags. The execution digest covers the Maude version
+and the derivation timeout; the oracle digest comes from `hs_fingerprint`.
+A changed
+oracle, whether a bump or a `patches/series` edit re-applied by
+`./setup.sh testing`, is a clean MISS per entry rather than a silently stale
+hit. Nothing is archived and nothing is wiped: `bump_submodule.sh`
+deliberately leaves the caches in place. Both fast gates therefore need the
+oracle binary even on a warm cache —
 its fingerprint is part of the address — and exit 2 without one,
 `NO_HS_FILL=1` included.
 
-**Run the migration once.** Entries written under the pre-fingerprint key are
-unreachable. `scripts/migrate_hs_cache_fp.sh` renames them onto the current
-names — `mv` only, it never runs the oracle — and must run before the next
-gate run, or the caches regenerate from scratch. It refuses (exit 2) unless
-the checked-out oracle is the submodule pin, since that premise is what makes
-adopting the old entries legitimate;
-`ALLOW_ORACLE_REV_MISMATCH=1` overrides, `DRY_RUN=1` reports without moving,
-and it prints per-cache migrated/already/other-oracle/collided/unrecognised/
-failed counts plus `DONE_MIGRATE_HS_CACHE_FP verdict=OK|FAILED`. It is
-idempotent. Every tool that touches `.hs_file_cache/` computes the same
-fingerprinted key, `triage_diff_vs_hs.sh` included, so nothing writes entries
-the migration would have to chase.
+`./setup.sh testing` writes a source attestation beside that binary and at a
+fixed location under `.stack-work/`: the submodule pin, the ordered
+patch-series SHA-256 and the binary SHA-256. `oracle_rev_check` verifies all
+three, and therefore accepts a byte-identical `HS_PATH` copy without trusting
+an arbitrary unstamped binary. This distinguishes the intended patched oracle
+from a dirty-worktree build whose `Git revision:` happens to have the same base
+commit. When the generated source tree and attested binary are already current,
+setup skips the timestamp-changing relink entirely.
 
-One gap remains: `.hs_canon_cache/` and `.web_hs_cache/` still key an
-`#include`ing theory on the includer alone, so an edit below
-`testParser/include/` leaves those two serving the pre-edit oracle. The gate
-caches above, the sweeps' `.hs_sweep_cache/` and `rs_ref_check.sh`'s
-reference keys all digest the included files (`gate_common.sh`'s
-`include_shas`).
+**Older cache generations stay safe and separate.** Current Haskell-output
+keys cover the oracle release/revision and patch series, Maude version and
+derivation-check timeout. Format-4 web profiles additionally cover Graphviz,
+the crawler's explicit `PLAN_VERSION`, its URL-key helper's source hash, and
+the loaded shell protocol that stages and invokes a crawl.
+
+Unlike format 3, format 4 does not use the crawler's entire source hash to
+select persistent entries. Bump `PLAN_VERSION` when routes, decoding,
+redirect/error handling or stateful request ordering change; timing and
+scheduling changes to independent reads do not require a bump. The full
+crawler source hash still detects edits during an active run. Older profiles
+remain on disk for older checkouts and are not promoted automatically; any
+manual migration must establish that the completed captures remain compatible.
+
+Changes confined to `web_diff.py` or response normalization reuse the same
+captures: those files guard the comparison verdict but are not cache
+producers. The shell protocol hash is computed from producer functions, so
+unrelated comments, cache plumbing and comparison-only edits do not strand
+manifests either.
+
+All current gate caches live under the main/common worktree's gitignored
+`scripts/.gate_cache/`, in `proof`, `load`, `raw`, `sweep`, and `web`
+subdirectories. Linked worktrees therefore reuse exactly the same pool.
+`TAMARIN_RS_CACHE_ROOT` overrides the common root. On first use, a legacy
+cache in the main checkout is renamed into an absent destination; caches in
+other linked worktrees are left untouched and reported for manual import.
+The Rust executable is intentionally outside the Haskell cache key, so a Rust
+rebuild retains the expensive oracle entries. Gates fingerprint it separately
+and refuse any verdict whose Rust binary changed during the comparison.
+
+The raw, web, proof, load and sweep caches, plus `rs_ref_check.sh`
+references, all digest included files transitively and executable oracle
+inputs. Tool identities use versions (plus the Haskell revision and patch
+series), so platform-specific rebuilds do not invalidate the cache. Executable
+hashes only guard in-flight replacement and source attestations. Unchanged
+executable metadata avoids repeated hashing; a metadata change triggers a
+content check. The web cache stages both dependency classes through one helper
+shared by both consumers.
+
+Dependency discovery unions the hidden parser-backed `tamarin-rs input-manifest`
+mode with a conservative parser-independent scan of every existing lexical
+include and executable quoted oracle path. The first side applies the exact
+preprocessor/heuristic semantics; the second prevents a parser omission from
+creating a stale cache hit. Missing active includes remain hard failures;
+ordinary syntax errors use the conservative identity so intentionally
+malformed parity fixtures can still compare the two provers' diagnostics.
+Manifest path fields are byte-preserving hex rather than raw TSV text, so a
+valid Unix filename containing tabs, newlines, or non-UTF-8 bytes cannot alias
+another dependency or corrupt web staging. The parser also reports whether the
+active theory declares lemmas; web crawls use that metadata to permit empty
+lemma discovery only for theories without lemma declarations.
+Run `./setup.sh testing` (or otherwise build `target/release/tamarin-rs`)
+before the shell/Python harness checks; `INPUT_MANIFEST_BIN` may select an
+equivalent development binary while working on the manifest itself.
 
 ## Fast gates (run on every build)
 
@@ -428,12 +559,12 @@ scripts/wf_gate.sh        # the wellformedness WARNING block
 scripts/pretty_gate.sh    # the pretty-printed `theory … end` echo
 ```
 
-They share one reference cache, `.hs_pretty_cache/`, and both can fill it:
+They share one reference cache, `.gate_cache/load/`, and both can fill it:
 
 - `<key>.load.gz` is the oracle's whole stripped load-time stdout. Either
   gate's PHASE 0 writes it — one cheap no-prove oracle load per missing entry,
   `JOBS`-limited — so a bump no longer costs a 30–60 min batch refill before
-  `wf_gate.sh` can compare anything. `.hs_file_cache/` is the `--prove` gate's
+  `wf_gate.sh` can compare anything. `.gate_cache/proof/` is the `--prove` gate's
   alone.
 - `wf_gate.sh` slices the wf block out of `.load.gz`; `pretty_gate.sh` derives
   `<key>.theory.gz` from it and skips a key only when *both* artifacts exist.
@@ -443,9 +574,9 @@ They share one reference cache, `.hs_pretty_cache/`, and both can fill it:
 - `NO_HS_FILL=1` skips PHASE 0 in either: right on a warm cache, an all-`SKIP`
   (failing) run on a cold one. Both still require the oracle binary, because
   the cache key is its fingerprint.
-- A `--diff` theory is marked with the sticky `<key>.nohs` and SKIPped by both
-  (the port does not do `--diff`), so the outcome does not depend on which
-  gate ran first. The default corpus lists no `--diff` file.
+- A `--diff` theory is reported directly as `SKIP_UNSUPPORTED_DIFF` by both
+  gates (the port does not do `--diff`); unsupported inputs create no cache
+  state. The default corpus lists no `--diff` file.
 - A fill that times out is discarded rather than cached: the file reports SKIP
   (a failing verdict) and is retried, so raising the timeout fixes it with no
   cache surgery.
@@ -458,15 +589,14 @@ to load under the oracle), `NO_HS_FILL`, `RESULTS_TSV`, `ALLOWLIST`,
 gate — lower values make the oracle's load-sensitive derivation checks time
 out under parallel fill, and the "Derivation checks timed out." block then
 sits in the shared load cache as a wrong reference until those entries are
-deleted), and `MAUDE_PATH`. Both resolve one maude through `gate_common.sh`
-(`MAUDE_PATH` → `PATH` → linuxbrew → hard fail) and prepend *that* binary's
-directory to `PATH`, so the maude an operator points them at is the one the
-oracle and the port both run.
+deleted), and `MAUDE_PATH`. Both resolve one Maude through `gate_common.sh`
+(`MAUDE_PATH` → `PATH` → linuxbrew → hard fail) and pass that exact path to
+the oracle and port.
 
 ## Corner fixtures (no oracle, no proving)
 
 ```bash
-scripts/divergence_fixtures/check.sh          # ~5 s, 19 fixtures
+scripts/divergence_fixtures/check.sh          # ~10 s, 55 fixtures
 ```
 
 Behaviour that no theory under the submodule's `examples/` tree reaches, so
@@ -474,9 +604,10 @@ Behaviour that no theory under the submodule's `examples/` tree reaches, so
 in any of it. Only the port runs: the oracle side is captured bytes committed
 under `divergence_fixtures/expected/`, stamped with the pin they came from
 (`expected/oracle_rev`) — `check.sh` refuses to run when that stamp no longer
-matches the submodule pin, so a bump forces a fresh `capture.sh`. One fixture,
-`ac_marker_collapse`, must NOT match — the check asserts both sides of a
-deliberate divergence, which a MATCH-only corpus gate cannot express.
+matches the submodule pin, so a bump forces a fresh `capture.sh`. The rows
+currently all require a match. The manifest also supports `diverge` rows, which
+must reproduce recorded port bytes while remaining different from the oracle;
+this preserves both sides of a deliberate divergence when one exists.
 
 It is the cheapest real assertion in the tree, and the only oracle-byte
 comparison CI makes: the `test` job's `Divergence fixtures` step builds
@@ -506,7 +637,9 @@ under their own `== n row(s) UNCOMPARED ==` block and counted on the DONE
 sentinel, `== DONE <sweep> <ts> verdict=<...> UNCOMPARED=<n> files=<n> ==` —
 both fields are always present, and neither fails the verdict (`files=` is
 the distinct compared-file count `rs_ref_check.sh generate` reads). On
-today's ledger that is 23 rows (pe 19, json 3, module 1). Read `verdict=OK
+today's ledger that is 23 rows (pe 19, module 3, json 1). The three module
+rows are one input tested in `spthy`, `spthytyped`, and `msr` output modes.
+Read `verdict=OK
 UNCOMPARED=19` as "the rows it compared agree, and 19 were not compared".
 An *undocumented* timeout is still a plain ERROR and still fails.
 
@@ -520,29 +653,34 @@ Compares one binary's stripped `--prove` output hashes against
 `scripts/ci_ref_fast.tsv` over the 365-file fast corpus, in both directions:
 a run row with no reference row is a mismatch, and a reference row that never
 ran is `NOTRUN`, so a trimmed `ALLOWLIST` fails instead of silently shrinking
-coverage. Note what this is *not*: the reference was generated from main's own
-binary, so a pass means "this branch agrees with main", not "this branch
-agrees with the oracle".
+coverage. The reference is a committed oracle-certified snapshot, not a live
+oracle run. A pass establishes agreement with those certified bytes over this
+exact fast corpus; broader and newly updated oracle behaviour still needs the
+local gates.
 
 `generate` rewrites the reference and is manual — needed after a deliberate
 output change, a submodule bump, or a Maude version change (the pinned version
 is recorded in the reference header and enforced):
 
 ```bash
-scripts/corpus_file_diff.sh 2>&1 | tee /tmp/fullgate.log
-scripts/rs_ref_check.sh generate --certified-by /tmp/fullgate.log
+ALLOWLIST=scripts/parity_corpus_fast.txt scripts/corpus_file_diff.sh 2>&1 \
+  | tee /tmp/fast-proof-gate.log
+scripts/rs_ref_check.sh generate --certified-by /tmp/fast-proof-gate.log
 ```
 
-**`--certified-by` is required, and it must be a comparing gate's log.** The
-named file's last `verdict=` line must read exactly `verdict=OK` AND carry a
-known comparing-gate sentinel — `wf_gate:`, `pretty_gate:`,
-`DONE_CORPUS_FILE_DIFF`, or a sweep's `== DONE` line; anything else is
-refused, `rs_vs_rs_diff.sh`'s `DONE_RS_VS_RS` (proves nothing about Haskell)
-and `migrate_hs_cache_fp.sh`'s rename log (never runs the oracle) by name —
-AND carry `files=<n>` covering at least every file being baselined, so an OK
-from a `FAMILY=1`/narrowed-`ALLOWLIST` run cannot certify the unscoped
-corpus. The log's path, its verdict and `HS_PATH`'s fingerprint — revision-
-checked against the submodule pin (`gate_common.sh`'s `oracle_rev_check`,
+**`--certified-by` is required, and it must be the proof-output gate's log.**
+The named file's last `verdict=` line must be
+`DONE_CORPUS_FILE_DIFF verdict=OK` and must carry the exact sorted
+relpath/input-key scope being baselined, plus the oracle and execution
+fingerprints. Run `corpus_file_diff.sh` with the same allowlist as the
+reference generation; a wf/pretty/flag sweep or a same-sized different corpus
+cannot certify proof-output hashes. The gate also certifies an aggregate of
+the normalized proof bytes actually compared; `generate` refuses to write if
+its newly produced rows do not have that exact aggregate. The log's path, its verdict and
+`HS_PATH`'s fingerprint — revision-
+checked against the submodule pin and current patch series, both of which are
+also recorded in the reference and enforced directly by `check`
+(`gate_common.sh`'s `oracle_rev_check`,
 `ALLOW_ORACLE_REV_MISMATCH=1` to override) — are stamped into the reference
 header beside `# maude:`. Without all that, `generate` would launder whatever
 this binary does today into the baseline. `rs_ref_check.sh`'s own
@@ -564,7 +702,7 @@ stdout; agreement everywhere means the change is behaviorally inert and
 inherits the baseline's HS-faithfulness by transitivity.
 `scripts/triage_diff_vs_hs.sh` then 3-way-triages any DIFF files against
 Haskell output (moved toward HS or away?). It reads and fills the batch gate's
-`.hs_file_cache/` at the same fingerprinted key, and runs all three binaries
+`.gate_cache/proof/` at the same fingerprinted key, and runs all three binaries
 under the file's canonical `file_flags.tsv` flags — the same flags the sweep
 that flagged the file used — so the comparison is like-for-like and an entry
 it writes is one `corpus_file_diff.sh` will reuse. It needs the oracle binary
@@ -588,6 +726,7 @@ sweep that compared nothing.
 
 ```bash
 ALLOWLIST=seed              RESULTS_TSV=/tmp/web.tsv scripts/web_parity.sh   # 2-file smoke
+ALLOWLIST=scripts/websweep_residual.txt RESULTS_TSV=/tmp/web.tsv scripts/web_parity.sh  # milestone corpus
 ALLOWLIST=<filelist>        RESULTS_TSV=/tmp/web.tsv scripts/web_parity.sh
 ```
 
@@ -595,22 +734,82 @@ ALLOWLIST=<filelist>        RESULTS_TSV=/tmp/web.tsv scripts/web_parity.sh
 literal `seed` for the built-in 2-file smoke list. Unset or unreadable is
 `exit 2`, not a fall-through to a default corpus.
 
-Boots both servers on the same theory (HS on port 3021, RS on 3022), crawls
-every proof-tree / constraint-system / graph / source page — autoproving
-each lemma along the way — and diffs the pages semantically
-(`web_crawl.py` / `web_normalize.py` / `web_diff.py`). HS crawl manifests are
-cached content-keyed under `scripts/.web_hs_cache/`, each with a
-`<sha256>.hs.fp` sidecar naming the oracle that produced it; an unstamped or
-foreign-stamped manifest is re-crawled rather than reused, so the first run
-after an oracle rebuild re-crawls the whole HS side (hours on the 77-file
-milestone list). Env knobs: `FILE_TIMEOUT`, `READY_TIMEOUT`, `HS_PORT`,
-`RS_PORT`, `MAX_NODES` (400 proof-node visits per theory), `CACHE`,
+Runs two independent theories concurrently by default (`JOBS=2`). Each worker
+owns a pair of ports: the defaults use 3021/3022 and 3023/3024 for HS/RS.
+Within each theory, the Haskell crawl finishes before Rust starts. Workers
+claim the next theory as they become free; use `JOBS=1` to reduce memory use.
+
+The crawler autoproves each lemma and visits proof-tree, constraint-system,
+graph and source pages up to the configured proof-node cap. Autoprove and
+other state-changing requests stay sequential. Read-only proof/graph pages
+use `WEB_FETCH_JOBS=2` concurrent requests per server (allowed range 1–16),
+with results recorded in crawl-plan order.
+
+HTML is compared byte for byte, including tag spelling, attribute order,
+highlighting and whitespace. Only environment fields such as versions,
+timestamps, theory indices and work-directory paths are normalized; malformed
+markup is preserved rather than repaired. JSON envelopes additionally allow
+different key order and encoding. Graph and plain-text responses retain their
+byte comparisons apart from environment fields.
+
+Both engines receive the per-theory interactive recipe from
+`scripts/web_flags.tsv` (`WEB_FLAGS_MAP` overrides it), and those flags are
+part of the input key. The auto-sources examples use `--auto-sources`, as
+upstream's interactive instructions require; Rust also honors the equivalent
+in-file configuration block. Unsupported flags fail explicitly.
+
+HS crawl manifests are cached in profiles under `scripts/.gate_cache/web/`.
+`web_cache.sh` selects a
+profile from oracle, Maude and Graphviz versions (including the oracle revision
+and patch series), the URL-key helper's source SHA-256, the loaded shell
+producer protocol, plus the derivation timeout, crawl-plan version and node cap
+(not the HTTP request deadline, which cannot alter a successful complete
+manifest); entry keys cover the theory, flags, transitive includes and
+executable oracle inputs. Linked worktrees share the main
+checkout's pool, so switching Tamarin versions automatically reselects the
+corresponding cache instead of overwriting it. Per-entry locks and atomic
+publication let background fills and readers safely use that shared pool at
+the same time. Each manifest records its actual per-run work directory;
+comparison replaces the HS and RS roots with one token, so a warm manifest
+remains comparable when `WEB_WORK_ROOT` is customized or a later run receives
+another `mktemp` name.
+
+The default crawl budgets are 420 seconds for the whole file
+(`FILE_TIMEOUT`) and 180 seconds for one HTTP request
+(`WEB_CRAWL_TIMEOUT`). Raising either can recover a slow oracle crawl without
+changing the cache profile: failed or timed-out crawls are never published,
+and a successful deadline cannot change response bytes.
+
+`web_diff.py` and the full response normalizer are comparison
+inputs rather than cache producers: their hashes are checked before and after
+each diff without selecting another HS profile. Diff artifacts are staged with
+the result and replace their traversal-safe, hashed per-theory `DIFFDIR`
+namespace only after that final check; an all-MATCH rerun removes old
+diagnostics. Each importing Python process
+uses a fresh per-workdir bytecode cache, so the checked source is the code that
+executes. Old flat `.web_hs_cache*` entries do not attest Maude,
+derivation or Graphviz identity, so they remain available to old checkouts but
+are not promoted into current profiles. Both consumers use one guarded server
+lifecycle that refuses an occupied port before boot and waits for release after
+shutdown. Cancellation stops active probes, crawlers and servers and removes
+their work directories. Both gates also reject a source whose input key changes
+while it is being staged. Env knobs:
+`JOBS` (2, `web_parity.sh` only), `WEB_FETCH_JOBS` (2), `WEB_FLAGS_MAP`,
+`FILE_TIMEOUT`, `WEB_CRAWL_TIMEOUT`, `READY_TIMEOUT`, `HS_PORT`, `RS_PORT`, `MAX_NODES` (400
+proof-node visits per theory), `WEB_CACHE_ROOT`, `CACHE` (exact-directory
+override; existing manifests require a matching `PROFILE`), `WEB_WORK_ROOT` (large per-run manifests; defaults
+under `target/`, not a size-limited `/tmp`),
 `DIFFDIR`, `DERIVCHECK_TIMEOUT`, `SERVER_MEM_KB` (per-server address-space
 cap, 24 GiB), `HS_PATH`, `RS_PATH`, `MAUDE_PATH`, `CORPUS_ROOT`,
 `TAM_RS_NO_AUTO_BUILD` (it rebuilds the port by default, unlike every other
 gate), `WEB_LEDGER` (default `scripts/websweep_ledger.tsv`; the literal `none`
 runs without one, which makes every DIFF undocumented by definition) and
 `FAIL_ON_CAPPED`.
+
+`TIMING` lines report server startup, crawl and shutdown, crawler phases,
+comparison work and total gate time. Use these to distinguish proving/fetching
+cost from comparison overhead; totals depend on the corpus, cache warmth and
+worker settings.
 
 **Its exit status reports divergence as well as vacuity.** DIFF and
 `MISSING_*` rows are matched mechanically against the residue ledger
@@ -636,10 +835,20 @@ The file list is **required** — no argument is `exit 2`, because the old
 default was `websweep_residual.txt`, exactly the set where a DIFF is expected.
 It ends in `DONE_PANE_BYTE_CHECK verdict=<...>` and exits nonzero on DIFF,
 `MISSING_*`, any `SKIP_*` and any `FILE-COUNT`/`ROW-COUNT` shortfall, so a
-missing `.web_hs_cache/` (all rows `SKIP_NO_CACHE`) is a red run rather than a
-clean-looking histogram. It reads the same `.hs.fp` sidecar and cannot
+missing selected cache profile (all rows `SKIP_NO_CACHE`) is a red run rather
+than a clean-looking histogram. It reads the same `.hs.fp` sidecar and cannot
 re-crawl, so a manifest from another oracle is `SKIP_STALE_CACHE`; it needs
-the oracle binary present to check that, even though it only boots the port.
+the oracle binary present to select and check that profile, even though it only
+boots the port.
+
+The focused harness regression checks do not need a running Tamarin server,
+but start a local HTTP fixture and require permission to bind loopback sockets.
+They also use the parser-backed Rust binary described above. CI runs the same
+command:
+
+```bash
+python3 scripts/test_web_harness.py
+```
 
 ## Debugging a divergence
 
@@ -653,65 +862,52 @@ scripts/diff_proof_tree.sh <file> <lemma> "TAM_RS_DBG_APPLY_EQ_STORE=1"   # extr
 target/release/examples/dump_proof <file> <lemma> | python3 scripts/canon_proof_tree.py
 ```
 
-`scripts/corpus_diff_proof_trees.sh` runs the same diff over a hand-picked
-regression corpus (PASS/FAIL tally); `scripts/corpus_full_trace_diff.sh`
-does it for every lemma in the corpus.
-
-**Proof-search state trace** — both provers emit a `[STATE]` line at every
-proof-method expansion; diffing them pinpoints the first divergence:
-
-```bash
-TAM_HS_TRACE_STATE=1 <hs-binary>                 --prove=<lemma> <file> 2>&1 | grep '^\[STATE\]' > /tmp/hs.trace
-TAM_RS_TRACE_STATE=1 target/release/tamarin-rs --prove=<lemma> <file> 2>&1 | grep '^\[STATE\]' > /tmp/rs.trace
-diff /tmp/hs.trace /tmp/rs.trace | head
-```
-
-**Maude IPC trace** — lock-step command/response comparison:
-
-```bash
-TAM_DBG_MAUDE_IO=full TAM_DBG_MAUDE_IO_FILTER=unify target/release/tamarin-rs --prove <file>
-scripts/diff_maude_io.sh <file> <lemma>       # side-by-side HS↔RS Maude traffic
-scripts/diff_aes_calls.sh <file> <lemma>      # apply_eq_store call counts per site
-```
-
-See `crates/tamarin-term/src/maude_proc.rs` for the env-gated trace points.
+`scripts/corpus_diff_proof_trees.sh` runs the same diff over a small,
+hand-picked regression corpus (PASS/FAIL tally).
 
 **Diagnostic env flags** (all off by default; solving behavior is never
 env-configurable — these only dump, count, verify-and-panic, or force a
-reference path whose output is byte-identical). `TAM_HS_*` work on the
-instrumented Haskell build, the rest on the Rust binary:
+reference path whose output is byte-identical):
 
 | Variable | Effect |
 |---|---|
 | `TAM_RS_DBG_INTR_DUMP=1` | assembled intruder-rule cache (index, kind, budget/flags, facts) |
 | `TAM_RS_DBG_SOURCES_DUMP=1` | per-source goal + refined case names after `ensure_saturated` |
 | `TAM_DBG_PERFORM_SPLIT=1` | perform_split case lists (RS) |
-| `TAM_HS_DBG_PERFORM_SPLIT=1` | same, HS side |
 | `TAM_RS_DBG_APPLY_EQ_STORE=1` | applyEqStore IN/OUT (RS) |
-| `TAM_HS_DBG_APPLY_EQ_STORE=1` | same, HS side |
+| `TAM_RS_DBG_APPLY_EQ_STORE_FILTER=substantive` | limit that dump to calls with equations or substitutions |
 | `TAM_DBG_AES_VARIANTS=1` | apply_eq_store variant before→after counts |
-| `TAM_HS_TRACE_CHAINS=1` | HS-side solveChain enter/extend |
 | `TAM_RS_VERIFY_BOUNDS_CACHE=1` | panic if the bounds_max cache diverges from a full recompute |
 | `TAM_RS_VERIFY_SUBST_SKIP=1` | panic if a marker-skipped `subst_system` pass was not a bit-identical no-op |
 | `TAM_RS_VERIFY_FP=1` | panic if a bloom-skipped fact descent would actually have changed the fact |
 | `TAM_RS_VERIFY_FACT_MAX=1` | panic if a Fact's cached `max_var` diverges from a full walk of its terms |
 | `TAM_RS_VERIFY_CANON_TABLES=1` | panic if a per-store incremental canon table diverges from a full rebuild |
+| `TAM_RS_VERIFY_REDUCE_NF=1` | panic if a normal-form fast path elided a Maude reduce that would have changed the term |
 | `TAM_RS_NO_SIMP_NOOP_SKIP=1` | force the full Simplify pass (disable the no-op shortcut; A/B oracle) |
-| `TAM_RS_NO_SOURCE_CACHE=1` | disable the session source cache + presaturation pre-pass (per-lemma recompute) |
+| `TAM_RS_NO_SOURCE_CACHE=1` | disable persistent session source-case reuse (recompute for each proof/source context; A/B oracle) |
+| `TAM_RS_DISABLE_BOUNDS_CACHE=1` | force the full `bounds_max` walk (disable the cache; A/B oracle) |
+| `TAM_RS_DISABLE_PARALLEL_EXPAND=1` | expand proof-tree siblings serially instead of per-child in parallel |
+| `TAM_RS_KEEP_SYS=1` | keep every proof node's `System` instead of dropping the ones the search no longer needs |
 | `TAM_RS_SUBST_SKIP_STATS=1` | `subst_system` call/skip counters to stderr |
 | `TAM_RS_FP_STATS=1` | fact-descent bloom-skip counters to stderr |
 | `TAM_RS_SIMP_NOOP_STATS=1` | Simplify no-op shortcut hit/miss counters to stderr |
 | `TAM_RS_CANON_TABLE_STATS=1` | canon-table cache hit/rebuild counters to stderr |
+| `TAM_MAUDE_CACHE_STATS=1` | one Maude reduce/unify/reply cache hit-rate line per subprocess at teardown |
+| `TAM_SATURATION_LIMIT=<n>` | source-saturation step cap; outranks the CLI `-s=` |
+| `TAM_PROVE_DEADLINE_MS=<n>` | per-search wall-clock cap (co-operative) |
 
 The `TAM_RS_VERIFY_*` hooks certify the solver's internal caches and skip
 optimisations: exporting them during a full corpus-gate run re-executes every
 skipped computation and panics on any divergence, turning the byte gate into a
-self-check of the optimisation machinery as well. The `TAM_RS_NO_*` switches
-are the A/B complement — they force the pre-optimisation reference path, whose
-output must stay byte-identical.
+self-check of the optimisation machinery as well. The `TAM_RS_NO_*` /
+`TAM_RS_DISABLE_*` switches are the A/B complement — they force the
+pre-optimisation reference path, whose output must stay byte-identical.
 
-The list is not exhaustive — grep the sources for `TAM_DBG_` / `TAM_RS_` /
-`TAM_HS_` for the full set.
+The table lists every Rust-side diagnostic/solver flag. Test-only dependency
+escape hatches are separate:
+`TAM_ALLOW_NO_MAUDE=1`, `TAM_ALLOW_NO_CORPUS=1`, and
+`TAM_ALLOW_NO_DOT=1` explicitly permit the corresponding tests to skip when
+that external dependency is unavailable. They should not be set for a gate.
 
 ## Script index
 
@@ -734,7 +930,7 @@ exits 2 rather than running with a private fallback.
 | `pretty_gate.sh` | `theory … end` echo, 432 files, same cache, fills it too |
 | `divergence_fixtures/check.sh` (+ `capture.sh`, `fixtures.tsv`) | corners the corpus cannot reach; no oracle, no proving — CI's only oracle-byte comparison |
 | `pe_sweep.sh` / `module_sweep.sh` / `json_sweep.sh` (+ `sweep_common.sh`) | flag parity: stdout, stderr and rc |
-| `rs_ref_check.sh` | CI's gate: output hashes vs `ci_ref_fast.tsv` (RS-vs-RS, not oracle) |
+| `rs_ref_check.sh` | CI's gate: output hashes vs the oracle-certified `ci_ref_fast.tsv` snapshot |
 | `capture_cli_refs.sh` | captures the oracle stdout `cli_e2e.rs`'s flag pins compare against |
 | `web_parity.sh` (+ `web_crawl.py`, `web_normalize.py`, `web_diff.py`) | interactive-mode gate |
 | `pane_byte_check.sh` | byte-exact pane HTML vs the web cache; file list required |
@@ -746,7 +942,8 @@ exits 2 rather than running with a private fallback.
 |---|---|
 | `parity_corpus.txt` | canonical 432-file corpus list |
 | `parity_corpus_fast.txt` | 365-file CI subset (every file proving in ≤1.5 s) |
-| `file_flags.tsv` | per-file extra prover flags, applied to both sides |
+| `file_flags.tsv` | per-file batch flags |
+| `web_flags.tsv` | separate per-file interactive flags; unsupported entries fail the web gates |
 | `ci_ref_fast.tsv` | committed output-hash reference for `rs_ref_check.sh` |
 | `sweep_expected.tsv` | the flag sweeps' residual ledger (applied mechanically) |
 | `pe_family.txt` / `module_family.txt` / `json_family.txt` | `FAMILY=1` subsets |
@@ -761,16 +958,12 @@ exits 2 rather than running with a private fallback.
 | `diff_proof_raw.sh` | one lemma, raw HS↔RS diff |
 | `corpus_raw_diff.sh` | raw per-lemma diff across the corpus |
 | `compare_parity_tsv.py` | compare two gate TSVs by (file, lemma) |
-| `diff_maude_io.sh` / `diff_aes_calls.sh` | Maude-IPC and eq-store call-site diffs |
 | `diff_proof_tree.sh` / `canon_proof_tree.py` / `corpus_diff_proof_trees.sh` | structural proof-tree diffs, pre-byte-parity era; superseded by the byte gates and only worth reaching for when output diverges too grossly to read |
-| `corpus_full_trace_diff.sh` / `canonicalize_trace.py` / `diff_trace.py` | canonicalised `[EXEC]` trace diffing; the most detailed comparison |
-
 **Maintenance**
 
 | Script | Purpose |
 |---|---|
-| `bump_submodule.sh` | submodule bump: patch rebase, oracle rebuild, cite remap, 6-step re-certification checklist (the caches self-invalidate, so none is archived) |
-| `migrate_hs_cache_fp.sh` | one-time re-keying of the HS caches onto the fingerprint-bearing names |
+| `bump_submodule.sh` | submodule bump: patch rebase, oracle rebuild, automatic server-fixture refresh, cite remap, and explicit re-certification checklist (the caches self-invalidate, so none is archived) |
 | `bench.sh` | RS-vs-HS wall-clock + memory tables (`--write` regenerates the README block) |
 | `check_hs_cites.py` / `remap_hs_cites.py` / `extend_anchor_citations.py` | upstream line-cite validation and remapping |
 | `gen_license_headers.py` (+ `header_identities.json`) | GPL notice maintenance (`--check` for staleness) |

@@ -1,0 +1,79 @@
+theory S7PeMacroRule
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: adec/2, aenc/2, fst/1, h/1, pair/2, pk/1, snd/1
+equations:
+    adec(aenc(x.1, pk(x.2)), x.2) = x.1,
+    fst(<x.1, x.2>) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+macros: encrypt( x, y ) =  aenc(x, y),
+        unwrap( x, y ) =  h(adec(x, y))
+
+text{* the abstract state after partial evaluation contains 5 facts:
+
+1. !Ltk( $A, ~ltk.1 )
+
+2. !Pk( $A, pk(~ltk.1) )
+
+3. Fr( ~z )
+
+4. Out( z )
+
+5. In( z )
+
+This abstract state results in 3 refined multiset rewriting rules.
+Note that the original number of multiset rewriting rules was 3.
+
+*}
+
+rule (modulo E) Recv:
+   [ !Ltk( $S, ~ltkS.1 ), In( c.2 ) ]
+  --[ Got( $S, unwrap(c.2, ~ltkS.1) ) ]->
+   [ Out( unwrap(c.2, ~ltkS.1) ) ]
+
+  /*
+  rule (modulo AC) Recv:
+     [ !Ltk( $S, ~ltkS ), In( c ) ] --[ Got( $S, h(z) ) ]-> [ Out( h(z) ) ]
+    variants (modulo AC)
+    1. ~ltkS = ~x.7
+       c     = aenc(x.8, pk(~x.7))
+       z     = x.8
+    
+    2. ~ltkS = ~ltkS.8
+       c     = c.9
+       z     = adec(c.9, ~ltkS.8)
+  */
+
+rule (modulo E) Register:
+   [ Fr( ~ltk.2 ) ] --> [ !Ltk( $A, ~ltk.2 ), !Pk( $A, pk(~ltk.2) ) ]
+
+  /*
+  rule (modulo AC) Register:
+     [ Fr( ~ltk ) ] --> [ !Ltk( $A, ~ltk ), !Pk( $A, pk(~ltk) ) ]
+  */
+
+rule (modulo E) Send:
+   [ Fr( ~k.1 ), !Pk( $S, pk(~ltk.2) ) ]
+  -->
+   [ Out( encrypt(~k.1, pk(~ltk.2)) ) ]
+
+  /*
+  rule (modulo AC) Send:
+     [ Fr( ~k ), !Pk( $S, pk(~ltk) ) ] --> [ Out( aenc(~k, pk(~ltk)) ) ]
+  */
+
+lemma Reachable:
+  exists-trace "∃ S m #i. Got( S, m ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ S m #i. (Got( S, m ) @ #i)"
+*/
+by sorry
+
+
+
+end

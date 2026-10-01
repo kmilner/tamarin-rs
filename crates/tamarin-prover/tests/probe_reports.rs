@@ -14,7 +14,6 @@
 //! `ensureGraphVizDot`/`ensureGraphCommand` calls (Interactive.hs:106-108) but
 //! then binds a socket and blocks.
 
-use std::path::Path;
 use std::process::Command;
 
 mod common;
@@ -80,7 +79,7 @@ fn missing_dot_reports_the_spawn_exception() {
     );
 }
 
-/// Oracle (`test --with-dot=/bin/true`): the tool starts and exits 0, but its
+/// Oracle (`test --with-dot=true`): the tool starts and exits 0, but its
 /// stderr carries no `graphviz`, so `check` fails with `Left "Error."` and the
 /// `Detailed results` block dumps the empty streams.  `ensureGraphVizDot`
 /// returns `Nothing`, so the PNG probe is skipped and no blank line follows.
@@ -90,26 +89,22 @@ fn non_graphviz_dot_reports_the_detailed_results_block() {
         eprintln!("skipping: maude not where the run will look for it");
         return;
     }
-    if !Path::new("/bin/true").exists() {
-        eprintln!("skipping: no /bin/true to stand in for a non-Graphviz dot");
-        return;
-    }
-    let (rc, stdout, stderr) = run_test_command(&["--with-dot=/bin/true"]);
+    let (rc, stdout, stderr) = run_test_command(&["--with-dot=true"]);
     assert_eq!(rc, 1);
     assert_eq!(stdout, FAILED_RUN_STDOUT);
     assert_eq!(
         common::strip_maude_banner(&stderr),
-        "GraphViz tool: '/bin/true'\n\
+        "GraphViz tool: 'true'\n\
          \x20checking version: Error.\n\
-         Detailed results from testing '/bin/true'\n\
-         \x20command: /bin/true -V\n\
+         Detailed results from testing 'true'\n\
+         \x20command: true -V\n\
          \x20stdin:   \n\
          \x20stdout:  \n\
          \x20stderr:  \n"
     );
 }
 
-/// Oracle command: `test --with-dot=/bin/false`.  The tool starts but exits 1.
+/// Oracle command: `test --with-dot=false`.  The tool starts but exits 1.
 /// The code consults the exit code before `check` runs at all.  The reason is
 /// therefore the `failed with exit code 1` line, followed by
 /// `ensureGraphVizDot`'s `errMsg1` (Environment.hs:88-95).  This is the only
@@ -127,16 +122,12 @@ fn bad_exit_dot_reports_the_exit_code_reason_line() {
         eprintln!("skipping: maude not where the run will look for it");
         return;
     }
-    if !Path::new("/bin/false").exists() {
-        eprintln!("skipping: no /bin/false to stand in for a dot that exits non-zero");
-        return;
-    }
-    let (rc, stdout, stderr) = run_test_command(&["--with-dot=/bin/false"]);
+    let (rc, stdout, stderr) = run_test_command(&["--with-dot=false"]);
     assert_eq!(rc, 1);
     assert_eq!(stdout, FAILED_RUN_STDOUT);
     assert_eq!(
         common::strip_maude_banner(&stderr),
-        "GraphViz tool: '/bin/false'\n\
+        "GraphViz tool: 'false'\n\
          \x20checking version: failed with exit code 1\n\
          \n\
          WARNING:\n\
@@ -146,8 +137,8 @@ fn bad_exit_dot_reports_the_exit_code_reason_line() {
          \x20Please download an official version from:\n\
          \x20        http://www.graphviz.org/\n\
          \n\
-         Detailed results from testing '/bin/false'\n\
-         \x20command: /bin/false -V\n\
+         Detailed results from testing 'false'\n\
+         \x20command: false -V\n\
          \x20stdin:   \n\
          \x20stdout:  \n\
          \x20stderr:  \n"
@@ -303,44 +294,36 @@ fn missing_maude_aborts_interactive_before_binding() {
 /// A maude that STARTS but reports an unsupported version is not fatal: the
 /// version probe's `Left` reason is `errMsg`, the installation probe still
 /// runs, and the run carries on (`ensureMaude`'s `Bool` is discarded
-/// everywhere but `test`).  `/bin/echo` stands in: it answers `--version`
-/// with coreutils' banner and, run bare, writes nothing to stderr.
+/// everywhere but `test`).  `echo` stands in: it answers `--version`
+/// with non-Maude output and, run bare, writes nothing to stderr.
 #[test]
 fn unsupported_maude_reports_but_does_not_abort() {
-    if !Path::new("/bin/echo").exists() {
-        eprintln!("skipping: no /bin/echo to stand in for an unsupported maude");
-        return;
-    }
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
     let out = cmd
-        .args([
-            "test",
-            "--with-maude=/bin/echo",
-            "--with-dot=/nonexistent/dot",
-        ])
+        .args(["test", "--with-maude=echo", "--with-dot=/nonexistent/dot"])
         .output()
         .expect("spawn tamarin-rs");
     let stderr = String::from_utf8(out.stderr).expect("utf-8 stderr");
     let echo_version = String::from_utf8(
-        Command::new("/bin/echo")
+        Command::new("echo")
             .arg("--version")
             .output()
-            .expect("spawn /bin/echo")
+            .expect("spawn echo")
             .stdout,
     )
     .expect("utf-8 echo --version");
     assert_eq!(
         stderr,
         format!(
-            "maude tool: '/bin/echo'\n\
+            "maude tool: 'echo'\n\
              \x20checking version: WARNING:\n\
              \n\
              \x20'maude --version' returned unsupported version '{stripped}'\n\
              \x20Please install one of the following versions of Maude: \
              2.7.1, 3.0, 3.1, 3.2.1, 3.2.2, 3.3, 3.3.1, 3.4, 3.5, 3.5.1\n\
              \n\
-             Detailed results from testing '/bin/echo'\n\
-             \x20command: /bin/echo --version\n\
+             Detailed results from testing 'echo'\n\
+             \x20command: echo --version\n\
              \x20stdin:   \n\
              \x20stdout:  {echo_version}\n\
              \x20stderr:  \n\

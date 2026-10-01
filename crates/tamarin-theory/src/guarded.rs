@@ -2,685 +2,55 @@
 // of the tamarin-prover sources this file cites; list them with:
 //   scripts/gen_license_headers.py --authors <this file>
 
-//! Port of `Theory.Constraint.System.Guarded.formulaToGuarded` —
-//! the conversion from a surface-formula (lemma / restriction) to the
-//! guarded-fragment representation that Tamarin's solver consumes.
+//! Port of `Theory.Constraint.System.Guarded` — the guarded-fragment
+//! representation Tamarin's solver consumes, and `formulaToGuarded`, the
+//! conversion into it from a lemma or restriction formula.
 //!
 //! A guarded formula is one where every quantified variable is bound
 //! by an action or equality atom that fires before it's referenced.
 //! The check is polarity-aware: `not (Ex x. P(x) @ #i)` becomes
 //! equivalent to `All x #i. P(x) @ #i ==> ⊥` and so on.
 //!
-//! The conversion INPUT is `tamarin_parser::ast::Formula` (named
-//! variables, matching HS's `LNFormula`), while the OUTPUT `Guarded`
-//! uses the BVar-based, locally-nameless DeBruijn representation
-//! (`GAtom`/`GTerm` from `guarded_types`), mirroring HS's
-//! `Guarded (String,LSort) Name LVar` whose atoms are
-//! `Atom (VTerm c (BVar v))`.
+//! The conversion INPUT is [`crate::formula::LNFormula`]; the OUTPUT
+//! [`Guarded`] carries the same atoms over [`BLNTerm`] (HS `BLTerm`,
+//! LTerm.hs:484), the term whose variable leaves are `BVar`s: `Bound(n)`
+//! is a De Bruijn index into the enclosing binder list — `Bound(0)` is the
+//! innermost binder, `Bound(k-1)` the outermost — and `Free(v)` an unbound
+//! `LVar`.
 
 use std::collections::BTreeSet;
 
-use crate::guarded_types::cow_pair_arc;
-use tamarin_parser::ast as p;
+use crate::atom::{fold_atom, map_atom, Atom, ProtoAtom};
+use crate::fact::Fact;
+use crate::formula::{lift_free, BLNTerm, Quantifier};
+use crate::tools::equation_store::LNSubst;
+use tamarin_term::lterm::{frees, BVar, HasFrees, LNTerm, LSort, LVar};
+use tamarin_term::term::{f_app, map_lits, Term};
+use tamarin_term::vterm::{var_term, Lit};
 use tamarin_utils::cow::{cow_map_arc, cow_map_vec, cow_pair};
-
-pub use crate::guarded_types::{
-    atom_to_gatom_free, close_subst, fact_to_gfact_free, ga, gatom_to_atom, gfact_to_fact,
-    gterm_to_term, lvar_to_binding, map_free_atom, map_free_fact, map_free_term, open_subst,
-    subst_bound_atom_at_depth, subst_bound_fact_at_depth, subst_bound_term_at_depth,
-    subst_free_atom_at_depth, subst_free_fact_at_depth, subst_free_term_at_depth,
-    term_to_gterm_free, BVar, GAtom, GBinding, GFact, GTerm,
-};
+use tamarin_utils::fresh::MonadFresh;
 
 // =============================================================================
 // Guarded data type
 // =============================================================================
 
-#[derive(Debug, Copy, Clone, PartialEq, Hash)]
-pub enum Quant {
-    All,
-    Ex,
-}
-
-// ===========================================================================
-// HS-faithful Ord for Guarded
-// ===========================================================================
-//
-// HS's `Theory.Constraint.System.Guarded.Guarded` derives Ord structurally
-// (Guarded.hs:121-129):
-//
-//     data Guarded s c v = GAto  (Atom ...)
-//                        | GDisj (Disj (Guarded ...))
-//                        | GConj (Conj (Guarded ...))
-//                        | GGuarded Quantifier [s] [Atom ...] (Guarded ...)
-//
-// Constructor order: GAto < GDisj < GConj < GGuarded.
-// Within each, lexicographic on contents.
-//
-// HS's `Set LNGuarded` iterates via `S.toList` which yields elements in
-// ascending Ord.  Rust's `sys.formulas: Vec<Guarded>` iterates in
-// insertion order, so the impl-pass / reduce-formulas / eval-formula-atoms
-// passes see clauses in a DIFFERENT order than HS does — which propagates
-// to which clause's matches fire first → goal-nrs of newly-inserted
-// Disj formulas → goal pick at downstream proof steps.
-//
-// This module provides `cmp_guarded` (and helpers `cmp_atom` /
-// `cmp_term`) that mirror HS's derived Ord chain.
-
-/// HS-faithful structural comparison for Guarded.  Mirrors HS's derived
-/// `Ord (Guarded s c v)` on `Theory.Constraint.System.Guarded.Guarded`.
-pub fn cmp_guarded(a: &Guarded, b: &Guarded) -> std::cmp::Ordering {
-    let ta = guarded_tag(a);
-    let tb = guarded_tag(b);
-    if ta != tb {
-        return ta.cmp(&tb);
-    }
-    // Tag equality above guarantees same variant, so each `let … else` binding
-    // of `b` is infallible.  Match `a` exhaustively (no wildcard) so a new
-    // `Guarded` variant forces a comparison here.
-    match a {
-        Guarded::Atom(x) => {
-            let Guarded::Atom(y) = b else {
-                unreachable!("guarded tag matched Atom")
-            };
-            cmp_atom(x, y)
-        }
-        Guarded::Disj(xs) => {
-            let Guarded::Disj(ys) = b else {
-                unreachable!("guarded tag matched Disj")
-            };
-            cmp_slice(xs, ys, cmp_guarded)
-        }
-        Guarded::Conj(xs) => {
-            let Guarded::Conj(ys) = b else {
-                unreachable!("guarded tag matched Conj")
-            };
-            cmp_slice(xs, ys, cmp_guarded)
-        }
-        Guarded::GGuarded {
-            qua: q1,
-            vars: v1,
-            guards: g1,
-            body: b1,
-        } => {
-            let Guarded::GGuarded {
-                qua: q2,
-                vars: v2,
-                guards: g2,
-                body: b2,
-            } = b
-            else {
-                unreachable!("guarded tag matched GGuarded")
-            };
-            cmp_quant(q1, q2)
-                // HS-faithful: in `LNGuarded = Guarded (String,LSort) Name
-                // LVar` (Guarded.hs:391), the `s` parameter — used
-                // for GGuarded's binding list — is the TUPLE
-                // `(String, LSort)`, NOT `LVar`.  Our `GBinding` carries
-                // exactly those two fields, so bindings sort by
-                // (name, sort) only (cmp_binding); there is no idx on a
-                // binding.  Free-var comparison inside terms still uses
-                // cmp_varspec which mirrors HS's `Ord LVar = (idx, sort, name)`.
-                .then_with(|| cmp_slice(v1, v2, cmp_binding))
-                .then_with(|| cmp_slice(g1, g2, cmp_atom))
-                .then_with(|| cmp_guarded(b1, b2))
-        }
-    }
-}
-
-fn guarded_tag(g: &Guarded) -> u8 {
-    match g {
-        Guarded::Atom(_) => 0,
-        Guarded::Disj(_) => 1,
-        Guarded::Conj(_) => 2,
-        Guarded::GGuarded { .. } => 3,
-    }
-}
-
-fn cmp_quant(a: &Quant, b: &Quant) -> std::cmp::Ordering {
-    let ta = if matches!(a, Quant::All) { 0u8 } else { 1 };
-    let tb = if matches!(b, Quant::All) { 0u8 } else { 1 };
-    ta.cmp(&tb)
-}
-
-/// HS list Ord: element-by-element, shorter < longer.
-pub(crate) fn cmp_slice<T, F>(a: &[T], b: &[T], mut f: F) -> std::cmp::Ordering
-where
-    F: FnMut(&T, &T) -> std::cmp::Ordering,
-{
-    use std::cmp::Ordering;
-    let mut i = 0;
-    loop {
-        match (a.get(i), b.get(i)) {
-            (Some(x), Some(y)) => {
-                let c = f(x, y);
-                if c != Ordering::Equal {
-                    return c;
-                }
-                i += 1;
-            }
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (None, None) => return Ordering::Equal,
-        }
-    }
-}
-
-/// HS-faithful Ord for `ProtoAtom`: Action < EqE < Subterm < Less < Last
-/// < Syntactic (Theory/Model/Atom.hs:78-84).  Rust's `GAtom` declares
-/// variants in a different order; we re-map to HS's order via
-/// `atom_tag`.  `LessMset` has no HS equivalent — put at end.
-pub fn cmp_atom(a: &GAtom, b: &GAtom) -> std::cmp::Ordering {
-    let ta = atom_tag(a);
-    let tb = atom_tag(b);
-    if ta != tb {
-        return ta.cmp(&tb);
-    }
-    // Tag equality above guarantees same variant, so each `let … else` binding
-    // of `b` is infallible.  Match `a` exhaustively (no wildcard) so a new
-    // `GAtom` variant forces a comparison here.
-    match a {
-        // HS `data ProtoAtom s t = Action t (Fact t) | ...` derives Ord
-        // (Atom.hs:78-84), so the derived comparison is the timepoint term
-        // `t` FIRST, then the `Fact t`.  Rust's `GAtom::Action(GFact, GTerm)`
-        // stores fact-then-term, so we must compare the timepoint first.
-        GAtom::Action(f1, t1) => {
-            let GAtom::Action(f2, t2) = b else {
-                unreachable!("atom tag matched Action")
-            };
-            cmp_term(t1, t2).then_with(|| cmp_fact(f1, f2))
-        }
-        GAtom::Eq(a1, b1) => {
-            let GAtom::Eq(a2, b2) = b else {
-                unreachable!("atom tag matched Eq")
-            };
-            cmp_term(a1, a2).then_with(|| cmp_term(b1, b2))
-        }
-        GAtom::Subterm(a1, b1) => {
-            let GAtom::Subterm(a2, b2) = b else {
-                unreachable!("atom tag matched Subterm")
-            };
-            cmp_term(a1, a2).then_with(|| cmp_term(b1, b2))
-        }
-        GAtom::Less(a1, b1) => {
-            let GAtom::Less(a2, b2) = b else {
-                unreachable!("atom tag matched Less")
-            };
-            cmp_term(a1, a2).then_with(|| cmp_term(b1, b2))
-        }
-        GAtom::Last(t1) => {
-            let GAtom::Last(t2) = b else {
-                unreachable!("atom tag matched Last")
-            };
-            cmp_term(t1, t2)
-        }
-        GAtom::Pred(f1) => {
-            let GAtom::Pred(f2) = b else {
-                unreachable!("atom tag matched Pred")
-            };
-            cmp_fact(f1, f2)
-        }
-        GAtom::LessMset(a1, b1) => {
-            let GAtom::LessMset(a2, b2) = b else {
-                unreachable!("atom tag matched LessMset")
-            };
-            cmp_term(a1, a2).then_with(|| cmp_term(b1, b2))
-        }
-    }
-}
-
-fn atom_tag(a: &GAtom) -> u8 {
-    match a {
-        GAtom::Action(_, _) => 0,
-        GAtom::Eq(_, _) => 1,
-        GAtom::Subterm(_, _) => 2,
-        GAtom::Less(_, _) => 3,
-        GAtom::Last(_) => 4,
-        GAtom::Pred(_) => 5,
-        GAtom::LessMset(_, _) => 6, // Rust-only, no HS equivalent
-    }
-}
-
-/// HS Term Ord: `Lit < FApp` (Term.hs).  Walks `GTerm`.  Bound vars sort
-/// before Free vars (HS `BVar = Bound Int | Free v` declaration order).
-pub fn cmp_term(a: &GTerm, b: &GTerm) -> std::cmp::Ordering {
-    use GTerm::*;
-    let (ca, sa) = term_class(a);
-    let (cb, sb) = term_class(b);
-    if ca != cb {
-        return ca.cmp(&cb);
-    }
-    // FApp class (ca == cb == 1): HS `Ord (Term a)` compares `FAPP fsym ts`
-    // by `compare fsym` THEN `compare ts` (derived Ord on
-    // `Term a = LIT a | FAPP FunSym [Term a]`, Term/Term/Raw.hs:71-75, see line 74).  The
-    // `FunSym` Ord is `NoEq < AC < C < List`, and within `NoEq` it is
-    // `Ord NoEqSym = (name, (arity, privacy, constructability, ndc))`
-    // (FunctionSymbols.hs:131-132) — i.e. compared by NAME first.
-    //
-    // RS special-cases several HS `FAPP (NoEq sym)` terms into dedicated
-    // `GTerm` variants (`Pair`=pair, `BinOp Exp`=exp, `Diff`=diff,
-    // `NumberOne`=one, `NatOne`=tone, `DhNeutral`=DH_neutral) and AC
-    // ops into `BinOp Mult/Union/Xor/NatPlus`.  These must NOT be ordered
-    // by RUST VARIANT — HS's `FunSym` Ord is name-based (e.g. HS sorts
-    // `exp(...)` BEFORE `pair(...)` because `"exp" < "pair"`), and a
-    // variant-based order swaps the `S.toList sFormulas` iteration order
-    // in `evalFormulaAtoms`, flipping which co-created SidUpdated DisjG
-    // got the lower `gsNr` (UM3 `CK_secure_UM3` abstract-vs-transcript
-    // disj swap).
-    //
-    // Faithful: compare two FApp-class terms by their HS `FunSym` key
-    // (`funsym_key`), then by the argument list (flattened+sorted for AC,
-    // matching `fAppAC`'s `sort (...)`, Term/Term/Raw.hs:118-129, see line 123).
-    if ca == 1 {
-        // Borrowed FunSym key (no per-comparison allocation): compare
-        // (outer, name-bytes, arity) in HS order without materialising a
-        // `Vec`.  `cmp_term` is a very hot path (every BTreeSet/Map op on
-        // guarded terms), so the name must be compared as a `&[u8]` slice.
-        let (oa, na, aa) = funsym_key(a);
-        let (ob, nb, ab) = funsym_key(b);
-        let kc = oa
-            .cmp(&ob)
-            .then_with(|| na.cmp(nb))
-            .then_with(|| aa.cmp(&ab));
-        if kc != std::cmp::Ordering::Equal {
-            return kc;
-        }
-        // Same FunSym: compare argument lists in HS `[Term a]` order.
-        // AC ops compare a sorted, flattened multiset (HS stores args
-        // pre-sorted by `fAppAC`); everything else compares positionally.
-        if let (BinOp(o1, _, _), BinOp(o2, _, _)) = (a, b) {
-            if is_ac_binop(o1) && is_ac_binop(o2) {
-                let mut args_a = Vec::new();
-                let mut args_b = Vec::new();
-                flatten_ac_binop(o1, a, &mut args_a);
-                flatten_ac_binop(o2, b, &mut args_b);
-                args_a.sort_by(|x, y| cmp_term(x, y));
-                args_b.sort_by(|x, y| cmp_term(x, y));
-                return cmp_slice(&args_a, &args_b, |x, y| cmp_term(x, y));
-            }
-        }
-        return cmp_fapp_args(a, b);
-    }
-    match (a, b) {
-        // Lit class:
-        (Var(v1), Var(v2)) => cmp_bvar(v1, v2),
-        (PubLit(s1), PubLit(s2)) => s1.cmp(s2),
-        (FreshLit(s1), FreshLit(s2)) => s1.cmp(s2),
-        (NatLit(s1), NatLit(s2)) => s1.cmp(s2),
-        (Number(n1), Number(n2)) => n1.cmp(n2),
-        _ => {
-            // Lit-class sub-discriminator (Con < Var; among Con by NameTag
-            // then name) — handled by `term_class`'s sub_tag.
-            sa.cmp(&sb)
-        }
-    }
-}
-
-/// HS `FunSym` Ord key for a FApp-class `GTerm`.  Returns
-/// `(outer, name, arity)` where `outer` mirrors HS's `FunSym` constructor
-/// order `NoEq(0) < AC(1) < C(2) < List(3)` (FunctionSymbols.hs:150-154)
-/// and, within `NoEq`, `(name, arity)` mirrors `Ord NoEqSym` (compared by
-/// name then arity — privacy/constructability never disambiguate two
-/// distinct symbols sharing a name+arity).  The builtin AC ops carry no name;
-/// their `ACSym` order is `Union < Mult < Xor < NatPlus < ACfct`
-/// (FunctionSymbols.hs:138-139), encoded in the third (`arity`) field as an
-/// index so AC terms sort among themselves by ACSym and after every NoEq
-/// term.  A user-defined `ACfct` carries its name, which sorts after the
-/// builtin ops' empty name and orders two `ACfct`s by name — mirroring
-/// `Ord ACfctSym`, whose first tuple component is the name.
+/// HS-faithful `LNGuarded = Guarded (String, LSort) Name LVar`
+/// (Guarded.hs:121-129,:391): the three parameters are fixed here because the
+/// prover instantiates them at exactly that one type.
 ///
-/// `em/2` is HS's sole `C` symbol.  `CSym` is a single nullary constructor
-/// (`data CSym = EMap`, FunctionSymbols.hs:142-143), so a `C` key carries
-/// neither name nor arity and every `C` term ties on those two fields.
-/// The classification is by NAME ALONE: the parser's `naryOpApp` builds
-/// `fAppC EMap` for any application written `em(…)`, whether `em` comes from
-/// the `bilinear-pairing` builtin or from a user `functions:` declaration
-/// (Theory/Text/Parser/Term.hs:103) — so a `GTerm`, which carries only the
-/// name, has everything the decision needs.  The `op{t1}t2` spelling is NOT
-/// covered: `binaryAlgApp` has no `em` case and builds `fAppNoEq`
-/// (Theory/Text/Parser/Term.hs:119-121), matching `AlgApp`'s `NoEq` key below.
-/// Arity is pinned to 2 because a `C` term of any other arity is rejected
-/// downstream (`viewTerm2`, Term/Term/Raw.hs:190).
-fn funsym_key(t: &GTerm) -> (u8, &[u8], usize) {
-    use GTerm::*;
-    // NoEq syms: outer = 0, key by (name-bytes, arity).  Static byte-string
-    // literals (`b"pair"` etc.) are `&'static [u8]` and coerce to the
-    // elided output lifetime; `n.as_bytes()` borrows from `t`.  No alloc.
-    match t {
-        // RS special-cased HS `FAPP (NoEq sym)` terms:
-        Pair(_) => (0, b"pair", 2),
-        BinOp(p::BinOp::Exp, _, _) => (0, b"exp", 2),
-        Diff(_, _) => (0, b"diff", 2),
-        NumberOne => (0, b"one", 0),
-        NatOne => (0, b"tone", 0),
-        DhNeutral => (0, b"DH_neutral", 0),
-        // C sym: outer = 2, above every NoEq and AC term whatever its name.
-        App(n, args) if &**n == "em" && args.len() == 2 => (2, b"", 0),
-        App(n, args) => (0, n.as_bytes(), args.len()),
-        AlgApp(n, _, _) => (0, n.as_bytes(), 2),
-        // AC ops: outer = 1, ACSym order Union<Mult<Xor<NatPlus> in field 3.
-        BinOp(p::BinOp::Union, _, _) => (1, b"", 0),
-        BinOp(p::BinOp::Mult, _, _) => (1, b"", 1),
-        BinOp(p::BinOp::Xor, _, _) => (1, b"", 2),
-        BinOp(p::BinOp::NatPlus, _, _) => (1, b"", 3),
-        BinOp(p::BinOp::AcFct(n), _, _) => (1, n.as_bytes(), 4),
-        // PatMatch is RS-only with no HS equivalent — sort after all.
-        PatMatch(_) => (255, b"", 0),
-        // Lit-class terms never reach here (ca != 1).
-        _ => (254, b"", 0),
-    }
-}
-
-/// The HS argument pair `[t1, t2]` of a `pairSym`-headed term, as
-/// `(t1, spine)` where `spine` is the operand list of `t2` in the same
-/// flattened spelling — so `t2` is `Pair(spine)` when `spine` has two or more
-/// elements and `spine[0]` when it has one.
+/// A binder carries a name and a sort; its identity is the position it holds
+/// in the `GGuarded` binder list.  A variable leaf inside an atom is either
+/// `BVar::Bound(n)` — a De Bruijn index into that list — or `BVar::Free(v)`.
 ///
-/// HS builds nested pairs (`fAppPair (x, y) = fAppNoEq pairSym [x, y]`,
-/// Term/Term.hs:163), so `<a, b, c>` is `pair(a, pair(b, c))` and its arity-2
-/// argument list is `[a, pair(b, c)]`.  RS stores that spine FLAT in
-/// `Pair`, and also carries the source prefix spelling `pair(a, b)` as
-/// `App("pair", [a, b])` — both key `(0, "pair", 2)` in [`funsym_key`], so
-/// both must expose the same nested argument list to `Ord`.
-fn pair_spine(t: &GTerm) -> Option<(&GTerm, &[GTerm])> {
-    match t {
-        GTerm::Pair(x) if x.len() >= 2 => Some((&x[0], &x[1..])),
-        GTerm::App(n, x) if &**n == "pair" && x.len() == 2 => Some((&x[0], &x[1..])),
-        GTerm::AlgApp(n, l, r) if &**n == "pair" => Some((l, std::slice::from_ref(&**r))),
-        _ => None,
-    }
-}
-
-/// Compare two pair spines: `x` and `y` each stand for the term
-/// `Pair(x)`/`Pair(y)` when they hold two or more elements and for their sole
-/// element otherwise.  Recurses down the spine so that, at the position where
-/// one side's spine ends and the other's continues, HS's `Ord` pits a plain
-/// term against a `pairSym` FAPP — which is why `<a, z>` sorts BEFORE
-/// `<a, b, c>` (`z` is a LIT, `pair(b, c)` a FAPP, and `LIT _ < FAPP _ _`,
-/// Term/Term/Raw.hs:72-74).
-fn cmp_pair_spine(x: &[GTerm], y: &[GTerm]) -> std::cmp::Ordering {
-    if x.is_empty() || y.is_empty() {
-        return x.len().cmp(&y.len());
-    }
-    match (x.len(), y.len()) {
-        (1, 1) => cmp_term(&x[0], &y[0]),
-        (1, _) => cmp_term_vs_pair_spine(&x[0], y),
-        (_, 1) => cmp_term_vs_pair_spine(&y[0], x).reverse(),
-        _ => cmp_term(&x[0], &y[0]).then_with(|| cmp_pair_spine(&x[1..], &y[1..])),
-    }
-}
-
-/// Compare a term `t` against the pair `Pair(y)` that spine `y` (two or more
-/// elements) stands for, without materialising that `Pair`.  Mirrors
-/// `cmp_term`'s dispatch: LIT class first, then the `FunSym` key against
-/// `pairSym`, then the argument lists.
-fn cmp_term_vs_pair_spine(t: &GTerm, y: &[GTerm]) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    if term_class(t).0 != 1 {
-        return Ordering::Less;
-    }
-    let (o, n, a) = funsym_key(t);
-    let key = o
-        .cmp(&0)
-        .then_with(|| n.cmp(b"pair".as_slice()))
-        .then_with(|| a.cmp(&2));
-    if key != Ordering::Equal {
-        return key;
-    }
-    match pair_spine(t) {
-        Some((h, tail)) => cmp_term(h, &y[0]).then_with(|| cmp_pair_spine(tail, &y[1..])),
-        None => Ordering::Equal,
-    }
-}
-
-/// Compare the argument lists of two same-FunSym, non-AC FApp terms,
-/// mirroring HS's positional `compare ts` on `[Term a]`.
-fn cmp_fapp_args(a: &GTerm, b: &GTerm) -> std::cmp::Ordering {
-    use GTerm::*;
-    // A `pairSym` key ties every pair spelling, whose HS argument list is the
-    // arity-2 `[t1, t2]` of the RIGHT-NESTED spine rather than RS's flat
-    // operand vector — see [`pair_spine`].
-    if let (Some((ha, ta)), Some((hb, tb))) = (pair_spine(a), pair_spine(b)) {
-        return cmp_term(ha, hb).then_with(|| cmp_pair_spine(ta, tb));
-    }
-    match (a, b) {
-        (App(_, x), App(_, y)) => cmp_slice(x, y, cmp_term),
-        (AlgApp(_, l1, r1), AlgApp(_, l2, r2)) => cmp_term(l1, l2).then_with(|| cmp_term(r1, r2)),
-        (Diff(l1, r1), Diff(l2, r2)) => cmp_term(l1, l2).then_with(|| cmp_term(r1, r2)),
-        (BinOp(_, l1, r1), BinOp(_, l2, r2)) => cmp_term(l1, l2).then_with(|| cmp_term(r1, r2)),
-        (PatMatch(x), PatMatch(y)) => cmp_term(x, y),
-        // 0-arity builtins (one/tone/DH_neutral): no args.
-        (NumberOne, NumberOne) | (NatOne, NatOne) | (DhNeutral, DhNeutral) => {
-            std::cmp::Ordering::Equal
-        }
-        // Cross-variant operands only reach here when funsym_key tied them
-        // (e.g. App("exp",[..]) vs BinOp(Exp,..) — both key (0,"exp",2));
-        // compare their argument lists positionally.
-        _ => cmp_slice(&fapp_args(a), &fapp_args(b), cmp_term),
-    }
-}
-
-/// Collect the positional argument list of a FApp-class term (for
-/// cross-representation comparison when two terms share a FunSym key).
-fn fapp_args(t: &GTerm) -> Vec<GTerm> {
-    use GTerm::*;
-    match t {
-        App(_, x) => x.to_vec(),
-        Pair(x) => x.to_vec(),
-        AlgApp(_, l, r) | Diff(l, r) | BinOp(_, l, r) => vec![(**l).clone(), (**r).clone()],
-        PatMatch(x) => vec![(**x).clone()],
-        _ => Vec::new(),
-    }
-}
-
-/// HS `Ord BVar`: derived; `Bound < Free`.  Within each constructor,
-/// compare the contents — `Int` for Bound, LVar Ord (idx, sort, name) for Free.
-pub fn cmp_bvar(a: &BVar, b: &BVar) -> std::cmp::Ordering {
-    match (a, b) {
-        (BVar::Bound(_), BVar::Free(_)) => std::cmp::Ordering::Less,
-        (BVar::Free(_), BVar::Bound(_)) => std::cmp::Ordering::Greater,
-        (BVar::Bound(n1), BVar::Bound(n2)) => n1.cmp(n2),
-        (BVar::Free(v1), BVar::Free(v2)) => cmp_varspec(v1, v2),
-    }
-}
-
-/// Returns `(class, sub_tag)` where class=0 for Lit-like, 1 for FApp-like.
-///
-/// HS-faithful: a `GTerm` corresponds to `Term (Lit Name (BVar v))`, whose
-/// derived `Ord` is `LIT _ < FAPP _ _` (Term/Term/Raw.hs:72-74), and within
-/// `LIT`, `Lit c v = Con c | Var v` derives `Con < Var` (VTerm.hs:56-57).
-/// Therefore ALL constant literals (Pub/Fresh/Nat names) sort BEFORE any
-/// variable.  Among constants, `Ord Name` compares the `NameTag` first
-/// (`FreshName | PubName | NodeName | NatName`, LTerm.hs:219-220) so the literal
-/// order is Fresh < Pub < Nat, then by name string.  Variables come last in
-/// the `LIT` class.
-///
-/// The 0-arity builtins `NumberOne`/`NatOne`/`DhNeutral` are NOT literals in
-/// HS — they are `fAppNoEq oneSym []` / `fAppNoEq natOneSym []` /
-/// `fAppNoEq dhNeutralSym []` (Term/Term.hs:127-130), i.e. nullary function
-/// applications, so they belong to the FApp class.
-fn term_class(t: &GTerm) -> (u8, u8) {
-    use GTerm::*;
-    match t {
-        // LIT (Con name): constants, ordered by Name's NameTag (Fresh<Pub<Nat).
-        FreshLit(_) => (0, 0),
-        PubLit(_) => (0, 1),
-        NatLit(_) => (0, 2),
-        Number(_) => (0, 3),
-        // LIT (Var v): variables sort after all constants.
-        Var(_) => (0, 4),
-        // FAPP: nullary builtins are NoEq function applications, not literals.
-        // NB: the second field below is a tie-breaker ONLY within the Lit
-        // class (sub-tags 0..4); the FApp sub-tags (1,0)..(1,8) are never
-        // consulted for ordering, because `cmp_term` dispatches every
-        // FApp-class term through `funsym_key`/`cmp_fapp_args` (the `ca == 1`
-        // branch) and returns before the `sa.cmp(&sb)` sub-tag fallthrough.
-        NumberOne => (1, 0),
-        NatOne => (1, 1),
-        DhNeutral => (1, 2),
-        App(_, _) => (1, 3),
-        AlgApp(_, _, _) => (1, 4),
-        Pair(_) => (1, 5),
-        Diff(_, _) => (1, 6),
-        BinOp(_, _, _) => (1, 7),
-        PatMatch(_) => (1, 8),
-    }
-}
-
-/// HS-faithful: which `BinOp`s are AC (associative-commutative)?
-/// Mirrors HS's `MaudeSig`-attribute classification: Mult, Union, Xor,
-/// NatPlus and the user-declared `[AC]` symbols are AC; Exp is NOT
-/// (right-associative algebraic).
-fn is_ac_binop(o: &p::BinOp) -> bool {
-    use p::BinOp::*;
-    matches!(o, Mult | Union | Xor | NatPlus | AcFct(_))
-}
-
-/// Flatten an AC-BinOp chain into a flat operand list, BORROWING the operands.
-/// E.g. `BinOp(Union, BinOp(Union, a, b), c)` flattens to `[&a, &b, &c]`.
-/// Non-matching outer terms are pushed verbatim (no recursion into
-/// nested non-Union/non-same-op subtrees).  Borrowing keeps the hot
-/// `cmp_term` AC branch allocation-free per operand.
-fn flatten_ac_binop<'a>(op: &p::BinOp, t: &'a GTerm, out: &mut Vec<&'a GTerm>) {
-    match t {
-        GTerm::BinOp(inner_op, l, r) if inner_op == op => {
-            flatten_ac_binop(op, l, out);
-            flatten_ac_binop(op, r, out);
-        }
-        _ => out.push(t),
-    }
-}
-
-/// HS-faithful Ord for free `LVar`: `(idx, sort, name)` lexicographic
-/// (Term/LTerm.hs:545-548).  Rust's `p::VarSpec` has the same fields
-/// in a different declaration order — we compare in HS's order.
-/// Used for VarSpecs that appear as FREE vars inside terms.
-pub fn cmp_varspec(a: &p::VarSpec, b: &p::VarSpec) -> std::cmp::Ordering {
-    a.idx
-        .cmp(&b.idx)
-        .then_with(|| cmp_sort_hint(&a.sort, &b.sort))
-        .then_with(|| a.name.cmp(&b.name))
-}
-
-/// HS-faithful Ord for GGuarded *binding* entries.  In LNGuarded, the
-/// binding type is `(String, LSort)` — Guarded.hs:391.  So bindings
-/// sort by `(name, sort)` lex.  Our `GBinding` carries only those
-/// two fields.
-pub fn cmp_binding(a: &GBinding, b: &GBinding) -> std::cmp::Ordering {
-    a.name
-        .cmp(&b.name)
-        .then_with(|| cmp_sort_hint(&a.sort, &b.sort))
-}
-
-/// HS LSort declaration order (Term/LTerm.hs:165-170):
-///   LSortPub < LSortFresh < LSortMsg < LSortNode < LSortNat.
-fn cmp_sort_hint(a: &p::SortHint, b: &p::SortHint) -> std::cmp::Ordering {
-    sort_hint_tag(a).cmp(&sort_hint_tag(b))
-}
-
-fn sort_hint_tag(s: &p::SortHint) -> u8 {
-    use p::SortHint::*;
-    use p::SuffixSort;
-    match s {
-        Pub => 0,
-        Fresh => 1,
-        Msg => 2,
-        Node => 3,
-        Nat => 4,
-        Suffix(SuffixSort::Pub) => 0,
-        Suffix(SuffixSort::Fresh) => 1,
-        Suffix(SuffixSort::Msg) => 2,
-        Suffix(SuffixSort::Node) => 3,
-        Suffix(SuffixSort::Nat) => 4,
-        Untagged => 99, // no HS equivalent (sorted last)
-    }
-}
-
-/// HS Fact Ord (Theory/Model/Fact.hs:173-174): `compare tag tag' <> compare ts
-/// ts'`.  Annotations are explicitly IGNORED in `Ord (Fact t)`
-/// (Theory/Model/Fact.hs:169-174, whose line-169 comment reads "Ignore
-/// annotations in equality and ord testing").  Works on
-/// `GFact` (HS `Fact (VTerm c (BVar v))`).
-///
-/// The HS `FactTag` Ord (Theory/Model/Fact.hs:136-148, derived) compares a `ProtoFact`
-/// by `(Multiplicity, String, Int)` where `Multiplicity = Persistent |
-/// Linear` orders `Persistent < Linear`, and `Int` is the arity.  Rust's
-/// `bool` Ord gives `false < true`, so to reproduce `Persistent < Linear`
-/// we must order `persistent == true` BEFORE `persistent == false` — i.e.
-/// reverse the bool comparison.  Arity (`args.len()`) is part of the
-/// `FactTag` key and is therefore compared BEFORE the term list, exactly
-/// as `compare tag tag'` precedes `compare ts ts'`.
-///
-/// SPECIAL-TAG SEGREGATION: HS `FactTag` (Theory/Model/Fact.hs:136-148, derived Ord) is
-/// `ProtoFact Multiplicity String Int | FreshFact | OutFact | InFact |
-/// KUFact | KDFact | DedFact | TermFact`.  With a derived `Ord` the
-/// *constructor index* dominates, so EVERY `ProtoFact` sorts before EVERY
-/// special tag, and the special tags order amongst themselves in that
-/// declaration sequence (Fresh < Out < In < KU < KD < Ded < Term).
-///
-/// `GFact` carries only `(persistent, name)`, not the full `FactTag` enum,
-/// but the parser (`fact()` in tamarin-parser, mirroring HS `mkProtoFact`,
-/// Parser/Fact.hs:56-63) has already CANONICALISED reserved names to their
-/// exact tag spelling — `Fr`, `Out`, `In`, `KU`, `KD`, `Ded` — and fixed
-/// their multiplicity (KU/KD persistent, the rest linear).  So we can
-/// recover the tag class from the name string with an exact (case-sensitive)
-/// match, identical to `fact_to_lnfact`'s mapping in `elaborate.rs`.  Names
-/// that are not one of those reserved spellings (including the ordinary
-/// proto-fact `K`) are `ProtoFact`s.
-fn fact_tag_class(f: &GFact) -> u8 {
-    // ProtoFact == 0 so it sorts before all special tags, matching the
-    // derived constructor order. Special tags follow Theory/Model/Fact.hs:139-147.
-    match f.name.as_str() {
-        "Fr" => 1,   // FreshFact
-        "Out" => 2,  // OutFact
-        "In" => 3,   // InFact
-        "KU" => 4,   // KUFact
-        "KD" => 5,   // KDFact
-        "Ded" => 6,  // DedFact
-        "Term" => 7, // TermFact (internal; never parsed, but mapped for completeness)
-        _ => 0,      // ProtoFact (incl. "K")
-    }
-}
-
-pub fn cmp_fact(a: &GFact, b: &GFact) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    // `compare tag tag'`: first by FactTag constructor class.
-    let (ca, cb) = (fact_tag_class(a), fact_tag_class(b));
-    let tag_ord = ca.cmp(&cb).then_with(|| {
-        if ca == 0 {
-            // Both ProtoFact: derived Ord compares the inner triple
-            // `(Multiplicity, String, Int)` = (multiplicity, name, arity).
-            // Persistent < Linear: persistent==true must sort first, so
-            // compare `b.persistent` against `a.persistent` to reverse
-            // `bool`'s false<true ordering.
-            b.persistent
-                .cmp(&a.persistent)
-                .then_with(|| a.name.cmp(&b.name))
-                .then_with(|| a.args.len().cmp(&b.args.len()))
-        } else {
-            // Both the same special tag: nullary constructors compare
-            // equal at the tag level (no inner fields).
-            Ordering::Equal
-        }
-    });
-    // `<> compare ts ts'`: tie-break on the term list.
-    tag_ord.then_with(|| cmp_slice(&a.args, &b.args, cmp_term))
-}
-
-/// HS-faithful Guarded type. Mirrors `Theory.Constraint.System.Guarded.Guarded`.
-///
-/// Atoms use `GAtom` (which is `Atom (VTerm c (BVar v))` in HS), so a
-/// variable leaf inside an atom is either `Bound(n)` (DeBruijn index into
-/// the enclosing binder list) or `Free(LVar)`. Bindings carry only name +
-/// sort — DeBruijn position determines identity.
-///
-/// `Hash` is derived alongside the derived `PartialEq` (equal values hash
-/// equal), enabling the implied-formula dedup's `fx_hash_one` prefilter.
-#[derive(Debug, Clone, PartialEq, Hash)]
+/// The derived `Eq`/`Ord`/`Hash` are HS's own (`deriving (Eq, Ord, …)`,
+/// Guarded.hs:129).  `Hash` reads exactly the fields `PartialEq` compares, the
+/// consistency the implied-formula dedup's hash prefilter relies on
+/// (`insert_implied_formulas_pass`, constraint/solver/simplify.rs).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Guarded {
     /// One atomic predicate (may contain Bound vars only when nested under
     /// a sufficient number of `GGuarded` binders).
-    Atom(GAtom),
+    Atom(Atom<BLNTerm>),
     /// Disjunction of guarded sub-formulas.
     Disj(std::sync::Arc<[Guarded]>),
     /// Conjunction of guarded sub-formulas.
@@ -689,9 +59,9 @@ pub enum Guarded {
     /// (when `qua = Ex`). The `as` are the *guard* atoms, all
     /// quantified `xs` must be bound by them.
     GGuarded {
-        qua: Quant,
-        vars: std::sync::Arc<[GBinding]>,
-        guards: std::sync::Arc<[GAtom]>,
+        qua: Quantifier,
+        vars: std::sync::Arc<[(String, LSort)]>,
+        guards: std::sync::Arc<[Atom<BLNTerm>]>,
         body: std::sync::Arc<Guarded>,
     },
 }
@@ -702,6 +72,8 @@ pub enum Guarded {
 /// hot constants never contend on a single cache line.
 static EMPTY_CONJ: std::sync::OnceLock<std::sync::Arc<[Guarded]>> = std::sync::OnceLock::new();
 static EMPTY_DISJ: std::sync::OnceLock<std::sync::Arc<[Guarded]>> = std::sync::OnceLock::new();
+static EMPTY_VARS: std::sync::OnceLock<std::sync::Arc<[(String, LSort)]>> =
+    std::sync::OnceLock::new();
 
 /// Boolean atom helper.
 pub fn gtrue() -> Guarded {
@@ -727,8 +99,8 @@ pub fn gtf(b: bool) -> Guarded {
 }
 
 /// Content-membership test for the `Arc`-wrapped formula stores
-/// (`System::formulas` / `solved_formulas` / `lemmas` /
-/// `sources_lemma_universals`).  The per-element `Arc` is transparent:
+/// (`System::formulas` / `solved_formulas` / `lemmas`). The per-element `Arc`
+/// is transparent:
 /// the comparison dereferences to the underlying `Guarded` value (via
 /// `Arc`'s `Deref`), so this is identical to a plain
 /// `Vec<Guarded>::contains` — content equality, never pointer identity.
@@ -743,9 +115,12 @@ pub fn reducible_formula(fm: &Guarded) -> bool {
     match fm {
         Guarded::Atom(_) => true,
         Guarded::Conj(_) => true,
-        Guarded::GGuarded { qua: Quant::Ex, .. } => true,
         Guarded::GGuarded {
-            qua: Quant::All,
+            qua: Quantifier::Ex,
+            ..
+        } => true,
+        Guarded::GGuarded {
+            qua: Quantifier::All,
             vars,
             guards,
             body,
@@ -754,7 +129,7 @@ pub fn reducible_formula(fm: &Guarded) -> bool {
             body_is_false
                 && matches!(
                     &guards[0],
-                    GAtom::Less(_, _) | GAtom::Subterm(_, _) | GAtom::Last(_),
+                    ProtoAtom::Less(_, _) | ProtoAtom::Subterm(_, _) | ProtoAtom::Last(_),
                 )
         }
         _ => false,
@@ -794,11 +169,13 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
             return gfalse();
         }
     }
-    // HS-faithful: mirror `gconj`'s `nub` BEFORE the `[gf] -> gf`
-    // singleton unwrap, so the result is a fixpoint of `gconj` itself:
-    // `gconj [a, a]` must be `a`, not the non-normal singleton `Conj [a]`
-    // that only a second application would unwrap.  `normalise_guarded`
-    // relies on this one-pass idempotence.
+    // Port normal form: run `nub` BEFORE the `[gf] -> gf` singleton unwrap,
+    // so the result is a fixpoint of `gconj` itself. The pinned Haskell
+    // implementation unwraps based on the pre-`nub` length, but that can
+    // leave `GConj [a]` after `gconj [a, a]`; this representation instead
+    // normalizes it to `a` because `normalise_guarded_cow` relies on one-pass
+    // idempotence: `gconj [a, a]` must be `a`, not the non-normal singleton
+    // `Conj [a]` that only a second application would unwrap.
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) {
@@ -809,155 +186,6 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
         return deduped.into_iter().next().unwrap();
     }
     Guarded::Conj(deduped.into())
-}
-
-/// Walk a guarded formula and replace atoms whose truth value the
-/// caller's `valuation` returns `Some(_)`. Mirrors Haskell's
-/// `Theory.Constraint.System.Guarded.simplifyGuardedOrReturn`.
-///
-/// Cases:
-/// - `Atom a` becomes `gtrue`/`gfalse` if the valuation is decided;
-///   otherwise unchanged.
-/// - `Conj` / `Disj` recurse and re-build via `gconj` / `gdisj` so
-///   short-circuits collapse the right way.
-/// - `GGuarded(All, [], guards, body)`: if any guard is False the
-///   whole universal is True; otherwise drop guards that evaluate to
-///   True and keep only the unknown ones, then recurse on the body.
-/// - Guarded quantifiers with bound vars are left intact — the body
-///   gets simplified once the quantifier is gone (matches Haskell).
-pub fn simplify_guarded_with(
-    fm: &Guarded,
-    valuation: &dyn Fn(&p::Atom) -> Option<bool>,
-) -> Guarded {
-    // HS `simplifyGuardedOrReturn` calls `valuation =<< unbindAtom ato`,
-    // which is Nothing whenever any Bound var is present in the atom.
-    // We mirror by attempting GAtom→p::Atom conversion; on Bound, the
-    // round-trip panics, so we use a safe variant.
-    let eval = |a: &GAtom| -> Option<bool> { try_gatom_to_atom(a).and_then(|pa| valuation(&pa)) };
-    match fm {
-        Guarded::Atom(a) => match eval(a) {
-            Some(true) => gtrue(),
-            Some(false) => gfalse(),
-            None => fm.clone(),
-        },
-        Guarded::Disj(items) => {
-            let simplified: Vec<_> = items
-                .iter()
-                .map(|g| simplify_guarded_with(g, valuation))
-                .collect();
-            gdisj(simplified)
-        }
-        Guarded::Conj(items) => {
-            let simplified: Vec<_> = items
-                .iter()
-                .map(|g| simplify_guarded_with(g, valuation))
-                .collect();
-            gconj(simplified)
-        }
-        Guarded::GGuarded {
-            qua: Quant::All,
-            vars,
-            guards,
-            body,
-        } if vars.is_empty() => {
-            let evals: Vec<Option<bool>> = guards.iter().map(eval).collect();
-            // Any False guard → universal vacuously holds.
-            if evals.iter().any(|v| v == &Some(false)) {
-                return gtrue();
-            }
-            // Keep only the Unknown guards — True guards are vacuous.
-            let kept: Vec<GAtom> = guards
-                .iter()
-                .zip(&evals)
-                .filter(|(_, v)| v.is_none())
-                .map(|(a, _)| a.clone())
-                .collect();
-            let body_s = simplify_guarded_with(body, valuation);
-            // HS-faithful: `simp` builds the universal via `gall [] (...) (simp
-            // gf)` (Guarded.hs:665-698, see line 689).  `gall` collapses to the body when the
-            // kept guards are empty AND collapses the whole universal to
-            // `gtrue` when the simplified body is `gtrue` (Guarded.hs:449-453, see line 452),
-            // regardless of whether guards remain.  Building `GGuarded`
-            // directly would leave a non-canonical `GGuarded{All,[],kept,
-            // gtrue}` where Haskell produces `gtrue`.
-            gall(vars.to_vec(), kept, body_s)
-        }
-        // Quantifiers with bound vars stay as-is — Haskell delays
-        // simplification past the binder.
-        Guarded::GGuarded { .. } => fm.clone(),
-    }
-}
-
-/// Convert `GAtom` to `p::Atom` if no Bound vars are present, else None.
-/// HS `unbindAtom`.
-pub fn try_gatom_to_atom(a: &GAtom) -> Option<p::Atom> {
-    Some(match a {
-        GAtom::Eq(s, t) => p::Atom::Eq(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
-        GAtom::Less(s, t) => p::Atom::Less(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
-        GAtom::LessMset(s, t) => p::Atom::LessMset(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
-        GAtom::Subterm(s, t) => p::Atom::Subterm(try_gterm_to_term(s)?, try_gterm_to_term(t)?),
-        GAtom::Action(f, t) => p::Atom::Action(try_gfact_to_fact(f)?, try_gterm_to_term(t)?),
-        GAtom::Last(t) => p::Atom::Last(try_gterm_to_term(t)?),
-        GAtom::Pred(f) => p::Atom::Pred(try_gfact_to_fact(f)?),
-    })
-}
-
-/// Convert `GTerm` to `p::Term` if no Bound vars are present, else None.
-pub fn try_gterm_to_term(t: &GTerm) -> Option<p::Term> {
-    Some(match t {
-        GTerm::Var(BVar::Free(v)) => p::Term::Var(v.clone()),
-        GTerm::Var(BVar::Bound(_)) => return None,
-        GTerm::PubLit(s) => p::Term::PubLit(s.clone()),
-        GTerm::FreshLit(s) => p::Term::FreshLit(s.clone()),
-        GTerm::NatLit(s) => p::Term::NatLit(s.clone()),
-        GTerm::Number(n) => p::Term::Number(*n),
-        GTerm::NumberOne => p::Term::NumberOne,
-        GTerm::NatOne => p::Term::NatOne,
-        GTerm::DhNeutral => p::Term::DhNeutral,
-        GTerm::App(n, args) => {
-            let mut acc = Vec::with_capacity(args.len());
-            for a in args.iter() {
-                acc.push(try_gterm_to_term(a)?);
-            }
-            p::Term::App(n.to_string(), acc)
-        }
-        GTerm::AlgApp(n, a, b) => p::Term::AlgApp(
-            n.to_string(),
-            Box::new(try_gterm_to_term(a)?),
-            Box::new(try_gterm_to_term(b)?),
-        ),
-        GTerm::Pair(items) => {
-            let mut acc = Vec::with_capacity(items.len());
-            for it in items.iter() {
-                acc.push(try_gterm_to_term(it)?);
-            }
-            p::Term::Pair(acc)
-        }
-        GTerm::Diff(a, b) => p::Term::Diff(
-            Box::new(try_gterm_to_term(a)?),
-            Box::new(try_gterm_to_term(b)?),
-        ),
-        GTerm::BinOp(op, a, b) => p::Term::BinOp(
-            *op,
-            Box::new(try_gterm_to_term(a)?),
-            Box::new(try_gterm_to_term(b)?),
-        ),
-        GTerm::PatMatch(t) => p::Term::PatMatch(Box::new(try_gterm_to_term(t)?)),
-    })
-}
-
-/// Convert `GFact` to `p::Fact` if no Bound vars are present, else None.
-pub fn try_gfact_to_fact(f: &GFact) -> Option<p::Fact> {
-    let mut args = Vec::with_capacity(f.args.len());
-    for a in f.args.iter() {
-        args.push(try_gterm_to_term(a)?);
-    }
-    Some(p::Fact {
-        persistent: f.persistent,
-        name: f.name.clone(),
-        args,
-        annotations: f.annotations.clone(),
-    })
 }
 
 /// Smart `Disj` — flatten one level, short-circuit on `gtrue`, drop
@@ -1032,7 +260,7 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
 ///   gex _   _   gf | gf == gfalse = gfalse
 ///   gex ss  as  gf                = GGuarded Ex ss as gf
 /// ```
-pub fn gex(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
+pub fn gex(vars: Vec<(String, LSort)>, guards: Vec<Atom<BLNTerm>>, body: Guarded) -> Guarded {
     if vars.is_empty() {
         let mut items: Vec<Guarded> = guards.into_iter().map(Guarded::Atom).collect();
         items.push(body);
@@ -1042,7 +270,7 @@ pub fn gex(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
         return gfalse();
     }
     Guarded::GGuarded {
-        qua: Quant::Ex,
+        qua: Quantifier::Ex,
         vars: vars.into(),
         guards: guards.into(),
         body: std::sync::Arc::new(body),
@@ -1055,7 +283,7 @@ pub fn gex(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
 ///   gall _   _    gf | gf == gtrue = gtrue
 ///   gall ss  atos gf              = GGuarded All ss atos gf
 /// ```
-pub fn gall(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
+pub fn gall(vars: Vec<(String, LSort)>, guards: Vec<Atom<BLNTerm>>, body: Guarded) -> Guarded {
     if guards.is_empty() {
         return body;
     }
@@ -1063,10 +291,87 @@ pub fn gall(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
         return gtrue();
     }
     Guarded::GGuarded {
-        qua: Quant::All,
+        qua: Quantifier::All,
         vars: vars.into(),
         guards: guards.into(),
         body: std::sync::Arc::new(body),
+    }
+}
+
+/// Walk a guarded formula and replace atoms whose truth value the
+/// caller's `valuation` returns `Some(_)`. Mirrors Haskell's
+/// `Theory.Constraint.System.Guarded.simplifyGuardedOrReturn`
+/// (Guarded.hs:665-698).
+///
+/// Cases:
+/// - `Atom a` becomes `gtrue`/`gfalse` if the valuation is decided;
+///   otherwise unchanged.
+/// - `Conj` / `Disj` recurse and re-build via `gconj` / `gdisj` so
+///   short-circuits collapse the right way.
+/// - `GGuarded(All, [], guards, body)`: if any guard is False the
+///   whole universal is True; otherwise drop guards that evaluate to
+///   True and keep only the unknown ones, then recurse on the body.
+/// - Guarded quantifiers with bound vars are left intact — the body
+///   gets simplified once the quantifier is gone (matches Haskell).
+pub fn simplify_guarded_with(
+    fm: &Guarded,
+    valuation: &dyn Fn(&Atom<LNTerm>) -> Option<bool>,
+) -> Guarded {
+    // HS `simplifyGuardedOrReturn` calls `valuation =<< unbindAtom ato`
+    // (Guarded.hs:679), which is `Nothing` whenever any `Bound` leaf is
+    // present.
+    let eval = |a: &Atom<BLNTerm>| -> Option<bool> { unbind_atom(a).and_then(|la| valuation(&la)) };
+    match fm {
+        Guarded::Atom(a) => match eval(a) {
+            Some(true) => gtrue(),
+            Some(false) => gfalse(),
+            None => fm.clone(),
+        },
+        Guarded::Disj(items) => {
+            let simplified: Vec<_> = items
+                .iter()
+                .map(|g| simplify_guarded_with(g, valuation))
+                .collect();
+            gdisj(simplified)
+        }
+        Guarded::Conj(items) => {
+            let simplified: Vec<_> = items
+                .iter()
+                .map(|g| simplify_guarded_with(g, valuation))
+                .collect();
+            gconj(simplified)
+        }
+        Guarded::GGuarded {
+            qua: Quantifier::All,
+            vars,
+            guards,
+            body,
+        } if vars.is_empty() => {
+            let evals: Vec<Option<bool>> = guards.iter().map(eval).collect();
+            // Any False guard → universal vacuously holds.
+            if evals.iter().any(|v| v == &Some(false)) {
+                return gtrue();
+            }
+            // Keep only the Unknown guards — True guards are vacuous.
+            let kept: Vec<Atom<BLNTerm>> = guards
+                .iter()
+                .zip(&evals)
+                .filter(|(_, v)| v.is_none())
+                .map(|(a, _)| a.clone())
+                .collect();
+            let body_s = simplify_guarded_with(body, valuation);
+            // HS-faithful: `simp` builds the universal via `gall [] (...) (simp
+            // gf)` (Guarded.hs:665-698, see line 689).  `gall` collapses to the body when the
+            // kept guards are empty AND collapses the whole universal to
+            // `gtrue` when the simplified body is `gtrue` (Guarded.hs:449-453, see line 452),
+            // regardless of whether guards remain.  Building `GGuarded`
+            // directly would leave a non-canonical `GGuarded{All,[],kept,
+            // gtrue}` where Haskell produces `gtrue`.
+            gall(vars.to_vec(), kept, body_s)
+        }
+        // Quantifiers with bound vars stay as-is — Haskell delays
+        // simplification past the binder.
+        Guarded::GGuarded { .. } => fm.clone(),
     }
 }
 
@@ -1077,19 +382,65 @@ pub fn gall(vars: Vec<GBinding>, guards: Vec<GAtom>, body: Guarded) -> Guarded {
 #[derive(Debug, Clone)]
 pub struct GuardError {
     pub message: String,
-    /// The parser-AST sub-formula at the point of failure, mirroring HS's
-    /// `f0` in `convert polarity f0@(Qua qua0 _ _)` — the innermost
-    /// quantifier that failed the guard check.  Used by callers to render
-    /// the HS-faithful:
+    /// The sub-formula at the point of failure — HS's `f0` in
+    /// `convert polarity f0@(Qua qua0 _ _)` (Guarded.hs:499), the innermost
+    /// quantifier whose guard check failed.  Callers quote it above the
+    /// whole formula, as HS's `ppError` does (Guarded.hs:477-479):
     ///   ```text
     ///   <error_text>
     ///     "<sub_formula>"
     ///   in the formula
     ///     "<full_formula>"
     ///   ```
-    /// block.  `None` means the error occurred outside a quantifier context
-    /// (shouldn't happen in practice but handled gracefully).
-    pub subject_formula: Option<tamarin_parser::ast::Formula>,
+    /// Its enclosing binders are already opened, so it prints on its own
+    /// through [`crate::pretty_formula::lnformula_doc`].  `None` for a
+    /// failure outside a quantifier.
+    pub subject_formula: Option<crate::formula::LNFormula>,
+    /// The quoted variable names of HS `noUnguardedVars` (Guarded.hs:507-514),
+    /// which builds its message with `fsep` over one `Doc` per name.  Empty
+    /// for every other failure, whose message is a single `text`.
+    pub unguarded_vars: Vec<String>,
+}
+
+impl GuardError {
+    /// The message as the `Doc` HS throws (Guarded.hs:507-514 and
+    /// Guarded.hs:561-563).
+    /// The unguarded-variable list is an `fsep`, so it wraps at the width
+    /// and nesting the caller renders it at; every other message is one
+    /// `text` on a single line.
+    pub fn message_doc(&self) -> crate::pretty_hpj::Doc {
+        use crate::pretty_hpj::{fsep, punctuate, Doc};
+        if self.unguarded_vars.is_empty() {
+            return Doc::text(&self.message);
+        }
+        let mut parts = vec![Doc::text("unguarded variable(s)")];
+        parts.extend(punctuate(
+            Doc::text(","),
+            self.unguarded_vars.iter().map(Doc::text).collect(),
+        ));
+        parts.extend(["in", "the", "subformula"].into_iter().map(Doc::text));
+        fsep(parts)
+    }
+
+    /// HS `ppError` from `formulaToGuarded`: the error payload, its failing
+    /// quantified subformula, and the original formula as one wrapping Doc.
+    pub fn full_doc(&self, original: &crate::formula::LNFormula) -> crate::pretty_hpj::Doc {
+        use crate::pretty_formula::lnformula_doc;
+        use crate::pretty_hpj::Doc;
+
+        let quoted = |formula| {
+            Doc::char('"')
+                .beside(lnformula_doc(formula))
+                .beside(Doc::char('"'))
+                .nest(2)
+        };
+        let mut doc = self.message_doc();
+        if let Some(subject) = &self.subject_formula {
+            doc = doc.above_g(quoted(subject));
+        }
+        doc.above_g(Doc::text("in the formula"))
+            .above_g(quoted(original))
+    }
 }
 
 impl std::fmt::Display for GuardError {
@@ -1099,200 +450,122 @@ impl std::fmt::Display for GuardError {
 }
 impl std::error::Error for GuardError {}
 
-fn err(msg: impl Into<String>) -> GuardError {
+pub(crate) fn err(msg: impl Into<String>) -> GuardError {
     GuardError {
         message: msg.into(),
         subject_formula: None,
+        unguarded_vars: Vec::new(),
     }
 }
 
 // =============================================================================
-// Conversion entry point
+// Substitutions of bound for free and vice versa (Guarded.hs:289-352)
 // =============================================================================
 
-/// Convert a surface formula to its guarded form.
-pub fn formula_to_guarded(f: &p::Formula) -> Result<Guarded, GuardError> {
-    // HS-faithful: HS represents formula terms as LNTerm, where every AC head
-    // (`Mult`/`Union`/`Xor`/`NatPlus`) is stored as a flat, `fAppAC`-sorted
-    // argument list (Term/Term/Raw.hs:118-129).  The sort happens at PARSE
-    // time over the FREE logical variables, ordered by `Ord LVar` =
-    // (idx, sort, name) (LTerm.hs:545-548) — for freshly-parsed lemma vars
-    // (all idx 0) this is name-alphabetical, e.g. `x + z` stays `x++z` and
-    // `y + z` stays `y++z`.  `formulaToGuarded` then abstracts Free→Bound via
-    // a structural `fmap` (Guarded.hs:303-318) that preserves the AC arg
-    // positions.  Our parser stores formula terms as nested `BinOp(op, l, r)`
-    // trees in source order and never sorts them, so we canonicalise the AC
-    // chains over the FREE-variable parser AST FIRST (mirroring HS's
-    // parse-time `fAppAC` on free LVars), then convert to guarded form.
-    let canon = crate::elaborate::canonicalize_ac_in_formula(f);
-    // HS runs the whole conversion inside a `Precise.FreshT` seeded with
-    // `avoidPrecise fmOrig` (Guarded.hs:474), so every quantifier prefix it
-    // opens draws freshened binder names from ONE state threaded across the
-    // entire traversal.  Those freshened names are what the unguarded-variable
-    // diagnostic reports.
-    let mut fresh = avoid_precise_formula(&canon);
-    convert(false, &canon, &mut fresh)
+/// HS `bvarToLVar` (Guarded.hs:322-327): read an atom of a locally-nameless
+/// formula whose binders are all opened as an atom over plain `LVar`s.  A
+/// surviving `Bound` index is HS's `boundError`.
+pub fn bvar_to_lvar(a: &Atom<BLNTerm>) -> Atom<LNTerm> {
+    map_atom(a, &mut |t| {
+        map_lits(t, &mut |l| match l {
+            Lit::Con(c) => Lit::Con(*c),
+            Lit::Var(BVar::Free(v)) => Lit::Var(*v),
+            Lit::Var(BVar::Bound(i)) => panic!("bvarToLVar: left-over bound variable '{i}'"),
+        })
+    })
 }
 
-/// HS `avoidPrecise fmOrig` (LTerm.hs:714-715) for a parser-AST formula:
-/// seeds `name -> maxIdx+1` over the formula's FREE variables, so the first
-/// `fresh_ident name` yields an index past every free occurrence.  The
-/// counter is keyed by the bare `lvarName` alone, sort- and index-blind
-/// (`avoidPreciseVars`, LTerm.hs:706-709), so one free `#x.2` pushes the
-/// supply for a message-sorted binder `x` all the way to `x.3`.
-///
-/// HS's `frees` runs on the locally-nameless `LNFormula`, where quantified
-/// occurrences are `BVar::Bound` and thus invisible.  Binders are still named
-/// here, so a scope stack of [`VarKey`]s stands in — keyed by the same full
-/// identity HS's `quantify` captures with (`v == x` at `Eq LVar`,
-/// Theory/Model/Formula.hs:347-351): under `∀ x.` an occurrence of `x.1` or
-/// `#x` is a DIFFERENT variable, stays free, and seeds the supply.
-fn avoid_precise_formula(f: &p::Formula) -> tamarin_utils::fresh::PreciseFreshState {
-    fn walk_formula(f: &p::Formula, bound: &mut Vec<VarKey>, out: &mut Vec<VarKey>) {
-        match f {
-            p::Formula::True | p::Formula::False => {}
-            p::Formula::Atom(a) => walk_atom(a, bound, out),
-            p::Formula::Not(g) => walk_formula(g, bound, out),
-            p::Formula::And(l, r)
-            | p::Formula::Or(l, r)
-            | p::Formula::Implies(l, r)
-            | p::Formula::Iff(l, r) => {
-                walk_formula(l, bound, out);
-                walk_formula(r, bound, out);
-            }
-            p::Formula::Forall(vs, body) | p::Formula::Exists(vs, body) => {
-                let saved = bound.len();
-                bound.extend(vs.iter().map(|v| var_key(&v.name, v.idx, v.sort)));
-                walk_formula(body, bound, out);
-                bound.truncate(saved);
-            }
+/// HS `bTermToLTerm` (Guarded.hs:335-338): read a term of a locally-nameless
+/// formula whose binders are all opened as a term over plain `LVar`s.  A
+/// surviving `Bound` index is HS's `boundError`.
+pub fn bterm_to_lterm(t: &BLNTerm) -> LNTerm {
+    map_lits(t, &mut |l| match l {
+        Lit::Con(c) => Lit::Con(*c),
+        Lit::Var(BVar::Free(v)) => Lit::Var(*v),
+        Lit::Var(BVar::Bound(i)) => panic!("bTermToLTerm: left-over bound variable '{i}'"),
+    })
+}
+
+/// HS `unbindAtom` (Guarded.hs:351-352): the atom over plain `LVar`s when it
+/// carries no `Bound` leaf, `None` otherwise.
+pub(crate) fn unbind_atom(a: &Atom<BLNTerm>) -> Option<Atom<LNTerm>> {
+    fn has_bound(t: &BLNTerm) -> bool {
+        match t {
+            Term::Lit(Lit::Var(BVar::Bound(_))) => true,
+            Term::Lit(_) => false,
+            Term::App(_, args) => args.iter().any(has_bound),
         }
     }
-    fn walk_atom(a: &p::Atom, bound: &[VarKey], out: &mut Vec<VarKey>) {
-        let mut keys = Vec::new();
-        match a {
-            // `Eq` covers both `blatom` equality alternatives, and both
-            // `Subterm` sides and `LessMset`'s parse as message terms
-            // (Theory/Text/Parser/Formula.hs:44-58).
-            p::Atom::Eq(l, r) | p::Atom::LessMset(l, r) | p::Atom::Subterm(l, r) => {
-                term_var_keys(l, false, &mut keys);
-                term_var_keys(r, false, &mut keys);
-            }
-            // `nodevarTerm` positions: whatever sigil they were written with,
-            // the parser types these `LSortNode`.
-            p::Atom::Less(l, r) => {
-                term_var_keys(l, true, &mut keys);
-                term_var_keys(r, true, &mut keys);
-            }
-            p::Atom::Action(fa, t) => {
-                for arg in &fa.args {
-                    term_var_keys(arg, false, &mut keys);
+    let mut bound = false;
+    fold_atom(a, &mut |t| bound |= has_bound(t));
+    if bound {
+        None
+    } else {
+        Some(bvar_to_lvar(a))
+    }
+}
+
+/// Lift an atom over plain `LVar`s into the locally-nameless one, every
+/// variable free.  HS `fmap (fmapTerm (fmap Free))` (Guarded.hs:378),
+/// [`crate::formula::lift_free`] per term.
+pub fn lift_free_atom(a: &Atom<LNTerm>) -> Atom<BLNTerm> {
+    map_atom(a, &mut lift_free)
+}
+
+/// HS `substFreeAtom` (Guarded.hs:308-317): replace every free variable in
+/// `dom(s)` by the De Bruijn index `s` gives it.  `fmap (fmapTerm (fmap …))`
+/// rebuilds each application through `fApp`, so an AC or `C` argument list is
+/// re-sorted under `Bound i < Free x` (LTerm.hs:476-478, Raw.hs:119-134).
+pub(crate) fn subst_free_atom(s: &[(LVar, u64)], a: &Atom<BLNTerm>) -> Atom<BLNTerm> {
+    subst_free_atom_at(s, 0, a)
+}
+
+fn subst_free_atom_at(s: &[(LVar, u64)], depth: u64, a: &Atom<BLNTerm>) -> Atom<BLNTerm> {
+    map_atom(a, &mut |t| {
+        map_lits(t, &mut |l| match l {
+            Lit::Var(BVar::Free(x)) => match s.iter().find(|(v, _)| v == x) {
+                Some((_, i)) => Lit::Var(BVar::Bound(
+                    i.checked_add(depth).expect("guarded binder depth overflow"),
+                )),
+                None => l.clone(),
+            },
+            _ => l.clone(),
+        })
+    })
+}
+
+/// HS `substFree` (Guarded.hs:319-320): [`subst_free_atom`] at every atom,
+/// with the index shifted by the number of binders crossed.
+pub(crate) fn subst_free(s: &[(LVar, u64)], g: &Guarded) -> Guarded {
+    map_guarded_atoms(g, &mut |j, a| subst_free_atom_at(s, j, a))
+}
+
+/// HS `substBoundAtom` (Guarded.hs:289-296): replace every bound index in
+/// `dom(s)` by the free variable `s` gives it, rebuilding through `fApp` as
+/// [`subst_free_atom`] does.
+pub(crate) fn subst_bound_atom(s: &[(u64, LVar)], a: &Atom<BLNTerm>) -> Atom<BLNTerm> {
+    subst_bound_atom_at(s, 0, a)
+}
+
+fn subst_bound_atom_at(s: &[(u64, LVar)], depth: u64, a: &Atom<BLNTerm>) -> Atom<BLNTerm> {
+    map_atom(a, &mut |t| {
+        map_lits(t, &mut |l| match l {
+            Lit::Var(BVar::Bound(n)) => {
+                match s.iter().find(|(i, _)| i.checked_add(depth) == Some(*n)) {
+                    Some((_, v)) => Lit::Var(BVar::Free(*v)),
+                    None => l.clone(),
                 }
-                term_var_keys(t, true, &mut keys);
             }
-            p::Atom::Last(t) => term_var_keys(t, true, &mut keys),
-            p::Atom::Pred(fa) => {
-                for arg in &fa.args {
-                    term_var_keys(arg, false, &mut keys);
-                }
-            }
-        }
-        out.extend(keys.into_iter().filter(|k| !bound.contains(k)));
-    }
-    let mut frees = Vec::new();
-    walk_formula(f, &mut Vec::new(), &mut frees);
-    tamarin_utils::fresh::PreciseFreshState::avoid_precise(
-        frees.into_iter().map(|(name, idx, _sort)| (name, idx)),
-    )
+            _ => l.clone(),
+        })
+    })
 }
 
-/// Returns `true` if the formula is "safety": closed (no free vars)
-/// and contains no existential quantifier in its guarded form.
-pub fn is_safety_formula(g: &Guarded) -> bool {
-    fn no_existential(g: &Guarded) -> bool {
-        match g {
-            Guarded::Atom(_) => true,
-            Guarded::GGuarded { qua: Quant::Ex, .. } => false,
-            Guarded::GGuarded {
-                qua: Quant::All,
-                body,
-                ..
-            } => no_existential(body),
-            Guarded::Disj(inner) => inner.iter().all(no_existential),
-            Guarded::Conj(inner) => inner.iter().all(no_existential),
-        }
-    }
-    free_vars(g).is_empty() && no_existential(g)
+/// HS `substBound` (Guarded.hs:301-302): [`subst_bound_atom`] at every atom,
+/// with the index shifted by the number of binders crossed.
+pub(crate) fn subst_bound(s: &[(u64, LVar)], g: &Guarded) -> Guarded {
+    map_guarded_atoms(g, &mut |j, a| subst_bound_atom_at(s, j, a))
 }
-
-/// Compute the set of free (un-quantified) variables in a guarded formula.
-///
-/// With DeBruijn bindings, Bound vars don't appear in this set — they have
-/// no name (their "name" is positional).  We collect VarSpec names from
-/// every `BVar::Free` leaf.
-pub fn free_vars(g: &Guarded) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    for_each_free_var_in_guarded(g, &mut |v| {
-        out.insert(v.name.clone());
-    });
-    out
-}
-
-/// Full identity of a logical variable, as `(name, idx, sort tag)`.
-///
-/// HS `remainingUnguarded` (Guarded.hs:523-533) works over `[LVar]` and
-/// `frees`, so variables are compared by
-/// HS `instance Eq LVar` (LTerm.hs:541-542) — `i1 == i2 && s1 == s2 && n1 ==
-/// n2`.  A binder `x.1` is therefore a DIFFERENT variable from an enclosing
-/// `x`, and `#x` a different variable from `x`.
-///
-/// The sort component is the sort HS's parser assigns the occurrence, so it
-/// is resolved exactly as in `subst_free_term_cow` (guarded_types.rs):
-/// temporal positions are `Node`, every other occurrence folds through
-/// `normalise_msg_sort`.
-type VarKey = (String, u64, u8);
-
-/// Build the [`VarKey`] of a variable occurrence carrying `sort`.
-fn var_key(name: &str, idx: u64, sort: p::SortHint) -> VarKey {
-    (
-        name.to_string(),
-        idx,
-        sort_hint_tag(&crate::guarded_types::normalise_msg_sort(sort)),
-    )
-}
-
-/// Collect the identity of every variable leaf in a parser-AST term.  Used
-/// by `remaining_unguarded` for the pre-DeBruijn unguarded-variable check.
-///
-/// `temporal` marks a term in timepoint position (HS `nodevarTerm`, i.e. the
-/// `@`-argument of an action atom), whose variable is `LSortNode` whatever
-/// sigil it was written with.  Below a function symbol, pair or operator HS
-/// parses sub-terms with the message-term parser, so the flag does not
-/// descend — mirroring `subst_free_term_cow`.
-fn term_var_keys(t: &p::Term, temporal: bool, out: &mut Vec<VarKey>) {
-    match t {
-        p::Term::Var(v) => out.push(if temporal {
-            var_key(&v.name, v.idx, p::SortHint::Node)
-        } else {
-            var_key(&v.name, v.idx, v.sort)
-        }),
-        p::Term::App(_, args) | p::Term::Pair(args) => {
-            for a in args {
-                term_var_keys(a, false, out);
-            }
-        }
-        p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
-            term_var_keys(a, false, out);
-            term_var_keys(b, false, out);
-        }
-        p::Term::PatMatch(inner) => term_var_keys(inner, false, out),
-        _ => {}
-    }
-}
-
-// =============================================================================
-// Walking Guarded with DeBruijn-aware substitution
-// =============================================================================
 
 /// Port of HS `mapGuardedAtoms :: (Integer -> a -> b) -> LGuarded a ->
 /// LGuarded b`: the single depth-tracking recursor shared by every eager
@@ -1301,8 +574,15 @@ fn term_var_keys(t: &p::Term, temporal: bool, out: &mut Vec<VarKey>) {
 /// quantifier blocks, and traversal order.  Guards of a `GGuarded` are
 /// mapped — and the body recursed — at `depth + vars.len()`, so an atom
 /// under `n` binders is always handed `depth == n`.
-fn map_guarded_atoms<F: FnMut(u32, &GAtom) -> GAtom>(g: &Guarded, f: &mut F) -> Guarded {
-    fn rec<F: FnMut(u32, &GAtom) -> GAtom>(g: &Guarded, depth: u32, f: &mut F) -> Guarded {
+fn map_guarded_atoms<F: FnMut(u64, &Atom<BLNTerm>) -> Atom<BLNTerm>>(
+    g: &Guarded,
+    f: &mut F,
+) -> Guarded {
+    fn rec<F: FnMut(u64, &Atom<BLNTerm>) -> Atom<BLNTerm>>(
+        g: &Guarded,
+        depth: u64,
+        f: &mut F,
+    ) -> Guarded {
         match g {
             Guarded::Atom(a) => Guarded::Atom(f(depth, a)),
             Guarded::Disj(items) => Guarded::Disj(items.iter().map(|i| rec(i, depth, f)).collect()),
@@ -1313,7 +593,7 @@ fn map_guarded_atoms<F: FnMut(u32, &GAtom) -> GAtom>(g: &Guarded, f: &mut F) -> 
                 guards,
                 body,
             } => {
-                let new_depth = depth + vars.len() as u32;
+                let new_depth = depth + vars.len() as u64;
                 Guarded::GGuarded {
                     qua: *qua,
                     vars: vars.clone(),
@@ -1326,21 +606,229 @@ fn map_guarded_atoms<F: FnMut(u32, &GAtom) -> GAtom>(g: &Guarded, f: &mut F) -> 
     rec(g, 0, f)
 }
 
-/// Mirror HS `substFree :: [(LVar, Integer)] -> LGuarded c -> LGuarded c`.
-///
-/// Walks the Guarded tracking scope depth (number of binders crossed).
-/// At each atom, replaces each `Free(v)` matching some `(v, db)` in `s`
-/// with `Bound(db + depth)`.
-pub fn subst_free_guarded(g: &Guarded, s: &[(p::VarSpec, u32)]) -> Guarded {
-    map_guarded_atoms(g, &mut |d, a| subst_free_atom_at_depth(a, s, d))
+/// Returns `true` if the formula is "safety": closed (no free vars)
+/// and contains no existential quantifier in its guarded form.  HS
+/// `isSafetyFormula` (Guarded.hs:154-165).
+pub fn is_safety_formula(g: &Guarded) -> bool {
+    fn no_existential(g: &Guarded) -> bool {
+        match g {
+            Guarded::Atom(_) => true,
+            Guarded::GGuarded {
+                qua: Quantifier::Ex,
+                ..
+            } => false,
+            Guarded::GGuarded {
+                qua: Quantifier::All,
+                body,
+                ..
+            } => no_existential(body),
+            Guarded::Disj(inner) => inner.iter().all(no_existential),
+            Guarded::Conj(inner) => inner.iter().all(no_existential),
+        }
+    }
+    is_closed(g) && no_existential(g)
 }
+
+/// Is `g` closed (no free variables)?  HS `null (frees [gf0])`
+/// (Guarded.hs:156).
+pub fn is_closed(g: &Guarded) -> bool {
+    let mut any = false;
+    g.for_each_free(&mut |_| any = true);
+    !any
+}
+
+/// Find the maximum variable idx used in a guarded formula. Used
+/// to allocate fresh indices without collisions.
+pub fn max_var_idx(g: &Guarded) -> u64 {
+    let mut m = 0u64;
+    g.for_each_free(&mut |v| {
+        if v.idx > m {
+            m = v.idx;
+        }
+    });
+    m
+}
+
+/// Is every AC and `C` argument list in `g` sorted?
+///
+/// [`map_lits`] rebuilds each application through `f_app`, which sorts those
+/// two argument lists (Raw.hs:119-134) and leaves every other one alone, so a
+/// formula equals its identity map exactly when it is already in that form.
+/// [`insert_formula`](crate::constraint::solver::reduction::Reduction::insert_formula)
+/// checks it with `debug_assert!` at the store boundary.
+pub fn is_ac_canonical(g: &Guarded) -> bool {
+    map_guarded_atoms(g, &mut |_, a| {
+        map_atom(a, &mut |t| map_lits(t, &mut |l| l.clone()))
+    }) == *g
+}
+
+// =============================================================================
+// Opening and closing (Guarded.hs:358-384)
+// =============================================================================
+
+/// Build the substitution HS `closeGuarded` uses: `s = zip (reverse vs) [0..]`
+/// (Guarded.hs:382).  Given `vs = [v0, …, v_{k-1}]` (outer→inner lexical
+/// order), returns `[(v_{k-1}, 0), …, (v_0, k-1)]`.
+fn close_subst(vs: &[LVar]) -> Vec<(LVar, u64)> {
+    let k = vs.len();
+    vs.iter()
+        .enumerate()
+        .rev()
+        .map(|(i, v)| (*v, (k - 1 - i) as u64))
+        .collect()
+}
+
+/// Build the substitution HS `openGuarded` uses: `subst xs = zip [0..]
+/// (reverse xs)` (Guarded.hs:372).  Given `xs = [x0, …, x_{k-1}]` (binder
+/// lexical order), returns `[(0, x_{k-1}), …, (k-1, x_0)]`.
+fn open_subst(xs: &[LVar]) -> Vec<(u64, LVar)> {
+    xs.iter()
+        .rev()
+        .enumerate()
+        .map(|(i, v)| (i as u64, *v))
+        .collect()
+}
+
+/// HS `openGuarded` (Guarded.hs:364-373): `Some((qua, xs, ats, gf))` for a
+/// `GGuarded`, `None` for every other shape.  One variable is drawn per binder
+/// through `fresh_ident` (HS `freshLVar n s`, LTerm.hs:301-302), and both the
+/// guards and the body get this binder's De Bruijn indices replaced by the
+/// drawn variables.  Each guard is then read over plain variables
+/// ([`bvar_to_lvar`]); the body keeps the indices of the binders inside it,
+/// which the next `open_guarded` draws.
+pub fn open_guarded(
+    g: &Guarded,
+    fresh: &mut dyn MonadFresh,
+) -> Option<(Quantifier, Vec<LVar>, Vec<Atom<LNTerm>>, Guarded)> {
+    let Guarded::GGuarded {
+        qua,
+        vars,
+        guards,
+        body,
+    } = g
+    else {
+        return None;
+    };
+    // HS `xs <- mapM (\(n,s) -> freshLVar n s) vs`.
+    let xs: Vec<LVar> = vars
+        .iter()
+        .map(|(n, s)| LVar::new(n, *s, fresh.fresh_ident(n)))
+        .collect();
+    let s = open_subst(&xs);
+    let ats: Vec<Atom<LNTerm>> = guards
+        .iter()
+        .map(|a| bvar_to_lvar(&subst_bound_atom(&s, a)))
+        .collect();
+    Some((*qua, xs, ats, subst_bound(&s, body)))
+}
+
+/// HS `closeGuarded` (Guarded.hs:376-384): bind `xs` in `atoms` and `body`,
+/// then build the quantifier through its smart constructor.  Each binder keeps
+/// only its name and sort (`vs' = map (lvarName &&& lvarSort) vs`).
+pub fn close_guarded(
+    qua: Quantifier,
+    xs: Vec<LVar>,
+    atoms: Vec<Atom<LNTerm>>,
+    body: Guarded,
+) -> Guarded {
+    let s = close_subst(&xs);
+    let new_guards: Vec<Atom<BLNTerm>> = atoms
+        .iter()
+        .map(|a| subst_free_atom(&s, &lift_free_atom(a)))
+        .collect();
+    let new_body = subst_free(&s, &body);
+    let vs: Vec<(String, LSort)> = xs.iter().map(|v| (v.name.to_string(), v.sort)).collect();
+    match qua {
+        Quantifier::Ex => gex(vs, new_guards, new_body),
+        Quantifier::All => gall(vs, new_guards, new_body),
+    }
+}
+
+/// Compute which of `xs` are NOT bound by any of `atoms`, as POSITIONS in
+/// `xs`. Mirrors Haskell's `remainingUnguarded` (Guarded.hs:523-533), whose
+/// `ug0 \\ frees ...` likewise preserves the prefix order of the survivors.
+/// Positions rather than variables so the caller can name each survivor from
+/// the parallel freshened prefix (see [`unguarded_error`]).
+///
+/// The working set is a `[LVar]` and `\\`/`intersect` use `Eq LVar`
+/// (LTerm.hs:541-542) — name, sort and index together.  So under
+/// `All x. ... ==> All x.1 z. <x.1,z> = x`, the guard covers the binders `x.1`
+/// and `z` even though its right-hand side mentions the *outer* `x`, which is
+/// a different variable.
+///
+/// HS sorts the atoms with `sortGAtoms` (Guarded.hs:193-194), a stable
+/// partition placing actions before equalities.
+fn remaining_unguarded(xs: &[LVar], atoms: &[Atom<LNTerm>]) -> Vec<usize> {
+    let mut sorted_atoms: Vec<&Atom<LNTerm>> = atoms.iter().collect();
+    sorted_atoms.sort_by_key(|a| if a.is_action() { 0 } else { 1 });
+    let mut unguarded: BTreeSet<LVar> = xs.iter().copied().collect();
+    for atom in &sorted_atoms {
+        match atom {
+            // HS `frees (a, fa)` over `GAction a fa`: every variable of the
+            // timepoint and of the fact.
+            ProtoAtom::Action(t, fact) => {
+                for v in frees(t) {
+                    unguarded.remove(&v);
+                }
+                for v in frees(fact) {
+                    unguarded.remove(&v);
+                }
+            }
+            ProtoAtom::EqE(s, t) => {
+                let sv = frees(s);
+                let tv = frees(t);
+                let s_covered = sv.iter().all(|k| !unguarded.contains(k));
+                let t_covered = tv.iter().all(|k| !unguarded.contains(k));
+                if s_covered {
+                    for k in tv {
+                        unguarded.remove(&k);
+                    }
+                } else if t_covered {
+                    for k in sv {
+                        unguarded.remove(&k);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    xs.iter()
+        .enumerate()
+        .filter(|(_, v)| unguarded.contains(v))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Render HS `noUnguardedVars` (Guarded.hs:507-514) for the survivors at
+/// `positions` of the quantifier prefix.  The names come from `freshened` —
+/// the prefix as `openFormulaPrefix` renamed it — so a binder shadowing an
+/// already-opened one is reported as `x.1`, not `x`.
+fn unguarded_error(positions: &[usize], freshened: &[LVar]) -> GuardError {
+    // HS: `map (quotes . text . show) unguarded` (Guarded.hs:507-514, see line 511)
+    // over `[LVar]`, whose `show` is the EXPLICIT `instance Show LVar`
+    // (LTerm.hs:550-557) that `Display for LVar` ports.
+    let names: Vec<String> = positions
+        .iter()
+        .map(|&i| format!("'{}'", freshened[i]))
+        .collect();
+    let mut e = err(format!(
+        "unguarded variable(s) {} in the subformula",
+        names.join(", ")
+    ));
+    e.unguarded_vars = names;
+    e
+}
+
+// =============================================================================
+// Normal form of a stored formula
+// =============================================================================
 
 /// Rebuild a guarded formula bottom-up through the `gconj`/`gdisj` smart
 /// constructors, restoring the normal form that formula conversion
 /// (`convert`) establishes at creation: flattened, duplicate-free
 /// connectives.  Port of HS `normaliseGuarded` (150f5eba).
 /// NOTE: disjunctions are normalised CONSTRUCTOR-PRESERVING at every
-/// level (`normalise_disj_list`), not via the full `gdisj`: a singleton
+/// level (`normalise_disj_list_cow`), not via the full `gdisj`: a singleton
 /// disjunction wrapping a conjunction is load-bearing for the S_∀
 /// saturation dedup — `insert_formula` STORES disjunctions (formula +
 /// `Goal::Disj` twin) but DECOMPOSES bare conjunctions without storing
@@ -1350,23 +838,14 @@ pub fn subst_free_guarded(g: &Guarded, s: &[(p::VarSpec, u32)]) -> Guarded {
 /// `gconj` (their singleton unwrap is harmless because conjunctions are
 /// decomposed on insertion anyway); this requires `gconj` to be
 /// idempotent — see the note on `gconj`.
-pub fn normalise_guarded(g: &Guarded) -> Guarded {
-    // Route through the COW helper so borrow-callers get the same logic with
-    // no duplication; only cost vs the COW path is the top-level clone when
-    // nothing changed.
-    normalise_guarded_cow(g).unwrap_or_else(|| g.clone())
-}
-
-/// Copy-on-write variant of [`normalise_guarded`]: returns `None` when
-/// normalisation leaves `g` structurally unchanged (so an owning caller can
-/// reuse `g` by move with zero allocation), `Some(rebuilt)` otherwise.  The
-/// `Some` value is BYTE-IDENTICAL to `normalise_guarded(g)` — same
-/// flatten/dedup/order.  Mirrors the `subst_guarded_cow` /
-/// `cac_rec_guarded_cow` convention (recursion returns `None` when all
-/// children are unchanged).
+///
+/// Copy-on-write: returns `None` when normalisation leaves `g` structurally
+/// unchanged (so an owning caller can reuse `g` by move with zero
+/// allocation), `Some(rebuilt)` otherwise.  Mirrors the `subst_guarded_cow`
+/// convention (recursion returns `None` when all children are unchanged).
 pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
     match g {
-        // `normalise_guarded`'s Atom arm is `g.clone()` → always unchanged.
+        // An atom carries no connectives to flatten → always unchanged.
         Guarded::Atom(_) => None,
         Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),
         Guarded::Conj(items) => {
@@ -1375,8 +854,7 @@ pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
             // dedup / singleton-unwrap).  When no child changed AND `gconj`
             // is a structural no-op on the (already-normalised) children, the
             // whole node is unchanged.  Otherwise the rebuild is exactly
-            // `gconj(children)` — identical to the eager
-            // `gconj(items.iter().map(normalise_guarded).collect())`.
+            // `gconj(children)`.
             let mapped = cow_map_vec(items, normalise_guarded_cow);
             let children: &[Guarded] = mapped.as_deref().unwrap_or(&items[..]);
             if mapped.is_none() && gconj_is_structural_noop(children) {
@@ -1435,16 +913,12 @@ fn gconj_is_structural_noop(items: &[Guarded]) -> bool {
 /// `Goal::Disj` twin (same payload, different wrapper) stay in LOCKSTEP.
 /// Port of HS `normaliseDisjList` (150f5eba); see that commit for why
 /// full `gdisj` here desynchronises the twin stores (gcm livelock).
-pub fn normalise_disj_list(items: &[Guarded]) -> Vec<Guarded> {
-    normalise_disj_list_cow(items).unwrap_or_else(|| items.to_vec())
-}
-
-/// Copy-on-write variant of [`normalise_disj_list`]: `None` when the
+/// Copy-on-write disjunction normalization: `None` when the
 /// constructor-preserving normalisation leaves the disjunct list unchanged
 /// (every disjunct normalises in place, none is a nested `Disj` to flatten,
 /// no duplicate to drop), `Some(rebuilt)` otherwise.  BYTE-IDENTICAL to
-/// `normalise_disj_list(items)` in the `Some` case.
-fn normalise_disj_list_cow(items: &[Guarded]) -> Option<Vec<Guarded>> {
+/// a freshly rebuilt list in the `Some` case.
+pub(crate) fn normalise_disj_list_cow(items: &[Guarded]) -> Option<Vec<Guarded>> {
     // Normalise each disjunct (COW); `children` is the normalised list — the
     // originals when `mapped` is `None` (all disjuncts unchanged).
     let mapped = cow_map_vec(items, normalise_guarded_cow);
@@ -1475,7 +949,7 @@ fn disj_flatten_is_structural_noop(items: &[Guarded]) -> bool {
 
 /// One-level flatten of nested `Disj`s + duplicate drop over an
 /// already-normalised disjunct list.  This is the outer-loop body of
-/// `normalise_disj_list` factored out so it runs on the COW-normalised
+/// disjunction normalizer factored out so it runs on the COW-normalised
 /// children; BYTE-IDENTICAL to that original loop (same push/dedup order).
 fn flatten_dedup_disj(children: &[Guarded]) -> Vec<Guarded> {
     fn push(g: Guarded, out: &mut Vec<Guarded>) {
@@ -1499,19 +973,11 @@ fn flatten_dedup_disj(children: &[Guarded]) -> Vec<Guarded> {
 
 /// Normalise a formula for storage in the constraint system: full
 /// smart-constructor normal form, except that a TOP-LEVEL disjunction
-/// keeps its `Disj` constructor (via `normalise_disj_list`) so it stays
-/// in lockstep with its `Goal::Disj` twin.  Port of HS
-/// `normaliseStoredFormula` (150f5eba).
-pub fn normalise_stored_formula(g: &Guarded) -> Guarded {
-    normalise_stored_formula_cow(g).unwrap_or_else(|| g.clone())
-}
-
-/// Copy-on-write variant of [`normalise_stored_formula`]: `None` when
-/// unchanged, `Some(rebuilt)` (BYTE-IDENTICAL to
-/// `normalise_stored_formula(g)`) otherwise.  Like `normalise_stored_formula`,
-/// a TOP-LEVEL `Disj` keeps its constructor (via the constructor-preserving
+/// keeps its `Disj` constructor (via the constructor-preserving
 /// `normalise_disj_list_cow`) so it stays in lockstep with its `Goal::Disj`
-/// twin.
+/// twin.  Port of HS `normaliseStoredFormula` (150f5eba).
+///
+/// Copy-on-write: `None` when unchanged, `Some(rebuilt)` otherwise.
 pub fn normalise_stored_formula_cow(g: &Guarded) -> Option<Guarded> {
     match g {
         Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),
@@ -1519,11 +985,10 @@ pub fn normalise_stored_formula_cow(g: &Guarded) -> Option<Guarded> {
     }
 }
 
-/// Owned fast path for [`normalise_stored_formula`]: consumes `g`, returning
-/// it by MOVE (zero allocation) when normalisation is a no-op, else the
-/// rebuilt tree.  For callers that own their input and immediately reassign
-/// it.  The returned value is BYTE-IDENTICAL to
-/// `normalise_stored_formula(&g)`.
+/// Owned fast path for [`normalise_stored_formula_cow`]: consumes `g`,
+/// returning it by MOVE (zero allocation) when normalisation is a no-op, else
+/// the rebuilt tree.  For callers that own their input and immediately
+/// reassign it.
 pub fn normalise_stored_formula_owned(g: Guarded) -> Guarded {
     match normalise_stored_formula_cow(&g) {
         Some(n) => n,
@@ -1531,112 +996,94 @@ pub fn normalise_stored_formula_owned(g: Guarded) -> Guarded {
     }
 }
 
-/// Mirror HS `substBound :: [(Integer, LVar)] -> LGuarded c -> LGuarded c`.
-///
-/// Walks the Guarded tracking scope depth.  At each atom, replaces each
-/// `Bound(n)` matching some `(i, v)` in `s` (where `n = i + depth`) with
-/// `Free(v)`.
-pub fn subst_bound_guarded(g: &Guarded, s: &[(u32, p::VarSpec)]) -> Guarded {
-    map_guarded_atoms(g, &mut |d, a| subst_bound_atom_at_depth(a, s, d))
+// =============================================================================
+// Conversion to a guarded formula
+// =============================================================================
+
+/// HS `formulaToGuarded` (Guarded.hs:471-479): the whole traversal runs
+/// inside one `Precise.FreshT` seeded with `avoidPrecise fmOrig`, so every
+/// quantifier prefix it opens draws its binders from a single supply.
+pub fn formula_to_guarded(f: &crate::formula::LNFormula) -> Result<Guarded, GuardError> {
+    let mut fresh = crate::formula::avoid_precise_lnformula(f);
+    convert(false, f, &mut fresh)
 }
 
-// =============================================================================
-// Polarity-aware conversion
-// =============================================================================
-
+/// HS `convert` (Guarded.hs:481-505,565-566).  `polarity` is the implicit
+/// negation the conversion carries: at `True` the guarded formula returned
+/// is equivalent to the negation of `f`.
 fn convert(
     polarity: bool,
-    f: &p::Formula,
+    f: &crate::formula::LNFormula,
     fresh: &mut tamarin_utils::fresh::PreciseFreshState,
 ) -> Result<Guarded, GuardError> {
+    use crate::formula::{open_formula_prefix, Connective, ProtoFormula, Quantifier};
     match f {
-        p::Formula::True => Ok(gtf(!polarity)),
-        p::Formula::False => Ok(gtf(polarity)),
-        p::Formula::Atom(a) => {
-            let ga = atom_to_gatom_free(a);
+        ProtoFormula::Tf(b) => Ok(gtf(polarity != *b)),
+        ProtoFormula::Atom(a) => {
             if polarity {
-                Ok(gnot_atom(&ga))
+                Ok(gnot_atom(a))
             } else {
-                Ok(Guarded::Atom(ga))
+                Ok(Guarded::Atom(a.clone()))
             }
         }
-        p::Formula::Not(g) => convert(!polarity, g, fresh),
-        p::Formula::And(a, b) => {
+        ProtoFormula::Not(g) => convert(!polarity, g, fresh),
+        ProtoFormula::Conn(Connective::And, a, b) => {
             let sub = vec![convert(polarity, a, fresh)?, convert(polarity, b, fresh)?];
-            if polarity {
-                Ok(gdisj(sub))
-            } else {
-                Ok(gconj(sub))
-            }
+            Ok(if polarity { gdisj(sub) } else { gconj(sub) })
         }
-        p::Formula::Or(a, b) => {
+        ProtoFormula::Conn(Connective::Or, a, b) => {
             let sub = vec![convert(polarity, a, fresh)?, convert(polarity, b, fresh)?];
-            if polarity {
-                Ok(gconj(sub))
-            } else {
-                Ok(gdisj(sub))
-            }
+            Ok(if polarity { gconj(sub) } else { gdisj(sub) })
         }
-        p::Formula::Implies(a, b) => {
-            // p ⇒ q  is  ¬p ∨ q
+        ProtoFormula::Conn(Connective::Imp, a, b) => {
+            // p ⇒ q is ¬p ∨ q.
             let nag = convert(!polarity, a, fresh)?;
             let cag = convert(polarity, b, fresh)?;
-            if polarity {
-                Ok(gconj(vec![nag, cag]))
-            } else {
-                Ok(gdisj(vec![nag, cag]))
-            }
+            let sub = vec![nag, cag];
+            Ok(if polarity { gconj(sub) } else { gdisj(sub) })
         }
-        p::Formula::Iff(a, b) => {
-            // p ↔ q  is  (p ⇒ q) ∧ (q ⇒ p)
-            let lhs = p::Formula::Implies(a.clone(), b.clone());
-            let rhs = p::Formula::Implies(b.clone(), a.clone());
-            let sub = vec![
+        // p ↔ q is (p ⇒ q) ∧ (q ⇒ p), and HS conjoins the two arms at both
+        // polarities (Guarded.hs:565-566).
+        ProtoFormula::Conn(Connective::Iff, a, b) => {
+            let lhs = ProtoFormula::Conn(Connective::Imp, a.clone(), b.clone());
+            let rhs = ProtoFormula::Conn(Connective::Imp, b.clone(), a.clone());
+            Ok(gconj(vec![
                 convert(polarity, &lhs, fresh)?,
                 convert(polarity, &rhs, fresh)?,
-            ];
-            Ok(gconj(sub))
+            ]))
         }
-        // The quantifier shape (Forall vs Exists) determines whether the
-        // body must be a top-level implication (`convert_all`) or a
-        // conjunction (`convert_ex`). Polarity only affects which
-        // quantifier label appears in the output and which polarity we
-        // recurse with for inner subformulas.
-        //
-        // We "open" consecutive same-quantifier prefixes (mirroring
-        // Haskell's `openFormulaPrefix`) so that `Ex x. Ex y. body`
-        // is treated as a single `Ex [x, y]. body` for guard checking.
-        p::Formula::Forall(_, _) | p::Formula::Exists(_, _) => {
-            let (xs, body) = open_quantifier_prefix(f);
-            // HS `openFormulaPrefix` draws each binder through `freshLVar n s`
-            // (Theory/Model/Formula.hs:296-309, LTerm.hs:301-302) BEFORE
-            // `noUnguardedVars` inspects the prefix, so a shadowed binder is
-            // reported under its freshened index.  `freshened` is that
-            // renaming, positionally parallel to `xs`; only the DIAGNOSTIC
-            // consumes it, because the body carried into
-            // `convert_all`/`convert_ex` keeps the source names that
-            // `remaining_unguarded` and `close_guarded` match on.
-            let freshened: Vec<p::VarSpec> = xs
-                .iter()
-                .map(|v| p::VarSpec {
-                    idx: fresh.fresh_ident(&v.name),
-                    ..v.clone()
-                })
-                .collect();
-            let same_qua = matches!(f, p::Formula::Forall(_, _));
-            let result = if same_qua {
-                let out_qua = if polarity { Quant::Ex } else { Quant::All };
-                convert_all(&xs, &freshened, body, polarity, out_qua, fresh)
-            } else {
-                let out_qua = if polarity { Quant::All } else { Quant::Ex };
-                convert_ex(&xs, &freshened, body, polarity, out_qua, fresh)
+        // The quantifier decides whether the body must be a top-level
+        // implication (`convAll`) or a conjunction (`convEx`); the polarity
+        // decides which quantifier the guarded formula carries and which
+        // polarity the sub-formulas take (Guarded.hs:499-505).  The whole
+        // prefix of like quantifiers is opened at once, each binder drawn
+        // fresh and substituted into the body, so the guard check and the
+        // diagnostic name the binders HS names.
+        ProtoFormula::Qua(qua0, _, _) => {
+            let (xs, _, body) = open_formula_prefix(f, fresh);
+            let result = match qua0 {
+                Quantifier::All => {
+                    let out_qua = if polarity {
+                        Quantifier::Ex
+                    } else {
+                        Quantifier::All
+                    };
+                    convert_all(&xs, &body, polarity, out_qua, fresh)
+                }
+                Quantifier::Ex => {
+                    let out_qua = if polarity {
+                        Quantifier::All
+                    } else {
+                        Quantifier::Ex
+                    };
+                    convert_ex(&xs, &body, polarity, out_qua, fresh)
+                }
             };
-            // HS: the error from `convEx`/`convAll` is decorated with
-            // `ppFormula f0` (the current quantifier sub-formula) by
-            // `noUnguardedVars` / the toplevel-implication check.
-            // We mirror by attaching `f.clone()` as `subject_formula`
-            // on the INNERMOST failure (guard: set only when not yet set,
-            // so the deepest quantifier sub-formula wins).
+            // Both throws of this arm quote `ppFormula f0`, the quantifier
+            // sub-formula they were reached through (Guarded.hs:513, :562),
+            // and the exception carries that quote out unchanged — so the
+            // innermost quantifier is the one named, which the guard below
+            // reproduces by setting the field once.
             result.map_err(|mut e| {
                 if e.subject_formula.is_none() {
                     e.subject_formula = Some(f.clone());
@@ -1647,51 +1094,22 @@ fn convert(
     }
 }
 
-/// Open consecutive same-quantifier binders. `Forall x. Forall y.
-/// body` → `(vec![x, y], body)`. The first `Formula` argument must
-/// itself be a quantifier; we follow only matching kinds.
-fn open_quantifier_prefix(f: &p::Formula) -> (Vec<p::VarSpec>, &p::Formula) {
-    let mut vars = Vec::new();
-    let mut cur = f;
-    let kind = match f {
-        p::Formula::Forall(_, _) => 0,
-        p::Formula::Exists(_, _) => 1,
-        _ => return (vars, f),
-    };
-    loop {
-        match cur {
-            p::Formula::Forall(xs, body) if kind == 0 => {
-                vars.extend(xs.iter().cloned());
-                cur = body;
-            }
-            p::Formula::Exists(xs, body) if kind == 1 => {
-                vars.extend(xs.iter().cloned());
-                cur = body;
-            }
-            _ => break,
-        }
-    }
-    (vars, cur)
-}
-
-/// Body-is-conjunction case (existential-shaped). The body is split
-/// into guard atoms (action / equality) and remaining sub-formulas;
-/// each quantified variable must be bound by some guard atom.
+/// HS `convEx` (Guarded.hs:535-543): the body is a conjunction whose action
+/// and equality atoms guard the prefix.
 fn convert_ex(
-    xs: &[p::VarSpec],
-    freshened: &[p::VarSpec],
-    body: &p::Formula,
+    xs: &[LVar],
+    body: &crate::formula::LNFormula,
     polarity: bool,
-    out_qua: Quant,
+    out_qua: Quantifier,
     fresh: &mut tamarin_utils::fresh::PreciseFreshState,
 ) -> Result<Guarded, GuardError> {
     let (atoms, others) = split_conj_actions_eqs(body);
     let unguarded = remaining_unguarded(xs, &atoms);
     if !unguarded.is_empty() {
-        return Err(unguarded_error(&unguarded, freshened));
+        return Err(unguarded_error(&unguarded, xs));
     }
-    let mut converted = Vec::new();
-    for f in &others {
+    let mut converted = Vec::with_capacity(others.len());
+    for f in others {
         converted.push(convert(polarity, f, fresh)?);
     }
     let body_guarded = if polarity {
@@ -1702,198 +1120,62 @@ fn convert_ex(
     Ok(close_guarded(out_qua, xs.to_vec(), atoms, body_guarded))
 }
 
-/// Body-is-implication case (universal-shaped). The antecedent is
-/// split into guard atoms and remaining sub-formulas; each
-/// quantified variable must be bound by some guard atom in the
-/// antecedent.
+/// HS `convAll` (Guarded.hs:546-563): the body is an implication whose
+/// antecedent guards the prefix.
 fn convert_all(
-    xs: &[p::VarSpec],
-    freshened: &[p::VarSpec],
-    body: &p::Formula,
+    xs: &[LVar],
+    body: &crate::formula::LNFormula,
     polarity: bool,
-    out_qua: Quant,
+    out_qua: Quantifier,
     fresh: &mut tamarin_utils::fresh::PreciseFreshState,
 ) -> Result<Guarded, GuardError> {
-    if let p::Formula::Implies(ante, succ) = body {
-        let (atoms, ante_others) = split_conj_actions_eqs(ante);
-        let unguarded = remaining_unguarded(xs, &atoms);
-        if !unguarded.is_empty() {
-            return Err(unguarded_error(&unguarded, freshened));
-        }
-        let mut sub = Vec::with_capacity(ante_others.len() + 1);
-        for f in &ante_others {
-            sub.push(convert(!polarity, f, fresh)?);
-        }
-        sub.push(convert(polarity, succ, fresh)?);
-        let body_guarded = if polarity { gconj(sub) } else { gdisj(sub) };
-        Ok(close_guarded(out_qua, xs.to_vec(), atoms, body_guarded))
-    } else {
-        Err(err("universal quantifier without toplevel implication"))
+    use crate::formula::{Connective, ProtoFormula};
+    let ProtoFormula::Conn(Connective::Imp, ante, succ) = body else {
+        return Err(err("universal quantifier without toplevel implication"));
+    };
+    let (atoms, ante_others) = split_conj_actions_eqs(ante);
+    let unguarded = remaining_unguarded(xs, &atoms);
+    if !unguarded.is_empty() {
+        return Err(unguarded_error(&unguarded, xs));
     }
+    let mut sub = Vec::with_capacity(ante_others.len() + 1);
+    for f in ante_others {
+        sub.push(convert(!polarity, f, fresh)?);
+    }
+    sub.push(convert(polarity, succ, fresh)?);
+    let body_guarded = if polarity { gconj(sub) } else { gdisj(sub) };
+    Ok(close_guarded(out_qua, xs.to_vec(), atoms, body_guarded))
 }
 
-/// Mirror HS `closeGuarded :: Quantifier -> [LVar] -> [Atom] -> LGuarded -> LGuarded`.
-///
-/// Takes named LVars `xs`, parser-AST atoms `atoms`, and an already-built
-/// body `gf`.  Closes the binder:
-///   - Lifts each atom from `p::Atom` to `GAtom` (initially all Free).
-///   - Substitutes every Free LVar matching `xs[i]` with `Bound(k-1-i)` in
-///     the atoms (depth 0) and the body (depth-tracked through nested
-///     binders).
-///   - Strips the binder list down to `(name, sort)` pairs (`GBinding`).
-///
-/// HS:
-/// ```text
-///   closeGuarded qua vs as gf = ((case qua of Ex -> gex; All -> gall) vs' as' gf'
-///     where  as'   = map (substFreeAtom s . fmap (fmapTerm (fmap Free))) as
-///            gf'   = substFree s gf
-///            s     = zip (reverse vs) [0..]
-///            vs'   = map (lvarName &&& lvarSort) vs
-/// ```
-pub fn close_guarded(
-    qua: Quant,
-    xs: Vec<p::VarSpec>,
-    atoms: Vec<p::Atom>,
-    body: Guarded,
-) -> Guarded {
-    let close_s = close_subst(&xs);
-    let new_guards: Vec<GAtom> = atoms
-        .iter()
-        .map(|a| {
-            let ga = atom_to_gatom_free(a);
-            subst_free_atom_at_depth(&ga, &close_s, 0)
-        })
-        .collect();
-    let new_body = subst_free_guarded(&body, &close_s);
-    let vs: Vec<GBinding> = xs.iter().map(lvar_to_binding).collect();
-    match qua {
-        Quant::Ex => gex(vs, new_guards, new_body),
-        Quant::All => gall(vs, new_guards, new_body),
-    }
-}
-
-/// Split a conjunction of formulas, separating guard atoms (action /
-/// equality) from the remaining sub-formulas. Returns
-/// `(guard_atoms, other_subformulas)`.
-fn split_conj_actions_eqs(f: &p::Formula) -> (Vec<p::Atom>, Vec<p::Formula>) {
-    fn rec(f: &p::Formula, atoms: &mut Vec<p::Atom>, others: &mut Vec<p::Formula>) {
+/// HS `conjActionsEqs` (Guarded.hs:516-519): split a conjunction into the
+/// action and equality atoms that can guard a binder and the sub-formulas
+/// that cannot.  Each guarding atom is read over plain variables
+/// ([`bvar_to_lvar`], HS `Left $ bvarToLVar a`, Guarded.hs:517-518), which is
+/// what [`remaining_unguarded`] and [`close_guarded`] take.
+fn split_conj_actions_eqs(
+    f: &crate::formula::LNFormula,
+) -> (Vec<Atom<LNTerm>>, Vec<&crate::formula::LNFormula>) {
+    use crate::formula::{Connective, ProtoFormula};
+    fn rec<'a>(
+        f: &'a crate::formula::LNFormula,
+        atoms: &mut Vec<Atom<LNTerm>>,
+        others: &mut Vec<&'a crate::formula::LNFormula>,
+    ) {
         match f {
-            p::Formula::And(a, b) => {
+            ProtoFormula::Conn(Connective::And, a, b) => {
                 rec(a, atoms, others);
                 rec(b, atoms, others);
             }
-            p::Formula::Atom(p::Atom::Action(fact, t)) => {
-                atoms.push(p::Atom::Action(fact.clone(), t.clone()))
+            ProtoFormula::Atom(a @ (ProtoAtom::Action(_, _) | ProtoAtom::EqE(_, _))) => {
+                atoms.push(bvar_to_lvar(a))
             }
-            p::Formula::Atom(p::Atom::Eq(a, b)) => atoms.push(p::Atom::Eq(a.clone(), b.clone())),
-            other => others.push(other.clone()),
+            other => others.push(other),
         }
     }
     let mut atoms = Vec::new();
     let mut others = Vec::new();
     rec(f, &mut atoms, &mut others);
     (atoms, others)
-}
-
-/// Compute which of `xs` are NOT bound by any of `atoms`, as POSITIONS in
-/// `xs`. Mirrors Haskell's `remainingUnguarded` (Guarded.hs:523-533), whose
-/// `ug0 \\ frees ...` likewise preserves the prefix order of the survivors.
-/// Positions rather than variables so the caller can name each survivor from
-/// the parallel freshened prefix (see [`unguarded_error`]).
-///
-/// Variables are tracked by full [`VarKey`] identity, not by name: HS's
-/// working set is a `[LVar]` and `\\`/`intersect` use `Eq LVar`
-/// (name + sort + idx).  So under `All x. ... ==> All x.1 z. <x.1,z> = x`,
-/// the guard covers the binders `x.1` and `z` even though its right-hand
-/// side mentions the *outer* `x`, which is a different variable.
-fn remaining_unguarded(xs: &[p::VarSpec], atoms: &[p::Atom]) -> Vec<usize> {
-    let mut sorted_atoms: Vec<&p::Atom> = atoms.iter().collect();
-    // Action atoms first, then equalities.
-    sorted_atoms.sort_by_key(|a| match a {
-        p::Atom::Action(_, _) => 0,
-        _ => 1,
-    });
-    let mut unguarded: BTreeSet<VarKey> =
-        xs.iter().map(|v| var_key(&v.name, v.idx, v.sort)).collect();
-    for atom in &sorted_atoms {
-        match atom {
-            // HS `frees (a, fa)` over `GAction a fa`: the fact's arguments are
-            // message positions, the timepoint is a temporal one.
-            p::Atom::Action(fact, t) => {
-                let mut frees = Vec::new();
-                for arg in &fact.args {
-                    term_var_keys(arg, false, &mut frees);
-                }
-                term_var_keys(t, true, &mut frees);
-                for k in frees {
-                    unguarded.remove(&k);
-                }
-            }
-            p::Atom::Eq(s, t) => {
-                let mut sv = Vec::new();
-                let mut tv = Vec::new();
-                term_var_keys(s, false, &mut sv);
-                term_var_keys(t, false, &mut tv);
-                let s_covered = sv.iter().all(|k| !unguarded.contains(k));
-                let t_covered = tv.iter().all(|k| !unguarded.contains(k));
-                if s_covered {
-                    for k in tv {
-                        unguarded.remove(&k);
-                    }
-                } else if t_covered {
-                    for k in sv {
-                        unguarded.remove(&k);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    xs.iter()
-        .enumerate()
-        .filter(|(_, v)| unguarded.contains(&var_key(&v.name, v.idx, v.sort)))
-        .map(|(i, _)| i)
-        .collect()
-}
-
-/// Render HS `noUnguardedVars` (Guarded.hs:507-514) for the survivors at
-/// `positions` of the quantifier prefix.  The names come from `freshened` —
-/// the prefix as `openFormulaPrefix` renamed it — so a binder shadowing an
-/// already-opened one is reported as `x.1`, not `x`.
-fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError {
-    // HS: `map (quotes . text . show) unguarded` (Guarded.hs:507-514, see line 511) over
-    // `[LVar]`.  Each LVar is rendered by the EXPLICIT `instance Show LVar`
-    // (LTerm.hs:550-557): `show (LVar v s i) = sortPrefix s ++ body`, where
-    // `sortPrefix` (LTerm.hs:193-199) is "" (Msg) / "~" (Fresh) / "$" (Pub)
-    // / "#" (Node) / "%" (Nat), and `body` is `v` when `i == 0` else
-    // `v ++ "." ++ show i`.  `quotes` then single-quotes the result, so the
-    // rendered output is e.g. `'#i'` or `'x.5'` — NOT a bare `'name'`.
-    let show_lvar = |v: &p::VarSpec| -> String {
-        let prefix = match v.sort {
-            p::SortHint::Fresh | p::SortHint::Suffix(p::SuffixSort::Fresh) => "~",
-            p::SortHint::Pub | p::SortHint::Suffix(p::SuffixSort::Pub) => "$",
-            p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node) => "#",
-            p::SortHint::Nat | p::SortHint::Suffix(p::SuffixSort::Nat) => "%",
-            // Msg / Untagged / Suffix(Msg) => "" (LSortMsg has no prefix).
-            _ => "",
-        };
-        let body = if v.name.is_empty() {
-            v.idx.to_string()
-        } else if v.idx == 0 {
-            v.name.clone()
-        } else {
-            format!("{}.{}", v.name, v.idx)
-        };
-        format!("'{}{}'", prefix, body)
-    };
-    let names: Vec<String> = positions
-        .iter()
-        .map(|&i| show_lvar(&freshened[i]))
-        .collect();
-    err(format!(
-        "unguarded variable(s) {} in the subformula",
-        names.join(", ")
-    ))
 }
 
 // =============================================================================
@@ -1909,7 +1191,7 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
 ///
 /// Uniformly negates every atom by wrapping it in a universal
 /// guarded ⊥: "for all traces in which `a` holds, ⊥" ≡ ¬a. This
-/// is the right encoding for Less/Eq/Action/Last/Pred/Subterm alike,
+/// is the right encoding for Less/Eq/Action/Last/Subterm alike,
 /// independent of the term sort.
 ///
 /// Do NOT decompose ¬EqE / ¬Less into `gdisj [Less, Less]`, nor encode
@@ -1919,554 +1201,80 @@ fn unguarded_error(positions: &[usize], freshened: &[p::VarSpec]) -> GuardError 
 /// undefined between Msg/Fresh/Pub terms, and the Ex form is semantically
 /// False rather than ¬Action.  See `Guarded.hs:410-412` vs
 /// `Guarded.hs:618`.
-fn gnot_atom(a: &GAtom) -> Guarded {
+fn gnot_atom(a: &Atom<BLNTerm>) -> Guarded {
     Guarded::GGuarded {
-        qua: Quant::All,
-        vars: Vec::new().into(),
+        qua: Quantifier::All,
+        vars: EMPTY_VARS
+            .get_or_init(|| std::sync::Arc::from(Vec::new()))
+            .clone(),
         guards: vec![a.clone()].into(),
         body: std::sync::Arc::new(gfalse()),
     }
 }
 
 // =============================================================================
-// Top-level negation — port of Haskell's `gnot`.
+// Substitution of free variables
 // =============================================================================
 
-/// Substitution mapping a free LVar (keyed by `(name, idx)`) to a
-/// replacement parser-AST term.  Applied to `Guarded` formulas via
-/// `subst_guarded` (e.g. witness-LVar canonicalisation below).
+/// Copy-on-write application of an [`LNSubst`] to a locally-nameless term.
+/// HS `apply subst = (`bindTerm` applyBLLit)` with
+/// `applyBLLit (Var (Free v)) = maybe (lit l) (fmapTerm (fmap Free)) (imageOf subst v)`
+/// (SubstVFree.hs:297-302): a `Bound` leaf is left alone and every rebuilt
+/// application goes through `fApp`, so AC and `C` argument lists re-sort.
 ///
-/// Keyed by the *interned* `&'static str` name (see [`tamarin_term::intern`]):
-/// `LVar.name` is already interned, so LVar-sourced builds key with zero
-/// alloc, and the (rare, construction-time) parser-`VarSpec`-sourced inserts
-/// intern via `intern_str`.  The per-leaf *lookups* on the substitution-apply
-/// hot path (`subst_term` / `subst_gterm_cow`) do NOT intern: they probe with
-/// the borrowed [`VarSubstKey`], which hashes and compares by content exactly
-/// like the owned key — skipping the intern pool entirely (its probe plus the
-/// map's own hash cost ~3% of stateverif at 1 core, and its lock traffic
-/// ping-pongs across workers at 16).  Key equality is unchanged —
-/// `&str`/`String` both hash/compare by content — so the key set is identical
-/// to a `(String, u64)` map.
-///
-/// `IndexMap` (Fx-hashed) rather than a std `HashMap`: `IndexMap` supports
-/// the borrowed-key `Equivalent` probe above, and its iteration order is
-/// insertion order (deterministic).  Byte-safe: no `VarSubst` is ever
-/// iterated toward output — every consumer is a keyed
-/// `get`/`insert`/`is_empty`/`len` (the `subst_*` fns, `collect_witness_vars`,
-/// `match_atom_via_maude`), and the sole iteration (`combine_substs`' union) is
-/// order-independent in both its `Some`/`None` outcome and its resulting map.
-pub type VarSubst = indexmap::IndexMap<(&'static str, u64), p::Term, rustc_hash::FxBuildHasher>;
-
-/// Borrowed lookup key for [`VarSubst`]: probes by *content* so the
-/// substitution-apply leaves need not intern the leaf's name first.
-///
-/// Hash-consistency with the owned `(&'static str, u64)` key is by
-/// construction: the derived tuple `Hash` feeds `self.0.hash(state)` then
-/// `self.1.hash(state)`, and this impl performs the identical two calls on
-/// the identical value types (`&str`, `u64`), so equal content ⇒ equal hash
-/// under any hasher.  `Equivalent` compares the same two fields, so a probe
-/// hits exactly the entries the interned-key probe would.
-struct VarSubstKey<'a>(&'a str, u64);
-
-impl std::hash::Hash for VarSubstKey<'_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-        self.1.hash(state);
-    }
-}
-
-impl indexmap::Equivalent<(&'static str, u64)> for VarSubstKey<'_> {
-    fn equivalent(&self, key: &(&'static str, u64)) -> bool {
-        self.1 == key.1 && self.0 == key.0
-    }
-}
-
-/// Rewrite every Maude-witness LVar named `x` (any idx) to its canonical
-/// `idx == 0` form.  Used to dedup implied formulas in
-/// `insertImpliedFormulas` where Maude unification mints a fresh witness
-/// per call: two structurally-identical derivations from the same
-/// (restriction, action-node) pair would otherwise have different witness
-/// idx and bypass `Vec::contains`, causing solved_formulas to grow without
-/// bound and the simplify loop to never converge.
-///
-/// We touch ONLY witness vars (name == "x"), canonicalising their idx to 0
-/// while preserving name and sort — every other LVar (real protocol vars,
-/// distinct named fresh values) keeps its identity, so the dedup doesn't
-/// over-merge legitimately-distinct implications.
-pub fn normalize_witness_lvars(g: &Guarded) -> Guarded {
-    normalize_witness_lvars_cow(g).unwrap_or_else(|| g.clone())
-}
-
-/// Copy-on-write core of [`normalize_witness_lvars`]: returns `None` when `g`
-/// carries no `x`-named witness var (the common case — `collect_witness_vars` finds
-/// nothing) OR when the witness substitution touches no leaf
-/// (`subst_guarded_cow` returns `None`), so a caller can reuse `g` by move/borrow
-/// instead of cloning.  `Some(_)` is byte-identical to the eager rebuild.
-pub fn normalize_witness_lvars_cow(g: &Guarded) -> Option<Guarded> {
-    let mut subst: VarSubst = VarSubst::default();
-    collect_witness_vars(g, &mut subst);
-    if subst.is_empty() {
-        return None;
-    }
-    subst_guarded_cow(g, &subst)
-}
-
-/// Identity no-op on `Guarded`, kept so callers can express the intent of
-/// alpha-canonicalisation.  With HS-faithful DeBruijn bindings, alpha-equivalent
-/// formulas compare equal under structural `Eq` automatically — Bound vars carry
-/// no idx, so `Ex j:5. KU(s)@j:5` and `Ex j:6. KU(s)@j:6` both yield
-/// `GGuarded { vars: [(j, Node)], body: ... Bound(0) ... }` — so no rewriting is
-/// needed.  Called from `constraint::system` and `solver::reduction` to mark
-/// the spots where HS relied on its DeBruijn invariant.  `solver::simplify`
-/// deliberately skips it — see `implied_apply_canon_cow` in simplify.rs, which
-/// drops the call to save one identity `Guarded` clone.
-///
-/// Intentionally a no-op identity clone: faithful HS port marker.
-pub fn normalize_bound_lvars(g: &Guarded) -> Guarded {
-    g.clone()
-}
-
-/// Normalize equivalent sort hints so two `Guarded` formulas that
-/// differ ONLY by sort hint compare equal under `==`.
-///
-/// All of `SortHint::Msg`, `SortHint::Suffix(SuffixSort::Msg)`, and
-/// `SortHint::Untagged` map to `LSort::Msg` in elaboration (see
-/// `elaborate::sort_of`).  Implied-formula matching uses Maude →
-/// LNTerm → parser-AST round trips, where `lnterm_to_term` always
-/// produces the canonical `SortHint::Msg`/`Pub`/`Fresh`/`Node`/`Nat`
-/// form regardless of the original hint.  Formulas created by other
-/// paths (lemma re-instantiation, ginduct on the IH) may retain
-/// `Untagged` or suffix-style hints.  Without normalisation, two
-/// semantically-identical formulas compare unequal and the dedupe in
-/// `insert_formula` / `insert_implied_formulas_pass` lets
-/// duplicates accumulate.
-///
-/// Concretely: `RFID_Simple::Device_Init_Use_Set` was generating
-/// duplicate IH-Disjs at depth 2 — one with `sk:Msg` and one with
-/// `sk:Untagged`.
-pub fn normalize_sort_hints(g: &Guarded) -> Guarded {
-    use crate::guarded_types::normalise_msg_sort as norm_sort;
-    fn norm_binding(b: &GBinding) -> GBinding {
-        GBinding {
-            name: b.name.clone(),
-            sort: norm_sort(b.sort),
-        }
-    }
-    fn norm_bvar(b: &BVar) -> BVar {
-        match b {
-            BVar::Bound(n) => BVar::Bound(*n),
-            BVar::Free(v) => BVar::Free(p::VarSpec {
-                name: v.name.clone(),
-                idx: v.idx,
-                sort: norm_sort(v.sort),
-                typ: v.typ.clone(),
-            }),
-        }
-    }
-    fn norm_term(t: &GTerm) -> GTerm {
-        match t {
-            GTerm::Var(b) => GTerm::Var(norm_bvar(b)),
-            GTerm::App(n, args) => GTerm::App(n.clone(), args.iter().map(norm_term).collect()),
-            GTerm::Pair(args) => GTerm::Pair(args.iter().map(norm_term).collect()),
-            GTerm::AlgApp(n, a, b) => GTerm::AlgApp(n.clone(), ga(norm_term(a)), ga(norm_term(b))),
-            GTerm::Diff(a, b) => GTerm::Diff(ga(norm_term(a)), ga(norm_term(b))),
-            GTerm::BinOp(op, a, b) => GTerm::BinOp(*op, ga(norm_term(a)), ga(norm_term(b))),
-            GTerm::PatMatch(inner) => GTerm::PatMatch(ga(norm_term(inner))),
-            _ => t.clone(),
-        }
-    }
-    fn norm_fact(f: &GFact) -> GFact {
-        GFact {
-            persistent: f.persistent,
-            name: f.name.clone(),
-            args: f.args.iter().map(norm_term).collect(),
-            annotations: f.annotations.clone(),
-        }
-    }
-    fn norm_atom(a: &GAtom) -> GAtom {
-        match a {
-            GAtom::Action(f, t) => GAtom::Action(norm_fact(f), norm_term(t)),
-            GAtom::Eq(x, y) => GAtom::Eq(norm_term(x), norm_term(y)),
-            GAtom::Less(x, y) => GAtom::Less(norm_term(x), norm_term(y)),
-            GAtom::LessMset(x, y) => GAtom::LessMset(norm_term(x), norm_term(y)),
-            GAtom::Subterm(x, y) => GAtom::Subterm(norm_term(x), norm_term(y)),
-            GAtom::Last(t) => GAtom::Last(norm_term(t)),
-            GAtom::Pred(f) => GAtom::Pred(norm_fact(f)),
-        }
-    }
-    fn rec(g: &Guarded) -> Guarded {
-        match g {
-            Guarded::Atom(a) => Guarded::Atom(norm_atom(a)),
-            Guarded::Disj(items) => Guarded::Disj(items.iter().map(rec).collect()),
-            Guarded::Conj(items) => Guarded::Conj(items.iter().map(rec).collect()),
-            Guarded::GGuarded {
-                qua,
-                vars,
-                guards,
-                body,
-            } => Guarded::GGuarded {
-                qua: *qua,
-                vars: vars.iter().map(norm_binding).collect(),
-                guards: guards.iter().map(norm_atom).collect(),
-                body: std::sync::Arc::new(rec(body)),
-            },
-        }
-    }
-    rec(g)
-}
-
-/// Canonicalise AC-`BinOp` argument ordering inside a `Guarded` so two
-/// formulas differing only by AC permutation compare equal under `==`.
-///
-/// HS-faithful rationale.  HS represents formulas using LNTerm (which
-/// stores AC operators as flat sorted argument lists via `f_app_ac`).
-/// Every HS `mapFrees` / `apply` over LNTerm routes through `f_app_ac`,
-/// so AC heads stay in canonical sorted order after substitution.  Rust
-/// stores formulas in parser-AST `BinOp(op, l, r)` (strict arity-2), and
-/// `subst_term` / `subst_gterm_cow` recurse into the children without
-/// re-sorting.
-///
-/// After `rename_precise_system` renumbers free vars (e.g. `ekR.5 →
-/// ekR.0`, `ltkI.7 → ltkI.0`), the LVar `Ord` (`idx`-first ⇒
-/// `name`-only on ties) flips: an originally-sorted
-/// `Mult(ltkI.5, ekR.7)` (`ltkI < ekR` by idx) becomes a NOW-unsorted
-/// `Mult(ltkI.0, ekR.0)` (`ekR < ltkI` by name).  The PARSER-AST slots
-/// stay in original order — no re-sort happens.  Meanwhile a fresh
-/// implied-formula built via `lnterm_to_term`-of-`f_app_ac` output
-/// arrives in canonical sorted form (`Mult(ekR.0, ltkI.0)`).  Dedup via
-/// bare `==` (or via `apply_canon`'s witness/bound normalisation) then
-/// fails, and `insert_implied_formulas_pass` adds a structurally-
-/// duplicate formula on every subsequent `simplifySystem` call —
-/// breaking idempotency.
-///
-/// This pass mirrors HS's invariant explicitly: for every AC head
-/// (`Mult`, `Union`, `Xor`, `NatPlus`), flatten the binary chain into
-/// the full multiset, sort it via `cmp_term` (the existing HS-faithful
-/// parser-AST Ord), then re-fold into a right-leaning canonical
-/// `BinOp(op, x0, BinOp(op, x1, ...))`.  Two AC-permuted parser-AST
-/// representations of the same multiset collapse to the same shape.
-pub fn canonicalize_ac_in_guarded(g: &Guarded) -> Guarded {
-    canonicalize_ac_in_guarded_with(g, cmp_term)
-}
-
-/// Copy-on-write variant of [`canonicalize_ac_in_guarded`]: returns `None` when
-/// `g` is already AC-canonical (no AC subterm anywhere needed re-sorting), so a
-/// caller holding an OWNED `g` can reuse it by move instead of allocating a
-/// rebuilt deep copy.  `Some(_)` is byte-identical to the eager entry point.
-pub fn canonicalize_ac_in_guarded_cow(g: &Guarded) -> Option<Guarded> {
-    cac_rec_guarded_cow(g, cmp_term)
-}
-
-type GCmp = fn(&GTerm, &GTerm) -> std::cmp::Ordering;
-
-fn cac_rec_term(t: &GTerm, cmp: GCmp) -> GTerm {
-    // Wrapper: materialise the COW result, reusing `t` when nothing changed.
-    match cac_rec_term_cow(t, cmp) {
-        Some(g) => g,
-        None => t.clone(),
-    }
-}
-
-/// Copy-on-write core of `cac_rec_term`.  Returns `None` when the subtree is
-/// already in canonical form (no AC chain needed re-sorting and no descendant
-/// changed), so the caller can reuse the input `Arc` without allocating a
-/// rebuilt copy.  `Some(g)` carries the rebuilt subtree.
-///
-/// The produced canonical form is byte-identical to the eager version: every
-/// `None`-reuse path is gated on the recursive results being structurally
-/// unchanged, and the AC branch only returns `None` after confirming the
-/// re-folded sorted chain equals the input (`acc == *t`).
-fn cac_rec_term_cow(t: &GTerm, cmp: GCmp) -> Option<GTerm> {
+/// `None` when the substitution touches no leaf, so the caller can reuse its
+/// input.  A domain hit always changes the leaf, because a `Subst` drops the
+/// `x ~> x` mappings as it is built (SubstVFree.hs:163-165).
+fn subst_blnterm_cow(t: &BLNTerm, s: &LNSubst) -> Option<BLNTerm> {
     match t {
-        GTerm::Var(_)
-        | GTerm::PubLit(_)
-        | GTerm::FreshLit(_)
-        | GTerm::NatLit(_)
-        | GTerm::Number(_)
-        | GTerm::NumberOne
-        | GTerm::NatOne
-        | GTerm::DhNeutral => None,
-        // `em(a, b)` is the sole COMMUTATIVE (C) function symbol (EMap,
-        // bilinear pairing).  HS stores every C application in sorted-arg
-        // form: `fAppC nacsym as = FAPP (C nacsym) (sort as)` (Term/Term/Raw.hs:133-134;
-        // `fAppEMap (x,y) = fAppC EMap [x,y]`, Term/Term.hs:166-167, see line 167).  So in HS
-        // `em('P', x)` and `em(x, 'P')` are byte-identical, and the
-        // structural `S.member sSolvedFormulas` guard in `insertImpliedFormulas`
-        // always matches a re-derived instance against the solved one.
-        //
-        // The C-symbol `em` must be sorted here too, not just the AC
-        // operators (`Mult/Union/Xor/NatPlus`).  If `em` args are left in
-        // whatever order substitution produced them, then after a
-        // reuse-lemma's abstract key var `s` is bound (e.g.
-        // `s ↦ KDF(em('P', ini_share)^…)`), `substSolvedFormulas` rewrites
-        // the solved disjunction with one `em` arg order while a fresh
-        // `impliedFormulas` match against the `Secret('KEY', …)` action
-        // produces the other order — so the `solved_formulas` dedup fails
-        // and RS re-inserts (and re-solves) a disjunction HS had already
-        // discharged (idbased/BP_IBS bilinear divergence: extra
-        // `secrecy_session_key` reuse-lemma instance after `splitEqs`).
-        // Mirror HS: sort `em`'s two args so both sides canonicalise alike.
-        GTerm::App(n, args) if &**n == "em" && args.len() == 2 => {
-            let a2 = cac_rec_term(&args[0], cmp);
-            let b2 = cac_rec_term(&args[1], cmp);
-            let (first, second) = if cmp(&a2, &b2) != std::cmp::Ordering::Greater {
-                (a2, b2)
-            } else {
-                (b2, a2)
-            };
-            let sorted: std::sync::Arc<[GTerm]> = std::sync::Arc::from(vec![first, second]);
-            // Reuse the input only when the children were unchanged AND
-            // already in sorted order (byte-identical to the rebuilt form).
-            if sorted.as_ref() == args.as_ref() {
-                None
-            } else {
-                Some(GTerm::App(n.clone(), sorted))
-            }
+        Term::Lit(Lit::Var(BVar::Free(v))) => s.image_of(v).map(lift_free),
+        Term::Lit(_) => None,
+        Term::App(sym, args) => {
+            cow_map_vec(&args[..], |a| subst_blnterm_cow(a, s)).map(|new| f_app(*sym, new))
         }
-        GTerm::App(n, args) => cac_rec_slice(args, cmp).map(|new| GTerm::App(n.clone(), new)),
-        GTerm::Pair(args) => cac_rec_slice(args, cmp).map(GTerm::Pair),
-        GTerm::AlgApp(n, a, b) => {
-            cow_pair_arc(a, cac_rec_term_cow(a, cmp), b, cac_rec_term_cow(b, cmp))
-                .map(|(a, b)| GTerm::AlgApp(n.clone(), a, b))
-        }
-        GTerm::Diff(a, b) => cow_pair_arc(a, cac_rec_term_cow(a, cmp), b, cac_rec_term_cow(b, cmp))
-            .map(|(a, b)| GTerm::Diff(a, b)),
-        GTerm::BinOp(op, l, r) => {
-            if is_ac_binop(op) {
-                // Recurse into children first, then flatten the whole AC
-                // chain rooted here and rebuild in sorted multiset order.
-                let l2 = cac_rec_term(l, cmp);
-                let r2 = cac_rec_term(r, cmp);
-                let mut flat = Vec::new();
-                flatten_ac_binop(op, &l2, &mut flat);
-                flatten_ac_binop(op, &r2, &mut flat);
-                flat.sort_by(|x, y| cmp(x, y));
-                // Right-fold to a binary chain.  At least 2 args.
-                let mut iter = flat.into_iter().rev();
-                let last = iter.next().expect("AC BinOp always flattens to >=2 args");
-                let mut acc = last.clone();
-                for prev in iter {
-                    acc = GTerm::BinOp(*op, ga(prev.clone()), ga(acc));
-                }
-                // Reuse the input only if the canonical chain is byte-identical
-                // (children unchanged AND already sorted+right-leaning).
-                if acc == *t {
-                    None
-                } else {
-                    Some(acc)
-                }
-            } else {
-                cow_pair_arc(l, cac_rec_term_cow(l, cmp), r, cac_rec_term_cow(r, cmp))
-                    .map(|(l, r)| GTerm::BinOp(*op, l, r))
-            }
-        }
-        GTerm::PatMatch(inner) => cac_rec_term_cow(inner, cmp).map(|g| GTerm::PatMatch(ga(g))),
     }
 }
 
-/// COW over a slice of `Arc<[GTerm]>` children: returns `None` if every child
-/// is unchanged, else `Some` of the rebuilt slice (reusing unchanged children
-/// by cloning their `Arc`).  Single-pass: the output `Vec` is allocated lazily
-/// only when (and after) the first child changes.
-fn cac_rec_slice(args: &std::sync::Arc<[GTerm]>, cmp: GCmp) -> Option<std::sync::Arc<[GTerm]>> {
-    cow_map_arc(args, |a| cac_rec_term_cow(a, cmp))
-}
-
-// Copy-on-write canonicalisation, one level up from `cac_rec_term_cow`: each
-// `*_cow` returns `None` when nothing under it needed re-sorting, so an
-// all-unchanged formula propagates a single `None` to the root and the owned
-// caller reuses its input by move (no rebuild).  Every `Some(_)` materialises
-// EXACTLY what the eager rebuild produces (changed children rebuilt,
-// unchanged children cloned), so the output is byte-identical — the parity gate
-// verifies.  The lazy single-pass bookkeeping (clone the unchanged prefix on the
-// first change) lives once in `tamarin_utils::cow::{cow_map_arc, cow_pair}`.
-
-fn cac_rec_fact_cow(f: &GFact, cmp: GCmp) -> Option<GFact> {
-    cow_map_arc(&f.args, |a| cac_rec_term_cow(a, cmp)).map(|args| GFact {
-        persistent: f.persistent,
-        name: f.name.clone(),
-        args,
-        annotations: f.annotations.clone(),
-    })
-}
-
-/// COW of a GTerm pair: `None` when BOTH are unchanged.
-fn cac_pair_cow(x: &GTerm, y: &GTerm, cmp: GCmp) -> Option<(GTerm, GTerm)> {
-    cow_pair(x, cac_rec_term_cow(x, cmp), y, cac_rec_term_cow(y, cmp))
-}
-
-fn cac_rec_atom_cow(a: &GAtom, cmp: GCmp) -> Option<GAtom> {
+fn subst_gatom_cow(a: &Atom<BLNTerm>, s: &LNSubst) -> Option<Atom<BLNTerm>> {
     match a {
-        GAtom::Action(f, t) => cow_pair(f, cac_rec_fact_cow(f, cmp), t, cac_rec_term_cow(t, cmp))
-            .map(|(f, t)| GAtom::Action(f, t)),
-        GAtom::Eq(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| GAtom::Eq(a, b)),
-        GAtom::Less(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| GAtom::Less(a, b)),
-        GAtom::LessMset(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| GAtom::LessMset(a, b)),
-        GAtom::Subterm(x, y) => cac_pair_cow(x, y, cmp).map(|(a, b)| GAtom::Subterm(a, b)),
-        GAtom::Last(t) => cac_rec_term_cow(t, cmp).map(GAtom::Last),
-        GAtom::Pred(f) => cac_rec_fact_cow(f, cmp).map(GAtom::Pred),
+        ProtoAtom::EqE(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| ProtoAtom::EqE(a, b)),
+        ProtoAtom::Less(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| ProtoAtom::Less(a, b)),
+        ProtoAtom::Subterm(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| ProtoAtom::Subterm(a, b)),
+        ProtoAtom::Action(t, f) => cow_pair(t, subst_blnterm_cow(t, s), f, subst_gfact_cow(f, s))
+            .map(|(t, f)| ProtoAtom::Action(t, f)),
+        ProtoAtom::Last(t) => subst_blnterm_cow(t, s).map(ProtoAtom::Last),
+        ProtoAtom::Syntactic(_) => None,
     }
 }
 
-fn cac_rec_guarded_cow(g: &Guarded, cmp: GCmp) -> Option<Guarded> {
-    match g {
-        Guarded::Atom(a) => cac_rec_atom_cow(a, cmp).map(Guarded::Atom),
-        Guarded::Disj(items) => {
-            cow_map_arc(items, |i| cac_rec_guarded_cow(i, cmp)).map(Guarded::Disj)
-        }
-        Guarded::Conj(items) => {
-            cow_map_arc(items, |i| cac_rec_guarded_cow(i, cmp)).map(Guarded::Conj)
-        }
-        Guarded::GGuarded {
-            qua,
-            vars,
-            guards,
-            body,
-        } => cow_pair(
-            guards,
-            cow_map_arc(guards, |a| cac_rec_atom_cow(a, cmp)),
-            &**body,
-            cac_rec_guarded_cow(body, cmp),
-        )
-        .map(|(guards, body)| Guarded::GGuarded {
-            qua: *qua,
-            vars: vars.clone(),
-            guards,
-            body: std::sync::Arc::new(body),
-        }),
-    }
+fn subst_gpair_cow(x: &BLNTerm, y: &BLNTerm, s: &LNSubst) -> Option<(BLNTerm, BLNTerm)> {
+    cow_pair(x, subst_blnterm_cow(x, s), y, subst_blnterm_cow(y, s))
 }
 
-fn canonicalize_ac_in_guarded_with(g: &Guarded, cmp: GCmp) -> Guarded {
-    cac_rec_guarded_cow(g, cmp).unwrap_or_else(|| g.clone())
+fn subst_gfact_cow(f: &Fact<BLNTerm>, s: &LNSubst) -> Option<Fact<BLNTerm>> {
+    cow_map_arc(&f.terms, |a| subst_blnterm_cow(a, s)).map(|terms| f.with_terms(terms))
 }
 
-fn collect_witness_vars(g: &Guarded, out: &mut VarSubst) {
-    // The witness set is exactly the Free-leaf set that
-    // `for_each_free_var_in_guarded` enumerates (guards + body, all GAtom
-    // variants); we keep only the "x"-named leaves, canonicalising idx→0.
-    // `out` is keyed by (interned name, idx), so visitation order is
-    // irrelevant to the resulting map.
-    //
-    // Every accepted leaf has name == "x", so intern the key root once
-    // (loop-invariant hoist) instead of per leaf.
-    let x_name: &'static str = tamarin_term::intern::intern_str("x");
-    for_each_free_var_in_guarded(g, &mut |v| {
-        if v.name == "x" {
-            let canonical = p::VarSpec {
-                name: v.name.clone(),
-                idx: 0, // canonical idx
-                sort: v.sort,
-                typ: v.typ.clone(),
-            };
-            out.insert((x_name, v.idx), p::Term::Var(canonical));
-        }
-    });
-}
-
-/// Convert the eq-store's `Subst<Name, LVar>` to a parser-AST
-/// `VarSubst` so it can be applied to `Guarded` formulas.  Used to
-/// canonicalize implied formulas during `insertImpliedFormulas` dedup:
-/// Maude unification mints fresh witness LVars per call, so
-/// structurally-identical derivations would otherwise be treated as
-/// distinct entries.
-pub fn var_subst_from_eq_store(eq_store: &crate::tools::equation_store::EquationStore) -> VarSubst {
-    use crate::elaborate::lnterm_to_term;
-    use tamarin_term::lterm::LVar;
-    let mut out: VarSubst = VarSubst::default();
-    let pairs: Vec<(LVar, _)> = eq_store.subst.to_list();
-    for (lv, lt) in pairs {
-        // `lv.name` is already an interned `&'static str` — zero-alloc key.
-        out.insert((lv.name, lv.idx), lnterm_to_term(&lt));
-    }
-    out
-}
-
-pub fn subst_term(t: &p::Term, s: &VarSubst) -> p::Term {
-    use p::Term;
-    match t {
-        Term::Var(v) => {
-            // Content-keyed probe (`VarSubstKey`): no intern-pool traffic,
-            // no allocation — one hash of the (name, idx) pair.
-            if let Some(target) = s.get(&VarSubstKey(&v.name, v.idx)) {
-                target.clone()
-            } else {
-                Term::Var(v.clone())
-            }
-        }
-        Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::NatOne
-        | Term::DhNeutral => t.clone(),
-        Term::App(name, args) => Term::App(
-            name.clone(),
-            args.iter().map(|a| subst_term(a, s)).collect(),
-        ),
-        Term::AlgApp(name, a, b) => Term::AlgApp(
-            name.clone(),
-            Box::new(subst_term(a, s)),
-            Box::new(subst_term(b, s)),
-        ),
-        Term::Pair(items) => Term::Pair(items.iter().map(|i| subst_term(i, s)).collect()),
-        Term::Diff(a, b) => Term::Diff(Box::new(subst_term(a, s)), Box::new(subst_term(b, s))),
-        Term::BinOp(op, a, b) => {
-            Term::BinOp(*op, Box::new(subst_term(a, s)), Box::new(subst_term(b, s)))
-        }
-        Term::PatMatch(t) => Term::PatMatch(Box::new(subst_term(t, s))),
-    }
-}
-
-/// Apply a `VarSubst` to a parser-AST fact.
-pub fn subst_fact(f: &p::Fact, s: &VarSubst) -> p::Fact {
-    p::Fact {
-        args: f.args.iter().map(|a| subst_term(a, s)).collect(),
-        ..f.clone()
-    }
-}
-
-/// Apply a `VarSubst` to a parser-AST atom.
-pub fn subst_atom(a: &p::Atom, s: &VarSubst) -> p::Atom {
-    use p::Atom;
-    match a {
-        Atom::Eq(x, y) => Atom::Eq(subst_term(x, s), subst_term(y, s)),
-        Atom::Less(x, y) => Atom::Less(subst_term(x, s), subst_term(y, s)),
-        Atom::LessMset(x, y) => Atom::LessMset(subst_term(x, s), subst_term(y, s)),
-        Atom::Subterm(x, y) => Atom::Subterm(subst_term(x, s), subst_term(y, s)),
-        Atom::Action(f, t) => Atom::Action(subst_fact(f, s), subst_term(t, s)),
-        Atom::Last(t) => Atom::Last(subst_term(t, s)),
-        Atom::Pred(f) => Atom::Pred(subst_fact(f, s)),
-    }
-}
-
-/// Apply a `VarSubst` to a guarded formula. Substitutes through
-/// guards, body, and every nested term/atom — but only Free LVar
-/// leaves (Bound vars are positional and cannot collide).
+/// Apply an [`LNSubst`] to a guarded formula: each free leaf in the domain
+/// takes its image, guards and body alike.  A `Bound` leaf is positional and
+/// carries no variable identity, so a binder cannot capture an image variable.
 ///
-/// With HS-faithful DeBruijn bindings, no capture-avoidance dance is
-/// needed: Bound vars carry no LVar idx, so a free-var substitution
-/// cannot accidentally capture them.
-/// Mirrors HS `applySkGuarded subst = mapGuardedAtoms (const $ apply subst)`.
-pub fn subst_guarded(g: &Guarded, s: &VarSubst) -> Guarded {
+/// HS `instance Apply LNSubst LNGuarded`: `apply subst = mapGuardedAtoms
+/// (const $ apply subst)` (Guarded.hs:393-394).
+pub fn subst_guarded(g: &Guarded, s: &LNSubst) -> Guarded {
     if s.is_empty() {
         return g.clone();
     }
-    subst_guarded_inner(g, s)
-}
-
-fn subst_guarded_inner(g: &Guarded, s: &VarSubst) -> Guarded {
     subst_guarded_cow(g, s).unwrap_or_else(|| g.clone())
 }
 
-/// Copy-on-write core of `subst_guarded_inner`: returns `None` when the
-/// substitution touches no Free leaf anywhere in `g` (and no `mk_gpair` flatten
-/// fires), so a caller can reuse `g` instead of deep-rebuilding the whole
-/// connective tree.  One level up from `subst_gterm_cow`, mirroring its shape;
-/// every `Some(_)` is byte-identical to the eager rebuild (changed children
-/// rebuilt, unchanged children cloned, in positional order).
-pub fn subst_guarded_cow(g: &Guarded, s: &VarSubst) -> Option<Guarded> {
+/// Copy-on-write core of [`subst_guarded`]: returns `None` when the
+/// substitution touches no free leaf anywhere in `g`, so a caller can reuse
+/// `g` instead of deep-rebuilding the whole connective tree.  One level up
+/// from `subst_blnterm_cow`, mirroring its shape; every `Some(_)` is
+/// byte-identical to the eager rebuild (changed children rebuilt, unchanged
+/// children cloned, in positional order).
+pub fn subst_guarded_cow(g: &Guarded, s: &LNSubst) -> Option<Guarded> {
     match g {
         Guarded::Atom(a) => subst_gatom_cow(a, s).map(Guarded::Atom),
         Guarded::Disj(items) => cow_map_arc(items, |i| subst_guarded_cow(i, s)).map(Guarded::Disj),
@@ -2491,234 +1299,96 @@ pub fn subst_guarded_cow(g: &Guarded, s: &VarSubst) -> Option<Guarded> {
     }
 }
 
-/// Substitute Free LVar leaves in a `GAtom`.  Replacement targets are
-/// parser-AST terms (`p::Term`), which we lift to `GTerm` with all-Free
-/// leaves — those Free LVars are at the system's top-level scope and
-/// cannot collide with any binder.
-fn subst_gatom_cow(a: &GAtom, s: &VarSubst) -> Option<GAtom> {
-    match a {
-        GAtom::Eq(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| GAtom::Eq(a, b)),
-        GAtom::Less(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| GAtom::Less(a, b)),
-        GAtom::LessMset(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| GAtom::LessMset(a, b)),
-        GAtom::Subterm(x, y) => subst_gpair_cow(x, y, s).map(|(a, b)| GAtom::Subterm(a, b)),
-        GAtom::Action(f, t) => cow_pair(f, subst_gfact_cow(f, s), t, subst_gterm_cow(t, s))
-            .map(|(f, t)| GAtom::Action(f, t)),
-        GAtom::Last(t) => subst_gterm_cow(t, s).map(GAtom::Last),
-        GAtom::Pred(f) => subst_gfact_cow(f, s).map(GAtom::Pred),
-    }
-}
-
-fn subst_gpair_cow(x: &GTerm, y: &GTerm, s: &VarSubst) -> Option<(GTerm, GTerm)> {
-    cow_pair(x, subst_gterm_cow(x, s), y, subst_gterm_cow(y, s))
-}
-
-/// Substitute Free LVar leaves in a `GFact`.
-fn subst_gfact_cow(f: &GFact, s: &VarSubst) -> Option<GFact> {
-    cow_map_arc(&f.args, |a| subst_gterm_cow(a, s)).map(|args| GFact {
-        persistent: f.persistent,
-        name: f.name.clone(),
-        args,
-        annotations: f.annotations.clone(),
-    })
-}
-
-/// Copy-on-write substitution of Free LVar leaves in a `GTerm`.  Returns `None` when the subtree
-/// contains no variable in the substitution's domain (so no leaf is replaced
-/// and no `mk_gpair` flattening can fire), letting the caller reuse the input
-/// `Arc` without rebuilding.  `Some(g)` carries the rebuilt subtree.
+/// Rewrite every Maude-witness LVar named `x` (any idx) to its canonical
+/// `idx == 0` form.  Used to dedup implied formulas in
+/// `insertImpliedFormulas` where Maude unification mints a fresh witness
+/// per call: two structurally-identical derivations from the same
+/// (restriction, action-node) pair would otherwise have different witness
+/// idx and bypass `Vec::contains`, causing solved_formulas to grow without
+/// bound and the simplify loop to never converge.
 ///
-/// Faithfulness: the result is byte-identical to a full rebuild that maps
-/// every leaf and re-runs `mk_gpair` at every `Pair` node.
-/// - A `None`-reuse on `App`/`AlgApp`/`Diff`/`BinOp`/`PatMatch` is gated on
-///   every child returning `None`, i.e. no substitution touched the subtree.
-/// - The `Pair` case is the delicate one: `mk_gpair` flattens a *trailing*
-///   `Pair` child even under an empty-effect substitution.  So `None` comes
-///   back only when no child changed AND the input's last element is not a
-///   `Pair` (i.e. it is already in `mk_gpair`-canonical form, hence
-///   `mk_gpair(items) == *t`).  When any child changed, or the tail is a
-///   `Pair`, `mk_gpair` runs.
-fn subst_gterm_cow(t: &GTerm, s: &VarSubst) -> Option<GTerm> {
-    match t {
-        GTerm::Var(BVar::Free(v)) => {
-            // Content-keyed probe (`VarSubstKey`): no intern-pool traffic,
-            // no allocation — one hash of the (name, idx) pair.
-            match s.get(&VarSubstKey(&v.name, v.idx)) {
-                None => None,
-                // Value-equality COW, mirroring the term side's compare-based
-                // COW (`map_free_term_cow` in lterm.rs, `if &nl != l`):
-                // a hit whose replacement reproduces THIS exact leaf reports
-                // `None` so the caller reuses the input instead of rebuilding.
-                // `term_to_gterm_free(t) == GTerm::Var(BVar::Free(v))` holds
-                // iff `t` is a `Var(spec)` with `spec == v` AND the nullary-fun
-                // guard does not fire (that guard lifts the leaf to `App`).  A
-                // replacement that normalises spelling (Untagged→Msg sort, or
-                // `typ` dropped) compares unequal and rebuilds, so the leaf
-                // canonicalisation of `term_to_gterm_free` is preserved.
-                Some(p::Term::Var(spec))
-                    if spec == v
-                        && !(matches!(spec.sort, p::SortHint::Untagged)
-                            && spec.idx == 0
-                            && crate::elaborate::is_user_nullary_fun(&spec.name)) =>
-                {
-                    None
-                }
-                Some(t) => Some(term_to_gterm_free(t)),
-            }
-        }
-        GTerm::Var(_)
-        | GTerm::PubLit(_)
-        | GTerm::FreshLit(_)
-        | GTerm::NatLit(_)
-        | GTerm::Number(_)
-        | GTerm::NumberOne
-        | GTerm::NatOne
-        | GTerm::DhNeutral => None,
-        GTerm::App(n, args) => subst_gterm_slice(args, s).map(|new| GTerm::App(n.clone(), new)),
-        GTerm::AlgApp(n, a, b) => cow_pair_arc(a, subst_gterm_cow(a, s), b, subst_gterm_cow(b, s))
-            .map(|(a, b)| GTerm::AlgApp(n.clone(), a, b)),
-        // Canonicalise via `mk_gpair`: substituting a pair-valued var into a
-        // tuple tail (`<..,matchingComm>` with `matchingComm := <a,b>`) would
-        // otherwise leave a non-canonical `Pair([..,Pair([a,b])])` that no
-        // longer structurally matches the flat form produced by the
-        // `impliedFormulas`/LNTerm path — defeating the `solved_formulas`
-        // dedup and re-deriving discharged disjunctions.  See `mk_gpair`.
-        GTerm::Pair(items) => {
-            // `mk_gpair` flattens a trailing `Pair` even under an
-            // empty-effect substitution.  Reuse the input (`None`) only if
-            // nothing changed AND it is already `mk_gpair`-canonical (tail
-            // not a `Pair`).  Otherwise materialise the full child list and
-            // run `mk_gpair`.  Single-pass: allocate the rebuild `Vec`
-            // lazily on the first changed child.
-            let mut out: Option<Vec<GTerm>> = None;
-            for (i, it) in items.iter().enumerate() {
-                match subst_gterm_cow(it, s) {
-                    Some(g) => out.get_or_insert_with(|| items[..i].to_vec()).push(g),
-                    None => {
-                        if let Some(v) = out.as_mut() {
-                            v.push(it.clone());
-                        }
-                    }
-                }
-            }
-            match out {
-                Some(rebuilt) => Some(crate::guarded_types::mk_gpair(rebuilt)),
-                None => {
-                    // No child changed.  Flatten only if the tail is a `Pair`.
-                    if matches!(items.last(), Some(GTerm::Pair(_))) {
-                        Some(crate::guarded_types::mk_gpair(items.to_vec()))
-                    } else {
-                        None
-                    }
-                }
-            }
-        }
-        GTerm::Diff(a, b) => cow_pair_arc(a, subst_gterm_cow(a, s), b, subst_gterm_cow(b, s))
-            .map(|(a, b)| GTerm::Diff(a, b)),
-        GTerm::BinOp(op, a, b) => cow_pair_arc(a, subst_gterm_cow(a, s), b, subst_gterm_cow(b, s))
-            .map(|(a, b)| GTerm::BinOp(*op, a, b)),
-        GTerm::PatMatch(inner) => subst_gterm_cow(inner, s).map(|g| GTerm::PatMatch(ga(g))),
+/// We touch ONLY witness vars (name == "x"), canonicalising their idx to 0
+/// while preserving name and sort — every other LVar (real protocol vars,
+/// distinct named fresh values) keeps its identity, so the dedup doesn't
+/// over-merge legitimately-distinct implications.
+///
+/// Copy-on-write: returns `None` when `g` carries no `x`-named witness var
+/// with a non-zero idx (the common case — [`collect_witness_vars`] finds
+/// nothing) OR when the witness substitution touches no leaf
+/// (`subst_guarded_cow` returns `None`), so a caller can reuse `g` by
+/// move/borrow instead of cloning.
+pub fn normalize_witness_lvars_cow(g: &Guarded) -> Option<Guarded> {
+    let subst = collect_witness_vars(g);
+    if subst.is_empty() {
+        return None;
     }
+    subst_guarded_cow(g, &subst)
 }
 
-/// COW over an `Arc<[GTerm]>` argument slice: `None` if every child is
-/// unchanged, else `Some` of the rebuilt slice (unchanged children reuse their
-/// `Arc`).  Used by the non-`Pair` n-ary case (`App`), which never flattens.
-/// Single-pass: the output `Vec` is allocated lazily on first change.
-fn subst_gterm_slice(
-    args: &std::sync::Arc<[GTerm]>,
-    s: &VarSubst,
-) -> Option<std::sync::Arc<[GTerm]>> {
-    cow_map_arc(args, |a| subst_gterm_cow(a, s))
+/// The `x`-named free leaves of `g`, each mapped to its own `idx == 0` form.
+///
+/// The witness set is exactly the free-leaf set `HasFrees` enumerates
+/// (guards + body, all atom variants).  Keying by the whole `LVar` gives two
+/// leaves that share a name and an index but differ in sort their own
+/// canonical images, so visitation order is irrelevant to the result.
+fn collect_witness_vars(g: &Guarded) -> LNSubst {
+    let mut out: std::collections::BTreeMap<LVar, LNTerm> = std::collections::BTreeMap::new();
+    g.for_each_free(&mut |v| {
+        if v.name == "x" {
+            out.insert(*v, var_term(LVar::new(v.name, v.sort, 0)));
+        }
+    });
+    LNSubst::from_map(out)
 }
 
-/// Read-only visitor over every `BVar::Free` leaf of a guarded formula,
-/// covering the identical leaf set that `map_lvars_in_guarded` remaps
-/// (walk Disj/Conj/GGuarded, hit each Free leaf in guards + body). The
-/// single free-var fold shared by [`max_var_idx`]/[`min_var_idx`] so the
-/// idx-bound walks stay in lockstep with the freshen/shift mapper without
-/// rebuilding the tree.
-pub fn for_each_free_var_in_guarded<F: FnMut(&p::VarSpec)>(g: &Guarded, f: &mut F) {
-    fn rec_term<F: FnMut(&p::VarSpec)>(t: &GTerm, f: &mut F) {
-        match t {
-            GTerm::Var(BVar::Free(v)) => f(v),
-            GTerm::Var(BVar::Bound(_)) => {}
-            GTerm::App(_, args) | GTerm::Pair(args) => {
-                for a in args.iter() {
-                    rec_term(a, f);
-                }
-            }
-            GTerm::AlgApp(_, a, b) | GTerm::Diff(a, b) | GTerm::BinOp(_, a, b) => {
-                rec_term(a, f);
-                rec_term(b, f);
-            }
-            GTerm::PatMatch(t) => rec_term(t, f),
-            _ => {}
-        }
-    }
-    fn rec_atom<F: FnMut(&p::VarSpec)>(a: &GAtom, f: &mut F) {
-        match a {
-            GAtom::Eq(x, y) | GAtom::Less(x, y) | GAtom::LessMset(x, y) | GAtom::Subterm(x, y) => {
-                rec_term(x, f);
-                rec_term(y, f);
-            }
-            GAtom::Action(fa, t) => {
-                for arg in fa.args.iter() {
-                    rec_term(arg, f);
-                }
-                rec_term(t, f);
-            }
-            GAtom::Last(t) => rec_term(t, f),
-            GAtom::Pred(fa) => {
-                for a in fa.args.iter() {
-                    rec_term(a, f);
-                }
-            }
-        }
-    }
-    fn rec<F: FnMut(&p::VarSpec)>(g: &Guarded, f: &mut F) {
-        match g {
-            Guarded::Atom(a) => rec_atom(a, f),
+// =============================================================================
+// Free variables
+// =============================================================================
+
+/// HS `instance HasFrees (Guarded (String, LSort) c LVar)`
+/// (Guarded.hs:272-276): `foldFrees f = foldMap (foldFrees f)` over the
+/// `Foldable` instance (Guarded.hs:259-263) and `mapFrees f =
+/// traverseGuarded (mapFrees f)` — atoms in tree order, `GGuarded` guards
+/// before body, the binder list left alone.
+///
+/// The `monotone` flag is ignored: `traverseGuarded` rebuilds every term with
+/// `traverseTerm`, which is `fApp`-based unconditionally
+/// (Guarded.hs:265-268, Raw.hs:210-213), unlike `mapFrees` for a bare `Term`
+/// (LTerm.hs:788-791).  So a rename re-sorts every AC and `C` argument list
+/// under the mapped variables, whichever map mode the caller asked for.
+impl HasFrees for Guarded {
+    fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
+        match self {
+            Guarded::Atom(a) => fold_atom(a, &mut |t| t.for_each_free(f)),
             Guarded::Disj(xs) | Guarded::Conj(xs) => {
                 for x in xs.iter() {
-                    rec(x, f);
+                    x.for_each_free(f);
                 }
             }
             Guarded::GGuarded { guards, body, .. } => {
-                // Bindings carry no idx in the DeBruijn representation.
                 for a in guards.iter() {
-                    rec_atom(a, f);
+                    fold_atom(a, &mut |t| t.for_each_free(f));
                 }
-                rec(body, f);
+                body.for_each_free(f);
             }
         }
     }
-    rec(g, f);
+
+    fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, _monotone: bool) -> Self {
+        map_guarded_atoms(&self, &mut |_d, a| {
+            map_atom(a, &mut |t| {
+                map_lits(t, &mut |l| match l {
+                    Lit::Var(BVar::Free(v)) => Lit::Var(BVar::Free(f(*v))),
+                    other => other.clone(),
+                })
+            })
+        })
+    }
 }
 
-/// Find the maximum variable idx used in a guarded formula. Used
-/// to allocate fresh indices without collisions.
-pub fn max_var_idx(g: &Guarded) -> u64 {
-    let mut m = 0u64;
-    for_each_free_var_in_guarded(g, &mut |v: &p::VarSpec| {
-        if v.idx > m {
-            m = v.idx;
-        }
-    });
-    m
-}
-
-/// Minimum idx over all `BVar::Free` leaves of a guarded formula, or
-/// `None` when the formula has no free variables.  The min-side twin of
-/// [`max_var_idx`] — needed by HS `boundsVarIdx` mirrors (LTerm.hs:674-675
-/// folds frees with `minMaxSingleton`), e.g. the `matchToGoal`
-/// whole-source `rename` rebase in `sources.rs`.
-pub fn min_var_idx(g: &Guarded) -> Option<u64> {
-    let mut m: Option<u64> = None;
-    for_each_free_var_in_guarded(g, &mut |v: &p::VarSpec| {
-        m = Some(m.map_or(v.idx, |c| c.min(v.idx)));
-    });
-    m
-}
+// =============================================================================
+// Top-level negation — port of Haskell's `gnot`.
+// =============================================================================
 
 /// `gnot`: structural negation of a guarded formula.
 ///   - `Atom a`        → `gnot_atom a`
@@ -2743,13 +1413,13 @@ pub fn gnot(g: &Guarded) -> Guarded {
         //   go (GGuarded All ss as gf) = gex  ss as (go gf)
         //   go (GGuarded Ex  ss as gf) = gall ss as (go gf)
         Guarded::GGuarded {
-            qua: Quant::All,
+            qua: Quantifier::All,
             vars,
             guards,
             body,
         } => gex(vars.to_vec(), guards.to_vec(), gnot(body)),
         Guarded::GGuarded {
-            qua: Quant::Ex,
+            qua: Quantifier::Ex,
             vars,
             guards,
             body,
@@ -2790,7 +1460,7 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
             }
             Ok(all)
         }
-        Guarded::GGuarded { qua, .. } => Ok(matches!(qua, Quant::All)),
+        Guarded::GGuarded { qua, .. } => Ok(matches!(qua, Quantifier::All)),
     }
 }
 
@@ -2800,7 +1470,7 @@ pub fn contains_action(g: &Guarded) -> bool {
     match g {
         // Haskell `containsAction = foldGuarded (const True) ...`
         // (Guarded.hs:636-637): the bare-atom handler is `const True`, so
-        // EVERY atom (Action/Eq/Less/Last/Subterm/Pred) yields True — not
+        // EVERY atom (Action/Eq/Less/Last/Subterm) yields True — not
         // only Action atoms.
         Guarded::Atom(_) => true,
         Guarded::Disj(xs) | Guarded::Conj(xs) => xs.iter().any(contains_action),
@@ -2809,16 +1479,6 @@ pub fn contains_action(g: &Guarded) -> bool {
             !guards.is_empty() || contains_action(body)
         }
     }
-}
-
-/// Is `g` closed (no free variables)?
-fn is_closed(g: &Guarded) -> bool {
-    free_vars(g).is_empty()
-}
-
-/// Test whether an atom is a `Last(_)` predicate.
-fn is_last_atom(a: &GAtom) -> bool {
-    matches!(a, GAtom::Last(_))
 }
 
 /// `toInductionHypothesis`: rewrite a doubly guarded formula into its
@@ -2831,7 +1491,7 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
             guards,
             body,
         } => {
-            if guards.iter().any(is_last_atom) {
+            if guards.iter().any(Atom::is_last) {
                 return Err("formula not last-free".to_string());
             }
             let body2 = to_induction_hypothesis(body)?;
@@ -2853,22 +1513,17 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
                 .iter()
                 .rev()
                 .enumerate()
-                .filter(|(_, v)| {
-                    matches!(
-                        v.sort,
-                        p::SortHint::Node | p::SortHint::Suffix(p::SuffixSort::Node)
-                    )
-                })
-                .map(|(j, _)| Guarded::Atom(GAtom::Last(GTerm::Var(BVar::Bound(j as u32)))))
+                .filter(|(_, v)| v.1 == LSort::Node)
+                .map(|(j, _)| Guarded::Atom(ProtoAtom::Last(var_term(BVar::Bound(j as u64)))))
                 .collect();
             match qua {
-                Quant::All => {
+                Quantifier::All => {
                     // gex ss as (gconj (map gnotAtom lastAtos ++ [gf']))
                     let mut items: Vec<Guarded> = last_atos.iter().map(gnot).collect();
                     items.push(body2);
                     Ok(gex(vars.to_vec(), guards.to_vec(), gconj(items)))
                 }
-                Quant::Ex => {
+                Quantifier::Ex => {
                     // gall ss as (gdisj (map GAto lastAtos ++ [gf']))
                     let mut items = last_atos;
                     items.push(body2);
@@ -2876,14 +1531,14 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
                 }
             }
         }
-        Guarded::Atom(GAtom::Less(i, j)) => Ok(Guarded::Disj(
+        Guarded::Atom(ProtoAtom::Less(i, j)) => Ok(Guarded::Disj(
             vec![
-                Guarded::Atom(GAtom::Eq(i.clone(), j.clone())),
-                Guarded::Atom(GAtom::Less(j.clone(), i.clone())),
+                Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
+                Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
             ]
             .into(),
         )),
-        Guarded::Atom(GAtom::Last(_)) => Err("formula not last-free".to_string()),
+        Guarded::Atom(ProtoAtom::Last(_)) => Err("formula not last-free".to_string()),
         Guarded::Atom(a) => Ok(gnot_atom(a)),
         Guarded::Disj(xs) => {
             let xs2 = xs
@@ -2920,24 +1575,6 @@ pub fn ginduct(g: &Guarded) -> Result<(Guarded, Guarded), String> {
     let base_case = gtf(base);
     let step_case = gconj(vec![g.clone(), gf_ih]);
     Ok((base_case, step_case))
-}
-
-/// Apply a `VarSpec → VarSpec` transformation to every FREE variable
-/// reference in a `Guarded` formula.  Variables bound by an enclosing
-/// `GGuarded` are NOT passed to `f` — they stay verbatim.  Used by
-/// `freshen_system_keep_with_shift` (sources.rs) to shift free-var
-/// idxs in stored formulas / solved_formulas / lemmas alongside the
-/// rest of the system, mirroring Haskell's uniform `mapFrees`
-/// (Theory/Constraint/System.hs:1863-1877) which traverses ALL 13 system fields.
-pub fn map_lvars_in_guarded<F>(g: &Guarded, mut f: F) -> Guarded
-where
-    F: FnMut(&p::VarSpec) -> p::VarSpec,
-{
-    // With DeBruijn bindings, only `BVar::Free` leaves carry an LVar
-    // identity — `Bound` is positional and skipped automatically.
-    // No bound-set tracking needed; the depth handed by the combinator is
-    // irrelevant here since `map_free_atom` rewrites Free leaves in place.
-    map_guarded_atoms(g, &mut |_d, a| map_free_atom(a, &mut f))
 }
 
 // =============================================================================

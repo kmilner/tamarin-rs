@@ -18,11 +18,12 @@
 //! (`tamarin-prover` at the submodule pin, plain no-prove render).
 
 use tamarin_parser::parse_theory;
-use tamarin_theory::guarded::formula_to_guarded;
+use tamarin_theory::elaborate::formula_to_guarded_parsed;
 
 /// Convert lemma `name` of `theory` and return the rejection's first line.
 fn unguarded_message(theory: &str, name: &str) -> String {
     let parsed = parse_theory(theory, &[]).expect("theory parses");
+    let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("theory elaborates");
     let lemma = parsed
         .items
         .iter()
@@ -31,7 +32,7 @@ fn unguarded_message(theory: &str, name: &str) -> String {
             _ => None,
         })
         .unwrap_or_else(|| panic!("lemma `{}` present", name));
-    formula_to_guarded(&lemma.formula)
+    formula_to_guarded_parsed(&lemma.formula, &elaborated.signature)
         .expect_err("formula is unguardable")
         .message
 }

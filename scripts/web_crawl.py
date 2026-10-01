@@ -16,7 +16,8 @@ Deterministic click-through crawl:
 
 Writes a JSON manifest {norm_url: {kind, status, body}} keyed by
 idx-normalized URL, for web_diff.py to compare across HS and RS, stamped with
-the `PLAN_VERSION` of the crawl plan that produced it.
+the `PLAN_VERSION` and work directory of the crawl that produced it. The latter
+lets comparison remove exact staged paths even when WEB_WORK_ROOT is custom.
 
 Pure stdlib (urllib, json, re).  Usage:
   web_crawl.py BASE_URL OUT_MANIFEST.json [--max-nodes N]
@@ -28,9 +29,10 @@ import sys
 import time
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from web_normalize import norm_url_key  # noqa: E402
+from web_url_key import norm_url_key  # noqa: E402
 
 # Per-request timeout.  60s was too small for legitimately-slow autoproves
 # (Yubikey slightly_weaker_invariant, eccDAA, opc_ua) — a capped autoprove
@@ -40,16 +42,12 @@ from web_normalize import norm_url_key  # noqa: E402
 TIMEOUT = int(os.environ.get("WEB_CRAWL_TIMEOUT", "120"))
 MAX_NODES_DEFAULT = int(os.environ.get("WEB_CRAWL_MAX_NODES", "400"))
 
-# Version of the URL PLAN below, stamped into every manifest under
-# PLAN_VERSION_KEY (a top-level sibling of "manifest", never a URL row).
+# Capture contract, stamped into each manifest under PLAN_VERSION_KEY.
 # v2 = statics + source cases + per-lemma roots/next/prev + autoprove + sitemap ×4 variants.
-# web_parity.sh's HS manifest cache is keyed on sha256(theory) alone, which
-# cannot see a plan that has GROWN — an old manifest's unvisited URL families
-# read as MISSING_HS rows rather than as a cache miss.  Bump this whenever the
-# plan adds URLs; web_parity.sh then re-crawls each cached file on next use.
-# Dropping URLs from the plan needs no bump: a cached manifest is then a
-# superset, and web_diff.py drops the unpaired rows (the graph-route 0/0
-# probes) before pairing.
+# Bump for changes to captured content: routes, decoding, redirect/error handling,
+# or ordering of stateful requests. Timing and scheduling of independent reads
+# do not require a bump. The web cache uses this version rather than source
+# bytes; live source fingerprints still reject edits during an active gate.
 PLAN_VERSION = 2
 PLAN_VERSION_KEY = "__plan_version__"
 
@@ -59,15 +57,13 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None  # don't follow; we want to see the 3xx
 
 
-_OPENER = urllib.request.build_opener(NoRedirect)
-
-
 def http_get(base, path):
     """Return (status, content_type, body_text)."""
     url = base + path
     req = urllib.request.Request(url, method="GET")
     try:
-        with _OPENER.open(req, timeout=TIMEOUT) as r:
+        # An opener owns handler state; don't share it between fetch threads.
+        with urllib.request.build_opener(NoRedirect).open(req, timeout=TIMEOUT) as r:
             ct = r.headers.get("Content-Type", "")
             body = r.read().decode("utf-8", "replace")
             return r.status, ct, body
@@ -116,12 +112,25 @@ def hrefs(body):
     return re.findall(r'href="([^"]*)"', body)
 
 
+def fetch_pages(base, paths, workers):
+    """Fetch read-only pages in bounded batches, yielding in sitemap order."""
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for offset in range(0, len(paths), workers):
+            batch = paths[offset:offset + workers]
+            yield from zip(batch, pool.map(lambda p: http_get(base, p), batch))
+
+
 def main():
     if len(sys.argv) < 3:
         print("usage: web_crawl.py BASE OUT.json [--max-nodes N] [--allow-no-lemmas]",
               file=sys.stderr)
         sys.exit(2)
     base = sys.argv[1].rstrip("/")
+    workers = int(os.environ.get("WEB_FETCH_JOBS", "2"))
+    if not 1 <= workers <= 16:
+        raise SystemExit("WEB_FETCH_JOBS must be within 1..16")
+    started = time.perf_counter()
+    timings = {}
     out_path = sys.argv[2]
     allow_no_lemmas = "--allow-no-lemmas" in sys.argv
     max_nodes = MAX_NODES_DEFAULT
@@ -188,6 +197,8 @@ def main():
         record(f"/thy/trace/{idx}/prev/normal/proof/{L}")
 
     # 3. autoprove each lemma, tracking idx
+    timings["initial_pages"] = time.perf_counter() - started
+    started = time.perf_counter()
     for L in lemmas:
         status, ct, body = record(f"/thy/trace/{idx}/autoprove/idfs/0/False/proof/{L}")
         try:
@@ -197,6 +208,8 @@ def main():
         if isinstance(j, dict) and "redirect" in j:
             idx = idx_of(j["redirect"], idx)
     log.append(f"final_idx_after_autoprove={idx}")
+    timings["autoprove"] = time.perf_counter() - started
+    started = time.perf_counter()
 
     # 4. build sitemap from each lemma's fully-proved overview
     sitemap = []
@@ -228,13 +241,24 @@ def main():
         capped = True
         log.append(f"CAPPED proof-node visits {len(proof_nodes)} -> {max_nodes}")
         proof_nodes = proof_nodes[:max_nodes]
-    for p in others:
-        record(p)
+    timings["sitemap"] = time.perf_counter() - started
+    started = time.perf_counter()
+    # Other links can include /main/method, which applies a proof method even
+    # though it uses GET. Preserve their original sequential execution.
+    for path in others:
+        record(path)
+    pages = []
     for p in proof_nodes:
-        record(p)
+        pages.append(p)
         # same node under the DOT, JSON-graph and HTML-shell routes
         for route in ("interactive-graph-def", "json", "intdot"):
-            record(p.replace("/main/proof/", f"/{route}/proof/"))
+            pages.append(p.replace("/main/proof/", f"/{route}/proof/"))
+    # Autoprove and sitemap discovery have finished. Only these read-only
+    # proof/graph views may overlap; record results here in plan order.
+    for path, (status, ct, body) in fetch_pages(base, pages, workers):
+        manifest[norm_url_key(path)] = {
+            "kind": kind_of(path, ct), "status": status, "body": body}
+    timings["pages"] = time.perf_counter() - started
 
     # A dead or dying server (OOM-guard kill, per-request heap exhaustion)
     # yields REQUEST_ERROR bodies; a manifest containing them would be cached
@@ -246,10 +270,16 @@ def main():
               f"refusing to write a poisoned manifest", file=sys.stderr)
         sys.exit(3)
 
+    started = time.perf_counter()
     with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"base": base, "lemmas": lemmas, "log": log,
+        json.dump({"base": base,
+                   "workdir": os.path.dirname(os.path.abspath(out_path)),
+                   "lemmas": lemmas, "log": log,
                    "capped": capped, PLAN_VERSION_KEY: PLAN_VERSION,
                    "manifest": manifest}, f)
+    timings["write"] = time.perf_counter() - started
+    print("TIMING crawl " + " ".join(f"{k}_ms={v*1000:.0f}" for k, v in timings.items()),
+          file=sys.stderr)
     print(f"crawled {len(manifest)} urls, {len(proof_nodes)} proof nodes"
           f"{' (CAPPED)' if capped else ''}; lemmas={len(lemmas)}", file=sys.stderr)
 

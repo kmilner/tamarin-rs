@@ -17,12 +17,10 @@
 //! case maps and when the `Simplify` method compares `sys' /= cleanup sys`;
 //! note `M.fromListWith (error "case names not unique")` there *errors* on a
 //! duplicate case name rather than deduping.
-//!
-//! In Rust we don't have a single `mapFrees` typeclass that covers `System`,
-//! so we walk each field by hand. The walk-order mirrors
-//! `Reduction::subst_system_once` so any future cross-checks stay aligned.
 
-use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
+use tamarin_term::apply::Apply;
+use tamarin_term::bind::Bindings;
+use tamarin_term::lterm::{LNTerm, LVar};
 use tamarin_term::subst::Subst;
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
@@ -30,7 +28,7 @@ use tamarin_utils::fresh::PreciseFreshState;
 
 use crate::constraint::constraints::Goal;
 use crate::constraint::system::System;
-use crate::guarded::{subst_guarded_cow, VarSubst};
+use crate::guarded::{subst_guarded_cow, Guarded};
 
 /// Canonicalise the free `LVar`s of `sys` so that two systems differing
 /// only by variable numbering compare equal.
@@ -40,7 +38,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // Rewrites every free LVar through a deterministic alpha-rename;
     // the resulting max-var-idx is almost always smaller.  The full
     // cache is invalidated after Phase 1, and only when some binding is
-    // a genuine remap (`state.changed`): an all-identity rename leaves
+    // a genuine remap (`bindings.changed()`): an all-identity rename leaves
     // every value byte-identical — Phase 2 then only re-sorts fields and
     // dedups EQUAL values (the HS `S.fromList` effects), neither of
     // which can change the max free-var idx, so the cache stays exact.
@@ -48,215 +46,40 @@ pub fn rename_precise_system(sys: &mut System) {
     // rewrite in Phase 2 step 1: an all-identity NODE rename (a weaker
     // condition, snapshotted as `nodes_identity` below) already leaves
     // the nodes byte-identical even when later fields are remapped.
-    let mut state = RenameState::new();
+    let mut fresh = PreciseFreshState::nothing_used();
+    let mut bindings = Bindings::new();
 
     // ----------------------------------------------------------------------
-    // Phase 1 — walk every free LVar in deterministic traversal order so the
-    // import-binding map is populated independent of how we apply later.
+    // Phase 1 — walk every free LVar in `instance HasFrees System`'s order so
+    // the import-binding map is populated independent of how we apply later.
     //
-    // HS-faithful order — matches `instance HasFrees System` field walk
-    // (System.hs:383-397 declaration order, traversed by foldFrees):
-    //   sNodes → sEdges → sLessAtoms → sLastAtom → sSubtermStore →
-    //   sEqStore → sFormulas → sSolvedFormulas → sLemmas → sGoals
-    //
-    // This MUST match HS's renamePrecise to keep per-name idx assignment
-    // in lockstep: formulas must be visited before goals so that a free
-    // LVar shared between a formula and a goal Disj is bound to the same
-    // fresh idx HS would assign, otherwise the two become distinct LVars.
+    // The walk MUST match HS's, because `bindings.import` allocates per-name
+    // idxs in VISIT order: formulas are visited before goals, so a free LVar
+    // shared between a formula and a goal `Disj` is bound to the same fresh
+    // idx HS assigns it, and the `Vec`-backed fields are visited in their
+    // `Data.Set` / `Data.Map` order rather than in insertion order.
     // ----------------------------------------------------------------------
-
-    // HS-faithful: HS's `instance HasFrees (Map k v)` uses
-    // `M.foldrWithKey` which walks the map keyed by `Ord k` ascending
-    // (Term/LTerm.hs:905-914, see line 907).  Rust's `sys.nodes` is a `Vec<(NodeId,
-    // RuleACInst)>` in insertion order — that order is NOT the same as
-    // NodeId-ascending.  Without this sort, the walk visits a newly-grafted
-    // source-case Gen_Step (high pre-rename idx but inserted last) AFTER
-    // pre-existing Check nodes — yet then `state.import` allocates per-name
-    // counters in *visit* order, so the newly-grafted Gen_Step gets the
-    // FIRST fresh "vr" slot if walked first / LAST if walked last.  For
-    // Helper_Loop_and_success this controls whether vr.0 ends up Check
-    // (HS pattern) or Gen_Step (the unsorted-walk pattern), which in turn flips
-    // impliedFormulas' sysActions iteration order and the Disj goal-nrs.
-    let mut nodes_sorted: Vec<&(
-        crate::constraint::constraints::NodeId,
-        crate::rule::RuleACInst,
-    )> = sys.nodes.iter().collect();
-    nodes_sorted.sort_by_key(|a| a.0);
-    for (id, rule) in nodes_sorted {
-        state.import(id);
-        rule.for_each_free(&mut |v| {
-            state.import(v);
-        });
-    }
-    // Nodes are the FIRST field walked, so `!state.changed` here means every
-    // node var (ids + rule vars) was bound to its own idx — the node rename
-    // is the identity.  Snapshotted before any later field can flip the flag,
-    // enabling the Phase 2 step-1 identity fast path.
-    let nodes_identity = !state.changed;
-    // HS-faithful: `instance HasFrees (S.Set a)` (Term/LTerm.hs:898-903, see line 900)
-    // walks the set via `foldMap (foldFrees f)` — i.e. ascending Ord
-    // order.  HS's `_sEdges` / `_sLessAtoms` / `_sSubtermStore` fields
-    // are `S.Set` (System.hs:385-388 + SubtermStore.hs:546-548) and HS
-    // visits them sorted by their derived `Ord`.  RS's `Vec` is in
-    // insertion order, which DIVERGES from HS for `requiresKU`-driven
-    // Less-atom inserts whose new vk-LVars get appended later but sort
-    // earlier by `(smaller, larger)` than older atoms.  Sort copies here
-    // ONLY for the rename-precise walk so the per-name "vk" counter
-    // assigns canonical idxs in HS Set-order — matching HS's
-    // `evalFresh ... nothingUsed`-canonicalised numbering exactly —
-    // without touching the live `less_atoms` / `edges` Vec used
-    // elsewhere.
-    let mut edges_sorted: Vec<&crate::constraint::constraints::Edge> = sys.edges.iter().collect();
-    edges_sorted.sort();
-    for e in edges_sorted {
-        state.import(&e.src.0);
-        state.import(&e.tgt.0);
-    }
-    let mut less_sorted: Vec<&crate::constraint::constraints::LessAtom> =
-        sys.less_atoms.iter().collect();
-    less_sorted.sort();
-    for la in less_sorted {
-        state.import(&la.smaller);
-        state.import(&la.larger);
-    }
-    if let Some(la) = &sys.last_atom {
-        state.import(la);
-    }
-    // HS `HasFrees SubtermStore` (SubtermStore.hs:546-548) walks
-    // `negSt <> st <> solvedSt`; each summand is a `S.Set` — sorted.
-    // `neg_subterms` (negSt) must be visited FIRST to match HS order.
-    // HS `neg_subterms` is `S.Set (LNTerm, LNTerm)` — sorted by pair Ord.
-    let mut neg_sorted: Vec<&(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)> =
-        sys.subterm_store.neg_subterms.iter().collect();
-    neg_sorted.sort();
-    for (s, b) in neg_sorted {
-        s.for_each_free(&mut |v| {
-            state.import(v);
-        });
-        b.for_each_free(&mut |v| {
-            state.import(v);
-        });
-    }
-    // SubtermConstraint isn't `Ord` in RS so sort by `(small, big)`
-    // which mirrors HS's derived ordering on the analogous field pair.
-    let mut sub_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint> =
-        sys.subterm_store.subterms.iter().collect();
-    sub_sorted.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
-    for c in sub_sorted {
-        c.small.for_each_free(&mut |v| {
-            state.import(v);
-        });
-        c.big.for_each_free(&mut |v| {
-            state.import(v);
-        });
-    }
-    let mut solved_sorted: Vec<&crate::tools::subterm_store::SubtermConstraint> =
-        sys.subterm_store.solved_subterms.iter().collect();
-    solved_sorted.sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
-    for c in solved_sorted {
-        c.small.for_each_free(&mut |v| {
-            state.import(v);
-        });
-        c.big.for_each_free(&mut |v| {
-            state.import(v);
-        });
-    }
-    // eq_store.subst: visit keys (dom) and values (range).  RS's
-    // `Subst` is `BTreeMap`-backed, so the borrowing `iter()` already
-    // yields pairs in ascending-key order — matches HS's `HasFrees
-    // (LSubst c) = foldFrees f . sMap` walking `M.Map LVar Term`
-    // ascending (SubstVFree.hs:220-221, see line 221).
-    for (k, t) in sys.eq_store.subst.iter() {
-        state.import(k);
-        t.for_each_free(&mut |v| {
-            state.import(v);
-        });
-    }
-    // eq_store.conj: HS-faithful `HasFrees (SubstVFresh n LVar)` only
-    // walks DOMAIN (keys), NOT values (SubstVFresh.hs:196-202).  This
-    // preserves the witness idxs in values — crucial for
-    // sort-discriminating across variants at perform_split.
-    //
-    // The outer container `Conj (SplitId, S.Set LNSubstVFresh)`
-    // (EquationStore.hs:116-121, see line 118) is a `Conj`-list (insertion order — match
-    // with RS's `Vec<EqDisj>`).  The INNER `S.Set LNSubstVFresh` is Ord
-    // ascending — sort to match.
-    for d in &sys.eq_store.conj {
-        let mut substs_sorted: Vec<
-            &tamarin_term::subst_vfresh::SubstVFresh<tamarin_term::lterm::Name, LVar>,
-        > = d.substs.iter().collect();
-        substs_sorted.sort();
-        for s in substs_sorted {
-            // Borrowing `dom()` walks the same BTreeMap keys in the same
-            // ascending order as `to_list()`, without cloning every
-            // (key, range-term) pair only to discard it.
-            for k in s.dom() {
-                state.import(k);
-                // Note: value vars NOT imported (HS-faithful).
-            }
-        }
-    }
-    // HS-faithful: `_sFormulas` / `_sSolvedFormulas` / `_sLemmas` are
-    // `S.Set LNGuarded` (System.hs:390-392), walked via `HasFrees (S.Set
-    // a) = foldMap (foldFrees f)` in Ord-ascending.  RS's
-    // `Vec<Guarded>` is in insertion order — sort via the existing
-    // `cmp_guarded` helper (guarded.rs:67) which mirrors HS's derived
-    // `Ord Guarded` (Guarded.hs:121-129).
-    let mut formulas_sorted: Vec<&crate::guarded::Guarded> =
-        sys.formulas.iter().map(|f| f.as_ref()).collect();
-    formulas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for f in formulas_sorted {
-        guarded_for_each_free(f, &mut |v| {
-            state.import(v);
-        });
-    }
-    let mut solved_formulas_sorted: Vec<&crate::guarded::Guarded> =
-        sys.solved_formulas.iter().map(|f| f.as_ref()).collect();
-    solved_formulas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for f in solved_formulas_sorted {
-        guarded_for_each_free(f, &mut |v| {
-            state.import(v);
-        });
-    }
-    let mut lemmas_sorted: Vec<&crate::guarded::Guarded> =
-        sys.lemmas.iter().map(|f| f.as_ref()).collect();
-    lemmas_sorted.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-    for f in lemmas_sorted {
-        guarded_for_each_free(f, &mut |v| {
-            state.import(v);
-        });
-    }
-    // HS-faithful: `_sGoals` is `M.Map Goal GoalStatus` (System.hs:383-401, see line 393),
-    // walked via `HasFrees (M.Map k v) = M.foldrWithKey combine`
-    // (Term/LTerm.hs:905-914, see line 907) in ascending key order (`Ord Goal`).
-    // `goal_cmp` matches HS's derived `Ord Goal`
-    // (System/Constraints.hs:156-168); see
-    // `goal_cmp_tag_order_matches_haskell_declaration` test in goals.rs.
-    let mut goals_sorted: Vec<&(Goal, crate::constraint::system::GoalStatus)> =
-        sys.goals.iter().collect();
-    goals_sorted.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
-    for (g, _) in goals_sorted {
-        goal_for_each_free(g, &mut |v| {
-            state.import(v);
-        });
-    }
+    let mut nodes_identity = false;
+    sys.for_each_free_with_node_boundary(
+        &mut (&mut bindings, &mut fresh, &mut nodes_identity),
+        |state, v| {
+            state.0.import(v, state.1);
+        },
+        |state| *state.2 = !state.0.changed(),
+    );
 
     // ----------------------------------------------------------------------
     // Phase 2 — apply the renaming map.
     //
     // For LVar-only fields we look up directly. For term-bearing fields we
-    // build a `Subst` (LVar → Var-term) and apply via `apply_vterm`. For
-    // guarded formulas we use the parser-level `VarSubst`.
+    // build a `Subst` (LVar → Var-term) and apply via `apply_vterm`; the
+    // guarded formulas take the same `Subst`.
     // ----------------------------------------------------------------------
 
-    // `state.changed` covers EVERY field (Phase 1 walks them all), so a
+    // `bindings.changed()` covers EVERY field (Phase 1 walks them all), so a
     // false value proves the whole rename is the identity — see the
     // invalidation note at the top of this function.
-    let any_remap = state.changed;
-    let map = state.into_map();
-    if map.is_empty() {
-        return;
-    }
+    let any_remap = bindings.changed();
     if any_remap {
         sys.invalidate_max_var_idx_cache();
         // Whole-system alpha-rename: no inherited verified-no-op verdict
@@ -267,34 +90,27 @@ pub fn rename_precise_system(sys: &mut System) {
     }
 
     let term_subst: Subst<tamarin_term::lterm::Name, LVar> = Subst::from_list(
-        map.iter()
-            .map(|(old, new)| (old.0, Term::Lit(Lit::Var(*new)))),
+        bindings
+            .iter()
+            .map(|(old, new)| (old, Term::Lit(Lit::Var(new)))),
     );
-    // Hashed leaf-lookup view over the pass-invariant rename subst
-    // (`SubstView`): Phase 2 applies this ONE fixed var→var substitution to
-    // every goal/eq-store/subterm-store term, so a single FxHash probe per
-    // `Lit::Var` leaf replaces the `BTreeMap` descent — identical lookups,
-    // byte-identical output.  (`from_list` above already drops identity
-    // `x ~> x` entries, so the view's hit set matches the map's exactly.)
-    let term_view = tamarin_term::subst::SubstView::new(&term_subst);
-    let formula_subst: VarSubst = map
-        .iter()
-        .map(|(old, new)| {
-            let sort = lvar_sort_to_sort_hint(new.sort);
-            (
-                // `old.0.name` is an interned `&'static str` — zero-alloc key.
-                (old.0.name, old.0.idx),
-                tamarin_parser::ast::Term::Var(tamarin_parser::ast::VarSpec {
-                    name: new.name.to_string(),
-                    idx: new.idx,
-                    sort,
-                    typ: None,
-                }),
-            )
-        })
-        .collect();
+    // A `Disj` goal's alternatives are renamed one pass each, with no
+    // fixpoint and no re-normalisation: the rename is a bijection on
+    // variables, so one pass reaches every leaf and cannot make two
+    // alternatives equal.
+    let disj = |alts: &[Guarded]| -> Option<Vec<Guarded>> {
+        tamarin_utils::cow::cow_map_vec(alts, |g| subst_guarded_cow(g, &term_subst))
+    };
+    // Phase 2 applies this ONE fixed variable-to-variable substitution to
+    // every node, goal, edge and stored term, which is what the pass's hashed
+    // leaf view is for.  The cached-bloom fact fast path is off: the domain is
+    // every free variable of the system, so it could only ever skip a
+    // variable-free fact.
+    let pass = crate::apply::SystemSubst::new(&term_subst, false, &disj);
 
-    let map_var = |v: LVar| -> LVar { map.get(&v).copied().unwrap_or(v) };
+    // `from_list` above drops identity `x ~> x` entries, so the substitution
+    // rewrites a variable exactly where the binding map remaps it.
+    let map_var = |v: LVar| -> LVar { bindings.get(&v).unwrap_or(v) };
 
     // 1. Nodes — id + rule.
     //
@@ -308,12 +124,8 @@ pub fn rename_precise_system(sys: &mut System) {
     // some iterate directly).  Mirror HS by sorting here.
     //
     // Identity fast path: when the node rename is the identity
-    // (`nodes_identity`), `map_var` maps every node id + rule var to itself,
-    // so the per-rule `map_free` re-walk is a value no-op.  `map_free` is the
-    // non-monotone (`Arbitrary`) map, which AC-re-sorts on rebuild, but a
-    // stored node term is always `f_app`-normal (every term is built through
-    // `f_app`; the monotone paths preserve normal form), so re-sorting under
-    // an identity var-map reproduces the same normal form.  The only
+    // (`nodes_identity`), the substitution binds no node id and no rule
+    // variable, so the per-rule walk would rewrite nothing.  The only
     // remaining effect is the ascending-NodeId re-sort; if `sys.nodes` is
     // already so sorted the whole step is a no-op and the `Arc` stays shared
     // with the parent (no deep clone, no rebuild), and — since the nodes are
@@ -345,11 +157,7 @@ pub fn rename_precise_system(sys: &mut System) {
             crate::rule::RuleACInst,
         )> = nodes
             .into_iter()
-            .map(|(id, rule)| {
-                let new_id = map_var(id);
-                let new_rule = rule.map_free(&mut |v| map_var(v));
-                (new_id, new_rule)
-            })
+            .map(|(id, rule)| (id.apply(&pass), rule.apply(&pass)))
             .collect();
         renamed.sort_by_key(|a| a.0);
         sys.content_mut_untracked().nodes = std::sync::Arc::new(renamed);
@@ -357,8 +165,9 @@ pub fn rename_precise_system(sys: &mut System) {
 
     // 2. Edges.
     for e in sys.content_mut_untracked().edges.iter_mut() {
-        e.src.0 = map_var(e.src.0);
-        e.tgt.0 = map_var(e.tgt.0);
+        if let Some(new_edge) = e.apply_changed(&pass) {
+            *e = new_edge;
+        }
     }
     // Dedup after rename — sort + dedup (matches subst_system).
     let mut tmp: Vec<_> = std::mem::take(&mut sys.content_mut_untracked().edges);
@@ -368,7 +177,7 @@ pub fn rename_precise_system(sys: &mut System) {
 
     // 3. Last atom.
     if let Some(la) = sys.content_mut_untracked().last_atom.take() {
-        sys.content_mut_untracked().last_atom = Some(map_var(la));
+        sys.content_mut_untracked().last_atom = Some(la.apply(&pass));
     }
 
     // 4. Less atoms.
@@ -382,10 +191,8 @@ pub fn rename_precise_system(sys: &mut System) {
     // (Term/LTerm.hs:898-903, see line 903 `fmap S.fromList . mapFrees f . S.toList`).
     let mut new_less: Vec<crate::constraint::constraints::LessAtom> =
         Vec::with_capacity(sys.less_atoms.len());
-    for mut la in std::mem::take(&mut sys.content_mut_untracked().less_atoms) {
-        la.smaller = map_var(la.smaller);
-        la.larger = map_var(la.larger);
-        new_less.push(la);
+    for la in std::mem::take(&mut sys.content_mut_untracked().less_atoms) {
+        new_less.push(la.apply(&pass));
     }
     // Sort + dedup (O(n log n)), matching HS's `S.fromList` over the renamed
     // set rather than an O(n^2) membership scan.
@@ -396,50 +203,23 @@ pub fn rename_precise_system(sys: &mut System) {
     // 5. Goals — per-variant rewrite.
     let goals =
         std::sync::Arc::unwrap_or_clone(std::mem::take(&mut sys.content_mut_untracked().goals));
-    let apply_term = |t: LNTerm| -> LNTerm { term_view.apply(t) };
-    let apply_fact = |fa: crate::fact::LNFact| -> crate::fact::LNFact {
-        // Var→var rename is a frees-changing rebuild, so the fact must be
-        // rebuilt through the computing constructor `fresh_annotated`, which
-        // derives the bloom from the renamed terms — never copy `fa`'s stale one.
-        let terms: Vec<LNTerm> = fa.terms.iter().cloned().map(&apply_term).collect();
-        crate::fact::Fact::fresh_annotated(fa.tag, fa.annotations, terms)
-    };
-    let mut new_goals: Vec<(Goal, crate::constraint::system::GoalStatus)> =
-        Vec::with_capacity(goals.len());
-    for (g, st) in goals {
-        let g2 = match g {
-            Goal::Action(i, fa) => Goal::Action(map_var(i), apply_fact(fa)),
-            Goal::Premise(p, fa) => Goal::Premise((map_var(p.0), p.1), apply_fact(fa)),
-            Goal::Chain(c, p) => Goal::Chain((map_var(c.0), c.1), (map_var(p.0), p.1)),
-            Goal::Disj(d) => {
-                // COW: an identity rename (or one that touches no Disj leaf)
-                // reuses the owned `g` with zero rebuild; `Some` is byte-
-                // identical to the eager `subst_guarded`.
-                let items: Vec<crate::guarded::Guarded> =
-                    d.0.into_iter()
-                        .map(|g| subst_guarded_cow(&g, &formula_subst).unwrap_or(g))
-                        .collect();
-                Goal::Disj(crate::constraint::constraints::Disj(items))
-            }
-            Goal::Split(s) => Goal::Split(s),
-            Goal::Subterm((s, t)) => Goal::Subterm((apply_term(s), apply_term(t))),
-        };
-        new_goals.push((g2, st));
-    }
+    let mut new_goals: Vec<(Goal, crate::constraint::system::GoalStatus)> = goals
+        .into_iter()
+        .map(|(g, st)| (g.apply(&pass), st))
+        .collect();
     // HS-faithful: `mapFrees (M.Map Goal GoalStatus)`
     // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:905-914, see line 914).
     // `M.fromList` builds a Map keyed by Ord Goal, so post-rename the
     // entries land in ascending NEW Goal order.
     //
-    // Sort + dedup (O(n log n)) instead of an O(n^2) membership scan. We
-    // dedup on structural `Goal` equality (plain `==`) — NOT on
-    // `goal_cmp == Equal`, because `goal_cmp` orders
-    // Disj goals by len + canonical string and would over-collapse.
-    new_goals.sort_by(|a, b| crate::constraint::solver::goals::goal_cmp(&a.0, &b.0));
+    // Sort + dedup (O(n log n)) instead of an O(n^2) membership scan.  The
+    // dedup key is the goal alone, ignoring the status: `M.fromList` builds
+    // a `Map Goal GoalStatus`, which collapses entries sharing a goal.
+    new_goals.sort_by(|a, b| a.0.cmp(&b.0));
     new_goals.dedup_by(|a, b| a.0 == b.0);
     sys.content_mut_untracked().goals = std::sync::Arc::new(new_goals);
 
-    // 6. Formulas / solved / lemmas — via parser-level VarSubst.
+    // 6. Formulas / solved / lemmas — via the same rename `Subst`.
     //
     // HS-faithful: `_sFormulas` / `_sSolvedFormulas` / `_sLemmas` are
     // `S.Set LNGuarded`. `mapFrees (S.Set a) = fmap S.fromList . mapFrees
@@ -447,27 +227,24 @@ pub fn rename_precise_system(sys: &mut System) {
     // so post-rename entries are sorted by NEW Ord Guarded AND
     // collision-deduped.  Mirror by sorting+deduping after the in-place
     // rename: post-rename two formulas that became equal collapse.
-    if !formula_subst.is_empty() {
-        let sort_dedup_guarded = |v: &mut Vec<std::sync::Arc<crate::guarded::Guarded>>,
-                                  sub: &VarSubst| {
-            // COW: only the formulas whose leaves actually change are rebuilt;
-            // `Some(nf)` is byte-identical to the eager `subst_guarded`, and a
-            // no-effect (identity) rename leaves `*f` untouched.  The
-            // sort+dedup below runs even when the COW loop rebuilt nothing —
-            // HS's `S.fromList` rebuild happens under an identity rename too,
-            // and intervening passes may have left the Vec unsorted.
-            for f in v.iter_mut() {
-                if let Some(nf) = subst_guarded_cow(f, sub) {
-                    *f = std::sync::Arc::new(nf);
-                }
+    let sort_dedup_guarded = |v: &mut Vec<std::sync::Arc<crate::guarded::Guarded>>| {
+        // COW: only the formulas whose leaves actually change are rebuilt;
+        // `Some(nf)` is byte-identical to the eager `subst_guarded`, and a
+        // no-effect (identity) rename leaves `*f` untouched.  The
+        // sort+dedup below runs even when the COW loop rebuilt nothing —
+        // HS's `S.fromList` rebuild happens under an identity rename too,
+        // and intervening passes may have left the Vec unsorted.
+        for f in v.iter_mut() {
+            if let Some(nf) = subst_guarded_cow(f, &term_subst) {
+                *f = std::sync::Arc::new(nf);
             }
-            v.sort_by(|a, b| crate::guarded::cmp_guarded(a, b));
-            v.dedup_by(|a, b| crate::guarded::cmp_guarded(a, b) == std::cmp::Ordering::Equal);
-        };
-        sort_dedup_guarded(sys.formulas_mut_untracked(), &formula_subst);
-        sort_dedup_guarded(sys.solved_formulas_mut_untracked(), &formula_subst);
-        sort_dedup_guarded(&mut sys.content_mut_untracked().lemmas, &formula_subst);
-    }
+        }
+        v.sort();
+        v.dedup();
+    };
+    sort_dedup_guarded(sys.formulas_mut_untracked());
+    sort_dedup_guarded(sys.solved_formulas_mut_untracked());
+    sort_dedup_guarded(&mut sys.content_mut_untracked().lemmas);
 
     // 7. eq_store — rewrite the subst (dom + range) and the conj.
     let old_subst = std::mem::replace(
@@ -477,7 +254,7 @@ pub fn rename_precise_system(sys: &mut System) {
     let pairs: Vec<(LVar, LNTerm)> = old_subst
         .to_list()
         .into_iter()
-        .map(|(k, v)| (map_var(k), apply_term(v)))
+        .map(|(k, v)| (map_var(k), v.apply(&pass)))
         .collect();
     sys.eq_store_mut().subst = Subst::from_list(pairs);
 
@@ -526,8 +303,9 @@ pub fn rename_precise_system(sys: &mut System) {
     // `Set SubtermD` for both pos and neg).  `mapFrees (S.Set a) =
     // fmap S.fromList . mapFrees f . S.toList` — sort + dedup post-rename.
     for c in sys.subterm_store_mut().subterms.iter_mut() {
-        c.small = apply_term(c.small.clone());
-        c.big = apply_term(c.big.clone());
+        if let Some(nc) = c.apply_changed(&pass) {
+            *c = nc;
+        }
     }
     sys.subterm_store_mut()
         .subterms
@@ -536,8 +314,9 @@ pub fn rename_precise_system(sys: &mut System) {
         .subterms
         .dedup_by(|a, b| (&a.small, &a.big) == (&b.small, &b.big));
     for c in sys.subterm_store_mut().solved_subterms.iter_mut() {
-        c.small = apply_term(c.small.clone());
-        c.big = apply_term(c.big.clone());
+        if let Some(nc) = c.apply_changed(&pass) {
+            *c = nc;
+        }
     }
     sys.subterm_store_mut()
         .solved_subterms
@@ -551,258 +330,10 @@ pub fn rename_precise_system(sys: &mut System) {
     // set invariant on the rewritten pairs.
     let mapped: Vec<(LNTerm, LNTerm)> = std::mem::take(&mut sys.subterm_store_mut().neg_subterms)
         .into_iter()
-        .map(|(s, t)| (apply_term(s), apply_term(t)))
+        .map(|pair| pair.apply(&pass))
         .collect();
     sys.subterm_store_mut().neg_subterms =
         crate::tools::subterm_store::SortedPairSet::rebuild_from(mapped);
-}
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-/// Rename-map key wrapping the original `LVar`.
-///
-/// `Hash` delegates to `LVar`'s content-based derive, so two vars with equal
-/// *content* always hash to the same bucket even when their interned name
-/// pointers differ (a rare non-canonical literal name vs the pooled copy) —
-/// this is what keeps the dedup correct and the `--prove` output byte-identical.
-/// Only `Eq` is optimised, via `lvar_fast_eq` — same relation as `LVar`'s derive.
-#[derive(Clone)]
-struct VarKey(LVar);
-
-impl PartialEq for VarKey {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        lvar_fast_eq(&self.0, &other.0)
-    }
-}
-impl Eq for VarKey {}
-impl std::hash::Hash for VarKey {
-    #[inline]
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state)
-    }
-}
-// Lets `contains_key`/`get` probe by `&LVar` (no clone) yet run the fast eq.
-// The probe hashes via `LVar`'s derive (identical to `VarKey::hash`), so the
-// probe lands in the same bucket the owned key was stored in.
-impl hashbrown::Equivalent<VarKey> for LVar {
-    #[inline]
-    fn equivalent(&self, key: &VarKey) -> bool {
-        lvar_fast_eq(self, &key.0)
-    }
-}
-
-/// Exactly `LVar`'s content equality, faster: interned names share one
-/// canonical pointer (intern guarantees content-equal ⇒ pointer-equal), so a
-/// pointer+len match confirms the name without the byte compare; anything else
-/// falls back to the full content compare, so the relation is unchanged.
-#[inline]
-fn lvar_fast_eq(a: &LVar, b: &LVar) -> bool {
-    // Destructure without `..` so a new `LVar` field forces an equality decision
-    // here, keeping this fast path in step with `LVar`'s derived Eq.
-    let LVar {
-        name: a_name,
-        sort: a_sort,
-        idx: a_idx,
-    } = a;
-    let LVar {
-        name: b_name,
-        sort: b_sort,
-        idx: b_idx,
-    } = b;
-    // idx (u64) first — most discriminating, cheapest — then sort, so a
-    // hash-collision mismatch is rejected before the name is touched.
-    if a_idx != b_idx || a_sort != b_sort {
-        return false;
-    }
-    (std::ptr::eq(a_name.as_ptr(), b_name.as_ptr()) && a_name.len() == b_name.len())
-        || a_name == b_name
-}
-
-/// The rename map: keyed by `VarKey` (content hash, fast pointer eq), hashed
-/// with the same `FxBuildHasher` as `FastMap`.  Iteration order is never
-/// observed — `into_map` feeds only `Subst::from_list` (a re-sorted `BTreeMap`)
-/// and a distinct-key `VarSubst` applied by lookup.
-type RenameMap = hashbrown::HashMap<VarKey, LVar, rustc_hash::FxBuildHasher>;
-
-struct RenameState {
-    fresh: PreciseFreshState,
-    map: RenameMap,
-    /// Set the first time a var is bound to a DIFFERENT idx than its
-    /// original.  `import` always preserves name+sort, so a fresh binding
-    /// is the identity exactly when its allocated idx equals the original;
-    /// `!changed` after a field's walk means the rename is the identity over
-    /// every var seen so far (used for the nodes-first fast path).
-    changed: bool,
-}
-
-impl RenameState {
-    fn new() -> Self {
-        RenameState {
-            fresh: PreciseFreshState::nothing_used(),
-            map: RenameMap::default(),
-            changed: false,
-        }
-    }
-    /// `importBinding`: idempotent — first call for `v` allocates a fresh
-    /// LVar keyed by `v.name`; later calls return the same binding.
-    fn import(&mut self, v: &LVar) {
-        // Probe by `&LVar` (no clone) via `VarKey`'s `Equivalent` impl, whose
-        // `eq` short-circuits on the interned name POINTER — skipping the
-        // byte-wise `str` compare that dominated `import`'s confirming-eq self
-        // time (`equal_same_length` in the profile) — with a content fallback
-        // that keeps the equality RELATION exactly `LVar`'s.  The hash is still
-        // content-based (see `VarKey`), so equal-content vars — even with
-        // different name pointers — dedup into one slot: output is identical.
-        if self.map.contains_key(v) {
-            return;
-        }
-        let idx = self.fresh.fresh_ident(v.name);
-        // Record whether this first binding remaps the idx (name+sort are
-        // always preserved), so an all-identity prefix leaves `changed` false.
-        if idx != v.idx {
-            self.changed = true;
-        }
-        // First occurrence only (rare): materialise the owned key.
-        self.map.insert(
-            VarKey(*v),
-            LVar {
-                name: v.name,
-                sort: v.sort,
-                idx,
-            },
-        );
-    }
-    fn into_map(self) -> RenameMap {
-        self.map
-    }
-}
-
-fn lvar_sort_to_sort_hint(s: tamarin_term::lterm::LSort) -> tamarin_parser::ast::SortHint {
-    use tamarin_parser::ast::SortHint;
-    use tamarin_term::lterm::LSort;
-    match s {
-        LSort::Msg => SortHint::Msg,
-        LSort::Pub => SortHint::Pub,
-        LSort::Fresh => SortHint::Fresh,
-        LSort::Node => SortHint::Node,
-        LSort::Nat => SortHint::Nat,
-    }
-}
-
-fn goal_for_each_free(g: &Goal, f: &mut dyn FnMut(&LVar)) {
-    match g {
-        Goal::Action(i, fa) => {
-            f(i);
-            fa.for_each_free(f);
-        }
-        Goal::Premise(p, fa) => {
-            f(&p.0);
-            fa.for_each_free(f);
-        }
-        Goal::Chain(c, p) => {
-            f(&c.0);
-            f(&p.0);
-        }
-        Goal::Disj(d) => {
-            for item in &d.0 {
-                guarded_for_each_free(item, f);
-            }
-        }
-        Goal::Split(_) => {}
-        Goal::Subterm((a, b)) => {
-            a.for_each_free(f);
-            b.for_each_free(f);
-        }
-    }
-}
-
-/// Walk every free `LVar` of a `Guarded` formula. With DeBruijn bindings,
-/// `BVar::Bound` leaves carry no LVar identity and are auto-skipped; only
-/// `BVar::Free` leaves get visited.
-fn guarded_for_each_free(g: &crate::guarded::Guarded, f: &mut dyn FnMut(&LVar)) {
-    use crate::guarded::Guarded;
-    match g {
-        Guarded::Atom(a) => atom_for_each_free(a, f),
-        Guarded::Disj(xs) | Guarded::Conj(xs) => {
-            for x in xs.iter() {
-                guarded_for_each_free(x, f);
-            }
-        }
-        Guarded::GGuarded { guards, body, .. } => {
-            for a in guards.iter() {
-                atom_for_each_free(a, f);
-            }
-            guarded_for_each_free(body, f);
-        }
-    }
-}
-
-fn atom_for_each_free(a: &crate::guarded::GAtom, f: &mut dyn FnMut(&LVar)) {
-    use crate::guarded::GAtom;
-    match a {
-        GAtom::Eq(x, y) | GAtom::Less(x, y) | GAtom::LessMset(x, y) | GAtom::Subterm(x, y) => {
-            term_for_each_free(x, f);
-            term_for_each_free(y, f);
-        }
-        GAtom::Action(fa, t) => {
-            // HS `Traversable ProtoAtom` visits the timepoint BEFORE the
-            // fact: `traverse f (Action i fa) = Action <$> f i <*> traverse f fa`
-            // (Atom.hs).  renamePrecise allocates fresh per-name indices
-            // in visit order, so the timepoint must be walked first to
-            // match HS's idx assignment.
-            term_for_each_free(t, f);
-            for arg in fa.args.iter() {
-                term_for_each_free(arg, f);
-            }
-        }
-        GAtom::Last(t) => term_for_each_free(t, f),
-        GAtom::Pred(fa) => {
-            for arg in fa.args.iter() {
-                term_for_each_free(arg, f);
-            }
-        }
-    }
-}
-
-fn term_for_each_free(t: &crate::guarded::GTerm, f: &mut dyn FnMut(&LVar)) {
-    use crate::guarded::{BVar, GTerm};
-    match t {
-        GTerm::Var(BVar::Free(v)) => {
-            let sort = parser_sort_to_lsort(v.sort);
-            f(&LVar {
-                name: tamarin_term::intern::intern_str(v.name.as_str()),
-                sort,
-                idx: v.idx,
-            });
-        }
-        GTerm::Var(BVar::Bound(_)) => {}
-        GTerm::PubLit(_)
-        | GTerm::FreshLit(_)
-        | GTerm::NatLit(_)
-        | GTerm::Number(_)
-        | GTerm::NumberOne
-        | GTerm::NatOne
-        | GTerm::DhNeutral => {}
-        GTerm::App(_, args) | GTerm::Pair(args) => {
-            for a in args.iter() {
-                term_for_each_free(a, f);
-            }
-        }
-        GTerm::AlgApp(_, a, b) | GTerm::Diff(a, b) | GTerm::BinOp(_, a, b) => {
-            term_for_each_free(a, f);
-            term_for_each_free(b, f);
-        }
-        GTerm::PatMatch(t) => term_for_each_free(t, f),
-    }
-}
-
-/// Thin wrapper over the shared `sort_hint_to_lsort_opt` mapping (`sources`),
-/// resolving `Untagged` to `LSort::Msg`.
-fn parser_sort_to_lsort(s: tamarin_parser::ast::SortHint) -> tamarin_term::lterm::LSort {
-    super::sources::sort_hint_to_lsort_opt(&s).unwrap_or(tamarin_term::lterm::LSort::Msg)
 }
 
 #[cfg(test)]
@@ -833,6 +364,28 @@ mod tests {
         assert_eq!(sys, System::empty());
     }
 
+    #[test]
+    fn variable_free_system_still_rebuilds_set_backed_fields() {
+        use crate::guarded::{gfalse, gtrue};
+
+        let mut sys = System::empty();
+        sys.content_mut().formulas = vec![
+            std::sync::Arc::new(gtrue()),
+            std::sync::Arc::new(gfalse()),
+            std::sync::Arc::new(gtrue()),
+        ];
+
+        rename_precise_system(&mut sys);
+
+        assert_eq!(
+            sys.formulas
+                .iter()
+                .map(|formula| formula.as_ref().clone())
+                .collect::<Vec<_>>(),
+            vec![gfalse(), gtrue()]
+        );
+    }
+
     /// Two systems that differ only in their node-id indices must compare
     /// equal after the rename.  A second pass must change nothing.  The test
     /// needs both halves.  Without them the canonical form that `process` and
@@ -851,5 +404,13 @@ mod tests {
         let once = a.clone();
         rename_precise_system(&mut a);
         assert_eq!(a, once);
+    }
+
+    #[test]
+    fn a_rest_only_rename_keeps_the_nodes_shared() {
+        let mut sys = less_sys(7, 8);
+        let nodes = std::sync::Arc::clone(&sys.nodes);
+        rename_precise_system(&mut sys);
+        assert!(std::sync::Arc::ptr_eq(&nodes, &sys.nodes));
     }
 }

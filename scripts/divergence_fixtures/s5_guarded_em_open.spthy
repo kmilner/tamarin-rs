@@ -1,0 +1,50 @@
+/*
+ * The argument order of the commutative `em` inside a guarded formula, under
+ * two SIBLING binder prefixes that bind the same name.
+ *
+ * `formulaToGuarded` (Theory/Constraint/System/Guarded.hs:471-479) threads one
+ * `Precise` supply across the whole formula, so the second prefix's `x` is
+ * drawn at index 1, and `fAppC` sorts the two `em` arguments under that index
+ * (`fAppC nacsym as = FAPP (C nacsym) (sort as)`, Term/Term/Raw.hs:133-134;
+ * `Ord LVar` reads the index first, LTerm.hs:546-548), putting `y` at index 0
+ * first.  `prettyGuarded` (Guarded.hs:827-866) opens each `GGuarded` inside
+ * `scopeFreshness`, so the second prefix is reached with the name `x` still
+ * untouched and both binders are drawn at index 0; `openGuarded`
+ * (Guarded.hs:364-373) substitutes them through `substBoundAtom`, which
+ * rebuilds the application through `fApp` and sorts the pair again.  Two
+ * binders at index 0 tie on the index and on the sort, so the name decides
+ * and `x` comes first: the echo reads `em(x, y)` where the stored formula
+ * holds the operands the other way round.
+ *
+ * Both lemmas write the same two operands in the two possible source orders
+ * and both echo `em(x, y)`, so the row pins that neither the written order
+ * nor the conversion's order reaches the echo.
+ *
+ * `em` is HS's only commutative symbol and it cannot appear in a corpus
+ * lemma: the `Formula terms` wellformedness check allows only public
+ * constants and bound variables in a formula, which is why the wf slice here
+ * carries a WARNING block.
+ *
+ * Mode `match`: the two engines agree on this shape.
+ *
+ * Compared slices: the wellformedness report AND the `theory … end` echo,
+ * which carries both lemmas' `guarded formula characterizing …` blocks (see
+ * check.sh).
+ */
+theory S5GuardedEmOpen
+begin
+
+builtins: bilinear-pairing
+
+rule A:
+  [ In(x), In(y) ] --[ C(x), B(y) ]-> [ ]
+
+lemma sibling_binders:
+  exists-trace
+  "(Ex x #i. C(x) @ i) & (Ex x y #j. B(em(x, y)) @ j)"
+
+lemma sibling_binders_written_swapped:
+  exists-trace
+  "(Ex x #i. C(x) @ i) & (Ex x y #j. B(em(y, x)) @ j)"
+
+end

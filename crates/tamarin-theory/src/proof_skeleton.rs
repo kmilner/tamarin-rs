@@ -99,8 +99,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
             ProofMethod::Simplify
             | ProofMethod::SolveGoal(_)
             | ProofMethod::Induction
-            | ProofMethod::Invalidated
-            | ProofMethod::RawSolve(_) => {
+            | ProofMethod::Invalidated => {
                 // Non-terminal method with no children — must have
                 // closed contradictorily without producing cases.
                 // Haskell renders this as `by solve(...)` / `by simplify`
@@ -131,13 +130,12 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // Special case: a single child with empty key is a "Linear"
     // continuation (no branching). Haskell prints these inline, with
     // no `case`/`next`/`qed` wrapper.
-    if node.children.len() == 1 {
-        if let Some((name, child)) = node.children.iter().next() {
-            if name.is_empty() {
-                render_node(child, indent, out);
-                return;
-            }
-        }
+    if node.children.len() == 1
+        && let Some((name, child)) = node.children.iter().next()
+        && name.is_empty()
+    {
+        render_node(child, indent, out);
+        return;
     }
     // On exists-trace lemmas only the trace-found path survives: when a
     // node's status rolls up to Solved (TraceFound), siblings that closed
@@ -211,7 +209,6 @@ fn method_keyword(m: &ProofMethod) -> &'static str {
         ProofMethod::Sorry(_) => "",    // handled at leaf-emit time
         ProofMethod::Finished(_) => "", // handled at leaf-emit time
         ProofMethod::Invalidated => "INVALIDATED",
-        ProofMethod::RawSolve(_) => "solve", // display-only; handled in pp_step_doc
     }
 }
 

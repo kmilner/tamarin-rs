@@ -1,0 +1,6 @@
+
+/* Instructions shown by the lemma add, edit and delete views. */
+.wrap-text li {
+    white-space: normal;
+    word-wrap: break-word;
+}

@@ -9,18 +9,17 @@
 # Default port: 18901.
 #
 # Pre-requisites:
-#   - `tamarin-prover` on PATH, built from the submodule pin (the script
-#     refuses any other revision)
-#   - `curl` on PATH
+#   - the testing oracle built by `./setup.sh testing` (override its automatic
+#     discovery with `HS_PATH`)
+#   - `curl` and `maude` on PATH (override the latter with `MAUDE_PATH`)
 #   - The Tamarin source tree's `examples/regression/trace/issue193.spthy`
 #
 # Output: writes each captured response into
 #   tests/fixtures/haskell-responses/
-# plus `oracle_rev`, the submodule revision they were captured from.  The
-# `haskell_captures_match_the_submodule_pin` test in tests/common/mod.rs goes
-# red when that stamp is not the current pin, so a submodule bump that forgets
-# to re-run this script fails the suite instead of silently pinning the port to
-# a stale oracle.
+# plus `oracle_rev`, the submodule revision and patch series they were captured
+# from.  `tests/capture_provenance.rs` checks both identities, so a source
+# change that forgets to re-run this script fails the suite instead of silently
+# pinning the port to a stale oracle.
 #
 # Re-run this whenever Haskell behaviour changes.  The Rust port tests in
 # `tests/routes_*.rs` compare against these captures several ways: byte
@@ -33,24 +32,35 @@ set -euo pipefail
 PORT="${1:-18901}"
 BASE="http://127.0.0.1:${PORT}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 RES_DIR="${SCRIPT_DIR}/fixtures/haskell-responses"
 FIXTURE="${SCRIPT_DIR}/fixtures/issue193.spthy"
 
-if ! command -v tamarin-prover >/dev/null 2>&1; then
-  echo "error: tamarin-prover not on PATH" >&2
-  exit 1
-fi
+[ -r "$ROOT/scripts/gate_common.sh" ] || {
+  echo "error: missing scripts/gate_common.sh" >&2
+  exit 2
+}
+# shellcheck source=../../../scripts/gate_common.sh
+. "$ROOT/scripts/gate_common.sh"
+[ -r "$ROOT/scripts/web_cache.sh" ] || {
+  echo "error: missing scripts/web_cache.sh" >&2
+  exit 2
+}
+# shellcheck source=../../../scripts/web_cache.sh
+. "$ROOT/scripts/web_cache.sh"
+HS_PATH=$(resolve_hs_oracle "$ROOT") || exit 2
+MAUDE=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE"
 
-# Fixtures must come from the pinned patched oracle, not whatever
-# tamarin-prover happens to be first on PATH (the brew release shadows it
-# on this machine). Refuse any binary whose baked git revision differs
-# from the submodule pin.
-pin="$(git -C "${SCRIPT_DIR}/../../.." rev-parse :tamarin-prover)"
-binrev="$(tamarin-prover --version 2>/dev/null | sed -n 's/^Git revision: \([0-9a-f]*\).*/\1/p')"
-if [[ "$binrev" != "$pin" ]]; then
-  echo "error: tamarin-prover on PATH is revision '${binrev:-unknown}' but the submodule pin is $pin" >&2
-  echo "       put the testing oracle's bin dir first on PATH (tamarin-prover-testing/.stack-work/install/*/*/*/bin)" >&2
-  exit 1
+# Fixtures must come from the controlled build of the pin and current patch
+# series, not an arbitrary binary that happens to have the same base commit.
+oracle_rev_check "$HS_PATH" "$MAUDE" "$ROOT"
+pin="$(git -C "$ROOT" rev-parse :tamarin-prover)"
+patch_series="$(patch_series_fingerprint "$ROOT")" || exit 2
+
+if ! web_port_free "$PORT"; then
+  echo "error: port $PORT is already occupied; refusing to capture another service" >&2
+  exit 2
 fi
 
 if [[ ! -f "$FIXTURE" ]]; then
@@ -63,7 +73,21 @@ mkdir -p "$RES_DIR"
 # Poll the just-launched $SERVER_PID until it serves the root page; dump its
 # log and give up otherwise.  Optional $1 names the theory it is serving.
 wait_for_server() {
+  local state
   for _ in {1..40}; do
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+      echo "error: Haskell server exited before becoming ready (log: /tmp/haskell-server.log)" >&2
+      cat /tmp/haskell-server.log >&2
+      exit 1
+    fi
+    state=$(ps -o stat= -p "$SERVER_PID" 2>/dev/null || true)
+    case "$state" in
+      ''|*Z*)
+        echo "error: Haskell server exited before becoming ready (log: /tmp/haskell-server.log)" >&2
+        cat /tmp/haskell-server.log >&2
+        exit 1
+        ;;
+    esac
     if curl -fs -o /dev/null "$BASE/" 2>/dev/null; then
       return
     fi
@@ -77,15 +101,18 @@ wait_for_server() {
 
 # Spin Haskell up in its own work-dir so it doesn't dirty ours.
 WORKDIR="$(mktemp -d)"
+# Keep the completed capture beside the destination so GNU mv can atomically
+# exchange the two directories without a cross-filesystem fallback.
+CAPTURE_DIR="$(mktemp -d "${RES_DIR}.capture.XXXXXX")"
 # BIGDIR is the second phase's work-dir (created further down); declaring it
 # here keeps the trap's `${BIGDIR:+...}` well-defined under `set -u` and
 # contributes no argument to `rm` while it is empty.
 BIGDIR=""
-trap 'rm -rf "$WORKDIR" ${BIGDIR:+"$BIGDIR"}; pkill -P $$ -f "tamarin-prover interactive --port=${PORT}" 2>/dev/null || true' EXIT
+trap 'rm -rf "$WORKDIR" "$CAPTURE_DIR" ${BIGDIR:+"$BIGDIR"}; pkill -P $$ -f "tamarin-prover interactive --port=${PORT}" 2>/dev/null || true' EXIT
 cp "$FIXTURE" "$WORKDIR/issue193.spthy"
 
 echo "starting Haskell tamarin-prover on port $PORT ..."
-( cd "$WORKDIR" && tamarin-prover interactive --port="$PORT" --no-logging ./ ) >/tmp/haskell-server.log 2>&1 &
+( cd "$WORKDIR" && "$HS_PATH" interactive --port="$PORT" --no-logging ./ ) >/tmp/haskell-server.log 2>&1 &
 SERVER_PID=$!
 wait_for_server
 echo "Haskell server up, capturing fixtures into $RES_DIR ..."
@@ -113,7 +140,11 @@ fetch() {
     HEAD) opts+=(-I) ;;
   esac
   local status
-  status=$(curl "${opts[@]}" -o "${RES_DIR}/${outfile}" -w "%{http_code}" "${BASE}${url}" || echo "ERR")
+  if ! status=$(curl "${opts[@]}" -o "${CAPTURE_DIR}/${outfile}" \
+      -w "%{http_code}" "${BASE}${url}"); then
+    printf "  %-30s %3s\n" "$url" ERR
+    return 1
+  fi
   printf "  %-30s %3s\n" "$url" "$status"
 }
 
@@ -203,6 +234,10 @@ fetch equiv_overview.json       "/thy/equiv/1/overview/help"
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
+if ! web_wait_port_free "$PORT"; then
+  echo "error: port $PORT did not become free after stopping the first server" >&2
+  exit 1
+fi
 
 # ---------------- Backend abbreviation (second theory, second server) -------
 # `abbrevInBackend` replaces every premise/conclusion term of `size >= 30` with
@@ -212,17 +247,21 @@ wait "$SERVER_PID" 2>/dev/null || true
 # would renumber the theory indices every URL above depends on.
 BIGDIR="$(mktemp -d)"
 cp "${SCRIPT_DIR}/fixtures/BigTermProved.spthy" "$BIGDIR/BigTermProved.spthy"
-( cd "$BIGDIR" && tamarin-prover interactive --port="$PORT" --no-logging ./ ) >>/tmp/haskell-server.log 2>&1 &
+( cd "$BIGDIR" && "$HS_PATH" interactive --port="$PORT" --no-logging ./ ) >>/tmp/haskell-server.log 2>&1 &
 SERVER_PID=$!
 wait_for_server BigTermProved
 fetch json_proof_abbrev.json    "/thy/trace/1/json/proof/done/_/Init/Init?abbrevInBackend=1"
 rm -rf "$BIGDIR"
 
-# Stamp the oracle these bytes came from, last: `set -e` aborts above on any
-# failed phase, so a half-written capture never claims a revision.  The stamp
-# has no trailing newline (the same shape scripts/divergence_fixtures/ uses).
-printf '%s' "$pin" > "${RES_DIR}/oracle_rev"
+# Stamp the oracle these bytes came from only after every request succeeds,
+# then atomically exchange the complete capture with the committed directory.
+# After the exchange CAPTURE_DIR names the old fixtures, which the EXIT trap
+# removes. A failure or interruption before the exchange leaves them untouched;
+# one after it leaves the complete new generation in place.
+printf 'pin=%s\npatch_series_sha256=%s\n' "$pin" "$patch_series" \
+  > "${CAPTURE_DIR}/oracle_rev"
+mv --exchange --no-copy --no-target-directory "$CAPTURE_DIR" "$RES_DIR"
 
-echo "done.  Captures live under: ${RES_DIR} (oracle_rev: $pin)"
+echo "done.  Captures live under: ${RES_DIR} (pin: $pin, patches: $patch_series)"
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true

@@ -1,0 +1,50 @@
+theory S3UnguardableWideLemma
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) A:
+   [ In( x ) ] --[ Observed( x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma WideUnguardable:
+  all-traces
+  "∀ firstArgument secondArgument thirdArgument fourthArgument.
+    ((<firstArgument, secondArgument> = <thirdArgument, fourthArgument>) ∧
+     (<secondArgument, thirdArgument> = <fourthArgument, firstArgument>)) ⇒
+    (⊥)"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'firstArgument', 'secondArgument', 'thirdArgument',
+  'fourthArgument' in the subformula
+    "∀ firstArgument secondArgument thirdArgument fourthArgument.
+      ((<firstArgument, secondArgument> = <thirdArgument, fourthArgument>) ∧
+       (<secondArgument, thirdArgument> = <fourthArgument, firstArgument>)) ⇒
+      (⊥)"
+  in the formula
+    "∀ firstArgument secondArgument thirdArgument fourthArgument.
+      ((<firstArgument, secondArgument> = <thirdArgument, fourthArgument>) ∧
+       (<secondArgument, thirdArgument> = <fourthArgument, firstArgument>)) ⇒
+      (⊥)"
+*/
+by sorry
+
+lemma NarrowUnguardable:
+  all-traces "∀ x z. (<x, z> = x) ⇒ (⊥)"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x', 'z' in the subformula
+    "∀ x z. (<x, z> = x) ⇒ (⊥)"
+  in the formula
+    "∀ x z. (<x, z> = x) ⇒ (⊥)"
+*/
+by sorry
+
+
+
+end

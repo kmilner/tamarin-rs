@@ -5,21 +5,20 @@
 //! Out-of-line tests for `tools::abstract_interpretation`.  The expected
 //! byte strings are the v1.13.0 oracle's observed output for the same
 //! shapes (`--partial-evaluation` stderr traces and the `text{*…*}`
-//! report body).  Maude-backed tests need a maude: the crate-shared
-//! [`crate::test_maude::maude_path`] probe resolves one from `$MAUDE_PATH`,
-//! the system prefixes, `$PATH` or linuxbrew, and PANICS when none of those
-//! hits.  Set `TAM_ALLOW_NO_MAUDE=1` to skip them silently instead.
+//! report body).  Maude-backed tests need a maude:
+//! [`tamarin_test_support::require_maude_path`] resolves one from
+//! `$MAUDE_PATH`, the system prefixes, `$PATH` or the package-manager
+//! prefixes, and PANICS when none of those hits.  Set
+//! `TAM_ALLOW_NO_MAUDE=1` to skip them silently instead.
 
 use super::*;
 use crate::fact::{proto_fact, Multiplicity};
-use crate::rule::{ProtoRuleEInfo, Rule};
-use crate::signature::SignaturePure;
+use crate::rule::{ProtoRuleEInfo, ProtoRuleName, Rule};
 use tamarin_term::builtin::{fresh_var, msg_var};
 use tamarin_term::lterm::pub_term;
 use tamarin_term::maude_sig::{hash_maude_sig, pair_maude_sig};
 use tamarin_term::term::f_app_no_eq;
-
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 // =============================================================================
 // Doc helpers (numbered' / $--$)
@@ -259,16 +258,16 @@ fn nub_modulo_freshness_distinguishes_sharing() {
     assert_eq!(kept.len(), 2);
 }
 
-/// The Set round-trip comparator orders by rule name (HS derived
+/// The Set round-trip key orders by rule name (HS derived
 /// `Ord ProtoRuleEInfo` — name first).
 #[test]
-fn proto_rule_cmp_sorts_alphabetically_by_name() {
+fn proto_rule_key_sorts_alphabetically_by_name() {
     let mut rules = [
         simple_rule("Zebra", ("x", 0), ("x", 0)),
         simple_rule("Apple", ("x", 0), ("x", 0)),
         simple_rule("Mango", ("x", 0), ("x", 0)),
     ];
-    rules.sort_by(proto_rule_cmp);
+    rules.sort_by(|a, b| proto_rule_key(a).cmp(&proto_rule_key(b)));
     let names: Vec<&str> = rules
         .iter()
         .map(|r| match &r.info.name {
@@ -289,7 +288,9 @@ fn proto_rule_cmp_sorts_alphabetically_by_name() {
 /// between styles.
 #[test]
 fn partial_evaluation_trace_bytes_and_style_invariance() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let init: ProtoRuleE = Rule::new(
         ProtoRuleEInfo::standard("Init"),
@@ -300,22 +301,12 @@ fn partial_evaluation_trace_bytes_and_style_invariance() {
         ],
         vec![],
     );
-    let (st_s, rules_s, trace_s) = partial_evaluation(
-        &h,
-        EvaluationStyle::Summary,
-        std::slice::from_ref(&init),
-        &Default::default(),
-    )
-    .unwrap();
+    let (st_s, rules_s, trace_s) =
+        partial_evaluation(&h, EvaluationStyle::Summary, std::slice::from_ref(&init)).unwrap();
     assert_eq!(trace_s, " partial evaluation: step 0 added 2 facts\n");
 
-    let (st_v, rules_v, trace_v) = partial_evaluation(
-        &h,
-        EvaluationStyle::Tracing,
-        std::slice::from_ref(&init),
-        &Default::default(),
-    )
-    .unwrap();
+    let (st_v, rules_v, trace_v) =
+        partial_evaluation(&h, EvaluationStyle::Tracing, std::slice::from_ref(&init)).unwrap();
     assert_eq!(
         trace_v,
         " partial evaluation: step 0 added 2 facts\n\
@@ -326,7 +317,7 @@ fn partial_evaluation_trace_bytes_and_style_invariance() {
     );
 
     let (st_q, rules_q, trace_q) =
-        partial_evaluation(&h, EvaluationStyle::Silent, &[init], &Default::default()).unwrap();
+        partial_evaluation(&h, EvaluationStyle::Silent, &[init]).unwrap();
     assert_eq!(trace_q, "");
 
     // stdout is byte-identical between styles: same state, same rules.
@@ -349,7 +340,9 @@ fn partial_evaluation_trace_bytes_and_style_invariance() {
 /// `1. St( ~k )[+]`, i.e. B's annotated form, even though A sorts first.
 #[test]
 fn abstract_state_keeps_the_last_inserted_annotations() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let st_plain = proto_fact(Multiplicity::Linear, "St", vec![fresh_var("k", 0)]);
     let st_marked = LNFact::fresh_annotated(
@@ -370,8 +363,7 @@ fn abstract_state_keeps_the_last_inserted_annotations() {
     // `getProtoRuleEs`' sorted order: A before B, so B's conclusion is
     // abstracted and inserted last.
     let rules = [mk("A", st_plain), mk("B", st_marked)];
-    let (st, refined, _) =
-        partial_evaluation(&h, EvaluationStyle::Summary, &rules, &Default::default()).unwrap();
+    let (st, refined, _) = partial_evaluation(&h, EvaluationStyle::Summary, &rules).unwrap();
     let report = abs_state_report(&st, refined.len(), rules.len());
     assert!(
         report.contains("\n1. St( ~k )[+]\n"),
@@ -386,7 +378,9 @@ fn abstract_state_keeps_the_last_inserted_annotations() {
 /// minimum index to 0.
 #[test]
 fn partial_evaluation_rule_multiplication_and_name_hints() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let sig = pair_maude_sig().merge(hash_maude_sig());
     let h = MaudeHandle::start(&path, sig).unwrap();
     let hh = |t: LNTerm| f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![t]);
@@ -429,8 +423,7 @@ fn partial_evaluation_rule_multiplication_and_name_hints() {
     );
 
     let rules = [rule_a, rule_b, rule_c, rule_d];
-    let (st, refined, trace) =
-        partial_evaluation(&h, EvaluationStyle::Summary, &rules, &Default::default()).unwrap();
+    let (st, refined, trace) = partial_evaluation(&h, EvaluationStyle::Summary, &rules).unwrap();
     assert_eq!(
         trace,
         " partial evaluation: step 0 added 2 facts\n \
@@ -492,34 +485,18 @@ fn partial_evaluation_rule_multiplication_and_name_hints() {
 // Maude-backed: apply_partial_evaluation splice
 // =============================================================================
 
-fn parsed_stub_rule(name: &str) -> p::Rule {
-    p::Rule {
-        name: name.to_string(),
-        modulo: None,
-        attributes: vec![],
-        let_block: vec![],
-        premises: vec![],
-        actions: vec![],
-        conclusions: vec![],
-        embedded_restrictions: vec![],
-        variants: vec![],
-        left_right: None,
-    }
+fn text_item(tag: &str) -> TheoryItem {
+    TheoryItem::Text(("section".to_string(), tag.to_string()))
 }
 
-fn comment(tag: &str) -> p::TheoryItem {
-    p::TheoryItem::FormalComment {
-        header: "section".to_string(),
-        body: tag.to_string(),
-    }
-}
-
-/// The report + refined rules land at the FIRST rule item's position in
-/// BOTH item lists; earlier items stay put, later non-rule items follow;
-/// the refined rules come out alphabetically (§3 rows 1, 3).
+/// The report + refined rules land at the FIRST rule item's position;
+/// earlier items stay put, later non-rule items follow; the refined rules
+/// come out alphabetically (§3 rows 1, 3).
 #[test]
 fn apply_partial_evaluation_splices_at_first_rule_item() {
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
 
     let zebra: ProtoRuleE = Rule::new(
@@ -539,43 +516,24 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
         vec![],
     );
 
-    let mut parsed = p::Theory {
-        is_diff: false,
-        name: "T".to_string(),
-        configuration: None,
-        items: vec![
-            comment("before"),
-            p::TheoryItem::Rule(parsed_stub_rule("Zebra")),
-            comment("mid"),
-            p::TheoryItem::Rule(parsed_stub_rule("Apple")),
-            comment("after"),
-        ],
-    };
-    let mut elab: Theory = Theory::new("T", SignaturePure::empty(false));
+    let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
     elab.items = vec![
-        TheoryItem::Text(("section".to_string(), "before".to_string())),
+        text_item("before"),
         TheoryItem::Rule(OpenProtoRule::new(zebra)),
-        TheoryItem::Text(("section".to_string(), "mid".to_string())),
+        text_item("mid"),
         TheoryItem::Rule(OpenProtoRule::new(apple)),
-        TheoryItem::Text(("section".to_string(), "after".to_string())),
+        text_item("after"),
     ];
 
-    let trace = apply_partial_evaluation(
-        &mut parsed,
-        &mut elab,
-        &h,
-        EvaluationStyle::Summary,
-        &Default::default(),
-    )
-    .unwrap();
+    let trace = apply_partial_evaluation(&mut elab, &h, EvaluationStyle::Summary).unwrap();
     // Two zero-premise rules, conclusions abstract to Ap(y) + Out(z).
     assert_eq!(trace, " partial evaluation: step 0 added 2 facts\n");
 
-    // Parsed: before | text{*report*} | Apple | Zebra | mid | after.
-    assert_eq!(parsed.items.len(), 6);
-    assert_eq!(parsed.items[0], comment("before"));
-    match &parsed.items[1] {
-        p::TheoryItem::FormalComment { header, body } => {
+    // before | text{*report*} | Apple | Zebra | mid | after.
+    assert_eq!(elab.items.len(), 6);
+    assert_eq!(elab.items[0], text_item("before"));
+    match &elab.items[1] {
+        TheoryItem::Text((header, body)) => {
             assert_eq!(header, "text");
             assert!(
                 body.starts_with(" the abstract state after partial evaluation contains 4 facts:")
@@ -587,54 +545,129 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
         }
         other => panic!("expected report item, got {:?}", other),
     }
-    let rule_name = |it: &p::TheoryItem| match it {
-        p::TheoryItem::Rule(r) => r.name.clone(),
+    let rule_name = |it: &TheoryItem| match it {
+        TheoryItem::Rule(r) => r.name().to_string(),
         other => panic!("expected rule item, got {:?}", other),
     };
-    assert_eq!(rule_name(&parsed.items[2]), "Apple");
-    assert_eq!(rule_name(&parsed.items[3]), "Zebra");
-    assert_eq!(parsed.items[4], comment("mid"));
-    assert_eq!(parsed.items[5], comment("after"));
+    assert_eq!(rule_name(&elab.items[2]), "Apple");
+    assert_eq!(rule_name(&elab.items[3]), "Zebra");
+    assert_eq!(elab.items[4], text_item("mid"));
+    assert_eq!(elab.items[5], text_item("after"));
 
-    // Elaborated: same shape, fresh OpenProtoRules (no variants/breakers).
-    assert_eq!(elab.items.len(), 6);
-    assert!(matches!(&elab.items[1], TheoryItem::Text((h2, _)) if h2 == "text"));
-    let elab_names: Vec<&str> = elab.rules().map(|r| r.name()).collect();
-    assert_eq!(elab_names, vec!["Apple", "Zebra"]);
-    assert!(elab
-        .rules()
-        .all(|r| r.variant_substs.is_empty() && r.abstracted_rule.is_none()));
+    // Fresh OpenProtoRules for the caller's re-close.
+    assert!(elab.rules().all(|r| r.variant_substs.is_empty()
+        && r.abstracted_rule.is_none()
+        && r.loop_breakers.is_empty()));
+}
+
+/// A spliced refined rule carries the pre-macro rule as its `rule_e`, the
+/// half HS's re-close narrows `applyMacroInRule macros ruE` from while
+/// keeping `ruE` itself (lib/theory/src/Rule.hs:82-86).  `open_proto_rule`
+/// then identifies the AC half with it up to terms and the rule renders
+/// without a `rule (modulo AC)` block.
+#[test]
+fn a_refined_rule_keeps_its_pre_macro_e_half() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+
+    // `macros: dup(y) = <y, y>` and a rule whose conclusion calls it.
+    let y = LVar::new("y", LSort::Msg, 0);
+    let dup: crate::theory::LNMacro = crate::theory::LNMacro::new(
+        b"dup".to_vec(),
+        vec![y],
+        tamarin_term::builtin::pair(var_term(y), var_term(y)),
+    );
+    let dup_call: LNTerm = f_app(
+        tamarin_term::macro_expand::macro_to_fun_sym(&dup),
+        vec![var_term(y)],
+    );
+    let macroed: ProtoRuleE = Rule::new(
+        ProtoRuleEInfo::standard("Macroed"),
+        vec![],
+        vec![proto_fact(
+            Multiplicity::Linear,
+            "Ap",
+            vec![dup_call.clone()],
+        )],
+        vec![],
+    );
+
+    let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
+    elab.items = vec![
+        TheoryItem::Macros(vec![dup]),
+        TheoryItem::Rule(OpenProtoRule::new(macroed)),
+    ];
+    apply_partial_evaluation(&mut elab, &h, EvaluationStyle::Silent).unwrap();
+
+    let refined: Vec<&OpenProtoRule> = elab.rules().collect();
+    assert_eq!(refined.len(), 1);
+    let opr = refined[0];
+    assert_eq!(
+        opr.rule_e().conclusions,
+        vec![proto_fact(Multiplicity::Linear, "Ap", vec![dup_call])]
+    );
+    assert_eq!(
+        opr.rule.conclusions,
+        vec![proto_fact(
+            Multiplicity::Linear,
+            "Ap",
+            vec![tamarin_term::builtin::pair(var_term(y), var_term(y))]
+        )]
+    );
+    assert!(crate::theory::open_proto_rule(opr).rule_ac.is_empty());
 }
 
 /// A theory with no rule items is a no-op (HS `replaceProtoRules [] = []`).
 #[test]
 fn apply_partial_evaluation_no_rules_is_noop() {
-    let Some(path) = maude_path() else { return };
-    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let mut parsed = p::Theory {
-        is_diff: false,
-        name: "T".to_string(),
-        configuration: None,
-        items: vec![comment("only")],
+    let Some(path) = require_maude_path() else {
+        return;
     };
-    let mut elab: Theory = Theory::new("T", SignaturePure::empty(false));
-    elab.items = vec![TheoryItem::Text((
-        "section".to_string(),
-        "only".to_string(),
-    ))];
-    let parsed_before = parsed.clone();
+    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
+    elab.items = vec![text_item("only")];
     let elab_before = elab.clone();
-    let trace = apply_partial_evaluation(
-        &mut parsed,
-        &mut elab,
-        &h,
-        EvaluationStyle::Tracing,
-        &Default::default(),
-    )
-    .unwrap();
+    let trace = apply_partial_evaluation(&mut elab, &h, EvaluationStyle::Tracing).unwrap();
     assert_eq!(trace, "");
-    assert_eq!(parsed, parsed_before);
     assert_eq!(elab, elab_before);
+}
+
+// =============================================================================
+// `_restrict`-formula frees
+// =============================================================================
+
+/// One `_restrict` formula as the rule carries it: an atom over the given
+/// free variables.
+fn restr_action(timepoint: LVar, arg: LVar) -> crate::formula::SyntacticLNFormula {
+    let lift = |v: LVar| {
+        crate::formula::lift_free(&tamarin_term::vterm::var_term::<
+            tamarin_term::lterm::Name,
+            LVar,
+        >(v))
+    };
+    crate::formula::ProtoFormula::Atom(crate::atom::ProtoAtom::Action(
+        lift(timepoint),
+        crate::fact::Fact::fresh(
+            crate::fact::FactTag::Proto(Multiplicity::Linear, "P", 1),
+            vec![lift(arg)],
+        ),
+    ))
+}
+
+/// `info_frees` is HS `freesList` over `preRestriction` (Term/LTerm.hs:605-608):
+/// first occurrence first, NOT sorted by `Ord LVar`.  An action atom folds its
+/// timepoint before the fact's arguments (Theory/Model/Atom.hs:129-136), so
+/// `P( y ) @ #i` with `#i` at the higher index yields `[#i, y]` where the
+/// sorted list would be `[y, #i]`.
+#[test]
+fn info_frees_are_in_occurrence_order() {
+    let i = LVar::new("i", LSort::Node, 5);
+    let y = LVar::new("y", LSort::Msg, 1);
+    let mut r: ProtoRuleE = Rule::new(ProtoRuleEInfo::standard("A"), vec![], vec![], vec![]);
+    r.info.restrictions = vec![restr_action(i, y)];
+    assert_eq!(info_frees(&r), vec![i, y]);
 }
 
 // =============================================================================
@@ -650,13 +683,15 @@ fn apply_partial_evaluation_no_rules_is_noop() {
 /// Restr_A_1( eq(x.2, x.2) ) ]-> [ ]`, while the same rule with a
 /// free-less `_restrict` formula renders `[ In( x ) ]`.
 #[test]
-fn restriction_frees_floor_the_final_rename() {
-    let Some(path) = maude_path() else { return };
+fn info_frees_floor_the_final_rename() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let sig = pair_maude_sig().merge(hash_maude_sig());
     let h = MaudeHandle::start(&path, sig).unwrap();
     let hh = |t: LNTerm| f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![t]);
-    let rule_a = || -> ProtoRuleE {
-        Rule::new(
+    let rule_a = |restrictions: Vec<crate::formula::SyntacticLNFormula>| -> ProtoRuleE {
+        let mut r = Rule::new(
             ProtoRuleEInfo::standard("A"),
             vec![crate::fact::in_fact(msg_var("x", 0))],
             vec![],
@@ -665,16 +700,20 @@ fn restriction_frees_floor_the_final_rename() {
                 "Restr_A_1",
                 vec![hh(msg_var("x", 0))],
             )],
-        )
+        );
+        r.info.restrictions = restrictions;
+        r
     };
 
     // Refinement: In(x.0) ≐ In(z.1) (state fact renamed above avoid=1),
     // unifier image drawn at index 2 → body var x.2.  With the formula
     // free x.0 in play the rename's minimum is 0 and x.2 SURVIVES.
-    let frees: BTreeMap<String, Vec<LVar>> =
-        [("A".to_string(), vec![LVar::new("x", LSort::Msg, 0)])].into();
+    let with_free = vec![restr_action(
+        LVar::new("i", LSort::Node, 0),
+        LVar::new("x", LSort::Msg, 0),
+    )];
     let (_, refined, _) =
-        partial_evaluation(&h, EvaluationStyle::Silent, &[rule_a()], &frees).unwrap();
+        partial_evaluation(&h, EvaluationStyle::Silent, &[rule_a(with_free)]).unwrap();
     assert_eq!(refined.len(), 1);
     assert_eq!(
         refined[0].premises,
@@ -690,13 +729,8 @@ fn restriction_frees_floor_the_final_rename() {
     );
 
     // Without info frees the same rule renames its minimum down to 0.
-    let (_, refined0, _) = partial_evaluation(
-        &h,
-        EvaluationStyle::Silent,
-        &[rule_a()],
-        &Default::default(),
-    )
-    .unwrap();
+    let (_, refined0, _) =
+        partial_evaluation(&h, EvaluationStyle::Silent, &[rule_a(vec![])]).unwrap();
     assert_eq!(
         refined0[0].premises,
         vec![crate::fact::in_fact(msg_var("x", 0))]
@@ -721,7 +755,9 @@ fn loop_breakers_key_same_named_refined_rules_apart() {
     use crate::constraint::solver::context::annotate_loop_breakers;
     use crate::rule::PremIdx;
     use crate::theory::OpenProtoRule;
-    let Some(path) = maude_path() else { return };
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let fact = |name: &'static str, arg: LNTerm| -> LNFact {
         proto_fact(Multiplicity::Linear, name, vec![arg])

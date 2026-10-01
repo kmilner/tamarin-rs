@@ -32,7 +32,7 @@ use tamarin_theory::pretty_theory::web_proto_rules;
 fn rule_echo(src: &str) -> String {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = elaborate(&thy).expect("elaborate");
-    let mut rendered = web_proto_rules(&thy, &elaborated);
+    let mut rendered = web_proto_rules(&elaborated);
     assert_eq!(rendered.len(), 1, "one rule per probe theory");
     let rule = rendered.remove(0);
     match rule.split_once("\n\n  /*") {
@@ -91,7 +91,7 @@ fn pair_ac_operands_order_by_the_nested_spine() {
 #[test]
 fn pair_operands_keep_their_place_among_other_ac_heads() {
     let src = "theory MixedAc begin\n\
-               builtins: multiset\n\
+               builtins: multiset, diffie-hellman\n\
                rule SameHead:\n\
                \x20 [ Out( ((b*c)*a) ++ (b*z) ++ <a,b,c> ++ <a,z> ++ h ) ] --[ ]-> []\n\
                end\n";

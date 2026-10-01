@@ -37,12 +37,7 @@ async fn intdot_returns_html_shell() {
     // does `withTheory`.  It therefore answers the shell for any theory path,
     // and a lemma path is one of them.  The oracle capture comes from a lemma
     // path.  The test compares the response byte for byte.
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/intdot/lemma/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/intdot/lemma/debug").await;
     assert_eq!(res.status(), 200);
     assert_eq!(
         res.text().await.expect("text"),
@@ -51,12 +46,7 @@ async fn intdot_returns_html_shell() {
 
     // The shell's `dotsrc` is the same theory path, rendered again against the
     // json route.  An empty proof-tree case name therefore comes back as `_`.
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/intdot/proof/debug/_"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/intdot/proof/debug/_").await;
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("text");
     assert!(
@@ -90,7 +80,7 @@ async fn dot_routes_unhandled_path_is_internal_error() {
             "igd_unhandled_path.html",
         ),
     ] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
+        let res = s.get(path).await;
         assert_eq!(res.status(), 500, "{path} must be a 500");
         assert_eq!(
             res.text().await.expect("text"),
@@ -104,11 +94,8 @@ async fn dot_routes_unhandled_path_is_internal_error() {
 async fn interactive_graph_def_returns_dot() {
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
-        .client
-        .get(s.url("/thy/trace/1/interactive-graph-def/proof/debug"))
-        .send()
-        .await
-        .expect("send");
+        .get("/thy/trace/1/interactive-graph-def/proof/debug")
+        .await;
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("text");
     // The route answers `D.showDot "G"`'s container verbatim (`dotGraphString`,
@@ -124,11 +111,8 @@ async fn interactive_graph_def_returns_dot() {
     // which `getTheoryInteractiveGraphR` (`src/Web/Handler.hs:1464-1470`)
     // answers with `notFound`.
     let res = s
-        .client
-        .get(s.url("/thy/trace/1/interactive-graph-def/proof/debug/_"))
-        .send()
-        .await
-        .expect("send");
+        .get("/thy/trace/1/interactive-graph-def/proof/debug/_")
+        .await;
     assert_eq!(res.status(), 404);
 }
 
@@ -148,7 +132,7 @@ async fn interactive_graph_def_renders_source_cases() {
             "igd_cases_raw.dot",
         ),
     ] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
+        let res = s.get(path).await;
         assert_eq!(res.status(), 200, "{path} must be a 200");
         let body = res.text().await.expect("text");
         assert_eq!(
@@ -191,12 +175,7 @@ async fn graph_json_returns_json_graph_with_dot_json_content_type() {
     // rendered file to `sendFile (fromString ".json")`, so the response
     // `Content-Type` is the literal string `.json`.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/json/proof/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/json/proof/debug").await;
     assert_eq!(res.status(), 200);
     assert_eq!(content_type(&res), ".json");
     let body = res.text().await.expect("text");
@@ -217,18 +196,15 @@ async fn graph_json_returns_json_graph_with_dot_json_content_type() {
 /// root, which carries no rule instances, so its assertions hold over an EMPTY
 /// graph and cannot see whether the solved systems survive.  Autoprove `debug`
 /// and re-read the witness node: its system must actually be there.  This is
-/// the regression guard for `init_process_globals`' `SysRetention::KeepAll` —
+/// the regression guard for the web session's `SysRetention::KeepAll` —
 /// without it every searched proof node drops its `System` and every
 /// post-autoprove graph renders empty.
 #[tokio::test]
 async fn graph_json_after_autoprove_carries_the_system() {
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
-        .client
-        .get(s.url("/thy/trace/1/autoprove/idfs/0/False/proof/debug"))
-        .send()
-        .await
-        .expect("send autoprove");
+        .get("/thy/trace/1/autoprove/idfs/0/False/proof/debug")
+        .await;
     assert_eq!(res.status(), 200);
     let redirect: serde_json::Value = res.json().await.expect("autoprove replies JSON");
     // `{"redirect": "/thy/trace/2/overview/proof/debug/<path>"}` — the graph
@@ -237,15 +213,7 @@ async fn graph_json_after_autoprove_carries_the_system() {
         .as_str()
         .expect("autoprove must redirect to the proved node")
         .replace("/overview/", "/json/");
-    let body = s
-        .client
-        .get(s.url(&target))
-        .send()
-        .await
-        .expect("send")
-        .text()
-        .await
-        .expect("text");
+    let body = s.get(&target).await.text().await.expect("text");
     let v: serde_json::Value = serde_json::from_str(&body).expect("body must be valid JSON");
     let graph = &v["graphs"][0];
     assert!(
@@ -266,14 +234,25 @@ async fn graph_json_unresolvable_proof_path_is_empty_body() {
     // HS `proofPathCode` is `fromMaybe ""` over `resolveProofPath`, so an
     // unknown case name still answers 200 with an EMPTY body.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/json/proof/debug/_/no_such_case"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/json/proof/debug/_/no_such_case").await;
     assert_eq!(res.status(), 200);
     assert_eq!(res.text().await.expect("text"), "");
+}
+
+#[tokio::test]
+async fn unknown_lemma_is_an_unresolvable_graph_path() {
+    let s = start_server_with_theory("issue193.spthy").await;
+
+    let json = s.get("/thy/trace/1/json/proof/notALemma").await;
+    assert_eq!(json.status(), 200);
+    assert_eq!(json.text().await.expect("JSON body"), "");
+
+    for route in ["graph", "interactive-graph-def"] {
+        let response = s
+            .get(&format!("/thy/trace/1/{route}/proof/notALemma"))
+            .await;
+        assert_eq!(response.status(), 404, "{route}");
+    }
 }
 
 #[tokio::test]
@@ -286,7 +265,7 @@ async fn graph_json_unhandled_path_is_internal_error() {
     let s = start_server_with_theory("issue193.spthy").await;
     let expected = haskell_capture("json_rules.html");
     for path in ["/thy/trace/1/json/rules", "/thy/trace/1/json/lemma/debug"] {
-        let res = s.client.get(s.url(path)).send().await.expect("send");
+        let res = s.get(path).await;
         assert_eq!(res.status(), 500, "{path} must be a 500");
         assert_eq!(
             content_type(&res),
@@ -331,12 +310,7 @@ async fn graph_json_source_case_returns_json_graph() {
     // `Theory: <thy> Case: <i>:<j>` — the 1-based indices straight from the
     // path.  Covers the branch the out-of-range 404 above cannot reach.
     let s = start_server_with_theory("issue193.spthy").await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/json/cases/refined/1/1"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/json/cases/refined/1/1").await;
     assert_eq!(res.status(), 200);
     assert_eq!(content_type(&res), ".json");
     let body = res.text().await.expect("text");
@@ -364,12 +338,7 @@ async fn graph_json_abbrev_in_backend_shortens_long_terms() {
     // is byte-compared against the Haskell capture.
     let s = start_server_with_theory("BigTermProved.spthy").await;
     let path = "/thy/trace/1/json/proof/done/_/Init/Init";
-    let abbreviated = s
-        .client
-        .get(s.url(&format!("{path}?abbrevInBackend=1")))
-        .send()
-        .await
-        .expect("send");
+    let abbreviated = s.get(&format!("{path}?abbrevInBackend=1")).await;
     assert_eq!(abbreviated.status(), 200);
     let abbreviated = abbreviated.text().await.expect("text");
     assert_eq!(abbreviated, haskell_capture("json_proof_abbrev.json"));
@@ -383,7 +352,7 @@ async fn graph_json_abbrev_in_backend_shortens_long_terms() {
 
     // Without the parameter the same node keeps its full terms, so the two
     // bodies differ.
-    let plain = s.client.get(s.url(path)).send().await.expect("send");
+    let plain = s.get(path).await;
     assert_eq!(plain.status(), 200);
     let plain = plain.text().await.expect("text");
     assert!(
@@ -480,12 +449,7 @@ async fn graph_renders_via_json_cmd_when_with_json_is_set() {
         cfg.json_path = Some(stub);
     })
     .await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/graph/proof/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/graph/proof/debug").await;
     assert_eq!(res.status(), 200);
     assert_eq!(
         res.headers()
@@ -503,12 +467,7 @@ async fn graph_renders_via_json_cmd_when_with_json_is_set() {
         cfg.json_path = Some(stub);
     })
     .await;
-    let res = s
-        .client
-        .get(s.url("/thy/trace/1/graph/proof/debug"))
-        .send()
-        .await
-        .expect("send");
+    let res = s.get("/thy/trace/1/graph/proof/debug").await;
     assert_eq!(res.status(), 404);
 
     let _ = std::fs::remove_dir_all(&dir);

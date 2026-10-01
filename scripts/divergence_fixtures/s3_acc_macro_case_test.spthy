@@ -1,0 +1,39 @@
+// The two formulas an accountability-generated lemma prints when the case test
+// it is built from calls a macro.
+//
+// `Acc.translate` runs on the OPEN theory (Main/TheoryLoader.hs:472,479) and
+// adds each generated lemma with `liftedAddLemma`
+// (lib/accountability/src/Accountability.hs:42-49), which predicate-expands it
+// and nothing else (Theory/Text/Parser.hs:141-152).  `closeTheory` then maps
+// `applyMacroInLemma` over EVERY lemma of the theory, the generated ones
+// included (CloseRule.hs:85): the macro-applied formula becomes `_lFormula`
+// and the formula as added becomes `_lOriginalFormula`
+// (lib/theory/src/Lemma.hs:83-88).  `prettyLemma` quotes the original on the
+// header line and converts `_lFormula` for the guarded block
+// (lib/theory/src/Lemma.hs:116-141, see lines 121,125), so `tag(x)` stands in
+// every generated header and `<'t', x>` in every generated guarded block.  A
+// port that skips the macro application at injection writes the call in both
+// places, and the solver then proves a formula over an uninterpreted `tag/1`.
+//
+// Mode `match`: the two engines agree on this shape.
+//
+// Compared slice: the `theory … end` echo (see check.sh), which carries every
+// generated header beside its guarded block.
+
+
+theory S3AccMacroCaseTest
+begin
+
+macros:
+  tag(x) = <'t', x>
+
+rule L:
+  [ In( <x, a> ) ] --[ Log( tag(x), a ) ]-> [ ]
+
+test badLog:
+  "Ex #i x. Log(tag(x), a)@i"
+
+lemma acc:
+  badLog account for "All a #i x. Log(tag(x), a)@i ==> not(a = 'ok')"
+
+end

@@ -4,13 +4,14 @@
 
 //! Port of `Term.Macro` from `lib/term/src/Term/Macro.hs`.
 //!
-//! A macro is a triple `(name, params, body)`. `apply_macros` recursively
-//! expands every occurrence of any macro symbol in a term.
+//! A macro is a triple `(name, params, body)` (Term/Macro.hs:22). `apply_macros`
+//! recursively expands every occurrence of any macro symbol in a term.
 
 use crate::function_symbols::{Constructability, FunSym, NdcState, NoEqSym, Privacy};
+use crate::lterm::{BVar, LNTerm, LVar, Name};
 use crate::subst::{apply_vterm, Subst};
-use crate::term::{f_app, Term};
-use crate::vterm::VTerm;
+use crate::term::{f_app, map_lits, Term};
+use crate::vterm::{Lit, VTerm};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Macro<C, V> {
@@ -38,6 +39,40 @@ impl<C, V> Macro<C, V> {
             body,
         }
     }
+}
+
+/// HS `LNMacro` (Term/Macro.hs:24): the macro a `macros:` declaration builds.
+pub type LNMacro = Macro<Name, LVar>;
+
+/// HS `BNMacro` (Term/Macro.hs:26): the same macro over the `BVar` terms a
+/// formula's atoms carry.
+pub type BNMacro = Macro<Name, BVar<LVar>>;
+
+/// HS `lnMacrosToBNMacros` (Term/Macro.hs:56-60): every parameter and every
+/// variable of the body becomes a `Free` `BVar`, so the macro applies to the
+/// terms of a formula's atoms.  `freeTerm` is a plain functor map
+/// (Term/LTerm.hs:522-523) and all of the body's variables land on the same
+/// side of `BVar`'s ordering, so the `f_app` rebuild inside [`map_lits`]
+/// keeps the AC argument order.
+pub fn ln_macros_to_bn_macros(macros: &[LNMacro]) -> Vec<BNMacro> {
+    macros.iter().map(ln_macro_to_bn_macro).collect()
+}
+
+fn ln_macro_to_bn_macro(m: &LNMacro) -> BNMacro {
+    Macro {
+        name: m.name.clone(),
+        params: m.params.iter().copied().map(BVar::Free).collect(),
+        body: free_term(&m.body),
+    }
+}
+
+/// HS `freeTerm` (Term/LTerm.hs:522-523): every variable of an `LNTerm` as a
+/// free `BVar`.
+fn free_term(t: &LNTerm) -> VTerm<Name, BVar<LVar>> {
+    map_lits(t, &mut |l| match l {
+        Lit::Con(c) => Lit::Con(*c),
+        Lit::Var(v) => Lit::Var(BVar::Free(*v)),
+    })
 }
 
 /// `macroToFunSym`: synthesise a private destructor `NoEqSym` for a macro
@@ -222,5 +257,53 @@ mod tests {
             vec![b.clone(), b],
         );
         assert_eq!(apply_macros(&macros, wrong_arity.clone()), wrong_arity);
+    }
+
+    /// `examples/features/macros/MacroExample.spthy` declares
+    /// `decrypt(x, y) = adec(x, y)` and `hashdec(x, y) = h(decrypt(x, y))`, so
+    /// the body of `hashdec` calls the macro declared before it. One
+    /// `apply_macros` reaches `h(adec(a, b))`.
+    #[test]
+    fn a_macro_body_calling_another_macro_expands_completely() {
+        let x = crate::lterm::LVar::new("x", crate::lterm::LSort::Msg, 0);
+        let y = crate::lterm::LVar::new("y", crate::lterm::LSort::Msg, 0);
+        let decrypt: LNMacro = Macro::new(
+            b"decrypt".to_vec(),
+            vec![x, y],
+            crate::builtin::adec(var_term(x), var_term(y)),
+        );
+        let decrypt_sym = macro_to_fun_sym(&decrypt).into_no_eq();
+        let hashdec: LNMacro = Macro::new(
+            b"hashdec".to_vec(),
+            vec![x, y],
+            crate::builtin::hash(crate::term::f_app_no_eq(
+                decrypt_sym,
+                vec![var_term(x), var_term(y)],
+            )),
+        );
+        let hashdec_sym = macro_to_fun_sym(&hashdec).into_no_eq();
+        let a = msg_var("a", 0);
+        let b = msg_var("b", 0);
+
+        let invoke: LNTerm = crate::term::f_app_no_eq(hashdec_sym, vec![a.clone(), b.clone()]);
+        assert_eq!(
+            apply_macros(&[decrypt, hashdec], invoke),
+            crate::builtin::hash(crate::builtin::adec(a, b))
+        );
+    }
+
+    /// `lnMacrosToBNMacros` retags the parameters and the body, so the macro
+    /// applies to the `BVar` terms a formula's atoms carry. A term of the use
+    /// site keeps its own bound indices across the substitution.
+    #[test]
+    fn bn_macros_apply_to_a_term_holding_a_bound_index() {
+        let x = crate::lterm::LVar::new("x", crate::lterm::LSort::Msg, 0);
+        let dup: LNMacro = Macro::new(b"dup".to_vec(), vec![x], pair(var_term(x), var_term(x)));
+        let dup_sym = macro_to_fun_sym(&dup).into_no_eq();
+        let bn = ln_macros_to_bn_macros(std::slice::from_ref(&dup));
+
+        let bound: VTerm<crate::lterm::Name, BVar<LVar>> = var_term(BVar::Bound(0));
+        let invoke = crate::term::f_app_no_eq(dup_sym, vec![bound.clone()]);
+        assert_eq!(apply_macros(&bn, invoke), pair(bound.clone(), bound));
     }
 }

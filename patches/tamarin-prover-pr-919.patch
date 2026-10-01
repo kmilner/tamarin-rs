@@ -1,0 +1,983 @@
+diff --git a/Makefile b/Makefile
+index 4a158ab8e649bd6c9581e2c4c32a6ad21154a107..edc3ee1f6d83de9318a5ea79f4d69bff092160ef 100644
+--- a/Makefile
++++ b/Makefile
+@@ -482,7 +482,7 @@ accountability-case-studies:	$(ACCOUNTABILITY_CS_TARGETS)
+ ## Regression (old issues)
+ ##########################
+ 
+-FAST_REGRESSION_CASE_STUDIES=issue446-1.spthy issue446-2.spthy issue753-4.spthy issue753-5.spthy issue753-6.spthy issue834.spthy issue777.spthy issue770.spthy
++FAST_REGRESSION_CASE_STUDIES=issue446-1.spthy issue446-2.spthy issue753-4.spthy issue753-5.spthy issue753-6.spthy issue834.spthy issue777.spthy issue770.spthy issue914.spthy
+ FAST_REGRESSION_TARGETS=$(subst .spthy,_analyzed.spthy,$(addprefix case-studies$(SUBDIR)regression/trace/,$(FAST_REGRESSION_CASE_STUDIES)))
+ 
+ 
+diff --git a/case-studies-regression/csf26-ac/fast/UM_three_pass_analyzed.spthy b/case-studies-regression/csf26-ac/fast/UM_three_pass_analyzed.spthy
+index 1a87a70f9bfd7bb2a2bd59b2a2ab14764111305c..b9dc97718806b423d204bd3b61208e413d97f8b9 100644
+--- a/case-studies-regression/csf26-ac/fast/UM_three_pass_analyzed.spthy
++++ b/case-studies-regression/csf26-ac/fast/UM_three_pass_analyzed.spthy
+@@ -789,7 +789,7 @@ solve( (∃ #l matchingComm.
+                 solve( !Ltk( $B, ~ea ) ▶₂ #l )
+                   case Register_key_honest
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -1416,7 +1416,7 @@ solve( (∃ #l matchingComm.
+                      ) @ #l )
+                 case I_Complete_case_1
+                 solve( (∀ rest.
+-                         ((rest add 'g'^~ex) =
++                         ((rest add ('g'^~ex)) =
+                           (<'1', 'g'^~ex> add 
+                            <'2', Y, 
+                             MAC(first(h(<z, 'g'^(~ea*~ea), $A, $A, 'g'^~ex, Y>)),
+@@ -2226,7 +2226,7 @@ solve( (∃ #l matchingComm.
+               next
+                 case I_Complete_case_2
+                 solve( (∀ rest.
+-                         ((rest add 'g'^~ex) =
++                         ((rest add ('g'^~ex)) =
+                           (<'1', 'g'^~ex> add 
+                            <'2', Y, 
+                             MAC(first(h(<z, 'g'^(~ea*~ea), $A, $A, 'g'^~ex, Y>)),
+@@ -3116,7 +3116,7 @@ solve( (∃ #l matchingComm.
+                     solve( !Ltk( $B, ~ea ) ▶₂ #l )
+                       case Register_key_honest
+                       solve( (∀ rest.
+-                               ((rest add 'g'^~ex) =
++                               ((rest add ('g'^~ex)) =
+                                 (<'1', 'g'^~ex> add 
+                                  <'2', 'g'^~ey, 
+                                   MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -3268,7 +3268,7 @@ solve( (∃ #l matchingComm.
+                     solve( !Ltk( $B, ~ea ) ▶₂ #l )
+                       case Register_key_honest
+                       solve( (∀ rest.
+-                               ((rest add 'g'^~ex) =
++                               ((rest add ('g'^~ex)) =
+                                 (<'1', 'g'^~ex> add 
+                                  <'2', 'g'^~ey, 
+                                   MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -3470,7 +3470,7 @@ solve( (∃ #l matchingComm.
+                           solve( R_Act( ~ey, $B, $A, 'g'^~ex ) ▶₀ #v )
+                             case R_Activate
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~ex) =
++                                     ((rest add ('g'^~ex)) =
+                                       (<'1', 'g'^~ex> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey
+@@ -3698,7 +3698,7 @@ solve( (∃ #l matchingComm.
+                 solve( I_Act( ~ex, $A, $B ) ▶₀ #l )
+                   case I_Activate
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey>)),
+@@ -4153,7 +4153,7 @@ solve( (∃ #l matchingComm.
+                 solve( I_Act( ~ex, $A, $B ) ▶₀ #l )
+                   case I_Activate
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey>)),
+@@ -4648,7 +4648,7 @@ solve( (∃ #l matchingComm.
+                                    ) @ #vk.1 )
+                               case I_Complete
+                               solve( (∀ rest.
+-                                       ((rest add 'g'^~ex) =
++                                       ((rest add ('g'^~ex)) =
+                                         (<'1', 'g'^~ex> add 
+                                          <'2', 'g'^~ey, 
+                                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~eb), $A, $A, 'g'^~ex, 'g'^~ey
+@@ -4800,7 +4800,7 @@ solve( (∃ #l matchingComm.
+                                                  ) ▶₀ #l )
+                                             case I_Complete
+                                             solve( (∀ rest.
+-                                                     ((rest add 'g'^~x) =
++                                                     ((rest add ('g'^~x)) =
+                                                       (<'1', 'g'^~x> add 
+                                                        <'2', 'g'^~ey, 
+                                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 
+@@ -4905,7 +4905,7 @@ solve( (∃ #l matchingComm.
+                                                  ) ▶₀ #l )
+                                             case I_Complete
+                                             solve( (∀ rest.
+-                                                     ((rest add 'g'^~x) =
++                                                     ((rest add ('g'^~x)) =
+                                                       (<'1', 'g'^~x> add 
+                                                        <'2', 'g'^~ey, 
+                                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 
+@@ -5230,7 +5230,7 @@ solve( (∃ #l matchingComm.
+                              ) @ #vk.1 )
+                         case I_Complete
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~eb), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -5896,7 +5896,7 @@ solve( (∃ #l matchingComm.
+                                    ) @ #vk.1 )
+                               case I_Complete
+                               solve( (∀ rest.
+-                                       ((rest add 'g'^~ex) =
++                                       ((rest add ('g'^~ex)) =
+                                         (<'1', 'g'^~ex> add 
+                                          <'2', 'g'^~ey, 
+                                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~eb), $A, $A, 'g'^~ex, 'g'^~ey
+@@ -6048,7 +6048,7 @@ solve( (∃ #l matchingComm.
+                                                  ) ▶₀ #l )
+                                             case I_Complete
+                                             solve( (∀ rest.
+-                                                     ((rest add 'g'^~x) =
++                                                     ((rest add ('g'^~x)) =
+                                                       (<'1', 'g'^~x> add 
+                                                        <'2', 'g'^~ey, 
+                                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 
+@@ -6153,7 +6153,7 @@ solve( (∃ #l matchingComm.
+                                                  ) ▶₀ #l )
+                                             case I_Complete
+                                             solve( (∀ rest.
+-                                                     ((rest add 'g'^~x) =
++                                                     ((rest add ('g'^~x)) =
+                                                       (<'1', 'g'^~x> add 
+                                                        <'2', 'g'^~ey, 
+                                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 
+@@ -6478,7 +6478,7 @@ solve( (∃ #l matchingComm.
+                              ) @ #vk.1 )
+                         case I_Complete
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~eb), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -6880,7 +6880,7 @@ next
+             next
+               case case_2
+               solve( (∀ rest.
+-                       ((rest add 'g'^~ex) =
++                       ((rest add ('g'^~ex)) =
+                         (<'1', 'g'^~ex> add 
+                          <'2', 'g'^~ey, 
+                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -7357,7 +7357,7 @@ next
+             next
+               case case_3
+               solve( (∀ rest.
+-                       ((rest add 'g'^~ex) =
++                       ((rest add ('g'^~ex)) =
+                         (<'1', 'g'^~ex> add 
+                          <'2', 'g'^~ey, 
+                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -7869,7 +7869,7 @@ next
+                     solve( !Ltk( $B, ~ea ) ▶₂ #v )
+                       case Register_key_honest
+                       solve( (∀ rest.
+-                               ((rest add 'g'^~ex) =
++                               ((rest add ('g'^~ex)) =
+                                 (<'1', 'g'^~ex> add 
+                                  <'2', 'g'^~ey, 
+                                   MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -7961,7 +7961,7 @@ next
+                     solve( !Ltk( $B, ~ea ) ▶₂ #v )
+                       case Register_key_honest
+                       solve( (∀ rest.
+-                               ((rest add 'g'^~ex) =
++                               ((rest add ('g'^~ex)) =
+                                 (<'1', 'g'^~ex> add 
+                                  <'2', 'g'^~ey, 
+                                   MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -8577,7 +8577,7 @@ next
+                              ) ▶₀ #l )
+                         case R_Complete_case_1
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -9463,7 +9463,7 @@ next
+                       next
+                         case R_Complete_case_2
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -10403,7 +10403,7 @@ next
+                              ) ▶₀ #l )
+                         case R_Complete_case_1
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -11289,7 +11289,7 @@ next
+                       next
+                         case R_Complete_case_2
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -12229,7 +12229,7 @@ next
+                              ) ▶₀ #l )
+                         case R_Complete_case_1
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -13115,7 +13115,7 @@ next
+                       next
+                         case R_Complete_case_2
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -14201,7 +14201,7 @@ next
+                    ) @ #vk.1 )
+               case I_Complete_case_1
+               solve( (∀ rest.
+-                       ((rest add 'g'^~ex) =
++                       ((rest add ('g'^~ex)) =
+                         (<'1', 'g'^~ex> add 
+                          <'2', 'g'^~ey, 
+                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~eb), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -15150,7 +15150,7 @@ next
+             next
+               case I_Complete_case_2
+               solve( (∀ rest.
+-                       ((rest add 'g'^~ex) =
++                       ((rest add ('g'^~ex)) =
+                         (<'1', 'g'^~ex> add 
+                          <'2', 'g'^~ey, 
+                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey>)),
+@@ -15577,7 +15577,7 @@ next
+                                  ) ▶₀ #l )
+                             case I_Complete_case_1
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -16472,7 +16472,7 @@ next
+                           next
+                             case I_Complete_case_2
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -17425,7 +17425,7 @@ next
+                                  ) ▶₀ #l )
+                             case I_Complete_case_1
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -18320,7 +18320,7 @@ next
+                           next
+                             case I_Complete_case_2
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -19273,7 +19273,7 @@ next
+                                  ) ▶₀ #l )
+                             case I_Complete_case_1
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -20168,7 +20168,7 @@ next
+                           next
+                             case I_Complete_case_2
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -21308,8 +21308,8 @@ qed
+ Generated from:
+ Tamarin version 1.13.0
+ Maude version 3.5.1
+-Git revision: 41bc81379b23681e7057314a5cf66a25c45e1986, branch: canonicalise-subst
+-Compiled at: 2026-07-27 16:11:34.947223 UTC
++Git revision: 767a8a730bfb2462364e6079a0834478c79db7b8, branch: issue-914
++Compiled at: 2026-08-18 09:13:37.448390675 UTC
+ */
+ 
+ end
+@@ -21321,7 +21321,7 @@ summary of summaries:
+ analyzed: examples/csf26-ac/fast/UM_three_pass.spthy
+ 
+   output:          examples/csf26-ac/fast/UM_three_pass.spthy.tmp
+-  processing time: 37.43s
++  processing time: 64.38s
+   
+   key_agreement_reachable (exists-trace): verified (14 steps)
+   CK_secure_UM3 (all-traces): verified (1772 steps)
+diff --git a/case-studies-regression/csf26-ac/fast/UM_three_pass_combined_analyzed.spthy b/case-studies-regression/csf26-ac/fast/UM_three_pass_combined_analyzed.spthy
+index 665e1c2eb2be5bd807d9c02cf182651d4c6cfa32..d4fee74cf2bbd77cae12495a534c49772d0994f0 100644
+--- a/case-studies-regression/csf26-ac/fast/UM_three_pass_combined_analyzed.spthy
++++ b/case-studies-regression/csf26-ac/fast/UM_three_pass_combined_analyzed.spthy
+@@ -854,8 +854,8 @@ qed
+ Generated from:
+ Tamarin version 1.13.0
+ Maude version 3.5.1
+-Git revision: 41bc81379b23681e7057314a5cf66a25c45e1986, branch: canonicalise-subst
+-Compiled at: 2026-07-27 16:11:34.947223 UTC
++Git revision: 767a8a730bfb2462364e6079a0834478c79db7b8, branch: issue-914
++Compiled at: 2026-08-18 09:13:37.448390675 UTC
+ */
+ 
+ end
+@@ -867,7 +867,7 @@ summary of summaries:
+ analyzed: examples/csf26-ac/fast/UM_three_pass_combined.spthy
+ 
+   output:          examples/csf26-ac/fast/UM_three_pass_combined.spthy.tmp
+-  processing time: 4.83s
++  processing time: 9.15s
+   
+   key_agreement_reachable (exists-trace): verified (14 steps)
+   CK_secure_UM3 (all-traces): falsified - found trace (13 steps)
+diff --git a/case-studies-regression/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy b/case-studies-regression/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy
+index c65c574671de5cc0df85e3d912cdadab265acba2..1c073fbfdcd450cd23fe330c5aa2bea11d3984b0 100644
+--- a/case-studies-regression/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy
++++ b/case-studies-regression/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy
+@@ -1495,7 +1495,7 @@ solve( (∃ #l matchingComm.
+                 solve( I_Act( ~ex, $A, $B ) ▶₀ #l )
+                   case I_Activate
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey, 'UM3'
+@@ -1544,7 +1544,7 @@ solve( (∃ #l matchingComm.
+                 solve( I_Act( ~ex, $A, $B ) ▶₀ #l )
+                   case I_Activate
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey, 'UM3'
+@@ -3512,7 +3512,7 @@ next
+             next
+               case I_Complete_case_2
+               solve( (∀ rest.
+-                       ((rest add 'g'^~ex) =
++                       ((rest add ('g'^~ex)) =
+                         (<'1', 'g'^~ex> add 
+                          <'2', 'g'^~ey, 
+                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey, 'UM3'
+@@ -3908,7 +3908,7 @@ next
+                 next
+                   case Corrupt_SessionKey_case_2
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey, 'UM3'
+@@ -4388,7 +4388,7 @@ next
+                 next
+                   case Reveal_SessionKey_case_2
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey, 'UM3'
+@@ -5661,8 +5661,8 @@ qed
+ Generated from:
+ Tamarin version 1.13.0
+ Maude version 3.5.1
+-Git revision: 41bc81379b23681e7057314a5cf66a25c45e1986, branch: canonicalise-subst
+-Compiled at: 2026-07-27 16:11:34.947223 UTC
++Git revision: 767a8a730bfb2462364e6079a0834478c79db7b8, branch: issue-914
++Compiled at: 2026-08-18 09:13:37.448390675 UTC
+ */
+ 
+ end
+@@ -5674,7 +5674,7 @@ summary of summaries:
+ analyzed: examples/csf26-ac/fast/UM_three_pass_combined_fixed.spthy
+ 
+   output:          examples/csf26-ac/fast/UM_three_pass_combined_fixed.spthy.tmp
+-  processing time: 7.85s
++  processing time: 13.68s
+   
+   key_agreement_reachable (exists-trace): verified (14 steps)
+   CK_secure_UM3 (all-traces): verified (497 steps)
+diff --git a/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_analyzed.spthy b/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_analyzed.spthy
+index 0f09787a48ffacad0a69aaef343438ca7dab58d3..b9dc97718806b423d204bd3b61208e413d97f8b9 100644
+--- a/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_analyzed.spthy
++++ b/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_analyzed.spthy
+@@ -789,7 +789,7 @@ solve( (∃ #l matchingComm.
+                 solve( !Ltk( $B, ~ea ) ▶₂ #l )
+                   case Register_key_honest
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -1416,7 +1416,7 @@ solve( (∃ #l matchingComm.
+                      ) @ #l )
+                 case I_Complete_case_1
+                 solve( (∀ rest.
+-                         ((rest add 'g'^~ex) =
++                         ((rest add ('g'^~ex)) =
+                           (<'1', 'g'^~ex> add 
+                            <'2', Y, 
+                             MAC(first(h(<z, 'g'^(~ea*~ea), $A, $A, 'g'^~ex, Y>)),
+@@ -2226,7 +2226,7 @@ solve( (∃ #l matchingComm.
+               next
+                 case I_Complete_case_2
+                 solve( (∀ rest.
+-                         ((rest add 'g'^~ex) =
++                         ((rest add ('g'^~ex)) =
+                           (<'1', 'g'^~ex> add 
+                            <'2', Y, 
+                             MAC(first(h(<z, 'g'^(~ea*~ea), $A, $A, 'g'^~ex, Y>)),
+@@ -3116,7 +3116,7 @@ solve( (∃ #l matchingComm.
+                     solve( !Ltk( $B, ~ea ) ▶₂ #l )
+                       case Register_key_honest
+                       solve( (∀ rest.
+-                               ((rest add 'g'^~ex) =
++                               ((rest add ('g'^~ex)) =
+                                 (<'1', 'g'^~ex> add 
+                                  <'2', 'g'^~ey, 
+                                   MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -3268,7 +3268,7 @@ solve( (∃ #l matchingComm.
+                     solve( !Ltk( $B, ~ea ) ▶₂ #l )
+                       case Register_key_honest
+                       solve( (∀ rest.
+-                               ((rest add 'g'^~ex) =
++                               ((rest add ('g'^~ex)) =
+                                 (<'1', 'g'^~ex> add 
+                                  <'2', 'g'^~ey, 
+                                   MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -3470,7 +3470,7 @@ solve( (∃ #l matchingComm.
+                           solve( R_Act( ~ey, $B, $A, 'g'^~ex ) ▶₀ #v )
+                             case R_Activate
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~ex) =
++                                     ((rest add ('g'^~ex)) =
+                                       (<'1', 'g'^~ex> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey
+@@ -3698,7 +3698,7 @@ solve( (∃ #l matchingComm.
+                 solve( I_Act( ~ex, $A, $B ) ▶₀ #l )
+                   case I_Activate
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey>)),
+@@ -4153,7 +4153,7 @@ solve( (∃ #l matchingComm.
+                 solve( I_Act( ~ex, $A, $B ) ▶₀ #l )
+                   case I_Activate
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey>)),
+@@ -4648,7 +4648,7 @@ solve( (∃ #l matchingComm.
+                                    ) @ #vk.1 )
+                               case I_Complete
+                               solve( (∀ rest.
+-                                       ((rest add 'g'^~ex) =
++                                       ((rest add ('g'^~ex)) =
+                                         (<'1', 'g'^~ex> add 
+                                          <'2', 'g'^~ey, 
+                                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~eb), $A, $A, 'g'^~ex, 'g'^~ey
+@@ -4800,7 +4800,7 @@ solve( (∃ #l matchingComm.
+                                                  ) ▶₀ #l )
+                                             case I_Complete
+                                             solve( (∀ rest.
+-                                                     ((rest add 'g'^~x) =
++                                                     ((rest add ('g'^~x)) =
+                                                       (<'1', 'g'^~x> add 
+                                                        <'2', 'g'^~ey, 
+                                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 
+@@ -4905,7 +4905,7 @@ solve( (∃ #l matchingComm.
+                                                  ) ▶₀ #l )
+                                             case I_Complete
+                                             solve( (∀ rest.
+-                                                     ((rest add 'g'^~x) =
++                                                     ((rest add ('g'^~x)) =
+                                                       (<'1', 'g'^~x> add 
+                                                        <'2', 'g'^~ey, 
+                                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 
+@@ -5230,7 +5230,7 @@ solve( (∃ #l matchingComm.
+                              ) @ #vk.1 )
+                         case I_Complete
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~eb), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -5896,7 +5896,7 @@ solve( (∃ #l matchingComm.
+                                    ) @ #vk.1 )
+                               case I_Complete
+                               solve( (∀ rest.
+-                                       ((rest add 'g'^~ex) =
++                                       ((rest add ('g'^~ex)) =
+                                         (<'1', 'g'^~ex> add 
+                                          <'2', 'g'^~ey, 
+                                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~eb), $A, $A, 'g'^~ex, 'g'^~ey
+@@ -6048,7 +6048,7 @@ solve( (∃ #l matchingComm.
+                                                  ) ▶₀ #l )
+                                             case I_Complete
+                                             solve( (∀ rest.
+-                                                     ((rest add 'g'^~x) =
++                                                     ((rest add ('g'^~x)) =
+                                                       (<'1', 'g'^~x> add 
+                                                        <'2', 'g'^~ey, 
+                                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 
+@@ -6153,7 +6153,7 @@ solve( (∃ #l matchingComm.
+                                                  ) ▶₀ #l )
+                                             case I_Complete
+                                             solve( (∀ rest.
+-                                                     ((rest add 'g'^~x) =
++                                                     ((rest add ('g'^~x)) =
+                                                       (<'1', 'g'^~x> add 
+                                                        <'2', 'g'^~ey, 
+                                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 
+@@ -6478,7 +6478,7 @@ solve( (∃ #l matchingComm.
+                              ) @ #vk.1 )
+                         case I_Complete
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~eb), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -6880,7 +6880,7 @@ next
+             next
+               case case_2
+               solve( (∀ rest.
+-                       ((rest add 'g'^~ex) =
++                       ((rest add ('g'^~ex)) =
+                         (<'1', 'g'^~ex> add 
+                          <'2', 'g'^~ey, 
+                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -7357,7 +7357,7 @@ next
+             next
+               case case_3
+               solve( (∀ rest.
+-                       ((rest add 'g'^~ex) =
++                       ((rest add ('g'^~ex)) =
+                         (<'1', 'g'^~ex> add 
+                          <'2', 'g'^~ey, 
+                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -7869,7 +7869,7 @@ next
+                     solve( !Ltk( $B, ~ea ) ▶₂ #v )
+                       case Register_key_honest
+                       solve( (∀ rest.
+-                               ((rest add 'g'^~ex) =
++                               ((rest add ('g'^~ex)) =
+                                 (<'1', 'g'^~ex> add 
+                                  <'2', 'g'^~ey, 
+                                   MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -7961,7 +7961,7 @@ next
+                     solve( !Ltk( $B, ~ea ) ▶₂ #v )
+                       case Register_key_honest
+                       solve( (∀ rest.
+-                               ((rest add 'g'^~ex) =
++                               ((rest add ('g'^~ex)) =
+                                 (<'1', 'g'^~ex> add 
+                                  <'2', 'g'^~ey, 
+                                   MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -8577,7 +8577,7 @@ next
+                              ) ▶₀ #l )
+                         case R_Complete_case_1
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -9463,7 +9463,7 @@ next
+                       next
+                         case R_Complete_case_2
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -10403,7 +10403,7 @@ next
+                              ) ▶₀ #l )
+                         case R_Complete_case_1
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -11289,7 +11289,7 @@ next
+                       next
+                         case R_Complete_case_2
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -12229,7 +12229,7 @@ next
+                              ) ▶₀ #l )
+                         case R_Complete_case_1
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -13115,7 +13115,7 @@ next
+                       next
+                         case R_Complete_case_2
+                         solve( (∀ rest.
+-                                 ((rest add 'g'^~ex) =
++                                 ((rest add ('g'^~ex)) =
+                                   (<'1', 'g'^~ex> add 
+                                    <'2', 'g'^~ey, 
+                                     MAC(first(h(<'g'^(~ex*~ey), 'g'^(~ea*~ea), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -14201,7 +14201,7 @@ next
+                    ) @ #vk.1 )
+               case I_Complete_case_1
+               solve( (∀ rest.
+-                       ((rest add 'g'^~ex) =
++                       ((rest add ('g'^~ex)) =
+                         (<'1', 'g'^~ex> add 
+                          <'2', 'g'^~ey, 
+                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~eb), $A, $A, 'g'^~ex, 'g'^~ey>)),
+@@ -15150,7 +15150,7 @@ next
+             next
+               case I_Complete_case_2
+               solve( (∀ rest.
+-                       ((rest add 'g'^~ex) =
++                       ((rest add ('g'^~ex)) =
+                         (<'1', 'g'^~ex> add 
+                          <'2', 'g'^~ey, 
+                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey>)),
+@@ -15577,7 +15577,7 @@ next
+                                  ) ▶₀ #l )
+                             case I_Complete_case_1
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -16472,7 +16472,7 @@ next
+                           next
+                             case I_Complete_case_2
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -17425,7 +17425,7 @@ next
+                                  ) ▶₀ #l )
+                             case I_Complete_case_1
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -18320,7 +18320,7 @@ next
+                           next
+                             case I_Complete_case_2
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -19273,7 +19273,7 @@ next
+                                  ) ▶₀ #l )
+                             case I_Complete_case_1
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -20168,7 +20168,7 @@ next
+                           next
+                             case I_Complete_case_2
+                             solve( (∀ rest.
+-                                     ((rest add 'g'^~x) =
++                                     ((rest add ('g'^~x)) =
+                                       (<'1', 'g'^~x> add 
+                                        <'2', 'g'^~ey, 
+                                         MAC(first(h(<'g'^(~ey*~x), 'g'^(~eb*~eb), $A, $A, 'g'^~x, 'g'^~ey>)),
+@@ -21308,8 +21308,8 @@ qed
+ Generated from:
+ Tamarin version 1.13.0
+ Maude version 3.5.1
+-Git revision: 41bc81379b23681e7057314a5cf66a25c45e1986, branch: canonicalise-subst
+-Compiled at: 2026-07-27 16:11:34.947223 UTC
++Git revision: 767a8a730bfb2462364e6079a0834478c79db7b8, branch: issue-914
++Compiled at: 2026-08-18 09:13:37.448390675 UTC
+ */
+ 
+ end
+@@ -21321,7 +21321,7 @@ summary of summaries:
+ analyzed: examples/csf26-ac/fast/UM_three_pass.spthy
+ 
+   output:          examples/csf26-ac/fast/UM_three_pass.spthy.tmp
+-  processing time: 37.54s
++  processing time: 64.38s
+   
+   key_agreement_reachable (exists-trace): verified (14 steps)
+   CK_secure_UM3 (all-traces): verified (1772 steps)
+diff --git a/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_combined_analyzed.spthy b/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_combined_analyzed.spthy
+index 6aa01173b94d7875d733e9e039465bba8f8dee49..d4fee74cf2bbd77cae12495a534c49772d0994f0 100644
+--- a/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_combined_analyzed.spthy
++++ b/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_combined_analyzed.spthy
+@@ -854,8 +854,8 @@ qed
+ Generated from:
+ Tamarin version 1.13.0
+ Maude version 3.5.1
+-Git revision: 41bc81379b23681e7057314a5cf66a25c45e1986, branch: canonicalise-subst
+-Compiled at: 2026-07-27 16:11:34.947223 UTC
++Git revision: 767a8a730bfb2462364e6079a0834478c79db7b8, branch: issue-914
++Compiled at: 2026-08-18 09:13:37.448390675 UTC
+ */
+ 
+ end
+@@ -867,7 +867,7 @@ summary of summaries:
+ analyzed: examples/csf26-ac/fast/UM_three_pass_combined.spthy
+ 
+   output:          examples/csf26-ac/fast/UM_three_pass_combined.spthy.tmp
+-  processing time: 4.93s
++  processing time: 9.15s
+   
+   key_agreement_reachable (exists-trace): verified (14 steps)
+   CK_secure_UM3 (all-traces): falsified - found trace (13 steps)
+diff --git a/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy b/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy
+index 00142b68a3af0e00649c5e68a0476e9cb8a88778..1c073fbfdcd450cd23fe330c5aa2bea11d3984b0 100644
+--- a/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy
++++ b/case-studies-regression/fast-tests/csf26-ac/fast/UM_three_pass_combined_fixed_analyzed.spthy
+@@ -1495,7 +1495,7 @@ solve( (∃ #l matchingComm.
+                 solve( I_Act( ~ex, $A, $B ) ▶₀ #l )
+                   case I_Activate
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey, 'UM3'
+@@ -1544,7 +1544,7 @@ solve( (∃ #l matchingComm.
+                 solve( I_Act( ~ex, $A, $B ) ▶₀ #l )
+                   case I_Activate
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey, 'UM3'
+@@ -3512,7 +3512,7 @@ next
+             next
+               case I_Complete_case_2
+               solve( (∀ rest.
+-                       ((rest add 'g'^~ex) =
++                       ((rest add ('g'^~ex)) =
+                         (<'1', 'g'^~ex> add 
+                          <'2', 'g'^~ey, 
+                           MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey, 'UM3'
+@@ -3908,7 +3908,7 @@ next
+                 next
+                   case Corrupt_SessionKey_case_2
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey, 'UM3'
+@@ -4388,7 +4388,7 @@ next
+                 next
+                   case Reveal_SessionKey_case_2
+                   solve( (∀ rest.
+-                           ((rest add 'g'^~ex) =
++                           ((rest add ('g'^~ex)) =
+                             (<'1', 'g'^~ex> add 
+                              <'2', 'g'^~ey, 
+                               MAC(first(h(<'g'^(~ex*~ey), 'g'^(~eb*~x), $A, $B, 'g'^~ex, 'g'^~ey, 'UM3'
+@@ -5661,8 +5661,8 @@ qed
+ Generated from:
+ Tamarin version 1.13.0
+ Maude version 3.5.1
+-Git revision: 41bc81379b23681e7057314a5cf66a25c45e1986, branch: canonicalise-subst
+-Compiled at: 2026-07-27 16:11:34.947223 UTC
++Git revision: 767a8a730bfb2462364e6079a0834478c79db7b8, branch: issue-914
++Compiled at: 2026-08-18 09:13:37.448390675 UTC
+ */
+ 
+ end
+@@ -5674,7 +5674,7 @@ summary of summaries:
+ analyzed: examples/csf26-ac/fast/UM_three_pass_combined_fixed.spthy
+ 
+   output:          examples/csf26-ac/fast/UM_three_pass_combined_fixed.spthy.tmp
+-  processing time: 7.87s
++  processing time: 13.68s
+   
+   key_agreement_reachable (exists-trace): verified (14 steps)
+   CK_secure_UM3 (all-traces): verified (497 steps)
+diff --git a/case-studies-regression/fast-tests/regression/trace/issue914_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/issue914_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..6c4f0bf31e583e2433b15164c006d52b08c355a3
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/issue914_analyzed.spthy
+@@ -0,0 +1,55 @@
++theory Issue914
++
++begin
++
++// Function signature and definition of the equational theory E
++
++builtins: diffie-hellman
++functions: fst/1, pair/2, snd/1, add/2 [AC]
++equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++rule (modulo E) Gen:
++   [ Fr( ~e ) ] --[ Secret( ('pad' add ('g'^~e)) ) ]-> [ Out( 'g'^~e ) ]
++
++  /* has exactly the trivial AC variant */
++
++lemma secrecy:
++  all-traces "∀ m #i. (Secret( m ) @ #i) ⇒ (¬(∃ #j. K( m ) @ #j))"
++/*
++guarded formula characterizing all counter-examples:
++"∃ m #i. (Secret( m ) @ #i) ∧ ∃ #j. (K( m ) @ #j)"
++*/
++simplify
++solve( !KU( ('pad' add ('g'^~e)) ) @ #vk )
++  case c_add
++  solve( !KU( 'g'^~e ) @ #vk.2 )
++    case Gen
++    SOLVED // trace found
++  qed
++qed
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 7750cd6c604e737ec64f2891268a8fb904f3865a, branch: issue-914
++Compiled at: 2026-08-18 10:01:17.985278967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/issue914.spthy
++
++  output:          examples/regression/trace/issue914.spthy.tmp
++  processing time: 0.07s
++  
++  secrecy (all-traces): falsified - found trace (4 steps)
++
++==============================================================================
++*/
+diff --git a/examples/regression/trace/issue914.spthy b/examples/regression/trace/issue914.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..9f758fc48f5a8c3d1a4b12d349e89af0bd897d00
+--- /dev/null
++++ b/examples/regression/trace/issue914.spthy
+@@ -0,0 +1,21 @@
++/*
++ * Regression test for issue #914.
++ * A user-defined AC operator binds more tightly than '^'.
++ * The printer must keep parentheses around a '^' argument.
++ * Without them, the stored theory reads back as a different
++ * theory, and the verdict flips from falsified to verified.
++ */
++theory Issue914
++begin
++
++builtins: diffie-hellman
++functions: add/2 [AC]
++
++rule Gen:
++  [ Fr(~e) ] --[ Secret( add('g'^~e, 'pad') ) ]-> [ Out( 'g'^~e ) ]
++
++lemma secrecy:
++  all-traces
++  "All m #i. Secret(m) @ #i ==> not (Ex #j. K(m) @ #j)"
++
++end
+diff --git a/lib/term/src/Term/Term.hs b/lib/term/src/Term/Term.hs
+index 762d6ac520128fb593671736cbd07731f7486433..88f01dcab33fd312f95abdf87d03fb4855ba74cb 100644
+--- a/lib/term/src/Term/Term.hs
++++ b/lib/term/src/Term/Term.hs
+@@ -302,7 +302,7 @@ prettyTerm ppLit = ppTerm
+     ppTerm t = case viewTerm t of
+         Lit l                                     -> ppLit l
+         FApp (AC (ACfct (f, _))) []               -> text (BC.unpack f)
+-        FApp (AC (ACfct (f, _))) ts               -> ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts
++        FApp (AC (ACfct (f, _))) ts               -> ppTermsWith ppACArg (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts
+         FApp (AC Mult)     ts                     -> ppTerms "*" 1 "(" ")" ts
+         FApp (AC Xor)      ts                     -> ppTerms "⊕" 1 "(" ")" ts
+         FApp (AC Union)    ts                     -> ppTerms "++" 1 "(" ")" ts
+@@ -316,9 +316,20 @@ prettyTerm ppLit = ppTerm
+         FApp (C EMap)      ts                     -> ppFun emapSymString ts
+         FApp List          ts                     -> ppFun "LIST" ts
+  
+-    ppTerms sepa n lead finish ts =
++    ppTerms = ppTermsWith ppTerm
++
++    ppTermsWith pp sepa n lead finish ts =
+         fcat . (text lead :) . (++[text finish]) .
+-            map (nest n) . punctuate (text sepa) . map ppTerm $ ts
++            map (nest n) . punctuate (text sepa) . map pp $ ts
++
++    -- A user-defined AC operator binds more tightly than '^'. Print
++    -- parentheses around an exponentiation argument so that the parser
++    -- reads the term back unchanged. Exponentiation is the only form
++    -- that this printer writes infix without its own brackets. If you
++    -- add another such form, extend this guard.
++    ppACArg t = case viewTerm t of
++        FApp (NoEq s) [_,_] | s == expSym -> parens (ppTerm t)
++        _                                 -> ppTerm t
+ 
+     split (viewTerm2 -> FPair t1 t2) = t1 : split t2
+     split t                          = [t]

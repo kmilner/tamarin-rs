@@ -44,16 +44,18 @@
 //! pipeline of the same theories is kept under `cfg(test)` as the
 //! differential reference for the structural builders (see the tests).
 
-use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::{FunSym, NdcState, Privacy};
-use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar};
+use tamarin_term::lterm::{BVar, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::rewriting::Equal;
 use tamarin_term::subst_vfresh::LNSubstVFresh;
 use tamarin_term::term::Term;
+use tamarin_term::vterm::var_term;
 
+use crate::atom::ProtoAtom;
 use crate::constraint::solver::context::IntrRuleCache;
 use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
+use crate::formula::{exists_var, for_all_var, lift_free, BLNTerm, LNFormula, ProtoFormula};
 use crate::guarded::Guarded;
 use crate::rule::{
     apply_subst_rule, get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
@@ -94,19 +96,22 @@ pub fn check_close_intr_rule(
     maude: &MaudeHandle,
     theory_name: Option<&str>,
     deduction_chain_check: bool,
-) -> NdcCheckedCache {
+    initial: &[IntrRuleAC],
+    parameters: crate::constraint::solver::sources::IntegerParameters,
+) -> Result<NdcCheckedCache, crate::prove::ProveError> {
     let assembled = crate::constraint::solver::context::ProofContext::assemble_intruder_rules(
         &maude.maude_sig(),
         maude,
+        initial,
     );
     if !deduction_chain_check {
-        return NdcCheckedCache {
+        return Ok(NdcCheckedCache {
             cache: assembled,
             ndc_funs: Vec::new(),
-        };
+        });
     }
-    let (ndc_funs, cache) = pretty_ndc_check(maude, theory_name, assembled);
-    NdcCheckedCache { cache, ndc_funs }
+    let (ndc_funs, cache) = pretty_ndc_check(maude, theory_name, assembled, parameters)?;
+    Ok(NdcCheckedCache { cache, ndc_funs })
 }
 
 // =============================================================================
@@ -218,35 +223,34 @@ fn decompose(facts: &[LNFact]) -> Vec<Vec<LNFact>> {
         return vec![vec![]];
     };
     let rest_d = decompose(rest);
-    if f.tag == FactTag::Ku && f.terms.len() == 1 {
-        if let Term::App(head, args) = &f.terms[0] {
-            let as_kd = Fact::fresh_annotated(FactTag::Kd, f.annotations.clone(), f.terms.to_vec());
-            let mut out: Vec<Vec<LNFact>> = rest_d
+    if f.tag == FactTag::Ku
+        && f.terms.len() == 1
+        && let Term::App(head, args) = &f.terms[0]
+    {
+        let as_kd = Fact::fresh_annotated(FactTag::Kd, f.annotations.clone(), f.terms.to_vec());
+        let mut out: Vec<Vec<LNFact>> = rest_d
+            .iter()
+            .map(|l| {
+                let mut l2 = Vec::with_capacity(l.len() + 1);
+                l2.push(as_kd.clone());
+                l2.extend(l.iter().cloned());
+                l2
+            })
+            .collect();
+        if !fun_sym_private(head) {
+            let arg_kus: Vec<LNFact> = args
                 .iter()
-                .map(|l| {
-                    let mut l2 = Vec::with_capacity(l.len() + 1);
-                    l2.push(as_kd.clone());
-                    l2.extend(l.iter().cloned());
-                    l2
-                })
+                .map(|a| Fact::fresh_annotated(FactTag::Ku, f.annotations.clone(), vec![a.clone()]))
                 .collect();
-            if !fun_sym_private(head) {
-                let arg_kus: Vec<LNFact> = args
-                    .iter()
-                    .map(|a| {
-                        Fact::fresh_annotated(FactTag::Ku, f.annotations.clone(), vec![a.clone()])
-                    })
-                    .collect();
-                for x1 in decompose(&arg_kus) {
-                    for y in &rest_d {
-                        let mut l = x1.clone();
-                        l.extend(y.iter().cloned());
-                        out.push(l);
-                    }
+            for x1 in decompose(&arg_kus) {
+                for y in &rest_d {
+                    let mut l = x1.clone();
+                    l.extend(y.iter().cloned());
+                    out.push(l);
                 }
             }
-            return out;
         }
+        return out;
     }
     rest_d
         .into_iter()
@@ -319,85 +323,83 @@ fn deduction_rule(s: &[LNFact]) -> crate::theory::OpenProtoRule {
     ))
 }
 
-/// A `#`-sorted idx-0 parser-AST variable — the timepoint/binder shape
-/// the restriction and lemma formulas quantify over.
-fn ndc_node_var(name: &str) -> p::VarSpec {
-    p::VarSpec {
-        name: name.to_string(),
-        idx: 0,
-        sort: p::SortHint::Node,
-        typ: None,
-    }
+/// A `#`-sorted idx-0 variable — the timepoint/binder shape the restriction
+/// and lemma formulas quantify over (HS `LVar x LSortNode 0`,
+/// CloseRule.hs:273-274).
+fn ndc_node_var(name: &str) -> LVar {
+    LVar::new(name, LSort::Node, 0)
+}
+
+/// A timepoint as a formula term: `LIT (Var (Free v))` (CloseRule.hs:273).
+fn free_time(v: &LVar) -> BLNTerm {
+    var_term(BVar::Free(*v))
 }
 
 /// `FACT() @ #tv` — HS `factAnd`/`factAndD` (CloseRule.hs:273,277): a
 /// nullary Linear proto fact at a Node-sorted timepoint.
-fn nullary_action_at(fact_name: &str, tv: &p::VarSpec) -> p::Formula {
-    p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: fact_name.to_string(),
-            args: Vec::new(),
-            annotations: Vec::new(),
-        },
-        p::Term::Var(tv.clone()),
+fn nullary_action_at(fact_name: &str, tv: &LVar) -> LNFormula {
+    ProtoFormula::Atom(ProtoAtom::Action(
+        free_time(tv),
+        crate::fact::proto_fact(Multiplicity::Linear, fact_name, Vec::new()).map_ref(lift_free),
     ))
 }
 
 /// `#a = #b` — HS `factEq` (CloseRule.hs:274).
-fn time_eq(a: &p::VarSpec, b: &p::VarSpec) -> p::Formula {
-    p::Formula::Atom(p::Atom::Eq(
-        p::Term::Var(a.clone()),
-        p::Term::Var(b.clone()),
-    ))
+fn time_eq(a: &LVar, b: &LVar) -> LNFormula {
+    ProtoFormula::Atom(ProtoAtom::EqE(free_time(a), free_time(b)))
+}
+
+/// `foldr (hinted forAll) f vs` (Theory/Text/Parser/Formula.hs:73-77, over
+/// `forAll` Theory/Model/Formula.hs:355-356 and `hinted` :364-365): close
+/// the binders from the last to the first, so the first variable of `vs`
+/// carries the outermost quantifier.  The hint is
+/// `hint (LVar n s _) = (n, s)` (Theory/Model/Formula.hs:227-228).
+fn close_all(vs: &[LVar], body: LNFormula) -> LNFormula {
+    vs.iter().rev().fold(body, |acc, v| {
+        for_all_var((v.name.to_string(), v.sort), v, acc)
+    })
+}
+
+/// [`close_all`] at `exists` (Theory/Model/Formula.hs:359-360).
+fn close_ex(vs: &[LVar], body: LNFormula) -> LNFormula {
+    vs.iter().rev().fold(body, |acc, v| {
+        exists_var((v.name.to_string(), v.sort), v, acc)
+    })
 }
 
 /// HS `newRestriction0` (CloseRule.hs:269-275):
-/// `All #ndci #ndcj. OnlyOnce() @ #ndci & OnlyOnce() @ #ndcj ==>
-/// #ndci = #ndcj`, as the parser-AST value the parse of that text yields.
-/// HS names the binders `i`/`j` (LSortNode); the `ndc`-prefixed names are
-/// hints only, invisible outside the synthetic proof search.
-fn only_once_restriction_ast() -> p::Formula {
+/// `All #ndci #ndcj. OnlyOnce() @ #ndci & OnlyOnce() @ #ndcj ==> #ndci = #ndcj`.
+/// HS names the binders `i`/`j` and closes them with `forAllFormula`, a
+/// `foldl` over ascending `frees` that makes the LAST variable the outermost
+/// binder (Theory/Model/Formula.hs:537-538), where [`close_all`] keeps the
+/// written order.  Names and prefix order are hints only, invisible outside
+/// the synthetic proof search.
+fn only_once_restriction() -> LNFormula {
     let i = ndc_node_var("ndci");
     let j = ndc_node_var("ndcj");
-    p::Formula::Forall(
-        vec![i.clone(), j.clone()],
-        Box::new(p::Formula::Implies(
-            Box::new(p::Formula::And(
-                Box::new(nullary_action_at("OnlyOnce", &i)),
-                Box::new(nullary_action_at("OnlyOnce", &j)),
-            )),
-            Box::new(time_eq(&i, &j)),
-        )),
+    close_all(
+        &[i, j],
+        nullary_action_at("OnlyOnce", &i)
+            .and(nullary_action_at("OnlyOnce", &j))
+            .implies(time_eq(&i, &j)),
     )
 }
 
 /// HS `newRestriction2` (CloseRule.hs:280-283):
 /// `All #ndci #ndcj #ndck. OnlyOnceD() @ #ndci & OnlyOnceD() @ #ndcj &
 /// OnlyOnceD() @ #ndck ==> #ndci = #ndcj | #ndci = #ndck | #ndcj = #ndck`
-/// (`&`/`|` left-associated, as the parser builds them).
-fn only_once_d_restriction_ast() -> p::Formula {
+/// (`.&&.` and `.||.` are `infixl`, and both bind tighter than `.==>.` —
+/// Theory/Model/Formula.hs:233-235).
+fn only_once_d_restriction() -> LNFormula {
     let i = ndc_node_var("ndci");
     let j = ndc_node_var("ndcj");
     let k = ndc_node_var("ndck");
-    p::Formula::Forall(
-        vec![i.clone(), j.clone(), k.clone()],
-        Box::new(p::Formula::Implies(
-            Box::new(p::Formula::And(
-                Box::new(p::Formula::And(
-                    Box::new(nullary_action_at("OnlyOnceD", &i)),
-                    Box::new(nullary_action_at("OnlyOnceD", &j)),
-                )),
-                Box::new(nullary_action_at("OnlyOnceD", &k)),
-            )),
-            Box::new(p::Formula::Or(
-                Box::new(p::Formula::Or(
-                    Box::new(time_eq(&i, &j)),
-                    Box::new(time_eq(&i, &k)),
-                )),
-                Box::new(time_eq(&j, &k)),
-            )),
-        )),
+    close_all(
+        &[i, j, k],
+        nullary_action_at("OnlyOnceD", &i)
+            .and(nullary_action_at("OnlyOnceD", &j))
+            .and(nullary_action_at("OnlyOnceD", &k))
+            .implies(time_eq(&i, &j).or(time_eq(&i, &k)).or(time_eq(&j, &k))),
     )
 }
 
@@ -407,11 +409,12 @@ fn only_once_d_restriction_ast() -> p::Formula {
 /// constants whose every binder is action-guarded, so the conversion
 /// cannot fail.
 fn deduction_restrictions(with_only_once_d: bool) -> Vec<Guarded> {
-    let mut asts = vec![only_once_restriction_ast()];
+    let mut formulas = vec![only_once_restriction()];
     if with_only_once_d {
-        asts.push(only_once_d_restriction_ast());
+        formulas.push(only_once_d_restriction());
     }
-    asts.iter()
+    formulas
+        .iter()
         .map(|f| {
             crate::guarded::formula_to_guarded(f).unwrap_or_else(|e| {
                 panic!(
@@ -423,91 +426,52 @@ fn deduction_restrictions(with_only_once_d: bool) -> Vec<Guarded> {
         .collect()
 }
 
-/// Push every variable of a parser-AST term onto `out` in traversal
-/// order, first occurrence wins.  Fixes the lemma's data-binder order.
-fn collect_var_specs(t: &p::Term, out: &mut Vec<p::VarSpec>) {
-    match t {
-        p::Term::Var(v) if !out.contains(v) => {
-            out.push(v.clone());
-        }
-        p::Term::App(_, args) | p::Term::Pair(args) => {
-            for a in args {
-                collect_var_specs(a, out);
-            }
-        }
-        p::Term::AlgApp(_, a, b) | p::Term::Diff(a, b) | p::Term::BinOp(_, a, b) => {
-            collect_var_specs(a, out);
-            collect_var_specs(b, out);
-        }
-        p::Term::PatMatch(inner) => collect_var_specs(inner, out),
-        _ => {}
-    }
-}
-
 /// HS `newLemmas`' formula (CloseRule.hs:263-267):
 /// `Not (existFormula (landFormula (aLemma s ++ [kLogFact fact_term])))`,
 /// i.e. ¬∃ vars #t0 #t1. Generated_0(varD s) @ #t0 ∧ K(fact_term) @ #t1
 /// — with `aLemma`'s arguments NOT Msg→Fresh-retyped (only
 /// `lvarToLnterm`'s Nat→Fresh), and `kLogFact = protoFact Linear "K"`
-/// (Theory/Model/Fact.hs:302-303).  Built over the parser-AST formula layer (the
-/// `Guarded` leaf type) via `lnterm_to_parser` and converted by the same
-/// `formula_to_guarded` the load path applies to user lemmas.
+/// (Theory/Model/Fact.hs:301-303).  `landFormula` lifts each fact with
+/// `fmap (fmap (fmap Free))` (CloseRule.hs:200-201) — [`Fact::map_ref`] of
+/// [`lift_free`].
 ///
-/// Same-named binders stay distinct without renaming: binder resolution
-/// keys on (name, idx, sort) (guarded_types.rs `subst_free_term_cow`),
-/// mirroring HS's sort-aware `LVar` identity — so a Nat variable (Fresh
-/// in the `Generated_0` args via `lvarToLnterm`, Nat inside the K term)
-/// and dotted-index unifier variables (`x.5`) resolve to their own
-/// binders.  Binder names and order: HS quantifies `frees` under their
-/// own names with timepoints `"0"`/`"1"`; here the data binders keep
-/// first-occurrence order with `ndct`-named timepoints last — names and
-/// prefix order are hints only, invisible outside the synthetic search.
+/// Binder names and order: HS quantifies `frees` under their own names with
+/// timepoints `"0"`/`"1"`; here the data binders keep first-occurrence order
+/// with `ndct`-named timepoints last — names and prefix order are hints
+/// only, invisible outside the synthetic search.  Same-named binders stay
+/// distinct because a binder closes exactly the occurrences equal to its
+/// whole `LVar` (HS `quantify`'s `v == x`, Theory/Model/Formula.hs:350-352),
+/// so a Nat variable (Fresh in the `Generated_0` args via `lvarToLnterm`,
+/// Nat inside the K term) and dotted-index unifier variables (`x.5`) each
+/// close their own occurrences.
 fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
     let var_d: Vec<LVar> = tamarin_term::lterm::frees(&s.to_vec());
-    // `lnterm_to_parser` hints a Msg variable `SortHint::Msg` — the same
-    // concrete sort the parser pins on a prefixless quantifier binder
-    // (`quantifier_binder`, HS `msgvar` Token.hs:440-441), so the binder
-    // list below is byte-identical to a parsed one.
-    let lower = crate::pretty_theory::lnterm_to_parser;
     // aLemma s (CloseRule.hs:263): `map lvarToLnterm (varD s)`.
-    let gen_args: Vec<p::Term> = var_d
-        .iter()
-        .map(|v| lower(&crate::fact::lvar_to_lnterm(v)))
-        .collect();
-    let k_arg = lower(fact_term);
-    let mut binders: Vec<p::VarSpec> = Vec::new();
-    for t in gen_args.iter().chain(std::iter::once(&k_arg)) {
-        collect_var_specs(t, &mut binders);
+    let gen_args: Vec<LNTerm> = var_d.iter().map(crate::fact::lvar_to_lnterm).collect();
+    let mut binders: Vec<LVar> = Vec::new();
+    for t in gen_args.iter().chain(std::iter::once(fact_term)) {
+        t.for_each_free(&mut |v| {
+            if !binders.contains(v) {
+                binders.push(*v);
+            }
+        });
     }
     let t0 = ndc_node_var("ndct0");
     let t1 = ndc_node_var("ndct1");
-    let gen_at = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "Generated_0".to_string(),
-            args: gen_args,
-            annotations: Vec::new(),
-        },
-        p::Term::Var(t0.clone()),
+    let gen_at = ProtoFormula::Atom(ProtoAtom::Action(
+        free_time(&t0),
+        crate::fact::proto_fact(Multiplicity::Linear, "Generated_0", gen_args).map_ref(lift_free),
     ));
-    let k_at = p::Formula::Atom(p::Atom::Action(
-        p::Fact {
-            persistent: false,
-            name: "K".to_string(),
-            args: vec![k_arg],
-            annotations: Vec::new(),
-        },
-        p::Term::Var(t1.clone()),
+    let k_at = ProtoFormula::Atom(ProtoAtom::Action(
+        free_time(&t1),
+        crate::fact::k_log_fact(fact_term.clone()).map_ref(lift_free),
     ));
     binders.push(t0);
     binders.push(t1);
-    let ast = p::Formula::Not(Box::new(p::Formula::Exists(
-        binders,
-        Box::new(p::Formula::And(Box::new(gen_at), Box::new(k_at))),
-    )));
+    let fm = close_ex(&binders, gen_at.and(k_at)).not();
     // Every binder occurs in one of the two Action guard atoms by
     // construction, so the conversion cannot fail on guardedness.
-    crate::guarded::formula_to_guarded(&ast).unwrap_or_else(|e| {
+    crate::guarded::formula_to_guarded(&fm).unwrap_or_else(|e| {
         panic!(
             "[ndc] deduction lemma failed guarded conversion: {}",
             e.message
@@ -544,30 +508,34 @@ fn prove_deduction_theory(
     s: &[LNFact],
     fact_term: &LNTerm,
     with_only_once_d: bool,
-) -> bool {
-    use crate::constraint::solver::context::ProofContext;
+    parameters: crate::constraint::solver::sources::IntegerParameters,
+) -> Result<bool, crate::prove::ProveError> {
+    use crate::constraint::solver::context::{ProofContext, ProofContextOptions};
     use crate::constraint::solver::search::{proof_status, run_proof_search, ProofStatus};
     use crate::constraint::system::{formula_to_system, SourceKind};
 
     let rules = vec![deduction_rule(s)];
     let restrictions = deduction_restrictions(with_only_once_d);
     let g = deduction_lemma_guarded(s, fact_term);
-    let ctx = ProofContext::new_with_injected_intruder_rules(
+    let ctx = ProofContext::try_with_options(
         maude.clone(),
         rules,
-        restrictions.clone(),
-        intr_modified.clone(),
-    );
-    ctx.ensure_saturated();
+        ProofContextOptions {
+            restrictions: restrictions.clone(),
+            intruder_rules: Some(intr_modified.clone()),
+            parameters,
+            ..Default::default()
+        },
+    )?;
+    ctx.ensure_saturated()?;
     let sys = formula_to_system(
         restrictions,
         SourceKind::RefinedSources,
-        tamarin_parser::ast::TraceQuantifier::AllTraces,
-        false,
+        crate::theory::TraceQuantifier::AllTraces,
         &g,
     );
-    let root = run_proof_search(&ctx, sys, usize::MAX);
-    proof_status(&root) == ProofStatus::TraceFound
+    let root = run_proof_search(&ctx, sys, usize::MAX)?;
+    Ok(proof_status(&root) == ProofStatus::TraceFound)
 }
 
 /// HS `deductionCheck` (CloseRule.hs:215): can `fact` be derived from
@@ -575,10 +543,10 @@ fn prove_deduction_theory(
 /// cache injected into every decomposition's theory.
 fn deduction_check(
     maude: &MaudeHandle,
-    intr_modified: &IntrRuleCache,
+    intr_modified: &BoundToOneCache<'_>,
     fact: &LNFact,
     facts: &[LNFact],
-) -> bool {
+) -> Result<bool, crate::prove::ProveError> {
     let fact_term = fact
         .terms
         .first()
@@ -591,17 +559,27 @@ fn deduction_check(
         })
         .collect();
     if set_d.is_empty() {
-        return true;
+        return Ok(true);
     }
     // `checkProofd tabProof1 || checkProofd tabProof2`: every
     // decomposition's proof must find a trace; theory-1 carries both
     // restrictions, theory-2 only `OnlyOnce`.
-    let all_traces_found = |with_ood: bool| -> bool {
-        set_d
-            .iter()
-            .all(|s| prove_deduction_theory(maude, intr_modified, s, fact_term, with_ood))
+    let all_traces_found = |with_ood: bool| -> Result<bool, crate::prove::ProveError> {
+        for s in &set_d {
+            if !prove_deduction_theory(
+                maude,
+                intr_modified.modified(),
+                s,
+                fact_term,
+                with_ood,
+                intr_modified.parameters,
+            )? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     };
-    all_traces_found(true) || all_traces_found(false)
+    Ok(all_traces_found(true)? || all_traces_found(false)?)
 }
 
 // =============================================================================
@@ -652,14 +630,20 @@ struct BoundToOneCache<'a> {
     intr_r: &'a [IntrRuleAC],
     checked_fun: Option<FunSym>,
     modified: std::cell::OnceCell<IntrRuleCache>,
+    parameters: crate::constraint::solver::sources::IntegerParameters,
 }
 
 impl<'a> BoundToOneCache<'a> {
-    fn new(intr_r: &'a [IntrRuleAC], checked_fun: Option<FunSym>) -> Self {
+    fn new(
+        intr_r: &'a [IntrRuleAC],
+        checked_fun: Option<FunSym>,
+        parameters: crate::constraint::solver::sources::IntegerParameters,
+    ) -> Self {
         Self {
             intr_r,
             checked_fun,
             modified: std::cell::OnceCell::new(),
+            parameters,
         }
     }
 
@@ -686,7 +670,7 @@ fn chained_rules_deduction_test(
     intr_modified: &BoundToOneCache<'_>,
     inst_sigma: &IntrRuleAC,
     inst1_sigma: &IntrRuleAC,
-) -> bool {
+) -> Result<bool, crate::prove::ProveError> {
     let mut facts: Vec<LNFact> = Vec::new();
     facts.extend_from_slice(get_deconstr_rule_prems_tail(inst_sigma));
     facts.extend_from_slice(get_deconstr_rule_prems_tail(inst1_sigma));
@@ -699,9 +683,9 @@ fn chained_rules_deduction_test(
         );
     }
     if ded_naive(&fact_to_deduce.terms[0], &terms) {
-        return true;
+        return Ok(true);
     }
-    deduction_check(maude, intr_modified.modified(), fact_to_deduce, &facts)
+    deduction_check(maude, intr_modified, fact_to_deduce, &facts)
 }
 
 /// Shape guard of HS `ndcCheck`'s first clause: a deconstruction rule with
@@ -740,9 +724,9 @@ fn ndc_check_prepare<'a>(
     maude: &MaudeHandle,
     r: &'a IntrRuleAC,
     r1: &IntrRuleAC,
-) -> Option<ChainablePair<'a>> {
+) -> Result<Option<ChainablePair<'a>>, crate::prove::ProveError> {
     if !(ndc_checkable(r) && ndc_checkable(r1)) {
-        return None;
+        return Ok(None);
     }
     // `r1 `renameAvoiding` r` — same idiom as
     // `equal_duplicate_rule_up_to_renaming`.
@@ -756,9 +740,9 @@ fn ndc_check_prepare<'a>(
             rhs: kd_prem1,
         }],
     )
-    .unwrap_or_default();
+    .map_err(|error| crate::prove::ProveError::Maude(error.to_string()))?;
     if unifs.is_empty() {
-        return None;
+        return Ok(None);
     }
     // The fresh supply `applySubsts` threads across the unifier list,
     // avoiding both rules.
@@ -766,12 +750,12 @@ fn ndc_check_prepare<'a>(
     let mut track = |v: &LVar| counter = counter.max(v.idx + 1);
     r.for_each_free(&mut track);
     fresh_inst1.for_each_free(&mut track);
-    Some(ChainablePair {
+    Ok(Some(ChainablePair {
         r,
         fresh_inst1,
         unifs,
         counter,
-    })
+    }))
 }
 
 /// Deduction phase of HS `ndcCheck` (`checkDeduction`): every unifier-
@@ -782,14 +766,14 @@ fn ndc_check_eval(
     maude: &MaudeHandle,
     intr_modified: &BoundToOneCache<'_>,
     pair: ChainablePair<'_>,
-) -> bool {
+) -> Result<bool, crate::prove::ProveError> {
     let ChainablePair {
         r,
         fresh_inst1,
         unifs,
         mut counter,
     } = pair;
-    unifs.into_iter().all(|u_pairs| {
+    for u_pairs in unifs {
         // `applySubsts subst r freshInst1` — freshToFree this unifier off
         // the pair's supply, which the whole list shares in order.
         let s_fresh = LNSubstVFresh::from_list(u_pairs);
@@ -798,13 +782,16 @@ fn ndc_check_eval(
             counter += n;
             b
         });
-        chained_rules_deduction_test(
+        if !chained_rules_deduction_test(
             maude,
             intr_modified,
             &apply_subst_rule(&sigma, r),
             &apply_subst_rule(&sigma, &fresh_inst1),
-        )
-    })
+        )? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 // =============================================================================
@@ -820,7 +807,8 @@ fn apply_ndc_check(
     maude: &MaudeHandle,
     intr_r: &[IntrRuleAC],
     groups: Vec<Vec<IntrRuleAC>>,
-) -> (Vec<FunSym>, Vec<IntrRuleAC>) {
+    parameters: crate::constraint::solver::sources::IntegerParameters,
+) -> Result<(Vec<FunSym>, Vec<IntrRuleAC>), crate::prove::ProveError> {
     let mut tagged: Vec<FunSym> = Vec::new();
     let mut out: Vec<IntrRuleAC> = Vec::new();
     for group in groups {
@@ -832,7 +820,7 @@ fn apply_ndc_check(
         .expect("applyNDCcheck: checked groups are destructor groups");
         // `boundToOne` maps the cache against this group's head function, so
         // one mapping serves every pair below.
-        let intr_modified = BoundToOneCache::new(intr_r, Some(f));
+        let intr_modified = BoundToOneCache::new(intr_r, Some(f), parameters);
         // `checkChainReductionIter [(x,y) | x <- t1, y <- t1]` is a
         // `foldr` whose lazy `&&` chain runs the cheap per-pair
         // unifications in FORWARD pair order but forces the expensive
@@ -841,25 +829,30 @@ fn apply_ndc_check(
         // pair's own result — short-circuiting the remaining (earlier)
         // pairs once one fails.  Verdict `== (True, False)`: at least
         // one pair chains AND every forced deduction test passed.
-        let chainable: Vec<ChainablePair<'_>> = group
-            .iter()
-            .flat_map(|x| group.iter().map(move |y| (x, y)))
-            .filter_map(|(x, y)| ndc_check_prepare(maude, x, y))
-            .collect();
-        let is_ndc = !chainable.is_empty()
-            && chainable
-                .into_iter()
-                .rev()
-                .all(|pair| ndc_check_eval(maude, &intr_modified, pair));
+        let mut chainable = Vec::new();
+        for x in &group {
+            for y in &group {
+                if let Some(pair) = ndc_check_prepare(maude, x, y)? {
+                    chainable.push(pair);
+                }
+            }
+        }
+        let mut is_ndc = !chainable.is_empty();
+        for pair in chainable.into_iter().rev() {
+            if !ndc_check_eval(maude, &intr_modified, pair)? {
+                is_ndc = false;
+                break;
+            }
+        }
         let fun_name = crate::intruder_rules::show_fun_sym_name(&f);
         if is_ndc {
             eprintln!("Function {} has the NDC property.", fun_name);
             tagged.push(f);
             for mut r in group {
-                if let IntrRuleACInfo::DestrRule { funs, .. } = &mut r.info {
-                    if let Some(h) = funs.first_mut() {
-                        *h = h.add_ndc(NdcState::IsNdc);
-                    }
+                if let IntrRuleACInfo::DestrRule { funs, .. } = &mut r.info
+                    && let Some(h) = funs.first_mut()
+                {
+                    *h = h.add_ndc(NdcState::IsNdc);
                 }
                 out.push(r);
             }
@@ -868,7 +861,7 @@ fn apply_ndc_check(
             out.extend(group);
         }
     }
-    (tagged, out)
+    Ok((tagged, out))
 }
 
 /// HS `prettyNDCcheck` (trace mode): run the NDC property check over the
@@ -883,7 +876,8 @@ pub fn pretty_ndc_check(
     maude: &MaudeHandle,
     theory_name: Option<&str>,
     init_rules: Vec<IntrRuleAC>,
-) -> (Vec<FunSym>, Vec<IntrRuleAC>) {
+    parameters: crate::constraint::solver::sources::IntegerParameters,
+) -> Result<(Vec<FunSym>, Vec<IntrRuleAC>), crate::prove::ProveError> {
     let (builtin_or_constr_or_ndc, checked_groups, all_subterm) =
         partition_for_ndc(init_rules.clone());
     let marker = |suffix: &str| {
@@ -900,13 +894,14 @@ pub fn pretty_ndc_check(
     // restore the counter — mirroring the `ensure_saturated` purity
     // bracket.
     let cnt_before = maude.fresh_counter_peek();
-    let (tagged, checked_rules) = apply_ndc_check(maude, &init_rules, checked_groups);
+    let result = apply_ndc_check(maude, &init_rules, checked_groups, parameters);
     maude.reset_counter_to(cnt_before);
     marker("ended");
-    (
+    let (tagged, checked_rules) = result?;
+    Ok((
         tagged,
         ndc_cache_order(checked_rules, builtin_or_constr_or_ndc, all_subterm),
-    )
+    ))
 }
 
 // =============================================================================

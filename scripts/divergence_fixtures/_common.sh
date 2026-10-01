@@ -4,6 +4,7 @@
 # fixture verdict means the same thing a gate verdict does:
 #   wf_block      == wf_gate.sh's slice
 #   theory_block  == pretty_gate.sh's slice
+#   summary_block == the tail of stdout corpus_file_diff.sh compares in full
 # Keep them in step with those scripts.
 
 # maude and dot live in linuxbrew here, and neither engine loads a theory
@@ -66,12 +67,21 @@ theory_block() {
     '
 }
 
+# The run summary: everything from `summary of summaries:` on, which carries
+# the `WARNING: N wellformedness check failed!` count and the per-lemma
+# verdicts.  `strip_env` has already dropped the `analyzed:` and
+# `processing time:` lines.
+summary_block() {
+    awk '/^summary of summaries:$/ { f=1 } f { print }'
+}
+
 # `slice <name> < raw-stdout` — cut one comparable block out of a theory load.
 slice() {
     case "$1" in
-        wf)     wf_block ;;
-        theory) theory_block ;;
-        *)      die "unknown slice '$1' in $manifest" ;;
+        wf)      wf_block ;;
+        theory)  theory_block ;;
+        summary) summary_block ;;
+        *)       die "unknown slice '$1' in $manifest" ;;
     esac
 }
 

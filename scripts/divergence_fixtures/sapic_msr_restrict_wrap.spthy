@@ -1,0 +1,32 @@
+// An embedded MSR's `_restrict` formula that is wider than one line.
+//
+// An embedded rule prints through `rulePrinter`, which hands
+// `prettyRuleRestrGen` the formula printer
+// `ppRes = prettySyntacticLNFormula . toLFormula`
+// (Theory/Sapic/Print.hs:41-44#rulePrinter), and the restriction item is the
+// Doc composition `ppRestr' fact = operator_ "_restrict(" <> ppRestr fact <>
+// operator_ ")"` (Theory/Model/Rule.hs:1382#ppRestr').  Because the formula
+// is a Doc inside that composition rather than a finished string, the break
+// its conjunction takes (Theory/Model/Formula.hs:493-496) indents the second
+// conjunct by the ten columns of `_restrict(`.
+//
+// The step is reprinted in the `process=` attribute of the rule it generates,
+// once modulo E and once modulo AC, so the shape appears twice.
+//
+// Compared slice: the `theory … end` echo.  The wf report is clean on both
+// engines, so this row pins the echo alone.  No process under
+// tamarin-prover/examples carries an embedded `_restrict` at all: every
+// `_restrict(` there sits in a protocol rule, which a different parser reads,
+// so this shape is reachable only from a fixture.
+
+theory SapicMsrRestrictWrap
+begin
+
+functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1
+
+process:
+  in(<xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz>);
+  [ ] --[ Ev(xxxxxxxxxx), _restrict( aaaaaaaaaa(xxxxxxxxxx) = bbbbbbbbbb(yyyyyyyyyy) & cccccccccc(zzzzzzzzzz) = aaaaaaaaaa(yyyyyyyyyy) ) ]-> [ ];
+  out('a')
+
+end

@@ -1,27 +1,27 @@
 # capture_cli_refs.sh provenance — regenerate with: scripts/capture_cli_refs.sh
-# hs_bin	/home/kamilner/tamarin-rs-2/tamarin-prover-testing/.stack-work/install/x86_64-linux-tinfo6/ec0cb11b1bfcf8776d45e0357bbc6d6ff2077f9222735af22115429c8cdfcef1/9.6.7/bin/tamarin-prover
-# hs_fp	52016016.1786102993
-# hs_rev	ef3f0468f6f12b81f43289aa64f5d1b9e53eaf59 (matches submodule pin)
+# hs_bin	/home/kamilner/tamarin-rs/tamarin-prover-testing/.stack-work/install/x86_64-linux-tinfo6/ca796a326f2409c82ae7038f0aff009780c6bbead539e5430a2c0b1206b4c6f0/9.6.7/bin/tamarin-prover
+# hs_fp	51554800.1787958604
+# hs_rev	573a43953195d83e62fdbe32fc98253031bca60f (matches submodule pin)
 # maude	3.5.1
-# captured	2026-08-14T21:54:08Z
-basic_bound_10	1567
-basic_bound_1	1497
-basic_lemma_reach	1802
-basic_plain	1567
+# captured	2026-08-29T10:16:58Z
+basic_bound_1	1521
+basic_bound_10	1591
+basic_lemma_reach	1826
+basic_plain	1591
 basic_precompute	213
-chan_heuristic_i	2247
-chan_heur_override	2338
-chan_heur_plain	2270
-chan_open_chains_0	2859
-chan_oracle_only	2020
-chan_oracle_pick_last	2177
-chan_oracle_rank_none	2315
-chan_plain	2315
-chan_saturation_1	2315
-chan_stop_bfs	2387
-chan_stop_none	2583
-chan_stop_sorry	2357
+chan_heur_override	2362
+chan_heur_plain	2294
+chan_heuristic_i	2271
+chan_open_chains_0	2883
+chan_oracle_only	2044
+chan_oracle_pick_last	2201
+chan_oracle_rank_none	2339
+chan_plain	2339
+chan_saturation_1	2339
+chan_stop_bfs	2411
+chan_stop_none	2607
+chan_stop_sorry	2381
 ifdef_defined	484
 ifdef_plain	259
-tutorial_bound_6	6249
-tutorial_plain	6253
+tutorial_bound_6	6273
+tutorial_plain	6277

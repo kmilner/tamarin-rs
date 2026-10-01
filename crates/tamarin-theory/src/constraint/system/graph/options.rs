@@ -24,7 +24,7 @@ pub struct GraphOptions {
 
 impl Default for GraphOptions {
     fn default() -> Self {
-        // Mirror of `defaultGraphOptions` (Graph.hs).
+        // Mirror of `defaultGraphOptions` (Graph.hs:66-73).
         GraphOptions {
             simplification_level: SimplificationLevel::SL2,
             show_auto_source: false,

@@ -1,0 +1,34 @@
+/*
+ * The sort a bare identifier takes from the position it sits in.  The
+ * argument of `last`, the operand after `@` and both operands of `<` are read
+ * with `nodevar` (Theory/Text/Parser/Formula.hs:43-59#blatom,
+ * Token.hs:444-448#nodevar) and a fact argument or a term-equality operand
+ * with `msgvar` (Token.hs:440-441#msgvar), so in each lemma here the bare
+ * occurrence and the like-named binder are two different variables: the
+ * occurrence stays free and the display renames the binder apart.  No theory
+ * under tamarin-prover/examples writes a bare identifier in a timepoint
+ * position next to a like-named message binder, so this row is the guard on
+ * that reading.
+ *
+ * Compared slice: the `theory … end` echo, which carries the three lemma
+ * formulas and the guarded formulas the solver receives (see check.sh).
+ */
+theory TemporalPositions
+begin
+
+rule A:
+  [ Fr(~x) ] --[ Alive(~x) ]-> [ ]
+
+lemma pred_node_arg:
+  all-traces
+  "All #x. Alive('a') @ x ==> Ex y. Alive(y) @ x & not(y = x)"
+
+lemma less_bare:
+  all-traces
+  "All #x y. Alive(y) @ x ==> Ex z. Alive(z) @ x & x < z"
+
+lemma last_bare:
+  all-traces
+  "All x y. Alive(y) @ x ==> last(x)"
+
+end

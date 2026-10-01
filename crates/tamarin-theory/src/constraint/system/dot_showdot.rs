@@ -588,8 +588,7 @@ fn legend_html_label(abbrevs: &Abbreviations) -> String {
 /// HS `render $ Sys.prettyLNTerm t` (System/Dot.hs:470-472) — the Doc-based term
 /// printer at the default style, so a wide term WRAPS.
 fn render_lnterm(t: &LNTerm) -> String {
-    crate::pretty_formula::term_doc(&crate::pretty_theory::lnterm_to_parser(t))
-        .render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)
+    tamarin_term::pretty::pretty_nterm(t).render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)
 }
 
 /// graphviz's HTML-text escape (`escapeValue`, Data.GraphViz.Attributes.HTML).

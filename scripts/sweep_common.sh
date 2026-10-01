@@ -2,7 +2,7 @@
 # json_sweep.sh). Source me. Provides:
 #   grun         — OOM-guarded, memory-capped, time-capped run
 #   norm         — blank the volatile banner lines (same set as corpus_file_diff.sh)
-#   nerr         — collapse the duplicated [Open Chains] stderr line
+#   nerr         — normalize known warnings and parser diagnostic frames
 #   io_diff      — first of stdout/stderr that differs after normalization
 #   row          — append one tab-separated row to $OUT
 #   infra_abort / nocompare_check — detect a row that compared NOTHING
@@ -20,12 +20,13 @@
 #   sweep_drive  — the whole driver tail: stale check, list, banner, parallel
 #                  pass, retry, verdict
 # and, via gate_common.sh (sourced below): norm, the OOM prologue grun wraps,
-# include_shas (folded into hs_run's cache key below), rs_stale_check, the
+# parser-selected dependencies (folded into hs_run's cache key below), rs_stale_check, the
 # maude resolver and the oracle preflights.
 #
-# The oracle cache (HS_CACHE, default scripts/.hs_sweep_cache/, gitignored)
+# The oracle cache (HS_CACHE, default scripts/.gate_cache/sweep/, gitignored)
 # keys on sha256(theory) + the sweep-provided flag tag + the oracle binary
-# fingerprint + the maude path — oracle output is deterministic for that key,
+# fingerprint + the shared Maude/derivation execution fingerprint — oracle
+# output is deterministic for that key,
 # so iterating on the Rust side never re-runs the oracle. Timeouts are cached
 # WITH their cap: a timeout at cap T satisfies any request with cap <= T
 # (it would time out again), while a finished run satisfies every cap.
@@ -43,7 +44,8 @@ RS_BIN=${RS_BIN:-${RS_PATH:-$REPO/target/release/tamarin-rs}}
 TIMEOUT=${TIMEOUT:-120}
 RETRY_TIMEOUT=${RETRY_TIMEOUT:-600}
 JOBS=${JOBS:-3}
-HS_CACHE=${HS_CACHE:-$REPO/scripts/.hs_sweep_cache}
+HS_CACHE=${HS_CACHE:-$(shared_cache_dir "$REPO" sweep "$REPO/scripts/.hs_sweep_cache")} || exit 2
+SWEEP_DERIVCHECK_TIMEOUT=30
 # Overridable so the ledger machinery can be exercised against a mutated copy
 # without editing the real one.
 LEDGER=${LEDGER:-$REPO/scripts/sweep_expected.tsv}
@@ -60,39 +62,7 @@ row() { local IFS=$'\t'; printf '%s\n' "$*" >> "$OUT"; }
 # four lines the gates' strip_env deletes, kept as position evidence here
 # because nonempty_compared distinguishes blanked from deleted.
 
-# Normalize the two known pre-existing stderr divergences (NEITHER is any
-# flag's — both reproduce on a plain `tamarin-prover <file>` run, and both are
-# byte-identical between the current binary and a pre-branch build):
-#
-#   [Open Chains]        RS's derivation-check stage emits the "Too many chain
-#                        constraints" warning twice where HS emits it once;
-#                        consecutive duplicates of that exact line collapse.
-#   [Saturating Sources] Both sides trace saturation progress on every CLI
-#                        close (showSaturation = True), but the SEQUENCE COUNTS
-#                        still differ structurally: HS traces once per force of
-#                        a ClosedRuleCache thunk, RS once per saturation it
-#                        actually runs — one extra sequence on a theory with a
-#                        [sources] lemma, one where HS emits none on a theory
-#                        whose proofs never consult a source case, and counts
-#                        differing both ways under --auto-sources (run.rs's
-#                        close_translated_theory enumerates all three). 282 of
-#                        the 372 case-studies-regression theories differ by
-#                        these lines alone.
-#
-# Dropping them is the only way the stderr axis can police ANYTHING else: left
-# in, the class alone paints the corpus red and a genuinely new warning hides
-# in the noise. It is a real port gap, not an accepted divergence — closing it
-# retires this filter.
-#
-# What that costs, measured by injecting lines into the RS side: a stderr line
-# beginning "[Saturating Sources]" is invisible to every sweep whatever it says,
-# and so is any difference in how many times the [Open Chains] warning repeats
-# CONSECUTIVELY (the ledger's stderr-open-chains rows are the non-consecutive
-# count differences, which do still surface). Any other stderr byte is caught.
-nerr() {
-  awk '!(/^\[Open Chains\] Too many chain constraints/ && $0 == prev) { print } { prev = $0 }' \
-    | grep -v '^\[Saturating Sources\]'
-}
+# nerr is also provided by gate_common.sh.
 
 # io_diff <workdir>
 #   Echoes the first of stdout/stderr that differs between <workdir>/hs.* and
@@ -100,8 +70,19 @@ nerr() {
 #   when both match.
 io_diff() {
   local d=$1
-  if ! diff -q <(norm < "$d/hs.out") <(norm < "$d/rs.out") >/dev/null; then echo stdout; return 1; fi
-  if ! diff -q <(norm < "$d/hs.err" | nerr) <(norm < "$d/rs.err" | nerr) >/dev/null; then echo stderr; return 1; fi
+  if ! diff -q <(norm < "$d/hs.out" 2>/dev/null) \
+               <(norm < "$d/rs.out" 2>/dev/null) >/dev/null; then
+    echo stdout
+    return 1
+  fi
+  # diff -q deliberately stops reading at the first mismatch. Suppress the
+  # resulting EPIPE diagnostics from the normalizer feeding its process
+  # substitutions; they describe diff's early exit, not a gate failure.
+  if ! diff -q <({ norm < "$d/hs.err" | nerr; } 2>/dev/null) \
+               <({ norm < "$d/rs.err" | nerr; } 2>/dev/null) >/dev/null; then
+    echo stderr
+    return 1
+  fi
   return 0
 }
 
@@ -250,17 +231,15 @@ sweep_preflight() {
   # its captures (rationale, skip conditions and the ALLOW_ORACLE_REV_MISMATCH
   # escape hatch are documented at the definition).
   oracle_rev_check "$HS_BIN" "$MAUDE" "$REPO"
+  execution_fingerprint "$MAUDE" "$SWEEP_DERIVCHECK_TIMEOUT" || exit 2
 }
 sweep_preflight
 
-# Oracle-binary fingerprint (gate_common's hs_fingerprint), part of every
-# cache key. Loop-invariant, so it is taken once here rather than per cached
-# lookup.
-hs_fingerprint "$HS_BIN"
+# sweep_preflight's source check also computes the oracle fingerprint used by
+# every cache key.
 
-# include_shas comes from gate_common.sh (it is part of ckey and of
-# rs_ref_check.sh's ikey there too); hs_run folds it into its digest below,
-# and it prints nothing for an include-free theory, keeping those keys stable.
+# Parser-selected include/oracle hashes are part of every cache key; hs_run
+# folds the same manifest rows into its digest below.
 
 # hs_run <workdir> <theory> <tag> <flag...>
 #   Executes  grun $HS_BIN --with-maude=$MAUDE <flag...> <theory>
@@ -270,9 +249,30 @@ hs_fingerprint "$HS_BIN"
 #   excluding volatile paths (pass e.g. "json+dot", not the tmp-dir flags).
 hs_run() {
   local wd=$1 f=$2 tag=$3; shift 3
-  local key
-  key=$( { sha256sum "$f" | cut -d' ' -f1; echo "$tag"; echo "$HS_FP"; echo "$MAUDE"
-           include_shas "$f"; } | sha256sum | cut -d' ' -f1 )
+  local key input_key checked_key arg deriv= lock_fd
+  local -a identity_args=()
+  for arg in "$@"; do
+    case "$arg" in
+      --derivcheck-timeout=*) deriv=${arg#*=}; identity_args+=("$arg");;
+      # Export destinations are volatile workdir plumbing. The stable tag
+      # already identifies which artifact-producing mode is requested.
+      --output-json=*|--output-dot=*) ;;
+      *) identity_args+=("$arg");;
+    esac
+  done
+  if [ "$deriv" != "$SWEEP_DERIVCHECK_TIMEOUT" ]; then
+    echo "ERROR: hs_run derivation timeout '${deriv:-missing}' differs from cache identity '$SWEEP_DERIVCHECK_TIMEOUT'" >&2
+    : > "$wd/input-manifest.error"
+    return 1
+  fi
+  if ! input_key=$(input_content_key "$f" "${identity_args[*]}"); then
+    : > "$wd/input-manifest.error"
+    return 1
+  fi
+  key=$(printf '%s\n%s\n%s\n%s\n' "$input_key" "$tag" "$HS_FP" "$EXEC_FP" \
+      | sha256sum | cut -d' ' -f1)
+  mkdir -p "$HS_CACHE/${key:0:2}" || return 1
+  cache_entry_lock "$HS_CACHE/${key:0:2}" "$key" lock_fd || return 1
   local dir="$HS_CACHE/${key:0:2}/$key"
   if [ -f "$dir/rc" ]; then
     local crc ccap
@@ -282,7 +282,13 @@ hs_run() {
       # would keep doing so after the environment is repaired: drop it and
       # re-run rather than serving it forever.
       if cp "$dir"/hs.* "$wd/"; then
-        if infra_abort "$wd/hs.err"; then rm -rf "$dir"; else return "$crc"; fi
+        if infra_abort "$wd/hs.err" \
+            || transient_silent_failure "$crc" "$wd/hs.out" "$wd/hs.err"; then
+          rm -rf "$dir"
+        else
+          cache_entry_unlock "$lock_fd"
+          return "$crc"
+        fi
       fi
     fi
   fi
@@ -290,11 +296,22 @@ hs_run() {
   local rc=$?
   # Same reason in the other direction: an abort is a property of this
   # environment, so storing it would poison every later sweep at this key.
-  infra_abort "$wd/hs.err" && return "$rc"
+  if infra_abort "$wd/hs.err" \
+      || transient_silent_failure "$rc" "$wd/hs.out" "$wd/hs.err"; then
+    cache_entry_unlock "$lock_fd"
+    return "$rc"
+  fi
+  if ! checked_key=$(input_content_key "$f" "${identity_args[*]}") || [ "$checked_key" != "$input_key" ] \
+      || ! producer_identity_unchanged; then
+    : > "$wd/input-manifest.error"
+    cache_entry_unlock "$lock_fd"
+    return 1
+  fi
   local tmp="$dir.tmp.$$"
   mkdir -p "$tmp" && cp "$wd"/hs.* "$tmp/" \
     && echo "$TIMEOUT" > "$tmp/cap" && echo "$rc" > "$tmp/rc" \
     && mkdir -p "$(dirname "$dir")" && rm -rf "$dir" && mv "$tmp" "$dir"
+  cache_entry_unlock "$lock_fd"
   return "$rc"
 }
 
@@ -319,6 +336,11 @@ sweep_one() {
   # sweep_finish's row-count check report the row that never landed.
   d=$(mktemp -d) || return
   hs_run "$d" "$f" "$ctag" "$@"; hrc=$?
+  if [ -f "$d/input-manifest.error" ]; then
+    row "${k[@]}" ERROR "input or producer identity changed${tag:+ $tag}"
+    rm -rf "$d"
+    return
+  fi
   # A broken environment is diagnosed before the cap is blamed for it: an
   # unusable maude both aborts and hangs, and "timeout" would be the wrong
   # story (and a ledgerable one).
@@ -327,7 +349,9 @@ sweep_one() {
   # the RS side would burn the full cap producing nothing to compare against.
   if [ "$hrc" -ge 124 ]; then row "${k[@]}" ERROR "timeout/kill hs=$hrc rs=skipped${tag:+ $tag}"; rm -rf "$d"; return; fi
   grun "$RS_BIN" --with-maude="$MAUDE" "$@" "$f" > "$d/rs.out" 2> "$d/rs.err"; rrc=$?
-  if [ "$rrc" -ge 124 ]; then row "${k[@]}" ERROR "timeout/kill hs=$hrc rs=$rrc${tag:+ $tag}"
+  if ! comparison_identity_unchanged; then
+    row "${k[@]}" ERROR "producer changed during comparison${tag:+ $tag}"
+  elif [ "$rrc" -ge 124 ]; then row "${k[@]}" ERROR "timeout/kill hs=$hrc rs=$rrc${tag:+ $tag}"
   elif nc=$(nocompare_check "$hrc" "$rrc" "$d" "$d/hs.out" "$d/rs.out"); then row "${k[@]}" NO-COMPARE "$nc${tag:+ $tag}"
   elif [ "$hrc" -ne "$rrc" ]; then row "${k[@]}" DIFF "rc hs=$hrc rs=$rrc${tag:+ $tag}"
   elif ! io=$(io_diff "$d"); then row "${k[@]}" DIFF "$io${tag:+ $tag}"
@@ -371,7 +395,7 @@ resolve_list() {
 #   stderr and the sweep reaching sweep_finish with no file at all.
 sweep_out() {
   OUT=${OUT:-$1}
-  mkdir -p "$(dirname "$OUT")" && : > "$OUT" || {
+  claim_output "$OUT" SWEEP_OUT_LOCK_FD || {
     echo "ERROR: cannot write OUT '$OUT' — no row of this sweep would land" >&2
     exit 2
   }
@@ -385,8 +409,16 @@ sweep_out() {
 #   turns up in sweep_finish's row-count check.
 sweep_export() {
   export -f one row grun oom_prologue norm nerr io_diff infra_abort nonempty_compared \
-            nocompare_check include_shas hs_run sweep_one "$@"
-  export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP
+            transient_silent_failure \
+            nocompare_check file_sha256 parser_input_manifest manifest_encode manifest_normalize \
+            manifest_decode_into input_manifest \
+            _include_shas_from_manifest _oracle_shas_from_manifest input_content_key \
+            cache_entry_lock cache_entry_unlock binary_sha256 binary_identity_unchanged \
+            execution_identity_unchanged producer_identity_unchanged rs_identity_unchanged \
+            comparison_identity_unchanged hs_run sweep_one "$@"
+  export HS_BIN RS_BIN MAUDE OUT TIMEOUT HS_CACHE HS_FP HS_FP_PATH EXEC_FP \
+         MAUDE_FP MAUDE_FP_PATH RS_FP RS_FP_PATH GATE_COMMON_DIR \
+         SWEEP_DERIVCHECK_TIMEOUT
 }
 
 # sweep_retry <out.tsv> <status-col>

@@ -1,0 +1,9 @@
+WARNING: the following wellformedness checks failed!
+
+Public constants with mismatching capitalization
+================================================
+
+Identifiers are case-sensitive, mismatched capitalizations are considered as different, i.e., 'ID' is different from 'id'. Check the capitalization of your identifiers.
+
+  1. rule "R":  name 'ID', 'id'
+*/

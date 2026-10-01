@@ -21,7 +21,7 @@
 //! index 0 (`lock`), the second index 1 (`lock.1`), etc.  This counter is
 //! independent of the per-name `renameUnique` counter.
 
-use tamarin_utils::fresh::FastFreshState;
+use tamarin_utils::fresh::{FastFreshState, MonadFresh};
 
 use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::sapic::{Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm};
@@ -33,7 +33,7 @@ type AnnotatedProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 /// `LocalException` (Locks.hs:28-28): thrown when `annotateEachClosestUnlock`
 /// encounters a `Rep` (`WFRep`) or `Parallel` (`WFPar`) below a lock.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LockWfError {
+pub(crate) enum LockWfError {
     /// `WFRep` — replication below the lock.
     Rep,
     /// `WFPar` — parallel below the lock.
@@ -106,7 +106,7 @@ fn annotate_locks_go(
             let v = LVar {
                 name: "lock",
                 sort: LSort::Msg,
-                idx: fresh.fresh_ident(),
+                idx: fresh.fresh_ident(""),
             };
             let p1 = annotate_each_closest_unlock(&t, &v, *body)?;
             let p2 = annotate_locks_go(fresh, p1)?;
@@ -132,7 +132,7 @@ fn annotate_locks_go(
 /// `annotateLocks` (Locks.hs:94-99): run `annotateLocks'` with the fresh counter
 /// seeded at 0.  On a wellformedness error (`Rep`/`Parallel` below a lock), HS
 /// `throwM`s a `ProcessNotWellformed (WFLock tag)`; we surface it as an `Err`.
-pub fn annotate_locks(p: AnnotatedProc) -> Result<AnnotatedProc, String> {
+pub(crate) fn annotate_locks(p: AnnotatedProc) -> Result<AnnotatedProc, String> {
     let mut fresh = FastFreshState::nothing_used();
     annotate_locks_go(&mut fresh, p).map_err(|e| match e {
         LockWfError::Rep => {
@@ -249,8 +249,8 @@ mod tests {
     /// Sapic/Exceptions.hs:32-34). They select different wording in the
     /// `ProcessNotWellformed` error that upstream throws. The two arms must
     /// therefore not collapse into one error. A lock whose scope stays open is
-    /// the only way to reach either tag. The public entry point must refuse
-    /// the process in both cases.
+    /// the only way to reach either tag. `annotate_locks` must refuse the
+    /// process in both cases.
     #[test]
     fn parallel_and_replication_below_lock_error_distinctly() {
         // lock 's'; ( 0 | 0 )  — WFPar

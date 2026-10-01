@@ -25,16 +25,22 @@ for f in tamarin-prover/examples/Tutorial.spthy \
          tamarin-prover/examples/loops/Minimal_Crypto_API.spthy; do
     [ -f "$f" ] || continue
     for lem in $(grep "^lemma " "$f" 2>/dev/null | awk -F'[ :]' '{print $2}'); do
-        line=$(timeout 180 bash "$diff_tree" "$f" "$lem" 2>/dev/null)
-        diff_lines=$(echo "$line" | awk '{print $2}')
-        if [ "$diff_lines" = "0" ]; then
+        if ! line=$(timeout 180 bash "$diff_tree" "$f" "$lem" 2>&1); then
+            FAIL=$((FAIL+1))
+            fails+=("$f::$lem: TOOL-ERROR ${line:-no output}")
+            continue
+        fi
+        summary=$(printf '%s\n' "$line" | tail -1)
+        diff_lines=$(printf '%s\n' "$summary" | awk '{print $2}')
+        if [[ "$diff_lines" =~ ^[0-9]+$ ]] && [ "$diff_lines" = "0" ]; then
             PASS=$((PASS+1))
         else
             FAIL=$((FAIL+1))
-            fails+=("$f::$lem: $line")
+            fails+=("$f::$lem: $summary")
         fi
     done
 done
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"
 for x in "${fails[@]}"; do echo "  $x"; done
+[ "$FAIL" -eq 0 ]

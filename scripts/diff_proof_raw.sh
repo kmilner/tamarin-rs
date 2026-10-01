@@ -19,12 +19,13 @@
 #                     the full window by default.
 #   QUIET=1           print only the summary line, not the diff body
 #   NO_HS_CACHE=1     ignore the raw HS cache
-#   HS_CANON_CACHE    cache dir (default <script_dir>/.hs_canon_cache); HS raw
-#                     stdout is cached/reused as <key>.full.gz, where key is
-#                     sha256(theory)__<lemma>__v<CACHE_VERSION>[__f<flags>]
-#                     __b<oracle-binary fingerprint>.  corpus_raw_diff.sh and
-#                     corpus_full_trace_diff.sh fingerprint the same way, so
-#                     their FLAGLESS entries are exchanged with this script's
+#   HS_CANON_CACHE    cache dir (default shared .gate_cache/raw); HS raw
+#                     stdout and exit status are cached/reused as
+#                     <key>.full.gz + <key>.rc, where key is
+#                     sha256(canonical theory/include/oracle/flags identity)__<lemma>__v<CACHE_VERSION>
+#                     __e<execution fingerprint>__b<oracle-binary fingerprint>. corpus_raw_diff.sh
+#                     fingerprints its flagless entries the same way, so they
+#                     are exchanged with this script's
 #                     (a flagged run salts __f and stays distinct).
 #   TAM_RS_NO_AUTO_BUILD=1  skip the cargo rebuild of the RS binary
 set -uo pipefail
@@ -44,6 +45,8 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # flags_for, the oracle fingerprint recipe.
 [ -r "$script_dir/gate_common.sh" ] || { echo "diff_proof_raw: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
+[ -r "$script_dir/proof_diff_common.sh" ] || { echo "diff_proof_raw: missing proof_diff_common.sh" >&2; exit 2; }
+. "$script_dir/proof_diff_common.sh"
 # OOM discipline: the provers below die alone at the cap, not the session.
 oom_prologue
 CACHE_VERSION="${CACHE_VERSION:-1}"
@@ -57,8 +60,6 @@ CACHE_VERSION="${CACHE_VERSION:-1}"
 FLAGS_MAP="${FLAGS_MAP:-$script_dir/file_flags.tsv}"
 file_rel="${file#"$repo_root"/tamarin-prover/examples/}"; file_rel="${file_rel#tamarin-prover/examples/}"
 EXTRA_FLAGS="$(flags_for "$file_rel")"
-FLAGS_SALT=""
-[ -n "$EXTRA_FLAGS" ] && FLAGS_SALT="__f$(printf '%s' "$EXTRA_FLAGS" | sha256sum | cut -c1-12)"
 [ -n "$EXTRA_FLAGS" ] && echo "diff_proof_raw: $file_rel canonical flags: $EXTRA_FLAGS" >&2
 # Deriv-check timeout (secs) passed to BOTH binaries so the message-derivation
 # section is compared deterministically.  HS's DEFAULT is 5s, which fires on
@@ -66,7 +67,7 @@ FLAGS_SALT=""
 # RS (computing fully) shows the real results — a spurious DIFF.  30s lets both
 # compute fully on the corpus (deriv-check output verified faithful when both run).
 DERIVCHECK_TIMEOUT="${DERIVCHECK_TIMEOUT:-30}"
-HS_CANON_CACHE="${HS_CANON_CACHE:-$script_dir/.hs_canon_cache}"
+HS_CANON_CACHE="${HS_CANON_CACHE:-$(shared_cache_dir "$repo_root" raw "$script_dir/.hs_canon_cache")}" || exit 2
 NO_HS_CACHE="${NO_HS_CACHE:-}"
 # HS RTS flags. Upstream commit 00a282da ("Canonicalise maude's returned
 # substitution entries", Maude/Types.hs:134) made HS proofs schedule-
@@ -78,30 +79,14 @@ NO_HS_CACHE="${NO_HS_CACHE:-}"
 HS_RTS="${HS_RTS:--N}"
 [ -n "$NO_HS_CACHE" ] || mkdir -p "$HS_CANON_CACHE" 2>/dev/null || true
 
-find_hs_bin() {
-    local root="$1" c
-    for c in "$root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover \
-             "$root"/tamarin-prover-testing/.stack-work/dist/*/ghc-*/build/tamarin-prover/tamarin-prover; do
-        if [ -x "$c" ]; then echo "$c"; return 0; fi
-    done
-    return 1
-}
-hs_path="$(find_hs_bin "$repo_root" 2>/dev/null || true)"
-if [ -z "$hs_path" ]; then
-    main_root="$(git -C "$repo_root" worktree list --porcelain 2>/dev/null | awk '/^worktree/{print $2; exit}')"
-    if [ -n "$main_root" ] && [ "$main_root" != "$repo_root" ]; then
-        hs_path="$(find_hs_bin "$main_root" 2>/dev/null || true)"
-    fi
-fi
-[ -z "$hs_path" ] && hs_path="$(command -v tamarin-prover 2>/dev/null || true)"
-if [ -z "$hs_path" ]; then
-    echo "diff_proof_raw.sh: no HS tamarin-prover binary found" >&2
-    exit 2
-fi
+hs_path=$(resolve_hs_oracle "$repo_root") || exit 2
 # Oracle-binary fingerprint (gate_common's hs_fingerprint), salted into the
 # cache key below: sha256(theory)+lemma cannot see the ORACLE changing, so a
 # rebuilt oracle would keep being answered out of the previous one's entries.
-hs_fingerprint "$hs_path"
+MAUDE=$(resolve_maude) || exit 2
+maude_on_path "$MAUDE"
+oracle_rev_check "$hs_path" "$MAUDE" "$repo_root"
+execution_fingerprint "$MAUDE" "$DERIVCHECK_TIMEOUT" || exit 2
 
 # `tamarin-prover` is the PACKAGE; its only bin target is `tamarin-rs`, so
 # --bin tamarin-prover selects nothing and cargo errors out.
@@ -117,6 +102,7 @@ if [ ! -x "$rs_path" ]; then
     echo "diff_proof_raw.sh: RS binary not built at $rs_path" >&2
     exit 2
 fi
+rs_stale_check "$rs_path" "$repo_root"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -127,11 +113,19 @@ trap 'rm -rf "$tmp"' EXIT
 
 # --- HS (shared raw cache).
 key=""
+lock_fd=""
+hs_rc=0
 if [ -z "$NO_HS_CACHE" ]; then
-    h=$(sha256sum "$file" 2>/dev/null | cut -d' ' -f1)
-    key="$HS_CANON_CACHE/${h}__${lemma}__v${CACHE_VERSION}${FLAGS_SALT}__b${HS_FP_SALT}"
+    if ! cache_id=$(proof_cache_key "$file" "$lemma" "$EXTRA_FLAGS"); then
+        echo "$lemma: input manifest failed" >&2
+        exit 2
+    fi
+    key="$HS_CANON_CACHE/$cache_id"
+    cache_entry_lock "$HS_CANON_CACHE" "$cache_id" lock_fd || {
+        echo "$lemma: cannot lock cache entry" >&2; exit 2;
+    }
 fi
-if [ -n "$key" ] && [ -f "$key.full.gz" ]; then
+if [ -n "$key" ] && proof_cache_result "$key.rc" "$key.full.gz" hs_rc; then
     # The cache is keyed by file CONTENT, but HS echoes the input path verbatim
     # on its "analyzed:" line. A hit recorded from another checkout/worktree
     # would otherwise produce a spurious path-only diff — rewrite it to the
@@ -141,26 +135,45 @@ if [ -n "$key" ] && [ -f "$key.full.gz" ]; then
         > "$tmp/hs.out"
     hs_src="cache"
 else
+    # Payload-only entries predate status-aware caching and cannot certify a
+    # result. Remove one under the entry lock before publishing a paired entry.
+    [ -z "$key" ] || rm -f "$key.full.gz" "$key.rc"
     # shellcheck disable=SC2086  # $EXTRA_FLAGS must word-split into flags
-    timeout "$TIMEOUT" "$hs_path" +RTS $HS_RTS -RTS $EXTRA_FLAGS --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$file" 2>/dev/null > "$tmp/hs.out"
+    timeout "$TIMEOUT" "$hs_path" +RTS $HS_RTS -RTS --with-maude="$MAUDE" $EXTRA_FLAGS --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$file" 2>/dev/null > "$tmp/hs.out"
     hs_rc=$?
     # >=128 is a signal death (OOM's 137), which truncates stdout the same way
     # the timeout does — bail before the cache write below can keep it.
-    if [ "$hs_rc" -eq 124 ] || [ "$hs_rc" -ge 128 ]; then
+    if [ "$hs_rc" -ge 124 ]; then
+        [ -z "$lock_fd" ] || cache_entry_unlock "$lock_fd"
         echo "$lemma: HS TIMEOUT/KILLED (rc=$hs_rc, cap ${TIMEOUT}s)"
         exit 1
     fi
-    # Never cache empty HS output (startup failures poison the cache).
-    [ -n "$key" ] && [ -s "$tmp/hs.out" ] && gzip -c "$tmp/hs.out" > "$key.full.gz" 2>/dev/null || true
+    if [ -n "$key" ]; then
+        checked_id=$(proof_cache_key "$file" "$lemma" "$EXTRA_FLAGS") || checked_id=
+        [ "$checked_id" != "$cache_id" ] || ! producer_identity_unchanged \
+            || cache_publish_proof "$key.rc" "$key.full.gz" "$hs_rc" "$tmp/hs.out" 2>/dev/null || true
+    fi
     hs_src="run"
 fi
+[ -z "$lock_fd" ] || cache_entry_unlock "$lock_fd"
 
 # --- RS.
 # shellcheck disable=SC2086
-timeout "$RS_TIMEOUT" env $extra_env "$rs_path" $EXTRA_FLAGS --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$file" 2>/dev/null > "$tmp/rs.out"
+timeout "$RS_TIMEOUT" env $extra_env "$rs_path" --with-maude="$MAUDE" $EXTRA_FLAGS --derivcheck-timeout="$DERIVCHECK_TIMEOUT" --prove="$lemma" "$file" 2>/dev/null > "$tmp/rs.out"
 rs_rc=$?
-if [ "$rs_rc" -eq 124 ]; then
-    echo "$lemma: RS TIMEOUT (${RS_TIMEOUT}s)"
+if [ "$rs_rc" -ge 124 ]; then
+    echo "$lemma: RS TIMEOUT/KILLED (rc=$rs_rc, cap ${RS_TIMEOUT}s)"
+    exit 1
+fi
+
+if { [ -n "$key" ] && { ! checked_id=$(proof_cache_key "$file" "$lemma" "$EXTRA_FLAGS") \
+        || [ "$checked_id" != "$cache_id" ]; }; } \
+        || ! comparison_identity_unchanged; then
+    echo "$lemma: input or producer changed during comparison"
+    exit 1
+fi
+if [ "$hs_rc" -ne "$rs_rc" ]; then
+    echo "$lemma: RC_DIFF (HS=$hs_rc [$hs_src], RS=$rs_rc)"
     exit 1
 fi
 

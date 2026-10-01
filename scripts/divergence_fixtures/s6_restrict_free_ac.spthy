@@ -1,0 +1,40 @@
+/*
+ * `_restrict` formulas over AC-headed terms, one wholly free and one mixing a
+ * bound variable with free ones.
+ *
+ * `rewrite`'s third guard substitutes a whole application whose arguments
+ * carry free variables and no bound one (Theory/Model/Restriction.hs:103-105),
+ * so `(y add x) ++ x` becomes a single fresh `x` and the rule's action carries
+ * the term itself — in the AC-normal argument order `fApp` gave it
+ * (Term/Term/Raw.hs:111-127), not the written one.
+ *
+ * The fourth guard rebuilds an application that mixes the two through
+ * `termViewToTerm` (Theory/Model/Restriction.hs:106-110), the RAW constructor
+ * (Term/Term/Raw.hs:103-105), which applies no AC normalisation: the rebuilt
+ * `++` keeps the operand positions the traversal saw, and the fresh variables
+ * are numbered in that same order.
+ *
+ * `add` is a user `[AC]` symbol, which `prettyTerm` renders with spaces around
+ * the operator (Term/Term.hs:305) while `++` prints without them
+ * (Term/Term.hs:308), so the echo tells the two chains apart.
+ *
+ * No corpus theory reaches this: no `_restrict` in the examples tree mentions
+ * a multiset or a user-AC symbol.
+ *
+ * Mode `match`: the two engines agree on this shape.
+ *
+ * Compared slice: the `theory … end` echo (see check.sh).
+ */
+theory S6RestrictFreeAc
+begin
+
+builtins: multiset
+functions: add/2 [AC]
+
+rule A:
+  [ In( x ), In( y ) ]
+  --[ _restrict( Ex #i. Ev( (y add x) ++ x ) @ #i ),
+      _restrict( Ex z #i. Ev( (z add x) ++ y ) @ #i ) ]->
+  [ ]
+
+end

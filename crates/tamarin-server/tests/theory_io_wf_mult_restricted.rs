@@ -73,7 +73,13 @@ fn web_load_reports_multiplication_restriction_unescaped_in_the_banner() {
     tamarin_server::init_process_globals();
     // `derivcheck_timeout = 0` skips the dynamic derivation checks, matching
     // the `--derivcheck-timeout=0` oracle probe.
-    let entry = theory_io::load_from_path(&fixture(), NO_MAUDE, 0).expect("fixture loads");
+    let mut cfg = tamarin_server::ServerConfig::new(
+        "127.0.0.1:0".parse().unwrap(),
+        std::path::PathBuf::new(),
+        NO_MAUDE.to_string(),
+    );
+    cfg.derivcheck_timeout = 0;
+    let entry = theory_io::load_from_path(&fixture(), &cfg).expect("fixture loads");
 
     assert!(
         entry

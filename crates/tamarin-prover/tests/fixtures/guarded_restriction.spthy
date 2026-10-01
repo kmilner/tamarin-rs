@@ -1,0 +1,13 @@
+theory GuardedRestriction
+begin
+
+rule R:
+    [] --[ A() ]-> []
+
+restriction bad:
+    "All x #i. A() @ #i ==> x = x"
+
+lemma ok:
+    exists-trace "Ex #i. A() @ #i"
+
+end

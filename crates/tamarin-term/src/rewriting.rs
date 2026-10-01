@@ -43,6 +43,9 @@ pub enum Match<A> {
     DelayedMatches(Vec<(A, A)>),
 }
 
+/// HS `instance Monoid (Match a)` sets `mempty = DelayedMatches []`
+/// (Definitions.hs:117-118).  `#[derive(Default)]` would need a `#[default]`
+/// variant and would pick `NoMatch`, the absorbing element.
 impl<A> Default for Match<A> {
     fn default() -> Self {
         Match::DelayedMatches(Vec::new())
@@ -94,6 +97,10 @@ impl<A> Match<A> {
 
 // -- Rewrite rule -------------------------------------------------------------
 
+/// HS `data RRule a = RRule a a` derives `Ord` over the left-hand side then
+/// the right-hand side (Definitions.hs:138-139).  `MaudeSig::rrules` hands a
+/// `BTreeSet<RRule<LNTerm>>` to the Maude module writer, so this order reaches
+/// the emitted module.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RRule<A> {
     pub lhs: A,
@@ -109,6 +116,21 @@ impl<A> RRule<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Match::default` is HS's `mempty`, the EMPTY delayed match — not the
+    /// `NoMatch` a derive would select.
+    #[test]
+    fn match_default_is_the_empty_delayed_match() {
+        assert_eq!(Match::<i32>::default().flatten(), Some(Vec::new()));
+    }
+
+    /// The derived `Ord` compares `lhs` before `rhs`, the field order of HS's
+    /// `RRule a a`.
+    #[test]
+    fn rrule_ord_compares_the_lhs_first() {
+        assert!(RRule::new(1, 9) < RRule::new(2, 0));
+        assert!(RRule::new(1, 0) < RRule::new(1, 1));
+    }
 
     #[test]
     fn equal_eval() {

@@ -69,21 +69,27 @@ fi
 # when nothing resolves) and put its directory on PATH for the two binaries.
 MAUDE=$(resolve_maude) || exit 2
 maude_on_path "$MAUDE"
+execution_fingerprint "$MAUDE" "$DERIV" || exit 2
+PRE_FP=$(binary_sha256 "$PRE") || exit 2
+POST_FP=$(binary_sha256 "$POST") || exit 2
+export MAUDE MAUDE_FP MAUDE_FP_PATH PRE_FP POST_FP
 
 # strip_env / flags_for come from gate_common.sh.
-export -f strip_env flags_for
+export -f strip_env flags_for file_sha256 binary_sha256 binary_identity_unchanged \
+    execution_identity_unchanged
 
 one() {
-    local rel="$1" f="$CORPUS/$1" a b ra rb da fl rundir="" farg
+    local rel="$1" f="$CORPUS/$1" a b ra rb da fl
     [ -f "$f" ] || { printf '%s\tNOFILE\t0\n' "$rel"; return 0; }
-    fl=$(flags_for "$rel"); farg="$f"
-    # @cd: run from the theory's directory (oracle scripts resolve ./ paths).
-    if [[ " $fl " == *" @cd "* ]]; then fl=${fl//@cd/}; rundir=$(dirname "$f"); farg=$(basename "$f"); fi
+    fl=$(flags_for "$rel")
     local ta tb; ta=$(mktemp); tb=$(mktemp)
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$TIMEOUT" "$PRE"  $fl --derivcheck-timeout="$DERIV" --prove "$farg" ) >"$ta" 2>/dev/null; ra=$?
-    ( [ -n "$rundir" ] && cd "$rundir"
-      timeout "$TIMEOUT" "$POST" $fl --derivcheck-timeout="$DERIV" --prove "$farg" ) >"$tb" 2>/dev/null; rb=$?
+    timeout "$TIMEOUT" "$PRE" --with-maude="$MAUDE" $fl --derivcheck-timeout="$DERIV" --prove "$f" >"$ta" 2>/dev/null; ra=$?
+    timeout "$TIMEOUT" "$POST" --with-maude="$MAUDE" $fl --derivcheck-timeout="$DERIV" --prove "$f" >"$tb" 2>/dev/null; rb=$?
+    if ! execution_identity_unchanged \
+            || ! binary_identity_unchanged "$PRE" "$PRE_FP" \
+            || ! binary_identity_unchanged "$POST" "$POST_FP"; then
+        rm -f "$ta" "$tb"; printf '%s\tERROR_IDENTITY\tproducer changed during comparison\n' "$rel"; return 0
+    fi
     if [ "$ra" = 124 ] && [ "$rb" = 124 ]; then rm -f "$ta" "$tb"; printf '%s\tTIMEOUT_BOTH\t0\n' "$rel"; return 0; fi
     if [ "$ra" = 124 ] || [ "$rb" = 124 ]; then rm -f "$ta" "$tb"; printf '%s\tTIMEOUT_ONE\tpre=%s,post=%s\n' "$rel" "$ra" "$rb"; return 0; fi
     # A prover that errors out (missing maude, bad flags, OOM-abort) must not

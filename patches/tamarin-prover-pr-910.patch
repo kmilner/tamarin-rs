@@ -1,0 +1,161 @@
+diff --git a/lib/term/src/Term/Maude/Parser.hs b/lib/term/src/Term/Maude/Parser.hs
+index ad0a05333cb550f9a2945cefcf608d28dcb562ab..302372fa6bf1ea0c6c0514af6bdb1731d3718827 100644
+--- a/lib/term/src/Term/Maude/Parser.hs
++++ b/lib/term/src/Term/Maude/Parser.hs
+@@ -376,10 +376,13 @@ parseTerm msig = choice
+                        | ident == ppMaudeACSym Union      = fAppAC Union   args
+                        | ident == ppMaudeACSym NatPlus    = fAppAC NatPlus args
+                        | ident == ppMaudeACSym Xor        = fAppAC Xor   args
+-                       | BC.isInfixOf "tamPDA" ident      = fAppACfct (parseFunACSym ident) args
+-                       | BC.isInfixOf "tamPCA" ident      = fAppACfct (parseFunACSym ident) args
+-                       | BC.isInfixOf "tamXDA" ident      = fAppACfct (parseFunACSym ident) args
+-                       | BC.isInfixOf "tamXCA" ident      = fAppACfct (parseFunACSym ident) args
++                       -- User-defined AC symbols are encoded as
++                       -- funSymPrefix + privacy + constructability + "A" + ident,
++                       -- so only a prefix match identifies them.
++                       | BC.isPrefixOf "tamPDA" ident     = fAppACfct (parseFunACSym ident) args
++                       | BC.isPrefixOf "tamPCA" ident     = fAppACfct (parseFunACSym ident) args
++                       | BC.isPrefixOf "tamXDA" ident     = fAppACfct (parseFunACSym ident) args
++                       | BC.isPrefixOf "tamXCA" ident     = fAppACfct (parseFunACSym ident) args
+                        | ident == ppMaudeCSym  EMap       = fAppC  EMap  args
+         appIdent [arg] | ident == "list"                  = fAppList (flattenCons arg)
+         appIdent args                                     = fAppNoEq op args
+diff --git a/lib/term/src/Term/SubtermRule.hs b/lib/term/src/Term/SubtermRule.hs
+index 7700b08cc114260ba8679817609532bb5b742c47..444a2fcfe1198201f31750446b1328258270cb1a 100644
+--- a/lib/term/src/Term/SubtermRule.hs
++++ b/lib/term/src/Term/SubtermRule.hs
+@@ -48,7 +48,8 @@ data CtxtStRule = CtxtStRule LNTerm StRhs
+ -- | Convert a rewrite rule to a context subterm rewrite rule if possible.
+ rRuleToCtxtStRule :: RRule LNTerm -> Maybe CtxtStRule
+ rRuleToCtxtStRule (lhs `RRule` rhs)
+-  | frees rhs == [] = Just $ CtxtStRule lhs (StRhs (constantPositions lhs) rhs)
++  | Lit _ <- viewTerm lhs = Nothing  -- e.g. "x = c" is not a valid rewrite rule
++  | frees rhs == []       = Just $ CtxtStRule lhs (StRhs (constantPositions lhs) rhs)
+   | otherwise       = do
+                          sbtms <- findAllSubterms lhs rhs
+                          case sbtms of
+diff --git a/lib/theory/src/Theory/Text/Parser.hs b/lib/theory/src/Theory/Text/Parser.hs
+index f25de6090945e3cdef6d1083afd8e39a7009a6ed..e325420c438037ae2b94dda0adaae935e201b7ca 100644
+--- a/lib/theory/src/Theory/Text/Parser.hs
++++ b/lib/theory/src/Theory/Text/Parser.hs
+@@ -240,9 +240,9 @@ theory inFile = do
+         then do
+             fileArgs <- stringLiteral <* symbol_ "begin"
+             addItems inFile (set thyInFile (fromMaybe "" inFile) 
+-              $ set thyName thyId (modify thyItems (++ [ConfigBlockItem fileArgs]) defThy)) <* symbol_ "end"
++              $ set thyName thyId (modify thyItems (++ [ConfigBlockItem fileArgs]) defThy)) <* reserved "end"
+         else do
+-            addItems inFile (set thyInFile (fromMaybe "" inFile) $ set thyName thyId defThy) <* symbol_ "end"
++            addItems inFile (set thyInFile (fromMaybe "" inFile) $ set thyName thyId defThy) <* reserved "end"
+   where
+     addItems :: Maybe FilePath -> OpenTheory -> Parser OpenTheory
+     addItems inFile0 thy = asum
+@@ -405,9 +405,9 @@ diffTheory inFile = do
+     if block == "configuration"
+         then do
+             fileArgs <- stringLiteral <* symbol_ "begin"
+-            addItems inFile (set diffThyInFile (fromMaybe "" inFile) $ set diffThyName thyId (modify diffThyItems (++ [DiffConfigBlockItem fileArgs]) (defaultOpenDiffTheory ("diff" `S.member` flags0)))) <* symbol_ "end"
++            addItems inFile (set diffThyInFile (fromMaybe "" inFile) $ set diffThyName thyId (modify diffThyItems (++ [DiffConfigBlockItem fileArgs]) (defaultOpenDiffTheory ("diff" `S.member` flags0)))) <* reserved "end"
+         else do
+-            addItems inFile (set diffThyInFile (fromMaybe "" inFile) $ set diffThyName thyId (defaultOpenDiffTheory ("diff" `S.member` flags0))) <* symbol "end"
++            addItems inFile (set diffThyInFile (fromMaybe "" inFile) $ set diffThyName thyId (defaultOpenDiffTheory ("diff" `S.member` flags0))) <* reserved "end"
+   where
+     addItems :: Maybe FilePath -> OpenDiffTheory -> Parser OpenDiffTheory
+     addItems inFile0 thy = asum
+diff --git a/lib/theory/src/Theory/Text/Parser/Term.hs b/lib/theory/src/Theory/Text/Parser/Term.hs
+index dbb4ea216aa9b23951dff8e1fc53873b8c5f809e..dfccca27d6ca0cab6ea4252c2080ff539a0fe580 100644
+--- a/lib/theory/src/Theory/Text/Parser/Term.hs
++++ b/lib/theory/src/Theory/Text/Parser/Term.hs
+@@ -62,7 +62,7 @@ llitNoPub = asum [freshTerm <$> freshName, varTerm <$> msgvar]
+ lookupArity :: String -> Parser (Int, Privacy,Constructability, ACstate, NDCstate)
+ lookupArity op = do
+     maudeSig <- sig <$> getState
+-    case lookup (BC.pack op) (map extractName(S.toList (userDefinedFunSyms maudeSig) ++ map NoEqUser (S.toList (macroNames maudeSig) ++ [(emapSymString, (2,Public,Constructor,NotNDC))]))) of
++    case lookup (BC.pack op) (map extractName(S.toList (userDefinedFunSyms maudeSig) ++ map NoEqUser (S.toList (macroNames maudeSig) ++ [(emapSymString, (2,Public,Constructor,NotNDC)) | enableBP maudeSig]))) of
+         Nothing                            -> fail $ "unknown operator `" ++ op ++ "'"
+         Just (NoEqUser (_,(k,priv,cnstr,ndc))) -> return (k,priv,cnstr,NotAC,ndc)
+         Just (ACfctUser (_,(priv,cnstr,ndc)))  -> return (2,priv,cnstr,IsAC,ndc)
+@@ -91,6 +91,7 @@ naryOpApp eqn plit = do
+     when (eqn && op `elem` reservedBuiltins)
+       $ error $ "`" ++ show op ++ "` is a reserved function name for builtins."
+     (k,priv,constr,acstate,ndcstate) <- lookupArity op
++    bpEnabled <- enableBP . sig <$> getState
+     ts <- parens $ if k == 1
+                      then return <$> tupleterm eqn plit
+                      else commaSep (msetterm eqn plit)
+@@ -100,7 +101,9 @@ naryOpApp eqn plit = do
+                ", but here it is used with arity " ++ show k'
+     --let app o = if BC.pack op == emapSymString then fAppC EMap else fAppNoEq o
+     case (BC.pack op,(k,priv,constr,acstate)) of
+-      (o,(_,_,_,_)) | o == emapSymString -> return $ fAppC EMap ts
++      -- em is the built-in bilinear e-map only when the bilinear-pairing
++      -- builtin is enabled; otherwise it is an ordinary function
++      (o,(2,_,_,_)) | o == emapSymString && bpEnabled -> return $ fAppC EMap ts
+       (_,(_,_,_,NotAC)) -> return $ fAppNoEq (BC.pack op, (k,priv,constr,ndcstate)) ts
+       (_,(_,_,_,IsAC)) -> return $ fAppAC (ACfct (BC.pack op, (priv,constr,ndcstate))) ts
+     --return $ app (BC.pack op, (k,priv,constr)) ts
+diff --git a/lib/theory/src/Theory/Text/Parser/Token.hs b/lib/theory/src/Theory/Text/Parser/Token.hs
+index 1aee18cb72ac78e8662b0f03b55aacfb9240ffd7..207ec69e5ee12ac4e6a633adb61437013c3465fc 100644
+--- a/lib/theory/src/Theory/Text/Parser/Token.hs
++++ b/lib/theory/src/Theory/Text/Parser/Token.hs
+@@ -12,6 +12,7 @@ module Theory.Text.Parser.Token (
+   -- * Symbols
+   , symbol
+   , symbol_
++  , reserved
+   , dot
+   , comma
+   , colon
+@@ -276,6 +277,11 @@ symbol sym = try (T.symbol spthy sym) <?> ("\"" ++ sym ++ "\"")
+ symbol_ :: String -> Parser ()
+ symbol_ = void . symbol
+ 
++-- | Parse a keyword, i.e. a symbol that must not be followed by an
++-- identifier character (so @end@ does not match a prefix of @endrule@).
++reserved :: String -> Parser ()
++reserved = T.reserved spthy
++
+ -- | Between braces.
+ braced :: Parser a -> Parser a
+ braced = T.braces spthy
+@@ -506,7 +512,11 @@ lvarNoSuffix = sortedLVarNoSuffix [minBound..]
+ sapicvar :: Parser SapicLVar
+ sapicvar = do
+         v <- lvarNoSuffix
+-        t <- option Nothing $ colon *> typep
++        -- node variables default to the node type so that a quantified
++        -- "#j" matches its occurrences parsed by sapicnodevar
++        let defaultType = if lvarSort v == LSortNode
++                            then defaultSapicNodeType else Nothing
++        t <- option defaultType $ colon *> typep
+         return (SapicLVar v t)
+ 
+ sapicpatternvar :: Parser PatternSapicLVar
+diff --git a/lib/theory/src/TheoryObject.hs b/lib/theory/src/TheoryObject.hs
+index 743d03f16650ce0e943d478d695d67d8870877b3..66d3732a196220d2d652353fa0bb3cb170af0348 100644
+--- a/lib/theory/src/TheoryObject.hs
++++ b/lib/theory/src/TheoryObject.hs
+@@ -898,7 +898,10 @@ prettyRestriction rstr =
+             _ -> emptyDoc)
+   where
+     Restriction _ expandedFormula ogFormula = rstr
+-    safety = isSafetyFormula $ formulaToGuarded_ $ expandedFormula
++    -- an unguardable formula is reported by the wellformedness checks; it
++    -- must not abort printing here
++    safety = either (const False :: Doc -> Bool) isSafetyFormula
++               (formulaToGuarded expandedFormula)
+ 
+ -- | Pretty print an either restriction.
+ prettyEitherRestriction :: (HighlightDocument d) => (Side, Restriction) -> d
+@@ -913,7 +916,10 @@ prettyEitherRestriction (s, rstr) =
+             _ -> emptyDoc
+   where
+     Restriction _ expandedFormula ogFormula = rstr
+-    safety = isSafetyFormula $ formulaToGuarded_ $ expandedFormula
++    -- an unguardable formula is reported by the wellformedness checks; it
++    -- must not abort printing here
++    safety = either (const False :: Doc -> Bool) isSafetyFormula
++               (formulaToGuarded expandedFormula)
+ 
+ 
+ 

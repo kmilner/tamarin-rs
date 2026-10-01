@@ -55,7 +55,7 @@ pub fn compress_system(mut sys: RenderSystem) -> RenderSystem {
 /// Drop `LessAtom`s that are implied by the edge relation.
 fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
     // Build adjacency from `rawEdgeRel` = edges ++ unsolvedChains
-    // (Simplification.hs:33-38, see line 37 / System.hs:1613-1616).
+    // (Simplification.hs:33-38, see line 37 / System.hs:1615-1618).
     let adj = build_raw_edge_adjacency(&sys);
     // HS `entailed (LessAtom from to _) = to `S.member` reachableSet [from] edges`
     // (Simplification.hs:33-38, see line 38).  `Dag.reachableSet [from]` ALWAYS
@@ -72,34 +72,17 @@ fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
     sys
 }
 
-/// `(from, to)` node pairs of unsolved chain goals — mirror of
-/// `unsolvedChains` (System.hs:1601-1605) projected to node ids via
-/// `nodeConcNode *** nodePremNode`.
-fn unsolved_chain_pairs(sys: &System) -> Vec<(NodeId, NodeId)> {
-    sys.goals
-        .iter()
-        .filter_map(|(g, st)| {
-            if st.solved {
-                return None;
-            }
-            if let Goal::Chain(src, tgt) = g {
-                Some((src.0, tgt.0))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
 /// Adjacency for `rawEdgeRel sys = edges ++ unsolvedChains sys`
-/// (System.hs:1613-1616).
+/// (System.hs:1615-1618).
 fn build_raw_edge_adjacency(sys: &System) -> BTreeMap<NodeId, Vec<NodeId>> {
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for e in &sys.edges {
         adj.entry(e.src.0).or_default().push(e.tgt.0);
     }
-    for (from, to) in unsolved_chain_pairs(sys) {
-        adj.entry(from).or_default().push(to);
+    // `unsolvedChains` (System.hs:1603-1607) projected to node ids via
+    // `nodeConcNode *** nodePremNode`.
+    for (from, to) in sys.unsolved_chains() {
+        adj.entry(from.0).or_default().push(to.0);
     }
     adj
 }
@@ -145,9 +128,9 @@ fn try_hide_node_id(v: &NodeId, sys: RenderSystem) -> RenderSystem {
     }
     // Try hideRule first if v has a node entry, else hideAction.  Either way
     // the `Err` arm carries the untouched system back, so both are kept.
-    let node_rule = sys.nodes.iter().find(|(id, _)| id == v).cloned();
+    let node_rule = sys.node_rule_safe(v).cloned();
     let attempt = match node_rule {
-        Some((_, ru)) => try_hide_rule(v, ru, sys),
+        Some(ru) => try_hide_rule(v, ru, sys),
         None => try_hide_action(v, sys),
     };
     let (Ok(out) | Err(out)) = attempt;
@@ -155,62 +138,14 @@ fn try_hide_node_id(v: &NodeId, sys: RenderSystem) -> RenderSystem {
 }
 
 fn mentioned_in_unsolved_chains(v: &NodeId, sys: &System) -> bool {
-    sys.goals.iter().any(|(g, st)| {
-        if st.solved {
-            return false;
-        }
-        if let Goal::Chain(src, tgt) = g {
-            &src.0 == v || &tgt.0 == v
-        } else {
-            false
-        }
-    })
+    sys.unsolved_chains()
+        .any(|(src, tgt)| &src.0 == v || &tgt.0 == v)
 }
 
 fn mentioned_in_formulas(v: &NodeId, formulas: &[std::sync::Arc<crate::guarded::Guarded>]) -> bool {
-    formulas.iter().any(|g| guarded_mentions_node(v, g))
-}
-
-fn guarded_mentions_node(v: &NodeId, g: &crate::guarded::Guarded) -> bool {
-    use crate::guarded::Guarded;
-    match g {
-        Guarded::Conj(items) | Guarded::Disj(items) => {
-            items.iter().any(|x| guarded_mentions_node(v, x))
-        }
-        Guarded::GGuarded { guards, body, .. } => {
-            // HS `foldFrees` over the `Foldable (Guarded s c)` instance folds
-            // BOTH the guard atoms and the body (Guarded.hs:259-263), so a
-            // free node-sort var occurring only in a guard atom must count.
-            guards.iter().any(|a| atom_mentions_node(v, a)) || guarded_mentions_node(v, body)
-        }
-        Guarded::Atom(at) => atom_mentions_node(v, at),
-    }
-}
-
-fn atom_mentions_node(v: &NodeId, at: &crate::guarded_types::GAtom) -> bool {
-    use crate::guarded_types::{BVar, GAtom, GTerm};
-    let mentions_term = |t: &GTerm| -> bool {
-        if let GTerm::Var(BVar::Free(spec)) = t {
-            // HS `notOccursIn proj = not $ getAny $ foldFrees (Any . (v ==))
-            // (proj se)` (Simplification.hs:95-96) folds FULL `LVar` equality
-            // (name AND idx AND sort) over the formula's free vars. Comparing
-            // the NAME ONLY spuriously matches a different index — e.g. node
-            // `#vr.4` matched a formula mentioning `#vr` (idx 0), wrongly
-            // rejecting `#vr.4` from compression and keeping a transfer node
-            // (`d_0_snd`) HS hides. Match name AND idx (both are node-sort
-            // here: `v` is a NodeId and only node vars can equal it).
-            return *spec.name == *v.name && spec.idx == v.idx;
-        }
-        false
-    };
-    match at {
-        GAtom::Action(_, t) => mentions_term(t),
-        GAtom::Last(t) => mentions_term(t),
-        GAtom::Eq(a, b) | GAtom::Less(a, b) | GAtom::LessMset(a, b) | GAtom::Subterm(a, b) => {
-            mentions_term(a) || mentions_term(b)
-        }
-        GAtom::Pred(_) => false,
-    }
+    formulas
+        .iter()
+        .any(|g| tamarin_term::lterm::occurs_free(v, &**g))
 }
 
 // ---------------------------------------------------------------------
@@ -220,19 +155,9 @@ fn atom_mentions_node(v: &NodeId, at: &crate::guarded_types::GAtom) -> bool {
 fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, RenderSystem> {
     // Collect KU action atoms at v.
     let ku_actions: Vec<(NodeId, crate::fact::LNFact)> = sys
-        .goals
-        .iter()
-        .filter_map(|(g, st)| {
-            if st.solved {
-                return None;
-            }
-            if let Goal::Action(n, fa) = g {
-                if n == v && matches!(fa.tag, FactTag::Ku) && !fa.terms.is_empty() {
-                    return Some((*n, fa.clone()));
-                }
-            }
-            None
-        })
+        .unsolved_action_atoms()
+        .filter(|(n, fa)| n == v && matches!(fa.tag, FactTag::Ku) && !fa.terms.is_empty())
+        .map(|(n, fa)| (n, fa.clone()))
         .collect();
     if ku_actions.is_empty() {
         return Err(sys);
@@ -246,16 +171,10 @@ fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, Render
     }
     // Other restrictions: no standard action atoms mentioning v;
     // no last-atom = v; no edges referencing v.
-    if sys.goals.iter().any(|(g, st)| {
-        if st.solved {
-            return false;
-        }
-        if let Goal::Action(n, fa) = g {
-            n == v && !matches!(fa.tag, FactTag::Ku)
-        } else {
-            false
-        }
-    }) {
+    if sys
+        .unsolved_action_atoms()
+        .any(|(n, fa)| n == *v && !matches!(fa.tag, FactTag::Ku))
+    {
         return Err(sys);
     }
     if sys.last_atom.as_ref() == Some(v) {
@@ -375,16 +294,7 @@ fn try_hide_rule(
     {
         return Err(sys);
     }
-    if sys.goals.iter().any(|(g, st)| {
-        if st.solved {
-            return false;
-        }
-        if let Goal::Action(n, _) = g {
-            n == v
-        } else {
-            false
-        }
-    }) {
+    if sys.unsolved_action_atoms().any(|(n, _)| n == *v) {
         return Err(sys);
     }
     // Apply.
@@ -464,8 +374,8 @@ pub fn simplify_system(level: SimplificationLevel, sys: RenderSystem) -> RenderS
 fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
     // Haskell: `oldLesses = rawLessRel sys`, used for BOTH `Dag.cyclic`
     // and `Dag.transRed` (Simplification.hs:61-74).  `rawLessRel se =
-    // getLessRel sLessAtoms ++ rawEdgeRel se` (System.hs:1621-1622), and
-    // `rawEdgeRel = edges ++ unsolvedChains` (System.hs:1613-1616).
+    // getLessRel sLessAtoms ++ rawEdgeRel se` (System.hs:1623-1624), and
+    // `rawEdgeRel = edges ++ unsolvedChains` (System.hs:1615-1618).
     let mut old_lesses: Vec<(NodeId, NodeId)> = sys
         .less_atoms
         .iter()
@@ -474,7 +384,7 @@ fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
     for e in &sys.edges {
         old_lesses.push((e.src.0, e.tgt.0));
     }
-    old_lesses.extend(unsolved_chain_pairs(&sys));
+    old_lesses.extend(sys.unsolved_chains().map(|(from, to)| (from.0, to.0)));
     // If there's a cycle in the combined graph we bail, matching Haskell's
     // `Dag.cyclic` guard (Simplification.hs:61-74).
     if tamarin_utils::dag::cyclic(&old_lesses) {

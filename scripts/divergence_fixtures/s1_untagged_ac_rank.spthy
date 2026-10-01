@@ -1,0 +1,31 @@
+/*
+ * The operand order of an AC operator applied to one bare and one sorted
+ * variable.  A bare name is message-sorted (`msgvar`,
+ * Token.hs:440-441#msgvar), and the operands of the formula are ordered by
+ * `Ord LVar`, which compares the sort after the index
+ * (LTerm.hs:546-548#compare) with the message sort ahead of the natural sort
+ * (LTerm.hs:165-170#LSort), so `z` stands to the left of `%q`.  Both source
+ * spellings canonicalise to that one order, so the two lemmas agree with each
+ * other and with the guarded formula the solver receives.  No corpus theory
+ * writes an AC application over a bare variable and a nat-sorted one.
+ *
+ * Compared slice: the `theory … end` echo, which carries both lemma formulas
+ * (see check.sh).
+ */
+theory UntaggedAcRank
+begin
+
+builtins: multiset, natural-numbers
+
+rule A:
+  [ In(z) ] --[ Ev(z) ]-> [ Out(z) ]
+
+lemma bare_vs_nat:
+  exists-trace
+  "Ex %q z #i. Ev(z) @ i & z %+ %q = z"
+
+lemma bare_vs_nat_written_other_way:
+  exists-trace
+  "Ex %q z #i. Ev(z) @ i & %q %+ z = z"
+
+end

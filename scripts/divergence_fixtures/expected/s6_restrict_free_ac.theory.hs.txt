@@ -1,0 +1,38 @@
+theory S6RestrictFreeAc
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset
+functions: fst/1, pair/2, snd/1, add/2 [AC]
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+restriction Restr_A_1:
+  "∀ x #NOW. (Restr_A_1( x ) @ #NOW) ⇒ (∃ #i. Ev( x ) @ #i)"
+
+  /*
+  expanded formula:
+  "∀ x #NOW. (Restr_A_1( x ) @ #NOW) ⇒ (∃ #i. Ev( x ) @ #i)"
+  */
+
+restriction Restr_A_2:
+  "∀ x #NOW x.1.
+    (Restr_A_2( x, x.1 ) @ #NOW) ⇒ (∃ z #i. Ev( (x++(z add x.1)) ) @ #i)"
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1.
+    (Restr_A_2( x, x.1 ) @ #NOW) ⇒ (∃ z #i. Ev( (x++(z add x.1)) ) @ #i)"
+  */
+
+rule (modulo E) A:
+   [ In( x ), In( y ) ]
+  --[ Restr_A_1( (x++(x add y)) ), Restr_A_2( y, x ) ]->
+   [ ]
+
+  /* has exactly the trivial AC variant */
+
+
+
+end

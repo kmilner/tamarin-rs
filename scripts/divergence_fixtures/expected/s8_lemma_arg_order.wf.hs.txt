@@ -1,0 +1,7 @@
+WARNING: the following wellformedness checks failed!
+
+Check presence of the --prove/--lemma arguments in theory
+=========================================================
+
+  --> 'l1', 'l2', 'p1', 'p2' from arguments do(es) not correspond to a specified lemma in the theory 
+*/

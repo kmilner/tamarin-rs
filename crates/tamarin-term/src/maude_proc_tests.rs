@@ -7,7 +7,7 @@ use crate::lterm::{LSort, LVar};
 use crate::maude_sig::pair_maude_sig;
 use crate::vterm::Lit;
 
-use crate::test_maude::maude_path;
+use tamarin_test_support::require_maude_path;
 
 /// `fst(pair(a, b))` over [`pair_maude_sig`].  The pairing signature really
 /// rewrites this term.  `reduce` therefore cannot answer it from either of
@@ -48,7 +48,7 @@ fn reducible_fst_pair(a: &str, b: &str) -> LNTerm {
 /// would talk to nothing.
 #[test]
 fn spawn_and_reduce_pair() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -65,9 +65,33 @@ fn spawn_and_reduce_pair() {
     assert_eq!(h.stats().norm_count, 1, "the reduce really went to Maude");
 }
 
+/// `Reduction` runs over the FAST `FreshT` (Reduction.hs:118 with the
+/// re-export at Control/Monad/Fresh.hs:42), so the handle's single counter
+/// answers both class methods: `freshIdent` ignores the name and draws one
+/// (Control/Monad/Fresh/Class.hs:39), and `freshIdents k` reserves `k` and
+/// returns the first.
+#[test]
+fn maude_handle_fresh_idents_is_reserve_idxs() {
+    let path = match require_maude_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping: no maude");
+            return;
+        }
+    };
+    let h = MaudeHandle::start(&path, pair_maude_sig()).expect("start");
+    let mut m = &h;
+    assert_eq!(m.fresh_ident("x"), 0);
+    assert_eq!(m.fresh_ident("y"), 1);
+    assert_eq!(m.fresh_idents(4), 2);
+    // The draws all came from the one counter that `reserve_idxs` advances.
+    assert_eq!(h.fresh_counter_peek(), 6);
+    assert_eq!(h.reserve_idxs(1), 6);
+}
+
 #[test]
 fn unify_two_vars() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -101,7 +125,7 @@ fn unify_two_vars() {
 
 #[test]
 fn unify_xor_terms_ac() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -154,7 +178,7 @@ fn unify_xor_terms_ac() {
 /// x:Msg with y:Pub should narrow x → ?:Pub.
 #[test]
 fn unify_narrows_msg_var_to_pub() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -188,7 +212,7 @@ fn unify_narrows_msg_var_to_pub() {
 /// (Pub ⊂ Msg, but `pk(_)` is not Pub).
 #[test]
 fn unify_pub_var_with_pk_msg_term_fails() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => return,
     };
@@ -221,7 +245,7 @@ fn unify_pub_var_with_pk_msg_term_fails() {
 /// round of the same size therefore reuses those members and spawns no more.
 #[test]
 fn pool_acquire_release_size() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -270,7 +294,7 @@ fn pool_acquire_release_size() {
 /// keeps reporting the TARGET, while `spawned()` stays at 1.
 #[test]
 fn pool_sequential_reuse_stays_at_one_spawned() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -307,7 +331,7 @@ fn pool_sequential_reuse_stays_at_one_spawned() {
 /// so `reduce` cannot answer it locally.
 #[test]
 fn pool_parallel_reduce_returns_correct_results() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -347,7 +371,7 @@ fn pool_parallel_reduce_returns_correct_results() {
 
 #[test]
 fn pool_blocks_when_exhausted() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -393,7 +417,7 @@ fn pool_blocks_when_exhausted() {
 /// genuinely goes to Maude.
 #[test]
 fn shared_caches_elide_round_trip_across_handles() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -435,7 +459,7 @@ fn shared_caches_elide_round_trip_across_handles() {
 /// to Maude's reduced result.
 #[test]
 fn reduce_nf_fast_path_on_ac_signature() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -470,8 +494,8 @@ fn reduce_nf_fast_path_on_ac_signature() {
 // var) must AC-match subject `code2 ++ x ++ <a,b>` by binding
 // `codeOther -> code2 ++ x`, matching HS's Maude matchAction.
 #[test]
-fn match_eqs_const_subject_mset_var_to_submultiset() {
-    let path = match maude_path() {
+fn match_eqs_skolemize_both_mset_var_to_submultiset() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -508,9 +532,9 @@ fn match_eqs_const_subject_mset_var_to_submultiset() {
     let xv = LVar::new("x", LSort::Msg, 9);
     let subj = crate::term::f_app_ac(AcSym::Union, vec![mk(code2), mk(xv), payload.clone()]);
     let mut pattern_vars = std::collections::BTreeSet::new();
-    pattern_vars.insert(("codeOther".to_string(), 89u64));
+    pattern_vars.insert(("codeOther", 89u64));
     let res = h
-        .match_eqs_const_subject(
+        .match_eqs_skolemize_both(
             &[Equal {
                 lhs: pat,
                 rhs: subj,
@@ -534,11 +558,10 @@ fn match_eqs_const_subject_mset_var_to_submultiset() {
 }
 
 // HS's `impliedFormulas` runs `skolemizeGuarded` over the WHOLE clause
-// (`System.hs:1110-1144, see line 1121`): every FREE (non-universal) LVar of the guard
+// (`System.hs:1112-1146, see line 1123`): every FREE (non-universal) LVar of the guard
 // pattern becomes a Maude *constant*; only universal-bound vars stay
-// bindable. `match_eqs_const_subject` over-matches such guards (treats
-// free vars as Maude variables); `match_eqs_skolemize_both` treats them
-// as distinct constants, matching HS's `skolemizeGuarded`-then-match.
+// bindable.  `match_eqs_skolemize_both` treats those free vars as
+// distinct constants, matching HS's `skolemizeGuarded`-then-match.
 //
 // Mirrors the real STS_MAC_fix2 `AcceptedR` guard match (sent as
 // per-argument equations, one for each fact position).  The guard
@@ -548,15 +571,15 @@ fn match_eqs_const_subject_mset_var_to_submultiset() {
 // system vars (`x`,`tid`).  Two equations:
 //   eq1:  exp(g, ekI)  <=?  exp(g, x)     (pattern free ekI vs x)
 //   eq2:  exp(g, ekR)  <=?  exp(g, tid)   (pattern free ekR vs tid)
-// With `match_eqs_const_subject` the pattern's `ekI`,`ekR` are Maude
-// VARIABLES, so Maude binds `ekI->x`, `ekR->tid` and the match
-// SUCCEEDS — the spurious match that fired `gfalse` one step early.
-// With `match_eqs_skolemize_both` every free var is a distinct
-// CONSTANT, so `exp(g,c_ekI)` != `exp(g,c_x)` and the match FAILS,
-// exactly as HS's `skolemizeGuarded`-then-`matchAction` does.
+// Skolemizing the subject side alone would leave the pattern's
+// `ekI`,`ekR` as Maude VARIABLES, so Maude would bind `ekI->x`,
+// `ekR->tid` and the match would SUCCEED — a spurious match that fires
+// `gfalse` one step early.  Skolemizing both sides makes every free var
+// a distinct CONSTANT, so `exp(g,c_ekI)` != `exp(g,c_x)` and the match
+// FAILS, exactly as HS's `skolemizeGuarded`-then-`matchAction` does.
 #[test]
 fn impl_guard_match_skolemizes_pattern_free_vars() {
-    let path = match maude_path() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -591,14 +614,8 @@ fn impl_guard_match_skolemizes_pattern_free_vars() {
         },
     ];
     // No universal-bound vars in these positions.
-    let pattern_vars: std::collections::BTreeSet<(String, u64)> = std::collections::BTreeSet::new();
-    // const_subject OVER-MATCHES: the pattern's free `ekI`,`ekR` are
-    // Maude variables binding to x,tid.
-    let over = h.match_eqs_const_subject(&eqs, &pattern_vars).expect("m1");
-    assert!(
-        !over.is_empty(),
-        "sanity: const_subject is expected to OVER-match here (the bug)"
-    );
+    let pattern_vars: std::collections::BTreeSet<(&'static str, u64)> =
+        std::collections::BTreeSet::new();
     // skolemize_both: ekI,ekR,x,tid are distinct constants, so neither
     // equation can be satisfied → NO match, matching HS.
     let fixed = h.match_eqs_skolemize_both(&eqs, &pattern_vars).expect("m2");
@@ -611,27 +628,23 @@ fn impl_guard_match_skolemizes_pattern_free_vars() {
     );
 }
 
-/// Directional regression for the `match_eqs` / `compare_term_subs`
-/// flipped-`Equal`-convention bug.
+/// Directional regression for the `match_eqs` `Equal` convention.
 ///
-/// HS `compareTermSubs t1 t2` (`Subsumption.hs:37-45`) returns `GT`
-/// when `t1` is strictly MORE SPECIFIC than `t2`, `LT` when more
-/// general. With `t1 = h(x)` (general) and `t2 = h(a)` (ground,
+/// HS `matchWith t p = DelayedMatches [(t, p)]` (Term/Rewriting/Definitions.hs:93)
+/// is `(subject, pattern)`, and `compareTermSubs t1 t2` (Subsumption.hs:37-45)
+/// relies on that order: with `t1 = h(x)` (general) and `t2 = h(a)` (ground,
 /// specific):
-///   - arm A = `t1 matchWith t2` = subject h(x) vs pattern h(a):
-///     h(x)'s free var sits in the SUBJECT (ground) slot, h(a) is
-///     the pattern with no vars ⇒ No match (empty).
-///   - arm B = `t2 matchWith t1` = subject h(a) vs pattern h(x):
-///     x --> a ⇒ matches.
-///   - check [] (_:_) = LT ⇒ `compareTermSubs(h(x),h(a)) = Just LT`
-///     and symmetrically `compareTermSubs(h(a),h(x)) = Just GT`.
+///   - `t1 matchWith t2` = subject h(x) vs pattern h(a): h(x)'s free var
+///     sits in the SUBJECT (ground) slot, h(a) is the pattern with no vars
+///     ⇒ No match (empty).
+///   - `t2 matchWith t1` = subject h(a) vs pattern h(x): x --> a ⇒ matches.
 ///
-/// Pins the directionality: arm A (`t1` matchWith `t2`) uses `Equal { lhs:
-/// t1, rhs: t2 }` (RS `Equal`'s HS-faithful subject,pattern order), not
-/// the pattern,subject order used by the `const_subject` sibling.
+/// Pins the directionality: `t matchWith p` is `Equal { lhs: t, rhs: p }`
+/// (RS `Equal`'s HS-faithful subject,pattern order), not the
+/// pattern,subject order used by `match_eqs_skolemize_both`.
 #[test]
-fn compare_term_subs_direction_matches_hs() {
-    let path = match maude_path() {
+fn match_eqs_direction_matches_hs() {
+    let path = match require_maude_path() {
         Some(p) => p,
         None => {
             eprintln!("skipping: no maude");
@@ -655,24 +668,27 @@ fn compare_term_subs_direction_matches_hs() {
     )));
     let t_gen = crate::term::Term::App(FunSym::NoEq(h_sym), vec![mk(x)].into()); // h(x) general
     let t_spec = crate::term::Term::App(FunSym::NoEq(h_sym), vec![a].into()); // h(a) specific
-                                                                              // general vs specific => general is LESS specific => Less.
-    assert_eq!(
-        crate::subsumption::compare_term_subs(&hnd, &t_gen, &t_spec).expect("cmp"),
-        Some(std::cmp::Ordering::Less),
-        "h(x) is more general than h(a); HS compareTermSubs gives Less"
+    let matches = |subject: &LNTerm, pattern: &LNTerm| {
+        hnd.match_eqs(&[Equal {
+            lhs: subject.clone(),
+            rhs: pattern.clone(),
+        }])
+        .expect("match")
+    };
+    // subject h(x), pattern h(a): the subject is ground to the matcher, so
+    // nothing binds and there is no match.
+    assert!(
+        matches(&t_gen, &t_spec).is_empty(),
+        "h(x) matchWith h(a) must not match: the subject's var cannot bind"
     );
-    // specific vs general => specific is MORE specific => Greater.
-    assert_eq!(
-        crate::subsumption::compare_term_subs(&hnd, &t_spec, &t_gen).expect("cmp"),
-        Some(std::cmp::Ordering::Greater),
-        "h(a) is more specific than h(x); HS compareTermSubs gives Greater"
+    // subject h(a), pattern h(x): x --> a.
+    assert!(
+        !matches(&t_spec, &t_gen).is_empty(),
+        "h(a) matchWith h(x) must match with x --> a"
     );
-    // Identical (modulo renaming) terms compare Equal (invariant).
+    // Terms equal modulo renaming match in both directions.
     let y = LVar::new("y", LSort::Msg, 1);
     let t_gen2 = crate::term::Term::App(FunSym::NoEq(h_sym), vec![mk(y)].into());
-    assert_eq!(
-        crate::subsumption::compare_term_subs(&hnd, &t_gen, &t_gen2).expect("cmp"),
-        Some(std::cmp::Ordering::Equal),
-        "h(x) and h(y) are equal modulo renaming => Equal"
-    );
+    assert!(!matches(&t_gen, &t_gen2).is_empty());
+    assert!(!matches(&t_gen2, &t_gen).is_empty());
 }

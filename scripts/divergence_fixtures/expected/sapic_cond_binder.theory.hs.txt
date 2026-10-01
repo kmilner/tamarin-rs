@@ -1,0 +1,245 @@
+theory SapicCondBinder
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+predicate: Eq( a, b )<=>a = b
+
+rule (modulo E) Init[color=#ffffff, process="in(x.1);", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) inx_0_[color=#ffffff, process="in(x.1);", issapicrule,
+                       role='Process']:
+   [ State_( ), In( x.1 ) ] --> [ State_1( x.1 ) ]
+
+  /*
+  rule (modulo AC) inx_0_[color=#ffffff, process="in(x.1);", issapicrule,
+                          role='Process']:
+     [ State_( ), In( x ) ] --> [ State_1( x ) ]
+  */
+
+rule (modulo E) p_0_1[color=#ffffff, process="|", issapicrule,
+                      role='Process']:
+   [ State_1( x.1 ) ] --> [ State_11( x.1 ), State_12( x.1 ) ]
+
+  /*
+  rule (modulo AC) p_0_1[color=#ffffff, process="|", issapicrule,
+                         role='Process']:
+     [ State_1( x ) ] --> [ State_11( x ), State_12( x ) ]
+  */
+
+restriction Restr_ifyEqyxEqxa_0_11_1:
+  "∀ x #NOW x.1.
+    (Restr_ifyEqyxEqxa_0_11_1( x, x.1 ) @ #NOW) ⇒
+    ((∃ y. y = x) ∧ (x.1 = 'a'))"
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1.
+    (Restr_ifyEqyxEqxa_0_11_1( x, x.1 ) @ #NOW) ⇒
+    ((∃ y. y = x) ∧ (x.1 = 'a'))"
+  */
+
+rule (modulo E) ifyEqyxEqxa_0_11[color=#ffffff,
+                                 process="if (∃ y. Eq( y, x.1 )) ∧ (Eq( x.1, 'a' ))", issapicrule,
+                                 role='Process']:
+   [ State_11( x.1 ) ]
+  --[ Restr_ifyEqyxEqxa_0_11_1( x.1, x.1 ) ]->
+   [ State_111( x.1 ) ]
+
+  /*
+  rule (modulo AC) ifyEqyxEqxa_0_11[color=#ffffff,
+                                    process="if (∃ y. Eq( y, x.1 )) ∧ (Eq( x.1, 'a' ))", issapicrule,
+                                    role='Process']:
+     [ State_11( x ) ]
+    --[ Restr_ifyEqyxEqxa_0_11_1( x, x ) ]->
+     [ State_111( x ) ]
+  */
+
+restriction Restr_ifyEqyxEqxa_1_11_1:
+  "∀ x #NOW x.1.
+    (Restr_ifyEqyxEqxa_1_11_1( x, x.1 ) @ #NOW) ⇒
+    (¬((∃ y. y = x) ∧ (x.1 = 'a')))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1.
+    (Restr_ifyEqyxEqxa_1_11_1( x, x.1 ) @ #NOW) ⇒
+    (¬((∃ y. y = x) ∧ (x.1 = 'a')))"
+  */
+
+rule (modulo E) ifyEqyxEqxa_1_11[color=#ffffff,
+                                 process="if (∃ y. Eq( y, x.1 )) ∧ (Eq( x.1, 'a' ))", issapicrule,
+                                 role='Process']:
+   [ State_11( x.1 ) ]
+  --[ Restr_ifyEqyxEqxa_1_11_1( x.1, x.1 ) ]->
+   [ State_112( x.1 ) ]
+
+  /*
+  rule (modulo AC) ifyEqyxEqxa_1_11[color=#ffffff,
+                                    process="if (∃ y. Eq( y, x.1 )) ∧ (Eq( x.1, 'a' ))", issapicrule,
+                                    role='Process']:
+     [ State_11( x ) ]
+    --[ Restr_ifyEqyxEqxa_1_11_1( x, x ) ]->
+     [ State_112( x ) ]
+  */
+
+rule (modulo E) outyes_0_111[color=#ffffff, process="out('yes');",
+                             issapicrule, role='Process']:
+   [ State_111( x.1 ) ] --> [ State_1111( x.1 ), Out( 'yes' ) ]
+
+  /*
+  rule (modulo AC) outyes_0_111[color=#ffffff, process="out('yes');",
+                                issapicrule, role='Process']:
+     [ State_111( x ) ] --> [ State_1111( x ), Out( 'yes' ) ]
+  */
+
+rule (modulo E) p_0_1111[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1111( x.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1111[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_1111( x ) ] --> [ ]
+  */
+
+rule (modulo E) outno_0_112[color=#ffffff, process="out('no');",
+                            issapicrule, role='Process']:
+   [ State_112( x.1 ) ] --> [ State_1121( x.1 ), Out( 'no' ) ]
+
+  /*
+  rule (modulo AC) outno_0_112[color=#ffffff, process="out('no');",
+                               issapicrule, role='Process']:
+     [ State_112( x ) ] --> [ State_1121( x ), Out( 'no' ) ]
+  */
+
+rule (modulo E) p_0_1121[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1121( x.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1121[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_1121( x ) ] --> [ ]
+  */
+
+restriction Restr_ifxEqxbEqxa_0_12_1:
+  "∀ x #NOW.
+    (Restr_ifxEqxbEqxa_0_12_1( x ) @ #NOW) ⇒
+    ((∃ x.1. x.1 = 'b') ∧ (x = 'a'))"
+
+  /*
+  expanded formula:
+  "∀ x #NOW.
+    (Restr_ifxEqxbEqxa_0_12_1( x ) @ #NOW) ⇒
+    ((∃ x.1. x.1 = 'b') ∧ (x = 'a'))"
+  */
+
+rule (modulo E) ifxEqxbEqxa_0_12[color=#ffffff,
+                                 process="if (∃ x.2. Eq( x.2, 'b' )) ∧ (Eq( x.1, 'a' ))", issapicrule,
+                                 role='Process']:
+   [ State_12( x.1 ) ]
+  --[ Restr_ifxEqxbEqxa_0_12_1( x.1 ) ]->
+   [ State_121( x.1 ) ]
+
+  /*
+  rule (modulo AC) ifxEqxbEqxa_0_12[color=#ffffff,
+                                    process="if (∃ x.2. Eq( x.2, 'b' )) ∧ (Eq( x.1, 'a' ))", issapicrule,
+                                    role='Process']:
+     [ State_12( x ) ]
+    --[ Restr_ifxEqxbEqxa_0_12_1( x ) ]->
+     [ State_121( x ) ]
+  */
+
+restriction Restr_ifxEqxbEqxa_1_12_1:
+  "∀ x #NOW.
+    (Restr_ifxEqxbEqxa_1_12_1( x ) @ #NOW) ⇒
+    (¬((∃ x.1. x.1 = 'b') ∧ (x = 'a')))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW.
+    (Restr_ifxEqxbEqxa_1_12_1( x ) @ #NOW) ⇒
+    (¬((∃ x.1. x.1 = 'b') ∧ (x = 'a')))"
+  */
+
+rule (modulo E) ifxEqxbEqxa_1_12[color=#ffffff,
+                                 process="if (∃ x.2. Eq( x.2, 'b' )) ∧ (Eq( x.1, 'a' ))", issapicrule,
+                                 role='Process']:
+   [ State_12( x.1 ) ]
+  --[ Restr_ifxEqxbEqxa_1_12_1( x.1 ) ]->
+   [ State_122( x.1 ) ]
+
+  /*
+  rule (modulo AC) ifxEqxbEqxa_1_12[color=#ffffff,
+                                    process="if (∃ x.2. Eq( x.2, 'b' )) ∧ (Eq( x.1, 'a' ))", issapicrule,
+                                    role='Process']:
+     [ State_12( x ) ]
+    --[ Restr_ifxEqxbEqxa_1_12_1( x ) ]->
+     [ State_122( x ) ]
+  */
+
+rule (modulo E) outshadow_0_121[color=#ffffff, process="out('shadow');",
+                                issapicrule, role='Process']:
+   [ State_121( x.1 ) ] --> [ State_1211( x.1 ), Out( 'shadow' ) ]
+
+  /*
+  rule (modulo AC) outshadow_0_121[color=#ffffff, process="out('shadow');",
+                                   issapicrule, role='Process']:
+     [ State_121( x ) ] --> [ State_1211( x ), Out( 'shadow' ) ]
+  */
+
+rule (modulo E) p_0_1211[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1211( x.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1211[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_1211( x ) ] --> [ ]
+  */
+
+rule (modulo E) outfree_0_122[color=#ffffff, process="out('free');",
+                              issapicrule, role='Process']:
+   [ State_122( x.1 ) ] --> [ State_1221( x.1 ), Out( 'free' ) ]
+
+  /*
+  rule (modulo AC) outfree_0_122[color=#ffffff, process="out('free');",
+                                 issapicrule, role='Process']:
+     [ State_122( x ) ] --> [ State_1221( x ), Out( 'free' ) ]
+  */
+
+rule (modulo E) p_0_1221[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1221( x.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1221[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_1221( x ) ] --> [ ]
+  */
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  */
+
+
+
+end
