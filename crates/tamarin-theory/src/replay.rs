@@ -1049,8 +1049,10 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
         }
         GoalSpec::Chain {
             src_var,
+            src_idx,
             conc_idx,
             tgt_var,
+            tgt_idx,
             prem_idx,
         } => {
             // HS dispatch: `solve( (#i, n) ~~> (#j, m) )` parses to
@@ -1058,15 +1060,23 @@ fn match_goal(spec: &GoalSpec, sys: &System) -> Option<Goal> {
             // (Theory/Text/Parser/Proof.hs:59) and
             // matches by structural equality against an open
             // `Goal::Chain(...)` in `sys.goals` (HS ProofMethod.hs:258:
-            // `goal `M.member` sGoals`).  HS's open chain-goal carries
-            // concrete LVar identities — same skeleton-vs-runtime LVar
-            // suffix-idx mismatch as Action/Premise.  We match by var
-            // ROOT name + conc/prem idx, ignoring suffix idxs.
+            // `goal `M.member` sGoals`).  So both node LVars count in
+            // FULL, name AND idx, as in the Action/Premise arms.  Root
+            // names alone are ambiguous: one system can hold both
+            // `(#vr, 0) ~~> (#vk, 0)` and `(#vr.1, 0) ~~> (#vk.1, 0)`,
+            // and binding a stored step for the second to the first
+            // re-derives the wrong goal, so every step below it replays
+            // as `/* unannotated */`.
+            //
+            // `sGoals` is keyed by `Goal`, so at most one open goal can
+            // match.
             open_goals(sys)
                 .find(|g| match g {
                     Goal::Chain((src, c), (tgt, p)) => {
                         *src.name == **src_var
+                            && src.idx == *src_idx as u64
                             && *tgt.name == **tgt_var
+                            && tgt.idx == *tgt_idx as u64
                             && c.0 == *conc_idx as usize
                             && p.0 == *prem_idx as usize
                     }

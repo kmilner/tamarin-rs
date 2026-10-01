@@ -368,11 +368,13 @@ fn match_chain_goal_by_var_and_idx() {
     let mut sys = System::empty();
     sys.goals_mut().push((g_ij.clone(), Default::default()));
     sys.goals_mut().push((g_jk.clone(), Default::default()));
-    // Ask for (#j, 1) ~~> (#k, 0).
+    // Ask for (#j.5, 1) ~~> (#k.7, 0).
     let spec = GoalSpec::Chain {
         src_var: "j".into(),
+        src_idx: 5,
         conc_idx: 1,
         tgt_var: "k".into(),
+        tgt_idx: 7,
         prem_idx: 0,
     };
     let matched = match_goal(&spec, &sys).expect("should match");
@@ -380,19 +382,53 @@ fn match_chain_goal_by_var_and_idx() {
     // And the other side.
     let spec2 = GoalSpec::Chain {
         src_var: "i".into(),
+        src_idx: 3,
         conc_idx: 0,
         tgt_var: "j".into(),
+        tgt_idx: 5,
         prem_idx: 2,
     };
     assert_eq!(match_goal(&spec2, &sys).expect("should match"), g_ij);
     // Wrong idx — no match.
     let bad = GoalSpec::Chain {
         src_var: "i".into(),
+        src_idx: 3,
         conc_idx: 9,
         tgt_var: "j".into(),
+        tgt_idx: 5,
         prem_idx: 2,
     };
     assert!(match_goal(&bad, &sys).is_none());
+}
+
+/// Chain matcher — two open Chain goals whose node variables share their
+/// ROOT names (`(#vr, 0) ~~> (#vk, 0)` and `(#vr.1, 0) ~~> (#vk.1, 0)`).
+/// HS's `M.member` on the parsed `ChainG` compares the full LVars, so each
+/// stored step binds its own goal, and a step whose indices match no open
+/// goal binds none.  Matching on root names bound the first goal for both.
+#[test]
+fn match_chain_goal_by_full_node_vars() {
+    use crate::rule::{ConcIdx, PremIdx};
+    let vr = LVar::new("vr", LSort::Node, 0);
+    let vk = LVar::new("vk", LSort::Node, 0);
+    let vr1 = LVar::new("vr", LSort::Node, 1);
+    let vk1 = LVar::new("vk", LSort::Node, 1);
+    let g0 = Goal::Chain((vr, ConcIdx(0)), (vk, PremIdx(0)));
+    let g1 = Goal::Chain((vr1, ConcIdx(0)), (vk1, PremIdx(0)));
+    let mut sys = System::empty();
+    sys.goals_mut().push((g0.clone(), Default::default()));
+    sys.goals_mut().push((g1.clone(), Default::default()));
+    let spec = |src_idx, tgt_idx| GoalSpec::Chain {
+        src_var: "vr".into(),
+        src_idx,
+        conc_idx: 0,
+        tgt_var: "vk".into(),
+        tgt_idx,
+        prem_idx: 0,
+    };
+    assert_eq!(match_goal(&spec(1, 1), &sys), Some(g1));
+    assert_eq!(match_goal(&spec(0, 0), &sys), Some(g0));
+    assert_eq!(match_goal(&spec(1, 0), &sys), None);
 }
 
 /// Subterm matcher — open Subterm goals are matched by canonical

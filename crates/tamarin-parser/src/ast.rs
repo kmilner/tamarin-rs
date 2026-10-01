@@ -375,16 +375,20 @@ pub enum GoalSpec {
     /// `(<nodevar>, <natural>)` and the operator is `~~>` (HS
     /// `prettyGoal (ChainG c p)` Constraints.hs:275-276).
     ///
-    /// We capture the time-var names (e.g. `i`, `j` from `#i`/`#j`)
-    /// and the conclusion / premise indices.  The replay matcher
-    /// disambiguates by these idxs and the time-var ROOT name; LVar
-    /// suffix-idxs are intentionally ignored (skeleton-text indices
-    /// differ from runtime LVar indices — same pattern as Action /
-    /// Premise).
+    /// We capture both node variables in full, ROOT name and index
+    /// (`#vr.6` is `vr` and `6`), and the conclusion / premise indices.
+    /// HS's `ChainG` carries the full LVars, and the replay matcher
+    /// compares all of them, like the Action / Premise arms.
     Chain {
+        /// Source node variable ROOT name (sigil/idx stripped).
         src_var: String,
+        /// Source node variable index (the `N` in `#vr.N`; `0` when absent).
+        src_idx: u32,
         conc_idx: u32,
+        /// Target node variable ROOT name (sigil/idx stripped).
         tgt_var: String,
+        /// Target node variable index (the `N` in `#vk.N`; `0` when absent).
+        tgt_idx: u32,
         prem_idx: u32,
     },
     /// `<small> ⊏ <big>` — subterm-split goal.  Mirrors HS

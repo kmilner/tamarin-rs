@@ -218,15 +218,19 @@ fn solve_chain_goal() {
         ParsedMethod::SolveGoal(
             GoalSpec::Chain {
                 src_var,
+                src_idx,
                 conc_idx,
                 tgt_var,
+                tgt_idx,
                 prem_idx,
             },
             _,
         ) => {
             assert_eq!(src_var, "i");
+            assert_eq!(*src_idx, 0);
             assert_eq!(*conc_idx, 0);
             assert_eq!(tgt_var, "j");
+            assert_eq!(*tgt_idx, 0);
             assert_eq!(*prem_idx, 2);
         }
         other => panic!("expected Chain goal-spec, got {:?}", other),
@@ -235,24 +239,28 @@ fn solve_chain_goal() {
 
 #[test]
 fn solve_chain_goal_with_freshen_suffix() {
-    // HS sometimes emits a freshen suffix like `#i.2` on the
-    // pretty-printed nodevar; the parser must strip it.
+    // HS emits a freshen suffix like `#i.2` on the pretty-printed nodevar
+    // whenever the index is not 0; the parser keeps it as the var's index,
+    // apart from the ROOT name.
     let src = "solve( (#i.5, 1) ~~> (#j.7, 0) ) by sorry";
     let t = parse_proof_tree(src).expect("parse");
     match &t.method {
         ParsedMethod::SolveGoal(
             GoalSpec::Chain {
                 src_var,
+                src_idx,
                 conc_idx,
                 tgt_var,
+                tgt_idx,
                 prem_idx,
             },
             _,
         ) => {
-            // Freshen suffix stripped from the var ROOT.
             assert_eq!(src_var, "i");
+            assert_eq!(*src_idx, 5);
             assert_eq!(*conc_idx, 1);
             assert_eq!(tgt_var, "j");
+            assert_eq!(*tgt_idx, 7);
             assert_eq!(*prem_idx, 0);
         }
         other => panic!("expected Chain goal-spec, got {:?}", other),

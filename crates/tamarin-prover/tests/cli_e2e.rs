@@ -86,6 +86,41 @@ fn prove_chain_writes_output_with_verified_summary() {
     );
 }
 
+/// A stored proof whose chain steps name node variables with the same root
+/// names (`(#vr.6, 0) ~~> (#vk.1, 0)` while another `#vr…`/`#vk…` chain goal is
+/// open) replays in full: the checker matches a chain goal on its full node
+/// variables, as HS's `M.member` on the parsed `ChainG` does.  Matching on
+/// the root names bound the wrong goal, and the proof checked as `analysis
+/// incomplete` with 64 steps `/* unannotated */`.
+#[test]
+fn stored_chain_steps_replay_by_full_node_variables() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    let in_path = fixture("replay_chain_goal_identity.spthy");
+    let out_dir = std::env::temp_dir().join("tamarin_prover_e2e_replay_chain");
+    std::fs::create_dir_all(&out_dir).expect("mkdir out_dir");
+    let out_path = out_dir.join("replay_chain_goal_identity_out.spthy");
+    let output_arg = format!("--output={}", out_path.to_str().unwrap());
+
+    let (code, stdout, stderr) = run_binary(&[&output_arg], &[&in_path]);
+    assert_eq!(
+        code, 0,
+        "expected exit code 0, got {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("recentalive_tag (all-traces): verified"),
+        "the stored proof must check as verified; got:\n{stdout}"
+    );
+    let body = std::fs::read_to_string(&out_path).expect("output written");
+    assert!(
+        !body.contains("unannotated") && !body.contains("sorry"),
+        "every stored step must replay; got:\n{body}"
+    );
+}
+
 #[test]
 fn prove_lemma_filter_excludes_other_lemmas() {
     if !maude_available() {

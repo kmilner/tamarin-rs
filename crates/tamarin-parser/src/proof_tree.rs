@@ -541,9 +541,9 @@ fn count_quant_vars(after_qua: &str) -> usize {
 /// pretty rendering
 /// (Constraints.hs:275-276).
 ///
-/// We extract the time-var ROOT name (stripping any trailing `.N`
-/// freshen-suffix that HS's pretty-printer can emit) and the natural
-/// idx for each side.  The matcher disambiguates by these.
+/// We extract each side's time-var ROOT name, its `.N` freshen-suffix
+/// (HS's pretty-printer emits it whenever the index is not 0), and the
+/// natural idx.  The matcher compares all of them.
 fn try_chain_split(text: &str) -> Option<GoalSpec> {
     // Find the top-level `~~>` separator.  HS prints exactly `~~>`
     // (operator_ "~~>" inside fsep) so a plain substring search suffices
@@ -553,12 +553,14 @@ fn try_chain_split(text: &str) -> Option<GoalSpec> {
     let arrow_pos = find_top_level_substr(text, "~~>")?;
     let lhs = text[..arrow_pos].trim();
     let rhs = text[arrow_pos + 3..].trim();
-    let (src_var, conc_idx) = parse_node_idx_pair(lhs)?;
-    let (tgt_var, prem_idx) = parse_node_idx_pair(rhs)?;
+    let (src_var, src_idx, conc_idx) = parse_node_idx_pair(lhs)?;
+    let (tgt_var, tgt_idx, prem_idx) = parse_node_idx_pair(rhs)?;
     Some(GoalSpec::Chain {
         src_var,
+        src_idx,
         conc_idx,
         tgt_var,
+        tgt_idx,
         prem_idx,
     })
 }
@@ -652,9 +654,9 @@ fn find_top_level_char(s: &str, needle: char) -> Option<usize> {
 
 /// Parse a `(#name[.idx], N)` (or `(name[.idx], N)`) pair as used by
 /// HS `nodeConc / nodePrem` (Theory/Text/Parser/Proof.hs:29-31,34-36).
-/// Returns the time-var
-/// ROOT name (stripping any `.idx` freshen suffix) plus the natural N.
-fn parse_node_idx_pair(s: &str) -> Option<(String, u32)> {
+/// Returns the time-var ROOT name, its `.idx` freshen suffix (`0` when
+/// absent), and the natural N.
+fn parse_node_idx_pair(s: &str) -> Option<(String, u32, u32)> {
     let trimmed = s.trim();
     let inside = trimmed.strip_prefix('(')?.strip_suffix(')')?.trim();
     // Split into name-side / number-side on the first top-level `,`.
@@ -678,8 +680,14 @@ fn parse_node_idx_pair(s: &str) -> Option<(String, u32)> {
     if var_name.is_empty() {
         return None;
     }
+    // The freshen suffix, as the Action / Premise heads read it: a
+    // missing or malformed `.idx` is index 0.
+    let var_idx = name_no_hash[end..]
+        .strip_prefix('.')
+        .and_then(|rest| rest.trim().parse::<u32>().ok())
+        .unwrap_or(0);
     let idx: u32 = num_part.parse().ok()?;
-    Some((var_name, idx))
+    Some((var_name, var_idx, idx))
 }
 
 struct GoalParser<'a> {
