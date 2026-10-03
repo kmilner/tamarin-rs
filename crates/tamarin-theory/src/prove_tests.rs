@@ -57,6 +57,55 @@ fn stop_on_trace_attribute_precedence_and_rendering() {
     }
 }
 
+#[test]
+fn default_web_stop_on_trace_preserves_the_session_choice() {
+    use crate::constraint::solver::context::CutStrategy;
+    let Some(h) = maude() else { return };
+    let source = include_str!("../../tamarin-prover/tests/fixtures/lemma_stop_on_trace.spthy");
+    let theory = std::sync::Arc::new(elaborated(
+        &tamarin_parser::parse_theory(source, &[]).unwrap(),
+    ));
+    fn nodes(tree: &ProofNode) -> usize {
+        1 + tree.children.values().map(nodes).sum::<usize>()
+    }
+    for forced in [false, true] {
+        let session = ProverSession::build(
+            theory.clone(),
+            h.clone(),
+            ProverSessionOptions {
+                cut: CutStrategy::Nothing,
+                force_cut: forced,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for (override_cut, expected_nodes) in [
+            (None, if forced { 4 } else { 3 }),
+            (Some(CutStrategy::SeqDfs), 3),
+            (Some(CutStrategy::Nothing), 4),
+        ] {
+            let (_, _, sys) = lemma_context_and_system(&session, "selected").unwrap();
+            let tree = prove_system_in_session_with_options(
+                &session,
+                "selected",
+                sys,
+                SearchOptions {
+                    proof_bound: 20,
+                    ranking_depth_offset: 0,
+                    cut: override_cut,
+                    oracle_only: false,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                nodes(&tree),
+                expected_nodes,
+                "forced={forced}, override={override_cut:?}"
+            );
+        }
+    }
+}
+
 /// Returns a maude handle on `sig`.  Returns `None` only when the run opts
 /// out explicitly with `TAM_ALLOW_NO_MAUDE=1`.  Path resolution and the
 /// policy that panics both live in [`tamarin_test_support::require_maude_path`].

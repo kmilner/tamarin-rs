@@ -534,8 +534,9 @@ fn web_search_options(
     Some(SearchOptions {
         proof_bound: if bound == 0 { usize::MAX } else { bound },
         ranking_depth_offset,
-        cut,
-        force_cut: quit_on_empty || extractor_cut != CutStrategy::Dfs,
+        // The default web button preserves CLI > lemma > configuration.
+        // Other buttons (including oracle-only) are explicit overrides.
+        cut: (quit_on_empty || extractor_cut != CutStrategy::Dfs).then_some(cut),
         oracle_only: quit_on_empty,
     })
 }
@@ -2177,19 +2178,20 @@ mod tests {
             let nested = web_search_options(extractor, 5, false, 3).expect(extractor);
             assert_eq!(nested.proof_bound, 5);
             assert_eq!(nested.ranking_depth_offset, 3);
-            assert_eq!(nested.cut, expected);
-            assert_eq!(nested.force_cut, expected != CutStrategy::Dfs);
+            assert_eq!(
+                nested.cut,
+                (expected != CutStrategy::Dfs).then_some(expected)
+            );
             assert!(!nested.oracle_only);
         }
 
         let unbounded = web_search_options("characterize", 0, false, 0).expect("all");
         assert_eq!(unbounded.proof_bound, usize::MAX);
-        assert_eq!(unbounded.cut, CutStrategy::Nothing);
+        assert_eq!(unbounded.cut, Some(CutStrategy::Nothing));
 
         let quit = web_search_options("characterize", 0, true, 0).expect("quit");
-        assert_eq!(quit.cut, CutStrategy::AfterSorry);
+        assert_eq!(quit.cut, Some(CutStrategy::AfterSorry));
         assert!(quit.oracle_only);
-        assert!(quit.force_cut);
         assert!(web_search_options("unknown", 0, false, 0).is_none());
         assert!(web_search_options("unknown", 0, true, 0).is_none());
     }
