@@ -3871,7 +3871,7 @@ fn dedupe_formulas_pass(red: &mut Reduction) {
 /// which entries this pass (re-)splits.
 fn propagate_subterm_obvious(red: &mut Reduction) {
     use crate::tools::subterm_store::{split_subterm, subterm_step, SubtermSplit};
-    use tamarin_term::lterm::{is_msg_var, sort_of_lnterm, LSort};
+    use tamarin_term::lterm::{sort_of_lnterm, LSort};
     let mut changed = ChangeIndicator::Unchanged;
     if red.sys.subterm_store.contradictory {
         return;
@@ -3935,8 +3935,8 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
     //   - recursive splitSubterm on each changed `¬(s ⊏ t)`;
     //   - `TrueD ∈ splits` ⇒ isContradictory;
     //   - `EqualD (x,y)` ⇒ emit `¬(x = y)`;
-    //   - `NatSubtermD (s,t)` with isNatSubterm ⇒ flip into posSubterms
-    //     as `(t, s %+ 1)`;
+    //   - `NatSubtermD (s,t)` with natural s ⇒ flip into posSubterms
+    //     as `(t, s %+ 1)`; message-sorted s stays deferred (#958);
     //   - SubD/NatD leaves union back into negSubterms;
     //   - changed entries whose split is empty are already-false ⇒
     //     removed from negSubterms;
@@ -3993,40 +3993,38 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
                 }
             }
         }
-        // flippedNatSubterms — `(t, s %+ 1)` for NatSubtermD with
-        // isNatSubterm, unioned into posSubterms.
+        // Upstream #958: flip a negative natural order only when its
+        // smaller operand is already natural, not an unconstrained message.
         for x in &splits_all {
-            if let SubtermSplit::NatSubtermD(ns, nt) = x {
-                let s_is_nat_or_msg = matches!(sort_of_lnterm(ns), LSort::Nat) || is_msg_var(ns);
-                let t_is_nat = matches!(sort_of_lnterm(nt), LSort::Nat);
-                if s_is_nat_or_msg && t_is_nat {
-                    use tamarin_term::function_symbols::{nat_one_sym, AcSym};
-                    use tamarin_term::term::{f_app_ac, f_app_no_eq};
-                    let one_term: tamarin_term::lterm::LNTerm = f_app_no_eq(nat_one_sym(), vec![]);
-                    let s_plus_one = f_app_ac(AcSym::NatPlus, vec![ns.clone(), one_term]);
-                    let exists = red
+            if let SubtermSplit::NatSubtermD(ns, nt) = x
+                && sort_of_lnterm(ns) == LSort::Nat
+            {
+                use tamarin_term::function_symbols::{nat_one_sym, AcSym};
+                use tamarin_term::term::{f_app_ac, f_app_no_eq};
+                let one_term: tamarin_term::lterm::LNTerm = f_app_no_eq(nat_one_sym(), vec![]);
+                let s_plus_one = f_app_ac(AcSym::NatPlus, vec![ns.clone(), one_term]);
+                let exists = red
+                    .sys
+                    .subterm_store
+                    .subterms
+                    .iter()
+                    .any(|c| c.small == *nt && c.big == s_plus_one)
+                    || red
                         .sys
                         .subterm_store
-                        .subterms
+                        .solved_subterms
                         .iter()
-                        .any(|c| c.small == *nt && c.big == s_plus_one)
-                        || red
-                            .sys
-                            .subterm_store
-                            .solved_subterms
-                            .iter()
-                            .any(|c| c.small == *nt && c.big == s_plus_one);
-                    if !exists {
-                        red.sys.invalidate_max_var_idx_cache();
-                        red.sys.subterm_store_mut().subterms.push(
-                            crate::tools::subterm_store::SubtermConstraint {
-                                small: nt.clone(),
-                                big: s_plus_one,
-                                propagated: false,
-                            },
-                        );
-                        changed = ChangeIndicator::Changed;
-                    }
+                        .any(|c| c.small == *nt && c.big == s_plus_one);
+                if !exists {
+                    red.sys.invalidate_max_var_idx_cache();
+                    red.sys.subterm_store_mut().subterms.push(
+                        crate::tools::subterm_store::SubtermConstraint {
+                            small: nt.clone(),
+                            big: s_plus_one,
+                            propagated: false,
+                        },
+                    );
+                    changed = ChangeIndicator::Changed;
                 }
             }
         }
@@ -4361,9 +4359,7 @@ fn nat_subterm_equalities(
     relation: &[(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)],
 ) -> Option<Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)>> {
     use tamarin_term::function_symbols::{nat_one_sym, AcSym};
-    use tamarin_term::lterm::{
-        flattened_ac_terms, get_var, is_msg_var, sort_of_lnterm, LNTerm, LSort, LVar,
-    };
+    use tamarin_term::lterm::{flattened_ac_terms, get_var, LNTerm, LSort, LVar};
     use tamarin_term::term::{f_app_ac, f_app_no_eq, Term};
 
     // ---- helpers ----------------------------------------------------------
@@ -4371,12 +4367,6 @@ fn nat_subterm_equalities(
     // `fAppNatOne = fAppNoEq natOneSym []` — the surface form of `%1`.
     fn nat_one_term() -> LNTerm {
         f_app_no_eq(nat_one_sym(), vec![])
-    }
-
-    // `isNatSubterm (small, big) = (Nat small || msgVar small) && Nat big`
-    // (SubtermStore.hs).
-    fn is_nat_subterm(s: &LNTerm, t: &LNTerm) -> bool {
-        (sort_of_lnterm(s) == LSort::Nat || is_msg_var(s)) && sort_of_lnterm(t) == LSort::Nat
     }
 
     // Vertex = (Bool sign, LVar var).  We use `(bool, LVar)` directly.
@@ -4391,14 +4381,20 @@ fn nat_subterm_equalities(
     // Returns a list of `((from, to), weight)`.
     fn format_edge(st: &(LNTerm, LNTerm)) -> Vec<((Vertex, Vertex), i64)> {
         let (a, b) = st;
-        if !is_nat_subterm(a, b) {
-            return Vec::new();
-        }
         let one = nat_one_term();
         // `flattened_ac_terms` borrows out of `a`/`b`, so the summands are
         // inspected in place — no per-summand clone.
         let l_flat: Vec<&LNTerm> = flattened_ac_terms(AcSym::NatPlus, a);
         let r_flat: Vec<&LNTerm> = flattened_ac_terms(AcSym::NatPlus, b);
+        // Upstream #958: do not silently discard non-natural summands or
+        // encode message variables as natural-number ordering vertices.
+        if !l_flat
+            .iter()
+            .chain(&r_flat)
+            .all(|t| **t == one || matches!(get_var(t), Some(v) if v.sort == LSort::Nat))
+        {
+            return Vec::new();
+        }
         let l_vars: Vec<LVar> = l_flat
             .iter()
             .copied()

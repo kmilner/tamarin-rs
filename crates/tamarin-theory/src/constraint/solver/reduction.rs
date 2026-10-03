@@ -5544,11 +5544,8 @@ impl<'ctx> Reduction<'ctx> {
     ///   case split of
     ///     TrueD                 -> return ()
     ///     SubtermD st1          -> modM sSubtermStore (addSubterm st1)
-    ///     NatSubtermD st1@(s,t) -> if length splitList == 1
-    ///                                then do newVar <- freshLVar "newVar" LSortNat
-    ///                                        let sPlus = s ++: varTerm newVar
-    ///                                        insertFormula $ closeGuarded Ex [newVar] [EqE sPlus t] gtrue
-    ///                                else modM sSubtermStore (addSubterm st1)
+    ///     NatSubtermD (s,t)     -> -- solve s + newVar = t; refine a Msg s
+    ///                             -- to a fresh Nat first (upstream #958)
     ///     EqualD (l, r)         -> insertFormula $ GAto $ EqE (lTermToBTerm l) (lTermToBTerm r)
     ///     ACNewVarD ((smallPlus, big), newVar) ->
     ///                              insertFormula $ closeGuarded Ex [newVar] [EqE smallPlus big] gtrue
@@ -5622,7 +5619,6 @@ impl<'ctx> Reduction<'ctx> {
             return Ok(GoalCases::Contradictory);
         }
 
-        let single = split_list.len() == 1;
         let base_sys = self.sys.clone();
         let mut cases: Vec<GoalBranch> = Vec::new();
         for (i, split) in split_list.iter().enumerate() {
@@ -5645,21 +5641,31 @@ impl<'ctx> Reduction<'ctx> {
                     SystemOutcome::Linear
                 }
                 SubtermSplit::NatSubtermD(s, t) => {
-                    if single {
-                        // newVar <- freshLVar "newVar" LSortNat
-                        let avoid_max = sub.fresh_var_baseline();
-                        sub.maude.ensure_above(avoid_max);
-                        let new_var = LVar::new("newVar", LSort::Nat, sub.maude.fresh_idx());
-                        // sPlus = s ++: varTerm newVar
-                        let s_plus = f_app_ac(AcSym::NatPlus, vec![s.clone(), var_term(new_var)]);
-                        // insertFormula $ closeGuarded Ex [newVar] [EqE sPlus t] gtrue
-                        let f = close_guarded_ex_eq(&new_var, &s_plus, t);
-                        sub.insert_formula(f)?
+                    // Upstream #958: every natural split becomes an equation,
+                    // including splits with siblings. Refine a message-sorted
+                    // smaller operand before putting it below NatPlus.
+                    let avoid_max = sub.fresh_var_baseline();
+                    sub.maude.ensure_above(avoid_max);
+                    let new_var = LVar::new("newVar", LSort::Nat, sub.maude.fresh_idx());
+                    let f = if tamarin_term::lterm::is_msg_var(s) {
+                        let small_var = LVar::new("small", LSort::Nat, sub.maude.fresh_idx());
+                        let small = var_term(small_var);
+                        let s_plus =
+                            f_app_ac(AcSym::NatPlus, vec![small.clone(), var_term(new_var)]);
+                        crate::guarded::close_guarded(
+                            crate::formula::Quantifier::Ex,
+                            vec![small_var, new_var],
+                            vec![
+                                crate::atom::ProtoAtom::EqE(s.clone(), small),
+                                crate::atom::ProtoAtom::EqE(s_plus, t.clone()),
+                            ],
+                            crate::guarded::gtrue(),
+                        )
                     } else {
-                        sub.sys.invalidate_max_var_idx_cache();
-                        sub.sys.subterm_store_mut().add(s.clone(), t.clone());
-                        SystemOutcome::Linear
-                    }
+                        let s_plus = f_app_ac(AcSym::NatPlus, vec![s.clone(), var_term(new_var)]);
+                        close_guarded_ex_eq(&new_var, &s_plus, t)
+                    };
+                    sub.insert_formula(f)?
                 }
                 SubtermSplit::EqualD(l, r) => {
                     // insertFormula $ GAto $ EqE (lTermToBTerm l) (lTermToBTerm r)

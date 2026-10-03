@@ -785,6 +785,32 @@ fn solve_subterm_goal_marks_solved_and_moves() {
 }
 
 #[test]
+fn positive_nat_subterm_refines_the_message_operand() {
+    use tamarin_term::function_symbols::{nat_one_sym, AcSym};
+    use tamarin_term::lterm::{sort_of_lnterm, LSort, LVar};
+    use tamarin_term::term::{f_app_ac, f_app_no_eq};
+    use tamarin_term::vterm::var_term;
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let h = tamarin_term::maude_proc::MaudeHandle::start(
+        &path,
+        tamarin_term::maude_sig::nat_maude_sig(),
+    )
+    .expect("natural-number Maude");
+    let ctx = ProofContext::new(h, Vec::new());
+    let small = var_term(LVar::new("x", LSort::Msg, 0));
+    let one = f_app_no_eq(nat_one_sym(), vec![]);
+    let big = f_app_ac(AcSym::NatPlus, vec![one.clone(), one]);
+    let mut red = Reduction::new(&ctx, System::empty());
+    let outcome = red.solve_subterm_goal(&(small.clone(), big)).unwrap();
+    assert!(matches!(outcome, GoalCases::LinearNamed(_)), "{outcome:?}");
+    let refined = tamarin_term::subst::apply_vterm(&red.sys.eq_store().subst, small);
+    assert_eq!(sort_of_lnterm(&refined), LSort::Nat);
+    assert!(red.sys.subterm_store.subterms.is_empty());
+}
+
+#[test]
 fn solve_subterm_self_is_contradictory() {
     let Some(ctx) = ctx() else { return };
     let mut sys = System::empty();
