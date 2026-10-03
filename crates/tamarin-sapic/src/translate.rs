@@ -394,22 +394,18 @@ pub(crate) fn translate(
     opts: TranslateOptions,
 ) -> Result<Translation, String> {
     // The annotation chain, innermost first (sapic/src/Sapic.hs): toAnProcess,
-    // propagateNames, annotateSecretChannels, annotatePureStates,
-    // translateTermsReport, translateLetDestr — then annotateLocks.
+    // propagateNames, annotatePureStates, translateTermsReport,
+    // translateLetDestr, annotateSecretChannels — then annotateLocks.
     let an_proc_pre: Process<ProcessAnnotation<LVar>, SapicLVar> =
         propagate_names(to_annotated::<LVar>(plain));
-    // annotateSecretChannels (sapic/src/Sapic.hs): attach
-    // `secret_channel` to every ChIn/ChOut whose channel is an always-secret
-    // fresh variable.
-    let an_proc_sec = crate::secret_channels::annotate_secret_channels(an_proc_pre);
     // `checkOps' (._stateChannelOpt) annotatePureStates`
     // (sapic/src/Sapic.hs): the
     // pure-state / state-channel optimisation, off unless the theory declares
     // `options: translation-state-optimisation`.
     let an_proc_states = if opts.state_channel_opt {
-        crate::states::annotate_pure_states(an_proc_sec)
+        crate::states::annotate_pure_states(an_proc_pre)
     } else {
-        an_proc_sec
+        an_proc_pre
     };
     // `checkOps' (._transReport) translateTermsReport`
     // (sapic/src/Sapic.hs): rewrite
@@ -421,7 +417,9 @@ pub(crate) fn translate(
         an_proc_states
     };
     let an_proc_let = crate::let_destructors::translate_let_destr(macros, st_rules, an_proc_rep)?;
-    let an_proc = crate::locks::annotate_locks(an_proc_let)?;
+    // Substituting a let can expose a channel name through an escaping alias.
+    let an_proc_sec = crate::secret_channels::annotate_secret_channels(an_proc_let);
+    let an_proc = crate::locks::annotate_locks(an_proc_sec)?;
 
     // Build the translation context (gated progress/reliable/async wrappers).
     // The progress-function domain / inverse are computed once (HS recomputes
