@@ -5,6 +5,29 @@ use super::*;
 use crate::parse_error::{ErrorDetails, MAX_DIAGNOSTIC_MESSAGE_CHARS};
 
 #[test]
+fn stop_on_trace_attribute_accepts_all_methods_case_insensitively() {
+    use tamarin_term::tags::CutStrategy;
+    for method in ["DFS", "BFS", "SEQDFS", "NONE", "SORRY"] {
+        for spelling in [method.to_string(), method.to_lowercase()] {
+            let src = format!("theory H begin lemma L [stop-on-trace = {spelling}]: \"T\" end");
+            let parsed = parse_theory(&src, &[]).unwrap();
+            let TheoryItem::Lemma(lemma) = &parsed.items[0] else {
+                panic!("lemma")
+            };
+            assert_eq!(
+                lemma.attributes,
+                vec![LemmaAttr::StopOnTrace(CutStrategy::parse(method).unwrap())]
+            );
+        }
+    }
+    assert!(parse_theory(
+        "theory H begin lemma L [stop-on-trace=oops]: \"T\" end",
+        &[]
+    )
+    .is_err());
+}
+
+#[test]
 fn heuristic_rankings_are_individual_and_boundary_terminated() {
     for boundary in [
         "\n",

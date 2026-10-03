@@ -1387,6 +1387,7 @@ impl TheoryPipeline<'_> {
                 maude_pool: self.file_maude_pool.clone(),
                 cli_heuristic,
                 cut: self.cut,
+                force_cut: self.opts.stop_on_trace.is_some(),
                 ndc_cache: self.ndc_cache.clone(),
                 parameters: self.opts.parameters,
                 sys_retention: if wants_trace_output(self.args) {

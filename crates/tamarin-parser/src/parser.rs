@@ -3485,6 +3485,12 @@ impl<'a> Parser<'a> {
                 let raw = self.heuristic_rankings()?;
                 self.skip_ws();
                 attrs.push(LemmaAttr::Heuristic(raw));
+            } else if self.try_kw("stop-on-trace") {
+                self.require_punct("=")?;
+                let method = self.ident()?;
+                let cut = tamarin_term::tags::CutStrategy::parse(&method)
+                    .ok_or_else(|| self.err(format!("unknown stop-on-trace method: {method}")))?;
+                attrs.push(LemmaAttr::StopOnTrace(cut));
             } else if self.try_kw("output") {
                 self.require_punct("=")?;
                 self.skip_ws();

@@ -1567,6 +1567,7 @@ pub fn lemma_attr_docs(
             // HS `text ("heuristic=" ++ prettyGoalRankings h)`,
             // space-separated and with the oracle name expanded.
             Heuristic(s) => format!("heuristic={}", pretty_heuristic_str(s, in_file)),
+            StopOnTrace(cut) => format!("stop-on-trace={}", cut.as_str()),
             Output(modules) => format!("output=[{}]", modules.join(",")),
             Left => "left".into(),
             Right => "right".into(),
