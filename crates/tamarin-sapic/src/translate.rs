@@ -112,10 +112,29 @@ fn map_to_annotated_rule(
     p: &ProcessPosition,
     bodies: Vec<RuleBody>,
 ) -> Vec<AnnotatedRule<ProcessAnnotation<LVar>>> {
+    let equation_patterns: BTreeSet<_> = proc
+        .annotation()
+        .let_plan
+        .iter()
+        .enumerate()
+        .flat_map(|(i, stage)| {
+            stage.alternatives.iter().filter_map(move |(lhs, reduct)| {
+                reduct
+                    .as_ref()
+                    .map(|_| (crate::annotation::let_stage_position(p, i), lhs.clone()))
+            })
+        })
+        .collect();
     bodies
         .into_iter()
         .enumerate()
         .map(|(i, (prems, acts, concs, restr))| AnnotatedRule {
+            matches_destructor_equation: prems.iter().any(|f| match f {
+                TransFact::FLet(pos, term, _) => {
+                    equation_patterns.contains(&(pos.clone(), term.clone()))
+                }
+                _ => false,
+            }),
             process_name: None,
             process: proc.clone(),
             position: RulePosition::Pos(p.clone()),
@@ -360,6 +379,7 @@ pub(crate) fn translate(
     plain: &PlainProcess,
     needs_in_ev_res: bool,
     st_rules: &std::collections::BTreeSet<tamarin_term::subterm_rule::CtxtStRule>,
+    macros: &[tamarin_theory::theory::LNMacro],
     opts: TranslateOptions,
 ) -> Result<Translation, String> {
     // The annotation chain, innermost first (sapic/src/Sapic.hs): toAnProcess,
@@ -389,7 +409,7 @@ pub(crate) fn translate(
     } else {
         an_proc_states
     };
-    let an_proc_let = crate::let_destructors::translate_let_destr(st_rules, an_proc_rep);
+    let an_proc_let = crate::let_destructors::translate_let_destr(macros, st_rules, an_proc_rep)?;
     let an_proc = crate::locks::annotate_locks(an_proc_let)?;
 
     // Build the translation context (gated progress/reliable/async wrappers).
@@ -693,7 +713,7 @@ mod tests {
         let plain = convert_process(&typing2_process(), &sig).unwrap();
         let typed = type_and_rename_process(&sig, &[], &plain).unwrap();
         let st_rules = std::collections::BTreeSet::new();
-        let tr = translate(&typed, false, &st_rules, TranslateOptions::default()).unwrap();
+        let tr = translate(&typed, false, &st_rules, &[], TranslateOptions::default()).unwrap();
         // The rules are Init, new, event, out and null, in that order.  They
         // use the `<label>_<index>_<position>` naming that HS derives from
         // the pretty-printed head of each node (Facts.hs `toRule`).  The test

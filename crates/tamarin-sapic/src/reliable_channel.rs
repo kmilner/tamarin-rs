@@ -59,6 +59,7 @@ pub(crate) fn reliable_channel_init(
         ],
         restr: vec![],
         index: 0,
+        matches_destructor_equation: false,
     };
     let mut out = vec![message_id_rule];
     out.extend(init_rules);

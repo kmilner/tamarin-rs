@@ -707,82 +707,92 @@ pub(crate) fn base_trans_comb(
             );
             Ok((vec![body_in, body_notset], tx_prime, Some(tildex.clone())))
         }
-        // Let (Basetranslation.hs).  Match-vars are ignored in the
-        // translation (they are bound in the def_state).  The RHS / matched LHS
-        // are threaded through a `Let_<pos>` (FLet) fact:
-        //   t1or = toLNTerm left
-        //   (t1, t2, freevars) = case an.destructor_equation of
-        //       None        -> (t1or, toLNTerm right, frees t1or)
-        //       Some(tl1,tl2) -> (tl1, tl2, frees tl1 \ tildex)
-        //   fa  = (t1 = t2) ⇒ ⊥          (the else-arm restriction body)
-        //   faN = ∀ freevars. fa
-        //   tildexl = frees t1or ∪ tildex
-        //   pos = p++[1]
-        //   if elseBranch:
-        //     [ ([def_state], [], [FLet pos t2 tildex], []),
-        //       ([FLet pos t1 tildex], [], [def_state1 tildexl], []),
-        //       ([FLet pos t2 tildex], [], [def_state2 tildex], [faN]) ],
-        //      tildexl, Just tildex
-        //   else:
-        //     [ ([def_state], [], [FLet pos t2 tildex], []),
-        //       ([FLet pos t1 tildex], [], [def_state1 tildexl], []) ],
-        //      tildexl, Nothing
+        // Strict plans retain shared source continuations. Backwards liveness
+        // drops generated intermediates as soon as they are dead, but keeps
+        // caller variables through every success/failure boundary.
         PC::Let { left, right, .. } => {
-            let t1or = to_ln_term(left);
-            let (t1, t2, freevars): (LNTerm, LNTerm, BTreeSet<LVar>) = match &an.destructor_equation
-            {
-                None => {
-                    let fv = ln_term_vars(&t1or);
-                    (t1or.clone(), to_ln_term(right), fv)
-                }
-                Some((tl1, tl2)) => {
-                    let mut fv = ln_term_vars(tl1);
-                    for v in tildex {
-                        fv.remove(v);
-                    }
-                    (tl1.clone(), tl2.clone(), fv)
-                }
+            use crate::annotation::{let_stage_position, LetStage};
+            let lhs = to_ln_term(left);
+            let mut result_vars = tildex.clone();
+            result_vars.extend(ln_term_vars(&lhs));
+            let fallback;
+            let stages = if an.let_plan.is_empty() {
+                fallback = vec![LetStage {
+                    input: to_ln_term(right),
+                    alternatives: vec![(lhs, None)],
+                    bound: result_vars.clone(),
+                }];
+                &fallback
+            } else {
+                &an.let_plan
             };
-            // `tildexl = frees t1or ∪ tildex`
-            let mut tildexl = tildex.clone();
-            tildexl.extend(ln_term_vars(&t1or));
-            // `pos = p ++ [1]`
-            let pos = p1.clone();
-            let body0: RuleBody = (
+            let mut live = result_vars.clone();
+            let mut live_after = vec![BTreeSet::new(); stages.len()];
+            for (i, stage) in stages.iter().enumerate().rev() {
+                live_after[i] = live.clone();
+                live = live.difference(&stage.bound).copied().collect();
+                live.extend(ln_term_vars(&stage.input));
+            }
+            let mut bodies = vec![(
                 vec![def_state(tildex)],
                 vec![],
                 vec![TransFact::FLet(
-                    pos.clone(),
-                    t2.clone(),
+                    let_stage_position(p, 0),
+                    stages[0].input.clone(),
                     tildex.iter().copied().collect(),
                 )],
                 vec![],
-            );
-            // The failure restriction is unused when no else rule is emitted.
-            let fa_n = an
-                .else_branch
-                .then(|| let_else_restriction(&t1, &t2, &freevars));
-            let body1: RuleBody = (
-                vec![TransFact::FLet(
-                    pos.clone(),
-                    t1,
-                    tildex.iter().copied().collect(),
-                )],
-                vec![],
-                vec![def_state1(&tildexl)],
-                vec![],
-            );
-            if an.else_branch {
-                let body2: RuleBody = (
-                    vec![TransFact::FLet(pos, t2, tildex.iter().copied().collect())],
-                    vec![],
-                    vec![def_state2(tildex)],
-                    vec![fa_n.expect("else-branch restriction was built")],
-                );
-                Ok((vec![body0, body1, body2], tildexl, Some(tildex.clone())))
-            } else {
-                Ok((vec![body0, body1], tildexl, None))
+            )];
+            let mut vars = tildex.clone();
+            for (i, stage) in stages.iter().enumerate() {
+                let available: BTreeSet<_> = vars.union(&stage.bound).copied().collect();
+                let mut next_vars = tildex.clone();
+                next_vars.extend(available.intersection(&live_after[i]).copied());
+                for (pattern, reduct) in &stage.alternatives {
+                    let destination = if let Some(next) = stages.get(i + 1) {
+                        TransFact::FLet(
+                            let_stage_position(p, i + 1),
+                            reduct.as_ref().unwrap_or(&next.input).clone(),
+                            next_vars.iter().copied().collect(),
+                        )
+                    } else {
+                        def_state1(&result_vars)
+                    };
+                    bodies.push((
+                        vec![TransFact::FLet(
+                            let_stage_position(p, i),
+                            pattern.clone(),
+                            vars.iter().copied().collect(),
+                        )],
+                        vec![],
+                        vec![destination],
+                        vec![],
+                    ));
+                }
+                if an.else_branch {
+                    let failures = stage
+                        .alternatives
+                        .iter()
+                        .map(|(pattern, _)| {
+                            let freevars =
+                                ln_term_vars(pattern).difference(&vars).copied().collect();
+                            let_else_restriction(pattern, &stage.input, &freevars)
+                        })
+                        .collect();
+                    bodies.push((
+                        vec![TransFact::FLet(
+                            let_stage_position(p, i),
+                            stage.input.clone(),
+                            vars.iter().copied().collect(),
+                        )],
+                        vec![],
+                        vec![def_state2(tildex)],
+                        failures,
+                    ));
+                }
+                vars = next_vars;
             }
+            Ok((bodies, result_vars, an.else_branch.then(|| tildex.clone())))
         }
     }
 }
@@ -892,6 +902,7 @@ pub(crate) fn base_init(
         concs: vec![TransFact::State(StateKind::LState, vec![], vec![])],
         restr: vec![],
         index: 0,
+        matches_destructor_equation: false,
     };
     (vec![rule], BTreeSet::new())
 }

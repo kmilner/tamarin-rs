@@ -521,6 +521,7 @@ pub(crate) struct AnnotatedRule<Ann> {
     /// (`rule_restriction::rule_restrictions`), which turns each into a
     /// `Restr_<rule>_<i>` restriction plus an action on this rule.
     pub restr: Vec<SyntacticLNFormula>,
+    pub matches_destructor_equation: bool,
     pub index: usize,
 }
 
@@ -609,7 +610,7 @@ pub(crate) fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE 
         process: Some(std::sync::Arc::new(
             tamarin_theory::sapic::SharedProcess::new(plain),
         )),
-        ignore_deriv_checks: is_lookup_proc,
+        ignore_deriv_checks: is_lookup_proc || r.matches_destructor_equation,
         is_sapic_rule: true,
         role: Some(role_from_process_name_list(names)),
     };
@@ -721,6 +722,7 @@ mod tests {
             concs: vec![TransFact::Out(var_term(z))],
             restr: Vec::new(),
             index: 0,
+            matches_destructor_equation: false,
         };
         let rule = to_rule(&r);
         assert_eq!(rule.new_vars, vec![var_term(z)]);

@@ -6,7 +6,7 @@
 //!
 //! `annotateLocks` (Locks.hs) assigns each `lock` a fresh lock variable
 //! (`freshLVar "lock" LSortMsg`, minted from a SINGLE fast fresh counter that
-//! starts at 0 — `evalFreshT a 0`, Locks.hs) and, via
+//! starts after reserved source/equation variables named `lock`) and, via
 //! `annotateEachClosestUnlock` (Locks.hs), matches that lock variable onto
 //! each closest enclosing-scope `unlock` (and `insert`/`lookup`) that shares the
 //! lock's term.
@@ -15,9 +15,9 @@
 //! `propagateNames` / `annotateSecretChannels` / `annotatePureStates`.
 //!
 //! NOTE on the fresh counter: HS `annotateLocks` runs in the *Fast* `FreshT`
-//! monad (`evalFreshT a 0`), where `freshIdent _name = freshIdents 1` ignores the
-//! name and returns the global counter (0, 1, 2, ...).  So the first lock gets
-//! index 0 (`lock`), the second index 1 (`lock.1`), etc.  This counter is
+//! monad, where `freshIdent _name = freshIdents 1` ignores the name and
+//! returns the global counter. Without reserved lock variables the first
+//! lock gets index 0, the second index 1, etc. This counter is
 //! independent of the per-name `renameUnique` counter.
 
 use tamarin_utils::fresh::{FastFreshState, MonadFresh};
@@ -132,7 +132,11 @@ fn annotate_locks_go(
 /// seeded at 0.  On a wellformedness error (`Rep`/`Parallel` below a lock), HS
 /// `throwM`s a `ProcessNotWellformed (WFLock tag)`; we surface it as an `Err`.
 pub(crate) fn annotate_locks(p: AnnotatedProc) -> Result<AnnotatedProc, String> {
-    let mut fresh = FastFreshState::nothing_used();
+    let reserved: Vec<_> = crate::annotation::translation_vars(&p)
+        .into_iter()
+        .filter(|v| v.name == "lock")
+        .collect();
+    let mut fresh = tamarin_term::lterm::avoid(&reserved);
     annotate_locks_go(&mut fresh, p).map_err(|e| match e {
         LockWfError::Rep => {
             "process not well-formed: replication below a lock without a matching unlock"
