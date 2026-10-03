@@ -25,6 +25,11 @@ tamarin-sapic = { workspace = true }
 tamarin-accountability = { workspace = true }
 walkdir = "2"
 mimalloc = { version = "0.1", default-features = false }
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "simp_minimize"
+harness = false
 
 [lints]
 workspace = true

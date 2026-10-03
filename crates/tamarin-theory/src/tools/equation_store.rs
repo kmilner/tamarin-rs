@@ -928,26 +928,28 @@ impl EquationStore {
         for d in self.conj.iter_mut() {
             // Fast path: if no duplicate, no empty, and no contradictory subst
             // exists, this disj is left untouched (no change, no clone).  This
-            // is the common case and avoids the O(n^2) dedup-clone below.
-            let mut has_dup = false;
-            for (i, s) in d.substs.iter().enumerate() {
-                if d.substs[..i].iter().any(|x| x == s) {
-                    has_dup = true;
-                    break;
-                }
-            }
-            let needs_work = has_dup || d.substs.iter().any(|s| s == &empty || is_contr(s));
-            if !needs_work {
+            // is the common case.  `simp_with_fresh_avoiding` keeps every disj
+            // sorted and deduplicated (`sort_disj_substs`), so a strictly
+            // ascending disj, checked in n - 1 comparisons, has no duplicate.
+            // Otherwise duplicates are found through an ordered set (`Ord`
+            // agrees with `Eq`, both derived).  A pairwise scan was O(n^2)
+            // whole-substitution comparisons per disj per `simp` round, which
+            // dominated `splitEqs` on large AC-unifier disjunctions
+            // (bilinear-pairing `Joux`: ~90 s for one 160-case split).
+            let sorted = d.substs.windows(2).all(|w| w[0] < w[1]);
+            let needs_special = d.substs.iter().any(|s| s == &empty || is_contr(s));
+            if sorted && !needs_special {
                 continue;
             }
-            // Dedup in-place while preserving first occurrences.
-            let mut seen: Vec<LNSubstVFresh> = Vec::new();
-            for s in &d.substs {
-                if !seen.iter().any(|x| x == s) {
-                    seen.push(s.clone());
-                }
-            }
-            let original_len = d.substs.len();
+            // Dedup while preserving first occurrences, by reference: nothing
+            // is cloned unless the disj changes.
+            let mut seen: Vec<&LNSubstVFresh> = if sorted {
+                d.substs.iter().collect()
+            } else {
+                let mut distinct: BTreeSet<&LNSubstVFresh> = BTreeSet::new();
+                // `insert` returns `false` if the element was already present.
+                d.substs.iter().filter(|s| distinct.insert(*s)).collect()
+            };
             // Haskell-faithful `simpMinimize` (EquationStore.hs):
             // if any subst is empty (vacuously true) OR contradictory,
             // reduce the disj.  If empty present → singleton empty
@@ -957,16 +959,18 @@ impl EquationStore {
             // The variant-SplitG-preservation case is handled upstream
             // in `apply_eq_store` via `renameAvoiding`, which prevents
             // the narrowing variant from collapsing to an empty subst.
-            let reduce_to_empty = seen.iter().any(|s| s == &empty || is_contr(s));
-            if reduce_to_empty {
-                if seen.iter().any(|s| s == &empty) {
-                    seen = vec![empty.clone()];
+            if needs_special {
+                if seen.iter().any(|s| **s == empty) {
+                    seen = vec![&empty];
                 } else {
                     seen.retain(|s| !is_contr(s));
                 }
             }
-            if seen.len() != original_len || seen != d.substs {
-                d.substs = seen;
+            // `seen` keeps the order of `d.substs` (and `[empty]` has length
+            // 1 only if `d.substs` was already `[empty]`), so an unchanged
+            // length means an unchanged disj.
+            if seen.len() != d.substs.len() {
+                d.substs = seen.into_iter().cloned().collect();
                 changed = true;
             }
         }
