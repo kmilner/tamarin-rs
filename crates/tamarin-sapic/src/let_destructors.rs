@@ -266,7 +266,7 @@ fn subst_annotation(
 ) -> ProcessAnnotation<LVar> {
     ann.parsing_ann = ann
         .parsing_ann
-        .map_location(|location| subst_term(subst, &location));
+        .map_terms(|location| subst_term(subst, &location));
     ann
 }
 

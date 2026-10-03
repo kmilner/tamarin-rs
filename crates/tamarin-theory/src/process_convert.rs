@@ -282,7 +282,7 @@ fn strip_pat_match(t: &p::Term, match_vars: &mut BTreeSet<SapicLVar>) -> p::Term
 /// node's location. Names/back-substitution are filled in by later passes
 /// (`propagate_names`, `rename_unique`).
 pub fn convert_process(proc: &p::Process, sig: &MaudeSig) -> Result<PlainProcess, ConvertError> {
-    convert_process_with(proc, sig, &mut |_, _, _| {
+    convert_process_with(proc, sig, &[], &mut |_, _, _, _| {
         Err(ConvertError::new(
             "process calls require convert_process_with_defs",
         ))
@@ -296,23 +296,49 @@ pub fn convert_process(proc: &p::Process, sig: &MaudeSig) -> Result<PlainProcess
 pub(crate) fn convert_process_with<F>(
     proc: &p::Process,
     sig: &MaudeSig,
+    used: &[tamarin_term::lterm::LVar],
     resolve_call: &mut F,
 ) -> Result<PlainProcess, ConvertError>
 where
-    F: FnMut(&str, &[p::Term], &MaudeSig) -> Result<PlainProcess, ConvertError>,
+    F: FnMut(
+        &str,
+        &[p::Term],
+        &MaudeSig,
+        &[tamarin_term::lterm::LVar],
+    ) -> Result<PlainProcess, ConvertError>,
 {
     let ann = ProcessParsedAnnotation::empty();
     match proc {
         p::Process::Null => Ok(Process::Null(ann)),
-        p::Process::Action { action: act, body } => Ok(Process::Action(
-            action(act, sig)?,
-            ann,
-            Box::new(convert_process_with(body, sig, resolve_call)?),
-        )),
+        p::Process::Action { action: act, body } => {
+            let ac = action(act, sig)?;
+            let mut vars = BTreeSet::new();
+            crate::sapic_scope::collect_action_vars(&ac, &mut vars);
+            let next: Vec<_> = used
+                .iter()
+                .copied()
+                .chain(vars.into_iter().map(|v| v.var))
+                .collect();
+            Ok(Process::Action(
+                ac,
+                ann,
+                Box::new(convert_process_with(body, sig, &next, resolve_call)?),
+            ))
+        }
         p::Process::Comb { comb, left, right } => {
-            let l = Box::new(convert_process_with(left, sig, resolve_call)?);
-            let r = Box::new(convert_process_with(right, sig, resolve_call)?);
             let c = combinator(comb, sig)?;
+            let mut next = used.to_vec();
+            match &c {
+                ProcessCombinator::Lookup(_, v) => next.push(v.var),
+                ProcessCombinator::Let { left, .. } => next.extend(
+                    crate::sapic::frees_sapic_term(left)
+                        .into_iter()
+                        .map(|v| v.var),
+                ),
+                _ => {}
+            }
+            let l = Box::new(convert_process_with(left, sig, &next, resolve_call)?);
+            let r = Box::new(convert_process_with(right, sig, used, resolve_call)?);
             Ok(Process::Comb(c, ann, l, r))
         }
         // `!P` parses to `ProcessAction Rep mempty P` in HS
@@ -321,14 +347,14 @@ where
         p::Process::Replication(body) => Ok(Process::Action(
             SapicAction::Rep,
             ann,
-            Box::new(convert_process_with(body, sig, resolve_call)?),
+            Box::new(convert_process_with(body, sig, used, resolve_call)?),
         )),
-        p::Process::Call { name, args } => resolve_call(name, args, sig),
+        p::Process::Call { name, args } => resolve_call(name, args, sig, used),
         p::Process::AtAnnotation(inner, location) => {
             // HS `processAddAnnotation p (mempty { location = Just m })`:
             // attach the converted location to the root of the parenthesised
             // process, preserving any annotation already present there.
-            let converted = convert_process_with(inner, sig, resolve_call)?;
+            let converted = convert_process_with(inner, sig, used, resolve_call)?;
             let mut location_ann = ProcessParsedAnnotation::empty();
             location_ann.location = Some(term(location, sig)?);
             Ok(add_root_annotation(converted, location_ann))

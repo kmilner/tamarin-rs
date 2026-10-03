@@ -78,6 +78,44 @@ fn diagnostic_lexeme(text: &str) -> String {
     bounded_diagnostic_text(text, MAX_DIAGNOSTIC_NAME_CHARS)
 }
 
+/// Binding and matching share an identity even when occurrences have different types.
+fn pattern_identities(
+    term: &Term,
+    matched: bool,
+    binds: &mut Vec<(String, u64, LSort)>,
+    matches: &mut std::collections::BTreeSet<(String, u64, LSort)>,
+) {
+    match term {
+        Term::Var(v) => {
+            let id = (v.name.clone(), v.idx, v.sort);
+            if matched {
+                matches.insert(id);
+            } else {
+                binds.push(id);
+            }
+        }
+        Term::PatMatch(t) => pattern_identities(t, true, binds, matches),
+        Term::App(_, args) | Term::Pair(args) => {
+            for t in args {
+                pattern_identities(t, matched, binds, matches);
+            }
+        }
+        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
+            pattern_identities(a, matched, binds, matches);
+            pattern_identities(b, matched, binds, matches);
+        }
+        _ => {}
+    }
+}
+
+fn valid_input_pattern(term: &Term) -> bool {
+    let mut binds = Vec::new();
+    let mut matches = std::collections::BTreeSet::new();
+    pattern_identities(term, false, &mut binds, &mut matches);
+    let unique: std::collections::BTreeSet<_> = binds.iter().cloned().collect();
+    unique.len() == binds.len() && unique.is_disjoint(&matches)
+}
+
 // =============================================================================
 // Parser entry points
 // =============================================================================
@@ -2835,7 +2873,15 @@ impl<'a> Parser<'a> {
         })();
         // Retain consumed comment failures before the next alternative rewinds.
         let e1 = match self.lx.finish(message) {
-            Ok(msg) => return Ok((None, msg)),
+            Ok(msg) => {
+                return if valid_input_pattern(&msg) {
+                    Ok((None, msg))
+                } else {
+                    Err(self.err(
+                        "Invalid pattern: input binders must be linear and distinct from matches",
+                    ))
+                }
+            }
             Err(e) => e,
         };
         self.restore(probe);
@@ -2844,6 +2890,11 @@ impl<'a> Parser<'a> {
             self.require_punct(",")?;
             let msg = self.with_patterns(|p| p.term(false))?;
             self.require_punct(")")?;
+            if !valid_input_pattern(&msg) {
+                return Err(self.err(
+                    "Invalid pattern: input binders must be linear and distinct from matches",
+                ));
+            }
             Ok((Some(chan), msg))
         })()
         .map_err(|e2| Self::select_alt_error(e1, e2))
@@ -4013,6 +4064,21 @@ impl<'a> Parser<'a> {
                 }
                 let (acts, restrs) = p.parse_actions_and_restrictions()?;
                 let concs = p.fact_list()?;
+                let mut binds = Vec::new();
+                let mut matches = std::collections::BTreeSet::new();
+                for t in prems.iter().flat_map(|f| &f.args) {
+                    pattern_identities(t, false, &mut binds, &mut matches);
+                }
+                if binds.iter().any(|v| matches.contains(v)) {
+                    return Err(p.err("Invalid pattern in lhs of embedded MSR"));
+                }
+                matches.clear();
+                for t in acts.iter().chain(&concs).flat_map(|f| &f.args) {
+                    pattern_identities(t, false, &mut binds, &mut matches);
+                }
+                if !matches.is_empty() {
+                    return Err(p.err("Invalid pattern in embedded MSR action or conclusion"));
+                }
                 Ok(Some(SapicAction::Msr {
                     prems,
                     acts,

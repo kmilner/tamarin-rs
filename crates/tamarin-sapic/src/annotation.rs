@@ -38,7 +38,7 @@ pub(crate) fn let_stage_position(p: &[i64], i: usize) -> Vec<i64> {
 }
 
 pub(crate) fn translation_vars(p: &AnnotatedProcess<LVar>) -> Vec<LVar> {
-    let mut vars: Vec<_> = crate::typing::vars_proc(p)
+    let mut vars: Vec<_> = tamarin_theory::sapic_scope::vars_proc_with_annotations(p)
         .into_iter()
         .map(|v| v.var)
         .collect();

@@ -80,13 +80,6 @@ pub(crate) fn list_union<T: PartialEq + Clone>(xs: &[T], ys: &[T]) -> Vec<T> {
     out
 }
 
-/// `Data.List.intersect xs ys`: keep every element of `xs` (in `xs`-order,
-/// duplicates preserved) that is an `Eq`-member of `ys`.  Generic over any
-/// `PartialEq` element.
-pub(crate) fn list_intersect<T: PartialEq + Clone>(xs: &[T], ys: &[T]) -> Vec<T> {
-    xs.iter().filter(|x| ys.contains(x)).cloned().collect()
-}
-
 /// `baseTransAction` (Basetranslation.hs).  Returns the rule bodies and
 /// the updated `tildex`.  `needs_ass_immediate` is the `needsInEvRes` flag;
 /// when false, `Event` emits NO extra `EventEmpty` action.

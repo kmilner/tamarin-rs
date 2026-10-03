@@ -627,9 +627,9 @@ fn quit_on_warning_prints_report_block_and_aborts() {
         stdout,
         "\nWARNING: the following wellformedness checks failed!\n\n\
          Wellformedness-error in Process\n\
-         \x20\x20Variable bound twice: x.\n\
+         \x20\x20Variable bound twice: counter.\n\
          \x20\x20\n\
-         \x20\x20Variable bound twice: counter.\n\n"
+         \x20\x20Variable bound twice: x.\n\n"
     );
     let rest = strip_maude_banner(&stderr);
     assert!(
