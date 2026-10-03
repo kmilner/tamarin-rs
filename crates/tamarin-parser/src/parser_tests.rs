@@ -5,6 +5,56 @@ use super::*;
 use crate::parse_error::{ErrorDetails, MAX_DIAGNOSTIC_MESSAGE_CHARS};
 
 #[test]
+fn heuristic_rankings_are_individual_and_boundary_terminated() {
+    for boundary in [
+        "\n",
+        "\t",
+        "\r",
+        "\u{c}",
+        "\u{b}",
+        "/* comment */",
+        "// comment\n",
+    ] {
+        let src = format!("theory H begin heuristic: sO \"path\"i{{Custom}}{boundary}end");
+        let parsed = parse_theory(&src, &[]).unwrap();
+        let TheoryItem::Heuristic { raw, .. } = &parsed.items[0] else {
+            panic!("heuristic")
+        };
+        assert_eq!(raw, "sO \"path\"i{Custom}");
+    }
+    for rankings in [
+        "sx\n",
+        "s\ni\n",
+        "s #endif",
+        "{}\n",
+        "{Custom\n",
+        "O \"\"\n",
+        "O \"path\n",
+        "s\u{a0}",
+    ] {
+        let src = format!("theory H begin heuristic: {rankings} end");
+        assert!(parse_theory(&src, &[]).is_err(), "accepted {rankings:?}");
+    }
+    let parsed = parse_theory(
+        "theory H begin lemma L [heuristic=\u{a0}sO \"path\" /* trailing */]: \"T\" end",
+        &[],
+    )
+    .unwrap();
+    let TheoryItem::Lemma(lemma) = &parsed.items[0] else {
+        panic!("lemma")
+    };
+    assert_eq!(
+        lemma.attributes,
+        vec![LemmaAttr::Heuristic("sO \"path\"".into())]
+    );
+    assert!(parse_theory(
+        "theory H begin lemma L [heuristic=s/* stop */i]: \"T\" end",
+        &[]
+    )
+    .is_err());
+}
+
+#[test]
 fn diff_theory_validates_but_does_not_lower_diff_proofs() {
     let src = "theory D begin
         diffLemma observational_equivalence:

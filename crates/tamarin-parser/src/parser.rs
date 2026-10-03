@@ -1641,11 +1641,16 @@ impl<'a> Parser<'a> {
     fn heuristic(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("heuristic")?;
         self.require_punct(":")?;
-        // Read until newline as raw text. Heuristic rankings are flexible; we
-        // take everything up to next newline / `\n` boundary.
-        let raw = self.read_to_eol();
+        let raw = self.heuristic_rankings()?;
+        if !matches!(
+            self.lx.peek(),
+            Some('\t' | '\r' | '\n' | '\u{c}' | '\u{b}' | '/')
+        ) {
+            return Err(self.err_expect("end of heuristic line"));
+        }
+        self.skip_ws();
         Ok(TheoryItem::Heuristic {
-            raw: raw.trim().to_string(),
+            raw,
             source_file: self
                 .source_file
                 .as_ref()
@@ -1653,17 +1658,56 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn read_to_eol(&mut self) -> String {
-        let mut s = String::new();
-        while let Some(c) = self.lx.peek() {
-            if c == '\n' {
-                break;
+    /// Each ranking owns its optional path/name. Only ASCII spaces separate
+    /// rankings; comments and other whitespace end the sequence.
+    fn heuristic_rankings(&mut self) -> Result<String, ParseError> {
+        let start = self.lx.pos().offset;
+        let mut count = 0;
+        loop {
+            match self.lx.peek() {
+                Some('o' | 'O') => {
+                    self.lx.bump();
+                    while self.lx.eat(' ') {}
+                    if self.lx.eat('"') {
+                        let path_start = self.lx.pos().offset;
+                        while matches!(self.lx.peek(), Some(c) if !matches!(c, '"' | '\n' | '\r')) {
+                            self.lx.bump();
+                        }
+                        if self.lx.pos().offset == path_start || !self.lx.eat('"') {
+                            return Err(self.err_expect("nonempty quoted oracle path"));
+                        }
+                    }
+                }
+                Some('{') => {
+                    self.lx.bump();
+                    while self.lx.eat(' ') {}
+                    let name_start = self.lx.pos().offset;
+                    while matches!(self.lx.peek(), Some(c) if !matches!(c, '"' | '\n' | '\r' | '{' | '}'))
+                    {
+                        self.lx.bump();
+                    }
+                    if self.lx.pos().offset == name_start || !self.lx.eat('}') {
+                        return Err(self.err_expect("complete nonempty tactic reference"));
+                    }
+                }
+                Some(c) if c.is_alphabetic() => {
+                    let allowed = if self.is_diff { "sScC" } else { "sSpPcCiI" };
+                    if !allowed.contains(c) {
+                        return Err(self.err(format!("unknown proof method ranking `{c}`")));
+                    }
+                    self.lx.bump();
+                }
+                _ => break,
             }
-            s.push(c);
-            self.lx.bump();
+            count += 1;
+            while self.lx.eat(' ') {}
         }
-        // Trailing inline comments are left intact; trimming is the consumer's job.
-        s
+        if count == 0 {
+            return Err(self.err_expect("proof method ranking"));
+        }
+        Ok(self.lx.src()[start..self.lx.pos().offset]
+            .trim_end_matches(' ')
+            .to_string())
     }
 
     fn tactic(&mut self) -> Result<TheoryItem, ParseError> {
@@ -3438,7 +3482,8 @@ impl<'a> Parser<'a> {
                 attrs.push(LemmaAttr::HideLemma(id));
             } else if self.try_kw("heuristic") {
                 self.require_punct("=")?;
-                let raw = self.read_until_attribute_end();
+                let raw = self.heuristic_rankings()?;
+                self.skip_ws();
                 attrs.push(LemmaAttr::Heuristic(raw));
             } else if self.try_kw("output") {
                 self.require_punct("=")?;

@@ -297,25 +297,20 @@ pub fn parse_heuristic_str_with_tactics(
                 continue;
             }
         }
-        // Compact letter run: HS's `regularRanking` (`many1 letter` →
-        // `filterHeuristic`) consumes a maximal run of letters as one token.
-        // `defaultOracleNames` later gives any oracle in it the same default
-        // workDir and relative path as a standalone default oracle.
+        // Consume one ranking, so the next oracle can claim its own path
+        // even in a compact sequence such as `sO "path"i`.
         if c.is_ascii_alphabetic() {
-            while i < chars.len() && chars[i].is_ascii_alphabetic() {
-                let ranking = chars[i];
-                let oracle = if matches!(ranking, 'o' | 'O') {
-                    default_oracle
-                        .get_or_insert_with(|| {
-                            crate::pretty_theory::oracle_name_for_theory(theory_file)
-                        })
-                        .as_str()
-                } else {
-                    "oracle"
-                };
-                out.push(GoalRanking::from_char_with_oracle(ranking, oracle));
-                i += 1;
-            }
+            let oracle = if matches!(c, 'o' | 'O') {
+                default_oracle
+                    .get_or_insert_with(|| {
+                        crate::pretty_theory::oracle_name_for_theory(theory_file)
+                    })
+                    .as_str()
+            } else {
+                "oracle"
+            };
+            out.push(GoalRanking::from_char_with_oracle(c, oracle));
+            i += 1;
             continue;
         }
         i += 1; // skip unknown
