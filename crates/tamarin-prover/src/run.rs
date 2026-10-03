@@ -108,9 +108,9 @@ pub(crate) enum LemmaVerdict {
     Falsified,
     /// We exhausted the search budget or hit `Sorry`.
     Analyzed,
-    /// HS `UnfinishableProof`: no open goals but subterm store has reducible
-    /// operators.  HS `showProofStatus` (Theory/Proof.hs):
-    ///   "analysis cannot be finished (reducible operators in subterms)"
+    /// HS `UnfinishableProof`: no open goals but unresolved subterm constraints.
+    /// `showProofStatus` (upstream b07e308, Theory/Proof.hs):
+    ///   "analysis cannot be finished (unresolved subterm constraints)"
     Unfinishable,
     /// HS `UndeterminedProof` (Theory/Proof.hs): proof tree folds to a
     /// status that could not be determined — renders "analysis undetermined".
@@ -130,7 +130,7 @@ pub(crate) enum LemmaVerdict {
 ///   `<lemma> (<quantifier>): falsified - found trace (<N> steps)`
 ///   `<lemma> (<quantifier>): verified (<N> steps)`
 ///   `<lemma> (<quantifier>): analysis incomplete (<N> steps)`
-///   `<lemma> (<quantifier>): analysis cannot be finished (reducible operators in subterms) (<N> steps)`
+///   `<lemma> (<quantifier>): analysis cannot be finished (unresolved subterm constraints) (<N> steps)`
 fn format_lemma_summary_line(r: &LemmaResult) -> String {
     let quantifier = if r.exists_trace {
         "exists-trace"
@@ -153,7 +153,7 @@ fn format_lemma_summary_line(r: &LemmaResult) -> String {
         }
         // HS `showProofStatus _ UnfinishableProof` (Theory/Proof.hs).
         LemmaVerdict::Unfinishable => format!(
-            "analysis cannot be finished (reducible operators in subterms) ({} steps)",
+            "analysis cannot be finished (unresolved subterm constraints) ({} steps)",
             r.proof_steps
         ),
         // HS `showProofStatus _ UndeterminedProof` (Theory/Proof.hs).
