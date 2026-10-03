@@ -1,10 +1,9 @@
 # tamarin-prover (Rust port)
 
 A Rust port of the [Tamarin Prover](https://tamarin-prover.github.io/) with the goal
-of reproducing the Haskell prover's output byte-for-byte. Across the README's
-representative suite it is 4.6–116× faster than the most recent Tamarin
-release (median 23×), with 2.1–21× lower peak process-tree memory at one
-core.
+of reproducing the Haskell prover's output byte-for-byte. The recorded
+benchmarks below compare it with Tamarin 1.12.0; see
+[Performance](#performance) for measurements and methodology.
 
 ## Important notes
 
@@ -19,32 +18,22 @@ In many cases, proving in tamarin-rs and reverifying in tamarin-prover is still 
 in tamarin-prover directly; you may also find tamarin-rs useful for iterating more quickly before
 checking against the regular tamarin-prover.
 
-At time of writing there are two upstream issues in Haskell affecting proof
-reverifiability: https://github.com/tamarin-prover/tamarin-prover/issues/871
-(fixed on the develop branch, not yet in a release) and
-https://github.com/tamarin-prover/tamarin-prover/issues/881 (fix pending in
-https://github.com/tamarin-prover/tamarin-prover/pull/882). If you'd like to
-build a version of tamarin-prover that has the fixes applied already, you can
-use `./setup.sh testing`; we use this patched version for internal testing.
-Once both fixes are merged and released all proofs should be identical; if you
-do find any that differ (even if they cross-verify) please report them in the
-github issues so they can be fixed!
+Use `./setup.sh testing` to build the pinned, patched Haskell prover used for
+internal testing. Released Haskell versions may lack fixes required to replay
+some proofs; [patches/README.md](patches/README.md) documents the oracle's
+patch series. Please report output differences even if the proofs cross-verify.
 
 The licensing of this code is somewhat complicated, but the built binary is GPL 3.0.
 See [License](#license) if you are interested in future prospects for redistribution.
 
 ## Summary
 
-- **Parity:** byte-identical `--prove` output with the Haskell prover on a
-  432-file corpus — the feature-complete theories under
-  `tamarin-prover/examples/` plus one repo-local regression fixture. Stored
-  proofs replay and validate across provers in both directions, and the
-  interactive web UI agrees page-for-page with the Haskell server except for
-  a small documented cosmetic residue in `scripts/websweep_ledger.tsv`.
-  The 77-theory milestone crawl uses `scripts/websweep_residual.txt`, with
-  explicit proof-node caps — see [Parity status](#parity-status).
-- **Performance:** 4.6–116× faster than the most recent Tamarin release
-  (1.12.0) across 1–16 cores (median 23×). At one core, peak process-tree
+- **Parity gates:** 500 proof theories and 77 web theories are compared
+  against the patched Haskell oracle. Full parity is not currently certified;
+  the final gate verdicts report differences, timeouts and coverage limits —
+  see [Parity status](#parity-status).
+- **Recorded performance:** 4.6–116× faster than Tamarin 1.12.0
+  across 1–16 cores (median 23×). At one core, peak process-tree
   memory is 2.1–21× lower; at sixteen cores it ranges from 25% higher on
   tiny `NSPK3` to 12.5× lower on `CCITT_X509_3` — see
   [Performance](#performance).
@@ -68,8 +57,7 @@ crates/            the Rust port (crate breakdown below)
 scripts/           parity gates, benchmarks, and divergence-debugging harnesses
 tests/             wellformedness fixture corpus
 patches/
-  series                       ordered list of one Haskell patch per
-                               not-yet-merged upstream PR
+  series                       ordered list of one Haskell patch per tracked PR
   tamarin-prover-pr-*.patch    patches applied to the testing oracle
 tamarin-prover/    upstream submodule, pinned to a known-good commit and kept
                    PRISTINE — holds the canonical Haskell sources, the
@@ -119,55 +107,46 @@ are verified against setup's fixed `.stack-work/` attestation.
 The correctness criterion is byte-identical raw `--prove` output, ignoring
 the volatile header lines (Git revision, compile time, processing time, and
 the `analyzed:` path).
-The batch gate (`scripts/corpus_file_diff.sh`, corpus in
-`scripts/parity_corpus.txt`) currently reports:
-
-| Result | Files | Meaning |
-|--------|------:|---------|
-| MATCH | 432 | Rust output byte-identical to Haskell |
-| DIFF  |   0 | — |
-| SKIP  |   0 | — |
-
-The corpus spans every feature-complete theory family under `tamarin-prover/examples/` —
-classic and AKE protocols, XOR / bilinear-pairing / multiset theories, the
-auto-sources suites, accountability case studies, and 79 SAPiC `process:`
-theories — each run under its canonical upstream invocation: bare `--prove`,
-plus the extra flags `scripts/file_flags.tsv` records for the 40 theories
-whose upstream recipe needs them. Theories outside the corpus need an unported
-feature (`--diff`), hit a known auto-prover or SAPiC-rendering divergence
-tracked for porting, exceed the gate's per-file Haskell time budget under
-their canonical flags, or are the same files upstream's own regression
-suite excludes as non-terminating.
+The proof gate (`scripts/test.sh proof`) compares stdout and exit status for
+the 500 theories in `scripts/parity_corpus.txt`. The explicit list covers
+classic and AKE protocols, XOR / bilinear-pairing / multiset theories,
+auto-sources, accountability, SAPiC and upstream/patch regressions. Each runs
+with `--prove` and any per-theory options in `scripts/file_flags.tsv`.
+Patch-only fixtures are read from `tamarin-prover-testing/examples/`.
+Equivalence mode, negative inputs, export-only scenarios and extra command
+sidecar options require separate coverage; see
+[regression coverage](TESTING.md#upstream-regression-coverage).
 
 Stored proofs are validated, not just displayed: loading a proof-carrying
 file replays every stored step against a freshly derived constraint system,
-and proof files are cross-compatible in both directions with byte-identical
-analysis output from either loader.
+with cross-prover replay checked by focused regressions.
 
 The interactive web UI (`interactive` subcommand) is verified by a crawl
-gate (`scripts/web_parity.sh`): both servers load the same theory with the
-same flags, autoprove each lemma, and compare proof-tree, constraint-system,
+gate (`scripts/test.sh web`) over 77 theories: both servers load the same theory
+with the same flags, autoprove each lemma, and compare proof-tree, constraint-system,
 graph and source pages. HTML is compared byte for byte, including highlighting,
 markup and whitespace, except for environment fields such as timestamps and
 work-directory paths. JSON envelopes also allow different key order and
 encoding. Proof-node visits are capped at 400 per theory by default; truncated
 crawls are reported, and `FAIL_ON_CAPPED=1` makes them fail the gate. Within
-that coverage, the two UIs agree except for a small documented residue that
-renders *identical* proof states with different internal
-counter values (fresh-variable witness indices, goal-creation numbers,
-term-abbreviation picks on a few AC-heavy theories); these never appear in
-proof scripts, proof structure, or verdicts.
+that coverage, `scripts/websweep_ledger.tsv` records accepted differences;
+unexplained differences and missing comparisons fail the gate. The ledger is
+not a claim that a fresh run passes.
+
+Each gate saves its log, results and exit status under `scripts/results/`.
+Use the final verdict to assess parity; neither warm caches nor focused
+regression passes certify a full corpus. See [TESTING.md](TESTING.md) for
+the verification policy.
 
 ## Performance
 
 Wall-clock time and peak memory for both provers on eight representative
 theories, proving all lemmas (`--derivcheck-timeout=30`) on x86_64 Linux,
 24 cores (Maude 3.5.1); Haskell at `+RTS -N{1,4,16}`, the Rust port at
-`--processors={1,4,16}`. The Haskell baseline is the **most recent
-tamarin-prover release (1.12.0)** — the binary users actually install — not
-the develop branch this repo pins for parity testing: develop carries
-performance work of its own that is not in a release yet, so expect a
-smaller gap against a develop build. Tables are generated by
+`--processors={1,4,16}`. These recorded measurements use **tamarin-prover
+1.12.0**, not the patched oracle pinned for parity testing. They do not measure
+the current patch series or guarantee the same speedups on another build.
+Tables are generated by
 `scripts/bench.sh` (regenerate in place with `scripts/bench.sh --write`);
 the RS+HS and RS columns show the change versus Haskell (negative = faster
 / less memory).
@@ -250,18 +229,11 @@ visible on small theories: memory ranges from 25% higher on `NSPK3` to 12.5×
 lower on `CCITT_X509_3`. The smallest speed gains are on `Joux`, whose runtime
 is dominated by AC-heavy Maude queries both provers pay for equally.
 
-The `not supported` entries in the RS+HS column are not failures of the
-port: the emitted `Joux` and `wireguard` proofs are correct, but the
-unpatched 1.12.0 release cannot replay them (`analysis incomplete`) due
-to two upstream tamarin-prover issues —
-[#871](https://github.com/tamarin-prover/tamarin-prover/issues/871)
-(proof shape depends on thread count; already fixed on the develop
-branch) and
-[#881](https://github.com/tamarin-prover/tamarin-prover/issues/881)
-(emitted proofs normalise differently on reload; fix pending in
-[#882](https://github.com/tamarin-prover/tamarin-prover/pull/882)). The
-patched `./setup.sh testing` build applies both fixes and re-verifies
-both theories.
+The `not supported` entries in the RS+HS column mean that unpatched 1.12.0
+could not replay the emitted `Joux` and `wireguard` proofs in these measurements
+(`analysis incomplete`). The associated issues concern thread-dependent proof
+shape and stored-formula normalisation. Use the patched `./setup.sh testing`
+oracle for parity checks, rather than this benchmark's release baseline.
 
 The port parallelises at two levels, both via rayon: independent lemmas are
 proved concurrently, and within a lemma the proof-search fan-out and source
@@ -339,12 +311,7 @@ refined sources are computed once and shared across lemmas.
   satellite flags (`--replication-bound`, the `--proverif-no-*`
   family) — the HS `Export.hs` backend. The three values parse; a run
   that reaches them fails with a "not yet ported" message. The reference
-  output the pinned oracle offers is thin: over the 1042-file corpus
-  `-m proverif` and `-m proverifequiv` produce output for the same 44
-  files, none of which has an `equivLemma`; `-m deepsec` emits nothing
-  anywhere; and 38 of the 123 process-bearing files, including all 21
-  under `examples/sapic/export/`, crash the oracle, whose `builtins`
-  table has no arm for the `dest-*` or `natural-numbers` names.
+  output for these backends is outside the proof and web parity gates.
 
 Diff theories are recorded with their canonical `--diff` invocation in
 `scripts/file_flags.tsv`; they join `scripts/parity_corpus.txt` once the
@@ -369,11 +336,20 @@ tamarin-prover/         the binary: CLI parser + run dispatch
 
 ## Testing
 
-`cargo test` runs the Rust suites; parity against the Haskell prover is the
-real correctness gate — `scripts/corpus_file_diff.sh` for batch mode,
-`scripts/web_parity.sh` for the interactive UI. See
-[TESTING.md](TESTING.md) for the full verification ladder, the gate
-environment reference, and the divergence-debugging toolbox.
+`cargo test` runs the Rust suites. The two headline parity tests compare against
+the patched Haskell prover and automatically fill/reuse their oracle caches:
+
+```bash
+./setup.sh testing
+cargo build --release -p tamarin-prover
+scripts/test.sh proof
+scripts/test.sh web
+```
+
+Use `scripts/test.sh all` to run both sequentially. Start with the
+[corpus quick-start](scripts/README.md) for cache generation, results and
+resource settings; [TESTING.md](TESTING.md) covers prerequisites, certification
+and debugging.
 
 ## License
 

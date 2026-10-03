@@ -142,7 +142,7 @@ jobs:
           echo /opt/maude >> "$GITHUB_PATH"
       - run: cargo build --release
       - name: Parity harness regression tests
-        run: python3 scripts/test_web_harness.py
+        run: scripts/test.sh harness
       # Prove-output parity: this branch's binary vs the committed reference
       # of main's outputs (scripts/ci_ref_fast.tsv over
       # scripts/parity_corpus_fast.txt).  On DIFF: reproduce locally with
