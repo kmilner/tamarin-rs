@@ -40,12 +40,23 @@ type LNSubst = Subst<Name, LVar>;
 #[derive(Debug, Clone)]
 pub enum VariantsError {
     Maude(String),
+    MissingMaudeForExplicitVariants,
+    UnsupportedInput(crate::wellformedness::WfReport),
 }
 
 impl std::fmt::Display for VariantsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VariantsError::Maude(s) => write!(f, "Maude error: {}", s),
+            VariantsError::MissingMaudeForExplicitVariants => write!(
+                f,
+                "Maude is required to validate explicit rule variants; refusing to load an unchecked family."
+            ),
+            VariantsError::UnsupportedInput(report) => write!(
+                f,
+                "{}\nUnsupported rule semantics - aborting before proof search.",
+                crate::pretty_theory::render_wf_error_report(report)
+            ),
         }
     }
 }
@@ -341,7 +352,11 @@ pub fn prepare_theory_rules(
     annotate_breakers: bool,
 ) -> Result<crate::wellformedness::WfReport, VariantsError> {
     populate_rule_variants(theory, maude, pool)?;
-    let report = crate::wellformedness::check_wellformedness(theory, Some(maude));
+    let report = crate::wellformedness::check_wellformedness(theory, Some(maude))?;
+    let fatal = crate::wellformedness::variants::fatal_wf_errors(&report);
+    if annotate_breakers && !fatal.is_empty() {
+        return Err(VariantsError::UnsupportedInput(fatal));
+    }
     finish_theory_rules(theory, maude, annotate_breakers);
     Ok(report)
 }

@@ -31,6 +31,7 @@ pub enum ProveError {
     InvalidHeuristic(String),
     Ranking(RankingError),
     Maude(String),
+    UnsupportedInput(String),
 }
 
 impl From<crate::tools::equation_store::AddEqsError> for ProveError {
@@ -48,8 +49,10 @@ impl From<RankingError> for ProveError {
 
 impl From<crate::tools::rule_variants::VariantsError> for ProveError {
     fn from(error: crate::tools::rule_variants::VariantsError) -> Self {
-        let crate::tools::rule_variants::VariantsError::Maude(message) = error;
-        Self::Maude(message)
+        match error {
+            crate::tools::rule_variants::VariantsError::Maude(message) => Self::Maude(message),
+            other => Self::UnsupportedInput(other.to_string()),
+        }
     }
 }
 
@@ -85,6 +88,7 @@ impl std::fmt::Display for ProveError {
             ProveError::InvalidHeuristic(m) => f.write_str(m),
             ProveError::Ranking(m) => write!(f, "goal ranking: {m}"),
             ProveError::Maude(m) => write!(f, "Maude error: {m}"),
+            ProveError::UnsupportedInput(m) => write!(f, "{m}"),
         }
     }
 }
@@ -96,7 +100,8 @@ impl std::error::Error for ProveError {
             ProveError::LemmaNotFound(_)
             | ProveError::Guarded(_)
             | ProveError::InvalidHeuristic(_)
-            | ProveError::Maude(_) => None,
+            | ProveError::Maude(_)
+            | ProveError::UnsupportedInput(_) => None,
         }
     }
 }

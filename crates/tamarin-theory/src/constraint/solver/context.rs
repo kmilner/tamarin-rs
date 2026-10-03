@@ -959,7 +959,26 @@ impl ProofContext {
                 );
         }
         let injective_fact_insts = injective_fact_insts.into_iter().collect();
-        if !loop_breakers_prepared {
+        // Explicit AC families are executable rules, not display-only metadata.
+        // Keep injectivity based on the original expanded E rules, but build
+        // all solver indices and loop breakers from the supplied members.
+        let has_explicit_variants = rules.iter().any(|rule| !rule.rule_ac.is_empty());
+        if has_explicit_variants {
+            rules = rules
+                .into_iter()
+                .flat_map(|rule| {
+                    if rule.rule_ac.is_empty() {
+                        vec![rule]
+                    } else {
+                        crate::theory::closed_rules_ac(&rule)
+                            .iter()
+                            .map(|ac| crate::auto_sources::closed_rule_as_open(&rule, ac))
+                            .collect()
+                    }
+                })
+                .collect();
+        }
+        if !loop_breakers_prepared || has_explicit_variants {
             annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &maude);
         }
         for rule in &mut rules {
@@ -1334,6 +1353,28 @@ mod tests {
     use super::{IntrRuleCache, ProofContext, SaturateState, SaturationRun};
     use crate::rule::IntrRuleAC;
     use tamarin_test_support::require_maude_path;
+
+    #[test]
+    fn explicit_variant_actions_are_used_by_the_solver() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let source = r#"theory ExplicitActions begin
+rule Emit: [In(x)] --[Original(x)]-> []
+variants
+rule (modulo AC) Emit: [In(y.8)] --[Original(y.8), Added(y.8)]-> []
+end"#;
+        let theory =
+            crate::elaborate::elaborate(&tamarin_parser::parse_theory(source, &[]).unwrap())
+                .unwrap();
+        let maude =
+            tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone()).unwrap();
+        let ctx = ProofContext::new(maude, theory.rules().cloned().collect());
+        assert_eq!(ctx.rules.len(), 1);
+        assert_eq!(ctx.rules[0].rule.actions.len(), 2);
+        assert_eq!(ctx.rules[0].variant_substs.len(), 1);
+        assert!(ctx.rules[0].variant_substs[0].is_empty());
+    }
 
     #[test]
     fn injectivity_analysis_uses_expanded_macros_not_display_rules() {

@@ -644,7 +644,11 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 opr.rule_ac = r
                     .variants
                     .iter()
-                    .map(|v| rule_to_proto_rule_e(v, &out.signature))
+                    .map(|v| {
+                        rule_to_proto_rule_e(v, &out.signature).map(|rule| {
+                            crate::rule::apply_macro_in_rule_preserving_new_vars(&macros, rule)
+                        })
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 out.items.push(TheoryItem::Rule(opr));
             }

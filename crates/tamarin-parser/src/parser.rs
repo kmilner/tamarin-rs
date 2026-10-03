@@ -2958,7 +2958,11 @@ impl<'a> Parser<'a> {
         // `(modulo AC)` head is absent and parsing proceeds. (More lenient than
         // Haskell, but still accepts all valid Haskell input.)
         self.in_context(ParseContext::Rule, |parser| {
-            parser.rule_after_kw().map(|(rule, _)| rule)
+            let (rule, _) = parser.rule_after_kw()?;
+            if !rule.embedded_restrictions.is_empty() {
+                return Err(parser.err("Embedded restrictions in explicit AC variants are not supported; use named restrictions and action facts instead."));
+            }
+            Ok(rule)
         })
     }
 

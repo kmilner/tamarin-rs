@@ -1648,11 +1648,10 @@ impl TheoryPipeline<'_> {
                     !translate_mode,
                 )?);
         } else {
-            self.wf_report
-                .extend(tamarin_theory::wellformedness::check_wellformedness(
-                    &self.elaborated,
-                    None,
-                ));
+            self.wf_report.extend(
+                tamarin_theory::wellformedness::check_wellformedness(&self.elaborated, None)
+                    .map_err(|error| RunError::variants(error, &self.elaborated.in_file))?,
+            );
         }
 
         // `showSaturation` is the last argument of `closeTheoryWithMaude`
