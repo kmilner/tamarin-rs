@@ -80,13 +80,22 @@ fn get_produced_facts(rules: &[ERule]) -> BTreeSet<LNFact> {
 /// `mergeInfo` (Compression.hs): keep the FIRST rule's name (`mergeStand
 /// n _ = n`), merge attrs, concatenate restrictions.
 ///
-/// `mergeAttrs a a' = a <> a'` (Compression.hs):
-/// `RuleAttributes::merge` is right-precedence (`other.x.or(self.x)`), matching
-/// HS `a <> a'`; for two rules of the same source process the result is the
-/// same either way.
+/// Keep lookup provenance when absorbing a later silent rule: its result is
+/// bound by an IsIn action, not a premise. Two lookups cannot be merged.
 fn merge_info(i1: &ProtoRuleEInfo, i2: &ProtoRuleEInfo) -> ProtoRuleEInfo {
     let name = i1.name;
-    let attributes = i1.attributes.clone().merge(i2.attributes.clone());
+    let mut attributes = i1.attributes.clone().merge(i2.attributes.clone());
+    if matches!(
+        i1.attributes.process.as_deref().map(|p| &**p),
+        Some(tamarin_theory::sapic::Process::Comb(
+            tamarin_theory::sapic::ProcessCombinator::Lookup(_, _),
+            _,
+            _,
+            _
+        ))
+    ) {
+        attributes.process = i1.attributes.process.clone();
+    }
     let mut restrictions = i1.restrictions.clone();
     restrictions.extend_from_slice(&i2.restrictions);
     ProtoRuleEInfo {
@@ -318,6 +327,31 @@ mod tests {
         info.attributes.is_sapic_rule = true;
         info.attributes.process = Some(Arc::new(SharedProcess::new(p)));
         Rule::new(info, Vec::new(), Vec::new(), Vec::new())
+    }
+
+    #[test]
+    fn merged_lookup_keeps_its_binding_provenance() {
+        use tamarin_theory::sapic::ProcessCombinator;
+        let null = Process::Null(ProcessParsedAnnotation::empty());
+        let lookup = Process::Comb(
+            ProcessCombinator::Lookup(
+                tamarin_term::lterm::pub_term("cell"),
+                SapicLVar::untyped(LVar::new("value", LSort::Msg, 0)),
+            ),
+            ProcessParsedAnnotation::empty(),
+            Box::new(null.clone()),
+            Box::new(null.clone()),
+        );
+        let first = rule_with_process("Lookup", lookup);
+        let second = rule_with_process("Later", null);
+        assert_eq!(
+            merge_info(&first.info, &second.info).attributes.process,
+            first.info.attributes.process
+        );
+        assert_eq!(
+            merge_info(&second.info, &first.info).attributes.process,
+            first.info.attributes.process
+        );
     }
 
     /// `set_insert` dedups like HS's `S.Set (Rule ProtoRuleEInfo)`, so two
