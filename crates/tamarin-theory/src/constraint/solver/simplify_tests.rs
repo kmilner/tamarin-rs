@@ -36,6 +36,92 @@ fn ctx() -> Option<ProofContext> {
 }
 
 #[test]
+fn last_injective_nodes_merge_unless_strictly_ordered() {
+    use crate::constraint::constraints::{Edge, LessAtom, Reason};
+    use crate::constraint::solver::contradictions::{contradictions, Contradiction};
+    use crate::fact::{Fact, FactTag, Multiplicity};
+    use crate::rule::{
+        ConcIdx, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+    };
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let Some(mut ctx) = ctx() else { return };
+    let tag = FactTag::Proto(Multiplicity::Linear, "S", 1);
+    std::sync::Arc::get_mut(&mut ctx.shared)
+        .unwrap()
+        .injective_fact_insts
+        .insert(tag, Vec::new());
+    let fact = Fact::new(tag, vec![tamarin_term::lterm::pub_term("id")]);
+    let rule = |name, prems, concs| {
+        Rule::new(
+            RuleInfo::Proto(ProtoRuleACInstInfo {
+                name: ProtoRuleName::Stand(name),
+                attributes: RuleAttributes::empty(),
+                loop_breakers: Vec::new(),
+            }),
+            prems,
+            concs,
+            Vec::new(),
+        )
+    };
+    let i = LVar::new("i", LSort::Node, 0);
+    let j = LVar::new("j", LSort::Node, 1);
+    let k = LVar::new("k", LSort::Node, 2);
+    let mut sys = System::empty();
+    sys.add_node(i, rule("Init", vec![], vec![fact.clone()]));
+    sys.add_node(j, rule("Fin", vec![fact.clone()], vec![]));
+    sys.add_node(k, rule("Fin", vec![fact], vec![]));
+    sys.add_edge(Edge {
+        src: (i, ConcIdx(0)),
+        tgt: (k, PremIdx(0)),
+    });
+    sys.add_less(LessAtom::new(i, j, Reason::Adversary));
+    sys.set_last_atom(Some(k));
+    assert!(!contradictions(&ctx, &sys)
+        .unwrap()
+        .iter()
+        .any(|c| matches!(c, Contradiction::NonInjectiveFactInstance(..))));
+    let mut merged = Reduction::new(&ctx, sys.clone());
+    assert!(matches!(
+        merge_last_injective_fact_nodes(&mut merged).unwrap(),
+        SystemOutcome::Linear
+    ));
+    let subst = &merged.sys.eq_store().subst;
+    assert_eq!(
+        tamarin_term::subst::apply_vterm(subst, var_term(j)),
+        tamarin_term::subst::apply_vterm(subst, var_term(k))
+    );
+    for (a, b) in [(j, k), (k, j)] {
+        let mut ordered = sys.clone();
+        ordered.add_less(LessAtom::new(a, b, Reason::Adversary));
+        let mut red = Reduction::new(&ctx, ordered);
+        assert!(matches!(
+            merge_last_injective_fact_nodes(&mut red).unwrap(),
+            SystemOutcome::Contradictory
+        ));
+    }
+    // Direct contradiction callers also reject non-unifiable final rules.
+    sys.add_node(
+        j,
+        rule(
+            "Different",
+            sys.nodes
+                .iter()
+                .find(|(id, _)| *id == j)
+                .unwrap()
+                .1
+                .premises
+                .clone(),
+            vec![],
+        ),
+    );
+    assert!(contradictions(&ctx, &sys)
+        .unwrap()
+        .iter()
+        .any(|c| matches!(c, Contradiction::NonInjectiveFactInstance(..))));
+}
+
+#[test]
 fn implied_safety_false_rejects_the_system() {
     let Some(ctx) = ctx() else { return };
     let mut sys = System::empty();

@@ -376,11 +376,13 @@ pub(crate) fn initial_source_cases(
             )?
             .into_iter()
             .filter_map(|SystemBranch { sys: s, .. }| {
-                if s.eq_store().is_false()
-                    || !crate::constraint::solver::contradictions::contradictions(ctx, &s)
-                        .is_empty()
-                {
+                if s.eq_store().is_false() {
                     return None;
+                }
+                match crate::constraint::solver::contradictions::contradictions(ctx, &s) {
+                    Err(error) => return Some(Err(error)),
+                    Ok(cs) if !cs.is_empty() => return None,
+                    Ok(_) => {}
                 }
                 // HS-faithful: `initialSource` (Sources.hs) does NOT restrict
                 // the raw case's substitution — it returns `polish <$> runReduction
@@ -397,9 +399,9 @@ pub(crate) fn initial_source_cases(
                 // match HS; the surviving internal bindings are dropped by the refine
                 // output restrict anyway, so the rendered saturated case is unchanged
                 // apart from the now-HS-aligned node numbering.
-                Some(s)
+                Some(Ok(s))
             })
-            .collect::<Vec<_>>(),
+            .collect::<Result<Vec<_>, crate::prove::ProveError>>()?,
         )
     };
     let linear_counter = red.maude.fresh_counter_peek();
@@ -1574,7 +1576,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
             }
         };
         let mut red = Reduction::new_inheriting(ctx, sys, fresh_counter);
-        let contras = contradictions(red.ctx, &red.sys);
+        let contras = contradictions(red.ctx, &red.sys)?;
         if !contras.is_empty() {
             // Haskell mzero — drop branch (don't push to finished).
             continue;

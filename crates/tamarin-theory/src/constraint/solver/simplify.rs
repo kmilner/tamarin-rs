@@ -53,10 +53,40 @@ const SIMPLIFY_PASSES: &[Pass] = &[
     Pass::Linear(enforce_fresh_ordering_pass),
     Pass::Linear(propagate_subterm_obvious),
     Pass::Fallible(simp_injective_fact_eq_mon_pass),
+    Pass::Fallible(merge_last_injective_fact_nodes),
     Pass::Linear(dedupe_formulas_pass),
     Pass::Linear(drop_trivially_true_formulas_pass),
     Pass::Linear(normalise_less_atoms_pass),
 ];
+
+/// Upstream 7dbad334: interfering nodes at the end of an injective fact's
+/// lifetime must denote the same final event, unless strict order forbids it.
+fn merge_last_injective_fact_nodes(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
+    use crate::constraint::solver::contradictions::injective_interference_candidates;
+    use crate::constraint::solver::goals::reachable_set_adj;
+    use tamarin_term::rewriting::Equal;
+    let candidates =
+        injective_interference_candidates(red.ctx, &red.sys, |k| red.sys.last_atom == Some(k));
+    let adj = red.sys.build_always_before_adj();
+    let mut equations = Vec::new();
+    for (_, j, k) in candidates {
+        if reachable_set_adj(adj.map(), &j, false).contains(&k)
+            || reachable_set_adj(adj.map(), &k, false).contains(&j)
+        {
+            red.mark_contradictory();
+            return Ok(SystemOutcome::Contradictory);
+        }
+        let eq = Equal { lhs: j, rhs: k };
+        if !equations.contains(&eq) {
+            equations.push(eq);
+        }
+    }
+    let base = red.sys.clone();
+    let result = red.solve_node_id_eqs(&equations);
+    complete_solve(red, base, result)
+}
 
 /// Post-loop steps shared between `simplify_system` and `simplify_system_fan_out`.
 ///
