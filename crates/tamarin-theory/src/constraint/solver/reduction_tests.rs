@@ -425,6 +425,182 @@ fn subst_system_rewrites_less_atom_node_ids() {
 }
 
 #[test]
+fn goal_substitution_interleaves_action_insertion_and_status_merging() {
+    use crate::fact::ku_fact;
+    use tamarin_term::function_symbols::pair_sym;
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::term::f_app_no_eq;
+    use tamarin_term::vterm::var_term;
+
+    let Some(ctx) = ctx() else { return };
+    let node = LVar::new("i", LSort::Node, 0);
+    let x = var_term(LVar::new("x", LSort::Msg, 10));
+    let pair = f_app_no_eq(pair_sym(), vec![pub_term("a"), pub_term("b")]);
+    let old_goal = Goal::Action(node, ku_fact(pair.clone()));
+    let changed_goal = Goal::Action(node, ku_fact(x.clone()));
+    assert!(changed_goal < old_goal, "the variable is visited first");
+    let mut sys = System::empty();
+    sys.add_goal(old_goal.clone());
+    sys.goals_mut()[0].1.solved = true;
+    sys.add_goal(changed_goal);
+    let mut red = Reduction::new(&ctx, sys);
+    red.solve_term_eqs(SplitStrategy::SplitNow, &[Equal::new(x, pair)])
+        .expect("solve substitution");
+    red.subst_system().expect("ordered goal rebuild");
+
+    // The changed variable is re-inserted and decomposed BEFORE the old
+    // compound goal is visited. Its old status is then merged, not discarded.
+    assert_eq!(red.sys.next_goal_nr, 5);
+    let status = &red
+        .sys
+        .goals
+        .iter()
+        .find(|(g, _)| *g == old_goal)
+        .unwrap()
+        .1;
+    assert!(status.solved);
+    assert_eq!(status.nr, 0);
+    for (value, idx, nr) in [("a", 11, 3), ("b", 12, 4)] {
+        let goal = Goal::Action(LVar::new("vk", LSort::Node, idx), ku_fact(pub_term(value)));
+        assert_eq!(
+            red.sys.goals.iter().find(|(g, _)| *g == goal).unwrap().1.nr,
+            nr
+        );
+    }
+}
+
+#[test]
+fn goal_rebuild_keeps_bounds_exact_and_reserves_removed_variables() {
+    use crate::fact::ku_fact;
+    use tamarin_term::builtin::pair;
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::vterm::var_term;
+
+    let Some(ctx) = ctx() else { return };
+    let x = var_term(LVar::new("x", LSort::Msg, 1));
+    let mut sys = System::empty();
+    sys.add_goal(Goal::Action(
+        LVar::new("i", LSort::Node, 0),
+        ku_fact(x.clone()),
+    ));
+    let later = Goal::Action(LVar::new("later", LSort::Node, 100), ku_fact(pub_term("c")));
+    sys.add_goal(later.clone());
+    let mut red = Reduction::new(&ctx, sys);
+    red.solve_term_eqs(
+        SplitStrategy::SplitNow,
+        &[Equal::new(x, pair(pub_term("a"), pub_term("b")))],
+    )
+    .expect("solve substitution");
+    assert_eq!(bounds_max(&red.sys), 100);
+
+    // With TAM_RS_VERIFY_BOUNDS_CACHE=1 this also checks every intermediate
+    // bounds lookup while decomposing the first goal, before restoring later.
+    red.subst_system().expect("rebuild goals with exact bounds");
+    assert_eq!(red.sys.goals.len(), 4);
+    assert!(red.sys.goals.iter().any(|(g, _)| *g == later));
+    for (value, idx) in [("a", 101), ("b", 102)] {
+        let goal = Goal::Action(LVar::new("vk", LSort::Node, idx), ku_fact(pub_term(value)));
+        assert!(red.sys.goals.iter().any(|(g, _)| *g == goal));
+    }
+    assert_eq!(bounds_max(&red.sys), bounds_max_uncached(&red.sys));
+}
+
+#[test]
+fn node_collision_equalities_are_settled_before_substituting_goals() {
+    use crate::fact::{ku_fact, out_fact};
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::vterm::var_term;
+
+    let Some(ctx) = ctx() else { return };
+    let i = LVar::new("i", LSort::Node, 0);
+    let j = LVar::new("j", LSort::Node, 1);
+    let k = LVar::new("k", LSort::Node, 2);
+    let l = LVar::new("l", LSort::Node, 3);
+    let x = var_term(LVar::new("x", LSort::Msg, 4));
+    let value = pub_term("1");
+    let rule = |term| crate::rule::Rule {
+        info: crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
+            name: crate::rule::ProtoRuleName::Stand("R"),
+            attributes: crate::rule::RuleAttributes::empty(),
+            loop_breakers: Vec::new(),
+        }),
+        premises: vec![],
+        conclusions: vec![out_fact(term)],
+        actions: vec![],
+        new_vars: vec![],
+    };
+    let mut sys = System::empty();
+    sys.add_node(i, rule(x.clone()));
+    sys.add_node(j, rule(value.clone()));
+    sys.add_goal(Goal::Action(k, ku_fact(x.clone())));
+    sys.add_goal(Goal::Action(l, ku_fact(x)));
+    let mut red = Reduction::new(&ctx, sys);
+    red.solve_node_id_eqs(&[Equal::new(i, j), Equal::new(k, l)])
+        .expect("alias nodes");
+    red.subst_system().expect("substitute nodes, then goals");
+
+    // Merging i and j first yields x = '1'. Both changed KU facts must be
+    // re-inserted at their ORIGINAL nodes, even though k and l are aliases.
+    // Substituting goals before the rule equality loses one insertion.
+    assert_eq!(red.sys.nodes.len(), 1);
+    assert_eq!(red.sys.next_goal_nr, 4);
+    for (node, nr) in [(k, 2), (l, 3)] {
+        let goal = Goal::Action(node, ku_fact(value.clone()));
+        let status = &red.sys.goals.iter().find(|(g, _)| *g == goal).unwrap().1;
+        assert_eq!(status.nr, nr);
+        assert!(!status.solved);
+    }
+
+    // A subsequent substitution merges the node aliases, retaining the older
+    // status, but must not consume another insertion number.
+    red.subst_system().expect("merge aliases");
+    assert_eq!(red.sys.goals.len(), 1);
+    assert_eq!(red.sys.goals[0].1.nr, 2);
+    assert_eq!(red.sys.next_goal_nr, 4);
+}
+
+#[test]
+fn subst_system_reinserts_changed_solved_knowledge_goals() {
+    use crate::fact::ku_fact;
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::vterm::var_term;
+
+    let Some(ctx) = ctx() else { return };
+    for solved in [false, true] {
+        let node = LVar::new("i", LSort::Node, 0);
+        let x = var_term(LVar::new("x", LSort::Msg, 1));
+        let value = pub_term("1");
+        let mut sys = System::empty();
+        sys.add_goal(Goal::Action(node, ku_fact(x.clone())));
+        sys.goals_mut()[0].1.solved = solved;
+        let mut red = Reduction::new(&ctx, sys);
+        red.solve_term_eqs(SplitStrategy::SplitNow, &[Equal::new(x, value.clone())])
+            .expect("solve substitution");
+        red.subst_system().expect("propagate substitution");
+
+        // HS substGoals calls insertAction for changed message terms, without
+        // consulting the old solved status. It allocates a new, unsolved goal.
+        assert_eq!(red.sys.goals.len(), 1);
+        let (goal, status) = &red.sys.goals[0];
+        assert_eq!(*goal, Goal::Action(node, ku_fact(value)));
+        assert!(!status.solved);
+        assert_eq!(status.nr, 1);
+        assert_eq!(red.sys.next_goal_nr, 2);
+
+        // Once propagated, status-only changes must not reinsert the goal or
+        // invalidate the verified-identity substitution skip's semantics.
+        red.sys.goals_mut()[0].1.solved = true;
+        let expected = red.sys.clone();
+        red.subst_system().expect("identity substitution");
+        assert_eq!(red.sys, expected);
+    }
+}
+
+#[test]
 fn subst_system_idempotent_on_empty_substitution() {
     let Some(ctx) = ctx() else { return };
     // This system has content, but its eq-store is empty.  The early return
@@ -521,8 +697,8 @@ fn subst_system_marks_contradiction_on_shape_mismatch() {
 #[test]
 fn subst_system_merges_collided_nodes_and_equates_their_rules() {
     // When two nodes collapse to the same canonical id, Haskell's
-    // `setNodes` runs `solveRuleEqs` on their facts. Our port queues
-    // those into solve_fact_eqs at the tail of subst_system. Verify
+    // `setNodes` runs `solveRuleEqs` on their facts before substituting
+    // the remaining system. Verify
     // that the merge happens and only one node remains under the
     // canonical id.
     let Some(ctx) = ctx() else { return };

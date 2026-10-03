@@ -191,6 +191,10 @@ fn stamps_and_marker_excluded_from_partial_eq() {
 fn content_untracked_callers_are_enumerated() {
     const ALLOWED: &[&str] = &[
         "subst_system_once",
+        // Extracted node-ID phase: lowering mutations invalidate both max
+        // caches (which bumps content_stamp); subst_system_once folds its
+        // change flag into the final verified-identity marker decision.
+        "subst_node_ids",
         "set_nodes",
         "rename_precise_system",
         "normalise_less_atoms_pass",
