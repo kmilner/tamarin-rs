@@ -4,17 +4,17 @@
 //! End-to-end byte pins for `--partial-evaluation`.
 //!
 //! HS applies it inside `closeTranslatedTheory` (TheoryLoader.hs),
-//! between the theory close and `proveTheory`: `applyPartialEvaluation`
-//! (Prover.hs) replaces the closed theory's proto-rules with the
-//! abstract interpretation's refined set, splices the abstract-state report
-//! ahead of them as a `TextItem` and re-closes.  So a plain load — no
-//! `--prove` — already shows the whole effect on stdout, while the
+//! between the theory close and `proveTheory`: the patched oracle's
+//! `applyPartialEvaluation` (Prover.hs; upstream #954) replaces each rule
+//! family at its original position with its refinements, splices the
+//! abstract-state report ahead of the first rule as a `TextItem` and re-closes.
+//! A plain load without `--prove` already shows the whole effect on stdout;
 //! `Debug.Trace` step lines (AbstractInterpretation.hs) are lazy
 //! thunks forced during rendering and therefore land on stderr AFTER the
 //! `[Theory X] Theory closed` marker.
 //!
-//! Every expectation below is verbatim oracle bytes from the pinned v1.13.0
-//! binary (Git revision ef3f0468) on [`THEORY`], with only the machine-local
+//! Every expectation below is verbatim oracle bytes from the patched v1.13.0
+//! oracle at upstream pin da8787d5 on [`THEORY`], with only the machine-local
 //! lines blanked: the three maude banner lines (path + local version), the
 //! `Generated from:` block's `Maude version` / `Git revision:` /
 //! `Compiled at:`, the `analyzed:` temp path and the wall-clock
@@ -36,8 +36,7 @@ use common::{joined, maude_available, normalize_stdout, strip_maude_banner};
 const TMP_DIR: &str = "tamarin_prover_partial_evaluation";
 
 /// `crates/tamarin-prover/tests/fixtures/single_recv.spthy`, inline: two
-/// rules declared `Send` then `Recv`, so the alphabetical re-emission that
-/// `applyPartialEvaluation`'s `Set`-round-trip forces is observable, plus one
+/// rules declared `Send` then `Recv` make source-family order observable, plus one
 /// exists-trace lemma to keep the `summary of summaries:` block non-empty.
 const THEORY: &str = "theory SingleRecv\nbegin\n\n\
                       rule Send:\n  [ Fr(~k) ] --[ S(~k) ]-> [ Out(~k) ]\n\n\
@@ -57,8 +56,8 @@ fn run_binary(stem: &str, extra: &[&str]) -> (i32, String, String) {
 /// The oracle's `--partial-evaluation=summary` stdout for [`THEORY`],
 /// normalized by [`normalize_stdout`].  Two things to read off it: the
 /// `text{*…*}` report `applyPartialEvaluation` splices at the position of the
-/// first rule item (`replaceProtoRules`, Prover.hs), and the rules coming back in
-/// alphabetical order — `Recv` before `Send`, the reverse of the source.
+/// first rule item (`replaceProtoRules` in patched Prover.hs), and the rules
+/// retaining their source family order — `Send` before `Recv`.
 const EXPECTED_STDOUT: &[&str] = &[
     "theory SingleRecv",
     "",
@@ -82,13 +81,13 @@ const EXPECTED_STDOUT: &[&str] = &[
     "",
     "*}",
     "",
-    "rule (modulo E) Recv:",
-    "   [ In( x ) ] --[ R( x ) ]-> [ ]",
+    "rule (modulo E) Send:",
+    "   [ Fr( ~k ) ] --[ S( ~k ) ]-> [ Out( ~k ) ]",
     "",
     "  /* has exactly the trivial AC variant */",
     "",
-    "rule (modulo E) Send:",
-    "   [ Fr( ~k ) ] --[ S( ~k ) ]-> [ Out( ~k ) ]",
+    "rule (modulo E) Recv:",
+    "   [ In( x ) ] --[ R( x ) ]-> [ ]",
     "",
     "  /* has exactly the trivial AC variant */",
     "",
@@ -124,7 +123,7 @@ const EXPECTED_STDOUT: &[&str] = &[
 ];
 
 /// The `text{*…*}` block of [`EXPECTED_STDOUT`]: `render ppAbsState`
-/// (Prover.hs) wrapped by `prettyFormalComment` (lib/theory/src/Pretty.hs).
+/// in patched Prover.hs, wrapped by `prettyFormalComment` (lib/theory/src/Pretty.hs).
 /// The blank lines around the numbered fact list are the two `$--$` joins
 /// (Text/PrettyPrint/Class.hs); the one before `*}` is the `".\n\n"` ending the last
 /// `text`.
@@ -205,15 +204,15 @@ fn summary_emits_step_trace_on_stderr() {
     assert_eq!(stderr, joined(EXPECTED_STDERR_SUMMARY));
 }
 
-/// The re-close re-emits the rules alphabetically: `Recv` before `Send`,
-/// where an unflagged run keeps the source order.
+/// Re-closing preserves the original rule-family order: `Send` before `Recv`,
+/// as in an unflagged run.
 #[test]
-fn partial_evaluation_resorts_rules() {
+fn partial_evaluation_preserves_rule_family_order() {
     if !maude_available() {
         eprintln!("skipping: maude not on path");
         return;
     }
-    let (code, pe_stdout, stderr) = run_binary("pe_sort", &["--partial-evaluation=summary"]);
+    let (code, pe_stdout, stderr) = run_binary("pe_order", &["--partial-evaluation=summary"]);
     assert_eq!(code, 0, "stderr: {stderr}");
     let recv = pe_stdout
         .find("rule (modulo E) Recv:")
@@ -221,9 +220,9 @@ fn partial_evaluation_resorts_rules() {
     let send = pe_stdout
         .find("rule (modulo E) Send:")
         .expect("Send rule in PE stdout");
-    assert!(recv < send, "expected Recv before Send:\n{pe_stdout}");
+    assert!(send < recv, "expected Send before Recv:\n{pe_stdout}");
 
-    let (code, plain_stdout, stderr) = run_binary("pe_sort", &[]);
+    let (code, plain_stdout, stderr) = run_binary("pe_order", &[]);
     assert_eq!(code, 0, "stderr: {stderr}");
     let recv = plain_stdout
         .find("rule (modulo E) Recv:")
