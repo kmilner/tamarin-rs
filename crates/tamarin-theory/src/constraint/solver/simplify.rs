@@ -3912,7 +3912,8 @@ fn dedupe_formulas_pass(red: &mut Reduction) {
 fn propagate_subterm_obvious(red: &mut Reduction) {
     use crate::tools::subterm_store::{split_subterm, subterm_step, SubtermSplit};
     use tamarin_term::lterm::{sort_of_lnterm, LSort};
-    let mut changed = ChangeIndicator::Unchanged;
+    let previous_store = red.sys.subterm_store.clone();
+    let mut changed_goals = false;
     if red.sys.subterm_store.contradictory {
         return;
     }
@@ -4010,27 +4011,18 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
         }
         if splits_all.iter().any(|x| matches!(x, SubtermSplit::TrueD)) {
             contradictory = true;
-            changed = ChangeIndicator::Changed;
         }
         // eqFormulas — ¬(x = y) for each EqualD.
         for x in &splits_all {
             if let SubtermSplit::EqualD(l, r) = x {
-                let prev = new_formulas.len();
                 emit_neg_eq(l.clone(), r.clone(), &mut new_formulas);
-                if new_formulas.len() > prev {
-                    changed = ChangeIndicator::Changed;
-                }
             }
         }
         // acFormulas — `∀ newVar. smallPlus = big ⇒ ⊥` for each
         // ACNewVarD.
         for x in &splits_all {
             if let SubtermSplit::AcNewVarD(small_plus, big, new_var) = x {
-                let prev = new_formulas.len();
                 emit_ac_neg(small_plus, big, new_var, &mut new_formulas);
-                if new_formulas.len() > prev {
-                    changed = ChangeIndicator::Changed;
-                }
             }
         }
         // Upstream #958: flip a negative natural order only when its
@@ -4064,7 +4056,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
                             propagated: false,
                         },
                     );
-                    changed = ChangeIndicator::Changed;
                 }
             }
         }
@@ -4072,9 +4063,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
         for x in &splits_all {
             if let SubtermSplit::SubtermD(s, t) | SubtermSplit::NatSubtermD(s, t) = x {
                 red.sys.invalidate_max_var_idx_cache();
-                if red.sys.subterm_store_mut().add_neg(s.clone(), t.clone()) {
-                    changed = ChangeIndicator::Changed;
-                }
+                red.sys.subterm_store_mut().add_neg(s.clone(), t.clone());
             }
         }
         // negSubterms \ alreadyFalse.
@@ -4082,7 +4071,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
             if let Ok(pos) = red.sys.subterm_store.neg_subterms.binary_search(p) {
                 red.sys.invalidate_max_var_idx_cache();
                 red.sys.subterm_store_mut().neg_subterms.remove_at(pos);
-                changed = ChangeIndicator::Changed;
             }
         }
         // oldNegSubterms := original negSubterms.  This is
@@ -4134,11 +4122,9 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
                 // goal), never by the trivially-true simp path.  Moving
                 // it to solved_subterms here rendered a spurious
                 // `Solved Subterms: 1. …` section HS doesn't show.
-                changed = ChangeIndicator::Changed;
             }
             Some(ref entries) if entries.is_empty() => {
                 contradictory = true;
-                changed = ChangeIndicator::Changed;
                 subterm_goals.push(crate::constraint::constraints::Goal::Subterm((
                     c.small.clone(),
                     c.big.clone(),
@@ -4178,7 +4164,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
                         let f = crate::guarded::Guarded::Atom(atom);
                         if !new_formulas.contains(&f) {
                             new_formulas.push(f);
-                            changed = ChangeIndicator::Changed;
                         }
                     }
                 }
@@ -4215,16 +4200,10 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
             for (ps, pr) in &pos {
                 if nr == pr {
                     // emit ¬(ns = ps)
-                    let prev = new_formulas.len();
                     emit_neg_eq(ns.clone(), ps.clone(), &mut new_formulas);
-                    if new_formulas.len() > prev {
-                        changed = ChangeIndicator::Changed;
-                    }
                     // negSubterms ∪ {(ns, ps)}.
                     red.sys.invalidate_max_var_idx_cache();
-                    if red.sys.subterm_store_mut().add_neg(ns.clone(), ps.clone()) {
-                        changed = ChangeIndicator::Changed;
-                    }
+                    red.sys.subterm_store_mut().add_neg(ns.clone(), ps.clone());
                 }
             }
         }
@@ -4243,7 +4222,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
         && crate::tools::subterm_store::has_subterm_cycle(&reducible, &red.sys.subterm_store)
     {
         contradictory = true;
-        changed = ChangeIndicator::Changed;
     }
 
     // -------------------------------------------------------------
@@ -4268,7 +4246,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
         match nat_subterm_equalities(&pos_pairs) {
             None => {
                 contradictory = true;
-                changed = ChangeIndicator::Changed;
             }
             Some(eqs) => {
                 for (l, r) in eqs {
@@ -4276,7 +4253,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
                     let f = crate::guarded::Guarded::Atom(atom);
                     if !new_formulas.contains(&f) {
                         new_formulas.push(f);
-                        changed = ChangeIndicator::Changed;
                     }
                 }
             }
@@ -4314,7 +4290,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
             .cloned()
             .collect();
         if !to_remove.is_empty() || !to_add.is_empty() {
-            changed = ChangeIndicator::Changed;
+            changed_goals = true;
         }
         for g in &to_remove {
             red.sys.invalidate_max_var_idx_cache();
@@ -4328,24 +4304,38 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
     if contradictory {
         red.sys.subterm_store_mut().contradictory = true;
     }
-    // Push emitted formulas directly to `sys.formulas` (NOT via
-    // `insert_formula`, which routes negated-atom universals through
-    // the `Subterm` arm of `insert_atom`'s caller — that path pushes
-    // the formula into `solved_formulas` as well, after which a
-    // subsequent `reduce_formulas_pass` round strips it back out of
-    // `formulas` via the solved-dedup short-circuit in
-    // `insert_formula`).  HS's `simpSubterms` (Simplify.hs)
-    // funnels emitted formulas through `insertFormula` only ONCE per
-    // simplify iteration and relies on the negSubterms set surviving
-    // in `_negSubterms`; we mirror the same single-pass placement by
-    // keeping the formula in `sys.formulas` only.
+    // Match simpSubterms: compare the resulting constraints, ignoring the
+    // old-negative bookkeeping and Rust's propagation markers. Intermediate
+    // removal/reinsertion of an already-false negative is not a change.
+    let same_pairs = |a: &[crate::tools::subterm_store::SubtermConstraint],
+                      b: &[crate::tools::subterm_store::SubtermConstraint]| {
+        a.iter()
+            .map(|c| (&c.small, &c.big))
+            .collect::<std::collections::BTreeSet<_>>()
+            == b.iter()
+                .map(|c| (&c.small, &c.big))
+                .collect::<std::collections::BTreeSet<_>>()
+    };
+    let store = &red.sys.subterm_store;
+    let changed_store = store.contradictory != previous_store.contradictory
+        || store.neg_subterms != previous_store.neg_subterms
+        || !same_pairs(&store.subterms, &previous_store.subterms)
+        || !same_pairs(&store.solved_subterms, &previous_store.solved_subterms);
+    let mut changed_formulas = false;
     for f in new_formulas {
-        if red.sys.insert_formula(f) {
-            red.changed = ChangeIndicator::Changed;
-            changed = ChangeIndicator::Changed;
+        // insertFormula ignores formulas known in either store. Re-emitting
+        // the same S_neg disequality must not perpetually restart the loop.
+        if !red
+            .sys
+            .formulas
+            .iter()
+            .chain(red.sys.solved_formulas.iter())
+            .any(|known| known.as_ref() == &f)
+        {
+            changed_formulas |= red.sys.insert_formula(f);
         }
     }
-    if matches!(changed, ChangeIndicator::Changed) {
+    if changed_store || changed_goals || changed_formulas {
         red.changed = ChangeIndicator::Changed;
     }
 }

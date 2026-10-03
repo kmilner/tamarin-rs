@@ -370,39 +370,37 @@ pub(crate) fn initial_source_cases(
     // Every solver branch descends from `red.sys`, so it already carries the
     // safety restrictions installed above.
     let normalize_and_keep = |sys: System, counter: u64| {
-        Ok::<_, crate::prove::ProveError>(
-            crate::constraint::solver::simplify::simplify_system_with_fanout_seeded_with_counters(
-                ctx, sys, counter,
-            )?
-            .into_iter()
-            .filter_map(|SystemBranch { sys: s, .. }| {
-                if s.eq_store().is_false() {
-                    return None;
-                }
-                match crate::constraint::solver::contradictions::contradictions(ctx, &s) {
-                    Err(error) => return Some(Err(error)),
-                    Ok(cs) if !cs.is_empty() => return None,
-                    Ok(_) => {}
-                }
-                // HS-faithful: `initialSource` (Sources.hs) does NOT restrict
-                // the raw case's substitution — it returns `polish <$> runReduction
-                // instantiate` verbatim, keeping every binding (e.g. a rule's internal
-                // `lock`/`v` ⟼ goal-var bindings).  `restrict stableVars` is applied
-                // ONLY by `refineSource` (Sources.hs) on the SATURATED output,
-                // which `refine_one_source` already mirrors.  Restricting the raw
-                // case's subst here would drop its internal rule vars and so LOWER
-                // `avoid th` — the fresh-var seed
-                // `saturateSources` threads into `refineSource` (Sources.hs
-                // `fs = avoid th`).  With the seed one index short per dropped var, the
-                // saturated source cases minted every grafted `#vr`/`~n` node id below
-                // HS's.  Keeping the raw subst here makes `bounds_max` (RS's `avoid`)
-                // match HS; the surviving internal bindings are dropped by the refine
-                // output restrict anyway, so the rendered saturated case is unchanged
-                // apart from the now-HS-aligned node numbering.
-                Some(Ok(s))
-            })
-            .collect::<Result<Vec<_>, crate::prove::ProveError>>()?,
-        )
+        crate::constraint::solver::simplify::simplify_system_with_fanout_seeded_with_counters(
+            ctx, sys, counter,
+        )?
+        .into_iter()
+        .filter_map(|SystemBranch { sys: s, .. }| {
+            if s.eq_store().is_false() {
+                return None;
+            }
+            match crate::constraint::solver::contradictions::contradictions(ctx, &s) {
+                Err(error) => return Some(Err(error)),
+                Ok(cs) if !cs.is_empty() => return None,
+                Ok(_) => {}
+            }
+            // HS-faithful: `initialSource` (Sources.hs) does NOT restrict
+            // the raw case's substitution — it returns `polish <$> runReduction
+            // instantiate` verbatim, keeping every binding (e.g. a rule's internal
+            // `lock`/`v` ⟼ goal-var bindings).  `restrict stableVars` is applied
+            // ONLY by `refineSource` (Sources.hs) on the SATURATED output,
+            // which `refine_one_source` already mirrors.  Restricting the raw
+            // case's subst here would drop its internal rule vars and so LOWER
+            // `avoid th` — the fresh-var seed
+            // `saturateSources` threads into `refineSource` (Sources.hs
+            // `fs = avoid th`).  With the seed one index short per dropped var, the
+            // saturated source cases minted every grafted `#vr`/`~n` node id below
+            // HS's.  Keeping the raw subst here makes `bounds_max` (RS's `avoid`)
+            // match HS; the surviving internal bindings are dropped by the refine
+            // output restrict anyway, so the rendered saturated case is unchanged
+            // apart from the now-HS-aligned node numbering.
+            Some(Ok(s))
+        })
+        .collect::<Result<Vec<_>, crate::prove::ProveError>>()
     };
     let linear_counter = red.maude.fresh_counter_peek();
     Ok(match outcome {

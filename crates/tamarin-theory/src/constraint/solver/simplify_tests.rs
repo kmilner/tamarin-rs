@@ -36,6 +36,29 @@ fn ctx() -> Option<ProofContext> {
 }
 
 #[test]
+fn residual_positive_and_negative_subterms_reach_a_fixed_point() {
+    use tamarin_term::builtin::msg_var;
+    use tamarin_term::lterm::pub_term;
+    let Some(ctx) = ctx() else {
+        return;
+    };
+    let mut sys = System::empty();
+    sys.subterm_store_mut().add(pub_term("d"), msg_var("x", 0));
+    sys.subterm_store_mut()
+        .add_neg(pub_term("c"), msg_var("x", 0));
+    let mut red = Reduction::new(&ctx, sys);
+    for _ in 0..4 {
+        red.changed = ChangeIndicator::Unchanged;
+        propagate_subterm_obvious(&mut red);
+        if red.changed == ChangeIndicator::Unchanged {
+            assert!(!red.sys.subterm_store.contradictory);
+            return;
+        }
+    }
+    panic!("S_neg repeatedly emits an already-known disequality");
+}
+
+#[test]
 fn last_injective_nodes_merge_unless_strictly_ordered() {
     use crate::constraint::constraints::{Edge, LessAtom, Reason};
     use crate::constraint::solver::contradictions::{contradictions, Contradiction};
