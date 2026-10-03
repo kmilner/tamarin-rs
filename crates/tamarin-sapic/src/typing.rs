@@ -21,7 +21,7 @@ use tamarin_utils::fresh::PreciseFreshState;
 
 #[cfg(test)]
 use tamarin_theory::formula::formula_frees;
-use tamarin_theory::sapic::PlainProcess;
+use tamarin_theory::sapic::{map_process, map_terms_action, map_terms_comb, PlainProcess};
 use tamarin_theory::sapic::{
     traverse_terms_action, traverse_terms_comb, Process, ProcessCombinator, SapicAction, SapicLVar,
     SapicTerm, SapicType,
@@ -317,13 +317,44 @@ fn merge_fun_types(
 /// shared `vars` env, and the earlier `out(y)` — reconstructed afterwards — then
 /// renders `out(y:bitstring)`.  A pre-order single pass would miss this.
 fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainProcess, String> {
+    let typed = type_process_go(env, p)?;
+    let final_var = |v: &SapicLVar| {
+        SapicLVar::new(
+            v.var,
+            env.vars
+                .get(&v.var)
+                .cloned()
+                .unwrap_or_else(|| v.stype.clone()),
+        )
+    };
+    let final_term = |t: &SapicTerm| {
+        tamarin_term::term::map_lits(t, &mut |lit| match lit {
+            Lit::Var(v) => Lit::Var(final_var(v)),
+            Lit::Con(c) => Lit::Con(*c),
+        })
+    };
+    // An earlier action can refine a variable after reconstructing its
+    // continuation. Apply final types everywhere except quantified formulas.
+    Ok(map_process(
+        &typed,
+        &mut |a| map_terms_action(final_term, |f| f.clone(), final_var, a),
+        &mut |c| map_terms_comb(final_term, |f| f.clone(), final_var, c),
+        &mut |ann| {
+            let mut ann = ann.clone();
+            ann.location = ann.location.as_ref().map(final_term);
+            ann
+        },
+    ))
+}
+
+fn type_process_go(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainProcess, String> {
     match p {
         Process::Null(ann) => Ok(Process::Null(ann.clone())),
         Process::Action(ac, ann, body) => {
             // 1. fAct: insert bound vars (with their declared types).
             insert_declarations(env, action_binder_declarations(ac))?;
             // 2. recurse into the subtree FIRST (learns deeper types into `env`).
-            let body1 = type_process(env, body)?;
+            let body1 = type_process_go(env, body)?;
             // 3. gAct: type the action's terms, with the now-complete `env`.
             let ac1 = type_action(env, ac)?;
             // The `gAct ac@(Event (Fact tag _ ts))` case (Typing.hs):
@@ -345,8 +376,8 @@ fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainPr
             // 1. fComb: insert bound vars.
             insert_declarations(env, combinator_binder_declarations(c))?;
             // 2. recurse into BOTH children first.
-            let l1 = type_process(env, l)?;
-            let r1 = type_process(env, r)?;
+            let l1 = type_process_go(env, l)?;
+            let r1 = type_process_go(env, r)?;
             // 3. gComb: type this node's terms with the completed `env`.
             let c1 = type_comb(env, c)?;
             Ok(Process::Comb(c1, ann.clone(), Box::new(l1), Box::new(r1)))
@@ -614,6 +645,33 @@ mod tests {
         } else {
             panic!("expected New action");
         }
+    }
+
+    #[test]
+    fn inferred_types_reach_binders_and_earlier_reconstructed_unlocks() {
+        let parsed = tamarin_parser::parse_theory(
+            "theory T begin functions: f(a):a process: new s; lock s; out(f(s)); unlock s end",
+            &[],
+        )
+        .unwrap();
+        let thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+        let typed = type_and_rename_process(
+            &thy.signature,
+            &collect_user_fun_typings(&thy),
+            thy.processes().next().unwrap(),
+        )
+        .unwrap();
+        let vars = vars_proc(&typed);
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].stype.as_deref(), Some("a"));
+        let mut keys = vec![];
+        tamarin_theory::sapic::for_each_process(&typed, &mut |node| {
+            if let Process::Action(SapicAction::Lock(t) | SapicAction::Unlock(t), _, _) = node {
+                keys.push(t.clone());
+            }
+        });
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], keys[1]);
     }
 
     #[test]
