@@ -1453,9 +1453,8 @@ fn rejects_a_universal_without_a_toplevel_implication() {
     );
 }
 
-/// HS `convert polarity (Conn Iff f1 f2)` is `gconj` of the two implications
-/// (Guarded.hs), which at the entry polarity is what the written
-/// conjunction of them converts to.
+/// At positive polarity, equivalence conjoins its two implications
+/// (Guarded.hs).
 #[test]
 fn treats_iff_as_two_implications() {
     let iff = g("(Ex x #i. A(x) @ #i) <=> (Ex y #j. B(y) @ #j)").expect("both sides are guarded");
@@ -1467,6 +1466,36 @@ fn treats_iff_as_two_implications() {
         matches!(&iff, Guarded::Conj(items) if items.len() == 2),
         "the two implications are conjoined, got {iff:?}"
     );
+}
+
+#[test]
+fn negated_equivalence_disjoins_negated_implications() {
+    let iff =
+        g("not ((Ex x #i. A(x) @ #i) <=> (Ex y #j. B(y) @ #j))").expect("both sides are guarded");
+    let expanded = g("not (((Ex x #i. A(x) @ #i) ==> (Ex y #j. B(y) @ #j)) & \
+        ((Ex y #j. B(y) @ #j) ==> (Ex x #i. A(x) @ #i)))")
+    .expect("both sides are guarded");
+    assert_eq!(iff, expanded);
+    assert!(matches!(iff, Guarded::Disj(items) if items.len() == 2));
+}
+
+#[test]
+fn equivalence_truth_table_respects_both_polarities() {
+    for left in [false, true] {
+        for right in [false, true] {
+            let formula = format!(
+                "({} <=> {})",
+                if left { "T" } else { "F" },
+                if right { "T" } else { "F" }
+            );
+            assert_eq!(g(&formula).unwrap(), gtf(left == right));
+            assert_eq!(g(&format!("not {formula}")).unwrap(), gtf(left != right));
+            assert_eq!(
+                g(&format!("not (not {formula})")).unwrap(),
+                gtf(left == right)
+            );
+        }
+    }
 }
 
 // =============================================================================

@@ -334,9 +334,10 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 }
 
 // =============================================================================
-// Open theory — port of HS `prettyOpenTheory` (OpenTheory.hs) =
-// `prettyTheory prettySignaturePure (const emptyDoc) prettyOpenProtoRule
-// prettyProof prettyTranslationElement` (TheoryObject.hs).
+// Open theory — port of HS `prettyOpenTheory` (OpenTheory.hs#prettyOpenTheory) =
+// `prettyTheory` with the pure signature and declared options, an empty cache,
+// `prettyOpenProtoRule`, `prettyProof` and `prettyTranslationElement`
+// (TheoryObject.hs).
 // Differences from the closed print:
 //   - the signature is the PARSE-time pure signature (same `prettyMaudeSig`
 //     renderer — for a theory that has not been closed the two signatures
@@ -360,7 +361,7 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 //     both.
 // =============================================================================
 
-/// HS `prettyOpenTheory` (OpenTheory.hs) as `--parse-only` emits it
+/// HS `prettyOpenTheory` (OpenTheory.hs#prettyOpenTheory) as `--parse-only` emits it
 /// (Batch.hs `putStrLn . renderDoc`): the returned string carries NO
 /// trailing newline, the caller's `println!` supplies `putStrLn`'s.
 pub fn pretty_open_theory(thy: &Theory) -> String {
@@ -376,7 +377,7 @@ pub fn pretty_open_theory(thy: &Theory) -> String {
 /// wellformedness block (`reportToDoc` — pass the pre-rendered
 /// [`format_wf_block`] string) and the `Generated from:` version block.
 /// `prettyOpenTheoryByModule`'s `spthy` and `spthytyped` arms
-/// (TheoryLoader.hs) both land here; they differ only in the theory
+/// (TheoryLoader.hs#prettyOpenTheoryByModule) both land here; they differ only in the theory
 /// VALUE, which `tamarin_sapic::type_theory::type_theory_env` has rewritten
 /// for `spthytyped`.
 pub fn pretty_open_theory_by_module(thy: &Theory, wf_block: &str, build: &BuildInfo) -> String {
@@ -537,14 +538,14 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
                 .render()
         }
         // Only builtins not recoverable from the printed signature survive
-        // here; all others deliberately render empty (TheoryObject.hs).
+        // here; all others deliberately render empty (TheoryObject.hs#prettyTranslationElement).
         TranslationElement::SignatureBuiltin(name) => match name.as_str() {
             "locations-report" | "reliable-channel" | "dest-pairing" => {
                 format!("builtins: {name}")
             }
             _ => String::new(),
         },
-        // The two `FunctionTypingInfo` cases.
+        // The two `FunctionTypingInfo` cases (TheoryObject.hs).
         TranslationElement::FunctionTypingInfo(fti) => pretty_function_typing_info(fti).render(),
         TranslationElement::ExportInfo { tag, body } => {
             let mut escaped = String::with_capacity(body.len());

@@ -127,7 +127,7 @@ pub(crate) fn rename_unique(p: &PlainProcess) -> PlainProcess {
 /// tag, the inferred argument types of its LAST typed occurrence (HS
 /// `Map.insert tag …`, Typing.hs — later events overwrite earlier ones).
 /// `events` has no RS reader: its consumer is `loadHeaders`'
-/// `event e(t1,…)` emission (Export.hs), part of the unported
+/// `event e(t1,…)` emission (Export/Sapic.hs), part of the unported
 /// ProVerif / DeepSec export backends.
 pub struct TypingEnvironment {
     pub vars: BTreeMap<LVar, SapicType>,

@@ -3,7 +3,7 @@
 
 //! End-to-end byte pins for `-m` / `--output-module` translate-only mode
 //! (Batch.hs): per-module stdout (`prettyOpenTheoryByModule`,
-//! TheoryLoader.hs, plus `withVersionAndReport`'s two trailing
+//! TheoryLoader.hs#prettyOpenTheoryByModule, plus `withVersionAndReport`'s two trailing
 //! comments), the six-marker stderr with NO `Theory closed`, the deferred
 //! `-o`/`-O` write path, the `--quit-on-warning` abort shape, and the clap
 //! parse error for an unknown module value (rc 2, stderr, no maude probe,
@@ -267,7 +267,7 @@ const EXPECTED_MSR: &[&str] = &[
 
 /// Oracle stdout for `-m=spthy` on [`PATTERNS`].  The `process:` block goes
 /// through `prettyProcess = prettySapic' rulePrinter` (TheoryObject.hs,
-/// Print.hs), which re-applies `unextractMatchingVariables mv` to an
+/// Theory/Sapic/Print.hs), which re-applies `unextractMatchingVariables mv` to an
 /// embedded MSR's PREMISES: `[ In( =z ) ]` keeps the `=` pattern-match marker,
 /// while the unmarked sibling rule stays `[ In( z ) ]`.
 const EXPECTED_PATTERNS_SPTHY: &[&str] = &[

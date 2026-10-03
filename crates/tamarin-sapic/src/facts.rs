@@ -549,7 +549,7 @@ fn role_from_process_name_list(names: &[String]) -> String {
     }
 }
 
-/// `stripNonAlphanumerical = filter isAlpha` (Facts.hs).
+/// `stripNonAlphanumerical = filter isAlpha` (Sapic/Facts.hs#stripNonAlphanumerical).
 fn strip_non_alphabetic(s: &str) -> String {
     s.chars().filter(|c| c.is_alphabetic()).collect()
 }

@@ -163,6 +163,10 @@ pub type WfReport = Vec<WfError>;
 /// Variant checks need a live Maude process. Without it, theories declaring
 /// explicit families return an error, even if those families might be valid:
 /// missing validation must not become permission to use them after recovery.
+/// With a handle, call [`crate::tools::rule_variants::populate_rule_variants`]
+/// first: the no-variant check reads those cached computation results.
+/// Frontends normally use [`crate::tools::rule_variants::prepare_theory_rules`],
+/// which owns that ordering and the subsequent fatal-error policy.
 pub fn check_wellformedness(
     thy: &Theory,
     maude: Option<&MaudeHandle>,

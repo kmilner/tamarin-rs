@@ -63,10 +63,10 @@ index f25de6090945e3cdef6d1083afd8e39a7009a6ed..e325420c438037ae2b94dda0adaae935
      addItems :: Maybe FilePath -> OpenDiffTheory -> Parser OpenDiffTheory
      addItems inFile0 thy = asum
 diff --git a/lib/theory/src/Theory/Text/Parser/Term.hs b/lib/theory/src/Theory/Text/Parser/Term.hs
-index dbb4ea216aa9b23951dff8e1fc53873b8c5f809e..dfccca27d6ca0cab6ea4252c2080ff539a0fe580 100644
+index 751d26d3ed66d15d56de0667b99f74d82df01f4d..5a577040fd6490d0705c701561ee82d60494957e 100644
 --- a/lib/theory/src/Theory/Text/Parser/Term.hs
 +++ b/lib/theory/src/Theory/Text/Parser/Term.hs
-@@ -62,7 +62,7 @@ llitNoPub = asum [freshTerm <$> freshName, varTerm <$> msgvar]
+@@ -61,7 +61,7 @@ llitNoPub = asum [freshTerm <$> freshName, varTerm <$> msgvar]
  lookupArity :: String -> Parser (Int, Privacy,Constructability, ACstate, NDCstate)
  lookupArity op = do
      maudeSig <- sig <$> getState
@@ -75,7 +75,7 @@ index dbb4ea216aa9b23951dff8e1fc53873b8c5f809e..dfccca27d6ca0cab6ea4252c2080ff53
          Nothing                            -> fail $ "unknown operator `" ++ op ++ "'"
          Just (NoEqUser (_,(k,priv,cnstr,ndc))) -> return (k,priv,cnstr,NotAC,ndc)
          Just (ACfctUser (_,(priv,cnstr,ndc)))  -> return (2,priv,cnstr,IsAC,ndc)
-@@ -91,6 +91,7 @@ naryOpApp eqn plit = do
+@@ -90,6 +90,7 @@ naryOpApp eqn plit = do
      when (eqn && op `elem` reservedBuiltins)
        $ error $ "`" ++ show op ++ "` is a reserved function name for builtins."
      (k,priv,constr,acstate,ndcstate) <- lookupArity op
@@ -83,7 +83,7 @@ index dbb4ea216aa9b23951dff8e1fc53873b8c5f809e..dfccca27d6ca0cab6ea4252c2080ff53
      ts <- parens $ if k == 1
                       then return <$> tupleterm eqn plit
                       else commaSep (msetterm eqn plit)
-@@ -100,7 +101,9 @@ naryOpApp eqn plit = do
+@@ -99,7 +100,9 @@ naryOpApp eqn plit = do
                 ", but here it is used with arity " ++ show k'
      --let app o = if BC.pack op == emapSymString then fAppC EMap else fAppNoEq o
      case (BC.pack op,(k,priv,constr,acstate)) of
@@ -95,30 +95,10 @@ index dbb4ea216aa9b23951dff8e1fc53873b8c5f809e..dfccca27d6ca0cab6ea4252c2080ff53
        (_,(_,_,_,IsAC)) -> return $ fAppAC (ACfct (BC.pack op, (priv,constr,ndcstate))) ts
      --return $ app (BC.pack op, (k,priv,constr)) ts
 diff --git a/lib/theory/src/Theory/Text/Parser/Token.hs b/lib/theory/src/Theory/Text/Parser/Token.hs
-index 1aee18cb72ac78e8662b0f03b55aacfb9240ffd7..207ec69e5ee12ac4e6a633adb61437013c3465fc 100644
+index 4678eece436ab75493faa70331dd0bbe16d64d81..8ea44f882f1982fb99ce6080799ccb988decca50 100644
 --- a/lib/theory/src/Theory/Text/Parser/Token.hs
 +++ b/lib/theory/src/Theory/Text/Parser/Token.hs
-@@ -12,6 +12,7 @@ module Theory.Text.Parser.Token (
-   -- * Symbols
-   , symbol
-   , symbol_
-+  , reserved
-   , dot
-   , comma
-   , colon
-@@ -276,6 +277,11 @@ symbol sym = try (T.symbol spthy sym) <?> ("\"" ++ sym ++ "\"")
- symbol_ :: String -> Parser ()
- symbol_ = void . symbol
- 
-+-- | Parse a keyword, i.e. a symbol that must not be followed by an
-+-- identifier character (so @end@ does not match a prefix of @endrule@).
-+reserved :: String -> Parser ()
-+reserved = T.reserved spthy
-+
- -- | Between braces.
- braced :: Parser a -> Parser a
- braced = T.braces spthy
-@@ -506,7 +512,11 @@ lvarNoSuffix = sortedLVarNoSuffix [minBound..]
+@@ -513,7 +513,11 @@ lvarNoSuffix = sortedLVarNoSuffix [minBound..]
  sapicvar :: Parser SapicLVar
  sapicvar = do
          v <- lvarNoSuffix
@@ -132,10 +112,10 @@ index 1aee18cb72ac78e8662b0f03b55aacfb9240ffd7..207ec69e5ee12ac4e6a633adb6143701
  
  sapicpatternvar :: Parser PatternSapicLVar
 diff --git a/lib/theory/src/TheoryObject.hs b/lib/theory/src/TheoryObject.hs
-index 743d03f16650ce0e943d478d695d67d8870877b3..66d3732a196220d2d652353fa0bb3cb170af0348 100644
+index 67862202fe178f2a8c89d89507f5908224811885..bec6c341d2034393852522a66f73edd3ae15be7e 100644
 --- a/lib/theory/src/TheoryObject.hs
 +++ b/lib/theory/src/TheoryObject.hs
-@@ -898,7 +898,10 @@ prettyRestriction rstr =
+@@ -901,7 +901,10 @@ prettyRestriction rstr =
              _ -> emptyDoc)
    where
      Restriction _ expandedFormula ogFormula = rstr
@@ -147,7 +127,7 @@ index 743d03f16650ce0e943d478d695d67d8870877b3..66d3732a196220d2d652353fa0bb3cb1
  
  -- | Pretty print an either restriction.
  prettyEitherRestriction :: (HighlightDocument d) => (Side, Restriction) -> d
-@@ -913,7 +916,10 @@ prettyEitherRestriction (s, rstr) =
+@@ -916,7 +919,10 @@ prettyEitherRestriction (s, rstr) =
              _ -> emptyDoc
    where
      Restriction _ expandedFormula ogFormula = rstr

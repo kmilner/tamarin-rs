@@ -25,45 +25,40 @@ text{* the abstract state after partial evaluation contains 5 facts:
 
 5. In( z )
 
-This abstract state results in 3 refined multiset rewriting rules.
+This abstract state results in 2 refined multiset rewriting rules.
+Kept 1 original rule families to preserve their variants on export.
 Note that the original number of multiset rewriting rules was 3.
 
 *}
 
+rule (modulo E) Register:
+   [ Fr( ~ltk.2 ) ] --> [ !Ltk( $A, ~ltk.2 ), !Pk( $A, pk(~ltk.2) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Send___VARIANT_1:
+   [ Fr( ~k.1 ), !Pk( $S, pk(~ltk.2) ) ]
+  -->
+   [ Out( aenc(~k.1, pk(~ltk.2)) ) ]
+
+  /* has exactly the trivial AC variant */
+
 rule (modulo E) Recv:
-   [ !Ltk( $S, ~ltkS.1 ), In( c.2 ) ]
-  --[ Got( $S, unwrap(c.2, ~ltkS.1) ) ]->
-   [ Out( unwrap(c.2, ~ltkS.1) ) ]
+   [ !Ltk( $S, ~ltkS ), In( c ) ]
+  --[ Got( $S, unwrap(c, ~ltkS) ) ]->
+   [ Out( unwrap(c, ~ltkS) ) ]
 
   /*
   rule (modulo AC) Recv:
      [ !Ltk( $S, ~ltkS ), In( c ) ] --[ Got( $S, h(z) ) ]-> [ Out( h(z) ) ]
     variants (modulo AC)
-    1. ~ltkS = ~x.7
-       c     = aenc(x.8, pk(~x.7))
-       z     = x.8
+    1. ~ltkS = ~ltkS.5
+       c     = c.5
+       z     = adec(c.5, ~ltkS.5)
     
-    2. ~ltkS = ~ltkS.8
-       c     = c.9
-       z     = adec(c.9, ~ltkS.8)
-  */
-
-rule (modulo E) Register:
-   [ Fr( ~ltk.2 ) ] --> [ !Ltk( $A, ~ltk.2 ), !Pk( $A, pk(~ltk.2) ) ]
-
-  /*
-  rule (modulo AC) Register:
-     [ Fr( ~ltk ) ] --> [ !Ltk( $A, ~ltk ), !Pk( $A, pk(~ltk) ) ]
-  */
-
-rule (modulo E) Send:
-   [ Fr( ~k.1 ), !Pk( $S, pk(~ltk.2) ) ]
-  -->
-   [ Out( encrypt(~k.1, pk(~ltk.2)) ) ]
-
-  /*
-  rule (modulo AC) Send:
-     [ Fr( ~k ), !Pk( $S, pk(~ltk) ) ] --> [ Out( aenc(~k, pk(~ltk)) ) ]
+    2. ~ltkS = ~x.5
+       c     = aenc(x.6, pk(~x.5))
+       z     = x.6
   */
 
 lemma Reachable:

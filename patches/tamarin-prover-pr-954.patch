@@ -1,0 +1,3555 @@
+diff --git a/Makefile b/Makefile
+index 1ed2125d3d771a1eb82b4366c2b838203a8506b3..446473d8d9c552ddab8f7ae5d5d7a6fd60654adc 100644
+--- a/Makefile
++++ b/Makefile
+@@ -144,7 +144,7 @@ csf12-case-studies:	$(CSF12_CS_TARGETS)
+ case-studies$(SUBDIR)%_analyzed.spthy:	examples/%.spthy $(TAMARIN)
+ 	mkdir -p $(dir $@)
+ 	# Use -N3, as the fourth core is used by the OS and the console
+-	$(TAMARIN) $< --prove --stop-on-trace=dfs -d=0 +RTS -N3 -RTS -o$<.tmp >$<.out
++	$(TAMARIN) $< --prove --stop-on-trace=dfs -d=0 $(TRACE_EXTRA_ARGS) +RTS -N3 -RTS -o$<.tmp >$<.out
+ 	# We only produce the target after the run, otherwise aborted
+ 	# runs already 'finish' the case.
+ 	printf "\n/* Output\n" >>$<.tmp
+@@ -483,10 +483,20 @@ accountability-case-studies:	$(ACCOUNTABILITY_CS_TARGETS)
+ ##########################
+ 
+ FAST_REGRESSION_CASE_STUDIES=issue446-1.spthy issue446-2.spthy issue753-4.spthy issue753-5.spthy issue753-6.spthy issue834.spthy issue777.spthy issue770.spthy issue914.spthy negated-equivalence.spthy
++COMMON_REGRESSION_CASE_STUDIES=soundness-manual-variants-complete.spthy soundness-partial-evaluation-variants.spthy partial-evaluation-export.spthy partial-evaluation-collision.spthy
++COMMON_REGRESSION_CASE_STUDIES+=manual-variant-auto-sources-roundtrip.spthy
++case-studies$(SUBDIR)regression/trace/manual-variant-auto-sources-roundtrip_analyzed.spthy: TRACE_EXTRA_ARGS=--auto-sources
++COMMON_REGRESSION_CASE_STUDIES+=covered-product-export.spthy
++FAST_REGRESSION_CASE_STUDIES+=$(COMMON_REGRESSION_CASE_STUDIES)
+ FAST_REGRESSION_TARGETS=$(subst .spthy,_analyzed.spthy,$(addprefix case-studies$(SUBDIR)regression/trace/,$(FAST_REGRESSION_CASE_STUDIES)))
+ 
+ 
++case-studies$(SUBDIR)regression/trace/soundness-partial-evaluation-variants_analyzed.spthy: TRACE_EXTRA_ARGS=--partial-evaluation=summary
++case-studies$(SUBDIR)regression/trace/partial-evaluation-export_analyzed.spthy: TRACE_EXTRA_ARGS=--partial-evaluation=summary
++case-studies$(SUBDIR)regression/trace/partial-evaluation-collision_analyzed.spthy: TRACE_EXTRA_ARGS=--partial-evaluation=summary
++
+ REGRESSION_CASE_STUDIES=issue216.spthy issue193.spthy issue310.spthy issue519.spthy issue527.spthy issue515.spthy
++REGRESSION_CASE_STUDIES+=$(COMMON_REGRESSION_CASE_STUDIES)
+ REGRESSION_TARGETS=$(subst .spthy,_analyzed.spthy,$(addprefix case-studies$(SUBDIR)regression/trace/,$(REGRESSION_CASE_STUDIES)))
+ 
+ SEQDFS_CASE_STUDIES=seqdfsneeded.spthy
+diff --git a/case-studies-regression/fast-tests/regression/trace/covered-product-export_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/covered-product-export_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..b22475691280775a159c6a7a1597251b9929c798
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/covered-product-export_analyzed.spthy
+@@ -0,0 +1,60 @@
++theory CoveredProductExport
++
++begin
++
++// Function signature and definition of the equational theory E
++
++builtins: diffie-hellman
++functions: fst/1, pair/2, snd/1
++equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++rule (modulo E) Emit:
++   [ ] --[ Power( 'g'^'a'^'b' ) ]-> [ ]
++ variants
++  rule (modulo AC) Emit___VARIANT_1:
++     [ ] --[ Power( 'g'^('a'*'b') ), Added( ('a'*'b') ) ]-> [ ]
++
++lemma witness:
++  exists-trace "∃ x y #i. (Power( x ) @ #i) ∧ (Added( y ) @ #i)"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ x y #i. (Power( x ) @ #i) ∧ (Added( y ) @ #i)"
++*/
++simplify
++SOLVED // trace found
++
++lemma no_added:
++  all-traces "∀ x #i. (Added( x ) @ #i) ⇒ (⊥)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x #i. (Added( x ) @ #i)"
++*/
++simplify
++SOLVED // trace found
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/covered-product-export.spthy
++
++  output:          examples/regression/trace/covered-product-export.spthy.tmp
++  processing time: 0.15s
++  
++  witness (exists-trace): verified (2 steps)
++  no_added (all-traces): falsified - found trace (2 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/fast-tests/regression/trace/manual-variant-auto-sources-roundtrip_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/manual-variant-auto-sources-roundtrip_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..4e6104112f34383eb27f1144bd3178a3ad5c502a
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/manual-variant-auto-sources-roundtrip_analyzed.spthy
+@@ -0,0 +1,151 @@
++theory ManualVariantAutoSourcesRoundtrip
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, sdec/2, senc/2, snd/1
++equations:
++    fst(<x.1, x.2>) = x.1,
++    sdec(senc(x.1, x.2), x.2) = x.1,
++    snd(<x.1, x.2>) = x.2
++
++macros: identity( x ) =  x
++
++rule (modulo E) Emit:
++   [ In( <x, x> ), In( k ) ]
++  --[ Original( sdec(x, k) ) ]->
++   [ Out( sdec(x, k) ) ]
++ variants
++  rule (modulo AC) Emit___VARIANT_1:
++     [ In( <cipher, cipher> ), In( key ) ]
++    --[ Original( sdec(cipher, key) ), Added( 'a' ) ]->
++     [ Out( sdec(cipher, key) ) ]
++  ,
++  rule (modulo AC) Emit___VARIANT_2:
++     [ In( <senc(plain, key), senc(plain, key)> ), In( key ) ]
++    --[
++    AUTO_IN_TERM_0_0_1_0__Emit___VARIANT_2( senc(plain, key), plain ),
++    AUTO_IN_TERM_0_0_0_0__Emit___VARIANT_2( senc(plain, key), plain ),
++    Original( plain ), Added( 'a' )
++    ]->
++     [ Out( plain ) ]
++
++lemma witness:
++  exists-trace "∃ #i. Added( 'a' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Added( 'a' ) @ #i)"
++*/
++simplify
++solve( Added( 'a' ) @ #i )
++  case Emit___VARIANT_1
++  SOLVED // trace found
++qed
++
++lemma false_safety:
++  all-traces "∀ #i. (Added( 'a' ) @ #i) ⇒ (⊥)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ #i. (Added( 'a' ) @ #i)"
++*/
++simplify
++solve( Added( 'a' ) @ #i )
++  case Emit___VARIANT_1
++  SOLVED // trace found
++qed
++
++lemma AUTO_typing [sources]:
++  all-traces
++  "((⊤) ∧
++    (∀ x m #i.
++      (AUTO_IN_TERM_0_0_0_0__Emit___VARIANT_2( m, x ) @ #i) ⇒
++      (∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)))) ∧
++   (∀ x m #i.
++     (AUTO_IN_TERM_0_0_1_0__Emit___VARIANT_2( m, x ) @ #i) ⇒
++     (∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)))"
++/*
++guarded formula characterizing all counter-examples:
++"((∃ x m #i.
++    (AUTO_IN_TERM_0_0_0_0__Emit___VARIANT_2( m, x ) @ #i)
++   ∧
++    ∀ #j. (!KU( x ) @ #j) ⇒ ¬(#j < #i)) ∨
++  (∃ x m #i.
++    (AUTO_IN_TERM_0_0_1_0__Emit___VARIANT_2( m, x ) @ #i)
++   ∧
++    ∀ #j. (!KU( x ) @ #j) ⇒ ¬(#j < #i)))"
++*/
++induction
++  case empty_trace
++  by contradiction /* from formulas */
++next
++  case non_empty_trace
++  solve( (∃ x m #i.
++           (AUTO_IN_TERM_0_0_0_0__Emit___VARIANT_2( m, x ) @ #i)
++          ∧
++           ∀ #j. (!KU( x ) @ #j) ⇒ ¬(#j < #i))  ∥
++         (∃ x m #i.
++           (AUTO_IN_TERM_0_0_1_0__Emit___VARIANT_2( m, x ) @ #i)
++          ∧
++           ∀ #j. (!KU( x ) @ #j) ⇒ ¬(#j < #i)) )
++    case case_1
++    solve( (last(#i))  ∥
++           (∃ #j. (!KU( x ) @ #j) ∧ (¬(last(#j))) ∧ (#j < #i)) )
++      case case_1
++      solve( !KU( senc(x, key) ) @ #vk.1 )
++        case Emit___VARIANT_2
++        by contradiction /* cyclic */
++      next
++        case c_senc
++        by contradiction /* from formulas */
++      qed
++    next
++      case case_2
++      by contradiction /* from formulas */
++    qed
++  next
++    case case_2
++    solve( (last(#i))  ∥
++           (∃ #j. (!KU( x ) @ #j) ∧ (¬(last(#j))) ∧ (#j < #i)) )
++      case case_1
++      solve( !KU( senc(x, key) ) @ #vk.1 )
++        case Emit___VARIANT_2
++        by contradiction /* cyclic */
++      next
++        case c_senc
++        by contradiction /* from formulas */
++      qed
++    next
++      case case_2
++      by contradiction /* from formulas */
++    qed
++  qed
++qed
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy
++
++  output:          examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy.tmp
++  processing time: 0.18s
++  
++  witness (exists-trace): verified (3 steps)
++  false_safety (all-traces): falsified - found trace (3 steps)
++  AUTO_typing (all-traces): verified (13 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/fast-tests/regression/trace/partial-evaluation-collision_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/partial-evaluation-collision_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..70e200979fe94ca5773c74cc7979394a82afdfce
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/partial-evaluation-collision_analyzed.spthy
+@@ -0,0 +1,89 @@
++theory PartialEvaluationCollision
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, sdec/2, senc/2, snd/1
++equations:
++    fst(<x.1, x.2>) = x.1,
++    sdec(senc(x.1, x.2), x.2) = x.1,
++    snd(<x.1, x.2>) = x.2
++
++text{* the abstract state after partial evaluation contains 3 facts:
++
++1. Fr( ~z )
++
++2. Out( z )
++
++3. In( z )
++
++This abstract state results in 1 refined multiset rewriting rules.
++Kept 1 original rule families to preserve their variants on export.
++Note that the original number of multiset rewriting rules was 2.
++
++*}
++
++rule (modulo E) Dec:
++   [ In( x ) ] --> [ Out( sdec(x, 'k') ) ]
++
++  /*
++  rule (modulo AC) Dec:
++     [ In( x ) ] --> [ Out( z ) ]
++    variants (modulo AC)
++    1. x     = x.3
++       z     = sdec(x.3, 'k')
++    
++    2. x     = senc(x.3, 'k')
++       z     = x.3
++  */
++
++rule (modulo E) Dec___VARIANT_2:
++   [ ] --[ Marker( ) ]-> [ ]
++
++  /* has exactly the trivial AC variant */
++
++lemma reachable:
++  exists-trace "∃ #i. Marker( ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Marker( ) @ #i)"
++*/
++simplify
++SOLVED // trace found
++
++lemma false_safety:
++  all-traces "¬(∃ #i. Marker( ) @ #i)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ #i. (Marker( ) @ #i)"
++*/
++simplify
++SOLVED // trace found
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/partial-evaluation-collision.spthy
++
++  output:          examples/regression/trace/partial-evaluation-collision.spthy.tmp
++  processing time: 0.08s
++  
++  reachable (exists-trace): verified (2 steps)
++  false_safety (all-traces): falsified - found trace (2 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/fast-tests/regression/trace/partial-evaluation-export_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/partial-evaluation-export_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..445b995d6de860aeff7c6f8f07e0adae2789a1aa
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/partial-evaluation-export_analyzed.spthy
+@@ -0,0 +1,291 @@
++theory PartialEvaluationExport
++
++begin
++
++// Function signature and definition of the equational theory E
++
++builtins: natural-numbers
++functions: fst/1, pair/2, sdec/2, senc/2, snd/1
++equations:
++    fst(<x.1, x.2>) = x.1,
++    sdec(senc(x.1, x.2), x.2) = x.1,
++    snd(<x.1, x.2>) = x.2
++
++macros: identity( x ) =  x
++
++text{* the abstract state after partial evaluation contains 9 facts:
++
++1. !Key( ~k )
++
++2. NaturalState( %x )
++
++3. NaturalState( %z )
++
++4. NaturalState( %1 )
++
++5. State( 'a' )
++
++6. State( 'b' )
++
++7. Fr( ~z )
++
++8. Out( z )
++
++9. In( z )
++
++This abstract state results in 11 refined multiset rewriting rules.
++Kept 1 original rule families to preserve their variants on export.
++Note that the original number of multiset rewriting rules was 11.
++
++*}
++
++rule (modulo E) Key:
++   [ Fr( ~k ) ] --> [ !Key( ~k ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Secret:
++   [ Fr( ~m.1 ), !Key( ~k ) ]
++  --[ Secret( ~m.1 ) ]->
++   [ Out( senc(~m.1, ~k) ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Dec:
++   [ In( x ), !Key( k ) ] --> [ Out( sdec(x, k) ) ]
++ variants
++  rule (modulo AC) Dec___VARIANT_2:
++     [ In( senc(z.2, k.1) ), !Key( k.1 ) ]
++    --[ Decrypted( z.2 ) ]->
++     [ Out( z.2 ) ]
++  ,
++  rule (modulo AC) Dec___VARIANT_1:
++     [ In( x.2 ), !Key( k.1 ) ]
++    --[ Unreduced( sdec(x.2, k.1) ) ]->
++     [ Out( sdec(x.2, k.1) ) ]
++
++lemma unreduced_secret:
++  exists-trace "∃ m #i #j. (Secret( m ) @ #i) ∧ (Unreduced( m ) @ #j)"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ m #i #j. (Secret( m ) @ #i) ∧ (Unreduced( m ) @ #j)"
++*/
++by simplify
++
++lemma decrypted_reachable:
++  exists-trace "∃ m #i. Decrypted( m ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ m #i. (Decrypted( m ) @ #i)"
++*/
++simplify
++solve( !Key( k ) ▶₁ #i )
++  case Key
++  solve( !KU( senc(m, ~k) ) @ #vk )
++    case Secret
++    SOLVED // trace found
++  qed
++qed
++
++lemma unreduced_reachable:
++  exists-trace "∃ m #i. Unreduced( m ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ m #i. (Unreduced( m ) @ #i)"
++*/
++simplify
++solve( !Key( k ) ▶₁ #i )
++  case Key
++  SOLVED // trace found
++qed
++
++rule (modulo E) SeedA:
++   [ ] --> [ State( 'a' ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) SeedB:
++   [ ] --> [ State( 'b' ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Use:
++   [ State( 'a' ) ] --[ Used( 'a' ) ]-> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Use_PE_2:
++   [ State( 'b' ) ] --[ Used( 'b' ) ]-> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Use_PE_1:
++   [ ] --[ ReservedName( ) ]-> [ ]
++
++  /* has exactly the trivial AC variant */
++
++lemma pruned_family_unreachable:
++  exists-trace "∃ #i. Pruned( ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Pruned( ) @ #i)"
++*/
++simplify
++by solve( Pruned( ) @ #i )
++
++lemma first_specialization_reachable:
++  exists-trace "∃ #i. Used( 'a' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Used( 'a' ) @ #i)"
++*/
++simplify
++solve( Used( 'a' ) @ #i )
++  case Use
++  solve( State( 'a' ) ▶₀ #i )
++    case SeedA
++    SOLVED // trace found
++  qed
++qed
++
++lemma second_specialization_reachable:
++  exists-trace "∃ #i. Used( 'b' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Used( 'b' ) @ #i)"
++*/
++simplify
++solve( Used( 'b' ) @ #i )
++  case Use_PE_2
++  solve( State( 'b' ) ▶₀ #i )
++    case SeedB
++    SOLVED // trace found
++  qed
++qed
++
++lemma existing_rule_reachable:
++  exists-trace "∃ #i. ReservedName( ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (ReservedName( ) @ #i)"
++*/
++simplify
++SOLVED // trace found
++
++rule (modulo E) NaturalSeedOne:
++   [ ] --> [ NaturalState( %1 ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) NaturalSeedTwo:
++   [ ] --> [ NaturalState( (%1%+%1) ) ]
++
++  /* has exactly the trivial AC variant */
++
++restriction Restr_NaturalUse_1:
++  "∀ x #NOW. (Restr_NaturalUse_1( x ) @ #NOW) ⇒ (x ⊏ (%1%+%1))"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ x #NOW. (Restr_NaturalUse_1( x ) @ #NOW) ⇒ (x ⊏ (%1%+%1))"
++  */
++
++rule (modulo E) NaturalUse___VARIANT_1:
++   [ NaturalState( %x ) ]
++  --[ NaturalUsed( %x ), Restr_NaturalUse_1( %x ) ]->
++   [ NaturalState( %x ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) NaturalUse___VARIANT_1_PE_1:
++   [ NaturalState( %1 ) ]
++  --[ NaturalUsed( %1 ), Restr_NaturalUse_1( %1 ) ]->
++   [ NaturalState( %1 ) ]
++
++  /* has exactly the trivial AC variant */
++
++lemma embedded_restriction_first:
++  exists-trace "∃ #i. NaturalUsed( %1 ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (NaturalUsed( %1 ) @ #i)"
++*/
++simplify
++solve( NaturalUsed( %1 ) @ #i )
++  case NaturalUse___VARIANT_1
++  solve( NaturalState( %1 ) ▶₀ #i )
++    case NaturalSeedOne
++    SOLVED // trace found
++  qed
++qed
++
++lemma embedded_restriction_second:
++  exists-trace "∃ #i. NaturalUsed( (%1%+%1) ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (NaturalUsed( (%1%+%1) ) @ #i)"
++*/
++simplify
++solve( NaturalUsed( (%1%+%1) ) @ #i )
++  case NaturalUse___VARIANT_1
++  by contradiction /* contradictory subterm store */
++qed
++
++lemma embedded_restriction_repeated:
++  exists-trace
++  "∃ x #i #j.
++    ((NaturalUsed( x ) @ #i) ∧ (NaturalUsed( x ) @ #j)) ∧ (#i < #j)"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ x #i #j. (NaturalUsed( x ) @ #i) ∧ (NaturalUsed( x ) @ #j) ∧ #i < #j"
++*/
++simplify
++solve( NaturalUsed( x ) @ #i )
++  case NaturalUse___VARIANT_1
++  solve( NaturalUsed( %1 ) @ #j )
++    case NaturalUse___VARIANT_1
++    solve( NaturalState( %1 ) ▶₀ #i )
++      case NaturalSeedOne
++      solve( NaturalState( %1 ) ▶₀ #j )
++        case NaturalSeedOne
++        SOLVED // trace found
++      qed
++    qed
++  qed
++qed
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/partial-evaluation-export.spthy
++
++  output:          examples/regression/trace/partial-evaluation-export.spthy.tmp
++  processing time: 0.25s
++  
++  unreduced_secret (exists-trace): falsified - no trace found (1 steps)
++  decrypted_reachable (exists-trace): verified (4 steps)
++  unreduced_reachable (exists-trace): verified (3 steps)
++  pruned_family_unreachable (exists-trace): falsified - no trace found (2 steps)
++  first_specialization_reachable (exists-trace): verified (4 steps)
++  second_specialization_reachable (exists-trace): verified (4 steps)
++  existing_rule_reachable (exists-trace): verified (2 steps)
++  embedded_restriction_first (exists-trace): verified (4 steps)
++  embedded_restriction_second (exists-trace): falsified - no trace found (3 steps)
++  embedded_restriction_repeated (exists-trace): verified (6 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/fast-tests/regression/trace/soundness-manual-variants-complete_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/soundness-manual-variants-complete_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..842b20e57f48073045b205ef48908f7629c699ad
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/soundness-manual-variants-complete_analyzed.spthy
+@@ -0,0 +1,103 @@
++theory SoundnessManualVariantsComplete
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, sdec/2, senc/2, snd/1
++equations:
++    fst(<x.1, x.2>) = x.1,
++    sdec(senc(x.1, x.2), x.2) = x.1,
++    snd(<x.1, x.2>) = x.2
++
++rule (modulo E) Key:
++   [ Fr( ~k ) ] --> [ !Key( ~k ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Secret:
++   [ Fr( ~m ), !Key( ~k ) ] --[ Secret( ~m ) ]-> [ Out( senc(~m, ~k) ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Dec:
++   [ In( x ), !Key( k ) ] --> [ Out( sdec(x, k) ) ]
++ variants
++  rule (modulo AC) Dec___VARIANT_2:
++     [ In( senc(z.2, k.1) ), !Key( k.1 ) ]
++    --[ Decrypted( z.2 ) ]->
++     [ Out( z.2 ) ]
++  ,
++  rule (modulo AC) Dec___VARIANT_1:
++     [ In( x.2 ), !Key( k.1 ) ]
++    --[ Decrypted( sdec(x.2, k.1) ) ]->
++     [ Out( sdec(x.2, k.1) ) ]
++
++lemma secrecy:
++  all-traces "∀ m #i. (Secret( m ) @ #i) ⇒ (¬(∃ #j. K( m ) @ #j))"
++/*
++guarded formula characterizing all counter-examples:
++"∃ m #i. (Secret( m ) @ #i) ∧ ∃ #j. (K( m ) @ #j)"
++*/
++simplify
++solve( !Key( ~k ) ▶₁ #i )
++  case Key
++  solve( !KU( ~m ) @ #vk )
++    case Dec___VARIANT_2
++    solve( !KU( senc(t, ~k.1) ) @ #vk.1 )
++      case Secret
++      solve( (#vl, 0) ~~> (#vk, 0) )
++        case Var_fresh_1_m
++        SOLVED // trace found
++      qed
++    qed
++  qed
++qed
++
++lemma annotated_variant_reachable:
++  exists-trace "∃ m #i #j. (Secret( m ) @ #i) ∧ (Decrypted( m ) @ #j)"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ m #i #j. (Secret( m ) @ #i) ∧ (Decrypted( m ) @ #j)"
++*/
++simplify
++solve( !Key( ~k ) ▶₁ #i )
++  case Key
++  solve( Decrypted( ~m ) @ #j )
++    case Dec___VARIANT_2
++    solve( !Key( k.1 ) ▶₁ #j )
++      case Key
++      solve( !KU( senc(~m, ~k.1) ) @ #vk )
++        case Secret
++        SOLVED // trace found
++      qed
++    qed
++  qed
++qed
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/soundness-manual-variants-complete.spthy
++
++  output:          examples/regression/trace/soundness-manual-variants-complete.spthy.tmp
++  processing time: 0.26s
++  
++  secrecy (all-traces): falsified - found trace (6 steps)
++  annotated_variant_reachable (exists-trace): verified (6 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/fast-tests/regression/trace/soundness-partial-evaluation-variants_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/soundness-partial-evaluation-variants_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..a32b54e2452dd1478e72df6183d97496b4282787
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/soundness-partial-evaluation-variants_analyzed.spthy
+@@ -0,0 +1,108 @@
++theory SoundnessPartialEvaluationVariants
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: c/1, d/1, fst/1, pair/2, snd/1
++equations: d(c(x)) = x, fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++text{* the abstract state after partial evaluation contains 3 facts:
++
++1. State( 'ok' )
++
++2. Fr( ~z )
++
++3. In( z )
++
++This abstract state results in 2 refined multiset rewriting rules.
++Note that the original number of multiset rewriting rules was 2.
++
++*}
++
++rule (modulo E) Seed:
++   [ ] --> [ State( 'ok' ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) UseModuloE___VARIANT_1:
++   [ State( 'ok' ) ] --[ UsedModuloE( ), UsedImportedVariant( ) ]-> [ ]
++
++  /* has exactly the trivial AC variant */
++
++lemma e_variant_reachable:
++  exists-trace "∃ #i. UsedModuloE( ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (UsedModuloE( ) @ #i)"
++*/
++simplify
++solve( State( 'ok' ) ▶₀ #i )
++  case Seed
++  SOLVED // trace found
++qed
++
++lemma e_variant_not_unreachable:
++  all-traces "¬(∃ #i. UsedModuloE( ) @ #i)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ #i. (UsedModuloE( ) @ #i)"
++*/
++simplify
++solve( State( 'ok' ) ▶₀ #i )
++  case Seed
++  SOLVED // trace found
++qed
++
++lemma imported_variant_reachable:
++  exists-trace "∃ #i. UsedImportedVariant( ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (UsedImportedVariant( ) @ #i)"
++*/
++simplify
++solve( State( 'ok' ) ▶₀ #i )
++  case Seed
++  SOLVED // trace found
++qed
++
++lemma imported_variant_not_unreachable:
++  all-traces "¬(∃ #i. UsedImportedVariant( ) @ #i)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ #i. (UsedImportedVariant( ) @ #i)"
++*/
++simplify
++solve( State( 'ok' ) ▶₀ #i )
++  case Seed
++  SOLVED // trace found
++qed
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/soundness-partial-evaluation-variants.spthy
++
++  output:          examples/regression/trace/soundness-partial-evaluation-variants.spthy.tmp
++  processing time: 0.08s
++  
++  e_variant_reachable (exists-trace): verified (3 steps)
++  e_variant_not_unreachable (all-traces): falsified - found trace (3 steps)
++  imported_variant_reachable (exists-trace): verified (3 steps)
++  imported_variant_not_unreachable (all-traces): falsified - found trace (3 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/regression/trace/covered-product-export_analyzed.spthy b/case-studies-regression/regression/trace/covered-product-export_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..948a40b4dd91b9921867e74d8de7d45020cb52ae
+--- /dev/null
++++ b/case-studies-regression/regression/trace/covered-product-export_analyzed.spthy
+@@ -0,0 +1,60 @@
++theory CoveredProductExport
++
++begin
++
++// Function signature and definition of the equational theory E
++
++builtins: diffie-hellman
++functions: fst/1, pair/2, snd/1
++equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++rule (modulo E) Emit:
++   [ ] --[ Power( 'g'^'a'^'b' ) ]-> [ ]
++ variants
++  rule (modulo AC) Emit___VARIANT_1:
++     [ ] --[ Power( 'g'^('a'*'b') ), Added( ('a'*'b') ) ]-> [ ]
++
++lemma witness:
++  exists-trace "∃ x y #i. (Power( x ) @ #i) ∧ (Added( y ) @ #i)"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ x y #i. (Power( x ) @ #i) ∧ (Added( y ) @ #i)"
++*/
++simplify
++SOLVED // trace found
++
++lemma no_added:
++  all-traces "∀ x #i. (Added( x ) @ #i) ⇒ (⊥)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x #i. (Added( x ) @ #i)"
++*/
++simplify
++SOLVED // trace found
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/covered-product-export.spthy
++
++  output:          examples/regression/trace/covered-product-export.spthy.tmp
++  processing time: 0.10s
++  
++  witness (exists-trace): verified (2 steps)
++  no_added (all-traces): falsified - found trace (2 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/regression/trace/manual-variant-auto-sources-roundtrip_analyzed.spthy b/case-studies-regression/regression/trace/manual-variant-auto-sources-roundtrip_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..0bfa47db985fa0aa1d137bacb37e1cdfbbe4c00c
+--- /dev/null
++++ b/case-studies-regression/regression/trace/manual-variant-auto-sources-roundtrip_analyzed.spthy
+@@ -0,0 +1,151 @@
++theory ManualVariantAutoSourcesRoundtrip
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, sdec/2, senc/2, snd/1
++equations:
++    fst(<x.1, x.2>) = x.1,
++    sdec(senc(x.1, x.2), x.2) = x.1,
++    snd(<x.1, x.2>) = x.2
++
++macros: identity( x ) =  x
++
++rule (modulo E) Emit:
++   [ In( <x, x> ), In( k ) ]
++  --[ Original( sdec(x, k) ) ]->
++   [ Out( sdec(x, k) ) ]
++ variants
++  rule (modulo AC) Emit___VARIANT_1:
++     [ In( <cipher, cipher> ), In( key ) ]
++    --[ Original( sdec(cipher, key) ), Added( 'a' ) ]->
++     [ Out( sdec(cipher, key) ) ]
++  ,
++  rule (modulo AC) Emit___VARIANT_2:
++     [ In( <senc(plain, key), senc(plain, key)> ), In( key ) ]
++    --[
++    AUTO_IN_TERM_0_0_1_0__Emit___VARIANT_2( senc(plain, key), plain ),
++    AUTO_IN_TERM_0_0_0_0__Emit___VARIANT_2( senc(plain, key), plain ),
++    Original( plain ), Added( 'a' )
++    ]->
++     [ Out( plain ) ]
++
++lemma witness:
++  exists-trace "∃ #i. Added( 'a' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Added( 'a' ) @ #i)"
++*/
++simplify
++solve( Added( 'a' ) @ #i )
++  case Emit___VARIANT_1
++  SOLVED // trace found
++qed
++
++lemma false_safety:
++  all-traces "∀ #i. (Added( 'a' ) @ #i) ⇒ (⊥)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ #i. (Added( 'a' ) @ #i)"
++*/
++simplify
++solve( Added( 'a' ) @ #i )
++  case Emit___VARIANT_1
++  SOLVED // trace found
++qed
++
++lemma AUTO_typing [sources]:
++  all-traces
++  "((⊤) ∧
++    (∀ x m #i.
++      (AUTO_IN_TERM_0_0_0_0__Emit___VARIANT_2( m, x ) @ #i) ⇒
++      (∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)))) ∧
++   (∀ x m #i.
++     (AUTO_IN_TERM_0_0_1_0__Emit___VARIANT_2( m, x ) @ #i) ⇒
++     (∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)))"
++/*
++guarded formula characterizing all counter-examples:
++"((∃ x m #i.
++    (AUTO_IN_TERM_0_0_0_0__Emit___VARIANT_2( m, x ) @ #i)
++   ∧
++    ∀ #j. (!KU( x ) @ #j) ⇒ ¬(#j < #i)) ∨
++  (∃ x m #i.
++    (AUTO_IN_TERM_0_0_1_0__Emit___VARIANT_2( m, x ) @ #i)
++   ∧
++    ∀ #j. (!KU( x ) @ #j) ⇒ ¬(#j < #i)))"
++*/
++induction
++  case empty_trace
++  by contradiction /* from formulas */
++next
++  case non_empty_trace
++  solve( (∃ x m #i.
++           (AUTO_IN_TERM_0_0_0_0__Emit___VARIANT_2( m, x ) @ #i)
++          ∧
++           ∀ #j. (!KU( x ) @ #j) ⇒ ¬(#j < #i))  ∥
++         (∃ x m #i.
++           (AUTO_IN_TERM_0_0_1_0__Emit___VARIANT_2( m, x ) @ #i)
++          ∧
++           ∀ #j. (!KU( x ) @ #j) ⇒ ¬(#j < #i)) )
++    case case_1
++    solve( (last(#i))  ∥
++           (∃ #j. (!KU( x ) @ #j) ∧ (¬(last(#j))) ∧ (#j < #i)) )
++      case case_1
++      solve( !KU( senc(x, key) ) @ #vk.1 )
++        case Emit___VARIANT_2
++        by contradiction /* cyclic */
++      next
++        case c_senc
++        by contradiction /* from formulas */
++      qed
++    next
++      case case_2
++      by contradiction /* from formulas */
++    qed
++  next
++    case case_2
++    solve( (last(#i))  ∥
++           (∃ #j. (!KU( x ) @ #j) ∧ (¬(last(#j))) ∧ (#j < #i)) )
++      case case_1
++      solve( !KU( senc(x, key) ) @ #vk.1 )
++        case Emit___VARIANT_2
++        by contradiction /* cyclic */
++      next
++        case c_senc
++        by contradiction /* from formulas */
++      qed
++    next
++      case case_2
++      by contradiction /* from formulas */
++    qed
++  qed
++qed
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy
++
++  output:          examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy.tmp
++  processing time: 0.16s
++  
++  witness (exists-trace): verified (3 steps)
++  false_safety (all-traces): falsified - found trace (3 steps)
++  AUTO_typing (all-traces): verified (13 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/regression/trace/partial-evaluation-collision_analyzed.spthy b/case-studies-regression/regression/trace/partial-evaluation-collision_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..70e200979fe94ca5773c74cc7979394a82afdfce
+--- /dev/null
++++ b/case-studies-regression/regression/trace/partial-evaluation-collision_analyzed.spthy
+@@ -0,0 +1,89 @@
++theory PartialEvaluationCollision
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, sdec/2, senc/2, snd/1
++equations:
++    fst(<x.1, x.2>) = x.1,
++    sdec(senc(x.1, x.2), x.2) = x.1,
++    snd(<x.1, x.2>) = x.2
++
++text{* the abstract state after partial evaluation contains 3 facts:
++
++1. Fr( ~z )
++
++2. Out( z )
++
++3. In( z )
++
++This abstract state results in 1 refined multiset rewriting rules.
++Kept 1 original rule families to preserve their variants on export.
++Note that the original number of multiset rewriting rules was 2.
++
++*}
++
++rule (modulo E) Dec:
++   [ In( x ) ] --> [ Out( sdec(x, 'k') ) ]
++
++  /*
++  rule (modulo AC) Dec:
++     [ In( x ) ] --> [ Out( z ) ]
++    variants (modulo AC)
++    1. x     = x.3
++       z     = sdec(x.3, 'k')
++    
++    2. x     = senc(x.3, 'k')
++       z     = x.3
++  */
++
++rule (modulo E) Dec___VARIANT_2:
++   [ ] --[ Marker( ) ]-> [ ]
++
++  /* has exactly the trivial AC variant */
++
++lemma reachable:
++  exists-trace "∃ #i. Marker( ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Marker( ) @ #i)"
++*/
++simplify
++SOLVED // trace found
++
++lemma false_safety:
++  all-traces "¬(∃ #i. Marker( ) @ #i)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ #i. (Marker( ) @ #i)"
++*/
++simplify
++SOLVED // trace found
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/partial-evaluation-collision.spthy
++
++  output:          examples/regression/trace/partial-evaluation-collision.spthy.tmp
++  processing time: 0.08s
++  
++  reachable (exists-trace): verified (2 steps)
++  false_safety (all-traces): falsified - found trace (2 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/regression/trace/partial-evaluation-export_analyzed.spthy b/case-studies-regression/regression/trace/partial-evaluation-export_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..8529afeaa11aa97bed50978bdae1d2a533daa6fd
+--- /dev/null
++++ b/case-studies-regression/regression/trace/partial-evaluation-export_analyzed.spthy
+@@ -0,0 +1,291 @@
++theory PartialEvaluationExport
++
++begin
++
++// Function signature and definition of the equational theory E
++
++builtins: natural-numbers
++functions: fst/1, pair/2, sdec/2, senc/2, snd/1
++equations:
++    fst(<x.1, x.2>) = x.1,
++    sdec(senc(x.1, x.2), x.2) = x.1,
++    snd(<x.1, x.2>) = x.2
++
++macros: identity( x ) =  x
++
++text{* the abstract state after partial evaluation contains 9 facts:
++
++1. !Key( ~k )
++
++2. NaturalState( %x )
++
++3. NaturalState( %z )
++
++4. NaturalState( %1 )
++
++5. State( 'a' )
++
++6. State( 'b' )
++
++7. Fr( ~z )
++
++8. Out( z )
++
++9. In( z )
++
++This abstract state results in 11 refined multiset rewriting rules.
++Kept 1 original rule families to preserve their variants on export.
++Note that the original number of multiset rewriting rules was 11.
++
++*}
++
++rule (modulo E) Key:
++   [ Fr( ~k ) ] --> [ !Key( ~k ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Secret:
++   [ Fr( ~m.1 ), !Key( ~k ) ]
++  --[ Secret( ~m.1 ) ]->
++   [ Out( senc(~m.1, ~k) ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Dec:
++   [ In( x ), !Key( k ) ] --> [ Out( sdec(x, k) ) ]
++ variants
++  rule (modulo AC) Dec___VARIANT_2:
++     [ In( senc(z.2, k.1) ), !Key( k.1 ) ]
++    --[ Decrypted( z.2 ) ]->
++     [ Out( z.2 ) ]
++  ,
++  rule (modulo AC) Dec___VARIANT_1:
++     [ In( x.2 ), !Key( k.1 ) ]
++    --[ Unreduced( sdec(x.2, k.1) ) ]->
++     [ Out( sdec(x.2, k.1) ) ]
++
++lemma unreduced_secret:
++  exists-trace "∃ m #i #j. (Secret( m ) @ #i) ∧ (Unreduced( m ) @ #j)"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ m #i #j. (Secret( m ) @ #i) ∧ (Unreduced( m ) @ #j)"
++*/
++by simplify
++
++lemma decrypted_reachable:
++  exists-trace "∃ m #i. Decrypted( m ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ m #i. (Decrypted( m ) @ #i)"
++*/
++simplify
++solve( !Key( k ) ▶₁ #i )
++  case Key
++  solve( !KU( senc(m, ~k) ) @ #vk )
++    case Secret
++    SOLVED // trace found
++  qed
++qed
++
++lemma unreduced_reachable:
++  exists-trace "∃ m #i. Unreduced( m ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ m #i. (Unreduced( m ) @ #i)"
++*/
++simplify
++solve( !Key( k ) ▶₁ #i )
++  case Key
++  SOLVED // trace found
++qed
++
++rule (modulo E) SeedA:
++   [ ] --> [ State( 'a' ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) SeedB:
++   [ ] --> [ State( 'b' ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Use:
++   [ State( 'a' ) ] --[ Used( 'a' ) ]-> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Use_PE_2:
++   [ State( 'b' ) ] --[ Used( 'b' ) ]-> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Use_PE_1:
++   [ ] --[ ReservedName( ) ]-> [ ]
++
++  /* has exactly the trivial AC variant */
++
++lemma pruned_family_unreachable:
++  exists-trace "∃ #i. Pruned( ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Pruned( ) @ #i)"
++*/
++simplify
++by solve( Pruned( ) @ #i )
++
++lemma first_specialization_reachable:
++  exists-trace "∃ #i. Used( 'a' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Used( 'a' ) @ #i)"
++*/
++simplify
++solve( Used( 'a' ) @ #i )
++  case Use
++  solve( State( 'a' ) ▶₀ #i )
++    case SeedA
++    SOLVED // trace found
++  qed
++qed
++
++lemma second_specialization_reachable:
++  exists-trace "∃ #i. Used( 'b' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Used( 'b' ) @ #i)"
++*/
++simplify
++solve( Used( 'b' ) @ #i )
++  case Use_PE_2
++  solve( State( 'b' ) ▶₀ #i )
++    case SeedB
++    SOLVED // trace found
++  qed
++qed
++
++lemma existing_rule_reachable:
++  exists-trace "∃ #i. ReservedName( ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (ReservedName( ) @ #i)"
++*/
++simplify
++SOLVED // trace found
++
++rule (modulo E) NaturalSeedOne:
++   [ ] --> [ NaturalState( %1 ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) NaturalSeedTwo:
++   [ ] --> [ NaturalState( (%1%+%1) ) ]
++
++  /* has exactly the trivial AC variant */
++
++restriction Restr_NaturalUse_1:
++  "∀ x #NOW. (Restr_NaturalUse_1( x ) @ #NOW) ⇒ (x ⊏ (%1%+%1))"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ x #NOW. (Restr_NaturalUse_1( x ) @ #NOW) ⇒ (x ⊏ (%1%+%1))"
++  */
++
++rule (modulo E) NaturalUse___VARIANT_1:
++   [ NaturalState( %x ) ]
++  --[ NaturalUsed( %x ), Restr_NaturalUse_1( %x ) ]->
++   [ NaturalState( %x ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) NaturalUse___VARIANT_1_PE_1:
++   [ NaturalState( %1 ) ]
++  --[ NaturalUsed( %1 ), Restr_NaturalUse_1( %1 ) ]->
++   [ NaturalState( %1 ) ]
++
++  /* has exactly the trivial AC variant */
++
++lemma embedded_restriction_first:
++  exists-trace "∃ #i. NaturalUsed( %1 ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (NaturalUsed( %1 ) @ #i)"
++*/
++simplify
++solve( NaturalUsed( %1 ) @ #i )
++  case NaturalUse___VARIANT_1
++  solve( NaturalState( %1 ) ▶₀ #i )
++    case NaturalSeedOne
++    SOLVED // trace found
++  qed
++qed
++
++lemma embedded_restriction_second:
++  exists-trace "∃ #i. NaturalUsed( (%1%+%1) ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (NaturalUsed( (%1%+%1) ) @ #i)"
++*/
++simplify
++solve( NaturalUsed( (%1%+%1) ) @ #i )
++  case NaturalUse___VARIANT_1
++  by contradiction /* contradictory subterm store */
++qed
++
++lemma embedded_restriction_repeated:
++  exists-trace
++  "∃ x #i #j.
++    ((NaturalUsed( x ) @ #i) ∧ (NaturalUsed( x ) @ #j)) ∧ (#i < #j)"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ x #i #j. (NaturalUsed( x ) @ #i) ∧ (NaturalUsed( x ) @ #j) ∧ #i < #j"
++*/
++simplify
++solve( NaturalUsed( x ) @ #i )
++  case NaturalUse___VARIANT_1
++  solve( NaturalUsed( %1 ) @ #j )
++    case NaturalUse___VARIANT_1
++    solve( NaturalState( %1 ) ▶₀ #i )
++      case NaturalSeedOne
++      solve( NaturalState( %1 ) ▶₀ #j )
++        case NaturalSeedOne
++        SOLVED // trace found
++      qed
++    qed
++  qed
++qed
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/partial-evaluation-export.spthy
++
++  output:          examples/regression/trace/partial-evaluation-export.spthy.tmp
++  processing time: 0.24s
++  
++  unreduced_secret (exists-trace): falsified - no trace found (1 steps)
++  decrypted_reachable (exists-trace): verified (4 steps)
++  unreduced_reachable (exists-trace): verified (3 steps)
++  pruned_family_unreachable (exists-trace): falsified - no trace found (2 steps)
++  first_specialization_reachable (exists-trace): verified (4 steps)
++  second_specialization_reachable (exists-trace): verified (4 steps)
++  existing_rule_reachable (exists-trace): verified (2 steps)
++  embedded_restriction_first (exists-trace): verified (4 steps)
++  embedded_restriction_second (exists-trace): falsified - no trace found (3 steps)
++  embedded_restriction_repeated (exists-trace): verified (6 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/regression/trace/soundness-manual-variants-complete_analyzed.spthy b/case-studies-regression/regression/trace/soundness-manual-variants-complete_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..8fd27b78b7a368d4589330692e8efb6edaaeb2ee
+--- /dev/null
++++ b/case-studies-regression/regression/trace/soundness-manual-variants-complete_analyzed.spthy
+@@ -0,0 +1,103 @@
++theory SoundnessManualVariantsComplete
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, sdec/2, senc/2, snd/1
++equations:
++    fst(<x.1, x.2>) = x.1,
++    sdec(senc(x.1, x.2), x.2) = x.1,
++    snd(<x.1, x.2>) = x.2
++
++rule (modulo E) Key:
++   [ Fr( ~k ) ] --> [ !Key( ~k ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Secret:
++   [ Fr( ~m ), !Key( ~k ) ] --[ Secret( ~m ) ]-> [ Out( senc(~m, ~k) ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Dec:
++   [ In( x ), !Key( k ) ] --> [ Out( sdec(x, k) ) ]
++ variants
++  rule (modulo AC) Dec___VARIANT_2:
++     [ In( senc(z.2, k.1) ), !Key( k.1 ) ]
++    --[ Decrypted( z.2 ) ]->
++     [ Out( z.2 ) ]
++  ,
++  rule (modulo AC) Dec___VARIANT_1:
++     [ In( x.2 ), !Key( k.1 ) ]
++    --[ Decrypted( sdec(x.2, k.1) ) ]->
++     [ Out( sdec(x.2, k.1) ) ]
++
++lemma secrecy:
++  all-traces "∀ m #i. (Secret( m ) @ #i) ⇒ (¬(∃ #j. K( m ) @ #j))"
++/*
++guarded formula characterizing all counter-examples:
++"∃ m #i. (Secret( m ) @ #i) ∧ ∃ #j. (K( m ) @ #j)"
++*/
++simplify
++solve( !Key( ~k ) ▶₁ #i )
++  case Key
++  solve( !KU( ~m ) @ #vk )
++    case Dec___VARIANT_2
++    solve( !KU( senc(t, ~k.1) ) @ #vk.1 )
++      case Secret
++      solve( (#vl, 0) ~~> (#vk, 0) )
++        case Var_fresh_1_m
++        SOLVED // trace found
++      qed
++    qed
++  qed
++qed
++
++lemma annotated_variant_reachable:
++  exists-trace "∃ m #i #j. (Secret( m ) @ #i) ∧ (Decrypted( m ) @ #j)"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ m #i #j. (Secret( m ) @ #i) ∧ (Decrypted( m ) @ #j)"
++*/
++simplify
++solve( !Key( ~k ) ▶₁ #i )
++  case Key
++  solve( Decrypted( ~m ) @ #j )
++    case Dec___VARIANT_2
++    solve( !Key( k.1 ) ▶₁ #j )
++      case Key
++      solve( !KU( senc(~m, ~k.1) ) @ #vk )
++        case Secret
++        SOLVED // trace found
++      qed
++    qed
++  qed
++qed
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/soundness-manual-variants-complete.spthy
++
++  output:          examples/regression/trace/soundness-manual-variants-complete.spthy.tmp
++  processing time: 0.22s
++  
++  secrecy (all-traces): falsified - found trace (6 steps)
++  annotated_variant_reachable (exists-trace): verified (6 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/regression/trace/soundness-partial-evaluation-variants_analyzed.spthy b/case-studies-regression/regression/trace/soundness-partial-evaluation-variants_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..4f6c9cf0ae7233b8c6aca87afc782138391f1e35
+--- /dev/null
++++ b/case-studies-regression/regression/trace/soundness-partial-evaluation-variants_analyzed.spthy
+@@ -0,0 +1,108 @@
++theory SoundnessPartialEvaluationVariants
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: c/1, d/1, fst/1, pair/2, snd/1
++equations: d(c(x)) = x, fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++text{* the abstract state after partial evaluation contains 3 facts:
++
++1. State( 'ok' )
++
++2. Fr( ~z )
++
++3. In( z )
++
++This abstract state results in 2 refined multiset rewriting rules.
++Note that the original number of multiset rewriting rules was 2.
++
++*}
++
++rule (modulo E) Seed:
++   [ ] --> [ State( 'ok' ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) UseModuloE___VARIANT_1:
++   [ State( 'ok' ) ] --[ UsedModuloE( ), UsedImportedVariant( ) ]-> [ ]
++
++  /* has exactly the trivial AC variant */
++
++lemma e_variant_reachable:
++  exists-trace "∃ #i. UsedModuloE( ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (UsedModuloE( ) @ #i)"
++*/
++simplify
++solve( State( 'ok' ) ▶₀ #i )
++  case Seed
++  SOLVED // trace found
++qed
++
++lemma e_variant_not_unreachable:
++  all-traces "¬(∃ #i. UsedModuloE( ) @ #i)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ #i. (UsedModuloE( ) @ #i)"
++*/
++simplify
++solve( State( 'ok' ) ▶₀ #i )
++  case Seed
++  SOLVED // trace found
++qed
++
++lemma imported_variant_reachable:
++  exists-trace "∃ #i. UsedImportedVariant( ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (UsedImportedVariant( ) @ #i)"
++*/
++simplify
++solve( State( 'ok' ) ▶₀ #i )
++  case Seed
++  SOLVED // trace found
++qed
++
++lemma imported_variant_not_unreachable:
++  all-traces "¬(∃ #i. UsedImportedVariant( ) @ #i)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ #i. (UsedImportedVariant( ) @ #i)"
++*/
++simplify
++solve( State( 'ok' ) ▶₀ #i )
++  case Seed
++  SOLVED // trace found
++qed
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: 1deba9032cc30028eaaec5d255ae5012aa6aa168 (with uncommited changes), branch: msr-rule-handling
++Compiled at: 2026-09-25 19:05:11.301386967 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/soundness-partial-evaluation-variants.spthy
++
++  output:          examples/regression/trace/soundness-partial-evaluation-variants.spthy.tmp
++  processing time: 0.12s
++  
++  e_variant_reachable (exists-trace): verified (3 steps)
++  e_variant_not_unreachable (all-traces): falsified - found trace (3 steps)
++  imported_variant_reachable (exists-trace): verified (3 steps)
++  imported_variant_not_unreachable (all-traces): falsified - found trace (3 steps)
++
++==============================================================================
++*/
+diff --git a/examples/regression/negative/diff-side-products.spthy b/examples/regression/negative/diff-side-products.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..9d2288902a8808965cccc1090bcbef3cda5bd90b
+--- /dev/null
++++ b/examples/regression/negative/diff-side-products.spthy
+@@ -0,0 +1,31 @@
++theory DiffSideProducts
++begin
++builtins: diffie-hellman, hashing
++
++// The parent rules contain no products. Validation must inspect both explicit
++// sides, after expanding their macros. Otherwise these false absence claims
++// verify because multiplication outside exponents does not cancel here.
++// The control uses exponent terms directly, which remain supported.
++macros: value(x,y) = x*y
++
++#ifdef EXPONENTS
++rule LeftProduct: [In(x),In(y)] --> []
++left rule LeftProduct: [In(x),In(y)] --[LeftValue('g'^(x*y))]-> []
++right rule LeftProduct: [In(x),In(y)] --> []
++
++rule RightProduct: [In(x),In(y)] --> []
++left rule RightProduct: [In(x),In(y)] --> []
++right rule RightProduct: [In(x),In(y)] --[RightValue(h('g'^(x*y)))]-> []
++#else
++rule LeftProduct: [In(x),In(y)] --> []
++left rule LeftProduct: [In(x),In(y)] --[LeftValue(value(x,y))]-> []
++right rule LeftProduct: [In(x),In(y)] --> []
++
++rule RightProduct: [In(x),In(y)] --> []
++left rule RightProduct: [In(x),In(y)] --> []
++right rule RightProduct: [In(x),In(y)] --[RightValue(h(value(x,y)))]-> []
++#endif
++
++lemma no_left_unit [left]: "not (Ex #i. LeftValue(1)@i)"
++lemma no_right_unit [right]: "not (Ex #i. RightValue(h(1))@i)"
++end
+diff --git a/examples/regression/negative/diff-side-products.spthy.test.json b/examples/regression/negative/diff-side-products.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..12f4317be04cb66aaa28037eee39315116bed209
+--- /dev/null
++++ b/examples/regression/negative/diff-side-products.spthy.test.json
+@@ -0,0 +1,42 @@
++{
++  "tests": [
++    {
++      "name": "default-rejection",
++      "args": [
++        "--diff",
++        "--prove"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Unsupported multiplication outside exponents",
++        "Rule LeftProduct has products outside exponents:",
++        "Rule RightProduct has products outside exponents:"
++      ]
++    },
++    {
++      "name": "strict-rejection",
++      "args": [
++        "--diff",
++        "--prove",
++        "--quit-on-warning"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Unsupported multiplication outside exponents",
++        "Rule LeftProduct has products outside exponents:",
++        "Rule RightProduct has products outside exponents:"
++      ]
++    },
++    {
++      "name": "exponents-supported",
++      "args": [
++        "--diff",
++        "-DEXPONENTS",
++        "--quit-on-warning"
++      ],
++      "contains": [
++        "All wellformedness checks were successful."
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/negative/manual-variant-embedded-restriction.spthy b/examples/regression/negative/manual-variant-embedded-restriction.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..515048c1957675974082dae00cc86ede617d5bcf
+--- /dev/null
++++ b/examples/regression/negative/manual-variant-embedded-restriction.spthy
+@@ -0,0 +1,12 @@
++theory ManualVariantEmbeddedRestriction begin
++builtins: symmetric-encryption
++// Embedded restrictions in explicit variant members used to be dropped
++// silently, so b_exists was verified although the restriction forbids it.
++// Such members must be rejected.
++rule Emit: [In(x), In(k)] --> [Out(sdec(x,k))]
++variants
++rule (modulo AC) Emit___VARIANT_1: [In(x.2), In(k.1)] --[Emitted(x.2), _restrict(x.2 = 'a')]-> [Out(sdec(x.2,k.1))],
++rule (modulo AC) Emit___VARIANT_2: [In(senc(z.2,k.1)), In(k.1)] --[Emitted(z.2), _restrict(z.2 = 'a')]-> [Out(z.2)]
++lemma only_a: "All x #i. Emitted(x)@i ==> x = 'a'"
++lemma b_exists: exists-trace "Ex #i. Emitted('b')@i"
++end
+diff --git a/examples/regression/negative/manual-variant-embedded-restriction.spthy.test.json b/examples/regression/negative/manual-variant-embedded-restriction.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..479ab607645b10254306c7d7307122002e227e02
+--- /dev/null
++++ b/examples/regression/negative/manual-variant-embedded-restriction.spthy.test.json
+@@ -0,0 +1,14 @@
++{
++  "tests": [
++    {
++      "name": "embedded-restriction",
++      "args": [
++        "--prove"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Embedded restrictions in explicit AC variants are not supported"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/covered-product-export.spthy b/examples/regression/trace/covered-product-export.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..e412350b001377dc0a5967decab9cb4e8f644d54
+--- /dev/null
++++ b/examples/regression/trace/covered-product-export.spthy
+@@ -0,0 +1,16 @@
++theory CoveredProductExport
++begin
++builtins: diffie-hellman
++
++// The product is already present in the computed Power action, so the
++// complete manual family may mention it in an added action. Printing that
++// member as an original rule would put it outside the supported E-rule
++// fragment. Keep the parent and the explicit variant on export.
++rule Emit: [] --[ Power(('g'^'a')^'b') ]-> []
++variants
++rule (modulo AC) Emit___VARIANT_1:
++  [] --[ Power('g'^('a'*'b')), Added('a'*'b') ]-> []
++
++lemma witness: exists-trace "Ex x y #i. Power(x)@i & Added(y)@i"
++lemma no_added: "All x #i. Added(x)@i ==> F"
++end
+diff --git a/examples/regression/trace/covered-product-export.spthy.test.json b/examples/regression/trace/covered-product-export.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..3e8deea1d812742c3cded6a7d83ea784abda7e59
+--- /dev/null
++++ b/examples/regression/trace/covered-product-export.spthy.test.json
+@@ -0,0 +1,25 @@
++{
++  "tests": [
++    {
++      "name": "covered-product",
++      "args": [
++        "--prove",
++        "--quit-on-warning"
++      ],
++      "contains": [
++        "witness (exists-trace): verified",
++        "no_added (all-traces): falsified"
++      ]
++    },
++    {
++      "name": "export-roundtrip",
++      "args": [
++        "--quit-on-warning"
++      ],
++      "checks": [
++        "roundtrip",
++        "partial-evaluation"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/dh-products-in-exponents.spthy b/examples/regression/trace/dh-products-in-exponents.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..51e873a6ba8b44fd0b83660ecfc0434fbe05dcea
+--- /dev/null
++++ b/examples/regression/trace/dh-products-in-exponents.spthy
+@@ -0,0 +1,11 @@
++theory DHProductsInExponents
++begin
++builtins: diffie-hellman
++
++// Products in exponent positions remain supported. Cancellation can give
++// the neutral exponent, so this rule can emit Power('g').
++rule Power:
++  [ In(x), In(y) ] --[ Power('g'^(x*y)) ]-> []
++
++lemma power_neutral_exists: exists-trace "Ex #i. Power('g')@i"
++end
+diff --git a/examples/regression/trace/dh-products-in-exponents.spthy.test.json b/examples/regression/trace/dh-products-in-exponents.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..5ecdfb438282c8b0d9718c77001b27af65338e4e
+--- /dev/null
++++ b/examples/regression/trace/dh-products-in-exponents.spthy.test.json
+@@ -0,0 +1,28 @@
++{
++  "tests": [
++    {
++      "name": "trace-exponents-supported",
++      "args": [
++        "--prove",
++        "--quit-on-warning"
++      ],
++      "contains": [
++        "power_neutral_exists (exists-trace): verified"
++      ]
++    },
++    {
++      "name": "diff-exponents-supported",
++      "args": [
++        "--diff",
++        "--prove=power_neutral_exists",
++        "--quit-on-warning"
++      ],
++      "matches": [
++        {
++          "regex": "power_neutral_exists.*verified",
++          "min": 2
++        }
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/manual-variant-added-actions.spthy b/examples/regression/trace/manual-variant-added-actions.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..8c20b19964938cba722496e79b08a7847d2ed4e9
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-added-actions.spthy
+@@ -0,0 +1,34 @@
++theory ManualVariantAddedActions begin
++builtins: symmetric-encryption, xor, diffie-hellman
++// Each family adds an action over inherited terms that some instance makes
++// reducible or cancels: y = senc('m',k.1) for sdec, y = k.1 for xor, and
++// y = inv(k.1) for the exponent product. The solver discards rule instances
++// with terms that are not in normal form, so accepting these families would
++// silently drop the traces that the lemmas below need.
++rule Key: [ Fr(~k) ] --> [ !Key(~k), Out(~k) ]
++
++rule Dec: [ In(x), In(y), !Key(k) ] --[ Got(y), UsesKey(k) ]-> [ Out(sdec(x,k)) ]
++variants
++rule (modulo AC) Dec___VARIANT_1:
++  [ In(x.2), In(y), !Key(k.1) ] --[ Got(y), UsesKey(k.1), Dec(sdec(y,k.1)) ]-> [ Out(sdec(x.2,k.1)) ],
++rule (modulo AC) Dec___VARIANT_2:
++  [ In(senc(z.2,k.1)), In(y), !Key(k.1) ] --[ Got(y), UsesKey(k.1), Dec(sdec(y,k.1)) ]-> [ Out(z.2) ]
++
++rule Xor: [ In(x), In(y), !Key(k) ] --> [ Out(sdec(x,k)) ]
++variants
++rule (modulo AC) Xor___VARIANT_1:
++  [ In(x.2), In(y), !Key(k.1) ] --[ X(y XOR k.1) ]-> [ Out(sdec(x.2,k.1)) ],
++rule (modulo AC) Xor___VARIANT_2:
++  [ In(senc(z.2,k.1)), In(y), !Key(k.1) ] --[ X(y XOR k.1) ]-> [ Out(z.2) ]
++
++rule Exp: [ In(x), In(y), !Key(k) ] --> [ Out(sdec(x,k)) ]
++variants
++rule (modulo AC) Exp___VARIANT_1:
++  [ In(x.2), In(y), !Key(k.1) ] --[ E('g'^(y*k.1)) ]-> [ Out(sdec(x.2,k.1)) ],
++rule (modulo AC) Exp___VARIANT_2:
++  [ In(senc(z.2,k.1)), In(y), !Key(k.1) ] --[ E('g'^(y*k.1)) ]-> [ Out(z.2) ]
++
++lemma got_enc: exists-trace "Ex k #i. Got(senc('m',k))@i & UsesKey(k)@i"
++lemma zero_exists: exists-trace "Ex #i. X(zero)@i"
++lemma g_exists: exists-trace "Ex #i. E('g')@i"
++end
+diff --git a/examples/regression/trace/manual-variant-added-actions.spthy.test.json b/examples/regression/trace/manual-variant-added-actions.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..11bd0745b2954ab3e85c02a177e63a8333ec16cb
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-added-actions.spthy.test.json
+@@ -0,0 +1,17 @@
++{
++  "tests": [
++    {
++      "name": "default-rejection",
++      "args": [
++        "--prove"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Unsupported actions added to variants",
++        "Rule Dec___VARIANT_1 adds actions whose instances can leave normal form:",
++        "Rule Xor___VARIANT_1 adds actions whose instances can leave normal form:",
++        "Rule Exp___VARIANT_1 adds actions whose instances can leave normal form:"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/manual-variant-auto-sources-output.spthy b/examples/regression/trace/manual-variant-auto-sources-output.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..01f0d5c3d0cf89bc8769ee41ee465a3c07e66ee9
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-auto-sources-output.spthy
+@@ -0,0 +1,55 @@
++theory ManualVariantAutoSourcesOutput
++begin
++
++builtins: symmetric-encryption
++
++// The output of --auto-sources for a theory whose Resp rule has an open
++// chain. Resp___VARIANT_3 adds an AUTO_IN_TERM action that the E-rule and the
++// other members lack. Its terms occur in the member's premises, so the added
++// action is covered and Tamarin must accept its own output.
++
++rule Init:
++   [ Fr( ~k ), Fr( ~m ) ]
++  --[
++  AUTO_OUT_TERM_1_0_0_1__Resp___VARIANT_3( senc(<'1', ~m>, ~k) ),
++  Sent( ~m )
++  ]->
++   [ !Key( ~k ), Out( senc(<'1', ~m>, ~k) ) ]
++
++rule Resp:
++   [ !Key( k ), In( c ) ]
++  --[ Got( snd(sdec(c, k)) ) ]->
++   [ Out( snd(sdec(c, k)) ) ]
++ variants
++  rule (modulo AC) Resp___VARIANT_1:
++     [ !Key( k.2 ), In( c.1 ) ]
++    --[ Got( snd(sdec(c.1, k.2)) ) ]->
++     [ Out( snd(sdec(c.1, k.2)) ) ]
++  ,
++  rule (modulo AC) Resp___VARIANT_2:
++     [ !Key( k.1 ), In( senc(x.2, k.1) ) ]
++    --[ Got( snd(x.2) ) ]->
++     [ Out( snd(x.2) ) ]
++  ,
++  rule (modulo AC) Resp___VARIANT_3:
++     [ !Key( k.1 ), In( senc(<x.3, z.2>, k.1) ) ]
++    --[
++    AUTO_IN_TERM_1_0_0_1__Resp___VARIANT_3( senc(<x.3, z.2>, k.1), z.2 ),
++    Got( z.2 )
++    ]->
++     [ Out( z.2 ) ]
++
++lemma got_sent:
++  exists-trace "Ex m #i #j. Sent( m ) @ #i & Got( m ) @ #j"
++
++lemma secret:
++  all-traces "All m #i. Sent( m ) @ #i ==> not (Ex #j. K( m ) @ #j)"
++
++lemma AUTO_typing [sources]:
++  all-traces
++  "All x m #i.
++     AUTO_IN_TERM_1_0_0_1__Resp___VARIANT_3( m, x ) @ #i ==>
++     ((Ex #j. !KU( x ) @ #j & #j < #i) |
++      (Ex #j. AUTO_OUT_TERM_1_0_0_1__Resp___VARIANT_3( m ) @ #j & #j < #i))"
++
++end
+diff --git a/examples/regression/trace/manual-variant-auto-sources-output.spthy.test.json b/examples/regression/trace/manual-variant-auto-sources-output.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..add470f5b975a38894d03eae63d2e2d0e1d0581f
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-auto-sources-output.spthy.test.json
+@@ -0,0 +1,16 @@
++{
++  "tests": [
++    {
++      "name": "generated-added-actions",
++      "args": [
++        "--prove",
++        "--quit-on-warning"
++      ],
++      "contains": [
++        "got_sent (exists-trace): verified",
++        "secret (all-traces): falsified",
++        "AUTO_typing (all-traces): verified"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy b/examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..2d9ee0e9dc16aad26f4d2534aa6084dff45782af
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy
+@@ -0,0 +1,23 @@
++theory ManualVariantAutoSourcesRoundtrip
++begin
++builtins: symmetric-encryption
++macros: identity(x) = x
++
++// Auto-sources unfolds these already explicit members before adding its
++// actions. Their names must still match the computed family on reload,
++// including when partial evaluation keeps that family for safe export.
++rule Emit:
++  [In(<x,x>), In(k)] --[Original(sdec(x,k))]-> [Out(sdec(x,k))]
++variants
++rule (modulo AC) Emit___VARIANT_1:
++  [In(<cipher,cipher>), In(identity(key))]
++  --[Original(identity(sdec(cipher,key))), Added('a')]->
++  [Out(identity(sdec(cipher,key)))]
++,
++rule (modulo AC) Emit___VARIANT_2:
++  [In(<senc(plain,key),senc(plain,key)>), In(identity(key))]
++  --[Original(identity(plain)), Added('a')]-> [Out(identity(plain))]
++
++lemma witness: exists-trace "Ex #i. Added('a')@i"
++lemma false_safety: "All #i. Added('a')@i ==> F"
++end
+diff --git a/examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy.test.json b/examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..6faffc1a555a9f76444fb31c4554daeed8bb1732
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy.test.json
+@@ -0,0 +1,15 @@
++{
++  "tests": [
++    {
++      "name": "generated-family-roundtrip",
++      "args": [
++        "--auto-sources",
++        "--quit-on-warning"
++      ],
++      "checks": [
++        "roundtrip",
++        "partial-evaluation"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/manual-variant-invalid-member.spthy b/examples/regression/trace/manual-variant-invalid-member.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..b89a650b5586ef49f18c965ecc137b4c6671c70a
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-invalid-member.spthy
+@@ -0,0 +1,27 @@
++theory ManualVariantInvalidMember
++begin
++
++builtins: symmetric-encryption
++
++rule Key:
++  [ Fr(~k) ] --> [ !Key(~k) ]
++
++rule Secret:
++  [ Fr(~m), !Key(~k) ] --[ Secret(~m) ]-> [ Out(senc(~m,~k)) ]
++
++// The first member is not a variant of Dec: it outputs the key instead of
++// the decryption. This changes the rule's conclusion, so the family must
++// be rejected. The secrecy lemma is already false for the original rule:
++// an attacker can submit Secret's ciphertext to Dec.
++rule Dec:
++  [ In(x), !Key(k) ] --> [ Out(sdec(x,k)) ]
++  variants
++  rule (modulo AC) Dec___VARIANT_1:
++    [ In(x.2), !Key(k.1) ] --> [ Out(k.1) ],
++  rule (modulo AC) Dec___VARIANT_2:
++    [ In(senc(z.2,k.1)), !Key(k.1) ] --> [ Out(z.2) ]
++
++lemma secrecy:
++  "All m #i. Secret(m)@i ==> not Ex #j. K(m)@j"
++
++end
+diff --git a/examples/regression/trace/manual-variant-invalid-member.spthy.test.json b/examples/regression/trace/manual-variant-invalid-member.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..8eb993b85bf794634b1d1969abace47add3f74bc
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-invalid-member.spthy.test.json
+@@ -0,0 +1,30 @@
++{
++  "tests": [
++    {
++      "name": "default-rejection",
++      "args": [
++        "--prove"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "cannot confirm manual variants:",
++        "Unsupported rule semantics - aborting before proof search."
++      ],
++      "matches": [
++        {
++          "regex": "summary of summaries:",
++          "max": 0
++        }
++      ]
++    },
++    {
++      "name": "export-reports-warning",
++      "args": [
++        "-m=msr"
++      ],
++      "contains": [
++        "cannot confirm manual variants:"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/manual-variant-renamed-dh.spthy b/examples/regression/trace/manual-variant-renamed-dh.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..769e9f9c428dbcea94ccdacfce124c30494a8cc3
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-renamed-dh.spthy
+@@ -0,0 +1,27 @@
++theory ManualVariantRenamedDH begin
++builtins: diffie-hellman
++#ifdef PRODUCT
++macros: annotation(x,y) = x*y
++#else
++macros: annotation(x,y) = x
++#endif
++// The members rename the computed variables (y.8 and z.9). Products that the
++// computed variants introduce in the original action are supported; only a
++// product in an added annotation (with PRODUCT) is rejected.
++rule Power: [In(x)] --[Power(('g'^x)^'b')]-> []
++variants
++rule (modulo AC) Power___VARIANT_1:
++  [In(y.8)] --[Power('g'^('b'*y.8)), Annotated(), Unsupported(annotation(y.8,$extra))]-> [],
++rule (modulo AC) Power___VARIANT_2:
++  [In(inv('b'))] --[Power('g'), Annotated()]-> [],
++rule (modulo AC) Power___VARIANT_3:
++  [In(inv(('b'*y.8)))] --[Power('g'^inv(y.8)), Annotated()]-> [],
++rule (modulo AC) Power___VARIANT_4:
++  [In(1)] --[Power('g'^'b'), Annotated()]-> [],
++rule (modulo AC) Power___VARIANT_5:
++  [In(y.8*inv('b'))] --[Power('g'^y.8), Annotated()]-> [],
++rule (modulo AC) Power___VARIANT_6:
++  [In(y.8*inv(('b'*z.9)))] --[Power('g'^(y.8*inv(z.9))), Annotated()]-> []
++lemma witness: exists-trace "Ex x #i. Power(x)@i & Annotated()@i"
++lemma false_safety: "All x #i. Power(x)@i ==> F"
++end
+diff --git a/examples/regression/trace/manual-variant-renamed-dh.spthy.test.json b/examples/regression/trace/manual-variant-renamed-dh.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..2d03d99cb7a61f12cb0d034489f70114e78f9d99
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-renamed-dh.spthy.test.json
+@@ -0,0 +1,27 @@
++{
++  "tests": [
++    {
++      "name": "renamed-verdicts",
++      "args": [
++        "--prove",
++        "--quit-on-warning"
++      ],
++      "contains": [
++        "witness (exists-trace): verified",
++        "false_safety (all-traces): falsified"
++      ]
++    },
++    {
++      "name": "renamed-added-product-rejection",
++      "args": [
++        "--prove",
++        "-DPRODUCT"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Unsupported actions added to variants",
++        "Unsupported rule semantics - aborting before proof search."
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/manual-variant-renamed-macros.spthy b/examples/regression/trace/manual-variant-renamed-macros.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..9ca91c916a465e8ddc91a9856dddab4ba522d5e3
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-renamed-macros.spthy
+@@ -0,0 +1,41 @@
++theory ManualVariantRenamedMacros begin
++builtins: symmetric-encryption
++macros: identity(x) = x,
++        erase(x) = 'a',
++        duplicate(x) = <x,x>,
++        nested(x) = identity(duplicate(identity(x)))
++
++// Both equation cases, independently renamed, with macros in all fact roles.
++// The members are compared with the computed variants after macro expansion
++// and up to renaming, and the solver uses them expanded. The erased public
++// variable is absent from executable facts after expansion. Without the
++// second member the family is incomplete and is rejected.
++#ifdef INCOMPLETE
++rule Emit:
++  [In(<x,x>), In(k)] --[Original(sdec(x,k)), Public($p)]-> [Out(sdec(x,k))]
++variants
++rule (modulo AC) Emit___VARIANT_1:
++  [In(nested(cipher)), In(identity(key))]
++  --[Original(identity(sdec(cipher,key))), Public(identity($q)),
++     Added(erase($unused)), Seen(nested($q))]->
++  [Out(identity(sdec(cipher,key)))]
++#else
++rule Emit:
++  [In(<x,x>), In(k)] --[Original(sdec(x,k)), Public($p)]-> [Out(sdec(x,k))]
++variants
++rule (modulo AC) Emit___VARIANT_1:
++  [In(nested(cipher)), In(identity(key))]
++  --[Original(identity(sdec(cipher,key))), Public(identity($q)),
++     Added(erase($unused)), Seen(nested($q))]->
++  [Out(identity(sdec(cipher,key)))]
++,
++rule (modulo AC) Emit___VARIANT_2:
++  [In(nested(senc(plain,key))), In(identity(key))]
++  --[Original(identity(plain)), Public(identity($q)),
++     Added(erase($unused)), Seen(nested($q))]->
++  [Out(identity(plain))]
++#endif
++
++lemma witness: exists-trace "Ex #i. Added('a')@i & Seen(<'b','b'>)@i"
++lemma false_safety: "All #i. Added('a')@i ==> F"
++end
+diff --git a/examples/regression/trace/manual-variant-renamed-macros.spthy.test.json b/examples/regression/trace/manual-variant-renamed-macros.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..f5524d6b473b3eb0f0e74f8519f699e294852e05
+--- /dev/null
++++ b/examples/regression/trace/manual-variant-renamed-macros.spthy.test.json
+@@ -0,0 +1,27 @@
++{
++  "tests": [
++    {
++      "name": "renamed-macro-verdicts",
++      "args": [
++        "--prove",
++        "--quit-on-warning"
++      ],
++      "contains": [
++        "witness (exists-trace): verified",
++        "false_safety (all-traces): falsified"
++      ]
++    },
++    {
++      "name": "incomplete-rejection",
++      "args": [
++        "--prove",
++        "-DINCOMPLETE"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "cannot confirm manual variants:",
++        "Unsupported rule semantics - aborting before proof search."
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/partial-evaluation-collision.spthy b/examples/regression/trace/partial-evaluation-collision.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..18f1eaf1f2e5cb12472fa6727a3d4e643b376e6d
+--- /dev/null
++++ b/examples/regression/trace/partial-evaluation-collision.spthy
+@@ -0,0 +1,14 @@
++theory PartialEvaluationCollision
++begin
++builtins: symmetric-encryption
++
++// A generated variant of Dec has the same name as the independent Marker rule.
++// Retaining Dec on export must not erase the other rule's refinement.
++rule Dec:
++  [ In(x) ] --> [ Out(sdec(x,'k')) ]
++rule Dec___VARIANT_2:
++  [] --[ Marker() ]-> []
++
++lemma reachable: exists-trace "Ex #i. Marker() @ i"
++lemma false_safety: "not (Ex #i. Marker() @ i)"
++end
+diff --git a/examples/regression/trace/partial-evaluation-collision.spthy.test.json b/examples/regression/trace/partial-evaluation-collision.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..a8560d079314a38c33e8c8e34bdd02dc6cfd0535
+--- /dev/null
++++ b/examples/regression/trace/partial-evaluation-collision.spthy.test.json
+@@ -0,0 +1,13 @@
++{
++  "tests": [
++    {
++      "name": "partial-evaluation",
++      "args": [
++        "--quit-on-warning"
++      ],
++      "checks": [
++        "partial-evaluation"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/partial-evaluation-export.spthy b/examples/regression/trace/partial-evaluation-export.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..15aee6006f197b66e401e9e2be1c61ba951bcb0d
+--- /dev/null
++++ b/examples/regression/trace/partial-evaluation-export.spthy
+@@ -0,0 +1,104 @@
++theory PartialEvaluationExport
++begin
++
++builtins: symmetric-encryption, natural-numbers
++
++macros: identity(x) = x
++
++rule Key:
++  [ Fr(~k) ] --> [ !Key(~k) ]
++
++rule Secret:
++  [ Fr(~m), !Key(~k) ]
++  --[ Secret(~m) ]->
++  [ Out(senc(~m,~k)) ]
++
++rule Dec:
++  [ In(x), !Key(k) ] --> [ Out(sdec(x,k)) ]
++  variants
++  rule (modulo AC) Dec___VARIANT_2:
++    [ In(senc(z.2,k.1)), !Key(k.1) ] --[ Decrypted(z.2) ]-> [ Out(z.2) ],
++  rule (modulo AC) Dec___VARIANT_1:
++    [ In(x.2), !Key(k.1) ]
++    --[ Unreduced(sdec(x.2,k.1)) ]->
++    [ Out(sdec(x.2,k.1)) ]
++
++// The generic variant applies only when the decryption does not reduce.
++// Exporting it as an E-rule after partial evaluation used to introduce a
++// cancelling variant with the Unreduced action, making this trace possible.
++lemma unreduced_secret:
++  exists-trace
++  "Ex m #i #j. Secret(m) @ i & Unreduced(m) @ j"
++
++lemma decrypted_reachable:
++  exists-trace
++  "Ex m #i. Decrypted(m) @ i"
++
++lemma unreduced_reachable:
++  exists-trace
++  "Ex m #i. Unreduced(m) @ i"
++
++// Partial evaluation splits Use into two rules. Both must survive export
++// with distinct names, without colliding with the existing Use_PE_1 rule.
++rule SeedA:
++  [ ] --> [ State('a') ]
++
++// Identical originals are accepted and share one family.
++rule SeedA:
++  [ ] --> [ State('a') ]
++
++rule SeedB:
++  [ ] --> [ State('b') ]
++
++rule Use:
++  [ State(x) ] --[ Used(x) ]-> [ ]
++
++rule Use_PE_1:
++  [ ] --[ ReservedName() ]-> [ ]
++
++// This family has no reachable instance and must be dropped by the plan.
++rule Unreachable:
++  [ State('unseeded') ] --[ Pruned() ]-> [ ]
++
++lemma pruned_family_unreachable:
++  exists-trace
++  "Ex #i. Pruned() @ i"
++
++lemma first_specialization_reachable:
++  exists-trace
++  "Ex #i. Used('a') @ i"
++
++lemma second_specialization_reachable:
++  exists-trace
++  "Ex #i. Used('b') @ i"
++
++lemma existing_rule_reachable:
++  exists-trace
++  "Ex #i. ReservedName() @ i"
++
++// Embedded restrictions are materialized as a separate restriction/action
++// before partial evaluation. Macro expansion and export must preserve it.
++rule NaturalSeedOne:
++  [ ] --> [ NaturalState(%1) ]
++
++rule NaturalSeedTwo:
++  [ ] --> [ NaturalState(%1 %+ %1) ]
++
++rule NaturalUse:
++  [ NaturalState(x) ]
++  --[ NaturalUsed(x), _restrict(x << %1 %+ %1) ]->
++  [ NaturalState(identity(x)) ]
++
++lemma embedded_restriction_first:
++  exists-trace
++  "Ex #i. NaturalUsed(%1) @ i"
++
++lemma embedded_restriction_second:
++  exists-trace
++  "Ex #i. NaturalUsed(%1 %+ %1) @ i"
++
++lemma embedded_restriction_repeated:
++  exists-trace
++  "Ex x #i #j. NaturalUsed(x) @ i & NaturalUsed(x) @ j & #i < #j"
++
++end
+diff --git a/examples/regression/trace/partial-evaluation-export.spthy.test.json b/examples/regression/trace/partial-evaluation-export.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..a8560d079314a38c33e8c8e34bdd02dc6cfd0535
+--- /dev/null
++++ b/examples/regression/trace/partial-evaluation-export.spthy.test.json
+@@ -0,0 +1,13 @@
++{
++  "tests": [
++    {
++      "name": "partial-evaluation",
++      "args": [
++        "--quit-on-warning"
++      ],
++      "checks": [
++        "partial-evaluation"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/soundness-dh-products-outside-exponents.spthy b/examples/regression/trace/soundness-dh-products-outside-exponents.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..6fe3b81096c209134212b2ef535400e3b0d50aa2
+--- /dev/null
++++ b/examples/regression/trace/soundness-dh-products-outside-exponents.spthy
+@@ -0,0 +1,32 @@
++theory SoundnessDHProductsOutsideExponents
++begin
++
++builtins: diffie-hellman, hashing
++
++// Products outside exponents are read modulo AC only, so x = 'a' and
++// y = inv('a') do not make x*y equal to 1. Each of these lemmas is false,
++// and each rule must be rejected: top-level and nested action products and
++// a conclusion product.
++rule Product:
++  [ In(x), In(y) ] --[ Product(x*y) ]-> []
++
++rule NestedProduct:
++  [ In(x), In(y) ] --[ NestedProduct(h(x*y)) ]-> []
++
++rule StoreProduct:
++  [ In(x), In(y) ] --> [ Stored(x*y) ]
++
++rule UseUnit:
++  [ Stored(1) ] --[ UsedUnit() ]-> []
++
++// A product in an exponent is normalised by variant computation and is
++// supported; this rule must not be reported.
++rule Power:
++  [ In(x), In(y) ] --[ Power('g'^(x*y)) ]-> []
++
++lemma product_unit_never: "All #i. Product(1)@i ==> F"
++lemma nested_unit_never: "All #i. NestedProduct(h(1))@i ==> F"
++lemma stored_unit_never: "All #i. UsedUnit()@i ==> F"
++lemma power_neutral_exists: exists-trace "Ex #i. Power('g')@i"
++
++end
+diff --git a/examples/regression/trace/soundness-dh-products-outside-exponents.spthy.test.json b/examples/regression/trace/soundness-dh-products-outside-exponents.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..f55e8be2e48e7550f1e0bd7b89df0943080a856a
+--- /dev/null
++++ b/examples/regression/trace/soundness-dh-products-outside-exponents.spthy.test.json
+@@ -0,0 +1,43 @@
++{
++  "tests": [
++    {
++      "name": "default-rejection",
++      "args": [
++        "--prove"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Unsupported multiplication outside exponents",
++        "Rule Product has products outside exponents:",
++        "Rule NestedProduct has products outside exponents:",
++        "Rule StoreProduct has products outside exponents:"
++      ],
++      "matches": [
++        {
++          "regex": "Rule Power has products outside exponents",
++          "max": 0
++        }
++      ]
++    },
++    {
++      "name": "diff-rejection",
++      "args": [
++        "--diff",
++        "--prove"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Unsupported multiplication outside exponents",
++        "Rule Product has products outside exponents:",
++        "Rule NestedProduct has products outside exponents:",
++        "Rule StoreProduct has products outside exponents:"
++      ],
++      "matches": [
++        {
++          "regex": "Rule Power has products outside exponents",
++          "max": 0
++        }
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/soundness-manual-variants-complete.spthy b/examples/regression/trace/soundness-manual-variants-complete.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..eea6b5311dbc24385a32c723144c67aaf7910c03
+--- /dev/null
++++ b/examples/regression/trace/soundness-manual-variants-complete.spthy
+@@ -0,0 +1,32 @@
++theory SoundnessManualVariantsComplete
++begin
++
++builtins: symmetric-encryption
++
++rule Key:
++  [ Fr(~k) ] --> [ !Key(~k) ]
++
++rule Secret:
++  [ Fr(~m), !Key(~k) ] --[ Secret(~m) ]-> [ Out(senc(~m,~k)) ]
++
++// All computed cases are present, in reverse order and with extra actions
++// of the kind used by auto-sources. Completeness must allow these additions.
++// Keep the generated variant names and variable numbering used on export.
++rule Dec:
++  [ In(x), !Key(k) ] --> [ Out(sdec(x,k)) ]
++  variants
++  rule (modulo AC) Dec___VARIANT_2:
++    [ In(senc(z.2,k.1)), !Key(k.1) ]
++    --[ Decrypted(z.2) ]-> [ Out(z.2) ],
++  rule (modulo AC) Dec___VARIANT_1:
++    [ In(x.2), !Key(k.1) ]
++    --[ Decrypted(sdec(x.2,k.1)) ]-> [ Out(sdec(x.2,k.1)) ]
++
++// The retained decryption case exposes the secret.
++lemma secrecy:
++  "All m #i. Secret(m)@i ==> not Ex #j. K(m)@j"
++
++lemma annotated_variant_reachable: exists-trace
++  "Ex m #i #j. Secret(m)@i & Decrypted(m)@j"
++
++end
+diff --git a/examples/regression/trace/soundness-manual-variants-complete.spthy.test.json b/examples/regression/trace/soundness-manual-variants-complete.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..ed3439ca9e5f80f28f1dfa6be01534a7894f9e48
+--- /dev/null
++++ b/examples/regression/trace/soundness-manual-variants-complete.spthy.test.json
+@@ -0,0 +1,10 @@
++{
++  "tests": [
++    {
++      "name": "validation",
++      "args": [
++        "--quit-on-warning"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/soundness-manual-variants-incomplete.spthy b/examples/regression/trace/soundness-manual-variants-incomplete.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..5fc97226a2de4d843b95c6183bdec50044f90e7f
+--- /dev/null
++++ b/examples/regression/trace/soundness-manual-variants-incomplete.spthy
+@@ -0,0 +1,24 @@
++theory SoundnessManualVariantsIncomplete
++begin
++
++builtins: symmetric-encryption
++
++rule Key:
++  [ Fr(~k) ] --> [ !Key(~k) ]
++
++rule Secret:
++  [ Fr(~m), !Key(~k) ] --[ Secret(~m) ]-> [ Out(senc(~m,~k)) ]
++
++// This is a valid variant, but the decryption case is missing, so the
++// family must be rejected even though each member is a variant.
++rule Dec:
++  [ In(x), !Key(k) ] --> [ Out(sdec(x,k)) ]
++  variants
++  rule (modulo AC) Dec___VARIANT_1:
++    [ In(x.2), !Key(k.1) ] --> [ Out(sdec(x.2,k.1)) ]
++
++// Unsoundly verified if the incomplete variants are silently accepted.
++lemma secrecy:
++  "All m #i. Secret(m)@i ==> not Ex #j. K(m)@j"
++
++end
+diff --git a/examples/regression/trace/soundness-manual-variants-incomplete.spthy.test.json b/examples/regression/trace/soundness-manual-variants-incomplete.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..c53a7f187d743636346f5c5f7bfd01e67feb41a8
+--- /dev/null
++++ b/examples/regression/trace/soundness-manual-variants-incomplete.spthy.test.json
+@@ -0,0 +1,15 @@
++{
++  "tests": [
++    {
++      "name": "default-rejection",
++      "args": [
++        "--prove"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "cannot confirm manual variants:",
++        "Unsupported rule semantics - aborting before proof search."
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/soundness-partial-evaluation-variants.spthy b/examples/regression/trace/soundness-partial-evaluation-variants.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..ff0c2fa9e39f09ac2e318d7ae24ccafb9c631a0a
+--- /dev/null
++++ b/examples/regression/trace/soundness-partial-evaluation-variants.spthy
+@@ -0,0 +1,40 @@
++theory SoundnessPartialEvaluationVariants
++begin
++
++functions: c/1, d/1
++equations: d(c(x)) = x
++
++rule Seed:
++  [ ] --> [ State('ok') ]
++
++// The abstract interpreter must start from the compiled E-variant. Its old
++// AC-only refinement did not see that this premise is State('ok') modulo E.
++rule UseModuloE:
++  [ State(d(c('ok'))) ]
++  --[ UsedModuloE() ]->
++  [ ]
++  variants
++  // Partial evaluation must also preserve this imported variant and its added
++  // action instead of recomputing variants from the original E-rule.
++  rule (modulo AC) UseModuloE___VARIANT_1:
++    [ State('ok') ]
++    --[ UsedModuloE(), UsedImportedVariant() ]->
++    [ ]
++
++lemma e_variant_reachable:
++  exists-trace
++  "Ex #i. UsedModuloE() @ #i"
++
++lemma e_variant_not_unreachable:
++  all-traces
++  "not (Ex #i. UsedModuloE() @ #i)"
++
++lemma imported_variant_reachable:
++  exists-trace
++  "Ex #i. UsedImportedVariant() @ #i"
++
++lemma imported_variant_not_unreachable:
++  all-traces
++  "not (Ex #i. UsedImportedVariant() @ #i)"
++
++end
+diff --git a/examples/regression/trace/soundness-partial-evaluation-variants.spthy.test.json b/examples/regression/trace/soundness-partial-evaluation-variants.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..73c6402f943b5cb1f0c8991d09ffe16ba7af08c2
+--- /dev/null
++++ b/examples/regression/trace/soundness-partial-evaluation-variants.spthy.test.json
+@@ -0,0 +1,17 @@
++{
++  "tests": [
++    {
++      "name": "partial-evaluation-verdicts",
++      "args": [
++        "--prove",
++        "--partial-evaluation=summary"
++      ],
++      "contains": [
++        "e_variant_reachable (exists-trace): verified",
++        "e_variant_not_unreachable (all-traces): falsified",
++        "imported_variant_reachable (exists-trace): verified",
++        "imported_variant_not_unreachable (all-traces): falsified"
++      ]
++    }
++  ]
++}
+diff --git a/lib/term/src/Term/LTerm.hs b/lib/term/src/Term/LTerm.hs
+index 7d9bbc84e8251047e26c35eaba53ee714e62bbab..0195d6ec2e2e08d1315725ce0ac69e95e1bb8730 100644
+--- a/lib/term/src/Term/LTerm.hs
++++ b/lib/term/src/Term/LTerm.hs
+@@ -90,6 +90,7 @@ module Term.LTerm (
+   , rename
+   , renameIgnoring
+   , eqModuloFreshnessNoAC
++  , canonicalizeFreshnessNoAC
+   , avoid
+   , evalFreshAvoiding
+   , evalFreshTAvoiding
+@@ -664,10 +665,15 @@ eqModuloFreshnessNoAC :: (HasFrees a, Eq a) => a -> a -> Bool
+ eqModuloFreshnessNoAC t1 =
+      -- this formulation shares normalisation of t1 among further calls to
+      -- different t2.
+-    (normIndices t1 ==) . normIndices
+-  where
+-    normIndices = (`evalFresh` nothingUsed) . (`evalBindT` noBindings) .
+-                  mapFrees (Arbitrary $ \x -> importBinding (`LVar` lvarSort x) x "")
++    (canonicalizeFreshnessNoAC t1 ==) . canonicalizeFreshnessNoAC
++
++-- | Comparison key for 'eqModuloFreshnessNoAC'. Discards variable name
++-- hints and assigns indices in traversal order, retaining sorts. This is not
++-- an AC normal form; keep the original value when retaining representatives.
++canonicalizeFreshnessNoAC :: HasFrees a => a -> a
++canonicalizeFreshnessNoAC =
++    (`evalFresh` nothingUsed) . (`evalBindT` noBindings) .
++    mapFrees (Arbitrary $ \x -> importBinding (`LVar` lvarSort x) x "")
+ 
+ -- | The mininum and maximum index of all free variables.
+ {-# INLINABLE boundsVarIdx #-}
+diff --git a/lib/term/src/Term/UnitTests.hs b/lib/term/src/Term/UnitTests.hs
+index c62ca29e96daa110128ea188e7e84921041a41ab..4d04087f4b2f984ca253da5b64ab11d0d0ba1f73 100644
+--- a/lib/term/src/Term/UnitTests.hs
++++ b/lib/term/src/Term/UnitTests.hs
+@@ -199,7 +199,20 @@ testsNorm hnd = TestLabel "Tests for normalization" $ TestList
+ 
+ testsTerm :: Test
+ testsTerm = TestLabel "Tests for Terms" $ TestList
+-    [ uncurry (testEqual "Terms: propSubtermReplace") (propSubtermReplace bigTerm [1,0]) ]
++    [ uncurry (testEqual "Terms: propSubtermReplace") (propSubtermReplace bigTerm [1,0])
++    , testEqual "Freshness key retains sharing and sorts, discards hints"
++        (canonicalizeFreshnessNoAC [LVar "x" LSortMsg 8, LVar "y" LSortFresh 3,
++                                   LVar "x" LSortMsg 8])
++        [LVar "" LSortMsg 0, LVar "" LSortFresh 1, LVar "" LSortMsg 0]
++    , testTrue "Freshness equality ignores original hints and indices"
++        (eqModuloFreshnessNoAC [LVar "x" LSortMsg 8, LVar "x" LSortMsg 8]
++                              [LVar "z" LSortMsg 2, LVar "z" LSortMsg 2])
++    , testTrue "Freshness equality distinguishes sharing and sorts"
++        (not (eqModuloFreshnessNoAC [LVar "x" LSortMsg 8, LVar "x" LSortMsg 8]
++                                   [LVar "x" LSortMsg 8, LVar "y" LSortMsg 8]) &&
++         not (eqModuloFreshnessNoAC (LVar "x" LSortMsg 8)
++                                   (LVar "x" LSortFresh 8)))
++    ]
+ 
+ propSubtermReplace :: Ord a => Term a -> Position -> (Term a, Term a)
+ propSubtermReplace t p = (t,(t `replacePos` (t `atPos` p,p)))
+diff --git a/lib/theory/src/OpenTheory.hs b/lib/theory/src/OpenTheory.hs
+index 5089a0345258e6078eec341f12432a17b989fe84..6d9b32263b8abeaa52282728a11708dc69150b53 100644
+--- a/lib/theory/src/OpenTheory.hs
++++ b/lib/theory/src/OpenTheory.hs
+@@ -814,7 +814,8 @@ normalizeTheory =
+ -- | Pretty print an open rule together with its assertion soundness proof.
+ prettyOpenProtoRule :: (HighlightDocument d) => OpenProtoRule -> d
+ prettyOpenProtoRule (OpenProtoRule ruE []) = prettyProtoRuleE ruE
+-prettyOpenProtoRule (OpenProtoRule _ [ruAC]) = prettyProtoRuleACasE ruAC
++prettyOpenProtoRule (OpenProtoRule _ [ruAC])
++  | null (ruleProductsOutsideExponents ruAC) = prettyProtoRuleACasE ruAC
+ prettyOpenProtoRule (OpenProtoRule ruE variants) =
+   prettyProtoRuleE ruE
+     $-$ nest 1 (kwVariants $-$ nest 1 (ppList prettyProtoRuleAC variants))
+@@ -833,7 +834,8 @@ prettyOpenProtoRuleAsClosedRule (OpenProtoRule ruE []) =
+         emptyDoc
+           $-$ multiComment_ ["has exactly the trivial AC variant"]
+     )
+-prettyOpenProtoRuleAsClosedRule (OpenProtoRule _ [ruAC@(Rule (ProtoRuleACInfo _ _ (Disj disj) _) _ _ _ _)]) =
++prettyOpenProtoRuleAsClosedRule (OpenProtoRule _ [ruAC@(Rule (ProtoRuleACInfo _ _ (Disj disj) _) _ _ _ _)])
++  | null (ruleProductsOutsideExponents ruAC) =
+   prettyProtoRuleACasE ruAC
+     $--$ ( nest 2 $
+              prettyLoopBreakers (L.get rInfo ruAC)
+diff --git a/lib/theory/src/Prover.hs b/lib/theory/src/Prover.hs
+index 3f42d25da2298f35be4428727b6708250771ca3d..dc901eed743e717d90f2952e5be829d75d1084b2 100644
+--- a/lib/theory/src/Prover.hs
++++ b/lib/theory/src/Prover.hs
+@@ -8,6 +8,7 @@ module Prover (
+ 
+ import           Prelude                             hiding (id, (.))
+ 
++import qualified Data.Map                            as M
+ import           Data.Maybe
+ import qualified Data.Set                            as S
+ 
+@@ -27,6 +28,7 @@ import           Theory.Proof
+ import           Theory.Text.Pretty
+ import           Theory.Tools.AbstractInterpretation
+ import           Theory.Tools.LoopBreakers
++import           Theory.Tools.RuleVariants           (variantsProtoRule)
+ import           Lemma
+ import           ClosedTheory
+ import           TheoryObject
+@@ -234,6 +236,11 @@ mkDiffSystem _ _ _ = emptyDiffSystem
+ -- Partial evaluation / abstract interpretation
+ -----------------------------------------------
+ 
++-- | Export disposition for one original rule family.
++data PartialEvaluationFamilyPlan
++    = KeepOriginal
++    | EmitRefinements [ProtoRuleE]
++
+ -- | Apply partial evaluation.
+ applyPartialEvaluation :: EvaluationStyle -> Bool -> ClosedTheory -> ClosedTheory
+ applyPartialEvaluation evalStyle autosources thy0 =
+@@ -242,26 +249,97 @@ applyPartialEvaluation evalStyle autosources thy0 =
+       autosources True
+   where
+     sig          = L.get thySignature thy0
+-    ruEs         = getProtoRuleEs thy0
+-    (st', ruEs') = (`runReader` L.get sigmMaudeHandle sig) $
+-                   partialEvaluation evalStyle ruEs
++    originals = getProtoRuleEs thy0
++    familyIds = M.fromList $ zip originals [0 :: Int ..]
++    familyId ru = familyIds M.! ru
++    -- Keep ownership separate from names: a generated variant name can also
++    -- be the name of an independent E-rule. All imported variants belong to
++    -- the same original E-rule, and this ID survives refinement and renaming.
++    -- Parser/SAPIC insertion checks E-name uniqueness, but programmatic
++    -- addRules/closeTheoryWithMaude callers need not, so names cannot be IDs.
++    rules =
++      [ fmap (\info -> (familyId (L.get cprRuleE ru), info))
++          (compiledRule variant)
++      | ru <- theoryRules thy0, variant <- unfoldRuleVariants ru ]
++    originalRuleCount = length originals
++    (st', rules') = (`runReader` L.get sigmMaudeHandle sig) $
++                    partialEvaluation evalStyle rules
++
++    -- A compiled AC variant is not necessarily an equivalent E-rule: exporting
++    -- it as one can introduce further variants on reload, with the wrong added
++    -- actions. Keep the original family if any refinement would change under
++    -- E-variant computation, or would fail the original-rule product check.
++    -- Restoring the complete family preserves its added
++    -- actions and keeps manual-variant completeness checks applicable.
++    -- Prepend each refinement, then restore family order once. Appending to
++    -- the growing bucket would repeatedly copy its prefix.
++    refinements = M.map reverse $ M.fromListWith (++)
++      [ (fst (L.get rInfo ru), [fmap snd ru])
++      | ru <- rules' ]
++    -- Include pruned families explicitly, so deletion is never inferred from
++    -- a missing lookup. All original rules have an entry, including duplicates.
++    familyPlans = M.fromList
++      [ (familyId ru, planFamily (M.findWithDefault [] (familyId ru) refinements))
++      | ru <- originals ]
++    planFamily rs
++      | any (not . exportable) rs = KeepOriginal
++      | otherwise = EmitRefinements rs
++    exportable ru = null (ruleProductsOutsideExponents ru) &&
++      case variantsProtoRule (L.get sigmMaudeHandle sig) ru of
++        Just ac -> eqModuloFreshnessNoAC ac (compiledRuleAC ru)
++        Nothing -> False
++
++    -- Refinement can split one rule into several rules with the same name.
++    -- Allocate distinct export names before closing the theory, so proofs and
++    -- printed rules use the same names. Reserve even names of removed rules.
++    namedFamilyPlans = MS.evalState (traverse nameFamily familyPlans)
++      (retainedNames, reservedNames)
++    nameFamily (EmitRefinements rs) = EmitRefinements <$> mapM nameRefinement rs
++    nameFamily plan = return plan
++    retainedNames = S.fromList
++      [ getRuleName ru | ru <- originals,
++                         KeepOriginal <- [familyPlans M.! familyId ru] ]
++    reservedNames = S.fromList $ map getRuleName originals ++
++      map (getRuleName . fmap snd) rules
++    nameRefinement ru = do
++      (used, reserved) <- MS.get
++      let originalName = getRuleName ru
++          name = if originalName `S.notMember` used then originalName else
++            head [ candidate | i <- [1 :: Integer ..],
++                   let candidate = originalName ++ "_PE_" ++ show i,
++                   candidate `S.notMember` reserved ]
++          renamed = if name == originalName then ru else
++            L.set (preName . rInfo) (StandRule name) ru
++      MS.put (S.insert name used, S.insert name reserved)
++      return renamed
++
++    replaceRule (RuleItem ru) = case namedFamilyPlans M.! owner of
++      KeepOriginal -> [RuleItem ru]
++      EmitRefinements rs -> map (RuleItem . openCompiledRule) rs
++      where
++        owner = familyId (L.get oprRuleE ru)
++    replaceRule item = [item]
+ 
+     replaceProtoRules [] = []
+     replaceProtoRules (item:items)
+       | isRuleItem item  =
+           [ TextItem ("text", render ppAbsState)
+-       -- Here we loose imported variants!
+-          ] ++ map (\x -> RuleItem (OpenProtoRule x [])) ruEs' ++ filter (not . isRuleItem) items
++          ] ++ concatMap replaceRule (item:items)
+       | otherwise        = item : replaceProtoRules items
+ 
++    retainedCount = length [() | KeepOriginal <- M.elems familyPlans]
++
+     ppAbsState =
+       (text $ " the abstract state after partial evaluation"
+               ++ " contains " ++ show (S.size st') ++ " facts:") $--$
+       (numbered' $ map prettyLNFact $ S.toList st') $--$
+-      (text $ "This abstract state results in " ++ show (length ruEs') ++
++      (text $ "This abstract state results in " ++ show (sum [length rs | EmitRefinements rs <- M.elems familyPlans]) ++
+               " refined multiset rewriting rules.\n" ++
++              (if retainedCount == 0 then "" else
++                "Kept " ++ show retainedCount ++
++                " original rule families to preserve their variants on export.\n") ++
+               "Note that the original number of multiset rewriting rules was "
+-              ++ show (length ruEs) ++ ".\n\n")
++              ++ show originalRuleCount ++ ".\n\n")
+ 
+ -- | Apply partial evaluation.
+ applyPartialEvaluationDiff :: EvaluationStyle -> Bool -> ClosedDiffTheory -> ClosedDiffTheory
+@@ -304,6 +382,35 @@ applyPartialEvaluationDiff evalStyle autoSources thy0 =
+               ++ show (length (ruEs RHS)) ++ ".\n\n")
+ 
+ 
++-- Partial evaluation only needs unification modulo AC when it starts from the
++-- already computed E-variants. Representing each compiled variant as an E-rule
++-- lets us reinstall its refined AC rule without recomputing or losing imported
++-- variants. Embedded restrictions are already separate theory items here; an
++-- empty local list avoids inferring monotonicity from a restriction whose
++-- variables were renamed while its E-variant was computed.
++compiledRule :: ClosedProtoRule -> ProtoRuleE
++compiledRule cru = case L.get cprRuleAC cru of
++  Rule info prems concs acts newVars ->
++    Rule (ProtoRuleEInfo
++            (L.get pracName info)
++            (L.get pracAttributes info)
++            [])
++         prems concs acts newVars
++
++openCompiledRule :: ProtoRuleE -> OpenProtoRule
++openCompiledRule ruE = OpenProtoRule ruE [compiledRuleAC ruE]
++
++compiledRuleAC :: ProtoRuleE -> ProtoRuleAC
++compiledRuleAC (Rule eInfo prems concs acts newVars) =
++    Rule acInfo prems concs acts newVars
++  where
++    acInfo = ProtoRuleACInfo
++               (L.get preName eInfo)
++               (L.get preAttributes eInfo)
++               (Disj [emptySubstVFresh])
++               []
++
++
+ -- | Open a theory by dropping the closed world assumption and values whose
+ -- soundness depends on it.
+ openTheory :: ClosedTheory -> OpenTheory
+diff --git a/lib/theory/src/Rule.hs b/lib/theory/src/Rule.hs
+index 798c93591a0c0ab832332faebb5eef2559e9916f..8b33128aaa0c7d41f9e19d01aadff760afa2631e 100644
+--- a/lib/theory/src/Rule.hs
++++ b/lib/theory/src/Rule.hs
+@@ -63,6 +63,10 @@ openProtoRule r = OpenProtoRule ruleE ruleAC
+ unfoldRuleVariants :: ClosedProtoRule -> [ClosedProtoRule]
+ unfoldRuleVariants (ClosedProtoRule ruE ruAC@(Rule ruACInfoOld ps cs as nvs))
+    | isTrivialProtoVariantAC ruAC ruE = [ClosedProtoRule ruE ruAC]
++   -- Supplied or previously unfolded members already have their own names.
++   -- Re-unfolding their identity substitution must not append another suffix.
++   | L.get pracVariants ruACInfoOld == Disj [emptySubstVFresh]
++   , ruleName ruAC /= ruleName ruE = [ClosedProtoRule ruE ruAC]
+    | otherwise = map toClosedProtoRule variants
+         where
+           ruACInfo i = ProtoRuleACInfo (rName i (L.get pracName ruACInfoOld)) rAttributes (Disj [emptySubstVFresh]) loopBreakers
+@@ -83,7 +87,8 @@ closeProtoRule :: MaudeHandle -> [LNMacro] -> OpenProtoRule -> [ClosedProtoRule]
+ -- if there are no macros, we do not call applyMacroInRule to make sure that new vars are not overwritten (important for diff mode)
+ closeProtoRule hnd []     (OpenProtoRule ruE [])   = ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd ruE)
+ closeProtoRule hnd macros (OpenProtoRule ruE [])   = ClosedProtoRule ruE <$> maybeToList (variantsProtoRule hnd (applyMacroInRule macros ruE))
+-closeProtoRule _   _      (OpenProtoRule ruE ruAC) = map (ClosedProtoRule ruE) ruAC
++closeProtoRule _   macros (OpenProtoRule ruE ruAC) =
++    map (ClosedProtoRule ruE . applyMacroInRulePreservingNewVars macros) ruAC
+ 
+ 
+ -- | Returns true if the REFINED sources contain open chains.
+diff --git a/lib/theory/src/Theory/Model/Rule.hs b/lib/theory/src/Theory/Model/Rule.hs
+index c4d976609f2ba7d7ba2f75a670b9b00b1762817b..a9426651802e042daa83ca5b20e2167f38fa5731 100644
+--- a/lib/theory/src/Theory/Model/Rule.hs
++++ b/lib/theory/src/Theory/Model/Rule.hs
+@@ -94,6 +94,7 @@ module Theory.Model.Rule (
+   , builtInDestrRuleInclPair
+   , containsNewVars
+   , getRuleName
++  , ruleProductsOutsideExponents
+   , getRuleNameDiff
+   , getDestrRuleFunction
+   , getRemainingRuleApplications
+@@ -110,6 +111,7 @@ module Theory.Model.Rule (
+   , compareRulesUpToNewVars
+   , equalUpToAddedActions
+   , equalUpToTerms
++  , alignRuleUpToRenaming
+ 
+   -- ** Conversion
+   , ruleACToIntrRuleAC
+@@ -133,6 +135,7 @@ module Theory.Model.Rule (
+   , xorRuleInstance
+   , addAction
+   , applyMacroInRule
++  , applyMacroInRulePreservingNewVars
+ 
+   -- ** Unification
+   , unifyRuleACInstEqs
+@@ -792,6 +795,18 @@ isTrivialProtoVariantAC (Rule info ps as cs nvs) (Rule _ ps' as' cs' nvs') =
+     L.get pracVariants info == Disj [emptySubstVFresh]
+     && ps == ps' && as == as' && cs == cs' && nvs == nvs'
+ 
++-- | Products in actions or conclusions that would be unsupported in an
++-- original E-rule. Keep this check shared by validation and rule export.
++ruleProductsOutsideExponents :: Rule i -> [LNTerm]
++ruleProductsOutsideExponents ru = concatMap products $
++    concatMap factTerms (L.get rActs ru ++ L.get rConcs ru)
++  where
++    products t = case viewTerm t of
++      FApp (AC Mult) _                         -> [t]
++      FApp (NoEq sym) [base, _] | sym == expSym -> products base
++      FApp _ args                              -> concatMap products args
++      _                                        -> []
++
+ -- | Returns a rule's name
+ getRuleName :: HasRuleName (Rule i) => Rule i -> String
+ getRuleName ru = case ruleName ru of
+@@ -955,6 +970,56 @@ equalUpToAddedActions ruAC@(Rule _ ps cs as _) ruE@(Rule _ ps' cs' as' _) =
+       then compareActions ass ass'
+       else compareActions ass (a':ass')
+ 
++-- | @alignRuleUpToRenaming member computed@ checks that @member@ equals
++-- @computed@ up to a bijective, sort-preserving renaming of variables and up
++-- to added actions: the premises and conclusions of @member@ are the renamed
++-- ones of @computed@, and the renamed actions of @computed@ occur in order
++-- among the actions of @member@. It returns those actions of @member@, that
++-- is, the actions of @computed@ in the variable names of @member@; the other
++-- actions of @member@ are added. The first alignment found is returned.
++-- Terms are compared modulo AC, and macros must already be expanded.
++alignRuleUpToRenaming :: (HasRuleName (Rule i), HasRuleName (Rule j))
++                      => Rule i -> Rule j -> WithMaude (Maybe [LNFact])
++alignRuleUpToRenaming member computed
++  | ruleName member /= ruleName computed = return Nothing
++  | equalUpToAddedActions member computed = return (Just acts')
++  | skeleton (facts' []) /= skeleton (L.get rPrems computed, L.get rConcs computed, []) =
++      return Nothing
++  | otherwise = reader $ \hnd -> listToMaybe
++      [ chosen
++      | chosen <- orderedChoices (L.get rActs member) acts'
++      , let actual = facts' chosen
++      , skeleton actual == skeleton expected
++      , isRenamingOf hnd actual expected ]
++  where
++    acts' = L.get rActs computed
++    facts' as = (L.get rPrems member, L.get rConcs member, as)
++    -- Rename apart, so that the unifier relates two disjoint sets of variables.
++    expected = (L.get rPrems computed, L.get rConcs computed, acts')
++                 `renameAvoiding` facts' (L.get rActs member)
++    -- Ordered selections of member actions with the tags of the computed ones.
++    orderedChoices _      []     = [[]]
++    orderedChoices []     _      = []
++    orderedChoices (a:as) (e:es) =
++      [ a : rest | factTag a == factTag e, rest <- orderedChoices as es ] ++
++      orderedChoices as (e:es)
++    -- A renaming preserves the facts once every variable is replaced by one
++    -- variable of the same sort; this cheap test avoids most unifications.
++    skeleton :: ([LNFact], [LNFact], [LNFact]) -> ([LNFact], [LNFact], [LNFact])
++    skeleton fs = apply (substFromList [ (v, varTerm (LVar "_" (lvarSort v) 0))
++                                       | v <- frees fs ] :: LNSubst) fs
++    isRenamingOf hnd actual@(ps, cs, as) (ps', cs', as') =
++      case concat <$> sequence (zipWith factEqs (ps ++ cs ++ as) (ps' ++ cs' ++ as')) of
++        Just eqs | length ps == length ps' && length cs == length cs' ->
++          any renamesBoth (unifyLNTerm eqs `runReader` hnd)
++        _ -> False
++      where
++        renamesBoth subst = isRenaming (restrictVFresh (frees actual) subst)
++                         && isRenaming (restrictVFresh (frees (ps', cs', as')) subst)
++    factEqs (Fact tag _ ts) (Fact tag' _ ts')
++      | tag == tag' && length ts == length ts' = Just (zipWith Equal ts ts')
++      | otherwise                              = Nothing
++
+ -- | returns true if the first Rule has the same name, premise, conclusion and
+ -- action facts, ignoring terms
+ equalUpToTerms :: (HasRuleName (Rule i), HasRuleName (Rule i2)) => (Rule i) -> (Rule i2) -> Bool
+@@ -1120,6 +1185,15 @@ applyMacroInRule mcs (Rule info ruPrems ruConcs ruActs _) = Rule info mRuPrems m
+     mRuActs    = map (applyMacroInFact mcs) ruActs
+     mRuNewVars = newVariables mRuPrems (mRuConcs ++ mRuActs)
+ 
++-- | Expand macros in an explicit variant member. Its new variables are kept
++-- in their positions, with macros expanded, instead of being recomputed from
++-- the expanded facts.
++applyMacroInRulePreservingNewVars :: [LNMacro] -> Rule i -> Rule i
++applyMacroInRulePreservingNewVars [] ru = ru
++applyMacroInRulePreservingNewVars mcs ru =
++    L.set rNewVars (map (applyMacros mcs) (L.get rNewVars ru)) $
++      applyMacroInRule mcs ru
++
+ 
+ -- Unification
+ --------------
+diff --git a/lib/theory/src/Theory/Text/Parser/Rule.hs b/lib/theory/src/Theory/Text/Parser/Rule.hs
+index 9bb540d9f7d2c72b4e0033326ca1f6fef43efdcf..d0b11b831aac58235894c139611b567719ede7f6 100644
+--- a/lib/theory/src/Theory/Text/Parser/Rule.hs
++++ b/lib/theory/src/Theory/Text/Parser/Rule.hs
+@@ -150,6 +150,8 @@ protoRuleAC = do
+         fail $ "cannot use reserved rule name '" ++ name ++ "'"
+     subst <- option emptySubst letBlock
+     (ps0,as0,cs0,rs0) <- genericRule msgvar nodevar
++    unless (null rs0) $
++        fail "Embedded restrictions in explicit AC variants are not supported; use named restrictions and action facts instead."
+     let (ps,as,cs,_) = apply subst (ps0,as0,cs0,rs0)
+     return $ Rule ri ps cs as (newVariables ps $ cs ++ as)
+ 
+diff --git a/lib/theory/src/Theory/Tools/AbstractInterpretation.hs b/lib/theory/src/Theory/Tools/AbstractInterpretation.hs
+index c1554b7ca30af23eaa7047d6bb66394e8f245c68..9ed4fae4634ff90d224780c9ee26a92f085638d8 100644
+--- a/lib/theory/src/Theory/Tools/AbstractInterpretation.hs
++++ b/lib/theory/src/Theory/Tools/AbstractInterpretation.hs
+@@ -25,6 +25,7 @@ import           Control.Basics
+ import           Control.Monad.Bind
+ import           Control.Monad.Reader
+ 
++import           Data.Function        (on)
+ import           Data.Label
+ import           Data.List
+ import qualified Data.Set             as S
+@@ -86,16 +87,22 @@ interpretAbstractly unifyFactEqs initState addFact stateFacts rus =
+ data EvaluationStyle = Silent | Summary | Tracing
+   deriving Show
+ 
+--- | Concrete partial evaluator activated with flag: --partial-evaluation
+-partialEvaluation :: EvaluationStyle
+-                  -> [ProtoRuleE] -> WithMaude (S.Set LNFact, [ProtoRuleE])
+-partialEvaluation evalStyle ruEs = reader $ \hnd ->
++-- | Concrete partial evaluator activated with flag: --partial-evaluation.
++-- Refinement uses the AC unifier used by the constraint solver. To preserve
++-- reachability modulo E, callers must supply a complete, unfolded set of
++-- E-variants, as the trace-theory applyPartialEvaluation caller does. The
++-- legacy applyPartialEvaluationDiff caller supplies original E-rules instead;
++-- this precondition does not establish soundness for that path.
++partialEvaluation :: (Eq i, Show i, HasFrees i, Apply LNSubst i)
++                  => EvaluationStyle
++                  -> [Rule i] -> WithMaude (S.Set LNFact, [Rule i])
++partialEvaluation evalStyle rules = reader $ \hnd ->
+     consumeEvaluation $ interpretAbstractly
+-        ((`runReader` hnd) . unifyLNFactEqs)  -- FIXME: Use E-unification here
++        ((`runReader` hnd) . unifyLNFactEqs)
+         S.empty
+         (S.insert . absFact)
+         S.toList
+-        ruEs
++        rules
+   where
+     consumeEvaluation [] = error "partialEvaluation: impossible"
+     consumeEvaluation ((st0, rus0) : rest0) =
+@@ -103,7 +110,10 @@ partialEvaluation evalStyle ruEs = reader $ \hnd ->
+       where
+         go _ st rus [] =
+           ( st
+-          , nubBy eqModuloFreshnessNoAC $                 -- remove duplicates
++          , map fst $ nubBy ((==) `on` snd) $
++            -- Share one comparison key per candidate; retain original hints
++            -- and the first representative. Equality comparisons remain quadratic.
++            map (\ru -> (ru, canonicalizeFreshnessNoAC ru)) $
+             map ((`evalFresh` nothingUsed) . rename) rus
+           )
+         go i st _   ((st', rus') : rest) =
+diff --git a/lib/theory/src/Theory/Tools/Wellformedness.hs b/lib/theory/src/Theory/Tools/Wellformedness.hs
+index c12787db680890c14a4f410a95f5f1c7a32d3246..e4d12125119269286723a1d61a5348f3270e6715 100644
+--- a/lib/theory/src/Theory/Tools/Wellformedness.hs
++++ b/lib/theory/src/Theory/Tools/Wellformedness.hs
+@@ -60,6 +60,7 @@ module Theory.Tools.Wellformedness (
+ 
+   -- * Wellformedness checking
+     WfErrorReport
++  , fatalWfErrors
+   , checkWellformedness
+   , checkWellformednessDiff
+ 
+@@ -82,17 +83,20 @@ import           Data.Label
+ import           Data.List                   (intersperse,(\\), intercalate, isPrefixOf)
+ import           Data.Maybe
+ -- import           Data.Monoid                 (mappend, mempty)
++import qualified Data.Map.Strict             as M
+ import qualified Data.Set                    as S
+ -- import           Data.Traversable            (traverse)
+ import Data.Functor (($>))
+ 
+ import           Control.Monad.Bind
++import           Control.Monad.Reader        (runReader)
+ 
+ import           Extension.Prelude
+ import           Term.LTerm
+ 
+ import           Term.Maude.Signature
+ import           Theory
++import           Theory.Model.Rule          (ruleProductsOutsideExponents)
+ import           Theory.Text.Pretty
+ import           Theory.Sapic
+ import           Theory.Tools.RuleVariants
+@@ -112,6 +116,18 @@ import Term.SubtermRule ( CtxtStRule, prettyCtxtStRule, filterNonSubtermCtxtRule
+ type Topic         = String
+ type WfError       = (Topic, Doc)
+ type WfErrorReport = [WfError]
++
++-- These checks identify unsupported inputs for which proof search can return
++-- a wrong verdict. Other wellformedness reports retain their warning policy.
++invalidVariantsTopic, uncoveredAddedActionTopic, unsupportedMultiplicationTopic :: Topic
++invalidVariantsTopic = underlineTopic "Variants"
++uncoveredAddedActionTopic = underlineTopic "Unsupported actions added to variants"
++unsupportedMultiplicationTopic = underlineTopic "Unsupported multiplication outside exponents"
++
++fatalWfErrors :: WfErrorReport -> WfErrorReport
++fatalWfErrors = filter ((`elem`
++    [invalidVariantsTopic, uncoveredAddedActionTopic, unsupportedMultiplicationTopic]) . fst)
++
+ type RuleAndFact   = (String, LNFact) -- String : name of rule where the fact is
+                                       -- LNFact : the rule
+ 
+@@ -136,7 +152,11 @@ thyProtoRules thy = [ applyMacroInRule (theoryMacros thy) (get oprRuleE ru) | Ru
+ -- | All protocol rules of a theory.
+ -- thyProtoRules :: OpenTranslatedTheory ->
+ diffThyProtoRules :: OpenDiffTheory -> [ProtoRuleE]
+-diffThyProtoRules thy = [ applyMacroInRule (diffTheoryMacros thy) (get dprRule ru) | DiffRuleItem ru <- get diffThyItems thy ]
++diffThyProtoRules thy = map (applyMacroInRule (diffTheoryMacros thy)) $ concat
++    [ get dprRule ru : case get dprLeftRight ru of
++        Nothing -> []
++        Just (leftSide, rightSide) -> map (get oprRuleE) [leftSide, rightSide]
++    | DiffRuleItem ru <- get diffThyItems thy ]
+ 
+ -- | Lower-case a string.
+ lowerCase :: String -> String
+@@ -353,9 +373,9 @@ natWellSortedReportDiff thy = natSortErrors itemsTerms
+ 
+ --- | Check that the protocol rule variants are correct.
+ variantsCheck :: MaudeHandle -> [LNMacro] -> String -> OpenProtoRule -> WfErrorReport
+-variantsCheck hnd macros info (OpenProtoRule ruE ruAC) = catMaybes
+-  [ guard (not (null ruAC) && not (sameVariantsUpToActions ruAC recomputedVariants)) $>
+-      ( underlineTopic "Variants"
++variantsCheck hnd macros info (OpenProtoRule ruE supplied) = catMaybes
++  [ guard (not (null ruAC) && not complete) $>
++      ( invalidVariantsTopic
+       , text info $-$ nest 2 (numbered' (map prettyProtoRuleAC ruAC))
+         $--$ text "Recomputed variants: " $--$
+         nest 2 (numbered' $ map prettyProtoRuleAC recomputedVariants)
+@@ -365,12 +385,60 @@ variantsCheck hnd macros info (OpenProtoRule ruE ruAC) = catMaybes
+       ,       text "Rule " <> prettyRuleName ruE <> text " has no variants."
+         $--$  text "Most likely, this means that the rule's use of fresh variables is contradictory. "
+         <>    text "For exaple, a rule with the premises In(~x) and Fr(~x) has no variants because ~x cannot be sent before it is generated." )]
++  ++ concat
++    [ addedActionReport (mhMaudeSig hnd) parsed inherited
++    | (parsed, Just inherited) <- zip ruAC alignments
++    ]
+   where
++    -- The solver uses the supplied members with their macros expanded.
++    ruAC = map (applyMacroInRulePreservingNewVars macros) supplied
+     recomputedVariants =
+       map (get cprRuleAC) $
+       concatMap (unfoldRuleVariants . ClosedProtoRule ruE) $
+       maybeToList (variantsProtoRule hnd (applyMacroInRule macros ruE))
+-    sameVariantsUpToActions parsed computed = all (\x -> any (equalUpToAddedActions x) computed) parsed
++    -- The solver uses the supplied members as they are. Every member must
++    -- therefore be a computed variant up to renaming and added actions, and
++    -- every computed variant must be supplied, or rule instances are missing.
++    -- The alignment also gives the member's inherited (computed) actions.
++    computedByName = M.fromList [(ruleName ru, ru) | ru <- recomputedVariants]
++    alignments =
++      [ M.lookup (ruleName parsed) computedByName >>= \computed ->
++          alignRuleUpToRenaming parsed computed `runReader` hnd
++      | parsed <- ruAC ]
++    complete = all isJust alignments &&
++      M.keysSet computedByName == S.fromList (map ruleName ruAC)
++
++-- | Actions that an explicit variant member adds to its computed variant are
++-- not part of variant computation. The solver discards every rule instance
++-- with a term that is not in normal form, including action terms, so an added
++-- action that can leave normal form silently removes rule instances. An added
++-- action may therefore only combine subterms that already occur in the
++-- member's premises, conclusions or computed actions, whose normality the
++-- variant guarantees, using symbols that can neither rewrite nor cancel. AC
++-- multiplication and xor are listed as irreducible but cancel. The comparison
++-- is syntactic, so it is conservative for AC subterms.
++addedActionReport :: MaudeSig -> ProtoRuleAC -> [LNFact] -> WfErrorReport
++addedActionReport msig member inherited =
++    [ ( uncoveredAddedActionTopic
++      , text "Rule" <-> prettyRuleName member <-> text "adds actions whose instances can leave normal form:"
++        $-$ nest 2 (prettyLNTermList uncovered)
++        $-$ text "Such subterms must already occur in the member's premises, conclusions or computed actions."
++        $-$ text "Annotate the original rule instead, so that variant computation covers them."
++      )
++    | not (null uncovered) ]
++  where
++    added = get rActs member \\ inherited
++    inheritedTerms = concatMap factTerms (get rPrems member ++ get rConcs member ++ inherited)
++    covered = S.fromList (concatMap subtermsOf inheritedTerms)
++    subtermsOf t = t : case viewTerm t of
++      FApp _ as -> concatMap subtermsOf as
++      _         -> []
++    stable = irreducibleFunSyms msig `S.difference` S.fromList [AC Mult, AC Xor]
++    risky t = case viewTerm t of
++      Lit _                           -> []
++      FApp o as | o `S.member` stable -> concatMap risky as
++      _                               -> [t]
++    uncovered = [ r | fa <- added, t <- factTerms fa, r <- risky t, r `S.notMember` covered ]
+ 
+ -- | Report on missing or different variants.
+ ruleVariantsReport :: SignatureWithMaude -> OpenTranslatedTheory -> WfErrorReport
+@@ -1037,6 +1105,21 @@ formulaReportsDiff thy = do
+                          fm     = applyMacroInFormula (diffTheoryMacros thy) (get rstrFormula rstr)
+                      return (header, fm)
+ 
++-- | Products in the actions or conclusions of an original rule, outside the
++-- exponent of @^@, are read modulo AC only: they are not expanded into their
++-- DH cancellation variants. Products in exponent position are normalised by
++-- variant computation and are supported. The multiplication-restriction
++-- warning of multRestrictedReport' also covers exponents in conclusions.
++multiplicationOutsideExponentsReport :: HasRuleName (Rule i) => Rule i -> WfErrorReport
++multiplicationOutsideExponentsReport ru =
++    [ ( unsupportedMultiplicationTopic
++      , text "Rule" <-> prettyRuleName ru <-> text "has products outside exponents:"
++        <-> prettyLNTermList mults
++      )
++    | not (null mults) ]
++  where
++    mults = ruleProductsOutsideExponents ru
++
+ -- | Check that all rules are multipliation restricted. Compared
+ -- to the definition in the paper we are slightly more lenient.
+ -- We also accept a rule that is an instance of a multiplication
+@@ -1109,8 +1192,10 @@ multRestrictedReport' irreducible ru0 = do
+ -- 2. check vars(rhs) subset of vars(lhs) u V_Pub for abstracted rule for abstracted variables.
+ -- 3. check that * does not occur in rhs of abstracted rule.
+ multRestrictedReport :: OpenTranslatedTheory -> WfErrorReport
+-multRestrictedReport thy = multRestrictedReport' irreducible (thyProtoRules thy)
++multRestrictedReport thy = multRestrictedReport' irreducible rules ++
++    concatMap multiplicationOutsideExponentsReport rules
+   where
++    rules = thyProtoRules thy
+     irreducible = irreducibleFunSyms $ get (sigpMaudeSig . thySignature) thy
+ 
+ 
+@@ -1123,8 +1208,10 @@ multRestrictedReport thy = multRestrictedReport' irreducible (thyProtoRules thy)
+ -- 2. check vars(rhs) subset of vars(lhs) u V_Pub for abstracted rule for abstracted variables.
+ -- 3. check that * does not occur in rhs of abstracted rule.
+ multRestrictedReportDiff :: OpenDiffTheory -> WfErrorReport
+-multRestrictedReportDiff thy = multRestrictedReport' irreducible (diffThyProtoRules thy)
++multRestrictedReportDiff thy = multRestrictedReport' irreducible rules ++
++    concatMap multiplicationOutsideExponentsReport rules
+   where
++    rules = diffThyProtoRules thy
+     irreducible = irreducibleFunSyms $ get (sigpMaudeSig . diffThySignature) thy
+ 
+ 
+diff --git a/src/Main/Mode/Batch.hs b/src/Main/Mode/Batch.hs
+index dcc7efe11025a2bc36b251f5aabaf84a67af3229..4949dde09ae1cc35cbd3253cea2521c6e9bffe37 100644
+--- a/src/Main/Mode/Batch.hs
++++ b/src/Main/Mode/Batch.hs
+@@ -241,6 +241,14 @@ run thisMode as
+                                             ++ [ prettyWfErrorReport report
+                                                , Pretty.text "" ]
+           die "quit-on-warning mode selected - aborting on wellformedness errors."
++        -- Like a parse error, unsupported input stops the batch.
++        handleError (UnsupportedInputError report) = do
++          putStrLn $ renderDoc $ Pretty.vcat [ Pretty.text ""
++                                             , Pretty.text $ "ERROR: unsupported rule semantics in " ++ inFile ++ ":"
++                                             , Pretty.text ""
++                                             , prettyWfErrorReport report
++                                             , Pretty.text "" ]
++          die "Unsupported rule semantics - aborting before proof search."
+ 
+         ppWf []  = Pretty.emptyDoc
+         ppWf rep = Pretty.vcat $
+diff --git a/src/Main/TheoryLoader.hs b/src/Main/TheoryLoader.hs
+index 9cbe6059e9b5466916cf05d932d849060b8c3241..c164123c54267db54fa90028af0375cbe3726e11 100644
+--- a/src/Main/TheoryLoader.hs
++++ b/src/Main/TheoryLoader.hs
+@@ -434,11 +434,17 @@ lemmaSelector thyOpts lem
+ data TheoryLoadError
+   = ParserError ParseError
+   | WarningError WfErrorReport
++  -- ^ Wellformedness warnings under --quit-on-warning.
++  | UnsupportedInputError WfErrorReport
++  -- ^ Rule input outside the supported fragment, for which proof search can
++  --   return a wrong verdict. Raised independently of --quit-on-warning, and
++  --   only when a theory is closed for proving.
+   | ExportTranslationError Export.ExportError
+ 
+ instance Show TheoryLoadError where
+   show (ParserError e) = show e
+   show (WarningError e) = Pretty.render (prettyWfErrorReport e)
++  show (UnsupportedInputError e) = Pretty.render (prettyWfErrorReport e)
+   show (ExportTranslationError e) = e.exportErrorCode ++ ": " ++ e.exportErrorMessage
+ 
+ -- | Load an open theory from a string with the given options.
+@@ -554,17 +560,26 @@ checkCloseIntrRuleDiff sign name diffThy = if deductionChainCheckBool then (sigW
+ -- | Perform wellformedness and deducability checks on a theory.
+ checkTranslatedTheory ::
+   (MonadIO m, MonadError TheoryLoadError m) =>
++  Bool ->
++  -- ^ Reject unsupported rule input. Export-only modes report it as a
++  --   warning instead, since no verdict is computed.
+   TheoryLoadOptions ->
+   SignatureWithMaude ->
+   Either OpenTranslatedTheory OpenDiffTheory ->
+   m (WfErrorReport, SignatureWithMaude, Either OpenTranslatedTheory OpenDiffTheory)
+-checkTranslatedTheory thyOpts sign thy = do
++checkTranslatedTheory rejectUnsupported thyOpts sign thy = do
+   let transReport =
+         either
+           (\openThy -> checkWellformedness incompleteMSRs openThy sign)
+           (`checkWellformednessDiff` sign)
+           thy
+ 
++  -- Reject known unsound inputs before derivation checking or closing can use
++  -- their supplied rules. This is independent of the general warning policy.
++  let fatalReport = fatalWfErrors transReport
++  when (rejectUnsupported && not (null fatalReport))
++    (throwError $ UnsupportedInputError fatalReport)
++
+   deducThy0 <- bitraverse (\x -> return ((addMessageDeductionRuleVariants x) `runReader` (mh)))
+                           (\x -> return ((addMessageDeductionRuleVariantsDiff x) `runReader` (mh))) thy
+ 
+@@ -727,7 +742,7 @@ closeTheory ::
+ closeTheory version loadedThyOpts sign srcThy = do
+   (preReport, transThy) <- translateTheory thyOpts srcThy
+   let removedThy = first removeTranslationItems transThy
+-  (postReport, sign', checkedThy) <- checkTranslatedTheory thyOpts sign removedThy
++  (postReport, sign', checkedThy) <- checkTranslatedTheory True thyOpts sign removedThy
+   closedThy <- closeTranslatedTheory thyOpts sign' checkedThy
+   finalThy <- withVersionAndReport version thyOpts (preReport ++ postReport) closedThy
+ 
+@@ -777,7 +792,7 @@ translateAndCheckTheory ::
+ translateAndCheckTheory _version thyOpts sign srcThy = do
+   (preReport, transThy) <- translateTheory thyOpts srcThy
+   let removedThy = first removeTranslationItems transThy
+-  (postReport, _, _) <- checkTranslatedTheory thyOpts sign removedThy
++  (postReport, _, _) <- checkTranslatedTheory False thyOpts sign removedThy
+   finalThy <-
+     case transThy of
+       Left _ -> pure transThy
+diff --git a/src/Web/Dispatch.hs b/src/Web/Dispatch.hs
+index e84e27810b4078a4843e97e6b09bc53baac103da..94bee9234c2188f3515cb3d64c11cae08eeb9bca 100644
+--- a/src/Web/Dispatch.hs
++++ b/src/Web/Dispatch.hs
+@@ -41,7 +41,7 @@ import System.Directory
+ import System.Exit
+ import System.FilePath
+ import Main.Console (renderDoc)
+-import Main.TheoryLoader (TheoryLoadError(ExportTranslationError, ParserError, WarningError), TheoryLoadOptions(..))
++import Main.TheoryLoader (TheoryLoadError(ExportTranslationError, ParserError, UnsupportedInputError, WarningError), TheoryLoadOptions(..))
+ import Theory
+ import Theory.Tools.Wellformedness
+ import Text.PrettyPrint.Class qualified as Pretty
+@@ -179,6 +179,11 @@ loadTheories thOpts readyMsg thDir thLoad thClose autoProver = do
+         Left (WarningError report) -> do
+           putStrLn $ renderDoc $ ppInteractive report path
+           die "quit-on-warning mode selected - aborting on wellformedness errors."
++        Left (UnsupportedInputError report) -> do
++          -- Skip this theory and keep serving the others.
++          putStrLn $ renderDoc $ ppInteractive report path
++          putStrLn $ "Rejected " ++ path ++ ": unsupported rule semantics."
++          pure Nothing
+         Left exportError@(ExportTranslationError _) -> do
+           putStrLn $ "Export error while loading " ++ path ++ ": " ++ show exportError
+           pure Nothing
+diff --git a/src/Web/Handler.hs b/src/Web/Handler.hs
+index d9baa4782bf0986c6e6f5469ef5b67a51feda0c8..d53cdaf4000c34880202596d4b37058640a6b1cd 100644
+--- a/src/Web/Handler.hs
++++ b/src/Web/Handler.hs
+@@ -418,6 +418,9 @@ reloadTheoryFromFile filePath idx isDiff replaceTrace replaceDiff successRoute =
+       show (length report) ++ " error(s) found" ++ (if isDiff then " in diff theory" else "") ++
+       ":\n\n" ++ renderHtmlDoc (htmlDoc $ prettyWfErrorReport report)
+ 
++    Left (UnsupportedInputError report) -> mkAlert $ "Unsupported rule semantics while reloading " ++ typeName ++ ":\n\n"
++      ++ filePath ++ "\n\n" ++ renderHtmlDoc (htmlDoc $ prettyWfErrorReport report)
++
+     Left exportError@(ExportTranslationError _) ->
+       mkAlert $ "Export error while reloading " ++ typeName ++ ":\n\n" ++ show exportError
+     

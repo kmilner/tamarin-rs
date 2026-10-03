@@ -1041,15 +1041,16 @@ fn convert(
             let sub = vec![nag, cag];
             Ok(if polarity { gconj(sub) } else { gdisj(sub) })
         }
-        // p ↔ q is (p ⇒ q) ∧ (q ⇒ p), and HS conjoins the two arms at both
-        // polarities (Guarded.hs).
+        // p ↔ q is (p ⇒ q) ∧ (q ⇒ p). Under negation the two
+        // negated implications are disjoined (Guarded.hs).
         ProtoFormula::Conn(Connective::Iff, a, b) => {
             let lhs = ProtoFormula::Conn(Connective::Imp, a.clone(), b.clone());
             let rhs = ProtoFormula::Conn(Connective::Imp, b.clone(), a.clone());
-            Ok(gconj(vec![
+            let sub = vec![
                 convert(polarity, &lhs, fresh)?,
                 convert(polarity, &rhs, fresh)?,
-            ]))
+            ];
+            Ok(if polarity { gdisj(sub) } else { gconj(sub) })
         }
         // The quantifier decides whether the body must be a top-level
         // implication (`convAll`) or a conjunction (`convEx`); the polarity

@@ -1,0 +1,352 @@
+diff --git a/examples/regression/diff/saved-proof-prove-diff.spthy b/examples/regression/diff/saved-proof-prove-diff.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..2c4ee7d5c12eb218c03145e264271412236b6c0b
+--- /dev/null
++++ b/examples/regression/diff/saved-proof-prove-diff.spthy
+@@ -0,0 +1,72 @@
++theory SavedProofProveDiff
++begin
++
++builtins: symmetric-encryption
++
++rule Key:
++  [ Fr(~k) ] --> [ !Key(~k), Out(~k) ]
++
++rule R:
++  [ In(x), In(y), !Key(k) ] --[ Got(y), UsesKey(k) ]-> [ Out(sdec(x,k)) ]
++
++rule C:
++  [ Fr(~a) ] --> [ Out(diff(~a, 'z')) ]
++
++// Saved proofs, as written by --diff --prove --output. They keep only the
++// branches that lead to a trace or an attack, so checking them leaves sorry
++// steps in the other branches. Once the trace or attack is found these need
++// no proof, and the proof search in some of them does not terminate.
++lemma got_enc [right]:
++  exists-trace "Ex k #i. Got(senc('m',k))@i & UsesKey(k)@i"
++simplify
++solve( !Key( k ) ▶₂ #i )
++  case Key
++  solve( splitEqs(0) )
++    case split_case_1
++    solve( !KU( senc('m', ~k) ) @ #vk.1 )
++      case c_senc
++      solve( !KU( ~k ) @ #vk.3 )
++        case Key
++        SOLVED // trace found
++      qed
++    qed
++  qed
++qed
++
++lemma got_enc [left]:
++  exists-trace "Ex k #i. Got(senc('m',k))@i & UsesKey(k)@i"
++simplify
++solve( !Key( k ) ▶₂ #i )
++  case Key
++  solve( splitEqs(0) )
++    case split_case_1
++    solve( !KU( senc('m', ~k) ) @ #vk.1 )
++      case c_senc
++      solve( !KU( ~k ) @ #vk.3 )
++        case Key
++        SOLVED // trace found
++      qed
++    qed
++  qed
++qed
++
++diffLemma Observational_equivalence:
++rule-equivalence
++  case Rule_Equality
++  backward-search
++    case RHS
++    step( simplify )
++    step( solve( !KD( x ) ▶₁ #i ) )
++      case C
++      step( solve( (#vl, 0) ~~> (#i, 1) ) )
++        case Const_pub_z
++        step( solve( !KU( 'z' ) @ #vk ) )
++          case pub
++          by ATTACK // trace found
++        qed
++      qed
++    qed
++  qed
++qed
++
++end
+diff --git a/examples/regression/diff/saved-proof-prove-diff.spthy.test.json b/examples/regression/diff/saved-proof-prove-diff.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..a9d15a53907a2e44206d875af567d229308f676b
+--- /dev/null
++++ b/examples/regression/diff/saved-proof-prove-diff.spthy.test.json
+@@ -0,0 +1,31 @@
++{
++  "tests": [
++    {
++      "name": "prove-saved-diff",
++      "args": [
++        "--diff",
++        "--prove"
++      ],
++      "timeout": 60,
++      "contains": [
++        "RHS :  got_enc (exists-trace): verified (6 steps)",
++        "LHS :  got_enc (exists-trace): verified (6 steps)",
++        "DiffLemma:  Observational_equivalence : falsified - found trace (7 steps)"
++      ]
++    },
++    {
++      "name": "retain-later-saved-attack",
++      "args": [
++        "--diff",
++        "--prove",
++        "--stop-on-trace=sorry",
++        "--bound=0"
++      ],
++      "contains": [
++        "RHS :  got_enc (exists-trace): verified",
++        "LHS :  got_enc (exists-trace): verified",
++        "DiffLemma:  Observational_equivalence : falsified - found trace"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/saved-proof-prove.spthy b/examples/regression/trace/saved-proof-prove.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d489c06d36f089c95d5779ca5fd89cc476f3111
+--- /dev/null
++++ b/examples/regression/trace/saved-proof-prove.spthy
+@@ -0,0 +1,33 @@
++theory SavedProofProve
++begin
++
++builtins: symmetric-encryption
++
++rule Key:
++  [ Fr(~k) ] --> [ !Key(~k), Out(~k) ]
++
++rule R:
++  [ In(x), In(y), !Key(k) ] --[ Got(y), UsesKey(k) ]-> [ Out(sdec(x,k)) ]
++
++// A saved proof, as written by --prove --output. It keeps only the branch
++// that leads to the trace, so checking it leaves sorry steps in the other
++// branches. Once the trace is found these need no proof, and the proof
++// search in some of them does not terminate.
++lemma got_enc:
++  exists-trace "Ex k #i. Got(senc('m',k))@i & UsesKey(k)@i"
++simplify
++solve( !Key( k ) ▶₂ #i )
++  case Key
++  solve( splitEqs(0) )
++    case split_case_1
++    solve( !KU( senc('m', ~k) ) @ #vk.1 )
++      case c_senc
++      solve( !KU( ~k ) @ #vk.3 )
++        case Key
++        SOLVED // trace found
++      qed
++    qed
++  qed
++qed
++
++end
+diff --git a/examples/regression/trace/saved-proof-prove.spthy.test.json b/examples/regression/trace/saved-proof-prove.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..ebbc38632488459e79712cbb7fe091378cbace8a
+--- /dev/null
++++ b/examples/regression/trace/saved-proof-prove.spthy.test.json
+@@ -0,0 +1,14 @@
++{
++  "tests": [
++    {
++      "name": "prove-saved-trace",
++      "args": [
++        "--prove"
++      ],
++      "timeout": 60,
++      "contains": [
++        "got_enc (exists-trace): verified (6 steps)"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/saved-proof-stop-on-sorry.spthy b/examples/regression/trace/saved-proof-stop-on-sorry.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..be0970be280d1044250a34ac7ffd2bd407287172
+--- /dev/null
++++ b/examples/regression/trace/saved-proof-stop-on-sorry.spthy
+@@ -0,0 +1,38 @@
++theory SavedProofProveStopOnSorry
++begin
++
++builtins: symmetric-encryption
++
++// A precedes Key in case order and cannot supply the encryption key. With
++// --bound=0 it stays unfinished; the later saved Key proof must survive.
++rule A:
++  [ Fr(~k) ] --> [ !Key(~k) ]
++
++rule Key:
++  [ Fr(~k) ] --> [ !Key(~k), Out(~k) ]
++
++rule R:
++  [ In(x), In(y), !Key(k) ] --[ Got(y), UsesKey(k) ]-> [ Out(sdec(x,k)) ]
++
++// A saved proof, as written by --prove --output. It keeps only the branch
++// that leads to the trace, so checking it leaves sorry steps in the other
++// branches. Once the trace is found these need no proof, and the proof
++// search in some of them does not terminate.
++lemma got_enc:
++  exists-trace "Ex k #i. Got(senc('m',k))@i & UsesKey(k)@i"
++simplify
++solve( !Key( k ) ▶₂ #i )
++  case Key
++  solve( splitEqs(0) )
++    case split_case_1
++    solve( !KU( senc('m', ~k) ) @ #vk.1 )
++      case c_senc
++      solve( !KU( ~k ) @ #vk.3 )
++        case Key
++        SOLVED // trace found
++      qed
++    qed
++  qed
++qed
++
++end
+diff --git a/examples/regression/trace/saved-proof-stop-on-sorry.spthy.test.json b/examples/regression/trace/saved-proof-stop-on-sorry.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..d39727e2bf10fde536c96f822fb69cdc9fc8d598
+--- /dev/null
++++ b/examples/regression/trace/saved-proof-stop-on-sorry.spthy.test.json
+@@ -0,0 +1,15 @@
++{
++  "tests": [
++    {
++      "name": "retain-later-saved-trace",
++      "args": [
++        "--prove",
++        "--stop-on-trace=sorry",
++        "--bound=0"
++      ],
++      "contains": [
++        "got_enc (exists-trace): verified"
++      ]
++    }
++  ]
++}
+diff --git a/lib/theory/src/Theory/Proof.hs b/lib/theory/src/Theory/Proof.hs
+index f5699c4930c7ef7991455b9790d2caff7447b952..c8a433a6c2d3a25030fd66225348e91c1023ecd0 100644
+--- a/lib/theory/src/Theory/Proof.hs
++++ b/lib/theory/src/Theory/Proof.hs
+@@ -85,6 +85,8 @@ module Theory.Proof (
+   , AutoProver(..)
+   , runAutoProver
+   , runAutoDiffProver
++  , runAutoProverOnSorries
++  , runAutoDiffProverOnSorries
+ 
+   -- ** Pretty Printing
+   , prettyProof
+@@ -729,15 +731,8 @@ selectDiffTactic prover ctx = fromMaybe [defaultTactic]
+ 
+ runAutoProver :: AutoProver -> Prover
+ runAutoProver aut@(AutoProver _ _  bound cut _) =
+-    mapProverProof cutSolved $ maybe id boundProver bound autoProver
++    mapProverProof (extractSolutions cut) $ maybe id boundProver bound autoProver
+   where
+-    cutSolved = case cut of
+-      CutDFS             -> cutOnSolvedDFS
+-      CutBFS             -> cutOnSolvedBFS
+-      CutSingleThreadDFS -> cutOnSolvedSingleThreadDFS
+-      CutNothing         -> id
+-      CutAfterSorry      -> cutAfterFirstSorry
+-
+     -- | The standard automatic prover that ignores the existing proof and
+     -- tries to find one by itself.
+     autoProver :: Prover
+@@ -751,15 +746,8 @@ runAutoProver aut@(AutoProver _ _  bound cut _) =
+ 
+ runAutoDiffProver :: AutoProver -> DiffProver
+ runAutoDiffProver aut@(AutoProver _ _ bound cut _) =
+-    mapDiffProverDiffProof cutSolved $ maybe id boundProver bound autoProver
++    mapDiffProverDiffProof (extractDiffSolutions cut) $ maybe id boundProver bound autoProver
+   where
+-    cutSolved = case cut of
+-      CutDFS             -> cutOnSolvedDFSDiff
+-      CutBFS             -> cutOnSolvedBFSDiff
+-      CutSingleThreadDFS -> cutOnSolvedSingleThreadDFSDiff
+-      CutAfterSorry      -> cutAfterFirstSorryDiff
+-      CutNothing         -> id
+-
+     -- | The standard automatic prover that ignores the existing proof and
+     -- tries to find one by itself.
+     autoProver :: DiffProver
+@@ -772,6 +760,47 @@ runAutoDiffProver aut@(AutoProver _ _ bound cut _) =
+         boundDiffProofDepth b <$> runDiffProver p ctxt d se prf
+ 
+ 
++-- | Replace the sorry steps of an existing proof by proofs of the automatic
++-- prover, and extract solutions from the resulting proof as a whole, as the
++-- automatic prover does for a proof it constructs from scratch. Extracting
++-- them for each replaced step separately would search every replaced step
++-- until it finds a solution or ends, even when the existing proof or another
++-- replaced step already contains one, and such a search need not terminate.
++-- Stopping at a sorry instead applies only within each replacement: cutting
++-- the whole tree at an unfinished sibling could discard a saved solution.
++runAutoProverOnSorries :: AutoProver -> Prover
++runAutoProverOnSorries aut
++  | apCut aut == CutAfterSorry = replaceSorryProver $ runAutoProver aut
++  | otherwise = mapProverProof (extractSolutions (apCut aut)) $
++      replaceSorryProver $ runAutoProver aut { apCut = CutNothing }
++
++-- | Replace the sorry steps of an existing diff proof by proofs of the
++-- automatic diff prover, and extract solutions from the resulting proof as a
++-- whole; see 'runAutoProverOnSorries'.
++runAutoDiffProverOnSorries :: AutoProver -> DiffProver
++runAutoDiffProverOnSorries aut
++  | apCut aut == CutAfterSorry = replaceDiffSorryProver $ runAutoDiffProver aut
++  | otherwise = mapDiffProverDiffProof (extractDiffSolutions (apCut aut)) $
++      replaceDiffSorryProver $ runAutoDiffProver aut { apCut = CutNothing }
++
++-- | Keep only the part of a proof that the solution extractor selects.
++extractSolutions :: SolutionExtractor -> Proof (Maybe a) -> Proof (Maybe a)
++extractSolutions cut = case cut of
++    CutDFS             -> cutOnSolvedDFS
++    CutBFS             -> cutOnSolvedBFS
++    CutSingleThreadDFS -> cutOnSolvedSingleThreadDFS
++    CutNothing         -> id
++    CutAfterSorry      -> cutAfterFirstSorry
++
++-- | Keep only the part of a diff proof that the solution extractor selects.
++extractDiffSolutions :: SolutionExtractor -> DiffProof (Maybe a) -> DiffProof (Maybe a)
++extractDiffSolutions cut = case cut of
++    CutDFS             -> cutOnSolvedDFSDiff
++    CutBFS             -> cutOnSolvedBFSDiff
++    CutSingleThreadDFS -> cutOnSolvedSingleThreadDFSDiff
++    CutAfterSorry      -> cutAfterFirstSorryDiff
++    CutNothing         -> id
++
+ -- | The result of one pass of iterative deepening.
+ data IterDeepRes = NoSolution | MaybeNoSolution | Solution ProofPath
+ 
+diff --git a/src/Main/TheoryLoader.hs b/src/Main/TheoryLoader.hs
+index c164123c54267db54fa90028af0375cbe3726e11..4866cb4dccf7d49daad57d00fc3ab4677e53e122 100644
+--- a/src/Main/TheoryLoader.hs
++++ b/src/Main/TheoryLoader.hs
+@@ -720,11 +720,11 @@ closeTranslatedTheory thyOpts sign srcThy = do
+     selector l = lemmaSelectorByModule thyOpts l && lemmaSelector thyOpts l
+ 
+     prover
+-      | thyOpts.proveMode = replaceSorryProver $ runAutoProver $ constructAutoProver thyOpts
++      | thyOpts.proveMode = runAutoProverOnSorries $ constructAutoProver thyOpts
+       | otherwise = mempty
+ 
+     diffProver
+-      | thyOpts.proveMode = replaceDiffSorryProver $ runAutoDiffProver $ constructAutoProver thyOpts
++      | thyOpts.proveMode = runAutoDiffProverOnSorries $ constructAutoProver thyOpts
+       | otherwise = mempty
+ 
+     withDiffTheory = bitraverse pure

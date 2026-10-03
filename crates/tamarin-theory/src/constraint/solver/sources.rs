@@ -960,8 +960,8 @@ fn refine_one_source(
                 ctx,
                 sys,
                 ths_snapshot,
-                // HS `solveAllSafeGoals (filter goodTh ths) (get
-                // paramOpenChainsLimit parameters)` (Sources.hs):
+                // HS `solveAllSafeGoals (filter goodTh ths) parameters`
+                // (Sources.hs), using `paramOpenChainsLimit` at :146:
                 // the `-c/--open-chains` limit, default 10.
                 ctx.parameters.open_chains_limit(),
                 outer_cap,
@@ -1663,15 +1663,17 @@ fn run_solve_all_safe_goals_disj_with_progress(
                     if chains_left > 0 {
                         true
                     } else {
-                        // HS `safeGoal` traces UNCONDITIONALLY (no
-                        // `showSaturationSteps` gate) each time it rejects a
-                        // chain goal for an exhausted budget
-                        // (Sources.hs) — every mode, stderr.
-                        eprintln!(
-                            "[Open Chains] Too many chain constraints, \
-                             stopping precomputation. Open Chains limits (can \
-                             be changed with -c=): {chains_limit}"
-                        );
+                        // HS `safeGoal` reports an exhausted chain budget via
+                        // `traceChainLimit` (Sources.hs), gated by
+                        // `showSaturationSteps`, keeping auxiliary derivation
+                        // and NDC checks silent.
+                        if red.ctx.show_saturation_steps {
+                            eprintln!(
+                                "[Open Chains] Too many chain constraints, \
+                                 stopping precomputation. Open Chains limits (can \
+                                 be changed with -c=): {chains_limit}"
+                            );
+                        }
                         false
                     }
                 }

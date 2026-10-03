@@ -329,13 +329,16 @@ mod tests {
             "restriction single_session: \
              \"All #i #j. Init() @ #i & Init() @ #j ==> #i = #j\" process: 0",
         ] {
-            let parsed = tamarin_parser::parse_theory(&format!("theory T begin {source} end"), &[])
-                .unwrap();
+            let parsed =
+                tamarin_parser::parse_theory(&format!("theory T begin {source} end"), &[]).unwrap();
             let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
             let duplicate = thy.restrictions().next().unwrap().name.clone();
             let error = apply_sapic(&mut thy, false).unwrap_err();
             assert_eq!(error.message, format!("duplicate restriction: {duplicate}"));
-            assert_eq!(thy.restrictions().filter(|r| r.name == duplicate).count(), 1);
+            assert_eq!(
+                thy.restrictions().filter(|r| r.name == duplicate).count(),
+                1
+            );
         }
     }
 

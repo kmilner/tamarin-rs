@@ -782,7 +782,7 @@ fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
 }
 
 /// Apply `--auto-sources` (HS `closeTheoryWithMaude`'s autosources branch,
-/// CloseRule.hs).  When the raw sources contain
+/// CloseRule.hs#closeTheoryWithMaude). When the raw sources contain
 /// partial deconstructions, unfold every rule into its AC-variant rules
 /// ([`unfold_rule_variants`]), annotate them with AUTO_* actions and append
 /// the `AUTO_typing` sources lemma.  `ndc_cache` is the theory's

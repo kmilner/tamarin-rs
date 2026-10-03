@@ -1361,7 +1361,7 @@ struct TheoryPipeline<'a> {
     /// `close_translated_theory` to join into the signature — HS's
     /// `closeTheory` adopts `checkTranslatedTheory`'s `sign'` while
     /// `translateAndCheckTheory` binds `(postReport, _, _)` and discards it
-    /// (TheoryLoader.hs).
+    /// (TheoryLoader.hs#translateAndCheckTheory).
     ndc_funs: Vec<tamarin_term::function_symbols::FunSym>,
 }
 
@@ -1791,7 +1791,7 @@ impl TheoryPipeline<'_> {
         }
 
         // `--auto-sources` (HS `closeTheoryWithMaude` autosources branch,
-        // CloseRule.hs): when the raw sources contain
+        // CloseRule.hs#closeTheoryWithMaude): when the raw sources contain
         // partial deconstructions, unfold every rule into its AC-variant
         // rules (`unfoldRuleVariants`), annotate them with AUTO_* actions and
         // add the `AUTO_typing` sources lemma.  HS applies this on EVERY
@@ -2416,7 +2416,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 let results = skipped_results(&st.elaborated, &opts.lemma_names);
 
                 // Translate-only render (`prettyOpenTheoryByModule`,
-                // TheoryLoader.hs, followed by `withVersionAndReport`'s
+                // TheoryLoader.hs#prettyOpenTheoryByModule, followed by `withVersionAndReport`'s
                 // two trailing comment items, TheoryLoader.hs).  The doc
                 // is BUFFERED — Batch.hs processes every file before any
                 // doc is printed or written.

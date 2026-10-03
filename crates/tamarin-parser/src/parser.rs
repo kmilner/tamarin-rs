@@ -2175,7 +2175,7 @@ impl<'a> Parser<'a> {
                 // check never runs, and nothing is registered.  Discarding the
                 // requested attributes is what keeps `functions: fst/1
                 // [destructor]` printing as `function: fst (Any) : Any` in the
-                // open theory's typing lines (TheoryObject.hs).
+                // open theory's typing lines (TheoryObject.hs#prettyTranslationElement).
                 return Ok(FunctionDecl {
                     name,
                     arg_types: self.materialize_function_args(args)?,

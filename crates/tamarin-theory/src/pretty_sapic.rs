@@ -308,7 +308,7 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
         // formula wraps at the HughesPJ default width — and the same string
         // feeds BOTH the `process="..."` attribute and the SAPIC-derived rule
         // names, which the `filter isAlpha` of `stripNonAlphanumerical`
-        // (Sapic/Facts.hs) leaves unaffected by the break.
+        // (Sapic/Facts.hs#stripNonAlphanumerical) leaves unaffected by the break.
         ProcessCombinator::Cond(f) => {
             format!(
                 "if {}",

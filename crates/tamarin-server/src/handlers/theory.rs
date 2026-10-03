@@ -1841,15 +1841,15 @@ fn json_graph_response(body: String) -> Response {
 /// `imgThyPath`'s (`/graph`) and `dotGraphString`'s
 /// (`/interactive-graph-def`).  This `error` is upstream's DELIBERATE answer
 /// to a theory path the route does not draw, so the port reproduces its page
-/// byte-for-byte. Coordinates include PR #928; captured HTTP fixtures verify
-/// them against the patched oracle.
-const JSON_UNHANDLED_SITE: &str = "1312:31";
+/// byte-for-byte. Captured HTTP fixtures verify these coordinates against
+/// the pinned, patched oracle.
+const JSON_UNHANDLED_SITE: &str = "1314:31";
 
 /// `imgThyPath`'s clause — see [`JSON_UNHANDLED_SITE`].
-const GRAPH_UNHANDLED_SITE: &str = "1410:51";
+const GRAPH_UNHANDLED_SITE: &str = "1412:51";
 
 /// `dotGraphString`'s clause — see [`JSON_UNHANDLED_SITE`].
-const INTERACTIVE_DOT_UNHANDLED_SITE: &str = "2317:51";
+const INTERACTIVE_DOT_UNHANDLED_SITE: &str = "2319:51";
 
 /// The `error` `thyPathSystem`'s catch-all clause raises for a theory path that
 /// is neither a proof nor a source case, as GHC renders it into Yesod's error
