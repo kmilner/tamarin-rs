@@ -556,7 +556,18 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::
             change_list.push((fm.clone(), simp));
         }
     }
-    for (fm, simp) in change_list {
+    apply_formula_atom_changes(red, &change_list)
+}
+
+/// Continue the frozen evalFormulaAtoms change list in every equality branch.
+/// Returning immediately on a split defers the remaining changes until after
+/// substSystem, reopening knowledge goals under an intermediate substitution.
+fn apply_formula_atom_changes(
+    red: &mut Reduction,
+    mut changes: &[(crate::guarded::Guarded, crate::guarded::Guarded)],
+) -> Result<SystemOutcome, crate::prove::ProveError> {
+    use crate::guarded::Guarded;
+    while let Some(((fm, simp), rest)) = changes.split_first() {
         // Haskell `evalFormulaAtoms` (Simplify.hs):
         //   case fm of
         //     GDisj disj -> markGoalAsSolved "simplified" (DisjG disj)
@@ -596,8 +607,8 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::
         // vacuous Simplify step downstream where Haskell goes straight to
         // Solve (injectivity_check class).
         red.sys.invalidate_max_var_idx_cache();
-        red.sys.formulas_mut().retain(|f| **f != fm);
-        red.sys.insert_solved_formula(fm);
+        red.sys.formulas_mut().retain(|f| **f != *fm);
+        red.sys.insert_solved_formula(fm.clone());
         // HS-faithful: `evalFormulaAtoms` (Simplify.hs) ALWAYS
         // calls `insertFormula fm'` regardless of whether `fm'` is gtrue,
         // gfalse, or any other shape.  Critical for the empty-Conj
@@ -622,9 +633,24 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::
         // short-circuits the dedup check.  Without parity here we get +1
         // step counts at every checkpoint inside the affected proof subtree.
         red.changed = ChangeIndicator::Changed;
-        match red.insert_formula(simp)? {
-            SystemOutcome::Linear => {}
-            outcome => return Ok(outcome),
+        match red.insert_formula(simp.clone())? {
+            SystemOutcome::Linear => changes = rest,
+            SystemOutcome::Contradictory => return Ok(SystemOutcome::Contradictory),
+            SystemOutcome::Cases(arms) => {
+                let mut completed = Vec::new();
+                for arm in arms {
+                    let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
+                    match apply_formula_atom_changes(&mut branch, rest)? {
+                        SystemOutcome::Linear => completed.push(SystemBranch {
+                            sys: branch.sys,
+                            counter: branch.maude.fresh_counter_peek(),
+                        }),
+                        SystemOutcome::Cases(arms) => completed.extend(arms),
+                        SystemOutcome::Contradictory => {}
+                    }
+                }
+                return Ok(red.finish_system_cases(completed));
+            }
         }
     }
     Ok(SystemOutcome::Linear)

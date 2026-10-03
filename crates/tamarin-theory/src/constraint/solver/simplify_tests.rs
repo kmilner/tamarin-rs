@@ -182,6 +182,74 @@ fn implied_formulas_do_not_force_existential_reuse_lemmas() {
     assert!(red.sys.goals.is_empty());
 }
 
+#[test]
+fn formula_atom_evaluation_finishes_its_change_list_in_every_branch() {
+    use crate::atom::ProtoAtom;
+    use crate::formula::{lift_free, Quantifier};
+    use crate::guarded::Guarded;
+    use tamarin_term::builtin::msg_var;
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::term::f_app_ac;
+    use tamarin_term::vterm::var_term;
+
+    let Some(maude) = maude_with_sig(tamarin_term::maude_sig::mset_maude_sig()) else {
+        return;
+    };
+    let ctx = ProofContext::new(maude, Vec::new());
+    let equality = |left, right| Guarded::Atom(ProtoAtom::EqE(lift_free(&left), lift_free(&right)));
+    let union = |terms| f_app_ac(AcSym::Union, terms);
+    let last = LVar::new("last", LSort::Node, 4);
+    let bodies = [
+        equality(
+            union(vec![msg_var("x", 0), msg_var("y", 1)]),
+            union(vec![pub_term("a"), pub_term("b")]),
+        ),
+        equality(
+            union(vec![msg_var("u", 2), msg_var("v", 3)]),
+            union(vec![pub_term("c"), pub_term("d")]),
+        ),
+        Guarded::Atom(ProtoAtom::Last(lift_free(&var_term(last)))),
+    ];
+    // Each true guard simplifies away in the same frozen evaluation pass.
+    // The first two bodies each split into two AC-unification branches;
+    // all four continuations must still process the final Last atom.
+    let formulas: Vec<_> = ["a", "b", "c"]
+        .into_iter()
+        .zip(bodies)
+        .map(|(name, body)| Guarded::GGuarded {
+            qua: Quantifier::All,
+            vars: Vec::new().into(),
+            guards: vec![ProtoAtom::EqE(
+                lift_free(&pub_term(name)),
+                lift_free(&pub_term(name)),
+            )]
+            .into(),
+            body: std::sync::Arc::new(body),
+        })
+        .collect();
+    assert!(formulas.windows(2).all(|pair| pair[0] < pair[1]));
+    let mut sys = System::empty();
+    for formula in &formulas {
+        sys.insert_formula(formula.clone());
+    }
+    let mut red = Reduction::new(&ctx, sys);
+    let SystemOutcome::Cases(arms) = eval_formula_atoms_pass(&mut red).unwrap() else {
+        panic!("the two independent equalities must fan out");
+    };
+    assert_eq!(arms.len(), 4);
+    for arm in arms {
+        assert_eq!(arm.sys.last_atom, Some(last));
+        for formula in &formulas {
+            assert!(!crate::guarded::stores_contains(&arm.sys.formulas, formula));
+            assert!(crate::guarded::stores_contains(
+                &arm.sys.solved_formulas,
+                formula
+            ));
+        }
+    }
+}
+
 /// Run the production simplifier in tests that intentionally construct a
 /// linear case. A surprise split is itself a regression in these fixtures.
 fn simplify_one(ctx: &ProofContext, sys: System) -> System {
