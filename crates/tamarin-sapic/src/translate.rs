@@ -394,32 +394,29 @@ pub(crate) fn translate(
     opts: TranslateOptions,
 ) -> Result<Translation, String> {
     // The annotation chain, innermost first (sapic/src/Sapic.hs): toAnProcess,
-    // propagateNames, annotatePureStates, translateTermsReport,
-    // translateLetDestr, annotateSecretChannels — then annotateLocks.
+    // propagateNames, translateTermsReport, translateLetDestr,
+    // annotateSecretChannels, annotatePureStates — then annotateLocks.
     let an_proc_pre: Process<ProcessAnnotation<LVar>, SapicLVar> =
         propagate_names(to_annotated::<LVar>(plain));
-    // `checkOps' (._stateChannelOpt) annotatePureStates`
-    // (sapic/src/Sapic.hs): the
-    // pure-state / state-channel optimisation, off unless the theory declares
-    // `options: translation-state-optimisation`.
-    let an_proc_states = if opts.state_channel_opt {
-        crate::states::annotate_pure_states(an_proc_pre)
-    } else {
-        an_proc_pre
-    };
     // `checkOps' (._transReport) translateTermsReport`
     // (sapic/src/Sapic.hs): rewrite
     // `report(t)` terms to `rep(t, loc)` under the in-scope `@location`
     // annotation.
     let an_proc_rep = if opts.trans_report {
-        crate::report::translate_terms_report(an_proc_states)
+        crate::report::translate_terms_report(an_proc_pre)
     } else {
-        an_proc_states
+        an_proc_pre
     };
     let an_proc_let = crate::let_destructors::translate_let_destr(macros, st_rules, an_proc_rep)?;
     // Substituting a let can expose a channel name through an escaping alias.
     let an_proc_sec = crate::secret_channels::annotate_secret_channels(an_proc_let);
-    let an_proc = crate::locks::annotate_locks(an_proc_sec)?;
+    // State identifiers and generated-plan binders are final after substitution.
+    let an_proc_states = if opts.state_channel_opt {
+        crate::states::annotate_pure_states(an_proc_sec)
+    } else {
+        an_proc_sec
+    };
+    let an_proc = crate::locks::annotate_locks(an_proc_states)?;
 
     // Build the translation context (gated progress/reliable/async wrappers).
     // The progress-function domain / inverse are computed once (HS recomputes
