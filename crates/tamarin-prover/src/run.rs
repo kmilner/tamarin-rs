@@ -69,17 +69,52 @@ pub enum RunError {
     Regular(String),
     /// An exception which escapes to Haskell's top-level runtime handler.
     GhcException(String),
+    /// A fatal wellformedness report, printed on stdout by Batch.handleError.
+    UnsupportedInput {
+        in_file: String,
+        report: tamarin_theory::wellformedness::WfReport,
+    },
 }
 
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Regular(message) | Self::GhcException(message) => f.write_str(message),
+            Self::UnsupportedInput { in_file, report } => write!(
+                f,
+                "unsupported rule semantics in {in_file}:\n{}",
+                tamarin_theory::pretty_theory::render_wf_error_report(report)
+            ),
         }
     }
 }
 
 impl std::error::Error for RunError {}
+
+impl RunError {
+    fn variants(error: tamarin_theory::tools::rule_variants::VariantsError, in_file: &str) -> Self {
+        match error {
+            tamarin_theory::tools::rule_variants::VariantsError::UnsupportedInput(report) => {
+                Self::UnsupportedInput {
+                    in_file: in_file.to_owned(),
+                    report,
+                }
+            }
+            other => Self::Regular(other.to_string()),
+        }
+    }
+}
+
+/// Batch.hs `handleError (UnsupportedInputError report)`: the report goes to
+/// stdout; only the abort message goes to stderr. No theory or summary follows.
+pub fn print_unsupported_input(in_file: &str, report: &tamarin_theory::wellformedness::WfReport) {
+    let report = tamarin_theory::pretty_theory::render_wf_error_report(report);
+    println!(
+        "\nERROR: unsupported rule semantics in {in_file}:\n\n{}\n",
+        report.trim_end_matches('\n')
+    );
+    eprintln!("Unsupported rule semantics - aborting before proof search.");
+}
 
 impl From<tamarin_theory::prove::ProveError> for RunError {
     fn from(error: tamarin_theory::prove::ProveError) -> Self {
@@ -1640,13 +1675,15 @@ impl TheoryPipeline<'_> {
         // persist breaker annotations on its open theory.
         let translate_mode = self.translate_module.is_some();
         if let Some(m) = self.file_maude.as_ref() {
-            self.wf_report
-                .extend(tamarin_theory::tools::rule_variants::prepare_theory_rules(
+            self.wf_report.extend(
+                tamarin_theory::tools::rule_variants::prepare_theory_rules(
                     std::sync::Arc::make_mut(&mut self.elaborated),
                     m,
                     self.file_maude_pool.as_deref(),
                     !translate_mode,
-                )?);
+                )
+                .map_err(|error| RunError::variants(error, &self.elaborated.in_file))?,
+            );
         } else {
             self.wf_report.extend(
                 tamarin_theory::wellformedness::check_wellformedness(&self.elaborated, None)
@@ -1832,7 +1869,8 @@ impl TheoryPipeline<'_> {
                 std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.as_deref(),
-            )?;
+            )
+            .map_err(|error| RunError::variants(error, &self.elaborated.in_file))?;
 
             // HS's re-close passes `autoSources` again
             // (`applyPartialEvaluation style autoSources`, TheoryLoader.hs;

@@ -58,8 +58,8 @@ The runner's topic comparison has two rules:
 This directory holds one `<fixture>.report` file per pinned fixture.
 Each file starts with `#` provenance lines, and the expected block
 follows them. The files use two provenance keys. Every file carries a
-`# source:` line, and that line must name the oracle. Four files also
-carry an `# omits:` line. Those four files need it because the
+`# source:` line, and that line must name the oracle. Three files also
+carry an `# omits:` line. Those three files need it because the
 oracle's block ends with a `Message Derivation Checks` section.
 Harness 2's pipeline does not produce that section. The production callers splice
 that section in afterwards. It is a dynamic check, and it needs Maude.
@@ -84,6 +84,10 @@ Load the fixture through the pinned `tamarin-prover` build. You do not
 need `--prove`, because the wellformedness checks print at load. Copy
 the `/* WARNING … */` block. Drop any trailing
 `Message Derivation Checks` section. Keep the `#` header.
+For fatal findings such as unsupported products, use `-m=msr` to print
+the report without attempting to prove the invalid theory. The multiplication
+fixture also uses `--derivcheck-timeout=0`, so its capture needs no dynamic
+section removed.
 
 ## Check categories
 
@@ -113,6 +117,7 @@ fixture pins yet are marked *(unpinned)*:
   `Formula terms`)*
 - Unbound variables
 - Multiplication restriction of rules
+- Unsupported multiplication outside exponents
 - Variants / Rule has no variants *(unpinned)*
 - Lemma annotations
 - Inexistent lemma actions *(unpinned)*

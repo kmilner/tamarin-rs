@@ -74,12 +74,23 @@ impl WfError {
     }
 
     /// A `WfError` whose body is a ready `Doc`, framed the way
-    /// `prettyWfErrorReport` frames a topic group: `text topic $-$ nest 2
-    /// body` (Wellformedness.hs), rendered into
+    /// `prettyWfErrorReport` frames a plain topic group:
+    /// `text topic $-$ nest 2 body`, rendered into
     /// [`WfError::message`].
     pub fn block(topic: impl Into<String>, body: Doc) -> Self {
         let topic = topic.into();
         let message = Doc::text(&topic)
+            .above_g(body.nest(2))
+            .render_with(WF_LINE_LENGTH, WF_RIBBON);
+        WfError { topic, message }
+    }
+
+    /// A block with an underlined heading, retaining the bare grouping topic.
+    /// Haskell opts into `underlineTopic` per check; accountability uses plain
+    /// headings and must not inherit the rule checks' formatting.
+    pub fn underlined_block(topic: impl Into<String>, body: Doc) -> Self {
+        let topic = topic.into();
+        let message = Doc::text(underline_topic(&topic))
             .above_g(body.nest(2))
             .render_with(WF_LINE_LENGTH, WF_RIBBON);
         WfError { topic, message }
@@ -231,4 +242,18 @@ pub fn underline_topic(title: &str) -> String {
 /// so a 1-of-10+ list prints ` 1.`…`10.`.
 fn numbered_index_width(count: usize) -> usize {
     count.to_string().len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_heading_style_is_explicit() {
+        let plain = WfError::block("Topic", Doc::text("body"));
+        let underlined = WfError::underlined_block("Topic", Doc::text("body"));
+        assert_eq!(plain.topic, underlined.topic);
+        assert_eq!(plain.message, "Topic\n  body");
+        assert_eq!(underlined.message, "Topic\n=====\n\n  body");
+    }
 }

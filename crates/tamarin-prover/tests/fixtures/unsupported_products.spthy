@@ -1,0 +1,15 @@
+theory UnsupportedProducts
+begin
+
+builtins: diffie-hellman
+
+rule ActionProduct:
+  [ In(x), In(y) ] --[ Product(x*y) ]-> []
+
+rule ConclusionProduct:
+  [ In(x), In(y) ] --> [ Out(x*y) ]
+
+lemma must_not_prove:
+  "T"
+
+end

@@ -837,6 +837,39 @@ pub fn equal_up_to_terms(ru_ac: &ProtoRuleAC, ru_e: &ProtoRuleE) -> bool {
         && same_tags(&ru_ac.actions, &ru_e.actions)
 }
 
+/// Products in actions/conclusions outside exponent positions cannot be
+/// exported as original E rules. Premises are handled by variant computation.
+pub fn rule_products_outside_exponents<I>(rule: &Rule<I>) -> Vec<LNTerm> {
+    fn products(term: &LNTerm, out: &mut Vec<LNTerm>) {
+        use tamarin_term::function_symbols::{AcSym, FunSym};
+        use tamarin_term::term::Term;
+        match term {
+            Term::App(FunSym::Ac(AcSym::Mult), _) => out.push(term.clone()),
+            Term::App(FunSym::NoEq(sym), args)
+                if *sym == tamarin_term::function_symbols::exp_sym() && args.len() == 2 =>
+            {
+                products(&args[0], out);
+            }
+            Term::App(_, args) => {
+                for arg in args.iter() {
+                    products(arg, out);
+                }
+            }
+            Term::Lit(_) => {}
+        }
+    }
+    let mut out = Vec::new();
+    for term in rule
+        .actions
+        .iter()
+        .chain(&rule.conclusions)
+        .flat_map(|f| f.terms.iter())
+    {
+        products(term, &mut out);
+    }
+    out
+}
+
 /// HS `isTrivialProtoVariantAC` (Theory/Model/Rule.hs): the variant
 /// disjunction is the identity substitution alone and the two rule bodies —
 /// premises, conclusions, actions and new variables — are equal, facts
@@ -1558,7 +1591,9 @@ pub fn pretty_open_proto_rule(r: &crate::theory::OpenProtoRule) -> Doc {
     let variants = crate::theory::manual_rule_variants(r);
     match variants.as_slice() {
         [] => pretty_proto_rule_e(r.rule_e()),
-        [ru_ac] => pretty_proto_rule_ac_as_e(ru_ac),
+        [ru_ac] if rule_products_outside_exponents(ru_ac).is_empty() => {
+            pretty_proto_rule_ac_as_e(ru_ac)
+        }
         vs => pretty_proto_rule_e(r.rule_e()).above_g(
             kw_variants()
                 .above_g(pretty_proto_rule_ac_list(vs).nest(1))
@@ -1580,7 +1615,7 @@ pub fn pretty_open_proto_rule_as_closed_rule(r: &crate::theory::MergedProtoRule)
             pretty_proto_rule_e(&r.rule_e),
             Doc::empty().above_g(trivial_ac_variant_comment()).nest(2),
         ),
-        [ru_ac] => above_blank(
+        [ru_ac] if rule_products_outside_exponents(ru_ac).is_empty() => above_blank(
             pretty_proto_rule_ac_as_e(ru_ac),
             pretty_loop_breakers(&ru_ac.info.loop_breakers)
                 .above_g(if ru_ac.info.variants.len() == 1 {

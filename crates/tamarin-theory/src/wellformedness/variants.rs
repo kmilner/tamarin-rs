@@ -29,7 +29,9 @@ pub fn fatal_wf_errors(report: &[WfError]) -> WfReport {
         .filter(|e| {
             matches!(
                 e.topic.as_str(),
-                "Variants" | "Unsupported actions added to variants"
+                "Variants"
+                    | "Unsupported actions added to variants"
+                    | "Unsupported multiplication outside exponents"
             )
         })
         .cloned()
@@ -64,7 +66,7 @@ pub fn explicit_variants_report(
                 ),
                 recomputed.nest(2),
             );
-            report.push(WfError::block("Variants", body));
+            report.push(WfError::underlined_block("Variants", body));
         }
         for (member, inherited) in parent.rule_ac.iter().zip(alignments) {
             if let Some(inherited) = inherited {
@@ -295,7 +297,7 @@ fn added_action_report(maude: &MaudeHandle, member: &ProtoRuleE, inherited: &[LN
             .map(tamarin_term::pretty::pretty_nterm)
             .collect(),
     ));
-    vec![WfError::block("Unsupported actions added to variants",
+    vec![WfError::underlined_block("Unsupported actions added to variants",
         Doc::text(format!("Rule {} adds actions whose instances can leave normal form:", crate::rule::pretty_proto_rule_name(&member.info.name).render()))
             .above_g(terms.nest(2))
             .above_g(Doc::text("Such subterms must already occur in the member's premises, conclusions or computed actions."))

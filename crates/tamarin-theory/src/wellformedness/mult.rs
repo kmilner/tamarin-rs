@@ -97,6 +97,23 @@ pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
             entry_doc(ru, &abstracted, &mults, &unbounds).render_with(WF_LINE_LENGTH, WF_RIBBON),
         ));
     }
+    for opr in elab.rules() {
+        let mults = crate::rule::rule_products_outside_exponents(&opr.rule);
+        if !mults.is_empty() {
+            let list = hpj::fsep(hpj::punctuate(
+                Doc::text(","),
+                mults.iter().map(pretty_nterm).collect(),
+            ));
+            out.push(WfError::underlined_block(
+                "Unsupported multiplication outside exponents",
+                Doc::text(format!(
+                    "Rule {} has products outside exponents:",
+                    opr.name()
+                ))
+                .beside_sp(list),
+            ));
+        }
+    }
     out
 }
 

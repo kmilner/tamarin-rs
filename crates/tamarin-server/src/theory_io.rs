@@ -259,6 +259,15 @@ pub(crate) fn load_from_source(
             tamarin_theory::wellformedness::check_wellformedness(&typed, None)
                 .map_err(|error| LoadError::Elaborate(error.to_string()))?,
         );
+        // Best-effort loading may skip Maude, but cannot turn a known unsafe
+        // rule into a usable theory. Match prepare_theory_rules' fatal policy.
+        let fatal = tamarin_theory::wellformedness::variants::fatal_wf_errors(&wf_report);
+        if !fatal.is_empty() {
+            return Err(LoadError::Elaborate(
+                tamarin_theory::tools::rule_variants::VariantsError::UnsupportedInput(fatal)
+                    .to_string(),
+            ));
+        }
     }
 
     // HS `makeWfErrorsHtml` (src/Web/Handler.hs) — the header-banner
