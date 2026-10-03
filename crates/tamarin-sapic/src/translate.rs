@@ -357,6 +357,8 @@ pub(crate) struct Translation {
     /// `liftedAddProtoRule`) over them.
     pub rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)>,
     pub restrictions: Vec<Restriction>,
+    /// Generated premise/conclusion names, excluding builtins and user MSR facts.
+    pub internal_facts: std::collections::BTreeSet<String>,
 }
 
 /// Translation options threaded from the theory (HS `_thyOptions`).  Defaults
@@ -469,6 +471,24 @@ pub(crate) fn translate(
     // silent shape that compresses; their `restr` is preserved per-rule below).
     let mut all = init_rules;
     all.extend(proto_rules);
+    let mut internal_facts: std::collections::BTreeSet<_> = all
+        .iter()
+        .flat_map(|r| r.prems.iter().chain(&r.concs))
+        .filter(|f| {
+            !matches!(
+                f,
+                crate::facts::TransFact::Fr(_)
+                    | crate::facts::TransFact::In(_)
+                    | crate::facts::TransFact::Out(_)
+                    | crate::facts::TransFact::TamarinFact(_)
+            )
+        })
+        .map(|f| tamarin_theory::fact::fact_tag_name(&crate::facts::fact_to_fact(f).tag).to_owned())
+        .collect();
+    if opts.state_channel_opt {
+        // Forced injectivity reserves these even if this process does not use them.
+        internal_facts.extend(["L_PureState".to_owned(), "L_CellLocked".to_owned()]);
+    }
     // The embedded restriction formulas, keyed by rule NAME (compression keeps
     // the first rule's name and never merges `_restrict`-bearing arms — see the
     // `isLetFact`/no-compress guards), so re-pairing by name is faithful.
@@ -560,6 +580,7 @@ pub(crate) fn translate(
     Ok(Translation {
         rules,
         restrictions,
+        internal_facts,
     })
 }
 
