@@ -67,8 +67,13 @@ fn merge_last_injective_fact_nodes(
     use crate::constraint::solver::contradictions::injective_interference_candidates;
     use crate::constraint::solver::goals::reachable_set_adj;
     use tamarin_term::rewriting::Equal;
-    let candidates =
-        injective_interference_candidates(red.ctx, &red.sys, |k| red.sys.last_atom == Some(k));
+    let Some(last) = red.sys.last_atom else {
+        return Ok(SystemOutcome::Linear);
+    };
+    let candidates = injective_interference_candidates(red.ctx, &red.sys, |k| k == last);
+    if candidates.is_empty() {
+        return Ok(SystemOutcome::Linear);
+    }
     let adj = red.sys.build_always_before_adj();
     let mut equations = Vec::new();
     for (_, j, k) in candidates {
