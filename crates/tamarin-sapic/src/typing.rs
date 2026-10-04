@@ -612,11 +612,6 @@ pub(crate) fn type_and_rename_process(
     type_and_rename_process_in(&mut env, p)
 }
 
-/// `S.toList (varsProc p)` (Sapic/Process.hs): every SAPIC variable that
-/// occurs anywhere in `p`, as the sorted deduplicated `Set` list.  Two
-/// occurrences of the same `LVar` under DIFFERENT `stype` tags are distinct
-/// set elements, exactly as in HS.  Generic in the annotation, as HS's
-/// `Foldable (Process ann)` is.
 /// The theory's `FunctionTypingInfo` items (HS `theoryFunctionTypingInfos`,
 /// TheoryObject.hs) as the `(name, arg_types, out_type)` triples
 /// [`init_te_from_sig`] overlays.  Plain `f/2` declarations carry `Nothing`

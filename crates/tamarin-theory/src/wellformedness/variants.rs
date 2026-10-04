@@ -86,12 +86,14 @@ fn computed_variants(
     parent: &OpenProtoRule,
     maude: &MaudeHandle,
 ) -> Result<Vec<ProtoRuleE>, VariantsError> {
-    if open_rule_has_no_variants(maude, parent) {
-        return Ok(vec![]);
-    }
     let mut computed = parent.clone();
     computed.rule_ac.clear();
     prepare_open_rule_variant(&mut computed, maude)?;
+    // Public proving accepts freshly elaborated theories too: absent cached
+    // variants mean "unprepared" until the computation above has run.
+    if open_rule_has_no_variants(maude, &computed) {
+        return Ok(vec![]);
+    }
     Ok(closed_rules_ac(&computed)
         .iter()
         .flat_map(|ac| crate::tools::rule_variants::unfold_closed_rule(&computed, ac))

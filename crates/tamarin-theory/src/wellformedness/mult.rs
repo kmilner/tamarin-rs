@@ -97,8 +97,20 @@ pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
             entry_doc(ru, &abstracted, &mults, &unbounds).render_with(WF_LINE_LENGTH, WF_RIBBON),
         ));
     }
-    for opr in elab.rules() {
-        let mults = crate::rule::rule_products_outside_exponents(&opr.rule);
+    out.extend(unsupported_products_report(
+        elab.rules().map(|opr| &opr.rule),
+    ));
+    out
+}
+
+/// The unsupported-product rule applies to source E rules. Compiled members
+/// can legitimately carry products already covered by inherited exponent terms.
+pub(crate) fn unsupported_products_report<'a>(
+    rules: impl IntoIterator<Item = &'a ProtoRuleE>,
+) -> Vec<WfError> {
+    let mut out = Vec::new();
+    for rule in rules {
+        let mults = crate::rule::rule_products_outside_exponents(rule);
         if !mults.is_empty() {
             let list = hpj::fsep(hpj::punctuate(
                 Doc::text(","),
@@ -108,7 +120,10 @@ pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
                 "Unsupported multiplication outside exponents",
                 Doc::text(format!(
                     "Rule {} has products outside exponents:",
-                    opr.name()
+                    match rule.info.name {
+                        crate::rule::ProtoRuleName::Fresh => "Fresh",
+                        crate::rule::ProtoRuleName::Stand(name) => name,
+                    }
                 ))
                 .beside_sp(list),
             ));

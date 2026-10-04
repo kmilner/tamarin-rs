@@ -220,6 +220,56 @@ fn public_proving_accepts_valid_manual_variants_and_ordinary_warnings() {
 }
 
 #[test]
+fn public_proving_rejects_unsupported_source_products() {
+    for term in ["'a' * 'b'", "product('a','b')"] {
+        let source = format!(
+            r#"theory UnsupportedProduct begin
+        builtins: diffie-hellman
+        macros: product(x,y) = x*y
+        rule Emit: [] --[A({term})]-> []
+        lemma witness: exists-trace "Ex x #i. A(x) @ i"
+        end"#
+        );
+        let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+        let theory = elaborated(&parsed);
+        let Some(h) = maude_with(theory.signature.clone()) else {
+            return;
+        };
+        let error = prove_lemma(std::sync::Arc::new(theory), "witness", h, 5).unwrap_err();
+        assert!(matches!(error, ProveError::UnsupportedInput(ref s)
+        if s.contains("Unsupported multiplication outside exponents")));
+    }
+}
+
+#[test]
+fn public_proving_computes_reducible_manual_families_before_validating() {
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory PublicManualVariant begin
+        builtins: symmetric-encryption
+        rule Key: [Fr(~k)] --> [!Key(~k)]
+        rule Dec: [In(x), !Key(k)] --[A(sdec(x,k))]-> []
+        variants
+        rule (modulo AC) Dec___VARIANT_1:
+          [In(x.2), !Key(k.1)] --[A(sdec(x.2,k.1))]-> [],
+        rule (modulo AC) Dec___VARIANT_2:
+          [In(senc(z.2,k.1)), !Key(k.1)] --[A(z.2)]-> []
+        lemma witness: exists-trace "Ex m #i. A(m)@i"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let theory = elaborated(&parsed);
+    let Some(h) = maude_with(theory.signature.clone()) else {
+        return;
+    };
+    let proof = prove_lemma(std::sync::Arc::new(theory), "witness", h, 10).unwrap();
+    assert_eq!(
+        crate::constraint::solver::search::proof_status(&proof),
+        ProofStatus::TraceFound
+    );
+}
+
+#[test]
 fn guarded_conversion_errors_use_haskell_default_width() {
     let vars = (1..=25)
         .map(|i| format!("x{i}"))

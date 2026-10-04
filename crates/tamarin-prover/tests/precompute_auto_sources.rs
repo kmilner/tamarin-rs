@@ -29,6 +29,41 @@
 
 mod common;
 
+#[test]
+fn auto_sources_preserves_supported_products_in_compiled_variant_actions() {
+    if !common::maude_available() {
+        return;
+    }
+    let source = r#"theory CoveredProductAutoSources begin
+    builtins: diffie-hellman, symmetric-encryption
+    rule Emit: [] --[Power(('g'^'a')^'b')]-> []
+    variants
+    rule (modulo AC) Emit___VARIANT_1:
+      [] --[Power('g'^('a'*'b')),Added('a'*'b')]-> []
+    rule Setup: [Fr(~k)] --> [!Key(~k)]
+    rule Dec: [!Key(~k),In(x)] --[Dec(sdec(x,~k))]-> [Out(sdec(x,~k))]
+    lemma witness: exists-trace "Ex x y #i. Power(x)@i & Added(y)@i"
+    end"#;
+    let (code, stdout, stderr) = common::run_raw(
+        "tamarin_auto_sources_covered_product",
+        "covered",
+        source,
+        &[
+            "--auto-sources",
+            "--prove=witness",
+            "--bound=8",
+            "--no-ndc",
+            "--derivcheck-timeout=0",
+            "--processors=1",
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("witness (exists-trace): verified (2 steps)"),
+        "{stdout}"
+    );
+}
+
 use common::{joined, maude_available};
 
 /// The temp subdirectory this suite writes its theories to.
