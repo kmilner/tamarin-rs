@@ -51,7 +51,7 @@ const SIMPLIFY_PASSES: &[Pass] = &[
     Pass::Fallible(eval_formula_atoms_pass),
     Pass::Fallible(insert_implied_formulas_pass),
     Pass::Linear(enforce_fresh_ordering_pass),
-    Pass::Linear(propagate_subterm_obvious),
+    Pass::Fallible(propagate_subterm_obvious),
     Pass::Fallible(simp_injective_fact_eq_mon_pass),
     Pass::Fallible(merge_last_injective_fact_nodes),
     Pass::Linear(dedupe_formulas_pass),
@@ -3940,13 +3940,15 @@ fn dedupe_formulas_pass(red: &mut Reduction) {
 /// difference (HS `oldNegSubterms`, SubtermStore.hs; taken
 /// by `simpSplitNegSt`, SubtermStore.hs) decides
 /// which entries this pass (re-)splits.
-fn propagate_subterm_obvious(red: &mut Reduction) {
+fn propagate_subterm_obvious(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::tools::subterm_store::{split_subterm, subterm_step, SubtermSplit};
     use tamarin_term::lterm::{sort_of_lnterm, LSort};
     let previous_store = red.sys.subterm_store.clone();
     let mut changed_goals = false;
     if red.sys.subterm_store.contradictory {
-        return;
+        return Ok(SystemOutcome::Linear);
     }
     let reducible = red.ctx.maude.maude_sig().reducible_fun_syms_fast.clone();
 
@@ -4352,23 +4354,21 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
         || store.neg_subterms != previous_store.neg_subterms
         || !same_pairs(&store.subterms, &previous_store.subterms)
         || !same_pairs(&store.solved_subterms, &previous_store.solved_subterms);
-    let mut changed_formulas = false;
-    for f in new_formulas {
-        // insertFormula ignores formulas known in either store. Re-emitting
-        // the same S_neg disequality must not perpetually restart the loop.
-        if !red
-            .sys
+    let changed_formulas = new_formulas.iter().any(|f| {
+        !red.sys
             .formulas
             .iter()
             .chain(red.sys.solved_formulas.iter())
-            .any(|known| known.as_ref() == &f)
-        {
-            changed_formulas |= red.sys.insert_formula(f);
-        }
-    }
+            .any(|known| known.as_ref() == f)
+    });
     if changed_store || changed_goals || changed_formulas {
         red.changed = ChangeIndicator::Changed;
     }
+    // HS simpSubterms inserts these immediately, in derivation order. Merely
+    // storing them until reduceFormulas runs again delays equality solving
+    // past other passes, changing goal ages (and potentially goal ranking).
+    // Equality insertion may branch, so preserve every branch and its counter.
+    red.insert_formulas(&new_formulas)
 }
 
 /// `natSubtermEqualities` — UTVPI-based cycle detection and equality

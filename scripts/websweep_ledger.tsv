@@ -41,12 +41,12 @@
 # aborts the gate BEFORE it crawls anything.
 #
 # Classes:
-#   witness-index  Identical proof states rendered with different internal
-#                  counter values - fresh-variable witness indices,
-#                  goal-creation numbers, term-abbreviation picks - on AC-heavy
-#                  theories. Cosmetic: never reaches proof scripts, proof
-#                  structure or verdicts. Upstream numbering/eq-store class,
-#                  tamarin-prover issue #874.
+#   witness-index  Observed fresh-variable index differences on AC-heavy
+#                  theories. Changed digit widths can also reflow proof-pane
+#                  lines. Goal ages are not variable indices: they affect goal
+#                  ranking and must not be dismissed as cosmetic. This label
+#                  records an audited baseline, not a mechanical check that
+#                  every future DIFF is only variable renumbering.
 #   proof-path     The two autoproofs reach the same verdict along DIFFERENT
 #                  case paths, so the site maps harvested from the proved
 #                  theory carry different node URLs and pair as MISSING_*
@@ -99,7 +99,7 @@ csf18-alethea/alethea_votingphase_malS_abstain.spthy	watch	none	crawled clean at
 csf19-wrapping/gcm.spthy	witness-index	DIFF	4 pages at cert_20260805
 csf19-wrapping/siv.spthy	witness-index	DIFF	7 pages at cert_20260805
 csf20-disputeResolution/mixvote_ShHm.spthy	watch	none	crawled clean at cert_20260805
-csf23-subterms/ParserTests.spthy	witness-index	DIFF	1 page at cert_20260805
+csf23-subterms/ParserTests.spthy	watch	none	goal ages and all responses match at parity-goals-http_20261004
 csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_keyreg_partially_matching.spthy	witness-index	DIFF	3 pages at full_20260828
 csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_partially_matching.spthy	witness-index	DIFF	3 pages at full_20260828
 csf26-ac/fast/Joux.spthy	witness-index	DIFF	8 pages at full_20260828
@@ -111,7 +111,7 @@ experiments/JKL_TS2_2008-KI.spthy	witness-index	DIFF	5 pages at cert_20260805
 features/auto-sources/spore/SpliceAS.spthy	watch	none	not crawled at cert_20260805
 features/auto-sources/tamarin-repo/loops/RFID_Simple-without-SL.spthy	watch	none	crawled clean at cert_20260805
 features/auto-sources/tamarin-repo/related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	watch	none	crawled clean at cert_20260805
-features/multiset/NumberSubtermTests.spthy	witness-index	DIFF	1 page at cert_20260805
+features/multiset/NumberSubtermTests.spthy	watch	none	goal ages and all responses match at parity-goals-http_20261004
 features/multiset/counter.spthy	watch	none	crawled clean at cert_20260805
 features/noise/secrecy_4_passiveINpsk1.spthy	witness-index	DIFF	71 pages at cert_20260805
 features/noise/secrecy_4_passiveINpsk1_proof.spthy	witness-index	DIFF	71 pages at cert_20260805
@@ -122,8 +122,8 @@ loops/Minimal_Loop_Example.spthy	watch	none	crawled clean at cert_20260805
 regression/trace/issue532.spthy	watch	none	bounds-error parity covered by captured HTTP regressions; no exception allowed
 related_work/TPM_DKRS_CSF11/TPM_Exclusive_Secrets.spthy	watch	none	crawled clean at cert_20260805
 related_work/YubiSecure_KS_STM12/Yubikey_and_YubiHSM_multiset.spthy	watch	none	crawled clean at cert_20260805
-related_work/YubiSecure_KS_STM12/Yubikey_multiset.spthy	witness-index	DIFF	40 pages at cert_20260805
-sapic/fast/Yubikey/Yubikey.spthy	witness-index	DIFF	1 page at cert_20260805
+related_work/YubiSecure_KS_STM12/Yubikey_multiset.spthy	watch	none	778 responses match at full-verification_20261004
+sapic/fast/Yubikey/Yubikey.spthy	watch	none	1720 responses match at yubikey-ledger-review_20261004 (400-node cap)
 sapic/fast/basic/channels2.spthy	watch	none	bounds-error parity covered by captured HTTP regressions; no exception allowed
 sapic/fast/feature-ass-immediate/test-all.spthy	watch	none	bounds-error parity covered by captured HTTP regressions; no exception allowed
 sapic/fast/feature-inevent-restriction/inevent-restriction-private-channel.spthy	watch	none	bounds-error parity covered by captured HTTP regressions; no exception allowed

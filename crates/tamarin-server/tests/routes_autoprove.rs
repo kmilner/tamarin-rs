@@ -15,6 +15,32 @@ mod common;
 
 use common::*;
 
+/// The pinned Haskell web corpus gives KU(a) age 8 and Disj(false) age 7.
+/// Deferring subterm-derived equalities used to swap their relative ages
+/// (7 and 9), even though the proof still closed by contradiction.
+#[tokio::test]
+async fn subterm_deduction_goal_ages_match_haskell() {
+    let theory = workspace_root().join("tamarin-prover/examples/csf23-subterms/ParserTests.spthy");
+    let s = start_server_with_theory(theory.to_str().expect("theory path")).await;
+    let res = s
+        .get("/thy/trace/1/autoprove/idfs/0/False/proof/arityOneDeduction")
+        .await;
+    assert_eq!(res.status(), 200);
+    let result: serde_json::Value = res.json().await.expect("autoprove JSON");
+    assert!(result["redirect"].is_string(), "{result}");
+    let res = s.get("/thy/trace/2/main/proof/arityOneDeduction/_").await;
+    assert_eq!(res.status(), 200);
+    let pane: serde_json::Value = res.json().await.expect("proof pane JSON");
+    let html = pane["html"].as_str().expect("proof pane HTML");
+    for (goal, age) in [("!KU( a )", 8), ("Disj ", 7)] {
+        let line = html
+            .lines()
+            .find(|line| line.contains(goal))
+            .expect("goal line");
+        assert!(line.contains(&format!("// nr: {age}&quot;")), "{line}");
+    }
+}
+
 // ---------------------------------------------------------------------
 // /thy/trace/<idx>/autoprove/<extractor>/<bound>/<quit>/proof/<lemma>
 // ---------------------------------------------------------------------
