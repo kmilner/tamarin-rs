@@ -1,9 +1,9 @@
 # capture_cli_refs.sh provenance — regenerate with: scripts/capture_cli_refs.sh
 # hs_bin	/home/kamilner/tamarin-rs/tamarin-prover-testing/.stack-work/install/x86_64-linux-tinfo6/ca796a326f2409c82ae7038f0aff009780c6bbead539e5430a2c0b1206b4c6f0/9.6.7/bin/tamarin-prover
-# hs_fp	1563eaedc7b46bebdcc5103180f63cc9138edf3c69bc014e68e302d3e47a2db9
+# hs_fp	17351c9ff54b34c5de5e72928042736d2192d191f814e0a230c5e023a203ec05
 # hs_rev	da8787d5506e2d35bc1c92d7653bf6265fecbddb (verified: revision and setup attestation match the submodule pin)
 # maude	3.5.1
-# captured	2026-10-04T08:30:57Z
+# captured	2026-10-04T17:36:28Z
 basic_bound_1	1521
 basic_bound_10	1591
 basic_lemma_reach	1826

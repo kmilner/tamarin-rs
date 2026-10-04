@@ -99,7 +99,7 @@ Generated from:
 Tamarin version 1.13.0
 Maude version 3.5.1
 Git revision: da8787d5506e2d35bc1c92d7653bf6265fecbddb (with uncommited changes), branch: HEAD
-Compiled at: 2026-10-03 13:51:15.624809229 UTC
+Compiled at: 2026-10-04 17:28:29.429729067 UTC
 */
 
 end
@@ -109,7 +109,7 @@ summary of summaries:
 
 analyzed: /home/kamilner/tamarin-rs/crates/tamarin-prover/tests/fixtures/cli_flags_chan.spthy
 
-  processing time: 0.25s
+  processing time: 0.23s
   
   secrecy (all-traces): verified (11 steps)
   exec (exists-trace): verified (6 steps)
