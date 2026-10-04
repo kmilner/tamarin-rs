@@ -587,18 +587,7 @@ impl<'ctx> Reduction<'ctx> {
                 crate::constraint::constraints::NodeId,
                 usize,
             > = tamarin_utils::FastMap::default();
-            // Accumulate fact-eqs split by component so we can flatten them in
-            // Haskell `solveRuleEqs` order: ALL conclusions (across every colliding
-            // node), THEN all premises, THEN all actions
-            // (Reduction.hs:771-777, see line 776: `map (fmap (get rConcs)) eqs ++
-            //  map (fmap (get rPrems)) eqs ++ map (fmap (get rActs)) eqs`).
-            // Building three separate vectors and concatenating at the end is the
-            // faithful "batch transpose" (all conclusions, then premises, then actions).
-            let mut conc_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
-            let mut prem_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
-            let mut act_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
-            let mut shape_mismatch = false;
-            let mut collisions = 0usize;
+            let mut rule_eqs = Vec::new();
             // Haskell-faithful `substNodes` order (Reduction.hs:616-621):
             //   substNodes = substNodeIds <*
             //                ((modM sNodes . M.map . apply) =<< getM sSubst)
@@ -621,8 +610,6 @@ impl<'ctx> Reduction<'ctx> {
             // An ID rename or collision invalidates both max caches. Merely
             // sorting nodes leaves their values and bounds unchanged.
             let mut nodes_value_changed = false;
-            let mut id_renamed_nodes: Vec<(crate::constraint::constraints::NodeId, RuleACInst)> =
-                Vec::new();
             for (id, rule) in nodes {
                 let new_id = match id.apply_changed(&pass) {
                     Some(v) => {
@@ -631,29 +618,14 @@ impl<'ctx> Reduction<'ctx> {
                     }
                     None => id,
                 };
-                // Pass 1: node-id rename only (HS `substNodeIds` `apply subst`
-                // on the id, not the rule body).  Keep the rule UN-substituted.
-                id_renamed_nodes.push((new_id, rule));
-            }
-            // Pass 1b: dedupe by new_id, detecting collisions on RAW rules.
-            for (new_id, rule) in id_renamed_nodes {
+                // Keep raw rules until every node collision has contributed
+                // its equalities, preserving their encounter order.
                 match id_to_index.get(&new_id).copied() {
                     Some(i) => {
-                        collisions += 1;
-                        let kept: &RuleACInst = &new_nodes[i].1;
-                        if kept.info != rule.info
-                            || kept.premises.len() != rule.premises.len()
-                            || kept.conclusions.len() != rule.conclusions.len()
-                            || kept.actions.len() != rule.actions.len()
-                        {
-                            shape_mismatch = true;
-                        } else {
-                            // Collect per component; concatenated conc++prem++act
-                            // after the loop to match Haskell `solveRuleEqs`.
-                            flatten_list_eq(&kept.conclusions, &rule.conclusions, &mut conc_eqs);
-                            flatten_list_eq(&kept.premises, &rule.premises, &mut prem_eqs);
-                            flatten_list_eq(&kept.actions, &rule.actions, &mut act_eqs);
-                        }
+                        rule_eqs.push(tamarin_term::rewriting::Equal {
+                            lhs: new_nodes[i].1.clone(),
+                            rhs: rule,
+                        });
                     }
                     None => {
                         id_to_index.insert(new_id, new_nodes.len());
@@ -661,92 +633,27 @@ impl<'ctx> Reduction<'ctx> {
                     }
                 }
             }
-            // Flatten the component-grouped fact-eqs in Haskell `solveRuleEqs`
-            // order: all conclusions, then all premises, then all actions.
-            let mut rule_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> =
-                Vec::with_capacity(conc_eqs.len() + prem_eqs.len() + act_eqs.len());
-            rule_eqs.append(&mut conc_eqs);
-            rule_eqs.append(&mut prem_eqs);
-            rule_eqs.append(&mut act_eqs);
-            if nodes_value_changed || collisions > 0 {
+            let collided = !rule_eqs.is_empty();
+            if nodes_value_changed || collided {
                 self.sys.invalidate_max_var_idx_cache();
                 self.sys.invalidate_node_max_cache();
             }
             self.sys.content_mut_untracked().nodes = std::sync::Arc::new(new_nodes);
-            if shape_mismatch {
-                // Force a `gfalse` formula so `has_false_formula` picks up
-                // the contradiction in the next contradictions check.
-                let bot = crate::guarded::gfalse();
-                if !crate::guarded::stores_contains(&self.sys.formulas, &bot) {
-                    self.sys.invalidate_max_var_idx_cache();
-                    self.sys
-                        .formulas_mut_untracked()
-                        .push(std::sync::Arc::new(bot));
-                    self.changed = ChangeIndicator::Changed;
-                }
-                // Also flip `eq_store.is_false` so the simplify-time filter
-                // in `exec_proof_method`'s SolveGoal arm sees this as the
-                // Haskell-faithful mzero-equivalent and drops the case from
-                // the resulting case map.  Haskell's `setNodes` →
-                // `solveRuleEqs` (Reduction.hs:771-777, see line 774) contradictoryIf fires
-                // mzero on rInfo / fact-shape mismatch, so the case
-                // disappears from `runReduction`'s Disj.  Setting is_false
-                // here matches that shape on the SolveGoal proof-tree filter.
-                if self.set_eq_store_false() {
-                    self.changed = ChangeIndicator::Changed;
-                }
+            // The shared solver validates rule/fact shapes and batches all
+            // conclusions, then premises, then actions. SplitLater leaves
+            // branching to the ordinary equality-goal continuation.
+            if collided
+                && matches!(
+                    self.solve_rule_eqs(SplitStrategy::SplitLater, &rule_eqs)?,
+                    SolveOutcome::Contradictory
+                )
+            {
+                // Substitution callers also detect failure through gfalse;
+                // solve_rule_eqs itself maintains the equation-store marker.
+                self.mark_contradictory();
             }
-            let had_rule_eqs = !rule_eqs.is_empty();
-            if had_rule_eqs {
-                // Tag/arity mismatches mean two distinct rule instances
-                // collapsed to the same node id but their facts disagree
-                // — the system has no model (Haskell `setNodes` →
-                // `solveRuleEqs` would fail).  The shape_mismatch flag
-                // above only checks LIST LENGTHS (premise/conclusion/
-                // action counts), so two same-length but differently-
-                // typed rules (e.g. Setup_Key `[Fr]→[!Key]/[IsKey]` vs
-                // c_fresh `[Fr]→[KU]/[KU]`) pass that check while their
-                // individual facts disagree on tag.  Detect those here
-                // and force gfalse, mirroring Haskell's contradictory
-                // outcome for `solveFactEqs` on incompatible facts.
-                let mut tag_mismatch = false;
-                let mut safe_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> =
-                    Vec::with_capacity(rule_eqs.len());
-                for e in rule_eqs {
-                    if e.lhs.tag != e.rhs.tag || e.lhs.terms.len() != e.rhs.terms.len() {
-                        tag_mismatch = true;
-                    } else {
-                        safe_eqs.push(e);
-                    }
-                }
-                if tag_mismatch {
-                    // Mirrors Haskell `setNodes` → `solveRuleEqs` →
-                    // `solveFactEqs` (Reduction.hs:765-769, see line 768) where a fact-tag
-                    // mismatch fires `contradictoryIf True` → mzero.  We
-                    // funnel through `mark_contradictory` so BOTH the
-                    // gfalse-in-formulas marker AND `eq_store.is_false`
-                    // get set (SolveGoal-arm mzero proxy + post-simplify
-                    // FormulasFalse).
-                    self.mark_contradictory();
-                }
-                // Use SplitLater so we don't recurse into perform_split
-                // (which can itself call subst_system).  Track the
-                // outcome — Haskell's `solveRuleEqs` propagates failure
-                // (`solveFactEqs` returns Contradictory if unification
-                // fails on same-tag facts with incompatible terms, e.g.
-                // !Key(~k) = !Key(some_other_term)).
-                let res = self.solve_fact_eqs(SplitStrategy::SplitLater, &safe_eqs);
-                let res = res?;
-                if matches!(res, SolveOutcome::Contradictory) {
-                    // Mirrors Haskell `solveFactEqs` -> `solveTermEqs`
-                    // ending in `noContradictoryEqStore` (Reduction.hs:731-754, see line 753)
-                    // which fires mzero on `eqsIsFalse`.  Set both
-                    // markers via the helper.
-                    self.mark_contradictory();
-                }
-            }
-            changed |= nodes_value_changed || collisions > 0 || shape_mismatch || had_rule_eqs;
-            if self.sys.eq_store().is_false() || collisions == 0 {
+            changed |= nodes_value_changed || collided;
+            if self.sys.eq_store().is_false() || !collided {
                 return Ok(changed);
             }
             // Each continuing round removed at least one node, so this loop is
@@ -2523,9 +2430,14 @@ impl<'ctx> Reduction<'ctx> {
         strategy: SplitStrategy,
         eqs: &[tamarin_term::rewriting::Equal<RuleACInst>],
     ) -> Result<SolveOutcome, crate::prove::ProveError> {
-        // Rule infos must match (rule names, intruder-info, etc.).
+        // Rule infos and all three fact-list lengths must match before the
+        // lists are zipped. Otherwise an unmatched suffix would be ignored.
         for e in eqs {
-            if e.lhs.info != e.rhs.info {
+            if e.lhs.info != e.rhs.info
+                || e.lhs.conclusions.len() != e.rhs.conclusions.len()
+                || e.lhs.premises.len() != e.rhs.premises.len()
+                || e.lhs.actions.len() != e.rhs.actions.len()
+            {
                 self.set_eq_store_false();
                 return Ok(SolveOutcome::Contradictory);
             }

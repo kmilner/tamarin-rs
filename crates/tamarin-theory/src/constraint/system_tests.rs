@@ -1161,7 +1161,11 @@ fn goal_status_merge_is_associative_commutative_and_idempotent() {
     for solved in [false, true] {
         for looping in [false, true] {
             for nr in [0, 3, u64::MAX] {
-                statuses.push(GoalStatus { solved, looping, nr });
+                statuses.push(GoalStatus {
+                    solved,
+                    looping,
+                    nr,
+                });
             }
         }
     }

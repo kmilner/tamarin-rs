@@ -651,47 +651,76 @@ fn subst_system_idempotent_on_empty_substitution() {
 }
 
 #[test]
-fn subst_system_marks_contradiction_on_shape_mismatch() {
-    // Two nodes with the same canonical id but DIFFERENT rule
-    // shapes (e.g. one with 0 conclusions, one with 1) cannot be
-    // merged consistently — Haskell's `setNodes` reaches the same
-    // conclusion via `solveRuleEqs` failing. Our port pushes
-    // `gfalse` so the next contradictions check trips.
+fn rule_merges_reject_mismatched_fact_list_lengths() {
+    // The same rule info does not imply the same number of facts. Check
+    // every component in both orientations, through each rule-merge path.
     let Some(ctx) = ctx() else { return };
-    let mut r = Reduction::new(&ctx, System::empty());
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::vterm::Lit;
+    use tamarin_term::rewriting::Equal;
     let i = LVar::new("i", LSort::Node, 2);
     let j = LVar::new("j", LSort::Node, 3);
-    let info = || {
+    let empty = crate::rule::Rule::new(
         crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
             name: crate::rule::ProtoRuleName::Stand("R"),
             attributes: crate::rule::RuleAttributes::empty(),
             loop_breakers: Vec::new(),
-        })
-    };
-    // First node has 0 conclusions; second has 1 — incompatible.
-    r.sys
-        .add_node(i, crate::rule::Rule::new(info(), vec![], vec![], vec![]));
-    let dummy_fact = crate::fact::Fact::new(crate::fact::FactTag::Out, vec![]);
-    r.sys.add_node(
-        j,
-        crate::rule::Rule::new(info(), vec![], vec![dummy_fact], vec![]),
+        }),
+        vec![],
+        vec![],
+        vec![],
     );
-    // Force i = j into the eq-store.
-    let ti = tamarin_term::term::Term::Lit(Lit::Var(i));
-    let tj = tamarin_term::term::Term::Lit(Lit::Var(j));
-    r.solve_term_eqs(
-        SplitStrategy::SplitNow,
-        &[tamarin_term::rewriting::Equal { lhs: ti, rhs: tj }],
-    )
-    .expect("solve");
-    r.subst_system().expect("solver operation");
-    let bot = crate::guarded::gfalse();
-    assert!(
-        crate::guarded::stores_contains(&r.sys.formulas, &bot),
-        "shape mismatch must push gfalse onto the formula list"
-    );
+    for component in 0..3 {
+        let mut longer = empty.clone();
+        let lists = [
+            &mut longer.premises,
+            &mut longer.conclusions,
+            &mut longer.actions,
+        ];
+        lists[component].push(crate::fact::out_fact(tamarin_term::lterm::pub_term("a")));
+        for (left, right) in [(&empty, &longer), (&longer, &empty)] {
+            for strategy in [SplitStrategy::SplitNow, SplitStrategy::SplitLater] {
+                let mut direct = Reduction::new(&ctx, System::empty());
+                assert!(matches!(
+                    direct
+                        .solve_rule_eqs(strategy, &[Equal::new(left.clone(), right.clone())])
+                        .unwrap(),
+                    SolveOutcome::Contradictory
+                ));
+                assert!(direct.sys.eq_store().is_false());
+                assert!(direct.sys.formulas.is_empty());
+            }
+
+            let mut set = Reduction::new(&ctx, System::empty());
+            assert!(matches!(
+                set.set_nodes(vec![(i, left.clone()), (i, right.clone())])
+                    .unwrap(),
+                SolveOutcome::Contradictory
+            ));
+            assert!(set.sys.eq_store().is_false());
+            assert!(set.sys.formulas.is_empty());
+            assert_eq!(set.sys.nodes.as_slice(), &[(i, left.clone())]);
+
+            let mut sys = System::empty();
+            // Reverse insertion order: substitution must still keep the
+            // lower original node's rule when the IDs become aliases.
+            sys.add_node(j, right.clone());
+            sys.add_node(i, left.clone());
+            let mut substituted = Reduction::new(&ctx, sys);
+            substituted.solve_node_id_eqs(&[Equal::new(i, j)]).unwrap();
+            substituted.subst_system().unwrap();
+            assert_eq!(substituted.sys.nodes.len(), 1);
+            assert_eq!(&substituted.sys.nodes[0].1, left);
+            assert!(substituted.sys.eq_store().is_false());
+            assert!(crate::guarded::stores_contains(
+                &substituted.sys.formulas,
+                &crate::guarded::gfalse()
+            ));
+            assert_eq!(
+                bounds_max(&substituted.sys),
+                bounds_max_uncached(&substituted.sys)
+            );
+        }
+    }
 }
 
 #[test]
