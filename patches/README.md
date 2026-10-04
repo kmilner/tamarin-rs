@@ -23,7 +23,7 @@ individual files are not necessarily standalone GitHub PR diffs.
 | [#955](https://github.com/tamarin-prover/tamarin-prover/pull/955) — `tamarin-prover-pr-955.patch` | #952 | Replay saved proofs without exploring irrelevant unfinished branches. |
 | [#957](https://github.com/tamarin-prover/tamarin-prover/pull/957) — `tamarin-prover-pr-957.patch` | #952 | SAPIC destructor evaluation and progress translation. |
 | [#959](https://github.com/tamarin-prover/tamarin-prover/pull/959) — `tamarin-prover-pr-959.patch` | #957 | Sound SAPIC channel and state optimisations. |
-| [#960](https://github.com/tamarin-prover/tamarin-prover/pull/960) — `tamarin-prover-pr-960.patch` | #959 | SAPIC scope, reserved names, and inferred types. |
+| [#960](https://github.com/tamarin-prover/tamarin-prover/pull/960) — `tamarin-prover-pr-960.patch` | #959 | SAPIC scope, reserved names, inferred types, and faithful process/public-name export. |
 | [#951](https://github.com/tamarin-prover/tamarin-prover/pull/951) — `tamarin-prover-pr-951.patch` | — | Avoid unnecessary diff-mirror evaluation. |
 | [#956](https://github.com/tamarin-prover/tamarin-prover/pull/956) — `tamarin-prover-pr-956.patch` | — | Omit empty graph previews in diff proof subcases. |
 | [#953](https://github.com/tamarin-prover/tamarin-prover/pull/953) — `tamarin-prover-pr-953.patch` | — | Tree-sitter grammar and heuristic parser fixes. |
@@ -44,7 +44,7 @@ the checked-in source, not the current state of the PRs.
 | #955 | `07e0954738e96bd4a0c7c2f5bff38d4bfb11e4a3` |
 | #957 | `7704372e6d51795deebb958be32dbe166ca22565` |
 | #959 | `c54ffbbefde3ed75bdfc84eddf0fbf8f5a55e238` |
-| #960 | `02d360028a1d413022c7469832ff98527d020ba2` |
+| #960 | `f6cd64f9907c26e5a835f616504810cde28115ee` |
 | #951 | `6a8afffb2648f62f453f205348db63f7d89dc024` |
 | #956 | `38f22e3f354835efe14f028d81c749cda746835d` |
 | #953 | `438d6abe17d2206f286a389f7e13dbf9a4ce7e68` |

@@ -1,19 +1,22 @@
 diff --git a/Makefile b/Makefile
-index 809194bd20f5ed1497c565ddbabcb3fecaa721ab..d387c0dceab6c77ddd1618ddbcbc2a608605d156 100644
+index 809194bd20f5ed1497c565ddbabcb3fecaa721ab..1fa461e00f6bbe58798d2cd8a2d90bffb86e3aaf 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -496,6 +496,8 @@ COMMON_REGRESSION_CASE_STUDIES+=soundness-sapic-progress-let.spthy soundness-sap
+@@ -496,6 +496,11 @@ COMMON_REGRESSION_CASE_STUDIES+=soundness-sapic-progress-let.spthy soundness-sap
  COMMON_REGRESSION_CASE_STUDIES+=soundness-sapic-channel-alias.spthy soundness-sapic-channel-embedded.spthy soundness-sapic-channel-pattern.spthy
  # SAPIC state cells
  COMMON_REGRESSION_CASE_STUDIES+=soundness-sapic-state-phases.spthy soundness-sapic-state-parallel-independent.spthy soundness-sapic-state-parallel-boundaries.spthy soundness-sapic-state-overwrite.spthy soundness-sapic-state-repeated-insert.spthy soundness-sapic-unlocked-lookup.spthy soundness-sapic-state-alias.spthy soundness-sapic-state-delete.spthy soundness-sapic-state-double-insert.spthy soundness-sapic-state-equivalent-key.spthy soundness-sapic-state-supported.spthy
 +# SAPIC binder scopes, process calls and embedded rules
++COMMON_REGRESSION_CASE_STUDIES+=soundness-sapic-pattern-parameter.spthy
++COMMON_REGRESSION_CASE_STUDIES+=soundness-sapic-pattern-export.spthy
++COMMON_REGRESSION_CASE_STUDIES+=sapic-open-process-export.spthy sapic-inline-export-locations.spthy
 +COMMON_REGRESSION_CASE_STUDIES+=sapic-inferred-lock-types.spthy sapic-inferred-location-types.spthy sapic-else-binding-scope.spthy sapic-msr-call-binding-reuse.spthy soundness-sapic-binder-scope.spthy soundness-sapic-process-call-capture.spthy sapic-process-call-caller-scope.spthy sapic-nested-call-caller-scope.spthy sapic-process-call-location-scope.spthy sapic-embedded-msr-binding.spthy
  COMMON_REGRESSION_CASE_STUDIES+=sapic-lookup-destructor-progress.spthy
  FAST_REGRESSION_CASE_STUDIES+=$(COMMON_REGRESSION_CASE_STUDIES)
  FAST_REGRESSION_TARGETS=$(subst .spthy,_analyzed.spthy,$(addprefix case-studies$(SUBDIR)regression/trace/,$(FAST_REGRESSION_CASE_STUDIES)))
 diff --git a/case-studies-regression/fast-tests/regression/trace/sapic-else-binding-scope_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/sapic-else-binding-scope_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..f25d4a6135e3db1cbe9b26b2c0f5a218c9a0ce63
+index 0000000000000000000000000000000000000000..9348dc6b61f978692eb5dc605323922e7d61a8ad
 --- /dev/null
 +++ b/case-studies-regression/fast-tests/regression/trace/sapic-else-binding-scope_analyzed.spthy
 @@ -0,0 +1,433 @@
@@ -428,8 +431,8 @@ index 0000000000000000000000000000000000000000..f25d4a6135e3db1cbe9b26b2c0f5a218
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -441,7 +444,7 @@ index 0000000000000000000000000000000000000000..f25d4a6135e3db1cbe9b26b2c0f5a218
 +analyzed: examples/regression/trace/sapic-else-binding-scope.spthy
 +
 +  output:          examples/regression/trace/sapic-else-binding-scope.spthy.tmp
-+  processing time: 0.25s
++  processing time: 0.30s
 +  
 +  lookup_typed_else (exists-trace): verified (3 steps)
 +  lookup_untyped_else (exists-trace): verified (3 steps)
@@ -452,7 +455,7 @@ index 0000000000000000000000000000000000000000..f25d4a6135e3db1cbe9b26b2c0f5a218
 +*/
 diff --git a/case-studies-regression/fast-tests/regression/trace/sapic-embedded-msr-binding_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/sapic-embedded-msr-binding_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..3573e790e0b489448e4ac71840ffd05b596140b4
+index 0000000000000000000000000000000000000000..f0d0147717cdcafa0ee348df38ddabcc655a04d9
 --- /dev/null
 +++ b/case-studies-regression/fast-tests/regression/trace/sapic-embedded-msr-binding_analyzed.spthy
 @@ -0,0 +1,568 @@
@@ -999,8 +1002,8 @@ index 0000000000000000000000000000000000000000..3573e790e0b489448e4ac71840ffd05b
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -1012,7 +1015,7 @@ index 0000000000000000000000000000000000000000..3573e790e0b489448e4ac71840ffd05b
 +analyzed: examples/regression/trace/sapic-embedded-msr-binding.spthy
 +
 +  output:          examples/regression/trace/sapic-embedded-msr-binding.spthy.tmp
-+  processing time: 0.52s
++  processing time: 0.81s
 +  
 +  binds_new_variable (exists-trace): verified (4 steps)
 +  matches_public_value (exists-trace): verified (4 steps)
@@ -1026,7 +1029,7 @@ index 0000000000000000000000000000000000000000..3573e790e0b489448e4ac71840ffd05b
 +*/
 diff --git a/case-studies-regression/fast-tests/regression/trace/sapic-inferred-location-types_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/sapic-inferred-location-types_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..fa6aba0a4af8be3e071fb29a434a4311126388d6
+index 0000000000000000000000000000000000000000..6a3c84d35c81968028c72f7182a019ae9ad087ba
 --- /dev/null
 +++ b/case-studies-regression/fast-tests/regression/trace/sapic-inferred-location-types_analyzed.spthy
 @@ -0,0 +1,230 @@
@@ -1240,8 +1243,8 @@ index 0000000000000000000000000000000000000000..fa6aba0a4af8be3e071fb29a434a4311
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -1253,7 +1256,7 @@ index 0000000000000000000000000000000000000000..fa6aba0a4af8be3e071fb29a434a4311
 +analyzed: examples/regression/trace/sapic-inferred-location-types.spthy
 +
 +  output:          examples/regression/trace/sapic-inferred-location-types.spthy.tmp
-+  processing time: 0.17s
++  processing time: 0.18s
 +  
 +  reaches_done (exists-trace): verified (4 steps)
 +  correct_value (all-traces): verified (3 steps)
@@ -1262,7 +1265,7 @@ index 0000000000000000000000000000000000000000..fa6aba0a4af8be3e071fb29a434a4311
 +*/
 diff --git a/case-studies-regression/fast-tests/regression/trace/sapic-inferred-lock-types_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/sapic-inferred-lock-types_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..02678f4f7531800b87f6c93f42cb92ba1df686ce
+index 0000000000000000000000000000000000000000..199202841ed38a833a2c9982a00072dbec9b1e63
 --- /dev/null
 +++ b/case-studies-regression/fast-tests/regression/trace/sapic-inferred-lock-types_analyzed.spthy
 @@ -0,0 +1,165 @@
@@ -1412,8 +1415,8 @@ index 0000000000000000000000000000000000000000..02678f4f7531800b87f6c93f42cb92ba
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -1425,15 +1428,266 @@ index 0000000000000000000000000000000000000000..02678f4f7531800b87f6c93f42cb92ba
 +analyzed: examples/regression/trace/sapic-inferred-lock-types.spthy
 +
 +  output:          examples/regression/trace/sapic-inferred-lock-types.spthy.tmp
-+  processing time: 0.13s
++  processing time: 0.16s
 +  
 +  reaches_done (exists-trace): verified (3 steps)
 +
 +==============================================================================
 +*/
+diff --git a/case-studies-regression/fast-tests/regression/trace/sapic-inline-export-locations_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/sapic-inline-export-locations_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..688198b0bb2dc74de839be85ce00233d0d79a27b
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/sapic-inline-export-locations_analyzed.spthy
+@@ -0,0 +1,245 @@
++theory SapicInlineExportLocations
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: check_rep/2 [destructor], fst/1, get_rep/1 [destructor],
++           pair/2, rep/2 [private,constructor], report/1, snd/1
++equations:
++    check_rep(rep(x.1, x.2), x.2) = x.1,
++    fst(<x.1, x.2>) = x.1,
++    get_rep(rep(x.1, x.2)) = x.1,
++    snd(<x.1, x.2>) = x.2
++
++heuristic: p
++
++predicate: Report( x, l )<=>⊤
++
++lemma pattern_location:
++  exists-trace "∃ #i. Pattern( rep('a', 'outer') ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Pattern( rep('a', 'outer') ) @ #i)"
++*/
++simplify
++solve( State_1111( ) ▶₀ #i )
++  case ina_0_111
++  SOLVED // trace found
++qed
++
++lemma caller_location:
++  exists-trace "∃ x #i. Caller( rep(x, x) ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ x #i. (Caller( rep(x, x) ) @ #i)"
++*/
++simplify
++solve( State_1211( x ) ▶₀ #i )
++  case Open_0_121
++  SOLVED // trace found
++qed
++
++lemma inner_location:
++  exists-trace "∃ x #i. Inner( rep(x, 'inner') ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ x #i. (Inner( rep(x, 'inner') ) @ #i)"
++*/
++simplify
++solve( State_211( x ) ▶₀ #i )
++  case Inner_0_21
++  SOLVED // trace found
++qed
++
++lemma inner_overrides_caller:
++  all-traces "∀ x l #i. (Inner( rep(x, l) ) @ #i) ⇒ (l = 'inner')"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x l #i. (Inner( rep(x, l) ) @ #i) ∧ ¬(l = 'inner')"
++*/
++simplify
++by contradiction /* from formulas */
++
++restriction Restr_ReportRule_1:
++  "∀ #NOW. (Restr_ReportRule_1( ) @ #NOW) ⇒ (⊤)"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ #NOW. (Restr_ReportRule_1( ) @ #NOW) ⇒ (⊤)"
++  */
++
++rule (modulo E) ReportRule[color=#ffffff, process="|", issapicrule,
++                           role='Process']:
++   [ In( <x, loc> ) ] --[ Restr_ReportRule_1( ) ]-> [ Out( rep(x, loc) ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Init[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ ] --[ Init( ) ]-> [ State_( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ State_( ) ] --> [ State_1( ), State_2( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_1[color=#ffffff, process="|", issapicrule,
++                      role='Process']:
++   [ State_1( ) ] --> [ State_11( ), State_12( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Patterna_0_11[color=#ffffff, process="Pattern('a');",
++                              issapicrule, role='Process']:
++   [ State_11( ) ] --> [ State_111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) ina_0_111[color=#805040, process="in('a');", issapicrule,
++                          role='Pattern']:
++   [ State_111( ), In( 'a' ) ] --> [ State_1111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventPatternrepaouter_0_1111[color=#805040,
++                                             process="event Pattern( rep('a', 'outer') );", issapicrule,
++                                             role='Pattern']:
++   [ State_1111( ) ] --[ Pattern( rep('a', 'outer') ) ]-> [ State_11111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_11111[color=#805040, process="0", issapicrule,
++                          role='Pattern']:
++   [ State_11111( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) newx_0_12[color=#ffffff, process="new x.1;", issapicrule,
++                          role='Process']:
++   [ State_12( ), Fr( x.1 ) ] --> [ State_121( x.1 ) ]
++
++  /*
++  rule (modulo AC) newx_0_12[color=#ffffff, process="new x.1;",
++                             issapicrule, role='Process']:
++     [ State_12( ), Fr( x ) ] --> [ State_121( x ) ]
++  */
++
++rule (modulo E) Open_0_121[color=#ffffff, process="Open();", issapicrule,
++                           role='Process']:
++   [ State_121( x.1 ) ] --> [ State_1211( x.1 ) ]
++
++  /*
++  rule (modulo AC) Open_0_121[color=#ffffff, process="Open();",
++                              issapicrule, role='Process']:
++     [ State_121( x ) ] --> [ State_1211( x ) ]
++  */
++
++rule (modulo E) eventCallerrepxx_0_1211[color=#5d8040,
++                                        process="event Caller( rep(x.1, x.1) );", issapicrule, role='Open']:
++   [ State_1211( x.1 ) ]
++  --[ Caller( rep(x.1, x.1) ) ]->
++   [ State_12111( x.1 ) ]
++
++  /*
++  rule (modulo AC) eventCallerrepxx_0_1211[color=#5d8040,
++                                           process="event Caller( rep(x.1, x.1) );", issapicrule,
++                                           role='Open']:
++     [ State_1211( x ) ] --[ Caller( rep(x, x) ) ]-> [ State_12111( x ) ]
++  */
++
++rule (modulo E) p_0_12111[color=#5d8040, process="0", issapicrule,
++                          role='Open']:
++   [ State_12111( x.1 ) ] --> [ ]
++
++  /*
++  rule (modulo AC) p_0_12111[color=#5d8040, process="0", issapicrule,
++                             role='Open']:
++     [ State_12111( x ) ] --> [ ]
++  */
++
++rule (modulo E) newx_0_2[color=#ffffff, process="new x.2;", issapicrule,
++                         role='Process']:
++   [ State_2( ), Fr( x.2 ) ] --> [ State_21( x.2 ) ]
++
++  /*
++  rule (modulo AC) newx_0_2[color=#ffffff, process="new x.2;", issapicrule,
++                            role='Process']:
++     [ State_2( ), Fr( x ) ] --> [ State_21( x ) ]
++  */
++
++rule (modulo E) Inner_0_21[color=#ffffff, process="Inner();",
++                           issapicrule, role='Process']:
++   [ State_21( x.2 ) ] --> [ State_211( x.2 ) ]
++
++  /*
++  rule (modulo AC) Inner_0_21[color=#ffffff, process="Inner();",
++                              issapicrule, role='Process']:
++     [ State_21( x ) ] --> [ State_211( x ) ]
++  */
++
++rule (modulo E) eventInnerrepxinner_0_211[color=#406e80,
++                                          process="event Inner( rep(x.2, 'inner') );", issapicrule,
++                                          role='Inner']:
++   [ State_211( x.2 ) ]
++  --[ Inner( rep(x.2, 'inner') ) ]->
++   [ State_2111( x.2 ) ]
++
++  /*
++  rule (modulo AC) eventInnerrepxinner_0_211[color=#406e80,
++                                             process="event Inner( rep(x.2, 'inner') );", issapicrule,
++                                             role='Inner']:
++     [ State_211( x ) ] --[ Inner( rep(x, 'inner') ) ]-> [ State_2111( x ) ]
++  */
++
++rule (modulo E) p_0_2111[color=#406e80, process="0", issapicrule,
++                         role='Inner']:
++   [ State_2111( x.2 ) ] --> [ ]
++
++  /*
++  rule (modulo AC) p_0_2111[color=#406e80, process="0", issapicrule,
++                            role='Inner']:
++     [ State_2111( x ) ] --> [ ]
++  */
++
++restriction single_session:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  */
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/sapic-inline-export-locations.spthy
++
++  output:          examples/regression/trace/sapic-inline-export-locations.spthy.tmp
++  processing time: 0.19s
++  
++  pattern_location (exists-trace): verified (3 steps)
++  caller_location (exists-trace): verified (3 steps)
++  inner_location (exists-trace): verified (3 steps)
++  inner_overrides_caller (all-traces): verified (2 steps)
++
++==============================================================================
++*/
 diff --git a/case-studies-regression/fast-tests/regression/trace/sapic-msr-call-binding-reuse_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/sapic-msr-call-binding-reuse_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..e0c7eca814bbff462dafeed796cd3d35f5ba4cfe
+index 0000000000000000000000000000000000000000..7eb59b4660f630dbd867a41ca0f605ddc525955f
 --- /dev/null
 +++ b/case-studies-regression/fast-tests/regression/trace/sapic-msr-call-binding-reuse_analyzed.spthy
 @@ -0,0 +1,125 @@
@@ -1540,8 +1794,8 @@ index 0000000000000000000000000000000000000000..e0c7eca814bbff462dafeed796cd3d35
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -1553,7 +1807,7 @@ index 0000000000000000000000000000000000000000..e0c7eca814bbff462dafeed796cd3d35
 +analyzed: examples/regression/trace/sapic-msr-call-binding-reuse.spthy
 +
 +  output:          examples/regression/trace/sapic-msr-call-binding-reuse.spthy.tmp
-+  processing time: 0.08s
++  processing time: 0.12s
 +  
 +  WARNING: 1 wellformedness check failed!
 +           The analysis results might be wrong!
@@ -1564,7 +1818,7 @@ index 0000000000000000000000000000000000000000..e0c7eca814bbff462dafeed796cd3d35
 +*/
 diff --git a/case-studies-regression/fast-tests/regression/trace/sapic-nested-call-caller-scope_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/sapic-nested-call-caller-scope_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..e5bd4366a84ce8123b85d88bc08dddcf6d330612
+index 0000000000000000000000000000000000000000..5f4b8b755466a42554612d4a4849e42f606d841a
 --- /dev/null
 +++ b/case-studies-regression/fast-tests/regression/trace/sapic-nested-call-caller-scope_analyzed.spthy
 @@ -0,0 +1,1176 @@
@@ -2717,8 +2971,8 @@ index 0000000000000000000000000000000000000000..e5bd4366a84ce8123b85d88bc08dddcf
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -2730,7 +2984,7 @@ index 0000000000000000000000000000000000000000..e5bd4366a84ce8123b85d88bc08dddcf
 +analyzed: examples/regression/trace/sapic-nested-call-caller-scope.spthy
 +
 +  output:          examples/regression/trace/sapic-nested-call-caller-scope.spthy.tmp
-+  processing time: 1.47s
++  processing time: 2.18s
 +  
 +  input_independent (exists-trace): verified (6 steps)
 +  typed_input_independent (exists-trace): verified (6 steps)
@@ -2744,9 +2998,291 @@ index 0000000000000000000000000000000000000000..e5bd4366a84ce8123b85d88bc08dddcf
 +
 +==============================================================================
 +*/
+diff --git a/case-studies-regression/fast-tests/regression/trace/sapic-open-process-export_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/sapic-open-process-export_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4b4d27efffc194a37afd16cccd444eb1f1c8c35
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/sapic-open-process-export_analyzed.spthy
+@@ -0,0 +1,276 @@
++theory SapicOpenProcessExport
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, snd/1
++equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++heuristic: p
++
++lemma caller_binding:
++  all-traces
++  "∀ x #i.
++    (Seen( x ) @ #i) ⇒ ((x = 'a') ∨ (∃ #j. (Created( x ) @ #j) ∧ (#j < #i)))"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x #i.
++  (Seen( x ) @ #i)
++ ∧
++  (¬(x = 'a')) ∧ (∀ #j. (Created( x ) @ #j) ⇒ ¬(#j < #i))"
++*/
++simplify
++solve( Seen( x ) @ #i )
++  case eventSeena_0_211
++  by contradiction /* from formulas */
++next
++  case eventSeenx_0_11111
++  solve( State_11111( x ) ▶₀ #i )
++    case P_0_1111
++    by contradiction /* from formulas */
++  qed
++next
++  case eventSeenx_0_12111
++  solve( State_12111( x ) ▶₀ #i )
++    case P_0_1211
++    by contradiction /* from formulas */
++  qed
++qed
++
++lemma distinct_callers:
++  exists-trace
++  "∃ x y #i #j #k #l.
++    ((((Created( x ) @ #i) ∧ (Created( y ) @ #j)) ∧ (Seen( x ) @ #k)) ∧
++     (Seen( y ) @ #l)) ∧
++    (¬(x = y))"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ x y #i #j #k #l.
++  (Created( x ) @ #i) ∧
++  (Created( y ) @ #j) ∧
++  (Seen( x ) @ #k) ∧
++  (Seen( y ) @ #l)
++ ∧
++  ¬(x = y)"
++*/
++simplify
++solve( Created( x ) @ #i )
++  case eventCreatedx_0_111
++  solve( State_111( x ) ▶₀ #i )
++    case newx_0_11
++    solve( Created( y ) @ #j )
++      case eventCreatedx_0_121
++      solve( State_121( y ) ▶₀ #j )
++        case newx_0_12
++        solve( Seen( ~n ) @ #k )
++          case eventSeenx_0_11111
++          solve( State_11111( ~n ) ▶₀ #k )
++            case P_0_1111
++            solve( Seen( ~n.1 ) @ #l )
++              case eventSeenx_0_12111
++              solve( State_12111( ~n.1 ) ▶₀ #l )
++                case P_0_1211
++                SOLVED // trace found
++              qed
++            qed
++          qed
++        qed
++      qed
++    qed
++  qed
++qed
++
++lemma closed_wrapper:
++  exists-trace "∃ #i. Seen( 'a' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Seen( 'a' ) @ #i)"
++*/
++simplify
++solve( Seen( 'a' ) @ #i )
++  case eventSeena_0_211
++  solve( State_211( ) ▶₀ #i )
++    case P_0_21
++    SOLVED // trace found
++  qed
++qed
++
++rule (modulo E) Init[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ ] --[ Init( ) ]-> [ State_( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ State_( ) ] --> [ State_1( ), State_2( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_1[color=#ffffff, process="|", issapicrule,
++                      role='Process']:
++   [ State_1( ) ] --> [ State_11( ), State_12( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) newx_0_11[color=#ffffff, process="new x.1;", issapicrule,
++                          role='Process']:
++   [ State_11( ), Fr( x.1 ) ] --> [ State_111( x.1 ) ]
++
++  /*
++  rule (modulo AC) newx_0_11[color=#ffffff, process="new x.1;",
++                             issapicrule, role='Process']:
++     [ State_11( ), Fr( x ) ] --> [ State_111( x ) ]
++  */
++
++rule (modulo E) eventCreatedx_0_111[color=#ffffff,
++                                    process="event Created( x.1 );", issapicrule, role='Process']:
++   [ State_111( x.1 ) ] --[ Created( x.1 ) ]-> [ State_1111( x.1 ) ]
++
++  /*
++  rule (modulo AC) eventCreatedx_0_111[color=#ffffff,
++                                       process="event Created( x.1 );", issapicrule, role='Process']:
++     [ State_111( x ) ] --[ Created( x ) ]-> [ State_1111( x ) ]
++  */
++
++rule (modulo E) P_0_1111[color=#ffffff, process="P();", issapicrule,
++                         role='Process']:
++   [ State_1111( x.1 ) ] --> [ State_11111( x.1 ) ]
++
++  /*
++  rule (modulo AC) P_0_1111[color=#ffffff, process="P();", issapicrule,
++                            role='Process']:
++     [ State_1111( x ) ] --> [ State_11111( x ) ]
++  */
++
++rule (modulo E) eventSeenx_0_11111[color=#6c8040,
++                                   process="event Seen( x.1 );", issapicrule, role='P']:
++   [ State_11111( x.1 ) ] --[ Seen( x.1 ) ]-> [ State_111111( x.1 ) ]
++
++  /*
++  rule (modulo AC) eventSeenx_0_11111[color=#6c8040,
++                                      process="event Seen( x.1 );", issapicrule, role='P']:
++     [ State_11111( x ) ] --[ Seen( x ) ]-> [ State_111111( x ) ]
++  */
++
++rule (modulo E) p_0_111111[color=#6c8040, process="0", issapicrule,
++                           role='P']:
++   [ State_111111( x.1 ) ] --> [ ]
++
++  /*
++  rule (modulo AC) p_0_111111[color=#6c8040, process="0", issapicrule,
++                              role='P']:
++     [ State_111111( x ) ] --> [ ]
++  */
++
++rule (modulo E) newx_0_12[color=#ffffff, process="new x.2;", issapicrule,
++                          role='Process']:
++   [ State_12( ), Fr( x.2 ) ] --> [ State_121( x.2 ) ]
++
++  /*
++  rule (modulo AC) newx_0_12[color=#ffffff, process="new x.2;",
++                             issapicrule, role='Process']:
++     [ State_12( ), Fr( x ) ] --> [ State_121( x ) ]
++  */
++
++rule (modulo E) eventCreatedx_0_121[color=#ffffff,
++                                    process="event Created( x.2 );", issapicrule, role='Process']:
++   [ State_121( x.2 ) ] --[ Created( x.2 ) ]-> [ State_1211( x.2 ) ]
++
++  /*
++  rule (modulo AC) eventCreatedx_0_121[color=#ffffff,
++                                       process="event Created( x.2 );", issapicrule, role='Process']:
++     [ State_121( x ) ] --[ Created( x ) ]-> [ State_1211( x ) ]
++  */
++
++rule (modulo E) P_0_1211[color=#ffffff, process="P();", issapicrule,
++                         role='Process']:
++   [ State_1211( x.2 ) ] --> [ State_12111( x.2 ) ]
++
++  /*
++  rule (modulo AC) P_0_1211[color=#ffffff, process="P();", issapicrule,
++                            role='Process']:
++     [ State_1211( x ) ] --> [ State_12111( x ) ]
++  */
++
++rule (modulo E) eventSeenx_0_12111[color=#6c8040,
++                                   process="event Seen( x.2 );", issapicrule, role='P']:
++   [ State_12111( x.2 ) ] --[ Seen( x.2 ) ]-> [ State_121111( x.2 ) ]
++
++  /*
++  rule (modulo AC) eventSeenx_0_12111[color=#6c8040,
++                                      process="event Seen( x.2 );", issapicrule, role='P']:
++     [ State_12111( x ) ] --[ Seen( x ) ]-> [ State_121111( x ) ]
++  */
++
++rule (modulo E) p_0_121111[color=#6c8040, process="0", issapicrule,
++                           role='P']:
++   [ State_121111( x.2 ) ] --> [ ]
++
++  /*
++  rule (modulo AC) p_0_121111[color=#6c8040, process="0", issapicrule,
++                              role='P']:
++     [ State_121111( x ) ] --> [ ]
++  */
++
++rule (modulo E) Wrappeda_0_2[color=#ffffff, process="Wrapped('a');",
++                             issapicrule, role='Process']:
++   [ State_2( ) ] --> [ State_21( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) P_0_21[color=#404a80, process="P();", issapicrule,
++                       role='Wrapped']:
++   [ State_21( ) ] --> [ State_211( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventSeena_0_211[color=#6c8040,
++                                 process="event Seen( 'a' );", issapicrule, role='Wrapped_P']:
++   [ State_211( ) ] --[ Seen( 'a' ) ]-> [ State_2111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_2111[color=#6c8040, process="0", issapicrule,
++                         role='Wrapped_P']:
++   [ State_2111( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++restriction single_session:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  */
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/sapic-open-process-export.spthy
++
++  output:          examples/regression/trace/sapic-open-process-export.spthy.tmp
++  processing time: 0.24s
++  
++  caller_binding (all-traces): verified (7 steps)
++  distinct_callers (exists-trace): verified (10 steps)
++  closed_wrapper (exists-trace): verified (4 steps)
++
++==============================================================================
++*/
 diff --git a/case-studies-regression/fast-tests/regression/trace/sapic-process-call-caller-scope_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/sapic-process-call-caller-scope_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..a3d7963fdc420554495c823090481138cfbfb19d
+index 0000000000000000000000000000000000000000..4d7ea1991cf7072f76196fd6653899be40a9b56d
 --- /dev/null
 +++ b/case-studies-regression/fast-tests/regression/trace/sapic-process-call-caller-scope_analyzed.spthy
 @@ -0,0 +1,940 @@
@@ -3664,8 +4200,8 @@ index 0000000000000000000000000000000000000000..a3d7963fdc420554495c823090481138
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -3677,7 +4213,7 @@ index 0000000000000000000000000000000000000000..a3d7963fdc420554495c823090481138
 +analyzed: examples/regression/trace/sapic-process-call-caller-scope.spthy
 +
 +  output:          examples/regression/trace/sapic-process-call-caller-scope.spthy.tmp
-+  processing time: 0.86s
++  processing time: 1.25s
 +  
 +  caller_input (exists-trace): verified (6 steps)
 +  typed_caller_input (exists-trace): verified (6 steps)
@@ -3692,7 +4228,7 @@ index 0000000000000000000000000000000000000000..a3d7963fdc420554495c823090481138
 +*/
 diff --git a/case-studies-regression/fast-tests/regression/trace/sapic-process-call-location-scope_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/sapic-process-call-location-scope_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..623308670c9553d73ccd5f2c84b340a624ff7e9e
+index 0000000000000000000000000000000000000000..abd29c592770d14d377bfee70523602ac11821d9
 --- /dev/null
 +++ b/case-studies-regression/fast-tests/regression/trace/sapic-process-call-location-scope_analyzed.spthy
 @@ -0,0 +1,350 @@
@@ -4022,8 +4558,8 @@ index 0000000000000000000000000000000000000000..623308670c9553d73ccd5f2c84b340a6
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -4035,7 +4571,7 @@ index 0000000000000000000000000000000000000000..623308670c9553d73ccd5f2c84b340a6
 +analyzed: examples/regression/trace/sapic-process-call-location-scope.spthy
 +
 +  output:          examples/regression/trace/sapic-process-call-location-scope.spthy.tmp
-+  processing time: 0.20s
++  processing time: 0.32s
 +  
 +  direct_location (exists-trace): verified (4 steps)
 +  nested_location (exists-trace): verified (4 steps)
@@ -4048,7 +4584,7 @@ index 0000000000000000000000000000000000000000..623308670c9553d73ccd5f2c84b340a6
 +*/
 diff --git a/case-studies-regression/fast-tests/regression/trace/soundness-sapic-binder-scope_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/soundness-sapic-binder-scope_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..c767c9115d1ec078a073c939348a33a790ce793b
+index 0000000000000000000000000000000000000000..a6a645a5d2a21539987134085905dbc204bee32f
 --- /dev/null
 +++ b/case-studies-regression/fast-tests/regression/trace/soundness-sapic-binder-scope_analyzed.spthy
 @@ -0,0 +1,373 @@
@@ -4401,8 +4937,8 @@ index 0000000000000000000000000000000000000000..c767c9115d1ec078a073c939348a33a7
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -4414,7 +4950,7 @@ index 0000000000000000000000000000000000000000..c767c9115d1ec078a073c939348a33a7
 +analyzed: examples/regression/trace/soundness-sapic-binder-scope.spthy
 +
 +  output:          examples/regression/trace/soundness-sapic-binder-scope.spthy.tmp
-+  processing time: 0.21s
++  processing time: 0.29s
 +  
 +  WARNING: 3 wellformedness check failed!
 +           The analysis results might be wrong!
@@ -4425,9 +4961,400 @@ index 0000000000000000000000000000000000000000..c767c9115d1ec078a073c939348a33a7
 +
 +==============================================================================
 +*/
+diff --git a/case-studies-regression/fast-tests/regression/trace/soundness-sapic-pattern-export_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/soundness-sapic-pattern-export_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..18f278195b72590b25712638047333bc77c6c729
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/soundness-sapic-pattern-export_analyzed.spthy
+@@ -0,0 +1,254 @@
++theory SoundnessSapicPatternExport
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, snd/1
++equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++heuristic: p
++
++lemma supplied_patterns:
++  all-traces "∀ x #i. (Seen( x ) @ #i) ⇒ ((x = <'a', 'b'>) ∨ (x = 'd'))"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x #i. (Seen( x ) @ #i) ∧ (¬(x = <'a', 'b'>)) ∧ (¬(x = 'd'))"
++*/
++simplify
++solve( Seen( x ) @ #i )
++  case eventSeenab_0_11111
++  by contradiction /* from formulas */
++next
++  case eventSeend_0_12111
++  by contradiction /* from formulas */
++qed
++
++lemma repeated_pattern:
++  all-traces "∀ x #i. (Twice( x ) @ #i) ⇒ (x = 'c')"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x #i. (Twice( x ) @ #i) ∧ ¬(x = 'c')"
++*/
++simplify
++by contradiction /* from formulas */
++
++lemma pair_reachable:
++  exists-trace "∃ #i. Seen( <'a', 'b'> ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Seen( <'a', 'b'> ) @ #i)"
++*/
++simplify
++solve( Seen( <'a', 'b'> ) @ #i )
++  case eventSeenab_0_11111
++  solve( State_11111( ) ▶₀ #i )
++    case inab_0_1111
++    SOLVED // trace found
++  qed
++qed
++
++lemma nested_reachable:
++  exists-trace "∃ #i. Seen( 'd' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Seen( 'd' ) @ #i)"
++*/
++simplify
++solve( Seen( 'd' ) @ #i )
++  case eventSeend_0_12111
++  solve( State_12111( ) ▶₀ #i )
++    case ind_0_1211
++    SOLVED // trace found
++  qed
++qed
++
++lemma repeated_reachable:
++  exists-trace "∃ #i. Twice( 'c' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Twice( 'c' ) @ #i)"
++*/
++simplify
++solve( State_112111( ) ▶₀ #i )
++  case inc_0_11211
++  SOLVED // trace found
++qed
++
++lemma ordinary_parameter:
++  exists-trace "∃ #i. Value( 'e' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Value( 'e' ) @ #i)"
++*/
++simplify
++solve( State_21( ) ▶₀ #i )
++  case Valuee_0_2
++  SOLVED // trace found
++qed
++
++rule (modulo E) Init[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ ] --[ Init( ) ]-> [ State_( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ State_( ) ] --> [ State_1( ), State_2( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_1[color=#ffffff, process="|", issapicrule,
++                      role='Process']:
++   [ State_1( ) ] --> [ State_11( ), State_12( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_11[color=#ffffff, process="|", issapicrule,
++                       role='Process']:
++   [ State_11( ) ] --> [ State_111( ), State_112( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Pab_0_111[color=#ffffff, process="P(<'a', 'b'>);",
++                          issapicrule, role='Process']:
++   [ State_111( ) ] --> [ State_1111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) inab_0_1111[color=#6c8040, process="in(<'a', 'b'>);",
++                            issapicrule, role='P']:
++   [ State_1111( ), In( <'a', 'b'> ) ] --> [ State_11111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventSeenab_0_11111[color=#6c8040,
++                                    process="event Seen( <'a', 'b'> );", issapicrule, role='P']:
++   [ State_11111( ) ] --[ Seen( <'a', 'b'> ) ]-> [ State_111111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_111111[color=#6c8040, process="0", issapicrule,
++                           role='P']:
++   [ State_111111( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Twicec_0_112[color=#ffffff, process="Twice('c');",
++                             issapicrule, role='Process']:
++   [ State_112( ) ] --> [ State_1121( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) inc_0_1121[color=#804057, process="in('c');",
++                           issapicrule, role='Twice']:
++   [ State_1121( ), In( 'c' ) ] --> [ State_11211( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) inc_0_11211[color=#804057, process="in('c');",
++                            issapicrule, role='Twice']:
++   [ State_11211( ), In( 'c' ) ] --> [ State_112111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventTwicec_0_112111[color=#804057,
++                                     process="event Twice( 'c' );", issapicrule, role='Twice']:
++   [ State_112111( ) ] --[ Twice( 'c' ) ]-> [ State_1121111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_1121111[color=#804057, process="0", issapicrule,
++                            role='Twice']:
++   [ State_1121111( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Nestedd_0_12[color=#ffffff, process="Nested('d');",
++                             issapicrule, role='Process']:
++   [ State_12( ) ] --> [ State_121( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Pd_0_121[color=#7b4080, process="P('d');", issapicrule,
++                         role='Nested']:
++   [ State_121( ) ] --> [ State_1211( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) ind_0_1211[color=#6c8040, process="in('d');",
++                           issapicrule, role='Nested_P']:
++   [ State_1211( ), In( 'd' ) ] --> [ State_12111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventSeend_0_12111[color=#6c8040,
++                                   process="event Seen( 'd' );", issapicrule, role='Nested_P']:
++   [ State_12111( ) ] --[ Seen( 'd' ) ]-> [ State_121111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_121111[color=#6c8040, process="0", issapicrule,
++                           role='Nested_P']:
++   [ State_121111( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Valuee_0_2[color=#ffffff, process="Value('e');",
++                           issapicrule, role='Process']:
++   [ State_2( ) ] --> [ State_21( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventValuee_0_21[color=#408047,
++                                 process="event Value( 'e' );", issapicrule, role='Value']:
++   [ State_21( ) ] --[ Value( 'e' ) ]-> [ State_211( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_211[color=#408047, process="0", issapicrule,
++                        role='Value']:
++   [ State_211( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++restriction single_session:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  */
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/soundness-sapic-pattern-export.spthy
++
++  output:          examples/regression/trace/soundness-sapic-pattern-export.spthy.tmp
++  processing time: 0.22s
++  
++  supplied_patterns (all-traces): verified (4 steps)
++  repeated_pattern (all-traces): verified (2 steps)
++  pair_reachable (exists-trace): verified (4 steps)
++  nested_reachable (exists-trace): verified (4 steps)
++  repeated_reachable (exists-trace): verified (3 steps)
++  ordinary_parameter (exists-trace): verified (3 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/fast-tests/regression/trace/soundness-sapic-pattern-parameter_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/soundness-sapic-pattern-parameter_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..655de22fc3feb285a028f708efe0b3ae62add456
+--- /dev/null
++++ b/case-studies-regression/fast-tests/regression/trace/soundness-sapic-pattern-parameter_analyzed.spthy
+@@ -0,0 +1,125 @@
++theory SoundnessSapicPatternParameter
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, snd/1
++equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++heuristic: p
++
++lemma supplied_pattern:
++  all-traces "∀ x #i. (Seen( x ) @ #i) ⇒ (x = <'a', 'b'>)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x #i. (Seen( x ) @ #i) ∧ ¬(x = <'a', 'b'>)"
++*/
++simplify
++by contradiction /* from formulas */
++
++lemma reachable:
++  exists-trace "∃ #i. Seen( <'a', 'b'> ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Seen( <'a', 'b'> ) @ #i)"
++*/
++simplify
++solve( State_111( pat_x ) ▶₀ #i )
++  case inab_0_11
++  SOLVED // trace found
++qed
++
++rule (modulo E) Init[color=#ffffff, process="new pat_x.1;", issapicrule,
++                     role='Process']:
++   [ ] --[ Init( ) ]-> [ State_( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) newpatx_0_[color=#ffffff, process="new pat_x.1;",
++                           issapicrule, role='Process']:
++   [ State_( ), Fr( pat_x.1 ) ] --> [ State_1( pat_x.1 ) ]
++
++  /*
++  rule (modulo AC) newpatx_0_[color=#ffffff, process="new pat_x.1;",
++                              issapicrule, role='Process']:
++     [ State_( ), Fr( pat_x ) ] --> [ State_1( pat_x ) ]
++  */
++
++rule (modulo E) Pab_0_1[color=#ffffff, process="P(<'a', 'b'>);",
++                        issapicrule, role='Process']:
++   [ State_1( pat_x.1 ) ] --> [ State_11( pat_x.1 ) ]
++
++  /*
++  rule (modulo AC) Pab_0_1[color=#ffffff, process="P(<'a', 'b'>);",
++                           issapicrule, role='Process']:
++     [ State_1( pat_x ) ] --> [ State_11( pat_x ) ]
++  */
++
++rule (modulo E) inab_0_11[color=#6c8040, process="in(<'a', 'b'>);",
++                          issapicrule, role='P']:
++   [ State_11( pat_x.1 ), In( <'a', 'b'> ) ] --> [ State_111( pat_x.1 ) ]
++
++  /*
++  rule (modulo AC) inab_0_11[color=#6c8040, process="in(<'a', 'b'>);",
++                             issapicrule, role='P']:
++     [ State_11( pat_x ), In( <'a', 'b'> ) ] --> [ State_111( pat_x ) ]
++  */
++
++rule (modulo E) eventSeenab_0_111[color=#6c8040,
++                                  process="event Seen( <'a', 'b'> );", issapicrule, role='P']:
++   [ State_111( pat_x.1 ) ]
++  --[ Seen( <'a', 'b'> ) ]->
++   [ State_1111( pat_x.1 ) ]
++
++  /*
++  rule (modulo AC) eventSeenab_0_111[color=#6c8040,
++                                     process="event Seen( <'a', 'b'> );", issapicrule, role='P']:
++     [ State_111( pat_x ) ] --[ Seen( <'a', 'b'> ) ]-> [ State_1111( pat_x ) ]
++  */
++
++rule (modulo E) p_0_1111[color=#6c8040, process="0", issapicrule,
++                         role='P']:
++   [ State_1111( pat_x.1 ) ] --> [ ]
++
++  /*
++  rule (modulo AC) p_0_1111[color=#6c8040, process="0", issapicrule,
++                            role='P']:
++     [ State_1111( pat_x ) ] --> [ ]
++  */
++
++restriction single_session:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  */
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/soundness-sapic-pattern-parameter.spthy
++
++  output:          examples/regression/trace/soundness-sapic-pattern-parameter.spthy.tmp
++  processing time: 0.12s
++  
++  supplied_pattern (all-traces): verified (2 steps)
++  reachable (exists-trace): verified (3 steps)
++
++==============================================================================
++*/
 diff --git a/case-studies-regression/fast-tests/regression/trace/soundness-sapic-process-call-capture_analyzed.spthy b/case-studies-regression/fast-tests/regression/trace/soundness-sapic-process-call-capture_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..116b93ef85c16b8caf5554f25b945256f05651ca
+index 0000000000000000000000000000000000000000..2648d4b31bd80eafdcb8987346ecd73a55b21f2a
 --- /dev/null
 +++ b/case-studies-regression/fast-tests/regression/trace/soundness-sapic-process-call-capture_analyzed.spthy
 @@ -0,0 +1,1510 @@
@@ -5907,8 +6834,8 @@ index 0000000000000000000000000000000000000000..116b93ef85c16b8caf5554f25b945256
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -5920,7 +6847,7 @@ index 0000000000000000000000000000000000000000..116b93ef85c16b8caf5554f25b945256
 +analyzed: examples/regression/trace/soundness-sapic-process-call-capture.spthy
 +
 +  output:          examples/regression/trace/soundness-sapic-process-call-capture.spthy.tmp
-+  processing time: 2.95s
++  processing time: 4.53s
 +  
 +  typed_distinct (exists-trace): verified (3 steps)
 +  untyped_distinct (exists-trace): verified (3 steps)
@@ -5942,7 +6869,7 @@ index 0000000000000000000000000000000000000000..116b93ef85c16b8caf5554f25b945256
 +==============================================================================
 +*/
 diff --git a/case-studies-regression/fast-tests/sapic/fast/basic/typing_analyzed.spthy b/case-studies-regression/fast-tests/sapic/fast/basic/typing_analyzed.spthy
-index 280326fa08f9a80be8fce94d6eee85fd932fd11d..37b8ec40c5fbb033ade93a613f6607925d5bb5c5 100644
+index 280326fa08f9a80be8fce94d6eee85fd932fd11d..e6e793cb2a64f5081c05a7c05417545e751c2214 100644
 --- a/case-studies-regression/fast-tests/sapic/fast/basic/typing_analyzed.spthy
 +++ b/case-studies-regression/fast-tests/sapic/fast/basic/typing_analyzed.spthy
 @@ -26,384 +26,351 @@ rule (modulo E) inalol_0_[color=#ffffff, process="in(a.1:lol);",
@@ -6530,8 +7457,8 @@ index 280326fa08f9a80be8fce94d6eee85fd932fd11d..37b8ec40c5fbb033ade93a613f660792
  Maude version 3.5.1
 -Git revision: 41bc81379b23681e7057314a5cf66a25c45e1986, branch: canonicalise-subst
 -Compiled at: 2026-07-27 16:11:34.947223 UTC
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
  */
  
  end
@@ -6540,13 +7467,13 @@ index 280326fa08f9a80be8fce94d6eee85fd932fd11d..37b8ec40c5fbb033ade93a613f660792
  
    output:          examples/sapic/fast/basic/typing.spthy.tmp
 -  processing time: 0.03s
-+  processing time: 0.14s
++  processing time: 0.15s
    
  
  ==============================================================================
 diff --git a/case-studies-regression/regression/trace/sapic-else-binding-scope_analyzed.spthy b/case-studies-regression/regression/trace/sapic-else-binding-scope_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..f25d4a6135e3db1cbe9b26b2c0f5a218c9a0ce63
+index 0000000000000000000000000000000000000000..1aa55cc33fa8e2ccdfbcbd74e0725b9b555063c1
 --- /dev/null
 +++ b/case-studies-regression/regression/trace/sapic-else-binding-scope_analyzed.spthy
 @@ -0,0 +1,433 @@
@@ -6961,8 +7888,8 @@ index 0000000000000000000000000000000000000000..f25d4a6135e3db1cbe9b26b2c0f5a218
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -6974,7 +7901,7 @@ index 0000000000000000000000000000000000000000..f25d4a6135e3db1cbe9b26b2c0f5a218
 +analyzed: examples/regression/trace/sapic-else-binding-scope.spthy
 +
 +  output:          examples/regression/trace/sapic-else-binding-scope.spthy.tmp
-+  processing time: 0.25s
++  processing time: 0.31s
 +  
 +  lookup_typed_else (exists-trace): verified (3 steps)
 +  lookup_untyped_else (exists-trace): verified (3 steps)
@@ -6985,7 +7912,7 @@ index 0000000000000000000000000000000000000000..f25d4a6135e3db1cbe9b26b2c0f5a218
 +*/
 diff --git a/case-studies-regression/regression/trace/sapic-embedded-msr-binding_analyzed.spthy b/case-studies-regression/regression/trace/sapic-embedded-msr-binding_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..3573e790e0b489448e4ac71840ffd05b596140b4
+index 0000000000000000000000000000000000000000..8be7ddd62b5d326f07afaf34b019bcf85288cd80
 --- /dev/null
 +++ b/case-studies-regression/regression/trace/sapic-embedded-msr-binding_analyzed.spthy
 @@ -0,0 +1,568 @@
@@ -7532,8 +8459,8 @@ index 0000000000000000000000000000000000000000..3573e790e0b489448e4ac71840ffd05b
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -7545,7 +8472,7 @@ index 0000000000000000000000000000000000000000..3573e790e0b489448e4ac71840ffd05b
 +analyzed: examples/regression/trace/sapic-embedded-msr-binding.spthy
 +
 +  output:          examples/regression/trace/sapic-embedded-msr-binding.spthy.tmp
-+  processing time: 0.52s
++  processing time: 0.79s
 +  
 +  binds_new_variable (exists-trace): verified (4 steps)
 +  matches_public_value (exists-trace): verified (4 steps)
@@ -7559,7 +8486,7 @@ index 0000000000000000000000000000000000000000..3573e790e0b489448e4ac71840ffd05b
 +*/
 diff --git a/case-studies-regression/regression/trace/sapic-inferred-location-types_analyzed.spthy b/case-studies-regression/regression/trace/sapic-inferred-location-types_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..fa6aba0a4af8be3e071fb29a434a4311126388d6
+index 0000000000000000000000000000000000000000..db11ee82b475f84d24ee8ecc524304527ab2ad8e
 --- /dev/null
 +++ b/case-studies-regression/regression/trace/sapic-inferred-location-types_analyzed.spthy
 @@ -0,0 +1,230 @@
@@ -7773,8 +8700,8 @@ index 0000000000000000000000000000000000000000..fa6aba0a4af8be3e071fb29a434a4311
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -7786,7 +8713,7 @@ index 0000000000000000000000000000000000000000..fa6aba0a4af8be3e071fb29a434a4311
 +analyzed: examples/regression/trace/sapic-inferred-location-types.spthy
 +
 +  output:          examples/regression/trace/sapic-inferred-location-types.spthy.tmp
-+  processing time: 0.17s
++  processing time: 0.23s
 +  
 +  reaches_done (exists-trace): verified (4 steps)
 +  correct_value (all-traces): verified (3 steps)
@@ -7795,7 +8722,7 @@ index 0000000000000000000000000000000000000000..fa6aba0a4af8be3e071fb29a434a4311
 +*/
 diff --git a/case-studies-regression/regression/trace/sapic-inferred-lock-types_analyzed.spthy b/case-studies-regression/regression/trace/sapic-inferred-lock-types_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..02678f4f7531800b87f6c93f42cb92ba1df686ce
+index 0000000000000000000000000000000000000000..13fa52297ba34fe5a8f14062ed962f68cad713cd
 --- /dev/null
 +++ b/case-studies-regression/regression/trace/sapic-inferred-lock-types_analyzed.spthy
 @@ -0,0 +1,165 @@
@@ -7945,8 +8872,8 @@ index 0000000000000000000000000000000000000000..02678f4f7531800b87f6c93f42cb92ba
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -7958,15 +8885,266 @@ index 0000000000000000000000000000000000000000..02678f4f7531800b87f6c93f42cb92ba
 +analyzed: examples/regression/trace/sapic-inferred-lock-types.spthy
 +
 +  output:          examples/regression/trace/sapic-inferred-lock-types.spthy.tmp
-+  processing time: 0.13s
++  processing time: 0.19s
 +  
 +  reaches_done (exists-trace): verified (3 steps)
 +
 +==============================================================================
 +*/
+diff --git a/case-studies-regression/regression/trace/sapic-inline-export-locations_analyzed.spthy b/case-studies-regression/regression/trace/sapic-inline-export-locations_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..a7168ad4cd8b4e238ae6cfcfe093386943e4238f
+--- /dev/null
++++ b/case-studies-regression/regression/trace/sapic-inline-export-locations_analyzed.spthy
+@@ -0,0 +1,245 @@
++theory SapicInlineExportLocations
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: check_rep/2 [destructor], fst/1, get_rep/1 [destructor],
++           pair/2, rep/2 [private,constructor], report/1, snd/1
++equations:
++    check_rep(rep(x.1, x.2), x.2) = x.1,
++    fst(<x.1, x.2>) = x.1,
++    get_rep(rep(x.1, x.2)) = x.1,
++    snd(<x.1, x.2>) = x.2
++
++heuristic: p
++
++predicate: Report( x, l )<=>⊤
++
++lemma pattern_location:
++  exists-trace "∃ #i. Pattern( rep('a', 'outer') ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Pattern( rep('a', 'outer') ) @ #i)"
++*/
++simplify
++solve( State_1111( ) ▶₀ #i )
++  case ina_0_111
++  SOLVED // trace found
++qed
++
++lemma caller_location:
++  exists-trace "∃ x #i. Caller( rep(x, x) ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ x #i. (Caller( rep(x, x) ) @ #i)"
++*/
++simplify
++solve( State_1211( x ) ▶₀ #i )
++  case Open_0_121
++  SOLVED // trace found
++qed
++
++lemma inner_location:
++  exists-trace "∃ x #i. Inner( rep(x, 'inner') ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ x #i. (Inner( rep(x, 'inner') ) @ #i)"
++*/
++simplify
++solve( State_211( x ) ▶₀ #i )
++  case Inner_0_21
++  SOLVED // trace found
++qed
++
++lemma inner_overrides_caller:
++  all-traces "∀ x l #i. (Inner( rep(x, l) ) @ #i) ⇒ (l = 'inner')"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x l #i. (Inner( rep(x, l) ) @ #i) ∧ ¬(l = 'inner')"
++*/
++simplify
++by contradiction /* from formulas */
++
++restriction Restr_ReportRule_1:
++  "∀ #NOW. (Restr_ReportRule_1( ) @ #NOW) ⇒ (⊤)"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ #NOW. (Restr_ReportRule_1( ) @ #NOW) ⇒ (⊤)"
++  */
++
++rule (modulo E) ReportRule[color=#ffffff, process="|", issapicrule,
++                           role='Process']:
++   [ In( <x, loc> ) ] --[ Restr_ReportRule_1( ) ]-> [ Out( rep(x, loc) ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Init[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ ] --[ Init( ) ]-> [ State_( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ State_( ) ] --> [ State_1( ), State_2( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_1[color=#ffffff, process="|", issapicrule,
++                      role='Process']:
++   [ State_1( ) ] --> [ State_11( ), State_12( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Patterna_0_11[color=#ffffff, process="Pattern('a');",
++                              issapicrule, role='Process']:
++   [ State_11( ) ] --> [ State_111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) ina_0_111[color=#805040, process="in('a');", issapicrule,
++                          role='Pattern']:
++   [ State_111( ), In( 'a' ) ] --> [ State_1111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventPatternrepaouter_0_1111[color=#805040,
++                                             process="event Pattern( rep('a', 'outer') );", issapicrule,
++                                             role='Pattern']:
++   [ State_1111( ) ] --[ Pattern( rep('a', 'outer') ) ]-> [ State_11111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_11111[color=#805040, process="0", issapicrule,
++                          role='Pattern']:
++   [ State_11111( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) newx_0_12[color=#ffffff, process="new x.1;", issapicrule,
++                          role='Process']:
++   [ State_12( ), Fr( x.1 ) ] --> [ State_121( x.1 ) ]
++
++  /*
++  rule (modulo AC) newx_0_12[color=#ffffff, process="new x.1;",
++                             issapicrule, role='Process']:
++     [ State_12( ), Fr( x ) ] --> [ State_121( x ) ]
++  */
++
++rule (modulo E) Open_0_121[color=#ffffff, process="Open();", issapicrule,
++                           role='Process']:
++   [ State_121( x.1 ) ] --> [ State_1211( x.1 ) ]
++
++  /*
++  rule (modulo AC) Open_0_121[color=#ffffff, process="Open();",
++                              issapicrule, role='Process']:
++     [ State_121( x ) ] --> [ State_1211( x ) ]
++  */
++
++rule (modulo E) eventCallerrepxx_0_1211[color=#5d8040,
++                                        process="event Caller( rep(x.1, x.1) );", issapicrule, role='Open']:
++   [ State_1211( x.1 ) ]
++  --[ Caller( rep(x.1, x.1) ) ]->
++   [ State_12111( x.1 ) ]
++
++  /*
++  rule (modulo AC) eventCallerrepxx_0_1211[color=#5d8040,
++                                           process="event Caller( rep(x.1, x.1) );", issapicrule,
++                                           role='Open']:
++     [ State_1211( x ) ] --[ Caller( rep(x, x) ) ]-> [ State_12111( x ) ]
++  */
++
++rule (modulo E) p_0_12111[color=#5d8040, process="0", issapicrule,
++                          role='Open']:
++   [ State_12111( x.1 ) ] --> [ ]
++
++  /*
++  rule (modulo AC) p_0_12111[color=#5d8040, process="0", issapicrule,
++                             role='Open']:
++     [ State_12111( x ) ] --> [ ]
++  */
++
++rule (modulo E) newx_0_2[color=#ffffff, process="new x.2;", issapicrule,
++                         role='Process']:
++   [ State_2( ), Fr( x.2 ) ] --> [ State_21( x.2 ) ]
++
++  /*
++  rule (modulo AC) newx_0_2[color=#ffffff, process="new x.2;", issapicrule,
++                            role='Process']:
++     [ State_2( ), Fr( x ) ] --> [ State_21( x ) ]
++  */
++
++rule (modulo E) Inner_0_21[color=#ffffff, process="Inner();",
++                           issapicrule, role='Process']:
++   [ State_21( x.2 ) ] --> [ State_211( x.2 ) ]
++
++  /*
++  rule (modulo AC) Inner_0_21[color=#ffffff, process="Inner();",
++                              issapicrule, role='Process']:
++     [ State_21( x ) ] --> [ State_211( x ) ]
++  */
++
++rule (modulo E) eventInnerrepxinner_0_211[color=#406e80,
++                                          process="event Inner( rep(x.2, 'inner') );", issapicrule,
++                                          role='Inner']:
++   [ State_211( x.2 ) ]
++  --[ Inner( rep(x.2, 'inner') ) ]->
++   [ State_2111( x.2 ) ]
++
++  /*
++  rule (modulo AC) eventInnerrepxinner_0_211[color=#406e80,
++                                             process="event Inner( rep(x.2, 'inner') );", issapicrule,
++                                             role='Inner']:
++     [ State_211( x ) ] --[ Inner( rep(x, 'inner') ) ]-> [ State_2111( x ) ]
++  */
++
++rule (modulo E) p_0_2111[color=#406e80, process="0", issapicrule,
++                         role='Inner']:
++   [ State_2111( x.2 ) ] --> [ ]
++
++  /*
++  rule (modulo AC) p_0_2111[color=#406e80, process="0", issapicrule,
++                            role='Inner']:
++     [ State_2111( x ) ] --> [ ]
++  */
++
++restriction single_session:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  */
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/sapic-inline-export-locations.spthy
++
++  output:          examples/regression/trace/sapic-inline-export-locations.spthy.tmp
++  processing time: 0.18s
++  
++  pattern_location (exists-trace): verified (3 steps)
++  caller_location (exists-trace): verified (3 steps)
++  inner_location (exists-trace): verified (3 steps)
++  inner_overrides_caller (all-traces): verified (2 steps)
++
++==============================================================================
++*/
 diff --git a/case-studies-regression/regression/trace/sapic-msr-call-binding-reuse_analyzed.spthy b/case-studies-regression/regression/trace/sapic-msr-call-binding-reuse_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..e0c7eca814bbff462dafeed796cd3d35f5ba4cfe
+index 0000000000000000000000000000000000000000..d8ab61d73e93c835f176d7752f5326e3feaeffae
 --- /dev/null
 +++ b/case-studies-regression/regression/trace/sapic-msr-call-binding-reuse_analyzed.spthy
 @@ -0,0 +1,125 @@
@@ -8073,8 +9251,8 @@ index 0000000000000000000000000000000000000000..e0c7eca814bbff462dafeed796cd3d35
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -8086,7 +9264,7 @@ index 0000000000000000000000000000000000000000..e0c7eca814bbff462dafeed796cd3d35
 +analyzed: examples/regression/trace/sapic-msr-call-binding-reuse.spthy
 +
 +  output:          examples/regression/trace/sapic-msr-call-binding-reuse.spthy.tmp
-+  processing time: 0.08s
++  processing time: 0.10s
 +  
 +  WARNING: 1 wellformedness check failed!
 +           The analysis results might be wrong!
@@ -8097,7 +9275,7 @@ index 0000000000000000000000000000000000000000..e0c7eca814bbff462dafeed796cd3d35
 +*/
 diff --git a/case-studies-regression/regression/trace/sapic-nested-call-caller-scope_analyzed.spthy b/case-studies-regression/regression/trace/sapic-nested-call-caller-scope_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..e5bd4366a84ce8123b85d88bc08dddcf6d330612
+index 0000000000000000000000000000000000000000..0e112d48f94cc4148e2820f9b21915600d36e83f
 --- /dev/null
 +++ b/case-studies-regression/regression/trace/sapic-nested-call-caller-scope_analyzed.spthy
 @@ -0,0 +1,1176 @@
@@ -9250,8 +10428,8 @@ index 0000000000000000000000000000000000000000..e5bd4366a84ce8123b85d88bc08dddcf
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -9263,7 +10441,7 @@ index 0000000000000000000000000000000000000000..e5bd4366a84ce8123b85d88bc08dddcf
 +analyzed: examples/regression/trace/sapic-nested-call-caller-scope.spthy
 +
 +  output:          examples/regression/trace/sapic-nested-call-caller-scope.spthy.tmp
-+  processing time: 1.47s
++  processing time: 2.19s
 +  
 +  input_independent (exists-trace): verified (6 steps)
 +  typed_input_independent (exists-trace): verified (6 steps)
@@ -9277,9 +10455,291 @@ index 0000000000000000000000000000000000000000..e5bd4366a84ce8123b85d88bc08dddcf
 +
 +==============================================================================
 +*/
+diff --git a/case-studies-regression/regression/trace/sapic-open-process-export_analyzed.spthy b/case-studies-regression/regression/trace/sapic-open-process-export_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..5626f2a40a73ef36bb8a06831413191e4fd53081
+--- /dev/null
++++ b/case-studies-regression/regression/trace/sapic-open-process-export_analyzed.spthy
+@@ -0,0 +1,276 @@
++theory SapicOpenProcessExport
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, snd/1
++equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++heuristic: p
++
++lemma caller_binding:
++  all-traces
++  "∀ x #i.
++    (Seen( x ) @ #i) ⇒ ((x = 'a') ∨ (∃ #j. (Created( x ) @ #j) ∧ (#j < #i)))"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x #i.
++  (Seen( x ) @ #i)
++ ∧
++  (¬(x = 'a')) ∧ (∀ #j. (Created( x ) @ #j) ⇒ ¬(#j < #i))"
++*/
++simplify
++solve( Seen( x ) @ #i )
++  case eventSeena_0_211
++  by contradiction /* from formulas */
++next
++  case eventSeenx_0_11111
++  solve( State_11111( x ) ▶₀ #i )
++    case P_0_1111
++    by contradiction /* from formulas */
++  qed
++next
++  case eventSeenx_0_12111
++  solve( State_12111( x ) ▶₀ #i )
++    case P_0_1211
++    by contradiction /* from formulas */
++  qed
++qed
++
++lemma distinct_callers:
++  exists-trace
++  "∃ x y #i #j #k #l.
++    ((((Created( x ) @ #i) ∧ (Created( y ) @ #j)) ∧ (Seen( x ) @ #k)) ∧
++     (Seen( y ) @ #l)) ∧
++    (¬(x = y))"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ x y #i #j #k #l.
++  (Created( x ) @ #i) ∧
++  (Created( y ) @ #j) ∧
++  (Seen( x ) @ #k) ∧
++  (Seen( y ) @ #l)
++ ∧
++  ¬(x = y)"
++*/
++simplify
++solve( Created( x ) @ #i )
++  case eventCreatedx_0_111
++  solve( State_111( x ) ▶₀ #i )
++    case newx_0_11
++    solve( Created( y ) @ #j )
++      case eventCreatedx_0_121
++      solve( State_121( y ) ▶₀ #j )
++        case newx_0_12
++        solve( Seen( ~n ) @ #k )
++          case eventSeenx_0_11111
++          solve( State_11111( ~n ) ▶₀ #k )
++            case P_0_1111
++            solve( Seen( ~n.1 ) @ #l )
++              case eventSeenx_0_12111
++              solve( State_12111( ~n.1 ) ▶₀ #l )
++                case P_0_1211
++                SOLVED // trace found
++              qed
++            qed
++          qed
++        qed
++      qed
++    qed
++  qed
++qed
++
++lemma closed_wrapper:
++  exists-trace "∃ #i. Seen( 'a' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Seen( 'a' ) @ #i)"
++*/
++simplify
++solve( Seen( 'a' ) @ #i )
++  case eventSeena_0_211
++  solve( State_211( ) ▶₀ #i )
++    case P_0_21
++    SOLVED // trace found
++  qed
++qed
++
++rule (modulo E) Init[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ ] --[ Init( ) ]-> [ State_( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ State_( ) ] --> [ State_1( ), State_2( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_1[color=#ffffff, process="|", issapicrule,
++                      role='Process']:
++   [ State_1( ) ] --> [ State_11( ), State_12( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) newx_0_11[color=#ffffff, process="new x.1;", issapicrule,
++                          role='Process']:
++   [ State_11( ), Fr( x.1 ) ] --> [ State_111( x.1 ) ]
++
++  /*
++  rule (modulo AC) newx_0_11[color=#ffffff, process="new x.1;",
++                             issapicrule, role='Process']:
++     [ State_11( ), Fr( x ) ] --> [ State_111( x ) ]
++  */
++
++rule (modulo E) eventCreatedx_0_111[color=#ffffff,
++                                    process="event Created( x.1 );", issapicrule, role='Process']:
++   [ State_111( x.1 ) ] --[ Created( x.1 ) ]-> [ State_1111( x.1 ) ]
++
++  /*
++  rule (modulo AC) eventCreatedx_0_111[color=#ffffff,
++                                       process="event Created( x.1 );", issapicrule, role='Process']:
++     [ State_111( x ) ] --[ Created( x ) ]-> [ State_1111( x ) ]
++  */
++
++rule (modulo E) P_0_1111[color=#ffffff, process="P();", issapicrule,
++                         role='Process']:
++   [ State_1111( x.1 ) ] --> [ State_11111( x.1 ) ]
++
++  /*
++  rule (modulo AC) P_0_1111[color=#ffffff, process="P();", issapicrule,
++                            role='Process']:
++     [ State_1111( x ) ] --> [ State_11111( x ) ]
++  */
++
++rule (modulo E) eventSeenx_0_11111[color=#6c8040,
++                                   process="event Seen( x.1 );", issapicrule, role='P']:
++   [ State_11111( x.1 ) ] --[ Seen( x.1 ) ]-> [ State_111111( x.1 ) ]
++
++  /*
++  rule (modulo AC) eventSeenx_0_11111[color=#6c8040,
++                                      process="event Seen( x.1 );", issapicrule, role='P']:
++     [ State_11111( x ) ] --[ Seen( x ) ]-> [ State_111111( x ) ]
++  */
++
++rule (modulo E) p_0_111111[color=#6c8040, process="0", issapicrule,
++                           role='P']:
++   [ State_111111( x.1 ) ] --> [ ]
++
++  /*
++  rule (modulo AC) p_0_111111[color=#6c8040, process="0", issapicrule,
++                              role='P']:
++     [ State_111111( x ) ] --> [ ]
++  */
++
++rule (modulo E) newx_0_12[color=#ffffff, process="new x.2;", issapicrule,
++                          role='Process']:
++   [ State_12( ), Fr( x.2 ) ] --> [ State_121( x.2 ) ]
++
++  /*
++  rule (modulo AC) newx_0_12[color=#ffffff, process="new x.2;",
++                             issapicrule, role='Process']:
++     [ State_12( ), Fr( x ) ] --> [ State_121( x ) ]
++  */
++
++rule (modulo E) eventCreatedx_0_121[color=#ffffff,
++                                    process="event Created( x.2 );", issapicrule, role='Process']:
++   [ State_121( x.2 ) ] --[ Created( x.2 ) ]-> [ State_1211( x.2 ) ]
++
++  /*
++  rule (modulo AC) eventCreatedx_0_121[color=#ffffff,
++                                       process="event Created( x.2 );", issapicrule, role='Process']:
++     [ State_121( x ) ] --[ Created( x ) ]-> [ State_1211( x ) ]
++  */
++
++rule (modulo E) P_0_1211[color=#ffffff, process="P();", issapicrule,
++                         role='Process']:
++   [ State_1211( x.2 ) ] --> [ State_12111( x.2 ) ]
++
++  /*
++  rule (modulo AC) P_0_1211[color=#ffffff, process="P();", issapicrule,
++                            role='Process']:
++     [ State_1211( x ) ] --> [ State_12111( x ) ]
++  */
++
++rule (modulo E) eventSeenx_0_12111[color=#6c8040,
++                                   process="event Seen( x.2 );", issapicrule, role='P']:
++   [ State_12111( x.2 ) ] --[ Seen( x.2 ) ]-> [ State_121111( x.2 ) ]
++
++  /*
++  rule (modulo AC) eventSeenx_0_12111[color=#6c8040,
++                                      process="event Seen( x.2 );", issapicrule, role='P']:
++     [ State_12111( x ) ] --[ Seen( x ) ]-> [ State_121111( x ) ]
++  */
++
++rule (modulo E) p_0_121111[color=#6c8040, process="0", issapicrule,
++                           role='P']:
++   [ State_121111( x.2 ) ] --> [ ]
++
++  /*
++  rule (modulo AC) p_0_121111[color=#6c8040, process="0", issapicrule,
++                              role='P']:
++     [ State_121111( x ) ] --> [ ]
++  */
++
++rule (modulo E) Wrappeda_0_2[color=#ffffff, process="Wrapped('a');",
++                             issapicrule, role='Process']:
++   [ State_2( ) ] --> [ State_21( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) P_0_21[color=#404a80, process="P();", issapicrule,
++                       role='Wrapped']:
++   [ State_21( ) ] --> [ State_211( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventSeena_0_211[color=#6c8040,
++                                 process="event Seen( 'a' );", issapicrule, role='Wrapped_P']:
++   [ State_211( ) ] --[ Seen( 'a' ) ]-> [ State_2111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_2111[color=#6c8040, process="0", issapicrule,
++                         role='Wrapped_P']:
++   [ State_2111( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++restriction single_session:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  */
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/sapic-open-process-export.spthy
++
++  output:          examples/regression/trace/sapic-open-process-export.spthy.tmp
++  processing time: 0.26s
++  
++  caller_binding (all-traces): verified (7 steps)
++  distinct_callers (exists-trace): verified (10 steps)
++  closed_wrapper (exists-trace): verified (4 steps)
++
++==============================================================================
++*/
 diff --git a/case-studies-regression/regression/trace/sapic-process-call-caller-scope_analyzed.spthy b/case-studies-regression/regression/trace/sapic-process-call-caller-scope_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..a3d7963fdc420554495c823090481138cfbfb19d
+index 0000000000000000000000000000000000000000..cf7b310640928effd41f376ef9d46443192cd403
 --- /dev/null
 +++ b/case-studies-regression/regression/trace/sapic-process-call-caller-scope_analyzed.spthy
 @@ -0,0 +1,940 @@
@@ -10197,8 +11657,8 @@ index 0000000000000000000000000000000000000000..a3d7963fdc420554495c823090481138
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -10210,7 +11670,7 @@ index 0000000000000000000000000000000000000000..a3d7963fdc420554495c823090481138
 +analyzed: examples/regression/trace/sapic-process-call-caller-scope.spthy
 +
 +  output:          examples/regression/trace/sapic-process-call-caller-scope.spthy.tmp
-+  processing time: 0.86s
++  processing time: 1.26s
 +  
 +  caller_input (exists-trace): verified (6 steps)
 +  typed_caller_input (exists-trace): verified (6 steps)
@@ -10225,7 +11685,7 @@ index 0000000000000000000000000000000000000000..a3d7963fdc420554495c823090481138
 +*/
 diff --git a/case-studies-regression/regression/trace/sapic-process-call-location-scope_analyzed.spthy b/case-studies-regression/regression/trace/sapic-process-call-location-scope_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..623308670c9553d73ccd5f2c84b340a624ff7e9e
+index 0000000000000000000000000000000000000000..1dd77cbbfae2ed6df1db5d3d877ae72adee79e99
 --- /dev/null
 +++ b/case-studies-regression/regression/trace/sapic-process-call-location-scope_analyzed.spthy
 @@ -0,0 +1,350 @@
@@ -10555,8 +12015,8 @@ index 0000000000000000000000000000000000000000..623308670c9553d73ccd5f2c84b340a6
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -10568,7 +12028,7 @@ index 0000000000000000000000000000000000000000..623308670c9553d73ccd5f2c84b340a6
 +analyzed: examples/regression/trace/sapic-process-call-location-scope.spthy
 +
 +  output:          examples/regression/trace/sapic-process-call-location-scope.spthy.tmp
-+  processing time: 0.20s
++  processing time: 0.27s
 +  
 +  direct_location (exists-trace): verified (4 steps)
 +  nested_location (exists-trace): verified (4 steps)
@@ -10581,7 +12041,7 @@ index 0000000000000000000000000000000000000000..623308670c9553d73ccd5f2c84b340a6
 +*/
 diff --git a/case-studies-regression/regression/trace/soundness-sapic-binder-scope_analyzed.spthy b/case-studies-regression/regression/trace/soundness-sapic-binder-scope_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..c767c9115d1ec078a073c939348a33a790ce793b
+index 0000000000000000000000000000000000000000..23dfa99543b78ad2ccec34985abd2416a9c9826e
 --- /dev/null
 +++ b/case-studies-regression/regression/trace/soundness-sapic-binder-scope_analyzed.spthy
 @@ -0,0 +1,373 @@
@@ -10934,8 +12394,8 @@ index 0000000000000000000000000000000000000000..c767c9115d1ec078a073c939348a33a7
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -10947,7 +12407,7 @@ index 0000000000000000000000000000000000000000..c767c9115d1ec078a073c939348a33a7
 +analyzed: examples/regression/trace/soundness-sapic-binder-scope.spthy
 +
 +  output:          examples/regression/trace/soundness-sapic-binder-scope.spthy.tmp
-+  processing time: 0.21s
++  processing time: 0.28s
 +  
 +  WARNING: 3 wellformedness check failed!
 +           The analysis results might be wrong!
@@ -10958,9 +12418,400 @@ index 0000000000000000000000000000000000000000..c767c9115d1ec078a073c939348a33a7
 +
 +==============================================================================
 +*/
+diff --git a/case-studies-regression/regression/trace/soundness-sapic-pattern-export_analyzed.spthy b/case-studies-regression/regression/trace/soundness-sapic-pattern-export_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..d03d52955a664f59c950f567259659dfda89babe
+--- /dev/null
++++ b/case-studies-regression/regression/trace/soundness-sapic-pattern-export_analyzed.spthy
+@@ -0,0 +1,254 @@
++theory SoundnessSapicPatternExport
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, snd/1
++equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++heuristic: p
++
++lemma supplied_patterns:
++  all-traces "∀ x #i. (Seen( x ) @ #i) ⇒ ((x = <'a', 'b'>) ∨ (x = 'd'))"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x #i. (Seen( x ) @ #i) ∧ (¬(x = <'a', 'b'>)) ∧ (¬(x = 'd'))"
++*/
++simplify
++solve( Seen( x ) @ #i )
++  case eventSeenab_0_11111
++  by contradiction /* from formulas */
++next
++  case eventSeend_0_12111
++  by contradiction /* from formulas */
++qed
++
++lemma repeated_pattern:
++  all-traces "∀ x #i. (Twice( x ) @ #i) ⇒ (x = 'c')"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x #i. (Twice( x ) @ #i) ∧ ¬(x = 'c')"
++*/
++simplify
++by contradiction /* from formulas */
++
++lemma pair_reachable:
++  exists-trace "∃ #i. Seen( <'a', 'b'> ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Seen( <'a', 'b'> ) @ #i)"
++*/
++simplify
++solve( Seen( <'a', 'b'> ) @ #i )
++  case eventSeenab_0_11111
++  solve( State_11111( ) ▶₀ #i )
++    case inab_0_1111
++    SOLVED // trace found
++  qed
++qed
++
++lemma nested_reachable:
++  exists-trace "∃ #i. Seen( 'd' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Seen( 'd' ) @ #i)"
++*/
++simplify
++solve( Seen( 'd' ) @ #i )
++  case eventSeend_0_12111
++  solve( State_12111( ) ▶₀ #i )
++    case ind_0_1211
++    SOLVED // trace found
++  qed
++qed
++
++lemma repeated_reachable:
++  exists-trace "∃ #i. Twice( 'c' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Twice( 'c' ) @ #i)"
++*/
++simplify
++solve( State_112111( ) ▶₀ #i )
++  case inc_0_11211
++  SOLVED // trace found
++qed
++
++lemma ordinary_parameter:
++  exists-trace "∃ #i. Value( 'e' ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Value( 'e' ) @ #i)"
++*/
++simplify
++solve( State_21( ) ▶₀ #i )
++  case Valuee_0_2
++  SOLVED // trace found
++qed
++
++rule (modulo E) Init[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ ] --[ Init( ) ]-> [ State_( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_[color=#ffffff, process="|", issapicrule,
++                     role='Process']:
++   [ State_( ) ] --> [ State_1( ), State_2( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_1[color=#ffffff, process="|", issapicrule,
++                      role='Process']:
++   [ State_1( ) ] --> [ State_11( ), State_12( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_11[color=#ffffff, process="|", issapicrule,
++                       role='Process']:
++   [ State_11( ) ] --> [ State_111( ), State_112( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Pab_0_111[color=#ffffff, process="P(<'a', 'b'>);",
++                          issapicrule, role='Process']:
++   [ State_111( ) ] --> [ State_1111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) inab_0_1111[color=#6c8040, process="in(<'a', 'b'>);",
++                            issapicrule, role='P']:
++   [ State_1111( ), In( <'a', 'b'> ) ] --> [ State_11111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventSeenab_0_11111[color=#6c8040,
++                                    process="event Seen( <'a', 'b'> );", issapicrule, role='P']:
++   [ State_11111( ) ] --[ Seen( <'a', 'b'> ) ]-> [ State_111111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_111111[color=#6c8040, process="0", issapicrule,
++                           role='P']:
++   [ State_111111( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Twicec_0_112[color=#ffffff, process="Twice('c');",
++                             issapicrule, role='Process']:
++   [ State_112( ) ] --> [ State_1121( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) inc_0_1121[color=#804057, process="in('c');",
++                           issapicrule, role='Twice']:
++   [ State_1121( ), In( 'c' ) ] --> [ State_11211( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) inc_0_11211[color=#804057, process="in('c');",
++                            issapicrule, role='Twice']:
++   [ State_11211( ), In( 'c' ) ] --> [ State_112111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventTwicec_0_112111[color=#804057,
++                                     process="event Twice( 'c' );", issapicrule, role='Twice']:
++   [ State_112111( ) ] --[ Twice( 'c' ) ]-> [ State_1121111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_1121111[color=#804057, process="0", issapicrule,
++                            role='Twice']:
++   [ State_1121111( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Nestedd_0_12[color=#ffffff, process="Nested('d');",
++                             issapicrule, role='Process']:
++   [ State_12( ) ] --> [ State_121( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Pd_0_121[color=#7b4080, process="P('d');", issapicrule,
++                         role='Nested']:
++   [ State_121( ) ] --> [ State_1211( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) ind_0_1211[color=#6c8040, process="in('d');",
++                           issapicrule, role='Nested_P']:
++   [ State_1211( ), In( 'd' ) ] --> [ State_12111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventSeend_0_12111[color=#6c8040,
++                                   process="event Seen( 'd' );", issapicrule, role='Nested_P']:
++   [ State_12111( ) ] --[ Seen( 'd' ) ]-> [ State_121111( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_121111[color=#6c8040, process="0", issapicrule,
++                           role='Nested_P']:
++   [ State_121111( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) Valuee_0_2[color=#ffffff, process="Value('e');",
++                           issapicrule, role='Process']:
++   [ State_2( ) ] --> [ State_21( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) eventValuee_0_21[color=#408047,
++                                 process="event Value( 'e' );", issapicrule, role='Value']:
++   [ State_21( ) ] --[ Value( 'e' ) ]-> [ State_211( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) p_0_211[color=#408047, process="0", issapicrule,
++                        role='Value']:
++   [ State_211( ) ] --> [ ]
++
++  /* has exactly the trivial AC variant */
++
++restriction single_session:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  */
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/soundness-sapic-pattern-export.spthy
++
++  output:          examples/regression/trace/soundness-sapic-pattern-export.spthy.tmp
++  processing time: 0.24s
++  
++  supplied_patterns (all-traces): verified (4 steps)
++  repeated_pattern (all-traces): verified (2 steps)
++  pair_reachable (exists-trace): verified (4 steps)
++  nested_reachable (exists-trace): verified (4 steps)
++  repeated_reachable (exists-trace): verified (3 steps)
++  ordinary_parameter (exists-trace): verified (3 steps)
++
++==============================================================================
++*/
+diff --git a/case-studies-regression/regression/trace/soundness-sapic-pattern-parameter_analyzed.spthy b/case-studies-regression/regression/trace/soundness-sapic-pattern-parameter_analyzed.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..eb4bc393ca84f8154c7a0be4358c68aba21cdf38
+--- /dev/null
++++ b/case-studies-regression/regression/trace/soundness-sapic-pattern-parameter_analyzed.spthy
+@@ -0,0 +1,125 @@
++theory SoundnessSapicPatternParameter
++
++begin
++
++// Function signature and definition of the equational theory E
++
++functions: fst/1, pair/2, snd/1
++equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
++
++heuristic: p
++
++lemma supplied_pattern:
++  all-traces "∀ x #i. (Seen( x ) @ #i) ⇒ (x = <'a', 'b'>)"
++/*
++guarded formula characterizing all counter-examples:
++"∃ x #i. (Seen( x ) @ #i) ∧ ¬(x = <'a', 'b'>)"
++*/
++simplify
++by contradiction /* from formulas */
++
++lemma reachable:
++  exists-trace "∃ #i. Seen( <'a', 'b'> ) @ #i"
++/*
++guarded formula characterizing all satisfying traces:
++"∃ #i. (Seen( <'a', 'b'> ) @ #i)"
++*/
++simplify
++solve( State_111( pat_x ) ▶₀ #i )
++  case inab_0_11
++  SOLVED // trace found
++qed
++
++rule (modulo E) Init[color=#ffffff, process="new pat_x.1;", issapicrule,
++                     role='Process']:
++   [ ] --[ Init( ) ]-> [ State_( ) ]
++
++  /* has exactly the trivial AC variant */
++
++rule (modulo E) newpatx_0_[color=#ffffff, process="new pat_x.1;",
++                           issapicrule, role='Process']:
++   [ State_( ), Fr( pat_x.1 ) ] --> [ State_1( pat_x.1 ) ]
++
++  /*
++  rule (modulo AC) newpatx_0_[color=#ffffff, process="new pat_x.1;",
++                              issapicrule, role='Process']:
++     [ State_( ), Fr( pat_x ) ] --> [ State_1( pat_x ) ]
++  */
++
++rule (modulo E) Pab_0_1[color=#ffffff, process="P(<'a', 'b'>);",
++                        issapicrule, role='Process']:
++   [ State_1( pat_x.1 ) ] --> [ State_11( pat_x.1 ) ]
++
++  /*
++  rule (modulo AC) Pab_0_1[color=#ffffff, process="P(<'a', 'b'>);",
++                           issapicrule, role='Process']:
++     [ State_1( pat_x ) ] --> [ State_11( pat_x ) ]
++  */
++
++rule (modulo E) inab_0_11[color=#6c8040, process="in(<'a', 'b'>);",
++                          issapicrule, role='P']:
++   [ State_11( pat_x.1 ), In( <'a', 'b'> ) ] --> [ State_111( pat_x.1 ) ]
++
++  /*
++  rule (modulo AC) inab_0_11[color=#6c8040, process="in(<'a', 'b'>);",
++                             issapicrule, role='P']:
++     [ State_11( pat_x ), In( <'a', 'b'> ) ] --> [ State_111( pat_x ) ]
++  */
++
++rule (modulo E) eventSeenab_0_111[color=#6c8040,
++                                  process="event Seen( <'a', 'b'> );", issapicrule, role='P']:
++   [ State_111( pat_x.1 ) ]
++  --[ Seen( <'a', 'b'> ) ]->
++   [ State_1111( pat_x.1 ) ]
++
++  /*
++  rule (modulo AC) eventSeenab_0_111[color=#6c8040,
++                                     process="event Seen( <'a', 'b'> );", issapicrule, role='P']:
++     [ State_111( pat_x ) ] --[ Seen( <'a', 'b'> ) ]-> [ State_1111( pat_x ) ]
++  */
++
++rule (modulo E) p_0_1111[color=#6c8040, process="0", issapicrule,
++                         role='P']:
++   [ State_1111( pat_x.1 ) ] --> [ ]
++
++  /*
++  rule (modulo AC) p_0_1111[color=#6c8040, process="0", issapicrule,
++                            role='P']:
++     [ State_1111( pat_x ) ] --> [ ]
++  */
++
++restriction single_session:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  // safety formula
++
++  /*
++  expanded formula:
++  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
++  */
++
++/* All wellformedness checks were successful. */
++
++/*
++Generated from:
++Tamarin version 1.13.0
++Maude version 3.5.1
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
++*/
++
++end
++/* Output
++
++==============================================================================
++summary of summaries:
++
++analyzed: examples/regression/trace/soundness-sapic-pattern-parameter.spthy
++
++  output:          examples/regression/trace/soundness-sapic-pattern-parameter.spthy.tmp
++  processing time: 0.11s
++  
++  supplied_pattern (all-traces): verified (2 steps)
++  reachable (exists-trace): verified (3 steps)
++
++==============================================================================
++*/
 diff --git a/case-studies-regression/regression/trace/soundness-sapic-process-call-capture_analyzed.spthy b/case-studies-regression/regression/trace/soundness-sapic-process-call-capture_analyzed.spthy
 new file mode 100644
-index 0000000000000000000000000000000000000000..116b93ef85c16b8caf5554f25b945256f05651ca
+index 0000000000000000000000000000000000000000..ee01d73f26e14781f975d74297ca7ee307c72d51
 --- /dev/null
 +++ b/case-studies-regression/regression/trace/soundness-sapic-process-call-capture_analyzed.spthy
 @@ -0,0 +1,1510 @@
@@ -12440,8 +14291,8 @@ index 0000000000000000000000000000000000000000..116b93ef85c16b8caf5554f25b945256
 +Generated from:
 +Tamarin version 1.13.0
 +Maude version 3.5.1
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
 +*/
 +
 +end
@@ -12453,7 +14304,7 @@ index 0000000000000000000000000000000000000000..116b93ef85c16b8caf5554f25b945256
 +analyzed: examples/regression/trace/soundness-sapic-process-call-capture.spthy
 +
 +  output:          examples/regression/trace/soundness-sapic-process-call-capture.spthy.tmp
-+  processing time: 2.95s
++  processing time: 4.48s
 +  
 +  typed_distinct (exists-trace): verified (3 steps)
 +  untyped_distinct (exists-trace): verified (3 steps)
@@ -12475,7 +14326,7 @@ index 0000000000000000000000000000000000000000..116b93ef85c16b8caf5554f25b945256
 +==============================================================================
 +*/
 diff --git a/case-studies-regression/sapic/fast/basic/typing_analyzed.spthy b/case-studies-regression/sapic/fast/basic/typing_analyzed.spthy
-index 280326fa08f9a80be8fce94d6eee85fd932fd11d..37b8ec40c5fbb033ade93a613f6607925d5bb5c5 100644
+index 280326fa08f9a80be8fce94d6eee85fd932fd11d..3f911d39b6da7c7a7331546a126da5877fab75e0 100644
 --- a/case-studies-regression/sapic/fast/basic/typing_analyzed.spthy
 +++ b/case-studies-regression/sapic/fast/basic/typing_analyzed.spthy
 @@ -26,384 +26,351 @@ rule (modulo E) inalol_0_[color=#ffffff, process="in(a.1:lol);",
@@ -13063,8 +14914,8 @@ index 280326fa08f9a80be8fce94d6eee85fd932fd11d..37b8ec40c5fbb033ade93a613f660792
  Maude version 3.5.1
 -Git revision: 41bc81379b23681e7057314a5cf66a25c45e1986, branch: canonicalise-subst
 -Compiled at: 2026-07-27 16:11:34.947223 UTC
-+Git revision: ab33e229f09e61f52634bcc26c7331baaabc5830 (with uncommited changes), branch: sapic-scope-and-types
-+Compiled at: 2026-09-25 20:19:32.092070863 UTC
++Git revision: bf885ca9abf478867fbdbbf3ad80e4da85370e01 (with uncommited changes), branch: HEAD
++Compiled at: 2026-10-04 11:58:25.282416529 UTC
  */
  
  end
@@ -13073,10 +14924,25 @@ index 280326fa08f9a80be8fce94d6eee85fd932fd11d..37b8ec40c5fbb033ade93a613f660792
  
    output:          examples/sapic/fast/basic/typing.spthy.tmp
 -  processing time: 0.03s
-+  processing time: 0.14s
++  processing time: 0.18s
    
  
  ==============================================================================
+diff --git a/doc/READMEregressionTests.md b/doc/READMEregressionTests.md
+index 6a7e35c135bf85d5f4f7e35667fc5e0b4cbbe49f..4389112a16c4fba797039fc5df4290d0e3ea0a0e 100644
+--- a/doc/READMEregressionTests.md
++++ b/doc/READMEregressionTests.md
+@@ -181,7 +181,9 @@ The runner first proves the source. Each requested check then
+ compares its proof results with that same baseline:
+ 
+ - `roundtrip`: print without proofs and prove the reloaded output; also replay
+-  the saved original proof without `--prove`.
++  the saved original proof without `--prove`. Set `roundtrip_module` to
++  `spthy`, `spthytyped`, or `msr` to select the unproved export format. This
++  affects only printing; source and reloaded proofs still use normal proving.
+ - `partial-evaluation`: prove the partially evaluated source; export without
+   proofs and prove the reloaded output; replay the saved evaluated proof; and
+   partially evaluate and prove the unproved export again.
 diff --git a/examples/regression/negative/sapic-input-annotations-both.spthy b/examples/regression/negative/sapic-input-annotations-both.spthy
 new file mode 100644
 index 0000000000000000000000000000000000000000..d90bb4e6b5ff9c620731619da87d82be1bc4839b
@@ -13515,6 +15381,36 @@ index 0000000000000000000000000000000000000000..25f75c940f765d689de051bd1d2183bb
 +      "contains": [
 +        "is bound again in its body"
 +      ]
++    }
++  ]
++}
+diff --git a/examples/regression/negative/sapic-pattern-export-unused-argument.spthy b/examples/regression/negative/sapic-pattern-export-unused-argument.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..11918d78f7cf3edd65995e610d2b806be51a60f1
+--- /dev/null
++++ b/examples/regression/negative/sapic-pattern-export-unused-argument.spthy
+@@ -0,0 +1,8 @@
++theory SapicPatternExportUnusedArgument
++begin
++
++// Inlining must not bypass validation of an argument unused by the body.
++let P(pat_x,y) = in(pat_x); out('a')
++process: P('x',unbound)
++
++end
+diff --git a/examples/regression/negative/sapic-pattern-export-unused-argument.spthy.test.json b/examples/regression/negative/sapic-pattern-export-unused-argument.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..11d1d856538a3a8d3cf5b36b77de4eed278105eb
+--- /dev/null
++++ b/examples/regression/negative/sapic-pattern-export-unused-argument.spthy.test.json
+@@ -0,0 +1,10 @@
++{
++  "tests": [
++    {
++      "name": "typed-unused-argument",
++      "args": ["--output-module=spthytyped", "--quit-on-warning"],
++      "exit_code": 1,
++      "contains": ["are not bound"]
 +    }
 +  ]
 +}
@@ -14057,6 +15953,284 @@ index 0000000000000000000000000000000000000000..0bfb8b2e8aeff68f5626fa106cb7fedb
 +    }
 +  ]
 +}
+diff --git a/examples/regression/sapic/sapic-export-formula-names.spthy b/examples/regression/sapic/sapic-export-formula-names.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..ff26c1e88a761a783c22247cf0b4d9ee16fb683d
+--- /dev/null
++++ b/examples/regression/sapic/sapic-export-formula-names.spthy
+@@ -0,0 +1,11 @@
++theory SapicExportFormulaNames
++begin
++
++// Each name appears only in its formula, with no MSR rules to supply headers.
++predicates: IsA(x) <=> x = 'condition-only'
++process: in(x); if IsA(x) then event E(x)
++lemma query_name: "All x #i. E(x)@i ==> x = 'query-only'"
++lemma axiom_name [reuse]: "All x #i. E(x)@i ==> x = 'axiom-only'"
++restriction restriction_name: "All x #i. E(x)@i ==> x = 'restriction-only'"
++
++end
+diff --git a/examples/regression/sapic/sapic-export-formula-names.spthy.test.json b/examples/regression/sapic/sapic-export-formula-names.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..df2c042ed7845b6533ae7be28d0ab6f63bcf56ce
+--- /dev/null
++++ b/examples/regression/sapic/sapic-export-formula-names.spthy.test.json
+@@ -0,0 +1,39 @@
++{
++  "tests": [
++    {
++      "name": "formula-only-declarations",
++      "args": [
++        "--output-module=proverif",
++        "--quit-on-warning"
++      ],
++      "matches": [
++        {
++          "regex": "free v'condition_2d_only:bitstring\\.",
++          "min": 1,
++          "max": 1
++        },
++        {
++          "regex": "free v'query_2d_only:bitstring\\.",
++          "min": 1,
++          "max": 1
++        },
++        {
++          "regex": "free v'axiom_2d_only:bitstring\\.",
++          "min": 1,
++          "max": 1
++        },
++        {
++          "regex": "free v'restriction_2d_only:bitstring\\.",
++          "min": 1,
++          "max": 1
++        }
++      ],
++      "contains": [
++        "= v'condition_2d_only",
++        "= v'query_2d_only",
++        "= v'axiom_2d_only",
++        "= v'restriction_2d_only"
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/sapic/sapic-export-public-name-rules.spthy b/examples/regression/sapic/sapic-export-public-name-rules.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..c9152478e7bb3f6763837dcdcef82c1150bdb950
+--- /dev/null
++++ b/examples/regression/sapic/sapic-export-public-name-rules.spthy
+@@ -0,0 +1,11 @@
++theory SapicExportPublicNameRules
++begin
++
++// Rule terms, embedded actions, SAPIC terms and queries must share one name
++// and one declaration for the same public constant.
++rule Other: [In(va_5f_b), In('a_b')] --[ Other('a.b') ]-> [Out(va_5f_b)]
++process: [In('a.b')] --[ Seen('a.b') ]-> []; out('a.b')
++lemma names: "All va_5f_b #i. Other(va_5f_b)@i ==> va_5f_b = 'a_b'"
++lemma secrecy: "not (Ex #i. K('a.b')@i)"
++
++end
+diff --git a/examples/regression/sapic/sapic-export-public-name-rules.spthy.test.json b/examples/regression/sapic/sapic-export-public-name-rules.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..cfda83d45f3727380c34c3c320d88765ef8c7d49
+--- /dev/null
++++ b/examples/regression/sapic/sapic-export-public-name-rules.spthy.test.json
+@@ -0,0 +1,35 @@
++{
++  "tests": [
++    {
++      "name": "shared-public-name",
++      "args": [
++        "--output-module=proverif",
++        "--quit-on-warning"
++      ],
++      "contains": [
++        "out(att,v'a_2e_b)",
++        "event eSeen(v'a_2e_b)",
++        "free v'a_5f_b:bitstring.",
++        "in(publicChannel, =v'a_5f_b)",
++        "out(publicChannel, va_5f_b)",
++        "va_5f_b = v'a_5f_b."
++      ],
++      "matches": [
++        {
++          "regex": "free v'a_2e_b:bitstring\\.",
++          "min": 1,
++          "max": 1
++        },
++        {
++          "regex": "query[^.]*attacker\\(\\s*v'a_2e_b\\s*\\)",
++          "min": 1,
++          "max": 1
++        },
++        {
++          "regex": "\\b(?:va_b|sa\\.b)\\b",
++          "max": 0
++        }
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/sapic/sapic-export-public-names.spthy b/examples/regression/sapic/sapic-export-public-names.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..e34ee324bcf9ce3c36c64d56c87ad4e9bc950f6f
+--- /dev/null
++++ b/examples/regression/sapic/sapic-export-public-names.spthy
+@@ -0,0 +1,24 @@
++theory SapicExportPublicNames
++begin
++builtins: dest-pairing
++
++// Declarations, matching patterns and ordinary outputs must name the same
++// public constants. Dots, underscores and literal escapes must stay distinct;
++// quoted one/zero/g are names, not the similarly named built-in constants.
++// The binder must also remain distinct from the escaped public name 'a_2'.
++let P =
++  in(va_5f); in('a_2'); out(va_5f);
++  in('a'); out('a');
++  in('a.b'); out('a.b');
++  in('a_b'); out('a_b');
++  in('a_2e_b'); out('a_2e_b');
++  in('one'); out('one');
++  in('zero'); out('zero');
++  in('g'); out('g')
++
++#ifdef PROCESS
++process: P
++#else
++equivLemma: P P
++#endif
++end
+diff --git a/examples/regression/sapic/sapic-export-public-names.spthy.test.json b/examples/regression/sapic/sapic-export-public-names.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..b219fc27b9c08231c5ae968113c0e16f15c0b107
+--- /dev/null
++++ b/examples/regression/sapic/sapic-export-public-names.spthy.test.json
+@@ -0,0 +1,122 @@
++{
++  "tests": [
++    {
++      "name": "proverif",
++      "args": [
++        "--output-module=proverif",
++        "--quit-on-warning",
++        "-DPROCESS"
++      ],
++      "matches": [
++        {
++          "regex": "free (?:v'a|v'a_2e_b|v'a_5f_b|v'a_5f_2e_5f_b|v'one|v'zero|v'g)(?::bitstring)?\\.",
++          "min": 7,
++          "max": 7
++        },
++        {
++          "regex": "=(?:v'a|v'a_2e_b|v'a_5f_b|v'a_5f_2e_5f_b|v'one|v'zero|v'g)(?![A-Za-z0-9_])",
++          "min": 7,
++          "max": 7
++        },
++        {
++          "regex": "out\\(att,\\s*(?:v'a|v'a_2e_b|v'a_5f_b|v'a_5f_2e_5f_b|v'one|v'zero|v'g)\\)",
++          "min": 7,
++          "max": 7
++        },
++        {
++          "regex": "free v'a_5f_2(?::bitstring)?\\.",
++          "min": 1,
++          "max": 1
++        },
++        {
++          "regex": "=v'a_5f_2(?![A-Za-z0-9_])",
++          "min": 1,
++          "max": 1
++        },
++        {
++          "regex": "out\\(att,va_5f(?:_\\d+)?\\)",
++          "min": 1,
++          "max": 1
++        }
++      ]
++    },
++    {
++      "name": "proverifequiv",
++      "args": [
++        "--output-module=proverifequiv",
++        "--quit-on-warning"
++      ],
++      "matches": [
++        {
++          "regex": "free (?:v'a|v'a_2e_b|v'a_5f_b|v'a_5f_2e_5f_b|v'one|v'zero|v'g)(?::bitstring)?\\.",
++          "min": 7,
++          "max": 7
++        },
++        {
++          "regex": "=(?:v'a|v'a_2e_b|v'a_5f_b|v'a_5f_2e_5f_b|v'one|v'zero|v'g)(?![A-Za-z0-9_])",
++          "min": 14,
++          "max": 14
++        },
++        {
++          "regex": "out\\(att,\\s*(?:v'a|v'a_2e_b|v'a_5f_b|v'a_5f_2e_5f_b|v'one|v'zero|v'g)\\)",
++          "min": 14,
++          "max": 14
++        },
++        {
++          "regex": "free v'a_5f_2(?::bitstring)?\\.",
++          "min": 1,
++          "max": 1
++        },
++        {
++          "regex": "=v'a_5f_2(?![A-Za-z0-9_])",
++          "min": 2,
++          "max": 2
++        },
++        {
++          "regex": "out\\(att,va_5f(?:_\\d+)?\\)",
++          "min": 2,
++          "max": 2
++        }
++      ]
++    },
++    {
++      "name": "deepsec",
++      "args": [
++        "--output-module=deepsec",
++        "--quit-on-warning"
++      ],
++      "matches": [
++        {
++          "regex": "free (?:v'a|v'a_2e_b|v'a_5f_b|v'a_5f_2e_5f_b|v'one|v'zero|v'g)(?::bitstring)?\\.",
++          "min": 7,
++          "max": 7
++        },
++        {
++          "regex": "=(?:v'a|v'a_2e_b|v'a_5f_b|v'a_5f_2e_5f_b|v'one|v'zero|v'g)(?![A-Za-z0-9_])",
++          "min": 14,
++          "max": 14
++        },
++        {
++          "regex": "out\\(att,\\s*(?:v'a|v'a_2e_b|v'a_5f_b|v'a_5f_2e_5f_b|v'one|v'zero|v'g)\\)",
++          "min": 14,
++          "max": 14
++        },
++        {
++          "regex": "free v'a_5f_2(?::bitstring)?\\.",
++          "min": 1,
++          "max": 1
++        },
++        {
++          "regex": "=v'a_5f_2(?![A-Za-z0-9_])",
++          "min": 2,
++          "max": 2
++        },
++        {
++          "regex": "out\\(att,va_5f(?:_\\d+)?\\)",
++          "min": 2,
++          "max": 2
++        }
++      ]
++    }
++  ]
++}
 diff --git a/examples/regression/sapic/sapic-let-annotations-both.spthy b/examples/regression/sapic/sapic-let-annotations-both.spthy
 new file mode 100644
 index 0000000000000000000000000000000000000000..fbeb7734c72ae931df4fef5b2f40dcd56a285b12
@@ -14356,6 +16530,98 @@ index 0000000000000000000000000000000000000000..6808fc4e3ecde42c471f78a6631394a5
 +          "max": 3
 +        }
 +      ]
++    }
++  ]
++}
+diff --git a/examples/regression/sapic/sapic-open-msr-typed-export.spthy b/examples/regression/sapic/sapic-open-msr-typed-export.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..a6137b4012807612c83e1c706158681f692d323b
+--- /dev/null
++++ b/examples/regression/sapic/sapic-open-msr-typed-export.spthy
+@@ -0,0 +1,11 @@
++theory SapicOpenMsrTypedExport
++begin
++
++// Both premise occurrences bind the same variable. Inferring the parameters
++// of P must not mistake the typed occurrence for a free variable: the export
++// would declare an unused parameter while still calling P with no arguments.
++// Typed export now prints the expanded body of this open definition.
++let P = [F(x), G(x:a)] --> []; out(x)
++process: P
++
++end
+diff --git a/examples/regression/sapic/sapic-open-msr-typed-export.spthy.test.json b/examples/regression/sapic/sapic-open-msr-typed-export.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d2ae718f4fd771ba5f884461b0fdd9641633a5a
+--- /dev/null
++++ b/examples/regression/sapic/sapic-open-msr-typed-export.spthy.test.json
+@@ -0,0 +1,12 @@
++{
++  "tests": [
++    {
++      "name": "typed-export",
++      "args": ["--output-module=spthytyped", "--quit-on-warning"],
++      "matches": [
++        {"regex": "\\bP\\s*\\(", "max": 0, "theory_only": true},
++        {"regex": "x\\.[0-9]+:a", "min": 3, "max": 3, "theory_only": true}
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/sapic/sapic-pattern-export-types.spthy b/examples/regression/sapic/sapic-pattern-export-types.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..c85b108b73c65a0cf875abf0c35d9874caedd7a2
+--- /dev/null
++++ b/examples/regression/sapic/sapic-pattern-export-types.spthy
+@@ -0,0 +1,19 @@
++theory SapicPatternExportTypes
++begin
++
++// Substitution replaces the annotated pattern variable by a constant. The
++// declaration must still constrain f, even when P is unused in the process.
++#ifdef CONFLICT
++functions: f(b):b
++#else
++functions: f/1
++#endif
++
++let P(pat_x:a) = in(pat_x:a); out(f(pat_x:a))
++#ifdef UNUSED
++process: 0
++#else
++process: P('c')
++#endif
++
++end
+diff --git a/examples/regression/sapic/sapic-pattern-export-types.spthy.test.json b/examples/regression/sapic/sapic-pattern-export-types.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..348df76bc52aa8c3dac4efba722f154cc0472571
+--- /dev/null
++++ b/examples/regression/sapic/sapic-pattern-export-types.spthy.test.json
+@@ -0,0 +1,26 @@
++{
++  "tests": [
++    {
++      "name": "declaration-types",
++      "args": ["--output-module=spthytyped", "--quit-on-warning"],
++      "matches": [{"regex": "f\\s*\\(a\\)", "min": 1, "theory_only": true}]
++    },
++    {
++      "name": "unused-declaration-types",
++      "args": ["--output-module=spthytyped", "--quit-on-warning", "-DUNUSED"],
++      "matches": [{"regex": "f\\s*\\(a\\)", "min": 1, "theory_only": true}]
++    },
++    {
++      "name": "conflicting-declaration-types",
++      "args": ["--output-module=spthytyped", "--quit-on-warning", "-DCONFLICT"],
++      "exit_code": 1,
++      "contains": ["Typing error: expected term "]
++    },
++    {
++      "name": "unused-conflicting-declaration-types",
++      "args": ["--output-module=spthytyped", "--quit-on-warning", "-DCONFLICT", "-DUNUSED"],
++      "exit_code": 1,
++      "contains": ["Typing error: expected term "]
 +    }
 +  ]
 +}
@@ -14696,7 +16962,7 @@ index 0000000000000000000000000000000000000000..efbfcb6c550b555fb41ab622e36f8c06
 +end
 diff --git a/examples/regression/trace/sapic-inferred-location-types.spthy.test.json b/examples/regression/trace/sapic-inferred-location-types.spthy.test.json
 new file mode 100644
-index 0000000000000000000000000000000000000000..8e17436db53948cb6a93be128cbc63e0472d811b
+index 0000000000000000000000000000000000000000..8285a2464b77f700ed4ad7c7d134e525d9522850
 --- /dev/null
 +++ b/examples/regression/trace/sapic-inferred-location-types.spthy.test.json
 @@ -0,0 +1,23 @@
@@ -14716,7 +16982,7 @@ index 0000000000000000000000000000000000000000..8e17436db53948cb6a93be128cbc63e0
 +      "matches": [
 +        {"regex": "new StateChannel:channel\\[assumeCell\\];", "min": 1, "max": 1},
 +        {"regex": "new lock_StateChannel:channel\\[assumeCell\\];", "min": 1, "max": 1},
-+        {"regex": "out\\(StateChannel, vvalue\\)", "min": 1},
++        {"regex": "out\\(StateChannel, v'value\\)", "min": 1},
 +        {"regex": "in\\(StateChannel, x_\\d+:bitstring\\)", "min": 1},
 +        {"regex": "free stateChannel|tbl_states_handle", "max": 0}
 +      ]
@@ -14765,6 +17031,61 @@ index 0000000000000000000000000000000000000000..3e074038e35d1d01371dac243e222df3
 +      ],
 +      "matches": [
 +        {"regex": "reaches_done \\(exists-trace\\): verified", "min": 1}
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/sapic-inline-export-locations.spthy b/examples/regression/trace/sapic-inline-export-locations.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..19a66e9a692b25864b5ad78dd2f722f9269a3f73
+--- /dev/null
++++ b/examples/regression/trace/sapic-inline-export-locations.spthy
+@@ -0,0 +1,23 @@
++theory SapicInlineExportLocations
++begin
++
++builtins: locations-report
++predicates: Report(x,l) <=> T
++
++// Inlining must retain the caller's location unless the body supplies one.
++let Pattern(pat_x) = in(pat_x); event Pattern(report(pat_x))
++let Open = event Caller(report(x))
++let Inner = (event Inner(report(x)))@'inner'
++
++process:
++  (Pattern('a'))@'outer' |
++  (new x; (Open)@x) |
++  (new x; (Inner)@'outer')
++
++lemma pattern_location: exists-trace "Ex #i. Pattern(rep('a','outer'))@i"
++lemma caller_location: exists-trace "Ex x #i. Caller(rep(x,x))@i"
++lemma inner_location: exists-trace "Ex x #i. Inner(rep(x,'inner'))@i"
++lemma inner_overrides_caller:
++  "All x l #i. Inner(rep(x,l))@i ==> l = 'inner'"
++
++end
+diff --git a/examples/regression/trace/sapic-inline-export-locations.spthy.test.json b/examples/regression/trace/sapic-inline-export-locations.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..408c3d885f43cd8a4623e8f911a248704b346049
+--- /dev/null
++++ b/examples/regression/trace/sapic-inline-export-locations.spthy.test.json
+@@ -0,0 +1,20 @@
++{
++  "tests": [
++    {
++      "name": "typed-roundtrip",
++      "args": ["--quit-on-warning"],
++      "checks": ["roundtrip"],
++      "roundtrip_module": "spthytyped"
++    },
++    {
++      "name": "typed-locations",
++      "args": ["--output-module=spthytyped", "--quit-on-warning"],
++      "matches": [
++        {"regex": "\\blet\\b", "max": 0, "theory_only": true},
++        {"regex": "@'outer'", "min": 1, "max": 1, "theory_only": true},
++        {"regex": "@'inner'", "min": 1, "max": 1, "theory_only": true},
++        {"regex": "new (x\\.[0-9]+);\\s*\\(event Caller\\(\\s*report\\(\\1\\)\\s*\\)\\)@\\1", "min": 1, "max": 1, "theory_only": true}
 +      ]
 +    }
 +  ]
@@ -15063,6 +17384,58 @@ index 0000000000000000000000000000000000000000..a79d6aaf307e62941ac4810ec50b7b53
 +    }
 +  ]
 +}
+diff --git a/examples/regression/trace/sapic-open-process-export.spthy b/examples/regression/trace/sapic-open-process-export.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..d622ad9df5cb212c639c61601ec60c0b10a66a10
+--- /dev/null
++++ b/examples/regression/trace/sapic-open-process-export.spthy
+@@ -0,0 +1,21 @@
++theory SapicOpenProcessExport
++begin
++
++// P captures the x at each call. Export used to declare P(x) but print P(),
++// losing the association with the two different fresh names in the callers.
++let P = event Seen(x)
++let Wrapped(x) = P
++
++process:
++  (new x; event Created(x); P) |
++  (new x; event Created(x); P) |
++  Wrapped('a')
++
++lemma caller_binding:
++  "All x #i. Seen(x)@i ==> x = 'a' | (Ex #j. Created(x)@j & j < i)"
++lemma distinct_callers: exists-trace
++  "Ex x y #i #j #k #l. Created(x)@i & Created(y)@j &
++     Seen(x)@k & Seen(y)@l & not(x = y)"
++lemma closed_wrapper: exists-trace "Ex #i. Seen('a')@i"
++
++end
+diff --git a/examples/regression/trace/sapic-open-process-export.spthy.test.json b/examples/regression/trace/sapic-open-process-export.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..fbd442c81fecc320401da9e75360a7a3f0e1f91c
+--- /dev/null
++++ b/examples/regression/trace/sapic-open-process-export.spthy.test.json
+@@ -0,0 +1,19 @@
++{
++  "tests": [
++    {
++      "name": "typed-roundtrip",
++      "args": ["--quit-on-warning"],
++      "checks": ["roundtrip"],
++      "roundtrip_module": "spthytyped"
++    },
++    {
++      "name": "typed-captures",
++      "args": ["--output-module=spthytyped", "--quit-on-warning"],
++      "matches": [
++        {"regex": "\\bP\\s*\\(", "max": 0, "theory_only": true},
++        {"regex": "new (x\\.[0-9]+);\\s*event Created\\(\\s*\\1\\s*\\);\\s*event Seen\\(\\s*\\1\\s*\\)", "min": 2, "max": 2, "theory_only": true},
++        {"regex": "let\\s+Wrapped\\s*\\(", "min": 1, "max": 1, "theory_only": true}
++      ]
++    }
++  ]
++}
 diff --git a/examples/regression/trace/sapic-process-call-caller-scope.spthy b/examples/regression/trace/sapic-process-call-caller-scope.spthy
 new file mode 100644
 index 0000000000000000000000000000000000000000..c15dbdcca757b1f2cc0eb65b646f9856da9a7f17
@@ -15279,6 +17652,104 @@ index 0000000000000000000000000000000000000000..688af891a864133ea1c7daaece8f4a8e
 +lemma key_outer: exists-trace
 +  "Ex #i. Read('value')@i"
 +end
+diff --git a/examples/regression/trace/soundness-sapic-pattern-export.spthy b/examples/regression/trace/soundness-sapic-pattern-export.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..e5933dfe9e6fa1ee653346456d6cf8b085ed7713
+--- /dev/null
++++ b/examples/regression/trace/soundness-sapic-pattern-export.spthy
+@@ -0,0 +1,21 @@
++theory SoundnessSapicPatternExport
++begin
++
++// Typed export used to rename the input binder independently of its formal,
++// so reparsing P's export accepted any input instead of the supplied pattern.
++let P(pat_x) = in(pat_x); event Seen(pat_x)
++let Twice(pat_x) = in(pat_x); in(pat_x); event Twice(pat_x)
++let Nested(pat_x) = P(pat_x)
++let Value(x) = event Value(x)
++
++process: P(<'a','b'>) | Twice('c') | Nested('d') | Value('e')
++
++lemma supplied_patterns:
++  "All x #i. Seen(x)@i ==> x = <'a','b'> | x = 'd'"
++lemma repeated_pattern: "All x #i. Twice(x)@i ==> x = 'c'"
++lemma pair_reachable: exists-trace "Ex #i. Seen(<'a','b'>)@i"
++lemma nested_reachable: exists-trace "Ex #i. Seen('d')@i"
++lemma repeated_reachable: exists-trace "Ex #i. Twice('c')@i"
++lemma ordinary_parameter: exists-trace "Ex #i. Value('e')@i"
++
++end
+diff --git a/examples/regression/trace/soundness-sapic-pattern-export.spthy.test.json b/examples/regression/trace/soundness-sapic-pattern-export.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..1496463436904b0329c025979be55442bc541298
+--- /dev/null
++++ b/examples/regression/trace/soundness-sapic-pattern-export.spthy.test.json
+@@ -0,0 +1,22 @@
++{
++  "tests": [
++    {
++      "name": "typed-roundtrip",
++      "args": ["--quit-on-warning"],
++      "checks": ["roundtrip"],
++      "roundtrip_module": "spthytyped"
++    },
++    {
++      "name": "typed-patterns",
++      "args": ["--output-module=spthytyped", "--quit-on-warning"],
++      "matches": [
++        {"regex": "pat_x", "max": 0, "theory_only": true},
++        {"regex": "in\\(<'a',\\s*'b'>\\)", "min": 1, "max": 1, "theory_only": true},
++        {"regex": "in\\('c'\\)", "min": 2, "max": 2, "theory_only": true},
++        {"regex": "in\\('d'\\)", "min": 1, "max": 1, "theory_only": true},
++        {"regex": "let\\s+Value\\s*\\(", "min": 1, "max": 1, "theory_only": true},
++        {"regex": "Value\\('e'\\)", "min": 1, "theory_only": true}
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/trace/soundness-sapic-pattern-parameter.spthy b/examples/regression/trace/soundness-sapic-pattern-parameter.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..9876002a79709c0d77ebf55b4bf434f1569e24ed
+--- /dev/null
++++ b/examples/regression/trace/soundness-sapic-pattern-parameter.spthy
+@@ -0,0 +1,17 @@
++theory SoundnessSapicPatternParameter
++begin
++
++// A pat_ parameter stands for the supplied input pattern. An unused caller
++// binder with the same name must not turn it into an unrestricted input.
++let P(pat_x) = in(pat_x); event Seen(pat_x)
++
++#ifdef NO_COLLISION
++process: new unused; P(<'a','b'>)
++#else
++process: new pat_x; P(<'a','b'>)
++#endif
++
++lemma supplied_pattern: "All x #i. Seen(x)@i ==> x = <'a','b'>"
++lemma reachable: exists-trace "Ex #i. Seen(<'a','b'>)@i"
++
++end
+diff --git a/examples/regression/trace/soundness-sapic-pattern-parameter.spthy.test.json b/examples/regression/trace/soundness-sapic-pattern-parameter.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..8178283b257d691f134791fb37993aaddd691aa8
+--- /dev/null
++++ b/examples/regression/trace/soundness-sapic-pattern-parameter.spthy.test.json
+@@ -0,0 +1,14 @@
++{
++  "tests": [
++    {
++      "name": "caller-collision",
++      "args": ["--quit-on-warning"],
++      "checks": ["roundtrip"]
++    },
++    {
++      "name": "renamed-caller",
++      "args": ["--quit-on-warning", "-DNO_COLLISION"],
++      "checks": ["roundtrip"]
++    }
++  ]
++}
 diff --git a/examples/regression/trace/soundness-sapic-process-call-capture.spthy b/examples/regression/trace/soundness-sapic-process-call-capture.spthy
 new file mode 100644
 index 0000000000000000000000000000000000000000..8d5b2d846db50f31a80292af82694b7b557c4816
@@ -15369,6 +17840,232 @@ index 0000000000000000000000000000000000000000..a3b94d0a1f1861b77bd8d0b89a3b58ec
 +    }
 +  ]
 +}
+diff --git a/lib/export/src/Export/Name.hs b/lib/export/src/Export/Name.hs
+index af7bfd9e98661048dd7ae8c1a2a0e676df7a3c5d..011678d96cc9fc6f83c86354b81fc8a5ea56d1d3 100644
+--- a/lib/export/src/Export/Name.hs
++++ b/lib/export/src/Export/Name.hs
+@@ -11,12 +11,14 @@ module Export.Name
+     allocateVariable,
+     freshNameAvoiding,
+     sanitizeSymbol,
++    publicName,
+   )
+ where
+ 
+-import Data.Char (isDigit)
++import Data.Char (isAscii, isAlphaNum, isDigit, ord)
+ import Data.Map.Strict qualified as Map
+ import Data.Set qualified as Set
++import Numeric (showHex)
+ 
+ data TargetNamespace
+   = GlobalNamespace
+@@ -35,6 +37,17 @@ newtype NameAllocator = NameAllocator (Map.Map TargetNamespace (Set.Set String))
+ emptyNameAllocator :: NameAllocator
+ emptyNameAllocator = NameAllocator Map.empty
+ 
++-- | Quoted public names are distinct from built-in constants. Use the same
++-- spelling in declarations, patterns and terms, including embedded rules.
++-- Apostrophes are valid in both targets but not in source identifiers, so
++-- local binders cannot capture these names. Escape underscores too, so
++-- punctuation cannot alias a literal escape.
++publicName :: String -> String
++publicName name = "v'" ++ concatMap encode name
++  where
++    encode c | isAscii c && isAlphaNum c = [c]
++             | otherwise = "_" ++ showHex (ord c) "_"
++
+ reserveNames :: TargetNamespace -> Set.Set String -> NameAllocator -> NameAllocator
+ reserveNames namespace names (NameAllocator allocated) =
+   NameAllocator (Map.insertWith Set.union namespace names allocated)
+diff --git a/lib/export/src/Export/ProVerif.hs b/lib/export/src/Export/ProVerif.hs
+index 05ad09df928d81d2b2bd0952f1e0291ed2ec41f6..7fbbd0b76235abf08be8bc6f4954ddbf1f336003 100644
+--- a/lib/export/src/Export/ProVerif.hs
++++ b/lib/export/src/Export/ProVerif.hs
+@@ -447,6 +447,7 @@ loadLemmas preparedQueryPlans preparedAxiomPlans sharedEventTags hasSpecificLemm
+              preparedFormulaPlan <- NE.toList prepared.preparedAxiomFormulas
+            ]
+     headers = makeEventHeaders sharedEventTags allFacts
++      `S.union` foldMap headersOfFormula preparedFormulas
+ 
+ -- | Classify how a lemma should be translated based on selector and attributes
+ classifyLemma ::
+@@ -509,12 +510,12 @@ loadRestrictions sharedEventTags te preparedRestrictionPlans thy =
+             (planOutcome restriction._rstrName preparedRestrictionPlans)
+         | restriction <- rs
+         ]
+-      allFacts =
+-        [ fact
++      preparedFormulas =
++        [ preparedFormulaPlan.preparedFormula
+         | (_, PropertyEmitted prepared) <- preparedRestrictionPlans,
+-          preparedFormulaPlan <- NE.toList prepared.preparedRestrictionFormulas,
+-          fact <- formulaFacts preparedFormulaPlan.preparedFormula
++          preparedFormulaPlan <- NE.toList prepared.preparedRestrictionFormulas
+         ]
++      allFacts = concatMap formulaFacts preparedFormulas
+       validFacts =
+         [ f
+         | f@(Fact tag _ _) <- allFacts,
+@@ -522,4 +523,5 @@ loadRestrictions sharedEventTags te preparedRestrictionPlans thy =
+           factTagName tag `notElem` ["OnlyOnce", "DistinctFact"]
+         ]
+       headers = makeEventHeaders sharedEventTags validFacts
++        `S.union` foldMap headersOfFormula preparedFormulas
+    in (docs, headers)
+diff --git a/lib/export/src/Export/ProVerif/Rule.hs b/lib/export/src/Export/ProVerif/Rule.hs
+index 79cb86c9f49ec6412f828b70231767aeb62456e7..aed8c565603d6571eb1b3f535dea214976658d36 100644
+--- a/lib/export/src/Export/ProVerif/Rule.hs
++++ b/lib/export/src/Export/ProVerif/Rule.hs
+@@ -68,7 +68,7 @@ loadRules plan thy m = case theoryRules thy of
+           `S.union` completionHeader
+       baseHeaders = Sym "free" "publicChannel" ":channel" []
+       desHeaders = map makeDestructorHeader $ M.toList destructors
+-      ruleHeaders = foldMap (\r -> makeHeadersFromRule ruleIdEvents r thy) rulesMod
++      ruleHeaders = foldMap (makeHeadersFromRule ruleIdEvents) rulesMod
+       completionHeader
+         | S.null completionTriggerEvents = S.empty
+         | otherwise =
+@@ -236,7 +236,7 @@ makeDestructorHeader ((dDef, atom), dName) =
+       Eq "reduc" declarations (dName ++ "(" ++ body ++ ") = " ++ showAtom False atom) "[private]"
+     _ -> translationInvariantFail "A generated destructor definition has no body."
+ 
+-makeHeadersFromRule :: S.Set String -> OpenProtoRule -> OpenTheory -> S.Set ProVerifHeader
++makeHeadersFromRule :: S.Set String -> OpenProtoRule -> S.Set ProVerifHeader
+ makeHeadersFromRule ruleIdEvents (OpenProtoRule ruE _) = makeHeadersFromProtoRule ruleIdEvents ruE
+ 
+ notDiffRuleActs :: Rule ProtoRuleEInfo -> [Fact LNTerm]
+@@ -250,20 +250,13 @@ notDiffRuleActs ru = filter isNotDiffAnnotation ru._rActs
+             factTerms = []
+           }
+ 
+-makeHeadersFromProtoRule :: S.Set String -> Rule ProtoRuleEInfo -> OpenTheory -> S.Set ProVerifHeader
+-makeHeadersFromProtoRule ruleIdEvents ru thy = S.unions [freeHeaders, tables, events]
++makeHeadersFromProtoRule :: S.Set String -> Rule ProtoRuleEInfo -> S.Set ProVerifHeader
++makeHeadersFromProtoRule ruleIdEvents ru = S.unions [freeHeaders, tables, events]
+   where
+-    freeHeaders = makeFreeHeaders ru._rPrems (notDiffRuleActs ru) ru._rConcs thy
++    freeHeaders = makeFreeHeadersFromFacts ru._rPrems (notDiffRuleActs ru) ru._rConcs
+     tables = makeTableHeaders ru._rPrems ru._rConcs
+     events = makeEventHeaders ruleIdEvents (notDiffRuleActs ru)
+ 
+-makeFreeHeaders :: [LNFact] -> [LNFact] -> [LNFact] -> OpenTheory -> S.Set ProVerifHeader
+-makeFreeHeaders rprems racts rconcls thy =
+-  makeFreeHeadersFromFacts rprems racts rconcls
+-    `S.union` S.map (\x -> Sym "free" x ":bitstring" []) lemmaBitstrings
+-  where
+-    lemmaBitstrings = foldMap (searchLemmaForBitstrings . (._lFormula)) (theoryLemmas thy)
+-
+ makeFreeHeadersFromFacts :: [LNFact] -> [LNFact] -> [LNFact] -> S.Set ProVerifHeader
+ makeFreeHeadersFromFacts rprems racts rconcls =
+   S.map (\x -> Sym "free" x ":bitstring" []) (freeBitstringsFromFacts rprems racts rconcls)
+@@ -273,14 +266,6 @@ freeBitstringsFromFacts rprems racts rconcls = foldMap searchTermForBitstrings a
+   where
+     allTerms = foldMap factTerms (rprems ++ racts ++ rconcls)
+ 
+-searchLemmaForBitstrings :: ProtoFormula Unit2 (String, LSort) Name LVar -> S.Set String
+-searchLemmaForBitstrings =
+-  foldFormula searchAtomForBitstring (const S.empty) id (\_ p q -> p `S.union` q) (\_ _ p -> p)
+-  where
+-    searchAtomForBitstring a = case a of
+-      Action _ f -> foldMap searchTermForBitstrings f
+-      _ -> S.empty
+-
+ searchTermForBitstrings :: (Show l) => Term l -> S.Set String
+ searchTermForBitstrings =
+   foldMap
+@@ -656,7 +641,7 @@ showAtom :: Bool -> String -> String
+ showAtom sanitized atom = case atom of
+   '~' : rest -> sanitize (replaceDots rest)
+   '$' : rest -> sanitize (replaceDots rest)
+-  '\'' : rest -> sanitizeName ('v' : replaceDots (dropLast rest))
++  '\'' : rest -> sanitizeName (publicName (dropLast rest))
+   _ : _ -> sanitize (replaceDots atom)
+   [] -> translationFail "Cannot translate an empty atom name."
+   where
+diff --git a/lib/export/src/Export/Sapic.hs b/lib/export/src/Export/Sapic.hs
+index c6ae778d3c008f32a10afb4e1b3007d811e0e2cd..2b23290dedc30df1ddb4da1cac652697287a6a36 100644
+--- a/lib/export/src/Export/Sapic.hs
++++ b/lib/export/src/Export/Sapic.hs
+@@ -4,6 +4,7 @@ module Export.Sapic
+   ( ensureAttackerContext,
+     formalCommentDocs,
+     headerOfFunSym,
++    headersOfFormula,
+     loadDiffProc,
+     loadEquivProc,
+     loadHeaders,
+@@ -21,7 +22,7 @@ import Data.List as List
+ import Data.Map qualified as M
+ import Data.Maybe
+ import Data.Set qualified as S
+-import Export.Name (sanitizeSymbol)
++import Export.Name (publicName, sanitizeSymbol)
+ import Export.ProVerif.Header
+ import Export.ProVerif.Rule
+ import Export.Types
+@@ -37,11 +38,7 @@ import Theory.Sapic
+ 
+ 
+ ppPubName :: NameId -> Doc
+-ppPubName (NameId n) = text $ case n of
+-  "zero" -> "0"
+-  "one" -> "1"
+-  "g" -> "g"
+-  _ -> "v" ++ n
++ppPubName (NameId n) = text $ publicName n
+ 
+ 
+ ------------------------------------------------------------------------------
+@@ -73,6 +70,12 @@ ppTypeLit :: (Show c) => TranslationContext -> Lit c SapicLVar -> Doc
+ ppTypeLit tc (Var v) = ppTypeVar tc v
+ ppTypeLit _ (Con c) = text . sanitizeSymbol 'a' $ show c
+ 
++-- | Collect declarations from all formula terms, including equalities.
++headersOfFormula :: LNFormula -> S.Set ProVerifHeader
++headersOfFormula =
++  foldFormula (foldMap (snd . renderTermWithHeaders (const emptyDoc)))
++    (const S.empty) id (\_ p q -> p `S.union` q) (\_ _ p -> p)
++
+ -- | Render a term and collect required ProVerif header declarations.
+ -- Takes a literal rendering function and a term, returns the rendered
+ -- Doc and the set of headers needed for declarations (e.g., free constants).
+@@ -112,16 +115,7 @@ renderTermWithHeaders ppLit t = (ppTerm t, getHdTerm t)
+       text (ppFunSym f ++ "(") <> fsep (punctuate comma (map ppTerm ts)) <> text ")"
+     getHdTerm tm = case viewTerm tm of
+       Lit (Con (Name PubName n)) ->
+-        if show n `elem` ["g", "one", "zero"]
+-          then S.empty
+-          else -- The 's' is just prepended here instead of using sanitizeSymbol, because that function
+-          -- only does the prepending for reserved keywords and symbols starting with a digit. For
+-          -- free bitstrings however, we ALWAYS want the leading 's', to also avoid clashes with
+-          -- function names, rule names, event names etc. We could also do it like that for variables
+-          -- and function names (where we use sanitizeSymbol now), but I thought if we did it in all
+-          -- other places it might not be needed there, and I thought it would be better to leave as
+-          -- much as possible of the original naming as it is
+-            S.singleton (Sym "free" ("s" ++ show n) ":bitstring" [])
++        S.singleton (Sym "free" (publicName $ show n) ":bitstring" [])
+       Lit _ -> S.empty
+       FApp _ ts -> foldl (\x y -> x `S.union` getHdTerm y) S.empty ts
+ 
+@@ -133,7 +127,7 @@ renderSapicTermWithPattern tc mVars isPattern = renderTermWithHeaders ppLit
+   where
+     ppLit v = case v of
+       Con (Name FreshName n) -> text . sanitizeSymbol 'a' $ show n
+-      Con (Name PubName n) | isPattern -> text "=" <> text ("s" ++ show n)
++      Con (Name PubName n) | isPattern -> text "=" <> ppPubName n
+       Con (Name PubName n) -> ppPubName n
+       Var (SapicLVar lvar@(LVar _ lsort _) _)
+         | lsort `elem` [LSortPub, LSortFresh, LSortNat] ->
+@@ -420,7 +414,7 @@ ppSapic renderFormula tc (ProcessComb (Cond a) _ pl pr) =
+     ppFact' p =
+       case expandFormula (predicates tc) (toLFormula p) of
+         Left _ -> translationFail "Export does not support tamarin predicates in conditionnals."
+-        Right form -> (renderFormula form, S.empty)
++        Right form -> (renderFormula form, headersOfFormula form)
+     addElseBranch (d, s) = case pr of
+       ProcessNull _ -> (d, s)
+       _ ->
 diff --git a/lib/sapic/src/Sapic.hs b/lib/sapic/src/Sapic.hs
 index 8cfaaa65a9d6c5e731b13a0cefcce483849041ce..cb803b5ce90b28bc1ef979b42775e6637e4c6830 100644
 --- a/lib/sapic/src/Sapic.hs
@@ -15538,10 +18235,18 @@ index 3edb2eef7feec581ca6c3f4ba9acdd66f2d59726..56ce43d8ac19b7da6e3025e71f22c478
  instance Show WFerror where
      show (WFUnbound varset) =
 diff --git a/lib/sapic/src/Sapic/Typing.hs b/lib/sapic/src/Sapic/Typing.hs
-index 98cb0ca7200d3f2f48cab1384ebcb05159ef1ef7..b4191fb1f2ce30285f1eba66a570ddd38cba8e21 100644
+index 98cb0ca7200d3f2f48cab1384ebcb05159ef1ef7..7ac03df82811e115142c91463d3820eb49b7b908 100644
 --- a/lib/sapic/src/Sapic/Typing.hs
 +++ b/lib/sapic/src/Sapic/Typing.hs
-@@ -135,12 +135,29 @@ typeTermsWithEnv typeEnv terms = execStateT (mapM typeWith' terms) typeEnv'
+@@ -2,6 +2,7 @@
+ 
+ module Sapic.Typing
+   ( typeTheory
++  , typeTheoryForExport
+   , typeTheoryEnv
+   , typeTermsWithEnv
+   , typeProcess
+@@ -135,12 +136,29 @@ typeTermsWithEnv typeEnv terms = execStateT (mapM typeWith' terms) typeEnv'
  typeProcess :: (GoodAnnotation a, MonadThrow m, MonadCatch m, Show a, Typeable a) =>
      Process a SapicLVar ->  StateT
          TypingEnvironment m (Process a SapicLVar)
@@ -15574,7 +18279,7 @@ index 98cb0ca7200d3f2f48cab1384ebcb05159ef1ef7..b4191fb1f2ce30285f1eba66a570ddd3
          -- gAct/gComb reconstruct process tree assigning types to the terms
          gAct ac@(Event (Fact tag _ ts)) ann r = do -- r is typed subprocess
              ac' <- traverseTermsAction (typeWith' $ ProcessAction ac ann r) typeWithFact typeWithVar ac
-@@ -158,7 +175,18 @@ typeProcess = traverseProcess fNull fAct fComb gAct gComb
+@@ -158,7 +176,18 @@ typeProcess = traverseProcess fNull fAct fComb gAct gComb
          typeWithVar  v -- variables are correctly typed, as we just inserted them
              | Nothing <- stype v = return $ SapicLVar (slvar v) defaultSapicType
              | otherwise = return v
@@ -15594,7 +18299,60 @@ index 98cb0ca7200d3f2f48cab1384ebcb05159ef1ef7..b4191fb1f2ce30285f1eba66a570ddd3
          insertVar v = do
              te <- get
              case Map.lookup (slvar v) te.vars of
-@@ -237,27 +265,33 @@ renameUnique :: (Monad m, Apply (Subst Name LVar) ann, GoodAnnotation ann, HasCa
+@@ -216,7 +245,10 @@ typeTheoryEnv th = do
+                 typeProcess pUnique
+         typeAndRenameProcessDef p = do
+                 let pr = p._pBody
+-                let pvars = fromMaybe (S.toList (varsProc pr) List.\\ accBindings pr) p._pVars
++                -- Annotations constrain types, not binding identities.
++                let bound = S.fromList $ map toLVar $ accBindings pr
++                let pvars = fromMaybe (filter ((`S.notMember` bound) . toLVar) $
++                                      S.toList (varsProc pr)) p._pVars
+                 let aux_pr = ProcessAction (ChIn Nothing (fAppList (map varTerm pvars)) S.empty) mempty pr
+                 renamedP <- typeAndRenameProcess aux_pr
+                 case renamedP of
+@@ -229,6 +261,40 @@ typeTheoryEnv th = do
+ typeTheory :: (MonadThrow m, MonadCatch m) => OpenTheory -> m OpenTheory
+ typeTheory th = fst <$> typeTheoryEnv th
+ 
++-- | Pattern parameters stand for syntax rather than values. Typing their
++-- definition as a function renames the formal and its pattern binder apart.
++-- Export the parser's already instantiated bodies for these calls instead.
++-- Open definitions also need their caller's bindings: inferring parameters
++-- for the definition alone leaves its original zero-argument calls invalid.
++-- This preparation is only for export; MSR translation keeps its call nodes.
++typeTheoryForExport :: (MonadThrow m, MonadCatch m) => OpenTheory -> m OpenTheory
++typeTheoryForExport th = do
++    -- Check declarations before discarding them: their annotations can still
++    -- constrain function types, even when substitution replaces a pattern
++    -- variable by a constant in every call.
++    typed <- typeTheory th
++    processes <- mapMProcesses (pure . inlineCalls mempty) typed
++    definitions <- mapMProcessesDef
++      (\p -> pure $ p { _pBody = inlineCalls mempty p._pBody }) processes
++    pure $ definitions { _thyItems = filter keepDefinition definitions._thyItems }
++  where
++    expanded = S.fromList [p._pName | p <- theoryProcessDefs th,
++                          isNothing p._pVars || hasPatternParameter p]
++    hasPatternParameter p =
++      let parameters = S.fromList $ map toLVar $ fromMaybe [] p._pVars
++      in any ((`S.member` parameters) . toLVar) $ accBindings p._pBody
++    keepDefinition (TranslationItem (ProcessDefItem p)) = p._pName `S.notMember` expanded
++    keepDefinition _ = True
++    -- Preserve call-site annotations; a location in the body overrides the
++    -- caller's location, just as it does when traversing the expanded process.
++    inlineCalls ann (ProcessAction (ProcessCall name _) here rest)
++      | name `S.member` expanded = inlineCalls (ann <> here) rest
++    inlineCalls ann (ProcessAction ac here rest) =
++      ProcessAction ac (ann <> here) (inlineCalls mempty rest)
++    inlineCalls ann (ProcessComb c here left right) =
++      ProcessComb c (ann <> here) (inlineCalls mempty left) (inlineCalls mempty right)
++    inlineCalls ann (ProcessNull here) = ProcessNull (ann <> here)
++
+ -- | Rename a process so that all its names are unique. Returns renamed process
+ -- p' and substitution such that: let (p',subst) = renameUnique p in apply subst
+ -- p' equals p
+@@ -237,27 +303,33 @@ renameUnique :: (Monad m, Apply (Subst Name LVar) ann, GoodAnnotation ann, HasCa
  renameUnique p = Precise.evalFreshT actualCall initState
      where
          actualCall = renameUnique' emptySubst p
@@ -15750,7 +18508,7 @@ index e7d5ec9c5e24d83d12ba75ac43e1bd54022c090c..e8c29952d6b25cb31c76fdc080562b16
      where
          freesPatternFactList = foldMap (foldMap freesPatternSapicLVar)
 diff --git a/lib/theory/src/Theory/Sapic/Process.hs b/lib/theory/src/Theory/Sapic/Process.hs
-index feb7c2aceb658650655a5db7681733d8eb9b942b..06b2ae28de6934820a7192970fcfa632d383c09b 100644
+index feb7c2aceb658650655a5db7681733d8eb9b942b..4dda97d78fbc1952a15c4a26e3a44c808a873a4a 100644
 --- a/lib/theory/src/Theory/Sapic/Process.hs
 +++ b/lib/theory/src/Theory/Sapic/Process.hs
 @@ -35,8 +35,17 @@ module Theory.Sapic.Process (
@@ -15771,7 +18529,7 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..06b2ae28de6934820a7192970fcfa632
      -- pretty printing
      , prettySapic'
      , prettySapicAction'
-@@ -50,13 +59,15 @@ module Theory.Sapic.Process (
+@@ -50,13 +59,16 @@ module Theory.Sapic.Process (
  
  import Data.Binary
  import Data.Data
@@ -15785,11 +18543,12 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..06b2ae28de6934820a7192970fcfa632
  import Term.Substitution
  import Theory.Text.Pretty
  import Data.List
++import Data.Maybe (isJust)
 +import qualified Data.Foldable as F
  import Control.Monad.Catch
  import Theory.Sapic.Term
  import Theory.Sapic.Substitution
-@@ -318,6 +329,8 @@ applyMatchVars' f = fromList . concatMap extractVars . toList
+@@ -318,6 +330,8 @@ applyMatchVars' f = fromList . concatMap extractVars . toList
  
  instance Apply SapicSubst (SapicAction SapicLVar) where
      apply subst (ChIn mt t vs) = ChIn (apply subst mt) (apply subst t) (applyMatchVars subst vs)
@@ -15798,7 +18557,7 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..06b2ae28de6934820a7192970fcfa632
      apply subst ac = mapTermsAction (apply subst) (apply subst) (apply subst) ac
  
  -- | Substitute for LVars, ignoring types
-@@ -361,6 +374,16 @@ instance {-# OVERLAPPABLE #-} (Ord v, Apply s v, Apply s ann) => Apply s (Proces
+@@ -361,6 +375,16 @@ instance {-# OVERLAPPABLE #-} (Ord v, Apply s v, Apply s ann) => Apply s (Proces
  varsProc :: (Ord v, Show v) => Process ann v -> Set v
  varsProc = foldMap Data.Set.singleton -- foldProcess fNull fAct fComb gAct gComb empty p
  
@@ -15815,7 +18574,7 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..06b2ae28de6934820a7192970fcfa632
  -------------------------
  -- Applying substitutions ( with error messages )
  -------------------------
-@@ -408,20 +431,132 @@ instance ApplyM SapicSubst (SapicAction SapicLVar)
+@@ -408,20 +432,139 @@ instance ApplyM SapicSubst (SapicAction SapicLVar)
          where lvarName' (SapicLVar v _ ) = lvarName v
  
  
@@ -15891,18 +18650,17 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..06b2ae28de6934820a7192970fcfa632
 +-- supply keeps later names distinct without repeatedly scanning each suffix.
 +applyProcessSubstAvoiding :: (GoodAnnotation ann, MonadThrow m)
 +                         => [LVar] -> SapicSubst -> LProcess ann -> m (LProcess ann)
-+applyProcessSubstAvoiding = expandProcessCall False
++applyProcessSubstAvoiding = expandProcessCall Nothing
 +
 +-- | Expand a call: substitute the arguments for the parameters in the body.
 +-- The reserved variables are those of the caller's scope. The body of a
 +-- closed definition (one with a parameter list) is a scope of its own, so
-+-- every binder that shares an identity with a caller variable is renamed
-+-- apart first. Afterwards no binder of the body is a caller variable, a
-+-- parameter or a variable of an argument, so neither side can capture the
-+-- other.
++-- local binders that share identities with caller variables are renamed
++-- apart first. Pattern parameters are substituted directly instead, since
++-- they stand for the supplied pattern rather than a local binding.
 +expandProcessCall :: (GoodAnnotation ann, MonadThrow m)
-+                  => Bool -> [LVar] -> SapicSubst -> LProcess ann -> m (LProcess ann)
-+expandProcessCall closed reserved original proc =
++                  => Maybe [SapicLVar] -> [LVar] -> SapicSubst -> LProcess ann -> m (LProcess ann)
++expandProcessCall parameters reserved original proc =
 +    evalFreshTAvoiding (go (fromList reserved) (substFromList [] :: Subst Name LVar) proc) avoidVars
 +  where
 +    -- Scope is indexed by LVar throughout SAPIC. Type annotations constrain
@@ -15915,6 +18673,9 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..06b2ae28de6934820a7192970fcfa632
 +    subst = substFromList [(v, t) | v <- occurrences, Just t <- [Map.lookup (toLVar v) images]]
 +
 +    incoming = fromList $ map toLVar $ varsRange subst
++    -- Substitutions omit identity mappings. Keep the explicit formals too,
++    -- so a nested call P(pat_x) cannot freshen P's own pat_x parameter away.
++    formals = fromList $ maybe [] (map toLVar) parameters
 +    callerScope = fromList reserved
 +    avoidVars = reserved ++ map toLVar
 +      (dom subst ++ varsRange subst ++ procVars)
@@ -15924,9 +18685,14 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..06b2ae28de6934820a7192970fcfa632
 +          -- scope renamed apart from the caller, and generated binders that
 +          -- collide with the caller. Other user rebinding in an open body is
 +          -- preserved for validation.
-+          captures = Data.List.filter (\v -> v `member` incoming ||
-+                                  (closed && v `member` callerScope) ||
-+                                  (v `member` generated && v `member` used)) bound
++          -- Pattern parameters are replaced by the argument itself; renaming
++          -- them here would remove them from the substitution's domain.
++          patternParameter v = (v `member` formals || Map.member v images) &&
++                               "pat_" `Data.List.isPrefixOf` lvarName v
++          captures = Data.List.filter (\v -> not (patternParameter v) &&
++                                 (v `member` incoming ||
++                                  (isJust parameters && v `member` callerScope) ||
++                                  (v `member` generated && v `member` used))) bound
 +      fresh <- mapM (\v -> freshLVar (lvarName v) (lvarSort v)) captures
 +      return $ substFromList $ zip captures (map varTerm fresh)
 +    markGenerated ren ann = mapProcessParsedAnnotation (\parsed -> parsed
@@ -15978,7 +18744,7 @@ index 144d5fce6e8198d7095d22818d9bd8d0a14d797a..5bf48024092d9d862b15de4932e69d84
 -                    }
 +        return $ applyProcessParsedAnnotation subst ann
 diff --git a/lib/theory/src/Theory/Text/Parser/Sapic.hs b/lib/theory/src/Theory/Text/Parser/Sapic.hs
-index fd3633ef9386ba099310bdf288abf61aa5036dcf..a7909d1c9a25311aedc1c0017be85f490e415879 100644
+index fd3633ef9386ba099310bdf288abf61aa5036dcf..d86e4fba5fcbd3282c6c278dd15fe4781a3c8ef1 100644
 --- a/lib/theory/src/Theory/Text/Parser/Sapic.hs
 +++ b/lib/theory/src/Theory/Text/Parser/Sapic.hs
 @@ -37,7 +37,9 @@ import Theory.Text.Parser.Let
@@ -15986,7 +18752,7 @@ index fd3633ef9386ba099310bdf288abf61aa5036dcf..a7909d1c9a25311aedc1c0017be85f49
  import Theory.Sapic.Pattern
  import qualified Data.Functor.Identity ()
 -import Data.Maybe (fromMaybe)
-+import Data.Maybe (fromMaybe, isJust, listToMaybe)
++import Data.Maybe (fromMaybe, listToMaybe)
 +import Data.List (isPrefixOf)
 +import qualified Data.Foldable as F
  
@@ -16159,7 +18925,7 @@ index fd3633ef9386ba099310bdf288abf61aa5036dcf..a7909d1c9a25311aedc1c0017be85f49
 +                        let vars = fromMaybe [] mvars
 +                        -- A definition with a parameter list, even an empty
 +                        -- one, is closed and is expanded hygienically.
-+                        substP <- expandProcessCall (isJust mvars) usedVars (substFromList $ zip vars ts) p
++                        substP <- expandProcessCall mvars usedVars (substFromList $ zip vars ts) p
                          return (ProcessAction
                                  (ProcessCall (BC.unpack i) ts) mempty
                                  (processAddAnnotation substP (mempty {processnames =  [BC.unpack i]}))
@@ -16174,3 +18940,97 @@ index fd3633ef9386ba099310bdf288abf61aa5036dcf..a7909d1c9a25311aedc1c0017be85f49
 -    Just p -> return (get pBody p, fromMaybe [] $ get pVars p)
 +    Just p -> return (get pBody p, get pVars p)
      Nothing -> fail $ "process not defined: " ++ i
+diff --git a/regressionTestCommands.py b/regressionTestCommands.py
+index b26c3479cdd5b1b6a3f20bc97f1f3b9f86f2f87e..1654f79f9f53dc83589228e8fa52b5d293c7485e 100644
+--- a/regressionTestCommands.py
++++ b/regressionTestCommands.py
+@@ -56,7 +56,7 @@ def theory_text(text):
+ 
+ 
+ def validate(test):
+-    allowed = {"name", "args", "exit_code", "contains", "matches", "fact_arities", "baseline", "checks", "timeout", "slow"}
++    allowed = {"name", "args", "exit_code", "contains", "matches", "fact_arities", "baseline", "checks", "roundtrip_module", "timeout", "slow"}
+     if not isinstance(test, dict) or set(test) - allowed:
+         raise RegressionFailure(f"Unknown test fields or invalid test: {test!r}")
+     if not isinstance(test.get("name"), str) or not re.fullmatch(r"[\w-]+", test["name"]):
+@@ -82,6 +82,9 @@ def validate(test):
+         raise RegressionFailure("checks may contain roundtrip and partial-evaluation")
+     if len(set(checks)) != len(checks):
+         raise RegressionFailure("Duplicate checks")
++    if "roundtrip_module" in test and ("roundtrip" not in checks or
++            test["roundtrip_module"] not in ("spthy", "spthytyped", "msr")):
++        raise RegressionFailure("roundtrip_module requires roundtrip and must be spthy, spthytyped or msr")
+     baseline = test.get("baseline")
+     if "baseline" in test and (not isinstance(baseline, str) or not baseline or
+                                  Path(baseline).is_absolute() or ".." in Path(baseline).parts):
+@@ -234,7 +237,8 @@ def run_test(source, test, tamarin, baseline_dir, artifacts):
+         checks = test.get("checks", [])
+         original = invoke("original", source, prove=True, export="roundtrip" in checks)
+         if "roundtrip" in checks:
+-            printed = invoke("printed", source, export=True)
++            flags = (f"--output-module={test['roundtrip_module']}",) if "roundtrip_module" in test else ()
++            printed = invoke("printed", source, flags, export=True)
+             invoke("reloaded", printed, prove=True)
+             invoke("replay", original, check_verdicts=True)
+         if "partial-evaluation" in checks:
+diff --git a/src/Main/TheoryLoader.hs b/src/Main/TheoryLoader.hs
+index 4866cb4dccf7d49daad57d00fc3ab4677e53e122..916ffa95585844361cd722f0ead491fa1dd272ed 100644
+--- a/src/Main/TheoryLoader.hs
++++ b/src/Main/TheoryLoader.hs
+@@ -479,16 +479,16 @@ processOpenTheory :: (MonadCatch m) => TheoryLoadOptions -> OpenTheory -> m Open
+ processOpenTheory thyOpts = case thyOpts.outputModule of
+   Nothing -> Sapic.typeTheory >=> Sapic.translate >=> Acc.translate
+   Just ModuleSpthy -> pure
+-  Just ModuleSpthyTyped -> Sapic.typeTheory
++  Just ModuleSpthyTyped -> Sapic.typeTheoryForExport
+   -- If the output module is set to MSR, we only keep the specified lemmas in the theory.
+   Just ModuleMsr ->
+     Sapic.typeTheory
+       >=> Sapic.translate
+       >=> Acc.translate
+       >=> (pure . filterLemma lemmas)
+-  Just ModuleProVerifEquivalence -> Sapic.typeTheory -- Type theory here to catch errors.
+-  Just ModuleProVerif -> Sapic.typeTheory -- Type theory here to catch errors.
+-  Just ModuleDeepSec -> Sapic.typeTheory
++  Just ModuleProVerifEquivalence -> Sapic.typeTheoryForExport -- Type theory here to catch errors.
++  Just ModuleProVerif -> Sapic.typeTheoryForExport -- Type theory here to catch errors.
++  Just ModuleDeepSec -> Sapic.typeTheoryForExport
+   where
+     lemmas = lemmaSelector thyOpts
+ 
+diff --git a/tests/test_regression_commands.py b/tests/test_regression_commands.py
+index 1b9d6c5fde5fd53ad808057d78b5ec4444dddc37..12746906a9c8feabea7739ac54928cda5c38b33e 100644
+--- a/tests/test_regression_commands.py
++++ b/tests/test_regression_commands.py
+@@ -60,6 +60,8 @@ class ExpectationTests(unittest.TestCase):
+ 
+     def test_metadata_errors_cannot_silently_disable_checks(self):
+         for fields in [{"check": ["roundtrip"]}, {"checks": ["unknown"]},
++                       {"roundtrip_module": "spthytyped"},
++                       {"checks": ["roundtrip"], "roundtrip_module": "proverif"},
+                        {"checks": "roundtrip"}, {"baseline": None},
+                        {"checks": ["roundtrip"], "exit_code": 1, "contains": ["error"]},
+                        {"checks": ["roundtrip"], "args": ["--prove"]},
+@@ -170,6 +172,22 @@ class WorkflowTests(unittest.TestCase):
+     def run_test(self):
+         commands.run_test(self.source, self.test, "tamarin-prover", self.root, self.root / "logs")
+ 
++    def test_typed_roundtrip_prints_typed_but_proves_normally(self):
++        self.test.update(checks=["roundtrip"], roundtrip_module="spthytyped")
++        commands.validate(self.test)
++        def prover(argv, timeout):
++            result = self.prover(argv, timeout)
++            if "--output-module=spthytyped" in argv:
++                self.assertNotIn("--prove", argv)
++                return 0, "theory TypedExport begin end\n"  # No proof summary.
++            return result
++        with patch.object(commands, "run_process", side_effect=prover) as run:
++            self.run_test()
++        invocations = [call.args[0] for call in run.call_args_list]
++        self.assertEqual(sum("--output-module=spthytyped" in argv for argv in invocations), 1)
++        self.assertTrue(any(Path(argv[1]).name == "printed.spthy" and "--prove" in argv
++                            for argv in invocations))
++
+     def test_export_reload_and_replay_use_distinct_inputs(self):
+         with patch.object(commands, "run_process", side_effect=self.prover) as run:
+             self.run_test()
