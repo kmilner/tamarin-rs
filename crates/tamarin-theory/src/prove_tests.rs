@@ -270,6 +270,47 @@ fn public_proving_computes_reducible_manual_families_before_validating() {
 }
 
 #[test]
+fn public_proving_accepts_partial_evaluation_identity_families() {
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory PartialIdentity begin
+        builtins: symmetric-encryption
+        rule Key: [Fr(~k)] --> [!Key(~k)]
+        rule Secret: [Fr(~m), !Key(~k)] --[Secret(~m)]-> [Out(senc(~m,~k))]
+        lemma witness: exists-trace "Ex m #i. Secret(m) @ i"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let mut theory = elaborated(&parsed);
+    let Some(h) = maude_with(theory.signature.clone()) else {
+        return;
+    };
+    crate::tools::rule_variants::prepare_theory_rules(&mut theory, &h, None, true).unwrap();
+    crate::tools::apply_partial_evaluation(&mut theory, &h, crate::tools::EvaluationStyle::Silent)
+        .unwrap();
+    crate::tools::rule_variants::reprepare_theory_rules(&mut theory, &h, None).unwrap();
+    let theory = std::sync::Arc::new(theory);
+    for loop_breakers_prepared in [false, true] {
+        let counter = h.fresh_counter_peek();
+        let session = ProverSession::build(
+            theory.clone(),
+            h.clone(),
+            ProverSessionOptions {
+                loop_breakers_prepared,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(h.fresh_counter_peek(), counter);
+        let proof = prove_lemma_in_session(&session, "witness", 10).unwrap();
+        assert_eq!(
+            crate::constraint::solver::search::proof_status(&proof),
+            ProofStatus::TraceFound
+        );
+    }
+}
+
+#[test]
 fn guarded_conversion_errors_use_haskell_default_width() {
     let vars = (1..=25)
         .map(|i| format!("x{i}"))

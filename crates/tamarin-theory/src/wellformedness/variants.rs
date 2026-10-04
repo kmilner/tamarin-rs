@@ -45,7 +45,23 @@ pub fn explicit_variants_report(
 ) -> Result<WfReport, VariantsError> {
     let mut report = Vec::new();
     for parent in thy.rules().filter(|r| !r.rule_ac.is_empty()) {
-        let computed = computed_variants(parent, maude)?;
+        let mut computed = computed_variants(parent, maude)?;
+        // Partial evaluation reopens a compiled identity family under its
+        // original name. Recomputing can canonicalize variable indices and
+        // thereby give that sole variant a suffix. The identical E/AC pair
+        // may keep its name, but must still pass the full semantic alignment.
+        if let ([member], [computed], crate::rule::ProtoRuleName::Stand(name)) = (
+            parent.rule_ac.as_slice(),
+            computed.as_mut_slice(),
+            parent.rule_e().info.name,
+        ) {
+            let generated = crate::rule::ProtoRuleName::Stand(tamarin_term::intern::intern_str(
+                &format!("{name}___VARIANT_1"),
+            ));
+            if member == parent.rule_e() && computed.info.name == generated {
+                computed.info.name = member.info.name;
+            }
+        }
         let by_name: BTreeMap<_, _> = computed.iter().map(|r| (r.info.name, r)).collect();
         let mut alignments = Vec::new();
         for member in &parent.rule_ac {
@@ -345,6 +361,61 @@ mod tests {
             }
         }
         let report = crate::wellformedness::check_wellformedness(&theory, Some(&maude)).unwrap();
+        assert!(report.iter().any(|e| e.topic == "Variants"), "{report:?}");
+    }
+
+    #[test]
+    fn identity_families_still_require_complete_semantic_alignment() {
+        let Some(path) = tamarin_test_support::require_maude_path() else {
+            return;
+        };
+        for rule in [
+            // One computed variant, but normalization changes the body.
+            "rule R: [] --[A(sdec(senc('a','k'),'k'))]-> []",
+            // The identity member alone omits the reducing variant.
+            "rule R: [In(x), In(k)] --[A(sdec(x,k))]-> []",
+        ] {
+            let source = format!("theory Identity begin builtins: symmetric-encryption {rule} end");
+            let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+            let mut theory = crate::elaborate::elaborate(&parsed).unwrap();
+            for item in &mut theory.items {
+                if let crate::theory::TheoryItem::Rule(rule) = item {
+                    rule.rule_ac = vec![rule.rule.clone()];
+                }
+            }
+            let maude = MaudeHandle::start(&path, theory.signature.clone()).unwrap();
+            let report = explicit_variants_report(&theory, &maude).unwrap();
+            assert!(
+                report.iter().any(|e| e.topic == "Variants"),
+                "{source}: {report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identity_family_must_match_original_e_rule_not_a_restricted_compiled_rule() {
+        let Some(path) = tamarin_test_support::require_maude_path() else {
+            return;
+        };
+        let parsed = tamarin_parser::parse_theory(
+            "theory Original begin rule R: [In(x)] --[A(x)]-> [] end",
+            &[],
+        )
+        .unwrap();
+        let mut theory = crate::elaborate::elaborate(&parsed).unwrap();
+        let subst = Subst::from_list([(
+            LVar::new("x", LSort::Msg, 0),
+            tamarin_term::lterm::pub_term("a"),
+        )]);
+        for item in &mut theory.items {
+            if let crate::theory::TheoryItem::Rule(rule) = item {
+                rule.rule_e = Some(Box::new(rule.rule.clone()));
+                rule.rule = crate::rule::apply_subst_rule(&subst, &rule.rule);
+                rule.rule_ac = vec![rule.rule.clone()];
+            }
+        }
+        let maude = MaudeHandle::start(&path, theory.signature.clone()).unwrap();
+        let report = explicit_variants_report(&theory, &maude).unwrap();
         assert!(report.iter().any(|e| e.topic == "Variants"), "{report:?}");
     }
 

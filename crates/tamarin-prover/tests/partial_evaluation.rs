@@ -53,6 +53,43 @@ fn run_binary(stem: &str, extra: &[&str]) -> (i32, String, String) {
     (code, normalize_stdout(&stdout), stderr)
 }
 
+#[test]
+fn proving_accepts_partial_evaluation_identity_families_after_canonical_renaming() {
+    if !maude_available() {
+        return;
+    }
+    let source = r#"theory PartialEvaluationCanonicalFamily
+begin
+builtins: symmetric-encryption
+rule Key:
+  [ Fr(~k) ] --> [ !Key(~k) ]
+rule Secret:
+  [ Fr(~m), !Key(~k) ] --[ Secret(~m) ]-> [ Out(senc(~m,~k)) ]
+lemma reachable:
+  exists-trace "Ex m #i. Secret(m) @ i"
+end"#;
+    let (code, stdout, stderr) = common::run_raw(
+        TMP_DIR,
+        "pe_canonical_identity",
+        source,
+        &[
+            "--partial-evaluation=summary",
+            "--quit-on-warning",
+            "--prove",
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        !stderr.contains("cannot confirm manual variants"),
+        "{stderr}"
+    );
+    assert!(stdout.contains("[ Fr( ~m.1 ), !Key( ~k ) ]"), "{stdout}");
+    assert!(
+        stdout.contains("reachable (exists-trace): verified (3 steps)"),
+        "{stdout}\n{stderr}"
+    );
+}
+
 /// The oracle's `--partial-evaluation=summary` stdout for [`THEORY`],
 /// normalized by [`normalize_stdout`].  Two things to read off it: the
 /// `text{*…*}` report `applyPartialEvaluation` splices at the position of the
