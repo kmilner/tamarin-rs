@@ -482,6 +482,28 @@ class DiffArtifactNames(unittest.TestCase):
                 canonical('<span style="color: green">example</span>'),
             )
 
+    def test_invalid_source_case_routes_are_compared(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            urls = [f"/thy/trace/1/{route}/cases/raw/0/0"
+                    for route in ("json", "graph", "interactive-graph-def")]
+            row = {"kind": "html", "status": 500, "body": "bounds error"}
+            for other, expected in ((row, "MATCH"),
+                                    ({**row, "status": 404}, "DIFF"),
+                                    (None, "MISSING_RS")):
+                for side, manifest in (("hs", dict.fromkeys(urls, row)),
+                                       ("rs", dict.fromkeys(urls, other) if other else {})):
+                    (root / f"{side}.json").write_text(json.dumps({
+                        "manifest": manifest, "capped": False,
+                    }))
+                args = ["web_diff.py", str(root / "hs.json"),
+                        str(root / "rs.json"), str(root / "out.tsv")]
+                with mock.patch("sys.argv", args), mock.patch("builtins.print"):
+                    WEB_DIFF.main()
+                rows = (root / "out.tsv").read_text().splitlines()
+                self.assertEqual(len(rows), 3)
+                self.assertTrue(all(row.split("\t")[1] == expected for row in rows))
+
     def test_equal_bodies_skip_canonicalization_but_metadata_still_matters(self):
         with tempfile.TemporaryDirectory() as td:
             root = pathlib.Path(td)

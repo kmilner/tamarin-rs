@@ -264,6 +264,15 @@ impl SaturateGate {
     }
 }
 
+/// Failure to select a materialised source case. Keep the two bounds errors
+/// distinct: callers such as the web routes report the failed lookup.
+#[derive(Debug)]
+pub enum SourceCaseError {
+    SourceIndex,
+    CaseIndex,
+    Proof(crate::prove::ProveError),
+}
+
 impl ProofContext {
     pub(crate) fn proving_may_fail(&self) -> bool {
         self.source_provider
@@ -300,12 +309,13 @@ impl ProofContext {
         &self,
         source: usize,
         case: usize,
-    ) -> Result<Option<crate::constraint::system::System>, crate::prove::ProveError> {
-        self.ensure_saturated()?;
-        Ok(self
-            .full_sources
+    ) -> Result<crate::constraint::system::System, SourceCaseError> {
+        self.ensure_saturated().map_err(SourceCaseError::Proof)?;
+        self.full_sources
             .get(source)
-            .and_then(|source| source.case_system_at(case)))
+            .ok_or(SourceCaseError::SourceIndex)?
+            .case_system_at(case)
+            .ok_or(SourceCaseError::CaseIndex)
     }
 
     fn copy_with_sources(
