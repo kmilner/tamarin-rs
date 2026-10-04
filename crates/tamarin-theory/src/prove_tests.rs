@@ -10,7 +10,7 @@
 //! lists therefore needs no second check that asserts less here.
 
 use super::*;
-use crate::constraint::solver::search::NodeStatus;
+use crate::constraint::solver::search::{NodeStatus, ProofStatus};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::{pair_maude_sig, MaudeSig};
 use tamarin_test_support::require_maude_path;
@@ -155,6 +155,68 @@ fn prove_lemma_unknown_name_is_error() {
         5,
     );
     assert!(matches!(r, Err(ProveError::LemmaNotFound(_))));
+}
+
+#[test]
+fn public_proving_rejects_invalid_manual_variants() {
+    let Some(h) = maude() else { return };
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory InvalidVariant begin
+        rule Emit: [In(x)] --[A(x)]-> []
+        variants
+        rule (modulo AC) Emit: [In('a')] --[A('a')]-> []
+        lemma fixed: "All x #i. A(x) @ i ==> x = 'a'"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let theory = std::sync::Arc::new(elaborated(&parsed));
+    let counter = h.fresh_counter_peek();
+    let error = prove_lemma(theory.clone(), "fixed", h.clone(), 30).unwrap_err();
+    assert!(matches!(error, ProveError::UnsupportedInput(ref s) if s.contains("Variants")));
+    assert_eq!(h.fresh_counter_peek(), counter);
+    // A frontend's loop-breaker flag is not evidence that validation happened.
+    for loop_breakers_prepared in [false, true] {
+        let result = ProverSession::build(
+            theory.clone(),
+            h.clone(),
+            ProverSessionOptions {
+                loop_breakers_prepared,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(result, Err(ProveError::UnsupportedInput(_))));
+    }
+}
+
+#[test]
+fn public_proving_accepts_valid_manual_variants_and_ordinary_warnings() {
+    let Some(h) = maude() else { return };
+    // Reuse on an exists-trace lemma is an ordinary warning, not a reason to
+    // reject this complete family or turn the false all-traces lemma true.
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory ValidVariant begin
+        rule Emit: [In(x)] --[A(x)]-> []
+        variants
+        rule (modulo AC) Emit: [In(y)] --[A(y)]-> []
+        lemma fixed: "All x #i. A(x) @ i ==> x = 'a'"
+        lemma witness [reuse]: exists-trace "Ex x #i. A(x) @ i"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let theory = std::sync::Arc::new(elaborated(&parsed));
+    let report = crate::wellformedness::check_wellformedness(&theory, Some(&h)).unwrap();
+    assert!(!report.is_empty());
+    assert!(crate::wellformedness::variants::fatal_wf_errors(&report).is_empty());
+    let counter = h.fresh_counter_peek();
+    let session = ProverSession::build(theory, h.clone(), Default::default()).unwrap();
+    assert_eq!(h.fresh_counter_peek(), counter);
+    let proof = prove_lemma_in_session(&session, "fixed", 30).unwrap();
+    assert_eq!(
+        crate::constraint::solver::search::proof_status(&proof),
+        ProofStatus::TraceFound
+    );
 }
 
 #[test]

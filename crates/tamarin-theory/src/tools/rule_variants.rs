@@ -374,6 +374,26 @@ pub fn reprepare_theory_rules(
     Ok(())
 }
 
+/// Enforce the fatal rule checks at the public proving boundary as well as in
+/// the frontends. Ordinary wellformedness warnings do not prevent proving.
+/// Validation must not consume the session's fresh-variable counter.
+pub fn validate_theory_for_proving(
+    theory: &Theory,
+    maude: &MaudeHandle,
+) -> Result<(), VariantsError> {
+    let _plain = crate::pretty_hpj::HtmlDocGuard::disable();
+    let validation_maude = maude.with_fresh_counter_from(maude.fresh_counter_peek());
+    let mut report =
+        crate::wellformedness::variants::explicit_variants_report(theory, &validation_maude)?;
+    report.extend(crate::wellformedness::mult::mult_restricted_report(theory));
+    let fatal = crate::wellformedness::variants::fatal_wf_errors(&report);
+    if fatal.is_empty() {
+        Ok(())
+    } else {
+        Err(VariantsError::UnsupportedInput(fatal))
+    }
+}
+
 fn finish_theory_rules(theory: &mut Theory, maude: &MaudeHandle, annotate_breakers: bool) {
     retain_rules_with_variants(theory, maude);
     if annotate_breakers {

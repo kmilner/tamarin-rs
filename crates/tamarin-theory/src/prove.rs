@@ -1117,6 +1117,7 @@ impl ProverSession {
         maude: tamarin_term::maude_proc::MaudeHandle,
         options: ProverSessionOptions,
     ) -> Result<Self, ProveError> {
+        crate::tools::rule_variants::validate_theory_for_proving(&theory, &maude)?;
         let ProverSessionOptions {
             maude_pool,
             cli_heuristic,
