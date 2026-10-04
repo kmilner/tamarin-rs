@@ -499,12 +499,11 @@ pub fn apply_partial_evaluation(
     maude: &MaudeHandle,
     style: EvaluationStyle,
 ) -> Result<String, crate::tools::rule_variants::VariantsError> {
-    use crate::auto_sources::{closed_rule_as_open, unfold_one_rule_variants};
-    use crate::rule::{
-        is_trivial_proto_variant_ac, rule_products_outside_exponents, ProtoRuleName,
-    };
+    use crate::rule::{rule_products_outside_exponents, ProtoRuleName};
     use crate::theory::{closed_rules_ac, merge_open_proto_rules};
-    use crate::tools::rule_variants::prepare_open_rule_variant;
+    use crate::tools::rule_variants::{
+        closed_rule_as_open, prepare_open_rule_variant, unfold_closed_rule,
+    };
 
     let mut originals: Vec<_> = elaborated.rules().map(|r| r.rule_e().clone()).collect();
     if originals.is_empty() {
@@ -524,13 +523,7 @@ pub fn apply_partial_evaluation(
         prepare_open_rule_variant(&mut parent, maude)?;
         let family = owner(parent.rule_e());
         for ac in closed_rules_ac(&parent) {
-            let open = closed_rule_as_open(&parent, &ac);
-            let members = if is_trivial_proto_variant_ac(&ac, parent.rule_e()) {
-                vec![open]
-            } else {
-                unfold_one_rule_variants(&open)
-            };
-            for member in members {
+            for member in unfold_closed_rule(&parent, &ac) {
                 let mut rule = member.rule;
                 // Embedded restrictions already live as theory items. Their
                 // pre-variant variables must not influence refinement.

@@ -982,7 +982,7 @@ impl ProofContext {
                     } else {
                         crate::theory::closed_rules_ac(&rule)
                             .iter()
-                            .map(|ac| crate::auto_sources::closed_rule_as_open(&rule, ac))
+                            .map(|ac| crate::tools::rule_variants::closed_rule_as_open(&rule, ac))
                             .collect()
                     }
                 })

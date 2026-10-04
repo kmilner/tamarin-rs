@@ -27,7 +27,8 @@ use tamarin_utils::fresh::{FastFreshState, MonadFresh};
 
 use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::sapic::{
-    frees_sapic_term, Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm,
+    frees_sapic_term, process_contains, Process, ProcessCombinator, SapicAction, SapicLVar,
+    SapicTerm,
 };
 
 use crate::annotation::{AnVar, ProcessAnnotation};
@@ -256,17 +257,6 @@ enum CellPhase {
     Locked,
 }
 
-fn process_contains(p: &AnnotatedProc, predicate: &impl Fn(&AnnotatedProc) -> bool) -> bool {
-    predicate(p)
-        || match p {
-            Process::Null(_) => false,
-            Process::Action(_, _, rest) => process_contains(rest, predicate),
-            Process::Comb(_, _, l, r) => {
-                process_contains(l, predicate) || process_contains(r, predicate)
-            }
-        }
-}
-
 fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm) -> bool {
     fn without_init(phase: CellPhase) -> CellPhase {
         if phase == CellPhase::InitializerAllowed {
@@ -311,7 +301,7 @@ fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm) -> bool {
             Process::Comb(ProcessCombinator::Parallel, _, l, r) => {
                 let uses_target = |node: &AnnotatedProc| state_identifier(node) == Some(target);
                 if phase == InitializerAllowed
-                    && !(process_contains(l, &uses_target) && process_contains(r, &uses_target))
+                    && !(process_contains(l, uses_target) && process_contains(r, uses_target))
                 {
                     check(l, target, phase) && check(r, target, phase)
                 } else {
@@ -346,7 +336,7 @@ fn isolated_cell(p: &AnnotatedProc, target: &SapicTerm) -> bool {
     let Term::Lit(Lit::Var(v)) = target else {
         return false;
     };
-    !process_contains(p, &|node| {
+    !process_contains(p, |node| {
         state_identifier(node).is_some_and(|other| {
             other != target && frees_sapic_term(other).iter().any(|sv| sv.var == v.var)
         })

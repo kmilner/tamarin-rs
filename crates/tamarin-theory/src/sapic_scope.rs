@@ -13,18 +13,15 @@ fn collect_proc_vars<A>(
     p: &Process<A, SapicLVar>,
     out: &mut std::collections::BTreeSet<SapicLVar>,
 ) {
-    match p {
+    for_each_process(p, &mut |node| match node {
         Process::Null(_) => {}
-        Process::Action(a, _, body) => {
+        Process::Action(a, _, _) => {
             collect_action_vars(a, out);
-            collect_proc_vars(body, out);
         }
-        Process::Comb(c, _, l, r) => {
+        Process::Comb(c, _, _, _) => {
             collect_comb_vars(c, out);
-            collect_proc_vars(l, out);
-            collect_proc_vars(r, out);
         }
-    }
+    });
 }
 
 fn collect_term_vars(t: &SapicTerm, out: &mut std::collections::BTreeSet<SapicLVar>) {

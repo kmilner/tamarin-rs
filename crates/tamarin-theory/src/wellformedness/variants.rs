@@ -92,20 +92,11 @@ fn computed_variants(
     let mut computed = parent.clone();
     computed.rule_ac.clear();
     prepare_open_rule_variant(&mut computed, maude)?;
-    let mut rules = Vec::new();
-    for ac in closed_rules_ac(&computed) {
-        let open = crate::auto_sources::closed_rule_as_open(&computed, &ac);
-        if crate::rule::is_trivial_proto_variant_ac(&ac, computed.rule_e()) {
-            rules.push(open.rule);
-        } else {
-            rules.extend(
-                crate::auto_sources::unfold_one_rule_variants(&open)
-                    .into_iter()
-                    .map(|o| o.rule),
-            );
-        }
-    }
-    Ok(rules)
+    Ok(closed_rules_ac(&computed)
+        .iter()
+        .flat_map(|ac| crate::tools::rule_variants::unfold_closed_rule(&computed, ac))
+        .map(|o| o.rule)
+        .collect())
 }
 
 fn skeleton(facts: &[LNFact]) -> Vec<LNFact> {

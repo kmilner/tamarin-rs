@@ -37,6 +37,131 @@ use crate::theory::{OpenProtoRule, Theory, TheoryItem};
 
 type LNSubst = Subst<Name, LVar>;
 
+/// Convert and unfold one compiled AC member, preserving its parent and name.
+pub(crate) fn unfold_closed_rule(parent: &OpenProtoRule, ac: &ProtoRuleAC) -> Vec<OpenProtoRule> {
+    let open = closed_rule_as_open(parent, ac);
+    if crate::rule::is_trivial_proto_variant_ac(ac, parent.rule_e()) {
+        vec![open]
+    } else {
+        unfold_one_rule_variants(&open)
+    }
+}
+
+/// HS `unfoldRuleVariants` on ONE closed rule (lib/theory/src/Rule.hs:63-79),
+/// non-trivial case: for each substitution i (1-based) of the rule's variant
+/// disjunction, `freshToFreeAvoiding` it against the AC rule, apply it to
+/// (premises, conclusions, actions, new vars), and emit a rule named
+/// `<name>___VARIANT_<i>` (a FreshRule keeps its name) whose own variants
+/// are `Disj [emptySubstVFresh]`, carrying over the original's attributes
+/// and (pre-computed) loop breakers verbatim.
+///
+/// RS mapping: the AC rule is `abstracted_rule` when present (else the E
+/// body IS the AC body), and the disjunction is `variant_substs` — with an
+/// unpopulated empty list standing for HS's ever-present trivial
+/// `Disj [emptySubstVFresh]` (`trueDisj`, RuleVariants.hs:61-133, see line
+/// 119), so a body-divergent rule with no residual substs still unfolds
+/// into exactly one `___VARIANT_1` rule (the reproducing case: partial
+/// evaluation leaves `rule ≠ abstracted_rule` with a collapsed
+/// disjunction).
+fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
+    use tamarin_term::lterm::{HasFrees, LVar};
+    use tamarin_term::subst_vfresh::LNSubstVFresh;
+    let ac: &crate::rule::ProtoRuleE = o.abstracted_rule.as_ref().unwrap_or(&o.rule);
+    let trivial_disj = [LNSubstVFresh::empty()];
+    let substs: &[LNSubstVFresh] = if o.variant_substs.is_empty() {
+        &trivial_disj
+    } else {
+        &o.variant_substs
+    };
+    if substs == trivial_disj && ac.info.name != o.rule_e().info.name {
+        return vec![o.clone()];
+    }
+    // `freshToFreeAvoiding subst ruAC` allocates above `avoid ruAC`; HS's
+    // `HasFrees (Rule ProtoRuleACInfo)` folds the rule INFO first, whose
+    // variant-disjunction DOMAIN keys are frees (keys-only,
+    // Theory/Model/Rule.hs:291-306, 503-515; SubstVFresh.hs:196-202), so
+    // they participate in the bound alongside the body.
+    let mut max_idx: Option<u64> = None;
+    {
+        let mut see = |v: &LVar| {
+            max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
+        };
+        for s in substs {
+            for (k, _) in s.iter() {
+                see(k);
+            }
+        }
+        ac.for_each_free(&mut see);
+    }
+    let seed = max_idx.map(|m| m + 1).unwrap_or(0);
+    substs
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            // Each subst gets its own `evalFreshAvoiding` scope (HS maps
+            // `freshToFreeAvoiding` per subst against the same `ruAC`).
+            let mut counter = seed;
+            let sigma = s.fresh_to_free_avoiding(|n| {
+                let b = counter;
+                counter += n;
+                b
+            });
+            let mut ru = crate::rule::apply_subst_rule(&sigma, ac);
+            // `rName i` (lib/theory/src/Rule.hs:71-73): FreshRule keeps its
+            // name; StandRule gains the 1-based `___VARIANT_<i>` suffix.
+            ru.info.name = match ru.info.name {
+                crate::rule::ProtoRuleName::Fresh => crate::rule::ProtoRuleName::Fresh,
+                crate::rule::ProtoRuleName::Stand(name) => crate::rule::ProtoRuleName::Stand(
+                    tamarin_term::intern::intern_str(&format!("{}___VARIANT_{}", name, i + 1)),
+                ),
+            };
+            OpenProtoRule {
+                rule: ru,
+                variant_substs: vec![LNSubstVFresh::empty()],
+                abstracted_rule: None,
+                loop_breakers: o.loop_breakers.clone(),
+                // `toClosedProtoRule` keeps the ORIGINAL rule as every
+                // variant's `cprRuleE` (lib/theory/src/Rule.hs:75-76) — the
+                // half `getProtoRuleEs` dedups back to one copy.
+                rule_e: Some(Box::new(o.rule_e().clone())),
+                // `unfoldRuleVariants` runs on a rule whose variants Maude
+                // computed, which `closeProtoRule` reaches only for a rule
+                // that declared none (lib/theory/src/Rule.hs:82-86).
+                rule_ac: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// Re-express one closed AC half as the split open representation consumed by
+/// [`unfold_one_rule_variants`]. This also covers source-declared
+/// `variants (modulo AC)` blocks, whose bodies do not live in
+/// `abstracted_rule`/`variant_substs` on their parent.
+pub(crate) fn closed_rule_as_open(
+    parent: &OpenProtoRule,
+    ac: &crate::rule::ProtoRuleAC,
+) -> OpenProtoRule {
+    let rule = crate::rule::Rule {
+        info: crate::rule::ProtoRuleEInfo {
+            name: ac.info.name,
+            attributes: ac.info.attributes.clone(),
+            restrictions: parent.rule.info.restrictions.clone(),
+        },
+        premises: ac.premises.clone(),
+        conclusions: ac.conclusions.clone(),
+        actions: ac.actions.clone(),
+        new_vars: ac.new_vars.clone(),
+    };
+    OpenProtoRule {
+        rule,
+        variant_substs: ac.info.variants.clone(),
+        abstracted_rule: None,
+        loop_breakers: ac.info.loop_breakers.clone(),
+        rule_e: Some(Box::new(parent.rule_e().clone())),
+        rule_ac: Vec::new(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum VariantsError {
     Maude(String),
