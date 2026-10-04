@@ -110,7 +110,8 @@ fn type_one(env: &mut TypingEnvironment, proc: &PlainProcess) -> Result<PlainPro
 /// `typeAndRenameProcessDef` (Typing.hs):
 ///
 /// ```haskell
-/// let pvars = fromMaybe (S.toList (varsProc pr) List.\\ accBindings pr) p._pVars
+/// let bound = S.fromList $ map toLVar $ accBindings pr
+/// let pvars = fromMaybe (filter ((`S.notMember` bound) . toLVar) $ S.toList (varsProc pr)) p._pVars
 /// let aux_pr = ProcessAction (ChIn Nothing (fAppList (map varTerm pvars)) S.empty) mempty pr
 /// renamedP <- typeAndRenameProcess aux_pr
 /// case renamedP of
@@ -135,13 +136,14 @@ fn type_process_def(
     let pvars: Vec<SapicLVar> = match &declared {
         Some(vs) => vs.clone(),
         None => {
-            // `S.toList (varsProc pr) List.\\ accBindings pr` — the left list
-            // is a dup-free set list, so `\\` (remove ONE occurrence per
-            // right-hand element) equals membership filtering.
-            let acc = crate::bindings::acc_bindings(&pr);
+            // Type annotations constrain types, not binding identities.
+            let bound: BTreeSet<_> = crate::bindings::acc_bindings(&pr)
+                .into_iter()
+                .map(|v| v.var)
+                .collect();
             vars_proc(&pr)
                 .into_iter()
-                .filter(|v| !acc.contains(v))
+                .filter(|v| !bound.contains(&v.var))
                 .collect()
         }
     };

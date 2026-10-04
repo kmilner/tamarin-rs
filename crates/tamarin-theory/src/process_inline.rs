@@ -173,7 +173,7 @@ fn inline_call(
     let subst = SapicSubst::from_list(params.into_iter().zip(sapic_args.iter().cloned()));
 
     // Closed definitions have their own scope; open definitions retain theirs.
-    let substituted = expand_process_call(def.vars.is_some(), reserved, &subst, body)?;
+    let substituted = expand_process_call(def.vars.as_deref(), reserved, &subst, body)?;
 
     // `processAddAnnotation substP (mempty {processnames = [name]})`: tag the
     // body's root node with the call name (drives `role=` / colour).
@@ -192,7 +192,7 @@ fn inline_call(
 
 /// Capture-avoiding process-call expansion with a scoped alpha-renaming environment.
 fn expand_process_call(
-    closed: bool,
+    parameters: Option<&[SapicLVar]>,
     reserved: &[LVar],
     original: &SapicSubst,
     p: PlainProcess,
@@ -220,7 +220,16 @@ fn expand_process_call(
         .max()
         .unwrap_or(0);
     let mut expansion = Expansion {
-        closed,
+        closed: parameters.is_some(),
+        // Identity substitutions are omitted, so keep the explicit formals
+        // too: nested P(pat_x) must not freshen P's own pattern parameter away.
+        pattern_parameters: parameters
+            .into_iter()
+            .flatten()
+            .map(|v| v.var)
+            .chain(images.keys().copied())
+            .filter(|v| v.name.starts_with("pat_"))
+            .collect(),
         caller: reserved.iter().copied().collect(),
         incoming,
         subst,
@@ -231,6 +240,7 @@ fn expand_process_call(
 
 struct Expansion {
     closed: bool,
+    pattern_parameters: BTreeSet<LVar>,
     caller: BTreeSet<LVar>,
     incoming: BTreeSet<LVar>,
     subst: SapicSubst,
@@ -249,9 +259,12 @@ impl Expansion {
             .into_iter()
             .map(|v| v.var)
             .filter(|v| {
-                self.incoming.contains(v)
-                    || (self.closed && self.caller.contains(v))
-                    || (generated.contains(v) && used.contains(v))
+                // Pattern formals stand for the caller's supplied syntax,
+                // not a local binding to rename before substitution.
+                !self.pattern_parameters.contains(v)
+                    && (self.incoming.contains(v)
+                        || (self.closed && self.caller.contains(v))
+                        || (generated.contains(v) && used.contains(v)))
             })
             .map(|v| (v, LVar::new(v.name, v.sort, self.fresh.fresh_ident(v.name))))
             .collect()
@@ -485,6 +498,33 @@ mod tests {
     use std::collections::BTreeSet;
     use tamarin_term::lterm::LSort;
     use tamarin_term::maude_sig::pair_maude_sig;
+
+    #[test]
+    fn pattern_formals_survive_caller_collisions_and_nested_identity_calls() {
+        let inputs = |binder| {
+            let source = format!(
+                "theory PatternFormal begin
+                 let P(pat_x) = in(pat_x); event Seen(pat_x)
+                 let Nested(pat_x) = P(pat_x)
+                 process: new {binder}; (P(<'a','b'>) | Nested('c'))
+                 end"
+            );
+            let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+            let theory = crate::elaborate::elaborate(&parsed).unwrap();
+            let mut inputs = Vec::new();
+            crate::sapic::for_each_process(theory.processes().next().unwrap(), &mut |p| {
+                if let Process::Action(SapicAction::ChIn { msg, .. }, _, _) = p {
+                    inputs.push(msg.clone());
+                }
+            });
+            assert_eq!(inputs.len(), 2);
+            assert!(inputs
+                .iter()
+                .all(|t| crate::sapic::frees_sapic_term(t).is_empty()));
+            inputs
+        };
+        assert_eq!(inputs("pat_x"), inputs("unused"));
+    }
 
     fn pub_lit(s: &str) -> p::Term {
         p::Term::PubLit(s.to_string())
