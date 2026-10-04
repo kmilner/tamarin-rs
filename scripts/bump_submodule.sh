@@ -127,7 +127,7 @@ The rebuilt oracle has a new fingerprint, so old cache entries stay isolated
 for old checkouts while current gates refill their own generation. Re-certify:
   1. scripts/divergence_fixtures/capture.sh && git diff -- scripts/divergence_fixtures/expected
   2. scripts/capture_cli_refs.sh && cargo test -p tamarin-prover --test cli_e2e
-  3. scripts/test.sh proof
+  3. ALLOWLIST=scripts/parity_corpus_fast.txt scripts/test.sh proof
      scripts/rs_ref_check.sh generate --certified-by <printed-output-directory>/run.log
   4. scripts/wf_gate.sh && scripts/pretty_gate.sh; run all three flag sweeps
   5. cargo test -p tamarin-server (HTTP captures refreshed automatically above;

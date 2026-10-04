@@ -18,10 +18,12 @@
 ../../tamarin-prover-testing/examples/regression/trace/sapic-empty-parameter-scope.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-inferred-location-types.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-inferred-lock-types.spthy
+../../tamarin-prover-testing/examples/regression/trace/sapic-inline-export-locations.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-lookup-destructor-progress.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-nested-call-caller-scope.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-nested-call-parameter-scope.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-nested-parameter-capture.spthy
+../../tamarin-prover-testing/examples/regression/trace/sapic-open-process-export.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-process-call-caller-scope.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-process-call-location-scope.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-variant-action-control.spthy
@@ -32,6 +34,8 @@
 ../../tamarin-prover-testing/examples/regression/trace/soundness-partial-evaluation-variants.spthy
 ../../tamarin-prover-testing/examples/regression/trace/soundness-safety-false.spthy
 ../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-binder-scope.spthy
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-pattern-export.spthy
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-pattern-parameter.spthy
 ../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-channel-alias.spthy
 ../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-channel-embedded.spthy
 ../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-channel-pattern.spthy

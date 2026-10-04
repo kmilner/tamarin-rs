@@ -12,7 +12,7 @@ After installing the prerequisites below:
 ```bash
 ./setup.sh testing
 cargo build --release -p tamarin-prover
-scripts/test.sh proof   # 500-theory proof corpus
+scripts/test.sh proof   # 504-theory proof corpus
 scripts/test.sh web     # 77-theory web corpus
 # Or: scripts/test.sh all
 ```
@@ -226,7 +226,7 @@ fast gates do need the oracle binary present to address it.**
 
 | Command | Checks |
 |---|---|
-| `scripts/corpus_file_diff.sh` | the ground-truth batch gate: 500-file `--prove` byte parity (cold runtime depends on proof budgets) |
+| `scripts/corpus_file_diff.sh` | the ground-truth batch gate: 504-file `--prove` byte parity (cold runtime depends on proof budgets) |
 | `scripts/pe_sweep.sh` / `module_sweep.sh` / `json_sweep.sh` | the same sweeps over their full corpora |
 | `ALLOWLIST=<filelist> scripts/web_parity.sh` | interactive-mode gate: crawl + HTML byte comparison |
 | `scripts/bench.sh` | performance tables (see README) |
@@ -447,11 +447,11 @@ comparison is stronger than canonical proof-tree comparison.
 
 ```bash
 cargo build --release
-RESULTS_TSV=/tmp/gate.tsv scripts/corpus_file_diff.sh    # ALLOWLIST defaults to the 500-file corpus
+RESULTS_TSV=/tmp/gate.tsv scripts/corpus_file_diff.sh    # ALLOWLIST defaults to the 504-file corpus
 ```
 
 Ends in `DONE_CORPUS_FILE_DIFF verdict=OK files=<n>` and exits 0, or names
-what is wrong (`DIFF=n`, `RC_DIFF=n`, `SKIPPED=n`, `ROW-COUNT=n/500`) and
+what is wrong (`DIFF=n`, `RC_DIFF=n`, `SKIPPED=n`, `ROW-COUNT=n/504`) and
 exits nonzero. There is nothing to tally by hand: the script prints its own
 `=== SUMMARY ===` histogram, and the verdict additionally covers the failure
 modes a histogram cannot show you — files whose bytes were never compared,
@@ -460,7 +460,7 @@ different exit status (`RC_DIFF`; the oracle's rc is cached as `<key>.rc`
 beside its stdout). The summary's `RC_UNKNOWN=n` counts entries filled before
 that channel existed and is deliberately not a failure.
 
-Whole-file `--prove` diff over the canonical 500-file corpus
+Whole-file `--prove` diff over the canonical 504-file corpus
 (`scripts/parity_corpus.txt` — submodule examples, a repo-local Nat+reuse
 fixture and patched-checkout regressions). Two strictly sequential phases: Haskell
 output is computed once per file-content hash and cached under
@@ -675,7 +675,7 @@ scripts/rs_ref_check.sh check       # exactly what CI's rs-parity job runs
 ```
 
 Compares one binary's stripped `--prove` output hashes against
-`scripts/ci_ref_fast.tsv` over the 426-file fast corpus, in both directions:
+`scripts/ci_ref_fast.tsv` over the 430-file fast corpus, in both directions:
 a run row with no reference row is a mismatch, and a reference row that never
 ran is `NOTRUN`, so a trimmed `ALLOWLIST` fails instead of silently shrinking
 coverage. The reference is a committed oracle-certified snapshot, not a live
@@ -750,8 +750,8 @@ sweep that compared nothing.
 ## Upstream regression coverage
 
 The proof corpus is a committed allowlist, not a scan of upstream's examples.
-Its 500 theories include upstream examples, a repository-local fixture and
-61 fixtures from the patched `tamarin-prover-testing` checkout created by
+Its 504 theories include upstream examples, a repository-local fixture and
+65 fixtures from the patched `tamarin-prover-testing` checkout created by
 `./setup.sh testing`.
 Their paths are relative to the ordinary `tamarin-prover/examples` root;
 `../../tamarin-prover-testing/examples/...` deliberately selects patched
@@ -771,7 +771,11 @@ Equivalence-mode, negative-input, export-only and load-only fixtures need
 their corresponding rejection, export, load or equivalence checks. Additional
 `-D` configurations, output-module checks, round trips and sidecar assertions
 also remain separate coverage; proving a file once does not exercise them all.
-The 426-theory fast CI corpus includes all 61 patched proof fixtures plus the
+The `sapic_export` CLI suite separately checks typed-export round trips,
+including proof verdicts, pattern arguments, open definitions, call-site
+locations, declaration constraints and unused-argument validation. Run it with
+`cargo test --profile ci -p tamarin-prover --test sapic_export`.
+The 430-theory fast CI corpus includes all 65 patched proof fixtures plus the
 upstream negated-equivalence regression. Its certified hashes are maintained
 separately; CI materializes the patched sources with `./setup.sh testing-sources`
 without compiling Haskell. Negative-input and non-proof scenarios remain in

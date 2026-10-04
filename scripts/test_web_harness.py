@@ -90,13 +90,16 @@ class ProofCorpusSelection(unittest.TestCase):
     def test_fast_corpus_includes_patched_proof_regressions(self):
         corpus = set((HERE / "parity_corpus.txt").read_text().splitlines())
         fast = (HERE / "parity_corpus_fast.txt").read_text().splitlines()
-        self.assertEqual(len(fast), 426)
         self.assertEqual(len(fast), len(set(fast)))
         self.assertLessEqual(set(fast), corpus)
         patched = {rel for rel in corpus
                    if rel.startswith("../../tamarin-prover-testing/")}
-        self.assertEqual(len(patched), 61)
         self.assertLessEqual(patched, set(fast))
+        # Pin the new proof regressions by identity, not incidental corpus size.
+        for name in ("sapic-inline-export-locations", "sapic-open-process-export",
+                     "soundness-sapic-pattern-export", "soundness-sapic-pattern-parameter"):
+            self.assertIn("../../tamarin-prover-testing/examples/regression/trace/"
+                          + name + ".spthy", patched)
         self.assertIn("regression/trace/negated-equivalence.spthy", fast)
         # Now rejected before proof search; cli_e2e pins that failure instead.
         self.assertNotIn("sp14/GDH.spthy", fast)
@@ -105,7 +108,6 @@ class ProofCorpusSelection(unittest.TestCase):
     def test_corpus_is_unique_and_sources_are_tracked_or_in_the_patch_series(self):
         root = HERE.parent
         corpus = (HERE / "parity_corpus.txt").read_text().splitlines()
-        self.assertEqual(len(corpus), 500)
         self.assertEqual(len(corpus), len(set(corpus)))
         patched_sources = set()
         for name in (root / "patches/series").read_text().splitlines():
