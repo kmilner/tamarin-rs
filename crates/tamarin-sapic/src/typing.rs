@@ -155,6 +155,20 @@ fn sqcap(t1: &SapicType, t2: &SapicType) -> Result<SapicType, String> {
     }
 }
 
+/// `sqHandler` adds the offending term to type conflicts during `typeWith`.
+fn sqcap_for_term(
+    t: &SapicTerm,
+    actual: &SapicType,
+    expected: &SapicType,
+) -> Result<SapicType, String> {
+    sqcap(actual, expected).map_err(|_| {
+        format!(
+            "Typing error: expected term {} to have type {expected:?}, but found {actual:?}",
+            tamarin_term::pretty::pretty_nterm(t).render(),
+        )
+    })
+}
+
 /// `defaultFunctionType n = (replicate n Nothing, Nothing)` (Typing.hs).
 fn default_function_type(n: usize) -> (Vec<SapicType>, SapicType) {
     (vec![None; n], None)
@@ -197,11 +211,11 @@ fn type_with(
                 None
             } else {
                 match env.vars.get(lvar) {
-                    None => return Err(format!("variable {lvar} is not bound")),
+                    None => return Err(format!("The variable(s) {lvar} are not bound.")),
                     Some(ty) => ty.clone(),
                 }
             };
-            let merged = sqcap(&stype, tt)?;
+            let merged = sqcap_for_term(t, &stype, tt)?;
             env.vars.insert(*lvar, merged.clone());
             Ok((var_term(SapicLVar::new(*lvar, merged.clone())), merged))
         }
@@ -226,7 +240,7 @@ fn type_with(
                     let key = UserDefinedSym::NoEqUser(*fs);
                     // First pass: refine output type from target.
                     let (intypes1, outtype1) = get_fun(env, n, &key);
-                    let mintype1 = sqcap(&outtype1, tt)?;
+                    let mintype1 = sqcap_for_term(t, &outtype1, tt)?;
                     insert_fun(env, &key, (intypes1.clone(), mintype1))?;
                     // Type args (discard results, just to learn input types).
                     let ts: Vec<SapicTerm> = args.to_vec();
@@ -237,7 +251,7 @@ fn type_with(
                     }
                     // Recompute output type, having learnt arg types.
                     let (intypes2, outtype2) = get_fun(env, n, &key);
-                    let mintype2 = sqcap(&outtype2, tt)?;
+                    let mintype2 = sqcap_for_term(t, &outtype2, tt)?;
                     insert_fun(env, &key, (ptypes, mintype2))?;
                     // Type args for real.
                     let mut ts_new: Vec<SapicTerm> = Vec::with_capacity(ts.len());

@@ -1476,7 +1476,7 @@ impl TheoryPipeline<'_> {
             let user_set_heuristic = !self.elaborated.heuristic.is_empty();
             // Which translation steps run depends on the output module
             // (`processOpenTheory`, TheoryLoader.hs): `spthy` is
-            // `pure`, `spthytyped` is `Sapic.typeTheory` alone, and `msr` /
+            // `pure`, `spthytyped` is `Sapic.typeTheoryForExport`, and `msr` /
             // normal mode run the full `typeTheory >=> translate >=>
             // Acc.translate` pipeline.
             let skip_translation = matches!(
@@ -1494,12 +1494,9 @@ impl TheoryPipeline<'_> {
                     Vec::new()
                 };
                 if translate_module == Some(TranslateModule::SpthyTyped) {
-                    // `Sapic.typeTheory` (`typeTheoryEnv`, Typing.hs):
-                    // the typed and renamed processes replace the parse-time
-                    // ones in place, and the recomputed `function:` items
-                    // replace the source-positioned ones at the end of the
-                    // item list.
-                    if let Err(e) = tamarin_sapic::type_theory::type_theory_env(
+                    // Type and validate first, then export instantiated bodies
+                    // of open definitions and pattern-parameter calls.
+                    if let Err(e) = tamarin_sapic::type_theory::type_theory_for_export(
                         std::sync::Arc::make_mut(&mut self.elaborated),
                     ) {
                         // HS: `ProcessNotWellformed` / typing exceptions
