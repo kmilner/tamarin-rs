@@ -2545,9 +2545,7 @@ fn rewire_source_premise(
         goals
             .entry(goal)
             .and_modify(|old| {
-                old.solved |= status.solved;
-                old.looping |= status.looping;
-                old.nr = old.nr.min(status.nr);
+                old.merge_from(status);
             })
             .or_insert_with(|| status.clone());
     }

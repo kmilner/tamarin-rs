@@ -1102,22 +1102,10 @@ impl<'ctx> Reduction<'ctx> {
                 let new_goals =
                     std::sync::Arc::make_mut(&mut self.sys.content_mut_untracked().goals);
                 if let Some(i) = new_goals.iter().position(|(k, _)| *k == g2) {
-                    let st_old = &mut new_goals[i].1;
-                    let merged_solved = st_old.solved || st.solved;
-                    let merged_looping = st_old.looping || st.looping;
-                    let merged_nr = std::cmp::min(st_old.nr, st.nr);
                     // A status merge that changes a kept
                     // goal's status is a real System mutation with no term
                     // signal.  Flag it so the "zero change" verdict is exact.
-                    if merged_solved != st_old.solved
-                        || merged_looping != st_old.looping
-                        || merged_nr != st_old.nr
-                    {
-                        goals_value_changed = true;
-                    }
-                    st_old.solved = merged_solved;
-                    st_old.looping = merged_looping;
-                    st_old.nr = merged_nr;
+                    goals_value_changed |= new_goals[i].1.merge_from(&st);
                 } else {
                     new_goals.push((g2, st));
                 }

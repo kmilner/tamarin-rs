@@ -1130,3 +1130,59 @@ fn goal_status_ord_follows_the_hs_field_order() {
         std::cmp::Ordering::Less
     );
 }
+
+#[test]
+fn goal_status_merge_preserves_flags_and_oldest_age() {
+    let mut status = GoalStatus {
+        solved: true,
+        looping: false,
+        nr: 7,
+    };
+    let incoming = GoalStatus {
+        solved: false,
+        looping: true,
+        nr: 3,
+    };
+    assert!(status.merge_from(&incoming));
+    assert_eq!(
+        status,
+        GoalStatus {
+            solved: true,
+            looping: true,
+            nr: 3,
+        }
+    );
+    assert!(!status.merge_from(&incoming));
+}
+
+#[test]
+fn goal_status_merge_is_associative_commutative_and_idempotent() {
+    let mut statuses = Vec::new();
+    for solved in [false, true] {
+        for looping in [false, true] {
+            for nr in [0, 3, u64::MAX] {
+                statuses.push(GoalStatus { solved, looping, nr });
+            }
+        }
+    }
+    for a in &statuses {
+        assert!(!a.clone().merge_from(a));
+        for b in &statuses {
+            let mut ab = a.clone();
+            let changed = ab.merge_from(b);
+            assert_eq!(changed, ab != *a);
+            let mut ba = b.clone();
+            ba.merge_from(a);
+            assert_eq!(ab, ba);
+            for c in &statuses {
+                let mut left = ab.clone();
+                left.merge_from(c);
+                let mut bc = b.clone();
+                bc.merge_from(c);
+                let mut right = a.clone();
+                right.merge_from(&bc);
+                assert_eq!(left, right);
+            }
+        }
+    }
+}
