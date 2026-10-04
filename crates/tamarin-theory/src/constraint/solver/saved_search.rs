@@ -213,6 +213,49 @@ mod tests {
     }
 
     #[test]
+    fn bfs_replay_preserves_nested_stale_saved_branches() {
+        let Some(path) = tamarin_test_support::require_maude_path() else {
+            return;
+        };
+        let parsed = tamarin_parser::parse_theory(
+            r#"theory StaleBfs begin
+            rule Emit1: [Fr(~x)] --[A(~x)]-> []
+            rule Emit2: [Fr(~x)] --[A(~x)]-> []
+            lemma witness [stop-on-trace=BFS]: exists-trace
+              "Ex x #i. A(x) @ i"
+            simplify
+            case stale
+              simplify
+              simplify
+              by sorry
+            qed
+            end"#,
+            &[],
+        )
+        .unwrap();
+        let theory = crate::elaborate::elaborate(&parsed).unwrap();
+        let maude =
+            tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone()).unwrap();
+        let proof =
+            crate::prove::prove_lemma(std::sync::Arc::new(theory), "witness", maude, 30).unwrap();
+        assert_eq!(proof_status(&proof), ProofStatus::TraceFound);
+        let mut stale = &proof.children["stale"];
+        for _ in 0..2 {
+            assert!(!stale.annotated);
+            assert!(matches!(stale.method, ProofMethod::Simplify));
+            assert_eq!(stale.children.len(), 1);
+            stale = stale.children.values().next().unwrap();
+        }
+        assert!(!stale.annotated);
+        assert!(matches!(stale.method, ProofMethod::Sorry(None)));
+        assert!(stale.children.is_empty());
+        fn steps(node: &ProofNode) -> usize {
+            1 + node.children.values().map(steps).sum::<usize>()
+        }
+        assert_eq!(steps(&proof), 7);
+    }
+
+    #[test]
     fn whole_proof_depth_selects_the_reached_path_not_an_earlier_deeper_trace() {
         let Some(ctx) = context() else {
             return;

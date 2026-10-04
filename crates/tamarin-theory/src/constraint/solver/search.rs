@@ -737,7 +737,9 @@ fn bfs_check_level(
         }
         return build.then(|| node.clone());
     }
-    if node.children.is_empty() {
+    // Positive-depth traversal must not descend into a stale saved subtree:
+    // HS checkLevel preserves proofs whose psInfo is Nothing unchanged.
+    if !node.annotated || node.children.is_empty() {
         return build.then(|| node.clone());
     }
     let mut new_children: BTreeMap<String, ProofNode> = BTreeMap::new();
