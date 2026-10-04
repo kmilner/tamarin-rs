@@ -11,7 +11,7 @@ usage() {
     cat <<'EOF'
 Usage: scripts/test.sh {proof|web|all|harness}
 
-  proof    Run the 504-theory proof corpus (fills/reuses the Haskell cache).
+  proof    Run the 505-theory proof corpus (fills/reuses the Haskell cache).
   web      Run the 77-theory web corpus (fills/reuses the Haskell cache).
   all      Run both, sequentially; report failure if either fails.
   harness  Run the cache/comparison harness regression tests.

@@ -20,6 +20,7 @@
 ../../tamarin-prover-testing/examples/regression/trace/sapic-inferred-lock-types.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-inline-export-locations.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-lookup-destructor-progress.spthy
+../../tamarin-prover-testing/examples/regression/trace/sapic-msr-call-binding-reuse.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-nested-call-caller-scope.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-nested-call-parameter-scope.spthy
 ../../tamarin-prover-testing/examples/regression/trace/sapic-nested-parameter-capture.spthy

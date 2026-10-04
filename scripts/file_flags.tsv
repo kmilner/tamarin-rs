@@ -135,8 +135,8 @@ thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSM
 ../../tamarin-prover-testing/examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy	--auto-sources --quit-on-warning
 ../../tamarin-prover-testing/examples/regression/trace/manual-variant-renamed-dh.spthy	--quit-on-warning
 ../../tamarin-prover-testing/examples/regression/trace/manual-variant-renamed-macros.spthy	--quit-on-warning
-../../tamarin-prover-testing/examples/regression/trace/partial-evaluation-collision.spthy	--quit-on-warning
-../../tamarin-prover-testing/examples/regression/trace/partial-evaluation-export.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/partial-evaluation-collision.spthy	--partial-evaluation=summary --quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/partial-evaluation-export.spthy	--partial-evaluation=summary --quit-on-warning
 ../../tamarin-prover-testing/examples/regression/trace/sapic-else-binding-scope.spthy	--quit-on-warning
 ../../tamarin-prover-testing/examples/regression/trace/sapic-embedded-msr-binding.spthy	--quit-on-warning
 ../../tamarin-prover-testing/examples/regression/trace/sapic-empty-parameter-scope.spthy	--quit-on-warning

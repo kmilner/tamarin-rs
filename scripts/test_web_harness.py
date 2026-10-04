@@ -96,7 +96,7 @@ class ProofCorpusSelection(unittest.TestCase):
                    if rel.startswith("../../tamarin-prover-testing/")}
         self.assertLessEqual(patched, set(fast))
         # Pin the new proof regressions by identity, not incidental corpus size.
-        for name in ("sapic-inline-export-locations", "sapic-open-process-export",
+        for name in ("sapic-inline-export-locations", "sapic-open-process-export", "sapic-msr-call-binding-reuse",
                      "soundness-sapic-pattern-export", "soundness-sapic-pattern-parameter"):
             self.assertIn("../../tamarin-prover-testing/examples/regression/trace/"
                           + name + ".spthy", patched)
@@ -138,6 +138,8 @@ class ProofCorpusSelection(unittest.TestCase):
             ("saved-proof-stop-on-sorry", "--stop-on-trace=sorry --bound=0"),
             ("manual-variant-auto-sources-roundtrip", "--auto-sources --quit-on-warning"),
             ("soundness-partial-evaluation-variants", "--partial-evaluation=summary"),
+            ("partial-evaluation-collision", "--partial-evaluation=summary --quit-on-warning"),
+            ("partial-evaluation-export", "--partial-evaluation=summary --quit-on-warning"),
         ):
             rel = prefix + name + ".spthy"
             self.assertIn(rel, corpus)

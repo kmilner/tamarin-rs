@@ -22,7 +22,7 @@ caches. Do not rebuild them or edit producer inputs during an active run.
 ## Run
 
 ```bash
-scripts/test.sh proof     # 504 theories: full --prove stdout and exit status
+scripts/test.sh proof     # 505 theories: full --prove stdout and exit status
 scripts/test.sh web       # 77 theories: crawled web responses
 scripts/test.sh all       # both, sequentially, even if the first fails
 ```
@@ -67,7 +67,7 @@ See [web-parity coverage](../TESTING.md#web-parity-gate-interactive-mode).
 | Proof | [`parity_corpus.txt`](parity_corpus.txt) | `scripts/.gate_cache/proof/` |
 | Web | [`websweep_residual.txt`](websweep_residual.txt) (77-theory regression set, not the full proof corpus) | `scripts/.gate_cache/web/` |
 
-The proof list is explicit, not automatic discovery. Its 504 theories include
+The proof list is explicit, not automatic discovery. Its 505 theories include
 upstream and patched trace-proof regressions. Patch-only fixtures use paths into
 `tamarin-prover-testing/examples/`, so `./setup.sh testing` must materialize
 them. Required default-case flags are in `file_flags.tsv`; extra `-D` variants,
@@ -77,8 +77,8 @@ merely by adding their theory to this proof gate. See
 Typed-export and reloaded-proof regressions have their own fast check:
 `cargo test --profile ci -p tamarin-prover --test sapic_export`.
 
-The fast CI proof set includes all 65 patched proof regressions and the
-upstream negated-equivalence case (430 theories total). GDH now belongs to the
+The fast CI proof set includes all 66 patched proof regressions and the
+upstream negated-equivalence case (431 theories total). GDH now belongs to the
 CLI rejection tests and full proof gate, not the successful-proof fast set.
 For that committed-hash
 check, `./setup.sh testing-sources` prepares the fixtures without building
