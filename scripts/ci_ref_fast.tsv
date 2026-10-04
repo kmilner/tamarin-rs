@@ -1,13 +1,13 @@
 # rs_ref_check reference — regenerate with: scripts/rs_ref_check.sh generate --certified-by <gate-results>
 # maude: 3.5.1
-# oracle: 1563eaedc7b46bebdcc5103180f63cc9138edf3c69bc014e68e302d3e47a2db9
+# oracle: 17351c9ff54b34c5de5e72928042736d2192d191f814e0a230c5e023a203ec05
 # oracle-pin: da8787d5506e2d35bc1c92d7653bf6265fecbddb
-# oracle-patch-series: 13c6236c144423d90fdc412e5b790cec269902e6e6c67d9effdda4104478f075
+# oracle-patch-series: 20329753d0c2a5f2225956e0c7bd74327a8fc5825b0670a06f4695e27d45ea40
 # execution: 6e74ba20726f8db225806f9c535dad06e21157386621e0cec28925bdbeda1f45
 # certified-gate: DONE_CORPUS_FILE_DIFF
-# certified-scope-sha256: 5f119a182bda113739affa96b7d6f93eb71ae7fbfe6e42c23ffd69679d934fd0
-# certified-proof-outputs-sha256: 91bf9a7f48f5e3d9d90db15b16dfdf700c7e719af355c524bacaa99a0c002a85
-# certified-by: scripts/results/review-fixes.qYs3K6/fast-proof-final.log (verdict=OK)
+# certified-scope-sha256: c9cad482b1b70d283f7bea36b3277c6b1e0f695378a686cf78e3d8eb3626e324
+# certified-proof-outputs-sha256: df4ee07e3d761599993167d1e9ac0d91f727ea00bb5dcd15eea7cc8c2543ac43
+# certified-by: scripts/results/pr960-refresh.ij7iqvj3/proof.WXKuI6yM/run.log (verdict=OK)
 ../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy	50bb0c14ecb57f839ed5373234c6ab741df7f46bc933472c57e04ab003dc1e39	73520d97b5ec41a7ac4ee28fc0c6f66af921a02e8987b33716aa3b4f47dc72e7	365
 ../../tamarin-prover-testing/examples/regression/sapic/sapic-destructor-auxiliary.spthy	79e8915e60b85fc82adf6ff774cef2c28e5cd403cdbaf17b8e4f579aaf022353	7f33d1e81896cbac7a900f7d91c03536f2fbb8f91966aab123b65de2bc88d201	224
 ../../tamarin-prover-testing/examples/regression/sapic/sapic-let-macros.spthy	44dedb1bbc7c3fffc7e4a07913368d72db5c1486a391ab593585175313040938	a76be01a7faf982fad804a6009c8cc58088dd15ab02114acbee6002148c7f249	1145
@@ -21,17 +21,20 @@
 ../../tamarin-prover-testing/examples/regression/trace/msr-macro-injectivity.spthy	0b60767eccef39992ac5ee45115d68b4ec123158f785fb6ab2eb972c04c2b451	df2663f6b3d7684b7d9645ed54252616dad7801055aff1bbb677b6438b1fb377	185
 ../../tamarin-prover-testing/examples/regression/trace/msr-source-premise-index.spthy	fc7aa78cab7dc836e7e1c1df5135a284509ca44f209859e06d9d606df03a7fe4	c50c03b5e81f5bb8a64b3b69f09224651bd4ca61756f5d4d42161a7fb128e75d	170
 ../../tamarin-prover-testing/examples/regression/trace/nat-subterm-sorts.spthy	0bc392c415a36379306dd0479cd1c4fad865a8adf00e1b8be444d3e378a8e145	233be7d90f514112ce99c71bb3302776c1271ba0a66a1cf347055d664d83171c	181
-../../tamarin-prover-testing/examples/regression/trace/partial-evaluation-collision.spthy	c3b14322089fbf3ea70b599ba165d113fe9000546ea6299a826ee3f2b575db2c	36070a9d50926fa5f3644a04c95d85867f45d4dd10adbe47fe70517d0f4d999e	68
-../../tamarin-prover-testing/examples/regression/trace/partial-evaluation-export.spthy	fc4b0757ff41524f9e7ad6147cc72906cd69ac46bfa880cc1907f49d497b5b86	7a42a057924d341ebe4ae4501fb4d1f1e54db369a01fa3a3d7961c634071b7ef	231
+../../tamarin-prover-testing/examples/regression/trace/partial-evaluation-collision.spthy	802e2777f6b87f7a462dc5a00bbbffa8073a1b5452e53d84fc4a58b55232f1b6	b5e2804f6f2d4f08f516a84f2e2d8bf528b34b8dd9b87780c5c492e63504b34e	82
+../../tamarin-prover-testing/examples/regression/trace/partial-evaluation-export.spthy	c080fc83efd8c9245f12e2174b207d5d6eb8d59b648aa4a10a4ea9e28bd6faeb	b2152d281030096d41b6834c56f4add6cc2434641cbe1c6c50ba64dec281dbce	284
 ../../tamarin-prover-testing/examples/regression/trace/sapic-else-binding-scope.spthy	38eee6bb9a45a6d5d4252707535d4553217c59b3a99032672f04110d538e4d7e	7a747888bf47cc549fbce299b2c1248d2d5c827b8ccd8c28bcb784294b79cd66	426
 ../../tamarin-prover-testing/examples/regression/trace/sapic-embedded-msr-binding.spthy	2d34e68e05951ce6a7285ce9481889a2a546f34f90e3308a261f56785add0f46	7197afb4ec1c5356da997daf295285f38496af9166c1c3031419e2d07adcf391	561
 ../../tamarin-prover-testing/examples/regression/trace/sapic-empty-parameter-scope.spthy	070d6bf5e23423363f814fff50d58f1abe72aa63699d40e1d1465ed3de414eed	61d5035c92156d0edc04b6c35cd6670fbaa67ff686e2e4fb67d99f3bb23d4294	123
 ../../tamarin-prover-testing/examples/regression/trace/sapic-inferred-location-types.spthy	2189e3ab651339cea3e112bdcb18f72fedbcd0002d3da8cb9740f7626497fef1	201f2e7ff1f833b7593f58becdb4ff0c98575a56fcceaff6946ce8dcbcf0f526	223
 ../../tamarin-prover-testing/examples/regression/trace/sapic-inferred-lock-types.spthy	ff8762d03031a4af60657a15e2541f2306ef29bdcc18b6472933a43e8d9767ba	ba0c46e3289f5a82276f0a4e14b7f4a78dde2a7d23507a621944847518ac5cd0	158
+../../tamarin-prover-testing/examples/regression/trace/sapic-inline-export-locations.spthy	72e0f46786b8a4dc95f9140b229296891c4f9e58d7d331fbcc356355b3191779	b9069e30b91f26b332b3b5b242e088e700243ac1de18438b56560d3f9444fcbe	238
 ../../tamarin-prover-testing/examples/regression/trace/sapic-lookup-destructor-progress.spthy	48a6f2e6c7c1a4c34ae37e794c78a653957eaefff943f926f3999d665cf99fd7	ffa1de1f6ae3d4c6078179dab8d5cebf58c2325969256b30d449a3f8306fd582	290
+../../tamarin-prover-testing/examples/regression/trace/sapic-msr-call-binding-reuse.spthy	d5ff5571012ea5d433f706c386f44ea6d20c4896eec288eefda413143d49dcd7	03609c7e2f6b4c18921ffd37424f698ae4d85c69134728ea1562a8c4902c1598	118
 ../../tamarin-prover-testing/examples/regression/trace/sapic-nested-call-caller-scope.spthy	2b3220d77a32ecfcd851f043b879c632eea13d52762dbc91982790e73227e63b	e92fde4bc6abaacde2b3a068775ee3992427efc08b9449e9c00d53a8c3171a01	1169
 ../../tamarin-prover-testing/examples/regression/trace/sapic-nested-call-parameter-scope.spthy	ded0607c6337ef38516d922e8e7bbf0cf72f6bbf4f61bf4f9ad04e56a460c34a	5498354fa1fa70442fdd449af71dedde8fe06ade28edfec6a699be553abfc6ce	314
 ../../tamarin-prover-testing/examples/regression/trace/sapic-nested-parameter-capture.spthy	d51b8be7dc54ab6c3c57825afd5c9b5492ebf5b6e819968bdcda1061f4517ca2	5433f83853ddef52ea332fff6d8d8bdf59d85d7f56d691cf9ed01589b3c97b09	169
+../../tamarin-prover-testing/examples/regression/trace/sapic-open-process-export.spthy	9abe3d59ee4601a037b025994d7d390afa84b08f0fe39550c346e6d7df936d3f	0c1e21a42892899970c019ff7d5a39c69296444658cbada3b8500f8560e86c3b	269
 ../../tamarin-prover-testing/examples/regression/trace/sapic-process-call-caller-scope.spthy	79c9fac728b09c4523e1cc3f0b7a34947e172335a2a5fe19f992d9be80147217	0eecbf977a91878dc56bb36bacc05886c4b09c71f9aa616d63a91c0b5b53526b	933
 ../../tamarin-prover-testing/examples/regression/trace/sapic-process-call-location-scope.spthy	2c6671359feaff10121d6b7f9afc28d3ac6d01ef0c179dc7b3dca798c52b9748	f9757f4ec7ab229c4c3b5eb65dc820c1177904cf8442d3b0dbb2475879d7dc6d	343
 ../../tamarin-prover-testing/examples/regression/trace/sapic-variant-action-control.spthy	654ed87d2df98f7369d3de642716dee9fc78340e16695d84ac5648a53a4347ee	47d94fbc95b8d433d19298d80fb8c1a45cdccde80d4626d0182b2b0273242b7f	168
@@ -55,6 +58,8 @@
 ../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-nested-destructor-failure-chain.spthy	a00994c29ef9fd019c4202a6d4f96ed48d997802ab6c5ff25ada02c84e553078	6eb7663283d0f069dc7f34c8cf69a55ec932d4f0839cea4351cff3141b8a7358	1271
 ../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-nested-destructor-progress.spthy	28956c457ba1162016519b5d7b59646c237dfd312e0719be7a1c5bb060214c63	206a571c85fd9b54d858bc5ec8b899d8b745446dac05d10335ac34a7041c26d9	1269
 ../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-nested-destructors.spthy	6023a0fe982aaed73cb0d1ea5f28723a98a545340df0ef0ab396928876dcd077	bcff3553b971e4a9465a1a61c30131b7194be1de6a129d7e3cbdafe60234911a	3244
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-pattern-export.spthy	cad3849cc52080ce9d6fa23b452a281fcdf6d79087a2726bdfd9613e3f55172c	65cbd3c597f0531daced18bbff4072abed866aed193329b8c14877d5d3d6daec	247
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-pattern-parameter.spthy	c26820d4c7e6e83e3fa3e21b1f4fa1c3998412e3fb9872d0204f001cec54617f	b932b47ac0d9334c9468f6106009c7be0d8e25bac19da17ae1a2d495de4c19f9	118
 ../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-process-call-capture.spthy	46f7f2be8343df710e849c00646da114a940bedb2225ec9885bca2895fd41da4	9c4356e0d660664020b3ec1f802f510d71a6a37a078621e3413d03c5072a504f	1503
 ../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-progress-let.spthy	b2c3796ed4ce4cf241922ff9fc17ef320423da5c733f419216a9a7ed7f780343	36c81b8adc6b2c25ca56bb664060aafcc4cc57b5156cdf075a73b8c2d9d94ff0	216
 ../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-state-alias.spthy	467fa2c57fa74239af6e1d2a520d6d4f32904fa169747e1986960e93e575d223	1721f6558ac7d467a4db268d2c70dfbfc8cca36cec1c7d0e10df9482a6e39164	324
