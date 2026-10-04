@@ -112,36 +112,18 @@ fn map_to_annotated_rule(
     p: &ProcessPosition,
     bodies: Vec<RuleBody>,
 ) -> Vec<AnnotatedRule<ProcessAnnotation<LVar>>> {
-    let equation_patterns: BTreeSet<_> = proc
-        .annotation()
-        .let_plan
-        .iter()
-        .enumerate()
-        .flat_map(|(i, stage)| {
-            stage.alternatives.iter().filter_map(move |(lhs, reduct)| {
-                reduct
-                    .as_ref()
-                    .map(|_| (crate::annotation::let_stage_position(p, i), lhs.clone()))
-            })
-        })
-        .collect();
     bodies
         .into_iter()
         .enumerate()
-        .map(|(i, (prems, acts, concs, restr))| AnnotatedRule {
-            matches_destructor_equation: prems.iter().any(|f| match f {
-                TransFact::FLet(pos, term, _) => {
-                    equation_patterns.contains(&(pos.clone(), term.clone()))
-                }
-                _ => false,
-            }),
+        .map(|(i, body)| AnnotatedRule {
+            matches_destructor_equation: body.matches_destructor_equation,
             process_name: None,
             process: proc.clone(),
             position: RulePosition::Pos(p.clone()),
-            prems,
-            acts,
-            concs,
-            restr,
+            prems: body.prems,
+            acts: body.acts,
+            concs: body.concs,
+            restr: body.restr,
             index: i,
         })
         .collect()
@@ -675,6 +657,44 @@ mod tests {
     use tamarin_term::lterm::LSort;
     use tamarin_theory::process_convert::convert_process;
     use tamarin_theory::sapic::ProcessParsedAnnotation;
+
+    #[test]
+    fn only_equation_matches_skip_derivation_checks_through_translation_wrappers() {
+        for progress in [false, true] {
+            for reliable in [false, true] {
+                let options = if progress {
+                    "options: translation-progress"
+                } else {
+                    ""
+                };
+                let (builtin, input, output) = if reliable {
+                    ("builtins: reliable-channel", "in('r',x)", "out('r',y)")
+                } else {
+                    ("", "in(x)", "out(y)")
+                };
+                let source = format!(
+                    "theory T begin {builtin} {options} \
+                     functions: d/1 [destructor], wrap/1 equations: d(wrap(x))=x \
+                     process: {input}; let y=d(d(x)) in {output} else event Failed() end"
+                );
+                let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+                let mut theory = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+                crate::apply::apply_sapic(&mut theory, false).unwrap();
+                let exempt: Vec<_> = theory
+                    .rules()
+                    .filter(|rule| rule.rule_e().info.attributes.ignore_deriv_checks)
+                    .map(|rule| rule.name().to_string())
+                    .collect();
+                // Each reduction has its own equation match and subsequent user
+                // pattern. Neither user patterns nor any failure arm is exempt.
+                assert_eq!(
+                    exempt,
+                    ["letyddx_1_1", "letyddx_5_1"],
+                    "progress={progress}, reliable={reliable}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn progress_preserves_failure_of_let_with_omitted_else() {
