@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Root + housekeeping handlers.
 
@@ -18,7 +17,7 @@ use crate::state::{AppState, TheoryOrigin};
 use crate::theory_io;
 
 /// `GET /` — Welcome page listing loaded theories.  Mirror Haskell's
-/// `rootTpl` (`src/Web/Hamlet.hs:53-81`).
+/// `rootTpl` (`src/Web/Hamlet.hs`).
 pub async fn get(State(state): State<Arc<AppState>>) -> Response {
     let html = render_index(&state);
     html_response(html)
@@ -26,7 +25,7 @@ pub async fn get(State(state): State<Arc<AppState>>) -> Response {
 
 /// `POST /` — File upload (multipart `uploadedTheory`).
 pub async fn post(State(state): State<Arc<AppState>>, mut mp: Multipart) -> Response {
-    // Mirror Haskell `postRootR` (src/Web/Handler.hs:791-825): a missing
+    // Mirror Haskell `postRootR` (src/Web/Handler.hs): a missing
     // `uploadedTheory` field → "Post request failed."; an empty file →
     // "No theory file given."; a load error → "Theory loading failed:…";
     // success → "Loaded new theory!".
@@ -65,13 +64,13 @@ pub async fn post(State(state): State<Arc<AppState>>, mut mp: Multipart) -> Resp
                 tracing::info!(idx, file = %filename, "uploaded theory");
                 // Haskell appends a ` WARNING: ignoring the following
                 // wellformedness errors: …` suffix to this alert when the
-                // report is non-empty (Handler.hs:813-818).  The Rust port
+                // report is non-empty (Handler.hs).  The Rust port
                 // emits the bare message; the same report is still surfaced on
                 // the theory page (the `wf-warning` banner + the source/message
                 // `/* WARNING */` block, both from `entry.wf_report`).
                 alert_msg = Some("Loaded new theory!".into());
             }
-            // HS `postRootR` (src/Web/Handler.hs:791-825, see line 809):
+            // HS `postRootR` (src/Web/Handler.hs):
             //   `setMessage $ "Theory loading failed:\n" <> toHtml (show err)`
             // — a NEWLINE separates the prefix from the error, not a space.
             // The '\n' survives both HS Blaze escaping and our `html_escape`
@@ -118,7 +117,7 @@ pub async fn robots() -> impl IntoResponse {
 /// `invalidArgs` (400) when it's missing; on success it returns
 /// `Canceled request!` as `text/plain`.
 ///
-/// See `getKillThreadR` in `src/Web/Handler.hs:1517-1534`.
+/// See `getKillThreadR` in `src/Web/Handler.hs`.
 ///
 /// We don't yet wire a `tokio_util::sync::CancellationToken` registry,
 /// so the "cancel" is a soft ack — but the 400-on-missing-path
@@ -155,13 +154,13 @@ pub(crate) struct KillQuery {
 // ---------------------------------------------------------------------
 fn render_index(state: &AppState) -> String {
     let theories = state.store.list();
-    // HS `theoriesTpl` (Web/Hamlet.hs:84-101): the `<table>…</table><br>` (or
+    // HS `theoriesTpl` (Web/Hamlet.hs): the `<table>…</table><br>` (or
     // the empty-branch `<strong>No theories loaded!</strong><br>`) that fills
     // the second `intropage` of `rootTpl`.
     let theories_content = if theories.is_empty() {
         "<strong>No theories loaded!</strong><br>".to_string()
     } else {
-        // HS `theoryTpl` (Web/Hamlet.hs:116-134): one `<tr>` per theory.  The
+        // HS `theoryTpl` (Web/Hamlet.hs): one `<tr>` per theory.  The
         // header row follows upstream PR #928’s corrected table structure.
         let mut rows = String::new();
         for t in &theories {

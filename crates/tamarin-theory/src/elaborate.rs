@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Elaboration: parser AST → typed `Theory`.
 //!
@@ -120,7 +119,7 @@ pub fn elaborate_with_diagnostics(
 
 /// Collect every `Name` constant of a term in traversal order — HS
 /// `universeBi t` at `[Name]`, which both name reports filter by
-/// `sortOfName` (Wellformedness.hs:447, :475-478).  Generic over the variable
+/// `sortOfName` (Wellformedness.hs).  Generic over the variable
 /// type so it serves both `LNTerm` (rule facts) and `SapicTerm` (process
 /// terms).
 pub(crate) fn collect_names<V>(t: &VTerm<Name, V>, out: &mut Vec<Name>) {
@@ -241,7 +240,7 @@ pub fn elaborate(parser_thy: &p::Theory) -> Result<Theory, ElabError> {
 ///
 /// `in_file` is the theory's source path.  HS's parser resolves the
 /// `heuristic:` header's default oracle names against it while building the
-/// theory (`defaultOracleNames`, Theory/Text/Parser.hs:249-250).
+/// theory (`defaultOracleNames`, Theory/Text/Parser.hs).
 pub fn elaborate_with_in_file(parser_thy: &p::Theory, in_file: &str) -> Result<Theory, ElabError> {
     let sig = minimal_maude_sig(parser_thy.is_diff);
     let mut thy: Theory = Theory::new(parser_thy.name.clone(), sig);
@@ -254,8 +253,8 @@ pub fn elaborate_with_in_file(parser_thy: &p::Theory, in_file: &str) -> Result<T
     // The `heuristic:` headers, parsed once the whole item list is known so
     // that a `{name}` ranking finds a `tactic:` declared after it.  HS parses
     // them into `[GoalRanking ProofContext]` in the parser itself
-    // (`heuristic`, Theory/Text/Parser/Signature.hs:305-306) and stores that
-    // list (`addHeuristic`, TheoryObject.hs:598-600).
+    // (`heuristic`, Theory/Text/Parser/Signature.hs) and stores that
+    // list (`addHeuristic`, TheoryObject.hs).
     let mut heuristic_headers = parser_thy.items.iter().filter_map(|item| match item {
         p::TheoryItem::Heuristic { raw, source_file } => Some((raw, source_file)),
         _ => None,
@@ -319,7 +318,7 @@ fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
 
 /// The `SapicFunSym` a `functions:` declaration records as its
 /// `FunctionTypingInfo` item (HS `function`,
-/// Theory/Text/Parser/Signature.hs:183-225): the declared name, arity and
+/// Theory/Text/Parser/Signature.hs): the declared name, arity and
 /// attribute flags paired with the declared SAPIC argument and result types.
 pub(crate) fn function_decl_typing_info(d: &p::FunctionDecl) -> SapicFunSym {
     use tamarin_term::function_symbols::UserDefinedSym;
@@ -370,7 +369,7 @@ pub(crate) fn function_decl_typing_info(d: &p::FunctionDecl) -> SapicFunSym {
 /// `TheoryItem::Macros`. Every other item kind returns an empty list.
 ///
 /// Signature-conflict rules (HS `extendSig` / `function`,
-/// Theory/Text/Parser/Signature.hs:102-135, 200-225) are enforced at parse
+/// Theory/Text/Parser/Signature.hs) are enforced at parse
 /// time (`Parser::enable_builtin` / `Parser::function_decl`) — the single
 /// point where theories are ingested — so the declarations reaching here are
 /// conflict-free and this step only BUILDS the signature.
@@ -385,7 +384,7 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 // NOTE: `diffie-hellman` already arrives with `enable_dh`
                 // set (its MaudeSig is `dh_maude_sig`, see
                 // builtinsDiffNames in
-                // Theory/Text/Parser/Signature.hs:58-76, see line 62),
+                // Theory/Text/Parser/Signature.hs),
                 // and `merge` ORs `enable_dh`, so no explicit force is
                 // needed here.  `diff` is a header/CLI flag handled via
                 // the base signature's diff bit, never a `builtins:` entry.
@@ -408,7 +407,7 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 };
                 let ndc = ndc_state_of(d.ndc, d.ndc_diff);
                 // HS `function`'s fst/snd short-circuit (Theory/Text/
-                // Parser/Signature.hs:217, name-only by design — it tests
+                // Parser/Signature.hs, name-only by design — it tests
                 // neither arity nor privacy): a re-declared fst/snd
                 // resolves to the EXISTING symbol and `addFunSym` is
                 // never reached, so `functions: fst/1 [destructor]`
@@ -456,7 +455,7 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 // Haskell's `equation` parser hard-fails with
                 // "Not a correct equation: ..." when an LHS=RHS pair
                 // cannot be converted to a CtxtStRule
-                // (Theory/Text/Parser/Signature.hs:245-249, see line 249).  Match
+                // (Theory/Text/Parser/Signature.hs).  Match
                 // that failure behaviour rather than silently dropping.
                 let (Some(l), Some(r)) = (term_to_lnterm(&eq.lhs, &s), term_to_lnterm(&eq.rhs, &s))
                 else {
@@ -481,10 +480,10 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
             for m in macros {
                 let args: Vec<LVar> = m.args.iter().map(varspec_to_lvar).collect();
                 // HS `macro` parses the body with `msetterm False llit`
-                // (Theory/Text/Parser/Macro.hs:39), which has no pattern-match (`=t`)
+                // (Theory/Text/Parser/Macro.hs), which has no pattern-match (`=t`)
                 // production, so a body that converts to a `PatMatch`
                 // here would be a hard parse failure in HS — and
-                // `addMacroSym` (Theory/Text/Parser/Macro.hs:46) always runs for any parsed
+                // `addMacroSym` (Theory/Text/Parser/Macro.hs) always runs for any parsed
                 // macro.  Returning an error therefore matches HS's
                 // parse-fail semantics: silently skipping would drop both
                 // the `LNMacro` push and the fun-sym registration.
@@ -500,8 +499,8 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 };
                 // Register macro fun-sym in MaudeSig — mirrors HS
                 // `addMacroSym (op,(k,Private,Destructor,NotNDC))`
-                // (Theory/Text/Parser/Macro.hs:29-47, see line 46) and
-                // `macroToFunSym` (Term/Macro.hs:29-30, see line 30).  After parser-
+                // (Theory/Text/Parser/Macro.hs) and
+                // `macroToFunSym` (Term/Macro.hs).  After parser-
                 // AST macro expansion (run in `elaborate()` above)
                 // no call site references the macro name, but
                 // the fun-sym must still be present in MaudeSig so
@@ -530,19 +529,19 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
 fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), ElabError> {
     // The predicates declared so far, in source order.  HS expands a lemma or
     // restriction against `theoryPredicates thy` as it is added
-    // (Theory/Text/Parser.hs:129-152, TheoryObject.hs:433-449), so an item
+    // (Theory/Text/Parser.hs, TheoryObject.hs), so an item
     // textually before a `predicates:` block does not see it.
     let mut preds: Vec<crate::predicate::Predicate> = Vec::new();
     // The macros declared so far, read back from the items pushed for them.
     // HS applies `theoryMacros thy0` to every item at close time
-    // (`closeTheoryItem`, CloseRule.hs:84-86); a macro call that precedes its
+    // (`closeTheoryItem`, CloseRule.hs); a macro call that precedes its
     // `macros:` block is an "unknown operator" parse failure
-    // (`lookupArity`, Theory/Text/Parser/Term.hs:62-66), so the two lists
+    // (`lookupArity`, Theory/Text/Parser/Term.hs), so the two lists
     // agree on every theory that parses.
     let mut macros: Vec<LNMacro> = Vec::new();
     // HS's parser inlines a `P(args)` call against only the definitions the
     // theory holds when the call is read (`checkProcess`,
-    // Theory/Text/Parser/Sapic.hs:314-317). The RS parser keeps calls, so this
+    // Theory/Text/Parser/Sapic.hs). The RS parser keeps calls, so this
     // environment grows in source order. It stores already-converted bodies:
     // later definitions cannot retroactively satisfy an earlier call.
     let mut process_defs = crate::process_inline::ProcessDefMap::new();
@@ -559,8 +558,8 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             p::TheoryItem::Functions(decls) => {
                 maude_sig_step(item, out)?;
                 // HS folds `addFunctionTypingInfo` over the block's
-                // declarations (Theory/Text/Parser.hs:259-262,
-                // TheoryObject.hs:492-493): one `FunctionTypingInfo` item per
+                // declarations (Theory/Text/Parser.hs,
+                // TheoryObject.hs): one `FunctionTypingInfo` item per
                 // declaration, in source order.
                 for d in decls {
                     out.items.push(TheoryItem::Translation(
@@ -580,7 +579,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             }
             p::TheoryItem::Predicates(predicates) => {
                 // HS `preddeclaration` folds `liftedAddPredicate` over the
-                // block (Theory/Text/Parser/Signature.hs:277-283), which
+                // block (Theory/Text/Parser/Signature.hs), which
                 // appends a `PredicateItem` per declaration.
                 for pd in predicates {
                     let pred = crate::predicate::from_parser(pd, &out.signature)?;
@@ -621,7 +620,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             }
             p::TheoryItem::Rule(r) => {
                 let mut e = rule_to_proto_rule_e(r, &out.signature)?;
-                // HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) adds
+                // HS `liftedAddProtoRule` (Theory/Text/Parser.hs) adds
                 // one restriction per `_restrict` formula BEFORE the rule and
                 // appends the actions that reach them to the rule.
                 for restr in crate::rule_restriction::lift_rule_restrictions(&mut e, &preds)? {
@@ -632,7 +631,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                 }
                 // `closeProtoRule` narrows `applyMacroInRule macros ruE` into
                 // the AC half and keeps `ruE` itself as the `cprRuleE` half
-                // (lib/theory/src/Rule.hs:82-86).  A theory that declares no
+                // (lib/theory/src/Rule.hs).  A theory that declares no
                 // macro, or a rule whose body calls none, leaves the two
                 // identical.
                 let mut opr =
@@ -641,7 +640,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     opr.rule_e = Some(Box::new(e));
                 }
                 // `protoRule`'s `variants` block
-                // (Theory/Text/Parser/Rule.hs:126-135, see line 134).
+                // (Theory/Text/Parser/Rule.hs).
                 opr.rule_ac = r
                     .variants
                     .iter()
@@ -711,15 +710,15 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             }
             p::TheoryItem::TopLevelProcess(proc) => {
                 // `toplevelprocess` adds a `ProcessItem`
-                // (Theory/Text/Parser/Sapic.hs:73-78,
-                // Theory/Text/Parser.hs:290-291).
+                // (Theory/Text/Parser/Sapic.hs,
+                // Theory/Text/Parser.hs).
                 let pp = elaborate_process(proc, &process_defs, &out.signature)?;
                 out.items
                     .push(TheoryItem::Translation(TranslationElement::Process(pp)));
             }
             p::TheoryItem::ProcessDef(d) => {
                 // `processDef` stores the body and the declared formals
-                // (Theory/Text/Parser/Sapic.hs:64-72); `_pVars` is `Nothing`
+                // (Theory/Text/Parser/Sapic.hs); `_pVars` is `Nothing`
                 // for a `let P = …` written without a parameter list.
                 if process_defs.contains_key(&d.name) {
                     return Err(ElabError {
@@ -741,7 +740,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     .push(TheoryItem::Translation(TranslationElement::ProcessDef(def)));
             }
             p::TheoryItem::EquivLemma(p1, p2) => {
-                // `equivLemma` (Theory/Text/Parser/Sapic.hs:203-209).
+                // `equivLemma` (Theory/Text/Parser/Sapic.hs).
                 let msig = &out.signature;
                 let c1 = elaborate_process(p1, &process_defs, msig)?;
                 let c2 = elaborate_process(p2, &process_defs, msig)?;
@@ -751,7 +750,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                     )));
             }
             p::TheoryItem::DiffEquivLemma(proc) => {
-                // `diffEquivLemma` (Theory/Text/Parser/Sapic.hs:211-218).
+                // `diffEquivLemma` (Theory/Text/Parser/Sapic.hs).
                 let pp = elaborate_process(proc, &process_defs, &out.signature)?;
                 out.items
                     .push(TheoryItem::Translation(TranslationElement::DiffEquivLemma(
@@ -777,7 +776,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
 /// The formula HS's `liftedAddLemma` / `liftedAddRestriction` store: the
 /// surface formula closed by [`crate::formula::from_parser`] and stripped of
 /// its predicate sugar by `expandLemma` / `expandRestriction`
-/// (Theory/Text/Parser.hs:129-152, TheoryObject.hs:433-449).  The expansion
+/// (Theory/Text/Parser.hs, TheoryObject.hs).  The expansion
 /// IS the sugar stripper, so a use site with no matching predicate is the
 /// only way it fails.
 fn item_formula(
@@ -810,8 +809,8 @@ fn elaborate_process(
 
 /// Fold a parsed rule's attribute list into `RuleAttributes`, mirroring HS
 /// `ruleAttributesp = option mempty (fold <$> list ruleAttribute)`
-/// (`Theory/Text/Parser/Rule.hs:97-98`) and the per-attribute `ruleAttribute`
-/// parser (`Theory/Text/Parser/Rule.hs:70-95`):
+/// (`Theory/Text/Parser/Rule.hs`) and the per-attribute `ruleAttribute`
+/// parser (`Theory/Text/Parser/Rule.hs`):
 ///   * `color=`/`colour=`  → `ruleColor` (`hexToRGB`);
 ///   * `process=`          → IGNORED (`parseAndIgnore`; the RS parser already
 ///                           drops it, so `RuleAttr::Process` never reaches here
@@ -822,7 +821,7 @@ fn elaborate_process(
 ///   * `issapicrule`       → `isSAPiCRule = True`;
 ///   * `x-<ext>`           → ignored.
 ///
-/// `fold` combines via the `RuleAttributes` `Semigroup` (Theory/Model/Rule.hs:382-396):
+/// `fold` combines via the `RuleAttributes` `Semigroup` (Theory/Model/Rule.hs):
 /// later duplicates win on the `Option` fields (`preferRight`), bools `||`.
 ///
 /// This carries a rule's SAPIC display attributes (role / color /
@@ -850,10 +849,9 @@ fn rule_attributes_from_parser(attrs: &[p::RuleAttr]) -> RuleAttributes {
 }
 
 fn rule_to_proto_rule_e(r: &p::Rule, sig: &MaudeSig) -> Result<ProtoRuleE, ElabError> {
-    // HS `modify preRestriction (++ rs) ri` (Theory/Text/Parser/Rule.hs:121,
-    // 135): the rule carries its `_restrict` formulas as parsed — predicate
+    // HS `modify preRestriction (++ rs) ri` (Theory/Text/Parser/Rule.hs): the rule carries its `_restrict` formulas as parsed — predicate
     // atoms unexpanded, since `liftedAddProtoRule` expands only the copies it
-    // lifts (Theory/Text/Parser.hs:175-193).
+    // lifts (Theory/Text/Parser.hs).
     let restrictions = r
         .embedded_restrictions
         .iter()
@@ -879,7 +877,7 @@ fn rule_to_proto_rule_e(r: &p::Rule, sig: &MaudeSig) -> Result<ProtoRuleE, ElabE
         .iter()
         .map(|f| fact_to_lnfact(f, sig))
         .collect::<Result<Vec<_>, _>>()?;
-    // HS `newVariables ps $ cs ++ as` (Theory/Text/Parser/Rule.hs:121-154).
+    // HS `newVariables ps $ cs ++ as` (Theory/Text/Parser/Rule.hs).
     let new_vars = crate::fact::new_variables(&prems, &[&concs[..], &acts[..]].concat());
 
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))
@@ -925,7 +923,7 @@ pub fn fact_tag_of(f: &p::Fact) -> crate::fact::FactTag {
 }
 
 /// A parser fact's annotation list as the `S.Set FactAnnotation` a
-/// `Theory.Model.Fact` holds (Theory/Model/Fact.hs:157-162).
+/// `Theory.Model.Fact` holds (Theory/Model/Fact.hs).
 /// Shared by [`fact_to_lnfact`] and [`fact_to_sapic_fact`].
 pub(crate) fn copy_fact_annotations(f: &p::Fact) -> BTreeSet<crate::fact::FactAnnotation> {
     f.annotations.iter().copied().collect()
@@ -950,14 +948,14 @@ pub fn fact_to_lnfact(f: &p::Fact, sig: &MaudeSig) -> Result<crate::fact::LNFact
 /// `solve( ... )` step.
 ///
 /// HS's proof parser builds the `Goal` value directly (`goal`,
-/// Theory/Text/Parser/Proof.hs:38-72), and `checkAndExecProofMethod` looks it
-/// up in `sGoals` by structural equality (ProofMethod.hs:253-258).  The
+/// Theory/Text/Parser/Proof.hs), and `checkAndExecProofMethod` looks it
+/// up in `sGoals` by structural equality (ProofMethod.hs).  The
 /// parser AST reaches that value through the same converters the rest of the
 /// theory goes through, so a stored goal and a live one are built the same
 /// way.
 ///
 /// A disjunct that `formula_to_guarded_parsed` rejects is an error here, as
-/// `guardedFormula`'s `fail` is in HS (Theory/Text/Parser/Formula.hs:122-127).
+/// `guardedFormula`'s `fail` is in HS (Theory/Text/Parser/Formula.hs).
 pub fn goal_from_parsed(g: &p::GoalSpec, sig: &MaudeSig) -> Result<Goal, ElabError> {
     let term = |t: &p::Term| {
         term_to_lnterm(t, sig).ok_or_else(|| ElabError {
@@ -1010,7 +1008,7 @@ pub fn formula_to_guarded_parsed(
 
 /// The internal [`ProofMethod`](crate::constraint::solver::proof_method::ProofMethod)
 /// of one stored proof step — the value HS's `proofMethod`
-/// (Theory/Text/Parser/Proof.hs:75-85) builds directly.
+/// (Theory/Text/Parser/Proof.hs) builds directly.
 pub fn proof_method_from_parsed(
     m: &p::ParsedMethod,
     sig: &MaudeSig,
@@ -1029,7 +1027,7 @@ pub fn proof_method_from_parsed(
 }
 
 /// A lemma's stored proof as the internal [`ProofTree`], the shape HS's
-/// `proofSkeleton` returns (Theory/Text/Parser/Proof.hs:98-115).
+/// `proofSkeleton` returns (Theory/Text/Parser/Proof.hs).
 pub fn proof_tree_from_parsed(
     t: &p::ParsedProofTree,
     sig: &MaudeSig,
@@ -1118,7 +1116,7 @@ pub fn map_formula_terms(f: &p::Formula, g: &dyn Fn(&p::Term) -> p::Term) -> p::
 
 /// Right-fold a non-empty term list into a right-associative `pair(..)` chain:
 /// `[a, b, c]` → `pair(a, pair(b, c))`; `None` on an empty list.  Mirrors HS's
-/// `tupleterm`'s `chainr1 ... (curry fAppPair)` (Theory/Text/Parser/Term.hs:210-212)
+/// `tupleterm`'s `chainr1 ... (curry fAppPair)` (Theory/Text/Parser/Term.hs)
 /// — the shared fold behind the arity-1 surplus-argument tuple and the `<..>`
 /// tuple syntax.
 fn right_nest_pair<V>(items: Vec<VTerm<Name, V>>) -> Option<VTerm<Name, V>> {
@@ -1140,11 +1138,11 @@ enum HeadSym {
 
 /// The symbol a prefix application of `name` at `arity` denotes.
 ///
-/// HS `lookupArity` (Theory/Text/Parser/Term.hs:60-71) looks `name` up in
+/// HS `lookupArity` (Theory/Text/Parser/Term.hs) looks `name` up in
 /// `userDefinedFunSyms` — free symbols before user-defined AC symbols — then
 /// the macro names, and hands `naryOpApp` / `binaryAlgApp` the privacy,
 /// constructability and NDC state of the first match, which those build
-/// `fAppNoEq` / `fAppAC` from (Theory/Text/Parser/Term.hs:87-121).  A name
+/// `fAppNoEq` / `fAppAC` from (Theory/Text/Parser/Term.hs).  A name
 /// in both halves is therefore the FREE symbol; [`MaudeSig::fun_sym_named`]
 /// preserves that order.
 ///
@@ -1169,7 +1167,7 @@ fn head_sym(sig: &MaudeSig, name: &str, arity: usize) -> HeadSym {
 
 /// The `[AC]` symbol an infix application of `name` denotes.  HS `acterm`
 /// builds `fAppACfct` straight from `stACFunSyms`
-/// (Theory/Text/Parser/Term.hs:165-172), so a free symbol sharing the name —
+/// (Theory/Text/Parser/Term.hs), so a free symbol sharing the name —
 /// which claims the prefix spelling in [`head_sym`] — does not claim this
 /// one.  The default covers a name the signature has no `[AC]` symbol for,
 /// which the parser does not emit: it writes `BinOp::AcFct` only for a name
@@ -1187,7 +1185,7 @@ fn ac_fct_sym(sig: &MaudeSig, name: &str) -> AcFctSym {
 
 /// True when `name` is a free symbol of arity 1, which HS `naryOpApp` reads
 /// off `lookupArity` to parse the argument list as ONE tuple term
-/// (Theory/Text/Parser/Term.hs:94-96), folding `f(a, b, c)` to `f(<a, b, c>)`.
+/// (Theory/Text/Parser/Term.hs), folding `f(a, b, c)` to `f(<a, b, c>)`.
 fn is_arity1_no_eq(sig: &MaudeSig, name: &str) -> bool {
     use tamarin_term::function_symbols::FunSym;
     matches!(sig.fun_sym_named(name.as_bytes()), Some(FunSym::NoEq(s)) if s.arity == 1)
@@ -1203,7 +1201,7 @@ fn is_arity1_no_eq(sig: &MaudeSig, name: &str) -> bool {
 /// built in one universe.  `sig` is the theory signature every application
 /// head is resolved against, as HS `naryOpApp` / `binaryAlgApp` / `acterm`
 /// resolve theirs through `lookupArity` over the parser state's signature
-/// (Theory/Text/Parser/Term.hs:60-71,87-121,165-172).
+/// (Theory/Text/Parser/Term.hs).
 fn term_to_vterm<V, F>(t: &p::Term, sig: &MaudeSig, mk_var: &F) -> Option<VTerm<Name, V>>
 where
     V: Clone + Ord,
@@ -1227,9 +1225,9 @@ where
             Some(Term::Lit(Lit::Con(n)))
         }
         p::Term::NumberOne => {
-            // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs:146-148, see line 148); the
+            // HS `fAppOne = fAppNoEq oneSym []` (Term/Term.hs); the
             // `"1"` keyword in the term parser dispatches to this
-            // (Theory/Text/Parser/Term.hs:138-153, see line 149).  Mirror exactly — emit
+            // (Theory/Text/Parser/Term.hs).  Mirror exactly — emit
             // a 0-arity NoEq application of `oneSym`, NOT a public
             // constant.  Treating it as `Lit::Con(Pub,"1")` causes
             // source-case enumeration to mismatch HS's `c_one` rule.
@@ -1239,18 +1237,18 @@ where
             ))
         }
         p::Term::DhNeutral => {
-            // HS `fAppDHNeutral = fAppNoEq dhNeutralSym []` (Term/Term.hs:150-151);
+            // HS `fAppDHNeutral = fAppNoEq dhNeutralSym []` (Term/Term.hs);
             // dispatched by `symbol "DH_neutral" *> pure fAppDHNeutral`
-            // (Theory/Text/Parser/Term.hs:138-153, see line 142).
+            // (Theory/Text/Parser/Term.hs).
             Some(f_app_no_eq(
                 tamarin_term::function_symbols::dh_neutral_sym(),
                 vec![],
             ))
         }
         p::Term::NatOne => {
-            // HS `fAppNatOne = fAppNoEq natOneSym []` (Term/Term.hs:156-158); the
+            // HS `fAppNatOne = fAppNoEq natOneSym []` (Term/Term.hs); the
             // `1:nat` / `%1` keywords dispatch to this
-            // (Theory/Text/Parser/Term.hs:138-153, see line 143).
+            // (Theory/Text/Parser/Term.hs).
             Some(f_app_no_eq(
                 tamarin_term::function_symbols::nat_one_sym(),
                 vec![],
@@ -1275,11 +1273,11 @@ where
             // term, leaving e.g. `c_h` out of the case list.
             // Arity-1 symbols whose surplus comma-separated args fold into
             // a single tuple, mirroring HS's signature-driven `naryOpApp`
-            // (`k == 1`, Theory/Text/Parser/Term.hs:94-96).  The listed
+            // (`k == 1`, Theory/Text/Parser/Term.hs).  The listed
             // names cover the builtin unary symbols the signature query
             // does not reach here — `h` / `fst` / `snd` / `inv` / `pk`,
             // plus `getMessage` (revealing-signing) and `get_rep` /
-            // `report` (locations-report), Term/Builtin/Signature.hs:38-40.
+            // `report` (locations-report), Term/Builtin/Signature.hs.
             // Widening the list to the whole signature regresses the
             // corpus, so it stays written out.
             let unary_builtin = matches!(
@@ -1296,7 +1294,7 @@ where
             }
             // `em(a, b)` under the bilinear-pairing builtin lowers to a
             // C-symbol application, not NoEq.  Mirrors HS `naryOpApp`
-            // (Theory/Text/Parser/Term.hs:87-106, see line 103):
+            // (Theory/Text/Parser/Term.hs):
             //   `(o,(_,_,_,_)) | o == emapSymString -> return $ fAppC EMap ts`
             // Classifying `em` as NoEq instead would declare the Maude
             // operator as `op tamem : Msg Msg -> Msg [comm]` (`op_c` in
@@ -1349,7 +1347,7 @@ where
             let aa = term_to_vterm(a, sig, mk_var)?;
             let bb = term_to_vterm(b, sig, mk_var)?;
             // Haskell `binaryAlgApp` also reads `(k,priv,cnstr)` from the
-            // signature via `lookupArity` (Theory/Text/Parser/Term.hs:108-121, see line 114),
+            // signature via `lookupArity` (Theory/Text/Parser/Term.hs),
             // so thread privacy/constructability here too.
             // #883: `[AC]` symbols build an AC application here as well —
             // under the same NoEq-first name resolution as the prefix
@@ -1362,10 +1360,10 @@ where
         p::Term::Diff(a, b) => {
             let aa = term_to_vterm(a, sig, mk_var)?;
             let bb = term_to_vterm(b, sig, mk_var)?;
-            // `diffOp` builds `fAppDiff` (Theory/Text/Parser/Term.hs:135), i.e.
-            // `fAppNoEq diffSym` (Term/Term.hs:162) — and `diff` is PRIVATE
+            // `diffOp` builds `fAppDiff` (Theory/Text/Parser/Term.hs), i.e.
+            // `fAppNoEq diffSym` (Term/Term.hs) — and `diff` is PRIVATE
             // (`diffSym = (diffSymString,(2,Private,Constructor,NotNDC))`,
-            // Term/Term/FunctionSymbols.hs:249).  The privacy is observable:
+            // Term/Term/FunctionSymbols.hs).  The privacy is observable:
             // it is the first attribute char of the Maude operator name
             // (`tamPCFUdiff`), and `contains_private` keys off it.
             Some(f_app_no_eq(
@@ -1383,7 +1381,7 @@ where
                 p::BinOp::NatPlus => Some(f_app_ac(AcSym::NatPlus, vec![aa, bb])),
                 // A user-declared `[AC]` symbol applied infix — ALWAYS the AC
                 // application (HS `acterm` builds `fAppACfct` straight from
-                // `stACFunSyms`, Theory/Text/Parser/Term.hs:166-172), even
+                // `stACFunSyms`, Theory/Text/Parser/Term.hs), even
                 // when a `NoEq` symbol shares the name and claims the prefix
                 // spelling.  It reads the same user-function signature for
                 // the symbol's privacy / constructability / NDC flags.
@@ -1411,7 +1409,7 @@ pub fn term_to_lnterm(t: &p::Term, sig: &MaudeSig) -> Option<tamarin_term::lterm
 // Parallel to `term_to_lnterm`, but the literal/variable case preserves the
 // SAPIC type annotation (`VarSpec.typ`) into `SapicLVar.stype`.  Mirrors HS's
 // SAPIC term parser (`Theory.Text.Parser.Sapic.sapicterm = msetterm False
-// ltypedlit`, Theory/Text/Parser/Sapic.hs:56-57), which builds
+// ltypedlit`, Theory/Text/Parser/Sapic.hs), which builds
 // `Term (Lit Name SapicLVar)` keeping
 // the `name:type` annotation on each typed variable.  Reuses the SAME
 // function-symbol / arity-1-fold / em / pair logic as `term_to_lnterm` (via
@@ -1430,7 +1428,7 @@ pub fn term_to_sapic_term(t: &p::Term, sig: &MaudeSig) -> Option<crate::sapic::S
 
 /// A parse-time variable occurrence as a SAPIC variable: the `LVar` of
 /// [`varspec_to_lvar`] carrying the written `name:type` annotation, as HS's
-/// `sapicvar` reads one (Token.hs:506-510).
+/// `sapicvar` reads one (Token.hs).
 pub fn varspec_to_sapic(v: &p::VarSpec) -> crate::sapic::SapicLVar {
     crate::sapic::SapicLVar::new(varspec_to_lvar(v), v.typ.clone())
 }

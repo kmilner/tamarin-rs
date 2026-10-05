@@ -1,8 +1,8 @@
 /*
  * Every variable written with an explicit `:sort` suffix, in a rule, a
  * restriction and two lemmas.  Upstream's suffix arm returns the same plain
- * `LVar` its sigil arms return (Token.hs:409-433#sortedLVar) and prints it
- * through `sortPrefix` (LTerm.hs:194-199#sortPrefix), so the sigil spelling
+ * `LVar` its sigil arms return (Token.hs#sortedLVar) and prints it
+ * through `sortPrefix` (LTerm.hs#sortPrefix), so the sigil spelling
  * comes back out.  No theory under tamarin-prover/examples writes a `:sort`
  * suffix, so this row is the only guard on that spelling: the corpus gates
  * stay green across a regression in it.

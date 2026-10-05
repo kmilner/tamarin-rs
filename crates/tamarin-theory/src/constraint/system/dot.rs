@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of Haskell's `Theory.Constraint.System.Dot` +
 //! `Theory.Constraint.System.Graph.*` — convert a `System` into a
@@ -20,39 +19,39 @@
 //!
 //! Upstream has exactly one such serializer — `dotSystemCompact graphOptions
 //! dotOptions system` — and hands it to `D.showDot` UNWRAPPED at the batch
-//! `--output-dot` writer (`Batch.hs:256`, at the trace's own label) and at the
-//! interactive DOT route (`dotGraphString`, `Web/Theory.hs:2312-2318`, at the
+//! `--output-dot` writer (`Batch.hs`, at the trace's own label) and at the
+//! interactive DOT route (`dotGraphString`, `Web/Theory.hs`, at the
 //! fixed label `"G"`).  Both of RS's callers go through this module at those
 //! two labels.
 //!
 //! Upstream's seven other `showDot "G"` sites serialise the same thing and
 //! belong to three functions RS has no counterpart for.  `imgThyPath`
-//! (`:1435`) and `imgDiffThyPath` (`:1532`, `:1546`, `:1553`) WRITE a file and
+//! and `imgDiffThyPath` WRITE a file and
 //! shell out to graphviz, so what they answer with is an image;
-//! `interactiveDotDiffThyPath` (`:1641`, `:1655`, `:1662`) returns its text,
+//! `interactiveDotDiffThyPath` returns its text,
 //! but only over `DiffTheory*` paths, and RS's `/thy/equiv/` routes are stubs
 //! that draw nothing.
-//! Three of the seven run the document through `prefixedShowDot`
-//! (`:1432-1436`, `:1527-1533`, `:1636-1642`), which `unlines` two
+//! Three of the seven run the document through `prefixedShowDot`,
+//! which `unlines` two
 //! `// protocol rules: …` / `// message deduction rules: …` comment lines
 //! ahead of it; the other four, the proof-path arms of the two diff
 //! functions, do not.  A DOT comment is invisible to graphviz, so on the image
 //! routes the prefix cannot reach the rendering at all.
 //!
 //! Per-rule node FILL colours are a faithful port of HS `nodeColorMap`
-//! (System/Dot.hs:193-221): the size-dependent light-HSV palette keyed by
+//! (System/Dot.hs): the size-dependent light-HSV palette keyed by
 //! `(groupIdx, memberIdx)` — see `build_node_color_map` / `NodeColorMap` in
 //! [`crate::constraint::system::graph::color`]. An explicit per-rule
 //! `color:` attribute and a cluster's `manualNodeColor` still take priority
-//! (HS `dotNodeCompact`, System/Dot.hs:251-259).
+//! (HS `dotNodeCompact`, System/Dot.hs).
 //! Each rule record also carries HS's `fontcolor` (`colorUsesWhiteFont` of the
-//! palette colour, System/Dot.hs:261 / 289-290) and `role` (System/Dot.hs:246 / 262)
+//! palette colour, System/Dot.hs) and `role` (System/Dot.hs)
 //! attributes.
 //!
 //! The `uncompact`/`FullBoringNodes` toggle belongs to HS `DotOptions`, which
 //! RS has no counterpart for, so the renderer is always compact — matching
-//! the HS default (`defaultDotOptions`, System/Dot.hs:84-87, see line 85) and the
-//! interactive route's own default (`getOptions`, Handler.hs:1396-1414, which
+//! the HS default (`defaultDotOptions`, System/Dot.hs) and the
+//! interactive route's own default (`getOptions`, Handler.hs, which
 //! selects `CompactBoringNodes` when the `uncompact` query param is absent).
 //!
 //! Reference:
@@ -103,8 +102,8 @@ use crate::constraint::system::graph::{system_to_graph, Graph};
 /// options.  Returns a self-contained `digraph "G" { … }` block.
 ///
 /// The options are the pair the batch writer picks (`defaultGraphOptions` —
-/// SL2, no auto-source, no clustering, abbreviate, compress — Graph.hs:66-73,
-/// and `defaultDotOptions`, System/Dot.hs:84, both named at `Batch.hs:254-255`); the
+/// SL2, no auto-source, no clustering, abbreviate, compress — Graph.hs,
+/// and `defaultDotOptions`, System/Dot.hs, both named at `Batch.hs`); the
 /// label is the one the web routes fix.  No upstream
 /// call site combines the two — `dotSystemCompact` takes its options from
 /// whoever calls it — so this is a test-only convenience, `pub` because
@@ -116,13 +115,13 @@ pub fn system_to_dot(sys: &System) -> String {
 /// Render a [`System`] into a Graphviz DOT document under the given
 /// options — the interactive graph routes' entry point.
 ///
-/// HS `dotGraphString` (`Web/Theory.hs:2312-2318`), which backs
-/// `getTheoryInteractiveGraphR` (`Handler.hs:1464-1470`), serialises the same
+/// HS `dotGraphString` (`Web/Theory.hs`), which backs
+/// `getTheoryInteractiveGraphR` (`Handler.hs`), serialises the same
 /// `dotSystemCompact graphOptions dotOptions system` the batch `--output-dot`
-/// writer does (`Batch.hs:256`) through `D.showDot`, at the fixed label `"G"`.
+/// writer does (`Batch.hs`) through `D.showDot`, at the fixed label `"G"`.
 /// So this is [`system_to_dot_labeled`] at that label.  `getTheoryGraphR`
-/// (`Handler.hs:1418-1432`) reaches the same call through `imgThyPath`, whose
-/// `prefixedShowDot` (`Web/Theory.hs:1432-1436`) prepends two `//` comment
+/// (`Handler.hs`) reaches the same call through `imgThyPath`, whose
+/// `prefixedShowDot` (`Web/Theory.hs`) prepends two `//` comment
 /// lines before handing the file to graphviz — comments graphviz discards, so
 /// the SVG that route answers with is this document's.
 pub fn system_to_dot_with(sys: &System, opts: &GraphOptions) -> String {
@@ -146,7 +145,7 @@ fn abbreviate_rule(ru: &RuleACInst, abbrev: &dyn Fn(&LNTerm) -> Option<LNTerm>) 
 }
 
 /// The `<TABLE …>` opening tag `abbrevLabel`'s `tableAttributes`
-/// (`[Border 1, CellBorder 0, CellSpacing 3, CellPadding 1]`, System/Dot.hs:462)
+/// (`[Border 1, CellBorder 0, CellSpacing 3, CellPadding 1]`, System/Dot.hs)
 /// print as.  Both legend serializers open with it; in the batch one its
 /// WIDTH is additionally the continuation indent of the rows below.
 const LEGEND_TABLE_OPEN: &str =
@@ -176,7 +175,7 @@ fn round_half_even(x: f64) -> i64 {
 }
 
 /// HS `renderBalanced 100 (max 30 . round . (*1.3))` + `scaleIndent`
-/// (System/Dot.hs:360-382), the layout engine for record-row fields: each doc of
+/// (System/Dot.hs), the layout engine for record-row fields: each doc of
 /// a row is rendered at a line length PROPORTIONAL to its one-line length
 /// (`renderStyle (defaultStyle { lineLength = w })`, i.e. PageMode with
 /// ribbon `round (w / 1.5)`), so a lone fact in a row gets width
@@ -213,7 +212,7 @@ fn render_balanced(docs: Vec<Doc>) -> Vec<String> {
         .collect()
 }
 
-/// HS `scaleIndent` (System/Dot.hs:378-382) — see `render_balanced`.
+/// HS `scaleIndent` (System/Dot.hs) — see `render_balanced`.
 fn scale_indent(s: String) -> String {
     let leading = s.chars().take_while(|c| c.is_whitespace()).count();
     if leading == 0 {
@@ -229,10 +228,10 @@ fn scale_indent(s: String) -> String {
     out
 }
 
-/// Mirror Haskell `ruleLabelM.isNotDiffAnnotation` (System/Dot.hs:344): the action
+/// Mirror Haskell `ruleLabelM.isNotDiffAnnotation` (System/Dot.hs): the action
 /// fact equal to the synthetic diff annotation
 /// `Fact (ProtoFact Linear ("Diff" ++ getRuleNameDiff ru) 0) S.empty []`
-/// is dropped before rendering. `getRuleNameDiff` (Theory/Model/Rule.hs:813-827) prefixes
+/// is dropped before rendering. `getRuleNameDiff` (Theory/Model/Rule.hs) prefixes
 /// the rule's `getRuleName` with `"Intr"`/`"Proto"` depending on the rule
 /// kind. Returns `true` when the fact should be KEPT.
 fn diff_annotation_name(ru: &RuleACInst) -> String {
@@ -250,7 +249,7 @@ fn is_not_diff_annotation(diff_fact_name: &str, fa: &LNFact) -> bool {
     !is_diff
 }
 
-/// Mirror Haskell `ruleLabelM.isAutoSource`/`hasAutoLabel` (System/Dot.hs:346-357):
+/// Mirror Haskell `ruleLabelM.isAutoSource`/`hasAutoLabel` (System/Dot.hs):
 /// a fact whose `showFactTag` begins with one of the auto-source label
 /// prefixes is an auto-source fact. These labels are linear proto facts, so
 /// `showFactTag` reduces to the bare proto name here (no `!` prefix), which
@@ -264,8 +263,8 @@ fn is_auto_source(fa: &LNFact) -> bool {
         || name.starts_with("AUTO_OUT_FACT_")
 }
 
-/// HS `isIntruderRule ru || isFreshRule ru` (Theory/Model/Rule.hs:780-782 / 734-735): the
-/// predicate gating `mkNode`'s `CompactBoringNodes` branch (System/Dot.hs:299-300).
+/// HS `isIntruderRule ru || isFreshRule ru` (Theory/Model/Rule.hs): the
+/// predicate gating `mkNode`'s `CompactBoringNodes` branch (System/Dot.hs).
 /// True for any intruder rule and for the reserved proto `Fresh` rule.
 fn is_intruder_or_fresh(ru: &RuleACInst) -> bool {
     match &ru.info {
@@ -274,7 +273,7 @@ fn is_intruder_or_fresh(ru: &RuleACInst) -> bool {
     }
 }
 
-/// Build the rule-node label Doc — HS `ruleLabelM` (System/Dot.hs:333-341):
+/// Build the rule-node label Doc — HS `ruleLabelM` (System/Dot.hs):
 /// `prettyNodeId v <-> colon <-> text (showDotRuleCaseName ru) <> (if null lbl
 /// then mempty else brackets (vcat (punctuate comma lbl)))`. `<->` is
 /// space-separated (`#i : name`) but the action bracket is joined with `<>`
@@ -283,7 +282,7 @@ fn is_intruder_or_fresh(ru: &RuleACInst) -> bool {
 /// as HS (`is_not_diff_annotation`; drop `AUTO_*` only when
 /// `goShowAutoSource`).  The caller lays this Doc out via
 /// `render_balanced` (HS `asM = renderRow [(Nothing, ruleLabel)]`,
-/// System/Dot.hs:323-325 — a single-doc row, i.e. width 130 / ribbon 87).
+/// System/Dot.hs — a single-doc row, i.e. width 130 / ribbon 87).
 fn rule_label_doc(nid: &LVar, ru: &RuleACInst, opts: &GraphOptions) -> Doc {
     let diff_fact_name = diff_annotation_name(ru);
     let act_docs: Vec<Doc> = ru
@@ -300,7 +299,7 @@ fn rule_label_doc(nid: &LVar, ru: &RuleACInst, opts: &GraphOptions) -> Doc {
     if act_docs.is_empty() {
         header
     } else {
-        // `brackets (vcat $ punctuate comma lbl)` (System/Dot.hs:341).
+        // `brackets (vcat $ punctuate comma lbl)` (System/Dot.hs).
         header
             .beside(Doc::text("["))
             .beside(pretty_hpj::vcat(pretty_hpj::punctuate(
@@ -312,8 +311,8 @@ fn rule_label_doc(nid: &LVar, ru: &RuleACInst, opts: &GraphOptions) -> Doc {
 }
 
 /// Mirror Haskell's `showDotRuleCaseName` for `RuleACInst`
-/// (Theory/Model/Rule.hs:1342-1344 via `prettyDotProtoRuleName`,
-/// Theory/Model/Rule.hs:1292-1308).
+/// (Theory/Model/Rule.hs via `prettyDotProtoRuleName`,
+/// Theory/Model/Rule.hs).
 fn rule_case_name(ru: &RuleACInst) -> String {
     match &ru.info {
         RuleInfo::Proto(p) => match &p.name {
@@ -338,7 +337,7 @@ fn rule_case_name(ru: &RuleACInst) -> String {
     }
 }
 
-/// Mirror Haskell `trimSapicName` (Theory/Model/Rule.hs:1300-1308): strips a
+/// Mirror Haskell `trimSapicName` (Theory/Model/Rule.hs): strips a
 /// trailing `_<digits>_<digits>` suffix from a SAPiC rule name.
 fn trim_sapic_name(name: &str) -> String {
     if let Some((prefix, m)) = name.rsplit_once('_')
@@ -353,7 +352,7 @@ fn trim_sapic_name(name: &str) -> String {
     name.to_string()
 }
 
-/// HS `ruleColor'` (System/Dot.hs:251-256): `rgbToHex` of the proto rule's explicit
+/// HS `ruleColor'` (System/Dot.hs): `rgbToHex` of the proto rule's explicit
 /// `color:` attribute, if any. `None` for intruder rules / no attribute.
 fn explicit_rule_color(ru: &RuleACInst) -> Option<String> {
     if let RuleInfo::Proto(p) = &ru.info
@@ -365,7 +364,7 @@ fn explicit_rule_color(ru: &RuleACInst) -> Option<String> {
 }
 
 /// Pick a rule node's fill colour with HS `dotNodeCompact`'s priority
-/// (System/Dot.hs:258-259): `fromMaybe (maybe "white" rgbToHex color)
+/// (System/Dot.hs): `fromMaybe (maybe "white" rgbToHex color)
 /// (ruleColor' <|> manualNodeColor)` — the explicit `color:` attribute wins,
 /// then the cluster's `manualNodeColor`, then the `nodeColorMap` palette
 /// fallback (`maybe "white" rgbToHex (M.lookup rInfo colorMap)`): a node
@@ -384,7 +383,7 @@ fn rule_fillcolor(
         })
 }
 
-/// HS `dotNodeCompact.colorUsesWhiteFont` (System/Dot.hs:289-290): a node uses a white
+/// HS `dotNodeCompact.colorUsesWhiteFont` (System/Dot.hs): a node uses a white
 /// font iff it HAS a palette colour and that colour is "dark" in apparent
 /// (linear) luminance, `0.2126 r + 0.7152 g + 0.0722 b < 0.5`. An absent colour
 /// (`None`) ⇒ black font. Keyed off the palette colour (`M.lookup rInfo
@@ -396,7 +395,7 @@ fn color_uses_white_font(color: Option<tamarin_utils::color::Rgb>) -> bool {
     }
 }
 
-/// Which arm of `dotEdge`'s `SystemEdge` guard chain (System/Dot.hs:390-397) an edge
+/// Which arm of `dotEdge`'s `SystemEdge` guard chain (System/Dot.hs) an edge
 /// falls into.  The classification is decided here; its sole consumer,
 /// `dot_showdot`, spells the resulting attributes (`json.rs` carries its own
 /// `EdgeClass` for the JSON edge palette).
@@ -410,7 +409,7 @@ enum EdgeKind {
     Other,
 }
 
-/// `dotEdge`'s `SystemEdge` guard chain (System/Dot.hs:390-397), split out so the
+/// `dotEdge`'s `SystemEdge` guard chain (System/Dot.hs), split out so the
 /// classification is decided here and spelled as attributes by the serializer.
 fn classify_edge(
     orig_node_map: &NodeRuleMap<'_>,
@@ -421,14 +420,14 @@ fn classify_edge(
     let conc_tag = lookup_conc_tag(orig_node_map, src);
     let prem_tag = lookup_prem_tag(orig_node_map, tgt);
     let is_proto = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Proto(_, _, _))) };
-    // HS `isPersistentFact` (Theory/Model/Fact.hs:379-380) reads the tag's
-    // multiplicity, and HS `factTagMultiplicity` (Theory/Model/Fact.hs:383-388)
+    // HS `isPersistentFact` (Theory/Model/Fact.hs) reads the tag's
+    // multiplicity, and HS `factTagMultiplicity` (Theory/Model/Fact.hs)
     // makes `KUFact`/`KDFact`
     // persistent alongside `ProtoFact Persistent _ _`.  Only the proto arm can
     // fire below: the branch is gated on `check isProtoFact`, and both endpoints
     // of an `Edge` carry the same tag because HS `insertEdges`
-    // (Reduction.hs:281-284) unifies the two facts through `solveFactEqs`, whose
-    // first act is `contradictoryIf` on unequal tags (Reduction.hs:766-769).
+    // (Reduction.hs) unifies the two facts through `solveFactEqs`, whose
+    // first act is `contradictoryIf` on unequal tags (Reduction.hs).
     let is_persistent = |t: Option<&FactTag>| -> bool {
         t.is_some_and(|tag| {
             crate::fact::fact_tag_multiplicity(tag) == crate::fact::Multiplicity::Persistent
@@ -446,7 +445,7 @@ fn classify_edge(
     }
 }
 
-/// HS `resolveNodeConcFact` (System.hs:932-933) reached through Graph.hs:93-96,
+/// HS `resolveNodeConcFact` (System.hs) reached through Graph.hs,
 /// keeping only the tag `dotEdge`'s predicates test.
 fn lookup_conc_tag(
     orig_node_map: &NodeRuleMap<'_>,
@@ -457,7 +456,7 @@ fn lookup_conc_tag(
     ru.conclusions.get(idx.0).map(|fa| fa.tag)
 }
 
-/// HS `resolveNodePremFact` (System.hs:928-929) reached through Graph.hs:87-90,
+/// HS `resolveNodePremFact` (System.hs) reached through Graph.hs,
 /// keeping only the tag `dotEdge`'s predicates test.
 fn lookup_prem_tag(
     orig_node_map: &NodeRuleMap<'_>,
@@ -468,11 +467,11 @@ fn lookup_prem_tag(
     ru.premises.get(idx.0).map(|fa| fa.tag)
 }
 
-/// Port of Haskell `roleColor` (System/Dot.hs:559-569): a deterministic per-role
+/// Port of Haskell `roleColor` (System/Dot.hs): a deterministic per-role
 /// `#RRGGBBAA` colour. `simpleHash name = foldl (\acc c -> acc*31 + ord c) 7`
-/// (System/Dot.hs:551-552) over the role's base name (Haskell `Int`, i.e. 64-bit
+/// (System/Dot.hs) over the role's base name (Haskell `Int`, i.e. 64-bit
 /// two's-complement wrapping), `generateValue = (hash `mod` 360) / 360`
-/// (System/Dot.hs:555-556; Haskell `mod` is non-negative for a positive divisor —
+/// (System/Dot.hs; Haskell `mod` is non-negative for a positive divisor —
 /// `rem_euclid` here), then
 /// `hsvToRGB (HSV (v*360) 0.75 0.85)` with each channel `floor(f*255)` and a
 /// fixed alpha `floor(255*0.3) = 76`. Hex digits are UPPERCASE (`%02X`), and

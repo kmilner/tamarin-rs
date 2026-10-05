@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::constraint::solver::context::ProofContext;
@@ -587,7 +586,7 @@ fn fresh_ordering_follows_transitive_positive_subterms() {
         .any(|atom| atom.smaller == supplier && atom.larger == consumer));
 }
 
-/// CR-rule *N6* `exploitUniqueMsgOrder` (Simplify.hs:166-169) inserts
+/// CR-rule *N6* `exploitUniqueMsgOrder` (Simplify.hs) inserts
 /// `i_kd < i_ku` for every message that is both a KD conclusion and a KU
 /// action.  HS's `F.mapM_ insertLess … M.intersectionWith` has no condition.
 /// A single node can both conclude `KD(m)` and carry a `KU(m)` action.  Such
@@ -740,7 +739,7 @@ fn simplify_decomposes_top_level_conj() {
     // inserted as `Goal::Action` (via `insertAtom -> insertAction`)
     // rather than being tracked as formulas/solved_formulas.
     // Mirrors HS `insert' mark fm = ... GConj fms -> mapM_ (insert
-    // False) (getConj fms)` (Reduction.hs:449-451) where the inner
+    // False) (getConj fms)` (Reduction.hs) where the inner
     // GAto path's `markAsSolved` is gated on `when mark`.
     let has_action_goal = |name: &str| {
         sys.goals.iter().any(|(g, _)| match g {
@@ -1151,8 +1150,8 @@ fn ku_action_uniqueness_merges_two_nodes_with_same_term() {
 /// produce the `ACNewVarD` existential leaf, which `simpSplitNegSt`
 /// turns into the `acFormula`:
 ///   ∀ newVar. (a++a) ++ newVar = (b++c) ⇒ ⊥
-/// (HS SubtermStore.hs:187-204, see line 194; the `ACNewVarD` leaf is
-/// built by `splitSubterm`'s `step` at SubtermStore.hs:289-296).
+/// (HS SubtermStore.hs; the `ACNewVarD` leaf is
+/// built by `splitSubterm`'s `step` at SubtermStore.hs).
 ///
 /// Authenticity: HS's `tamarin-prover --prove` verifies the
 /// corresponding lemma `not(a++a ⊏ b++c)` (4 steps) — the proof
@@ -1281,7 +1280,7 @@ fn simp_injective_eq_mon_emits_constant_eq() {
 /// and `S(~id, <a2, k2>)`.  The pass must equate ONLY the Constant
 /// pair-leaf (`k1 = k2`), leaving the Unstable leaf (`a1`/`a2`)
 /// untouched — pinning that the consumer pairs by pair-leaf (HS
-/// `trimmedPairTerms`/`shapeTerm`, Simplify.hs:611-628), not by whole
+/// `trimmedPairTerms`/`shapeTerm`, Simplify.hs), not by whole
 /// argument position.
 #[test]
 fn simp_injective_eq_mon_pairs_tuple_leaves() {

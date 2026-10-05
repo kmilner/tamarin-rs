@@ -1,9 +1,8 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! `escapeHtmlEntities` from `lib/utils/src/Text/PrettyPrint/Html.hs`
-//! (Text/PrettyPrint/Html.hs:140-149).
+//! (Text/PrettyPrint/Html.hs).
 //!
 //! [`escape_html_entities`] is the one HTML escaper in the tree.  The rest of
 //! that Haskell module — the `HtmlDoc` render mode — lives in

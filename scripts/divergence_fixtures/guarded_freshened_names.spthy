@@ -1,16 +1,16 @@
 // The names in the `unguarded variable(s) …` diagnostic, against the other
 // spellings of the SAME binder in the same load.
 //
-// `formulaToGuarded` (Theory/Constraint/System/Guarded.hs:471-479) runs the
-// whole conversion inside one `Precise.evalFreshT … (avoidPrecise fmOrig)`
-// (line 474), and its quantifier arms draw their binders with
-// `openFormulaPrefix` (Guarded.hs:536,547) with no `scopeFreshness` around
+// `formulaToGuarded` (Theory/Constraint/System/Guarded.hs) runs the
+// whole conversion inside one `Precise.evalFreshT … (avoidPrecise fmOrig)`,
+// and its quantifier arms draw their binders with
+// `openFormulaPrefix` (Guarded.hs) with no `scopeFreshness` around
 // them — so a single supply is threaded across the entire formula.
-// `noUnguardedVars` (Guarded.hs:507-514) then `show`s the survivors under
-// those freshened names (line 511).  The pretty printer has its own supply:
-// `prettyLNFormula` (Theory/Model/Formula.hs:518-520) seeds `avoidPrecise`
+// `noUnguardedVars` (Guarded.hs) then `show`s the survivors under
+// those freshened names.  The pretty printer has its own supply:
+// `prettyLNFormula` (Theory/Model/Formula.hs) seeds `avoidPrecise`
 // afresh, and `prettyLFormula` opens every prefix under `scopeFreshness`
-// (Theory/Model/Formula.hs:503-505), which RESTORES the supply on the way
+// (Theory/Model/Formula.hs), which RESTORES the supply on the way
 // out.  One binder can therefore print differently in the report and in the
 // echo:
 //
@@ -27,20 +27,20 @@
 //
 // A supply reset per quantifier, or one counting only ENCLOSING binders,
 // collapses those answers onto one.  The quoted SUBFORMULA is a spelling
-// again: `noUnguardedVars` quotes it as `ppFormula f0` (Guarded.hs:513) and
-// `ppFormula` (Guarded.hs:477) is `nest 2 . doubleQuotes . prettyLNFormula`,
+// again: `noUnguardedVars` quotes it as `ppFormula f0` (Guarded.hs) and
+// `ppFormula` (Guarded.hs) is `nest 2 . doubleQuotes . prettyLNFormula`,
 // whose `avoidPrecise` sees that subformula alone — so it reads `"∀ x z. …"`
-// beside a variable list that says 'x.1'.  `ppError` (Guarded.hs:479) prints
+// beside a variable list that says 'x.1'.  `ppError` (Guarded.hs) prints
 // the whole formula the same way, which is why the trailer under `in the
 // formula` carries the printer's names and not the conversion's.
 //
 // Every probe here is a LEMMA on purpose.  `prettyRestriction`
-// (TheoryObject.hs:889-901) decides its `// safety formula` line with
-// `formulaToGuarded_` (Guarded.hs:466-467), which is `either (error . render)
+// (TheoryObject.hs) decides its `// safety formula` line with
+// `formulaToGuarded_` (Guarded.hs), which is `either (error . render)
 // id`, so the oracle DIES while printing an unguardable restriction and the
 // same formulas as restrictions yield no comparable bytes at all.  A lemma's
 // conversion reaches only `checkGuarded`'s `Either`
-// (Theory/Tools/Wellformedness.hs:988-993).
+// (Theory/Tools/Wellformedness.hs).
 //
 // No corpus theory carries an unguardable lemma or restriction — no corpus wf
 // block holds a " Formula guardedness" header at all.

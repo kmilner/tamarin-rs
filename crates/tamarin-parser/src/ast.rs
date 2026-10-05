@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Surface-syntax AST for `.spthy` files: the loose tree [`crate::parser`]
 //! produces and `tamarin-theory` (wellformedness, elaboration) consumes.
@@ -124,7 +123,7 @@ pub struct FunctionDecl {
     /// diff-mode intruder rules (HS `NDCstate IsNDCDiff`).
     ///
     /// The symbol's NDC state is the join of the two flags (HS `function`,
-    /// Theory/Text/Parser/Signature.hs:183-225): neither = `NotNDC`, `ndc`
+    /// Theory/Text/Parser/Signature.hs): neither = `NotNDC`, `ndc`
     /// alone = `IsNDC`, `ndc_diff` alone = `IsNDCDiff`, both = `IsNDCBoth`.
     pub ndc_diff: bool,
 }
@@ -186,7 +185,7 @@ pub enum RuleAttr {
     IsSapicRule,
     /// `process="..."` — the rendered `prettySapicTopLevel'` of a
     /// SAPIC-generated rule's subprocess.  HS's rule-attribute PARSER ignores
-    /// a user-written `process=` (`parseAndIgnore`, Parser/Rule.hs:68-93, see line 72), so this
+    /// a user-written `process=` (`parseAndIgnore`, Parser/Rule.hs), so this
     /// variant is never produced by the parser; it is synthesised only by the
     /// SAPIC translation when it injects generated rules into the parsed theory
     /// (so the pretty-printer renders the `process="..."` attribute).
@@ -211,9 +210,9 @@ pub struct Lemma {
     /// The verbatim source text of the lemma (from the `lemma` keyword up to
     /// and including the trailing whitespace/comments after its proof
     /// skeleton), with comments stripped.  Mirrors HS `_lPlaintext`
-    /// (`ProtoLemma`, `Items/LemmaItem.hs:48-58, see line 50`), which the parser fills from
+    /// (`ProtoLemma`, `Items/LemmaItem.hs`), which the parser fills from
     /// `removeComments $ take (length start - length end) start`
-    /// (`Theory/Text/Parser/Lemma.hs:78-88, see line 87`).  Used only by the interactive web
+    /// (`Theory/Text/Parser/Lemma.hs`).  Used only by the interactive web
     /// server's Edit-lemma form (never rendered by `--prove`).
     pub plaintext: String,
 }
@@ -246,11 +245,11 @@ pub struct CaseTest {
 /// Structured skeleton parse — mirrors HS's
 /// `LTree (ProofStep ProofMethod (Maybe System))` produced by
 /// `Theory.Text.Parser.Proof.startProofSkeleton`
-/// (lib/theory/src/Theory/Text/Parser/Proof.hs:90-115).
+/// (lib/theory/src/Theory/Text/Parser/Proof.hs).
 ///
 /// The skeleton is the *static* tree as written in the `.spthy` source,
 /// before any prover is run; `by sorry` leaves are the placeholders
-/// `replaceSorryProver` (HS: Theory/Proof.hs:642-651) replaces with
+/// `replaceSorryProver` (HS: Theory/Proof.hs) replaces with
 /// auto-prover output at proof-replay time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProofSkeleton {
@@ -265,7 +264,7 @@ pub struct ProofSkeleton {
 /// One node of the parsed proof skeleton.
 ///
 /// Mirrors HS's `LNode (ProofStep ProofMethod ()) (Map CaseName ProofSkeleton)`
-/// from lib/theory/src/Theory/Text/Parser/Proof.hs:98-115:
+/// from lib/theory/src/Theory/Text/Parser/Proof.hs:
 ///
 /// ```haskell
 /// proofSkeleton =
@@ -293,9 +292,9 @@ pub struct ParsedProofTree {
 }
 
 /// Parsed proof method.  Mirrors the `ProofMethod` values HS's
-/// `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) produces, plus
+/// `proofMethod` (Theory/Text/Parser/Proof.hs) produces, plus
 /// `SolvedLeaf` for the `SOLVED` keyword, which HS reads at the skeleton
-/// level (`solvedProof`, Theory/Text/Parser/Proof.hs:102-103).
+/// level (`solvedProof`, Theory/Text/Parser/Proof.hs).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedMethod {
     /// `sorry` (HS `Sorry Nothing`).  This is the placeholder
@@ -320,8 +319,8 @@ pub enum ParsedMethod {
 /// The goal of a stored `solve( ... )` step.
 ///
 /// [`crate::parser::parse_parens_goal`] builds these from HS's `goal` grammar
-/// (Theory/Text/Parser/Proof.hs:38-72); they mirror the HS `Goal`
-/// constructors (Constraints.hs:159-171) over surface terms and formulas
+/// (Theory/Text/Parser/Proof.hs); they mirror the HS `Goal`
+/// constructors (Constraints.hs) over surface terms and formulas
 /// instead of `LNTerm`s and `LNGuarded`s.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GoalSpec {
@@ -337,7 +336,7 @@ pub enum GoalSpec {
     Split(i64),
     /// `gf1 ∥ gf2 ∥ ...` — HS `DisjG (Disj LNGuarded)`.  Each disjunct is a
     /// `plainFormula`; HS's `guardedFormula`
-    /// (Theory/Text/Parser/Formula.hs:122-127) turns it into an `LNGuarded`,
+    /// (Theory/Text/Parser/Formula.hs) turns it into an `LNGuarded`,
     /// which `tamarin_theory::elaborate::goal_from_parsed` does here.
     Disj(Vec<Formula>),
     /// `<small> ⊏ <big>` — HS `SubtermG (LNTerm, LNTerm)`.
@@ -464,7 +463,7 @@ pub enum Condition {
 // =============================================================================
 
 /// HS `Fact` ignores its annotations in equality and ordering
-/// (Theory/Model/Fact.hs:169-174) and holds them in a `S.Set`, where they
+/// (Theory/Model/Fact.hs) and holds them in a `S.Set`, where they
 /// have no order at all; the derive here reads `annotations` as an ordered
 /// list, so this equality is finer than HS's.  Only test assertions compare a
 /// parsed fact — the elaborated `tamarin_theory::fact::Fact` that production
@@ -557,9 +556,9 @@ impl BinOp {
     /// The string HS `prettyTerm` puts between the operands of this operator.
     ///
     /// The five builtin operators are the literal separators of `prettyTerm`'s
-    /// `ppTerms`/`exp` arms (`*`, `⊕`, `++`, `%+`, `^`; Term/Term.hs:306-310).
+    /// `ppTerms`/`exp` arms (`*`, `⊕`, `++`, `%+`, `^`; Term/Term.hs).
     /// A user-declared `[AC]` symbol is separated by `" " ++ BC.unpack f ++ " "`
-    /// (Term/Term.hs:305), i.e. its name with the spaces included, so that one
+    /// (Term/Term.hs), i.e. its name with the spaces included, so that one
     /// arm owns a `String`.
     ///
     /// This is the single separator table: printers that need a `&'static str`
@@ -578,7 +577,7 @@ impl BinOp {
 }
 
 /// A variable occurrence: HS `LVar` plus the SAPIC type annotation HS keeps
-/// beside it in `SapicLVar` (Theory/Sapic/Term.hs:64-65).
+/// beside it in `SapicLVar` (Theory/Sapic/Term.hs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VarSpec {
     pub name: String,
@@ -592,7 +591,7 @@ mod tests {
     use super::BinOp;
 
     /// The separator strings HS `prettyTerm` puts between operands
-    /// (Term/Term.hs:305-310).  Every printer of a `BinOp` reads them from
+    /// (Term/Term.hs).  Every printer of a `BinOp` reads them from
     /// here, so a typo would move in lockstep across all of them — pin the
     /// table itself.
     #[test]

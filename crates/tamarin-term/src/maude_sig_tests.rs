@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 
@@ -47,8 +46,8 @@ fn wire_index_covers_every_emitted_signature_symbol() {
 }
 
 /// HS `addFunSym`/`addMacroSym` route through the monoid `<>`
-/// (Term/Maude/Signature.hs:170-178), which rebuilds from `mempty`
-/// (eqConvergent=False, line 153) and so RESETS eqConvergent to false.
+/// (Term/Maude/Signature.hs), which rebuilds from `mempty`
+/// (eqConvergent=False) and so RESETS eqConvergent to false.
 ///
 /// Probed against the real prover (v1.13.0): a `functions:` block placed
 /// AFTER an `equations [convergent]:` block prints `equations:` (the
@@ -56,7 +55,7 @@ fn wire_index_covers_every_emitted_signature_symbol() {
 /// `equations [convergent]:`.  `add_ctxt_st_rule` must NOT reset, since
 /// elaborate.rs sets eq_convergent before the rule loop (mirroring the HS
 /// parser's explicit re-set AFTER `foldl addCtxtStRule`,
-/// Theory/Text/Parser/Signature.hs:241-242).
+/// Theory/Text/Parser/Signature.hs).
 #[test]
 fn add_fun_sym_resets_eq_convergent() {
     use crate::function_symbols::{Constructability, NoEqSym, Privacy};
@@ -138,7 +137,7 @@ fn add_fun_sym_routes_ac_symbols() {
     assert!(!sig.has_no_ac_operators());
 }
 
-/// HS `ppFunSymb`/`showAttrs` (Term/Maude/Signature.hs:273-292): attributes are
+/// HS `ppFunSymb`/`showAttrs` (Term/Maude/Signature.hs): attributes are
 /// bracketed after a LEADING space, free symbols print
 /// `[private,constructor]` where AC symbols print only `[private]`, and the
 /// NDC attributes come last.
@@ -260,7 +259,7 @@ fn merge_keeps_the_lhs_flags_with_their_rules() {
     assert!(!merged.st_lhs_all_ac_c_free());
 }
 
-/// HS `joinNDCinSig` (Term/Maude/Signature.hs:236-246) is a record update over
+/// HS `joinNDCinSig` (Term/Maude/Signature.hs) is a record update over
 /// `stFunSyms`/`stACFunSyms` that does NOT re-run `maudeSig`, so every
 /// derived cache keeps its pre-join NDC states — and `ndc` participates in
 /// `NoEqSym`/`AcFctSym` `Eq`/`Ord`, so those are DIFFERENT symbols, not the
@@ -271,8 +270,8 @@ fn merge_keeps_the_lhs_flags_with_their_rules() {
 ///   * `fun_syms` (and `no_eq_fun_syms`/`ac_user_fun_syms`/the
 ///     irreducible+reducible sets read off it) keep `NotNdc`;
 ///   * `user_defined_st_fun_syms` (HS `userDefinedSTFunSyms`,
-///     Term/Maude/Signature.hs:166-167) reads the joined `st_fun_syms` for its free
-///     half but the stale `acUserFunSyms` (Term/Maude/Signature.hs:160-161) for its AC
+///     Term/Maude/Signature.hs) reads the joined `st_fun_syms` for its free
+///     half but the stale `acUserFunSyms` (Term/Maude/Signature.hs) for its AC
 ///     half, so with one name carried by both a free and an `[AC]` symbol
 ///     the two halves disagree about NDC.
 #[test]
@@ -333,9 +332,9 @@ fn join_ndc_in_sig_leaves_every_derived_cache_stale() {
 }
 
 /// A free and a user-defined AC symbol of one name: HS `lookupArity`
-/// (Theory/Text/Parser/Term.hs:62-72) takes the FIRST match of
+/// (Theory/Text/Parser/Term.hs) takes the FIRST match of
 /// `S.toList (userDefinedFunSyms …)`, whose `NoEqUser` entries all precede its
-/// `ACfctUser` ones (FunctionSymbols.hs:146).
+/// `ACfctUser` ones (FunctionSymbols.hs).
 #[test]
 fn fun_sym_named_prefers_noeq_over_ac() {
     let f_free = NoEqSym::new(
@@ -363,8 +362,8 @@ fn fun_sym_named_prefers_noeq_over_ac() {
 /// `symmetric-encryption` and `dest-symmetric-encryption` both carry `sdec/2`,
 /// as a constructor and as a destructor; `unionExceptPairSym` keeps both
 /// (its exception is `fst`/`snd`).  Constructability is the fourth component
-/// of HS `NoEqSym` (FunctionSymbols.hs:132) and `Constructor < Destructor`
-/// (FunctionSymbols.hs:116), so the set order offers the constructor first.
+/// of HS `NoEqSym` (FunctionSymbols.hs) and `Constructor < Destructor`
+/// (FunctionSymbols.hs), so the set order offers the constructor first.
 #[test]
 fn fun_sym_named_prefers_the_constructor_over_the_destructor() {
     let sig = sym_enc_maude_sig().merge(sym_enc_dest_maude_sig());
@@ -375,7 +374,7 @@ fn fun_sym_named_prefers_the_constructor_over_the_destructor() {
     );
 }
 
-/// `userDefinedFunSyms` reads the FULL `funSyms` (Term/Maude/Signature.hs:157-164),
+/// `userDefinedFunSyms` reads the FULL `funSyms` (Term/Maude/Signature.hs),
 /// so an enabled theory's free symbols resolve like declared ones — while its
 /// AC operator `mult` (`AC Mult`, no name of its own) is not in the index at
 /// all, which is HS's `unknown operator` for that spelling.
@@ -390,7 +389,7 @@ fn fun_sym_named_sees_theory_symbols_under_dh() {
 }
 
 /// HS appends the macro names after the function symbols
-/// (Theory/Text/Parser/Term.hs:65), so a function symbol of the same name
+/// (Theory/Text/Parser/Term.hs), so a function symbol of the same name
 /// wins and a macro alone resolves.
 #[test]
 fn fun_sym_named_falls_back_to_a_macro_name() {
@@ -424,7 +423,7 @@ fn fun_sym_named_falls_back_to_a_macro_name() {
 
 /// The name index answers with the free symbol when one shares the name, so
 /// the AC symbol is asked for separately — HS `acUserFunSyms`
-/// (Term/Maude/Signature.hs:160-161) over the same derived `fun_syms`.
+/// (Term/Maude/Signature.hs) over the same derived `fun_syms`.
 #[test]
 fn ac_fct_sym_named_finds_the_ac_symbol_when_a_noeq_shares_the_name() {
     let f_free = NoEqSym::new(
@@ -451,7 +450,7 @@ fn ac_fct_sym_named_finds_the_ac_symbol_when_a_noeq_shares_the_name() {
 }
 
 /// `join_ndc_in_sig` is a record update over the subterm-signature sets that
-/// does NOT re-run `maudeSig` (Term/Maude/Signature.hs:236-246), so the index
+/// does NOT re-run `maudeSig` (Term/Maude/Signature.hs), so the index
 /// and the AC lookup keep the pre-join NDC states, like every other derived
 /// cache; `refresh` is what carries the join into them.
 #[test]

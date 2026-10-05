@@ -1,14 +1,13 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of Haskell's `--auto-sources` lemma generation
-//! (`addAutoSourcesLemma`, `lib/theory/src/OpenTheory.hs:138-538`).
+//! (`addAutoSourcesLemma`, `lib/theory/src/OpenTheory.hs`).
 //!
 //! When `--auto-sources` is set and the raw sources still contain open
 //! chains (partial deconstructions), Tamarin first UNFOLDS every closed
 //! rule into its per-AC-variant rules (`itemsModAC = unfoldRules items`,
-//! CloseRule.hs:106-110; `unfoldRuleVariants`, lib/theory/src/Rule.hs:63-79
+//! CloseRule.hs; `unfoldRuleVariants`, lib/theory/src/Rule.hs
 //! — identity for trivial-variant rules) and then generates a single
 //! `sources` lemma over the unfolded rule set: each open-chain input
 //! subterm is tied to the earlier outputs it can unify with (via Maude) or
@@ -44,28 +43,28 @@ fn bound(i: u64) -> BLNTerm {
     var_term(BVar::Bound(i))
 }
 
-/// `Qua All (name, sort)` (OpenTheory.hs:395-417).
+/// `Qua All (name, sort)` (OpenTheory.hs).
 fn all(name: &str, sort: LSort, body: LNFormula) -> LNFormula {
     LNFormula::for_all((name.to_string(), sort), body)
 }
 
-/// `Qua Ex (name, sort)` (OpenTheory.hs:484-501).
+/// `Qua Ex (name, sort)` (OpenTheory.hs).
 fn ex(name: &str, sort: LSort, body: LNFormula) -> LNFormula {
     LNFormula::exists((name.to_string(), sort), body)
 }
 
-/// `Ato (Action tp fa)` (OpenTheory.hs:404-412).
+/// `Ato (Action tp fa)` (OpenTheory.hs).
 fn action(fa: Fact<BLNTerm>, tp: BLNTerm) -> LNFormula {
     LNFormula::Atom(ProtoAtom::Action(tp, fa))
 }
 
-/// `Ato (Less a b)` (OpenTheory.hs:500).
+/// `Ato (Less a b)` (OpenTheory.hs).
 fn less(a: BLNTerm, b: BLNTerm) -> LNFormula {
     LNFormula::Atom(ProtoAtom::Less(a, b))
 }
 
 /// The four AUTO action facts — `inputFactTerm`, `inputFactFact`,
-/// `outputFactTerm` and `outputFactFact` (OpenTheory.hs:313-352): a linear
+/// `outputFactTerm` and `outputFactFact` (OpenTheory.hs): a linear
 /// proto fact of the given name over the given terms.
 fn auto_fact(name: &str, terms: Vec<BLNTerm>) -> Fact<BLNTerm> {
     Fact::new(
@@ -78,7 +77,7 @@ fn auto_fact(name: &str, terms: Vec<BLNTerm>) -> Fact<BLNTerm> {
     )
 }
 
-/// `orKU` (OpenTheory.hs:484-501): `∃ j. !KU(x) @ j ∧ j < i`, read under the
+/// `orKU` (OpenTheory.hs): `∃ j. !KU(x) @ j ∧ j < i`, read under the
 /// `x`, `m`, `i` prefix that `Bound 3` and `Bound 1` point back into.
 fn or_ku() -> LNFormula {
     let ku = Fact::new(FactTag::Ku, vec![bound(3)]);
@@ -89,7 +88,7 @@ fn or_ku() -> LNFormula {
     )
 }
 
-/// `toFactsTerm ru p f''` (OpenTheory.hs:502-519):
+/// `toFactsTerm ru p f''` (OpenTheory.hs):
 /// `f'' ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i)`.
 fn to_facts_term(out_name: &str, inner: LNFormula) -> LNFormula {
     inner.or(ex(
@@ -100,7 +99,7 @@ fn to_facts_term(out_name: &str, inner: LNFormula) -> LNFormula {
 }
 
 /// `addForm` protected-subterm case with NO matching outputs
-/// (OpenTheory.hs:395-417): `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒ orKU`.
+/// (OpenTheory.hs): `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒ orKU`.
 pub(crate) fn term_input_form_no_outputs(in_name: &str) -> LNFormula {
     let in_fact = auto_fact(in_name, vec![bound(1), bound(2)]);
     all(
@@ -115,7 +114,7 @@ pub(crate) fn term_input_form_no_outputs(in_name: &str) -> LNFormula {
 }
 
 /// `addForm` protected-subterm case WITH matching outputs
-/// (OpenTheory.hs:419-441): `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒
+/// (OpenTheory.hs): `∀ x m i. AUTO_IN_TERM(m,x) @ i ⇒
 /// (orKU ∨ (∃ j. AUTO_OUT_TERM(m) @ j ∧ j < i))`.
 pub(crate) fn term_input_form_with_outputs(in_name: &str, out_name: &str) -> LNFormula {
     let in_fact = auto_fact(in_name, vec![bound(1), bound(2)]);
@@ -136,21 +135,21 @@ pub(crate) fn term_input_form_with_outputs(in_name: &str, out_name: &str) -> LNF
 
 // ---------------------------------------------------------------------------
 // Fact-input cases (AUTO_*_FACT) — HS `addForm (_, Right _, _)` and
-// `formulaMultArity` / `toFactsFact` (OpenTheory.hs:443-483, 520-533).
+// `formulaMultArity` / `toFactsFact` (OpenTheory.hs).
 // ---------------------------------------------------------------------------
 
-/// `listOfM n` (OpenTheory.hs:380-381): `["m1", "m2", ..., "mn"]`.
+/// `listOfM n` (OpenTheory.hs): `["m1", "m2", ..., "mn"]`.
 fn list_of_m(n: usize) -> Vec<String> {
     (1..=n).map(|k| format!("m{}", k)).collect()
 }
 
-/// `listVarTerm q s` (OpenTheory.hs:534-535): the occurrences `Bound q` down
+/// `listVarTerm q s` (OpenTheory.hs): the occurrences `Bound q` down
 /// to `Bound s`.
 fn list_var_term(q: u64, s: u64) -> Vec<BLNTerm> {
     (s..=q).rev().map(bound).collect()
 }
 
-/// `formulaMultArity nb` (OpenTheory.hs:445-462): the `∀ m1..mn.` prefix with
+/// `formulaMultArity nb` (OpenTheory.hs): the `∀ m1..mn.` prefix with
 /// `m1` outermost, wrapped around `∀ i.` and `body`.
 fn formula_mult_arity(nb: usize, body: LNFormula) -> LNFormula {
     list_of_m(nb)
@@ -159,7 +158,7 @@ fn formula_mult_arity(nb: usize, body: LNFormula) -> LNFormula {
         .fold(all("i", NODE, body), |acc, h| all(h, MSG, acc))
 }
 
-/// `addForm (_, Right (_, []), _)` (OpenTheory.hs:443-462): no matching
+/// `addForm (_, Right (_, []), _)` (OpenTheory.hs): no matching
 /// outputs → `∀ m1..mn i. AUTO_IN_FACT(m1..mn) @ i ⇒ ⊥`.
 fn fact_input_form_no_outputs(in_name: &str, arity: usize) -> LNFormula {
     let in_fact = auto_fact(in_name, list_var_term(arity as u64, 1));
@@ -169,7 +168,7 @@ fn fact_input_form_no_outputs(in_name: &str, arity: usize) -> LNFormula {
     )
 }
 
-/// `toFactsFact ru p outn` (OpenTheory.hs:520-533): `∃ j. AUTO_OUT_FACT(…) @ j
+/// `toFactsFact ru p outn` (OpenTheory.hs): `∃ j. AUTO_OUT_FACT(…) @ j
 /// ∧ j < i`, the output fact over the input binders `Bound (1 + arity)` down
 /// to `Bound 2`.
 fn to_facts_fact(out_name: &str, out_arity: usize) -> LNFormula {
@@ -181,7 +180,7 @@ fn to_facts_fact(out_name: &str, out_arity: usize) -> LNFormula {
     )
 }
 
-/// `addForm (_, Right (_, outs:_), _)` (OpenTheory.hs:464-483): with a
+/// `addForm (_, Right (_, outs:_), _)` (OpenTheory.hs): with a
 /// matching output → `∀ m1..mn i. AUTO_IN_FACT(m1..mn) @ i ⇒ toFactsFact`.
 fn fact_input_form_with_outputs(
     in_name: &str,
@@ -197,7 +196,7 @@ fn fact_input_form_with_outputs(
 }
 
 // ---------------------------------------------------------------------------
-// Discovery: walk the open chains, match inputs to outputs (OpenTheory.hs:144-538).
+// Discovery: walk the open chains, match inputs to outputs (OpenTheory.hs).
 // ---------------------------------------------------------------------------
 
 /// AUTO action facts (with CONCRETE rule terms) to add to a rule, plus the
@@ -269,7 +268,7 @@ fn auto_names(m: &Matched, pos: &ExtendedPosition, rin_name: &str) -> (String, S
 
 /// `ruleName . cprRuleE` — the E-half's name.  Variants of one unfold all
 /// share it, which is what makes HS's "we ignore outputs of the same rule"
-/// guard (OpenTheory.hs:138-538, see line 292,303) skip SIBLING
+/// guard (OpenTheory.hs) skip SIBLING
 /// variants too: the guard compares the `cprRuleE` names, not the
 /// `___VARIANT_<i>` AC names (everything else in the lemma computation —
 /// AUTO fact names, `addLabels`' targeting, the `done` cases — uses the AC
@@ -281,7 +280,7 @@ fn rule_e_name(o: &OpenProtoRule) -> &str {
     }
 }
 
-/// Port of `addAutoSourcesLemma`'s body (OpenTheory.hs:144-538) without the
+/// Port of `addAutoSourcesLemma`'s body (OpenTheory.hs) without the
 /// theory-item plumbing: given the protocol rules and the open-chain cases,
 /// compute the rule AUTO annotations and the source-lemma formula.
 pub(crate) fn add_auto_sources_lemma(
@@ -557,9 +556,9 @@ pub(crate) fn add_auto_sources_lemma(
 }
 
 /// Build the AUTO source lemma item (HS `unprovenLemma lemmaName [SourceLemma]
-/// AllTraces formula`, OpenTheory.hs:138-538, see line 157).  `unprovenLemma`
+/// AllTraces formula`, OpenTheory.hs).  `unprovenLemma`
 /// seeds `_lOriginalFormula` with the same formula
-/// (Theory/ProofSkeleton.hs:59-61).
+/// (Theory/ProofSkeleton.hs).
 pub(crate) fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theory::Lemma {
     use crate::theory::{Lemma, LemmaAttr, TraceQuantifier};
     Lemma {
@@ -571,13 +570,13 @@ pub(crate) fn build_source_lemma(name: &str, formula: LNFormula) -> crate::theor
         formula,
         proof: None,
         // HS `unprovenLemma` seeds `_lPlaintext` with "Unpr_inSkeleton"
-        // (`Theory/ProofSkeleton.hs:59-61, see line 61`).
+        // (`Theory/ProofSkeleton.hs`).
         plaintext: "Unpr_inSkeleton".to_string(),
     }
 }
 
 /// Whether the theory already contains a lemma named `name`
-/// (HS `find lemma items`, OpenTheory.hs:138-538, see line 146).
+/// (HS `find lemma items`, OpenTheory.hs).
 pub(crate) fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
     items
         .iter()
@@ -585,7 +584,7 @@ pub(crate) fn has_lemma_named(items: &[TheoryItem], name: &str) -> bool {
 }
 
 /// Add an AUTO action to an open proto rule's AC form. HS adds to
-/// `cprRuleAC` only (`addActionClosedProtoRule`, lib/theory/src/Rule.hs:97-99);
+/// `cprRuleAC` only (`addActionClosedProtoRule`, lib/theory/src/Rule.hs);
 /// for a trivial-variant rule (no
 /// abstracted form) that is the rule itself, which renders as
 /// `rule (modulo E)` and propagates to its instances.  A rule that still IS
@@ -602,7 +601,7 @@ fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
     o.rule.add_action(action);
 }
 
-/// HS `unfoldRuleVariants` on ONE closed rule (lib/theory/src/Rule.hs:63-79),
+/// HS `unfoldRuleVariants` on ONE closed rule (lib/theory/src/Rule.hs),
 /// non-trivial case: for each substitution i (1-based) of the rule's variant
 /// disjunction, `freshToFreeAvoiding` it against the AC rule, apply it to
 /// (premises, conclusions, actions, new vars), and emit a rule named
@@ -613,8 +612,7 @@ fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
 /// RS mapping: the AC rule is `abstracted_rule` when present (else the E
 /// body IS the AC body), and the disjunction is `variant_substs` — with an
 /// unpopulated empty list standing for HS's ever-present trivial
-/// `Disj [emptySubstVFresh]` (`trueDisj`, RuleVariants.hs:61-133, see line
-/// 119), so a body-divergent rule with no residual substs still unfolds
+/// `Disj [emptySubstVFresh]` (`trueDisj`, RuleVariants.hs), so a body-divergent rule with no residual substs still unfolds
 /// into exactly one `___VARIANT_1` rule (the reproducing case: partial
 /// evaluation leaves `rule ≠ abstracted_rule` with a collapsed
 /// disjunction).
@@ -631,7 +629,7 @@ fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
     // `freshToFreeAvoiding subst ruAC` allocates above `avoid ruAC`; HS's
     // `HasFrees (Rule ProtoRuleACInfo)` folds the rule INFO first, whose
     // variant-disjunction DOMAIN keys are frees (keys-only,
-    // Theory/Model/Rule.hs:291-306, 503-515; SubstVFresh.hs:196-202), so
+    // Theory/Model/Rule.hs; SubstVFresh.hs), so
     // they participate in the bound alongside the body.
     let mut max_idx: Option<u64> = None;
     {
@@ -659,7 +657,7 @@ fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
                 b
             });
             let mut ru = crate::rule::apply_subst_rule(&sigma, ac);
-            // `rName i` (lib/theory/src/Rule.hs:71-73): FreshRule keeps its
+            // `rName i` (lib/theory/src/Rule.hs): FreshRule keeps its
             // name; StandRule gains the 1-based `___VARIANT_<i>` suffix.
             ru.info.name = match ru.info.name {
                 crate::rule::ProtoRuleName::Fresh => crate::rule::ProtoRuleName::Fresh,
@@ -673,12 +671,12 @@ fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
                 abstracted_rule: None,
                 loop_breakers: o.loop_breakers.clone(),
                 // `toClosedProtoRule` keeps the ORIGINAL rule as every
-                // variant's `cprRuleE` (lib/theory/src/Rule.hs:75-76) — the
+                // variant's `cprRuleE` (lib/theory/src/Rule.hs) — the
                 // half `getProtoRuleEs` dedups back to one copy.
                 rule_e: Some(Box::new(o.rule_e().clone())),
                 // `unfoldRuleVariants` runs on a rule whose variants Maude
                 // computed, which `closeProtoRule` reaches only for a rule
-                // that declared none (lib/theory/src/Rule.hs:82-86).
+                // that declared none (lib/theory/src/Rule.hs).
                 rule_ac: Vec::new(),
             }
         })
@@ -711,9 +709,9 @@ fn closed_rule_as_open(parent: &OpenProtoRule, ac: &crate::rule::ProtoRuleAC) ->
     }
 }
 
-/// HS `unfoldRules items` (CloseRule.hs:106-110) over the theory's item
+/// HS `unfoldRules items` (CloseRule.hs) over the theory's item
 /// list: replace every closed rule whose AC variant is non-trivial
-/// (`isTrivialProtoVariantAC`, Theory/Model/Rule.hs:789-793) by its
+/// (`isTrivialProtoVariantAC`, Theory/Model/Rule.hs) by its
 /// per-variant rules ([`unfold_one_rule_variants`]); trivial-variant rules
 /// stay unchanged, so the pass is the identity on a theory whose variants are
 /// all trivial.
@@ -721,10 +719,10 @@ fn closed_rule_as_open(parent: &OpenProtoRule, ac: &crate::rule::ProtoRuleAC) ->
 /// The variants take the unfolded rule's slot in item order, each carrying
 /// the original as its `cprRuleE` half.  The printer regroups them:
 /// `mergeOpenProtoRules` collapses the run sharing one `ruE`
-/// (OpenTheory.hs:592-603) and `prettyOpenProtoRuleAsClosedRule` renders a
+/// (OpenTheory.hs) and `prettyOpenProtoRuleAsClosedRule` renders a
 /// single AC body as `prettyProtoRuleACasE` (under the `___VARIANT_1` name,
 /// as if modulo E) and several as `prettyProtoRuleE ruE` plus a ` variants`
-/// block of `rule (modulo AC)` sub-blocks (OpenTheory.hs:827-850).
+/// block of `rule (modulo AC)` sub-blocks (OpenTheory.hs).
 ///
 /// Returns `true` iff any rule was unfolded.
 fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
@@ -734,7 +732,7 @@ fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
     for item in &elaborated.items {
         let TheoryItem::Rule(o) = item else { continue };
         // HS `isTrivialProtoVariantAC ruAC ruE` over the closed rules the item
-        // closes into (lib/theory/src/Rule.hs:82-86): a rule declaring its own
+        // closes into (lib/theory/src/Rule.hs): a rule declaring its own
         // `variants (modulo AC)` blocks yields one closed rule per block, and
         // the item is left alone when every one of them is trivial.
         let closed = crate::theory::closed_rules_ac(o);
@@ -778,7 +776,7 @@ fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
 }
 
 /// Apply `--auto-sources` (HS `closeTheoryWithMaude`'s autosources branch,
-/// CloseRule.hs:56-137, see line 58,106-112).  When the raw sources contain
+/// CloseRule.hs).  When the raw sources contain
 /// partial deconstructions, unfold every rule into its AC-variant rules
 /// ([`unfold_rule_variants`]), annotate them with AUTO_* actions and append
 /// the `AUTO_typing` sources lemma.  `ndc_cache` is the theory's
@@ -822,7 +820,7 @@ pub fn apply_auto_sources(
     }
 
     // GENERATION chains: the RAW (saturated, unrefined) sources — HS
-    // `addAutoSourcesLemma` uses `crcRawSources` (RuleItem.hs:64-70, see line 66).
+    // `addAutoSourcesLemma` uses `crcRawSources` (RuleItem.hs).
     let ctx_raw = ProofContext::try_with_options(
         maude.clone(),
         rules.clone(),
@@ -874,14 +872,14 @@ pub fn apply_auto_sources(
         return Ok(false);
     }
 
-    // `itemsModAC = unfoldRules items` (CloseRule.hs:106-110): once the
+    // `itemsModAC = unfoldRules items` (CloseRule.hs): once the
     // trigger fires, every closed rule is replaced by its per-AC-variant
     // rules BEFORE the AUTO lemma is computed, so the AUTO_* names and
     // annotations reference the `___VARIANT_<i>` rules.  The loop breakers
     // were computed before this point and are carried into each variant
     // verbatim.
     let unfolded = unfold_rule_variants(elaborated);
-    // `cache itemsModAC` (CloseRule.hs:112): `addAutoSourcesLemma` reads the
+    // `cache itemsModAC` (CloseRule.hs): `addAutoSourcesLemma` reads the
     // rule cache RECOMPUTED over the unfolded rules.  When nothing unfolded,
     // `itemsModAC == items` and the cache has the same value — reuse the
     // original context's chains (and its saturation trace count).
@@ -925,7 +923,7 @@ pub fn apply_auto_sources(
     }
 
     // Add the lemma unless one of the same name already exists
-    // (OpenTheory.hs:145-148).
+    // (OpenTheory.hs).
     if !has_lemma_named(&elaborated.items, "AUTO_typing") {
         elaborated.items.push(TheoryItem::Lemma(build_source_lemma(
             "AUTO_typing",
@@ -941,7 +939,7 @@ mod tests {
     use crate::pretty_formula::{lemma_header_line_doc, lnformula_doc};
 
     /// The `--auto-sources` unfold (`unfoldRuleVariants`,
-    /// lib/theory/src/Rule.hs:63-79): a rule with a non-trivial variant
+    /// lib/theory/src/Rule.hs): a rule with a non-trivial variant
     /// disjunction is replaced in the item list by one `___VARIANT_<i>` rule
     /// per substitution, each carrying the trivial disjunction, the
     /// original's loop breakers, and the original rule as its `cprRuleE`
@@ -1010,7 +1008,7 @@ mod tests {
         assert_eq!(variants.len(), substs.len());
         for v in &variants {
             // `Disj [emptySubstVFresh]` + carried breakers + the ORIGINAL
-            // rule as the `cprRuleE` half (lib/theory/src/Rule.hs:68-76).
+            // rule as the `cprRuleE` half (lib/theory/src/Rule.hs).
             assert_eq!(v.variant_substs.len(), 1);
             assert!(v.variant_substs[0].is_empty());
             assert!(v.abstracted_rule.is_none());
@@ -1034,9 +1032,9 @@ mod tests {
         assert_eq!(tr_after, &tr);
 
         // `toClosedProtoRule` gives every variant the SAME `ruE`
-        // (lib/theory/src/Rule.hs:74-75), which is what lets
+        // (lib/theory/src/Rule.hs), which is what lets
         // `mergeOpenProtoRules` collapse the run back into one item
-        // (OpenTheory.hs:592-603).
+        // (OpenTheory.hs).
         assert!(variants.windows(2).all(|w| w[0].rule_e() == w[1].rule_e()));
     }
 

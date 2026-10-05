@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! `show`-faithful renderers and the shared `checkFormula` engine for the
 //! Vacarme/noise tactic selectors (`dhreNoise`, `defaultNoise`,
@@ -8,20 +7,20 @@
 //! `isInFactTerms`).
 //!
 //! Port of the `tacticFunctions` where-clause in
-//! `lib/theory/src/Theory/Text/Parser/Tactics.hs:117-220`.
+//! `lib/theory/src/Theory/Text/Parser/Tactics.hs`.
 //!
 //! These selectors build PCRE patterns from `map show <LVar>` and test
 //! `show <term> =~ ...`.  They use Haskell's `Show` instances, which are
 //! NOT the same as the user-facing pretty-printer:
-//!   - `show LVar`  : `sortPrefix s ++ body`  (LTerm.hs:550-557)
-//!   - `show Name`  : `~'n'` / `'n'` / `#'n'` / `%'n'` (LTerm.hs:235-240)
-//!   - `show (Term a)` (raw form, Term/Term/Raw.hs:227-237): prefix
+//!   - `show LVar`  : `sortPrefix s ++ body`  (LTerm.hs)
+//!   - `show Name`  : `~'n'` / `'n'` / `#'n'` / `%'n'` (LTerm.hs)
+//!   - `show (Term a)` (raw form, Term/Term/Raw.hs): prefix
 //!     applications whose arguments are separated by a bare comma, a `NoEq` or
 //!     user-`AC` symbol alone when it takes no arguments, and the derived
 //!     `ACSym` constructor name (Union/Mult/Xor/NatPlus) as the head of a
 //!     builtin AC application.  [`tamarin_term::term::show_term`] is that
 //!     instance.
-//!   - `show (BVar v)` (derived, LTerm.hs:476-478): `Bound i` / `Free <show v>`.
+//!   - `show (BVar v)` (derived, LTerm.hs): `Bound i` / `Free <show v>`.
 //!
 //! `show (Term (Lit Name (BVar LVar)))` (the `VTerm Name (BVar LVar)` used by
 //! `checkFormula`) therefore renders Var leaves as `Bound i` / `Free <lvar>`.
@@ -35,7 +34,7 @@ use crate::formula::BLNTerm;
 use crate::guarded::Guarded;
 
 // =============================================================================
-// `show FactTag` (derived Show, Theory/Model/Fact.hs:136-149) — used by isFactName
+// `show FactTag` (derived Show, Theory/Model/Fact.hs) — used by isFactName
 // =============================================================================
 
 /// HS derived `show FactTag`.  For `ProtoFact m n a` this is
@@ -67,11 +66,11 @@ pub fn show_fact_tag(t: &FactTag) -> String {
 }
 
 // =============================================================================
-// checkFormula — the shared engine (Tactics.hs:190-209)
+// checkFormula — the shared engine (Tactics.hs)
 // =============================================================================
 
 /// Recursively collect ALL action fact-tag names occurring in the guards of
-/// a guarded formula.  Mirrors HS `guardFactTags` (Guarded.hs:167-174),
+/// a guarded formula.  Mirrors HS `guardFactTags` (Guarded.hs),
 /// which folds over the WHOLE structure (not just the top level).
 fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
     match g {
@@ -92,7 +91,7 @@ fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
     }
 }
 
-/// HS `getFormulaTerms` (Tactics.hs:203-205): the fact terms of the single
+/// HS `getFormulaTerms` (Tactics.hs): the fact terms of the single
 /// top-level guard, when the formula is exactly `GGuarded _ _ [Action _ fa] _`.
 fn formula_action_fact(g: &Guarded) -> Option<&Fact<BLNTerm>> {
     if let Guarded::GGuarded { guards, .. } = g
@@ -104,7 +103,7 @@ fn formula_action_fact(g: &Guarded) -> Option<&Fact<BLNTerm>> {
     None
 }
 
-/// HS `checkFormula oracleType f` (Tactics.hs:190-209).
+/// HS `checkFormula oracleType f` (Tactics.hs).
 ///
 /// Returns the free `LVar`s of the top-level Reveal-action's fact terms,
 /// but ONLY if (a) some guard fact-tag name matches the regex `"Reveal"`
@@ -139,10 +138,10 @@ fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<LVar> {
         return Vec::new();
     }
 
-    // getFormulaTermsCore (Tactics.hs:207-209):
+    // getFormulaTermsCore (Tactics.hs):
     //   concat $ map (map getCore . varsVTerm) (fact args)
-    // HS `varsVTerm` (VTerm.hs:116-117) sortednubs over `Ord (BVar LVar)`
-    // (Bound < Free), collecting BOTH Bound and Free vars; `getCore` (:194-195)
+    // HS `varsVTerm` (VTerm.hs) sortednubs over `Ord (BVar LVar)`
+    // (Bound < Free), collecting BOTH Bound and Free vars; `getCore`
     // then maps `Free v -> v` and `error`s on any Bound de-Bruijn index.
     // We collect only Free vars per term (sortednub: sorted + deduped), then
     // concat.  This is byte-identical to HS whenever HS does not crash; a Bound
@@ -174,7 +173,7 @@ fn show_term_list(args: &[BLNTerm]) -> String {
     out
 }
 
-/// HS `getFactTerms_ goal` for `reasonableNoncesNoise` (Tactics.hs:184-186):
+/// HS `getFactTerms_ goal` for `reasonableNoncesNoise` (Tactics.hs):
 /// the fact terms of an `ActionG _ (Fact { factTerms = ft })`, else `[]`.
 pub(crate) fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal) -> Vec<LNTerm> {
     if let crate::constraint::constraints::Goal::Action(_, fa) = goal {
@@ -185,7 +184,7 @@ pub(crate) fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal
 }
 
 /// Accessor for the single-term action fact used by `isInFactTerms`
-/// (Tactics.hs:218-220): `ActionG _ (Fact { factTerms = [test] })`.
+/// (Tactics.hs): `ActionG _ (Fact { factTerms = [test] })`.
 pub(crate) fn action_goal_single_term(
     goal: &crate::constraint::constraints::Goal,
 ) -> Option<&LNTerm> {
@@ -197,7 +196,7 @@ pub(crate) fn action_goal_single_term(
     None
 }
 
-/// Accessor pair for `isFactName` (Tactics.hs:212-215).  Returns either the
+/// Accessor pair for `isFactName` (Tactics.hs).  Returns either the
 /// linear ProtoFact NAME (premise case) or the `show FactTag` (action case).
 pub enum FactNameProbe {
     /// `PremiseG _ Fact{factTag = ProtoFact Linear name _}` => compare `name == s`.
@@ -284,7 +283,7 @@ mod tests {
     }
 
     /// HS's `Show (Term a)` intercalates the WHOLE argument list of an
-    /// application (Term/Term/Raw.hs:227-237), so a three-argument AC term
+    /// application (Term/Term/Raw.hs), so a three-argument AC term
     /// shows flat rather than as a nested binary chain.
     #[test]
     fn show_term_writes_a_three_argument_ac_application_flat() {
@@ -331,7 +330,7 @@ mod tests {
         assert_eq!(show_fact_tag(&FactTag::Term), "TermFact");
     }
 
-    /// Every applied-symbol arm of `Show (Term a)` (Term/Raw.hs:227-237):
+    /// Every applied-symbol arm of `Show (Term a)` (Term/Raw.hs):
     /// the `NoEq` nullary/applied pair, `C EMap`, `List`, the four builtin
     /// AC operators (whose derived `show ACSym` names always take an
     /// argument list) and the user-`[AC]` nullary/applied pair.
@@ -392,7 +391,7 @@ mod tests {
     fn show_term_writes_the_two_nullary_arithmetic_symbols_by_name() {
         // fAppOne = FApp (NoEq oneSym) [] with oneSymString = "one" and
         // fAppNatOne = FApp (NoEq natOneSym) [] with natOneSymString = "tone"
-        // (FunctionSymbols.hs:226,236,255,267).
+        // (FunctionSymbols.hs).
         let one: BLNTerm = f_app_no_eq(tamarin_term::function_symbols::one_sym(), vec![]);
         assert_eq!(show_term(&one), "one");
         let tone: BLNTerm = f_app_no_eq(nat_one_sym(), vec![]);
@@ -400,7 +399,7 @@ mod tests {
     }
 
     /// A `Bound` leaf shows as the derived `Show (BVar v)` writes it
-    /// (LTerm.hs:476-478).
+    /// (LTerm.hs).
     #[test]
     fn show_term_writes_a_bound_leaf_with_its_index() {
         let t: BLNTerm = var_term(BVar::Bound(3));

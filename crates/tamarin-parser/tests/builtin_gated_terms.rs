@@ -1,11 +1,10 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! The algebraic term levels are gated on the parse-time signature bits.
 //!
 //! `multterm`, `xorterm`, `msetterm` and `natterm`
-//! (Theory/Text/Parser/Term.hs:179-208) each read one `enable…` bit off the
+//! (Theory/Text/Parser/Term.hs) each read one `enable…` bit off the
 //! parser state and run their `chainl1` only when it is set; otherwise the
 //! level is skipped and its operator is not a term operator at all.  `multterm`
 //! guards `expterm` as well, so `^` needs the same `enableDH` that `*` needs.

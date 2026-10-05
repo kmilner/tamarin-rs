@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.Substitution.SubstVFree` from
 //! `lib/term/src/Term/Substitution/SubstVFree.hs`.
@@ -26,7 +25,7 @@ use crate::vterm::{Lit, VTerm};
 /// usually want to inspect or build the mapping.
 ///
 /// HS `newtype Subst c v = Subst { sMap :: Map v (VTerm c v) }` derives
-/// `Eq`/`Ord` over the one map field (SubstVFree.hs:85-86); `BTreeMap`'s `Ord`
+/// `Eq`/`Ord` over the one map field (SubstVFree.hs); `BTreeMap`'s `Ord`
 /// compares ascending entries, as `Data.Map`'s does.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Subst<C, V> {
@@ -154,11 +153,11 @@ where
     }
 }
 
-/// `instance Ord c => HasFrees (LSubst c)` (SubstVFree.hs:259-264).
+/// `instance Ord c => HasFrees (LSubst c)` (SubstVFree.hs).
 ///
-/// The walk is the `M.Map` instance (LTerm.hs:905-909): each entry's key
+/// The walk is the `M.Map` instance (LTerm.hs): each entry's key
 /// before its value, in ascending key order.  The map rebuilds every entry as
-/// a pair — key then value (LTerm.hs:855-860) — and goes back through
+/// a pair — key then value (LTerm.hs) — and goes back through
 /// `substFromList`, which drops any binding the map turned into `x ~> x`.
 impl<C: Ord + Clone> HasFrees for Subst<C, LVar> {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
@@ -211,11 +210,11 @@ pub fn apply_vterm_map<C: Ord + Clone, V: Ord + Clone>(
     t.apply(map)
 }
 
-/// HS's overlappable `Apply s (BVar v)` (SubstVFree.hs:293-295): a bound De
+/// HS's overlappable `Apply s (BVar v)` (SubstVFree.hs): a bound De
 /// Bruijn index is left alone, and a free variable is rewritten by the
 /// `Apply s v` instance the caller passes in — `Apply (Subst c v) v`
-/// (SubstVFree.hs:279-285) for a plain variable, `Apply (Subst Name LVar)
-/// SapicLVar` (Theory/Sapic/Term.hs:115-117) for a variable that carries a
+/// (SubstVFree.hs) for a plain variable, `Apply (Subst Name LVar)
+/// SapicLVar` (Theory/Sapic/Term.hs) for a variable that carries a
 /// type tag the rewrite preserves.
 pub fn apply_bvar<V>(v: &BVar<V>, apply_free: &mut dyn FnMut(&V) -> V) -> BVar<V> {
     match v {
@@ -225,11 +224,11 @@ pub fn apply_bvar<V>(v: &BVar<V>, apply_free: &mut dyn FnMut(&V) -> V) -> BVar<V
 }
 
 /// HS's overlapping `Apply (Subst c v) (VTerm c (BVar v))`
-/// (SubstVFree.hs:297-302): replace every free literal in the substitution's
+/// (SubstVFree.hs): replace every free literal in the substitution's
 /// domain by its image, lifted back into `BVar` form with `fmapTerm (fmap
 /// Free)`.  A bound index is not in the domain, so a binder cannot capture an
 /// image variable.  The rebuild goes through [`f_app`], as HS's `bindTerm`
-/// (Term/Term/Raw.hs:219-221) does, so AC argument lists are flattened and
+/// (Term/Term/Raw.hs) does, so AC argument lists are flattened and
 /// re-sorted under the images.
 pub fn apply_bvterm<C: Ord + Clone, V: Ord + Clone>(
     s: &Subst<C, V>,
@@ -329,14 +328,14 @@ mod tests {
         assert_eq!(apply_vterm(&s, t.clone()), t);
     }
 
-    /// `foldFrees f = foldFrees f . sMap` (SubstVFree.hs:261) through the
-    /// `M.Map` instance (LTerm.hs:905-909): ascending key order, and inside an
+    /// `foldFrees f = foldFrees f . sMap` (SubstVFree.hs) through the
+    /// `M.Map` instance (LTerm.hs): ascending key order, and inside an
     /// entry the key before its value.
     #[test]
     fn subst_folds_key_then_value_ascending() {
         use crate::lterm::{frees_list, LSort};
         let v = |n: &'static str, i: u64| LVar::new(n, LSort::Msg, i);
-        // `Ord LVar` compares the index first (LTerm.hs:546-548), so `b.0` is
+        // `Ord LVar` compares the index first (LTerm.hs), so `b.0` is
         // the smaller key even though `a` sorts before `b` by name.
         let s: Subst<C, LVar> = Subst::from_list(vec![
             (v("a", 1), var_term(v("x", 4))),
@@ -349,7 +348,7 @@ mod tests {
     }
 
     /// `mapFrees f = (substFromList <$>) . mapFrees f . substToList`
-    /// (SubstVFree.hs:264): the rebuild goes back through `substFromList`, so
+    /// (SubstVFree.hs): the rebuild goes back through `substFromList`, so
     /// an entry the map turned into `x ~> x` disappears.
     #[test]
     fn subst_map_drops_identity_bindings() {
@@ -421,7 +420,7 @@ mod tests {
         assert_eq!(view.image_of(&"w"), s.image_of(&"w"));
     }
 
-    /// `applyBLLit` (SubstVFree.hs:299-301) replaces a `Free` literal in the
+    /// `applyBLLit` (SubstVFree.hs) replaces a `Free` literal in the
     /// domain by its image, lifted back into `BVar` form; a `Bound` index and
     /// a constant are literals it hands back untouched.
     #[test]
@@ -445,7 +444,7 @@ mod tests {
     }
 
     /// `bindTerm` rebuilds every application through `fApp`
-    /// (Term/Term/Raw.hs:219-221), so an AC argument list is re-sorted under
+    /// (Term/Term/Raw.hs), so an AC argument list is re-sorted under
     /// the images instead of keeping the positions of the original arguments.
     #[test]
     fn apply_bvterm_resorts_ac_arguments_after_a_rewrite() {
@@ -498,7 +497,7 @@ mod tests {
     /// `restrict` is a PURE KEY-FILTER (no chain-chase).
     ///
     /// Haskell `Theory.Tools.EquationStore.restrict` calls
-    /// `Subst.restrict` (SubstVFree.hs:198-199):
+    /// `Subst.restrict` (SubstVFree.hs):
     /// ```haskell
     /// restrict :: IsVar v => [v] -> Subst c v -> Subst c v
     /// restrict vs (Subst smap) = Subst (M.filterWithKey (\v _ -> v `elem` vs) smap)

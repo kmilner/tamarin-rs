@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Axum router wiring, mirroring `Web.Dispatch`'s route table.
 
@@ -36,7 +35,7 @@ async fn not_found_page(req: Request, next: Next) -> Response {
     // `Uri::path` is the raw, still-percent-encoded path, query excluded —
     // WAI's `rawPathInfo`.
     let raw_path = req.uri().path().to_owned();
-    // The theory-index route piece is `#Int` (`src/Web/Types.hs:580-616`), and
+    // The theory-index route piece is `#Int` (`src/Web/Types.hs`), and
     // Yesod's `PathPiece Int` takes an optional sign and decimal digits that
     // fit an `Int`, nothing else: `01` and `+1` are theory 1, while `1x`, ` 1`,
     // `(1)` and an over-long literal make the route not match at all, so

@@ -1,9 +1,8 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Faithful port of HS `checkTerms` (the "Formula terms" wellformedness
-//! check) from `lib/theory/src/Theory/Tools/Wellformedness.hs:960-985`.
+//! check) from `lib/theory/src/Theory/Tools/Wellformedness.hs`.
 //!
 //! `checkTerms header maudeSig fm` collects the terms appearing in the ATOMS
 //! of `fm` (`crate::formula::formula_terms`, HS `formulaTerms`), then keeps
@@ -27,7 +26,7 @@
 //! The formula is the internal one, so its AC and C applications are already
 //! in the argument order HS's `fApp` gives them: `from_parser` closes each
 //! binder with `quantify`, whose `mapLits` rebuild re-sorts every node it
-//! passes (Theory/Model/Formula.hs:347-352), and the outermost binder's pass
+//! passes (Theory/Model/Formula.hs), and the outermost binder's pass
 //! runs last — so the terms this check inspects are sorted under the ordering
 //! in which `Bound` precedes every `Free` and `Bound i` orders by `i`.
 
@@ -54,7 +53,7 @@ use super::WfError;
 ///
 /// CAVEAT: this is a precomputed effective budget, NOT HS's own lineLength.
 /// We do not reproduce the outer warning-frame nesting in the `Doc`
-/// renderer, so if HS's `lineWidth` (Console.hs:242-243) or the WARNING-frame
+/// renderer, so if HS's `lineWidth` (Console.hs) or the WARNING-frame
 /// indentation ever changes, this constant (used at both `render_with`
 /// call sites in `render_block` and by
 /// [`super::formulas`]'s "Quantifier sorts" block, which HS lays out
@@ -70,12 +69,12 @@ const ALLOWED_PARAGRAPH: &str = "The only allowed terms are public constants \
     symbols are disallowed.";
 
 /// The `checkTerms` finding for one annotated formula, if it has offenders.
-/// HS `checkTerms header maudeSig fm` (Wellformedness.hs:960-985), the
-/// `checkTerms` arm of HS `formulaReports` (Wellformedness.hs:1003), so the
+/// HS `checkTerms header maudeSig fm` (Wellformedness.hs), the
+/// `checkTerms` arm of HS `formulaReports` (Wellformedness.hs), so the
 /// combined per-formula pass in [`super::formulas`] interleaves it with the
 /// other two arms.  `header` is HS's `"Lemma `n'"` / `"Restriction `n'"`;
 /// `sig` is the signature the `allowed` predicate classifies against
-/// (Wellformedness.hs:975).
+/// (Wellformedness.hs).
 pub fn check_terms(sig: &MaudeSig, header: &str, fm: &LNFormula) -> Option<WfError> {
     let offenders: Vec<String> = crate::formula::formula_terms(fm)
         .into_iter()
@@ -91,8 +90,8 @@ pub fn check_terms(sig: &MaudeSig, header: &str, fm: &LNFormula) -> Option<WfErr
     ))
 }
 
-/// HS `allowed` (Wellformedness.hs:978-985).  `FUnion` is the multiset
-/// union `viewTerm2` gives an `AC Union` head (Term/Term/Raw.hs:185), and
+/// HS `allowed` (Wellformedness.hs).  `FUnion` is the multiset
+/// union `viewTerm2` gives an `AC Union` head (Term/Term/Raw.hs), and
 /// it is allowed whether or not the signature holds it; every other head
 /// has to be a member of `irreducibleFunSyms`.
 fn allowed(sig: &MaudeSig, t: &BLNTerm) -> bool {

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::constraint::system::System;
@@ -39,7 +38,7 @@ fn solved_goal_filtered() {
 }
 
 /// `is_open_in_sys` treats the empty disjunction as closed while it is still
-/// unsolved.  This mirrors HS `DisjG (Disj []) -> False` (Goals.hs:89).  The
+/// unsolved.  This mirrors HS `DisjG (Disj []) -> False` (Goals.hs).  The
 /// contradictions pass disposes of the empty disjunction, not goal solving.
 /// The `solved` flag stays false here, so the default arm `_ -> not solved`
 /// would report this goal open.  Only the empty-Disj arm keeps it out of
@@ -63,7 +62,7 @@ fn empty_disj_goal_is_never_open() {
 }
 
 /// `dispatch_solve_goal` marks the goal solved before it delegates.  This
-/// mirrors HS `solveGoal` (Goals.hs:201-213).  The solver that it delegates
+/// mirrors HS `solveGoal` (Goals.hs).  The solver that it delegates
 /// to can rewrite the terms of the goal through `solveFactEqs` or
 /// `substSystem`.  A mark after the solve would then miss the substituted
 /// key and leave the goal open.
@@ -287,10 +286,10 @@ fn an_empty_quitting_tactic_is_a_normal_stop() {
     );
 }
 
-// -- moveNatToEnd / isNatSubtermSplit (ProofMethod.hs:1064-1066) ----------
+// -- moveNatToEnd / isNatSubtermSplit (ProofMethod.hs) ----------
 
-/// `isNatSubtermSplit` (ProofMethod.hs:1048-1129, see line 1065) = `isNatSubterm st`
-/// (SubtermStore.hs:112-113, see line 113): `(sort small == Nat || isMsgVar small) &&
+/// `isNatSubtermSplit` (ProofMethod.hs) = `isNatSubterm st`
+/// (SubtermStore.hs): `(sort small == Nat || isMsgVar small) &&
 /// sort big == Nat`.  Non-SubtermG goals are False.
 #[test]
 fn is_nat_subterm_split_matches_haskell() {
@@ -320,12 +319,12 @@ fn is_nat_subterm_split_matches_haskell() {
     assert!(!is_nat_subterm_split(&Goal::Split(SplitId(0))));
 }
 
-// -- UsefulGoalNr ('c') derived Usefulness Ord (ProofMethod.hs:479-502, see line 484) ------
+// -- UsefulGoalNr ('c') derived Usefulness Ord (ProofMethod.hs) ------
 
 /// HS `UsefulGoalNrRanking -> sortOn (\(_, (nr, useless)) -> (useless,
 /// nr))` sorts on the DERIVED `Ord Usefulness` (declaration order
 /// Useful<LoopBreaker<ProbablyConstructible<CurrentlyDeducible,
-/// AnnotatedGoals.hs:18-27), NOT `tagUsefulness` (which would collapse
+/// AnnotatedGoals.hs), NOT `tagUsefulness` (which would collapse
 /// LoopBreaker and ProbablyConstructible to the same key).  So a
 /// LoopBreaker goal must rank BEFORE a ProbablyConstructible goal even
 /// when its creation-nr is larger.
@@ -406,11 +405,11 @@ fn goal_ord_disj_var_sort_uses_lsort_ord() {
 }
 
 /// A `{name}` ranking keeps the name written between the braces — HS
-/// `internalTacticRanking` (Parser/Signature.hs:313-318) and
-/// `filterHeuristic` (System.hs:681-685) both build
+/// `internalTacticRanking` (Parser/Signature.hs) and
+/// `filterHeuristic` (System.hs) both build
 /// `InternalTacticRanking False (Tactic <name> (SmartRanking False) [] [])`
 /// — and takes the body of the declared tactic of that name when the theory
-/// has one (HS `chosenTactic`, ProofMethod.hs:490-503).
+/// has one (HS `chosenTactic`, ProofMethod.hs).
 #[test]
 fn tactic_ranking_keeps_the_braced_name() {
     use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
@@ -556,10 +555,10 @@ fn smart_oracle_stops_before_launch_when_source_materialisation_fails() {
 
 /// `pretty_goal_rankings` writes back the token each stored ranking parsed
 /// from — the single letters `goalRankingIdentifiers` maps
-/// (System.hs:586-599), an oracle ranking as its letter plus the quoted
+/// (System.hs), an oracle ranking as its letter plus the quoted
 /// path, a tactic ranking as its braced name (`prettyGoalRanking`,
-/// System.hs:711-716), joined by single spaces (`prettyGoalRankings`,
-/// System.hs:708-709).  The theory stores the parsed list, so this round
+/// System.hs), joined by single spaces (`prettyGoalRankings`,
+/// System.hs).  The theory stores the parsed list, so this round
 /// trip is what keeps a `heuristic:` header's echo byte-identical.
 #[test]
 fn parsed_heuristic_renders_back_to_its_tokens() {

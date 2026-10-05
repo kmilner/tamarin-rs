@@ -2,8 +2,8 @@
 // guard.
 //
 // `convert` splits a quantifier body with `conjActionsEqs`
-// (Theory/Constraint/System/Guarded.hs:516-519), which admits only `Action` and
-// `EqE` atoms, and hands them to `closeGuarded` (Guarded.hs:376-384); the terms
+// (Theory/Constraint/System/Guarded.hs), which admits only `Action` and
+// `EqE` atoms, and hands them to `closeGuarded` (Guarded.hs); the terms
 // inside those atoms are what the `guarded formula characterizing …` block
 // prints.  Both quantifier arms are here: `Guarded`'s universal guard and
 // `Existential`'s existential one.
@@ -11,12 +11,12 @@
 // Two term shapes ride in on those atoms.
 //
 //   - Pairs are BINARY in the oracle
-//     (`fAppPair (x,y) = fAppNoEq pairSym [x, y]`, Term/Term.hs:161-163), so
+//     (`fAppPair (x,y) = fAppNoEq pairSym [x, y]`, Term/Term.hs), so
 //     `<a, <b, c>>` and `<a, b, c>` are one term and print alike, while
 //     `<<a, b>, c>` — a pair in a non-tail position — is a different term and
 //     keeps its brackets.  `Spliced` carries the tail pair inside an AC
 //     argument, where the splice and the AC sort meet.
-//   - `fAppAC` (Term/Term/Raw.hs:119-129) flattens an argument headed by the
+//   - `fAppAC` (Term/Term/Raw.hs) flattens an argument headed by the
 //     same AC symbol and sorts what is left, so the written nesting and the
 //     written order are both erased: `(a ++ b) ++ c`, `a ++ (b ++ c)` and
 //     `c ++ a ++ b` all print `(a++b++c)`, `a ++ a ++ b` keeps both copies of

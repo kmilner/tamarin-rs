@@ -1,14 +1,14 @@
 // TWO offenders and TWO reports under one "Formula terms" wf header.
 //
-// HS `prettyWfErrorReport` (Theory/Tools/Wellformedness.hs:118-126) groups the
+// HS `prettyWfErrorReport` (Theory/Tools/Wellformedness.hs) groups the
 // report by topic with `groupOn fst`, so a topic's underlined header is printed
 // ONCE and its errors follow at `nest 2`, separated by a blank line.  The
 // shared closing paragraph ("The only allowed terms are …") belongs to each
 // error rather than to the topic, so it repeats per offending formula.  Inside
 // one error, `checkTerms` lays the offenders out with `punctuate comma $ map
 // (nest 2 . text . quote . show)` under an `fsep`
-// (Theory/Tools/Wellformedness.hs:964-966).  Both lemmas below hold reducible
-// `em`/`*` terms, and `formulaReports` (Wellformedness.hs:999-1000) walks them
+// (Theory/Tools/Wellformedness.hs).  Both lemmas below hold reducible
+// `em`/`*` terms, and `formulaReports` (Wellformedness.hs) walks them
 // in theory order:
 //
 //   - `OneOffenderGround` contributes ONE offender, so its list is a single
@@ -17,14 +17,14 @@
 //     continuation indent appear.
 //
 // The offender spelling is HS's `instance Show (Term a)`
-// (Term/Term/Raw.hs:227-238), not `prettyTerm`: a builtin AC head prints as
+// (Term/Term/Raw.hs), not `prettyTerm`: a builtin AC head prints as
 // the `Show ACSym` constructor applied prefix — `Mult(…)`, never infix `*` —
 // and commas carry no following space.  The operands are the flattened, sorted
 // multiset, and `data FunSym = NoEq … | AC … | C … | List`
-// (Term/Term/FunctionSymbols.hs:150-154) ranks `NoEq` before `C`, so `f`/`aaa`
+// (Term/Term/FunctionSymbols.hs) ranks `NoEq` before `C`, so `f`/`aaa`
 // precede `em` and the source order `em(x, y) * f(x, y)` comes back reversed.
 // `em` is a C symbol, whose smart constructor sorts too (`fAppC`,
-// Term/Term/Raw.hs:133-134), so `em(x, y)` prints with its arguments in index
+// Term/Term/Raw.hs), so `em(x, y)` prints with its arguments in index
 // order while the `NoEq` `aaa(x, y)` beside it keeps source order — the two
 // halves of one offender disagree on purpose.  The `Bound` indices are counted
 // from the innermost binder, and the `Ex #j` around the second offender shifts

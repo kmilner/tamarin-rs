@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Control.Monad.Fresh` and friends.
 //!
@@ -17,17 +16,17 @@ use crate::FastMap;
 // =============================================================================
 
 /// Supplies of fresh identifiers (`class MonadFresh`,
-/// Control/Monad/Fresh/Class.hs:24-36).
+/// Control/Monad/Fresh/Class.hs).
 ///
-/// `scopeFreshness` (Control/Monad/Fresh/Class.hs:34-36) is not a trait
+/// `scopeFreshness` (Control/Monad/Fresh/Class.hs) is not a trait
 /// method: each supply keeps its own inherent `scope_freshness`, which takes
 /// the scoped work as a closure.
 pub trait MonadFresh {
-    /// `freshIdent name` (Control/Monad/Fresh/Class.hs:25-27): the next fresh
+    /// `freshIdent name` (Control/Monad/Fresh/Class.hs): the next fresh
     /// identifier for this name.
     fn fresh_ident(&mut self, name: &str) -> u64;
 
-    /// `freshIdents k` (Control/Monad/Fresh/Class.hs:29-32): reserve `k`
+    /// `freshIdents k` (Control/Monad/Fresh/Class.hs): reserve `k`
     /// identifiers across all names and return the first one.
     fn fresh_idents(&mut self, k: u64) -> u64;
 }
@@ -73,7 +72,7 @@ impl FastFreshState {
 }
 
 /// `instance MonadFresh (Fast.FreshT m)`
-/// (Control/Monad/Fresh/Class.hs:38-41): the name is ignored,
+/// (Control/Monad/Fresh/Class.hs): the name is ignored,
 /// `freshIdent _name = freshIdents 1`.
 impl MonadFresh for FastFreshState {
     fn fresh_ident(&mut self, _name: &str) -> u64 {
@@ -106,7 +105,7 @@ impl PreciseFreshState {
         }
     }
 
-    /// Port of HS `avoidPreciseVars` (Term/LTerm.hs:706-709):
+    /// Port of HS `avoidPreciseVars` (Term/LTerm.hs):
     /// `foldl' (\m (name, idx) -> insertWith max name (idx+1) m) empty`.
     /// Seeds the per-name counters so the next `fresh_ident name` yields an
     /// index strictly greater than every avoided `(name, idx)`.  Used by
@@ -170,7 +169,7 @@ impl PreciseFreshState {
 }
 
 /// `instance MonadFresh (Precise.FreshT m)`
-/// (Control/Monad/Fresh/Class.hs:43-46): both methods are the per-name
+/// (Control/Monad/Fresh/Class.hs): both methods are the per-name
 /// supply's own.
 impl MonadFresh for PreciseFreshState {
     fn fresh_ident(&mut self, name: &str) -> u64 {
@@ -198,7 +197,7 @@ mod tests {
     #[test]
     fn fast_fresh_ident_ignores_the_name() {
         // `freshIdent _name = freshIdents 1`
-        // (Control/Monad/Fresh/Class.hs:39): the single counter advances by
+        // (Control/Monad/Fresh/Class.hs): the single counter advances by
         // one whatever name is asked for, so two different names never share
         // an index.
         let mut s = FastFreshState::nothing_used();

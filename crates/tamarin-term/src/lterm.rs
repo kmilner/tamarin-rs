@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.LTerm` data types from `lib/term/src/Term/LTerm.hs`:
 //! sorts, names, logical variables, simple predicates and convertors,
@@ -82,7 +81,7 @@ pub fn sort_suffix(s: LSort) -> &'static str {
 // =============================================================================
 
 /// HS `newtype NameId = NameId { getNameId :: String }` with a derived `Ord`
-/// (LTerm.hs:215-216).
+/// (LTerm.hs).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NameId(pub &'static str);
 
@@ -97,9 +96,9 @@ impl NameId {
 
 /// Variant order mirrors the Haskell constructor order
 /// (`data NameTag = FreshName | PubName | NodeName | NatName | AbbrevName`,
-/// LTerm.hs:219), which the derived `Ord` on both sides reads off.
+/// LTerm.hs), which the derived `Ord` on both sides reads off.
 ///
-/// `Abbrev` is the tag `Web.Utils.shorten` (`src/Web/Utils.hs:71-88`) puts on
+/// `Abbrev` is the tag `Web.Utils.shorten` (`src/Web/Utils.hs`) puts on
 /// the short constant it substitutes for a long term; it never occurs in a
 /// parsed or solved term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -112,7 +111,7 @@ pub enum NameTag {
 }
 
 /// HS `data Name = Name {nTag :: NameTag, nId :: NameId}` with a derived `Ord`
-/// (LTerm.hs:223-224): the tag decides first, then the identifier.  This order
+/// (LTerm.hs): the tag decides first, then the identifier.  This order
 /// reaches printed output through `Term`'s `Ord`, which sorts AC arguments.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Name {
@@ -145,7 +144,7 @@ pub fn sort_of_name(n: &Name) -> LSort {
         NameTag::Pub => LSort::Pub,
         NameTag::Node => LSort::Node,
         NameTag::Nat => LSort::Nat,
-        // LTerm.hs:266.
+        // LTerm.hs.
         NameTag::Abbrev => LSort::Msg,
     }
 }
@@ -158,7 +157,7 @@ pub fn sort_of_name(n: &Name) -> LSort {
 /// and index match.
 ///
 /// **Ord semantics**: idx FIRST, then sort, then name — mirrors Haskell's
-/// `instance Ord LVar` in `lib/term/src/Term/LTerm.hs:546-548`:
+/// `instance Ord LVar` in `lib/term/src/Term/LTerm.hs`:
 ///
 /// ```haskell
 /// instance Ord LVar where
@@ -168,7 +167,7 @@ pub fn sort_of_name(n: &Name) -> LSort {
 ///
 /// where `x1=name, x2=sort, x3=idx` (comment: *"An ord instance that prefers
 /// the 'lvarIdx' over the 'lvarName'."*).  This matters because Haskell's
-/// `unifyRaw` (Unification.hs:275-276) orients same-sort var-var bindings such
+/// `unifyRaw` (Unification.hs) orients same-sort var-var bindings such
 /// that the larger-Ord (=larger-idx) becomes the KEY:
 ///
 /// ```haskell
@@ -176,7 +175,7 @@ pub fn sort_of_name(n: &Name) -> LSort {
 /// ```
 ///
 /// Combined with `refineSource`'s post-saturate
-/// `restrict stableVars sSubst` (Sources.hs:119-126, see line 123), this ensures stable
+/// `restrict stableVars sSubst` (Sources.hs), this ensures stable
 /// pattern vars (small idx like t.1, t.2) are NEVER keys, so all
 /// stable-keyed bindings drop and pattern vars stay unbound for runtime
 /// `applySource` to bind cleanly.
@@ -355,7 +354,7 @@ pub fn flattened_ac_terms<A>(sym: AcSym, t: &Term<A>) -> Vec<&Term<A>> {
     out
 }
 
-/// HS `ltermNodeId` (LTerm.hs:464-465): the node-id variable of a term that is
+/// HS `ltermNodeId` (LTerm.hs): the node-id variable of a term that is
 /// one — a variable leaf of sort `LSortNode` — and `None` otherwise.
 ///
 /// The sort guard is load-bearing for the solver: answering `Some` for another
@@ -375,14 +374,14 @@ pub fn lterm_node_id<C>(t: &crate::term::Term<crate::vterm::Lit<C, LVar>>) -> Op
 // =============================================================================
 
 /// HS `data BVar v = Bound Integer | Free v` derives `Ord` in that variant
-/// order (LTerm.hs:476-478), which orders the terms inside a formula.
+/// order (LTerm.hs), which orders the terms inside a formula.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BVar<V> {
     Bound(u64),
     Free(V),
 }
 
-/// HS `bltermNodeId` (LTerm.hs:526-528): the node-id variable of a term that
+/// HS `bltermNodeId` (LTerm.hs): the node-id variable of a term that
 /// is one — a `Free` leaf of sort `LSortNode` — and `None` otherwise.
 pub fn blterm_node_id<C>(t: &crate::term::Term<crate::vterm::Lit<C, BVar<LVar>>>) -> Option<LVar> {
     match t {
@@ -414,14 +413,14 @@ impl<V> BVar<V> {
 // =============================================================================
 
 /// A type that contains free `LVar`s. The Haskell typeclass takes a
-/// `MonotoneFunction` (LTerm.hs:574-575) distinguishing AC-position-preserving
+/// `MonotoneFunction` (LTerm.hs) distinguishing AC-position-preserving
 /// updates (`Monotone`, used by `rename`/`renameIgnoring`/`renameAvoiding*`
 /// index shifts) from arbitrary ones (`Arbitrary`, used by `someInst`,
 /// `applyVTerm` substitution, `fmap`). The two differ only at AC sub-terms:
 /// `Arbitrary` re-sorts the AC argument list (`fApp` -> `fAppAC`), while
 /// `Monotone` preserves the relative argument order (`unsafefApp`) because a
 /// monotone shift cannot change the AC-normal form ordering
-/// (`instance HasFrees (Term l)`'s `mapFrees`, LTerm.hs:788-791).
+/// (`instance HasFrees (Term l)`'s `mapFrees`, LTerm.hs).
 pub trait HasFrees {
     /// Visit every free `LVar` exactly once in deterministic order.
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar));
@@ -447,7 +446,7 @@ pub trait HasFrees {
     /// `Monotone` map: preserves AC argument order.  Use ONLY where HS uses
     /// `rename`/`renameIgnoring`/`renameAvoiding*`/`someRuleACInst*` — i.e.
     /// pure index shifts whose monotonicity guarantees the AC-normal form
-    /// does not change (LTerm.hs:569-575).
+    /// does not change (LTerm.hs).
     fn map_free_monotone(self, f: &mut dyn FnMut(LVar) -> LVar) -> Self
     where
         Self: Sized,
@@ -463,7 +462,7 @@ pub fn frees_list<T: HasFrees>(t: &T) -> Vec<LVar> {
     out
 }
 
-/// `getAny . foldFrees (Any . (v ==))` (Simplification.hs:96): whether `v` is
+/// `getAny . foldFrees (Any . (v ==))` (Simplification.hs): whether `v` is
 /// one of the free `LVar`s of `t`, compared on name, sort and index.
 pub fn occurs_free<T: HasFrees + ?Sized>(v: &LVar, t: &T) -> bool {
     let mut found = false;
@@ -552,7 +551,7 @@ impl HasFreesV for LVar {
     }
 }
 
-// HS `instance HasFrees v => HasFrees (BVar v)` (LTerm.hs:766-776): a `Bound`
+// HS `instance HasFrees v => HasFrees (BVar v)` (LTerm.hs): a `Bound`
 // index carries no variable, so both directions pass it through.  This makes
 // `Lit<C, BVar<LVar>>` a `HasFrees` leaf, which is how the guarded formula's
 // terms over `BVar<LVar>` reach the trait.
@@ -700,7 +699,7 @@ impl<T: HasFrees + Clone> HasFrees for std::sync::Arc<T> {
 /// sort and name hint).
 ///
 /// The empty-exemption case of [`rename_ignoring`]: HS states the two
-/// separately (`rename`, LTerm.hs:638-645) with bodies that differ only in the
+/// separately (`rename`, LTerm.hs) with bodies that differ only in the
 /// `elem … vars` test, which an empty list always answers `False`.
 #[inline]
 pub fn rename<T: HasFrees, M: MonadFresh>(t: T, fresh: &mut M) -> T {
@@ -719,7 +718,7 @@ pub fn rename_ignoring<T: HasFrees, M: MonadFresh>(vars: &[LVar], t: T, fresh: &
             let span = max - min + 1;
             let fresh_start = fresh.fresh_idents(span);
             let shift = fresh_start as i128 - min as i128;
-            // HS `renameIgnoring` (LTerm.hs:650-657) uses `mapFrees (Monotone
+            // HS `renameIgnoring` (LTerm.hs) uses `mapFrees (Monotone
             // ...)` here even though the `vars` exemption makes the map
             // non-monotone in general; transcribing HS verbatim (rather than
             // "fixing" it to an `Arbitrary` map) is what preserves AC arg
@@ -747,7 +746,7 @@ pub fn rename_avoiding_ignoring<S: HasFrees, T: HasFrees>(s: S, avoid_in: &T, va
     rename_ignoring(vars, s, &mut fresh)
 }
 
-/// `renameAvoiding s avoid_in` (LTerm.hs:696): replace all free variables in
+/// `renameAvoiding s avoid_in` (LTerm.hs): replace all free variables in
 /// `s` by fresh variables avoiding the variables in `avoid_in`.
 pub fn rename_avoiding<S: HasFrees, T: HasFrees>(s: S, avoid_in: &T) -> S {
     let mut fresh = avoid(avoid_in);
@@ -788,7 +787,7 @@ mod tests {
         assert_eq!(sort_of_name(&Name::new(NameTag::Node, "n")), LSort::Node);
         assert_eq!(sort_of_name(&Name::new(NameTag::Nat, "n")), LSort::Nat);
         // The web abbreviation tag has no sort of its own.  It falls back to
-        // Msg (LTerm.hs:266).  It is the one tag whose sort does not carry
+        // Msg (LTerm.hs).  It is the one tag whose sort does not carry
         // the name of the tag.
         assert_eq!(sort_of_name(&Name::new(NameTag::Abbrev, "a")), LSort::Msg);
     }
@@ -886,7 +885,7 @@ mod tests {
     // counterpart by checked file:line below.**
     // =========================================================================
 
-    /// LTerm.hs:165-170:
+    /// LTerm.hs:
     ///     data LSort = LSortPub | LSortFresh | LSortMsg | LSortNode | LSortNat
     ///                deriving( Eq, Ord, ... )
     #[test]
@@ -900,7 +899,7 @@ mod tests {
         assert!(LSort::Pub < LSort::Nat);
     }
 
-    /// LTerm.hs:219:
+    /// LTerm.hs:
     ///     data NameTag = FreshName | PubName | NodeName | NatName | AbbrevName
     #[test]
     fn name_tag_ord_matches_haskell_declaration() {
@@ -910,7 +909,7 @@ mod tests {
         assert!(NameTag::Nat < NameTag::Abbrev);
     }
 
-    /// Haskell `sortCompare` (LTerm.hs:181-191) is a PARTIAL ORDER, NOT
+    /// Haskell `sortCompare` (LTerm.hs) is a PARTIAL ORDER, NOT
     /// the same as `Ord LSort`.  Specifically:
     ///   - Msg is greater than every other comparable sort
     ///   - Node is incomparable to ALL other sorts (returns Nothing)

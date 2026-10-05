@@ -70,7 +70,7 @@ DERIVCHECK_TIMEOUT="${DERIVCHECK_TIMEOUT:-30}"
 HS_CANON_CACHE="${HS_CANON_CACHE:-$(shared_cache_dir "$repo_root" raw "$script_dir/.hs_canon_cache")}" || exit 2
 NO_HS_CACHE="${NO_HS_CACHE:-}"
 # HS RTS flags. Upstream commit 00a282da ("Canonicalise maude's returned
-# substitution entries", Maude/Types.hs:134) made HS proofs schedule-
+# substitution entries", Maude/Types.hs) made HS proofs schedule-
 # INDEPENDENT — `+RTS -Nk` for any k now yields byte-identical proofs
 # (verified on UM3: all -N share md5 cd93570e…). So we no longer force
 # single-thread; HS_RTS defaults to `-N` (all cores) to speed up cache

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::fact::LNFact;
@@ -671,7 +670,7 @@ fn add_goal_idempotent() {
 /// slot: the second insertion ORs its `looping` flag into the stored status,
 /// keeps the smaller `nr`, and leaves the stored goal in place, while
 /// `next_goal_nr` still advances once per call (HS `insertGoalStatus` and the
-/// `combineGoalStatus` it merges with, Reduction.hs:513-523).
+/// `combineGoalStatus` it merges with, Reduction.hs).
 #[test]
 fn add_goal_merges_structurally_equal_disj_goals() {
     use crate::constraint::constraints::Disj;
@@ -805,7 +804,7 @@ use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
 
 /// A node variable, distinguished from every other fixture variable by its
-/// index alone: `Ord LVar` compares the index first (LTerm.hs:546-548), so a
+/// index alone: `Ord LVar` compares the index first (LTerm.hs), so a
 /// visit sequence reads off as a list of indices.
 fn nvar(idx: u64) -> NodeId {
     LVar::new("i", LSort::Node, idx)
@@ -851,7 +850,7 @@ fn last_formula(idx: u64) -> Guarded {
 }
 
 /// A system carrying a distinct variable in every field of the Haskell record
-/// (System.hs:383-392).  Each multi-element field is filled in the REVERSE of
+/// (System.hs).  Each multi-element field is filled in the REVERSE of
 /// its `Data.Set` / `Data.Map` order, so a walk that reads the stored `Vec`
 /// order instead of the container order comes out backwards.
 fn one_variable_per_field_system() -> System {
@@ -878,7 +877,7 @@ fn one_variable_per_field_system() -> System {
     {
         let st = s.subterm_store_mut();
         // The negative subterms carry the HIGHEST indices of the store, so the
-        // sequence tells `negSt <> st <> solvedSt` (SubtermStore.hs:548-549)
+        // sequence tells `negSt <> st <> solvedSt` (SubtermStore.hs)
         // apart from any index-ordered walk.
         st.neg_subterms = SortedPairSet::rebuild_from(vec![(mterm(90), mterm(91))]);
         st.old_neg_subterms = SortedPairSet::rebuild_from(vec![(mterm(98), mterm(99))]);
@@ -915,8 +914,8 @@ fn one_variable_per_field_system() -> System {
     s
 }
 
-/// `instance HasFrees System`'s fold (System.hs:1836-1849) over the record at
-/// System.hs:383-395: the ten variable-bearing fields in declaration order,
+/// `instance HasFrees System`'s fold (System.hs) over the record at
+/// System.hs: the ten variable-bearing fields in declaration order,
 /// each `Data.Set` / `Data.Map` field in its container order rather than in
 /// the port's insertion order.  `old_neg_subterms` and the domain-only rule
 /// for the equation store's disjunctions show up as the two gaps in the
@@ -980,9 +979,9 @@ fn for_each_free_walks_fields_in_system_hs_order() {
     );
 }
 
-/// `instance HasFrees System`'s map (System.hs:1866-1879) rebuilds each
+/// `instance HasFrees System`'s map (System.hs) rebuilds each
 /// `Vec`-backed field where it stands, where HS re-establishes the container
-/// with `S.fromList` / `M.fromList` (LTerm.hs:903, LTerm.hs:914).  The ranges
+/// with `S.fromList` / `M.fromList` (LTerm.hs, LTerm.hs).  The ranges
 /// of the equation store's disjunctions and `old_neg_subterms` are carried
 /// over untouched.
 #[test]
@@ -1107,7 +1106,7 @@ fn bounds_max_covers_every_field_except_disj_goals() {
 }
 
 /// HS derives `Ord GoalStatus` over `_gsSolved`, `_gsNr`, `_gsLoopBreaker`
-/// (System.hs:369-379).  The port declares `looping` first, so a pair whose
+/// (System.hs).  The port declares `looping` first, so a pair whose
 /// `solved` and `looping` disagree in opposite directions settles on
 /// `solved`.
 #[test]

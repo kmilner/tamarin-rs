@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.Builtin.{Signature, Convenience, Rules}` from
 //! `lib/term/src/Term/Builtin/`.
@@ -218,7 +217,7 @@ pub fn emap<A: Ord + Clone>(a: Term<A>, b: Term<A>) -> Term<A> {
     f_app_c(CSym::EMap, vec![a, b])
 }
 
-/// HS `Convenience.hs:55-59#x1` binds `x1`, `x2` and `x3` once as the message
+/// HS `Convenience.hs#x1` binds `x1`, `x2` and `x3` once as the message
 /// variables every builtin rewrite rule below is written over.
 fn x1() -> LNTerm {
     msg_var("x", 1)
@@ -311,7 +310,7 @@ pub fn mset_rules() -> BTreeSet<RRule<LNTerm>> {
 
 /// The rewrite `lhs -> rhs`, where `positions` gives the positions at which
 /// `rhs` occurs in `lhs` (HS `CtxtStRule` over an `StRhs`,
-/// Term/SubtermRule.hs:40-45).
+/// Term/SubtermRule.hs).
 fn st_rule(lhs: LNTerm, positions: Vec<Position>, rhs: LNTerm) -> CtxtStRule {
     CtxtStRule::new(
         lhs,
@@ -322,17 +321,17 @@ fn st_rule(lhs: LNTerm, positions: Vec<Position>, rhs: LNTerm) -> CtxtStRule {
     )
 }
 
-/// `fstRule` (Rules.hs:101): `fst(<x1,x2>) = x1`.
+/// `fstRule` (Rules.hs): `fst(<x1,x2>) = x1`.
 pub fn fst_rule() -> CtxtStRule {
     st_rule(fst(pair(x1(), x2())), vec![vec![0, 0]], x1())
 }
 
-/// `sndRule` (Rules.hs:102): `snd(<x1,x2>) = x2`.
+/// `sndRule` (Rules.hs): `snd(<x1,x2>) = x2`.
 pub fn snd_rule() -> CtxtStRule {
     st_rule(snd(pair(x1(), x2())), vec![vec![0, 1]], x2())
 }
 
-/// `fstDestRule` (Rules.hs:103): `fstDest(<x1,x2>) = x1`, the destructor-rooted
+/// `fstDestRule` (Rules.hs): `fstDest(<x1,x2>) = x1`, the destructor-rooted
 /// variant of [`fst_rule`].
 pub fn fst_dest_rule() -> CtxtStRule {
     st_rule(
@@ -342,7 +341,7 @@ pub fn fst_dest_rule() -> CtxtStRule {
     )
 }
 
-/// `sndDestRule` (Rules.hs:104): `sndDest(<x1,x2>) = x2`, the destructor-rooted
+/// `sndDestRule` (Rules.hs): `sndDest(<x1,x2>) = x2`, the destructor-rooted
 /// variant of [`snd_rule`].
 pub fn snd_dest_rule() -> CtxtStRule {
     st_rule(
@@ -352,12 +351,12 @@ pub fn snd_dest_rule() -> CtxtStRule {
     )
 }
 
-/// `pairRules` (Rules.hs:106).
+/// `pairRules` (Rules.hs).
 pub fn pair_rules() -> BTreeSet<CtxtStRule> {
     set_of([fst_rule(), snd_rule()])
 }
 
-/// `pairDestRules` (Rules.hs:115): the DESTRUCTOR variant of `pair_rules`,
+/// `pairDestRules` (Rules.hs): the DESTRUCTOR variant of `pair_rules`,
 /// used by the `dest-pairing` builtin.
 pub fn pair_dest_rules() -> BTreeSet<CtxtStRule> {
     set_of([fst_dest_rule(), snd_dest_rule()])
@@ -390,7 +389,7 @@ pub fn signature_rules() -> BTreeSet<CtxtStRule> {
     )])
 }
 
-/// `locationReportRules` (Rules.hs:112-114): `check_rep(rep(x1,x2), x2) = x1`
+/// `locationReportRules` (Rules.hs): `check_rep(rep(x1,x2), x2) = x1`
 /// and `get_rep(rep(x1,x2)) = x1`.  Used by the `locations-report` builtin.
 pub fn location_report_rules() -> BTreeSet<CtxtStRule> {
     let rep = || f_app_no_eq(rep_sym(), vec![x1(), x2()]);
@@ -408,7 +407,7 @@ pub fn location_report_rules() -> BTreeSet<CtxtStRule> {
     ])
 }
 
-/// `symEncDestRules` (Rules.hs:116-116): `sdecDest(senc(x1,x2), x2) = x1` —
+/// `symEncDestRules` (Rules.hs): `sdecDest(senc(x1,x2), x2) = x1` —
 /// the DESTRUCTOR variant of `sym_enc_rules`, used by the
 /// `dest-symmetric-encryption` builtin.
 pub fn sym_enc_dest_rules() -> BTreeSet<CtxtStRule> {
@@ -419,7 +418,7 @@ pub fn sym_enc_dest_rules() -> BTreeSet<CtxtStRule> {
     )])
 }
 
-/// `asymEncDestRules` (Rules.hs:117-117): `adecDest(aenc(x1, pk(x2)), x2) = x1`
+/// `asymEncDestRules` (Rules.hs): `adecDest(aenc(x1, pk(x2)), x2) = x1`
 /// — the DESTRUCTOR variant of `asym_enc_rules`, used by the
 /// `dest-asymmetric-encryption` builtin.
 pub fn asym_enc_dest_rules() -> BTreeSet<CtxtStRule> {
@@ -432,7 +431,7 @@ pub fn asym_enc_dest_rules() -> BTreeSet<CtxtStRule> {
 
 /// `revealSignatureRules`: `revealVerify(revealSign(x,y), x, pk(y)) = true`
 /// plus `getMessage(revealSign(x,y)) = x`.  Mirrors
-/// `Term.Builtin.Rules.revealSignatureRules` (Rules.hs:110-111).
+/// `Term.Builtin.Rules.revealSignatureRules` (Rules.hs).
 pub fn reveal_signature_rules() -> BTreeSet<CtxtStRule> {
     let reveal_sign = || f_app_no_eq(reveal_sign_sym(), vec![x1(), x2()]);
     set_of([
@@ -450,7 +449,7 @@ pub fn reveal_signature_rules() -> BTreeSet<CtxtStRule> {
 }
 
 /// `signatureDestRules`: `verifyDest(sign(x, y), x, pk(y)) = true`.
-/// Mirrors `Term.Builtin.Rules.signatureDestRules` (Rules.hs:118-118).
+/// Mirrors `Term.Builtin.Rules.signatureDestRules` (Rules.hs).
 pub fn signature_dest_rules() -> BTreeSet<CtxtStRule> {
     set_of([st_rule(
         f_app_no_eq(verify_dest_sym(), vec![sign(x1(), x2()), x1(), pk(x2())]),
@@ -481,7 +480,7 @@ mod tests {
             .collect()
     }
 
-    /// `dhRules` (Rules.hs:47-61) is Lankford's DH presentation, which has 13
+    /// `dhRules` (Rules.hs) is Lankford's DH presentation, which has 13
     /// rules.  A count alone constrains no symbol, no argument and no
     /// nesting.  One mistyped `inv` or `*` still gives 13 rules and a
     /// different equational theory, with no message.  Each line below is the
@@ -509,7 +508,7 @@ mod tests {
         );
     }
 
-    /// `xorRules` (Rules.hs:91-95).  `x.1⊕x.1⊕x.2 = x.2` is the flattened
+    /// `xorRules` (Rules.hs).  `x.1⊕x.1⊕x.2 = x.2` is the flattened
     /// three-argument form of HS's `x1 +: x1 +: x2`.  `fAppAC` flattens the
     /// nested `+:` when it builds the term.  `x1 +: x1` keeps both copies.
     #[test]
@@ -524,7 +523,7 @@ mod tests {
         );
     }
 
-    /// `bpRules` (Rules.hs:71-78) is the bilinear-pairing extension of DH.
+    /// `bpRules` (Rules.hs) is the bilinear-pairing extension of DH.
     #[test]
     fn bp_rules_match_haskell() {
         assert_eq!(
@@ -537,7 +536,7 @@ mod tests {
         );
     }
 
-    /// `msetRules` (Rules.hs:87) is empty.  Multisets are pure AC.  They have
+    /// `msetRules` (Rules.hs) is empty.  Multisets are pure AC.  They have
     /// no rewrite rules of their own.
     #[test]
     fn mset_rules_are_empty() {
@@ -578,8 +577,8 @@ mod tests {
     }
 
     /// The builtin signatures are the `NoEqSym` tuples of
-    /// `Term.Builtin.Signature` (Term/Builtin/Signature.hs:19-44), grouped at
-    /// Term/Builtin/Signature.hs:61-97.  Each symbol's arity, privacy and
+    /// `Term.Builtin.Signature` (Term/Builtin/Signature.hs), grouped at
+    /// Term/Builtin/Signature.hs.  Each symbol's arity, privacy and
     /// constructability appears in the output, in the `functions:` block.
     /// The three values also decide which intruder rules the code generates.
     /// The test therefore compares all three for each symbol.  A test of

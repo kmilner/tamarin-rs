@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Rule colors retain their literal grammar and six-digit validation.
 
@@ -47,7 +46,7 @@ fn six_digit_codes_are_accepted() {
     assert_eq!(accepted_code("FF00FF"), "FF00FF");
 }
 
-/// `ruleAttribute` offers the British spelling first (Parser/Rule.hs:72-73),
+/// `ruleAttribute` offers the British spelling first (Parser/Rule.hs),
 /// and it stores the same attribute.  The oracle loads
 /// `rule R1[colour=ff00ff]` at exit 0.  It renders that attribute as
 /// `color=#ff00ff`.  That is the spelling the corpus uses

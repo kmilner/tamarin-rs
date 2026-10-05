@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Constraint.System.Constraints` —
 //! graph-constraint primitives (`Edge`, `LessAtom`), goal types
@@ -44,8 +43,8 @@ pub struct Edge {
     pub tgt: NodePrem,
 }
 
-/// HS `Apply LNSubst Edge` (Constraints.hs:107-108): both ends through the
-/// pair instance (SubstVFree.hs:316-317), which reaches the node id and
+/// HS `Apply LNSubst Edge` (Constraints.hs): both ends through the
+/// pair instance (SubstVFree.hs), which reaches the node id and
 /// leaves the conclusion / premise index alone.
 impl Apply<SystemSubst<'_>> for Edge {
     fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
@@ -59,10 +58,10 @@ impl Apply<SystemSubst<'_>> for Edge {
     }
 }
 
-/// `instance HasFrees Edge` (Constraints.hs:110-115): the source conclusion
+/// `instance HasFrees Edge` (Constraints.hs): the source conclusion
 /// before the target premise.  Only the node id of each end is a variable —
 /// the conclusion and premise indices are `Int`s, whose instance contributes
-/// nothing to the fold and maps to itself (LTerm.hs:820-823).
+/// nothing to the fold and maps to itself (LTerm.hs).
 impl HasFrees for Edge {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
         self.src.0.for_each_free(f);
@@ -107,7 +106,7 @@ impl std::fmt::Display for Reason {
 ///
 /// Equality and ordering ignore the reason tag — two atoms are "the
 /// same" iff they constrain the same pair.  HS hand-writes both instances
-/// over `(smaller, larger)` for that reason (Constraints.hs:126-130); a
+/// over `(smaller, larger)` for that reason (Constraints.hs); a
 /// derive over the three fields would rank atoms by their reason.
 #[derive(Debug, Clone)]
 pub struct LessAtom {
@@ -143,10 +142,10 @@ impl PartialOrd for LessAtom {
     }
 }
 
-/// `instance HasFrees LessAtom` (Constraints.hs:145-150): the smaller node id
+/// `instance HasFrees LessAtom` (Constraints.hs): the smaller node id
 /// then the larger one.  The reason tag holds no variable and is carried over
 /// by `pure`.
-/// HS `Apply LNSubst LessAtom` (Constraints.hs:142-143): both endpoints,
+/// HS `Apply LNSubst LessAtom` (Constraints.hs): both endpoints,
 /// with the reason tag carried over.
 impl Apply<SystemSubst<'_>> for LessAtom {
     fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
@@ -201,7 +200,7 @@ impl<T> Disj<T> {
     }
 }
 
-/// `instance HasFrees a => HasFrees (Disj a)` (LTerm.hs:884-889): the
+/// `instance HasFrees a => HasFrees (Disj a)` (LTerm.hs): the
 /// disjuncts in list order, through the `Vec` instance.
 impl<T: HasFrees> HasFrees for Disj<T> {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
@@ -219,7 +218,7 @@ impl<T: HasFrees> HasFrees for Disj<T> {
 
 /// A `Goal` denotes that a constraint reduction rule is applicable.
 ///
-/// The derived `Ord` mirrors HS's derived `Ord Goal` (Constraints.hs:159-172):
+/// The derived `Ord` mirrors HS's derived `Ord Goal` (Constraints.hs):
 /// constructor rank is declaration order — `ActionG < ChainG < PremiseG <
 /// SplitG < DisjG < SubtermG` — so the variants below MUST stay in HS's
 /// declaration order (every goal sort in the solver routes through this
@@ -227,20 +226,20 @@ impl<T: HasFrees> HasFrees for Disj<T> {
 /// constructor the payloads compare left to right, each through an `Ord`
 /// that mirrors its HS counterpart:
 ///
-/// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs:546-548).
+/// - `LVar` — manual `Ord` = `(idx, sort, name)` (LTerm.hs).
 /// - `LNFact` — manual `Ord` = tag then terms, annotations IGNORED, which is
-///   HS's manual `instance Ord (Fact t)` (Model/Fact.hs:173-174), not a derived
+///   HS's manual `instance Ord (Fact t)` (Model/Fact.hs), not a derived
 ///   one; `FactTag`'s derived `Ord` matches HS's constructor and payload
-///   order (Model/Fact.hs:137-148), as does `Multiplicity`'s
-///   (Model/Fact.hs:133-134).
+///   order (Model/Fact.hs), as does `Multiplicity`'s
+///   (Model/Fact.hs).
 /// - `NodeConc` / `NodePrem` — `(LVar, ConcIdx/PremIdx)` tuples; the index
 ///   newtypes derive `Ord` over their integer, as HS's do
-///   (Model/Rule.hs:233-238).
+///   (Model/Rule.hs).
 /// - `SplitId` — newtype over an integer, derived both sides
-///   (EquationStore.hs:88-89).
+///   (EquationStore.hs).
 /// - `LNTerm` — `Lit < App`, then symbol then arguments, mirroring the
-///   derived `Ord (Term a)` / `Ord (Lit c v)` (Raw.hs:73-75, VTerm.hs:56-58).
-/// - `Guarded` — its own derived `Ord` (Guarded.hs:129); HS's `Disj` is a
+///   derived `Ord (Term a)` / `Ord (Lit c v)` (Raw.hs, VTerm.hs).
+/// - `Guarded` — its own derived `Ord` (Guarded.hs); HS's `Disj` is a
 ///   newtype over a list, so the wrapper compares lexicographically.
 ///
 /// HS holds `sGoals` in a `Map Goal GoalStatus`, so any `M.toList` walk of
@@ -272,17 +271,17 @@ impl Goal {
     }
 }
 
-/// `instance HasFrees Goal` (Constraints.hs:210-232): every variant folds and
+/// `instance HasFrees Goal` (Constraints.hs): every variant folds and
 /// maps its payloads left to right — the timepoint before the fact of an
 /// `Action`, the node id of a `Premise`'s premise before its fact, the
 /// conclusion's node id before the premise's for a `Chain`, and both sides of
-/// a `Subterm` pair (LTerm.hs:855-860).  A `Premise`/`Chain` index is an
+/// a `Subterm` pair (LTerm.hs).  A `Premise`/`Chain` index is an
 /// `Int`, so only the node id of such a pair is a variable
-/// (LTerm.hs:820-823).  `Split` carries a `SplitId`, whose instance is `const
-/// mempty` / `pure` (EquationStore.hs:91-94).
-/// HS `Apply LNSubst Goal` (Constraints.hs:234-241).  A `SplitG` carries a
+/// (LTerm.hs).  `Split` carries a `SplitId`, whose instance is `const
+/// mempty` / `pure` (EquationStore.hs).
+/// HS `Apply LNSubst Goal` (Constraints.hs).  A `SplitG` carries a
 /// split id, which is not a variable
-/// (Theory/Tools/EquationStore.hs:152-153).  The `DisjG` arm is the pass's
+/// (Theory/Tools/EquationStore.hs).  The `DisjG` arm is the pass's
 /// own rewrite of the alternatives, which differs between the two whole-system
 /// passes — see [`SystemSubst`].
 impl Apply<SystemSubst<'_>> for Goal {
@@ -366,7 +365,7 @@ mod tests {
 
     // HS's derived `Ord Goal` ranks by constructor first, in declaration
     // order `ActionG < ChainG < PremiseG < SplitG < DisjG < SubtermG`
-    // (Constraints.hs:159-172), and only then by payload.
+    // (Constraints.hs), and only then by payload.
     #[test]
     fn goal_ord_ranks_constructors_in_haskell_order() {
         use crate::fact::{FactTag, LNFact};
@@ -398,13 +397,13 @@ mod tests {
         }
 
         // Same-constructor tie-break: `ActionG` compares its `LVar` first, and
-        // `Ord LVar` is idx-major (LTerm.hs:546-548), so `#i.1` precedes
+        // `Ord LVar` is idx-major (LTerm.hs), so `#i.1` precedes
         // `#a.2` despite sorting after it by name.
         let lo = Goal::Action(LVar::new("i", LSort::Node, 1), fa.clone());
         let hi = Goal::Action(LVar::new("a", LSort::Node, 2), fa.clone());
         assert_eq!(lo.cmp(&hi), Ordering::Less);
         // Equal node ids fall through to the fact, which orders by tag then
-        // terms with annotations ignored (Model/Fact.hs:173-174).
+        // terms with annotations ignored (Model/Fact.hs).
         let fresh = LNFact::new(FactTag::Fresh, vec![t.clone()]);
         let a_out = Goal::Action(node("i"), fa);
         let a_fresh = Goal::Action(node("i"), fresh);
@@ -503,7 +502,7 @@ mod tests {
         t.map_free(&mut |v: LVar| LVar::new(v.name, v.sort, v.idx + 100))
     }
 
-    /// `instance HasFrees Edge` (Constraints.hs:110-115): source then target,
+    /// `instance HasFrees Edge` (Constraints.hs): source then target,
     /// and the two indices are not variables.
     #[test]
     fn edge_visits_the_source_before_the_target() {
@@ -521,7 +520,7 @@ mod tests {
         );
     }
 
-    /// `instance HasFrees LessAtom` (Constraints.hs:145-150): smaller then
+    /// `instance HasFrees LessAtom` (Constraints.hs): smaller then
     /// larger, with the reason carried over.  `PartialEq LessAtom` ignores the
     /// reason, so the fields are compared one by one.
     #[test]
@@ -534,7 +533,7 @@ mod tests {
         assert_eq!(mapped.reason, Reason::InjectiveFacts);
     }
 
-    /// `instance HasFrees a => HasFrees (Disj a)` (LTerm.hs:884-889): list
+    /// `instance HasFrees a => HasFrees (Disj a)` (LTerm.hs): list
     /// order in both directions, with no sorting of the disjuncts.
     #[test]
     fn disj_visits_its_items_in_list_order() {
@@ -543,7 +542,7 @@ mod tests {
         assert_eq!(shifted(d).0, vec![node_at("b", 102), node_at("a", 101)]);
     }
 
-    /// `instance HasFrees Goal`'s fold (Constraints.hs:210-218), one variant
+    /// `instance HasFrees Goal`'s fold (Constraints.hs), one variant
     /// per row and a variable of its own in every payload, so the sequence
     /// pins which payload comes first.
     #[test]
@@ -576,7 +575,7 @@ mod tests {
         }
     }
 
-    /// `instance HasFrees Goal`'s map (Constraints.hs:226-232): every payload
+    /// `instance HasFrees Goal`'s map (Constraints.hs): every payload
     /// is rewritten, the premise and conclusion indices stay, and a `SplitG`
     /// keeps its id.
     #[test]

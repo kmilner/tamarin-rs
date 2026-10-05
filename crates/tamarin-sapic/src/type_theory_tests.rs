@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 
@@ -302,7 +301,7 @@ process: P
 end
 "#;
     let thy = typed(src);
-    // The `Some(vec![])` rule (Typing.hs:224 — always `Just`).
+    // The `Some(vec![])` rule (Typing.hs — always `Just`).
     let defs: Vec<&ProcessDef> = thy.process_defs().collect();
     assert_eq!(defs.len(), 1);
     assert_eq!(defs[0].vars, Some(Vec::new()));
@@ -322,7 +321,7 @@ end
 }
 
 /// A `let` binder written `cnext:nat` inside a process.  HS `sapicvar`
-/// (Token.hs:506-510) is `lvarNoSuffix` — PREFIX sorts only — plus
+/// (Token.hs) is `lvarNoSuffix` — PREFIX sorts only — plus
 /// `option Nothing (colon *> typep)`, so the `:nat` names a SAPIC TYPE and
 /// `cnext` stays msg-sorted; the same text in a rule would be the nat-sorted
 /// `%cnext`.  Reading it as a sort suffix instead makes the binder a
@@ -380,13 +379,13 @@ end";
 
 /// A SAPIC condition's variables are `SapicLVar`s, so a process definition
 /// written without formals takes their type tags into `_pVars`
-/// (`pvars = S.toList (varsProc pr) \\ accBindings pr`, Sapic/Typing.hs:219,
+/// (`pvars = S.toList (varsProc pr) \\ accBindings pr`, Sapic/Typing.hs,
 /// over `varsProc = foldMap Data.Set.singleton`,
-/// Theory/Sapic/Process.hs:361-362), and `-m=spthytyped` prints each formal
-/// with `show :: SapicLVar` (TheoryObject.hs:791-799,
-/// Theory/Sapic/Term.hs:108-110).  A timepoint operand of `<` is read by
+/// Theory/Sapic/Process.hs), and `-m=spthytyped` prints each formal
+/// with `show :: SapicLVar` (TheoryObject.hs,
+/// Theory/Sapic/Term.hs).  A timepoint operand of `<` is read by
 /// `sapicnodevar` and so carries `node`
-/// (Theory/Sapic/Term.hs:99-100#defaultSapicNodeType). Current upstream also
+/// (Theory/Sapic/Term.hs#defaultSapicNodeType). Current upstream also
 /// defaults every node-sorted `sapicvar` to that type, including a predicate
 /// argument such as `#p`.
 #[test]

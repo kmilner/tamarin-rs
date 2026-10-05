@@ -1,9 +1,8 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! The substitution a whole-system pass applies, as
-//! `instance Apply LNSubst System` (System.hs:1815-1822) reaches the parts of
+//! `instance Apply LNSubst System` (System.hs) reaches the parts of
 //! a constraint system.
 //!
 //! Haskell threads a bare `LNSubst` through those instances.  The port's pass

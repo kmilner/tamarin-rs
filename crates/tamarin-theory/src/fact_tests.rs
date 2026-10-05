@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use tamarin_term::builtin::msg_var;
@@ -44,7 +43,7 @@ fn equality_ignores_annotations() {
 }
 
 /// `is_linear` and `is_persistent` partition every tag (HS
-/// `factTagMultiplicity`, Theory/Model/Fact.hs:383-388). A `Proto` tag carries
+/// `factTagMultiplicity`, Theory/Model/Fact.hs). A `Proto` tag carries
 /// its own multiplicity. KU and KD are Persistent. Every other tag is Linear.
 /// The test asserts both directions. A predicate that degenerates to a
 /// constant therefore cannot pass the test.
@@ -67,7 +66,7 @@ fn linear_vs_persistent() {
 }
 
 /// `lvarToLnterm` re-sorts NAT variables to FRESH ones — the surprising bit
-/// of the HS definition (Theory/Model/Fact.hs:331-333), since only fresh-sorted variables
+/// of the HS definition (Theory/Model/Fact.hs), since only fresh-sorted variables
 /// can be bound by the `Fr`-premise `freesToFresh` builds around them.
 #[test]
 fn lvar_to_lnterm_resorts_nat_to_fresh() {
@@ -100,8 +99,8 @@ fn trivial_ku_fact_predicates() {
 // =========================================================================
 // Haskell-faithfulness invariants.
 //
-// Theory/Model/Fact.hs:133:  `data Multiplicity = Persistent | Linear`
-// Theory/Model/Fact.hs:137:  `data FactTag = ProtoFact ... | FreshFact | OutFact |
+// Theory/Model/Fact.hs:  `data Multiplicity = Persistent | Linear`
+// Theory/Model/Fact.hs:  `data FactTag = ProtoFact ... | FreshFact | OutFact |
 //                              InFact | KUFact | KDFact | DedFact |
 //                              TermFact`
 //
@@ -111,12 +110,12 @@ fn trivial_ku_fact_predicates() {
 // injective-fact code assumes.
 // =========================================================================
 
-/// Multiplicity: `Persistent < Linear` from Theory/Model/Fact.hs:133-134.
+/// Multiplicity: `Persistent < Linear` from Theory/Model/Fact.hs.
 #[test]
 fn multiplicity_ord_matches_haskell_declaration() {
     assert!(
         Multiplicity::Persistent < Multiplicity::Linear,
-        "Persistent must sort before Linear (Theory/Model/Fact.hs:133)"
+        "Persistent must sort before Linear (Theory/Model/Fact.hs)"
     );
 }
 
@@ -133,7 +132,7 @@ fn fact_tag_ord_proto_sorts_before_builtins() {
     let fresh = FactTag::Fresh;
     assert!(
         proto < fresh,
-        "Proto must sort before Fresh (Haskell decl order Theory/Model/Fact.hs:137)"
+        "Proto must sort before Fresh (Haskell decl order Theory/Model/Fact.hs)"
     );
     assert!(fresh < FactTag::Out);
     assert!(FactTag::Out < FactTag::In);
@@ -315,7 +314,7 @@ fn fingerprints_are_invisible_to_eq_and_ord() {
 }
 
 /// `Hash` reads the same fields `Eq` reads, so the annotations stay out of it
-/// (HS ignores them in `Eq`/`Ord`, Theory/Model/Fact.hs:169-174).
+/// (HS ignores them in `Eq`/`Ord`, Theory/Model/Fact.hs).
 #[test]
 fn fact_hash_ignores_annotations() {
     let a = fresh_fact(msg_var("x", 0)).annotate(FactAnnotation::SolveFirst);
@@ -476,14 +475,14 @@ fn max_var_equals_the_manual_walk() {
 }
 
 // =========================================================================
-// `prettyFact` (Theory/Model/Fact.hs:566-582)
+// `prettyFact` (Theory/Model/Fact.hs)
 // =========================================================================
 
 /// `nestShort n lead finish body = sep [lead $$ nest n body, finish]`
-/// (Text/PrettyPrint/Class.hs:218) puts a space on each side of the argument
+/// (Text/PrettyPrint/Class.hs) puts a space on each side of the argument
 /// list when the whole fact fits on one line, and the tag of a persistent
 /// fact carries the `!` prefix `showFactTag` gives it
-/// (Theory/Model/Fact.hs:549-553).
+/// (Theory/Model/Fact.hs).
 #[test]
 fn pretty_lnfact_emits_the_nest_short_inner_spaces() {
     let fa = ku_fact(fresh_var("ltk", 0));
@@ -499,8 +498,8 @@ fn pretty_lnfact_zero_arity_keeps_its_inner_space() {
 }
 
 /// `ppAnn` reads `S.toList`, i.e. `FactAnnotation`'s `Ord` order
-/// (Theory/Model/Fact.hs:573-574), which is the declaration order
-/// `SolveFirst < SolveLast < NoSources` (Theory/Model/Fact.hs:154).  The
+/// (Theory/Model/Fact.hs), which is the declaration order
+/// `SolveFirst < SolveLast < NoSources` (Theory/Model/Fact.hs).  The
 /// annotations go in in the opposite order, so the output can only come from
 /// the set's iteration order.
 #[test]
@@ -517,7 +516,7 @@ fn pretty_lnfact_annotations_in_ord_order() {
 
 /// A tag whose arity disagrees with the argument count prints
 /// `MALFORMED-` followed by HS's DERIVED `show tag`
-/// (Theory/Model/Fact.hs:569), which spells the constructor and quotes a
+/// (Theory/Model/Fact.hs), which spells the constructor and quotes a
 /// protocol fact's name, and not the multiplicity-prefix spelling
 /// `show_fact_tag` gives.
 #[test]
@@ -536,7 +535,7 @@ fn pretty_lnfact_malformed_arity() {
         "MALFORMED-FreshFact( x, y )"
     );
     // The annotation suffix hangs off the malformed head as well
-    // (Theory/Model/Fact.hs:569).
+    // (Theory/Model/Fact.hs).
     let annotated = builtin.annotate(FactAnnotation::SolveLast);
     assert_eq!(
         pretty_lnfact(&annotated).render(),
@@ -545,7 +544,7 @@ fn pretty_lnfact_malformed_arity() {
 }
 
 /// The argument printer is a parameter, exactly as `prettyFact ppTerm`
-/// (Theory/Model/Fact.hs:567) takes one, so a `Fact` over any term type
+/// (Theory/Model/Fact.hs) takes one, so a `Fact` over any term type
 /// prints through its own leaf renderer.
 #[test]
 fn pretty_fact_takes_the_argument_printer() {
@@ -604,7 +603,7 @@ fn show_bl_fact_renders_a_nonempty_annotation_set() {
 }
 
 /// `isKLogFact` is `isProtoFact` narrowed to the name `K`
-/// (Theory/Model/Fact.hs:348-350), which is the tag [`k_log_fact`] builds.
+/// (Theory/Model/Fact.hs), which is the tag [`k_log_fact`] builds.
 /// The special tags are not protocol facts at all, and `KU`/`KD` do not
 /// qualify despite their names.
 #[test]
@@ -624,7 +623,7 @@ fn is_k_log_fact_is_the_proto_fact_named_k() {
     }
 }
 
-/// HS `newVariables prems concs` (Theory/Model/Fact.hs:524-529): the
+/// HS `newVariables prems concs` (Theory/Model/Fact.hs): the
 /// difference of the two lists' variable sets, as terms, in sorted `LVar`
 /// order.  Only the two lists given take part — the caller decides whether
 /// the actions belong in the second one (`cs ++ as` at the rule parser's

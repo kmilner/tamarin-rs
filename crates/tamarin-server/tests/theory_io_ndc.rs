@@ -1,16 +1,15 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! `--no-ndc` on the web load path.
 //!
 //! HS hands the interactive mode's `TheoryLoadOptions` to `withWebUI` as the
-//! partially applied `loadTheory thyLoadOptions` (Interactive.hs:135), and
-//! `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826) writes
-//! `ndcCheck` — `not (argExists "no-ndc")` (TheoryLoader.hs:365-366) — into the
+//! partially applied `loadTheory thyLoadOptions` (Interactive.hs), and
+//! `addParamsOptions`' `addNdcOption` (TheoryLoader.hs) writes
+//! `ndcCheck` — `not (argExists "no-ndc")` (TheoryLoader.hs) — into the
 //! loaded theory's `_deductionChainCheck`.  `checkCloseIntrRule` reads that
 //! field back and runs `prettyNDCcheck` only when it holds
-//! (TheoryLoader.hs:513-519).  So a web load with the flag set must skip the
+//! (TheoryLoader.hs).  So a web load with the flag set must skip the
 //! NDC pass exactly like the `--prove` batch load does.
 //!
 //! Both verdicts are pinned to the ef3f0468 oracle on the `NdcXorr` fixture,
@@ -89,7 +88,7 @@ fn ndc_check_flag_gates_the_web_load_ndc_pass() {
     tamarin_server::init_process_globals();
     let path = fixture();
     // `derivcheck_timeout = 0` skips the dynamic derivation checks, which this
-    // test does not observe (HS `TheoryLoader.hs:578-579` skips them on EQ).
+    // test does not observe (HS `TheoryLoader.hs` skips them on EQ).
     let mut cfg = tamarin_server::ServerConfig::new(
         "127.0.0.1:0".parse().unwrap(),
         std::path::PathBuf::new(),
@@ -97,7 +96,7 @@ fn ndc_check_flag_gates_the_web_load_ndc_pass() {
     );
     cfg.derivcheck_timeout = 0;
 
-    // Flag absent — HS `ndcCheck = True` (TheoryLoader.hs:279), the pass runs.
+    // Flag absent — HS `ndcCheck = True` (TheoryLoader.hs), the pass runs.
     let checked = theory_io::load_from_path(&path, &cfg).expect("fixture loads");
     assert_eq!(
         functions_line(&checked),
@@ -108,7 +107,7 @@ fn ndc_check_flag_gates_the_web_load_ndc_pass() {
         "the pass tags the xorr destructor rules it found NDC",
     );
 
-    // `--no-ndc` — HS's `else (sign, intrRules)` branch (TheoryLoader.hs:517):
+    // `--no-ndc` — HS's `else (sign, intrRules)` branch (TheoryLoader.hs):
     // no verdicts, no signature tags, cache in raw assembly order.
     cfg.ndc_check = false;
     let skipped = theory_io::load_from_path(&path, &cfg).expect("fixture loads");

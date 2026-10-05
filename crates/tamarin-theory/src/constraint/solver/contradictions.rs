@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Constraint.Solver.Contradictions`.
 //!
@@ -187,9 +186,9 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
 ///   where hnd = L.get sigmMaudeHandle sig
 /// ```
 ///
-/// And `nf' = nfViaHaskell` (Norm.hs:130-131) — a structural NF check
+/// And `nf' = nfViaHaskell` (Norm.hs) — a structural NF check
 /// that walks the term tree against the reducibility patterns in
-/// Norm.hs:60-99 (NOT full Maude normalisation: no `reduce`, no AC
+/// Norm.hs (NOT full Maude normalisation: no `reduce`, no AC
 /// re-canonicalisation).  It runs in the `WithMaude` reader because its
 /// `struleApplicable` arm matches subterm-rule LHSes via
 /// `solveMatchLNTerm`, which needs Maude AC matching for rules whose
@@ -259,7 +258,7 @@ type NfMemo = tamarin_utils::FastMap<tamarin_term::lterm::LNTerm, bool>;
 /// `nf'` on a candidate subterm, answered from `memo` when already seen.
 ///
 /// This is HS's `sortednub` over `maybeNonNormalTerms`
-/// (Contradictions.hs:152-158, see line 154): the same candidate recurs
+/// (Contradictions.hs): the same candidate recurs
 /// across a node's premises and conclusions and across nodes, and on a
 /// user-`[AC]` signature each fresh evaluation issues a `struleApplicable`
 /// Maude match per Ac-/C-headed st-rule LHS.
@@ -282,7 +281,7 @@ fn nf_memoized(
 /// `maybe_not_nf_subterms`) — fails the NF check, the system has a
 /// non-normal term.  Constants are in NF; irreducible-headed apps recurse
 /// into their args.  This is the boolean OR of `maybeNonNormalTerms` ∘
-/// `maybeNotNfSubterms` (Norm.hs:165-171) over `nf'` (Norm.hs:132-134), but without
+/// `maybeNotNfSubterms` (Norm.hs) over `nf'` (Norm.hs), but without
 /// building the `BTreeSet` of every candidate: the OR needs no ordered
 /// candidate list, and [`NfMemo`] carries the dedup.  The check runs
 /// through `nf_via_haskell_maude_with_sig` — HS's `nf'` runs in the
@@ -319,7 +318,7 @@ fn any_non_nf(
 /// (e.g. `{z → verify(s,m,pkA)}`).  Without including vars we miss
 /// the SplitG variant filter and the picked variant pulls the
 /// reducible term into the system unfiltered.
-/// Mirrors Haskell `maybeNotNfSubterms` exactly (Norm.hs:162-168):
+/// Mirrors Haskell `maybeNotNfSubterms` exactly (Norm.hs):
 /// the `_` arm catches both `Lit (Var _)` and reducible `FApp`.
 ///
 /// For `has_non_normal_terms` the variable case is harmless:
@@ -471,9 +470,9 @@ fn root_sym(t: &tamarin_term::lterm::LNTerm) -> Option<RootSym> {
                 NameTag::Fresh => LSort::Fresh,
                 NameTag::Nat => LSort::Nat,
                 NameTag::Node => LSort::Node,
-                // `sortOfName (Name AbbrevName _) = LSortMsg` (LTerm.hs:266),
+                // `sortOfName (Name AbbrevName _) = LSortMsg` (LTerm.hs),
                 // and HS's guard `Lit _ | sortOfLNTerm t == LSortMsg ->
-                // Nothing` (Contradictions.hs:255) drops every message-sorted
+                // Nothing` (Contradictions.hs) drops every message-sorted
                 // literal, constants included.
                 NameTag::Abbrev => return None,
             };
@@ -1023,7 +1022,7 @@ fn has_forbidden_chain<'a>(
             .map(|v| Term::Lit(Lit::Var(*v)))
             .collect();
         // (3) Some KU(t_start) action node precedes the chain
-        // start `c.0`.  HS-faithful: `allKUActions` (System.hs:1584-1587)
+        // start `c.0`.  HS-faithful: `allKUActions` (System.hs)
         // unions BOTH `unsolvedActionAtoms` (unsolved ActionG goals)
         // AND node `rActs` lists.
         //
@@ -1107,7 +1106,7 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
     // `niFactors` / multiset-subset are shared at module scope
     // (`ni_factors` / `ni_factors_subset`).
 
-    // `isSimpleTerm`: HS Term/LTerm.hs:383-386.
+    // `isSimpleTerm`: HS Term/LTerm.hs.
     // `not (containsPrivate t) && all (LSortFresh /=) (lits t)`.
     fn is_simple_term(t: &LNTerm) -> bool {
         if contains_private(t) {
@@ -1146,7 +1145,7 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
         None
     }
 
-    // `allKUActions`: HS System.hs:1584-1587.  Unions
+    // `allKUActions`: HS System.hs.  Unions
     // `unsolvedActionAtoms sys` (open KU goals) and the
     // `rActs` lists of each node.  Returns (NodeId, fact, term).
     // For "knownEarlier" we only need (NodeId, term).
@@ -1640,7 +1639,7 @@ fn bp_view_pmult(
     None
 }
 
-/// `niFactors`: HS Term/LTerm.hs:351-355.  The non-inverse factors of a
+/// `niFactors`: HS Term/LTerm.hs.  The non-inverse factors of a
 /// term.  `Mult(ts...)` → concat-map ni_factors; `Inv(t)` → ni_factors t;
 /// else `[t]`.  Shared by `has_forbidden_exp` and the BP checks.
 fn ni_factors(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::LNTerm> {
@@ -2117,7 +2116,7 @@ impl SubstNfChecker {
                 continue;
             }
             let restricted = vfresh_subst.restrict(tvars);
-            // HS `freshToFreeAvoidingFast subst tvars` (Term/Substitution.hs:77-81):
+            // HS `freshToFreeAvoidingFast subst tvars` (Term/Substitution.hs):
             // a PURE uniform-shift rename of the range vars avoiding `tvars`
             // (`rename (map snd l) \`evalFreshAvoiding\` tvars`).  It consumes
             // NO fresh-counter state — the probe subst is local to this
@@ -2133,7 +2132,7 @@ impl SubstNfChecker {
             }
             // Slow path: structural NF check (HS-faithful).  Mirrors HS
             // `nfApply subst0 t = t == t' || nf' t' \`runReader\` hnd`
-            // where `nf' = nfViaHaskell` (Norm.hs:130-131) — run with the
+            // where `nf' = nfViaHaskell` (Norm.hs) — run with the
             // handle, as HS does: the st-rule arm needs Maude AC matching
             // for rules whose LHS contains an Ac-/C-headed subterm (user
             // `[AC]` cancellation equations; csf26-ac CRxor `splitEqs(2)`

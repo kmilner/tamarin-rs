@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::builtin::{fresh_var, msg_var, pair, pub_var};
@@ -16,7 +15,7 @@ fn as_var(t: &LNTerm) -> &LVar {
 }
 
 // -------------------------------------------------------------------
-// 1. `Ord LVar` is idx-first (LTerm.hs:546-548).
+// 1. `Ord LVar` is idx-first (LTerm.hs).
 //
 //    The most-easily-missed semantic choice.  Rust's `#[derive(Ord)]`
 //    gives name-first lexicographic order, which is the *opposite*
@@ -79,14 +78,14 @@ fn lvar_ord_btreemap_iteration_is_idx_first() {
 // -------------------------------------------------------------------
 // 2. Same-sort var-var unification: larger-idx becomes the KEY.
 //
-//    Haskell `unifyRaw` (Unification.hs:273-281, see line 276):
+//    Haskell `unifyRaw` (Unification.hs):
 //        (sl, sr) | sl == sr -> if vl < vr then elim vr l else elim vl r
 //    `elim v t` makes `v` the KEY mapped to `t`.  So when vl < vr
 //    (vl has smaller idx under idx-first Ord), eliminate vr →
 //    LARGER-idx is the KEY.
 //
 //    This is the orientation that makes `restrict stableVars`
-//    (Sources.hs:113-137, see line 123) work: stable pattern vars (small idx) stay
+//    (Sources.hs) work: stable pattern vars (small idx) stay
 //    on the value side and get dropped by the key-filter.
 // -------------------------------------------------------------------
 
@@ -134,7 +133,7 @@ fn factored_unify_orients_var_var_per_haskell_when_idxs_tie() {
 // -------------------------------------------------------------------
 // 3. Cross-sort var-var unification: narrower sort is the value.
 //
-//    Haskell `unifyRaw` (Unification.hs:278-281):
+//    Haskell `unifyRaw` (Unification.hs):
 //        _ | sortGeqLTerm sortOf vl r -> elim vl r
 //          | _                        -> elim vr l
 //    When vl's sort ⊇ vr's sort, vl is bound to vr — the broader
@@ -194,7 +193,7 @@ fn factored_unify_pub_fresh_no_unifier() {
 // -------------------------------------------------------------------
 // 4. Var-vs-term: the var is always the KEY.
 //
-//    Haskell `unifyRaw` (Unification.hs:283-284):
+//    Haskell `unifyRaw` (Unification.hs):
 //        (Lit (Var vl), _           ) -> elim vl r
 //        (_,            Lit (Var vr)) -> elim vr l
 //    Both arms: the var (vl or vr) is the KEY, the term is the value.
@@ -219,7 +218,7 @@ fn factored_unify_var_vs_app_binds_var_to_app() {
 // -------------------------------------------------------------------
 // 5. `unifyLTermFactored` separates non-AC from AC residuals.
 //
-//    Haskell (Unification.hs:120-133):
+//    Haskell (Unification.hs):
 //        unifyLTermFactored sortOf eqs = ... do
 //            solve h $ execRWST unif sortOf M.empty
 //        unif = sequence [ unifyRaw t p | Equal t p <- eqs ]
@@ -331,7 +330,7 @@ fn factored_unify_chained_var_var_then_var_term() {
 }
 
 // -------------------------------------------------------------------
-// 7. Occurs check (Unification.hs:310-315, see line 311): `v `occurs` t` → no unifier.
+// 7. Occurs check (Unification.hs): `v `occurs` t` → no unifier.
 // -------------------------------------------------------------------
 
 #[test]
@@ -346,7 +345,7 @@ fn factored_unify_occurs_check() {
 // 8. The factored unify and the older `unify_lnterm_no_ac` agree on
 //    orientation for var-vs-non-var (both bind the var to the term)
 //    AND on same-sort var-var (Haskell-faithful: larger-idx is key,
-//    Unification.hs:273-281, see line 276).  These tests pin both invariants.
+//    Unification.hs).  These tests pin both invariants.
 // -------------------------------------------------------------------
 
 #[test]
@@ -364,7 +363,7 @@ fn old_and_factored_unify_agree_on_var_vs_term() {
 
 #[test]
 fn old_and_factored_unify_agree_on_same_sort_var_var_orientation() {
-    // Both paths follow Haskell `unifyRaw` (Unification.hs:273-281, see line 276):
+    // Both paths follow Haskell `unifyRaw` (Unification.hs):
     //   `if vl < vr then elim vr l else elim vl r`
     // i.e. LARGER-idx becomes KEY, smaller-idx becomes value.
     // This is the exact pattern from foo_eligibility's saturate.  `t.1` is a
@@ -401,6 +400,6 @@ fn old_and_factored_unify_agree_on_same_sort_var_var_orientation() {
     assert_eq!(
         old, new_,
         "Both unifiers must produce identical substs \
-                    (Haskell-faithful: Unification.hs:276)."
+                    (Haskell-faithful: Unification.hs)."
     );
 }

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.VTerm` from `lib/term/src/Term/VTerm.hs`.
 //!
@@ -14,7 +13,7 @@ use crate::term::{lit, Term};
 /// Literal: either a constant `Con(c)` or a variable `Var(v)`.
 ///
 /// HS `data Lit c v = Con c | Var v` derives `Eq`/`Ord` in that variant order
-/// (VTerm.hs:56-57), and `Term`'s own `Ord` reads it, so `Con < Var` decides
+/// (VTerm.hs), and `Term`'s own `Ord` reads it, so `Con < Var` decides
 /// the argument order of every printed AC term.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Lit<C, V> {
@@ -22,7 +21,7 @@ pub enum Lit<C, V> {
     Var(V),
 }
 
-/// HS `instance (Show v, Show c) => Show (Lit c v)` (VTerm.hs:98-100): a
+/// HS `instance (Show v, Show c) => Show (Lit c v)` (VTerm.hs): a
 /// literal writes its payload, with no constructor name around it.
 impl<C: fmt::Display, V: fmt::Display> fmt::Display for Lit<C, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -58,7 +57,7 @@ pub fn vars_vterm<C, V: Ord + Clone>(t: &VTerm<C, V>) -> Vec<V> {
 
 /// In-order list of variables in `t`, with duplicates and in source order
 /// (left-to-right, depth-first). Mirrors the HS `foldMap (foldMap (:[]))`
-/// traversal used by `freesSapicTerm` (Theory/Sapic/Term.hs:131-132) — NOT sorted,
+/// traversal used by `freesSapicTerm` (Theory/Sapic/Term.hs) — NOT sorted,
 /// NOT deduplicated. Use [`vars_vterm`] when set semantics are wanted.
 pub fn vars_vterm_in_order<C, V: Clone>(t: &VTerm<C, V>) -> Vec<V> {
     let mut out = Vec::new();

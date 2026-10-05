@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use tamarin_term::lterm::LSort;
@@ -382,7 +381,7 @@ fn remove_permutations_drops_renamed_variants() {
 
 /// `add_eqs` for AC-free, same-sort var-var input must orient the
 /// resulting subst with LARGER-idx as KEY (Haskell `unifyRaw`
-/// convention, Unification.hs:273-281, see line 276).
+/// convention, Unification.hs).
 ///
 /// This is the most important orientation invariant for downstream
 /// `restrict stableVars`: stable pattern vars (small idx) must stay
@@ -572,7 +571,7 @@ fn add_eqs_unsatisfiable_sets_store_false() {
 use tamarin_term::lterm::{frees_list, HasFrees};
 
 /// A variable named `n` distinguished by its index, so `Ord` follows the index
-/// (LTerm.hs:546-548) and a walk order is readable off the indices alone.
+/// (LTerm.hs) and a walk order is readable off the indices alone.
 fn hf_var(n: &str, idx: u64) -> LVar {
     LVar::new(n, LSort::Msg, idx)
 }
@@ -602,8 +601,8 @@ fn hf_disj() -> EqDisj {
 }
 
 /// The disjunction walks its substitutions in ascending `Ord` order, the
-/// `S.toList` of HS's `S.Set LNSubstVFresh` (LTerm.hs:898-901), and each of
-/// them exposes its domain keys alone (SubstVFresh.hs:196-202).
+/// `S.toList` of HS's `S.Set LNSubstVFresh` (LTerm.hs), and each of
+/// them exposes its domain keys alone (SubstVFresh.hs).
 #[test]
 fn eq_disj_walks_its_substitution_domains_in_ord_order() {
     assert_eq!(
@@ -642,7 +641,7 @@ fn eq_disj_arbitrary_map_deduplicates_collapsed_substitutions() {
     assert_eq!(mapped.substs, vec![hf_subst(0, 7)]);
 }
 
-/// `instance HasFrees EqStore` (EquationStore.hs:155-164): the free
+/// `instance HasFrees EqStore` (EquationStore.hs): the free
 /// substitution — each entry's key before its value — then the conjunction in
 /// list order.  `next_split` holds no variable.
 #[test]

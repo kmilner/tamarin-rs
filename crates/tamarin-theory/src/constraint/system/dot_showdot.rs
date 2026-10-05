@@ -1,11 +1,10 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! The DOT serializer: HS
 //! `D.showDot label $ dotSystemCompact graphOptions dotOptions system`
-//! (Batch.hs:256 for `--output-dot`; `dotGraphString`,
-//! `Web/Theory.hs:2312-2318`, at label `"G"` for the interactive graph route).
+//! (Batch.hs for `--output-dot`; `dotGraphString`,
+//! `Web/Theory.hs`, at label `"G"` for the interactive graph route).
 //! Upstream has only this one serializer, and so do we — [`super`] is the
 //! entry point and the graph-CONTENT layer
 //! (label, colour, filtering and ordering helpers, reused wholesale here),
@@ -13,17 +12,17 @@
 //! ([`tamarin_utils::dot`]) and rendered by `showDot`:
 //!
 //!   * NODE IDS come from `Text.Dot`'s single monotonic counter
-//!     (`rawNode`, Text/Dot.hs:156-162): `n0`, `n1`, … in ALLOCATION order,
+//!     (`rawNode`, Text/Dot.hs): `n0`, `n1`, … in ALLOCATION order,
 //!     which for a record is every field's PORT first (left-to-right) and the
-//!     node itself last (`genRecord`, Text/Dot.hs:284-288).
-//!   * EVERY record field carries a port `<n<k>>` (Text/Dot.hs:258-262),
+//!     node itself last (`genRecord`, Text/Dot.hs).
+//!   * EVERY record field carries a port `<n<k>>` (Text/Dot.hs),
 //!     including the middle rule-label row — HS's port type is
 //!     `Maybe (Either PremIdx ConcIdx)` and the rule label is the `Nothing`
-//!     port (System/Dot.hs:309-315).  The node's own dot id, as recorded in
+//!     port (System/Dot.hs).  The node's own dot id, as recorded in
 //!     `dsNodes`, is therefore the PORTED `n<node>:n<label-port>`, which is
 //!     what less-edges attach to.
 //!   * ATTRIBUTE VALUES are always quoted, including numbers
-//!     (`showAttr`, Text/Dot.hs:346-353) — `nodesep="0.3"`, `weight="10.0"`.
+//!     (`showAttr`, Text/Dot.hs) — `nodesep="0.3"`, `weight="10.0"`.
 //!   * STATEMENTS are unindented, one per line, and a node's attribute list
 //!     abuts its id (`n3[…];`, `node[…];`).
 //!
@@ -41,9 +40,9 @@ use crate::constraint::constraints::{LessAtom, NodeConc, NodeId, NodePrem, Reaso
 use crate::constraint::system::graph::repr::{Cluster, GraphRepr};
 use crate::rule::{ConcIdx, PremIdx};
 
-/// HS's record port type `Maybe (Either PremIdx ConcIdx)` (System/Dot.hs:295-296):
+/// HS's record port type `Maybe (Either PremIdx ConcIdx)` (System/Dot.hs):
 /// the key each record field is tagged with, and thus the key `dotNodeCompact`
-/// splits the returned association list on (System/Dot.hs:265-269).
+/// splits the returned association list on (System/Dot.hs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RowKey {
     /// `Just (Left i)` — a premise field, cached into `dsPrems`.
@@ -54,34 +53,34 @@ enum RowKey {
     Conc(usize),
 }
 
-/// HS `DotState` (System/Dot.hs:94-101): the dot id of every emitted component,
+/// HS `DotState` (System/Dot.hs): the dot id of every emitted component,
 /// keyed the way the edge writers look them up.
 #[derive(Default)]
 struct DotState {
     /// `_dsNodes`: the LAST node emitted at a system node id — `dotLessEdge`'s
-    /// (System/Dot.hs:409-413) and `generateLegend`'s (System/Dot.hs:455-458) lookup.
+    /// (System/Dot.hs) and `generateLegend`'s (System/Dot.hs) lookup.
     ds_nodes: BTreeMap<NodeId, DotNodeId>,
-    /// `_dsPrems`: `dotGenEdge`'s target endpoint (System/Dot.hs:405).
+    /// `_dsPrems`: `dotGenEdge`'s target endpoint (System/Dot.hs).
     ds_prems: BTreeMap<NodePrem, DotNodeId>,
-    /// `_dsConcs`: `dotGenEdge`'s source endpoint (System/Dot.hs:404).
+    /// `_dsConcs`: `dotGenEdge`'s source endpoint (System/Dot.hs).
     ds_concs: BTreeMap<NodeConc, DotNodeId>,
 }
 
-/// The `ReaderT (Graph, NodeColorMap, DotOptions)` environment (System/Dot.hs:92)
+/// The `ReaderT (Graph, NodeColorMap, DotOptions)` environment (System/Dot.hs)
 /// plus the two derived lookups `dotGraphCompact` computes once.
 struct Env<'a> {
     opts: &'a GraphOptions,
     color_map: &'a NodeColorMap,
     graph: &'a Graph<'a>,
-    /// `resolveNodePremFact`/`resolveNodeConcFact`'s system (Graph.hs:87-96) —
+    /// `resolveNodePremFact`/`resolveNodeConcFact`'s system (Graph.hs) —
     /// the ORIGINAL one, not the simplified copy the repr was built from.
     orig_node_map: NodeRuleMap<'a>,
-    /// `hasOutgoingEdge graph v` (System/Dot.hs:280-282), over the TOP-LEVEL edges.
+    /// `hasOutgoingEdge graph v` (System/Dot.hs), over the TOP-LEVEL edges.
     has_outgoing: tamarin_utils::FastSet<NodeId>,
 }
 
 impl Env<'_> {
-    /// HS `renderLNFact`'s abbreviation step (System/Dot.hs:227-235): `goAbbreviate`
+    /// HS `renderLNFact`'s abbreviation step (System/Dot.hs): `goAbbreviate`
     /// gates the substitution, so an always-`None` lookup is the `else` arm.
     fn abbrev(&self, t: &LNTerm) -> Option<LNTerm> {
         if !self.opts.abbreviate {
@@ -92,12 +91,12 @@ impl Env<'_> {
 }
 
 /// HS `D.showDot label $ dotSystemCompact graphOptions dotOptions system`
-/// (Batch.hs:256).  `--output-dot` passes the trace's own label; the
+/// (Batch.hs).  `--output-dot` passes the trace's own label; the
 /// interactive graph routes reach it through [`super::system_to_dot_with`],
 /// which fixes the label at `"G"`.
 pub fn system_to_dot_labeled(sys: &System, opts: &GraphOptions, label: &str) -> String {
     let graph = system_to_graph(sys, opts);
-    // `dotSystemCompact` (System/Dot.hs:506-512) keys the palette off the RAW
+    // `dotSystemCompact` (System/Dot.hs) keys the palette off the RAW
     // system's nodes, not the compressed/simplified copy.
     let color_map = build_node_color_map(&sys.nodes);
     let mut g = DotGraph::new();
@@ -105,7 +104,7 @@ pub fn system_to_dot_labeled(sys: &System, opts: &GraphOptions, label: &str) -> 
     show_dot(label, &g)
 }
 
-/// Port of `dotGraphCompact` (System/Dot.hs:514-538).
+/// Port of `dotGraphCompact` (System/Dot.hs).
 ///
 /// Visible to the parent module so its tests can render a hand-built
 /// [`Graph`] whose original and drawn systems deliberately disagree — a shape
@@ -153,7 +152,7 @@ pub(super) fn dot_graph_compact(
     for l in &less_edges {
         dot_less_edge(g, &st, l);
     }
-    // `dotClustersEdges` (System/Dot.hs:542-547) re-runs `mergeLessEdges` over the
+    // `dotClustersEdges` (System/Dot.hs) re-runs `mergeLessEdges` over the
     // CONCATENATION of every cluster's edges, after all nodes and clusters.
     let (cl_less, cl_rest) = merge_less_edges(repr.clusters.iter().flat_map(|c| c.edges.iter()));
     for e in cl_rest {
@@ -168,7 +167,7 @@ pub(super) fn dot_graph_compact(
     }
 }
 
-/// HS `setDefaultAttributes` (System/Dot.hs:132-138).
+/// HS `setDefaultAttributes` (System/Dot.hs).
 fn set_default_attributes(g: &mut DotGraph) {
     g.attribute("nodesep", "0.3");
     g.attribute("ranksep", "0.3");
@@ -181,7 +180,7 @@ fn set_default_attributes(g: &mut DotGraph) {
     g.edge_attributes(attrs(&[("fontsize", "8"), ("fontname", "Helvetica")]));
 }
 
-/// HS `setDefaultAttributesIfCluster` (System/Dot.hs:143-164).
+/// HS `setDefaultAttributesIfCluster` (System/Dot.hs).
 fn set_default_attributes_if_cluster(g: &mut DotGraph) {
     for (k, v) in [
         ("nodesep", "0.8"),
@@ -230,8 +229,8 @@ fn attrs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Port of `dotCluster` (System/Dot.hs:572-587) and the dot half of `roleCluster`
-/// (System/Dot.hs:178-188): the subgraph id is `createClusterNodeId name`, i.e. the
+/// Port of `dotCluster` (System/Dot.hs) and the dot half of `roleCluster`
+/// (System/Dot.hs): the subgraph id is `createClusterNodeId name`, i.e. the
 /// QUOTED `"cluster_<name>"`, and the cluster's `roleColor` is threaded to its
 /// child nodes as `manualNodeColor`.
 fn dot_cluster(g: &mut DotGraph, st: &mut DotState, env: &Env<'_>, cluster: &Cluster) {
@@ -257,7 +256,7 @@ fn dot_cluster(g: &mut DotGraph, st: &mut DotState, env: &Env<'_>, cluster: &Clu
     });
 }
 
-/// HS `mkSimpleNode` (System/Dot.hs:292-293): a plain ellipse whose attribute list
+/// HS `mkSimpleNode` (System/Dot.hs): a plain ellipse whose attribute list
 /// starts with the label.
 fn mk_simple_node(g: &mut DotGraph, lbl: &str, extra: Vec<(String, String)>) -> DotNodeId {
     let mut a = attrs(&[("label", lbl), ("shape", "ellipse")]);
@@ -265,7 +264,7 @@ fn mk_simple_node(g: &mut DotGraph, lbl: &str, extra: Vec<(String, String)>) -> 
     g.node(a)
 }
 
-/// Port of `dotNodeCompact` (System/Dot.hs:238-293).
+/// Port of `dotNodeCompact` (System/Dot.hs).
 fn dot_node_compact(
     g: &mut DotGraph,
     st: &mut DotState,
@@ -277,7 +276,7 @@ fn dot_node_compact(
     match &node.ty {
         NodeType::System(ru) => {
             let ru_ab = abbreviate_rule(ru, &|t: &LNTerm| env.abbrev(t));
-            // `attrs` (System/Dot.hs:260-262): fill, style, fontcolor, role — in that
+            // `attrs` (System/Dot.hs): fill, style, fontcolor, role — in that
             // order, appended AFTER `genRecord`'s shape/label.
             let node_attrs = vec![
                 (
@@ -339,8 +338,8 @@ fn dot_node_compact(
             st.ds_nodes.insert(v, nid);
         }
         // `missingNode shape label = D.node [("label", render label),("shape",shape)]`
-        // (System/Dot.hs:283-285); both labels are `(<show v>, <i>)`
-        // (`prettyNodeConc`/`prettyNodePrem`, Constraints.hs:256-261).  Note
+        // (System/Dot.hs); both labels are `(<show v>, <i>)`
+        // (`prettyNodeConc`/`prettyNodePrem`, Constraints.hs).  Note
         // the caches: a missing node lands in `dsConcs`/`dsPrems`, NOT in
         // `dsNodes`.
         NodeType::Missing(MissingHint::Conc(ci)) => {
@@ -360,7 +359,7 @@ fn dot_node_compact(
     }
 }
 
-/// Port of `mkNode` (System/Dot.hs:295-315) — the compact-ellipse / full-record
+/// Port of `mkNode` (System/Dot.hs) — the compact-ellipse / full-record
 /// split, returning HS's `[(Maybe (Either PremIdx ConcIdx), D.NodeId)]`.
 fn mk_node(
     g: &mut DotGraph,
@@ -416,17 +415,17 @@ fn mk_node(
     }
 }
 
-/// HS `renderRow` (System/Dot.hs:360-364): lay a row's docs out with `renderBalanced`
+/// HS `renderRow` (System/Dot.hs): lay a row's docs out with `renderBalanced`
 /// while keeping each field's port key.
 fn render_row(row: Vec<(RowKey, Doc)>) -> Vec<(RowKey, String)> {
     let (keys, docs): (Vec<RowKey>, Vec<Doc>) = row.into_iter().unzip();
     keys.into_iter().zip(render_balanced(docs)).collect()
 }
 
-/// Port of `mergeLessEdges` (System/Dot.hs:592-622): split a scope's edges into the
+/// Port of `mergeLessEdges` (System/Dot.hs): split a scope's edges into the
 /// per-`(smaller, larger)` merged less-edges and everything else.
 ///
-/// `eqClasses` (Extension/Prelude.hs:124-131) is a STABLE sort by the key
+/// `eqClasses` (Extension/Prelude.hs) is a STABLE sort by the key
 /// followed by `groupBy`, so the merged list is ordered by `(smaller, larger)`
 /// and each class keeps its edges in encounter order.
 fn merge_less_edges<'a, I: Iterator<Item = &'a GEdge>>(
@@ -456,7 +455,7 @@ fn merge_less_edges<'a, I: Iterator<Item = &'a GEdge>>(
     (merged, rest)
 }
 
-/// HS `allRtoColors` (System/Dot.hs:616-622): a class's reasons, most important
+/// HS `allRtoColors` (System/Dot.hs): a class's reasons, most important
 /// first, as one graphviz weighted colour list.  A class of several reasons
 /// splits the edge into equal-width bands (`":c;1/n"` per colour); the
 /// singleton case — the only one a `System` can produce, since `LessAtom`
@@ -477,7 +476,7 @@ fn all_rto_colors(mut reasons: Vec<Reason>) -> String {
         .join(":")
 }
 
-/// Port of `dotEdge`'s non-less arms (System/Dot.hs:386-406).
+/// Port of `dotEdge`'s non-less arms (System/Dot.hs).
 fn dot_edge(g: &mut DotGraph, st: &DotState, env: &Env<'_>, edge: &GEdge) {
     let (src, tgt, style) = match edge {
         GEdge::System(src, tgt) => {
@@ -510,7 +509,7 @@ fn dot_edge(g: &mut DotGraph, st: &DotState, env: &Env<'_>, edge: &GEdge) {
     g.edge(s.clone(), t.clone(), style);
 }
 
-/// Port of `dotLessEdge` (System/Dot.hs:409-413): colour FIRST, then style.
+/// Port of `dotLessEdge` (System/Dot.hs): colour FIRST, then style.
 fn dot_less_edge(g: &mut DotGraph, st: &DotState, less: &(NodeId, NodeId, String)) {
     let (smaller, larger, color) = less;
     let (Some(s), Some(t)) = (st.ds_nodes.get(smaller), st.ds_nodes.get(larger)) else {
@@ -523,7 +522,7 @@ fn dot_less_edge(g: &mut DotGraph, st: &DotState, less: &(NodeId, NodeId, String
     );
 }
 
-/// Port of `generateLegend` (System/Dot.hs:438-458): a `rank=sink` scope holding one
+/// Port of `generateLegend` (System/Dot.hs): a `rank=sink` scope holding one
 /// `shape=plain` node with the HTML-table label, plus an invisible edge from
 /// every graph sink to it.
 fn generate_legend(g: &mut DotGraph, st: &DotState, env: &Env<'_>) {
@@ -535,7 +534,7 @@ fn generate_legend(g: &mut DotGraph, st: &DotState, env: &Env<'_>) {
     let n_legend = g.scope(|sub| {
         sub.attribute("rank", "sink");
         // `html_label` is `showAttr`'s one unquoted, unescaped attribute
-        // (Text/Dot.hs:348).
+        // (Text/Dot.hs).
         sub.node(vec![
             ("shape".to_string(), "plain".to_string()),
             ("html_label".to_string(), html),
@@ -548,9 +547,8 @@ fn generate_legend(g: &mut DotGraph, st: &DotState, env: &Env<'_>) {
     }
 }
 
-/// HS `htmlLabel $ abbrevLabel sortedAbbrevs labelColor` (System/Dot.hs:449 /
-/// 461-475) as graphviz's HTML-label printer renders it (`renderDot . unqtDot`,
-/// Text/Dot.hs:414-419), wrapped in the `<`…`>` that makes it a `html_label`.
+/// HS `htmlLabel $ abbrevLabel sortedAbbrevs labelColor` (System/Dot.hs) as graphviz's HTML-label printer renders it (`renderDot . unqtDot`,
+/// Text/Dot.hs), wrapped in the `<`…`>` that makes it a `html_label`.
 ///
 /// Three things the printer does that a naive concatenation does not:
 ///   * the rows are `align`ed under the opening tag, so every row after the
@@ -558,7 +556,7 @@ fn generate_legend(g: &mut DotGraph, st: &DotState, env: &Env<'_>) {
 ///   * an abbreviation's expansion is `render`ed at the default HughesPJ style
 ///     (100 columns, ribbon 67) and can therefore be MULTI-LINE; HS splits it
 ///     back into `Str` items separated by `Newline [Align HLeft]`
-///     (`joinLinesWith`, System/Dot.hs:478-479), i.e. `<BR ALIGN="LEFT"/>`;
+///     (`joinLinesWith`, System/Dot.hs), i.e. `<BR ALIGN="LEFT"/>`;
 ///   * text is escaped by [`escape_html_text`], which is not plain
 ///     entity-escaping.
 fn legend_html_label(abbrevs: &Abbreviations) -> String {
@@ -567,7 +565,7 @@ fn legend_html_label(abbrevs: &Abbreviations) -> String {
         .into_iter()
         .map(|(_term, name, exp)| {
             // `font txt = Text [Font [Color labelColor] txt]` with
-            // `labelColor = doAbbrevColor = RGB 0 0 0` (System/Dot.hs:85-87/469).
+            // `labelColor = doAbbrevColor = RGB 0 0 0` (System/Dot.hs).
             let name_cell = format!(
                 "<TD ALIGN=\"LEFT\" VALIGN=\"TOP\"><FONT COLOR=\"#000000\">{}</FONT></TD>",
                 escape_html_text(&render_lnterm(name))
@@ -585,7 +583,7 @@ fn legend_html_label(abbrevs: &Abbreviations) -> String {
     format!("<{}{}</TABLE>>", LEGEND_TABLE_OPEN, rows.join(&row_sep))
 }
 
-/// HS `render $ Sys.prettyLNTerm t` (System/Dot.hs:470-472) — the Doc-based term
+/// HS `render $ Sys.prettyLNTerm t` (System/Dot.hs) — the Doc-based term
 /// printer at the default style, so a wide term WRAPS.
 fn render_lnterm(t: &LNTerm) -> String {
     tamarin_term::pretty::pretty_nterm(t).render_with(DEFAULT_LINE_LENGTH, DEFAULT_RIBBON)
@@ -624,8 +622,8 @@ fn escape_html_text(s: &str) -> String {
     out
 }
 
-/// Port of `getGraphSinks` (Graph.hs:168-172) over `toEdgeList`
-/// (GraphRepr.hs:92-109): the ids of the nodes — free ones then each cluster's,
+/// Port of `getGraphSinks` (Graph.hs) over `toEdgeList`
+/// (GraphRepr.hs): the ids of the nodes — free ones then each cluster's,
 /// duplicates included — that source no edge of ANY kind.
 fn graph_sinks(repr: &GraphRepr) -> Vec<NodeId> {
     let sources: tamarin_utils::FastSet<NodeId> = repr

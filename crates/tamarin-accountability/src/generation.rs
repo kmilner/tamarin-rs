@@ -1,16 +1,15 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Accountability.Generation` (lib/accountability/src/Accountability/Generation.hs):
 //! the seven verification-condition generators, their fresh-counter threading
-//! and the intermediate transformation they end in (Generation.hs:264-300).
+//! and the intermediate transformation they end in (Generation.hs).
 //!
 //! Each accountability lemma expands to one lemma per condition family, in the
-//! order `casesLemmas` fixes (Generation.hs:243-255): all `suff`, then
+//! order `casesLemmas` fixes (Generation.hs): all `suff`, then
 //! `verif_empty`, then all `verif_nonempty`, `min`, `uniq`, `inj`, `single`.
 //! A single fresh counter starting at 0 (HS `evalFreshT (casesLemmas ..) 0`,
-//! Generation.hs:257-258) is threaded through the families that call `rename`
+//! Generation.hs) is threaded through the families that call `rename`
 //! (`suff`, `min`, `single`), in exactly that visitation order.
 
 use tamarin_term::lterm::{LSort, LVar};
@@ -25,7 +24,7 @@ use crate::formula::{
     quantify_frees, quantify_vars, rename, strict_subset_of, temp_var, vars_eq, Conn, Quant,
 };
 
-/// A resolved case test (HS `CaseTest`, Items/CaseTestItem.hs:25-29).
+/// A resolved case test (HS `CaseTest`, Items/CaseTestItem.hs).
 pub(crate) struct CaseTestData {
     pub(crate) name: String,
     pub(crate) formula: SyntacticLNFormula,
@@ -49,7 +48,7 @@ pub(crate) struct GenLemma {
     pub(crate) formula: SyntacticLNFormula,
 }
 
-/// HS `toLemma accLemma quantifier suffix formula` (Generation.hs:25-32): wraps
+/// HS `toLemma accLemma quantifier suffix formula` (Generation.hs): wraps
 /// the generated formula with its name and trace quantifier.  The accountability
 /// lemma's attributes (HS `_aAttributes`) are copied onto each generated lemma
 /// by the injection step in `lib.rs`.
@@ -61,7 +60,7 @@ fn to_lemma(quantifier: TraceQuantifier, name: String, formula: SyntacticLNFormu
     }
 }
 
-/// HS `caseTestFormulasExcept` (Generation.hs:101-103): the formulas of all
+/// HS `caseTestFormulasExcept` (Generation.hs): the formulas of all
 /// case tests except `ct`, in order.
 fn case_test_formulas_except(acc: &AccData, ct: &CaseTestData) -> Vec<SyntacticLNFormula> {
     acc.case_tests
@@ -71,7 +70,7 @@ fn case_test_formulas_except(acc: &AccData, ct: &CaseTestData) -> Vec<SyntacticL
         .collect()
 }
 
-/// HS `andIf p a b = if p then a .&&. b else a` (Generation.hs:91-92).  `b` is
+/// HS `andIf p a b = if p then a .&&. b else a` (Generation.hs).  `b` is
 /// evaluated lazily (HS is non-strict): the `noOther` conjunct is a `foldr1`
 /// that is undefined on the empty case-test-formula list, so it must not be
 /// forced when `p_` is false.
@@ -87,7 +86,7 @@ fn and_if(
     }
 }
 
-/// HS `singleMatch t` (Generation.hs:95-99):
+/// HS `singleMatch t` (Generation.hs):
 /// `rename t; rename t; t1 .&&. ∀ frees(t2). (t2 ⇒ varsEq (frees t2) (frees t1))`.
 fn single_match(t: &SyntacticLNFormula, counter: &mut u64) -> SyntacticLNFormula {
     let t1 = rename(t, counter);
@@ -99,7 +98,7 @@ fn single_match(t: &SyntacticLNFormula, counter: &mut u64) -> SyntacticLNFormula
 }
 
 /// HS `noOther fms = foldr1 (.&&.) (map (Not . quantifyFrees exists) fms)`
-/// (Generation.hs:88-89).
+/// (Generation.hs).
 fn no_other(taus: &[SyntacticLNFormula]) -> SyntacticLNFormula {
     fold_r1(
         Conn::And,
@@ -109,7 +108,7 @@ fn no_other(taus: &[SyntacticLNFormula]) -> SyntacticLNFormula {
     )
 }
 
-/// HS `freesSubsetCorrupt vars` (Generation.hs:59-63):
+/// HS `freesSubsetCorrupt vars` (Generation.hs):
 /// `foldl1 (.&&.) [ ∃ i. Corrupted(var)@i | var <- vars ]`.
 fn frees_subset_corrupt(vars: &[LVar]) -> SyntacticLNFormula {
     fold_l1(
@@ -126,7 +125,7 @@ fn frees_subset_corrupt(vars: &[LVar]) -> SyntacticLNFormula {
     )
 }
 
-/// HS `sufficiency` (Generation.hs:166-176).
+/// HS `sufficiency` (Generation.hs).
 fn sufficiency(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
     let name = format!("{}_{}_suff", acc.name, ct.name);
     let taus = case_test_formulas_except(acc, ct);
@@ -139,7 +138,7 @@ fn sufficiency(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma 
     to_lemma(TraceQuantifier::ExistsTrace, name, to_intermediate(formula))
 }
 
-/// HS `verifiabilityEmpty` (Generation.hs:178-185).  NOTE: the only family
+/// HS `verifiabilityEmpty` (Generation.hs).  NOTE: the only family
 /// that does NOT apply `toIntermediate` — the formula is returned raw.
 fn verifiability_empty(acc: &AccData) -> GenLemma {
     let name = format!("{}_verif_empty", acc.name);
@@ -156,7 +155,7 @@ fn verifiability_empty(acc: &AccData) -> GenLemma {
     to_lemma(TraceQuantifier::AllTraces, name, formula)
 }
 
-/// HS `verifiabilityNonEmpty` (Generation.hs:187-194).
+/// HS `verifiabilityNonEmpty` (Generation.hs).
 fn verifiability_nonempty(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     let name = format!("{}_{}_verif_nonempty", acc.name, ct.name);
     let tau = ct.formula.clone();
@@ -165,7 +164,7 @@ fn verifiability_nonempty(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
 }
 
-/// HS `minimality` (Generation.hs:196-208).
+/// HS `minimality` (Generation.hs).
 fn minimality(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
     let name = format!("{}_{}_min", acc.name, ct.name);
     let taus: Vec<SyntacticLNFormula> = acc.case_tests.iter().map(|c| c.formula.clone()).collect();
@@ -183,7 +182,7 @@ fn minimality(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
     to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
 }
 
-/// HS `uniqueness` (Generation.hs:210-216).
+/// HS `uniqueness` (Generation.hs).
 fn uniqueness(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     let name = format!("{}_{}_uniq", acc.name, ct.name);
     let tau = ct.formula.clone();
@@ -192,7 +191,7 @@ fn uniqueness(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
 }
 
-/// HS `injective` (Generation.hs:219-225):
+/// HS `injective` (Generation.hs):
 /// `∀ frees(tau). tau ⇒ foldl (.&&.) ⊤ [ ¬(x = y) | x, y <- frees tau, x ≠ y ]`.
 fn injective(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     let name = format!("{}_{}_inj", acc.name, ct.name);
@@ -211,7 +210,7 @@ fn injective(acc: &AccData, ct: &CaseTestData) -> GenLemma {
     to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
 }
 
-/// HS `singlematched` (Generation.hs:227-237).
+/// HS `singlematched` (Generation.hs).
 fn singlematched(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
     let name = format!("{}_{}_single", acc.name, ct.name);
     let taus = case_test_formulas_except(acc, ct);
@@ -221,7 +220,7 @@ fn singlematched(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemm
     to_lemma(TraceQuantifier::ExistsTrace, name, to_intermediate(formula))
 }
 
-/// HS `casesLemmas` (Generation.hs:243-255): builds the seven families in the
+/// HS `casesLemmas` (Generation.hs): builds the seven families in the
 /// fixed order, threading `counter` through the `rename`-using families
 /// (`suff`, `min`, `single`) in visitation order.
 fn cases_lemmas(acc: &AccData, counter: &mut u64) -> Vec<GenLemma> {
@@ -249,7 +248,7 @@ fn cases_lemmas(acc: &AccData, counter: &mut u64) -> Vec<GenLemma> {
 }
 
 /// HS `generateAccountabilityLemmas accLemma = evalFreshT (casesLemmas accLemma) 0`
-/// (Generation.hs:257-258): the fresh counter resets to 0 per accountability
+/// (Generation.hs): the fresh counter resets to 0 per accountability
 /// lemma.
 pub(crate) fn generate_accountability_lemmas(acc: &AccData) -> Vec<GenLemma> {
     let mut counter: u64 = 0;
@@ -257,11 +256,11 @@ pub(crate) fn generate_accountability_lemmas(acc: &AccData) -> Vec<GenLemma> {
 }
 
 // =============================================================================
-// Intermediate transformation (Generation.hs:264-300) and the first-order
-// simplification it ends in (Theory/Model/Formula.hs:379-412)
+// Intermediate transformation (Generation.hs) and the first-order
+// simplification it ends in (Theory/Model/Formula.hs)
 // =============================================================================
 
-/// HS `pull_l`/`pull_r`/`pull_2` (Generation.hs:285-287): bind `x` over
+/// HS `pull_l`/`pull_r`/`pull_2` (Generation.hs): bind `x` over
 /// `p op q` and keep pulling inside.  The three HS variants differ only in
 /// which operand's free indices shift under the new binder, which the callers
 /// below do.
@@ -277,7 +276,7 @@ fn pull(
     ProtoFormula::Qua(qua, x, Box::new(pull_quantifiers(quans, combined)))
 }
 
-/// HS `pullQuantifiers` (Generation.hs:267-287).
+/// HS `pullQuantifiers` (Generation.hs).
 fn pull_quantifiers(quans: &[Quant], fm: SyntacticLNFormula) -> SyntacticLNFormula {
     let ProtoFormula::Conn(c, a, b) = fm else {
         return fm;
@@ -317,7 +316,7 @@ fn pull_quantifiers(quans: &[Quant], fm: SyntacticLNFormula) -> SyntacticLNFormu
     }
 }
 
-/// HS `mergeQuantifiers = mergeQuantifiers1 [All, Ex]` (Generation.hs:289-300).
+/// HS `mergeQuantifiers = mergeQuantifiers1 [All, Ex]` (Generation.hs).
 fn merge_quantifiers(fm: SyntacticLNFormula) -> SyntacticLNFormula {
     merge_quantifiers1(&[Quant::All, Quant::Ex], fm)
 }
@@ -337,7 +336,7 @@ fn merge_quantifiers1(quans: &[Quant], fm: SyntacticLNFormula) -> SyntacticLNFor
             ),
         ),
         // HS `Conn Iff p q -> pullQuantifiers quans $ (mq p .==>. mq q) .&&.
-        // (mq q .==>. mq p)` (Generation.hs:298-299): the biconditional
+        // (mq q .==>. mq p)` (Generation.hs): the biconditional
         // expands to the conjunction of both implications.
         ProtoFormula::Conn(Conn::Iff, p_, q) => {
             let mp = merge_quantifiers1(quans, *p_);
@@ -349,7 +348,7 @@ fn merge_quantifiers1(quans: &[Quant], fm: SyntacticLNFormula) -> SyntacticLNFor
     }
 }
 
-/// HS `simplifyFormula` (Theory/Model/Formula.hs:379-412).
+/// HS `simplifyFormula` (Theory/Model/Formula.hs).
 fn simplify_formula(fm: SyntacticLNFormula) -> SyntacticLNFormula {
     match fm {
         ProtoFormula::Atom(a) => simplify_formula1(ProtoFormula::Atom(a)),
@@ -368,7 +367,7 @@ fn simplify_formula(fm: SyntacticLNFormula) -> SyntacticLNFormula {
     }
 }
 
-/// HS `simplifyFormula1` (Theory/Model/Formula.hs:391-412).
+/// HS `simplifyFormula1` (Theory/Model/Formula.hs).
 fn simplify_formula1(fm: SyntacticLNFormula) -> SyntacticLNFormula {
     use Conn::*;
     match fm {
@@ -420,7 +419,7 @@ fn simplify_formula1(fm: SyntacticLNFormula) -> SyntacticLNFormula {
     }
 }
 
-/// HS `toIntermediate = simplifyFormula . mergeQuantifiers` (Generation.hs:264-265).
+/// HS `toIntermediate = simplifyFormula . mergeQuantifiers` (Generation.hs).
 fn to_intermediate(fm: SyntacticLNFormula) -> SyntacticLNFormula {
     simplify_formula(merge_quantifiers(fm))
 }
@@ -441,7 +440,7 @@ mod tests {
 
     /// `simplifyFormula` collapses `⇒ ⊤` to `⊤` and quantifiers over `⊤` to
     /// `⊤` — the acc_*_inj single-var case
-    /// (Theory/Model/Formula.hs:391-412, see line 404,411).
+    /// (Theory/Model/Formula.hs).
     #[test]
     fn simplify_true_implication_and_quantifier() {
         // ∀ x. (P => ⊤)  ->  ⊤
@@ -451,7 +450,7 @@ mod tests {
     }
 
     /// `simplifyFormula1` rewrites a reflexive equality `t = t` to `⊤`
-    /// (Theory/Model/Formula.hs:379-412, see line 392) and leaves a
+    /// (Theory/Model/Formula.hs) and leaves a
     /// non-reflexive one alone.
     #[test]
     fn simplify_reflexive_equality() {
@@ -466,7 +465,7 @@ mod tests {
     }
 
     /// `pullQuantifiers` pulls a universal out of a conjunction and shifts the
-    /// OTHER conjunct's dangling bound indices up by one (Generation.hs:267-287, see line 274,285):
+    /// OTHER conjunct's dangling bound indices up by one (Generation.hs):
     /// `(∀ j. A@j) ∧ B@Bound(0)` becomes `∀ j. (A@Bound(0) ∧ B@Bound(1))`.
     #[test]
     fn pull_quantifiers_shifts_dangling_bound() {

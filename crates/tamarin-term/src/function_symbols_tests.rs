@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 
@@ -108,7 +107,7 @@ fn implicit_sig_includes_pair_and_inv() {
 // Maude-bridge command order and term canonicalization.
 // =========================================================================
 
-/// FunctionSymbols.hs:138:
+/// FunctionSymbols.hs:
 ///     data ACSym = Union | Mult | Xor | NatPlus | ACfct ACfctSym
 #[test]
 fn ac_sym_ord_matches_haskell_declaration() {
@@ -435,7 +434,7 @@ fn no_eq_sym_ord_follows_the_haskell_tuple_field_chain() {
     );
 }
 
-/// FunctionSymbols.hs:125:
+/// FunctionSymbols.hs:
 ///     data NDCstate = IsNDC | NotNDC | IsNDCDiff | IsNDCBoth
 #[test]
 fn ndc_state_ord_matches_haskell_declaration() {
@@ -444,7 +443,7 @@ fn ndc_state_ord_matches_haskell_declaration() {
     assert!(NdcState::IsNdcDiff < NdcState::IsNdcBoth);
 }
 
-/// FunctionSymbols.hs:111:
+/// FunctionSymbols.hs:
 ///     data Privacy = Private | Public
 #[test]
 fn privacy_ord_matches_haskell_declaration() {
@@ -454,14 +453,14 @@ fn privacy_ord_matches_haskell_declaration() {
     );
 }
 
-/// FunctionSymbols.hs:116:
+/// FunctionSymbols.hs:
 ///     data Constructability = Constructor | Destructor
 #[test]
 fn constructability_ord_matches_haskell_declaration() {
     assert!(Constructability::Constructor < Constructability::Destructor);
 }
 
-/// FunctionSymbols.hs:150-153:
+/// FunctionSymbols.hs:
 ///     data FunSym = NoEq NoEqSym | AC ACSym | C CSym | List
 ///
 /// `NoEq` comes first.  This order matters because `BTreeSet<FunSym>`

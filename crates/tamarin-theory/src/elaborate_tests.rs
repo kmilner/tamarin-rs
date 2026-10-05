@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::theory::TraceQuantifier;
@@ -19,7 +18,7 @@ fn theory_msig(src: &str) -> tamarin_term::maude_sig::MaudeSig {
 /// The spellings are read from a parsed rule, because the resolution they
 /// exercise is split between the two stages: the parser lowers the prefix
 /// `[AC]` head and the bare 0-arity name (`lookupArity`/`nullaryApp`,
-/// Theory/Text/Parser/Term.hs:62-72,158-163), and `term_to_lnterm` reads the
+/// Theory/Text/Parser/Term.hs), and `term_to_lnterm` reads the
 /// declaration's attributes off the signature.
 #[test]
 fn term_to_lnterm_reads_every_attribute_from_the_signature() {
@@ -85,11 +84,11 @@ fn term_to_lnterm_reads_every_attribute_from_the_signature() {
 }
 
 /// A name declared both `[AC]` and free carries TWO symbols with their own
-/// attributes (`stACFunSyms` and `stFunSyms`, Term/Maude/Signature.hs:97-98).
+/// attributes (`stACFunSyms` and `stFunSyms`, Term/Maude/Signature.hs).
 /// `lookupArity`'s list search reaches the free one first, so the prefix
 /// spelling `f(a, b)` is the free symbol, while `acterm` builds the infix
 /// spelling `(a f b)` straight from `stACFunSyms`
-/// (Theory/Text/Parser/Term.hs:60-71,165-172).
+/// (Theory/Text/Parser/Term.hs).
 #[test]
 fn a_name_declared_twice_resolves_prefix_free_and_infix_ac() {
     use tamarin_term::function_symbols::{AcSym, FunSym};
@@ -128,7 +127,7 @@ fn a_name_declared_twice_resolves_prefix_free_and_infix_ac() {
 }
 
 /// `em(a, b)` is the bilinear-pairing C symbol (HS `naryOpApp`'s
-/// `o == emapSymString` arm, Theory/Text/Parser/Term.hs:102-103).  HS applies
+/// `o == emapSymString` arm, Theory/Text/Parser/Term.hs).  HS applies
 /// that arm with no builtin gate; the port gates it on the builtin, because
 /// the Maude operator `tamem` is declared only under `enableBP` and a term
 /// carrying it without the builtin crashes the first `get variants` query.
@@ -171,7 +170,7 @@ fn em_is_the_emap_symbol_only_under_bilinear_pairing() {
 /// corpus.  The fold is therefore only as good as the membership of that
 /// list.  Every name on it must fold surplus comma-separated arguments into
 /// one right-associative pair, mirroring the `k == 1` branch of HS
-/// `naryOpApp` (Theory/Text/Parser/Term.hs:94-96).  A builtin that genuinely
+/// `naryOpApp` (Theory/Text/Parser/Term.hs).  A builtin that genuinely
 /// takes several arguments must not fold.  The corpus exercises `h` alone.
 /// The other names (`inv`/`pk` and the revealing-signing and
 /// locations-report symbols) are reachable only from theories that the fast
@@ -226,9 +225,9 @@ fn hardcoded_unary_builtins_fold_surplus_arguments() {
 /// PRIVATE `diffSym`, not a public symbol that merely shares the name.
 ///
 /// HS `diffSym = (diffSymString,(2,Private,Constructor,NotNDC))`
-/// (Term/Term/FunctionSymbols.hs:249).  Privacy is observable three ways:
+/// (Term/Term/FunctionSymbols.hs).  Privacy is observable three ways:
 /// the Maude operator is `tamPCFUdiff` (`funSymEncodeAttr`,
-/// Term/Maude/Parser.hs:76-88 — the port's `fun_sym_encode_attr`), the
+/// Term/Maude/Parser.hs — the port's `fun_sym_encode_attr`), the
 /// `NoEqSym` equality that `viewTerm2`/`ppTerm` use to recognise a diff
 /// term compares the whole tuple, and `contains_private` keys off it.
 #[test]
@@ -356,7 +355,7 @@ fn builtin_matching_redeclaration_accepted() {
 }
 
 // `dest-pairing` is exempt from the builtins-arm FUNCTION check
-// (Theory/Text/Parser/Signature.hs:124) — oracle probes tb / tc — and a destructor
+// (Theory/Text/Parser/Signature.hs) — oracle probes tb / tc — and a destructor
 // fst re-declaration matches its merged tuple, so the pre-check
 // passes too.
 #[test]
@@ -398,7 +397,7 @@ fn enable_flag_builtins_reserve_no_names() {
 
 // Without `dest-pairing`, `fst`/`snd` are not builtin-reserved, so the
 // pre-check is silent and the name-only short-circuit
-// (Theory/Text/Parser/Signature.hs:217)
+// (Theory/Text/Parser/Signature.hs)
 // returns the existing symbol: the signature keeps the CONSTRUCTOR
 // variant — oracle probe t1.
 #[test]
@@ -571,7 +570,7 @@ fn let_inlining_end_to_end_elaborates() {
 
 /// The public names of a `Cond` condition come from the formula's own `Name`
 /// literals, the same constants `universeBi` collects from a rule's facts
-/// (`publicNamesReport'`, Wellformedness.hs:463-483).  A declared nullary
+/// (`publicNamesReport'`, Wellformedness.hs).  A declared nullary
 /// symbol is an application and contributes nothing.
 #[test]
 fn condition_public_names_are_harvested_from_the_internal_terms() {
@@ -607,7 +606,7 @@ fn condition_public_names_are_harvested_from_the_internal_terms() {
     );
 }
 
-/// HS's `universeBi ru` (Wellformedness.hs:463-483#publicNamesReport') is a
+/// HS's `universeBi ru` (Wellformedness.hs#publicNamesReport') is a
 /// whole-value traversal of the generated rule, so it reaches the embedded
 /// MSR's restriction formulas as well as its fact rows — the end-to-end pin
 /// is `scripts/divergence_fixtures/sapic_pubname_in_restrict`.
@@ -648,11 +647,11 @@ fn process_pub_names_reach_an_msr_embedded_restriction() {
     );
 }
 
-/// A case test's formula is a `SyntacticLNFormula` (Items/CaseTestItem.hs:27)
-/// added verbatim by `liftedAddCaseTest` (Theory/Text/Parser.hs:159-163), so
+/// A case test's formula is a `SyntacticLNFormula` (Items/CaseTestItem.hs)
+/// added verbatim by `liftedAddCaseTest` (Theory/Text/Parser.hs), so
 /// a predicate atom reaches the elaborated item unexpanded;
 /// `caseTestToPredicate` strips the sugar at accountability-translation time
-/// (Items/CaseTestItem.hs:33-37).
+/// (Items/CaseTestItem.hs).
 #[test]
 fn a_case_test_keeps_its_predicate_sugar() {
     use crate::atom::{ProtoAtom, SyntacticSugar};
@@ -681,7 +680,7 @@ fn a_case_test_keeps_its_predicate_sugar() {
 }
 
 /// An accountability lemma's formula is a `SyntacticLNFormula`
-/// (Items/AccLemmaItem.hs:32) built by the formula parser, so elaboration
+/// (Items/AccLemmaItem.hs) built by the formula parser, so elaboration
 /// closes each binder into a De Bruijn index carrying the binder's name and
 /// sort and lowers the terms to the internal representation.
 #[test]
@@ -744,10 +743,10 @@ fn an_acc_lemma_stores_the_internal_formula() {
 
 /// A lemma stores two formulas: `_lFormula`, the macro-expanded one the solver
 /// and the guarded block read, and `_lOriginalFormula`, the pre-macro one HS's
-/// `applyMacroInLemma` records (lib/theory/src/Lemma.hs:83-88, applied to every
-/// lemma by `closeTheoryItem`, CloseRule.hs:85).  `liftedAddLemma`
+/// `applyMacroInLemma` records (lib/theory/src/Lemma.hs, applied to every
+/// lemma by `closeTheoryItem`, CloseRule.hs).  `liftedAddLemma`
 /// predicate-expands the lemma before it is stored
-/// (Theory/Text/Parser.hs:141-152), so the predicate atom is inlined in both
+/// (Theory/Text/Parser.hs), so the predicate atom is inlined in both
 /// while the macro call survives only in the original.  A lemma that calls no
 /// macro stores the same formula twice.
 #[test]
@@ -792,9 +791,9 @@ end\n";
 /// A restriction stores two formulas: `_rstrFormula`, the macro-expanded one
 /// the solver and the `expanded formula:` block read, and
 /// `_rstrOriginalFormula`, the pre-macro one HS's `applyMacroInRestriction`
-/// records (Theory/Model/Restriction.hs:164-166).  `liftedAddRestriction`
+/// records (Theory/Model/Restriction.hs).  `liftedAddRestriction`
 /// predicate-expands the restriction before it is stored
-/// (Theory/Text/Parser.hs:129-139), so the predicate atom is inlined in both
+/// (Theory/Text/Parser.hs), so the predicate atom is inlined in both
 /// while the macro call survives only in the original.  A restriction that
 /// calls no macro stores the same formula twice.
 #[test]
@@ -837,12 +836,12 @@ end\n";
 }
 
 /// HS applies the theory's macros to the internal rule at close time
-/// (`closeTheoryItem`, CloseRule.hs:84, `applyMacroInRule`,
-/// Theory/Model/Rule.hs:1115-1121) and keeps the parsed rule unexpanded, which
+/// (`closeTheoryItem`, CloseRule.hs, `applyMacroInRule`,
+/// Theory/Model/Rule.hs) and keeps the parsed rule unexpanded, which
 /// is what the `rule (modulo E)` block prints — the split
 /// `examples/features/macros/MacroExample.spthy` shows.  The parser has
 /// already inlined the rule's `let` bindings by then
-/// (Theory/Text/Parser/Rule.hs:119), so a macro call written on the right of
+/// (Theory/Text/Parser/Rule.hs), so a macro call written on the right of
 /// a binding reaches the internal rule expanded.
 #[test]
 fn macro_in_a_let_bound_term_reaches_the_internal_rule() {
@@ -880,9 +879,9 @@ end\n";
 }
 
 /// `closeProtoRule` narrows `applyMacroInRule macros ruE` into the AC half and
-/// keeps `ruE` itself as `cprRuleE` (lib/theory/src/Rule.hs:82-86), the half
+/// keeps `ruE` itself as `cprRuleE` (lib/theory/src/Rule.hs), the half
 /// `prettyClosedProtoRule` quotes as the `rule (modulo E)` block
-/// (ClosedTheory.hs:331-366).  That is the `encrypt`/`aenc` split
+/// (ClosedTheory.hs).  That is the `encrypt`/`aenc` split
 /// `examples/features/macros/MacroExample.spthy` prints.  A rule whose body
 /// calls no macro is its own E half, so it stores none.
 #[test]
@@ -913,7 +912,7 @@ end\n";
     assert_eq!(shown(&rules[1].rule_e().conclusions[0]), "Out( ~k )");
 }
 
-/// HS `nullaryApp` (Theory/Text/Parser/Term.hs:151,158-163) parses a bare
+/// HS `nullaryApp` (Theory/Text/Parser/Term.hs) parses a bare
 /// arity-0 macro name as a 0-ary application, so `konst` and `konst()` are
 /// the same call and reach the internal rule expanded. `nullaryApp` claims
 /// the bare identifier before an index or sort suffix can be read, making
@@ -941,7 +940,7 @@ end\n";
 
 /// The parser splices a live `#ifdef` branch into the top-level item stream,
 /// as HS's `ifdef` adds the branch's items to the theory it is parsing
-/// (Theory/Text/Parser.hs:350-361), so the macro call-sites of a rule written
+/// (Theory/Text/Parser.hs), so the macro call-sites of a rule written
 /// inside one are expanded like any other rule's.
 #[test]
 fn a_macro_call_inside_a_live_ifdef_branch_is_expanded() {
@@ -965,10 +964,10 @@ end\n";
 }
 
 /// A `variants` block is parsed into `_oprRuleAC` (`protoRule`,
-/// Theory/Text/Parser/Rule.hs:126-135, see line 134) and reaches the close
+/// Theory/Text/Parser/Rule.hs) and reaches the close
 /// untouched: `closeProtoRule`'s third equation maps `ClosedProtoRule ruE`
 /// over the list instead of computing variants or applying the macros
-/// (lib/theory/src/Rule.hs:82-86, see line 86).
+/// (lib/theory/src/Rule.hs).
 #[test]
 fn manual_variants_reach_the_internal_rule() {
     use crate::pretty_hpj::FLAT_WIDTH;
@@ -997,9 +996,8 @@ end\n";
 
 /// A case test and an accountability lemma are `TranslationItem`s, which
 /// `closeTheoryItem` passes through with no macro application
-/// (CloseRule.hs:82-90, see line 90) and `liftedAddCaseTest` /
-/// `liftedAddAccLemma` add verbatim (Theory/Text/Parser.hs:153-163, see lines
-/// 157 and 163).  Their formulas keep the macro call the source wrote.
+/// (CloseRule.hs) and `liftedAddCaseTest` /
+/// `liftedAddAccLemma` add verbatim (Theory/Text/Parser.hs).  Their formulas keep the macro call the source wrote.
 #[test]
 fn a_case_test_and_an_acc_lemma_keep_their_macro_calls() {
     use crate::pretty_hpj::FLAT_WIDTH;
@@ -1040,7 +1038,7 @@ end\n";
 
 /// The stored proof of a lemma reaches the solver as internal
 /// [`ProofMethod`](crate::constraint::solver::proof_method::ProofMethod)
-/// values: HS's `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) builds them
+/// values: HS's `proofMethod` (Theory/Text/Parser/Proof.hs) builds them
 /// in the parser, and `proof_tree_from_parsed` builds them here, through the
 /// same converters the rest of the theory goes through.
 #[test]
@@ -1105,7 +1103,7 @@ fn stored_proof_steps_convert_to_internal_goals() {
     assert_eq!(step2.cases[0].1.method, ProofMethod::Sorry(None));
 }
 
-/// HS `guardedFormula` (Theory/Text/Parser/Formula.hs:122-127) `fail`s the
+/// HS `guardedFormula` (Theory/Text/Parser/Formula.hs) `fail`s the
 /// parse when a disjunct of a stored goal is not guardable; here the
 /// conversion fails elaboration, and the message names the lemma.
 #[test]
@@ -1128,10 +1126,10 @@ fn a_non_guardable_stored_disjunct_fails_elaboration() {
 }
 
 /// HS folds `addFunctionTypingInfo` over every declaration of a `functions:`
-/// block (Theory/Text/Parser.hs:259-262), so a block of three declarations
+/// block (Theory/Text/Parser.hs), so a block of three declarations
 /// leaves three `FunctionTypingInfo` items in source order, each carrying the
 /// `UserDefinedSym` the declaration's attributes select and the declared SAPIC
-/// types (HS `function`, Theory/Text/Parser/Signature.hs:183-225).
+/// types (HS `function`, Theory/Text/Parser/Signature.hs).
 #[test]
 fn each_function_declaration_becomes_a_typing_info() {
     use tamarin_term::function_symbols::{Constructability, NdcState, Privacy, UserDefinedSym};
@@ -1166,7 +1164,7 @@ fn each_function_declaration_becomes_a_typing_info() {
 
     // `/2` is the untyped form: every argument and the result take
     // `defaultSapicType` (HS `functionType`,
-    // Theory/Text/Parser/Signature.hs:152-156), and `[AC]` selects the
+    // Theory/Text/Parser/Signature.hs), and `[AC]` selects the
     // arity-free `ACfctUser` symbol.
     let mix = match infos[2].sym {
         UserDefinedSym::AcFctUser(s) => s,
@@ -1180,11 +1178,11 @@ fn each_function_declaration_becomes_a_typing_info() {
 }
 
 /// HS's parser stores each process-bearing declaration as its own theory item
-/// as it reads it (`addProcess`, Theory/Text/Parser.hs:290-291; the
-/// `ProcessDef` / `EquivLemma` neighbours at :292-296), so the elaborated item
+/// as it reads it (`addProcess`, Theory/Text/Parser.hs; the
+/// `ProcessDef` / `EquivLemma` neighbours), so the elaborated item
 /// list holds them interleaved with the rules in source order.  A `P(args)`
 /// call arrives inlined behind its `ProcessCall` marker action, which is what
-/// `checkProcess` + `applyM` build (Theory/Text/Parser/Sapic.hs:295-312).
+/// `checkProcess` + `applyM` build (Theory/Text/Parser/Sapic.hs).
 #[test]
 fn process_items_keep_their_source_position() {
     use crate::sapic::{Process, SapicAction};
@@ -1225,7 +1223,7 @@ fn process_items_keep_their_source_position() {
 
     // `out('a')` behind the marker, with the definition's name recorded on
     // the substituted body (`processAddAnnotation`,
-    // Theory/Text/Parser/Sapic.hs:308-311).
+    // Theory/Text/Parser/Sapic.hs).
     let top = thy.processes().next().unwrap();
     let Process::Action(SapicAction::ProcessCall(name, args), _, body) = top else {
         panic!("expected a ProcessCall marker, got {top:?}");

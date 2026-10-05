@@ -1,9 +1,8 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of the top-level SAPIC `translate` orchestration
-//! (`lib/sapic/src/Sapic.hs:45-101`) and `gen` (sapic/src/Sapic.hs:112-153).
+//! (`lib/sapic/src/Sapic.hs`) and `gen` (sapic/src/Sapic.hs).
 //!
 //! For a single top-level process, [`translate`]:
 //!   1. annotates it — `toAnProcess`, `propagateNames`,
@@ -50,7 +49,7 @@ type PosSet = BTreeSet<Vec<i64>>;
 
 /// Per-translation context for the gated progress / reliable / async wrappers
 /// (HS `trans` = `progressTrans . reliableChannelTrans . baseTrans` in
-/// `sapic/src/Sapic.hs:98-100`).  The progress function domain / inverse are computed once
+/// `sapic/src/Sapic.hs`).  The progress function domain / inverse are computed once
 /// (HS recomputes `pfFrom`/`pfInv` per node; identical result, computed once
 /// here for speed).
 struct TransCtx {
@@ -64,7 +63,7 @@ struct TransCtx {
     inv_pf: Option<Box<dyn Fn(&[i64]) -> Option<Pos>>>,
 }
 
-/// `propagateNames` (Facts.hs:327-341): push each node's process-names down to
+/// `propagateNames` (Facts.hs): push each node's process-names down to
 /// its children so every node carries the names of all its ancestors.
 pub(crate) fn propagate_names<A: GoodAnnotation>(
     p: Process<A, SapicLVar>,
@@ -107,7 +106,7 @@ fn set_names<A: GoodAnnotation>(ann: A, names: Vec<String>) -> A {
     ann.set_parsed(parsed)
 }
 
-/// `mapToAnnotatedRule` (sapic/src/Sapic.hs:149-150): tag each rule body with its index.
+/// `mapToAnnotatedRule` (sapic/src/Sapic.hs): tag each rule body with its index.
 fn map_to_annotated_rule(
     proc: &Process<ProcessAnnotation<LVar>, SapicLVar>,
     p: &ProcessPosition,
@@ -129,7 +128,7 @@ fn map_to_annotated_rule(
         .collect()
 }
 
-/// `gen` (sapic/src/Sapic.hs:112-153).  Handles `Null`, `Action` (incl. the `Rep`
+/// `gen` (sapic/src/Sapic.hs).  Handles `Null`, `Action` (incl. the `Rep`
 /// replication action), and the `Comb` combinators in scope — `Parallel`,
 /// `NDC` (with the `substStatePos` shared-position rewrite), and `CondEq`.
 /// `Cond`-with-a-formula / `Lookup` / `Let` are rejected in `base_trans_comb`.
@@ -155,7 +154,7 @@ fn generate_rules(
             here.extend(rest);
             Ok(here)
         }
-        // NDC special case (sapic/src/Sapic.hs:123-127): the NDC node itself emits NO
+        // NDC special case (sapic/src/Sapic.hs): the NDC node itself emits NO
         // rule; its two children SHARE the parent's state position.  We
         // translate each child at `p++[1]` / `p++[2]` (so rule names carry the
         // correct position suffix), then rewrite the State premise of EVERY
@@ -172,7 +171,7 @@ fn generate_rules(
             out.extend(subst_state_pos_rules(r, &pr, p));
             Ok(out)
         }
-        // General combinator (sapic/src/Sapic.hs:128-134): emit this node's own rules,
+        // General combinator (sapic/src/Sapic.hs): emit this node's own rules,
         // then recurse into the left child with `tildex'1` and (if present) the
         // right child with `tildex'2`.
         Process::Comb(c, ann, _, _) => {
@@ -194,7 +193,7 @@ fn generate_rules(
 }
 
 /// `trans_action` = `progressTransAct (reliableChannelTransAct baseTransAction)`
-/// (sapic/src/Sapic.hs:98-100, applied per node).  Reliable wraps the base; progress wraps
+/// (sapic/src/Sapic.hs, applied per node).  Reliable wraps the base; progress wraps
 /// the result.
 fn trans_action(
     ctx: &TransCtx,
@@ -252,8 +251,7 @@ fn trans_comb(
 }
 
 /// `substStatePos p_old p_new` over a list of generated rules
-/// (sapic/src/Sapic.hs:112-153, see line 124,
-/// 140-144): rewrite the position of every NON-semistate `State` PREMISE fact
+/// (sapic/src/Sapic.hs): rewrite the position of every NON-semistate `State` PREMISE fact
 /// from `p_old` to `p_new` (leaving the actual position `p_old==p++[i]` only in
 /// the rule NAME, which was already fixed during `gen`).
 fn subst_state_pos_rules(
@@ -274,7 +272,7 @@ fn subst_state_pos_rules(
         .collect()
 }
 
-/// `substStatePos` on a single fact (sapic/src/Sapic.hs:142-144):
+/// `substStatePos` on a single fact (sapic/src/Sapic.hs):
 ///   State s p' vs | p' == p_old, not (isSemiState s) = State LState p_new vs
 ///   otherwise = fact
 fn subst_state_pos_fact(f: TransFact, p_old: &[i64], p_new: &[i64]) -> TransFact {
@@ -286,7 +284,7 @@ fn subst_state_pos_fact(f: TransFact, p_old: &[i64], p_new: &[i64]) -> TransFact
     }
 }
 
-/// `getLockPositions = pfoldMap getLock` (Basetranslation.hs:449-479, see line 473,478): the lock
+/// `getLockPositions = pfoldMap getLock` (Basetranslation.hs): the lock
 /// variables of every `Lock` action with `pureState=False` and a `lock`
 /// annotation, in `pfoldMap` order, NOT deduplicated.
 fn get_lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LVar> {
@@ -303,7 +301,7 @@ fn get_lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LV
     out
 }
 
-/// `nub $ getUnlockPositions` (Basetranslation.hs:449-479, see line 463): the lock variables of
+/// `nub $ getUnlockPositions` (Basetranslation.hs): the lock variables of
 /// every `Unlock` action with `pureState=False` and an `unlock` annotation, in
 /// `pfoldMap` order, first-occurrence deduplicated (HS `List.nub`).
 fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LVar> {
@@ -324,7 +322,7 @@ fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<
 pub(crate) struct Translation {
     /// The generated rules, each paired with its embedded `_restrict`
     /// formulas.  HS attaches these as the rule's `_preRestriction`
-    /// (sapic/src/Sapic/Facts.hs:376-379); the port pairs them with the rule
+    /// (sapic/src/Sapic/Facts.hs); the port pairs them with the rule
     /// here, and `apply_sapic` runs the `_restrict` expansion (HS
     /// `liftedAddProtoRule`) over them.
     pub rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)>,
@@ -340,21 +338,21 @@ pub(crate) struct TranslateOptions {
     pub trans_reliable: bool,
     pub async_channels: bool,
     pub compress_events: bool,
-    /// `_transReport` (sapic/src/Sapic.hs:45-101, see line 56, 64): gates
+    /// `_transReport` (sapic/src/Sapic.hs): gates
     /// `translateTermsReport` (the `report(t)`→`rep(t, loc)` term rewrite)
     /// and `reportInit` (the fixed
     /// `ReportRule`).  Set from the `locations-report` builtin.
     pub trans_report: bool,
-    /// `_stateChannelOpt` (OpenTheory.hs:546-547, see line 547, default False): gates the
+    /// `_stateChannelOpt` (OpenTheory.hs, default False): gates the
     /// pure-state / state-channel optimisation — `annotatePureStates`
-    /// (sapic/src/Sapic.hs:45-101, see line 57) and
+    /// (sapic/src/Sapic.hs) and
     /// `setforcedInjectiveFacts {L_PureState, L_CellLocked}`
-    /// (sapic/src/Sapic.hs:45-101, see line 84).  Set from
+    /// (sapic/src/Sapic.hs).  Set from
     /// `options: translation-state-optimisation`.
     pub state_channel_opt: bool,
 }
 
-/// `translate` (sapic/src/Sapic.hs:45-101).  `needs_in_ev_res` is HS
+/// `translate` (sapic/src/Sapic.hs).  `needs_in_ev_res` is HS
 /// `needsInEvRes = any lemmaNeedsInEvRes (theoryLemmas th)`.  `opts` carries the
 /// `_transProgress` / `_transReliable` / `_asynchronousChannels` /
 /// `_compressEvents` gates.
@@ -364,17 +362,17 @@ pub(crate) fn translate(
     st_rules: &std::collections::BTreeSet<tamarin_term::subterm_rule::CtxtStRule>,
     opts: TranslateOptions,
 ) -> Result<Translation, String> {
-    // The annotation chain, innermost first (sapic/src/Sapic.hs:55-61): toAnProcess,
+    // The annotation chain, innermost first (sapic/src/Sapic.hs): toAnProcess,
     // propagateNames, annotateSecretChannels, annotatePureStates,
     // translateTermsReport, translateLetDestr — then annotateLocks.
     let an_proc_pre: Process<ProcessAnnotation<LVar>, SapicLVar> =
         propagate_names(to_annotated::<LVar>(plain));
-    // annotateSecretChannels (sapic/src/Sapic.hs:45-101, see line 58): attach
+    // annotateSecretChannels (sapic/src/Sapic.hs): attach
     // `secret_channel` to every ChIn/ChOut whose channel is an always-secret
     // fresh variable.
     let an_proc_sec = crate::secret_channels::annotate_secret_channels(an_proc_pre);
     // `checkOps' (._stateChannelOpt) annotatePureStates`
-    // (sapic/src/Sapic.hs:45-101, see line 57): the
+    // (sapic/src/Sapic.hs): the
     // pure-state / state-channel optimisation, off unless the theory declares
     // `options: translation-state-optimisation`.
     let an_proc_states = if opts.state_channel_opt {
@@ -383,7 +381,7 @@ pub(crate) fn translate(
         an_proc_sec
     };
     // `checkOps' (._transReport) translateTermsReport`
-    // (sapic/src/Sapic.hs:45-101, see line 56): rewrite
+    // (sapic/src/Sapic.hs): rewrite
     // `report(t)` terms to `rep(t, loc)` under the in-scope `@location`
     // annotation.
     let an_proc_rep = if opts.trans_report {
@@ -474,14 +472,14 @@ pub(crate) fn translate(
         })
         .collect();
 
-    // restrictions (baseRestr, Basetranslation.hs:449-468), in HS order:
+    // restrictions (baseRestr, Basetranslation.hs), in HS order:
     //   [setIn, setNotIn]   if the process `contains isLookup`
     //                       (NoDelete variants unless it also `contains isDelete`)
     //   [resEq, resNotEq]   if the process `contains isEq`  (a CondEq node)
     //   [resSingleSession]  always (hasAccountabilityLemmaWithControl = True)
     // (locking restrictions are handled separately.)
     let mut restrictions = Vec::new();
-    // HS `isLookup`/`isDelete` (ProcessUtils.hs:46-52) only count
+    // HS `isLookup`/`isDelete` (ProcessUtils.hs) only count
     // `pureState=False` nodes — a pure-state lookup/delete uses the
     // `L_PureState`/`L_CellLocked` facts and needs NO set_in/set_notin
     // restriction, so both closures carry that guard.
@@ -501,13 +499,13 @@ pub(crate) fn translate(
         restrictions.extend(predicate_restrictions());
     }
     restrictions.push(single_session_restriction());
-    // `addIf needsInEvRes [resInEv]` (Basetranslation.hs:449-479, see line 460) — the in_event
+    // `addIf needsInEvRes [resInEv]` (Basetranslation.hs) — the in_event
     // restriction, AFTER single_session, when a lemma needs it.
     if needs_in_ev_res {
         restrictions.push(crate::base_translation::in_event_restriction());
     }
 
-    // Locking restrictions (baseRestr, Basetranslation.hs:463-468), AFTER the
+    // Locking restrictions (baseRestr, Basetranslation.hs), AFTER the
     // hardcoded restrictions, in HS order:
     //   lockingWithUnlock = map (resLocking True)  (nub  getUnlockPositions)
     //   lockingOnlyLock   = map (resLocking False) (getLockPositions \\ getUnlockPositions)
@@ -540,18 +538,18 @@ pub(crate) fn translate(
 }
 
 // =============================================================================
-// needsInEvRes (sapic/src/Sapic.hs:45-101, see line 101, 156-181)
+// needsInEvRes (sapic/src/Sapic.hs)
 // =============================================================================
 
 /// `needsInEvRes = any lemmaNeedsInEvRes (theoryLemmas th)`
-/// (sapic/src/Sapic.hs:45-101, see line 101): does
+/// (sapic/src/Sapic.hs): does
 /// any of the theory's lemmas fall in the fragment that requires the `in_event`
 /// restriction?  Each lemma is classified via `lemma_needs_in_ev_res`.
 pub(crate) fn needs_in_ev_res(thy: &tamarin_theory::theory::Theory) -> bool {
     thy.lemmas().any(lemma_needs_in_ev_res)
 }
 
-/// `lemmaNeedsInEvRes` (sapic/src/Sapic.hs:175-181): classify a lemma by its trace
+/// `lemmaNeedsInEvRes` (sapic/src/Sapic.hs): classify a lemma by its trace
 /// quantifier and the (pos, neg) polarity of its formula.
 fn lemma_needs_in_ev_res(lem: &tamarin_theory::theory::Lemma) -> bool {
     use tamarin_theory::theory::TraceQuantifier as TQ;
@@ -565,7 +563,7 @@ fn lemma_needs_in_ev_res(lem: &tamarin_theory::theory::Lemma) -> bool {
     }
 }
 
-/// `isPosNegFormula` (sapic/src/Sapic.hs:156-172): determine whether a formula is in the
+/// `isPosNegFormula` (sapic/src/Sapic.hs): determine whether a formula is in the
 /// positive (L+) and/or negative (L-) fragment.  Returns `(isPos, isNeg)`.  The
 /// only special case is an `Action` atom on the `K` fact, which is `(True,
 /// False)` (a `K(..)@t` action is positive but not negative).
@@ -592,7 +590,7 @@ fn is_pos_neg_formula(f: &LNFormula) -> (bool, bool) {
         }
         // `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p` — NOT
         // the `And` of the two `Imp` cases: `.&&.` is infixl 3 and `.==>.` is
-        // infixr 1 (Theory/Model/Formula.hs:233-235), so the expression parses
+        // infixr 1 (Theory/Model/Formula.hs), so the expression parses
         // as `p .==>. ((q .&&. q) .==>. p)`, whose polarity is
         // `and2(swap(fp), and2(swap(fq), fp))`.  The two differ whenever `fq`
         // is asymmetric (a `K(..)@t` atom in `q`): HS keeps the second
@@ -606,7 +604,7 @@ fn is_pos_neg_formula(f: &LNFormula) -> (bool, bool) {
 }
 
 /// `isPosNegFormula (Ato (Action _ f))` dispatches on `isActualKFact (factTag
-/// f)` (sapic/src/Sapic.hs:156-172, see line 159, 167-169): an action on a
+/// f)` (sapic/src/Sapic.hs): an action on a
 /// protocol fact named `K` is `(True, False)`; every other atom is
 /// `(True, True)`.
 fn is_pos_neg_atom(
@@ -748,8 +746,8 @@ mod tests {
     }
 
     /// `Conn Iff p q -> isPosNegFormula $ p .==>. q .&&. q .==>. p`
-    /// (sapic/src/Sapic.hs:165) parses as `p .==>. ((q .&&. q) .==>. p)` (`.&&.` infixl 3
-    /// binds tighter than `.==>.` infixr 1, Theory/Model/Formula.hs:233-235),
+    /// (sapic/src/Sapic.hs) parses as `p .==>. ((q .&&. q) .==>. p)` (`.&&.` infixl 3
+    /// binds tighter than `.==>.` infixr 1, Theory/Model/Formula.hs),
     /// so with `p` symmetric and `q` a `K` atom the polarity is `(F, T)` — the
     /// negative component survives.  The symmetric `(p ==> q) && (q ==> p)`
     /// reading yields `(F, F)` and wrongly makes an all-traces lemma need the

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! No-deconstruction-chain (NDC) check — port of the NDC parts of HS
 //! `CloseRule.hs` (`prettyNDCcheck` / `applyNDCcheck` / `ndcCheck` /
@@ -37,7 +36,7 @@
 //! The synthetic deduction theories are built STRUCTURALLY — the `Out0`
 //! rule, the restriction(s) and the `Deduction` lemma constructed as
 //! values, mirroring HS's `addRules`/`addLemmas`/`addRestrictions` over
-//! `emptyThy` (CloseRule.hs:242-252) — and proved with an INJECTED
+//! `emptyThy` (CloseRule.hs) — and proved with an INJECTED
 //! intruder cache (`bound_to_one` of the parent's pre-check cache),
 //! mirroring HS's `closeTheoryWithMaude sig t` with
 //! `thyCache = intrRmodified`.  A text render → parse → elaborate
@@ -285,14 +284,14 @@ fn msg_to_fresh_terms(t: &LNTerm) -> LNTerm {
     }
 }
 
-/// HS `newRules` (CloseRule.hs:257-262): the `Out0` source rule for one
+/// HS `newRules` (CloseRule.hs): the `Out0` source rule for one
 /// decomposition `s`, built as a value.  Premises `Fr` each free variable
 /// of `s`'s terms (`pre = freesToFresh . varFresh`: Msg vars retyped
 /// Fresh by `msgToFreshVars`, Nat vars by `lvarToLnterm`); conclusions
 /// `Out` every fact term with Msg vars retyped (`co`); actions
 /// `Generated_0` over the retyped variables plus `OnlyOnce` (`a`).
 /// `rNewVars` is HS's literal `[]` — the structural rule never runs the
-/// parser's `newVariables` computation (Parser/Rule.hs:135).
+/// parser's `newVariables` computation (Parser/Rule.hs).
 fn deduction_rule(s: &[LNFact]) -> crate::theory::OpenProtoRule {
     // varD s (HS: `frees $ concatMap factTerms s` — `sortednub .
     // freesList`; the ordering fixes the `Generated_0` argument order,
@@ -325,17 +324,17 @@ fn deduction_rule(s: &[LNFact]) -> crate::theory::OpenProtoRule {
 
 /// A `#`-sorted idx-0 variable — the timepoint/binder shape the restriction
 /// and lemma formulas quantify over (HS `LVar x LSortNode 0`,
-/// CloseRule.hs:273-274).
+/// CloseRule.hs).
 fn ndc_node_var(name: &str) -> LVar {
     LVar::new(name, LSort::Node, 0)
 }
 
-/// A timepoint as a formula term: `LIT (Var (Free v))` (CloseRule.hs:273).
+/// A timepoint as a formula term: `LIT (Var (Free v))` (CloseRule.hs).
 fn free_time(v: &LVar) -> BLNTerm {
     var_term(BVar::Free(*v))
 }
 
-/// `FACT() @ #tv` — HS `factAnd`/`factAndD` (CloseRule.hs:273,277): a
+/// `FACT() @ #tv` — HS `factAnd`/`factAndD` (CloseRule.hs): a
 /// nullary Linear proto fact at a Node-sorted timepoint.
 fn nullary_action_at(fact_name: &str, tv: &LVar) -> LNFormula {
     ProtoFormula::Atom(ProtoAtom::Action(
@@ -344,34 +343,34 @@ fn nullary_action_at(fact_name: &str, tv: &LVar) -> LNFormula {
     ))
 }
 
-/// `#a = #b` — HS `factEq` (CloseRule.hs:274).
+/// `#a = #b` — HS `factEq` (CloseRule.hs).
 fn time_eq(a: &LVar, b: &LVar) -> LNFormula {
     ProtoFormula::Atom(ProtoAtom::EqE(free_time(a), free_time(b)))
 }
 
-/// `foldr (hinted forAll) f vs` (Theory/Text/Parser/Formula.hs:73-77, over
-/// `forAll` Theory/Model/Formula.hs:355-356 and `hinted` :364-365): close
+/// `foldr (hinted forAll) f vs` (Theory/Text/Parser/Formula.hs, over
+/// `forAll` Theory/Model/Formula.hs and `hinted`): close
 /// the binders from the last to the first, so the first variable of `vs`
 /// carries the outermost quantifier.  The hint is
-/// `hint (LVar n s _) = (n, s)` (Theory/Model/Formula.hs:227-228).
+/// `hint (LVar n s _) = (n, s)` (Theory/Model/Formula.hs).
 fn close_all(vs: &[LVar], body: LNFormula) -> LNFormula {
     vs.iter().rev().fold(body, |acc, v| {
         for_all_var((v.name.to_string(), v.sort), v, acc)
     })
 }
 
-/// [`close_all`] at `exists` (Theory/Model/Formula.hs:359-360).
+/// [`close_all`] at `exists` (Theory/Model/Formula.hs).
 fn close_ex(vs: &[LVar], body: LNFormula) -> LNFormula {
     vs.iter().rev().fold(body, |acc, v| {
         exists_var((v.name.to_string(), v.sort), v, acc)
     })
 }
 
-/// HS `newRestriction0` (CloseRule.hs:269-275):
+/// HS `newRestriction0` (CloseRule.hs):
 /// `All #ndci #ndcj. OnlyOnce() @ #ndci & OnlyOnce() @ #ndcj ==> #ndci = #ndcj`.
 /// HS names the binders `i`/`j` and closes them with `forAllFormula`, a
 /// `foldl` over ascending `frees` that makes the LAST variable the outermost
-/// binder (Theory/Model/Formula.hs:537-538), where [`close_all`] keeps the
+/// binder (Theory/Model/Formula.hs), where [`close_all`] keeps the
 /// written order.  Names and prefix order are hints only, invisible outside
 /// the synthetic proof search.
 fn only_once_restriction() -> LNFormula {
@@ -385,11 +384,11 @@ fn only_once_restriction() -> LNFormula {
     )
 }
 
-/// HS `newRestriction2` (CloseRule.hs:280-283):
+/// HS `newRestriction2` (CloseRule.hs):
 /// `All #ndci #ndcj #ndck. OnlyOnceD() @ #ndci & OnlyOnceD() @ #ndcj &
 /// OnlyOnceD() @ #ndck ==> #ndci = #ndcj | #ndci = #ndck | #ndcj = #ndck`
 /// (`.&&.` and `.||.` are `infixl`, and both bind tighter than `.==>.` —
-/// Theory/Model/Formula.hs:233-235).
+/// Theory/Model/Formula.hs).
 fn only_once_d_restriction() -> LNFormula {
     let i = ndc_node_var("ndci");
     let j = ndc_node_var("ndcj");
@@ -404,7 +403,7 @@ fn only_once_d_restriction() -> LNFormula {
 }
 
 /// HS `addRestrictions [newRestriction0, newRestriction2]` (theory-1) /
-/// `[newRestriction0]` (theory-2) — CloseRule.hs:247,252 — as guarded
+/// `[newRestriction0]` (theory-2) — CloseRule.hs — as guarded
 /// values in theory order (`OnlyOnce` first).  The formulas are closed
 /// constants whose every binder is action-guarded, so the conversion
 /// cannot fail.
@@ -426,13 +425,13 @@ fn deduction_restrictions(with_only_once_d: bool) -> Vec<Guarded> {
         .collect()
 }
 
-/// HS `newLemmas`' formula (CloseRule.hs:263-267):
+/// HS `newLemmas`' formula (CloseRule.hs):
 /// `Not (existFormula (landFormula (aLemma s ++ [kLogFact fact_term])))`,
 /// i.e. ¬∃ vars #t0 #t1. Generated_0(varD s) @ #t0 ∧ K(fact_term) @ #t1
 /// — with `aLemma`'s arguments NOT Msg→Fresh-retyped (only
 /// `lvarToLnterm`'s Nat→Fresh), and `kLogFact = protoFact Linear "K"`
-/// (Theory/Model/Fact.hs:301-303).  `landFormula` lifts each fact with
-/// `fmap (fmap (fmap Free))` (CloseRule.hs:200-201) — [`Fact::map_ref`] of
+/// (Theory/Model/Fact.hs).  `landFormula` lifts each fact with
+/// `fmap (fmap (fmap Free))` (CloseRule.hs) — [`Fact::map_ref`] of
 /// [`lift_free`].
 ///
 /// Binder names and order: HS quantifies `frees` under their own names with
@@ -440,13 +439,13 @@ fn deduction_restrictions(with_only_once_d: bool) -> Vec<Guarded> {
 /// with `ndct`-named timepoints last — names and prefix order are hints
 /// only, invisible outside the synthetic search.  Same-named binders stay
 /// distinct because a binder closes exactly the occurrences equal to its
-/// whole `LVar` (HS `quantify`'s `v == x`, Theory/Model/Formula.hs:350-352),
+/// whole `LVar` (HS `quantify`'s `v == x`, Theory/Model/Formula.hs),
 /// so a Nat variable (Fresh in the `Generated_0` args via `lvarToLnterm`,
 /// Nat inside the K term) and dotted-index unifier variables (`x.5`) each
 /// close their own occurrences.
 fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
     let var_d: Vec<LVar> = tamarin_term::lterm::frees(&s.to_vec());
-    // aLemma s (CloseRule.hs:263): `map lvarToLnterm (varD s)`.
+    // aLemma s (CloseRule.hs): `map lvarToLnterm (varD s)`.
     let gen_args: Vec<LNTerm> = var_d.iter().map(crate::fact::lvar_to_lnterm).collect();
     let mut binders: Vec<LVar> = Vec::new();
     for t in gen_args.iter().chain(std::iter::once(fact_term)) {
@@ -483,7 +482,7 @@ fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
 /// `Deduction` lemma's proof status folds to `TraceFound` (an attack on
 /// the all-traces lemma = the fact IS derivable without chaining).
 ///
-/// The theory is HS `modifiedTheory1/2` (CloseRule.hs:247-252), built
+/// The theory is HS `modifiedTheory1/2` (CloseRule.hs), built
 /// structurally over the parent signature already on `maude`: the `Out0`
 /// rule, the restriction(s) and the `Deduction` lemma are constructed as
 /// values ([`deduction_rule`], [`deduction_restrictions`],
@@ -538,7 +537,7 @@ fn prove_deduction_theory(
     Ok(proof_status(&root) == ProofStatus::TraceFound)
 }
 
-/// HS `deductionCheck` (CloseRule.hs:215): can `fact` be derived from
+/// HS `deductionCheck` (CloseRule.hs): can `fact` be derived from
 /// `facts` without chaining?  `intr_modified` is the `boundToOne`-mapped
 /// cache injected into every decomposition's theory.
 fn deduction_check(

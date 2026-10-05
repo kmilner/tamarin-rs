@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Accountability translation for the Tamarin prover (Rust port).
 //!
@@ -36,9 +35,9 @@ use tamarin_theory::theory::{
 use crate::generation::{generate_accountability_lemmas, AccData, CaseTestData};
 
 /// Accountability translation error: HS `AccException`
-/// (lib/accountability/src/Accountability.hs:31-39) plus the
+/// (lib/accountability/src/Accountability.hs) plus the
 /// `ParsingException`s HS `translate` can throw through `liftedAddLemma` /
-/// `liftedAddPredicate` (Parser/Exceptions.hs:28-44).
+/// `liftedAddPredicate` (Parser/Exceptions.hs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccError {
     /// HS `CaseTestsUndefined`: one or more case tests required by an
@@ -46,7 +45,7 @@ pub enum AccError {
     /// `(lemma name, missing case-test identifiers)`.
     CaseTestsUndefined(Vec<(String, Vec<String>)>),
     /// HS `UndefinedPredicate` (thrown by `liftedAddLemma`'s `expandLemma`,
-    /// Text/Parser.hs:116-118,145-147, when a generated lemma's formula references an
+    /// Text/Parser.hs, when a generated lemma's formula references an
     /// undefined predicate).  Carries HS's `showFactTagArity` rendering,
     /// `name/arity`.
     UndefinedPredicate(String),
@@ -54,15 +53,15 @@ pub enum AccError {
     /// generated lemma's name collides with an existing lemma).
     DuplicateLemma(String),
     /// HS `DuplicateItem (PredicateItem _)` (thrown by `liftedAddPredicate`,
-    /// Parser/Signature.hs:328-331, when a case-test predicate's fact tag
+    /// Parser/Signature.hs, when a case-test predicate's fact tag
     /// collides with an existing predicate).  Carries the rendered fact.
     DuplicatePredicate(String),
 }
 
 impl std::fmt::Display for AccError {
     /// Mirrors HS `show` of the corresponding exception
-    /// (lib/accountability/src/Accountability.hs:36-38 /
-    /// Parser/Exceptions.hs:33-44); the driver prefixes `tamarin-prover: ` as
+    /// (lib/accountability/src/Accountability.hs /
+    /// Parser/Exceptions.hs); the driver prefixes `tamarin-prover: ` as
     /// GHC's top-level handler does.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -103,7 +102,7 @@ fn theory_case_tests(thy: &Theory) -> impl Iterator<Item = &CaseTest> {
 /// The theory's case tests (declaration order) and accountability lemmas.
 /// Each acc lemma is paired with the number of case tests declared BEFORE it:
 /// HS binds `_aCaseTests` when the lemma is parsed (`mapMaybe (flip
-/// lookupCaseTest thy)` over the items parsed so far, Text/Parser.hs:276-279), so a
+/// lookupCaseTest thy)` over the items parsed so far, Text/Parser.hs), so a
 /// case test declared after the lemma is undefined for it.
 fn collect_acc_items(thy: &Theory) -> (Vec<CaseTest>, Vec<(AccLemma, usize)>) {
     let mut case_tests: Vec<CaseTest> = Vec::new();
@@ -132,7 +131,7 @@ fn list_diff(xs: &[String], ys: &[String]) -> Vec<String> {
     result
 }
 
-/// HS `undefinedCaseTests` (lib/accountability/src/Accountability.hs:53-58):
+/// HS `undefinedCaseTests` (lib/accountability/src/Accountability.hs):
 /// the ident list `required` vs the resolved-case-test names `defined` (idents
 /// that name a defined case test, in order).  Returns the missing idents when
 /// the two lists differ.
@@ -156,7 +155,7 @@ fn undefined_case_tests(acc: &AccLemma, defined_names: &[String]) -> Option<Vec<
 
 /// Expand the accountability lemmas + case-test predicates into `thy` (HS
 /// `Accountability.translate`,
-/// lib/accountability/src/Accountability.hs:42-49).  A no-op when the theory
+/// lib/accountability/src/Accountability.hs).  A no-op when the theory
 /// declares neither accountability lemmas nor case tests, so ordinary
 /// theories are byte-unchanged.  Case tests WITHOUT any
 /// acc lemma still get their predicates appended (HS `translate` runs its
@@ -186,7 +185,7 @@ pub fn translate(thy: &mut Theory) -> Result<(), AccError> {
     // Predicate fact tags `(name, arity, persistent)` defined for this theory:
     // every `predicates:` item (HS `theoryPredicates` — position-insensitive at
     // translate time) plus the builtin `Smaller/2` (HS `lookupPredicate`
-    // appends `builtinPredicates`, Predicate.hs:77-78).  Backs the
+    // appends `builtinPredicates`, Predicate.hs).  Backs the
     // `UndefinedPredicate` / `DuplicateItem (PredicateItem _)` error paths;
     // grows as case-test predicates are added (HS folds `thy'` through
     // `liftedAddPredicate`).
@@ -201,11 +200,11 @@ pub fn translate(thy: &mut Theory) -> Result<(), AccError> {
     let declared_preds: Vec<Predicate> = thy.predicates().cloned().collect();
 
     // The macro DEFINITIONS `applyMacroInLemma` substitutes into each generated
-    // lemma at close time (CloseRule.hs:85), in declaration order.
+    // lemma at close time (CloseRule.hs), in declaration order.
     let declared_macros: Vec<LNMacro> = thy.macros().cloned().collect();
 
     // Existing lemma names (HS `addLemma` guards on `lookupLemma`, which scans
-    // `LemmaItem`s only — TheoryObject.hs:461-465); grows as generated lemmas
+    // `LemmaItem`s only — TheoryObject.hs); grows as generated lemmas
     // are appended.
     let mut lemma_names: Vec<String> = thy.lemmas().map(|l| l.name.clone()).collect();
 
@@ -268,7 +267,7 @@ pub fn translate(thy: &mut Theory) -> Result<(), AccError> {
 }
 
 /// The `(name, arity, persistent)` key a predicate is looked up by — HS
-/// `lookupPredicate` compares the whole fact tag (Predicate.hs:77-80).
+/// `lookupPredicate` compares the whole fact tag (Predicate.hs).
 fn pred_tag(pr: &Predicate) -> (String, usize, bool) {
     (
         fact_tag_name(&pr.fact.tag),
@@ -327,13 +326,13 @@ fn render_fact(f: &Fact<LVar>) -> String {
 }
 
 /// Append one generated lemma to the theory (HS `addLemma`, which appends at
-/// the end of the item list, TheoryObject.hs:461-465).  The lemma carries the
+/// the end of the item list, TheoryObject.hs).  The lemma carries the
 /// two formulas a closed theory's lemma holds: `_lOriginalFormula` is the one
 /// `expandLemma` builds, predicate-expanded against `predicates`
-/// (Theory/Text/Parser.hs:141-152), and `_lFormula` is that formula with the
+/// (Theory/Text/Parser.hs), and `_lFormula` is that formula with the
 /// theory's macros applied, which `closeTheory` maps over every lemma
 /// including the ones this translation added (`applyMacroInLemma`,
-/// CloseRule.hs:85, lib/theory/src/Lemma.hs:83-88).  A formula the expansion
+/// CloseRule.hs, lib/theory/src/Lemma.hs).  A formula the expansion
 /// rejects is not added.
 fn inject_lemma(
     thy: &mut Theory,
@@ -358,24 +357,24 @@ fn inject_lemma(
         formula: expanded,
         proof: None,
         // HS `skeletonLemma name "generation" ..` seeds `_lPlaintext` with
-        // "generation" (ProofSkeleton.hs:63-64); never rendered by `--prove`.
+        // "generation" (ProofSkeleton.hs); never rendered by `--prove`.
         plaintext: "generation".to_string(),
     };
     thy.items.push(TheoryItem::Lemma(lemma));
 }
 
 // =============================================================================
-// caseTestToPredicate (Items/CaseTestItem.hs:33-36 + mkPredicate,
-// Theory/Syntactic/Predicate.hs:38-42)
+// caseTestToPredicate (Items/CaseTestItem.hs + mkPredicate,
+// Theory/Syntactic/Predicate.hs)
 // =============================================================================
 
-/// HS `caseTestToPredicate` (Items/CaseTestItem.hs:33-37): `None` when the
+/// HS `caseTestToPredicate` (Items/CaseTestItem.hs): `None` when the
 /// case-test formula has syntactic sugar that `toLNFormula` cannot strip (a
 /// predicate atom), otherwise `mkPredicate name formula`
-/// (Theory/Syntactic/Predicate.hs:38-43).
+/// (Theory/Syntactic/Predicate.hs).
 fn case_test_to_predicate(c: &CaseTest) -> Option<Predicate> {
     // `toLNFormula` is `Nothing` while any atom still carries the predicate
-    // sugar (Theory/Model/Formula.hs:369-373).
+    // sugar (Theory/Model/Formula.hs).
     let stripped = to_lnformula(&c.formula)?;
     // The fact args are the formula's sorted free variables.
     let frees = formula_frees(&stripped);
@@ -383,10 +382,10 @@ fn case_test_to_predicate(c: &CaseTest) -> Option<Predicate> {
 }
 
 // =============================================================================
-// checkWellformedness / accRPReport (Generation.hs:324-346)
+// checkWellformedness / accRPReport (Generation.hs)
 // =============================================================================
 
-/// HS `Accountability.checkWellformedness` (Generation.hs:345-346): the RP-check
+/// HS `Accountability.checkWellformedness` (Generation.hs): the RP-check
 /// report, emitted only when the theory declares accountability lemmas.
 pub fn check_wellformedness(thy: &Theory) -> Vec<WfError> {
     let has_acc_lemma = thy
@@ -399,7 +398,7 @@ pub fn check_wellformedness(thy: &Theory) -> Vec<WfError> {
     acc_rp_report(thy)
 }
 
-/// HS `accRPReport` (Generation.hs:324-343): the topic + explanation for the
+/// HS `accRPReport` (Generation.hs): the topic + explanation for the
 /// RP (BR) syntactic criterion.  Empty when no warning fires.
 fn acc_rp_report(thy: &Theory) -> Vec<WfError> {
     let rules = rp_check_rules(thy);
@@ -418,9 +417,9 @@ fn acc_rp_report(thy: &Theory) -> Vec<WfError> {
         return Vec::new();
     }
 
-    // HS `vcat warnings $--$ detailedExplanation` (Generation.hs:326), framed
+    // HS `vcat warnings $--$ detailedExplanation` (Generation.hs), framed
     // by `prettyWfErrorReport` as `text topic $-$ nest 2 body`
-    // (Wellformedness.hs:118-125).
+    // (Wellformedness.hs).
     let body = hpj::above_blank(
         hpj::vcat(warnings.into_iter().map(Doc::text).collect()),
         detailed_explanation(),
@@ -430,7 +429,7 @@ fn acc_rp_report(thy: &Theory) -> Vec<WfError> {
 
 const ACC_RP_TOPIC: &str = "Accountability (RP check)";
 
-/// HS `detailedExplanation` (Generation.hs:337-343): the first line, then a
+/// HS `detailedExplanation` (Generation.hs): the first line, then a
 /// `$--$` blank line, then the five `$-$`-joined lines of the condition.
 /// Right single quotation marks (U+2019) are copied verbatim.
 fn detailed_explanation() -> Doc {
@@ -458,8 +457,8 @@ fn theory_has_restrictions(thy: &Theory) -> bool {
 
 /// The rules HS's RP check scans: each rule's E-form plus its explicit AC
 /// variants (HS `rulesLNFacts` / `rulesActions` read `_oprRuleE` and
-/// `_oprRuleAC`, Generation.hs:128-146).  Macros stay UNexpanded: `rule_e()`
-/// is the half `closeProtoRule` keeps unexpanded (lib/theory/src/Rule.hs:82-86),
+/// `_oprRuleAC`, Generation.hs).  Macros stay UNexpanded: `rule_e()`
+/// is the half `closeProtoRule` keeps unexpanded (lib/theory/src/Rule.hs),
 /// and a declared `variants (modulo AC)` block is never macro-applied at all.
 fn rp_check_rules(thy: &Theory) -> Vec<&ProtoRuleE> {
     let mut out = Vec::new();
@@ -471,7 +470,7 @@ fn rp_check_rules(thy: &Theory) -> Vec<&ProtoRuleE> {
 }
 
 /// HS `rulesContainPubConst thy = any termContainsPubConst (rulesLNTerms thy)`
-/// (Generation.hs:320-322): any premise/action/conclusion term of any rule is
+/// (Generation.hs): any premise/action/conclusion term of any rule is
 /// or contains a public constant.
 fn rules_contain_pub_const(rules: &[&ProtoRuleE]) -> bool {
     rules.iter().any(|r| {
@@ -484,7 +483,7 @@ fn rules_contain_pub_const(rules: &[&ProtoRuleE]) -> bool {
     })
 }
 
-/// HS `termContainsPubConst` (Generation.hs:148-153): a public constant literal
+/// HS `termContainsPubConst` (Generation.hs): a public constant literal
 /// (`'x'`) anywhere in the term.
 fn term_contains_pub_const(t: &LNTerm) -> bool {
     match t {
@@ -493,7 +492,7 @@ fn term_contains_pub_const(t: &LNTerm) -> bool {
     }
 }
 
-/// HS `caseTestsInstantiatedByPubVars` (Generation.hs:314-318): for every
+/// HS `caseTestsInstantiatedByPubVars` (Generation.hs): for every
 /// case-test action fact and every rule action fact sharing its tag, each free
 /// variable of the case-test fact must line up with a public variable in the
 /// rule fact.
@@ -510,7 +509,7 @@ fn case_tests_instantiated_by_pub_vars(thy: &Theory, rules: &[&ProtoRuleE]) -> b
     true
 }
 
-/// HS `caseTestsFacts thy` (Generation.hs:120-122): the action facts of every
+/// HS `caseTestsFacts thy` (Generation.hs): the action facts of every
 /// case test's formula.
 fn case_tests_facts(thy: &Theory) -> Vec<Fact<BLNTerm>> {
     theory_case_tests(thy)
@@ -518,17 +517,17 @@ fn case_tests_facts(thy: &Theory) -> Vec<Fact<BLNTerm>> {
         .collect()
 }
 
-/// HS `rulesActions thy` (Generation.hs:142-146): every rule's action facts.
+/// HS `rulesActions thy` (Generation.hs): every rule's action facts.
 fn rules_actions<'a>(rules: &[&'a ProtoRuleE]) -> Vec<&'a LNFact> {
     rules.iter().flat_map(|r| r.actions.iter()).collect()
 }
 
-/// HS `cTag == rTag` (Generation.hs:316-318).
+/// HS `cTag == rTag` (Generation.hs).
 fn fact_tag_eq(cf: &Fact<BLNTerm>, rf: &LNFact) -> bool {
     cf.tag == rf.tag
 }
 
-/// HS `freeVarsInstantiatedByPubVars` (Generation.hs:309-312): at each position
+/// HS `freeVarsInstantiatedByPubVars` (Generation.hs): at each position
 /// where the case-test fact holds a free variable, the rule fact must hold a
 /// public variable.
 fn free_vars_instantiated_by_pub_vars(c_terms: &[BLNTerm], r_terms: &[LNTerm]) -> bool {
@@ -539,7 +538,7 @@ fn free_vars_instantiated_by_pub_vars(c_terms: &[BLNTerm], r_terms: &[LNTerm]) -
         .all(|(_, r)| is_pub_var(r))
 }
 
-/// HS `termIsFreeVar` (Generation.hs:156-160): the term is a single Free
+/// HS `termIsFreeVar` (Generation.hs): the term is a single Free
 /// variable (a `Bound` variable or non-variable term is not).
 fn term_is_free_var(t: &BLNTerm) -> bool {
     matches!(t, Term::Lit(Lit::Var(BVar::Free(_))))
@@ -598,9 +597,9 @@ lemma acc:\n  badLog account for \"All x a #i. Log(x, a)@i ==> not(IsBad(a))\"\n
 end\n";
 
     /// HS `translate` injects each generated lemma with `liftedAddLemma`
-    /// (lib/accountability/src/Accountability.hs:42-49), which
+    /// (lib/accountability/src/Accountability.hs), which
     /// predicate-expands it through `expandLemma`
-    /// (Theory/Text/Parser.hs:141-152), so no `Pred` atom reaches the stored
+    /// (Theory/Text/Parser.hs), so no `Pred` atom reaches the stored
     /// `LNFormula`: `IsBad(a)` is inlined as `a = 'bad'`.
     #[test]
     fn generated_lemmas_have_predicates_inlined_at_injection() {
@@ -695,9 +694,9 @@ lemma acc:\n  badLog account for \"All a #i x. Log(tag(x), a)@i ==> not(a = 'ok'
 end\n";
 
     /// `closeTheory` maps `applyMacroInLemma` over every lemma of the theory,
-    /// the injected ones included (CloseRule.hs:85), which stores the
+    /// the injected ones included (CloseRule.hs), which stores the
     /// macro-applied formula as `_lFormula` and the formula as injected as
-    /// `_lOriginalFormula` (lib/theory/src/Lemma.hs:83-88).  The printer quotes
+    /// `_lOriginalFormula` (lib/theory/src/Lemma.hs).  The printer quotes
     /// the original on the header line and converts `_lFormula` for the guarded
     /// block, so the macro call survives in the header and nowhere else.
     #[test]

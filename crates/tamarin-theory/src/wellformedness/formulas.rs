@@ -1,8 +1,7 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of HS `formulaReports` (Wellformedness.hs:996-1015) — the
+//! Port of HS `formulaReports` (Wellformedness.hs) — the
 //! wellformedness pass over every lemma / restriction formula.
 //!
 //! HS runs it as ONE list-monad loop:
@@ -25,7 +24,7 @@
 //!   * The three topics are emitted PER FORMULA, so they interleave in item
 //!     order, and a topic REOPENS after an intervening one.  Since
 //!     `prettyWfErrorReport` groups with `groupOn fst = groupBy ((==) `on`
-//!     fst)` (Extension/Prelude.hs:96-97), which only merges CONSECUTIVE
+//!     fst)` (Extension/Prelude.hs), which only merges CONSECUTIVE
 //!     entries, each run gets its own underlined header — e.g. `Formula
 //!     terms` / ` Formula guardedness` / `Formula terms` for three lemmas
 //!     where only the middle one is unguardable.  Splicing all findings of
@@ -39,8 +38,8 @@
 //! The formulas the three arms read are macro- and predicate-expanded:
 //! `annFormulas` applies `applyMacroInFormula (theoryMacros thy)` itself, and
 //! predicates are inlined at PARSE time
-//! (`liftedAddLemma`→`expandLemma`→`expandFormula`, Theory/Text/Parser.hs:145-147;
-//! `liftedAddRestriction`→`expandRestriction`, lines 132-134).  The elaborated
+//! (`liftedAddLemma`→`expandLemma`→`expandFormula`, Theory/Text/Parser.hs;
+//! `liftedAddRestriction`→`expandRestriction`).  The elaborated
 //! [`Lemma::formula`](crate::theory::Lemma::formula) and
 //! [`Restriction::formula`](crate::restriction::ProtoRestriction::formula) are
 //! that formula: `elaborate` inlines the predicates and applies the theory's
@@ -56,10 +55,10 @@ use crate::theory::{Theory, TheoryItem};
 use super::check_terms::{check_terms, WF_WIDTH};
 use super::{underline_topic, WfError};
 
-/// HS `underlineTopic "Quantifier sorts"` (Wellformedness.hs:1002).
+/// HS `underlineTopic "Quantifier sorts"` (Wellformedness.hs).
 const QUANTIFIER_TOPIC: &str = "Quantifier sorts";
 
-/// HS `annFormulas` (Wellformedness.hs:1006-1014): the annotated formulas
+/// HS `annFormulas` (Wellformedness.hs): the annotated formulas
 /// `formulaReports` checks, as `(header, formula)` pairs.  `<|>` on lists is
 /// `++`, so this is ALL lemmas in theory order followed by ALL restrictions
 /// in theory order.  Headers are HS's `"Lemma " ++ quote name` /
@@ -80,24 +79,24 @@ fn ann_formulas(thy: &Theory) -> Vec<(String, &LNFormula)> {
     lemmas
 }
 
-/// Port of HS `formulaReports` (Wellformedness.hs:996-1015): one pass over
+/// Port of HS `formulaReports` (Wellformedness.hs): one pass over
 /// `annFormulas` running `checkQuantifiers`, `checkTerms` and `checkGuarded`
 /// per formula, so the three topics interleave exactly as HS emits them.
 ///
 /// `thy` is the TRANSLATED theory — HS's single `checkWellformedness` runs on
 /// the `OpenTranslatedTheory` (`checkTranslatedTheory`,
-/// TheoryLoader.hs:559-565, fed by `closeTheory` at :726-728), so
+/// TheoryLoader.hs, fed by `closeTheory`), so
 /// `annFormulas` also covers the restrictions SAPIC's `let … else` / `if`
 /// lowering mints and the lemmas the accountability translation appends.
 /// `checkTerms` classifies against the theory's own signature (HS `get
-/// (sigpMaudeSig . thySignature) thy`, Wellformedness.hs:1003).
+/// (sigpMaudeSig . thySignature) thy`, Wellformedness.hs).
 pub fn formula_reports(thy: &Theory) -> Vec<WfError> {
     let sig = &thy.signature;
     let mut out: Vec<WfError> = Vec::new();
     for (header, fm) in ann_formulas(thy) {
         // HS `msum [checkQuantifiers, checkTerms, checkGuarded]` = `concat`:
         // every arm runs for every formula, findings concatenated in this
-        // order (Wellformedness.hs:1002-1004).
+        // order (Wellformedness.hs).
         out.extend(check_quantifiers(&header, fm));
         out.extend(check_terms(sig, &header, fm));
         out.extend(check_guarded_entry(&header, fm));
@@ -105,7 +104,7 @@ pub fn formula_reports(thy: &Theory) -> Vec<WfError> {
     out
 }
 
-/// Port of HS `checkGuarded` (Wellformedness.hs:988-993): the finding for one
+/// Port of HS `checkGuarded` (Wellformedness.hs): the finding for one
 /// annotated formula that fails `formulaToGuarded`.  `header` is HS's
 /// `"Lemma `n'"` / `"Restriction `n'"`.
 ///
@@ -157,7 +156,7 @@ fn check_guarded_entry(header: &str, formula: &LNFormula) -> Option<WfError> {
     Some(WfError::new(topic, msg))
 }
 
-/// Port of HS `checkQuantifiers` (Wellformedness.hs:948-957): every binder
+/// Port of HS `checkQuantifiers` (Wellformedness.hs): every binder
 /// whose sort is not `LSortMsg` / `LSortNode` / `LSortNat` is an offender, so
 /// quantifying over a fresh (`~x`) or public (`$x`) variable is flagged.
 ///
@@ -206,7 +205,7 @@ fn check_quantifiers(header: &str, fm: &LNFormula) -> Option<WfError> {
 }
 
 /// HS's `show` of the binder's `LSort` when that sort is NOT one of
-/// `[LSortMsg, LSortNode, LSortNat]` (Wellformedness.hs:957), else `None`.
+/// `[LSortMsg, LSortNode, LSortNat]` (Wellformedness.hs), else `None`.
 /// A bare binder is `LSortMsg`: the sort of a quantified variable comes
 /// from its prefix or suffix alone, never from inference.
 fn disallowed_sort_show(sort: LSort) -> Option<&'static str> {
@@ -248,7 +247,7 @@ mod tests {
         formula_reports(&elaborated)
     }
 
-    /// `annFormulas = lemmas <|> restrictions` (Wellformedness.hs:1006-1014):
+    /// `annFormulas = lemmas <|> restrictions` (Wellformedness.hs):
     /// all lemmas in theory order, then all restrictions — NOT a single
     /// item-order walk.  Bytes pinned to the oracle (Git revision ef3f0468)
     /// for the theory below, whose items alternate restriction / lemma.
@@ -289,7 +288,7 @@ mod tests {
     }
 
     /// `msum` = `concat` per formula, so the three topics interleave and a
-    /// topic reopens after an intervening one (Wellformedness.hs:999-1005).
+    /// topic reopens after an intervening one (Wellformedness.hs).
     /// Oracle bytes: `Formula terms` / ` Formula guardedness` / `Formula
     /// terms` as THREE groups for this theory.
     #[test]
@@ -325,7 +324,7 @@ mod tests {
         );
     }
 
-    /// `checkQuantifiers` (Wellformedness.hs:948-957) flags fresh- and
+    /// `checkQuantifiers` (Wellformedness.hs) flags fresh- and
     /// public-sorted binders.  Bytes are the pinned oracle's for `q1.spthy`.
     #[test]
     fn quantifier_sorts_flags_fresh_and_pub_binders() {
@@ -348,7 +347,7 @@ mod tests {
     }
 
     /// Node-, message- and nat-sorted binders are allowed
-    /// (`[LSortMsg, LSortNode, LSortNat]`, Wellformedness.hs:957), and the
+    /// (`[LSortMsg, LSortNode, LSortNat]`, Wellformedness.hs), and the
     /// binder's index is not part of the shown pair (`~n.1` → `("n",…)`).
     #[test]
     fn quantifier_sorts_allows_msg_node_binders_and_drops_the_index() {
@@ -391,7 +390,7 @@ mod tests {
     }
 
     /// `annFormulas` applies `applyMacroInFormula (theoryMacros thy)`
-    /// (Wellformedness.hs:1007-1014), so a macro call is reported as its
+    /// (Wellformedness.hs), so a macro call is reported as its
     /// expansion.  Oracle bytes for the theory below (Git revision ef3f0468):
     /// `exp(Bound 1,Bound 1)`, not the `sq` call.
     #[test]

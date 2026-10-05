@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Parser-AST → theory-AST process converter.
 //!
@@ -72,7 +71,7 @@ pub(crate) fn action(
         p::SapicAction::ChIn { chan, msg } => {
             // The surface `in(c, pat)` parser stores the pattern with `=t`
             // (`PatMatch`) match markers.  HS `ChIn maybeChannel (unpattern pt)
-            // (extractMatchingVariables pt)` (Parser/Sapic.hs:84-162, see line 114) unpatterns the
+            // (extractMatchingVariables pt)` (Parser/Sapic.hs) unpatterns the
             // message term and splits the matched variables out into `match_vars`.
             // We reuse the same `unpattern`/`extractMatchingVariables` helper used
             // for `let` patterns.
@@ -84,17 +83,17 @@ pub(crate) fn action(
             })
         }
         // Mutable state: `insert t1 v` / `delete t`.  These map to the
-        // theory `SapicAction::{Insert,Delete}` (Sapic/Process.hs:72-73), translated by
-        // `baseTransAction` Insert/Delete (Basetranslation.hs:177-184).
+        // theory `SapicAction::{Insert,Delete}` (Sapic/Process.hs), translated by
+        // `baseTransAction` Insert/Delete (Basetranslation.hs).
         p::SapicAction::Insert(t1, t2) => Ok(SapicAction::Insert(term(t1, sig)?, term(t2, sig)?)),
         p::SapicAction::Delete(t) => Ok(SapicAction::Delete(term(t, sig)?)),
         // Locks: `lock t` / `unlock t` → theory `SapicAction::{Lock,Unlock}`
-        // (Sapic/Process.hs:74-75), annotated by `Sapic.Locks.annotateLocks` and
-        // translated by `baseTransAction` Lock/Unlock (Basetranslation.hs:185-194).
+        // (Sapic/Process.hs), annotated by `Sapic.Locks.annotateLocks` and
+        // translated by `baseTransAction` Lock/Unlock (Basetranslation.hs).
         p::SapicAction::Lock(t) => Ok(SapicAction::Lock(term(t, sig)?)),
         p::SapicAction::Unlock(t) => Ok(SapicAction::Unlock(term(t, sig)?)),
         // Embedded MSR rule `[l]--[a]->[r]` (optionally with `restricting φ`).
-        // HS (Parser/Sapic.hs:154-160):
+        // HS (Parser/Sapic.hs):
         //   let matchVars = foldMap (foldMap extractMatchingVariables) l
         //   let f = fmap (fmap unpattern); g = fmap (fmap unpatternVar)
         //   if validMSR S.empty (l,a,r) then MSR (f l) (f a) (f r) (g phi) matchVars
@@ -163,7 +162,7 @@ fn fact_unpattern(
 }
 
 /// HS `g = fmap (fmap unpatternVar)` over an embedded restriction formula
-/// (Parser/Sapic.hs:158): strip every `=v` (`PatMatch`) marker from the
+/// (Parser/Sapic.hs): strip every `=v` (`PatMatch`) marker from the
 /// formula's terms.  No match-vars are collected — HS takes `matchVars` from
 /// the premises only.
 fn formula_unpattern(f: &p::Formula) -> p::Formula {
@@ -188,7 +187,7 @@ pub(crate) fn combinator(
         }
         // `if <formula> then .. else ..`.  HS parses the condition with
         // `standardFormula sapicvar sapicnodevar`
-        // (Theory/Text/Parser/Sapic.hs:252-255), which is `sapic_from_parser`:
+        // (Theory/Text/Parser/Sapic.hs), which is `sapic_from_parser`:
         // the variables carry their SAPIC type tag and a timepoint operand is
         // tagged `node`.  Predicate atoms stay sugar until the SAPIC rule
         // injection (`tamarin_sapic::apply`) expands them (HS
@@ -197,14 +196,14 @@ pub(crate) fn combinator(
             sapic_from_parser(f, sig).map_err(|e| ConvertError::new(e.message))?,
         )),
         // `lookup t as v in .. else ..`.  HS `Lookup (SapicNTerm v) v`
-        // (Sapic/Process.hs:95).
+        // (Sapic/Process.hs).
         p::ProcessComb::Lookup(t, v) => Ok(ProcessCombinator::Lookup(
             term(t, sig)?,
             varspec_to_sapic(v),
         )),
         // `let pat = value in P [else Q]`.  HS
         // `ProcessComb (Let (unpattern t1) t2 (extractMatchingVariables t1))`
-        // (Parser/Sapic.hs:268-269).  The parser-AST pattern `pat` may contain
+        // (Parser/Sapic.hs).  The parser-AST pattern `pat` may contain
         // `=t` (`PatMatch`) match markers; we split them out into `match_vars`
         // and `unpattern` the rest into the `left` term.
         p::ProcessComb::Let { pat, value } => {
@@ -220,7 +219,7 @@ pub(crate) fn combinator(
 }
 
 /// Convert a `let` pattern term (HS `unpattern` + `extractMatchingVariables`,
-/// Pattern.hs:55-96).  Returns the `unpattern`ed SAPIC term (with every `=v`
+/// Pattern.hs).  Returns the `unpattern`ed SAPIC term (with every `=v`
 /// match marker stripped to a plain `v`) plus the set of match-marked
 /// variables.  HS `extractMatchingVariables` collects every `PatternMatch v`;
 /// `unpattern = fmap (fmap unpatternVar)` drops the bind/match tag.
@@ -237,7 +236,7 @@ fn convert_let_pattern(
 /// Recursively strip `PatMatch` wrappers from a pattern term, recording each
 /// matched variable.  A `=v` contributes `v` to the match-var set (HS
 /// `extractMatchingVariables` collects the `PatternMatch` variables,
-/// Pattern.hs:92-96) and unwraps to `v`; the parser only puts the marker on a
+/// Pattern.hs) and unwraps to `v`; the parser only puts the marker on a
 /// variable (`pattern_var_atom`), matching HS `sapicpatternvar`.  Non-pattern
 /// subterms are returned unchanged.
 fn strip_pat_match(t: &p::Term, match_vars: &mut BTreeSet<SapicLVar>) -> p::Term {
@@ -356,7 +355,7 @@ mod tests {
     use tamarin_term::maude_sig::pair_maude_sig;
 
     /// The signature a def-less conversion runs against: `minimalMaudeSig`
-    /// (`pairFunSig`, Term/Maude/Signature.hs:224-226), which every theory
+    /// (`pairFunSig`, Term/Maude/Signature.hs), which every theory
     /// carries.
     fn msig() -> MaudeSig {
         pair_maude_sig()
@@ -602,7 +601,7 @@ mod tests {
     /// A bare token naming a declared 0-arity symbol is an APPLICATION in a
     /// condition, not a free variable: HS's term parser resolves it against
     /// the signature while parsing (`nullaryApp`,
-    /// Theory/Text/Parser/Term.hs:151,158-163), so `freesList` never reports
+    /// Theory/Text/Parser/Term.hs), so `freesList` never reports
     /// it and a substitution never rewrites it.
     #[test]
     fn a_declared_nullary_symbol_in_a_condition_is_an_application_not_a_free_variable() {
@@ -632,7 +631,7 @@ mod tests {
     /// A quantifier binder in a condition is a `Bound` De Bruijn index, so it
     /// is not a free variable and no substitution can reach it — HS's
     /// `Foldable BVar` yields `Free` variables only
-    /// (Theory/Sapic/Term.hs:131-132#freesSapicTerm).
+    /// (Theory/Sapic/Term.hs#freesSapicTerm).
     #[test]
     fn a_bound_occurrence_in_a_condition_is_not_a_free_variable() {
         let msig = msig();
@@ -674,13 +673,13 @@ mod tests {
     // -- pattern (`=t`) splitting -------------------------------------------
     //
     // HS tags pattern variables at the leaf. The rule is `ltypedpatternlit =
-    // vlit sapicpatternvar` (Parser/Sapic.hs:52-53). A `sapicpatternvar` is an
-    // optional `=` in front of a single `sapicvar` (Token.hs:512-519). A
+    // vlit sapicpatternvar` (Parser/Sapic.hs). A `sapicpatternvar` is an
+    // optional `=` in front of a single `sapicvar` (Token.hs). A
     // pattern term is therefore a `SapicNTerm PatternSapicLVar`. Every
     // variable in that term carries a `PatternBind` or `PatternMatch` tag.
     // `unpattern = fmap (fmap unpatternVar)` drops the tags
-    // (Pattern.hs:54-60). `extractMatchingVariables pt = S.fromList $ foldMap
-    // (foldMap isPatternMatch) pt` (Pattern.hs:92-96) collects the matched
+    // (Pattern.hs). `extractMatchingVariables pt = S.fromList $ foldMap
+    // (foldMap isPatternMatch) pt` (Pattern.hs) collects the matched
     // ones. It is a foldMap over the complete term. The depth therefore does
     // not matter, and the result is a set.
 
@@ -696,8 +695,8 @@ mod tests {
     }
 
     /// Builds the `SapicLVar` that [`pvar`] elaborates to. A `sapicvar` keeps
-    /// the `:type` annotation (Token.hs:506-510). A `PatternSapicLVar` wraps a
-    /// complete `SapicLVar` (Pattern.hs:42-44). The type is therefore part of
+    /// the `:type` annotation (Token.hs). A `PatternSapicLVar` wraps a
+    /// complete `SapicLVar` (Pattern.hs). The type is therefore part of
     /// the `extractMatchingVariables` set element.
     fn svar(name: &str, typ: Option<&str>) -> SapicLVar {
         SapicLVar::new(LVar::new(name, LSort::Msg, 0), typ.map(Into::into))
@@ -719,7 +718,7 @@ mod tests {
 
     #[test]
     fn msr_unpatterns_every_row_but_takes_match_vars_from_the_premises_only() {
-        // HS (Parser/Sapic.hs:155-161):
+        // HS (Parser/Sapic.hs):
         //   (l,a,r,phi) <- try $ genericRule sapicpatternvar (PatternBind <$> sapicnodevar)
         //   let matchVars =  foldMap (foldMap extractMatchingVariables) l
         //   let f = fmap (fmap unpattern)
@@ -732,7 +731,7 @@ mod tests {
         let prems = vec![pfact("In", vec![deep(pat_match(pvar("x", None)))])];
         // HS never gives this code a `=` in the action rows or the conclusion
         // rows. The `validMSR` guards `(_,[]) <- freesPatternFactList a` and
-        // `(_,[]) <- freesPatternFactList r` (Pattern.hs:79-89) fail the parse
+        // `(_,[]) <- freesPatternFactList r` (Pattern.hs) fail the parse
         // first. The pinned oracle also rejects such a source. The half that
         // this test pins is the HS half. Whatever those rows contain, they add
         // nothing to `matchVars`.
@@ -788,7 +787,7 @@ mod tests {
     #[test]
     fn msr_restrict_formulas_lose_their_markers_and_add_no_match_vars() {
         // HS applies `g = fmap (fmap unpatternVar)` to the embedded
-        // restriction formulas (Parser/Sapic.hs:158-160): every `=` marker
+        // restriction formulas (Parser/Sapic.hs): every `=` marker
         // goes away, and `matchVars` still folds over the premises only.
         // The strip runs BEFORE the locally-nameless formula is built, and
         // the second assertion below is what pins that order — the end-to-end
@@ -858,9 +857,9 @@ mod tests {
     #[test]
     fn let_and_chin_patterns_split_matched_leaves_out_of_the_bound_term() {
         // HS builds `let` as `ProcessComb (Let (unpattern t1) t2
-        // (extractMatchingVariables t1)) mempty p' q` (Parser/Sapic.hs:268-269).
+        // (extractMatchingVariables t1)) mempty p' q` (Parser/Sapic.hs).
         // HS builds `in(c,pt)` as `ChIn maybeChannel (unpattern pt)
-        // (extractMatchingVariables pt)` (Parser/Sapic.hs:113-114). Both sides
+        // (extractMatchingVariables pt)` (Parser/Sapic.hs). Both sides
         // use the same pair of Pattern.hs functions.
         //
         // `extractMatchingVariables` returns an `S.Set SapicLVar`. The two

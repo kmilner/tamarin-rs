@@ -2,8 +2,8 @@
 // formula — the two places HS strips the marker on DIFFERENT paths.
 //
 // HS parses the embedded rule with pattern literals (`genericRule
-// sapicpatternvar`, Theory/Text/Parser/Sapic.hs:155) and then splits the
-// result (Parser/Sapic.hs:156-160): the fact rows go through `unpattern` and the
+// sapicpatternvar`, Theory/Text/Parser/Sapic.hs) and then splits the
+// result (Parser/Sapic.hs): the fact rows go through `unpattern` and the
 // premises contribute the match-var set, while the `_restrict` formulas go
 // through `g = fmap (fmap unpatternVar)` — markers stripped, NO match-vars
 // collected.  Skipping the `g` leaves a marker inside the minted `Restr_…`

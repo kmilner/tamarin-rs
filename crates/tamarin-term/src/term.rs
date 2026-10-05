@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.Term.Raw` from `lib/term/src/Term/Term/Raw.hs`.
 //!
@@ -46,7 +45,7 @@ pub enum Term<A> {
 // content-based one; on a pointer mismatch we fall back to the full structural
 // comparison.  Variant order (Lit < App) and field order match the derived
 // impls exactly, which is HS `data Term a = LIT a | FAPP FunSym [Term a]`
-// with a derived `Eq`/`Ord` (Term/Term/Raw.hs:73-75).
+// with a derived `Eq`/`Ord` (Term/Term/Raw.hs).
 impl<A: PartialEq> PartialEq for Term<A> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
@@ -196,7 +195,7 @@ const TERM_ERROR_PACKAGE: &str = "tamarin-prover-term-1.13.0-HEWlVEyEBKAFHPl3i5M
 /// `src/Term/Term/Raw.hs`.
 const FAPP_AC_EMPTY_SITE: &str = "120:20";
 
-/// HS `error "Term.fAppAC: empty argument list"` (Raw.hs:120).
+/// HS `error "Term.fAppAC: empty argument list"` (Raw.hs).
 const FAPP_AC_EMPTY_MSG: &str = "Term.fAppAC: empty argument list";
 
 /// Raise the HS `error` at `call_site`, GHC-style.
@@ -205,8 +204,8 @@ const FAPP_AC_EMPTY_MSG: &str = "Term.fAppAC: empty argument list";
 /// catching it the runtime prints `tamarin-prover: ` ++ `displayException`
 /// (message + `HasCallStack` frame) on stderr and exits 1.  The `error`s this
 /// stands in for sit below the port's error-returning layers, in code whose
-/// callers cannot carry a `Result` (`Term.fAppAC`, Raw.hs:120;
-/// `Main.Console.testProcess`' maude abort, Console.hs:147), so the port
+/// callers cannot carry a `Result` (`Term.fAppAC`, Raw.hs;
+/// `Main.Console.testProcess`' maude abort, Console.hs), so the port
 /// raises a panic whose payload carries exactly the text GHC would print; the
 /// binary's panic hook recognises it via [`hs_error_text`] and reproduces the
 /// stream and exit code.
@@ -291,8 +290,8 @@ pub fn unsafe_f_app<A>(fsym: FunSym, args: Vec<Term<A>>) -> Term<A> {
     Term::App(fsym, args.into())
 }
 
-/// HS `fmapTerm` (Term/Term/Raw.hs:216-217), the `mapLits` of
-/// Theory/Model/Formula.hs:288-291: map every literal and rebuild each
+/// HS `fmapTerm` (Term/Term/Raw.hs), the `mapLits` of
+/// Theory/Model/Formula.hs: map every literal and rebuild each
 /// application through [`f_app`], so AC and C argument lists are flattened
 /// and re-sorted under the order of the new literals.
 pub fn map_lits<A, B: Ord + Clone>(t: &Term<A>, f: &mut dyn FnMut(&A) -> B) -> Term<B> {
@@ -336,17 +335,17 @@ pub fn count_proper_subterms<A: PartialEq>(needle: &Term<A>, haystack: &Term<A>)
 
 // =============================================================================
 // "Protected" subterms (auto-sources).
-// NB (HS Term/Term.hs:254-255): anything but a pair or an AC symbol is "protected".
+// NB (HS Term/Term.hs): anything but a pair or an AC symbol is "protected".
 // =============================================================================
 
 /// `True` iff the term's top symbol is an AC operator. Port of HS `isAC`
-/// (Term/Term.hs:229-231).
+/// (Term/Term.hs).
 pub fn is_ac<A>(t: &Term<A>) -> bool {
     matches!(t, Term::App(FunSym::Ac(_), _))
 }
 
 /// `True` iff the term is a pair `<_,_>`. Port of HS `isPair`
-/// (Term/Term.hs:185-187, `viewTerm2 -> FPair _ _`): top symbol is the binary
+/// (Term/Term.hs, `viewTerm2 -> FPair _ _`): top symbol is the binary
 /// `pair` constructor.
 pub fn is_pair<A>(t: &Term<A>) -> bool {
     match t {
@@ -358,14 +357,14 @@ pub fn is_pair<A>(t: &Term<A>) -> bool {
 }
 
 /// `True` iff the term is a DH product `_*_`. Port of HS `isProduct`
-/// (Term/Term.hs:200-202, `viewTerm2 -> FMult _`): top symbol is the AC
+/// (Term/Term.hs, `viewTerm2 -> FMult _`): top symbol is the AC
 /// multiplication operator.
 pub fn is_product<A>(t: &Term<A>) -> bool {
     matches!(t, Term::App(FunSym::Ac(AcSym::Mult), _))
 }
 
 /// `True` iff the term is a well-formed inverse `inv(_)`. Port of HS `isInverse`
-/// (Term/Term.hs:195-197, `viewTerm2 -> FInv _`): the unary `inv` operator
+/// (Term/Term.hs, `viewTerm2 -> FInv _`): the unary `inv` operator
 /// applied to one argument.
 pub fn is_inverse<A>(t: &Term<A>) -> bool {
     match t {
@@ -378,7 +377,7 @@ pub fn is_inverse<A>(t: &Term<A>) -> bool {
 
 /// All "protected" subterms of `t`: subterms whose top symbol is a function
 /// that is neither a pair nor an AC operator. Port of HS `allProtSubterms`
-/// (Term/Term.hs:260-265) — pre-order, descending through pairs/AC operators.
+/// (Term/Term.hs) — pre-order, descending through pairs/AC operators.
 pub fn all_prot_subterms<A: Clone>(t: &Term<A>) -> Vec<Term<A>> {
     match t {
         Term::App(_, args) if is_pair(t) || is_ac(t) => {
@@ -434,7 +433,7 @@ pub trait TermSize {
     fn size(&self) -> usize;
 }
 
-// Port of `instance Sized a => Sized (Term a)` (Term/Term/Raw.hs:247-248).
+// Port of `instance Sized a => Sized (Term a)` (Term/Term/Raw.hs).
 impl<A: TermSize> TermSize for Term<A> {
     fn size(&self) -> usize {
         match self {
@@ -444,7 +443,7 @@ impl<A: TermSize> TermSize for Term<A> {
     }
 }
 
-// Port of `instance Sized (Lit c v) where size _ = 1` (VTerm.hs:95-96).
+// Port of `instance Sized (Lit c v) where size _ = 1` (VTerm.hs).
 // This is what makes `TermSize` reachable for real `VTerm`/`LNTerm`.
 impl<C, V> TermSize for crate::vterm::Lit<C, V> {
     fn size(&self) -> usize {
@@ -481,13 +480,13 @@ impl TermSize for &str {
 /// A term literal that renders through Haskell's `show`.
 ///
 /// The `Show a` constraint of HS `instance Show a => Show (Term a)`
-/// (Term/Term/Raw.hs:227-237).
+/// (Term/Term/Raw.hs).
 pub trait ShowLit {
     /// Append `show self` to `out`.
     fn show_into(&self, out: &mut String);
 }
 
-/// HS `instance Show a => Show (Term a)` (Term/Term/Raw.hs:227-237).
+/// HS `instance Show a => Show (Term a)` (Term/Term/Raw.hs).
 ///
 /// Every application is prefix and its arguments are separated by a bare comma;
 /// a `NoEq` or user-`AC` symbol applied to no arguments writes its name alone.
@@ -495,7 +494,7 @@ pub trait ShowLit {
 /// and `exp` applications keep their prefix form instead of turning into
 /// `<a, b>` and `a^b`, and each of the four builtin AC operators writes the
 /// `ACSym` constructor name its derived `Show` gives
-/// (Term/Term/FunctionSymbols.hs:138-139) instead of an infix operator.
+/// (Term/Term/FunctionSymbols.hs) instead of an infix operator.
 pub fn show_term<A: ShowLit>(t: &Term<A>) -> String {
     let mut out = String::new();
     write_show_term(t, &mut out);
@@ -824,7 +823,7 @@ mod tests {
     }
 
     /// Lit::Con < Lit::Var: constants sort before variables.
-    /// VTerm.hs:56: `data Lit c v = Con c | Var v`.
+    /// VTerm.hs: `data Lit c v = Con c | Var v`.
     ///
     /// This matters for `f_app_ac`/`f_app_c` argument sorting: if a
     /// term mixes constants and variables, constants always sort first.
@@ -851,7 +850,7 @@ mod tests {
         );
     }
 
-    /// `BVar::Bound < BVar::Free` from LTerm.hs:451-453 declaration order.
+    /// `BVar::Bound < BVar::Free` from LTerm.hs declaration order.
     /// `data BVar v = Bound Integer | Free v`
     ///
     /// This drives the BTreeMap key order for guarded-formula
@@ -866,11 +865,11 @@ mod tests {
         assert!(
             bound < free,
             "BVar::Bound must sort before BVar::Free \
-                 (Haskell LTerm.hs:451 declaration order)"
+                 (Haskell LTerm.hs declaration order)"
         );
     }
 
-    /// `fAppAC _ [] = error "Term.fAppAC: empty argument list"` (Raw.hs:120).
+    /// `fAppAC _ [] = error "Term.fAppAC: empty argument list"` (Raw.hs).
     /// The payload carries GHC's `displayException` text so the binary's hook
     /// can print it verbatim; the end-to-end stderr and exit code are pinned in
     /// `tamarin-prover/tests/ac_empty_args_error.rs`.
@@ -955,8 +954,7 @@ mod tests {
     }
 
     /// `FApp (NoEq (s,_)) [] -> BC.unpack s` and
-    /// `FApp (AC (ACfct (s,_))) [] -> BC.unpack s` (Term/Raw.hs:227-237, see
-    /// line 231): the two nullary arms write the name alone.
+    /// `FApp (AC (ACfct (s,_))) [] -> BC.unpack s` (Term/Raw.hs): the two nullary arms write the name alone.
     #[test]
     fn show_term_writes_a_nullary_symbol_without_parentheses() {
         let g: ShowT = f_app_no_eq(show_noeq(b"g", 0), vec![]);
@@ -965,7 +963,7 @@ mod tests {
         assert_eq!(show_term(&nil), "nil");
     }
 
-    /// `intercalate ","` (Term/Raw.hs:227-237, see line 232): no space follows
+    /// `intercalate ","` (Term/Raw.hs): no space follows
     /// a comma, and each argument is itself shown, so the form nests.
     #[test]
     fn show_term_writes_comma_separated_arguments() {
@@ -976,9 +974,9 @@ mod tests {
         assert_eq!(show_term(&outer), "k(h(x,y),x,LIST(y))");
     }
 
-    /// `FApp (AC o) as -> show o ++ …` (Term/Raw.hs:227-237, see line 237)
+    /// `FApp (AC o) as -> show o ++ …` (Term/Raw.hs)
     /// writes the derived `ACSym` constructor name
-    /// (Term/Term/FunctionSymbols.hs:138-139); the `ACfct` arm (see line 234)
+    /// (Term/Term/FunctionSymbols.hs); the `ACfct` arm
     /// writes the user symbol's own name instead.
     #[test]
     fn show_writes_an_ac_head_by_its_constructor_name() {

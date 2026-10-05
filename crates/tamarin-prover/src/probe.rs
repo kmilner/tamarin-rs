@@ -1,9 +1,8 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Installation self-probes — the port of HS `Main.Console.testProcess`
-//! (Console.hs:97-149) and the callers that drive it.
+//! (Console.hs) and the callers that drive it.
 //!
 //! HS runs every "is this tool here and does it work?" check through ONE
 //! combinator, so all of them share a report shape: an unterminated test-name
@@ -11,7 +10,7 @@
 //! block — the `Detailed results from testing '<prog>'` dump for a bad exit
 //! code / rejected output, the `caught exception while executing:` dump when
 //! the process cannot be started at all.  [`test_process`] is that combinator;
-//! [`ensure_maude`] (Console.hs:151-185), [`ensure_graph_viz_dot`] and
+//! [`ensure_maude`] (Console.hs), [`ensure_graph_viz_dot`] and
 //! [`ensure_graph_command`] are the callers.
 //!
 //! The maude probes are the only ones whose failure is fatal: `testProcess`'
@@ -29,7 +28,7 @@ use std::process::{Command, ExitStatus, Stdio};
 #[path = "probe_tests.rs"]
 pub(crate) mod tests;
 
-/// HS `commandLine` (Console.hs:94-95): `unwords $ prog : args`.
+/// HS `commandLine` (Console.hs): `unwords $ prog : args`.
 fn command_line(prog: &str, args: &[&str]) -> String {
     let mut s = String::from(prog);
     for a in args {
@@ -39,7 +38,7 @@ fn command_line(prog: &str, args: &[&str]) -> String {
     s
 }
 
-/// HS `testProcess`' `errMsg` block (Console.hs:114-121): the `reason`, then
+/// HS `testProcess`' `errMsg` block (Console.hs): the `reason`, then
 /// the `Detailed results` block echoing the command line and the three
 /// streams.  Every line is `putStrErrLn`-terminated, so `reason` — which HS's
 /// default messages build with `unlines`, i.e. already newline-terminated —
@@ -65,7 +64,7 @@ fn error_report(
     )
 }
 
-/// HS `testProcess`' `IOException` handler (Console.hs:139-149): the exception
+/// HS `testProcess`' `IOException` handler (Console.hs): the exception
 /// block, whose first line continues the unterminated test-name prefix
 /// [`test_process`] has already written.  The trailing blank line is
 /// `putStrErrLn ""`, which only the `maudeTest = False` branch reaches — a
@@ -148,7 +147,7 @@ fn read_process_with_exit_code(
     ))
 }
 
-/// HS `testProcess` (Console.hs:97-149) — the single process-probe combinator
+/// HS `testProcess` (Console.hs) — the single process-probe combinator
 /// every installation self-check goes through.
 ///
 /// `check` is HS's `String -> String -> Either String String` over (stdout,
@@ -160,7 +159,7 @@ fn read_process_with_exit_code(
 /// reason, which is checked before `check` runs unless `ignore_exit_code`.
 ///
 /// `maude_test` is HS's eighth argument: with it set, a spawn failure is not
-/// merely reported but raised as the GHC `error` at Console.hs:147, which
+/// merely reported but raised as the GHC `error` at Console.hs, which
 /// stops the whole run.
 ///
 /// `prog` is HS's `prog` — the name every report shows — and `exec` is the
@@ -185,7 +184,7 @@ fn test_process(
     maude_test: bool,
 ) -> Option<String> {
     // `putStrErr testName` then `hFlush stdout; hFlush stderr`
-    // (Console.hs:109-111): the flushes keep the probe lines ordered against
+    // (Console.hs): the flushes keep the probe lines ordered against
     // the caller's own stdout when both streams land in the same file.
     eprint!("{test_name}");
     let _ = std::io::stdout().flush();
@@ -200,14 +199,14 @@ fn test_process(
                 exception_report(prog, args, inp, &exception, maude_test)
             );
             if maude_test {
-                // Console.hs:146-147: the maude probes never return from here.
+                // Console.hs: the maude probes never return from here.
                 tamarin_term::term::hs_error(MAUDE_ABORT_MSG, MAUDE_ABORT_SITE.to_string());
             }
             return None;
         }
     };
 
-    // Console.hs:128-133: the exit code is consulted FIRST unless
+    // Console.hs: the exit code is consulted FIRST unless
     // `ignoreExitCode`, and its reason is `defaultMsg` — `check` never runs on
     // that path.
     let reason = if !ignore_exit_code && !status.success() {
@@ -229,7 +228,7 @@ fn test_process(
 }
 
 /// The message HS applies `error` to when a maude probe cannot start the tool
-/// (Console.hs:147).
+/// (Console.hs).
 const MAUDE_ABORT_MSG: &str = "Maude is not installed. Ensure Maude is available and on the path.";
 
 /// The `HasCallStack` frame that abort prints, as the pinned oracle renders
@@ -237,14 +236,14 @@ const MAUDE_ABORT_MSG: &str = "Maude is not installed. Ensure Maude is available
 /// The coordinates are oracle data — refresh them at a submodule bump.
 const MAUDE_ABORT_SITE: &str = "src/Main/Console.hs:147:9 in main:Main.Console";
 
-/// HS `ensureMaude`'s `supportedVersions` (Console.hs:176): the ` checking
+/// HS `ensureMaude`'s `supportedVersions` (Console.hs): the ` checking
 /// version: ` probe accepts these strings and no others.  2.7.0 and earlier
 /// are excluded upstream because their `get variants` command is incompatible.
 const SUPPORTED_MAUDE_VERSIONS: [&str; 10] = [
     "2.7.1", "3.0", "3.1", "3.2.1", "3.2.2", "3.3", "3.3.1", "3.4", "3.5", "3.5.1",
 ];
 
-/// HS `ensureMaude`'s local `errMsg` (Console.hs:180-185) — `unlines` of
+/// HS `ensureMaude`'s local `errMsg` (Console.hs) — `unlines` of
 /// `WARNING:`, a blank line, the caller's `reason` and the supported-version
 /// list, so the result already ends in a newline (which leaves a blank line
 /// before the `Detailed results` block that follows it).
@@ -258,7 +257,7 @@ fn maude_err_msg(reason: &str) -> String {
     )
 }
 
-/// HS `ensureMaude`'s `checkVersion` (Console.hs:164-167): `maude --version`'s
+/// HS `ensureMaude`'s `checkVersion` (Console.hs): `maude --version`'s
 /// stdout with TRAILING whitespace dropped (`reverse . dropWhile isSpace .
 /// reverse`) must be one of [`SUPPORTED_MAUDE_VERSIONS`].  The rejected string
 /// is echoed into the reason verbatim, however many lines it spans.
@@ -273,7 +272,7 @@ fn check_maude_version(out: &str) -> Result<String, String> {
     }
 }
 
-/// HS `ensureMaude`'s `checkInstall` (Console.hs:171-172): the interpreter run
+/// HS `ensureMaude`'s `checkInstall` (Console.hs): the interpreter run
 /// must leave stderr EMPTY — stdout (maude's banner) is ignored.  Anything on
 /// stderr becomes the `errMsg` reason as-is.
 fn check_maude_install(err: &str) -> Result<String, String> {
@@ -284,10 +283,10 @@ fn check_maude_install(err: &str) -> Result<String, String> {
     }
 }
 
-/// HS `ensureMaude` (Console.hs:151-185) — the maude probe every mode but
-/// `--parse-only` runs first: `test` (Test.hs:46), `variants` (Intruder.hs:45),
+/// HS `ensureMaude` (Console.hs) — the maude probe every mode but
+/// `--parse-only` runs first: `test` (Test.hs), `variants` (Intruder.hs),
 /// and `interactive`/batch through `ensureMaudeAndGetVersion`
-/// (Interactive.hs:103, Batch.hs:97/102/115).
+/// (Interactive.hs, Batch.hs).
 ///
 /// Two [`test_process`] calls with `maudeTest = True`: `maude --version` must
 /// report a supported version, and `maude` fed `quit\n` must run the
@@ -305,7 +304,7 @@ fn check_maude_install(err: &str) -> Result<String, String> {
 /// `unknown version\n` or `<version> (unsupported)\n`.
 pub(crate) fn ensure_maude(maude: &str, exec: &str) -> (bool, String) {
     eprintln!("maude tool: '{maude}'");
-    // HS `errMsg'` (Console.hs:178): one default message shared by both
+    // HS `errMsg'` (Console.hs): one default message shared by both
     // probes, reached only through the bad-exit-code reason.
     let default_msg = maude_err_msg(&format!("'{maude}' executable not found / does not work"));
     let version = test_process(
@@ -330,7 +329,7 @@ pub(crate) fn ensure_maude(maude: &str, exec: &str) -> (bool, String) {
         false,
         true,
     );
-    // Console.hs:156: HS re-runs `maude --version` a third time for the
+    // Console.hs: HS re-runs `maude --version` a third time for the
     // version data.  On the passing path that is the stdout the version probe
     // already returned, so only a failed version probe pays for the rerun.
     let out = match &version {
@@ -343,7 +342,7 @@ pub(crate) fn ensure_maude(maude: &str, exec: &str) -> (bool, String) {
         if out.is_empty() {
             (false, "unknown version\n".to_string())
         } else {
-            // HS `init out ++ " (unsupported)\n"` (Console.hs:159): `init`
+            // HS `init out ++ " (unsupported)\n"` (Console.hs): `init`
             // drops the version output's trailing newline.
             let mut unsupported = out;
             unsupported.pop();
@@ -355,7 +354,7 @@ pub(crate) fn ensure_maude(maude: &str, exec: &str) -> (bool, String) {
     }
 }
 
-/// HS `ensureGraphVizDot`'s `errMsg1` (Environment.hs:88-95) — the default
+/// HS `ensureGraphVizDot`'s `errMsg1` (Environment.hs) — the default
 /// message for a `dot -V` that exits non-zero.  `unlines`, so it ends in a
 /// newline.
 const ERR_MSG_NOT_GRAPHVIZ: &str = "WARNING:\n\
@@ -365,7 +364,7 @@ const ERR_MSG_NOT_GRAPHVIZ: &str = "WARNING:\n\
                                     \x20Please download an official version from:\n\
                                     \x20        http://www.graphviz.org/\n";
 
-/// HS `ensureGraphVizDot`'s `errMsg2` (Environment.hs:96-101) — the default
+/// HS `ensureGraphVizDot`'s `errMsg2` (Environment.hs) — the default
 /// message for a `dot -T?` that exits non-zero.  Unreachable in practice: the
 /// PNG probe passes `ignoreExitCode = True`, and `dot -T?` always fails.
 const ERR_MSG_NO_PNG: &str = "WARNING:\n\
@@ -373,11 +372,11 @@ const ERR_MSG_NO_PNG: &str = "WARNING:\n\
                               \x20The dot tool does not seem to support PNG.\n\
                               \x20Graph generation might not work.\n";
 
-/// HS `ensureGraphCommand`'s `errMsg` (Environment.hs:114-115), which doubles
+/// HS `ensureGraphCommand`'s `errMsg` (Environment.hs), which doubles
 /// as its `check` failure reason.  `unlines`, so it ends in a newline.
 const ERR_MSG_COMMAND_NOT_FOUND: &str = "Command not found\n";
 
-/// HS `ensureGraphVizDot`'s local `check` (Environment.hs:81-87): look for
+/// HS `ensureGraphVizDot`'s local `check` (Environment.hs): look for
 /// `needle` in the LOWERCASED stderr — stdout is ignored.  With an empty
 /// `ok_msg` the reported message is `init err' ++ ". OK."`, the lowercased
 /// banner with its LAST character dropped (`dot -V`'s trailing newline);
@@ -396,9 +395,9 @@ fn stderr_contains(needle: &str, ok_msg: &str, err: &str) -> Result<String, Stri
     Ok(format!("{banner}. OK."))
 }
 
-/// HS `ensureGraphVizDot` (Environment.hs:72-101) — the `--with-dot` probe,
-/// run at interactive startup (Interactive.hs:106-107) and by the `test`
-/// command (Test.hs:50).  Two [`test_process`] calls: `dot -V`'s stderr banner
+/// HS `ensureGraphVizDot` (Environment.hs) — the `--with-dot` probe,
+/// run at interactive startup (Interactive.hs) and by the `test`
+/// command (Test.hs).  Two [`test_process`] calls: `dot -V`'s stderr banner
 /// must mention `graphviz`, and — only if that passed — `dot -T?`'s must list
 /// `png`.  The PNG probe ignores the exit code, since `dot -T?` reports the
 /// format list by failing.
@@ -435,11 +434,11 @@ pub(crate) fn ensure_graph_viz_dot(dot: &str) -> Option<String> {
     }
 }
 
-/// HS `ensureGraphCommand` (Environment.hs:104-115) — the `--with-json`
+/// HS `ensureGraphCommand` (Environment.hs) — the `--with-json`
 /// startup probe, which shells out to `which` rather than running the tool.
 /// `Checking availablity ...` reproduces the upstream typo and, unlike the
 /// maude/dot checks, carries no leading space and no trailing newline.  The
-/// verdict is discarded by Interactive.hs:106-108, so this never aborts
+/// verdict is discarded by Interactive.hs, so this never aborts
 /// startup.
 pub(crate) fn ensure_graph_command(cmd: &str) -> Option<String> {
     eprintln!("Graph rendering command: {cmd}");

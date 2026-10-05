@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Proof-skeleton printer + Haskell `--output=` extractor for
 //! cross-checking that our proof trees structurally match
@@ -65,7 +64,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // Terminal-method handling: Sorry/Finished and SolveGoal/Simplify
     // /Induction with no children are leaves.  Haskell's prettyProof
     // emits `by <method>` as a single line for every leaf except
-    // `Finished Solved`, which prints bare (Theory/Proof.hs:1064-1066), so we
+    // `Finished Solved`, which prints bare (Theory/Proof.hs), so we
     // mirror that here — emit *just* the leaf line, skipping the separate
     // method-keyword line.
     if node.children.is_empty() {
@@ -77,7 +76,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
                 out.push_str(" */\n");
             }
             ProofMethod::Finished(MethodResult::Solved) => {
-                // Mirror HS `prettyProofMethod` (ProofMethod.hs:1174-1186, see line 1176):
+                // Mirror HS `prettyProofMethod` (ProofMethod.hs):
                 //   `keyword_ "SOLVED" <-> lineComment_ "trace found"`.
                 out.push_str(&pad);
                 out.push_str("SOLVED // trace found\n");
@@ -140,8 +139,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
     // On exists-trace lemmas only the trace-found path survives: when a
     // node's status rolls up to Solved (TraceFound), siblings that closed
     // Contradictory are elided.  In Haskell this pruning is done *before*
-    // printing, by `cutOnSolved*` -> `extractSolved` (Theory/Proof.hs:879-882,
-    // 920-923), which rebuilds the tree keeping one label per level;
+    // printing, by `cutOnSolved*` -> `extractSolved` (Theory/Proof.hs), which rebuilds the tree keeping one label per level;
     // `prettyProof` itself prints whatever tree it is handed.
     //
     // Mirror that pruning here so the skeleton diff is apples-to-apples.
@@ -156,10 +154,10 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
             .find(|(_, c)| c.status == NodeStatus::Solved)
         {
             Some((name, child)) => {
-                // Haskell's `extractSolved` (`Theory/Proof.hs:880-882`)
+                // Haskell's `extractSolved` (`Theory/Proof.hs`)
                 // keeps the survivor's label verbatim — including any
                 // `_case_N` dedup suffix appended by `uniqueListBy`
-                // (ProofMethod.hs:90-102, applied at :307) when the goal
+                // (ProofMethod.hs) when the goal
                 // originally had multiple cases sharing a rule name.
                 // Pass the name through unchanged.
                 vec![(name.as_str(), child)]
@@ -217,7 +215,7 @@ fn contradiction_label(
 ) -> String {
     use crate::constraint::solver::contradictions::Contradiction as K;
     // Strings are abbreviated mirrors of Haskell `prettyContradiction`
-    // (Contradictions.hs:487-506); see the case there for each variant.
+    // (Contradictions.hs); see the case there for each variant.
     // A few variants drop Haskell's interpolated detail (e.g. Haskell's
     // `"node " ++ show j ++ " after last node " ++ show i` becomes
     // `"node after last"`, `"non-injective facts " ++ show cex` becomes
@@ -421,10 +419,9 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     }
     // UNFINISHABLE leaf (reducible operator in subterm).  Haskell's
     // `prettyProof` prepends `by ` to this non-Solved finished leaf
-    // (ppCases ps [] at Theory/Proof.hs:1054-1075, see line 1065) and
+    // (ppCases ps [] at Theory/Proof.hs) and
     // `prettyProofMethod` emits `keyword_ "UNFINISHABLE" <-> lineComment_
-    // "reducible operator in subterm"` (ProofMethod.hs:1174-1186, see line
-    // 1178).  Our `render` emits the same line, so preserve it verbatim
+    // "reducible operator in subterm"` (ProofMethod.hs).  Our `render` emits the same line, so preserve it verbatim
     // instead of dropping it.
     if t.starts_with("UNFINISHABLE") || t.starts_with("by UNFINISHABLE") {
         return Some(format!(
@@ -434,7 +431,7 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     }
     if t.starts_with("SOLVED") || t == "by SOLVED" {
         // HS pretty-prints `keyword_ "SOLVED" <-> lineComment_ "trace found"`
-        // (ProofMethod.hs:1174-1186, see line 1176), so the raw line is `SOLVED // trace found`.
+        // (ProofMethod.hs), so the raw line is `SOLVED // trace found`.
         // Our `render` emits the same suffix; preserve it here so the diff
         // matches verbatim instead of treating the cosmetic comment as a
         // divergence.

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Deterministic test oracle for the `--oraclename` pin in tests/cli_e2e.rs.
 #
-# Contract (HS `oracleRanking`, ProofMethod.hs:604-620): argv[1] is the lemma
+# Contract (HS `oracleRanking`, ProofMethod.hs): argv[1] is the lemma
 # name, stdin carries one `<index>: <goal>` line per open goal, and stdout is
 # the list of indices to rank FIRST — anything not named keeps its incoming
 # order behind them.  This one ranks the LAST goal first, which is a different

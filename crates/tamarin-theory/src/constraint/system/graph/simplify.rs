@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Constraint.System.Graph.Simplification` —
 //! drops transitive `Less`-atoms and hides "transfer" nodes
@@ -24,7 +23,7 @@ use tamarin_term::lterm::{sort_of_lnterm, LNTerm, LSort};
 // Compression (compressSystem)
 // ---------------------------------------------------------------------
 
-/// Mirror of Haskell `compressSystem` (Simplification.hs:42-46).
+/// Mirror of Haskell `compressSystem` (Simplification.hs).
 /// Drops entailed less-atoms, then tries to hide each node in turn.
 pub fn compress_system(mut sys: RenderSystem) -> RenderSystem {
     sys = drop_entailed_ord_constraints(sys);
@@ -55,11 +54,11 @@ pub fn compress_system(mut sys: RenderSystem) -> RenderSystem {
 /// Drop `LessAtom`s that are implied by the edge relation.
 fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
     // Build adjacency from `rawEdgeRel` = edges ++ unsolvedChains
-    // (Simplification.hs:33-38, see line 37 / System.hs:1615-1618).
+    // (Simplification.hs / System.hs).
     let adj = build_raw_edge_adjacency(&sys);
     // HS `entailed (LessAtom from to _) = to `S.member` reachableSet [from] edges`
-    // (Simplification.hs:33-38, see line 38).  `Dag.reachableSet [from]` ALWAYS
-    // contains the start node `from` itself (DAG/Simple.hs:72-78: `visit` inserts
+    // (Simplification.hs).  `Dag.reachableSet [from]` ALWAYS
+    // contains the start node `from` itself (DAG/Simple.hs: `visit` inserts
     // `x` before recursing), so a REFLEXIVE atom (`from == to`) is unconditionally
     // entailed — hence dropped from the display graph.  `reachable` below is
     // strict-path (returns false for `from == to`), so the reflexive case must be
@@ -73,13 +72,13 @@ fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
 }
 
 /// Adjacency for `rawEdgeRel sys = edges ++ unsolvedChains sys`
-/// (System.hs:1615-1618).
+/// (System.hs).
 fn build_raw_edge_adjacency(sys: &System) -> BTreeMap<NodeId, Vec<NodeId>> {
     let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
     for e in &sys.edges {
         adj.entry(e.src.0).or_default().push(e.tgt.0);
     }
-    // `unsolvedChains` (System.hs:1603-1607) projected to node ids via
+    // `unsolvedChains` (System.hs) projected to node ids via
     // `nodeConcNode *** nodePremNode`.
     for (from, to) in sys.unsolved_chains() {
         adj.entry(from.0).or_default().push(to.0);
@@ -110,7 +109,7 @@ fn reachable(adj: &BTreeMap<NodeId, Vec<NodeId>>, from: &NodeId, to: &NodeId) ->
 }
 
 // ---------------------------------------------------------------------
-// tryHideNodeId — `Simplification.hs:85-152`
+// tryHideNodeId — `Simplification.hs`
 // ---------------------------------------------------------------------
 
 fn try_hide_node_id(v: &NodeId, sys: RenderSystem) -> RenderSystem {
@@ -149,7 +148,7 @@ fn mentioned_in_formulas(v: &NodeId, formulas: &[std::sync::Arc<crate::guarded::
 }
 
 // ---------------------------------------------------------------------
-// hideAction — `Simplification.hs:99-122`
+// hideAction — `Simplification.hs`
 // ---------------------------------------------------------------------
 
 fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, RenderSystem> {
@@ -238,7 +237,7 @@ fn eligible_term(t: &LNTerm) -> bool {
 }
 
 // ---------------------------------------------------------------------
-// hideRule — `Simplification.hs:124-152`
+// hideRule — `Simplification.hs`
 // ---------------------------------------------------------------------
 
 fn try_hide_rule(
@@ -317,7 +316,7 @@ fn try_hide_rule(
 }
 
 fn rule_eligible(ru: &RuleACInst) -> bool {
-    // HS `eligibleRule` (Simplification.hs:148-152):
+    // HS `eligibleRule` (Simplification.hs):
     //   any ($ ru) [isISendRule, isIRecvRule, isCoerceRule, isFreshRule]
     //   || ( null (get rActs ru) && all (\l -> length (get l ru) <= 1) [rPrems, rConcs] )
     // The `isFooRule` disjunction and the `null rActs && <=1 prem/conc` fallback
@@ -339,7 +338,7 @@ fn rule_eligible(ru: &RuleACInst) -> bool {
 }
 
 // ---------------------------------------------------------------------
-// simplifySystem — `Simplification.hs:53-57` + 61-74
+// simplifySystem — `Simplification.hs`
 // ---------------------------------------------------------------------
 
 /// Simplification levels — port of `SimplificationLevel`.
@@ -364,7 +363,7 @@ pub fn simplify_system(level: SimplificationLevel, sys: RenderSystem) -> RenderS
 }
 
 /// Transitive reduction of `sLessAtoms`.  Mirror of
-/// `Simplification.hs:61-74`.
+/// `Simplification.hs`.
 ///
 /// `total_red = True`  -> retain only `(x,y) ∈ transRed sLess`
 /// `total_red = False` -> retain `(x,y) ∈ transRed sLess` OR reason ∈ {Formula, Adversary}
@@ -373,9 +372,9 @@ pub fn simplify_system(level: SimplificationLevel, sys: RenderSystem) -> RenderS
 /// `simplifySystem` and `compressSystem`.
 fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
     // Haskell: `oldLesses = rawLessRel sys`, used for BOTH `Dag.cyclic`
-    // and `Dag.transRed` (Simplification.hs:61-74).  `rawLessRel se =
-    // getLessRel sLessAtoms ++ rawEdgeRel se` (System.hs:1623-1624), and
-    // `rawEdgeRel = edges ++ unsolvedChains` (System.hs:1615-1618).
+    // and `Dag.transRed` (Simplification.hs).  `rawLessRel se =
+    // getLessRel sLessAtoms ++ rawEdgeRel se` (System.hs), and
+    // `rawEdgeRel = edges ++ unsolvedChains` (System.hs).
     let mut old_lesses: Vec<(NodeId, NodeId)> = sys
         .less_atoms
         .iter()
@@ -386,7 +385,7 @@ fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
     }
     old_lesses.extend(sys.unsolved_chains().map(|(from, to)| (from.0, to.0)));
     // If there's a cycle in the combined graph we bail, matching Haskell's
-    // `Dag.cyclic` guard (Simplification.hs:61-74).
+    // `Dag.cyclic` guard (Simplification.hs).
     if tamarin_utils::dag::cyclic(&old_lesses) {
         return sys;
     }
@@ -503,7 +502,7 @@ mod tests {
     /// is ever a candidate for hiding.  The edges matter as much as the
     /// rules.  `tryHideRule` stops unless the counts of the in and out edges
     /// equal the counts of the premises and conclusions
-    /// (Simplification.hs:125-152).  An isolated node therefore survives,
+    /// (Simplification.hs).  An isolated node therefore survives,
     /// whatever its rule looks like.
     fn compressed_chain(middle: RuleACInst) -> (RenderSystem, [NodeId; 3]) {
         let kvar: LNTerm = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));

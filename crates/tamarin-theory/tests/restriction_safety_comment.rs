@@ -1,13 +1,12 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Byte-pins the `// safety formula` annotation a restriction carries.
 //!
-//! HS `prettyRestriction` (TheoryObject.hs:889-901, see line 894) prints
+//! HS `prettyRestriction` (TheoryObject.hs) prints
 //! `nest 2 (lineComment_ "safety formula")` under the restriction's formula
 //! iff `isSafetyFormula (formulaToGuarded_ expandedFormula)` holds, and
-//! `isSafetyFormula` (Guarded.hs:156-164) demands the guarded formula be
+//! `isSafetyFormula` (Guarded.hs) demands the guarded formula be
 //! CLOSED (`null (frees [gf0])`) as well as existential-free.  The three
 //! restrictions below cover the annotated case and both rejection reasons.
 //!

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Sapic.Annotation` from `lib/sapic/src/Sapic/Annotation.hs`.
 //!
@@ -42,13 +41,13 @@ pub(crate) struct ProcessAnnotation<V> {
     /// Variable identifying the state cell associated with this op.
     pub state_channel: Option<AnVar<V>>,
     /// Term marking the binding of a state-channel.  HS `isStateChannel ::
-    /// Maybe SapicTerm` (sapic/src/Sapic/Annotation.hs:48-60, see line 59): the
+    /// Maybe SapicTerm` (sapic/src/Sapic/Annotation.hs): the
     /// cell identifier this fresh `new StateChannel:channel` was introduced for.
     pub is_state_channel: Option<SapicTerm>,
 }
 
 /// HS `instance Monoid (ProcessAnnotation v)` sets `elseBranch` to `True` in
-/// `mempty` (sapic/src/Sapic/Annotation.hs:73-74), which no derive can
+/// `mempty` (sapic/src/Sapic/Annotation.hs), which no derive can
 /// express, and a derive would also demand `V: Default`.
 impl<V> Default for ProcessAnnotation<V> {
     fn default() -> Self {
@@ -104,11 +103,11 @@ impl<V> ProcessAnnotation<V> {
     }
 
     /// Combine two annotations, matching Haskell's
-    /// `Semigroup (ProcessAnnotation v)` (sapic/src/Sapic/Annotation.hs:76-86).
+    /// `Semigroup (ProcessAnnotation v)` (sapic/src/Sapic/Annotation.hs).
     ///
     /// The `AnVar` fields (`lock`, `unlock`, `secret_channel`,
     /// `state_channel`) are combined via `Maybe`'s `<>`, whose inner `AnVar`
-    /// `<>` is right-biased (`(<>) _ b = b`, sapic/src/Sapic/Annotation.hs:43-44),
+    /// `<>` is right-biased (`(<>) _ b = b`, sapic/src/Sapic/Annotation.hs),
     /// so when both are `Some` the *right* value wins (`other.X.or(self.X)`).
     /// `destructor_equation`/`is_state_channel` use Haskell `mayMerge`
     /// (left-biased on `Just`/`Just`), so they keep the *left* value
@@ -145,7 +144,7 @@ impl<V> GoodAnnotation for ProcessAnnotation<V> {
 /// `V` (typically `tamarin_term::lterm::LVar`).
 pub(crate) type AnnotatedProcess<V> = Process<ProcessAnnotation<V>, SapicLVar>;
 
-/// `toAnProcess` (sapic/src/Sapic/Annotation.hs:136-140): lift a parsed process into a
+/// `toAnProcess` (sapic/src/Sapic/Annotation.hs): lift a parsed process into a
 /// translation annotation by wrapping the parsed annotation in
 /// `ProcessAnnotation`.
 pub(crate) fn to_annotated<V>(
@@ -159,10 +158,10 @@ pub(crate) fn to_annotated<V>(
     })
 }
 
-/// `toProcess` (sapic/src/Sapic/Annotation.hs:142-145): drop the translation
+/// `toProcess` (sapic/src/Sapic/Annotation.hs): drop the translation
 /// annotations and recover the parsed-stage form — the inverse of
 /// [`to_annotated`].  `facts::to_rule` erases with it for the rule name and
-/// the `process=` attribute (Facts.hs:391).
+/// the `process=` attribute (Facts.hs).
 pub(crate) fn to_parsed<Ann: GoodAnnotation>(
     p: &Process<Ann, SapicLVar>,
 ) -> Process<ProcessParsedAnnotation, SapicLVar> {

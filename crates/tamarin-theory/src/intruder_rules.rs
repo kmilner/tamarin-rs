@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Tools.IntruderRules` from
 //! `lib/theory/src/Theory/Tools/IntruderRules.hs` — covers the
@@ -258,7 +257,7 @@ pub fn destruction_rules(
     out
 }
 
-/// `showFunSymName` (Term/Term.hs:286-296) — the plain-name rendering used for
+/// `showFunSymName` (Term/Term.hs) — the plain-name rendering used for
 /// intruder rule names and case names: user symbols print their own name; the
 /// builtin AC/C operators print their `*SymString` names.  Note `Union`
 /// renders as HS's `munSymString` ("mun"), NOT `unionSymString` ("union") —
@@ -423,10 +422,10 @@ fn private_constructor_rules(
 /// only structure a pair reject may rest on.
 ///
 /// `App` records the top symbol and the argument count exactly as HS
-/// `unifyRaw` (Term/Unification.hs:288-306) inspects them.  AC/C
+/// `unifyRaw` (Term/Unification.hs) inspects them.  AC/C
 /// applications with fewer than two arguments are [`TermShape::Opaque`]:
 /// HS states "we assume here that terms of the form mult(t) never occur"
-/// (Term/Unification.hs:299-301), so their unification behaviour is unpinned
+/// (Term/Unification.hs), so their unification behaviour is unpinned
 /// and no reject may rest on them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TermShape {
@@ -441,7 +440,7 @@ enum TermShape {
     Opaque,
 }
 
-/// HS `unifyRaw`'s function-application arms (Term/Unification.hs:288-306):
+/// HS `unifyRaw`'s function-application arms (Term/Unification.hs):
 /// only same-symbol pairs proceed — with equal argument counts outside the
 /// AC arm, which delays to Maude on symbol equality alone — plus the two
 /// natural-number arms that delay a nullary `natOne` against a `tplus` sum
@@ -472,18 +471,18 @@ impl TermShape {
         }
     }
 
-    /// No substitution `σ` that `isRenamingPerRule` (Theory/Model/Rule.hs:1163,1188)
+    /// No substitution `σ` that `isRenamingPerRule` (Theory/Model/Rule.hs)
     /// accepts can equate two terms of these shapes, so an equation between
     /// them forces the enclosing check to `False`.
     ///
     ///  * `App`/`App` and `App`/`Name` are decided by HS `unifyRaw`
-    ///    (Term/Unification.hs:283-306) alone: unification fails outright,
+    ///    (Term/Unification.hs) alone: unification fails outright,
     ///    so `unifs` is empty and `any isRenamingPerRule` is `False`.
     ///  * `Var` against `Name`/`App` needs the renaming test as well: `σ`
     ///    of a `Lit (Con _)`/`FApp` term is again a constant/application and
     ///    a variable is AC-equal only to itself, so `σ` must bind that
     ///    variable — which occurs in its rule, hence in `vars ru` — to a
-    ///    non-variable, and `isRenaming` (SubstVFresh.hs:148-149) demands
+    ///    non-variable, and `isRenaming` (SubstVFresh.hs) demands
     ///    every image be a variable.
     fn clashes_with(self, other: TermShape) -> bool {
         match (self, other) {
@@ -515,7 +514,7 @@ struct FactShape {
 impl FactShape {
     /// Some zipped term pair of the two facts cannot be equated.  The zip
     /// truncates, mirroring HS `matchFacts`' `zipWith Equal t1 t2`
-    /// (Theory/Model/Rule.hs:1168-1169).
+    /// (Theory/Model/Rule.hs).
     fn clashes_with(&self, other: &FactShape) -> bool {
         self.terms
             .iter()
@@ -543,13 +542,13 @@ impl FactShape {
 /// Every reject is a necessary condition of the check it guards: a pair the
 /// fingerprints reject is one on which
 /// [`equal_duplicate_rule_up_to_renaming`] (HS `equalDuplicateRuleUpToRenaming`,
-/// Theory/Model/Rule.hs:1178-1179) resp. [`equal_subset_rule_up_to_renaming`] (HS
-/// `equalSubsetRuleUpToRenaming`, Theory/Model/Rule.hs:1182-1198) provably answers
+/// Theory/Model/Rule.hs) resp. [`equal_subset_rule_up_to_renaming`] (HS
+/// `equalSubsetRuleUpToRenaming`, Theory/Model/Rule.hs) provably answers
 /// `False`, so the survivor set and its order are exactly those of the
 /// unguarded loop.  The three shape facts the rejects rest on are:
-///  1. HS `unifyRaw` (Term/Unification.hs:288-306) fails on a top-symbol
+///  1. HS `unifyRaw` (Term/Unification.hs) fails on a top-symbol
 ///     mismatch, so a clashing equation leaves `unifs` empty;
-///  2. `isRenaming` (SubstVFresh.hs:148-149) requires every image to be a
+///  2. `isRenaming` (SubstVFresh.hs) requires every image to be a
 ///     variable, so an accepted `σ` maps each rule's variables to variables;
 ///  3. such a `σ` preserves every term's top-level shape, so facts it
 ///     equates must agree on tag, term count and per-term shape.
@@ -581,9 +580,9 @@ impl RuleFingerprint {
     /// Necessary condition for `equal_duplicate_rule_up_to_renaming(r1, r2)`,
     /// with `self` the fingerprint of `r1` and `other` that of `r2`.
     ///
-    /// `renameAvoiding` (Theory/Model/Rule.hs:1179) only renames variables, so `r2`'s
+    /// `renameAvoiding` (Theory/Model/Rule.hs) only renames variables, so `r2`'s
     /// fingerprint describes the renamed-apart rule too.  HS
-    /// `equalRuleUpToRenamingIgnoringNames` (Theory/Model/Rule.hs:1157-1169) folds
+    /// `equalRuleUpToRenamingIgnoringNames` (Theory/Model/Rule.hs) folds
     /// `matchFacts` over `zip (pr1++co1++ac1) (pr2++co2++ac2)`, failing on a
     /// fact-tag mismatch and otherwise extending the equation set by
     /// `zipWith Equal t1 t2`; both zips truncate, and so do these.
@@ -597,7 +596,7 @@ impl RuleFingerprint {
     /// Necessary condition for `equal_subset_rule_up_to_renaming(r1, r2)`,
     /// with `self` the fingerprint of `r1` and `other` that of `r2`.  Two
     /// parts, mirroring HS `equalSubsetRuleUpToRenaming`
-    /// (Theory/Model/Rule.hs:1182-1198):
+    /// (Theory/Model/Rule.hs):
     ///  * `unifyLNFactEqs [Equal (head co2) (head co1)]` is empty — HS's
     ///    `[] -> False` — unless both rules have a conclusion, their tags and
     ///    term counts agree and their zipped terms do not clash;
@@ -659,7 +658,7 @@ impl RuleFingerprint {
 /// [`special_intruder_rules`], is never routed through here.
 ///
 /// Stage 1's subsumption arm depends on it: HS `equalSubsetRuleUpToRenaming`
-/// forces `head co2` / `head co1` (Theory/Model/Rule.hs:1184) and so `error`s on a
+/// forces `head co2` / `head co1` (Theory/Model/Rule.hs) and so `error`s on a
 /// conclusion-free rule, whereas [`equal_subset_rule_up_to_renaming`] returns
 /// `false` there — which reads as "not subsumed" and silently keeps a rule HS
 /// would have refused to process.  The `debug_assert!` below makes that state
@@ -724,7 +723,7 @@ fn minimize_intruder_rules(
         .collect()
 }
 
-/// `isDoublePremiseRule` (IntruderRules.hs:203-208).
+/// `isDoublePremiseRule` (IntruderRules.hs).
 ///
 /// Drops destructor rules whose first premise is `KD(t)` where `t` is a
 /// msg-var, conclusions are ground, no private function symbols appear
@@ -781,8 +780,8 @@ fn is_double_premise_rule(r: &IntrRuleAC) -> bool {
 
 /// `multisetIntruderRules` — port of Haskell's
 /// `Theory.Tools.IntruderRules.multisetIntruderRules`
-/// (`lib/theory/src/Theory/Tools/IntruderRules.hs:386-392`, with
-/// `mkDUnionRule` at 394-398 and `mkCUnionRule` at 439-443):
+/// (`lib/theory/src/Theory/Tools/IntruderRules.hs`, with
+/// `mkDUnionRule` and `mkCUnionRule`):
 ///
 /// ```haskell
 /// multisetIntruderRules = [mkDUnionRule [x_var, y_var] x_var,
@@ -1052,7 +1051,7 @@ pub fn construction_rules(
 // rules therefore arrive at the rule cache fully processed.
 // =============================================================================
 
-/// `isPrivateFunction` (Term/Term.hs:224-226): top-level function symbol is Private.
+/// `isPrivateFunction` (Term/Term.hs): top-level function symbol is Private.
 pub fn is_private_function(t: &LNTerm) -> bool {
     use tamarin_term::function_symbols::{NoEqSym, Privacy};
     use tamarin_term::term::Term;
@@ -1485,13 +1484,13 @@ fn variants_intruder_with(
     let cleaned: Vec<LNSubstVFresh> = raw_substs
         .into_iter()
         .map(|pairs| {
-            // HS-faithful `removeRenamings` (Maude/Types.hs:133-157, see line 144): HS's
+            // HS-faithful `removeRenamings` (Maude/Types.hs): HS's
             // `msubstToLSubstVFresh bindings substMaude` — applied to EVERY
-            // variant subst inside `variantsViaMaude` (Term/Maude/Process.hs:260-272, see line 271,
+            // variant subst inside `variantsViaMaude` (Term/Maude/Process.hs,
             // `map (msubstToLSubstVFresh bindings) <$> parseVariantsReply`) —
             // ends with `removeRenamings $ substFromListVFresh slist`, dropping
             // each entry whose image is a bare fresh Var with no other role in
-            // the substitution's range (`isRenamedVar`, SubstVFresh.hs:140-145).
+            // the substitution's range (`isRenamedVar`, SubstVFresh.hs).
             // RS's `maude.variants()` does NOT clean (the proving caller
             // `abstract_rule_and_variants` cleans it itself,
             // tools/rule_variants.rs), so we clean here to match HS.  The IDENTITY
@@ -1499,7 +1498,7 @@ fn variants_intruder_with(
             // `x0 --> #1` (a fresh witness); `removeRenamings` collapses it to
             // the EMPTY subst, so `freshToFreeAvoiding {}` is the identity and
             // the variant rule equals the base rule — which the `ruvariant /= ru`
-            // guard (IntruderRules.hs:354-360, see line 356) then drops.  Without this step the
+            // guard (IntruderRules.hs) then drops.  Without this step the
             // identity variants leak through as `{x0 -> x.N}`, yielding the two
             // extra base-case rules (+1 `d_inv` `KD(x)->KD(inv(x))` and
             // +1 `d_exp`) that over-produce 53 rules instead of HS's 51.
@@ -1612,7 +1611,7 @@ fn variants_intruder_with(
             }
         }
 
-        // Drop rules with single product-conclusion (IntruderRules.hs:362-364).
+        // Drop rules with single product-conclusion (IntruderRules.hs).
         let conc_terms: Vec<&LNTerm> = ruvariant
             .conclusions
             .iter()
@@ -1656,7 +1655,7 @@ fn variants_intruder_with(
 // =============================================================================
 // `dhIntruderRules` — port of
 // `Theory.Tools.IntruderRules.dhIntruderRules`
-// (IntruderRules.hs:290-342).
+// (IntruderRules.hs).
 //
 // HS shape:
 // ```haskell
@@ -1735,7 +1734,7 @@ fn intr_mk_empty(_: LNFact) -> Vec<LNFact> {
 }
 
 /// `dhIntruderRules` — compute the intruder rules for the Diffie-Hellman
-/// theory.  Direct mirror of HS `dhIntruderRules` (IntruderRules.hs:290-342).
+/// theory.  Direct mirror of HS `dhIntruderRules` (IntruderRules.hs).
 ///
 /// Returns 5 constructor rules (`_exp`, `_inv`, `_DH_neutral`, `_one`,
 /// `_mult`) plus the variants-expansion of 2 destructor rules
@@ -1743,18 +1742,18 @@ fn intr_mk_empty(_: LNFact) -> Vec<LNFact> {
 /// `DH_neutral` are only really applied in `diff` mode — in trace mode
 /// all such constraints are solved directly — but the constructors
 /// always appear in the message theory (mirrors HS comment at
-/// IntruderRules.hs:294-296).
+/// IntruderRules.hs).
 ///
 /// # Role: cache REGENERATOR (not the production runtime path)
 ///
 /// HS uses this function only inside `Main.Mode.Intruder.run`
-/// (src/Main/Mode/Intruder.hs:43-63, see line 48) to PRODUCE `data/intruder_variants_dh.spthy`:
+/// (src/Main/Mode/Intruder.hs) to PRODUCE `data/intruder_variants_dh.spthy`:
 /// ```haskell
 /// let dhRules = dhIntruderRules False `runReader` dhHnd
 /// ```
 /// The production theory-load path
 /// (`Main.TheoryLoader.addMessageDeductionRuleVariants`,
-/// TheoryLoader.hs:881-901) parses the CACHED file via
+/// TheoryLoader.hs) parses the CACHED file via
 /// `mkDhIntruderVariants` — see [`crate::intruder_variants::mk_dh_intruder_variants`].
 ///
 /// In production the Rust port likewise takes the cached-file path
@@ -1776,13 +1775,13 @@ pub fn dh_intruder_rules(
     };
 
     // `x_var_0 = varTerm (LVar "x" LSortMsg 0)` etc.
-    // IntruderRules.hs:306-307.
+    // IntruderRules.hs.
     let x_var_0 = var_term(LVar::new("x", LSort::Msg, 0));
     let x_var_1 = var_term(LVar::new("x", LSort::Msg, 1));
 
     // HS `expRule mkInfo kudFact mkAction`
     //   = Rule mkInfo [kudFact x_var_0, kuFact x_var_1] [kudFact (fAppExp ...)] (mkAction ...) []
-    // IntruderRules.hs:309-315.
+    // IntruderRules.hs.
     let exp_rule = |info: IntrRuleACInfo,
                     kud_fact: fn(LNTerm) -> LNFact,
                     mk_action: fn(LNFact) -> Vec<LNFact>|
@@ -1795,7 +1794,7 @@ pub fn dh_intruder_rules(
         Rule::new(info, vec![bfact, efact], vec![concfact], acts)
     };
 
-    // HS `multRule` — IntruderRules.hs:317-323.
+    // HS `multRule` — IntruderRules.hs.
     let mult_rule = |info: IntrRuleACInfo,
                      kud_fact: fn(LNTerm) -> LNFact,
                      mk_action: fn(LNFact) -> Vec<LNFact>|
@@ -1808,7 +1807,7 @@ pub fn dh_intruder_rules(
         Rule::new(info, vec![bfact, efact], vec![concfact], acts)
     };
 
-    // HS `invRule` — IntruderRules.hs:325-330.
+    // HS `invRule` — IntruderRules.hs.
     let inv_rule = |info: IntrRuleACInfo,
                     kud_fact: fn(LNTerm) -> LNFact,
                     mk_action: fn(LNFact) -> Vec<LNFact>|
@@ -1820,7 +1819,7 @@ pub fn dh_intruder_rules(
         Rule::new(info, vec![bfact], vec![concfact], acts)
     };
 
-    // HS `oneRule` — IntruderRules.hs:332-336.
+    // HS `oneRule` — IntruderRules.hs.
     let one_rule = |info: IntrRuleACInfo,
                     kud_fact: fn(LNTerm) -> LNFact,
                     mk_action: fn(LNFact) -> Vec<LNFact>|
@@ -1831,7 +1830,7 @@ pub fn dh_intruder_rules(
         Rule::new(info, vec![], vec![concfact], acts)
     };
 
-    // HS `dhNeutralRule` — IntruderRules.hs:338-342.
+    // HS `dhNeutralRule` — IntruderRules.hs.
     let dh_neutral_rule = |info: IntrRuleACInfo,
                            kud_fact: fn(LNTerm) -> LNFact,
                            mk_action: fn(LNFact) -> Vec<LNFact>|
@@ -1902,7 +1901,7 @@ pub fn dh_intruder_rules(
 
 // =============================================================================
 // `bpIntruderRules` — port of
-// `Theory.Tools.IntruderRules.bpIntruderRules` (IntruderRules.hs:449-478).
+// `Theory.Tools.IntruderRules.bpIntruderRules` (IntruderRules.hs).
 //
 // HS shape:
 // ```haskell
@@ -1927,14 +1926,14 @@ pub fn dh_intruder_rules(
 // NOTE the asymmetries vs `dhIntruderRules`:
 //   * `pmultRule`'s conclusion is `pmult(x_var_1, x_var_0)` — the args
 //     are SWAPPED relative to the premise order (HS `fAppPMult (x_var_1,
-//     x_var_0)`, IntruderRules.hs:464-470, see line 469).
+//     x_var_0)`, IntruderRules.hs).
 //   * `emapRule` uses `kud` (the KU/KD-fact constructor) for BOTH
 //     premises (`bfact = kud x0`, `efact = kud x1`), not `kuFact` for the
-//     second (IntruderRules.hs:475-476).
+//     second (IntruderRules.hs).
 //
 // # Role: runtime BP generator for the `variants` command ONLY
 //
-// HS's `variants` command (Main.Mode.Intruder.run, Intruder.hs:48-53)
+// HS's `variants` command (Main.Mode.Intruder.run, Intruder.hs)
 // generates `bpIntruderRules False` at RUNTIME against a fresh
 // `bpMaudeSig` handle.  On current Maude this differs from the STALE
 // cached `data/intruder_variants_bp.spthy`, which production PROVING
@@ -1943,7 +1942,7 @@ pub fn dh_intruder_rules(
 // must keep using the cached file.
 // =============================================================================
 /// `bpIntruderRules` — compute the bilinear-pairing intruder rules at
-/// runtime.  Direct mirror of HS `bpIntruderRules` (IntruderRules.hs:449-478).
+/// runtime.  Direct mirror of HS `bpIntruderRules` (IntruderRules.hs).
 ///
 /// Returns 2 constructor rules (`_pmult`, `_em`) plus the
 /// variants-expansion of the `_pmult` destructor (via plain
@@ -1960,11 +1959,11 @@ pub fn bp_intruder_rules(
     use tamarin_term::builtin::{emap, pmult};
     use tamarin_term::function_symbols::{pmult_sym, CSym, EMAP_SYM_STRING, PMULT_SYM_STRING};
 
-    // `x_var_0 = varTerm (LVar "x" LSortMsg 0)` etc. (IntruderRules.hs:461-462).
+    // `x_var_0 = varTerm (LVar "x" LSortMsg 0)` etc. (IntruderRules.hs).
     let x_var_0 = var_term(LVar::new("x", LSort::Msg, 0));
     let x_var_1 = var_term(LVar::new("x", LSort::Msg, 1));
 
-    // HS `pmultRule mkInfo kud mkAction` (IntruderRules.hs:464-470).
+    // HS `pmultRule mkInfo kud mkAction` (IntruderRules.hs).
     //   prems = [kud x0, kuFact x1]; conc = kud (pmult(x1, x0)).
     // The conclusion args are SWAPPED: `fAppPMult (x_var_1, x_var_0)`.
     let pmult_rule = |info: IntrRuleACInfo,
@@ -1979,7 +1978,7 @@ pub fn bp_intruder_rules(
         Rule::new(info, vec![bfact, efact], vec![concfact], acts)
     };
 
-    // HS `emapRule mkInfo kud mkAction` (IntruderRules.hs:472-478).
+    // HS `emapRule mkInfo kud mkAction` (IntruderRules.hs).
     //   prems = [kud x0, kud x1] (BOTH via kud); conc = kud (em(x0, x1)).
     let emap_rule = |info: IntrRuleACInfo,
                      kud_fact: fn(LNTerm) -> LNFact,
@@ -2094,7 +2093,7 @@ fn bp_variants_intruder(
 
     let variants = variants_intruder_with(maude, &minimize_variants, true, diff, ru);
 
-    // KD→KU post-process (IntruderRules.hs:489-494): if the first premise
+    // KD→KU post-process (IntruderRules.hs): if the first premise
     // is a KD-fact whose single arg is a bare Var, rewrite that premise's
     // tag KD→KU (keeping the same args/annotations); else the symmetric
     // case where the SECOND premise is the bare-Var KD-fact.

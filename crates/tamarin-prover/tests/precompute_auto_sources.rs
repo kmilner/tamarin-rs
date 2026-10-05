@@ -1,20 +1,19 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! End-to-end byte pins for the rule count of the `--precompute-only`
 //! document, with and without `--auto-sources`.
 //!
 //! HS `prettyPrecomputation` prints `length (L.get crProtocol rules)`
-//! (ClosedTheory.hs:553-575, see line 562).  `crProtocol` carries one entry per
+//! (ClosedTheory.hs).  `crProtocol` carries one entry per
 //! `ClosedProtoRule` of the closed theory plus the intruder rules that are
 //! neither construction nor destruction rules (`closeRuleCache`,
-//! CloseRule.hs:402-436).  When `--auto-sources` finds partial deconstructions
+//! CloseRule.hs).  When `--auto-sources` finds partial deconstructions
 //! in the refined sources, `closeTheoryWithMaude` closes over `unfoldRules
-//! items` (CloseRule.hs:56-64, see line 58), and `unfoldRules` maps
-//! `unfoldRuleVariants` over every rule item (CloseRule.hs:106-110), so a rule
+//! items` (CloseRule.hs), and `unfoldRules` maps
+//! `unfoldRuleVariants` over every rule item (CloseRule.hs), so a rule
 //! whose AC variant is non-trivial contributes one `ClosedProtoRule` per
-//! variant (`unfoldRuleVariants`, lib/theory/src/Rule.hs:63-78) rather than one
+//! variant (`unfoldRuleVariants`, lib/theory/src/Rule.hs) rather than one
 //! for the whole rule.
 //!
 //! No corpus file passes both flags, so neither the prove gate nor the pretty
@@ -25,7 +24,7 @@
 //! reads 4 twice and fails the second test alone.
 //!
 //! `--derivcheck-timeout=300` is on both runs because a derivation check that
-//! times out adds a wellformedness entry, and `ppWf` (Batch.hs:244-247) puts
+//! times out adds a wellformedness entry, and `ppWf` (Batch.hs) puts
 //! its WARNING line ahead of the stats.
 
 mod common;
@@ -40,7 +39,7 @@ const TMP_DIR: &str = "tamarin_prover_precompute_auto_sources";
 /// `senc(m, ~k)`.  Its `Out(sdec(x, ~k))` conclusion leaves the refined
 /// sources with partial deconstructions, the condition `--auto-sources` tests
 /// before it unfolds (`containsPartialDeconstructions`,
-/// lib/theory/src/Rule.hs:89-94).
+/// lib/theory/src/Rule.hs).
 const THEORY: &str = "theory AutoSourcesUnfold\nbegin\n\n\
                       builtins: symmetric-encryption\n\n\
                       rule Setup:\n  [ Fr(~k) ] --> [ !Key(~k) ]\n\n\
@@ -60,7 +59,7 @@ fn precompute_stdout(stem: &str, extra: &[&str]) -> String {
 }
 
 /// The two rule items close into two `ClosedProtoRule`s — `variantsProtoRule`
-/// parks `Dec`'s two variants inside one of them (lib/theory/src/Rule.hs:84) —
+/// parks `Dec`'s two variants inside one of them (lib/theory/src/Rule.hs) —
 /// plus the two intruder members of `crProtocol`.
 #[test]
 fn precompute_counts_the_closed_protocol_rules() {

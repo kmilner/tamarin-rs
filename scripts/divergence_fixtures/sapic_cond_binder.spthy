@@ -2,11 +2,11 @@
 // of the same name.
 //
 // `quantify` closes a free variable into `Bound i` by comparing the whole
-// variable (Theory/Model/Formula.hs:346-352#quantify), and the printer opens
+// variable (Theory/Model/Formula.hs#quantify), and the printer opens
 // it again with a name `freshLVar` picks against the formula's own supply
-// (Theory/Model/Formula.hs:274-291#openFormula, reached from
-// Theory/Model/Formula.hs:474-514#prettyLFormula and seeded by `avoidPrecise`
-// at Theory/Model/Formula.hs:523-525#prettySyntacticLNFormula).  So the two
+// (Theory/Model/Formula.hs#openFormula, reached from
+// Theory/Model/Formula.hs#prettyLFormula and seeded by `avoidPrecise`
+// at Theory/Model/Formula.hs#prettySyntacticLNFormula).  So the two
 // branches print as
 //
 //   if (∃ y. Eq( y, x.1 )) ∧ (Eq( x.1, 'a' ))
@@ -15,7 +15,7 @@
 // — the first binder keeps its written name beside the free `x.1` of the
 // `in`, and the second binder, written with the free variable's own name, is
 // opened as `x.2` and cannot collide with it.  The rule names derived from
-// those strings (Sapic/Facts.hs:401#stripNonAlphanumerical) carry the binder
+// those strings (Sapic/Facts.hs#stripNonAlphanumerical) carry the binder
 // names as well: `ifyEqyxEqxa_0_11` and `ifxEqxbEqxa_0_12`.
 //
 // Mode `match`: the two engines agree on this shape, and the row exists so

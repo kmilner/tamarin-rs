@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Function declaration validation and theory closing boundaries.
 
@@ -12,8 +11,8 @@ fn decl_theory(decl: &str) -> String {
     format!("theory T begin\n\nfunctions: {decl}\n\nend\n")
 }
 
-/// HS `function` reaches the `IsAC` arity `fail` (Parser/Signature.hs:220) only
-/// through the `_` case of the conflict check at Parser/Signature.hs:212-217, so a
+/// HS `function` reaches the `IsAC` arity `fail` (Parser/Signature.hs) only
+/// through the `_` case of the conflict check at Parser/Signature.hs, so a
 /// name already in the signature reports THAT diagnostic instead.
 #[test]
 fn redeclaration_conflict_outranks_the_ac_arity_check() {
@@ -46,8 +45,8 @@ fn redeclaration_conflict_outranks_the_ac_arity_check() {
     ));
 }
 
-/// Parser/Signature.hs:213 exempts a `fst`/`snd` re-declaration at the pair
-/// projections' own shape, and :217 then returns the EXISTING symbol
+/// Parser/Signature.hs exempts a `fst`/`snd` re-declaration at the pair
+/// projections' own shape, then returns the EXISTING symbol
 /// `NoEqUser (f, kp')` — so the arity check never runs, `[AC]` is dropped, and
 /// the whole requested option tuple gives way to the builtin pair projection's
 /// `(1, Public, Constructor, NotNDC)`.  The oracle accepts `fst/1 [AC]` and
@@ -117,11 +116,11 @@ fn malformed_function_types_point_at_the_invalid_token() {
 }
 
 /// Trailing content after the closing `end` is ignored: HS runs the theory
-/// parser WITHOUT `eof` (`runParser (whiteSpace *> parser) …`, Token.hs:247-248),
+/// parser WITHOUT `eof` (`runParser (whiteSpace *> parser) …`, Token.hs),
 /// so whatever follows is left unconsumed and discarded.
 ///
 /// DELIBERATE DIVERGENCE on `endd`/`endx`/`endrule …`.  HS's `symbol_ "end"`
-/// (Text/Parser.hs:243,245) is `try (T.symbol spthy "end")` (Token.hs:272-273), a
+/// (Text/Parser.hs) is `try (T.symbol spthy "end")` (Token.hs), a
 /// plain `string` with no word boundary, so it PREFIX-matches the identifier
 /// and the remainder becomes ignored trailing input: the pinned oracle accepts
 /// `… endrule R2: [ ] --[ ]-> [ ]` at exit 0 and silently drops the rule.  This

@@ -2,14 +2,14 @@
 //
 // A nullary application is neither a literal nor a parenthesised call: HS
 // `prettyTerm` matches `FApp (NoEq (f, _)) []` before the general `ppFun` case
-// and prints the bare name (Term/Term.hs:314), so `nil` carries no `()`.  A
+// and prints the bare name (Term/Term.hs), so `nil` carries no `()`.  A
 // condition is a FORMULA, so `prettySapicComb (Cond a)` renders it with
-// `prettySyntacticSapicFormula` (Theory/Sapic/Process.hs:476) rather than the
+// `prettySyntacticSapicFormula` (Theory/Sapic/Process.hs) rather than the
 // term printer a `let` right-hand side uses, and everything the translation
 // derives from the step reads off that one rendering:
 //
 //   - the rule name, `filter isAlpha` over `prettySapicTopLevel`
-//     (HS `toRule`, Sapic/Facts.hs:384,401), so the bare `nil` contributes its
+//     (HS `toRule`, Sapic/Facts.hs), so the bare `nil` contributes its
 //     three letters and the names end `…nilk_0_1` / `…nilk_1_1`.  A
 //     parenthesised or dropped nullary spells them otherwise, and the
 //     restriction names are `Restr_` ++ the rule name;

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Wellformedness checks over a Tamarin theory.
 //!
@@ -14,7 +13,7 @@
 //! and [`equations`] the subterm-convergence warning.
 //!
 //! [`check_wellformedness`] is HS's `checkWellformedness`
-//! (Wellformedness.hs:1270-1286): one pass over the translated theory that
+//! (Wellformedness.hs): one pass over the translated theory that
 //! runs the checks in the order of HS's list literal.  Both drivers — the
 //! batch CLI (`run.rs`) and the web server's theory load (`theory_io.rs`) —
 //! call it once, after the SAPIC and accountability translations, so the
@@ -74,7 +73,7 @@ impl WfError {
 
     /// A `WfError` whose body is a ready `Doc`, framed the way
     /// `prettyWfErrorReport` frames a topic group: `text topic $-$ nest 2
-    /// body` (Wellformedness.hs:118-125), rendered into
+    /// body` (Wellformedness.hs), rendered into
     /// [`WfError::message`].
     pub fn block(topic: impl Into<String>, body: Doc) -> Self {
         let topic = topic.into();
@@ -86,30 +85,30 @@ impl WfError {
 
     /// A `WfError` whose body is HS's `text info $-$ nest 2 (fsep $ punctuate
     /// comma cells)` paragraph fill — `unboundCheck`
-    /// (Wellformedness.hs:497-498), `reservedFactNameRules'`
-    /// (Wellformedness.hs:546) and `specialFactsUsage'`
-    /// (Wellformedness.hs:563).
+    /// (Wellformedness.hs), `reservedFactNameRules'`
+    /// (Wellformedness.hs) and `specialFactsUsage'`
+    /// (Wellformedness.hs).
     ///
     /// HS builds such a body as ONE `Doc` and lets the layout engine break it,
     /// so a cell that overruns the ribbon does not merely get a line of its
     /// own: it breaks at its OWN `sep`/`fsep`/`fcat` points, dropping
     /// `prettyLNFact`'s closing `)` onto the next line and refilling the
     /// argument list at the `nestShort'` indent
-    /// (Text/PrettyPrint/Class.hs:218-223).  `cells` are those documents —
-    /// `prettyLNFact` (Theory/Model/Fact.hs:567-574) or `prettyLVar`
-    /// (`prettyVarList`, TheoryObject.hs:858-859) — and the body is laid out
+    /// (Text/PrettyPrint/Class.hs).  `cells` are those documents —
+    /// `prettyLNFact` (Theory/Model/Fact.hs) or `prettyLVar`
+    /// (`prettyVarList`, TheoryObject.hs) — and the body is laid out
     /// here, into [`WfError::message`].
     ///
     /// `info` is HS's `text info`, the body's first line; the `nest 2`
     /// `prettyWfErrorReport` applies to every body of a topic group
-    /// (Wellformedness.hs:118-125) is baked in, because the break decisions
+    /// (Wellformedness.hs) is baked in, because the break decisions
     /// depend on the body's absolute column.
     pub fn filled(topic: impl Into<String>, info: impl Into<String>, cells: Vec<Doc>) -> Self {
         // HS `fsep $ punctuate comma cells` with `comma = char ','`
-        // (Text/PrettyPrint/Class.hs:121).
+        // (Text/PrettyPrint/Class.hs).
         let list = hpj::fsep(hpj::punctuate(Doc::char(','), cells));
         // `above_g` is HughesPJ's `$+$`, which HS's `$-$` maps to
-        // (Text/PrettyPrint/Class.hs:180); `info` is a single `text` (its
+        // (Text/PrettyPrint/Class.hs); `info` is a single `text` (its
         // `<->` join cannot break), so it keeps its trailing spaces on the
         // line above the fill.
         let message = Doc::text(info.into())
@@ -124,7 +123,7 @@ impl WfError {
 }
 
 /// `lineLength` of the style HughesPJ's `render` uses, reached from HS through
-/// `addComment`'s `render` (TheoryObject.hs:717-718).
+/// `addComment`'s `render` (TheoryObject.hs).
 const WF_LINE_LENGTH: usize = 100;
 /// `ribbonLen = round (100 / 1.5) = 67` for [`WF_LINE_LENGTH`].
 const WF_RIBBON: usize = 67;
@@ -135,17 +134,17 @@ pub type WfReport = Vec<WfError>;
 // The pass
 // =============================================================================
 
-/// Port of HS `checkWellformedness` (Wellformedness.hs:1270-1286): every
+/// Port of HS `checkWellformedness` (Wellformedness.hs): every
 /// check of HS's list literal, run once over the TRANSLATED theory, in that
 /// list's order.
 ///
 /// HS's `incompleteMSRs :: Bool` is a literal `False` at its only call site
-/// (`checkTranslatedTheory`, TheoryLoader.hs:602), so `factReports`' two
+/// (`checkTranslatedTheory`, TheoryLoader.hs), so `factReports`' two
 /// `inexistentActions` arms are unreachable and stay unported; the parameter
 /// is absent here.  HS's `SignatureWithMaude` argument reaches only
 /// `ruleVariantsReport`; every other check that needs the signature reads it
 /// off the theory (`get (sigpMaudeSig . thySignature) thy`,
-/// Wellformedness.hs:1003, :1113, :1211-1214), which is what
+/// Wellformedness.hs), which is what
 /// `thy.signature` is here.
 ///
 /// `ruleVariantsReport` (HS position 6) is the one check that needs a live
@@ -180,20 +179,20 @@ pub fn topics(report: &WfReport) -> BTreeSet<String> {
 // Helpers — rules and report formatting
 // =============================================================================
 
-/// HS `thyProtoRules` (Wellformedness.hs:133-134): the macro-applied E-rule
+/// HS `thyProtoRules` (Wellformedness.hs): the macro-applied E-rule
 /// of every rule item, in item order.
 fn thy_proto_rules(thy: &Theory) -> impl Iterator<Item = &ProtoRuleE> {
     thy.rules().map(|opr| &opr.rule)
 }
 
-/// HS `showRuleCaseName` (Theory/Model/Rule.hs:1337-1340): `render
+/// HS `showRuleCaseName` (Theory/Model/Rule.hs): `render
 /// . ruleInfo prettyProtoRuleName prettyIntrRuleACInfo . ruleName`, whose
 /// protocol-rule arm is all a [`ProtoRuleE`] reaches.
 fn show_rule_case_name(ru: &ProtoRuleE) -> String {
     pretty_proto_rule_name(&ru.info.name).render()
 }
 
-/// HS `quote cs = '`' : cs ++ "'"` (Wellformedness.hs:164-165).
+/// HS `quote cs = '`' : cs ++ "'"` (Wellformedness.hs).
 fn quote(s: &str) -> String {
     format!("`{}'", s)
 }
@@ -214,7 +213,7 @@ pub fn underline_topic(title: &str) -> String {
 }
 
 /// HS `numbered'` index width: `nWidth = length (show n)` where `n` is the
-/// number of items (PrettyPrint/Class.hs:257-258).  Each index is rendered as
+/// number of items (PrettyPrint/Class.hs).  Each index is rendered as
 /// `flushRight nWidth (show i)` — i.e. left-padded with spaces to this width —
 /// so a 1-of-10+ list prints ` 1.`…`10.`.
 fn numbered_index_width(count: usize) -> usize {

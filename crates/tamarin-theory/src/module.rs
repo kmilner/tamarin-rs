@@ -1,18 +1,17 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Module` — the `--output-module` / `-m` selector.
 //!
-//! HS `ModuleType` (Theory/Module.hs:16-25) derives `Enum`/`Bounded`, and
-//! `moduleList` (Batch.hs:83-84) renders `[minBound ..]` with `show` to build
+//! HS `ModuleType` (Theory/Module.hs) derives `Enum`/`Bounded`, and
+//! `moduleList` (Batch.hs) renders `[minBound ..]` with `show` to build
 //! the flag's placeholder `spthytyped|spthy|msr|proverifequiv|proverif|deepsec`
 //! — which `tamarin-prover`'s help text spells out literally rather than
 //! deriving.  The declaration order is load-bearing twice over: it fixes that
-//! placeholder and, per the upstream comment (Theory/Module.hs:17-18), keeps
+//! placeholder and, per the upstream comment (Theory/Module.hs), keeps
 //! no `show` value a prefix of a later one.
 
-/// HS `ModuleType` (Theory/Module.hs:16-25).
+/// HS `ModuleType` (Theory/Module.hs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ModuleType {
     /// `spthytyped` — spthy with the SAPIC type inference applied.
@@ -30,7 +29,7 @@ pub enum ModuleType {
 }
 
 impl ModuleType {
-    /// HS `moduleConstructors = enumFrom minBound` (Batch.hs:83).
+    /// HS `moduleConstructors = enumFrom minBound` (Batch.hs).
     pub const ALL: [ModuleType; 6] = [
         ModuleType::SpthyTyped,
         ModuleType::Spthy,
@@ -40,7 +39,7 @@ impl ModuleType {
         ModuleType::DeepSec,
     ];
 
-    /// HS `show` (Theory/Module.hs:27-33).
+    /// HS `show` (Theory/Module.hs).
     pub fn as_str(self) -> &'static str {
         match self {
             ModuleType::SpthyTyped => "spthytyped",
@@ -52,7 +51,7 @@ impl ModuleType {
         }
     }
 
-    /// HS `find ((str ==) . show) [minBound ..]` (TheoryLoader.hs:373-376):
+    /// HS `find ((str ==) . show) [minBound ..]` (TheoryLoader.hs):
     /// exact match against the `show` strings, no prefixes and no aliases.
     /// `None` is HS's `ArgumentError "output mode not supported."`.
     pub fn from_show(s: &str) -> Option<ModuleType> {
@@ -94,7 +93,7 @@ mod tests {
     #[test]
     fn no_show_value_is_a_prefix_of_a_later_one() {
         // The invariant the upstream declaration order documents
-        // (Theory/Module.hs:17-18).
+        // (Theory/Module.hs).
         for (i, a) in ModuleType::ALL.iter().enumerate() {
             for b in &ModuleType::ALL[i + 1..] {
                 assert!(

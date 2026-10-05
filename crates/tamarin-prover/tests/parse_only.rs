@@ -1,12 +1,11 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! `--parse-only` end-to-end byte pins.
 //!
-//! HS `--parse-only` (Batch.hs:91-95) parses each input file (`loadTheory`,
+//! HS `--parse-only` (Batch.hs) parses each input file (`loadTheory`,
 //! which emits the `[Theory X] Theory loaded` traceM on stderr —
-//! TheoryLoader.hs:451), then prints `prettyOpenTheory` for each via
+//! TheoryLoader.hs), then prints `prettyOpenTheory` for each via
 //! `putStrLn . renderDoc` on STDOUT — no Maude banner, no wellformedness, no
 //! `summary of summaries`, and NO output files (`-o`/`-O` are ignored by that
 //! branch).  Every expected string below is the byte-exact stdout/stderr of
@@ -873,7 +872,7 @@ end
 
 /// Two input files: one doc per file, each `putStrLn`-terminated, docs abut
 /// with no extra blank line; the stderr markers all precede the stdout docs
-/// (HS processes every file before printing — Batch.hs:91-95).
+/// (HS processes every file before printing — Batch.hs).
 #[test]
 fn multi_file_docs_concatenate() {
     assert_transcript(
@@ -949,7 +948,7 @@ end
 
 /// Legacy `axiom` items: parsed as restrictions and echoed as `restriction`,
 /// with HS's `Debug.Trace` deprecation warning on stderr ahead of the
-/// `Theory loaded` markers (Theory/Text/Parser/Restriction.hs:88-92).  The
+/// `Theory loaded` markers (Theory/Text/Parser/Restriction.hs).  The
 /// traced value is a shared CAF, so THREE axioms across TWO files still print
 /// the line exactly once; a real `restriction` never prints it.
 #[test]
@@ -1086,8 +1085,8 @@ end
 
 /// A `_restrict` action atom whose time point is FREE.  HS's `Traversable
 /// (ProtoAtom s)` is `Action <$> f i <*> traverse f fa`
-/// (Theory/Model/Atom.hs:139-140) and its `Foldable` folds in the same order
-/// (Theory/Model/Atom.hs:130-131), so `rewrite` abstracts the time point into
+/// (Theory/Model/Atom.hs) and its `Foldable` folds in the same order
+/// (Theory/Model/Atom.hs), so `rewrite` abstracts the time point into
 /// the first fresh variable and `freesList` puts it first in the generated
 /// fact: the restriction reads `Restr_A_1( x, x.1 )` over `B( x.1 ) @ x`, and
 /// the rule's appended action reads `Restr_A_1( #i, f(x, y) )`.  A `_restrict`
@@ -1137,12 +1136,12 @@ end
 }
 
 /// A predicate use site whose argument names a variable the predicate body
-/// also binds.  HS `expandFormula` (Theory/Syntactic/Predicate.hs:82-105)
+/// also binds.  HS `expandFormula` (Theory/Syntactic/Predicate.hs)
 /// splices the body under `compSubst`'s De Bruijn shift and renames nothing,
 /// so the two stay apart — the body's binder is an index, the use-site `z` is
 /// free — and the printer gives the binder the next display index, `z.1`.
 /// The multiset `(<)` reaches the same expansion through the built-in
-/// `Smaller` predicate (Theory/Text/Parser/Formula.hs:30-38), whose body binds
+/// `Smaller` predicate (Theory/Text/Parser/Formula.hs), whose body binds
 /// `z` as well.  Both the quoted lemma formula and its guarded block carry
 /// that spelling.
 #[test]
@@ -1206,9 +1205,8 @@ end
 /// The open theory's lemma and restriction carry the formula as the source
 /// wrote it: HS's `_lOriginalFormula` / `_rstrOriginalFormula` are `Nothing`
 /// before `applyMacroInLemma` / `applyMacroInRestriction` run at close time
-/// (lib/theory/src/Lemma.hs:83-88, Theory/Model/Restriction.hs:164-166), so
-/// `prettyLemma`'s quoted line and guarded block (lib/theory/src/Lemma.hs:
-/// 116-141) and `prettyRestriction`'s body (TheoryObject.hs:889-901) all show
+/// (lib/theory/src/Lemma.hs, Theory/Model/Restriction.hs), so
+/// `prettyLemma`'s quoted line and guarded block (lib/theory/src/Lemma.hs) and `prettyRestriction`'s body (TheoryObject.hs) all show
 /// the macro CALL, and the `expanded formula:` block that block's `Just _`
 /// guard controls is not written.
 #[test]
@@ -1273,9 +1271,9 @@ end
 
 /// A rule written with a manual `variants (modulo AC)` block, which the parser
 /// stores as the rule item's `_oprRuleAC` list (`protoRule`,
-/// Theory/Text/Parser/Rule.hs:126-135).  `prettyOpenProtoRule`
-/// (OpenTheory.hs:814-820) prints several variants under `kwVariants` — the
-/// bare `variants` keyword (Theory/Text/Pretty.hs:146) — below the E rule, and
+/// Theory/Text/Parser/Rule.hs).  `prettyOpenProtoRule`
+/// (OpenTheory.hs) prints several variants under `kwVariants` — the
+/// bare `variants` keyword (Theory/Text/Pretty.hs) — below the E rule, and
 /// prints a LONE variant through `prettyProtoRuleACasE`, which shows the
 /// variant's own name and body in place of the E rule's.
 #[test]

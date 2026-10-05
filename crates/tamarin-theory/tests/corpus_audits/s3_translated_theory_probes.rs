@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Corpus probes over the TRANSLATED theory — the internal theory as the
 //! driver leaves it after `elaborate`, `apply_sapic` and
@@ -12,8 +11,8 @@
 //! stores — `_lFormula` / `_rstrFormula`, macro- and predicate-expanded, and
 //! the `_lOriginalFormula` / `_rstrOriginalFormula` that
 //! `applyMacroInLemma` / `applyMacroInRestriction` record for every item of a
-//! closed theory (lib/theory/src/Lemma.hs:83-89,
-//! Theory/Model/Restriction.hs:164-166).
+//! closed theory (lib/theory/src/Lemma.hs,
+//! Theory/Model/Restriction.hs).
 //! `every_translated_item_has_one_lookup` checks the lookup a printer that
 //! reads an item by name depends on (`Theory::lookup_lemma` /
 //! `lookup_restriction`) over everything the two translations add.
@@ -118,7 +117,7 @@ fn items(thy: &Theory) -> Vec<(String, &LNFormula, Option<&LNFormula>)> {
 /// each is present and renders, which walks every atom and term it holds.
 /// The original one is what HS's `applyMacroInLemma` /
 /// `applyMacroInRestriction` fill in for every item of a closed theory, the
-/// injected ones included (CloseRule.hs:82-85).
+/// injected ones included (CloseRule.hs).
 fn probe_formulas(thy: &Theory, at: &dyn Fn(&str) -> String) -> Vec<String> {
     let mut out = Vec::new();
     for (label, formula, original) in items(thy) {
@@ -156,9 +155,9 @@ fn item_names(thy: &Theory) -> Vec<(&'static str, &str)> {
 /// `lookup_restriction` performs.  A name the translations leave alone keeps
 /// whatever multiplicity the source gave it: a diff theory declares one name
 /// per side, HS keys those by `(Side, name)` (`EitherLemmaItem` /
-/// `EitherRestrictionItem`, Items/TheoryItem.hs:78-79), and the flat internal
+/// `EitherRestrictionItem`, Items/TheoryItem.hs), and the flat internal
 /// theory holds both — it carries no side attribute, the non-diff restriction
-/// parser accepting none (Theory/Text/Parser/Restriction.hs:77-81).  Returns
+/// parser accepting none (Theory/Text/Parser/Restriction.hs).  Returns
 /// the findings, the number of names looked up and the number carried over
 /// untouched.
 fn probe_lookups(

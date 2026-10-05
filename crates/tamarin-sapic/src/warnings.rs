@@ -1,18 +1,17 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Sapic.Warnings` (`lib/sapic/src/Sapic/Warnings.hs`).
 //!
 //! `checkWellformedness = concatMap (toWfErrorReport . warnProcess) . theoryProcesses`
-//! (Warnings.hs:37-38) runs the SAPIC-specific wellformedness checks on every
+//! (Warnings.hs) runs the SAPIC-specific wellformedness checks on every
 //! `process:` of an `OpenTheory`, *after parsing but before annotation /
 //! `typeTheory`* — i.e. on the `Process ProcessParsedAnnotation SapicLVar`.
 //!
 //! `warnProcess p = map WFBoundTwice (capturedVariables p) <> toList (checkLocks p)`
-//! (Warnings.hs:17-21).  Each `WFerror` becomes a report pair
+//! (Warnings.hs).  Each `WFerror` becomes a report pair
 //! `("Wellformedness-error in Process", show e)` (`toWfErrorReport`,
-//! Warnings.hs:24-27).
+//! Warnings.hs).
 //!
 //! Currently ported: the **bound-twice** check (`map WFBoundTwice
 //! (capturedVariables p)`).  `checkLocks` (the sibling lock-matching check) is
@@ -25,11 +24,11 @@ use tamarin_theory::sapic::{GoodAnnotation, Process, SapicLVar};
 use crate::bindings::captured_variables;
 
 /// The fixed topic HS `toWfErrorReport` attaches to every SAPIC process error
-/// (Warnings.hs:24-27, see line 27).  Rendered verbatim (NOT underlined) by
-/// `prettyWfErrorReport` (Wellformedness.hs:118-125).
+/// (Warnings.hs).  Rendered verbatim (NOT underlined) by
+/// `prettyWfErrorReport` (Wellformedness.hs).
 pub(crate) const SAPIC_PROCESS_TOPIC: &str = "Wellformedness-error in Process";
 
-/// `warnProcess` (Warnings.hs:17-21): the list of `WFerror`s for one process.
+/// `warnProcess` (Warnings.hs): the list of `WFerror`s for one process.
 ///
 /// HS: `map WFBoundTwice (capturedVariables p) <> toList (checkLocks p)`.
 ///
@@ -49,10 +48,10 @@ pub(crate) fn warn_process<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<
         .iter()
         .map(|v| {
             // `show (WFBoundTwice v) = "Variable bound twice: " ++ show v ++ "."`
-            // (Sapic/Exceptions.hs:117-118).
+            // (Sapic/Exceptions.hs).
             let body = format!("Variable bound twice: {v}.");
-            // `toWfErrorReport` (Warnings.hs:24-27) pairs each error with the
-            // topic; `prettyWfErrorReport` (Wellformedness.hs:118-125) renders
+            // `toWfErrorReport` (Warnings.hs) pairs each error with the
+            // topic; `prettyWfErrorReport` (Wellformedness.hs) renders
             // a topic GROUP as `text topic $-$ nest 2 (vcat (intersperse "")
             // bodies)` — the topic header ONCE, then each body 2-space-indented
             // and separated by a blank line.  We emit ONE `WfError` per error
@@ -65,7 +64,7 @@ pub(crate) fn warn_process<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<
         .collect()
 }
 
-/// `Sapic.checkWellformedness` (Warnings.hs:37-38) for a single process:
+/// `Sapic.checkWellformedness` (Warnings.hs) for a single process:
 /// `toWfErrorReport . warnProcess`.  The caller concatenates the result over
 /// every `theoryProcesses` (here: the single top-level process).
 pub(crate) fn check_wellformedness<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<WfError> {
@@ -119,8 +118,8 @@ mod tests {
     }
 
     /// The test covers every branch of HS `Show (SapicLVar)` and `Show LVar`
-    /// (Theory/Sapic/Term.hs:108-110, Term/LTerm.hs:550-557#show, prefix table
-    /// Term/LTerm.hs:193-199#sortPrefix).  The port splices the result without
+    /// (Theory/Sapic/Term.hs, Term/LTerm.hs#show, prefix table
+    /// Term/LTerm.hs#sortPrefix).  The port splices the result without
     /// change into the body of the `Variable bound twice: …` report.
     #[test]
     fn sapic_lvar_display_matches_hs_show() {

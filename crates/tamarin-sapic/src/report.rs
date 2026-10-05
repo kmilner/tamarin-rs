@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Sapic.Report` (`lib/sapic/src/Sapic/Report.hs`) — the
 //! `locations-report` (`builtins: locations-report`) translation, gated on
@@ -8,13 +7,13 @@
 //!
 //! Two passes, both run only when `_transReport` is set:
 //!
-//!   1. `translateTermsReport` (Report.hs:104-105): `reportMapTerms subst
+//!   1. `translateTermsReport` (Report.hs): `reportMapTerms subst
 //!      Nothing` — propagate the per-process `@location` annotation down the
 //!      tree and, where a `Just loc` is in scope, rewrite every `report(t)`
-//!      term to `rep(subst loc t, loc)` (`subst`, Report.hs:92-97). This also
+//!      term to `rep(subst loc t, loc)` (`subst`, Report.hs). This also
 //!      reaches condition and embedded-MSR formulas, matching upstream #922.
 //!
-//!   2. `reportInit` (Report.hs:28-41): prepend the fixed `ReportRule`
+//!   2. `reportInit` (Report.hs): prepend the fixed `ReportRule`
 //!         [ In( <x, loc> ) ] --[ <Report(x,loc) predicate restriction> ]->
 //!         [ Out( rep(x, loc) ) ]
 //!      to the initial rules.  Its embedded restriction is the syntactic
@@ -23,7 +22,7 @@
 //!      the `Restr_ReportRule_1` restriction and the `Restr_ReportRule_1(...)`
 //!      action.
 //!
-//! `x` and `loc` are HS `LVar s LSortMsg 0` (Report.hs:37-39).
+//! `x` and `loc` are HS `LVar s LSortMsg 0` (Report.hs).
 
 use std::collections::BTreeSet;
 
@@ -43,7 +42,7 @@ use crate::facts::{AnnotatedRule, RulePosition, SpecialPosition, TransFact};
 
 type AnnProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 
-/// `reportInit` (Report.hs:28-41): prepend the `ReportRule` to the initial
+/// `reportInit` (Report.hs): prepend the `ReportRule` to the initial
 /// rules.  `init_tx` is threaded unchanged.
 ///
 ///   reportrule = AnnotatedRule (Just "ReportRule") anP (Right NoPosition)
@@ -71,7 +70,7 @@ pub(crate) fn report_init(
     let concl = TransFact::Out(rep);
 
     // restr: `Syntactic . Pred $ protoFact Linear "Report" [varTerm (Free x),
-    // varTerm (Free loc)]` (Report.hs:41).  The `_restrict` expansion
+    // varTerm (Free loc)]` (Report.hs).  The `_restrict` expansion
     // (`apply.rs`) binds it to the user `Report` predicate.
     let report_pred = ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::new(
         FactTag::Proto(Multiplicity::Linear, "Report", 2),
@@ -97,10 +96,10 @@ pub(crate) fn report_init(
 }
 
 // =============================================================================
-// translateTermsReport (Report.hs:50-105)
+// translateTermsReport (Report.hs)
 // =============================================================================
 
-/// `translateTermsReport = reportMapTerms subst Nothing` (Report.hs:104-105):
+/// `translateTermsReport = reportMapTerms subst Nothing` (Report.hs):
 /// walk the process, threading the in-scope `@location` annotation down via
 /// `opt_loc`, and rewrite `report(t)` terms in actions / combinators to
 /// `rep(subst loc t, loc)` wherever a `Just loc` is in scope.
@@ -108,7 +107,7 @@ pub(crate) fn translate_terms_report(p: AnnProc) -> AnnProc {
     report_map_terms(None, p)
 }
 
-/// `opt_loc loc ann` (Report.hs:44-48): the location at this node — the node's
+/// `opt_loc loc ann` (Report.hs): the location at this node — the node's
 /// own parsed `location` if set, otherwise the inherited `loc`.
 fn opt_loc(loc: &Option<SapicTerm>, ann: &ProcessAnnotation<LVar>) -> Option<SapicTerm> {
     match &ann.parsing_ann.location {
@@ -117,7 +116,7 @@ fn opt_loc(loc: &Option<SapicTerm>, ann: &ProcessAnnotation<LVar>) -> Option<Sap
     }
 }
 
-/// `reportMapTerms loc` (Report.hs:52-60).
+/// `reportMapTerms loc` (Report.hs).
 fn report_map_terms(loc: Option<SapicTerm>, p: AnnProc) -> AnnProc {
     match p {
         Process::Null(ann) => Process::Null(ann),
@@ -139,7 +138,7 @@ fn report_map_terms(loc: Option<SapicTerm>, p: AnnProc) -> AnnProc {
     }
 }
 
-/// `reportMapTermsAction f loc ac` (Report.hs:61-77): apply `subst loc` to the
+/// `reportMapTermsAction f loc ac` (Report.hs): apply `subst loc` to the
 /// terms of each action.  `New`, `Rep`, `ProcessCall` are identity.
 /// Upstream #922 also maps embedded MSR restriction formulas.
 fn report_map_terms_action(
@@ -187,7 +186,7 @@ fn report_map_terms_action(
     }
 }
 
-/// `reportMapTermsComb f loc c` (Report.hs:78-87): `CondEq`, `Let`, `Lookup`
+/// `reportMapTermsComb f loc c` (Report.hs): `CondEq`, `Let`, `Lookup`
 /// have their terms `subst`'d; upstream #922 maps formula terms in `Cond`.
 fn report_map_terms_comb(
     loc: &Option<SapicTerm>,
@@ -234,7 +233,7 @@ fn subst_formula(loc: &Option<SapicTerm>, formula: SapicFormula) -> SapicFormula
     })
 }
 
-/// `subst` (Report.hs:92-97): rewrite `report(a)` to `rep(subst loc a, loc)`
+/// `subst` (Report.hs): rewrite `report(a)` to `rep(subst loc a, loc)`
 /// when a `Just loc` is in scope.  With `Nothing` location it is the identity
 /// (`subst Nothing t = t`).
 fn subst<V: Clone + Ord>(loc: &Option<VTerm<Name, V>>, t: &VTerm<Name, V>) -> VTerm<Name, V> {
@@ -244,7 +243,7 @@ fn subst<V: Clone + Ord>(loc: &Option<VTerm<Name, V>>, t: &VTerm<Name, V>) -> VT
     }
 }
 
-/// The `subst (Just loc)` arm (Report.hs:94-97).
+/// The `subst (Just loc)` arm (Report.hs).
 fn subst_at<V: Clone + Ord>(loc: &VTerm<Name, V>, t: &VTerm<Name, V>) -> VTerm<Name, V> {
     use tamarin_term::function_symbols::FunSym;
     match t {
@@ -290,8 +289,8 @@ mod tests {
     }
 
     /// `protFact = Syntactic . Pred $ protoFact Linear "Report" [varTerm
-    /// (Free x), varTerm (Free loc)]` (Report.hs:41), over `x` and `loc` =
-    /// `LVar s LSortMsg 0` (Report.hs:37-39).  Both arguments are FREE
+    /// (Free x), varTerm (Free loc)]` (Report.hs), over `x` and `loc` =
+    /// `LVar s LSortMsg 0` (Report.hs).  Both arguments are FREE
     /// `BVar`s: the atom stands under no binder, so a `Bound` index there
     /// would resolve against an empty scope.
     #[test]

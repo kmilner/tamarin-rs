@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Syntactic.Predicate` from
 //! `lib/theory/src/Theory/Syntactic/Predicate.hs`.
@@ -44,7 +43,7 @@ pub struct Predicate {
 }
 
 /// The one failure of [`expand_formula`]: HS `Left $ factTag fa`
-/// (Theory/Syntactic/Predicate.hs:90-91), a use site no predicate matches.
+/// (Theory/Syntactic/Predicate.hs), a use site no predicate matches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpandError {
     pub tag: FactTag,
@@ -52,9 +51,9 @@ pub struct ExpandError {
 
 impl std::fmt::Display for ExpandError {
     /// HS `show (UndefinedPredicate facttag)`
-    /// (Theory/Text/Parser/Exceptions.hs:33-34) = `"undefined predicate " ++
+    /// (Theory/Text/Parser/Exceptions.hs) = `"undefined predicate " ++
     /// showFactTagArity facttag`, and `showFactTagArity`
-    /// (Theory/Model/Fact.hs:555-557) is the name with its multiplicity
+    /// (Theory/Model/Fact.hs) is the name with its multiplicity
     /// prefix, a slash and the arity.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -93,12 +92,12 @@ impl Predicate {
 }
 
 /// One `predicates:` declaration, HS `predicate = Predicate <$> fact' lvar <*
-/// symbol "<=>" <*> plainFormula` (Theory/Text/Parser/Signature.hs:271-275).
+/// symbol "<=>" <*> plainFormula` (Theory/Text/Parser/Signature.hs).
 ///
 /// The fact comes from the DECLARATION — `fact' lvar` reads the written
 /// parameter list — not from the body's free variables, so
 /// `Report(x,y) <=> not(y = 'loc')` keeps arity 2.  `plainFormula`
-/// (Theory/Text/Parser/Formula.hs:112-117) fails on a body that carries
+/// (Theory/Text/Parser/Formula.hs) fails on a body that carries
 /// syntactic sugar, which is the sugar check here.
 pub fn from_parser(pred: &p::Predicate, sig: &MaudeSig) -> Result<Predicate, ElabError> {
     let mut params: Vec<LVar> = Vec::with_capacity(pred.fact.args.len());
@@ -134,10 +133,10 @@ pub fn smaller_fact<T>(t1: T, t2: T) -> Fact<T> {
     )
 }
 
-/// HS `builtinPredicates` (Theory/Syntactic/Predicate.hs:58-74): the single
+/// HS `builtinPredicates` (Theory/Syntactic/Predicate.hs): the single
 /// predicate `Smaller(x, y) <=> ∃ z. y = x ++ z`, over `x`, `y`, `z` all
 /// `LVar _ LSortMsg 0`.  The multiset `(<)` operator parses to a `Smaller`
-/// use site (`smallerp`, Theory/Text/Parser/Formula.hs:30-38), so this is
+/// use site (`smallerp`, Theory/Text/Parser/Formula.hs), so this is
 /// also its expansion.
 ///
 /// `exists_var` abstracts `z` to `Bound 0` and the union's `f_app` rebuild
@@ -158,7 +157,7 @@ pub fn builtin_predicates() -> Vec<Predicate> {
 }
 
 /// HS `lookupPredicate fact = find (sameName fact . pFact) . (++
-/// builtinPredicates)` (Theory/Syntactic/Predicate.hs:76-79): the first
+/// builtinPredicates)` (Theory/Syntactic/Predicate.hs): the first
 /// predicate whose fact tag equals `fa`'s, searching the declared ones before
 /// the built-in list.  `FactTag` carries multiplicity, name and arity, so all
 /// three must agree.
@@ -171,7 +170,7 @@ pub fn lookup_predicate<T>(fa: &Fact<T>, preds: &[Predicate]) -> Option<Predicat
         .find(|p| p.fact.tag == fa.tag)
 }
 
-/// HS `expandFormula` (Theory/Syntactic/Predicate.hs:82-105): replace every
+/// HS `expandFormula` (Theory/Syntactic/Predicate.hs): replace every
 /// `Pred` atom by the matching predicate's body, with the declared parameters
 /// bound to the use-site terms.
 ///
@@ -195,7 +194,7 @@ pub fn expand_formula(
 }
 
 /// HS `apply' (compSubst (pFact pr) fa) (pFormula pr)`
-/// (Theory/Syntactic/Predicate.hs:88, :96-105): the predicate's body with
+/// (Theory/Syntactic/Predicate.hs): the predicate's body with
 /// `Free param ↦ use-site term` applied through `mapAtoms`, the substitution
 /// rebuilt at each atom's depth so [`shift_bound`] raises the use-site terms
 /// past the body's binders.
@@ -217,7 +216,7 @@ fn apply_at_use_site(pr: &Predicate, fa: &Fact<BLNTerm>) -> LNFormula {
     })
 }
 
-/// HS `up` (Theory/Syntactic/Predicate.hs:103-105): raise every bound index
+/// HS `up` (Theory/Syntactic/Predicate.hs): raise every bound index
 /// of a use-site term by the number of binders the predicate body wraps it
 /// in.  A free variable is left alone.  The rebuild is order-preserving, so
 /// the AC argument lists `map_lits` re-sorts come back unchanged.
@@ -279,7 +278,7 @@ mod tests {
     }
 
     /// HS `smallerFact` builds `protoFact Linear "Smaller" [t1, t2]`
-    /// (Theory/Syntactic/Predicate.hs:50-56).  This is the tag that
+    /// (Theory/Syntactic/Predicate.hs).  This is the tag that
     /// [`lookup_predicate`] matches on.  It is also the operand order that
     /// the `∃ z. t2 = t1 ++ z` expansion depends on.
     #[test]
@@ -298,7 +297,7 @@ mod tests {
     /// The built-in body is `∃ z. y = (x ++ z)` with `z` abstracted, and the
     /// union is AC-sorted after the abstraction — `Bound 0` sorts before
     /// `Free x` under the derived `Ord BVar` (`Bound` is the first variant,
-    /// LTerm.hs:476-478).
+    /// LTerm.hs).
     #[test]
     fn builtin_smaller_binds_z_as_the_first_union_operand() {
         let bs = builtin_predicates();
@@ -328,7 +327,7 @@ mod tests {
         }
     }
 
-    /// `addPredicate`'s tag guard (TheoryObject.hs:540-543) keeps a theory
+    /// `addPredicate`'s tag guard (TheoryObject.hs) keeps a theory
     /// from declaring `Smaller/2`, so the declaration under test is built
     /// here rather than parsed: the same tag as the built-in, a different
     /// body.
@@ -352,7 +351,7 @@ mod tests {
 
     /// HS's `predicate` production reads the body with `plainFormula`, which
     /// fails with "Syntactic sugar is not allowed, guarded formula expected."
-    /// (Theory/Text/Parser/Formula.hs:112-117).  A predicate call inside a
+    /// (Theory/Text/Parser/Formula.hs).  A predicate call inside a
     /// predicate body is exactly that sugar.
     #[test]
     fn a_sugared_predicate_body_is_rejected() {
@@ -413,10 +412,10 @@ mod tests {
 
     /// HS adds case tests and accountability lemmas verbatim
     /// (`liftedAddCaseTest` / `liftedAddAccLemma`,
-    /// Theory/Text/Parser.hs:153-163) with NO predicate expansion — their
+    /// Theory/Text/Parser.hs) with NO predicate expansion — their
     /// `Pred` sugar stays intact for the accountability translation.  Only
     /// `liftedAddLemma` and the restriction path expand
-    /// (TheoryObject.hs:433-449).
+    /// (TheoryObject.hs).
     #[test]
     fn case_test_and_acc_lemma_keep_pred_atoms() {
         let src = "theory T begin\n\

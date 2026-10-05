@@ -1,18 +1,17 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Text.Pretty` (`lib/theory/src/Theory/Text/Pretty.hs`): the
 //! theory-level document, comment and keyword combinators.  HS re-exports the
 //! highlight and Doc combinators from the same module
-//! (`module Text.PrettyPrint.Highlight`, `Theory/Text/Pretty.hs:10`); here they
+//! (`module Text.PrettyPrint.Highlight`, `Theory/Text/Pretty.hs`); here they
 //! come from the Doc engine in `tamarin-utils`.
 
 pub use tamarin_utils::pretty_hpj::*;
 
-// -- Additional combinators (HS Theory.Text.Pretty.hs:83-84) ------------------
+// -- Additional combinators (HS Theory.Text.Pretty.hs) ------------------
 
-/// HS `vsep = foldr ($--$) emptyDoc` (`Theory/Text/Pretty.hs:83-84`):
+/// HS `vsep = foldr ($--$) emptyDoc` (`Theory/Text/Pretty.hs`):
 /// right-folds [`above_blank`] over `ds`, separating the documents with empty
 /// lines.
 pub fn vsep(ds: Vec<Doc>) -> Doc {
@@ -23,48 +22,48 @@ pub fn vsep(ds: Vec<Doc>) -> Doc {
     acc
 }
 
-// -- Comments (HS Theory.Text.Pretty.hs:96-112) -------------------------------
+// -- Comments (HS Theory.Text.Pretty.hs) -------------------------------
 
 /// HS `lineComment_ s = comment $ text "//" <-> text s`
-/// (`Theory/Text/Pretty.hs:96-100`).
+/// (`Theory/Text/Pretty.hs`).
 pub fn line_comment_(s: &str) -> Doc {
     comment(Doc::text("//").beside_sp(Doc::text(s)))
 }
 
 /// HS `multiComment_ ls = comment $ fsep [text "/*", vcat (map text ls),
-/// text "*/"]` (`Theory/Text/Pretty.hs:105-106`).
+/// text "*/"]` (`Theory/Text/Pretty.hs`).
 pub fn multi_comment_(lines: &[&str]) -> Doc {
     let body = vcat(lines.iter().map(|l| Doc::text(*l)).collect());
     comment(fsep(vec![Doc::text("/*"), body, Doc::text("*/")]))
 }
 
 /// HS `multiComment d = comment $ fsep [text "/*", d, text "*/"]`
-/// (`Theory/Text/Pretty.hs:102-103`).
+/// (`Theory/Text/Pretty.hs`).
 pub fn multi_comment(d: Doc) -> Doc {
     comment(fsep(vec![Doc::text("/*"), d, Doc::text("*/")]))
 }
 
 /// HS `closedComment_ s = comment $ fsep [text "/*", text s, text "*/"]`
-/// (`Theory/Text/Pretty.hs:111-112`).
+/// (`Theory/Text/Pretty.hs`).
 pub(crate) fn closed_comment_(s: &str) -> Doc {
     comment(fsep(vec![Doc::text("/*"), Doc::text(s), Doc::text("*/")]))
 }
 
-// -- Keyword composites (HS Theory.Text.Pretty.hs:148-159) --------------------
+// -- Keyword composites (HS Theory.Text.Pretty.hs) --------------------
 
 /// HS `kwModulo what thy = keyword_ what <-> parens (keyword_ "modulo" <->
-/// text thy)` (`Theory/Text/Pretty.hs:148-152`).
+/// text thy)` (`Theory/Text/Pretty.hs`).
 pub fn kw_modulo(what: &str, thy: &str) -> Doc {
     keyword_(what).beside_sp(parens(keyword_("modulo").beside_sp(Doc::text(thy))))
 }
 
 /// HS `kwRuleModulo = kwModulo "rule"`
-/// (`Theory/Text/Pretty.hs:154-156, see line 156`).
+/// (`Theory/Text/Pretty.hs`).
 pub fn kw_rule_modulo(thy: &str) -> Doc {
     kw_modulo("rule", thy)
 }
 
-/// HS `kwVariants = keyword_ "variants"` (`Theory/Text/Pretty.hs:146`).
+/// HS `kwVariants = keyword_ "variants"` (`Theory/Text/Pretty.hs`).
 pub fn kw_variants() -> Doc {
     keyword_("variants")
 }

@@ -1,14 +1,13 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Pretty-printer for the two formula representations of the port: the
 //! locally-nameless [`LNFormula`]/[`SyntacticLNFormula`] and the solver's
 //! `tamarin_theory::guarded::Guarded`.
 //!
 //! Ports of Haskell `prettyLNFormula`/`prettySyntacticLNFormula`
-//! (`lib/theory/src/Theory/Model/Formula.hs:474-525`) and `prettyGuarded`
-//! (`lib/theory/src/Theory/Constraint/System/Guarded.hs:824-828, see line 828`).
+//! (`lib/theory/src/Theory/Model/Formula.hs`) and `prettyGuarded`
+//! (`lib/theory/src/Theory/Constraint/System/Guarded.hs`).
 //!
 //! Output uses Tamarin's interactive UI math glyphs:
 //!   `∀`, `∃`, `⇒`, `∧`, `∨`, `¬`, `⊤`, `⊥`, `@`, `<`, `=`, `⊏`,
@@ -21,7 +20,7 @@
 //! [`lnformula_doc`] and [`syntactic_lnformula_doc`] open each atom's bound
 //! variables against the binders in scope; the `Guarded` path opens each
 //! binder through `guarded::open_guarded` (HS `openGuarded`,
-//! Guarded.hs:364-373).
+//! Guarded.hs).
 
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
 use tamarin_term::pretty::pp_lvar;
@@ -36,7 +35,7 @@ use crate::guarded::{bvar_to_lvar, open_guarded, Guarded};
 use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
 
 /// Render the lemma-header line, mirroring HS `prettyLemma`
-/// (lib/theory/src/Lemma.hs:119-122):
+/// (lib/theory/src/Lemma.hs):
 ///   `nest 2 $ sep [ prettyTraceQuantifier, doubleQuotes (prettyLNFormula f) ]`
 /// Built as ONE `Doc` through the HS-faithful engine so the `sep`
 /// (quant-keyword vs formula) flat-or-wrap decision, the formula's
@@ -47,7 +46,7 @@ use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
 /// column 0 (the `nest 2` indent IS included in the output, like HS's
 /// `nest 2` rendered at the theory's column 0).
 pub fn lemma_header_line_doc(quant: &str, formula_doc: Doc) -> String {
-    // `doubleQuotes d = "\"" <> d <> "\""` (Text/PrettyPrint/Class.hs:148-148).
+    // `doubleQuotes d = "\"" <> d <> "\""` (Text/PrettyPrint/Class.hs).
     let dq = Doc::text("\"").beside(formula_doc).beside(Doc::text("\""));
     // `sep [quant, dq]` then `nest 2`.
     let line = hpj::sep(vec![Doc::text(quant), dq]).nest(2);
@@ -55,7 +54,7 @@ pub fn lemma_header_line_doc(quant: &str, formula_doc: Doc) -> String {
 }
 
 /// Render `nest n $ doubleQuotes (prettyLNFormula f)` through the
-/// HS-faithful engine (the restriction-body shape, TheoryObject.hs:889-893, see line 893)
+/// HS-faithful engine (the restriction-body shape, TheoryObject.hs)
 /// around an already built formula `Doc`, whichever formula representation
 /// produced it.  The `nest n` indent is included in the output; the `"` is a
 /// real Doc `beside` so the formula's wrapped continuation lines indent to
@@ -71,7 +70,7 @@ fn doublequoted_nested(formula_doc: Doc, nest_n: usize) -> Doc {
 
 /// [`guarded_doc`] laid out flat — the one-line string the web layer's
 /// disjunction-goal label quotes each disjunct with (HS `prettyGoal (DisjG
-/// (Disj gfs))`, Constraints.hs:281-283).
+/// (Disj gfs))`, Constraints.hs).
 pub fn pretty_guarded(g: &Guarded) -> String {
     guarded_doc(g).render_with(FLAT_WIDTH, FLAT_WIDTH)
 }
@@ -81,21 +80,21 @@ pub fn pretty_guarded(g: &Guarded) -> String {
 /// first character of the formula will land in the final output.  The page
 /// /ribbon widths are the fixed `LINE_LENGTH`/`RIBBON` constants, so there
 /// is no per-call width knob.  Mirrors Haskell's `prettyGuarded`
-/// (Guarded.hs:824-866) composed with the HughesPJ `sep`/`nest` layout
+/// (Guarded.hs) composed with the HughesPJ `sep`/`nest` layout
 /// semantics.
 ///
 /// Routes through the HS-faithful Doc engine (`crate::pretty_hpj`):
 /// `guarded_to_doc` builds a `Doc` tree that mirrors HS `prettyGuarded`'s
 /// `sep`/`nest`/`fsep` structure node-for-node, then `render_at` lays it
 /// out with the same `get1` per-NilAbove `w`-shrinkage HughesPJ uses
-/// (HughesPJ.hs:1011).  `indent` is the column where the formula's first
+/// (HughesPJ.hs).  `indent` is the column where the formula's first
 /// char will land (e.g. 1, right after the opening `"` of the lemma's
-/// `doubleQuotes` wrap, lib/theory/src/Lemma.hs:116-141, see line 138/141).
+/// `doubleQuotes` wrap, lib/theory/src/Lemma.hs).
 ///
 /// NOTE: `render_at`'s `sl_initial` only shrinks the budget; it does NOT
 /// shift continuation lines by the leading prefix width.  In HS the
 /// `prettyGuarded` doc is the RIGHT operand of `doubleQuotes`'s `<>`
-/// (`"\"" <> prettyGuarded <> "\""`, Text/PrettyPrint/Class.hs:148-148), and HughesPJ `beside`
+/// (`"\"" <> prettyGuarded <> "\""`, Text/PrettyPrint/Class.hs), and HughesPJ `beside`
 /// DOES shift the right doc's vertical layout by the leading `"`'s width
 /// (1 col).  Callers that place the formula after a 1-col prefix must use
 /// `pretty_guarded_doublequoted` (which models the `"` as a real Doc
@@ -110,7 +109,7 @@ fn pretty_guarded_wrapped(g: &Guarded, indent: usize) -> String {
     doc.render_at(hpj::LINE_LENGTH, hpj::RIBBON, indent)
 }
 
-/// HS `doubleQuotes (prettyGuarded gf)` (lib/theory/src/Lemma.hs:116-141, see line 138/141, Text/PrettyPrint/Class.hs:148-148).
+/// HS `doubleQuotes (prettyGuarded gf)` (lib/theory/src/Lemma.hs, Text/PrettyPrint/Class.hs).
 /// Builds `"\"" <> guarded_doc <> "\""` as a single Doc and renders it,
 /// so HughesPJ `beside`'s column-shift puts continuation lines at the
 /// formula's start column (1, right after the opening quote) — matching
@@ -122,10 +121,10 @@ pub fn pretty_guarded_doublequoted(g: &Guarded) -> String {
     Doc::text("\"").beside(doc).beside(Doc::text("\"")).render()
 }
 
-/// HS bare `prettyGuarded gf` (Guarded.hs:824-866) as a Doc — WITHOUT the
+/// HS bare `prettyGuarded gf` (Guarded.hs) as a Doc — WITHOUT the
 /// lemma path's `doubleQuotes` wrap.  This is what
 /// `prettyNonGraphSystem` renders the `sFormulas` / `sLemmas` /
-/// `sSolvedFormulas` sections with (System.hs:1674-1687, see line 1677/1678/1680), so the
+/// `sSolvedFormulas` sections with (System.hs), so the
 /// formula participates in the surrounding pane Doc and wraps at the
 /// pane's width/nesting exactly as in HS.
 pub(crate) fn guarded_doc(g: &Guarded) -> crate::pretty_hpj::Doc {
@@ -134,7 +133,7 @@ pub(crate) fn guarded_doc(g: &Guarded) -> crate::pretty_hpj::Doc {
 }
 
 /// Build the `pretty_hpj::Doc` for a `prettyGoal (DisjG (Disj gfs))`
-/// (Constraints.hs:282-283):
+/// (Constraints.hs):
 ///   `fsep $ punctuate (operator_ "  ∥") (map (nest 1 . parens . prettyGuarded) gfs)`
 /// Each disjunct is `nest 1 (parens (prettyGuarded gf))`, the separator is
 /// `"  ∥"` (two spaces + ∥) placed AFTER each non-last item by `punctuate`,
@@ -146,19 +145,19 @@ pub fn disj_goal_to_doc(gfs: &[Guarded]) -> crate::pretty_hpj::Doc {
         .map(|g| {
             let mut state = avoid_precise_guarded(g);
             let inner = guarded_to_doc(g, &mut state);
-            // `nest 1 (parens (prettyGuarded gf))` — `parens` (Text/PrettyPrint/Class.hs:149-149)
+            // `nest 1 (parens (prettyGuarded gf))` — `parens` (Text/PrettyPrint/Class.hs)
             // is `char '(' <> d <> char ')'` (PLAIN).
             Doc::char('(').beside(inner).beside(Doc::char(')')).nest(1)
         })
         .collect();
-    // HS `punctuate (operator_ "  ∥")` (Constraints.hs:273-288, see line 283) — the `∥`
+    // HS `punctuate (operator_ "  ∥")` (Constraints.hs) — the `∥`
     // separator is an `hl_operator` span.
     let punct = hpj::punctuate(hpj::operator_("  \u{2225}"), items); // "  ∥"
     hpj::fsep(punct)
 }
 
 /// HS `multiComment_ ["unannotated"]`
-/// (Theory/Text/Pretty.hs:105-106):
+/// (Theory/Text/Pretty.hs):
 ///   `comment $ fsep [text "/*", vcat $ map text ls, text "*/"]`
 /// With a single line `"unannotated"`, `vcat [text "unannotated"]` is
 /// just `text "unannotated"`, and `fsep` joins the three with single
@@ -176,7 +175,7 @@ fn unannotated_comment_doc() -> crate::pretty_hpj::Doc {
 
 /// Render a proof-step line that may carry the `/* unannotated */`
 /// comment, reproducing HS `prettyIncrementalProof.ppStep`
-/// (ProofSkeleton.hs:80-84):
+/// (ProofSkeleton.hs):
 ///   `sep [ prettyProofMethod (psMethod step)
 ///        , if isNothing (psInfo step) then multiComment_ ["unannotated"]
 ///                                     else emptyDoc ]`
@@ -209,7 +208,7 @@ pub fn step_line_with_unann(
         hpj::sep(vec![method_doc, unannotated_comment_doc()])
     };
     // HS `ppCases ps [] = prettyCase ps (kwBy <> text " ") <> prettyStep ps`
-    // (Theory/Proof.hs:1065-1066): the `by ` keyword is laid out BESIDE the WHOLE
+    // (Theory/Proof.hs): the `by ` keyword is laid out BESIDE the WHOLE
     // `sep [method, comment]`, NOT folded into the first `sep` element.  So
     // when `sep` breaks vertically the dropped `/* unannotated */` aligns at
     // the sep's start column = `base_indent + len(prefix)`; `beside` shifts
@@ -232,16 +231,16 @@ pub fn step_line_with_unann(
 // ============================================================================
 // Intruder-variant rendering — the `tamarin-prover variants` subcommand.
 //
-// HS `prettyIntruderVariants` (Theory/Model/Rule.hs:1465-1466):
+// HS `prettyIntruderVariants` (Theory/Model/Rule.hs):
 //   `vcat . intersperse (text "") $ map prettyIntrRuleAC vs`
 // each rule via `prettyNamedRule (kwRuleModulo "AC") (const emptyDoc)`
-// (Theory/Model/Rule.hs:1446-1447) = `header $-$ nest 2 body`, where the body
+// (Theory/Model/Rule.hs) = `header $-$ nest 2 body`, where the body
 // is `rule::pretty_rule_restr_gen` over the rule's `LNFact`s.
 // The two blocks (DH then BP) concatenate with NO separating newline
-// (HS `putStrLn (dhS ++ bpS)`, Main/Mode/Intruder.hs:43-63, see line 53).
+// (HS `putStrLn (dhS ++ bpS)`, Main/Mode/Intruder.hs).
 // ============================================================================
 
-/// HS intruder-rule name (`prettyIntrRuleACInfo`, Theory/Model/Rule.hs:1347-1357):
+/// HS intruder-rule name (`prettyIntrRuleACInfo`, Theory/Model/Rule.hs):
 /// `c`/`d` prefix for Constr/Destr, fixed lowercase keywords otherwise, all
 /// wrapped in `prefixIfReserved` (prepend `_` for reserved names / names
 /// already starting with `_`).
@@ -272,7 +271,7 @@ pub(crate) fn intr_rule_name(info: &crate::rule::IntrRuleACInfo) -> String {
 }
 
 /// `renderDoc . prettyIntruderVariants` for a block of intruder rules
-/// (Theory/Model/Rule.hs:1465-1466).  Each rule is `rule (modulo AC) NAME:` then
+/// (Theory/Model/Rule.hs).  Each rule is `rule (modulo AC) NAME:` then
 /// the `nest 2` body; rules are separated by ONE blank line
 /// (`vcat . intersperse (text "")`).  Returns the block with NO trailing
 /// newline, so a DH block and a BP block concatenate seamlessly (the DH
@@ -301,12 +300,12 @@ pub fn pretty_intruder_variants(rules: &[crate::rule::IntrRuleAC]) -> String {
         .join("\n\n")
 }
 
-/// HS `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:706-709,:714-715) on
+/// HS `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs) on
 /// a guarded formula: every free variable seeds its name's counter with
 /// `maxIdx + 1`, so a binder whose name a free variable uses is drawn with a
 /// larger index.  `fresh_ident name` returns the counter (default 0) and
 /// bumps it, so a name seeded at 1 displays as `name.1` (HS `show LVar`,
-/// LTerm.hs:550-557).
+/// LTerm.hs).
 fn avoid_precise_guarded(g: &Guarded) -> PreciseFreshState {
     PreciseFreshState::avoid_precise(
         tamarin_term::lterm::frees(g)
@@ -317,10 +316,10 @@ fn avoid_precise_guarded(g: &Guarded) -> PreciseFreshState {
 
 // =============================================================================
 // Locally-nameless formulas — Doc-engine path
-// (HS `prettyLFormula`, Theory/Model/Formula.hs:474-514)
+// (HS `prettyLFormula`, Theory/Model/Formula.hs)
 // =============================================================================
 
-/// HS `prettyLNFormula` (Theory/Model/Formula.hs:518-520):
+/// HS `prettyLNFormula` (Theory/Model/Formula.hs):
 /// `Precise.evalFresh (prettyLFormula prettyNAtom fm) (avoidPrecise fm)`.
 pub fn lnformula_doc(f: &LNFormula) -> Doc {
     lformula_doc(
@@ -338,8 +337,8 @@ pub fn pretty_lnformula(f: &LNFormula) -> String {
     lnformula_doc(f).render_with(FLAT_WIDTH, FLAT_WIDTH)
 }
 
-/// HS `prettySyntacticLNFormula` (Theory/Model/Formula.hs:523-525): as
-/// [`lnformula_doc`], with `prettySyntacticNAtom` (Atom.hs:236-239) printing
+/// HS `prettySyntacticLNFormula` (Theory/Model/Formula.hs): as
+/// [`lnformula_doc`], with `prettySyntacticNAtom` (Atom.hs) printing
 /// the atoms, so a `Pred` atom prints as its fact.
 pub fn syntactic_lnformula_doc(f: &SyntacticLNFormula) -> Doc {
     lformula_doc(
@@ -350,7 +349,7 @@ pub fn syntactic_lnformula_doc(f: &SyntacticLNFormula) -> Doc {
     )
 }
 
-/// HS `prettyLFormula ppAtom` (Theory/Model/Formula.hs:474-514).  `scope`
+/// HS `prettyLFormula ppAtom` (Theory/Model/Formula.hs).  `scope`
 /// holds the display `LVar` of every enclosing binder, innermost last, which
 /// is what the `Bound` indices of an atom refer to.
 fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
@@ -361,19 +360,19 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
 ) -> Doc {
     match f {
         // `pp (Ato a) = return $ ppAtom (fmap (mapLits (fmap extractFree)) a)`
-        // (Theory/Model/Formula.hs:484): every bound variable of the atom,
+        // (Theory/Model/Formula.hs): every bound variable of the atom,
         // the sugar's included, resolves to its binder's display `LVar`
         // before the atom printer sees it.
         ProtoFormula::Atom(a) => pp_atom(&map_atom(a, &mut |t| open_bound_term(t, scope))),
         // `pp (TF True) = operator_ "⊤"` / `pp (TF False) = operator_ "⊥"`
-        // (Theory/Model/Formula.hs:485-486).
+        // (Theory/Model/Formula.hs).
         ProtoFormula::Tf(true) => hpj::operator_("\u{22A4}"),
         ProtoFormula::Tf(false) => hpj::operator_("\u{22A5}"),
-        // `operator_ "¬" <> opParens p'` (Theory/Model/Formula.hs:488-490).
+        // `operator_ "¬" <> opParens p'` (Theory/Model/Formula.hs).
         ProtoFormula::Not(p_) => hpj::operator_("\u{00AC}")
             .beside(hpj::op_parens(lformula_doc(p_, pp_atom, scope, state))),
         // `sep [opParens p' <-> ppOp op, opParens q']`
-        // (Theory/Model/Formula.hs:493-501); `<->` is `<+>`.
+        // (Theory/Model/Formula.hs); `<->` is `<+>`.
         ProtoFormula::Conn(c, l, r) => {
             let op = match c {
                 Connective::And => "\u{2227}",
@@ -387,8 +386,8 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
         }
         // `scopeFreshness $ do (vs, qua, fm') <- openFormulaPrefix fm; ...
         // sep [ppQuant qua <> ppVars vs <> operator_ ".", nest 1 d']`
-        // (Theory/Model/Formula.hs:503-514).  `opForall`/`opExists` carry
-        // their trailing space (Theory/Text/Pretty.hs:177-178) and
+        // (Theory/Model/Formula.hs).  `opForall`/`opExists` carry
+        // their trailing space (Theory/Text/Pretty.hs) and
         // `ppVars = fsep . map (text . show)` makes the binder list
         // breakable.
         ProtoFormula::Qua(q, hint, body) => {
@@ -402,7 +401,7 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
                 let var_docs: Vec<Doc> = vs
                     .iter()
                     .map(|x| {
-                        // `show LVar` (LTerm.hs:550-557).
+                        // `show LVar` (LTerm.hs).
                         let mut s = String::new();
                         pp_lvar(x, &mut s);
                         Doc::text(s)
@@ -419,10 +418,10 @@ fn lformula_doc<S: MapSugar<BLNTerm, LNTerm>>(
     }
 }
 
-/// HS `openFormulaPrefix` (Theory/Model/Formula.hs:296-309) against the
+/// HS `openFormulaPrefix` (Theory/Model/Formula.hs) against the
 /// display scope: collect the hint of the binder at hand and of every
 /// directly nested binder of the same quantifier, allocate each a display
-/// `LVar` (`freshLVar n s = LVar n s <$> freshIdent n`, LTerm.hs:301-302)
+/// `LVar` (`freshLVar n s = LVar n s <$> freshIdent n`, LTerm.hs)
 /// pushed onto `scope`, and return those `LVar`s with the body beneath the
 /// prefix.  The caller truncates `scope` after recursing into the body.
 fn open_display_prefix<'a, S>(
@@ -457,13 +456,13 @@ fn open_display_prefix<'a, S>(
 // `render_at` layout for both the full-formula and guarded wrapped paths.
 // =============================================================================
 
-/// HS ribbon width.  HS sets `lineWidth = 110` (`Main/Console.hs:241-243, see line 243`)
-/// and `defaultStyle.ribbonsPerLine = 1.5` (`HughesPJ.hs:940`), giving
-/// `ribbonLen = round(110/1.5) = 73` (`HughesPJ.hs:1010`).
+/// HS ribbon width.  HS sets `lineWidth = 110` (`Main/Console.hs`)
+/// and `defaultStyle.ribbonsPerLine = 1.5` (`HughesPJ.hs`), giving
+/// `ribbonLen = round(110/1.5) = 73` (`HughesPJ.hs`).
 pub const RIBBON: usize = 73;
 
 /// HS hard page width.  Mirrors `lineWidth = 110`
-/// (`Main/Console.hs:241-243, see line 243`).
+/// (`Main/Console.hs`).
 pub const LINE_LENGTH: usize = 110;
 
 // =============================================================================
@@ -471,13 +470,13 @@ pub const LINE_LENGTH: usize = 110;
 // =============================================================================
 //
 // Build a `pretty_hpj::Doc` tree mirroring HS `prettyGuarded`
-// (Guarded.hs:824-866) EXACTLY, then render it via the HughesPJ-faithful
+// (Guarded.hs) EXACTLY, then render it via the HughesPJ-faithful
 // engine (`crate::pretty_hpj`).  The formula-structural nodes
 // (GDisj/GConj/GGuarded) carry the sep-Unions where the engine makes its
 // byte-exact wrap decisions; the atoms and facts under them carry the break
 // points `prettyNAtom`/`prettyFact`/`prettyTerm` give them.
 //
-// HS recurrences (Guarded.hs:830-866):
+// HS recurrences (Guarded.hs):
 //   pp (GAto a)        = prettyNAtom (bvarToLVar a)            -- flat
 //   pp (GDisj [])      = operator_ "⊥"
 //   pp (GDisj xs)      = parens $ sep $ punctuate " ∨" (map opParens ps)
@@ -492,13 +491,13 @@ pub const LINE_LENGTH: usize = 110;
 //                          sep [quantifier, sep [dante, connective, dsucc]]
 
 /// Build a `pretty_hpj::Doc` for a guarded formula, mirroring HS `pp`
-/// inside `prettyGuarded` (Guarded.hs:830-866).  Threads the Precise fresh
+/// inside `prettyGuarded` (Guarded.hs).  Threads the Precise fresh
 /// `state` through the scope-freshness each `GGuarded` opens, which is the
 /// supply [`open_guarded`] draws that binder's names from.
 fn guarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::{self as hpj, Doc};
     match g {
-        // HS `pp (GAto a) = prettyNAtom (bvarToLVar a)` (Guarded.hs:831).
+        // HS `pp (GAto a) = prettyNAtom (bvarToLVar a)` (Guarded.hs).
         Guarded::Atom(a) => pretty_natom(&bvar_to_lvar(a)),
         Guarded::Disj(xs) if xs.is_empty() => hpj::operator_("\u{22A5}"), // ⊥
         Guarded::Conj(xs) if xs.is_empty() => hpj::operator_("\u{22A4}"), // ⊤
@@ -509,7 +508,7 @@ fn guarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_h
                 .map(|x| hpj::op_parens(guarded_to_doc(x, state)))
                 .collect();
             let punct = hpj::punctuate(hpj::operator_(" \u{2228}"), ps); // " ∨"
-                                                                         // `parens` (Text/PrettyPrint/Class.hs:149-149) is `char '(' <> d <> char ')'` — PLAIN.
+                                                                         // `parens` (Text/PrettyPrint/Class.hs) is `char '(' <> d <> char ')'` — PLAIN.
             Doc::char('(')
                 .beside(hpj::sep(punct))
                 .beside(Doc::char(')'))
@@ -523,23 +522,23 @@ fn guarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_h
             let punct = hpj::punctuate(hpj::operator_(" \u{2227}"), ps); // " ∧"
             hpj::sep(punct)
         }
-        // HS: `scopeFreshness $ do ...` (Guarded.hs:846-862).
+        // HS: `scopeFreshness $ do ...` (Guarded.hs).
         Guarded::GGuarded { .. } => state.scope_freshness(|state| gguarded_to_doc(g, state)),
     }
 }
 
 /// Doc for a `GGuarded`, after `scopeFreshness` saved the Precise state.
-/// Mirrors HS Guarded.hs:849-862.
+/// Mirrors HS Guarded.hs.
 fn gguarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_hpj::Doc {
     use crate::pretty_hpj::{self as hpj, Doc};
     // HS `(qua, vs, atoms, gf) <- fromJust <$> openGuarded gf0`
-    // (Guarded.hs:849): the binders are drawn from this scope's supply and
+    // (Guarded.hs): the binders are drawn from this scope's supply and
     // substituted into the guards and the body.
     let (qua, vs, atoms, body) = open_guarded(g, state).expect("gguarded_to_doc: not a GGuarded");
 
     // `dante = nest 1 $ pp (GConj (Conj antecedent))` with
     // `antecedent = map (GAto . fmap (fmapTerm (fmap Free))) atoms`
-    // (Guarded.hs:850-854): each opened guard is a `pp (GAto …)` wrapped in
+    // (Guarded.hs): each opened guard is a `pp (GAto …)` wrapped in
     // opParens, and an empty antecedent is `pp (GConj (Conj [])) =
     // operator_ "⊤"`.
     let dante = if atoms.is_empty() {
@@ -555,9 +554,9 @@ fn gguarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_
 
     // `quantifier = operator_ ppQuant <-> ppVars vs <> operator_ "."`.
     // `<->` is `<+>` (beside with one space); `ppVars = fsep . map (text .
-    // show)` (Guarded.hs:864) over the drawn variables, whose `show` is the
+    // show)` (Guarded.hs) over the drawn variables, whose `show` is the
     // sort prefix, the name and a `.<idx>` suffix past index 0
-    // (LTerm.hs:550-557).
+    // (LTerm.hs).
     let sym = match qua {
         Quantifier::All => "\u{2200}",
         Quantifier::Ex => "\u{2203}",
@@ -568,7 +567,7 @@ fn gguarded_to_doc(g: &Guarded, state: &mut PreciseFreshState) -> crate::pretty_
         .beside_sp(ppvars)
         .beside(hpj::operator_("."));
 
-    // Case analysis (Guarded.hs:855-862).
+    // Case analysis (Guarded.hs).
     let is_ex_trivial = matches!(qua, Quantifier::Ex) && body_is_true(&body);
     let is_neg = matches!(qua, Quantifier::All) && vs.is_empty() && body_is_false(&body);
 

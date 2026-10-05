@@ -1,19 +1,18 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! The wellformedness checks that walk a theory's rules.
 //!
-//! HS `unboundReport` (Wellformedness.hs:514-519), `freshNamesReport'`
-//! (Wellformedness.hs:444-452), `ruleSortsReport`
-//! (Wellformedness.hs:275-279) and `natWellSortedReport`
-//! (Wellformedness.hs:319-333) read `thyProtoRules thy`
-//! (Wellformedness.hs:133-134) — the macro-applied `oprRuleE` of every rule
+//! HS `unboundReport` (Wellformedness.hs), `freshNamesReport'`
+//! (Wellformedness.hs), `ruleSortsReport`
+//! (Wellformedness.hs) and `natWellSortedReport`
+//! (Wellformedness.hs) read `thyProtoRules thy`
+//! (Wellformedness.hs) — the macro-applied `oprRuleE` of every rule
 //! item of the `OpenTranslatedTheory`.  The elaborated [`Theory`]'s rules are
 //! that set: `elaborate` applies the theory's macros and `apply_sapic`
 //! appends the generated rules, which is the same input [`super::mult`]
 //! reads.  [`public_names_report`] (HS `publicNamesReport'`,
-//! Wellformedness.hs:463-484) reads them too, including the source
+//! Wellformedness.hs) reads them too, including the source
 //! subprocess a generated rule carries.
 //!
 //! The two checks that read a whole rule rather than its facts take HS's own
@@ -28,7 +27,7 @@
 //! [`nat_well_sorted_report`] renders its own `<>` chain at the same width —
 //! the style `addComment` bakes the wellformedness comment in with, HughesPJ's
 //! library default `lineLength = 100`, `ribbonsPerLine = 1.5`
-//! (TheoryObject.hs:717-718).
+//! (TheoryObject.hs).
 
 use std::collections::BTreeSet;
 
@@ -57,8 +56,8 @@ use super::{
 // =============================================================================
 
 /// HS `isNowNode v = lvarSort v == LSortNode && lvarName v == "NOW"`
-/// (Wellformedness.hs:504-505): the `#NOW` node `varNow`
-/// (Theory/Model/Restriction.hs:87-88) a rule's `_restrict` formula carries
+/// (Wellformedness.hs): the `#NOW` node `varNow`
+/// (Theory/Model/Restriction.hs) a rule's `_restrict` formula carries
 /// free is bound by no premise.
 fn is_now_node(v: &LVar) -> bool {
     v.sort == LSort::Node && v.name == "NOW"
@@ -67,11 +66,10 @@ fn is_now_node(v: &LVar) -> bool {
 /// The variable a `lookup t as v` combinator binds, for a rule whose
 /// `process` attribute IS such a combinator — HS `originatesFromLookup`'s
 /// `match v (Just (ProcessComb (Lookup _ v') _ _ _)) = v == slvar v'`
-/// (Wellformedness.hs:501-503).  The variable reaches the generated rule
+/// (Wellformedness.hs).  The variable reaches the generated rule
 /// through that rule's `IsIn( t, v )` action rather than through a premise.
 /// Every user-written rule yields `None`: HS's rule-attribute parser discards
-/// a written `process=` (`parseAndIgnore`, Theory/Text/Parser/Rule.hs:70-96,
-/// see line 74), so the attribute is carried only by SAPIC-generated rules.
+/// a written `process=` (`parseAndIgnore`, Theory/Text/Parser/Rule.hs), so the attribute is carried only by SAPIC-generated rules.
 fn lookup_binder(ru: &ProtoRuleE) -> Option<LVar> {
     let process: &crate::sapic::PlainProcess = ru.info.attributes.process.as_deref()?;
     match process {
@@ -80,7 +78,7 @@ fn lookup_binder(ru: &ProtoRuleE) -> Option<LVar> {
     }
 }
 
-/// HS `unboundCheck`'s `unboundVars` (Wellformedness.hs:505-511): the free
+/// HS `unboundCheck`'s `unboundVars` (Wellformedness.hs): the free
 /// variables of the conclusions, the actions and the rule info, minus the
 /// premise-bound ones, the `#NOW` node, the pub-sorted ones (which the
 /// adversary knows) and the `lookup` binder.
@@ -90,10 +88,10 @@ fn unbound_vars(ru: &ProtoRuleE) -> Vec<LVar> {
     let bound: BTreeSet<LVar> = frees(&ru.premises).into_iter().collect();
     let binder = lookup_binder(ru);
     // HS `frees (get rConcs ru, get rActs ru, get rInfo ru)`, and `frees =
-    // sortednub . freesList` (LTerm.hs:613-614), so the three components make
+    // sortednub . freesList` (LTerm.hs), so the three components make
     // one sorted, deduplicated list.  `rInfo`'s own `HasFrees` reaches the
     // `_preRestriction` formulas alone — the rule name and the attributes fold
-    // to `mempty` (Theory/Model/Rule.hs:462-473, 491-498).
+    // to `mempty` (Theory/Model/Rule.hs).
     let mut vars = frees_list(&ru.conclusions);
     vars.extend(frees_list(&ru.actions));
     for phi in &ru.info.restrictions {
@@ -107,18 +105,18 @@ fn unbound_vars(ru: &ProtoRuleE) -> Vec<LVar> {
     vars
 }
 
-/// Port of HS `unboundReport` (Wellformedness.hs:514-519): one entry per
+/// Port of HS `unboundReport` (Wellformedness.hs): one entry per
 /// offending rule, all under the topic "Unbound variables".  The summary's
-/// WARNING count is `length rep` (Batch.hs:246), so the entries stay
+/// WARNING count is `length rep` (Batch.hs), so the entries stay
 /// un-grouped.
 ///
 /// Each entry carries only its body — HS `text info $-$ nest 2 (prettyVarList
-/// unboundVars)` (Wellformedness.hs:497-498) — because `prettyWfErrorReport`
+/// unboundVars)` (Wellformedness.hs) — because `prettyWfErrorReport`
 /// emits the underlined header once per topic group and nests the bodies by 2
-/// (Wellformedness.hs:118-125).  `prettyVarList = fsep . punctuate comma . map
-/// prettyLVar` (TheoryObject.hs:858-859) is the paragraph fill
+/// (Wellformedness.hs).  `prettyVarList = fsep . punctuate comma . map
+/// prettyLVar` (TheoryObject.hs) is the paragraph fill
 /// [`WfError::filled`] lays out, and `prettyLVar = text . show`
-/// (LTerm.hs:922-923) makes each cell a leaf.
+/// (LTerm.hs) makes each cell a leaf.
 pub fn unbound_report(thy: &Theory) -> Vec<WfError> {
     let mut out = Vec::new();
     for ru in thy_proto_rules(thy) {
@@ -143,20 +141,20 @@ pub fn unbound_report(thy: &Theory) -> Vec<WfError> {
 // Nat sorts
 // =============================================================================
 
-/// HS `viewTerm2`'s `NatOne` (Term/Term/Raw.hs:191-198, see line 198): the
+/// HS `viewTerm2`'s `NatOne` (Term/Term/Raw.hs): the
 /// nullary application of `natOneSym`, which the source spells `%1`.
 fn is_nat_one(t: &LNTerm) -> bool {
     matches!(t, Term::App(FunSym::NoEq(s), ts) if ts.is_empty() && *s == nat_one_sym())
 }
 
-/// HS `isNatVar` (LTerm.hs:334-336): a term that is a nat-sorted VARIABLE.
+/// HS `isNatVar` (LTerm.hs): a term that is a nat-sorted VARIABLE.
 /// A nat literal such as `%'a'` is a `Con` name and so is not one.
 fn is_nat_var(t: &LNTerm) -> bool {
     matches!(t, Term::Lit(Lit::Var(v)) if v.sort == LSort::Nat)
 }
 
 /// The operands of a `%+` application — HS `viewTerm2`'s `FNatPlus list`
-/// (Term/Term/Raw.hs:180-188, see line 186), i.e. the AC-flattened, sorted
+/// (Term/Term/Raw.hs), i.e. the AC-flattened, sorted
 /// argument list `fAppAC` builds at construction.
 fn nat_plus_operands(t: &LNTerm) -> Option<&[LNTerm]> {
     match t {
@@ -165,7 +163,7 @@ fn nat_plus_operands(t: &LNTerm) -> Option<&[LNTerm]> {
     }
 }
 
-/// HS `notOnlyNat` (Wellformedness.hs:296-300): the recursion under `%+`.
+/// HS `notOnlyNat` (Wellformedness.hs): the recursion under `%+`.
 /// Everything that is neither `%1`, nor a nat variable, nor a nested `%+` is
 /// an offending operand.
 fn not_only_nat<'a>(t: &'a LNTerm, out: &mut Vec<&'a LNTerm>) {
@@ -178,7 +176,7 @@ fn not_only_nat<'a>(t: &'a LNTerm, out: &mut Vec<&'a LNTerm>) {
     }
 }
 
-/// HS `nonWellSorted` (Wellformedness.hs:293-303): descend through the term
+/// HS `nonWellSorted` (Wellformedness.hs): descend through the term
 /// and collect, for every `%+` application, the operands that are not
 /// nat-sorted.
 fn non_well_sorted<'a>(t: &'a LNTerm, out: &mut Vec<&'a LNTerm>) {
@@ -198,7 +196,7 @@ fn non_well_sorted<'a>(t: &'a LNTerm, out: &mut Vec<&'a LNTerm>) {
     }
 }
 
-/// HS `getRuleTerms` (Wellformedness.hs:332-333): `concatMap factTerms` over
+/// HS `getRuleTerms` (Wellformedness.hs): `concatMap factTerms` over
 /// the premises, the actions and the conclusions, in that order.
 fn rule_terms(ru: &ProtoRuleE) -> impl Iterator<Item = &LNTerm> {
     ru.premises
@@ -208,8 +206,8 @@ fn rule_terms(ru: &ProtoRuleE) -> impl Iterator<Item = &LNTerm> {
         .flat_map(|f| f.terms.iter())
 }
 
-/// Port of HS `natWellSortedReport` (Wellformedness.hs:319-333) over its rule
-/// terms, through `natSortErrors` (Wellformedness.hs:315-316): one entry per
+/// Port of HS `natWellSortedReport` (Wellformedness.hs) over its rule
+/// terms, through `natSortErrors` (Wellformedness.hs): one entry per
 /// `(term, offending operand)` pair, body `prettyLNTerm err <> text " in term
 /// " <> prettyLNTerm t <> text " must be of sort nat"`, with the rule name
 /// absent and `t` the whole fact argument.
@@ -254,7 +252,7 @@ pub fn nat_well_sorted_report(thy: &Theory) -> Vec<WfError> {
     out
 }
 
-/// HS `boundTerms` (Wellformedness.hs:283-290): open each guarded block's
+/// HS `boundTerms` (Wellformedness.hs): open each guarded block's
 /// locally nameless binders, then visit the terms of atom bodies. Guard atoms
 /// are excluded exactly as in the reference implementation.
 fn for_each_bound_guarded_term(
@@ -303,14 +301,14 @@ fn for_each_bound_guarded_term(
 /// Every `Name` of a rule, in HS `universeBi ru` order — the `Data`
 /// traversal visits a constructor's fields left to right, so the rule info
 /// comes first (its attributes, then its `_restrict` formulas —
-/// Theory/Model/Rule.hs:421-425) and the premises, conclusions, actions and
-/// new variables follow (Theory/Model/Rule.hs:218-225).
+/// Theory/Model/Rule.hs) and the premises, conclusions, actions and
+/// new variables follow (Theory/Model/Rule.hs).
 fn rule_names(ru: &ProtoRuleE) -> Vec<Name> {
     let mut out = Vec::new();
     // The source subprocess a SAPIC-generated rule carries: HS's `universeBi`
     // descends into it, so a constant that appears only there is a name of
     // the rule.  HS's rule-attribute parser discards a written `process=`
-    // (`parseAndIgnore`, Theory/Text/Parser/Rule.hs:70-96, see line 74), so a
+    // (`parseAndIgnore`, Theory/Text/Parser/Rule.hs), so a
     // user rule never carries one.
     if let Some(proc) = &ru.info.attributes.process {
         collect_process_names(proc, &mut out);
@@ -333,7 +331,7 @@ fn rule_names(ru: &ProtoRuleE) -> Vec<Name> {
 // Fresh public constants — `~'foo'` is forbidden
 // =============================================================================
 
-/// Port of HS `freshNamesReport'` (Wellformedness.hs:444-452): one body per
+/// Port of HS `freshNamesReport'` (Wellformedness.hs): one body per
 /// rule that mentions a fresh-sorted `Name`, the `~'foo'` literal no `Fr`
 /// premise can produce.
 ///
@@ -341,9 +339,9 @@ fn rule_names(ru: &ProtoRuleE) -> Vec<Name> {
 /// . show) names)` — ONE paragraph fill whose first cell is the info line, so
 /// a name that would overrun the ribbon takes a line of its own at the fill's
 /// indent plus 2.  `show (Name FreshName n) = "~'" ++ show n ++ "'"`
-/// (LTerm.hs:235-240, see line 236) is [`Name`]'s `Display`, and the `nest 2`
+/// (LTerm.hs) is [`Name`]'s `Display`, and the `nest 2`
 /// `prettyWfErrorReport` applies to every body of a topic group
-/// (Wellformedness.hs:118-125) is baked in, because the break decisions
+/// (Wellformedness.hs) is baked in, because the break decisions
 /// depend on the body's absolute column.  [`grouped_topic_block`] joins the
 /// rendered bodies under the one `underlineTopic` header.
 pub fn fresh_names_report(thy: &Theory) -> WfReport {
@@ -382,7 +380,7 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
 // Public constant capitalization clashes
 // =============================================================================
 
-/// HS `clashesOn f g xs` (Wellformedness.hs:154-161): stable-sort by `f`,
+/// HS `clashesOn f g xs` (Wellformedness.hs): stable-sort by `f`,
 /// group the consecutive runs equal under `f`, `sortednubOn g` each run
 /// (sort by `g`, keep the first element per distinct `g`), and return the
 /// runs holding at least two elements.  `f` is taken once per element.
@@ -412,7 +410,7 @@ fn clashes_on<A: Clone, B: Ord, C: Ord>(
 }
 
 /// The clash-detection + rendering half of HS `publicNamesReport'`
-/// (Wellformedness.hs:463-484).  Its caller,
+/// (Wellformedness.hs).  Its caller,
 /// [`public_names_report`], harvests the
 /// `(showRuleCaseName, pubName)` pairs from the ELABORATED rules — including
 /// the `process` attribute HS's `universeBi` walks — which the parser AST
@@ -423,7 +421,7 @@ fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
     // HS `show` of a (public) Name constant is the quoted form `'name'`.
     let shw = |n: &str| format!("'{}'", n);
     // HS `findClashes = clashesOn (map toLower . show . snd) (show . snd)`
-    // (Wellformedness.hs:479).
+    // (Wellformedness.hs).
     let clashes = clashes_on(
         |p: &(String, String)| shw(&p.1).to_lowercase(),
         |p: &(String, String)| shw(&p.1),
@@ -475,7 +473,7 @@ fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
     vec![WfError::new(topic, s)]
 }
 
-/// Port of HS `publicNamesReport'` (Wellformedness.hs:463-484) over the
+/// Port of HS `publicNamesReport'` (Wellformedness.hs) over the
 /// translated theory's rules.  `publicNames = universeBi ru` is the same
 /// whole-rule name walk `freshNamesReport'` uses, [`rule_names`] here, so it
 /// reaches the rule info's `_restrict` formulas and the source subprocess HS
@@ -484,7 +482,7 @@ fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
 ///
 /// The root `Init` rule carries the WHOLE process (`base_init` in
 /// tamarin-sapic's base_translation.rs; HS `baseInit`,
-/// Basetranslation.hs:312-317, see line 313 — the rule's annotation is `anP`, the full
+/// Basetranslation.hs — the rule's annotation is `anP`, the full
 /// process) and is emitted first, so under `clashesOn`'s
 /// first-occurrence dedup it wins every public name — reproducing HS's
 /// `rule "Init":  name 'C', 'c'` attribution.
@@ -506,8 +504,8 @@ pub fn public_names_report(thy: &Theory) -> Vec<WfError> {
 // =============================================================================
 
 /// HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
-/// (TheoryObject.hs:858-859), whose `prettyLVar = text . show`
-/// (LTerm.hs:922-923) makes each cell a leaf.
+/// (TheoryObject.hs), whose `prettyLVar = text . show`
+/// (LTerm.hs) makes each cell a leaf.
 fn pretty_var_list(vars: &[LVar]) -> Doc {
     hpj::fsep(hpj::punctuate(
         Doc::char(','),
@@ -515,22 +513,22 @@ fn pretty_var_list(vars: &[LVar]) -> Doc {
     ))
 }
 
-/// Port of HS `sortsClashCheck` (Wellformedness.hs:258-272): the variables
+/// Port of HS `sortsClashCheck` (Wellformedness.hs): the variables
 /// that agree modulo case and index but differ as `LVar`s clash.  Bare
 /// identifiers carry sort `msg`, so `~ltk` (fresh) and `ltk` (msg) are a
 /// clash.
 ///
 /// The body is HS's `text info $-$ nest 2 (numbered' $ map prettyVarList cs)`
 /// with `prettyWfErrorReport`'s per-body `nest 2`
-/// (Wellformedness.hs:118-125) baked in, so the fills break at the body's
+/// (Wellformedness.hs) baked in, so the fills break at the body's
 /// true column.  The header and the "Possible reasons" paragraph HS carries
 /// in the topic string come from the topic itself, through
 /// `pretty_theory`'s headerless-preamble table.
 fn sorts_clash_check(info: String, vars: &[LVar]) -> Vec<WfError> {
-    // HS `clashesOn removeSort id $ frees t` (Wellformedness.hs:259) with
+    // HS `clashesOn removeSort id $ frees t` (Wellformedness.hs) with
     // `removeSort lv = (lowerCase (lvarName lv), lvarIdx lv)`; the identity
     // projection's `sortednubOn` sorts by `Ord LVar` — the index, then the
-    // sort, then the name (LTerm.hs:546-548).
+    // sort, then the name (LTerm.hs).
     let clashes = clashes_on(
         |v: &LVar| (v.name.to_lowercase(), v.idx),
         |v: &LVar| *v,
@@ -540,7 +538,7 @@ fn sorts_clash_check(info: String, vars: &[LVar]) -> Vec<WfError> {
         return Vec::new();
     }
     // `above_g` is HughesPJ's `$+$`, which HS's `$-$` maps to
-    // (Text/PrettyPrint/Class.hs:180).
+    // (Text/PrettyPrint/Class.hs).
     let body = Doc::text(info)
         .above_g(
             hpj::numbered_prime(clashes.iter().map(|grp| pretty_var_list(grp)).collect()).nest(2),
@@ -553,9 +551,9 @@ fn sorts_clash_check(info: String, vars: &[LVar]) -> Vec<WfError> {
     )]
 }
 
-/// Port of HS `ruleSortsReport` (Wellformedness.hs:275-279): one entry per
+/// Port of HS `ruleSortsReport` (Wellformedness.hs): one entry per
 /// offending rule, so the summary's `length rep` WARNING count matches HS
-/// (Batch.hs:246).  Its input is `frees ru`, which folds the rule info first
+/// (Batch.hs).  Its input is `frees ru`, which folds the rule info first
 /// and so reaches a variable that occurs only in a `_restrict` formula
 /// ([`proto_rule_e_frees`]).
 pub fn rule_sorts_report(thy: &Theory) -> WfReport {
@@ -573,11 +571,11 @@ pub fn rule_sorts_report(thy: &Theory) -> WfReport {
 // Rule variants
 // =============================================================================
 
-/// Port of HS `ruleVariantsReport` (Wellformedness.hs:375-382): HS's
-/// `variantsCheck` (Wellformedness.hs:354-372) over every rule item, with a
+/// Port of HS `ruleVariantsReport` (Wellformedness.hs): HS's
+/// `variantsCheck` (Wellformedness.hs) over every rule item, with a
 /// live Maude behind the variant recomputation.
 ///
-/// Only the `guard (null recomputedVariants)` arm (Wellformedness.hs:362-366)
+/// Only the `guard (null recomputedVariants)` arm (Wellformedness.hs)
 /// is ported.  The other arm, "Variants", compares a `variants (modulo AC)`
 /// block written out in the rule body against the recomputed set; no corpus
 /// file writes such a block, and the internal rule's `rule_ac` half would have
@@ -587,7 +585,7 @@ pub fn rule_sorts_report(thy: &Theory) -> WfReport {
 /// [`open_rule_has_no_variants`] answers from the verdict
 /// `populate_rule_variants` recorded on each rule, so the check issues no
 /// Maude query of its own; the driver keys the no-variant rule drop off the
-/// same predicate (HS `closeProtoRule`, lib/theory/src/Rule.hs:82-86).
+/// same predicate (HS `closeProtoRule`, lib/theory/src/Rule.hs).
 pub fn rule_variants_report(thy: &Theory, maude: Option<&MaudeHandle>) -> WfReport {
     let Some(maude) = maude else {
         return Vec::new();
@@ -599,7 +597,7 @@ pub fn rule_variants_report(thy: &Theory, maude: Option<&MaudeHandle>) -> WfRepo
         }
         // HS `text "Rule " <> prettyRuleName ruE <> text " has no variants."
         // $--$ text "Most likely, ..." <> text "For exaple, ..."`
-        // (Wellformedness.hs:363-366).  Every piece is a `text`, which
+        // (Wellformedness.hs).  Every piece is a `text`, which
         // HughesPJ never breaks, so the paragraph is one long line and the
         // `$--$` blank line carries the group's `nest 2` indent.  "For exaple"
         // is spelled that way in the HS source.

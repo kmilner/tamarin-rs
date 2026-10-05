@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::cli::parse_args;
@@ -74,7 +73,7 @@ fn out_path_for_none_means_stdout() {
     // `-o` with no value records the empty sentinel.  There is no `-O` to
     // derive a name from, so this is the miss case of HS `mkOutPath`.
     // `None` here makes the caller `die` with
-    // `Please specify a valid output file/directory` (Batch.hs:119-123).
+    // `Please specify a valid output file/directory` (Batch.hs).
     // The caller does not fall back to stdout.
     let a = parse(&["-o", "in.spthy"]);
     assert_eq!(a.output_file.as_deref(), Some(""));
@@ -92,7 +91,7 @@ fn out_path_for_none_means_stdout() {
 // The `--stop-on-trace` method table exists three times — the clap
 // `ValueEnum` (cli.rs), `stop_on_trace_cut` here, and the
 // `configuration:`-block reader `parse_stop_on_trace` (tamarin-theory
-// prove.rs) — where HS has one (`stopOnTrace`, TheoryLoader.hs:397-405)
+// prove.rs) — where HS has one (`stopOnTrace`, TheoryLoader.hs)
 // serving both argv and the block.  This pin is the coupling: every
 // name the CLI accepts must map to the same `CutStrategy` the block
 // reader gives it, so an arm edited in one table cannot drift silently.
@@ -224,7 +223,7 @@ fn mk_theory_load_options_accepts_valid_values() {
     let o = mk_theory_load_options(&a).expect("valid values");
     assert_eq!(o.partial_evaluation, Some(crate::cli::PartialEval::Verbose),);
     assert_eq!(o.output_module, Some(ModuleType::Msr));
-    // HS `derivDefault = 5` (TheoryLoader.hs:391-393) is resolved into
+    // HS `derivDefault = 5` (TheoryLoader.hs) is resolved into
     // the record; `ndcCheck` defaults on.
     assert_eq!(o.derivation_checks, 5);
     assert!(o.ndc_check);
@@ -289,8 +288,8 @@ fn mk_result(verdict: LemmaVerdict, exists_trace: bool, steps: usize) -> LemmaRe
 }
 
 // Pins the per-lemma summary strings to HS `showProofStatus`
-// (Theory/Proof.hs:1105-1112) + the `(N steps)` suffix
-// (ClosedTheory.hs:487-489).  Undetermined/Invalidated render distinct
+// (Theory/Proof.hs) + the `(N steps)` suffix
+// (ClosedTheory.hs).  Undetermined/Invalidated render distinct
 // strings, not "analysis incomplete".  The wording for a falsified lemma
 // depends on the quantifier.  That branch is the one branch of this
 // function whose two arms are a plausible copy-paste of each other.
@@ -328,17 +327,17 @@ fn lemma_summary_line_per_proof_status() {
     );
 }
 
-// HS `traceLabelOptions` (Batch.hs:305-317) is a CONSTANT in batch mode:
+// HS `traceLabelOptions` (Batch.hs) is a CONSTANT in batch mode:
 // `defaultGraphOptions` (SL2 / AS False / CL False / A True / C True,
-// Graph.hs:66-72) and `defaultDotOptions`' `CompactBoringNodes`
-// (Theory/Constraint/System/Dot.hs:84-87) are hard-coded at Batch.hs:254-255.  Pinned against the
+// Graph.hs) and `defaultDotOptions`' `CompactBoringNodes`
+// (Theory/Constraint/System/Dot.hs) are hard-coded at Batch.hs.  Pinned against the
 // v1.13.0 oracle's `digraph` lines.
 #[test]
 fn trace_label_options_is_the_batch_constant() {
     assert_eq!(trace_label_options(), "SL2-AS0-CL0-A1-C1-NB");
 }
 
-// `traceOutputLabel` (Batch.hs:290-303): `"trace_" ++ thyName ++ "_" ++
+// `traceOutputLabel` (Batch.hs): `"trace_" ++ thyName ++ "_" ++
 // options ++ "_" ++ lemmaName ++ intercalate "-" proofPath` — with NO
 // separator before the path.  HS's single-case methods use the empty case
 // name, so the leading dash comes from `intercalate` after an empty first
@@ -360,7 +359,7 @@ fn trace_output_label_has_no_separator_before_the_path() {
     );
 }
 
-// `intercalate "\n" $ map serializeDot labelledSystems` (Batch.hs:265)
+// `intercalate "\n" $ map serializeDot labelledSystems` (Batch.hs)
 // driven through [`write_output_traces`] itself, so the pin fails when the
 // writer changes rather than when `Vec::join` does: every graph already
 // ends `}\n`, so the separator leaves exactly one blank line between

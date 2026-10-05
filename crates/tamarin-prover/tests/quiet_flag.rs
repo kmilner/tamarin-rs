@@ -1,16 +1,15 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! `--quiet` is inert: it suppresses nothing the Haskell binary prints.
 //!
 //! HS registers the flag (`flagNone ["quiet"] (addEmptyArg "quiet")`,
-//! TheoryLoader.hs:159-163) and never reads it back — the sole consumer is
-//! commented out at TheoryLoader.hs:414-416, and `argExists "quiet"` occurs
+//! TheoryLoader.hs) and never reads it back — the sole consumer is
+//! commented out at TheoryLoader.hs, and `argExists "quiet"` occurs
 //! nowhere else in the tree.  So `ensureMaudeAndGetVersion`'s banner
-//! (Console.hs:150-155), the `[Theory X] …` `traceM` markers
-//! (TheoryLoader.hs:451, 496, 581, 594, 696; CloseRule.hs:383, 386) and
-//! `ppRep`'s `summary of summaries:` block (Batch.hs:87-316) all appear with
+//! (Console.hs), the `[Theory X] …` `traceM` markers
+//! (TheoryLoader.hs; CloseRule.hs) and
+//! `ppRep`'s `summary of summaries:` block (Batch.hs) all appear with
 //! and without the flag.
 //!
 //! The pinned oracle (Git revision ef3f0468) confirms it: on [`THEORY`],
@@ -52,7 +51,7 @@ const EXPECTED_STDERR: &[&str] = &[
 
 /// The oracle's `--quiet` stdout for [`THEORY`], normalized by
 /// [`normalize_stdout`].  The lone `"  "` line is HS `ppRep`'s separator
-/// (Batch.hs:146-148).
+/// (Batch.hs).
 const EXPECTED_STDOUT: &[&str] = &[
     "theory Quiet",
     "",

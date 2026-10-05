@@ -108,30 +108,6 @@ if [ -d "$testdir" ]; then
     git -C "$testdir" clean -fdq
 fi
 
-mkdir -p "$root/scripts/results"
-remap_report="scripts/results/cite_remap_$newshort.txt"
-python3 "$root/scripts/remap_hs_cites.py" --old "$old" --new "$new" --apply \
-    2>&1 | tee "$root/$remap_report"
-remap_status="${PIPESTATUS[0]}"
-[ "$remap_status" = 0 ] \
-    || echo "WARNING: cite remap failed — see $remap_report" >&2
-
-wrapped="$(cd "$root" && grep -rnE '\.hs:[0-9]+([,-][0-9]+)*,[[:space:]]*$' \
-    crates --include='*.rs' || true)"
-if [ -n "$wrapped" ]; then
-    {
-        echo
-        echo "WRAPPED CITES — verify these were remapped as a whole:"
-        printf '%s\n' "$wrapped"
-    } >> "$root/$remap_report"
-fi
-
-if (cd "$root" && python3 scripts/check_hs_cites.py) >> "$root/$remap_report" 2>&1; then
-    echo "cite gate: check_hs_cites.py OK"
-else
-    echo "WARNING: check_hs_cites.py found stale cites — see $remap_report" >&2
-fi
-
 staged_outputs="tamarin-prover gitlink"
 if [ "${SKIP_BUILD:-0}" != 1 ]; then
     "$root/setup.sh" testing
@@ -146,7 +122,6 @@ fi
 cat <<EOF
 == bumped tamarin-prover $oldshort -> $newshort ==
 staged (not committed): $staged_outputs
-review: $remap_report and any Haskell cite rewrites
 
 The rebuilt oracle has a new fingerprint, so old cache entries stay isolated
 for old checkouts while current gates refill their own generation. Re-certify:

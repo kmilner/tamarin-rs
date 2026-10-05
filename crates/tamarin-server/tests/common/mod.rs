@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Shared test harness: spin up a real `axum` server on an ephemeral
 //! port with a small fixture theory pre-loaded.  Returns the base URL
@@ -137,7 +136,7 @@ pub async fn start_server_with_theory_and(
         solver_parameters: Default::default(),
         stop_on_trace: None,
         // Match ServerConfig::new's defaults (HS `dotPath`,
-        // Environment.hs:37-38, and an absent `--with-json`).
+        // Environment.hs, and an absent `--with-json`).
         dot_path: "dot".to_string(),
         json_path: None,
         auto_sources: false,
@@ -325,9 +324,9 @@ fn blank_version_banner(s: &str) -> String {
 /// banner.
 ///
 /// Three routes serve that one document: `getTheorySourceR`
-/// (`src/Web/Handler.hs:1015-1022`), `getTheoryMessageDeductionR`
-/// (`src/Web/Handler.hs:1050-1055`) and `getDownloadTheoryR`
-/// (`src/Web/Handler.hs:1763-1766`).  `getDownloadTheoryR` returns the body of
+/// (`src/Web/Handler.hs`), `getTheoryMessageDeductionR`
+/// (`src/Web/Handler.hs`) and `getDownloadTheoryR`
+/// (`src/Web/Handler.hs`).  `getDownloadTheoryR` returns the body of
 /// `getTheorySourceR`.
 #[allow(dead_code)]
 pub fn assert_theory_source_matches_capture(body: &str, capture: &str) {

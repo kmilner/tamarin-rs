@@ -403,10 +403,14 @@ so as to not inherit any information about the GPL 3.0 source code beyond broad 
 etc. Early experiments with clean room implementation of the formatting code had limited success,
 so for now there is no active work on this.
 
-Ported files carry a short GPL 3.0 notice at the top; the upstream authors whose permission a
-given file awaits are computed on demand from its citations with
-`scripts/gen_license_headers.py --authors <file>` (range-blame at the pinned submodule commit).
-The same script regenerates the notices; `--check` verifies them.
+Ported files carry an explicit GPL 3.0 notice at the top. These notices are
+maintained independently of source references; editing or removing a reference
+does not change a file's licensing designation.
+
+Source comments refer to files and symbols in the pinned `tamarin-prover/`
+submodule, for example `Theory/Model/Rule.hs#getRuleName`. Paths may use an
+unambiguous suffix.
+
 Currently no one has granted permission, because I haven't started asking yet. If you want to
 preempt this and give your permission please send me an email or file a github issue!
 

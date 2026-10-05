@@ -1,12 +1,11 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Tools.AbstractInterpretation` — abstract interpretation
 //! for partial evaluation of multiset rewriting systems — plus the theory
-//! rewrite HS performs in `applyPartialEvaluation` (Prover.hs:237-264).
+//! rewrite HS performs in `applyPartialEvaluation` (Prover.hs).
 //!
-//! Algorithm (HS `interpretAbstractly`, AbstractInterpretation.hs:44-83):
+//! Algorithm (HS `interpretAbstractly`, AbstractInterpretation.hs):
 //! starting from the abstract state `{ Fr(~z), In(z) }`, repeatedly refine
 //! every rule against the state (each premise E-unified — via Maude —
 //! against every state fact with the same tag) and add the refined rules'
@@ -18,8 +17,8 @@
 //! A structural subtlety this module must reproduce: a rule carries its
 //! `_restrict` formulas in `ProtoRuleEInfo::restrictions` (HS
 //! `preRestriction`), `HasFrees (Rule i)` folds over them before the body
-//! (Theory/Model/Rule.hs:291-298, Theory/Model/Rule.hs:491-498) and `Apply
-//! ProtoRuleEInfo` is the identity (Theory/Model/Rule.hs:500-501).  So a
+//! (Theory/Model/Rule.hs, Theory/Model/Rule.hs) and `Apply
+//! ProtoRuleEInfo` is the identity (Theory/Model/Rule.hs).  So a
 //! refined rule keeps its ORIGINAL restriction frees unsubstituted, and they
 //! floor the final `rename`'s index shift (a fully-substituted body keeps its
 //! refined indices — the oracle renders `In( x.2 )` for
@@ -63,9 +62,9 @@ use crate::rule::{unify_ln_fact_eqs, ProtoRuleE};
 use crate::theory::{OpenProtoRule, Theory, TheoryItem};
 
 /// How to report on performing a partial evaluation.  HS
-/// `EvaluationStyle` (AbstractInterpretation.hs:86); the CLI maps
+/// `EvaluationStyle` (AbstractInterpretation.hs); the CLI maps
 /// `SUMMARY` → `Summary` and `VERBOSE` → `Tracing`
-/// (TheoryLoader.hs:354-358); `Silent` is unreachable from the CLI.
+/// (TheoryLoader.hs); `Silent` is unreachable from the CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvaluationStyle {
     Silent,
@@ -74,7 +73,7 @@ pub enum EvaluationStyle {
 }
 
 // =============================================================================
-// absFact / absTerm (AbstractInterpretation.hs:122-139)
+// absFact / absTerm (AbstractInterpretation.hs)
 // =============================================================================
 
 /// Per-fact abstraction state: HS's `evalBind noBindings` +
@@ -85,7 +84,7 @@ struct AbsState {
     bindings: Vec<(LNTerm, LNTerm)>,
 }
 
-/// HS `absTerm` (AbstractInterpretation.hs:131-139): constants survive,
+/// HS `absTerm` (AbstractInterpretation.hs): constants survive,
 /// `NoEq` applications are recursed into, everything else (variables and
 /// AC/C/List applications) is replaced via `importBinding` — identical
 /// sub-terms within one fact share the imported variable; a fresh variable
@@ -114,7 +113,7 @@ fn abs_term(t: &LNTerm, st: &mut AbsState) -> LNTerm {
     }
 }
 
-/// HS `absFact` (AbstractInterpretation.hs:124-129): every `Out` fact
+/// HS `absFact` (AbstractInterpretation.hs): every `Out` fact
 /// collapses to `Out( z )` with `z = LVar "z" LSortMsg 0` (annotations
 /// dropped — `outFact` builds a default-annotation fact); any other fact
 /// keeps its tag and annotations with the terms abstracted left-to-right
@@ -134,10 +133,10 @@ fn abs_fact(fa: &LNFact) -> LNFact {
 }
 
 // =============================================================================
-// interpretAbstractly (AbstractInterpretation.hs:44-83)
+// interpretAbstractly (AbstractInterpretation.hs)
 // =============================================================================
 
-/// HS `refineRule` (AbstractInterpretation.hs:76-83), the `FreshT []`
+/// HS `refineRule` (AbstractInterpretation.hs), the `FreshT []`
 /// nondeterminism made explicit as a DFS: for each premise (in order),
 /// choose a state fact with the same tag (state facts visited in sorted
 /// `S.toList` order — premise 1 varies SLOWEST) and `rename` it above the
@@ -191,7 +190,7 @@ fn refine_rule(
     }
     // Seed: `evalFreshT (avoid ru)` — the counter starts above the rule's
     // maximum free variable index.  HS's `avoid` folds the rule info too
-    // (`HasFrees (Rule i)`, Theory/Model/Rule.hs:291-298), so the `_restrict`
+    // (`HasFrees (Rule i)`, Theory/Model/Rule.hs), so the `_restrict`
     // formulas' frees participate in the bound.
     let body_bound = avoid(ru).fresh_idents(0);
     let info_bound = info_frees(ru).iter().map(|v| v.idx + 1).max().unwrap_or(0);
@@ -200,8 +199,8 @@ fn refine_rule(
     go(maude, state_facts, ru, 0, seed, &mut eqs, out)
 }
 
-/// HS `interpretAbstractly` (AbstractInterpretation.hs:44-83) fused with
-/// `partialEvaluation`'s `consumeEvaluation` (AbstractInterpretation.hs:100-119),
+/// HS `interpretAbstractly` (AbstractInterpretation.hs) fused with
+/// `partialEvaluation`'s `consumeEvaluation` (AbstractInterpretation.hs),
 /// instantiated at their single upstream use (`S.Set LNFact` state,
 /// `S.insert . absFact` add, `unifyLNFactEqs` unification).
 ///
@@ -240,8 +239,8 @@ fn interpret_abstractly(
         }
         // Only CONCLUSIONS feed the state (HS `get rConcs`).  `S.insert`
         // REPLACES an existing equal element, and `Eq`/`Ord LNFact` compare
-        // tag + terms only (Theory/Model/Fact.hs:170-174) while `prettyLNFact`
-        // still prints the annotations (Theory/Model/Fact.hs:567-574) — so the
+        // tag + terms only (Theory/Model/Fact.hs) while `prettyLNFact`
+        // still prints the annotations (Theory/Model/Fact.hs) — so the
         // LAST insertion
         // of a tag/terms-equal fact decides which annotations the report
         // shows.  `BTreeSet::replace` is that semantics; `insert` would keep
@@ -256,7 +255,7 @@ fn interpret_abstractly(
             return Ok((st, refined, trace));
         }
         // HS `withTrace` over the step from `st` to `st_next`
-        // (AbstractInterpretation.hs:109-119).
+        // (AbstractInterpretation.hs).
         let added = st_next.len() - st.len();
         match style {
             EvaluationStyle::Silent => {}
@@ -281,11 +280,11 @@ fn interpret_abstractly(
 }
 
 // =============================================================================
-// eqModuloFreshnessNoAC for rules (Term/LTerm.hs:663-670)
+// eqModuloFreshnessNoAC for rules (Term/LTerm.hs)
 // =============================================================================
 
 /// The rule's `_restrict`-formula frees: HS `foldFrees f rstr`
-/// (Theory/Model/Rule.hs:491-498) over `preRestriction`, in `freesList`
+/// (Theory/Model/Rule.hs) over `preRestriction`, in `freesList`
 /// order — first occurrence first, duplicates kept, since the caller
 /// numbers them by first occurrence.
 fn info_frees(r: &ProtoRuleE) -> Vec<LVar> {
@@ -298,7 +297,7 @@ fn info_frees(r: &ProtoRuleE) -> Vec<LVar> {
 
 /// Canonicalise every free variable of `r` to `LVar "" <sort> <seq-idx>`
 /// in `mapFrees` traversal order.  HS traverses the rule INFO first
-/// (Theory/Model/Rule.hs:291-298), binding the unsubstituted
+/// (Theory/Model/Rule.hs), binding the unsubstituted
 /// `_restrict`-formula frees
 /// before the body (premises, conclusions, actions, new_vars) — so a body
 /// variable identical to a restriction free reuses its canon slot, and
@@ -349,18 +348,18 @@ fn nub_modulo_freshness(rules: Vec<(ProtoRuleE, Vec<LVar>)>) -> Vec<ProtoRuleE> 
 }
 
 // =============================================================================
-// partialEvaluation (AbstractInterpretation.hs:86-119)
+// partialEvaluation (AbstractInterpretation.hs)
 // =============================================================================
 
 /// HS renders the trace/report docs with the plain `render`
-/// (Text/PrettyPrint/Class.hs:77-78)
+/// (Text/PrettyPrint/Class.hs)
 /// = HughesPJ's DEFAULT style: lineLength 100, ribbon `round(100/1.5)` = 67
 /// — NOT the console width the theory body uses.
 fn render_default_style(d: Doc) -> String {
     d.render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON)
 }
 
-/// HS `partialEvaluation` (AbstractInterpretation.hs:90-119).  Returns
+/// HS `partialEvaluation` (AbstractInterpretation.hs).  Returns
 /// `(abstract state, refined rules, trace)`:
 /// * the fixpoint abstract state;
 /// * the last iteration's rules, each `rename`d from `nothingUsed` (min
@@ -382,7 +381,7 @@ fn partial_evaluation(
     // index shift making the minimum free var index 0.  The minimum is
     // taken over the body frees AND the rule's unsubstituted
     // `_restrict`-formula frees (HS `boundsVarIdx` folds the rule info,
-    // Theory/Model/Rule.hs:291-298), which HS's `mapFrees` shifts along with
+    // Theory/Model/Rule.hs), which HS's `mapFrees` shifts along with
     // the body —
     // the shifted info frees then seed the dedup's canonicalisation.
     let renamed: Vec<(ProtoRuleE, Vec<LVar>)> =
@@ -391,10 +390,10 @@ fn partial_evaluation(
 }
 
 /// HS `(`evalFresh` nothingUsed) . rename` over a refined rule
-/// (LTerm.hs:638-645): compute `boundsVarIdx` over the body frees ∪ the
+/// (LTerm.hs): compute `boundsVarIdx` over the body frees ∪ the
 /// rule's `_restrict`-formula frees, then shift every index uniformly so the
 /// minimum becomes 0.  The info frees are shifted too (HS's `mapFrees` maps
-/// the info, Theory/Model/Rule.hs:302-306) and returned for the dedup's canon
+/// the info, Theory/Model/Rule.hs) and returned for the dedup's canon
 /// pass.
 fn rename_rule_from_zero(r: ProtoRuleE) -> (ProtoRuleE, Vec<LVar>) {
     let info_vars = info_frees(&r);
@@ -419,7 +418,7 @@ fn rename_rule_from_zero(r: ProtoRuleE) -> (ProtoRuleE, Vec<LVar>) {
 }
 
 // =============================================================================
-// applyPartialEvaluation (Prover.hs:237-264)
+// applyPartialEvaluation (Prover.hs)
 // =============================================================================
 
 /// The sort key of HS's derived-`Ord (Rule i)` order, minus the unreachable
@@ -435,7 +434,7 @@ fn proto_rule_key(r: &ProtoRuleE) -> impl Ord + '_ {
     )
 }
 
-/// The `text{* … *}` report body (HS `ppAbsState`, Prover.hs:257-264),
+/// The `text{* … *}` report body (HS `ppAbsState`, Prover.hs),
 /// byte-exact: leading space, `$--$`-joined header / `numbered'` fact list
 /// / footer, trailing `".\n\n"` from the footer's literal newlines.
 fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> String {
@@ -455,10 +454,10 @@ fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> S
     ))
 }
 
-/// HS `applyPartialEvaluation` (Prover.hs:237-264) over the internal theory:
+/// HS `applyPartialEvaluation` (Prover.hs) over the internal theory:
 ///
 /// 1. `ru_es` = the rules' `ProtoRuleE`s through a Set round-trip
-///    (`getProtoRuleEs`, ClosedTheory.hs:87-89) — this is what re-orders
+///    (`getProtoRuleEs`, ClosedTheory.hs) — this is what re-orders
 ///    the rules ALPHABETICALLY by name.
 /// 2. Run [`partial_evaluation`].
 /// 3. Splice the item list (HS `replaceProtoRules`): items before the first
@@ -480,16 +479,16 @@ pub fn apply_partial_evaluation(
     maude: &MaudeHandle,
     style: EvaluationStyle,
 ) -> Result<String, MaudeError> {
-    // HS `getProtoRuleEs` (ClosedTheory.hs:87-89) extracts `cprRuleE` — the
+    // HS `getProtoRuleEs` (ClosedTheory.hs) extracts `cprRuleE` — the
     // E-half that keeps the macro calls as the source writes them
-    // (`closeProtoRule`, lib/theory/src/Rule.hs:82-86), that
+    // (`closeProtoRule`, lib/theory/src/Rule.hs), that
     // `addActionClosedProtoRule` never annotates
-    // (lib/theory/src/Rule.hs:95-99) and that `unfoldRuleVariants` duplicates
-    // verbatim across variants (lib/theory/src/Rule.hs:63-79, see line 76) —
+    // (lib/theory/src/Rule.hs) and that `unfoldRuleVariants` duplicates
+    // verbatim across variants (lib/theory/src/Rule.hs) —
     // so when the `--auto-sources` close preceded this call the refinement
     // input carries NO AUTO_* actions, and the Set round-trip below
     // collapses the per-variant duplicates ("we remove duplicates if they
-    // exist due to variant unfolding", ClosedTheory.hs:87-89, see line 89).
+    // exist due to variant unfolding", ClosedTheory.hs).
     // Feeding the annotated `rule` half instead lets the baked AUTO actions
     // reach the second close, whose refined-source trigger they then
     // wrongly satisfy.
@@ -515,10 +514,10 @@ pub fn apply_partial_evaluation(
 
     // The refined rules carry empty variant/loop-breaker fields for the
     // caller's re-close.  That re-close is HS's second
-    // `closeTheoryWithMaude` (Prover.hs:238-241), which reaches
+    // `closeTheoryWithMaude` (Prover.hs), which reaches
     // `closeProtoRule` and narrows `applyMacroInRule macros ruE` while
     // keeping the refined rule itself as `cprRuleE`
-    // (lib/theory/src/Rule.hs:82-86).
+    // (lib/theory/src/Rule.hs).
     let macros: Vec<crate::theory::LNMacro> = elaborated.macros().cloned().collect();
     let mut inserted: Vec<TheoryItem> = Vec::with_capacity(refined.len() + 1);
     inserted.push(TheoryItem::Text(("text".to_string(), body)));

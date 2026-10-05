@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::lterm::{LSort, LVar};
@@ -65,10 +64,10 @@ fn spawn_and_reduce_pair() {
     assert_eq!(h.stats().norm_count, 1, "the reduce really went to Maude");
 }
 
-/// `Reduction` runs over the FAST `FreshT` (Reduction.hs:118 with the
-/// re-export at Control/Monad/Fresh.hs:42), so the handle's single counter
+/// `Reduction` runs over the FAST `FreshT` (Reduction.hs with the
+/// re-export at Control/Monad/Fresh.hs), so the handle's single counter
 /// answers both class methods: `freshIdent` ignores the name and draws one
-/// (Control/Monad/Fresh/Class.hs:39), and `freshIdents k` reserves `k` and
+/// (Control/Monad/Fresh/Class.hs), and `freshIdents k` reserves `k` and
 /// returns the first.
 #[test]
 fn maude_handle_fresh_idents_is_reserve_idxs() {
@@ -558,7 +557,7 @@ fn match_eqs_skolemize_both_mset_var_to_submultiset() {
 }
 
 // HS's `impliedFormulas` runs `skolemizeGuarded` over the WHOLE clause
-// (`System.hs:1112-1146, see line 1123`): every FREE (non-universal) LVar of the guard
+// (`System.hs`): every FREE (non-universal) LVar of the guard
 // pattern becomes a Maude *constant*; only universal-bound vars stay
 // bindable.  `match_eqs_skolemize_both` treats those free vars as
 // distinct constants, matching HS's `skolemizeGuarded`-then-match.
@@ -630,8 +629,8 @@ fn impl_guard_match_skolemizes_pattern_free_vars() {
 
 /// Directional regression for the `match_eqs` `Equal` convention.
 ///
-/// HS `matchWith t p = DelayedMatches [(t, p)]` (Term/Rewriting/Definitions.hs:93)
-/// is `(subject, pattern)`, and `compareTermSubs t1 t2` (Subsumption.hs:37-45)
+/// HS `matchWith t p = DelayedMatches [(t, p)]` (Term/Rewriting/Definitions.hs)
+/// is `(subject, pattern)`, and `compareTermSubs t1 t2` (Subsumption.hs)
 /// relies on that order: with `t1 = h(x)` (general) and `t2 = h(a)` (ground,
 /// specific):
 ///   - `t1 matchWith t2` = subject h(x) vs pattern h(a): h(x)'s free var

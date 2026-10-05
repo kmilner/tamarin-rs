@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.Rewriting.Norm` — normalisation and normal-form
 //! checks via the Maude bridge.
@@ -39,7 +38,7 @@ pub fn norm(maude: &MaudeHandle, t: &LNTerm) -> Result<LNTerm, MaudeError> {
 }
 
 /// `nfViaHaskell` — pure structural normal-form check.  Mirrors HS
-/// `Term/Rewriting/Norm.hs:54-127` (`nfViaHaskell`).  Returns `true`
+/// `Term/Rewriting/Norm.hs` (`nfViaHaskell`).  Returns `true`
 /// iff `t` is in normal form according to the structural rules of the
 /// signature, **independent of any AC canonicalisation that Maude
 /// might apply**.  This is critical: a term like `mult(tid, x)` and
@@ -52,7 +51,7 @@ pub fn norm(maude: &MaudeHandle, t: &LNTerm) -> Result<LNTerm, MaudeError> {
 /// and causing wrong-verified outcomes on DH key-secrecy lemmas
 /// (JKL_TS2_2004{,_KI_wPFS}).
 ///
-/// HS-faithful pattern set (`nfViaHaskell` lines 60-99):
+/// HS-faithful pattern set (`nfViaHaskell` in Norm.hs):
 ///   - irreducible top: walk subterms
 ///   - reducible exponent / inverse / mult / xor / pmult / emap
 ///     patterns: return `false`
@@ -66,7 +65,7 @@ pub fn nf_via_haskell(msig: &MaudeSig, t: &LNTerm) -> bool {
 /// but the subterm-rule arm can also fire for rules whose LHS contains an
 /// Ac-/C-headed subterm (e.g. the user-`[AC]` cancellation equations
 /// `xorr(x, x) = zeroo` / `xorr(xorr(x, y), x) = y`).  HS's
-/// `struleApplicable` (Norm.hs:107-113) matches via `solveMatchLNTerm`
+/// `struleApplicable` (Norm.hs) matches via `solveMatchLNTerm`
 /// inside the `WithMaude` reader, so AC-headed rule LHSes match through
 /// Maude; the pure no-AC matcher used by [`nf_via_haskell`] can never
 /// match them (its `match_raw` raises `NeedsAC` on any Ac-vs-Ac pair).
@@ -97,12 +96,12 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
         Term::Lit(_) => true,
         Term::App(sym, args) => {
             // 1. Irreducible NoEq / user-defined-AC top: walk subterms.
-            // HS's `nfViaHaskell` (Norm.hs:55-127, see line 62) gates the
+            // HS's `nfViaHaskell` (Norm.hs) gates the
             // irreducible-set lookup on the symbol KIND — it checks
             // `FAppNoEq o ts | (NoEq o) \`S.member\` irreducible` and
             // `FAppACfct o ts | (AC (ACfct o)) \`S.member\` irreducible`.  The
             // builtin AC operators sit in `irreducible_fun_syms` as well, for
-            // OTHER consumers (Contradictions.hs:152-153 `maybeNonNormalTerms`
+            // OTHER consumers (Contradictions.hs `maybeNonNormalTerms`
             // uses `S.member` on the FUN set to decide which subterms to NOT
             // include), but Norm.hs matches them through their own `viewTerm2`
             // constructors, so they must not take this arm: ungated,
@@ -130,7 +129,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             }
             // 3. Subterm-rule LHS match → reducible.  Both of HS's st-rule
             //    arms are guarded on the top symbol's KIND — `FAppNoEq _ _`
-            //    and `FAppACfct _ _` (Norm.hs:73-74) — so only NoEq- and
+            //    and `FAppACfct _ _` (Norm.hs) — so only NoEq- and
             //    user-`[AC]`-headed terms are ever offered to
             //    `struleApplicable`.  Builtin-AC- and C-headed terms have
             //    their own dedicated reducibility patterns (sections 5-6
@@ -146,7 +145,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             //    is a structural guarantee, not a filter that fires in
             //    practice.)
             //    HS uses `solveMatchLNTerm (t `matchWith` lhs)`
-            //    (Norm.hs:107-113).
+            //    (Norm.hs).
             //    All builtin subterm rules (pair / senc / sdec / aenc /
             //    adec / sign / verify / ...) have AC-free LHS, so the
             //    no-AC matcher is complete for them; a rule whose LHS
@@ -252,7 +251,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                     AcSym::Mult => {
                         // HS: `FMult ts | fAppOne `elem` ts || fAppDHNeutral
                         // `elem` ts || any isProduct ts || invalidMult ts`
-                        // (Norm.hs:84) — the three element tests fuse into one
+                        // (Norm.hs) — the three element tests fuse into one
                         // pass, the disjunction is unchanged.
                         let reducible_factor = |a: &LNTerm| {
                             is_nullary(a, ONE_SYM_STRING)
@@ -266,7 +265,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                     }
                     AcSym::Xor => {
                         // HS: `FXor ts | fAppZero `elem` ts || any isXor ts ||
-                        // invalidXor ts` (Norm.hs:86).
+                        // invalidXor ts` (Norm.hs).
                         if args
                             .iter()
                             .any(|a| is_nullary(a, ZERO_SYM_STRING) || is_xor(a))
@@ -319,7 +318,7 @@ fn is_xor(t: &LNTerm) -> bool {
     matches!(t, Term::App(FunSym::Ac(AcSym::Xor), _))
 }
 
-/// `invalidMult` — HS `Norm.hs:115-121`.  Detects mult patterns that
+/// `invalidMult` — HS `Norm.hs`.  Detects mult patterns that
 /// are not in NF due to inverse cancellation.
 fn invalid_mult(ts: &[LNTerm]) -> bool {
     use crate::function_symbols::{AcSym, INV_SYM_STRING};
@@ -353,7 +352,7 @@ fn invalid_mult(ts: &[LNTerm]) -> bool {
     }
 }
 
-/// `invalidXor` — HS `Norm.hs:123-126`.  True iff `ts` contains
+/// `invalidXor` — HS `Norm.hs`.  True iff `ts` contains
 /// duplicates.
 fn invalid_xor(ts: &[LNTerm]) -> bool {
     // Smart constructors keep AC arguments sorted, so duplicates are adjacent
@@ -377,7 +376,7 @@ fn invalid_xor(ts: &[LNTerm]) -> bool {
             .any(|(i, term)| ts[i + 1..].contains(term))
 }
 
-/// `struleApplicable` — HS `Norm.hs:107-113`.  Returns true iff the
+/// `struleApplicable` — HS `Norm.hs`.  Returns true iff the
 /// rule's LHS matches `t` AND the rule actually rewrites `t` to
 /// something different.
 fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
@@ -391,7 +390,7 @@ fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> b
 /// The `StRhs` disambiguation both `struleApplicable` ports apply once the
 /// rule's LHS has matched `t`.
 fn strule_rewrites(t: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
-    // HS (Norm.hs:110-113):
+    // HS (Norm.hs):
     //   _:_ -> case rhs of
     //            StRhs [] s -> not (t == s)   -- reducible, but RHS might equal t
     //            StRhs _  _ -> True
@@ -411,7 +410,7 @@ fn strule_rewrites(t: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
 /// the same HS `solveMatchLNTerm (t `matchWith` lhs)` semantics, with the
 /// 3-way native matcher first and a Maude `match` only on `NeedsAc`
 /// (mirroring HS `matchViaMaude` on `Left ACProblem`,
-/// Term/Unification.hs:235-236), minus the `NeedsAc` pairs the module's
+/// Term/Unification.hs), minus the `NeedsAc` pairs the module's
 /// axioms already answer (see the root-symbol note below).  Subject vars
 /// are rigid in the Maude `match` command on both sides of the port, so the
 /// outcomes agree.
@@ -440,14 +439,14 @@ fn rule_applies_ac(
             // identity element is ever declared
             // (`maude_print.rs::op_ac`/`op_c` plus the user-AC `op` loop,
             // mirroring HS `theoryOpAC`/`theoryOpACUser`,
-            // Term/Maude/Parser.hs:217-267).  Commutativity and associativity each
+            // Term/Maude/Parser.hs).  Commutativity and associativity each
             // carry the same symbol at the root of both sides, so the root
             // symbol is invariant across a term's axiom class, and no
             // instance of an `f`-rooted pattern is axiom-equal to a
             // `g`-rooted subject for `f /= g`.  `match_raw` reports
             // `NeedsAc` for *any* two AC-headed sides — it deliberately
             // does not compare the symbols, mirroring HS `matchRaw`
-            // (Unification.hs:336-360, see line 356) — so the comparison
+            // (Unification.hs) — so the comparison
             // belongs here.
             (Term::App(FunSym::Ac(t_sym), _), Term::App(FunSym::Ac(lhs_sym), _))
                 if t_sym != lhs_sym =>
@@ -465,7 +464,7 @@ fn rule_applies_ac(
     matched && strule_rewrites(t, rhs)
 }
 
-// NOTE: `maybeNotNfSubterms` (HS `Term/Rewriting/Norm.hs:165-171`) lives
+// NOTE: `maybeNotNfSubterms` (HS `Term/Rewriting/Norm.hs`) lives
 // in the solver, not here — see `contradictions.rs::maybe_not_nf_subterms`,
 // which is the HS-faithful copy (it returns `[t]` for a bare `Lit (Var _)`,
 // matching HS's `_ -> [t]` wildcard, and `[]` only for `Lit (Con _)`).

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Integration tests for the STUBBED routes.
 //!
@@ -76,7 +75,7 @@ async fn test_edit_stub_returns_alert() {
 // ---------------------------------------------------------------------
 // /del/path/lemma/<name> — LIVE
 //
-// Haskell `getDeleteStepR` (`src/Web/Handler.hs:1681-1698`) uses
+// Haskell `getDeleteStepR` (`src/Web/Handler.hs`) uses
 // `modifyTheory` → allocates a new idx and returns
 // `{redirect: /thy/trace/<newIdx>/overview/lemma/<name>}`.
 // We mirror the SHAPE (new idx + same lemma path); Haskell's exact
@@ -247,7 +246,7 @@ async fn test_prev_main_lemma_matches_haskell() {
 async fn test_next_normal_help_to_message_matches_haskell() {
     // Haskell `next "normal" = nextThyPath` walks Help → Message.
     // Other section strings (like `main`) are no-ops per
-    // `next _ = const id` (`src/Web/Handler.hs:1546-1549`).  This
+    // `next _ = const id` (`src/Web/Handler.hs`).  This
     // test exercises the `normal` arm; the `main` no-op is covered
     // by `test_next_main_help_is_noop_matches_haskell`.
     // Navigation only inspects the loaded theory; a missing post-load Maude

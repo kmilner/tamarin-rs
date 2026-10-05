@@ -2,23 +2,23 @@
 //
 // `Out` on a rule's left-hand side raises the "Special facts" check, whose
 // message renders the offending fact with `prettyLNFact`
-// (HS `specialFactsUsage'`, Theory/Tools/Wellformedness.hs:553-566) — the one
+// (HS `specialFactsUsage'`, Theory/Tools/Wellformedness.hs) — the one
 // wf entry that prints a whole AC-headed term, and so the one that exposes
 // tamarin-parser's `wf::cmp_wf_term` to a user `[AC]` head.
 //
 //   - `Operand` pins the operand ORDER against a bare variable: `Ord (Term a)`
-//     puts every `LIT` before every `FAPP` (Term/Term/Raw.hs:73-75), so the
+//     puts every `LIT` before every `FAPP` (Term/Term/Raw.hs), so the
 //     `add` application follows `z` however the source spells the chain;
 //   - `CrossOp` pins the CROSS-OPERATOR rank, where both operands are
 //     AC-headed and `Ord ACSym` decides.  `ACfct` is the last constructor of
 //     `data ACSym = Union | Mult | Xor | NatPlus | ACfct ACfctSym`
-//     (Term/Term/FunctionSymbols.hs:138), so a user-AC operand sorts after
+//     (Term/Term/FunctionSymbols.hs), so a user-AC operand sorts after
 //     every builtin one — `NatPlus` is the adjacent case and the one an
 //     off-by-one rank gets backwards.
 //
 // The two also pin the two INFIX spellings apart: HS `prettyTerm` renders a
-// user AC symbol as `" " ++ name ++ " "` (Term/Term.hs:305) but the builtin
-// operators without surrounding spaces (Term/Term.hs:308-309), so one term
+// user AC symbol as `" " ++ name ++ " "` (Term/Term.hs) but the builtin
+// operators without surrounding spaces (Term/Term.hs), so one term
 // carries `(p add q)` and the other `(%e%+%f)`.
 //
 // No corpus theory declares an `[AC]` symbol in a rule that trips a wf check.

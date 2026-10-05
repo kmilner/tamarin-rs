@@ -1,13 +1,12 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Pins HS's `unboundReport` coverage of the rules SAPIC's process
 //! translation generates.
 //!
 //! HS runs its single `checkWellformedness` pass on the TRANSLATED theory
-//! (`checkTranslatedTheory`, TheoryLoader.hs:559-565), so `unboundReport`
-//! (Wellformedness.hs:514-519) walks the generated rules too.  A variable free
+//! (`checkTranslatedTheory`, TheoryLoader.hs), so `unboundReport`
+//! (Wellformedness.hs) walks the generated rules too.  A variable free
 //! only inside a process's embedded `_restrict` is lifted into the generated
 //! rule's `Restr_<rule>_<i>( … )` action, where no premise binds it, and so is
 //! reported against that rule.
@@ -20,7 +19,7 @@
 //!   - and ahead of `ruleVariantsReport`'s (index 6) "Rule has no variants",
 //!     whose rule `closeProtoRule` drops from the closed theory;
 //!   - the variable a `lookup t as v` combinator binds is NOT reported, per
-//!     `originatesFromLookup` (Wellformedness.hs:501-510).
+//!     `originatesFromLookup` (Wellformedness.hs).
 //!
 //! The expected bytes below are the pinned oracle's (Git revision ef3f0468)
 //! output for the four `tests/fixtures/sapic_*.spthy` files, run with
@@ -40,7 +39,7 @@ fn load(fixture_name: &str) -> String {
     let out_path = out_dir.join(format!("{fixture_name}.out"));
 
     // `-o`/`--output` is a cmdargs `flagOpt` whose value must be ATTACHED
-    // (Batch.hs:44-84, see line 76).
+    // (Batch.hs).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
     let (code, _, stderr) = run_binary(
         &["--quiet", "--derivcheck-timeout=0", &output_arg],
@@ -151,7 +150,7 @@ fn sapic_restrict_unbound_sorts_before_rule_variants() {
         "the generated-rule `Unbound variables` group must splice ahead of \
          `Rule has no variants`.\nexpected:\n{expected}\ngot:\n{body}"
     );
-    // HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86, see line 84) makes no
+    // HS `closeProtoRule` (lib/theory/src/Rule.hs) makes no
     // closed rule for a rule with no variants, so `NoVar` reaches the report
     // but not the printed theory.  The oracle prints the same.
     assert!(

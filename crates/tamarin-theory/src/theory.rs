@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Top-level `Theory` data type — port of `TheoryObject.Theory` and
 //! `Items.TheoryItem.TheoryItem`.
@@ -34,9 +33,9 @@ pub struct OpenProtoRule {
     /// represents the un-narrowed E-rule; when this disjunction is
     /// non-empty, `solve_rule_constraints` adds it as a SplitG goal
     /// in the eq-store so the variant choice is enumerated lazily
-    /// per Haskell's `solveRuleConstraints` (Reduction.hs:789-797).
+    /// per Haskell's `solveRuleConstraints` (Reduction.hs).
     /// Mirrors `RuleACConstrs = Disj LNSubstVFresh`
-    /// (Theory/Model/Rule.hs:1009).
+    /// (Theory/Model/Rule.hs).
     pub variant_substs: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
     /// The abstracted form of `rule` for the SplitG path (Haskell
     /// `variantsProtoRule` returns this in the `ProtoRuleAC`'s
@@ -56,30 +55,28 @@ pub struct OpenProtoRule {
     /// populated while closing the theory, or by a standalone
     /// `ProofContext` on demand.
     pub loop_breakers: Vec<crate::rule::PremIdx>,
-    /// HS's `cprRuleE` half (`ClosedProtoRule`, Items/RuleItem.hs:56-59),
+    /// HS's `cprRuleE` half (`ClosedProtoRule`, Items/RuleItem.hs),
     /// stored only where it differs from `rule`: **`None` iff `rule` IS that
     /// half**.  Three steps drive them apart.  `elaborate_items` applies the
     /// theory's macros to `rule` alone, because `closeProtoRule` narrows
     /// `applyMacroInRule macros ruE` and keeps the unexpanded `ruE`
-    /// (lib/theory/src/Rule.hs:82-86).  `addActionClosedProtoRule` adds AUTO
-    /// actions to `cprRuleAC` only (lib/theory/src/Rule.hs:95-99).
+    /// (lib/theory/src/Rule.hs).  `addActionClosedProtoRule` adds AUTO
+    /// actions to `cprRuleAC` only (lib/theory/src/Rule.hs).
     /// `unfoldRuleVariants` carries the ORIGINAL rule as every variant's
-    /// `cprRuleE` (lib/theory/src/Rule.hs:63-79, see line 76).  Consumers of
+    /// `cprRuleE` (lib/theory/src/Rule.hs).  Consumers of
     /// HS's `getProtoRuleEs` (`S.toList . S.fromList . map oprRuleE`,
-    /// ClosedTheory.hs:87-89) — partial evaluation — must read this half
+    /// ClosedTheory.hs) — partial evaluation — must read this half
     /// through [`OpenProtoRule::rule_e`]: it is macro-unexpanded, carries no
     /// AUTO actions, and the Set round-trip collapses the per-variant
     /// duplicates.
     pub rule_e: Option<Box<ProtoRuleE>>,
-    /// HS's `_oprRuleAC` (Items/RuleItem.hs:34-36): the `variants (modulo
+    /// HS's `_oprRuleAC` (Items/RuleItem.hs): the `variants (modulo
     /// AC)` blocks the source writes out, parsed by `protoRuleAC` and
-    /// collected by `protoRule` (Theory/Text/Parser/Rule.hs:126-135, see line
-    /// 134).  A rule that declares them is closed by mapping `ClosedProtoRule
+    /// collected by `protoRule` (Theory/Text/Parser/Rule.hs).  A rule that declares them is closed by mapping `ClosedProtoRule
     /// ruE` over the list rather than by computing variants, so neither the
-    /// macros nor Maude ever touch them (lib/theory/src/Rule.hs:82-86, see
-    /// line 86).  HS types them `ProtoRuleAC`; the parser fills that info's
+    /// macros nor Maude ever touch them (lib/theory/src/Rule.hs).  HS types them `ProtoRuleAC`; the parser fills that info's
     /// variant and loop-breaker slots with `Disj [emptySubstVFresh]` and `[]`
-    /// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs:138-143, see line 142),
+    /// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs),
     /// so a [`ProtoRuleE`] holds everything a parsed block carries.
     pub rule_ac: Vec<ProtoRuleE>,
 }
@@ -98,7 +95,7 @@ impl OpenProtoRule {
 
     /// HS's `cprRuleE` — the rule as the source writes it, before the macros
     /// and before an `--auto-sources` close annotates or unfolds it.
-    /// `getProtoRuleEs` (ClosedTheory.hs:87-89) reads exactly this.
+    /// `getProtoRuleEs` (ClosedTheory.hs) reads exactly this.
     pub fn rule_e(&self) -> &ProtoRuleE {
         self.rule_e.as_deref().unwrap_or(&self.rule)
     }
@@ -111,10 +108,10 @@ impl OpenProtoRule {
     }
 }
 
-/// HS `ProcessDef` (Items/ProcessItem.hs:23-28): the payload of a
+/// HS `ProcessDef` (Items/ProcessItem.hs): the payload of a
 /// `let P (v1,…,vn) = …` declaration.  `vars` is `None` for a definition
 /// written without a parameter list; the SAPIC typing pass replaces it with
-/// the inferred formals (`typeAndRenameProcessDef`, Typing.hs:217-225).
+/// the inferred formals (`typeAndRenameProcessDef`, Typing.hs).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProcessDef {
     pub name: String,
@@ -123,7 +120,7 @@ pub struct ProcessDef {
 }
 
 /// `Theory.Sapic.SapicFunSym` — `(UserDefinedSym, [SapicType], SapicType)`
-/// (Theory/Sapic/Term.hs:78), so a typing declaration can name a free OR a
+/// (Theory/Sapic/Term.hs), so a typing declaration can name a free OR a
 /// user-defined AC symbol. Payload of `TranslationElement::FunctionTypingInfo`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SapicFunSym {
@@ -146,8 +143,7 @@ pub type ConfigBlock = String;
 /// translation that aren't first-class top-level constructs in the
 /// surface syntax.
 ///
-/// Mirrors the full HS `TranslationElement` surface (Items/TheoryItem.hs:
-/// 43-53); elaboration produces every variant.
+/// Mirrors the full HS `TranslationElement` surface (Items/TheoryItem.hs); elaboration produces every variant.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranslationElement {
     Process(PlainProcess),
@@ -175,18 +171,18 @@ pub struct Lemma {
     pub heuristic_in_file: Option<String>,
     pub attributes: Vec<LemmaAttr>,
     pub trace_quantifier: TraceQuantifier,
-    /// `_lFormula` (Items/LemmaItem.hs:53) — the macro- and predicate-expanded
+    /// `_lFormula` (Items/LemmaItem.hs) — the macro- and predicate-expanded
     /// formula, which the solver converts to a guarded formula and the printer
     /// shows in the `guarded formula characterizing ...` block.
     pub formula: LNFormula,
-    /// `_lOriginalFormula` (Items/LemmaItem.hs:54) — the same formula before
+    /// `_lOriginalFormula` (Items/LemmaItem.hs) — the same formula before
     /// macro application, which the printer quotes on the header line.  HS's
     /// `applyMacroInLemma` fills it for every lemma of a closed theory, macros
-    /// or none (lib/theory/src/Lemma.hs:83-88, CloseRule.hs:85).
+    /// or none (lib/theory/src/Lemma.hs, CloseRule.hs).
     pub original_formula: Option<LNFormula>,
     pub proof: ProofSkeleton,
     /// Verbatim source text (comments stripped) — HS `_lPlaintext`
-    /// (`Items/LemmaItem.hs:48-58, see line 50`).  Carried through elaboration for the
+    /// (`Items/LemmaItem.hs`).  Carried through elaboration for the
     /// interactive web server's Edit-lemma form; never used by `--prove`.
     pub plaintext: String,
 }
@@ -202,10 +198,10 @@ impl Lemma {
     }
 }
 
-/// HS `applyMacroInLemma` (lib/theory/src/Lemma.hs:83-88): the theory's macros
+/// HS `applyMacroInLemma` (lib/theory/src/Lemma.hs): the theory's macros
 /// applied to the formula, with the formula as it stood recorded as the
 /// original one.  HS runs it over every lemma of a closed theory
-/// (`closeTheoryItem`, CloseRule.hs:85), macros or none, so
+/// (`closeTheoryItem`, CloseRule.hs), macros or none, so
 /// `original_formula` ends up filled either way.
 pub fn apply_macro_in_lemma(macros: &[LNMacro], lemma: Lemma) -> Lemma {
     let original_formula = lemma.formula.clone();
@@ -224,9 +220,9 @@ pub struct AccLemma {
     /// File whose parser context supplied an accountability heuristic.
     pub heuristic_in_file: Option<String>,
     pub attributes: Vec<LemmaAttr>,
-    /// HS `_aFormula` (Items/AccLemmaItem.hs:32).  The `Pred` sugar stays:
+    /// HS `_aFormula` (Items/AccLemmaItem.hs).  The `Pred` sugar stays:
     /// `liftedAddAccLemma` adds the lemma verbatim
-    /// (Theory/Text/Parser.hs:153-157), with neither predicate nor macro
+    /// (Theory/Text/Parser.hs), with neither predicate nor macro
     /// expansion.
     pub formula: SyntacticLNFormula,
     pub case_test_idents: Vec<String>,
@@ -236,24 +232,24 @@ pub struct AccLemma {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaseTest {
     pub name: String,
-    /// HS `_cFormula` (Items/CaseTestItem.hs:27).  The `Pred` sugar stays:
+    /// HS `_cFormula` (Items/CaseTestItem.hs).  The `Pred` sugar stays:
     /// `liftedAddCaseTest` adds the case test verbatim
-    /// (Theory/Text/Parser.hs:159-163), and `caseTestToPredicate` strips it
+    /// (Theory/Text/Parser.hs), and `caseTestToPredicate` strips it
     /// with `toLNFormula` at accountability-translation time
-    /// (Items/CaseTestItem.hs:33-37).
+    /// (Items/CaseTestItem.hs).
     pub formula: SyntacticLNFormula,
 }
 
-/// HS `LNMacro` (Term/Macro.hs:24): one `macros:` declaration, `name(params)
+/// HS `LNMacro` (Term/Macro.hs): one `macros:` declaration, `name(params)
 /// = body`.
 pub use tamarin_term::macro_expand::LNMacro;
 
 /// One node of a lemma's stored proof — HS `ProofSkeleton = Proof ()`, i.e.
-/// `LTree CaseName (ProofStep ())` (Theory/ProofSkeleton.hs:30,
-/// Theory/Proof.hs:187-192,238).
+/// `LTree CaseName (ProofStep ())` (Theory/ProofSkeleton.hs,
+/// Theory/Proof.hs).
 ///
 /// `cases` keeps the source order of the `case` blocks; the printer sorts by
-/// name (HS stores them in an `M.fromList`, Theory/Text/Parser/Proof.hs:113)
+/// name (HS stores them in an `M.fromList`, Theory/Text/Parser/Proof.hs)
 /// and replay looks each case up by name.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProofTree {
@@ -263,8 +259,8 @@ pub struct ProofTree {
 
 /// A lemma's stored proof.  `None` is a lemma written without one, which HS
 /// gives the one-node `unproven ()` skeleton
-/// (Theory/ProofSkeleton.hs:59-61); `prove::replace_sorry_prove` (HS
-/// `replaceSorryProver`, Theory/Proof.hs:641-650) walks the tree at
+/// (Theory/ProofSkeleton.hs); `prove::replace_sorry_prove` (HS
+/// `replaceSorryProver`, Theory/Proof.hs) walks the tree at
 /// proof-replay time and invokes the auto-prover only at `sorry` leaves.
 pub type ProofSkeleton = Option<ProofTree>;
 
@@ -282,7 +278,7 @@ pub enum TheoryItem<R = OpenProtoRule> {
 }
 
 impl<R> TheoryItem<R> {
-    /// The non-rule half of HS `mapTheoryItem f id` (TheoryObject.hs:269-271):
+    /// The non-rule half of HS `mapTheoryItem f id` (TheoryObject.hs):
     /// a rule item hands its payload back as `Err`, every other item is cloned
     /// into the target rule type at its position.  Callers supply the rule arm,
     /// which may yield one item or several.
@@ -306,7 +302,7 @@ impl<R> TheoryItem<R> {
 
 /// `Option` block — translation/proof-driver options set per theory.
 ///
-/// HS `Option` (Items/OptionItem.hs:21-38) declares fourteen fields in another
+/// HS `Option` (Items/OptionItem.hs) declares fourteen fields in another
 /// order and derives `Ord` over them.  Only equality is derived here, and it
 /// is order-insensitive, so an ordering for this struct has to be written out
 /// rather than derived.
@@ -322,7 +318,7 @@ pub struct Options {
     pub lemmas_to_prove: Vec<String>,
 }
 
-/// HS `defaultOption` (OpenTheory.hs:546-547), whose tenth field is the
+/// HS `defaultOption` (OpenTheory.hs), whose tenth field is the
 /// `True` of `_deductionChainCheck`.
 impl Default for Options {
     fn default() -> Self {
@@ -379,7 +375,7 @@ pub struct Theory<R = OpenProtoRule> {
     pub name: String,
     pub in_file: String,
     /// The `heuristic:` header's goal rankings (HS `_thyHeuristic ::
-    /// [GoalRanking ProofContext]`, TheoryObject.hs:185), parsed when the
+    /// [GoalRanking ProofContext]`, TheoryObject.hs), parsed when the
     /// theory is built.
     pub heuristic: Vec<crate::constraint::solver::goals::GoalRanking>,
     /// File whose parser context supplied the top-level heuristic header.
@@ -461,7 +457,7 @@ impl<R> Theory<R> {
     }
 
     /// Look up a restriction by name (HS `lookupRestriction`,
-    /// TheoryObject.hs:671-672).
+    /// TheoryObject.hs).
     pub fn lookup_restriction(&self, name: &str) -> Option<&Restriction> {
         self.restrictions().find(|r| r.name == name)
     }
@@ -483,7 +479,7 @@ impl<R> Theory<R> {
 }
 
 impl<R> Theory<R> {
-    /// HS `theoryFunctionTypingInfos` (TheoryObject.hs:368-369): the
+    /// HS `theoryFunctionTypingInfos` (TheoryObject.hs): the
     /// `SapicFunSym` of every `functions:` declaration, in source order.
     pub fn function_typing_infos(&self) -> impl Iterator<Item = &SapicFunSym> {
         self.items.iter().filter_map(|i| match i {
@@ -492,7 +488,7 @@ impl<R> Theory<R> {
         })
     }
 
-    /// HS `theoryProcesses` (TheoryObject.hs:360-361): the body of every
+    /// HS `theoryProcesses` (TheoryObject.hs): the body of every
     /// top-level `process:` item, in source order.  `equivLemma` and
     /// `diffEquivLemma` processes are NOT included, matching the comprehension
     /// over `ProcessItem` alone.
@@ -503,7 +499,7 @@ impl<R> Theory<R> {
         })
     }
 
-    /// HS `theoryProcessDefs` (TheoryObject.hs:364-365): every `let P = …`
+    /// HS `theoryProcessDefs` (TheoryObject.hs): every `let P = …`
     /// definition, in source order.
     pub fn process_defs(&self) -> impl Iterator<Item = &ProcessDef> {
         self.items.iter().filter_map(|i| match i {
@@ -517,7 +513,7 @@ impl<R> Theory<R> {
 // The render-time view of a rule item
 // =============================================================================
 
-/// HS `OpenProtoRule` (Items/RuleItem.hs:34-37): a rule modulo E together with
+/// HS `OpenProtoRule` (Items/RuleItem.hs): a rule modulo E together with
 /// the rules modulo AC that differ from it.  [`open_proto_rule`] builds one
 /// per rule item and [`merge_open_proto_rules`] concatenates the AC halves of
 /// consecutive items that share an E rule.
@@ -527,17 +523,17 @@ pub struct MergedProtoRule {
     pub rule_ac: Vec<crate::rule::ProtoRuleAC>,
 }
 
-/// HS `cprRuleAC` (Items/RuleItem.hs:56-59) rebuilt from the split
+/// HS `cprRuleAC` (Items/RuleItem.hs) rebuilt from the split
 /// representation: the `variants (modulo AC)` blocks the source writes, which
-/// `closeProtoRule` turns into one closed rule each (lib/theory/src/Rule.hs:86),
+/// `closeProtoRule` turns into one closed rule each (lib/theory/src/Rule.hs),
 /// otherwise the single narrowed form — the abstracted body when Maude found
 /// reducible sub-terms, else the rule itself.  The info carries the rule's own
 /// name and attributes, the variant disjunction and the loop breakers.
 ///
 /// `closeProtoRule` reaches `variantsProtoRule` only for a rule that writes no
-/// `variants (modulo AC)` block (lib/theory/src/Rule.hs:82-86), so a written
+/// `variants (modulo AC)` block (lib/theory/src/Rule.hs), so a written
 /// block keeps the disjunction its parser gave it — `Disj [emptySubstVFresh]`
-/// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs:138-143, see line 142) —
+/// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs) —
 /// and the narrowing [`crate::tools::rule_variants::populate_rule_variants`]
 /// ran on the E rule stays out of it.  For every other rule an empty
 /// `variant_substs` stands for that same trivial disjunction.
@@ -568,7 +564,7 @@ pub fn closed_rules_ac(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
 }
 
 /// A rule's facts under a `ProtoRuleAC` info.  HS types both halves as one
-/// `Rule` over two infos (Theory/Model/Rule.hs:635-638), so only the info
+/// `Rule` over two infos (Theory/Model/Rule.hs), so only the info
 /// changes.
 fn rule_ac_under(e: &ProtoRuleE, info: crate::rule::ProtoRuleACInfo) -> crate::rule::ProtoRuleAC {
     crate::rule::Rule {
@@ -580,7 +576,7 @@ fn rule_ac_under(e: &ProtoRuleE, info: crate::rule::ProtoRuleACInfo) -> crate::r
     }
 }
 
-/// HS `openProtoRule` (lib/theory/src/Rule.hs:51-59): the E rule with the AC
+/// HS `openProtoRule` (lib/theory/src/Rule.hs): the E rule with the AC
 /// rules that `equal_up_to_terms` cannot identify with it; an AC rule that
 /// differs from the E rule only in its terms is dropped.
 pub fn open_proto_rule(r: &OpenProtoRule) -> MergedProtoRule {
@@ -592,7 +588,7 @@ pub fn open_proto_rule(r: &OpenProtoRule) -> MergedProtoRule {
     MergedProtoRule { rule_e, rule_ac }
 }
 
-/// HS `ClosedProtoRule` (Items/RuleItem.hs:50-59): the rule as the source
+/// HS `ClosedProtoRule` (Items/RuleItem.hs): the rule as the source
 /// writes it beside the one rule modulo AC `closeProtoRule` narrows it to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosedProtoRule {
@@ -601,8 +597,8 @@ pub struct ClosedProtoRule {
 }
 
 /// HS `closeTheoryItem`'s rule arm followed by `unfoldClosedRules`
-/// (CloseRule.hs:82-93#unfoldClosedRules) over `closeProtoRule`
-/// (lib/theory/src/Rule.hs:82-86): a rule item becomes one closed rule per AC
+/// (CloseRule.hs#unfoldClosedRules) over `closeProtoRule`
+/// (lib/theory/src/Rule.hs): a rule item becomes one closed rule per AC
 /// rule it closes into — one for a computed narrowing, one per `variants
 /// (modulo AC)` block the source writes — each carrying the item's E half.
 /// Every other item passes through at its position.
@@ -623,7 +619,7 @@ pub fn close_proto_rules(items: &[TheoryItem<OpenProtoRule>]) -> Vec<TheoryItem<
 }
 
 /// HS `mergeOpenProtoRules . map (mapTheoryItem openProtoRule id)`
-/// (ClosedTheory.hs:402, OpenTheory.hs:592-603): every rule item opened, then
+/// (ClosedTheory.hs, OpenTheory.hs): every rule item opened, then
 /// runs of consecutive rule items sharing an E rule collapsed into one item
 /// whose AC list is their concatenation.  Every other item passes through at
 /// its position.
@@ -652,12 +648,12 @@ pub fn merge_open_proto_rules(
     out
 }
 
-/// HS `_oprRuleAC` (Items/RuleItem.hs:34-36) as `prettyOpenProtoRule` reads
+/// HS `_oprRuleAC` (Items/RuleItem.hs) as `prettyOpenProtoRule` reads
 /// it: the `variants (modulo AC)` blocks the source writes, typed as the
 /// `ProtoRuleAC`s the parser builds.  `protoRuleACInfo` gives each of them the
 /// rule's own name and attributes, the identity substitution as its variant
 /// disjunction and an empty loop-breaker list
-/// (Theory/Text/Parser/Rule.hs:137-143, see line 142).
+/// (Theory/Text/Parser/Rule.hs).
 pub(crate) fn manual_rule_variants(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
     r.rule_ac
         .iter()
@@ -675,7 +671,7 @@ pub(crate) fn manual_rule_variants(r: &OpenProtoRule) -> Vec<crate::rule::ProtoR
         .collect()
 }
 
-/// HS `clearFunctionTypingInfos` (TheoryObject.hs:504-508): drop every
+/// HS `clearFunctionTypingInfos` (TheoryObject.hs): drop every
 /// source-positioned `FunctionTypingInfo` item.
 pub fn clear_function_typing_infos<R>(thy: &mut Theory<R>) {
     thy.items.retain(|i| {
@@ -686,7 +682,7 @@ pub fn clear_function_typing_infos<R>(thy: &mut Theory<R>) {
     });
 }
 
-/// HS `containsManualRuleVariants` (OpenTheory.hs:584-589): whether any rule
+/// HS `containsManualRuleVariants` (OpenTheory.hs): whether any rule
 /// item carries an AC rule of its own.
 pub fn contains_manual_rule_variants(items: &[TheoryItem<MergedProtoRule>]) -> bool {
     items

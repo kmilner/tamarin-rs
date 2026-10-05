@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 
@@ -125,7 +124,7 @@ fn single_quoted_basic() {
     assert_eq!(l.single_quoted().as_deref(), Ok("foo"));
 
     // `singleQuotedString = singleQuoted $ many1 (noneOf "'\n")`
-    // (Token.hs:452-453).  `many1` needs one body character, so `''`
+    // (Token.hs).  `many1` needs one body character, so `''`
     // fails.  A newline or the end of the input before the closing quote
     // leaves the literal unclosed.  Failures retain their position;
     // the enclosing parser owns backtracking.
@@ -237,8 +236,8 @@ fn export_body_rejects_newline_escape() {
 
 #[test]
 fn formal_comment_rejects_every_failing_body() {
-    // `many bodyChar <* string "*}"` (Token.hs:379) uses `bodyChar`
-    // (Token.hs:382-387).  After the lexer reads the opening `{*`, the
+    // `many bodyChar <* string "*}"` (Token.hs) uses `bodyChar`
+    // (Token.hs).  After the lexer reads the opening `{*`, the
     // body can fail in exactly three ways.  Upstream rejects each of the
     // three inputs as well.  The messages below come from the pinned
     // oracle on `theory T\nbegin\n\nnote{* ... \n\nend\n`:
@@ -258,7 +257,7 @@ fn formal_comment_rejects_every_failing_body() {
     //
     // A probe of this port, not the oracle, gives the `Pos::ZERO` half.
     // HS wraps only `many1 letter <* string "{*"` in `try`
-    // (Token.hs:378).  A body failure is therefore a parsec failure that
+    // (Token.hs).  A body failure is therefore a parsec failure that
     // has consumed input.  The enclosing item alternation cannot backtrack
     // past such a failure.  For that reason every oracle frame above
     // points into the body.  This lexer rewinds to the start of the header

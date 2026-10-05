@@ -23,20 +23,6 @@ jobs:
         run: rustup toolchain install 1.88.0 --profile minimal --no-self-update
       - name: MSRV check
         run: cargo +1.88.0 check --workspace --all-targets
-      # Every HS line cite in crates/ comments must resolve against the pinned
-      # submodule (scripts/check_hs_cites.py — MISSING/AMBIGUOUS/RANGE/BLANK/
-      # COMMENT/SEELINE).  Ordinary PRs edit cites too, not just bumps, and
-      # nothing else fails on a drifted one.  Needs only the submodule; ~seconds.
-      - name: HS cite check
-        run: python3 scripts/check_hs_cites.py
-      # Every file that has a resolvable HS citation must also have the
-      # constant licence notice.  The script's --check exits 1 on a stale
-      # notice.  This step has the same trigger as the cite check above.  An
-      # ordinary PR can add a citation to a file that has none yet.  That
-      # makes the file stale, and nothing else detects it.  The step needs
-      # only the submodule, because the script resolves the citations.
-      - name: Licence header check
-        run: python3 scripts/gen_license_headers.py --check
 
   test:
     runs-on: ubuntu-latest

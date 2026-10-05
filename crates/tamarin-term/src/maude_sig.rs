@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.Maude.Signature` from
 //! `lib/term/src/Term/Maude/Signature.hs`.
@@ -30,7 +29,7 @@ use crate::rewriting::RRule;
 use crate::subterm_rule::CtxtStRule;
 use crate::term::Term;
 
-/// HS `stRules :: S.Set CtxtStRule` (Term/Maude/Signature.hs:99), paired with the
+/// HS `stRules :: S.Set CtxtStRule` (Term/Maude/Signature.hs), paired with the
 /// `maude_proc::term_ac_c_free` verdict of each rule's LHS.
 ///
 /// `norm::go_nf` needs that verdict per rule — at every `App` node of every
@@ -121,7 +120,7 @@ impl FromIterator<CtxtStRule> for StRules {
     }
 }
 
-/// HS `data MaudeSig` (Term/Maude/Signature.hs:90-108); the field order is
+/// HS `data MaudeSig` (Term/Maude/Signature.hs); the field order is
 /// HS's declaration order, which its derived `Ord` reads off.  The trailing
 /// fields have no HS counterpart: they are lookup mirrors of the sets above
 /// them, rebuilt by [`MaudeSig::refresh`].
@@ -158,9 +157,9 @@ pub struct MaudeSig {
     pub irreducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
     pub reducible_fun_syms_fast: tamarin_utils::FastSet<FunSym>,
     /// The symbol a NAME resolves to, in the order HS `lookupArity` searches
-    /// (Theory/Text/Parser/Term.hs:62-72): the free symbols of `fun_syms`,
+    /// (Theory/Text/Parser/Term.hs): the free symbols of `fun_syms`,
     /// then its user-defined AC symbols (together HS `userDefinedFunSyms`,
-    /// Term/Maude/Signature.hs:162-164), then `macro_names`.  The first entry
+    /// Term/Maude/Signature.hs), then `macro_names`.  The first entry
     /// of that order wins, and the built-in AC/C/`List` symbols — which carry
     /// no name and are not part of `userDefinedFunSyms` — are absent.  Filled
     /// by [`MaudeSig::refresh`] and read through [`MaudeSig::fun_sym_named`].
@@ -192,7 +191,7 @@ impl MaudeSig {
         self.st_rules.all_lhs_ac_c_free()
     }
 
-    /// HS `maudeSig` (Term/Maude/Signature.hs:110-125#maudeSig): recompute the
+    /// HS `maudeSig` (Term/Maude/Signature.hs#maudeSig): recompute the
     /// cached `fun_syms` / `irreducible_fun_syms` / `reducible_fun_syms` from
     /// the source-of-truth flags.
     pub fn refresh(mut self) -> Self {
@@ -251,7 +250,7 @@ impl MaudeSig {
         self.irreducible_fun_syms_fast = irreducible.iter().copied().collect();
         self.reducible_fun_syms_fast = reducible.iter().copied().collect();
 
-        // Name index, in the order HS `lookupArity` (Theory/Text/Parser/Term.hs:62-72)
+        // Name index, in the order HS `lookupArity` (Theory/Text/Parser/Term.hs)
         // searches: `userDefinedFunSyms` — the free symbols of `fun_syms`
         // before its user-defined AC ones, each half in the symbol's own order
         // — then the macro names.  HS `lookup` takes the first match, so an
@@ -328,9 +327,9 @@ impl MaudeSig {
             .collect()
     }
 
-    /// The symbol HS `lookupArity` (Theory/Text/Parser/Term.hs:62-72) resolves
+    /// The symbol HS `lookupArity` (Theory/Text/Parser/Term.hs) resolves
     /// `name` to, or `None` where HS fails with `unknown operator`: the first
-    /// entry of `userDefinedFunSyms` (Term/Maude/Signature.hs:162-164) —
+    /// entry of `userDefinedFunSyms` (Term/Maude/Signature.hs) —
     /// free symbols before user-defined AC symbols — and then of the macro
     /// names.  HS's association list ends in a hard-coded `em/2` row that
     /// belongs to no signature, so `em` is answered here only when the
@@ -344,7 +343,7 @@ impl MaudeSig {
     }
 
     /// The user-defined AC symbol of this name, read off `fun_syms` like HS
-    /// `acUserFunSyms` (Term/Maude/Signature.hs:160-161).
+    /// `acUserFunSyms` (Term/Maude/Signature.hs).
     /// [`MaudeSig::fun_sym_named`] answers with the free symbol when one
     /// shares the name, so a question about the AC symbol alone asks here.
     pub fn ac_fct_sym_named(&self, name: &[u8]) -> Option<AcFctSym> {
@@ -374,7 +373,7 @@ impl MaudeSig {
     /// AC symbols to `st_ac_fun_syms`.
     ///
     /// HS `addFunSym funsym msig = msig <> mempty {stFunSyms = [funsym]}`
-    /// (Term/Maude/Signature.hs:170-173) — the `<>` routes through
+    /// (Term/Maude/Signature.hs) — the `<>` routes through
     /// `unionExceptPairSym`, so adding the `fst`/`snd` DESTRUCTOR variant
     /// removes the built-in CONSTRUCTOR variant (and vice versa).  A plain
     /// `insert` would leave BOTH `fst/1` and `fst/1[destructor]` in the set,
@@ -389,9 +388,9 @@ impl MaudeSig {
                 self.st_ac_fun_syms.insert(f);
             }
         }
-        // HS `<>` (Term/Maude/Signature.hs:128-150) rebuilds via
-        // `maudeSig (mempty {...})`, and `mempty` has `eqConvergent=False`
-        // (line 153), which `maudeSig` preserves (line 112).  So routing through
+        // HS `<>` (Term/Maude/Signature.hs) rebuilds via
+        // `maudeSig (mempty {...})`, and `mempty` has `eqConvergent=False`,
+        // which `maudeSig` preserves.  So routing through
         // the monoid RESETS eqConvergent to false; mirror that here.
         self.eq_convergent = false;
         self.refresh()
@@ -400,7 +399,7 @@ impl MaudeSig {
     /// Join `ndc_state` onto the NDC state of every symbol in the subterm
     /// signature whose NAME matches `fun_sym`'s.
     ///
-    /// HS `joinNDCinSig` (Term/Maude/Signature.hs:233-247) matches by name only, because
+    /// HS `joinNDCinSig` (Term/Maude/Signature.hs) matches by name only, because
     /// the NDC state of the symbol handed in may differ from the one recorded
     /// in the signature (e.g. for symbols read out of the metadata of
     /// diff-mode intruder rules).  `fun_sym`s that carry no name (the built-in
@@ -440,7 +439,7 @@ impl MaudeSig {
     }
 
     /// The `functions:` list of HS `prettyMaudeSigExcept`
-    /// (Term/Maude/Signature.hs:252-295): the subterm signature's free symbols rendered
+    /// (Term/Maude/Signature.hs): the subterm signature's free symbols rendered
     /// as `name/arity[attrs]`, followed by the user-defined AC symbols as
     /// `name/2[attrs]`, both skipping the entries listed in `excl`.
     ///
@@ -491,9 +490,9 @@ impl MaudeSig {
     /// Add a macro symbol.
     ///
     /// HS `addMacroSym funsym msig = msig <> mempty {macroNames=...}`
-    /// (Term/Maude/Signature.hs:176-178) routes through the monoid `<>`, which
-    /// rebuilds from `mempty` (eqConvergent=False, line 153; preserved by
-    /// `maudeSig`, line 112) and so RESETS eqConvergent to false — match that.
+    /// (Term/Maude/Signature.hs) routes through the monoid `<>`, which
+    /// rebuilds from `mempty` (eqConvergent=False; preserved by
+    /// `maudeSig`) and so RESETS eqConvergent to false — match that.
     pub fn add_macro_sym(mut self, sym: NoEqSym) -> Self {
         self.macro_names.insert(sym);
         self.eq_convergent = false;
@@ -503,12 +502,11 @@ impl MaudeSig {
     /// Add a context subterm rule.
     pub fn add_ctxt_st_rule(mut self, rule: CtxtStRule) -> Self {
         // HS-faithful pair mutual-exclusion (`unionExceptPairRules`,
-        // Term/Maude/Signature.hs:144): the fst/snd CONSTRUCTOR and
+        // Term/Maude/Signature.hs): the fst/snd CONSTRUCTOR and
         // DESTRUCTOR rule variants are mutually exclusive.  HS `addCtxtStRule`
-        // (Term/Maude/Signature.hs:181-183) is `msig <> mempty {stRules=[str]}`,
+        // (Term/Maude/Signature.hs) is `msig <> mempty {stRules=[str]}`,
         // so each user `equations:` rule goes through the monoid `<>`, which
-        // applies `unionExceptPairRules` (Term/Maude/Signature.hs:128-150, see
-        // line 139) — it is NOT a plain
+        // applies `unionExceptPairRules` (Term/Maude/Signature.hs) — it is NOT a plain
         // set insert.  So an exported theory that declares `fst/1[destructor]` +
         // the pairing equation must keep only the declared destructor rule, not
         // BOTH the base constructor rule AND the user destructor rule (which
@@ -537,7 +535,7 @@ impl MaudeSig {
             enable_xor: self.enable_xor || other.enable_xor,
             enable_diff: self.enable_diff || other.enable_diff,
             st_fun_syms: union_except_pair_sym(&self.st_fun_syms, &other.st_fun_syms),
-            // HS `<>` unions `stACFunSyms` plainly (Term/Maude/Signature.hs:138): the
+            // HS `<>` unions `stACFunSyms` plainly (Term/Maude/Signature.hs): the
             // `fst`/`snd` constructor-vs-destructor exception applies to the
             // free symbols only.
             st_ac_fun_syms: self
@@ -565,7 +563,7 @@ impl MaudeSig {
 }
 
 /// The name a symbol carries in HS `userDefinedFunSyms`
-/// (Term/Maude/Signature.hs:162-164): free and user-defined AC symbols have
+/// (Term/Maude/Signature.hs): free and user-defined AC symbols have
 /// one, the built-in AC operators, the C symbols and `List` have none and are
 /// not part of that signature.
 fn user_defined_name(sym: FunSym) -> Option<&'static [u8]> {
@@ -576,7 +574,7 @@ fn user_defined_name(sym: FunSym) -> Option<&'static [u8]> {
     }
 }
 
-/// HS `attrsNDC` (Term/Maude/Signature.hs:289): the NDC attributes a symbol prints, in
+/// HS `attrsNDC` (Term/Maude/Signature.hs): the NDC attributes a symbol prints, in
 /// trace-then-diff order (a symbol with `IsNdcBoth` prints both).
 fn ndc_attrs(ndc: NdcState) -> &'static [&'static str] {
     match ndc {
@@ -587,7 +585,7 @@ fn ndc_attrs(ndc: NdcState) -> &'static [&'static str] {
     }
 }
 
-/// HS `showAttrs` (Term/Maude/Signature.hs:291-292): nothing at all for an empty
+/// HS `showAttrs` (Term/Maude/Signature.hs): nothing at all for an empty
 /// attribute list, otherwise ` [a1,a2,…]` — note the LEADING space.
 fn show_attrs(attrs: &[&str]) -> String {
     if attrs.is_empty() {
@@ -597,7 +595,7 @@ fn show_attrs(attrs: &[&str]) -> String {
     }
 }
 
-/// HS `removeIfNecessary'` (Term/Maude/Signature.hs:147-150): if `to_add` is a
+/// HS `removeIfNecessary'` (Term/Maude/Signature.hs): if `to_add` is a
 /// member of `st2`, drop `to_remove` from `st1` before unioning `st2` in.
 /// Union is left-biased, as `S.union` is.
 fn remove_if_necessary_prime<T: Ord + Clone>(
@@ -614,7 +612,7 @@ fn remove_if_necessary_prime<T: Ord + Clone>(
     out
 }
 
-/// HS `removeIfNecessary` (Term/Maude/Signature.hs:146): run
+/// HS `removeIfNecessary` (Term/Maude/Signature.hs): run
 /// `removeIfNecessary'` once each way round, so `x` and `y` are mutually
 /// exclusive in the result.
 fn remove_if_necessary<T: Ord + Clone>(
@@ -627,7 +625,7 @@ fn remove_if_necessary<T: Ord + Clone>(
     remove_if_necessary_prime(&s, st2, y, x)
 }
 
-/// HS `unionExceptPairSym` (Term/Maude/Signature.hs:143).
+/// HS `unionExceptPairSym` (Term/Maude/Signature.hs).
 ///
 /// The `fst`/`snd` constructor and destructor variants are mutually
 /// exclusive: whichever variant `st2` carries WINS, and the opposite
@@ -638,7 +636,7 @@ fn union_except_pair_sym(a: &BTreeSet<NoEqSym>, b: &BTreeSet<NoEqSym>) -> BTreeS
     remove_if_necessary(&after_fst, b, &snd_sym(), &snd_dest_sym())
 }
 
-/// HS `unionExceptPairRules` (Term/Maude/Signature.hs:144).
+/// HS `unionExceptPairRules` (Term/Maude/Signature.hs).
 ///
 /// The constructor/destructor pair REWRITE RULES are mutually exclusive
 /// exactly like the symbols (`unionExceptPairSym`).  Without this, merging
@@ -662,7 +660,7 @@ fn union_except_pair_rules(
 // =============================================================================
 
 /// HS writes every builtin signature as `maudeSig $ mempty {…}`
-/// (Term/Maude/Signature.hs:199-231): a record update of `mempty` handed to
+/// (Term/Maude/Signature.hs): a record update of `mempty` handed to
 /// the smart constructor.  This macro is that shape in Rust — the named fields
 /// over `MaudeSig::default()`, then [`MaudeSig::refresh`].
 macro_rules! maude_sig {
@@ -691,7 +689,7 @@ pub fn pair_maude_sig() -> MaudeSig {
     maude_sig!(st_fun_syms: pair_fun_sig(), st_rules: pair_rules().into())
 }
 
-/// `pairDestMaudeSig` (Term/Maude/Signature.hs:221): the `dest-pairing` variant —
+/// `pairDestMaudeSig` (Term/Maude/Signature.hs): the `dest-pairing` variant —
 /// fst/snd are DESTRUCTORS (`pair_fun_dest_sig`) with the destructor
 /// rewrite rules (`pair_dest_rules`), rather than constructors.
 pub fn pair_dest_maude_sig() -> MaudeSig {

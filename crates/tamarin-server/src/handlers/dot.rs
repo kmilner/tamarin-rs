@@ -1,8 +1,7 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of Haskell's `dotToImg` (Web/Theory.hs:1494-1497) — shell out to the
+//! Port of Haskell's `dotToImg` (Web/Theory.hs) — shell out to the
 //! GraphViz binary to turn a rendered DOT document into an image.
 //!
 //! The DOT document itself is produced by
@@ -17,7 +16,7 @@ use tamarin_theory::constraint::system::System;
 
 /// Helper used by handlers to render the [`System`] as DOT and pipe it
 /// through `<dot_cmd> -Tsvg` under the given graph options.  `dot_cmd` is
-/// HS `dotPath` (Environment.hs:37-38): the `--with-dot` value, or the bare
+/// HS `dotPath` (Environment.hs): the `--with-dot` value, or the bare
 /// `"dot"` resolved via `$PATH`.  Returns the SVG bytes on success.  When
 /// `dot` is missing or fails, returns the DOT source instead (the frontend's
 /// `intdot-staticgraph` can render DOT client-side via viz.js, so this

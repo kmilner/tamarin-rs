@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Sapic.ReliableChannelTranslation`
 //! (`lib/sapic/src/Sapic/ReliableChannelTranslation.hs`).
@@ -36,7 +35,7 @@ fn pub_name_is(t: &SapicTerm, id: &str) -> bool {
     )
 }
 
-/// `reliableChannelInit anP (initrules, initTx)` (ReliableChannelTranslation.hs:27-35):
+/// `reliableChannelInit anP (initrules, initTx)` (ReliableChannelTranslation.hs):
 /// prepend the `MessageIDRule`.
 pub(crate) fn reliable_channel_init(
     an_proc: &AProc,
@@ -66,7 +65,7 @@ pub(crate) fn reliable_channel_init(
     (out, init_tx)
 }
 
-/// `reliableChannelTransAct tAct ac an p tx` (ReliableChannelTranslation.hs:38-84).
+/// `reliableChannelTransAct tAct ac an p tx` (ReliableChannelTranslation.hs).
 ///
 /// Returns `Some((rules, tx'))` when the action is a `'c'`/`'r'`-channel
 /// in/out (the channel-specific translation overrides the base translation), or
@@ -159,7 +158,7 @@ pub(crate) fn reliable_channel_trans_act(
             Ok(Some((vec![body], tx2)))
         }
         // `throwM WFReliable` for every remaining channel action
-        // (ReliableChannelTranslation.hs:75-78, four guards with one body): the
+        // (ReliableChannelTranslation.hs, four guards with one body): the
         // `'c'`/`'r'` arms above already consumed the well-formed cases.
         SapicAction::ChOut { .. } | SapicAction::ChIn { .. } => {
             Err("process not well-formed: reliable channel".to_string())
@@ -169,7 +168,7 @@ pub(crate) fn reliable_channel_trans_act(
     }
 }
 
-/// `reliableChannelRestr anP restrictions` (ReliableChannelTranslation.hs:103-115):
+/// `reliableChannelRestr anP restrictions` (ReliableChannelTranslation.hs):
 /// add the `reliable` restriction iff the process contains a reliable OUT.
 pub(crate) fn reliable_channel_restr(
     an_proc: &AProc,
@@ -189,7 +188,7 @@ pub(crate) fn reliable_channel_restr(
     restrictions
 }
 
-/// `resReliable` (ReliableChannelTranslation.hs:97-100):
+/// `resReliable` (ReliableChannelTranslation.hs):
 ///   `∀ #i x y. Send(x,y)@#i ⇒ ∃ #j. Receive(x,y)@#j ∧ #i < #j`
 fn res_reliable() -> Restriction {
     use crate::restriction_builder as rb;

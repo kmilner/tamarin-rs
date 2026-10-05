@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Recursive-descent parser for `.spthy` files.
 
@@ -95,7 +94,7 @@ pub fn parse_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseError> {
 
 /// Parse a diff theory, enabling both the `diff(a, b)` term and the diff-only
 /// top-level namespaces. This is the syntax-level counterpart of HS
-/// `parseOpenDiffTheoryString` (`Theory/Text/Parser.hs:84-86`).
+/// `parseOpenDiffTheoryString` (`Theory/Text/Parser.hs`).
 pub fn parse_diff_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseError> {
     let mut p = Parser::new(input, flags, true);
     p.theory()
@@ -104,7 +103,7 @@ pub fn parse_diff_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseErr
 /// Like [`parse_theory`], but threads the **including file's directory** so that
 /// `#include "file"` directives resolve relative to it.
 ///
-/// Direct port of HS `include` (Theory/Text/Parser.hs:323-343): the path is
+/// Direct port of HS `include` (Theory/Text/Parser.hs): the path is
 /// resolved against `takeDirectory inFile0`, the included header-less fragment
 /// is parsed as a continuation of the current item stream (same parser state —
 /// signature, known functions, flags thread through), and nested includes
@@ -168,7 +167,7 @@ pub fn parse_theory_with_manifest(
 ///     `rule (modulo AC) <name>[<limit>]: [..] --[..]-> [..]`
 /// (with no surrounding `theory ... begin ... end` wrapper).
 ///
-/// Direct port of HS `parseIntruderRules` (Theory/Text/Parser/Rule.hs:223-228):
+/// Direct port of HS `parseIntruderRules` (Theory/Text/Parser/Rule.hs):
 /// ```haskell
 /// parseIntruderRules
 ///     :: MaudeSig -> String -> B.ByteString -> Either ParseError [IntrRuleAC]
@@ -177,7 +176,7 @@ pub fn parse_theory_with_manifest(
 ///   . T.unpack . TE.decodeUtf8
 /// ```
 /// `msig` is the signature HS installs with `setState (mkStateSig msig)`
-/// (Theory/Text/Parser/Rule.hs:227, called from TheoryLoader.hs:860-876);
+/// (Theory/Text/Parser/Rule.hs, called from TheoryLoader.hs);
 /// [`Parser::seed_signature`] does the same here, so `nullaryApp` resolves
 /// the constants these machine-generated files use — `one` and `DH_neutral`
 /// in the cached DH file — instead of reading them as variables.
@@ -185,7 +184,7 @@ pub fn parse_theory_with_manifest(
 /// The bodies are parsed using the existing `parse_rule_ac` path.
 /// The caller is responsible for translating the parser-AST rules into
 /// `IntrRuleAC` (incl. the `c_`/`d_` name dispatch HS `intrInfo` does
-/// at Theory/Text/Parser/Rule.hs:163-172).
+/// at Theory/Text/Parser/Rule.hs).
 pub fn parse_intruder_rules(msig: &MaudeSig, input: &str) -> Result<Vec<Rule>, ParseError> {
     let mut p = Parser::new(input, &[], false);
     p.seed_signature(msig);
@@ -201,7 +200,7 @@ pub fn parse_intruder_rules(msig: &MaudeSig, input: &str) -> Result<Vec<Rule>, P
                 break;
             }
             // HS `intrRule` uses `try (symbol "rule" *> moduloAC *> intrInfo <* colon)`
-            // (Theory/Text/Parser/Rule.hs:156-161, see line 159) — i.e. requires the
+            // (Theory/Text/Parser/Rule.hs) — i.e. requires the
             // `rule (modulo AC) name:` head.
             // `parse_rule_ac` enforces the same shape.
             let r = p.parse_rule_ac()?;
@@ -214,7 +213,7 @@ pub fn parse_intruder_rules(msig: &MaudeSig, input: &str) -> Result<Vec<Rule>, P
 
 /// Strip `//` line comments and `/* */` block comments from a lemma's verbatim
 /// source span, used to populate `ast::Lemma::plaintext`.  Faithful port of HS
-/// `removeComments` / `removeCommentBlock` (`Theory/Text/Parser/Lemma.hs:62-74`),
+/// `removeComments` / `removeCommentBlock` (`Theory/Text/Parser/Lemma.hs`),
 /// including the newline-swallowing behaviour that HS relies on: a `\n`
 /// immediately preceding a comment is consumed with the comment, and a block
 /// comment's closing `*/\n` consumes the trailing newline.  This determines the
@@ -262,7 +261,7 @@ enum FunctionArgs {
 }
 
 /// The `(arity, Privacy, Constructability, NDCstate)` options tuple HS carries
-/// per free function symbol (HS `NoEqSym`, Term/Term/FunctionSymbols.hs:132).
+/// per free function symbol (HS `NoEqSym`, Term/Term/FunctionSymbols.hs).
 ///
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FunOptions {
@@ -278,7 +277,7 @@ struct FunOptions {
 impl FunOptions {
     /// A public constructor of the given arity with no NDC property — the
     /// shape of every symbol in HS's `pairFunSig`
-    /// (Term/Term/FunctionSymbols.hs:299-300).
+    /// (Term/Term/FunctionSymbols.hs).
     fn plain(arity: usize) -> Self {
         FunOptions {
             arity,
@@ -304,7 +303,7 @@ impl FunOptions {
     /// `(Int, Privacy, Constructability, NDCstate)`: componentwise, with each
     /// constructor ranked by declaration order — `Private < Public`,
     /// `Constructor < Destructor` and `IsNDC < NotNDC < IsNDCDiff < IsNDCBoth`
-    /// (Term/Term/FunctionSymbols.hs:110-126).
+    /// (Term/Term/FunctionSymbols.hs).
     fn ord_key(&self) -> (usize, u8, u8, u8) {
         (
             self.arity,
@@ -345,12 +344,12 @@ fn function_option_difference(previous: FunOptions, requested: FunOptions) -> St
 }
 
 /// The `MaudeSig` each `builtins:` name enables, in HS's `builtinsNames` order
-/// (Theory/Text/Parser/Signature.hs:78-86, whose tail is `builtinsDiffNames`,
-/// Theory/Text/Parser/Signature.hs:58-76) — the order `builtinReservedNames`
-/// (Theory/Text/Parser/Signature.hs:178-181) is built in.
+/// (Theory/Text/Parser/Signature.hs, whose tail is `builtinsDiffNames`,
+/// Theory/Text/Parser/Signature.hs) — the order `builtinReservedNames`
+/// (Theory/Text/Parser/Signature.hs) is built in.
 ///
 /// `reliable-channel` is absent on purpose: it maps to `Nothing`
-/// (Theory/Text/Parser/Signature.hs:84), so it neither merges a signature nor
+/// (Theory/Text/Parser/Signature.hs), so it neither merges a signature nor
 /// reserves anything.
 macro_rules! builtin_maude_sigs {
     ($($name:literal => $sig:path),+ $(,)?) => {
@@ -388,11 +387,11 @@ builtin_maude_sigs! {
 /// The `stFunSyms` of every [`BUILTIN_MAUDE_SIGS`] row, i.e. the free function
 /// symbols enabling that builtin adds to the parse-time signature, each row in
 /// the `S.toList` (ascending, raw-byte) order HS's `extendSig` iterates
-/// (Theory/Text/Parser/Signature.hs:102-135, see line 105).
+/// (Theory/Text/Parser/Signature.hs).
 ///
 /// The rows whose `MaudeSig` only flips an enable flag (`diffie-hellman`,
 /// `bilinear-pairing`, `multiset`, `xor`, `natural-numbers` —
-/// Term/Maude/Signature.hs:200-205) are empty and reserve no names.
+/// Term/Maude/Signature.hs) are empty and reserve no names.
 fn builtin_st_fun_sym_table() -> &'static [(&'static str, Vec<NoEqSym>)] {
     use std::sync::OnceLock;
     static TABLE: OnceLock<Vec<(&'static str, Vec<NoEqSym>)>> = OnceLock::new();
@@ -418,30 +417,30 @@ fn is_builtin_name(name: &str) -> bool {
 }
 
 /// A builtin symbol's name as text.  Every name the builtin `MaudeSig`s carry
-/// is ASCII (Term/Builtin/Signature.hs:18-44,
-/// Term/Term/FunctionSymbols.hs:221-243).
+/// is ASCII (Term/Builtin/Signature.hs,
+/// Term/Term/FunctionSymbols.hs).
 fn sym_name(sym: &NoEqSym) -> &'static str {
     std::str::from_utf8(sym.name).expect("builtin symbol names are ASCII")
 }
 
 /// The non-AC (`NoEq`) symbols each theory-level enable flag folds into
-/// `funSyms` (Term/Maude/Signature.hs:110-125): the flags contribute whole
+/// `funSyms` (Term/Maude/Signature.hs): the flags contribute whole
 /// `FunSig`s, of which only the `NoEq` members reach `noEqFunSyms` and hence
-/// `userDefinedFunSyms` (Term/Maude/Signature.hs:157-164) — the set the
-/// macro-name conflict check searches (Theory/Text/Parser/Macro.hs:43).
+/// `userDefinedFunSyms` (Term/Maude/Signature.hs) — the set the
+/// macro-name conflict check searches (Theory/Text/Parser/Macro.hs).
 /// Their AC members (`Mult`, `Xor`, `Union`, `NatPlus`) and BP's `C EMap` are
 /// not `NoEq`/`ACfct` and never enter that set.
 struct TheoryNoEqSyms {
-    /// `dhFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs:283-284),
+    /// `dhFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs),
     /// contributed when `enableDH || enableBP` (the `maudeSig` smart
     /// constructor forces `enableDH` under BP,
-    /// Term/Maude/Signature.hs:110-112).
+    /// Term/Maude/Signature.hs).
     dh: Vec<NoEqSym>,
-    /// `bpFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs:291-292).
+    /// `bpFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs).
     bp: Vec<NoEqSym>,
-    /// `xorFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs:287-288).
+    /// `xorFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs).
     xor: Vec<NoEqSym>,
-    /// `natFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs:324-325).
+    /// `natFunSig`'s `NoEq` part (Term/Term/FunctionSymbols.hs).
     nat: Vec<NoEqSym>,
 }
 
@@ -472,12 +471,12 @@ fn theory_noeq_syms() -> &'static TheoryNoEqSyms {
 enum ArityRes {
     /// `NoEqUser` (or a macro name, or the appended `em` row): the whole
     /// `(k, priv, cnstr, ndc)` tuple `lookupArity` hands back
-    /// (Theory/Text/Parser/Term.hs:66-67), of which `naryOpApp` checks the
-    /// arity (Theory/Text/Parser/Term.hs:97-100) and passes the rest into
+    /// (Theory/Text/Parser/Term.hs), of which `naryOpApp` checks the
+    /// arity (Theory/Text/Parser/Term.hs) and passes the rest into
     /// `fAppNoEq`'s symbol.
     NoEq { opts: FunOptions },
     /// `ACfctUser`: any argument count is accepted
-    /// (`Theory/Text/Parser/Term.hs:98` gates the
+    /// (`Theory/Text/Parser/Term.hs` gates the
     /// check on `NotAC`) and the application builds `fAppAC (ACfct …)`.
     Ac,
 }
@@ -485,8 +484,8 @@ enum ArityRes {
 impl ArityRes {
     /// Whether an application of `id` resolving this way builds HS `expSym`
     /// — `("exp", (2, Public, Constructor, NotNDC))`
-    /// (Term/Term/FunctionSymbols.hs:245,251), the one `NoEq` symbol
-    /// `prettyTerm` renders infix as `t1^t2` (Term/Term.hs:310).  Both
+    /// (Term/Term/FunctionSymbols.hs), the one `NoEq` symbol
+    /// `prettyTerm` renders infix as `t1^t2` (Term/Term.hs).  Both
     /// application spellings emit [`BinOp::Exp`] for it, which is what the
     /// `^` operator parses to, so the printers reach that rendering from
     /// either source spelling.
@@ -511,9 +510,9 @@ impl ArityRes {
 ///
 /// Cycle identity combines the file, its include-resolution directory, and
 /// entry flags. Nested paths resolve from the written path's directory, even
-/// for symlinks (HS `takeDirectory filepath`, Theory/Text/Parser.hs:342).
-/// Conditions depend on flags (`evalformula`, Theory/Text/Parser.hs:223), which
-/// only grow through `#define` (Theory/Text/Parser.hs:312). A changed flag set
+/// for symlinks (HS `takeDirectory filepath`, Theory/Text/Parser.hs).
+/// Conditions depend on flags (`evalformula`, Theory/Text/Parser.hs), which
+/// only grow through `#define` (Theory/Text/Parser.hs). A changed flag set
 /// therefore permits guarded re-entry; an identical frame indicates a cycle.
 #[derive(Debug)]
 struct IncludeFrame {
@@ -617,7 +616,7 @@ pub struct Parser<'a> {
     /// Formula alternatives need not restore it: the next variable overwrites it.
     sort_suffix_consumed: bool,
     /// Whether prefix applications resolve through [`Self::lookup_arity`]
-    /// (HS `naryOpApp`/`binaryAlgApp`, Theory/Text/Parser/Term.hs:88-121).  True
+    /// (HS `naryOpApp`/`binaryAlgApp`, Theory/Text/Parser/Term.hs).  True
     /// for theory parsing and for [`parse_parens_goal`], which runs inside the
     /// theory parser's symbol state; [`parse_formula_str`] and
     /// [`parse_intruder_rules`] clear it because they re-parse RENDERED text
@@ -636,10 +635,10 @@ pub struct Parser<'a> {
     sapic_var_types: bool,
     /// Whether a `=`-pattern (`Term::PatMatch`) may start a term.  On only in
     /// the three positions where HS threads a PATTERN literal parser: an `in`
-    /// message (`ltypedpatternlit`, Theory/Text/Parser/Sapic.hs:102,109), the
+    /// message (`ltypedpatternlit`, Theory/Text/Parser/Sapic.hs), the
     /// pattern side of a process `let` binding (`sapicpatternterm`,
-    /// Parser/Sapic.hs:264), and an embedded MSR rule — all fact rows plus its
-    /// `_restrict` formulas (`genericRule sapicpatternvar`, Parser/Sapic.hs:155).
+    /// Parser/Sapic.hs), and an embedded MSR rule — all fact rows plus its
+    /// `_restrict` formulas (`genericRule sapicpatternvar`, Parser/Sapic.hs).
     /// Everywhere else HS's literal parser has no `=` alternative, so a `=`
     /// starts no term and falls through to the no-alternative error.
     allow_pat: bool,
@@ -813,7 +812,7 @@ impl<'a> Parser<'a> {
     }
     fn require_kw(&mut self, kw: &str) -> Result<(), ParseError> {
         // HS `symbol_ kw` = `void (try (T.symbol spthy kw) <?> ("\""++kw++"\""))`
-        // (Token.hs:272-277): on failure, Expect is the quoted keyword.
+        // (Token.hs): on failure, Expect is the quoted keyword.
         if self.try_kw(kw) {
             Ok(())
         } else {
@@ -829,7 +828,7 @@ impl<'a> Parser<'a> {
             Ok(())
         } else {
             // HS `symbol p` labels the failure with the quoted punctuation
-            // (Token.hs:272-273).
+            // (Token.hs).
             let label = format!("\"{p}\"");
             Err(self.err_expect(label))
         }
@@ -941,7 +940,7 @@ impl<'a> Parser<'a> {
         let mut configuration = None;
         if self.try_kw("configuration") {
             // HS: `symbol "configuration" <* colon` then `stringLiteral <*
-            // symbol_ "begin"` (Theory/Text/Parser.hs:238,241); the trailing
+            // symbol_ "begin"` (Theory/Text/Parser.hs); the trailing
             // `begin` here
             // is a plain `symbol_ "begin"`, label `"begin"`.
             self.require_punct(":")?;
@@ -949,15 +948,13 @@ impl<'a> Parser<'a> {
             self.require_kw("begin")?;
         } else if !self.try_kw("begin") {
             // HS: `try (symbol "configuration" <* colon) <|> symbol "begin"
-            //      <?> "configuration or begin"` (Theory/Text/Parser.hs:230-393,
-            // see line 238) — the whole
+            //      <?> "configuration or begin"` (Theory/Text/Parser.hs) — the whole
             // choice is relabelled, so the failure Expect is the single custom
             // label, not the two quoted keywords.
             return Err(self.err_expect("configuration or begin"));
         }
         let items = self.in_context(ParseContext::Theory, |p| p.theory_items_until_end())?;
-        // HS `addItems … <* symbol_ "end"` (Theory/Text/Parser.hs:230-393, see
-        // line 243,245): when `end` is
+        // HS `addItems … <* symbol_ "end"` (Theory/Text/Parser.hs): when `end` is
         // absent the trailing-`end` failure merges with the item alternation's
         // error, so report the full item-position error rather than a bare
         // `expecting "end"`.
@@ -1141,7 +1138,7 @@ impl<'a> Parser<'a> {
 
         // Accountability: `lemma X [accountability_attrs] ...` is matched by lemma_item.
         // A lemmaAcc requires >=1 case-test ident before `accounts for` (HS
-        // `commaSep1`, Theory/Text/Parser/Accountability.hs:30-39, see line 36);
+        // `commaSep1`, Theory/Text/Parser/Accountability.hs);
         // the zero-ident form falls back to
         // a normal lemma.
 
@@ -1153,7 +1150,7 @@ impl<'a> Parser<'a> {
     /// Expand an already-consumed `#include` keyword and its following path into the
     /// sequence of theory items declared in the referenced file.
     ///
-    /// HS `include` (Theory/Text/Parser.hs:323-343):
+    /// HS `include` (Theory/Text/Parser.hs):
     /// ```haskell
     /// include inFile0 thy = do
     ///    filepath <- try (symbol "#include") *> filePathParser
@@ -1371,7 +1368,7 @@ impl<'a> Parser<'a> {
                 ));
             }
             // HS `builtinTheory = asum $ map (try . extendSig) builtinsNames`
-            // (Theory/Text/Parser/Signature.hs:139): `extendSig` runs per name,
+            // (Theory/Text/Parser/Signature.hs): `extendSig` runs per name,
             // right after its
             // `symbol`, so a conflict is diagnosed against the signature the
             // EARLIER names in the same list already merged, at the position
@@ -1406,23 +1403,23 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        // `commaSep1`'s trailing `comma` (Token.hs:353-355) fails here.
+        // `commaSep1`'s trailing `comma` (Token.hs) fails here.
         self.skip_ws();
         Ok(TheoryItem::Builtins(names))
     }
 
-    /// HS `extendSig` (Theory/Text/Parser/Signature.hs:102-135) for one
+    /// HS `extendSig` (Theory/Text/Parser/Signature.hs) for one
     /// `builtins:` name: reject the conflicts it names, then merge the builtin's
     /// `stFunSyms` into [`Parser::fun_syms`] and add its names to
     /// [`Parser::reserved_builtin_names`].
     ///
     /// A name with no `MaudeSig` (`reliable-channel`) takes the second
-    /// `extendSig` equation (Theory/Text/Parser/Signature.hs:136-138), which
+    /// `extendSig` equation (Theory/Text/Parser/Signature.hs), which
     /// only consumes the
     /// symbol. Names outside HS's table are rejected by [`Self::builtins`]
     /// before this function is called.
     ///
-    /// `diffbuiltins` (Theory/Text/Parser/Signature.hs:141-148), the parser a
+    /// `diffbuiltins` (Theory/Text/Parser/Signature.hs), the parser a
     /// diff theory uses,
     /// merges the signature with neither check and reserves no names.
     fn enable_builtin(&mut self, name: &str) -> Result<(), ParseError> {
@@ -1430,14 +1427,14 @@ impl<'a> Parser<'a> {
             return Ok(());
         };
         // The `MaudeSig`s of these names carry only an enable flag
-        // (Term/Maude/Signature.hs:200-205); `mappend` ORs it into the
+        // (Term/Maude/Signature.hs); `mappend` ORs it into the
         // signature.  Recorded for both the diff and non-diff builtins parsers,
         // which merge signatures identically
-        // (Theory/Text/Parser/Signature.hs:102-148).
+        // (Theory/Text/Parser/Signature.hs).
         match name {
             "diffie-hellman" => self.state.sig_enable_dh = true,
             // `maudeSig` sets `enableDH = enableDH || enableBP`
-            // (Term/Maude/Signature.hs:110-112).
+            // (Term/Maude/Signature.hs).
             "bilinear-pairing" => {
                 self.state.sig_enable_bp = true;
                 self.state.sig_enable_dh = true;
@@ -1448,7 +1445,7 @@ impl<'a> Parser<'a> {
             _ => {}
         }
         if !self.is_diff {
-            // `functionConflicts` (Theory/Text/Parser/Signature.hs:110-115): a
+            // `functionConflicts` (Theory/Text/Parser/Signature.hs): a
             // name the builtin
             // brings that the signature already carries at a DIFFERENT options
             // tuple.  `dest-pairing` is exempt — it is expected to replace the
@@ -1487,7 +1484,7 @@ impl<'a> Parser<'a> {
                 .extend(syms.iter().map(|s| sym_name(s).to_string()));
         }
         // `modifyStateSig (mappend msig)`, whose `unionExceptPairSym`
-        // (Term/Maude/Signature.hs:126-146) makes the pair projections
+        // (Term/Maude/Signature.hs) makes the pair projections
         // exclusive: whichever variant the incoming signature carries evicts
         // the other one.
         for s in syms {
@@ -1524,17 +1521,17 @@ impl<'a> Parser<'a> {
     }
 
     /// Take the whole parse-time signature from `sig` — HS `mkStateSig`
-    /// (Theory/Text/Parser/Token.hs:175-176), the state
+    /// (Theory/Text/Parser/Token.hs), the state
     /// `parseIntruderRules` installs before its rules
-    /// (Theory/Text/Parser/Rule.hs:223-228).
+    /// (Theory/Text/Parser/Rule.hs).
     ///
     /// It supplies the three tables the term parser reads: the free symbols
     /// `lookupArity` and `nullaryApp` search
-    /// (Theory/Text/Parser/Term.hs:62-72,158-163), the `[AC]` names `acterm`
-    /// turns into infix operators (Theory/Text/Parser/Term.hs:165-174), and
+    /// (Theory/Text/Parser/Term.hs), the `[AC]` names `acterm`
+    /// turns into infix operators (Theory/Text/Parser/Term.hs), and
     /// the macro names both of the first two append.  The theory-level `NoEq`
     /// symbols come with the enable flags, as they do in HS's `funSyms`
-    /// (Term/Maude/Signature.hs:110-125).
+    /// (Term/Maude/Signature.hs).
     pub(crate) fn seed_signature(&mut self, sig: &MaudeSig) {
         Arc::make_mut(&mut self.state.fun_syms).clear();
         for f in &sig.st_fun_syms {
@@ -1570,8 +1567,8 @@ impl<'a> Parser<'a> {
     /// Copy the symbol state a sub-parser reads from the parser whose text
     /// carried it.  HS runs a nested parse in the enclosing parser's state,
     /// which supplies `acterm` the INFIX spelling of the user-declared `[AC]`
-    /// symbols (Theory/Text/Parser/Term.hs:166-172), `nullaryApp` the arity-0
-    /// constants (Theory/Text/Parser/Term.hs:158-163) and `diff` its gate.
+    /// symbols (Theory/Text/Parser/Term.hs), `nullaryApp` the arity-0
+    /// constants (Theory/Text/Parser/Term.hs) and `diff` its gate.
     fn seed_from(&mut self, parent: &Parser<'_>) {
         self.state.fun_syms = parent.state.fun_syms.clone();
         self.state.ac_fun_syms = parent.state.ac_fun_syms.clone();
@@ -1918,7 +1915,7 @@ impl<'a> Parser<'a> {
 
     /// The `(arity, options)` HS's `function` finds for `name` in the parse-time
     /// signature: `lookup f (S.toList (stFunSyms sign) ++ S.toList (macroNames
-    /// sign))` (Theory/Text/Parser/Signature.hs:212), which takes the FIRST
+    /// sign))` (Theory/Text/Parser/Signature.hs), which takes the FIRST
     /// match — free symbols before macros.
     fn lookup_fun_options(&self, name: &str) -> Option<FunOptions> {
         self.state
@@ -2023,7 +2020,7 @@ impl<'a> Parser<'a> {
             }
             self.require_punct("]")?;
         }
-        // HS `function` (Theory/Text/Parser/Signature.hs:183-225) folds the
+        // HS `function` (Theory/Text/Parser/Signature.hs) folds the
         // attribute list into one
         // value per property, each defaulting to the "absent" case.
         let private = atts.contains(&FctAttr::Private);
@@ -2038,7 +2035,7 @@ impl<'a> Parser<'a> {
             ndc,
             ndc_diff,
         };
-        // Check (1), Theory/Text/Parser/Signature.hs:200-209: a name an enabled
+        // Check (1), Theory/Text/Parser/Signature.hs: a name an enabled
         // `builtins:` item
         // reserved must be re-declared at EXACTLY the builtin's options tuple.
         // It runs BEFORE the general conflict check, has no `fst`/`snd`
@@ -2065,11 +2062,11 @@ impl<'a> Parser<'a> {
                 return Err(self.with_function_site(error, &name, b));
             }
         }
-        // Check (2), Theory/Text/Parser/Signature.hs:212-217: the general
+        // Check (2), Theory/Text/Parser/Signature.hs: the general
         // conflict against the
         // parse-time signature, macro names included.
         if let Some(prev) = self.lookup_fun_options(&name) {
-            // Theory/Text/Parser/Signature.hs:213: `fst`/`snd` may be
+            // Theory/Text/Parser/Signature.hs: `fst`/`snd` may be
             // re-declared at the pair
             // projections' own shape, tested by name, arity and privacy only.
             let pair_proj = (name == "fst" || name == "snd") && requested.arity == 1 && !private;
@@ -2088,7 +2085,7 @@ impl<'a> Parser<'a> {
                 return Err(self.with_function_site(error, &name, prev));
             }
             if name == "fst" || name == "snd" {
-                // Theory/Text/Parser/Signature.hs:217-218 returns
+                // Theory/Text/Parser/Signature.hs returns
                 // `NoEqUser (f, kp')`, i.e. the
                 // EXISTING symbol's option tuple: the declared argument and
                 // result types survive, but privacy, constructability and the
@@ -2096,7 +2093,7 @@ impl<'a> Parser<'a> {
                 // check never runs, and nothing is registered.  Discarding the
                 // requested attributes is what keeps `functions: fst/1
                 // [destructor]` printing as `function: fst (Any) : Any` in the
-                // open theory's typing lines (TheoryObject.hs:820-838).
+                // open theory's typing lines (TheoryObject.hs).
                 return Ok(FunctionDecl {
                     name,
                     arg_types: self.materialize_function_args(args)?,
@@ -2115,7 +2112,7 @@ impl<'a> Parser<'a> {
             .iter()
             .any(|(n, opts)| n == &name && *opts == requested);
         // HS rejects a non-binary `[AC]` symbol outright
-        // (Theory/Text/Parser/Signature.hs:220)
+        // (Theory/Text/Parser/Signature.hs)
         // in the `_` case of the conflict check, so check (2) above wins for
         // a name already in the signature.
         if ac && requested.arity != 2 {
@@ -2142,7 +2139,7 @@ impl<'a> Parser<'a> {
             }
         } else {
             // HS's `NotAC` branch instead files the symbol under `stFunSyms`
-            // (`addFunSym (NoEqUser ...)`, Theory/Text/Parser/Signature.hs:224),
+            // (`addFunSym (NoEqUser ...)`, Theory/Text/Parser/Signature.hs),
             // a set insert.
             self.insert_fun_sym(&name, requested);
         }
@@ -2167,7 +2164,7 @@ impl<'a> Parser<'a> {
     }
 
     /// One function attribute inside the `[...]` list.  Port of HS
-    /// `functionAttribute` (Theory/Text/Parser/Signature.hs:164-171), whose
+    /// `functionAttribute` (Theory/Text/Parser/Signature.hs), whose
     /// alternatives are tried in exactly this order; `None` here is HS's failing
     /// `asum`, which ends the attribute list.
     ///
@@ -2196,9 +2193,9 @@ impl<'a> Parser<'a> {
 
     /// SAPIC type: `<defaultSapicTypeS>` = `Any` placeholder, or an identifier.
     fn type_p(&mut self) -> Result<Option<String>, ParseError> {
-        // HS `typep` (Token.hs:472-473): `(try (symbol defaultSapicTypeS) *>
+        // HS `typep` (Token.hs): `(try (symbol defaultSapicTypeS) *>
         // return Nothing) <|> Just <$> identifier`, where `defaultSapicTypeS =
-        // "Any"` (Theory/Sapic/Term.hs:94-95, see line 95). Only the literal `Any`
+        // "Any"` (Theory/Sapic/Term.hs). Only the literal `Any`
         // (case-sensitive) is the default placeholder; everything else is
         // `Just <ident>` — so lowercase `any` is `Just "any"`, and `*` is not a
         // valid identifier (a parse failure, matching HS).
@@ -2210,7 +2207,7 @@ impl<'a> Parser<'a> {
 
     fn equations(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("equations")?;
-        // HS `equations` (Theory/Text/Parser/Signature.hs:234-239): `convergent`
+        // HS `equations` (Theory/Text/Parser/Signature.hs): `convergent`
         // is set only when
         // the literal `[convergent]` is present (`brackets (symbol "convergent")`);
         // an empty `[]` makes the `try` block fail (convergent=False) and the
@@ -2226,13 +2223,13 @@ impl<'a> Parser<'a> {
         self.require_punct(":")?;
         let mut eqs = Vec::new();
         loop {
-            // HS `equation` (Theory/Text/Parser/Signature.hs:245-246) parses both
+            // HS `equation` (Theory/Text/Parser/Signature.hs) parses both
             // operands with
             // `acterm True llitNoPub`. The `True` (eqn flag) gates multiset/
             // nat/xor/mult/exp operators (but NOT the user-defined AC operators
             // of `acterm`) — matched here by `acterm(true)`, which is what
             // `term(true)` reduces to anyway once those gates are closed.
-            // `llitNoPub` (Theory/Text/Parser/Term.hs:57-58 = `asum [freshTerm
+            // `llitNoPub` (Theory/Text/Parser/Term.hs = `asum [freshTerm
             // <$> freshName,
             // varTerm <$> msgvar]`) additionally forbids public-name literals
             // `'foo'` and nat literals `%'n'` in operands, while still allowing
@@ -2270,7 +2267,7 @@ impl<'a> Parser<'a> {
             let name_start = self.save();
             let name = self.ident()?;
             // HS `when (BC.unpack op `elem` reservedBuiltins) $ error …`
-            // (Theory/Text/Parser/Macro.hs:34-35): a GHC `error`, raised right
+            // (Theory/Text/Parser/Macro.hs): a GHC `error`, raised right
             // after the
             // identifier and BEFORE the arguments, so it wins over every later
             // failure in the macro — including a malformed argument list, and
@@ -2289,8 +2286,7 @@ impl<'a> Parser<'a> {
             }
             let opening = self.save();
             self.require_punct("(")?;
-            // HS `parens $ commaSep lvar` (Theory/Text/Parser/Macro.hs:29-49, see
-            // line 36): trailing comma OK.
+            // HS `parens $ commaSep lvar` (Theory/Text/Parser/Macro.hs): trailing comma OK.
             let mut arg_positions = Vec::new();
             let args = self.sep_end_by(opening, ")", |parser| {
                 let (argument, position) = parser.var_spec_spanned()?;
@@ -2298,11 +2294,11 @@ impl<'a> Parser<'a> {
                 Ok(argument)
             })?;
             // HS `unless (length args == length (nub args)) $ error …`
-            // (Theory/Text/Parser/Macro.hs:37-38), the second GHC `error`: `nub`
+            // (Theory/Text/Parser/Macro.hs), the second GHC `error`: `nub`
             // compares FULL
             // `LVar`s, so name, sort and index all count — `m(x, x:pub)` and
             // `m(x.1, x)` pass, `m(x, x)` and `m(x, x:msg)` do not (a
-            // prefixless binder is `LSortMsg`, Token.hs:424-433).
+            // prefixless binder is `LSortMsg`, Token.hs).
             if let Some((index, argument)) = Self::duplicate_macro_arg(&args) {
                 return Err(self.semantic_error(
                     ParseErrorKind::DuplicateMacroArgument {
@@ -2315,11 +2311,11 @@ impl<'a> Parser<'a> {
             self.require_punct("=")?;
             let body = self.term(false)?;
             // HS `macro` rejects a name the signature already carries
-            // (Theory/Text/Parser/Macro.hs:43-44): `op elem map extractName
+            // (Theory/Text/Parser/Macro.hs): `op elem map extractName
             // (S.toList
             // (userDefinedFunSyms sign) ++ map NoEqUser (S.toList (macroNames
             // sign)))` — the subterm symbols plus the enabled theories' `NoEq`
-            // symbols (`noEqFunSyms`, Term/Maude/Signature.hs:157-164), the
+            // symbols (`noEqFunSyms`, Term/Maude/Signature.hs), the
             // user-declared `[AC]` symbols (`acUserFunSyms`), and every macro
             // registered so far (including earlier in this very `macros:`
             // list).  The check runs AFTER the body parse, so a body parse
@@ -2337,9 +2333,9 @@ impl<'a> Parser<'a> {
             }
             // HS `macro` registers the name under `macroNames` as
             // `(k, Private, Destructor, NotNDC)`
-            // (Theory/Text/Parser/Macro.hs:46), which
+            // (Theory/Text/Parser/Macro.hs), which
             // `function`'s conflict check then sees
-            // (Theory/Text/Parser/Signature.hs:212).
+            // (Theory/Text/Parser/Signature.hs).
             Arc::make_mut(&mut self.state.macro_syms).push((
                 name.clone(),
                 FunOptions {
@@ -2359,18 +2355,18 @@ impl<'a> Parser<'a> {
         Ok(TheoryItem::Macros(ms))
     }
 
-    /// HS `reservedBuiltins` (Theory/Text/Parser/Term.hs:74-85) in its order:
+    /// HS `reservedBuiltins` (Theory/Text/Parser/Term.hs) in its order:
     /// the builtin symbol names no macro may take, whatever the theory
-    /// declares (values at Term/Term/FunctionSymbols.hs:221-243).
+    /// declares (values at Term/Term/FunctionSymbols.hs).
     const RESERVED_BUILTINS: &'static [&'static str] = &[
         "mun", "one", "exp", "mult", "inv", "pmult", "em", "zero", "xor",
     ];
 
     /// HS `length args /= length (nub args)`
-    /// (Theory/Text/Parser/Macro.hs:37): `nub`'s `Eq LVar`
-    /// compares name, sort and index together (LTerm.hs:541-542), so two
+    /// (Theory/Text/Parser/Macro.hs): `nub`'s `Eq LVar`
+    /// compares name, sort and index together (LTerm.hs), so two
     /// arguments collide only when all three agree.  The sort is the one
-    /// `lvar` gave the argument (Token.hs:409-437): an explicit prefix or
+    /// `lvar` gave the argument (Token.hs): an explicit prefix or
     /// suffix names it, a prefixless binder is `LSortMsg`.
     fn duplicate_macro_arg(args: &[VarSpec]) -> Option<(usize, &VarSpec)> {
         let mut seen: Vec<(&str, u64, LSort)> = Vec::with_capacity(args.len());
@@ -2384,14 +2380,14 @@ impl<'a> Parser<'a> {
         None
     }
 
-    /// The macro-name membership test of Theory/Text/Parser/Macro.hs:43 — see
+    /// The macro-name membership test of Theory/Text/Parser/Macro.hs — see
     /// [`Self::macros`].
-    /// `extractName` (Theory/Text/Parser/Macro.hs:49-50) drops the options, so
+    /// `extractName` (Theory/Text/Parser/Macro.hs) drops the options, so
     /// only names
     /// compare; the reserved builtin names (`mun`, `em`, …) are NOT part of
     /// this set unless a theory flag contributes them (a macro so named never
     /// reaches this check — the reserved-name `error` at
-    /// Theory/Text/Parser/Macro.hs:34-35 fires
+    /// Theory/Text/Parser/Macro.hs fires
     /// first).
     fn macro_name_conflicts(&self, name: &str) -> bool {
         self.state.fun_syms.iter().any(|(n, _)| n == name)
@@ -2424,7 +2420,7 @@ impl<'a> Parser<'a> {
             }
         }
         // HS folds `liftedAddPredicate` over the block AFTER `commaSep1`
-        // collected every declaration (Theory/Text/Parser/Signature.hs:278-284),
+        // collected every declaration (Theory/Text/Parser/Signature.hs),
         // so a collision — against an earlier block, the builtin `Smaller/2`,
         // or an earlier declaration of the same block — fails at the position
         // after parsing the whole block.
@@ -2459,7 +2455,7 @@ impl<'a> Parser<'a> {
         let r = self.restriction("axiom")?;
         // HS `legacyAxiom` builds the restriction through
         // `trace "Deprecation Warning: ..." Restriction <$> ...`
-        // (Theory/Text/Parser/Restriction.hs:88-92).  The traced value is a
+        // (Theory/Text/Parser/Restriction.hs).  The traced value is a
         // shared CAF, so the message reaches stderr at most once per process,
         // and it is only forced once a COMPLETE `axiom` item has been built —
         // an axiom whose formula fails to parse prints nothing.
@@ -2512,13 +2508,13 @@ impl<'a> Parser<'a> {
         }
         self.require_punct(":")?;
         let phi = self.double_quoted_formula()?;
-        // HS `liftedAddRestriction` (Theory/Text/Parser.hs:129-134) runs
-        // `addRestriction`'s name guard (TheoryObject.hs:453-456) on each
+        // HS `liftedAddRestriction` (Theory/Text/Parser.hs) runs
+        // `addRestriction`'s name guard (TheoryObject.hs) on each
         // parsed `restriction`/`axiom` item. A left/right attribute marks the
         // diff-theory shape, which
         // HS's plain `restriction` production cannot even read
-        // (Theory/Text/Parser/Restriction.hs:77-80) and its diff parse routes
-        // through `liftedAddRestriction'` (Theory/Text/Parser.hs:433-435,546),
+        // (Theory/Text/Parser/Restriction.hs) and its diff parse routes
+        // through `liftedAddRestriction'` (Theory/Text/Parser.hs),
         // splitting the sides instead of comparing names; the guard leaves
         // those items, and every item of a diff parse, alone.
         if !self.is_diff
@@ -2536,7 +2532,7 @@ impl<'a> Parser<'a> {
         // Feed the restriction-name set the `_restrict` guard consults
         // ([`Parser::guard_duplicate_rule`] step 1): HS `addRestriction`
         // checks new `Restr_<rule>_<i>` names against ALL restrictions,
-        // user-declared ones included (TheoryObject.hs:453-456).
+        // user-declared ones included (TheoryObject.hs).
         self.state.seen_restriction_names.push(name.clone());
         if !self.is_diff {
             self.named_sites
@@ -2574,7 +2570,7 @@ impl<'a> Parser<'a> {
         let (r, name_start) = self.parse_rule_located()?;
         // Dispatch on the `(modulo AC)` head alone.  Intruder-rule names
         // conventionally start with `c` or `d` (HS `intrInfo`,
-        // Theory/Text/Parser/Rule.hs:163-172, see line 171,172), but that prefix
+        // Theory/Text/Parser/Rule.hs), but that prefix
         // is not tested
         // here — the `c`/`d` split happens when the caller translates the
         // parser rule into an `IntrRuleAC`.
@@ -2582,24 +2578,24 @@ impl<'a> Parser<'a> {
             Ok(TheoryItem::IntrRule(r))
         } else {
             // HS `addItems`'s rule alternative runs `liftedAddProtoRule` on
-            // each parsed rule (Theory/Text/Parser.hs:283-285) — intruder
+            // each parsed rule (Theory/Text/Parser.hs) — intruder
             // rules instead go through `addIntrRuleACs`, which `nub`-appends
-            // without any name guard (OpenTheory.hs:751-753).
+            // without any name guard (OpenTheory.hs).
             self.guard_duplicate_rule(&r, name_start)?;
             Ok(TheoryItem::Rule(r))
         }
     }
 
-    /// The name guards HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193)
+    /// The name guards HS `liftedAddProtoRule` (Theory/Text/Parser.hs)
     /// runs after each protocol rule parses, in HS's order:
     ///
     ///   1. each `_restrict` formula's minted `Restr_<rule>_<i>` restriction is
     ///      added first — `addRestriction` fails if a restriction with that
-    ///      NAME already exists (TheoryObject.hs:453-456), so a second
+    ///      NAME already exists (TheoryObject.hs), so a second
     ///      `_restrict`-carrying rule with a reused name dies here
     ///      (`duplicate restriction: Restr_<rule>_1`) even when it is
     ///      byte-identical to the first;
-    ///   2. then the rule itself — `addOpenProtoRule` (OpenTheory.hs:691-702)
+    ///   2. then the rule itself — `addOpenProtoRule` (OpenTheory.hs)
     ///      fails only when the name is already bound to a DIFFERENT rule
     ///      (`maybe True (ru ==) $ lookupOpenProtoRule …`); an identical
     ///      duplicate passes the guard and is appended AGAIN (both copies
@@ -2609,11 +2605,11 @@ impl<'a> Parser<'a> {
     /// Diff mode is exempt: diff theories route rules through
     /// `liftedAddDiffRule`/`addDiffRule` with a different message
     /// (`"duplicate rule or inconsistent names: …"`,
-    /// Theory/Text/Parser.hs:520-522), which
+    /// Theory/Text/Parser.hs), which
     /// this port does not implement.
     ///
     /// Equality is on the parsed AST minus the `(modulo E)` head, which HS
-    /// discards at parse time (`optional moduloE`, Parser/Rule.hs:100-104).
+    /// discards at parse time (`optional moduloE`, Parser/Rule.hs).
     /// HS compares rules after `liftedAddProtoRule` has appended the minted
     /// `Restr_*` actions; two same-name rules that both carry an embedded
     /// restriction die at the restriction guard above before this comparison
@@ -2625,7 +2621,7 @@ impl<'a> Parser<'a> {
         }
         for i in 1..=r.embedded_restrictions.len() {
             // HS `fromRuleRestriction (rname ++ "_" ++ show i)` with
-            // `restrPrefix = "Restr_"` (Model/Restriction.hs:129-149).
+            // `restrPrefix = "Restr_"` (Model/Restriction.hs).
             let rstr_name = format!("Restr_{}_{}", r.name, i);
             if self.state.seen_restriction_names.contains(&rstr_name) {
                 return Err(self.duplicate_declaration(
@@ -2728,7 +2724,7 @@ impl<'a> Parser<'a> {
     /// actions/restrictions) or `--[ .. ]->` with a `fact_or_restr` loop
     /// splitting action Facts from embedded Restrs, allowing a trailing comma
     /// before `]->` (HS `commaSep` = `sepEndBy comma`,
-    /// Theory/Text/Parser/Rule.hs:205-213, see line 210).
+    /// Theory/Text/Parser/Rule.hs).
     fn parse_actions_and_restrictions(&mut self) -> Result<(Vec<Fact>, Vec<Formula>), ParseError> {
         if self.try_punct("-->") {
             return Ok((vec![], vec![]));
@@ -2741,7 +2737,7 @@ impl<'a> Parser<'a> {
     /// the `]->` terminator, assuming `--[` has already been consumed. Facts
     /// become actions and `_restrict(..)` become restrictions; a trailing comma
     /// before `]->` is permitted (HS `commaSep`,
-    /// Theory/Text/Parser/Rule.hs:205-213, see line 210).
+    /// Theory/Text/Parser/Rule.hs).
     fn parse_action_restr_list(&mut self) -> Result<(Vec<Fact>, Vec<Formula>), ParseError> {
         let mut acts = Vec::new();
         let mut rstrs = Vec::new();
@@ -2781,7 +2777,7 @@ impl<'a> Parser<'a> {
 
     /// The `in(...)` argument list.  Unlike [`Parser::parse_chan_msg`], the
     /// MESSAGE term takes `=v` patterns and the channel does not, so the two
-    /// HS alternatives (Parser/Sapic.hs:96-116) cannot fold into one parse:
+    /// HS alternatives (Parser/Sapic.hs) cannot fold into one parse:
     /// `try` the one-argument `(msg)` form with pattern literals first, then
     /// `(chan, msg)` with a plain channel. When both fail, select one complete
     /// diagnostic with [`Parser::select_alt_error`].
@@ -2861,7 +2857,7 @@ impl<'a> Parser<'a> {
     fn parse_rule_ac(&mut self) -> Result<Rule, ParseError> {
         self.require_kw("rule")?;
         // HS `protoRuleACInfo`/`intrRule`
-        // (Theory/Text/Parser/Rule.hs:137-138/157) sequence a
+        // (Theory/Text/Parser/Rule.hs) sequence a
         // non-optional `moduloAC` here (`symbol "rule" *> moduloAC *> ...`).
         // This port relaxes that: `try_modulo` returns `None` when the
         // `(modulo AC)` head is absent and parsing proceeds. (More lenient than
@@ -2872,10 +2868,10 @@ impl<'a> Parser<'a> {
     }
 
     /// The rule header and body that follow the `rule` keyword, shared by
-    /// `protoRule` (Theory/Text/Parser/Rule.hs:126-135) and `protoRuleAC`
-    /// (Theory/Text/Parser/Rule.hs:146-154): the optional `(modulo ...)` head,
+    /// `protoRule` (Theory/Text/Parser/Rule.hs) and `protoRuleAC`
+    /// (Theory/Text/Parser/Rule.hs): the optional `(modulo ...)` head,
     /// the name, the attribute list and the closing colon of `protoRuleInfo` /
-    /// `protoRuleACInfo` (Theory/Text/Parser/Rule.hs:100-107 / 138-143), then
+    /// `protoRuleACInfo` (Theory/Text/Parser/Rule.hs), then
     /// `option emptySubst letBlock`, the premises, the actions and embedded
     /// restrictions, the conclusions and the `apply subst` of the bindings.
     /// `variants` and `left_right` are empty; only `protoRule` has them, and
@@ -2956,7 +2952,7 @@ impl<'a> Parser<'a> {
                 let c = self.color_attr_value()?;
                 attrs.push(RuleAttr::Color(c));
             } else if self.try_kw("process") {
-                // HS `ruleAttribute` (Parser/Rule.hs:68-93, see line 72) `parseAndIgnore`s
+                // HS `ruleAttribute` (Parser/Rule.hs) `parseAndIgnore`s
                 // `process=`: the value is parsed and DISCARDED, leaving
                 // `ruleProcess = Nothing`, so a user-written `process=` is never
                 // rendered.  `process=` is only emitted by HS for
@@ -3007,17 +3003,17 @@ impl<'a> Parser<'a> {
     }
 
     /// The value of a `color=`/`colour=` rule attribute: HS `hexColor`
-    /// (Token.hs:403-406, `lexeme (singleQuoted hexCode <|> hexCode)` with
+    /// (Token.hs, `lexeme (singleQuoted hexCode <|> hexCode)` with
     /// `hexCode = optional (symbol "#") *> many1 hexDigit`) followed by
-    /// `parseColor`'s `hexToRGB` validation (Parser/Rule.hs:81-85).
+    /// `parseColor`'s `hexToRGB` validation (Parser/Rule.hs).
     ///
-    /// `hexToRGB` (Data/Color.hs:149-155) only matches a six-character code
+    /// `hexToRGB` (Data/Color.hs) only matches a six-character code
     /// (`[r1,r2,g1,g2,b1,b2]`, each pair read via `readHex`, so both cases
     /// are fine); anything else is `Nothing` and `parseColor` raises
     /// `fail ("Color code " ++ show hc ++ " could not be parsed to RGB")`.
     /// The accepted code is stored verbatim (quotes/`#` stripped); rendering
     /// lowercases it, matching `rgbToHex` of the parsed `RGB` value
-    /// (Data/Color.hs:139-147 round-trips every 6-digit code byte-for-byte).
+    /// (Data/Color.hs round-trips every 6-digit code byte-for-byte).
     ///
     /// Kept from the previous lexer-side implementation: no whitespace is
     /// skipped after the opening quote or the `#`, so `' #FF'` / `'# FF'` are
@@ -3080,9 +3076,9 @@ impl<'a> Parser<'a> {
     fn read_attribute_token(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
         // HS `parseAndIgnore = betweenMatching (\(l,r) -> manyCharsExcept [l,r] ...)`
-        // (Theory/Text/Parser/Rule.hs:69-95, see line 87). `betweenMatching`
-        // (Token.hs:305-316) tries each pair in
-        // `matches`, and `manyCharsExcept [l,r]` (Token.hs:320-321) consumes
+        // (Theory/Text/Parser/Rule.hs). `betweenMatching`
+        // (Token.hs) tries each pair in
+        // `matches`, and `manyCharsExcept [l,r]` (Token.hs) consumes
         // chars until the FIRST `l` or `r` (NO nesting), after which `between`
         // requires the closing `r`. The pair set INCLUDES `('|','|')`.
         let pairs = [
@@ -3127,7 +3123,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The left side of one `let` definition — HS `sortedLVar` under
-    /// `genericletBlock` (Theory/Text/Parser/Let.hs:24-31): an indexed
+    /// `genericletBlock` (Theory/Text/Parser/Let.hs): an indexed
     /// identifier with an optional sort prefix or `:sort` suffix, never an
     /// application or a compound term.  HS's sort list here is `[LSortMsg,
     /// LSortNat]`. `Ok(None)` means no variable starts here, which ends the
@@ -3146,7 +3142,7 @@ impl<'a> Parser<'a> {
         Ok(Some(v))
     }
 
-    /// HS `letBlock` (Theory/Text/Parser/Let.hs:28-35): a sequence of
+    /// HS `letBlock` (Theory/Text/Parser/Let.hs): a sequence of
     /// `sortedLVar [LSortMsg, LSortNat] <* equalSign` definitions closed by
     /// `in`, folded into an `LNSubst`.  The left side is a VARIABLE, so a
     /// bare identifier that names an arity-0 function symbol binds the
@@ -3178,9 +3174,8 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let opening = self.save();
         self.require_punct("[")?;
-        // HS `list (fact ...)` (Theory/Text/Parser/Rule.hs:205-213, see line
-        // 207,212) = `brackets . commaSep`
-        // (Token.hs:362-363) with `commaSep = sepEndBy comma`: the list may
+        // HS `list (fact ...)` (Theory/Text/Parser/Rule.hs) = `brackets . commaSep`
+        // (Token.hs) with `commaSep = sepEndBy comma`: the list may
         // be empty and a trailing comma before `]` is OK.
         self.sep_end_by(opening, "]", |p| p.fact())
     }
@@ -3202,7 +3197,7 @@ impl<'a> Parser<'a> {
     fn lemma_item(&mut self) -> Result<TheoryItem, ParseError> {
         // HS `protoLemma` captures `start <- getInput` BEFORE `symbol "lemma"`;
         // the enclosing item loop has already consumed leading whitespace, so
-        // the cursor sits exactly at `lemma` here (`Theory/Text/Parser/Lemma.hs:78-88, see line 80`).
+        // the cursor sits exactly at `lemma` here (`Theory/Text/Parser/Lemma.hs`).
         let start = self.lx.pos().offset;
         // Look ahead to decide between a normal lemma and an accountability lemma.
         // Accountability lemmas have the body `accounts for [..]` after the name.
@@ -3234,7 +3229,7 @@ impl<'a> Parser<'a> {
         let proof = self.try_proof_skeleton()?;
         // HS `end <- getInput` after the proof skeleton; `inputString =
         // removeComments $ take (length start - length end) start`
-        // (`Theory/Text/Parser/Lemma.hs:86-87`).  The closing-quote lexeme and
+        // (`Theory/Text/Parser/Lemma.hs`).  The closing-quote lexeme and
         // `try_proof_skeleton` have already consumed trailing whitespace and
         // comments, so `end` sits at the next top-level token — exactly HS's.
         let end = self.lx.pos().offset;
@@ -3242,12 +3237,12 @@ impl<'a> Parser<'a> {
         if proof.is_none() {
             self.skip_ws();
         }
-        // HS `liftedAddLemma` (Theory/Text/Parser.hs:280-282) runs `addLemma`'s
-        // name guard (TheoryObject.hs:462-465) on each parsed lemma;
+        // HS `liftedAddLemma` (Theory/Text/Parser.hs) runs `addLemma`'s
+        // name guard (TheoryObject.hs) on each parsed lemma;
         // accountability lemmas are TranslationItems, which `lookupLemma`
-        // (TheoryObject.hs:675-676) does not see, so they neither feed nor hit
+        // (TheoryObject.hs) does not see, so they neither feed nor hit
         // this set. A diff parse routes sided lemmas through
-        // `liftedAddLemma'` (Theory/Text/Parser.hs:438,532), whose per-side
+        // `liftedAddLemma'` (Theory/Text/Parser.hs), whose per-side
         // stores enforce their own duplicate guards. In a regular parse,
         // `left`/`right` are ordinary attributes and `liftedAddLemma` still
         // checks the shared lemma namespace.
@@ -3353,7 +3348,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        // HS `lemmaAcc` (Theory/Text/Parser/Accountability.hs:30-39, see line 36)
+        // HS `lemmaAcc` (Theory/Text/Parser/Accountability.hs)
         // uses `commaSep1 $ identifier`,
         // requiring at least one case-test identifier before `accounts for`.
         // Since the whole `lemmaAcc` is `try`-wrapped, an empty list backtracks
@@ -3450,8 +3445,7 @@ impl<'a> Parser<'a> {
                 self.skip_ws();
                 let opening = self.save();
                 self.require_punct("[")?;
-                // HS `list constructorp` (Theory/Text/Parser/Lemma.hs:39-53, see
-                // line 49) = `brackets . commaSep`:
+                // HS `list constructorp` (Theory/Text/Parser/Lemma.hs) = `brackets . commaSep`:
                 // trailing comma before `]` is permitted.
                 let outs = self.sep_end_by(opening, "]", |p| p.ident())?;
                 attrs.push(LemmaAttr::Output(outs));
@@ -3460,7 +3454,7 @@ impl<'a> Parser<'a> {
             } else if self.try_kw("right") {
                 attrs.push(LemmaAttr::Right);
             } else {
-                // HS `lemmaAttribute` (Theory/Text/Parser/Lemma.hs:39-53) is a
+                // HS `lemmaAttribute` (Theory/Text/Parser/Lemma.hs) is a
                 // closed `asum` of the
                 // recognised attributes with no catch-all; an unknown attribute
                 // makes `list (lemmaAttribute ...)` fail and `protoLemma`'s outer
@@ -3531,10 +3525,10 @@ impl<'a> Parser<'a> {
         let save = self.save();
         // First-token set that can START a stored proof skeleton, matching HS.
         // This gate is for `lemma_item`'s regular proof grammar:
-        //   - regular `proofMethod` (Theory/Text/Parser/Proof.hs:77-85): sorry,
+        //   - regular `proofMethod` (Theory/Text/Parser/Proof.hs): sorry,
         //     simplify, solve,
         //     contradiction, induction, INVALIDATED, UNFINISHABLE
-        //   - regular skeleton extras (Theory/Text/Parser/Proof.hs:99-115):
+        //   - regular skeleton extras (Theory/Text/Parser/Proof.hs):
         //     `by` (finalProof),
         //     `SOLVED` (solvedProof)
         // `case`/`next`/`qed` are intentionally absent: they only appear INSIDE
@@ -3663,8 +3657,7 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let opening = self.save();
         let vars = if self.try_punct("(") {
-            // HS `parens $ commaSep sapicvar` (Theory/Text/Parser/Sapic.hs:64-72,
-            // see line 69): trailing comma OK.
+            // HS `parens $ commaSep sapicvar` (Theory/Text/Parser/Sapic.hs): trailing comma OK.
             // `sapicvar`, so a `:` here types the parameter (see
             // [`Parser::sapic_var_types`]).
             let r = self.with_sapic_var_types(|p| p.sep_end_by(opening, ")", |p| p.var_spec()));
@@ -3687,7 +3680,7 @@ impl<'a> Parser<'a> {
         if diff {
             // HS `diffEquivLemma` turns the signature's diff bit on right after
             // the colon and leaves it on for the rest of the parse
-            // (Theory/Text/Parser/Sapic.hs:211-217, see line 215).
+            // (Theory/Text/Parser/Sapic.hs).
             self.state.enable_diff = true;
         }
         let p1 = self.process()?;
@@ -3703,7 +3696,7 @@ impl<'a> Parser<'a> {
         self.require_kw("export")?;
         let tag = self.ident()?;
         self.require_punct(":")?;
-        // Export bodies use the strict `bodyChar` grammar (Parser/Signature.hs:297-302),
+        // Export bodies use the strict `bodyChar` grammar (Parser/Signature.hs),
         // NOT the general string-literal escape decoding.
         let opening = self.save();
         let body = self
@@ -3738,7 +3731,7 @@ impl<'a> Parser<'a> {
     }
 
     /// One process-`let` binding — HS `definition = sapicpatternterm <*
-    /// equalSign <*> sapicterm` (Let.hs:23-26): only the pattern side takes
+    /// equalSign <*> sapicterm` (Let.hs): only the pattern side takes
     /// `=v` patterns.
     fn let_definition(&mut self) -> Result<(Term, Term), ParseError> {
         let pat = self.with_patterns(|p| p.term(false))?;
@@ -3826,7 +3819,7 @@ impl<'a> Parser<'a> {
             // `let pat = t [, pat = t]* in p` or with newline-separated
             // bindings (Tamarin's `genericletBlock = many1 definition` has no
             // separator between bindings).
-            // HS `genericletBlock = many1 definition` (Let.hs:23-26, see line 24) with
+            // HS `genericletBlock = many1 definition` (Let.hs) with
             // `definition = sapicpatternterm <* equalSign <*> sapicterm`. There
             // is no separator between bindings; `many1` greedily reparses a
             // `definition` and backtracks when one fails to parse. We mirror that
@@ -3899,7 +3892,7 @@ impl<'a> Parser<'a> {
             let opening = self.save();
             let args = if self.try_punct("(") {
                 // HS `parens $ commaSep (msetterm ...)`
-                // (Theory/Text/Parser/Sapic.hs:224-312, see line 296):
+                // (Theory/Text/Parser/Sapic.hs):
                 // trailing comma before `)` is permitted.
                 self.sep_end_by(opening, ")", |p| p.term(false))?
             } else {
@@ -3957,7 +3950,7 @@ impl<'a> Parser<'a> {
             return Ok(Some(SapicAction::Event(f)));
         }
         // Embedded MSR: `[..] --[..]-> [..]`.  HS parses it via `genericRule
-        // sapicpatternvar …` (Parser/Sapic.hs:155), so the whole rule — every
+        // sapicpatternvar …` (Parser/Sapic.hs), so the whole rule — every
         // fact row and the `_restrict` formulas — is ONE pattern-literal
         // region, shared with the plain-rule arrow alternation.
         if self.lx.peek() == Some('[') {
@@ -4006,17 +3999,16 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let opening = self.save();
         self.require_punct("(")?;
-        // HS `parens (commaSep pterm)` (Theory/Text/Parser/Fact.hs:39-63, see
-        // line 47): trailing comma OK.
+        // HS `parens (commaSep pterm)` (Theory/Text/Parser/Fact.hs): trailing comma OK.
         let args = self.sep_end_by(opening, ")", |p| p.term(false))?;
         let mut annotations = Vec::new();
         self.skip_ws();
         if self.try_punct("[") && !self.try_punct("]") {
             loop {
-                // HS `factAnnotation` (Theory/Text/Parser/Fact.hs:31-36):
+                // HS `factAnnotation` (Theory/Text/Parser/Fact.hs):
                 // SolveFirst is
                 // `opUnion`, and `opUnion = symbol_ "++" <|> symbol_ "+"`
-                // (Token.hs:551-552) — so `++` is accepted as well as `+`
+                // (Token.hs) — so `++` is accepted as well as `+`
                 // (try `++` first, then `+`). SolveLast is `opMinus` (`-`),
                 // NoSources is `no_precomp`.
                 if self.try_punct("++") || self.try_punct("+") {
@@ -4036,9 +4028,9 @@ impl<'a> Parser<'a> {
         }
         // HS-faithful parse-time canonicalisation, mirroring
         // `Theory.Text.Parser.Fact.mkProtoFact`
-        // (Theory/Text/Parser/Fact.hs:56-63) combined with
-        // `factTagMultiplicity` (Model/Fact.hs:382-388) and `factTagName`
-        // (Model/Fact.hs:535-545).  Any fact whose name uppercases to one of
+        // (Theory/Text/Parser/Fact.hs) combined with
+        // `factTagMultiplicity` (Model/Fact.hs) and `factTagName`
+        // (Model/Fact.hs).  Any fact whose name uppercases to one of
         // the reserved special names becomes that special fact, which:
         //   * fixes the CANONICAL name (KU/KD/Ded/Fr/In/Out),
         //   * fixes the multiplicity from the tag (KU and KD are Persistent;
@@ -4064,8 +4056,7 @@ impl<'a> Parser<'a> {
         .into_iter()
         .find(|(canonical, _, _)| name.eq_ignore_ascii_case(canonical));
         if let Some((cname, cpersistent, keep_ann)) = canonical {
-            // `!Fr(...)` is a parse error (Theory/Text/Parser/Fact.hs:39-63, see
-            // line 45).
+            // `!Fr(...)` is a parse error (Theory/Text/Parser/Fact.hs).
             if cname == "Fr" && persistent {
                 return Err(self.semantic_error(
                     ParseErrorKind::PersistentFreshFact,
@@ -4074,7 +4065,7 @@ impl<'a> Parser<'a> {
                 ));
             }
             // `singleTerm`: special facts have arity one
-            // (Theory/Text/Parser/Fact.hs:52-54).
+            // (Theory/Text/Parser/Fact.hs).
             if args.len() != 1 {
                 let diagnostic_name = diagnostic_lexeme(&name);
                 return Err(self.semantic_error(
@@ -4161,15 +4152,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs:59):
+    /// `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs):
     /// a variable in a timepoint position takes `LSortNode` from its
     /// position, since `nodevar` is the only parser that reads there
-    /// (Token.hs:443-448).  `nodevar` accepts `#name`, a bare name and
+    /// (Token.hs).  `nodevar` accepts `#name`, a bare name and
     /// `name:node`, and fails on any other spelling.  It reads the bare name
-    /// with `indexedIdentifier` (Token.hs:445-447), which never consults the
+    /// with `indexedIdentifier` (Token.hs), which never consults the
     /// signature, so a name that is also an arity-0 symbol is a timepoint
     /// variable here rather than the constant `nullaryApp` builds for it
-    /// elsewhere (Theory/Text/Parser/Term.hs:158-163) — the zero-argument
+    /// elsewhere (Theory/Text/Parser/Term.hs) — the zero-argument
     /// application arm below. Callers that must enforce `nodevarTerm` syntax
     /// validate the parsed shape with [`Self::node_operand`] first.
     fn node_sorted(t: Term) -> Term {
@@ -4326,7 +4317,7 @@ impl<'a> Parser<'a> {
             // `blatom`'s "term equality" alternative reads both operands with
             // `msgvar`, which rejects a node variable, so an equality whose
             // left operand is one is the LAST alternative, "node equality"
-            // (Theory/Text/Parser/Formula.hs:51,56): `nodevarTerm` on both
+            // (Theory/Text/Parser/Formula.hs): `nodevarTerm` on both
             // sides, which reads a bare right operand as a timepoint.
             if matches!(&lhs, Term::Var(v) if v.sort == LSort::Node) {
                 let rhs = Self::node_operand(rhs, rhs_explicit_sort)
@@ -4349,7 +4340,7 @@ impl<'a> Parser<'a> {
                 );
             }
             let rhs = self.term(false)?;
-            // HS `smallerp` (Theory/Text/Parser/Formula.hs:30-38): the multiset
+            // HS `smallerp` (Theory/Text/Parser/Formula.hs): the multiset
             // comparison operator `a (<) b` desugars DIRECTLY into the built-in
             // `Smaller` predicate fact at PARSE time —
             //   `(Syntactic . Pred) $ protoFact Linear "Smaller" [a,b]`.
@@ -4367,7 +4358,7 @@ impl<'a> Parser<'a> {
             return Ok(Formula::Atom(Atom::Pred(fact)));
         }
         if self.try_punct("<") {
-            // HS `blatom` (Theory/Text/Parser/Formula.hs:44-60, see line 49)
+            // HS `blatom` (Theory/Text/Parser/Formula.hs)
             // restricts both operands of `<` to
             // node/timepoint variables: `Less <$> try (nodevarTerm <* opLess)
             // <*> nodevarTerm`. We parse terms first so the earlier atom
@@ -4441,7 +4432,7 @@ impl<'a> Parser<'a> {
         matched.then_some(op)
     }
 
-    /// HS `msetterm` (Theory/Text/Parser/Term.hs:195-200): the union level runs
+    /// HS `msetterm` (Theory/Text/Parser/Term.hs): the union level runs
     /// only under `enableMSet && not eqn`, otherwise the parser drops straight
     /// to [`Self::natterm`] and `++`/`+` are not term operators at all.
     fn msetterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
@@ -4458,7 +4449,7 @@ impl<'a> Parser<'a> {
         Ok(term)
     }
 
-    /// HS `natterm` (Theory/Text/Parser/Term.hs:203-208): `%+` needs
+    /// HS `natterm` (Theory/Text/Parser/Term.hs): `%+` needs
     /// `enableNat && not eqn`.
     fn natterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
         if !self.state.sig_enable_nat || eqn {
@@ -4471,7 +4462,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// HS `xorterm` (Theory/Text/Parser/Term.hs:187-192): `XOR`/`⊕` need
+    /// HS `xorterm` (Theory/Text/Parser/Term.hs): `XOR`/`⊕` need
     /// `enableXor && not eqn`.
     fn xorterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
         if !self.state.sig_enable_xor || eqn {
@@ -4484,7 +4475,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// HS `multterm` (Theory/Text/Parser/Term.hs:179-185): without
+    /// HS `multterm` (Theory/Text/Parser/Term.hs): without
     /// `enableDH && not eqn` the parser skips BOTH this level and
     /// [`Self::expterm`], so neither `*` nor `^` is a term operator.
     fn multterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
@@ -4499,7 +4490,7 @@ impl<'a> Parser<'a> {
     }
 
     /// HS `expterm` is "a left-associative sequence of exponentiations"
-    /// (`chainl1`, Parser/Term.hs:174-176).
+    /// (`chainl1`, Parser/Term.hs).
     fn expterm(&mut self, eqn: bool) -> Result<Term, ParseError> {
         self.chainl1(
             |p| p.acterm(eqn),
@@ -4511,7 +4502,7 @@ impl<'a> Parser<'a> {
     /// A left-associative sequence of user-defined AC operators — the infix
     /// notation `t1 f t2` for a binary symbol declared `f/2 [AC]`.
     ///
-    /// Port of HS `acterm` (Theory/Text/Parser/Term.hs:165-174):
+    /// Port of HS `acterm` (Theory/Text/Parser/Term.hs):
     /// ```haskell
     /// acterm eqn plit = do
     ///     acsyms <- stACFunSyms . sig <$> getState
@@ -4541,8 +4532,8 @@ impl<'a> Parser<'a> {
     /// same name is ALSO a `NoEq` symbol of the signature, whereas the PREFIX
     /// spelling of such a dual-declared name resolves through `lookupArity` to
     /// the `NoEq` symbol (its `lookup` list sorts every `NoEqUser` before
-    /// every `ACfctUser`, Theory/Text/Parser/Term.hs:62-72,
-    /// Term/Term/FunctionSymbols.hs:146-147).  The AST node therefore has to
+    /// every `ACfctUser`, Theory/Text/Parser/Term.hs,
+    /// Term/Term/FunctionSymbols.hs).  The AST node therefore has to
     /// carry which spelling was written for the readers to resolve it.
     fn ac_chain(&mut self, level: usize, eqn: bool) -> Result<Term, ParseError> {
         if level >= self.state.ac_fun_syms.len() {
@@ -4566,7 +4557,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// What HS `lookupArity` (Theory/Text/Parser/Term.hs:62-72) resolves a
+    /// What HS `lookupArity` (Theory/Text/Parser/Term.hs) resolves a
     /// prefix-application head to.
     ///
     /// Its `lookup` list is `map extractName (S.toList (userDefinedFunSyms
@@ -4576,18 +4567,18 @@ impl<'a> Parser<'a> {
     ///
     ///   * every `NoEqUser` outranks every `ACfctUser` (`UserDefinedSym`'s
     ///     derived `Ord` ranks constructors in declaration order,
-    ///     Term/Term/FunctionSymbols.hs:146-147) — a dual-declared name
+    ///     Term/Term/FunctionSymbols.hs) — a dual-declared name
     ///     resolves NoEq;
     ///   * among same-name `NoEqUser` entries the set order picks the smallest
     ///     `(arity, priv, constr, ndc)` tuple ([`FunOptions::ord_key`]);
     ///   * `userDefinedFunSyms` is built from the FULL `funSyms`
-    ///     (Term/Maude/Signature.hs:157-164), so the enabled theories' `NoEq`
+    ///     (Term/Maude/Signature.hs), so the enabled theories' `NoEq`
     ///     symbols ([`Self::enabled_theory_noeq_syms`]) participate;
     ///   * macros come after the function symbols, and `em` is ALWAYS present
     ///     at arity 2 (even without bilinear-pairing), appended last.
     ///
     /// `Some(NoEq)`'s applications are arity-checked
-    /// (`Theory/Text/Parser/Term.hs:97-100`);
+    /// (`Theory/Text/Parser/Term.hs`);
     /// `Some(Ac)`'s are not (the check is gated on `NotAC`).  `None` is HS's
     /// `fail "unknown operator ..."`, which the try-wrapped application
     /// converts into a backtrack.
@@ -4620,7 +4611,7 @@ impl<'a> Parser<'a> {
         if op == "em" {
             // The appended `(emapSymString, (2,Public,Constructor,NotNDC))`
             // row: `naryOpApp` special-cases the NAME into `fAppC EMap`
-            // (Theory/Text/Parser/Term.hs:102-103), which the readers resolve
+            // (Theory/Text/Parser/Term.hs), which the readers resolve
             // from the `em`
             // application node; the arity check runs like any NoEq's.
             return Some(ArityRes::NoEq {
@@ -4631,7 +4622,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Whether `name` is an arity-0 symbol HS `nullaryApp`
-    /// (Theory/Text/Parser/Term.hs:158-163)
+    /// (Theory/Text/Parser/Term.hs)
     /// parses via `symbol` — searched over `funSyms maudeSig` (the subterm
     /// signature plus the enabled theories' symbols) and `macroNames`.
     fn is_nullary_sym(&self, name: &str) -> bool {
@@ -4700,9 +4691,9 @@ impl<'a> Parser<'a> {
                 self.lx.bump(); // consume '<'
                 self.skip_ws();
                 // HS `pairing = angled (tupleterm eqn plit)`
-                // (Theory/Text/Parser/Term.hs:157) with
+                // (Theory/Text/Parser/Term.hs) with
                 // `tupleterm = chainr1 (msetterm ...) (... <$ comma)`
-                // (Theory/Text/Parser/Term.hs:211-212). `chainr1` requires >=1
+                // (Theory/Text/Parser/Term.hs). `chainr1` requires >=1
                 // operand, so [`Self::tuple_contents`] always reads one: an
                 // empty `<>` fails to parse (matching HS, where no other
                 // `term` alternative starts with `<`), and a singleton `<a>`
@@ -4782,8 +4773,8 @@ impl<'a> Parser<'a> {
             return Ok(Term::PubLit(s));
         }
         // diff(a, b) — HS `diffOp = symbol "diff" *> parens ...`
-        // (Theory/Text/Parser/Term.hs:123-135, see line 125).
-        // `diff` is a reserved name (Token.hs:214-230, see line 225) so it is NOT an identifier and
+        // (Theory/Text/Parser/Term.hs).
+        // `diff` is a reserved name (Token.hs) so it is NOT an identifier and
         // must be matched as a keyword here, BEFORE the identifier path. The
         // word-boundary check in `peek_symbol` keeps `diffuse(...)` an identifier
         // (function application), matching HS where `naryOpApp` handles it.
@@ -4830,8 +4821,7 @@ impl<'a> Parser<'a> {
         if let Some(id) = self.lx.identifier() {
             // HS `naryOpApp`/`binaryAlgApp` reject a reserved builtin name in
             // an `equations:` context with a GHC `error`
-            // (Theory/Text/Parser/Term.hs:90-92,
-            // 111-113) right after the identifier — BEFORE looking at what
+            // (Theory/Text/Parser/Term.hs) right after the identifier — BEFORE looking at what
             // follows, so even a bare `exp` inside an equation aborts.  The
             // error propagates directly out of the equation parser.
             if eqn && Self::RESERVED_BUILTINS.contains(&id.as_str()) {
@@ -4899,7 +4889,7 @@ impl<'a> Parser<'a> {
     /// `.<index>` and `:sort` / `:type` suffix are read.
     ///
     /// HS's `term` tries `nullaryApp` ahead of the literal parser
-    /// (Theory/Text/Parser/Term.hs:139-153,158-163): an identifier that is an
+    /// (Theory/Text/Parser/Term.hs): an identifier that is an
     /// arity-0 symbol of `funSyms maudeSig ∪ macroNames maudeSig` is the
     /// application `fApp fs []`, whatever a same-named binder is in scope.
     /// Current upstream reads a complete identifier before resolving a
@@ -4923,7 +4913,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The variable after a pattern `=` — HS `sapicvar` via `sapicpatternvar`
-    /// (Token.hs:506-519): a sorted variable with an optional `.idx` index and
+    /// (Token.hs): a sorted variable with an optional `.idx` index and
     /// `:type` annotation, never an application, literal, or compound term.
     fn pattern_var_atom(&mut self) -> Result<Term, ParseError> {
         if let Some(v) = self.try_var_spec()? {
@@ -4934,7 +4924,7 @@ impl<'a> Parser<'a> {
     }
 
     /// HS `naryOpApp`'s argument parse after `lookupArity` succeeded
-    /// (Theory/Text/Parser/Term.hs:93-105), starting at the opening `(`:
+    /// (Theory/Text/Parser/Term.hs), starting at the opening `(`:
     ///
     /// ```haskell
     /// ts <- parens $ if k == 1 then return <$> tupleterm eqn plit
@@ -4945,11 +4935,11 @@ impl<'a> Parser<'a> {
     /// So an arity-1 symbol takes ONE `tupleterm` — surplus commas fold into
     /// a right-associative pair (`h(a, b)` is `h(<a, b>)`) and a trailing
     /// comma is a parse failure — while any other arity takes `commaSep`
-    /// (`sepEndBy`, Token.hs:353-355: empty list and trailing comma both OK)
+    /// (`sepEndBy`, Token.hs: empty list and trailing comma both OK)
     /// followed by the `NotAC`-gated arity check.  An `IsAC` head accepts any
     /// count: `fAppAC` flattens ≥2 arguments (built here as the same nested
     /// [`BinOp::AcFct`] the infix spelling produces), collapses a singleton to
-    /// its argument (`fAppAC _ [a] = a`, Term/Term/Raw.hs:118-121), and
+    /// its argument (`fAppAC _ [a] = a`, Term/Term/Raw.hs), and
     /// `fAppAC _ []` is a GHC `error` the empty argument list only triggers
     /// once the theory pipeline forces the term — kept as an `App` node here
     /// (`scripts/divergence_fixtures/ac_prefix_arities.spthy`).
@@ -5006,10 +4996,10 @@ impl<'a> Parser<'a> {
 
     /// The argument list of a prefix application whose head the signature
     /// declares `[AC]`, as the term HS `naryOpApp` builds for it: `fAppAC
-    /// (ACfct ...) ts` (Theory/Text/Parser/Term.hs:105), which the AST spells
+    /// (ACfct ...) ts` (Theory/Text/Parser/Term.hs), which the AST spells
     /// as a left-folded chain of [`BinOp::AcFct`].  A single argument is the
     /// term itself, as `fAppAC` over a one-element list flattens to it
-    /// (`fAppAC _ [a] = a`, Term/Term/Raw.hs:121), and an empty list leaves
+    /// (`fAppAC _ [a] = a`, Term/Term/Raw.hs), and an empty list leaves
     /// the plain application.
     fn ac_prefix_app(id: String, ts: Vec<Term>) -> Term {
         let sym = tamarin_term::intern::intern_str(&id);
@@ -5027,12 +5017,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// HS `binaryAlgApp` (Theory/Text/Parser/Term.hs:109-121) after
+    /// HS `binaryAlgApp` (Theory/Text/Parser/Term.hs) after
     /// `lookupArity` succeeded,
     /// starting at the opening `{`: `op{t1}t2` parses `braced (tupleterm …)`
     /// then a trailing atom (`term eqn plit`), requires arity 2, and builds
     /// `fAppNoEq`/`fAppAC` by the head's AC state.  There is no `em` special
-    /// case here (`naryOpApp`'s Theory/Text/Parser/Term.hs:103 is prefix-only).
+    /// case here (`naryOpApp`'s Theory/Text/Parser/Term.hs is prefix-only).
     fn binary_alg_app(
         &mut self,
         id: String,
@@ -5076,7 +5066,7 @@ impl<'a> Parser<'a> {
 
     /// HS `sortedLVar`'s suffix arm: `indexedIdentifier <* colon` followed by
     /// one `sortSuffix`, returning `LVar n s i` with `s` the suffix's sort —
-    /// the same plain `LVar` the sigil arms build (Token.hs:409-433).
+    /// the same plain `LVar` the sigil arms build (Token.hs).
     fn attach_sort_suffix(&mut self, mut v: VarSpec) -> Result<VarSpec, ParseError> {
         // Suffix syntax: `<id>:msg`, `:pub`, `:fresh`, `:node`, `:nat`.
         self.sort_suffix_consumed = false;
@@ -5084,11 +5074,11 @@ impl<'a> Parser<'a> {
         if self.try_punct(":") {
             // Inside a SAPIC process every variable comes from HS `sapicvar =
             // lvarNoSuffix` plus an optional type (Token.hs).
-            // `lvarNoSuffix` (Token.hs:502-503) is `sortedLVarNoSuffix
-            // [minBound..]` (Token.hs:486-501), which offers PREFIX sorts only, so a
+            // `lvarNoSuffix` (Token.hs) is `sortedLVarNoSuffix
+            // [minBound..]` (Token.hs), which offers PREFIX sorts only, so a
             // colon there always introduces a SAPIC TYPE — `x:nat` is the
             // msg-sorted `x` typed `"nat"`, not a nat-sorted variable — and
-            // `typep`'s `Any` is the untyped placeholder (Token.hs:472-473).
+            // `typep`'s `Any` is the untyped placeholder (Token.hs).
             if self.sapic_var_types {
                 match self.type_p_element() {
                     Some(t) => v.typ = t,
@@ -5176,7 +5166,7 @@ impl<'a> Parser<'a> {
                 }
             }
             // HS `sortedLVar`'s `mkPrefixParser LSortMsg` arm is the bare
-            // `LSortMsg -> pure ()` case (Token.hs:424-426): a prefixless
+            // `LSortMsg -> pure ()` case (Token.hs): a prefixless
             // identifier is message-sorted.
             Some(c) if c.is_alphabetic() => LSort::Msg,
             _ => return Ok(None),
@@ -5218,9 +5208,9 @@ impl<'a> Parser<'a> {
     /// Parse a quantifier's binder list (`All`/`Ex` share this): a sequence of
     /// variables terminated by `.`, which is consumed.  HS
     /// `quantification`'s `many1 (try varp <|> nodep)` with `varp = msgvar`,
-    /// `nodep = nodevar` (Theory/Text/Parser/Formula.hs:64-77, see line 75,
-    /// Token.hs:440-447): a prefixless binder is `LSortMsg`
-    /// (Token.hs:440-441 into 409-433, see line 426), and an explicit
+    /// `nodep = nodevar` (Theory/Text/Parser/Formula.hs,
+    /// Token.hs): a prefixless binder is `LSortMsg`
+    /// (Token.hs#msgvar), and an explicit
     /// `$`/`~`/`#`/`%` sigil or `:sort` suffix names the sort — which is what
     /// [`Self::var_spec`] builds.
     fn quantifier_binders(&mut self) -> Result<Vec<VarSpec>, ParseError> {
@@ -5314,7 +5304,7 @@ impl<'a> Parser<'a> {
     // =========================================================================
 
     /// Parse the goal inside a stored `solve( ... )` step.  HS `goal`
-    /// (Theory/Text/Parser/Proof.hs:38-72):
+    /// (Theory/Text/Parser/Proof.hs):
     ///
     /// ```haskell
     /// goal = asum
@@ -5327,7 +5317,7 @@ impl<'a> Parser<'a> {
     /// The two fact alternatives share a head here; [`Parser::goal_after`]
     /// preserves commitment while retaining failed heads for error selection.
     /// `disjSplitGoal` backtracks on its own because HS's `plainFormula`
-    /// (Theory/Text/Parser/Formula.hs:112-117) is `try`-wrapped whole, and
+    /// (Theory/Text/Parser/Formula.hs) is `try`-wrapped whole, and
     /// `eqSplitGoal` is `try $ do ...`.
     ///
     /// The equation split is hoisted above the disjunction, which accepts the
@@ -5379,7 +5369,7 @@ impl<'a> Parser<'a> {
     }
 
     /// The `try (head <* sep) *> tail` shape of `stSplitGoal`, `premiseGoal`,
-    /// `actionGoal` and `chainGoal` (Theory/Text/Parser/Proof.hs:49-68):
+    /// `actionGoal` and `chainGoal` (Theory/Text/Parser/Proof.hs):
     /// `head` reads the goal's first operand AND its separator under one
     /// `try`, so failing either restores the input and retains the error for
     /// [`Self::goal`] to compare if later alternatives fail, while `tail` reads
@@ -5405,10 +5395,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// HS `disjSplitGoal` (Theory/Text/Parser/Proof.hs:61):
+    /// HS `disjSplitGoal` (Theory/Text/Parser/Proof.hs):
     /// `(DisjG . Disj) <$> sepBy1 guardedFormula (symbol "∥")`.  A disjunct is
     /// a `plainFormula`; the `formulaToGuarded` half of `guardedFormula`
-    /// (Theory/Text/Parser/Formula.hs:122-127) runs in
+    /// (Theory/Text/Parser/Formula.hs) runs in
     /// `tamarin_theory::elaborate::goal_from_parsed`.
     fn disj_split_goal(&mut self) -> Result<GoalSpec, ParseError> {
         let mut alts = vec![self.formula()?];
@@ -5418,9 +5408,9 @@ impl<'a> Parser<'a> {
         Ok(GoalSpec::Disj(alts))
     }
 
-    /// HS `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-68): two
+    /// HS `stSplitGoal` (Theory/Text/Parser/Proof.hs): two
     /// `msetterm False (vlit msgvar)` terms around `opSubterm`
-    /// (`<<` or `⊏`, Token.hs:574-576), the first of them under the `try`.
+    /// (`<<` or `⊏`, Token.hs), the first of them under the `try`.
     fn subterm_goal(
         &mut self,
         head_error: &mut Option<ParseError>,
@@ -5438,10 +5428,10 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// HS `premiseGoal` (Theory/Text/Parser/Proof.hs:54-57) and `actionGoal`
-    /// (Theory/Text/Parser/Proof.hs:49-52) share `fact llit`. Select `opRequires`
-    /// (`▶` plus a subscript natural, Token.hs:618-619) or `opAt` (`@`,
-    /// Token.hs:566-568) after parsing the fact once. The complete separator,
+    /// HS `premiseGoal` (Theory/Text/Parser/Proof.hs) and `actionGoal`
+    /// (Theory/Text/Parser/Proof.hs) share `fact llit`. Select `opRequires`
+    /// (`▶` plus a subscript natural, Token.hs) or `opAt` (`@`,
+    /// Token.hs) after parsing the fact once. The complete separator,
     /// including a premise index, remains under `try`; node-variable failures commit.
     fn fact_goal(
         &mut self,
@@ -5474,10 +5464,10 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// HS `chainGoal` (Theory/Text/Parser/Proof.hs:59): a `nodeConc` and
-    /// `opChain` (`~~>`, Token.hs:621-623) under the `try`, then a `nodePrem`.
+    /// HS `chainGoal` (Theory/Text/Parser/Proof.hs): a `nodeConc` and
+    /// `opChain` (`~~>`, Token.hs) under the `try`, then a `nodePrem`.
     /// Each endpoint is `parens ((,) <$> nodevar <*> (comma *> natural))`
-    /// (Theory/Text/Parser/Proof.hs:28-36).
+    /// (Theory/Text/Parser/Proof.hs).
     fn chain_goal(
         &mut self,
         head_error: &mut Option<ParseError>,
@@ -5495,7 +5485,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// HS `nodePrem`/`nodeConc` (Theory/Text/Parser/Proof.hs:28-36):
+    /// HS `nodePrem`/`nodeConc` (Theory/Text/Parser/Proof.hs):
     /// `parens ((,) <$> nodevar <*> (comma *> natural))`.
     fn node_idx_pair(&mut self) -> Result<(VarSpec, u64), ParseError> {
         self.require_punct("(")?;
@@ -5509,7 +5499,7 @@ impl<'a> Parser<'a> {
         Ok((v, n))
     }
 
-    /// HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs:70-72):
+    /// HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs):
     /// `symbol_ "splitEqs"` then `parens natural`.
     fn eq_split_goal(&mut self) -> Result<GoalSpec, ParseError> {
         if !self.try_kw("splitEqs") {
@@ -5524,7 +5514,7 @@ impl<'a> Parser<'a> {
         Ok(GoalSpec::Split(n as i64))
     }
 
-    /// Parse a timepoint variable.  HS `nodevar` (Token.hs:443-448) is
+    /// Parse a timepoint variable.  HS `nodevar` (Token.hs) is
     /// `sortedLVar [LSortNode]` — the `#x` prefix or the `x:node` suffix —
     /// or a bare `indexedIdentifier` stamped `LSortNode`.  A `$`/`~`/`%`
     /// sigil, a different sort suffix and a SAPIC type annotation are all
@@ -5555,11 +5545,11 @@ impl<'a> Parser<'a> {
 // =============================================================================
 
 /// Substitute a rule's `let` bindings into its body — HS
-/// `apply subst (ps0,as0,cs0,rs0)` (Theory/Text/Parser/Rule.hs:119, 133, 153).
+/// `apply subst (ps0,as0,cs0,rs0)` (Theory/Text/Parser/Rule.hs).
 ///
 /// `letBlock` folds the bindings with `foldr1 compose` over singleton
-/// substitutions (Theory/Text/Parser/Let.hs:35) and `compose s1 s2` has the
-/// effect of `s1(s2(t))` (Term/Substitution/SubstVFree.hs:186-191), so the
+/// substitutions (Theory/Text/Parser/Let.hs) and `compose s1 s2` has the
+/// effect of `s1(s2(t))` (Term/Substitution/SubstVFree.hs), so the
 /// bindings apply in REVERSE source order.  A binding's right-hand side is
 /// therefore rewritten by the bindings that precede it (`let a = ~k  b = h(a)`
 /// puts `h(~k)` in the body), while a reference to a LATER binding survives as
@@ -5838,7 +5828,7 @@ fn subst_let_atom(a: &mut Atom, key: &VarSpec, val: &Term) {
 
 /// One attribute of a `functions:` declaration.  Mirrors HS `FctAttr`
 /// (`Privacy Privacy | Constructability Constructability | ACstate ACstate |
-/// NDCstate NDCstate`, Term/Term/FunctionSymbols.hs:128-129) restricted to the
+/// NDCstate NDCstate`, Term/Term/FunctionSymbols.hs) restricted to the
 /// six values the surface syntax can produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FctAttr {
@@ -5875,7 +5865,7 @@ enum FactOrRestr {
 /// input after the formula.
 ///
 /// `msig` is the signature the text was rendered against, seeded as HS
-/// `parseString` seeds one (Theory/Text/Parser/Token.hs:250-258): it supplies
+/// `parseString` seeds one (Theory/Text/Parser/Token.hs): it supplies
 /// the `[AC]` symbols' infix spelling, the arity-0 constants `nullaryApp`
 /// claims, and the enable bits that open the algebraic term levels, so text
 /// rendered from a theory reparses under that theory's operators.
@@ -5902,14 +5892,14 @@ pub fn parse_formula_str(s: &str, msig: &MaudeSig) -> Result<Formula, ParseError
 /// report the byte offset just past its closing `)`.
 ///
 /// HS reads the step as `symbol "solve" *> parens goal`
-/// (Theory/Text/Parser/Proof.hs:80), one parser over one input; the offset
+/// (Theory/Text/Parser/Proof.hs), one parser over one input; the offset
 /// lets the proof-skeleton parser resume where this one stopped.
 ///
 /// `parent` is the parser the stored text came out of, whose symbol state
 /// [`Parser::seed_from`] copies: HS's proof parser runs inside the theory
-/// parser and reads its `stSig` (Theory/Text/Parser/Proof.hs:38-72), so an
+/// parser and reads its `stSig` (Theory/Text/Parser/Proof.hs), so an
 /// application head in the goal resolves through `lookupArity`
-/// (Theory/Text/Parser/Term.hs:88-105) against the theory's symbols exactly
+/// (Theory/Text/Parser/Term.hs) against the theory's symbols exactly
 /// as one in a rule does.
 pub(crate) fn parse_parens_goal(
     s: &str,

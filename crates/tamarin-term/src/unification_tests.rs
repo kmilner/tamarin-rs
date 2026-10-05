@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::builtin::{msg_var, pair, pk};
@@ -12,7 +11,7 @@ fn unify_two_distinct_variables() {
     let y: LNTerm = msg_var("y", 0);
     let s = unify_lnterm_no_ac(vec![Equal::new(x.clone(), y)]).unwrap();
     // HS `unifyRaw` orients a var-var pair of the same sort by `Ord LVar`
-    // (Unification.hs:276).  The index and the sort are equal here, so the
+    // (Unification.hs).  The index and the sort are equal here, so the
     // comparison falls to the name.  `unifyRaw` therefore eliminates the later
     // name, and that name becomes the key.  A check that the substitution is
     // not empty accepts either orientation.
@@ -74,7 +73,7 @@ fn match_fails_on_different_arity() {
 }
 
 // -------------------------------------------------------------------
-// HS `unifyRaw` AC/C arms (Unification.hs:299-308): the AC arm fires
+// HS `unifyRaw` AC/C arms (Unification.hs): the AC arm fires
 // only when BOTH sides are AC apps with the SAME symbol; otherwise the
 // pair falls through to `_ -> mzero` (no unifier).  These pin that the AC
 // arm delays/NeedsAC only for same-symbol AC apps on both sides.
@@ -155,7 +154,7 @@ fn no_ac_same_ac_symbol_is_needs_ac() {
 
 // -------------------------------------------------------------------
 // `solve_match_lterm` 3-way outcome (HS `solveMatchLTerm`,
-// Unification.hs:219-239).  These pin the exact distinction that
+// Unification.hs).  These pin the exact distinction that
 // eliminates the LAK06 (28 879→0) / NAXOS / CRxor surplus Maude
 // `match`es: an AC-/C-headed subterm only forces a Maude fallback
 // when it appears AC-vs-AC; under a variable pattern, or facing a

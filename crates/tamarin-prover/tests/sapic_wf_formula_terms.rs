@@ -1,13 +1,12 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Pins HS's "Formula terms" (`checkTerms`) coverage of the restrictions
 //! SAPIC's `let … else` lowering generates.
 //!
 //! HS runs its single `checkWellformedness` pass on the TRANSLATED theory
-//! (`checkTranslatedTheory`, TheoryLoader.hs:559-565), so `formulaReports`'
-//! `annFormulas` (Wellformedness.hs:1006-1015) includes the `Restr_<rule>_<i>`
+//! (`checkTranslatedTheory`, TheoryLoader.hs), so `formulaReports`'
+//! `annFormulas` (Wellformedness.hs) includes the `Restr_<rule>_<i>`
 //! restrictions minted while lowering a `let` pattern's `else` branch.  Those
 //! carry the branch's right-hand side verbatim, so a reducible symbol there —
 //! `exp` in `<<'a'^'b', 'b'>, 'c'>` — is an offender and must be reported.
@@ -52,7 +51,7 @@ fn sapic_else_branch_restriction_reports_formula_terms() {
     let out_path = out_dir.join("sapic_else_branch_exp_out.spthy");
 
     // `-o`/`--output` is a cmdargs `flagOpt` whose value must be ATTACHED
-    // (Batch.hs:44-84, see line 76).
+    // (Batch.hs).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
     let (code, _, stderr) = run_binary(&["--quiet", &output_arg], &[&in_path]);
     assert_eq!(

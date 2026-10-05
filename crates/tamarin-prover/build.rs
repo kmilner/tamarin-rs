@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Embed git revision + build timestamp into the compiled binary for
 //! `--version`'s provenance lines (cli.rs `LONG_VERSION`) and the
@@ -34,7 +33,7 @@ fn main() {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    // Dirty-tree suffix, mirroring HS `gitVersion` (Console.hs:200-209): when
+    // Dirty-tree suffix, mirroring HS `gitVersion` (Console.hs): when
     // `$(gitDirty)` is true the SHA is followed by " (with uncommited changes)"
     // (HS's spelling — single 't') *before* the `, branch:` separator. HS's
     // `$(gitDirty)` comes from `Development.GitRev`, which reports dirty when
@@ -59,7 +58,7 @@ fn main() {
     // Build timestamp (UTC).  Avoid `Date.now()`-style nondeterminism
     // concerns — this runs at COMPILE time, not at proof time.
     //
-    // NOTE: this does NOT byte-match HS's `compileTime` (Console.hs:200-216, see line 213),
+    // NOTE: this does NOT byte-match HS's `compileTime` (Console.hs),
     // which is `show =<< getCurrentTime` and emits sub-second precision (up to
     // picoseconds, trailing zeros trimmed) — e.g. `... 08:31:14.64851655 UTC`.
     // `date` only offers `%N` (nanoseconds, fixed width, no trim) so it cannot

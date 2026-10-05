@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Corpus census of what the guarded store actually holds: every lemma and
 //! restriction of every `.spthy` under the examples tree is elaborated,
@@ -8,20 +7,19 @@
 //! walked leaf by leaf.
 //!
 //! HS's guarded formula is `Guarded (String, LSort) Name LVar`
-//! (`Guarded.hs:391`) — its atoms are `Atom (VTerm c (BVar v))`
-//! (`Guarded.hs:121`) over the internal term.  Each row below is a property
+//! (`Guarded.hs`) — its atoms are `Atom (VTerm c (BVar v))`
+//! (`Guarded.hs`) over the internal term.  Each row below is a property
 //! of that store read off the corpus rather than assumed:
 //!
 //! * a substitution keyed on `(name, idx)` and one keyed on the whole `LVar`
 //!   agree exactly while no two free variables of one formula share a name
 //!   and an index across two sorts;
-//! * `em` is the commutative symbol `fAppC` sorts (`Term/Term/Raw.hs:
-//!   133-134`), and the printer's application arm writes its arguments in
+//! * `em` is the commutative symbol `fAppC` sorts (`Term/Term/Raw.hs`), and the printer's application arm writes its arguments in
 //!   stored order (`pretty_formula.rs`) — a binary `em` in the guarded store
 //!   is where a stored order could differ from a printed one;
 //! * and [`NON_CANONICAL_FORMULAS`] counts the formulas whose stored AC and
 //!   `C` argument lists are not the ones `fApp` builds
-//!   (`Term/Term/Raw.hs:111-115`, `:119-134`).
+//!   (`Term/Term/Raw.hs`).
 
 use crate::corpus_util;
 use crate::corpus_util::{deep_pool, rel, LoadSkip};

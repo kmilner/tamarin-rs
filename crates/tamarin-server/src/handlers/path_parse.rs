@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Parse the wildcard path segment after `/thy/trace/<idx>/<section>/`
 //! into a [`TheoryPath`], mirroring Haskell's `parseTheoryPath` in
@@ -174,7 +173,7 @@ fn parse_segs(segs: &[String]) -> Option<TheoryPath> {
         "add" => rest.first().map(|n| TheoryPath::Add(n.clone())),
         "delete" => rest.first().map(|n| TheoryPath::Delete(n.clone())),
         "proof" => {
-            // Mirror Haskell `parseProof` (`src/Web/Types.hs:424-463, see line 450`):
+            // Mirror Haskell `parseProof` (`src/Web/Types.hs`):
             //   parseProof (y:ys) = Just (TheoryProof y ys)
             // i.e. the sub-path is taken AS-IS (after `unprefixUnderscore`
             // each segment).  We do NOT pop trailing empty segments:
@@ -188,7 +187,7 @@ fn parse_segs(segs: &[String]) -> Option<TheoryPath> {
             Some(TheoryPath::Proof { lemma, sub })
         }
         "method" => {
-            // Mirror Haskell `parseMethod` (`src/Web/Types.hs:424-463, see line 453`):
+            // Mirror Haskell `parseMethod` (`src/Web/Types.hs`):
             //   parseMethod (y:z:zs) = safeRead z >>= Just . TheoryMethod y zs
             // i.e. the sub-path is taken AS-IS (after `unprefixUnderscore`
             // each segment) — including a single empty trailing
@@ -228,7 +227,7 @@ fn parse_segs(segs: &[String]) -> Option<TheoryPath> {
 }
 
 /// Haskell `parseCases`'s `safeRead = listToMaybe . map fst . reads`
-/// (`src/Web/Types.hs:443`) at `ReadS Int`: the two case indices are SIGNED, so
+/// (`src/Web/Types.hs`) at `ReadS Int`: the two case indices are SIGNED, so
 /// a negative one parses and reaches the handler, where it names no case
 /// exactly as index 0 does (see `handlers::theory::source_case_system`).
 ///

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::elaborate::formula_to_guarded_parsed;
@@ -49,7 +48,7 @@ fn bvar_to_lvar_frees_an_opened_atom() {
     assert_eq!(bvar_to_lvar(&a), ProtoAtom::Last(var_term(i)));
 }
 
-/// HS `bvarToLVar`'s `boundError` (Guarded.hs:326-327): the atom must have
+/// HS `bvarToLVar`'s `boundError` (Guarded.hs): the atom must have
 /// every enclosing binder opened before it is read over plain `LVar`s.
 #[test]
 #[should_panic(expected = "bvarToLVar: left-over bound variable '2'")]
@@ -97,9 +96,9 @@ fn gf(persistent: bool, name: &str) -> Fact<BLNTerm> {
 }
 
 // The guarded fact order, as the solver reaches it: the derived
-// `Ord (ProtoAtom s t)` (Atom.hs:78-84) compares an `Action`'s timepoint and
+// `Ord (ProtoAtom s t)` (Atom.hs) compares an `Action`'s timepoint and
 // then its fact, so a shared timepoint leaves the fact deciding.  The fact
-// half is HS `Ord (Fact t)` (Theory/Model/Fact.hs:173-174) — the `FactTag`
+// half is HS `Ord (Fact t)` (Theory/Model/Fact.hs) — the `FactTag`
 // first, then the term list.
 fn cmp_gfact(a: &Fact<BLNTerm>, b: &Fact<BLNTerm>) -> std::cmp::Ordering {
     let at = |f: &Fact<BLNTerm>| -> Atom<BLNTerm> {
@@ -110,9 +109,9 @@ fn cmp_gfact(a: &Fact<BLNTerm>, b: &Fact<BLNTerm>) -> std::cmp::Ordering {
 
 /// `FactTag`'s derived Ord segregates every ProtoFact before every reserved
 /// tag and orders the reserved tags in declaration sequence
-/// (Theory/Model/Fact.hs:137-148).  `fact_tag_of` recovers the reserved tags
+/// (Theory/Model/Fact.hs).  `fact_tag_of` recovers the reserved tags
 /// from the names the parser canonicalises to (`mkProtoFact`,
-/// Theory/Text/Parser/Fact.hs:56-63), leaving every other name a `ProtoFact`.
+/// Theory/Text/Parser/Fact.hs), leaving every other name a `ProtoFact`.
 #[test]
 fn guarded_facts_sort_every_proto_before_every_reserved_tag() {
     use std::cmp::Ordering::Less;
@@ -162,7 +161,7 @@ fn guarded_proto_facts_sort_by_multiplicity_then_name_then_arity() {
 }
 
 /// The guarded fact ignores its annotations in equality, as HS's `Eq (Fact t)`
-/// does (Theory/Model/Fact.hs:169-174).
+/// does (Theory/Model/Fact.hs).
 #[test]
 fn guarded_facts_ignore_their_annotations() {
     let plain = gf_args(false, "P", 1);
@@ -174,9 +173,9 @@ fn guarded_facts_ignore_their_annotations() {
     assert_eq!(cmp_gfact(&plain, &annotated), std::cmp::Ordering::Equal);
 }
 
-/// A pair is a nested arity-2 FAPP (`fAppPair`, Term/Term.hs:163), so
+/// A pair is a nested arity-2 FAPP (`fAppPair`, Term/Term.hs), so
 /// `<a, z>` and `<a, b, c>` first differ at argument 2 — `z` against
-/// `pair(b, c)` — where `LIT _ < FAPP _ _` (Term/Term/Raw.hs:72-74) puts
+/// `pair(b, c)` — where `LIT _ < FAPP _ _` (Term/Term/Raw.hs) puts
 /// `<a, z>` first.
 #[test]
 fn ord_orders_pairs_by_their_nested_spine() {
@@ -193,7 +192,7 @@ fn ord_orders_pairs_by_their_nested_spine() {
 
 /// Both variable orderings compare the sort with `LSort`'s derived `Ord`,
 /// which ranks the five sorts in their declaration order
-/// (Term/LTerm.hs:165-170): `Pub`, `Fresh`, `Msg`, `Node`, `Nat`.  The printed
+/// (Term/LTerm.hs): `Pub`, `Fresh`, `Msg`, `Node`, `Nat`.  The printed
 /// operand order of an AC application rides on this through `Ord LVar`, so a
 /// reordering of the `LSort` variants moves printed output.
 #[test]
@@ -217,7 +216,7 @@ fn variable_ordering_ranks_sorts_in_lsort_declaration_order() {
     }
 }
 
-/// HS `data Quantifier = All | Ex` (Theory/Model/Formula.hs:111-112) derives
+/// HS `data Quantifier = All | Ex` (Theory/Model/Formula.hs) derives
 /// Ord, so `All` sorts before `Ex` — the first field the guarded formula's
 /// `GGuarded` comparison reads.
 #[test]
@@ -263,7 +262,7 @@ fn ginduct_rejects_action_free_formula() {
 }
 
 /// HS `satisfiedByEmptyTrace` decides a `GGuarded` on its quantifier
-/// (Guarded.hs:588-594).  The empty trace satisfies a guarded `∀` vacuously.
+/// (Guarded.hs).  The empty trace satisfies a guarded `∀` vacuously.
 /// The empty trace does not satisfy a guarded `∃`.  A bare atom outside every
 /// quantifier is an error, because such a formula is not doubly guarded.  The
 /// test checks all three arms.  The `∀` case alone cannot tell the real
@@ -407,7 +406,7 @@ fn unindexed_shadowing_inner_binder_stays_unguarded() {
 
 #[test]
 fn timepoint_guard_matches_sigilless_occurrence() {
-    // HS parses the `@`-argument with `nodevar` (Token.hs:444-448), which
+    // HS parses the `@`-argument with `nodevar` (Token.hs), which
     // assigns `LSortNode` whether or not the `#` sigil is written, so the
     // binder `#j` is guarded by `Bar(x) @ j`.
     let r = g("Ex #j. Bar(x) @ j").expect("#j is guarded by the action's timepoint");
@@ -489,7 +488,7 @@ fn subst_descends_into_app_args() {
 
 /// The substitution is keyed by the whole `LVar`, so a variable that differs
 /// from the domain entry in its index or in its sort is another variable and
-/// passes through unchanged (`Ord LVar`, LTerm.hs:546-548).
+/// passes through unchanged (`Ord LVar`, LTerm.hs).
 #[test]
 fn subst_keys_on_the_whole_variable() {
     let s = LNSubst::from_list(vec![(key("x", 5), var("y", 0))]);
@@ -646,7 +645,7 @@ fn induction_hypothesis_emits_last_atoms_for_node_sorted_binders() {
 }
 
 /// `lastAtos = [Last (Bound j) | (j, (_, LSortNode)) <- zip [0..] (reverse ss)]`
-/// (Guarded.hs:613-616) has two parts that discriminate, and the exact index
+/// (Guarded.hs) has two parts that discriminate, and the exact index
 /// list checks both.  The first part is the `LSortNode` filter: a `Msg`-sorted
 /// binder contributes nothing.  The second part is the `reverse`: the indices
 /// count from the innermost binder outwards.  Without the `reverse`, the pair
@@ -688,7 +687,7 @@ fn mk_gatom_eq(a: &str, b: &str) -> Atom<BLNTerm> {
 }
 
 /// The same equality over plain `LVar`s, as `simplify_guarded_with` hands it
-/// to its valuation (HS `unbindAtom`, Guarded.hs:351-352).
+/// to its valuation (HS `unbindAtom`, Guarded.hs).
 fn mk_eq(a: &str, b: &str) -> Atom<LNTerm> {
     bvar_to_lvar(&mk_gatom_eq(a, b))
 }
@@ -775,7 +774,7 @@ fn simplify_universal_drops_true_guards_keeps_unknown() {
 }
 
 /// With every guard True, the universal collapses to `gall [] [] body`.
-/// That is the simplified body (HS `gall _ [] gf = gf`, Guarded.hs:449-453).
+/// That is the simplified body (HS `gall _ [] gf = gf`, Guarded.hs).
 /// The atom in the body stays unknown here.  If the valuation also decided
 /// that atom as True, the `gf == gtrue` arm of `gall` would return `gtrue`.
 /// It would return `gtrue` whether or not the code dropped the True guards,
@@ -802,14 +801,14 @@ fn simplify_universal_with_quantifier_left_intact() {
 // Haskell-faithfulness invariants for guarded-formula smart ctors.
 //
 // `gconj` / `gdisj` mirror Haskell's smart constructors in
-// `Theory.Constraint.System.Guarded` (gconj: Guarded.hs:415-423; gdisj:
-// Guarded.hs:426-437).  They
+// `Theory.Constraint.System.Guarded` (gconj: Guarded.hs; gdisj:
+// Guarded.hs).  They
 // SHORT-CIRCUIT on `gtrue`/`gfalse` and dedupe via `nub`.
 // =========================================================================
 
 /// `gtrue` is represented as `Conj []` and `gfalse` as `Disj []`.
 /// This is a Haskell convention (`gtf False = GDisj (Disj [])`,
-/// `gtf True = GConj (Conj [])`, Guarded.hs:397-400).  Many
+/// `gtf True = GConj (Conj [])`, Guarded.hs).  Many
 /// short-circuit checks rely on it (e.g. `x == gfalse()` in
 /// `gconj`).  If we accidentally encode them differently, every
 /// short-circuit silently breaks.
@@ -829,7 +828,7 @@ fn gtrue_is_empty_conj_and_gfalse_is_empty_disj() {
 /// `gtrue` items.
 #[test]
 fn gconj_of_only_gtrue_items_is_gtrue() {
-    // Guarded.hs:422: `gconj`'s `flatten` should collapse all-true conjunctions.
+    // Guarded.hs: `gconj`'s `flatten` should collapse all-true conjunctions.
     // Rust impl flattens `Conj` items (gtrue is Conj([])), so all
     // gtrue items dissolve into empty.  Result: `Conj([])` = gtrue.
     let g = gconj(vec![gtrue(), gtrue(), gtrue()]);
@@ -842,7 +841,7 @@ fn gconj_of_only_gtrue_items_is_gtrue() {
 
 /// `gconj([..., gfalse, ...])` SHORT-CIRCUITS to `gfalse` regardless
 /// of other items.  This is the "any-false makes conjunction false"
-/// short-circuit at Guarded.hs:415-423, see line 418.
+/// short-circuit at Guarded.hs.
 #[test]
 fn gconj_short_circuits_on_gfalse() {
     // Build a non-trivial atom by parsing a small formula.
@@ -882,7 +881,7 @@ fn gdisj_short_circuits_on_gtrue() {
 }
 
 /// `gconj` deduplicates syntactically-equal items.  Mirrors
-/// Haskell's `nub gfs` (Guarded.hs:415-423, see line 420).  Dedup is ORDER-PRESERVING
+/// Haskell's `nub gfs` (Guarded.hs).  Dedup is ORDER-PRESERVING
 /// (Haskell `Data.List.nub` keeps first occurrence).
 #[test]
 fn gconj_dedupes_syntactic_duplicates() {
@@ -963,7 +962,7 @@ fn gconj_flattens_nested_conj_one_level() {
 
 /// `gdisj` recursively flattens ARBITRARILY deeply nested `Disj`s.
 /// Mirrors HS `gdisj`'s `flatten (GDisj disj) = concatMap flatten $
-/// getDisj disj` (Guarded.hs:426-437, see line 436), which unwraps every level, not
+/// getDisj disj` (Guarded.hs), which unwraps every level, not
 /// just one — a 5-way `∨` parsed as a binary-Or chain must flatten to a
 /// single 5-alt Disj goal.
 #[test]
@@ -1000,7 +999,7 @@ fn gdisj_deeply_nested_disj_flattens_to_5_alts() {
 }
 
 /// Symmetric: `gconj` recursively flattens deeply nested `Conj`s.
-/// Mirrors HS Guarded.hs:415-423, see line 422 `flatten (GConj conj) = concatMap
+/// Mirrors HS Guarded.hs `flatten (GConj conj) = concatMap
 /// flatten $ getConj conj`.
 #[test]
 fn gconj_deeply_nested_conj_flattens() {
@@ -1128,14 +1127,14 @@ fn gnot_distributes_over_disj() {
 
 /// `em` is the sole commutative (C) function symbol, and `fAppC` stores it in
 /// sorted-arg form (`fAppC nacsym as = FAPP (C nacsym) (sort as)`,
-/// Term/Term/Raw.hs:133-134).  Every guarded term is built through it, so the
+/// Term/Term/Raw.hs).  Every guarded term is built through it, so the
 /// two spellings of one pairing are ONE value and a substituted
 /// solved-formula compares equal to a freshly-derived implied-formula over
 /// the same pairing (the idbased/BP_IBS bilinear divergence).
 #[test]
 fn guarded_ac_arguments_are_sorted_by_construction() {
     // em(x, 'P') — the derived `Ord (Lit c v)` puts `Con` before `Var`
-    // (VTerm.hs:56-57), so the sorted form leads with the constant.
+    // (VTerm.hs), so the sorted form leads with the constant.
     let x = bfree("x", 0, LSort::Msg);
     let p_lit = bpub("P");
     let em_unsorted = f_app_c(CSym::EMap, vec![x.clone(), p_lit.clone()]);
@@ -1158,7 +1157,7 @@ fn guarded_ac_arguments_are_sorted_by_construction() {
     assert_eq!(mk(exp(em_unsorted)), mk(exp(em_sorted)));
 
     // An AC argument list is flattened as well as sorted
-    // (`fAppAC`, Term/Term/Raw.hs:119-129), so a chain folded either way
+    // (`fAppAC`, Term/Term/Raw.hs), so a chain folded either way
     // round is the same three-argument application.
     let leaf = |n: &str| bfree(n, 0, LSort::Msg);
     let mult = |a: BLNTerm, b: BLNTerm| f_app_ac(AcSym::Mult, vec![a, b]);
@@ -1173,14 +1172,14 @@ fn guarded_ac_arguments_are_sorted_by_construction() {
 
 /// `closeGuarded` substitutes each abstracted variable for its De Bruijn
 /// index through `substFreeAtom`, whose `fmapTerm` rebuilds every
-/// application with `fApp` (Guarded.hs:289-296).  The derived `Ord BVar`
-/// puts `Bound i` before `Free x` (LTerm.hs:476-478), so an AC argument
+/// application with `fApp` (Guarded.hs).  The derived `Ord BVar`
+/// puts `Bound i` before `Free x` (LTerm.hs), so an AC argument
 /// list whose second operand is the one being bound comes back re-sorted
 /// under the index.
 #[test]
 fn close_guarded_resorts_ac_arguments_under_the_bound_indices() {
     // `a * x` with `a` and `x` both free sorts to [a, x] (Ord LVar is
-    // (idx, sort, name), LTerm.hs:546-548).
+    // (idx, sort, name), LTerm.hs).
     let a = LVar::new("a", LSort::Msg, 0);
     let x = LVar::new("x", LSort::Msg, 0);
     let open: BLNTerm = f_app_ac(
@@ -1221,13 +1220,13 @@ fn close_guarded_resorts_ac_arguments_under_the_bound_indices() {
 }
 
 /// `em/2` occupies the `C` tier of HS's derived `Ord FunSym`
-/// (`NoEq < AC < C < List`, FunctionSymbols.hs:150-154), so it outranks
+/// (`NoEq < AC < C < List`, FunctionSymbols.hs), so it outranks
 /// every `NoEq` and every `AC` head whatever the names involved.  The
 /// classification is by name alone — `naryOpApp` builds `fAppC EMap` for
 /// any `em(…)` application, builtin-declared or user-declared
-/// (Theory/Text/Parser/Term.hs:103) — while the `op{t1}t2` spelling goes
+/// (Theory/Text/Parser/Term.hs) — while the `op{t1}t2` spelling goes
 /// through `binaryAlgApp`, which has no `em` case and yields `fAppNoEq`
-/// (Theory/Text/Parser/Term.hs:109-121).
+/// (Theory/Text/Parser/Term.hs).
 ///
 /// Oracle bytes (pinned build, Git revision ef3f0468), each from a theory
 /// whose source order is `em` first:
@@ -1296,7 +1295,7 @@ fn em_funsym_key_is_c_tier() {
     );
 
     // Only the binary form is a C symbol: `viewTerm2` rejects a `C` node
-    // of any other arity (Term/Term/Raw.hs:190), so a 3-ary `em` carries the
+    // of any other arity (Term/Term/Raw.hs), so a 3-ary `em` carries the
     // NoEq key and its name order.
     let em3 = f_app_no_eq(user_sym("em", 3), vec![gl.clone(), hl.clone(), gl.clone()]);
     assert_eq!(em3.cmp(&f), Less);
@@ -1304,8 +1303,8 @@ fn em_funsym_key_is_c_tier() {
 
 /// `subst_blnterm_cow` reports `Some` exactly on a domain hit: the leaf's
 /// whole `LVar` is the key, and a `Subst` holds no `x ~> x` mapping
-/// (SubstVFree.hs:163-165), so a hit always changes the leaf.  The image is
-/// lifted through `fmapTerm (fmap Free)` (SubstVFree.hs:297-302).
+/// (SubstVFree.hs), so a hit always changes the leaf.  The image is
+/// lifted through `fmapTerm (fmap Free)` (SubstVFree.hs).
 #[test]
 fn subst_blnterm_cow_reports_a_domain_hit() {
     let s = LNSubst::from_list(vec![(
@@ -1374,8 +1373,8 @@ fn witness_subst_keys_distinguish_sorts() {
 // =============================================================================
 
 /// HS's formula parser reads a bare fact as `Syntactic . Pred`
-/// (Theory/Text/Parser/Formula.hs:51), which `to_lnformula` cannot strip
-/// (Theory/Model/Formula.hs:369-373).  A formula that reaches the conversion
+/// (Theory/Text/Parser/Formula.hs), which `to_lnformula` cannot strip
+/// (Theory/Model/Formula.hs).  A formula that reaches the conversion
 /// without predicate expansion is a [`GuardError`], where the expanded one
 /// converts.
 #[test]
@@ -1390,8 +1389,8 @@ fn formula_to_guarded_parsed_reports_a_residual_predicate_atom() {
 }
 
 /// HS `noUnguardedVars` names the survivors of the prefix `openFormulaPrefix`
-/// drew (Guarded.hs:507-514), and `avoidPrecise` seeds that supply from the
-/// free variables (LTerm.hs:706-709,714-715), so a free `x.3` puts the
+/// drew (Guarded.hs), and `avoidPrecise` seeds that supply from the
+/// free variables (LTerm.hs), so a free `x.3` puts the
 /// binder `x` at index 4.  The expected bytes are the pinned oracle's, as
 /// `tests/guarded_unguarded_freshening.rs` records them.
 #[test]
@@ -1423,7 +1422,7 @@ fn opens_a_shadowed_binder_under_a_fresh_index() {
 }
 
 /// HS `convAll` accepts only `Conn Imp ante suc` beneath the prefix
-/// (Guarded.hs:546-563).
+/// (Guarded.hs).
 #[test]
 fn rejects_a_universal_without_a_toplevel_implication() {
     let e = g("All k #i. Setup(k) @ #i").expect_err("the body is an action, not an implication");
@@ -1434,7 +1433,7 @@ fn rejects_a_universal_without_a_toplevel_implication() {
 }
 
 /// HS `convert polarity (Conn Iff f1 f2)` is `gconj` of the two implications
-/// (Guarded.hs:565-566), which at the entry polarity is what the written
+/// (Guarded.hs), which at the entry polarity is what the written
 /// conjunction of them converts to.
 #[test]
 fn treats_iff_as_two_implications() {
@@ -1450,15 +1449,15 @@ fn treats_iff_as_two_implications() {
 }
 
 // =============================================================================
-// openGuarded (Guarded.hs:364-373)
+// openGuarded (Guarded.hs)
 // =============================================================================
 
 /// `openGuarded` draws one variable per binder through `freshLVar`
-/// (Guarded.hs:367, LTerm.hs:301-302), so three nested prefixes that all bind
+/// (Guarded.hs, LTerm.hs), so three nested prefixes that all bind
 /// the name `x` take the indices 0, 1 and 2 from one supply.  Those are the
 /// names the printer shows, because `prettyGuarded`'s `GGuarded` arm opens
 /// the binder from the very supply its `scopeFreshness` holds
-/// (Guarded.hs:847-849).
+/// (Guarded.hs).
 #[test]
 fn open_guarded_draws_the_binder_names_the_printer_shows() {
     use tamarin_utils::fresh::PreciseFreshState;
@@ -1486,9 +1485,9 @@ fn open_guarded_draws_the_binder_names_the_printer_shows() {
 }
 
 /// `openGuarded`'s `substBoundAtom` is `fmap (fmapTerm (fmap subst))`
-/// (Guarded.hs:290), which rebuilds the application through `fApp`, and
+/// (Guarded.hs), which rebuilds the application through `fApp`, and
 /// `fAppC` sorts a commutative symbol's arguments
-/// (`fAppC nacsym as = FAPP (C nacsym) (sort as)`, Term/Term/Raw.hs:133-134).
+/// (`fAppC nacsym as = FAPP (C nacsym) (sort as)`, Term/Term/Raw.hs).
 /// So a stored `em` whose arguments the drawn variable puts out of order comes
 /// back sorted.
 #[test]
@@ -1497,8 +1496,8 @@ fn open_guarded_sorts_a_commutative_argument_pair() {
     use tamarin_utils::fresh::PreciseFreshState;
     let a = LVar::new("a", LSort::Msg, 0);
     // `em(Bound 0, a)` with `x` the binder: `Ord BVar` puts `Bound` first
-    // (LTerm.hs:476-478), and `Ord LVar` is (idx, sort, name)
-    // (LTerm.hs:546-548), so opening `x` at index 0 puts `a` first.
+    // (LTerm.hs), and `Ord LVar` is (idx, sort, name)
+    // (LTerm.hs), so opening `x` at index 0 puts `a` first.
     let em = f_app_c(
         CSym::EMap,
         vec![var_term(BVar::Bound(0)), var_term(BVar::Free(a))],
@@ -1525,7 +1524,7 @@ fn open_guarded_sorts_a_commutative_argument_pair() {
 }
 
 /// Anything but a `GGuarded` opens to `None` (HS `openGuarded _ = return
-/// Nothing`, Guarded.hs:373).
+/// Nothing`, Guarded.hs).
 #[test]
 fn open_guarded_declines_a_non_guarded_formula() {
     use tamarin_utils::fresh::PreciseFreshState;
@@ -1535,7 +1534,7 @@ fn open_guarded_declines_a_non_guarded_formula() {
 }
 
 // =============================================================================
-// HasFrees for Guarded (Guarded.hs:272-277)
+// HasFrees for Guarded (Guarded.hs)
 // =============================================================================
 
 fn hf_leaf(name: &str, idx: u64, sort: LSort) -> BLNTerm {
@@ -1553,7 +1552,7 @@ fn hf_names(g: &Guarded) -> Vec<String> {
 }
 
 /// HS `Foldable`/`Traversable ProtoAtom` fold the timepoint of an `Action`
-/// before the fact (Atom.hs:130-131, 139-140).  Both directions of the
+/// before the fact (Atom.hs).  Both directions of the
 /// `HasFrees` instance carry that order.
 #[test]
 fn action_atom_visits_timepoint_before_fact() {
@@ -1582,7 +1581,7 @@ fn action_atom_visits_timepoint_before_fact() {
 }
 
 /// `BVar::Bound` leaves are positional and carry no variable identity, so
-/// neither direction of the instance touches them (Guarded.hs:259-263 folds
+/// neither direction of the instance touches them (Guarded.hs folds
 /// through the atoms only).
 #[test]
 fn bound_leaves_are_skipped() {
@@ -1613,7 +1612,7 @@ fn bound_leaves_are_skipped() {
 }
 
 /// HS folds a `GGuarded`'s guard atoms before its body
-/// (`foldMap … as `mappend` b`, Guarded.hs:259-263).
+/// (`foldMap … as `mappend` b`, Guarded.hs).
 #[test]
 fn guards_visited_before_body() {
     let g = Guarded::GGuarded {
@@ -1632,8 +1631,8 @@ fn guards_visited_before_body() {
 }
 
 /// HS `mapFrees`/`foldFrees` on a guarded formula reach the `LVar` inside a
-/// `Free` leaf and write the mapped variable back WHOLE (Guarded.hs:272-277
-/// through `HasFrees LVar`, LTerm.hs:746-752), so the mapped sort is the one
+/// `Free` leaf and write the mapped variable back WHOLE (Guarded.hs
+/// through `HasFrees LVar`, LTerm.hs), so the mapped sort is the one
 /// the leaf carries afterwards.
 #[test]
 fn hasfrees_map_takes_the_mapped_sort() {
@@ -1650,7 +1649,7 @@ fn hasfrees_map_takes_the_mapped_sort() {
 }
 
 /// `mapFrees` rebuilds each application through `fApp`
-/// (`fmapTerm`, Term/Term/Raw.hs:111-115), so a rename that reorders an AC
+/// (`fmapTerm`, Term/Term/Raw.hs), so a rename that reorders an AC
 /// argument list under `Ord LVar` comes back sorted.
 #[test]
 fn renaming_a_guarded_formula_resorts_its_ac_arguments() {
@@ -1684,13 +1683,13 @@ fn renaming_a_guarded_formula_resorts_its_ac_arguments() {
 // =============================================================================
 
 /// The guarded atom an `LNTerm` equation takes: HS `freeTerm = fmap (fmap
-/// freeLNTerm)` on both sides (LTerm.hs:521-523).
+/// freeLNTerm)` on both sides (LTerm.hs).
 fn stored_eq(l: &LNTerm, r: &LNTerm) -> Atom<BLNTerm> {
     ProtoAtom::EqE(lift_free(l), lift_free(r))
 }
 
 /// The store keeps an AC application's argument list FLAT and sorted, as
-/// `fAppAC` builds it (Term/Term/Raw.hs:119-129) — never a nested binary
+/// `fAppAC` builds it (Term/Term/Raw.hs) — never a nested binary
 /// chain over the same leaves.
 #[test]
 fn guarded_store_holds_a_flat_ac_application() {
@@ -1716,7 +1715,7 @@ fn guarded_store_holds_a_flat_ac_application() {
 }
 
 /// `one`, `tone` and `DH_neutral` are nullary `NoEq` applications, and the
-/// store keeps them as such (FunctionSymbols.hs:255,257,267).
+/// store keeps them as such (FunctionSymbols.hs).
 #[test]
 fn guarded_store_holds_the_nullary_constants_as_applications() {
     use tamarin_term::function_symbols::{dh_neutral_sym, nat_one_sym, one_sym};
@@ -1731,7 +1730,7 @@ fn guarded_store_holds_the_nullary_constants_as_applications() {
 }
 
 /// A tuple is a RIGHT-nested chain of the binary `pairSym`
-/// (`fAppPair`, Term/Term.hs:163), and the store keeps that chain: the
+/// (`fAppPair`, Term/Term.hs), and the store keeps that chain: the
 /// UM_three_pass `CK_secure_UM3` term is `<'UM3', <B, <A, <'1', 'g'^~ex>>>>`,
 /// four `pair` nodes deep.
 #[test]

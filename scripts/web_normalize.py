@@ -51,7 +51,7 @@ _VOLATILE = [
     # equal.  HS never emits this suffix, so the rule is a no-op on HS.
     (re.compile(r" \(Rust port\)"), ""),
     # The help page's env line — HS `helpHtml` renders `Theory: NAME (Loaded at
-    # <formatTime %T> from <show origin>) ...` (`src/Web/Theory.hs:1187-1194`).
+    # <formatTime %T> from <show origin>) ...` (`src/Web/Theory.hs`).
     # The wall-clock time and the temp/cache-dir load path both differ between
     # the two backends (and run-to-run), so strip the whole `Loaded at …`
     # parenthetical to a placeholder on BOTH sides.  The load path never

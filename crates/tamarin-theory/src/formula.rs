@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Model.Formula` from
 //! `lib/theory/src/Theory/Model/Formula.hs`: the formula data type with its
@@ -93,12 +92,12 @@ pub type BLNTerm = VTerm<Name, BVar<LVar>>;
 /// `SyntacticSugar` gives [`SyntacticLNFormula`].
 pub type LNProtoFormula<S> = ProtoFormula<S, (String, LSort), Name, LVar>;
 
-/// HS `SyntacticLNFormula` (Theory/Model/Formula.hs:263): an [`LNFormula`]
+/// HS `SyntacticLNFormula` (Theory/Model/Formula.hs): an [`LNFormula`]
 /// whose atoms may carry the parser's `Pred` sugar, with the sugar's fact
-/// over the same `BVar` terms as the plain atoms (Atom.hs:78-87).
+/// over the same `BVar` terms as the plain atoms (Atom.hs).
 pub type SyntacticLNFormula = LNProtoFormula<SyntacticSugar<BLNTerm>>;
 
-/// HS `SyntacticNFormula v` (Theory/Model/Formula.hs:264): a
+/// HS `SyntacticNFormula v` (Theory/Model/Formula.hs): a
 /// [`SyntacticLNFormula`] over a free-variable type of the caller's choice.
 pub type SyntacticNFormula<V> =
     ProtoFormula<SyntacticSugar<VTerm<Name, BVar<V>>>, (String, LSort), Name, V>;
@@ -137,16 +136,16 @@ impl<S, H, C, V> ProtoFormula<S, H, C, V> {
 }
 
 // =============================================================================
-// Sugar traversal (Atom.hs:87-94), free variables (Theory/Model/Formula.hs:321-333),
-// quantifier introduction (Theory/Model/Formula.hs:347-360) and `toLNFormula`
-// (Theory/Model/Formula.hs:369-373).
+// Sugar traversal (Atom.hs), free variables (Theory/Model/Formula.hs),
+// quantifier introduction (Theory/Model/Formula.hs) and `toLNFormula`
+// (Theory/Model/Formula.hs).
 // =============================================================================
 
 /// HS `frees` on a formula: its `HasFrees` instance
-/// (Theory/Model/Formula.hs:321-333) at `V = LVar`, and HS `freesSapicTerm`
-/// (Theory/Sapic/Term.hs:131-132) at a variable type `HasFrees` does not
+/// (Theory/Model/Formula.hs) at `V = LVar`, and HS `freesSapicTerm`
+/// (Theory/Sapic/Term.hs) at a variable type `HasFrees` does not
 /// cover.  The `Foldable (ProtoFormula ...)` instance
-/// (Theory/Model/Formula.hs:197-199) descends into the atoms' terms, sugar
+/// (Theory/Model/Formula.hs) descends into the atoms' terms, sugar
 /// included, and the `Foldable BVar` instance yields only `Free` variables —
 /// so bound De Bruijn indices contribute nothing and binder hints are
 /// ignored. Deduplicated and sorted, like [`tamarin_term::lterm::frees`].
@@ -161,10 +160,10 @@ where
     out
 }
 
-/// HS `freesList` (Term/LTerm.hs:605-608) at the same instances
+/// HS `freesList` (Term/LTerm.hs) at the same instances
 /// [`formula_frees`] uses: the free variables in the order the `Foldable`
 /// traversal yields them, duplicates kept. HS `frees = sortednub . freesList`
-/// (Term/LTerm.hs:610-614) is [`formula_frees`]; callers that number
+/// (Term/LTerm.hs) is [`formula_frees`]; callers that number
 /// variables by first occurrence need this list instead.
 pub fn formula_frees_list<S, C, V>(fm: &ProtoFormula<S, (String, LSort), C, V>) -> Vec<V>
 where
@@ -184,7 +183,7 @@ where
 }
 
 /// The free variables of one term in literal order — HS `freesSapicTerm =
-/// foldMap $ foldMap (: [])` (Theory/Sapic/Term.hs:131-132), whose inner
+/// foldMap $ foldMap (: [])` (Theory/Sapic/Term.hs), whose inner
 /// `foldMap` is the `Foldable BVar` instance and so skips a bound index.
 fn for_each_free_term_var<C, V>(t: &VTerm<C, BVar<V>>, f: &mut dyn FnMut(&V)) {
     match t {
@@ -199,7 +198,7 @@ fn for_each_free_term_var<C, V>(t: &VTerm<C, BVar<V>>, f: &mut dyn FnMut(&V)) {
 }
 
 /// Every term of every atom, in the order the `Foldable (ProtoFormula syn s c)`
-/// instance folds them (Theory/Model/Formula.hs:197-199).
+/// instance folds them (Theory/Model/Formula.hs).
 pub(crate) fn for_each_formula_term<S, C, V>(
     fm: &ProtoFormula<S, (String, LSort), C, V>,
     f: &mut dyn FnMut(&VTerm<C, BVar<V>>),
@@ -227,10 +226,10 @@ pub fn for_each_formula_atom<'a, S, H, C, V>(
     }
 }
 
-/// HS `formulaFacts` (Theory/Tools/Wellformedness.hs:893-906): the fact of
+/// HS `formulaFacts` (Theory/Tools/Wellformedness.hs): the fact of
 /// every `Action` atom, in `foldFormula` order.  A `Syntactic` atom carries a
 /// fact too, and it is deliberately skipped — HS's comment at
-/// Theory/Tools/Wellformedness.hs:902 reads "the 'facts' in a predicate atom
+/// Theory/Tools/Wellformedness.hs reads "the 'facts' in a predicate atom
 /// are not real facts".
 pub fn formula_facts<S, H, C, V>(fm: &ProtoFormula<S, H, C, V>) -> Vec<&Fact<VTerm<C, BVar<V>>>> {
     let mut out = Vec::new();
@@ -242,9 +241,9 @@ pub fn formula_facts<S, H, C, V>(fm: &ProtoFormula<S, H, C, V>) -> Vec<&Fact<VTe
     out
 }
 
-/// HS `formulaTerms` (Theory/Tools/Wellformedness.hs:918-920): the terms of
+/// HS `formulaTerms` (Theory/Tools/Wellformedness.hs): the terms of
 /// every atom, in `foldFormula` order.  Its atom step is `atomTerms`
-/// (Theory/Tools/Wellformedness.hs:908-915), which yields NOTHING for a
+/// (Theory/Tools/Wellformedness.hs), which yields NOTHING for a
 /// `Syntactic` atom, so this is a different traversal from the `Foldable`
 /// instance [`for_each_formula_term`] runs.
 pub(crate) fn formula_terms<S, H, C, V>(fm: &ProtoFormula<S, H, C, V>) -> Vec<&VTerm<C, BVar<V>>> {
@@ -253,11 +252,11 @@ pub(crate) fn formula_terms<S, H, C, V>(fm: &ProtoFormula<S, H, C, V>) -> Vec<&V
     out
 }
 
-/// HS `traverseFormulaAtom` (Theory/Model/Formula.hs:212-219#traverseFormulaAtom):
+/// HS `traverseFormulaAtom` (Theory/Model/Formula.hs#traverseFormulaAtom):
 /// rebuild the formula with every atom replaced by the WHOLE FORMULA the
 /// callback returns, under an effect — `Result` here, the `Either FactTag`
 /// HS's predicate expansion runs in.  It is built on `foldFormula`
-/// (Theory/Model/Formula.hs:140-156#foldFormula), which threads no De Bruijn
+/// (Theory/Model/Formula.hs#foldFormula), which threads no De Bruijn
 /// depth, so the callback sees the atom alone; [`map_atoms`] runs on
 /// `foldFormulaScope` and hands each atom its depth.  Atoms are visited left
 /// to right, and the binder hints are carried across.
@@ -285,11 +284,11 @@ where
     }
 }
 
-/// HS `mapAtoms` (Theory/Model/Formula.hs:267-270): rebuild the formula with
+/// HS `mapAtoms` (Theory/Model/Formula.hs): rebuild the formula with
 /// every atom replaced by `f`'s result.  `f` also receives the atom's De
 /// Bruijn depth — the number of binders between the formula's root and the
 /// atom — which `foldFormulaScope` threads by recursing with `succ i` at each
-/// `Qua` (Theory/Model/Formula.hs:160-173).  The atom map may change the
+/// `Qua` (Theory/Model/Formula.hs).  The atom map may change the
 /// sugar, constant and variable types; the binder hints are carried across.
 pub fn map_atoms<S, S2, H, C, C2, V, V2>(
     fm: ProtoFormula<S, H, C, V>,
@@ -319,8 +318,8 @@ fn map_atoms_at<S, S2, H, C, C2, V, V2>(
 /// [`map_atoms`] over [`map_atom`]: rebuild the formula with `f` applied to
 /// every term of every atom, at the atom's De Bruijn depth.  This is the shape
 /// HS writes as `mapAtoms (\i a -> fmap (g i) a)`
-/// (Theory/Model/Formula.hs:267-270 over the `Functor (ProtoAtom s)` instance,
-/// Atom.hs:121-127) in each of the formula rewrites below.
+/// (Theory/Model/Formula.hs over the `Functor (ProtoAtom s)` instance,
+/// Atom.hs) in each of the formula rewrites below.
 fn map_formula_terms<S, H, C, V>(
     fm: ProtoFormula<S, H, C, V>,
     f: &mut dyn FnMut(u64, &VTerm<C, BVar<V>>) -> VTerm<C, BVar<V>>,
@@ -331,7 +330,7 @@ where
     map_atoms(fm, &mut |i, a| map_atom(a, &mut |t| f(i, t)))
 }
 
-/// HS `quantify x` (Theory/Model/Formula.hs:347-352): turn the free variable `x` into a
+/// HS `quantify x` (Theory/Model/Formula.hs): turn the free variable `x` into a
 /// bound one, using the De Bruijn index of the binder that is about to be put
 /// in front of the formula.
 pub fn quantify<S, C, V>(
@@ -343,7 +342,7 @@ where
     C: Ord + Clone,
     V: Ord + Clone,
 {
-    // `mapLits (fmap (>>= subst i))` (Theory/Model/Formula.hs:349-352): the
+    // `mapLits (fmap (>>= subst i))` (Theory/Model/Formula.hs): the
     // free occurrences of `x` become the index `i`; constants and already-bound
     // indices are untouched, and the `f_app` rebuild inside `map_lits` re-sorts
     // AC arguments (`Bound` sorts before `Free`).
@@ -355,11 +354,11 @@ where
     })
 }
 
-/// HS `applyMacroInFormula` (Theory/Model/Formula.hs:314-316): the theory's
+/// HS `applyMacroInFormula` (Theory/Model/Formula.hs): the theory's
 /// macros applied to every term of every atom, through the `BVar`-tagged
 /// macros [`ln_macros_to_bn_macros`](tamarin_term::macro_expand::ln_macros_to_bn_macros)
 /// builds.  An empty macro list leaves the formula as it stands, which is HS's
-/// own first equation (:315).
+/// own first equation.
 pub fn apply_macro_in_formula(macros: &[LNMacro], fm: LNFormula) -> LNFormula {
     if macros.is_empty() {
         return fm;
@@ -368,7 +367,7 @@ pub fn apply_macro_in_formula(macros: &[LNMacro], fm: LNFormula) -> LNFormula {
     map_formula_terms(fm, &mut |_, t| apply_macros(&bn, t.clone()))
 }
 
-/// HS `exists hint x` (Theory/Model/Formula.hs:359-360): `Qua Ex hint . quantify x`.
+/// HS `exists hint x` (Theory/Model/Formula.hs): `Qua Ex hint . quantify x`.
 pub fn exists_var<S, C, V>(
     hint: (String, LSort),
     x: &V,
@@ -382,7 +381,7 @@ where
     ProtoFormula::exists(hint, quantify(x, fm))
 }
 
-/// HS `forAll hint x` (Theory/Model/Formula.hs:355-356): `Qua All hint . quantify x`.
+/// HS `forAll hint x` (Theory/Model/Formula.hs): `Qua All hint . quantify x`.
 pub fn for_all_var<S, C, V>(
     hint: (String, LSort),
     x: &V,
@@ -397,9 +396,9 @@ where
 }
 
 /// HS's overlapping `Apply (Subst c v) (VTerm c (BVar v))`
-/// (Term/Substitution/SubstVFree.hs:297-302) under `mapAtoms (const $ apply
+/// (Term/Substitution/SubstVFree.hs) under `mapAtoms (const $ apply
 /// subst)`, the `Apply s (ProtoFormula syn h c v)` instance
-/// (Theory/Model/Formula.hs:338-340): rewrite the free occurrences of the
+/// (Theory/Model/Formula.hs): rewrite the free occurrences of the
 /// substitution's domain in every atom.  A binder is a `Bound` index and is
 /// outside the domain, so it cannot capture a variable of the image.
 pub fn apply_subst<S, C, V>(
@@ -415,12 +414,12 @@ where
 }
 
 /// The same `Apply s (ProtoFormula syn h c v)` instance
-/// (Theory/Model/Formula.hs:338-340) at a substitution that does not map the
+/// (Theory/Model/Formula.hs) at a substitution that does not map the
 /// formula's own variable type: the atoms' terms take the overlappable `Apply
-/// s (Term (Lit c v))` (Term/Substitution/SubstVFree.hs:290-291), which
+/// s (Term (Lit c v))` (Term/Substitution/SubstVFree.hs), which
 /// rewrites each literal and rebuilds through `fApp`, and each free variable
 /// takes `rename` through [`apply_bvar`].  A `SapicLVar` renamed this way
-/// keeps its type tag (Theory/Sapic/Term.hs:115-117).
+/// keeps its type tag (Theory/Sapic/Term.hs).
 pub fn apply_rename<S, C, V>(
     fm: ProtoFormula<S, (String, LSort), C, V>,
     rename: &mut dyn FnMut(&V) -> V,
@@ -438,7 +437,7 @@ where
     })
 }
 
-/// HS `shiftFreeIndices n` (Theory/Model/Formula.hs:458-465): raise by `n`
+/// HS `shiftFreeIndices n` (Theory/Model/Formula.hs): raise by `n`
 /// every bound index that refers past this formula's own binders, which is
 /// what moving a sub-formula under one more binder needs.  `map_atoms` hands
 /// each atom its De Bruijn depth `i`, so an index below `i` belongs to a
@@ -460,8 +459,8 @@ where
     })
 }
 
-/// HS `toLNFormula` (Theory/Model/Formula.hs:369-373): strip the sugar with
-/// `toAtom` (Atom.hs:200-206); `None` if any atom carries sugar.
+/// HS `toLNFormula` (Theory/Model/Formula.hs): strip the sugar with
+/// `toAtom` (Atom.hs); `None` if any atom carries sugar.
 pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
     match fm {
         ProtoFormula::Atom(ProtoAtom::Syntactic(_)) => None,
@@ -480,17 +479,17 @@ pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
 }
 
 // =============================================================================
-// Closing the parser AST (Theory/Text/Parser/Formula.hs:44-77) and opening a
-// bound term for display (Theory/Model/Formula.hs:274-291, :481-484).
+// Closing the parser AST (Theory/Text/Parser/Formula.hs) and opening a
+// bound term for display (Theory/Model/Formula.hs).
 // =============================================================================
 
 /// The two variable parsers HS's formula grammar is parameterised over,
-/// `standardFormula varp nodep` (Theory/Text/Parser/Formula.hs:108-109),
+/// `standardFormula varp nodep` (Theory/Text/Parser/Formula.hs),
 /// bundled with the term and fact converters that read a literal the same
 /// way `varp` does.  HS instantiates the grammar at `msgvar`/`nodevar` for
-/// the theory's own formulas (Theory/Text/Parser/Formula.hs:112-114) and at
+/// the theory's own formulas (Theory/Text/Parser/Formula.hs) and at
 /// `sapicvar`/`sapicnodevar` for a SAPIC condition
-/// (Theory/Text/Parser/Sapic.hs:253-254); [`MsgVars`] and [`SapicVars`] are
+/// (Theory/Text/Parser/Sapic.hs); [`MsgVars`] and [`SapicVars`] are
 /// those two instantiations.
 pub trait FormulaVars {
     /// The free-variable type of the formula the walk builds.
@@ -501,10 +500,10 @@ pub trait FormulaVars {
     fn var(v: &p::VarSpec) -> Self::Var;
 
     /// `nodep`: the variable `nodevarTerm` reads in a timepoint position
-    /// (Theory/Text/Parser/Formula.hs:59).
+    /// (Theory/Text/Parser/Formula.hs).
     fn node_var(v: &p::VarSpec) -> Self::Var;
 
-    /// HS `hint` (Theory/Model/Formula.hs:134-135): the name and sort a
+    /// HS `hint` (Theory/Model/Formula.hs): the name and sort a
     /// binder records for display.
     fn hint(v: &Self::Var) -> (String, LSort);
 
@@ -515,9 +514,9 @@ pub trait FormulaVars {
     fn fact(f: &p::Fact, sig: &MaudeSig) -> Result<Fact<VTerm<Name, Self::Var>>, ElabError>;
 }
 
-/// HS's `msgvar`/`nodevar` instantiation (Theory/Text/Parser/Formula.hs:112-114).
+/// HS's `msgvar`/`nodevar` instantiation (Theory/Text/Parser/Formula.hs).
 /// Both parsers give an `LVar`, and the RS parser has already stamped the
-/// sort each of them would read (Token.hs:440-448), so [`FormulaVars::var`]
+/// sort each of them would read (Token.hs), so [`FormulaVars::var`]
 /// and [`FormulaVars::node_var`] are the same reading of a `VarSpec`.
 pub struct MsgVars;
 
@@ -546,14 +545,14 @@ impl FormulaVars for MsgVars {
 }
 
 /// HS's `sapicvar`/`sapicnodevar` instantiation
-/// (Theory/Text/Parser/Sapic.hs:253-254).  `sapicvar` reads the written
-/// `name:type` annotation (Token.hs:506-510) and `sapicnodevar` stamps
-/// `defaultSapicNodeType` on a timepoint (Token.hs:522-525,
-/// Theory/Sapic/Term.hs:99-100).  A binder is `sapicvar`'s reading for every
+/// (Theory/Text/Parser/Sapic.hs).  `sapicvar` reads the written
+/// `name:type` annotation (Token.hs) and `sapicnodevar` stamps
+/// `defaultSapicNodeType` on a timepoint (Token.hs,
+/// Theory/Sapic/Term.hs).  A binder is `sapicvar`'s reading for every
 /// spelling: `many1 (try varp <|> nodep)`
-/// (Theory/Text/Parser/Formula.hs:75) reaches `sapicnodevar` only where
+/// (Theory/Text/Parser/Formula.hs) reaches `sapicnodevar` only where
 /// `sapicvar` fails, and `lvarNoSuffix` accepts every sort's sigil
-/// (Token.hs:502-503).
+/// (Token.hs).
 pub struct SapicVars;
 
 impl FormulaVars for SapicVars {
@@ -582,41 +581,41 @@ impl FormulaVars for SapicVars {
 
 /// Build a [`SyntacticLNFormula`] from the parser's formula AST the way HS's
 /// formula parser builds one while parsing
-/// (Theory/Text/Parser/Formula.hs:44-77) — [`from_parser_with`] at
+/// (Theory/Text/Parser/Formula.hs) — [`from_parser_with`] at
 /// [`MsgVars`].
 ///
 /// Variable sorts come from the parser, which stamps them by syntactic
-/// position as HS's `msgvar`/`nodevar` do (Token.hs:440-448).  A binder
+/// position as HS's `msgvar`/`nodevar` do (Token.hs).  A binder
 /// closes exactly the occurrences equal to its `LVar` in name, sort and
-/// index (HS `quantify`'s `v == x`, Theory/Model/Formula.hs:350-352), so
+/// index (HS `quantify`'s `v == x`, Theory/Model/Formula.hs), so
 /// `Ex ~k. Made(k)` leaves the message-sorted `k` free.  A bare 0-arity
 /// symbol is already an application when it arrives, so no binder of that
-/// name closes it (HS `nullaryApp`, Theory/Text/Parser/Term.hs:158-163).  A
+/// name closes it (HS `nullaryApp`, Theory/Text/Parser/Term.hs).  A
 /// `(<)` atom becomes the `Smaller` predicate (`smallerp`,
-/// Theory/Text/Parser/Formula.hs:30-38); a SAPIC `=t` pattern term, which
+/// Theory/Text/Parser/Formula.hs); a SAPIC `=t` pattern term, which
 /// `term_to_lnterm` rejects, is an [`ElabError`].
 pub fn from_parser(f: &p::Formula, sig: &MaudeSig) -> Result<SyntacticLNFormula, ElabError> {
     from_parser_with::<MsgVars>(f, sig)
 }
 
 /// [`from_parser_with`] at [`SapicVars`]: HS `standardFormula sapicvar
-/// sapicnodevar` (Theory/Text/Parser/Sapic.hs:253-254), the formula a
+/// sapicnodevar` (Theory/Text/Parser/Sapic.hs), the formula a
 /// `Cond` combinator and an embedded `_restrict` carry.
 ///
 /// A binder closes exactly the occurrences equal to its whole `SapicLVar`,
 /// type tag included (HS `quantify`'s `v == x`,
-/// Theory/Model/Formula.hs:350-352). Current `sapicvar` defaults a node-sorted
+/// Theory/Model/Formula.hs). Current `sapicvar` defaults a node-sorted
 /// binder to type `node`, matching `sapicnodevar` at its occurrences.
 pub fn sapic_from_parser(f: &p::Formula, sig: &MaudeSig) -> Result<SapicFormula, ElabError> {
     from_parser_with::<SapicVars>(f, sig)
 }
 
 /// The closing walk of HS's formula grammar
-/// (Theory/Text/Parser/Formula.hs:44-77): every atom is lifted with all of
+/// (Theory/Text/Parser/Formula.hs): every atom is lifted with all of
 /// its variables free (`blatom`'s `fmap (fmapTerm (fmap Free))`,
-/// Theory/Text/Parser/Formula.hs:44-45), and a quantifier closes its binders
-/// with `foldr (hinted q) f vs` (Theory/Text/Parser/Formula.hs:73-77) over
-/// `forAll`/`exists` (Theory/Model/Formula.hs:355-360), so the last binder
+/// Theory/Text/Parser/Formula.hs), and a quantifier closes its binders
+/// with `foldr (hinted q) f vs` (Theory/Text/Parser/Formula.hs) over
+/// `forAll`/`exists` (Theory/Model/Formula.hs), so the last binder
 /// of the list is the innermost one.
 pub fn from_parser_with<F: FormulaVars>(
     f: &p::Formula,
@@ -652,10 +651,10 @@ pub fn from_parser_with<F: FormulaVars>(
     }
 }
 
-/// HS `foldr (hinted q) f vs` (Theory/Text/Parser/Formula.hs:73-77): close
+/// HS `foldr (hinted q) f vs` (Theory/Text/Parser/Formula.hs): close
 /// the binders from the last to the first, each with the hint that `hinted`
-/// (Theory/Model/Formula.hs:364-365) reads off the binder's variable
-/// (Theory/Model/Formula.hs:227-228 at an `LVar`, Theory/Sapic/Term.hs:111-112
+/// (Theory/Model/Formula.hs) reads off the binder's variable
+/// (Theory/Model/Formula.hs at an `LVar`, Theory/Sapic/Term.hs
 /// at a `SapicLVar`).
 fn close_binders<F: FormulaVars>(
     q: fn((String, LSort), &F::Var, SyntacticNFormula<F::Var>) -> SyntacticNFormula<F::Var>,
@@ -668,7 +667,7 @@ fn close_binders<F: FormulaVars>(
     })
 }
 
-/// The atom alternatives of HS `blatom` (Theory/Text/Parser/Formula.hs:45-57).
+/// The atom alternatives of HS `blatom` (Theory/Text/Parser/Formula.hs).
 fn atom_from_parser<F: FormulaVars>(
     a: &p::Atom,
     sig: &MaudeSig,
@@ -691,7 +690,7 @@ fn atom_from_parser<F: FormulaVars>(
     })
 }
 
-/// `fmapTerm (fmap Free)` (Theory/Text/Parser/Formula.hs:45): every variable
+/// `fmapTerm (fmap Free)` (Theory/Text/Parser/Formula.hs): every variable
 /// of the term as a free `BVar`.  The literal order is unchanged, so the
 /// `f_app` rebuild inside [`map_lits`] keeps the AC argument order.
 pub fn lift_free<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>) -> VTerm<C, BVar<V>> {
@@ -712,9 +711,9 @@ fn free_term<F: FormulaVars>(
         })
 }
 
-/// HS `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs:59):
-/// the three positions `blatom` reads with it — `last`'s argument (:46), an
-/// action's timepoint (:47) and both operands of `<` (:49) — take a bare
+/// HS `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs):
+/// the three positions `blatom` reads with it — `last`'s argument, an
+/// action's timepoint and both operands of `<` — take a bare
 /// variable through `nodep`.  The RS parser also accepts a non-variable term
 /// there (parser.rs's `<` arm), which converts like any other term.
 fn node_term<F: FormulaVars>(
@@ -737,9 +736,9 @@ fn free_fact<F: FormulaVars>(
 /// Replace every bound index of `t` by the binder it refers to, given the
 /// enclosing binders innermost-last in `scope`: `Bound(0)` is the innermost
 /// binder, `Bound(i)` the one `i` binders further out.  This is HS
-/// `openFormula`'s `mapLits (subst x i)` (Theory/Model/Formula.hs:274-291)
+/// `openFormula`'s `mapLits (subst x i)` (Theory/Model/Formula.hs)
 /// applied once per enclosing binder, followed by `extractFree`
-/// (Theory/Model/Formula.hs:481-484), whose error message is kept for an
+/// (Theory/Model/Formula.hs), whose error message is kept for an
 /// index past the scope.  The rebuild through [`map_lits`] re-sorts AC
 /// arguments under the opened `LVar`s, as HS's `fApp` does.
 pub fn open_bound_term(t: &BLNTerm, scope: &[LVar]) -> LNTerm {
@@ -754,11 +753,11 @@ pub fn open_bound_term(t: &BLNTerm, scope: &[LVar]) -> LNTerm {
 }
 
 // =============================================================================
-// Opening a quantifier prefix (Theory/Model/Formula.hs:272-309) against the
-// precise fresh supply HS seeds with `avoidPrecise` (LTerm.hs:706-715).
+// Opening a quantifier prefix (Theory/Model/Formula.hs) against the
+// precise fresh supply HS seeds with `avoidPrecise` (LTerm.hs).
 // =============================================================================
 
-/// HS `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs:706-709, :714-715)
+/// HS `avoidPrecise = avoidPreciseVars . frees` (LTerm.hs)
 /// on a locally-nameless formula: the free variables seed the per-name
 /// counters, so a binder whose name a free variable uses is drawn with a
 /// larger index.
@@ -772,13 +771,13 @@ pub(crate) fn avoid_precise_lnformula<S: SugarTerms<BLNTerm>>(
     )
 }
 
-/// HS `openFormula` (Theory/Model/Formula.hs:272-286): when `f` is `Q v. f'`,
+/// HS `openFormula` (Theory/Model/Formula.hs): when `f` is `Q v. f'`,
 /// the quantifier, a fresh `LVar` for the binder and the body with that
 /// variable put in the binder's place; `None` when `f` is not a quantifier.
 ///
 /// HS returns the fresh draw as an unrun action, so a caller that rejects the
 /// quantifier takes nothing from the supply
-/// (Theory/Model/Formula.hs:305-307); here the caller decides before calling.
+/// (Theory/Model/Formula.hs); here the caller decides before calling.
 pub fn open_formula<S, C>(
     f: &ProtoFormula<S, (String, LSort), C, LVar>,
     fresh: &mut PreciseFreshState,
@@ -796,9 +795,9 @@ where
     }
 }
 
-/// The action HS `openFormula` returns (Theory/Model/Formula.hs:279-284):
+/// The action HS `openFormula` returns (Theory/Model/Formula.hs):
 /// `freshLVar` on the binder's name and sort ([`fresh_lvar`],
-/// LTerm.hs:300-302), then `mapAtoms (\i a -> fmap (mapLits (subst x i)) a)`
+/// LTerm.hs), then `mapAtoms (\i a -> fmap (mapLits (subst x i)) a)`
 /// over the body.  `i` is the atom's depth below the opened binder, and
 /// `subst` rewrites exactly the index `i`, so an index that belongs to an
 /// enclosing binder stays bound.
@@ -824,7 +823,7 @@ where
     (x, opened)
 }
 
-/// HS `openFormulaPrefix` (Theory/Model/Formula.hs:293-309): open the
+/// HS `openFormulaPrefix` (Theory/Model/Formula.hs): open the
 /// outermost binder and every directly nested binder of the same quantifier,
 /// each with its own fresh `LVar`, and return them outermost first with the
 /// quantifier and the body beneath them.  A binder of the other quantifier
@@ -1334,7 +1333,7 @@ mod tests {
     }
 
     /// `sapicvar` carries the written `name:type` into the binder and into
-    /// every term literal (Token.hs:506-510), and a binder closes the
+    /// every term literal (Token.hs), and a binder closes the
     /// occurrences equal to its whole `SapicLVar`, so the untagged `x` of the
     /// same name and sort stays free.
     #[test]
@@ -1347,10 +1346,10 @@ mod tests {
     }
 
     /// `nodevarTerm` reads its variable with `nodep = sapicnodevar`, which
-    /// stamps `defaultSapicNodeType` (Token.hs:522-525,
-    /// Theory/Sapic/Term.hs:99-100), in the three positions `blatom` writes
+    /// stamps `defaultSapicNodeType` (Token.hs,
+    /// Theory/Sapic/Term.hs), in the three positions `blatom` writes
     /// it: `last`'s argument, an action's timepoint and both operands of `<`
-    /// (Theory/Text/Parser/Formula.hs:46-49).
+    /// (Theory/Text/Parser/Formula.hs).
     #[test]
     fn sapic_from_parser_tags_a_timepoint_operand_node() {
         let node = |n: &str| sapic_free(n, LSort::Node, Some("node"));
@@ -1660,8 +1659,8 @@ mod tests {
     /// The supply is the caller's and is not rolled back per prefix, so two
     /// sibling prefixes that use one binder name get distinct indices.  HS's
     /// guarded conversion opens its prefixes this way (`convEx`/`convAll`,
-    /// Guarded.hs:535-564); its printer wraps each prefix in `scopeFreshness`
-    /// instead (Theory/Model/Formula.hs:503-506).
+    /// Guarded.hs); its printer wraps each prefix in `scopeFreshness`
+    /// instead (Theory/Model/Formula.hs).
     #[test]
     fn open_formula_draws_from_one_unscoped_supply() {
         let prefix = || -> LNFormula {
@@ -1695,7 +1694,7 @@ mod tests {
     /// [`traverse_formula_atom`] hands the callback the atom itself, and the
     /// callback's own `map_atom` walk of an `Action` reads the time point
     /// before the fact's arguments (HS `Functor (ProtoAtom s)`,
-    /// Theory/Model/Atom.hs:121-127#fmap).  Atoms arrive left to right and
+    /// Theory/Model/Atom.hs#fmap).  Atoms arrive left to right and
     /// each returned formula is spliced in place of its atom.
     #[test]
     fn traverse_formula_atom_visits_the_action_timepoint_first() {
@@ -1736,14 +1735,14 @@ mod tests {
     // =========================================================================
     // Haskell-faithfulness invariants for Connective and Quantifier order.
     //
-    // Theory/Model/Formula.hs:106-108: `data Connective = And | Or | Imp | Iff`
-    // Theory/Model/Formula.hs:110-112: `data Quantifier = All | Ex`
+    // Theory/Model/Formula.hs: `data Connective = And | Or | Imp | Iff`
+    // Theory/Model/Formula.hs: `data Quantifier = All | Ex`
     //
     // These orders matter for any BTreeMap<Connective,_> iteration and for
     // Haskell-faithful structural comparison / round-tripping of formulas.
     // =========================================================================
 
-    /// `Connective` Ord — `And < Or < Imp < Iff` from Theory/Model/Formula.hs:107.
+    /// `Connective` Ord — `And < Or < Imp < Iff` from Theory/Model/Formula.hs.
     #[test]
     fn connective_ord_matches_haskell_declaration() {
         assert!(Connective::And < Connective::Or);
@@ -1751,7 +1750,7 @@ mod tests {
         assert!(Connective::Imp < Connective::Iff);
     }
 
-    /// `Quantifier` Ord — `All < Ex` from Theory/Model/Formula.hs:111.
+    /// `Quantifier` Ord — `All < Ex` from Theory/Model/Formula.hs.
     ///
     /// The All<Ex order is required for Haskell-faithful structural /
     /// BTreeMap comparisons and round-tripping of formulas, matching the
@@ -1762,7 +1761,7 @@ mod tests {
     fn quantifier_ord_matches_haskell_declaration() {
         assert!(
             Quantifier::All < Quantifier::Ex,
-            "All MUST sort before Ex (Theory/Model/Formula.hs:111)"
+            "All MUST sort before Ex (Theory/Model/Formula.hs)"
         );
     }
 
@@ -1782,7 +1781,7 @@ mod tests {
 
     /// `formulaFacts` yields the fact of an `Action` atom and of nothing else.
     /// A `Syntactic` atom carries a fact too and is skipped, which is the one
-    /// arm HS spells out (Theory/Tools/Wellformedness.hs:902).  The facts come
+    /// arm HS spells out (Theory/Tools/Wellformedness.hs).  The facts come
     /// out in `foldFormula` order: left operand before right, through `Not`
     /// and through a binder.
     #[test]

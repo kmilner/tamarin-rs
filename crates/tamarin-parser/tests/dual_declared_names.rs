@@ -1,13 +1,12 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Declaration-side parity for DUAL-DECLARED names — one name that is both a
 //! `NoEq` funsym and a user-declared `[AC]` symbol.
 //!
-//! HS `function`'s conflict check (Parser/Signature.hs:212-217) looks the name
+//! HS `function`'s conflict check (Parser/Signature.hs) looks the name
 //! up in `stFunSyms` only, and an `[AC]` declaration registers under
-//! `stACFunSyms` (`addFunSym (ACfctUser …)`, Parser/Signature.hs:221), so the two declarations
+//! `stACFunSyms` (`addFunSym (ACfctUser …)`, Parser/Signature.hs), so the two declarations
 //! never collide directly: `f/2 [AC], f/2` and `f/2, f/2 [AC]` are BOTH
 //! accepted (the compared options tuple `(k,priv,destr,ndc)` carries no AC
 //! flag).  Only a NoEq declaration whose tuple DIFFERS from the `[AC]`
@@ -58,7 +57,7 @@ fn both_declaration_orders_are_accepted() {
 
 /// The NoEq-first order at a different arity DOES conflict: the `[AC]`
 /// declaration's requested tuple is compared against the `stFunSyms` entry
-/// (Parser/Signature.hs:212-215).
+/// (Parser/Signature.hs).
 #[test]
 fn a_noeq_first_arity_mismatch_conflicts() {
     let source = "theory T begin functions: f/3, f/2 [AC] end";
@@ -72,8 +71,8 @@ fn a_noeq_first_arity_mismatch_conflicts() {
 
 /// The AST keeps the two spellings of a dual name apart: prefix is a plain
 /// `App` (which the readers resolve NoEq-first, HS `lookupArity`,
-/// Parser/Term.hs:62-71), infix is `BinOp::AcFct` (always the AC symbol, HS
-/// `acterm`, Parser/Term.hs:165-172).  The oracle renders the two differently in one
+/// Parser/Term.hs), infix is `BinOp::AcFct` (always the AC symbol, HS
+/// `acterm`, Parser/Term.hs).  The oracle renders the two differently in one
 /// rule — `A( ('a' f 'b') ), B( f('a', 'b') )` (probe `p_infix`) — which is
 /// only representable with distinct nodes.
 #[test]

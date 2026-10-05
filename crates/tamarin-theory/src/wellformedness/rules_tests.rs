@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::super::check_wellformedness;
 use super::*;
@@ -23,7 +22,7 @@ fn elaborated(src: &str) -> Theory {
 
 /// The report's bodies joined the way `prettyWfErrorReport` joins a topic
 /// group — `intersperse (text "")` under one header, which at the group's
-/// 2-space nest is a two-space line (Wellformedness.hs:118-125).
+/// 2-space nest is a two-space line (Wellformedness.hs).
 fn bodies(report: &[WfError]) -> String {
     assert!(!report.is_empty(), "empty report");
     report
@@ -46,7 +45,7 @@ fn lookup_process(v: LVar) -> crate::sapic::PlainProcess {
 }
 
 /// HS `frees` sorts by `Ord LVar` = `(idx, sort, name)`
-/// (LTerm.hs:546-548), so the list is not in source order: `~nr` (fresh)
+/// (LTerm.hs), so the list is not in source order: `~nr` (fresh)
 /// precedes the msg-sorted `mi` and `ni`, and `$A` is dropped as
 /// pub-sorted.  Byte-pinned to the pinned oracle (ef3f0468) on
 /// `Out(<ni, ~nr, $A, mi>)`.
@@ -60,7 +59,7 @@ fn unbound_variables_are_listed_in_lvar_order() {
 }
 
 /// A builtin's 0-arity constant is a symbol only while that builtin is
-/// enabled (`nullaryApp`, Theory/Text/Parser/Term.hs:158-163), so the same
+/// enabled (`nullaryApp`, Theory/Text/Parser/Term.hs), so the same
 /// bare name is a variable — and an unbound one — in a theory that does
 /// not enable it.
 #[test]
@@ -80,7 +79,7 @@ fn bare_name_of_a_disabled_builtin_constant_is_a_variable() {
     );
 }
 
-/// HS `originatesFromLookup` (Wellformedness.hs:501-503, 506-510): the
+/// HS `originatesFromLookup` (Wellformedness.hs): the
 /// variable a `lookup t as v` combinator binds reaches its generated rule
 /// through the `IsIn( t, v )` action, so it is not unbound — while an
 /// otherwise identical rule without the `process` attribute is.  The
@@ -324,7 +323,7 @@ fn unbound_variable_list_fills_at_the_report_ribbon() {
 }
 
 /// The parser inlines a rule's `let` bindings into the body it builds
-/// (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs:119), so
+/// (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs), so
 /// the check reads the substituted facts: `c %+ %1` is nat well sorted
 /// once `c` is the nat variable `%i`.
 #[test]
@@ -383,7 +382,7 @@ fn fresh_public_constants_message_format() {
 }
 
 /// HS `thyProtoRules` applies the theory's macros to the `oprRuleE` of every
-/// rule item (Wellformedness.hs:133-134).  `elaborate` applies them at its
+/// rule item (Wellformedness.hs).  `elaborate` applies them at its
 /// single rule-construction site, so the elaborated rule IS the macro-applied
 /// one and the checks read it directly: the parsed rule still carries the
 /// call `m(~k)`, the internal rule carries `h(~k)`.
@@ -421,7 +420,7 @@ fn thy_proto_rules_returns_the_macro_applied_rule() {
 
 /// HS `frees` folds the rule info before the facts, so a variable that only
 /// the rule's `_restrict` formula mentions joins the clash groups: `#NOW`
-/// (`varNow`, Theory/Model/Restriction.hs:87-88) reaches no fact of the rule
+/// (`varNow`, Theory/Model/Restriction.hs) reaches no fact of the rule
 /// and clashes with the fresh `~now`.  Byte-pinned to the pinned oracle
 /// (ef3f0468) through `scripts/divergence_fixtures/s8_restrict_sort_clash`.
 #[test]
@@ -455,7 +454,7 @@ fn fresh_names_report_sees_a_restrict_name() {
 }
 
 /// `publicNamesReport'` reads the same `universeBi` name walk
-/// (Wellformedness.hs:477-478), so a public constant that only a `_restrict`
+/// (Wellformedness.hs), so a public constant that only a `_restrict`
 /// formula mentions joins the clash groups: `'ID'` reaches no fact of the
 /// rule and clashes with the `'id'` in the conclusion.  Byte-pinned to the
 /// pinned oracle (ef3f0468) on this theory under `--derivcheck-timeout=0`.

@@ -1,19 +1,18 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Pins the one-header-per-topic layout `prettyWfErrorReport` gives every
 //! wellformedness group.
 //!
 //! HS renders each `groupOn fst` group as
 //! `text topic $-$ (nest 2 . vcat . intersperse (text "") $ map snd errs)`
-//! (Wellformedness.hs:118-125): the `underlineTopic` header ONCE, then every
+//! (Wellformedness.hs): the `underlineTopic` header ONCE, then every
 //! body indented two spaces and separated by a two-space blank line.  The
 //! theories below reach that renderer from both directions — checks whose
 //! bodies carry neither header nor indent (`freshFactArguments'`,
-//! Wellformedness.hs:569-576; `multRestrictedReport'`,
-//! Wellformedness.hs:1047-1064) and a check whose bodies bake the header in
-//! (`formulaReports`, Wellformedness.hs:999-1005, see line 1003).
+//! Wellformedness.hs; `multRestrictedReport'`,
+//! Wellformedness.hs) and a check whose bodies bake the header in
+//! (`formulaReports`, Wellformedness.hs).
 //!
 //! Expected bytes are the pinned oracle's (Git revision ef3f0468).
 
@@ -31,7 +30,7 @@ fn load_wf_block(src: &str) -> String {
 }
 
 /// The `Formula terms` findings of the elaborated theory: the `checkTerms`
-/// arm of HS's `formulaReports` loop (Wellformedness.hs:1003), which is the
+/// arm of HS's `formulaReports` loop (Wellformedness.hs), which is the
 /// path both load pipelines take.
 fn formula_terms_report(src: &str) -> Vec<tamarin_theory::wellformedness::WfError> {
     let thy = parse_theory(src, &[]).expect("parse");
@@ -43,7 +42,7 @@ fn formula_terms_report(src: &str) -> Vec<tamarin_theory::wellformedness::WfErro
 }
 
 /// `unboundReport` is HS check index 2 and `lemmaAttributeReport` index 9
-/// (Wellformedness.hs:1270-1286), so the unbound group opens the block.
+/// (Wellformedness.hs), so the unbound group opens the block.
 /// Bytes are the pinned oracle's (Git revision ef3f0468) for this theory
 /// under `--derivcheck-timeout=0`.
 #[test]
@@ -64,7 +63,7 @@ fn unbound_group_precedes_a_later_topic() {
 
 /// `freshFactArguments'` pairs the underlined topic with a bare
 /// `text ("rule " ++ quote …) <-> text "fact:" <-> prettyLNFact fa`
-/// (Wellformedness.hs:574-576), so header, indent and separator all come from
+/// (Wellformedness.hs), so header, indent and separator all come from
 /// `prettyWfErrorReport`.
 #[test]
 fn fr_fact_topic_prints_its_underlined_header_once() {
@@ -85,7 +84,7 @@ fn fr_fact_topic_prints_its_underlined_header_once() {
 }
 
 /// `checkTerms` bodies arrive with the header baked in, one copy per lemma
-/// (`formulaReports`, Wellformedness.hs:999-1005, see line 1003), so a two-lemma group
+/// (`formulaReports`, Wellformedness.hs), so a two-lemma group
 /// keeps only the first copy and separates the bodies with the two-space
 /// blank line `intersperse (text "")` renders under `nest 2`.
 #[test]
@@ -115,7 +114,7 @@ fn formula_terms_group_prints_its_header_once() {
 }
 
 /// `multRestrictedReport'` also pairs the underlined topic with a body that
-/// carries no header (Wellformedness.hs:1047-1064, see line 1050), but that
+/// carries no header (Wellformedness.hs), but that
 /// body bakes in `ppTopic`'s `nest 2` itself, because its `prettyProtoRuleE`
 /// dumps make their `sep`/`fsep` wrap decisions at the indented column.  Two
 /// offending rules therefore land in ONE group whose header appears once and
@@ -154,7 +153,7 @@ fn multiplication_restriction_topic_prints_its_underlined_header() {
     );
 }
 
-/// The paragraph every `checkTerms` body ends with (Wellformedness.hs:968-973),
+/// The paragraph every `checkTerms` body ends with (Wellformedness.hs),
 /// already at the two-space indent `ppTopic` gives a group's bodies.
 const ALLOWED_LINES: &[&str] = &[
     "  The only allowed terms are public constants and bound node and",
@@ -167,7 +166,7 @@ const ALLOWED_LINES: &[&str] = &[
 /// Two offending RESTRICTIONS — the shape SAPIC's `let … else` lowering mints,
 /// one `Restr_<rule>_<i>` per else-branch, each carrying its branch's
 /// right-hand side verbatim.  Both land in `annFormulas`
-/// (Wellformedness.hs:1006-1015) back to back, so `groupOn fst` puts them in
+/// (Wellformedness.hs) back to back, so `groupOn fst` puts them in
 /// ONE group under a single header.
 ///
 /// Bytes are the pinned oracle's (Git revision ef3f0468).

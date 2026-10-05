@@ -1,16 +1,15 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
-//! Pins HS `ruleVariantsReport` (Wellformedness.hs:375-382) and the rule drop
+//! Pins HS `ruleVariantsReport` (Wellformedness.hs) and the rule drop
 //! that shares its verdict.
 //!
 //! `variantsCheck`'s `guard (null recomputedVariants)` arm
-//! (Wellformedness.hs:362-366) fires when `variantsProtoRule` returns
+//! (Wellformedness.hs) fires when `variantsProtoRule` returns
 //! `Nothing`.  The canonical shape is a rule with both `Fr(~x)` and `In(~x)`
 //! among its premises: `~x` cannot be sent before it is generated, so every
 //! candidate substitution is fresh-redundant.  `closeProtoRule`
-//! (lib/theory/src/Rule.hs:82-86) then produces no closed rule for it, and the
+//! (lib/theory/src/Rule.hs) then produces no closed rule for it, and the
 //! batch driver drops it from the theory on the same verdict.
 //!
 //! The expected block is the pinned oracle's (Git revision ef3f0468).
@@ -41,7 +40,7 @@ fn loaded(mp: &str) -> (Theory, MaudeHandle) {
 }
 
 /// The oracle's `Rule has no variants` body, once, for `NoVar` alone.  "For
-/// exaple" is spelled that way in the HS source (Wellformedness.hs:366).
+/// exaple" is spelled that way in the HS source (Wellformedness.hs).
 #[test]
 fn no_variant_rule_is_reported() {
     let Some(mp) = require_maude_path() else {
@@ -86,7 +85,7 @@ fn variant_transport_failure_is_not_reported_as_no_variants() {
     assert_eq!(elaborated.rules().count(), 2);
 }
 
-/// HS `closeProtoRule` (lib/theory/src/Rule.hs:82-86) drops a rule with no
+/// HS `closeProtoRule` (lib/theory/src/Rule.hs) drops a rule with no
 /// variants from the closed theory.  The batch driver's `retain` reads this
 /// predicate, not the report, so a rule name that `showRuleCaseName` prefixes
 /// still matches.

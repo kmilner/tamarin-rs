@@ -1,13 +1,12 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Sapic.Compression` (`lib/sapic/src/Sapic/Compression.hs`).
 //!
 //! Path compression: merge adjacent "silent" SAPIC rules (rules that do not
 //! perform observable actions) along the state-fact flow, starting from the
 //! initial `State_( )` fact.  Gated on `_transProgress` in HS
-//! (`sapic/src/Sapic.hs:45-101, see line 72`).
+//! (`sapic/src/Sapic.hs`).
 //!
 //! Operates on the final `Rule<ProtoRuleEInfo>` list (post-`toRule`).  HS uses
 //! `S.Set (Rule ProtoRuleEInfo)` in `mergeRules` and `S.Set (Fact LNTerm)` for
@@ -28,7 +27,7 @@ const NO_COMPRESS_KEYWORDS: &[&str] = &[
     "IsIn", "IsNotSet", "Insert", "Delete", "Lock", "Unlock", "Progress",
 ];
 
-/// `isSapicNoCompress` (Compression.hs:32-35).
+/// `isSapicNoCompress` (Compression.hs).
 fn is_sapic_no_compress(f: &LNFact) -> bool {
     if let FactTag::Proto(_, name, _) = &f.tag {
         NO_COMPRESS_KEYWORDS.iter().any(|kw| name.starts_with(kw))
@@ -37,12 +36,12 @@ fn is_sapic_no_compress(f: &LNFact) -> bool {
     }
 }
 
-/// `isStateProcessFact f = isStateFact f || isLetFact f` (Compression.hs:37-38).
+/// `isStateProcessFact f = isStateFact f || isLetFact f` (Compression.hs).
 fn is_state_process_fact(f: &LNFact) -> bool {
     is_state_fact(f) || is_let_fact(f)
 }
 
-/// `sameName` (Compression.hs:40-42): both are proto facts with the same name.
+/// `sameName` (Compression.hs): both are proto facts with the same name.
 fn same_name(a: &LNFact, b: &LNFact) -> bool {
     match (&a.tag, &b.tag) {
         (FactTag::Proto(_, n1, _), FactTag::Proto(_, n2, _)) => n1 == n2,
@@ -50,21 +49,21 @@ fn same_name(a: &LNFact, b: &LNFact) -> bool {
     }
 }
 
-/// `List.partition (List.any (sameName fact) . _rPrems)` (Compression.hs:45-46).
+/// `List.partition (List.any (sameName fact) . _rPrems)` (Compression.hs).
 fn get_prem_rules(fact: &LNFact, rules: Vec<ERule>) -> (Vec<ERule>, Vec<ERule>) {
     rules
         .into_iter()
         .partition(|r| r.premises.iter().any(|f| same_name(fact, f)))
 }
 
-/// `getConcsRules` (Compression.hs:49-50): partition on conclusions.
+/// `getConcsRules` (Compression.hs): partition on conclusions.
 fn get_concs_rules(fact: &LNFact, rules: Vec<ERule>) -> (Vec<ERule>, Vec<ERule>) {
     rules
         .into_iter()
         .partition(|r| r.conclusions.iter().any(|f| same_name(fact, f)))
 }
 
-/// `getProducedFacts` (Compression.hs:53-58): all state-process facts in the
+/// `getProducedFacts` (Compression.hs): all state-process facts in the
 /// conclusions of the given rules.
 fn get_produced_facts(rules: &[ERule]) -> BTreeSet<LNFact> {
     let mut out = BTreeSet::new();
@@ -78,10 +77,10 @@ fn get_produced_facts(rules: &[ERule]) -> BTreeSet<LNFact> {
     out
 }
 
-/// `mergeInfo` (Compression.hs:60-68): keep the FIRST rule's name (`mergeStand
+/// `mergeInfo` (Compression.hs): keep the FIRST rule's name (`mergeStand
 /// n _ = n`), merge attrs, concatenate restrictions.
 ///
-/// `mergeAttrs a a' = a <> a'` (Compression.hs:60-68, see line 67):
+/// `mergeAttrs a a' = a <> a'` (Compression.hs):
 /// `RuleAttributes::merge` is right-precedence (`other.x.or(self.x)`), matching
 /// HS `a <> a'`; for two rules of the same source process the result is the
 /// same either way.
@@ -97,7 +96,7 @@ fn merge_info(i1: &ProtoRuleEInfo, i2: &ProtoRuleEInfo) -> ProtoRuleEInfo {
     }
 }
 
-/// `canMerge compEvents r1 r2` (Compression.hs:71-84).
+/// `canMerge compEvents r1 r2` (Compression.hs).
 fn can_merge(comp_events: bool, r1: &ERule, r2: &ERule) -> bool {
     let ract = &r1.actions;
     let rconc = &r1.conclusions;
@@ -131,7 +130,7 @@ fn can_merge(comp_events: bool, r1: &ERule, r2: &ERule) -> bool {
     true
 }
 
-/// `merge compEvents rule1 rule2 ruleset` (Compression.hs:87-96).
+/// `merge compEvents rule1 rule2 ruleset` (Compression.hs).
 fn merge(comp_events: bool, rule1: &ERule, rule2: &ERule, ruleset: &mut Vec<ERule>) {
     if can_merge(comp_events, rule1, rule2) {
         // `newprem = rprem ++ filter (`notElem` rconc) rprem2`
@@ -166,7 +165,7 @@ fn merge(comp_events: bool, rule1: &ERule, rule2: &ERule, ruleset: &mut Vec<ERul
     }
 }
 
-/// `mergeRules compEvents leftrules rightrules` (Compression.hs:99-105).
+/// `mergeRules compEvents leftrules rightrules` (Compression.hs).
 fn merge_rules(comp_events: bool, leftrules: &[ERule], rightrules: &[ERule]) -> Vec<ERule> {
     if leftrules.len() == 1 && rightrules.len() == 1 {
         // `foldl (\set l -> foldl (flip (merge l)) set rightrules) S.empty leftrules`,
@@ -185,17 +184,17 @@ fn merge_rules(comp_events: bool, leftrules: &[ERule], rightrules: &[ERule]) -> 
     }
 }
 
-/// `compressOne compEvents fact msr` (Compression.hs:111-118).
+/// `compressOne compEvents fact msr` (Compression.hs).
 fn compress_one(
     comp_events: bool,
     fact: &LNFact,
     msr: Vec<ERule>,
 ) -> (Vec<ERule>, BTreeSet<LNFact>) {
-    // HS `compressOne` (Compression.hs:111-118): the `where`-bound `new_rules` /
+    // HS `compressOne` (Compression.hs): the `where`-bound `new_rules` /
     // `new_facts` are SHARED across both guards — the persistent case returns the
     // UNCOMPRESSED `msr` but STILL computes `new_facts` from the merge of the
     // fact's prem/concs rules (NOT `getProducedFacts msr`).
-    // `isPersistentFact` (Theory/Model/Fact.hs:379-380).
+    // `isPersistentFact` (Theory/Model/Fact.hs).
     let persistent = fact.is_persistent();
     if persistent {
         // Compute `new_facts` from the merge, but return the ORIGINAL `msr`
@@ -217,7 +216,7 @@ fn compress_one(
     (out, new_facts)
 }
 
-/// `compress compEvents (fact:remainder) compressed_facts msr` (Compression.hs:121-129).
+/// `compress compEvents (fact:remainder) compressed_facts msr` (Compression.hs).
 fn compress(
     comp_events: bool,
     mut worklist: Vec<LNFact>,
@@ -244,7 +243,7 @@ fn compress(
     msr
 }
 
-/// `pathCompression compEvents msr` (Compression.hs:133-140).
+/// `pathCompression compEvents msr` (Compression.hs).
 ///
 /// Starts from the initial `State_( )` fact and removes dangling rules (those
 /// with no actions AND no conclusions).
@@ -286,7 +285,7 @@ fn cmp_rule(a: &ERule, b: &ERule) -> std::cmp::Ordering {
 fn cmp_info(a: &ProtoRuleEInfo, b: &ProtoRuleEInfo) -> std::cmp::Ordering {
     // `ProtoRuleEInfo` Ord = (name, attributes, restrictions).  The attributes
     // compare through `Ord RuleAttributes`, which walks HS's own field chain
-    // (Theory/Model/Rule.hs:367-379) and reads the whole process.  The SAPIC
+    // (Theory/Model/Rule.hs) and reads the whole process.  The SAPIC
     // rules reaching compression carry NO `info.restrictions` (the per-rule
     // `_restrict` formulas live in `AnnotatedRule.restr`, lifted separately), so
     // comparing by length is a faithful proxy — `SyntacticLNFormula` has no
@@ -323,8 +322,8 @@ mod tests {
 
     /// `set_insert` dedups like HS's `S.Set (Rule ProtoRuleEInfo)`, so two
     /// rules whose processes differ only BELOW the top node are two elements:
-    /// HS's `Ord RuleAttributes` (Theory/Model/Rule.hs:367-379) compares the
-    /// whole process (Theory/Sapic/Process.hs:121).  A key reading the top node
+    /// HS's `Ord RuleAttributes` (Theory/Model/Rule.hs) compares the
+    /// whole process (Theory/Sapic/Process.hs).  A key reading the top node
     /// alone ties them, and the second rule is then dropped.
     #[test]
     fn set_insert_keeps_rules_whose_processes_differ_below_the_top_node() {

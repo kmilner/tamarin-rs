@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Sapic.ProgressTranslation`
 //! (`lib/sapic/src/Sapic/ProgressTranslation.hs`).
@@ -44,7 +43,7 @@ fn rhs_p(pos: &[i64]) -> Pos {
     v
 }
 
-/// `addProgressFrom domPF child (l,a,r,res)` (ProgressTranslation.hs:39-49):
+/// `addProgressFrom domPF child (l,a,r,res)` (ProgressTranslation.hs):
 /// add a `Fr (varProgress child)` premise, a `ProgressFrom child` action, and
 /// thread the progress var into every rhs state fact — IF any rhs fact is a
 /// non-semi state AND `child ∈ domPF`.
@@ -64,7 +63,7 @@ fn add_progress_from(dom_pf: &PosSet, child: &Pos, body: RuleBody) -> RuleBody {
     }
 }
 
-/// `addProgressTo invPF child (l,a,r,res)` (ProgressTranslation.hs:93-102): add a
+/// `addProgressTo invPF child (l,a,r,res)` (ProgressTranslation.hs): add a
 /// `ProgressTo child posFrom` action IF any rhs fact is a "target state" whose
 /// next-position is `child` (an `LState`/`PState`), and `child` has an inverse.
 fn add_progress_to<F: Fn(&[i64]) -> Option<Pos>>(
@@ -91,7 +90,7 @@ fn add_progress_to<F: Fn(&[i64]) -> Option<Pos>>(
     (l, a, r, res)
 }
 
-/// `addProgressItems domPF invPF pos` (ProgressTranslation.hs:73-80):
+/// `addProgressItems domPF invPF pos` (ProgressTranslation.hs):
 ///   addProgressFrom domPF (lhsP pos) . addProgressTo invPF (lhsP pos) . addProgressTo invPF (rhsP pos)
 fn add_progress_items<F: Fn(&[i64]) -> Option<Pos>>(
     dom_pf: &PosSet,
@@ -105,7 +104,7 @@ fn add_progress_items<F: Fn(&[i64]) -> Option<Pos>>(
     add_progress_from(dom_pf, &lhs, b)
 }
 
-/// `extendVars domPF pos tx` (ProgressTranslation.hs:66-69): add `varProgress
+/// `extendVars domPF pos tx` (ProgressTranslation.hs): add `varProgress
 /// (lhsP pos)` to `tx` if `lhsP pos ∈ domPF`.
 fn extend_vars(dom_pf: &PosSet, pos: &[i64], tx: &mut BTreeSet<LVar>) {
     let lhs = lhs_p(pos);
@@ -114,7 +113,7 @@ fn extend_vars(dom_pf: &PosSet, pos: &[i64], tx: &mut BTreeSet<LVar>) {
     }
 }
 
-/// `progressInit anP (initrules, initTx)` (ProgressTranslation.hs:54-62).
+/// `progressInit anP (initrules, initTx)` (ProgressTranslation.hs).
 pub(crate) fn progress_init(
     an_proc: &AProc,
     init_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>>,
@@ -143,7 +142,7 @@ pub(crate) fn progress_init(
     Ok((new_rules, new_tx))
 }
 
-/// `progressTransAct` (ProgressTranslation.hs:111-119): post-process the base
+/// `progressTransAct` (ProgressTranslation.hs): post-process the base
 /// action translation result.  `dom_pf` / the inverse are computed once and
 /// threaded in.
 pub(crate) fn progress_trans_act(
@@ -161,7 +160,7 @@ pub(crate) fn progress_trans_act(
     (new_rules, tx1)
 }
 
-/// `progressTransComb` (ProgressTranslation.hs:122-132).  Note: HS uses the SAME
+/// `progressTransComb` (ProgressTranslation.hs).  Note: HS uses the SAME
 /// `extendVars domPF pos` on both `tx1` and (fmap'd) `tx2`.
 pub(crate) fn progress_trans_comb(
     dom_pf: &PosSet,
@@ -183,14 +182,14 @@ pub(crate) fn progress_trans_comb(
     (new_rules, tx1, new_tx2)
 }
 
-/// `resProgressInit` (ProgressTranslation.hs:150-153): `∃ #t. Init( ) @ #t`.
+/// `resProgressInit` (ProgressTranslation.hs): `∃ #t. Init( ) @ #t`.
 fn res_progress_init() -> Restriction {
     use crate::restriction_builder as rb;
     let t = rb::node("t");
     rb::restriction("progressInit", rb::exists(&[t], rb::action("Init", &[], t)))
 }
 
-/// `progressRestr anP restrictions` (ProgressTranslation.hs:156-177): append the
+/// `progressRestr anP restrictions` (ProgressTranslation.hs): append the
 /// per-from-position `Progress_<pos>_to_<...>` restrictions, then `progressInit`.
 pub(crate) fn progress_restr(
     an_proc: &AProc,
@@ -207,7 +206,7 @@ pub(crate) fn progress_restr(
     Ok(restrictions)
 }
 
-/// `restriction pos` (ProgressTranslation.hs:163-177): for the given from-`pos`,
+/// `restriction pos` (ProgressTranslation.hs): for the given from-`pos`,
 /// one restriction per element of `pf anP pos` (the CNF set-of-sets of "to"s).
 fn restriction_for(an_proc: &AProc, pos: &[i64]) -> Result<Vec<Restriction>, String> {
     let toss = pf(an_proc, pos)?;
@@ -267,7 +266,7 @@ fn make_restriction(pos: &[i64], tos: &PosSet) -> Restriction {
     rb::restriction(name, rb::all(&[pvar, t1var], body))
 }
 
-/// `bigOr` (ProgressTranslation.hs:174-176): right-nested disjunction.  The
+/// `bigOr` (ProgressTranslation.hs): right-nested disjunction.  The
 /// empty case never occurs (`tos` is always non-empty here).
 fn big_or(tos: &[&Pos], progress_to: &impl Fn(&Pos) -> LNFormula) -> LNFormula {
     match tos {

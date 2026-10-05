@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Graph representation, simplification, abbreviations.
 //!
@@ -44,14 +43,14 @@ use simplify::{compress_system, simplify_system};
 
 use crate::constraint::system::System;
 
-/// Mirror of HS `Graph` (Graph.hs:76-81) restricted to the fields the two
+/// Mirror of HS `Graph` (Graph.hs) restricted to the fields the two
 /// renderers read.
 pub struct Graph<'a> {
     /// HS `_gSystem`: the ORIGINAL, un-compressed/un-simplified system handed
     /// to [`system_to_graph`].  `resolveNodePremFact`/`resolveNodeConcFact`
-    /// (Graph.hs:87-96) look facts up in it, so BOTH renderers type and colour
-    /// an edge from this system's rules — `dotEdge`'s `check` (System/Dot.hs:391-392)
-    /// and `getRelationType`/`colorEdge` (JSON.hs:434-435/452-453) — even for an
+    /// (Graph.hs) look facts up in it, so BOTH renderers type and colour
+    /// an edge from this system's rules — `dotEdge`'s `check` (System/Dot.hs)
+    /// and `getRelationType`/`colorEdge` (JSON.hs) — even for an
     /// endpoint the compression hid.
     pub system: &'a System,
     /// HS `_gRepr`.
@@ -60,11 +59,11 @@ pub struct Graph<'a> {
     pub abbreviations: Abbreviations,
 }
 
-/// Port of `systemToGraph` (Graph.hs:153-165).
+/// Port of `systemToGraph` (Graph.hs).
 ///
 /// Abbreviations are computed unconditionally: `goAbbreviate` gates only their
-/// APPLICATION — in the DOT renderer at `renderLNFact` (System/Dot.hs:228-236) and at
-/// `when abbreviate generateLegend` (System/Dot.hs:538), and not at all in the JSON
+/// APPLICATION — in the DOT renderer at `renderLNFact` (System/Dot.hs) and at
+/// `when abbreviate generateLegend` (System/Dot.hs), and not at all in the JSON
 /// export, which lists them verbatim while leaving node terms unabbreviated
 /// (the frontend performs the substitution).
 pub fn system_to_graph<'a>(sys: &'a System, options: &GraphOptions) -> Graph<'a> {

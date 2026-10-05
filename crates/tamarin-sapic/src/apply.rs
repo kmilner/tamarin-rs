@@ -1,11 +1,10 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Wiring: run the SAPIC translation and inject the generated rules,
 //! restrictions and heuristic into the theory.
 //!
-//! Mirrors the tail of HS `translate` (sapic/src/Sapic.hs:69-85):
+//! Mirrors the tail of HS `translate` (sapic/src/Sapic.hs):
 //!   - `foldM liftedAddProtoRule th  (map (`OpenProtoRule` []) eProtoRule)`
 //!   - `foldM liftedAddRestriction th1 rest`
 //!   - `addHeuristic [SapicRanking]` unless the user set one
@@ -15,9 +14,9 @@
 //!
 //! HS adds these items to the OPEN theory and applies the theory's macros to
 //! every rule and restriction at close time (`closeTheoryItem`,
-//! CloseRule.hs:82-84).  The port applies macros while elaborating, so the
+//! CloseRule.hs).  The port applies macros while elaborating, so the
 //! injection applies them here too, recording the pre-macro rule as the
-//! `cprRuleE` half `closeProtoRule` keeps (lib/theory/src/Rule.hs:82-86).
+//! `cprRuleE` half `closeProtoRule` keeps (lib/theory/src/Rule.hs).
 
 use tamarin_theory::wellformedness::WfError;
 
@@ -32,14 +31,14 @@ use tamarin_theory::theory::{LNMacro, OpenProtoRule, Theory, TheoryItem};
 use crate::translate::{needs_in_ev_res, translate, TranslateOptions};
 use crate::typing::{collect_user_fun_typings, type_and_rename_process};
 
-/// HS `Sapic.checkWellformedness` (Warnings.hs:37-38) over the UNTRANSLATED
+/// HS `Sapic.checkWellformedness` (Warnings.hs) over the UNTRANSLATED
 /// theory: warn-check the single top-level process.  The process arrives with
 /// its `P(args)` calls already inlined (HS inlines at parse time) but BEFORE
 /// `typeTheory` / `renameUnique`, so two binders sharing a name (e.g.
 /// `new x; new x`) are still alpha-identical and detected as captured.
 ///
 /// `translateTheory` computes this report on the open theory before any
-/// translation step (TheoryLoader.hs:487-499, see line 497), so both the
+/// translation step (TheoryLoader.hs), so both the
 /// translating path ([`apply_sapic`]) and the `-m spthy` / `-m spthytyped`
 /// paths that skip translation report exactly these warnings.
 ///
@@ -59,10 +58,10 @@ pub fn sapic_pre_report(thy: &Theory) -> Vec<WfError> {
 /// (in which case HS's `addHeuristic` returns `Nothing` and we do NOT add `p`).
 ///
 /// Returns the SAPIC-process wellformedness report (HS `Sapic.checkWellformedness`,
-/// Warnings.hs:37-38), which the caller PREPENDS to the overall report — HS
+/// Warnings.hs), which the caller PREPENDS to the overall report — HS
 /// computes it in `translateTheory` on the OpenTheory *before* translation, so
-/// it sorts before every other check (TheoryLoader.hs:487-499, see line 497;
-/// `preReport ++ postReport` at :730-732).  Empty for a well-formed (or
+/// it sorts before every other check (TheoryLoader.hs;
+/// `preReport ++ postReport`).  Empty for a well-formed (or
 /// non-SAPIC) theory.
 pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfError>, ElabError> {
     if !thy.is_sapic() {
@@ -90,7 +89,7 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         })?;
 
     // translate → rules + restrictions.  `needs_in_ev_res = any
-    // lemmaNeedsInEvRes (theoryLemmas th)` (sapic/src/Sapic.hs:45-101, see line 101): gates the
+    // lemmaNeedsInEvRes (theoryLemmas th)` (sapic/src/Sapic.hs): gates the
     // `EventEmpty`/`ChannelIn` actions + the `in_event` restriction.  HS
     // `theoryLemmas` = the (non-diff, non-accountability) `Lemma` items.
     let needs_in_ev = needs_in_ev_res(thy);
@@ -112,15 +111,15 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
 
     // The `predicate:` declarations the embedded `_restrict` formulas expand
     // against: HS `liftedExpandFormula` reads `theoryPredicates thy`
-    // (Theory/Text/Parser.hs:112-114), the list `elaborate` built from the
+    // (Theory/Text/Parser.hs), the list `elaborate` built from the
     // theory's `predicates:` items.
     let predicates: Vec<Predicate> = thy.predicates().cloned().collect();
     // The `macros:` declarations `closeTheoryItem` applies to every rule and
-    // restriction of the translated theory (CloseRule.hs:82-84).
+    // restriction of the translated theory (CloseRule.hs).
     let macros: Vec<LNMacro> = thy.macros().cloned().collect();
 
     // Inject each generated rule, running the `_restrict` expansion HS
-    // `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193) performs per rule:
+    // `liftedAddProtoRule` (Theory/Text/Parser.hs) performs per rule:
     // for each embedded restriction formula, mint a fresh action
     // `Restr_<rule>_<i>` + a global restriction `∀ … #NOW. Restr…@#NOW ⇒ φ`,
     // insert the restrictions BEFORE the rule, and append the actions to the
@@ -129,21 +128,21 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         let rname = match rule.info.name {
             ProtoRuleName::Stand(n) => n,
             // HS `liftedAddProtoRule` throws `TryingToAddFreshRule` for the
-            // reserved name (Theory/Text/Parser.hs:182); the translation gives
+            // reserved name (Theory/Text/Parser.hs); the translation gives
             // every generated rule a process position, so it never reaches
             // this arm.
             ProtoRuleName::Fresh => "Fresh",
         };
 
-        // HS `addActions` rebuilds `rActs` alone (Theory/Text/Parser.hs:188), so
-        // the rule keeps the `_preRestriction` formulas (Theory/Model/Rule.hs:424)
-        // `toRule` gave it (sapic/src/Sapic/Facts.hs:376-379) and the `rNewVars`
+        // HS `addActions` rebuilds `rActs` alone (Theory/Text/Parser.hs), so
+        // the rule keeps the `_preRestriction` formulas (Theory/Model/Rule.hs)
+        // `toRule` gave it (sapic/src/Sapic/Facts.hs) and the `rNewVars`
         // the translation computed.
         let mut lifted = rule.clone();
         lifted.info.restrictions = restr_formulas.clone();
         // `if <formula>` / `let … else` arm: expand the predicate atoms of
         // every embedded formula (HS `liftedExpandFormula`,
-        // Theory/Text/Parser.hs:178).
+        // Theory/Text/Parser.hs).
         let mut closed: Vec<LNFormula> = Vec::with_capacity(restr_formulas.len());
         for phi in restr_formulas {
             closed.push(expand_formula(&predicates, phi).map_err(|e| ElabError {
@@ -157,8 +156,8 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         }
 
         // HS `foldM liftedAddProtoRule th (map (`OpenProtoRule` []) eProtoRule)`
-        // (sapic/src/Sapic.hs:75): each generated rule goes through the same
-        // `addOpenProtoRule` name guard as a parsed rule (OpenTheory.hs:690-700)
+        // (sapic/src/Sapic.hs): each generated rule goes through the same
+        // `addOpenProtoRule` name guard as a parsed rule (OpenTheory.hs)
         // — `maybe True (ru ==)` over the rule bound to that name, so a user
         // rule named like a generated one (e.g. `rule Init` alongside a
         // `process:`) aborts the translation with `duplicate rule: <name>`.
@@ -181,7 +180,7 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
             });
         }
 
-        // The restrictions precede the rule (Theory/Text/Parser.hs:179-180).
+        // The restrictions precede the rule (Theory/Text/Parser.hs).
         for restr in generated {
             thy.items
                 .push(TheoryItem::Restriction(apply_macro_in_restriction(
@@ -206,7 +205,7 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     }
 
     // `addHeuristic [SapicRanking]` unless a heuristic is already set
-    // (sapic/src/Sapic.hs:45-101, see line 82).  `SapicRanking` renders as `p`
+    // (sapic/src/Sapic.hs).  `SapicRanking` renders as `p`
     // and drives the prover's goal ranking.
     if !user_set_heuristic && thy.heuristic.is_empty() {
         thy.heuristic
@@ -221,7 +220,7 @@ mod tests {
     use super::*;
 
     /// The `else` arm of a pattern `let` carries the restriction
-    /// `∀ y w. (<y, w> = z) ⇒ ⊥` (Basetranslation.hs:261-269), so the
+    /// `∀ y w. (<y, w> = z) ⇒ ⊥` (Basetranslation.hs), so the
     /// translated theory gets one generated `Restr_letywz_2_1_1` restriction
     /// plus the action that reaches it on rule `letywz_2_1`.
     const LET_ELSE: &str = "theory T begin\n\
@@ -231,10 +230,10 @@ mod tests {
 
     /// The generated restriction and the appended action land in the theory,
     /// the restriction immediately before its rule (HS adds the expanded
-    /// restrictions and then the rule, Theory/Text/Parser.hs:179-180), and the
+    /// restrictions and then the rule, Theory/Text/Parser.hs), and the
     /// rule keeps the premises, conclusions and new variables the translation
     /// built — the lift only appends actions (`addActions`,
-    /// Theory/Text/Parser.hs:188).
+    /// Theory/Text/Parser.hs).
     #[test]
     fn generated_rule_carries_its_restrict_formulas() {
         let parsed = tamarin_parser::parse_theory(LET_ELSE, &[]).unwrap();
@@ -311,10 +310,10 @@ mod tests {
         end";
 
     /// `closeTheoryItem` applies the theory's macros to every rule of the
-    /// TRANSLATED theory, the generated ones included (CloseRule.hs:82-83),
+    /// TRANSLATED theory, the generated ones included (CloseRule.hs),
     /// and `closeProtoRule` narrows `applyMacroInRule macros ruE` while
     /// keeping the unexpanded `ruE` as the `cprRuleE` half
-    /// (lib/theory/src/Rule.hs:82-86).
+    /// (lib/theory/src/Rule.hs).
     #[test]
     fn generated_rules_carry_the_macro_applied_rule_beside_the_call() {
         let parsed = tamarin_parser::parse_theory(MACRO_PROCESS, &[]).unwrap();

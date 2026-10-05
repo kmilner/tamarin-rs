@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Model.Rule` from `lib/theory/src/Theory/Model/Rule.hs`.
 //!
@@ -68,7 +67,7 @@ impl<I> Rule<I> {
     }
 
     /// Add an action fact, prepended, unless already present. Port of HS
-    /// `addAction` (Theory/Model/Rule.hs:1108-1112): `if act elem acts then
+    /// `addAction` (Theory/Model/Rule.hs): `if act elem acts then
     /// unchanged else
     /// act:acts`.
     pub fn add_action(&mut self, act: LNFact) {
@@ -97,13 +96,13 @@ impl<I> Rule<I> {
     }
 }
 
-/// HS `applyMacroInRule` (Theory/Model/Rule.hs:1115-1121): the theory's macros
+/// HS `applyMacroInRule` (Theory/Model/Rule.hs): the theory's macros
 /// applied to every premise, conclusion and action, `new_vars` recomputed from
-/// the rewritten facts (`newVariables mRuPrems (mRuConcs ++ mRuActs)`, :1121)
+/// the rewritten facts (`newVariables mRuPrems (mRuConcs ++ mRuActs)`)
 /// and `info` left as it stands — so a rule's `_restrict` formulas keep their
 /// macro calls.  An empty macro list returns the rule untouched, which is the
 /// case HS's `closeProtoRule` splits out to keep `new_vars` as the rule holds
-/// them (lib/theory/src/Rule.hs:82-85).
+/// them (lib/theory/src/Rule.hs).
 pub fn apply_macro_in_rule<I>(macros: &[LNMacro], r: Rule<I>) -> Rule<I> {
     if macros.is_empty() {
         return r;
@@ -123,7 +122,7 @@ pub fn apply_macro_in_rule<I>(macros: &[LNMacro], r: Rule<I>) -> Rule<I> {
         .iter()
         .map(|f| apply_macro_in_fact(macros, f))
         .collect();
-    // HS `newVariables mRuPrems (mRuConcs ++ mRuActs)` (Theory/Model/Rule.hs:1121).
+    // HS `newVariables mRuPrems (mRuConcs ++ mRuActs)` (Theory/Model/Rule.hs).
     let new_vars =
         crate::fact::new_variables(&premises, &[&conclusions[..], &actions[..]].concat());
     Rule {
@@ -141,9 +140,9 @@ pub fn apply_macro_in_rule<I>(macros: &[LNMacro], r: Rule<I>) -> Rule<I> {
 // `HasFrees`, so this impl cannot recurse into it. This is sound because every
 // caller operates on `RuleACInst`, whose info (ProtoRuleACInstInfo /
 // IntrRuleACInfo) carries no free LVars. Note that Haskell's `HasFrees (Rule i)`
-// (Theory/Model/Rule.hs:291-306) DOES fold over `info` first, and
+// (Theory/Model/Rule.hs) DOES fold over `info` first, and
 // ProtoRuleEInfo/ProtoRuleACInfo
-// info (Theory/Model/Rule.hs:491-498, 503-515) carry frees (restrictions /
+// info (Theory/Model/Rule.hs) carry frees (restrictions /
 // variant keys); callers
 // that need those (ProtoRuleE/AC) must walk variants/restrictions separately, as
 // rule_variants.rs::rename_precise_rule_with_variants does.
@@ -192,10 +191,10 @@ impl<I: Clone> HasFrees for Rule<I> {
 }
 
 /// HS `Apply LNSubst i => Apply LNSubst (Rule i)`
-/// (Theory/Model/Rule.hs:308-310).  At `RuleACInst` the info is a
-/// `ProtoRuleACInstInfo`, whose instance (Theory/Model/Rule.hs:517-519)
+/// (Theory/Model/Rule.hs).  At `RuleACInst` the info is a
+/// `ProtoRuleACInstInfo`, whose instance (Theory/Model/Rule.hs)
 /// rewrites only the rule name, and a rule name is not a variable
-/// (Theory/Model/Rule.hs:467-468) — so the info comes through untouched.
+/// (Theory/Model/Rule.hs) — so the info comes through untouched.
 impl<I: Clone> Apply<SystemSubst<'_>> for Rule<I> {
     fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
         let premises = self.premises.apply_changed(subst);
@@ -215,12 +214,12 @@ impl<I: Clone> Apply<SystemSubst<'_>> for Rule<I> {
     }
 }
 
-/// HS `frees` at `Rule ProtoRuleEInfo` (Theory/Model/Rule.hs:291-298): the
+/// HS `frees` at `Rule ProtoRuleEInfo` (Theory/Model/Rule.hs): the
 /// info's free variables, then the premises', conclusions', actions' and new
 /// variables', `sortednub`bed (`frees = sortednub . freesList`,
-/// Term/LTerm.hs:613-614).  `HasFrees ProtoRuleEInfo`
-/// (Theory/Model/Rule.hs:491-494) folds the rule name and the attributes,
-/// whose own instances yield nothing (Theory/Model/Rule.hs:462-465, :470-473),
+/// Term/LTerm.hs).  `HasFrees ProtoRuleEInfo`
+/// (Theory/Model/Rule.hs) folds the rule name and the attributes,
+/// whose own instances yield nothing (Theory/Model/Rule.hs),
 /// so the info contributes exactly the `_restrict` formulas' free variables —
 /// the ones the [`HasFrees`] impl above cannot reach.
 pub fn proto_rule_e_frees(ru: &ProtoRuleE) -> Vec<LVar> {
@@ -235,16 +234,16 @@ pub fn proto_rule_e_frees(ru: &ProtoRuleE) -> Vec<LVar> {
 }
 
 /// HS `instance Apply LNSubst i => Apply LNSubst (Rule i)`
-/// (Theory/Model/Rule.hs:308-310):
+/// (Theory/Model/Rule.hs):
 /// a free substitution applied to every fact and new-var term of a rule.
 ///
 /// `info` is carried over untouched, which is what HS's `apply subst i` comes
 /// to for the info types this port instantiates: the `Apply` instances for
 /// `ProtoRuleEInfo` and `IntrRuleACInfo` are literally `apply _ = id`
-/// (Theory/Model/Rule.hs:500-501, 619-620), and `ProtoRuleACInstInfo`'s
-/// (Theory/Model/Rule.hs:517-519)
+/// (Theory/Model/Rule.hs), and `ProtoRuleACInstInfo`'s
+/// (Theory/Model/Rule.hs)
 /// maps only its `ProtoRuleName`, whose own instance is `apply _ = id`
-/// (Theory/Model/Rule.hs:467-468).  So a refined `ProtoRuleE` keeps its
+/// (Theory/Model/Rule.hs).  So a refined `ProtoRuleE` keeps its
 /// original
 /// restriction frees unsubstituted.
 pub(crate) fn apply_subst_rule<I: Clone>(
@@ -279,10 +278,10 @@ pub struct PremIdx(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConcIdx(pub usize);
 
-/// HS `Apply s PremIdx` (Theory/Model/Rule.hs:475-476) and `Apply s ConcIdx`
-/// (Theory/Model/Rule.hs:483-484): an index is not a variable, so a
+/// HS `Apply s PremIdx` (Theory/Model/Rule.hs) and `Apply s ConcIdx`
+/// (Theory/Model/Rule.hs): an index is not a variable, so a
 /// substitution leaves it alone.  The `NodePrem` / `NodeConc` pairs reach
-/// these through the pair instance (SubstVFree.hs:316-317).
+/// these through the pair instance (SubstVFree.hs).
 impl Apply<SystemSubst<'_>> for PremIdx {
     fn apply_changed(&self, _subst: &SystemSubst<'_>) -> Option<Self> {
         None
@@ -330,7 +329,7 @@ pub struct RuleAttributes {
     /// Color for graphical display.
     pub color: Option<Rgb>,
     /// Source process — for SAPIC-derived rules (HS `ruleProcess`,
-    /// Theory/Model/Rule.hs:367-378).  Shared behind an `Arc` because the
+    /// Theory/Model/Rule.hs).  Shared behind an `Arc` because the
     /// solver clones a rule's attributes once per rule instance it builds and
     /// a SAPIC theory's top-level rules carry the whole process tree, so an
     /// instance points at the process rather than copying it.  See
@@ -351,7 +350,7 @@ impl PartialOrd for RuleAttributes {
 }
 
 /// HS derives `Ord RuleAttributes` over `ruleColor`, `ruleProcess`,
-/// `ignoreDerivChecks`, `isSAPiCRule`, `role` (Theory/Model/Rule.hs:367-379),
+/// `ignoreDerivChecks`, `isSAPiCRule`, `role` (Theory/Model/Rule.hs),
 /// which is this struct's declaration order.  HS's colour is an
 /// `RGB Rational` and totally ordered; [`Rgb`] uses `f64::total_cmp` so the
 /// relation remains total even for values public Rust callers construct
@@ -405,9 +404,9 @@ pub enum ProtoRuleName {
 pub struct ProtoRuleEInfo {
     pub name: ProtoRuleName,
     pub attributes: RuleAttributes,
-    /// HS `_preRestriction` (Theory/Model/Rule.hs:423): the rule's
+    /// HS `_preRestriction` (Theory/Model/Rule.hs): the rule's
     /// `_restrict` formulas as written.  `Apply ProtoRuleEInfo` is the
-    /// identity (Theory/Model/Rule.hs:500-501), so they are never
+    /// identity (Theory/Model/Rule.hs), so they are never
     /// substituted; only their free variables are read.
     pub restrictions: Vec<SyntacticLNFormula>,
 }
@@ -444,7 +443,7 @@ pub struct ProtoRuleACInfo {
 /// Information for instances of protocol rules modulo AC.
 ///
 /// HS derives `Ord ProtoRuleACInstInfo` over `_praciName`,
-/// `_praciAttributes`, `_praciLoopBreakers` (Theory/Model/Rule.hs:444-449),
+/// `_praciAttributes`, `_praciLoopBreakers` (Theory/Model/Rule.hs),
 /// which is this struct's declaration order.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtoRuleACInstInfo {
@@ -459,7 +458,7 @@ pub struct ProtoRuleACInstInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IntrRuleACInfo {
-    /// HS `ConstrRule BC.ByteString FunSym` (Theory/Model/Rule.hs:540); `fun`
+    /// HS `ConstrRule BC.ByteString FunSym` (Theory/Model/Rule.hs); `fun`
     /// is the
     /// symbol this construction rule builds.
     ConstrRule {
@@ -467,7 +466,7 @@ pub enum IntrRuleACInfo {
         fun: FunSym,
     },
     /// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]`
-    /// (Theory/Model/Rule.hs:541).
+    /// (Theory/Model/Rule.hs).
     /// `remaining_applications` of `0` means unbounded; `-1` means not yet
     /// determined. `funs` lists the function symbols this rule's application
     /// corresponds to (head first).
@@ -506,9 +505,9 @@ pub type RuleACInst = Rule<RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo>>;
 // Predicates / queries
 // =============================================================================
 
-/// HS `isDestrRule` (Model/Rule.hs:694-698): the `_crDestruct` class —
+/// HS `isDestrRule` (Model/Rule.hs): the `_crDestruct` class —
 /// a `DestrRule` or the `IEquality` rule.  HS partitions the rules with
-/// `isDestrRule` and `isConstrRule` (CloseRule.hs:435-436), so the
+/// `isDestrRule` and `isConstrRule` (CloseRule.hs), so the
 /// `IEquality` rule is classified as a destruction rule, not a protocol
 /// rule.
 pub fn is_destr_rule(info: &IntrRuleACInfo) -> bool {
@@ -518,7 +517,7 @@ pub fn is_destr_rule(info: &IntrRuleACInfo) -> bool {
     )
 }
 
-/// HS `isConstrRule` (Model/Rule.hs:707-714): the `_crConstruct` class —
+/// HS `isConstrRule` (Model/Rule.hs): the `_crConstruct` class —
 /// a `ConstrRule`, `FreshConstr`, `PubConstr`, `NatConstr` or `Coerce`.
 pub fn is_constr_rule(info: &IntrRuleACInfo) -> bool {
     matches!(
@@ -809,7 +808,7 @@ const RESERVED_RULE_NAMES: [&str; 7] = [
 // Rule comparison
 // =============================================================================
 
-/// HS `equalUpToTerms` (Theory/Model/Rule.hs:958-968): the two rules share a
+/// HS `equalUpToTerms` (Theory/Model/Rule.hs): the two rules share a
 /// name, have the same number of premises, conclusions and actions, and the
 /// facts at each position share a tag.  Terms, fact annotations and the rule
 /// infos beyond the name are not compared.
@@ -823,7 +822,7 @@ pub fn equal_up_to_terms(ru_ac: &ProtoRuleAC, ru_e: &ProtoRuleE) -> bool {
         && same_tags(&ru_ac.actions, &ru_e.actions)
 }
 
-/// HS `isTrivialProtoVariantAC` (Theory/Model/Rule.hs:789-793): the variant
+/// HS `isTrivialProtoVariantAC` (Theory/Model/Rule.hs): the variant
 /// disjunction is the identity substitution alone and the two rule bodies —
 /// premises, conclusions, actions and new variables — are equal, facts
 /// compared whole (tag, annotations and terms).
@@ -837,7 +836,7 @@ pub fn is_trivial_proto_variant_ac(ru_ac: &ProtoRuleAC, ru_e: &ProtoRuleE) -> bo
 }
 
 /// Set-subset check: every distinct element of `a` is `==` to some element of
-/// `b`.  Mirrors Haskell's `subsetOf` (Utils/Misc.hs:90-92):
+/// `b`.  Mirrors Haskell's `subsetOf` (Utils/Misc.hs):
 /// `subsetOf xs ys = (S.fromList xs) `S.isSubsetOf` (S.fromList ys)` —
 /// `S.fromList` deduplicates BOTH arguments, so multiplicity is ignored on both
 /// sides.  This is a SET subset, not a multiset/list subset.
@@ -1233,7 +1232,7 @@ pub fn unifiable_rule_ac_insts(
 // =============================================================================
 
 /// HS `ppList = fsep . punctuate comma` applied to `map ppFact`
-/// (Theory/Model/Rule.hs:1379-1380) at `ppFact = prettyLNFact`.
+/// (Theory/Model/Rule.hs) at `ppFact = prettyLNFact`.
 fn pp_list(facts: &[LNFact]) -> Doc {
     fsep(punctuate(
         Doc::char(','),
@@ -1242,15 +1241,15 @@ fn pp_list(facts: &[LNFact]) -> Doc {
 }
 
 /// HS `ppFactsList list = fsep [operator_ "[", ppFacts' list, operator_ "]"]`
-/// (Theory/Model/Rule.hs:1381).
+/// (Theory/Model/Rule.hs).
 fn pp_facts_list(facts: &[LNFact]) -> Doc {
     fsep(vec![operator_("["), pp_list(facts), operator_("]")])
 }
 
 /// HS `prettyRuleRestrGen ppFact ppRestr prems acts concls restr`
-/// (Theory/Model/Rule.hs:1366-1382) at `ppFact = prettyLNFact` and an empty
+/// (Theory/Model/Rule.hs) at `ppFact = prettyLNFact` and an empty
 /// restriction list, i.e. HS `prettyRule`
-/// (Theory/Model/Rule.hs:1389-1390):
+/// (Theory/Model/Rule.hs):
 /// `sep [nest 1 (ppFactsList prems), arrow, nest 1 (ppFactsList concls)]`.
 ///
 /// HS takes the bare `-->` arrow when `null acts && null restr`; `restr` is
@@ -1268,7 +1267,7 @@ pub fn pretty_rule_restr_gen(prems: &[LNFact], acts: &[LNFact], concls: &[LNFact
     ])
 }
 
-/// HS `prettyProtoRuleName` (Theory/Model/Rule.hs:1287-1290): the reserved
+/// HS `prettyProtoRuleName` (Theory/Model/Rule.hs): the reserved
 /// `Fresh` rule prints under its own name, a user rule under
 /// [`prefix_if_reserved`].
 pub(crate) fn pretty_proto_rule_name(name: &ProtoRuleName) -> Doc {
@@ -1278,7 +1277,7 @@ pub(crate) fn pretty_proto_rule_name(name: &ProtoRuleName) -> Doc {
     }
 }
 
-/// HS `getRuleNameDiff` on a protocol rule (Theory/Model/Rule.hs:812-823):
+/// HS `getRuleNameDiff` on a protocol rule (Theory/Model/Rule.hs):
 /// `"Proto"` before the rule name, with the reserved `Fresh` rule spelled
 /// `FreshRule`.
 fn proto_rule_name_diff(name: &ProtoRuleName) -> String {
@@ -1288,7 +1287,7 @@ fn proto_rule_name_diff(name: &ProtoRuleName) -> String {
     }
 }
 
-/// HS `prettyRuleAttribute` (Theory/Model/Rule.hs:1313-1328): the record's set
+/// HS `prettyRuleAttribute` (Theory/Model/Rule.hs): the record's set
 /// fields as `fsep $ punctuate comma $ catMaybes [color, process,
 /// no_derivcheck, issapicrule, role]`.  A `Nothing` field and a `False` flag
 /// contribute nothing.
@@ -1299,7 +1298,7 @@ pub fn pretty_rule_attribute(attr: &RuleAttributes) -> Doc {
     }
     if let Some(proc) = &attr.process {
         // HS `ppProcess p = text "process=" <> text ("\"" ++
-        // prettySapicTopLevel' f p ++ "\"")` (Theory/Model/Rule.hs:1324-1327),
+        // prettySapicTopLevel' f p ++ "\"")` (Theory/Model/Rule.hs),
         // whose local `f` renders an embedded MSR block through
         // `prettyRuleRestr`.
         parts.push(Doc::text("process=").beside(Doc::text(format!(
@@ -1323,7 +1322,7 @@ pub fn pretty_rule_attribute(attr: &RuleAttributes) -> Doc {
     fsep(punctuate(Doc::char(','), parts))
 }
 
-/// HS `prettyRuleAttributes` (Theory/Model/Rule.hs:1330-1334): the attribute
+/// HS `prettyRuleAttributes` (Theory/Model/Rule.hs): the attribute
 /// list in brackets, or nothing at all when the record equals `mempty`.
 pub fn pretty_rule_attributes(attr: &RuleAttributes) -> Doc {
     if *attr == RuleAttributes::empty() {
@@ -1337,7 +1336,7 @@ pub fn pretty_rule_attributes(attr: &RuleAttributes) -> Doc {
     }
 }
 
-/// HS `prettyNamedRule prefix ppInfo ru` (Theory/Model/Rule.hs:1393-1405):
+/// HS `prettyNamedRule prefix ppInfo ru` (Theory/Model/Rule.hs):
 ///
 /// ```text
 /// prefix <-> prettyRuleName ru <> prettyRuleAttributes ru <> colon $-$
@@ -1347,7 +1346,7 @@ pub fn pretty_rule_attributes(attr: &RuleAttributes) -> Doc {
 ///
 /// `acts` drops the diff annotation `Diff<getRuleNameDiff ru>()` — a nullary
 /// linear protocol fact with no annotations — that `addDiffLabel` attaches in
-/// diff mode (Theory/Model/Rule.hs:1404).  `info` is the already-rendered
+/// diff mode (Theory/Model/Rule.hs).  `info` is the already-rendered
 /// `ppInfo` result; the empty doc there leaves the rule at its body.
 fn pretty_named_rule<I>(
     prefix: Doc,
@@ -1378,7 +1377,7 @@ fn pretty_named_rule<I>(
         .above_g(info.nest(2))
 }
 
-/// HS `prettyLoopBreakers` (Theory/Model/Rule.hs:1418-1424): a `// loop
+/// HS `prettyLoopBreakers` (Theory/Model/Rule.hs): a `// loop
 /// breaker: [i]` line comment, plural for more than one, nothing when there
 /// are none.  Haskell `show` on `[Int]` puts no space after the commas.
 pub fn pretty_loop_breakers(breakers: &[PremIdx]) -> Doc {
@@ -1391,7 +1390,7 @@ pub fn pretty_loop_breakers(breakers: &[PremIdx]) -> Doc {
 }
 
 /// HS `prettyDisjLNSubstsVFresh`'s `ppConj`
-/// (Term/Substitution/SubstVFresh.hs:223-229): one substitution as a `vcat` of
+/// (Term/Substitution/SubstVFresh.hs): one substitution as a `vcat` of
 /// `var $$ nest 6 ("=" <-> term)` bindings.
 ///
 /// The `text ". " <>` of the enclosing `numbered'` is a BESIDE onto this
@@ -1419,13 +1418,13 @@ pub(crate) fn pretty_subst_vfresh_conj(subst: &tamarin_term::subst_vfresh::LNSub
     vcat(eqs)
 }
 
-/// HS `prettyDisjLNSubstsVFresh` (Term/Substitution/SubstVFresh.hs:223-229):
+/// HS `prettyDisjLNSubstsVFresh` (Term/Substitution/SubstVFresh.hs):
 /// the disjunction as `numbered'` over the per-substitution conjunctions.
 fn pretty_disj_ln_substs_vfresh(substs: &[tamarin_term::subst_vfresh::LNSubstVFresh]) -> Doc {
     numbered_prime(substs.iter().map(pretty_subst_vfresh_conj).collect())
 }
 
-/// HS `prettyProtoRuleACInfo` (Theory/Model/Rule.hs:1407-1413): the variant
+/// HS `prettyProtoRuleACInfo` (Theory/Model/Rule.hs): the variant
 /// disjunction under a `variants (modulo AC)` keyword, then the loop
 /// breakers.  A disjunction holding nothing but the identity substitution
 /// prints neither keyword nor block.
@@ -1439,7 +1438,7 @@ fn pretty_proto_rule_ac_info(info: &ProtoRuleACInfo) -> Doc {
     variants.above_g(pretty_loop_breakers(&info.loop_breakers))
 }
 
-/// HS `prettyProtoRuleE` (Theory/Model/Rule.hs:1434-1435): the rule under the
+/// HS `prettyProtoRuleE` (Theory/Model/Rule.hs): the rule under the
 /// `rule (modulo E)` prefix, with no trailing info block.
 pub fn pretty_proto_rule_e(ru: &ProtoRuleE) -> Doc {
     pretty_named_rule(
@@ -1451,7 +1450,7 @@ pub fn pretty_proto_rule_e(ru: &ProtoRuleE) -> Doc {
     )
 }
 
-/// HS `prettyProtoRuleACasE` (Theory/Model/Rule.hs:1442-1444): an AC rule
+/// HS `prettyProtoRuleACasE` (Theory/Model/Rule.hs): an AC rule
 /// printed under the `rule (modulo E)` prefix, its variant disjunction and
 /// loop breakers left out.
 pub fn pretty_proto_rule_ac_as_e(ru: &ProtoRuleAC) -> Doc {
@@ -1464,7 +1463,7 @@ pub fn pretty_proto_rule_ac_as_e(ru: &ProtoRuleAC) -> Doc {
     )
 }
 
-/// HS `prettyProtoRuleAC` (Theory/Model/Rule.hs:1458-1459): the rule under the
+/// HS `prettyProtoRuleAC` (Theory/Model/Rule.hs): the rule under the
 /// `rule (modulo AC)` prefix followed by its `ProtoRuleACInfo`.
 pub fn pretty_proto_rule_ac(ru: &ProtoRuleAC) -> Doc {
     pretty_named_rule(
@@ -1478,12 +1477,12 @@ pub fn pretty_proto_rule_ac(ru: &ProtoRuleAC) -> Doc {
 
 /// HS `multiComment_ ["has exactly the trivial AC variant"]`, the annotation
 /// both closed-rule printers put under a rule whose AC form says nothing the
-/// E form does not (ClosedTheory.hs:335-339, OpenTheory.hs:833-834).
+/// E form does not (ClosedTheory.hs, OpenTheory.hs).
 fn trivial_ac_variant_comment() -> Doc {
     multi_comment_(&["has exactly the trivial AC variant"])
 }
 
-/// HS `prettyClosedProtoRule` (ClosedTheory.hs:331-366#prettyClosedProtoRule):
+/// HS `prettyClosedProtoRule` (ClosedTheory.hs#prettyClosedProtoRule):
 /// four shapes, keyed on the AC rule's relation to the E rule.  A trivial AC
 /// variant prints the E rule with the annotation; an AC rule that carries
 /// added actions prints as if it were modulo E; an AC rule that only narrowed
@@ -1522,7 +1521,7 @@ pub fn pretty_closed_proto_rule(ru_ac: &ProtoRuleAC, ru_e: &ProtoRuleE) -> Doc {
     }
 }
 
-/// HS `ppList` (OpenTheory.hs:822-824): the AC rules of a merged rule item,
+/// HS `ppList` (OpenTheory.hs): the AC rules of a merged rule item,
 /// one `prettyProtoRuleAC` each, separated by a `,` line.
 fn pretty_proto_rule_ac_list(variants: &[ProtoRuleAC]) -> Doc {
     match variants {
@@ -1535,7 +1534,7 @@ fn pretty_proto_rule_ac_list(variants: &[ProtoRuleAC]) -> Doc {
 }
 
 /// HS `prettyOpenProtoRule`
-/// (OpenTheory.hs:814-824#prettyOpenProtoRule): the printer of an open
+/// (OpenTheory.hs#prettyOpenProtoRule): the printer of an open
 /// theory's rule item.  A rule with no manual `variants (modulo AC)` block is
 /// its E rule; one manual variant stands in for the E rule and prints under
 /// the `rule (modulo E)` prefix; several are listed under a `variants` block
@@ -1554,7 +1553,7 @@ pub fn pretty_open_proto_rule(r: &crate::theory::OpenProtoRule) -> Doc {
 }
 
 /// HS `prettyOpenProtoRuleAsClosedRule`
-/// (OpenTheory.hs:826-850#prettyOpenProtoRuleAsClosedRule): the printer
+/// (OpenTheory.hs#prettyOpenProtoRuleAsClosedRule): the printer
 /// `prettyClosedTheory` switches the whole theory to when some rule item
 /// carries an AC rule of its own.  With no AC rule the loop breakers are
 /// unavailable and only the annotation is printed; with one the AC rule

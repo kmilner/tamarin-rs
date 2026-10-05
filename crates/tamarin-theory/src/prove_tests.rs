@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Out-of-line tests for [`super`].
 //!
@@ -201,7 +200,7 @@ fn intruder_pair_construction_reaches_solved() {
     assert_eq!(root.status, NodeStatus::Solved);
 }
 
-/// HS `gatherReusableLemmas` (CloseRule.hs:179-188) collects the lemmas that
+/// HS `gatherReusableLemmas` (CloseRule.hs) collects the lemmas that
 /// become `sLemmas` hypotheses for the lemma under proof.  Each guard
 /// matters, and each one can be dropped on its own, so the test checks them
 /// one by one.  The declaration order acts as a `break`: a `[reuse]` lemma is

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Corpus net for the locally-nameless formula conversions: every formula
 //! of every `.spthy` under the examples tree is
@@ -75,7 +74,7 @@ fn process_formulas(proc_: &p::Process, label: &str, out: &mut Vec<Item>) {
 /// Every formula the theory carries, as parsed.  The theory parser resolves
 /// arities at parse time (its `lookup_arity` `k == 1` branch parses an
 /// arity-1 application's surplus arguments as one tuple, as HS `naryOpApp`
-/// does — Theory/Text/Parser/Term.hs:94-96), so no arity fold is needed here.
+/// does — Theory/Text/Parser/Term.hs), so no arity fold is needed here.
 fn theory_formulas(parsed: &p::Theory) -> Vec<Item> {
     let item = |label: String, formula: p::Formula| Item {
         label,
@@ -460,7 +459,7 @@ fn shapes(f: &p::Formula) -> Shapes<'_> {
 
 /// The internal annotation a parser annotation converts to
 /// (`elaborate::copy_fact_annotations`), whose `Ord` orders the `BTreeSet`
-/// the internal fact stores (`fact.rs:39-44`, `:97`).
+/// the internal fact stores ([`FactAnnotation`], [`crate::fact::Fact::annotations`]).
 fn internal_annotation(a: &p::FactAnnotation) -> FactAnnotation {
     match a {
         p::FactAnnotation::SolveFirst => FactAnnotation::SolveFirst,
@@ -558,7 +557,7 @@ fn corpus_no_typed_varspec_in_theory_formulas() {
                 continue;
             }
             // A SAPIC condition is parsed by `standardFormula sapicvar
-            // sapicnodevar` (Theory/Text/Parser/Sapic.hs:253-254), whose
+            // sapicnodevar` (Theory/Text/Parser/Sapic.hs), whose
             // variables carry the SAPIC type annotation; `sapic_from_parser`
             // is the instantiation that keeps it.
             if item.sapic {
@@ -596,10 +595,10 @@ fn corpus_no_typed_varspec_in_theory_formulas() {
 /// width breaks the formula over more than one line.
 ///
 /// A `Cond` and an embedded `_restrict` are parsed by `standardFormula
-/// sapicvar sapicnodevar` (Theory/Text/Parser/Sapic.hs:253-254), so
+/// sapicvar sapicnodevar` (Theory/Text/Parser/Sapic.hs), so
 /// [`sapic_from_parser`] is the instantiation that builds them, and the
 /// printer drops the type tags with `toLFormula` first
-/// (`prettySyntacticSapicFormula`, Theory/Sapic/Term.hs:174-175).  Dropping
+/// (`prettySyntacticSapicFormula`, Theory/Sapic/Term.hs).  Dropping
 /// them has to land on the formula [`from_parser`] builds directly.
 fn compare_sapic(item: &Item, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<bool, Mismatch> {
     let raw = &item.formula;

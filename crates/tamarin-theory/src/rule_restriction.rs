@@ -1,22 +1,21 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of HS `liftedAddProtoRule` (Theory/Text/Parser.hs:175-193).
+//! Port of HS `liftedAddProtoRule` (Theory/Text/Parser.hs).
 //!
 //! A rule carries its `_restrict(φ)` formulas in its own info
-//! (`_preRestriction`, Theory/Model/Rule.hs:424).  Each formula has its
+//! (`_preRestriction`, Theory/Model/Rule.hs).  Each formula has its
 //! predicate atoms expanded (`liftedExpandFormula`,
-//! Theory/Text/Parser.hs:178) and [`crate::restriction::from_rule_restriction`]
+//! Theory/Text/Parser.hs) and [`crate::restriction::from_rule_restriction`]
 //! turns it into the global restriction `Restr_<rule>_<i>` plus the action
 //! fact that reaches it.  The restrictions go into the theory before the rule
-//! and the actions are appended to the rule (Theory/Text/Parser.hs:179-180).
+//! and the actions are appended to the rule (Theory/Text/Parser.hs).
 //!
 //! HS runs this as it adds each parsed rule to the theory
-//! (Theory/Text/Parser.hs:283-284), so the predicates are the ones declared
-//! before the rule (`theoryPredicates thy`, Theory/Text/Parser.hs:112-114) and
+//! (Theory/Text/Parser.hs), so the predicates are the ones declared
+//! before the rule (`theoryPredicates thy`, Theory/Text/Parser.hs) and
 //! the rule keeps its `_restrict` formulas, since `addActions` rebuilds `rActs`
-//! alone (Theory/Text/Parser.hs:188).  `elaborate_items` is where the port
+//! alone (Theory/Text/Parser.hs).  `elaborate_items` is where the port
 //! builds the theory rule by rule and calls this; `tamarin_sapic::apply` runs
 //! the same lift over the rules the SAPIC translation generates.
 
@@ -37,7 +36,7 @@ pub(crate) fn lift_rule_restrictions(
     let rname = match rule.info.name {
         ProtoRuleName::Stand(n) => n,
         // HS `liftedAddProtoRule` throws `TryingToAddFreshRule` for the
-        // reserved name (Theory/Text/Parser.hs:182); the parser rejects the
+        // reserved name (Theory/Text/Parser.hs); the parser rejects the
         // reserved rule names, so a parsed rule never reaches this arm.
         ProtoRuleName::Fresh => "Fresh",
     };
@@ -58,7 +57,7 @@ pub(crate) fn lift_rule_restrictions(
 }
 
 /// HS `restrictions`/`actions` over `counter = zip [1..]`
-/// (Theory/Text/Parser.hs:190-193): one `Restr_<rname>_<i>` restriction and
+/// (Theory/Text/Parser.hs): one `Restr_<rname>_<i>` restriction and
 /// its action fact per formula, numbered from one.
 pub fn rule_restrictions(rname: &str, formulas: &[LNFormula]) -> Vec<(Restriction, LNFact)> {
     formulas

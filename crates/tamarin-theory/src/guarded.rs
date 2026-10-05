@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Constraint.System.Guarded` — the guarded-fragment
 //! representation Tamarin's solver consumes, and `formulaToGuarded`, the
@@ -13,7 +12,7 @@
 //!
 //! The conversion INPUT is [`crate::formula::LNFormula`]; the OUTPUT
 //! [`Guarded`] carries the same atoms over [`BLNTerm`] (HS `BLTerm`,
-//! LTerm.hs:484), the term whose variable leaves are `BVar`s: `Bound(n)`
+//! LTerm.hs), the term whose variable leaves are `BVar`s: `Bound(n)`
 //! is a De Bruijn index into the enclosing binder list — `Bound(0)` is the
 //! innermost binder, `Bound(k-1)` the outermost — and `Free(v)` an unbound
 //! `LVar`.
@@ -35,7 +34,7 @@ use tamarin_utils::fresh::MonadFresh;
 // =============================================================================
 
 /// HS-faithful `LNGuarded = Guarded (String, LSort) Name LVar`
-/// (Guarded.hs:121-129,:391): the three parameters are fixed here because the
+/// (Guarded.hs): the three parameters are fixed here because the
 /// prover instantiates them at exactly that one type.
 ///
 /// A binder carries a name and a sort; its identity is the position it holds
@@ -43,7 +42,7 @@ use tamarin_utils::fresh::MonadFresh;
 /// `BVar::Bound(n)` — a De Bruijn index into that list — or `BVar::Free(v)`.
 ///
 /// The derived `Eq`/`Ord`/`Hash` are HS's own (`deriving (Eq, Ord, …)`,
-/// Guarded.hs:129).  `Hash` reads exactly the fields `PartialEq` compares, the
+/// Guarded.hs).  `Hash` reads exactly the fields `PartialEq` compares, the
 /// consistency the implied-formula dedup's hash prefilter relies on
 /// (`insert_implied_formulas_pass`, constraint/solver/simplify.rs).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -197,7 +196,7 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
 /// both close — Haskell collapses this to `gfalse` directly.
 pub fn gdisj(items: Vec<Guarded>) -> Guarded {
     // Recursively flatten nested `Disj`s. HS-faithful: mirrors Haskell
-    // `gdisj` (Guarded.hs:426-437) whose helper
+    // `gdisj` (Guarded.hs) whose helper
     // `flatten (GDisj disj) = concatMap flatten $ getDisj disj`
     // recursively unwraps every level. Must flatten EVERY level (not just
     // one): a 5-way `∨` parsed as a binary `Or` chain
@@ -231,8 +230,8 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
         }
     }
     // HS-faithful: the `[gf] -> gf` singleton unwrap matches the FLATTENED,
-    // non-nubbed list (Guarded.hs:426-437, see line 428); `nub` is applied only in the
-    // otherwise branch (`GDisj $ Disj $ nub gfs`, Guarded.hs:426-437, see line 434).  So a
+    // non-nubbed list (Guarded.hs); `nub` is applied only in the
+    // otherwise branch (`GDisj $ Disj $ nub gfs`, Guarded.hs).  So a
     // flattened list like `[a,a]` is not a singleton and yields
     // `Disj (nub [a,a]) = Disj [a]`, NOT bare `a`.  (Note: this `out`
     // already has `gfalse` items dropped — see flatten above — so the
@@ -240,7 +239,7 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
     if out.len() == 1 {
         return out.into_iter().next().unwrap();
     }
-    // Mirror Haskell `gdisj`'s `nub gfs` (Guarded.hs:426-437, see line 434).
+    // Mirror Haskell `gdisj`'s `nub gfs` (Guarded.hs).
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) {
@@ -301,7 +300,7 @@ pub fn gall(vars: Vec<(String, LSort)>, guards: Vec<Atom<BLNTerm>>, body: Guarde
 /// Walk a guarded formula and replace atoms whose truth value the
 /// caller's `valuation` returns `Some(_)`. Mirrors Haskell's
 /// `Theory.Constraint.System.Guarded.simplifyGuardedOrReturn`
-/// (Guarded.hs:665-698).
+/// (Guarded.hs).
 ///
 /// Cases:
 /// - `Atom a` becomes `gtrue`/`gfalse` if the valuation is decided;
@@ -318,7 +317,7 @@ pub fn simplify_guarded_with(
     valuation: &dyn Fn(&Atom<LNTerm>) -> Option<bool>,
 ) -> Guarded {
     // HS `simplifyGuardedOrReturn` calls `valuation =<< unbindAtom ato`
-    // (Guarded.hs:679), which is `Nothing` whenever any `Bound` leaf is
+    // (Guarded.hs), which is `Nothing` whenever any `Bound` leaf is
     // present.
     let eval = |a: &Atom<BLNTerm>| -> Option<bool> { unbind_atom(a).and_then(|la| valuation(&la)) };
     match fm {
@@ -361,9 +360,9 @@ pub fn simplify_guarded_with(
                 .collect();
             let body_s = simplify_guarded_with(body, valuation);
             // HS-faithful: `simp` builds the universal via `gall [] (...) (simp
-            // gf)` (Guarded.hs:665-698, see line 689).  `gall` collapses to the body when the
+            // gf)` (Guarded.hs).  `gall` collapses to the body when the
             // kept guards are empty AND collapses the whole universal to
-            // `gtrue` when the simplified body is `gtrue` (Guarded.hs:449-453, see line 452),
+            // `gtrue` when the simplified body is `gtrue` (Guarded.hs),
             // regardless of whether guards remain.  Building `GGuarded`
             // directly would leave a non-canonical `GGuarded{All,[],kept,
             // gtrue}` where Haskell produces `gtrue`.
@@ -383,9 +382,9 @@ pub fn simplify_guarded_with(
 pub struct GuardError {
     pub message: String,
     /// The sub-formula at the point of failure — HS's `f0` in
-    /// `convert polarity f0@(Qua qua0 _ _)` (Guarded.hs:499), the innermost
+    /// `convert polarity f0@(Qua qua0 _ _)` (Guarded.hs), the innermost
     /// quantifier whose guard check failed.  Callers quote it above the
-    /// whole formula, as HS's `ppError` does (Guarded.hs:477-479):
+    /// whole formula, as HS's `ppError` does (Guarded.hs):
     ///   ```text
     ///   <error_text>
     ///     "<sub_formula>"
@@ -396,15 +395,15 @@ pub struct GuardError {
     /// through [`crate::pretty_formula::lnformula_doc`].  `None` for a
     /// failure outside a quantifier.
     pub subject_formula: Option<crate::formula::LNFormula>,
-    /// The quoted variable names of HS `noUnguardedVars` (Guarded.hs:507-514),
+    /// The quoted variable names of HS `noUnguardedVars` (Guarded.hs),
     /// which builds its message with `fsep` over one `Doc` per name.  Empty
     /// for every other failure, whose message is a single `text`.
     pub unguarded_vars: Vec<String>,
 }
 
 impl GuardError {
-    /// The message as the `Doc` HS throws (Guarded.hs:507-514 and
-    /// Guarded.hs:561-563).
+    /// The message as the `Doc` HS throws (Guarded.hs and
+    /// Guarded.hs).
     /// The unguarded-variable list is an `fsep`, so it wraps at the width
     /// and nesting the caller renders it at; every other message is one
     /// `text` on a single line.
@@ -459,10 +458,10 @@ pub(crate) fn err(msg: impl Into<String>) -> GuardError {
 }
 
 // =============================================================================
-// Substitutions of bound for free and vice versa (Guarded.hs:289-352)
+// Substitutions of bound for free and vice versa (Guarded.hs)
 // =============================================================================
 
-/// HS `bvarToLVar` (Guarded.hs:322-327): read an atom of a locally-nameless
+/// HS `bvarToLVar` (Guarded.hs): read an atom of a locally-nameless
 /// formula whose binders are all opened as an atom over plain `LVar`s.  A
 /// surviving `Bound` index is HS's `boundError`.
 pub fn bvar_to_lvar(a: &Atom<BLNTerm>) -> Atom<LNTerm> {
@@ -475,7 +474,7 @@ pub fn bvar_to_lvar(a: &Atom<BLNTerm>) -> Atom<LNTerm> {
     })
 }
 
-/// HS `bTermToLTerm` (Guarded.hs:335-338): read a term of a locally-nameless
+/// HS `bTermToLTerm` (Guarded.hs): read a term of a locally-nameless
 /// formula whose binders are all opened as a term over plain `LVar`s.  A
 /// surviving `Bound` index is HS's `boundError`.
 pub fn bterm_to_lterm(t: &BLNTerm) -> LNTerm {
@@ -486,7 +485,7 @@ pub fn bterm_to_lterm(t: &BLNTerm) -> LNTerm {
     })
 }
 
-/// HS `unbindAtom` (Guarded.hs:351-352): the atom over plain `LVar`s when it
+/// HS `unbindAtom` (Guarded.hs): the atom over plain `LVar`s when it
 /// carries no `Bound` leaf, `None` otherwise.
 pub(crate) fn unbind_atom(a: &Atom<BLNTerm>) -> Option<Atom<LNTerm>> {
     fn has_bound(t: &BLNTerm) -> bool {
@@ -506,16 +505,16 @@ pub(crate) fn unbind_atom(a: &Atom<BLNTerm>) -> Option<Atom<LNTerm>> {
 }
 
 /// Lift an atom over plain `LVar`s into the locally-nameless one, every
-/// variable free.  HS `fmap (fmapTerm (fmap Free))` (Guarded.hs:378),
+/// variable free.  HS `fmap (fmapTerm (fmap Free))` (Guarded.hs),
 /// [`crate::formula::lift_free`] per term.
 pub fn lift_free_atom(a: &Atom<LNTerm>) -> Atom<BLNTerm> {
     map_atom(a, &mut lift_free)
 }
 
-/// HS `substFreeAtom` (Guarded.hs:308-317): replace every free variable in
+/// HS `substFreeAtom` (Guarded.hs): replace every free variable in
 /// `dom(s)` by the De Bruijn index `s` gives it.  `fmap (fmapTerm (fmap …))`
 /// rebuilds each application through `fApp`, so an AC or `C` argument list is
-/// re-sorted under `Bound i < Free x` (LTerm.hs:476-478, Raw.hs:119-134).
+/// re-sorted under `Bound i < Free x` (LTerm.hs, Raw.hs).
 pub(crate) fn subst_free_atom(s: &[(LVar, u64)], a: &Atom<BLNTerm>) -> Atom<BLNTerm> {
     subst_free_atom_at(s, 0, a)
 }
@@ -534,13 +533,13 @@ fn subst_free_atom_at(s: &[(LVar, u64)], depth: u64, a: &Atom<BLNTerm>) -> Atom<
     })
 }
 
-/// HS `substFree` (Guarded.hs:319-320): [`subst_free_atom`] at every atom,
+/// HS `substFree` (Guarded.hs): [`subst_free_atom`] at every atom,
 /// with the index shifted by the number of binders crossed.
 pub(crate) fn subst_free(s: &[(LVar, u64)], g: &Guarded) -> Guarded {
     map_guarded_atoms(g, &mut |j, a| subst_free_atom_at(s, j, a))
 }
 
-/// HS `substBoundAtom` (Guarded.hs:289-296): replace every bound index in
+/// HS `substBoundAtom` (Guarded.hs): replace every bound index in
 /// `dom(s)` by the free variable `s` gives it, rebuilding through `fApp` as
 /// [`subst_free_atom`] does.
 pub(crate) fn subst_bound_atom(s: &[(u64, LVar)], a: &Atom<BLNTerm>) -> Atom<BLNTerm> {
@@ -561,7 +560,7 @@ fn subst_bound_atom_at(s: &[(u64, LVar)], depth: u64, a: &Atom<BLNTerm>) -> Atom
     })
 }
 
-/// HS `substBound` (Guarded.hs:301-302): [`subst_bound_atom`] at every atom,
+/// HS `substBound` (Guarded.hs): [`subst_bound_atom`] at every atom,
 /// with the index shifted by the number of binders crossed.
 pub(crate) fn subst_bound(s: &[(u64, LVar)], g: &Guarded) -> Guarded {
     map_guarded_atoms(g, &mut |j, a| subst_bound_atom_at(s, j, a))
@@ -608,7 +607,7 @@ fn map_guarded_atoms<F: FnMut(u64, &Atom<BLNTerm>) -> Atom<BLNTerm>>(
 
 /// Returns `true` if the formula is "safety": closed (no free vars)
 /// and contains no existential quantifier in its guarded form.  HS
-/// `isSafetyFormula` (Guarded.hs:154-165).
+/// `isSafetyFormula` (Guarded.hs).
 pub fn is_safety_formula(g: &Guarded) -> bool {
     fn no_existential(g: &Guarded) -> bool {
         match g {
@@ -630,7 +629,7 @@ pub fn is_safety_formula(g: &Guarded) -> bool {
 }
 
 /// Is `g` closed (no free variables)?  HS `null (frees [gf0])`
-/// (Guarded.hs:156).
+/// (Guarded.hs).
 pub fn is_closed(g: &Guarded) -> bool {
     let mut any = false;
     g.for_each_free(&mut |_| any = true);
@@ -652,7 +651,7 @@ pub fn max_var_idx(g: &Guarded) -> u64 {
 /// Is every AC and `C` argument list in `g` sorted?
 ///
 /// [`map_lits`] rebuilds each application through `f_app`, which sorts those
-/// two argument lists (Raw.hs:119-134) and leaves every other one alone, so a
+/// two argument lists (Raw.hs) and leaves every other one alone, so a
 /// formula equals its identity map exactly when it is already in that form.
 /// [`insert_formula`](crate::constraint::solver::reduction::Reduction::insert_formula)
 /// checks it with `debug_assert!` at the store boundary.
@@ -663,11 +662,11 @@ pub fn is_ac_canonical(g: &Guarded) -> bool {
 }
 
 // =============================================================================
-// Opening and closing (Guarded.hs:358-384)
+// Opening and closing (Guarded.hs)
 // =============================================================================
 
 /// Build the substitution HS `closeGuarded` uses: `s = zip (reverse vs) [0..]`
-/// (Guarded.hs:382).  Given `vs = [v0, …, v_{k-1}]` (outer→inner lexical
+/// (Guarded.hs).  Given `vs = [v0, …, v_{k-1}]` (outer→inner lexical
 /// order), returns `[(v_{k-1}, 0), …, (v_0, k-1)]`.
 fn close_subst(vs: &[LVar]) -> Vec<(LVar, u64)> {
     let k = vs.len();
@@ -679,7 +678,7 @@ fn close_subst(vs: &[LVar]) -> Vec<(LVar, u64)> {
 }
 
 /// Build the substitution HS `openGuarded` uses: `subst xs = zip [0..]
-/// (reverse xs)` (Guarded.hs:372).  Given `xs = [x0, …, x_{k-1}]` (binder
+/// (reverse xs)` (Guarded.hs).  Given `xs = [x0, …, x_{k-1}]` (binder
 /// lexical order), returns `[(0, x_{k-1}), …, (k-1, x_0)]`.
 fn open_subst(xs: &[LVar]) -> Vec<(u64, LVar)> {
     xs.iter()
@@ -689,9 +688,9 @@ fn open_subst(xs: &[LVar]) -> Vec<(u64, LVar)> {
         .collect()
 }
 
-/// HS `openGuarded` (Guarded.hs:364-373): `Some((qua, xs, ats, gf))` for a
+/// HS `openGuarded` (Guarded.hs): `Some((qua, xs, ats, gf))` for a
 /// `GGuarded`, `None` for every other shape.  One variable is drawn per binder
-/// through `fresh_ident` (HS `freshLVar n s`, LTerm.hs:301-302), and both the
+/// through `fresh_ident` (HS `freshLVar n s`, LTerm.hs), and both the
 /// guards and the body get this binder's De Bruijn indices replaced by the
 /// drawn variables.  Each guard is then read over plain variables
 /// ([`bvar_to_lvar`]); the body keeps the indices of the binders inside it,
@@ -722,7 +721,7 @@ pub fn open_guarded(
     Some((*qua, xs, ats, subst_bound(&s, body)))
 }
 
-/// HS `closeGuarded` (Guarded.hs:376-384): bind `xs` in `atoms` and `body`,
+/// HS `closeGuarded` (Guarded.hs): bind `xs` in `atoms` and `body`,
 /// then build the quantifier through its smart constructor.  Each binder keeps
 /// only its name and sort (`vs' = map (lvarName &&& lvarSort) vs`).
 pub fn close_guarded(
@@ -745,18 +744,18 @@ pub fn close_guarded(
 }
 
 /// Compute which of `xs` are NOT bound by any of `atoms`, as POSITIONS in
-/// `xs`. Mirrors Haskell's `remainingUnguarded` (Guarded.hs:523-533), whose
+/// `xs`. Mirrors Haskell's `remainingUnguarded` (Guarded.hs), whose
 /// `ug0 \\ frees ...` likewise preserves the prefix order of the survivors.
 /// Positions rather than variables so the caller can name each survivor from
 /// the parallel freshened prefix (see [`unguarded_error`]).
 ///
 /// The working set is a `[LVar]` and `\\`/`intersect` use `Eq LVar`
-/// (LTerm.hs:541-542) — name, sort and index together.  So under
+/// (LTerm.hs) — name, sort and index together.  So under
 /// `All x. ... ==> All x.1 z. <x.1,z> = x`, the guard covers the binders `x.1`
 /// and `z` even though its right-hand side mentions the *outer* `x`, which is
 /// a different variable.
 ///
-/// HS sorts the atoms with `sortGAtoms` (Guarded.hs:193-194), a stable
+/// HS sorts the atoms with `sortGAtoms` (Guarded.hs), a stable
 /// partition placing actions before equalities.
 fn remaining_unguarded(xs: &[LVar], atoms: &[Atom<LNTerm>]) -> Vec<usize> {
     let mut sorted_atoms: Vec<&Atom<LNTerm>> = atoms.iter().collect();
@@ -799,14 +798,14 @@ fn remaining_unguarded(xs: &[LVar], atoms: &[Atom<LNTerm>]) -> Vec<usize> {
         .collect()
 }
 
-/// Render HS `noUnguardedVars` (Guarded.hs:507-514) for the survivors at
+/// Render HS `noUnguardedVars` (Guarded.hs) for the survivors at
 /// `positions` of the quantifier prefix.  The names come from `freshened` —
 /// the prefix as `openFormulaPrefix` renamed it — so a binder shadowing an
 /// already-opened one is reported as `x.1`, not `x`.
 fn unguarded_error(positions: &[usize], freshened: &[LVar]) -> GuardError {
-    // HS: `map (quotes . text . show) unguarded` (Guarded.hs:507-514, see line 511)
+    // HS: `map (quotes . text . show) unguarded` (Guarded.hs)
     // over `[LVar]`, whose `show` is the EXPLICIT `instance Show LVar`
-    // (LTerm.hs:550-557) that `Display for LVar` ports.
+    // (LTerm.hs) that `Display for LVar` ports.
     let names: Vec<String> = positions
         .iter()
         .map(|&i| format!("'{}'", freshened[i]))
@@ -1000,7 +999,7 @@ pub fn normalise_stored_formula_owned(g: Guarded) -> Guarded {
 // Conversion to a guarded formula
 // =============================================================================
 
-/// HS `formulaToGuarded` (Guarded.hs:471-479): the whole traversal runs
+/// HS `formulaToGuarded` (Guarded.hs): the whole traversal runs
 /// inside one `Precise.FreshT` seeded with `avoidPrecise fmOrig`, so every
 /// quantifier prefix it opens draws its binders from a single supply.
 pub fn formula_to_guarded(f: &crate::formula::LNFormula) -> Result<Guarded, GuardError> {
@@ -1008,7 +1007,7 @@ pub fn formula_to_guarded(f: &crate::formula::LNFormula) -> Result<Guarded, Guar
     convert(false, f, &mut fresh)
 }
 
-/// HS `convert` (Guarded.hs:481-505,565-566).  `polarity` is the implicit
+/// HS `convert` (Guarded.hs).  `polarity` is the implicit
 /// negation the conversion carries: at `True` the guarded formula returned
 /// is equivalent to the negation of `f`.
 fn convert(
@@ -1043,7 +1042,7 @@ fn convert(
             Ok(if polarity { gconj(sub) } else { gdisj(sub) })
         }
         // p ↔ q is (p ⇒ q) ∧ (q ⇒ p), and HS conjoins the two arms at both
-        // polarities (Guarded.hs:565-566).
+        // polarities (Guarded.hs).
         ProtoFormula::Conn(Connective::Iff, a, b) => {
             let lhs = ProtoFormula::Conn(Connective::Imp, a.clone(), b.clone());
             let rhs = ProtoFormula::Conn(Connective::Imp, b.clone(), a.clone());
@@ -1055,7 +1054,7 @@ fn convert(
         // The quantifier decides whether the body must be a top-level
         // implication (`convAll`) or a conjunction (`convEx`); the polarity
         // decides which quantifier the guarded formula carries and which
-        // polarity the sub-formulas take (Guarded.hs:499-505).  The whole
+        // polarity the sub-formulas take (Guarded.hs).  The whole
         // prefix of like quantifiers is opened at once, each binder drawn
         // fresh and substituted into the body, so the guard check and the
         // diagnostic name the binders HS names.
@@ -1080,7 +1079,7 @@ fn convert(
                 }
             };
             // Both throws of this arm quote `ppFormula f0`, the quantifier
-            // sub-formula they were reached through (Guarded.hs:513, :562),
+            // sub-formula they were reached through (Guarded.hs),
             // and the exception carries that quote out unchanged — so the
             // innermost quantifier is the one named, which the guard below
             // reproduces by setting the field once.
@@ -1094,7 +1093,7 @@ fn convert(
     }
 }
 
-/// HS `convEx` (Guarded.hs:535-543): the body is a conjunction whose action
+/// HS `convEx` (Guarded.hs): the body is a conjunction whose action
 /// and equality atoms guard the prefix.
 fn convert_ex(
     xs: &[LVar],
@@ -1120,7 +1119,7 @@ fn convert_ex(
     Ok(close_guarded(out_qua, xs.to_vec(), atoms, body_guarded))
 }
 
-/// HS `convAll` (Guarded.hs:546-563): the body is an implication whose
+/// HS `convAll` (Guarded.hs): the body is an implication whose
 /// antecedent guards the prefix.
 fn convert_all(
     xs: &[LVar],
@@ -1147,10 +1146,10 @@ fn convert_all(
     Ok(close_guarded(out_qua, xs.to_vec(), atoms, body_guarded))
 }
 
-/// HS `conjActionsEqs` (Guarded.hs:516-519): split a conjunction into the
+/// HS `conjActionsEqs` (Guarded.hs): split a conjunction into the
 /// action and equality atoms that can guard a binder and the sub-formulas
 /// that cannot.  Each guarding atom is read over plain variables
-/// ([`bvar_to_lvar`], HS `Left $ bvarToLVar a`, Guarded.hs:517-518), which is
+/// ([`bvar_to_lvar`], HS `Left $ bvarToLVar a`, Guarded.hs), which is
 /// what [`remaining_unguarded`] and [`close_guarded`] take.
 fn split_conj_actions_eqs(
     f: &crate::formula::LNFormula,
@@ -1183,7 +1182,7 @@ fn split_conj_actions_eqs(
 // =============================================================================
 
 /// `gnotAtom` — port of Haskell `Theory.Constraint.System.Guarded.gnotAtom`
-/// (lib/theory/src/Theory/Constraint/System/Guarded.hs:410-412):
+/// (lib/theory/src/Theory/Constraint/System/Guarded.hs):
 ///
 /// ```text
 /// gnotAtom a = GGuarded All [] [a] gfalse
@@ -1199,8 +1198,8 @@ fn split_conj_actions_eqs(
 /// `toInductionHypothesis`, which DOES decompose Less for induction): the
 /// disjunction form is semantically wrong for term-sort EqE since Less is
 /// undefined between Msg/Fresh/Pub terms, and the Ex form is semantically
-/// False rather than ¬Action.  See `Guarded.hs:410-412` vs
-/// `Guarded.hs:618`.
+/// False rather than ¬Action.  See `Guarded.hs` vs
+/// `Guarded.hs`.
 fn gnot_atom(a: &Atom<BLNTerm>) -> Guarded {
     Guarded::GGuarded {
         qua: Quantifier::All,
@@ -1219,12 +1218,12 @@ fn gnot_atom(a: &Atom<BLNTerm>) -> Guarded {
 /// Copy-on-write application of an [`LNSubst`] to a locally-nameless term.
 /// HS `apply subst = (`bindTerm` applyBLLit)` with
 /// `applyBLLit (Var (Free v)) = maybe (lit l) (fmapTerm (fmap Free)) (imageOf subst v)`
-/// (SubstVFree.hs:297-302): a `Bound` leaf is left alone and every rebuilt
+/// (SubstVFree.hs): a `Bound` leaf is left alone and every rebuilt
 /// application goes through `fApp`, so AC and `C` argument lists re-sort.
 ///
 /// `None` when the substitution touches no leaf, so the caller can reuse its
 /// input.  A domain hit always changes the leaf, because a `Subst` drops the
-/// `x ~> x` mappings as it is built (SubstVFree.hs:163-165).
+/// `x ~> x` mappings as it is built (SubstVFree.hs).
 fn subst_blnterm_cow(t: &BLNTerm, s: &LNSubst) -> Option<BLNTerm> {
     match t {
         Term::Lit(Lit::Var(BVar::Free(v))) => s.image_of(v).map(lift_free),
@@ -1260,7 +1259,7 @@ fn subst_gfact_cow(f: &Fact<BLNTerm>, s: &LNSubst) -> Option<Fact<BLNTerm>> {
 /// carries no variable identity, so a binder cannot capture an image variable.
 ///
 /// HS `instance Apply LNSubst LNGuarded`: `apply subst = mapGuardedAtoms
-/// (const $ apply subst)` (Guarded.hs:393-394).
+/// (const $ apply subst)` (Guarded.hs).
 pub fn subst_guarded(g: &Guarded, s: &LNSubst) -> Guarded {
     if s.is_empty() {
         return g.clone();
@@ -1346,15 +1345,15 @@ fn collect_witness_vars(g: &Guarded) -> LNSubst {
 // =============================================================================
 
 /// HS `instance HasFrees (Guarded (String, LSort) c LVar)`
-/// (Guarded.hs:272-276): `foldFrees f = foldMap (foldFrees f)` over the
-/// `Foldable` instance (Guarded.hs:259-263) and `mapFrees f =
+/// (Guarded.hs): `foldFrees f = foldMap (foldFrees f)` over the
+/// `Foldable` instance (Guarded.hs) and `mapFrees f =
 /// traverseGuarded (mapFrees f)` — atoms in tree order, `GGuarded` guards
 /// before body, the binder list left alone.
 ///
 /// The `monotone` flag is ignored: `traverseGuarded` rebuilds every term with
 /// `traverseTerm`, which is `fApp`-based unconditionally
-/// (Guarded.hs:265-268, Raw.hs:210-213), unlike `mapFrees` for a bare `Term`
-/// (LTerm.hs:788-791).  So a rename re-sorts every AC and `C` argument list
+/// (Guarded.hs, Raw.hs), unlike `mapFrees` for a bare `Term`
+/// (LTerm.hs).  So a rename re-sorts every AC and `C` argument list
 /// under the mapped variables, whichever map mode the caller asked for.
 impl HasFrees for Guarded {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
@@ -1447,7 +1446,7 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
             Ok(any)
         }
         Guarded::Conj(xs) => {
-            // HS `liftM and . sequence . getConj` (Guarded.hs:588-594, see line 593):
+            // HS `liftM and . sequence . getConj` (Guarded.hs):
             // `sequence` forces ALL conjuncts (failing if any is `Left`)
             // BEFORE reducing with `and`.  So we must evaluate every
             // conjunct and propagate any error rather than short-circuiting
@@ -1469,13 +1468,13 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
 pub fn contains_action(g: &Guarded) -> bool {
     match g {
         // Haskell `containsAction = foldGuarded (const True) ...`
-        // (Guarded.hs:636-637): the bare-atom handler is `const True`, so
+        // (Guarded.hs): the bare-atom handler is `const True`, so
         // EVERY atom (Action/Eq/Less/Last/Subterm) yields True — not
         // only Action atoms.
         Guarded::Atom(_) => true,
         Guarded::Disj(xs) | Guarded::Conj(xs) => xs.iter().any(contains_action),
         Guarded::GGuarded { guards, body, .. } => {
-            // Haskell `Guarded.hs:636-637`: `\_ _ as body -> not (null as) || body`.
+            // Haskell `Guarded.hs`: `\_ _ as body -> not (null as) || body`.
             !guards.is_empty() || contains_action(body)
         }
     }
@@ -1499,7 +1498,7 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
             // Mirrors Haskell's
             //   lastAtos = [ Last (varTerm (Bound j))
             //              | (j, (_, LSortNode)) <- zip [0..] (reverse ss) ]
-            // Haskell `reverse ss` (Guarded.hs:613-616, see line 615) — node-sorted binders
+            // Haskell `reverse ss` (Guarded.hs) — node-sorted binders
             // emitted in REVERSE quantifier order.  For `∀ k #i #j`, ss
             // reversed = [#j, #i, k] → lastAtos = [Last(#j), Last(#i)].
             // Without `.rev()`, our disj order is [#i, #j] (matches HS
