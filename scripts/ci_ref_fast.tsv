@@ -1,16 +1,18 @@
 # rs_ref_check reference — regenerate with: scripts/rs_ref_check.sh generate --certified-by <gate-results>
 # maude: 3.5.1
-# oracle: 17351c9ff54b34c5de5e72928042736d2192d191f814e0a230c5e023a203ec05
+# oracle: be6c62d625504bd6d1daae4883336d999cf5fd0edb475b38a49f379614ff650d
 # oracle-pin: da8787d5506e2d35bc1c92d7653bf6265fecbddb
-# oracle-patch-series: 20329753d0c2a5f2225956e0c7bd74327a8fc5825b0670a06f4695e27d45ea40
+# oracle-patch-series: 5e31e1f56f9f1165d1d0ba10c033fd1ed098f9b7697f889ee5880c4cc123af9a
 # execution: 6e74ba20726f8db225806f9c535dad06e21157386621e0cec28925bdbeda1f45
 # certified-gate: DONE_CORPUS_FILE_DIFF
-# certified-scope-sha256: c9cad482b1b70d283f7bea36b3277c6b1e0f695378a686cf78e3d8eb3626e324
-# certified-proof-outputs-sha256: df4ee07e3d761599993167d1e9ac0d91f727ea00bb5dcd15eea7cc8c2543ac43
-# certified-by: scripts/results/pr960-refresh.ij7iqvj3/proof.WXKuI6yM/run.log (verdict=OK)
+# certified-scope-sha256: 5fae0a4b61f9288070c470894b829861001f0a10a1380fe8ef0eb505e52c0211
+# certified-proof-outputs-sha256: 2a30b89e2986887f0f565e12fa8a9baedd82d86d1acabab08fc391c347d07d58
+# certified-by: scripts/results/pr960-nested.upqLU8/proof.dHfGLIvh/run.log (verdict=OK)
 ../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy	50bb0c14ecb57f839ed5373234c6ab741df7f46bc933472c57e04ab003dc1e39	73520d97b5ec41a7ac4ee28fc0c6f66af921a02e8987b33716aa3b4f47dc72e7	365
 ../../tamarin-prover-testing/examples/regression/sapic/sapic-destructor-auxiliary.spthy	79e8915e60b85fc82adf6ff774cef2c28e5cd403cdbaf17b8e4f579aaf022353	7f33d1e81896cbac7a900f7d91c03536f2fbb8f91966aab123b65de2bc88d201	224
 ../../tamarin-prover-testing/examples/regression/sapic/sapic-let-macros.spthy	44dedb1bbc7c3fffc7e4a07913368d72db5c1486a391ab593585175313040938	a76be01a7faf982fad804a6009c8cc58088dd15ab02114acbee6002148c7f249	1145
+../../tamarin-prover-testing/examples/regression/sapic/sapic-nested-closed-scope.spthy	29857922cb0a434cada5d88075cd49a3a2769b4118fc937ff1c37048650a4aca	8d1766d98bd01c1c8ea6a51cbd1492516560b4ad4cc56bbef68cfc6b13903d1f	114
+../../tamarin-prover-testing/examples/regression/sapic/sapic-nested-local-pattern-name.spthy	d270a2a0b5fc8389b0fc604a75cbf3b39c43965a08932597a65ac3b173f540c9	c87eaffcb6155ea7654cb916f7834b53fa2c8d14400fc0d73422579108617107	119
 ../../tamarin-prover-testing/examples/regression/trace/covered-product-export.spthy	f4356abd69bf459cae6e83e4b3bec74a5e1a807840b4762b0a648d318baed35d	f0748bc5cbd6614658381f6d04058868fd92f19db1800425b7374e1001a65f6e	53
 ../../tamarin-prover-testing/examples/regression/trace/dh-products-in-exponents.spthy	ef5a96f4ea2e693e1ce928856858d3a9e54bb1e54e6faa8824d651942578d621	932292b561a35ce59118a51fe68e747eb64756e9276635d16e9adea577e37840	240
 ../../tamarin-prover-testing/examples/regression/trace/manual-variant-auto-sources-output.spthy	38b8be9cb405f50e7a288c1eb27caf728ea3387a9e564db9c0e02c3fae7012e5	0e7d3d8ec3a3bfd9088e4f7b7d5f2942d1c517a6bc76292118a93bb35ce137e1	156
