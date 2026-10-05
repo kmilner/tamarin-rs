@@ -16,6 +16,10 @@
 #                         The submodule itself is never modified, so it stays
 #                         trivially in sync with upstream.
 #
+#   ./setup.sh testing-sources
+#                         materialise that same patched tree without building
+#                         Haskell (for the committed-reference CI gate).
+#
 # The files in patches/series mirror fixes that are still under upstream
 # review. Keeping one patch per PR makes each fix easy to drop after it lands.
 # Only the testing oracle needs them; the submodule stays pristine.
@@ -28,10 +32,15 @@ series="$root/patches/series"
     echo "ERROR: missing scripts/gate_common.sh" >&2; exit 1; }
 . "$root/scripts/gate_common.sh"
 
+case "${1:-}" in
+    ''|testing|testing-sources) ;;
+    *) echo "usage: $0 [testing|testing-sources]" >&2; exit 2 ;;
+esac
+
 git -C "$root" submodule update --init tamarin-prover
 echo "submodule ready (pristine upstream @ $(git -C "$sub" rev-parse --short HEAD))"
 
-[ "${1:-}" = "testing" ] || exit 0
+[ -n "${1:-}" ] || exit 0
 
 # Materialise the patched testing tree as a git worktree of the submodule's
 # pinned commit: shares the object store (cheap) and keeps git metadata so
@@ -109,6 +118,8 @@ while IFS= read -r name || [ -n "$name" ]; do
     fi
 done < "$series"
 echo "testing tree patched ($applied patch(es))"
+
+[ "$1" = testing-sources ] && exit 0
 
 install_root="$(cd "$testdir" && stack path --local-install-root)"
 oracle="$install_root/bin/tamarin-prover"

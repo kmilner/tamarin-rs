@@ -121,3 +121,48 @@ testParser/define.spthy	-D=A -D=B -D=C
 thesis-LaraSchmid-evoting/chapter5_HumanErrors/HPagree.spthy	-D=ruleBased
 thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/Google2Step_EA.spthy	-D=infallible
 thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSMS_EA.spthy	-D=untrained
+
+# ---- new trace-proof regressions from the upstream bump / split PRs --------
+# Patched-only fixtures live in the setup.sh testing checkout. The gate adds
+# --prove itself; preserve default trace-case options from their test.json.
+# Use the gate's shared derivation-check timeout (30s), not the runner's 5s.
+# Other -D, export, negative and --diff scenarios are NOT covered by these rows.
+../../tamarin-prover-testing/examples/regression/sapic/sapic-destructor-auxiliary.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/sapic/sapic-let-macros.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/sapic/sapic-nested-closed-scope.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/sapic/sapic-nested-local-pattern-name.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/covered-product-export.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/dh-products-in-exponents.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/manual-variant-auto-sources-output.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/manual-variant-auto-sources-roundtrip.spthy	--auto-sources --quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/manual-variant-renamed-dh.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/manual-variant-renamed-macros.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/partial-evaluation-collision.spthy	--partial-evaluation=summary --quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/partial-evaluation-export.spthy	--partial-evaluation=summary --quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-else-binding-scope.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-embedded-msr-binding.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-empty-parameter-scope.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-inferred-location-types.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-inferred-lock-types.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-lookup-destructor-progress.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-nested-call-caller-scope.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-nested-call-parameter-scope.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-nested-parameter-capture.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-process-call-caller-scope.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-process-call-location-scope.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/sapic-variant-action-control.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/saved-proof-stop-on-sorry.spthy	--stop-on-trace=sorry --bound=0
+../../tamarin-prover-testing/examples/regression/trace/soundness-manual-variants-complete.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-partial-evaluation-variants.spthy	--partial-evaluation=summary
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-destructor-alternatives.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-destructor-failure-chain.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-destructor-generated-binders.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-destructor-nonvariable-result.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-destructor-patterns.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-nested-destructor-failure-chain.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-nested-destructor-progress.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-nested-destructors.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-state-parallel-independent.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-state-phases.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/soundness-sapic-state-supported.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/trace/subterm-witness-public.spthy	--quit-on-warning

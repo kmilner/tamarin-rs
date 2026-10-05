@@ -37,31 +37,17 @@
 //!
 //! ## Replay strategy in this port
 //!
-//! The full HS `--prove` flow runs in two passes that this one-pass
-//! walker folds together:
-//!   1. close-time `checkAndExtendProver (sorryProver Nothing)`
-//!      (`proveTheory (const True) checkProofM`, CloseRule.hs) over
-//!      ALL lemmas — it re-execs each stored step, keeping the verbatim
-//!      structure and turning any step that no longer applies into an
-//!      annotated `sorry /* invalid proof step encountered */`;
-//!   2. prove-time `replaceSorryProver $ runAutoProver` (TheoryLoader.hs)
-//!      over the lemmas the `--prove` selector targets — it re-runs the
-//!      auto-prover at every annotated `sorry` leaf.
+//! First re-execute the finite saved skeleton with `check_and_extend`,
+//! including validation of every stored terminal claim. Then replace annotated
+//! sorries lazily and extract solutions from the combined tree. Search frontiers
+//! use whole-tree depth, while bounds and heuristic depth stay local to each
+//! replacement. This avoids searching an infinite unfinished sibling to
+//! completion before reaching a saved trace (upstream #955).
 //!
-//! We do both in one pass: at every non-Sorry node we exec the proof
-//! method, get the case list, and recurse into each; at Sorry leaves and
-//! at unmatched-case children we fall through to [`run_proof_search`]
-//! (target lemmas) or emit an annotated/unannotated `sorry` (non-target
-//! lemmas, via `auto_prove == false`).
-//!
-//! This matches HS's end result for any skeleton whose
-//! `exec_proof_method`-produced case names match the skeleton's
-//! child names — which is the normal case, since HS produced those
-//! names in the first place.  When names diverge (e.g. a case the
-//! user's skeleton has but our prover's `exec_proof_method` doesn't
-//! produce, or vice versa), we mirror `checkProof`'s `mergeMapsWith`
-//! handling: stored-only cases are kept verbatim and runtime-only cases
-//! are auto-proved (target) or annotated-sorry'd (non-target).
+//! `CutAfterSorry` is the exception: it remains local to each replacement so
+//! a bounded unfinished sibling cannot discard a later saved solution. The
+//! one-pass check-and-extend walker retains that path. Stored-only branches
+//! are preserved without system annotations and are never auto-proved.
 
 use std::collections::BTreeMap;
 
@@ -93,7 +79,15 @@ pub fn replace_sorry_prove(
     skeleton: &ProofTree,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    replay_node(ctx, initial, skeleton, proof_bound, true)
+    // CutAfterSorry remains local to each replacement, so an unfinished
+    // sibling cannot erase a later saved solution. Other cuts select from
+    // the combined, checked tree (upstream #955), not each sorry separately.
+    if ctx.cut == crate::constraint::solver::context::CutStrategy::AfterSorry {
+        replay_node(ctx, initial, skeleton, proof_bound, true)
+    } else {
+        let checked = replay_node(ctx, initial, skeleton, proof_bound, false)?;
+        crate::constraint::solver::search::extend_saved_proof(ctx, checked, proof_bound)
+    }
 }
 
 /// Replay a stored skeleton WITHOUT auto-proving its open/sorry leaves —
@@ -236,7 +230,7 @@ fn finished_leaf(
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
     let same_kind = |r: &MethodResult| std::mem::discriminant(r) == std::mem::discriminant(stored);
-    match is_finished(ctx, &sys) {
+    match is_finished(ctx, &sys)? {
         Some(ref r) if same_kind(r) => Ok(ProofNode {
             method: ProofMethod::Finished(stored.clone()),
             sys,

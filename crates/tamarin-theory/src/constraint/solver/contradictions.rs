@@ -60,7 +60,10 @@ pub enum Contradiction {
 }
 
 /// Collect every contradiction currently witnessed by the system.
-pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> {
+pub fn contradictions(
+    _ctxt: &ProofContext,
+    sys: &System,
+) -> Result<Vec<Contradiction>, crate::prove::ProveError> {
     let mut out = Vec::new();
     // Build Haskell's `rawLessRel = sLessAtoms ++ sEdges ++ unsolvedChains`
     // once for cycle detection and every ordering-dependent check below.
@@ -169,10 +172,10 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
         sys,
         ab_adj.map(),
         &node_rules,
-    ));
+    )?);
     // 12. NodeAfterLast (×n).
     out.extend(node_after_last(sys, ab_adj.map()));
-    out
+    Ok(out)
 }
 
 /// `hasNonNormalTerms` — port of Haskell's
@@ -1692,7 +1695,8 @@ fn bp_over_complicated(
 /// injective tag and first term `t`, find every reachable node `j`
 /// (via the raw less-relation) such that `j ≠ i, k` and `j`'s rule
 /// produces or consumes a fact of the same tag with the same first
-/// term, AND `k` is reachable from `j` (or `k` is the last node).
+/// term, AND `k` is reachable from `j` (or `k` is a last node whose
+/// rule instance cannot unify with `j`).
 ///
 /// Such a `(i, j, k)` triple witnesses two simultaneous "live"
 /// instances of the injective fact, contradicting injectivity.
@@ -1701,7 +1705,59 @@ fn non_injective_fact_instances<'a>(
     sys: &'a System,
     adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
     node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
-) -> Vec<Contradiction> {
+) -> Result<Vec<Contradiction>, crate::prove::ProveError> {
+    let mut out = Vec::new();
+    let candidates =
+        injective_interference_candidates_with_graph(ctxt, sys, adj, node_rules, |_| true);
+    let mut reach = BTreeMap::new();
+    for (i, j, k) in candidates {
+        let ordered = reach
+            .entry(j)
+            .or_insert_with(|| crate::constraint::solver::goals::reachable_set_adj(adj, &j, false))
+            .contains(&k);
+        let incompatible_last = if !ordered && sys.last_atom == Some(k) {
+            let rules = node_rules.get_or_init(|| sys.node_rule_map());
+            match (rules.get(&j), rules.get(&k)) {
+                (Some(a), Some(b)) => !crate::rule::unifiable_rule_ac_insts(&ctxt.maude, a, b)
+                    .map_err(|error| {
+                        crate::prove::ProveError::Maude(format!("last-node unification: {error:?}"))
+                    })?,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if ordered || incompatible_last {
+            out.push(Contradiction::NonInjectiveFactInstance(i, j, k));
+        }
+    }
+    Ok(out)
+}
+
+/// Upstream 7dbad334: identify interference independently of the final-node
+/// contradiction test so simplification can merge compatible final events.
+pub(crate) fn injective_interference_candidates(
+    ctxt: &ProofContext,
+    sys: &System,
+    endpoint: impl Fn(NodeId) -> bool,
+) -> Vec<(NodeId, NodeId, NodeId)> {
+    let adj = sys.build_always_before_adj();
+    injective_interference_candidates_with_graph(
+        ctxt,
+        sys,
+        adj.map(),
+        &std::cell::OnceCell::new(),
+        endpoint,
+    )
+}
+
+fn injective_interference_candidates_with_graph<'a>(
+    ctxt: &ProofContext,
+    sys: &'a System,
+    adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
+    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
+    endpoint: impl Fn(NodeId) -> bool,
+) -> Vec<(NodeId, NodeId, NodeId)> {
     let mut out = Vec::new();
     if ctxt.injective_fact_insts.is_empty() {
         return out;
@@ -1739,9 +1795,14 @@ fn non_injective_fact_instances<'a>(
     let lookup_node =
         |id: &NodeId| -> Option<&crate::rule::RuleACInst> { node_rule_map.get(id).copied() };
 
-    for e in &sys.edges {
+    let mut edges: Vec<_> = sys.edges.iter().collect();
+    edges.sort();
+    for e in edges {
         let (i, conc_idx) = (e.src.0, e.src.1);
         let k = e.tgt.0;
+        if !endpoint(k) {
+            continue;
+        }
         // Look up the conclusion fact at (i, conc_idx).
         let i_rule = match lookup_node(&i) {
             Some(r) => r,
@@ -1754,10 +1815,7 @@ fn non_injective_fact_instances<'a>(
         if !ctxt.injective_fact_insts.contains_key(&k_fa_prem.tag) {
             continue;
         }
-        let k_term = match k_fa_prem.terms.first() {
-            Some(t) => t,
-            None => continue,
-        };
+        let k_term = k_fa_prem.terms.first();
         // Reachable set from i.
         let reach = reachable(&mut reach_cache, adj, &i);
         for j in reach.iter() {
@@ -1770,20 +1828,14 @@ fn non_injective_fact_instances<'a>(
             };
             // Conflicting fact in j's prems or concs.
             let conflicting = |fa: &crate::fact::LNFact| -> bool {
-                fa.tag == k_fa_prem.tag && fa.terms.first() == Some(k_term)
+                fa.tag == k_fa_prem.tag && fa.terms.first() == k_term
             };
             let has_conflict = j_rule.premises.iter().any(conflicting)
                 || j_rule.conclusions.iter().any(conflicting);
             if !has_conflict {
                 continue;
             }
-            // k reachable from j OR k is the last node.
-            let j_reach = reachable(&mut reach_cache, adj, j);
-            let k_after_j = j_reach.contains(&k);
-            let k_is_last = sys.last_atom.as_ref() == Some(&k);
-            if k_after_j || k_is_last {
-                out.push(Contradiction::NonInjectiveFactInstance(i, *j, k));
-            }
+            out.push((i, *j, k));
         }
     }
     out

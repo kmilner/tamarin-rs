@@ -644,7 +644,7 @@ impl Args {
 
 /// Does the lemma name match the user's `--prove`/`--lemma` filter?
 ///
-/// Mirrors HS `lemmaSelector` (TheoryLoader.hs): the empty
+/// Mirrors HS `lemmaSelector` (TheoryLoader.hs#lemmaSelector): the empty
 /// filter `[]`, the single-empty filter `[""]`, and the double-empty
 /// filter `["",""]` all mean "all lemmas".  Otherwise we run
 /// `any lemmaMatches filter` where a pattern ending in `*` matches by

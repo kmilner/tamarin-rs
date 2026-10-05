@@ -36,8 +36,8 @@ GATE_ENV_KEYS = set("""
     BIN CACHE CORPUS CORPUS_ROOT DERIV
     DERIVCHECK_TIMEOUT DIFFDIR DOT_FP EXEC_FP EXEC_FP_SALT EXTRA_FLAGS
     FAIL_ON_CAPPED FAMILY FILE_TIMEOUT FLAGS_MAP HS_CACHE HS_FP HS_FP_SALT
-    HS_PATH HS_PORT INPUT_MANIFEST_BIN JOBS MAUDE_PATH MAX_NODES OUT
-    PORT_FREE_TIMEOUT READY_TIMEOUT REF RESULTS_TSV RETRY_TIMEOUT ROOT RS_BIN
+    HS_PATH HS_PORT HS_N HS_MAXHEAP HS_RTS INPUT_MANIFEST_BIN JOBS MAUDE_PATH MAX_NODES OUT
+    PORT_FREE_TIMEOUT READY_TIMEOUT REF RESULTS_ROOT RESULTS_TSV RETRY_TIMEOUT ROOT RS_BIN
     RS_FP RS_PATH RS_PORT SERVER_MEM_KB SERVER_STOP_TIMEOUT TAMARIN_RS_CACHE_ROOT
     TAM_RS_NO_AUTO_BUILD TIMEOUT WEB_CACHE_ROOT WEB_CRAWL_TIMEOUT WEB_FLAGS_MAP
     WEB_LEDGER WEB_ORACLE_SHA256 WEB_PRODUCER_PROTOCOL_FP WEB_TEST_PORT
@@ -84,6 +84,207 @@ def run_shell(script, *, temp_dir=None, env=None, check=True):
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return result
+
+
+class ProofCorpusSelection(unittest.TestCase):
+    def test_fast_corpus_includes_patched_proof_regressions(self):
+        corpus = set((HERE / "parity_corpus.txt").read_text().splitlines())
+        fast = (HERE / "parity_corpus_fast.txt").read_text().splitlines()
+        self.assertEqual(len(fast), len(set(fast)))
+        self.assertLessEqual(set(fast), corpus)
+        patched = {rel for rel in corpus
+                   if rel.startswith("../../tamarin-prover-testing/")}
+        self.assertLessEqual(patched, set(fast))
+        # Pin the new proof regressions by identity, not incidental corpus size.
+        for name in ("sapic-inline-export-locations", "sapic-open-process-export", "sapic-msr-call-binding-reuse",
+                     "soundness-sapic-pattern-export", "soundness-sapic-pattern-parameter"):
+            self.assertIn("../../tamarin-prover-testing/examples/regression/trace/"
+                          + name + ".spthy", patched)
+        self.assertIn("regression/trace/negated-equivalence.spthy", fast)
+        for name in ("sapic-nested-closed-scope", "sapic-nested-local-pattern-name"):
+            self.assertIn("../../tamarin-prover-testing/examples/regression/sapic/"
+                          + name + ".spthy", patched)
+        # Now rejected before proof search; cli_e2e pins that failure instead.
+        self.assertNotIn("sp14/GDH.spthy", fast)
+        self.assertIn("sp14/GDH.spthy", corpus)
+
+    def test_corpus_is_unique_and_sources_are_tracked_or_in_the_patch_series(self):
+        root = HERE.parent
+        corpus = (HERE / "parity_corpus.txt").read_text().splitlines()
+        self.assertEqual(len(corpus), len(set(corpus)))
+        patched_sources = set()
+        for name in (root / "patches/series").read_text().splitlines():
+            if not name.strip() or name.startswith("#"):
+                continue
+            for line in (root / "patches" / name).read_text().splitlines():
+                if line.startswith("+++ b/"):
+                    patched_sources.add(line.removeprefix("+++ b/"))
+        prefix = "../../tamarin-prover-testing/"
+        for rel in corpus:
+            with self.subTest(theory=rel):
+                if rel.startswith(prefix):
+                    # CI does not build the Haskell checkout. The fixture must
+                    # nevertheless be provided by an enabled, tracked patch.
+                    self.assertIn(rel.removeprefix(prefix), patched_sources)
+                else:
+                    self.assertTrue((root / "tamarin-prover/examples" / rel).is_file())
+
+    def test_regression_recipes_preserve_required_proof_options(self):
+        corpus = set((HERE / "parity_corpus.txt").read_text().splitlines())
+        rows = [line.split("\t", 1) for line in
+                (HERE / "file_flags.tsv").read_text().splitlines()
+                if line and not line.startswith("#")]
+        self.assertEqual(len(rows), len(dict(rows)), "duplicate flag-map entry")
+        flags = dict(rows)
+        for name in ("sapic-nested-closed-scope", "sapic-nested-local-pattern-name"):
+            rel = "../../tamarin-prover-testing/examples/regression/sapic/" + name + ".spthy"
+            self.assertEqual(flags[rel], "--quit-on-warning")
+        prefix = "../../tamarin-prover-testing/examples/regression/trace/"
+        for name, expected in (
+            ("saved-proof-stop-on-sorry", "--stop-on-trace=sorry --bound=0"),
+            ("manual-variant-auto-sources-roundtrip", "--auto-sources --quit-on-warning"),
+            ("soundness-partial-evaluation-variants", "--partial-evaluation=summary"),
+            ("partial-evaluation-collision", "--partial-evaluation=summary --quit-on-warning"),
+            ("partial-evaluation-export", "--partial-evaluation=summary --quit-on-warning"),
+        ):
+            rel = prefix + name + ".spthy"
+            self.assertIn(rel, corpus)
+            self.assertEqual(flags[rel], expected)
+        self.assertIn(prefix + "saved-proof-prove.spthy", corpus)
+        self.assertIn("regression/trace/issue914.spthy", corpus)
+
+
+class TestingSourceSetup(unittest.TestCase):
+    def test_sources_only_applies_patches_and_reuses_tree_without_building(self):
+        run_shell(
+            r'''
+set -e
+t=$HARNESS_TMP
+git init -q "$t/upstream"
+printf 'original\n' > "$t/upstream/input"
+printf '.stack-work/\n' > "$t/upstream/.gitignore"
+git -C "$t/upstream" add .
+git -C "$t/upstream" -c user.name=Test -c user.email=test@example.invalid commit -qm initial
+git init -q "$t/repo"
+git -C "$t/repo" -c protocol.file.allow=always submodule add -q "$t/upstream" tamarin-prover
+mkdir -p "$t/repo/scripts" "$t/repo/patches" "$t/bin"
+cp setup.sh "$t/repo/setup.sh"
+cp scripts/gate_common.sh "$t/repo/scripts/gate_common.sh"
+printf 'patched\n' > "$t/repo/tamarin-prover/input"
+git -C "$t/repo/tamarin-prover" diff > "$t/repo/patches/test.patch"
+printf 'original\n' > "$t/repo/tamarin-prover/input"
+printf 'test.patch\n' > "$t/repo/patches/series"
+printf '#!/bin/sh\nexit 99\n' > "$t/bin/stack"
+chmod +x "$t/bin/stack"
+export PATH="$t/bin:$PATH"
+bash "$t/repo/setup.sh" testing-sources
+test "$(cat "$t/repo/tamarin-prover/input")" = original
+test "$(cat "$t/repo/tamarin-prover-testing/input")" = patched
+mkdir -p "$t/repo/tamarin-prover-testing/.stack-work"
+printf keep > "$t/repo/tamarin-prover-testing/.stack-work/artifact"
+bash "$t/repo/setup.sh" testing-sources > "$t/second.log"
+grep -F 'testing tree already has the current patch series' "$t/second.log"
+test "$(cat "$t/repo/tamarin-prover-testing/.stack-work/artifact")" = keep
+test "$(cat "$t/repo/tamarin-prover-testing/input")" = patched
+'''
+        )
+
+
+class CorpusEntryPoint(unittest.TestCase):
+    """Exercise dispatch without launching a prover or touching real caches."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="corpus entry ")
+        self.addCleanup(temporary.cleanup)
+        self.root = pathlib.Path(temporary.name)
+        self.scripts = self.root / "scripts"
+        self.scripts.mkdir()
+        self.entry = self.scripts / "test.sh"
+        self.entry.write_text((HERE / "test.sh").read_text())
+        for suite, engine in (("proof", "corpus_file_diff.sh"),
+                              ("web", "web_parity.sh")):
+            (self.scripts / engine).write_text(
+                f'echo "engine={suite}"\n'
+                'for key in ALLOWLIST JOBS HS_N FILE_TIMEOUT RESULTS_TSV '
+                'DIFFDIR TAM_RS_NO_AUTO_BUILD HS_PATH RS_PATH MAUDE_PATH; do\n'
+                '    printf "%s=%s\\n" "$key" "${!key:-}"\n'
+                'done\n'
+                f'exit "${{STUB_{suite.upper()}_EXIT:-0}}"\n'
+            )
+
+    def run_entry(self, *args, **overrides):
+        return subprocess.run(
+            ["bash", str(self.entry), *args], cwd=self.root,
+            env=clean_environment(overrides), text=True, capture_output=True,
+        )
+
+    def outputs(self, suite):
+        return sorted((self.scripts / "results").glob(f"{suite}.*"))
+
+    def test_help_and_invalid_arguments_do_not_start_runs(self):
+        for args, status in ((("--help",), 0), ((), 2),
+                             (("unknown",), 2), (("proof", "extra"), 2)):
+            with self.subTest(args=args):
+                self.assertEqual(self.run_entry(*args).returncode, status)
+        self.assertFalse((self.scripts / "results").exists())
+
+    def test_default_corpora_and_isolated_outputs(self):
+        for suite, corpus, jobs in (("proof", "parity_corpus.txt", 2),
+                                    ("web", "websweep_residual.txt", 1)):
+            with self.subTest(suite=suite):
+                result = self.run_entry(suite)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output, = self.outputs(suite)
+                log = (output / "run.log").read_text()
+                self.assertIn(f"ALLOWLIST={self.scripts / corpus}\n", log)
+                self.assertIn(f"JOBS={jobs}\n", log)
+                self.assertIn("FILE_TIMEOUT=600\n", log)
+                self.assertIn("TAM_RS_NO_AUTO_BUILD=1\n", log)
+                self.assertIn(f"RESULTS_TSV={output / 'results.tsv'}\n", log)
+                self.assertIn(f"DIFFDIR={output / 'diffs'}\n", log)
+                self.assertEqual((output / "exit-code").read_text(), "0\n")
+        self.assertEqual(self.run_entry("proof").returncode, 0)
+        self.assertEqual(len(self.outputs("proof")), 2)
+
+    def test_single_suite_preserves_overrides_and_failure(self):
+        overrides = dict(ALLOWLIST="custom corpus.txt", JOBS="3", HS_N="2",
+                         FILE_TIMEOUT="900", RESULTS_TSV="custom.tsv",
+                         DIFFDIR="custom diffs", HS_PATH="/sealed/hs",
+                         RS_PATH="/sealed/rs", MAUDE_PATH="/sealed/maude")
+        result = self.run_entry("proof", STUB_PROOF_EXIT="7", **overrides)
+        self.assertEqual(result.returncode, 7, result.stderr)
+        output, = self.outputs("proof")
+        log = (output / "run.log").read_text()
+        for key, value in overrides.items():
+            self.assertIn(f"{key}={value}\n", log)
+        self.assertEqual((output / "exit-code").read_text(), "7\n")
+
+    def test_all_runs_both_after_failure_and_does_not_leak_defaults(self):
+        for proof, web in ((0, 0), (3, 0), (0, 4), (3, 4)):
+            with self.subTest(proof=proof, web=web):
+                result = self.run_entry("all", STUB_PROOF_EXIT=str(proof),
+                                        STUB_WEB_EXIT=str(web))
+                self.assertEqual(result.returncode, int(bool(proof or web)))
+                self.assertIn("engine=proof", result.stdout)
+                self.assertIn("engine=web", result.stdout)
+                self.assertIn("JOBS=2\n", result.stdout)
+                self.assertIn("JOBS=1\n", result.stdout)
+
+    def test_all_rejects_ambiguous_paths_before_starting(self):
+        for key in ("ALLOWLIST", "CACHE", "RESULTS_TSV", "DIFFDIR"):
+            with self.subTest(key=key):
+                result = self.run_entry("all", **{key: "custom"})
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(key, result.stderr)
+        self.assertFalse((self.scripts / "results").exists())
+
+    def test_results_root_override(self):
+        destination = self.root / "other results"
+        result = self.run_entry("web", RESULTS_ROOT=str(destination))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output, = destination.glob("web.*")
+        self.assertTrue((output / "run.log").is_file())
+        self.assertFalse((self.scripts / "results").exists())
 
 
 class ShellScenarioDiagnostics(unittest.TestCase):
@@ -290,6 +491,28 @@ class DiffArtifactNames(unittest.TestCase):
                 canonical('<span style="color: red">example</span>'),
                 canonical('<span style="color: green">example</span>'),
             )
+
+    def test_invalid_source_case_routes_are_compared(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = pathlib.Path(td)
+            urls = [f"/thy/trace/1/{route}/cases/raw/0/0"
+                    for route in ("json", "graph", "interactive-graph-def")]
+            row = {"kind": "html", "status": 500, "body": "bounds error"}
+            for other, expected in ((row, "MATCH"),
+                                    ({**row, "status": 404}, "DIFF"),
+                                    (None, "MISSING_RS")):
+                for side, manifest in (("hs", dict.fromkeys(urls, row)),
+                                       ("rs", dict.fromkeys(urls, other) if other else {})):
+                    (root / f"{side}.json").write_text(json.dumps({
+                        "manifest": manifest, "capped": False,
+                    }))
+                args = ["web_diff.py", str(root / "hs.json"),
+                        str(root / "rs.json"), str(root / "out.tsv")]
+                with mock.patch("sys.argv", args), mock.patch("builtins.print"):
+                    WEB_DIFF.main()
+                rows = (root / "out.tsv").read_text().splitlines()
+                self.assertEqual(len(rows), 3)
+                self.assertTrue(all(row.split("\t")[1] == expected for row in rows))
 
     def test_equal_bodies_skip_canonicalization_but_metadata_still_matters(self):
         with tempfile.TemporaryDirectory() as td:

@@ -136,6 +136,8 @@ pub struct ProcessParsedAnnotation {
     /// Substitution that maps renamed variables back to the user's
     /// original names. Empty until uniqueness renaming has run.
     pub back_substitution: Subst<Name, LVar>,
+    /// Binders freshened or owned by a closed call, at this node only.
+    pub generated_binders: Vec<SapicLVar>,
 }
 
 impl ProcessParsedAnnotation {
@@ -143,8 +145,16 @@ impl ProcessParsedAnnotation {
         Self::default()
     }
 
-    pub fn map_location(mut self, f: impl FnOnce(SapicTerm) -> SapicTerm) -> Self {
-        self.location = self.location.map(f);
+    pub fn map_terms(mut self, mut f: impl FnMut(SapicTerm) -> SapicTerm) -> Self {
+        self.location = self.location.map(&mut f);
+        self.generated_binders = self
+            .generated_binders
+            .into_iter()
+            .filter_map(|v| match f(tamarin_term::vterm::var_term(v)) {
+                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) => Some(v),
+                _ => None,
+            })
+            .collect();
         self
     }
 
@@ -156,10 +166,13 @@ impl ProcessParsedAnnotation {
             (l1, None) => l1,
         };
         let back_substitution = self.back_substitution.compose(&other.back_substitution);
+        let mut generated_binders = self.generated_binders;
+        generated_binders.extend(other.generated_binders);
         ProcessParsedAnnotation {
             process_names: names,
             location,
             back_substitution,
+            generated_binders,
         }
     }
 }
@@ -822,6 +835,7 @@ mod tests {
                 process_names: vec![name.to_string()],
                 location,
                 back_substitution: sub,
+                generated_binders: vec![],
             }
         };
         let sub = |from: &str, to: &str| {

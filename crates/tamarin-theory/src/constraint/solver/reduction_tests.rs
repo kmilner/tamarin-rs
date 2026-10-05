@@ -425,6 +425,182 @@ fn subst_system_rewrites_less_atom_node_ids() {
 }
 
 #[test]
+fn goal_substitution_interleaves_action_insertion_and_status_merging() {
+    use crate::fact::ku_fact;
+    use tamarin_term::function_symbols::pair_sym;
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::term::f_app_no_eq;
+    use tamarin_term::vterm::var_term;
+
+    let Some(ctx) = ctx() else { return };
+    let node = LVar::new("i", LSort::Node, 0);
+    let x = var_term(LVar::new("x", LSort::Msg, 10));
+    let pair = f_app_no_eq(pair_sym(), vec![pub_term("a"), pub_term("b")]);
+    let old_goal = Goal::Action(node, ku_fact(pair.clone()));
+    let changed_goal = Goal::Action(node, ku_fact(x.clone()));
+    assert!(changed_goal < old_goal, "the variable is visited first");
+    let mut sys = System::empty();
+    sys.add_goal(old_goal.clone());
+    sys.goals_mut()[0].1.solved = true;
+    sys.add_goal(changed_goal);
+    let mut red = Reduction::new(&ctx, sys);
+    red.solve_term_eqs(SplitStrategy::SplitNow, &[Equal::new(x, pair)])
+        .expect("solve substitution");
+    red.subst_system().expect("ordered goal rebuild");
+
+    // The changed variable is re-inserted and decomposed BEFORE the old
+    // compound goal is visited. Its old status is then merged, not discarded.
+    assert_eq!(red.sys.next_goal_nr, 5);
+    let status = &red
+        .sys
+        .goals
+        .iter()
+        .find(|(g, _)| *g == old_goal)
+        .unwrap()
+        .1;
+    assert!(status.solved);
+    assert_eq!(status.nr, 0);
+    for (value, idx, nr) in [("a", 11, 3), ("b", 12, 4)] {
+        let goal = Goal::Action(LVar::new("vk", LSort::Node, idx), ku_fact(pub_term(value)));
+        assert_eq!(
+            red.sys.goals.iter().find(|(g, _)| *g == goal).unwrap().1.nr,
+            nr
+        );
+    }
+}
+
+#[test]
+fn goal_rebuild_keeps_bounds_exact_and_reserves_removed_variables() {
+    use crate::fact::ku_fact;
+    use tamarin_term::builtin::pair;
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::vterm::var_term;
+
+    let Some(ctx) = ctx() else { return };
+    let x = var_term(LVar::new("x", LSort::Msg, 1));
+    let mut sys = System::empty();
+    sys.add_goal(Goal::Action(
+        LVar::new("i", LSort::Node, 0),
+        ku_fact(x.clone()),
+    ));
+    let later = Goal::Action(LVar::new("later", LSort::Node, 100), ku_fact(pub_term("c")));
+    sys.add_goal(later.clone());
+    let mut red = Reduction::new(&ctx, sys);
+    red.solve_term_eqs(
+        SplitStrategy::SplitNow,
+        &[Equal::new(x, pair(pub_term("a"), pub_term("b")))],
+    )
+    .expect("solve substitution");
+    assert_eq!(bounds_max(&red.sys), 100);
+
+    // With TAM_RS_VERIFY_BOUNDS_CACHE=1 this also checks every intermediate
+    // bounds lookup while decomposing the first goal, before restoring later.
+    red.subst_system().expect("rebuild goals with exact bounds");
+    assert_eq!(red.sys.goals.len(), 4);
+    assert!(red.sys.goals.iter().any(|(g, _)| *g == later));
+    for (value, idx) in [("a", 101), ("b", 102)] {
+        let goal = Goal::Action(LVar::new("vk", LSort::Node, idx), ku_fact(pub_term(value)));
+        assert!(red.sys.goals.iter().any(|(g, _)| *g == goal));
+    }
+    assert_eq!(bounds_max(&red.sys), bounds_max_uncached(&red.sys));
+}
+
+#[test]
+fn node_collision_equalities_are_settled_before_substituting_goals() {
+    use crate::fact::{ku_fact, out_fact};
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::vterm::var_term;
+
+    let Some(ctx) = ctx() else { return };
+    let i = LVar::new("i", LSort::Node, 0);
+    let j = LVar::new("j", LSort::Node, 1);
+    let k = LVar::new("k", LSort::Node, 2);
+    let l = LVar::new("l", LSort::Node, 3);
+    let x = var_term(LVar::new("x", LSort::Msg, 4));
+    let value = pub_term("1");
+    let rule = |term| crate::rule::Rule {
+        info: crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
+            name: crate::rule::ProtoRuleName::Stand("R"),
+            attributes: crate::rule::RuleAttributes::empty(),
+            loop_breakers: Vec::new(),
+        }),
+        premises: vec![],
+        conclusions: vec![out_fact(term)],
+        actions: vec![],
+        new_vars: vec![],
+    };
+    let mut sys = System::empty();
+    sys.add_node(i, rule(x.clone()));
+    sys.add_node(j, rule(value.clone()));
+    sys.add_goal(Goal::Action(k, ku_fact(x.clone())));
+    sys.add_goal(Goal::Action(l, ku_fact(x)));
+    let mut red = Reduction::new(&ctx, sys);
+    red.solve_node_id_eqs(&[Equal::new(i, j), Equal::new(k, l)])
+        .expect("alias nodes");
+    red.subst_system().expect("substitute nodes, then goals");
+
+    // Merging i and j first yields x = '1'. Both changed KU facts must be
+    // re-inserted at their ORIGINAL nodes, even though k and l are aliases.
+    // Substituting goals before the rule equality loses one insertion.
+    assert_eq!(red.sys.nodes.len(), 1);
+    assert_eq!(red.sys.next_goal_nr, 4);
+    for (node, nr) in [(k, 2), (l, 3)] {
+        let goal = Goal::Action(node, ku_fact(value.clone()));
+        let status = &red.sys.goals.iter().find(|(g, _)| *g == goal).unwrap().1;
+        assert_eq!(status.nr, nr);
+        assert!(!status.solved);
+    }
+
+    // A subsequent substitution merges the node aliases, retaining the older
+    // status, but must not consume another insertion number.
+    red.subst_system().expect("merge aliases");
+    assert_eq!(red.sys.goals.len(), 1);
+    assert_eq!(red.sys.goals[0].1.nr, 2);
+    assert_eq!(red.sys.next_goal_nr, 4);
+}
+
+#[test]
+fn subst_system_reinserts_changed_solved_knowledge_goals() {
+    use crate::fact::ku_fact;
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::rewriting::Equal;
+    use tamarin_term::vterm::var_term;
+
+    let Some(ctx) = ctx() else { return };
+    for solved in [false, true] {
+        let node = LVar::new("i", LSort::Node, 0);
+        let x = var_term(LVar::new("x", LSort::Msg, 1));
+        let value = pub_term("1");
+        let mut sys = System::empty();
+        sys.add_goal(Goal::Action(node, ku_fact(x.clone())));
+        sys.goals_mut()[0].1.solved = solved;
+        let mut red = Reduction::new(&ctx, sys);
+        red.solve_term_eqs(SplitStrategy::SplitNow, &[Equal::new(x, value.clone())])
+            .expect("solve substitution");
+        red.subst_system().expect("propagate substitution");
+
+        // HS substGoals calls insertAction for changed message terms, without
+        // consulting the old solved status. It allocates a new, unsolved goal.
+        assert_eq!(red.sys.goals.len(), 1);
+        let (goal, status) = &red.sys.goals[0];
+        assert_eq!(*goal, Goal::Action(node, ku_fact(value)));
+        assert!(!status.solved);
+        assert_eq!(status.nr, 1);
+        assert_eq!(red.sys.next_goal_nr, 2);
+
+        // Once propagated, status-only changes must not reinsert the goal or
+        // invalidate the verified-identity substitution skip's semantics.
+        red.sys.goals_mut()[0].1.solved = true;
+        let expected = red.sys.clone();
+        red.subst_system().expect("identity substitution");
+        assert_eq!(red.sys, expected);
+    }
+}
+
+#[test]
 fn subst_system_idempotent_on_empty_substitution() {
     let Some(ctx) = ctx() else { return };
     // This system has content, but its eq-store is empty.  The early return
@@ -475,54 +651,83 @@ fn subst_system_idempotent_on_empty_substitution() {
 }
 
 #[test]
-fn subst_system_marks_contradiction_on_shape_mismatch() {
-    // Two nodes with the same canonical id but DIFFERENT rule
-    // shapes (e.g. one with 0 conclusions, one with 1) cannot be
-    // merged consistently — Haskell's `setNodes` reaches the same
-    // conclusion via `solveRuleEqs` failing. Our port pushes
-    // `gfalse` so the next contradictions check trips.
+fn rule_merges_reject_mismatched_fact_list_lengths() {
+    // The same rule info does not imply the same number of facts. Check
+    // every component in both orientations, through each rule-merge path.
     let Some(ctx) = ctx() else { return };
-    let mut r = Reduction::new(&ctx, System::empty());
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::vterm::Lit;
+    use tamarin_term::rewriting::Equal;
     let i = LVar::new("i", LSort::Node, 2);
     let j = LVar::new("j", LSort::Node, 3);
-    let info = || {
+    let empty = crate::rule::Rule::new(
         crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
             name: crate::rule::ProtoRuleName::Stand("R"),
             attributes: crate::rule::RuleAttributes::empty(),
             loop_breakers: Vec::new(),
-        })
-    };
-    // First node has 0 conclusions; second has 1 — incompatible.
-    r.sys
-        .add_node(i, crate::rule::Rule::new(info(), vec![], vec![], vec![]));
-    let dummy_fact = crate::fact::Fact::new(crate::fact::FactTag::Out, vec![]);
-    r.sys.add_node(
-        j,
-        crate::rule::Rule::new(info(), vec![], vec![dummy_fact], vec![]),
+        }),
+        vec![],
+        vec![],
+        vec![],
     );
-    // Force i = j into the eq-store.
-    let ti = tamarin_term::term::Term::Lit(Lit::Var(i));
-    let tj = tamarin_term::term::Term::Lit(Lit::Var(j));
-    r.solve_term_eqs(
-        SplitStrategy::SplitNow,
-        &[tamarin_term::rewriting::Equal { lhs: ti, rhs: tj }],
-    )
-    .expect("solve");
-    r.subst_system().expect("solver operation");
-    let bot = crate::guarded::gfalse();
-    assert!(
-        crate::guarded::stores_contains(&r.sys.formulas, &bot),
-        "shape mismatch must push gfalse onto the formula list"
-    );
+    for component in 0..3 {
+        let mut longer = empty.clone();
+        let lists = [
+            &mut longer.premises,
+            &mut longer.conclusions,
+            &mut longer.actions,
+        ];
+        lists[component].push(crate::fact::out_fact(tamarin_term::lterm::pub_term("a")));
+        for (left, right) in [(&empty, &longer), (&longer, &empty)] {
+            for strategy in [SplitStrategy::SplitNow, SplitStrategy::SplitLater] {
+                let mut direct = Reduction::new(&ctx, System::empty());
+                assert!(matches!(
+                    direct
+                        .solve_rule_eqs(strategy, &[Equal::new(left.clone(), right.clone())])
+                        .unwrap(),
+                    SolveOutcome::Contradictory
+                ));
+                assert!(direct.sys.eq_store().is_false());
+                assert!(direct.sys.formulas.is_empty());
+            }
+
+            let mut set = Reduction::new(&ctx, System::empty());
+            assert!(matches!(
+                set.set_nodes(vec![(i, left.clone()), (i, right.clone())])
+                    .unwrap(),
+                SolveOutcome::Contradictory
+            ));
+            assert!(set.sys.eq_store().is_false());
+            assert!(set.sys.formulas.is_empty());
+            assert_eq!(set.sys.nodes.as_slice(), &[(i, left.clone())]);
+
+            let mut sys = System::empty();
+            // Reverse insertion order: substitution must still keep the
+            // lower original node's rule when the IDs become aliases.
+            sys.add_node(j, right.clone());
+            sys.add_node(i, left.clone());
+            let mut substituted = Reduction::new(&ctx, sys);
+            substituted.solve_node_id_eqs(&[Equal::new(i, j)]).unwrap();
+            substituted.subst_system().unwrap();
+            assert_eq!(substituted.sys.nodes.len(), 1);
+            assert_eq!(&substituted.sys.nodes[0].1, left);
+            assert!(substituted.sys.eq_store().is_false());
+            assert!(crate::guarded::stores_contains(
+                &substituted.sys.formulas,
+                &crate::guarded::gfalse()
+            ));
+            assert_eq!(
+                bounds_max(&substituted.sys),
+                bounds_max_uncached(&substituted.sys)
+            );
+        }
+    }
 }
 
 #[test]
 fn subst_system_merges_collided_nodes_and_equates_their_rules() {
     // When two nodes collapse to the same canonical id, Haskell's
-    // `setNodes` runs `solveRuleEqs` on their facts. Our port queues
-    // those into solve_fact_eqs at the tail of subst_system. Verify
+    // `setNodes` runs `solveRuleEqs` on their facts before substituting
+    // the remaining system. Verify
     // that the merge happens and only one node remains under the
     // canonical id.
     let Some(ctx) = ctx() else { return };
@@ -782,6 +987,32 @@ fn solve_subterm_goal_marks_solved_and_moves() {
         .goals
         .iter()
         .any(|(g, s)| matches!(g, Goal::Subterm(_)) && s.solved));
+}
+
+#[test]
+fn positive_nat_subterm_refines_the_message_operand() {
+    use tamarin_term::function_symbols::{nat_one_sym, AcSym};
+    use tamarin_term::lterm::{sort_of_lnterm, LSort, LVar};
+    use tamarin_term::term::{f_app_ac, f_app_no_eq};
+    use tamarin_term::vterm::var_term;
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let h = tamarin_term::maude_proc::MaudeHandle::start(
+        &path,
+        tamarin_term::maude_sig::nat_maude_sig(),
+    )
+    .expect("natural-number Maude");
+    let ctx = ProofContext::new(h, Vec::new());
+    let small = var_term(LVar::new("x", LSort::Msg, 0));
+    let one = f_app_no_eq(nat_one_sym(), vec![]);
+    let big = f_app_ac(AcSym::NatPlus, vec![one.clone(), one]);
+    let mut red = Reduction::new(&ctx, System::empty());
+    let outcome = red.solve_subterm_goal(&(small.clone(), big)).unwrap();
+    assert!(matches!(outcome, GoalCases::LinearNamed(_)), "{outcome:?}");
+    let refined = tamarin_term::subst::apply_vterm(&red.sys.eq_store().subst, small);
+    assert_eq!(sort_of_lnterm(&refined), LSort::Nat);
+    assert!(red.sys.subterm_store.subterms.is_empty());
 }
 
 #[test]

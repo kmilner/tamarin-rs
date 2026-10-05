@@ -5,6 +5,28 @@ full-corpus byte parity. Commands run from the repository root unless noted;
 the pristine Haskell sources and the examples corpus live in the
 `tamarin-prover/` submodule.
 
+## Start here: the two corpus tests and their caches
+
+After installing the prerequisites below:
+
+```bash
+./setup.sh testing
+cargo build --release -p tamarin-prover
+scripts/test.sh proof   # 507-theory proof corpus
+scripts/test.sh web     # 77-theory web corpus
+# Or: scripts/test.sh all
+```
+
+These commands generate missing oracle cache entries and then compare Rust
+against them. Rerun the same commands to reuse the caches; there is no separate
+cache-generation script. Each run saves its log, TSV and exit status in a fresh
+directory under `scripts/results/`. They do not rebuild binaries or clear caches.
+
+The [corpus quick-start](scripts/README.md) explains scope, timeouts, resources,
+results and how the supporting checks differ. The rest of this document is
+the detailed verification policy, not a list of scripts you must run merely
+to generate the two caches.
+
 ## Prerequisites
 
 **Supported host.** The shell harness currently supports GNU/Linux and is
@@ -171,7 +193,7 @@ Haskell's Parsec header plus `unexpected`/`expecting` lines. They retain any
 unrecognized lines, including runtime errors before or after a diagnostic.
 Unrecognized Haskell semantic-message formats remain visible for review rather
 than being silently treated as parser presentation. Focused normalization tests
-run as part of `python3 scripts/test_web_harness.py`.
+run as part of `scripts/test.sh harness`.
 
 ## The verification ladder
 
@@ -190,8 +212,8 @@ fast gates do need the oracle binary present to address it.**
 | `cargo clippy --workspace --all-targets -- -D warnings` | lints (CI enforces it) | seconds warm |
 | `MAUDE_PATH=$(command -v maude) cargo test --profile ci --workspace` | Rust unit + integration suites | minutes |
 | `scripts/divergence_fixtures/check.sh` | 55 corner fixtures vs committed oracle captures (CI runs this too) | ~10 s |
-| `scripts/wf_gate.sh` | wellformedness block, 432 files, vs the shared load cache | ~45 s |
-| `scripts/pretty_gate.sh` | `theory … end` echo, 432 files, vs the same load cache | ~45 s |
+| `scripts/wf_gate.sh` | wellformedness block, canonical corpus, vs the shared load cache | load-only; depends on cache warmth |
+| `scripts/pretty_gate.sh` | `theory … end` echo, canonical corpus, vs the same load cache | load-only; depends on cache warmth |
 
 **Tier 2 — pre-push, tens of minutes.**
 
@@ -204,7 +226,7 @@ fast gates do need the oracle binary present to address it.**
 
 | Command | Checks |
 |---|---|
-| `scripts/corpus_file_diff.sh` | the ground-truth batch gate: 432-file `--prove` byte parity (~30–60 min cold) |
+| `scripts/corpus_file_diff.sh` | the ground-truth batch gate: 507-file `--prove` byte parity (cold runtime depends on proof budgets) |
 | `scripts/pe_sweep.sh` / `module_sweep.sh` / `json_sweep.sh` | the same sweeps over their full corpora |
 | `ALLOWLIST=<filelist> scripts/web_parity.sh` | interactive-mode gate: crawl + HTML byte comparison |
 | `scripts/bench.sh` | performance tables (see README) |
@@ -232,9 +254,11 @@ purpose, so its own log cannot be fed back as `--certified-by` evidence. Read
 the verdict, not the histogram above it: a DIFF count of 0 is also what a run
 that compared nothing prints, and the verdict is what separates the two.
 
+For example, a passing two-file allowlist reports:
+
 ```
-wf_gate: MATCH=432 DIFF=0 SKIP=0 of 432  ->  .../scripts/results/wf_gate_results.tsv
-wf_gate: verdict=OK files=432
+wf_gate: MATCH=2 DIFF=0 SKIP=0 of 2  ->  .../scripts/results/wf_gate_results.tsv
+wf_gate: verdict=OK files=2
 ```
 
 The trailing `files=<n>` on every comparing gate's verdict line is the number
@@ -349,8 +373,9 @@ makes one comparison per lemma, over the whole `examples/` tree. This probe
 is not the correctness criterion. That criterion is byte-identical `--prove`
 stdout, and the corpus gate below checks it. That gate is stricter than this
 probe on the files it covers, because a proof is part of the stdout it
-compares. Its file list is narrower: it names 431 of the 1042 `.spthy` files
-under `examples/`, so this probe reaches files the gate never opens.
+compares. Its explicit 507-theory list is narrower than the whole upstream
+corpus (and includes patched fixtures), so this probe reaches files the gate
+never opens.
 
 **The probe asserts.** It prints its match rate and its list of divergences.
 It then calls `enforce_probe_ledger`. That function fails the test in four
@@ -423,11 +448,11 @@ comparison is stronger than canonical proof-tree comparison.
 
 ```bash
 cargo build --release
-RESULTS_TSV=/tmp/gate.tsv scripts/corpus_file_diff.sh    # ALLOWLIST defaults to the 432-file corpus
+RESULTS_TSV=/tmp/gate.tsv scripts/corpus_file_diff.sh    # ALLOWLIST defaults to the 507-file corpus
 ```
 
 Ends in `DONE_CORPUS_FILE_DIFF verdict=OK files=<n>` and exits 0, or names
-what is wrong (`DIFF=n`, `RC_DIFF=n`, `SKIPPED=n`, `ROW-COUNT=n/432`) and
+what is wrong (`DIFF=n`, `RC_DIFF=n`, `SKIPPED=n`, `ROW-COUNT=n/507`) and
 exits nonzero. There is nothing to tally by hand: the script prints its own
 `=== SUMMARY ===` histogram, and the verdict additionally covers the failure
 modes a histogram cannot show you — files whose bytes were never compared,
@@ -436,9 +461,9 @@ different exit status (`RC_DIFF`; the oracle's rc is cached as `<key>.rc`
 beside its stdout). The summary's `RC_UNKNOWN=n` counts entries filled before
 that channel existed and is deliberately not a failure.
 
-Whole-file `--prove` diff over the canonical 432-file corpus
-(`scripts/parity_corpus.txt` — the submodule's examples plus one repo-local
-Nat+reuse fixture listed by `../..`-relative path). Two strictly sequential phases: Haskell
+Whole-file `--prove` diff over the canonical 507-file corpus
+(`scripts/parity_corpus.txt` — submodule examples, a repo-local Nat+reuse
+fixture and patched-checkout regressions). Two strictly sequential phases: Haskell
 output is computed once per file-content hash and cached under
 `scripts/.gate_cache/proof/`; the Rust binary is then diffed against the cache
 — so re-runs after Rust-only changes skip the Haskell side entirely.
@@ -551,8 +576,8 @@ equivalent development binary while working on the manifest itself.
 
 ## Fast gates (run on every build)
 
-Both slice the *load-time* output — no `--prove` — so they cost ~45 s over
-the whole 432-file corpus instead of the batch gate's tens of minutes.
+Both slice the *load-time* output — no `--prove` — so they avoid the full
+proof-search cost. Runtime depends on theory-loading cost and cache warmth.
 
 ```bash
 scripts/wf_gate.sh        # the wellformedness WARNING block
@@ -626,7 +651,7 @@ Load-time only (none of them proves), but the only gates that compare
 **stderr** as well as stdout and rc. `FAMILY=1` is the inner-loop subset — one
 representative per divergence class, seconds on a warm cache; dropping it
 gives the milestone corpus. Documented residuals live in
-`scripts/sweep_expected.tsv` and report as `LEDGERED`; see `scripts/README.md`
+`scripts/sweep_expected.tsv` and report as `LEDGERED`; see `scripts/REFERENCE.md`
 for what the ledger can and cannot excuse.
 
 **`UNCOMPARED` is the status to watch.** A ledgered row whose outcome is ERROR,
@@ -646,11 +671,12 @@ An *undocumented* timeout is still a plain ERROR and still fails.
 ## CI reference gate
 
 ```bash
+./setup.sh testing-sources         # patched fixtures only; no Haskell build
 scripts/rs_ref_check.sh check       # exactly what CI's rs-parity job runs
 ```
 
 Compares one binary's stripped `--prove` output hashes against
-`scripts/ci_ref_fast.tsv` over the 365-file fast corpus, in both directions:
+`scripts/ci_ref_fast.tsv` over the 433-file fast corpus, in both directions:
 a run row with no reference row is a mismatch, and a reference row that never
 ran is `NOTRUN`, so a trimmed `ALLOWLIST` fails instead of silently shrinking
 coverage. The reference is a committed oracle-certified snapshot, not a live
@@ -722,6 +748,55 @@ list is `exit 2`, and so is an environment with no resolvable maude — every
 run would fail fast on both sides and be scored `ERROR_BOTH`, which is a
 sweep that compared nothing.
 
+## Upstream regression coverage
+
+The proof corpus is a committed allowlist, not a scan of upstream's examples.
+Its 507 theories include upstream examples, a repository-local fixture and
+68 fixtures from the patched `tamarin-prover-testing` checkout created by
+`./setup.sh testing`.
+Their paths are relative to the ordinary `tamarin-prover/examples` root;
+`../../tamarin-prover-testing/examples/...` deliberately selects patched
+fixtures without copying them into the pristine submodule.
+
+The regressions cover saved-proof replay/stopping, manual variants,
+subterm/natural-number handling, partial evaluation and SAPiC binding,
+destructor and state-translation soundness. They are included even when Rust
+does not yet match: a mismatch is work to fix, not grounds for exclusion.
+`file_flags.tsv` retains the upstream default trace-case options, notably
+`--stop-on-trace=sorry --bound=0` for the saved-proof stopping case,
+`--auto-sources` and `--partial-evaluation=summary` where required. The gate
+still supplies its shared 30-second derivation-check timeout and `--prove`.
+
+This is not full coverage of upstream's `.spthy.test.json` scenarios.
+Equivalence-mode, negative-input, export-only and load-only fixtures need
+their corresponding rejection, export, load or equivalence checks. Additional
+`-D` configurations, output-module checks, round trips and sidecar assertions
+also remain separate coverage; proving a file once does not exercise them all.
+The `sapic_export` CLI suite separately checks typed-export round trips,
+including proof verdicts, pattern arguments, open definitions, call-site
+locations, declaration constraints and unused-argument validation. Run it with
+`cargo test --profile ci -p tamarin-prover --test sapic_export`.
+The `sapic_scope` CLI suite covers nested closed-call ownership through open
+and closed wrappers, caller renaming, local pattern variables and rejection
+of repeated local binders. Run it with
+`cargo test --profile ci -p tamarin-prover --test sapic_scope`.
+The 433-theory fast CI corpus includes all 68 patched proof fixtures plus the
+upstream negated-equivalence regression. Its certified hashes are maintained
+separately; CI materializes the patched sources with `./setup.sh testing-sources`
+without compiling Haskell. Negative-input and non-proof scenarios remain in
+their focused suites rather than this successful-proof-output reference.
+In particular, `sp14/GDH.spthy` is now rejected for unsupported products;
+`cli_e2e` checks its failure and diagnostic, and the full proof gate still
+compares its output and exit status against Haskell.
+
+Adding entries without changing existing theory inputs or per-file flags
+preserves their Haskell proof-cache keys. Corpus membership is part
+of the whole-run certificate, not the individual cache key: a certificate
+for a smaller list cannot certify an expanded one. Active runs snapshot their list
+at startup and continue with their original scope. A later full run reuses
+their entries and fills only the new ones; an additions-only `ALLOWLIST` can
+also be run separately, but is not a full-corpus certificate.
+
 ## Web-parity gate (interactive mode)
 
 ```bash
@@ -744,6 +819,16 @@ graph and source pages up to the configured proof-node cap. Autoprove and
 other state-changing requests stay sequential. Read-only proof/graph pages
 use `WEB_FETCH_JOBS=2` concurrent requests per server (allowed range 1–16),
 with results recorded in crawl-plan order.
+
+Each selected proof node is fetched through four views: `main/proof` (the
+HTML proof/constraint pane), `interactive-graph-def/proof` (graph definition),
+`json/proof` (JSON graph), and `intdot/proof` (graph-view HTML shell).
+These are different representations of the same state, not repeated samples
+to test determinism. Each view is compared between Haskell and Rust:
+agreement on the proof pane alone does not establish agreement on graph
+generation or serialization. The default 400-node cap therefore permits up
+to 1,600 node-view requests per server in this phase, in addition to the
+initial lemma, source and other page requests.
 
 HTML is compared byte for byte, including tag spelling, attribute order,
 highlighting and whitespace. Only environment fields such as versions,
@@ -824,15 +909,16 @@ crawl truncated at `MAX_NODES`) are always reported and fail only under
 `FAIL_ON_CAPPED=1`. `scripts/websweep_residual.txt` is the milestone crawl
 list; the machine-checked residue lives in the ledger.
 
-`scripts/pane_byte_check.sh` is the byte-exact companion for the
-`main/message` and `main/rules` panes:
+`scripts/pane_byte_check.sh` is an optional, focused diagnostic for the
+`main/message` and `main/rules` panes. The full web gate already checks HTML
+bytes, so this is not an extra milestone requirement:
 
 ```bash
 scripts/pane_byte_check.sh <file-list>          # or ALLOWLIST=<file-list> ...
 ```
 
-The file list is **required** — no argument is `exit 2`, because the old
-default was `websweep_residual.txt`, exactly the set where a DIFF is expected.
+The file list is **required** — no argument is `exit 2`. Unlike the full web
+gate, this diagnostic does not apply the accepted-difference ledger.
 It ends in `DONE_PANE_BYTE_CHECK verdict=<...>` and exits nonzero on DIFF,
 `MISSING_*`, any `SKIP_*` and any `FILE-COUNT`/`ROW-COUNT` shortfall, so a
 missing selected cache profile (all rows `SKIP_NO_CACHE`) is a red run rather
@@ -847,23 +933,22 @@ They also use the parser-backed Rust binary described above. CI runs the same
 command:
 
 ```bash
-python3 scripts/test_web_harness.py
+scripts/test.sh harness
 ```
 
 ## Debugging a divergence
 
 Work top-down: which lemma → which proof step → which solver call.
 
-**Proof-tree diff** (canonicalised, per lemma):
+**Raw proof diff** (per lemma):
 
 ```bash
-scripts/diff_proof_tree.sh tamarin-prover/examples/Tutorial.spthy Client_auth
-scripts/diff_proof_tree.sh <file> <lemma> "TAM_RS_DBG_APPLY_EQ_STORE=1"   # extra env for the RS run
-target/release/examples/dump_proof <file> <lemma> | python3 scripts/canon_proof_tree.py
+scripts/diff_proof_raw.sh tamarin-prover/examples/Tutorial.spthy Client_auth
+scripts/diff_proof_raw.sh <file> <lemma> "TAM_RS_DBG_APPLY_EQ_STORE=1"   # extra env for the RS run
 ```
 
-`scripts/corpus_diff_proof_trees.sh` runs the same diff over a small,
-hand-picked regression corpus (PASS/FAIL tally).
+`scripts/corpus_raw_diff.sh` batches per-lemma comparisons. These are diagnostic
+tools; `scripts/test.sh proof` is the full-file parity gate.
 
 **Diagnostic env flags** (all off by default; solving behavior is never
 env-configurable — these only dump, count, verify-and-panic, or force a
@@ -911,57 +996,7 @@ that external dependency is unavailable. They should not be set for a gate.
 
 ## Script index
 
-Per-script detail — env contracts, verdict semantics, cache layout — lives in
-`scripts/README.md`; this is the map.
-
-`scripts/gate_common.sh` is the shared core underneath them: the gates, the
-three flag sweeps (via `sweep_common.sh`) and the cache-touching triage tools
-source it for the OOM prologue, the three strip policies, `flags_for`/`ckey`,
-`hs_fingerprint`, the gate file list, the maude resolver and the
-stale-binary / oracle-revision preflights. A consumer that cannot read it
-exits 2 rather than running with a private fallback.
-
-**Gates**
-
-| Script | Purpose |
-|---|---|
-| `corpus_file_diff.sh` | the ground-truth batch byte gate (cached HS, per-file) |
-| `wf_gate.sh` | wellformedness block, 432 files, off the shared no-prove load cache |
-| `pretty_gate.sh` | `theory … end` echo, 432 files, same cache, fills it too |
-| `divergence_fixtures/check.sh` (+ `capture.sh`, `fixtures.tsv`) | corners the corpus cannot reach; no oracle, no proving — CI's only oracle-byte comparison |
-| `pe_sweep.sh` / `module_sweep.sh` / `json_sweep.sh` (+ `sweep_common.sh`) | flag parity: stdout, stderr and rc |
-| `rs_ref_check.sh` | CI's gate: output hashes vs the oracle-certified `ci_ref_fast.tsv` snapshot |
-| `capture_cli_refs.sh` | captures the oracle stdout `cli_e2e.rs`'s flag pins compare against |
-| `web_parity.sh` (+ `web_crawl.py`, `web_normalize.py`, `web_diff.py`) | interactive-mode gate |
-| `pane_byte_check.sh` | byte-exact pane HTML vs the web cache; file list required |
-| `rs_vs_rs_diff.sh` / `triage_diff_vs_hs.sh` | refactor-inertness sweep + 3-way triage |
-
-**Data files**
-
-| File | Purpose |
-|---|---|
-| `parity_corpus.txt` | canonical 432-file corpus list |
-| `parity_corpus_fast.txt` | 365-file CI subset (every file proving in ≤1.5 s) |
-| `file_flags.tsv` | per-file batch flags |
-| `web_flags.tsv` | separate per-file interactive flags; unsupported entries fail the web gates |
-| `ci_ref_fast.tsv` | committed output-hash reference for `rs_ref_check.sh` |
-| `sweep_expected.tsv` | the flag sweeps' residual ledger (applied mechanically) |
-| `pe_family.txt` / `module_family.txt` / `json_family.txt` | `FAMILY=1` subsets |
-| `websweep_residual.txt` | the web milestone crawl list (residue itself is ledgered below) |
-| `websweep_ledger.tsv` | the web gate's residue ledger (applied mechanically) |
-| `crates/tamarin-prover/tests/fixtures/cli_refs/cases.tsv` | the argv table both `capture_cli_refs.sh` and `cli_e2e.rs` read |
-
-**Triage**
-
-| Script | Purpose |
-|---|---|
-| `diff_proof_raw.sh` | one lemma, raw HS↔RS diff |
-| `corpus_raw_diff.sh` | raw per-lemma diff across the corpus |
-| `compare_parity_tsv.py` | compare two gate TSVs by (file, lemma) |
-| `diff_proof_tree.sh` / `canon_proof_tree.py` / `corpus_diff_proof_trees.sh` | structural proof-tree diffs, pre-byte-parity era; superseded by the byte gates and only worth reaching for when output diverges too grossly to read |
-**Maintenance**
-
-| Script | Purpose |
-|---|---|
-| `bump_submodule.sh` | submodule bump: patch rebase, oracle rebuild, automatic server-fixture refresh, and explicit re-certification checklist (the caches self-invalidate, so none is archived) |
-| `bench.sh` | RS-vs-HS wall-clock + memory tables (`--write` regenerates the README block) |
+The [corpus quick-start](scripts/README.md) is the task-oriented index:
+two headline gates first, then supporting coverage and diagnostics.
+The [implementation reference](scripts/REFERENCE.md) documents individual
+scripts, environment settings, data files and shared cache contracts.

@@ -350,6 +350,7 @@ fn check(parsed: &p::Theory) -> WfReport {
         &crate::elaborate::elaborate(parsed).expect("elaborate"),
         None,
     )
+    .expect("static wellformedness checks")
 }
 
 /// Return the single `WfError` whose topic matches `topic`.

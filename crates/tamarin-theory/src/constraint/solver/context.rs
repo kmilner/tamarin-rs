@@ -264,6 +264,15 @@ impl SaturateGate {
     }
 }
 
+/// Failure to select a materialised source case. Keep the two bounds errors
+/// distinct: callers such as the web routes report the failed lookup.
+#[derive(Debug)]
+pub enum SourceCaseError {
+    SourceIndex,
+    CaseIndex,
+    Proof(crate::prove::ProveError),
+}
+
 impl ProofContext {
     pub(crate) fn proving_may_fail(&self) -> bool {
         self.source_provider
@@ -300,12 +309,13 @@ impl ProofContext {
         &self,
         source: usize,
         case: usize,
-    ) -> Result<Option<crate::constraint::system::System>, crate::prove::ProveError> {
-        self.ensure_saturated()?;
-        Ok(self
-            .full_sources
+    ) -> Result<crate::constraint::system::System, SourceCaseError> {
+        self.ensure_saturated().map_err(SourceCaseError::Proof)?;
+        self.full_sources
             .get(source)
-            .and_then(|source| source.case_system_at(case)))
+            .ok_or(SourceCaseError::SourceIndex)?
+            .case_system_at(case)
+            .ok_or(SourceCaseError::CaseIndex)
     }
 
     fn copy_with_sources(
@@ -395,52 +405,7 @@ pub enum UseInduction {
     AvoidInduction,
 }
 
-/// How the auto-prover cuts the proof tree around solved leaves,
-/// mirroring HS `SolutionExtractor` (Theory/Proof.hs) as selected
-/// by `runAutoProver` (Theory/Proof.hs).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum CutStrategy {
-    /// HS `CutDFS` → `cutOnSolvedDFS` (Theory/Proof.hs): parallel
-    /// iterative-deepening DFS, doubling `dMax` from 4.  Selects the leftmost
-    /// (preorder, CaseName order) solved leaf among those shallower than the
-    /// first `dMax` (4, 8, 16, …) to admit any solved leaf — within that
-    /// depth bucket a deeper-but-leftmost leaf beats a shallower one further
-    /// right, so this is NOT globally-shallowest.  The default when
-    /// `--stop-on-trace` is absent
-    /// (HS `constructAutoProver`: `fromMaybe CutDFS`, TheoryLoader.hs).
-    #[default]
-    Dfs,
-    /// HS `CutSingleThreadDFS` → `cutOnSolvedSingleThreadDFS`
-    /// (Theory/Proof.hs): single-thread depth-first with NO depth
-    /// bound and NO iterative deepening.  `findSolved`'s `foldMap` over the
-    /// children map descends the leftmost branch (CaseName order) to
-    /// completion before its siblings and stops at the first solved leaf, so
-    /// a deep solved leaf under the leftmost branch wins over a shallower one
-    /// further right even when the shallower leaf sits inside `Dfs`'s first
-    /// depth bucket (where `Dfs` would cut the deep branch off and pick it).
-    SeqDfs,
-    /// HS `CutBFS` → `cutOnSolvedBFS` (Theory/Proof.hs): iterative
-    /// level-deepening over the DFS proof tree.  At each level `l` the tree
-    /// is forced to depth `l` and walked in CaseName order with threaded
-    /// state: a Solved leaf at exactly depth `l` flips TraceFound; a node
-    /// still pending at depth `l` is cut to `sorry /* bound reached */`
-    /// (`sorry /* ignored (attack exists) */` once TraceFound).  On
-    /// TraceFound the CUT tree is the result — those sorry leaves are part
-    /// of the printed proof; a level that completes with nothing pending
-    /// returns the full tree unchanged.
-    Bfs,
-    /// HS `CutNothing` → `id` (Theory/Proof.hs): no cut at all — the
-    /// full proof tree is built and printed; sibling exploration does not
-    /// stop when a trace is found.
-    Nothing,
-    /// HS `CutAfterSorry` → `cutAfterFirstSorry` (Theory/Proof.hs):
-    /// preorder walk in CaseName order; the first `Sorry` or Solved leaf
-    /// aborts, and every node visited after the abort becomes a bare
-    /// `sorry` leaf (children dropped, system annotation kept).  Under the
-    /// unbounded default prover the only aborter is a Solved leaf, so this
-    /// reads as "stop at the first trace, sorry out the remainder".
-    AfterSorry,
-}
+pub use tamarin_term::tags::CutStrategy;
 
 impl ProofContext {
     pub fn new(maude: MaudeHandle, rules: Vec<OpenProtoRule>) -> Self {
@@ -983,7 +948,9 @@ impl ProofContext {
         };
         Self::dump_intruder_rules(&intruder_rules);
         // Detect injective fact instances ahead of time — mirrors
-        // Haskell's `pcInjectiveFactInsts` precomputation.
+        // Haskell's `pcInjectiveFactInsts` precomputation. Use the expanded
+        // solver rule, not `rule_e()` (which preserves macro syntax for
+        // display): upstream 1bc2bc8 fixes that distinction in closeRuleCache.
         let proto_rules: Vec<crate::rule::ProtoRuleE> =
             rules.iter().map(|r| r.rule.clone()).collect();
         let proto_rule_refs: Vec<&crate::rule::ProtoRuleE> = proto_rules.iter().collect();
@@ -1002,7 +969,26 @@ impl ProofContext {
                 );
         }
         let injective_fact_insts = injective_fact_insts.into_iter().collect();
-        if !loop_breakers_prepared {
+        // Explicit AC families are executable rules, not display-only metadata.
+        // Keep injectivity based on the original expanded E rules, but build
+        // all solver indices and loop breakers from the supplied members.
+        let has_explicit_variants = rules.iter().any(|rule| !rule.rule_ac.is_empty());
+        if has_explicit_variants {
+            rules = rules
+                .into_iter()
+                .flat_map(|rule| {
+                    if rule.rule_ac.is_empty() {
+                        vec![rule]
+                    } else {
+                        crate::theory::closed_rules_ac(&rule)
+                            .iter()
+                            .map(|ac| crate::tools::rule_variants::closed_rule_as_open(&rule, ac))
+                            .collect()
+                    }
+                })
+                .collect();
+        }
+        if !loop_breakers_prepared || has_explicit_variants {
             annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &maude);
         }
         for rule in &mut rules {
@@ -1377,6 +1363,75 @@ mod tests {
     use super::{IntrRuleCache, ProofContext, SaturateState, SaturationRun};
     use crate::rule::IntrRuleAC;
     use tamarin_test_support::require_maude_path;
+
+    #[test]
+    fn explicit_variant_actions_are_used_by_the_solver() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let source = r#"theory ExplicitActions begin
+rule Emit: [In(x)] --[Original(x)]-> []
+variants
+rule (modulo AC) Emit: [In(y.8)] --[Original(y.8), Added(y.8)]-> []
+end"#;
+        let theory =
+            crate::elaborate::elaborate(&tamarin_parser::parse_theory(source, &[]).unwrap())
+                .unwrap();
+        let maude =
+            tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone()).unwrap();
+        let ctx = ProofContext::new(maude, theory.rules().cloned().collect());
+        assert_eq!(ctx.rules.len(), 1);
+        assert_eq!(ctx.rules[0].rule.actions.len(), 2);
+        assert_eq!(ctx.rules[0].variant_substs.len(), 1);
+        assert!(ctx.rules[0].variant_substs[0].is_empty());
+    }
+
+    #[test]
+    fn injectivity_analysis_uses_expanded_macros_not_display_rules() {
+        use crate::fact::{FactTag, Multiplicity};
+        use crate::tools::injective_fact_instances::{
+            simple_injective_fact_instances, MonotonicBehaviour,
+        };
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        // Upstream 1bc2bc8 / msr-macro-injectivity: unexpanded macro
+        // applications look like strictly increasing free constructors.
+        let source = r#"theory MacroInjectivity begin
+macros: identity(x) = x, constant(x) = 'c', projection(x) = fst(<x, 'c'>)
+rule Init: [Fr(~id), In(x)] --> [S(~id, x), C(~id, x), P(~id, x)]
+rule Identity: [S(~id, x)] --> [S(~id, identity(x))]
+rule Constant: [C(~id, x)] --> [C(~id, constant(x))]
+rule Projection: [P(~id, x)] --> [P(~id, projection(x))]
+end"#;
+        let theory =
+            crate::elaborate::elaborate(&tamarin_parser::parse_theory(source, &[]).unwrap())
+                .unwrap();
+        let rules: Vec<_> = theory.rules().cloned().collect();
+        assert!(rules[1..].iter().all(|r| r.rule_e.is_some()));
+        let unexpanded = simple_injective_fact_instances(
+            &rules.iter().map(|r| r.rule_e()).collect::<Vec<_>>(),
+            &theory.signature.reducible_fun_syms_fast,
+        );
+        assert_eq!(unexpanded.len(), 3);
+        assert!(unexpanded
+            .iter()
+            .all(|(_, shape)| *shape == vec![vec![MonotonicBehaviour::StrictlyIncreasing]]));
+        let maude = tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature).unwrap();
+        let ctx = ProofContext::new(maude, rules);
+        for (tag, behaviour) in [
+            ("S", MonotonicBehaviour::Constant),
+            ("C", MonotonicBehaviour::Unstable),
+            ("P", MonotonicBehaviour::Unstable),
+        ] {
+            assert_eq!(
+                ctx.injective_fact_insts
+                    .get(&FactTag::Proto(Multiplicity::Linear, tag, 2)),
+                Some(&vec![vec![behaviour]]),
+                "{tag} must be analysed after macro expansion"
+            );
+        }
+    }
 
     /// A small Maude-free rule list: the special intruder rules
     /// (`coerce`, `pub`, `fresh`, `isend`, `irecv`).

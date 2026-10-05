@@ -964,10 +964,9 @@ end\n";
 }
 
 /// A `variants` block is parsed into `_oprRuleAC` (`protoRule`,
-/// Theory/Text/Parser/Rule.hs) and reaches the close
-/// untouched: `closeProtoRule`'s third equation maps `ClosedProtoRule ruE`
-/// over the list instead of computing variants or applying the macros
-/// (lib/theory/src/Rule.hs).
+/// Theory/Text/Parser/Rule.hs) and kept as explicit variants rather than
+/// recomputed. Macros are expanded in each supplied variant as well as
+/// the original rule before variant validation (lib/theory/src/Rule.hs).
 #[test]
 fn manual_variants_reach_the_internal_rule() {
     use crate::pretty_hpj::FLAT_WIDTH;
@@ -989,7 +988,7 @@ end\n";
 
     assert_eq!(rule.rule_ac.len(), 2);
     assert_eq!(rule.rule_ac[0].info.name, ProtoRuleName::Stand("R"));
-    assert_eq!(shown(&rule.rule_ac[0].actions[0]), "A( m(y) )");
+    assert_eq!(shown(&rule.rule_ac[0].actions[0]), "A( f(y) )");
     assert_eq!(shown(&rule.rule_ac[0].conclusions[0]), "Out( f(y) )");
     assert_eq!(shown(&rule.rule_ac[1].actions[0]), "A( f(z) )");
 }

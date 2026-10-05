@@ -534,7 +534,9 @@ fn web_search_options(
     Some(SearchOptions {
         proof_bound: if bound == 0 { usize::MAX } else { bound },
         ranking_depth_offset,
-        cut,
+        // The default web button preserves CLI > lemma > configuration.
+        // Other buttons (including oracle-only) are explicit overrides.
+        cut: (quit_on_empty || extractor_cut != CutStrategy::Dfs).then_some(cut),
         oracle_only: quit_on_empty,
     })
 }
@@ -1586,7 +1588,7 @@ pub async fn graph(
     let result = tokio::task::spawn_blocking(
         move || -> Result<Option<Response>, crate::state::StoreError> {
             let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
-            let resolved = thy_path_system(&entry, &path, GRAPH_UNHANDLED_SITE)
+            let resolved = thy_path_system(&entry, &path, GRAPH_SITES)
                 .map_err(crate::state::StoreError::Build)?;
             let label = resolved.json_label(&entry.typed_theory.name);
             let Some(sys) = resolved.into_system() else {
@@ -1643,7 +1645,7 @@ pub async fn interactive_graph_def(
     let result = tokio::task::spawn_blocking(
         move || -> Result<Option<String>, crate::state::StoreError> {
             let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
-            let resolved = thy_path_system(&entry, &path, INTERACTIVE_DOT_UNHANDLED_SITE)
+            let resolved = thy_path_system(&entry, &path, INTERACTIVE_DOT_SITES)
                 .map_err(crate::state::StoreError::Build)?;
             Ok(resolved.into_system().map(|sys| {
                 tamarin_theory::constraint::system::dot::system_to_dot_with(&sys, &opts)
@@ -1671,7 +1673,7 @@ pub async fn interactive_graph_def(
 ///   HS `fromMaybe ""`: a 200 with an EMPTY body.
 /// - `TheorySource kind i j` — the `(i-1, j-1)` case system, labelled
 ///   `Theory: <thy> Case: <i>:<j>`, with no backend abbreviation.  Indices
-///   naming no case are a 404 (see [`thy_path_system`]).
+///   naming no case are a 500 (see [`thy_path_system`]).
 /// - every other path — HS `error "Unhandled theory path. This is a bug."`,
 ///   i.e. 500.
 ///
@@ -1690,7 +1692,7 @@ pub async fn graph_json(
     let result = tokio::task::spawn_blocking(
         move || -> Result<Option<String>, crate::state::StoreError> {
             let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
-            let resolved = thy_path_system(&entry, &path, JSON_UNHANDLED_SITE)
+            let resolved = thy_path_system(&entry, &path, JSON_SITES)
                 .map_err(crate::state::StoreError::Build)?;
             let label = resolved.json_label(&entry.typed_theory.name);
             Ok(match resolved {
@@ -1839,19 +1841,38 @@ fn json_graph_response(body: String) -> Response {
 /// `imgThyPath`'s (`/graph`) and `dotGraphString`'s
 /// (`/interactive-graph-def`).  This `error` is upstream's DELIBERATE answer
 /// to a theory path the route does not draw, so the port reproduces its page
-/// byte-for-byte. Coordinates include PR #928; captured HTTP fixtures verify
-/// them against the patched oracle.
-const JSON_UNHANDLED_SITE: &str = "1312:31";
+/// byte-for-byte. Captured HTTP fixtures verify these coordinates against
+/// the pinned, patched oracle.
+#[derive(Clone, Copy)]
+struct GraphCallSites {
+    unhandled: &'static str,
+    source_index: &'static str,
+    case_index: &'static str,
+}
 
-/// `imgThyPath`'s clause — see [`JSON_UNHANDLED_SITE`].
-const GRAPH_UNHANDLED_SITE: &str = "1410:51";
+const JSON_SITES: GraphCallSites = GraphCallSites {
+    unhandled: "1314:31",
+    source_index: "1318:108",
+    case_index: "1318:117",
+};
 
-/// `dotGraphString`'s clause — see [`JSON_UNHANDLED_SITE`].
-const INTERACTIVE_DOT_UNHANDLED_SITE: &str = "2317:51";
+/// `imgThyPath`'s clauses — see [`GraphCallSites`].
+const GRAPH_SITES: GraphCallSites = GraphCallSites {
+    unhandled: "1412:51",
+    source_index: "1418:38",
+    case_index: "1418:47",
+};
+
+/// `dotGraphString`'s clauses — see [`GraphCallSites`].
+const INTERACTIVE_DOT_SITES: GraphCallSites = GraphCallSites {
+    unhandled: "2319:51",
+    source_index: "2325:38",
+    case_index: "2325:47",
+};
 
 /// The `error` `thyPathSystem`'s catch-all clause raises for a theory path that
 /// is neither a proof nor a source case, as GHC renders it into Yesod's error
-/// page.  `site` is the raising clause (see [`JSON_UNHANDLED_SITE`]).
+/// page.  `site` is the raising clause (see [`GraphCallSites`]).
 fn unhandled_theory_path(site: &str) -> String {
     format!(
         "Unhandled theory path. This is a bug.\nCallStack (from HasCallStack):\n  \
@@ -1859,17 +1880,60 @@ fn unhandled_theory_path(site: &str) -> String {
     )
 }
 
-/// HS `casesSystem k i j`: the `(i-1, j-1)` case of the `k` sources, or `None`
-/// when either 1-based index names no case — the port's correction of the
-/// raising `!!` upstream has there (see [`thy_path_system`]).
+/// Render the pinned GHC list-index exception without panicking in Rust.
+fn source_index_error(site: &str, negative: bool) -> String {
+    let (message, error_site, helper, helper_site) = if negative {
+        ("negative index", "1369:12", "negIndex", "1373:17")
+    } else {
+        ("index too large", "1366:14", "tooLarge", "1376:50")
+    };
+    format!(
+        "Prelude.!!: {message}\nCallStack (from HasCallStack):\n  \
+         error, called at libraries/base/GHC/List.hs:{error_site} in base:GHC.List\n  \
+         {helper}, called at libraries/base/GHC/List.hs:{helper_site} in base:GHC.List\n  \
+         !!, called at src/Web/Theory.hs:{site} in main:Web.Theory"
+    )
+}
+
+/// HS `casesSystem k i j`: select one case without cloning the other systems.
+/// Invalid indices reproduce upstream's exception page; an absent proof
+/// state remains an unresolved system.
 fn source_case_system(
     entry: &crate::state::TheoryEntry,
     kind: &path_parse::SourceKind,
     src_idx: i64,
     case_idx: i64,
+    sites: GraphCallSites,
 ) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
+    use tamarin_theory::constraint::solver::context::SourceCaseError;
+    use tamarin_theory::constraint::system::SourceKind;
+    // Haskell Int arithmetic wraps. The outer (!! j) tests for a negative
+    // index before demanding the inner source lookup, even if i is invalid.
+    let case_nth = usize::try_from(case_idx.wrapping_sub(1))
+        .map_err(|_| source_index_error(sites.case_index, true))?;
+    let src_nth = usize::try_from(src_idx.wrapping_sub(1))
+        .map_err(|_| source_index_error(sites.source_index, true))?;
+    let Some(ps) = &entry.proof_state else {
+        return Ok(None);
+    };
     let want_refined = matches!(kind, path_parse::SourceKind::Refined);
-    theory_html::source_list_case(entry, want_refined, src_idx, case_idx)
+    let source_kind = if want_refined {
+        SourceKind::RefinedSources
+    } else {
+        SourceKind::RawSources
+    };
+    let ctx = ps.context_for_sources(source_kind)?;
+    let mut system = ctx
+        .source_case_system_at(src_nth, case_nth)
+        .map_err(|error| match error {
+            SourceCaseError::SourceIndex => source_index_error(sites.source_index, false),
+            SourceCaseError::CaseIndex => source_index_error(sites.case_index, false),
+            SourceCaseError::Proof(error) => format!("proof context: {error}"),
+        })?;
+    if want_refined {
+        system.source_kind = Some(SourceKind::RefinedSources);
+    }
+    Ok(Some(system))
 }
 
 /// What [`thy_path_system`] resolved: the drawn system, plus the arm it came
@@ -1885,8 +1949,7 @@ enum PathSystem {
         lemma: String,
         system: Option<tamarin_theory::constraint::system::System>,
     },
-    /// HS `casesSystem k i j`; `system` is `None` when the indices name no
-    /// case (see [`source_case_system`]).
+    /// HS `casesSystem k i j`; `system` is `None` only without a proof state.
     Source {
         src_idx: i64,
         case_idx: i64,
@@ -1923,23 +1986,17 @@ impl PathSystem {
 ///     `Theory: <thy> Case: <i>:<j>`;
 ///   - `TheoryProof lemma path` — the sub-proof's system, labelled
 ///     `Theory: <thy> Lemma: <lemma>`;
-///   - anything else — the catch-all `error`, at `unhandled_site` (see
-///     [`JSON_UNHANDLED_SITE`]), which the routes render as a 500 page.
+///   - anything else — the catch-all `error` (see [`GraphCallSites`]), which
+///     the routes render as a 500 page.
 ///
-/// The port DIVERGES from upstream on the source-case indices.  Both are read
-/// signed (`safeRead` at `ReadS Int`, `src/Web/Types.hs`), so every value a
-/// client can type in the address bar arrives here, and upstream feeds them
-/// straight into `cases !! (i-1) !! (j-1)` behind no bounds check at all
-/// (`src/Web/Theory.hs` for `/json`, `/graph`, and
-/// `/interactive-graph-def`): a non-positive or past-the-end index raises
-/// `Prelude.!!` and Yesod serves a 500 page whose body is the exception text
-/// with its GHC CallStack.  Here an index that names no case is an ordinary
-/// miss — a `None` system, which every route answers with [`not_found`], the
-/// same answer upstream gives an unresolvable proof path.
+/// Source indices are signed (`safeRead` at `ReadS Int`, Web/Types.hs).
+/// Upstream's unchecked `cases !! (i-1) !! (j-1)` raises on invalid indices.
+/// Return its route-specific exception text so the status and body match,
+/// while keeping the Rust handler safe from bounds panics.
 fn thy_path_system(
     entry: &crate::state::TheoryEntry,
     path: &path_parse::TheoryPath,
-    unhandled_site: &str,
+    sites: GraphCallSites,
 ) -> Result<PathSystem, String> {
     match path {
         path_parse::TheoryPath::Source {
@@ -1947,7 +2004,7 @@ fn thy_path_system(
             src_idx,
             case_idx,
         } => {
-            let system = source_case_system(entry, kind, *src_idx, *case_idx)?;
+            let system = source_case_system(entry, kind, *src_idx, *case_idx, sites)?;
             Ok(PathSystem::Source {
                 src_idx: *src_idx,
                 case_idx: *case_idx,
@@ -1958,7 +2015,7 @@ fn thy_path_system(
             lemma: lemma.clone(),
             system: resolve_system_for_path(entry, path)?,
         }),
-        _ => Err(unhandled_theory_path(unhandled_site)),
+        _ => Err(unhandled_theory_path(sites.unhandled)),
     }
 }
 
@@ -2176,16 +2233,19 @@ mod tests {
             let nested = web_search_options(extractor, 5, false, 3).expect(extractor);
             assert_eq!(nested.proof_bound, 5);
             assert_eq!(nested.ranking_depth_offset, 3);
-            assert_eq!(nested.cut, expected);
+            assert_eq!(
+                nested.cut,
+                (expected != CutStrategy::Dfs).then_some(expected)
+            );
             assert!(!nested.oracle_only);
         }
 
         let unbounded = web_search_options("characterize", 0, false, 0).expect("all");
         assert_eq!(unbounded.proof_bound, usize::MAX);
-        assert_eq!(unbounded.cut, CutStrategy::Nothing);
+        assert_eq!(unbounded.cut, Some(CutStrategy::Nothing));
 
         let quit = web_search_options("characterize", 0, true, 0).expect("quit");
-        assert_eq!(quit.cut, CutStrategy::AfterSorry);
+        assert_eq!(quit.cut, Some(CutStrategy::AfterSorry));
         assert!(quit.oracle_only);
         assert!(web_search_options("unknown", 0, false, 0).is_none());
         assert!(web_search_options("unknown", 0, true, 0).is_none());

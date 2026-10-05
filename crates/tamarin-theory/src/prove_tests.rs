@@ -10,10 +10,101 @@
 //! lists therefore needs no second check that asserts less here.
 
 use super::*;
-use crate::constraint::solver::search::NodeStatus;
+use crate::constraint::solver::search::{NodeStatus, ProofStatus};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::{pair_maude_sig, MaudeSig};
 use tamarin_test_support::require_maude_path;
+
+#[test]
+fn stop_on_trace_attribute_precedence_and_rendering() {
+    use crate::constraint::solver::context::CutStrategy;
+    let Some(h) = maude() else { return };
+    let parsed = tamarin_parser::parse_theory("theory H begin lemma L [stop-on-trace=seqdfs,stop-on-trace=none]: \"T\" lemma Plain: \"T\" end", &[]).unwrap();
+    let theory = std::sync::Arc::new(elaborated(&parsed));
+    assert_eq!(
+        crate::pretty_theory::lemma_attr_docs(
+            &theory.lookup_lemma("L").unwrap().attributes,
+            "H.spthy"
+        )
+        .into_iter()
+        .map(|d| d.render())
+        .collect::<Vec<_>>(),
+        vec!["stop-on-trace=SEQDFS", "stop-on-trace=NONE"]
+    );
+    for forced in [false, true] {
+        let session = ProverSession::build(
+            theory.clone(),
+            h.clone(),
+            ProverSessionOptions {
+                cut: CutStrategy::Bfs,
+                force_cut: forced,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            session.context_for_lemma("L").unwrap().cut,
+            if forced {
+                CutStrategy::Bfs
+            } else {
+                CutStrategy::SeqDfs
+            }
+        );
+        assert_eq!(
+            session.context_for_lemma("Plain").unwrap().cut,
+            CutStrategy::Bfs
+        );
+    }
+}
+
+#[test]
+fn default_web_stop_on_trace_preserves_the_session_choice() {
+    use crate::constraint::solver::context::CutStrategy;
+    let Some(h) = maude() else { return };
+    let source = include_str!("../../tamarin-prover/tests/fixtures/lemma_stop_on_trace.spthy");
+    let theory = std::sync::Arc::new(elaborated(
+        &tamarin_parser::parse_theory(source, &[]).unwrap(),
+    ));
+    fn nodes(tree: &ProofNode) -> usize {
+        1 + tree.children.values().map(nodes).sum::<usize>()
+    }
+    for forced in [false, true] {
+        let session = ProverSession::build(
+            theory.clone(),
+            h.clone(),
+            ProverSessionOptions {
+                cut: CutStrategy::Nothing,
+                force_cut: forced,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for (override_cut, expected_nodes) in [
+            (None, if forced { 4 } else { 3 }),
+            (Some(CutStrategy::SeqDfs), 3),
+            (Some(CutStrategy::Nothing), 4),
+        ] {
+            let (_, _, sys) = lemma_context_and_system(&session, "selected").unwrap();
+            let tree = prove_system_in_session_with_options(
+                &session,
+                "selected",
+                sys,
+                SearchOptions {
+                    proof_bound: 20,
+                    ranking_depth_offset: 0,
+                    cut: override_cut,
+                    oracle_only: false,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                nodes(&tree),
+                expected_nodes,
+                "forced={forced}, override={override_cut:?}"
+            );
+        }
+    }
+}
 
 /// Returns a maude handle on `sig`.  Returns `None` only when the run opts
 /// out explicitly with `TAM_ALLOW_NO_MAUDE=1`.  Path resolution and the
@@ -64,6 +155,159 @@ fn prove_lemma_unknown_name_is_error() {
         5,
     );
     assert!(matches!(r, Err(ProveError::LemmaNotFound(_))));
+}
+
+#[test]
+fn public_proving_rejects_invalid_manual_variants() {
+    let Some(h) = maude() else { return };
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory InvalidVariant begin
+        rule Emit: [In(x)] --[A(x)]-> []
+        variants
+        rule (modulo AC) Emit: [In('a')] --[A('a')]-> []
+        lemma fixed: "All x #i. A(x) @ i ==> x = 'a'"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let theory = std::sync::Arc::new(elaborated(&parsed));
+    let counter = h.fresh_counter_peek();
+    let error = prove_lemma(theory.clone(), "fixed", h.clone(), 30).unwrap_err();
+    assert!(matches!(error, ProveError::UnsupportedInput(ref s) if s.contains("Variants")));
+    assert_eq!(h.fresh_counter_peek(), counter);
+    // A frontend's loop-breaker flag is not evidence that validation happened.
+    for loop_breakers_prepared in [false, true] {
+        let result = ProverSession::build(
+            theory.clone(),
+            h.clone(),
+            ProverSessionOptions {
+                loop_breakers_prepared,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(result, Err(ProveError::UnsupportedInput(_))));
+    }
+}
+
+#[test]
+fn public_proving_accepts_valid_manual_variants_and_ordinary_warnings() {
+    let Some(h) = maude() else { return };
+    // Reuse on an exists-trace lemma is an ordinary warning, not a reason to
+    // reject this complete family or turn the false all-traces lemma true.
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory ValidVariant begin
+        rule Emit: [In(x)] --[A(x)]-> []
+        variants
+        rule (modulo AC) Emit: [In(y)] --[A(y)]-> []
+        lemma fixed: "All x #i. A(x) @ i ==> x = 'a'"
+        lemma witness [reuse]: exists-trace "Ex x #i. A(x) @ i"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let theory = std::sync::Arc::new(elaborated(&parsed));
+    let report = crate::wellformedness::check_wellformedness(&theory, Some(&h)).unwrap();
+    assert!(!report.is_empty());
+    assert!(crate::wellformedness::variants::fatal_wf_errors(&report).is_empty());
+    let counter = h.fresh_counter_peek();
+    let session = ProverSession::build(theory, h.clone(), Default::default()).unwrap();
+    assert_eq!(h.fresh_counter_peek(), counter);
+    let proof = prove_lemma_in_session(&session, "fixed", 30).unwrap();
+    assert_eq!(
+        crate::constraint::solver::search::proof_status(&proof),
+        ProofStatus::TraceFound
+    );
+}
+
+#[test]
+fn public_proving_rejects_unsupported_source_products() {
+    for term in ["'a' * 'b'", "product('a','b')"] {
+        let source = format!(
+            r#"theory UnsupportedProduct begin
+        builtins: diffie-hellman
+        macros: product(x,y) = x*y
+        rule Emit: [] --[A({term})]-> []
+        lemma witness: exists-trace "Ex x #i. A(x) @ i"
+        end"#
+        );
+        let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+        let theory = elaborated(&parsed);
+        let Some(h) = maude_with(theory.signature.clone()) else {
+            return;
+        };
+        let error = prove_lemma(std::sync::Arc::new(theory), "witness", h, 5).unwrap_err();
+        assert!(matches!(error, ProveError::UnsupportedInput(ref s)
+        if s.contains("Unsupported multiplication outside exponents")));
+    }
+}
+
+#[test]
+fn public_proving_computes_reducible_manual_families_before_validating() {
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory PublicManualVariant begin
+        builtins: symmetric-encryption
+        rule Key: [Fr(~k)] --> [!Key(~k)]
+        rule Dec: [In(x), !Key(k)] --[A(sdec(x,k))]-> []
+        variants
+        rule (modulo AC) Dec___VARIANT_1:
+          [In(x.2), !Key(k.1)] --[A(sdec(x.2,k.1))]-> [],
+        rule (modulo AC) Dec___VARIANT_2:
+          [In(senc(z.2,k.1)), !Key(k.1)] --[A(z.2)]-> []
+        lemma witness: exists-trace "Ex m #i. A(m)@i"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let theory = elaborated(&parsed);
+    let Some(h) = maude_with(theory.signature.clone()) else {
+        return;
+    };
+    let proof = prove_lemma(std::sync::Arc::new(theory), "witness", h, 10).unwrap();
+    assert_eq!(
+        crate::constraint::solver::search::proof_status(&proof),
+        ProofStatus::TraceFound
+    );
+}
+
+#[test]
+fn public_proving_accepts_partial_evaluation_identity_families() {
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory PartialIdentity begin
+        builtins: symmetric-encryption
+        rule Key: [Fr(~k)] --> [!Key(~k)]
+        rule Secret: [Fr(~m), !Key(~k)] --[Secret(~m)]-> [Out(senc(~m,~k))]
+        lemma witness: exists-trace "Ex m #i. Secret(m) @ i"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let mut theory = elaborated(&parsed);
+    let Some(h) = maude_with(theory.signature.clone()) else {
+        return;
+    };
+    crate::tools::rule_variants::prepare_theory_rules(&mut theory, &h, None, true).unwrap();
+    crate::tools::apply_partial_evaluation(&mut theory, &h, crate::tools::EvaluationStyle::Silent)
+        .unwrap();
+    crate::tools::rule_variants::reprepare_theory_rules(&mut theory, &h, None).unwrap();
+    let theory = std::sync::Arc::new(theory);
+    for loop_breakers_prepared in [false, true] {
+        let counter = h.fresh_counter_peek();
+        let session = ProverSession::build(
+            theory.clone(),
+            h.clone(),
+            ProverSessionOptions {
+                loop_breakers_prepared,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(h.fresh_counter_peek(), counter);
+        let proof = prove_lemma_in_session(&session, "witness", 10).unwrap();
+        assert_eq!(
+            crate::constraint::solver::search::proof_status(&proof),
+            ProofStatus::TraceFound
+        );
+    }
 }
 
 #[test]

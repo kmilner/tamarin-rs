@@ -1041,15 +1041,16 @@ fn convert(
             let sub = vec![nag, cag];
             Ok(if polarity { gconj(sub) } else { gdisj(sub) })
         }
-        // p ↔ q is (p ⇒ q) ∧ (q ⇒ p), and HS conjoins the two arms at both
-        // polarities (Guarded.hs).
+        // p ↔ q is (p ⇒ q) ∧ (q ⇒ p). Under negation the two
+        // negated implications are disjoined (Guarded.hs).
         ProtoFormula::Conn(Connective::Iff, a, b) => {
             let lhs = ProtoFormula::Conn(Connective::Imp, a.clone(), b.clone());
             let rhs = ProtoFormula::Conn(Connective::Imp, b.clone(), a.clone());
-            Ok(gconj(vec![
+            let sub = vec![
                 convert(polarity, &lhs, fresh)?,
                 convert(polarity, &rhs, fresh)?,
-            ]))
+            ];
+            Ok(if polarity { gdisj(sub) } else { gconj(sub) })
         }
         // The quantifier decides whether the body must be a top-level
         // implication (`convAll`) or a conjunction (`convEx`); the polarity
@@ -1432,7 +1433,8 @@ pub fn gnot(g: &Guarded) -> Guarded {
 
 /// `satisfiedByEmptyTrace`: does the formula hold under the empty
 /// trace (no actions)? Returns `Err` for atoms outside the scope of a
-/// quantifier (formula is not doubly guarded).
+/// quantifier (formula is not doubly guarded), or an equality-only guard
+/// whose truth on the empty trace has not been established (upstream #958).
 pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
     match g {
         Guarded::Atom(_) => Err("atom outside the scope of a quantifier".to_string()),
@@ -1459,7 +1461,16 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
             }
             Ok(all)
         }
-        Guarded::GGuarded { qua, .. } => Ok(matches!(qua, Quantifier::All)),
+        Guarded::GGuarded { qua, guards, .. } => {
+            if guards.iter().any(|atom| matches!(atom, Atom::Action(_, _))) {
+                Ok(matches!(qua, Quantifier::All))
+            } else {
+                Err(
+                    "formula has an equality-only guard whose value on the empty trace is unknown"
+                        .to_string(),
+                )
+            }
+        }
     }
 }
 

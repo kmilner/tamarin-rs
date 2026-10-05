@@ -31,6 +31,7 @@ pub enum ProveError {
     InvalidHeuristic(String),
     Ranking(RankingError),
     Maude(String),
+    UnsupportedInput(String),
 }
 
 impl From<crate::tools::equation_store::AddEqsError> for ProveError {
@@ -48,8 +49,10 @@ impl From<RankingError> for ProveError {
 
 impl From<crate::tools::rule_variants::VariantsError> for ProveError {
     fn from(error: crate::tools::rule_variants::VariantsError) -> Self {
-        let crate::tools::rule_variants::VariantsError::Maude(message) = error;
-        Self::Maude(message)
+        match error {
+            crate::tools::rule_variants::VariantsError::Maude(message) => Self::Maude(message),
+            other => Self::UnsupportedInput(other.to_string()),
+        }
     }
 }
 
@@ -59,7 +62,8 @@ impl From<crate::tools::rule_variants::VariantsError> for ProveError {
 pub struct SearchOptions {
     pub proof_bound: usize,
     pub ranking_depth_offset: usize,
-    pub cut: crate::constraint::solver::context::CutStrategy,
+    /// None keeps the session/lemma selection; Some is an explicit override.
+    pub cut: Option<crate::constraint::solver::context::CutStrategy>,
     pub oracle_only: bool,
 }
 
@@ -84,6 +88,7 @@ impl std::fmt::Display for ProveError {
             ProveError::InvalidHeuristic(m) => f.write_str(m),
             ProveError::Ranking(m) => write!(f, "goal ranking: {m}"),
             ProveError::Maude(m) => write!(f, "Maude error: {m}"),
+            ProveError::UnsupportedInput(m) => write!(f, "{m}"),
         }
     }
 }
@@ -95,7 +100,8 @@ impl std::error::Error for ProveError {
             ProveError::LemmaNotFound(_)
             | ProveError::Guarded(_)
             | ProveError::InvalidHeuristic(_)
-            | ProveError::Maude(_) => None,
+            | ProveError::Maude(_)
+            | ProveError::UnsupportedInput(_) => None,
         }
     }
 }
@@ -297,14 +303,26 @@ pub fn parse_stop_on_trace(
     raw: &str,
 ) -> Result<crate::constraint::solver::context::CutStrategy, String> {
     use crate::constraint::solver::context::CutStrategy;
-    match raw.to_ascii_lowercase().as_str() {
-        "dfs" => Ok(CutStrategy::Dfs),
-        "bfs" => Ok(CutStrategy::Bfs),
-        "seqdfs" => Ok(CutStrategy::SeqDfs),
-        "sorry" => Ok(CutStrategy::AfterSorry),
-        "none" => Ok(CutStrategy::Nothing),
-        other => Err(format!("unknown stop-on-trace method: {}", other)),
+    CutStrategy::parse(raw)
+        .ok_or_else(|| format!("unknown stop-on-trace method: {}", raw.to_ascii_lowercase()))
+}
+
+fn select_cut(
+    fallback: crate::constraint::solver::context::CutStrategy,
+    forced: bool,
+    lemma: &crate::theory::Lemma,
+) -> crate::constraint::solver::context::CutStrategy {
+    if forced {
+        return fallback;
     }
+    lemma
+        .attributes
+        .iter()
+        .find_map(|a| match a {
+            crate::theory::LemmaAttr::StopOnTrace(cut) => Some(*cut),
+            _ => None,
+        })
+        .unwrap_or(fallback)
 }
 
 /// [`parse_config_block`] + eager validation of both recorded errors —
@@ -610,11 +628,10 @@ pub struct ProverSession {
     prepared_lemmas: Vec<PreparedLemma>,
     /// The `[sources]` subset of `prepared_lemmas`, retained as shared handles.
     source_assumptions: std::sync::Arc<Result<Vec<std::sync::Arc<Guarded>>, ProveError>>,
-    /// Solved-leaf extraction strategy (HS `apCut`, threaded from
-    /// `--stop-on-trace`, TheoryLoader.hs).  Theory-global (HS
-    /// stores it once in `TheoryLoadOptions.stopOnTrace`), so it is set on
-    /// every per-lemma `ProofContext` in [`Self::setup_per_lemma_ctx`].
+    /// Theory-wide fallback; an explicitly forced CLI choice wins over the
+    /// lemma attribute, which otherwise wins over this fallback.
     cut: crate::constraint::solver::context::CutStrategy,
+    force_cut: bool,
     /// Template `ProofContext` carrying the expensive precompute:
     /// `rules` (with variants installed), `intruder_rules`,
     /// `full_sources` (raw, unsaturated cells), etc.
@@ -646,6 +663,7 @@ pub struct ProverSessionOptions {
     pub maude_pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
     pub cli_heuristic: CliHeuristic,
     pub cut: crate::constraint::solver::context::CutStrategy,
+    pub force_cut: bool,
     pub ndc_cache: Option<IntrRuleCache>,
     pub parameters: crate::constraint::solver::sources::IntegerParameters,
     pub sys_retention: crate::constraint::solver::search::SysRetention,
@@ -663,6 +681,7 @@ impl Default for ProverSessionOptions {
             maude_pool: None,
             cli_heuristic: CliHeuristic::default(),
             cut: crate::constraint::solver::context::CutStrategy::Dfs,
+            force_cut: false,
             ndc_cache: None,
             parameters: crate::constraint::solver::sources::IntegerParameters::default(),
             sys_retention: crate::constraint::solver::search::SysRetention::DropAll,
@@ -1098,10 +1117,12 @@ impl ProverSession {
         maude: tamarin_term::maude_proc::MaudeHandle,
         options: ProverSessionOptions,
     ) -> Result<Self, ProveError> {
+        crate::tools::rule_variants::validate_theory_for_proving(&theory, &maude)?;
         let ProverSessionOptions {
             maude_pool,
             cli_heuristic,
             cut,
+            force_cut,
             ndc_cache,
             parameters,
             sys_retention,
@@ -1178,6 +1199,7 @@ impl ProverSession {
             prepared_lemmas,
             source_assumptions,
             cut,
+            force_cut,
             template_ctx: std::sync::Arc::new(template_ctx),
             setup_counter_before,
             source_cache: std::sync::Arc::new(SourceCache::default()),
@@ -1204,9 +1226,7 @@ impl ProverSession {
             lemma.trace_quantifier,
             crate::theory::TraceQuantifier::ExistsTrace,
         );
-        // HS `apCut` is theory-global (one `TheoryLoadOptions.stopOnTrace`),
-        // so stamp the session's cut onto every per-lemma context.
-        ctx.cut = self.cut;
+        ctx.cut = select_cut(self.cut, self.force_cut, lemma);
         let session_in_file = self.theory.in_file.as_str();
         ctx.heuristic = prepared.heuristic.clone();
         ctx.lemma_name = lemma.name.clone();
@@ -1396,7 +1416,7 @@ pub fn prove_system_in_session(
         SearchOptions {
             proof_bound,
             ranking_depth_offset: 0,
-            cut: session.cut,
+            cut: None,
             oracle_only: false,
         },
     )
@@ -1412,7 +1432,9 @@ pub fn prove_system_in_session_with_options(
     use crate::constraint::solver::goals::GoalRanking;
 
     let mut ctx = session.context_for_lemma(lemma_name)?;
-    ctx.cut = options.cut;
+    if let Some(cut) = options.cut {
+        ctx.cut = cut;
+    }
     if options.oracle_only
         && let Some(rankings) = &mut ctx.heuristic
     {

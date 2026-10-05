@@ -37,15 +37,140 @@ use crate::theory::{OpenProtoRule, Theory, TheoryItem};
 
 type LNSubst = Subst<Name, LVar>;
 
+/// HS `unfoldRuleVariants` on ONE closed rule (lib/theory/src/Rule.hs),
+/// non-trivial case: for each substitution i (1-based) of the rule's variant
+/// disjunction, `freshToFreeAvoiding` it against the AC rule, apply it to
+/// (premises, conclusions, actions, new vars), and emit a rule named
+/// `<name>___VARIANT_<i>` (a FreshRule keeps its name) whose own variants
+/// are `Disj [emptySubstVFresh]`, carrying over the original's attributes
+/// and (pre-computed) loop breakers verbatim.
+///
+/// An empty disjunction stands for HS's ever-present trivial
+/// `Disj [emptySubstVFresh]` (`trueDisj`, RuleVariants.hs), so a body-divergent rule with no residual substs still unfolds
+/// into exactly one `___VARIANT_1` rule.
+pub(crate) fn unfold_closed_rule(parent: &OpenProtoRule, ac: &ProtoRuleAC) -> Vec<OpenProtoRule> {
+    use tamarin_term::lterm::{HasFrees, LVar};
+    use tamarin_term::subst_vfresh::LNSubstVFresh;
+    let o = closed_rule_as_open(parent, ac);
+    if crate::rule::is_trivial_proto_variant_ac(ac, parent.rule_e()) {
+        return vec![o];
+    }
+    let ac = &o.rule;
+    let trivial_disj = [LNSubstVFresh::empty()];
+    let substs: &[LNSubstVFresh] = if o.variant_substs.is_empty() {
+        &trivial_disj
+    } else {
+        &o.variant_substs
+    };
+    if substs == trivial_disj && ac.info.name != o.rule_e().info.name {
+        return vec![o];
+    }
+    // `freshToFreeAvoiding subst ruAC` allocates above `avoid ruAC`; HS's
+    // `HasFrees (Rule ProtoRuleACInfo)` folds the rule INFO first, whose
+    // variant-disjunction DOMAIN keys are frees (keys-only,
+    // Theory/Model/Rule.hs; SubstVFresh.hs), so
+    // they participate in the bound alongside the body.
+    let mut max_idx: Option<u64> = None;
+    {
+        let mut see = |v: &LVar| {
+            max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
+        };
+        for s in substs {
+            for (k, _) in s.iter() {
+                see(k);
+            }
+        }
+        ac.for_each_free(&mut see);
+    }
+    let seed = max_idx.map(|m| m + 1).unwrap_or(0);
+    substs
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            // Each subst gets its own `evalFreshAvoiding` scope (HS maps
+            // `freshToFreeAvoiding` per subst against the same `ruAC`).
+            let mut counter = seed;
+            let sigma = s.fresh_to_free_avoiding(|n| {
+                let b = counter;
+                counter += n;
+                b
+            });
+            let mut ru = crate::rule::apply_subst_rule(&sigma, ac);
+            // `rName i` (lib/theory/src/Rule.hs): FreshRule keeps its
+            // name; StandRule gains the 1-based `___VARIANT_<i>` suffix.
+            ru.info.name = match ru.info.name {
+                crate::rule::ProtoRuleName::Fresh => crate::rule::ProtoRuleName::Fresh,
+                crate::rule::ProtoRuleName::Stand(name) => crate::rule::ProtoRuleName::Stand(
+                    tamarin_term::intern::intern_str(&format!("{}___VARIANT_{}", name, i + 1)),
+                ),
+            };
+            OpenProtoRule {
+                rule: ru,
+                variant_substs: vec![LNSubstVFresh::empty()],
+                abstracted_rule: None,
+                loop_breakers: o.loop_breakers.clone(),
+                // `toClosedProtoRule` keeps the ORIGINAL rule as every
+                // variant's `cprRuleE` (lib/theory/src/Rule.hs) — the
+                // half `getProtoRuleEs` dedups back to one copy.
+                rule_e: Some(Box::new(o.rule_e().clone())),
+                // `unfoldRuleVariants` runs on a rule whose variants Maude
+                // computed, which `closeProtoRule` reaches only for a rule
+                // that declared none (lib/theory/src/Rule.hs).
+                rule_ac: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// Re-express one closed AC half as the split open representation consumed by
+/// [`unfold_closed_rule`]. This also covers source-declared
+/// `variants (modulo AC)` blocks, whose bodies do not live in
+/// `abstracted_rule`/`variant_substs` on their parent.
+pub(crate) fn closed_rule_as_open(
+    parent: &OpenProtoRule,
+    ac: &crate::rule::ProtoRuleAC,
+) -> OpenProtoRule {
+    let rule = crate::rule::Rule {
+        info: crate::rule::ProtoRuleEInfo {
+            name: ac.info.name,
+            attributes: ac.info.attributes.clone(),
+            restrictions: parent.rule.info.restrictions.clone(),
+        },
+        premises: ac.premises.clone(),
+        conclusions: ac.conclusions.clone(),
+        actions: ac.actions.clone(),
+        new_vars: ac.new_vars.clone(),
+    };
+    OpenProtoRule {
+        rule,
+        variant_substs: ac.info.variants.clone(),
+        abstracted_rule: None,
+        loop_breakers: ac.info.loop_breakers.clone(),
+        rule_e: Some(Box::new(parent.rule_e().clone())),
+        rule_ac: Vec::new(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum VariantsError {
     Maude(String),
+    MissingMaudeForExplicitVariants,
+    UnsupportedInput(crate::wellformedness::WfReport),
 }
 
 impl std::fmt::Display for VariantsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VariantsError::Maude(s) => write!(f, "Maude error: {}", s),
+            VariantsError::MissingMaudeForExplicitVariants => write!(
+                f,
+                "Maude is required to validate explicit rule variants; refusing to load an unchecked family."
+            ),
+            VariantsError::UnsupportedInput(report) => write!(
+                f,
+                "{}\nUnsupported rule semantics - aborting before proof search.",
+                crate::pretty_theory::render_wf_error_report(report)
+            ),
         }
     }
 }
@@ -341,7 +466,11 @@ pub fn prepare_theory_rules(
     annotate_breakers: bool,
 ) -> Result<crate::wellformedness::WfReport, VariantsError> {
     populate_rule_variants(theory, maude, pool)?;
-    let report = crate::wellformedness::check_wellformedness(theory, Some(maude));
+    let report = crate::wellformedness::check_wellformedness(theory, Some(maude))?;
+    let fatal = crate::wellformedness::variants::fatal_wf_errors(&report);
+    if annotate_breakers && !fatal.is_empty() {
+        return Err(VariantsError::UnsupportedInput(fatal));
+    }
     finish_theory_rules(theory, maude, annotate_breakers);
     Ok(report)
 }
@@ -357,6 +486,34 @@ pub fn reprepare_theory_rules(
     populate_rule_variants(theory, maude, pool)?;
     finish_theory_rules(theory, maude, true);
     Ok(())
+}
+
+/// Enforce the fatal rule checks at the public proving boundary as well as in
+/// the frontends. Ordinary wellformedness warnings do not prevent proving.
+/// Validation must not consume the session's fresh-variable counter.
+pub fn validate_theory_for_proving(
+    theory: &Theory,
+    maude: &MaudeHandle,
+) -> Result<(), VariantsError> {
+    let _plain = crate::pretty_hpj::HtmlDocGuard::disable();
+    let validation_maude = maude.with_fresh_counter_from(maude.fresh_counter_peek());
+    let mut report =
+        crate::wellformedness::variants::explicit_variants_report(theory, &validation_maude)?;
+    let macros: Vec<_> = theory.macros().cloned().collect();
+    for rule in theory.rules() {
+        // Closing may replace `rule` by an AC member with supported added
+        // products. Check the original E half, but expand its source macros.
+        let source = crate::rule::apply_macro_in_rule(&macros, rule.rule_e().clone());
+        report.extend(crate::wellformedness::mult::unsupported_products_report([
+            &source,
+        ]));
+    }
+    let fatal = crate::wellformedness::variants::fatal_wf_errors(&report);
+    if fatal.is_empty() {
+        Ok(())
+    } else {
+        Err(VariantsError::UnsupportedInput(fatal))
+    }
 }
 
 fn finish_theory_rules(theory: &mut Theory, maude: &MaudeHandle, annotate_breakers: bool) {

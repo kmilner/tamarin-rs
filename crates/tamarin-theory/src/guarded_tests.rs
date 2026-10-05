@@ -281,6 +281,27 @@ fn satisfied_by_empty_trace_handles_quants() {
 }
 
 #[test]
+fn empty_trace_rejects_equality_only_guards() {
+    // Equality-only guards can have witnesses without any trace actions.
+    // Neither quantifier may be decided by vacuity in this case (#958).
+    let term = crate::formula::lift_free(&tamarin_term::builtin::msg_var("x", 0));
+    for qua in [Quantifier::All, Quantifier::Ex] {
+        let formula = Guarded::GGuarded {
+            qua,
+            vars: Vec::new().into(),
+            guards: vec![Atom::EqE(term.clone(), term.clone())].into(),
+            body: std::sync::Arc::new(gtrue()),
+        };
+        assert!(satisfied_by_empty_trace(&formula).is_err());
+        // Do not short-circuit a Boolean fold before checking every child.
+        let disj = Guarded::Disj(vec![gtrue(), formula.clone()].into());
+        let conj = Guarded::Conj(vec![gfalse(), formula].into());
+        assert!(satisfied_by_empty_trace(&disj).is_err());
+        assert!(satisfied_by_empty_trace(&conj).is_err());
+    }
+}
+
+#[test]
 fn ginduct_existential_action_succeeds() {
     // Ex k #i. P(k) @ #i — closed, contains an action atom, not last-bearing.
     let gf = g("Ex k #i. P(k)@#i").expect("guarded");
@@ -1432,9 +1453,8 @@ fn rejects_a_universal_without_a_toplevel_implication() {
     );
 }
 
-/// HS `convert polarity (Conn Iff f1 f2)` is `gconj` of the two implications
-/// (Guarded.hs), which at the entry polarity is what the written
-/// conjunction of them converts to.
+/// At positive polarity, equivalence conjoins its two implications
+/// (Guarded.hs).
 #[test]
 fn treats_iff_as_two_implications() {
     let iff = g("(Ex x #i. A(x) @ #i) <=> (Ex y #j. B(y) @ #j)").expect("both sides are guarded");
@@ -1446,6 +1466,36 @@ fn treats_iff_as_two_implications() {
         matches!(&iff, Guarded::Conj(items) if items.len() == 2),
         "the two implications are conjoined, got {iff:?}"
     );
+}
+
+#[test]
+fn negated_equivalence_disjoins_negated_implications() {
+    let iff =
+        g("not ((Ex x #i. A(x) @ #i) <=> (Ex y #j. B(y) @ #j))").expect("both sides are guarded");
+    let expanded = g("not (((Ex x #i. A(x) @ #i) ==> (Ex y #j. B(y) @ #j)) & \
+        ((Ex y #j. B(y) @ #j) ==> (Ex x #i. A(x) @ #i)))")
+    .expect("both sides are guarded");
+    assert_eq!(iff, expanded);
+    assert!(matches!(iff, Guarded::Disj(items) if items.len() == 2));
+}
+
+#[test]
+fn equivalence_truth_table_respects_both_polarities() {
+    for left in [false, true] {
+        for right in [false, true] {
+            let formula = format!(
+                "({} <=> {})",
+                if left { "T" } else { "F" },
+                if right { "T" } else { "F" }
+            );
+            assert_eq!(g(&formula).unwrap(), gtf(left == right));
+            assert_eq!(g(&format!("not {formula}")).unwrap(), gtf(left != right));
+            assert_eq!(
+                g(&format!("not (not {formula})")).unwrap(),
+                gtf(left == right)
+            );
+        }
+    }
 }
 
 // =============================================================================

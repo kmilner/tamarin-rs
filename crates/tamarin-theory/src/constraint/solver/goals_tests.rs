@@ -574,3 +574,13 @@ fn compact_and_standalone_default_oracles_parse_identically() {
     let spaced = parse_heuristic_str_with_tactics(r#"o s o O "y" s O"#, "t.spthy", &[]);
     assert_eq!(compact, spaced);
 }
+
+#[test]
+fn compact_heuristic_keeps_each_oracle_path() {
+    let rankings =
+        parse_heuristic_str_with_tactics("sO \"path with spaces\"i{Custom}", "H.spthy", &[]);
+    assert_eq!(
+        crate::pretty_theory::pretty_goal_rankings(&rankings),
+        "s O \"path with spaces\" i {Custom}"
+    );
+}

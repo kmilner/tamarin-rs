@@ -59,6 +59,7 @@ pub(crate) fn reliable_channel_init(
         ],
         restr: vec![],
         index: 0,
+        matches_destructor_equation: false,
     };
     let mut out = vec![message_id_rule];
     out.extend(init_rules);
@@ -98,7 +99,7 @@ pub(crate) fn reliable_channel_trans_act(
             tx2.extend(freeset(&t));
             // `ts = fAppPair (v,t)`
             let ts = tamarin_term::builtin::pair(vt.clone(), t.clone());
-            let body: RuleBody = (
+            let body = RuleBody::new(
                 vec![def_state(), TransFact::In(ts.clone())],
                 vec![TransAction::ChannelIn(ts)],
                 vec![def_state1(&tx2)],
@@ -113,7 +114,7 @@ pub(crate) fn reliable_channel_trans_act(
             let mut tx2 = tx.clone();
             tx2.extend(freeset(&vt));
             tx2.extend(freeset(&t));
-            let body: RuleBody = (
+            let body = RuleBody::new(
                 vec![def_state(), TransFact::In(vt.clone())],
                 vec![TransAction::ChannelIn(vt)],
                 vec![def_state1(&tx2), TransFact::Out(t)],
@@ -130,7 +131,7 @@ pub(crate) fn reliable_channel_trans_act(
             let mut tx2 = tx.clone();
             tx2.extend(freeset(&rt));
             tx2.extend(freeset(&t));
-            let body: RuleBody = (
+            let body = RuleBody::new(
                 vec![
                     def_state(),
                     TransFact::In(t.clone()),
@@ -149,7 +150,7 @@ pub(crate) fn reliable_channel_trans_act(
             let mut tx2 = tx.clone();
             tx2.extend(freeset(&rt));
             tx2.extend(freeset(&t));
-            let body: RuleBody = (
+            let body = RuleBody::new(
                 vec![TransFact::MessageIDSender(p.clone()), def_state()],
                 vec![TransAction::Send(p.clone(), t.clone())],
                 vec![TransFact::Out(t), def_state1(&tx2)],

@@ -120,6 +120,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
+      # The fast corpus includes fixtures supplied by our upstream patches.
+      # Only their sources are needed: CI compares committed oracle hashes.
+      - run: ./setup.sh testing-sources
       - run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
       # The focused harness tests fingerprint Graphviz as part of web-cache
@@ -139,7 +142,7 @@ jobs:
           echo /opt/maude >> "$GITHUB_PATH"
       - run: cargo build --release
       - name: Parity harness regression tests
-        run: python3 scripts/test_web_harness.py
+        run: scripts/test.sh harness
       # Prove-output parity: this branch's binary vs the committed reference
       # of main's outputs (scripts/ci_ref_fast.tsv over
       # scripts/parity_corpus_fast.txt).  On DIFF: reproduce locally with

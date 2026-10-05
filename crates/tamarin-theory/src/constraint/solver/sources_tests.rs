@@ -6,6 +6,87 @@ use super::*;
 use tamarin_test_support::require_maude_path;
 
 #[test]
+fn source_premise_rewire_moves_goals_and_combines_collisions() {
+    use crate::constraint::constraints::{Edge, Goal};
+    use crate::constraint::system::GoalStatus;
+    use crate::fact::{Fact, FactTag};
+    use crate::rule::{ConcIdx, PremIdx};
+    use tamarin_term::lterm::{LSort, LVar};
+    let node = LVar::new("i", LSort::Node, 0);
+    let supplier = LVar::new("j", LSort::Node, 1);
+    let from = (node, PremIdx(0));
+    let to = (node, PremIdx(2));
+    let conc = (supplier, ConcIdx(0));
+    let fact = Fact::new(FactTag::Out, vec![tamarin_term::builtin::msg_var("x", 0)]);
+    let mut sys = System::empty();
+    sys.add_edge(Edge {
+        src: conc,
+        tgt: from,
+    });
+    sys.add_edge(Edge { src: conc, tgt: to });
+    sys.content_mut().goals = std::sync::Arc::new(vec![
+        (
+            Goal::Premise(from, fact.clone()),
+            GoalStatus {
+                solved: true,
+                looping: false,
+                nr: 7,
+            },
+        ),
+        (
+            Goal::Premise(to, fact.clone()),
+            GoalStatus {
+                solved: false,
+                looping: true,
+                nr: 3,
+            },
+        ),
+        (
+            Goal::Chain(conc, from),
+            GoalStatus {
+                solved: false,
+                looping: false,
+                nr: 9,
+            },
+        ),
+        (
+            Goal::Action(node, fact.clone()),
+            GoalStatus {
+                solved: false,
+                looping: false,
+                nr: 10,
+            },
+        ),
+    ]);
+    let next_nr = sys.next_goal_nr;
+    rewire_source_premise(&mut sys, from, to);
+    assert_eq!(sys.edges[0].tgt, to);
+    assert_eq!(
+        sys.edges.len(),
+        1,
+        "mapped edge collisions are set-deduplicated"
+    );
+    assert_eq!(sys.goals.len(), 3);
+    let status = &sys
+        .goals
+        .iter()
+        .find(|(g, _)| *g == Goal::Premise(to, fact.clone()))
+        .unwrap()
+        .1;
+    assert!(status.solved && status.looping);
+    assert_eq!(status.nr, 3);
+    assert!(sys.goals.iter().any(|(g, _)| *g == Goal::Chain(conc, to)));
+    assert!(sys
+        .goals
+        .iter()
+        .any(|(g, _)| *g == Goal::Action(node, fact.clone())));
+    assert_eq!(
+        sys.next_goal_nr, next_nr,
+        "rewiring must not allocate new goal numbers"
+    );
+}
+
+#[test]
 fn default_parameters_match_haskell() {
     let p = IntegerParameters::default();
     assert_eq!(p.open_chains_limit(), 10);

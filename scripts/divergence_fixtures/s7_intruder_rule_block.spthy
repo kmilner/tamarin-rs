@@ -6,7 +6,7 @@
  * (`intrRule`, Theory/Text/Parser/Rule.hs; `addIntrRuleACs`,
  * Theory/Text/Parser.hs, OpenTheory.hs), not into the item list,
  * and both theory prints drop the cache: `prettyOpenTheory` passes
- * `const emptyDoc` as `ppCache` (OpenTheory.hs) and
+ * `const emptyDoc` as `ppCache` (OpenTheory.hs#prettyOpenTheory) and
  * `prettyClosedTheory` passes `ppInjectiveFactInsts`
  * (ClosedTheory.hs), which renders only the looping-facts comment.
  * So the block contributes nothing to the echo, and the rule joins no

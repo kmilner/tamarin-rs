@@ -69,17 +69,52 @@ pub enum RunError {
     Regular(String),
     /// An exception which escapes to Haskell's top-level runtime handler.
     GhcException(String),
+    /// A fatal wellformedness report, printed on stdout by Batch.handleError.
+    UnsupportedInput {
+        in_file: String,
+        report: tamarin_theory::wellformedness::WfReport,
+    },
 }
 
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Regular(message) | Self::GhcException(message) => f.write_str(message),
+            Self::UnsupportedInput { in_file, report } => write!(
+                f,
+                "unsupported rule semantics in {in_file}:\n{}",
+                tamarin_theory::pretty_theory::render_wf_error_report(report)
+            ),
         }
     }
 }
 
 impl std::error::Error for RunError {}
+
+impl RunError {
+    fn variants(error: tamarin_theory::tools::rule_variants::VariantsError, in_file: &str) -> Self {
+        match error {
+            tamarin_theory::tools::rule_variants::VariantsError::UnsupportedInput(report) => {
+                Self::UnsupportedInput {
+                    in_file: in_file.to_owned(),
+                    report,
+                }
+            }
+            other => Self::Regular(other.to_string()),
+        }
+    }
+}
+
+/// Batch.hs `handleError (UnsupportedInputError report)`: the report goes to
+/// stdout; only the abort message goes to stderr. No theory or summary follows.
+pub fn print_unsupported_input(in_file: &str, report: &tamarin_theory::wellformedness::WfReport) {
+    let report = tamarin_theory::pretty_theory::render_wf_error_report(report);
+    println!(
+        "\nERROR: unsupported rule semantics in {in_file}:\n\n{}\n",
+        report.trim_end_matches('\n')
+    );
+    eprintln!("Unsupported rule semantics - aborting before proof search.");
+}
 
 impl From<tamarin_theory::prove::ProveError> for RunError {
     fn from(error: tamarin_theory::prove::ProveError) -> Self {
@@ -108,9 +143,9 @@ pub(crate) enum LemmaVerdict {
     Falsified,
     /// We exhausted the search budget or hit `Sorry`.
     Analyzed,
-    /// HS `UnfinishableProof`: no open goals but subterm store has reducible
-    /// operators.  HS `showProofStatus` (Theory/Proof.hs):
-    ///   "analysis cannot be finished (reducible operators in subterms)"
+    /// HS `UnfinishableProof`: no open goals but unresolved subterm constraints.
+    /// `showProofStatus` (upstream b07e308, Theory/Proof.hs):
+    ///   "analysis cannot be finished (unresolved subterm constraints)"
     Unfinishable,
     /// HS `UndeterminedProof` (Theory/Proof.hs): proof tree folds to a
     /// status that could not be determined — renders "analysis undetermined".
@@ -130,7 +165,7 @@ pub(crate) enum LemmaVerdict {
 ///   `<lemma> (<quantifier>): falsified - found trace (<N> steps)`
 ///   `<lemma> (<quantifier>): verified (<N> steps)`
 ///   `<lemma> (<quantifier>): analysis incomplete (<N> steps)`
-///   `<lemma> (<quantifier>): analysis cannot be finished (reducible operators in subterms) (<N> steps)`
+///   `<lemma> (<quantifier>): analysis cannot be finished (unresolved subterm constraints) (<N> steps)`
 fn format_lemma_summary_line(r: &LemmaResult) -> String {
     let quantifier = if r.exists_trace {
         "exists-trace"
@@ -153,7 +188,7 @@ fn format_lemma_summary_line(r: &LemmaResult) -> String {
         }
         // HS `showProofStatus _ UnfinishableProof` (Theory/Proof.hs).
         LemmaVerdict::Unfinishable => format!(
-            "analysis cannot be finished (reducible operators in subterms) ({} steps)",
+            "analysis cannot be finished (unresolved subterm constraints) ({} steps)",
             r.proof_steps
         ),
         // HS `showProofStatus _ UndeterminedProof` (Theory/Proof.hs).
@@ -1326,7 +1361,7 @@ struct TheoryPipeline<'a> {
     /// `close_translated_theory` to join into the signature — HS's
     /// `closeTheory` adopts `checkTranslatedTheory`'s `sign'` while
     /// `translateAndCheckTheory` binds `(postReport, _, _)` and discards it
-    /// (TheoryLoader.hs).
+    /// (TheoryLoader.hs#translateAndCheckTheory).
     ndc_funs: Vec<tamarin_term::function_symbols::FunSym>,
 }
 
@@ -1387,6 +1422,7 @@ impl TheoryPipeline<'_> {
                 maude_pool: self.file_maude_pool.clone(),
                 cli_heuristic,
                 cut: self.cut,
+                force_cut: self.opts.stop_on_trace.is_some(),
                 ndc_cache: self.ndc_cache.clone(),
                 parameters: self.opts.parameters,
                 sys_retention: if wants_trace_output(self.args) {
@@ -1440,7 +1476,7 @@ impl TheoryPipeline<'_> {
             let user_set_heuristic = !self.elaborated.heuristic.is_empty();
             // Which translation steps run depends on the output module
             // (`processOpenTheory`, TheoryLoader.hs): `spthy` is
-            // `pure`, `spthytyped` is `Sapic.typeTheory` alone, and `msr` /
+            // `pure`, `spthytyped` is `Sapic.typeTheoryForExport`, and `msr` /
             // normal mode run the full `typeTheory >=> translate >=>
             // Acc.translate` pipeline.
             let skip_translation = matches!(
@@ -1458,12 +1494,9 @@ impl TheoryPipeline<'_> {
                     Vec::new()
                 };
                 if translate_module == Some(TranslateModule::SpthyTyped) {
-                    // `Sapic.typeTheory` (`typeTheoryEnv`, Typing.hs):
-                    // the typed and renamed processes replace the parse-time
-                    // ones in place, and the recomputed `function:` items
-                    // replace the source-positioned ones at the end of the
-                    // item list.
-                    if let Err(e) = tamarin_sapic::type_theory::type_theory_env(
+                    // Type and validate first, then export instantiated bodies
+                    // of open definitions and pattern-parameter calls.
+                    if let Err(e) = tamarin_sapic::type_theory::type_theory_for_export(
                         std::sync::Arc::make_mut(&mut self.elaborated),
                     ) {
                         // HS: `ProcessNotWellformed` / typing exceptions
@@ -1639,19 +1672,20 @@ impl TheoryPipeline<'_> {
         // persist breaker annotations on its open theory.
         let translate_mode = self.translate_module.is_some();
         if let Some(m) = self.file_maude.as_ref() {
-            self.wf_report
-                .extend(tamarin_theory::tools::rule_variants::prepare_theory_rules(
+            self.wf_report.extend(
+                tamarin_theory::tools::rule_variants::prepare_theory_rules(
                     std::sync::Arc::make_mut(&mut self.elaborated),
                     m,
                     self.file_maude_pool.as_deref(),
                     !translate_mode,
-                )?);
+                )
+                .map_err(|error| RunError::variants(error, &self.elaborated.in_file))?,
+            );
         } else {
-            self.wf_report
-                .extend(tamarin_theory::wellformedness::check_wellformedness(
-                    &self.elaborated,
-                    None,
-                ));
+            self.wf_report.extend(
+                tamarin_theory::wellformedness::check_wellformedness(&self.elaborated, None)
+                    .map_err(|error| RunError::variants(error, &self.elaborated.in_file))?,
+            );
         }
 
         // `showSaturation` is the last argument of `closeTheoryWithMaude`
@@ -1754,7 +1788,7 @@ impl TheoryPipeline<'_> {
         }
 
         // `--auto-sources` (HS `closeTheoryWithMaude` autosources branch,
-        // CloseRule.hs): when the raw sources contain
+        // CloseRule.hs#closeTheoryWithMaude): when the raw sources contain
         // partial deconstructions, unfold every rule into its AC-variant
         // rules (`unfoldRuleVariants`), annotate them with AUTO_* actions and
         // add the `AUTO_typing` sources lemma.  HS applies this on EVERY
@@ -1832,7 +1866,8 @@ impl TheoryPipeline<'_> {
                 std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.as_deref(),
-            )?;
+            )
+            .map_err(|error| RunError::variants(error, &self.elaborated.in_file))?;
 
             // HS's re-close passes `autoSources` again
             // (`applyPartialEvaluation style autoSources`, TheoryLoader.hs;
@@ -2378,7 +2413,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 let results = skipped_results(&st.elaborated, &opts.lemma_names);
 
                 // Translate-only render (`prettyOpenTheoryByModule`,
-                // TheoryLoader.hs, followed by `withVersionAndReport`'s
+                // TheoryLoader.hs#prettyOpenTheoryByModule, followed by `withVersionAndReport`'s
                 // two trailing comment items, TheoryLoader.hs).  The doc
                 // is BUFFERED — Batch.hs processes every file before any
                 // doc is printed or written.

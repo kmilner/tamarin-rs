@@ -1,0 +1,82 @@
+diff --git a/lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs b/lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs
+index 57aae2aec0e9e99cb52b381c620790a7f429452d..9c43b91bbff13c46305a76e3fc9210306a343956 100644
+--- a/lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs
++++ b/lib/theory/src/Theory/Constraint/Solver/ProofMethod.hs
+@@ -450,8 +450,11 @@ execDiffProofMethod ctxt method sys =
+     mmirrorCtxt          = eitherProofContext ctxt . opposite <$> mside
+     mallSubtermsFinished = do
+       finished <- finishedSubterms <$> mctxt <*> msys'
+-      finishedMirrored <- (all . finishedSubterms <$> mmirrorCtxt) <*> mmirrorSyss
+-      return $ finished && finishedMirrored
++      -- Mirroring changes only the nodes, so every mirror shares this subterm
++      -- store. Check it once without enumerating all alternative mirrors.
++      finishedMirrored <- finishedSubterms <$> mmirrorCtxt <*> msys'
++      mirrors <- mmirrorSyss
++      return $ finished && (finishedMirrored || null mirrors)
+ 
+     protoRules       = L.get dpcProtoRules  ctxt
+     destrRules       = L.get dpcDestrRules  ctxt
+diff --git a/lib/theory/src/Theory/Constraint/System.hs b/lib/theory/src/Theory/Constraint/System.hs
+index ff84ae9636f0f9d716bba6117bd08573d1cd6922..b4787ed34c47f1e28347f8b77eb610440469106b 100644
+--- a/lib/theory/src/Theory/Constraint/System.hs
++++ b/lib/theory/src/Theory/Constraint/System.hs
+@@ -2139,44 +2139,17 @@ prettyNonGraphSystem se = vsep $ map combine_ -- text $ show se
+ 
+ -- | Pretty print the non-graph part of the sequent; i.e. equation store and
+ -- clauses.
+-prettyNonGraphSystemDiff :: HighlightDocument d => DiffProofContext -> DiffSystem -> d
+-prettyNonGraphSystemDiff ctxt se = vsep $ map combine_
++prettyNonGraphSystemDiff :: HighlightDocument d => DiffSystem -> d
++prettyNonGraphSystemDiff se = vsep $ map combine_
+   [ ("proof type",          prettyProofType $ L.get dsProofType se)
+   , ("current rule",        maybe (text "none") text $ L.get dsCurrentRule se)
+   , ("system",              maybe (text "none") prettyNonGraphSystem $ L.get dsSystem se)
+-  , ("mirror system",       case ((L.get dsSide se), (L.get dsSystem se)) of
+-                                 (Just s, Just sys) | (dgIsNotEmpty sys) && (allOpenGoalsAreSimpleFacts ctxt sys) && (allOpenFactGoalsAreIndependent sys) -> vsep $ map (prettySystem) $ getMirrorDG ctxt s sys
+-                                 _                                                                                                                        -> text "none")
+---   , ("DEBUG",               maybe (text "none") (\x -> vsep $ map prettyGuarded x) help)
+---   , ("DEBUG2",              maybe (text "none") (\x -> vsep $ map prettyGuarded x) help2)
+   , ("protocol rules",      vsep $ map prettyProtoRuleE $ S.toList $ L.get dsProtoRules se)
+   , ("construction rules",  vsep $ map prettyRuleAC $ S.toList $ L.get dsConstrRules se)
+   , ("destruction rules",   vsep $ map prettyRuleAC $ S.toList $ L.get dsDestrRules se)
+   ]
+   where
+     combine_ (header, d)  = fsep [keyword_ header <> colon, nest 2 d]
+---     help :: Maybe [LNGuarded]
+---     help = do
+---       side <- L.get dsSide se
+--- --       system <- L.get dsSystem se
+---       restrictions <- Just $ L.get dpcRestrictions ctxt
+---       siderestrictions <- Just $ filter (\x -> fst x == side) restrictions
+--- --       formulas <- Just $ concat $ map snd siderestrictions
+--- --       evalFms <- Just $ doRestrictionsHold (if side == LHS then L.get dpcPCLeft ctxt else L.get dpcPCRight ctxt) system formulas
+--- --       strings <- Just $ (concat $ map (\x -> (show x) ++ " ") evalFms) ++ (concat $ map (\x -> (show x) ++ " ") formulas)
+---       return $ concat $ map snd siderestrictions
+---
+---     help2 :: Maybe [LNGuarded]
+---     help2 = do
+---       side2 <- L.get dsSide se
+---       side <- Just $ if side2 == LHS then RHS else LHS
+--- --       system <- L.get dsSystem se
+---       restrictions <- Just $ L.get dpcRestrictions ctxt
+---       siderestrictions <- Just $ filter (\x -> fst x == side) restrictions
+--- --       formulas <- Just $ concat $ map snd siderestrictions
+--- --       evalFms <- Just $ doRestrictionsHold (if side == LHS then L.get dpcPCLeft ctxt else L.get dpcPCRight ctxt) system formulas
+--- --       strings <- Just $ (concat $ map (\x -> (show x) ++ " ") evalFms) ++ (concat $ map (\x -> (show x) ++ " ") formulas)
+---       return $ concat $ map snd siderestrictions
+ 
+ -- | Pretty print the proof type.
+ prettyProofType :: HighlightDocument d => Maybe DiffProofType -> d
+diff --git a/src/Web/Theory.hs b/src/Web/Theory.hs
+index f15f38a328815f24fdefbea8b7cae8f02a596c9d..7abb21b745363013c4cabc5ba9391d0cd293d322 100644
+--- a/src/Web/Theory.hs
++++ b/src/Web/Theory.hs
+@@ -735,7 +735,7 @@ subDiffProofSnippet renderUrl tidx ti lemma proofPath ctxt prf =
+         ++
+         mirrorSystem
+         ++
+-        [ preformatted (Just "sequent") (prettyNonGraphSystemDiff ctxt se)
++        [ preformatted (Just "sequent") (prettyNonGraphSystemDiff se)
+         , withTag "h3" [] (text $ nCases ++ " sub-case(s)")
+         ] ++
+         subCases

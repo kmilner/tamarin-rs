@@ -78,6 +78,44 @@ fn diagnostic_lexeme(text: &str) -> String {
     bounded_diagnostic_text(text, MAX_DIAGNOSTIC_NAME_CHARS)
 }
 
+/// Binding and matching share an identity even when occurrences have different types.
+fn pattern_identities(
+    term: &Term,
+    matched: bool,
+    binds: &mut Vec<(String, u64, LSort)>,
+    matches: &mut std::collections::BTreeSet<(String, u64, LSort)>,
+) {
+    match term {
+        Term::Var(v) => {
+            let id = (v.name.clone(), v.idx, v.sort);
+            if matched {
+                matches.insert(id);
+            } else {
+                binds.push(id);
+            }
+        }
+        Term::PatMatch(t) => pattern_identities(t, true, binds, matches),
+        Term::App(_, args) | Term::Pair(args) => {
+            for t in args {
+                pattern_identities(t, matched, binds, matches);
+            }
+        }
+        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
+            pattern_identities(a, matched, binds, matches);
+            pattern_identities(b, matched, binds, matches);
+        }
+        _ => {}
+    }
+}
+
+fn valid_input_pattern(term: &Term) -> bool {
+    let mut binds = Vec::new();
+    let mut matches = std::collections::BTreeSet::new();
+    pattern_identities(term, false, &mut binds, &mut matches);
+    let unique: std::collections::BTreeSet<_> = binds.iter().cloned().collect();
+    unique.len() == binds.len() && unique.is_disjoint(&matches)
+}
+
 // =============================================================================
 // Parser entry points
 // =============================================================================
@@ -1641,11 +1679,16 @@ impl<'a> Parser<'a> {
     fn heuristic(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("heuristic")?;
         self.require_punct(":")?;
-        // Read until newline as raw text. Heuristic rankings are flexible; we
-        // take everything up to next newline / `\n` boundary.
-        let raw = self.read_to_eol();
+        let raw = self.heuristic_rankings()?;
+        if !matches!(
+            self.lx.peek(),
+            Some('\t' | '\r' | '\n' | '\u{c}' | '\u{b}' | '/')
+        ) {
+            return Err(self.err_expect("end of heuristic line"));
+        }
+        self.skip_ws();
         Ok(TheoryItem::Heuristic {
-            raw: raw.trim().to_string(),
+            raw,
             source_file: self
                 .source_file
                 .as_ref()
@@ -1653,17 +1696,56 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn read_to_eol(&mut self) -> String {
-        let mut s = String::new();
-        while let Some(c) = self.lx.peek() {
-            if c == '\n' {
-                break;
+    /// Each ranking owns its optional path/name. Only ASCII spaces separate
+    /// rankings; comments and other whitespace end the sequence.
+    fn heuristic_rankings(&mut self) -> Result<String, ParseError> {
+        let start = self.lx.pos().offset;
+        let mut count = 0;
+        loop {
+            match self.lx.peek() {
+                Some('o' | 'O') => {
+                    self.lx.bump();
+                    while self.lx.eat(' ') {}
+                    if self.lx.eat('"') {
+                        let path_start = self.lx.pos().offset;
+                        while matches!(self.lx.peek(), Some(c) if !matches!(c, '"' | '\n' | '\r')) {
+                            self.lx.bump();
+                        }
+                        if self.lx.pos().offset == path_start || !self.lx.eat('"') {
+                            return Err(self.err_expect("nonempty quoted oracle path"));
+                        }
+                    }
+                }
+                Some('{') => {
+                    self.lx.bump();
+                    while self.lx.eat(' ') {}
+                    let name_start = self.lx.pos().offset;
+                    while matches!(self.lx.peek(), Some(c) if !matches!(c, '"' | '\n' | '\r' | '{' | '}'))
+                    {
+                        self.lx.bump();
+                    }
+                    if self.lx.pos().offset == name_start || !self.lx.eat('}') {
+                        return Err(self.err_expect("complete nonempty tactic reference"));
+                    }
+                }
+                Some(c) if c.is_alphabetic() => {
+                    let allowed = if self.is_diff { "sScC" } else { "sSpPcCiI" };
+                    if !allowed.contains(c) {
+                        return Err(self.err(format!("unknown proof method ranking `{c}`")));
+                    }
+                    self.lx.bump();
+                }
+                _ => break,
             }
-            s.push(c);
-            self.lx.bump();
+            count += 1;
+            while self.lx.eat(' ') {}
         }
-        // Trailing inline comments are left intact; trimming is the consumer's job.
-        s
+        if count == 0 {
+            return Err(self.err_expect("proof method ranking"));
+        }
+        Ok(self.lx.src()[start..self.lx.pos().offset]
+            .trim_end_matches(' ')
+            .to_string())
     }
 
     fn tactic(&mut self) -> Result<TheoryItem, ParseError> {
@@ -2093,7 +2175,7 @@ impl<'a> Parser<'a> {
                 // check never runs, and nothing is registered.  Discarding the
                 // requested attributes is what keeps `functions: fst/1
                 // [destructor]` printing as `function: fst (Any) : Any` in the
-                // open theory's typing lines (TheoryObject.hs).
+                // open theory's typing lines (TheoryObject.hs#prettyTranslationElement).
                 return Ok(FunctionDecl {
                     name,
                     arg_types: self.materialize_function_args(args)?,
@@ -2791,7 +2873,15 @@ impl<'a> Parser<'a> {
         })();
         // Retain consumed comment failures before the next alternative rewinds.
         let e1 = match self.lx.finish(message) {
-            Ok(msg) => return Ok((None, msg)),
+            Ok(msg) => {
+                return if valid_input_pattern(&msg) {
+                    Ok((None, msg))
+                } else {
+                    Err(self.err(
+                        "Invalid pattern: input binders must be linear and distinct from matches",
+                    ))
+                }
+            }
             Err(e) => e,
         };
         self.restore(probe);
@@ -2800,6 +2890,11 @@ impl<'a> Parser<'a> {
             self.require_punct(",")?;
             let msg = self.with_patterns(|p| p.term(false))?;
             self.require_punct(")")?;
+            if !valid_input_pattern(&msg) {
+                return Err(self.err(
+                    "Invalid pattern: input binders must be linear and distinct from matches",
+                ));
+            }
             Ok((Some(chan), msg))
         })()
         .map_err(|e2| Self::select_alt_error(e1, e2))
@@ -2863,7 +2958,11 @@ impl<'a> Parser<'a> {
         // `(modulo AC)` head is absent and parsing proceeds. (More lenient than
         // Haskell, but still accepts all valid Haskell input.)
         self.in_context(ParseContext::Rule, |parser| {
-            parser.rule_after_kw().map(|(rule, _)| rule)
+            let (rule, _) = parser.rule_after_kw()?;
+            if !rule.embedded_restrictions.is_empty() {
+                return Err(parser.err("Embedded restrictions in explicit AC variants are not supported; use named restrictions and action facts instead."));
+            }
+            Ok(rule)
         })
     }
 
@@ -3438,8 +3537,15 @@ impl<'a> Parser<'a> {
                 attrs.push(LemmaAttr::HideLemma(id));
             } else if self.try_kw("heuristic") {
                 self.require_punct("=")?;
-                let raw = self.read_until_attribute_end();
+                let raw = self.heuristic_rankings()?;
+                self.skip_ws();
                 attrs.push(LemmaAttr::Heuristic(raw));
+            } else if self.try_kw("stop-on-trace") {
+                self.require_punct("=")?;
+                let method = self.ident()?;
+                let cut = tamarin_term::tags::CutStrategy::parse(&method)
+                    .ok_or_else(|| self.err(format!("unknown stop-on-trace method: {method}")))?;
+                attrs.push(LemmaAttr::StopOnTrace(cut));
             } else if self.try_kw("output") {
                 self.require_punct("=")?;
                 self.skip_ws();
@@ -3962,6 +4068,21 @@ impl<'a> Parser<'a> {
                 }
                 let (acts, restrs) = p.parse_actions_and_restrictions()?;
                 let concs = p.fact_list()?;
+                let mut binds = Vec::new();
+                let mut matches = std::collections::BTreeSet::new();
+                for t in prems.iter().flat_map(|f| &f.args) {
+                    pattern_identities(t, false, &mut binds, &mut matches);
+                }
+                if binds.iter().any(|v| matches.contains(v)) {
+                    return Err(p.err("Invalid pattern in lhs of embedded MSR"));
+                }
+                matches.clear();
+                for t in acts.iter().chain(&concs).flat_map(|f| &f.args) {
+                    pattern_identities(t, false, &mut binds, &mut matches);
+                }
+                if !matches.is_empty() {
+                    return Err(p.err("Invalid pattern in embedded MSR action or conclusion"));
+                }
                 Ok(Some(SapicAction::Msr {
                     prems,
                     acts,

@@ -1,5 +1,4 @@
-# source: oracle ef3f0468, plain load
-# omits: Message Derivation Checks (Maude-backed, spliced later by the production callers)
+# source: patched oracle da8787d5, -m=msr --derivcheck-timeout=0 (2026-10-04)
 /*
 WARNING: the following wellformedness checks failed!
 
@@ -15,4 +14,9 @@ Multiplication restriction of rules
        [ Fr( ~x ), In( (a*b) ) ] --> [ Out( <~x, (a*b)> ) ]
   
     Terms with multiplication:  (a*b)
+
+Unsupported multiplication outside exponents
+============================================
+
+  Rule Bad has products outside exponents: (a*b)
 */

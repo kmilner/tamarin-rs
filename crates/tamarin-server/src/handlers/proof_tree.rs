@@ -227,6 +227,7 @@ impl ProofState {
             maude,
             tamarin_theory::prove::ProverSessionOptions {
                 cut,
+                force_cut: cfg.stop_on_trace.is_some(),
                 ndc_cache: ndc_cache.cloned(),
                 parameters: cfg.solver_parameters,
                 sys_retention: tamarin_theory::constraint::solver::search::SysRetention::KeepAll,
@@ -289,7 +290,9 @@ impl ProofState {
             let mut children = BTreeMap::new();
             for (name, sys) in cases {
                 // Eagerly classify each child as finished / open.
-                let (status, leaf_method) = match is_finished(&ctx, &sys) {
+                let (status, leaf_method) = match is_finished(&ctx, &sys)
+                    .map_err(|error| format!("proof context: {error}"))?
+                {
                     Some(r) => {
                         let s = match &r {
                             tamarin_theory::constraint::solver::proof_method::Result::Solved =>

@@ -35,6 +35,297 @@ fn ctx() -> Option<ProofContext> {
     Some(ProofContext::new(maude()?, Vec::new()))
 }
 
+#[test]
+fn residual_positive_and_negative_subterms_reach_a_fixed_point() {
+    use tamarin_term::builtin::msg_var;
+    use tamarin_term::lterm::pub_term;
+    let Some(ctx) = ctx() else {
+        return;
+    };
+    let mut sys = System::empty();
+    sys.subterm_store_mut().add(pub_term("d"), msg_var("x", 0));
+    sys.subterm_store_mut()
+        .add_neg(pub_term("c"), msg_var("x", 0));
+    let mut red = Reduction::new(&ctx, sys);
+    for _ in 0..4 {
+        red.changed = ChangeIndicator::Unchanged;
+        assert!(matches!(
+            propagate_subterm_obvious(&mut red).unwrap(),
+            SystemOutcome::Linear
+        ));
+        if red.changed == ChangeIndicator::Unchanged {
+            assert!(!red.sys.subterm_store.contradictory);
+            return;
+        }
+    }
+    panic!("S_neg repeatedly emits an already-known disequality");
+}
+
+#[test]
+fn subterm_deductions_solve_equalities_in_the_same_pass() {
+    use tamarin_term::builtin::{hash_sym, msg_var};
+    use tamarin_term::term::f_app_no_eq;
+    let Some(maude) = maude_with_sig(tamarin_term::maude_sig::hash_maude_sig()) else {
+        return;
+    };
+    let ctx = ProofContext::new(maude, Vec::new());
+    let a = msg_var("a", 0);
+    let b = msg_var("b", 1);
+    let mut sys = System::empty();
+    sys.subterm_store_mut()
+        .add(a.clone(), f_app_no_eq(hash_sym(), vec![b.clone()]));
+    sys.subterm_store_mut().add_neg(a, b);
+    let mut red = Reduction::new(&ctx, sys);
+    assert!(matches!(
+        propagate_subterm_obvious(&mut red).unwrap(),
+        SystemOutcome::Linear
+    ));
+    assert!(
+        !red.sys.eq_store().subst.is_empty(),
+        "a = b must be solved now"
+    );
+    assert!(
+        red.sys.formulas.is_empty(),
+        "do not defer the equation to the next pass"
+    );
+    assert_eq!(red.sys.solved_formulas.len(), 1);
+}
+
+#[test]
+fn subterm_deductions_preserve_all_equality_branches() {
+    use tamarin_term::builtin::{hash_sym, msg_var};
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::pub_term;
+    use tamarin_term::term::{f_app_ac, f_app_no_eq};
+    let sig =
+        tamarin_term::maude_sig::hash_maude_sig().merge(tamarin_term::maude_sig::mset_maude_sig());
+    let Some(maude) = maude_with_sig(sig) else {
+        return;
+    };
+    let ctx = ProofContext::new(maude, Vec::new());
+    let mut sys = System::empty();
+    for (left, right) in [
+        (
+            vec![msg_var("x", 0), msg_var("y", 1)],
+            vec![pub_term("a"), pub_term("b")],
+        ),
+        (
+            vec![msg_var("u", 2), msg_var("v", 3)],
+            vec![pub_term("c"), pub_term("d")],
+        ),
+    ] {
+        let left = f_app_ac(AcSym::Union, left);
+        let right = f_app_ac(AcSym::Union, right);
+        sys.subterm_store_mut()
+            .add(left.clone(), f_app_no_eq(hash_sym(), vec![right.clone()]));
+        sys.subterm_store_mut().add_neg(left, right);
+    }
+    let mut red = Reduction::new(&ctx, sys);
+    let SystemOutcome::Cases(arms) = propagate_subterm_obvious(&mut red).unwrap() else {
+        panic!("each arity-one equality should have two AC unifiers");
+    };
+    assert_eq!(arms.len(), 4);
+    for arm in arms {
+        assert_eq!(
+            arm.sys.eq_store().subst.len(),
+            4,
+            "both equalities must finish in each arm"
+        );
+    }
+}
+
+#[test]
+fn last_injective_nodes_merge_unless_strictly_ordered() {
+    use crate::constraint::constraints::{Edge, LessAtom, Reason};
+    use crate::constraint::solver::contradictions::{contradictions, Contradiction};
+    use crate::fact::{Fact, FactTag, Multiplicity};
+    use crate::rule::{
+        ConcIdx, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+    };
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let Some(mut ctx) = ctx() else { return };
+    let tag = FactTag::Proto(Multiplicity::Linear, "S", 1);
+    std::sync::Arc::get_mut(&mut ctx.shared)
+        .unwrap()
+        .injective_fact_insts
+        .insert(tag, Vec::new());
+    let fact = Fact::new(tag, vec![tamarin_term::lterm::pub_term("id")]);
+    let rule = |name, prems, concs| {
+        Rule::new(
+            RuleInfo::Proto(ProtoRuleACInstInfo {
+                name: ProtoRuleName::Stand(name),
+                attributes: RuleAttributes::empty(),
+                loop_breakers: Vec::new(),
+            }),
+            prems,
+            concs,
+            Vec::new(),
+        )
+    };
+    let i = LVar::new("i", LSort::Node, 0);
+    let j = LVar::new("j", LSort::Node, 1);
+    let k = LVar::new("k", LSort::Node, 2);
+    let mut sys = System::empty();
+    sys.add_node(i, rule("Init", vec![], vec![fact.clone()]));
+    sys.add_node(j, rule("Fin", vec![fact.clone()], vec![]));
+    sys.add_node(k, rule("Fin", vec![fact], vec![]));
+    sys.add_edge(Edge {
+        src: (i, ConcIdx(0)),
+        tgt: (k, PremIdx(0)),
+    });
+    sys.add_less(LessAtom::new(i, j, Reason::Adversary));
+    sys.set_last_atom(Some(k));
+    assert!(!contradictions(&ctx, &sys)
+        .unwrap()
+        .iter()
+        .any(|c| matches!(c, Contradiction::NonInjectiveFactInstance(..))));
+    let mut merged = Reduction::new(&ctx, sys.clone());
+    assert!(matches!(
+        merge_last_injective_fact_nodes(&mut merged).unwrap(),
+        SystemOutcome::Linear
+    ));
+    let subst = &merged.sys.eq_store().subst;
+    assert_eq!(
+        tamarin_term::subst::apply_vterm(subst, var_term(j)),
+        tamarin_term::subst::apply_vterm(subst, var_term(k))
+    );
+    for (a, b) in [(j, k), (k, j)] {
+        let mut ordered = sys.clone();
+        ordered.add_less(LessAtom::new(a, b, Reason::Adversary));
+        let mut red = Reduction::new(&ctx, ordered);
+        assert!(matches!(
+            merge_last_injective_fact_nodes(&mut red).unwrap(),
+            SystemOutcome::Contradictory
+        ));
+    }
+    // Direct contradiction callers also reject non-unifiable final rules.
+    sys.add_node(
+        j,
+        rule(
+            "Different",
+            sys.nodes
+                .iter()
+                .find(|(id, _)| *id == j)
+                .unwrap()
+                .1
+                .premises
+                .clone(),
+            vec![],
+        ),
+    );
+    assert!(contradictions(&ctx, &sys)
+        .unwrap()
+        .iter()
+        .any(|c| matches!(c, Contradiction::NonInjectiveFactInstance(..))));
+}
+
+#[test]
+fn implied_safety_false_rejects_the_system() {
+    let Some(ctx) = ctx() else { return };
+    let mut sys = System::empty();
+    sys.insert_lemma(crate::guarded::gfalse());
+    let mut red = Reduction::new(&ctx, sys);
+    let outcome = insert_implied_formulas_pass(&mut red).expect("formula reduction");
+    assert!(
+        matches!(outcome, SystemOutcome::Contradictory)
+            || red
+                .sys
+                .formulas
+                .iter()
+                .any(|f| f.as_ref() == &crate::guarded::gfalse())
+    );
+}
+
+#[test]
+fn implied_formulas_do_not_force_existential_reuse_lemmas() {
+    use crate::formula::Quantifier;
+    use crate::guarded::{gtrue, Guarded};
+    let Some(ctx) = ctx() else { return };
+    let mut sys = System::empty();
+    sys.insert_lemma(Guarded::GGuarded {
+        qua: Quantifier::Ex,
+        vars: Vec::new().into(),
+        guards: Vec::new().into(),
+        body: std::sync::Arc::new(gtrue()),
+    });
+    let mut red = Reduction::new(&ctx, sys);
+    assert!(matches!(
+        insert_implied_formulas_pass(&mut red).unwrap(),
+        SystemOutcome::Linear
+    ));
+    assert!(red.sys.formulas.is_empty());
+    assert!(red.sys.goals.is_empty());
+}
+
+#[test]
+fn formula_atom_evaluation_finishes_its_change_list_in_every_branch() {
+    use crate::atom::ProtoAtom;
+    use crate::formula::{lift_free, Quantifier};
+    use crate::guarded::Guarded;
+    use tamarin_term::builtin::msg_var;
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::term::f_app_ac;
+    use tamarin_term::vterm::var_term;
+
+    let Some(maude) = maude_with_sig(tamarin_term::maude_sig::mset_maude_sig()) else {
+        return;
+    };
+    let ctx = ProofContext::new(maude, Vec::new());
+    let equality = |left, right| Guarded::Atom(ProtoAtom::EqE(lift_free(&left), lift_free(&right)));
+    let union = |terms| f_app_ac(AcSym::Union, terms);
+    let last = LVar::new("last", LSort::Node, 4);
+    let bodies = [
+        equality(
+            union(vec![msg_var("x", 0), msg_var("y", 1)]),
+            union(vec![pub_term("a"), pub_term("b")]),
+        ),
+        equality(
+            union(vec![msg_var("u", 2), msg_var("v", 3)]),
+            union(vec![pub_term("c"), pub_term("d")]),
+        ),
+        Guarded::Atom(ProtoAtom::Last(lift_free(&var_term(last)))),
+    ];
+    // Each true guard simplifies away in the same frozen evaluation pass.
+    // The first two bodies each split into two AC-unification branches;
+    // all four continuations must still process the final Last atom.
+    let formulas: Vec<_> = ["a", "b", "c"]
+        .into_iter()
+        .zip(bodies)
+        .map(|(name, body)| Guarded::GGuarded {
+            qua: Quantifier::All,
+            vars: Vec::new().into(),
+            guards: vec![ProtoAtom::EqE(
+                lift_free(&pub_term(name)),
+                lift_free(&pub_term(name)),
+            )]
+            .into(),
+            body: std::sync::Arc::new(body),
+        })
+        .collect();
+    assert!(formulas.windows(2).all(|pair| pair[0] < pair[1]));
+    let mut sys = System::empty();
+    for formula in &formulas {
+        sys.insert_formula(formula.clone());
+    }
+    let mut red = Reduction::new(&ctx, sys);
+    let SystemOutcome::Cases(arms) = eval_formula_atoms_pass(&mut red).unwrap() else {
+        panic!("the two independent equalities must fan out");
+    };
+    assert_eq!(arms.len(), 4);
+    for arm in arms {
+        assert_eq!(arm.sys.last_atom, Some(last));
+        for formula in &formulas {
+            assert!(!crate::guarded::stores_contains(&arm.sys.formulas, formula));
+            assert!(crate::guarded::stores_contains(
+                &arm.sys.solved_formulas,
+                formula
+            ));
+        }
+    }
+}
+
 /// Run the production simplifier in tests that intentionally construct a
 /// linear case. A surprise split is itself a regression in these fixtures.
 fn simplify_one(ctx: &ProofContext, sys: System) -> System {
@@ -1144,6 +1435,48 @@ fn ku_action_uniqueness_merges_two_nodes_with_same_term() {
     );
 }
 
+#[test]
+fn nat_order_encoding_does_not_treat_messages_as_naturals() {
+    use tamarin_term::function_symbols::nat_one_sym;
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::f_app_no_eq;
+    use tamarin_term::vterm::var_term;
+    let one = f_app_no_eq(nat_one_sym(), vec![]);
+    let message = var_term(LVar::new("x", LSort::Msg, 0));
+    let natural = var_term(LVar::new("x", LSort::Nat, 0));
+    assert_eq!(
+        nat_subterm_equalities(&[(message, one.clone())]),
+        Some(vec![])
+    );
+    assert_eq!(nat_subterm_equalities(&[(natural, one)]), None);
+}
+
+#[test]
+fn negative_nat_subterm_does_not_refine_a_message_operand() {
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let Some(h) = maude_with_sig(tamarin_term::maude_sig::nat_maude_sig()) else {
+        return;
+    };
+    let ctx = ProofContext::new(h, Vec::new());
+    let small = var_term(LVar::new("x", LSort::Msg, 0));
+    let big = var_term(LVar::new("n", LSort::Nat, 0));
+    let mut sys = System::empty();
+    sys.subterm_store_mut().add_neg(small.clone(), big.clone());
+    let mut red = Reduction::new(&ctx, sys);
+    assert!(matches!(
+        propagate_subterm_obvious(&mut red).unwrap(),
+        SystemOutcome::Linear
+    ));
+    assert!(red.sys.subterm_store.subterms.is_empty());
+    assert!(red
+        .sys
+        .subterm_store
+        .neg_subterms
+        .iter()
+        .any(|(s, t)| *s == small && *t == big));
+}
+
 /// `simpSplitNegSt` S_subterm-neg-ac-recurse: a negative multiset
 /// subterm `¬(a++a ⊏ b++c)` whose AC sides do NOT cancel under
 /// `processACSubterm` (so it returns `Left (nSmall, nBig)`) must
@@ -1184,7 +1517,10 @@ fn simp_split_neg_ac_recurse_emits_ac_formula() {
     assert!(sys.subterm_store_mut().add_neg(small.clone(), big.clone()));
     let mut r = Reduction::new(&ctx, sys);
 
-    propagate_subterm_obvious(&mut r);
+    assert!(matches!(
+        propagate_subterm_obvious(&mut r).unwrap(),
+        SystemOutcome::Linear
+    ));
     assert_eq!(
         r.changed,
         ChangeIndicator::Changed,

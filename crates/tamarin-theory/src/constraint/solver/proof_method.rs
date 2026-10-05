@@ -36,8 +36,8 @@ pub enum Result {
     Solved,
     /// A contradiction could be derived.
     Contradictory(Option<Contradiction>),
-    /// The proof can't be finished — typically because of reducible
-    /// operators in subterms or a solution after weakening.
+    /// The proof can't be finished — unresolved subterm constraints or
+    /// a solution after weakening.
     Unfinishable,
 }
 
@@ -54,16 +54,19 @@ pub enum ProofMethod {
 
 /// `isFinished`: returns the appropriate `Result` if the system is in
 /// a terminal state — solved, contradictory, or unfinishable.
-pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
+pub fn is_finished(
+    ctx: &ProofContext,
+    sys: &System,
+) -> std::result::Result<Option<Result>, crate::prove::ProveError> {
     if sys.is_initial() {
-        return None;
+        return Ok(None);
     }
-    let cs = contradictions(ctx, sys);
+    let cs = contradictions(ctx, sys)?;
     if let Some(c) = cs.into_iter().next() {
         // Mirror Haskell `contradictorySystem`: any contradiction
         // closes the branch as `Contradictory`.  Haskell's `isFinished`
         // does not gate this on source-case diagnostics.
-        return Some(Result::Contradictory(Some(c)));
+        return Ok(Some(Result::Contradictory(Some(c))));
     }
     // Direct port of Haskell `isFinished` (ProofMethod.hs):
     //   | null ogs && stFinished     = Just Solved
@@ -76,60 +79,22 @@ pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
     // (gfalse is caught as a FormulasFalse contradiction above, so we
     // don't need an explicit `no_false_formula` guard here.)
     use crate::constraint::solver::goals::open_goals;
-    let no_open_goals = open_goals(sys).is_empty();
-    let sub_finished = finished_subterms(ctx, sys);
-    if no_open_goals && sub_finished {
-        // Haskell's `isFinished` returns Solved directly here.
-        Some(Result::Solved)
-    } else if no_open_goals && !sub_finished {
-        Some(Result::Unfinishable)
-    } else {
-        None
+    if !open_goals(sys).is_empty() {
+        return Ok(None);
     }
+    // Haskell only forces the witness check once no open goals remain.
+    Ok(Some(if finished_subterms(ctx, sys) {
+        Result::Solved
+    } else {
+        Result::Unfinishable
+    }))
 }
 
-/// Direct port of Haskell `finishedSubterms`
-/// (`Theory/Tools/SubtermStore.hs`):
-///   hasReducibleOperatorsOnTop reducible sst =
-///     all (topIsNotReducible . snd) allSubterms
-///     where allSubterms = posSubterms ∪ negSubterms ∪ solvedSubterms
-///           topIsNotReducible (FApp f _) = f ∉ reducible
-///           topIsNotReducible _          = True
-///
-/// True iff every subterm's RHS has a top-level function symbol that
-/// is NOT in the reducible set.  If any subterm's RHS has a reducible
-/// top symbol, the proof cannot finish (further rewriting could
-/// reduce it).
+/// Haskell `finishedSubterms` (upstream b07e308): residual positive message
+/// containers need a public witness; reducible containing terms stay
+/// unresolved. The check does not mutate the system or discharge goals.
 pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
-    use tamarin_term::term::Term;
-    let msig = ctx.maude.maude_sig();
-    let top_is_not_reducible = |t: &tamarin_term::lterm::LNTerm| -> bool {
-        match t {
-            // HS `topIsNotReducible (FApp f _) = f \`S.notMember\` reducible`
-            // (SubtermStore.hs).  `reducible_fun_syms` is a
-            // `FunSig = BTreeSet<FunSym>`, so `contains` does the exact
-            // structural `FunSym` equality test in O(log n).
-            Term::App(f, _) => !msig.reducible_fun_syms.contains(f),
-            // Variables and constants are never reducible at the top.
-            _ => true,
-        }
-    };
-    // HS `hasReducibleOperatorsOnTop` walks posSubterms ∪ negSubterms ∪
-    // solvedSubterms (SubtermStore.hs).
-    sys.subterm_store
-        .subterms
-        .iter()
-        .all(|s| top_is_not_reducible(&s.big))
-        && sys
-            .subterm_store
-            .solved_subterms
-            .iter()
-            .all(|s| top_is_not_reducible(&s.big))
-        && sys
-            .subterm_store
-            .neg_subterms
-            .iter()
-            .all(|(_, big)| top_is_not_reducible(big))
+    super::subterm_witness::finished_subterms(&ctx.maude.maude_sig(), sys)
 }
 
 /// Render/index applicability — the evaluation depth HS's
@@ -674,7 +639,7 @@ pub fn check_and_exec_proof_method(
 ) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
     match method {
         ProofMethod::Finished(r) => {
-            let Some(actual) = is_finished(ctx, sys) else {
+            let Some(actual) = is_finished(ctx, sys)? else {
                 return Ok(None);
             };
             if !same_kind(r, &actual) {
@@ -751,7 +716,7 @@ mod tests {
         };
         let s = System::empty();
         assert!(
-            is_finished(&ctx, &s).is_none(),
+            is_finished(&ctx, &s).unwrap().is_none(),
             "initial system shouldn't be finished"
         );
     }
@@ -783,9 +748,27 @@ mod tests {
             });
         let rule: RuleACInst = Rule::new(info, Vec::new(), Vec::new(), Vec::new());
         s.add_node(nid, rule);
-        match is_finished(&ctx, &s) {
+        match is_finished(&ctx, &s).unwrap() {
             Some(Result::Solved) => {}
             r => panic!("expected Solved, got {:?}", r),
+        }
+    }
+
+    #[test]
+    fn residual_subterm_without_a_public_witness_is_unfinishable() {
+        use tamarin_term::lterm::{fresh_term, pub_term, LSort, LVar};
+        use tamarin_term::vterm::var_term;
+        let Some(ctx) = ctx() else { return };
+        for (small, expected) in [
+            (fresh_term("secret"), Result::Unfinishable),
+            (pub_term("public"), Result::Solved),
+        ] {
+            let mut sys = System::empty();
+            sys.solved_formulas_mut()
+                .push(std::sync::Arc::new(crate::guarded::gtrue()));
+            sys.subterm_store_mut()
+                .add(small, var_term(LVar::new("x", LSort::Msg, 0)));
+            assert_eq!(is_finished(&ctx, &sys).unwrap(), Some(expected));
         }
     }
 
@@ -809,7 +792,7 @@ mod tests {
         // `FormulasFalse` contradiction.
         s.formulas_mut()
             .push(std::sync::Arc::new(crate::guarded::gfalse()));
-        match is_finished(&ctx, &s) {
+        match is_finished(&ctx, &s).unwrap() {
             Some(Result::Contradictory(Some(Contradiction::FormulasFalse))) => {}
             r => panic!("expected Contradictory(FormulasFalse), got {:?}", r),
         }
