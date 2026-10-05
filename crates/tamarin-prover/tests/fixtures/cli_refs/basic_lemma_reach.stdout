@@ -51,7 +51,7 @@ Generated from:
 Tamarin version 1.13.0
 Maude version 3.5.1
 Git revision: da8787d5506e2d35bc1c92d7653bf6265fecbddb (with uncommited changes), branch: HEAD
-Compiled at: 2026-10-04 17:28:29.429729067 UTC
+Compiled at: 2026-10-05 09:28:28.234956792 UTC
 */
 
 end
@@ -61,7 +61,7 @@ summary of summaries:
 
 analyzed: /home/kamilner/tamarin-rs/crates/tamarin-prover/tests/fixtures/cli_flags_basic.spthy
 
-  processing time: 0.15s
+  processing time: 0.13s
   
   WARNING: 1 wellformedness check failed!
            The analysis results might be wrong!

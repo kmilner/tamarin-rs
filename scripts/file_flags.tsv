@@ -129,6 +129,8 @@ thesis-LaraSchmid-evoting/chapter5_HumanErrors/AuthenticationProtocols/OTPoverSM
 # Other -D, export, negative and --diff scenarios are NOT covered by these rows.
 ../../tamarin-prover-testing/examples/regression/sapic/sapic-destructor-auxiliary.spthy	--quit-on-warning
 ../../tamarin-prover-testing/examples/regression/sapic/sapic-let-macros.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/sapic/sapic-nested-closed-scope.spthy	--quit-on-warning
+../../tamarin-prover-testing/examples/regression/sapic/sapic-nested-local-pattern-name.spthy	--quit-on-warning
 ../../tamarin-prover-testing/examples/regression/trace/covered-product-export.spthy	--quit-on-warning
 ../../tamarin-prover-testing/examples/regression/trace/dh-products-in-exponents.spthy	--quit-on-warning
 ../../tamarin-prover-testing/examples/regression/trace/manual-variant-auto-sources-output.spthy	--quit-on-warning

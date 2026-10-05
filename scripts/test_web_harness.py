@@ -101,6 +101,9 @@ class ProofCorpusSelection(unittest.TestCase):
             self.assertIn("../../tamarin-prover-testing/examples/regression/trace/"
                           + name + ".spthy", patched)
         self.assertIn("regression/trace/negated-equivalence.spthy", fast)
+        for name in ("sapic-nested-closed-scope", "sapic-nested-local-pattern-name"):
+            self.assertIn("../../tamarin-prover-testing/examples/regression/sapic/"
+                          + name + ".spthy", patched)
         # Now rejected before proof search; cli_e2e pins that failure instead.
         self.assertNotIn("sp14/GDH.spthy", fast)
         self.assertIn("sp14/GDH.spthy", corpus)
@@ -133,6 +136,9 @@ class ProofCorpusSelection(unittest.TestCase):
                 if line and not line.startswith("#")]
         self.assertEqual(len(rows), len(dict(rows)), "duplicate flag-map entry")
         flags = dict(rows)
+        for name in ("sapic-nested-closed-scope", "sapic-nested-local-pattern-name"):
+            rel = "../../tamarin-prover-testing/examples/regression/sapic/" + name + ".spthy"
+            self.assertEqual(flags[rel], "--quit-on-warning")
         prefix = "../../tamarin-prover-testing/examples/regression/trace/"
         for name, expected in (
             ("saved-proof-stop-on-sorry", "--stop-on-trace=sorry --bound=0"),
