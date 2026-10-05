@@ -4061,18 +4061,18 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
     // as Haskell `simpSplitPosSt` (SubtermStore.hs) does with
     // `splitSubterm reducible True` (noRecurse).  `subterm_step` runs
     // `isTrueFalse` first, so the trivial cases surface as:
-    //   Some([TrueD])  — trivially true  → toRemoveAsTrue (HS:176,179);
+    //   Some([TrueD])  — trivially true  → toRemoveAsTrue;
     //                    pair leaves the live set (RS keeps a
     //                    `propagated` copy in solved_subterms).
     //   Some([])       — trivially false (incl. small == big) →
-    //                    isContradictory ||= [] ∈ splits (HS:181).  The
+    //                    isContradictory ||= [] ∈ splits.  The
     //                    pair REMAINS in posSubterms — HS removes ONLY
     //                    the [TrueD] case — and it IS a goal, since
-    //                    `[] ∉ [[TrueD],[SubtermD x]]` (HS:174).
+    //                    `[] ∉ [[TrueD],[SubtermD x]]`.
     //   None           — step = Nothing ⇒ splitSubterm = [SubtermD self]
     //                    ⇒ unsplittable: pair stays, NO goal.
-    //   Some(other)    — real decomposition ⇒ SubtermG goal (HS:174)
-    //                    plus the arity-one-deduction check (HS:177).
+    //   Some(other)    — real decomposition ⇒ SubtermG goal
+    //                    plus the arity-one-deduction check.
     let mut kept: Vec<crate::tools::subterm_store::SubtermConstraint> = Vec::new();
     let solved: Vec<crate::tools::subterm_store::SubtermConstraint> =
         std::mem::take(&mut red.sys.subterm_store_mut().solved_subterms);
@@ -4090,7 +4090,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
             Some(ref entries)
                 if entries.len() == 1 && matches!(entries[0], SubtermSplit::TrueD) =>
             {
-                // toRemoveAsTrue (HS:176,179): the pair is DELETED from
+                // toRemoveAsTrue: the pair is DELETED from
                 // posSubterms and goes NOWHERE — HS's solvedSubterms is
                 // populated only by `solveSubtermGoal` (a solved proof
                 // goal), never by the trivially-true simp path.  Moving

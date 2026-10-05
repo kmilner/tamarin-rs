@@ -333,8 +333,8 @@ pub fn parse_heuristic_str_with_tactics(
 /// Haskell iterates `M.toList $ get sGoals sys` in Goal-derived-Ord
 /// order, but every ranking that consumes the result begins with
 /// `goalNrRanking = sortOn (fst . snd)` (ProofMethod.hs; the first
-/// stage of smartRanking:1053, injRanking:946, GoalNrRanking:482, and
-/// the oracle preSorts:483-484).  Since `gsNr` is unique, sorting by nr
+/// stage of `smartRanking`, `injRanking`, `GoalNrRanking`, and
+/// the oracle presorts).  Since `gsNr` is unique, sorting by nr
 /// fully overrides the `M.toList` Goal-Ord, so emitting goals in nr
 /// order here is exactly HS's post-`goalNrRanking` order — HS-faithful.
 ///
@@ -2107,7 +2107,7 @@ fn chain_to_equality(
 
 /// True if a goal is still "open": not vacuously False, not already
 /// trivially handled.  **Direct port of Haskell's `openGoals` filter**
-/// (`Theory.Constraint.Solver.Goals:66-101`):
+/// (`Theory/Constraint/Solver/Goals.hs`):
 ///
 /// NOTE: Haskell's first ActionG arm branches on `get sDiffSystem sys`
 /// (Goals.hs): in a diff proof every KU action goal is open iff

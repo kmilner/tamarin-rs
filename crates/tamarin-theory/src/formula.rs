@@ -358,7 +358,7 @@ where
 /// macros applied to every term of every atom, through the `BVar`-tagged
 /// macros [`ln_macros_to_bn_macros`](tamarin_term::macro_expand::ln_macros_to_bn_macros)
 /// builds.  An empty macro list leaves the formula as it stands, which is HS's
-/// own first equation (:315).
+/// own first equation.
 pub fn apply_macro_in_formula(macros: &[LNMacro], fm: LNFormula) -> LNFormula {
     if macros.is_empty() {
         return fm;
@@ -712,8 +712,8 @@ fn free_term<F: FormulaVars>(
 }
 
 /// HS `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs):
-/// the three positions `blatom` reads with it — `last`'s argument (:46), an
-/// action's timepoint (:47) and both operands of `<` (:49) — take a bare
+/// the three positions `blatom` reads with it — `last`'s argument, an
+/// action's timepoint and both operands of `<` — take a bare
 /// variable through `nodep`.  The RS parser also accepts a non-variable term
 /// there (parser.rs's `<` arm), which converts like any other term.
 fn node_term<F: FormulaVars>(

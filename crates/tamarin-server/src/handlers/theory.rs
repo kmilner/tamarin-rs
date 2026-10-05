@@ -464,9 +464,9 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> Result<String, Str
         &build,
     );
     // `getTheorySourceR` / `getTheoryMessageDeductionR` / `getDownloadTheoryR`
-    // are all `render . prettyClosedTheory` (Handler.hs
-    // :1763-1766), and HughesPJ's `render` ends at the document's last
-    // character — the batch path's trailing newline is `putStrLn`'s, not the
+    // are all `render . prettyClosedTheory` (Handler.hs), and HughesPJ's
+    // `render` ends at the document's last character — the batch path's
+    // trailing newline is `putStrLn`'s, not the
     // document's (Batch.hs, which is why `-o` files are written
     // without it).  `pretty_closed_theory` carries that newline for the
     // stdout caller, so the body served here is one byte shorter.

@@ -49,7 +49,7 @@ pub(crate) fn text_response(s: String) -> Response {
 /// alongside a `{"error":<message>,"message":"Internal Server Error"}` one
 /// through `selectRep`; the HTML rendering is first, so it is what every
 /// Tamarin client gets — the browser pages, and the frontend's plain `fetch`
-/// of the JSON graph route (`frontend/src/wcs/graph.ts:426`), which sends
+/// of the JSON graph route (`frontend/src/wcs/graph.ts#fetchJsonSource`), which sends
 /// `Accept: */*` and discards the body of a non-`ok` response anyway.  A client
 /// that explicitly asks for `application/json` gets the JSON rendering from HS
 /// and this HTML one here.

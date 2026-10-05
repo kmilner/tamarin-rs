@@ -87,7 +87,7 @@ pub fn pretty_guarded(g: &Guarded) -> String {
 /// `guarded_to_doc` builds a `Doc` tree that mirrors HS `prettyGuarded`'s
 /// `sep`/`nest`/`fsep` structure node-for-node, then `render_at` lays it
 /// out with the same `get1` per-NilAbove `w`-shrinkage HughesPJ uses
-/// (HughesPJ.hs:1011).  `indent` is the column where the formula's first
+/// (HughesPJ.hs).  `indent` is the column where the formula's first
 /// char will land (e.g. 1, right after the opening `"` of the lemma's
 /// `doubleQuotes` wrap, lib/theory/src/Lemma.hs).
 ///
@@ -457,8 +457,8 @@ fn open_display_prefix<'a, S>(
 // =============================================================================
 
 /// HS ribbon width.  HS sets `lineWidth = 110` (`Main/Console.hs`)
-/// and `defaultStyle.ribbonsPerLine = 1.5` (`HughesPJ.hs:940`), giving
-/// `ribbonLen = round(110/1.5) = 73` (`HughesPJ.hs:1010`).
+/// and `defaultStyle.ribbonsPerLine = 1.5` (`HughesPJ.hs`), giving
+/// `ribbonLen = round(110/1.5) = 73` (`HughesPJ.hs`).
 pub const RIBBON: usize = 73;
 
 /// HS hard page width.  Mirrors `lineWidth = 110`

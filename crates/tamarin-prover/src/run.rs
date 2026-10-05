@@ -305,10 +305,7 @@ fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
         let row = format!(
             "S\t{}\t{}",
             path_field(&alias.physical),
-            alias
-                .staged
-                .as_deref()
-                .map_or_else(String::new, &path_field)
+            alias.staged.as_deref().map_or_else(String::new, path_field)
         );
         if seen_sources.insert(row.clone()) {
             println!("{row}");
@@ -331,7 +328,7 @@ fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
                 oracle_rows.insert(format!(
                     "O\t{}\t{}",
                     path_field(&oracle),
-                    staged.as_deref().map_or_else(String::new, &path_field)
+                    staged.as_deref().map_or_else(String::new, path_field)
                 ));
             }
         }
@@ -388,7 +385,7 @@ fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
                 oracle_rows.insert(format!(
                     "O\t{}\t{}",
                     path_field(&oracle),
-                    staged.as_deref().map_or_else(String::new, &path_field)
+                    staged.as_deref().map_or_else(String::new, path_field)
                 ));
             }
         }
@@ -2431,7 +2428,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     // HS `outputTraces` (Batch.hs) runs in `processThy`'s
                     // close-and-prove `else` — the ONLY branch that reaches it.
                     // `--parse-only` (Batch.hs), `--precompute-only`
-                    // (:202-208) and `-m` (:210-220) all return first, so they leave
+                    // and `-m` all return first, so they leave
                     // the target paths untouched, as does a run with no input files
                     // (`helpAndExit`, Batch.hs) and `--diff` (the `bitraverse`
                     // `Right` arm is `pure ()`; RS rejects `--diff` before the loop).

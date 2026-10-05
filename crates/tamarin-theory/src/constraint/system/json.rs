@@ -1137,7 +1137,7 @@ mod tests {
         // This checks the cluster order, which the `contains` checks above
         // cannot see.  HS builds the clusters from `Map.toList nodesByGroup`
         // (GraphRepr.hs) over the `Map String [Node]` that
-        // `groupNodesByRole` (:139-144) accumulates.  Data.Map lists its keys
+        // `groupNodesByRole` accumulates.  Data.Map lists its keys
         // in ascending order.  The roles therefore go into the output sorted
         // by name.
         let p = out

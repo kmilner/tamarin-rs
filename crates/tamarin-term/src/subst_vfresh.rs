@@ -382,11 +382,11 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         // HS has NO preserve concept in ANY freshToFree* variant:
         //   - `freshToFree` (Term/Substitution.hs) imports EVERY range
         //     var to a brand-new fresh var via `importBinding`;
-        //   - `freshToFreeAvoiding` (:71-72) is just
+        //   - `freshToFreeAvoiding` is just
         //     `freshToFree s \`evalFreshAvoiding\` t` — `evalFreshAvoiding`
         //     only SEEDS the fresh counter above t's max idx, it never
         //     skips a variable;
-        //   - `freshToFreeAvoidingFast` (:74-81) renames all range vars
+        //   - `freshToFreeAvoidingFast` renames all range vars
         //     via `rename ... \`evalFreshAvoiding\` t` — same.
         // We therefore rename every range var unconditionally.  HS maintains
         // the invariant that VFresh ranges are pure-fresh (composeVFresh's

@@ -875,7 +875,7 @@ fn re_expand_depth_limited(
 }
 
 /// Roll a node's children up into its status, mirroring Haskell's
-/// `Semigroup ProofStatus` precedence (`Theory.Proof:409`):
+/// `Semigroup ProofStatus` precedence (`Theory/Proof.hs`):
 /// `Solved` > `Sorry` > `Unfinishable` > `Contradictory`.  Returns
 /// `Sorry` for an empty child set (the defensive fallback used by its
 /// callers); a caller that must leave `status` untouched on
@@ -1318,7 +1318,7 @@ fn expand_inner(
         }
     }
     // Rollup follows Haskell's `Semigroup ProofStatus`
-    // (`Theory.Proof:409`):
+    // (`Theory/Proof.hs`):
     //
     //   TraceFound <> _ = TraceFound
     //   _ <> TraceFound = TraceFound

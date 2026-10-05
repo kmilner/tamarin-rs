@@ -2190,8 +2190,8 @@ fn ku_vars(rule: &crate::rule::RuleACInst) -> IsAcConstructor {
         _ => None,
     };
     match (
-        rule.premises.first().and_then(&ku_var),
-        rule.premises.get(1).and_then(&ku_var),
+        rule.premises.first().and_then(ku_var),
+        rule.premises.get(1).and_then(ku_var),
     ) {
         (Some(v1), Some(v2)) => IsAcConstructor::AcConstructor(v1, v2),
         _ => IsAcConstructor::OtherRule,

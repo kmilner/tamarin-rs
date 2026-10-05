@@ -56,7 +56,7 @@ use crate::sapic::{
 };
 
 /// HughesPJ DEFAULT `lineLength` (`Text.PrettyPrint.HughesPJ.style`,
-/// pretty-1.1.3.6 HughesPJ.hs:939).  The inner `render` calls in
+/// pretty-1.1.3.6 HughesPJ.hs).  The inner `render` calls in
 /// `prettySapicAction'` use the bare `P.render` (Text/PrettyPrint/Class.hs), so they
 /// render at this width, NOT the tamarin theory width (110).
 const SAPIC_LINE_LENGTH: usize = 100;

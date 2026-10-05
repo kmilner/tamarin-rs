@@ -132,7 +132,8 @@ impl std::error::Error for IntrRuleParseError {}
 /// `nullaryApp` against `funSyms maudeSig` to distinguish 0-arity NoEq
 /// applications (e.g. `one`, `DH_neutral` for `dhFunSig`) from free
 /// variables.  Without it, the cached DH file's
-/// `[ ] --[ !KU( one ) ]-> [ !KU( one ) ]` rule (intruder_variants_dh.spthy:8)
+/// `[ ] --[ !KU( one ) ]-> [ !KU( one ) ]` rule (`c_one` in
+/// `data/intruder_variants_dh.spthy`)
 /// parses `one` as a Msg-sort variable whose !KU-action unifies with
 /// every KU goal — adding a spurious `c_one` case to every source-case
 /// enumeration and falsely closing branches with `SOLVED // trace found`.

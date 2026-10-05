@@ -13,7 +13,7 @@
 //! `sep`, `cat`, `fsep`, `fcat`, `nest`) build a `Doc`; `render` walks
 //! the doc using HughesPJ's `best` / `get` / `get1` choosing between
 //! Union alternatives via `nicest1` /`fits`.  We track per-line `w`
-//! shrinkage at each `NilAbove` (HS `get1` line 1011 of pretty-1.1.3.6:
+//! shrinkage at each `NilAbove` (HS `get1` in pretty-1.1.3.6:
 //! `get1 w sl (NilAbove p) = nilAbove_ (get (w - sl) p)`).
 //!
 //! Defaults: `lineWidth = 110` (HS src/Main/Console.hs), threaded into
@@ -802,7 +802,7 @@ fn above_nest(p: Doc, g: bool, k: isize, q: Doc) -> Doc {
     match p {
         Doc::NoDoc => Doc::NoDoc,
         // HS `aboveNest (p Union q) g k r = aboveNest p g k r `union_`
-        // aboveNest q g k r` (pretty-1.1.3.6 HughesPJ.hs:585).  CRITICAL:
+        // aboveNest q g k r` (pretty-1.1.3.6 HughesPJ.hs).  CRITICAL:
         // under GHC's call-by-need both distributed branches are thunks —
         // `best`/`fits` forces the right one only when the left overflows.
         // Distributing eagerly into BOTH branches rebuilds `q` under every
@@ -912,7 +912,7 @@ pub fn nest_short_doc(lead: &str, finish: &str, body: Doc) -> Doc {
 }
 
 /// HS `hsep = foldr (\p q -> Beside p True q) empty` then reduce
-/// (HughesPJ.hs:500).  RIGHT fold, no Empty-filtering — the `beside_`
+/// (HughesPJ.hs).  RIGHT fold, no Empty-filtering — the `beside_`
 /// smart constructor handles Empty.  Using a LEFT fold (or pre-filtering
 /// Empty) builds a structurally different RDoc whose `Nest`/`Union`
 /// accumulation diverges from HS for 3+ items (NSPK3 GGuarded inner sep).
@@ -920,12 +920,12 @@ pub fn hsep(ds: Vec<Doc>) -> Doc {
     foldr_beside(true, ds)
 }
 
-/// HS `hcat = foldr (\p q -> Beside p False q) empty` (HughesPJ.hs:496).
+/// HS `hcat = foldr (\p q -> Beside p False q) empty` (HughesPJ.hs).
 pub fn hcat(ds: Vec<Doc>) -> Doc {
     foldr_beside(false, ds)
 }
 
-/// HS `vcat = foldr (\p q -> Above p False q) empty` (HughesPJ.hs:504).
+/// HS `vcat = foldr (\p q -> Above p False q) empty` (HughesPJ.hs).
 /// RIGHT fold.
 pub fn vcat(ds: Vec<Doc>) -> Doc {
     // foldr Above empty ds  →  d0 $$ (d1 $$ (... $$ empty))
@@ -995,7 +995,7 @@ fn sep_nb(g: bool, p: Doc, k: isize, ys: Vec<Doc>) -> Doc {
     match p {
         Doc::Nest(_, inner) => sep_nb(g, (*inner).clone(), k, ys),
         Doc::Empty => {
-            // HS `sepNB g Empty k ys` (pretty-1.1.3.6 HughesPJ.hs:760-766):
+            // HS `sepNB g Empty k ys` (pretty-1.1.3.6 HughesPJ.hs):
             //   = oneLiner (nilBeside g (reduceDoc rest)) `mkUnion`
             //     nilAboveNest False k (reduceDoc (vcat ys))
             //   where rest | g = hsep ys | otherwise = hcat ys
@@ -1095,7 +1095,7 @@ fn fill_nb(g: bool, p: Doc, k: isize, ys: Vec<Doc>) -> Doc {
     }
 }
 
-/// HS `fillNBE` (pretty-1.1.3.6 HughesPJ.hs:824+):
+/// HS `fillNBE` (pretty-1.1.3.6 HughesPJ.hs):
 ///   fillNBE g k y ys
 ///     = nilBeside g (fill1 g ((elideNest . oneLiner . reduceDoc) y) k1 ys)
 ///         `mkUnion` nilAboveNest False k (fill g (y:ys))

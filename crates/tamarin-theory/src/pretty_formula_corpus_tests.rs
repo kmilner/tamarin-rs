@@ -459,7 +459,7 @@ fn shapes(f: &p::Formula) -> Shapes<'_> {
 
 /// The internal annotation a parser annotation converts to
 /// (`elaborate::copy_fact_annotations`), whose `Ord` orders the `BTreeSet`
-/// the internal fact stores (`fact.rs:39-44`, `:97`).
+/// the internal fact stores ([`FactAnnotation`], [`crate::fact::Fact::annotations`]).
 fn internal_annotation(a: &p::FactAnnotation) -> FactAnnotation {
     match a {
         p::FactAnnotation::SolveFirst => FactAnnotation::SolveFirst,

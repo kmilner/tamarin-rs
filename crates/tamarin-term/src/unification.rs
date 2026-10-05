@@ -519,9 +519,6 @@ mod tests;
 //
 // If any of these tests fails, STOP and investigate before chasing a
 // downstream symptom — the root is here at the term layer.
-//
-// Haskell line numbers cited below track the pinned submodule and are
-// remapped at each bump; the contracts they pin do not move.
 #[cfg(test)]
 #[path = "unification_haskell_invariants_tests.rs"]
 mod haskell_invariants_tests;

@@ -108,9 +108,8 @@ impl<'a> Lexer<'a> {
     /// tab stop (`col + 8 - ((col-1) mod 8)`), and every other character
     /// advances by one.  The tab rule is load-bearing for byte parity: the
     /// `SourcePos` in a parse-error frame is the one parsec computed, so a
-    /// tab-indented line reports the expanded column (e.g.
-    /// `examples/csf18-alethea/alethea_selectionphase_anonymity.spthy`
-    /// line 104 is two tabs deep and its error is at column 66, not 52).
+    /// tab-indented line reports the expanded column. See
+    /// `tests/parsec_tab_columns.rs::tabs_advance_to_the_next_eight_column_stop`.
     pub fn bump(&mut self) -> Option<char> {
         let c = self.peek()?;
         let len = c.len_utf8();

@@ -1481,7 +1481,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
     // `finished.push` (a branch reaching a leaf) — see the per-branch
     // `took_step` field on `Entry`.  This drives the outer saturate's
     // "changes" detection (Sources.hs; `not (null names)` from
-    // solveAllSafeGoals returning caseNames, 213-215).
+    // `solveAllSafeGoals` returning `caseNames`).
     let mut any_step_taken: bool = false;
     // The sole caller passes outer_cap / branch_cap = MAX (the HS-faithful
     // unbounded default), so on the current path the two guards below never

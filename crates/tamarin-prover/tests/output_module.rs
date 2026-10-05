@@ -105,7 +105,7 @@ fn run_translate(stem: &str, theory: &str, extra: &[&str]) -> (i32, String, Stri
 /// [`REPLICATION`], after the banner: exactly six markers — NO
 /// `[Theory Replication] Theory closed`, because translate mode goes through
 /// `translateAndCheckTheory` (TheoryLoader.hs), which never reaches
-/// `closeTranslatedTheory` and its `traceM` marker (:696).
+/// `closeTranslatedTheory` and its `traceM` marker.
 const EXPECTED_STDERR: &[&str] = &[
     "[Theory Replication] Theory loaded",
     "[Theory Replication] Theory translated",
@@ -543,7 +543,7 @@ fn proverif_module_errors_as_unported() {
 }
 
 /// `--parse-only -m msr` behaves as plain `--parse-only` (Batch.hs guard
-/// order :91-101): no maude banner, no wf/version comment blocks, no
+/// order): no maude banner, no wf/version comment blocks, no
 /// translation.
 #[test]
 fn parse_only_wins_over_output_module() {

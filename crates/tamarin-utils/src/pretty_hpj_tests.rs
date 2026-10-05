@@ -179,8 +179,7 @@ fn wireguard_5_deep_and_layout() {
 fn wireguard_aead_fsep_breaks_before_e() {
     // Mirror wireguard Handshake_Complete In( ... ) input.
     // Goal: pp_term `aead( h(<pair>), 'e', h(<pair>) )` at indent
-    // = 10 should break before `'e',` per HS (line 626 in HS
-    // output).
+    // = 10 should break before `'e',` per HS output.
     //
     // HS's `prettyTerm` for App uses
     //   `ppFun f ts = text (f++"(") <> fsep (punctuate "," (map ppTerm ts)) <> text ")"`.

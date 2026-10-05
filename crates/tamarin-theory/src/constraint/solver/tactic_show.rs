@@ -141,7 +141,7 @@ fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<LVar> {
     // getFormulaTermsCore (Tactics.hs):
     //   concat $ map (map getCore . varsVTerm) (fact args)
     // HS `varsVTerm` (VTerm.hs) sortednubs over `Ord (BVar LVar)`
-    // (Bound < Free), collecting BOTH Bound and Free vars; `getCore` (:194-195)
+    // (Bound < Free), collecting BOTH Bound and Free vars; `getCore`
     // then maps `Free v -> v` and `error`s on any Bound de-Bruijn index.
     // We collect only Free vars per term (sortednub: sorted + deduped), then
     // concat.  This is byte-identical to HS whenever HS does not crash; a Bound

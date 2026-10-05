@@ -4,7 +4,7 @@
  *
  * `expandFormula` (Theory/Syntactic/Predicate.hs) splices the
  * predicate's body under `compSubst`, which only raises the use-site terms'
- * De Bruijn indices past the body's own binders (:96-105).  It renames
+ * De Bruijn indices past the body's own binders.  It renames
  * nothing: the body's binder is an INDEX and the use-site `z` is a FREE
  * variable, so the two never collide however they are spelled.  The names
  * separate at print time instead — `prettyLNFormula` opens each binder with

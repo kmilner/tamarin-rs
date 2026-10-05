@@ -1743,7 +1743,7 @@ fn pretty_restriction_view(
 ///
 /// `render` is HughesPJ's default style: `lineLength = 100` and
 /// `ribbonsPerLine = 1.5`, so `fullRender` rounds the ribbon to 67
-/// (HughesPJ.hs:940, :1010) — NOT the 110/73 the console's `renderDoc`
+/// (HughesPJ.hs) — NOT the 110/73 the console's `renderDoc`
 /// installs for the surrounding theory echo.  The fact and the formula are
 /// rendered INDEPENDENTLY at that style from column 0, then concatenated as
 /// plain text.
@@ -2827,7 +2827,7 @@ mod predicate_echo_tests {
     /// fact and formula out with `render`, HughesPJ's default style, and
     /// embeds the two as one `text`.  That style is 100 columns with 1.5
     /// ribbons per line, which `fullRender` rounds to a ribbon of 67
-    /// (HughesPJ.hs:940, :1010), while the theory echo around the predicate
+    /// (HughesPJ.hs), while the theory echo around the predicate
     /// item is laid out by the console's `renderDoc` at 110/73.  So a
     /// predicate formula breaks where 67 columns of ribbon run out, not
     /// where 73 do: `Between`'s inner conjunction is 68 columns wide and

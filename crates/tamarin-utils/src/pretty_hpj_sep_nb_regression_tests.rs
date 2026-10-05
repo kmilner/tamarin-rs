@@ -61,7 +61,7 @@ fn nested_sep_disjunct_second_item_column() {
 
 /// Pins the `False` in `sepNB g Empty k ys`'s
 /// `nilAboveNest False k (reduceDoc (vcat ys))`
-/// (pretty-1.1.3.6 HughesPJ.hs:760-766). The `pretty` package that GHC
+/// (pretty-1.1.3.6 HughesPJ.hs). The `pretty` package that GHC
 /// bundles settles on `False`. The XXX comment upstream does not settle the
 /// choice.
 ///
