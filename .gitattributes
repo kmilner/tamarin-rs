@@ -1,2 +1,3 @@
 # Patch payloads preserve upstream whitespace and unified-diff context markers.
-patches/*.patch -whitespace
+# Mark them as generated so GitHub collapses them in its default diff view.
+patches/*.patch -whitespace linguist-generated=true
