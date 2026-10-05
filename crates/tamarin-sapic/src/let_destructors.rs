@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Sapic.LetDestructors` (`lib/sapic/src/Sapic/LetDestructors.hs`).
 //!
@@ -8,27 +7,27 @@
 //! every `Let t1 t2 mv` combinator (Basetranslation.hs `Let` corresponds to a
 //! `ProcessCombinator::Let { left, right, match_vars }`):
 //!
-//!   * **Case A** (LetDestructors.hs:35-58) — `t1` a plain variable and `t2` a
+//!   * **Case A** (LetDestructors.hs) — `t1` a plain variable and `t2` a
 //!     `Destructor` application.  If the destructor has an associated rewrite
 //!     rule `dest(leftterms) = outvar`, the Let is KEPT and annotated with the
 //!     `destructorEquation` `(leftterms[outvar↦t1], rightterms)`; otherwise the
 //!     destructor never succeeds, so the whole Let is replaced by its
 //!     else-branch `pr`.
 //!
-//!   * **Case B** (LetDestructors.hs:59-61) — `t1` a plain variable `svar` NOT
+//!   * **Case B** (LetDestructors.hs) — `t1` a plain variable `svar` NOT
 //!     in the match-vars `mv`.  The Let is ELIMINATED: `svar → t2` is
 //!     substituted into the left process `pl` (the else-branch is discarded),
 //!     and the rewrite recurses.  This is the `let h = a in …` /
 //!     `let x = 't' in …` optimisation.
 //!
-//!   * **Case C** (LetDestructors.hs:62-65, the `_` fallthrough) — anything
+//!   * **Case C** (LetDestructors.hs, the `_` fallthrough) — anything
 //!     else.  The Let is KEPT, annotated only with `annElse elsebranch`, and
 //!     both branches are rewritten.
 //!
-//! `elsebranch` (LetDestructors.hs:74-76) is `False` iff the right branch is the
+//! `elsebranch` (LetDestructors.hs) is `False` iff the right branch is the
 //! null process, else `True`.
 //!
-//! Runs as part of `translate` (HS `sapic/src/Sapic.hs:45-101, see line 55`),
+//! Runs as part of `translate` (HS `sapic/src/Sapic.hs`),
 //! AFTER `propagateNames` and BEFORE `annotateLocks`, over the already
 //! type-/rename-unique'd process.
 
@@ -45,7 +44,7 @@ use tamarin_theory::sapic::{
 
 use crate::annotation::{AnnotatedProcess, ProcessAnnotation};
 
-/// `translateLetDestr rules p` (LetDestructors.hs:98-100) — the entry point.
+/// `translateLetDestr rules p` (LetDestructors.hs) — the entry point.
 pub(crate) fn translate_let_destr(
     st_rules: &std::collections::BTreeSet<CtxtStRule>,
     p: AnnotatedProcess<LVar>,
@@ -59,12 +58,12 @@ fn map_proc(
 ) -> AnnotatedProcess<LVar> {
     match p {
         Process::Null(ann) => Process::Null(ann),
-        // `ProcessAction ac ann p'` (LetDestructors.hs:29-31): descend.
+        // `ProcessAction ac ann p'` (LetDestructors.hs): descend.
         Process::Action(ac, ann, body) => {
             let body1 = map_proc(rules, *body);
             Process::Action(ac, ann, Box::new(body1))
         }
-        // `ProcessComb c@(Let t1 t2 mv) _ pl pr` (LetDestructors.hs:33-66) —
+        // `ProcessComb c@(Let t1 t2 mv) _ pl pr` (LetDestructors.hs) —
         // HS discards the node's annotation here (the `_`), and so do we; see
         // `map_let` for why re-using it would over-propagate process names.
         Process::Comb(
@@ -77,7 +76,7 @@ fn map_proc(
             pl,
             pr,
         ) => map_let(rules, left, right, match_vars, *pl, *pr),
-        // `ProcessComb c ann pl pr` (LetDestructors.hs:82-85): non-Let comb.
+        // `ProcessComb c ann pl pr` (LetDestructors.hs): non-Let comb.
         Process::Comb(c, ann, pl, pr) => {
             let pl1 = map_proc(rules, *pl);
             let pr1 = map_proc(rules, *pr);
@@ -94,16 +93,16 @@ fn map_let(
     pl: AnnotatedProcess<LVar>,
     pr: AnnotatedProcess<LVar>,
 ) -> AnnotatedProcess<LVar> {
-    // `t1' = toLNTerm t1`, `t2' = toLNTerm t2` (LetDestructors.hs:68-69).
+    // `t1' = toLNTerm t1`, `t2' = toLNTerm t2` (LetDestructors.hs).
     let t1_ln = crate::base_translation::to_ln_term(&left);
     let t2_ln = crate::base_translation::to_ln_term(&right);
 
     // `elsebranch = case pr of ProcessNull _ -> False; _ -> True`
-    // (LetDestructors.hs:74-76).
+    // (LetDestructors.hs).
     let elsebranch = !matches!(pr, Process::Null(_));
 
     // Dispatch on the shape of (t1, viewTerm t1', viewTerm t2') — Case A first
-    // (LetDestructors.hs:34-58): t1 a var AND t2 a Destructor application.
+    // (LetDestructors.hs): t1 a var AND t2 a Destructor application.
     if let VTerm::Lit(Lit::Var(_)) = &left
         && let VTerm::App(FunSym::NoEq(funsym), rightterms) = &t2_ln
         && funsym.constructability == Constructability::Destructor
@@ -111,7 +110,7 @@ fn map_let(
         return case_destructor(rules, &t1_ln, *funsym, rightterms, pl, pr, elsebranch);
     }
 
-    // Case B (LetDestructors.hs:59-61): t1 a plain variable NOT in match-vars.
+    // Case B (LetDestructors.hs): t1 a plain variable NOT in match-vars.
     if let VTerm::Lit(Lit::Var(svar)) = &left
         && !match_vars.contains(svar)
     {
@@ -121,9 +120,9 @@ fn map_let(
         return map_proc(rules, pl1);
     }
 
-    // Case C (LetDestructors.hs:62-65): keep the Let, annotate `annElse
+    // Case C (LetDestructors.hs): keep the Let, annotate `annElse
     // elsebranch`.  HS `annElse b = mempty {elseBranch = b}`
-    // (sapic/src/Sapic/Annotation.hs:132-133)
+    // (sapic/src/Sapic/Annotation.hs)
     // builds a FRESH `mempty`-based annotation, REPLACING the existing one — so
     // every other field (incl. the propagated `processnames`) is dropped back to
     // its default.  The node's incoming annotation must NOT be carried over
@@ -144,7 +143,7 @@ fn map_let(
     )
 }
 
-/// Case A — destructor let (LetDestructors.hs:35-58).
+/// Case A — destructor let (LetDestructors.hs).
 fn case_destructor(
     rules: &std::collections::BTreeSet<CtxtStRule>,
     t1_ln: &LNTerm,
@@ -156,9 +155,9 @@ fn case_destructor(
 ) -> AnnotatedProcess<LVar> {
     match find_rule(&funsym, rules) {
         // No rule: the destructor never succeeds — replace the Let by its
-        // else-branch (LetDestructors.hs:38-39).
+        // else-branch (LetDestructors.hs).
         None => map_proc(rules, pr),
-        // `Just (leftterms, outvar)` (LetDestructors.hs:40-57).
+        // `Just (leftterms, outvar)` (LetDestructors.hs).
         Some((leftterms, outvar)) => {
             // `subst = substFromList [(outvar, t1')]`
             // `leftermssubst = apply subst $ toPairs leftterms`
@@ -169,7 +168,7 @@ fn case_destructor(
             // `new_an = annDestructorEquation leftermssubst (toPairs rightterms) elsebranch`
             // — HS `annDestructorEquation v1 v2 b = mempty { destructorEquation =
             // Just (v1, v2), elseBranch = b }`
-            // (sapic/src/Sapic/Annotation.hs:129-130) builds a
+            // (sapic/src/Sapic/Annotation.hs) builds a
             // FRESH `mempty`-based annotation, REPLACING the existing one.  Every
             // other field (incl. the propagated `processnames`) is therefore reset
             // to default, so the node's incoming annotation is dropped (Case C
@@ -219,7 +218,7 @@ fn rebuild_let_comb(
     }
 }
 
-/// `findRule funsym acc rule` (LetDestructors.hs:87-96): the first destructor
+/// `findRule funsym acc rule` (LetDestructors.hs): the first destructor
 /// rewrite rule `dest(y) = v` whose head symbol matches `funsym`.
 fn find_rule(
     funsym: &tamarin_term::function_symbols::NoEqSym,
@@ -242,7 +241,7 @@ fn find_rule(
     acc
 }
 
-/// `toPairs` (LetDestructors.hs:71-73): fold a list of terms into a
+/// `toPairs` (LetDestructors.hs): fold a list of terms into a
 /// right-nested pair.  `[] -> fAppOne`, `[s] -> s`, `(p:q) -> <p, toPairs q>`.
 fn to_pairs(ts: &[LNTerm]) -> LNTerm {
     match ts {
@@ -255,7 +254,7 @@ fn to_pairs(ts: &[LNTerm]) -> LNTerm {
     }
 }
 
-/// `make_untyped_variant` + `substFromList` (LetDestructors.hs:78-80, :60): the
+/// `make_untyped_variant` + `substFromList` (LetDestructors.hs): the
 /// substitution `svar -> t2` where a typed `svar` also maps its untyped
 /// variant.  Keys are `LVar` (type-erased) for the `apply` over LN terms in the
 /// process; the process terms carry SAPIC types, so we substitute over the
@@ -295,7 +294,7 @@ fn subst_annotation(
     ann
 }
 
-/// `apply subst` for a `SapicAction SapicLVar` (Sapic/Process.hs:319-321):
+/// `apply subst` for a `SapicAction SapicLVar` (Sapic/Process.hs):
 /// `mapTermsAction`, with `ChIn` and `Msr` match variables rewritten by
 /// [`apply_match_vars`].
 fn subst_action(
@@ -313,7 +312,7 @@ fn subst_action(
                 chan: chan.as_ref().map(|t| subst_term(subst, t)),
                 msg: subst_term(subst, msg),
                 // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
-                // SapicLVar)` (Sapic/Process.hs:319-321) to reach this rewrite: a
+                // SapicLVar)` (Sapic/Process.hs) to reach this rewrite: a
                 // `let`-bound match var `=t` (where `t = <a,'test'>`) becomes the
                 // match-var set `{a}`.
                 match_vars: apply_match_vars(subst, match_vars),
@@ -356,7 +355,7 @@ fn subst_action(
     )
 }
 
-/// `apply subst` for a `ProcessCombinator SapicLVar` (Sapic/Process.hs:330-334).
+/// `apply subst` for a `ProcessCombinator SapicLVar` (Sapic/Process.hs).
 fn subst_comb(
     subst: &Subst<Name, SapicLVar>,
     c: &ProcessCombinator<SapicLVar>,
@@ -479,8 +478,8 @@ mod tests {
         assert_eq!(out.annotation().parsing_ann.location, Some(location));
     }
 
-    /// HS `mapTermsAction .. (fmap ff rest) ..` (Sapic/Process.hs:155) under
-    /// `apply subst` (Sapic/Process.hs:319-321): a Case-B `let`-elimination
+    /// HS `mapTermsAction .. (fmap ff rest) ..` (Sapic/Process.hs) under
+    /// `apply subst` (Sapic/Process.hs): a Case-B `let`-elimination
     /// rewrites the `let`-bound variable inside an embedded MSR's
     /// `_restrict` formula, not only inside its fact rows.
     #[test]

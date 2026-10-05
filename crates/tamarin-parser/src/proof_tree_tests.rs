@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::ast::{Atom, BinOp, FactAnnotation, Formula, GoalSpec, Term};
@@ -99,7 +98,7 @@ fn induction_with_case_block() {
 
 #[test]
 fn identifier_stops_at_hyphen() {
-    // HS `identifier` (Token.hs:214-230, see line 224 `identLetter = alphaNum
+    // HS `identifier` (Token.hs `identLetter = alphaNum
     // <|> oneOf "_"`) does NOT accept `-`, so `case foo-bar` names the case
     // `foo` and leaves `-bar` where `proofSkeleton` expects a proof method,
     // which no `proofMethod` alternative reads.  An underscore IS an
@@ -113,7 +112,7 @@ fn identifier_stops_at_hyphen() {
 
 #[test]
 fn bare_inter_method_without_child_is_err() {
-    // HS `interProof` (Theory/Text/Parser/Proof.hs:109-113) has no
+    // HS `interProof` (Theory/Text/Parser/Proof.hs) has no
     // childless-leaf branch:
     // a method must be followed by either a `case`-block (`next`/`qed`)
     // or a recursive `proofSkeleton`.  A bare `simplify` with nothing
@@ -166,7 +165,7 @@ fn fact_goals_preserve_annotations_and_comments_around_the_separator() {
     }
 }
 
-/// HS `actionGoal` (Theory/Text/Parser/Proof.hs:49-52) keeps the whole
+/// HS `actionGoal` (Theory/Text/Parser/Proof.hs) keeps the whole
 /// timepoint `LVar` in `ActionG i fa`, index included, so `#vk.6` must not
 /// collapse to `#vk`.
 #[test]
@@ -192,8 +191,8 @@ fn action_goal_keeps_the_timepoint_index() {
     }
 }
 
-/// HS `premiseGoal` (Theory/Text/Parser/Proof.hs:54-57) reads `opRequires`
-/// (`▶` plus a SUBSCRIPT natural, Token.hs:617-619) between the fact and the
+/// HS `premiseGoal` (Theory/Text/Parser/Proof.hs) reads `opRequires`
+/// (`▶` plus a SUBSCRIPT natural, Token.hs) between the fact and the
 /// node variable.
 #[test]
 fn premise_goal_reads_the_subscript_index() {
@@ -216,7 +215,7 @@ fn premise_goal_reads_the_subscript_index() {
     }
 }
 
-/// `fact llit` is `fact'` (Theory/Text/Parser/Fact.hs:39-63), which reads the
+/// `fact llit` is `fact'` (Theory/Text/Parser/Fact.hs), which reads the
 /// `option [] $ list factAnnotation` suffix, so an annotated fact is a goal
 /// like any other.
 #[test]
@@ -233,9 +232,9 @@ fn premise_goal_accepts_an_annotated_fact() {
     }
 }
 
-/// HS `chainGoal` (Theory/Text/Parser/Proof.hs:59) is `nodeConc <* opChain`
+/// HS `chainGoal` (Theory/Text/Parser/Proof.hs) is `nodeConc <* opChain`
 /// then `nodePrem`, and both endpoints are a full `nodevar` plus a natural
-/// (Theory/Text/Parser/Proof.hs:28-36) — the node index is part of the goal.
+/// (Theory/Text/Parser/Proof.hs) — the node index is part of the goal.
 #[test]
 fn chain_goal_keeps_both_node_indices() {
     match goal("(#i.2, 0) ~~> (#j, 1)") {
@@ -251,7 +250,7 @@ fn chain_goal_keeps_both_node_indices() {
     }
 }
 
-/// HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs:70-72).  Id 0 is the first
+/// HS `eqSplitGoal` (Theory/Text/Parser/Proof.hs).  Id 0 is the first
 /// id the equation store mints.
 #[test]
 fn split_goal_reads_the_split_id() {
@@ -263,8 +262,8 @@ fn split_goal_reads_the_split_id() {
     }
 }
 
-/// HS `stSplitGoal` (Theory/Text/Parser/Proof.hs:63-68) accepts both
-/// spellings of `opSubterm` (Token.hs:574-576).
+/// HS `stSplitGoal` (Theory/Text/Parser/Proof.hs) accepts both
+/// spellings of `opSubterm` (Token.hs).
 #[test]
 fn subterm_goal_accepts_both_spellings() {
     for src in ["x \u{228F} <y, z>", "x << <y, z>"] {
@@ -279,7 +278,7 @@ fn subterm_goal_accepts_both_spellings() {
 }
 
 /// A user-declared `[AC]` symbol is written INFIX, and `acterm`
-/// (Theory/Text/Parser/Term.hs:165-174) reads it only when the symbol is in
+/// (Theory/Text/Parser/Term.hs) reads it only when the symbol is in
 /// the signature the sub-parser inherits.
 #[test]
 fn goal_reads_a_user_ac_argument_infix() {
@@ -310,7 +309,7 @@ fn goal_reads_a_user_ac_argument_infix() {
 /// A hand-written proof spells a user `[AC]` symbol prefix, the way the rules
 /// of its theory do.  HS resolves that head through `lookupArity` and builds
 /// the AC application (`naryOpApp`'s `IsAC` arm,
-/// Theory/Text/Parser/Term.hs:105), so both spellings name one term.
+/// Theory/Text/Parser/Term.hs), so both spellings name one term.
 #[test]
 fn goal_reads_a_user_ac_argument_prefix() {
     let mut msig = tamarin_term::maude_sig::pair_maude_sig();
@@ -338,9 +337,9 @@ fn goal_reads_a_user_ac_argument_prefix() {
 }
 
 /// Every prefix application in a stored goal resolves through `lookupArity`
-/// (`naryOpApp`, Theory/Text/Parser/Term.hs:88-105), which the theory's own
+/// (`naryOpApp`, Theory/Text/Parser/Term.hs), which the theory's own
 /// rules are read with: `exp` becomes the `^` term `prettyTerm` renders infix
-/// (Term/Term.hs:310) and an arity-1 head reads its parenthesised arguments
+/// (Term/Term.hs) and an arity-1 head reads its parenthesised arguments
 /// as one tuple.  A head the signature has no row for is not a term.
 #[test]
 fn goal_resolves_a_prefix_head_through_the_signature() {
@@ -379,7 +378,7 @@ fn goal_diff_argument_follows_the_diff_bit() {
     assert!(parse_goal_str("F( diff(a, b) ) @ #i", &bare_parser()).is_err());
 }
 
-/// HS reads the goal as `parens goal` (Theory/Text/Parser/Proof.hs:80), so
+/// HS reads the goal as `parens goal` (Theory/Text/Parser/Proof.hs), so
 /// the whole text between the parentheses is the goal.
 #[test]
 fn goal_rejects_trailing_text() {
@@ -387,7 +386,7 @@ fn goal_rejects_trailing_text() {
     assert!(parse_goal_str("splitEqs(3) splitEqs(4)", &bare_parser()).is_err());
 }
 
-/// HS `nodevar` (Token.hs:443-448) is `sortedLVar [LSortNode]` or a bare
+/// HS `nodevar` (Token.hs) is `sortedLVar [LSortNode]` or a bare
 /// `indexedIdentifier`; a `$`/`~`/`%` sigil names a different sort.
 #[test]
 fn nodevar_rejects_a_non_node_sigil() {
@@ -433,7 +432,7 @@ fn nested_case_block() {
 }
 
 /// HS reads the goal of a `solve( ... )` step with `parens goal`
-/// (Theory/Text/Parser/Proof.hs:80), so text no alternative of `goal`
+/// (Theory/Text/Parser/Proof.hs), so text no alternative of `goal`
 /// accepts fails the whole skeleton parse.
 #[test]
 fn unparseable_goal_fails_the_tree_parse() {
@@ -443,7 +442,7 @@ fn unparseable_goal_fails_the_tree_parse() {
     assert_eq!(error.line_column().0, 1);
 }
 
-/// HS `proofMethod` (Theory/Text/Parser/Proof.hs:75-85) is an `asum` of seven
+/// HS `proofMethod` (Theory/Text/Parser/Proof.hs) is an `asum` of seven
 /// keyword alternatives with no catch-all, so an unknown token fails.
 #[test]
 fn unknown_method_token_fails_the_tree_parse() {
@@ -451,7 +450,7 @@ fn unknown_method_token_fails_the_tree_parse() {
     assert!(parse_proof_tree("by ATTACK", &bare_parser()).is_err());
 }
 
-/// HS `disjSplitGoal` (Theory/Text/Parser/Proof.hs:61) is
+/// HS `disjSplitGoal` (Theory/Text/Parser/Proof.hs) is
 /// `sepBy1 guardedFormula (symbol "∥")`, so each alternative is a whole
 /// formula and the goal keeps them all.
 #[test]
@@ -528,7 +527,7 @@ fn solve_disj_five_alts() {
 }
 
 /// A public name may hold a bracket: HS `singleQuotedString`
-/// (Token.hs:452-453) reads `many1 (noneOf "'\n")`, and `prettyGoal` prints
+/// (Token.hs) reads `many1 (noneOf "'\n")`, and `prettyGoal` prints
 /// the name back with the bracket inside the quotes.  The goal grammar reads
 /// the name whole, so the bracket does not close the `solve( ... )` step and
 /// the rest of the skeleton parses on.

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Per-theory HTTP handlers.  Each one looks up the theory by idx,
 //! parses the trailing wildcard path, and emits HTML or the JSON
@@ -40,7 +39,7 @@ use tamarin_theory::prove::SearchOptions;
 /// Parse the trailing wildcard path.  Returns `None` on UNPARSEABLE
 /// input, mirroring Haskell's Yesod `PathMultiPiece TheoryPath`
 /// instance (`fromPathMultiPiece = parseTheoryPath`,
-/// `src/Web/Types.hs:662-665`): when `parseTheoryPath` returns
+/// `src/Web/Types.hs`): when `parseTheoryPath` returns
 /// `Nothing`, Yesod routing yields `notFound` (404) BEFORE the handler
 /// runs, so a malformed path 404s on every theory route.  Callers must
 /// map `None` to [`not_found`].  Note the legitimate help view
@@ -93,7 +92,7 @@ pub async fn interactive_overview(
 
 /// `GET /thy/trace/<idx>/main/*path` — AJAX-only JsonHtml content
 /// (no framing).  Missing idx returns 404 HTML to match Haskell's
-/// `withTheory` / `notFound` (see `src/Web/Handler.hs:662-672`).
+/// `withTheory` / `notFound` (see `src/Web/Handler.hs`).
 ///
 /// Special-cases the `TheoryMethod` path (Haskell `getTheoryPathMR` →
 /// `applyMethodAtPath`): we look up the ranked applicable methods at
@@ -175,7 +174,7 @@ fn overview_proof_url(idx: usize, lemma: &str, sub: &[String]) -> String {
 /// target; the async handler publishes it only after the worker completes.
 /// Mirrors Haskell's
 /// `applyMethodAtPath` + `modifyTheory` flow in
-/// `src/Web/Handler.hs:1078-1081` and `src/Web/Theory.hs:86-100`.
+/// `src/Web/Handler.hs` and `src/Web/Theory.hs`.
 fn apply_method(
     state: &AppState,
     idx: usize,
@@ -207,7 +206,7 @@ fn apply_method(
     };
     // Pick the N-th ranked method (1-based).  Filter to only those
     // methods whose `exec_proof_method` succeeds — matches Haskell's
-    // `rankProofMethods` → `execMethods` (`ProofMethod.hs:519-534`)
+    // `rankProofMethods` → `execMethods` (`ProofMethod.hs`)
     // semantics, and matches the user-visible numbering produced by
     // `write_applicable_methods` (which applies the same filter).
     // Without filtering here the numbering would drift on Sorry/no-op
@@ -218,9 +217,9 @@ fn apply_method(
             Err(e) => return Err(crate::state::StoreError::Build(e)),
         };
         // Haskell `applyMethodAtPath` ranks with `useHeuristic heuristic
-        // (length proofPath)` (Web/Theory.hs:96); the depth selects
+        // (length proofPath)` (Web/Theory.hs); the depth selects
         // which ranking of a multi-ranking heuristic is active
-        // (`rankings !! (depth mod n)`, ProofMethod.hs:580-589).  Pass
+        // (`rankings !! (depth mod n)`, ProofMethod.hs).  Pass
         // the proof-path length, not a hardcoded 0.
         let candidates = match tamarin_theory::constraint::solver::search::candidate_methods(
             &sys_at_path,
@@ -247,14 +246,14 @@ fn apply_method(
             }
         }
         // The method index is read signed (`safeRead` at `ReadS Int`,
-        // `src/Web/Types.hs:443`), so every `i` a client can type reaches
+        // `src/Web/Types.hs`), so every `i` a client can type reaches
         // here.  Upstream guards it with `length methods >= i` alone and then
-        // evaluates `methods !! (i-1)` (`src/Web/Theory.hs:99`), which admits
+        // evaluates `methods !! (i-1)` (`src/Web/Theory.hs`), which admits
         // every `i <= 0` into the `!!`: the raised `Prelude.!!` text — GHC
         // CallStack and all — comes back as an ordinary 200 JSON alert, and
         // only an `i` past the end reaches the intended
         // "Sorry, but the prover failed on the selected method!"
-        // (`src/Web/Handler.hs:1081`).  RS deliberately corrects that: an
+        // (`src/Web/Handler.hs`).  RS deliberately corrects that: an
         // index naming no ranked method is one failure, whichever side of the
         // list it falls off, and it always answers that alert.
         match method_nr
@@ -276,7 +275,7 @@ fn apply_method(
         )));
     }
     // Build the redirect URL.  Haskell's `getTheoryPathMR` for
-    // `TheoryMethod` (`src/Web/Handler.hs:1078-1081`) advances the target
+    // `TheoryMethod` (`src/Web/Handler.hs`) advances the target
     // via `nextSmartThyPath newThy (TheoryProof lemma proofPath)`, i.e. it
     // walks INTO the freshly created child case of the grown tree.  We do
     // the same by running `next_thy_path_inner` (smart) over the detached
@@ -284,7 +283,7 @@ fn apply_method(
     // arm always yields another `TheoryProof` (child path, next-lemma root,
     // or same path when nothing follows), so we render the `overview/proof`
     // URL from its `(lemma, sub)`.  The URL SHAPE matches Haskell's
-    // `renderTheoryPath` (`src/Web/Types.hs:371-384, see line 373`): lemma root (sub=[]) →
+    // `renderTheoryPath` (`src/Web/Types.hs`): lemma root (sub=[]) →
     // `proof/<lemma>`; each sub segment is `prefixWithUnderscore`d.
     let src_path = path_parse::TheoryPath::Proof {
         lemma: lemma.to_string(),
@@ -322,7 +321,7 @@ fn entry_for_path(
     }
 }
 
-/// Mirror Haskell `titleThyPath` (`src/Web/Theory.hs:1679-1700`).
+/// Mirror Haskell `titleThyPath` (`src/Web/Theory.hs`).
 /// Titles are independent of the theory name EXCEPT `TheoryHelp`.
 fn title_for(
     entry: &crate::state::TheoryEntry,
@@ -410,7 +409,7 @@ fn title_for(
 
 /// Render the full closed-theory source, mirroring HS `getTheorySourceR`
 /// and `getTheoryMessageDeductionR` — both are `render . prettyClosedTheory
-/// . theory` (`Web/Handler.hs:1015-1022, :1050-1055`), i.e. identical output.
+/// . theory` (`Web/Handler.hs`), i.e. identical output.
 ///
 /// HS's stored `ClosedTheory` carries each lemma's LIVE
 /// `IncrementalProof` — the close-time `checkAndExtendProver`-replayed
@@ -465,25 +464,24 @@ fn render_theory_source(entry: &crate::state::TheoryEntry) -> Result<String, Str
         &build,
     );
     // `getTheorySourceR` / `getTheoryMessageDeductionR` / `getDownloadTheoryR`
-    // are all `render . prettyClosedTheory` (Handler.hs:1015-1022, :1050-1055,
+    // are all `render . prettyClosedTheory` (Handler.hs
     // :1763-1766), and HughesPJ's `render` ends at the document's last
     // character — the batch path's trailing newline is `putStrLn`'s, not the
-    // document's (Batch.hs:114-134, which is why `-o` files are written
+    // document's (Batch.hs, which is why `-o` files are written
     // without it).  `pretty_closed_theory` carries that newline for the
     // stdout caller, so the body served here is one byte shorter.
     if body.ends_with('\n') {
         body.pop();
     }
     // Width: `render` here is HughesPJ's DEFAULT style, 100/67
-    // (Text/PrettyPrint/Class.hs:77-78).  `pretty_closed_theory` takes no
+    // (Text/PrettyPrint/Class.hs).  `pretty_closed_theory` takes no
     // width because it renders at the process-global display width, which
     // `init_process_globals` pins to `DEFAULT_LINE_LENGTH`/`DEFAULT_RIBBON`
     // = 100/67 before any render — so these routes already match HS's
     // `render . prettyClosedTheory` (byte-verified against the captured
     // oracle body for `issue193.spthy`,
     // `tests/fixtures/haskell-responses/source.txt`).  The batch BINARY is
-    // the one that differs: its `renderDoc` pins 110/73 (Console.hs:243,
-    // 398-399) via its own width install.
+    // the one that differs: its `renderDoc` pins 110/73 (Console.hs) via its own width install.
     Ok(body)
 }
 
@@ -565,7 +563,7 @@ pub async fn autoprove(
         return not_found();
     };
     // Match Haskell's Yesod `PathPiece SolutionExtractor`
-    // (`src/Web/Types.hs:639-651`): only the five known extractor names
+    // (`src/Web/Types.hs`): only the five known extractor names
     // parse; any other value makes `fromPathPiece` return `Nothing`, so
     // Yesod routing yields `notFound` (404) before the handler runs.
     // `autoprover_name` returns `None` for an unrecognised extractor and
@@ -585,7 +583,7 @@ pub async fn autoprove(
     let (lemma_name, sub): (String, Vec<String>) = match &path {
         path_parse::TheoryPath::Proof { lemma, sub } => (lemma.clone(), sub.clone()),
         // Haskell `getProverR` non-`TheoryProof` arm
-        // (`src/Web/Handler.hs:1137-1138`):
+        // (`src/Web/Handler.hs`):
         //   JsonAlert $ "Can't run " <> name <> " on the given theory path!"
         _ => {
             if !state.store.contains(idx) {
@@ -599,22 +597,22 @@ pub async fn autoprove(
     // Proof-depth bound: HS `getAutoProverR`'s `adapt` REPLACES the
     // theory autoprover's `apBound` with the URL's value —
     // `bound > 0 = Just bound`, `otherwise = Nothing`
-    // (Web/Handler.hs:1235-1249) — so the CLI `--bound` never reaches
+    // (Web/Handler.hs) — so the CLI `--bound` never reaches
     // these routes and 0 means unbounded, not "fall back to a default".
-    // The solver applies it as `boundProofDepth` (Theory/Proof.hs:336-344):
+    // The solver applies it as `boundProofDepth` (Theory/Proof.hs):
     // nodes at that depth become `sorry /* bound N hit */` leaves.
     let search_options = web_search_options(&extractor, bound, quit_on_empty, sub.len())
         .expect("extractor was validated by autoprover_name");
-    // HS `getProverR` → `applyProverAtPath` (`src/Web/Theory.hs:146-149`)
-    // → `focus proofPath prover` (`lib/theory/src/Theory/Proof.hs:602-612`):
+    // HS `getProverR` → `applyProverAtPath` (`src/Web/Theory.hs`)
+    // → `focus proofPath prover` (`lib/theory/src/Theory/Proof.hs`):
     // navigate to the URL's proof path, take THAT subproof's root system
     // (`psInfo (root prf)`), run the autoprover from it, and graft the
     // result back at the path via `modifyAtPath` — the rest of the tree is
     // untouched.  Root autoprove is the `focus [] prover = prover` special
-    // case.  The prover itself is `runAutoProver` (Web/Handler.hs:1236),
+    // case.  The prover itself is `runAutoProver` (Web/Handler.hs),
     // which "ignores the existing proof and tries to find one by itself"
-    // (Theory/Proof.hs:741-745) — NOT `replaceSorryProver` (that wrapper is
-    // batch-`--prove`-only, Main/TheoryLoader.hs:669-711, see line 706).  So any embedded
+    // (Theory/Proof.hs) — NOT `replaceSorryProver` (that wrapper is
+    // batch-`--prove`-only, Main/TheoryLoader.hs).  So any embedded
     // proof skeleton (e.g. Yubikey's `slightly_weaker_invariant` script,
     // replayed into the tree at `ProofState::new` time) is simply REPLACED
     // at the focused path: we search from the path node's stored system via
@@ -676,7 +674,7 @@ pub async fn autoprove(
             // Prover failure (missing session, prove error) or a graft
             // whose lemma/path vanished between the fork and the graft —
             // surface HS's prover-failure alert
-            // (`src/Web/Handler.hs:1121-1138, see line 1133`), same as the bad-path arm above.
+            // (`src/Web/Handler.hs`), same as the bad-path arm above.
             json_resp::alert(format!("Sorry, but {} failed!", name)).into_response()
         }
         Ok(Ok((detached, status, is_exists, target))) => {
@@ -741,7 +739,7 @@ fn parse_web_bound(raw: &str) -> Option<usize> {
 }
 
 /// Build the prover display name exactly as Haskell `getAutoProverR` /
-/// `getAutoProverAllR` (`src/Web/Handler.hs:1228-1256 / :1259-1283`):
+/// `getAutoProverAllR` (`src/Web/Handler.hs`):
 ///
 /// ```text
 /// fullName   = proverName <> " (" <> intercalate ", " qualifiers <> ")"
@@ -749,7 +747,7 @@ fn parse_web_bound(raw: &str) -> Option<usize> {
 /// ```
 ///
 /// `extractor` is the URL `#SolutionExtractor` path piece; Yesod's
-/// `instance PathPiece SolutionExtractor` (`src/Web/Types.hs:639-651`)
+/// `instance PathPiece SolutionExtractor` (`src/Web/Types.hs`)
 /// accepts only the five strings below — any other value makes
 /// `fromPathPiece` return `Nothing`, which Yesod turns into a routing
 /// `notFound` (404) BEFORE the handler runs.  We mirror that by
@@ -778,10 +776,10 @@ fn autoprover_name(extractor: &str, bound: usize) -> Option<String> {
 /// `GET /thy/trace/<idx>/autoproveAll/<extractor>/<bound>/*path` —
 /// run the autoprover on every lemma and return a redirect to the
 /// fresh theory idx, matching Haskell `getAutoProverAllR` /
-/// `getProverAllR` in `src/Web/Handler.hs:1259-1283 / :1141-1155`.
+/// `getProverAllR` in `src/Web/Handler.hs`.
 ///
 /// HS `getProverAllR` folds the SAME focus mechanism `autoprove` uses,
-/// at the root path of every lemma (`src/Web/Handler.hs:1141-1155, see line 1155`):
+/// at the root path of every lemma (`src/Web/Handler.hs`):
 ///
 /// ```text
 /// proveAll thy = foldM (\tha lemma ->
@@ -791,9 +789,9 @@ fn autoprover_name(extractor: &str, bound: usize) -> Option<String> {
 /// i.e. `runAutoProver` from each lemma's ROOT system, grafting the
 /// result as that lemma's new proof — replacing any embedded proof
 /// skeleton wholesale (`runAutoProver` "ignores the existing proof and
-/// tries to find one by itself", Theory/Proof.hs:741-745; it is NOT
+/// tries to find one by itself", Theory/Proof.hs; it is NOT
 /// wrapped in `replaceSorryProver`, the batch-`--prove`-only wrapper —
-/// Main/TheoryLoader.hs:669-711, see line 706).  We mirror that uniformly with
+/// Main/TheoryLoader.hs).  We mirror that uniformly with
 /// `autoprove`: fork the proof state at a fresh idx (HS `modifyTheory`)
 /// and `run_proof_search` + `graft_at_path` at `[]` per lemma.
 pub async fn autoprove_all(
@@ -804,7 +802,7 @@ pub async fn autoprove_all(
         return not_found();
     };
     // Match Haskell's Yesod `PathPiece SolutionExtractor`
-    // (`src/Web/Types.hs:639-651`): an unrecognised extractor makes
+    // (`src/Web/Types.hs`): an unrecognised extractor makes
     // `fromPathPiece` return `Nothing`, so Yesod routing 404s before
     // `getAutoProverAllR` runs.  (`getProverAllR` never surfaces the
     // prover `name` to the user — it always redirects — so unlike
@@ -816,7 +814,7 @@ pub async fn autoprove_all(
         return not_found();
     }
     // URL-only proof-depth bound, exactly as `autoprove` above (HS
-    // `getAutoProverAllR`'s identical `actualBound`, Web/Handler.hs:1265-1276).
+    // `getAutoProverAllR`'s identical `actualBound`, Web/Handler.hs).
     let search_options = web_search_options(&extractor, bound, false, 0)
         .expect("extractor was validated by autoprover_name");
 
@@ -879,7 +877,7 @@ pub async fn autoprove_all(
     };
     let new_idx = state.store.insert(detached);
 
-    // HS `getProverAllR` (`src/Web/Handler.hs:1141-1155, see line 1150`) advances the target
+    // HS `getProverAllR` (`src/Web/Handler.hs`) advances the target
     // via `nextSmartThyPath thy (TheoryProof (last names) [])` over the
     // NEW theory — the same smart traversal as `autoprove`, seeded at
     // the LAST lemma's root.  Now that the fork holds the freshly
@@ -894,7 +892,7 @@ pub async fn autoprove_all(
 /// `GET /thy/trace/<idx>/verify/*path` — returns:
 ///   - `{redirect}` when the path is `proof/<lemma>/<sub>`, re-pointing
 ///     navigation at the SAME idx/path.  NOTE: Haskell's
-///     `getTheoryVerifyR` (`src/Web/Handler.hs:839-845`) calls
+///     `getTheoryVerifyR` (`src/Web/Handler.hs`) calls
 ///     `editProof idx l`, which REBUILDS the lemma's proof via
 ///     `newProof`/`checkAndExtendProver` and `replaceTheory` before
 ///     redirecting.  The Rust port does NOT yet rebuild the proof; it
@@ -903,7 +901,7 @@ pub async fn autoprove_all(
 ///     mirroring Haskell's `getTheoryPathMR idx TheoryHelp` in the
 ///     `_` arm of `getTheoryVerifyR`.
 ///
-/// Reference: `src/Web/Handler.hs:839-847`.
+/// Reference: `src/Web/Handler.hs`.
 pub async fn verify(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
@@ -958,7 +956,7 @@ pub async fn unload(
 
 /// `POST /thy/trace/<idx>/reload` — re-read the source `.spthy` from
 /// disk and replace the entry at the same idx (mirrors Haskell
-/// `postReloadTheoryR` in `src/Web/Handler.hs:443-459` which calls
+/// `postReloadTheoryR` in `src/Web/Handler.hs` which calls
 /// `replaceTheory` — same idx, not a fresh allocation).
 pub async fn reload(
     State(state): State<Arc<AppState>>,
@@ -970,7 +968,7 @@ pub async fn reload(
         // form/button — surfacing through the standard alert UI.
         return json_resp::alert("Theory not found".to_string());
     };
-    // Mirror Haskell `checkReloadOrigin` (`src/Web/Handler.hs:391-394`):
+    // Mirror Haskell `checkReloadOrigin` (`src/Web/Handler.hs`):
     // two distinct JsonAlert strings for the two non-Local origins.
     let path = match &snapshot.entry.origin {
         crate::state::TheoryOrigin::Local(p) => p.clone(),
@@ -1003,7 +1001,7 @@ pub async fn reload(
             }
         }
         Ok(Err((path, error))) => match error {
-            // HS `reloadTheoryFromFile` (Handler.hs:413-414): a parse failure
+            // HS `reloadTheoryFromFile` (Handler.hs): a parse failure
             // becomes a JsonAlert
             //   "Parse error while reloading file:\n\n" ++ filePath
             //     ++ "\n\n" ++ show e
@@ -1024,10 +1022,10 @@ pub async fn download(
 ) -> Response {
     // Haskell uses `application/octet-stream` to force the browser to
     // present a "Save As" dialog rather than render inline.  See
-    // `getDownloadTheoryR` (`src/Web/Handler.hs:1763-1766`) — it
+    // `getDownloadTheoryR` (`src/Web/Handler.hs`) — it
     // returns `(typeOctet, source)` where `source` is the RENDERED
     // in-memory theory (`render . prettyClosedTheory`, via
-    // `getTheorySourceR`, `src/Web/Handler.hs:1015-1022`), so interactive
+    // `getTheorySourceR`, `src/Web/Handler.hs`), so interactive
     // modifications (applied proof steps, autoprove results) are
     // reflected in the saved file.  Same body as the `source_` handler,
     // different content-type/disposition.
@@ -1072,7 +1070,7 @@ fn stub_alert(what: &str) -> axum::Json<Value> {
 /// Compute the next theory-path under `section ∈ { normal, smart }`
 /// and return its `/main/...` URL as `text/plain`.
 ///
-/// Mirrors Haskell `getNextTheoryPathR` (`src/Web/Handler.hs:1538-1549`):
+/// Mirrors Haskell `getNextTheoryPathR` (`src/Web/Handler.hs`):
 ///   1. parse `path` into a TheoryPath
 ///   2. call `nextThyPath` or `nextSmartThyPath`
 ///   3. render `TheoryPathMR idx <new-path>` as a URL string
@@ -1144,7 +1142,7 @@ pub async fn prev_path(
 /// The `section` argument is matched verbatim against the strings
 /// `"normal"` / `"smart"`; any other value falls through to `const id`
 /// (no-op) per Haskell's `next _ = const id` in
-/// `src/Web/Handler.hs:1546-1549`.  That means e.g. `next/main/help`
+/// `src/Web/Handler.hs`.  That means e.g. `next/main/help`
 /// returns the SAME path back — used by the frontend when the user
 /// presses arrow keys outside the proof tree.
 fn next_theory_path(
@@ -1152,7 +1150,7 @@ fn next_theory_path(
     section: &str,
     entry: &crate::state::TheoryEntry,
 ) -> Result<path_parse::TheoryPath, crate::state::StoreError> {
-    // HS `getNextTheoryPathR` (`Handler.hs:1546-1549`): `next "normal" =
+    // HS `getNextTheoryPathR` (`Handler.hs`): `next "normal" =
     // nextThyPath`, `next "smart" = nextSmartThyPath`, everything else
     // `const id` (no-op).  The two differ ONLY in the `TheoryProof` arm.
     match section {
@@ -1187,7 +1185,7 @@ fn next_thy_path_inner(
             src_idx: 0,
             case_idx: 0,
         },
-        // Haskell `nextThyPath` (Web/Theory.hs:1769-1796, see line 1776): refined sources
+        // Haskell `nextThyPath` (Web/Theory.hs): refined sources
         // advance to the FIRST lemma's proof root, falling back to Help
         // only when there are no lemmas.
         T::Source {
@@ -1206,7 +1204,7 @@ fn next_thy_path_inner(
         },
         T::Edit(_) | T::Add(_) | T::Delete(_) => T::Help,
         // HS `nextThyPath`/`nextSmartThyPath` TheoryProof arm
-        // (Web/Theory.hs:1781-1784 / 1993-1996):
+        // (Web/Theory.hs):
         //   | Just nextPath <- getNextPath l p -> TheoryProof l nextPath
         //   | Just nextLemma <- getNextLemma l -> TheoryProof nextLemma []
         //   | otherwise                        -> TheoryProof l p
@@ -1278,7 +1276,7 @@ fn prev_thy_path_inner(
             src_idx: 0,
             case_idx: 0,
         },
-        // HS `prevThyPath` (Web/Theory.hs:1874-1876):
+        // HS `prevThyPath` (Web/Theory.hs):
         //   TheoryLemma l | Just prevLemma <- getPrevLemma l
         //                     -> TheoryProof prevLemma (lastPath prevLemma)
         //                 | otherwise -> TheorySource RefinedSource 0 0
@@ -1291,7 +1289,7 @@ fn prev_thy_path_inner(
         },
         T::Edit(_) | T::Add(_) | T::Delete(_) => T::Help,
         // HS `prevThyPath`/`prevSmartThyPath` TheoryProof arm
-        // (Web/Theory.hs:1877-1880 / 2094-2098):
+        // (Web/Theory.hs):
         //   | Just prevPath <- getPrevPath l p -> TheoryProof l prevPath
         //   | Just prevLemma <- getPrevLemma l ->
         //         TheoryProof prevLemma (lastPath prevLemma)
@@ -1460,8 +1458,8 @@ fn resolve_system_for_path(
 
 /// `GET /thy/trace/<idx>/intdot/*path` — the interactive graph shell page.
 ///
-/// HS `getInteractiveDotGraphR` (`src/Web/Handler.hs:903-911`) renders
-/// `intdotLayout True` (`src/Web/Types.hs:795-824`) around a
+/// HS `getInteractiveDotGraphR` (`src/Web/Handler.hs`) renders
+/// `intdotLayout True` (`src/Web/Types.hs`) around a
 /// `<dot-graph-viz>` custom element whose `dotsrc` points at the JSON graph
 /// route; the bundled `intdot-graph.es.js` fetches that and draws the graph
 /// client-side.  It does NOT resolve the constraint system itself — the shell
@@ -1469,7 +1467,7 @@ fn resolve_system_for_path(
 ///
 /// The same page serves both as the pop-out window and as the iframe embedded
 /// in the main theory view, so the floating `#popout-options` bar
-/// (`popoutOptionsTpl`, `src/Web/Types.hs:769-777`) is hidden client-side when
+/// (`popoutOptionsTpl`, `src/Web/Types.hs`) is hidden client-side when
 /// embedded (the inline script sets `graph-embedded` on `<html>`).  Its
 /// Options menu is `optionsMenuItemTpl True` — the trace-theory variant, which
 /// includes the `abstr-toggle` entry.
@@ -1572,14 +1570,14 @@ pub async fn graph(
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
-    // HS `getTheoryGraphR` (`src/Web/Handler.hs:1418-1432`) answers
+    // HS `getTheoryGraphR` (`src/Web/Handler.hs`) answers
     // `imgThyPath`'s `Nothing` with a generic `notFound`; there is no
     // placeholder SVG.  The label `imgThyPath` carries is for its `OutJSON`
     // branch, taken below only when `--with-json` was given.
     let opts = graph_options_from_map(&query);
     // `--with-json` switches this route to HS's `OutJSON` render branch
-    // (`imgThyPath` picks `toJSON jsonLabel system`, Web/Theory.hs:1404-1412,
-    // and `renderGraphCode` runs `jsonToImg`, Web/Theory.hs:1484-1491): the
+    // (`imgThyPath` picks `toJSON jsonLabel system`, Web/Theory.hs,
+    // and `renderGraphCode` runs `jsonToImg`, Web/Theory.hs): the
     // system is serialised with the SAME serialiser and label the `/json/`
     // route uses — but never abbreviated, `imgThyPath` has no abbrev call —
     // written to a file, and `<json-cmd> <img> <json>` is spawned to produce
@@ -1638,7 +1636,7 @@ pub async fn interactive_graph_def(
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
-    // HS `getTheoryInteractiveGraphR` (`src/Web/Handler.hs:1464-1470`) answers
+    // HS `getTheoryInteractiveGraphR` (`src/Web/Handler.hs`) answers
     // `dotGraphString`'s `Nothing` with `notFound`.  `dotGraphString` discards
     // the label its `thyPathSystem` returns (`(_, system) <- thyPathSystem …`).
     let opts = graph_options_from_map(&query);
@@ -1664,8 +1662,8 @@ pub async fn interactive_graph_def(
 /// `GET /thy/trace/<idx>/json/*path` — the constraint system at `path`
 /// serialised to the JSON graph format the `<dot-graph-viz>` frontend reads.
 ///
-/// Port of `getTheoryGraphJsonR` (`src/Web/Handler.hs:1435-1444`) over
-/// `graphJsonThyPath` (`src/Web/Theory.hs:1307-1341`):
+/// Port of `getTheoryGraphJsonR` (`src/Web/Handler.hs`) over
+/// `graphJsonThyPath` (`src/Web/Theory.hs`):
 ///
 /// - `TheoryProof lemma path` — the sub-proof's system, run through
 ///   `Web.Utils.abbrev` when the `abbrevInBackend` parameter is present, and
@@ -1745,12 +1743,12 @@ pub async fn graph_json(
     }
 }
 
-/// HS `jsonToImg` (Web/Theory.hs:1484-1491): write the JSON graph to a
+/// HS `jsonToImg` (Web/Theory.hs): write the JSON graph to a
 /// file, spawn `<json-cmd> <img> <json>` with empty stdin, and serve the
 /// produced image.  A nonzero exit is HS's stdout report —
 /// `jsonToImg: <cmd> failed with code <i> for file <json>:\n<err>` — then
 /// the `WARNING: failed to convert` stderr trace (`renderGraphCode`,
-/// Web/Theory.hs:1480-1481) and the route's `notFound`.
+/// Web/Theory.hs) and the route's `notFound`.
 ///
 /// HS names both files under its cache dir by a hash of the content; this
 /// port renders per-request under the system temp dir with a
@@ -1918,8 +1916,8 @@ impl PathSystem {
 }
 
 /// HS `thyPathSystem`, the `Maybe (String, System)` dispatch every graph route
-/// goes through (`graphJsonThyPath`'s `go` `src/Web/Theory.hs:1316-1318`,
-/// `imgThyPath` `:1414-1416`, `dotGraphString` `:2321-2323`):
+/// goes through (`graphJsonThyPath`'s `go` `src/Web/Theory.hs`,
+/// `imgThyPath`, `dotGraphString`):
 ///
 ///   - `TheorySource k i j` — the `casesSystem` case, labelled
 ///     `Theory: <thy> Case: <i>:<j>`;
@@ -1929,10 +1927,10 @@ impl PathSystem {
 ///     [`JSON_UNHANDLED_SITE`]), which the routes render as a 500 page.
 ///
 /// The port DIVERGES from upstream on the source-case indices.  Both are read
-/// signed (`safeRead` at `ReadS Int`, `src/Web/Types.hs:443`), so every value a
+/// signed (`safeRead` at `ReadS Int`, `src/Web/Types.hs`), so every value a
 /// client can type in the address bar arrives here, and upstream feeds them
 /// straight into `cases !! (i-1) !! (j-1)` behind no bounds check at all
-/// (`src/Web/Theory.hs:1322` for `/json`, `:1422` for `/graph`, `:2329` for
+/// (`src/Web/Theory.hs` for `/json`, `/graph`, and
 /// `/interactive-graph-def`): a non-positive or past-the-end index raises
 /// `Prelude.!!` and Yesod serves a 500 page whose body is the exception text
 /// with its GHC CallStack.  Here an index that names no case is an ordinary
@@ -1966,8 +1964,8 @@ fn thy_path_system(
 
 /// `POST /thy/trace/<idx>/edit/*path` — STUB.
 ///
-/// Haskell's `postTheoryEditR` (`src/Web/Handler.hs:851-886` and
-/// the `postEditTheoryR` block-comment at :1588-1622) reparses the
+/// Haskell's `postTheoryEditR` (`src/Web/Handler.hs` and
+/// the `postEditTheoryR` block-comment) reparses the
 /// lemma plaintext from a form field, calls `editLemma`, and
 /// reinserts the modified theory.  The Rust port doesn't yet expose
 /// per-lemma plaintext re-parsing through `tamarin-parser`, so this
@@ -1981,7 +1979,7 @@ pub async fn edit_stub(_: State<Arc<AppState>>, _: Path<(usize, String)>) -> axu
 /// `GET /thy/trace/<idx>/del/path/*path` — delete a lemma (path
 /// `lemma/<name>`) or a proof step (path `proof/<lemma>/<sub>`).
 /// Returns `{redirect}` on success, mirroring Haskell
-/// `getDeleteStepR` in `src/Web/Handler.hs:1681-1698`.
+/// `getDeleteStepR` in `src/Web/Handler.hs`.
 ///
 /// Haskell uses `modifyTheory` which allocates a fresh idx for the
 /// post-delete state. We likewise publish a detached snapshot only after the
@@ -2121,7 +2119,7 @@ pub async fn delete_step(
 
 /// `POST /thy/trace/<idx>/get_and_append/<name>` — append every
 /// modified lemma's plaintext to the source `.spthy` on disk.
-/// Mirrors Haskell `postAppendNewLemmasR` (`src/Web/Handler.hs:1769-1784`).
+/// Mirrors Haskell `postAppendNewLemmasR` (`src/Web/Handler.hs`).
 ///
 /// We don't yet track per-lemma "modified" state in the Rust port
 /// (lemma-editing is still stubbed), so every lemma is treated as

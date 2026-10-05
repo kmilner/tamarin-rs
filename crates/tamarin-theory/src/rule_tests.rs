@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::fact::{fresh_fact, in_fact, out_fact};
@@ -170,12 +169,12 @@ fn intruder_predicates() {
 }
 
 /// HS classifies the rules by partitioning them with `isDestrRule` and
-/// `isConstrRule` (CloseRule.hs:435-436): a rule `isDestrRule` accepts and
+/// `isConstrRule` (CloseRule.hs): a rule `isDestrRule` accepts and
 /// `isConstrRule` rejects lands in `crDestruct`, and the intruder rules
 /// both reject land in `crProtocol`.  `isDestrRule` accepts `IEqualityRule`
-/// (Theory/Model/Rule.hs:694-698), so the `IEquality` rule belongs to
-/// `crDestruct`: `solveChain` iterates it (Goals.hs:209) and `solvePremise`
-/// does not (Goals.hs:208).
+/// (Theory/Model/Rule.hs), so the `IEquality` rule belongs to
+/// `crDestruct`: `solveChain` iterates it (Goals.hs) and `solvePremise`
+/// does not (Goals.hs).
 #[test]
 fn iequality_belongs_to_the_destruction_class() {
     assert!(is_destr_rule(&IntrRuleACInfo::IEquality));
@@ -187,7 +186,7 @@ fn iequality_belongs_to_the_destruction_class() {
 /// order.  Pin both against a reshuffle: the variant sequence
 /// `ConstrRule < DestrRule < Coerce`, and the `DestrRule` field order of
 /// HS `DestrRule BC.ByteString Int Bool Bool [FunSym]`
-/// (Theory/Model/Rule.hs:541).
+/// (Theory/Model/Rule.hs).
 #[test]
 fn intr_rule_ac_info_ord_follows_declaration_order() {
     let sym = |n: &[u8]| {
@@ -243,7 +242,7 @@ fn print_extended_position() {
 
 #[test]
 fn reserved_names_match_hs() {
-    // HS `reservedRuleNames` (Model/Rule.hs:1284-1285), in its own order.
+    // HS `reservedRuleNames` (Model/Rule.hs), in its own order.
     assert_eq!(
         RESERVED_RULE_NAMES,
         [
@@ -498,14 +497,14 @@ fn rename_rule_shifts_indices() {
 }
 
 // =========================================================================
-// `prettyRuleRestrGen` (Theory/Model/Rule.hs:1366-1382)
+// `prettyRuleRestrGen` (Theory/Model/Rule.hs)
 // =========================================================================
 
 /// With no actions the middle of the `sep` is the bare `-->`
-/// (Theory/Model/Rule.hs:1369-1370), and each fact list is
+/// (Theory/Model/Rule.hs), and each fact list is
 /// `fsep ["[", ppList, "]"]`, so a body that fits on one line carries a
 /// space inside each bracket.  The premise and conclusion lists are `nest
-/// 1`ed (Theory/Model/Rule.hs:1368,1375), which is the leading column the
+/// 1`ed (Theory/Model/Rule.hs), which is the leading column the
 /// rule body shows when it is rendered at column zero.
 #[test]
 fn pretty_rule_restr_gen_uses_the_bare_arrow_without_actions() {
@@ -519,7 +518,7 @@ fn pretty_rule_restr_gen_uses_the_bare_arrow_without_actions() {
 }
 
 /// With actions the arrow becomes `fsep ["--[", ppList acts, "]->"]`
-/// (Theory/Model/Rule.hs:1371-1374), and the action list is punctuated by
+/// (Theory/Model/Rule.hs), and the action list is punctuated by
 /// the same comma as the premise and conclusion lists.
 #[test]
 fn pretty_rule_restr_gen_brackets_the_actions() {
@@ -538,7 +537,7 @@ fn pretty_rule_restr_gen_brackets_the_actions() {
 }
 
 /// A body too wide for the ribbon breaks at the `sep`
-/// (Theory/Model/Rule.hs:1368-1375): the premises, the arrow and the
+/// (Theory/Model/Rule.hs): the premises, the arrow and the
 /// conclusions each take a line, and only the two fact lists carry the
 /// `nest 1` column.
 #[test]
@@ -567,9 +566,9 @@ fn pretty_rule_restr_gen_breaks_at_the_arrows() {
 }
 
 /// HS keeps a rule's `_restrict` formulas on `preRestriction`
-/// (Theory/Text/Parser/Rule.hs:135) and `liftedAddProtoRule` appends the
+/// (Theory/Text/Parser/Rule.hs) and `liftedAddProtoRule` appends the
 /// generated actions without touching the field
-/// (Theory/Text/Parser.hs:188), so the elaborated rule carries them —
+/// (Theory/Text/Parser.hs), so the elaborated rule carries them —
 /// closed against the theory's signature, with its predicate atoms
 /// unexpanded.
 #[test]
@@ -596,7 +595,7 @@ fn elaborated_rule_carries_its_restrict_formulas() {
 }
 
 /// HS `prettyRuleAttributes` returns `emptyDoc` for a record equal to `mempty`
-/// (Theory/Model/Rule.hs:1330-1334), which is what an unattributed rule
+/// (Theory/Model/Rule.hs), which is what an unattributed rule
 /// carries.
 #[test]
 fn pretty_rule_attribute_omits_an_empty_record() {
@@ -608,7 +607,7 @@ fn pretty_rule_attribute_omits_an_empty_record() {
 /// HS `prettyRuleAttribute` renders `catMaybes [color, process,
 /// no_derivcheck, issapicrule, role]` in that order, separated by
 /// `punctuate comma` and wrapped in brackets by `prettyRuleAttributes`
-/// (Theory/Model/Rule.hs:1313-1334).  A record with all five fields set fixes
+/// (Theory/Model/Rule.hs).  A record with all five fields set fixes
 /// both the order and the spelling of each one, and overruns the ribbon: the
 /// `fsep` then breaks the list, with the continuation hanging one column in —
 /// where `hcat [text "[", …]` left it.
@@ -630,7 +629,7 @@ fn pretty_rule_attribute_renders_all_five_fields_in_order() {
 }
 
 /// Each field on its own: a `Nothing` field and a `False` flag drop out of
-/// `catMaybes` (Theory/Model/Rule.hs:1315-1321), so a record with one field
+/// `catMaybes` (Theory/Model/Rule.hs), so a record with one field
 /// set renders exactly that field.
 #[test]
 fn pretty_rule_attribute_renders_each_field_alone() {
@@ -657,7 +656,7 @@ fn pretty_rule_attribute_renders_each_field_alone() {
 }
 
 /// HS `equalUpToTerms` compares the rule name, the three list lengths and the
-/// fact tags (Theory/Model/Rule.hs:958-968).  Two rules whose facts carry the
+/// fact tags (Theory/Model/Rule.hs).  Two rules whose facts carry the
 /// same tags but different terms are equal; a differing name, an extra action
 /// or a differing tag separates them.
 #[test]
@@ -695,7 +694,7 @@ fn equal_up_to_terms_ignores_terms() {
     assert!(!equal_up_to_terms(&wrong_tag, &e));
 }
 
-/// HS `mergeOpenProtoRules` (OpenTheory.hs:592-603) collapses a run of
+/// HS `mergeOpenProtoRules` (OpenTheory.hs) collapses a run of
 /// consecutive rule items sharing an E rule into one item whose AC list is
 /// their concatenation, in order.  A non-rule item between two such rules
 /// ends the run, and every other item keeps its place.
@@ -704,7 +703,7 @@ fn merge_open_proto_rules_groups_consecutive_equal_e_rules() {
     use crate::theory::{merge_open_proto_rules, OpenProtoRule, TheoryItem};
     // Two rules whose E half is the same `Send` rule and whose AC halves are
     // the two Maude narrowings `unfoldRuleVariants` names `Send___VARIANT_<i>`
-    // (lib/theory/src/Rule.hs:63-79).
+    // (lib/theory/src/Rule.hs).
     let e: ProtoRuleE = Rule::new(
         ProtoRuleEInfo::standard("Send"),
         vec![in_fact(msg_var("m", 0))],
@@ -758,7 +757,7 @@ fn merge_open_proto_rules_groups_consecutive_equal_e_rules() {
         other => panic!("expected a rule item, got {other:?}"),
     }
     // `Recv`'s AC half is its own E half up to terms, so `openProtoRule` drops
-    // it (lib/theory/src/Rule.hs:55-58).
+    // it (lib/theory/src/Rule.hs).
     match &merged[3] {
         TheoryItem::Rule(r) => assert!(r.rule_ac.is_empty()),
         other => panic!("expected a rule item, got {other:?}"),
@@ -767,12 +766,12 @@ fn merge_open_proto_rules_groups_consecutive_equal_e_rules() {
 
 /// `closeProtoRule` maps `ClosedProtoRule ruE` over the `variants (modulo AC)`
 /// blocks the source writes and reaches `variantsProtoRule` only for a rule
-/// that writes none (lib/theory/src/Rule.hs:82-86), so a written variant keeps
+/// that writes none (lib/theory/src/Rule.hs), so a written variant keeps
 /// the disjunction its parser gave it — `Disj [emptySubstVFresh]`
-/// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs:138-143, see line 142).
+/// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs).
 /// `prettyOpenProtoRuleAsClosedRule` then takes its `length disj == 1` arm and
 /// annotates the rule instead of quoting a `variants (modulo AC)` block
-/// (OpenTheory.hs:836-843).  The rule here also carries a narrowing
+/// (OpenTheory.hs).  The rule here also carries a narrowing
 /// disjunction, which is what `populate_rule_variants` leaves on every rule
 /// item whose E rule holds a reducible sub-term.
 #[test]
@@ -810,7 +809,7 @@ fn manual_variant_keeps_the_trivial_disjunction() {
 
 /// HS `frees` at `Rule ProtoRuleEInfo` folds the info before the four fact
 /// and new-variable lists, and `HasFrees ProtoRuleEInfo` reaches the
-/// `_restrict` formulas (Theory/Model/Rule.hs:291-298, :491-494).  The
+/// `_restrict` formulas (Theory/Model/Rule.hs).  The
 /// [`HasFrees`] impl on `Rule<I>` skips the info, so a variable that occurs
 /// only in a restriction is visible to `proto_rule_e_frees` and to nothing
 /// else; one that occurs in both is listed once.
@@ -859,7 +858,7 @@ fn proto_rule_e_frees_folds_the_rule_restrictions() {
 
 /// `RuleAttributes`'s hand-written `Ord` walks HS's declaration order
 /// `ruleColor`, `ruleProcess`, `ignoreDerivChecks`, `isSAPiCRule`, `role`
-/// (Theory/Model/Rule.hs:367-379).  Each pair below sets one field and
+/// (Theory/Model/Rule.hs).  Each pair below sets one field and
 /// contradicts every field after it, so a chain in any other order fails.
 #[test]
 fn rule_attributes_ord_follows_the_haskell_field_order() {

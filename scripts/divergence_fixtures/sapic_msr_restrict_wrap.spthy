@@ -3,11 +3,11 @@
 // An embedded rule prints through `rulePrinter`, which hands
 // `prettyRuleRestrGen` the formula printer
 // `ppRes = prettySyntacticLNFormula . toLFormula`
-// (Theory/Sapic/Print.hs:41-44#rulePrinter), and the restriction item is the
+// (Theory/Sapic/Print.hs#rulePrinter), and the restriction item is the
 // Doc composition `ppRestr' fact = operator_ "_restrict(" <> ppRestr fact <>
-// operator_ ")"` (Theory/Model/Rule.hs:1382#ppRestr').  Because the formula
+// operator_ ")"` (Theory/Model/Rule.hs#ppRestr').  Because the formula
 // is a Doc inside that composition rather than a finished string, the break
-// its conjunction takes (Theory/Model/Formula.hs:493-496) indents the second
+// its conjunction takes (Theory/Model/Formula.hs) indents the second
 // conjunct by the ten columns of `_restrict(`.
 //
 // The step is reprinted in the `process=` attribute of the rule it generates,

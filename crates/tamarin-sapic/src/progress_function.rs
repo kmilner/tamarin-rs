@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Sapic.ProgressFunction` (`lib/sapic/src/Sapic/ProgressFunction.hs`).
 //!
@@ -31,7 +30,7 @@ type PosSet = BTreeSet<Pos>;
 type PosSetSet = BTreeSet<PosSet>;
 type AProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 
-/// `(<.>) pos = S.map (pos ++)` (ProgressFunction.hs:29-30): prefix `pos` onto
+/// `(<.>) pos = S.map (pos ++)` (ProgressFunction.hs): prefix `pos` onto
 /// each element of a set of positions.
 fn prefix_set(pos: &[i64], s: &PosSet) -> PosSet {
     s.iter()
@@ -43,18 +42,18 @@ fn prefix_set(pos: &[i64], s: &PosSet) -> PosSet {
         .collect()
 }
 
-/// `(<..>) pos = S.map (pos <.>)` (ProgressFunction.hs:33-34): prefix `pos` onto
+/// `(<..>) pos = S.map (pos <.>)` (ProgressFunction.hs): prefix `pos` onto
 /// each element in a set of sets.
 fn prefix_set_set(pos: &[i64], s: &PosSetSet) -> PosSetSet {
     s.iter().map(|inner| prefix_set(pos, inner)).collect()
 }
 
-/// `isBlockingAct` (ProgressFunction.hs:43-46): `Rep` and `ChIn` are blocking.
+/// `isBlockingAct` (ProgressFunction.hs): `Rep` and `ChIn` are blocking.
 fn is_blocking_act(ac: &SapicAction<SapicLVar>) -> bool {
     matches!(ac, SapicAction::Rep | SapicAction::ChIn { .. })
 }
 
-/// `blocking` (ProgressFunction.hs:49-54).
+/// `blocking` (ProgressFunction.hs).
 fn blocking(p: &AProc) -> bool {
     match p {
         Process::Null(_) => true,
@@ -66,7 +65,7 @@ fn blocking(p: &AProc) -> bool {
     }
 }
 
-/// `next` (ProgressFunction.hs:57-64): next positions to jump to.
+/// `next` (ProgressFunction.hs): next positions to jump to.
 fn next(p: &AProc) -> PosSet {
     use tamarin_theory::sapic::ProcessCombinator as PC;
     match p {
@@ -81,7 +80,7 @@ fn next(p: &AProc) -> PosSet {
     }
 }
 
-/// `nextOrChild` (ProgressFunction.hs:61-63): if the child is blocking, prefix
+/// `nextOrChild` (ProgressFunction.hs): if the child is blocking, prefix
 /// `pos` onto its `next`; otherwise the singleton `{pos}`.
 fn next_or_child(p: &AProc, pos: &[i64]) -> PosSet {
     if blocking(p) {
@@ -91,7 +90,7 @@ fn next_or_child(p: &AProc, pos: &[i64]) -> PosSet {
     }
 }
 
-/// `next0` (ProgressFunction.hs:67-74): like `next` but the null process maps to
+/// `next0` (ProgressFunction.hs): like `next` but the null process maps to
 /// the singleton of the EMPTY position.
 fn next0(p: &AProc) -> PosSet {
     use tamarin_theory::sapic::ProcessCombinator as PC;
@@ -115,7 +114,7 @@ fn next0_or_child(p: &AProc, pos: &[i64]) -> PosSet {
     }
 }
 
-/// `pfFrom` (ProgressFunction.hs:76-90): the domain of the progress function.
+/// `pfFrom` (ProgressFunction.hs): the domain of the progress function.
 ///
 /// `from' proc b`:
 ///   - `ProcessNull` → ∅
@@ -148,7 +147,7 @@ pub(crate) fn pf_from(process: &AProc) -> Result<PosSet, String> {
     from(process, true)
 }
 
-/// `combine x y = { x_i ∪ y_i | x_i ∈ x, y_i ∈ y }` (ProgressFunction.hs:94-99).
+/// `combine x y = { x_i ∪ y_i | x_i ∈ x, y_i ∈ y }` (ProgressFunction.hs).
 ///
 /// Faithful to HS's `S.foldr` nesting: outer fold over `x`, inner over `y`.
 fn combine(x: &PosSetSet, y: &PosSetSet) -> PosSetSet {
@@ -163,7 +162,7 @@ fn combine(x: &PosSetSet, y: &PosSetSet) -> PosSetSet {
     out
 }
 
-/// `f` (ProgressFunction.hs:105-122): the CNF set-of-sets of positions the
+/// `f` (ProgressFunction.hs): the CNF set-of-sets of positions the
 /// process `p` must go to.
 fn f(p: &AProc) -> Result<PosSetSet, String> {
     use tamarin_theory::sapic::ProcessCombinator as PC;
@@ -191,7 +190,7 @@ fn f(p: &AProc) -> Result<PosSetSet, String> {
     Ok(acc)
 }
 
-/// `pf proc pos` (ProgressFunction.hs:125-128): the progress function at a
+/// `pf proc pos` (ProgressFunction.hs): the progress function at a
 /// position — `pos <..> f (proc@pos)`.
 pub(crate) fn pf(proc: &AProc, pos: &[i64]) -> Result<PosSetSet, String> {
     let p_at = process_at(proc, pos).ok_or_else(|| format!("pf: invalid position {pos:?}"))?;
@@ -199,7 +198,7 @@ pub(crate) fn pf(proc: &AProc, pos: &[i64]) -> Result<PosSetSet, String> {
     Ok(prefix_set_set(pos, &res))
 }
 
-/// `flatten = S.foldr S.union S.empty` (ProgressFunction.hs:130-131).
+/// `flatten = S.foldr S.union S.empty` (ProgressFunction.hs).
 fn flatten(s: &PosSetSet) -> PosSet {
     let mut out = PosSet::new();
     for inner in s {
@@ -208,7 +207,7 @@ fn flatten(s: &PosSetSet) -> PosSet {
     out
 }
 
-/// `pfRange'` (ProgressFunction.hs:133-139): the set of `(to, from)` pairs.
+/// `pfRange'` (ProgressFunction.hs): the set of `(to, from)` pairs.
 fn pf_range_prime(proc: &AProc) -> Result<BTreeSet<(Pos, Pos)>, String> {
     let froms = pf_from(proc)?;
     let mut acc: BTreeSet<(Pos, Pos)> = BTreeSet::new();
@@ -221,7 +220,7 @@ fn pf_range_prime(proc: &AProc) -> Result<BTreeSet<(Pos, Pos)>, String> {
     Ok(acc)
 }
 
-/// `pfInv` (ProgressFunction.hs:146-149): the inverse of the progress function
+/// `pfInv` (ProgressFunction.hs): the inverse of the progress function
 /// — given a "to" position, the (first matching) "from" position.
 ///
 /// HS uses `L.find` over `S.toList set` (ascending `(to, from)` pair order), so

@@ -1,10 +1,9 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! The wellformedness checks over a theory's lemmas: HS
-//! `lemmaAttributeReport` (Wellformedness.hs:924-932) and
-//! `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171).
+//! `lemmaAttributeReport` (Wellformedness.hs) and
+//! `checkIfLemmasInTheory` (Wellformedness.hs).
 
 use crate::theory::{LemmaAttr, Theory, TraceQuantifier};
 
@@ -14,11 +13,11 @@ use super::{underline_topic, WfError, WfReport};
 // Check that CLI --prove/--lemma arguments name actual lemmas in the theory
 // =============================================================================
 
-/// Port of HS `checkIfLemmasInTheory` (Wellformedness.hs:1156-1171).
+/// Port of HS `checkIfLemmasInTheory` (Wellformedness.hs).
 ///
 /// The probe list is the theory's own `_lemmasToProve`
-/// (Wellformedness.hs:1168), which HS's `addLemmaToProve` fills from the
-/// `--prove`/`--lemma` values (TheoryLoader.hs:835-838) and both load
+/// (Wellformedness.hs), which HS's `addLemmaToProve` fills from the
+/// `--prove`/`--lemma` values (TheoryLoader.hs) and both load
 /// drivers write before this pass runs.
 ///
 /// Semantics (mirror of `findNotProvedLemmas` / `lemmaChecker`):
@@ -31,7 +30,7 @@ use super::{underline_topic, WfError, WfReport};
 ///     Names that don't correspond are collected; if any exist the WF
 ///     check fires.
 pub fn check_if_lemmas_in_theory(thy: &Theory) -> WfReport {
-    // HS: `| lemmaArgsNames == [[]] = []`  (Wellformedness.hs:1156-1171, see line 1158)
+    // HS: `| lemmaArgsNames == [[]] = []`  (Wellformedness.hs)
     // HS stores lemmaArgsNames as [String]; [[]] is [""] (a list
     // containing exactly one empty string), which means bare `--prove`
     // with no argument value.  Skip the check ONLY in that case.
@@ -48,9 +47,9 @@ pub fn check_if_lemmas_in_theory(thy: &Theory) -> WfReport {
 
     let theory_lemma_names: Vec<&str> = thy.lemmas().map(|l| l.name.as_str()).collect();
 
-    // HS `findNotProvedLemmas` (Wellformedness.hs:1140-1151, see line 1141) is
+    // HS `findNotProvedLemmas` (Wellformedness.hs) is
     // a `foldl` that PREPENDS mismatches, so it reverses its input.  That
-    // input is `lemmas_to_prove`, HS's `lemmaNames` (TheoryLoader.hs:326,836):
+    // input is `lemmas_to_prove`, HS's `lemmaNames` (TheoryLoader.hs):
     // the `--prove` values then the `--lemma` values, each flag's values
     // reversed.  The report therefore lists the `--lemma` values in
     // command-line order, then the `--prove` values in command-line order.
@@ -66,7 +65,7 @@ pub fn check_if_lemmas_in_theory(thy: &Theory) -> WfReport {
     }
 
     // HS topic: `underlineTopic "Check presence of the --prove/--lemma
-    // arguments in theory"` (Wellformedness.hs:1156-1171, see line 1169).
+    // arguments in theory"` (Wellformedness.hs).
     let topic_str = "Check presence of the --prove/--lemma arguments in theory";
     // HS body: `vcat [text $ "--> '" ++ intercalate "', '" notProvedLemmas
     //   ++ "'" ++ " from arguments do(es) not correspond ..."]`
@@ -110,10 +109,10 @@ fn arg_matches_any_lemma(arg: &str, theory_lemmas: &[&str]) -> bool {
 // Lemma annotations — reuse on exists-trace
 // =============================================================================
 
-/// Port of HS `lemmaAttributeReport` (Wellformedness.hs:924-932): a
+/// Port of HS `lemmaAttributeReport` (Wellformedness.hs): a
 /// list-monad `do` over `theoryLemmas` that returns ONE entry per
 /// exists-trace lemma tagged `reuse`, so the trailing
-/// `WARNING: N wellformedness check failed!` count (Batch.hs:246) counts
+/// `WARNING: N wellformedness check failed!` count (Batch.hs) counts
 /// each of them.
 ///
 /// Each body is HS's `text "Lemma" <-> quote name <> colon <-> text

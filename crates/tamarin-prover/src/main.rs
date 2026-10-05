@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Binary entry-point for the Rust `tamarin-prover` port.
 //!
@@ -43,7 +42,7 @@ fn is_stdout_broken_pipe(payload: &(dyn std::any::Any + Send)) -> bool {
 /// its `HasCallStack` frame) on stderr and exits 1.
 ///
 /// A few HS `error`s live below the port's error-returning layers, in code
-/// whose callers cannot carry a `Result` (`Term.fAppAC`, Raw.hs:120).  Those
+/// whose callers cannot carry a `Result` (`Term.fAppAC`, Raw.hs).  Those
 /// sites panic with a payload [`tamarin_term::term::hs_error_text`] recognises;
 /// a closed stdout is recognised by [`is_stdout_broken_pipe`]; everything else
 /// keeps Rust's own panic report.

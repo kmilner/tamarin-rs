@@ -1,8 +1,8 @@
 /*
  * A 0-arity function symbol used before its declaration.  A bare identifier
  * resolves against the signature declared SO FAR
- * (Theory/Text/Parser/Term.hs:158-163#nullaryApp,
- * Theory/Text/Parser/Term.hs:62-72#lookupArity), so rule A's `zed` is a
+ * (Theory/Text/Parser/Term.hs#nullaryApp,
+ * Theory/Text/Parser/Term.hs#lookupArity), so rule A's `zed` is a
  * message variable — unbound, and ordered before `zw` in the multiset — while
  * rule B's `zed` is the declared constant and follows `zw`.
  *

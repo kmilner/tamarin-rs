@@ -1,15 +1,14 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! `--output-json` / `--output-dot` end-to-end pins.
 //!
-//! HS `outputTraces` (Batch.hs:249-317) serialises the constraint system of
+//! HS `outputTraces` (Batch.hs) serialises the constraint system of
 //! every `Finished Solved` proof node, in lemma declaration order, once per
 //! input file — and only from `processThy`'s close-and-prove branch
-//! (Batch.hs:223-231).  Every earlier branch returns first, so `--parse-only`
-//! (Batch.hs:198-199), `--precompute-only` (:202-208), `-m` (:211-221) and a
-//! run with no input files (`helpAndExit`, Batch.hs:90) create NO file at all.
+//! (Batch.hs).  Every earlier branch returns first, so `--parse-only`
+//! (Batch.hs), `--precompute-only`, `-m` and a
+//! run with no input files (`helpAndExit`, Batch.hs) create NO file at all.
 //!
 //! The expectations below are the pinned v1.13.0 oracle's bytes.  Both
 //! documents are byte-asserted in full against a captured oracle fixture.
@@ -38,7 +37,7 @@ const SECOND_RECV: &str = "theory SecondRecv\nbegin\n\nrule Send:\n  \
                            [ In(x) ] --[ R(x) ]-> [ ]\n\nlemma chain:\n  exists-trace\n  \
                            \"Ex k #i #j. S(k) @ i & R(k) @ j\"\n\nend\n";
 
-/// HS `traceOutputLabel` (Batch.hs:290-303) on the fixture's single solved
+/// HS `traceOutputLabel` (Batch.hs) on the fixture's single solved
 /// node, verbatim from the oracle capture's `digraph` line.  Note the missing
 /// separator between `chain` and the proof path: the root's only case name is
 /// the empty string, so `intercalate "-" ["", "Send"]` contributes `-Send`.
@@ -127,7 +126,7 @@ fn parse_error_writes_no_trace_files() {
     c.assert_neither_exists("parse error");
 }
 
-/// `parseOnlyMode` (Batch.hs:198-199) returns before the close-and-prove arm.
+/// `parseOnlyMode` (Batch.hs) returns before the close-and-prove arm.
 #[test]
 fn parse_only_writes_no_trace_files() {
     let c = Case::new("parse_only");
@@ -136,7 +135,7 @@ fn parse_only_writes_no_trace_files() {
     c.assert_neither_exists("--parse-only");
 }
 
-/// `precomputeOnlyMode` (Batch.hs:202-208) likewise.
+/// `precomputeOnlyMode` (Batch.hs) likewise.
 #[test]
 fn precompute_only_writes_no_trace_files() {
     if !maude_available() {
@@ -149,7 +148,7 @@ fn precompute_only_writes_no_trace_files() {
     c.assert_neither_exists("--precompute-only");
 }
 
-/// `isTranslateOnlyMode` (Batch.hs:211-221) likewise — `-m` never closes the
+/// `isTranslateOnlyMode` (Batch.hs) likewise — `-m` never closes the
 /// theory, so there is nothing to serialise and no file is created.
 #[test]
 fn translate_only_writes_no_trace_files() {
@@ -210,7 +209,7 @@ fn solved_trace_json_matches_the_oracle_bytes() {
 }
 
 /// Full-byte pin of `--prove=chain --output-dot` against the oracle capture:
-/// `showDot`'s framing (Text/Dot.hs:234-248), the `traceOutputLabel` digraph
+/// `showDot`'s framing (Text/Dot.hs), the `traceOutputLabel` digraph
 /// id, and the whole `Text.Dot` element block — counter node ids, record
 /// ports, quoted attribute values, attribute order and statement order.
 #[test]
@@ -239,8 +238,8 @@ fn solved_trace_dot_matches_the_oracle_bytes() {
 }
 
 /// HS `writeFile` truncates, and `processThy` runs once per input file
-/// (`mapM (timedIO . processThy versionData) inFiles`, Batch.hs:116), so the
-/// LAST file's traces are what survive (Batch.hs:262-272).
+/// (`mapM (timedIO . processThy versionData) inFiles`, Batch.hs), so the
+/// LAST file's traces are what survive (Batch.hs).
 #[test]
 fn last_input_file_wins() {
     if !maude_available() {
@@ -265,7 +264,7 @@ fn last_input_file_wins() {
     assert!(!dot.contains("digraph \"trace_SingleRecv_"));
 }
 
-/// `intercalate "\n" $ map serializeDot labelledSystems` (Batch.hs:265) with
+/// `intercalate "\n" $ map serializeDot labelledSystems` (Batch.hs) with
 /// several solved nodes.  Each graph already ends `}\n`, so the separator
 /// leaves EXACTLY one blank line between the closing brace and the next
 /// `digraph`, and the file ends with a single `}\n`.
@@ -291,7 +290,7 @@ fn several_solved_lemmas_are_joined_by_one_blank_line() {
         2,
         "one graph per solved node:\n{dot}"
     );
-    // `getLemmas thy` DECLARATION order (Batch.hs:278) — `sent` before
+    // `getLemmas thy` DECLARATION order (Batch.hs) — `sent` before
     // `chain`, whatever order a parallel prover finished them in.  Counting
     // graphs, or asserting each label is present, cannot see a reversed list;
     // both digraph ids are verbatim from the oracle's `--prove --output-dot`
@@ -352,7 +351,7 @@ fn several_solved_lemmas_are_joined_by_one_blank_line() {
 // ---------------------------------------------------------------------
 
 /// Neither writer is guarded in HS (`writeFile` / `BL.writeFile`,
-/// Batch.hs:262-271), so a target that cannot be opened raises an
+/// Batch.hs), so a target that cannot be opened raises an
 /// `IOException` that escapes to GHC's runtime: `tamarin-prover: <path>:
 /// <opener>: <reason>` on stderr, NOTHING on stdout, exit 1.  The opener names
 /// the frame that opened the handle and so differs between the two writers —

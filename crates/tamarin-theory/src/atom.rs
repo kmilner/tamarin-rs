@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Model.Atom` from `lib/theory/src/Theory/Model/Atom.hs`.
 //!
@@ -30,7 +29,7 @@ pub enum SyntacticSugar<T> {
     Pred(Fact<T>),
 }
 
-/// HS `data ProtoAtom s t` (Atom.hs:78-84), whose derived `Ord` ranks the
+/// HS `data ProtoAtom s t` (Atom.hs), whose derived `Ord` ranks the
 /// variants in this declaration order and, within one variant, compares the
 /// fields left to right.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -48,7 +47,7 @@ pub type Atom<T> = ProtoAtom<Unit2, T>;
 pub type SyntacticAtom<T> = ProtoAtom<SyntacticSugar<T>, T>;
 
 /// Strip syntactic sugar, replacing it with `Unit2` (HS `toAtom`,
-/// Atom.hs:200-206).
+/// Atom.hs).
 pub fn to_atom<S, T>(a: ProtoAtom<S, T>) -> Atom<T> {
     match a {
         ProtoAtom::Action(t, fa) => ProtoAtom::Action(t, fa),
@@ -61,8 +60,8 @@ pub fn to_atom<S, T>(a: ProtoAtom<S, T>) -> Atom<T> {
 }
 
 /// The `Functor` instance of a sugar type: both `SyntacticSugar` and `Unit2`
-/// derive one (Atom.hs:87-94), and `Functor (ProtoAtom s)` descends into it at
-/// `Syntactic` (Atom.hs:127).  The term type changes under the map, so the
+/// derive one (Atom.hs), and `Functor (ProtoAtom s)` descends into it at
+/// `Syntactic` (Atom.hs).  The term type changes under the map, so the
 /// mapped sugar is a type of its own.
 pub trait MapSugar<T, U> {
     /// The sugar over the mapped term type.
@@ -87,8 +86,8 @@ impl<T, U> MapSugar<T, U> for SyntacticSugar<T> {
 }
 
 /// The `Foldable` instance of a sugar type, which both `SyntacticSugar` and
-/// `Unit2` derive (Atom.hs:87-94) and which `Foldable (ProtoAtom s)` descends
-/// into at `Syntactic` (Atom.hs:136).  The `Functor` half is [`MapSugar`].
+/// `Unit2` derive (Atom.hs) and which `Foldable (ProtoAtom s)` descends
+/// into at `Syntactic` (Atom.hs).  The `Functor` half is [`MapSugar`].
 pub trait SugarTerms<T>: Sized {
     /// Visit every term held by the sugar, left to right.
     fn for_each_term<'a>(&'a self, f: &mut dyn FnMut(&'a T));
@@ -105,7 +104,7 @@ impl<T> SugarTerms<T> for SyntacticSugar<T> {
     }
 }
 
-/// HS `Functor (ProtoAtom s)` (Atom.hs:121-127), borrowing its input.
+/// HS `Functor (ProtoAtom s)` (Atom.hs), borrowing its input.
 /// `Action` maps its time point before the fact's terms, the binary atoms map
 /// left before right, and `Syntactic` maps the sugar — the order a mapping
 /// function that mints fresh names or counts occurrences sees.
@@ -151,20 +150,20 @@ fn fold_atom_ladder<'a, S, T>(
     }
 }
 
-/// HS `Foldable (ProtoAtom s)` (Atom.hs:129-136): the ladder with the sugar's
-/// own `Foldable` (Atom.hs:87-94) run at `Syntactic` — the order a folding
+/// HS `Foldable (ProtoAtom s)` (Atom.hs): the ladder with the sugar's
+/// own `Foldable` (Atom.hs) run at `Syntactic` — the order a folding
 /// function with a counter sees.
 pub fn fold_atom<'a, S: SugarTerms<T>, T>(a: &'a ProtoAtom<S, T>, f: &mut dyn FnMut(&'a T)) {
     fold_atom_ladder(a, f, &mut |s, g| s.for_each_term(g));
 }
 
-/// HS `atomTerms` (Theory/Tools/Wellformedness.hs:908-915): the ladder with a
+/// HS `atomTerms` (Theory/Tools/Wellformedness.hs): the ladder with a
 /// `Syntactic` atom giving no terms, appending to `out`.
 pub fn collect_atom_terms<'a, S, T>(a: &'a ProtoAtom<S, T>, out: &mut Vec<&'a T>) {
     fold_atom_ladder(a, &mut |t| out.push(t), &mut |_, _| {});
 }
 
-/// HS `instance HasFrees t => HasFrees (Atom t)` (Atom.hs:156-161): both
+/// HS `instance HasFrees t => HasFrees (Atom t)` (Atom.hs): both
 /// directions run through the `Traversable`/`Foldable` instances, so they
 /// reach every term of the atom in [`fold_atom`]'s order and rebuild the atom
 /// around the mapped terms.  `foldFreesOcc` contributes nothing.
@@ -202,10 +201,10 @@ impl<T> Atom<T> {
 
 // -- Pretty-printing ----------------------------------------------------------
 
-/// HS `prettyProtoAtom ppS ppT` (Atom.hs:212-224).  `ppT` prints the `Action`
+/// HS `prettyProtoAtom ppS ppT` (Atom.hs).  `ppT` prints the `Action`
 /// fact's terms and both operands of `EqE` and `Subterm`; the `Action` time
 /// point, both `Less` operands and the `Last` operand print with `show`
-/// (Atom.hs:217,223,224), which on a term is
+/// (Atom.hs), which on a term is
 /// [`tamarin_term::term::show_term`].
 pub fn pretty_proto_atom<S, A: ShowLit>(
     pp_s: &dyn Fn(&S) -> Doc,
@@ -228,14 +227,14 @@ pub fn pretty_proto_atom<S, A: ShowLit>(
     }
 }
 
-/// HS `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs:226-229): the
+/// HS `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs): the
 /// `Unit2` sugar of a post-parsing atom carries nothing to print.
 pub(crate) fn pretty_atom<A: ShowLit>(pp_t: &dyn Fn(&Term<A>) -> Doc, a: &Atom<Term<A>>) -> Doc {
     pretty_proto_atom(&|_: &Unit2| Doc::empty(), pp_t, a)
 }
 
-/// HS `prettyNAtom = prettyAtom prettyNTerm` (Atom.hs:232-233) over
-/// `NAtom v = Atom (VTerm Name v)` (Atom.hs:107).
+/// HS `prettyNAtom = prettyAtom prettyNTerm` (Atom.hs) over
+/// `NAtom v = Atom (VTerm Name v)` (Atom.hs).
 pub fn pretty_natom<V>(a: &Atom<VTerm<Name, V>>) -> Doc
 where
     V: fmt::Display,
@@ -245,8 +244,8 @@ where
 }
 
 /// HS `prettySyntacticNAtom = prettyProtoAtom prettyPred prettyNTerm`, whose
-/// `prettyPred (Pred fa) = prettyNFact fa` (Atom.hs:236-239) is
-/// `prettyFact prettyNTerm` (Theory/Model/Fact.hs:577-578) on the sugar's
+/// `prettyPred (Pred fa) = prettyNFact fa` (Atom.hs) is
+/// `prettyFact prettyNTerm` (Theory/Model/Fact.hs) on the sugar's
 /// fact.
 pub fn pretty_syntactic_natom<V>(a: &SyntacticAtom<VTerm<Name, V>>) -> Doc
 where
@@ -303,7 +302,7 @@ mod tests {
     }
 
     /// `fmap` on an `Action` maps the time point before the fact's terms
-    /// (Atom.hs:122), which is the order a mapping function with a counter or
+    /// (Atom.hs), which is the order a mapping function with a counter or
     /// a fresh-name supply sees.  The map also changes the term type, and the
     /// sugar's with it.
     #[test]
@@ -333,8 +332,8 @@ mod tests {
     }
 
     /// `fold_atom` visits the `Action` time point before the fact's terms
-    /// (Atom.hs:129-130) and each binary atom's left operand before its
-    /// right, and the `Unit2` sugar contributes nothing (Atom.hs:92-94).
+    /// (Atom.hs) and each binary atom's left operand before its
+    /// right, and the `Unit2` sugar contributes nothing (Atom.hs).
     #[test]
     fn fold_atom_visits_the_terms_in_the_haskell_order() {
         let seen = |a: &Atom<LNTerm>| {
@@ -350,7 +349,7 @@ mod tests {
     }
 
     /// The derived `Ord` ranks the variants in HS's declaration order
-    /// (Atom.hs:78-84): Action, EqE, Subterm, Less, Last, Syntactic.
+    /// (Atom.hs): Action, EqE, Subterm, Less, Last, Syntactic.
     #[test]
     fn proto_atom_ord_follows_the_haskell_declaration_order() {
         let ascending: Vec<Atom<LNTerm>> = vec![
@@ -368,7 +367,7 @@ mod tests {
         }
     }
 
-    /// HS `Action t (Fact t)` (Atom.hs:78) puts the time point first, so the
+    /// HS `Action t (Fact t)` (Atom.hs) puts the time point first, so the
     /// derived `Ord` decides on it before it reaches the fact.  Here the two
     /// halves disagree: the smaller time point carries the larger fact.
     #[test]
@@ -406,7 +405,7 @@ mod tests {
     }
 
     /// Every arm of `prettyProtoAtom` other than `Syntactic`
-    /// (Atom.hs:216-224) carries its own operator: `Action` joins the fact,
+    /// (Atom.hs) carries its own operator: `Action` joins the fact,
     /// `@` and the time point with `<->`, `EqE` and `Subterm` are `sep`s,
     /// `Less` is two `<->`s and `Last` wraps its operand in plain
     /// parentheses.  Only the two `sep` arms add a break point of their own.
@@ -425,7 +424,7 @@ mod tests {
     }
 
     /// `prettySyntacticNAtom` prints a `Pred` atom as its fact
-    /// (Atom.hs:236-239) and leaves the other arms to `prettyProtoAtom`.
+    /// (Atom.hs) and leaves the other arms to `prettyProtoAtom`.
     #[test]
     fn pretty_syntactic_natom_prints_the_pred_fact() {
         let a: SyntacticAtom<LNTerm> = ProtoAtom::Syntactic(SyntacticSugar::Pred(Fact::new(
@@ -437,7 +436,7 @@ mod tests {
         assert_eq!(pretty_syntactic_natom(&plain).render(), "x = y");
     }
 
-    /// The time point positions take HS `show` (Atom.hs:217,223,224), not the
+    /// The time point positions take HS `show` (Atom.hs), not the
     /// `ppT` the fact and the `EqE`/`Subterm` operands take.  The two spell a
     /// `Lit` alike, so the difference shows only on an applied term: `show`
     /// keeps the prefix form where `prettyTerm` would write `<x, y>`.
@@ -451,8 +450,8 @@ mod tests {
     }
 
     /// `show LVar` writes the index alone when the name is empty
-    /// (LTerm.hs:554), which is the variable spelling `prettyNTerm` reaches
-    /// through `Show (Lit c v)` (VTerm.hs:98-100).
+    /// (LTerm.hs), which is the variable spelling `prettyNTerm` reaches
+    /// through `Show (Lit c v)` (VTerm.hs).
     #[test]
     fn lvar_with_no_name_shows_its_index() {
         let anon: LNTerm = lit(Lit::Var(LVar::new("", LSort::Fresh, 7)));

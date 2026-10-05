@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.Rewriting.Definitions` from
 //! `lib/term/src/Term/Rewriting/Definitions.hs`.
@@ -44,7 +43,7 @@ pub enum Match<A> {
 }
 
 /// HS `instance Monoid (Match a)` sets `mempty = DelayedMatches []`
-/// (Definitions.hs:117-118).  `#[derive(Default)]` would need a `#[default]`
+/// (Definitions.hs).  `#[derive(Default)]` would need a `#[default]`
 /// variant and would pick `NoMatch`, the absorbing element.
 impl<A> Default for Match<A> {
     fn default() -> Self {
@@ -98,7 +97,7 @@ impl<A> Match<A> {
 // -- Rewrite rule -------------------------------------------------------------
 
 /// HS `data RRule a = RRule a a` derives `Ord` over the left-hand side then
-/// the right-hand side (Definitions.hs:138-139).  `MaudeSig::rrules` hands a
+/// the right-hand side (Definitions.hs).  `MaudeSig::rrules` hands a
 /// `BTreeSet<RRule<LNTerm>>` to the Maude module writer, so this order reaches
 /// the emitted module.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -1,22 +1,21 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Structured tactics and their pretty-printing.
 //!
 //! Mirrors the Haskell reference:
 //!   - data type:  `Theory.Constraint.System.Tactic / Prio / Deprio`
-//!     (lib/theory/src/Theory/Constraint/System.hs:439-504)
+//!     (lib/theory/src/Theory/Constraint/System.hs)
 //!   - parser:     `Theory.Text.Parser.Tactics`
-//!     (lib/theory/src/Theory/Text/Parser/Tactics.hs:60-115)
-//!   - pretty:     `prettyTactic` (lib/theory/src/TheoryObject.hs:924-942)
+//!     (lib/theory/src/Theory/Text/Parser/Tactics.hs)
+//!   - pretty:     `prettyTactic` (lib/theory/src/TheoryObject.hs)
 //!
 //! Tactics are parsed directly into [`Tactic`] by `tamarin-parser`; this
 //! module evaluates and renders that shared representation.
 
 pub use tamarin_parser::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
 
-/// Render via the ported HS `prettyTactic` (TheoryObject.hs:924-942).
+/// Render via the ported HS `prettyTactic` (TheoryObject.hs).
 pub fn render(tactic: &Tactic) -> String {
     use crate::pretty_hpj::{self as hpj, Doc};
     hpj::vcat(vec![
@@ -215,21 +214,21 @@ deprio:\n\
     }
 
     /// Locks the corpus-relevant presort chars (`C`, `c`, `s`) which
-    /// round-trip identically through `goalRankingToChar` (System.hs:649-651).
+    /// round-trip identically through `goalRankingToChar` (System.hs).
     #[test]
     fn presort_char_round_trips() {
         let t = parse("x", "presort: C\nprio:\n  regex \"a\"\n");
         assert_eq!(t.presort, 'C');
         let t = parse("x", "presort: c\nprio:\n  regex \"a\"\n");
         assert_eq!(t.presort, 'c');
-        // Default (no presort) is SmartRanking False -> 's' (Tactics.hs:109-115, see line 112).
+        // Default (no presort) is SmartRanking False -> 's' (Tactics.hs).
         let t = parse("x", "prio:\n  regex \"a\"\n");
         assert_eq!(t.presort, 's');
     }
 
     /// HS opLAnd/opLOr/opLNot accept the Unicode spellings ∧/∨/¬ in a tactic
-    /// body (Token.hs:596-604) and render them as canonical ASCII ` & `/` | `/
-    /// `not ` (Tactics.hs:73-79). Verified against the HS prover v1.13.0: a
+    /// body (Token.hs) and render them as canonical ASCII ` & `/` | `/
+    /// `not ` (Tactics.hs). Verified against the HS prover v1.13.0: a
     /// `regex "a" ∧ regex "b"` block prints `regex"a" & regex"b"`, etc.
     #[test]
     fn accepts_unicode_operators() {
@@ -257,7 +256,7 @@ prio: {id}\n  not regex\"e\""
         );
     }
 
-    /// HS spthy `identLetter` excludes `.` (Token.hs:214-230, see line 224), so a function name
+    /// HS spthy `identLetter` excludes `.` (Token.hs), so a function name
     /// containing `.` is not tokenized as one identifier: HS parses `foo` then
     /// requires a `"` and rejects the `.` (confirmed against the HS prover:
     /// `unexpected "." expecting letter or digit or """`). The Rust parser

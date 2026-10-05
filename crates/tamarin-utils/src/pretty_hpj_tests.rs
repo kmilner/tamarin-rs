@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 
@@ -257,7 +256,7 @@ fn nested_sep_indent_alignment() {
 fn pkcs11_eleven_tuple_close_bracket_glue() {
     // Regression for the pkcs11-templates variant-subst tuple wrap
     // (cannot_obtain_key et al.).  HS renders the AC-variant block via
-    //   numbered' (map ppConj substs)   (SubstVFresh.hs:223-227)
+    //   numbered' (map ppConj substs)   (SubstVFresh.hs)
     // where each numbered item is `text i <> ". " <> vcat[prettyEq..]`
     // at nest 4.  The `". " <>` BESIDE onto the multi-line vcat measures
     // the inner fcat's ribbon from the OUTER (numbered) line start, so an
@@ -281,7 +280,7 @@ fn pkcs11_eleven_tuple_close_bracket_glue() {
         parts.push(Doc::text(">"));
         fcat(parts)
     };
-    // HS structure (SubstVFresh.hs:223-229 + Text/PrettyPrint/Class.hs:252-264):
+    // HS structure (SubstVFresh.hs + Text/PrettyPrint/Class.hs):
     //   numbered' = numbered (text "") . map (text ". " <>)
     //   each item = text(flushRight w i) <> (text ". " <> vcat[prettyEq..])
     //   prettyEq (a,b) = text a $$ nest 6 (text "=" <-> term)

@@ -1,9 +1,8 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! End-to-end stderr / exit-code parity for `fAppAC`'s empty-argument-list
-//! rejection (`error "Term.fAppAC: empty argument list"`, Raw.hs:120).
+//! rejection (`error "Term.fAppAC: empty argument list"`, Raw.hs).
 //!
 //! Declaring an AC symbol and then applying it to no arguments — `functions:
 //! f/2 [AC]` with a term `f()` — reaches that `error`.  It is a GHC `error`,

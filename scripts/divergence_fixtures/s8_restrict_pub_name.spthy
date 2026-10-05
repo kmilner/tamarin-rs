@@ -1,12 +1,12 @@
 // A public constant that only a rule's `_restrict` formula mentions.
 //
-// `publicNamesReport'` (Theory/Tools/Wellformedness.hs:463-484) harvests the
+// `publicNamesReport'` (Theory/Tools/Wellformedness.hs) harvests the
 // names of a rule with `universeBi`, the same whole-value traversal
 // `freshNamesReport'` uses, so it reaches the `_preRestriction` formula
-// (Theory/Model/Rule.hs:424) the `_restrict` construct leaves in the rule
-// info (Theory/Text/Parser.hs:175-192).  `'ID'` is a literal, not a free
+// (Theory/Model/Rule.hs) the `_restrict` construct leaves in the rule
+// info (Theory/Text/Parser.hs).  `'ID'` is a literal, not a free
 // variable, so the action fact `fromRuleRestriction` adds to the rule
-// (Theory/Model/Restriction.hs:141-162) carries nothing and the name is
+// (Theory/Model/Restriction.hs) carries nothing and the name is
 // reachable only through the rule info; it clashes with the `'id'` of the
 // conclusion.
 //

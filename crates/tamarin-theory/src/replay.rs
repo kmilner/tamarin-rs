@@ -1,12 +1,11 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Skeleton-replay prover — port of HS `replaceSorryProver`
 //! (lib/theory/src/Theory/Proof.hs).
 //!
 //! HS's `--prove` flag wires `replaceSorryProver $ runAutoProver`
-//! (TheoryLoader.hs:705-707, see line 706) so the auto-prover runs **only at `by sorry`
+//! (TheoryLoader.hs) so the auto-prover runs **only at `by sorry`
 //! leaves of the user-written skeleton**, not from scratch.  This
 //! preserves the case-decomposition structure the user wrote in the
 //! `.spthy` file even when the auto-prover would have picked a
@@ -41,11 +40,11 @@
 //! The full HS `--prove` flow runs in two passes that this one-pass
 //! walker folds together:
 //!   1. close-time `checkAndExtendProver (sorryProver Nothing)`
-//!      (`proveTheory (const True) checkProofM`, CloseRule.hs:57-71) over
+//!      (`proveTheory (const True) checkProofM`, CloseRule.hs) over
 //!      ALL lemmas — it re-execs each stored step, keeping the verbatim
 //!      structure and turning any step that no longer applies into an
 //!      annotated `sorry /* invalid proof step encountered */`;
-//!   2. prove-time `replaceSorryProver $ runAutoProver` (TheoryLoader.hs:705-707, see line 706)
+//!   2. prove-time `replaceSorryProver $ runAutoProver` (TheoryLoader.hs)
 //!      over the lemmas the `--prove` selector targets — it re-runs the
 //!      auto-prover at every annotated `sorry` leaf.
 //!
@@ -85,7 +84,7 @@ use crate::theory::ProofTree;
 /// `proof_bound` (`--bound=N`; `usize::MAX` = unbounded) is plumbed
 /// through to `run_proof_search` for the fall-through auto-prover
 /// invocations.  HS applies `boundProofDepth` inside `runAutoProver`
-/// (Theory/Proof.hs:730-750#runAutoProver), i.e. per sorry-replacement — so each
+/// (Theory/Proof.hs#runAutoProver), i.e. per sorry-replacement — so each
 /// fall-through search here counts depth from its own subtree root,
 /// exactly as HS does.
 pub fn replace_sorry_prove(
@@ -99,7 +98,7 @@ pub fn replace_sorry_prove(
 
 /// Replay a stored skeleton WITHOUT auto-proving its open/sorry leaves —
 /// the equivalent of HS's close-time `checkAndExtendProver (sorryProver
-/// Nothing)` (CloseRule.hs:57-71, see line 71, Proof.hs).  Each step's method and
+/// Nothing)` (CloseRule.hs, Proof.hs).  Each step's method and
 /// children are taken verbatim from the skeleton; every fall-through that
 /// `checkProof` would turn into a `Sorry` with a `Nothing` system
 /// (Proof.hs) becomes an *unannotated* `ProofNode`
@@ -109,7 +108,7 @@ pub fn replace_sorry_prove(
 ///
 /// Used for lemmas the `--prove` selector does NOT target (HS keeps their
 /// close-time-replayed proof untouched — `proveLemma`'s `| otherwise = lem`,
-/// CloseRule.hs:157-159).
+/// CloseRule.hs).
 pub fn check_and_extend(
     ctx: &ProofContext,
     initial: System,
@@ -182,7 +181,7 @@ fn invalid_step_node(node: &ProofTree, sys: System) -> ProofNode {
 ///
 /// We mirror this by converting the [`ProofTree`] to `ProofNode` with
 /// `annotated: false` throughout, keeping each node's stored `ProofMethod`
-/// — HS re-renders it with `prettyProofMethod` (ProofMethod.hs:1173-1187).
+/// — HS re-renders it with `prettyProofMethod` (ProofMethod.hs).
 /// The `sys` placeholder is the parent's sys (unused in display but
 /// required by `ProofNode`).
 fn parsed_to_unannotated(node: &ProofTree, sys: System) -> ProofNode {
@@ -208,7 +207,7 @@ fn parsed_to_unannotated(node: &ProofTree, sys: System) -> ProofNode {
 
 /// Public root-level **annotated** `sorry` leaf (HS keeps the parsed
 /// `unproven ()` proof when a lemma has no stored skeleton —
-/// ProofSkeleton.hs:59-61, see line 61; checkProof annotates the node with the start
+/// ProofSkeleton.hs; checkProof annotates the node with the start
 /// system, so it renders as plain `by sorry` with no `/* unannotated */`
 /// — see `annotated_sorry`).
 pub fn annotated_sorry_root(sys: System) -> ProofNode {
@@ -225,7 +224,7 @@ pub fn annotated_sorry_root(sys: System) -> ProofNode {
 ///
 /// The two results are compared by kind, not by value: the skeleton's `by
 /// contradiction` is `Contradictory(None)`
-/// (Theory/Text/Parser/Proof.hs:81) and matches a runtime
+/// (Theory/Text/Parser/Proof.hs) and matches a runtime
 /// `Contradictory(Just reason)`, and emitting the stored value keeps the
 /// reprinted method free of a reason.
 fn finished_leaf(
@@ -281,17 +280,16 @@ fn replay_node(
     crate::constraint::solver::trace::trace_state(&sys);
 
     // A terminal leaf: `by contradiction`, `SOLVED`
-    // (Theory/Text/Parser/Proof.hs:102-103) or `UNFINISHABLE`.  The stored
+    // (Theory/Text/Parser/Proof.hs) or `UNFINISHABLE`.  The stored
     // result is re-checked against `sys` and kept when it still holds; on
     // disagreement the step falls through, which is HS-faithful rather than a
     // divergence.  At close time `checkProof` re-execs the stored `Finished`
-    // step (`checkAndExecProofMethod`, Theory/Proof.hs:447-467, see line 456);
+    // step (`checkAndExecProofMethod`, Theory/Proof.hs);
     // when the method does not apply it returns `Nothing`, so checkProof
     // emits `sorryNode (Just "invalid proof step encountered")
-    // (M.singleton "" prf)` (Theory/Proof.hs:459-460) over the `noSystemPrf`'d
+    // (M.singleton "" prf)` (Theory/Proof.hs) over the `noSystemPrf`'d
     // subtree, and for a `--prove`-selected lemma `replaceSorryProver` then
-    // re-runs the auto-prover on that annotated sorry (CloseRule.hs:57-71, see
-    // line 71 → TheoryLoader.hs:705-707, see line 706).  A skeleton's `SOLVED`
+    // re-runs the auto-prover on that annotated sorry (CloseRule.hs → TheoryLoader.hs).  A skeleton's `SOLVED`
     // is HS's claim; RS verifies it with its own solver.
     if let ProofMethod::Finished(stored) = &node.method
         && node.cases.is_empty()
@@ -419,15 +417,14 @@ fn replay_node(
     // stale and a new case appeared), invoke the auto-prover on each.
     // This is HS-faithful: `checkProof`'s `mergeMapsWith` treats the
     // runtime-produced cases as the LEFT map and the stored skeleton's
-    // children as the RIGHT map (Theory/Proof.hs:447-467, see line 463
+    // children as the RIGHT map (Theory/Proof.hs
     // `mergeMapsWith
     // unhandledCase noSystemPrf (go (d+1)) cases cs`), so a runtime-only
     // case (present left, absent right) goes through `unhandledCase =
-    // mapProofInfo (Nothing,) . prover d` (Theory/Proof.hs:447-467, see line
-    // 462) → an annotated
+    // mapProofInfo (Nothing,) . prover d` (Theory/Proof.hs) → an annotated
     // `sorry Nothing (Just se)`.  For a `--prove`-selected lemma
     // `replaceSorryProver` then auto-proves that annotated sorry
-    // (CloseRule.hs:57-71, see line 71 → TheoryLoader.hs:705-707, see line 706), matching the
+    // (CloseRule.hs → TheoryLoader.hs), matching the
     // `run_proof_search` branch below.
     for (rt_name, rt_sys) in produced.into_iter() {
         // A case the skeleton already consumed — including one an unnamed
@@ -487,7 +484,7 @@ fn replay_node(
 /// Re-execute one stored proof step against `sys` and produce the
 /// (method, cases) pair it yields.
 ///
-/// HS `checkAndExecProofMethod` (Theory/Proof.hs:447-467, see line 456) runs
+/// HS `checkAndExecProofMethod` (Theory/Proof.hs) runs
 /// the stored `ProofMethod` itself; [`resolve_method`] is the `SolveGoal`
 /// half of that, binding the stored goal to the equal one among `sys`'s
 /// goals before `check_and_exec_proof_method` validates and runs it.
@@ -525,7 +522,7 @@ fn resolve_method(stored: &ProofMethod, sys: &System) -> Option<ProofMethod> {
 /// Find the goal of `sys` that the stored `solve( ... )` step names.
 ///
 /// HS looks the parsed `Goal` up with
-/// `guard (goal \`M.member\` L.get sGoals sys)` (ProofMethod.hs:253-258), i.e.
+/// `guard (goal \`M.member\` L.get sGoals sys)` (ProofMethod.hs), i.e.
 /// by structural equality.  The LIVE goal is returned, so the executed
 /// method carries the value `sys.goals` holds (`Fact` equality ignores the
 /// annotations, so the two can differ there).
@@ -533,7 +530,7 @@ fn resolve_method(stored: &ProofMethod, sys: &System) -> Option<ProofMethod> {
 /// `None` means the stored step names a goal this system does not have, and
 /// the caller emits `sorry /* invalid proof step encountered */` over the
 /// verbatim stored subtree — HS `checkProof`'s `Nothing` branch
-/// (Theory/Proof.hs:456-467).
+/// (Theory/Proof.hs).
 fn match_goal(stored: &Goal, sys: &System) -> Option<Goal> {
     sys.goals
         .iter()

@@ -1,11 +1,10 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Process-call inlining.
 //!
 //! HS inlines process definitions at PARSE TIME: when the parser
-//! (`actionprocess`, `Theory/Text/Parser/Sapic.hs:293-312`) reads an identifier
+//! (`actionprocess`, `Theory/Text/Parser/Sapic.hs`) reads an identifier
 //! `P(t1,..,tn)`, it looks the definition up (`checkProcess`), builds the
 //! parameter substitution `params -> args`, applies it to the def body with the
 //! capture-checking `applyM`, and emits
@@ -16,7 +15,7 @@
 //! ```
 //!
 //! The `ProcessCall` action node is a pure marker — its base translation is a
-//! trivial pass-through (`Basetranslation.hs:204-207`); the real behaviour comes
+//! trivial pass-through (`Basetranslation.hs`); the real behaviour comes
 //! from the substituted body that follows it as the action's continuation.
 //!
 //! The RS parser does NOT inline (it produces a `p::Process::Call { name, args }`
@@ -28,7 +27,7 @@
 //! and recursive cycles cannot send conversion into unbounded recursion.
 //!
 //! The `extend_sup` "type-erasure doubling" of
-//! `Theory/Text/Parser/Sapic.hs:299-306` is mirrored:
+//! `Theory/Text/Parser/Sapic.hs` is mirrored:
 //! a typed formal `x:ty` produces TWO substitution entries (typed AND untyped
 //! keyed) to the same argument, so body occurrences of either form are hit.
 
@@ -51,7 +50,7 @@ use crate::sapic::{
 use crate::theory::ProcessDef;
 
 /// Definitions visible at the current source position (HS `lookupProcessDef`,
-/// `TheoryObject.hs:693-694`). Each body was elaborated when its declaration
+/// `TheoryObject.hs`). Each body was elaborated when its declaration
 /// was encountered, against the environment that existed immediately before
 /// it. The item walk inserts a definition only after elaborating its body.
 pub type ProcessDefMap = BTreeMap<String, ProcessDef>;
@@ -69,7 +68,7 @@ pub fn convert_process_with_defs(
 }
 
 /// Inline one `P(args)` call (HS `actionprocess` identifier branch,
-/// `Theory/Text/Parser/Sapic.hs:293-312`).
+/// `Theory/Text/Parser/Sapic.hs`).
 fn inline_call(
     name: &str,
     args: &[p::Term],
@@ -78,7 +77,7 @@ fn inline_call(
 ) -> Result<PlainProcess, ConvertError> {
     use crate::sapic::ProcessParsedAnnotation;
 
-    // `checkProcess` (Theory/Text/Parser/Sapic.hs:314-317): fail if the
+    // `checkProcess` (Theory/Text/Parser/Sapic.hs): fail if the
     // process is undefined.
     let def = defs
         .get(name)
@@ -108,7 +107,7 @@ fn inline_call(
     let body = def.body.clone();
 
     // Build the parameter substitution with HS's `extend_sup` type-erasure
-    // doubling (Theory/Text/Parser/Sapic.hs:299-306): a typed formal
+    // doubling (Theory/Text/Parser/Sapic.hs): a typed formal
     // contributes both its typed and untyped keys mapping to the argument.
     let mut pairs: Vec<(SapicLVar, SapicTerm)> = Vec::new();
     for (param, arg) in params.iter().zip(sapic_args.iter()) {
@@ -129,7 +128,7 @@ fn inline_call(
     let annotated = add_root_annotation(substituted, name_ann);
 
     // Wrap in the `ProcessCall` marker action
-    // (Theory/Text/Parser/Sapic.hs:308-311).
+    // (Theory/Text/Parser/Sapic.hs).
     Ok(Process::Action(
         SapicAction::ProcessCall(name.to_string(), sapic_args),
         ProcessParsedAnnotation::empty(),
@@ -137,7 +136,7 @@ fn inline_call(
     ))
 }
 
-/// `applyM subst p` over an `LProcess` (Sapic/Process.hs:411-424): apply `subst` to
+/// `applyM subst p` over an `LProcess` (Sapic/Process.hs): apply `subst` to
 /// every term, raising a capture error if a substituted parameter would be
 /// captured by an inner binder (`new` / `lookup` / single-var `in`).
 ///
@@ -173,16 +172,16 @@ fn in_domain(subst: &SapicSubst, v: &SapicLVar) -> bool {
     subst.image_of(v).is_some() || subst.image_of(&SapicLVar::untyped(v.var)).is_some()
 }
 
-/// `applyM` for `SapicAction` (Sapic/Process.hs:392-408): substitute terms,
+/// `applyM` for `SapicAction` (Sapic/Process.hs): substitute terms,
 /// raising `CapturedNew` / `CapturedIn` on capture.  Everything the capture
 /// checks do not claim falls through to `apply subst`
-/// (Sapic/Process.hs:319-321).
+/// (Sapic/Process.hs).
 fn apply_m_action(
     subst: &SapicSubst,
     ac: &SapicAction<SapicLVar>,
 ) -> Result<SapicAction<SapicLVar>, ConvertError> {
     match ac {
-        // `New v` with `v ∈ dom subst` would be captured (Sapic/Process.hs:395-398).
+        // `New v` with `v ∈ dom subst` would be captured (Sapic/Process.hs).
         SapicAction::New(v) => {
             if in_domain(subst, v) {
                 return Err(ConvertError::new(format!(
@@ -193,7 +192,7 @@ fn apply_m_action(
             Ok(SapicAction::New(v.clone()))
         }
         // `ChIn` of a single captured var is captured unless its name starts
-        // with `pat_` (Sapic/Process.hs:399-406).
+        // with `pat_` (Sapic/Process.hs).
         SapicAction::ChIn {
             chan,
             msg,
@@ -212,11 +211,11 @@ fn apply_m_action(
                 chan: chan.as_ref().map(|t| subst_term(subst, t)),
                 msg: subst_term(subst, msg),
                 // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
-                // SapicLVar)` (Sapic/Process.hs:319-321) to reach this rewrite.
+                // SapicLVar)` (Sapic/Process.hs) to reach this rewrite.
                 // When inlining a call like `Q(h(a))` into `in(<y, =x>)`, the
                 // param match-var `x` becomes the vars of `h(a)` (= `{a}`) so that
                 // `bindingsAct = frees(<y,h(a)>) \ {a} = {y}` — i.e. the already-
-                // bound `a` is NOT rebound (Bindings.hs:21-26, see line 24).  Without this the
+                // bound `a` is NOT rebound (Bindings.hs).  Without this the
                 // stale `{x}` would leave `a` looking unbound, rebinding it to a
                 // fresh `a.N` and adding a spurious state-fact variable.
                 match_vars: apply_match_vars_with(|v| call_image(subst, v), match_vars),
@@ -257,7 +256,7 @@ fn apply_m_action(
     }
 }
 
-/// `applyM` for `ProcessCombinator` (Sapic/Process.hs:382-389): `Lookup`'s bound var
+/// `applyM` for `ProcessCombinator` (Sapic/Process.hs): `Lookup`'s bound var
 /// being captured raises `CapturedLookup`.
 fn apply_m_comb(
     subst: &SapicSubst,
@@ -302,12 +301,12 @@ fn apply_m_comb(
 }
 
 /// The image of `v` under the parameter substitution.  `extend_sup`
-/// (Theory/Text/Parser/Sapic.hs:299-306) keys a typed formal under both its
+/// (Theory/Text/Parser/Sapic.hs) keys a typed formal under both its
 /// typed and its untyped spelling, so a variable resolves against either.  A
 /// variable the substitution does not define stands for itself.
 ///
 /// This is the `f . varTerm` that [`apply_match_vars_with`] (HS
-/// `applyMatchVars'`, Theory/Sapic/Process.hs:313-317) drives.
+/// `applyMatchVars'`, Theory/Sapic/Process.hs) drives.
 fn call_image(subst: &SapicSubst, v: &SapicLVar) -> SapicTerm {
     subst
         .image_of(v)

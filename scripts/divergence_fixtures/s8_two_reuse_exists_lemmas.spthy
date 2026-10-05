@@ -1,9 +1,9 @@
 // Two lemmas that are both `reuse` and `exists-trace`.
 //
-// `lemmaAttributeReport` (Theory/Tools/Wellformedness.hs:924-932) is a
+// `lemmaAttributeReport` (Theory/Tools/Wellformedness.hs) is a
 // list-monad `do` over the theory's lemmas, so it yields one report ENTRY per
 // offending lemma.  The trailing count line is `length rep`
-// (Main/Mode/Batch.hs:246), which therefore counts two, while the
+// (Main/Mode/Batch.hs), which therefore counts two, while the
 // `Lemma annotations` block itself carries one header and both bodies.
 //
 // Compared slice: the run summary, which is where the count is printed.  No

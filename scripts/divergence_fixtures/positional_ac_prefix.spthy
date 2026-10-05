@@ -1,6 +1,6 @@
 /*
  * POSITIONAL prefix resolution: `lookupArity` reads the signature built SO
- * FAR (Theory/Text/Parser/Term.hs:62-72), and every `NoEqUser` outranks
+ * FAR (Theory/Text/Parser/Term.hs), and every `NoEqUser` outranks
  * every `ACfctUser` once both exist.  A use BETWEEN the `[AC]` declaration
  * and a later NoEq declaration of the same name therefore resolves AC
  * (r1 — rendered infix), while a use AFTER both resolves NoEq

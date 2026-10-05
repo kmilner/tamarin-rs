@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Theory tags that the parser AST and the elaborated theory both carry.
 //!
@@ -10,7 +9,7 @@
 //! the crate both depend on, and `tamarin-theory` re-exports them beside the
 //! types that hold them.
 
-/// HS `TraceQuantifier` (Items/LemmaItem.hs:42-44): whether a lemma claims
+/// HS `TraceQuantifier` (Items/LemmaItem.hs): whether a lemma claims
 /// validity over all traces or satisfiability by one.  The variant order is
 /// HS's declaration order, which its derived `Ord` reads off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,9 +18,9 @@ pub enum TraceQuantifier {
     AllTraces,
 }
 
-/// HS `LemmaAttribute` (Items/LemmaItem.hs:27-40): an attribute written in a
+/// HS `LemmaAttribute` (Items/LemmaItem.hs): an attribute written in a
 /// lemma's `[...]` list.  HS's `LemmaTactic` has no counterpart here: no
-/// spelling in `lemmaAttribute` (Theory/Text/Parser/Lemma.hs:38-53) builds
+/// spelling in `lemmaAttribute` (Theory/Text/Parser/Lemma.hs) builds
 /// one, so nothing can carry it.  The variant order is HS's declaration order
 /// with that one gap, which its derived `Ord` reads off.
 #[derive(Debug, Clone, PartialEq)]
@@ -46,7 +45,7 @@ pub enum LemmaAttr {
     Output(Vec<String>),
 }
 
-/// HS `FactAnnotation` (Theory/Model/Fact.hs:151-155): a property carried
+/// HS `FactAnnotation` (Theory/Model/Fact.hs): a property carried
 /// beside a fact for dot rendering and goal ranking, with no effect on the
 /// fact's semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

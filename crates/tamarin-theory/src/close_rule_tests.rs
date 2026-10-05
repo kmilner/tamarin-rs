@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::fact::{apply_subst_fact, Fact};
@@ -81,7 +80,7 @@ fn assert_structural_matches_text(
     let struct_lemma = deduction_lemma_guarded(&s2, &t2);
     // Whole-struct equality: premises/conclusions/actions, rule info
     // (name + attributes), and `new_vars` — the structural side's HS
-    // `[]` (CloseRule.hs:257) must coincide with the text side's
+    // `[]` (CloseRule.hs) must coincide with the text side's
     // parser-recomputed `newVariables` on these inputs (they diverge
     // only for Nat-sorted variables, which `lvarToLnterm` retypes in
     // the premises; keep Nat out of the differential inputs).
@@ -167,7 +166,7 @@ end\n";
 }
 
 /// The guarded values the NDC search runs on, pinned as text: the two
-/// restrictions HS `addRestrictions` installs (CloseRule.hs:247,252).  The
+/// restrictions HS `addRestrictions` installs (CloseRule.hs).  The
 /// binder names and their prefix order are the port's, not HS's, and a
 /// change to either moves the synthetic search and with it the `[NDC]` tags
 /// in the printed `functions:` header.
@@ -238,7 +237,7 @@ fn deduction_lemma_guarded_is_unchanged() {
 }
 
 /// HS `landFormula` seeds the lemma conjunction with `ltrue`
-/// (CloseRule.hs:200-201: a `foldl` of `.&&.` over `ltrue`), so HS's formula is
+/// (CloseRule.hs: a `foldl` of `.&&.` over `ltrue`), so HS's formula is
 /// `(⊤ ∧ Gen@#0) ∧ K@#1` where this module builds `Gen@t0 ∧ K@t1`.
 /// `gconj` drops ⊤, making the two shapes convert to the same
 /// guarded value — pinned here so the shape difference stays

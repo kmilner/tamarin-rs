@@ -1,21 +1,20 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! `Multiplication restriction of rules` (`multRestrictedReport`) on the WEB
 //! load path, and the raw `<`/`>` its rule dump puts through
 //! `makeWfErrorsHtml`'s banner.
 //!
 //! HS runs ONE `checkWellformedness` pass, over the `OpenTranslatedTheory`
-//! (Wellformedness.hs:1270-1286), which the interactive server shares with the
+//! (Wellformedness.hs), which the interactive server shares with the
 //! batch mode — so the check has to be spliced on both load paths, not only in
 //! `run.rs`.
 //!
-//! `makeWfErrorsHtml` (src/Web/Handler.hs:469-475) feeds the report through
-//! `renderHtmlDoc (htmlDoc …)`, and `htmlDoc = HtmlDoc` (Html.hs:96-97) only
+//! `makeWfErrorsHtml` (src/Web/Handler.hs) feeds the report through
+//! `renderHtmlDoc (htmlDoc …)`, and `htmlDoc = HtmlDoc` (Html.hs) only
 //! WRAPS the already-built plain `Doc`: the escaping `Document (HtmlDoc d)`
-//! instance (Html.hs:102-105) never runs, so `postprocessHtmlDoc`
-//! (Html.hs:157-162) is the whole transformation and a pair term's angle
+//! instance (Html.hs) never runs, so `postprocessHtmlDoc`
+//! (Html.hs) is the whole transformation and a pair term's angle
 //! brackets reach the browser unescaped.
 //!
 //! The expected bytes are the pinned oracle's (Git revision ef3f0468) wf block

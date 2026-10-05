@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Integration tests for the graph routes.
 //!
@@ -26,8 +25,8 @@ use common::*;
 
 #[tokio::test]
 async fn intdot_returns_html_shell() {
-    // HS `getInteractiveDotGraphR` (`src/Web/Handler.hs:903-911`) returns the
-    // `intdotLayout True` HTML shell page (`src/Web/Types.hs:795-824`) — a
+    // HS `getInteractiveDotGraphR` (`src/Web/Handler.hs`) returns the
+    // `intdotLayout True` HTML shell page (`src/Web/Types.hs`) — a
     // `<dot-graph-viz>` custom element whose `dotsrc` points at the JSON graph
     // route (which the bundled client-side viz fetches and draws), wrapped in
     // the `.graph-page` container with the floating Options bar.  It is NOT
@@ -60,7 +59,7 @@ async fn intdot_returns_html_shell() {
 /// `TheorySource` and `TheoryProof`; help / message / rules / lemma hit its
 /// catch-all `error "Unhandled theory path. This is a bug."` — a 500, not a
 /// 404 — and each route's copy of the clause is named in the CallStack
-/// (`imgThyPath` at `src/Web/Theory.hs:1416`, `dotGraphString` at `:2323`).
+/// (`imgThyPath` and `dotGraphString` in `src/Web/Theory.hs`).
 #[tokio::test]
 async fn dot_routes_unhandled_path_is_internal_error() {
     let s = start_server_with_theory("issue193.spthy").await;
@@ -99,16 +98,16 @@ async fn interactive_graph_def_returns_dot() {
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("text");
     // The route answers `D.showDot "G"`'s container verbatim (`dotGraphString`,
-    // `src/Web/Theory.hs:2312-2318`): the QUOTED digraph id, and the blank line
+    // `src/Web/Theory.hs`): the QUOTED digraph id, and the blank line
     // `"\n}\n"` leaves before the closing brace
-    // (`lib/utils/src/Text/Dot.hs:246-248`).
+    // (`lib/utils/src/Text/Dot.hs`).
     // The document between them is pinned byte for byte against the oracle by
     // `interactive_graph_def_renders_source_cases`.
     assert!(body.starts_with("digraph \"G\" {\n"), "header: {body:.40}");
     assert!(body.ends_with("\n\n}\n"), "trailer: {body:?}");
 
     // A proof path that does not resolve is `dotGraphString`'s `Nothing`,
-    // which `getTheoryInteractiveGraphR` (`src/Web/Handler.hs:1464-1470`)
+    // which `getTheoryInteractiveGraphR` (`src/Web/Handler.hs`)
     // answers with `notFound`.
     let res = s
         .get("/thy/trace/1/interactive-graph-def/proof/debug/_")
@@ -147,7 +146,7 @@ async fn interactive_graph_def_renders_source_cases() {
 /// Not Found page, 404, whichever end of the list the index falls off.
 ///
 /// Upstream feeds the index into `cases !! (i-1) !! (j-1)` unchecked
-/// (`src/Web/Theory.hs:1422` for `/graph`, `:2329` for
+/// (`src/Web/Theory.hs` for `/graph` and
 /// `/interactive-graph-def`), so these URLs answer 500 with the raw
 /// `Prelude.!!` text and its GHC CallStack; RS deliberately corrects that,
 /// which is why these are the only cases-route responses the port does not
@@ -171,7 +170,7 @@ async fn dot_routes_out_of_range_case_is_not_found() {
 
 #[tokio::test]
 async fn graph_json_returns_json_graph_with_dot_json_content_type() {
-    // HS `getTheoryGraphJsonR` (`src/Web/Handler.hs:1435-1444`) hands the
+    // HS `getTheoryGraphJsonR` (`src/Web/Handler.hs`) hands the
     // rendered file to `sendFile (fromString ".json")`, so the response
     // `Content-Type` is the literal string `.json`.
     let s = start_server_with_theory("issue193.spthy").await;
@@ -259,7 +258,7 @@ async fn unknown_lemma_is_an_unresolvable_graph_path() {
 async fn graph_json_unhandled_path_is_internal_error() {
     // `graphJsonThyPath` handles only `TheorySource` / `TheoryProof`;
     // everything else hits `error "Unhandled theory path. This is a bug."`
-    // (`src/Web/Theory.hs:1318`), which Yesod renders as its 500 page — the
+    // (`src/Web/Theory.hs`), which Yesod renders as its 500 page — the
     // `defaultLayout` frame around `<h1>Internal Server Error</h1>` and the
     // exception text, byte-for-byte the captured Haskell response.
     let s = start_server_with_theory("issue193.spthy").await;
@@ -279,10 +278,10 @@ async fn graph_json_unhandled_path_is_internal_error() {
 #[tokio::test]
 async fn graph_json_out_of_range_source_index_is_not_found() {
     // `parseCases` reads both indices with `safeRead` at `ReadS Int`
-    // (`src/Web/Types.hs:443`), so 0, a negative one and `Int` minBound all
+    // (`src/Web/Types.hs`), so 0, a negative one and `Int` minBound all
     // parse and reach the handler alongside a past-the-end one.  Upstream
     // hands every one of them to `casesCode`'s unchecked
-    // `cases !! (i-1) !! (j-1)` (`src/Web/Theory.hs:1322`), which raises: the
+    // `cases !! (i-1) !! (j-1)` (`src/Web/Theory.hs`), which raises: the
     // response is a 500 whose body is `Prelude.!!: negative index` or
     // `index too large` plus a CallStack naming the failing `!!` (minBound
     // wraps `i-1` to maxBound, so even that one reports "too large").  RS
@@ -305,7 +304,7 @@ async fn graph_json_out_of_range_source_index_is_not_found() {
 
 #[tokio::test]
 async fn graph_json_source_case_returns_json_graph() {
-    // `graphJsonThyPath`'s `TheorySource` branch (`src/Web/Theory.hs:1316`)
+    // `graphJsonThyPath`'s `TheorySource` branch (`src/Web/Theory.hs`)
     // serialises the `(i-1, j-1)` case system under the label
     // `Theory: <thy> Case: <i>:<j>` — the 1-based indices straight from the
     // path.  Covers the branch the out-of-range 404 above cannot reach.
@@ -331,7 +330,7 @@ async fn graph_json_source_case_returns_json_graph() {
 async fn graph_json_abbrev_in_backend_shortens_long_terms() {
     // `getTheoryGraphJsonR` runs the sub-proof's system through
     // `Web.Utils.abbrev` when `abbrevInBackend` is present
-    // (`src/Web/Handler.hs:1440`, `src/Web/Theory.hs:1330-1333`): every
+    // (`src/Web/Handler.hs`, `src/Web/Theory.hs`): every
     // premise/conclusion term of `size >= 30` is replaced by a
     // `Name AbbrevName` constant named after the term's head symbol, with an
     // occurrence counter from that symbol's SECOND abbreviation on.  The body
@@ -344,7 +343,7 @@ async fn graph_json_abbrev_in_backend_shortens_long_terms() {
     assert_eq!(abbreviated, haskell_capture("json_proof_abbrev.json"));
 
     // The abbreviation constants render as their bare ids — no quotes, no
-    // sigil (`show (Name AbbrevName n) = show n`, LTerm.hs:240).
+    // sigil (`show (Name AbbrevName n) = show n`, LTerm.hs).
     assert!(
         abbreviated.contains(r#""jgnFactShow": "A( g3 )""#),
         "abbreviated fact must show the bare constant"
@@ -366,7 +365,7 @@ async fn graph_json_abbrev_in_backend_shortens_long_terms() {
 fn dot_output_for_a_simple_system() {
     // The whole document `system_to_dot` produces for a one-rule system, which
     // is the only exercise that entry point gets: it pairs the batch writer's
-    // options (`Batch.hs:254-255`) with the web routes' label, a combination no
+    // options (`Batch.hs`) with the web routes' label, a combination no
     // upstream call site makes.  Every byte here is `Text.Dot`'s, anchored on
     // the oracle by
     // `constraint::system::dot::showdot::tests::single_rule_matches_the_oracle_bytes`:
@@ -419,7 +418,7 @@ fn dot_output_for_a_simple_system() {
 
 /// `--with-json` switches `/graph` to HS's `OutJSON` branch: the system's
 /// JSON graph is written to a file and `<json-cmd> <img> <json>` renders
-/// the image (`jsonToImg`, Web/Theory.hs:1484-1491).  A stub renderer
+/// the image (`jsonToImg`, Web/Theory.hs).  A stub renderer
 /// stands in for the tool: it checks it was handed a non-empty JSON file
 /// and writes a recognisable SVG.  A failing renderer is HS's
 /// `imgGenerated False` → the generic Not Found page.

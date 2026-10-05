@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Model.Restriction` from
 //! `lib/theory/src/Theory/Model/Restriction.hs` — the
@@ -38,17 +37,17 @@ pub struct ProtoRestriction<F> {
     /// `_rstrOriginalFormula` — the same formula before macro application,
     /// which the printer shows above that block.  HS's
     /// `applyMacroInRestriction` fills it for every restriction of a closed
-    /// theory, macros or none (Theory/Model/Restriction.hs:164-166).
+    /// theory, macros or none (Theory/Model/Restriction.hs).
     pub original_formula: Option<F>,
 }
 
 pub type Restriction = ProtoRestriction<LNFormula>;
 
-/// HS `applyMacroInRestriction` (Theory/Model/Restriction.hs:164-166): the
+/// HS `applyMacroInRestriction` (Theory/Model/Restriction.hs): the
 /// theory's macros applied to the formula, with the formula as it stood
 /// recorded as the original one unless the restriction already carries one.
 /// HS runs it over every restriction of a closed theory (`closeTheoryItem`,
-/// CloseRule.hs:84), macros or none, so `original_formula` ends up filled
+/// CloseRule.hs), macros or none, so `original_formula` ends up filled
 /// either way.
 pub fn apply_macro_in_restriction(macros: &[LNMacro], r: Restriction) -> Restriction {
     let original = r.original_formula.unwrap_or_else(|| r.formula.clone());
@@ -59,17 +58,17 @@ pub fn apply_macro_in_restriction(macros: &[LNMacro], r: Restriction) -> Restric
     }
 }
 
-/// HS `varNow = LVar "NOW" LSortNode 0` (Theory/Model/Restriction.hs:87-88):
+/// HS `varNow = LVar "NOW" LSortNode 0` (Theory/Model/Restriction.hs):
 /// the time point the generated restriction binds and the abstraction treats
 /// as not free.
 fn var_now() -> LVar {
     LVar::new("NOW", LSort::Node, 0)
 }
 
-/// HS `restrPrefix` (Theory/Model/Restriction.hs:130-131).
+/// HS `restrPrefix` (Theory/Model/Restriction.hs).
 const RESTR_PREFIX: &str = "Restr_";
 
-/// HS `isFree` (Theory/Model/Restriction.hs:127-128): a bound De Bruijn index
+/// HS `isFree` (Theory/Model/Restriction.hs): a bound De Bruijn index
 /// is not free, and neither is [`var_now`].
 fn is_free(bv: &BVar<LVar>) -> bool {
     match bv {
@@ -78,7 +77,7 @@ fn is_free(bv: &BVar<LVar>) -> bool {
     }
 }
 
-/// HS `containsVar p t` (Theory/Model/Restriction.hs:121-124): does a variable
+/// HS `containsVar p t` (Theory/Model/Restriction.hs): does a variable
 /// of `t` satisfy `p`?  A constant literal satisfies nothing.
 fn contains_var(t: &BLNTerm, p: &dyn Fn(&BVar<LVar>) -> bool) -> bool {
     match t {
@@ -90,14 +89,14 @@ fn contains_var(t: &BLNTerm, p: &dyn Fn(&BVar<LVar>) -> bool) -> bool {
 
 /// The fresh supply and the `{fresh ↦ abstracted term}` map [`rewrite`]
 /// threads: HS's `FreshT` over a `State (M.Map LVar (Term (Lit c2 LVar)))`
-/// (Theory/Model/Restriction.hs:96).
+/// (Theory/Model/Restriction.hs).
 struct RewriteState {
     fresh: FastFreshState,
     subst: BTreeMap<LVar, LNTerm>,
 }
 
 impl RewriteState {
-    /// HS `substitute` (Theory/Model/Restriction.hs:114-120): draw a fresh
+    /// HS `substitute` (Theory/Model/Restriction.hs): draw a fresh
     /// `LSortMsg` variable, record the term it stands for with its `Free`
     /// wrappers dropped (`fmap (fmap fromFree)`), and return the variable.
     fn substitute(&mut self, t: &BLNTerm) -> BLNTerm {
@@ -111,12 +110,12 @@ impl RewriteState {
     }
 }
 
-/// HS `fAt` (Theory/Model/Restriction.hs:99-112): abstract the subterms that
+/// HS `fAt` (Theory/Model/Restriction.hs): abstract the subterms that
 /// carry free variables into fresh ones.  A free variable becomes a fresh
 /// variable; an application whose arguments carry a free variable and no
 /// bound one is abstracted whole; an application that carries both is rebuilt
 /// around its abstracted arguments, through `termViewToTerm`
-/// (Term/Term/Raw.hs:103-105), which keeps the argument positions the
+/// (Term/Term/Raw.hs), which keeps the argument positions the
 /// traversal saw; anything else stays.
 fn rewrite_term(t: &BLNTerm, st: &mut RewriteState) -> BLNTerm {
     match t {
@@ -134,11 +133,11 @@ fn rewrite_term(t: &BLNTerm, st: &mut RewriteState) -> BLNTerm {
     }
 }
 
-/// HS `rewrite` (Theory/Model/Restriction.hs:90-128): every atom's terms with
+/// HS `rewrite` (Theory/Model/Restriction.hs): every atom's terms with
 /// their free-variable subterms abstracted, plus the map from each fresh
 /// variable to the term it stands for.  `traverseFormulaAtom` threads no De
 /// Bruijn depth and `traverse` on an `Action` atom visits the time point
-/// before the fact's arguments (Theory/Model/Atom.hs:139-140), which is the
+/// before the fact's arguments (Theory/Model/Atom.hs), which is the
 /// order the fresh counter — seeded at `0`, so `x`, `x.1`, … — sees them in.
 fn rewrite(f: &LNFormula) -> (LNFormula, BTreeMap<LVar, LNTerm>) {
     let mut st = RewriteState {
@@ -154,7 +153,7 @@ fn rewrite(f: &LNFormula) -> (LNFormula, BTreeMap<LVar, LNTerm>) {
     (out, st.subst)
 }
 
-/// HS `mkFact` (Theory/Model/Restriction.hs:162): `protoFactAnn Linear
+/// HS `mkFact` (Theory/Model/Restriction.hs): `protoFactAnn Linear
 /// (restrPrefix ++ rname) S.empty`, the linear fact `Restr_<rname>`.
 fn mk_fact<T>(rname: &str, terms: Vec<T>) -> Fact<T> {
     let arity = terms.len();
@@ -169,7 +168,7 @@ fn mk_fact<T>(rname: &str, terms: Vec<T>) -> Fact<T> {
 }
 
 /// HS `L.delete varNow` in `getBVarTerms`/`getVarTerms`
-/// (Theory/Model/Restriction.hs:159-160): drop the FIRST [`var_now`] of the
+/// (Theory/Model/Restriction.hs): drop the FIRST [`var_now`] of the
 /// list.
 fn delete_var_now(mut vs: Vec<LVar>) -> Vec<LVar> {
     if let Some(i) = vs.iter().position(|v| *v == var_now()) {
@@ -178,7 +177,7 @@ fn delete_var_now(mut vs: Vec<LVar>) -> Vec<LVar> {
     vs
 }
 
-/// HS `fromRuleRestriction rname f` (Theory/Model/Restriction.hs:141-162): the
+/// HS `fromRuleRestriction rname f` (Theory/Model/Restriction.hs): the
 /// restriction `Restr_<rname>` that states `f` of the time point a rule fired
 /// at, and the action fact the rule carries to reach it.
 ///
@@ -338,8 +337,8 @@ mod tests {
     }
 
     /// HS's `Traversable (ProtoAtom s)` runs `Action <$> f i <*> traverse f fa`
-    /// (Theory/Model/Atom.hs:139-140) and its `Foldable` folds in the same
-    /// order (Theory/Model/Atom.hs:130-131), so an action atom's time point is
+    /// (Theory/Model/Atom.hs) and its `Foldable` folds in the same
+    /// order (Theory/Model/Atom.hs), so an action atom's time point is
     /// abstracted — and folded into `freesList` — before the fact's arguments.
     /// Only a `_restrict` whose time point is FREE tells the two orders apart.
     #[test]

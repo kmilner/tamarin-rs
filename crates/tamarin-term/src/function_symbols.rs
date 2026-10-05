@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.Term.FunctionSymbols` from
 //! `lib/term/src/Term/Term/FunctionSymbols.hs`.
@@ -12,7 +11,7 @@
 use std::collections::BTreeSet;
 
 // HS bundles the four attribute enums below into `FctAttr`
-// (FunctionSymbols.hs:128); tamarin-parser carries the surface-shaped copy.
+// (FunctionSymbols.hs); tamarin-parser carries the surface-shaped copy.
 
 /// A function symbol can be either private (unknown to the adversary) or public.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -41,7 +40,7 @@ pub enum AcState {
 /// (`IsNdcDiff`), both, or neither.
 ///
 /// Variant order mirrors the Haskell declaration
-/// `IsNDC | NotNDC | IsNDCDiff | IsNDCBoth` (FunctionSymbols.hs:125) — the
+/// `IsNDC | NotNDC | IsNDCDiff | IsNDCBoth` (FunctionSymbols.hs) — the
 /// derived `Ord` participates in symbol ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NdcState {
@@ -77,7 +76,7 @@ impl NdcState {
 /// Free (no-equation) function symbol — name plus arity, privacy,
 /// constructability, and NDC property. Mirrors the Haskell tuple
 /// `(ByteString, (Int, Privacy, Constructability, NDCstate))`
-/// (FunctionSymbols.hs:132); the field order is that tuple's, which `Ord`
+/// (FunctionSymbols.hs); the field order is that tuple's, which `Ord`
 /// reads off.
 #[derive(Clone, Copy)]
 pub struct NoEqSym {
@@ -210,7 +209,7 @@ impl NoEqSym {
 /// User-defined AC function symbol — name plus privacy, constructability,
 /// and NDC property (arity is always 2). Mirrors the Haskell tuple
 /// `(ByteString, (Privacy, Constructability, NDCstate))`
-/// (FunctionSymbols.hs:135); the field order is that tuple's, which `Ord`
+/// (FunctionSymbols.hs); the field order is that tuple's, which `Ord`
 /// reads off.
 #[derive(Clone, Copy)]
 pub struct AcFctSym {
@@ -324,7 +323,7 @@ pub fn plain_show_bytes(name: &[u8]) -> String {
 // print `IsNdc` where GHC prints `IsNDC`; these three functions spell the
 // GHC constructor names.
 
-/// Derived `Show` of `Privacy` (FunctionSymbols.hs:111-112).
+/// Derived `Show` of `Privacy` (FunctionSymbols.hs).
 pub fn show_privacy(privacy: Privacy) -> &'static str {
     match privacy {
         Privacy::Private => "Private",
@@ -332,7 +331,7 @@ pub fn show_privacy(privacy: Privacy) -> &'static str {
     }
 }
 
-/// Derived `Show` of `Constructability` (FunctionSymbols.hs:116-117).
+/// Derived `Show` of `Constructability` (FunctionSymbols.hs).
 pub fn show_constructability(constructability: Constructability) -> &'static str {
     match constructability {
         Constructability::Constructor => "Constructor",
@@ -340,7 +339,7 @@ pub fn show_constructability(constructability: Constructability) -> &'static str
     }
 }
 
-/// Derived `Show` of `NDCstate` (FunctionSymbols.hs:125-126).
+/// Derived `Show` of `NDCstate` (FunctionSymbols.hs).
 pub fn show_ndc_state(ndc: NdcState) -> &'static str {
     match ndc {
         NdcState::IsNdc => "IsNDC",
@@ -367,7 +366,7 @@ pub fn show_acfct_sym(sym: &AcFctSym) -> String {
 /// AC (associative-commutative) function symbols.
 ///
 /// Variant order mirrors the Haskell declaration
-/// `Union | Mult | Xor | NatPlus | ACfct ACfctSym` (FunctionSymbols.hs:138).
+/// `Union | Mult | Xor | NatPlus | ACfct ACfctSym` (FunctionSymbols.hs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AcSym {
     Union,
@@ -482,7 +481,7 @@ pub const UNION_SYM_STRING: &[u8] = b"union";
 pub const EMAP_SYM_STRING: &[u8] = b"em";
 pub const PMULT_SYM_STRING: &[u8] = b"pmult";
 /// Display name of [`FunSym::List`].  HS has no `listSymString`:
-/// `showFunSymName`'s `List` arm spells the literal (Term/Term.hs:296).
+/// `showFunSymName`'s `List` arm spells the literal (Term/Term.hs).
 pub const LIST_SYM_STRING: &[u8] = b"List";
 
 // -- Predefined NoEq symbols --------------------------------------------------

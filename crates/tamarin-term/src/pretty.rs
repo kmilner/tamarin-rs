@@ -1,9 +1,8 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `prettyLNTerm`/`prettyTerm` from
-//! `lib/term/src/Term/Term.hs` (lines 298-327) and the `Show LVar` /
+//! `lib/term/src/Term/Term.hs` and the `Show LVar` /
 //! `Show Name` instances from `lib/term/src/Term/LTerm.hs`.
 //!
 //! Produces the same surface syntax Tamarin's interactive UI uses:
@@ -42,7 +41,7 @@ use crate::lterm::{sort_prefix, BVar, LNTerm, LSort, LVar, Name, NameTag};
 use crate::term::{ShowLit, Term};
 use crate::vterm::{Lit, VTerm};
 
-/// Mirror of Haskell `instance Show LVar` (LTerm.hs:550-557).
+/// Mirror of Haskell `instance Show LVar` (LTerm.hs).
 pub fn pp_lvar(v: &LVar, out: &mut String) {
     out.push_str(sort_prefix(v.sort));
     if v.name.is_empty() {
@@ -56,14 +55,14 @@ pub fn pp_lvar(v: &LVar, out: &mut String) {
     }
 }
 
-/// Mirror of Haskell `instance Show Name` (LTerm.hs:235-240).
+/// Mirror of Haskell `instance Show Name` (LTerm.hs).
 pub fn pp_name(n: &Name, out: &mut String) {
     match n.tag {
         NameTag::Fresh => out.push('~'),
         NameTag::Pub => {}
         NameTag::Node => out.push('#'),
         NameTag::Nat => out.push('%'),
-        // `show (Name AbbrevName n) = show n` (LTerm.hs:240) — the bare name
+        // `show (Name AbbrevName n) = show n` (LTerm.hs) — the bare name
         // id, with neither a sigil nor the quotes the other four tags carry.
         NameTag::Abbrev => {
             out.push_str(n.id.0);
@@ -76,7 +75,7 @@ pub fn pp_name(n: &Name, out: &mut String) {
 }
 
 pub fn ac_op_symbol(op: AcSym) -> &'static str {
-    // Haskell `prettyTerm`'s AC arms (Term/Term.hs:304-309).
+    // Haskell `prettyTerm`'s AC arms (Term/Term.hs).
     //   Mult => "*"; Xor => "⊕"; Union => "++"; NatPlus => "%+"
     // We use the unicode char for Xor since the rest of the UI
     // already passes UTF-8 around and the JS frontend renders it.
@@ -120,7 +119,7 @@ fn ac_fct_op_symbol_interned(name: &'static [u8]) -> &'static str {
 }
 
 /// The infix separator of a user-defined AC symbol: Haskell
-/// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts` (Term/Term.hs:305) surrounds
+/// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts` (Term/Term.hs) surrounds
 /// the symbol name by spaces, so the spaces are part of the separator (unlike
 /// the builtin ops).  Interned so it can be handed out as `&'static str` like
 /// the fixed ones; the pool is bounded by the theory's user-defined AC names.
@@ -131,11 +130,11 @@ pub fn ac_fct_op_symbol(name: &str) -> &'static str {
 }
 
 // ---------------------------------------------------------------------
-// `prettyTerm` — the Doc printer (Term/Term.hs:299-327).
+// `prettyTerm` — the Doc printer (Term/Term.hs).
 // ---------------------------------------------------------------------
 
 /// HS `prettyTerm :: (Document d, Show l) => (l -> d) -> Term l -> d`
-/// (Term/Term.hs:299-317), parameterised over the printer of the term's
+/// (Term/Term.hs), parameterised over the printer of the term's
 /// literals.  The arms keep HS's order: a nullary user-`[AC]` symbol before
 /// the generic AC arm, and `exp`/`diff`/`%1`/`pair` before the generic `NoEq`
 /// arms.  Each of those four guards compares the whole `NoEqSym`, as HS's
@@ -144,7 +143,7 @@ pub fn ac_fct_op_symbol(name: &str) -> &'static str {
 pub fn pretty_term<L>(pp_lit: &dyn Fn(&L) -> Doc, t: &Term<L>) -> Doc {
     match t {
         Term::Lit(l) => pp_lit(l),
-        // `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs:304).
+        // `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs).
         Term::App(FunSym::Ac(AcSym::AcFct(sym)), ts) if ts.is_empty() => {
             Doc::text(String::from_utf8_lossy(sym.name))
         }
@@ -159,7 +158,7 @@ pub fn pretty_term<L>(pp_lit: &dyn Fn(&L) -> Doc, t: &Term<L>) -> Doc {
                 .beside(Doc::text("^"))
                 .beside(pretty_term(pp_lit, &ts[1]))
         }
-        // All `<>` (Term/Term.hs:311), so a `diff` application never breaks at
+        // All `<>` (Term/Term.hs), so a `diff` application never breaks at
         // its comma the way the generic `ppFun` arm does.
         Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == diff_sym() => {
             Doc::text("diff")
@@ -172,7 +171,7 @@ pub fn pretty_term<L>(pp_lit: &dyn Fn(&L) -> Doc, t: &Term<L>) -> Doc {
         Term::App(FunSym::NoEq(sym), ts) if ts.is_empty() && *sym == nat_one_sym() => {
             Doc::text("%1")
         }
-        // The arm carries no arity guard (Term/Term.hs:313); the arity check
+        // The arm carries no arity guard (Term/Term.hs); the arity check
         // lives in `split`, which stops on anything else.
         Term::App(FunSym::NoEq(sym), _) if *sym == pair_sym() => {
             let mut flat: Vec<&Term<L>> = Vec::new();
@@ -190,14 +189,14 @@ pub fn pretty_term<L>(pp_lit: &dyn Fn(&L) -> Doc, t: &Term<L>) -> Doc {
     }
 }
 
-/// HS `prettyNTerm = prettyTerm (text . show)` (LTerm.hs:930-931) over
-/// `NTerm v = VTerm Name v` (LTerm.hs:227), whose literal printer is
-/// `Show (Lit c v)` (VTerm.hs:98-100).
+/// HS `prettyNTerm = prettyTerm (text . show)` (LTerm.hs) over
+/// `NTerm v = VTerm Name v` (LTerm.hs), whose literal printer is
+/// `Show (Lit c v)` (VTerm.hs).
 pub fn pretty_nterm<V: fmt::Display>(t: &VTerm<Name, V>) -> Doc {
     pretty_term(&|l: &Lit<Name, V>| Doc::text(l.to_string()), t)
 }
 
-/// HS `prettyLNTerm = prettyNTerm` (LTerm.hs:934-935) laid out on a single
+/// HS `prettyLNTerm = prettyNTerm` (LTerm.hs) laid out on a single
 /// line: [`FLAT_WIDTH`] leaves no `fcat` or `fsep` of the `Doc` a reason to
 /// break.  HS has no `String` twin — the flat form is what the port's map and
 /// sort keys, its abbreviation table and its debug messages compare.
@@ -205,14 +204,14 @@ pub fn pretty_nterm<V: fmt::Display>(t: &VTerm<Name, V>) -> Doc {
 /// The `Doc` is built and rendered in plain mode whatever the caller's
 /// rendering context: the callers that put the string back into a `Doc::text`
 /// take their escaping from that `Doc`, which is where HS's
-/// `Document (HtmlDoc d)` instance applies it (Html.hs:102-104), and the rest
+/// `Document (HtmlDoc d)` instance applies it (Html.hs), and the rest
 /// write to a plain-text channel.
 pub fn pretty_lnterm(t: &LNTerm) -> String {
     let _plain = HtmlDocGuard::disable();
     pretty_nterm(t).render_with(FLAT_WIDTH, FLAT_WIDTH)
 }
 
-/// HS `ppTerms sepa n lead finish ts` (Term/Term.hs:319-321):
+/// HS `ppTerms sepa n lead finish ts` (Term/Term.hs):
 /// `fcat . (text lead :) . (++[text finish]) . map (nest n)
 ///       . punctuate (text sepa) . map ppTerm`.
 fn pp_terms<L>(
@@ -257,7 +256,7 @@ fn pp_user_ac_terms<L>(pp_lit: &dyn Fn(&L) -> Doc, separator: &str, terms: &[Ter
     pp_docs(separator, 1, "(", ")", docs)
 }
 
-/// HS `ppFun f ts` (Term/Term.hs:326-327):
+/// HS `ppFun f ts` (Term/Term.hs):
 /// `text (f ++ "(") <> fsep (punctuate comma (map ppTerm ts)) <> text ")"`.
 fn pp_fun<L>(pp_lit: &dyn Fn(&L) -> Doc, f: &str, ts: &[Term<L>]) -> Doc {
     let docs: Vec<Doc> = ts.iter().map(|t| pretty_term(pp_lit, t)).collect();
@@ -266,8 +265,8 @@ fn pp_fun<L>(pp_lit: &dyn Fn(&L) -> Doc, f: &str, ts: &[Term<L>]) -> Doc {
         .beside(Doc::text(")"))
 }
 
-/// HS `split` (Term/Term.hs:323-324): `split (viewTerm2 -> FPair t1 t2) = t1 :
-/// split t2; split t = [t]`.  `FPair` (Term/Term/Raw.hs:194) needs exactly two
+/// HS `split` (Term/Term.hs): `split (viewTerm2 -> FPair t1 t2) = t1 :
+/// split t2; split t = [t]`.  `FPair` (Term/Term/Raw.hs) needs exactly two
 /// arguments and full `NoEqSym` equality with `pairSym`, and only the RIGHT
 /// child continues the spine, so `pair(pair(a, b), c)` keeps its left child
 /// nested.
@@ -285,10 +284,10 @@ fn split_pair<'a, L>(t: &'a Term<L>, out: &mut Vec<&'a Term<L>>) {
 // `ShowLit` impls — the literal half of HS `Show (Term a)`.
 // ---------------------------------------------------------------------
 
-/// HS `instance (Show v, Show c) => Show (Lit c v)` (Term/VTerm.hs:98-100) at
+/// HS `instance (Show v, Show c) => Show (Lit c v)` (Term/VTerm.hs) at
 /// `Lit Name LVar`, the literal of an `LNTerm`.  Both sides are the same
 /// `Show` instances the pretty-printer reuses for its leaves: `Show LVar`
-/// (LTerm.hs:550-557) and `Show Name` (LTerm.hs:235-240).
+/// (LTerm.hs) and `Show Name` (LTerm.hs).
 impl ShowLit for Lit<Name, LVar> {
     fn show_into(&self, out: &mut String) {
         match self {
@@ -299,7 +298,7 @@ impl ShowLit for Lit<Name, LVar> {
 }
 
 /// The same instance at `Lit Name (BVar LVar)`, the literal of a `BLTerm`.
-/// Its variable side is the derived `Show (BVar v)` (LTerm.hs:476-478):
+/// Its variable side is the derived `Show (BVar v)` (LTerm.hs):
 /// `Bound <i>` for a De Bruijn index, `Free <v>` for a free variable.  Neither
 /// payload takes parentheses — a De Bruijn index is never negative, and
 /// `Show LVar` is hand-written, so it ignores the precedence the derived
@@ -347,7 +346,7 @@ impl fmt::Display for Name {
 }
 
 // Convenience: `LSort` display matches Haskell's `sortSuffix`
-// (`Term.LTerm` lines 202-207), NOT the derived `Show LSort`
+// (`Term.LTerm`), NOT the derived `Show LSort`
 // (which yields constructor names like `LSortMsg`).
 impl fmt::Display for LSort {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -433,7 +432,7 @@ mod tests {
     }
 
     /// The four builtin AC operators render as HS `ppTerms <op> 1 "(" ")"`
-    /// (Term/Term.hs:304-309).  This gives one pair of parentheses around the
+    /// (Term/Term.hs).  This gives one pair of parentheses around the
     /// complete application.  The operator appears between the operands only.
     /// There are no spaces, and no separator at the start or at the end.  The
     /// arguments come out in AC-sorted order (`a` before `b`), whatever order
@@ -542,7 +541,7 @@ mod tests {
         let b = var("b", LSort::Msg);
         let t = f_app_ac(AcSym::AcFct(f), vec![a, b]);
         assert_eq!(pretty_lnterm(&t), "(a f b)");
-        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs:304):
+        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs):
         // the bare name, no parens.  `f_app_ac` rejects an empty argument list
         // (HS `fAppAC` errors likewise), so the arm is reachable only by direct
         // construction.
@@ -588,7 +587,7 @@ mod tests {
     /// Bytes from the oracle on a theory declaring `f/2 [AC]`, `op/2 [AC]`,
     /// `opq/2 [AC]` and a rule emitting `f(~a,~b)`, `op(~a,~b)`, `opq(~a,~b)`;
     /// it renders them `(~a f ~b)`, `(~a op ~b)`, `(~a opq ~b)` (HS
-    /// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`, Term/Term.hs:305).
+    /// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`, Term/Term.hs).
     #[test]
     fn ac_fct_separator_shared_across_threads() {
         use crate::function_symbols::{AcFctSym, AcSym, NdcState};
@@ -649,7 +648,7 @@ mod tests {
     }
 
     /// One sigil per `NameTag`, from HS `instance Show Name`
-    /// (LTerm.hs:235-240).  Four of the tags print a quoted form with their
+    /// (LTerm.hs).  Four of the tags print a quoted form with their
     /// own prefix character, and the prefix of `Pub` is empty.  `Abbrev`
     /// prints the bare id with no sigil and no quotes.
     #[test]
@@ -700,7 +699,7 @@ mod tests {
         lit(Lit::Var(BVar::Bound(i)))
     }
 
-    /// `show (Bound i)` is the derived `Show (BVar v)` (LTerm.hs:476-478):
+    /// `show (Bound i)` is the derived `Show (BVar v)` (LTerm.hs):
     /// the constructor name, a space, the index, no parentheses.  The whole
     /// offender spelling of a wellformedness report is built from this arm —
     /// the string here is the one pinned in
@@ -728,7 +727,7 @@ mod tests {
     }
 
     /// `show (Free v)` is the same derived instance; `Show LVar` is
-    /// hand-written (LTerm.hs:550-557), so its sort prefix follows the
+    /// hand-written (LTerm.hs), so its sort prefix follows the
     /// constructor name with no parentheses around it.
     #[test]
     fn show_writes_a_free_variable_as_the_derived_constructor() {
@@ -742,7 +741,7 @@ mod tests {
         assert_eq!(show_term(&z), "z");
     }
 
-    /// `show Name` (LTerm.hs:235-240) quotes the name id and prefixes the
+    /// `show Name` (LTerm.hs) quotes the name id and prefixes the
     /// tag's sigil; the abbreviation tag carries neither.
     #[test]
     fn show_writes_a_name_with_its_tag_sigil() {
@@ -895,7 +894,7 @@ mod tests {
     }
 
     /// The literal printer of `prettyNTerm` is `show`, so a name carries the
-    /// sigil of its tag (LTerm.hs:235-240) — `#` for a node name, which the
+    /// sigil of its tag (LTerm.hs) — `#` for a node name, which the
     /// Maude skolems of a node-sorted variable carry (`maude_proc`).
     #[test]
     fn pretty_nterm_prints_a_node_name_with_its_sigil() {
@@ -905,9 +904,9 @@ mod tests {
         assert_eq!(flat(&inside), "senc(#'n', m)");
     }
 
-    /// HS's `diff` arm is a chain of `<>` (Term/Term.hs:311), so the comma
+    /// HS's `diff` arm is a chain of `<>` (Term/Term.hs), so the comma
     /// between the operands is not a break point however far the application
-    /// overruns the line.  The generic `ppFun` arm (Term/Term.hs:326-327)
+    /// overruns the line.  The generic `ppFun` arm (Term/Term.hs)
     /// joins its arguments with `fsep`, so the same operands break there.
     #[test]
     fn pretty_nterm_diff_never_breaks() {
@@ -922,7 +921,7 @@ mod tests {
     }
 
     /// HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)`
-    /// (Term/Term.hs:304): the bare name, with neither parentheses nor the
+    /// (Term/Term.hs): the bare name, with neither parentheses nor the
     /// spaced separator the infix arm uses.
     #[test]
     fn pretty_nterm_nullary_user_ac_is_the_bare_name() {
@@ -940,7 +939,7 @@ mod tests {
 
     /// A pair term keeps its raw `<`/`>` under an enclosing HTML render: the
     /// escaping belongs to the `Doc` a caller wraps the string in, HS's
-    /// `Document (HtmlDoc d)` instance (Html.hs:102-104).
+    /// `Document (HtmlDoc d)` instance (Html.hs).
     #[test]
     fn pretty_lnterm_stays_plain_under_an_html_render() {
         let p = f_app_no_eq(pair_sym(), vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
@@ -952,7 +951,7 @@ mod tests {
         );
     }
 
-    /// HS `split` walks the RIGHT spine only (Term/Term.hs:323-324), so a
+    /// HS `split` walks the RIGHT spine only (Term/Term.hs), so a
     /// left-nested pair keeps its inner brackets.
     #[test]
     fn pretty_nterm_left_nested_pair_is_not_flattened() {
@@ -972,8 +971,8 @@ mod tests {
     }
 
     /// `prettyProtoAtom` writes its timepoint positions with `text (show v)`
-    /// (Atom.hs:216,223,224), not with `ppT`.  The two agree on a literal —
-    /// `show (LIT l) = show l` (Term/Term/Raw.hs:227-232, see line 230) —
+    /// (Atom.hs), not with `ppT`.  The two agree on a literal —
+    /// `show (LIT l) = show l` (Term/Term/Raw.hs) —
     /// which is the shape every constructed timepoint has; on an application
     /// they part, `show` keeping the prefix form the pretty-printer rewrites.
     #[test]

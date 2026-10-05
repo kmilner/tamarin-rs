@@ -1,21 +1,20 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Byte-pins the pair arm of HS `prettyTerm` and the `Ord` that arranges
 //! pair-headed AC operands, both observed on the `rule (modulo E)` echo.
 //!
 //! `prettyTerm` selects `ppTerms ", " 1 "<" ">" (split t)` for every
-//! `pairSym`-headed term (Term/Term.hs:313), so the SHAPE decides — the
+//! `pairSym`-headed term (Term/Term.hs), so the SHAPE decides — the
 //! source spelling `pair(a, b)` renders `<a, b>` exactly like `<a, b>`.
-//! `split` (Term/Term.hs:323-324) walks the RIGHT spine only, so a
+//! `split` (Term/Term.hs) walks the RIGHT spine only, so a
 //! left-nested `pair(pair(a, b), c)` keeps its inner brackets.
 //!
 //! The same nesting drives `Ord`: HS's pair carries the arity-2 argument list
-//! `[t1, t2]` (`fAppPair`, Term/Term.hs:163), so comparing `<a, z>` with
+//! `[t1, t2]` (`fAppPair`, Term/Term.hs), so comparing `<a, z>` with
 //! `<a, b, c>` pits `z` against `pair(b, c)` at position 2, where
-//! `LIT _ < FAPP _ _` (Term/Term/Raw.hs:72-74) puts `<a, z>` first in the
-//! sorted `++` chain (`fAppAC`, Term/Term/Raw.hs:118-129, see line 123).
+//! `LIT _ < FAPP _ _` (Term/Term/Raw.hs) puts `<a, z>` first in the
+//! sorted `++` chain (`fAppAC`, Term/Term/Raw.hs).
 //!
 //! Expected strings are the pinned oracle's bytes (Git revision ef3f0468) for
 //! the same theories, plain no-prove render.

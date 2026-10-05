@@ -1,14 +1,12 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
-//! Byte-pins HS `checkEquationsSubtermConvergence` (Wellformedness.hs:1222-1232)
-//! and its `isUserMarkedConvergent` guard (Wellformedness.hs:1211-1214, read
-//! at :1285).
+//! Byte-pins HS `checkEquationsSubtermConvergence` (Wellformedness.hs)
+//! and its `isUserMarkedConvergent` guard (Wellformedness.hs).
 //!
 //! The check reads `thyEquations = S.toList (stRules sig)`, so it runs off the
 //! elaborated signature.  The parser sets `eqConvergent = convergent` on EVERY
-//! `equations` block (Theory/Text/Parser/Signature.hs:232-243, see line 242),
+//! `equations` block (Theory/Text/Parser/Signature.hs),
 //! which is last-write-wins: a `[convergent]` block LAST suppresses the whole
 //! report, a regular block last does not.
 //!
@@ -31,8 +29,7 @@ fn message(src: &str) -> Option<String> {
 }
 
 /// A non-subterm-convergent equation renders as `sep [nest 2 lhs, "=" <-> rhs]`
-/// inside `prettyWfErrorReport`'s own `nest 2` (Wellformedness.hs:118-125, see
-/// line 122), so four leading spaces, and the pair-headed rhs prints in angle
+/// inside `prettyWfErrorReport`'s own `nest 2` (Wellformedness.hs), so four leading spaces, and the pair-headed rhs prints in angle
 /// form.  Oracle: `    ff(x, y) = <x, y>`.
 #[test]
 fn pair_headed_terms_render_in_angle_form() {

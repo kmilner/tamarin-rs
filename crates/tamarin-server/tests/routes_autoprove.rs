@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Integration tests that exercise the prover-driving endpoints: the
 //! autoprove routes and `main/method`'s single-step apply.
@@ -153,16 +152,16 @@ async fn test_autoprove_on_bad_path_returns_alert() {
 
 /// An out-of-range method number has ONE answer: the 200 JSON alert
 /// `getTheoryPathMR` replies to a `Nothing` apply with
-/// (`src/Web/Handler.hs:1081`), byte-compared against the capture.
+/// (`src/Web/Handler.hs`), byte-compared against the capture.
 ///
 /// Upstream splits it three ways instead: `applyMethodAtPath` guards with
 /// `length methods >= i` alone and then evaluates `methods !! (i-1)`
-/// (`src/Web/Theory.hs:99`), so only an `i` past the end reaches that alert
+/// (`src/Web/Theory.hs`), so only an `i` past the end reaches that alert
 /// while `i <= 0` passes the guard and raises `!!`'s `negIndex` — and `Int`
 /// minBound passes it too, `i-1` wrapping to maxBound so `!!` raises
 /// `tooLarge`.  Both exceptions come back as 200 alerts quoting the GHC
 /// CallStack, because `modifyTheory` runs the apply under `evalInThread`
-/// (`src/Web/Handler.hs:743,753`).  RS deliberately corrects that: one
+/// (`src/Web/Handler.hs`).  RS deliberately corrects that: one
 /// out-of-range index, one alert.
 #[tokio::test]
 async fn test_method_out_of_range_index_alerts_match_haskell() {
@@ -195,7 +194,7 @@ async fn test_method_out_of_range_index_alerts_match_haskell() {
 #[tokio::test]
 async fn test_autoprove_with_missing_idx_returns_404_html() {
     // Match Haskell: bad theory idx returns 404 HTML (see
-    // `withTheory` / `notFound` in `src/Web/Handler.hs:662-672`).
+    // `withTheory` / `notFound` in `src/Web/Handler.hs`).
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s
         .get("/thy/trace/99/autoprove/idfs/0/False/proof/debug")

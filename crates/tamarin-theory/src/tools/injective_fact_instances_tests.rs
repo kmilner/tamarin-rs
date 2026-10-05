@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 
@@ -152,7 +151,7 @@ fn pair_argument_is_flattened_to_the_right() {
     );
 }
 
-/// `duplicateFirstTerms` (HS InjectiveFactInstances.hs:181-182,188):
+/// `duplicateFirstTerms` (HS InjectiveFactInstances.hs):
 /// a rule with two same-tag conclusions sharing the same first term
 /// cannot be injective — `getMaybeEqMonConclusion` returns `Nothing`
 /// for the duplicated conclusion, so `combineAll` drops the WHOLE tag.
@@ -184,7 +183,7 @@ fn duplicate_first_terms_drops_tag() {
 // (#206: `Artificial::Fin_unique` regression).
 //
 // Mirrors Haskell `simpleInjectiveFactInstances`
-// (InjectiveFactInstances.hs:121-132):
+// (InjectiveFactInstances.hs):
 //
 //   guard $ (factTagMultiplicity tag == Linear)
 //        && (tag `elem` (factTag <$> rPrems ru))
@@ -269,7 +268,7 @@ fn persistent_facts_are_not_injective() {
 /// Arity-0 facts (no args) have no first term to be injective ON, so the
 /// candidate loop drops them via its `if conc.terms.is_empty()` guard —
 /// HS `guard (not (null (factTerms conc)))`
-/// (InjectiveFactInstances.hs:131).
+/// (InjectiveFactInstances.hs).
 #[test]
 fn arity_zero_facts_are_not_injective() {
     use crate::fact::{Fact, FactTag, Multiplicity};

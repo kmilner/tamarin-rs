@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Tools.InjectiveFactInstances`.
 //!
@@ -30,7 +29,7 @@
 //! list over the right-flattened pair-leaves of that position
 //! (`getPairTerms` / `getShape` / `shapeTerm` / `trimmedPairTerms`).  This
 //! mirrors `Theory.Tools.InjectiveFactInstances.simpleInjectiveFactInstances`
-//! (InjectiveFactInstances.hs:100-228).
+//! (InjectiveFactInstances.hs).
 
 use crate::fact::FactTag;
 use crate::rule::ProtoRuleE;
@@ -112,8 +111,8 @@ fn get_pair_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<&tamarin_term::lterm::
     out
 }
 
-/// HS `shapeTerm` (InjectiveFactInstances.hs:198-202 and the identical copy
-/// in Simplify.hs:611-616): unfold the tuple to the right `n - 1` times,
+/// HS `shapeTerm` (InjectiveFactInstances.hs and the identical copy
+/// in Simplify.hs): unfold the tuple to the right `n - 1` times,
 /// returning `n` leaves.  HS errors when the term does not have enough
 /// pairs; that only arises across rules with mismatched shapes, which
 /// `combineShapes` already trims to the shorter shape, so we fall back to
@@ -143,7 +142,7 @@ pub fn shape_term(t: &tamarin_term::lterm::LNTerm, n: usize) -> Vec<tamarin_term
     out
 }
 
-/// HS `trimmedPairTerms` (Simplify.hs:627-628): given an injective fact
+/// HS `trimmedPairTerms` (Simplify.hs): given an injective fact
 /// instance and the tag's behaviour/shape, return its injective identifier
 /// (the first term) and a flat list of `(behaviour, leaf-term)` pairs.
 ///   trimmedPairTerms fa = (firstTerm, concat $ zipWith
@@ -220,7 +219,7 @@ pub fn simple_injective_fact_instances(
         tag: &crate::fact::FactTag,
         t: &LNTerm,
     ) -> Option<&'a crate::fact::LNFact> {
-        // Mirrors HS `getPrem` (InjectiveFactInstances.hs:226-228):
+        // Mirrors HS `getPrem` (InjectiveFactInstances.hs):
         //   case filter (\faPrem -> factTag faPrem == tag && Just tConc == firstTerm faPrem) prems of
         //     [g] -> Just g
         //     _   -> Nothing  -- if there are multiple such guards, the rule cannot be executed
@@ -237,7 +236,7 @@ pub fn simple_injective_fact_instances(
         }
     }
 
-    // HS `getShape` (InjectiveFactInstances.hs:136-138): for each non-first
+    // HS `getShape` (InjectiveFactInstances.hs): for each non-first
     // term, `replicate Unspecified (length (getPairTerms term))`.
     fn get_shape(fact: &LNFact) -> Vec<Vec<MonotonicBehaviour>> {
         fact.terms
@@ -248,8 +247,8 @@ pub fn simple_injective_fact_instances(
     }
 
     // HS `map (map f) $ zipWith zip a b`, written by `combineShapes` with
-    // `fst` (InjectiveFactInstances.hs:141-142) and by `combineAll` with
-    // `combine` (146-149).  Both `zip`s truncate to the shorter list.
+    // `fst` (InjectiveFactInstances.hs) and by `combineAll` with
+    // `combine`.  Both `zip`s truncate to the shorter list.
     fn zip_shapes(
         a: &[Vec<MonotonicBehaviour>],
         b: &[Vec<MonotonicBehaviour>],
@@ -261,7 +260,7 @@ pub fn simple_injective_fact_instances(
             .collect()
     }
 
-    // HS `combineShapes` (InjectiveFactInstances.hs:141-142): keep the left
+    // HS `combineShapes` (InjectiveFactInstances.hs): keep the left
     // behaviour at each surviving position.
     fn combine_shapes(
         a: &[Vec<MonotonicBehaviour>],
@@ -270,7 +269,7 @@ pub fn simple_injective_fact_instances(
         zip_shapes(a, b, |x, _| x)
     }
 
-    // HS `combineAll` (InjectiveFactInstances.hs:144-151) folded over a list
+    // HS `combineAll` (InjectiveFactInstances.hs) folded over a list
     // of `Maybe` shapes.  `Nothing` anywhere ⇒ `Nothing` (non-injective).
     // The empty list yields the default candidate shape.
     fn combine_all(
@@ -291,7 +290,7 @@ pub fn simple_injective_fact_instances(
         Some(acc)
     }
 
-    // HS `extractConstraints` (InjectiveFactInstances.hs:56-62): from a rule
+    // HS `extractConstraints` (InjectiveFactInstances.hs): from a rule
     // restriction, collect `(t1, t2)` pairs from a bare top-level `Subterm`
     // atom (every other formula shape yields `[]`).  Bound variables in a
     // top-level atom are an implementation error in HS; we drop the
@@ -310,7 +309,7 @@ pub fn simple_injective_fact_instances(
     }
 
     // Candidate tags + their default shape.  Mirrors HS `candidates`
-    // (InjectiveFactInstances.hs:121-138): `M.fromListWith combineShapes`
+    // (InjectiveFactInstances.hs): `M.fromListWith combineShapes`
     // over `(tag, combineShapes (getShape conc) (getShape prem))` for each
     // (rule, conc, prem) with:
     //   guard $ (factTagMultiplicity tag == Linear)
@@ -357,7 +356,7 @@ pub fn simple_injective_fact_instances(
         }
     }
 
-    // HS `getMaybeEqStrict tag ru` (InjectiveFactInstances.hs:170-223): the
+    // HS `getMaybeEqStrict tag ru` (InjectiveFactInstances.hs): the
     // per-rule shape, or `Nothing` if the rule violates injectivity for the
     // tag.
     let get_maybe_eq_strict = |tag: &FactTag,
@@ -366,14 +365,14 @@ pub fn simple_injective_fact_instances(
      -> Option<Vec<Vec<MonotonicBehaviour>>> {
         let copies: Vec<&LNFact> = r.conclusions.iter().filter(|c| &c.tag == tag).collect();
         // HS `constraints = concatMap extractConstraints
-        //   (preRestriction (rInfo ru))` (InjectiveFactInstances.hs:100-228, see line 177).
+        //   (preRestriction (rInfo ru))` (InjectiveFactInstances.hs).
         let constraints: Vec<(LNTerm, LNTerm)> = r
             .info
             .restrictions
             .iter()
             .flat_map(extract_constraints)
             .collect();
-        // HS `duplicateFirstTerms` (InjectiveFactInstances.hs:181-182): the
+        // HS `duplicateFirstTerms` (InjectiveFactInstances.hs): the
         // first terms appearing at least twice among `copies`.
         let mut first_term_counts: BTreeMap<&LNTerm, usize> = BTreeMap::new();
         for c in &copies {
@@ -387,7 +386,7 @@ pub fn simple_injective_fact_instances(
             .map(|(t, _)| t)
             .collect();
 
-        // HS `getMaybeEqMonConclusion` (InjectiveFactInstances.hs:185-223).
+        // HS `getMaybeEqMonConclusion` (InjectiveFactInstances.hs).
         let get_maybe_eq_mon_conclusion =
             |fa_conc: &LNFact| -> Option<Vec<Vec<MonotonicBehaviour>>> {
                 let t_conc = first_term(fa_conc)?; // Nothing if no args
@@ -400,7 +399,7 @@ pub fn simple_injective_fact_instances(
                     return Some(default_shape.to_vec());
                 }
                 let fa_prem = copy_premise_for(r, tag, t_conc)?; // violating (2)(b)
-                                                                 // HS `getBehaviour` (InjectiveFactInstances.hs:213-219).
+                                                                 // HS `getBehaviour` (InjectiveFactInstances.hs).
                 let get_behaviour = |t1: &LNTerm, t2: &LNTerm| -> MonotonicBehaviour {
                     if t1 == t2 {
                         Constant
@@ -420,7 +419,7 @@ pub fn simple_injective_fact_instances(
                         Unstable
                     }
                 };
-                // HS `trimmedPairTerms` (InjectiveFactInstances.hs:205-207): unfold
+                // HS `trimmedPairTerms` (InjectiveFactInstances.hs): unfold
                 // each non-first term according to the default shape lengths.
                 let shape_lens: Vec<usize> = default_shape.iter().map(|s| s.len()).collect();
                 let trimmed = |fa: &LNFact| -> Vec<Vec<LNTerm>> {
@@ -468,9 +467,9 @@ pub fn simple_injective_fact_instances(
     out
 }
 
-/// HS `pureStateFactTag` / `pureStateLockFactTag` (Facts.hs:272-276): the two
+/// HS `pureStateFactTag` / `pureStateLockFactTag` (Facts.hs): the two
 /// fact tags `setforcedInjectiveFacts` forces injective when the state-channel
-/// optimisation is on (lib/sapic/src/Sapic.hs:84).  Both are `L_PureState/2` /
+/// optimisation is on (lib/sapic/src/Sapic.hs).  Both are `L_PureState/2` /
 /// `L_CellLocked/2`,
 /// linear, arity 2.
 pub fn pure_state_forced_fact_tags() -> Vec<FactTag> {
@@ -483,7 +482,7 @@ pub fn pure_state_forced_fact_tags() -> Vec<FactTag> {
 
 /// Union the forced-injective fact tags into a computed
 /// `simple_injective_fact_instances` result, mirroring HS `closeRuleCache`
-/// (CloseRule.hs:417-420):
+/// (CloseRule.hs):
 ///
 /// ```haskell
 /// forcedInjFacts' = S.map (\x -> (x, replicate (factTagArity x) [Unspecified])) forcedInjFacts

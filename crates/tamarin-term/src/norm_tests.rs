@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::lterm::{LNTerm, LSort, LVar};
@@ -253,7 +252,7 @@ fn cross_ac_symbol_strule_never_applies() {
 }
 
 /// Both of HS's st-rule arms are guarded on the top symbol's kind —
-/// `FAppNoEq _ _` and `FAppACfct _ _` (Norm.hs:73-74) — so a term headed
+/// `FAppNoEq _ _` and `FAppACfct _ _` (Norm.hs) — so a term headed
 /// by a builtin AC operator or by `em` never reaches `struleApplicable`,
 /// however permissive the rule's LHS.  The sharpest witness is an st rule
 /// whose LHS is a bare variable: it matches every subject term, so an
@@ -265,7 +264,7 @@ fn cross_ac_symbol_strule_never_applies() {
 /// The rule is built directly because the text frontend cannot produce it:
 /// `rrule_to_ctxt_st_rule`'s ground-RHS branch rejects a bare-literal LHS
 /// outright (the deliberate divergence from HS's non-exhaustive
-/// `constantPositions`, SubtermRule.hs:67-71), and its non-ground branch
+/// `constantPositions`, SubtermRule.hs), and its non-ground branch
 /// rejects because every position it can find inside a variable LHS is the
 /// empty one.  `CtxtStRule` is `pub`, so the gate is what keeps `go_nf`
 /// HS-faithful for any in-process constructor.

@@ -1,12 +1,11 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! The formula utilities `Accountability.Generation` builds its verification
-//! conditions from (lib/accountability/src/Accountability/Generation.hs:22-160).
+//! conditions from (lib/accountability/src/Accountability/Generation.hs).
 //!
 //! The formula is `tamarin_theory::formula::SyntacticLNFormula`, the type HS
-//! writes these generators over (Generation.hs:37-45): binders are De Bruijn
+//! writes these generators over (Generation.hs): binders are De Bruijn
 //! (`BVar::Bound`), free variables are `LVar`s, and the atoms carry the
 //! internal terms.  The generators themselves and the intermediate
 //! transformation are in `generation.rs`.
@@ -22,20 +21,20 @@ use tamarin_theory::formula::{
     BLNTerm, ProtoFormula, SyntacticLNFormula,
 };
 
-// The connective/quantifier enums (HS Theory/Model/Formula.hs:107,111) are
+// The connective/quantifier enums (HS Theory/Model/Formula.hs) are
 // shared with the ProtoFormula data-type port in `tamarin_theory::formula`.
 pub(crate) use tamarin_theory::formula::{Connective as Conn, Quantifier as Quant};
 
 // =============================================================================
-// Term / atom builders (Generation.hs:44-86)
+// Term / atom builders (Generation.hs)
 // =============================================================================
 
-/// HS `tempVar name = LVar name LSortNode 0` (Generation.hs:53-54).
+/// HS `tempVar name = LVar name LSortNode 0` (Generation.hs).
 pub(crate) fn temp_var(name: &str) -> LVar {
     LVar::new(name, LSort::Node, 0)
 }
 
-/// HS `msgVar name = LVar name LSortMsg 0` (Generation.hs:56-57).
+/// HS `msgVar name = LVar name LSortMsg 0` (Generation.hs).
 fn msg_var(name: &str) -> LVar {
     LVar::new(name, LSort::Msg, 0)
 }
@@ -46,20 +45,20 @@ pub(crate) fn free_term(v: LVar) -> BLNTerm {
 }
 
 /// HS `tempTerm name = varTerm $ Free $ LVar name LSortNode 0`
-/// (Generation.hs:47-48).
+/// (Generation.hs).
 fn temp_term(name: &str) -> BLNTerm {
     free_term(temp_var(name))
 }
 
 /// HS `msgTerm name = varTerm $ Free $ LVar name LSortMsg 0`
-/// (Generation.hs:50-51).
+/// (Generation.hs).
 fn msg_term(name: &str) -> BLNTerm {
     free_term(msg_var(name))
 }
 
 /// HS `protoFactFormula name terms at = Ato $ Action at $ protoFact Linear
-/// name terms` (Generation.hs:44-45), where `protoFact` tags the fact with
-/// its name and argument count (Theory/Model/Fact.hs:311-312).
+/// name terms` (Generation.hs), where `protoFact` tags the fact with
+/// its name and argument count (Theory/Model/Fact.hs).
 pub(crate) fn proto_fact_formula(
     name: &str,
     terms: Vec<BLNTerm>,
@@ -74,14 +73,14 @@ pub(crate) fn proto_fact_formula(
 }
 
 /// HS `eq x y = Ato $ EqE (varTerm $ Free x) (varTerm $ Free y)`
-/// (Generation.hs:72-73).
+/// (Generation.hs).
 fn eq_vars(x: &LVar, y: &LVar) -> SyntacticLNFormula {
     ProtoFormula::Atom(ProtoAtom::EqE(free_term(*x), free_term(*y)))
 }
 
 /// HS `ntuple vars = foldr1 (curry fAppPair) (map (varTerm . Free) vars)`
-/// (Generation.hs:82-83): a singleton is the bare term, longer lists nest to
-/// the right through `fAppPair` (Term/Term.hs:161-163).
+/// (Generation.hs): a singleton is the bare term, longer lists nest to
+/// the right through `fAppPair` (Term/Term.hs).
 fn ntuple(vars: &[LVar]) -> BLNTerm {
     let mut it = vars.iter().rev().copied().map(free_term);
     let mut acc = it.next().expect("ntuple: empty variable list");
@@ -91,17 +90,17 @@ fn ntuple(vars: &[LVar]) -> BLNTerm {
     acc
 }
 
-/// HS `varsEq l r = Ato $ EqE (ntuple l) (ntuple r)` (Generation.hs:85-86).
+/// HS `varsEq l r = Ato $ EqE (ntuple l) (ntuple r)` (Generation.hs).
 pub(crate) fn vars_eq(l: &[LVar], r: &[LVar]) -> SyntacticLNFormula {
     ProtoFormula::Atom(ProtoAtom::EqE(ntuple(l), ntuple(r)))
 }
 
-/// HS `isElem v vars = foldr1 (.||.) (map (eq v) vars)` (Generation.hs:70-73).
+/// HS `isElem v vars = foldr1 (.||.) (map (eq v) vars)` (Generation.hs).
 fn is_elem(v: &LVar, vars: &[LVar]) -> SyntacticLNFormula {
     fold_r1(Conn::Or, vars.iter().map(|w| eq_vars(v, w)).collect())
 }
 
-/// HS `corruptSubsetFrees vars` (Generation.hs:65-68):
+/// HS `corruptSubsetFrees vars` (Generation.hs):
 /// `∀ a i. Corrupted(a)@i ⇒ isElem a vars`.
 pub(crate) fn corrupt_subset_frees(vars: &[LVar]) -> SyntacticLNFormula {
     let body = proto_fact_formula("Corrupted", vec![msg_term("a")], temp_term("i"))
@@ -110,7 +109,7 @@ pub(crate) fn corrupt_subset_frees(vars: &[LVar]) -> SyntacticLNFormula {
 }
 
 /// HS `strictSubsetOf lhs rhs = subset lhs rhs .&&. strict lhs rhs`
-/// (Generation.hs:75-80).
+/// (Generation.hs).
 pub(crate) fn strict_subset_of(lhs: &[LVar], rhs: &[LVar]) -> SyntacticLNFormula {
     // subset xs ys = foldr1 (.&&.) (map (\x -> foldr1 (.||.) (map (eq x) ys)) xs)
     let subset = fold_r1(
@@ -130,7 +129,7 @@ pub(crate) fn strict_subset_of(lhs: &[LVar], rhs: &[LVar]) -> SyntacticLNFormula
 }
 
 // =============================================================================
-// Connective folds (Generation.hs:105-110)
+// Connective folds (Generation.hs)
 // =============================================================================
 
 /// HS `foldr1 op` for a non-empty list; right-associative.
@@ -150,7 +149,7 @@ pub(crate) fn fold_l1(op: Conn, fms: Vec<SyntacticLNFormula>) -> SyntacticLNForm
     })
 }
 
-/// HS `foldConn` (Generation.hs:105-110): a singleton is itself, otherwise
+/// HS `foldConn` (Generation.hs): a singleton is itself, otherwise
 /// `foldl1 op`.
 pub(crate) fn fold_conn(op: Conn, fms: Vec<SyntacticLNFormula>) -> SyntacticLNFormula {
     if fms.len() == 1 {
@@ -161,11 +160,11 @@ pub(crate) fn fold_conn(op: Conn, fms: Vec<SyntacticLNFormula>) -> SyntacticLNFo
 }
 
 // =============================================================================
-// Quantifier introduction (Generation.hs:37-42)
+// Quantifier introduction (Generation.hs)
 // =============================================================================
 
-/// HS `hinted quan v = quan (hint v) v` (Theory/Model/Formula.hs:364-365):
-/// the hint is the variable's name and sort (Theory/Model/Formula.hs:227-228).
+/// HS `hinted quan v = quan (hint v) v` (Theory/Model/Formula.hs):
+/// the hint is the variable's name and sort (Theory/Model/Formula.hs).
 fn qua_var(quant: Quant, x: &LVar, fm: SyntacticLNFormula) -> SyntacticLNFormula {
     let hint = (x.name.to_string(), x.sort);
     match quant {
@@ -175,7 +174,7 @@ fn qua_var(quant: Quant, x: &LVar, fm: SyntacticLNFormula) -> SyntacticLNFormula
 }
 
 /// HS `quantifyVars quan vars fm = foldr (hinted quan) fm vars`
-/// (Generation.hs:37-38): `vars[0]` is the OUTERMOST binder, `vars[last]` the
+/// (Generation.hs): `vars[0]` is the OUTERMOST binder, `vars[last]` the
 /// innermost.
 pub(crate) fn quantify_vars(
     quant: Quant,
@@ -186,21 +185,21 @@ pub(crate) fn quantify_vars(
 }
 
 /// HS `quantifyFrees quan fm = quantifyVars quan (frees fm) fm`
-/// (Generation.hs:41-42).
+/// (Generation.hs).
 pub(crate) fn quantify_frees(quant: Quant, fm: SyntacticLNFormula) -> SyntacticLNFormula {
     let vs = formula_frees(&fm);
     quantify_vars(quant, &vs, fm)
 }
 
 // =============================================================================
-// rename (Term/LTerm.hs:634-645)
+// rename (Term/LTerm.hs)
 // =============================================================================
 
-/// HS `rename` (Term/LTerm.hs:638-645): shift every free variable's index by
+/// HS `rename` (Term/LTerm.hs): shift every free variable's index by
 /// `freshStart - minVarIdx`, drawing `maxVarIdx - minVarIdx + 1` fresh
 /// identifiers from `counter`.  `formula_frees` is sorted by `Ord LVar`,
-/// which compares the index first (LTerm.hs:546-548), so its ends are the
-/// bounds HS `boundsVarIdx` folds (LTerm.hs:673-675).
+/// which compares the index first (LTerm.hs), so its ends are the
+/// bounds HS `boundsVarIdx` folds (LTerm.hs).
 pub(crate) fn rename(fm: &SyntacticLNFormula, counter: &mut u64) -> SyntacticLNFormula {
     let vars = formula_frees(fm);
     let (Some(first), Some(last)) = (vars.first(), vars.last()) else {
@@ -216,10 +215,10 @@ pub(crate) fn rename(fm: &SyntacticLNFormula, counter: &mut u64) -> SyntacticLNF
 }
 
 // =============================================================================
-// Atom queries (Generation.hs:112-118)
+// Atom queries (Generation.hs)
 // =============================================================================
 
-/// HS `formulaActionFacts` (Generation.hs:112-118): the `Fact`s appearing in
+/// HS `formulaActionFacts` (Generation.hs): the `Fact`s appearing in
 /// `Action` atoms of a formula.
 pub(crate) fn formula_action_facts(fm: &SyntacticLNFormula) -> Vec<Fact<BLNTerm>> {
     formula_facts(fm).into_iter().cloned().collect()
@@ -227,7 +226,7 @@ pub(crate) fn formula_action_facts(fm: &SyntacticLNFormula) -> Vec<Fact<BLNTerm>
 
 /// The `Fact`s appearing in the predicate-sugar atoms of a formula — the
 /// atoms HS `expandFormula` resolves against the theory's predicates
-/// (Theory/Syntactic/Predicate.hs:82-92).
+/// (Theory/Syntactic/Predicate.hs).
 pub(crate) fn formula_pred_facts(fm: &SyntacticLNFormula) -> Vec<Fact<BLNTerm>> {
     let mut out = Vec::new();
     for_each_formula_atom(fm, &mut |a| {
@@ -257,7 +256,7 @@ mod tests {
     }
 
     /// `rename` shifts free-var indices and advances the counter by the
-    /// (max-min+1) span (HS Term/LTerm.hs:638-645).
+    /// (max-min+1) span (HS Term/LTerm.hs).
     #[test]
     fn rename_shifts_and_advances_counter() {
         let fm = ProtoFormula::exists(("i".to_string(), LSort::Node), action_a_x_at_i(0));

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Model.Fact` from `lib/theory/src/Theory/Model/Fact.hs`.
 //!
@@ -135,7 +134,7 @@ pub struct Fact<T> {
 }
 
 // Equality, ordering and hashing read `tag` and `terms` only.  `annotations` is
-// excluded because HS `Eq`/`Ord LNFact` treat it as metadata (Theory/Model/Fact.hs:169-174,
+// excluded because HS `Eq`/`Ord LNFact` treat it as metadata (Theory/Model/Fact.hs,
 // whose line-169 comment reads "Ignore annotations in equality and ord
 // testing"); `bloom` is excluded because it is an out-of-band skip fingerprint
 // of the terms' frees (a superset of them, or the `u64::MAX` sentinel), not
@@ -259,7 +258,7 @@ impl<T> Fact<T> {
             max_var: u64::MAX,
         }
     }
-    /// Borrowing map — the HS `Functor Fact` instance (Theory/Model/Fact.hs:176-177) for
+    /// Borrowing map — the HS `Functor Fact` instance (Theory/Model/Fact.hs) for
     /// producers holding a `&Fact`.  Clones `tag`/`annotations` and stores both
     /// fingerprints as `u64::MAX`, exactly like [`Fact::new`]/[`Fact::map`]; the
     /// same recompute guidance applies if a hot LNFact producer routes here.
@@ -273,7 +272,7 @@ impl<T> Fact<T> {
         }
     }
     /// Fallible borrowing map — the HS `Traversable Fact` instance
-    /// (Theory/Model/Fact.hs:182-184) specialised to `Result`; short-circuits on the first
+    /// (Theory/Model/Fact.hs) specialised to `Result`; short-circuits on the first
     /// `Err`.  Same `tag`/`annotations` clone and `u64::MAX` fingerprints as
     /// [`Fact::map_ref`].
     pub fn try_map_ref<U, E>(&self, f: impl FnMut(&T) -> Result<U, E>) -> Result<Fact<U>, E> {
@@ -359,7 +358,7 @@ impl<T: HasFrees + Clone> HasFrees for Fact<T> {
     }
 }
 
-/// HS `Apply s t => Apply s (Fact t)` (Theory/Model/Fact.hs:196-197): the
+/// HS `Apply s t => Apply s (Fact t)` (Theory/Model/Fact.hs): the
 /// substitution reaches the fact's terms.  A rewritten fact goes through the
 /// computing constructor, which derives both cached fingerprints from the
 /// rewritten terms: their free variables differ from this fact's, so this
@@ -395,7 +394,7 @@ pub fn fact_tag_name(t: &FactTag) -> String {
     }
 }
 
-/// `showFactTag` (Theory/Model/Fact.hs:547-554): `factTagName` prefixed with `!` for
+/// `showFactTag` (Theory/Model/Fact.hs): `factTagName` prefixed with `!` for
 /// persistent facts.
 pub fn show_fact_tag(t: &FactTag) -> String {
     let prefix = if fact_tag_multiplicity(t) == Multiplicity::Persistent {
@@ -421,7 +420,7 @@ pub fn fact_tag_arity(t: &FactTag) -> usize {
 }
 
 pub fn fact_tag_multiplicity(t: &FactTag) -> Multiplicity {
-    // Mirror Haskell's `factTagMultiplicity` (Theory/Model/Fact.hs:383-388):
+    // Mirror Haskell's `factTagMultiplicity` (Theory/Model/Fact.hs):
     //
     //   factTagMultiplicity tag = case tag of
     //       ProtoFact multi _ _ -> multi
@@ -459,7 +458,7 @@ impl<T> Fact<T> {
         self.tag == FactTag::Kd
     }
     /// Mirrors Haskell `Theory.Model.Fact.isNoSourcesFact`
-    /// (Theory/Model/Fact.hs:434-436): returns true iff this fact has the
+    /// (Theory/Model/Fact.hs): returns true iff this fact has the
     /// `NoSources` annotation (set via `[no_sources]` on a fact).
     /// Used by `safeGoal` to exclude premise solving during
     /// saturate-time `solveAllSafeGoals`.
@@ -468,14 +467,14 @@ impl<T> Fact<T> {
     }
 }
 
-/// HS `isProtoFact` (Theory/Model/Fact.hs:338-341): a fact tagged
+/// HS `isProtoFact` (Theory/Model/Fact.hs): a fact tagged
 /// `ProtoFact`, i.e. one of the theory's own facts rather than a special
 /// tag.
 pub fn is_proto_fact<T>(f: &Fact<T>) -> bool {
     matches!(f.tag, FactTag::Proto(..))
 }
 
-/// HS `isKLogFact` (Theory/Model/Fact.hs:348-350): the protocol fact named
+/// HS `isKLogFact` (Theory/Model/Fact.hs): the protocol fact named
 /// `K`, which the intruder rule `isend` emits as an action
 /// ([`k_log_fact`]).  Its tag is a `ProtoFact`, so [`is_proto_fact`] holds of
 /// it too.
@@ -483,11 +482,11 @@ pub fn is_k_log_fact<T>(f: &Fact<T>) -> bool {
     is_proto_fact(f) && fact_tag_name(&f.tag) == "K"
 }
 
-/// Mirrors Haskell `Theory.Model.Fact.isKDXorFact` (Theory/Model/Fact.hs:262-265):
+/// Mirrors Haskell `Theory.Model.Fact.isKDXorFact` (Theory/Model/Fact.hs):
 /// returns true iff this is a KD-tagged fact whose single term is
 /// `xor`-headed.  Used by `safeGoal` and `isKDPrem` to exclude
 /// Xor-KD goals from saturate-time solving — Xor-KD goals are
-/// re-inserted directly by `insertAction` (Sources.hs:158-159).
+/// re-inserted directly by `insertAction` (Sources.hs).
 pub fn is_kd_xor_fact(fa: &LNFact) -> bool {
     use tamarin_term::function_symbols::{AcSym, FunSym};
     use tamarin_term::term::Term;
@@ -498,7 +497,7 @@ pub fn is_kd_xor_fact(fa: &LNFact) -> bool {
 }
 
 /// The single term of a KU-fact — the shape shared by the `isTrivialKUFact`
-/// family below (Theory/Model/Fact.hs:242-255).
+/// family below (Theory/Model/Fact.hs).
 fn ku_fact_term(fa: &LNFact) -> Option<&LNTerm> {
     match &fa.terms[..] {
         [t] if fa.tag == FactTag::Ku => Some(t),
@@ -506,13 +505,13 @@ fn ku_fact_term(fa: &LNFact) -> Option<&LNTerm> {
     }
 }
 
-/// Mirrors Haskell `isTrivialKUFact` (Theory/Model/Fact.hs:242-245): a KU-fact whose single
+/// Mirrors Haskell `isTrivialKUFact` (Theory/Model/Fact.hs): a KU-fact whose single
 /// term is a plain message variable.
 pub fn is_trivial_ku_fact(fa: &LNFact) -> bool {
     ku_fact_term(fa).is_some_and(tamarin_term::lterm::is_msg_var)
 }
 
-/// Mirrors Haskell `isNearlyTrivialKUFact` (Theory/Model/Fact.hs:247-250): a KU-fact whose
+/// Mirrors Haskell `isNearlyTrivialKUFact` (Theory/Model/Fact.hs): a KU-fact whose
 /// single term applies `sym` to message variables only.
 pub fn is_nearly_trivial_ku_fact(
     sym: &tamarin_term::function_symbols::FunSym,
@@ -527,7 +526,7 @@ pub fn is_nearly_trivial_ku_fact(
 
 pub type LNFact = Fact<LNTerm>;
 
-/// HS `applyMacroInFact` (Theory/Model/Fact.hs:323-325): the theory's macros
+/// HS `applyMacroInFact` (Theory/Model/Fact.hs): the theory's macros
 /// applied to every term of a fact, tag and annotations kept.
 pub fn apply_macro_in_fact(macros: &[LNMacro], f: &LNFact) -> LNFact {
     let terms: Vec<LNTerm> = f
@@ -538,7 +537,7 @@ pub fn apply_macro_in_fact(macros: &[LNMacro], f: &LNFact) -> LNFact {
     Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
 }
 
-/// HS `instance Apply s t => Apply s (Fact t)` (Theory/Model/Fact.hs:196-197,
+/// HS `instance Apply s t => Apply s (Fact t)` (Theory/Model/Fact.hs,
 /// `apply subst = fmap (apply subst)`): a free substitution applied to every
 /// term of a fact, tag and annotations kept.
 pub(crate) fn apply_subst_fact(
@@ -571,7 +570,7 @@ pub fn kd_fact(t: LNTerm) -> LNFact {
     Fact::fresh(FactTag::Kd, vec![t])
 }
 
-/// `kLogFact` from Haskell's `Theory/Model/Fact.hs:301-303`:
+/// `kLogFact` from Haskell's `Theory/Model/Fact.hs`:
 ///   `kLogFact = protoFact Linear "K" . return`
 ///
 /// ISend's action — the trace event "the intruder knows m".  A
@@ -590,13 +589,13 @@ pub fn proto_fact(mult: Multiplicity, name: &str, terms: Vec<LNTerm>) -> LNFact 
     )
 }
 
-/// HS `newVariables` (Theory/Model/Fact.hs:524-529): the variables of `concs`
+/// HS `newVariables` (Theory/Model/Fact.hs): the variables of `concs`
 /// not free in `prems`, as `varTerm`s in `S.toList` (sorted `LVar`) order.
 /// Call sites compose the second argument as HS does: the rule elaboration
 /// and `apply_macro_in_rule` pass `cs ++ as`
-/// (Theory/Text/Parser/Rule.hs:121-154, Theory/Model/Rule.hs:1121); the
+/// (Theory/Text/Parser/Rule.hs, Theory/Model/Rule.hs); the
 /// intruder-variant and SAPIC rule builders pass the conclusions alone
-/// (Theory/Text/Parser/Rule.hs:161, Sapic/Facts.hs:379).
+/// (Theory/Text/Parser/Rule.hs, Sapic/Facts.hs).
 pub fn new_variables(prems: &[LNFact], concs: &[LNFact]) -> Vec<LNTerm> {
     let mut prem_vars: BTreeSet<LVar> = BTreeSet::new();
     for f in prems {
@@ -617,7 +616,7 @@ pub fn new_variables(prems: &[LNFact], concs: &[LNFact]) -> Vec<LNTerm> {
 }
 
 /// View a protocol or `In` fact's terms. Port of HS `protoOrInFactView`
-/// (Theory/Model/Fact.hs:358-364): a `ProtoFact` yields its terms; an `In` fact (arity 1)
+/// (Theory/Model/Fact.hs): a `ProtoFact` yields its terms; an `In` fact (arity 1)
 /// yields its single term; anything else is `None`. A malformed `In` fact
 /// (arity ≠ 1) panics, mirroring HS `errMalformed`.
 pub fn proto_or_in_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
@@ -632,7 +631,7 @@ pub fn proto_or_in_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
 }
 
 /// View a protocol or `Out` fact's terms. Port of HS `protoOrOutFactView`
-/// (Theory/Model/Fact.hs:366-372).
+/// (Theory/Model/Fact.hs).
 pub fn proto_or_out_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
     match &fa.tag {
         FactTag::Proto(..) => Some(fa.terms.to_vec()),
@@ -644,7 +643,7 @@ pub fn proto_or_out_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
     }
 }
 
-/// Mirrors Haskell `lvarToLnterm` (Theory/Model/Fact.hs:331-333): a variable as a term, with
+/// Mirrors Haskell `lvarToLnterm` (Theory/Model/Fact.hs): a variable as a term, with
 /// `LSortNat` variables re-sorted to `LSortFresh` (so they can be bound by an
 /// `Fr`-premise); every other sort is kept as is.
 pub fn lvar_to_lnterm(v: &LVar) -> LNTerm {
@@ -665,7 +664,7 @@ pub fn lvar_to_lnterm(v: &LVar) -> LNTerm {
 // Pretty printing
 // =============================================================================
 
-/// HS `showFactAnnotation` (Theory/Model/Fact.hs:559-564).
+/// HS `showFactAnnotation` (Theory/Model/Fact.hs).
 fn show_fact_annotation(a: FactAnnotation) -> &'static str {
     match a {
         FactAnnotation::SolveFirst => "+",
@@ -674,9 +673,9 @@ fn show_fact_annotation(a: FactAnnotation) -> &'static str {
     }
 }
 
-/// HS's DERIVED `Show FactTag` (Theory/Model/Fact.hs:137-148) — the
+/// HS's DERIVED `Show FactTag` (Theory/Model/Fact.hs) — the
 /// constructor spelling [`pretty_fact`] puts after `MALFORMED-`
-/// (Theory/Model/Fact.hs:569), which is a different string from
+/// (Theory/Model/Fact.hs), which is a different string from
 /// [`show_fact_tag`].  A `Proto` name is an identifier, so Haskell's `show`
 /// for its `String` field is the name in double quotes.
 pub(crate) fn show_fact_tag_derived(t: &FactTag) -> String {
@@ -698,7 +697,7 @@ pub(crate) fn show_fact_tag_derived(t: &FactTag) -> String {
     }
 }
 
-/// HS's DERIVED `Show FactAnnotation` (Theory/Model/Fact.hs:154-155) — the
+/// HS's DERIVED `Show FactAnnotation` (Theory/Model/Fact.hs) — the
 /// constructor spelling, which is a different string from the concrete
 /// syntax [`show_fact_annotation`] writes.
 fn show_fact_annotation_derived(a: FactAnnotation) -> &'static str {
@@ -709,7 +708,7 @@ fn show_fact_annotation_derived(a: FactAnnotation) -> &'static str {
     }
 }
 
-/// HS's DERIVED `Show (Fact t)` (Theory/Model/Fact.hs:158-163) at
+/// HS's DERIVED `Show (Fact t)` (Theory/Model/Fact.hs) at
 /// `t = VTerm Name (BVar LVar)`, the fact type a formula's `Action` atom
 /// carries.  Record syntax, each field at precedence 0: the tag through
 /// [`show_fact_tag_derived`], the annotation set as `fromList ` before the
@@ -733,16 +732,16 @@ pub fn show_bl_fact(fa: &Fact<VTerm<Name, BVar<LVar>>>) -> String {
 }
 
 /// HS `ppFact n t = nestShort' (n ++ "(") ")" . fsep . punctuate comma $
-/// map ppTerm t` (Theory/Model/Fact.hs:572), with `nestShort' lead finish =
+/// map ppTerm t` (Theory/Model/Fact.hs), with `nestShort' lead finish =
 /// nestShort (length lead + 1) (text lead) (text finish)` and `nestShort n
 /// lead finish body = sep [lead $$ nest n body, finish]`
-/// (Text/PrettyPrint/Class.hs:218-223).
+/// (Text/PrettyPrint/Class.hs).
 fn pp_fact<T>(pp_term: &dyn Fn(&T) -> Doc, n: &str, ts: &[T]) -> Doc {
     let args: Vec<Doc> = ts.iter().map(pp_term).collect();
     nest_short_doc(&format!("{n}("), ")", fsep(punctuate(Doc::char(','), args)))
 }
 
-/// HS `ppAnn ann` (Theory/Model/Fact.hs:573-574): the empty set prints as
+/// HS `ppAnn ann` (Theory/Model/Fact.hs): the empty set prints as
 /// `emptyDoc`, any other as `brackets . fsep . punctuate comma` over
 /// `S.toList`.  `S.toList` yields `FactAnnotation`'s `Ord` order, which is
 /// the order a `BTreeSet` iterates in.
@@ -755,17 +754,17 @@ fn pp_ann(ann: &BTreeSet<FactAnnotation>) -> Doc {
         .map(|a| Doc::text(show_fact_annotation(*a)))
         .collect();
     // HS `brackets p = char '[' <> p <> char ']'`
-    // (Text/PrettyPrint/Class.hs:150).
+    // (Text/PrettyPrint/Class.hs).
     Doc::char('[')
         .beside(fsep(punctuate(Doc::char(','), items)))
         .beside(Doc::char(']'))
 }
 
-/// HS `prettyFact ppTerm (Fact tag an ts)` (Theory/Model/Fact.hs:566-574):
+/// HS `prettyFact ppTerm (Fact tag an ts)` (Theory/Model/Fact.hs):
 /// the tag, the arguments in parentheses and the annotation suffix.  A tag
 /// whose arity disagrees with the argument count prints its head as
 /// `MALFORMED-` followed by HS's derived `show tag`
-/// (Theory/Model/Fact.hs:569).
+/// (Theory/Model/Fact.hs).
 pub fn pretty_fact<T>(pp_term: &dyn Fn(&T) -> Doc, fa: &Fact<T>) -> Doc {
     let head = if fact_tag_arity(&fa.tag) == fa.terms.len() {
         show_fact_tag(&fa.tag)
@@ -775,7 +774,7 @@ pub fn pretty_fact<T>(pp_term: &dyn Fn(&T) -> Doc, fa: &Fact<T>) -> Doc {
     pp_fact(pp_term, &head, &fa.terms).beside(pp_ann(&fa.annotations))
 }
 
-/// HS `prettyLNFact = prettyFact prettyNTerm` (Theory/Model/Fact.hs:581-582).
+/// HS `prettyLNFact = prettyFact prettyNTerm` (Theory/Model/Fact.hs).
 pub fn pretty_lnfact(fa: &LNFact) -> Doc {
     pretty_fact(&|t: &LNTerm| tamarin_term::pretty::pretty_nterm(t), fa)
 }

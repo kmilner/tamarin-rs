@@ -1,16 +1,15 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! `Formula terms` (`checkTerms`) coverage of SAPIC-generated restrictions on
 //! the WEB load path — the twin of the batch `--prove` pin in
 //! `crates/tamarin-prover/tests/sapic_wf_formula_terms.rs`.
 //!
 //! HS runs ONE `checkWellformedness` pass, over the `OpenTranslatedTheory`
-//! (Wellformedness.hs:1270-1286, driven by `checkTranslatedTheory`,
-//! TheoryLoader.hs:559-565 and fed by `closeTheory`, TheoryLoader.hs:726-728).
+//! (Wellformedness.hs, driven by `checkTranslatedTheory`,
+//! TheoryLoader.hs and fed by `closeTheory`, TheoryLoader.hs).
 //! The interactive server shares that loader, so `formulaReports`' `annFormulas`
-//! (Wellformedness.hs:1006-1015) sees the `Restr_<rule>_<i>` restrictions minted
+//! (Wellformedness.hs) sees the `Restr_<rule>_<i>` restrictions minted
 //! while lowering a `let` pattern's `else` branch, exactly as the batch mode
 //! does.  Those restrictions carry the branch's right-hand side verbatim, so a
 //! reducible symbol there — `exp` in `<<'a'^'b','b'>,'c'>` — is an offender.
@@ -66,7 +65,7 @@ fn web_load_reports_formula_terms_for_sapic_else_restriction() {
     tamarin_server::init_process_globals();
     // `derivcheck_timeout = 0` skips the dynamic derivation checks, matching
     // the `--derivcheck-timeout=0` oracle probe (HS `compare derivChecks 0`
-    // returns `Just []` on EQ, TheoryLoader.hs:578-579), so the report holds
+    // returns `Just []` on EQ, TheoryLoader.hs), so the report holds
     // the static checks only.
     let mut cfg = tamarin_server::ServerConfig::new(
         "127.0.0.1:0".parse().unwrap(),

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.Maude.Types`.
 //!
@@ -19,7 +18,7 @@ use crate::vterm::Lit;
 ///
 /// HS `data MaudeLit = MaudeVar Integer LSort | FreshVar Integer LSort |
 /// MaudeConst Integer LSort` derives `Ord` in that variant and field order
-/// (Term/Maude/Types.hs:42-45); it orders the `ConvCtx` maps and the AC
+/// (Term/Maude/Types.hs); it orders the `ConvCtx` maps and the AC
 /// arguments of the terms sent over the Maude wire.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MaudeLit {
@@ -98,7 +97,7 @@ impl ConvCtx {
 /// however, *does* support a `Msg`-sorted constant directly: the emitted
 /// theory declares `op c : Nat -> Msg` and `MaudeConst(i, LSort::Msg)`
 /// prints as `c(i)`.  So to faithfully mirror HS's
-/// `sortOfSkol (SkConst v) = lvarSort v` (Guarded.hs:809-810) — where a
+/// `sortOfSkol (SkConst v) = lvarSort v` (Guarded.hs) — where a
 /// skolemized free variable keeps its *own* sort, which may be `Msg` —
 /// we carry a `Msg`-sorted skolem as a `NameTag::Pub` `Name` whose id
 /// begins with this sentinel, and recognise it here so that
@@ -135,7 +134,7 @@ pub fn lterm_to_mterm_global(t: &LNTerm, ctx: &mut ConvCtx) -> MTerm {
     // `map_lits` rebuilds through `f_app`, so AC args are flattened+sorted
     // and C/EMap args sorted by MaudeLit order after the left-to-right literal
     // imports.  This is HS `lTermToMTerm`'s `fApp o <$> mapM go as`
-    // (Term/Maude/Types.hs:74-85, Raw.hs:111-131).
+    // (Term/Maude/Types.hs, Raw.hs).
     crate::term::map_lits(t, &mut |lit| import_lit(lit, ctx))
 }
 
@@ -228,7 +227,7 @@ pub fn substitute_lookup_var(ctx: &ConvCtx, sort: LSort, idx: u64) -> Option<LVa
     // The sort-tolerant fallback in `lookup_canonical_var_lit` is a known
     // Rust-side compensation, NOT yet traced to its upstream cause.  It
     // diverges from HS `msubstToLSubstVFresh`/`VFree`'s `lookupVar s i =
-    // lookupBinding (MaudeVar i s)` (Term/Maude/Types.hs:153-157, 173-177), which is
+    // lookupBinding (MaudeVar i s)` (Term/Maude/Types.hs), which is
     // strict in the full `MaudeLit` sort and `error`s on a miss — there is no
     // any-sort fallback.  Kept to preserve current corpus parity until the
     // upstream cause is traced; do not change the fallback without a full
@@ -338,7 +337,7 @@ mod tests {
 
     /// Pins the load-bearing sort-tolerant DOMAIN fallback in
     /// `substitute_lookup_var`.  HS `lookupVar s i = lookupBinding
-    /// (MaudeVar i s)` (Term/Maude/Types.hs:153-157) is strict and would
+    /// (MaudeVar i s)` (Term/Maude/Types.hs) is strict and would
     /// `error` on a sort-miss; the Rust fallback instead recovers the
     /// original LVar by (idx, ANY sort).  This test locks the CURRENT Rust
     /// behavior so any change to that fallback is caught and re-validated
@@ -362,7 +361,7 @@ mod tests {
 
     /// Pins the load-bearing sort-tolerant RANGE fallback used by
     /// `mterm_to_lnterm` via `lookup_canonical_var_lit`.  HS `importLit`
-    /// (Term/Maude/Types.hs:94-106, see line 103) is strict on the full sort and on a miss
+    /// (Term/Maude/Types.hs) is strict on the full sort and on a miss
     /// mints a FRESH `LVar` at the widened sort; the Rust fallback instead
     /// recovers the original LVar identity.  Locks current Rust behavior.
     #[test]

@@ -1,12 +1,11 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Faithful port of HS `multRestrictedReport` / `multRestrictedReport'`
-//! (`lib/theory/src/Theory/Tools/Wellformedness.hs:1039-1099`) — the
+//! (`lib/theory/src/Theory/Tools/Wellformedness.hs`) — the
 //! "Multiplication restriction of rules" wellformedness check.
 //!
-//! HS runs the check over `thyProtoRules thy` (Wellformedness.hs:133-134):
+//! HS runs the check over `thyProtoRules thy` (Wellformedness.hs):
 //! every `RuleItem` of the `OpenTranslatedTheory` with the theory's macros
 //! applied — so SAPIC-generated rules are included and macro calls are
 //! already expanded.  The elaborated [`Theory`]'s rules are that same set
@@ -32,8 +31,8 @@
 //! The rendered entry is the header-less body of HS's `WfError` Doc, laid out
 //! by the HughesPJ engine at the width `addComment` renders the whole
 //! wellformedness comment with — HS `addComment c = TextItem ("", render c)`
-//! (TheoryObject.hs:717-718) uses `Text.PrettyPrint.Class.render`
-//! (Text/PrettyPrint/Class.hs:77-78) = HughesPJ's `render`, i.e. the library DEFAULT style
+//! (TheoryObject.hs) uses `Text.PrettyPrint.Class.render`
+//! (Text/PrettyPrint/Class.hs) = HughesPJ's `render`, i.e. the library DEFAULT style
 //! (`lineLength = 100`, `ribbonsPerLine = 1.5` ⇒ `ribbon = 67`), NOT the
 //! console's 110/73.  That is why the rule dump here wraps two columns
 //! earlier than the same rule in the theory body.
@@ -54,20 +53,20 @@ use crate::theory::Theory;
 use super::{WfError, WF_LINE_LENGTH, WF_RIBBON};
 
 /// HS `underlineTopic "Multiplication restriction of rules"`
-/// (Wellformedness.hs:1047-1051) — stored bare here because
+/// (Wellformedness.hs) — stored bare here because
 /// `render_wf_error_report` applies `underline_topic` once per group.
 const TOPIC: &str = "Multiplication restriction of rules";
 
-/// Port of HS `multRestrictedReport` (Wellformedness.hs:1110-1113):
+/// Port of HS `multRestrictedReport` (Wellformedness.hs):
 /// `multRestrictedReport' (irreducibleFunSyms …) (thyProtoRules thy)`.
 ///
 /// `elab` supplies the rules (HS `thyProtoRules`, i.e. macro-applied E-rules of
 /// the translated theory) and its own signature the irreducible-symbol
 /// classification (HS `irreducibleFunSyms $ get (sigpMaudeSig . thySignature)
-/// thy`, Wellformedness.hs:1113).  Each entry's name and attribute block come
+/// thy`, Wellformedness.hs).  Each entry's name and attribute block come
 /// from the rule it dumps, the way HS's `prettyNamedRule` reads
 /// `prettyRuleName ru <> prettyRuleAttributes ru` off the rule
-/// (Theory/Model/Rule.hs:1397-1398).
+/// (Theory/Model/Rule.hs).
 pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
     let irreducible = &elab.signature.irreducible_fun_syms;
     let mut out = Vec::new();
@@ -105,7 +104,7 @@ pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
 // HS `multTerms` / `unbound`
 // =============================================================================
 
-/// HS `multTerms` (Wellformedness.hs:1094-1096):
+/// HS `multTerms` (Wellformedness.hs):
 /// ```text
 /// multTerms t@(viewTerm -> FApp (AC Mult) _)  = [t]
 /// multTerms   (viewTerm -> FApp _         as) = concatMap multTerms as
@@ -122,8 +121,8 @@ fn mult_terms(t: &LNTerm) -> Vec<LNTerm> {
 }
 
 /// HS `unbound ru = [v | v <- frees (get rConcs ru) \\ frees (get rPrems ru),
-/// lvarSort v /= LSortPub]` (Wellformedness.hs:1098-1099).  `frees` is
-/// `sortednub . freesList` (Term/LTerm.hs:613-614), which a `BTreeSet` ordered by
+/// lvarSort v /= LSortPub]` (Wellformedness.hs).  `frees` is
+/// `sortednub . freesList` (Term/LTerm.hs), which a `BTreeSet` ordered by
 /// `Ord LVar` reproduces exactly.
 fn unbound(ru: &ProtoRuleE) -> BTreeSet<LVar> {
     let concs = fact_frees(&ru.conclusions);
@@ -151,7 +150,7 @@ fn fact_frees(facts: &[LNFact]) -> BTreeSet<LVar> {
 // HS `abstractRule`
 // =============================================================================
 
-/// HS `abstractRule` (Wellformedness.hs:1066-1071), run in
+/// HS `abstractRule` (Wellformedness.hs), run in
 /// ``(`evalFreshAvoiding` ru) . (`evalBindT` noBindings)``:
 ///
 /// ```text
@@ -163,14 +162,14 @@ fn fact_frees(facts: &[LNFact]) -> BTreeSet<LVar> {
 /// ```
 ///
 /// HS's binders there are misnamed: `Rule`'s field order is `i ps cs as nvs`
-/// (Theory/Model/Rule.hs:218-225), so `lhs` is the premises, `acts` the
+/// (Theory/Model/Rule.hs), so `lhs` is the premises, `acts` the
 /// CONCLUSIONS and `rhs` the ACTIONS.  The effect is that only the PREMISES
 /// create bindings; conclusions, actions and new variables merely substitute
 /// the ones the premises registered.
 fn abstract_rule(ru: &ProtoRuleE, irreducible: &BTreeSet<FunSym>) -> ProtoRuleE {
     // HS `evalFreshAvoiding … ru` starts the (single, name-agnostic) `Fresh`
     // counter at `avoid ru = maybe 0 (succ . snd) (boundsVarIdx ru)`
-    // (Term/LTerm.hs:680-686) — one past the largest variable index in the rule,
+    // (Term/LTerm.hs) — one past the largest variable index in the rule,
     // or 0 when the rule has no variables at all.
     let mut next_idx = avoid(ru);
     // HS `BindT` state: `M.Map LNTerm LVar`, so one binding per distinct
@@ -215,10 +214,10 @@ fn abstract_rule(ru: &ProtoRuleE, irreducible: &BTreeSet<FunSym>) -> ProtoRuleE 
     }
 }
 
-/// HS `avoid` (Term/LTerm.hs:680-681) over a rule's `frees`: `succ` of the largest
+/// HS `avoid` (Term/LTerm.hs) over a rule's `frees`: `succ` of the largest
 /// variable index, `0` for a variable-free rule.  The rule's info contributes
 /// no variables (`HasFrees RuleAttributes` folds to `mempty`,
-/// Theory/Model/Rule.hs:462-465, and RS lifts `_restrict` formulas out of the
+/// Theory/Model/Rule.hs, and RS lifts `_restrict` formulas out of the
 /// rule before elaboration), so premises, conclusions, actions and new
 /// variables are the whole domain.
 fn avoid(ru: &ProtoRuleE) -> u64 {
@@ -239,7 +238,7 @@ fn avoid(ru: &ProtoRuleE) -> u64 {
     max_idx.map_or(0, |m| m + 1)
 }
 
-/// HS `abstractTerm` (Wellformedness.hs:1073-1076):
+/// HS `abstractTerm` (Wellformedness.hs):
 /// ```text
 /// abstractTerm (viewTerm -> FApp o args) | o `S.member` irreducible =
 ///     fApp o <$> mapM abstractTerm args
@@ -248,7 +247,7 @@ fn avoid(ru: &ProtoRuleE) -> u64 {
 /// ```
 /// The catch-all covers exactly the reducible-headed applications: each is
 /// replaced by a fresh `x.<n>` of the term's own sort, memoised so equal
-/// terms share one variable (HS `importBinding`, Control/Monad/Bind.hs:125-140).
+/// terms share one variable (HS `importBinding`, Control/Monad/Bind.hs).
 fn abstract_term(
     t: &LNTerm,
     irreducible: &BTreeSet<FunSym>,
@@ -276,7 +275,7 @@ fn abstract_term(
     }
 }
 
-/// HS `replaceAbstracted` (Wellformedness.hs:1078-1086): substitute a term
+/// HS `replaceAbstracted` (Wellformedness.hs): substitute a term
 /// the premises already abstracted, otherwise rebuild it structurally.  The
 /// binding lookup happens FIRST, before the head symbol is inspected.
 fn replace_abstracted(t: &LNTerm, bindings: &BTreeMap<LNTerm, LVar>) -> LNTerm {
@@ -299,7 +298,7 @@ fn replace_abstracted(t: &LNTerm, bindings: &BTreeMap<LNTerm, LVar>) -> LNTerm {
 // Rendering
 // =============================================================================
 
-/// The per-rule body of HS's `WfError` (Wellformedness.hs:1053-1064):
+/// The per-rule body of HS's `WfError` (Wellformedness.hs):
 /// ```text
 /// text "The following rule is not multiplication restricted:"
 ///   $-$ nest 2 (prettyProtoRuleE ru)
@@ -313,11 +312,11 @@ fn replace_abstracted(t: &LNTerm, bindings: &BTreeMap<LNTerm, LVar>) -> LNTerm {
 /// The two trailing lines are `mempty` when their list is empty, and HS's
 /// `above_ p _ Empty = p` then drops them without a line of their own.
 /// `.nest(2)` at the end is `prettyWfErrorReport`'s per-group `nest 2`
-/// (Wellformedness.hs:118-125), baked in here so the HughesPJ width decisions
+/// (Wellformedness.hs), baked in here so the HughesPJ width decisions
 /// are made at the body's true column.
 fn entry_doc(ru: &ProtoRuleE, abstracted: &ProtoRuleE, mults: &[LNTerm], unbounds: &[LVar]) -> Doc {
     // `above_g` is HughesPJ's `$+$` — the NON-overlapping vertical join HS's
-    // `$-$` maps to (Text/PrettyPrint/Class.hs:180).  The overlapping `$$` would splice
+    // `$-$` maps to (Text/PrettyPrint/Class.hs).  The overlapping `$$` would splice
     // `text "" $$ nest 2 x` onto one line and swallow the blank separators.
     let mut d = Doc::text("The following rule is not multiplication restricted:")
         .above_g(pretty_proto_rule_e(ru).nest(2))
@@ -329,7 +328,7 @@ fn entry_doc(ru: &ProtoRuleE, abstracted: &ProtoRuleE, mults: &[LNTerm], unbound
         .above_g(Doc::text_hs(""));
     if !mults.is_empty() {
         // HS `prettyLNTermList = fsep . punctuate comma . map prettyLNTerm`
-        // (Wellformedness.hs:146-147).  `<->` is one space, and the text
+        // (Wellformedness.hs).  `<->` is one space, and the text
         // already ends in one — hence the doubled space before the list.
         let list = hpj::fsep(hpj::punctuate(
             Doc::text(","),
@@ -343,8 +342,8 @@ fn entry_doc(ru: &ProtoRuleE, abstracted: &ProtoRuleE, mults: &[LNTerm], unbound
     }
     if !unbounds.is_empty() {
         // HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
-        // (TheoryObject.hs:858-859), and `prettyLVar = text . show`
-        // (LTerm.hs:922-923).
+        // (TheoryObject.hs), and `prettyLVar = text . show`
+        // (LTerm.hs).
         let list = hpj::fsep(hpj::punctuate(
             Doc::text(","),
             unbounds.iter().map(|v| Doc::text(v.to_string())).collect(),

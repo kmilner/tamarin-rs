@@ -1,12 +1,12 @@
 // Accountability lemmas generated from case tests that use user predicates.
 //
-// `translate` (lib/accountability/src/Accountability.hs:42-49) builds an
-// accountability lemma's lemmas with `generateAccountabilityLemmas` (line 46)
+// `translate` (lib/accountability/src/Accountability.hs) builds an
+// accountability lemma's lemmas with `generateAccountabilityLemmas`
 // out of the case-test formulas as the parser stores them — predicate atoms and
-// all — and injects each one with `liftedAddLemma` (line 47).  That is where
-// the sugar goes: `liftedAddLemma` (Theory/Text/Parser.hs:141-150) runs
-// `expandLemma` (TheoryObject.hs:443-450), which replaces every predicate atom
-// through `expandFormula` (Theory/Syntactic/Predicate.hs:82-83).  So `IsBad(a)`
+// all — and injects each one with `liftedAddLemma`.  That is where
+// the sugar goes: `liftedAddLemma` (Theory/Text/Parser.hs) runs
+// `expandLemma` (TheoryObject.hs), which replaces every predicate atom
+// through `expandFormula` (Theory/Syntactic/Predicate.hs).  So `IsBad(a)`
 // reaches the printed lemma as `a = 'bad'` and `Same(x, a)` as `x = a`, while
 // the two `predicate:` blocks stay in the echo as written.
 //
@@ -24,7 +24,7 @@
 //
 // Compared slices: the wf report block, which pins the run clean — a surviving
 // predicate atom reaches `checkGuarded`
-// (Theory/Tools/Wellformedness.hs:988-993) and the formula-term checks — AND
+// (Theory/Tools/Wellformedness.hs) and the formula-term checks — AND
 // the `theory … end` echo, which carries the thirteen generated lemmas.
 
 

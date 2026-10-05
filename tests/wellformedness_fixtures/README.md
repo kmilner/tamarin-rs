@@ -69,7 +69,7 @@ Every fixture carries a `.report` file, so harness 2 pins the whole
 block of every one of them.
 
 The `Left rule`, `Right rule` and `Reserved prefixes` topics of HS
-`checkWellformednessDiff` (Wellformedness.hs:1247-1264) have no fixture
+`checkWellformednessDiff` (Wellformedness.hs) have no fixture
 here, because the port does not implement that pass: `run_batch`
 refuses `--diff` (`crates/tamarin-prover/src/run.rs:2008-2012`),
 `parse_theory` pins the parser AST's `is_diff` to `false`

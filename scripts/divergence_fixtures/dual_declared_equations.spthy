@@ -1,6 +1,6 @@
 // An `equations:` LHS written prefix over a dual-declared name resolves to
 // the NoEq symbol too (`naryOpApp` with eqn=true still goes through
-// `lookupArity`'s NoEq-first lookup, Theory/Text/Parser/Term.hs:62-72,88-105):
+// `lookupArity`'s NoEq-first lookup, Theory/Text/Parser/Term.hs):
 // the equation registers under NoEq `f`, the signature echo prints it
 // `f(x, y) = x` sorted among the pair projections by the derived
 // `Ord CtxtStRule`, and the now-reducible NoEq `f` flags the lemma.

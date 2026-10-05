@@ -1,13 +1,12 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use tamarin_parser::parse_theory;
 
 /// The `Formula terms` findings for `src`: the arm [`super::check_terms`]
 /// contributes to [`super::super::formulas::formula_reports`], HS's
-/// `formulaReports` loop (Wellformedness.hs:1003), over the elaborated
+/// `formulaReports` loop (Wellformedness.hs), over the elaborated
 /// theory the load pipelines check.
 fn check_terms_report(src: &str) -> Vec<WfError> {
     let thy = parse_theory(src, &[]).expect("parse");
@@ -48,7 +47,7 @@ fn reducible_destructor_is_offender() {
     );
 }
 
-/// The offender spelling is HS's `Show (Term a)` (Term/Term/Raw.hs:227-237)
+/// The offender spelling is HS's `Show (Term a)` (Term/Term/Raw.hs)
 /// over `VTerm Name (BVar LVar)`, not `prettyTerm`: a nested application
 /// stays prefix with comma-separated arguments and no space, a bound
 /// variable is the derived `Show (BVar v)` constructor plus its De Bruijn
@@ -156,12 +155,12 @@ fn one_offender(report: &[WfError], want: &str) {
 #[test]
 fn prefix_em_is_a_reducible_c_symbol_even_when_user_declared() {
     // `naryOpApp` routes the prefix spelling `em(…)` to `fAppC EMap` on
-    // the WRITTEN NAME (Theory/Text/Parser/Term.hs:103), so a user
+    // the WRITTEN NAME (Theory/Text/Parser/Term.hs), so a user
     // `functions: em/2` declaration beside `bilinear-pairing` does not
     // turn it into a NoEq symbol.  `C EMap` is subtracted from the
     // irreducible set by `bpReducibleFunSig`
-    // (Term/Term/FunctionSymbols.hs:311-312,
-    // Term/Maude/Signature.hs:120-124), so the enclosing `*` is an
+    // (Term/Term/FunctionSymbols.hs,
+    // Term/Maude/Signature.hs), so the enclosing `*` is an
     // offender even though `f/2`, `em/2` and `AC Mult` all look
     // irreducible by name.
     //
@@ -195,7 +194,7 @@ fn a_user_em_without_bilinear_pairing_is_an_ordinary_symbol() {
 #[test]
 fn em_written_as_alg_app_stays_a_noeq_symbol() {
     // `em{a}b` goes through `binaryAlgApp`, which has no `em` arm and
-    // builds `fAppNoEq ("em", …)` (Theory/Text/Parser/Term.hs:108-121).
+    // builds `fAppNoEq ("em", …)` (Theory/Text/Parser/Term.hs).
     // So it sorts among the NoEq symbols ("em" < "f") instead of after
     // them, unlike the prefix spelling above.
     //
@@ -256,7 +255,7 @@ fn builtin_ac_arguments_are_flattened_and_sorted() {
 #[test]
 fn user_ac_symbol_written_prefix_is_flattened_and_sorted() {
     // A `[AC]` symbol applied prefix is `fAppAC (ACfct …)` whatever the
-    // written arity (Theory/Text/Parser/Term.hs:104-105), so the nested
+    // written arity (Theory/Text/Parser/Term.hs), so the nested
     // `uac('z','a')` is spliced in and the whole list sorted.
     //
     // Oracle bytes (ef3f0468):

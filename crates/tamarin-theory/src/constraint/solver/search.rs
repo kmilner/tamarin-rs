@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Proof-search driver — port of the `Theory.Proof` step loop.
 //!
@@ -24,7 +23,7 @@
 //!
 //! Under the default `Dfs` strategy, termination is bounded by the
 //! ID-DFS depth alone (`MAX_DEPTH`,
-//! doubling from 4) — `cutOnSolvedDFS` (Theory/Proof.hs:854-884) has only
+//! doubling from 4) — `cutOnSolvedDFS` (Theory/Proof.hs) has only
 //! `dMax` and no step/node budget, doubling `dMax` from 4 with no
 //! upper bound.  HS terminates because it deepens over a finite proof
 //! tree (any TERMINATING lemma's tree is finite, so once `dMax`
@@ -58,8 +57,8 @@ pub struct ProofNode {
     /// Whether this step carries a valid constraint-system annotation
     /// (HS `psInfo step == Just sys`).  `false` mirrors HS's
     /// `Nothing`-annotated steps produced by `checkProof`
-    /// (Theory/Proof.hs:447-467, see line 467) when a stored skeleton step could not be
-    /// replayed; `prettyIncrementalProof` (ProofSkeleton.hs:80-84) then
+    /// (Theory/Proof.hs) when a stored skeleton step could not be
+    /// replayed; `prettyIncrementalProof` (ProofSkeleton.hs) then
     /// appends `/* unannotated */`.  Defaults to `true` for every
     /// freshly-searched / successfully-replayed node.
     pub annotated: bool,
@@ -100,7 +99,7 @@ fn is_depth_limited(node: &ProofNode) -> bool {
         && matches!(node.status, NodeStatus::Sorry)
 }
 
-/// HS `ProofStatus` (Theory/Proof.hs:397-407) — the aggregate status of a WHOLE
+/// HS `ProofStatus` (Theory/Proof.hs) — the aggregate status of a WHOLE
 /// proof tree, used to decide the lemma verdict.  Unlike the per-node
 /// [`NodeStatus`], this folds over every step (HS `getProofStatus =
 /// foldMap proofStepStatus`) and therefore correctly ABSORBS verbatim
@@ -119,7 +118,7 @@ pub enum ProofStatus {
 }
 
 impl ProofStatus {
-    /// HS `ProofStatus` Semigroup (Theory/Proof.hs:409-420): precedence
+    /// HS `ProofStatus` Semigroup (Theory/Proof.hs): precedence
     /// `Invalidated > TraceFound > Incomplete > Unfinishable > Complete >
     /// Undetermined`.
     pub fn combine(self, other: ProofStatus) -> ProofStatus {
@@ -148,7 +147,7 @@ impl ProofStatus {
     }
 }
 
-/// HS `proofStepStatus` (Theory/Proof.hs:427-433): the status of ONE node.
+/// HS `proofStepStatus` (Theory/Proof.hs): the status of ONE node.
 /// A node with no system annotation (`annotated == false`, HS `Nothing`)
 /// is `Undetermined` REGARDLESS of its method; otherwise it is keyed on
 /// the node's own method (NOT its aggregated `NodeStatus`).
@@ -166,7 +165,7 @@ pub fn proof_status(node: &ProofNode) -> ProofStatus {
     s
 }
 
-/// HS `proofSystems` (Batch.hs:284-288): every solved constraint system
+/// HS `proofSystems` (Batch.hs): every solved constraint system
 /// in the tree, paired with its proof path (the case names from the
 /// root, outermost first).
 ///
@@ -228,7 +227,7 @@ fn collect_solved_systems_owned(
 ///   peak RSS.
 /// * [`KeepSolved`](SysRetention::KeepSolved) — batch trace output
 ///   (`--output-dot` / `--output-json`), whose HS `outputTraces`
-///   (Batch.hs:252-288) reads exactly the
+///   (Batch.hs) reads exactly the
 ///   `ProofStep (Finished Solved) (Just sys)` nodes and no others.  The
 ///   retained systems are HS `outputTraces`' selector set, held for the
 ///   whole file (moved into `trace_systems`, freed after
@@ -375,12 +374,12 @@ thread_local! {
     /// Set to true by `expand` whenever a node hits `MAX_DEPTH`.  The
     /// top-level loop reads this between iterations to decide whether
     /// to retry with doubled depth.  Mirrors Haskell's `MaybeNoSolution`
-    /// sentinel in `cutOnSolvedDFS` (Theory/Proof.hs:855-877).
+    /// sentinel in `cutOnSolvedDFS` (Theory/Proof.hs).
     static DEPTH_LIMIT_HIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 
     /// `--bound=N` proof-depth bound — HS `boundProofDepth`
-    /// (Theory/Proof.hs:336-344#boundProofDepth), applied by `runAutoProver`'s
-    /// `maybe id boundProver (apBound p)` (Theory/Proof.hs:730-750#runAutoProver): every
+    /// (Theory/Proof.hs#boundProofDepth), applied by `runAutoProver`'s
+    /// `maybe id boundProver (apBound p)` (Theory/Proof.hs#runAutoProver): every
     /// node at depth `N` from the search root is replaced by a
     /// `sorry /* bound N hit */` leaf.  `usize::MAX` = no bound (HS
     /// `apBound = Nothing`, the default).  Unlike `MAX_DEPTH` this is
@@ -461,7 +460,7 @@ impl Drop for SearchTlsGuard {
 /// the default) runs the iterative-deepening DFS described below.
 ///
 /// **Iterative-deepening DFS** — port of Haskell's `cutOnSolvedDFS`
-/// (Theory/Proof.hs:854-884).  Starts at `max_depth=4` and doubles up with
+/// (Theory/Proof.hs).  Starts at `max_depth=4` and doubles up with
 /// only the far-out `usize::MAX/4` loop-termination guard (no fixed
 /// numeric cap).  At each iteration:
 ///   1. Expand the tree at the current `MAX_DEPTH`.  On the first
@@ -518,7 +517,7 @@ pub(crate) fn run_proof_search_at_depth(
     };
     match ctx.cut {
         CutStrategy::SeqDfs => {
-            // HS `cutOnSolvedSingleThreadDFS` (Theory/Proof.hs:795-816):
+            // HS `cutOnSolvedSingleThreadDFS` (Theory/Proof.hs):
             // single-thread DFS with NO iterative deepening and NO depth
             // bound.  One unbounded-depth `expand` pass descends the leftmost
             // branch (CaseName order) to completion, short-circuiting on the
@@ -529,7 +528,7 @@ pub(crate) fn run_proof_search_at_depth(
             // `MAX_DEPTH = usize::MAX` disables the depth cut entirely, so no
             // branch becomes a `depth limit` Sorry, `DEPTH_LIMIT_HIT` never
             // fires, and no re-expansion is needed.  Like HS (the FIXME at
-            // Theory/Proof.hs:793-814) this can fail to terminate on an infinite
+            // Theory/Proof.hs) this can fail to terminate on an infinite
             // leftmost branch; the wall-clock `deadline` is the only backstop.
             MAX_DEPTH.with(|m| m.set(usize::MAX));
             DEPTH_LIMIT_HIT.with(|f| f.set(false));
@@ -537,7 +536,7 @@ pub(crate) fn run_proof_search_at_depth(
             expand(ctx, &mut root, &mut budget, &deadline, 0)?;
         }
         CutStrategy::Nothing => {
-            // HS `CutNothing` → `id` (Theory/Proof.hs:730-750, see line 738): the full DFS proof
+            // HS `CutNothing` → `id` (Theory/Proof.hs): the full DFS proof
             // tree with NO cut and NO stop-on-solved.  Like SeqDfs this is
             // one unbounded-depth serial pass (the serial sibling loop's
             // abort policy below never fires for `Nothing`), and like HS
@@ -549,7 +548,7 @@ pub(crate) fn run_proof_search_at_depth(
             expand(ctx, &mut root, &mut budget, &deadline, 0)?;
         }
         CutStrategy::AfterSorry => {
-            // HS `CutAfterSorry` → `cutAfterFirstSorry` (Theory/Proof.hs:987-997).
+            // HS `CutAfterSorry` → `cutAfterFirstSorry` (Theory/Proof.hs).
             // HS's `M.mapAccum go` never forces a lazy subtree past the
             // abort point; the eager mirror is the serial sibling loop's
             // AfterSorry policy (below): the first Solved-or-Sorry child in
@@ -562,7 +561,7 @@ pub(crate) fn run_proof_search_at_depth(
             expand(ctx, &mut root, &mut budget, &deadline, 0)?;
         }
         CutStrategy::Bfs => {
-            // HS `cutOnSolvedBFS` (Theory/Proof.hs:928-955): force the tree one
+            // HS `cutOnSolvedBFS` (Theory/Proof.hs): force the tree one
             // level deeper per round and walk it with `checkLevel`'s
             // threaded state.  `checkLevel 0`'s `M.null cs` guard FORCES
             // each level-`level` node's case map (so a zero-case solve
@@ -585,7 +584,7 @@ pub(crate) fn run_proof_search_at_depth(
                 } else {
                     re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0)?;
                 }
-                // HS's poor-man's logging (Theory/Proof.hs:928-955, see line 934,941) — `trace` to
+                // HS's poor-man's logging (Theory/Proof.hs) — `trace` to
                 // stderr, unconditional.
                 eprintln!("searching for attacks at depth: {}", level);
                 let mut found = false;
@@ -615,7 +614,7 @@ pub(crate) fn run_proof_search_at_depth(
             }
         }
         CutStrategy::Dfs => {
-            // HS's `cutOnSolvedDFS` (Theory/Proof.hs:855-861) doubles `dMax` from 4
+            // HS's `cutOnSolvedDFS` (Theory/Proof.hs) doubles `dMax` from 4
             // with NO upper bound; we mirror that, keeping only a far-out cap
             // as a loop-termination guard for genuinely non-terminating
             // strategies.  No real Tamarin proof approaches this depth, so the
@@ -626,7 +625,7 @@ pub(crate) fn run_proof_search_at_depth(
             loop {
                 MAX_DEPTH.with(|m| m.set(current_max_depth));
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
-                // HS-faithful: `cutOnSolvedDFS` (Theory/Proof.hs:856-863) bounds the
+                // HS-faithful: `cutOnSolvedDFS` (Theory/Proof.hs) bounds the
                 // search by the ID-DFS depth `dMax` (our `MAX_DEPTH`) and the
                 // per-lemma wall-clock timeout ONLY — it has NO step/node
                 // budget.  A finite step budget would cut off exploration of
@@ -672,7 +671,7 @@ pub(crate) fn run_proof_search_at_depth(
         }
     }
     // HS-faithful: `cutOnSolvedDFS` / `cutOnSolvedSingleThreadDFS`
-    // (Theory/Proof.hs:854-884, 795-816) call `extractSolved path prf0` once a
+    // (Theory/Proof.hs) call `extractSolved path prf0` once a
     // Solved leaf is found, pruning the proof tree to JUST the
     // solved-witness path.  All Contradictory siblings are removed.
     // Without this, Rust's proof_steps count includes failed branches HS
@@ -688,7 +687,7 @@ pub(crate) fn run_proof_search_at_depth(
     Ok(root)
 }
 
-/// HS `cutOnSolvedBFS`'s `checkLevel` (Theory/Proof.hs:943-955) over the eager
+/// HS `cutOnSolvedBFS`'s `checkLevel` (Theory/Proof.hs) over the eager
 /// level-bounded tree: walk to depth `remaining` in CaseName order,
 /// threading `found` (HS TraceFound) and `incomplete` (HS
 /// IncompleteProof) exactly as HS's `State ProofStatus` does.  At depth 0:
@@ -758,7 +757,7 @@ fn bfs_check_level(
     })
 }
 
-/// HS-faithful `extractSolved` (Theory/Proof.hs:879-884, the non-diff
+/// HS-faithful `extractSolved` (Theory/Proof.hs, the non-diff
 /// `cutOnSolvedDFS` variant): walks the proof
 /// tree, finds the first Solved-leaf path from root, and prunes all
 /// non-path siblings.  Mutates `root` in place.
@@ -939,7 +938,7 @@ fn expand(
 /// `Sorry: depth limit` frontier stub (re-expanded next ID-DFS
 /// iteration), when every node is retained, or when solved-node
 /// retention is on and this node is `Finished(Solved)` — HS
-/// `outputTraces`' selector (Batch.hs:285).  Keyed on `method`, not on
+/// `outputTraces`' selector (Batch.hs).  Keyed on `method`, not on
 /// the aggregate [`NodeStatus`], which rolls up from children and would
 /// retain interior nodes too.
 fn drop_sys_after_expand(node: &ProofNode, retention: SysRetention) -> bool {
@@ -962,7 +961,7 @@ fn expand_inner(
     deadline: &std::time::Instant,
     depth: usize,
 ) -> Result<(), ProveError> {
-    // `--bound=N` (HS `boundProofDepth`, Theory/Proof.hs:336-344): `go n`'s
+    // `--bound=N` (HS `boundProofDepth`, Theory/Proof.hs): `go n`'s
     // `0 < n` guard fires before the node is even inspected, so ANY node at
     // depth `bound` — a would-be Solved leaf included — becomes
     // `sorry (Just $ "bound " ++ show bound ++ " hit")`.  Hence this check
@@ -982,7 +981,7 @@ fn expand_inner(
     // (proof_method.rs). Bound-cut nodes above remain wholly unevaluated,
     // matching HS's `boundProofDepth`.
     crate::constraint::solver::trace::trace_state(&node.sys);
-    // ID-DFS depth limit (Haskell `cutOnSolvedDFS` Theory/Proof.hs:855-877).
+    // ID-DFS depth limit (Haskell `cutOnSolvedDFS` Theory/Proof.hs).
     //
     // Haskell's `findSolved` checks `d >= dMax` BEFORE checking the
     // node's method type:
@@ -1035,7 +1034,7 @@ fn expand_inner(
     // path we pick the first surviving method.
     //
     // Reference: `Theory.Constraint.Solver.ProofMethod.rankProofMethods`
-    // (`ProofMethod.hs:520-548`):
+    // (`ProofMethod.hs`):
     //
     //   proofMethods = bool toList insertInduction (isInitialSystem sys)
     //                  ((Simplify, "") :| goals)
@@ -1083,10 +1082,10 @@ fn expand_inner(
     // after the lazy Disj-monad short-circuits other paths.
     //
     // Case iteration order: `execProofMethod`'s `process` helper
-    // (ProofMethod.hs:302-308) builds a `Data.Map` keyed by case name
-    // via `M.fromListWith` (ProofMethod.hs:283-340, see line 307), so
+    // (ProofMethod.hs) builds a `Data.Map` keyed by case name
+    // via `M.fromListWith` (ProofMethod.hs), so
     // entries are alphabetically ordered.  `proveSystemDFS` /
-    // `cutOnSolvedDFS` then walk in map order (Theory/Proof.hs:855-877 —
+    // `cutOnSolvedDFS` then walk in map order (Theory/Proof.hs —
     // `foldMap`, `M.map`).  Our `Vec` preserves creation order
     // (source-file rule order), so sort by name to match Haskell.
     cases.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1099,7 +1098,7 @@ fn expand_inner(
     //
     // Per-child parallelism (env-opt: `TAM_RS_DISABLE_PARALLEL_EXPAND=1`
     // disables; default ON).  Mirrors HS's `parTraversable nfProofMethod`
-    // at `Theory/Proof.hs:854-884, see line 871` (the `nfProofMethod` helper at 871-877)
+    // at `Theory/Proof.hs` (the `nfProofMethod` helper)
     // inside `cutOnSolvedDFS`: HS evaluates each child's
     // proof-method/info/children in parallel via the Eval monad strategy.
     // We do the equivalent by running each child's `expand` on a rayon
@@ -1184,7 +1183,7 @@ fn expand_inner(
                 // breaking deterministic output.
                 //
                 // HS-faithful: HS seeds a fresh FreshT counter per child case from
-                // `avoid sys` (ProofMethod.hs:283-340, see line 306).  Mirror by cloning `ctx.maude`
+                // `avoid sys` (ProofMethod.hs).  Mirror by cloning `ctx.maude`
                 // with its own `fresh_counter` per worker (bounds_max(sys) + 1).
                 //
                 // If a `maude_pool` is configured, also borrow a per-worker
@@ -1266,7 +1265,7 @@ fn expand_inner(
             if abort {
                 match ctx.cut {
                     CutStrategy::AfterSorry => {
-                        // HS `go True` (cutAfterFirstSorry, Theory/Proof.hs:993-994)
+                        // HS `go True` (cutAfterFirstSorry, Theory/Proof.hs)
                         // still exposes a cheap `Finished _` method without
                         // forcing an open node's selected method or children:
                         // finished nodes are preserved after the abort —
@@ -1377,7 +1376,7 @@ fn try_rank_goals(
 /// Insert an `Induction` candidate at the HS-mandated position when the
 /// system is in its initial state and the first formula supports
 /// induction.  Haskell's automatic path (`rankProofMethods`,
-/// ProofMethod.hs:520-548, see line 527) gates `insertInduction` on `isInitialSystem sys`
+/// ProofMethod.hs) gates `insertInduction` on `isInitialSystem sys`
 /// only; `execMethods` then filters non-applicable methods (the
 /// `ginduct` check here is our analog of `getInductionCases`).  Position:
 /// index 0 for `UseInduction`, index 1 (after `Simplify`) for
@@ -1405,7 +1404,7 @@ fn insert_induction_at<T>(out: &mut Vec<T>, sys: &System, ctx: &ProofContext, mk
 
 /// Build the priority-ordered list of candidate proof methods to
 /// try at this node.  Mirrors Haskell's `rankProofMethods`
-/// (`ProofMethod.hs:520-548`):
+/// (`ProofMethod.hs`):
 ///
 ///   proofMethods = bool toList insertInduction (isInitialSystem sys)
 ///                  ((Simplify, "") :| goals)
@@ -1423,7 +1422,7 @@ pub fn candidate_methods(
     ctx: &ProofContext,
     depth: usize,
 ) -> Result<Vec<ProofMethod>, ProveError> {
-    // HS `stoppingMethod` (rankProofMethods, ProofMethod.hs:749-751):
+    // HS `stoppingMethod` (rankProofMethods, ProofMethod.hs):
     // `(Finished <$> isFinished ctxt sys) <|> …` — a finished system's
     // method list is exactly `[Finished r]`, displacing Simplify and every
     // goal.  The web display/apply paths call here directly — e.g. an
@@ -1447,19 +1446,19 @@ fn candidate_methods_open(
     depth: usize,
 ) -> Result<Vec<ProofMethod>, ProveError> {
     // Haskell-faithful: build the FULL ranked goal list, not just the
-    // first one (ProofMethod.hs:520-540).  Haskell's `proofMethods`
+    // first one (ProofMethod.hs).  Haskell's `proofMethods`
     // includes ALL open goals as SolveGoal candidates; `execMethods`
     // then filters via `mapMaybe execMethod` and picks the first that
     // succeeds.  If the highest-ranked goal's SolveGoal returns None
     // (e.g. its dispatch_solve_goal hit Contradictory and was filtered),
     // we fall through to the next-ranked goal.
     //
-    // `depth` drives round-robin heuristic scheduling (ProofMethod.hs:581-590,
+    // `depth` drives round-robin heuristic scheduling (ProofMethod.hs,
     // `useHeuristic`'s `rankings !! (depth `mod` n)`).
     // The selected ranking produced no matches and quitOnEmpty is set:
     // emit ApplySorry.
     // HS: `guard (quitOnEmpty && not (null inp) && null ranked) *> Just ApplySorry`
-    // (ProofMethod.hs:597-622, see line 620, inside `oracleRanking`) — stoppingMethod fires.
+    // (ProofMethod.hs, inside `oracleRanking`) — stoppingMethod fires.
     // We represent this as an empty candidate list with a special Sorry.
     let goals = match try_rank_goals(sys, ctx, depth)? {
         Some(gs) => gs,
@@ -1482,7 +1481,7 @@ fn candidate_methods_open(
 
 /// UI-only variant of [`candidate_methods`] that also returns, for each
 /// method, the explanation string HS's `rankProofMethods` attaches
-/// (`ProofMethod.hs:754-769`).  `Simplify` / `Induction` / stopping
+/// (`ProofMethod.hs`).  `Simplify` / `Induction` / stopping
 /// methods get `""`; each `SolveGoal g` gets
 /// `"nr. " ++ show nr ++ sourceRule ++ usefulnessSuffix`, where
 /// `sourceRule = " (from rule "++getRuleName ru++")"` for the goal's node
@@ -1978,7 +1977,7 @@ mod tests {
 
     #[test]
     fn solved_systems_does_not_recurse_into_solved_node() {
-        // Batch.hs:285 matches `_` children and returns immediately: the
+        // Batch.hs matches `_` children and returns immediately: the
         // solved node's own system is the only result, its solved
         // descendants are invisible.
         let root = node(

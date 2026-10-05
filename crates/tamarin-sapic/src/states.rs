@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Sapic.States` from `lib/sapic/src/Sapic/States.hs`.
 //!
@@ -20,7 +19,7 @@
 //!      translation emits the `L_PureState`/`L_CellLocked` linear facts
 //!      instead of the classical `Insert`/`IsIn`/`Lock` actions.
 //!
-//! This mirrors `annotatePureStates` exactly (States.hs:192-196).
+//! This mirrors `annotatePureStates` exactly (States.hs).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,18 +34,18 @@ use crate::annotation::{AnVar, ProcessAnnotation};
 
 type AnnotatedProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 
-/// HS `stateChannelName = "StateChannel"` (States.hs:75-76).
+/// HS `stateChannelName = "StateChannel"` (States.hs).
 const STATE_CHANNEL_NAME: &str = "StateChannel";
 
 /// HS `isBound boundNames t = S.fromList (frees $ toLNTerm t) ⊆ boundNames`
-/// (States.hs:27-28): the state term's free variables are all bound by names.
+/// (States.hs): the state term's free variables are all bound by names.
 fn is_bound(bound_names: &BTreeSet<LVar>, t: &SapicTerm) -> bool {
     frees_sapic_term(t)
         .into_iter()
         .all(|sv| bound_names.contains(&sv.var))
 }
 
-/// HS `getAllStates` (States.hs:34-66): returns `(boundStates, freeStates)`
+/// HS `getAllStates` (States.hs): returns `(boundStates, freeStates)`
 /// — the set of state terms whose identifier is (resp. is not) fully bound
 /// by names.  `Insert`/`Lock`/`Unlock`/`Lookup` contribute their term to one
 /// of the two sets; `New v` adds `v` to the bound-name scope.
@@ -99,10 +98,10 @@ fn get_all_states(
     }
 }
 
-/// `StateMap`: HS `M.Map SapicTerm (AnVar LVar)` (States.hs:73-73).
+/// `StateMap`: HS `M.Map SapicTerm (AnVar LVar)` (States.hs).
 type StateMap = BTreeMap<SapicTerm, AnVar<LVar>>;
 
-/// HS `addStatesChannels` (States.hs:78-83): seed the fast fresh counter at
+/// HS `addStatesChannels` (States.hs): seed the fast fresh counter at
 /// the existing max `StateChannel` index (`initStateChan`), then descend with
 /// `declareStateChannel`.
 fn add_states_channels(p: AnnotatedProc) -> AnnotatedProc {
@@ -131,7 +130,7 @@ fn add_states_channels(p: AnnotatedProc) -> AnnotatedProc {
     )
 }
 
-/// HS `declareStateChannel` (States.hs:86-114): descend into the process.
+/// HS `declareStateChannel` (States.hs): descend into the process.
 /// When every name of a state term is in scope, declare a fresh
 /// `StateChannel` cell-handle (`new StateChannel:channel`) and record it in
 /// `stateMap`; meanwhile annotate every `Insert`/`Lock`/`Unlock`/`Lookup`
@@ -202,7 +201,7 @@ fn declare_state_channel(
     }
 }
 
-/// HS `addNews` (States.hs:113-114): prefix a `new StateChannel:channel`
+/// HS `addNews` (States.hs): prefix a `new StateChannel:channel`
 /// action (with `is_state_channel = Just term`) for each `(var, term)`.
 fn add_news(pr: AnnotatedProc, new_vars: &[(LVar, SapicTerm)]) -> AnnotatedProc {
     let mut out = pr;
@@ -223,7 +222,7 @@ fn add_news(pr: AnnotatedProc, new_vars: &[(LVar, SapicTerm)]) -> AnnotatedProc 
     out
 }
 
-/// HS `newStates` (States.hs:116-123): mint one fresh `StateChannel` LVar per
+/// HS `newStates` (States.hs): mint one fresh `StateChannel` LVar per
 /// declarable term, accumulating `(LVar, term)` pairs and the extended map.
 /// HS conses each new `(newvar, v)` onto `declared`, so the returned list is
 /// in REVERSE declarable order; we replicate that so `add_news` reproduces
@@ -251,7 +250,7 @@ fn new_states(
     (declared, map)
 }
 
-/// HS `existsAttackerUnpure` (States.hs:131-155): true if some state is
+/// HS `existsAttackerUnpure` (States.hs): true if some state is
 /// accessed in a non-pure fashion (a lone insert/lock/unlock/lookup on an
 /// unbound identifier).  When true, no state is considered pure.
 fn exists_attacker_unpure(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> bool {
@@ -299,7 +298,7 @@ fn exists_attacker_unpure(p: &AnnotatedProc, bound_names: &BTreeSet<LVar>) -> bo
     }
 }
 
-/// HS `isPureState` (States.hs:158-187): decide if a state `target` is pure.
+/// HS `isPureState` (States.hs): decide if a state `target` is pure.
 /// Returns `(isPure, loneInsert)`; `loneInsert` flags at least one lone
 /// insert (the initialisation) for this state.
 fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm, lone_insert: bool) -> (bool, bool) {
@@ -360,7 +359,7 @@ fn is_pure_state(p: &AnnotatedProc, target: &SapicTerm, lone_insert: bool) -> (b
     }
 }
 
-/// HS `annotatePureStates` (States.hs:192-196).
+/// HS `annotatePureStates` (States.hs).
 pub(crate) fn annotate_pure_states(p: AnnotatedProc) -> AnnotatedProc {
     if exists_attacker_unpure(&p, &BTreeSet::new()) {
         add_states_channels(p)
@@ -372,7 +371,7 @@ pub(crate) fn annotate_pure_states(p: AnnotatedProc) -> AnnotatedProc {
     }
 }
 
-/// HS `annotateEachPureStates` (States.hs:201-235): mark `pure_state` on
+/// HS `annotateEachPureStates` (States.hs): mark `pure_state` on
 /// every `lookup`/`unlock`/`lock`/`insert` on a pure cell, and on every
 /// `new StateChannel` whose cell `isPureState` (adding the cell to the
 /// `pureStates` set for the body).
@@ -421,7 +420,7 @@ fn annotate_each_pure_states(p: AnnotatedProc, pure_states: &BTreeSet<SapicTerm>
                     }
                 }
                 // HS's three `Unlock t` / `Lock t` / `Insert t _` guards
-                // (States.hs:219-233) share one body: mark `pureState` when the
+                // (States.hs) share one body: mark `pureState` when the
                 // cell is pure, and recurse either way.
                 SapicAction::Unlock(t) | SapicAction::Lock(t) | SapicAction::Insert(t, _) => {
                     let is_pure = pure_states.contains(t);

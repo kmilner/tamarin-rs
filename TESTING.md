@@ -209,7 +209,7 @@ fast gates do need the oracle binary present to address it.**
 | `ALLOWLIST=<filelist> scripts/web_parity.sh` | interactive-mode gate: crawl + HTML byte comparison |
 | `scripts/bench.sh` | performance tables (see README) |
 
-**CI enforces `cargo fmt`, clippy, HS citation integrity, licence headers,
+**CI enforces `cargo fmt`, clippy,
 `cargo test --workspace`, the 18-file wellformedness roster,
 `scripts/divergence_fixtures/check.sh`, and `rs_ref_check.sh check`.** It runs
 no live Haskell binary. The divergence step compares 55 corner cases with
@@ -963,7 +963,5 @@ exits 2 rather than running with a private fallback.
 
 | Script | Purpose |
 |---|---|
-| `bump_submodule.sh` | submodule bump: patch rebase, oracle rebuild, automatic server-fixture refresh, cite remap, and explicit re-certification checklist (the caches self-invalidate, so none is archived) |
+| `bump_submodule.sh` | submodule bump: patch rebase, oracle rebuild, automatic server-fixture refresh, and explicit re-certification checklist (the caches self-invalidate, so none is archived) |
 | `bench.sh` | RS-vs-HS wall-clock + memory tables (`--write` regenerates the README block) |
-| `check_hs_cites.py` / `remap_hs_cites.py` / `extend_anchor_citations.py` | upstream line-cite validation and remapping |
-| `gen_license_headers.py` (+ `header_identities.json`) | GPL notice maintenance (`--check` for staleness) |

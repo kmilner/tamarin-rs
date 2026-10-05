@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! The `System` sequent — the solver's working state.
 //!
@@ -110,7 +109,7 @@ pub enum Side {
 /// hatch).  A raw write that forgets the stamp/cache bookkeeping no
 /// longer type-checks — that is the enforcement pivot for the
 /// verified-identity `subst_system` skip.
-/// The fields of HS `System` (System.hs:382-400) plus the port's own
+/// The fields of HS `System` (System.hs) plus the port's own
 /// `Arc` wrappers, in a different order from HS's declaration.  Only equality
 /// is derived here, which is order-insensitive; HS's ordering chain is spelled
 /// out by `compare_systems_up_to_new_vars`, so no order may be derived on this
@@ -302,9 +301,9 @@ pub struct System {
     pub source_kind: Option<SourceKind>,
     pub side: Option<Side>,
     /// Monotonic goal-number counter (`_sNextGoalNr`,
-    /// System.hs:383-401, see line 394).  Advanced on every goal insertion (even when
+    /// System.hs).  Advanced on every goal insertion (even when
     /// the goal already exists — HS's `insertGoalStatus`
-    /// Reduction.hs:516-521 always `succ`s it).  Each new goal records
+    /// Reduction.hs always `succ`s it).  Each new goal records
     /// the current value as its `GoalStatus.nr`.
     pub next_goal_nr: u64,
     /// Cached max free-var idx across the system.  `None` means
@@ -518,10 +517,10 @@ pub struct GoalStatus {
     /// Whether the goal is already solved (kept for replay).
     pub solved: bool,
     /// Goal creation order (`_gsNr` in HS `GoalStatus`,
-    /// System.hs:369-380, see line 372).  Assigned from `System.next_goal_nr` at first
+    /// System.hs).  Assigned from `System.next_goal_nr` at first
     /// insertion; on re-insertion of an existing goal HS keeps the
     /// `min` (so the original, smaller nr wins — see
-    /// `combineGoalStatus`).  `goalNrRanking` (ProofMethod.hs:592-593
+    /// `combineGoalStatus`).  `goalNrRanking` (ProofMethod.hs
     /// `sortOn (fst . snd)`) orders goals by this number, NOT by Vec
     /// position.  This is the canonical tie-break within a heuristic
     /// priority class.
@@ -535,7 +534,7 @@ impl PartialOrd for GoalStatus {
 }
 
 /// HS derives `Ord GoalStatus` over `_gsSolved`, `_gsNr`, `_gsLoopBreaker`
-/// (System.hs:369-379).  The port declares `looping` first, so the order is
+/// (System.hs).  The port declares `looping` first, so the order is
 /// written out here instead of derived.
 impl Ord for GoalStatus {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -554,9 +553,9 @@ impl Ord for GoalStatus {
 ///
 /// THE INVARIANT, stated once for all the order helpers: `sNodes` is an
 /// `M.Map NodeId RuleACInst` and `sEdges` / `sLessAtoms` are `Data.Set`s
-/// (System.hs:383-385), `sFormulas` / `sSolvedFormulas` / `sLemmas` are
+/// (System.hs), `sFormulas` / `sSolvedFormulas` / `sLemmas` are
 /// `S.Set LNGuarded` and `sGoals` is an `M.Map Goal GoalStatus`
-/// (System.hs:389-392), so every HS pass that walks them — through `M.toList`,
+/// (System.hs), so every HS pass that walks them — through `M.toList`,
 /// `M.elems` or `S.toList` — sees them in ascending key/element order.  RS
 /// stores all six as `Vec`s in INSERTION order, which carries no map/set
 /// semantics: `Reduction::set_nodes` keeps first-occurrence order because that
@@ -570,11 +569,11 @@ impl Ord for GoalStatus {
 /// [`System::goals_in_map_order`].
 ///
 /// The orders are the HS instances: `Ord NodeId` is `Ord LVar` = idx, then
-/// sort, then name (LTerm.hs:546-548); `Edge`'s derived `Ord` is `src` then
-/// `tgt` (Constraints.hs:79-83); `LessAtom`'s manual `Ord` is
-/// `(smaller, larger)`, ignoring the reason tag (Constraints.hs:126-130);
-/// `Ord Guarded` is derived (Guarded.hs:121-129); `Ord Goal` is derived
-/// (Constraints.hs:159-172), mirrored by [`Goal`]'s own derive.
+/// sort, then name (LTerm.hs); `Edge`'s derived `Ord` is `src` then
+/// `tgt` (Constraints.hs); `LessAtom`'s manual `Ord` is
+/// `(smaller, larger)`, ignoring the reason tag (Constraints.hs);
+/// `Ord Guarded` is derived (Guarded.hs); `Ord Goal` is derived
+/// (Constraints.hs), mirrored by [`Goal`]'s own derive.
 ///
 /// Takes a slice rather than a `&System` so a call site holding only
 /// `&[(NodeId, RuleACInst)]` shares this one implementation.
@@ -598,7 +597,7 @@ pub(crate) fn formulas_in_set_order(formulas: &[Arc<Guarded>]) -> Vec<&Guarded> 
 
 /// [`System::node_rule_map`]'s return: a read-only `NodeId → &RuleACInst`
 /// index into a system's nodes, standing in for HS's `M.lookup v sNodes`
-/// (System.hs:929/931) wherever a caller resolves more than one node.
+/// (System.hs) wherever a caller resolves more than one node.
 pub type NodeRuleMap<'a> = tamarin_utils::FastMap<&'a NodeId, &'a RuleACInst>;
 
 impl System {
@@ -1157,7 +1156,7 @@ impl System {
     }
 
     /// The rule instance at node `v`, if present. Port of HS `nodeRuleSafe`
-    /// (System.hs:913-915): `M.lookup v sNodes`.
+    /// (System.hs): `M.lookup v sNodes`.
     pub fn node_rule_safe(&self, v: &NodeId) -> Option<&RuleACInst> {
         self.nodes.iter().find(|(id, _)| id == v).map(|(_, r)| r)
     }
@@ -1238,7 +1237,7 @@ impl System {
 
     /// All `In`- and protocol-premise terms in the system, as
     /// `(node, premise, term-index, term)`. Port of HS `allPrems`
-    /// (System.hs:896-901).
+    /// (System.hs).
     ///
     /// ORDER: the node walk is `nodes` INSERTION order, where HS walks
     /// `M.toList sNodes` (ascending `NodeId`).  A caller whose output depends
@@ -1266,7 +1265,7 @@ impl System {
     }
 
     /// All unsolved destruction chains, as `(NodeConc, NodePrem)`. Port of HS
-    /// `unsolvedChains` (System.hs:1603-1607).
+    /// `unsolvedChains` (System.hs).
     ///
     /// ORDER: `goals` INSERTION order, where HS walks `M.toList sGoals`
     /// (ascending `Goal`).  A caller that needs the HS sequence sorts the
@@ -1287,7 +1286,7 @@ impl System {
     }
 
     /// All unsolved action atoms, as `(NodeId, &LNFact)`. Port of HS
-    /// `unsolvedActionAtoms` (System.hs:1569-1573).  Same insertion-order
+    /// `unsolvedActionAtoms` (System.hs).  Same insertion-order
     /// caveat as [`unsolved_chains`](Self::unsolved_chains).
     pub fn unsolved_action_atoms(
         &self,
@@ -1300,7 +1299,7 @@ impl System {
     }
 
     /// All unsolved premise goals, as `(NodePrem, LNFact)`. Port of HS
-    /// `unsolvedPremises` (System.hs:1507-1511).  Same insertion-order caveat
+    /// `unsolvedPremises` (System.hs).  Same insertion-order caveat
     /// as [`unsolved_chains`](Self::unsolved_chains).
     pub fn unsolved_premises(
         &self,
@@ -1541,7 +1540,7 @@ impl System {
     /// the insertion still advances `next_goal_nr`, as HS's does.
     pub fn add_goal(&mut self, g: Goal) {
         // HS has a single goal entry point: `insertGoal goal False`
-        // (Reduction.hs:523-524). `add_goal` is exactly that — defer to
+        // (Reduction.hs). `add_goal` is exactly that — defer to
         // `add_goal_with_loop_flag` with `looping = false` so both
         // entry points share one counter-advance / dedup / push path.
         self.add_goal_with_loop_flag(g, false);
@@ -1563,7 +1562,7 @@ impl System {
     /// positions is structurally identical to the stored one and merges into
     /// it instead of accumulating a second, `solved=false` copy.
     pub fn add_goal_with_loop_flag(&mut self, g: Goal, looping: bool) {
-        // HS `insertGoalStatus` (Reduction.hs:516-521) reads
+        // HS `insertGoalStatus` (Reduction.hs) reads
         // `sNextGoalNr` then `succ`s it on EVERY call, including when
         // the goal key already exists (where `insertWith
         // combineGoalStatus` keeps the existing — smaller — nr).
@@ -1609,7 +1608,7 @@ impl System {
 
     /// Add an edge if not already present.  Low-level raw insert
     /// equivalent of HS `modM sEdges (S.insert e)`.  Callers that mirror
-    /// HS's `insertEdges` (Reduction.hs:278-281, which runs
+    /// HS's `insertEdges` (Reduction.hs, which runs
     /// `solveFactEqs`) must use `Reduction::insert_edge`; callers that
     /// mirror HS's raw `modM sEdges` (e.g. `exploitPrem InFact` /
     /// `exploitPrem FreshFact`) should use this directly.
@@ -1631,12 +1630,12 @@ impl System {
     pub fn add_less(&mut self, l: LessAtom) {
         // HS `insertLess` = `modM sLessAtoms (S.insert l)`. `Data.Set.insert`
         // REPLACES an existing equal element with the new one, and
-        // `Eq`/`Ord LessAtom` ignore the reason tag (Constraints.hs:126-130),
+        // `Eq`/`Ord LessAtom` ignore the reason tag (Constraints.hs),
         // so re-inserting the same `(smaller,larger)` with a DIFFERENT reason
         // OVERWRITES the stored reason (last-wins). A first-occurrence-wins
         // dedup would keep the wrong reason — e.g. a GenKey→Alice ordering
         // added first by fresh-uniqueness (`Fresh`) then by injective-fact
-        // monotonicity (`InjectiveFacts`, Simplify.hs:589 in `simpInjectiveFactEqMon`) must end up
+        // monotonicity (`InjectiveFacts`, Simplify.hs in `simpInjectiveFactEqMon`) must end up
         // `InjectiveFacts`, driving the less-edge's graph colour. The reason
         // is metadata for rendering only (read solely by `Dot.hs`/graph
         // simplification); replace in place to preserve iteration order.
@@ -1739,7 +1738,7 @@ impl System {
     pub fn always_before_with(&self, adj: &PrebuiltAdj, i: &NodeId, j: &NodeId) -> bool {
         // DELIBERATE deviation from HS `alwaysBefore`: HS's
         // `reachableSet [i] lessRel` seeds the visited set with `i`
-        // itself (Data/DAG/Simple.hs:76-79), so `alwaysBefore sys i i`
+        // itself (Data/DAG/Simple.hs), so `alwaysBefore sys i i`
         // is `True`.  We short-circuit `i == j` to `false`.  This is
         // caller-safe: every live caller already filters equal nodes
         // before reaching here (Less/EqE simplify guards, the
@@ -1795,21 +1794,21 @@ impl System {
         }
     }
 
-    /// Direct port of Haskell `isInitialSystem` (`System.hs:830-832`):
+    /// Direct port of Haskell `isInitialSystem` (`System.hs`):
     ///   isInitialSystem sys =
     ///     null (get sSolvedFormulas sys) && not (member bot (get sFormulas sys))
     /// where `bot = gfalse()`.  Two conditions: no solved formulas yet, and no
     /// gfalse in the formula set.  This is the gate the automatic-search path
-    /// (`rankProofMethods`, ProofMethod.hs:520-548, see line 527) uses to decide whether
+    /// (`rankProofMethods`, ProofMethod.hs) uses to decide whether
     /// `insertInduction` runs — NOT the stricter replay-only `canApplyInduction`
-    /// (ProofMethod.hs:264-270), which additionally checks node/goal emptiness
+    /// (ProofMethod.hs), which additionally checks node/goal emptiness
     /// and omits the gfalse check.
     pub fn is_initial(&self) -> bool {
         self.solved_formulas.is_empty()
             && !crate::guarded::stores_contains(&self.formulas, &crate::guarded::gfalse())
     }
 
-    /// Port of Haskell's `cleanup` (`ProofMethod.hs:310-311`):
+    /// Port of Haskell's `cleanup` (`ProofMethod.hs`):
     ///
     /// Resets the system's variable indices and clears the substitution.
     pub fn cleanup(mut self) -> Self {
@@ -1831,11 +1830,11 @@ impl System {
 // HasFrees
 // =============================================================================
 
-/// `instance HasFrees GoalStatus` (System.hs:1829-1832): a goal status holds
+/// `instance HasFrees GoalStatus` (System.hs): a goal status holds
 /// no variable, so it folds to nothing and maps to itself.  The `sGoals` walk
-/// reaches it through the pair instance (LTerm.hs:855-860), which is how HS's
+/// reaches it through the pair instance (LTerm.hs), which is how HS's
 /// `M.Map Goal GoalStatus` instance combines a key with its value
-/// (LTerm.hs:905-909).
+/// (LTerm.hs).
 impl HasFrees for GoalStatus {
     fn for_each_free(&self, _f: &mut dyn FnMut(&LVar)) {}
 
@@ -1844,15 +1843,15 @@ impl HasFrees for GoalStatus {
     }
 }
 
-/// `instance HasFrees System` (System.hs:1834-1879).
+/// `instance HasFrees System` (System.hs).
 ///
 /// The fold visits the thirteen fields of the Haskell record in declaration
-/// order (System.hs:383-395); the last three — `sNextGoalNr`, `sSourceKind`
+/// order (System.hs); the last three — `sNextGoalNr`, `sSourceKind`
 /// and `sDiffSystem` — hold no variable.
 ///
 /// The map rebuilds each `Vec`-backed field in its own STORAGE order, where
 /// HS re-establishes the container with `S.fromList` / `M.fromList`
-/// (LTerm.hs:903, LTerm.hs:914).  The port's insertion order is what the
+/// (LTerm.hs, LTerm.hs).  The port's insertion order is what the
 /// solver and the printer read back — `conjoin_system` appends to `formulas`,
 /// goal numbers follow the `goals` positions — so a re-sort here would move
 /// them.  A caller that wants the Haskell rebuild performs it itself, as

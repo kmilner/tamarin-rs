@@ -1,9 +1,8 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! End-to-end diagnostics for `naryOpApp`'s reserved-builtin
-//! rejection inside `equations:` (Theory/Text/Parser/Term.hs:90-92).
+//! rejection inside `equations:` (Theory/Text/Parser/Term.hs).
 //!
 //! Haskell raises a GHC exception here. The port converts it into the same
 //! semantic parser-error surface used for ordinary failures, without exposing

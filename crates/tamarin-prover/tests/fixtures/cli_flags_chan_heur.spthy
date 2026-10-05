@@ -2,7 +2,7 @@
 // for the CLI-override pin in tests/cli_e2e.rs: `i` and `s` reach different
 // `secrecy` proofs here, so a `--heuristic=s` run diverging from the bare
 // run proves the flag overrode the header (HS `apDefaultHeuristic <|>
-// pcHeuristic`, Theory/Proof.hs:706-707).
+// pcHeuristic`, Theory/Proof.hs).
 theory CliFlagsChanHeur
 begin
 

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.SubtermRule` from `lib/term/src/Term/SubtermRule.hs`.
 
@@ -12,7 +11,7 @@ use crate::term::Term;
 /// Right-hand side of a context subterm rewrite rule.
 ///
 /// HS `data StRhs = StRhs [Position] LNTerm` derives `Ord` over the positions
-/// then the term (SubtermRule.hs:40-41).
+/// then the term (SubtermRule.hs).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StRhs {
     pub positions: Vec<Position>,
@@ -20,7 +19,7 @@ pub struct StRhs {
 }
 
 /// HS `data CtxtStRule = CtxtStRule LNTerm StRhs` derives `Ord` over the
-/// left-hand side then the right-hand side (SubtermRule.hs:45-46).  A
+/// left-hand side then the right-hand side (SubtermRule.hs).  A
 /// signature holds these in a `BTreeSet`, whose iteration order reaches the
 /// printed `equations:` block and the wellformedness report.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -89,7 +88,7 @@ pub fn find_all_subterms(l: &LNTerm, r: &LNTerm) -> Option<Vec<Position>> {
     }
 }
 
-/// `subterms args [] 1` (SubtermRule.hs:59-65, called at :69): for each top-level arg
+/// `subterms args [] 1` (SubtermRule.hs): for each top-level arg
 /// `t`, find the positions where `t` occurs as a subterm of a SIBLING
 /// arg, each prefixed with that sibling's top-level index.  HS visits the
 /// remaining siblings (`zip [i..] ts`) before the already-processed ones
@@ -120,7 +119,7 @@ fn subterms(args: &[LNTerm]) -> Vec<Position> {
     out
 }
 
-/// `constantPositions` (SubtermRule.hs:67-71): for an `FApp _ args` LHS,
+/// `constantPositions` (SubtermRule.hs): for an `FApp _ args` LHS,
 /// the sibling-subterm positions of its args; if the LHS contains a
 /// private function symbol, or no sibling-subterm is found, every
 /// position of the LHS.
@@ -149,11 +148,11 @@ fn constant_positions(lhs: &LNTerm) -> Vec<Position> {
 ///
 /// DELIBERATE DIVERGENCE (documented upstream bug): on a ground-RHS equation
 /// whose LHS is a bare literal (`equations: x = c`), HS aborts the whole run —
-/// `constantPositions` (SubtermRule.hs:67-71) has only an `FApp` clause under
+/// `constantPositions` (SubtermRule.hs) has only an `FApp` clause under
 /// `-fno-warn-incomplete-patterns`, and the bottom is forced when the rule
-/// enters the `stRules` Set (Term/Maude/Signature.hs:181-183).  For the
+/// enters the `stRules` Set (Term/Maude/Signature.hs).  For the
 /// NON-ground sibling (`x = h(x)`) HS instead fails cleanly with "Not a correct
-/// equation: …" (Theory/Text/Parser/Signature.hs:247-249).  The port answers
+/// equation: …" (Theory/Text/Parser/Signature.hs).  The port answers
 /// `None` here, routing the ground case into that same clean failure.
 pub fn rrule_to_ctxt_st_rule(rule: &RRule<LNTerm>) -> Option<CtxtStRule> {
     if frees(&rule.rhs).is_empty() {
@@ -172,7 +171,7 @@ pub fn rrule_to_ctxt_st_rule(rule: &RRule<LNTerm>) -> Option<CtxtStRule> {
         ));
     }
     let positions = find_all_subterms(&rule.lhs, &rule.rhs)?;
-    // HS (SubtermRule.hs:54-57) matches `case sbtms of []:_ -> Nothing; [] ->
+    // HS (SubtermRule.hs) matches `case sbtms of []:_ -> Nothing; [] ->
     // Nothing; pos -> Just`. The `[]:_` arm rejects ONLY when the empty
     // position is at the HEAD of the list; an empty position later in the
     // list does not reject. The `is_empty()` guard above covers HS's `[]` arm,
@@ -233,7 +232,7 @@ mod tests {
         assert_eq!(find_subterm(&outer, &needle), vec![vec![0i64], vec![1, 0]]);
     }
 
-    /// A ground RHS routes through `constantPositions` (SubtermRule.hs:67-71).
+    /// A ground RHS routes through `constantPositions` (SubtermRule.hs).
     /// No argument occurs inside a sibling here.  `subterms` is therefore
     /// empty, and HS falls back to `positions lhs`.  That is every position of
     /// the LHS, and it includes the variable positions.
@@ -253,7 +252,7 @@ mod tests {
         );
     }
 
-    /// HS `subterms` (SubtermRule.hs:59-65, called at :69) looks at each
+    /// HS `subterms` (SubtermRule.hs) looks at each
     /// top-level argument in turn.  For that argument it searches the siblings
     /// that it has not processed yet first (`zip [i..] ts`).  It searches the
     /// already-processed siblings only after that (`zip [0..] done`).  The two
@@ -299,7 +298,7 @@ mod tests {
         );
     }
 
-    /// HS `rRuleToCtxtStRule` (SubtermRule.hs:54-57) rejects via the `[]:_`
+    /// HS `rRuleToCtxtStRule` (SubtermRule.hs) rejects via the `[]:_`
     /// arm only when the empty position is at the HEAD of the position list.
     /// For `h(x) = f(x, h(x))`, `findAllSubterms` yields `[[0], []]`: the
     /// empty position is SECOND, so HS keeps the rule (`pos -> Just`).
@@ -338,7 +337,7 @@ mod tests {
     /// equation" — the same clean failure both engines produce for the
     /// non-ground sibling `x = h(x)` ("Not a correct equation: RRule x h(x)"
     /// from the pinned oracle).  HS instead ABORTS on the ground case
-    /// (non-exhaustive `constantPositions`, SubtermRule.hs:67-71 under
+    /// (non-exhaustive `constantPositions`, SubtermRule.hs under
     /// `-fno-warn-incomplete-patterns`); the port deliberately diverges from
     /// that documented upstream bug.
     #[test]

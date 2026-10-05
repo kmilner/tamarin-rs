@@ -1,14 +1,13 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
-//! HS `factReports` (Wellformedness.hs:579-583): the wellformedness checks
+//! HS `factReports` (Wellformedness.hs): the wellformedness checks
 //! over a theory's facts — reserved names, reserved `KU`/`KD`/`K` usage,
 //! `Fr` arguments, the special `In`/`Out`/`Fr` tags, the arity /
 //! multiplicity / capitalization clash groups, and the facts a rule
 //! consumes on the left-hand side that no right-hand side produces.
 //!
-//! [`theory_facts`] is HS's `theoryFacts` (Wellformedness.hs:593-605): every
+//! [`theory_facts`] is HS's `theoryFacts` (Wellformedness.hs): every
 //! rule in item order with its facts in `ruleFacts` order, then every lemma
 //! with the facts of its formula's `Action` atoms.  A rule fact's cell is
 //! `prettyLNFact`, a lemma fact's the derived `show` of a
@@ -35,7 +34,7 @@ use crate::theory::Theory;
 // The factReports group
 // =============================================================================
 
-/// Port of HS `factReports` (Wellformedness.hs:579-583), in HS's member
+/// Port of HS `factReports` (Wellformedness.hs), in HS's member
 /// order.
 ///
 /// `theoryFacts` is one shared binding in HS's `where`, so the cells are
@@ -57,7 +56,7 @@ pub fn fact_reports(thy: &Theory) -> WfReport {
 
 /// One cell of HS `theoryFacts`: the fact as the report renders it, paired
 /// with `factInfo fa = (factTag fa, factArity fa, factMultiplicity fa)`
-/// (Wellformedness.hs:174-175).
+/// (Wellformedness.hs).
 struct FactCell {
     pp: Doc,
     tag: FactTag,
@@ -67,7 +66,7 @@ struct FactCell {
 
 impl FactCell {
     /// HS `extFactInfo fa = (prettyLNFact fa, factInfo fa)`
-    /// (Wellformedness.hs:609).
+    /// (Wellformedness.hs).
     fn of_rule_fact(fa: &LNFact) -> Self {
         FactCell {
             pp: pretty_lnfact(fa),
@@ -78,7 +77,7 @@ impl FactCell {
     }
 
     /// HS `theoryFacts`'s `LemmaItem` cell, `(text (show fa), factInfo fa)`
-    /// (Wellformedness.hs:602-605).
+    /// (Wellformedness.hs).
     fn of_lemma_fact(fa: &Fact<BLNTerm>) -> Self {
         FactCell {
             pp: Doc::text(show_bl_fact(fa)),
@@ -89,7 +88,7 @@ impl FactCell {
     }
 }
 
-/// HS `show` of `Multiplicity` (Theory/Model/Fact.hs:133-134).
+/// HS `show` of `Multiplicity` (Theory/Model/Fact.hs).
 fn show_multiplicity(m: Multiplicity) -> &'static str {
     match m {
         Multiplicity::Persistent => "Persistent",
@@ -97,7 +96,7 @@ fn show_multiplicity(m: Multiplicity) -> &'static str {
     }
 }
 
-/// HS `ruleFacts` (Wellformedness.hs:585-587): `concatMap (`get` ru) [rPrems,
+/// HS `ruleFacts` (Wellformedness.hs): `concatMap (`get` ru) [rPrems,
 /// rActs, rConcs]`.
 fn rule_facts<I>(ru: &Rule<I>) -> impl Iterator<Item = &LNFact> {
     ru.premises
@@ -106,12 +105,12 @@ fn rule_facts<I>(ru: &Rule<I>) -> impl Iterator<Item = &LNFact> {
         .chain(ru.conclusions.iter())
 }
 
-/// HS `theoryFacts` (Wellformedness.hs:593-605): each origin — a rule or a
+/// HS `theoryFacts` (Wellformedness.hs): each origin — a rule or a
 /// lemma — with the facts it contributes.
 ///
 /// A lemma's facts are the `Action` atoms of `_lFormula`, which at
 /// wellformedness time is predicate-expanded but not yet macro-expanded
-/// (`applyMacroInLemma` runs in `closeTheoryItem`, CloseRule.hs:85);
+/// (`applyMacroInLemma` runs in `closeTheoryItem`, CloseRule.hs);
 /// `Lemma::original_formula` is exactly that formula.
 ///
 fn theory_facts(thy: &Theory) -> Vec<(String, Vec<FactCell>)> {
@@ -151,7 +150,7 @@ fn theory_facts(thy: &Theory) -> Vec<(String, Vec<FactCell>)> {
 }
 
 /// HS `wrappedText = fsep . map text . words`
-/// (Wellformedness.hs:150-151).
+/// (Wellformedness.hs).
 fn wrapped_text(s: &str) -> Doc {
     hpj::fsep(s.split_whitespace().map(Doc::text).collect())
 }
@@ -160,7 +159,7 @@ fn wrapped_text(s: &str) -> Doc {
 // Reserved fact names
 // =============================================================================
 
-/// HS `reservedFactName`'s list (Wellformedness.hs:622): a `ProtoFact`
+/// HS `reservedFactName`'s list (Wellformedness.hs): a `ProtoFact`
 /// whose lowercased name is one of these is reserved.
 const RESERVED_FACT_NAMES: &[&str] = &["fr", "ku", "kd", "out", "in"];
 
@@ -175,7 +174,7 @@ fn show_derived_fact_info(cell: &FactCell) -> String {
     )
 }
 
-/// HS `reservedFactName` (Wellformedness.hs:621-624): the body a reserved-named
+/// HS `reservedFactName` (Wellformedness.hs): the body a reserved-named
 /// `ProtoFact` contributes, `ppFa $-$ text ("show:" ++ show info)`.
 fn reserved_fact_name(cell: &FactCell) -> Option<Doc> {
     let FactTag::Proto(_, name, _) = cell.tag else {
@@ -191,7 +190,7 @@ fn reserved_fact_name(cell: &FactCell) -> Option<Doc> {
     )
 }
 
-/// HS `reservedReport` (Wellformedness.hs:611-619): one entry per origin whose
+/// HS `reservedReport` (Wellformedness.hs): one entry per origin whose
 /// facts include a reserved-named `ProtoFact`.
 fn reserved_report(facts: &[(String, Vec<FactCell>)]) -> WfReport {
     let mut out = Vec::new();
@@ -201,9 +200,9 @@ fn reserved_report(facts: &[(String, Vec<FactCell>)]) -> WfReport {
             continue;
         }
         // `foldr1 ($--$) (wrappedText header : map (nest 2) errs)`; `$--$`
-        // is `above_blank` (Text/PrettyPrint/Class.hs:112-113).  The outer
+        // is `above_blank` (Text/PrettyPrint/Class.hs).  The outer
         // `nest 2` is `prettyWfErrorReport`'s per-group indent
-        // (Wellformedness.hs:118-125), which this topic's bodies carry
+        // (Wellformedness.hs), which this topic's bodies carry
         // themselves.
         let mut parts: Vec<Doc> = Vec::with_capacity(errs.len() + 1);
         parts.push(wrapped_text(&format!(
@@ -228,11 +227,11 @@ fn reserved_report(facts: &[(String, Vec<FactCell>)]) -> WfReport {
 // Reserved KU/KD/K-log usage
 // =============================================================================
 
-/// HS `reservedFactNameRules'` (Wellformedness.hs:529-550): one entry per rule
+/// HS `reservedFactNameRules'` (Wellformedness.hs): one entry per rule
 /// side that carries a `KUFact`/`KDFact` — plus, in the actions, an
 /// `InFact`/`OutFact`/`FreshFact` — or a fact `isKLogFact` holds of.
 ///
-/// `Ded(..)` parses to `DedFact` (`dedLogFact`, Theory/Model/Fact.hs:305-308),
+/// `Ded(..)` parses to `DedFact` (`dedLogFact`, Theory/Model/Fact.hs),
 /// which is in none of those sets.
 fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
     let mut out = Vec::new();
@@ -289,7 +288,7 @@ fn reserved_fact_name_rules(thy: &Theory) -> WfReport {
 // Special facts misuse
 // =============================================================================
 
-/// HS `specialFactsUsage'` (Wellformedness.hs:552-566): an `OutFact` premise
+/// HS `specialFactsUsage'` (Wellformedness.hs): an `OutFact` premise
 /// or a `FreshFact`/`InFact` conclusion.
 fn special_facts_usage(thy: &Theory) -> WfReport {
     let mut out = Vec::new();
@@ -330,7 +329,7 @@ fn special_facts_usage(thy: &Theory) -> WfReport {
 // Fr facts must use a fresh- or msg-variable
 // =============================================================================
 
-/// HS `freshFactArguments'` (Wellformedness.hs:569-576): a single-term
+/// HS `freshFactArguments'` (Wellformedness.hs): a single-term
 /// `FreshFact` premise whose term is neither a msg- nor a fresh-variable.
 ///
 /// The body carries neither the topic header nor `prettyWfErrorReport`'s
@@ -348,7 +347,7 @@ fn fresh_fact_arguments(thy: &Theory) -> WfReport {
                 continue;
             }
             // `text ("rule " ++ quote (showRuleCaseName ru)) <-> text "fact:"
-            //  <-> prettyLNFact fa` (Wellformedness.hs:574-576).
+            //  <-> prettyLNFact fa` (Wellformedness.hs).
             let body = Doc::text(format!("rule {} fact:", quote(&show_rule_case_name(ru))))
                 .beside_sp(pretty_lnfact(fa))
                 .render_with(WF_LINE_LENGTH, WF_RIBBON);
@@ -365,15 +364,15 @@ fn fresh_fact_arguments(thy: &Theory) -> WfReport {
 // Fact arity / multiplicity / capitalization clashes
 // =============================================================================
 
-/// HS `capIssueMsg` (Wellformedness.hs:680-683).
+/// HS `capIssueMsg` (Wellformedness.hs).
 const CAP_ISSUE_MSG: &str = "Fact names are case-sensitive, different capitalizations are \
      considered as different facts, i.e., Fact() is different from FAct(). \n\
      Check the capitalization of your fact names.";
-/// HS `arityIssueMsg` (Wellformedness.hs:684-686).
+/// HS `arityIssueMsg` (Wellformedness.hs).
 const ARITY_ISSUE_MSG: &str = "Same fact is used with different arities, \
      i.e., Fact('A','B') is different from Fact('A'). \n\
      Check the arguments of your facts.";
-/// HS `multipIssueMsg` (Wellformedness.hs:687-689).
+/// HS `multipIssueMsg` (Wellformedness.hs).
 const MULTIP_ISSUE_MSG: &str =
     "Same fact is used with different multiplicities, i.e., !Fact() (Persistent fact) exists \
      along with Fact() (Linear) in your rules. \n\
@@ -383,12 +382,12 @@ const MULTIP_ISSUE_MSG: &str =
 /// every fact whose lowercased fact name is the group's.
 type Clash<'a> = Vec<(&'a str, &'a FactCell)>;
 
-/// HS `factUsage` (Wellformedness.hs:636-689): one entry per issue kind that
+/// HS `factUsage` (Wellformedness.hs): one entry per issue kind that
 /// any clash group exhibits, in HS's `capIssues ++ arityIssues ++
 /// multipIssues` order.
 fn fact_usage(facts: &[(String, Vec<FactCell>)]) -> WfReport {
     // HS `groupOn factIdentifier $ sortOn factIdentifier theoryFacts'`
-    // (Wellformedness.hs:639-643): the groups come out in lowercased-name
+    // (Wellformedness.hs): the groups come out in lowercased-name
     // order, and `sortOn` is stable, so each keeps its `theoryFacts` order.
     let mut groups: BTreeMap<String, Clash> = BTreeMap::new();
     for (origin, cells) in facts {
@@ -438,7 +437,7 @@ fn fact_usage(facts: &[(String, Vec<FactCell>)]) -> WfReport {
 }
 
 /// HS `filter hasCapIssue` / `hasArityIssue` / `hasMultipIssue`
-/// (Wellformedness.hs:676-678): the groups over which `project` takes more
+/// (Wellformedness.hs): the groups over which `project` takes more
 /// than one distinct value.
 fn with_issue<'a, T: Ord>(
     clashes: &[&'a Clash<'a>],
@@ -458,7 +457,7 @@ fn with_issue<'a, T: Ord>(
 }
 
 /// HS's `capIssues` / `arityIssues` / `multipIssues` entry
-/// (Wellformedness.hs:644-658): the underlined topic and the issue paragraph
+/// (Wellformedness.hs): the underlined topic and the issue paragraph
 /// make up HS's topic string, which `prettyWfErrorReport` prints verbatim
 /// before laying out `text "\n" $-$ vcat (map format clashes)` under a
 /// `nest 2`.
@@ -486,7 +485,7 @@ fn fact_clash_block(
 }
 
 /// HS `formatCapIssue` / `formatArityIssue` / `formatMultipIssue`
-/// (Wellformedness.hs:660-674), which differ only in `detail`:
+/// (Wellformedness.hs), which differ only in `detail`:
 /// `text ("Fact `" ++ name ++ "':\n") $-$ nest 2 (numbered' items) $-$ text ""`.
 fn format_clash(clash: &Clash<'_>, detail: &dyn Fn(&FactCell) -> String) -> Doc {
     // HS `name clash`: the lowercased `factTagName` of the group's first fact.
@@ -506,9 +505,9 @@ fn format_clash(clash: &Clash<'_>, detail: &dyn Fn(&FactCell) -> String) -> Doc 
 // Facts occurring in a left-hand side but in no right-hand side
 // =============================================================================
 
-/// HS `showFactInfo` (Wellformedness.hs:248-251) over `factInfo fa =
+/// HS `showFactInfo` (Wellformedness.hs) over `factInfo fa =
 /// (factTag fa, factArity fa, factMultiplicity fa)`
-/// (Wellformedness.hs:174-175), which for a `ProtoFact` the tag alone
+/// (Wellformedness.hs), which for a `ProtoFact` the tag alone
 /// determines.  The leading space is HS's.
 fn show_fact_info(f: &LNFact) -> String {
     format!(
@@ -519,7 +518,7 @@ fn show_fact_info(f: &LNFact) -> String {
     )
 }
 
-/// HS `editDistance` (Utils/Misc.hs:164-174): the Levenshtein distance, over
+/// HS `editDistance` (Utils/Misc.hs): the Levenshtein distance, over
 /// two rows of the dynamic-programming table.
 fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
@@ -538,10 +537,10 @@ fn edit_distance(a: &str, b: &str) -> usize {
     prev[m]
 }
 
-/// Port of HS `factLhsOccurNoRhs'` (Wellformedness.hs:214-256): every proto
+/// Port of HS `factLhsOccurNoRhs'` (Wellformedness.hs): every proto
 /// PREMISE fact whose `factInfo` no rule's conclusions produce, each paired
 /// with the conclusion fact of smallest name edit distance
-/// (`mostSimilarName`, Wellformedness.hs:180-210), kept only at distance
+/// (`mostSimilarName`, Wellformedness.hs), kept only at distance
 /// `<= 3`.
 ///
 /// The single entry bakes in the underlined header and the `numbered'`
@@ -549,7 +548,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 /// which at `prettyWfErrorReport`'s 2-space body nest renders as two spaces.
 fn fact_lhs_occur_no_rhs(thy: &Theory) -> Vec<WfError> {
     // The topic's trailing space is HS's source literal
-    // (Wellformedness.hs:221).
+    // (Wellformedness.hs).
     let title = "Facts occur in the left-hand-side but not in any right-hand-side ";
 
     let names: Vec<String> = thy_proto_rules(thy).map(show_rule_case_name).collect();
@@ -600,7 +599,7 @@ fn fact_lhs_occur_no_rhs(thy: &Theory) -> Vec<WfError> {
     s.push('\n');
     let w = numbered_index_width(orphans.len());
     for (i, (rule_name, fa, suggestion)) in orphans.iter().enumerate() {
-        // HS `showRuleAndFact` (Wellformedness.hs:239-247): `show ruName`
+        // HS `showRuleAndFact` (Wellformedness.hs): `show ruName`
         // wraps the rule name in double quotes.
         let mut line = format!(
             "  {:>w$}. in rule \"{}\": {}",

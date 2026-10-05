@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::atom::Unit2;
@@ -53,7 +52,7 @@ fn unannotated_comment_renders_inline() {
 fn step_unann_inline_when_short() {
     // A short method + comment fit on one line: `sep` keeps the
     // `/* unannotated */` inline beside the method (HS ppStep,
-    // ProofSkeleton.hs:80-84).
+    // ProofSkeleton.hs).
     use crate::pretty_hpj::Doc;
     let m = Doc::text("simplify");
     let out = step_line_with_unann(m, 2, /*annotated=*/ false, "");
@@ -114,7 +113,7 @@ fn long_quantifier_varlist_wraps() {
     use tamarin_parser::parser::parse_formula_str;
     use tamarin_term::maude_sig::pair_maude_sig;
 
-    // HS `ppVars = fsep . map (text . show)` (Theory/Model/Formula.hs:503-511, see line 511): a long
+    // HS `ppVars = fsep . map (text . show)` (Theory/Model/Formula.hs): a long
     // bound-var list wraps across lines, the continuation aligned after
     // the `∃ ` prefix (column 2, the `<>` nesting offset).  Build an
     // existential with enough vars to overflow the ribbon, body `⊥`.
@@ -178,7 +177,7 @@ fn guarded_negation_shortcut() {
 
 /// Build the parser Term `<'1', g1> ++ <'2', g2> ++ <'3', g3>` where the
 /// pair payloads are long enough that the flat AC chain exceeds the ribbon
-/// and HS `prettyTerm` (Term/Term.hs:298-327, see line 305-309 `FApp (AC o) -> ppTerms ...`) must
+/// and HS `prettyTerm` (Term/Term.hs `FApp (AC o) -> ppTerms ...`) must
 /// wrap it with the `++` operator at line ends and each element `nest 1`'d.
 fn ac_chain_bterm() -> BLNTerm {
     let pair = |n: &str, payload: &str| {
@@ -218,7 +217,7 @@ fn ac_union_chain_wraps_in_guarded_formula() {
 }
 
 /// Regression: the AC `*` exponent inside an `exp` term must keep its
-/// `fcat` break points.  HS `prettyTerm` (Term/Term.hs:298-327, see line 310) renders exp as
+/// `fcat` break points.  HS `prettyTerm` (Term/Term.hs) renders exp as
 /// `ppTerm t1 <> "^" <> ppTerm t2`, so the exponent `t2 = (~a*~b)` stays a
 /// breakable `fcat`: `hmac('g'^(~a*~b), ...)` must wrap the `*`-operands
 /// like HS rather than run past LINE_LENGTH=110.  Mirrors the spdm
@@ -320,7 +319,7 @@ fn lnformula_doc_renders_the_lemma_header_samples() {
     use tamarin_term::maude_sig::{mset_maude_sig, pair_maude_sig};
 
     // The union sample needs the signature bit `builtins: multiset` sets, the
-    // one that opens `msetterm`'s `+` level (Theory/Text/Parser/Term.hs:195-200).
+    // one that opens `msetterm`'s `+` level (Theory/Text/Parser/Term.hs).
     let msig = pair_maude_sig().merge(mset_maude_sig());
 
     let samples: &[(&str, &[&str])] = &[
@@ -582,7 +581,7 @@ fn lnformula_doc_bare_name_under_node_binder() {
     }
 }
 
-/// `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs:226-229): the
+/// `prettyAtom = prettyProtoAtom (const emptyDoc)` (Atom.hs): the
 /// sugar-free atom renders as the empty document.
 #[test]
 fn lnformula_doc_prints_unit2_syntactic_as_empty() {
@@ -594,7 +593,7 @@ fn lnformula_doc_prints_unit2_syntactic_as_empty() {
 }
 
 /// A `Bound` index with no enclosing binder is HS `extractFree`'s error
-/// (Theory/Model/Formula.hs:481-482).
+/// (Theory/Model/Formula.hs).
 #[test]
 #[should_panic(expected = "prettyFormula: illegal bound variable '0'")]
 fn lnformula_doc_panics_on_unbound_index() {
@@ -609,10 +608,10 @@ fn lnformula_doc_panics_on_unbound_index() {
 // Display names bind by the whole variable identity
 // =============================================================================
 
-/// `avoidPrecise fm = avoidPreciseVars (frees fm)` (LTerm.hs:714-715) counts a
+/// `avoidPrecise fm = avoidPreciseVars (frees fm)` (LTerm.hs) counts a
 /// body occurrence as free unless a binder closes it, and `quantify` closes
 /// only what equals its `LVar` in name, sort AND index (`v == x`,
-/// Theory/Model/Formula.hs:347-352).  A message-sorted `k` under a `~k` or a
+/// Theory/Model/Formula.hs).  A message-sorted `k` under a `~k` or a
 /// `$k` binder is therefore free, seeds the display supply for the name `k`,
 /// and pushes the binder's own display name to `k.1`.
 ///
@@ -660,7 +659,7 @@ fn bare_binder_used_as_timepoint_is_renamed() {
 /// The `dif` binder and the `seq1` operand of
 /// examples/sapic/fast/SCADA/opc_ua_secure_conversation.spthy's
 /// `A_Counter_Increases` restriction are both message-sorted variables at
-/// index 0, so `Ord LVar` (idx, sort, name — LTerm.hs:546-548) orders the
+/// index 0, so `Ord LVar` (idx, sort, name — LTerm.hs) orders the
 /// union's operands by name and both printers write `(dif++seq1)`.
 ///
 /// Oracle bytes (pinned build): probe `S1_ac_binder_operand_order.spthy`.
@@ -675,7 +674,7 @@ fn existential_binder_keeps_ac_operand_order() {
         (((Seq_Sent( A, B, seq1 ) @ #i) ∧ (Seq_Sent( A, B, seq2 ) @ #j)) ∧\n     \
         (#i < #j)) ⇒\n    (∃ dif. seq2 = (dif++seq1))\"";
     // That theory declares `builtins: multiset`, the bit `msetterm`'s `+`
-    // level needs (Theory/Text/Parser/Term.hs:195-200).
+    // level needs (Theory/Text/Parser/Term.hs).
     let sig = pair_maude_sig().merge(mset_maude_sig());
     let f = parse_formula_str(
         "All A B seq1 seq2 #i #j.(Seq_Sent(A, B, seq1) @ #i \

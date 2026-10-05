@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Out-of-line tests for `tools::abstract_interpretation`.  The expected
 //! byte strings are the v1.13.0 oracle's observed output for the same
@@ -330,8 +329,8 @@ fn partial_evaluation_trace_bytes_and_style_invariance() {
     assert_eq!(rules_s.len(), 1);
 }
 
-/// `Eq`/`Ord LNFact` ignore annotations (Theory/Model/Fact.hs:170-174) but
-/// `prettyLNFact` prints them (Theory/Model/Fact.hs:567-574), so which
+/// `Eq`/`Ord LNFact` ignore annotations (Theory/Model/Fact.hs) but
+/// `prettyLNFact` prints them (Theory/Model/Fact.hs), so which
 /// annotations the
 /// abstract state shows is decided by `S.insert`'s REPLACE-on-equal
 /// semantics: the LAST conclusion inserted wins.  Oracle bytes for
@@ -562,7 +561,7 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
 
 /// A spliced refined rule carries the pre-macro rule as its `rule_e`, the
 /// half HS's re-close narrows `applyMacroInRule macros ruE` from while
-/// keeping `ruE` itself (lib/theory/src/Rule.hs:82-86).  `open_proto_rule`
+/// keeping `ruE` itself (lib/theory/src/Rule.hs).  `open_proto_rule`
 /// then identifies the AC half with it up to terms and the rule renders
 /// without a `rule (modulo AC)` block.
 #[test]
@@ -656,9 +655,9 @@ fn restr_action(timepoint: LVar, arg: LVar) -> crate::formula::SyntacticLNFormul
     ))
 }
 
-/// `info_frees` is HS `freesList` over `preRestriction` (Term/LTerm.hs:605-608):
+/// `info_frees` is HS `freesList` over `preRestriction` (Term/LTerm.hs):
 /// first occurrence first, NOT sorted by `Ord LVar`.  An action atom folds its
-/// timepoint before the fact's arguments (Theory/Model/Atom.hs:129-136), so
+/// timepoint before the fact's arguments (Theory/Model/Atom.hs), so
 /// `P( y ) @ #i` with `#i` at the higher index yields `[#i, y]` where the
 /// sorted list would be `[y, #i]`.
 #[test]

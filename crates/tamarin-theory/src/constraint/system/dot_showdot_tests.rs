@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Unit pins for the DOT serializer's `Text.Dot` bytes.
 
@@ -50,7 +49,7 @@ fn single_rule_matches_the_oracle_bytes() {
     );
 }
 
-/// `showDot`'s digraph id escapes `"` and NOTHING else (Text/Dot.hs:241).
+/// `showDot`'s digraph id escapes `"` and NOTHING else (Text/Dot.hs).
 #[test]
 fn digraph_id_escapes_only_double_quotes() {
     let sys = System::empty();
@@ -58,7 +57,7 @@ fn digraph_id_escapes_only_double_quotes() {
     assert!(got.starts_with("digraph \"a \\\"b\\\" \\c\" {\n"), "{got}");
 }
 
-/// `dotLessEdge` resolves both endpoints through `dsNodes` (System/Dot.hs:409-413),
+/// `dotLessEdge` resolves both endpoints through `dsNodes` (System/Dot.hs),
 /// which for a RECORD node is the rule-label field's PORTED id — not the bare
 /// node id — and emits `color` before `style`.
 #[test]

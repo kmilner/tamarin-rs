@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::constraint::solver::search::run_proof_search;
@@ -160,7 +159,7 @@ fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
 // Every stored goal below is a `Goal` value, the shape
 // `elaborate::goal_from_parsed` builds, and `match_goal` looks it up among
 // all of the system's goals by structural equality — HS's `M.member`
-// (ProofMethod.hs:253-258).
+// (ProofMethod.hs).
 
 /// Match an Action goal whose fact takes no arguments.
 #[test]
@@ -229,7 +228,7 @@ fn replay_checks_induction_applicability() {
 /// of them and a drifted index binds neither.
 ///
 /// HS pretty-prints a timepoint as `#t2` when its index is 0 and `#t2.7`
-/// when it is 7 (`Show LVar`, LTerm.hs:550-557), so the index in a stored
+/// when it is 7 (`Show LVar`, LTerm.hs), so the index in a stored
 /// goal is the index of the goal it names.
 #[test]
 fn match_action_disambiguates_by_time_var_root() {
@@ -283,7 +282,7 @@ fn match_premise_disambiguates_by_time_var_root() {
 }
 
 /// HS's `ChainG NodeConc NodePrem` carries a full `nodevar` at each
-/// endpoint (Theory/Text/Parser/Proof.hs:28-36), so a stored chain goal
+/// endpoint (Theory/Text/Parser/Proof.hs), so a stored chain goal
 /// whose endpoint index differs from the runtime one is an `M.member` miss.
 #[test]
 fn chain_goal_requires_the_node_index() {
@@ -364,7 +363,7 @@ fn disj(alts: Vec<crate::guarded::Guarded>) -> Goal {
 
 /// A disjunction goal binds the alternative list it names, not one of the
 /// same length: HS compares the parsed `Disj [LNGuarded]` with `M.member`
-/// (ProofMethod.hs:253-258).
+/// (ProofMethod.hs).
 #[test]
 fn disj_goal_is_structural() {
     // The two open goals share their alternative count and every
@@ -442,7 +441,7 @@ fn disj_goal_matches_either_ac_folding() {
 }
 
 /// HS check-and-extend, `mergeMapsWith` rightOnly branch
-/// (Theory/Proof.hs:463): a stored-skeleton case that the
+/// (Theory/Proof.hs): a stored-skeleton case that the
 /// re-executed method does NOT produce is mapped through
 /// `noSystemPrf` over the WHOLE subtree → every node `Nothing` →
 /// `/* unannotated */`.  `parsed_to_unannotated` must therefore set

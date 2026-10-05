@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use tamarin_term::maude_sig::pair_maude_sig;
@@ -806,7 +805,7 @@ fn solve_subterm_self_is_contradictory() {
 /// `solve_action_goal` emits `GoalCases::LinearNamed(rule_case_name)`
 /// rather than bare `Linear` — mirrors HS `solveAction`'s `Just ru ->
 /// ... return ru` arm (Goals.hs) whose surrounding `showRuleCaseName
-/// <$>` (Goals.hs:217-252, see line 223) unconditionally emits the rule's case name.
+/// <$>` (Goals.hs) unconditionally emits the rule's case name.
 #[test]
 fn solve_action_goal_existing_node_with_action_is_linear_named() {
     let Some(ctx) = ctx() else { return };
@@ -1095,7 +1094,7 @@ fn insert_atom_action_creates_action_goal() {
                 crate::fact::Multiplicity::Linear, "Setup", 1)));
 }
 
-/// HS `insertAtom` answers `Syntactic _ -> return ()` (Reduction.hs:421):
+/// HS `insertAtom` answers `Syntactic _ -> return ()` (Reduction.hs):
 /// the sugar carries no constraint, so nothing about the system moves.
 #[test]
 fn insert_atom_ignores_a_syntactic_atom() {
@@ -1231,7 +1230,7 @@ fn solve_action_with_fresh_premise_adds_fresh_supplier() {
 //
 // Mirrors Haskell's `casName` (Reduction.hs) which uses 1-INDEXED
 // `case_<n>` for generic case labels.  Off-by-one here makes
-// `distinguish` (ProofMethod.hs:282-339, see line 334) disambiguate against the
+// `distinguish` (ProofMethod.hs) disambiguate against the
 // wrong sibling suffix and the proof skeleton drifts.
 // =========================================================================
 
@@ -1255,7 +1254,7 @@ fn default_case_name_is_one_indexed() {
 
 /// Build a `∀[].[Less #i #j].⊥` GGuarded value — the negated-
 /// `Less`-of-node-ids idiom HS calls `markAsSolved`+decompose on
-/// (Reduction.hs:461-486).
+/// (Reduction.hs).
 fn neg_less_node_universal(i_name: &str, j_name: &str) -> Guarded {
     use crate::atom::ProtoAtom;
     use crate::formula::{BLNTerm, Quantifier};
@@ -1272,7 +1271,7 @@ fn neg_less_node_universal(i_name: &str, j_name: &str) -> Guarded {
 }
 
 /// HS-faithful `markAsSolved = when mark $ modM sSolvedFormulas
-/// $ S.insert fm` (Reduction.hs:427-494, see line 494).  Children of a Conj/Ex body
+/// $ S.insert fm` (Reduction.hs).  Children of a Conj/Ex body
 /// recurse via `insert' False`, so a negated-atom universal that
 /// arrives transitively MUST NOT push into `solved_formulas`.
 ///
@@ -1303,7 +1302,7 @@ fn insert_formula_negated_less_mark_false_does_not_push_solved() {
         !crate::guarded::stores_contains(&r.sys.solved_formulas, &g),
         "mark=false MUST NOT push the negated-Less universal into \
              solved_formulas — HS `markAsSolved` is `when mark $ ...` \
-             (Reduction.hs:491).  Pushing unconditionally inflates \
+             (Reduction.hs).  Pushing unconditionally inflates \
              sSolvedFormulas (Yubikey slightly_weaker_invariant: 3 vs 4)."
     );
     // The arm also really runs.  It decomposes the formula into
@@ -1351,7 +1350,7 @@ fn insert_formula_negated_less_mark_true_pushes_solved() {
         crate::guarded::stores_contains(&r.sys.solved_formulas, &g),
         "mark=true (top-level `insert_formula`) MUST push the \
              negated-Less universal into solved_formulas — \
-             HS `markAsSolved` fires (Reduction.hs:491)."
+             HS `markAsSolved` fires (Reduction.hs)."
     );
     // `mark` controls only the push into solved_formulas.  The
     // decomposition is the same on both paths.

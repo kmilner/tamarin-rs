@@ -1,13 +1,12 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Byte-parity of the wellformedness report's paragraph fills — HS
 //! `text info $-$ nest 2 (fsep $ punctuate comma cells)` for
-//! `specialFactsUsage'` (Wellformedness.hs:563), `reservedFactNameRules'`
-//! (Wellformedness.hs:546) and `unboundCheck` (Wellformedness.hs:497-498),
+//! `specialFactsUsage'` (Wellformedness.hs), `reservedFactNameRules'`
+//! (Wellformedness.hs) and `unboundCheck` (Wellformedness.hs),
 //! laid out by `tamarin_theory::wellformedness::WfError::filled` at
-//! `addComment`'s 100/67 (TheoryObject.hs:717-718).
+//! `addComment`'s 100/67 (TheoryObject.hs).
 //!
 //! Every expected block is the pinned oracle's (`ef3f0468`) `/* WARNING … */`
 //! comment verbatim, so the fill's break points — between cells, and INSIDE a

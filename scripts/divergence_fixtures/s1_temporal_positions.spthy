@@ -1,9 +1,9 @@
 /*
  * The sort a bare identifier takes from the position it sits in.  The
  * argument of `last`, the operand after `@` and both operands of `<` are read
- * with `nodevar` (Theory/Text/Parser/Formula.hs:43-59#blatom,
- * Token.hs:444-448#nodevar) and a fact argument or a term-equality operand
- * with `msgvar` (Token.hs:440-441#msgvar), so in each lemma here the bare
+ * with `nodevar` (Theory/Text/Parser/Formula.hs#blatom,
+ * Token.hs#nodevar) and a fact argument or a term-equality operand
+ * with `msgvar` (Token.hs#msgvar), so in each lemma here the bare
  * occurrence and the like-named binder are two different variables: the
  * occurrence stays free and the display renames the binder apart.  No theory
  * under tamarin-prover/examples writes a bare identifier in a timepoint

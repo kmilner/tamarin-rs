@@ -1,17 +1,16 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Theory-level driver of the SAPIC typing pass — HS `typeTheoryEnv`
-//! (Typing.hs:204-226):
+//! (Typing.hs):
 //!
 //! 1. `initTEFromSig` seeds ONE [`TypingEnvironment`] from the signature;
 //! 2. `mapMProcesses typeAndRenameProcess` types every process-bearing item
-//!    (`ProcessItem`, `DiffEquivLemma`, `EquivLemma` — TheoryObject.hs:279-291)
+//!    (`ProcessItem`, `DiffEquivLemma`, `EquivLemma` — TheoryObject.hs)
 //!    in source order against that shared environment;
 //! 3. `mapMProcessesDef typeAndRenameProcessDef` types every `ProcessDefItem`
-//!    (TheoryObject.hs:294-301) via the `ChIn`/`fAppList` wrapper trick
-//!    (Typing.hs:217-225), always setting `_pVars = Just …`;
+//!    (TheoryObject.hs) via the `ChIn`/`fAppList` wrapper trick
+//!    (Typing.hs), always setting `_pVars = Just …`;
 //! 4. `Map.foldrWithKey addFunctionTypingInfo' (clearFunctionTypingInfos th')
 //!    fte.funs` deletes every source-positioned `FunctionTypingInfo` item and
 //!    re-appends one per entry of the final `funs` map — `foldrWithKey` +
@@ -38,13 +37,13 @@ use crate::typing::{
     TypingEnvironment,
 };
 
-/// `typeTheoryEnv` (Typing.hs:204-226) over the elaborated theory, whose
+/// `typeTheoryEnv` (Typing.hs) over the elaborated theory, whose
 /// process-bearing items and `FunctionTypingInfo` items it rewrites in place —
 /// HS's first return component.  The second, the environment the whole theory
 /// was typed against, is handed back: no RS caller reads it, but its consumers
 /// are the ProVerif / DeepSec exporters (`loadHeaders` folds over `events`,
-/// Export.hs:2743-2754), which are unported.  `typeTheory`
-/// (Typing.hs:229-230) is this function with the environment discarded.
+/// Export.hs), which are unported.  `typeTheory`
+/// (Typing.hs) is this function with the environment discarded.
 ///
 /// Runs on EVERY theory — a process-free (non-SAPIC) theory still gets its
 /// `function:` items recomputed from the signature-seeded environment.
@@ -54,7 +53,7 @@ pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError>
         message: format!("SAPIC typing: {e}"),
     })?;
 
-    // Pass 1 — `mapMProcesses typeAndRenameProcess` (TheoryObject.hs:279-291):
+    // Pass 1 — `mapMProcesses typeAndRenameProcess` (TheoryObject.hs):
     // every process-bearing item typed in item order; `EquivLemma` types its
     // first process before its second.
     for item in &mut thy.items {
@@ -73,7 +72,7 @@ pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError>
     }
 
     // Pass 2 — `mapMProcessesDef typeAndRenameProcessDef`
-    // (TheoryObject.hs:294-301, Typing.hs:217-225), same environment.
+    // (TheoryObject.hs, Typing.hs), same environment.
     for item in &mut thy.items {
         if let TheoryItem::Translation(TranslationElement::ProcessDef(pd)) = item {
             let (vars, body) = type_process_def(&mut env, pd)?;
@@ -83,7 +82,7 @@ pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError>
     }
 
     // `Map.foldrWithKey addFunctionTypingInfo' (clearFunctionTypingInfos th')`
-    // (Typing.hs:210,226): every source-positioned typing item is dropped, and
+    // (Typing.hs): every source-positioned typing item is dropped, and
     // `foldrWithKey` applies the largest key innermost while each application
     // APPENDS, so the re-emitted order is descending key order — `BTreeMap`
     // reverse iteration (`UserDefinedSym`'s derived `Ord` matches HS's tuple
@@ -108,7 +107,7 @@ fn type_one(env: &mut TypingEnvironment, proc: &PlainProcess) -> Result<PlainPro
     })
 }
 
-/// `typeAndRenameProcessDef` (Typing.hs:217-225):
+/// `typeAndRenameProcessDef` (Typing.hs):
 ///
 /// ```haskell
 /// let pvars = fromMaybe (S.toList (varsProc pr) List.\\ accBindings pr) p._pVars
@@ -174,7 +173,7 @@ fn type_process_def(
         // HS `_ -> return p` ("should not be taken").
         return Ok((declared, pr));
     };
-    // `map termVar' tVars` (VTerm.hs:139-141) — every list element is
+    // `map termVar' tVars` (VTerm.hs) — every list element is
     // a variable (typing preserves the term structure).
     let vars = t_vars
         .iter()

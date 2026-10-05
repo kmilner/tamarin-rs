@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Tools.EquationStore`.
 //!
@@ -163,17 +162,17 @@ pub struct EqDisj {
 }
 
 /// One element of HS's `_eqsConj :: Conj (SplitId, S.Set LNSubstVFresh)`
-/// (EquationStore.hs:116-121), walked through the pair instance
-/// (LTerm.hs:855-860).  The `SplitId` half contributes nothing and maps to
-/// itself (EquationStore.hs:91-94); the substitutions follow in ascending
-/// `Ord` order, which is the `S.toList` of the HS set (LTerm.hs:898-901); the
+/// (EquationStore.hs), walked through the pair instance
+/// (LTerm.hs).  The `SplitId` half contributes nothing and maps to
+/// itself (EquationStore.hs); the substitutions follow in ascending
+/// `Ord` order, which is the `S.toList` of the HS set (LTerm.hs); the
 /// port stores the disjunction as an insertion-ordered `Vec`, so the walk
 /// sorts a list of references to reach that order.  Each substitution then
-/// exposes its domain keys alone (SubstVFresh.hs:196-202), which keeps the
+/// exposes its domain keys alone (SubstVFresh.hs), which keeps the
 /// witness indices of the ranges.
 ///
 /// Arbitrary maps re-sort and deduplicate the result, matching HS's
-/// `S.fromList` rebuild (LTerm.hs:903). Monotone maps preserve the existing
+/// `S.fromList` rebuild (LTerm.hs). Monotone maps preserve the existing
 /// set order and cannot introduce duplicates.
 impl HasFrees for EqDisj {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
@@ -198,9 +197,9 @@ impl HasFrees for EqDisj {
 }
 
 /// `orderedSubsts = sortOnMemo dropNameHintsLNSubstVFresh . S.toList`
-/// (EquationStore.hs:223-224): a disjunction's cases in canonical split
+/// (EquationStore.hs): a disjunction's cases in canonical split
 /// order.  The single source of truth for case ordering — `perform_split`
-/// and `pretty_system::pp_disj` (HS `ppDisj`, EquationStore.hs:659-662)
+/// and `pretty_system::pp_disj` (HS `ppDisj`, EquationStore.hs)
 /// both go through it, so the numbering shown for a disjunction matches
 /// the `split_case_i` labels a split of it emits.
 ///
@@ -210,7 +209,7 @@ impl HasFrees for EqDisj {
 ///     set's enumeration order has to be materialised here).
 ///  2. the stable `sort_by_cached_key(drop_name_hints)` re-sorts by the
 ///     α-canonical key (`drop_name_hints` = `dropNameHintsLNSubstVFresh`,
-///     EquationStore.hs:143-147), which renumbers each subst's fresh
+///     EquationStore.hs), which renumbers each subst's fresh
 ///     witness range-vars by first appearance in domain-key order.  This
 ///     makes `split_case_i` order independent of the Maude
 ///     fresh-allocation counter (Rust's witness indices need not equal
@@ -223,7 +222,7 @@ impl HasFrees for EqDisj {
 ///
 /// HS's `dropNameHintsBound` does NOT reach here: it is mapped only over
 /// the throwaway `addNormSys` copy in `removeRedundantCases`
-/// (Sources.hs:244-246, `map (fst . snd) ...` keeps the ORIGINAL case and
+/// (Sources.hs, `map (fst . snd) ...` keeps the ORIGINAL case and
 /// discards the name-hint-dropped system; gated on `enableBP ||
 /// enableMSet`), so it never mutates the live `sEqStore` that
 /// `performSplit` later splits.
@@ -246,10 +245,10 @@ pub struct EquationStore {
     pub next_split: SplitId,
 }
 
-/// `instance HasFrees EqStore` (EquationStore.hs:155-164): the free
+/// `instance HasFrees EqStore` (EquationStore.hs): the free
 /// substitution, then the conjunction of disjunctions in list order
-/// (LTerm.hs:891-896).  `next_split` is a `SplitId`, whose instance folds to
-/// nothing and maps to itself (EquationStore.hs:91-94).
+/// (LTerm.hs).  `next_split` is a `SplitId`, whose instance folds to
+/// nothing and maps to itself (EquationStore.hs).
 impl HasFrees for EquationStore {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
         self.subst.for_each_free(f);
@@ -421,7 +420,7 @@ impl EquationStore {
         // store that drops `id` and adds a fresh single-case
         // disjunction containing just that subst.
         //
-        // Mirrors Haskell `performSplit` (EquationStore.hs:228-237):
+        // Mirrors Haskell `performSplit` (EquationStore.hs):
         //   mkNewEqStore before after <$> orderedSubsts disj
         if tamarin_utils::env_gate!("TAM_DBG_PERFORM_SPLIT") {
             eprintln!(
@@ -549,15 +548,15 @@ impl EquationStore {
             })
             .collect();
 
-        // Haskell-faithful factored unification (Unification.hs:107-120):
+        // Haskell-faithful factored unification (Unification.hs):
         // first run the local non-AC unifier; only AC residuals go to
         // Maude.  When `unifyLTermFactored` returns `Just (m, [])`, the
         // result is the local subst directly — NO Maude call.  This is
         // critical for foo_eligibility-style cases: the local unifier
         // orients same-sort var-var with larger-idx-as-key
-        // (Unification.hs:273-281, see line 276), so stable pattern vars (small idx like
+        // (Unification.hs), so stable pattern vars (small idx like
         // t.1, t.2) stay on the value side and are dropped by
-        // `restrict stableVars` (Sources.hs:113-137, see line 118).
+        // `restrict stableVars` (Sources.hs).
         let local_result = tamarin_term::unification::unify_lnterm_factored(applied.clone());
         let local_result = match local_result {
             Some(r) => r,
@@ -612,10 +611,10 @@ impl EquationStore {
         // the local subst at the end (mirrors `flattenUnif` =
         // `map (\`composeVFresh\` subst) substs`).
         //
-        // HS-faithful (EquationStore.hs:241-270 `addEqs`): the AC unifier
+        // HS-faithful (EquationStore.hs `addEqs`): the AC unifier
         // is `unifyLNTermFactored eqs` with NO avoid — witness idxs are
         // numbered purely per-call at `avoid (M.elems bindings)`
-        // (Term/Maude/Types.hs:123-127) and the resulting `SubstVFresh`
+        // (Term/Maude/Types.hs) and the resulting `SubstVFresh`
         // witnesses are α-scoped per subst, so a system-wide floor is
         // neither passed nor needed.  (The single-unifier arm below still
         // re-bases its own witnesses via `freshen_witness_range`.)
@@ -648,8 +647,8 @@ impl EquationStore {
         // rounds with the local subst and the Maude unifier SEPARATELY,
         // not one round with their composition; (b) SplitLater callers get
         // a SplitG goal + a live singleton disj (HS `solveRuleEqs SplitLater`,
-        // Reduction.hs:772-777, reached from Reduction.hs:630;
-        // addEqs/performSplit in `solveTermEqs` at Reduction.hs:738-752);
+        // Reduction.hs, reached from Reduction.hs;
+        // addEqs/performSplit in `solveTermEqs` at Reduction.hs);
         // (c) addDisj bumps the next-split-id counter.
         // (Paired HS/RS traces on Scott::key_secrecy show applyBound never
         // SPLITS a disj subst on this corpus — out>1 occurs 0 times on
@@ -688,7 +687,7 @@ impl EquationStore {
             // `compose` accumulation collapses to a single `from_list` build.
             let maude_subst = LNSubst::from_list(raw);
             // Haskell-faithful: compose local_subst with Maude's result
-            // (Term/Unification.hs:168-170, see line 170 `flattenUnif` =
+            // (Term/Unification.hs `flattenUnif` =
             // `map (\`composeVFresh\` subst) substs`).
             let subst = maude_subst.compose(&local_subst);
             // Haskell-faithful: call applyEqStore so existing disj substs
@@ -1454,8 +1453,7 @@ impl EquationStore {
                 .zip(argss.iter())
                 .map(|(s, args)| {
                     let mut kept = without_key(s, &v);
-                    // HS-faithful `newMappings` (EquationStore.hs:
-                    // 455-464): `newMappings []` ERRORS ("AC symbols must have
+                    // HS-faithful `newMappings` (EquationStore.hs): `newMappings []` ERRORS ("AC symbols must have
                     // arity >= 2"); silently bailing here would leave a
                     // malformed store (the factor `{v -> op(fv1,fv2)}` is
                     // composed into the free subst below regardless, while this
@@ -1607,7 +1605,7 @@ impl EquationStore {
             // `freshToFree emptySubstVFresh` is empty, and `foreachDisj`
             // UNCONDITIONALLY runs `applyEqStoreAt "foreachDisj:simpSingleton"`
             // with that empty msubst after replacing the disj
-            // (EquationStore.hs:563-580, see line 578).  An empty asubst is NOT a no-op:
+            // (EquationStore.hs).  An empty asubst is NOT a no-op:
             // applyEqStore re-runs `applyBound` on every remaining disj
             // subst, re-deriving (and RENUMBERING) their fresh witnesses
             // under the current avoid set (renameAvoiding + unify +
@@ -1628,7 +1626,7 @@ impl EquationStore {
         // HS-faithful witness-freshening floor for the already-folded free
         // subst.  `simpSingleton` folds this disj via `freshToFree`, which in
         // HS draws its fresh range-var renames from the ambient `MonadFresh`
-        // counter (Term/Substitution.hs:54-66 → importBinding → freshLVar).
+        // counter (Term/Substitution.hs → importBinding → freshLVar).
         // That
         // counter threads monotonically through `runReduction`, so it is
         // ALWAYS above every idx it has ALREADY DRAWN — i.e. above the range
@@ -1636,7 +1634,7 @@ impl EquationStore {
         // (`applyEqStore`'s `asubst \`compose\` eqsSubst`).  RS re-seeds a
         // per-pop counter from `avoid sys = bounds_max`, which — HS-faithfully,
         // matching `foldFrees (SubstVFresh) = foldFrees f . M.keys`
-        // (SubstVFresh.hs:196-202, see line 197) — counts only DOMAIN keys, not range vars; when
+        // (SubstVFresh.hs) — counts only DOMAIN keys, not range vars; when
         // under-advanced (the WF message-derivation probe of a let-destructor
         // rule) `alloc` could draw an idx equal to an already-folded free-subst
         // range var, fusing two witnesses and forcing the eq-store false
@@ -1646,7 +1644,7 @@ impl EquationStore {
         //
         // Crucially we DO NOT floor above the un-folded sibling disjs in
         // `self.conj`: HS's counter is NOT above those.  Their range vars are
-        // per-call-local unify witnesses (Term/Maude/Types.hs:123-127,
+        // per-call-local unify witnesses (Term/Maude/Types.hs,
         // `evalFreshAvoiding (M.elems bindings)`), seeded above the *query's*
         // vars — NOT drawn from the `runReduction` MonadFresh counter — so HS's
         // counter sits far below them (RYY em source: fold draws ~x.18 while
@@ -1655,7 +1653,7 @@ impl EquationStore {
         // `applyBound`'s `renameAvoiding (map snd slist) avoidSet` — which, on
         // the post-fold `applyEqStore` re-unify, renames every conj disj's
         // range away from `varsRange newsubst` (the fold's fresh vars)
-        // regardless of numeric overlap (EquationStore.hs:281-291).  RS mirrors
+        // regardless of numeric overlap (EquationStore.hs).  RS mirrors
         // that in `apply_eq_store`.  Flooring above the conj here instead makes
         // each fold ratchet the counter to the max sibling witness, and the
         // subsequent re-unify re-bases those siblings even higher — a positive
@@ -1869,7 +1867,7 @@ impl EquationStore {
         // `evalFreshAvoiding (rename ...)` which seeds the supply at
         // `succ (max idx in avoidSet)` LOCALLY — bounded by the call's
         // own `avoid_max`, NOT the global session counter
-        // (`avoid` at LTerm.hs:680-681, `renameAvoiding` at LTerm.hs:696-697;
+        // (`avoid` at LTerm.hs, `renameAvoiding` at LTerm.hs;
         // EquationStore.hs `applyEqStore`/`applyBound`).  Each variant's
         // witness allocation therefore starts from the same avoid
         // baseline, and the variants' witnesses can OVERLAP in idx
@@ -1926,7 +1924,7 @@ impl EquationStore {
                 // HS `applyBound` (EquationStore.hs `applyEqStore`):
                 //   ran = renameAvoiding (map snd slist) avoidSet
                 // where `renameAvoiding s t = evalFreshAvoiding (rename s) t`
-                // (LTerm.hs:696-697) and `rename` (LTerm.hs:638-645) is a
+                // (LTerm.hs) and `rename` (LTerm.hs) is a
                 // SINGLE uniform monotone shift over the WHOLE range list:
                 //   freshStart <- freshIdents (succ (maxVarIdx - minVarIdx))
                 //   mapFrees (Monotone $ incVar (freshStart - minVarIdx))
@@ -1980,14 +1978,14 @@ impl EquationStore {
                 // (`reserve_idxs`), and the post-unify `reduce` calls all
                 // draw witness idxs from a fresh local counter seeded at
                 // `succ avoid_max` (mirroring HS's `evalFreshAvoiding
-                // (range) avoidSet`, LTerm.hs:696-697).  The Maude process
+                // (range) avoidSet`, LTerm.hs).  The Maude process
                 // state is shared (Arc cloned), only the counter is
                 // per-call — so the global counter advances ONLY for
                 // non-applyBound allocations.
                 //
                 // HS-faithful seed: `avoid avoidSet = succ (max idx in
                 // avoidSet)` where avoidSet = `domVFresh s ∪ varsRange
-                // newsubst` (LTerm.hs:680-681 `avoid`; EquationStore.hs
+                // newsubst` (LTerm.hs `avoid`; EquationStore.hs
                 // `renameAvoiding (range slist) (domVFresh s ∪ varsRange newsubst)`).
                 // HS does NOT include `max_idx` (the post-shift
                 // equation-system vars) in the seed — the shifted RHS
@@ -2003,7 +2001,7 @@ impl EquationStore {
                 if let Some(input) = &dbg_in {
                     eprintln!("[rs-aes-applyBound] IN  : {:?}", input);
                 }
-                // HS `applyBound` (EquationStore.hs:281-291, see line 282): `unifiers =
+                // HS `applyBound` (EquationStore.hs): `unifiers =
                 // unifyLNTerm eqs` — NO avoid.  The RHS terms were already
                 // rebased above `avoidSet` by the uniform-shift rename above
                 // (HS `ran = renameAvoiding (range) avoidSet`), so the reply
@@ -2051,7 +2049,7 @@ impl EquationStore {
                     // introduce narrowing witnesses for cross-sort
                     // var-var unification.  E.g. for `Var(~k:Fresh) =
                     // Var(~mw:Msg)`, the local unifier returns
-                    // `~mw:Msg → Var(~k:Fresh)` (Unification.hs:273-281, see line 278
+                    // `~mw:Msg → Var(~k:Fresh)` (Unification.hs
                     // orientation).  After restrict drops `~mw`, the
                     // `~k` narrowing info is lost AND `~k` (a system
                     // var in new_subst's range) ends up referenced
@@ -2147,7 +2145,7 @@ impl EquationStore {
                     // returns the raw Maude unifier outputs without
                     // calling `normSubstVFresh'` — that normaliser is only
                     // used during VARIANT COMPUTATION for rules
-                    // (RuleVariants.hs:61-134, see line 74 `normSubstVFresh'`), NOT here.  Normalising here
+                    // (RuleVariants.hs `normSubstVFresh'`), NOT here.  Normalising here
                     // hides non-NF range values (e.g. `Xor(~k,~k)` that
                     // reduces to `zero`) from the post-fan-out
                     // `simpMinimize`/`substCreatesNonNormalTerms` filter,
@@ -2276,7 +2274,7 @@ fn is_perm_subst(
     // `others_shared` also holds when neither `v1` nor `v2` is in the domain,
     // and the panics below then abort the prover — faithful, since HS's
     // `fromMaybe (error ...)` images are demanded under the same condition
-    // (EquationStore.hs:596-607).
+    // (EquationStore.hs).
     let others_shared = s1
         .iter()
         .all(|(x, t)| x == v1 || x == v2 || s2.image_of(x).is_some_and(|u| u == t));

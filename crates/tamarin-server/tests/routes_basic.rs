@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Integration tests for the LIVE routes that don't run the solver.
 //!
@@ -144,7 +143,7 @@ async fn test_robots_txt() {
 async fn test_kill_without_path_returns_400() {
     // Haskell: `/kill` without `?path=...` returns 400 with HTML body
     // "Invalid Arguments / No path to kill specified!".
-    // See `getKillThreadR` in `src/Web/Handler.hs:1517-1525`.
+    // See `getKillThreadR` in `src/Web/Handler.hs`.
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s.get("/kill").await;
     assert_eq!(
@@ -261,7 +260,7 @@ async fn test_main_message_envelope() {
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s.get("/thy/trace/1/main/message").await;
     assert_eq!(res.status(), 200);
-    // HS `messageSnippet` (Web/Theory.hs:926-937) emits the Signature section
+    // HS `messageSnippet` (Web/Theory.hs) emits the Signature section
     // and the Construction/Deconstruction rule sections.  It does not emit the
     // restrictions, which appear on the rules page.  There is no load stamp,
     // so the test compares the complete envelope.
@@ -278,7 +277,7 @@ async fn test_main_lemma_envelope() {
     assert_eq!(res.status(), 200);
     let body = res.text().await.expect("text");
     // HS `htmlThyPath` renders `TheoryLemma _ -> text "this is a mistake"`
-    // (Web/Theory.hs:1011-1152, see line 1074) — a deliberate upstream quirk; the bare
+    // (Web/Theory.hs) — a deliberate upstream quirk; the bare
     // `main/lemma/<name>` path is one that the frontend never uses.  The
     // frontend always links to `main/proof/<name>` instead.
     //
@@ -293,7 +292,7 @@ async fn test_main_lemma_envelope() {
 #[tokio::test]
 async fn test_main_with_missing_idx_returns_404_html() {
     // Haskell `withTheory` returns 404 HTML for an unknown idx
-    // (see `src/Web/Handler.hs:662-672`).  We mirror that exactly —
+    // (see `src/Web/Handler.hs`).  We mirror that exactly —
     // the frontend's loading-dialog dismiss / global error handler
     // distinguishes 404 from a JSON envelope.
     let s = start_server_with_theory("issue193.spthy").await;
@@ -352,7 +351,7 @@ async fn test_not_found_page_escapes_the_request_path() {
     );
 }
 
-/// The theory-index route piece is `#Int` (`src/Web/Types.hs:580-616`): a
+/// The theory-index route piece is `#Int` (`src/Web/Types.hs`): a
 /// piece Yesod's `PathPiece Int` cannot read — trailing junk, an over-long
 /// literal — makes the route not match, and a piece that reads but names no
 /// live theory (a negative one, say) is the handlers' own miss.  All of them
@@ -434,7 +433,7 @@ async fn test_source_returns_plain_text() {
     let ct = content_type(&res);
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
     // The route renders the complete `prettyClosedTheory` (`getTheorySourceR`,
-    // src/Web/Handler.hs:1015-1022).  The test compares it with the oracle's
+    // src/Web/Handler.hs).  The test compares it with the oracle's
     // rendering.  The `Generated from:` banner's build-specific values are the
     // only exception.
     assert_theory_source_matches_capture(&res.text().await.expect("read"), "source.txt");
@@ -447,7 +446,7 @@ async fn test_message_deduction_returns_plain_text() {
     assert_eq!(res.status(), 200);
     let ct = content_type(&res);
     assert!(ct.starts_with("text/plain"), "got CT={}", ct);
-    // `getTheoryMessageDeductionR` (src/Web/Handler.hs:1050-1055) renders the
+    // `getTheoryMessageDeductionR` (src/Web/Handler.hs) renders the
     // same `prettyClosedTheory` that `/source` renders.  The oracle's two
     // captures hold the same bytes.  The test compares this route with its own
     // capture.
@@ -461,7 +460,7 @@ async fn test_download_for_local_theory_returns_source_file() {
     assert_eq!(res.status(), 200);
 
     // Haskell uses `application/octet-stream` (see
-    // `getDownloadTheoryR` in `src/Web/Handler.hs:1763-1766` — it
+    // `getDownloadTheoryR` in `src/Web/Handler.hs` — it
     // returns `(typeOctet, source)`).  We mirror that exactly so the
     // frontend's "Save As" UX is bit-for-bit identical.
     let ct = content_type(&res);
@@ -483,7 +482,7 @@ async fn test_download_for_local_theory_returns_source_file() {
     );
 
     // `getDownloadTheoryR` returns `getTheorySourceR`'s body under the octet
-    // content type (src/Web/Handler.hs:1763-1766).  The test therefore
+    // content type (src/Web/Handler.hs).  The test therefore
     // compares this payload with the oracle's in the same way as `/source`.
     assert_theory_source_matches_capture(&res.text().await.expect("read"), "download.txt");
 }
@@ -532,7 +531,7 @@ async fn test_reload_returns_redirect_json_same_idx() {
     assert_eq!(rust_keys, haskell_keys);
     let redir = v.get("redirect").and_then(|t| t.as_str()).unwrap_or("");
     // Haskell `postReloadTheoryR` uses `replaceTheory` at the SAME idx
-    // (see `src/Web/Handler.hs:443-460`).  Match exactly — preserves
+    // (see `src/Web/Handler.hs`).  Match exactly — preserves
     // URLs bookmarked by the user.
     assert!(
         redir.starts_with("/thy/trace/1/overview/help"),

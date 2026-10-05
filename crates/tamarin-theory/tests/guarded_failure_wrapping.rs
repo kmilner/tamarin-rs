@@ -1,14 +1,13 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Pins the LAYOUT of the ` Formula guardedness` report body.
 //!
-//! HS throws a `Doc`, not a string (Guarded.hs:471-566): the
-//! unguarded-variable list is an `fsep` (Guarded.hs:507-514) and each quoted
-//! formula is `nest 2 . doubleQuotes . prettyLNFormula` (Guarded.hs:476-477).
+//! HS throws a `Doc`, not a string (Guarded.hs): the
+//! unguarded-variable list is an `fsep` (Guarded.hs) and each quoted
+//! formula is `nest 2 . doubleQuotes . prettyLNFormula` (Guarded.hs).
 //! `checkGuarded`'s `nest 2 err` and `prettyWfErrorReport`'s `nest 2`
-//! (Wellformedness.hs:124-125) lay both out at nesting 4 and 6, and the report is
+//! (Wellformedness.hs) lay both out at nesting 4 and 6, and the report is
 //! rendered with the plain `render`, so the widths are HughesPJ's default
 //! 100/67 — a long name list and a long formula both wrap.
 //!

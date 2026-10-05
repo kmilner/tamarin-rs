@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use crate::parse_error::{ErrorDetails, MAX_DIAGNOSTIC_MESSAGE_CHARS};
@@ -45,7 +44,7 @@ fn diff_theory_checks_each_lemma_namespace() {
 use tamarin_term::maude_sig::pair_maude_sig;
 
 /// [`parse_formula_str`] against the signature HS `parseString` installs
-/// (`pairMaudeSig`, Theory/Text/Parser/Token.hs:250-258).
+/// (`pairMaudeSig`, Theory/Text/Parser/Token.hs).
 fn parse_formula_str_sig(s: &str) -> Result<Formula, ParseError> {
     parse_formula_str(s, &pair_maude_sig())
 }
@@ -336,7 +335,7 @@ fn conflicting_arities_is_a_parse_error() {
 }
 
 /// HS `extendSig`'s own two checks
-/// (Theory/Text/Parser/Signature.hs:107-119), raised at the
+/// (Theory/Text/Parser/Signature.hs), raised at the
 /// position the builtin's `symbol` lexeme reached.
 #[test]
 fn builtins_item_rejects_conflicting_functions_and_macros() {
@@ -544,7 +543,7 @@ fn formula_string() {
     }
 }
 
-// HS `blatom` (Theory/Text/Parser/Formula.hs:45-57) tries the term-relational
+// HS `blatom` (Theory/Text/Parser/Formula.hs) tries the term-relational
 // atoms
 // (Subterm/Less/EqE) BEFORE the bare-fact `Pred` alternative, so an
 // uppercase function applied with a relational operator is an equality/
@@ -604,7 +603,7 @@ fn relational_application_errors_outweigh_predicate_prefixes() {
     assert_eq!(&source[error.span()], "Foo");
 }
 
-// HS `typep` (Token.hs:471-473) maps only the literal `Any` to the default
+// HS `typep` (Token.hs) maps only the literal `Any` to the default
 // (Nothing); lowercase `any` is `Just "any"`. Verified against
 // tamarin-prover 1.13.0: `new x:any` renders with `:any` preserved.
 #[test]
@@ -654,10 +653,10 @@ fn empty_tuple_is_error_singleton_collapses() {
     }
 }
 
-// HS `factAnnotation` (Theory/Text/Parser/Fact.hs:31-36, see line 33) maps
+// HS `factAnnotation` (Theory/Text/Parser/Fact.hs) maps
 // `opUnion` to SolveFirst, `opMinus` to SolveLast and `no_precomp` to
 // NoSources.  HS also defines `opUnion = symbol_ "++" <|> symbol_ "+"`
-// (Token.hs:551-552).  So the parser accepts `[++]` like `[+]`.
+// (Token.hs).  So the parser accepts `[++]` like `[+]`.
 // Verified against tamarin-prover 1.13.0: `Foo(~k)[++]` parses and renders
 // as `[+]`.
 #[test]
@@ -891,12 +890,11 @@ fn has_casetest(thy: &Theory) -> bool {
 
 // Regression: `test` is a genuine top-level theory-item keyword (HS
 // `caseTest = CaseTest <$> (symbol "test" *> identifier)`,
-// Theory/Text/Parser/Accountability.hs:25-27, see line 26, dispatched in `addItems`,
-// Theory/Text/Parser.hs:230-393, see line 268) but is ALSO an ordinary message variable
+// Theory/Text/Parser/Accountability.hs, dispatched in `addItems`,
+// Theory/Text/Parser.hs) but is ALSO an ordinary message variable
 // name inside proof goals — e.g. `solve( Match( test, sid ) @ #i4 )` in
 // examples/ake/bilinear/Scott.spthy.  HS parses the proof skeleton
-// STRUCTURALLY (`solve <$> parens goal`, Theory/Text/Parser/Proof.hs:76-85,
-// see line 80), so a `test` inside
+// STRUCTURALLY (`solve <$> parens goal`, Theory/Text/Parser/Proof.hs), so a `test` inside
 // `solve( ... )` is a `parens`-nested term and can never begin a new
 // top-level item. Parsing the proof grammar must consume the complete goal
 // before returning to the theory-item parser.
@@ -984,7 +982,7 @@ end"#;
 // ESCAPED, UNBALANCED parens inside a double-quoted string literal —
 // e.g. `regex "cp\("` and `regex "In_A\( 'S', <'codes'"` in
 // examples/csf18-alethea/....  Those `(`s are opaque regex text (HS lexes
-// the whole thing as `stringLiteral`, Token.hs:366-367); counting them as
+// the whole thing as `stringLiteral`, Token.hs); counting them as
 // grouping would swallow every following item. The tactic grammar must
 // treat double-quoted string interiors as opaque.
 #[test]
@@ -1063,10 +1061,10 @@ fn tactic_presort_requires_one_known_non_oracle_ranking() {
 
 // Regression: a proof CASE LABEL that collides with a top-level keyword must
 // not truncate the capture.  HS parses `oneCase = symbol "case" *> identifier`
-// (Theory/Text/Parser/Proof.hs:98-115, see line 115) structurally, so the identifier after
+// (Theory/Text/Parser/Proof.hs) structurally, so the identifier after
 // `case` is the case NAME and can be any top-level keyword — case names come
 // from rule / source-case names, and `test` is the CaseTest keyword
-// (Theory/Text/Parser/Accountability.hs:25-27, see line 26).  A rule named
+// (Theory/Text/Parser/Accountability.hs).  A rule named
 // `test` prints its solved case as `case test`, which must remain part of
 // the proof even though it is outside a parenthesized goal.
 #[test]
@@ -1198,9 +1196,9 @@ fn equation_lhs(src: &str) -> Term {
     panic!("theory must contain an equation");
 }
 
-// HS `functionAttribute` (Theory/Text/Parser/Signature.hs:164-171) accepts
+// HS `functionAttribute` (Theory/Text/Parser/Signature.hs) accepts
 // `AC`, `NDC-diff` and `NDC`; `function`
-// (Theory/Text/Parser/Signature.hs:183-225) folds them into the symbol's AC
+// (Theory/Text/Parser/Signature.hs) folds them into the symbol's AC
 // and NDC state.
 #[test]
 fn function_attributes_ac_ndc() {
@@ -1229,13 +1227,13 @@ fn function_attributes_ac_ndc() {
     assert!(e.private && e.destructor && !e.ac && !e.ndc && !e.ndc_diff);
 }
 
-// HS `acterm` (Theory/Text/Parser/Term.hs:165-172): a binary `[AC]` symbol is
+// HS `acterm` (Theory/Text/Parser/Term.hs): a binary `[AC]` symbol is
 // also an infix,
 // left-associative operator — the notation `prettyTerm` emits for such
 // terms.  The AST records the infix spelling as `BinOp::AcFct`, distinct
 // from the prefix `App`, because a name that is also a `NoEq` symbol of
 // the signature resolves NoEq when written prefix (`lookupArity`,
-// Theory/Text/Parser/Term.hs:62-72) but stays the AC symbol when written
+// Theory/Text/Parser/Term.hs) but stays the AC symbol when written
 // infix.
 #[test]
 fn ac_symbol_parses_infix_left_associative() {
@@ -1281,7 +1279,7 @@ fn ac_infix_requires_a_preceding_declaration() {
 
 // A `:` after a variable means different things inside and outside a SAPIC
 // process.  Rules/formulas use `msgvar`/`lvar` = `sortedLVar`, whose
-// `mkSuffixParser` reads `x:nat` as the NAT-SORTED `x` (Token.hs:407-432);
+// `mkSuffixParser` reads `x:nat` as the NAT-SORTED `x` (Token.hs);
 // processes use `sapicvar` = `lvarNoSuffix` (prefix sorts only) plus
 // an optional type, so the same text is the msg-sorted `x` carrying the SAPIC
 // TYPE `"nat"` (Token.hs). Node-sorted variables default to type `node`, while
@@ -1380,7 +1378,7 @@ fn var_of(t: &Term) -> &VarSpec {
 
 /// A sigil names the sort and a bare identifier is message-sorted, as HS
 /// `sortedLVar`'s prefix arms do — the bare `LSortMsg -> pure ()` case
-/// (Token.hs:409-433, see lines 424-426).
+/// (Token.hs).
 #[test]
 fn bare_variable_is_msg_sorted() {
     let t = rule_premise_term(
@@ -1401,7 +1399,7 @@ fn bare_variable_is_msg_sorted() {
 }
 
 /// HS `sortedLVar`'s suffix arm returns `LVar n s i` with `s` the suffix's
-/// sort, the same plain `LVar` the sigil arms build (Token.hs:409-421), so
+/// sort, the same plain `LVar` the sigil arms build (Token.hs), so
 /// `x:fresh` and `~x` are one variable.
 #[test]
 fn sort_suffix_parses_to_the_plain_sort() {
@@ -1422,8 +1420,8 @@ fn sort_suffix_parses_to_the_plain_sort() {
 }
 
 /// `blatom`'s timepoint operands are read with `nodevar`, which stamps
-/// `LSortNode` on a bare identifier (Theory/Text/Parser/Formula.hs:44-59,
-/// Token.hs:443-448): the argument of `last`, the operand after `@`, both
+/// `LSortNode` on a bare identifier (Theory/Text/Parser/Formula.hs,
+/// Token.hs): the argument of `last`, the operand after `@`, both
 /// operands of `<`, and both operands of an equality whose left operand is a
 /// node variable — that last one being the "node equality" alternative, which
 /// is reached only because "term equality" reads its operands with `msgvar`
@@ -1465,11 +1463,11 @@ fn timepoint_positions_are_node_sorted() {
     }
 }
 
-/// `nodevar` reads a bare name with `indexedIdentifier` (Token.hs:445-447),
+/// `nodevar` reads a bare name with `indexedIdentifier` (Token.hs),
 /// which does not consult the signature, so a name declared as an arity-0
 /// symbol is still a timepoint variable in a timepoint position — unlike the
 /// term parser, where `nullaryApp` claims it
-/// (Theory/Text/Parser/Term.hs:158-163).
+/// (Theory/Text/Parser/Term.hs).
 #[test]
 fn nullary_symbol_name_in_a_timepoint_position_is_a_variable() {
     // `c` is an application everywhere the term parser reads it.
@@ -1513,16 +1511,16 @@ fn nullary_symbol_name_in_a_timepoint_position_is_a_variable() {
 }
 
 /// A quantifier binder is `try varp <|> nodep` with `varp = msgvar`
-/// (Theory/Text/Parser/Formula.hs:73-76), and an operand of an AC operator is
+/// (Theory/Text/Parser/Formula.hs), and an operand of an AC operator is
 /// a message term, so the `dif` binder and the `seq1` operand of
 /// examples/sapic/fast/SCADA/opc_ua_secure_conversation.spthy's
 /// `A_Counter_Increases` restriction are both message-sorted.  Both feed
-/// `Ord LVar`, which compares the sort second (LTerm.hs:546-548), so the
+/// `Ord LVar`, which compares the sort second (LTerm.hs), so the
 /// printed operand order of `seq1 + dif` follows from them.
 #[test]
 fn bare_binder_and_bare_message_operand_are_msg_sorted() {
     // That theory declares `builtins: multiset`, which is what opens the `+`
-    // level of `msetterm` (Theory/Text/Parser/Term.hs:195-200).
+    // level of `msetterm` (Theory/Text/Parser/Term.hs).
     let f = parse_formula_str(
         "All A B seq1 seq2 #i #j.(Seq_Sent(A, B, seq1) @ #i \
          & Seq_Sent(A, B, seq2) @ #j & #i < #j ==> Ex dif. seq2 = seq1 + dif )",
@@ -1567,7 +1565,7 @@ fn rule_conclusions(src: &str) -> Vec<Fact> {
         .expect("the theory declares a rule")
 }
 
-/// HS `nullaryApp` (Theory/Text/Parser/Term.hs:158-163) claims a bare
+/// HS `nullaryApp` (Theory/Text/Parser/Term.hs) claims a bare
 /// identifier that is an arity-0 symbol of `funSyms maudeSig ∪ macroNames
 /// maudeSig`, so it is an application, not a variable.  A sigil and a use
 /// ahead of the declaration leave a variable in HS too. A `.idx`, a `:sort`
@@ -1650,7 +1648,7 @@ fn fixed_literals_do_not_claim_identifier_prefixes() {
 
 /// A prefix (or `op{a}b`) application whose head resolves to HS `expSym`
 /// builds the same node the `^` operator does, which is what makes
-/// `prettyTerm` render it infix (Term/Term.hs:310).  A redeclaration that is
+/// `prettyTerm` render it infix (Term/Term.hs).  A redeclaration that is
 /// a different symbol keeps the application.
 #[test]
 fn prefix_exp_resolving_to_the_dh_symbol_is_binop_exp() {
@@ -1738,10 +1736,10 @@ fn structural_mode_resolves_nullary_names_from_the_signature() {
 // =========================================================================
 //
 // HS applies the `let` substitution to `(ps, as, cs, rs)` inside the rule
-// parsers themselves (Theory/Text/Parser/Rule.hs:119, 133, 153), so a parsed
+// parsers themselves (Theory/Text/Parser/Rule.hs), so a parsed
 // rule carries no `let`-bound names.  `letBlock` folds the bindings with
-// `foldr1 compose` over singletons (Theory/Text/Parser/Let.hs:35) and
-// `compose s1 s2` means `s1(s2(t))` (Term/Substitution/SubstVFree.hs:186-191),
+// `foldr1 compose` over singletons (Theory/Text/Parser/Let.hs) and
+// `compose s1 s2` means `s1(s2(t))` (Term/Substitution/SubstVFree.hs),
 // so the bindings apply in reverse source order.
 
 /// The single rule of a one-rule theory.
@@ -1836,7 +1834,7 @@ fn let_inlining_substitutes_in_actions_and_conclusions() {
 }
 
 /// HS substitutes into `rs0`, the rule's `_restrict` formulas, alongside the
-/// three fact rows (Theory/Text/Parser/Rule.hs:119).
+/// three fact rows (Theory/Text/Parser/Rule.hs).
 #[test]
 fn let_inlining_reaches_an_embedded_restriction() {
     let r = only_rule(
@@ -1958,9 +1956,9 @@ fn rule_let_rejects_sorts_outside_msg_and_nat() {
 }
 
 /// HS's rule `let` binds a variable — `sortedLVar [LSortMsg, LSortNat]` under
-/// `genericletBlock` (Theory/Text/Parser/Let.hs:24-31) — while the rule body
+/// `genericletBlock` (Theory/Text/Parser/Let.hs) — while the rule body
 /// reads a declared arity-0 symbol as `nullaryApp`'s constant
-/// (Theory/Text/Parser/Term.hs:158-163).  A binding whose name is such a
+/// (Theory/Text/Parser/Term.hs).  A binding whose name is such a
 /// symbol therefore binds a variable the body never mentions, and the oracle
 /// prints `--[ E( c ) ]->` for the theory below.
 #[test]

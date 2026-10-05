@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Command-line interface for the Rust tamarin-prover port.
 //!
@@ -120,7 +119,7 @@ pub struct Args {
     // Lemma selection.
     /// True iff any `--prove` (with or without value) was passed.
     pub prove_mode: bool,
-    /// HS `lemmaNames` (TheoryLoader.hs:326): the `--prove` values followed
+    /// HS `lemmaNames` (TheoryLoader.hs): the `--prove` values followed
     /// by the `--lemma` values, each flag's values in reverse command-line
     /// order.  An empty entry (e.g. bare `--prove`) means "all lemmas".
     /// `lemma_matches` reads the list as a set; the order is observable
@@ -548,9 +547,9 @@ pub fn parse_args(raw: &[String]) -> Result<Args, clap::Error> {
         prove_mode: !cli.load.prove.is_empty(),
         lemma_names: {
             // HS `lemmaNames = findArg "prove" as ++ findArg "lemma" as`
-            // (TheoryLoader.hs:326).  `addArg` PREPENDS each occurrence to
-            // the `Arguments` list (Console.hs:279-280) and `findArg` reads
-            // that list front to back (Console.hs:269-270), so one flag's
+            // (TheoryLoader.hs).  `addArg` PREPENDS each occurrence to
+            // the `Arguments` list (Console.hs) and `findArg` reads
+            // that list front to back (Console.hs), so one flag's
             // values arrive in reverse command-line order.
             let mut v: Vec<String> = cli.load.prove.into_iter().rev().collect();
             v.extend(cli.load.lemma.into_iter().rev());
@@ -645,7 +644,7 @@ impl Args {
 
 /// Does the lemma name match the user's `--prove`/`--lemma` filter?
 ///
-/// Mirrors HS `lemmaSelector` (TheoryLoader.hs:418-432): the empty
+/// Mirrors HS `lemmaSelector` (TheoryLoader.hs): the empty
 /// filter `[]`, the single-empty filter `[""]`, and the double-empty
 /// filter `["",""]` all mean "all lemmas".  Otherwise we run
 /// `any lemmaMatches filter` where a pattern ending in `*` matches by

@@ -1,19 +1,18 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Pins that a declared 0-arity function symbol beats a same-named SAPIC
 //! process binder.
 //!
 //! HS's term parser tries `nullaryApp` before the literal parser
-//! (Theory/Text/Parser/Term.hs:151,158-163), so a declared 0-arity name in a
+//! (Theory/Text/Parser/Term.hs), so a declared 0-arity name in a
 //! term position is resolved against the signature AT PARSE TIME.  A process
 //! binder cannot shadow it: `new c` and `lookup t as c` take `sapicvar`
-//! (Theory/Text/Parser/Sapic.hs:87,236) and do bind an `LVar` named `c`, but the `if` condition's
+//! (Theory/Text/Parser/Sapic.hs) and do bind an `LVar` named `c`, but the `if` condition's
 //! `c` — parsed through `standardFormula`'s `msetterm` — is the constant
 //! `fApp c []`.
 //!
-//! `renameUnique` (Typing.hs:235-262) therefore renames the BINDER to `c.1`
+//! `renameUnique` (Typing.hs) therefore renames the BINDER to `c.1`
 //! while its `apply subst` leaves the condition's constant alone: the `Restr_`
 //! restriction keeps `c`, takes no argument, and the `process=` attribute
 //! reprints the bare `c`.
@@ -38,7 +37,7 @@ fn load_theory(stem: &str, src: &str) -> String {
         .join(format!("{stem}_out.spthy"));
 
     // `-o`/`--output` is a cmdargs `flagOpt` whose value must be ATTACHED
-    // (Batch.hs:44-84, see line 76).
+    // (Batch.hs).
     let output_arg = format!("--output={}", out_path.to_str().unwrap());
     let (code, _, stderr) = common::run_raw(
         TMP_DIR,

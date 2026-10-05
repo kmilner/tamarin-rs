@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! End-to-end diagnostics and exit codes for `macro` rejections.
 //!
@@ -14,7 +13,7 @@
 //!
 //! The oracle emits the `maude tool:` banner and, once a theory parses, the
 //! `[Theory X] …` markers on stderr even under `--quiet` (the flag is
-//! registered but never read — TheoryLoader.hs:159-163, 414-416).  The
+//! registered but never read — TheoryLoader.hs).  The
 //! expectations below are its `--quiet` stderr minus the three banner lines,
 //! whose maude path and version are machine-local.
 
@@ -52,8 +51,8 @@ fn run_binary(stem: &str, src: &str) -> (i32, String) {
 }
 
 /// The seven `traceM` markers a theory that loads, translates and closes
-/// writes to stderr: TheoryLoader.hs:451, 496, 581, 594, 696 and
-/// CloseRule.hs:383, 386.  `--quiet` leaves every one of them in place.
+/// writes to stderr: TheoryLoader.hs and
+/// CloseRule.hs.  `--quiet` leaves every one of them in place.
 fn theory_markers(name: &str) -> String {
     [
         "Theory loaded",
@@ -70,7 +69,7 @@ fn theory_markers(name: &str) -> String {
 }
 
 /// A macro named after one of the nine `reservedBuiltins`
-/// (Theory/Text/Parser/Term.hs:74-86) produces a structured diagnostic.
+/// (Theory/Text/Parser/Term.hs) produces a structured diagnostic.
 #[test]
 fn reserved_macro_name_prints_a_diagnostic_and_exits_1() {
     if !maude_available() {

@@ -1,11 +1,10 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of `Control.Monad.Bind` (Control/Monad/Bind.hs:53-58,
-//! Control/Monad/Bind.hs:114-140) at the key and value type its consumers use,
+//! Port of `Control.Monad.Bind` (Control/Monad/Bind.hs,
+//! Control/Monad/Bind.hs) at the key and value type its consumers use,
 //! `LVar`, plus the two renamings Haskell builds on it: `someInst`
-//! (Term/LTerm.hs:627-632) and `renamePrecise` (Term/LTerm.hs:717-735).
+//! (Term/LTerm.hs) and `renamePrecise` (Term/LTerm.hs).
 //!
 //! Haskell threads the binding store as a `StateT (Bindings k v)` and the
 //! identifier supply as a `MonadFresh` layer of the same stack; here both are
@@ -69,12 +68,12 @@ fn lvar_fast_eq(a: &LVar, b: &LVar) -> bool {
 }
 
 /// The store: keyed by [`VarKey`] (content hash, fast pointer eq).  Haskell's
-/// `Bindings` is a `Data.Map` (Control/Monad/Bind.hs:53-58); iteration order is
+/// `Bindings` is a `Data.Map` (Control/Monad/Bind.hs); iteration order is
 /// never observed here — [`Bindings::iter`]'s only consumers build a `Subst`
 /// (a re-sorted `BTreeMap`) and a distinct-key substitution applied by lookup.
 type BindMap = FastMap<VarKey, LVar>;
 
-/// `Bindings LVar LVar` (Control/Monad/Bind.hs:53-58) — one binding per variable, allocated
+/// `Bindings LVar LVar` (Control/Monad/Bind.hs) — one binding per variable, allocated
 /// on first occurrence by [`Bindings::import`].
 #[derive(Clone, Debug, Default)]
 pub struct Bindings {
@@ -83,21 +82,21 @@ pub struct Bindings {
 }
 
 impl Bindings {
-    /// `noBindings` (Control/Monad/Bind.hs:56-58).
+    /// `noBindings` (Control/Monad/Bind.hs).
     pub fn new() -> Self {
         Bindings::default()
     }
 
-    /// `importBinding` (Control/Monad/Bind.hs:125-140) at the value constructor both
-    /// `someInst` (Term/LTerm.hs:632) and `renamePrecise`
-    /// (Term/LTerm.hs:726-735) pass it: the first call for `v` allocates an
+    /// `importBinding` (Control/Monad/Bind.hs) at the value constructor both
+    /// `someInst` (Term/LTerm.hs) and `renamePrecise`
+    /// (Term/LTerm.hs) pass it: the first call for `v` allocates an
     /// `LVar` that keeps `v`'s name and sort and takes its index from `fresh`
     /// under the name hint `v.name`; later calls return that same binding.
     pub fn import<M: MonadFresh>(&mut self, v: &LVar, fresh: &mut M) -> LVar {
         self.import_named(v, v.name, fresh)
     }
 
-    /// `renameDropNamehint` (Term/LTerm.hs:737-740): the same import under the
+    /// `renameDropNamehint` (Term/LTerm.hs): the same import under the
     /// EMPTY name hint, so the binding keeps `v`'s sort and carries the empty
     /// name.  Two variables that share an index and a sort but differ in name
     /// stay two bindings, each with its own index, which is what lets a
@@ -106,7 +105,7 @@ impl Bindings {
         self.import_named(v, "", fresh)
     }
 
-    /// `importBinding mkR v name` (Control/Monad/Bind.hs:125-140) where `mkR`
+    /// `importBinding mkR v name` (Control/Monad/Bind.hs) where `mkR`
     /// builds an `LVar` from the hint and the drawn index under `v`'s sort: the
     /// first call for `v` draws an index from `fresh` under the hint `name` and
     /// binds `v` to it; later calls return that binding.
@@ -135,7 +134,7 @@ impl Bindings {
         bound
     }
 
-    /// `insertBinding` (Control/Monad/Bind.hs:119-123).  Overwrites any existing binding of
+    /// `insertBinding` (Control/Monad/Bind.hs).  Overwrites any existing binding of
     /// `k`.  Seeding `k -> k` is how a caller keeps a variable unchanged
     /// across [`some_inst`] (HS `keepVarBindings`).
     pub fn insert(&mut self, k: LVar, v: LVar) {
@@ -145,7 +144,7 @@ impl Bindings {
         self.map.insert(VarKey(k), v);
     }
 
-    /// `lookupBinding` (Control/Monad/Bind.hs:114-117).
+    /// `lookupBinding` (Control/Monad/Bind.hs).
     pub fn get(&self, v: &LVar) -> Option<LVar> {
         self.map.get(&VarKey(*v)).copied()
     }
@@ -167,7 +166,7 @@ impl Bindings {
     }
 }
 
-/// `someInst t` (Term/LTerm.hs:627-632): replace every free variable whose
+/// `someInst t` (Term/LTerm.hs): replace every free variable whose
 /// binding the caller has not already determined by a fresh variable of the
 /// same name and sort, reusing one binding per variable.
 ///
@@ -183,7 +182,7 @@ pub fn some_inst<T: HasFrees, M: MonadFresh>(t: T, bindings: &mut Bindings, fres
     t.map_free(&mut |v| bindings.get(&v).unwrap_or(v))
 }
 
-/// `renamePrecise t` (Term/LTerm.hs:717-735): replace every free variable with
+/// `renamePrecise t` (Term/LTerm.hs): replace every free variable with
 /// a fresh one, numbering each name from zero, so that two values differing
 /// only in variable indices map to the same result.  It is [`some_inst`] over
 /// an empty store and a per-name identifier supply.

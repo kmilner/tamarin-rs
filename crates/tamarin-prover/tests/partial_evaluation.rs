@@ -1,16 +1,15 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! End-to-end byte pins for `--partial-evaluation`.
 //!
-//! HS applies it inside `closeTranslatedTheory` (TheoryLoader.hs:675-698),
+//! HS applies it inside `closeTranslatedTheory` (TheoryLoader.hs),
 //! between the theory close and `proveTheory`: `applyPartialEvaluation`
-//! (Prover.hs:237-264) replaces the closed theory's proto-rules with the
+//! (Prover.hs) replaces the closed theory's proto-rules with the
 //! abstract interpretation's refined set, splices the abstract-state report
 //! ahead of them as a `TextItem` and re-closes.  So a plain load — no
 //! `--prove` — already shows the whole effect on stdout, while the
-//! `Debug.Trace` step lines (AbstractInterpretation.hs:109-119) are lazy
+//! `Debug.Trace` step lines (AbstractInterpretation.hs) are lazy
 //! thunks forced during rendering and therefore land on stderr AFTER the
 //! `[Theory X] Theory closed` marker.
 //!
@@ -48,7 +47,7 @@ const THEORY: &str = "theory SingleRecv\nbegin\n\n\
 
 /// Run the built binary on [`THEORY`] with `extra` flags, returning
 /// `(exit code, normalized stdout, raw stderr)`.  The banner is NOT stripped
-/// here: `--parse-only` never starts Maude (Batch.hs:91-95), so the tests that
+/// here: `--parse-only` never starts Maude (Batch.hs), so the tests that
 /// want it gone call [`strip_maude_banner`] themselves.
 fn run_binary(stem: &str, extra: &[&str]) -> (i32, String, String) {
     let (code, stdout, stderr) = common::run_raw(TMP_DIR, stem, THEORY, extra);
@@ -58,7 +57,7 @@ fn run_binary(stem: &str, extra: &[&str]) -> (i32, String, String) {
 /// The oracle's `--partial-evaluation=summary` stdout for [`THEORY`],
 /// normalized by [`normalize_stdout`].  Two things to read off it: the
 /// `text{*…*}` report `applyPartialEvaluation` splices at the position of the
-/// first rule item (`replaceProtoRules`, Prover.hs:249-255), and the rules coming back in
+/// first rule item (`replaceProtoRules`, Prover.hs), and the rules coming back in
 /// alphabetical order — `Recv` before `Send`, the reverse of the source.
 const EXPECTED_STDOUT: &[&str] = &[
     "theory SingleRecv",
@@ -125,9 +124,9 @@ const EXPECTED_STDOUT: &[&str] = &[
 ];
 
 /// The `text{*…*}` block of [`EXPECTED_STDOUT`]: `render ppAbsState`
-/// (Prover.hs:257-264) wrapped by `prettyFormalComment` (lib/theory/src/Pretty.hs:19-21).
+/// (Prover.hs) wrapped by `prettyFormalComment` (lib/theory/src/Pretty.hs).
 /// The blank lines around the numbered fact list are the two `$--$` joins
-/// (Text/PrettyPrint/Class.hs:112-114); the one before `*}` is the `".\n\n"` ending the last
+/// (Text/PrettyPrint/Class.hs); the one before `*}` is the `".\n\n"` ending the last
 /// `text`.
 const EXPECTED_REPORT: &[&str] = &[
     "text{* the abstract state after partial evaluation contains 3 facts:",
@@ -147,7 +146,7 @@ const EXPECTED_REPORT: &[&str] = &[
 /// The oracle's `--partial-evaluation=summary` stderr for [`THEORY`] after
 /// the banner: the seven close-pipeline markers, then the `Summary` trace —
 /// one line per fixpoint iteration except the last
-/// (AbstractInterpretation.hs:109-113), with its leading space.
+/// (AbstractInterpretation.hs), with its leading space.
 const EXPECTED_STDERR_SUMMARY: &[&str] = &[
     "[Theory SingleRecv] Theory loaded",
     "[Theory SingleRecv] Theory translated",
@@ -160,7 +159,7 @@ const EXPECTED_STDERR_SUMMARY: &[&str] = &[
 ];
 
 /// The same stderr under `=verbose` (`Tracing`,
-/// AbstractInterpretation.hs:114-119): the step line, a blank, the newly
+/// AbstractInterpretation.hs): the step line, a blank, the newly
 /// added facts as `nest 2 (numbered' …)`, a blank.
 const EXPECTED_STDERR_VERBOSE: &[&str] = &[
     "[Theory SingleRecv] Theory loaded",
@@ -267,7 +266,7 @@ fn stdout_identical_between_styles() {
     assert_ne!(strip_maude_banner(&s_err), strip_maude_banner(&v_err));
 }
 
-/// `--parse-only` returns before `closeTheory` (Batch.hs:198-199), so the
+/// `--parse-only` returns before `closeTheory` (Batch.hs), so the
 /// flag is inert there: no trace, no report, and the open theory keeps its
 /// source rule order.
 #[test]

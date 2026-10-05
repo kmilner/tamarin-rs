@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.Positions` from `lib/term/src/Term/Positions.hs`.
 //!
@@ -81,7 +80,7 @@ pub fn replace_pos<C: Ord + Clone, V: Ord + Clone>(
 }
 
 /// `find_pos t s`: all positions at which subterm `t` occurs inside `s`,
-/// or `None` if `t` is not a subterm. Port of HS `findPos` (Positions.hs:63-70).
+/// or `None` if `t` is not a subterm. Port of HS `findPos` (Positions.hs).
 ///
 /// NB: this mirrors HS exactly by indexing over the **n-ary** argument list
 /// (`viewTerm -> FApp _ ts`), NOT the right-leaning binary-AC encoding used
@@ -121,7 +120,7 @@ pub fn find_pos<C: Ord + Clone, V: Ord + Clone>(
 /// `deepest_prot_subterm term pos`: the deepest "protected" subterm of `term`
 /// on the path to `pos` (anything but a pair or AC operator is protected).
 /// Returns `None` if there is no protected subterm. Port of HS
-/// `deepestProtSubterm` (Positions.hs:125-135). Uses n-ary indexing (`atMay`),
+/// `deepestProtSubterm` (Positions.hs). Uses n-ary indexing (`atMay`),
 /// matching [`find_pos`]. Panics on an invalid position, like HS.
 pub fn deepest_prot_subterm<C: Ord + Clone, V: Ord + Clone>(
     term: &VTerm<C, V>,
@@ -280,8 +279,8 @@ mod tests {
     }
 
     /// The code addresses AC applications through the right-leaning binary
-    /// encoding `*[t1,t2,t3] ≡ t1 * (t2 * t3)` (`atPosMay`, Positions.hs:47-59;
-    /// `replacePos`, Positions.hs:76-80; `positions`, Positions.hs:109-122).
+    /// encoding `*[t1,t2,t3] ≡ t1 * (t2 * t3)` (`atPosMay`, Positions.hs;
+    /// `replacePos`, Positions.hs; `positions`, Positions.hs).
     /// `0` selects the head, and `1` selects the tail multiset.  The k-th of n
     /// arguments therefore sits at `1^k ++ [0]`.  The last one sits at `1^k`.
     /// No argument sits at `[k]`.  [`positions`], [`at_pos`] and
@@ -315,7 +314,7 @@ mod tests {
         // DIVERGENCE (port-captured, not oracle-derived).  The AC arm in RS
         // ends in a catch-all `_ => None`.  HS `atPosMay` has no such arm.  It
         // falls through to the generic `FApp _ as (i:ps)` equation
-        // (Positions.hs:55-58), so the oracle answers `Just c` here.  This
+        // (Positions.hs), so the oracle answers `Just c` here.  This
         // difference is unreachable in practice.  `positions` never emits a
         // bare index >= 2 for an AC node.
         assert_eq!(at_pos(&t, &[2]), None);

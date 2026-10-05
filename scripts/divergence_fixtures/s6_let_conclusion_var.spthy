@@ -2,7 +2,7 @@
  * A rule body that reads differently before and after its `let` block is
  * inlined.  The parser applies the substitution to the premises, actions,
  * conclusions and `_restrict` formulas as it builds the rule
- * (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs:119, 133, 153),
+ * (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs),
  * so every wellformedness check reads the substituted body.
  *
  * Rule `Reuse` premises `Fr(m)`, which passes the fresh-argument check as a

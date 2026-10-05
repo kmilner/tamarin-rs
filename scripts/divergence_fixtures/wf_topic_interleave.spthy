@@ -1,14 +1,14 @@
 // A wellformedness TOPIC that closes and reopens, inside the run of checks
 // around it.
 //
-// HS `checkWellformedness` (Theory/Tools/Wellformedness.hs:1270-1286) is one
-// ordered list of checks (lines 1272-1282), and `formulaReports`
-// (Wellformedness.hs:999-1014) is a single one of them.  Inside it, `msum
-// [checkQuantifiers, checkTerms, checkGuarded]` (lines 1002-1004) runs on
+// HS `checkWellformedness` (Theory/Tools/Wellformedness.hs) is one
+// ordered list of checks, and `formulaReports`
+// (Wellformedness.hs) is a single one of them.  Inside it, `msum
+// [checkQuantifiers, checkTerms, checkGuarded]` runs on
 // EVERY annotated formula; `WfErrorReport` is a list, so `msum` is `concat`
 // and all three arms report unconditionally, per formula, in item order.
-// `prettyWfErrorReport` (Wellformedness.hs:118-125) then groups with `groupOn
-// fst` (line 120), which is `groupBy ((==) `on` fst)` (Extension/Prelude.hs:96-97)
+// `prettyWfErrorReport` (Wellformedness.hs) then groups with `groupOn
+// fst`, which is `groupBy ((==) `on` fst)` (Extension/Prelude.hs)
 // and merges only CONSECUTIVE entries.  A topic therefore gets a second
 // underlined header when another topic falls between its findings:
 //
@@ -16,15 +16,15 @@
 //     `checkGuarded` between them, so "Formula terms" closes around
 //     " Formula guardedness" and opens again.  Collecting a topic's findings
 //     into one block instead gives a single header and reorders the bodies;
-//   - `RQ` trips `checkQuantifiers` (Wellformedness.hs:948-957).  Its entry
+//   - `RQ` trips `checkQuantifiers` (Wellformedness.hs).  Its entry
 //     sits with the formula it came from, not with its topic: `annFormulas`
-//     (Wellformedness.hs:1007-1014) is `lemmas <|> restrictions`, so the
+//     (Wellformedness.hs) is `lemmas <|> restrictions`, so the
 //     restriction's block follows every lemma's, after the reopened one.
 //
 // The two bracketing entries are what pin the whole run's POSITION: the rule's
-// free `u` trips `unboundReport` (Wellformedness.hs:514-519) from an earlier
+// free `u` trips `unboundReport` (Wellformedness.hs) from an earlier
 // check, and the reusable exists-trace lemma trips `lemmaAttributeReport`
-// (Wellformedness.hs:924-932) from the next one.  RS reaches `formulaReports`
+// (Wellformedness.hs) from the next one.  RS reaches `formulaReports`
 // only after the parser-level pass — the arms need the elaborated signature
 // and the translated theory — and splices its findings into that report, so
 // without an entry on each side the splice lands at the end whatever anchor

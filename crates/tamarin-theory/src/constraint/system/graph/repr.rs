@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Constraint.System.Graph.GraphRepr` —
 //! intermediate representation of a `System` as nodes/edges/clusters
@@ -14,7 +13,7 @@ use crate::constraint::constraints::{LessAtom, NodeConc, NodeId, NodePrem};
 use crate::fact::LNFact;
 use crate::rule::{ConcIdx, PremIdx, ProtoRuleName, RuleACInst, RuleInfo};
 
-/// Mirrors Haskell `NodeType` from `GraphRepr.hs:58-63`.
+/// Mirrors Haskell `NodeType` from `GraphRepr.hs`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeType {
     /// Node corresponding to a `RuleACInst` from `sNodes`.
@@ -34,14 +33,14 @@ pub enum MissingHint {
     Prem(PremIdx),
 }
 
-/// Mirror of `Node` from `GraphRepr.hs:51-55`.
+/// Mirror of `Node` from `GraphRepr.hs`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GNode {
     pub id: NodeId,
     pub ty: NodeType,
 }
 
-/// Mirror of `Edge` from `GraphRepr.hs:67-71`.
+/// Mirror of `Edge` from `GraphRepr.hs`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GEdge {
     System(NodeConc, NodePrem),
@@ -49,7 +48,7 @@ pub enum GEdge {
     UnsolvedChain(NodeConc, NodePrem),
 }
 
-/// Mirror of `Cluster` from `GraphRepr.hs:74-79`.
+/// Mirror of `Cluster` from `GraphRepr.hs`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cluster {
     pub name: String,
@@ -57,7 +56,7 @@ pub struct Cluster {
     pub edges: Vec<GEdge>,
 }
 
-/// Mirror of `GraphRepr` from `GraphRepr.hs:82-87`.
+/// Mirror of `GraphRepr` from `GraphRepr.hs`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GraphRepr {
     pub clusters: Vec<Cluster>,
@@ -76,7 +75,7 @@ impl GraphRepr {
 // ---------------------------------------------------------------------
 
 /// Return the `role` attribute of a `RuleACInst`, if any.
-/// Mirror of `extractRole` from `GraphRepr.hs:136-137`.
+/// Mirror of `extractRole` from `GraphRepr.hs`.
 pub fn extract_role(ru: &RuleACInst) -> Option<&str> {
     match &ru.info {
         RuleInfo::Proto(p) => p.attributes.role.as_deref(),
@@ -105,7 +104,7 @@ pub fn group_nodes_by_role<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a G
 }
 
 /// `extractBaseName name` returns `Just base` when `name = base_<digits>`.
-/// Mirror of `extractBaseName` (GraphRepr.hs:216-225).
+/// Mirror of `extractBaseName` (GraphRepr.hs).
 pub fn extract_base_name(name: &str) -> Option<String> {
     let parts: Vec<&str> = name.split('_').collect();
     if parts.len() < 2 {
@@ -123,10 +122,10 @@ pub fn extract_base_name(name: &str) -> Option<String> {
 }
 
 /// Return the rule's case-name (e.g. `Setup_1`) for proto-rules, else None.
-/// Mirror of `getRuleNameByNode` (GraphRepr.hs:208-214) which renders
-/// `showRuleCaseName` -> `prettyProtoRuleName` (Theory/Model/Rule.hs:1287-1290):
+/// Mirror of `getRuleNameByNode` (GraphRepr.hs) which renders
+/// `showRuleCaseName` -> `prettyProtoRuleName` (Theory/Model/Rule.hs):
 /// `StandRule n -> prefixIfReserved n`, `FreshRule -> "Fresh"`.
-/// `prefixIfReserved` (Theory/Model/Rule.hs:1277-1285) prepends `_` when the name is a
+/// `prefixIfReserved` (Theory/Model/Rule.hs) prepends `_` when the name is a
 /// reserved rule name or already starts with `_`.  This is plain
 /// `showRuleCaseName`, NOT the SAPiC-trimming `showDotRuleCaseName`.
 pub fn rule_name_by_node(n: &GNode) -> Option<String> {
@@ -209,7 +208,7 @@ fn find_connected_components<'a>(nodes: &'a [&'a GNode], edges: &[GEdge]) -> Vec
             }
         }
         // HS `component = filter (\node -> get nNodeId node `elem` componentIds)
-        // (n:ns)` (GraphRepr.hs:170-192, see line 190): component nodes are kept in the ORIGINAL
+        // (n:ns)` (GraphRepr.hs): component nodes are kept in the ORIGINAL
         // `nodes` order, not DFS discovery order.  Filtering the full `nodes`
         // slice is safe because each node belongs to exactly one component
         // (globally `visited`), so the per-component relative order matches HS.
@@ -245,7 +244,7 @@ fn edge_key(e: &GEdge) -> EdgeKey {
     }
 }
 
-/// Generic `addCluster` from `GraphRepr.hs:117-130`.  Given a grouping
+/// Generic `addCluster` from `GraphRepr.hs`.  Given a grouping
 /// of nodes (one group per cluster), it:
 ///   1. computes connected components within each group,
 ///   2. emits one cluster per component named `<group><suffix><N>`,
@@ -289,7 +288,7 @@ fn add_cluster(
     // Both filters have to decide by STRUCTURAL equality.  The cloned cluster
     // edges live at different addresses than the elements of `all_edges`, so
     // pointer identity is not available.  And HS `remainingNodes = filter
-    // (`notElem` clusteredNodes) grNodes` (GraphRepr.hs:117-130, see line 127)
+    // (`notElem` clusteredNodes) grNodes` (GraphRepr.hs)
     // is by value too: a node id can appear TWICE in `grNodes` with different
     // types — the last-atom id is pushed both as a `SystemNode` and as a free
     // `LastAction` ellipse (see `compute_basic_graph_repr`) — and when the
@@ -342,7 +341,7 @@ pub fn add_intelligent_cluster_using_similar_names(repr: &mut GraphRepr) {
 use crate::constraint::constraints::Goal;
 use crate::constraint::system::System;
 
-/// Port of `computeBasicGraphRepr` from `Graph.hs:140-150`.
+/// Port of `computeBasicGraphRepr` from `Graph.hs`.
 /// Collects from a `System`:
 ///   - rule nodes,
 ///   - unsolved-action atoms (KU goals etc.),
@@ -355,7 +354,7 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     let mut nodes: Vec<GNode> = Vec::new();
     // 1. System rule instances.
     // HS `systemNodes se = map systemNode (M.toList $ get Sys.sNodes se)`
-    // (Graph.hs:99-102) reads `sNodes` in `M.Map` key order — materialised by
+    // (Graph.hs) reads `sNodes` in `M.Map` key order — materialised by
     // `System::nodes_in_map_order`, which carries the invariant.
     for (nid, ru) in sys.nodes_in_map_order() {
         nodes.push(GNode {
@@ -365,19 +364,19 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     }
     // 2. Unsolved action atoms — collect by node id.
     // HS `systemUnsolvedActionNodes se = map unsolvedActionNode
-    // (collectBy $ unsolvedActionAtoms se)` (Graph.hs:105-108) does NOT filter
+    // (collectBy $ unsolvedActionAtoms se)` (Graph.hs) does NOT filter
     // these ids against `sNodes`: if an id is both a system node and an
     // unsolved ActionG goal, HS emits BOTH a SystemNode and an
     // UnsolvedActionNode.  So there is no skip-if-already-a-system-node guard.
     //
-    // `unsolvedActionAtoms` (System.hs:1569-1573) walks `M.toList sGoals`, so
+    // `unsolvedActionAtoms` (System.hs) walks `M.toList sGoals`, so
     // its action goals arrive in ascending `Goal` order; this crate's goal
     // store is a `Vec` in insertion order, so sort by `Ord Goal` first.
     // Filtering an `Ord`-sorted list down to one constructor yields the
     // same sequence as sorting that constructor's goals among themselves, so
     // only the action goals need sorting here.
     //
-    // `collectBy` (Extension/Prelude.hs:100-107) keys off `nub`'d FIRST
+    // `collectBy` (Extension/Prelude.hs) keys off `nub`'d FIRST
     // occurrences, and `ActionG`'s leading payload is the node id, so its key
     // order over that sorted list is ascending node id — what the `BTreeMap`
     // gives.  Within a node the facts then follow `LNFact` order.
@@ -402,9 +401,9 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     }
     // 3. Last-atom node.
     // HS `systemLastActionNode se = maybe [] (\nid -> [Node nid LastActionAtom])
-    // (get Sys.sLastAtom se)` (Graph.hs:111-112) appends this UNCONDITIONALLY
+    // (get Sys.sLastAtom se)` (Graph.hs) appends this UNCONDITIONALLY
     // whenever `sLastAtom` is set — it does NOT skip when the id coincides with
-    // a system/unsolved node.  `cacheState` (System/Dot.hs:106-113) re-runs each node's
+    // a system/unsolved node.  `cacheState` (System/Dot.hs) re-runs each node's
     // `dot` action and overwrites `dsNodes[v]`, so both the SystemNode record
     // AND the bare `#i` last-atom ellipse are emitted at the same id (the
     // ellipse ends up as `dsNodes[v]`, which drives less-edge resolution).  The
@@ -415,14 +414,13 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
             ty: NodeType::LastAction,
         });
     }
-    // HS reaches `sEdges` / `sLessAtoms` through `S.toList` (Graph.hs:116-128,
-    // 140-150) — `Data.Set` element order, materialised by
+    // HS reaches `sEdges` / `sLessAtoms` through `S.toList` (Graph.hs) — `Data.Set` element order, materialised by
     // `System::edges_in_set_order` / `System::less_atoms_in_set_order`.
     let sorted_edges = sys.edges_in_set_order();
     let sorted_less = sys.less_atoms_in_set_order();
     // 4. Missing nodes referenced by edges.
     // HS `systemMissingNodes se = mapMaybe missingNode (S.toList sEdges)`
-    // (Graph.hs:116-122): each edge yields AT MOST ONE missing node — `missingNode`
+    // (Graph.hs): each edge yields AT MOST ONE missing node — `missingNode`
     // checks the source first (`MissingNode (Left idx)`), and only if the source
     // is present does it check the target (`MissingNode (Right idx)`).  The
     // membership test is `nid `notElem` nodelist` where `nodelist = map fst
@@ -453,7 +451,7 @@ pub(crate) fn compute_basic_graph_repr(sys: &System) -> GraphRepr {
     for la in sorted_less {
         edges.push(GEdge::Less(la.clone()));
     }
-    // HS `unsolvedChains` (System.hs:1602-1606) walks `M.toList sGoals`, so
+    // HS `unsolvedChains` (System.hs) walks `M.toList sGoals`, so
     // its chain goals arrive in ascending `Goal` order — see step 2 for why
     // sorting the filtered subset reproduces that.  `Ord` on the
     // `(NodeConc, NodePrem)` pair is exactly `Ord Goal`'s `Chain` arm, so
@@ -548,7 +546,7 @@ mod tests {
     }
 
     // `sNodes` is a `Map NodeId RuleACInst` upstream and `systemNodes` reads it
-    // through `M.toList` (Graph.hs:100), so the emitted rule nodes are in
+    // through `M.toList` (Graph.hs), so the emitted rule nodes are in
     // ascending `NodeId` order — idx-major, so `#vr.5` precedes `#vk.6` —
     // whatever order the solver stored them in.
     #[test]
@@ -607,7 +605,7 @@ mod tests {
         // role grouping, so all of Alice's names come before Bob's.  The
         // session index counts the output of `findConnectedComponents`.  HS
         // builds that output by prepending (`go remainingNodes
-        // (component : components)`, GraphRepr.hs:186-191).  The component
+        // (component : components)`, GraphRepr.hs).  The component
         // discovered last, `#i.3`, is therefore `_Session_1`.  Both the name
         // and the position are written to the output.  The name appears as
         // the DOT subgraph id and as the JSON `jgcName`.  The position

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Byte pins for the report shapes [`super::test_process`] emits.  Every
 //! expected string here was lifted from an oracle capture of the pinned
@@ -49,7 +48,7 @@ fn command_line_is_unwords_prog_then_args() {
 
 /// Oracle: `interactive --with-json=/no/such/jsonbin` — `which` exits 1, so
 /// the reason is the exit-code line plus `ensureGraphCommand`'s `errMsg`
-/// (Environment.hs:114-115), which `unlines` already newline-terminated; the
+/// (Environment.hs), which `unlines` already newline-terminated; the
 /// extra `putStrErrLn` newline is the blank line before `Detailed results`.
 #[test]
 fn error_report_matches_which_exit_code_failure() {
@@ -186,7 +185,7 @@ fn exception_report_drops_the_blank_line_for_maude() {
 }
 
 /// The GHC `error` a failed maude spawn raises, as the oracle prints it under
-/// `tamarin-prover: ` (Console.hs:147).
+/// `tamarin-prover: ` (Console.hs).
 ///
 /// The test reads both halves back out of the pinned source.  It does not
 /// restate them.  Every other check of this abort compares what the port
@@ -215,7 +214,7 @@ fn maude_abort_is_the_console_hs_error() {
     );
 }
 
-/// HS `supportedVersions` (Console.hs:176), read back out of the pinned
+/// HS `supportedVersions` (Console.hs), read back out of the pinned
 /// source for the same reason as the abort pin above: every other test of the
 /// version check restates the list (or iterates the constant), so a submodule
 /// bump that edits the upstream list — 3.5 and 3.5.1 are recent additions —
@@ -298,7 +297,7 @@ fn maude_install_check_reads_stderr_only() {
     );
 }
 
-/// HS `errMsg'` (Console.hs:181) — the default message both maude probes pass,
+/// HS `errMsg'` (Console.hs) — the default message both maude probes pass,
 /// reached only through the bad-exit-code reason.
 #[test]
 fn maude_default_message_names_the_tool() {

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Constraint.System.Graph.Abbreviation`.
 //!
@@ -31,7 +30,7 @@ use super::repr::{GraphRepr, NodeType};
 // Options
 // ---------------------------------------------------------------------
 
-/// Mirror of `AbbreviationOptions` (Abbreviation.hs:56-62).
+/// Mirror of `AbbreviationOptions` (Abbreviation.hs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AbbreviationOptions {
     /// Soft cap on the number of abbreviations to generate, unless
@@ -47,7 +46,7 @@ pub struct AbbreviationOptions {
     pub prefix_length: usize,
 }
 
-/// HS `defaultAbbreviationOptions` (Abbreviation.hs:66-72).
+/// HS `defaultAbbreviationOptions` (Abbreviation.hs).
 impl Default for AbbreviationOptions {
     fn default() -> Self {
         AbbreviationOptions {
@@ -113,7 +112,7 @@ pub fn apply_abbreviations_fact(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, fa: 
 // Term-prefix extraction
 // ---------------------------------------------------------------------
 
-/// `getTermPrefix` (Abbreviation.hs:106-115).
+/// `getTermPrefix` (Abbreviation.hs).
 fn get_term_prefix(opts: &AbbreviationOptions, t: &LNTerm) -> String {
     let raw = match t {
         Term::Lit(Lit::Var(v)) => v.name.to_string(),
@@ -135,7 +134,7 @@ fn get_term_prefix(opts: &AbbreviationOptions, t: &LNTerm) -> String {
 type PrefixMap = BTreeMap<String, u32>;
 
 /// Generate one fresh abbreviation name for a candidate term.
-/// Mirror of `abbreviateTerm` (Abbreviation.hs:122-149).
+/// Mirror of `abbreviateTerm` (Abbreviation.hs).
 ///
 /// Returns the new prefix-index map and the abbreviation as an `LNTerm`
 /// (a Msg-sort variable).
@@ -167,7 +166,7 @@ fn abbreviate_term(
 /// alphanumeric runs (uppercased, sorted, deduped).  Used to avoid
 /// generating an abbreviation name that aliases an existing identifier.
 ///
-/// Mirrors Haskell `allNames` (Abbreviation.hs:220-225): `sort . nub . map
+/// Mirrors Haskell `allNames` (Abbreviation.hs): `sort . nub . map
 /// toUpper . T.split (not . isAlphaNum) $ show repr`.  `show repr` is the
 /// DERIVED Show of the whole `GraphRepr`, which for a `SystemNode` renders
 /// the rule's `_rInfo` — exposing the RAW `StandRule "<name>"` string, the
@@ -242,7 +241,7 @@ fn dump_rule(buf: &mut String, ru: &RuleACInst) {
 /// Emit the user-controlled name/role tokens that derived `Show` of a
 /// rule's `_rInfo` exposes (`RuleAttributes`, `ProtoRuleName`,
 /// `ProtoRuleACInstInfo` and `IntrRuleACInfo`, all `deriving Show` —
-/// Theory/Model/Rule.hs:367-379,413-416,444-449,539-553): the raw
+/// Theory/Model/Rule.hs): the raw
 /// `StandRule "<name>"` string, the `role = Just "<role>"` string, and the
 /// intruder `ConstrRule`/`DestrRule "<name>"` byte string.
 fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRuleACInfo>) {
@@ -353,7 +352,7 @@ fn sub_terms_no_pair(t: &LNTerm, out: &mut Vec<LNTerm>) {
 // Weight
 // ---------------------------------------------------------------------
 
-/// `length $ render $ prettyLNTerm t` (Abbreviation.hs:88-92) — the term
+/// `length $ render $ prettyLNTerm t` (Abbreviation.hs) — the term
 /// size that feeds `judgeTerm`'s weight.
 ///
 /// HS `render` is HughesPJ `P.render`, i.e. the library DEFAULT style
@@ -376,7 +375,7 @@ fn rendered_term_len(t: &LNTerm) -> usize {
         .count()
 }
 
-/// Mirror of `judgeTerm` (Abbreviation.hs:79-101).
+/// Mirror of `judgeTerm` (Abbreviation.hs).
 fn judge_term(
     abbrevs: &BTreeMap<LNTerm, LNTerm>,
     t: &LNTerm,
@@ -404,7 +403,7 @@ fn judge_term(
 // Main entry point
 // ---------------------------------------------------------------------
 
-/// Mirror of `computeAbbreviations` (Abbreviation.hs:166-254).
+/// Mirror of `computeAbbreviations` (Abbreviation.hs).
 pub fn compute_abbreviations(repr: &GraphRepr, opts: &AbbreviationOptions) -> Abbreviations {
     // Step 1: collect all terms and their occurrence counts.
     let terms = collect_all_terms(repr);
@@ -485,7 +484,7 @@ pub fn compute_abbreviations(repr: &GraphRepr, opts: &AbbreviationOptions) -> Ab
 // Ordering for the legend / JSON export
 // ---------------------------------------------------------------------
 
-/// Mirror Haskell `topoSortAbbrevs` (System/Dot.hs:421-436 and System/Dot.hs:484-499).
+/// Mirror Haskell `topoSortAbbrevs` (System/Dot.hs and System/Dot.hs).
 ///
 /// `entries` is the descending-name-sorted list of `(name, expansion)`.
 /// We build a graph with an edge `v -> u` whenever `entries[v].0` is a
@@ -540,7 +539,7 @@ fn topo_sort_abbrevs(entries: &[(&LNTerm, &LNTerm)]) -> Vec<usize> {
     postorder
 }
 
-/// Port of `orderAbbreviationsForJSON` (System/Dot.hs:417-436).
+/// Port of `orderAbbreviationsForJSON` (System/Dot.hs).
 ///
 /// `M.toList abbrevs` is the ascending-`LNTerm`-key iteration order of the
 /// [`Abbreviations`] `BTreeMap`; `sortOn (Down . render . prettyLNTerm . fst

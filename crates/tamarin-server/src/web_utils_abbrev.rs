@@ -1,15 +1,14 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Web.Utils` (`src/Web/Utils.hs`) — the server-side term
 //! abbreviation the JSON graph endpoint applies when the request carries the
-//! `abbrevInBackend` query parameter (`src/Web/Handler.hs:1440`).
+//! `abbrevInBackend` query parameter (`src/Web/Handler.hs`).
 //!
 //! `abbrev n sys` picks every term of the constraint system's rule conclusions
 //! and premises whose `size` is at least `n` and replaces it with a short
 //! constant, returning the rewritten system plus the legend.  The web handler
-//! keeps only the system (`src/Web/Theory.hs:1331-1333`), so [`abbrev`] builds
+//! keeps only the system (`src/Web/Theory.hs`), so [`abbrev`] builds
 //! the legend but does not hand it back.
 //!
 //! The rewrite is display-only — it swaps abbreviation constants in for real
@@ -17,10 +16,10 @@
 //! hands back a [`RenderSystem`], which cannot re-enter the prover.
 //!
 //! The short constant is `lit (Con (Name AbbrevName (NameId …)))`
-//! (Web/Utils.hs:71-88), whose `NameId` is the head symbol's own name plus, from
+//! (Web/Utils.hs), whose `NameId` is the head symbol's own name plus, from
 //! the second abbreviation of that symbol on, an occurrence counter (`aenc`,
 //! `aenc1`, `aenc2`, …).  It renders as that bare id: `show (Name AbbrevName
-//! n) = show n` (LTerm.hs:240), and its sort is `LSortMsg` (LTerm.hs:266).
+//! n) = show n` (LTerm.hs), and its sort is `LSortMsg` (LTerm.hs).
 
 use tamarin_term::function_symbols::FunSym;
 use tamarin_term::lterm::{LNTerm, Name, NameTag};
@@ -33,13 +32,13 @@ use tamarin_theory::constraint::system::graph::render_system::RenderSystem;
 use tamarin_theory::constraint::system::System;
 
 /// HS `Web.Utils.abbrev`'s minimal term size, as passed by
-/// `graphJsonThyPath` (`src/Web/Theory.hs:1331`).
+/// `graphJsonThyPath` (`src/Web/Theory.hs`).
 pub(crate) const MIN_ABBREV_SIZE: usize = 30;
 
-/// Port of `getTerms` (Web/Utils.hs:40-41): every fact term of every rule's
+/// Port of `getTerms` (Web/Utils.hs): every fact term of every rule's
 /// conclusions followed by its premises.
 ///
-/// `get sNodes` is a `M.Map NodeId RuleACInst` (System.hs:383) and the outer
+/// `get sNodes` is a `M.Map NodeId RuleACInst` (System.hs) and the outer
 /// `concatMap` folds it through `Foldable`, i.e. over `M.elems` — the `M.Map`
 /// key order `System::nodes_in_map_order` materialises.
 fn get_terms(sys: &System) -> impl Iterator<Item = &LNTerm> {
@@ -51,11 +50,11 @@ fn get_terms(sys: &System) -> impl Iterator<Item = &LNTerm> {
     })
 }
 
-/// HS's `TermState` (Web/Utils.hs:36): how many abbreviations each head symbol has
+/// HS's `TermState` (Web/Utils.hs): how many abbreviations each head symbol has
 /// already produced.
 type TermState = FastMap<String, usize>;
 
-/// Port of `shorten` (Web/Utils.hs:71-88): a `NoEq` function application becomes an
+/// Port of `shorten` (Web/Utils.hs): a `NoEq` function application becomes an
 /// `AbbrevName` constant named after its head symbol, everything else is
 /// returned unchanged.
 ///
@@ -76,12 +75,12 @@ fn shorten(t: &LNTerm, state: &mut TermState) -> LNTerm {
     lit(Lit::Con(Name::new(NameTag::Abbrev, name_id)))
 }
 
-/// The `Legend` (Web/Utils.hs:35) `computeLegend` builds: a `Map LNTerm LNTerm`
+/// The `Legend` (Web/Utils.hs) `computeLegend` builds: a `Map LNTerm LNTerm`
 /// assembled by `M.fromList . zip terms`, so when the same term is abbreviated
 /// more than once the LAST shortened form is the one that survives.
 type Legend = FastMap<LNTerm, LNTerm>;
 
-/// Port of `computeLegend` (Web/Utils.hs:61-65).
+/// Port of `computeLegend` (Web/Utils.hs).
 fn compute_legend(n: usize, sys: &System) -> Legend {
     let mut state = TermState::default();
     let mut legend = Legend::default();
@@ -92,7 +91,7 @@ fn compute_legend(n: usize, sys: &System) -> Legend {
     legend
 }
 
-/// Port of `updateSystem` (Web/Utils.hs:93-107): rewrite the top-level terms of
+/// Port of `updateSystem` (Web/Utils.hs): rewrite the top-level terms of
 /// every rule's premises and conclusions through the legend.  A rewritten fact
 /// is rebuilt from `(tag, annotations, terms)`, i.e. without its cached
 /// fingerprints — matching HS's `Fact tag a ts` and safe because the
@@ -112,7 +111,7 @@ fn update_system(legend: &Legend, sys: &mut System) {
     });
 }
 
-/// Port of `abbrev` (Web/Utils.hs:110-116).
+/// Port of `abbrev` (Web/Utils.hs).
 ///
 /// `abbreviate == false` is HS's `abbrev False _ sys = return (sys, M.empty)`,
 /// which hands the system back untouched.  Either way the result is sealed as

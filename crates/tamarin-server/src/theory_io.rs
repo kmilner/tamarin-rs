@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Parse + elaborate a `.spthy` file into a [`TheoryEntry`].
 
@@ -66,9 +65,9 @@ pub(crate) fn load_from_source(
     // Parser flags (`-D` defines + the `quit-on-warning` element) come from
     // the server configuration. `#include` paths resolve against the theory
     // file's own directory — HS threads `Just inFile`
-    // into the `theory` parser (`loadTheory`, TheoryLoader.hs:449-458) and
+    // into the `theory` parser (`loadTheory`, TheoryLoader.hs) and
     // `include` resolves against `takeDirectory <$> inFile0`
-    // (Theory/Text/Parser.hs:306-343).  An upload has no on-disk home
+    // (Theory/Text/Parser.hs).  An upload has no on-disk home
     // (HS's bare filename gives `takeDirectory = "."`), so it resolves
     // CWD-relative, the no-base default.
     let flags: Vec<&str> = cfg.parser_flags.iter().map(String::as_str).collect();
@@ -80,15 +79,15 @@ pub(crate) fn load_from_source(
         .map_err(|e| LoadError::Parse(e.render_plain_with_source(&source_name, src)))?;
 
     // HS lifecycle markers, stderr via `traceM`: "Theory loaded" right
-    // after parsing (TheoryLoader.hs:449-452, see line 451).
+    // after parsing (TheoryLoader.hs).
     eprintln!("[Theory {}] Theory loaded", parsed.name);
 
-    // "Theory translated" at the START of translation (TheoryLoader.hs:494-500, see line 496
+    // "Theory translated" at the START of translation (TheoryLoader.hs
     // prints before `processOpenTheory` runs); RS's `elaborate` is that
     // translation step.
     eprintln!("[Theory {}] Theory translated", parsed.name);
     // Oracle path resolution base: HS threads the parser's `inFile` into
-    // `defaultOracleNames` (Theory/Text/Parser.hs:249-250), so a
+    // `defaultOracleNames` (Theory/Text/Parser.hs), so a
     // `heuristic: o "./oracle-…"` resolves against the theory's own
     // directory (`hs_take_directory`).  Local files carry their on-disk
     // path; uploads keep the bare filename (dir "." — as in HS, where an
@@ -111,13 +110,13 @@ pub(crate) fn load_from_source(
     // Everything downstream of `elaborate` reads the internal theory; the
     // parser AST ends here.
     drop(parsed);
-    // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs:821-826), the last
-    // step of `loadTheory` (TheoryLoader.hs:449-452): the CLI's `ndcCheck`
+    // HS `addParamsOptions`' `addNdcOption` (TheoryLoader.hs), the last
+    // step of `loadTheory` (TheoryLoader.hs): the CLI's `ndcCheck`
     // becomes the loaded theory's `_deductionChainCheck`, which the NDC pass in
     // the maude block below reads back.
     typed.options.deduction_chain_check = cfg.ndc_check;
     // The `addLemmaToProve` sibling of that same `addParamsOptions`
-    // (TheoryLoader.hs:835-838): the CLI's `--prove`/`--lemma` selection
+    // (TheoryLoader.hs): the CLI's `--prove`/`--lemma` selection
     // becomes the loaded theory's `_lemmasToProve`.
     typed.options.lemmas_to_prove = cfg.lemmas_to_prove.clone();
 
@@ -132,7 +131,7 @@ pub(crate) fn load_from_source(
     // MUST run before `populate_rule_variants` below.  `user_set_heuristic`
     // is true iff a `heuristic:` item already populated `typed.heuristic` (HS
     // `addHeuristic` returns `Nothing` in that case).
-    // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs:494-500, see line 497)
+    // HS `Acc.checkWellformedness t` (translateTheory, TheoryLoader.hs)
     // runs on the PRE-translation theory — before `apply_sapic` injects the
     // SAPIC-generated rules (mirrors run.rs's CLI-side placement).
     let acc_wf = tamarin_accountability::check_wellformedness(&typed);
@@ -143,7 +142,7 @@ pub(crate) fn load_from_source(
     let sapic_wf = tamarin_sapic::apply::apply_sapic(&mut typed, user_set_heuristic)
         .map_err(|e| LoadError::Elaborate(e.message))?;
     // Accountability translation (HS `Sapic.translate >=> Acc.translate`,
-    // `processOpenTheory`, TheoryLoader.hs:470-484, see line 472): expands each
+    // `processOpenTheory`, TheoryLoader.hs): expands each
     // `… accounts for` lemma into its
     // verification-condition lemmas + case-test predicates, appending them to
     // `typed`, which carries the lemma list, the proof state and everything
@@ -152,7 +151,7 @@ pub(crate) fn load_from_source(
     // accountability lemmas / case tests.
     tamarin_accountability::translate(&mut typed)
         .map_err(|e| LoadError::Elaborate(e.to_string()))?;
-    // HS `preReport ++ postReport` (TheoryLoader.hs:726-732), as in
+    // HS `preReport ++ postReport` (TheoryLoader.hs), as in
     // `run_batch`: SAPIC warnings, then the accountability RP check, then the
     // whole `checkWellformedness` pass over the TRANSLATED theory. The latter
     // runs below after variant computation so `ruleVariantsReport` sees its
@@ -218,15 +217,15 @@ pub(crate) fn load_from_source(
         // interactive default 5s).  The budget comes from ServerConfig
         // (CLI flag on the interactive path, 5s default otherwise) —
         // matching HS interactive, whose flag set ends in `theoryLoadFlags`
-        // (Main/Mode/Interactive.hs:70), so the shared
-        // `--derivcheck-timeout` (TheoryLoader.hs:180-185, read at
-        // TheoryLoader.hs:391-393) applies.  Needs the Maude handle; runs on
+        // (Main/Mode/Interactive.hs), so the shared
+        // `--derivcheck-timeout` (TheoryLoader.hs, read at
+        // TheoryLoader.hs) applies.  Needs the Maude handle; runs on
         // the POST-translation theory (`typed`, matching run.rs's
         // `&self.elaborated` at that point).
         // HS brackets the check with stderr markers via `traceM`
-        // (TheoryLoader.hs:578-594, see line 581,594) — emitted for every close (initial
+        // (TheoryLoader.hs) — emitted for every close (initial
         // load, upload, reload), and only when derivChecks != 0
-        // (TheoryLoader.hs:578-579 skips the whole block on EQ).
+        // (TheoryLoader.hs skips the whole block on EQ).
         if cfg.derivcheck_timeout > 0 {
             eprintln!("[Theory {}] Derivation checks started", typed.name);
         }
@@ -261,11 +260,11 @@ pub(crate) fn load_from_source(
         ));
     }
 
-    // HS `makeWfErrorsHtml` (src/Web/Handler.hs:469-475) — the header-banner
+    // HS `makeWfErrorsHtml` (src/Web/Handler.hs) — the header-banner
     // rendering of the same report; empty string when the report is empty.
     let errors_html = make_wf_errors_html(&wf_report);
 
-    // "Theory closed" at the end of `closeTheory` (TheoryLoader.hs:696).
+    // "Theory closed" at the end of `closeTheory` (TheoryLoader.hs).
     eprintln!("[Theory {}] Theory closed", typed.name);
 
     Ok(TheoryEntry {
@@ -282,13 +281,13 @@ pub(crate) fn load_from_source(
     })
 }
 
-/// Build the HS `makeWfErrorsHtml` banner (`src/Web/Handler.hs:469-475`): wrap
+/// Build the HS `makeWfErrorsHtml` banner (`src/Web/Handler.hs`): wrap
 /// the wellformedness report in a `<div class="wf-warning">`, prefixed by the
 /// literal `WARNING: ...<br /><br />` line and followed by the report body
 /// rendered exactly as HS's `renderHtmlDoc (htmlDoc $ prettyWfErrorReport
 /// report)` — each source line's leading spaces turned into `&nbsp;` and a
 /// `<br/>` appended, with NO entity escaping (HS `postprocessHtmlDoc`,
-/// Text/PrettyPrint/Html.hs:157-162; see the body comment for why the
+/// Text/PrettyPrint/Html.hs; see the body comment for why the
 /// escaping `Document` instance never runs).  Empty report ⇒ empty string
 /// (HS `makeWfErrorsHtml [] = ""`).
 ///
@@ -314,11 +313,11 @@ fn make_wf_errors_html(report: &[WfError]) -> String {
         .and_then(|b| b.strip_suffix("*/"))
         .unwrap_or(&block);
     // HS `renderHtmlDoc = postprocessHtmlDoc . render . getHtmlDoc`
-    // (Html.hs:151-153) — the body is NOT entity-escaped: `htmlDoc = HtmlDoc`
-    // (Html.hs:96-97) only wraps an ALREADY BUILT plain `Doc`, so the escaping
-    // `Document (HtmlDoc d)` instance (Html.hs:102-105) never runs over
+    // (Html.hs) — the body is NOT entity-escaped: `htmlDoc = HtmlDoc`
+    // (Html.hs) only wraps an ALREADY BUILT plain `Doc`, so the escaping
+    // `Document (HtmlDoc d)` instance (Html.hs) never runs over
     // `prettyWfErrorReport`'s text.  Only `postprocessHtmlDoc = unlines . map
-    // (addBreak . indent) . lines` (Html.hs:157-162) applies: each line's
+    // (addBreak . indent) . lines` (Html.hs) applies: each line's
     // leading spaces become `&nbsp;` runs, `<br/>` is appended, and lines
     // rejoin with `\n` (trailing `\n`).  A body carrying `<`/`>` — a pair term
     // in a `Fr` fact or in the `multRestrictedReport` rule dump — therefore
@@ -349,9 +348,9 @@ mod tests {
 
     /// The interactive `TheoryLoadOptions` plumbing added for HS parity:
     /// `-D` defines reach `#ifdef` evaluation through the load configuration
-    /// (HS `toParserFlags`, TheoryLoader.hs:285-291), and a local file's
+    /// (HS `toParserFlags`, TheoryLoader.hs), and a local file's
     /// `#include` resolves against ITS OWN directory
-    /// (`takeDirectory <$> inFile`, Theory/Text/Parser.hs:306-343).
+    /// (`takeDirectory <$> inFile`, Theory/Text/Parser.hs).
     /// `maude_path` is a nonexistent binary so the best-effort Maude block
     /// is skipped and the test stays hermetic.
     #[test]

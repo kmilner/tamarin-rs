@@ -1,12 +1,11 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! HughesPJ-faithful pretty-printer Doc engine.
 //!
 //! Port of the layout algorithm from
 //! `Text.PrettyPrint.HughesPJ` (pretty-1.1.3.6) — the non-annotated
-//! module used in production (HS `Text/PrettyPrint/Class.hs:64-67, see line 67`/`:72`).
+//! module used in production (HS `Text/PrettyPrint/Class.hs`).
 //!
 //! The HS `Doc` is reduced to an RDoc with five constructors —
 //! `Empty`, `NilAbove`, `TextBeside`, `Nest`, `Union`, plus the
@@ -29,7 +28,7 @@
 
 use std::rc::Rc;
 
-// HS `flushRight` (`Extension/Prelude.hs:204-209`): left-pad with spaces to a
+// HS `flushRight` (`Extension/Prelude.hs`): left-pad with spaces to a
 // given character width, no truncation.
 use crate::prelude_ext::flush_right;
 
@@ -53,8 +52,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 ///   - the interactive web server renders every HTTP response at HS's
 ///     *web* width 100/67 — HughesPJ's default `style` used by `render`
 ///     (`getTheorySourceR` = `render . prettyClosedTheory`,
-///     `src/Web/Handler.hs:1015-1022, see line 1021`) and by `renderHtmlDoc`
-///     (`Text/PrettyPrint/Html.hs:152-153`).
+///     `src/Web/Handler.hs`) and by `renderHtmlDoc`
+///     (`Text/PrettyPrint/Html.hs`).
 ///
 /// Defaults to 110/73 so the CLI path is unchanged; the server calls
 /// [`set_display_width`] once at startup, before any rendering.  This is
@@ -95,7 +94,7 @@ thread_local! {
     /// as its HTML-entity-escaped column count instead of its visible column
     /// count.  This mirrors HS's web render path, which builds every document
     /// through the `HtmlDoc Doc` transformer: its `Document (HtmlDoc d)`
-    /// instance (`Text/PrettyPrint/Html.hs:102-104`) runs `escapeHtmlEntities`
+    /// instance (`Text/PrettyPrint/Html.hs`) runs `escapeHtmlEntities`
     /// on every `text`/`char` token BEFORE the HughesPJ fill measures it, so a
     /// `<`/`>` costs 4 columns (`&lt;`/`&gt;`) and a `'` costs 5 (`&#39;`) when
     /// deciding line breaks.  The interactive server escapes AFTER rendering
@@ -111,7 +110,7 @@ thread_local! {
 }
 
 /// Column width of `s` after HTML-entity escaping, matching HS
-/// `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs:140-149`) and the server's
+/// `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs`) and the server's
 /// `html_escape`: `<`/`>` → `&lt;`/`&gt;` (4), `&` → `&amp;` (5), `'` →
 /// `&#39;` (5), `"` → `&quot;` (6); every other codepoint counts as 1 column.
 fn html_entity_col_width(s: &str) -> usize {
@@ -151,16 +150,16 @@ thread_local! {
     /// When enabled:
     ///   * [`Doc::text`]/[`Doc::char`] run `escapeHtmlEntities` on their content
     ///     BEFORE it enters the layout, exactly as the `Document (HtmlDoc d)`
-    ///     instance (`Html.hs:102-104`) — so the stored bytes are already escaped
+    ///     instance (`Html.hs`) — so the stored bytes are already escaped
     ///     and the HughesPJ fill measures each token at its escaped-entity width
     ///     (`<`/`>` = 4, `&`/`'` = 5, `"` = 6).  This is a superset of the
     ///     width-only [`HtmlEntityWidthGuard`].
     ///   * the highlight combinators ([`keyword`]/[`operator`]/[`comment`] via
     ///     [`Doc::highlight`]) wrap their argument in a `<span class="hl_*">…</span>`
-    ///     emitted as ZERO-WIDTH text (HS `withTag`, `Html.hs:59-64`,
-    ///     `highlight`, `Html.hs:129-135`), so markup never perturbs line breaks.
+    ///     emitted as ZERO-WIDTH text (HS `withTag`, `Html.hs`,
+    ///     `highlight`, `Html.hs`), so markup never perturbs line breaks.
     ///     In plain mode they are the identity (HS plain `Doc` instance,
-    ///     `Highlight.hs:41-42`), so the `--prove` byte-identity corpus is
+    ///     `Highlight.hs`), so the `--prove` byte-identity corpus is
     ///     untouched (the flag defaults to `false`).
     ///
     /// Scoped via [`HtmlDocGuard`]; presentation-only, never affects verdicts.
@@ -183,7 +182,7 @@ impl HtmlDocGuard {
     /// drop).  For plain-text side channels rendered while an enclosing
     /// page render holds an `enable()` guard — e.g. the oracle/tactic
     /// goal strings, which HS produces with the plain `render $
-    /// prettyGoal` regardless of the surrounding widget (ProofMethod.hs:597-623, see line 606):
+    /// prettyGoal` regardless of the surrounding widget (ProofMethod.hs):
     /// HTML spans/entities in oracle stdin break the oracle's regexes.
     pub fn disable() -> Self {
         HtmlDocGuard(HTML_MODE.with(|c| c.replace(false)))
@@ -202,7 +201,7 @@ pub fn html_mode() -> bool {
     HTML_MODE.with(|c| c.get())
 }
 
-/// HS `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs:140-149`, copied there
+/// HS `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs`, copied there
 /// from blaze-html) — escape the five HTML metacharacters in the exact HS
 /// order/mapping so escaped column widths and output bytes match.
 pub use crate::pretty_html::escape_html_entities;
@@ -224,7 +223,7 @@ fn fill_width(s: &str) -> usize {
 // ============================================================================
 
 /// HS `Doc` from `pretty-1.1.3.6/Text/PrettyPrint/HughesPJ.hs` (the
-/// non-annotated module used in production, HS `Text/PrettyPrint/Class.hs:64-67, see line 67`/`:72`)
+/// non-annotated module used in production, HS `Text/PrettyPrint/Class.hs`)
 /// — minus the `Above`/`Beside` lazy constructors (we eagerly reduce on
 /// build).
 #[derive(Clone)]
@@ -333,7 +332,7 @@ impl Doc {
     /// like CJK count as 1 in both).
     pub fn text<S: AsRef<str>>(s: S) -> Doc {
         let s = s.as_ref();
-        // HS `Document (HtmlDoc d)` (`Html.hs:102-123, see line 104`): `text = HtmlDoc . text .
+        // HS `Document (HtmlDoc d)` (`Html.hs`): `text = HtmlDoc . text .
         // escapeHtmlEntities`.  In HtmlDoc mode we escape the content up front so
         // the stored bytes AND the layout width are the escaped form (a `<`
         // costs 4 columns, matching HS).  In plain mode this is the byte-faithful
@@ -376,7 +375,7 @@ impl Doc {
     pub fn char(c: char) -> Doc {
         let mut buf = [0u8; 4];
         let s = c.encode_utf8(&mut buf);
-        // HS `Document (HtmlDoc d)` (`Html.hs:102-123, see line 103`): `char = HtmlDoc . text .
+        // HS `Document (HtmlDoc d)` (`Html.hs`): `char = HtmlDoc . text .
         // escapeHtmlEntities . return`.  Escape in HtmlDoc mode (a bare `<`
         // becomes `&lt;`, width 4); plain mode is unchanged.
         if html_mode() {
@@ -462,7 +461,7 @@ impl Doc {
     /// `fullRender`/`easyDisplay`): every `Union` takes its SECOND
     /// (fully-laid-out) branch — the one guaranteed free of `NoDoc` —
     /// every `Nest` is dropped, and every `NilAbove` (line break) becomes
-    /// exactly ONE space.  Used by HS `System/Dot.hs:371-376, see line 374`'s `oneLineRender`
+    /// exactly ONE space.  Used by HS `System/Dot.hs`'s `oneLineRender`
     /// to measure each record field's used width for `renderBalanced`.
     pub fn one_line_render(&self) -> String {
         // Iterative for the same stack-depth reason as `lay_loop`.
@@ -499,7 +498,7 @@ impl Doc {
 // their tags, mirroring HS's `HtmlDoc`/`NoHtmlDoc` split.
 // ============================================================================
 
-/// HS `HighlightStyle` (`Text/PrettyPrint/Highlight.hs:33-34`).
+/// HS `HighlightStyle` (`Text/PrettyPrint/Highlight.hs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hl {
     Keyword,
@@ -507,7 +506,7 @@ pub enum Hl {
     Operator,
 }
 
-/// HS `hlClass` (`Text/PrettyPrint/Html.hs:133-135`).
+/// HS `hlClass` (`Text/PrettyPrint/Html.hs`).
 fn hl_class(h: Hl) -> &'static str {
     match h {
         Hl::Comment => "hl_comment",
@@ -518,8 +517,8 @@ fn hl_class(h: Hl) -> &'static str {
 
 impl Doc {
     /// HS `highlight` — `withTag "span" [("class", hlClass style)]` in the
-    /// `HtmlDoc` instance (`Html.hs:129-135`), the identity in the plain `Doc`
-    /// instance (`Highlight.hs:41-42`).
+    /// `HtmlDoc` instance (`Html.hs`), the identity in the plain `Doc`
+    /// instance (`Highlight.hs`).
     pub fn highlight(self, style: Hl) -> Doc {
         if html_mode() {
             with_tag("span", &[("class", hl_class(style))], self)
@@ -529,7 +528,7 @@ impl Doc {
     }
 }
 
-/// HS `attribute` (`Html.hs:82-83, see line 83`): ` key="escaped-value"`.
+/// HS `attribute` (`Html.hs`): ` key="escaped-value"`.
 fn push_attribute(buf: &mut String, key: &str, value: &str) {
     buf.push(' ');
     buf.push_str(key);
@@ -538,7 +537,7 @@ fn push_attribute(buf: &mut String, key: &str, value: &str) {
     buf.push('"');
 }
 
-/// HS `withTag tag attrs inner` (`Html.hs:59-64`):
+/// HS `withTag tag attrs inner` (`Html.hs`):
 /// `unescapedZeroWidthText open <> inner <> unescapedZeroWidthText close`.
 /// The open/close tags are ZERO-WIDTH (they don't move any line break), and the
 /// inner document is laid out normally.  Used only when building web panes.
@@ -581,7 +580,7 @@ pub fn hl_close(_style: Hl) -> String {
     }
 }
 
-// -- General highlighters (HS Highlight.hs:48-59) -----------------------------
+// -- General highlighters (HS Highlight.hs) -----------------------------
 
 pub fn comment(d: Doc) -> Doc {
     d.highlight(Hl::Comment)
@@ -603,21 +602,21 @@ pub fn operator_(s: &str) -> Doc {
     operator(Doc::text(s))
 }
 
-/// HS `opParens d = operator_ "(" <> d <> operator_ ")"` (`Highlight.hs:58-59`).
+/// HS `opParens d = operator_ "(" <> d <> operator_ ")"` (`Highlight.hs`).
 pub fn op_parens(d: Doc) -> Doc {
     operator_("(").beside(d).beside(operator_(")"))
 }
 
-/// HS `parens p = char '(' <> p <> char ')'` (`Text/PrettyPrint/Class.hs:149-149`) — PLAIN parens
+/// HS `parens p = char '(' <> p <> char ')'` (`Text/PrettyPrint/Class.hs`) — PLAIN parens
 /// (no highlight), used e.g. around `(modulo AC)`.
 pub fn parens(d: Doc) -> Doc {
     Doc::char('(').beside(d).beside(Doc::char(')'))
 }
 
-// -- Postprocessing (HS Html.hs:155-162) --------------------------------------
+// -- Postprocessing (HS Html.hs) --------------------------------------
 
 /// HS `postprocessHtmlDoc = unlines . map (addBreak . indent) . lines`
-/// (`Html.hs:157-162`): every line's leading spaces become `&nbsp;` runs, a
+/// (`Html.hs`): every line's leading spaces become `&nbsp;` runs, a
 /// `<br/>` is appended to every line, and lines are re-joined with `\n` (with a
 /// trailing `\n`, matching `unlines`).  `lines` treats `\n` as a terminator, so
 /// a trailing `\n` in the input does NOT create an extra empty line.
@@ -904,7 +903,7 @@ pub fn fcat(ds: Vec<Doc>) -> Doc {
 ///   nestShort (length lead + 1) (text lead) (text finish) body
 ///   = sep [ text lead $$ nest n body, text finish ]`
 /// where `$$` is HughesPJ `above` and `n = length lead + 1`
-/// (Text/PrettyPrint/Class.hs:218-223).  Shared by the formula, fact and
+/// (Text/PrettyPrint/Class.hs).  Shared by the formula, fact and
 /// SAPIC renderers.
 pub fn nest_short_doc(lead: &str, finish: &str, body: Doc) -> Doc {
     let n = lead.chars().count() as isize + 1;
@@ -1331,9 +1330,9 @@ pub fn punctuate(sep: Doc, ds: Vec<Doc>) -> Vec<Doc> {
 // `numbered'`, `$--$`).
 // ============================================================================
 
-/// HS `$--$` (`Text/PrettyPrint/Class.hs:112-114`): vertical concatenation with an empty
+/// HS `$--$` (`Text/PrettyPrint/Class.hs`): vertical concatenation with an empty
 /// line in between — `caseEmptyDoc`-guarded `d1 $-$ text "" $-$ d2`, where
-/// Class's `$-$` is HughesPJ `$+$` (`Text/PrettyPrint/Class.hs:180`) = [`Doc::above_g`].
+/// Class's `$-$` is HughesPJ `$+$` (`Text/PrettyPrint/Class.hs`) = [`Doc::above_g`].
 /// The separator is [`Doc::text_hs`]`("")` so it survives as a blank line
 /// (indented under a surrounding `nest`).
 pub fn above_blank(d1: Doc, d2: Doc) -> Doc {
@@ -1346,7 +1345,7 @@ pub fn above_blank(d1: Doc, d2: Doc) -> Doc {
     d1.above_g(Doc::text_hs("")).above_g(d2)
 }
 
-/// HS `numbered` (`Text/PrettyPrint/Class.hs:252-259`):
+/// HS `numbered` (`Text/PrettyPrint/Class.hs`):
 /// `foldr1 ($-$) $ intersperse vsep $ map pp $ zip [1..] ds` with
 /// `pp (i, d) = text (flushRight nWidth (show i)) <> d` and
 /// `nWidth = length (show (length ds))`.  `[]` yields the empty doc.
@@ -1379,7 +1378,7 @@ pub fn numbered(vsep: Doc, ds: Vec<Doc>) -> Doc {
     acc
 }
 
-/// HS `numbered'` (`Text/PrettyPrint/Class.hs:263-264`):
+/// HS `numbered'` (`Text/PrettyPrint/Class.hs`):
 /// `numbered (text "") . map (text ". " <>)`.
 pub fn numbered_prime(ds: Vec<Doc>) -> Doc {
     numbered(

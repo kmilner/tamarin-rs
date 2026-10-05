@@ -1,13 +1,12 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Sapic.Basetranslation` (`lib/sapic/src/Sapic/Basetranslation.hs`):
-//!   - `baseInit`       (Basetranslation.hs:312-318)
-//!   - `baseTransNull`  (Basetranslation.hs:81-82)
-//!   - `baseTransAction` (94-214) — every `SapicAction` arm
-//!   - `baseTransComb`   (226-306) — every `ProcessCombinator` arm
-//!   - the hardcoded restrictions `baseRestr` (449-485) selects from:
+//!   - `baseInit`       (Basetranslation.hs)
+//!   - `baseTransNull`  (Basetranslation.hs)
+//!   - `baseTransAction` — every `SapicAction` arm
+//!   - `baseTransComb`   — every `ProcessCombinator` arm
+//!   - the hardcoded restrictions `baseRestr` selects from:
 //!     `single_session`, state, predicate, event and locking restrictions are
 //!     built directly in the theory's internal formula representation.
 //!
@@ -40,7 +39,7 @@ pub(crate) type RuleBody = (
     Vec<SyntacticLNFormula>,
 );
 
-/// `baseTransNull` (Basetranslation.hs:81-82):
+/// `baseTransNull` (Basetranslation.hs):
 ///   `[([State LState p tildex], [], [], [])]`
 pub(crate) fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<RuleBody> {
     let st = TransFact::State(
@@ -88,7 +87,7 @@ pub(crate) fn list_intersect<T: PartialEq + Clone>(xs: &[T], ys: &[T]) -> Vec<T>
     xs.iter().filter(|x| ys.contains(x)).cloned().collect()
 }
 
-/// `baseTransAction` (Basetranslation.hs:94-205).  Returns the rule bodies and
+/// `baseTransAction` (Basetranslation.hs).  Returns the rule bodies and
 /// the updated `tildex`.  `needs_ass_immediate` is the `needsInEvRes` flag;
 /// when false, `Event` emits NO extra `EventEmpty` action.
 pub(crate) fn base_trans_action(
@@ -111,7 +110,7 @@ pub(crate) fn base_trans_action(
     };
 
     match ac {
-        // (Rep): replication (Basetranslation.hs:99-102).  Two rules:
+        // (Rep): replication (Basetranslation.hs).  Two rules:
         //   [([def_state], [], [State PSemiState (p++[1]) tildex], []),
         //    ([State PSemiState (p++[1]) tildex], [], [def_state' tildex], [])]
         // The first consumes the entering linear state and produces a
@@ -167,7 +166,7 @@ pub(crate) fn base_trans_action(
             );
             Ok((vec![body], tildex.clone()))
         }
-        // (ChIn channel t' matchVar) (Basetranslation.hs:105-127): handle channel
+        // (ChIn channel t' matchVar) (Basetranslation.hs): handle channel
         // input `in(c,pat); P` like `in(c,x); let pat = x in P`.  Mint a fresh
         // message variable `x` avoiding `tildex`, build the Let combinator rules
         // for `let pat = x`, then prepend the channel facts via
@@ -254,7 +253,7 @@ pub(crate) fn base_trans_action(
             }
         }
         // (ChOut (Just tc') t') | secretChannel = Just (AnVar _)
-        // (Basetranslation.hs:128-137): the private secret-channel output.
+        // (Basetranslation.hs): the private secret-channel output.
         SapicAction::ChOut {
             chan: Some(tc_term),
             msg,
@@ -293,7 +292,7 @@ pub(crate) fn base_trans_action(
             }
         }
         // (ChOut (Just tc') t') | secretChannel = Nothing
-        // (Basetranslation.hs:138-149): the public-channel output.
+        // (Basetranslation.hs): the public-channel output.
         SapicAction::ChOut {
             chan: Some(tc_term),
             msg,
@@ -354,7 +353,7 @@ pub(crate) fn base_trans_action(
             );
             Ok((vec![body], tildex.clone()))
         }
-        // === Pure cell translation (Basetranslation.hs:155-174) ===
+        // === Pure cell translation (Basetranslation.hs) ===
         // Gated on `an.pure_state`, which is only ever set when the
         // state-channel optimisation is enabled (`--translation-state-optimisation`
         // / `_stateChannelOpt`).  These guards MUST be checked BEFORE the classical
@@ -395,7 +394,7 @@ pub(crate) fn base_trans_action(
             Ok((vec![body], tildex.clone()))
         }
         // (Lock _) | pureState and (Unlock _) | pureState -> silent
-        // passthrough (Basetranslation.hs:170-174 gives both the same rule):
+        // passthrough (Basetranslation.hs gives both the same rule):
         //   [([def_state], [], [def_state' tildex], [])]
         SapicAction::Lock(_) | SapicAction::Unlock(_) if an.pure_state => {
             let body: RuleBody = (
@@ -407,7 +406,7 @@ pub(crate) fn base_trans_action(
             Ok((vec![body], tildex.clone()))
         }
 
-        // === Classical state translation (Basetranslation.hs:177-194) ===
+        // === Classical state translation (Basetranslation.hs) ===
         //
         // (Insert t1 t2): `[([def_state], [InsertA t1 t2], [def_state' tildex], [])]`
         SapicAction::Insert(t1, t2) => {
@@ -432,11 +431,11 @@ pub(crate) fn base_trans_action(
             );
             Ok((vec![body], tildex.clone()))
         }
-        // (Lock t) | Just (AnVar v) <- an.lock (Basetranslation.hs:185-189):
+        // (Lock t) | Just (AnVar v) <- an.lock (Basetranslation.hs):
         //   let tx' = v `insert` tildex in
         //   [([def_state, Fr v], [LockNamed t v, LockUnnamed t v], [def_state' tx'], [])]
         // (Lock _) | Nothing <- an.lock -> "Unannotated lock" error
-        //   (Basetranslation.hs:94-214, see line 190).
+        //   (Basetranslation.hs).
         SapicAction::Lock(t) => {
             let Some(an_v) = &an.lock else {
                 return Err("baseTransAction: Unannotated lock".to_string());
@@ -456,10 +455,10 @@ pub(crate) fn base_trans_action(
             );
             Ok((vec![body], tx2))
         }
-        // (Unlock t) | Just (AnVar v) <- an.unlock (Basetranslation.hs:191-193):
+        // (Unlock t) | Just (AnVar v) <- an.unlock (Basetranslation.hs):
         //   [([def_state], [UnlockNamed t v, UnlockUnnamed t v], [def_state' tildex], [])]
         // (Unlock _) | Nothing <- an.lock -> "Unannotated unlock" error
-        //   (Basetranslation.hs:94-214, see line 194).
+        //   (Basetranslation.hs).
         SapicAction::Unlock(t) => {
             let Some(an_v) = &an.unlock else {
                 return Err("baseTransAction: Unannotated unlock".to_string());
@@ -477,7 +476,7 @@ pub(crate) fn base_trans_action(
             );
             Ok((vec![body], tildex.clone()))
         }
-        // (ProcessCall ..): a pure inlining marker (Basetranslation.hs:204-207).
+        // (ProcessCall ..): a pure inlining marker (Basetranslation.hs).
         //   [([def_state], [], [def_state' tildex], [])]
         // The substituted body that follows the marker carries the real
         // behaviour; this rule just threads the state on by one position.
@@ -491,7 +490,7 @@ pub(crate) fn base_trans_action(
             Ok((vec![body], tildex.clone()))
         }
         // (MSR l' a' r' res' _): an embedded multiset-rewrite rule inside the
-        // process (Basetranslation.hs:200-203).  Match-vars are ignored here
+        // process (Basetranslation.hs).  Match-vars are ignored here
         // (they were consumed at parse time).
         //   (l,a,r,res) = (map toLNFact l', map toLNFact a', map toLNFact r',
         //                  map toLFormula res')
@@ -527,7 +526,7 @@ pub(crate) fn base_trans_action(
             // conclusions: def_state' tx' : map TamarinFact r
             let mut conc_facts: Vec<TransFact> = vec![def_state_next(&tx2)];
             conc_facts.extend(r.into_iter().map(TransFact::TamarinFact));
-            // restrictions: `map toLFormula res'` (Theory/Sapic/Term.hs:152-154
+            // restrictions: `map toLFormula res'` (Theory/Sapic/Term.hs
             // drops the type tags).
             let restr: Vec<SyntacticLNFormula> = rest.iter().map(to_lformula).collect();
             let body: RuleBody = (prems_facts, act_facts, conc_facts, restr);
@@ -537,12 +536,12 @@ pub(crate) fn base_trans_action(
 }
 
 /// The result of translating a combinator: `(rules, tildex_l, Option<tildex_r>)`
-/// — HS `TranslationResultComb` (Basetranslation.hs:51-51).  `tildex_r` is `None`
+/// — HS `TranslationResultComb` (Basetranslation.hs).  `tildex_r` is `None`
 /// when the combinator has no right child to translate (e.g. `let` without an
 /// else branch).
 pub(crate) type CombResult = (Vec<RuleBody>, BTreeSet<LVar>, Option<BTreeSet<LVar>>);
 
-/// `baseTransComb` (Basetranslation.hs:226-306): `Parallel`, `NDC`, `CondEq`,
+/// `baseTransComb` (Basetranslation.hs): `Parallel`, `NDC`, `CondEq`,
 /// `Cond` (with a formula), `Lookup` and `Let`.
 pub(crate) fn base_trans_comb(
     c: &tamarin_theory::sapic::ProcessCombinator<SapicLVar>,
@@ -570,7 +569,7 @@ pub(crate) fn base_trans_comb(
     };
 
     match c {
-        // Parallel (Basetranslation.hs:228-230):
+        // Parallel (Basetranslation.hs):
         //   ([([def_state], [], [def_state1 tildex, def_state2 tildex], [])],
         //    tildex, Just tildex)
         PC::Parallel => {
@@ -582,11 +581,11 @@ pub(crate) fn base_trans_comb(
             );
             Ok((vec![body], tildex.clone(), Some(tildex.clone())))
         }
-        // NDC (Basetranslation.hs:231-233): no rules of its own; both children
+        // NDC (Basetranslation.hs): no rules of its own; both children
         // share the parent's position (handled by `substStatePos` in `gen`).
         //   ([], tildex, Just tildex)
         PC::Ndc => Ok((vec![], tildex.clone(), Some(tildex.clone()))),
-        // CondEq (Basetranslation.hs:243-251):
+        // CondEq (Basetranslation.hs):
         //   let fa = toLNFact (protoFact Linear "Eq" [t1, t2]) in
         //   if vars_f ⊆ tildex then
         //     ([([def_state], [PredicateA fa], [def_state1 tildex], []),
@@ -619,7 +618,7 @@ pub(crate) fn base_trans_comb(
                 Some(tildex.clone()),
             ))
         }
-        // Cond f' (Basetranslation.hs:234-242):
+        // Cond f' (Basetranslation.hs):
         //   f <- toLFormula f'
         //   let freevars_f = fromList (freesList f)
         //   if freevars_f ⊆ tildex then
@@ -654,7 +653,7 @@ pub(crate) fn base_trans_comb(
                 Some(tildex.clone()),
             ))
         }
-        // Pure cell Lookup (Basetranslation.hs:280-289), gated on
+        // Pure cell Lookup (Basetranslation.hs), gated on
         //   pureState && Just (AnVar vs) <- an.unlock:
         //   let tx' = vs `insert` (v `insert` tildex) in
         //   ([([def_state, PureCell t (varTerm v), Fr vs], [],
@@ -684,7 +683,7 @@ pub(crate) fn base_trans_comb(
             );
             Ok((vec![body], tx_prime, Some(tildex.clone())))
         }
-        // Classical Lookup (Basetranslation.hs:293-299):
+        // Classical Lookup (Basetranslation.hs):
         //   let tx' = v `insert` tildex
         //   ([([def_state], [IsIn t v], [def_state1 tx'], []),
         //     ([def_state], [IsNotSet t], [def_state2 tildex], [])],
@@ -708,7 +707,7 @@ pub(crate) fn base_trans_comb(
             );
             Ok((vec![body_in, body_notset], tx_prime, Some(tildex.clone())))
         }
-        // Let (Basetranslation.hs:252-277).  Match-vars are ignored in the
+        // Let (Basetranslation.hs).  Match-vars are ignored in the
         // translation (they are bound in the def_state).  The RHS / matched LHS
         // are threaded through a `Let_<pos>` (FLet) fact:
         //   t1or = toLNTerm left
@@ -788,7 +787,7 @@ pub(crate) fn base_trans_comb(
     }
 }
 
-/// `mergeWithStateRule' (l',a',r') (l,a,r,f)` (Basetranslation.hs:84-92):
+/// `mergeWithStateRule' (l',a',r') (l,a,r,f)` (Basetranslation.hs):
 /// prepend the channel facts `(l',a',r')` onto a rule body `(l,a,r,f)` ONLY
 /// when the rule's premise list `l` contains a `State` fact (`List.find
 /// isState l`); otherwise the rule is left unchanged.  `mergeWithStateRule`
@@ -818,7 +817,7 @@ fn merge_with_state_rule(
         .collect()
 }
 
-/// `evalFreshAvoiding (freshLVar name LSortMsg) tildex` (Basetranslation.hs:94-214, see line 106):
+/// `evalFreshAvoiding (freshLVar name LSortMsg) tildex` (Basetranslation.hs):
 /// mint a fresh `LSortMsg` variable named `name` whose index avoids every
 /// variable index already present in `tildex`.  HS `avoid` = `maybe 0 (succ .
 /// snd) . boundsVarIdx` — i.e. (max index in `tildex`) + 1, or 0 if empty.
@@ -837,14 +836,14 @@ pub(crate) fn ln_term_vars(t: &LNTerm) -> BTreeSet<LVar> {
     tamarin_term::vterm::vars_vterm(t).into_iter().collect()
 }
 
-/// The else-arm restriction for a kept `let` (Basetranslation.hs:261-263):
+/// The else-arm restriction for a kept `let` (Basetranslation.hs):
 ///   `fa  = Conn Imp (Ato (EqE (fmapTerm (fmap Free) t1) (fmapTerm (fmap Free) t2))) (TF False)`
 ///   `faN = fold (hinted forAll) fa freevars`
 /// = `∀ freevars. ((t1 = t2) ⇒ ⊥)`.  `fold` is `Data.Set.fold` (the module
-/// imports `Data.Set` unqualified, Basetranslation.hs:36), which is `foldr`
+/// imports `Data.Set` unqualified, Basetranslation.hs), which is `foldr`
 /// over the ascending set, so the SMALLEST free variable carries the
 /// OUTERMOST binder.  `hinted forAll` takes the binder hint from the variable
-/// (`hint (LVar n s _) = (n, s)`, Theory/Model/Formula.hs:227-228).
+/// (`hint (LVar n s _) = (n, s)`, Theory/Model/Formula.hs).
 fn let_else_restriction(t1: &LNTerm, t2: &LNTerm, freevars: &BTreeSet<LVar>) -> SyntacticLNFormula {
     let eq = ProtoFormula::Atom(ProtoAtom::EqE(lift_free(t1), lift_free(t2)));
     let fa = eq.implies(ProtoFormula::lfalse());
@@ -853,7 +852,7 @@ fn let_else_restriction(t1: &LNTerm, t2: &LNTerm, freevars: &BTreeSet<LVar>) -> 
     })
 }
 
-/// `toLNFact (protoFact Linear "Eq" [t1, t2])` (Basetranslation.hs:226-306, see line 244): build
+/// `toLNFact (protoFact Linear "Eq" [t1, t2])` (Basetranslation.hs): build
 /// the `Eq( t1, t2 )` linear fact over the type-erased terms.
 fn eq_fact(t1: &SapicTerm, t2: &SapicTerm) -> tamarin_theory::fact::LNFact {
     use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
@@ -869,15 +868,15 @@ fn fact_vars(f: &tamarin_theory::fact::LNFact) -> BTreeSet<LVar> {
         .collect()
 }
 
-/// `show (WFUnbound varset)` (Sapic/Exceptions.hs:106-111): `The variable(s)
+/// `show (WFUnbound varset)` (Sapic/Exceptions.hs): `The variable(s)
 /// <vars> are not bound.`, the variables comma-joined in set order
-/// (`prettyVarSet`, Sapic/Exceptions.hs:84-85).
+/// (`prettyVarSet`, Sapic/Exceptions.hs).
 fn wf_unbound(vars: impl Iterator<Item = LVar>) -> String {
     let vars: Vec<String> = vars.map(|v| v.to_string()).collect();
     format!("The variable(s) {} are not bound.", vars.join(", "))
 }
 
-/// `baseInit` (Basetranslation.hs:312-318): the `Init` rule plus the empty
+/// `baseInit` (Basetranslation.hs): the `Init` rule plus the empty
 /// initial `tildex`.
 ///   `[AnnotatedRule (Just "Init") anP (Right InitPosition) [] [InitEmpty]
 ///       [State LState [] empty] [] 0]`
@@ -902,8 +901,8 @@ pub(crate) fn base_init(
 // =============================================================================
 
 /// The `single_session` restriction `resSingleSession`
-/// (Basetranslation.hs:361-364), one of the hard-coded restrictions
-/// `baseRestr` assembles (Basetranslation.hs:449-479, see line 459).  The
+/// (Basetranslation.hs), one of the hard-coded restrictions
+/// `baseRestr` assembles (Basetranslation.hs).  The
 /// formula body is HS's hardcoded formula.
 pub(crate) fn single_session_restriction() -> tamarin_theory::restriction::Restriction {
     use crate::restriction_builder as rb;
@@ -921,7 +920,7 @@ pub(crate) fn single_session_restriction() -> tamarin_theory::restriction::Restr
 }
 
 /// The two conditional-equality restrictions `resEq` / `resNotEq`
-/// (Basetranslation.hs:427-436), added by `baseRestr` when the process
+/// (Basetranslation.hs), added by `baseRestr` when the process
 /// `contains isEq` (a `CondEq` combinator).  The formula bodies are HS's
 /// hardcoded strings, parsed as HS's `toEx`/`parseRestriction` parses them.
 pub(crate) fn predicate_restrictions() -> Vec<tamarin_theory::restriction::Restriction> {
@@ -947,8 +946,8 @@ pub(crate) fn predicate_restrictions() -> Vec<tamarin_theory::restriction::Restr
     ]
 }
 
-/// The `set_in` / `set_notin` restrictions (Basetranslation.hs:332-359), added
-/// by `baseRestr` (449-457) when the process `contains isLookup`.  HS hardcodes
+/// The `set_in` / `set_notin` restrictions (Basetranslation.hs), added
+/// by `baseRestr` when the process `contains isLookup`.  HS hardcodes
 /// these as restriction strings and parses them with `toEx`/`parseRestriction`;
 /// we do the same with the RS `parse_formula_str` (so the rendered output is
 /// byte-identical to HS's hand-written strings, and AC/sort handling matches the
@@ -1016,7 +1015,7 @@ pub(crate) fn state_restrictions(
     vec![set_in, set_notin]
 }
 
-/// The `in_event` restriction `resInEv` (Basetranslation.hs:439-444), added by
+/// The `in_event` restriction `resInEv` (Basetranslation.hs), added by
 /// `baseRestr` when `needsInEvRes` (a lemma needs the in-event axiom).  As with
 /// the other hardcoded restrictions, HS parses the string with
 /// `parseRestriction`; we parse the same formula body so the rendered output is
@@ -1049,13 +1048,13 @@ pub(crate) fn in_event_restriction() -> tamarin_theory::restriction::Restriction
 }
 
 // =============================================================================
-// resLocking (Basetranslation.hs:366-425)
+// resLocking (Basetranslation.hs)
 // =============================================================================
 
-/// `resLockingPOS` (Basetranslation.hs:368-376): the per-lock locking
+/// `resLockingPOS` (Basetranslation.hs): the per-lock locking
 /// restriction.  `LockPOS`/`UnlockPOS` are placeholder fact names that
 /// `resLocking` rewrites to `Lock_<idx>`/`Unlock_<idx>` for the given lock var.
-/// `resLocking hasUnlock v` (Basetranslation.hs:406-425): produce the
+/// `resLocking hasUnlock v` (Basetranslation.hs): produce the
 /// `locking_<idx v>` restriction with `Lock_<idx>`/`Unlock_<idx>` action facts
 /// (HS `mapAtoms subst`, with
 /// `hardcode s = s ++ "_" ++ show (lvarIdx v)`).
@@ -1400,7 +1399,7 @@ mod tests {
         assert_eq!(txr, Some(tx));
     }
 
-    /// `faN = fold (hinted forAll) fa freevars` (Basetranslation.hs:261-263).
+    /// `faN = fold (hinted forAll) fa freevars` (Basetranslation.hs).
     /// `fold` is `Data.Set.fold` = `foldr` over the ASCENDING set, so the
     /// smallest free variable is the last binder applied and therefore the
     /// OUTERMOST one, while the largest sits next to the body and carries De
@@ -1500,7 +1499,7 @@ mod tests {
     }
 
     // A user-`[AC]` symbol prints INFIX, as HS `prettyTerm` renders it
-    // (Term/Term.hs:305): the translation's restriction bodies carry these
+    // (Term/Term.hs): the translation's restriction bodies carry these
     // terms into emitted bytes, so a prefix `add(…)` here would diverge from
     // the oracle in both the rendered predicate and the derived
     // rule/restriction names.  No corpus theory combines SAPIC with a user
@@ -1538,7 +1537,7 @@ mod tests {
 
     /// The terms the SAPIC translation builds print through HS `prettyTerm`,
     /// so `exp` comes out infix and a `pair` chain is split down the RIGHT
-    /// spine only (Term/Term.hs:310,313,323-324).  Both shapes reach emitted
+    /// spine only (Term/Term.hs).  Both shapes reach emitted
     /// bytes through `let_else_restriction`: on
     /// `let <x, y> = <'g'^k, <<'a','b'>,'c'>> in … else …` the pinned oracle
     /// (ef3f0468) renders the generated action as
@@ -1571,7 +1570,7 @@ mod tests {
         assert_eq!(render(&pair(e.clone(), inner.clone())), "<a^b, <a, b>, c>");
         assert_eq!(render(&inner), "<<a, b>, c>");
 
-        // `List` is HS `ppFun "LIST" ts` (Term/Term.hs:317), not a tuple.
+        // `List` is HS `ppFun "LIST" ts` (Term/Term.hs), not a tuple.
         assert_eq!(
             render(&f_app_list(vec![leaf("a"), leaf("b")])),
             "LIST(a, b)"

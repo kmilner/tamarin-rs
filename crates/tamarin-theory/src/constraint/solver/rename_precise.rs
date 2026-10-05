@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.LTerm.renamePrecise` applied to a `System`.
 //!
@@ -115,7 +114,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // 1. Nodes — id + rule.
     //
     // HS-faithful: `mapFrees (M.Map NodeId RuleACInst)`
-    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:905-914, see line 914).
+    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs).
     // `M.fromList` builds a Map keyed by Ord NodeId, so post-rename the
     // entries land in ascending NEW NodeId order.  Without this sort,
     // RS's `Vec<(NodeId, _)>` keeps the pre-rename insertion order — which
@@ -188,7 +187,7 @@ pub fn rename_precise_system(sys: &mut System) {
     // after the in-place rename.  See `subst_system_once`'s comment for
     // detailed rationale.
     // HS `mapFrees (S.Set LessAtom)`: sort + dedup post-rename
-    // (Term/LTerm.hs:898-903, see line 903 `fmap S.fromList . mapFrees f . S.toList`).
+    // (Term/LTerm.hs `fmap S.fromList . mapFrees f . S.toList`).
     let mut new_less: Vec<crate::constraint::constraints::LessAtom> =
         Vec::with_capacity(sys.less_atoms.len());
     for la in std::mem::take(&mut sys.content_mut_untracked().less_atoms) {
@@ -208,7 +207,7 @@ pub fn rename_precise_system(sys: &mut System) {
         .map(|(g, st)| (g.apply(&pass), st))
         .collect();
     // HS-faithful: `mapFrees (M.Map Goal GoalStatus)`
-    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs:905-914, see line 914).
+    // = `fmap M.fromList . mapFrees f . M.toList` (Term/LTerm.hs).
     // `M.fromList` builds a Map keyed by Ord Goal, so post-rename the
     // entries land in ascending NEW Goal order.
     //
@@ -223,7 +222,7 @@ pub fn rename_precise_system(sys: &mut System) {
     //
     // HS-faithful: `_sFormulas` / `_sSolvedFormulas` / `_sLemmas` are
     // `S.Set LNGuarded`. `mapFrees (S.Set a) = fmap S.fromList . mapFrees
-    // f . S.toList` (Term/LTerm.hs:898-903, see line 903) — rebuilds the set after mapping,
+    // f . S.toList` (Term/LTerm.hs) — rebuilds the set after mapping,
     // so post-rename entries are sorted by NEW Ord Guarded AND
     // collision-deduped.  Mirror by sorting+deduping after the in-place
     // rename: post-rename two formulas that became equal collapse.
@@ -259,7 +258,7 @@ pub fn rename_precise_system(sys: &mut System) {
     sys.eq_store_mut().subst = Subst::from_list(pairs);
 
     // HS-faithful: `HasFrees (SubstVFresh n LVar)` only maps DOMAIN
-    // (keys), NOT values.  From Term.Substitution.SubstVFresh.hs:196-202:
+    // (keys), NOT values.  From Term.Substitution.SubstVFresh.hs:
     //
     //   instance HasFrees (SubstVFresh n LVar) where
     //       foldFrees f = foldFrees f . M.keys . svMap
@@ -325,7 +324,7 @@ pub fn rename_precise_system(sys: &mut System) {
         .solved_subterms
         .dedup_by(|a, b| (&a.small, &a.big) == (&b.small, &b.big));
     // negSubterms are mapped too; oldNegSubterms are NOT (HS mapFrees
-    // keeps `oldNegSt` with `pure` — SubtermStore.hs:550-555).  Take the set
+    // keeps `oldNegSt` with `pure` — SubtermStore.hs).  Take the set
     // out, map each pair, then `rebuild_from` re-establishes the sorted-unique
     // set invariant on the rewritten pairs.
     let mapped: Vec<(LNTerm, LNTerm)> = std::mem::take(&mut sys.subterm_store_mut().neg_subterms)

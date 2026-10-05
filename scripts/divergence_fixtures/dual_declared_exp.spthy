@@ -1,10 +1,10 @@
 // Dual-declared `exp` under `builtins: diffie-hellman`: the builtin
-// contributes the NoEq `exp/2` (dhFunSig, Term/Maude/Signature.hs:110-125),
+// contributes the NoEq `exp/2` (dhFunSig, Term/Maude/Signature.hs),
 // so a user `functions: exp/2 [AC]` collides with a THEORY-contributed NoEq
 // symbol.  Prefix `exp(a, b)` resolves to that NoEq symbol — which is
-// `expSym`, so `prettyTerm` renders it `a^b` (Term/Term.hs:310) and the
+// `expSym`, so `prettyTerm` renders it `a^b` (Term/Term.hs) and the
 // Formula-terms check flags it REDUCIBLE (`dhReducibleFunSig`,
-// Term/Term/FunctionSymbols.hs:307-308) — while infix `a exp b` stays the
+// Term/Term/FunctionSymbols.hs) — while infix `a exp b` stays the
 // user's irreducible AC symbol.
 //
 // Compared slices: the wf report block AND the `theory … end` echo.

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use tamarin_parser::ast as p;
 use tamarin_parser::parse_theory;
@@ -41,7 +40,7 @@ fn only(report: &WfReport, topic: &str) -> String {
 
 /// The report's bodies joined the way `prettyWfErrorReport` joins a topic
 /// group — `intersperse (text "")` under one header, which at the group's
-/// 2-space nest is a two-space line (Wellformedness.hs:118-125).
+/// 2-space nest is a two-space line (Wellformedness.hs).
 fn bodies(report: &[WfError]) -> String {
     assert!(!report.is_empty(), "empty report");
     report
@@ -52,7 +51,7 @@ fn bodies(report: &[WfError]) -> String {
 }
 
 /// The parser inlines a rule's `let` bindings into the body it builds
-/// (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs:119), so the
+/// (`apply subst (ps0,as0,cs0,rs0)`, Theory/Text/Parser/Rule.hs), so the
 /// checks read the substituted facts: `Fr(m)` passes the fresh-argument check
 /// as a message variable and fails it as `Fr( h(~k) )`.  The end-to-end pin
 /// is `scripts/divergence_fixtures/s6_let_conclusion_var`.
@@ -102,7 +101,7 @@ fn reserved_name_detected() {
 
 /// A top-level `rule (modulo AC)` block is an intruder rule.  The parser puts
 /// it in the theory's intruder-rule cache (`addIntrRuleACs`,
-/// Theory/Text/Parser.hs:287). `theoryFacts` does inspect that cache, but the
+/// Theory/Text/Parser.hs). `theoryFacts` does inspect that cache, but the
 /// special `!KU`/`!KD` facts below are valid and raise nothing.
 #[test]
 fn intruder_rule_block_reaches_no_check() {
@@ -248,8 +247,8 @@ fn filled_entries_break_inside_an_over_wide_cell() {
 }
 
 /// HS `ppFact n ts = nestShort' (n ++ "(") ")" (fsep …)`
-/// (Model/Fact.hs:567-572) = `sep [text lead $$ nest n body, text ")"]`
-/// (Text/PrettyPrint/Class.hs:218-223).  With NO arguments the `$$` has
+/// (Model/Fact.hs) = `sep [text lead $$ nest n body, text ")"]`
+/// (Text/PrettyPrint/Class.hs).  With NO arguments the `$$` has
 /// nothing to overlap onto the lead's line, so only the `sep` space
 /// survives — the oracle
 /// (ef3f0468) prints the nullary fact `A( )`, not `A(  )`.
@@ -407,11 +406,11 @@ fn wf_lemma_fact_show_form_nests_pairs_right() {
 
 /// The lemma-fact `show` form prints an AC head over the FLATTENED,
 /// SORTED operand list and a `C` head (`em`) over the sorted one, because
-/// HS's terms are built by `fAppAC`/`fAppC` (Term/Term/Raw.hs:118-134).
+/// HS's terms are built by `fAppAC`/`fAppC` (Term/Term/Raw.hs).
 ///
 /// The sort key is the POST-De-Bruijn `Ord`: `quantify`'s `mapLits`
 /// rebuilds every node with `fApp` after substituting `Bound i`
-/// (Model/Formula.hs:288-291,347-352), so `Bound` precedes `Free` and `Bound i`
+/// (Model/Formula.hs), so `Bound` precedes `Free` and `Bound i`
 /// orders by `i` — the reverse of the source order of the binders.  Every
 /// expected string is byte-pinned to the pinned oracle (ef3f0468).
 #[test]
@@ -467,7 +466,7 @@ fn wf_lemma_fact_show_form_canonicalises_ac_and_c_heads() {
 }
 
 /// HS `freshFactArguments'` renders the offending premise with
-/// `prettyLNFact` (Wellformedness.hs:569-576, see line 576), so the body
+/// `prettyLNFact` (Wellformedness.hs), so the body
 /// carries `prettyLVar`'s `.idx` suffix and `prettyTerm`'s AC/C
 /// canonicalisation.  Byte-pinned to the pinned oracle (ef3f0468).
 #[test]
@@ -495,9 +494,9 @@ fn fresh_fact_argument_renders_the_whole_fact_like_prettylnfact() {
 }
 
 /// HS's `mkProtoFact` dispatches on `map toUpper f`
-/// (Theory/Text/Parser/Fact.hs:56-63), so every source spelling of `Ku`
+/// (Theory/Text/Parser/Fact.hs), so every source spelling of `Ku`
 /// carries the `KUFact` tag and no `.spthy` file reaches `reservedFactName`'s
-/// `ProtoFact _ name _` pattern (Wellformedness.hs:621-624).  The tag is set
+/// `ProtoFact _ name _` pattern (Wellformedness.hs).  The tag is set
 /// here directly.  The expected bytes are HS's `wrappedText header $--$
 /// nest 2 (ppFa $-$ text ("show:" ++ show info))` under
 /// `prettyWfErrorReport`'s `nest 2`.
@@ -536,7 +535,7 @@ fn reserved_report_groups_by_origin() {
 }
 
 /// HS reads a lemma's facts off `_lFormula`, which `applyMacroInLemma` only
-/// rewrites in `closeTheoryItem` (CloseRule.hs:85) — after
+/// rewrites in `closeTheoryItem` (CloseRule.hs) — after
 /// `checkWellformedness`.  `Lemma::original_formula` holds that pre-macro
 /// formula, so the cell shows the macro application rather than its body.
 #[test]
@@ -596,7 +595,7 @@ fn fact_lhs_no_rhs_suggests_the_smallest_edit_distance_not_the_first() {
 }
 
 /// HS `isSimilar` keeps the nearest right-hand-side name only at distance
-/// `<= 3` (Wellformedness.hs:192-196).  `Abc` is 4 edits from `Abcdefg`,
+/// `<= 3` (Wellformedness.hs).  `Abc` is 4 edits from `Abcdefg`,
 /// the only such name, so the line carries no suggestion.  Byte-pinned to
 /// the pinned oracle (ef3f0468).
 #[test]
@@ -618,7 +617,7 @@ fn fact_lhs_no_rhs_drops_the_suggestion_past_distance_three() {
 
 /// Both right-hand-side names are 1 edit from `Aaa`, and the tie goes to
 /// the first of them: HS `minimalEdFact` takes `listToMaybe . sortOn snd`
-/// (Wellformedness.hs:200-201), a stable sort.  Byte-pinned to the pinned
+/// (Wellformedness.hs), a stable sort.  Byte-pinned to the pinned
 /// oracle (ef3f0468).
 #[test]
 fn fact_lhs_no_rhs_breaks_distance_ties_by_rhs_source_order() {

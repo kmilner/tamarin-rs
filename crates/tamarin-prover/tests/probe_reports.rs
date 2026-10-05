@@ -1,17 +1,16 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Transcript pins for the tool-probe section HS `testProcess`
-//! (Console.hs:97-149) writes, driven through the `test` command's
-//! `ensureGraphVizDot` caller (Test.hs:50, Environment.hs:72-101) and through
-//! `ensureMaude` (Console.hs:151-185), which every mode but `--parse-only`
+//! (Console.hs) writes, driven through the `test` command's
+//! `ensureGraphVizDot` caller (Test.hs, Environment.hs) and through
+//! `ensureMaude` (Console.hs), which every mode but `--parse-only`
 //! runs first.
 //!
 //! Every expected stderr block is an oracle capture of the pinned Haskell
 //! prover run with the same flags.  The `test` command is the cheap way to
 //! reach the dot probes — interactive mode runs the same
-//! `ensureGraphVizDot`/`ensureGraphCommand` calls (Interactive.hs:106-108) but
+//! `ensureGraphVizDot`/`ensureGraphCommand` calls (Interactive.hs) but
 //! then binds a socket and blocks.
 
 use std::process::Command;
@@ -38,7 +37,7 @@ fn run_test_command(extra: &[&str]) -> (i32, String, String) {
 }
 
 /// The `test` command's stdout around the tool section: only the `nextTopic`
-/// headers and the blank line Test.hs:49 puts between the maude and dot
+/// headers and the blank line Test.hs puts between the maude and dot
 /// blocks, since every probe line goes to stderr.  HS additionally prints a
 /// `*** Testing the unification infrastructure ***` topic for its HUnit suite,
 /// which this port does not run.
@@ -107,7 +106,7 @@ fn non_graphviz_dot_reports_the_detailed_results_block() {
 /// Oracle command: `test --with-dot=false`.  The tool starts but exits 1.
 /// The code consults the exit code before `check` runs at all.  The reason is
 /// therefore the `failed with exit code 1` line, followed by
-/// `ensureGraphVizDot`'s `errMsg1` (Environment.hs:88-95).  This is the only
+/// `ensureGraphVizDot`'s `errMsg1` (Environment.hs).  This is the only
 /// route by which that WARNING block reaches a transcript.  `unlines` has
 /// already terminated the block, so a blank line separates it from the
 /// `Detailed results` dump.  `ensureGraphVizDot` returns `Nothing`.  The code
@@ -186,7 +185,7 @@ fn working_dot_reports_version_and_png_ok() {
 /// The stderr a maude that cannot be started produces, whatever mode asked for
 /// it: `testProcess`' exception block — with NO trailing blank line, because
 /// `maudeTest` takes the `error` branch instead of `putStrErrLn ""` — followed
-/// by GHC's top-level report of that `error` (Console.hs:147).
+/// by GHC's top-level report of that `error` (Console.hs).
 const MISSING_MAUDE_STDERR: &str = "maude tool: '/nonexistent/maude'\n\
      \x20checking version: caught exception while executing:\n\
      /nonexistent/maude --version\n\
@@ -223,7 +222,7 @@ fn missing_maude_aborts_the_test_command() {
 }
 
 /// Oracle (`--with-maude=/nonexistent/maude tiny.spthy`): a batch run's
-/// `ensureMaudeAndGetVersion` (Batch.hs:115) aborts in the same place, before
+/// `ensureMaudeAndGetVersion` (Batch.hs) aborts in the same place, before
 /// the first `[Theory …]` marker, leaving stdout completely empty.
 #[test]
 fn missing_maude_aborts_a_batch_run() {
@@ -249,7 +248,7 @@ fn missing_maude_aborts_a_batch_run() {
     );
 }
 
-/// `variants` runs the same probe (Intruder.hs:45) and dies the same way,
+/// `variants` runs the same probe (Intruder.hs) and dies the same way,
 /// before it writes any variant computation output.  The oracle's stdout is
 /// empty here.  A run that aborts after it prints a variant table has a
 /// different stdout.
@@ -269,10 +268,10 @@ fn missing_maude_aborts_the_variants_command() {
 }
 
 /// `interactive` probes through `ensureMaudeAndGetVersion`
-/// (Interactive.hs:103) and dies before binding any socket — no port
+/// (Interactive.hs) and dies before binding any socket — no port
 /// allocation is needed.  The oracle's stdout is empty.  That is the half
 /// that shows the abort comes first.  The `Finished loading theories …
-/// server ready at` line (Interactive.hs:125) is a stdout `println!`.
+/// server ready at` line (Interactive.hs) is a stdout `println!`.
 #[test]
 fn missing_maude_aborts_interactive_before_binding() {
     let dir = std::env::temp_dir().join("tamarin_rs_probe_reports_nomaude_wd");

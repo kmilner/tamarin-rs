@@ -3,15 +3,15 @@
 //
 // Inlining a call substitutes the actual arguments for the formal parameters
 // over the whole definition body
-// (Theory/Text/Parser/Sapic.hs:293-312, through
-// Theory/Sapic/Process.hs:392-408#applyM).  The formula argument of
+// (Theory/Text/Parser/Sapic.hs, through
+// Theory/Sapic/Process.hs#applyM).  The formula argument of
 // `mapTermsAction` reaches an embedded `_restrict`
-// (Theory/Sapic/Process.hs:155) and the one of `mapTermsComb` reaches an `if`
-// condition (Theory/Sapic/Process.hs:165), so `P(z)` puts `z` inside both.
+// (Theory/Sapic/Process.hs) and the one of `mapTermsComb` reaches an `if`
+// condition (Theory/Sapic/Process.hs), so `P(z)` puts `z` inside both.
 //
 // The conditional's rules therefore read `process="if Eq( z.1, 'a' )"` and are
 // named `ifEqza_0_11` and `ifEqza_1_11` after that string
-// (Sapic/Facts.hs:401#stripNonAlphanumerical), and the embedded restriction's
+// (Sapic/Facts.hs#stripNonAlphanumerical), and the embedded restriction's
 // rule carries `_restrict( Q( w.1 ) )` over the `in`'s own variable.
 //
 // Mode `match`: the two engines agree on this shape.  No corpus theory calls a

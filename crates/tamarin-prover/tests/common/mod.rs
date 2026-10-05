@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Shared harness for the end-to-end CLI suites: locate maude, run the built
 //! binary on a theory, and normalize the machine-local lines out of its
@@ -69,11 +68,11 @@ pub fn fixture(name: &str) -> PathBuf {
 }
 
 /// Drop the `maude tool: '<path>'` line and the ` checking …: OK.` lines that
-/// follow it (Console.hs:150-155) — the path comes from `--with-maude` and the
+/// follow it (Console.hs) — the path comes from `--with-maude` and the
 /// version from the local maude, so only their presence is portable — and
 /// ASSERT the banner was there: a run that skipped maude entirely must fail
 /// here, not pass vacuously.  Applied per test rather than inside the runners,
-/// because `--parse-only` never starts Maude (Batch.hs:91-95) and so prints no
+/// because `--parse-only` never starts Maude (Batch.hs) and so prints no
 /// banner at all.
 pub fn strip_maude_banner(stderr: &str) -> String {
     let rest: String = stderr

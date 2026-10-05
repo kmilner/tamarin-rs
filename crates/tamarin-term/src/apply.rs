@@ -1,8 +1,7 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of `class Apply` (SubstVFree.hs:267-268), the class of types a
+//! Port of `class Apply` (SubstVFree.hs), the class of types a
 //! substitution can be applied to.
 //!
 //! Haskell's class has one method, `apply`.  The primitive here is
@@ -29,7 +28,7 @@ use crate::term::{f_app_ac, f_app_c, f_app_list, f_app_no_eq, Term};
 use crate::vterm::{Lit, VTerm};
 
 /// What an [`Apply`] instance reads from a substitution: HS's `imageOf`
-/// (SubstVFree.hs:240-241), plus the empty test that lets a whole-value walk
+/// (SubstVFree.hs), plus the empty test that lets a whole-value walk
 /// return immediately.
 pub trait LeafSubst {
     /// The constant type of the substitution's range terms.
@@ -37,7 +36,7 @@ pub trait LeafSubst {
     /// The variable type the substitution binds.
     type Var;
 
-    /// HS `imageOf` (SubstVFree.hs:240-241).
+    /// HS `imageOf` (SubstVFree.hs).
     fn image_of(&self, v: &Self::Var) -> Option<&VTerm<Self::Const, Self::Var>>;
 
     /// Whether the substitution binds nothing, in which case it is the
@@ -84,13 +83,13 @@ impl<C: Ord + Clone, V: Ord + Clone + std::hash::Hash> LeafSubst for SubstView<'
     }
 }
 
-/// HS `class Apply t' t` (SubstVFree.hs:267-268).
+/// HS `class Apply t' t` (SubstVFree.hs).
 pub trait Apply<S>: Sized {
     /// The image of `self` under `subst`, or `None` when `subst` leaves
     /// `self` structurally unchanged and the caller may keep the original.
     fn apply_changed(&self, subst: &S) -> Option<Self>;
 
-    /// HS `apply` (SubstVFree.hs:268).
+    /// HS `apply` (SubstVFree.hs).
     fn apply(self, subst: &S) -> Self {
         match self.apply_changed(subst) {
             Some(v) => v,
@@ -99,7 +98,7 @@ pub trait Apply<S>: Sized {
     }
 }
 
-/// HS's overlapping `Apply (Subst c v) v` (SubstVFree.hs:279-285): a variable
+/// HS's overlapping `Apply (Subst c v) v` (SubstVFree.hs): a variable
 /// is replaced by the variable its image is.  Haskell errors on an image that
 /// is not a variable; the fields carrying a bare variable here are node ids,
 /// which the equation store only ever binds to another node id.
@@ -116,7 +115,7 @@ impl<S: LeafSubst<Var = LVar>> Apply<S> for LVar {
     }
 }
 
-/// HS's overlapping `Apply (Subst c v) (VTerm c v)` (SubstVFree.hs:287-288),
+/// HS's overlapping `Apply (Subst c v) (VTerm c v)` (SubstVFree.hs),
 /// i.e. `applyVTerm`: replace every domain variable by its image and rebuild
 /// through the smart constructors, so AC and `C` argument lists come back
 /// normalised under the images.
@@ -159,21 +158,21 @@ where
     }
 }
 
-/// HS `Apply s a => Apply s [a]` (SubstVFree.hs:331-332).
+/// HS `Apply s a => Apply s [a]` (SubstVFree.hs).
 impl<S, T: Apply<S> + Clone> Apply<S> for Vec<T> {
     fn apply_changed(&self, subst: &S) -> Option<Self> {
         cow_map_vec(&self[..], |x| x.apply_changed(subst))
     }
 }
 
-/// HS `Apply s a => Apply s (Maybe a)` (SubstVFree.hs:325-326).
+/// HS `Apply s a => Apply s (Maybe a)` (SubstVFree.hs).
 impl<S, T: Apply<S>> Apply<S> for Option<T> {
     fn apply_changed(&self, subst: &S) -> Option<Self> {
         self.as_ref()?.apply_changed(subst).map(Some)
     }
 }
 
-/// HS `(Apply s a, Apply s b) => Apply s (a, b)` (SubstVFree.hs:316-317).
+/// HS `(Apply s a, Apply s b) => Apply s (a, b)` (SubstVFree.hs).
 impl<S, A: Apply<S> + Clone, B: Apply<S> + Clone> Apply<S> for (A, B) {
     fn apply_changed(&self, subst: &S) -> Option<Self> {
         cow_pair(

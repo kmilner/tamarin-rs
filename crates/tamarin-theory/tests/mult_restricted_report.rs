@@ -1,8 +1,7 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
-//! Byte-pins HS `multRestrictedReport'` (Wellformedness.hs:1047-1099) — both
+//! Byte-pins HS `multRestrictedReport'` (Wellformedness.hs) — both
 //! of its triggers, the sort filter on the rhs-only variables, and the
 //! silence that the DH corpus depends on.
 //!
@@ -138,7 +137,7 @@ fn rhs_only_vars_drop_pub_sorts_and_share_one_abstraction_per_term() {
 
 /// `multTerms` reads the CONCLUSIONS only, and an exponentiation keeps its
 /// nested `exp` shape in the E-rule (`fAppExp` is a plain `fAppNoEq`,
-/// Term/Term.hs:161-164) — no `Mult` node reaches the conclusions.  A rule
+/// Term/Term.hs) — no `Mult` node reaches the conclusions.  A rule
 /// whose only product sits in an ACTION is therefore silent, which is what
 /// keeps the whole DH / bilinear corpus free of this topic.
 #[test]
@@ -152,7 +151,7 @@ fn a_multiplication_restricted_dh_rule_stays_silent() {
 
 /// Every product in a conclusion is listed, in the conclusion's own term
 /// order, through `prettyLNTermList = fsep . punctuate comma . map
-/// prettyLNTerm` (Wellformedness.hs:146-147); `multTerms` stops at a `Mult`
+/// prettyLNTerm` (Wellformedness.hs); `multTerms` stops at a `Mult`
 /// node, so the operands of a listed product never reappear.
 #[test]
 fn every_conclusion_product_is_listed_in_term_order() {
@@ -169,7 +168,7 @@ fn every_conclusion_product_is_listed_in_term_order() {
 }
 
 /// The source of [`ATTRS_ENTRY`]: one rule carrying every attribute HS's
-/// `prettyRuleAttribute` (Model/Rule.hs:1314-1327) can render off a
+/// `prettyRuleAttribute` (Model/Rule.hs) can render off a
 /// user-written attribute list.
 const ATTRS_SRC: &str = "theory MrAttrs begin\n\
                          rule R1 [color=Ff00Aa, no_derivcheck, role='Alice', issapicrule]:\n\
@@ -179,7 +178,7 @@ const ATTRS_SRC: &str = "theory MrAttrs begin\n\
 /// The entry [`ATTRS_SRC`] produces, oracle bytes (pinned build, Git revision
 /// ef3f0468).  `catMaybes [color, process, no_derivcheck, issapicrule, role]`
 /// fixes the render order regardless of the source order, `rgbToHex`
-/// (Data/Color.hs:140-147) lowercases the six hex digits, and the block's
+/// (Data/Color.hs) lowercases the six hex digits, and the block's
 /// `fsep` wraps at the wellformedness comment's 100/67 with the continuation
 /// hanging right after the `[`.
 const ATTRS_ENTRY: &str = "  The following rule is not multiplication restricted:\n    \
@@ -204,9 +203,9 @@ fn attribute_block_renders_in_hs_field_order_and_wraps_with_the_header() {
 
 /// `process=` reaches the dump the same way, and it can reach it no other way:
 /// the attribute lives only in the rule's `RuleAttributes` (HS `ruleProcess`,
-/// rendered by `ppProcess`, Model/Rule.hs:1324-1327), since HS's attribute
+/// rendered by `ppProcess`, Model/Rule.hs), since HS's attribute
 /// parser `parseAndIgnore`s a user-written `process=`
-/// (Text/Parser/Rule.hs:69-95, see line 74) and RS's drops it likewise.  The
+/// (Text/Parser/Rule.hs) and RS's drops it likewise.  The
 /// SAPIC translation is what fills the field, on the rules it generates.
 ///
 /// Oracle bytes (pinned build, Git revision ef3f0468) for the theory

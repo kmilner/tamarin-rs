@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Live proof-tree state — mirror of Haskell's `IncrementalProof` +
 //! `applyProverAtPath`.
@@ -206,7 +205,7 @@ impl ProofState {
         cfg: &crate::ServerConfig,
     ) -> Result<Self, String> {
         // Effective cut strategy — HS `closeTheory` precedence
-        // (TheoryLoader.hs:742, :759-762): the CLI `--stop-on-trace` wins;
+        // (TheoryLoader.hs): the CLI `--stop-on-trace` wins;
         // the theory's `configuration:` block is consulted only when
         // the flag is absent.  Steers the session's autoprove
         // (`runAutoProver`'s `apCut`) and interactive contexts.
@@ -360,7 +359,7 @@ impl ProofState {
     /// Graft `subtree` into the lemma's proof tree at `path`, replacing
     /// whatever subproof currently sits there; the REST of the tree is
     /// untouched.  Mirrors HS `focus path prover`
-    /// (`lib/theory/src/Theory/Proof.hs:602-612`): the prover result is
+    /// (`lib/theory/src/Theory/Proof.hs`): the prover result is
     /// spliced back at `path` via `modifyAtPath`, and `focus [] prover =
     /// prover` makes the empty path replace the whole proof — our
     /// `path == []` arm.  Errors mirror `modifyAtPath`'s `Nothing` (the
@@ -763,7 +762,7 @@ fn proof_tree_from_node(node: &ProofNode) -> tamarin_theory::theory::ProofTree {
     }
 }
 
-/// Port of HS `getProofPaths` (`Web/Theory.hs:2209-2213`):
+/// Port of HS `getProofPaths` (`Web/Theory.hs`):
 ///
 /// ```haskell
 /// getProofPaths proof = ([], psMethod . root $ proof) : go proof
@@ -794,7 +793,7 @@ fn proof_index_paths_go(
     }
 }
 
-/// Port of HS `isInterestingMethod` (`Web/Theory.hs:1968-1972`): the proof
+/// Port of HS `isInterestingMethod` (`Web/Theory.hs`): the proof
 /// methods that `nextSmartThyPath`/`prevSmartThyPath` stop on — an open
 /// `Sorry` leaf, or a `Finished` `Solved`/`Unfinishable` terminal.
 pub(crate) fn is_interesting_method(m: &ProofMethod) -> bool {
@@ -844,8 +843,8 @@ fn empty_case_status(method: &ProofMethod) -> NodeStatus {
 }
 
 /// Render the per-path sub-proof snippet.  Mirrors Haskell's
-/// `subProofSnippet` (`src/Web/Theory.hs:519-617`; the methods section follows
-/// `prettyApplicableProofMethods`, `Web/Theory.hs:519-617, see line 546`).  Emits:
+/// `subProofSnippet` (`src/Web/Theory.hs`; the methods section follows
+/// `prettyApplicableProofMethods`, `Web/Theory.hs`).  Emits:
 ///
 ///   1. The Applicable Proof Methods section — delegated to
 ///      `write_applicable_methods`.  It emits the numbered method links
@@ -869,7 +868,7 @@ pub(crate) fn render_sub_proof_snippet(
     // entity-escaped + span-marked and postprocessed once.  Build HtmlDoc mode
     // for the whole pane (so the sequent + method keywords render spanned).
     let _html = tamarin_theory::pretty_hpj::HtmlDocGuard::enable();
-    // HS `subProofSnippet` (`Web/Theory.hs:530-531`): an unannotated node
+    // HS `subProofSnippet` (`Web/Theory.hs`): an unannotated node
     // (`psInfo == Nothing` — a close-time-replay divergence kept verbatim
     // via `noSystemPrf`) has NO constraint system to render; HS emits the
     // single fallback line instead of the methods/sequent/sub-case blocks:
@@ -905,7 +904,7 @@ pub(crate) fn render_sub_proof_snippet(
         // HS `refDotInteractiveDynamicPath` → `<dynamic-graph graphSrc=…>`
         // pointing at `InteractiveDotGraphR` = the `intdot` route (the HTML
         // shell that in turn fetches `interactive-graph-def`), NOT the raw
-        // DOT route directly (`Web/Theory.hs:180-181`).
+        // DOT route directly (`Web/Theory.hs`).
         let src = format!(
             "/thy/trace/{idx}/intdot/proof/{lemma}{path}",
             idx = idx,
@@ -936,7 +935,7 @@ pub(crate) fn render_sub_proof_snippet(
             "<h4>Case {}</h4>",
             tamarin_theory::pretty_hpj::escape_html_entities(case_name)
         ));
-        // HS `refSubCase` (`Web/Theory.hs:612-617`): an unannotated child
+        // HS `refSubCase` (`Web/Theory.hs`): an unannotated child
         // (`psInfo == Nothing`) gets `text "no proof state available"`
         // instead of the static-graph reference.
         if !child_annotated {
@@ -960,7 +959,7 @@ pub(crate) fn render_sub_proof_snippet(
     ))
 }
 
-/// Mirror of Haskell `nonEmptyGraph` (`System.hs:1928-1932`):
+/// Mirror of Haskell `nonEmptyGraph` (`System.hs`):
 ///
 /// ```text
 /// nonEmptyGraph sys = not $
@@ -972,7 +971,7 @@ pub(crate) fn render_sub_proof_snippet(
 /// i.e. the dotted graph is non-empty iff ANY of: nodes, unsolved
 /// action atoms, unsolved chains, edges, or less-atoms is present.
 /// `unsolvedActionAtoms` / `unsolvedChains` are the unsolved-status
-/// `ActionG` / `ChainG` goals (`System.hs:1569-1573,1602-1606`).
+/// `ActionG` / `ChainG` goals (`System.hs`).
 fn has_graph_content(sys: &System) -> bool {
     if !sys.nodes.is_empty() || !sys.edges.is_empty() || !sys.less_atoms.is_empty() {
         return true;
@@ -994,9 +993,9 @@ fn write_applicable_methods(
     use tamarin_theory::pretty_hpj::{self as hpj, Doc};
     // The ranking used at this proof depth (HS `subProofSnippet`:
     // `ranking = useHeuristic heuristic (length proofPath)`,
-    // `Web/Theory.hs:606-608`).
+    // `Web/Theory.hs`).
     let ranking = ranking_at_depth(Some(ctx), depth);
-    // Match Haskell `rankProofMethods` (`ProofMethod.hs:519-534`):
+    // Match Haskell `rankProofMethods` (`ProofMethod.hs`):
     //   stoppingMethod = Finished <$> isFinished ctxt sys
     //   in execMethods $ maybe proofMethods ((:[]) . (,"")) stoppingMethod
     // When `isFinished` yields a verdict the WHOLE method list is replaced
@@ -1018,8 +1017,8 @@ fn write_applicable_methods(
     for candidate in
         candidate_methods_with_expl(sys, ctx, depth).map_err(|error| error.to_string())?
     {
-        // HS-faithful WHNF-depth applicability (Web/Theory.hs:546-552 via
-        // ProofMethod.hs:282-299, see line 298). Must stay in lockstep with
+        // HS-faithful WHNF-depth applicability (Web/Theory.hs via
+        // ProofMethod.hs). Must stay in lockstep with
         // `theory::apply_method`'s method-number filter.
         if tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
             ctx,
@@ -1032,7 +1031,7 @@ fn write_applicable_methods(
         }
     }
     if methods.is_empty() {
-        // Mirror Haskell `prettyApplicableProofMethods` (`Web/Theory.hs:546-548`):
+        // Mirror Haskell `prettyApplicableProofMethods` (`Web/Theory.hs`):
         //   [] | finishedSubterms ctxt sys -> "Constraint System is Solved"
         //   []                             -> "Constraint System is Unfinishable"
         // We only reach here when `is_finished` returned `None` (the
@@ -1048,7 +1047,7 @@ fn write_applicable_methods(
         }
         return Ok(());
     }
-    // HS `subProofSnippet` (`Web/Theory.hs:550-551`):
+    // HS `subProofSnippet` (`Web/Theory.hs`):
     //   withTag "h3" [] (text "Applicable Proof Methods:" <-> comment_ (goalRankingName ranking))
     // `comment_` wraps the ranking name in an `hl_comment` span (identity in
     // plain mode); the name text is entity-escaped by `Doc::text`.
@@ -1058,7 +1057,7 @@ fn write_applicable_methods(
     out.push(format!("<h3>{h3}</h3>"));
     // HS `preformatted (Just "methods") (numbered' $ zipWith prettyPM [1..] pms)`
     // = `withTag "div" [("class","preformatted methods")] …` (no `<pre>`).
-    // Mirror Haskell `Web.Theory.subProofSnippet` (`Web/Theory.hs:599-603`):
+    // Mirror Haskell `Web.Theory.subProofSnippet` (`Web/Theory.hs`):
     // each ranked method N (1-based) emits
     //   <a class="internal-link proof-method"
     //      href="/thy/trace/<idx>/main/method/<lemma>/<N>/<sub>">label</a>
@@ -1068,7 +1067,7 @@ fn write_applicable_methods(
     // landing on our `/main/method/...` route which dispatches to
     // `theory::apply_method` and returns a `{redirect}`.
     // HS lays the whole list out as ONE HtmlDoc (`numbered' $ zipWith
-    // prettyPM [1..] pms`, Web/Theory.hs:519-617, see line 552): each item is
+    // prettyPM [1..] pms`, Web/Theory.hs): each item is
     // `flushRight nW (show i) <> ". " <> (link (prettyProofMethod m) <->
     // lineComment_ expl)` — so the method text wraps (a) at HTML-ENTITY
     // fill widths (renderHtmlDoc), (b) beside-shifted by the `N. ` prefix
@@ -1080,7 +1079,7 @@ fn write_applicable_methods(
     // `</a>` boundary.  (Continuation-line indent bytes and the blank line
     // `numbered'` inserts between items are whitespace the parity gate
     // canonicalizes; the break POSITIONS are what must match.)
-    // HS `numbered' $ zipWith prettyPM [1..] pms` (Web/Theory.hs:519-617, see line 552):
+    // HS `numbered' $ zipWith prettyPM [1..] pms` (Web/Theory.hs):
     //   pp (i, d) = text (flushRight nW (show i)) <> text ". " <> d
     //   d        = withTag "a" [("class",…),("href",…)] (prettyProofMethod m)
     //              <-> (if null expl then emptyDoc else lineComment_ expl)
@@ -1126,7 +1125,7 @@ fn write_applicable_methods(
 
 /// Emit the `a.`/`b.`/`[o.]`/`s.` autoprove menu links that trail the
 /// numbered method list — a faithful port of HS `subProofSnippet`'s
-/// `autoProverLinks` (`Web/Theory.hs:553-597`), in HS order a, b, [o], s.
+/// `autoProverLinks` (`Web/Theory.hs`), in HS order a, b, [o], s.
 /// Each `AutoProverR tidx cut bound oracleBool path` renders as
 ///   /thy/trace/<idx>/autoprove/<cut>/<bound>/<oracleBool>/<path>
 /// with cut ∈ {idfs=CutDFS, characterize=CutNothing}; `AutoProverAllR`
@@ -1144,7 +1143,7 @@ fn write_autoprove_links(
     let l = lemma_esc;
     let p = url_path;
     let bound = 5; // HS `fromMaybe 5 (apBound ti.autoProver)` — default depth bound.
-                   // HS `autoProverLinks` (Web/Theory.hs:563-597) wraps each link's visible
+                   // HS `autoProverLinks` (Web/Theory.hs) wraps each link's visible
                    // text in `keyword_` — an `hl_keyword` span in HtmlDoc mode, plain text
                    // otherwise.  `kw` renders that span under the active guard.  The line is
                    // assembled by `hsep` (single-space separators); the `b.`/`s.` suffixes are
@@ -1183,11 +1182,11 @@ fn write_autoprove_links(
     ));
 }
 
-/// HS `usesOracle` (lib/theory/src/Theory/Constraint/System.hs:536-537):
+/// HS `usesOracle` (lib/theory/src/Theory/Constraint/System.hs):
 /// `all isOracleRanking rs`, where `isOracleRanking` is True for
 /// `OracleRanking`, `OracleSmartRanking` AND `InternalTacticRanking`
 /// (our `GoalRanking::Tactic`).  Gates the "o. autoprove ... until oracle
-/// returns nothing" menu entry (src/Web/Theory.hs:555-556), so it must
+/// returns nothing" menu entry (src/Web/Theory.hs), so it must
 /// also fire for `[heuristic={tactic}]` lemmas.  `all` over an empty
 /// ranking list would be vacuously true; guard with `!h.is_empty()`.
 fn uses_oracle(ctx: &ProofContext) -> bool {

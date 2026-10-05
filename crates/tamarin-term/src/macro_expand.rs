@@ -1,10 +1,9 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Term.Macro` from `lib/term/src/Term/Macro.hs`.
 //!
-//! A macro is a triple `(name, params, body)` (Term/Macro.hs:22). `apply_macros`
+//! A macro is a triple `(name, params, body)` (Term/Macro.hs). `apply_macros`
 //! recursively expands every occurrence of any macro symbol in a term.
 
 use crate::function_symbols::{Constructability, FunSym, NdcState, NoEqSym, Privacy};
@@ -41,17 +40,17 @@ impl<C, V> Macro<C, V> {
     }
 }
 
-/// HS `LNMacro` (Term/Macro.hs:24): the macro a `macros:` declaration builds.
+/// HS `LNMacro` (Term/Macro.hs): the macro a `macros:` declaration builds.
 pub type LNMacro = Macro<Name, LVar>;
 
-/// HS `BNMacro` (Term/Macro.hs:26): the same macro over the `BVar` terms a
+/// HS `BNMacro` (Term/Macro.hs): the same macro over the `BVar` terms a
 /// formula's atoms carry.
 pub type BNMacro = Macro<Name, BVar<LVar>>;
 
-/// HS `lnMacrosToBNMacros` (Term/Macro.hs:56-60): every parameter and every
+/// HS `lnMacrosToBNMacros` (Term/Macro.hs): every parameter and every
 /// variable of the body becomes a `Free` `BVar`, so the macro applies to the
 /// terms of a formula's atoms.  `freeTerm` is a plain functor map
-/// (Term/LTerm.hs:522-523) and all of the body's variables land on the same
+/// (Term/LTerm.hs) and all of the body's variables land on the same
 /// side of `BVar`'s ordering, so the `f_app` rebuild inside [`map_lits`]
 /// keeps the AC argument order.
 pub fn ln_macros_to_bn_macros(macros: &[LNMacro]) -> Vec<BNMacro> {
@@ -66,7 +65,7 @@ fn ln_macro_to_bn_macro(m: &LNMacro) -> BNMacro {
     }
 }
 
-/// HS `freeTerm` (Term/LTerm.hs:522-523): every variable of an `LNTerm` as a
+/// HS `freeTerm` (Term/LTerm.hs): every variable of an `LNTerm` as a
 /// free `BVar`.
 fn free_term(t: &LNTerm) -> VTerm<Name, BVar<LVar>> {
     map_lits(t, &mut |l| match l {

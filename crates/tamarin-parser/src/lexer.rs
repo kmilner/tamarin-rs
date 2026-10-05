@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Lexer for `.spthy` files.
 //!
@@ -271,12 +270,12 @@ impl<'a> Lexer<'a> {
     /// Parse an identifier: alphanum start, alphanum or `_` continuation.
     /// Returns None if the next char isn't alphanumeric.
     ///
-    /// Mirrors `identifier = T.identifier spthy` (Token.hs:393-394), which rejects
-    /// the reserved names `["in","let","rule","diff"]` (Token.hs:214-230, see line 225): a word equal
+    /// Mirrors `identifier = T.identifier spthy` (Token.hs), which rejects
+    /// the reserved names `["in","let","rule","diff"]` (Token.hs): a word equal
     /// to one of those is not a valid identifier, so we backtrack and return None.
     /// The `diff` term operator does NOT go through this — it is matched as a
     /// keyword/symbol (HS `diffOp = symbol "diff" *> parens ...`,
-    /// Parser/Term.hs:123-125).
+    /// Parser/Term.hs).
     pub fn identifier(&mut self) -> Option<String> {
         self.identifier_spanned().map(|(identifier, _)| identifier)
     }
@@ -319,7 +318,7 @@ impl<'a> Lexer<'a> {
 
     /// Parse a natural number literal (decimal only).
     ///
-    /// Haskell `T.natural spthy` (Token.hs:340-341, see line 341) is Parsec's `natural`, which also
+    /// Haskell `T.natural spthy` (Token.hs) is Parsec's `natural`, which also
     /// accepts `0x`/`0o` hex/octal prefixes and returns an unbounded `Integer`.
     /// Every `natural` call site is a small decimal index (premise/conclusion
     /// numbers, function arity, reuse limit, `x.1` subscripts) that no real
@@ -378,9 +377,9 @@ impl<'a> Lexer<'a> {
 
     /// Double-quoted string literal, decoding Haskell/Parsec string escapes.
     ///
-    /// Mirrors Haskell `stringLiteral = T.stringLiteral spthy` (Token.hs:366-367),
+    /// Mirrors Haskell `stringLiteral = T.stringLiteral spthy` (Token.hs),
     /// i.e. Parsec's default Haskell-report string literal (`T.makeTokenParser`,
-    /// Token.hs:214-230). It decodes:
+    /// Token.hs). It decodes:
     ///   * char escapes `\a \b \f \n \r \t \v \\ \" \'`,
     ///   * numeric escapes `\65` (decimal), `\o101` (octal), `\x41` (hex),
     ///   * control escapes `\^A`,
@@ -627,7 +626,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Strict export-body character stream, mirroring Haskell `bodyChar` in the
-    /// `export` parser (Parser/Signature.hs:297-302): each char is taken verbatim except
+    /// `export` parser (Parser/Signature.hs): each char is taken verbatim except
     /// `\`, which must be followed by `\` or `"` (the second char is returned and
     /// the backslash dropped); a bare `"` terminates the body and any other `\x`
     /// fails the whole parse. Used for `export <tag>: "..."` blocks.
@@ -649,10 +648,10 @@ impl<'a> Lexer<'a> {
         if !self.eat('\'') {
             return Err(self.pos);
         }
-        // Haskell `singleQuoted = between (symbol "'") (symbol "'")` (Token.hs:296-297):
+        // Haskell `singleQuoted = between (symbol "'") (symbol "'")` (Token.hs):
         // the opening `symbol "'"` is `lexeme (string "'")`, so it consumes whitespace
         // (and comments) AFTER the opening quote. The body `many1 (noneOf "'\n")`
-        // (Token.hs:452-453, see line 453) keeps interior/trailing spaces, so only the leading run is
+        // (Token.hs) keeps interior/trailing spaces, so only the leading run is
         // dropped here.
         self.skip_ws();
         let mut s = String::new();
@@ -666,7 +665,7 @@ impl<'a> Lexer<'a> {
             }
         }
         // Haskell `singleQuotedString = singleQuoted $ many1 (noneOf "'\n")`
-        // (Token.hs:452-453): `many1` requires at least one body char, so `''`
+        // (Token.hs): `many1` requires at least one body char, so `''`
         // must fail.
         if s.is_empty() {
             return Err(self.pos);
@@ -704,7 +703,7 @@ impl<'a> Lexer<'a> {
                     self.skip_ws();
                     return Some((header, body));
                 }
-                // Haskell `bodyChar` (Token.hs:382-387): `'*' -> mzero`. A lone `*`
+                // Haskell `bodyChar` (Token.hs): `'*' -> mzero`. A lone `*`
                 // that is not the start of the `*}` closer makes `bodyChar` fail, so
                 // `many bodyChar` stops and the required `string "*}"` then fails at
                 // the `*`, failing the whole formalComment.
@@ -719,7 +718,7 @@ impl<'a> Lexer<'a> {
                             body.push(c);
                             self.bump();
                         }
-                        // Haskell `bodyChar` (Token.hs:382-387): on `\` the inner
+                        // Haskell `bodyChar` (Token.hs): on `\` the inner
                         // `char '\\' <|> char '*'` only accepts `\` or `*`; any
                         // other `\x` makes `bodyChar` (wrapped in `try`) backtrack
                         // un-consuming the `\`, so `many bodyChar` stops and the
@@ -764,7 +763,7 @@ pub(crate) fn is_ident_char(c: char) -> bool {
 
 pub(crate) const RESERVED_NAMES: [&str; 4] = ["in", "let", "rule", "diff"];
 
-/// Reserved names that `T.identifier spthy` rejects (Token.hs:214-230, see line 225). A word equal
+/// Reserved names that `T.identifier spthy` rejects (Token.hs). A word equal
 /// to one of these is not a valid identifier.
 #[inline]
 pub(crate) fn is_reserved_name(s: &str) -> bool {

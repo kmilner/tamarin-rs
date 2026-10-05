@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 
@@ -232,7 +231,7 @@ fn precompute_full_sources_emits_em_only_when_bp_enabled() {
 /// every binding whose KEY is not in stable_vars.  No chain-chase.
 ///
 /// Mirrors `Theory.Tools.EquationStore.restrict`
-/// (via `Term.Substitution.Subst.restrict`, SubstVFree.hs:160-161):
+/// (via `Term.Substitution.Subst.restrict`, SubstVFree.hs):
 /// ```haskell
 /// restrict vs (Subst smap) = Subst (M.filterWithKey (\v _ -> v `elem` vs) smap)
 /// ```
@@ -346,9 +345,9 @@ fn restrict_eq_store_empties_subst_when_no_keys_are_stable() {
 // HS-faithful source-case naming invariant.
 //
 // By the time a case name reaches the runtime, `refineSource` has
-// already applied HS's `combine` (Sources.hs:135-139, ported in
+// already applied HS's `combine` (Sources.hs, ported in
 // `combine_case_names_list`) over the `[String]` step-name list, and
-// the result is joined with `intercalate "_"` (ProofMethod.hs:505-515, see line 511).
+// the result is joined with `intercalate "_"` (ProofMethod.hs).
 // The stored name is therefore the FINAL display name and must be
 // used verbatim — HS never re-splits a single name on `_`.
 // =========================================================================
@@ -507,10 +506,10 @@ fn system_with_a_variable_per_field(t: LNTerm) -> System {
 
 /// `rename th0` moves every free variable of the system by the shift, which
 /// is `mapFrees (Monotone (incVar shift))` over all thirteen fields of the
-/// Haskell record (LTerm.hs:643, System.hs:1866-1879) — the negative subterms
+/// Haskell record (LTerm.hs, System.hs) — the negative subterms
 /// included.  The two values the instance carries over stay put: the ranges
 /// of the equation store's disjunctions, whose variables count as fresh
-/// (SubstVFresh.hs:196-202), and `old_neg_subterms` (SubtermStore.hs:95).
+/// (SubstVFresh.hs), and `old_neg_subterms` (SubtermStore.hs).
 #[test]
 fn rename_system_by_shifts_every_field_including_neg_subterms() {
     let sys = system_with_a_variable_per_field(mterm(11));
@@ -538,9 +537,9 @@ fn rename_system_by_shifts_every_field_including_neg_subterms() {
     );
 }
 
-/// The shift is a `Monotone` map (LTerm.hs:643), so it rebuilds an AC
+/// The shift is a `Monotone` map (LTerm.hs), so it rebuilds an AC
 /// argument list with `unsafefApp` and keeps its order.  That is sound
-/// because `Ord LVar` compares the index first (LTerm.hs:546-548): adding one
+/// because `Ord LVar` compares the index first (LTerm.hs): adding one
 /// constant to every index cannot reorder two arguments, so the result is in
 /// AC-normal form already and equals what the re-sorting `Arbitrary` map
 /// produces.
@@ -575,15 +574,15 @@ fn shift_keeps_ac_arg_order() {
 // some_inst_system
 // =========================================================================
 
-/// `evalBindT (someInst sysTh0) keepVarBindings` (Sources.hs:342-348) draws
+/// `evalBindT (someInst sysTh0) keepVarBindings` (Sources.hs) draws
 /// one identifier per free variable it has not already bound, in the order
-/// `instance HasFrees System` (System.hs:1834-1879) reaches them: the nodes,
+/// `instance HasFrees System` (System.hs) reaches them: the nodes,
 /// the edges, the less atoms, the last atom, the subterm store — negative
-/// subterms first (SubtermStore.hs:546-557) — the equation store's
+/// subterms first (SubtermStore.hs) — the equation store's
 /// substitution and then its disjunctions' domain keys
-/// (SubstVFresh.hs:196-202), the three formula stores and the goals.  A
+/// (SubstVFresh.hs), the three formula stores and the goals.  A
 /// variable the store already binds to itself is returned unchanged and
-/// charged nothing (Control/Monad/Bind.hs:134-140).
+/// charged nothing (Control/Monad/Bind.hs).
 #[test]
 fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
     let Some(path) = require_maude_path() else {
@@ -664,11 +663,11 @@ fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
 // compute_rename_map
 // =========================================================================
 
-/// `renameDropNameHints` (Sources.hs:252-258) imports the system's variables
-/// in the order `instance HasFrees System` (System.hs:1834-1850) reaches
+/// `renameDropNameHints` (Sources.hs) imports the system's variables
+/// in the order `instance HasFrees System` (System.hs) reaches
 /// them, which for a disjunction of the equation store is ascending
-/// `Ord LNSubstVFresh` — HS holds it as an `S.Set` (EquationStore.hs:116-121)
-/// and the set instance folds `S.toList` (LTerm.hs:898-901).  The port stores
+/// `Ord LNSubstVFresh` — HS holds it as an `S.Set` (EquationStore.hs)
+/// and the set instance folds `S.toList` (LTerm.hs).  The port stores
 /// the disjunction as an insertion-ordered `Vec`, so a walk reading that
 /// `Vec` would hand the two substitutions' domain keys the opposite pair of
 /// indices, and two systems that differ only in insertion order would take
@@ -692,7 +691,7 @@ fn rename_map_walks_inner_conj_substs_in_ord_order() {
 }
 
 /// The subterm store folds its negative subterms before its positive and
-/// solved ones (SubtermStore.hs:546-549), so a variable that occurs in a
+/// solved ones (SubtermStore.hs), so a variable that occurs in a
 /// negative subterm alone is imported like any other and the dedup key
 /// carries its renamed identity.
 #[test]
@@ -709,9 +708,9 @@ fn rename_map_counts_neg_subterms() {
 // source_bounds
 // =========================================================================
 
-/// `boundsVarIdx` (LTerm.hs:672-675) folds the frees of `instance HasFrees
-/// System` (System.hs:1834-1879), which reaches the subterm store's NEGATIVE
-/// subterms before its positive and solved ones (SubtermStore.hs:546-549).  A
+/// `boundsVarIdx` (LTerm.hs) folds the frees of `instance HasFrees
+/// System` (System.hs), which reaches the subterm store's NEGATIVE
+/// subterms before its positive and solved ones (SubtermStore.hs).  A
 /// variable living in a negative subterm alone therefore sets both ends of
 /// the source's bounds, and so both the `matchToGoal` rename shift and the
 /// `refineSource` fresh seed.
@@ -724,10 +723,9 @@ fn bounds_var_idx_of_system_counts_neg_subterms() {
 }
 
 /// `source_bounds` splits the two ends of `instance HasFrees Source`
-/// (System.hs:1881-1891).  The MIN is over `cdGoal` and every case, because
-/// `rename th0` (Sources.hs:268-317, see line 307) rebases the whole source.
-/// The MAX is over the cases alone, because `avoid th` (Sources.hs:113-137,
-/// see line 128) sees a source whose `cdGoal` has already been overwritten
+/// (System.hs).  The MIN is over `cdGoal` and every case, because
+/// `rename th0` (Sources.hs) rebases the whole source.
+/// The MAX is over the cases alone, because `avoid th` (Sources.hs) sees a source whose `cdGoal` has already been overwritten
 /// with the live goal.
 #[test]
 fn source_bounds_takes_the_max_over_cases_only() {
@@ -959,8 +957,8 @@ fn source_debug_hides_mutex_internals() {
 }
 
 /// `norm_sys_for_compare`'s rename is HS `renameDropNamehint`
-/// (LTerm.hs:738-740), a `mapFrees (Arbitrary _)`; that variant rebuilds an
-/// application through `fApp` (LTerm.hs:788-791), so renaming a free leaf
+/// (LTerm.hs), a `mapFrees (Arbitrary _)`; that variant rebuilds an
+/// application through `fApp` (LTerm.hs), so renaming a free leaf
 /// past its AC siblings re-sorts the operands.
 #[test]
 fn the_case_rename_ac_normalises_the_operands() {
@@ -990,7 +988,7 @@ fn the_case_rename_ac_normalises_the_operands() {
 /// The comparison reaches the sort of every quantifier binder, so two systems
 /// whose formulas differ only there stay distinct cases: `Ord Guarded` is
 /// HS's own derived one and walks the binder list, whose sorts separate under
-/// `Ord LSort` (LTerm.hs:165-170).
+/// `Ord LSort` (LTerm.hs).
 #[test]
 fn binder_sorts_keep_two_systems_apart() {
     use crate::formula::Quantifier;
@@ -1055,7 +1053,7 @@ fn two_ac_heads_keep_two_systems_apart() {
 }
 
 /// Once the nodes tie, HS compares the remaining fields in its own record
-/// order (System.hs:382-396), where `_sLastAtom` comes fourth and
+/// order (System.hs), where `_sLastAtom` comes fourth and
 /// `_sFormulas` seventh.  `SystemContent` declares them the other way round,
 /// so a pair whose `last_atom` and `formulas` disagree in opposite directions
 /// settles on `last_atom`.

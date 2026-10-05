@@ -1,11 +1,10 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Pre-computed intruder-variant rule loaders.
 //!
 //! HS-faithful port of `Main.TheoryLoader.mkDhIntruderVariants` and
-//! `mkBpIntruderVariants` (src/Main/TheoryLoader.hs:853-876):
+//! `mkBpIntruderVariants` (src/Main/TheoryLoader.hs):
 //!
 //! ```haskell
 //! dhIntruderVariantsFile :: FilePath
@@ -25,7 +24,7 @@
 //!
 //! The cached files at `data/intruder_variants_dh.spthy` (51 rules) and
 //! `data/intruder_variants_bp.spthy` (75 rules) were produced by HS's
-//! `Main.Mode.Intruder.run` (src/Main/Mode/Intruder.hs:43-63, see line 48) — that mode
+//! `Main.Mode.Intruder.run` (src/Main/Mode/Intruder.hs) — that mode
 //! invokes `dhIntruderRules False`/`bpIntruderRules False` against
 //! Maude and pretty-prints the result.  See [`crate::intruder_rules`]
 //! for the Rust port of `dhIntruderRules`, which IS still used as a
@@ -33,7 +32,7 @@
 //! the production runtime path.
 //!
 //! The committed BP cache holds 75 rules, one more than the regenerator
-//! emits: `minimizeIntruderRules` (IntruderRules.hs:190-208) subsumes
+//! emits: `minimizeIntruderRules` (IntruderRules.hs) subsumes
 //! rules via the Maude-backed `equalDuplicateRuleUpToRenaming` /
 //! `equalSubsetRuleUpToRenaming`, collapsing one `d_em` variant that the
 //! cached file still lists, so `tamarin-prover variants` on the pinned
@@ -50,25 +49,25 @@ use crate::fact::LNFact;
 use crate::intruder_rules::show_fun_sym_name;
 use crate::rule::{IntrRuleAC, IntrRuleACInfo, Rule};
 
-/// HS `dhIntruderVariantsFile` (TheoryLoader.hs:853-854, see line 854).
+/// HS `dhIntruderVariantsFile` (TheoryLoader.hs).
 pub const DH_INTRUDER_VARIANTS_FILE: &str = "data/intruder_variants_dh.spthy";
 
-/// HS `bpIntruderVariantsFile` (TheoryLoader.hs:857-858, see line 858).
+/// HS `bpIntruderVariantsFile` (TheoryLoader.hs).
 pub const BP_INTRUDER_VARIANTS_FILE: &str = "data/intruder_variants_bp.spthy";
 
 /// The DH intruder-variants spthy source, embedded at compile time
 /// (HS uses `$(embedFile "data/intruder_variants_dh.spthy")` —
-/// TheoryLoader.hs:861-867, see line 867).
+/// TheoryLoader.hs).
 pub const DH_INTRUDER_VARIANTS_SPTHY: &str =
     include_str!("../../../tamarin-prover/data/intruder_variants_dh.spthy");
 
 /// The BP intruder-variants spthy source, embedded at compile time
 /// (HS uses `$(embedFile "data/intruder_variants_bp.spthy")` —
-/// TheoryLoader.hs:870-876, see line 876).
+/// TheoryLoader.hs).
 pub const BP_INTRUDER_VARIANTS_SPTHY: &str =
     include_str!("../../../tamarin-prover/data/intruder_variants_bp.spthy");
 
-/// HS `mkDhIntruderVariants` (TheoryLoader.hs:861-867).
+/// HS `mkDhIntruderVariants` (TheoryLoader.hs).
 ///
 /// ```haskell
 /// mkDhIntruderVariants :: MaudeSig -> [IntrRuleAC]
@@ -90,7 +89,7 @@ pub fn mk_dh_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
         })
 }
 
-/// HS `mkBpIntruderVariants` (TheoryLoader.hs:870-876).
+/// HS `mkBpIntruderVariants` (TheoryLoader.hs).
 pub fn mk_bp_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
     parse_intruder_rules(msig, BP_INTRUDER_VARIANTS_FILE, BP_INTRUDER_VARIANTS_SPTHY)
         .unwrap_or_else(|e| {
@@ -102,7 +101,7 @@ pub fn mk_bp_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
 }
 
 /// Error from `parse_intruder_rules`.  Includes the source file label
-/// (HS `ctxtDesc` — Theory/Text/Parser/Rule.hs:224-228, see line 226) for human-readable
+/// (HS `ctxtDesc` — Theory/Text/Parser/Rule.hs) for human-readable
 /// diagnostics.
 #[derive(Debug, Clone)]
 pub struct IntrRuleParseError {
@@ -118,7 +117,7 @@ impl std::fmt::Display for IntrRuleParseError {
 
 impl std::error::Error for IntrRuleParseError {}
 
-/// HS `parseIntruderRules` (Theory/Text/Parser/Rule.hs:224-228):
+/// HS `parseIntruderRules` (Theory/Text/Parser/Rule.hs):
 ///
 /// ```haskell
 /// parseIntruderRules
@@ -129,7 +128,7 @@ impl std::error::Error for IntrRuleParseError {}
 /// ```
 ///
 /// The `setState (mkStateSig msig)` step is critical: HS's term parser
-/// (Theory/Text/Parser/Term.hs:139-153, see line 151) dispatches bare identifiers via
+/// (Theory/Text/Parser/Term.hs) dispatches bare identifiers via
 /// `nullaryApp` against `funSyms maudeSig` to distinguish 0-arity NoEq
 /// applications (e.g. `one`, `DH_neutral` for `dhFunSig`) from free
 /// variables.  Without it, the cached DH file's
@@ -179,7 +178,7 @@ struct KnownFuns {
     /// returns the earliest match in `S.toList` order, and two DISTINCT
     /// symbols can share a `showFunSymName` — a user-defined AC symbol and a
     /// user-defined NoEq symbol may carry the same name, and `Ord FunSym`
-    /// (FunctionSymbols.hs:150-154) orders `NoEq` before `AC`, so the NoEq
+    /// (FunctionSymbols.hs) orders `NoEq` before `AC`, so the NoEq
     /// one is the earlier.  An `insert` loop would let the later symbol win
     /// and silently change which `FunSym` lands in the rule info.
     by_name: std::collections::BTreeMap<std::borrow::Cow<'static, str>, FunSym>,
@@ -387,7 +386,7 @@ fn ast_rule_to_intr_rule_ac(
     // but not premises.  The intruder-rule `.spthy` files don't have
     // any (all RHS vars are LHS vars), but compute it faithfully for
     // robustness.  HS reference: Theory.Model.Fact.newVariables
-    // (lib/theory/src/Theory/Model/Fact.hs:524-529, see line 527).
+    // (lib/theory/src/Theory/Model/Fact.hs).
     let new_vars = crate::fact::new_variables(&prems, &concs);
 
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))

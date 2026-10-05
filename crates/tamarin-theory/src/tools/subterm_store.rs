@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Tools.SubtermStore`.
 //!
@@ -36,7 +35,7 @@ pub struct SubtermConstraint {
 
 impl SubtermConstraint {
     /// The pair HS stores in `_posSubterms` / `_solvedSubterms`
-    /// (`S.Set (LNTerm, LNTerm)`, SubtermStore.hs:90-96).  `propagated` is
+    /// (`S.Set (LNTerm, LNTerm)`, SubtermStore.hs).  `propagated` is
     /// port-only and outside it, so every comparison that has to be as fine
     /// as HS's — and no finer — goes through this pair.
     pub fn hs_pair(&self) -> (&LNTerm, &LNTerm) {
@@ -45,7 +44,7 @@ impl SubtermConstraint {
 }
 
 /// HS reaches a stored constraint through `Apply LNSubst SubtermStore`
-/// (SubtermStore.hs:560-561) and the pair instance (SubstVFree.hs:316-317):
+/// (SubtermStore.hs) and the pair instance (SubstVFree.hs):
 /// the small side then the big one.  `propagated` is not part of the HS value
 /// and is carried over unchanged.
 impl Apply<SystemSubst<'_>> for SubtermConstraint {
@@ -65,8 +64,8 @@ impl Apply<SystemSubst<'_>> for SubtermConstraint {
 }
 
 /// One element of the `_posSubterms` / `_solvedSubterms` sets, which HS holds
-/// as `S.Set (LNTerm, LNTerm)` (SubtermStore.hs:90-96), so the walk is the
-/// pair instance (LTerm.hs:855-860): the small side then the big one.
+/// as `S.Set (LNTerm, LNTerm)` (SubtermStore.hs), so the walk is the
+/// pair instance (LTerm.hs): the small side then the big one.
 /// `propagated` is not part of the HS value and is carried over unchanged.
 impl HasFrees for SubtermConstraint {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
@@ -153,7 +152,7 @@ impl<'a> IntoIterator for &'a SortedPairSet {
 }
 
 /// Subterm store. Mirrors HS's 5-field `SubtermStore`
-/// (SubtermStore.hs:90-96):
+/// (SubtermStore.hs):
 ///   negSubterms / posSubterms / solvedSubterms / isContradictory /
 ///   oldNegSubterms.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -167,7 +166,7 @@ pub struct SubtermStore {
     /// `S.toList` iteration order).
     pub neg_subterms: SortedPairSet,
     /// Copy of `neg_subterms` that is NOT changed by apply/HasFrees/
-    /// add_neg — HS `_oldNegSubterms` (SubtermStore.hs:90-97, see line 95).  Only the
+    /// add_neg — HS `_oldNegSubterms` (SubtermStore.hs).  Only the
     /// `simpSplitNegSt` pass updates it; the set difference
     /// `neg_subterms \ old_neg_subterms` is the change-detection
     /// mechanism deciding which negative subterms get (re-)split.
@@ -177,7 +176,7 @@ pub struct SubtermStore {
 impl SubtermStore {
     /// Compare in HS's derived `Ord SubtermStore` order: `_negSubterms`,
     /// `_posSubterms`, `_solvedSubterms`, `_isContradictory`, then
-    /// `_oldNegSubterms` (SubtermStore.hs:90-97).
+    /// `_oldNegSubterms` (SubtermStore.hs).
     ///
     /// The port-only `propagated` marker is deliberately absent from this
     /// comparison because HS stores only `(LNTerm, LNTerm)` pairs.  Keep this
@@ -217,7 +216,7 @@ impl SubtermStore {
         });
     }
 
-    /// `addNegSubterm` (SubtermStore.hs:125-126): set-insert into
+    /// `addNegSubterm` (SubtermStore.hs): set-insert into
     /// negSubterms.  Sorted insert keeps HS `S.toList` iteration order.
     /// Returns true if the pair was newly added.
     pub fn add_neg(&mut self, small: LNTerm, big: LNTerm) -> bool {
@@ -229,7 +228,7 @@ impl SubtermStore {
     }
 
     /// `conjoinSubtermStores` — HS-faithful port of
-    /// `Theory.Tools.SubtermStore.conjoinSubtermStores` (SubtermStore.hs:108-110):
+    /// `Theory.Tools.SubtermStore.conjoinSubtermStores` (SubtermStore.hs):
     /// ```haskell
     /// conjoinSubtermStores (SubtermStore a1 b1 c1 d1 e1) (SubtermStore a2 b2 c2 d2 e2)
     ///   = SubtermStore (a1 `S.union` a2) (b1 `S.union` b2)
@@ -266,18 +265,18 @@ impl SubtermStore {
     }
 }
 
-/// `instance HasFrees SubtermStore` (SubtermStore.hs:546-557): the negative
+/// `instance HasFrees SubtermStore` (SubtermStore.hs): the negative
 /// subterms, then the positive ones, then the solved ones.  `contradictory`
 /// and `old_neg_subterms` are carried over by `pure` — HS states at
-/// SubtermStore.hs:95 that `oldNegSubterms` is the copy `apply`/`HasFrees`
+/// SubtermStore.hs that `oldNegSubterms` is the copy `apply`/`HasFrees`
 /// leave alone.
 ///
 /// HS holds all three walked fields as `S.Set (LNTerm, LNTerm)`, so its fold
-/// sees them in ascending pair order (LTerm.hs:898-901).  `neg_subterms` is
+/// sees them in ascending pair order (LTerm.hs).  `neg_subterms` is
 /// stored sorted, and the walk sorts references to the two `Vec`-backed
 /// fields by `(small, big)`.  The map rebuilds `neg_subterms` through
 /// [`SortedPairSet::rebuild_from`], which is the `S.fromList` of the HS set
-/// map (LTerm.hs:903); it rewrites `subterms` and `solved_subterms` where
+/// map (LTerm.hs); it rewrites `subterms` and `solved_subterms` where
 /// they stand, because the port keeps those two in insertion order and the
 /// subterm-store pane prints them in it (`pretty_system::pretty_subterm_store`).
 impl HasFrees for SubtermStore {
@@ -313,7 +312,7 @@ impl HasFrees for SubtermStore {
 
 /// The constraints of `cs` ordered by `(small, big)`, the order HS's
 /// `S.Set (LNTerm, LNTerm)` enumerates the same pairs in
-/// (SubtermStore.hs:90-96).  `SubtermConstraint` carries a `propagated`
+/// (SubtermStore.hs).  `SubtermConstraint` carries a `propagated`
 /// marker that is not part of that pair, so the sort reads
 /// [`SubtermConstraint::hs_pair`].
 fn sorted_by_pair(cs: &[SubtermConstraint]) -> Vec<&SubtermConstraint> {
@@ -323,7 +322,7 @@ fn sorted_by_pair(cs: &[SubtermConstraint]) -> Vec<&SubtermConstraint> {
 }
 
 /// `elemNotBelowReducible reducible inner outer` — port of Haskell's
-/// `Term.Term.elemNotBelowReducible` (`Term/Term.hs:273-279`).  True iff
+/// `Term.Term.elemNotBelowReducible` (`Term/Term.hs`).  True iff
 /// `inner` occurs syntactically in `outer` and never below a
 /// reducible function symbol.
 ///
@@ -351,7 +350,7 @@ pub fn elem_not_below_reducible(
     }
 }
 
-/// `processACSubterm f (small, big)` — HS SubtermStore.hs:313-328.
+/// `processACSubterm f (small, big)` — HS SubtermStore.hs.
 /// Returns `Err(false)` / `Err(true)` for the trivially-false /
 /// trivially-true reductions, or `Ok((nSmall, nBig))` for the
 /// terms with common AC children removed (both re-wrapped under `f`).
@@ -406,7 +405,7 @@ pub fn process_ac_subterm(
 }
 
 /// One leaf of [`split_subterm`] — direct port of HS `SubtermSplit`
-/// (SubtermStore.hs:250-255).  The disjunction-over-list ordering in
+/// (SubtermStore.hs).  The disjunction-over-list ordering in
 /// `solveSubterm` (`SubtermSplit{i}` case names) depends on the
 /// constructor order being preserved, so the variants and their
 /// `Ord` (derived) must follow HS exactly:
@@ -421,7 +420,7 @@ pub enum SubtermSplit {
     TrueD,
 }
 
-/// `step` of HS `splitSubterm` (SubtermStore.hs:279-308).  Allocates a
+/// `step` of HS `splitSubterm` (SubtermStore.hs).  Allocates a
 /// fresh `newVar` for the AC-recurse arm via `mk_fresh` (a closure
 /// mirroring `MonadFresh`'s `freshLVar "newVar" (sortOfLNTerm big)`).
 /// Returns `None` when `(small, big)` cannot be decomposed further, or
@@ -436,13 +435,13 @@ pub fn subterm_step(
     use tamarin_term::lterm::{flattened_ac_terms, is_msg_var, sort_of_lnterm, LSort};
     use tamarin_term::term::f_app_ac;
     use tamarin_term::vterm::{var_term, Lit};
-    // isTrueFalse arms (SubtermStore.hs:280-281).
+    // isTrueFalse arms (SubtermStore.hs).
     match is_true_false(reducible, small, big) {
         Some(true) => return Some(vec![SubtermSplit::TrueD]),
         Some(false) => return Some(vec![]),
         None => {}
     }
-    // CR-rule S_nat delayed (SubtermStore.hs:282-286).
+    // CR-rule S_nat delayed (SubtermStore.hs).
     let small_nat_or_msg = sort_of_lnterm(small) == LSort::Nat || is_msg_var(small);
     if small_nat_or_msg && sort_of_lnterm(big) == LSort::Nat {
         return match process_ac_subterm(AcSym::NatPlus, small, big) {
@@ -455,10 +454,10 @@ pub fn subterm_step(
         };
     }
     let mut out: Vec<SubtermSplit> = match big {
-        // variable big: do not recurse further (SubtermStore.hs:287).
+        // variable big: do not recurse further (SubtermStore.hs).
         Term::Lit(Lit::Var(_)) => return None,
         // AC big, non-reducible head: S_subterm-ac-recurse
-        // (SubtermStore.hs:289-296).
+        // (SubtermStore.hs).
         Term::App(FunSym::Ac(f), _) if !reducible.contains(&FunSym::Ac(*f)) => {
             let f = *f;
             let big_flat: Vec<LNTerm> = flattened_ac_terms(f, big).into_iter().cloned().collect();
@@ -483,8 +482,8 @@ pub fn subterm_step(
             }
         }
         // NoEq big, non-reducible head: S_subterm-recurse
-        // (SubtermStore.hs:297-299), whose leaves come from `eqOrSubterm`
-        // (SubtermStore.hs:307-308).
+        // (SubtermStore.hs), whose leaves come from `eqOrSubterm`
+        // (SubtermStore.hs).
         Term::App(fs @ FunSym::NoEq(_), ts) if !reducible.contains(fs) => {
             let mut out: Vec<SubtermSplit> = Vec::with_capacity(2 * ts.len());
             for ti in ts.iter() {
@@ -493,8 +492,8 @@ pub fn subterm_step(
             }
             out
         }
-        // C (commutative but not associative, SubtermStore.hs:300), List
-        // (SubtermStore.hs:302), and any reducible head (SubtermStore.hs:304).
+        // C (commutative but not associative, SubtermStore.hs), List
+        // (SubtermStore.hs), and any reducible head (SubtermStore.hs).
         _ => return None,
     };
     // HS builds each arm as an `S.Set`.
@@ -504,7 +503,7 @@ pub fn subterm_step(
 }
 
 /// `splitSubterm reducible noRecurse (small, big)` — HS
-/// SubtermStore.hs:261-274.  Returns the sorted-deduped leaf list (HS
+/// SubtermStore.hs.  Returns the sorted-deduped leaf list (HS
 /// `S.toList`) whose disjunction is equivalent to `small ⊏ big`: an empty
 /// list for a trivially false subterm, `[TrueD]` for a trivially true one.
 ///
@@ -524,7 +523,7 @@ pub fn split_subterm(
     if recurse {
         recurse_subterm(reducible, small, big, mk_fresh, &mut out);
     } else {
-        // singleStep (SubtermStore.hs:264-266):
+        // singleStep (SubtermStore.hs):
         //   fromMaybe (S.singleton (SubtermD st)) <$> step st
         match subterm_step(reducible, small, big, mk_fresh) {
             Some(v) => out = v,
@@ -537,7 +536,7 @@ pub fn split_subterm(
     out
 }
 
-/// HS `recurse` (SubtermStore.hs:268-274): re-`step` every `SubtermD`
+/// HS `recurse` (SubtermStore.hs): re-`step` every `SubtermD`
 /// entry, keep every other leaf as it is, and stop where `step` returns
 /// `Nothing`.  Entries are visited in `S.toList` order, which
 /// [`subterm_step`] already produces.
@@ -563,7 +562,7 @@ fn recurse_subterm(
     }
 }
 
-/// The Nat guards of HS `isTrueFalse reducible Nothing` (SubtermStore.hs:335-340),
+/// The Nat guards of HS `isTrueFalse reducible Nothing` (SubtermStore.hs),
 /// which fire BEFORE the `redElem` cases:
 ///
 /// ```haskell
@@ -595,7 +594,7 @@ pub fn nat_guards(small: &LNTerm, big: &LNTerm) -> Option<Option<bool>> {
         return Some(Some(true));
     }
     if sort_of_lnterm(small) == LSort::Nat || is_msg_var(small) {
-        // processACSubterm NatPlus (SubtermStore.hs:313-318): sort +
+        // processACSubterm NatPlus (SubtermStore.hs): sort +
         // removeSame on flattenedACTerms; empty big -> False, empty small
         // -> True, otherwise inconclusive.  The rebuilt `Ok` terms are the
         // caller's business (`splitSubterm`'s `step` re-runs it for the
@@ -606,14 +605,14 @@ pub fn nat_guards(small: &LNTerm, big: &LNTerm) -> Option<Option<bool>> {
 }
 
 /// The structural guards of HS `isTrueFalse reducible Nothing`
-/// (SubtermStore.hs:341-355), i.e. everything after the Nat guards: the
+/// (SubtermStore.hs), i.e. everything after the Nat guards: the
 /// `redElem` pair, the constant big side, CR-rule S_invalid on a variable
 /// big side, and CR-rule S_subterm-ac-recurse on a non-reducible AC big
 /// side.  `None` when the pair is undecidable.
 ///
-/// `simp_injective_fact_eq_mon_pass` (Simplify.hs:555-556) splices this
+/// `simp_injective_fact_eq_mon_pass` (Simplify.hs) splices this
 /// between the Nat guards and HS's `(Just sst)` store-membership arms
-/// (SubtermStore.hs:356-371); `propagate_subterm_obvious` calls it alone.
+/// (SubtermStore.hs); `propagate_subterm_obvious` calls it alone.
 pub fn is_true_false_structural(
     reducible: &FastSet<FunSym>,
     small: &LNTerm,
@@ -654,7 +653,7 @@ pub fn is_true_false_structural(
     None
 }
 
-/// `isTrueFalse reducible Nothing (small, big)` — HS SubtermStore.hs:335-355,
+/// `isTrueFalse reducible Nothing (small, big)` — HS SubtermStore.hs,
 /// the Nat guards followed by the structural ones.  `Some(true)` /
 /// `Some(false)` for a trivially true / false subterm relation, `None` when
 /// it depends on the substitution.
@@ -705,7 +704,7 @@ pub fn collect_fresh_vars_not_below_reducible(
 }
 
 /// `hasSubtermCycle` — port of Haskell's
-/// `Theory.Tools.SubtermStore.hasSubtermCycle` (`SubtermStore.hs:223-244`).
+/// `Theory.Tools.SubtermStore.hasSubtermCycle` (`SubtermStore.hs`).
 ///
 /// Detects a cycle `t0 ⊏ x0, ..., tn ⊏ xn = t0 ⊏ x0` in the positive
 /// subterm dag, where each next edge `(t_i+1, x_i+1)` follows from
@@ -856,7 +855,7 @@ mod tests {
         LVar::new("newVar", LSort::Msg, 0)
     }
 
-    /// CR-rule S_nat (SubtermStore.hs:282-286) hands `NatSubtermD` the pair
+    /// CR-rule S_nat (SubtermStore.hs) hands `NatSubtermD` the pair
     /// `processACSubterm NatPlus` returns, i.e. with the summands both sides
     /// share removed: `%x %+ %1 ⊏ %y %+ %1` becomes the leaf `%x ⊏ %y`.
     /// Keeping the original pair leaves the shared `%1` on both sides, and
@@ -876,9 +875,9 @@ mod tests {
     }
 
     /// `splitSubterm` returns `S.toList` of a `S.Set SubtermSplit`
-    /// (SubtermStore.hs:262), so the leaves come out in the derived
+    /// (SubtermStore.hs), so the leaves come out in the derived
     /// constructor order — every `SubtermD` before every `EqualD` — and not
-    /// in the order `eqOrSubterm` (SubtermStore.hs:307-308) pushed them per
+    /// in the order `eqOrSubterm` (SubtermStore.hs) pushed them per
     /// argument.
     #[test]
     fn recursive_split_lists_its_leaves_in_set_order() {
@@ -917,7 +916,7 @@ mod tests {
         assert!(!s.subterms[0].propagated);
     }
 
-    /// `elemNotBelowReducible` (Term/Term.hs:273-279) counts an occurrence in
+    /// `elemNotBelowReducible` (Term/Term.hs) counts an occurrence in
     /// `outer` only along a path that never crosses a reducible head.  The
     /// `inner == outer` base case applies before the function looks at the
     /// head.
@@ -955,7 +954,7 @@ mod tests {
         ));
     }
 
-    /// `hasSubtermCycle` (SubtermStore.hs:223-244) is the contradiction test
+    /// `hasSubtermCycle` (SubtermStore.hs) is the contradiction test
     /// for the CR-rule S_chain.  An edge `(t, x)` reaches `(t', x')` when `x`
     /// occurs in `t'` and not below a reducible head.  One edge pair can
     /// therefore be a cycle or not, according to the reducible set.
@@ -1031,7 +1030,7 @@ mod tests {
         assert!(s.binary_search(&(c, a)).is_ok());
     }
 
-    /// `conjoinSubtermStores` (SubtermStore.hs:108-110) unions all five HS
+    /// `conjoinSubtermStores` (SubtermStore.hs) unions all five HS
     /// fields.  These are the positive, solved, negative and old-negative
     /// sets, plus an OR on the contradiction flag.  A merge of two branches
     /// loses constraints without a message if the code drops any one of them.
@@ -1094,7 +1093,7 @@ mod tests {
     use tamarin_term::lterm::frees_list;
 
     /// A message variable named `x` distinguished by its index, so `Ord`
-    /// follows the index (LTerm.hs:546-548) and a walk order is readable off
+    /// follows the index (LTerm.hs) and a walk order is readable off
     /// the indices alone.
     fn xv(idx: u64) -> LVar {
         LVar::new("x", LSort::Msg, idx)
@@ -1132,7 +1131,7 @@ mod tests {
     }
 
     /// The port's element of the positive and solved subterm sets walks the
-    /// small side before the big one (LTerm.hs:855-860) and carries its
+    /// small side before the big one (LTerm.hs) and carries its
     /// `propagated` marker through the map.
     #[test]
     fn subterm_constraint_visits_small_then_big_and_keeps_propagated() {
@@ -1141,7 +1140,7 @@ mod tests {
         assert_eq!(shifted(c), cst(101, 102, true));
     }
 
-    /// `instance HasFrees SubtermStore`'s fold (SubtermStore.hs:548-549): the
+    /// `instance HasFrees SubtermStore`'s fold (SubtermStore.hs): the
     /// negative subterms first — before the positive ones that hold smaller
     /// variables — then the positive and the solved ones, each in `(small,
     /// big)` order rather than the insertion order the fixture stores.
@@ -1164,7 +1163,7 @@ mod tests {
         );
     }
 
-    /// The map (SubtermStore.hs:552-557) rewrites the three walked fields and
+    /// The map (SubtermStore.hs) rewrites the three walked fields and
     /// carries `contradictory` and `old_neg_subterms` over untouched.  The two
     /// `Vec`-backed fields keep their insertion order and their `propagated`
     /// markers; `neg_subterms` goes back through `SortedPairSet::rebuild_from`.
@@ -1194,7 +1193,7 @@ mod tests {
 
     /// HS derives `Ord SubtermStore` over `_negSubterms`, `_posSubterms`,
     /// `_solvedSubterms`, `_isContradictory`, `_oldNegSubterms`
-    /// (SubtermStore.hs:90-97).  The port declares `subterms` first and
+    /// (SubtermStore.hs).  The port declares `subterms` first and
     /// `neg_subterms` fourth, so a pair whose negative and positive sets
     /// disagree in opposite directions settles on the negative one.
     #[test]
@@ -1211,7 +1210,7 @@ mod tests {
     }
 
     /// `propagated` is port-only: HS holds the positive and solved sets as
-    /// `S.Set (LNTerm, LNTerm)` (SubtermStore.hs:90-96), so two stores that
+    /// `S.Set (LNTerm, LNTerm)` (SubtermStore.hs), so two stores that
     /// differ only in that marker compare equal.
     #[test]
     fn subterm_store_hs_comparison_ignores_the_propagated_marker() {

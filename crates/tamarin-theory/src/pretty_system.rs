@@ -1,11 +1,10 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Pretty-printer for the constraint `System`.
 //!
 //! Port of `prettyNonGraphSystem` from
-//! `lib/theory/src/Theory/Constraint/System.hs:1674-1687`.  Emits the same
+//! `lib/theory/src/Theory/Constraint/System.hs`.  Emits the same
 //! ordered section list the Haskell interactive UI shows in its
 //! "Constraint system" pane:
 //!
@@ -20,11 +19,11 @@
 //!   solved constraints: ...
 //!
 //! NOTE: the `subterms` and `equations` section bodies are faithful
-//! ports of Haskell's `prettySubtermStore` (SubtermStore.hs:569-581) and
-//! `prettyEqStore` (EquationStore.hs:650-670) — same `Contradictory` /
+//! ports of Haskell's `prettySubtermStore` (SubtermStore.hs) and
+//! `prettyEqStore` (EquationStore.hs) — same `Contradictory` /
 //! `CONTRADICTORY` headers, numbered keyword sections and `∃`-quantified
 //! disjuncts — built on the `pretty_hpj` HughesPJ Doc engine.  The whole
-//! pane is ONE Doc (`vsep $ map combine_ …`, System.hs:1674-1687) rendered
+//! pane is ONE Doc (`vsep $ map combine_ …`, System.hs) rendered
 //! once, so every term/formula/goal wraps at the pane width under its
 //! real section nesting, exactly as HS.  Residual divergences documented
 //! on `pretty_subterm_store` / `pretty_eq_store` (derived term `Ord` for
@@ -41,11 +40,11 @@ use crate::pretty_formula::guarded_doc;
 use crate::pretty_hpj::{fsep, numbered_prime, punctuate, vcat, vsep, Doc};
 
 /// Emit just the non-graph-part of the system, matching Haskell's
-/// `prettyNonGraphSystem` (System.hs:1674-1687):
+/// `prettyNonGraphSystem` (System.hs):
 /// `vsep $ map combine_ [("last", …), …]` — the entire pane is a single
 /// Doc rendered once at the web display width.
 pub fn pretty_non_graph_system(sys: &System) -> String {
-    // HS renders this pane (Web/Theory.hs:513-611, see line 535 `preformatted (Just "sequent")
+    // HS renders this pane (Web/Theory.hs `preformatted (Just "sequent")
     // (prettyNonGraphSystem se)`) through the `HtmlDoc Doc` transformer via
     // `renderHtmlDoc`: keywords/operators become `hl_*` spans, every `text` is
     // entity-escaped, and the HughesPJ fill measures each token at its escaped
@@ -75,7 +74,7 @@ pub fn pretty_non_graph_system(sys: &System) -> String {
 // last_atom
 // ---------------------------------------------------------------------
 
-// HS `maybe (text "none") prettyNodeId $ L.get sLastAtom se` (System.hs:1674-1687, see line 1676).
+// HS `maybe (text "none") prettyNodeId $ L.get sLastAtom se` (System.hs).
 fn pretty_last(sys: &System) -> Doc {
     match &sys.last_atom {
         None => Doc::text("none"),
@@ -88,14 +87,14 @@ fn pretty_last(sys: &System) -> Doc {
 // ---------------------------------------------------------------------
 
 /// Render a guarded-formula collection whose Haskell counterpart is a
-/// `S.Set LNGuarded` (System.hs:1674-1687, see line 1680 renders `sLemmas` via `S.toList`,
+/// `S.Set LNGuarded` (System.hs renders `sLemmas` via `S.toList`,
 /// i.e. ascending `Ord LNGuarded` with structural dedup).  RS stores
 /// `sLemmas` as a `Vec<Guarded>` in *insertion* order (see
 /// `System::insert_lemma`), so the raw Vec would render in a different
 /// order than HS whenever two lemmas were inserted out of Ord order
 /// (e.g. the two safety restrictions of `design-choices.spthy`).  Mirror
 /// `S.toList` here by sorting a view of the Vec with the HS-faithful
-/// derived `Ord Guarded` (Guarded.hs:129) and
+/// derived `Ord Guarded` (Guarded.hs) and
 /// collapsing `Ord`-equal duplicates, exactly as the equivalent
 /// sort+dedup in `rename_precise.rs` does for the live field.
 ///
@@ -106,7 +105,7 @@ fn pretty_last(sys: &System) -> Doc {
 /// is reached only from the interactive/web constraint-system pane, never
 /// from `--prove` output.
 ///
-/// HS: `vsep $ map prettyGuarded $ S.toList` (System.hs:1674-1687, see line 1677/1678/1680) —
+/// HS: `vsep $ map prettyGuarded $ S.toList` (System.hs) —
 /// each formula is a real Doc (`guarded_doc`) and formulas are separated
 /// by a blank line (`vsep` = fold `$--$`).
 fn pretty_formula_set(items: &[std::sync::Arc<Guarded>]) -> Doc {
@@ -126,7 +125,7 @@ fn pretty_formula_set(items: &[std::sync::Arc<Guarded>]) -> Doc {
 // --- Doc helpers mirroring `Text.PrettyPrint.Class` -------------------
 
 // HS `combine (header, d) = fsep [keyword_ header <> colon, nest 2 d]`
-// (SubtermStore.hs:569-581, see line 578 / EquationStore.hs:650-670, see line 658) — the section header is a
+// (SubtermStore.hs / EquationStore.hs) — the section header is a
 // `keyword_` span, the colon is plain.  `keyword_` is the identity in plain mode.
 fn combine(header: &str, d: Doc) -> Doc {
     fsep(vec![
@@ -135,7 +134,7 @@ fn combine(header: &str, d: Doc) -> Doc {
     ])
 }
 
-// Faithful port of Haskell `prettySubtermStore` (SubtermStore.hs:569-581).
+// Faithful port of Haskell `prettySubtermStore` (SubtermStore.hs).
 // Emits an optional `Contradictory: yes` header, then (when the store is
 // non-empty) three numbered keyword-headed sections `Negative Subterms` /
 // `Subterms` / `Solved Subterms`, each item rendered as
@@ -196,7 +195,7 @@ fn pretty_subterm_store(sys: &System) -> Doc {
     vcat(sections)
 }
 
-// Faithful port of Haskell `prettyEqStore` (EquationStore.hs:650-670).
+// Faithful port of Haskell `prettyEqStore` (EquationStore.hs).
 // Emits a leading `CONTRADICTORY` line when `eqsIsFalse`, then a `subst:`
 // section (`prettySubst (text.show) (text.show)`, i.e. `t <~ {vars}`
 // lines) and a `conj:` section whose disjuncts are `N.` followed by
@@ -229,7 +228,7 @@ fn pretty_eq_store(sys: &System) -> Doc {
 
 // HS `ppDisj (idx, substs) = text (show idx ++ ".") <-> numbered' conjs`
 // where `conjs = map ppSubst (orderedSubsts substs)`
-// (EquationStore.hs:659-662): the displayed case order is the same
+// (EquationStore.hs): the displayed case order is the same
 // α-canonical order `performSplit` produces, so the numbering shown for a
 // disjunction matches the `split_case_i` labels a split of it emits.  The
 // shared `ordered_substs` helper is what makes the two agree.
@@ -244,8 +243,8 @@ fn pp_disj(d: &crate::tools::equation_store::EqDisj) -> Doc {
 fn pp_subst_vfresh(subst: &crate::tools::equation_store::LNSubstVFresh) -> Doc {
     use crate::pretty_hpj::{hsep, operator_, sep};
     // hsep (opExists : map prettyLVar vars) <> opDot
-    // opExists = operator_ "∃ " (Theory/Text/Pretty.hs:177-177) — trailing space, one
-    // operator token; opDot = operator_ "." (Theory/Text/Pretty.hs:183-183). Both
+    // opExists = operator_ "∃ " (Theory/Text/Pretty.hs) — trailing space, one
+    // operator token; opDot = operator_ "." (Theory/Text/Pretty.hs). Both
     // `operator_`, so they
     // carry `hl_operator` spans in HtmlDoc mode and are identity in plain mode.
     let mut quant_parts: Vec<Doc> = vec![operator_("\u{2203} ")]; // opExists "∃ "
@@ -255,7 +254,7 @@ fn pp_subst_vfresh(subst: &crate::tools::equation_store::LNSubstVFresh) -> Doc {
     let quant = hsep(quant_parts).beside(operator_(".")); // opDot
 
     // fsep $ intersperse opLAnd $ map ppEq (substToListVFresh subst)
-    // opLAnd = operator_ "∧" (Theory/Text/Pretty.hs:179-179).
+    // opLAnd = operator_ "∧" (Theory/Text/Pretty.hs).
     let eqs: Vec<Doc> = subst
         .to_list()
         .into_iter()
@@ -278,7 +277,7 @@ fn pp_eq(
     )
 }
 
-// HS `prettySubst (text.show) (text.show) subst` (SubstVFree.hs:314-320):
+// HS `prettySubst (text.show) (text.show) subst` (SubstVFree.hs):
 //   map pp . M.toList . equivClasses . substToList
 //   pp (t, vs) = prettyTerm t <-> " <~ {" <> fsep (punctuate comma (map ppVar vs)) <> "}"
 // `equivClasses` groups vars by their mapped term; the map is keyed/ordered
@@ -299,7 +298,7 @@ fn pretty_subst_free(subst: &crate::tools::equation_store::LNSubst) -> Vec<Doc> 
         .map(|(t, vs)| {
             let vars: Vec<Doc> = vs.iter().map(|v| Doc::text(v.to_string())).collect();
             // prettyTerm ppLit t <-> " <~ {" <> fsep (punctuate comma vars) <> "}"
-            // (SubstVFree.hs:342-348) — the term is a real `prettyTerm` Doc,
+            // (SubstVFree.hs) — the term is a real `prettyTerm` Doc,
             // so an over-wide term wraps at the pane width exactly as HS.
             pretty_nterm(&t)
                 .beside_sp(crate::pretty_hpj::operator_(" <~ {")) // operator_ " <~ {"
@@ -325,7 +324,7 @@ fn intersperse(sep: Doc, xs: Vec<Doc>) -> Vec<Doc> {
 // goals
 // ---------------------------------------------------------------------
 
-// Mirrors Haskell `prettyGoals` (System.hs:1736-1754):
+// Mirrors Haskell `prettyGoals` (System.hs):
 //   (goal, status) <- M.toList sGoals          -- Goal-Ord iteration
 //   guard (solved == gsSolved status)
 //   prettyGoal goal <-> lineComment_
@@ -370,7 +369,7 @@ fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
         );
         // HS `prettyGoal goal <-> lineComment_ (...)` where `lineComment_ =
         // lineComment . text` and `lineComment d = comment $ text "//" <-> d`
-        // (Theory/Text/Pretty.hs:96-100).  The comment is PART of the goal's Doc, so its
+        // (Theory/Text/Pretty.hs).  The comment is PART of the goal's Doc, so its
         // width participates in the goal's own layout decisions (a goal near
         // the ribbon wraps because of its trailing comment, exactly as HS).
         let comment = format!("nr: {}{}{}\"{}\"", st.nr, source_rule, loop_breaker, useful);
@@ -388,7 +387,7 @@ fn pretty_goals(sys: &System, want_solved: bool) -> Doc {
 // ---------------------------------------------------------------------
 
 fn pretty_source_kind(sk: Option<SourceKind>) -> &'static str {
-    // Matches Haskell `instance Show SourceKind` (System.hs:345-347):
+    // Matches Haskell `instance Show SourceKind` (System.hs):
     //   show RawSource     = "raw"
     //   show RefinedSource = "refined"
     // The Haskell field is non-optional; the `None` arm is a Rust-only
@@ -407,7 +406,7 @@ fn pretty_source_kind(sk: Option<SourceKind>) -> &'static str {
 /// persistent `!` prefix), the term list in parentheses (always emitted, even
 /// for zero-arity facts), and a trailing `[...]` annotation block.
 ///
-/// This is NOT the byte-faithful `prettyFact` (Theory/Model/Fact.hs:567-574): that one is a
+/// This is NOT the byte-faithful `prettyFact` (Theory/Model/Fact.hs): that one is a
 /// `Doc` built with `nestShort'`, so it emits the inner-paren spaces
 /// (`!KU( ~ltk )`) and wraps at the display width.  Every rendering that
 /// reaches user-visible output goes through the `Doc` path instead
@@ -417,7 +416,7 @@ fn pretty_source_kind(sk: Option<SourceKind>) -> &'static str {
 /// `constraint::solver::context`, where one fact per line is the point.
 pub fn pretty_fact(fa: &LNFact) -> String {
     use crate::fact::{fact_tag_multiplicity, FactAnnotation, Multiplicity};
-    // Matches Haskell `showFactTag` (Theory/Model/Fact.hs:549-553): the `!` prefix is
+    // Matches Haskell `showFactTag` (Theory/Model/Fact.hs): the `!` prefix is
     // applied to any tag whose `factTagMultiplicity` is `Persistent`,
     // which includes KU/KD as well as persistent proto facts.
     let prefix = if fact_tag_multiplicity(&fa.tag) == Multiplicity::Persistent {
@@ -428,7 +427,7 @@ pub fn pretty_fact(fa: &LNFact) -> String {
     let name = fact_tag_name(&fa.tag);
     let args: Vec<String> = fa.terms.iter().map(pretty_lnterm).collect();
     let base = format!("{}{}({})", prefix, name, args.join(", "));
-    // Matches Haskell `ppAnn` (Theory/Model/Fact.hs:573-574): when annotations are
+    // Matches Haskell `ppAnn` (Theory/Model/Fact.hs): when annotations are
     // present, append `[a1, a2]` using `showFactAnnotation` for each.
     if fa.annotations.is_empty() {
         base
@@ -455,7 +454,7 @@ mod tests {
     /// This is the all-empty shape, which no corpus proof reaches.  Every
     /// section body is `emptyDoc`.  The definition
     /// `combine_ (header, d) = fsep [keyword_ header <> colon,
-    /// nest 2 d]` (System.hs:1673-1687) therefore collapses to the bare
+    /// nest 2 d]` (System.hs) therefore collapses to the bare
     /// header.  The `vsep` between the nine items leaves a blank line after
     /// every item except the last one.  `last` is the only body with content
     /// (`maybe (text "none")`).  `allowed cases` is `show sSourceKind`.  The
@@ -518,7 +517,7 @@ mod tests {
         // keyword sections in HS's order, the `<n>. ` prefixes of `numbered'`
         // and the `⊏` operator.  The gap before `⊏` is two spaces, not one.
         // HS defines `ppSt (a,b) = prettyNTerm a $$
-        // nest 3 (opSubterm <+> prettyNTerm b)` (SubtermStore.hs:580-581).
+        // nest 3 (opSubterm <+> prettyNTerm b)` (SubtermStore.hs).
         // The `nilAboveNest` of `$$` inlines the continuation at `3 - width a`
         // columns when the small term is a single character.
         assert_eq!(
@@ -542,11 +541,11 @@ mod tests {
         });
         let mut sys = System::empty();
         sys.set_eq_store(std::sync::Arc::new(eq));
-        // `prettyEqStore` (EquationStore.hs:650-662) prefixes `CONTRADICTORY`
+        // `prettyEqStore` (EquationStore.hs) prefixes `CONTRADICTORY`
         // only when `eqsIsFalse` holds.  It then prints the two sub-sections
         // that `combine` builds.  The disjunction renders as
         // `text (show (unSplitId idx) ++ ".")` beside `numbered' []`.  HS
-        // `numbered _ [] = emptyDoc` (Text/PrettyPrint/Class.hs:252-253)
+        // `numbered _ [] = emptyDoc` (Text/PrettyPrint/Class.hs)
         // removes the empty case list.  Only the bare `0.` remains.
         assert_eq!(
             pretty_eq_store(&sys).render(),
@@ -630,7 +629,7 @@ mod tests {
                 args,
             )
         };
-        // HS `fAppPair` is arity 2 (Term/Term.hs:163), so `<a, b, c>` is the
+        // HS `fAppPair` is arity 2 (Term/Term.hs), so `<a, b, c>` is the
         // right-nested chain `prettyTerm`'s `split` walks back out.
         let pair = |items: Vec<LNTerm>| {
             let mut it = items.into_iter().rev();
@@ -679,7 +678,7 @@ mod tests {
         // Build under the entity-width guard (HS HtmlDoc measures escaped
         // widths at `text` time; RS captures fill widths at Doc build).
         let _g = crate::pretty_hpj::HtmlEntityWidthGuard::enable();
-        // The `prettySubst` mapping line (SubstVFree.hs:354-360).
+        // The `prettySubst` mapping line (SubstVFree.hs).
         let line = pretty_nterm(&term)
             .beside_sp(Doc::text(" <~ {"))
             .beside(fsep(punctuate(Doc::text(","), vec![Doc::text("t.1")])))

@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Page furniture: the two HTML frames a response is wrapped in and the
 //! Options menu both of them splice.
@@ -15,7 +14,7 @@ use axum::{http::StatusCode, response::Response};
 
 use super::html_with_status;
 
-/// Byte-faithful port of HS `defaultLayout'` (`src/Web/Types.hs:699-736`): the
+/// Byte-faithful port of HS `defaultLayout'` (`src/Web/Types.hs`): the
 /// `$newline never` frame Yesod's `defaultLayout` puts around a page's
 /// `setTitle` text and its widget markup.  The standalone graph shell is the
 /// one page with a frame of its own ([`intdot_shell_html`], HS `intdotLayout`).
@@ -42,10 +41,10 @@ pub(super) fn error_page(status: StatusCode, title: &str, body: &str) -> Respons
 /// The "Options" drop-down's `<li>` run, from the `Options` anchor through the
 /// closing `</ul></li>` of the toggle list.
 ///
-/// HS splices the same `optionsMenuItemTpl True` (Web/Types.hs:749-763) into
-/// both the theory-page header (Web/Hamlet.hs:190, via
+/// HS splices the same `optionsMenuItemTpl True` (Web/Types.hs) into
+/// both the theory-page header (Web/Hamlet.hs, via
 /// `handlers::theory_html::header`) and the standalone graph shell's popout bar
-/// (`popoutOptionsTpl True`, Web/Types.hs:769-777, via [`intdot_shell_html`]),
+/// (`popoutOptionsTpl True`, Web/Types.hs, via [`intdot_shell_html`]),
 /// so the two pages carry byte-identical menu markup.
 pub(crate) const OPTIONS_MENU_ITEMS: &str =
     "<li><a href=\"#\">Options</a><ul class=\"list-with-toggles\">\
@@ -59,9 +58,9 @@ pub(crate) const OPTIONS_MENU_ITEMS: &str =
 <li><a id=lvl3-toggle href=\"#\">Graph simplification L3</a></li>\
 </ul></li>";
 
-/// Byte-for-byte reproduction of `intdotLayout True` (`src/Web/Types.hs:795-824`)
-/// wrapping `popoutOptionsTpl True` (`src/Web/Types.hs:769-777`) and
-/// `optionsMenuItemTpl True` (`src/Web/Types.hs:749-763`).
+/// Byte-for-byte reproduction of `intdotLayout True` (`src/Web/Types.hs`)
+/// wrapping `popoutOptionsTpl True` (`src/Web/Types.hs`) and
+/// `optionsMenuItemTpl True` (`src/Web/Types.hs`).
 ///
 pub(crate) fn intdot_shell_html(title: &str, dotsrc: &str) -> String {
     format!(

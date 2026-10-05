@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of the SAPIC process pretty-printers from
 //! `lib/theory/src/Theory/Sapic/{Term,Process}.hs` and
@@ -9,39 +8,39 @@
 //! SAPIC-generated rule names.
 //!
 //! WRAPPING.  The `process="..."` attribute value is NOT a single
-//! `text` — `prettySapicAction'` (Theory/Sapic/Process.hs:450-469) builds it by string
+//! `text` — `prettySapicAction'` (Theory/Sapic/Process.hs) builds it by string
 //! concatenation of literals (`"out("`, `"new "`, …) with the result of
 //! `render` applied SEPARATELY to each embedded term/fact/pattern `Doc`.  That
 //! inner `render` is `Text.PrettyPrint.Class.render = P.render`
-//! (`lib/utils/src/Text/PrettyPrint/Class.hs:77-78`), i.e. the HughesPJ
+//! (`lib/utils/src/Text/PrettyPrint/Class.hs`), i.e. the HughesPJ
 //! DEFAULT `style = Style { lineLength = 100, ribbonsPerLine = 1.5 }`, giving
 //! ribbon `round(100 / 1.5) = 67`.  This is DIFFERENT from the theory display
 //! width (110 / 73) used everywhere else (`pretty_hpj::{LINE_LENGTH,RIBBON}`).
 //! A long term such as `<aenc(shared_key.1, pk(skV.1)),
 //! report(aenc(shared_key.1, pk(skV.1)))>` (70 cols > 67) therefore wraps
 //! INSIDE the rendered term, with continuation lines indented by the `nest 1`
-//! that `ppTerms`/pairs apply (Term/Term.hs:319-321).  Each `render` starts at
+//! that `ppTerms`/pairs apply (Term/Term.hs).  Each `render` starts at
 //! column 0 (the surrounding literals do not shift the wrap column), so we
 //! render each sub-Doc standalone via [`render_sapic`].
 //!
 //! HS references:
-//!   - `prettySapicTerm = prettyTerm (text . show)` (Theory/Sapic/Term.hs:168-169):
-//!     the shared `prettyTerm` (Term/Term.hs:299-327,
+//!   - `prettySapicTerm = prettyTerm (text . show)` (Theory/Sapic/Term.hs):
+//!     the shared `prettyTerm` (Term/Term.hs,
 //!     [`tamarin_term::pretty::pretty_term`]) at the literal printer
-//!     `Show (Lit c v)` (Term/VTerm.hs:98-100), whose variable half is
-//!     `show v ++ ":" ++ t` for typed vars (Theory/Sapic/Term.hs:108-110).
+//!     `Show (Lit c v)` (Term/VTerm.hs), whose variable half is
+//!     `show v ++ ":" ++ t` for typed vars (Theory/Sapic/Term.hs).
 //!     Pairs go through `ppTerms ", " 1 "<" ">"` (fcat + `nest 1`,
-//!     Term/Term.hs:319-321), so a wrapped term carries that indent.
-//!   - `prettySapicFact = prettyFact prettySapicTerm` (Theory/Sapic/Term.hs:171-172,
+//!     Term/Term.hs), so a wrapped term carries that indent.
+//!   - `prettySapicFact = prettyFact prettySapicTerm` (Theory/Sapic/Term.hs,
 //!     [`crate::fact::pretty_fact`]); a fact renders as `Name( a, b )` via
 //!     `nestShort' (n++"(") ")" . fsep . punctuate comma`
-//!     (Theory/Model/Fact.hs:566-574, Text/PrettyPrint/Class.hs:221-223).
-//!   - `prettySapicAction'` (Theory/Sapic/Process.hs:450-469).
-//!   - `prettySapicTopLevel'` (Theory/Sapic/Process.hs:514-524).
+//!     (Theory/Model/Fact.hs, Text/PrettyPrint/Class.hs).
+//!   - `prettySapicAction'` (Theory/Sapic/Process.hs).
+//!   - `prettySapicTopLevel'` (Theory/Sapic/Process.hs).
 //!
 //! Scope: every `SapicAction` and `ProcessCombinator` variant, but only the
 //! TOP node of a process — `prettySapic'`'s recursive `$-$`/`nest` layout
-//! (Theory/Sapic/Process.hs:485-512) is not ported here; `pretty_theory::open_process_doc`
+//! (Theory/Sapic/Process.hs) is not ported here; `pretty_theory::open_process_doc`
 //! walks the tree and calls [`pretty_sapic_top_level`] per node.
 
 use std::collections::BTreeSet;
@@ -58,7 +57,7 @@ use crate::sapic::{
 
 /// HughesPJ DEFAULT `lineLength` (`Text.PrettyPrint.HughesPJ.style`,
 /// pretty-1.1.3.6 HughesPJ.hs:939).  The inner `render` calls in
-/// `prettySapicAction'` use the bare `P.render` (Text/PrettyPrint/Class.hs:77-78), so they
+/// `prettySapicAction'` use the bare `P.render` (Text/PrettyPrint/Class.hs), so they
 /// render at this width, NOT the tamarin theory width (110).
 const SAPIC_LINE_LENGTH: usize = 100;
 /// HughesPJ DEFAULT ribbon = `round(lineLength / ribbonsPerLine)` =
@@ -75,19 +74,19 @@ pub(crate) fn render_sapic(d: Doc) -> String {
 }
 
 /// `render (prettySapicTerm t)` over a `SapicTerm` — HS `prettyTerm (text .
-/// show)` (Theory/Sapic/Term.hs:168-169), the same body as `prettyNTerm`
-/// (Term/LTerm.hs:930-931) at `v = SapicLVar`, built as a HughesPJ `Doc` then
+/// show)` (Theory/Sapic/Term.hs), the same body as `prettyNTerm`
+/// (Term/LTerm.hs) at `v = SapicLVar`, built as a HughesPJ `Doc` then
 /// rendered standalone at the default width (100 / 67), so long terms WRAP
 /// exactly as HS's inner `render` does.
 pub(crate) fn pretty_sapic_term(t: &SapicTerm) -> String {
     render_sapic(pretty_nterm(t))
 }
 
-/// `prettyPattern' vs t` (Theory/Sapic/Process.hs:443-444) as a `Doc`:
+/// `prettyPattern' vs t` (Theory/Sapic/Process.hs) as a `Doc`:
 /// `prettySapicTerm . unextractMatchingVariables vs`.
-/// `unextractMatchingVariables` (Theory/Sapic/Pattern.hs:99-102) retags every
+/// `unextractMatchingVariables` (Theory/Sapic/Pattern.hs) retags every
 /// variable of the term, and the tag is read only by
-/// `Show PatternSapicLVar` (Theory/Sapic/Pattern.hs:46-48), which spells a
+/// `Show PatternSapicLVar` (Theory/Sapic/Pattern.hs), which spells a
 /// matched variable `"=" ++ show v` and a bound one `show v`.  The retagging
 /// therefore lives entirely in the literal printer handed to `prettyTerm`.
 fn pattern_term_doc(t: &SapicTerm, match_vars: &BTreeSet<SapicLVar>) -> Doc {
@@ -100,19 +99,19 @@ fn pattern_term_doc(t: &SapicTerm, match_vars: &BTreeSet<SapicLVar>) -> Doc {
     )
 }
 
-/// `render (prettyPattern' vs t)` (Theory/Sapic/Process.hs:443-444): a
+/// `render (prettyPattern' vs t)` (Theory/Sapic/Process.hs): a
 /// `ChIn`/`let` pattern rendered standalone at 100 / 67, so a long pattern
 /// wraps the same way HS's inner `render` does.
 fn pretty_pattern(t: &SapicTerm, match_vars: &BTreeSet<SapicLVar>) -> String {
     render_sapic(pattern_term_doc(t, match_vars))
 }
 
-/// `prettySapicFact` (Theory/Sapic/Term.hs:171-172) = `prettyFact
+/// `prettySapicFact` (Theory/Sapic/Term.hs) = `prettyFact
 /// prettySapicTerm`.  `match_vars`, when `Some`, is the
 /// `unextractMatchingVariables` set applied to every term of the fact (HS
 /// `rulePrinter`'s `l' = fmap (fmap (unextractMatchingVariables mv)) l` for
-/// the premises, Print.hs:45); `None` is its `toPat`, which passes `mempty`
-/// for the actions and conclusions (Print.hs:46) and so marks nothing.
+/// the premises, Print.hs); `None` is its `toPat`, which passes `mempty`
+/// for the actions and conclusions (Print.hs) and so marks nothing.
 fn sapic_fact_doc(f: &SapicLNFact, match_vars: Option<&BTreeSet<SapicLVar>>) -> Doc {
     match match_vars {
         Some(vs) => pretty_fact(&|t: &SapicTerm| pattern_term_doc(t, vs), f),
@@ -120,11 +119,11 @@ fn sapic_fact_doc(f: &SapicLNFact, match_vars: Option<&BTreeSet<SapicLVar>>) -> 
     }
 }
 
-/// `render (prettySapicFact a)` (Theory/Sapic/Term.hs:171-172): the fact Doc
+/// `render (prettySapicFact a)` (Theory/Sapic/Term.hs): the fact Doc
 /// rendered standalone at 100 / 67.  On one line this is `Name( a, b )` — the
 /// leading and trailing spaces come from `nestShort'`'s
 /// `sep [lead $$ nest k body, finish]` overlap
-/// (Text/PrettyPrint/Class.hs:218-223); an empty argument list renders
+/// (Text/PrettyPrint/Class.hs); an empty argument list renders
 /// `Name( )`.  A wide event fact wraps the same way HS's inner `render` does.
 fn pretty_sapic_fact(f: &SapicLNFact) -> String {
     render_sapic(sapic_fact_doc(f, None))
@@ -135,20 +134,20 @@ fn pretty_sapic_fact(f: &SapicLNFact) -> String {
 /// disagree about the premise rendering.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum MsrPrinter {
-    /// `Theory.Sapic.Print.rulePrinter` (Print.hs:34-46): re-applies
+    /// `Theory.Sapic.Print.rulePrinter` (Print.hs): re-applies
     /// `unextractMatchingVariables mv` to the PREMISES, so each match variable
     /// prints with a leading `=`; the actions and conclusions get `mempty`, so
     /// they stay unmarked.  Used by `prettySapic` / `prettySapicTopLevel`,
     /// i.e. the `process:` / `let` / `equivLemma` blocks of an open theory.
     Sapic,
     /// `prettyRuleAttribute`'s local `ppProcess.f l a r rest _`
-    /// (Theory/Model/Rule.hs:1324-1327): DISCARDS the match-var set, rendering the premises
+    /// (Theory/Model/Rule.hs): DISCARDS the match-var set, rendering the premises
     /// as plain facts.  Used for the `process="..."` rule attribute.
     Attribute,
 }
 
 /// The embedded-MSR rule printer.  Both HS instantiations go through
-/// `prettyRuleRestrGen` (Model/Rule.hs:1366-1383), which builds
+/// `prettyRuleRestrGen` (Model/Rule.hs), which builds
 /// `[ prems ] --[ acts (+ _restrict(..)) ]-> [ concls ]`; with no actions and
 /// no restrictions the arrow collapses to `-->`.  They differ only in the fact
 /// printer: [`MsrPrinter::Sapic`] marks the premises' match variables with `=`,
@@ -184,9 +183,9 @@ fn render_msr(
         let mut items: Vec<Doc> = acts.iter().map(|f| sapic_fact_doc(f, None)).collect();
         for phi in rest {
             // `ppRestr' fact = operator_ "_restrict(" <> ppRestr fact <>
-            // operator_ ")"` (Theory/Model/Rule.hs:1382#ppRestr') with
+            // operator_ ")"` (Theory/Model/Rule.hs#ppRestr') with
             // `ppRes = prettySyntacticLNFormula . toLFormula`
-            // (Theory/Sapic/Print.hs:41-44#rulePrinter).  The formula is a Doc
+            // (Theory/Sapic/Print.hs#rulePrinter).  The formula is a Doc
             // inside that composition, so a break it takes indents by the ten
             // columns of the opening operator and the whole item takes part in
             // the rule's layout, which the caller closes with `render_sapic`.
@@ -213,7 +212,7 @@ fn render_msr(
     render_sapic(doc)
 }
 
-/// `prettySapicAction'` (Theory/Sapic/Process.hs:450-469), linear subset.
+/// `prettySapicAction'` (Theory/Sapic/Process.hs), linear subset.
 fn pretty_sapic_action(a: &SapicAction<SapicLVar>, printer: MsrPrinter) -> String {
     match a {
         SapicAction::New(v) => format!("new {v}"),
@@ -252,14 +251,14 @@ fn pretty_sapic_action(a: &SapicAction<SapicLVar>, printer: MsrPrinter) -> Strin
         SapicAction::ProcessCall(s, ts) => {
             // HS `prettySapicAction' _ (ProcessCall s ts) = s ++ "(" ++ p ts
             // ++ ")"` where `p pts = render $ fsep (punctuate comma (map
-            // prettySapicTerm pts))` (Theory/Sapic/Process.hs:469-471).  The args render
+            // prettySapicTerm pts))` (Theory/Sapic/Process.hs).  The args render
             // standalone via a breakable `fsep` over a bare `,`.
             let arg_docs: Vec<Doc> = ts.iter().map(pretty_nterm).collect();
             let body = render_sapic(hpj::fsep(hpj::punctuate(Doc::char(','), arg_docs)));
             format!("{}({})", s, body)
         }
         // HS `prettySapicAction' prettyRule' (MSR p a c r mv) = prettyRule' p a c r mv`
-        // (Theory/Sapic/Process.hs:450-471, see line 468); `prettyRule'` is the caller-supplied
+        // (Theory/Sapic/Process.hs); `prettyRule'` is the caller-supplied
         // printer selected by `printer`.
         SapicAction::Msr {
             prems,
@@ -271,7 +270,7 @@ fn pretty_sapic_action(a: &SapicAction<SapicLVar>, printer: MsrPrinter) -> Strin
     }
 }
 
-/// `prettySapicComb` (Theory/Sapic/Process.hs:473-485), only the cases reachable here.
+/// `prettySapicComb` (Theory/Sapic/Process.hs), only the cases reachable here.
 fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
     match c {
         ProcessCombinator::Parallel => "|".to_string(),
@@ -281,15 +280,15 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
             format!("if {}={}", pretty_sapic_term(t), pretty_sapic_term(t2))
         }
         // HS `prettySapicComb (Cond a) = "if "++ render (prettySyntacticSapicFormula a)`
-        // (Theory/Sapic/Process.hs:473-483, see line 476).
+        // (Theory/Sapic/Process.hs).
         // `prettySyntacticSapicFormula = prettySyntacticLNFormula . toLFormula`
-        // (Theory/Sapic/Term.hs:174-175) drops the SAPIC type tags and keeps
+        // (Theory/Sapic/Term.hs) drops the SAPIC type tags and keeps
         // the syntactic structure (predicates intact, formula un-expanded).
         // The `render` is the inner one this module's header documents, so the
         // formula wraps at the HughesPJ default width — and the same string
         // feeds BOTH the `process="..."` attribute and the SAPIC-derived rule
         // names, which the `filter isAlpha` of `stripNonAlphanumerical`
-        // (Sapic/Facts.hs:401) leaves unaffected by the break.
+        // (Sapic/Facts.hs) leaves unaffected by the break.
         ProcessCombinator::Cond(f) => {
             format!(
                 "if {}",
@@ -299,7 +298,7 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
             )
         }
         // HS `prettySapicComb (Lookup t v) = "lookup "++ p t ++ " as " ++ show v`
-        // (Theory/Sapic/Process.hs:473-483, see line 482).  `show v` on an (untyped) `SapicLVar` is just the
+        // (Theory/Sapic/Process.hs).  `show v` on an (untyped) `SapicLVar` is just the
         // LVar display name (`x.1`); a typed var would append `:type`, but
         // lookup binders are never typed by inference (`typeWithVar`).
         ProcessCombinator::Lookup(t, v) => {
@@ -307,7 +306,7 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
         }
         // HS `prettySapicComb (Let t t' vs) = "let "++ p' t ++ "=" ++ p t'`
         // where `p = render . prettySapicTerm` and `p' = render . prettyPattern' vs`
-        // (Theory/Sapic/Process.hs:479-481).  `prettyPattern' vs = prettySapicTerm .
+        // (Theory/Sapic/Process.hs).  `prettyPattern' vs = prettySapicTerm .
         // unextractMatchingVariables vs` renders the LEFT pattern with its match
         // vars `=`-prefixed; the RIGHT is a plain term.
         ProcessCombinator::Let {
@@ -324,15 +323,15 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
     }
 }
 
-/// `prettySapicTopLevel' prettyRule'` (Theory/Sapic/Process.hs:514-524).  Only inspects the
+/// `prettySapicTopLevel' prettyRule'` (Theory/Sapic/Process.hs).  Only inspects the
 /// TOP node.
 ///
 /// Every `Doc` this module builds and hands to [`render_sapic`] is built and
 /// laid out in plain mode, whatever the caller's rendering context.  HS's
 /// inner `render` is the plain `P.render` on a plain `Doc`
-/// (Text/PrettyPrint/Class.hs:77-78), so the process text carries raw `<`,
+/// (Text/PrettyPrint/Class.hs), so the process text carries raw `<`,
 /// `>` and `'` at their visible widths; the callers put that string back into
-/// a `Doc::text`, which is where `Document (HtmlDoc d)` (Html.hs:102-104)
+/// a `Doc::text`, which is where `Document (HtmlDoc d)` (Html.hs)
 /// escapes it — once.
 fn pretty_sapic_top_level_with(p: &PlainProcess, printer: MsrPrinter) -> String {
     let _plain = hpj::HtmlDocGuard::disable();
@@ -356,7 +355,7 @@ pub(crate) fn pretty_sapic_open_node(p: &PlainProcess) -> String {
     }
 }
 
-/// `prettySapicTopLevel = prettySapicTopLevel' rulePrinter` (Print.hs:56):
+/// `prettySapicTopLevel = prettySapicTopLevel' rulePrinter` (Print.hs):
 /// the `process:` / `let` / `equivLemma` block printer and the source of the
 /// SAPIC-generated rule names.
 pub fn pretty_sapic_top_level(p: &PlainProcess) -> String {
@@ -364,7 +363,7 @@ pub fn pretty_sapic_top_level(p: &PlainProcess) -> String {
 }
 
 /// `prettySapicTopLevel' f` with `prettyRuleAttribute`'s local `f`
-/// (Theory/Model/Rule.hs:1324-1327): the `process="..."` rule-attribute value.
+/// (Theory/Model/Rule.hs): the `process="..."` rule-attribute value.
 pub fn pretty_sapic_top_level_attr(p: &PlainProcess) -> String {
     pretty_sapic_top_level_with(p, MsrPrinter::Attribute)
 }
@@ -441,9 +440,9 @@ mod tests {
         let y = VTerm::Lit(Lit::Var(sv("y", 1, None)));
         let applied = tamarin_term::term::f_app_ac(AcSym::AcFct(f), vec![x, y]);
         assert_eq!(pretty_sapic_term(&applied), "(x.1 f y.1)");
-        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs:304):
+        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs):
         // the bare name, no parens.  `f_app_ac` rejects an empty argument list
-        // (HS `fAppAC` errors likewise, Raw.hs:120), so no theory text reaches
+        // (HS `fAppAC` errors likewise, Raw.hs), so no theory text reaches
         // this arm — it is here to keep the printer the shape of `prettyTerm`.
         let nullary: SapicTerm = VTerm::App(FunSym::Ac(AcSym::AcFct(f)), vec![].into());
         assert_eq!(pretty_sapic_term(&nullary), "f");
@@ -499,7 +498,7 @@ mod tests {
              (Longer( cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1) ))"
         );
         // The derived rule name is `filter isAlpha` over the same string
-        // (Sapic/Facts.hs:401#stripNonAlphanumerical), so the break leaves it
+        // (Sapic/Facts.hs#stripNonAlphanumerical), so the break leaves it
         // untouched.
         let name: String = got.chars().filter(|c| c.is_alphabetic()).collect();
         assert_eq!(
@@ -520,7 +519,7 @@ mod tests {
     #[test]
     fn cond_renders_user_ac_flattened_sorted_and_infix() {
         // `^` is a term operator only under `builtins: diffie-hellman`
-        // (Theory/Text/Parser/Term.hs:179-185).
+        // (Theory/Text/Parser/Term.hs).
         // With `add` an ordinary function symbol the application stays
         // prefix, which is what makes the AC assertions below discriminating.
         assert_eq!(
@@ -607,11 +606,11 @@ mod tests {
         );
     }
 
-    /// `prettyFact`'s annotation suffix (Theory/Model/Fact.hs:573-574) reaches
+    /// `prettyFact`'s annotation suffix (Theory/Model/Fact.hs) reaches
     /// the embedded MSR through `rulePrinter`'s `ppFact = prettyFact $
-    /// prettyTerm $ text . show` (Print.hs:43), so an annotated fact carries
+    /// prettyTerm $ text . show` (Print.hs), so an annotated fact carries
     /// its `[…]` into the `process="…"` attribute — and, through
-    /// `filter isAlpha` (Sapic/Facts.hs:401#stripNonAlphanumerical), into the
+    /// `filter isAlpha` (Sapic/Facts.hs#stripNonAlphanumerical), into the
     /// derived rule name.
     ///
     /// Oracle bytes (pinned build, Git revision ef3f0468) for
@@ -676,7 +675,7 @@ mod tests {
              \x20[ ];"
         );
         // The derived rule name is `filter isAlpha` over the same string
-        // (Sapic/Facts.hs:401#stripNonAlphanumerical), so the breaks leave it
+        // (Sapic/Facts.hs#stripNonAlphanumerical), so the breaks leave it
         // untouched.
         let name: String = got.chars().filter(|c| c.is_alphabetic()).collect();
         assert_eq!(

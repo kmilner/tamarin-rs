@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of `Theory.Sapic.{Position, Term, Annotation, Process}` from
 //! `lib/theory/src/Theory/Sapic/`.
@@ -58,7 +57,7 @@ pub fn pretty_position(p: &ProcessPosition) -> String {
 /// SAPIC variables carry an optional type tag (`Some("node")`, `Some("Any")`, …).
 pub type SapicType = Option<String>;
 
-/// HS `defaultSapicTypeS` (Theory/Sapic/Term.hs:94-95).
+/// HS `defaultSapicTypeS` (Theory/Sapic/Term.hs).
 pub(crate) const DEFAULT_SAPIC_TYPE: &str = "Any";
 
 pub(crate) fn default_sapic_node_type() -> SapicType {
@@ -83,8 +82,8 @@ impl SapicLVar {
     }
 }
 
-/// HS `instance Show SapicLVar` (Theory/Sapic/Term.hs:108-110): the variable's
-/// own `Show LVar` (Term/LTerm.hs:550-557), followed by `":" ++ t` when the
+/// HS `instance Show SapicLVar` (Theory/Sapic/Term.hs): the variable's
+/// own `Show LVar` (Term/LTerm.hs), followed by `":" ++ t` when the
 /// variable carries a type tag.
 impl std::fmt::Display for SapicLVar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -101,13 +100,13 @@ pub type SapicNTerm<V> = VTerm<Name, V>;
 pub type SapicTerm = SapicNTerm<SapicLVar>;
 pub type SapicNFact<V> = Fact<SapicNTerm<V>>;
 pub type SapicLNFact = Fact<SapicTerm>;
-/// HS `SapicNFormula v` (Theory/Sapic/Term.hs:73) — the same declaration as
-/// HS `SyntacticNFormula v` (Theory/Model/Formula.hs:264).
+/// HS `SapicNFormula v` (Theory/Sapic/Term.hs) — the same declaration as
+/// HS `SyntacticNFormula v` (Theory/Model/Formula.hs).
 pub type SapicNFormula<V> = SyntacticNFormula<V>;
-/// HS `SapicFormula` (Theory/Sapic/Term.hs:74).
+/// HS `SapicFormula` (Theory/Sapic/Term.hs).
 pub type SapicFormula = SapicNFormula<SapicLVar>;
 
-/// HS `toLFormula` (Theory/Sapic/Term.hs:152-154): replace each free
+/// HS `toLFormula` (Theory/Sapic/Term.hs): replace each free
 /// variable by its `LVar`, dropping the type tag.  The four nested `fmap`s
 /// under `mapAtoms` reach the atom's terms, each term's literals, each
 /// literal's variable and the `BVar` inside it, so a bound De Bruijn index
@@ -209,10 +208,10 @@ pub enum SapicAction<V> {
         concs: Vec<SapicNFact<V>>,
         /// Embedded `_restrict(...)` formulas attached to the MSR's action row
         /// (`[l]--[a restricting φ]->[r]`).  HS `iRest :: [SapicNFormula v]`
-        /// (Theory/Sapic/Process.hs:81): each is a locally-nameless formula
+        /// (Theory/Sapic/Process.hs): each is a locally-nameless formula
         /// over the process's own variable type, with the parser's `Pred`
         /// sugar left un-expanded — the base translation (`baseTransAction`
-        /// MSR, Basetranslation.hs:200-203) hands them to the rule's 4th
+        /// MSR, Basetranslation.hs) hands them to the rule's 4th
         /// (restriction) component, where the SAPIC rule injection
         /// (`tamarin_sapic::apply`, HS `liftedAddProtoRule`) expands the
         /// predicates.
@@ -227,7 +226,7 @@ pub enum ProcessCombinator<V> {
     /// Non-deterministic choice.
     Ndc,
     /// `if <formula> then .. else ..`.  HS `Cond (SapicNFormula v)`
-    /// (Theory/Sapic/Process.hs:94): the condition is a
+    /// (Theory/Sapic/Process.hs): the condition is a
     /// locally-nameless formula over the process's own variable type, with
     /// the parser's `Pred` sugar left un-expanded — the SAPIC rule injection
     /// (`tamarin_sapic::apply`, HS `liftedAddProtoRule`) expands it once the
@@ -408,7 +407,7 @@ mod shared_process_order_tests {
 // Term traversals
 // =============================================================================
 
-/// `mapTermsAction ft ff fv ac` (Theory/Sapic/Process.hs:140-157): rebuild an
+/// `mapTermsAction ft ff fv ac` (Theory/Sapic/Process.hs): rebuild an
 /// action, sending every term through `ft`, every embedded formula through
 /// `ff` and every variable the action carries on its own through `fv`.
 pub fn map_terms_action<T, V>(
@@ -429,7 +428,7 @@ where
     }
 }
 
-/// `mapTermsComb ft ff fv c` (Theory/Sapic/Process.hs:159-170): the
+/// `mapTermsComb ft ff fv c` (Theory/Sapic/Process.hs): the
 /// [`map_terms_action`] counterpart for a process combinator.
 pub fn map_terms_comb<T, V>(
     mut ft: impl FnMut(&SapicNTerm<T>) -> SapicNTerm<V>,
@@ -449,7 +448,7 @@ where
     }
 }
 
-/// `traverseTermsAction ft ff fv ac` (Theory/Sapic/Process.hs:242-268) over the
+/// `traverseTermsAction ft ff fv ac` (Theory/Sapic/Process.hs) over the
 /// `Either` applicative: [`map_terms_action`] with fallible handlers, stopping
 /// at the first error in the visit order HS's `<*>` chain fixes.
 pub fn traverse_terms_action<T, V, E>(
@@ -510,7 +509,7 @@ where
     })
 }
 
-/// `traverseTermsComb ft ff fv c` (Theory/Sapic/Process.hs:270-283) over the
+/// `traverseTermsComb ft ff fv c` (Theory/Sapic/Process.hs) over the
 /// `Either` applicative: the [`traverse_terms_action`] counterpart for a
 /// process combinator.
 pub fn traverse_terms_comb<T, V, E>(
@@ -541,7 +540,7 @@ where
 }
 
 /// Visit every node in the process tree. Traversal order matches Haskell
-/// `pfoldMap` (Theory/Sapic/Process.hs:285-296):
+/// `pfoldMap` (Theory/Sapic/Process.hs):
 /// - `Null`: just the node itself.
 /// - `Action`: self first, then the body.
 /// - `Comb`: in-order — left subtree, then self, then right subtree
@@ -624,20 +623,20 @@ impl PatternSapicLVar {
 }
 
 /// `freesSapicTerm`: free variables of a SAPIC term, in source order, with
-/// duplicates (HS Sapic/Term.hs:131-132, `freesSapicTerm = foldMap (: [])` —
+/// duplicates (HS Sapic/Term.hs, `freesSapicTerm = foldMap (: [])` —
 /// a plain in-order traversal, neither sorted nor deduplicated).
 ///
 /// Order and duplicates are load-bearing: `bindingsAct`/`bindingsComb`
-/// (Sapic/Bindings.hs:22-33) apply `nub` (first-occurrence dedup) to this
+/// (Sapic/Bindings.hs) apply `nub` (first-occurrence dedup) to this
 /// list, and that ordered list flows into the not-yet-ported
-/// `Typing.mkSubst`, where `mapM freshLVar bvars` (Sapic/Typing.hs:267-269)
+/// `Typing.mkSubst`, where `mapM freshLVar bvars` (Sapic/Typing.hs)
 /// assigns fresh indices in binding-list order. Do not sort/dedup here.
 pub fn frees_sapic_term(t: &SapicTerm) -> Vec<SapicLVar> {
     tamarin_term::vterm::vars_vterm_in_order(t)
 }
 
 /// `freesSapicFact`: free variables of a SAPIC fact, in source order, with
-/// duplicates (HS Sapic/Term.hs:136-137, `freesSapicFact = foldMap
+/// duplicates (HS Sapic/Term.hs, `freesSapicFact = foldMap
 /// freesSapicTerm` — a plain `concatMap` over the fact's terms; no sort, no
 /// dedup). See [`frees_sapic_term`] for why order/duplicates matter.
 pub fn frees_sapic_fact(f: &Fact<SapicTerm>) -> Vec<SapicLVar> {
@@ -661,7 +660,7 @@ pub fn subst_fact(subst: &SapicSubst, f: &SapicLNFact) -> SapicLNFact {
     f.map_ref(|t| subst_term(subst, t))
 }
 
-/// `applyMatchVars subst vs` (Theory/Sapic/Process.hs:304-309): a match
+/// `applyMatchVars subst vs` (Theory/Sapic/Process.hs): a match
 /// variable is replaced by every variable of its image under `subst`, and kept
 /// as it is when `subst` does not define it.  Matching `=t` against a
 /// substituted compound term binds the term's own variables instead of the
@@ -683,7 +682,7 @@ where
     out
 }
 
-/// `applyMatchVars' f vs` (Theory/Sapic/Process.hs:313-317): the same rewrite
+/// `applyMatchVars' f vs` (Theory/Sapic/Process.hs): the same rewrite
 /// driven by a caller-supplied rewrite instead of a substitution.  HS applies
 /// `f` to `varTerm v` and keeps the variables of the result, so the parameter
 /// here is that composite `f . varTerm`.
@@ -705,7 +704,7 @@ where
 // Action / combinator predicates (mirroring Sapic.ProcessUtils)
 //
 // `is_lock`/`is_unlock`/`is_eq` are faithful ports of the corresponding HS
-// predicates (ProcessUtils.hs:54-60,70-72), which are generic over the
+// predicates (ProcessUtils.hs), which are generic over the
 // annotation and inspect only the action/combinator shape.
 // =============================================================================
 

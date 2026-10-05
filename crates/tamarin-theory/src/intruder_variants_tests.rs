@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
 use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
@@ -36,8 +35,8 @@ fn bp_variants_file_parses_to_75_rules() {
 
 /// The 5 constructor rules MUST be present with their HS-canonical
 /// underscore-prefixed names (`c_exp` → `ConstrRule "_exp"`, etc).
-/// HS reference: Theory/Tools/IntruderRules.hs:292-299 +
-/// Theory/Text/Parser/Rule.hs:163-172, see line 171 (`'c':cname → ConstrRule (BC.pack cname)`).
+/// HS reference: Theory/Tools/IntruderRules.hs +
+/// Theory/Text/Parser/Rule.hs (`'c':cname → ConstrRule (BC.pack cname)`).
 #[test]
 fn dh_variants_contains_five_constructors_with_underscore_prefix() {
     let rules = mk_dh_intruder_variants(&dh_maude_sig());
@@ -144,7 +143,7 @@ fn dh_variants_destructors_are_d_exp_or_d_inv_with_limit_0() {
 /// a user-defined AC symbol and a user-defined NoEq symbol may carry the
 /// same name, and only their `FunSym` variant separates them.
 ///
-/// `Ord FunSym` puts `NoEq` before `AC` (FunctionSymbols.hs:150-154), so
+/// `Ord FunSym` puts `NoEq` before `AC` (FunctionSymbols.hs), so
 /// in `S.toList` order the NoEq symbol is the earlier one and `find`
 /// returns it.  An index built by plain `insert` would return the AC one.
 #[test]
@@ -225,7 +224,7 @@ fn parse_intruder_rules_handles_tiny_inline() {
 
 /// Rule names that don't start with `c` or `d` must be rejected.
 /// DELIBERATE DIVERGENCE: HS `intrInfo`'s `case name of` has only the
-/// `'c':cname` and `'d':dname` arms (Theory/Text/Parser/Rule.hs:170-172), so a
+/// `'c':cname` and `'d':dname` arms (Theory/Text/Parser/Rule.hs), so a
 /// third prefix is an incomplete-pattern crash there; we return a parse error
 /// instead.
 #[test]
@@ -244,9 +243,9 @@ fn parse_intruder_rules_rejects_non_c_d_prefix() {
 /// under `dh_maude_sig()`, the rule `[ ] --[ !KU( one ) ]-> [ !KU( one ) ]`
 /// must have ROOT = the 0-arity NoEq application `oneSym{}`, NOT a Msg-sort
 /// var `one` (which would unify with every KU goal, falsely closing 8+ DH
-/// corpus branches).  HS: Theory/Text/Parser/Term.hs:139-153, see line 151
+/// corpus branches).  HS: Theory/Text/Parser/Term.hs
 /// (`nullaryApp` against `funSyms maudeSig`) and
-/// lib/term/src/Term/Term/FunctionSymbols.hs:255-255
+/// lib/term/src/Term/Term/FunctionSymbols.hs
 /// (`oneSym = (oneSymString,(0,Public,Constructor,NotNDC))`).
 #[test]
 fn dh_one_and_dh_neutral_parse_as_constants() {

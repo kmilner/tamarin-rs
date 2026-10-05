@@ -1,6 +1,5 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Port of the `GraphOptions` record from `Graph.hs`.
 //!
@@ -24,7 +23,7 @@ pub struct GraphOptions {
 
 impl Default for GraphOptions {
     fn default() -> Self {
-        // Mirror of `defaultGraphOptions` (Graph.hs:66-73).
+        // Mirror of `defaultGraphOptions` (Graph.hs).
         GraphOptions {
             simplification_level: SimplificationLevel::SL2,
             show_auto_source: false,

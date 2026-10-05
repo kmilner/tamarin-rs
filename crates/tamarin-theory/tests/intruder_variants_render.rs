@@ -1,14 +1,13 @@
-// Currently GPL 3.0 until granted permission by the upstream authors
-// of the tamarin-prover sources this file cites; list them with:
-//   scripts/gen_license_headers.py --authors <this file>
+// Currently GPL 3.0; see README.md for licensing details.
+// Derived from the upstream tamarin-prover sources referenced below.
 
 //! Byte-pins the `tamarin-prover variants` block against the oracle.
 //!
-//! HS `Main.Mode.Intruder.run` (Main/Mode/Intruder.hs:43-63) generates the
+//! HS `Main.Mode.Intruder.run` (Main/Mode/Intruder.hs) generates the
 //! Diffie-Hellman and the bilinear-pairing intruder rules through two
 //! separate maude handles and prints `putStrLn (dhS ++ bpS)`, where each
 //! block is `renderDoc . prettyIntruderVariants`
-//! (Theory/Model/Rule.hs:1464-1466).  `pretty_intruder_variants` is that
+//! (Theory/Model/Rule.hs).  `pretty_intruder_variants` is that
 //! renderer, and the rule bodies come out of `rule::pretty_rule_restr_gen`
 //! over `LNFact`s whose arguments are breakable term Docs, as HS's are.
 //!
@@ -45,7 +44,7 @@ fn expected() -> String {
 /// The subcommand's whole stdout, byte for byte.
 ///
 /// HS starts one maude on `dhMaudeSig` and a second on `bpMaudeSig`
-/// (Main/Mode/Intruder.hs:44-53) and passes `False` for the diff flag in both
+/// (Main/Mode/Intruder.hs) and passes `False` for the diff flag in both
 /// generators.  The two blocks abut with no separating newline, and
 /// `putStrLn` adds the single trailing one.
 #[test]

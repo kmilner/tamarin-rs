@@ -2,15 +2,15 @@
  * The argument order of the commutative `em` inside a guarded formula, under
  * two SIBLING binder prefixes that bind the same name.
  *
- * `formulaToGuarded` (Theory/Constraint/System/Guarded.hs:471-479) threads one
+ * `formulaToGuarded` (Theory/Constraint/System/Guarded.hs) threads one
  * `Precise` supply across the whole formula, so the second prefix's `x` is
  * drawn at index 1, and `fAppC` sorts the two `em` arguments under that index
- * (`fAppC nacsym as = FAPP (C nacsym) (sort as)`, Term/Term/Raw.hs:133-134;
- * `Ord LVar` reads the index first, LTerm.hs:546-548), putting `y` at index 0
- * first.  `prettyGuarded` (Guarded.hs:827-866) opens each `GGuarded` inside
+ * (`fAppC nacsym as = FAPP (C nacsym) (sort as)`, Term/Term/Raw.hs;
+ * `Ord LVar` reads the index first, LTerm.hs), putting `y` at index 0
+ * first.  `prettyGuarded` (Guarded.hs) opens each `GGuarded` inside
  * `scopeFreshness`, so the second prefix is reached with the name `x` still
  * untouched and both binders are drawn at index 0; `openGuarded`
- * (Guarded.hs:364-373) substitutes them through `substBoundAtom`, which
+ * (Guarded.hs) substitutes them through `substBoundAtom`, which
  * rebuilds the application through `fApp` and sorts the pair again.  Two
  * binders at index 0 tie on the index and on the sort, so the name decides
  * and `x` comes first: the echo reads `em(x, y)` where the stored formula

@@ -1,22 +1,22 @@
 // The two formulas a lemma and a restriction print: the source spelling in the
 // header and the macro-expanded one below it.
 //
-// `prettyLemma` (lib/theory/src/Lemma.hs:116-141) quotes the header formula as
-// `fromMaybe expandedFormula ogFormula` (line 121) and converts
-// `expandedFormula` for the guarded block (lines 125,131), so the two read
+// `prettyLemma` (lib/theory/src/Lemma.hs) quotes the header formula as
+// `fromMaybe expandedFormula ogFormula` and converts
+// `expandedFormula` for the guarded block, so the two read
 // DIFFERENT formulas whenever `_lOriginalFormula` is set.  `closeTheory` sets
 // it: `closeTheoryItem` maps `applyMacroInLemma` over every lemma
-// (CloseRule.hs:85), and that stores the pre-macro formula
-// (lib/theory/src/Lemma.hs:83-88).  `prettyRestriction`
-// (TheoryObject.hs:889-901) does the same in its header (line 893) and adds an
-// `expanded formula:` block for `Just` (lines 895-898); its
-// `applyMacroInRestriction` (Theory/Model/Restriction.hs:164-166) runs over
-// every restriction (CloseRule.hs:84), so `PlainRestriction`, which mentions no
+// (CloseRule.hs), and that stores the pre-macro formula
+// (lib/theory/src/Lemma.hs).  `prettyRestriction`
+// (TheoryObject.hs) does the same in its header and adds an
+// `expanded formula:` block for `Just`; its
+// `applyMacroInRestriction` (Theory/Model/Restriction.hs) runs over
+// every restriction (CloseRule.hs), so `PlainRestriction`, which mentions no
 // macro, still carries the block with identical text on both sides.
 //
 // Predicates are not the same expansion.  `liftedAddLemma` and
-// `liftedAddRestriction` (Theory/Text/Parser.hs:129-150) run `expandLemma` and
-// `expandRestriction` (TheoryObject.hs:434-450) at PARSE time, over the formula
+// `liftedAddRestriction` (Theory/Text/Parser.hs) run `expandLemma` and
+// `expandRestriction` (TheoryObject.hs) at PARSE time, over the formula
 // and over an already-stored original alike, so the header of `MacroLemma`
 // reads `m = <x, y>` where the source wrote `IsPairOf(m, x, y)`, while the
 // macro call `wrap(x, y)` survives beside it.  A header taken one expansion too
@@ -24,7 +24,7 @@
 //
 // `wrap` calls `tag`, so the expansion nests, and `tag(<x, y>)` is the term
 // `<'t', <x, y>>`, which prints `<'t', x, y>` — HS pairs are binary
-// (`fAppPair (x,y) = fAppNoEq pairSym [x, y]`, Term/Term.hs:161-163), so a pair
+// (`fAppPair (x,y) = fAppNoEq pairSym [x, y]`, Term/Term.hs), so a pair
 // in the tail is the flat tuple.  The rules between the restrictions and the
 // lemmas keep the pairing positional: a per-item original that drifted by one
 // item would attach `MacroRestriction`'s source formula to `PlainRestriction`.

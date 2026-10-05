@@ -1,6 +1,6 @@
 /*
  * lookupArity-driven argument-list shapes of `naryOpApp`
- * (Theory/Text/Parser/Term.hs:88-105) that no corpus theory reaches:
+ * (Theory/Text/Parser/Term.hs) that no corpus theory reaches:
  *
  *   - h('a','b')   arity-1 head: `k == 1` parses ONE `tupleterm`, so the
  *                  commas fold into a right-associative pair — h(<'a', 'b'>);
