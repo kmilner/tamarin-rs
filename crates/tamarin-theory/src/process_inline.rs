@@ -235,7 +235,12 @@ fn expand_process_call(
         subst,
         fresh: FastFreshState::seeded(seed),
     };
-    expansion.go(p, &reserved.iter().copied().collect(), &BTreeMap::new())
+    expansion.go(
+        p,
+        &reserved.iter().copied().collect(),
+        &BTreeSet::new(),
+        &BTreeMap::new(),
+    )
 }
 
 struct Expansion {
@@ -252,11 +257,11 @@ impl Expansion {
         &mut self,
         used: &BTreeSet<LVar>,
         ann: &crate::sapic::ProcessParsedAnnotation,
-        bound: Vec<SapicLVar>,
+        bound: &[SapicLVar],
     ) -> BTreeMap<LVar, LVar> {
         let generated: BTreeSet<_> = ann.generated_binders.iter().map(|v| v.var).collect();
         bound
-            .into_iter()
+            .iter()
             .map(|v| v.var)
             .filter(|v| {
                 // Pattern formals stand for the caller's supplied syntax,
@@ -272,23 +277,33 @@ impl Expansion {
 
     fn annotation(
         &self,
+        local: &BTreeSet<LVar>,
+        bound: &[SapicLVar],
         ren: &BTreeMap<LVar, LVar>,
         ann: &crate::sapic::ProcessParsedAnnotation,
     ) -> crate::sapic::ProcessParsedAnnotation {
-        let mut ann = rename_annotation(ren, ann);
-        for v in ren.values() {
-            let sv = SapicLVar::untyped(*v);
+        let mut ann = ann.clone();
+        // Closed calls own local binders even before a collision occurs.
+        // Preserve that ownership through open wrappers, but do not mark a
+        // repeated local declaration: it must still fail rebinding checks.
+        let owned = bound
+            .iter()
+            .map(|v| v.var)
+            .filter(|v| self.closed && !local.contains(v) && !self.pattern_parameters.contains(v));
+        for v in ren.keys().copied().chain(owned) {
+            let sv = SapicLVar::untyped(v);
             if !ann.generated_binders.contains(&sv) {
                 ann.generated_binders.push(sv);
             }
         }
-        apply_annotation(&self.subst, ann)
+        apply_annotation(&self.subst, rename_annotation(ren, &ann))
     }
 
     fn go(
         &mut self,
         p: PlainProcess,
         used: &BTreeSet<LVar>,
+        local: &BTreeSet<LVar>,
         env: &BTreeMap<LVar, LVar>,
     ) -> Result<PlainProcess, ConvertError> {
         Ok(match p {
@@ -298,9 +313,10 @@ impl Expansion {
             Process::Action(ac, ann, rest) => {
                 let ac = rename_action(env, &ac);
                 let ann = rename_annotation(env, &ann);
-                let ren = self.freshening(used, &ann, action_binders(&ac));
+                let bound = action_binders(&ac);
+                let ren = self.freshening(used, &ann, &bound);
                 let ac = apply_m_action(&self.subst, &rename_action_binders(&ren, &ac))?;
-                let ann = self.annotation(&ren, &ann);
+                let ann = self.annotation(local, &bound, &ren, &ann);
                 let mut vars = BTreeSet::new();
                 collect_action_vars(&ac, &mut vars);
                 let next = used
@@ -308,15 +324,18 @@ impl Expansion {
                     .copied()
                     .chain(vars.into_iter().map(|v| v.var))
                     .collect();
-                let rest = self.go(*rest, &next, &compose_renaming(&ren, env))?;
+                let mut next_local = local.clone();
+                next_local.extend(action_binders(&ac).into_iter().map(|v| v.var));
+                let rest = self.go(*rest, &next, &next_local, &compose_renaming(&ren, env))?;
                 Process::Action(ac, ann, Box::new(rest))
             }
             Process::Comb(c, ann, l, r) => {
                 let c = rename_comb(env, &c);
                 let ann = rename_annotation(env, &ann);
-                let ren = self.freshening(used, &ann, combinator_binders(&c));
+                let bound = combinator_binders(&c);
+                let ren = self.freshening(used, &ann, &bound);
                 let c = apply_m_comb(&self.subst, &rename_combinator_binders(&ren, &c))?;
-                let ann = self.annotation(&ren, &ann);
+                let ann = self.annotation(local, &bound, &ren, &ann);
                 let mut vars = BTreeSet::new();
                 collect_comb_vars(&c, &mut vars);
                 let next = used
@@ -324,8 +343,10 @@ impl Expansion {
                     .copied()
                     .chain(vars.into_iter().map(|v| v.var))
                     .collect();
-                let l = self.go(*l, &next, &compose_renaming(&ren, env))?;
-                let r = self.go(*r, used, env)?;
+                let mut next_local = local.clone();
+                next_local.extend(combinator_binders(&c).into_iter().map(|v| v.var));
+                let l = self.go(*l, &next, &next_local, &compose_renaming(&ren, env))?;
+                let r = self.go(*r, used, local, env)?;
                 Process::Comb(c, ann, Box::new(l), Box::new(r))
             }
         })
@@ -498,6 +519,36 @@ mod tests {
     use std::collections::BTreeSet;
     use tamarin_term::lterm::LSort;
     use tamarin_term::maude_sig::pair_maude_sig;
+
+    #[test]
+    fn closed_call_ownership_does_not_leak_into_failure_branches() {
+        for prefix in ["lookup 'key' as x", "let x = 'a'"] {
+            let source = format!(
+                "theory ClosedBranches begin
+                 let C() = {prefix} in event Seen(x) else in(x); event Seen(x)
+                 let O = C()
+                 let W(x) = O
+                 process: W('caller')
+                 end"
+            );
+            let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+            let theory = crate::elaborate::elaborate(&parsed).unwrap();
+            let mut binders = Vec::new();
+            crate::sapic::for_each_process(theory.processes().next().unwrap(), &mut |p| {
+                let (bound, ann) = match p {
+                    Process::Action(ac, ann, _) => (action_binders(ac), ann),
+                    Process::Comb(c, ann, _, _) => (combinator_binders(c), ann),
+                    Process::Null(_) => return,
+                };
+                for v in bound {
+                    assert!(ann.generated_binders.iter().any(|owned| owned.var == v.var));
+                    binders.push(v.var);
+                }
+            });
+            assert_eq!(binders.len(), 2, "{prefix}");
+            assert_ne!(binders[0], binders[1], "{prefix}");
+        }
+    }
 
     #[test]
     fn pattern_formals_survive_caller_collisions_and_nested_identity_calls() {

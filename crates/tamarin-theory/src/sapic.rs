@@ -136,7 +136,7 @@ pub struct ProcessParsedAnnotation {
     /// Substitution that maps renamed variables back to the user's
     /// original names. Empty until uniqueness renaming has run.
     pub back_substitution: Subst<Name, LVar>,
-    /// Binders freshened while expanding a call, at this node only.
+    /// Binders freshened or owned by a closed call, at this node only.
     pub generated_binders: Vec<SapicLVar>,
 }
 
