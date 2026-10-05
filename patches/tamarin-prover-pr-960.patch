@@ -15317,6 +15317,86 @@ index 0000000000000000000000000000000000000000..947c4c57d45baef4b4b5c5fc302d50bd
 +    }
 +  ]
 +}
+diff --git a/examples/regression/negative/sapic-nested-closed-rebinding.spthy b/examples/regression/negative/sapic-nested-closed-rebinding.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..9981e618330ab1fd1e2dd0d6d91c63c342c0f43d
+--- /dev/null
++++ b/examples/regression/negative/sapic-nested-closed-rebinding.spthy
+@@ -0,0 +1,20 @@
++theory SapicNestedClosedRebinding
++begin
++
++// Preserving C's scope must not turn two declarations in that same scope
++// into two distinct variables when another definition expands C().
++#ifdef INPUT
++let C() = in(x); in(x); event Seen(x)
++#else
++let C() = new x; new x; event Seen(x)
++#endif
++
++#ifdef CLOSED_WRAPPER
++let O() = C()
++process: O()
++#else
++let O = C()
++process: O
++#endif
++
++end
+diff --git a/examples/regression/negative/sapic-nested-closed-rebinding.spthy.test.json b/examples/regression/negative/sapic-nested-closed-rebinding.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..a78a23a3f3001d0432d2047587c5bedf29d36560
+--- /dev/null
++++ b/examples/regression/negative/sapic-nested-closed-rebinding.spthy.test.json
+@@ -0,0 +1,48 @@
++{
++  "tests": [
++    {
++      "name": "open-new",
++      "args": [
++        "--quit-on-warning"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Variable bound twice"
++      ]
++    },
++    {
++      "name": "open-input",
++      "args": [
++        "--quit-on-warning",
++        "-DINPUT"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Variable bound twice"
++      ]
++    },
++    {
++      "name": "closed-new",
++      "args": [
++        "--quit-on-warning",
++        "-DCLOSED_WRAPPER"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Variable bound twice"
++      ]
++    },
++    {
++      "name": "closed-input",
++      "args": [
++        "--quit-on-warning",
++        "-DCLOSED_WRAPPER",
++        "-DINPUT"
++      ],
++      "exit_code": 1,
++      "contains": [
++        "Variable bound twice"
++      ]
++    }
++  ]
++}
 diff --git a/examples/regression/negative/sapic-parameter-rebound-let.spthy b/examples/regression/negative/sapic-parameter-rebound-let.spthy
 new file mode 100644
 index 0000000000000000000000000000000000000000..9d2a5013ffafaf14161d9baa37df3f2db8eb8df7
@@ -16528,6 +16608,167 @@ index 0000000000000000000000000000000000000000..6808fc4e3ecde42c471f78a6631394a5
 +          "regex": "x\\.[0-9]+:alpha",
 +          "min": 3,
 +          "max": 3
++        }
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/sapic/sapic-nested-closed-scope.spthy b/examples/regression/sapic/sapic-nested-closed-scope.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..90eb934f34c5cbdac6d922eabe1c60721886eba5
+--- /dev/null
++++ b/examples/regression/sapic/sapic-nested-closed-scope.spthy
+@@ -0,0 +1,27 @@
++theory SapicNestedClosedScope
++begin
++
++// C's fresh x belongs to C(), even when an open wrapper introduces the call
++// before an outer definition supplies a parameter with the same name.
++let C() = new x; event Seen(x)
++let O = C()
++let ClosedO() = C()
++
++#ifdef CLOSED_WRAPPER
++let W(x) = ClosedO()
++#endif
++#ifdef DIRECT
++let W(x) = C()
++#endif
++#ifdef RENAMED_PARAMETER
++let W(y) = O
++#endif
++#ifdef not (CLOSED_WRAPPER | DIRECT | RENAMED_PARAMETER)
++let W(x) = O
++#endif
++
++process: W('a')
++lemma reachable: exists-trace "Ex x #i. Seen(x)@i"
++lemma fresh_value: "All x #i. Seen(x)@i ==> not (x = 'a')"
++
++end
+diff --git a/examples/regression/sapic/sapic-nested-closed-scope.spthy.test.json b/examples/regression/sapic/sapic-nested-closed-scope.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..060fc9595f8f073c8cb53d4094a26cbfcb31c6f1
+--- /dev/null
++++ b/examples/regression/sapic/sapic-nested-closed-scope.spthy.test.json
+@@ -0,0 +1,75 @@
++{
++  "tests": [
++    {
++      "name": "open-wrapper",
++      "args": [
++        "--quit-on-warning",
++        "--prove"
++      ],
++      "matches": [
++        {
++          "regex": "reachable \\(exists-trace\\): verified",
++          "min": 1
++        },
++        {
++          "regex": "fresh_value \\(all-traces\\): verified",
++          "min": 1
++        }
++      ]
++    },
++    {
++      "name": "closed-wrapper",
++      "args": [
++        "--quit-on-warning",
++        "--prove",
++        "-DCLOSED_WRAPPER"
++      ],
++      "matches": [
++        {
++          "regex": "reachable \\(exists-trace\\): verified",
++          "min": 1
++        },
++        {
++          "regex": "fresh_value \\(all-traces\\): verified",
++          "min": 1
++        }
++      ]
++    },
++    {
++      "name": "direct",
++      "args": [
++        "--quit-on-warning",
++        "--prove",
++        "-DDIRECT"
++      ],
++      "matches": [
++        {
++          "regex": "reachable \\(exists-trace\\): verified",
++          "min": 1
++        },
++        {
++          "regex": "fresh_value \\(all-traces\\): verified",
++          "min": 1
++        }
++      ]
++    },
++    {
++      "name": "renamed-parameter",
++      "args": [
++        "--quit-on-warning",
++        "--prove",
++        "-DRENAMED_PARAMETER"
++      ],
++      "matches": [
++        {
++          "regex": "reachable \\(exists-trace\\): verified",
++          "min": 1
++        },
++        {
++          "regex": "fresh_value \\(all-traces\\): verified",
++          "min": 1
++        }
++      ]
++    }
++  ]
++}
+diff --git a/examples/regression/sapic/sapic-nested-local-pattern-name.spthy b/examples/regression/sapic/sapic-nested-local-pattern-name.spthy
+new file mode 100644
+index 0000000000000000000000000000000000000000..54f8346c8bdcb70e2a2654cb58889ef08cbf9b14
+--- /dev/null
++++ b/examples/regression/sapic/sapic-nested-local-pattern-name.spthy
+@@ -0,0 +1,14 @@
++theory SapicNestedLocalPatternName
++begin
++
++// pat_x is local to C(), not W's pattern parameter. Passing through an open
++// definition must not make this input match W's argument.
++let C() = in(pat_x); event Seen(pat_x)
++let O = C()
++let W(pat_x) = O
++process: W('a')
++
++lemma another_input: exists-trace "Ex #i. Seen('b')@i"
++lemma only_argument: "All x #i. Seen(x)@i ==> x = 'a'"
++
++end
+diff --git a/examples/regression/sapic/sapic-nested-local-pattern-name.spthy.test.json b/examples/regression/sapic/sapic-nested-local-pattern-name.spthy.test.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..651734f4d5131a5dceb7e9a7451c1d00f3143d9a
+--- /dev/null
++++ b/examples/regression/sapic/sapic-nested-local-pattern-name.spthy.test.json
+@@ -0,0 +1,21 @@
++{
++  "tests": [
++    {
++      "name": "local-pattern-name",
++      "args": [
++        "--quit-on-warning",
++        "--prove"
++      ],
++      "matches": [
++        {
++          "regex": "another_input \\(exists-trace\\): verified",
++          "min": 1
++        },
++        {
++          "regex": "only_argument \\(all-traces\\): falsified",
++          "min": 1
 +        }
 +      ]
 +    }
@@ -18398,7 +18639,7 @@ index 98cb0ca7200d3f2f48cab1384ebcb05159ef1ef7..7ac03df82811e115142c91463d3820eb
      where
          substFromVarList = substFromList . map (second varTerm)
 diff --git a/lib/theory/src/Theory/Sapic/Annotation.hs b/lib/theory/src/Theory/Sapic/Annotation.hs
-index 58c1f81c5b565ee72810eec36a8b4d471b54f535..7342ec13861c0f8cdec765eae8bec41947df11ef 100644
+index 58c1f81c5b565ee72810eec36a8b4d471b54f535..0c329017e6198f685d0b3f7db95bb29ace7a3ac7 100644
 --- a/lib/theory/src/Theory/Sapic/Annotation.hs
 +++ b/lib/theory/src/Theory/Sapic/Annotation.hs
 @@ -18,6 +18,7 @@ module Theory.Sapic.Annotation (
@@ -18421,8 +18662,8 @@ index 58c1f81c5b565ee72810eec36a8b4d471b54f535..7342ec13861c0f8cdec765eae8bec419
      -- 2. only applies to variables bound at this subprocess
      -- 3. maps variables to variable terms
      , backSubstitution :: Subst Name LVar
-+    -- Binders renamed during process expansion, at this node only. An outer
-+    -- call may need to freshen them again to avoid its caller's variables.
++    -- Binders renamed or owned by a closed call during expansion, at this node
++    -- only. An outer call may need to freshen them to avoid caller variables.
 +    , generatedBinders :: [SapicLVar]
      }
      deriving (Eq, Ord, Show, Generic)
@@ -18508,7 +18749,7 @@ index e7d5ec9c5e24d83d12ba75ac43e1bd54022c090c..e8c29952d6b25cb31c76fdc080562b16
      where
          freesPatternFactList = foldMap (foldMap freesPatternSapicLVar)
 diff --git a/lib/theory/src/Theory/Sapic/Process.hs b/lib/theory/src/Theory/Sapic/Process.hs
-index feb7c2aceb658650655a5db7681733d8eb9b942b..4dda97d78fbc1952a15c4a26e3a44c808a873a4a 100644
+index feb7c2aceb658650655a5db7681733d8eb9b942b..6844cfcff04982bd7915b19211a25d24c2707e59 100644
 --- a/lib/theory/src/Theory/Sapic/Process.hs
 +++ b/lib/theory/src/Theory/Sapic/Process.hs
 @@ -35,8 +35,17 @@ module Theory.Sapic.Process (
@@ -18574,7 +18815,7 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..4dda97d78fbc1952a15c4a26e3a44c80
  -------------------------
  -- Applying substitutions ( with error messages )
  -------------------------
-@@ -408,20 +432,139 @@ instance ApplyM SapicSubst (SapicAction SapicLVar)
+@@ -408,20 +432,144 @@ instance ApplyM SapicSubst (SapicAction SapicLVar)
          where lvarName' (SapicLVar v _ ) = lvarName v
  
  
@@ -18661,7 +18902,7 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..4dda97d78fbc1952a15c4a26e3a44c80
 +expandProcessCall :: (GoodAnnotation ann, MonadThrow m)
 +                  => Maybe [SapicLVar] -> [LVar] -> SapicSubst -> LProcess ann -> m (LProcess ann)
 +expandProcessCall parameters reserved original proc =
-+    evalFreshTAvoiding (go (fromList reserved) (substFromList [] :: Subst Name LVar) proc) avoidVars
++    evalFreshTAvoiding (go (fromList reserved) Set.empty (substFromList [] :: Subst Name LVar) proc) avoidVars
 +  where
 +    -- Scope is indexed by LVar throughout SAPIC. Type annotations constrain
 +    -- occurrences, but must never change which variable gets substituted.
@@ -18687,18 +18928,21 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..4dda97d78fbc1952a15c4a26e3a44c80
 +          -- preserved for validation.
 +          -- Pattern parameters are replaced by the argument itself; renaming
 +          -- them here would remove them from the substitution's domain.
-+          patternParameter v = (v `member` formals || Map.member v images) &&
-+                               "pat_" `Data.List.isPrefixOf` lvarName v
 +          captures = Data.List.filter (\v -> not (patternParameter v) &&
 +                                 (v `member` incoming ||
 +                                  (isJust parameters && v `member` callerScope) ||
 +                                  (v `member` generated && v `member` used))) bound
 +      fresh <- mapM (\v -> freshLVar (lvarName v) (lvarSort v)) captures
 +      return $ substFromList $ zip captures (map varTerm fresh)
-+    markGenerated ren ann = mapProcessParsedAnnotation (\parsed -> parsed
-+      { generatedBinders = nub $ generatedBinders parsed
-+                            ++ map (`SapicLVar` Nothing) (varsRange ren) }) (applyAnn ren ann)
-+    go used env p = case p of
++    patternParameter v = (v `member` formals || Map.member v images) &&
++                         "pat_" `Data.List.isPrefixOf` lvarName v
++    -- A closed call owns its local binders even before a name collision.
++    -- Remember them through open wrappers, which may introduce a caller clash.
++    -- Do not mark a repeated local binder: it must still fail rebinding checks.
++    markGenerated local bound ren ann = applyAnn ren $ mapProcessParsedAnnotation (\parsed -> parsed
++      { generatedBinders = nub $ generatedBinders parsed ++ map (`SapicLVar` Nothing)
++          (dom ren ++ [v | isJust parameters, v <- bound, v `Set.notMember` local, not (patternParameter v)]) }) ann
++    go used local env p = case p of
 +      ProcessNull ann -> ProcessNull <$> applyM subst (applyAnn env ann)
 +      ProcessAction ac ann rest -> do
 +        let ac0 = apply env ac
@@ -18707,8 +18951,9 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..4dda97d78fbc1952a15c4a26e3a44c80
 +        ren <- freshening used ann0 bound
 +        let ac1 = renameActionBinders ren ac0
 +        ac' <- applyM subst ac1
-+        ann' <- applyM subst (markGenerated ren ann0)
-+        rest' <- go (Set.union (fromList $ map toLVar $ F.toList ac') used) (ren `compose` env) rest
++        ann' <- applyM subst (markGenerated local bound ren ann0)
++        rest' <- go (Set.union (fromList $ map toLVar $ F.toList ac') used)
++                    (Set.union (fromList $ map toLVar $ actionBinders ac') local) (ren `compose` env) rest
 +        return $ ProcessAction ac' ann' rest'
 +      ProcessComb comb ann left right -> do
 +        let comb0 = apply env comb
@@ -18717,10 +18962,11 @@ index feb7c2aceb658650655a5db7681733d8eb9b942b..4dda97d78fbc1952a15c4a26e3a44c80
 +        ren <- freshening used ann0 bound
 +        let comb1 = renameCombinatorBinders ren comb0
 +        comb' <- applyM subst comb1
-+        ann' <- applyM subst (markGenerated ren ann0)
-+        left' <- go (Set.union (fromList $ map toLVar $ F.toList comb') used) (ren `compose` env) left
++        ann' <- applyM subst (markGenerated local bound ren ann0)
++        left' <- go (Set.union (fromList $ map toLVar $ F.toList comb') used)
++                    (Set.union (fromList $ map toLVar $ combinatorBinders comb') local) (ren `compose` env) left
 +        -- Let/lookup failure branches retain the incoming environment.
-+        right' <- go used env right
++        right' <- go used local env right
 +        return $ ProcessComb comb' ann' left' right'
 +
 +instance (GoodAnnotation ann) => ApplyM SapicSubst (LProcess ann) where
