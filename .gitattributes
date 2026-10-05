@@ -1,3 +1,27 @@
 # Patch payloads preserve upstream whitespace and unified-diff context markers.
 # Mark them as generated so GitHub collapses them in its default diff view.
 patches/*.patch -whitespace linguist-generated=true
+
+# Captured CLI outputs and provenance; cases.tsv and input theories are authored.
+crates/tamarin-prover/tests/fixtures/cli_refs/*.stdout linguist-generated=true
+crates/tamarin-prover/tests/fixtures/cli_refs/CAPTURED.tsv linguist-generated=true
+crates/tamarin-prover/tests/fixtures/*_traces.dot linguist-generated=true
+crates/tamarin-prover/tests/fixtures/*_traces.json linguist-generated=true
+
+# Captured web responses and an oracle-produced analyzed theory.
+crates/tamarin-server/tests/fixtures/haskell-responses/** linguist-generated=true
+crates/tamarin-server/tests/fixtures/BigTermProved.spthy linguist-generated=true
+
+# Captured graph, intruder-variant, and wellformedness report baselines.
+crates/tamarin-theory/tests/assets/hsjson_*.json linguist-generated=true
+crates/tamarin-theory/tests/assets/intruder_variants.expected linguist-generated=true
+tests/wellformedness_fixtures/reports/*.report linguist-generated=true
+
+# Generated parity references; keep corpus lists, flags, and ledgers reviewable.
+scripts/ci_ref_fast.tsv linguist-generated=true
+scripts/divergence_fixtures/expected/*.hs.txt linguist-generated=true
+scripts/divergence_fixtures/expected/*.rs.txt linguist-generated=true
+scripts/divergence_fixtures/expected/oracle_rev linguist-generated=true
+
+# Cargo's generated dependency lockfile.
+Cargo.lock linguist-generated=true
