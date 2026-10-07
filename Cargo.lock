@@ -1373,6 +1373,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "tamarin-build"
+version = "1.13.0"
+
+[[package]]
 name = "tamarin-parser"
 version = "1.13.0"
 dependencies = [
@@ -1423,6 +1427,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tamarin-accountability",
+ "tamarin-build",
  "tamarin-parser",
  "tamarin-sapic",
  "tamarin-term",
@@ -1440,6 +1445,7 @@ dependencies = [
 name = "tamarin-term"
 version = "1.13.0"
 dependencies = [
+ "tamarin-build",
  "tamarin-test-support",
  "tamarin-utils",
 ]

@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Repository setup.
 #
-#   ./setup.sh            initialise the tamarin-prover submodule (pristine
-#                         upstream checkout at the pinned commit).  This is
-#                         all a plain `cargo build` needs: the build embeds
-#                         tamarin-prover/data/intruder_variants_{dh,bp}.spthy
-#                         at compile time, the web server serves the
-#                         submodule's data/ assets, and the example corpus
-#                         lives at tamarin-prover/examples/.
+#   ./setup.sh            initialise/update the tamarin-prover submodule to
+#                         the pinned commit. Cargo initializes a missing checkout
+#                         automatically; this explicit setup also updates an
+#                         existing checkout. The Rust build embeds its intruder
+#                         variants and GUI assets; tests use its example corpus.
+#
+#   ./setup.sh gui        additionally build the browser assets (requires
+#                         Node.js 22.12+ or 24+) in target/gui for frontend
+#                         development. Cargo builds its embedded GUI automatically.
 #
 #   ./setup.sh testing    additionally materialise a PATCHED copy of the
 #                         Haskell prover at tamarin-prover-testing/ and build
@@ -30,6 +32,10 @@ series="$root/patches/series"
 
 git -C "$root" submodule update --init tamarin-prover
 echo "submodule ready (pristine upstream @ $(git -C "$sub" rev-parse --short HEAD))"
+
+if [ "${1:-}" = "gui" ]; then
+    exec bash "$root/scripts/build_gui.sh"
+fi
 
 [ "${1:-}" = "testing" ] || exit 0
 

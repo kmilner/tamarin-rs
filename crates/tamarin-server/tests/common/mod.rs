@@ -11,9 +11,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tamarin_server::{
-    handlers::static_files::resolve_data_dir, router, AppState, ServerConfig, TheoryStore,
-};
+use tamarin_server::{router, AppState, ServerConfig, TheoryStore};
 
 /// One running test server.
 pub struct TestServer {
@@ -120,7 +118,7 @@ pub async fn start_server_with_theory_and(
 
     // Resolve a real data dir if we have one; tests that don't touch
     // /static won't care if it doesn't exist.
-    let data_dir = resolve_data_dir(Some(workspace_root().join("tamarin-prover/data")));
+    let data_dir = Some(workspace_root().join("tamarin-prover/data"));
 
     // One probe, shared by the config and the eager load below, so the two
     // cannot disagree about which binary they mean.

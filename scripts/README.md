@@ -1,12 +1,12 @@
-# scripts/ — parity gates, caches, and triage tools
+# scripts/ — GUI builds, tests, parity gates, and triage tools
 
 Per-script reference. For *which* gates to run and in what order, start from
 the verification ladder in [`../TESTING.md`](../TESTING.md).
 
-Every script compares the Rust port (`target/release/tamarin-rs`) against the
+The parity gates compare the Rust port (`target/release/tamarin-rs`) against the
 patched Haskell oracle (`../tamarin-prover-testing/`, built by
 `./setup.sh testing`). Result TSVs land in `results/` (gitignored).
-Most scripts take `ALLOWLIST=` (file of corpus-relative paths) to run a
+Most gates take `ALLOWLIST=` (file of corpus-relative paths) to run a
 subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
 
 **Build the port first.** Every gate checks an in-tree `target/` binary against
@@ -16,6 +16,27 @@ cannot be attributed to this checkout by its timestamps, so it is content-
 fingerprinted for the duration of the run but its source provenance remains
 the caller's responsibility. `target/release/tamarin-rs <theory> | grep
 '^Git revision:'` says what a gate actually measured.
+
+## GUI build and browser tests
+
+Cargo invokes `build_gui.sh` automatically to compile the frontend with npm
+in its build output directory, then embeds those assets in the binary. It
+initializes the upstream submodule when missing. Node.js and npm are build
+dependencies; the installed binary needs no separate GUI files.
+
+`cargo_binary_path.mjs` reads Cargo's JSON build output for `make install`, so
+installation finds the correct executable when a Cargo build target is configured.
+
+For standalone frontend development, `./setup.sh gui` or `make frontend`
+prepares `target/gui/frontend/dist`. The helper accepts an optional output
+directory as its first argument; `make frontend` uses `CARGO_TARGET_DIR/gui`.
+These standalone files are not inputs to Cargo's embedded GUI build.
+
+`test_gui.mjs` checks a copied binary in Chromium, including page loading,
+embedded and standalone graphs, and server-rendered SVG. See the
+[GUI browser regression instructions](../TESTING.md#gui-browser-regression)
+for the Playwright dependencies and invocation. It needs Maude and Graphviz,
+and does not use the Haskell oracle.
 
 ## The HS reference caches
 

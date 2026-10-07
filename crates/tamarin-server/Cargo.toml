@@ -35,5 +35,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tamarin-test-support = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "multipart"] }
 
+[build-dependencies]
+tamarin-build = { workspace = true }
+
 [lints]
 workspace = true

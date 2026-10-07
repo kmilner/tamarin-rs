@@ -13,5 +13,8 @@ tamarin-utils = { workspace = true }
 [dev-dependencies]
 tamarin-test-support = { workspace = true }
 
+[build-dependencies]
+tamarin-build = { workspace = true }
+
 [lints]
 workspace = true

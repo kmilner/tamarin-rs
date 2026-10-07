@@ -4,8 +4,8 @@
 //! HTTP server for the Tamarin prover (Rust port) interactive UI.
 //!
 //! Goal: serve the existing `frontend/` (TypeScript + d3 + viz-js)
-//! and the static assets under `data/` (jQuery, CSS, images) without
-//! modifying any frontend code.  The route shape closely mirrors
+//! and the static assets under `data/` (jQuery, CSS, images), embedded into
+//! the binary at compile time. The route shape closely mirrors
 //! Haskell's `Web.Dispatch` — same URL layout and the same JSON
 //! response envelope (`{ html, title }` / `{ alert }` / `{ redirect }`)
 //! used by the progressive UI.
@@ -70,8 +70,8 @@ use std::sync::Arc;
 pub struct ServerConfig {
     /// Address to bind, e.g. `127.0.0.1:3001`.
     pub bind_addr: SocketAddr,
-    /// Path to the `data/` directory (CSS, JS, images, fonts).
-    pub data_dir: PathBuf,
+    /// Optional override for the embedded GUI (CSS, JS, images, fonts).
+    pub data_dir: Option<PathBuf>,
     /// Path to the bundled frontend output (`frontend/dist/`), if any.
     pub frontend_dist: Option<PathBuf>,
     /// Path to the Maude binary.
@@ -111,10 +111,14 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    pub fn new(bind_addr: SocketAddr, data_dir: PathBuf, maude_path: String) -> Self {
+    pub fn new(
+        bind_addr: SocketAddr,
+        data_dir: impl Into<Option<PathBuf>>,
+        maude_path: String,
+    ) -> Self {
         Self {
             bind_addr,
-            data_dir,
+            data_dir: data_dir.into(),
             frontend_dist: None,
             maude_path,
             derivcheck_timeout: 5,
@@ -152,6 +156,9 @@ pub async fn serve(
     cfg: ServerConfig,
     theory_paths: Vec<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(data_dir) = &cfg.data_dir {
+        handlers::static_files::validate_assets(data_dir, cfg.frontend_dist.as_deref())?;
+    }
     init_process_globals();
 
     let store = TheoryStore::default();
@@ -202,7 +209,7 @@ pub async fn serve(
     // trailing space after "at" and the indented URL line.
     println!(
         "Finished loading theories ... server ready at \n\n    http://{}\n",
-        cfg.bind_addr,
+        listener.local_addr()?,
     );
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
