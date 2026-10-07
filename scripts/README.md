@@ -462,8 +462,8 @@ walks the RS test harness's ladder because its captures must use the maude
   script stops with an error. It never falls through to a different compiler.
   `--file Main.hs` runs a whole Haskell program verbatim. Use `--file` for a
   session that derives a dozen related cases with shared bindings.
-- **`bench.sh`** — RS-vs-HS wall/RSS benchmark; emits the README's markdown
-  tables.
+- **`bench.sh`** — RS-vs-HS wall/RSS benchmark; emits the
+  [performance tables](../docs/PERFORMANCE.md). Use `--write` to update that document.
 - **`../prove_and_reverify.sh`** (repo root) — prove with tamarin-rs, re-check
   the emitted proofs with the Haskell prover; stdout is the re-verified proof
   file.
@@ -580,7 +580,7 @@ For an exact historical implementation, use a commit-pinned permalink.
 
 GPL notices are explicit and maintained independently of these references.
 Adding, changing, or removing a reference must not automatically add or remove
-a licence notice. See [the licensing notes](../README.md#license).
+a licence notice. See [the licensing notes](../docs/LICENSING.md).
 
 ## Data files (tracked)
 

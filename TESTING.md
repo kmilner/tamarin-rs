@@ -213,7 +213,7 @@ fast gates do need the oracle binary present to address it.**
 | `scripts/corpus_file_diff.sh` | the ground-truth batch gate: 432-file `--prove` byte parity (~30–60 min cold) |
 | `scripts/pe_sweep.sh` / `module_sweep.sh` / `json_sweep.sh` | the same sweeps over their full corpora |
 | `ALLOWLIST=<filelist> scripts/web_parity.sh` | interactive-mode gate: crawl + HTML byte comparison |
-| `scripts/bench.sh` | performance tables (see README) |
+| `scripts/bench.sh` | performance tables (see [results](docs/PERFORMANCE.md)) |
 
 **CI enforces `cargo fmt`, clippy,
 `cargo test --workspace`, the 18-file wellformedness roster,
@@ -993,4 +993,4 @@ exits 2 rather than running with a private fallback.
 | Script | Purpose |
 |---|---|
 | `bump_submodule.sh` | submodule bump: patch rebase, oracle rebuild, automatic server-fixture refresh, and explicit re-certification checklist (the caches self-invalidate, so none is archived) |
-| `bench.sh` | RS-vs-HS wall-clock + memory tables (`--write` regenerates the README block) |
+| `bench.sh` | RS-vs-HS wall-clock + memory tables (`--write` regenerates `docs/PERFORMANCE.md`) |
