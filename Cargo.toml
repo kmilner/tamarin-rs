@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/tamarin-build",
     "crates/tamarin-utils",
     "crates/tamarin-term",
     "crates/tamarin-theory",
@@ -20,6 +21,7 @@ license = "GPL-3.0"
 repository = "https://github.com/tamarin-prover/tamarin-prover"
 
 [workspace.dependencies]
+tamarin-build = { path = "crates/tamarin-build", version = "1.13.0" }
 tamarin-utils = { path = "crates/tamarin-utils", version = "1.13.0" }
 tamarin-term = { path = "crates/tamarin-term", version = "1.13.0" }
 tamarin-theory = { path = "crates/tamarin-theory", version = "1.13.0" }

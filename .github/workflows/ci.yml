@@ -9,10 +9,11 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      # The submodule supplies data embedded by tamarin-theory at compile time.
+      # Exercise Cargo's automatic submodule initialization on a fresh checkout.
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
         with:
-          submodules: true
+          node-version: '24'
       - run: rustup update stable --no-self-update && rustup default stable
       - name: Formatting
         run: cargo fmt --all --check
@@ -37,6 +38,9 @@ jobs:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Install lld
         run: command -v ld.lld >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq lld)
       # Graphviz: two tests run a real `dot`.  The first is the success-path
@@ -56,9 +60,8 @@ jobs:
           sudo unzip -q /tmp/maude.zip -d /opt/maude
           sudo chmod +x /opt/maude/maude
       # MAUDE_PATH: every crate's maude-gated tests honour this env override.
-      # Without it they skip SILENTLY — their fallback probes check hardcoded
-      # paths (/usr/local/bin, CWD), never $PATH — and the suite reports the
-      # skipped tests as passes.
+      # Pin the test harness to this installation. Missing Maude fails tests
+      # unless TAM_ALLOW_NO_MAUDE=1 explicitly opts into skipping them.
       # PATH too: the port itself resolves a bare `maude` the way HS does
       # (/usr/local/bin, /usr/bin, then $PATH) and does NOT read MAUDE_PATH,
       # so tests that drive the real CLI paths — `--version`'s ensureMaude
@@ -70,6 +73,12 @@ jobs:
       - run: export PATH="/opt/maude:$PATH" && cargo test --profile ci --workspace
         env:
           MAUDE_PATH: /opt/maude/maude
+      - name: GUI browser regression
+        run: |
+          npm install --prefix target/gui-browser-test --no-audit --no-fund --no-save playwright@1.63.0
+          target/gui-browser-test/node_modules/.bin/playwright install --with-deps chromium
+          export PATH="/opt/maude:$PATH"
+          node scripts/test_gui.mjs
       # The bypass path deliberately recomputes sources per context. Keep it
       # in a separate process: environment-gate changes are not thread-safe
       # inside the parallel Rust test harness.
@@ -122,6 +131,9 @@ jobs:
           submodules: true
       - run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       # The focused harness tests fingerprint Graphviz as part of web-cache
       # producer identity; keep that dependency explicit in this job too.
       - name: Install Graphviz

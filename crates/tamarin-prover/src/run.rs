@@ -595,14 +595,11 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     };
     let bind_addr = SocketAddr::new(ip, port);
 
-    // Resolve data dir. Without an explicit flag, look for `data/`
-    // alongside the working directory or its ancestors — the same
-    // search the server already exposes via `resolve_data_dir`.
-    let data_dir = tamarin_server::handlers::static_files::resolve_data_dir(
-        args.data_dir.clone().map(PathBuf::from),
-    );
-    // Try to discover a sibling frontend/dist for the bundled UI assets.
-    let frontend_dist = guess_frontend_dist(&data_dir);
+    // Use the embedded GUI unless the user explicitly overrides it.
+    let data_dir = args.data_dir.clone().map(PathBuf::from);
+    let frontend_dist = data_dir
+        .as_deref()
+        .and_then(tamarin_server::handlers::static_files::frontend_dist);
 
     let mut cfg =
         tamarin_server::ServerConfig::new(bind_addr, data_dir, maude_invocation_path(args));
@@ -755,18 +752,6 @@ fn collect_theory_paths(in_files: &[String]) -> Result<Vec<std::path::PathBuf>, 
     }
     out.sort();
     Ok(out)
-}
-
-/// Best-effort: locate the bundled `frontend/dist/` sibling of `data/`.
-/// Returns None if not found — the server tolerates this and just
-/// won't serve the frontend assets.
-fn guess_frontend_dist(data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let parent = data_dir.parent()?;
-    let candidate = parent.join("frontend").join("dist");
-    if candidate.is_dir() {
-        return Some(candidate);
-    }
-    None
 }
 
 /// The effective per-theory cut strategy: the CLI `--stop-on-trace` wins;

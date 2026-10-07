@@ -424,7 +424,7 @@ struct InteractiveOpts {
     #[arg(long = "no-logging")]
     no_logging: bool,
 
-    /// Directory with the static web assets (default: auto-detected `data/`)
+    /// Override the embedded GUI with static web assets from DIR
     #[arg(long = "data-dir", value_name = "DIR")]
     data_dir: Option<String>,
 }

@@ -1,4 +1,4 @@
-//! Static asset serving.
+//! Serve the embedded GUI, or an explicit on-disk override for development.
 //!
 //! Tamarin's frontend pulls JS/CSS from two places:
 //!
@@ -9,9 +9,9 @@
 //!      `intdot-dynamicgraph.es.js`, plus
 //!      `intdot-style.css`
 //!
-//! Strategy:
+//! Assets are embedded at compile time. For an explicit `data_dir` override:
 //!   - Serve `data/<rest>` via tower-http `ServeDir`.
-//!   - For `js/intdot-*.es.js` and `css/intdot-*.css`, look the
+//!   - For `js/*.js` and `css/*.css`, look the
 //!     file up in `frontend/dist/` and stream it with `ServeFile`.
 //!   - Everything else 404s.
 //!
@@ -31,10 +31,73 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use crate::state::AppState;
 
+include!(concat!(env!("OUT_DIR"), "/gui_assets.rs"));
+
+/// Serve directly from the binary, with content-based validators so an upgraded
+/// binary cannot leave an old graph renderer in the browser cache.
+async fn embedded_asset(
+    axum::extract::Path(path): axum::extract::Path<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Response {
+    let Some(&(_, bytes, etag)) = EMBEDDED_ASSETS.iter().find(|(name, _, _)| *name == path) else {
+        return asset_not_found().await;
+    };
+    let cached = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').any(|tag| {
+                let tag = tag.trim().strip_prefix("W/").unwrap_or(tag.trim());
+                tag == etag || tag == "*"
+            })
+        });
+    let mut response = if cached {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        let mime = match path.rsplit('.').next().unwrap_or("") {
+            "js" => "text/javascript; charset=utf-8",
+            "css" => "text/css; charset=utf-8",
+            "png" => "image/png",
+            "gif" => "image/gif",
+            "ico" => "image/x-icon",
+            "svg" => "image/svg+xml",
+            "json" => "application/json",
+            "txt" => "text/plain; charset=utf-8",
+            _ => "application/octet-stream",
+        };
+        let body = if method == Method::HEAD {
+            Body::empty()
+        } else {
+            Body::from(bytes)
+        };
+        let mut response = body.into_response();
+        response
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, mime.parse().unwrap());
+        response
+            .headers_mut()
+            .insert(header::CONTENT_LENGTH, bytes.len().into());
+        response
+    };
+    response
+        .headers_mut()
+        .insert(header::ETAG, etag.parse().unwrap());
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
+    response
+}
+
 /// Build the static-files router, to be nested at `/static`.
 pub fn serve(state: Arc<AppState>) -> axum::Router<Arc<AppState>> {
-    let serve_data =
-        ServeDir::new(&state.cfg.data_dir).not_found_service(asset_not_found.into_service());
+    let Some(data_dir) = &state.cfg.data_dir else {
+        return axum::Router::new()
+            .route("/", axum::routing::get(asset_not_found))
+            .route("/{*path}", axum::routing::get(embedded_asset))
+            .fallback(asset_not_found);
+    };
+    let serve_data = ServeDir::new(data_dir).not_found_service(asset_not_found.into_service());
     let mut router: axum::Router<Arc<AppState>> = axum::Router::new();
 
     if state.cfg.frontend_dist.is_some() {
@@ -43,7 +106,7 @@ pub fn serve(state: Arc<AppState>) -> axum::Router<Arc<AppState>> {
             .route("/css/{name}", axum::routing::get(intdot_css_or_data));
     }
 
-    match patched_ui_css(&state.cfg.data_dir) {
+    match patched_ui_css(data_dir) {
         Ok(Some(file)) => {
             let service = ServeFile::new(file.path());
             router = router.route(
@@ -73,7 +136,7 @@ fn patched_ui_css(data_dir: &Path) -> std::io::Result<Option<tempfile::NamedTemp
     Ok(Some(file))
 }
 
-/// `/static/js/<name>` — if the name is `intdot-*.es.js`, serve from
+/// `/static/js/<name>` — if the name is `*.js`, serve from
 /// the frontend dist; otherwise hand off to `data/js/<name>`.
 async fn intdot_js_or_data(
     State(state): State<Arc<AppState>>,
@@ -81,10 +144,10 @@ async fn intdot_js_or_data(
     method: Method,
     headers: HeaderMap,
 ) -> Response {
-    dist_or_data(state, "js", ".es.js", name, method, headers).await
+    dist_or_data(state, "js", ".js", name, method, headers).await
 }
 
-/// `/static/css/<name>` — the [`intdot_js_or_data`] rule for `intdot-*.css`.
+/// `/static/css/<name>` — the [`intdot_js_or_data`] rule for `*.css`.
 async fn intdot_css_or_data(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
@@ -94,7 +157,7 @@ async fn intdot_css_or_data(
     dist_or_data(state, "css", ".css", name, method, headers).await
 }
 
-/// Serve `frontend/dist/<name>` for an `intdot-*<suffix>` asset, falling
+/// Serve `frontend/dist/<name>` for a `*<suffix>` asset, falling
 /// through to `data/<subdir>/<name>` for anything else (or a dist miss).
 async fn dist_or_data(
     state: Arc<AppState>,
@@ -104,8 +167,13 @@ async fn dist_or_data(
     method: Method,
     headers: HeaderMap,
 ) -> Response {
-    if name.starts_with("intdot-")
-        && name.ends_with(suffix)
+    // Axum decodes path captures, including escaped separators. Only accept
+    // a filename before joining it to either asset directory.
+    if name.contains(['/', '\\']) || name == "." || name == ".." {
+        return asset_not_found().await;
+    }
+    // Vite may split shared code into chunks without the intdot- prefix.
+    if name.ends_with(suffix)
         && let Some(dist) = &state.cfg.frontend_dist
         && let Some(resp) = try_file(&dist.join(&name), &method, &headers).await
     {
@@ -121,7 +189,10 @@ async fn fallback_to_data(
     method: &Method,
     headers: &HeaderMap,
 ) -> Response {
-    let candidate = state.cfg.data_dir.join(subdir).join(name);
+    let Some(data_dir) = &state.cfg.data_dir else {
+        return asset_not_found().await;
+    };
+    let candidate = data_dir.join(subdir).join(name);
     if let Some(resp) = try_file(&candidate, method, headers).await {
         return resp;
     }
@@ -158,26 +229,49 @@ async fn try_file(path: &Path, method: &Method, headers: &HeaderMap) -> Option<R
     Some(Response::from_parts(parts, Body::new(body)))
 }
 
-/// Convenience: turn an optional explicit data dir into a usable path.
-///
-/// An explicit path (e.g. from `--data-dir`) always wins.  Otherwise we
-/// probe a fixed list relative to the current working directory:
-/// `data` (running from inside `tamarin-prover/`), `tamarin-prover/data`
-/// (running from the repo root, where the assets live in the submodule),
-/// then `../data` / `../../data` (older nested layouts).  The first
-/// existing directory is used; if none match we fall back to `data`.
-pub fn resolve_data_dir(explicit: Option<PathBuf>) -> PathBuf {
-    if let Some(d) = explicit {
-        return d;
+/// Upstream's built graph modules live alongside data/ in frontend/dist/.
+pub fn frontend_dist(data_dir: &Path) -> Option<PathBuf> {
+    let candidate = data_dir.parent()?.join("frontend/dist");
+    candidate.is_dir().then_some(candidate)
+}
+
+/// Fail before loading theories when the browser cannot load the GUI.
+pub fn validate_assets(data_dir: &Path, dist: Option<&Path>) -> std::io::Result<()> {
+    let required = [
+        "js/jquery.js",
+        "js/jquery-ui.js",
+        "js/jquery-layout.js",
+        "js/jquery-cookie.js",
+        "js/jquery-superfish.js",
+        "js/jquery-contextmenu.js",
+        "js/tamarin-prover-ui.js",
+        "css/tamarin-prover-ui.css",
+        "css/jquery-contextmenu.css",
+        "css/smoothness/jquery-ui.css",
+        "js/intdot-graph.es.js",
+        "js/intdot-staticgraph.es.js",
+        "js/intdot-dynamicgraph.es.js",
+        "css/intdot-style.css",
+    ];
+    let readable = |path: &Path| {
+        std::fs::File::open(path)
+            .and_then(|file| file.metadata())
+            .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
+    };
+    let missing: Vec<_> = required
+        .into_iter()
+        .filter(|rel| {
+            let filename = Path::new(rel).file_name().expect("asset filename");
+            !(filename.to_string_lossy().starts_with("intdot-")
+                && dist.is_some_and(|dir| readable(&dir.join(filename))))
+                && !readable(&data_dir.join(rel))
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
     }
-    for c in ["data", "tamarin-prover/data", "../data", "../../data"] {
-        let p = Path::new(c);
-        if p.is_dir() {
-            if let Ok(abs) = std::fs::canonicalize(p) {
-                return abs;
-            }
-            return p.to_path_buf();
-        }
-    }
-    PathBuf::from("data")
+    Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!(
+        "GUI assets missing or unreadable in {}: {}. Remove --data-dir to use the embedded GUI, or pass --data-dir=/path/to/complete/data (with compiled graph assets in data/js and data/css or a sibling frontend/dist).",
+        data_dir.display(), missing.join(", "),
+    )))
 }
