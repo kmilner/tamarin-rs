@@ -11,10 +11,10 @@ installation workflow also uses Make.
 Maude is needed to run the prover. Graphviz (`dot`, or `--with-dot=/path/to/dot`)
 is needed for server-rendered SVG graphs; interactive graphs render in the browser.
 
-The default Make target builds and installs an optimized prover:
+`make` builds an optimized prover; `make install` also installs it:
 
 ```bash
-make                                  # Cargo release build (including GUI), then install
+make install                          # release build (including GUI), then install
 ~/.local/bin/tamarin-rs interactive /path/to/theories
 ```
 
@@ -24,8 +24,9 @@ binary, so it works from any directory and can be copied without the checkout,
 Node.js, npm, or asset files. Maude and Graphviz remain external tools.
 Add `~/.local/bin` to your `PATH` to invoke `tamarin-rs` by name.
 
-Use `make PREFIX=/custom/prefix` to change the installation directory or
-`make build` to build without installing. `make check` runs formatting and
+Use `make install PREFIX=/custom/prefix` to change the installation directory.
+`make` (or `make build`) builds without installing; `make debug` builds an
+unoptimized binary in `target/debug/`. `make check` runs formatting and
 Clippy; `make test` runs the Rust suite with the optimized `ci` profile.
 `CARGO_TARGET_DIR=/path/to/build` selects the output directory for Make's Cargo
 commands and its standalone frontend target.
