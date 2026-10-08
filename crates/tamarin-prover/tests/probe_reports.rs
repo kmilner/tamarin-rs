@@ -157,7 +157,17 @@ fn working_dot_reports_version_and_png_ok() {
     if !common::dot_available() {
         return;
     }
-    let (rc, _stdout, stderr) = run_test_command(&[]);
+    let (rc, stdout, stderr) = run_test_command(&[]);
+    // batch-tamarin's launch_tamarin_test requires both success markers.
+    assert!(stdout.contains("All tests successful"), "{stdout}");
+    assert!(
+        stdout.contains("The tamarin-prover should work as intended"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Maude/GraphViz availability checks only"),
+        "{stdout}"
+    );
     let probe = common::strip_maude_banner(&stderr);
     let lines: Vec<&str> = probe.lines().collect();
     assert_eq!(rc, 0, "expected a clean self-test, got:\n{probe}");

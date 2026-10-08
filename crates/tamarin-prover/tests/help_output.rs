@@ -73,14 +73,21 @@ fn each_mode_renders_its_own_help() {
 
 #[test]
 fn version_is_stdout_rc_zero() {
-    // `-V` prints the short form; `--version` adds the build provenance.
-    // The two assertions for absent text are what this test checks.  A clap
-    // `version` that uses `LONG_VERSION` makes `-V` print the provenance as
-    // well, and every other assertion here still holds.
+    // -V identifies the Rust build; --version adds upstream compatibility
+    // and build provenance for batch-tamarin and bug reports.
     let out = run(&["-V"]);
     assert_eq!(out.status.code(), Some(0));
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
+    let revision = env!("TAMARIN_GIT_REV");
+    let hash = revision.split_whitespace().next().unwrap();
+    let short_hash: String = hash.chars().take(7).collect();
+    let dirty = if revision.contains("(with uncommited changes)") {
+        "-dirty"
+    } else {
+        ""
+    };
+    let rust_identity = format!("tamarin-rs {short_hash}{dirty}");
+    assert_eq!(text, format!("{rust_identity}\n"));
     assert!(!text.contains("git revision"), "{text}");
     assert!(!text.contains("compiled at"), "{text}");
 
@@ -91,6 +98,19 @@ fn version_is_stdout_rc_zero() {
     assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
     assert!(text.contains("git revision"), "{text}");
     assert!(text.contains("compiled at"), "{text}");
+    // batch-tamarin searches the first line for `tamarin-prover X.Y.Z`.
+    let first_line = text.lines().next().unwrap();
+    assert!(
+        first_line.starts_with(&format!("{rust_identity} (")),
+        "{text}"
+    );
+    assert!(
+        first_line.contains(&format!(
+            "Rust port of tamarin-prover {}",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{text}"
+    );
 }
 
 #[test]

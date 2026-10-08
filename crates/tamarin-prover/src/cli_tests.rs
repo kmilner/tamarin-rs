@@ -633,6 +633,125 @@ fn interface_and_web_flags() {
 // =========================================================================
 
 #[test]
+fn batch_tamarin_rts_command() {
+    let a = parse(&[
+        "+RTS",
+        "-N4",
+        "-RTS",
+        "x.spthy",
+        "--prove=chain",
+        "-D=TEST",
+        "--output-json=traces/task.json",
+        "--output-dot=traces/task.dot",
+        "--output=out.spthy",
+    ]);
+    assert_eq!(a.processors, Some(4));
+    assert_eq!(a.effective_processors(), 4);
+    assert_eq!(a.effective_maude_processes(), 4);
+    assert_eq!(a.in_files, ["x.spthy"]);
+    assert!(a.prove_mode);
+    assert_eq!(a.lemma_names, ["chain"]);
+    assert_eq!(a.defines, ["TEST"]);
+    assert_eq!(a.trace_json.as_deref(), Some("traces/task.json"));
+    assert_eq!(a.trace_dot.as_deref(), Some("traces/task.dot"));
+    assert_eq!(a.output_file.as_deref(), Some("out.spthy"));
+}
+
+#[test]
+fn rts_blocks_anywhere_and_last_processor_setting_wins() {
+    for argv in [
+        vec!["x.spthy", "+RTS", "-N2"],
+        vec!["+RTS", "-N1", "-RTS", "x.spthy", "+RTS", "-N2", "-RTS"],
+        vec!["--processors=1", "x.spthy", "+RTS", "-N2"],
+        vec!["+RTS", "-N1", "-RTS", "x.spthy", "--processors=2"],
+        vec!["x.spthy", "+RTS", "-N1", "-N2"],
+    ] {
+        let a = parse(&argv);
+        assert_eq!(a.processors, Some(2), "{argv:?}");
+        assert_eq!(a.in_files, ["x.spthy"]);
+    }
+    let a = parse(&["interactive", ".", "+RTS", "-N2"]);
+    assert_eq!(a.subcommand, Subcommand::Interactive);
+    assert_eq!(a.processors, Some(2));
+    let a = parse(&["x.spthy", "--processors=1", "+RTS", "-N"]);
+    assert_eq!(
+        a.effective_processors(),
+        Args::default().effective_processors()
+    );
+    let a = parse(&["x.spthy", "+RTS", "-N1", "-RTS", "--maude-processes=8"]);
+    assert_eq!(a.effective_maude_processes(), 1);
+}
+
+#[test]
+fn rts_blocks_do_not_interrupt_native_option_values() {
+    let a = parse(&[
+        "--output-json",
+        "+RTS",
+        "-N2",
+        "-RTS",
+        "traces.json",
+        "x.spthy",
+    ]);
+    assert_eq!(a.trace_json.as_deref(), Some("traces.json"));
+    assert_eq!(a.processors, Some(2));
+    assert_eq!(a.in_files, ["x.spthy"]);
+    // Last flag occurrence wins even if its value follows an RTS block.
+    assert_eq!(
+        parse(&["--processors", "+RTS", "-N2", "-RTS", "1", "x.spthy"]).processors,
+        Some(2)
+    );
+    assert_eq!(
+        parse(&["+RTS", "-N2", "--RTS", "--processors", "1", "x.spthy"]).processors,
+        Some(1)
+    );
+    // A positional that looks like a native flag cannot override RTS settings.
+    assert_eq!(
+        parse(&["+RTS", "-N2", "--", "--processors=1"]).processors,
+        Some(2)
+    );
+}
+
+#[test]
+fn rts_terminators_preserve_application_arguments() {
+    let a = parse(&["+RTS", "-N2", "--RTS", "--prove", "x.spthy", "+RTS"]);
+    assert_eq!(a.processors, Some(2));
+    assert!(a.prove_mode);
+    assert_eq!(a.in_files, ["x.spthy", "+RTS"]);
+    let a = parse(&["+RTS", "-N2", "--", "+RTS", "-N4", "-RTS"]);
+    assert_eq!(a.processors, Some(2));
+    assert_eq!(a.in_files, ["+RTS", "-N4", "-RTS"]);
+    let a = parse(&["--", "+RTS", "-N4", "-RTS"]);
+    assert_eq!(a.processors, None);
+    assert_eq!(a.in_files, ["+RTS", "-N4", "-RTS"]);
+    assert_eq!(parse(&["+RTS", "-RTS", "x.spthy"]).processors, None);
+}
+
+#[test]
+fn rts_rejects_invalid_counts_and_unsupported_options() {
+    for option in [
+        "-N0",
+        "-N-1",
+        "-N+2",
+        "-N=2",
+        "-Ntwo",
+        "-N1.5",
+        "-N999999999999999999999999",
+    ] {
+        assert_eq!(
+            parse_err(&["x.spthy", "+RTS", option]).kind(),
+            clap::error::ErrorKind::ValueValidation,
+            "{option}",
+        );
+    }
+    for option in ["-M1G", "-s", "--processors=2", "x.spthy"] {
+        let err = parse_err(&["+RTS", option, "-RTS", "x.spthy"]);
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+        assert!(err.to_string().contains("unsupported RTS option"));
+    }
+    assert!(parse_args(&["-N2".into(), "x.spthy".into()]).is_err());
+}
+
+#[test]
 fn maude_processes_parsed() {
     let a = parse(&["--maude-processes", "3", "x.spthy"]);
     assert_eq!(a.maude_processes, Some(3));
