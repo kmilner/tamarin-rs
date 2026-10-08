@@ -22,15 +22,14 @@ see the [Tamarin manual installation instructions](https://tamarin-prover.com/ma
 
 
 ```bash
-make
+make install
 tamarin-rs --prove theory.spthy
 tamarin-rs interactive /path/to/theories
 ```
 
-`make` installs a release build to `~/.local/bin/tamarin-rs` by default, you may
+`make install` installs a release build to `~/.local/bin/tamarin-rs` by default, you may
 have to add it to your PATH if it is not already (or just use the full path directly).
 
-To build without installing, use `cargo build --release`.
 See the [build and development guide](docs/DEVELOPMENT.md) for custom install
 paths, frontend development, and the Haskell test build.
 
