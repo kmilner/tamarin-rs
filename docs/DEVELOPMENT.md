@@ -48,6 +48,12 @@ inside Cargo's build output directory, including when `CARGO_TARGET_DIR` is
 set, leaving the submodule pristine. No separate GUI build is needed after
 `cargo clean`. The release profile uses `lto = "fat"` and `codegen-units = 1`.
 
+Use `tamarin-rs --version` to identify a build: it reports the seven-character
+Git hash (`-dirty` for local edits) and the upstream Tamarin compatibility
+version. `-V` prints only the Rust build identity. This metadata is embedded at
+build time and survives moving the binary; builds without Git metadata report
+`unknown`.
+
 The submodule supplies the embedded GUI and intruder variants at build time,
 and the example corpus at test time. `scripts/bump_submodule.sh`
 automates updating its pin, checking patches, and rebuilding the oracle;

@@ -34,6 +34,15 @@ To build without installing, use `cargo build --release`.
 See the [build and development guide](docs/DEVELOPMENT.md) for custom install
 paths, frontend development, and the Haskell test build.
 
+## batch-tamarin
+
+Set a [batch-tamarin](https://github.com/tamarin-prover/batch-tamarin) recipe's
+`tamarin_versions.<alias>.path` to `tamarin-rs` or its full path. Its generated
+`+RTS -N<cores> -RTS` arguments work automatically, setting the worker count
+just like `--processors=<cores>`. Only the `-N` RTS option is supported;
+batch-tamarin handles memory limits and timeouts itself. Tested with
+batch-tamarin 1.2.0.
+
 ## Checking proofs
 
 With the Haskell `tamarin-prover` installed, this helper proves a theory with

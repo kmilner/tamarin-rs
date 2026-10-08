@@ -43,6 +43,47 @@ const SECOND_RECV: &str = "theory SecondRecv\nbegin\n\nrule Send:\n  \
 /// the empty string, so `intercalate "-" ["", "Send"]` contributes `-Send`.
 const SR_LABEL: &str = "trace_SingleRecv_SL2-AS0-CL0-A1-C1-NB_chain-Send";
 
+/// The invocation emitted by batch-tamarin 1.2.0's ExecutableTask.to_command.
+#[test]
+fn batch_tamarin_rts_invocation_writes_proof_and_traces() {
+    if !maude_available() {
+        return;
+    }
+    let c = Case::new("batch_tamarin_rts");
+    let input = fixture(SINGLE_RECV);
+    let proof = c.dir.join("proof.spthy");
+    let (code, stdout, stderr) = common::run_binary(
+        &[
+            "+RTS",
+            "-N2",
+            "-RTS",
+            input.to_str().unwrap(),
+            "--prove=chain",
+            "-D=TEST",
+            &format!("--output-json={}", c.json.display()),
+            &format!("--output-dot={}", c.dot.display()),
+            &format!("--output={}", proof.display()),
+        ],
+        &[],
+    );
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stdout.contains("chain (exists-trace): verified"),
+        "{stdout}"
+    );
+    assert!(std::fs::read_to_string(proof)
+        .unwrap()
+        .contains("SOLVED // trace found"));
+    assert_eq!(
+        c.json_bytes(),
+        std::fs::read(fixture("single_recv_traces.json")).unwrap()
+    );
+    assert_eq!(
+        std::fs::read(&c.dot).unwrap(),
+        std::fs::read(fixture("single_recv_traces.dot")).unwrap()
+    );
+}
+
 /// A fresh per-test temp dir holding the two trace paths.
 struct Case {
     dir: PathBuf,
