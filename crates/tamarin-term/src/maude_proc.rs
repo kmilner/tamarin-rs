@@ -159,14 +159,15 @@ pub struct SharedMaudeCaches {
     /// Memo for the RAW REPLY BYTES of the witness-producing Maude commands
     /// (`unify in MSG`, `get variants in MSG`, and the
     /// two `match in MSG` matchers), keyed by the *exact command
-    /// byte-string*.  Maude's reply to one of these
-    /// commands is a deterministic, command-local function of the theory
-    /// module — which is fixed for the life of the session (`sig` is
-    /// immutable after `start_with_caches()`, every sharer loads the
-    /// identical module, and `with_swapped_maude` hands out a different
-    /// pool handle rather than mutating any module) — so identical
-    /// command bytes imply an identical reply, exactly the invariant
-    /// `reduce` already relies on.
+    /// byte-string*.  Maude's reply to one of these commands depends on the
+    /// theory module and on the order in which the process first read the
+    /// variable names (see `name_order_command`).  The module is fixed for
+    /// the life of the session (`sig` is immutable after
+    /// `start_with_caches()`, every sharer loads the identical module, and
+    /// `with_swapped_maude` hands out a different pool handle rather than
+    /// mutating any module), and every process reads our names in the same
+    /// order before its first command.  So identical command bytes give an
+    /// identical reply in every sharer, whatever each process did before.
     ///
     /// This caches ONLY the raw bytes: the per-call back-conversion (per-arm
     /// `ConvCtx` clone, `input_max` seeded from the caller's own bindings) still
@@ -394,6 +395,46 @@ impl Drop for MaudeChildReaper {
     }
 }
 
+/// How many of our variable names (`x0`, `x1`, ..., see `pp_mterm`) every
+/// Maude process reads right after loading the theory.  Commands seen in
+/// practice use at most a few dozen variables.
+const ORDERED_VAR_NAMES: usize = 2000;
+
+/// A `parse` command that mentions `x0:Msg` ... `x{n-1}:Msg` in that order.
+///
+/// Maude orders variables by a number it gives each name the first time the
+/// process reads it (`VariableDagNode::compareArguments`), and that order
+/// decides how unifiers are ordered and which variable plays which role in
+/// them.  So the reply to the same `unify` command depended on which names
+/// the process had read before: pool members with different histories, or
+/// one process that got the same commands in another order, answered
+/// differently.  Reading our names once, in order, before any other command
+/// fixes their order in every process.  They also all sort before the names
+/// Maude makes up itself (`#1`, `%1`, ...), which it creates in increasing
+/// order.  This holds for commands with fewer than `n` variables.
+/// (No HS analog: tamarin-prover talks to one Maude process per session.)
+///
+/// The terms form a balanced `cons` tree, so the parser never nests deeply;
+/// every generated module declares `cons` (see `pp_theory`).
+fn name_order_command(n: usize) -> String {
+    fn tree(lo: usize, hi: usize, out: &mut String) {
+        if hi - lo == 1 {
+            out.push_str(&format!("x{lo}:Msg"));
+        } else {
+            let mid = (lo + hi) / 2;
+            out.push_str("cons(");
+            tree(lo, mid, out);
+            out.push(',');
+            tree(mid, hi, out);
+            out.push(')');
+        }
+    }
+    let mut cmd = String::from("parse in MSG : ");
+    tree(0, n.max(1), &mut cmd);
+    cmd.push_str(" .\n");
+    cmd
+}
+
 fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
@@ -522,6 +563,7 @@ impl MaudeHandle {
         // Load the theory.
         let theory = pp_theory(&sig);
         let _ = inner.execute(theory.as_bytes())?;
+        let _ = inner.execute(name_order_command(ORDERED_VAR_NAMES).as_bytes())?;
         Ok(MaudeHandle {
             inner: Arc::new(Mutex::new(inner)),
             child: Arc::new(Mutex::new(reaper)),
