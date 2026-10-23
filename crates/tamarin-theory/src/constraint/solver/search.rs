@@ -298,11 +298,16 @@ fn should_parallel_expand(
 /// per-lemma wall time) or, for one thread only, via
 /// [`ProofDeadlineGuard`].
 fn proof_deadline() -> std::time::Instant {
+    let now = std::time::Instant::now();
+    // No override, or one too far out to represent → run unbounded
+    // (faithful to HS).  ~10 years is effectively infinite and safe
+    // against `Instant` overflow.
+    let unbounded = || now + std::time::Duration::from_secs(10 * 365 * 24 * 3600);
     match deadline_cap_ms() {
-        Some(ms) => std::time::Instant::now() + std::time::Duration::from_millis(ms),
-        // No override → run unbounded (faithful to HS).  ~10 years is
-        // effectively infinite and safe against `Instant` overflow.
-        None => std::time::Instant::now() + std::time::Duration::from_secs(10 * 365 * 24 * 3600),
+        Some(ms) => now
+            .checked_add(std::time::Duration::from_millis(ms))
+            .unwrap_or_else(unbounded),
+        None => unbounded(),
     }
 }
 
@@ -343,6 +348,14 @@ impl ProofDeadlineGuard {
     pub fn set_ms(ms: u64) -> Self {
         let previous = DEADLINE_CAP_MS.with(|c| c.replace(Some(ms)));
         ProofDeadlineGuard { previous }
+    }
+
+    /// Lift any cap for searches started on this thread — including an
+    /// outer guard's and the `TAM_PROVE_DEADLINE_MS` env var's, which a
+    /// cleared (`None`) override would fall back to.  `u64::MAX` ms
+    /// overflows `Instant`, so [`proof_deadline`] reads it as no cutoff.
+    pub fn unbounded() -> Self {
+        Self::set_ms(u64::MAX)
     }
 }
 

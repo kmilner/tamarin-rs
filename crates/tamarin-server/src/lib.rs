@@ -77,9 +77,9 @@ pub struct ServerConfig {
     /// Path to the Maude binary.
     pub maude_path: String,
     /// `--derivcheck-timeout` for the dynamic message-derivation checks
-    /// run at theory load (HS interactive default 5s; 0 disables).  Set
-    /// from the CLI flag by `interactive` setup.
-    pub derivcheck_timeout: u32,
+    /// run at theory load (HS interactive default 5s; 0 disables, negative
+    /// is unbounded).  Set from the CLI flag by `interactive` setup.
+    pub derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout,
     /// Source-solver limits from `-c/--open-chains` and `-s/--saturation`.
     pub solver_parameters: tamarin_theory::constraint::solver::sources::IntegerParameters,
     /// CLI `--stop-on-trace` (None = flag absent).  Merged with each
@@ -121,7 +121,7 @@ impl ServerConfig {
             data_dir: data_dir.into(),
             frontend_dist: None,
             maude_path,
-            derivcheck_timeout: 5,
+            derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT,
             solver_parameters:
                 tamarin_theory::constraint::solver::sources::IntegerParameters::default(),
             stop_on_trace: None,

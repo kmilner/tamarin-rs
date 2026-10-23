@@ -54,7 +54,8 @@
 //! Known loud deltas from HS, deliberate: glued short values (`-b10`,
 //! `-DFOO`) are rejected (spell them `-b=10`, `-D=FOO`); numeric flags
 //! are range-checked at parse time where HS accepts any `read @Int`
-//! result — `-b=-1`/`-b=2^32`, `-d=2^32` (HS: a large timeout), and
+//! result — `-b=-1`/`-b=2^32`, `-d=2^32` (HS: a large timeout; a
+//! negative `-d` is accepted, as HS's "no time limit"), and
 //! `-c`/`-s` outside `0..=i64::MAX` (HS wraps out-of-range and honours
 //! negatives) are all rc-2 rejections here, never silent truncations;
 //! and the unported-feature flags HS still accepts (`--load-json`,
@@ -69,6 +70,7 @@
 //! `--diff` errors at run time (see each field's doc).
 
 use clap::{Args as ClapArgs, Parser, Subcommand as ClapSubcommand, ValueEnum};
+use tamarin_theory::deriv_check::DerivCheckTimeout;
 
 /// `--stop-on-trace` methods (HS `SolutionExtractor`; the value names match
 /// the Haskell spellings, matched case-insensitively as HS lowercases).
@@ -154,7 +156,7 @@ pub struct Args {
     pub verbose: bool,
     pub open_chains: Option<u64>,
     pub saturation: Option<u64>,
-    pub derivcheck_timeout: Option<u32>,
+    pub derivcheck_timeout: Option<DerivCheckTimeout>,
     pub proverif_no_reuse_lemmas: bool,
     pub proverif_no_restrictions: bool,
     pub replication_bound: Option<u32>,
@@ -296,15 +298,16 @@ struct LoadOpts {
           value_parser = clap::value_parser!(u64).range(..=i64::MAX as u64))]
     saturation: Option<u64>,
 
-    /// Per-variable message-derivation-check timeout in seconds; 0 disables
-    /// (default: 5)
-    // Typed `u32` because 0 is the disable sentinel downstream
-    // (`TheoryLoadOptions::derivation_checks`): a wider type narrowed later
-    // could truncate 2^32 onto the sentinel and silently skip the checks.
-    // HS reads a 64-bit Int; oversized values are loud rc-2 here.
+    /// Per-variable message-derivation-check timeout in seconds; 0 disables,
+    /// a negative value runs the checks without a time limit (default: 5)
+    // Parsed straight into `DerivCheckTimeout` so 0 / negative / positive
+    // stay distinct states rather than an integer sentinel: a value is
+    // never narrowed later, so 2^32 cannot truncate onto "disabled".  HS
+    // reads a 64-bit Int; positive values past u32::MAX are loud rc-2 here.
     #[arg(short = 'd', long = "derivcheck-timeout", global = true, num_args = 0..=1,
-          require_equals = true, default_missing_value = "5", value_name = "SECONDS")]
-    derivcheck_timeout: Option<u32>,
+          require_equals = true, default_missing_value = "5", value_name = "SECONDS",
+          allow_negative_numbers = true)]
+    derivcheck_timeout: Option<DerivCheckTimeout>,
 
     /// Accepted for compatibility (ProVerif export is not ported)
     #[arg(long = "proverif-no-reuse-lemmas", global = true)]

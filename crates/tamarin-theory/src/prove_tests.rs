@@ -1083,7 +1083,9 @@ fn scratch_proof_checks_return_backend_errors() {
                 crate::deriv_check::check_message_derivation(
                     &theory,
                     &h,
-                    1,
+                    crate::deriv_check::DerivCheckTimeout::Secs(
+                        std::num::NonZeroU32::new(1).expect("nonzero"),
+                    ),
                     None,
                     IntegerParameters::default(),
                 )

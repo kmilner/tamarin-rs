@@ -130,7 +130,7 @@ pub async fn start_server_with_theory_and(
         frontend_dist: None,
         maude_path: maude_path.clone(),
         // Match ServerConfig::new's default (HS interactive default 5s).
-        derivcheck_timeout: 5,
+        derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT,
         solver_parameters: Default::default(),
         stop_on_trace: None,
         // Match ServerConfig::new's defaults (HS `dotPath`,
