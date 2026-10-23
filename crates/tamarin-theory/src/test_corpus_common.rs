@@ -23,25 +23,35 @@ pub const SKIP_ELAB: &str = "elaboration rejects this upstream example";
 /// path and failed stage together: changes to either require an explicit
 /// review instead of being hidden by an aggregate coverage percentage.
 pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
-    ("ccs18-5G/5G-AKA-bindingChannel/5G_AKA.spthy", SKIP_PARSE),
-    ("ccs18-5G/5G-AKA-bindingChannel/5G_AKA_fix.spthy", SKIP_PARSE),
-    ("ccs18-5G/5G-AKA-nonBindingChannel/5G_AKA.spthy", SKIP_PARSE),
-    ("ccs18-5G/5G-AKA-nonBindingChannel/5G_AKA_fix.spthy", SKIP_PARSE),
-    ("ccs18-5G/5G-AKA-untraceability/5G_AKA_priv.spthy", SKIP_PARSE),
-    ("ccs18-5G/5G-AKA-untraceability/proofs/5G_AKA_priv-attack.spthy", SKIP_PARSE),
-    ("features/auto-sources/tamarin-repo/ccs18-5G/5G-AKA-untraceability/5G_AKA_priv-without-SL.spthy", SKIP_PARSE),
-    ("features/auto-sources/tamarin-repo/ccs18-5G/5G-AKA-untraceability/5G_AKA_priv.spthy", SKIP_PARSE),
     ("features/predicates/functionappl.spthy", SKIP_PARSE),
     ("regression/trace/issue834-2.spthy", SKIP_PARSE),
     ("regression/trace/issue834-3.spthy", SKIP_PARSE),
-    ("sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-4-fixed.spthy", SKIP_LISTED),
-    ("sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy", SKIP_LISTED),
-    ("sapic/not-working/PKCS11/pkcs11-dynamic-policy.spthy", SKIP_PARSE),
+    (
+        "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-4-fixed.spthy",
+        SKIP_LISTED,
+    ),
+    (
+        "sapic/deprecated/csf21-acc-unbounded/mixvote/mixvote_SmHh-multi-session-5-fixed.spthy",
+        SKIP_LISTED,
+    ),
+    (
+        "sapic/not-working/PKCS11/pkcs11-dynamic-policy.spthy",
+        SKIP_PARSE,
+    ),
     ("sapic/not-working/envelope/envelope.spthy", SKIP_PARSE),
-    ("sapic/not-working/envelope/envelope_allowsattack.spthy", SKIP_PARSE),
-    ("sapic/not-working/envelope/envelope_simpler.spthy", SKIP_PARSE),
+    (
+        "sapic/not-working/envelope/envelope_allowsattack.spthy",
+        SKIP_PARSE,
+    ),
+    (
+        "sapic/not-working/envelope/envelope_simpler.spthy",
+        SKIP_PARSE,
+    ),
     ("testParser/Yubikey.spthy", SKIP_PARSE),
-    ("testParser/include/include/include/include4.spthy", SKIP_PARSE),
+    (
+        "testParser/include/include/include/include4.spthy",
+        SKIP_PARSE,
+    ),
     ("testParser/include/include/include3.spthy", SKIP_PARSE),
     ("testParser/include/includeDiff.spthy", SKIP_PARSE),
     ("testParser/include/include_2.spthy", SKIP_PARSE),
