@@ -3797,22 +3797,19 @@ fn drop_trivially_true_formulas_pass(red: &mut Reduction) {
 /// equal formulas. Haskell uses `Set` storage so this is implicit; we use
 /// `Vec` so a manual pass is needed.
 fn dedupe_formulas_pass(red: &mut Reduction) {
-    use crate::guarded::Guarded;
-    let before = red.sys.formulas.len();
-    let mut seen: Vec<std::sync::Arc<Guarded>> = Vec::new();
+    use crate::constraint::solver::reduction::first_occurrences;
     // Read via `iter()` (Deref, no mut borrow) so the common no-op path (no
     // duplicates) takes ZERO mutable borrow and ZERO stamp bump — this pass
     // runs every simplify fixpoint iteration, including the final no-op one
     // that follows the `subst_system` marker-set, and an unconditional bump
     // here would staleify that marker and collapse the skip (design Finding 2).
-    for f in red.sys.formulas.iter() {
-        if !seen.iter().any(|g| **g == **f) {
-            seen.push(f.clone());
-        }
-    }
-    if seen.len() != before {
+    let first = first_occurrences(&red.sys.formulas[..]);
+    if first.contains(&false) {
         // A real drop: `formulas_mut()` bumps `content_stamp` on handout.
-        *red.sys.formulas_mut() = seen;
+        let mut keep = first.iter();
+        red.sys
+            .formulas_mut()
+            .retain(|_| *keep.next().unwrap_or(&false));
         red.changed = ChangeIndicator::Changed;
     }
 }

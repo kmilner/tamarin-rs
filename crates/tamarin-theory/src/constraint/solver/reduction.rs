@@ -3088,24 +3088,43 @@ fn subst_stored_formulas(
 }
 
 /// Dedup a Vec in place while preserving the FIRST occurrence's position.
-fn dedup_preserve_order<T: PartialEq>(v: &mut Vec<T>) {
-    // Keep the FIRST occurrence of each distinct element (preserving
-    // first-occurrence order).  Two-pointer in-place compaction: for each
-    // candidate, keep it only if it differs from every already-kept
-    // element in the prefix `v[..kept]`.  This is O(n^2) comparisons with
-    // no tail-shifting `Vec::remove`.  Requires only `T: PartialEq` (no Clone).
-    let len = v.len();
-    let mut kept = 0usize;
-    for i in 0..len {
-        let is_dup = (0..kept).any(|k| v[k] == v[i]);
-        if !is_dup {
-            if i != kept {
-                v.swap(kept, i);
-            }
-            kept += 1;
-        }
+fn dedup_preserve_order<T: PartialEq + std::hash::Hash>(v: &mut Vec<T>) {
+    let first = first_occurrences(v);
+    let mut keep = first.iter();
+    v.retain(|_| *keep.next().unwrap_or(&false));
+}
+
+/// For each item, whether it is the first of the items equal to it.
+///
+/// Long lists are grouped by hash and compared with `==` only within a
+/// group, so the result is the same as comparing each item with every
+/// earlier one, without the quadratic number of comparisons: formula lists
+/// in long proof branches grow to thousands of entries, and the comparison
+/// of two similar formulas walks deep into both.  Needs `Hash` to agree
+/// with `PartialEq` (equal items hash equal), as derived `Hash` does.
+pub(crate) fn first_occurrences<T: PartialEq + std::hash::Hash>(items: &[T]) -> Vec<bool> {
+    // Short lists: compare directly. Formulas that differ usually differ
+    // near the top, so each comparison stops early, while a hash walks the
+    // whole formula (measured: UM_three_pass's lists stay below 24 and got
+    // slower with hashing; OTPoverSMS_MA reaches lists of 4,000+).
+    if items.len() <= 32 {
+        return (0..items.len())
+            .map(|i| !(0..i).any(|k| items[k] == items[i]))
+            .collect();
     }
-    v.truncate(kept);
+    let mut by_hash: tamarin_utils::FastMap<u64, Vec<usize>> = Default::default();
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, x)| {
+            let group = by_hash.entry(tamarin_utils::fx_hash_one(x)).or_default();
+            let first = !group.iter().any(|&k| items[k] == *x);
+            if first {
+                group.push(i);
+            }
+            first
+        })
+        .collect()
 }
 
 /// The eq-store substitution with every binding chain chased to its end.
