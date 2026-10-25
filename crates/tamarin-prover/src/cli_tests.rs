@@ -743,12 +743,105 @@ fn rts_rejects_invalid_counts_and_unsupported_options() {
             "{option}",
         );
     }
-    for option in ["-M1G", "-s", "--processors=2", "x.spthy"] {
+    for option in ["-s", "--processors=2", "x.spthy"] {
         let err = parse_err(&["+RTS", option, "-RTS", "x.spthy"]);
         assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
         assert!(err.to_string().contains("unsupported RTS option"));
     }
     assert!(parse_args(&["-N2".into(), "x.spthy".into()]).is_err());
+}
+
+#[test]
+fn memory_limits_accept_native_and_rts_sizes() {
+    for (size, bytes) in [
+        ("4096", 4096),
+        ("4k", 4096),
+        ("4KiB", 4096),
+        ("512M", 512 << 20),
+        ("1.5g", 3 << 29),
+        (".5GiB", 1 << 29),
+        ("2T", 2 << 40),
+        ("0", 0),
+        ("0MiB", 0),
+        ("18446744073709551615", u64::MAX),
+    ] {
+        assert_eq!(
+            parse(&[&format!("--memory-limit={size}"), "x.spthy"]).memory_limit,
+            Some(bytes)
+        );
+        assert_eq!(
+            parse(&["x.spthy", "+RTS", &format!("-M{size}")]).memory_limit,
+            Some(bytes)
+        );
+    }
+    let a = parse(&["+RTS", "-N2", "-M4G", "-RTS", "--prove", "x.spthy"]);
+    assert_eq!(a.processors, Some(2));
+    assert_eq!(a.memory_limit, Some(4 << 30));
+    assert!(a.prove_mode);
+}
+
+#[test]
+fn memory_limit_last_setting_wins_without_disturbing_rts_delimiters() {
+    for argv in [
+        vec!["--memory-limit=1G", "+RTS", "-M2G", "-RTS", "x.spthy"],
+        vec!["+RTS", "-M1G", "-RTS", "--memory-limit", "2G", "x.spthy"],
+        vec!["--memory-limit", "+RTS", "-M2G", "-RTS", "1G", "x.spthy"],
+        vec!["+RTS", "-M1G", "-M2G", "--RTS", "x.spthy"],
+    ] {
+        assert_eq!(parse(&argv).memory_limit, Some(2 << 30), "{argv:?}");
+    }
+    assert_eq!(
+        parse(&["--memory-limit=1G", "+RTS", "-M0"]).memory_limit,
+        Some(0)
+    );
+    assert_eq!(
+        parse(&["+RTS", "-M1G", "-RTS", "--memory-limit=0"]).memory_limit,
+        Some(0)
+    );
+    let a = parse(&["+RTS", "-M2G", "--", "--memory-limit=1G"]);
+    assert_eq!(a.memory_limit, Some(2 << 30));
+    assert_eq!(a.in_files, ["--memory-limit=1G"]);
+    assert_eq!(parse(&["--", "+RTS", "-M2G"]).memory_limit, None);
+    assert_eq!(parse(&["--RTS", "+RTS", "--", "-M2G"]).memory_limit, None);
+}
+
+#[test]
+fn memory_limits_reject_bad_sizes_and_non_batch_modes() {
+    for size in [
+        "",
+        "-1",
+        "+1G",
+        "1e3",
+        "1Gjunk",
+        "NaN",
+        "inf",
+        ".",
+        "1.2.3G",
+        "0.1",
+        "18446744073709551616",
+        "18446744073709551615G",
+    ] {
+        for argv in [
+            vec![format!("--memory-limit={size}")],
+            vec!["+RTS".into(), format!("-M{size}")],
+        ] {
+            assert_eq!(
+                parse_args(&argv).unwrap_err().kind(),
+                clap::error::ErrorKind::ValueValidation,
+                "{argv:?}"
+            );
+        }
+    }
+    for mode in ["interactive", "test", "variants"] {
+        for argv in [vec!["--memory-limit=1G", mode], vec![mode, "+RTS", "-M1G"]] {
+            assert_eq!(
+                parse_err(&argv).kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{argv:?}"
+            );
+        }
+    }
+    assert!(parse_args(&["-M1G".into()]).is_err());
 }
 
 #[test]

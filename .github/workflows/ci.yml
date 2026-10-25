@@ -6,6 +6,21 @@ on:
   pull_request:
 
 jobs:
+  memory-monitor-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: rustup update stable --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      # Native process-group/RSS tests use a fake Maude, so they need neither
+      # Maude nor the Linux-only shell parity harness.
+      - run: cargo test --profile ci -p tamarin-prover --test memory_monitor --bin tamarin-rs
+
   checks:
     runs-on: ubuntu-latest
     steps:

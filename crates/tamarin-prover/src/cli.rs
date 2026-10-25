@@ -35,14 +35,15 @@
 //!   error.  The repeatable flags (`--prove`/`--lemma`/`-D`) append.
 //!
 //! The flags with no HS `flagOpt` history (`--output-json/--output-dot`,
-//! `--processors`, `--maude-processes`, `--data-dir`) take ordinary clap
+//! `--processors`, `--maude-processes`, `--memory-limit`, `--data-dir`) take ordinary clap
 //! values: `=`, attached, or space-separated.
 //!
-//! A small RTS compatibility pass extracts `+RTS -N[CORES] -RTS` and sets
-//! `processors`, for batch-tamarin. Bare `-N` uses all available cores;
-//! other RTS options are rejected.
+//! A small RTS compatibility pass extracts `-N[CORES]` and `-M<SIZE>` from
+//! `+RTS ... -RTS` blocks. Bare `-N` uses all available cores. `-M` maps to
+//! our sampled whole-job memory limit, not GHC's heap limit. Other RTS
+//! options are rejected.
 //! RTS blocks may end at argv's end; `--RTS` and `--` stop RTS processing.
-//! Mixed `-N` / `--processors` settings use the last occurrence.
+//! Mixed RTS / native settings use the last occurrence for each option.
 //!
 //! Loader and tool flags are `global`, so they work before or after a
 //! subcommand name (HS's interactive mode shares the loader flag set);
@@ -168,6 +169,10 @@ pub struct Args {
     /// `None` = use default (`available_parallelism()` — full machine).
     /// `Some(1)` = single-threaded, byte-identical to sequential output.
     pub processors: Option<usize>,
+
+    /// Batch supervisor's sampled RSS limit in bytes (0 disables it).
+    /// Includes Maude and other helpers in the prover's process group.
+    pub memory_limit: Option<u64>,
 
     /// `--maude-processes=M` — size of the pool of Maude subprocesses
     /// the rayon workers borrow from at parallel sites.  Each
@@ -346,6 +351,12 @@ struct ToolOpts {
     #[arg(long, global = true, value_parser = positive_usize, value_name = "N")]
     processors: Option<usize>,
 
+    /// Stop batch job above sampled total RSS (Linux/macOS; also +RTS -M<SIZE>
+    /// -RTS). Bytes or K/M/G/T, KiB/MiB/GiB/TiB; 0 disables. Approximate,
+    /// includes Maude; unfinished proofs are lost
+    #[arg(long, global = true, value_parser = memory_size, value_name = "SIZE")]
+    memory_limit: Option<u64>,
+
     /// Maude subprocess-pool size for parallel sites (default: one per
     /// worker)
     #[arg(long = "maude-processes", global = true, value_parser = positive_usize,
@@ -516,12 +527,60 @@ fn positive_usize(s: &str) -> Result<usize, String> {
     Ok(n)
 }
 
-/// Strip RTS blocks and return the processor override, if it follows the last
-/// native `--processors` flag. Keep settings separate so blocks can appear
+/// Parse binary size units, including GHC's case-insensitive K/M/G/T/W
+/// suffixes and decimal quantities. Use integer arithmetic to reject overflow
+/// without rounding a large value through f64. Zero means unlimited.
+fn memory_size(s: &str) -> Result<u64, String> {
+    let invalid = || {
+        format!("invalid memory size {s:?}; expected bytes or a size such as 512MiB or 1.5G (0 disables)")
+    };
+    let split = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(s.len());
+    let (number, suffix) = s.split_at(split);
+    let multiplier: u128 = match suffix.to_ascii_lowercase().as_str() {
+        "" | "b" => 1,
+        "k" | "kb" | "kib" => 1 << 10,
+        "m" | "mb" | "mib" => 1 << 20,
+        "g" | "gb" | "gib" => 1 << 30,
+        "t" | "tb" | "tib" => 1 << 40,
+        "w" => std::mem::size_of::<usize>() as u128,
+        _ => return Err(invalid()),
+    };
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    if (whole.is_empty() && fraction.is_empty())
+        || !whole
+            .bytes()
+            .chain(fraction.bytes())
+            .all(|b| b.is_ascii_digit())
+    {
+        return Err(invalid());
+    }
+    let digits = format!("{whole}{fraction}")
+        .parse::<u128>()
+        .map_err(|_| invalid())?;
+    let divisor = 10u128
+        .checked_pow(fraction.len().try_into().map_err(|_| invalid())?)
+        .ok_or_else(invalid)?;
+    let bytes = digits.checked_mul(multiplier).ok_or_else(invalid)? / divisor;
+    if bytes == 0 && digits != 0 {
+        return Err(invalid());
+    }
+    bytes.try_into().map_err(|_| invalid())
+}
+
+#[derive(Default)]
+struct RtsOverrides {
+    processors: Option<usize>,
+    memory_limit: Option<u64>,
+}
+
+/// Strip RTS blocks and return overrides that follow the corresponding last
+/// native flag. Keep settings separate so blocks can appear
 /// between application options and their values.
-fn extract_rts_args(raw: &[String]) -> Result<(Vec<String>, Option<usize>), clap::Error> {
+fn extract_rts_args(raw: &[String]) -> Result<(Vec<String>, RtsOverrides), clap::Error> {
     let mut args = Vec::with_capacity(raw.len());
-    let mut processors = None;
+    let mut overrides = RtsOverrides::default();
     let mut in_rts = false;
     let mut rts_enabled = true;
     let mut iter = raw.iter();
@@ -539,10 +598,16 @@ fn extract_rts_args(raw: &[String]) -> Result<(Vec<String>, Option<usize>), clap
                 break;
             }
             _ if in_rts => {
+                if let Some(value) = arg.strip_prefix("-M") {
+                    overrides.memory_limit = Some(memory_size(value).map_err(|e| {
+                        clap::Error::raw(clap::error::ErrorKind::ValueValidation, e)
+                    })?);
+                    continue;
+                }
                 let Some(value) = arg.strip_prefix("-N") else {
                     return Err(clap::Error::raw(
                         clap::error::ErrorKind::UnknownArgument,
-                        format!("unsupported RTS option {arg:?}; supported: -N[CORES]\n"),
+                        format!("unsupported RTS option {arg:?}; supported: -N[CORES], -M<SIZE>\n"),
                     ));
                 };
                 let n = if value.is_empty() {
@@ -558,18 +623,21 @@ fn extract_rts_args(raw: &[String]) -> Result<(Vec<String>, Option<usize>), clap
                             )
                         })?
                 };
-                processors = Some(n);
+                overrides.processors = Some(n);
             }
             _ => {
                 // A later native flag supersedes the pending RTS override.
                 if arg == "--processors" || arg.starts_with("--processors=") {
-                    processors = None;
+                    overrides.processors = None;
+                }
+                if arg == "--memory-limit" || arg.starts_with("--memory-limit=") {
+                    overrides.memory_limit = None;
                 }
                 args.push(arg.clone());
             }
         }
     }
-    Ok((args, processors))
+    Ok((args, overrides))
 }
 
 /// Parse an argv (without the binary name) into [`Args`].
@@ -578,9 +646,17 @@ fn extract_rts_args(raw: &[String]) -> Result<(Vec<String>, Option<usize>), clap
 /// [`clap::Error::exit`], which also handles `--help`/`--version`
 /// (printed to stdout, exit 0).
 pub fn parse_args(raw: &[String]) -> Result<Args, clap::Error> {
-    let (raw, rts_processors) = extract_rts_args(raw)?;
+    let (raw, rts) = extract_rts_args(raw)?;
     let cli =
         Cli::try_parse_from(std::iter::once("tamarin-rs".to_string()).chain(raw.iter().cloned()))?;
+
+    let memory_limit = rts.memory_limit.or(cli.tools.memory_limit);
+    if memory_limit.is_some_and(|n| n > 0) && cli.cmd.is_some() {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::ArgumentConflict,
+            "--memory-limit / +RTS -M is currently supported only in batch mode\n",
+        ));
+    }
 
     // Batch-only output flags are top-level (not `global`), so clap accepts
     // them BEFORE a subcommand word — and would then silently drop them
@@ -641,7 +717,8 @@ pub fn parse_args(raw: &[String]) -> Result<Args, clap::Error> {
         no_compress: cli.batch.no_compress,
         parse_only: cli.batch.parse_only,
         precompute_only: cli.batch.precompute_only,
-        processors: rts_processors.or(cli.tools.processors),
+        processors: rts.processors.or(cli.tools.processors),
+        memory_limit,
         maude_processes: cli.tools.maude_processes,
         output_file: cli.batch.output_file,
         output_dir: cli.batch.output_dir,
