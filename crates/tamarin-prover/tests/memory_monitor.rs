@@ -418,22 +418,50 @@ fn monitoring_does_not_steal_the_terminal_from_a_pipeline() {
     // Use a clean interactive shell so it establishes terminal job control at
     // startup, as a user's shell would.
     command.current_dir(&fixture.dir)
-        .args(["--noprofile", "--norc", "-i", "-c", "\"$1\" --memory-limit=1GiB --parse-only input.spthy | cat; printf '\\nPIPELINE_DONE\\n'", "monitor-pipeline"])
+        .args(["--noprofile", "--norc", "-i", "-c", "\"$1\" --memory-limit=1GiB --parse-only input.spthy | cat; printf '%65536s\\nPIPELINE_DONE\\n' ''", "monitor-pipeline"])
         .arg(env!("CARGO_BIN_EXE_tamarin-rs"));
     let (child, mut terminal) = spawn_terminal(command);
     fixture.child = Some(child);
-    assert!(fixture.finish().status.success());
+    // Drain while the shell runs: macOS terminal draining can block shell
+    // exit until the master is read. The padding above also fills Linux's PTY
+    // buffer, exercising this ordering on both platforms.
+    let flags = unsafe { libc::fcntl(terminal.as_raw_fd(), libc::F_GETFL) };
+    assert_ne!(flags, -1);
+    assert_ne!(
+        unsafe {
+            libc::fcntl(
+                terminal.as_raw_fd(),
+                libc::F_SETFL,
+                flags | libc::O_NONBLOCK,
+            )
+        },
+        -1
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
     let mut output = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {
+        assert!(
+            Instant::now() < deadline,
+            "pipeline terminal did not close: {}",
+            String::from_utf8_lossy(&output)
+        );
         match terminal.read(&mut buffer) {
             Ok(0) => break,
             Ok(n) => output.extend_from_slice(&buffer[..n]),
             Err(e) if e.raw_os_error() == Some(libc::EIO) => break, // Linux PTY EOF.
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
             Err(e) => panic!("read pipeline terminal: {e}"),
         }
     }
     let output = String::from_utf8_lossy(&output);
+    assert!(
+        fixture.finish().status.success(),
+        "pipeline failed: {output}"
+    );
     assert!(
         output.contains("theory MemoryTest"),
         "lost pipeline output: {output}"
