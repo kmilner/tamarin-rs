@@ -141,6 +141,13 @@ impl Job {
         // Negative PID addresses only the dedicated prover process group.
         if unsafe { libc::kill(-self.pid(), signal) } == -1 {
             let err = io::Error::last_os_error();
+            // Darwin skips zombies when signalling groups and returns EPERM
+            // when none remain to signal. We deliberately keep the exited
+            // worker unreaped to reserve the group ID until cleanup finishes.
+            #[cfg(target_os = "macos")]
+            if err.raw_os_error() == Some(libc::EPERM) && self.exited()? {
+                return Ok(());
+            }
             if err.raw_os_error() != Some(libc::ESRCH) {
                 return Err(err);
             }
@@ -284,6 +291,24 @@ impl Drop for SignalHandlers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleanup_preserves_status_when_only_the_zombie_worker_remains() {
+        for code in [0, 7] {
+            let child = Command::new("/bin/sh")
+                .args(["-c", &format!("exit {code}")])
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let mut job = Job { child: Some(child) };
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !job.exited().unwrap() {
+                assert!(Instant::now() < deadline, "worker did not exit");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(job.finish(None).unwrap(), code);
+        }
+    }
 
     #[test]
     fn job_control_cannot_discard_pending_termination() {

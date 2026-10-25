@@ -415,8 +415,10 @@ fn terminal_ctrl_z_stops_supervisor_and_resumes_worker() {
 fn monitoring_does_not_steal_the_terminal_from_a_pipeline() {
     let mut fixture = Fixture::new();
     let mut command = Command::new("/bin/bash");
+    // Use a clean interactive shell so it establishes terminal job control at
+    // startup, as a user's shell would.
     command.current_dir(&fixture.dir)
-        .args(["-c", "set -m; \"$1\" --memory-limit=1GiB --parse-only input.spthy | cat; printf '\\nPIPELINE_DONE\\n'", "monitor-pipeline"])
+        .args(["--noprofile", "--norc", "-i", "-c", "\"$1\" --memory-limit=1GiB --parse-only input.spthy | cat; printf '\\nPIPELINE_DONE\\n'", "monitor-pipeline"])
         .arg(env!("CARGO_BIN_EXE_tamarin-rs"));
     let (child, mut terminal) = spawn_terminal(command);
     fixture.child = Some(child);
