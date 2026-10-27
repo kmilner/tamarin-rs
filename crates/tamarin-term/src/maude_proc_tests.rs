@@ -691,3 +691,82 @@ fn match_eqs_direction_matches_hs() {
     assert!(!matches(&t_gen, &t_gen2).is_empty());
     assert!(!matches(&t_gen2, &t_gen).is_empty());
 }
+
+/// `x ⊕ a =? b ⊕ y` (seven unifiers) on a process that has read nothing
+/// but the theory, and on one that first read the names `x3 x2 x1 x0` in
+/// reverse order.  Maude orders variables by when a process first read
+/// their names, so without `name_order_command` the second process lists
+/// the unifiers in another order and gives the variables other roles.
+#[test]
+fn unify_reply_does_not_depend_on_the_names_maude_read_before() {
+    let path = match require_maude_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping: no maude");
+            return;
+        }
+    };
+    let sig = crate::maude_sig::xor_maude_sig();
+    let fresh = MaudeHandle::start(&path, sig.clone()).expect("start");
+    let used = MaudeHandle::start(&path, sig).expect("start");
+    let reverse = b"parse in MSG : cons(x3:Msg, cons(x2:Msg, cons(x1:Msg, x0:Msg))) .\n";
+    used.inner.lock().unwrap().execute(reverse).expect("parse");
+
+    let var = |n: &str| -> LNTerm { crate::term::Term::Lit(Lit::Var(LVar::new(n, LSort::Msg, 0))) };
+    let xor = |a: LNTerm, b: LNTerm| {
+        crate::term::f_app_ac(crate::function_symbols::AcSym::Xor, vec![a, b])
+    };
+    let eqs = [Equal {
+        lhs: xor(var("x"), var("a")),
+        rhs: xor(var("b"), var("y")),
+    }];
+    let want = fresh.unify(&eqs).expect("unify");
+    assert_eq!(want.len(), 7, "unifiers: {want:#?}");
+    assert_eq!(used.unify(&eqs).expect("unify"), want);
+
+    // The same on the raw reply, which the shared reply cache hands to
+    // every pool member.
+    let cmd = b"unify in MSG : tamxor(x0:Msg, x1:Msg) =? tamxor(x2:Msg, x3:Msg) .\n";
+    let reply = |h: &MaudeHandle| h.inner.lock().unwrap().execute(cmd).expect("unify");
+    let want = reply(&fresh);
+    assert!(
+        want.starts_with(b"Unifier 1") || want.starts_with(b"\nUnifier 1"),
+        "{}",
+        String::from_utf8_lossy(&want)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&reply(&used)),
+        String::from_utf8_lossy(&want)
+    );
+}
+
+/// The name-order command mentions every name once, in order, and Maude
+/// accepts it in the smallest module `pp_theory` writes (a rejected command
+/// would only print a warning, and the names would stay unread).
+#[test]
+fn name_order_command_lists_the_names_in_order_and_parses() {
+    let cmd = name_order_command(ORDERED_VAR_NAMES);
+    let names: Vec<usize> = cmd
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter_map(|tok| tok.strip_prefix('x')?.parse().ok())
+        .collect();
+    assert_eq!(names, (0..ORDERED_VAR_NAMES).collect::<Vec<_>>());
+
+    let path = match require_maude_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping: no maude");
+            return;
+        }
+    };
+    let h = MaudeHandle::start(&path, crate::maude_sig::minimal_maude_sig(false)).expect("start");
+    let reply = h
+        .inner
+        .lock()
+        .unwrap()
+        .execute(cmd.as_bytes())
+        .expect("parse");
+    let reply = String::from_utf8_lossy(&reply);
+    assert!(reply.starts_with("TOP: cons(cons("), "{reply:.200}");
+    assert!(reply.contains("x1999:Msg"), "{reply:.200}");
+}
