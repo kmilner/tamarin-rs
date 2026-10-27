@@ -321,6 +321,61 @@ fn pool_sequential_reuse_stays_at_one_spawned() {
     assert_eq!(pool.size(), 4, "size() still reports the target");
 }
 
+/// A thread that panics while one of the handle's calls holds its lock
+/// poisons the handle.  The pool must not hand it out again: the next
+/// `acquire` gets a new process that answers.  A healthy handle released by
+/// a panicking thread is still reused.
+#[test]
+fn pool_retires_a_handle_poisoned_by_a_panic() {
+    let path = match require_maude_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping: no maude");
+            return;
+        }
+    };
+    let pool = MaudePool::new(
+        &path,
+        pair_maude_sig(),
+        1,
+        Arc::new(SharedMaudeCaches::default()),
+    )
+    .expect("pool");
+    let panicked = std::thread::scope(|s| {
+        s.spawn(|| {
+            let h = pool.acquire();
+            let _call = h.handle().inner.lock().unwrap();
+            panic!("panic inside a Maude call");
+        })
+        .join()
+        .is_err()
+    });
+    assert!(panicked);
+    assert_eq!(pool.spawned(), 0, "the poisoned handle is retired");
+    let h = pool.acquire();
+    assert!(!h.handle().inner.is_poisoned());
+    let r = h.reduce(&reducible_fst_pair("a", "b")).expect("reduce");
+    assert_eq!(
+        r,
+        crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+            crate::lterm::NameTag::Pub,
+            "a"
+        )))
+    );
+    drop(h);
+
+    let panicked = std::thread::scope(|s| {
+        s.spawn(|| {
+            let _h = pool.acquire();
+            panic!("panic outside any Maude call");
+        })
+        .join()
+        .is_err()
+    });
+    assert!(panicked);
+    assert_eq!(pool.spawned(), 1, "a healthy handle goes back to the pool");
+}
+
 /// Six threads share a two-member pool.  Each thread gets its own answer
 /// back.  The term of each query differs from the terms of the other
 /// queries.  A handle that leaked another thread's reply therefore returns

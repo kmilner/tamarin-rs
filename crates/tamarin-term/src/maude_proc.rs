@@ -1893,11 +1893,27 @@ impl<'a> Drop for PooledMaude<'a> {
     fn drop(&mut self) {
         if let Some(h) = self.inner.take() {
             let mut state = self.pool.state.lock().unwrap();
-            // LIFO reuse: the most recently released (warmest) member is the
-            // next one popped, keeping queries concentrated on warm members.
-            state.free.push(h);
-            // Only one waiter can take the handle we just pushed.
+            // A panic in the middle of one of its calls poisoned the handle
+            // and may have left the process mid-reply: every later call on
+            // it would fail.  Retire it (its process ends when the last
+            // clone drops) and free the slot for a lazy spawn.  Only a
+            // caller that survives panics, such as the RL API's request
+            // threads, ever gets here.
+            let retired = if h.inner.is_poisoned() {
+                state.spawned -= 1;
+                Some(h)
+            } else {
+                // LIFO reuse: the most recently released (warmest) member is
+                // the next one popped, keeping queries concentrated on warm
+                // members.
+                state.free.push(h);
+                None
+            };
+            // Only one waiter can take the handle we just pushed (or the
+            // slot we just freed).
             self.pool.notify.notify_one();
+            drop(state);
+            drop(retired);
         }
     }
 }
