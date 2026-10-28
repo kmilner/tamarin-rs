@@ -38,9 +38,18 @@ paths, frontend development, and the Haskell test build.
 Set a [batch-tamarin](https://github.com/tamarin-prover/batch-tamarin) recipe's
 `tamarin_versions.<alias>.path` to `tamarin-rs` or its full path. Its generated
 `+RTS -N<cores> -RTS` arguments work automatically, setting the worker count
-just like `--processors=<cores>`. Only the `-N` RTS option is supported;
+just like `--processors=<cores>`. The `-M<size>` RTS option is also accepted
+as an alias for `--memory-limit` (see below); other RTS options are rejected.
 batch-tamarin handles memory limits and timeouts itself. Tested with
 batch-tamarin 1.2.0.
+
+## Memory limits
+
+For batch runs on Linux and macOS, `--memory-limit=<size>` (or `+RTS -M<size> -RTS`)
+sets a threshold for the combined resident memory of the prover and its Maude
+helpers; for example, `--memory-limit=4GiB`. The job stops when sampled usage
+exceeds the threshold. Usage can overshoot between samples; unfinished
+proofs are lost. See [memory-limit behavior and limitations](docs/PERFORMANCE.md#memory-limits).
 
 ## Checking proofs
 

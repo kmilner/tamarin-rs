@@ -36,6 +36,10 @@ rayon = { workspace = true }
 clap = { workspace = true }
 codespan-reporting = "0.13.1"
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+# Only process data is needed.
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+
 [dev-dependencies]
 tamarin-test-support = { workspace = true }
 
