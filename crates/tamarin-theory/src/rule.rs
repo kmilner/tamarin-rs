@@ -1592,7 +1592,10 @@ pub fn pretty_open_proto_rule(r: &crate::theory::OpenProtoRule) -> Doc {
     let variants = crate::theory::manual_rule_variants(r);
     match variants.as_slice() {
         [] => pretty_proto_rule_e(r.rule_e()),
-        [ru_ac] if rule_products_outside_exponents(ru_ac).is_empty() => {
+        [ru_ac]
+            if ru_ac.info.name == r.rule_e().info.name
+                && rule_products_outside_exponents(ru_ac).is_empty() =>
+        {
             pretty_proto_rule_ac_as_e(ru_ac)
         }
         vs => pretty_proto_rule_e(r.rule_e()).above_g(
@@ -1616,16 +1619,21 @@ pub fn pretty_open_proto_rule_as_closed_rule(r: &crate::theory::MergedProtoRule)
             pretty_proto_rule_e(&r.rule_e),
             Doc::empty().above_g(trivial_ac_variant_comment()).nest(2),
         ),
-        [ru_ac] if rule_products_outside_exponents(ru_ac).is_empty() => above_blank(
-            pretty_proto_rule_ac_as_e(ru_ac),
-            pretty_loop_breakers(&ru_ac.info.loop_breakers)
-                .above_g(if ru_ac.info.variants.len() == 1 {
-                    trivial_ac_variant_comment()
-                } else {
-                    multi_comment(pretty_proto_rule_ac(ru_ac))
-                })
-                .nest(2),
-        ),
+        [ru_ac]
+            if ru_ac.info.name == r.rule_e.info.name
+                && rule_products_outside_exponents(ru_ac).is_empty() =>
+        {
+            above_blank(
+                pretty_proto_rule_ac_as_e(ru_ac),
+                pretty_loop_breakers(&ru_ac.info.loop_breakers)
+                    .above_g(if ru_ac.info.variants.len() == 1 {
+                        trivial_ac_variant_comment()
+                    } else {
+                        multi_comment(pretty_proto_rule_ac(ru_ac))
+                    })
+                    .nest(2),
+            )
+        }
         variants => pretty_proto_rule_e(&r.rule_e).above_g(
             kw_variants()
                 .above_g(pretty_proto_rule_ac_list(variants).nest(1))

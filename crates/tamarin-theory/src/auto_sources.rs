@@ -724,11 +724,10 @@ pub(crate) fn closed_rule_as_open(
 ///
 /// The variants take the unfolded rule's slot in item order, each carrying
 /// the original as its `cprRuleE` half.  The printer regroups them:
-/// `mergeOpenProtoRules` collapses the run sharing one `ruE`
-/// (OpenTheory.hs) and `prettyOpenProtoRuleAsClosedRule` renders a
-/// single AC body as `prettyProtoRuleACasE` (under the `___VARIANT_1` name,
-/// as if modulo E) and several as `prettyProtoRuleE ruE` plus a ` variants`
-/// block of `rule (modulo AC)` sub-blocks (OpenTheory.hs).
+/// `mergeOpenProtoRules` collapses the run sharing one `ruE`. A separately
+/// named singleton stays inside its parent family, just like multiple AC
+/// members; only a safe same-name identity family can print as a standalone
+/// E rule (OpenTheory.hs).
 ///
 /// Returns `true` iff any rule was unfolded.
 fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
