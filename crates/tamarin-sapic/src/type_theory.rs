@@ -42,7 +42,7 @@ use crate::typing::{
 /// HS's first return component.  The second, the environment the whole theory
 /// was typed against, is handed back: no RS caller reads it, but its consumers
 /// are the ProVerif / DeepSec exporters (`loadHeaders` folds over `events`,
-/// Export.hs), which are unported.  `typeTheory`
+/// Export/Sapic.hs), which are unported.  `typeTheory`
 /// (Typing.hs) is this function with the environment discarded.
 ///
 /// Runs on EVERY theory — a process-free (non-SAPIC) theory still gets its

@@ -855,7 +855,7 @@ fn run_pinned_case(name: &str) -> Option<(String, String)> {
 
 /// `--lemma=NAME` narrows what gets proven.  HS appends `--lemma` values to
 /// the SAME `lemmaNames` list `--prove` fills (`TheoryLoader.hs`), and
-/// `lemmaSelector` (TheoryLoader.hs) matches a name exactly unless it
+/// `lemmaSelector` (TheoryLoader.hs#lemmaSelector) matches a name exactly unless it
 /// ends in `*` — so the bare `--prove`'s recorded `""` matches nothing and
 /// `reach` alone is proven, leaving `leaks` at `by sorry` / `analysis
 /// incomplete`.  The `''` that no lemma matches is also what makes
