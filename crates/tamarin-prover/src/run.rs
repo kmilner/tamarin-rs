@@ -1774,9 +1774,9 @@ impl TheoryPipeline<'_> {
         }
 
         // `--auto-sources` (HS `closeTheoryWithMaude` autosources branch,
-        // CloseRule.hs#closeTheoryWithMaude): when the raw sources contain
-        // partial deconstructions, unfold every rule into its AC-variant
-        // rules (`unfoldRuleVariants`), annotate them with AUTO_* actions and
+        // CloseRule.hs#closeTheoryWithMaude): prepare a preliminary cache of
+        // unfolded rules. If its refined sources contain partial
+        // deconstructions, annotate the rules from its raw sources with AUTO_* actions and
         // add the `AUTO_typing` sources lemma.  HS applies this on EVERY
         // theory close, and the FIRST close runs BEFORE partial evaluation
         // (`closeTheoryWithMaude sign t autoSources True` builds `closedThy`,
