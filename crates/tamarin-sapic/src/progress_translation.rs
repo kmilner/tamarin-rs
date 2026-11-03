@@ -47,20 +47,20 @@ fn rhs_p(pos: &[i64]) -> Pos {
 /// add a `Fr (varProgress child)` premise, a `ProgressFrom child` action, and
 /// thread the progress var into every rhs state fact — IF any rhs fact is a
 /// non-semi state AND `child ∈ domPF`.
-fn add_progress_from(dom_pf: &PosSet, child: &Pos, body: RuleBody) -> RuleBody {
-    let (l, a, r, res) = body;
-    let any_non_semi = r.iter().any(is_non_semi_state);
+fn add_progress_from(dom_pf: &PosSet, child: &Pos, mut body: RuleBody) -> RuleBody {
+    let any_non_semi = body.concs.iter().any(is_non_semi_state);
     if any_non_semi && dom_pf.contains(child) {
         let vp = var_progress(child);
-        let mut nl = vec![TransFact::Fr(vp)];
-        nl.extend(l);
-        let mut na = vec![TransAction::ProgressFrom(child.clone())];
-        na.extend(a);
-        let nr: Vec<TransFact> = r.iter().map(|f| add_var_to_state(&vp, f)).collect();
-        (nl, na, nr, res)
-    } else {
-        (l, a, r, res)
+        body.prems.insert(0, TransFact::Fr(vp));
+        body.acts
+            .insert(0, TransAction::ProgressFrom(child.clone()));
+        body.concs = body
+            .concs
+            .iter()
+            .map(|f| add_var_to_state(&vp, f))
+            .collect();
     }
+    body
 }
 
 /// `addProgressTo invPF child (l,a,r,res)` (ProgressTranslation.hs): add a
@@ -69,9 +69,8 @@ fn add_progress_from(dom_pf: &PosSet, child: &Pos, body: RuleBody) -> RuleBody {
 fn add_progress_to<F: Fn(&[i64]) -> Option<Pos>>(
     inv_pf: &F,
     child: &Pos,
-    body: RuleBody,
+    mut body: RuleBody,
 ) -> RuleBody {
-    let (l, a, r, res) = body;
     let is_target_state = |fct: &TransFact| -> bool {
         matches!(
             fct,
@@ -80,14 +79,13 @@ fn add_progress_to<F: Fn(&[i64]) -> Option<Pos>>(
                     && matches!(kind, StateKind::PState | StateKind::LState)
         )
     };
-    if r.iter().any(is_target_state)
+    if body.concs.iter().any(is_target_state)
         && let Some(pos_from) = inv_pf(child)
     {
-        let mut na = vec![TransAction::ProgressTo(child.clone(), pos_from)];
-        na.extend(a);
-        return (l, na, r, res);
+        body.acts
+            .insert(0, TransAction::ProgressTo(child.clone(), pos_from));
     }
-    (l, a, r, res)
+    body
 }
 
 /// `addProgressItems domPF invPF pos` (ProgressTranslation.hs):
@@ -130,12 +128,19 @@ pub(crate) fn progress_init(
     let new_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>> = init_rules
         .into_iter()
         .map(|mut r| {
-            let body: RuleBody = (r.prems, r.acts, r.concs, r.restr);
-            let (l, a, c, res) = add_progress_from(&dom_pf, &empty, body);
-            r.prems = l;
-            r.acts = a;
-            r.concs = c;
-            r.restr = res;
+            let body = RuleBody {
+                prems: r.prems,
+                acts: r.acts,
+                concs: r.concs,
+                restr: r.restr,
+                matches_destructor_equation: r.matches_destructor_equation,
+            };
+            let body = add_progress_from(&dom_pf, &empty, body);
+            r.prems = body.prems;
+            r.acts = body.acts;
+            r.concs = body.concs;
+            r.restr = body.restr;
+            r.matches_destructor_equation = body.matches_destructor_equation;
             r
         })
         .collect();
