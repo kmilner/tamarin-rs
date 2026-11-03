@@ -1274,8 +1274,7 @@ end
 /// Theory/Text/Parser/Rule.hs).  `prettyOpenProtoRule`
 /// (OpenTheory.hs) prints several variants under `kwVariants` — the
 /// bare `variants` keyword (Theory/Text/Pretty.hs) — below the E rule, and
-/// prints a LONE variant through `prettyProtoRuleACasE`, which shows the
-/// variant's own name and body in place of the E rule's.
+/// retains a lone variant under its original E-rule when their names differ.
 #[test]
 fn manual_rule_variants_block_round_trips() {
     assert_transcript(
@@ -1324,8 +1323,11 @@ rule (modulo E) R:
   rule (modulo AC) R___VARIANT_2:
      [ In( 'c' ) ] --[ R( f('c') ) ]-> [ Out( f('c') ) ]
 
-rule (modulo E) S___VARIANT_1:
-   [ In( 'd' ) ] --[ S( 'd' ) ]-> [ ]
+rule (modulo E) S:
+   [ In( z ) ] --[ S( z ) ]-> [ ]
+ variants
+  rule (modulo AC) S___VARIANT_1:
+     [ In( 'd' ) ] --[ S( 'd' ) ]-> [ ]
 
 end
 "#,

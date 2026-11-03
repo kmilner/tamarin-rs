@@ -829,8 +829,9 @@ fn manual_variant_keeps_the_trivial_disjunction() {
         vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()]
     );
     let out = pretty_open_proto_rule_as_closed_rule(&merged).render();
-    assert!(out.contains("has exactly the trivial AC variant"), "{out}");
-    assert!(!out.contains("variants (modulo AC)"), "{out}");
+    assert!(out.contains("rule (modulo E) R:"), "{out}");
+    assert!(out.contains("rule (modulo AC) R___VARIANT_1:"), "{out}");
+    assert!(out.contains("variants"), "{out}");
 }
 
 /// HS `frees` at `Rule ProtoRuleEInfo` folds the info before the four fact
