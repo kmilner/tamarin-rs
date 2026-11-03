@@ -136,3 +136,26 @@ fn precompute_counts_the_unfolded_variants_under_auto_sources() {
         ])
     );
 }
+
+#[test]
+fn precompute_counts_identical_rules_once() {
+    if !maude_available() {
+        return;
+    }
+    let source = r#"theory DuplicateCount begin
+        rule R: [In(x)] --[A(x)]-> [Out(x)]
+        rule R: [In(x)] --[A(x)]-> [Out(x)]
+        lemma witness: exists-trace "Ex x #i. A(x)@i"
+        end"#;
+    let (code, stdout, stderr) = common::run_raw(
+        TMP_DIR,
+        "duplicates",
+        source,
+        &["--precompute-only", "--derivcheck-timeout=0"],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.starts_with("Multiset rewriting rules: 3\n"),
+        "{stdout}"
+    );
+}

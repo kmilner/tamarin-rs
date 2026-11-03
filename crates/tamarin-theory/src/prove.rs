@@ -1047,20 +1047,7 @@ impl ProverSession {
     /// ClosedTheory.hs). Materialises the same session cache entries
     /// later proof requests use, avoiding a separate saturation/refinement.
     pub fn precomputation_stats(&self) -> Result<PrecomputationStats, ProveError> {
-        // HS `length (getClassifiedRules thy)._crProtocol`: the theory's
-        // rule items plus the intruder members of `crProtocol` —
-        // everything that is neither a construction rule (`isConstrRule`,
-        // Model/Rule.hs) nor a destruction rule (`isDestrRule`,
-        // Model/Rule.hs), i.e. ISend/IRecv/IRecvNC/Fresh.
-        let rules = self.theory.rules().count()
-            + self
-                .template_ctx
-                .intruder_rules
-                .iter()
-                .filter(|ir| {
-                    !crate::rule::is_constr_rule(&ir.info) && !crate::rule::is_destr_rule(&ir.info)
-                })
-                .count();
+        let rules = self.template_ctx.protocol_rule_count();
 
         let SourceStats { raw, refined } = self.source_stats();
         let raw = raw?;

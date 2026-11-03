@@ -635,7 +635,7 @@ pub fn merge_open_proto_rules(
 ) -> Vec<TheoryItem<MergedProtoRule>> {
     let mut out: Vec<TheoryItem<MergedProtoRule>> = Vec::new();
     for item in items {
-        let opened = match item.split_rule() {
+        let mut opened = match item.split_rule() {
             Ok(other) => {
                 out.push(other);
                 continue;
@@ -647,9 +647,13 @@ pub fn merge_open_proto_rules(
         // item is what the next one is compared against.
         match out.last_mut() {
             Some(TheoryItem::Rule(prev)) if prev.rule_e == opened.rule_e => {
-                prev.rule_ac.extend(opened.rule_ac)
+                prev.rule_ac =
+                    tamarin_utils::prelude_ext::nub(prev.rule_ac.drain(..).chain(opened.rule_ac));
             }
-            _ => out.push(TheoryItem::Rule(opened)),
+            _ => {
+                opened.rule_ac = tamarin_utils::prelude_ext::nub(opened.rule_ac);
+                out.push(TheoryItem::Rule(opened));
+            }
         }
     }
     out

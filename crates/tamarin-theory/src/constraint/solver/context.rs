@@ -391,6 +391,20 @@ impl ProofContext {
         Self::with_options(maude, rules, ProofContextOptions::default())
     }
 
+    /// Number of protocol-class rules, including non-constructor/non-destructor
+    /// intruder rules, after compiled-member deduplication.
+    pub fn protocol_rule_count(&self) -> usize {
+        self.rules.len()
+            + self
+                .intruder_rules
+                .iter()
+                .filter(|rule| {
+                    !crate::rule::is_constr_rule(&rule.info)
+                        && !crate::rule::is_destr_rule(&rule.info)
+                })
+                .count()
+    }
+
     /// Whether a search with a deadline visits its cases in order: a witness
     /// search, or one whose ranking or source provider can fail. A later
     /// case of such a search could end or fail it after the deadline has cut
@@ -821,6 +835,8 @@ impl ProofContext {
         for rule in &mut rules {
             crate::tools::rule_variants::prepare_open_rule_variant(rule, &maude)?;
         }
+        // Identical closed members must not create duplicate source cases.
+        let rules = tamarin_utils::prelude_ext::nub(rules);
         // `pcTrueSubterm` — all destructor rules are subterm rules.
         let pc_true_subterm = intruder_rules
             .iter()

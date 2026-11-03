@@ -190,21 +190,20 @@ fn proof_state(entry: &TheoryEntry) -> Result<String, String> {
     Ok(postprocess_html(&elems.join("\n")))
 }
 
-/// HS `length (getClassifiedRules thy)._crProtocol` — the count shown in the
-/// `Multiset rewriting rules … (N)` link.  Equal to the number of rules the
-/// `main/rules` page renders (`extraACRules ++ protoRules`), i.e.
-/// `web_proto_rules.len()` plus the ISend/IRecv-style intruder members of
-/// `crProtocol` (`ctx.intruder_rules` minus construction/destruction rules).
+/// Protocol-class rule count from the same compiled cache used by proof search.
 fn proto_rule_count(entry: &TheoryEntry) -> usize {
-    let proto = tamarin_theory::pretty_theory::web_proto_rules(&entry.typed_theory).len();
-    let extra = entry.proof_state.as_ref().map_or(0, |ps| {
-        let ctx = ps.template_context();
-        ctx.intruder_rules
-            .iter()
-            .filter(|ir| !is_constr_rule(&ir.info) && !is_destr_rule(&ir.info))
-            .count()
-    });
-    proto + extra
+    entry.proof_state.as_ref().map_or_else(
+        || {
+            tamarin_utils::prelude_ext::nub(
+                entry
+                    .typed_theory
+                    .rules()
+                    .flat_map(tamarin_theory::theory::closed_rules_ac),
+            )
+            .len()
+        },
+        |ps| ps.template_context().protocol_rule_count(),
+    )
 }
 
 /// HS `casesInfo` rendering: `(N cases, deconstructions complete)` or
@@ -1170,6 +1169,35 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tamarin_test_support::require_maude_path;
+
+    #[test]
+    fn rule_count_uses_deduplicated_protocol_cache() {
+        let Some(maude) = require_maude_path() else {
+            return;
+        };
+        let config = test_config(&maude);
+        let mut entry = crate::theory_io::load_from_source(
+            r#"theory DuplicateCount begin
+            rule R: [In(x)] --[A(x)]-> [Out(x)]
+            rule R: [In(x)] --[A(x)]-> [Out(x)]
+            lemma witness: exists-trace "Ex x #i. A(x)@i"
+            end"#,
+            crate::state::TheoryOrigin::Upload("duplicates.spthy".into()),
+            &config,
+        )
+        .unwrap();
+        assert_eq!(proto_rule_count(&entry), 1);
+        entry.proof_state = Some(Arc::new(
+            crate::handlers::proof_tree::ProofState::new(
+                &entry.typed_theory,
+                (*entry.prover_maude_sig).clone(),
+                entry.ndc_cache.as_ref(),
+                &config,
+            )
+            .unwrap(),
+        ));
+        assert_eq!(proto_rule_count(&entry), 3);
+    }
 
     #[test]
     fn long_lemma_attributes_wrap_in_the_shared_header() {
