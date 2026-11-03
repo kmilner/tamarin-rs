@@ -28,6 +28,10 @@ pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
     // diff(...) term, so the corpus loader uses the trace parser.
     ("regression/diff/last.spthy", SKIP_PARSE),
     // Intentional rejection fixtures introduced by the updated upstream pin.
+    (
+        "regression/negative/issue905-undeclared-em.spthy",
+        SKIP_PARSE,
+    ),
     ("regression/negative/issue906-end-prefix.spthy", SKIP_PARSE),
     ("regression/negative/issue907-variable-lhs.spthy", SKIP_ELAB),
     (

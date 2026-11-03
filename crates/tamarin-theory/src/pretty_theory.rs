@@ -1831,16 +1831,15 @@ fn pretty_macros(macros: &[crate::theory::LNMacro]) -> String {
     Doc::text("macros:").above(body).render()
 }
 
-/// HS `isSafetyFormula . formulaToGuarded_` (Guarded.hs) over
+/// HS `formulaToGuarded` followed by `isSafetyFormula` (Guarded.hs) over
 /// a restriction's formula.
 ///
 /// `isSafetyFormula gf0 = null (frees [gf0]) && noExistential gf0`
 /// (Guarded.hs): the guarded formula must be CLOSED *and* free of
 /// existential quantifiers.  `crate::guarded::is_safety_formula` is that exact
 /// predicate; this wrapper supplies the `LNFormula → LNGuarded` step.
-/// HS's `formulaToGuarded_` `error`s out when the formula is not guardable
-/// (`either (error . render) id`, Guarded.hs) and takes the whole run down;
-/// an unguardable restriction here yields `false` (no annotation) instead.
+/// An unguardable restriction yields `false` (no safety annotation), as in
+/// Haskell's `prettyRestriction`.
 fn is_safety_formula(f: &crate::formula::LNFormula) -> bool {
     match crate::guarded::formula_to_guarded(f) {
         Ok(g) => crate::guarded::is_safety_formula(&g),
