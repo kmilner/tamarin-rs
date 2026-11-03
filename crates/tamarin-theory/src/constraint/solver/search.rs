@@ -996,7 +996,12 @@ fn visit_child(
     Ok(child.status == NodeStatus::Solved)
 }
 
-fn expand_inner(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Result<(), ProveError> {
+/// Force this node's method without searching any of its child systems.
+fn force_method(
+    ctx: &ProofContext,
+    node: &mut ProofNode,
+    depth: usize,
+) -> Result<Option<Vec<(String, System)>>, ProveError> {
     check_cancelled()?;
     // `--bound=N` (HS `boundProofDepth`, Theory/Proof.hs): `go n`'s
     // `0 < n` guard fires before the node is even inspected, so ANY node at
@@ -1010,7 +1015,7 @@ fn expand_inner(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Resul
     if depth >= proof_bound {
         node.method = ProofMethod::Sorry(Some(format!("bound {proof_bound} hit")));
         node.status = NodeStatus::Sorry;
-        return Ok(());
+        return Ok(None);
     }
     // Rust-only diagnostic [STATE] emission (gated by TAM_RS_TRACE_STATE)
     // placed at every evaluated prove entry so Simplify / Induction /
@@ -1044,19 +1049,19 @@ fn expand_inner(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Resul
         DEPTH_LIMIT_HIT.with(|f| f.set(true));
         node.method = ProofMethod::Sorry(Some("depth limit".into()));
         node.status = NodeStatus::Sorry;
-        return Ok(());
+        return Ok(None);
     }
     // Already terminal.
     let finished = is_finished(ctx, &node.sys)?;
     if let Some(r) = finished {
         node.status = node_status_of(&r);
         node.method = ProofMethod::Finished(r);
-        return Ok(());
+        return Ok(None);
     }
     if deadline_reached() {
         node.method = ProofMethod::Sorry(Some("deadline reached".into()));
         node.status = NodeStatus::Sorry;
-        return Ok(());
+        return Ok(None);
     }
     // Mirror Haskell's `rankProofMethods` → `execMethods` flow:
     // build a priority-ordered list of candidate methods, try each
@@ -1077,10 +1082,10 @@ fn expand_inner(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Resul
     // `candidate_methods_open`: the terminal check above just proved
     // `is_finished(ctx, &node.sys)` is `None`, and nothing has touched
     // `node.sys` since — skip the guarded entry's redundant re-sweep.
-    let Some((method, mut cases)) = select_open_method(&node.sys, ctx, depth)? else {
+    let Some((method, cases)) = select_open_method(&node.sys, ctx, depth)? else {
         node.method = ProofMethod::Sorry(Some("Cannot prove".into()));
         node.status = NodeStatus::Sorry;
-        return Ok(());
+        return Ok(None);
     };
     node.method = method;
     if cases.is_empty() {
@@ -1097,8 +1102,34 @@ fn expand_inner(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Resul
         } else {
             NodeStatus::Contradictory
         };
-        return Ok(());
+        return Ok(None);
     }
+    Ok(Some(cases))
+}
+
+/// Haskell's cutAfterFirstSorry inspects every sibling's method. Preserve
+/// terminal methods and their reasons, and discard the children of open steps.
+fn cut_sibling_after_sorry(
+    ctx: &ProofContext,
+    node: &mut ProofNode,
+    depth: usize,
+) -> Result<(), ProveError> {
+    force_method(ctx, node, depth)?;
+    if !matches!(
+        node.method,
+        ProofMethod::Finished(_) | ProofMethod::Sorry(_)
+    ) {
+        node.method = ProofMethod::Sorry(None);
+        node.status = NodeStatus::Sorry;
+    }
+    node.children.clear();
+    check_cancelled()
+}
+
+fn expand_inner(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Result<(), ProveError> {
+    let Some(mut cases) = force_method(ctx, node, depth)? else {
+        return Ok(());
+    };
     // Early-break-on-Solved (Haskell `foldMap` semantics):
     //
     // Haskell's Disj-monad is lazy — once any branch returns
@@ -1140,41 +1171,17 @@ fn expand_inner(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Resul
         //                  `foldMap`-with-`Solution` short-circuit.
         //   Bfs / Nothing: never stop — HS forces every sibling
         //                  (`checkLevel`'s `traverse` / `id`).
-        //   AfterSorry:    stop on the first Solved-or-Sorry subtree, and
-        //                  keep the remaining cases as bare-`sorry` LEAVES —
-        //                  HS `cutAfterFirstSorry`'s `go True` rewrites every
-        //                  node visited after the abort to `Sorry Nothing`
-        //                  with its children dropped and its annotation
-        //                  kept, which is exactly a case HS never forces.
+        //   AfterSorry:    stop descending after the first Solved-or-Sorry
+        //                  subtree. Force each remaining sibling's method;
+        //                  retain terminal leaves and cut open steps to sorry.
         let mut abort = false;
         for (name, sys) in cases {
             if abort {
                 match ctx.cut {
                     CutStrategy::AfterSorry => {
-                        // HS `go True` (cutAfterFirstSorry, Theory/Proof.hs)
-                        // still exposes a cheap `Finished _` method without
-                        // forcing an open node's selected method or children:
-                        // finished nodes are preserved after the abort —
-                        // NSPK3 renders `by contradiction /* cyclic */`
-                        // leaves amid the sorry stubs — while every
-                        // still-open node becomes a bare `sorry` leaf.
-                        let (method, status) = match is_finished(ctx, &sys)? {
-                            Some(r) => {
-                                let st = node_status_of(&r);
-                                (ProofMethod::Finished(r), st)
-                            }
-                            None => (ProofMethod::Sorry(None), NodeStatus::Sorry),
-                        };
-                        node.children.insert(
-                            name,
-                            ProofNode {
-                                method,
-                                sys,
-                                children: BTreeMap::new(),
-                                status,
-                                annotated: true,
-                            },
-                        );
+                        let mut child = ProofNode::open(sys);
+                        visit_child(ctx, &name, &mut child, depth, cut_sibling_after_sorry)?;
+                        node.children.insert(name, child);
                         continue;
                     }
                     _ => break,
@@ -1440,6 +1447,35 @@ mod tests {
                 )
             });
         Some(ProofContext::new(h, Vec::new()))
+    }
+
+    #[test]
+    fn after_sorry_preserves_exhaustion_and_bound_reasons() {
+        let Some(ctx) = ctx() else { return };
+        let _tls = SearchTlsGuard::install(SearchTlsState {
+            deadline: None,
+            max_depth: usize::MAX,
+            depth_limit_hit: false,
+            proof_bound: usize::MAX,
+            ranking_depth_offset: 0,
+        });
+        let mut searched = ProofNode::open(System::empty());
+        expand(&ctx, &mut searched, 0).unwrap();
+        assert!(matches!(
+            searched.method,
+            ProofMethod::Finished(_) | ProofMethod::Sorry(Some(_))
+        ));
+        let mut cut = ProofNode::open(System::empty());
+        cut_sibling_after_sorry(&ctx, &mut cut, 0).unwrap();
+        assert_eq!(cut.method, searched.method);
+        assert_eq!(cut.status, searched.status);
+        assert!(cut.children.is_empty());
+
+        PROOF_BOUND.with(|bound| bound.set(1));
+        cut_sibling_after_sorry(&ctx, &mut cut, 1).unwrap();
+        assert!(
+            matches!(cut.method, ProofMethod::Sorry(Some(ref reason)) if reason == "bound 1 hit")
+        );
     }
 
     fn search_pool(
