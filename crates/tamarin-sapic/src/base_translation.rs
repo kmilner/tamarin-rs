@@ -658,7 +658,7 @@ pub(crate) fn base_trans_comb(
         //   let tx' = vs `insert` (v `insert` tildex) in
         //   ([([def_state, PureCell t (varTerm v), Fr vs], [],
         //      [def_state1 tx', CellLocked t (varTerm vs)], [])],
-        //    tx', Just tildex)
+        //    tx', Nothing)
         // (The right `IsNotSet` arm is commented out in HS — pure lookups have a
         // single arm.)
         PC::Lookup(t, v) if an.pure_state && an.unlock.is_some() => {
@@ -681,7 +681,8 @@ pub(crate) fn base_trans_comb(
                 ],
                 vec![],
             );
-            Ok((vec![body], tx_prime, Some(tildex.clone())))
+            // Pure lookups cannot fail; do not translate an unreachable branch.
+            Ok((vec![body], tx_prime, None))
         }
         // Classical Lookup (Basetranslation.hs):
         //   let tx' = v `insert` tildex
