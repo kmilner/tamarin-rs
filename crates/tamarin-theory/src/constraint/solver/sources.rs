@@ -2520,6 +2520,47 @@ struct ConjoinedArm {
     cont: u64,
 }
 
+/// Upstream #958 `matchToGoal`: move a source's premise endpoint in both
+/// edges and goals. Leaving a solved goal at the old index can discharge an
+/// unrelated live premise when the source is conjoined with the system.
+fn rewire_source_premise(
+    sys: &mut System,
+    from: (tamarin_term::lterm::LVar, crate::rule::PremIdx),
+    to: (tamarin_term::lterm::LVar, crate::rule::PremIdx),
+) {
+    use crate::constraint::constraints::Goal;
+    use crate::constraint::system::GoalStatus;
+    if from == to {
+        return;
+    }
+    let mut goals = std::collections::BTreeMap::<Goal, GoalStatus>::new();
+    for (goal, status) in sys.goals.iter() {
+        let mut goal = goal.clone();
+        match &mut goal {
+            Goal::Premise(prem, _) | Goal::Chain(_, prem) if *prem == from => *prem = to,
+            _ => {}
+        }
+        goals
+            .entry(goal)
+            .and_modify(|old| {
+                old.solved |= status.solved;
+                old.looping |= status.looping;
+                old.nr = old.nr.min(status.nr);
+            })
+            .or_insert_with(|| status.clone());
+    }
+    let content = sys.content_mut();
+    for edge in &mut content.edges {
+        if edge.tgt == from {
+            edge.tgt = to;
+        }
+    }
+    // Haskell's S.map also collapses edges whose endpoints now coincide.
+    content.edges.sort();
+    content.edges.dedup();
+    content.goals = std::sync::Arc::new(goals.into_iter().collect());
+}
+
 /// Refine half of Haskell's `applySource` (Sources.hs):
 ///
 /// ```haskell
@@ -2548,7 +2589,7 @@ struct ConjoinedArm {
 /// ```
 ///
 /// `matchToGoal`'s `PremiseG` arm additionally rewires the source case's
-/// EDGES onto the live premise index (Sources.hs).
+/// edges AND premise/chain goals onto the live premise index (upstream #958).
 ///
 /// The live goal is matched against the source's ABSTRACT `cdGoal`
 /// (`src.goal`) — NOT against a case-specific action.  That is what
@@ -2577,8 +2618,8 @@ struct ConjoinedArm {
 ///     `NeedsAc`, fall back to Maude.
 ///
 /// A.2.5 (`substNodePrem` in `matchToGoal`, Premise goals only):
-///     Rewire the renamed case's edges from the source pattern's premise
-///     index onto the live one.
+///     Rewire the renamed case's edges and premise/chain goals from the
+///     source pattern's premise index onto the live one.
 ///
 /// A.3 (`refineSubst subst` in `matchToGoal`):
 ///     `solveSubstEqs SplitNow subst >> substSystem` on the renamed
@@ -2632,35 +2673,13 @@ fn refine_source_case(
     let mut renamed_case = rename_system_by(case_sys, *rename_shift);
 
     // ---------------------------------------------------------------
-    // A.2.5 (Premise goals) — substNodePrem pPat (iPat, premIdxTerm).
-    // HS `matchToGoal` (Sources.hs) rewrites ONLY the source case's
-    // EDGES: `modM sEdges (substNodePrem pPat (iPat, premIdxTerm))`, where
-    // `substNodePrem from to = S.map (\e@(Edge c p) -> if p == from then
-    // Edge c to else e)`.  It does NOT touch `sGoals`.  So when the source
-    // pattern's consumer premise sits at index 0 (all precomputed sources
-    // use `PremIdx 0`, Sources.hs) but the LIVE goal being solved is at
-    // index i≠0, HS keeps the source case's SOLVED premise goal at index 0.
-    // After `conjoinSystem` re-inserts it (with a fresh gsNr) and node-merge
-    // relabels its node to the live node, this leaves a redundant SOLVED
-    // "ghost" premise goal `fa ▶₀ #i` alongside the genuine (now-solved)
-    // `fa ▶ᵢ #i`.  That ghost is search-inert (solved goals never drive open-
-    // goal selection) but it IS rendered in the per-node sequent, so the web
-    // UI must reproduce it byte-for-byte.  Do not rewrite the GOAL
-    // index — only edges — or the ghost goal is deduped away and
-    // diverges from HS on the interactive per-node systems.
+    // A.2.5: upstream #958 moves both edges and solved premise/chain goals,
+    // combining goal status when the rewritten keys coincide.
     if let Some((abstract_prem_idx, live_prem_idx)) = prem_rewire {
         let pat_prem = (*renamed_abstract_node, *abstract_prem_idx);
         let new_prem: (tamarin_term::lterm::LVar, crate::rule::PremIdx) =
             (*renamed_abstract_node, *live_prem_idx);
-        // In-place edge-endpoint rewrite through `content_mut()` — the
-        // conservative door bumps `content_stamp` (and, harmlessly, invalidates
-        // the caches: `renamed_case` was freshened, marker already cleared, and it
-        // is about to be wrapped in a `Reduction` and refined).
-        for e in renamed_case.content_mut().edges.iter_mut() {
-            if e.tgt == pat_prem {
-                e.tgt = new_prem;
-            }
-        }
+        rewire_source_premise(&mut renamed_case, pat_prem, new_prem);
     }
 
     // ---------------------------------------------------------------
