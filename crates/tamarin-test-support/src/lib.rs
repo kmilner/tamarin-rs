@@ -16,10 +16,32 @@
 /// The examples corpus used by workspace tests: `$CORPUS_ROOT` when set,
 /// otherwise the `tamarin-prover` submodule's examples directory.
 pub fn corpus_root() -> std::path::PathBuf {
-    std::env::var("CORPUS_ROOT").map_or_else(
-        |_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples"),
-        std::path::PathBuf::from,
+    resolve_corpus_root(
+        std::env::var_os("CORPUS_ROOT").as_deref(),
+        std::env::var_os("CARGO_MANIFEST_DIR").as_deref(),
     )
+}
+
+fn resolve_corpus_root(
+    explicit: Option<&std::ffi::OsStr>,
+    manifest: Option<&std::ffi::OsStr>,
+) -> std::path::PathBuf {
+    if let Some(root) = explicit {
+        return root.into();
+    }
+    workspace_root(manifest).join("tamarin-prover/examples")
+}
+
+fn workspace_root(manifest: Option<&std::ffi::OsStr>) -> std::path::PathBuf {
+    // Cargo supplies the invoking package's checkout at runtime; direct
+    // execution falls back to the path embedded when this crate was built.
+    std::path::Path::new(
+        manifest.unwrap_or_else(|| std::ffi::OsStr::new(env!("CARGO_MANIFEST_DIR"))),
+    )
+    .ancestors()
+    .nth(2)
+    .expect("workspace crates sit at <workspace>/crates/<name>")
+    .to_path_buf()
 }
 
 /// Absolute maude locations probed when `MAUDE_PATH` is unset, ahead of
@@ -135,6 +157,34 @@ pub fn maude_available() -> bool {
 mod tests {
     use std::path::{Path, PathBuf};
 
+    #[test]
+    fn corpus_root_follows_the_runtime_checkout_and_explicit_override() {
+        let runtime_manifest = Path::new("/other-checkout/crates/tamarin-theory");
+        let explicit = Path::new("/explicit-corpus");
+        let compiled = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
+        for (manifest, override_root, expected) in [
+            (
+                Some(runtime_manifest.as_os_str()),
+                None,
+                PathBuf::from("/other-checkout/tamarin-prover/examples"),
+            ),
+            (
+                Some(runtime_manifest.as_os_str()),
+                Some(explicit.as_os_str()),
+                explicit.to_path_buf(),
+            ),
+            (None, None, compiled.join("tamarin-prover/examples")),
+        ] {
+            assert_eq!(
+                super::resolve_corpus_root(override_root, manifest),
+                expected
+            );
+        }
+    }
+
     /// The one file in the workspace that may read `$MAUDE_PATH`: this one.
     const PROBE: &str = "crates/tamarin-test-support/src/lib.rs";
 
@@ -172,11 +222,7 @@ mod tests {
     /// a needle still matches inside it.
     #[test]
     fn maude_path_is_read_in_one_place() {
-        // `<workspace>/crates/tamarin-test-support` -> `<workspace>`.
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .expect("this crate sits at <workspace>/crates/<name>");
+        let workspace = super::workspace_root(std::env::var_os("CARGO_MANIFEST_DIR").as_deref());
         // The needles are built by concatenation, so this test's own source
         // is not a match and the hits counted below come from the probe.
         // There is one needle for the `var` spelling and one for the `var_os`
@@ -192,7 +238,7 @@ mod tests {
         let mut hits = 0usize;
         for path in rs_files(&workspace.join("crates")) {
             let rel = path
-                .strip_prefix(workspace)
+                .strip_prefix(&workspace)
                 .expect("scanned file lies under the workspace root");
             let text = std::fs::read_to_string(&path).expect("read source");
             let count: usize = needles.iter().map(|n| text.matches(n).count()).sum();
@@ -229,10 +275,7 @@ mod tests {
 
     #[test]
     fn corpus_root_is_read_in_one_place() {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .expect("this crate sits at <workspace>/crates/<name>");
+        let workspace = super::workspace_root(std::env::var_os("CARGO_MANIFEST_DIR").as_deref());
         let needles = [
             ["var(", "\"", "CORPUS_ROOT", "\""].concat(),
             ["var_os(", "\"", "CORPUS_ROOT", "\""].concat(),
@@ -240,7 +283,7 @@ mod tests {
         let mut hits = 0usize;
         let mut offenders = Vec::new();
         for path in rs_files(&workspace.join("crates")) {
-            let rel = path.strip_prefix(workspace).expect("workspace source");
+            let rel = path.strip_prefix(&workspace).expect("workspace source");
             let text = std::fs::read_to_string(&path).expect("read source");
             let count: usize = needles.iter().map(|n| text.matches(n).count()).sum();
             if rel == Path::new(PROBE) {

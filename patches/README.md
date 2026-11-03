@@ -9,13 +9,15 @@ separate branch, including stacked PRs, so each patch can be removed on merge.
 
 ## Validation
 
-Build both provers, then run the headline parity gates:
+Build both provers, then run the headline parity gates and upstream command
+regressions:
 
 ```bash
 ./setup.sh testing
 cargo build --release -p tamarin-prover
-scripts/corpus_file_diff.sh
-scripts/web_parity.sh
+scripts/test.sh proof
+scripts/test.sh web
+scripts/test.sh regressions
 ```
 
 The proof and web gates fill or reuse oracle caches under `scripts/.gate_cache`.

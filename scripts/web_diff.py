@@ -65,15 +65,9 @@ def main():
     urls = sorted(set(hs) | set(rs))
     rows = []
     counts = {}
-    # Truncation gets rows of its own, kept apart from the comparison rows so
-    # they cannot pad the TOTAL.  web_crawl.py stamps `capped` when it dropped
-    # proof-node visits at --max-nodes; until now that flag reached nobody, and
-    # a theory crawled down to the cap produced a page of MATCHes for the part
-    # that was visited and silence for the part that was not.
-    # A manifest predating the flag carries no `capped` key: absent means
-    # unknown, and claiming "not truncated" for it is exactly what these rows
-    # exist to prevent — telling the two apart is the crawl-plan stamp's job
-    # (web_parity.sh re-crawls a manifest from an older plan).
+    # Report truncated crawls separately so CAPPED rows cannot pad TOTAL.
+    # A missing `capped` key does not establish completeness: web_parity.sh
+    # requires a current crawl-plan stamp and re-crawls older manifests.
     capped_rows = []
     for side, doc in (("HS", hs_doc), ("RS", rs_doc)):
         if doc.get("capped"):
