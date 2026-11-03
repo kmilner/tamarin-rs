@@ -527,6 +527,24 @@ pub struct GoalStatus {
     pub nr: u64,
 }
 
+impl GoalStatus {
+    /// Haskell's `combineGoalStatus`: retain either solved/looping flag and
+    /// the oldest goal number. Return whether the stored status changed.
+    pub(crate) fn merge_from(&mut self, other: &Self) -> bool {
+        let merged = Self {
+            solved: self.solved || other.solved,
+            looping: self.looping || other.looping,
+            nr: self.nr.min(other.nr),
+        };
+        if *self == merged {
+            false
+        } else {
+            *self = merged;
+            true
+        }
+    }
+}
+
 impl PartialOrd for GoalStatus {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
@@ -1568,19 +1586,16 @@ impl System {
         // combineGoalStatus` keeps the existing — smaller — nr).
         let age = self.next_goal_nr;
         self.next_goal_nr = self.next_goal_nr.wrapping_add(1);
-        let slot_idx = self.goals.iter().position(|(existing, _)| *existing == g);
-        if let Some(idx) = slot_idx {
-            let slot = &mut self.goals_mut()[idx];
-            slot.1.looping = slot.1.looping || looping;
-            // combineGoalStatus keeps `min` of the two nrs; the
-            // existing one is always smaller, so leave it unchanged.
-            return;
-        }
         let st = GoalStatus {
             looping,
             nr: age,
             ..Default::default()
         };
+        let slot_idx = self.goals.iter().position(|(existing, _)| *existing == g);
+        if let Some(idx) = slot_idx {
+            self.goals_mut()[idx].1.merge_from(&st);
+            return;
+        }
         self.bump_cache_goal(&g);
         self.goals_mut().push((g, st));
     }
