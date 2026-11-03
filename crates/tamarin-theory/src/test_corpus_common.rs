@@ -47,6 +47,11 @@ pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
         "sapic/not-working/envelope/envelope_simpler.spthy",
         SKIP_PARSE,
     ),
+    // Both parsers reject the repeated TTPID input binder at line 193.
+    (
+        "sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy",
+        SKIP_PARSE,
+    ),
     ("testParser/Yubikey.spthy", SKIP_PARSE),
     (
         "testParser/include/include/include/include4.spthy",

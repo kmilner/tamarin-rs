@@ -75,6 +75,7 @@ pub mod restriction;
 pub mod rule;
 pub mod rule_restriction;
 pub mod sapic;
+pub mod sapic_scope;
 pub mod tactic;
 #[cfg(test)]
 pub(crate) mod test_corpus;

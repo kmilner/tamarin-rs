@@ -26,12 +26,12 @@
 //! a definition cannot acquire visibility of a later definition retroactively,
 //! and recursive cycles cannot send conversion into unbounded recursion.
 //!
-//! The `extend_sup` "type-erasure doubling" of
-//! `Theory/Text/Parser/Sapic.hs` is mirrored:
-//! a typed formal `x:ty` produces TWO substitution entries (typed AND untyped
-//! keyed) to the same argument, so body occurrences of either form are hit.
+//! Call expansion uses type-independent variable identities and freshens local
+//! binders within their scopes before substituting the actual arguments.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use tamarin_term::lterm::LVar;
+use tamarin_utils::fresh::{FastFreshState, MonadFresh};
 
 use tamarin_parser::ast as p;
 use tamarin_term::maude_sig::MaudeSig;
@@ -44,9 +44,10 @@ use crate::process_convert::{
     add_root_annotation, convert_process_with, term as convert_term, ConvertError,
 };
 use crate::sapic::{
-    apply_match_vars_with, subst_term, traverse_terms_action, traverse_terms_comb, try_map_process,
-    PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar, SapicSubst, SapicTerm,
+    apply_match_vars_with, subst_term, traverse_terms_action, traverse_terms_comb, PlainProcess,
+    Process, ProcessCombinator, SapicAction, SapicLVar, SapicSubst, SapicTerm,
 };
+use crate::sapic_scope::*;
 use crate::theory::ProcessDef;
 
 /// Definitions visible at the current source position (HS `lookupProcessDef`,
@@ -62,9 +63,71 @@ pub fn convert_process_with_defs(
     defs: &ProcessDefMap,
     sig: &MaudeSig,
 ) -> Result<PlainProcess, ConvertError> {
-    convert_process_with(proc, sig, &mut |name, args, sig| {
-        inline_call(name, args, defs, sig)
-    })
+    convert_process_avoiding(proc, defs, sig, &[])
+}
+
+pub(crate) fn convert_process_avoiding(
+    proc: &p::Process,
+    defs: &ProcessDefMap,
+    sig: &MaudeSig,
+    used: &[LVar],
+) -> Result<PlainProcess, ConvertError> {
+    let body = convert_process_with(proc, sig, used, &mut |name, args, sig, reserved| {
+        inline_call(name, args, defs, sig, reserved)
+    })?;
+    Ok(match_bound_msr_variables(
+        body,
+        &used.iter().copied().collect(),
+    ))
+}
+
+fn match_bound_msr_variables(p: PlainProcess, bound: &BTreeSet<LVar>) -> PlainProcess {
+    match p {
+        Process::Null(_) => p,
+        Process::Action(SapicAction::ProcessCall(..), _, _) => p,
+        Process::Action(mut ac, ann, body) => {
+            if let SapicAction::Msr {
+                prems, match_vars, ..
+            } = &mut ac
+            {
+                match_vars.extend(
+                    prems
+                        .iter()
+                        .flat_map(crate::sapic::frees_sapic_fact)
+                        .filter(|v| bound.contains(&v.var)),
+                );
+            }
+            let mut next = bound.clone();
+            next.extend(action_binders(&ac).into_iter().map(|v| v.var));
+            Process::Action(ac, ann, Box::new(match_bound_msr_variables(*body, &next)))
+        }
+        Process::Comb(c, ann, l, r) => {
+            let mut next = bound.clone();
+            next.extend(combinator_binders(&c).into_iter().map(|v| v.var));
+            Process::Comb(
+                c,
+                ann,
+                Box::new(match_bound_msr_variables(*l, &next)),
+                Box::new(match_bound_msr_variables(*r, bound)),
+            )
+        }
+    }
+}
+
+pub(crate) fn parameter_binder(p: &PlainProcess, params: &[LVar]) -> Option<SapicLVar> {
+    let clash = |vars: Vec<SapicLVar>| {
+        vars.into_iter()
+            .find(|v| params.contains(&v.var) && !v.var.name.starts_with("pat_"))
+    };
+    match p {
+        Process::Null(_) => None,
+        Process::Action(ac, _, rest) => {
+            clash(action_binders(ac)).or_else(|| parameter_binder(rest, params))
+        }
+        Process::Comb(c, _, l, r) => clash(combinator_binders(c))
+            .or_else(|| parameter_binder(l, params))
+            .or_else(|| parameter_binder(r, params)),
+    }
 }
 
 /// Inline one `P(args)` call (HS `actionprocess` identifier branch,
@@ -74,6 +137,7 @@ fn inline_call(
     args: &[p::Term],
     defs: &ProcessDefMap,
     sig: &MaudeSig,
+    reserved: &[LVar],
 ) -> Result<PlainProcess, ConvertError> {
     use crate::sapic::ProcessParsedAnnotation;
 
@@ -106,20 +170,10 @@ fn inline_call(
     // re-reading it against the caller's newer environment.
     let body = def.body.clone();
 
-    // Build the parameter substitution with HS's `extend_sup` type-erasure
-    // doubling (Theory/Text/Parser/Sapic.hs): a typed formal
-    // contributes both its typed and untyped keys mapping to the argument.
-    let mut pairs: Vec<(SapicLVar, SapicTerm)> = Vec::new();
-    for (param, arg) in params.iter().zip(sapic_args.iter()) {
-        pairs.push((param.clone(), arg.clone()));
-        if param.stype.is_some() {
-            pairs.push((SapicLVar::untyped(param.var), arg.clone()));
-        }
-    }
-    let subst = SapicSubst::from_list(pairs);
+    let subst = SapicSubst::from_list(params.into_iter().zip(sapic_args.iter().cloned()));
 
-    // `applyM (substFromList extend_sup) p` — capture-checking substitution.
-    let substituted = apply_m_process(&subst, body)?;
+    // Closed definitions have their own scope; open definitions retain theirs.
+    let substituted = expand_process_call(def.vars.as_deref(), reserved, &subst, body)?;
 
     // `processAddAnnotation substP (mempty {processnames = [name]})`: tag the
     // body's root node with the call name (drives `role=` / colour).
@@ -136,23 +190,167 @@ fn inline_call(
     ))
 }
 
-/// `applyM subst p` over an `LProcess` (Sapic/Process.hs): apply `subst` to
-/// every term, raising a capture error if a substituted parameter would be
-/// captured by an inner binder (`new` / `lookup` / single-var `in`).
-///
-/// HS `applyM` is capture-DETECTING (it throws `CapturedEx`), NOT
-/// capture-avoiding.  For parameterless calls (`subst` empty) this is a no-op
-/// rename and never fails.
-fn apply_m_process(subst: &SapicSubst, p: PlainProcess) -> Result<PlainProcess, ConvertError> {
-    if subst.is_empty() {
-        return Ok(p);
-    }
-    try_map_process(
-        &p,
-        &mut |action| apply_m_action(subst, action),
-        &mut |comb| apply_m_comb(subst, comb),
-        &mut |ann| Ok(apply_annotation(subst, ann.clone())),
+/// Capture-avoiding process-call expansion with a scoped alpha-renaming environment.
+fn expand_process_call(
+    parameters: Option<&[SapicLVar]>,
+    reserved: &[LVar],
+    original: &SapicSubst,
+    p: PlainProcess,
+) -> Result<PlainProcess, ConvertError> {
+    let proc_vars = vars_proc_with_annotations(&p);
+    let images: BTreeMap<_, _> = original.iter().map(|(v, t)| (v.var, t.clone())).collect();
+    let subst = SapicSubst::from_list(
+        proc_vars
+            .iter()
+            .chain(original.dom())
+            .filter_map(|v| images.get(&v.var).map(|t| (v.clone(), t.clone()))),
+    );
+    let incoming: BTreeSet<_> = subst
+        .range()
+        .flat_map(crate::sapic::frees_sapic_term)
+        .map(|v| v.var)
+        .collect();
+    let seed = reserved
+        .iter()
+        .copied()
+        .chain(proc_vars.iter().map(|v| v.var))
+        .chain(subst.dom().map(|v| v.var))
+        .chain(incoming.iter().copied())
+        .map(|v| v.idx + 1)
+        .max()
+        .unwrap_or(0);
+    let mut expansion = Expansion {
+        closed: parameters.is_some(),
+        // Identity substitutions are omitted, so keep the explicit formals
+        // too: nested P(pat_x) must not freshen P's own pattern parameter away.
+        pattern_parameters: parameters
+            .into_iter()
+            .flatten()
+            .map(|v| v.var)
+            .chain(images.keys().copied())
+            .filter(|v| v.name.starts_with("pat_"))
+            .collect(),
+        caller: reserved.iter().copied().collect(),
+        incoming,
+        subst,
+        fresh: FastFreshState::seeded(seed),
+    };
+    expansion.go(
+        p,
+        &reserved.iter().copied().collect(),
+        &BTreeSet::new(),
+        &BTreeMap::new(),
     )
+}
+
+struct Expansion {
+    closed: bool,
+    pattern_parameters: BTreeSet<LVar>,
+    caller: BTreeSet<LVar>,
+    incoming: BTreeSet<LVar>,
+    subst: SapicSubst,
+    fresh: FastFreshState,
+}
+
+impl Expansion {
+    fn freshening(
+        &mut self,
+        used: &BTreeSet<LVar>,
+        ann: &crate::sapic::ProcessParsedAnnotation,
+        bound: &[SapicLVar],
+    ) -> BTreeMap<LVar, LVar> {
+        let generated: BTreeSet<_> = ann.generated_binders.iter().map(|v| v.var).collect();
+        bound
+            .iter()
+            .map(|v| v.var)
+            .filter(|v| {
+                // Pattern formals stand for the caller's supplied syntax,
+                // not a local binding to rename before substitution.
+                !self.pattern_parameters.contains(v)
+                    && (self.incoming.contains(v)
+                        || (self.closed && self.caller.contains(v))
+                        || (generated.contains(v) && used.contains(v)))
+            })
+            .map(|v| (v, LVar::new(v.name, v.sort, self.fresh.fresh_ident(v.name))))
+            .collect()
+    }
+
+    fn annotation(
+        &self,
+        local: &BTreeSet<LVar>,
+        bound: &[SapicLVar],
+        ren: &BTreeMap<LVar, LVar>,
+        ann: &crate::sapic::ProcessParsedAnnotation,
+    ) -> crate::sapic::ProcessParsedAnnotation {
+        let mut ann = ann.clone();
+        // Closed calls own local binders even before a collision occurs.
+        // Preserve that ownership through open wrappers, but do not mark a
+        // repeated local declaration: it must still fail rebinding checks.
+        let owned = bound
+            .iter()
+            .map(|v| v.var)
+            .filter(|v| self.closed && !local.contains(v) && !self.pattern_parameters.contains(v));
+        for v in ren.keys().copied().chain(owned) {
+            let sv = SapicLVar::untyped(v);
+            if !ann.generated_binders.contains(&sv) {
+                ann.generated_binders.push(sv);
+            }
+        }
+        apply_annotation(&self.subst, rename_annotation(ren, &ann))
+    }
+
+    fn go(
+        &mut self,
+        p: PlainProcess,
+        used: &BTreeSet<LVar>,
+        local: &BTreeSet<LVar>,
+        env: &BTreeMap<LVar, LVar>,
+    ) -> Result<PlainProcess, ConvertError> {
+        Ok(match p {
+            Process::Null(ann) => {
+                Process::Null(apply_annotation(&self.subst, rename_annotation(env, &ann)))
+            }
+            Process::Action(ac, ann, rest) => {
+                let ac = rename_action(env, &ac);
+                let ann = rename_annotation(env, &ann);
+                let bound = action_binders(&ac);
+                let ren = self.freshening(used, &ann, &bound);
+                let ac = apply_m_action(&self.subst, &rename_action_binders(&ren, &ac))?;
+                let ann = self.annotation(local, &bound, &ren, &ann);
+                let mut vars = BTreeSet::new();
+                collect_action_vars(&ac, &mut vars);
+                let next = used
+                    .iter()
+                    .copied()
+                    .chain(vars.into_iter().map(|v| v.var))
+                    .collect();
+                let mut next_local = local.clone();
+                next_local.extend(action_binders(&ac).into_iter().map(|v| v.var));
+                let rest = self.go(*rest, &next, &next_local, &compose_renaming(&ren, env))?;
+                Process::Action(ac, ann, Box::new(rest))
+            }
+            Process::Comb(c, ann, l, r) => {
+                let c = rename_comb(env, &c);
+                let ann = rename_annotation(env, &ann);
+                let bound = combinator_binders(&c);
+                let ren = self.freshening(used, &ann, &bound);
+                let c = apply_m_comb(&self.subst, &rename_combinator_binders(&ren, &c))?;
+                let ann = self.annotation(local, &bound, &ren, &ann);
+                let mut vars = BTreeSet::new();
+                collect_comb_vars(&c, &mut vars);
+                let next = used
+                    .iter()
+                    .copied()
+                    .chain(vars.into_iter().map(|v| v.var))
+                    .collect();
+                let mut next_local = local.clone();
+                next_local.extend(combinator_binders(&c).into_iter().map(|v| v.var));
+                let l = self.go(*l, &next, &next_local, &compose_renaming(&ren, env))?;
+                let r = self.go(*r, used, local, env)?;
+                Process::Comb(c, ann, Box::new(l), Box::new(r))
+            }
+        })
+    }
 }
 
 /// Upstream #922's `applyMProcessParsedAnnotation`: locations are ordinary
@@ -163,7 +361,7 @@ fn apply_annotation(
     subst: &SapicSubst,
     ann: crate::sapic::ProcessParsedAnnotation,
 ) -> crate::sapic::ProcessParsedAnnotation {
-    ann.map_location(|loc| subst_term(subst, &loc))
+    ann.map_terms(|loc| subst_term(subst, &loc))
 }
 
 /// True iff a substitution maps `v` (in either typed or untyped form) — i.e.
@@ -321,6 +519,63 @@ mod tests {
     use std::collections::BTreeSet;
     use tamarin_term::lterm::LSort;
     use tamarin_term::maude_sig::pair_maude_sig;
+
+    #[test]
+    fn closed_call_ownership_does_not_leak_into_failure_branches() {
+        for prefix in ["lookup 'key' as x", "let x = 'a'"] {
+            let source = format!(
+                "theory ClosedBranches begin
+                 let C() = {prefix} in event Seen(x) else in(x); event Seen(x)
+                 let O = C()
+                 let W(x) = O
+                 process: W('caller')
+                 end"
+            );
+            let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+            let theory = crate::elaborate::elaborate(&parsed).unwrap();
+            let mut binders = Vec::new();
+            crate::sapic::for_each_process(theory.processes().next().unwrap(), &mut |p| {
+                let (bound, ann) = match p {
+                    Process::Action(ac, ann, _) => (action_binders(ac), ann),
+                    Process::Comb(c, ann, _, _) => (combinator_binders(c), ann),
+                    Process::Null(_) => return,
+                };
+                for v in bound {
+                    assert!(ann.generated_binders.iter().any(|owned| owned.var == v.var));
+                    binders.push(v.var);
+                }
+            });
+            assert_eq!(binders.len(), 2, "{prefix}");
+            assert_ne!(binders[0], binders[1], "{prefix}");
+        }
+    }
+
+    #[test]
+    fn pattern_formals_survive_caller_collisions_and_nested_identity_calls() {
+        let inputs = |binder| {
+            let source = format!(
+                "theory PatternFormal begin
+                 let P(pat_x) = in(pat_x); event Seen(pat_x)
+                 let Nested(pat_x) = P(pat_x)
+                 process: new {binder}; (P(<'a','b'>) | Nested('c'))
+                 end"
+            );
+            let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+            let theory = crate::elaborate::elaborate(&parsed).unwrap();
+            let mut inputs = Vec::new();
+            crate::sapic::for_each_process(theory.processes().next().unwrap(), &mut |p| {
+                if let Process::Action(SapicAction::ChIn { msg, .. }, _, _) = p {
+                    inputs.push(msg.clone());
+                }
+            });
+            assert_eq!(inputs.len(), 2);
+            assert!(inputs
+                .iter()
+                .all(|t| crate::sapic::frees_sapic_term(t).is_empty()));
+            inputs
+        };
+        assert_eq!(inputs("pat_x"), inputs("unused"));
+    }
 
     fn pub_lit(s: &str) -> p::Term {
         p::Term::PubLit(s.to_string())

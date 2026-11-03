@@ -725,11 +725,26 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
                         message: format!("duplicate process: {}", d.name),
                     });
                 }
-                let body = elaborate_process(&d.body, &process_defs, &out.signature)?;
-                let vars = d
+                let vars: Option<Vec<_>> = d
                     .vars
                     .as_ref()
                     .map(|vs| vs.iter().map(varspec_to_sapic).collect());
+                let identities: Vec<_> = vars.iter().flatten().map(|v| v.var).collect();
+                let body = crate::process_inline::convert_process_avoiding(
+                    &d.body,
+                    &process_defs,
+                    &out.signature,
+                    &identities,
+                )
+                .map_err(|e| ElabError {
+                    message: format!("SAPIC translation: {}", e.message),
+                })?;
+                if let Some(v) = crate::process_inline::parameter_binder(&body, &identities) {
+                    return Err(ElabError { message: format!(
+                        "parameter {} of process {} is bound again in its body; rename the inner binder",
+                        v.var, d.name,
+                    ) });
+                }
                 let def = ProcessDef {
                     name: d.name.clone(),
                     vars,
