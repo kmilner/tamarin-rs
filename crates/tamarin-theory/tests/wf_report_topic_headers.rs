@@ -119,7 +119,10 @@ fn formula_terms_group_prints_its_header_once() {
 /// body bakes in `ppTopic`'s `nest 2` itself, because its `prettyProtoRuleE`
 /// dumps make their `sep`/`fsep` wrap decisions at the indented column.  Two
 /// offending rules therefore land in ONE group whose header appears once and
-/// whose bodies are joined by the two-space blank line.
+/// whose bodies are joined by the two-space blank line. The unsupported-
+/// product findings follow in their own group, also with just one header.
+/// Rechecked against the patched da8787d5 oracle with
+/// `-m=msr --derivcheck-timeout=0`.
 #[test]
 fn multiplication_restriction_topic_prints_its_underlined_header() {
     let src = "theory MultProbe begin\n\
@@ -130,7 +133,11 @@ fn multiplication_restriction_topic_prints_its_underlined_header() {
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
     let errs = tamarin_theory::wellformedness::mult::mult_restricted_report(&elaborated);
-    assert_eq!(errs.len(), 2, "one entry per offending rule");
+    assert_eq!(
+        errs.len(),
+        4,
+        "one entry per rule in each of the two topics"
+    );
     let entry = |name: &str, term: &str, prems: &str| {
         format!(
             "  The following rule is not multiplication restricted:\n    \
@@ -147,7 +154,11 @@ fn multiplication_restriction_topic_prints_its_underlined_header() {
         format!(
             "/*\nWARNING: the following wellformedness checks failed!\n\n\
              Multiplication restriction of rules\n\
-             ===================================\n\n{}\n  \n{}\n*/",
+             ===================================\n\n{}\n  \n{}\n\n\
+             Unsupported multiplication outside exponents\n\
+             ============================================\n\n  \
+             Rule R1 has products outside exponents: (x*y)\n  \n  \
+             Rule R2 has products outside exponents: (a*b)\n*/",
             entry("R1", "x*y", "In( x ), In( y )"),
             entry("R2", "a*b", "In( a ), In( b )"),
         )

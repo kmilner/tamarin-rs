@@ -39,6 +39,69 @@ fn run_error(extra: &[&str]) -> RunError {
 }
 
 #[test]
+fn unsupported_products_report_on_stdout_and_abort_on_stderr() {
+    if !maude_available() {
+        return;
+    }
+    let theory = fixture("unsupported_products.spthy");
+    let topic = "Unsupported multiplication outside exponents";
+    let expected = format!(
+        "\nERROR: unsupported rule semantics in {}:\n\n{topic}\n{}\n\n  \
+         Rule ActionProduct has products outside exponents: (x*y)\n  \n  \
+         Rule ConclusionProduct has products outside exponents: (x*y)\n\n",
+        theory.display(),
+        "=".repeat(topic.len())
+    );
+    for flags in [
+        vec!["--prove"],
+        vec!["--prove", "--quit-on-warning"],
+        vec!["--precompute-only"],
+    ] {
+        let (code, stdout, stderr) = run_binary(&flags, &[&theory]);
+        assert_eq!(code, 1, "{flags:?}: {stderr}");
+        assert_eq!(stdout, expected, "{flags:?}");
+        assert!(stderr.ends_with("Unsupported rule semantics - aborting before proof search.\n"));
+        assert!(!stderr.contains("error:"), "{stderr}");
+        assert!(!stderr.contains("Theory closed"), "{stderr}");
+        assert!(!stderr.contains("Derivation checks started"), "{stderr}");
+    }
+
+    // Translate-only mode deliberately warns rather than rejecting the input.
+    let (code, stdout, stderr) = run_binary(&["--output-module=msr"], &[&theory]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("theory UnsupportedProducts"), "{stdout}");
+    assert!(stdout.contains(topic), "{stdout}");
+    assert!(!stdout.contains("ERROR:"), "{stdout}");
+}
+
+#[test]
+fn upstream_gdh_rejects_unsupported_products_before_proving() {
+    if !maude_available() {
+        return;
+    }
+    // Keep CI coverage when this previously accepted theory leaves the
+    // successful-proof fast reference. The full oracle gate also retains it.
+    let theory =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples/sp14/GDH.spthy");
+    let (code, stdout, stderr) = run_binary(&["--prove"], &[&theory]);
+    let topic = "Unsupported multiplication outside exponents";
+    assert_eq!(code, 1, "{stderr}");
+    assert_eq!(
+        stdout,
+        format!(
+            "\nERROR: unsupported rule semantics in {}:\n\n{topic}\n{}\n\n  \
+             Rule RecvOthers has products outside exponents: (~esk*y)\n  \n  \
+             Rule RecvRoundkey has products outside exponents: (~esk*y)\n\n",
+            theory.display(),
+            "=".repeat(topic.len()),
+        ),
+    );
+    assert!(stderr.ends_with("Unsupported rule semantics - aborting before proof search.\n"));
+    assert!(!stderr.contains("Theory closed"), "{stderr}");
+    assert!(!stdout.contains("summary of summaries:"), "{stdout}");
+}
+
+#[test]
 fn prove_chain_writes_output_with_verified_summary() {
     if !maude_available() {
         eprintln!("skipping: maude not on path");
