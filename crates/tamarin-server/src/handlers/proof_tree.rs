@@ -30,7 +30,7 @@ use parking_lot::{Mutex, MutexGuard};
 use tamarin_theory::constraint::solver::context::ProofContext;
 use tamarin_theory::constraint::solver::goals::{ranking_at_depth, GoalRanking};
 use tamarin_theory::constraint::solver::proof_method::{
-    exec_proof_method, finished_subterms, is_finished, ProofMethod,
+    exec_proof_method, is_finished, is_finished_or_stuck, ProofMethod,
 };
 use tamarin_theory::constraint::solver::search::{
     candidate_methods_with_expl, rollup_status, NodeStatus, ProofNode, ProofStatus,
@@ -1034,20 +1034,14 @@ fn write_applicable_methods(
         }
     }
     if methods.is_empty() {
-        // Mirror Haskell `prettyApplicableProofMethods` (`Web/Theory.hs`):
-        //   [] | finishedSubterms ctxt sys -> "Constraint System is Solved"
-        //   []                             -> "Constraint System is Unfinishable"
-        // We only reach here when `is_finished` returned `None` (the
-        // `Some` case produced a non-empty `[Finished r]` above), so the
-        // Solved/Unfinishable choice MUST come from `finished_subterms`
-        // exactly as HS does — not from `is_finished` (which is `None`
-        // here and would always pick "Solved").
-        let solved = finished_subterms(ctx, sys);
-        if solved {
-            out.push("<h3>Constraint System is Solved</h3>".to_string());
-        } else {
-            out.push("<h3>Constraint System is Unfinishable</h3>".to_string());
-        }
+        use tamarin_theory::constraint::solver::proof_method::Result as Terminal;
+        let heading = match is_finished_or_stuck(ctx, sys).map_err(|error| error.to_string())? {
+            Some(Terminal::Solved) => "Constraint System is Solved",
+            Some(Terminal::Unfinishable) => "Constraint System is Unfinishable",
+            Some(Terminal::Contradictory(_)) => "Constraint System is Contradictory",
+            None => "No applicable proof methods",
+        };
+        out.push(format!("<h3>{heading}</h3>"));
         return Ok(());
     }
     // HS `subProofSnippet` (`Web/Theory.hs`):
