@@ -10,7 +10,7 @@
 //! lists therefore needs no second check that asserts less here.
 
 use super::*;
-use crate::constraint::solver::search::NodeStatus;
+use crate::constraint::solver::search::{NodeStatus, ProofStatus};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::{pair_maude_sig, MaudeSig};
 use tamarin_test_support::require_maude_path;
@@ -155,6 +155,137 @@ fn prove_lemma_unknown_name_is_error() {
         5,
     );
     assert!(matches!(r, Err(ProveError::LemmaNotFound(_))));
+}
+
+#[test]
+fn public_proving_rejects_invalid_manual_variants() {
+    let Some(h) = maude() else { return };
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory InvalidVariant begin
+        rule Emit: [In(x)] --[A(x)]-> []
+        variants
+        rule (modulo AC) Emit: [In('a')] --[A('a')]-> []
+        lemma fixed: "All x #i. A(x) @ i ==> x = 'a'"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let theory = std::sync::Arc::new(elaborated(&parsed));
+    let counter = h.fresh_counter_peek();
+    let error = prove_lemma(theory.clone(), "fixed", h.clone(), 30).unwrap_err();
+    assert!(matches!(error, ProveError::UnsupportedInput(ref s) if s.contains("Variants")));
+    assert_eq!(h.fresh_counter_peek(), counter);
+    // A frontend's loop-breaker flag is not evidence that validation happened.
+    for loop_breakers_prepared in [false, true] {
+        let result = ProverSession::build(
+            theory.clone(),
+            h.clone(),
+            ProverSessionOptions {
+                loop_breakers_prepared,
+                ..Default::default()
+            },
+        );
+        assert!(matches!(result, Err(ProveError::UnsupportedInput(_))));
+    }
+}
+
+#[test]
+fn public_proving_accepts_valid_manual_variants_and_ordinary_warnings() {
+    let Some(h) = maude() else { return };
+    // Reuse on an exists-trace lemma is an ordinary warning, not a reason to
+    // reject this complete family or turn the false all-traces lemma true.
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory ValidVariant begin
+        rule Emit: [In(x)] --[A(x)]-> []
+        variants
+        rule (modulo AC) Emit: [In(y)] --[A(y)]-> []
+        lemma fixed: "All x #i. A(x) @ i ==> x = 'a'"
+        lemma witness [reuse]: exists-trace "Ex x #i. A(x) @ i"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let theory = std::sync::Arc::new(elaborated(&parsed));
+    let report = crate::wellformedness::check_wellformedness(&theory, Some(&h)).unwrap();
+    assert!(!report.is_empty());
+    assert!(crate::wellformedness::variants::fatal_wf_errors(&report).is_empty());
+    let counter = h.fresh_counter_peek();
+    let session = ProverSession::build(theory, h.clone(), Default::default()).unwrap();
+    assert_eq!(h.fresh_counter_peek(), counter);
+    let proof = prove_lemma_in_session(&session, "fixed", 30).unwrap();
+    assert_eq!(
+        crate::constraint::solver::search::proof_status(&proof),
+        ProofStatus::TraceFound
+    );
+}
+
+#[test]
+fn public_proving_computes_reducible_manual_families_before_validating() {
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory PublicManualVariant begin
+        builtins: symmetric-encryption
+        rule Key: [Fr(~k)] --> [!Key(~k)]
+        rule Dec: [In(x), !Key(k)] --[A(sdec(x,k))]-> []
+        variants
+        rule (modulo AC) Dec___VARIANT_1:
+          [In(x.2), !Key(k.1)] --[A(sdec(x.2,k.1))]-> [],
+        rule (modulo AC) Dec___VARIANT_2:
+          [In(senc(z.2,k.1)), !Key(k.1)] --[A(z.2)]-> []
+        lemma witness: exists-trace "Ex m #i. A(m)@i"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let theory = elaborated(&parsed);
+    let Some(h) = maude_with(theory.signature.clone()) else {
+        return;
+    };
+    let proof = prove_lemma(std::sync::Arc::new(theory), "witness", h, 10).unwrap();
+    assert_eq!(
+        crate::constraint::solver::search::proof_status(&proof),
+        ProofStatus::TraceFound
+    );
+}
+
+#[test]
+fn public_proving_accepts_partial_evaluation_identity_families() {
+    let parsed = tamarin_parser::parse_theory(
+        r#"theory PartialIdentity begin
+        builtins: symmetric-encryption
+        rule Key: [Fr(~k)] --> [!Key(~k)]
+        rule Secret: [Fr(~m), !Key(~k)] --[Secret(~m)]-> [Out(senc(~m,~k))]
+        lemma witness: exists-trace "Ex m #i. Secret(m) @ i"
+        end"#,
+        &[],
+    )
+    .unwrap();
+    let mut theory = elaborated(&parsed);
+    let Some(h) = maude_with(theory.signature.clone()) else {
+        return;
+    };
+    crate::tools::rule_variants::prepare_theory_rules(&mut theory, &h, None, true).unwrap();
+    crate::tools::apply_partial_evaluation(&mut theory, &h, crate::tools::EvaluationStyle::Silent)
+        .unwrap();
+    crate::tools::rule_variants::reprepare_theory_rules(&mut theory, &h, None).unwrap();
+    let theory = std::sync::Arc::new(theory);
+    for loop_breakers_prepared in [false, true] {
+        let counter = h.fresh_counter_peek();
+        let session = ProverSession::build(
+            theory.clone(),
+            h.clone(),
+            ProverSessionOptions {
+                loop_breakers_prepared,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(h.fresh_counter_peek(), counter);
+        let proof = prove_lemma_in_session(&session, "witness", 10).unwrap();
+        assert_eq!(
+            crate::constraint::solver::search::proof_status(&proof),
+            ProofStatus::TraceFound
+        );
+    }
 }
 
 #[test]

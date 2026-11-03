@@ -62,7 +62,11 @@ fn main() {
             Ok(t) => t,
             Err(_) => continue,
         };
-        let rust_topics = wf::topics(&wf::check_wellformedness(&elaborated, None));
+        // This scanner has no Maude handle, so cannot assess manual families.
+        let Ok(report) = wf::check_wellformedness(&elaborated, None) else {
+            continue;
+        };
+        let rust_topics = wf::topics(&report);
         if !rust_topics.is_empty() {
             rust_flagged += 1;
         }

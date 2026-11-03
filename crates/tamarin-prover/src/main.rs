@@ -92,5 +92,9 @@ fn main() -> ExitCode {
             eprintln!("tamarin-prover: {message}");
             ExitCode::from(1)
         }
+        Err(tamarin_prover::run::RunError::UnsupportedInput { in_file, report }) => {
+            tamarin_prover::run::print_unsupported_input(&in_file, &report);
+            ExitCode::from(1)
+        }
     }
 }

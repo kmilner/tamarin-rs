@@ -616,7 +616,7 @@ fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
 /// into exactly one `___VARIANT_1` rule (the reproducing case: partial
 /// evaluation leaves `rule ≠ abstracted_rule` with a collapsed
 /// disjunction).
-fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
+pub(crate) fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
     use tamarin_term::lterm::{HasFrees, LVar};
     use tamarin_term::subst_vfresh::LNSubstVFresh;
     let ac: &crate::rule::ProtoRuleE = o.abstracted_rule.as_ref().unwrap_or(&o.rule);
@@ -626,6 +626,9 @@ fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
     } else {
         &o.variant_substs
     };
+    if substs == trivial_disj && ac.info.name != o.rule_e().info.name {
+        return vec![o.clone()];
+    }
     // `freshToFreeAvoiding subst ruAC` allocates above `avoid ruAC`; HS's
     // `HasFrees (Rule ProtoRuleACInfo)` folds the rule INFO first, whose
     // variant-disjunction DOMAIN keys are frees (keys-only,
@@ -687,7 +690,10 @@ fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
 /// [`unfold_one_rule_variants`]. This also covers source-declared
 /// `variants (modulo AC)` blocks, whose bodies do not live in
 /// `abstracted_rule`/`variant_substs` on their parent.
-fn closed_rule_as_open(parent: &OpenProtoRule, ac: &crate::rule::ProtoRuleAC) -> OpenProtoRule {
+pub(crate) fn closed_rule_as_open(
+    parent: &OpenProtoRule,
+    ac: &crate::rule::ProtoRuleAC,
+) -> OpenProtoRule {
     let rule = crate::rule::Rule {
         info: crate::rule::ProtoRuleEInfo {
             name: ac.info.name,
