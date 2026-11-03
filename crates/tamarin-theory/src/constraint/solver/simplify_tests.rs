@@ -49,13 +49,89 @@ fn residual_positive_and_negative_subterms_reach_a_fixed_point() {
     let mut red = Reduction::new(&ctx, sys);
     for _ in 0..4 {
         red.changed = ChangeIndicator::Unchanged;
-        propagate_subterm_obvious(&mut red);
+        assert!(matches!(
+            propagate_subterm_obvious(&mut red).unwrap(),
+            SystemOutcome::Linear
+        ));
         if red.changed == ChangeIndicator::Unchanged {
             assert!(!red.sys.subterm_store.contradictory);
             return;
         }
     }
     panic!("S_neg repeatedly emits an already-known disequality");
+}
+
+#[test]
+fn subterm_deductions_solve_equalities_in_the_same_pass() {
+    use tamarin_term::builtin::{hash_sym, msg_var};
+    use tamarin_term::term::f_app_no_eq;
+    let Some(maude) = maude_with_sig(tamarin_term::maude_sig::hash_maude_sig()) else {
+        return;
+    };
+    let ctx = ProofContext::new(maude, Vec::new());
+    let a = msg_var("a", 0);
+    let b = msg_var("b", 1);
+    let mut sys = System::empty();
+    sys.subterm_store_mut()
+        .add(a.clone(), f_app_no_eq(hash_sym(), vec![b.clone()]));
+    sys.subterm_store_mut().add_neg(a, b);
+    let mut red = Reduction::new(&ctx, sys);
+    assert!(matches!(
+        propagate_subterm_obvious(&mut red).unwrap(),
+        SystemOutcome::Linear
+    ));
+    assert!(
+        !red.sys.eq_store().subst.is_empty(),
+        "a = b must be solved now"
+    );
+    assert!(
+        red.sys.formulas.is_empty(),
+        "do not defer the equation to the next pass"
+    );
+    assert_eq!(red.sys.solved_formulas.len(), 1);
+}
+
+#[test]
+fn subterm_deductions_preserve_all_equality_branches() {
+    use tamarin_term::builtin::{hash_sym, msg_var};
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::pub_term;
+    use tamarin_term::term::{f_app_ac, f_app_no_eq};
+    let sig =
+        tamarin_term::maude_sig::hash_maude_sig().merge(tamarin_term::maude_sig::mset_maude_sig());
+    let Some(maude) = maude_with_sig(sig) else {
+        return;
+    };
+    let ctx = ProofContext::new(maude, Vec::new());
+    let mut sys = System::empty();
+    for (left, right) in [
+        (
+            vec![msg_var("x", 0), msg_var("y", 1)],
+            vec![pub_term("a"), pub_term("b")],
+        ),
+        (
+            vec![msg_var("u", 2), msg_var("v", 3)],
+            vec![pub_term("c"), pub_term("d")],
+        ),
+    ] {
+        let left = f_app_ac(AcSym::Union, left);
+        let right = f_app_ac(AcSym::Union, right);
+        sys.subterm_store_mut()
+            .add(left.clone(), f_app_no_eq(hash_sym(), vec![right.clone()]));
+        sys.subterm_store_mut().add_neg(left, right);
+    }
+    let mut red = Reduction::new(&ctx, sys);
+    let SystemOutcome::Cases(arms) = propagate_subterm_obvious(&mut red).unwrap() else {
+        panic!("each arity-one equality should have two AC unifiers");
+    };
+    assert_eq!(arms.len(), 4);
+    for arm in arms {
+        assert_eq!(
+            arm.sys.eq_store().subst.len(),
+            4,
+            "both equalities must finish in each arm"
+        );
+    }
 }
 
 #[test]
@@ -1388,7 +1464,10 @@ fn negative_nat_subterm_does_not_refine_a_message_operand() {
     let mut sys = System::empty();
     sys.subterm_store_mut().add_neg(small.clone(), big.clone());
     let mut red = Reduction::new(&ctx, sys);
-    propagate_subterm_obvious(&mut red);
+    assert!(matches!(
+        propagate_subterm_obvious(&mut red).unwrap(),
+        SystemOutcome::Linear
+    ));
     assert!(red.sys.subterm_store.subterms.is_empty());
     assert!(red
         .sys
@@ -1438,7 +1517,10 @@ fn simp_split_neg_ac_recurse_emits_ac_formula() {
     assert!(sys.subterm_store_mut().add_neg(small.clone(), big.clone()));
     let mut r = Reduction::new(&ctx, sys);
 
-    propagate_subterm_obvious(&mut r);
+    assert!(matches!(
+        propagate_subterm_obvious(&mut r).unwrap(),
+        SystemOutcome::Linear
+    ));
     assert_eq!(
         r.changed,
         ChangeIndicator::Changed,
