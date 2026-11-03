@@ -2085,9 +2085,7 @@ fn pp_step_doc(
         PM::Induction => crate::pretty_hpj::keyword_("induction"),
         PM::Finished(MR::Solved) => crate::pretty_hpj::keyword_("SOLVED")
             .beside_sp(crate::pretty_hpj::line_comment_("trace found")),
-        PM::Finished(MR::Unfinishable) => crate::pretty_hpj::keyword_("UNFINISHABLE").beside_sp(
-            crate::pretty_hpj::line_comment_("unresolved subterm constraints"),
-        ),
+        PM::Finished(MR::Unfinishable) => crate::pretty_hpj::keyword_("UNFINISHABLE"),
         PM::Invalidated => crate::pretty_hpj::line_comment_(
             "proof may have been invalidated by editing a reuse lemma above. You should ",
         ),

@@ -198,7 +198,7 @@ fn public_proving_accepts_valid_manual_variants_and_ordinary_warnings() {
         r#"theory ValidVariant begin
         rule Emit: [In(x)] --[A(x)]-> []
         variants
-        rule (modulo AC) Emit: [In(y)] --[A(y)]-> []
+        rule (modulo AC) Emit___VARIANT_1: [In(y)] --[A(y)]-> []
         lemma fixed: "All x #i. A(x) @ i ==> x = 'a'"
         lemma witness [reuse]: exists-trace "Ex x #i. A(x) @ i"
         end"#,

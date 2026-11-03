@@ -22,6 +22,46 @@ fn args_from(args: &[&str]) -> tamarin_prover::Args {
     parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
 }
 
+#[test]
+fn saved_unfinishable_requires_exhausted_proof_methods() {
+    if !maude_available() {
+        return;
+    }
+    let source = r#"theory ExhaustedReplay begin
+        rule A: [] --[A()]-> []
+        lemma exhausted: "Ex x. x='a' & x='b'"
+        by UNFINISHABLE
+        lemma simplifiable: "All x. x='a' ==> x='a'"
+        by UNFINISHABLE
+        lemma inductive: exists-trace "All #i. A()@i ==> F"
+        by UNFINISHABLE
+        end"#;
+    let (code, output, error) = common::run_raw(
+        "tamarin_exhausted_replay",
+        "saved",
+        source,
+        &["--quit-on-warning"],
+    );
+    assert_eq!(code, 0, "{error}");
+    assert!(
+        output.contains("exhausted (all-traces): analysis cannot be finished"),
+        "{output}"
+    );
+    assert!(
+        output.contains("simplifiable (all-traces): analysis incomplete"),
+        "{output}"
+    );
+    assert!(
+        output.contains("inductive (exists-trace): analysis incomplete"),
+        "{output}"
+    );
+    assert_eq!(
+        output.matches("invalid proof step encountered").count(),
+        2,
+        "{output}"
+    );
+}
+
 /// Run the CLI in-process on `extra`, with `--with-maude` for the maude the
 /// harness resolved threaded ahead of it, and return the exit code.
 fn run_cli(extra: &[&str]) -> i32 {

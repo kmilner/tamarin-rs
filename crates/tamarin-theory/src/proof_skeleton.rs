@@ -83,7 +83,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
             }
             ProofMethod::Finished(MethodResult::Unfinishable) => {
                 out.push_str(&pad);
-                out.push_str("by UNFINISHABLE // unresolved subterm constraints\n");
+                out.push_str("by UNFINISHABLE\n");
             }
             ProofMethod::Sorry(reason) => {
                 out.push_str(&pad);
@@ -110,9 +110,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
                     NodeStatus::Contradictory => "by contradiction /* closed */\n",
                     NodeStatus::Solved => "SOLVED // trace found\n",
                     NodeStatus::Sorry => "by sorry\n",
-                    NodeStatus::Unfinishable => {
-                        "by UNFINISHABLE // unresolved subterm constraints\n"
-                    }
+                    NodeStatus::Unfinishable => "by UNFINISHABLE\n",
                     NodeStatus::Open => "by sorry /* open */\n",
                 });
             }
@@ -417,18 +415,9 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     if t.starts_with("by sorry") {
         return Some(format!("{}by sorry", pad));
     }
-    // UNFINISHABLE leaf (unresolved subterm constraints). Haskell's
-    // `prettyProof` prepends `by ` to this non-Solved finished leaf
-    // (ppCases ps [] at Theory/Proof.hs) and
-    // `prettyProofMethod` emits `keyword_ "UNFINISHABLE" <-> lineComment_
-    // "unresolved subterm constraints"` (upstream b07e308, ProofMethod.hs).
-    // Our `render` emits the same line, so preserve it verbatim
-    // instead of dropping it.
+    // Exhausted proof methods and unresolved subterms share this terminal.
     if t.starts_with("UNFINISHABLE") || t.starts_with("by UNFINISHABLE") {
-        return Some(format!(
-            "{}by UNFINISHABLE // unresolved subterm constraints",
-            pad
-        ));
+        return Some(format!("{}by UNFINISHABLE", pad));
     }
     if t.starts_with("SOLVED") || t == "by SOLVED" {
         // HS pretty-prints `keyword_ "SOLVED" <-> lineComment_ "trace found"`

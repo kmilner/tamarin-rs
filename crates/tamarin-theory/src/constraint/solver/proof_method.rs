@@ -36,8 +36,7 @@ pub enum Result {
     Solved,
     /// A contradiction could be derived.
     Contradictory(Option<Contradiction>),
-    /// The proof can't be finished — unresolved subterm constraints or
-    /// a solution after weakening.
+    /// Unresolved constraints prevent a trace, or no proof method applies.
     Unfinishable,
 }
 
@@ -95,6 +94,24 @@ pub fn is_finished(
 /// unresolved. The check does not mutate the system or discharge goals.
 pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
     super::subterm_witness::finished_subterms(&ctx.maude.maude_sig(), sys)
+}
+
+/// Recognize exhausted states independently of heuristic ranking. Only use
+/// this when checking a saved UNFINISHABLE step or after method exhaustion.
+pub fn is_finished_or_stuck(
+    ctx: &ProofContext,
+    sys: &System,
+) -> std::result::Result<Option<Result>, crate::prove::ProveError> {
+    if let Some(result) = is_finished(ctx, sys)? {
+        return Ok(Some(result));
+    }
+    if !crate::constraint::solver::goals::open_goals(sys).is_empty()
+        || exec_proof_method(ctx, &ProofMethod::Simplify, sys)?.is_some()
+        || (sys.is_initial() && exec_proof_method(ctx, &ProofMethod::Induction, sys)?.is_some())
+    {
+        return Ok(None);
+    }
+    Ok(Some(Result::Unfinishable))
 }
 
 /// Render/index applicability — the evaluation depth HS's
@@ -537,6 +554,14 @@ pub fn exec_proof_method(
             }
         }
         ProofMethod::Induction => {
+            // Search and replay must enforce the same applicability checks.
+            if !sys.nodes.is_empty()
+                || !sys.solved_formulas.is_empty()
+                || !sys.goals.is_empty()
+                || sys.formulas.len() != 1
+            {
+                return Ok(None);
+            }
             // Take the first formula and try `ginduct`.
             let Some(fm) = sys.formulas.first().cloned() else {
                 return Ok(None);
@@ -639,32 +664,19 @@ pub fn check_and_exec_proof_method(
 ) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
     match method {
         ProofMethod::Finished(r) => {
-            let Some(actual) = is_finished(ctx, sys)? else {
+            let actual = if matches!(r, Result::Unfinishable) {
+                is_finished_or_stuck(ctx, sys)?
+            } else {
+                is_finished(ctx, sys)?
+            };
+            let Some(actual) = actual else {
                 return Ok(None);
             };
             if !same_kind(r, &actual) {
                 return Ok(None);
             }
         }
-        ProofMethod::Induction => {
-            // Direct port of Haskell `canApplyInduction` (ProofMethod.hs):
-            //   guard (M.null sNodes); guard (S.null sSolvedFormulas);
-            //   guard (M.null sGoals); (_, t) <- uncons sFormulas; guard (null t)
-            // i.e. no nodes, no solved formulas, no open goals, exactly one
-            // formula.  No gfalse check (do NOT call is_initial_system here).
-            if !sys.nodes.is_empty() {
-                return Ok(None);
-            }
-            if !sys.solved_formulas.is_empty() {
-                return Ok(None);
-            }
-            if !sys.goals.is_empty() {
-                return Ok(None);
-            }
-            if sys.formulas.len() != 1 {
-                return Ok(None);
-            }
-        }
+        ProofMethod::Induction => {}
         ProofMethod::SolveGoal(g) => {
             if !sys.goals.iter().any(|(existing, _)| existing == g) {
                 return Ok(None);

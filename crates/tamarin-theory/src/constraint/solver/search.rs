@@ -42,7 +42,7 @@ use std::collections::BTreeMap;
 
 use crate::constraint::solver::context::{CutStrategy, ProofContext};
 use crate::constraint::solver::proof_method::{
-    exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
+    exec_proof_method, is_finished, is_finished_or_stuck, ProofMethod, Result as MethodResult,
 };
 use crate::constraint::system::System;
 use crate::prove::ProveError;
@@ -1067,8 +1067,13 @@ fn expand_inner(
     // `is_finished(ctx, &node.sys)` is `None`, and nothing has touched
     // `node.sys` since — skip the guarded entry's redundant re-sweep.
     let Some((method, mut cases)) = select_open_method(&node.sys, ctx, depth)? else {
-        node.method = ProofMethod::Sorry(Some("no method".into()));
-        node.status = NodeStatus::Sorry;
+        if let Some(result) = is_finished_or_stuck(ctx, &node.sys)? {
+            node.status = node_status_of(&result);
+            node.method = ProofMethod::Finished(result);
+        } else {
+            node.method = ProofMethod::Sorry(Some("Cannot prove".into()));
+            node.status = NodeStatus::Sorry;
+        }
         return Ok(());
     };
     node.method = method;

@@ -3833,7 +3833,14 @@ fn reduce_formulas_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::pro
         .sys
         .formulas
         .iter()
-        .filter(|f| reducible_formula(f))
+        .filter(|f| match f.as_ref() {
+            crate::guarded::Guarded::Disj(items) => !red.sys.goals.iter().any(|(goal, _)| {
+                goal == &crate::constraint::constraints::Goal::Disj(
+                    crate::constraint::constraints::Disj(items.to_vec()),
+                )
+            }),
+            _ => reducible_formula(f),
+        })
         .map(|f| f.as_ref().clone())
         .collect();
     to_decompose.sort();
@@ -3842,7 +3849,7 @@ fn reduce_formulas_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::pro
     }
     // Remove them, then re-insert via the decomposition logic.
     red.sys.invalidate_max_var_idx_cache();
-    red.sys.formulas_mut().retain(|f| !reducible_formula(f));
+    red.sys.formulas_mut().retain(|f| !to_decompose.contains(f));
     red.changed = ChangeIndicator::Changed;
     red.insert_formulas(&to_decompose)
 }
