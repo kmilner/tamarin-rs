@@ -83,7 +83,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
             }
             ProofMethod::Finished(MethodResult::Unfinishable) => {
                 out.push_str(&pad);
-                out.push_str("by UNFINISHABLE // reducible operator in subterm\n");
+                out.push_str("by UNFINISHABLE // unresolved subterm constraints\n");
             }
             ProofMethod::Sorry(reason) => {
                 out.push_str(&pad);
@@ -111,7 +111,7 @@ fn render_node(node: &ProofNode, indent: usize, out: &mut String) {
                     NodeStatus::Solved => "SOLVED // trace found\n",
                     NodeStatus::Sorry => "by sorry\n",
                     NodeStatus::Unfinishable => {
-                        "by UNFINISHABLE // reducible operator in subterm\n"
+                        "by UNFINISHABLE // unresolved subterm constraints\n"
                     }
                     NodeStatus::Open => "by sorry /* open */\n",
                 });
@@ -417,15 +417,16 @@ fn normalize_haskell_line(raw: &str) -> Option<String> {
     if t.starts_with("by sorry") {
         return Some(format!("{}by sorry", pad));
     }
-    // UNFINISHABLE leaf (reducible operator in subterm).  Haskell's
+    // UNFINISHABLE leaf (unresolved subterm constraints). Haskell's
     // `prettyProof` prepends `by ` to this non-Solved finished leaf
     // (ppCases ps [] at Theory/Proof.hs) and
     // `prettyProofMethod` emits `keyword_ "UNFINISHABLE" <-> lineComment_
-    // "reducible operator in subterm"` (ProofMethod.hs).  Our `render` emits the same line, so preserve it verbatim
+    // "unresolved subterm constraints"` (upstream b07e308, ProofMethod.hs).
+    // Our `render` emits the same line, so preserve it verbatim
     // instead of dropping it.
     if t.starts_with("UNFINISHABLE") || t.starts_with("by UNFINISHABLE") {
         return Some(format!(
-            "{}by UNFINISHABLE // reducible operator in subterm",
+            "{}by UNFINISHABLE // unresolved subterm constraints",
             pad
         ));
     }
