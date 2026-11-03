@@ -19,7 +19,7 @@ use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_test_support::require_maude_path;
 use tamarin_theory::theory::{Theory, TheoryItem};
 use tamarin_theory::tools::rule_variants::{open_rule_has_no_variants, populate_rule_variants};
-use tamarin_theory::wellformedness::rules::rule_variants_report;
+use tamarin_theory::wellformedness::variants::explicit_variants_report;
 
 /// A theory with one rule that has no variants (`NoVar`) and one that has the
 /// trivial one (`Ok`).
@@ -47,7 +47,7 @@ fn no_variant_rule_is_reported() {
         return;
     };
     let (thy, maude) = loaded(&mp);
-    let report = rule_variants_report(&thy, Some(&maude));
+    let report = explicit_variants_report(&thy, &maude).unwrap();
     assert_eq!(report.len(), 1, "only `NoVar` has no variants: {report:?}");
     assert_eq!(report[0].topic, "Rule has no variants");
     assert_eq!(
@@ -58,17 +58,6 @@ fn no_variant_rule_is_reported() {
          contradictory. For exaple, a rule with the premises In(~x) and Fr(~x) \
          has no variants because ~x cannot be sent before it is generated.\n"
     );
-}
-
-/// The web load path has no Maude process at wellformedness time and so emits
-/// no such block.
-#[test]
-fn no_maude_reports_nothing() {
-    let Some(mp) = require_maude_path() else {
-        return;
-    };
-    let (thy, _maude) = loaded(&mp);
-    assert!(rule_variants_report(&thy, None).is_empty());
 }
 
 #[test]

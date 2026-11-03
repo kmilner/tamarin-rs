@@ -70,13 +70,12 @@ pub struct OpenProtoRule {
     /// AUTO actions, and the Set round-trip collapses the per-variant
     /// duplicates.
     pub rule_e: Option<Box<ProtoRuleE>>,
-    /// HS's `_oprRuleAC` (Items/RuleItem.hs): the `variants (modulo
-    /// AC)` blocks the source writes out, parsed by `protoRuleAC` and
-    /// collected by `protoRule` (Theory/Text/Parser/Rule.hs).  A rule that declares them is closed by mapping `ClosedProtoRule
-    /// ruE` over the list rather than by computing variants, so neither the
-    /// macros nor Maude ever touch them (lib/theory/src/Rule.hs).  HS types them `ProtoRuleAC`; the parser fills that info's
-    /// variant and loop-breaker slots with `Disj [emptySubstVFresh]` and `[]`
-    /// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs),
+    /// Explicit `variants (modulo AC)` members (`_oprRuleAC`, Items/RuleItem.hs).
+    /// Open theories preserve source macros. Closing expands the members while
+    /// preserving declared new variables, without computing Maude variants
+    /// (`closeProtoRule`, lib/theory/src/Rule.hs).
+    ///
+    /// Parsed members have a trivial variant disjunction and no loop breakers,
     /// so a [`ProtoRuleE`] holds everything a parsed block carries.
     pub rule_ac: Vec<ProtoRuleE>,
 }
@@ -98,6 +97,14 @@ impl OpenProtoRule {
     /// `getProtoRuleEs` (ClosedTheory.hs) reads exactly this.
     pub fn rule_e(&self) -> &ProtoRuleE {
         self.rule_e.as_deref().unwrap_or(&self.rule)
+    }
+
+    /// Expand explicit members at the executable-rule boundary. Open printers
+    /// retain their source spelling until this step.
+    pub(crate) fn expand_variant_macros(&mut self, macros: &[LNMacro]) {
+        for member in &mut self.rule_ac {
+            *member = crate::rule::apply_macro_in_rule_preserving_new_vars(macros, member.clone());
+        }
     }
 
     pub fn name(&self) -> &str {

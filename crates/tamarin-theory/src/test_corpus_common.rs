@@ -30,6 +30,10 @@ pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
     // Intentional rejection fixtures introduced by the updated upstream pin.
     ("regression/negative/issue906-end-prefix.spthy", SKIP_PARSE),
     ("regression/negative/issue907-variable-lhs.spthy", SKIP_ELAB),
+    (
+        "regression/negative/manual-variant-embedded-restriction.spthy",
+        SKIP_PARSE,
+    ),
     ("regression/negative/missing-end.spthy", SKIP_PARSE),
     ("regression/trace/issue834-2.spthy", SKIP_PARSE),
     ("regression/trace/issue834-3.spthy", SKIP_PARSE),

@@ -1237,6 +1237,19 @@ pub fn format_wf_block(report: &[crate::wellformedness::WfError]) -> String {
 /// interactive server's `ppInteractive` console echo of the report at
 /// theory-load time (Web/Dispatch.hs).
 pub fn render_wf_error_report(report: &[crate::wellformedness::WfError]) -> String {
+    render_wf_error_report_with(report, |error| &error.message)
+}
+
+/// Batch fatal errors use Console.renderDoc directly, rather than the
+/// default-width render used to embed ordinary warning reports in theories.
+pub fn render_console_wf_error_report(report: &[crate::wellformedness::WfError]) -> String {
+    render_wf_error_report_with(report, crate::wellformedness::WfError::console_message)
+}
+
+fn render_wf_error_report_with(
+    report: &[crate::wellformedness::WfError],
+    message: impl Fn(&crate::wellformedness::WfError) -> &str,
+) -> String {
     let mut out = String::new();
     // HS `groupOn fst = groupBy ((==) `on` fst)` (Extension/Prelude.hs)
     // splits the report into runs of CONSECUTIVE same-topic entries, so a topic
@@ -1246,8 +1259,8 @@ pub fn render_wf_error_report(report: &[crate::wellformedness::WfError]) -> Stri
     let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
     for e in report {
         match groups.last_mut() {
-            Some((topic, msgs)) if *topic == e.topic => msgs.push(&e.message),
-            _ => groups.push((&e.topic, vec![&e.message])),
+            Some((topic, msgs)) if *topic == e.topic => msgs.push(message(e)),
+            _ => groups.push((&e.topic, vec![message(e)])),
         }
     }
     for (i, (topic, msgs)) in groups.iter().enumerate() {

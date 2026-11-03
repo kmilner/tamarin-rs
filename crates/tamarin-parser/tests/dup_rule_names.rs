@@ -326,3 +326,27 @@ fn predicate_block_finishes_parsing_before_duplicate_validation() {
         ParseErrorKind::DuplicateDeclaration { .. }
     ));
 }
+
+#[test]
+fn explicit_family_names_include_the_parent_and_each_member() {
+    for members in [
+        "rule (modulo AC) R: [] --> []",
+        "rule (modulo AC) V: [] --> [], rule (modulo AC) V: [] --> []",
+    ] {
+        let source = format!("theory T begin\nrule R: [] --> [] variants {members}\nend");
+        let error = err(&source, "duplicate_variant.spthy");
+        assert!(is_duplicate(&error, ParseContext::Rule, "R"), "{error:?}");
+        let start = source.find("R:").unwrap();
+        assert_eq!(error.span(), start..start + 1);
+    }
+}
+
+#[test]
+fn explicit_member_names_may_overlap_unrelated_families() {
+    let source = "theory T begin
+rule R: [] --> [] variants rule (modulo AC) V: [] --> []
+rule V: [] --> [] variants rule (modulo AC) W: [] --> []
+rule S: [] --> [] variants rule (modulo AC) V: [] --> []
+end";
+    assert_eq!(rule_names(source), ["R", "V", "S"]);
+}

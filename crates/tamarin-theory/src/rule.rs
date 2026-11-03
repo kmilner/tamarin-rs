@@ -134,6 +134,21 @@ pub fn apply_macro_in_rule<I>(macros: &[LNMacro], r: Rule<I>) -> Rule<I> {
     }
 }
 
+/// Explicit members retain the positions of their new-variable terms.
+pub fn apply_macro_in_rule_preserving_new_vars<I>(macros: &[LNMacro], r: Rule<I>) -> Rule<I> {
+    if macros.is_empty() {
+        return r;
+    }
+    let new_vars = r
+        .new_vars
+        .iter()
+        .map(|t| tamarin_term::macro_expand::apply_macros(macros, t.clone()))
+        .collect();
+    let mut expanded = apply_macro_in_rule(macros, r);
+    expanded.new_vars = new_vars;
+    expanded
+}
+
 // =============================================================================
 // HasFrees instance — visit/map over premises, conclusions, actions, new_vars.
 // `info` is intentionally skipped here: the generic bound is `Clone`, not
@@ -820,6 +835,16 @@ pub fn equal_up_to_terms(ru_ac: &ProtoRuleAC, ru_e: &ProtoRuleE) -> bool {
         && same_tags(&ru_ac.premises, &ru_e.premises)
         && same_tags(&ru_ac.conclusions, &ru_e.conclusions)
         && same_tags(&ru_ac.actions, &ru_e.actions)
+}
+
+/// Name of the numbered member of a protocol rule family.
+pub fn rule_variant_name(name: ProtoRuleName, index: usize) -> ProtoRuleName {
+    match name {
+        ProtoRuleName::Fresh => ProtoRuleName::Fresh,
+        ProtoRuleName::Stand(name) => ProtoRuleName::Stand(tamarin_term::intern::intern_str(
+            &format!("{name}___VARIANT_{index}"),
+        )),
+    }
 }
 
 /// HS `isTrivialProtoVariantAC` (Theory/Model/Rule.hs): the variant
