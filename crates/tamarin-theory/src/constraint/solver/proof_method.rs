@@ -554,20 +554,9 @@ pub fn exec_proof_method(
             //         [("empty_trace", baseCase), ("non_empty_trace", stepCase)]
             //     L.setM sFormulas (S.singleton caseFormula)
             //     return caseName
-            // HS uses `setM` — direct field write into `sFormulas`, NOT
-            // `insertFormula`.  Calling `insertFormula` here would route
-            // through HS's GDisj insertion arm (`insertFormula`/`insert'`,
-            // Reduction.hs) which adds the
-            // empty DisjG goal to `sGoals`; HS's `reduceFormulas`
-            // (Simplify.hs) filters by `reducibleFormula`
-            // (Reduction.hs `reducibleFormula`) which returns False for `GDisj _`, so
-            // an `empty_trace` formula `Disj([])` (gfalse) stays in
-            // `sFormulas` untouched and never produces a DisjG goal —
-            // `FormulasFalse` contradiction picks it up directly.
-            // (Routing through insert_formula would insert the empty DisjG
-            // goal at gsNr=0, shifting every subsequent gsNr in every
-            // sibling branch and diverging from HS at the first insertGoal
-            // call.)
+            // Match HS's direct formula-store assignment. Inserting here
+            // would create disjunction goals before simplifySystem and alter
+            // their ordering; simplification handles the selected formula.
             // HS `process . induction` (ProofMethod.hs):
             // `runReduction (induction <* simplifySystem)` under the DisjT
             // monad.  `simplifySystem` CAN fan out at induction time — a

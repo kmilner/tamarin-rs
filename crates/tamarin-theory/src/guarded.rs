@@ -168,13 +168,8 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
             return gfalse();
         }
     }
-    // Port normal form: run `nub` BEFORE the `[gf] -> gf` singleton unwrap,
-    // so the result is a fixpoint of `gconj` itself. The pinned Haskell
-    // implementation unwraps based on the pre-`nub` length, but that can
-    // leave `GConj [a]` after `gconj [a, a]`; this representation instead
-    // normalizes it to `a` because `normalise_guarded_cow` relies on one-pass
-    // idempotence: `gconj [a, a]` must be `a`, not the non-normal singleton
-    // `Conj [a]` that only a second application would unwrap.
+    // Like HS, deduplicate before collapsing a singleton so construction
+    // is idempotent: gconj [a, a] becomes a in one pass.
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) {
@@ -187,7 +182,7 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
     Guarded::Conj(deduped.into())
 }
 
-/// Smart `Disj` — flatten one level, short-circuit on `gtrue`, drop
+/// Smart `Disj` — flatten recursively, short-circuit on `gtrue`, drop
 /// `gfalse` items.  Mirrors Haskell's `gdisj` which treats `Disj` as a
 /// set semantically: True absorbs, False is the unit.  Without dropping
 /// gfalse items, partial_atom_valuation can turn `Disj([Eq(j,i),
@@ -229,25 +224,15 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
             return gtrue();
         }
     }
-    // HS-faithful: the `[gf] -> gf` singleton unwrap matches the FLATTENED,
-    // non-nubbed list (Guarded.hs); `nub` is applied only in the
-    // otherwise branch (`GDisj $ Disj $ nub gfs`, Guarded.hs).  So a
-    // flattened list like `[a,a]` is not a singleton and yields
-    // `Disj (nub [a,a]) = Disj [a]`, NOT bare `a`.  (Note: this `out`
-    // already has `gfalse` items dropped — see flatten above — so the
-    // empty case below collapses an all-`gfalse` disjunction to `gfalse`.)
-    if out.len() == 1 {
-        return out.into_iter().next().unwrap();
-    }
-    // Mirror Haskell `gdisj`'s `nub gfs` (Guarded.hs).
+    // Deduplicate before collapsing a singleton so normalization is idempotent.
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) {
             deduped.push(x);
         }
     }
-    if deduped.is_empty() {
-        gfalse()
+    if deduped.len() == 1 {
+        deduped.pop().unwrap()
     } else {
         Guarded::Disj(deduped.into())
     }
@@ -970,11 +955,10 @@ fn flatten_dedup_disj(children: &[Guarded]) -> Vec<Guarded> {
     out
 }
 
-/// Normalise a formula for storage in the constraint system: full
-/// smart-constructor normal form, except that a TOP-LEVEL disjunction
-/// keeps its `Disj` constructor (via the constructor-preserving
-/// `normalise_disj_list_cow`) so it stays in lockstep with its `Goal::Disj`
-/// twin.  Port of HS `normaliseStoredFormula` (150f5eba).
+/// Normalise a stored formula while preserving disjunction constructors at
+/// every level. The top-level wrapper stays in lockstep with its `Goal::Disj`
+/// twin; nested wrappers remain available for deduplication when inserted
+/// later (see [`normalise_guarded_cow`]). Port of HS `normaliseStoredFormula`.
 ///
 /// Copy-on-write: `None` when unchanged, `Some(rebuilt)` otherwise.
 pub fn normalise_stored_formula_cow(g: &Guarded) -> Option<Guarded> {
@@ -1499,13 +1483,10 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
                 }
             }
         }
-        Guarded::Atom(ProtoAtom::Less(i, j)) => Ok(Guarded::Disj(
-            vec![
-                Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
-                Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
-            ]
-            .into(),
-        )),
+        Guarded::Atom(ProtoAtom::Less(i, j)) => Ok(gdisj(vec![
+            Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
+            Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
+        ])),
         Guarded::Atom(ProtoAtom::Last(_)) => Err("formula not last-free".to_string()),
         Guarded::Atom(a) => Ok(gnot_atom(a)),
         Guarded::Disj(xs) => {

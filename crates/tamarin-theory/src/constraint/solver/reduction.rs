@@ -1734,16 +1734,10 @@ impl<'ctx> Reduction<'ctx> {
                         if mark {
                             self.sys.push_solved_formula_normalized_absent(g.clone());
                         }
-                        let d = crate::guarded::Guarded::Disj(
-                            vec![
-                                crate::guarded::Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
-                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
-                                    j.clone(),
-                                    i.clone(),
-                                )),
-                            ]
-                            .into(),
-                        );
+                        let d = crate::guarded::gdisj(vec![
+                            crate::guarded::Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
+                            crate::guarded::Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
+                        ]);
                         self.changed = ChangeIndicator::Changed;
                         self.insert_formula_inner(d, false)?
                     }
@@ -1763,19 +1757,10 @@ impl<'ctx> Reduction<'ctx> {
                         if mark {
                             self.sys.push_solved_formula_normalized_absent(g.clone());
                         }
-                        let d = crate::guarded::Guarded::Disj(
-                            vec![
-                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
-                                    i.clone(),
-                                    j.clone(),
-                                )),
-                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
-                                    j.clone(),
-                                    i.clone(),
-                                )),
-                            ]
-                            .into(),
-                        );
+                        let d = crate::guarded::gdisj(vec![
+                            crate::guarded::Guarded::Atom(ProtoAtom::Less(i.clone(), j.clone())),
+                            crate::guarded::Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
+                        ]);
                         self.changed = ChangeIndicator::Changed;
                         self.insert_formula_inner(d, false)?
                     }
@@ -1818,19 +1803,13 @@ impl<'ctx> Reduction<'ctx> {
                         let last_term: crate::formula::BLNTerm = tamarin_term::vterm::var_term(
                             tamarin_term::lterm::BVar::Free(last_node),
                         );
-                        let d = crate::guarded::Guarded::Disj(
-                            vec![
-                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
-                                    last_term.clone(),
-                                    i.clone(),
-                                )),
-                                crate::guarded::Guarded::Atom(ProtoAtom::Less(
-                                    i.clone(),
-                                    last_term,
-                                )),
-                            ]
-                            .into(),
-                        );
+                        let d = crate::guarded::gdisj(vec![
+                            crate::guarded::Guarded::Atom(ProtoAtom::Less(
+                                last_term.clone(),
+                                i.clone(),
+                            )),
+                            crate::guarded::Guarded::Atom(ProtoAtom::Less(i.clone(), last_term)),
+                        ]);
                         self.changed = ChangeIndicator::Changed;
                         self.insert_formula_inner(d, false)?
                     }
