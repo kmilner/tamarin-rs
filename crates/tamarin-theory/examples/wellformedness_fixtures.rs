@@ -34,10 +34,8 @@ use tamarin_theory::wellformedness as wf;
 mod common;
 use common::run_tamarin;
 
-/// Topic titles compare modulo surrounding whitespace: HS carries a
-/// source-literal trailing space on the LHS-usage title and a leading one on
-/// ` Formula guardedness`, neither of which a comma-separated `expected.txt`
-/// entry can hold — its fields are `trim`ed on parse.
+/// Topic titles compare modulo surrounding whitespace: Haskell's LHS-usage
+/// title carries a trailing space, while `expected.txt` fields are trimmed.
 fn norm(topic: &str) -> String {
     topic.trim().to_string()
 }
