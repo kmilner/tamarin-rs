@@ -1815,9 +1815,9 @@ impl System {
     /// where `bot = gfalse()`.  Two conditions: no solved formulas yet, and no
     /// gfalse in the formula set.  This is the gate the automatic-search path
     /// (`rankProofMethods`, ProofMethod.hs) uses to decide whether
-    /// `insertInduction` runs — NOT the stricter replay-only `canApplyInduction`
-    /// (ProofMethod.hs), which additionally checks node/goal emptiness
-    /// and omits the gfalse check.
+    /// `insertInduction` is considered. Execution in both search and replay
+    /// also requires `canApplyInduction` (ProofMethod.hs), which checks
+    /// node/goal emptiness and omits the gfalse check.
     pub fn is_initial(&self) -> bool {
         self.solved_formulas.is_empty()
             && !crate::guarded::stores_contains(&self.formulas, &crate::guarded::gfalse())
