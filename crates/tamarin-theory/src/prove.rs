@@ -59,9 +59,8 @@ impl From<crate::tools::rule_variants::VariantsError> for ProveError {
 pub struct SearchOptions {
     pub proof_bound: usize,
     pub ranking_depth_offset: usize,
-    pub cut: crate::constraint::solver::context::CutStrategy,
-    /// Explicit frontend selection overrides the lemma attribute.
-    pub force_cut: bool,
+    /// None keeps the session/lemma selection; Some is an explicit override.
+    pub cut: Option<crate::constraint::solver::context::CutStrategy>,
     pub oracle_only: bool,
 }
 
@@ -1411,8 +1410,7 @@ pub fn prove_system_in_session(
         SearchOptions {
             proof_bound,
             ranking_depth_offset: 0,
-            cut: session.cut,
-            force_cut: session.force_cut,
+            cut: None,
             oracle_only: false,
         },
     )
@@ -1428,8 +1426,9 @@ pub fn prove_system_in_session_with_options(
     use crate::constraint::solver::goals::GoalRanking;
 
     let mut ctx = session.context_for_lemma(lemma_name)?;
-    let (lemma, _) = session.lemma_and_prepared(lemma_name)?;
-    ctx.cut = select_cut(options.cut, options.force_cut, lemma);
+    if let Some(cut) = options.cut {
+        ctx.cut = cut;
+    }
     if options.oracle_only
         && let Some(rankings) = &mut ctx.heuristic
     {
