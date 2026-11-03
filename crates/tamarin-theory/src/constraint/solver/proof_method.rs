@@ -84,18 +84,13 @@ pub fn is_finished(
         return Ok(None);
     }
     // Haskell only forces the witness check once no open goals remain.
-    Ok(Some(if finished_subterms(ctx, sys) {
-        Result::Solved
-    } else {
-        Result::Unfinishable
-    }))
-}
-
-/// Haskell `finishedSubterms` (upstream ee96afd1): residual positive message
-/// containers need a public witness; reducible containing terms stay
-/// unresolved. The check does not mutate the system or discharge goals.
-pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
-    super::subterm_witness::finished_subterms(&ctx.maude.maude_sig(), sys)
+    Ok(Some(
+        if super::subterm_witness::finished_subterms(&ctx.maude.maude_sig(), sys) {
+            Result::Solved
+        } else {
+            Result::Unfinishable
+        },
+    ))
 }
 
 /// Recognize exhausted states independently of heuristic ranking. Only use
