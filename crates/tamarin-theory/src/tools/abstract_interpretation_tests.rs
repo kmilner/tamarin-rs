@@ -489,8 +489,7 @@ fn text_item(tag: &str) -> TheoryItem {
 }
 
 /// The report + refined rules land at the FIRST rule item's position;
-/// earlier items stay put, later non-rule items follow; the refined rules
-/// come out alphabetically (§3 rows 1, 3).
+/// earlier and intervening items stay put, and each family is replaced in place.
 #[test]
 fn apply_partial_evaluation_splices_at_first_rule_item() {
     let Some(path) = require_maude_path() else {
@@ -528,7 +527,7 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
     // Two zero-premise rules, conclusions abstract to Ap(y) + Out(z).
     assert_eq!(trace, " partial evaluation: step 0 added 2 facts\n");
 
-    // before | text{*report*} | Apple | Zebra | mid | after.
+    // before | text{*report*} | Zebra | mid | Apple | after.
     assert_eq!(elab.items.len(), 6);
     assert_eq!(elab.items[0], text_item("before"));
     match &elab.items[1] {
@@ -548,9 +547,9 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
         TheoryItem::Rule(r) => r.name().to_string(),
         other => panic!("expected rule item, got {:?}", other),
     };
-    assert_eq!(rule_name(&elab.items[2]), "Apple");
-    assert_eq!(rule_name(&elab.items[3]), "Zebra");
-    assert_eq!(elab.items[4], text_item("mid"));
+    assert_eq!(rule_name(&elab.items[2]), "Zebra");
+    assert_eq!(elab.items[3], text_item("mid"));
+    assert_eq!(rule_name(&elab.items[4]), "Apple");
     assert_eq!(elab.items[5], text_item("after"));
 
     // Fresh OpenProtoRules for the caller's re-close.
@@ -559,13 +558,9 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
         && r.loop_breakers.is_empty()));
 }
 
-/// A spliced refined rule carries the pre-macro rule as its `rule_e`, the
-/// half HS's re-close narrows `applyMacroInRule macros ruE` from while
-/// keeping `ruE` itself (lib/theory/src/Rule.hs).  `open_proto_rule`
-/// then identifies the AC half with it up to terms and the rule renders
-/// without a `rule (modulo AC)` block.
+/// A refinement is already compiled: macro expansion survives export.
 #[test]
-fn a_refined_rule_keeps_its_pre_macro_e_half() {
+fn a_refined_rule_exports_its_compiled_macro_expansion() {
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -594,19 +589,18 @@ fn a_refined_rule_keeps_its_pre_macro_e_half() {
     );
 
     let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
-    elab.items = vec![
-        TheoryItem::Macros(vec![dup]),
-        TheoryItem::Rule(OpenProtoRule::new(macroed)),
-    ];
+    let mut open = OpenProtoRule::new(crate::rule::apply_macro_in_rule(
+        std::slice::from_ref(&dup),
+        macroed.clone(),
+    ));
+    open.rule_e = Some(Box::new(macroed));
+    elab.items = vec![TheoryItem::Macros(vec![dup]), TheoryItem::Rule(open)];
     apply_partial_evaluation(&mut elab, &h, EvaluationStyle::Silent).unwrap();
 
     let refined: Vec<&OpenProtoRule> = elab.rules().collect();
     assert_eq!(refined.len(), 1);
     let opr = refined[0];
-    assert_eq!(
-        opr.rule_e().conclusions,
-        vec![proto_fact(Multiplicity::Linear, "Ap", vec![dup_call])]
-    );
+    assert_eq!(opr.rule_e().conclusions, opr.rule.conclusions);
     assert_eq!(
         opr.rule.conclusions,
         vec![proto_fact(
@@ -828,4 +822,61 @@ fn loop_breakers_key_same_named_refined_rules_apart() {
         vec![&[PremIdx(0)][..], &[][..], &[][..]],
         "the cycle must still be found across distinct same-named nodes"
     );
+}
+
+#[test]
+fn apply_partial_evaluation_orders_and_deduplicates_programmatic_metadata() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    for restrictions_only in [false, true] {
+        let b: ProtoRuleE = Rule::new(
+            ProtoRuleEInfo::standard("R"),
+            vec![],
+            vec![],
+            vec![proto_fact(Multiplicity::Linear, "A", vec![pub_term("a")])],
+        );
+        let mut a = b.clone();
+        if restrictions_only {
+            a.info
+                .restrictions
+                .push(crate::formula::ProtoFormula::Tf(true));
+        } else {
+            a.info.attributes.ignore_deriv_checks = true;
+        }
+        let mut theory = Theory::new("MetadataFamilies", pair_maude_sig());
+        theory.items = [a.clone(), b, a]
+            .into_iter()
+            .map(|r| TheoryItem::Rule(OpenProtoRule::new(r)))
+            .collect();
+        apply_partial_evaluation(&mut theory, &h, EvaluationStyle::Silent).unwrap();
+        let report = theory
+            .items
+            .iter()
+            .find_map(|item| match item {
+                TheoryItem::Text((_, text)) => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            report.contains("original number of multiset rewriting rules was 2."),
+            "{report}"
+        );
+        // Haskell's full-info Set orders B before A, regardless of input order.
+        // Replacement preserves the repeated input item, but shares its plan.
+        let names: Vec<_> = theory.rules().map(|r| r.name()).collect();
+        assert_eq!(
+            names,
+            ["R_PE_1", "R", "R_PE_1"],
+            "restrictions_only={restrictions_only}"
+        );
+        if !restrictions_only {
+            let attrs: Vec<_> = theory
+                .rules()
+                .map(|r| r.rule.info.attributes.ignore_deriv_checks)
+                .collect();
+            assert_eq!(attrs, [true, false, true]);
+        }
+    }
 }
