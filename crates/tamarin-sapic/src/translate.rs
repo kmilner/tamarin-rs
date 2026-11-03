@@ -112,10 +112,32 @@ fn map_to_annotated_rule(
     p: &ProcessPosition,
     bodies: Vec<RuleBody>,
 ) -> Vec<AnnotatedRule<ProcessAnnotation<LVar>>> {
+    let equation_patterns: BTreeSet<_> = proc
+        .annotation()
+        .let_plan
+        .iter()
+        .enumerate()
+        .flat_map(|(i, stage)| {
+            stage
+                .alternatives
+                .iter()
+                .filter_map(move |(pattern, reduct)| {
+                    reduct
+                        .as_ref()
+                        .map(|_| (crate::annotation::let_stage_position(p, i), pattern))
+                })
+        })
+        .collect();
     bodies
         .into_iter()
         .enumerate()
         .map(|(i, (prems, acts, concs, restr))| AnnotatedRule {
+            matches_destructor_equation: prems.iter().any(|premise| match premise {
+                TransFact::FLet(position, term, _) => {
+                    equation_patterns.contains(&(position.clone(), term))
+                }
+                _ => false,
+            }),
             process_name: None,
             process: proc.clone(),
             position: RulePosition::Pos(p.clone()),
@@ -360,6 +382,7 @@ pub(crate) fn translate(
     plain: &PlainProcess,
     needs_in_ev_res: bool,
     st_rules: &std::collections::BTreeSet<tamarin_term::subterm_rule::CtxtStRule>,
+    macros: &[tamarin_theory::theory::LNMacro],
     opts: TranslateOptions,
 ) -> Result<Translation, String> {
     // The annotation chain, innermost first (sapic/src/Sapic.hs): toAnProcess,
@@ -389,7 +412,7 @@ pub(crate) fn translate(
     } else {
         an_proc_states
     };
-    let an_proc_let = crate::let_destructors::translate_let_destr(st_rules, an_proc_rep);
+    let an_proc_let = crate::let_destructors::translate_let_destr(macros, st_rules, an_proc_rep)?;
     let an_proc = crate::locks::annotate_locks(an_proc_let)?;
 
     // Build the translation context (gated progress/reliable/async wrappers).
@@ -629,6 +652,71 @@ mod tests {
     use tamarin_theory::process_convert::convert_process;
     use tamarin_theory::sapic::ProcessParsedAnnotation;
 
+    #[test]
+    fn only_equation_matches_skip_derivation_checks_through_translation_wrappers() {
+        for progress in [false, true] {
+            for reliable in [false, true] {
+                let options = if progress {
+                    "options: translation-progress"
+                } else {
+                    ""
+                };
+                let (builtin, input, output) = if reliable {
+                    ("builtins: reliable-channel", "in('r',x)", "out('r',y)")
+                } else {
+                    ("", "in(x)", "out(y)")
+                };
+                let source = format!(
+                    "theory T begin {builtin} {options} \
+                     functions: d/1 [destructor], wrap/1 equations: d(wrap(x))=x \
+                     process: {input}; let y=d(d(x)) in {output} else event Failed() end"
+                );
+                let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+                let mut theory = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+                crate::apply::apply_sapic(&mut theory, false).unwrap();
+                let exempt: Vec<_> = theory
+                    .rules()
+                    .filter(|rule| rule.rule_e().info.attributes.ignore_deriv_checks)
+                    .map(|rule| rule.name().to_string())
+                    .collect();
+                // Each reduction has its own equation match and subsequent user
+                // pattern. Neither user patterns nor any failure arm is exempt.
+                assert_eq!(
+                    exempt,
+                    ["letyddx_1_1", "letyddx_5_1"],
+                    "progress={progress}, reliable={reliable}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn identical_equation_and_failure_premises_share_derivation_attributes() {
+        for progress in [false, true] {
+            let options = if progress {
+                "options: translation-progress"
+            } else {
+                ""
+            };
+            let source = format!(
+                "theory T begin {options} functions: d/0 [destructor], ok/0 \
+                 equations: d()=ok() \
+                 process: let y=d() in event Seen(y) else event Wrong() end"
+            );
+            let mut theory = tamarin_theory::elaborate::elaborate(
+                &tamarin_parser::parse_theory(&source, &[]).unwrap(),
+            )
+            .unwrap();
+            crate::apply::apply_sapic(&mut theory, false).unwrap();
+            let exempt: Vec<_> = theory
+                .rules()
+                .filter(|rule| rule.rule_e().info.attributes.ignore_deriv_checks)
+                .map(|rule| rule.name().to_string())
+                .collect();
+            assert_eq!(exempt, ["letyd_1_", "letyd_2_"], "progress={progress}");
+        }
+    }
+
     fn typing2_process() -> p::Process {
         let xspec = p::VarSpec {
             name: "x".into(),
@@ -693,7 +781,7 @@ mod tests {
         let plain = convert_process(&typing2_process(), &sig).unwrap();
         let typed = type_and_rename_process(&sig, &[], &plain).unwrap();
         let st_rules = std::collections::BTreeSet::new();
-        let tr = translate(&typed, false, &st_rules, TranslateOptions::default()).unwrap();
+        let tr = translate(&typed, false, &st_rules, &[], TranslateOptions::default()).unwrap();
         // The rules are Init, new, event, out and null, in that order.  They
         // use the `<label>_<index>_<position>` naming that HS derives from
         // the pretty-printed head of each node (Facts.hs `toRule`).  The test
