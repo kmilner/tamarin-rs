@@ -452,6 +452,10 @@ impl Drop for SearchTlsGuard {
     }
 }
 
+#[path = "saved_search.rs"]
+mod saved_search;
+pub(crate) use saved_search::extend_saved_proof;
+
 /// Run an iterative-deepening search.  Heuristic: try `Simplify`
 /// once, then pick the first ranked open goal each round.
 ///
@@ -718,7 +722,8 @@ fn bfs_check_level(
     build: bool,
 ) -> Option<ProofNode> {
     if remaining == 0 {
-        let solved_leaf = matches!(&node.method, ProofMethod::Finished(MethodResult::Solved));
+        let solved_leaf =
+            node.annotated && matches!(&node.method, ProofMethod::Finished(MethodResult::Solved));
         if solved_leaf {
             *found = true;
             return build.then(|| node.clone());
@@ -745,7 +750,9 @@ fn bfs_check_level(
         }
         return build.then(|| node.clone());
     }
-    if node.children.is_empty() {
+    // Positive-depth traversal must not descend into a stale saved subtree:
+    // HS checkLevel preserves proofs whose psInfo is Nothing unchanged.
+    if !node.annotated || node.children.is_empty() {
         return build.then(|| node.clone());
     }
     let mut new_children: BTreeMap<String, ProofNode> = BTreeMap::new();
@@ -1285,12 +1292,24 @@ fn expand_inner(
                         // NSPK3 renders `by contradiction /* cyclic */`
                         // leaves amid the sorry stubs — while every
                         // still-open node becomes a bare `sorry` leaf.
-                        let (method, status) = match is_finished(ctx, &sys)? {
-                            Some(r) => {
-                                let st = node_status_of(&r);
-                                (ProofMethod::Finished(r), st)
+                        let proof_bound = PROOF_BOUND.with(|b| b.get());
+                        let (method, status) = if depth + 1 >= proof_bound {
+                            // boundProofDepth wraps the lazy replacement
+                            // before cutAfterFirstSorry inspects its methods.
+                            // Even an ignored finished sibling at this depth
+                            // must therefore retain the bound-sorry marker.
+                            (
+                                ProofMethod::Sorry(Some(format!("bound {proof_bound} hit"))),
+                                NodeStatus::Sorry,
+                            )
+                        } else {
+                            match is_finished(ctx, &sys)? {
+                                Some(r) => {
+                                    let st = node_status_of(&r);
+                                    (ProofMethod::Finished(r), st)
+                                }
+                                None => (ProofMethod::Sorry(None), NodeStatus::Sorry),
                             }
-                            None => (ProofMethod::Sorry(None), NodeStatus::Sorry),
                         };
                         node.children.insert(
                             name,
