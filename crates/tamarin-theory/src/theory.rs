@@ -628,7 +628,7 @@ pub fn merge_open_proto_rules(
 ) -> Vec<TheoryItem<MergedProtoRule>> {
     let mut out: Vec<TheoryItem<MergedProtoRule>> = Vec::new();
     for item in items {
-        let opened = match item.split_rule() {
+        let mut opened = match item.split_rule() {
             Ok(other) => {
                 out.push(other);
                 continue;
@@ -640,9 +640,22 @@ pub fn merge_open_proto_rules(
         // item is what the next one is compared against.
         match out.last_mut() {
             Some(TheoryItem::Rule(prev)) if prev.rule_e == opened.rule_e => {
-                prev.rule_ac.extend(opened.rule_ac)
+                for rule in opened.rule_ac {
+                    if !prev.rule_ac.contains(&rule) {
+                        prev.rule_ac.push(rule);
+                    }
+                }
             }
-            _ => out.push(TheoryItem::Rule(opened)),
+            _ => {
+                let mut unique = Vec::new();
+                for rule in opened.rule_ac.drain(..) {
+                    if !unique.contains(&rule) {
+                        unique.push(rule);
+                    }
+                }
+                opened.rule_ac = unique;
+                out.push(TheoryItem::Rule(opened));
+            }
         }
     }
     out
