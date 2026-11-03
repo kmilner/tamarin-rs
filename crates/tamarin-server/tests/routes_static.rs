@@ -74,7 +74,7 @@ async fn embedded_gui_serves_page_dependencies_and_cache_validators() {
 }
 
 /// Each `/static/<p>` must serve `data/<p>`.  It must serve the exact bytes
-/// on disk, plus the local CSS and cancellation corrections. Every page this
+/// on disk, plus the local cancellation correction. Every page this
 /// crate renders links to the two assets below.
 ///
 /// A missing `data/` is a misconfiguration.  It is not a reason to skip the
@@ -103,9 +103,7 @@ async fn test_static_assets_are_served_from_the_data_dir() {
                 data_dir().join(rel).display()
             )
         });
-        if rel == "css/tamarin-prover-ui.css" {
-            on_disk.push_str(include_str!("../src/handlers/lemma_instructions.css"));
-        } else if rel == "js/tamarin-prover-ui.js" {
+        if rel == "js/tamarin-prover-ui.js" {
             on_disk.push_str(include_str!("../src/handlers/cancel_request.js"));
         }
         let res = s.get(url).await;
@@ -163,11 +161,8 @@ async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
     std::fs::write(data.join("js/ordinary.js"), b"ordinary-data").unwrap();
     std::fs::write(root.join("outside.js"), b"must not be served").unwrap();
 
-    let patched_css = format!(
-        "custom {{ color: blue; }}{}",
-        include_str!("../src/handlers/lemma_instructions.css")
-    );
-    std::fs::write(data.join("css/tamarin-prover-ui.css"), &patched_css).unwrap();
+    let custom_css = "custom { color: blue; }";
+    std::fs::write(data.join("css/tamarin-prover-ui.css"), custom_css).unwrap();
     let patched_js = format!(
         "// custom UI\n{}",
         include_str!("../src/handlers/cancel_request.js")
@@ -209,7 +204,7 @@ async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
 
     let css = s.get("/static/css/tamarin-prover-ui.css").await;
     assert_eq!(css.status(), 200);
-    assert_eq!(css.text().await.unwrap(), patched_css);
+    assert_eq!(css.text().await.unwrap(), custom_css);
     let js = s.get("/static/js/tamarin-prover-ui.js").await;
     assert_eq!(js.status(), 200);
     assert_eq!(js.text().await.unwrap(), patched_js);
