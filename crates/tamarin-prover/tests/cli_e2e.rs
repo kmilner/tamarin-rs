@@ -1143,6 +1143,25 @@ fn open_chains_flag_caps_the_precomputed_chain_resolution() {
         ),
         "`--open-chains=0` must report the cap it hit:\n{stderr}"
     );
+
+    // The same cap is exercised while checking variable derivability, but
+    // auxiliary closes suppress saturation diagnostics (Sources.hs).
+    let theory = fixture("cli_flags_chan.spthy");
+    let (code, _, stderr) = run_binary(
+        &[
+            "--output-module=msr",
+            "--open-chains=0",
+            "--derivcheck-timeout=300",
+        ],
+        &[&theory],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stderr.contains("Derivation checks started"), "{stderr}");
+    assert!(stderr.contains("Derivation checks ended"), "{stderr}");
+    assert!(
+        !stderr.contains("[Open Chains]"),
+        "translate-only derivation checks must not emit chain-limit diagnostics:\n{stderr}"
+    );
 }
 
 /// `--heuristic=o --oraclename=FILE` routes goal ranking through the named
