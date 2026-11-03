@@ -826,6 +826,7 @@ pub fn apply_auto_sources(
         maude.clone(),
         rules.clone(),
         ProofContextOptions {
+            macros: elaborated.macros().cloned().collect(),
             maude_pool: pool.clone(),
             restrictions: restrictions.clone(),
             intruder_rules: ndc_cache.clone(),
@@ -857,6 +858,7 @@ pub fn apply_auto_sources(
             maude.clone(),
             rules.clone(),
             ProofContextOptions {
+                macros: elaborated.macros().cloned().collect(),
                 maude_pool: pool.clone(),
                 restrictions: restrictions.clone(),
                 intruder_rules: ndc_cache.clone(),
@@ -890,6 +892,7 @@ pub fn apply_auto_sources(
             maude.clone(),
             rules.clone(),
             ProofContextOptions {
+                macros: elaborated.macros().cloned().collect(),
                 maude_pool: pool,
                 restrictions,
                 intruder_rules: ndc_cache,

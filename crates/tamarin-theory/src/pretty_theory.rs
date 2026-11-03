@@ -835,9 +835,9 @@ pub fn web_macros(thy: &Theory) -> Option<String> {
 fn render_injective_fact_insts(elab: &Theory) -> String {
     use crate::fact::{FactTag, Multiplicity};
     use crate::pretty_hpj::{self as hpj, punctuate, Doc};
-    let proto_rules: Vec<&crate::rule::ProtoRuleE> = elab.rules().map(|r| &r.rule).collect();
-    let mut tags = crate::tools::injective_fact_instances::simple_injective_fact_instances(
-        &proto_rules,
+    let mut tags = crate::tools::injective_fact_instances::injective_fact_instances_for_rules(
+        elab.rules(),
+        &elab.macros().cloned().collect::<Vec<_>>(),
         &elab.signature.reducible_fun_syms_fast,
     );
     // HS `closeRuleCache` (CloseRule.hs): union the FORCED injective facts
