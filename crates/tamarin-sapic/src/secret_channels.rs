@@ -11,7 +11,9 @@
 use std::collections::BTreeSet;
 
 use tamarin_term::lterm::LVar;
-use tamarin_theory::sapic::{Process, SapicAction, SapicLVar, SapicTerm};
+use tamarin_theory::sapic::{
+    frees_sapic_fact, Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm,
+};
 
 use crate::annotation::ProcessAnnotation;
 
@@ -42,8 +44,26 @@ fn get_secret_channels(p: &AnnotatedProc, candidates: BTreeSet<LVar>) -> BTreeSe
             next.retain(|v| !used.contains(v));
             get_secret_channels(body, next)
         }
+        Process::Action(SapicAction::Msr { concs, .. }, _, body) => {
+            let used: BTreeSet<_> = concs
+                .iter()
+                .flat_map(frees_sapic_fact)
+                .map(|v| v.var)
+                .collect();
+            let mut next = candidates;
+            next.retain(|v| !used.contains(v));
+            get_secret_channels(body, next)
+        }
         Process::Action(_, _, body) => get_secret_channels(body, candidates),
         Process::Null(_) => candidates,
+        Process::Comb(ProcessCombinator::Let { right, .. }, _, l, r) => {
+            let used = term_variables(right);
+            let mut next = candidates;
+            next.retain(|v| !used.contains(v));
+            let cl = get_secret_channels(l, next.clone());
+            let cr = get_secret_channels(r, next);
+            cl.intersection(&cr).copied().collect()
+        }
         Process::Comb(_, _, l, r) => {
             let cl = get_secret_channels(l, candidates.clone());
             let cr = get_secret_channels(r, candidates);
