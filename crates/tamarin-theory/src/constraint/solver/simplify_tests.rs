@@ -1144,6 +1144,45 @@ fn ku_action_uniqueness_merges_two_nodes_with_same_term() {
     );
 }
 
+#[test]
+fn nat_order_encoding_does_not_treat_messages_as_naturals() {
+    use tamarin_term::function_symbols::nat_one_sym;
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::f_app_no_eq;
+    use tamarin_term::vterm::var_term;
+    let one = f_app_no_eq(nat_one_sym(), vec![]);
+    let message = var_term(LVar::new("x", LSort::Msg, 0));
+    let natural = var_term(LVar::new("x", LSort::Nat, 0));
+    assert_eq!(
+        nat_subterm_equalities(&[(message, one.clone())]),
+        Some(vec![])
+    );
+    assert_eq!(nat_subterm_equalities(&[(natural, one)]), None);
+}
+
+#[test]
+fn negative_nat_subterm_does_not_refine_a_message_operand() {
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let Some(h) = maude_with_sig(tamarin_term::maude_sig::nat_maude_sig()) else {
+        return;
+    };
+    let ctx = ProofContext::new(h, Vec::new());
+    let small = var_term(LVar::new("x", LSort::Msg, 0));
+    let big = var_term(LVar::new("n", LSort::Nat, 0));
+    let mut sys = System::empty();
+    sys.subterm_store_mut().add_neg(small.clone(), big.clone());
+    let mut red = Reduction::new(&ctx, sys);
+    propagate_subterm_obvious(&mut red);
+    assert!(red.sys.subterm_store.subterms.is_empty());
+    assert!(red
+        .sys
+        .subterm_store
+        .neg_subterms
+        .iter()
+        .any(|(s, t)| *s == small && *t == big));
+}
+
 /// `simpSplitNegSt` S_subterm-neg-ac-recurse: a negative multiset
 /// subterm `¬(a++a ⊏ b++c)` whose AC sides do NOT cancel under
 /// `processACSubterm` (so it returns `Left (nSmall, nBig)`) must
