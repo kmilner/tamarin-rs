@@ -54,18 +54,21 @@ pub enum ProofMethod {
 
 /// `isFinished`: returns the appropriate `Result` if the system is in
 /// a terminal state — solved, contradictory, or unfinishable.
-pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
+pub fn is_finished(
+    ctx: &ProofContext,
+    sys: &System,
+) -> std::result::Result<Option<Result>, crate::prove::ProveError> {
     if sys.is_initial() {
-        return None;
+        return Ok(None);
     }
     #[cfg(test)]
     super::cancellation_tests::checkpoint(ctx, super::cancellation_tests::Work::Terminal);
-    let cs = contradictions(ctx, sys);
+    let cs = contradictions(ctx, sys)?;
     if let Some(c) = cs.into_iter().next() {
         // Mirror Haskell `contradictorySystem`: any contradiction
         // closes the branch as `Contradictory`.  Haskell's `isFinished`
         // does not gate this on source-case diagnostics.
-        return Some(Result::Contradictory(Some(c)));
+        return Ok(Some(Result::Contradictory(Some(c))));
     }
     // Direct port of Haskell `isFinished` (ProofMethod.hs):
     //   | null ogs && stFinished     = Just Solved
@@ -79,14 +82,14 @@ pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
     // don't need an explicit `no_false_formula` guard here.)
     use crate::constraint::solver::goals::open_goals;
     if !open_goals(sys).is_empty() {
-        return None;
+        return Ok(None);
     }
     // Haskell only forces the witness check once no open goals remain.
-    Some(if finished_subterms(ctx, sys) {
+    Ok(Some(if finished_subterms(ctx, sys) {
         Result::Solved
     } else {
         Result::Unfinishable
-    })
+    }))
 }
 
 /// Haskell `finishedSubterms` (upstream ee96afd1): residual positive message
@@ -639,7 +642,7 @@ pub fn check_and_exec_proof_method(
 ) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
     match method {
         ProofMethod::Finished(r) => {
-            let Some(actual) = is_finished(ctx, sys) else {
+            let Some(actual) = is_finished(ctx, sys)? else {
                 return Ok(None);
             };
             if !same_kind(r, &actual) {
@@ -716,7 +719,7 @@ mod tests {
         };
         let s = System::empty();
         assert!(
-            is_finished(&ctx, &s).is_none(),
+            is_finished(&ctx, &s).unwrap().is_none(),
             "initial system shouldn't be finished"
         );
     }
@@ -748,7 +751,7 @@ mod tests {
             });
         let rule: RuleACInst = Rule::new(info, Vec::new(), Vec::new(), Vec::new());
         s.add_node(nid, rule);
-        match is_finished(&ctx, &s) {
+        match is_finished(&ctx, &s).unwrap() {
             Some(Result::Solved) => {}
             r => panic!("expected Solved, got {:?}", r),
         }
@@ -768,7 +771,7 @@ mod tests {
                 .push(std::sync::Arc::new(crate::guarded::gtrue()));
             sys.subterm_store_mut()
                 .add(small, var_term(LVar::new("x", LSort::Msg, 0)));
-            assert_eq!(is_finished(&ctx, &sys), Some(expected));
+            assert_eq!(is_finished(&ctx, &sys).unwrap(), Some(expected));
         }
     }
 
@@ -792,7 +795,7 @@ mod tests {
         // `FormulasFalse` contradiction.
         s.formulas_mut()
             .push(std::sync::Arc::new(crate::guarded::gfalse()));
-        match is_finished(&ctx, &s) {
+        match is_finished(&ctx, &s).unwrap() {
             Some(Result::Contradictory(Some(Contradiction::FormulasFalse))) => {}
             r => panic!("expected Contradictory(FormulasFalse), got {:?}", r),
         }
