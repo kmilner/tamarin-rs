@@ -1025,6 +1025,12 @@ fn insert_implied_formulas_pass(
                     .expect("the arm matched a universal GGuarded");
                 Some((xs, new_guards, new_body))
             }
+            // Upstream #958: non-universal safety assumptions (including
+            // false and ground Boolean formulas) still require reduction.
+            // An empty matching prefix emits the formula itself through the
+            // same dedup/insertion path. Existential reuse lemmas are not
+            // assumptions that may be forced into every proof state.
+            _ if crate::guarded::is_safety_formula(f) => Some((Vec::new(), Vec::new(), f.clone())),
             _ => None,
         })
         .collect();
@@ -1072,9 +1078,6 @@ fn insert_implied_formulas_pass(
     node_actions.sort_by_key(|a| a.0);
     let mut sys_actions = unsolved_actions;
     sys_actions.extend(node_actions);
-    if sys_actions.is_empty() {
-        return Ok(SystemOutcome::Linear);
-    }
 
     // Group `sys_actions` indices by fact name, once per pass.  Without the
     // index, the Action-guard arm of `try_match_all_guards::rec` would scan
