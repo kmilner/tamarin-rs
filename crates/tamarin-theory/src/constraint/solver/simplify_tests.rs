@@ -35,6 +35,44 @@ fn ctx() -> Option<ProofContext> {
     Some(ProofContext::new(maude()?, Vec::new()))
 }
 
+#[test]
+fn implied_safety_false_rejects_the_system() {
+    let Some(ctx) = ctx() else { return };
+    let mut sys = System::empty();
+    sys.insert_lemma(crate::guarded::gfalse());
+    let mut red = Reduction::new(&ctx, sys);
+    let outcome = insert_implied_formulas_pass(&mut red).expect("formula reduction");
+    assert!(
+        matches!(outcome, SystemOutcome::Contradictory)
+            || red
+                .sys
+                .formulas
+                .iter()
+                .any(|f| f.as_ref() == &crate::guarded::gfalse())
+    );
+}
+
+#[test]
+fn implied_formulas_do_not_force_existential_reuse_lemmas() {
+    use crate::formula::Quantifier;
+    use crate::guarded::{gtrue, Guarded};
+    let Some(ctx) = ctx() else { return };
+    let mut sys = System::empty();
+    sys.insert_lemma(Guarded::GGuarded {
+        qua: Quantifier::Ex,
+        vars: Vec::new().into(),
+        guards: Vec::new().into(),
+        body: std::sync::Arc::new(gtrue()),
+    });
+    let mut red = Reduction::new(&ctx, sys);
+    assert!(matches!(
+        insert_implied_formulas_pass(&mut red).unwrap(),
+        SystemOutcome::Linear
+    ));
+    assert!(red.sys.formulas.is_empty());
+    assert!(red.sys.goals.is_empty());
+}
+
 /// Run the production simplifier in tests that intentionally construct a
 /// linear case. A surprise split is itself a regression in these fixtures.
 fn simplify_one(ctx: &ProofContext, sys: System) -> System {
