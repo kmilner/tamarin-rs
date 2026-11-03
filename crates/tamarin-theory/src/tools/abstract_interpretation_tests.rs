@@ -55,6 +55,47 @@ fn numbered_empty_is_empty_doc() {
 }
 
 #[test]
+fn streamed_fact_list_preserves_numbering_wrapping_and_indentation() {
+    for count in [0, 1, 9, 10, 13, 99, 100] {
+        let facts: Vec<_> = (0..count)
+            .map(|i| {
+                pretty_lnfact(&proto_fact(
+                    Multiplicity::Linear,
+                    "State",
+                    vec![pub_term(format!("value_{i}_with_a_long_name")); 5],
+                ))
+            })
+            .collect();
+        for indent in [0, 2] {
+            assert_eq!(
+                render_numbered_facts(facts.clone().into_iter(), indent),
+                render_default_style(hpj::numbered_prime(facts.clone()).nest(indent as isize)),
+                "{count} facts, indentation {indent}"
+            );
+        }
+    }
+}
+
+#[test]
+fn large_abstract_state_report_does_not_exhaust_the_stack() {
+    let state: BTreeSet<_> = (0..30_000)
+        .map(|i| proto_fact(Multiplicity::Linear, "State", vec![pub_term(i.to_string())]))
+        .collect();
+    let report = abs_state_report(&state, 12, 3, 2);
+    assert!(report
+        .starts_with(" the abstract state after partial evaluation contains 30000 facts:\n\n"));
+    assert_eq!(
+        report
+            .lines()
+            .filter(|line| line.contains(". State("))
+            .count(),
+        state.len()
+    );
+    assert!(report.contains("30000. State("));
+    assert!(report.ends_with("Kept 2 original rule families to preserve their variants on export.\nNote that the original number of multiset rewriting rules was 3.\n\n"));
+}
+
+#[test]
 fn above_blank_case_empty_guards() {
     let a = || Doc::text("a");
     let b = || Doc::text("b");
@@ -186,7 +227,7 @@ fn abs_state_report_bytes_flush_right_13_facts() {
     }
     st.insert(crate::fact::fresh_fact(fresh_var("z", 0)));
     st.insert(crate::fact::in_fact(msg_var("z", 0)));
-    let body = abs_state_report(&st, 11, 11);
+    let body = abs_state_report(&st, 11, 11, 0);
     let expect = " the abstract state after partial evaluation contains 13 facts:\n\
                   \n \
                   1. S1( ~k )\n\
@@ -240,11 +281,7 @@ fn nub_modulo_freshness_first_occurrence_wins() {
     let a1 = simple_rule("A", ("x", 3), ("x", 3));
     let a2 = simple_rule("A", ("y", 8), ("y", 8));
     let b = simple_rule("B", ("x", 3), ("x", 3));
-    let kept = nub_modulo_freshness(vec![
-        (a1.clone(), Vec::new()),
-        (a2, Vec::new()),
-        (b.clone(), Vec::new()),
-    ]);
+    let kept = nub_modulo_freshness(vec![a1.clone(), a2, b.clone()]);
     assert_eq!(kept, vec![a1, b]);
 }
 
@@ -253,7 +290,7 @@ fn nub_modulo_freshness_first_occurrence_wins() {
 fn nub_modulo_freshness_distinguishes_sharing() {
     let shared = simple_rule("A", ("x", 0), ("x", 0));
     let unshared = simple_rule("A", ("x", 0), ("y", 1));
-    let kept = nub_modulo_freshness(vec![(shared, Vec::new()), (unshared, Vec::new())]);
+    let kept = nub_modulo_freshness(vec![shared, unshared]);
     assert_eq!(kept.len(), 2);
 }
 
@@ -363,7 +400,7 @@ fn abstract_state_keeps_the_last_inserted_annotations() {
     // abstracted and inserted last.
     let rules = [mk("A", st_plain), mk("B", st_marked)];
     let (st, refined, _) = partial_evaluation(&h, EvaluationStyle::Summary, &rules).unwrap();
-    let report = abs_state_report(&st, refined.len(), rules.len());
+    let report = abs_state_report(&st, refined.len(), rules.len(), 0);
     assert!(
         report.contains("\n1. St( ~k )[+]\n"),
         "the annotated form must survive; got:\n{report}"
@@ -489,8 +526,7 @@ fn text_item(tag: &str) -> TheoryItem {
 }
 
 /// The report + refined rules land at the FIRST rule item's position;
-/// earlier items stay put, later non-rule items follow; the refined rules
-/// come out alphabetically (§3 rows 1, 3).
+/// earlier and intervening items stay put, and each family is replaced in place.
 #[test]
 fn apply_partial_evaluation_splices_at_first_rule_item() {
     let Some(path) = require_maude_path() else {
@@ -528,7 +564,7 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
     // Two zero-premise rules, conclusions abstract to Ap(y) + Out(z).
     assert_eq!(trace, " partial evaluation: step 0 added 2 facts\n");
 
-    // before | text{*report*} | Apple | Zebra | mid | after.
+    // before | text{*report*} | Zebra | mid | Apple | after.
     assert_eq!(elab.items.len(), 6);
     assert_eq!(elab.items[0], text_item("before"));
     match &elab.items[1] {
@@ -548,9 +584,9 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
         TheoryItem::Rule(r) => r.name().to_string(),
         other => panic!("expected rule item, got {:?}", other),
     };
-    assert_eq!(rule_name(&elab.items[2]), "Apple");
-    assert_eq!(rule_name(&elab.items[3]), "Zebra");
-    assert_eq!(elab.items[4], text_item("mid"));
+    assert_eq!(rule_name(&elab.items[2]), "Zebra");
+    assert_eq!(elab.items[3], text_item("mid"));
+    assert_eq!(rule_name(&elab.items[4]), "Apple");
     assert_eq!(elab.items[5], text_item("after"));
 
     // Fresh OpenProtoRules for the caller's re-close.
@@ -559,13 +595,9 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
         && r.loop_breakers.is_empty()));
 }
 
-/// A spliced refined rule carries the pre-macro rule as its `rule_e`, the
-/// half HS's re-close narrows `applyMacroInRule macros ruE` from while
-/// keeping `ruE` itself (lib/theory/src/Rule.hs).  `open_proto_rule`
-/// then identifies the AC half with it up to terms and the rule renders
-/// without a `rule (modulo AC)` block.
+/// A refinement is already compiled: macro expansion survives export.
 #[test]
-fn a_refined_rule_keeps_its_pre_macro_e_half() {
+fn a_refined_rule_exports_its_compiled_macro_expansion() {
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -594,19 +626,18 @@ fn a_refined_rule_keeps_its_pre_macro_e_half() {
     );
 
     let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
-    elab.items = vec![
-        TheoryItem::Macros(vec![dup]),
-        TheoryItem::Rule(OpenProtoRule::new(macroed)),
-    ];
+    let mut open = OpenProtoRule::new(crate::rule::apply_macro_in_rule(
+        std::slice::from_ref(&dup),
+        macroed.clone(),
+    ));
+    open.rule_e = Some(Box::new(macroed));
+    elab.items = vec![TheoryItem::Macros(vec![dup]), TheoryItem::Rule(open)];
     apply_partial_evaluation(&mut elab, &h, EvaluationStyle::Silent).unwrap();
 
     let refined: Vec<&OpenProtoRule> = elab.rules().collect();
     assert_eq!(refined.len(), 1);
     let opr = refined[0];
-    assert_eq!(
-        opr.rule_e().conclusions,
-        vec![proto_fact(Multiplicity::Linear, "Ap", vec![dup_call])]
-    );
+    assert_eq!(opr.rule_e().conclusions, opr.rule.conclusions);
     assert_eq!(
         opr.rule.conclusions,
         vec![proto_fact(
@@ -637,118 +668,7 @@ fn apply_partial_evaluation_no_rules_is_noop() {
 // `_restrict`-formula frees
 // =============================================================================
 
-/// One `_restrict` formula as the rule carries it: an atom over the given
-/// free variables.
-fn restr_action(timepoint: LVar, arg: LVar) -> crate::formula::SyntacticLNFormula {
-    let lift = |v: LVar| {
-        crate::formula::lift_free(&tamarin_term::vterm::var_term::<
-            tamarin_term::lterm::Name,
-            LVar,
-        >(v))
-    };
-    crate::formula::ProtoFormula::Atom(crate::atom::ProtoAtom::Action(
-        lift(timepoint),
-        crate::fact::Fact::fresh(
-            crate::fact::FactTag::Proto(Multiplicity::Linear, "P", 1),
-            vec![lift(arg)],
-        ),
-    ))
-}
-
-/// `info_frees` is HS `freesList` over `preRestriction` (Term/LTerm.hs):
-/// first occurrence first, NOT sorted by `Ord LVar`.  An action atom folds its
-/// timepoint before the fact's arguments (Theory/Model/Atom.hs), so
-/// `P( y ) @ #i` with `#i` at the higher index yields `[#i, y]` where the
-/// sorted list would be `[y, #i]`.
-#[test]
-fn info_frees_are_in_occurrence_order() {
-    let i = LVar::new("i", LSort::Node, 5);
-    let y = LVar::new("y", LSort::Msg, 1);
-    let mut r: ProtoRuleE = Rule::new(ProtoRuleEInfo::standard("A"), vec![], vec![], vec![]);
-    r.info.restrictions = vec![restr_action(i, y)];
-    assert_eq!(info_frees(&r), vec![i, y]);
-}
-
-// =============================================================================
-// Maude-backed: `_restrict`-formula frees floor the final rename
-// =============================================================================
-
-/// HS rules keep their `_restrict` formulas in `preRestriction`, whose
-/// frees are folded by `HasFrees (Rule i)` but never substituted (`Apply
-/// ProtoRuleEInfo` is the identity) — so a refined rule whose body vars
-/// were ALL substituted keeps its refined indices in the final rename
-/// (the index-0 info frees floor the shift).  Oracle pin:
-/// features/predicates/minimal.spthy renders `[ In( x.2 ) ] --[
-/// Restr_A_1( eq(x.2, x.2) ) ]-> [ ]`, while the same rule with a
-/// free-less `_restrict` formula renders `[ In( x ) ]`.
-#[test]
-fn info_frees_floor_the_final_rename() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let sig = pair_maude_sig().merge(hash_maude_sig());
-    let h = MaudeHandle::start(&path, sig).unwrap();
-    let hh = |t: LNTerm| f_app_no_eq(tamarin_term::builtin::hash_sym(), vec![t]);
-    let rule_a = |restrictions: Vec<crate::formula::SyntacticLNFormula>| -> ProtoRuleE {
-        let mut r = Rule::new(
-            ProtoRuleEInfo::standard("A"),
-            vec![crate::fact::in_fact(msg_var("x", 0))],
-            vec![],
-            vec![proto_fact(
-                Multiplicity::Linear,
-                "Restr_A_1",
-                vec![hh(msg_var("x", 0))],
-            )],
-        );
-        r.info.restrictions = restrictions;
-        r
-    };
-
-    // Refinement: In(x.0) ≐ In(z.1) (state fact renamed above avoid=1),
-    // unifier image drawn at index 2 → body var x.2.  With the formula
-    // free x.0 in play the rename's minimum is 0 and x.2 SURVIVES.
-    let with_free = vec![restr_action(
-        LVar::new("i", LSort::Node, 0),
-        LVar::new("x", LSort::Msg, 0),
-    )];
-    let (_, refined, _) =
-        partial_evaluation(&h, EvaluationStyle::Silent, &[rule_a(with_free)]).unwrap();
-    assert_eq!(refined.len(), 1);
-    assert_eq!(
-        refined[0].premises,
-        vec![crate::fact::in_fact(msg_var("x", 2))]
-    );
-    assert_eq!(
-        refined[0].actions,
-        vec![proto_fact(
-            Multiplicity::Linear,
-            "Restr_A_1",
-            vec![hh(msg_var("x", 2))]
-        )]
-    );
-
-    // Without info frees the same rule renames its minimum down to 0.
-    let (_, refined0, _) =
-        partial_evaluation(&h, EvaluationStyle::Silent, &[rule_a(vec![])]).unwrap();
-    assert_eq!(
-        refined0[0].premises,
-        vec![crate::fact::in_fact(msg_var("x", 0))]
-    );
-}
-
-// =============================================================================
-// Maude-backed: loop-breaker node identity over PE-refined rules
-// =============================================================================
-
-/// HS `useAutoLoopBreakersAC` keys the premise-solving relation by the
-/// WHOLE closed item (`Ord`), so same-named refined rules with different
-/// bodies are DISTINCT graph nodes.  Oracle pins (partial-evaluation
-/// probes):
-/// * `Gen/Step('1')/Step('2')/Back` — dataflow acyclic per item, cyclic
-///   under a name key → the oracle renders ZERO `// loop breaker:`
-///   comments (a name key would fabricate one);
-/// * `Back/Gen/Step` with a REAL `Step ↔ Back` cycle → the oracle marks
-///   `Back` premise 0 only.
+/// Same-named refined bodies remain distinct nodes in the dataflow graph.
 #[test]
 fn loop_breakers_key_same_named_refined_rules_apart() {
     use crate::constraint::solver::context::annotate_loop_breakers;
@@ -828,4 +748,61 @@ fn loop_breakers_key_same_named_refined_rules_apart() {
         vec![&[PremIdx(0)][..], &[][..], &[][..]],
         "the cycle must still be found across distinct same-named nodes"
     );
+}
+
+#[test]
+fn apply_partial_evaluation_orders_and_deduplicates_programmatic_metadata() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    for restrictions_only in [false, true] {
+        let b: ProtoRuleE = Rule::new(
+            ProtoRuleEInfo::standard("R"),
+            vec![],
+            vec![],
+            vec![proto_fact(Multiplicity::Linear, "A", vec![pub_term("a")])],
+        );
+        let mut a = b.clone();
+        if restrictions_only {
+            a.info
+                .restrictions
+                .push(crate::formula::ProtoFormula::Tf(true));
+        } else {
+            a.info.attributes.ignore_deriv_checks = true;
+        }
+        let mut theory = Theory::new("MetadataFamilies", pair_maude_sig());
+        theory.items = [a.clone(), b, a]
+            .into_iter()
+            .map(|r| TheoryItem::Rule(OpenProtoRule::new(r)))
+            .collect();
+        apply_partial_evaluation(&mut theory, &h, EvaluationStyle::Silent).unwrap();
+        let report = theory
+            .items
+            .iter()
+            .find_map(|item| match item {
+                TheoryItem::Text((_, text)) => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            report.contains("original number of multiset rewriting rules was 2."),
+            "{report}"
+        );
+        // Haskell's full-info Set orders B before A, regardless of input order.
+        // Replacement preserves the repeated input item, but shares its plan.
+        let names: Vec<_> = theory.rules().map(|r| r.name()).collect();
+        assert_eq!(
+            names,
+            ["R_PE_1", "R", "R_PE_1"],
+            "restrictions_only={restrictions_only}"
+        );
+        if !restrictions_only {
+            let attrs: Vec<_> = theory
+                .rules()
+                .map(|r| r.rule.info.attributes.ignore_deriv_checks)
+                .collect();
+            assert_eq!(attrs, [true, false, true]);
+        }
+    }
 }

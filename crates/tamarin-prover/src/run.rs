@@ -1782,12 +1782,9 @@ impl TheoryPipeline<'_> {
         // theory close, and the FIRST close runs BEFORE partial evaluation
         // (`closeTheoryWithMaude sign t autoSources True` builds `closedThy`,
         // TheoryLoader.hs, and `applyPartialEvaluation` consumes it).
-        // PE itself reads only the untouched `cprRuleE` half of the closed
-        // rules (`getProtoRuleEs`, ClosedTheory.hs — kept as `rule_e`
-        // on annotated/unfolded rules), so its refined rules come out
-        // AUTO-free; the PE branch below then re-applies auto-sources,
-        // mirroring the re-close, and it is THAT pass which unfolds and
-        // annotates the refined rules.  Auto-sources
+        // Partial evaluation refines compiled members, retaining their AUTO
+        // actions and family ownership. The subsequent close recomputes
+        // auto-sources on those refinements. Auto-sources
         // needs Maude (HS runs it in the `WithMaude` reader), so a missing
         // handle is an error, same as the prove path's.
         if self.auto_sources {
