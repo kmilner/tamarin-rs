@@ -404,13 +404,16 @@ impl ProofTimeLimit {
             })
     }
 
-    fn deadline(self) -> Option<std::time::Instant> {
+    fn duration(self) -> Option<std::time::Duration> {
         match self {
             Self::Unlimited => None,
-            Self::Milliseconds(ms) => {
-                std::time::Instant::now().checked_add(std::time::Duration::from_millis(ms))
-            }
+            Self::Milliseconds(ms) => Some(std::time::Duration::from_millis(ms)),
         }
+    }
+
+    fn deadline(self) -> Option<std::time::Instant> {
+        self.duration()
+            .and_then(|duration| std::time::Instant::now().checked_add(duration))
     }
 
     pub(crate) fn install(self) -> ProofDeadlineGuard {
@@ -561,6 +564,10 @@ impl Drop for SearchTlsGuard {
     }
 }
 
+#[path = "saved_search.rs"]
+mod saved_search;
+pub(crate) use saved_search::extend_saved_proof;
+
 /// Search from `initial` using the context's [`CutStrategy`]. The default
 /// [`CutStrategy::Dfs`] retains the first solved path in case order within the
 /// first depth round that finds a solution. One solved child suffices.
@@ -603,114 +610,112 @@ pub(crate) fn run_proof_search_at_depth(
             // solved child for SeqDfs, or stubbing the suffix for AfterSorry.
             expand(ctx, &mut root, 0)?;
         }
-        CutStrategy::Bfs => {
-            // HS `cutOnSolvedBFS` (Theory/Proof.hs): force the tree one
-            // level deeper per round and walk it with `checkLevel`'s
-            // threaded state.  `checkLevel 0`'s `M.null cs` guard FORCES
-            // each level-`level` node's case map (so a zero-case solve
-            // renders as its own `by solve(…)` closure) without forcing
-            // the child subtrees — the eager mirror expands with
-            // `MAX_DEPTH = level + 1` (level-`level` nodes execute their
-            // method; their children are `depth limit` stubs standing in
-            // for HS's unforced thunks, and the `checkLevel` walk below
-            // never descends past `remaining == 0`, so the stubs never
-            // reach the output).  Deepening re-expands only the stub
-            // frontier, like the Dfs arm.
-            let cap: usize = usize::MAX / 4;
-            let mut level: usize = 1;
+        CutStrategy::Bfs | CutStrategy::Dfs => {
+            let mut frontier = SearchFrontier::new(ctx.cut, DEADLINE.with(|d| d.get()));
+            let mut first = true;
             loop {
-                MAX_DEPTH.with(|m| m.set(level + 1));
+                MAX_DEPTH.with(|m| m.set(frontier.limit()));
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
-                if level == 1 {
+                if first {
                     expand(ctx, &mut root, 0)?;
+                    first = false;
                 } else {
                     re_expand_depth_limited(ctx, &mut root, 0)?;
                 }
-                // HS's poor-man's logging (Theory/Proof.hs) — `trace` to
-                // stderr, unconditional.
-                eprintln!("searching for attacks at depth: {}", level);
-                let mut found = false;
-                let mut incomplete = false;
-                bfs_check_level(&root, level, &mut found, &mut incomplete, false);
-                if found {
-                    eprintln!("attack found at depth: {}", level);
-                    let mut f2 = false;
-                    let mut i2 = false;
-                    if let Some(cut_tree) = bfs_check_level(&root, level, &mut f2, &mut i2, true) {
-                        root = cut_tree;
-                    }
+                let mut path = Vec::new();
+                let selected = find_solved_path(&root, &mut path).then_some(path);
+                if !frontier.advance(&mut root, selected, DEPTH_LIMIT_HIT.with(|f| f.get())) {
                     break;
                 }
-                // CompleteProof / UnfinishableProof: nothing was cut at
-                // this level — the tree is fully explored; keep it whole.
-                if !incomplete {
-                    break;
-                }
-                if deadline_reached() {
-                    break;
-                }
-                if level >= cap {
-                    break;
-                }
-                level += 1;
-            }
-        }
-        CutStrategy::Dfs => {
-            // HS's `cutOnSolvedDFS` (Theory/Proof.hs) doubles `dMax` from 4
-            // with NO upper bound; we mirror that, keeping only a far-out cap
-            // as a loop-termination guard for genuinely non-terminating
-            // strategies.  No real Tamarin proof approaches this depth, so the
-            // cap never flips a verdict.
-            let cap: usize = usize::MAX / 4;
-            let mut current_max_depth: usize = 4;
-            let mut first_iter = true;
-            loop {
-                MAX_DEPTH.with(|m| m.set(current_max_depth));
-                DEPTH_LIMIT_HIT.with(|f| f.set(false));
-                if first_iter {
-                    expand(ctx, &mut root, 0)?;
-                    first_iter = false;
-                } else {
-                    // Re-expand only `Sorry: depth limit` leaves
-                    // (Haskell-faithful memoization — the cached tree IS the
-                    // proof tree, only the unforced "depth limit" thunks need
-                    // (re-)expansion).
-                    re_expand_depth_limited(ctx, &mut root, 0)?;
-                }
-                if matches!(root.status, NodeStatus::Solved | NodeStatus::Contradictory) {
-                    break;
-                }
-                if deadline_reached() {
-                    break;
-                }
-                let hit_depth = DEPTH_LIMIT_HIT.with(|f| f.get());
-                if !hit_depth {
-                    // No branch hit the depth limit — going deeper won't help.
-                    break;
-                }
-                if current_max_depth >= cap {
-                    // Depth cap reached; accept whatever we have.
-                    break;
-                }
-                current_max_depth = current_max_depth.saturating_mul(2).min(cap);
             }
         }
     }
-    // HS-faithful: `cutOnSolvedDFS` / `cutOnSolvedSingleThreadDFS`
-    // (Theory/Proof.hs) call `extractSolved path prf0` once a
-    // Solved leaf is found, pruning the proof tree to JUST the
-    // solved-witness path.  All Contradictory siblings are removed.
-    // Without this, Rust's proof_steps count includes failed branches HS
-    // prunes — e.g. NSPK3 session_key_setup_possible reports 30 steps vs
-    // HS 5.  The other extractors keep their trees: `CutNothing` = `id`,
-    // `CutBFS` returns its level-cut tree, `CutAfterSorry` its
-    // sorry-stubbed tree.
+
+    // `cutOnSolvedDFS` / `cutOnSolvedSingleThreadDFS` (Theory/Proof.hs)
+    // retain only the solved-witness path. Other cut strategies retain the
+    // tree produced by their own pruning policy.
     if matches!(ctx.cut, CutStrategy::Dfs | CutStrategy::SeqDfs)
         && matches!(root.status, NodeStatus::Solved)
     {
         extract_solved_path(&mut root);
     }
     Ok(root)
+}
+
+/// Whole-tree depth rounds shared by ordinary and saved-proof search.
+/// The caller expands its own frontier and reports only witnesses reached in
+/// this round; saved trees may contain solutions below the current limit.
+struct SearchFrontier {
+    cut: CutStrategy,
+    depth: usize,
+    deadline: Option<std::time::Instant>,
+}
+
+impl SearchFrontier {
+    fn new(cut: CutStrategy, deadline: Option<std::time::Instant>) -> Self {
+        let depth = match cut {
+            CutStrategy::Dfs => 4,
+            CutStrategy::Bfs => 1,
+            _ => usize::MAX,
+        };
+        Self {
+            cut,
+            depth,
+            deadline,
+        }
+    }
+
+    fn limit(&self) -> usize {
+        // BFS forces the cases at the selected level, leaving their children
+        // as frontier stubs outside checkLevel's rendered tree.
+        self.depth
+            .saturating_add(usize::from(self.cut == CutStrategy::Bfs))
+    }
+
+    fn advance(
+        &mut self,
+        root: &mut ProofNode,
+        selected: Option<Vec<String>>,
+        mut incomplete: bool,
+    ) -> bool {
+        match self.cut {
+            CutStrategy::Dfs | CutStrategy::SeqDfs => {
+                if let Some(path) = selected {
+                    prune_to_path(root, &path);
+                    return false;
+                }
+            }
+            CutStrategy::Bfs => {
+                let depth = self.depth;
+                eprintln!("searching for attacks at depth: {depth}");
+                let mut found = false;
+                incomplete = false;
+                bfs_check_level(root, depth, &mut found, &mut incomplete, false);
+                if found {
+                    eprintln!("attack found at depth: {depth}");
+                    *root = bfs_check_level(root, depth, &mut false, &mut false, true)
+                        .expect("BFS build returns a tree");
+                    return false;
+                }
+            }
+            CutStrategy::Nothing | CutStrategy::AfterSorry => return false,
+        }
+        let cap = usize::MAX / 4;
+        if !incomplete
+            || self
+                .deadline
+                .is_some_and(|end| std::time::Instant::now() >= end)
+            || self.depth >= cap
+        {
+            return false;
+        }
+        self.depth = if self.cut == CutStrategy::Bfs {
+            self.depth + 1
+        } else {
+            self.depth.saturating_mul(2).min(cap)
+        };
+        true
+    }
 }
 
 /// HS `cutOnSolvedBFS`'s `checkLevel` (Theory/Proof.hs) over the eager
@@ -731,7 +736,8 @@ fn bfs_check_level(
     build: bool,
 ) -> Option<ProofNode> {
     if remaining == 0 {
-        let solved_leaf = matches!(&node.method, ProofMethod::Finished(MethodResult::Solved));
+        let solved_leaf =
+            node.annotated && matches!(&node.method, ProofMethod::Finished(MethodResult::Solved));
         if solved_leaf {
             *found = true;
             return build.then(|| node.clone());
@@ -758,7 +764,9 @@ fn bfs_check_level(
         }
         return build.then(|| node.clone());
     }
-    if node.children.is_empty() {
+    // Positive-depth traversal must not descend into a stale saved subtree:
+    // HS checkLevel preserves proofs whose psInfo is Nothing unchanged.
+    if !node.annotated || node.children.is_empty() {
         return build.then(|| node.clone());
     }
     let mut new_children: BTreeMap<String, ProofNode> = BTreeMap::new();
