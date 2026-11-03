@@ -994,6 +994,14 @@ impl ProofContext {
         for rule in &mut rules {
             crate::tools::rule_variants::prepare_open_rule_variant(rule, &maude)?;
         }
+        // Identical closed members must not create duplicate source cases.
+        let mut unique = Vec::new();
+        for rule in rules {
+            if !unique.contains(&rule) {
+                unique.push(rule);
+            }
+        }
+        let rules = unique;
         // `pcTrueSubterm` — all destructor rules are subterm rules.
         let pc_true_subterm = intruder_rules
             .iter()
