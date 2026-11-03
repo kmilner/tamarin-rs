@@ -235,6 +235,17 @@ fn trans_comb(
     p: &ProcessPosition,
     tildex: &BTreeSet<LVar>,
 ) -> Result<(Vec<RuleBody>, BTreeSet<LVar>, Option<BTreeSet<LVar>>), String> {
+    // Under progress, an omitted else is still the terminating process 0.
+    // Its failure transition must be available instead of forcing the let
+    // to succeed merely to discharge the progress restriction.
+    let mut progress_ann;
+    let ann = if ctx.trans_progress && matches!(c, ProcessCombinator::Let { .. }) {
+        progress_ann = ann.clone();
+        progress_ann.else_branch = true;
+        &progress_ann
+    } else {
+        ann
+    };
     let (bodies, tx1, tx2) = base_trans_comb(c, ann, p, tildex)?;
     if ctx.trans_progress {
         let inv = ctx.inv_pf.as_ref().expect("inv_pf set when trans_progress");
@@ -693,6 +704,31 @@ mod tests {
                 .map(|rule| rule.name().to_string())
                 .collect();
             assert_eq!(exempt, ["letyd_1_", "letyd_2_"], "progress={progress}");
+        }
+    }
+
+    #[test]
+    fn progress_preserves_failure_of_let_with_omitted_else() {
+        for progress in [false, true] {
+            let option = if progress {
+                "options: translation-progress"
+            } else {
+                ""
+            };
+            let source = format!(
+                "theory T begin {option} process: in(x); let <a,b> = x in event A(a,b) end"
+            );
+            let mut theory = tamarin_theory::elaborate::elaborate(
+                &tamarin_parser::parse_theory(&source, &[]).unwrap(),
+            )
+            .unwrap();
+            crate::apply::apply_sapic(&mut theory, false).unwrap();
+            assert_eq!(
+                theory
+                    .restrictions()
+                    .any(|r| r.name.starts_with("Restr_let")),
+                progress
+            );
         }
     }
 
