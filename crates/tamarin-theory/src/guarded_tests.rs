@@ -65,6 +65,19 @@ fn ground_truth() {
     assert_eq!(r, gtrue());
 }
 
+#[test]
+fn last_atoms_are_not_safety_even_when_closed() {
+    for formula in [
+        "All #i. K('a') @ i ==> last(i)",
+        "All #i. K('a') @ i & last(i) ==> F",
+        "All #i. K('a') @ i ==> not last(i)",
+    ] {
+        let guarded = g(formula).unwrap();
+        assert!(is_closed(&guarded));
+        assert!(!is_safety_formula(&guarded), "{formula}");
+    }
+}
+
 // A guarded fact with the given multiplicity, name and argument count. The
 // tag is whatever `fact_tag_of` gives the parser fact, so a reserved name
 // reaches its own `FactTag` constructor and every other name stays a
