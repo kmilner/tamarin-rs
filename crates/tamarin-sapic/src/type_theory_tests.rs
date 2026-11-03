@@ -382,7 +382,7 @@ end";
 /// (`pvars = S.toList (varsProc pr) \\ accBindings pr`, Sapic/Typing.hs,
 /// over `varsProc = foldMap Data.Set.singleton`,
 /// Theory/Sapic/Process.hs), and `-m=spthytyped` prints each formal
-/// with `show :: SapicLVar` (TheoryObject.hs,
+/// with `show :: SapicLVar` (TheoryObject.hs#prettyProcessDef,
 /// Theory/Sapic/Term.hs).  A timepoint operand of `<` is read by
 /// `sapicnodevar` and so carries `node`
 /// (Theory/Sapic/Term.hs#defaultSapicNodeType). Current upstream also

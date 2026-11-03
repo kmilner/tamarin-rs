@@ -1,19 +1,43 @@
 # Haskell oracle patch series
 
-`../setup.sh testing` applies the files listed in `series`, in order, to a
-worktree of the pinned `tamarin-prover` submodule. The submodule itself stays
-pristine.
+This branch tracks merged upstream Tamarin changes at
+`a75fec7ff13cbfcbb0a67813afb16707e981c06e`. [`series`](series) is empty:
+`./setup.sh testing` builds an oracle from the pristine submodule pin.
 
-| Patch | Upstream | Notes |
-|---|---|---|
-| `tamarin-prover-pr-882.patch` | [PR #882](https://github.com/tamarin-prover/tamarin-prover/pull/882) | Stored-formula normalisation, including the upstream always-normalise safeguards. |
-| `tamarin-prover-pr-910.patch` | [PR #910](https://github.com/tamarin-prover/tamarin-prover/pull/910) | Parser and pretty-printer fixes for issues #904–#909. |
-| `tamarin-prover-pr-919.patch` | [PR #919](https://github.com/tamarin-prover/tamarin-prover/pull/919) | Preserve exponentiation grouping under user-defined AC operators. |
-| `tamarin-prover-pr-920.patch` | [PR #920](https://github.com/tamarin-prover/tamarin-prover/pull/920) | Make `--parse-only` output round-trip. |
-| `tamarin-prover-pr-924.patch` | [PR #924](https://github.com/tamarin-prover/tamarin-prover/pull/924) | Reject unknown tactic presorts with an actionable parser error. |
-| `tamarin-prover-pr-925.patch` | [PR #925](https://github.com/tamarin-prover/tamarin-prover/pull/925) | Track outer variables correctly below nested guarded binders during natural-number sort checks. |
-| `tamarin-prover-pr-928.patch` | [PR #928](https://github.com/tamarin-prover/tamarin-prover/pull/928) | Fix invalid web HTML, modernize help markup, and move lemma instruction styles into CSS. Captured at `c23bad64f0823793a7ec897850e3b315713cc5ba`. |
+Pending upstream work lives on the stacked `bump-tamarin-prover-patches`
+branch. Each open PR there has its own incremental patch, including stacked
+PRs, so it can be tracked and removed when it merges.
 
-When a PR lands, bump the submodule, remove its line from `series`, and delete
-its patch. `scripts/bump_submodule.sh --check` identifies patches that are
-already present upstream or no longer apply cleanly.
+## Validation
+
+Build both provers, then run the headline parity gates and upstream command
+regressions:
+
+```bash
+./setup.sh testing
+cargo build --release -p tamarin-prover
+scripts/test.sh proof
+scripts/test.sh web
+scripts/test.sh regressions
+```
+
+The proof and web gates fill or reuse oracle caches under `scripts/.gate_cache`.
+The pin and patch contents identify the oracle generation; older caches stay
+available to other checkouts. Rust binary changes do not invalidate Haskell
+results. Read each run's final verdict to establish parity.
+
+Rust excludes observational equivalence (`--diff`) and the unported
+ProVerif/DeepSec exporters. Supported scenarios are selected individually from
+upstream command sidecars, including negative cases and export round trips.
+See [TESTING.md](../TESTING.md) and [scripts/README.md](../scripts/README.md).
+
+## Maintaining the split
+
+Update the submodule and port newly merged changes on `bump-tamarin-prover`.
+Then rebase `bump-tamarin-prover-patches` on it, remove landed PR patches and
+refresh the remaining incremental patches against their current PR heads.
+Keep behavior specific to open PRs on the stacked branch.
+
+Rebuild the oracle and recertify reference captures and both corpus gates after
+changing the pin or patch contents. Do not edit producer inputs during a gate
+run, and do not delete older cache generations.
