@@ -491,8 +491,17 @@ pub fn validate_theory_for_proving(
 ) -> Result<(), VariantsError> {
     let _plain = crate::pretty_hpj::HtmlDocGuard::disable();
     let validation_maude = maude.with_fresh_counter_from(maude.fresh_counter_peek());
-    let report =
+    let mut report =
         crate::wellformedness::variants::explicit_variants_report(theory, &validation_maude)?;
+    let macros: Vec<_> = theory.macros().cloned().collect();
+    for rule in theory.rules() {
+        // Closing may replace `rule` by an AC member with supported added
+        // products. Check the original E half, but expand its source macros.
+        let source = crate::rule::apply_macro_in_rule(&macros, rule.rule_e().clone());
+        report.extend(crate::wellformedness::mult::unsupported_products_report([
+            &source,
+        ]));
+    }
     let fatal = crate::wellformedness::variants::fatal_wf_errors(&report);
     if fatal.is_empty() {
         Ok(())
