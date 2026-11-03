@@ -20,11 +20,8 @@
 //! * the SAPIC / accountability translation both drivers run before the pass.
 //!   No fixture declares a process, and the render asserts this.
 //! * the Maude-backed `Message Derivation Checks` and `Rule variants` blocks
-//!   that the batch loop splices afterwards. Three expectation files
-//!   therefore carry an `# omits:` line.  That line names the derivation-check
-//!   section that the oracle prints and this pipeline does not.
-//!   `expected.txt` documents the same asymmetry for the differential
-//!   runner.
+//!   that the batch loop splices afterwards. The reference captures disable
+//!   derivation checks explicitly with `--derivcheck-timeout=0`.
 //!
 //! The expected bytes live in one file per fixture, at
 //! `tests/wellformedness_fixtures/reports/<fixture>.report`.  Each file opens

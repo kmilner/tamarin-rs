@@ -50,8 +50,8 @@ Check presence of the --prove/--lemma arguments in theory
 Generated from:
 Tamarin version 1.13.0
 Maude version 3.5.1
-Git revision: 573a43953195d83e62fdbe32fc98253031bca60f (with uncommited changes), branch: HEAD
-Compiled at: 2026-08-28 23:09:34.558175069 UTC
+Git revision: 4c658fcf6653832d60ebdeec1d4d1cab4d4470c1 (with uncommited changes), branch: HEAD
+Compiled at: 2026-11-03 16:07:21.833699751 UTC
 */
 
 end
@@ -61,7 +61,7 @@ summary of summaries:
 
 analyzed: /home/kamilner/tamarin-rs/crates/tamarin-prover/tests/fixtures/cli_flags_basic.spthy
 
-  processing time: 0.08s
+  processing time: 0.15s
   
   WARNING: 1 wellformedness check failed!
            The analysis results might be wrong!

@@ -17,8 +17,8 @@ Formula terms
   dropped where this is unambiguous. Moreover, reducible function
   symbols are disallowed.
 
- Formula guardedness
-====================
+Formula guardedness
+===================
 
   Lemma `NoGuard' cannot be converted to a guarded formula:
     universal quantifier without toplevel implication

@@ -14,4 +14,13 @@ Special facts
   
   rule `SameHead' uses disallowed facts on left-hand-side:
     Out( ((a*b*c)++(b*z)) )
+
+Unsupported multiplication outside exponents
+============================================
+
+  Rule CrossOp has products outside exponents: (x*y)
+  
+  Rule UnionVsMult has products outside exponents: (x*y)
+  
+  Rule SameHead has products outside exponents: (a*b*c), (b*z)
 */
