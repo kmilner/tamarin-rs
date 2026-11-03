@@ -227,6 +227,7 @@ impl ProofState {
             maude,
             tamarin_theory::prove::ProverSessionOptions {
                 cut,
+                force_cut: cfg.stop_on_trace.is_some(),
                 ndc_cache: ndc_cache.cloned(),
                 parameters: cfg.solver_parameters,
                 sys_retention: tamarin_theory::constraint::solver::search::SysRetention::KeepAll,

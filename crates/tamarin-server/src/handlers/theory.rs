@@ -535,6 +535,7 @@ fn web_search_options(
         proof_bound: if bound == 0 { usize::MAX } else { bound },
         ranking_depth_offset,
         cut,
+        force_cut: quit_on_empty || extractor_cut != CutStrategy::Dfs,
         oracle_only: quit_on_empty,
     })
 }
@@ -2177,6 +2178,7 @@ mod tests {
             assert_eq!(nested.proof_bound, 5);
             assert_eq!(nested.ranking_depth_offset, 3);
             assert_eq!(nested.cut, expected);
+            assert_eq!(nested.force_cut, expected != CutStrategy::Dfs);
             assert!(!nested.oracle_only);
         }
 
@@ -2187,6 +2189,7 @@ mod tests {
         let quit = web_search_options("characterize", 0, true, 0).expect("quit");
         assert_eq!(quit.cut, CutStrategy::AfterSorry);
         assert!(quit.oracle_only);
+        assert!(quit.force_cut);
         assert!(web_search_options("unknown", 0, false, 0).is_none());
         assert!(web_search_options("unknown", 0, true, 0).is_none());
     }

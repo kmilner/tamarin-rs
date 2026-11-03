@@ -15,6 +15,48 @@ use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::{pair_maude_sig, MaudeSig};
 use tamarin_test_support::require_maude_path;
 
+#[test]
+fn stop_on_trace_attribute_precedence_and_rendering() {
+    use crate::constraint::solver::context::CutStrategy;
+    let Some(h) = maude() else { return };
+    let parsed = tamarin_parser::parse_theory("theory H begin lemma L [stop-on-trace=seqdfs,stop-on-trace=none]: \"T\" lemma Plain: \"T\" end", &[]).unwrap();
+    let theory = std::sync::Arc::new(elaborated(&parsed));
+    assert_eq!(
+        crate::pretty_theory::lemma_attr_docs(
+            &theory.lookup_lemma("L").unwrap().attributes,
+            "H.spthy"
+        )
+        .into_iter()
+        .map(|d| d.render())
+        .collect::<Vec<_>>(),
+        vec!["stop-on-trace=SEQDFS", "stop-on-trace=NONE"]
+    );
+    for forced in [false, true] {
+        let session = ProverSession::build(
+            theory.clone(),
+            h.clone(),
+            ProverSessionOptions {
+                cut: CutStrategy::Bfs,
+                force_cut: forced,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            session.context_for_lemma("L").unwrap().cut,
+            if forced {
+                CutStrategy::Bfs
+            } else {
+                CutStrategy::SeqDfs
+            }
+        );
+        assert_eq!(
+            session.context_for_lemma("Plain").unwrap().cut,
+            CutStrategy::Bfs
+        );
+    }
+}
+
 /// Returns a maude handle on `sig`.  Returns `None` only when the run opts
 /// out explicitly with `TAM_ALLOW_NO_MAUDE=1`.  Path resolution and the
 /// policy that panics both live in [`tamarin_test_support::require_maude_path`].
