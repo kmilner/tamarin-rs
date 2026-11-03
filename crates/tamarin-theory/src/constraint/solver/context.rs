@@ -287,6 +287,15 @@ impl std::ops::Deref for ProofContext {
     }
 }
 
+/// Failure to select a materialised source case. Keep the two bounds errors
+/// distinct: callers such as the web routes report the failed lookup.
+#[derive(Debug)]
+pub enum SourceCaseError {
+    SourceIndex,
+    CaseIndex,
+    Proof(crate::prove::ProveError),
+}
+
 impl ProofContext {
     /// Materialise this context's sources and return independent working
     /// copies. Source forcing belongs here so a caller cannot accidentally
@@ -312,11 +321,12 @@ impl ProofContext {
         &self,
         source: usize,
         case: usize,
-    ) -> Result<Option<crate::constraint::system::System>, crate::prove::ProveError> {
-        Ok(self
-            .ensure_saturated()?
+    ) -> Result<crate::constraint::system::System, SourceCaseError> {
+        self.ensure_saturated().map_err(SourceCaseError::Proof)?
             .get(source)
-            .and_then(|source| source.case_system_at(case)))
+            .ok_or(SourceCaseError::SourceIndex)?
+            .case_system_at(case)
+            .ok_or(SourceCaseError::CaseIndex)
     }
 }
 
