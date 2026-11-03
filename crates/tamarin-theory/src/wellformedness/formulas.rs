@@ -221,7 +221,22 @@ fn disallowed_sort_show(sort: LSort) -> Option<&'static str> {
 /// its left operand's before its right's.  A source `All x y. …` closes into
 /// nested `Qua`s, so its binders come out left to right.
 fn collect_binders<'a>(fm: &'a LNFormula, out: &mut Vec<&'a (String, LSort)>) {
-    use crate::formula::ProtoFormula;
+    use crate::formula::{Connective, ProtoFormula, Quantifier};
+    fn pattern_exclusion(fm: &LNFormula) -> bool {
+        match fm {
+            ProtoFormula::Qua(Quantifier::All, _, body) => pattern_exclusion(body),
+            ProtoFormula::Conn(Connective::Imp, lhs, rhs) => {
+                matches!(
+                    lhs.as_ref(),
+                    ProtoFormula::Atom(crate::atom::ProtoAtom::EqE(_, _))
+                ) && matches!(rhs.as_ref(), ProtoFormula::Tf(false))
+            }
+            _ => false,
+        }
+    }
+    if pattern_exclusion(fm) {
+        return;
+    }
     match fm {
         ProtoFormula::Tf(_) | ProtoFormula::Atom(_) => {}
         ProtoFormula::Not(f) => collect_binders(f, out),
@@ -344,6 +359,28 @@ mod tests {
                 "Quantifier sorts\n================\n\n  Restriction `r1' uses quantifiers with wrong sort: (\"m\",LSortFresh)",
             ]
         );
+    }
+
+    #[test]
+    fn name_sorts_are_allowed_only_inside_equality_pattern_exclusions() {
+        let source = r#"theory SortedPatterns begin
+            lemma fresh_pattern: "All ~n. ~n = 'a' ==> F"
+            lemma public_pattern: "All $a. $a = 'a' ==> F"
+            lemma nested: "All ~outer. (All ~inner. ~inner = 'a' ==> F)"
+            lemma existential: "Ex ~n. ~n = 'a' ==> F"
+            end"#;
+        let reports = reports(source);
+        let errors: Vec<_> = reports
+            .iter()
+            .filter(|e| e.topic == QUANTIFIER_TOPIC)
+            .collect();
+        // The outer universal is also part of the equality-pattern prefix;
+        // guardedness separately rejects its undetermined variable.
+        assert_eq!(errors.len(), 1, "{reports:?}");
+        assert!(errors[0].message.contains("Lemma `existential'"));
+        assert!(reports
+            .iter()
+            .any(|e| e.topic == "Formula guardedness" && e.message.contains("nested")));
     }
 
     /// Node-, message- and nat-sorted binders are allowed
