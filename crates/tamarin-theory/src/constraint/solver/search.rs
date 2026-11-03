@@ -1078,7 +1078,7 @@ fn expand_inner(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Resul
     // `is_finished(ctx, &node.sys)` is `None`, and nothing has touched
     // `node.sys` since — skip the guarded entry's redundant re-sweep.
     let Some((method, mut cases)) = select_open_method(&node.sys, ctx, depth)? else {
-        node.method = ProofMethod::Sorry(Some("no method".into()));
+        node.method = ProofMethod::Sorry(Some("Cannot prove".into()));
         node.status = NodeStatus::Sorry;
         return Ok(());
     };

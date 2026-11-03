@@ -575,6 +575,13 @@ pub fn exec_proof_method(
             }
         }
         ProofMethod::Induction => {
+            if !sys.nodes.is_empty()
+                || !sys.solved_formulas.is_empty()
+                || !sys.goals.is_empty()
+                || sys.formulas.len() != 1
+            {
+                return Ok(None);
+            }
             // Take the first formula and try `ginduct`.
             let Some(fm) = sys.formulas.first().cloned() else {
                 return Ok(None);
@@ -589,20 +596,9 @@ pub fn exec_proof_method(
             //         [("empty_trace", baseCase), ("non_empty_trace", stepCase)]
             //     L.setM sFormulas (S.singleton caseFormula)
             //     return caseName
-            // HS uses `setM` — direct field write into `sFormulas`, NOT
-            // `insertFormula`.  Calling `insertFormula` here would route
-            // through HS's GDisj insertion arm (`insertFormula`/`insert'`,
-            // Reduction.hs) which adds the
-            // empty DisjG goal to `sGoals`; HS's `reduceFormulas`
-            // (Simplify.hs) filters by `reducibleFormula`
-            // (Reduction.hs `reducibleFormula`) which returns False for `GDisj _`, so
-            // an `empty_trace` formula `Disj([])` (gfalse) stays in
-            // `sFormulas` untouched and never produces a DisjG goal —
-            // `FormulasFalse` contradiction picks it up directly.
-            // (Routing through insert_formula would insert the empty DisjG
-            // goal at gsNr=0, shifting every subsequent gsNr in every
-            // sibling branch and diverging from HS at the first insertGoal
-            // call.)
+            // Match HS's direct formula-store assignment. Inserting here
+            // would create disjunction goals before simplifySystem and alter
+            // their ordering; simplification handles the selected formula.
             // HS `process . induction` (ProofMethod.hs):
             // `runReduction (induction <* simplifySystem)` under the DisjT
             // monad.  `simplifySystem` CAN fan out at induction time — a
@@ -684,25 +680,7 @@ pub fn check_and_exec_proof_method(
                 return Ok(None);
             }
         }
-        ProofMethod::Induction => {
-            // Direct port of Haskell `canApplyInduction` (ProofMethod.hs):
-            //   guard (M.null sNodes); guard (S.null sSolvedFormulas);
-            //   guard (M.null sGoals); (_, t) <- uncons sFormulas; guard (null t)
-            // i.e. no nodes, no solved formulas, no open goals, exactly one
-            // formula.  No gfalse check (do NOT call is_initial_system here).
-            if !sys.nodes.is_empty() {
-                return Ok(None);
-            }
-            if !sys.solved_formulas.is_empty() {
-                return Ok(None);
-            }
-            if !sys.goals.is_empty() {
-                return Ok(None);
-            }
-            if sys.formulas.len() != 1 {
-                return Ok(None);
-            }
-        }
+        ProofMethod::Induction => {}
         ProofMethod::SolveGoal(g) => {
             if !sys.goals.iter().any(|(existing, _)| existing == g) {
                 return Ok(None);
