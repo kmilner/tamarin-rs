@@ -78,7 +78,12 @@ scripts/test.sh web
 Both commands fill or reuse Haskell caches and save fresh results under
 `scripts/results/`. Read each run's final verdict: cache contents and focused
 regression passes do not establish full parity. The proof corpus does not cover
-every command-sidecar option, negative case or export round trip. See
+every command-sidecar option, negative case or export round trip. CI covers
+those separately with `scripts/test.sh regressions`, which discovers every
+supported sidecar scenario in the patched tree and reuses upstream's assertions
+and checked-in baselines. It reports diff-mode and unported-exporter exclusions
+explicitly. This command needs only Rust and Maude; it prepares patched sources
+without building Haskell or changing the oracle caches. See
 [the corpus quick-start](../scripts/README.md) and
 [regression coverage](../TESTING.md#upstream-regression-coverage).
 

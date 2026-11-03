@@ -62,18 +62,7 @@ def main():
     if diffdir:
         os.makedirs(diffdir, exist_ok=True)
 
-    # Unpaired probe family: the three graph routes at case index 0/0.  The
-    # backends deliberately disagree there (upstream's unchecked `!!` answers
-    # a 500 exception page, the port answers Not Found — see the divergence
-    # notes in tamarin-server handlers/theory.rs), so the rows pair as
-    # neither MATCH nor a defect.  web_crawl.py does not probe them; cached
-    # HS manifests can still carry the rows, which are dropped here rather
-    # than surfacing as MISSING_RS.
-    unpaired_case_routes = ("/json/cases/", "/graph/cases/",
-                            "/interactive-graph-def/cases/")
-    urls = [u for u in sorted(set(hs) | set(rs))
-            if not (u.endswith("/0/0")
-                    and any(r in u for r in unpaired_case_routes))]
+    urls = sorted(set(hs) | set(rs))
     rows = []
     counts = {}
     # Truncation gets rows of its own, kept apart from the comparison rows so

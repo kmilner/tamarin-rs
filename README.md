@@ -56,8 +56,8 @@ Some theories need a patched Haskell build for proof replay; see
 
 ## Status and performance
 
-- **Compatibility:** byte-identical batch output on a 432-file parity corpus,
-  with stored-proof replay checked in both directions. See
+- **Compatibility:** parity gates cover 523 proof theories and 78 web theories,
+  with stored-proof replay checked by focused regressions. See
   [coverage and remaining differences](docs/STATUS.md).
 - **Performance:** 4.6–116× faster than Tamarin 1.12.0 (median 23×) across the
   recorded eight-theory benchmark at 1–16 cores; 2.1–21× lower peak memory at

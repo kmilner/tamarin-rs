@@ -1,8 +1,8 @@
-# Shared helpers for the raw and canonical proof-differential tools. Source
+# Shared helpers for the raw per-lemma proof-differential tools. Source
 # gate_common.sh first: proof_cache_key uses its include and oracle digests.
 
 # proof_cache_key <theory> <lemma> [flags]
-#   The extension-free key shared by all three .gate_cache/raw users.
+#   The extension-free key shared by both .gate_cache/raw users.
 proof_cache_key() {
     local theory=$1 lemma=$2 flags=${3:-} h
     [ -n "${EXEC_FP_SALT:-}" ] || {
