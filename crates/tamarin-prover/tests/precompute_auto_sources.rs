@@ -10,7 +10,7 @@
 //! neither construction nor destruction rules (`closeRuleCache`,
 //! CloseRule.hs).  When `--auto-sources` finds partial deconstructions
 //! in the refined sources, `closeTheoryWithMaude` closes over `unfoldRules
-//! items` (CloseRule.hs), and `unfoldRules` maps
+//! items` (CloseRule.hs#closeTheoryWithMaude), and `unfoldRules` maps
 //! `unfoldRuleVariants` over every rule item (CloseRule.hs), so a rule
 //! whose AC variant is non-trivial contributes one `ClosedProtoRule` per
 //! variant (`unfoldRuleVariants`, lib/theory/src/Rule.hs) rather than one

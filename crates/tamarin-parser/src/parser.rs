@@ -1680,9 +1680,8 @@ impl<'a> Parser<'a> {
             self.skip_ws();
             let allowed = if self.is_diff { "sScC" } else { "sSpPcCiI" };
             if word.chars().count() != 1 || !allowed.contains(&word) {
-                // HS feeds this word to the partial `stringToGoalRanking` and
-                // aborts. Reject the same invalid declaration as a structured
-                // parse error instead of reproducing that runtime crash.
+                // Tactic presorts accept one of the rankings enabled for this
+                // theory mode. Report invalid declarations at the source span.
                 return Err(self.err(format!("unknown proof method ranking `{word}`")));
             }
             presort = word.chars().next().expect("validated presort");
@@ -2093,7 +2092,7 @@ impl<'a> Parser<'a> {
                 // check never runs, and nothing is registered.  Discarding the
                 // requested attributes is what keeps `functions: fst/1
                 // [destructor]` printing as `function: fst (Any) : Any` in the
-                // open theory's typing lines (TheoryObject.hs).
+                // open theory's typing lines (TheoryObject.hs#prettyTranslationElement).
                 return Ok(FunctionDecl {
                     name,
                     arg_types: self.materialize_function_args(args)?,

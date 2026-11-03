@@ -11,16 +11,15 @@
 #                         Node.js 22.12+ or 24+) in target/gui for frontend
 #                         development. Cargo builds its embedded GUI automatically.
 #
-#   ./setup.sh testing    additionally materialise a PATCHED copy of the
+#   ./setup.sh testing    additionally materialise an oracle copy of the
 #                         Haskell prover at tamarin-prover-testing/ and build
 #                         it with stack.  The parity/test scripts under
 #                         scripts/ use that binary as the byte-parity oracle.
 #                         The submodule itself is never modified, so it stays
 #                         trivially in sync with upstream.
 #
-# The files in patches/series mirror fixes that are still under upstream
-# review. Keeping one patch per PR makes each fix easy to drop after it lands.
-# Only the testing oracle needs them; the submodule stays pristine.
+# The oracle uses the pinned submodule plus any patches listed in patches/series.
+# An empty series builds pristine upstream. The submodule is never patched.
 set -eu
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sub="$root/tamarin-prover"

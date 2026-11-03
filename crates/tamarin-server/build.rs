@@ -83,23 +83,17 @@ fn main() {
     }
 
     // Include the same upstream corrections as the on-disk override routes.
-    for (name, patch) in [
-        (
-            "css/tamarin-prover-ui.css",
-            "src/handlers/lemma_instructions.css",
-        ),
-        ("js/tamarin-prover-ui.js", "src/handlers/cancel_request.js"),
-    ] {
-        println!("cargo:rerun-if-changed={patch}");
-        let patch = fs::read(patch).expect("UI patch");
-        let asset = assets.get_mut(name).expect("UI asset");
-        let mut bytes = fs::read(&asset).expect("read UI asset");
-        if !bytes.ends_with(&patch) {
-            bytes.extend_from_slice(&patch);
-        }
-        *asset = out.join(Path::new(name).file_name().unwrap());
-        fs::write(&asset, bytes).expect("write patched UI asset");
+    let name = "js/tamarin-prover-ui.js";
+    let patch = "src/handlers/cancel_request.js";
+    println!("cargo:rerun-if-changed={patch}");
+    let patch = fs::read(patch).expect("UI patch");
+    let asset = assets.get_mut(name).expect("UI asset");
+    let mut bytes = fs::read(&asset).expect("read UI asset");
+    if !bytes.ends_with(&patch) {
+        bytes.extend_from_slice(&patch);
     }
+    *asset = out.join(Path::new(name).file_name().unwrap());
+    fs::write(&asset, bytes).expect("write patched UI asset");
 
     let mut generated = String::from("const EMBEDDED_ASSETS: &[(&str, &[u8], &str)] = &[\n");
     for (name, path) in assets {

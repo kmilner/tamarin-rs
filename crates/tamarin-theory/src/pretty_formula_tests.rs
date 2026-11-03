@@ -177,7 +177,7 @@ fn guarded_negation_shortcut() {
 
 /// Build the parser Term `<'1', g1> ++ <'2', g2> ++ <'3', g3>` where the
 /// pair payloads are long enough that the flat AC chain exceeds the ribbon
-/// and HS `prettyTerm` (Term/Term.hs `FApp (AC o) -> ppTerms ...`) must
+/// and HS `prettyTerm` (Term/Term.hs#prettyTerm `FApp (AC o) -> ppTerms ...`) must
 /// wrap it with the `++` operator at line ends and each element `nest 1`'d.
 fn ac_chain_bterm() -> BLNTerm {
     let pair = |n: &str, payload: &str| {

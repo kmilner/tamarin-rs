@@ -106,28 +106,18 @@ pub fn serve(state: Arc<AppState>) -> axum::Router<Arc<AppState>> {
             .route("/css/{name}", axum::routing::get(intdot_css_or_data));
     }
 
-    for (name, patch) in [
-        (
-            "css/tamarin-prover-ui.css",
-            include_bytes!("lemma_instructions.css").as_slice(),
-        ),
-        (
-            "js/tamarin-prover-ui.js",
-            include_bytes!("cancel_request.js").as_slice(),
-        ),
-    ] {
-        match patched_ui_asset(data_dir, name, patch) {
-            Ok(Some(file)) => {
-                let service = ServeFile::new(file.path());
-                router = router.route(
-                    &format!("/{name}"),
-                    axum::routing::get_service(service).layer(axum::Extension(Arc::new(file))),
-                );
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(%error, name, "Could not patch UI asset; serving original")
-            }
+    let name = "js/tamarin-prover-ui.js";
+    match patched_ui_asset(data_dir, name, include_bytes!("cancel_request.js")) {
+        Ok(Some(file)) => {
+            let service = ServeFile::new(file.path());
+            router = router.route(
+                &format!("/{name}"),
+                axum::routing::get_service(service).layer(axum::Extension(Arc::new(file))),
+            );
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(%error, name, "Could not patch UI asset; serving original")
         }
     }
     router.fallback_service(serve_data)

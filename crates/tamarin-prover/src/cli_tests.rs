@@ -958,7 +958,7 @@ fn help_and_version_are_clap() {
 }
 
 // =========================================================================
-// lemma_matches (HS lemmaSelector, TheoryLoader.hs)
+// lemma_matches (HS lemmaSelector, TheoryLoader.hs#lemmaSelector)
 // =========================================================================
 
 #[test]
