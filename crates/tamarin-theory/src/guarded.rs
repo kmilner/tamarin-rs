@@ -596,21 +596,25 @@ fn map_guarded_atoms<F: FnMut(u64, &Atom<BLNTerm>) -> Atom<BLNTerm>>(
 }
 
 /// Returns `true` if the formula is "safety": closed (no free vars)
-/// and contains no existential quantifier in its guarded form.  HS
+/// and contains neither an existential quantifier nor a last atom. HS
 /// `isSafetyFormula` (Guarded.hs).
 pub fn is_safety_formula(g: &Guarded) -> bool {
     fn no_existential(g: &Guarded) -> bool {
         match g {
-            Guarded::Atom(_) => true,
+            Guarded::Atom(atom) => !matches!(atom, ProtoAtom::Last(_)),
             Guarded::GGuarded {
                 qua: Quantifier::Ex,
                 ..
             } => false,
             Guarded::GGuarded {
                 qua: Quantifier::All,
+                guards,
                 body,
                 ..
-            } => no_existential(body),
+            } => {
+                !guards.iter().any(|atom| matches!(atom, ProtoAtom::Last(_)))
+                    && no_existential(body)
+            }
             Guarded::Disj(inner) => inner.iter().all(no_existential),
             Guarded::Conj(inner) => inner.iter().all(no_existential),
         }

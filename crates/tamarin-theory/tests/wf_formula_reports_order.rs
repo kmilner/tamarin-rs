@@ -4,15 +4,15 @@
 //! Pins the ORDER `formulaReports` emits its findings in, end to end —
 //! `formula_reports` list order plus `prettyWfErrorReport`'s grouping.
 //!
-//! HS runs all three arms inside the `annFormulas` loop
-//! (`msum [checkQuantifiers, checkTerms, checkGuarded]`,
+//! HS runs all four arms inside the `annFormulas` loop
+//! (`msum [checkQuantifiers, checkTerms, checkGuarded, checkNoLast]`,
 //! Wellformedness.hs), so the topics INTERLEAVE
 //! per formula and a topic REOPENS after an intervening one — `groupOn fst`
 //! merges only CONSECUTIVE entries (Extension/Prelude.hs).  Emitting one
 //! whole block per topic instead would collapse the runs into a single header
 //! each and reorder the bodies.
 //!
-//! Expected bytes are the pinned oracle's (Git revision ef3f0468) for the
+//! Expected bytes are the pinned oracle's (Git revision 4c658fcf) for the
 //! theories below.
 
 use tamarin_parser::parse_theory;
@@ -38,7 +38,7 @@ const ALLOWED_LINES: &[&str] = &[
 ];
 
 /// Three lemmas where only the middle one is unguardable: `Formula terms`
-/// closes and REOPENS around the ` Formula guardedness` group, so the report
+/// closes and REOPENS around the `Formula guardedness` group, so the report
 /// carries three groups and three headers.
 #[test]
 fn formula_terms_reopens_after_the_guardedness_group() {
@@ -63,8 +63,8 @@ fn formula_terms_reopens_after_the_guardedness_group() {
     expected.extend(ALLOWED_LINES);
     expected.extend([
         "",
-        " Formula guardedness",
-        "====================",
+        "Formula guardedness",
+        "===================",
         "",
         "  Lemma `l2' cannot be converted to a guarded formula:",
         "    universal quantifier without toplevel implication",
@@ -110,8 +110,8 @@ fn a_formula_tripping_two_arms_splits_the_terms_group() {
     expected.extend(ALLOWED_LINES);
     expected.extend([
         "",
-        " Formula guardedness",
-        "====================",
+        "Formula guardedness",
+        "===================",
         "",
         "  Lemma `L1' cannot be converted to a guarded formula:",
         "    unguarded variable(s) '#j' in the subformula",
@@ -196,7 +196,7 @@ fn all_three_arms_of_one_formula_come_out_in_msum_order() {
         vec![
             "Quantifier sorts",
             "Formula terms",
-            " Formula guardedness",
+            "Formula guardedness",
             "Quantifier sorts",
             "Quantifier sorts",
         ]
