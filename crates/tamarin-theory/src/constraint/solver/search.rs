@@ -1023,7 +1023,7 @@ fn expand_inner(
         return Ok(());
     }
     // Already terminal.
-    let finished = is_finished(ctx, &node.sys);
+    let finished = is_finished(ctx, &node.sys)?;
     if let Some(r) = finished {
         node.status = node_status_of(&r);
         node.method = ProofMethod::Finished(r);
@@ -1285,7 +1285,7 @@ fn expand_inner(
                         // NSPK3 renders `by contradiction /* cyclic */`
                         // leaves amid the sorry stubs — while every
                         // still-open node becomes a bare `sorry` leaf.
-                        let (method, status) = match is_finished(ctx, &sys) {
+                        let (method, status) = match is_finished(ctx, &sys)? {
                             Some(r) => {
                                 let st = node_status_of(&r);
                                 (ProofMethod::Finished(r), st)
@@ -1442,7 +1442,7 @@ pub fn candidate_methods(
     // accountability `⊤` VC lemma's root, whose one applicable method is
     // `contradiction` (HS redirects on it; an empty list here made RS
     // alert "prover failed").
-    if let Some(r) = is_finished(ctx, sys) {
+    if let Some(r) = is_finished(ctx, sys)? {
         return Ok(vec![ProofMethod::Finished(r)]);
     }
     candidate_methods_open(sys, ctx, depth)
@@ -1513,7 +1513,7 @@ pub fn candidate_methods_with_expl(
     use crate::constraint::solver::annotated_goals::Usefulness;
     // HS `stoppingMethod` — see `candidate_methods`; keeps the DISPLAYED
     // numbering in lockstep with the apply path.
-    if let Some(r) = is_finished(ctx, sys) {
+    if let Some(r) = is_finished(ctx, sys)? {
         return Ok(vec![(ProofMethod::Finished(r), String::new())]);
     }
     // The selected ranking produced no matches with quitOnEmpty →

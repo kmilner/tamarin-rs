@@ -236,7 +236,7 @@ fn finished_leaf(
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
     let same_kind = |r: &MethodResult| std::mem::discriminant(r) == std::mem::discriminant(stored);
-    match is_finished(ctx, &sys) {
+    match is_finished(ctx, &sys)? {
         Some(ref r) if same_kind(r) => Ok(ProofNode {
             method: ProofMethod::Finished(stored.clone()),
             sys,
