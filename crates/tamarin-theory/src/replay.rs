@@ -53,7 +53,7 @@ use std::collections::BTreeMap;
 use crate::constraint::constraints::Goal;
 use crate::constraint::solver::context::ProofContext;
 use crate::constraint::solver::proof_method::{
-    check_and_exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
+    check_and_exec_proof_method, finished_step_is_valid, ProofMethod, Result as MethodResult,
 };
 use crate::constraint::solver::search::{
     node_status_of, run_proof_search_at_depth, NodeStatus, ProofNode,
@@ -228,9 +228,8 @@ fn finished_leaf(
     auto_prove: bool,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    let same_kind = |r: &MethodResult| std::mem::discriminant(r) == std::mem::discriminant(stored);
-    match is_finished(ctx, &sys)? {
-        Some(ref r) if same_kind(r) => Ok(ProofNode {
+    match finished_step_is_valid(ctx, &sys, stored)? {
+        true => Ok(ProofNode {
             method: ProofMethod::Finished(stored.clone()),
             sys,
             children: BTreeMap::new(),

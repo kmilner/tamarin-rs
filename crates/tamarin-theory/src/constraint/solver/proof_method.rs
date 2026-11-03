@@ -36,8 +36,7 @@ pub enum Result {
     Solved,
     /// A contradiction could be derived.
     Contradictory(Option<Contradiction>),
-    /// The proof can't be finished — unresolved subterm constraints or
-    /// a solution after weakening.
+    /// Unresolved constraints prevent a trace, or no proof method applies.
     Unfinishable,
 }
 
@@ -97,6 +96,25 @@ pub fn is_finished(
 /// unresolved. The check does not mutate the system or discharge goals.
 pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
     super::subterm_witness::finished_subterms(&ctx.maude.maude_sig(), sys)
+}
+
+/// Recognize exhausted states independently of heuristic ranking. Only use
+/// this when checking a saved UNFINISHABLE step or after method exhaustion.
+pub fn is_finished_or_stuck(
+    ctx: &ProofContext,
+    sys: &System,
+) -> std::result::Result<Option<Result>, crate::prove::ProveError> {
+    if let Some(result) = is_finished(ctx, sys)? {
+        return Ok(Some(result));
+    }
+    if !crate::constraint::solver::goals::open_goals(sys).is_empty()
+        || exec_proof_method(ctx, &ProofMethod::Simplify, sys)?.is_some()
+        || (sys.is_initial() && exec_proof_method(ctx, &ProofMethod::Induction, sys)?.is_some())
+    {
+        return Ok(None);
+    }
+    // A timed-out method has no cases but is not evidence of exhaustion.
+    Ok((!crate::constraint::solver::search::deadline_reached()).then_some(Result::Unfinishable))
 }
 
 /// Render/index applicability — the evaluation depth HS's
@@ -540,6 +558,7 @@ pub fn exec_proof_method(
             }
         }
         ProofMethod::Induction => {
+            // Search and replay must enforce the same applicability checks.
             if !sys.nodes.is_empty()
                 || !sys.solved_formulas.is_empty()
                 || !sys.goals.is_empty()
@@ -638,10 +657,7 @@ pub fn check_and_exec_proof_method(
 ) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
     match method {
         ProofMethod::Finished(r) => {
-            let Some(actual) = is_finished(ctx, sys)? else {
-                return Ok(None);
-            };
-            if !same_kind(r, &actual) {
+            if !finished_step_is_valid(ctx, sys, r)? {
                 return Ok(None);
             }
         }
@@ -654,6 +670,21 @@ pub fn check_and_exec_proof_method(
         ProofMethod::Simplify | ProofMethod::Sorry(_) | ProofMethod::Invalidated => {}
     }
     exec_proof_method(ctx, method, sys)
+}
+
+/// Validate a stored terminal marker by result kind. Contradiction reasons
+/// are runtime details; an UNFINISHABLE marker additionally checks exhaustion.
+pub(crate) fn finished_step_is_valid(
+    ctx: &ProofContext,
+    sys: &System,
+    expected: &Result,
+) -> std::result::Result<bool, crate::prove::ProveError> {
+    let actual = if matches!(expected, Result::Unfinishable) {
+        is_finished_or_stuck(ctx, sys)?
+    } else {
+        is_finished(ctx, sys)?
+    };
+    Ok(actual.is_some_and(|actual| same_kind(expected, &actual)))
 }
 
 fn same_kind(a: &Result, b: &Result) -> bool {

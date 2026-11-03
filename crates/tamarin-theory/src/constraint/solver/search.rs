@@ -45,7 +45,7 @@ pub use tamarin_utils::cancellation::CancellationGuard as ProofCancellationGuard
 
 use crate::constraint::solver::context::{CutStrategy, ProofContext};
 use crate::constraint::solver::proof_method::{
-    exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
+    exec_proof_method, is_finished, is_finished_or_stuck, ProofMethod, Result as MethodResult,
 };
 use crate::constraint::system::System;
 use crate::prove::ProveError;
@@ -1091,8 +1091,20 @@ fn force_method(
     // `is_finished(ctx, &node.sys)` is `None`, and nothing has touched
     // `node.sys` since — skip the guarded entry's redundant re-sweep.
     let Some((method, cases)) = select_open_method(&node.sys, ctx, depth)? else {
-        node.method = ProofMethod::Sorry(Some("Cannot prove".into()));
-        node.status = NodeStatus::Sorry;
+        if let Some(result) = is_finished_or_stuck(ctx, &node.sys)? {
+            node.status = node_status_of(&result);
+            node.method = ProofMethod::Finished(result);
+        } else {
+            node.method = ProofMethod::Sorry(Some(
+                if deadline_reached() {
+                    "deadline reached"
+                } else {
+                    "Cannot prove"
+                }
+                .into(),
+            ));
+            node.status = NodeStatus::Sorry;
+        }
         return Ok(None);
     };
     node.method = method;
@@ -1484,6 +1496,27 @@ mod tests {
         assert!(
             matches!(cut.method, ProofMethod::Sorry(Some(ref reason)) if reason == "bound 1 hit")
         );
+    }
+
+    #[test]
+    fn deadline_expiry_is_not_evidence_of_exhausted_methods() {
+        let Some(ctx) = ctx() else {
+            return;
+        };
+        let sys = System::empty();
+        let _tls = SearchTlsGuard::install(SearchTlsState {
+            deadline: None,
+            max_depth: usize::MAX,
+            depth_limit_hit: false,
+            proof_bound: usize::MAX,
+            ranking_depth_offset: 0,
+        });
+        assert_eq!(
+            is_finished_or_stuck(&ctx, &sys).unwrap(),
+            Some(MethodResult::Unfinishable)
+        );
+        DEADLINE.with(|deadline| deadline.set(Some(std::time::Instant::now())));
+        assert_eq!(is_finished_or_stuck(&ctx, &sys).unwrap(), None);
     }
 
     fn search_pool(
