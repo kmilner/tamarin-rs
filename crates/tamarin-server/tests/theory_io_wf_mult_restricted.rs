@@ -17,8 +17,9 @@
 //! (Html.hs) is the whole transformation and a pair term's angle
 //! brackets reach the browser unescaped.
 //!
-//! The expected bytes are the pinned oracle's (Git revision ef3f0468) wf block
-//! for `tests/fixtures/mult_restricted_pair.spthy`.
+//! The expected bytes are the pinned oracle's wf block for
+//! `tests/fixtures/mult_restricted_pair.spthy`. Its pair contains an exponent,
+//! not an unsupported product, so the input remains loadable.
 
 use std::path::PathBuf;
 
@@ -52,15 +53,14 @@ const EXPECTED_WF_BLOCK: &[&str] = &[
     "    rule (modulo E) R2:",
     "       [ In( fst(x) ), Fr( ~a ), Fr( ~b ) ]",
     "      --[ Go( x ) ]->",
-    "       [ Out( <x, (~a*~b)> ) ]",
+    "       [ Out( <x, ~a^~b> ) ]",
     "  ",
     "  After replacing reducible function symbols in lhs with variables:",
     "    rule (modulo E) R2:",
     "       [ In( x.1 ), Fr( ~a ), Fr( ~b ) ]",
     "      --[ Go( x ) ]->",
-    "       [ Out( <x, (~a*~b)> ) ]",
+    "       [ Out( <x, ~a^~b> ) ]",
     "  ",
-    "    Terms with multiplication:  (~a*~b)",
     "    Variables that occur only in rhs:  x",
     "*/",
 ];
@@ -101,11 +101,37 @@ fn web_load_reports_multiplication_restriction_unescaped_in_the_banner() {
     // only leading spaces (`&nbsp;`) and line breaks (`<br/>`) are rewritten.
     let banner = &entry.errors_html;
     assert!(
-        banner.contains("[ Out( <x, (~a*~b)> ) ]"),
+        banner.contains("[ Out( <x, ~a^~b> ) ]"),
         "banner must carry the pair term's angle brackets raw: {banner}"
     );
     assert!(
         !banner.contains("&lt;") && !banner.contains("&gt;"),
         "banner must not entity-escape the report body: {banner}"
     );
+}
+
+#[test]
+fn unsupported_products_are_rejected_even_without_maude() {
+    let Some(maude) = tamarin_test_support::require_maude_path() else {
+        return;
+    };
+    let gdh = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tamarin-prover/examples/sp14/GDH.spthy");
+    for maude_path in [NO_MAUDE, &maude] {
+        let cfg = tamarin_server::ServerConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            PathBuf::new(),
+            maude_path.to_string(),
+        );
+        let error = match theory_io::load_from_path(&gdh, &cfg) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("unsupported products loaded with {maude_path}"),
+        };
+        assert!(
+            error.contains("Unsupported multiplication outside exponents"),
+            "{error}"
+        );
+        assert!(error.contains("RecvOthers"), "{error}");
+        assert!(error.contains("RecvRoundkey"), "{error}");
+    }
 }

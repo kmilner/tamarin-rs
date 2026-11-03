@@ -3,9 +3,9 @@
 //! the pinned oracle's own `/* WARNING … */` block.
 //!
 //! The `examples/wellformedness_fixtures.rs` differential runner compares
-//! topic names only, and four fixtures list a single topic:
-//! `formula_unguarded`, `multiplication_in_rule_lhs`, `non_subterm_equation`
-//! and `quantifier_wrong_sort`.  This harness compares the full report bytes
+//! topic names only, including single-topic fixtures such as
+//! `formula_unguarded`, `non_subterm_equation` and `quantifier_wrong_sort`.
+//! This harness compares the full report bytes
 //! of every fixture instead, so a fixture cannot be hollowed out and still
 //! pass.  It also holds that runner's `expected.txt` roster to the fixture
 //! directory, in [`expected_txt_lists_every_fixture`].
@@ -20,7 +20,7 @@
 //! * the SAPIC / accountability translation both drivers run before the pass.
 //!   No fixture declares a process, and the render asserts this.
 //! * the Maude-backed `Message Derivation Checks` and `Rule variants` blocks
-//!   that the batch loop splices afterwards.  Four expectation files
+//!   that the batch loop splices afterwards. Three expectation files
 //!   therefore carry an `# omits:` line.  That line names the derivation-check
 //!   section that the oracle prints and this pipeline does not.
 //!   `expected.txt` documents the same asymmetry for the differential

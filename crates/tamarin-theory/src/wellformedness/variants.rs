@@ -27,7 +27,9 @@ pub fn fatal_wf_errors(report: &[WfError]) -> WfReport {
         .filter(|e| {
             matches!(
                 e.topic.as_str(),
-                "Variants" | "Unsupported actions added to variants"
+                "Variants"
+                    | "Unsupported actions added to variants"
+                    | "Unsupported multiplication outside exponents"
             )
         })
         .cloned()

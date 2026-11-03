@@ -13,7 +13,9 @@
 //! needs the reducible/irreducible classification and the `x.<n>` fresh
 //! variables `abstractRule` mints.
 //!
-//! Expected strings are the pinned oracle's bytes (Git revision ef3f0468).
+//! The original restriction strings are oracle bytes from ef3f0468. Product
+//! diagnostics and the supported-exponent control were rechecked against the
+//! patched da8787d5 oracle with `-m=msr --derivcheck-timeout=0`.
 
 use tamarin_parser::parse_theory;
 use tamarin_theory::pretty_theory::format_wf_block;
@@ -34,6 +36,9 @@ fn block(src: &str) -> Option<String> {
 const HEADER: &str = "/*\nWARNING: the following wellformedness checks failed!\n\n\
                       Multiplication restriction of rules\n\
                       ===================================\n\n";
+
+const UNSUPPORTED_HEADER: &str = "Unsupported multiplication outside exponents\n\
+                                ============================================\n\n";
 
 /// The second trigger, with no multiplication anywhere: `fst` is reducible,
 /// so `abstractTerm` replaces the whole premise term with a fresh `x.1` and
@@ -90,7 +95,8 @@ fn both_failure_kinds_print_their_lines_back_to_back() {
              --[ Go( x ) ]->\n       \
              [ Out( <x, (~a*~b)> ) ]\n  \n    \
              Terms with multiplication:  (~a*~b)\n    \
-             Variables that occur only in rhs:  x\n*/"
+             Variables that occur only in rhs:  x\n\n\
+             {UNSUPPORTED_HEADER}  Rule R2 has products outside exponents: (~a*~b)\n*/"
         )
     );
 }
@@ -135,18 +141,33 @@ fn rhs_only_vars_drop_pub_sorts_and_share_one_abstraction_per_term() {
     );
 }
 
-/// `multTerms` reads the CONCLUSIONS only, and an exponentiation keeps its
-/// nested `exp` shape in the E-rule (`fAppExp` is a plain `fAppNoEq`,
-/// Term/Term.hs) — no `Mult` node reaches the conclusions.  A rule
-/// whose only product sits in an ACTION is therefore silent, which is what
-/// keeps the whole DH / bilinear corpus free of this topic.
+/// Products in an exponent are supported in both actions and conclusions.
+/// Nested exponentiation keeps its `exp` shape in the E-rule (`fAppExp` is
+/// a plain `fAppNoEq`, Term/Term.hs).
 #[test]
 fn a_multiplication_restricted_dh_rule_stays_silent() {
     let src = "theory MrSilent begin\n\
                builtins: diffie-hellman\n\
-               rule R3: [ Fr(~a), Fr(~b) ] --[ Test(~a*~b) ]-> [ Out( 'g'^~a^~b ) ]\n\
+               rule R3: [ Fr(~a), Fr(~b) ] --[ Test('g'^(~a*~b)) ]-> [ Out( 'g'^~a^~b ) ]\n\
                end\n";
     assert_eq!(block(src), None);
+}
+
+/// The legacy conclusion-only check stays silent, but the unsupported-
+/// product check also inspects actions and must reject this old control.
+#[test]
+fn a_product_only_in_an_action_is_rejected() {
+    let src = "theory MrAction begin\n\
+               builtins: diffie-hellman\n\
+               rule R3: [ Fr(~a), Fr(~b) ] --[ Test(~a*~b) ]-> [ Out( 'g'^~a^~b ) ]\n\
+               end\n";
+    assert_eq!(
+        block(src).expect("action product must be reported"),
+        format!(
+            "/*\nWARNING: the following wellformedness checks failed!\n\n\
+             {UNSUPPORTED_HEADER}  Rule R3 has products outside exponents: (~a*~b)\n*/"
+        )
+    );
 }
 
 /// Every product in a conclusion is listed, in the conclusion's own term
@@ -162,7 +183,10 @@ fn every_conclusion_product_is_listed_in_term_order() {
                end\n";
     let rendered = block(src).expect("products must be reported");
     assert!(
-        rendered.ends_with("\n    Terms with multiplication:  (~c*~d), (~c*~c*~d)\n*/"),
+        rendered.ends_with(&format!(
+            "\n    Terms with multiplication:  (~c*~d), (~c*~c*~d)\n\n\
+             {UNSUPPORTED_HEADER}  Rule RC has products outside exponents: (~c*~d), (~c*~c*~d)\n*/"
+        )),
         "block: {rendered}"
     );
 }
