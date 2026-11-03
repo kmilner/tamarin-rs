@@ -229,25 +229,15 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
             return gtrue();
         }
     }
-    // HS-faithful: the `[gf] -> gf` singleton unwrap matches the FLATTENED,
-    // non-nubbed list (Guarded.hs); `nub` is applied only in the
-    // otherwise branch (`GDisj $ Disj $ nub gfs`, Guarded.hs).  So a
-    // flattened list like `[a,a]` is not a singleton and yields
-    // `Disj (nub [a,a]) = Disj [a]`, NOT bare `a`.  (Note: this `out`
-    // already has `gfalse` items dropped — see flatten above — so the
-    // empty case below collapses an all-`gfalse` disjunction to `gfalse`.)
-    if out.len() == 1 {
-        return out.into_iter().next().unwrap();
-    }
-    // Mirror Haskell `gdisj`'s `nub gfs` (Guarded.hs).
+    // Deduplicate before collapsing a singleton so normalization is idempotent.
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) {
             deduped.push(x);
         }
     }
-    if deduped.is_empty() {
-        gfalse()
+    if deduped.len() == 1 {
+        deduped.pop().unwrap()
     } else {
         Guarded::Disj(deduped.into())
     }

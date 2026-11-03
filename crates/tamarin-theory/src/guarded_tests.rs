@@ -931,6 +931,12 @@ fn gconj_duplicates_collapse_to_bare_item() {
     assert_eq!(out, a, "gconj must dedupe before the singleton unwrap");
 }
 
+#[test]
+fn gdisj_duplicates_collapse_to_bare_item() {
+    let a = g("last(#i)").unwrap();
+    assert_eq!(gdisj(vec![a.clone(), a.clone()]), a);
+}
+
 /// `gdisj` deduplicates syntactically-equal items.  Same as above,
 /// for disjunction.  Without this dedup, `verify_checksign_test`-class
 /// SplitG variants double up.

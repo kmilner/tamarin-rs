@@ -49,11 +49,11 @@ const SIMPLIFY_PASSES: &[Pass] = &[
     Pass::Fallible(solve_unique_actions_pass_fan_out),
     Pass::Fallible(reduce_formulas_pass),
     Pass::Fallible(eval_formula_atoms_pass),
-    Pass::Fallible(insert_implied_formulas_pass),
     Pass::Linear(enforce_fresh_ordering_pass),
     Pass::Fallible(propagate_subterm_obvious),
     Pass::Fallible(simp_injective_fact_eq_mon_pass),
     Pass::Fallible(merge_last_injective_fact_nodes),
+    Pass::Fallible(insert_implied_formulas_pass),
     Pass::Linear(dedupe_formulas_pass),
     Pass::Linear(drop_trivially_true_formulas_pass),
     Pass::Linear(normalise_less_atoms_pass),
@@ -185,8 +185,10 @@ fn simplify_system_fan_out_inner_with_passes(
     // HS-faithful (Simplify.hs): no iteration cap — the loop
     // terminates only when a full pass reports `Unchanged`.
     loop {
-        red.changed = ChangeIndicator::Unchanged;
         red.subst_system()?;
+        // Substitution is idempotent and is not one of the upstream pass
+        // changes used to decide whether existential implications are stable.
+        red.changed = ChangeIndicator::Unchanged;
         if let Some(branches) = continue_simplify_iteration(red, passes, 0)? {
             return Ok(branches);
         }
@@ -1033,6 +1035,17 @@ fn insert_implied_formulas_pass(
     use crate::guarded::Guarded;
     use tamarin_term::lterm::{LNTerm, LVar};
 
+    fn has_existential(formula: &Guarded) -> bool {
+        match formula {
+            Guarded::Atom(_) => false,
+            Guarded::GGuarded { qua, body, .. } => *qua == Quantifier::Ex || has_existential(body),
+            Guarded::Disj(items) | Guarded::Conj(items) => items.iter().any(has_existential),
+        }
+    }
+    // Temporary duplicate nodes can otherwise repeatedly generate witnesses
+    // for the same existential obligation. Match upstream's stable-pass gate.
+    let stable = red.changed == ChangeIndicator::Unchanged;
+
     // Mirror Haskell `impliedFormulas` (System.hs): `openGuarded gf`
     // returns `Just (All, vs, antecedent, succedent)` for ANY `GGuarded All`
     // formula — including those with empty `vs`.  Such empty-var universals
@@ -1075,6 +1088,7 @@ fn insert_implied_formulas_pass(
         .iter()
         .chain(sorted_lemmas_src.iter())
         .copied()
+        .filter(|formula| stable || !has_existential(formula))
         .filter_map(|f| match f {
             Guarded::GGuarded {
                 qua: Quantifier::All,
