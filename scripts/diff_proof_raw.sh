@@ -4,8 +4,8 @@
 # (Git revision / Compiled at / processing time). No canonicalisation.
 #
 # This is the per-lemma iteration tool for the raw-matching campaign; the
-# corpus-wide counterpart is corpus_raw_diff.sh, and the older canonicalised
-# pipeline (diff_proof_tree.sh / canon_proof_tree.py) is legacy.
+# corpus-wide counterpart is corpus_raw_diff.sh. For the full-file milestone
+# gate (rather than per-lemma diagnosis), use scripts/test.sh proof.
 #
 # Usage:
 #   diff_proof_raw.sh <file.spthy> <lemma> ["ENV1=v1 ENV2=v2"]

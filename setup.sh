@@ -132,9 +132,8 @@ oracle="$install_root/bin/tamarin-prover"
 patch_fp=$(patch_series_fingerprint "$root") || {
     echo "ERROR: cannot fingerprint patches/series" >&2; exit 1; }
 
-# A no-op setup must not relink the timestamp-bearing executable and thereby
-# manufacture a new cache fingerprint. Reuse it only when both the generated
-# source tree and its complete setup attestation are current.
+# Avoid unnecessary relinking. Reuse the existing executable only when its
+# generated source tree and complete setup attestation are current.
 build_needed=1
 stamp="${oracle}.tamarin-rs-oracle"
 if [ "$tree_current" = 1 ] && [ -x "$oracle" ] && [ -r "$stamp" ]; then

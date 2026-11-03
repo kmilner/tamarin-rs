@@ -39,6 +39,20 @@ enum Outcome {
 
 const SKIP_TRANSLATE: &str = "SAPIC/accountability translation rejects this example";
 const EXPECTED_TRANSLATION_SKIPS: &[(&str, &str)] = &[
+    // Upstream #957 deliberately rejects these destructor definitions/calls.
+    // Their diagnostics are asserted by the command-regression runner.
+    (
+        "regression/negative/sapic-ac-destructor-call.spthy",
+        SKIP_TRANSLATE,
+    ),
+    (
+        "regression/negative/sapic-ac-destructor.spthy",
+        SKIP_TRANSLATE,
+    ),
+    (
+        "regression/negative/sapic-destructor-result-call.spthy",
+        SKIP_TRANSLATE,
+    ),
     (
         "sapic/not-suitable-for-regression/issue-missing-unlock.spthy",
         SKIP_TRANSLATE,
