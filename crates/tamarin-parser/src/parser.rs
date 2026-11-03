@@ -4696,8 +4696,8 @@ impl<'a> Parser<'a> {
     ///   * `userDefinedFunSyms` is built from the FULL `funSyms`
     ///     (Term/Maude/Signature.hs), so the enabled theories' `NoEq`
     ///     symbols ([`Self::enabled_theory_noeq_syms`]) participate;
-    ///   * macros come after the function symbols, and `em` is ALWAYS present
-    ///     at arity 2 (even without bilinear-pairing), appended last.
+    ///   * macros come after the function symbols; the special `em` operator
+    ///     is available at arity 2 only with bilinear-pairing enabled.
     ///
     /// `Some(NoEq)`'s applications are arity-checked
     /// (`Theory/Text/Parser/Term.hs`);
@@ -4730,7 +4730,7 @@ impl<'a> Parser<'a> {
         if let Some((_, o)) = self.state.macro_syms.iter().find(|(n, _)| n == op) {
             return Some(ArityRes::NoEq { opts: *o });
         }
-        if op == "em" {
+        if op == "em" && self.state.sig_enable_bp {
             // The appended `(emapSymString, (2,Public,Constructor,NotNDC))`
             // row: `naryOpApp` special-cases the NAME into `fAppC EMap`
             // (Theory/Text/Parser/Term.hs), which the readers resolve

@@ -48,6 +48,20 @@ fn undeclared_application_reports_its_name() {
 }
 
 #[test]
+fn bilinear_map_requires_its_builtin_or_an_explicit_declaration() {
+    assert_undeclared(
+        "theory T\nbegin\nrule R: [ ] --> [ Out(em('a','b')) ]\nend\n",
+        "em",
+        (3, 23),
+    );
+    for declaration in ["builtins: bilinear-pairing", "functions: em/2"] {
+        let source =
+            format!("theory T begin {declaration}\nrule R: [] --> [Out(em('a','b'))]\nend");
+        parse_theory(&source, &[]).expect("declared em application");
+    }
+}
+
+#[test]
 fn use_before_declaration_is_still_undeclared() {
     assert_undeclared(
         "theory T\nbegin\nrule R: [ ] --> [ Out(g('a')) ]\nfunctions: g/1\nend\n",
