@@ -23,10 +23,10 @@ use tamarin_theory::pretty_theory::format_wf_block;
 fn load_wf_block(src: &str) -> String {
     let parsed = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("elaborate");
-    format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
-        &elaborated,
-        None,
-    ))
+    format_wf_block(
+        &tamarin_theory::wellformedness::check_wellformedness(&elaborated, None)
+            .expect("static wellformedness checks"),
+    )
 }
 
 /// The `Formula terms` findings of the elaborated theory: the `checkTerms`
@@ -73,7 +73,8 @@ fn fr_fact_topic_prints_its_underlined_header_once() {
                end\n";
     let thy = parse_theory(src, &[]).expect("parse");
     let elaborated = tamarin_theory::elaborate::elaborate(&thy).expect("elaborate");
-    let report = tamarin_theory::wellformedness::check_wellformedness(&elaborated, None);
+    let report = tamarin_theory::wellformedness::check_wellformedness(&elaborated, None)
+        .expect("static wellformedness checks");
     assert_eq!(
         format_wf_block(&report),
         "/*\nWARNING: the following wellformedness checks failed!\n\n\

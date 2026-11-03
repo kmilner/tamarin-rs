@@ -93,10 +93,10 @@ fn render_report(name: &str) -> String {
          translation stage both drivers run before the wellformedness pass, so its \
          report would be missing the generated rules' findings",
     );
-    format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
-        &elaborated,
-        None,
-    ))
+    format_wf_block(
+        &tamarin_theory::wellformedness::check_wellformedness(&elaborated, None)
+            .expect("static wellformedness checks"),
+    )
 }
 
 /// The leading `#` provenance lines of an expectation file.

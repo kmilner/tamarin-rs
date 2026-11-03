@@ -7,6 +7,7 @@ crates/tamarin-prover/tests/fixtures/cli_refs/*.stdout linguist-generated=true
 crates/tamarin-prover/tests/fixtures/cli_refs/CAPTURED.tsv linguist-generated=true
 crates/tamarin-prover/tests/fixtures/*_traces.dot linguist-generated=true
 crates/tamarin-prover/tests/fixtures/*_traces.json linguist-generated=true
+crates/tamarin-prover/tests/fixtures/manual_variant_fatal_report.txt linguist-generated=true
 
 # Captured web responses and an oracle-produced analyzed theory.
 crates/tamarin-server/tests/fixtures/haskell-responses/** linguist-generated=true

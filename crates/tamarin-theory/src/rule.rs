@@ -134,6 +134,21 @@ pub fn apply_macro_in_rule<I>(macros: &[LNMacro], r: Rule<I>) -> Rule<I> {
     }
 }
 
+/// Explicit members retain the positions of their new-variable terms.
+pub fn apply_macro_in_rule_preserving_new_vars<I>(macros: &[LNMacro], r: Rule<I>) -> Rule<I> {
+    if macros.is_empty() {
+        return r;
+    }
+    let new_vars = r
+        .new_vars
+        .iter()
+        .map(|t| tamarin_term::macro_expand::apply_macros(macros, t.clone()))
+        .collect();
+    let mut expanded = apply_macro_in_rule(macros, r);
+    expanded.new_vars = new_vars;
+    expanded
+}
+
 // =============================================================================
 // HasFrees instance — visit/map over premises, conclusions, actions, new_vars.
 // `info` is intentionally skipped here: the generic bound is `Clone`, not

@@ -2633,6 +2633,22 @@ impl<'a> Parser<'a> {
                 ));
             }
         }
+        // OpenTheory.addOpenProtoRule requires names within one explicit
+        // family to be distinct, including the parent. Internal compiled
+        // identity families do not pass through this parsed-input guard.
+        let mut family_names = std::collections::BTreeSet::from([r.name.as_str()]);
+        if r.variants
+            .iter()
+            .any(|v| !family_names.insert(v.name.as_str()))
+        {
+            return Err(self.duplicate_declaration(
+                "rule",
+                r.name.clone(),
+                ParseContext::Rule,
+                name_start,
+                r.name.len(),
+            ));
+        }
         if let Some(first) = self.state.seen_rules.iter().find(|p| p.name == r.name) {
             let differs = first.attributes != r.attributes
                 || first.premises != r.premises
@@ -2863,7 +2879,11 @@ impl<'a> Parser<'a> {
         // `(modulo AC)` head is absent and parsing proceeds. (More lenient than
         // Haskell, but still accepts all valid Haskell input.)
         self.in_context(ParseContext::Rule, |parser| {
-            parser.rule_after_kw().map(|(rule, _)| rule)
+            let (rule, _) = parser.rule_after_kw()?;
+            if !rule.embedded_restrictions.is_empty() {
+                return Err(parser.err("Embedded restrictions in explicit AC variants are not supported; use named restrictions and action facts instead."));
+            }
+            Ok(rule)
         })
     }
 

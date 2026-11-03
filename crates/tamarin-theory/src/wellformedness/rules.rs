@@ -571,17 +571,13 @@ pub fn rule_sorts_report(thy: &Theory) -> WfReport {
 // Rule variants
 // =============================================================================
 
-/// Port of HS `ruleVariantsReport` (Wellformedness.hs): HS's
-/// `variantsCheck` (Wellformedness.hs) over every rule item, with a
-/// live Maude behind the variant recomputation.
+/// The zero-variant warning from HS `ruleVariantsReport`
+/// (Wellformedness.hs) and `variantsCheck`
+/// (Wellformedness.hs). The complete wellformedness check combines
+/// this report with explicit-family validation in [`super::variants`].
 ///
-/// Only the `guard (null recomputedVariants)` arm (Wellformedness.hs)
-/// is ported.  The other arm, "Variants", compares a `variants (modulo AC)`
-/// block written out in the rule body against the recomputed set; no corpus
-/// file writes such a block, and the internal rule's `rule_ac` half would have
-/// to be re-abstracted to compare it.
-///
-/// `maude` is `None` on the web load path, which produces no such block.
+/// Both normal batch and web loads pass a live Maude handle after populating
+/// variants; `None` supports best-effort web loading when Maude cannot start.
 /// [`open_rule_has_no_variants`] answers from the verdict
 /// `populate_rule_variants` recorded on each rule, so the check issues no
 /// Maude query of its own; the driver keys the no-variant rule drop off the

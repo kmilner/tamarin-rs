@@ -1,0 +1,24 @@
+Variants
+========
+
+  Rule `Conflict' cannot confirm manual variants:
+    1. rule (modulo AC) Conflict___VARIANT_1:
+          [ In( y ), In( w ) ]
+         --[
+         L( y ), L( y ), L( y ), L( y ), L( y ), L( y ), L( y ), L( y ), L( y ),
+         L( y ), L( y ), L( y ), L( y ), L( y ), L( y ), L( y ), L( y ), L( y ),
+         L( y ), L( y ), L( y ), L( y ), L( y ), L( y ), L( y ), L( y ), L( y ),
+         L( y ), L( y ), L( y ), L( y ), L( y ), End( w )
+         ]->
+          [ Out( w ) ]
+  
+  Recomputed variants: 
+  
+    1. rule (modulo AC) Conflict___VARIANT_1:
+          [ In( x ), In( z ) ]
+         --[
+         L( x ), L( x ), L( x ), L( x ), L( x ), L( x ), L( x ), L( x ), L( x ),
+         L( x ), L( x ), L( x ), L( x ), L( x ), L( x ), L( x ), End( x )
+         ]->
+          [ Out( z ) ]
+
