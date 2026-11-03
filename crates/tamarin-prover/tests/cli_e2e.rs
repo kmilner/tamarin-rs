@@ -1109,7 +1109,7 @@ fn saturation_flag_caps_the_source_saturation_loop() {
     assert!(
         stderr.contains(
             "[Saturating Sources] Saturation aborted, more than 1 iterations. \
-             (Limit can be change with -s=)"
+             (Limit can be changed with -s=)"
         ),
         "`--saturation=1` must cut the saturation loop short; the port's \
          stderr never said so:\n{stderr}"
@@ -1142,6 +1142,25 @@ fn open_chains_flag_caps_the_precomputed_chain_resolution() {
              Open Chains limits (can be changed with -c=): 0"
         ),
         "`--open-chains=0` must report the cap it hit:\n{stderr}"
+    );
+
+    // The same cap is exercised while checking variable derivability, but
+    // auxiliary closes suppress saturation diagnostics (Sources.hs).
+    let theory = fixture("cli_flags_chan.spthy");
+    let (code, _, stderr) = run_binary(
+        &[
+            "--output-module=msr",
+            "--open-chains=0",
+            "--derivcheck-timeout=300",
+        ],
+        &[&theory],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stderr.contains("Derivation checks started"), "{stderr}");
+    assert!(stderr.contains("Derivation checks ended"), "{stderr}");
+    assert!(
+        !stderr.contains("[Open Chains]"),
+        "translate-only derivation checks must not emit chain-limit diagnostics:\n{stderr}"
     );
 }
 

@@ -916,7 +916,7 @@ pub(crate) fn saturate_sources_with_simp(
             if n > limit {
                 eprintln!(
                     "[Saturating Sources] Saturation aborted, more than {limit} \
-                     iterations. (Limit can be change with -s=)"
+                     iterations. (Limit can be changed with -s=)"
                 );
             } else if changed {
                 eprintln!("[Saturating Sources] Step {n} (Max {limit})");
@@ -1240,15 +1240,17 @@ fn solve_all_safe_goals(
                     if chains_left > 0 {
                         true
                     } else {
-                        // HS `safeGoal` traces UNCONDITIONALLY (no
-                        // `showSaturationSteps` gate) each time it rejects a
-                        // chain goal for an exhausted budget
-                        // (Sources.hs) — every mode, stderr.
-                        eprintln!(
-                            "[Open Chains] Too many chain constraints, \
-                             stopping precomputation. Open Chains limits (can \
-                             be changed with -c=): {chains_limit}"
-                        );
+                        // HS `safeGoal` reports an exhausted chain budget via
+                        // `traceChainLimit` (Sources.hs), gated by
+                        // `showSaturationSteps`, keeping auxiliary derivation
+                        // and NDC checks silent.
+                        if red.ctx.show_saturation_steps {
+                            eprintln!(
+                                "[Open Chains] Too many chain constraints, \
+                                 stopping precomputation. Open Chains limits (can \
+                                 be changed with -c=): {chains_limit}"
+                            );
+                        }
                         false
                     }
                 }
