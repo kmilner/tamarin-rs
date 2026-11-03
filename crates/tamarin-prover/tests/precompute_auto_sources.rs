@@ -73,7 +73,7 @@ const TMP_DIR: &str = "tamarin_prover_precompute_auto_sources";
 /// two AC variants: the generic one and the one where the input is
 /// `senc(m, ~k)`.  Its `Out(sdec(x, ~k))` conclusion leaves the refined
 /// sources with partial deconstructions, the condition `--auto-sources` tests
-/// before it unfolds (`containsPartialDeconstructions`,
+/// using the preliminary cache of unfolded rules (`containsPartialDeconstructions`,
 /// lib/theory/src/Rule.hs).
 const THEORY: &str = "theory AutoSourcesUnfold\nbegin\n\n\
                       builtins: symmetric-encryption\n\n\
@@ -82,6 +82,57 @@ const THEORY: &str = "theory AutoSourcesUnfold\nbegin\n\n\
                       [ !Key(~k), In(x) ] --[ Dec(sdec(x, ~k)) ]-> \
                       [ Out(sdec(x, ~k)) ]\n\n\
                       lemma reach:\n  exists-trace \"Ex m #i. Dec(m) @ #i\"\n\nend\n";
+
+#[test]
+fn auto_sources_annotates_explicit_identity_members_and_replays() {
+    if !maude_available() {
+        return;
+    }
+    let source = r#"theory TrivialSource begin
+    builtins: symmetric-encryption
+    rule Start:
+      [Fr(~k), Fr(~v)] --[Sent(~v)]-> [!Key(~k), Out(senc(<'tag',~v>,~k))]
+    variants rule (modulo AC) Start___VARIANT_1:
+      [Fr(~k), Fr(~v)] --[Sent(~v)]-> [!Key(~k), Out(senc(<'tag',~v>,~k))]
+    rule Consume:
+      [!Key(k), In(c)] --[Got(snd(sdec(c,k)))]-> [Out(snd(sdec(c,k)))]
+    lemma witness: exists-trace "Ex x #i. Got(x)@i"
+    end"#;
+    let args = [
+        "--prove",
+        "--auto-sources",
+        "--no-ndc",
+        "--derivcheck-timeout=0",
+        "--quit-on-warning",
+        "--processors=1",
+    ];
+    let (code, stdout, stderr) = common::run_raw(TMP_DIR, "identity_member", source, &args);
+    assert_eq!(code, 0, "{stderr}");
+    // Saved replay drops contradiction-reason comments in both provers,
+    // but must retain the executable annotations and both proof verdicts.
+    let (code, replay, stderr) = common::run_raw(TMP_DIR, "identity_replay", &stdout, &args);
+    assert_eq!(code, 0, "{stderr}");
+    for output in [&stdout, &replay] {
+        // Pinned pristine upstream a75fec7f verifies both in these steps.
+        for verdict in [
+            "witness (exists-trace): verified (4 steps)",
+            "AUTO_typing (all-traces): verified (12 steps)",
+        ] {
+            assert!(output.contains(verdict), "{output}");
+        }
+    }
+    fn start_member(output: &str) -> &str {
+        output
+            .split("rule (modulo AC) Start___VARIANT_1:")
+            .nth(1)
+            .expect("explicit identity member retained")
+            .split("rule ")
+            .next()
+            .unwrap()
+    }
+    assert!(start_member(&stdout).contains("AUTO_OUT_"), "{stdout}");
+    assert_eq!(start_member(&stdout), start_member(&replay));
+}
 
 /// Run the built binary on [`THEORY`] with `extra` flags, returning its raw
 /// stdout.  The precompute document carries no build-info block, no
@@ -135,6 +186,38 @@ fn precompute_counts_the_unfolded_variants_under_auto_sources() {
             "Refined sources: 6 cases, deconstructions complete",
         ])
     );
+}
+
+/// Existing sources lemmas can disable automatic generation even when the
+/// shared preliminary cache has raw chains. The public rules must then remain
+/// folded, and refining the cache must not erase its raw chains.
+#[test]
+fn manual_sources_preserve_raw_chains_and_disable_unfolding() {
+    if !maude_available() {
+        return;
+    }
+    let source = r#"theory ManualSources begin
+    builtins: symmetric-encryption
+    rule Setup: [Fr(~k)] --> [!Key(~k)]
+    rule Dec: [!Key(~k), In(x)] --[Dec(sdec(x,~k))]-> [Out(sdec(x,~k))]
+    lemma manually_closed [sources]: "All x #i. Dec(x)@i ==> F"
+    end"#;
+    // Exact output from pristine upstream a75fec7f, in both modes.
+    let expected = joined(&[
+        "Multiset rewriting rules: 4",
+        "Raw sources: 6 cases, 5 partial deconstructions left",
+        "Refined sources: 6 cases, deconstructions complete",
+    ]);
+    for (stem, extra) in [
+        ("manual_sources", vec![]),
+        ("manual_sources_auto", vec!["--auto-sources"]),
+    ] {
+        let mut args = vec!["--precompute-only", "--derivcheck-timeout=0"];
+        args.extend(extra);
+        let (code, stdout, stderr) = common::run_raw(TMP_DIR, stem, source, &args);
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, expected, "{stem}");
+    }
 }
 
 #[test]

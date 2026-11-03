@@ -4,9 +4,10 @@
 //! Port of Haskell's `--auto-sources` lemma generation
 //! (`addAutoSourcesLemma`, `lib/theory/src/OpenTheory.hs`).
 //!
-//! When `--auto-sources` is set and the raw sources still contain open
-//! chains (partial deconstructions), Tamarin first UNFOLDS every closed
-//! rule into its per-AC-variant rules (`itemsModAC = unfoldRules items`,
+//! When `--auto-sources` is set, Tamarin prepares unfolded, uniquely named
+//! rules for a shared preliminary cache. If the refined sources still have
+//! open chains, it generates annotations from the raw sources. Unfolding
+//! expands each closed rule into its AC variants (`itemsModAC = unfoldRules items`,
 //! CloseRule.hs; `unfoldRuleVariants`, lib/theory/src/Rule.hs
 //! — identity for trivial-variant rules) and then generates a single
 //! `sources` lemma over the unfolded rule set: each open-chain input
@@ -605,9 +606,10 @@ fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
 /// HS `unfoldRules items` (CloseRule.hs) over the theory's item
 /// list: replace every closed rule whose AC variant is non-trivial
 /// (`isTrivialProtoVariantAC`, Theory/Model/Rule.hs) by its
-/// per-variant rules ([`unfold_closed_rule`]); trivial-variant rules
-/// stay unchanged, so the pass is the identity on a theory whose variants are
-/// all trivial.
+/// per-variant rules ([`unfold_closed_rule`]). Explicit members, including
+/// trivial ones, each become a separate open rule so cache construction,
+/// temporary naming and annotation all use the same executable body.
+/// Ordinary computed trivial rules stay unchanged.
 ///
 /// The variants take the unfolded rule's slot in item order, each carrying
 /// the original as its `cprRuleE` half.  The printer regroups them:
@@ -616,56 +618,41 @@ fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
 /// members; only a safe same-name identity family can print as a standalone
 /// E rule (OpenTheory.hs).
 ///
-/// Returns `true` iff any rule was unfolded.
-fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
-    // Decision pass over the rules in item order: one entry per rule item
-    // (`None` = trivial, keep).
-    let mut elab_repl: Vec<Option<Vec<OpenProtoRule>>> = Vec::new();
-    for item in &elaborated.items {
-        let TheoryItem::Rule(o) = item else { continue };
+fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) {
+    let items = std::mem::take(&mut elaborated.items);
+    let mut new_items = Vec::with_capacity(items.len());
+    for item in items {
+        let TheoryItem::Rule(o) = item else {
+            new_items.push(item);
+            continue;
+        };
         // HS `isTrivialProtoVariantAC ruAC ruE` over the closed rules the item
         // closes into (lib/theory/src/Rule.hs): a rule declaring its own
         // `variants (modulo AC)` blocks yields one closed rule per block, and
-        // the item is left alone when every one of them is trivial.
-        let closed = crate::theory::closed_rules_ac(o);
-        if closed
-            .iter()
-            .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, o.rule_e()))
+        // each member must be represented separately even if it is trivial.
+        let closed = crate::theory::closed_rules_ac(&o);
+        if o.rule_ac.is_empty()
+            && closed
+                .iter()
+                .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, o.rule_e()))
         {
-            elab_repl.push(None);
+            new_items.push(TheoryItem::Rule(o));
             continue;
         }
-        let unfolded = closed
-            .iter()
-            .flat_map(|ac| unfold_closed_rule(o, ac))
-            .collect();
-        elab_repl.push(Some(unfolded));
-    }
-    if elab_repl.iter().all(|r| r.is_none()) {
-        return false;
-    }
-
-    // Each rule item takes its replacement run.
-    let items = std::mem::take(&mut elaborated.items);
-    let mut decisions = elab_repl.into_iter();
-    let mut new_items = Vec::with_capacity(items.len());
-    for item in items {
-        match item {
-            TheoryItem::Rule(o) => match decisions.next().expect("one decision per rule item") {
-                Some(vs) => new_items.extend(vs.into_iter().map(TheoryItem::Rule)),
-                None => new_items.push(TheoryItem::Rule(o)),
-            },
-            other => new_items.push(other),
-        }
+        new_items.extend(
+            closed
+                .iter()
+                .flat_map(|ac| unfold_closed_rule(&o, ac))
+                .map(TheoryItem::Rule),
+        );
     }
     elaborated.items = new_items;
-    true
 }
 
 /// Apply `--auto-sources` (HS `closeTheoryWithMaude`'s autosources branch,
-/// CloseRule.hs#closeTheoryWithMaude). When the raw sources contain
-/// partial deconstructions, unfold every rule into its AC-variant rules
-/// ([`unfold_rule_variants`]), annotate them with AUTO_* actions and append
+/// CloseRule.hs#closeTheoryWithMaude). The preliminary cache uses unfolded,
+/// temporarily named rules. When its refined sources contain partial
+/// deconstructions, annotate the public unfolded rules and append
 /// the `AUTO_typing` sources lemma.  `ndc_cache` is the theory's
 /// once-per-load NDC-checked intruder cache, injected into the scratch
 /// contexts below so they reuse the tagged+permuted rules instead of
@@ -680,122 +667,58 @@ pub fn apply_auto_sources(
     use crate::constraint::solver::context::{ProofContext, ProofContextOptions};
     use crate::guarded::formula_to_guarded;
 
-    // Both scratch contexts below share the caller's one rule list.
-    let ndc_cache = ndc_cache.cloned();
-
     let restrictions = elaborated
         .restrictions()
         .map(|r| formula_to_guarded(&r.formula))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| crate::prove::ProveError::Guarded(error.to_string()))?;
-    let rules: Vec<OpenProtoRule> = elaborated.rules().cloned().collect();
-
-    // collect open destruction chains across a context's (saturated) source
-    // cases.
-    fn collect_chains(
-        ctx: &ProofContext,
-    ) -> Result<Vec<((NodeConc, NodePrem), System)>, crate::prove::ProveError> {
-        let mut chains = Vec::new();
-        for src in ctx.ensure_saturated()?.iter() {
-            let cases = src.cases().expect("saturated source has cases");
-            for (_, sys) in cases.iter() {
-                for ch in sys.unsolved_chains() {
-                    chains.push((ch, sys.clone()));
-                }
-            }
-        }
-        Ok(chains)
-    }
-
-    // GENERATION chains: the RAW (saturated, unrefined) sources — HS
-    // `addAutoSourcesLemma` uses `crcRawSources` (RuleItem.hs).
-    let ctx_raw = ProofContext::try_with_options(
+    // Match CloseRule.cachePre: prepare the same unfolded, uniquely named
+    // rule set before both trigger refinement and annotation generation.
+    // Commit the unfolded public rules only if the trigger fires.
+    let mut prepared = elaborated.clone();
+    unfold_rule_variants(&mut prepared);
+    let rules = auto_source_rule_names(&prepared.rules().cloned().collect::<Vec<_>>());
+    let mut ctx = ProofContext::try_with_options(
         maude.clone(),
         rules.clone(),
         ProofContextOptions {
-            macros: elaborated.macros().cloned().collect(),
-            maude_pool: pool.clone(),
-            restrictions: restrictions.clone(),
-            intruder_rules: ndc_cache.clone(),
+            maude_pool: pool,
+            macros: prepared.macros().cloned().collect(),
+            restrictions,
+            intruder_rules: ndc_cache.cloned(),
             parameters,
             show_saturation_steps: true,
             loop_breakers_prepared: true,
             ..Default::default()
         },
     )?;
-    let raw_chains = collect_chains(&ctx_raw)?;
-
-    // TRIGGER: HS `containsPartialDeconstructions` checks the REFINED sources
-    // (crcRefinedSources, field 3) — those refined by the theory's existing
-    // `[sources]` lemmas. When such lemmas exist they can close the open
-    // chains, so the trigger is OFF even though the raw sources still have
-    // them (e.g. NSPK3 with a manual `types [sources]` lemma). Build a second
-    // context whose typing assumptions are those lemmas and check ITS chains.
-    let typing_asms: Vec<crate::guarded::Guarded> = elaborated
+    ctx.typing_assumptions = elaborated
         .lemmas()
         .filter(|l| l.is_source_assumption())
-        .map(|l| formula_to_guarded(&l.formula))
+        .map(|l| formula_to_guarded(&l.formula).map(std::sync::Arc::new))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| crate::prove::ProveError::Guarded(error.to_string()))?;
-    let trigger = if typing_asms.is_empty() {
-        // refined == raw
-        !raw_chains.is_empty()
-    } else {
-        let mut ctx_ref = ProofContext::try_with_options(
-            maude.clone(),
-            rules.clone(),
-            ProofContextOptions {
-                macros: elaborated.macros().cloned().collect(),
-                maude_pool: pool.clone(),
-                restrictions: restrictions.clone(),
-                intruder_rules: ndc_cache.clone(),
-                parameters,
-                show_saturation_steps: true,
-                loop_breakers_prepared: true,
-                ..Default::default()
-            },
-        )?;
-        ctx_ref.typing_assumptions = typing_asms.into_iter().map(std::sync::Arc::new).collect();
-        !collect_chains(&ctx_ref)?.is_empty()
-    };
+    let (raw, refined) = ctx.build_source_sets()?;
+    let trigger = refined.iter().any(|source| {
+        source
+            .cases()
+            .expect("saturated source has cases")
+            .iter()
+            .any(|(_, system)| system.unsolved_chains().next().is_some())
+    });
     if !trigger {
         return Ok(false);
     }
-
-    // `itemsModAC = unfoldRules items` (CloseRule.hs): once the
-    // trigger fires, every closed rule is replaced by its per-AC-variant
-    // rules BEFORE the AUTO lemma is computed, so the AUTO_* names and
-    // annotations reference the `___VARIANT_<i>` rules.  The loop breakers
-    // were computed before this point and are carried into each variant
-    // verbatim.
-    let unfolded = unfold_rule_variants(elaborated);
-    // `cache itemsModAC` (CloseRule.hs): `addAutoSourcesLemma` reads the
-    // rule cache RECOMPUTED over the unfolded rules.  When nothing unfolded,
-    // `itemsModAC == items` and the cache has the same value — reuse the
-    // original context's chains (and its saturation trace count).
-    let (rules, gen_chains) = if unfolded {
-        let rules: Vec<OpenProtoRule> = elaborated.rules().cloned().collect();
-        let ctx_mod = ProofContext::try_with_options(
-            maude.clone(),
-            rules.clone(),
-            ProofContextOptions {
-                macros: elaborated.macros().cloned().collect(),
-                maude_pool: pool,
-                restrictions,
-                intruder_rules: ndc_cache,
-                parameters,
-                show_saturation_steps: true,
-                loop_breakers_prepared: true,
-                ..Default::default()
-            },
-        )?;
-        let chains = collect_chains(&ctx_mod)?;
-        (rules, chains)
-    } else {
-        (rules, raw_chains)
-    };
-
-    let result = add_auto_sources_lemma(&maude, &rules, &gen_chains);
+    let mut chains = Vec::new();
+    for source in raw.iter() {
+        for (_, system) in source.cases().expect("saturated source has cases").iter() {
+            for chain in system.unsolved_chains() {
+                chains.push((chain, system.clone()));
+            }
+        }
+    }
+    let result = add_auto_sources_lemma(&maude, &rules, &chains);
+    *elaborated = prepared;
 
     // addLabels: add the AUTO actions to the matching rules. HS folds the
     // per-rule act list right-to-left over `addActionClosedProtoRule`
@@ -803,10 +726,16 @@ pub fn apply_auto_sources(
     // reproduces that order.
     for grp in &result.annotation_groups {
         for (rule_name, action) in grp.iter().rev() {
-            for item in elaborated.items.iter_mut() {
-                if let TheoryItem::Rule(o) = item
-                    && o.name() == rule_name
-                {
+            for (o, named) in elaborated
+                .items
+                .iter_mut()
+                .filter_map(|item| match item {
+                    TheoryItem::Rule(rule) => Some(rule),
+                    _ => None,
+                })
+                .zip(&rules)
+            {
+                if named.name() == rule_name {
                     add_action_to_open_rule(o, action.clone());
                 }
             }
@@ -822,6 +751,56 @@ pub fn apply_auto_sources(
         )));
     }
     Ok(true)
+}
+
+/// Names used only while building the auto-sources cache and routing actions.
+/// Public E/AC names stay unchanged; identical repeated rules share a label.
+fn auto_source_rule_names(rules: &[OpenProtoRule]) -> Vec<OpenProtoRule> {
+    use crate::rule::ProtoRuleName;
+    use std::collections::BTreeSet;
+    let reserved: BTreeSet<_> = rules
+        .iter()
+        .flat_map(|r| [r.rule.info.name, r.rule_e().info.name])
+        .collect();
+    let mut used = BTreeSet::new();
+    let mut assigned: Vec<(&OpenProtoRule, ProtoRuleName)> = Vec::new();
+    rules
+        .iter()
+        .map(|rule| {
+            let name =
+                if let Some((_, name)) = assigned.iter().find(|(original, _)| *original == rule) {
+                    *name
+                } else {
+                    let old = rule.rule.info.name;
+                    let name = if used.contains(&old) {
+                        (1..)
+                            .map(|i| {
+                                ProtoRuleName::Stand(tamarin_term::intern::intern_str(&format!(
+                                    "{}___AUTO_{i}",
+                                    rule.name()
+                                )))
+                            })
+                            .find(|name| !reserved.contains(name) && !used.contains(name))
+                            .unwrap()
+                    } else {
+                        old
+                    };
+                    used.insert(name);
+                    assigned.push((rule, name));
+                    name
+                };
+            let mut named = rule.clone();
+            if name != rule.rule.info.name {
+                // Changing only the executable half preserves the original family.
+                named.rule_e = Some(Box::new(rule.rule_e().clone()));
+                named.rule.info.name = name;
+                if let Some(abstracted) = &mut named.abstracted_rule {
+                    abstracted.info.name = name;
+                }
+            }
+            named
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -882,7 +861,7 @@ mod tests {
         let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
         elab.items = vec![TheoryItem::Rule(nt), TheoryItem::Rule(tr.clone())];
 
-        assert!(unfold_rule_variants(&mut elab));
+        unfold_rule_variants(&mut elab);
 
         // NT expands in place into one rule per substitution; TR keeps its
         // slot and its fields.
@@ -930,6 +909,84 @@ mod tests {
     }
 
     #[test]
+    fn temporary_aliases_reach_trivial_abstracted_bodies() {
+        let parsed = tamarin_parser::parse_theory(
+            r#"theory Aliases begin
+            builtins: symmetric-encryption
+            rule R: [] --[A()]-> []
+            rule Other: [In(sdec('a','b'))] --[B()]-> []
+            end"#,
+            &[],
+        )
+        .unwrap();
+        let mut theory = crate::elaborate::elaborate(&parsed).unwrap();
+        let Some(path) = tamarin_test_support::require_maude_path() else {
+            return;
+        };
+        let maude = MaudeHandle::start(&path, theory.signature.clone()).unwrap();
+        crate::tools::rule_variants::populate_rule_variants(&mut theory, &maude, None).unwrap();
+        let mut rules: Vec<_> = theory.rules().cloned().collect();
+        // Model a compiled member colliding with an independent source rule.
+        rules[0].rule.info.name = rules[1].rule.info.name;
+        assert!(rules[1].abstracted_rule.is_some());
+        assert!(crate::theory::closed_rules_ac(&rules[1])
+            .iter()
+            .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, rules[1].rule_e())));
+        let named = auto_source_rule_names(&rules);
+        assert_ne!(named[0].name(), named[1].name());
+        assert_eq!(named[1].rule_e(), rules[1].rule_e());
+        assert_eq!(
+            named[1].abstracted_rule.as_ref().unwrap().info.name,
+            named[1].rule.info.name
+        );
+        let ctx = crate::constraint::solver::context::ProofContext::new(maude, named);
+        let rule = &ctx.rules[1];
+        assert_eq!(
+            rule.abstracted_rule.as_ref().unwrap().info.name,
+            rule.rule.info.name
+        );
+    }
+
+    #[test]
+    fn unfold_prepares_trivial_explicit_members_for_annotation() {
+        use crate::fact::{in_fact, out_fact, proto_fact};
+        use crate::rule::{ProtoRuleEInfo, Rule};
+        use crate::theory::Theory;
+        use tamarin_term::builtin::msg_var;
+
+        let original = Rule::new(
+            ProtoRuleEInfo::standard("R"),
+            vec![in_fact(msg_var("x", 0))],
+            vec![out_fact(msg_var("x", 0))],
+            vec![],
+        );
+        let mut member = original.clone();
+        member.info.name = crate::rule::ProtoRuleName::Stand("R___VARIANT_1");
+        let mut open = OpenProtoRule::new(original.clone());
+        // Repeated identical members must retain their order and share labels.
+        open.rule_ac = vec![member.clone(), member.clone()];
+        let mut theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
+        theory.items.push(TheoryItem::Rule(open));
+
+        unfold_rule_variants(&mut theory);
+        let rules: Vec<_> = theory.rules().cloned().collect();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0], rules[1]);
+        for mut rule in auto_source_rule_names(&rules) {
+            assert_eq!(rule.name(), "R___VARIANT_1");
+            let action = proto_fact(Multiplicity::Linear, "AUTO_OUT", vec![msg_var("x", 0)]);
+            add_action_to_open_rule(&mut rule, action.clone());
+            let closed = crate::theory::closed_rules_ac(&rule);
+            assert_eq!(closed.len(), 1);
+            assert!(closed[0].actions.contains(&action));
+            assert_eq!(closed[0].premises, member.premises);
+            assert_eq!(closed[0].conclusions, member.conclusions);
+            assert_eq!(rule.rule_e(), &original);
+            assert!(rule.rule_ac.is_empty());
+        }
+    }
+
+    #[test]
     fn unfold_uses_source_declared_variant_bodies() {
         use crate::fact::{in_fact, out_fact};
         use crate::rule::{ProtoRuleEInfo, Rule};
@@ -953,7 +1010,7 @@ mod tests {
         let mut theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
         theory.items.push(TheoryItem::Rule(open));
 
-        assert!(unfold_rule_variants(&mut theory));
+        unfold_rule_variants(&mut theory);
         let unfolded = theory.rules().next().expect("unfolded rule");
         assert_eq!(unfolded.name(), "R___VARIANT_1");
         assert_eq!(unfolded.rule.premises, declared.premises);

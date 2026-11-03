@@ -449,7 +449,15 @@ impl ProofContext {
         }
     }
 
-    pub(crate) fn build_sources(mut self) -> Result<SharedSources, ProveError> {
+    pub(crate) fn build_sources(self) -> Result<SharedSources, ProveError> {
+        self.build_source_sets().map(|(_, refined)| refined)
+    }
+
+    /// Build raw and refined sources in one fresh-variable scope. Auto-source
+    /// generation reads the raw half while its trigger reads the refined half.
+    pub(crate) fn build_source_sets(
+        mut self,
+    ) -> Result<(SharedSources, SharedSources), ProveError> {
         self.sources = ContextSources::Materialized;
         // Source refinement uses local fresh variables. A cancelled build can
         // drop its entire working set without touching a proof's counter or cases.
@@ -470,14 +478,18 @@ impl ProofContext {
             self.parameters.saturation_limit(),
             &self,
         )?;
-        let refined = if self.typing_assumptions.is_empty() {
-            saturated
+        let raw = Arc::new(saturated);
+        self.full_sources = if self.typing_assumptions.is_empty() {
+            raw.clone()
         } else {
-            super::sources::refine_with_source_asms(saturated, &self.typing_assumptions, &self)?
+            Arc::new(super::sources::refine_with_source_asms(
+                raw.to_vec(),
+                &self.typing_assumptions,
+                &self,
+            )?)
         };
-        self.full_sources = Arc::new(refined);
         self.dump_sources();
-        Ok(self.full_sources)
+        Ok((raw, self.full_sources))
     }
 
     pub(crate) fn use_materialized_sources(&mut self, sources: SharedSources) {
