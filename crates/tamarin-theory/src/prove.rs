@@ -1194,6 +1194,7 @@ impl ProverSession {
             rules,
             crate::constraint::solver::context::ProofContextOptions {
                 maude_pool,
+                macros: theory.macros().cloned().collect(),
                 restrictions,
                 forced_injective_facts,
                 intruder_rules: ndc_cache,

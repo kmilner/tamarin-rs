@@ -34,6 +34,20 @@
 use crate::fact::FactTag;
 use crate::rule::ProtoRuleE;
 
+/// HS closeRuleCache analyzes the macro-expanded original E halves, even
+/// when the executable bodies have been replaced by unfolded AC members.
+pub fn injective_fact_instances_for_rules<'a>(
+    rules: impl IntoIterator<Item = &'a crate::theory::OpenProtoRule>,
+    macros: &[tamarin_term::macro_expand::LNMacro],
+    reducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
+) -> Vec<(FactTag, Vec<Vec<MonotonicBehaviour>>)> {
+    let expanded: Vec<_> = rules
+        .into_iter()
+        .map(|rule| crate::rule::apply_macro_in_rule(macros, rule.rule_e().clone()))
+        .collect();
+    simple_injective_fact_instances(&expanded.iter().collect::<Vec<_>>(), reducible)
+}
+
 /// How a particular term position evolves across rule applications.
 /// Variant order matches Haskell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

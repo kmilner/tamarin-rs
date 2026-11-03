@@ -193,6 +193,9 @@ pub struct ProofContext {
 #[derive(Default)]
 pub struct ProofContextOptions {
     pub maude_pool: Option<std::sync::Arc<MaudePool>>,
+    /// Expand the original E rules for injectivity analysis, even when the
+    /// executable rules have been unfolded or annotated by auto-sources.
+    pub macros: Vec<tamarin_term::macro_expand::LNMacro>,
     pub restrictions: Vec<crate::guarded::Guarded>,
     pub forced_injective_facts: Vec<crate::fact::FactTag>,
     pub intruder_rules: Option<IntrRuleCache>,
@@ -371,6 +374,8 @@ pub enum CutStrategy {
 }
 
 impl ProofContext {
+    /// Build a standalone context without theory macros. Use `with_options`
+    /// to supply the macro environment when rules retain unexpanded E halves.
     pub fn new(maude: MaudeHandle, rules: Vec<OpenProtoRule>) -> Self {
         Self::with_options(maude, rules, ProofContextOptions::default())
     }
@@ -729,6 +734,7 @@ impl ProofContext {
     ) -> Result<Self, crate::tools::rule_variants::VariantsError> {
         let ProofContextOptions {
             maude_pool,
+            macros,
             restrictions,
             forced_injective_facts,
             intruder_rules: intr_override,
@@ -760,14 +766,12 @@ impl ProofContext {
             )),
         };
         Self::dump_intruder_rules(&intruder_rules);
-        // Detect injective fact instances ahead of time — mirrors
-        // Haskell's `pcInjectiveFactInsts` precomputation.
-        let proto_rules: Vec<crate::rule::ProtoRuleE> =
-            rules.iter().map(|r| r.rule.clone()).collect();
-        let proto_rule_refs: Vec<&crate::rule::ProtoRuleE> = proto_rules.iter().collect();
+        // HS closeRuleCache analyzes macro-expanded cprRuleE, including
+        // after auto-sources has replaced executable bodies by AC members.
         let mut injective_fact_insts =
-            crate::tools::injective_fact_instances::simple_injective_fact_instances(
-                &proto_rule_refs,
+            crate::tools::injective_fact_instances::injective_fact_instances_for_rules(
+                &rules,
+                &macros,
                 &sig.reducible_fun_syms_fast,
             );
         // HS `closeRuleCache` (CloseRule.hs): union the FORCED injective
@@ -1110,8 +1114,119 @@ pub fn annotate_theory_loop_breakers(
 
 #[cfg(test)]
 mod tests {
-    use super::{Arc, IntrRuleCache, ProveError, SourceSlot};
+    use super::{Arc, IntrRuleCache, ProofContext, ProveError, SourceSlot};
     use crate::rule::IntrRuleAC;
+    use tamarin_test_support::require_maude_path;
+
+    #[test]
+    fn injectivity_analysis_uses_original_rules_after_unfolding() {
+        use crate::fact::{FactTag, Multiplicity};
+        use crate::tools::injective_fact_instances::MonotonicBehaviour;
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        for first_argument in ["~id", "projection(~id)"] {
+            let source = format!(
+                r#"theory UnfoldedInjectivity begin
+macros: projection(x) = fst(<x, 'c'>)
+rule Init: [Fr(~id), In(x)] --> [S({first_argument}, x)]
+rule Update: [S(~id, x)] --> [S(~id, projection(x))]
+end"#
+            );
+            let theory =
+                crate::elaborate::elaborate(&tamarin_parser::parse_theory(&source, &[]).unwrap())
+                    .unwrap();
+            let maude =
+                tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone())
+                    .unwrap();
+            // Model the normalized executable members while retaining the
+            // original E halves. The CLI regression covers actual unfolding.
+            let compiled = crate::elaborate::elaborate(&tamarin_parser::parse_theory(
+                "theory Compiled begin rule Init: [Fr(~id), In(x)] --> [S(~id,x)] rule Update: [S(~id,x)] --> [S(~id,x)] end",
+                &[],
+            ).unwrap()).unwrap();
+            let rules = theory
+                .rules()
+                .zip(compiled.rules())
+                .map(|(original, member)| {
+                    let mut rule = original.clone();
+                    rule.rule_e = Some(Box::new(original.rule_e().clone()));
+                    rule.rule = member.rule.clone();
+                    rule
+                })
+                .collect();
+            let ctx = ProofContext::with_options(
+                maude,
+                rules,
+                super::ProofContextOptions {
+                    macros: theory.macros().cloned().collect(),
+                    ..Default::default()
+                },
+            );
+            let expected =
+                (first_argument == "~id").then(|| vec![vec![MonotonicBehaviour::Unstable]]);
+            assert_eq!(
+                ctx.injective_fact_insts
+                    .get(&FactTag::Proto(Multiplicity::Linear, "S", 2)),
+                expected.as_ref()
+            );
+        }
+    }
+
+    #[test]
+    fn injectivity_analysis_uses_expanded_macros_not_display_rules() {
+        use crate::fact::{FactTag, Multiplicity};
+        use crate::tools::injective_fact_instances::{
+            simple_injective_fact_instances, MonotonicBehaviour,
+        };
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        // Upstream baf837f / msr-macro-injectivity: unexpanded macro
+        // applications look like strictly increasing free constructors.
+        let source = r#"theory MacroInjectivity begin
+macros: identity(x) = x, constant(x) = 'c', projection(x) = fst(<x, 'c'>)
+rule Init: [Fr(~id), In(x)] --> [S(~id, x), C(~id, x), P(~id, x)]
+rule Identity: [S(~id, x)] --> [S(~id, identity(x))]
+rule Constant: [C(~id, x)] --> [C(~id, constant(x))]
+rule Projection: [P(~id, x)] --> [P(~id, projection(x))]
+end"#;
+        let theory =
+            crate::elaborate::elaborate(&tamarin_parser::parse_theory(source, &[]).unwrap())
+                .unwrap();
+        let rules: Vec<_> = theory.rules().cloned().collect();
+        assert!(rules[1..].iter().all(|r| r.rule_e.is_some()));
+        let unexpanded = simple_injective_fact_instances(
+            &rules.iter().map(|r| r.rule_e()).collect::<Vec<_>>(),
+            &theory.signature.reducible_fun_syms_fast,
+        );
+        assert_eq!(unexpanded.len(), 3);
+        assert!(unexpanded
+            .iter()
+            .all(|(_, shape)| *shape == vec![vec![MonotonicBehaviour::StrictlyIncreasing]]));
+        let maude =
+            tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone()).unwrap();
+        let ctx = ProofContext::with_options(
+            maude,
+            rules,
+            super::ProofContextOptions {
+                macros: theory.macros().cloned().collect(),
+                ..Default::default()
+            },
+        );
+        for (tag, behaviour) in [
+            ("S", MonotonicBehaviour::Constant),
+            ("C", MonotonicBehaviour::Unstable),
+            ("P", MonotonicBehaviour::Unstable),
+        ] {
+            assert_eq!(
+                ctx.injective_fact_insts
+                    .get(&FactTag::Proto(Multiplicity::Linear, tag, 2)),
+                Some(&vec![vec![behaviour]]),
+                "{tag} must be analysed after macro expansion"
+            );
+        }
+    }
 
     /// A small Maude-free rule list: the special intruder rules
     /// (`coerce`, `pub`, `fresh`, `isend`, `irecv`).
