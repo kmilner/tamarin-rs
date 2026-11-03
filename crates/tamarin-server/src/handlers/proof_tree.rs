@@ -289,7 +289,9 @@ impl ProofState {
             let mut children = BTreeMap::new();
             for (name, sys) in cases {
                 // Eagerly classify each child as finished / open.
-                let (status, leaf_method) = match is_finished(&ctx, &sys) {
+                let (status, leaf_method) = match is_finished(&ctx, &sys)
+                    .map_err(|error| format!("proof context: {error}"))?
+                {
                     Some(r) => {
                         let s = match &r {
                             tamarin_theory::constraint::solver::proof_method::Result::Solved =>

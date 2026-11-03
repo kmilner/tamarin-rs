@@ -115,6 +115,92 @@ fn residual_positive_and_negative_subterms_reach_a_fixed_point() {
 }
 
 #[test]
+fn last_injective_nodes_merge_unless_strictly_ordered() {
+    use crate::constraint::constraints::{Edge, LessAtom, Reason};
+    use crate::constraint::solver::contradictions::{contradictions, Contradiction};
+    use crate::fact::{Fact, FactTag, Multiplicity};
+    use crate::rule::{
+        ConcIdx, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+    };
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let Some(mut ctx) = ctx() else { return };
+    let tag = FactTag::Proto(Multiplicity::Linear, "S", 1);
+    std::sync::Arc::get_mut(&mut ctx.shared)
+        .unwrap()
+        .injective_fact_insts
+        .insert(tag, Vec::new());
+    let fact = Fact::new(tag, vec![tamarin_term::lterm::pub_term("id")]);
+    let rule = |name, prems, concs| {
+        Rule::new(
+            RuleInfo::Proto(ProtoRuleACInstInfo {
+                name: ProtoRuleName::Stand(name),
+                attributes: RuleAttributes::empty(),
+                loop_breakers: Vec::new(),
+            }),
+            prems,
+            concs,
+            Vec::new(),
+        )
+    };
+    let i = LVar::new("i", LSort::Node, 0);
+    let j = LVar::new("j", LSort::Node, 1);
+    let k = LVar::new("k", LSort::Node, 2);
+    let mut sys = System::empty();
+    sys.add_node(i, rule("Init", vec![], vec![fact.clone()]));
+    sys.add_node(j, rule("Fin", vec![fact.clone()], vec![]));
+    sys.add_node(k, rule("Fin", vec![fact], vec![]));
+    sys.add_edge(Edge {
+        src: (i, ConcIdx(0)),
+        tgt: (k, PremIdx(0)),
+    });
+    sys.add_less(LessAtom::new(i, j, Reason::Adversary));
+    sys.set_last_atom(Some(k));
+    assert!(!contradictions(&ctx, &sys)
+        .unwrap()
+        .iter()
+        .any(|c| matches!(c, Contradiction::NonInjectiveFactInstance(..))));
+    let mut merged = Reduction::new(&ctx, sys.clone());
+    assert!(matches!(
+        merge_last_injective_fact_nodes(&mut merged).unwrap(),
+        SystemOutcome::Linear
+    ));
+    let subst = &merged.sys.eq_store().subst;
+    assert_eq!(
+        tamarin_term::subst::apply_vterm(subst, var_term(j)),
+        tamarin_term::subst::apply_vterm(subst, var_term(k))
+    );
+    for (a, b) in [(j, k), (k, j)] {
+        let mut ordered = sys.clone();
+        ordered.add_less(LessAtom::new(a, b, Reason::Adversary));
+        let mut red = Reduction::new(&ctx, ordered);
+        assert!(matches!(
+            merge_last_injective_fact_nodes(&mut red).unwrap(),
+            SystemOutcome::Contradictory
+        ));
+    }
+    // Direct contradiction callers also reject non-unifiable final rules.
+    sys.add_node(
+        j,
+        rule(
+            "Different",
+            sys.nodes
+                .iter()
+                .find(|(id, _)| *id == j)
+                .unwrap()
+                .1
+                .premises
+                .clone(),
+            vec![],
+        ),
+    );
+    assert!(contradictions(&ctx, &sys)
+        .unwrap()
+        .iter()
+        .any(|c| matches!(c, Contradiction::NonInjectiveFactInstance(..))));
+}
+
+#[test]
 fn implied_safety_false_rejects_the_system() {
     let Some(ctx) = ctx() else { return };
     let mut sys = System::empty();
@@ -622,6 +708,81 @@ fn plain_route_does_not_truncate_long_linear_chains() {
         plain_route(node(0), &linear, &cyclic),
         vec![node(0), node(1)]
     );
+}
+
+#[test]
+fn failed_unification_cannot_strengthen_fresh_ordering() {
+    use crate::constraint::constraints::Edge;
+    use crate::fact::{Fact, FactTag, Multiplicity};
+    use crate::rule::{
+        ConcIdx, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+    };
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
+
+    let Some(maude) = maude_with_sig(tamarin_term::maude_sig::dh_maude_sig()) else {
+        return;
+    };
+    let ctx = ProofContext::new(maude, Vec::new());
+    let term = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 0)));
+    let fresh = term("x", LSort::Fresh);
+    let message = tamarin_term::builtin::mult(term("m", LSort::Msg), term("n", LSort::Msg));
+    let containing_fresh = tamarin_term::builtin::mult(fresh.clone(), term("z", LSort::Msg));
+    let fact = |term| Fact::new(FactTag::Proto(Multiplicity::Linear, "P", 1), vec![term]);
+    let rule = |name, prems, concs| {
+        Rule::new(
+            RuleInfo::Proto(ProtoRuleACInstInfo {
+                name: ProtoRuleName::Stand(name),
+                attributes: RuleAttributes::empty(),
+                loop_breakers: Vec::new(),
+            }),
+            prems,
+            Vec::new(),
+            concs,
+        )
+    };
+    let supplier = LVar::new("supplier", LSort::Node, 0);
+    let successor = LVar::new("successor", LSort::Node, 0);
+    let consumer = LVar::new("consumer", LSort::Node, 0);
+    let mut sys = System::empty();
+    sys.add_node(
+        supplier,
+        rule(
+            "Init",
+            vec![Fact::new(FactTag::Fresh, vec![fresh.clone()])],
+            vec![fact(fresh.clone())],
+        ),
+    );
+    let successor_rule = rule("Step", vec![fact(message.clone())], vec![fact(message)]);
+    let mut consumer_rule = rule(
+        "Step",
+        vec![fact(containing_fresh.clone())],
+        vec![fact(containing_fresh)],
+    );
+    consumer_rule.actions.push(fact(fresh));
+    sys.add_node(successor, successor_rule.clone());
+    sys.add_node(consumer, consumer_rule.clone());
+    sys.add_edge(Edge {
+        src: (supplier, ConcIdx(0)),
+        tgt: (successor, PremIdx(0)),
+    });
+    ctx.maude.kill_subprocess();
+    assert!(
+        crate::rule::unifiable_rule_ac_insts(&ctx.maude, &successor_rule, &consumer_rule).is_err()
+    );
+    let mut reduction = Reduction::new(&ctx, sys);
+    enforce_fresh_ordering_pass(&mut reduction);
+    assert!(reduction
+        .sys
+        .less_atoms
+        .iter()
+        .any(|atom| atom.smaller == supplier && atom.larger == consumer));
+    assert!(!reduction
+        .sys
+        .less_atoms
+        .iter()
+        .any(|atom| atom.smaller == successor && atom.larger == consumer));
 }
 
 #[test]
