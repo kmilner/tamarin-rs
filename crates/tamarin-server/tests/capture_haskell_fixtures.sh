@@ -182,11 +182,18 @@ fetch kill_path.txt             "/kill?path=foo"
 # `graphJsonThyPath` falls through to `error "Unhandled theory path. This is a
 # bug."` on any theory path that is neither a proof nor a source case, so this
 # URL raises; the body is Yesod's error page and is asserted byte-for-byte in
-# `routes_graph.rs`.  Its OTHER 500s — the ones an out-of-range `cases/<i>/<j>`
-# index raises inside `!!` — are captured by nothing on purpose: the port
-# answers those with the ordinary Not Found page instead (a deliberate
-# divergence, see `graph_json_out_of_range_source_index_is_not_found`).
+# `routes_graph.rs`.
 fetch json_rules.html           "/thy/trace/1/json/rules"
+
+# Both list lookups can fail, with distinct call sites for each route.
+# Negative case indices fail before the source list is evaluated; minBound
+# wraps to maxBound when subtracting one. The Rust tests cover those aliases.
+for route in json graph interactive-graph-def; do
+  fetch "${route}_source_negative.html" "/thy/trace/1/${route}/cases/refined/0/1"
+  fetch "${route}_source_large.html"    "/thy/trace/1/${route}/cases/refined/9999/1"
+  fetch "${route}_case_negative.html"   "/thy/trace/1/${route}/cases/refined/1/0"
+  fetch "${route}_case_large.html"      "/thy/trace/1/${route}/cases/refined/1/9999"
+done
 
 # ---------------- Yesod's 404 page ----------------
 # Every `notFound` — unknown theory index, unparseable theory path, or a URL
@@ -209,10 +216,7 @@ fetch not_found_huge_idx.html   "/thy/trace/99999999999999999999/overview/help"
 # `/graph` (`imgThyPath`) and `/interactive-graph-def` (`dotGraphString`) draw
 # source cases and proof nodes; every other theory path is their catch-all
 # `error`.  The dot captures are the graph itself, asserted byte for byte in
-# `routes_graph.rs::interactive_graph_def_renders_source_cases`.  Their
-# out-of-range `cases/<i>/<j>` 500s are captured by
-# nothing on purpose — the port answers those with `notFound` (a deliberate
-# divergence, see `dot_routes_out_of_range_case_is_not_found`).
+# `routes_graph.rs::interactive_graph_def_renders_source_cases`.
 fetch igd_cases_refined.dot     "/thy/trace/1/interactive-graph-def/cases/refined/1/1"
 fetch igd_cases_raw.dot         "/thy/trace/1/interactive-graph-def/cases/raw/1/1"
 fetch igd_unhandled_path.html   "/thy/trace/1/interactive-graph-def/rules"
