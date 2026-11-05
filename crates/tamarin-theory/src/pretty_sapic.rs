@@ -164,10 +164,30 @@ fn render_msr(
         MsrPrinter::Sapic => Some(match_vars),
         MsrPrinter::Attribute => None,
     };
+    // Rule attributes render MSR facts through toLNFact: types affect the
+    // generated rule name, but are erased from this diagnostic process text.
+    let pp_fact = |f: &SapicLNFact, mv: Option<&BTreeSet<SapicLVar>>| {
+        if printer == MsrPrinter::Attribute {
+            pretty_fact(
+                &|t| {
+                    pretty_term(
+                        &|lit: &Lit<Name, SapicLVar>| match lit {
+                            Lit::Var(v) => Doc::text(v.var.to_string()),
+                            Lit::Con(c) => Doc::text(c.to_string()),
+                        },
+                        t,
+                    )
+                },
+                f,
+            )
+        } else {
+            sapic_fact_doc(f, mv)
+        }
+    };
 
     // `ppFactsList list = fsep [ "[", fsep (punctuate "," (map ppFact list)), "]" ]`.
     let pp_facts_list = |facts: &[SapicLNFact], mv: Option<&BTreeSet<SapicLVar>>| -> Doc {
-        let inner: Vec<Doc> = facts.iter().map(|f| sapic_fact_doc(f, mv)).collect();
+        let inner: Vec<Doc> = facts.iter().map(|f| pp_fact(f, mv)).collect();
         hpj::fsep(vec![
             Doc::char('['),
             hpj::fsep(hpj::punctuate(Doc::char(','), inner)),
@@ -180,7 +200,7 @@ fn render_msr(
         Doc::text("-->")
     } else {
         // map ppFact acts ++ map ppRestr' restr
-        let mut items: Vec<Doc> = acts.iter().map(|f| sapic_fact_doc(f, None)).collect();
+        let mut items: Vec<Doc> = acts.iter().map(|f| pp_fact(f, None)).collect();
         for phi in rest {
             // `ppRestr' fact = operator_ "_restrict(" <> ppRestr fact <>
             // operator_ ")"` (Theory/Model/Rule.hs#ppRestr') with
@@ -288,7 +308,7 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
         // formula wraps at the HughesPJ default width — and the same string
         // feeds BOTH the `process="..."` attribute and the SAPIC-derived rule
         // names, which the `filter isAlpha` of `stripNonAlphanumerical`
-        // (Sapic/Facts.hs) leaves unaffected by the break.
+        // (Sapic/Facts.hs#stripNonAlphanumerical) leaves unaffected by the break.
         ProcessCombinator::Cond(f) => {
             format!(
                 "if {}",

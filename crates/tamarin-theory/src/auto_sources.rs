@@ -27,6 +27,7 @@ use crate::fact::{
 use crate::formula::{BLNTerm, LNFormula};
 use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
 use crate::theory::{OpenProtoRule, TheoryItem};
+use crate::tools::rule_variants::unfold_closed_rule;
 use tamarin_term::lterm::{rename_avoiding, BVar, LNTerm, LSort};
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::positions::{at_pos, deepest_prot_subterm, find_pos};
@@ -601,118 +602,10 @@ fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
     o.rule.add_action(action);
 }
 
-/// HS `unfoldRuleVariants` on ONE closed rule (lib/theory/src/Rule.hs),
-/// non-trivial case: for each substitution i (1-based) of the rule's variant
-/// disjunction, `freshToFreeAvoiding` it against the AC rule, apply it to
-/// (premises, conclusions, actions, new vars), and emit a rule named
-/// `<name>___VARIANT_<i>` (a FreshRule keeps its name) whose own variants
-/// are `Disj [emptySubstVFresh]`, carrying over the original's attributes
-/// and (pre-computed) loop breakers verbatim.
-///
-/// RS mapping: the AC rule is `abstracted_rule` when present (else the E
-/// body IS the AC body), and the disjunction is `variant_substs` — with an
-/// unpopulated empty list standing for HS's ever-present trivial
-/// `Disj [emptySubstVFresh]` (`trueDisj`, RuleVariants.hs), so a body-divergent rule with no residual substs still unfolds
-/// into exactly one `___VARIANT_1` rule (the reproducing case: partial
-/// evaluation leaves `rule ≠ abstracted_rule` with a collapsed
-/// disjunction).
-fn unfold_one_rule_variants(o: &OpenProtoRule) -> Vec<OpenProtoRule> {
-    use tamarin_term::lterm::{HasFrees, LVar};
-    use tamarin_term::subst_vfresh::LNSubstVFresh;
-    let ac: &crate::rule::ProtoRuleE = o.abstracted_rule.as_ref().unwrap_or(&o.rule);
-    let trivial_disj = [LNSubstVFresh::empty()];
-    let substs: &[LNSubstVFresh] = if o.variant_substs.is_empty() {
-        &trivial_disj
-    } else {
-        &o.variant_substs
-    };
-    // `freshToFreeAvoiding subst ruAC` allocates above `avoid ruAC`; HS's
-    // `HasFrees (Rule ProtoRuleACInfo)` folds the rule INFO first, whose
-    // variant-disjunction DOMAIN keys are frees (keys-only,
-    // Theory/Model/Rule.hs; SubstVFresh.hs), so
-    // they participate in the bound alongside the body.
-    let mut max_idx: Option<u64> = None;
-    {
-        let mut see = |v: &LVar| {
-            max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
-        };
-        for s in substs {
-            for (k, _) in s.iter() {
-                see(k);
-            }
-        }
-        ac.for_each_free(&mut see);
-    }
-    let seed = max_idx.map(|m| m + 1).unwrap_or(0);
-    substs
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            // Each subst gets its own `evalFreshAvoiding` scope (HS maps
-            // `freshToFreeAvoiding` per subst against the same `ruAC`).
-            let mut counter = seed;
-            let sigma = s.fresh_to_free_avoiding(|n| {
-                let b = counter;
-                counter += n;
-                b
-            });
-            let mut ru = crate::rule::apply_subst_rule(&sigma, ac);
-            // `rName i` (lib/theory/src/Rule.hs): FreshRule keeps its
-            // name; StandRule gains the 1-based `___VARIANT_<i>` suffix.
-            ru.info.name = match ru.info.name {
-                crate::rule::ProtoRuleName::Fresh => crate::rule::ProtoRuleName::Fresh,
-                crate::rule::ProtoRuleName::Stand(name) => crate::rule::ProtoRuleName::Stand(
-                    tamarin_term::intern::intern_str(&format!("{}___VARIANT_{}", name, i + 1)),
-                ),
-            };
-            OpenProtoRule {
-                rule: ru,
-                variant_substs: vec![LNSubstVFresh::empty()],
-                abstracted_rule: None,
-                loop_breakers: o.loop_breakers.clone(),
-                // `toClosedProtoRule` keeps the ORIGINAL rule as every
-                // variant's `cprRuleE` (lib/theory/src/Rule.hs) — the
-                // half `getProtoRuleEs` dedups back to one copy.
-                rule_e: Some(Box::new(o.rule_e().clone())),
-                // `unfoldRuleVariants` runs on a rule whose variants Maude
-                // computed, which `closeProtoRule` reaches only for a rule
-                // that declared none (lib/theory/src/Rule.hs).
-                rule_ac: Vec::new(),
-            }
-        })
-        .collect()
-}
-
-/// Re-express one closed AC half as the split open representation consumed by
-/// [`unfold_one_rule_variants`]. This also covers source-declared
-/// `variants (modulo AC)` blocks, whose bodies do not live in
-/// `abstracted_rule`/`variant_substs` on their parent.
-fn closed_rule_as_open(parent: &OpenProtoRule, ac: &crate::rule::ProtoRuleAC) -> OpenProtoRule {
-    let rule = crate::rule::Rule {
-        info: crate::rule::ProtoRuleEInfo {
-            name: ac.info.name,
-            attributes: ac.info.attributes.clone(),
-            restrictions: parent.rule.info.restrictions.clone(),
-        },
-        premises: ac.premises.clone(),
-        conclusions: ac.conclusions.clone(),
-        actions: ac.actions.clone(),
-        new_vars: ac.new_vars.clone(),
-    };
-    OpenProtoRule {
-        rule,
-        variant_substs: ac.info.variants.clone(),
-        abstracted_rule: None,
-        loop_breakers: ac.info.loop_breakers.clone(),
-        rule_e: Some(Box::new(parent.rule_e().clone())),
-        rule_ac: Vec::new(),
-    }
-}
-
 /// HS `unfoldRules items` (CloseRule.hs) over the theory's item
 /// list: replace every closed rule whose AC variant is non-trivial
 /// (`isTrivialProtoVariantAC`, Theory/Model/Rule.hs) by its
-/// per-variant rules ([`unfold_one_rule_variants`]); trivial-variant rules
+/// per-variant rules ([`unfold_closed_rule`]); trivial-variant rules
 /// stay unchanged, so the pass is the identity on a theory whose variants are
 /// all trivial.
 ///
@@ -743,15 +636,10 @@ fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
             elab_repl.push(None);
             continue;
         }
-        let mut unfolded = Vec::new();
-        for ac in &closed {
-            let open = closed_rule_as_open(o, ac);
-            if crate::rule::is_trivial_proto_variant_ac(ac, o.rule_e()) {
-                unfolded.push(open);
-            } else {
-                unfolded.extend(unfold_one_rule_variants(&open));
-            }
-        }
+        let unfolded = closed
+            .iter()
+            .flat_map(|ac| unfold_closed_rule(o, ac))
+            .collect();
         elab_repl.push(Some(unfolded));
     }
     if elab_repl.iter().all(|r| r.is_none()) {
@@ -776,7 +664,7 @@ fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
 }
 
 /// Apply `--auto-sources` (HS `closeTheoryWithMaude`'s autosources branch,
-/// CloseRule.hs).  When the raw sources contain
+/// CloseRule.hs#closeTheoryWithMaude). When the raw sources contain
 /// partial deconstructions, unfold every rule into its AC-variant rules
 /// ([`unfold_rule_variants`]), annotate them with AUTO_* actions and append
 /// the `AUTO_typing` sources lemma.  `ndc_cache` is the theory's
@@ -883,8 +771,9 @@ pub fn apply_auto_sources(
     // rule cache RECOMPUTED over the unfolded rules.  When nothing unfolded,
     // `itemsModAC == items` and the cache has the same value — reuse the
     // original context's chains (and its saturation trace count).
-    let (rules, gen_chains) = if unfolded {
-        let rules: Vec<OpenProtoRule> = elaborated.rules().cloned().collect();
+    let named_rules = auto_source_rule_names(&elaborated.rules().cloned().collect::<Vec<_>>());
+    let (rules, gen_chains) = if unfolded || named_rules != rules {
+        let rules = named_rules;
         let ctx_mod = ProofContext::try_with_options(
             maude.clone(),
             rules.clone(),
@@ -912,10 +801,16 @@ pub fn apply_auto_sources(
     // reproduces that order.
     for grp in &result.annotation_groups {
         for (rule_name, action) in grp.iter().rev() {
-            for item in elaborated.items.iter_mut() {
-                if let TheoryItem::Rule(o) = item
-                    && o.name() == rule_name
-                {
+            for (o, named) in elaborated
+                .items
+                .iter_mut()
+                .filter_map(|item| match item {
+                    TheoryItem::Rule(rule) => Some(rule),
+                    _ => None,
+                })
+                .zip(&rules)
+            {
+                if named.name() == rule_name {
                     add_action_to_open_rule(o, action.clone());
                 }
             }
@@ -931,6 +826,53 @@ pub fn apply_auto_sources(
         )));
     }
     Ok(true)
+}
+
+/// Names used only while building the auto-sources cache and routing actions.
+/// Public E/AC names stay unchanged; identical repeated rules share a label.
+fn auto_source_rule_names(rules: &[OpenProtoRule]) -> Vec<OpenProtoRule> {
+    use crate::rule::ProtoRuleName;
+    use std::collections::BTreeSet;
+    let reserved: BTreeSet<_> = rules
+        .iter()
+        .flat_map(|r| [r.rule.info.name, r.rule_e().info.name])
+        .collect();
+    let mut used = BTreeSet::new();
+    let mut assigned: Vec<(&OpenProtoRule, ProtoRuleName)> = Vec::new();
+    rules
+        .iter()
+        .map(|rule| {
+            let name =
+                if let Some((_, name)) = assigned.iter().find(|(original, _)| *original == rule) {
+                    *name
+                } else {
+                    let old = rule.rule.info.name;
+                    let name = if used.contains(&old) {
+                        (1..)
+                            .map(|i| {
+                                ProtoRuleName::Stand(tamarin_term::intern::intern_str(&format!(
+                                    "{}___AUTO_{i}",
+                                    rule.name()
+                                )))
+                            })
+                            .find(|name| !reserved.contains(name) && !used.contains(name))
+                            .unwrap()
+                    } else {
+                        old
+                    };
+                    used.insert(name);
+                    assigned.push((rule, name));
+                    name
+                };
+            let mut named = rule.clone();
+            if name != rule.rule.info.name {
+                // Changing only the executable half preserves the original family.
+                named.rule_e = Some(Box::new(rule.rule_e().clone()));
+                named.rule.info.name = name;
+            }
+            named
+        })
+        .collect()
 }
 
 #[cfg(test)]

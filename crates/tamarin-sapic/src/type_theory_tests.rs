@@ -49,6 +49,21 @@ fn typed(input: &str) -> Theory {
     thy
 }
 
+#[test]
+fn mixed_typed_msr_binder_does_not_become_a_definition_parameter() {
+    let thy = typed(
+        "theory OpenMsrTyped begin
+         let P = [F(x), G(x:a)] --> []; out(x)
+         process: P
+         end",
+    );
+    let def = thy.process_defs().next().unwrap();
+    assert_eq!(def.vars, Some(vec![]));
+    let exported = render(&thy);
+    let reparsed = build(&exported);
+    assert_eq!(reparsed.process_defs().next().unwrap().vars, Some(vec![]));
+}
+
 /// `examples/sapic/fast/basic/typing4.spthy`.
 const TYPING4: &str = r#"theory Typing
 begin
@@ -382,7 +397,7 @@ end";
 /// (`pvars = S.toList (varsProc pr) \\ accBindings pr`, Sapic/Typing.hs,
 /// over `varsProc = foldMap Data.Set.singleton`,
 /// Theory/Sapic/Process.hs), and `-m=spthytyped` prints each formal
-/// with `show :: SapicLVar` (TheoryObject.hs,
+/// with `show :: SapicLVar` (TheoryObject.hs#prettyProcessDef,
 /// Theory/Sapic/Term.hs).  A timepoint operand of `<` is read by
 /// `sapicnodevar` and so carries `node`
 /// (Theory/Sapic/Term.hs#defaultSapicNodeType). Current upstream also

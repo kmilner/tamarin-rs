@@ -7,7 +7,8 @@
 //! from `tamarin_theory::sapic` with extra fields used by the various
 //! analysis passes (lock variables, secret-channel variables, etc.).
 
-use tamarin_term::lterm::LNTerm;
+use std::collections::BTreeSet;
+use tamarin_term::lterm::{frees, LNTerm, LVar};
 use tamarin_theory::sapic::{
     map_process, GoodAnnotation, Process, ProcessParsedAnnotation, SapicLVar, SapicTerm,
 };
@@ -16,6 +17,40 @@ use tamarin_theory::sapic::{
 /// rightmost wins (matches Haskell `instance Semigroup AnVar`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AnVar<V>(pub V);
+
+/// A strict evaluation step. Equation alternatives pass their reduct to the
+/// following user-pattern step; their local variables never enter state.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LetStage {
+    pub input: LNTerm,
+    pub alternatives: Vec<(LNTerm, Option<LNTerm>)>,
+    pub bound: BTreeSet<LVar>,
+}
+
+pub(crate) fn let_stage_position(p: &[i64], i: usize) -> Vec<i64> {
+    let mut pos = p.to_vec();
+    if i == 0 {
+        pos.push(1);
+    } else {
+        pos.extend([0, i as i64]);
+    }
+    pos
+}
+
+pub(crate) fn translation_vars(p: &AnnotatedProcess<LVar>) -> Vec<LVar> {
+    let mut vars: Vec<_> = tamarin_theory::sapic_scope::vars_proc_with_annotations(p)
+        .into_iter()
+        .map(|v| v.var)
+        .collect();
+    tamarin_theory::sapic::for_each_process(p, &mut |node| {
+        for stage in &node.annotation().let_plan {
+            vars.extend(frees(&stage.input));
+            vars.extend(frees(&stage.alternatives));
+            vars.extend(stage.bound.iter().copied());
+        }
+    });
+    vars
+}
 
 /// Annotations attached to a process during translation.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,8 +65,8 @@ pub(crate) struct ProcessAnnotation<V> {
     pub unlock: Option<AnVar<V>>,
     /// Variable annotating a channel known to be secret.
     pub secret_channel: Option<AnVar<V>>,
-    /// Two terms used to model a `let`-binding with a destructor RHS.
-    pub destructor_equation: Option<(LNTerm, LNTerm)>,
+    /// Ordered stages sharing the source success and failure continuations.
+    pub let_plan: Vec<LetStage>,
     /// Whether this process has a non-zero else branch (relevant for
     /// `let` translation).
     pub else_branch: bool,
@@ -56,7 +91,7 @@ impl<V> Default for ProcessAnnotation<V> {
             lock: None,
             unlock: None,
             secret_channel: None,
-            destructor_equation: None,
+            let_plan: Vec::new(),
             else_branch: true,
             pure_state: false,
             state_channel: None,
@@ -88,20 +123,6 @@ impl<V> ProcessAnnotation<V> {
             ..Default::default()
         }
     }
-    pub(crate) fn with_destructor_equation(t1: LNTerm, t2: LNTerm, else_branch: bool) -> Self {
-        Self {
-            destructor_equation: Some((t1, t2)),
-            else_branch,
-            ..Default::default()
-        }
-    }
-    pub(crate) fn with_else_branch(b: bool) -> Self {
-        Self {
-            else_branch: b,
-            ..Default::default()
-        }
-    }
-
     /// Combine two annotations, matching Haskell's
     /// `Semigroup (ProcessAnnotation v)` (sapic/src/Sapic/Annotation.hs).
     ///
@@ -109,7 +130,7 @@ impl<V> ProcessAnnotation<V> {
     /// `state_channel`) are combined via `Maybe`'s `<>`, whose inner `AnVar`
     /// `<>` is right-biased (`(<>) _ b = b`, sapic/src/Sapic/Annotation.hs),
     /// so when both are `Some` the *right* value wins (`other.X.or(self.X)`).
-    /// `destructor_equation`/`is_state_channel` use Haskell `mayMerge`
+    /// `let_plan`/`is_state_channel` use Haskell's left-biased merge
     /// (left-biased on `Just`/`Just`), so they keep the *left* value
     /// (`self.X.or(other.X)`). `pure_state` is OR'ed; `else_branch` is taken
     /// from the right operand.
@@ -119,7 +140,11 @@ impl<V> ProcessAnnotation<V> {
             lock: other.lock.or(self.lock),
             unlock: other.unlock.or(self.unlock),
             secret_channel: other.secret_channel.or(self.secret_channel),
-            destructor_equation: self.destructor_equation.or(other.destructor_equation),
+            let_plan: if self.let_plan.is_empty() {
+                other.let_plan
+            } else {
+                self.let_plan
+            },
             else_branch: other.else_branch,
             pure_state: self.pure_state || other.pure_state,
             state_channel: other.state_channel.or(self.state_channel),

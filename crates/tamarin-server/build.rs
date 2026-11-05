@@ -82,18 +82,6 @@ fn main() {
         assets.insert(format!("{prefix}/{name}"), path);
     }
 
-    // Include the same CSS correction as the on-disk override route.
-    let patch = Path::new("src/handlers/lemma_instructions.css");
-    println!("cargo:rerun-if-changed={}", patch.display());
-    let instructions = fs::read(patch).expect("lemma CSS");
-    let css = assets.get_mut("css/tamarin-prover-ui.css").expect("UI CSS");
-    let mut bytes = fs::read(&css).expect("read UI CSS");
-    if !bytes.ends_with(&instructions) {
-        bytes.extend_from_slice(&instructions);
-    }
-    *css = out.join("tamarin-prover-ui.css");
-    fs::write(&css, bytes).expect("write patched UI CSS");
-
     let mut generated = String::from("const EMBEDDED_ASSETS: &[(&str, &[u8], &str)] = &[\n");
     for (name, path) in assets {
         let bytes = fs::read(&path).expect("read asset");

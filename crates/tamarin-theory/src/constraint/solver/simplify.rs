@@ -49,14 +49,49 @@ const SIMPLIFY_PASSES: &[Pass] = &[
     Pass::Fallible(solve_unique_actions_pass_fan_out),
     Pass::Fallible(reduce_formulas_pass),
     Pass::Fallible(eval_formula_atoms_pass),
-    Pass::Fallible(insert_implied_formulas_pass),
     Pass::Linear(enforce_fresh_ordering_pass),
-    Pass::Linear(propagate_subterm_obvious),
+    Pass::Fallible(propagate_subterm_obvious),
     Pass::Fallible(simp_injective_fact_eq_mon_pass),
+    Pass::Fallible(merge_last_injective_fact_nodes),
+    Pass::Fallible(insert_implied_formulas_pass),
     Pass::Linear(dedupe_formulas_pass),
     Pass::Linear(drop_trivially_true_formulas_pass),
     Pass::Linear(normalise_less_atoms_pass),
 ];
+
+/// Upstream 7dbad334: interfering nodes at the end of an injective fact's
+/// lifetime must denote the same final event, unless strict order forbids it.
+fn merge_last_injective_fact_nodes(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
+    use crate::constraint::solver::contradictions::injective_interference_candidates;
+    use crate::constraint::solver::goals::reachable_set_adj;
+    use tamarin_term::rewriting::Equal;
+    let Some(last) = red.sys.last_atom else {
+        return Ok(SystemOutcome::Linear);
+    };
+    let candidates = injective_interference_candidates(red.ctx, &red.sys, |k| k == last);
+    if candidates.is_empty() {
+        return Ok(SystemOutcome::Linear);
+    }
+    let adj = red.sys.build_always_before_adj();
+    let mut equations = Vec::new();
+    for (_, j, k) in candidates {
+        if reachable_set_adj(adj.map(), &j, false).contains(&k)
+            || reachable_set_adj(adj.map(), &k, false).contains(&j)
+        {
+            red.mark_contradictory();
+            return Ok(SystemOutcome::Contradictory);
+        }
+        let eq = Equal { lhs: j, rhs: k };
+        if !equations.contains(&eq) {
+            equations.push(eq);
+        }
+    }
+    let base = red.sys.clone();
+    let result = red.solve_node_id_eqs(&equations);
+    complete_solve(red, base, result)
+}
 
 /// Post-loop steps shared between `simplify_system` and `simplify_system_fan_out`.
 ///
@@ -150,8 +185,10 @@ fn simplify_system_fan_out_inner_with_passes(
     // HS-faithful (Simplify.hs): no iteration cap — the loop
     // terminates only when a full pass reports `Unchanged`.
     loop {
-        red.changed = ChangeIndicator::Unchanged;
         red.subst_system()?;
+        // Substitution is idempotent and is not one of the upstream pass
+        // changes used to decide whether existential implications are stable.
+        red.changed = ChangeIndicator::Unchanged;
         if let Some(branches) = continue_simplify_iteration(red, passes, 0)? {
             return Ok(branches);
         }
@@ -526,7 +563,18 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::
             change_list.push((fm.clone(), simp));
         }
     }
-    for (fm, simp) in change_list {
+    apply_formula_atom_changes(red, &change_list)
+}
+
+/// Continue the frozen evalFormulaAtoms change list in every equality branch.
+/// Returning immediately on a split defers the remaining changes until after
+/// substSystem, reopening knowledge goals under an intermediate substitution.
+fn apply_formula_atom_changes(
+    red: &mut Reduction,
+    mut changes: &[(crate::guarded::Guarded, crate::guarded::Guarded)],
+) -> Result<SystemOutcome, crate::prove::ProveError> {
+    use crate::guarded::Guarded;
+    while let Some(((fm, simp), rest)) = changes.split_first() {
         // Haskell `evalFormulaAtoms` (Simplify.hs):
         //   case fm of
         //     GDisj disj -> markGoalAsSolved "simplified" (DisjG disj)
@@ -566,8 +614,8 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::
         // vacuous Simplify step downstream where Haskell goes straight to
         // Solve (injectivity_check class).
         red.sys.invalidate_max_var_idx_cache();
-        red.sys.formulas_mut().retain(|f| **f != fm);
-        red.sys.insert_solved_formula(fm);
+        red.sys.formulas_mut().retain(|f| **f != *fm);
+        red.sys.insert_solved_formula(fm.clone());
         // HS-faithful: `evalFormulaAtoms` (Simplify.hs) ALWAYS
         // calls `insertFormula fm'` regardless of whether `fm'` is gtrue,
         // gfalse, or any other shape.  Critical for the empty-Conj
@@ -592,9 +640,24 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::
         // short-circuits the dedup check.  Without parity here we get +1
         // step counts at every checkpoint inside the affected proof subtree.
         red.changed = ChangeIndicator::Changed;
-        match red.insert_formula(simp)? {
-            SystemOutcome::Linear => {}
-            outcome => return Ok(outcome),
+        match red.insert_formula(simp.clone())? {
+            SystemOutcome::Linear => changes = rest,
+            SystemOutcome::Contradictory => return Ok(SystemOutcome::Contradictory),
+            SystemOutcome::Cases(arms) => {
+                let mut completed = Vec::new();
+                for arm in arms {
+                    let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
+                    match apply_formula_atom_changes(&mut branch, rest)? {
+                        SystemOutcome::Linear => completed.push(SystemBranch {
+                            sys: branch.sys,
+                            counter: branch.maude.fresh_counter_peek(),
+                        }),
+                        SystemOutcome::Cases(arms) => completed.extend(arms),
+                        SystemOutcome::Contradictory => {}
+                    }
+                }
+                return Ok(red.finish_system_cases(completed));
+            }
         }
     }
     Ok(SystemOutcome::Linear)
@@ -972,6 +1035,17 @@ fn insert_implied_formulas_pass(
     use crate::guarded::Guarded;
     use tamarin_term::lterm::{LNTerm, LVar};
 
+    fn has_existential(formula: &Guarded) -> bool {
+        match formula {
+            Guarded::Atom(_) => false,
+            Guarded::GGuarded { qua, body, .. } => *qua == Quantifier::Ex || has_existential(body),
+            Guarded::Disj(items) | Guarded::Conj(items) => items.iter().any(has_existential),
+        }
+    }
+    // Temporary duplicate nodes can otherwise repeatedly generate witnesses
+    // for the same existential obligation. Match upstream's stable-pass gate.
+    let stable = red.changed == ChangeIndicator::Unchanged;
+
     // Mirror Haskell `impliedFormulas` (System.hs): `openGuarded gf`
     // returns `Just (All, vs, antecedent, succedent)` for ANY `GGuarded All`
     // formula — including those with empty `vs`.  Such empty-var universals
@@ -1014,6 +1088,7 @@ fn insert_implied_formulas_pass(
         .iter()
         .chain(sorted_lemmas_src.iter())
         .copied()
+        .filter(|formula| stable || !has_existential(formula))
         .filter_map(|f| match f {
             Guarded::GGuarded {
                 qua: Quantifier::All,
@@ -1023,6 +1098,12 @@ fn insert_implied_formulas_pass(
                     .expect("the arm matched a universal GGuarded");
                 Some((xs, new_guards, new_body))
             }
+            // Upstream #958: non-universal safety assumptions (including
+            // false and ground Boolean formulas) still require reduction.
+            // An empty matching prefix emits the formula itself through the
+            // same dedup/insertion path. Existential reuse lemmas are not
+            // assumptions that may be forced into every proof state.
+            _ if crate::guarded::is_safety_formula(f) => Some((Vec::new(), Vec::new(), f.clone())),
             _ => None,
         })
         .collect();
@@ -1070,7 +1151,11 @@ fn insert_implied_formulas_pass(
     node_actions.sort_by_key(|a| a.0);
     let mut sys_actions = unsolved_actions;
     sys_actions.extend(node_actions);
-    if sys_actions.is_empty() {
+    if sys_actions.is_empty()
+        && universals
+            .iter()
+            .all(|(_, guards, _)| guards.iter().any(|a| matches!(a, ProtoAtom::Action(_, _))))
+    {
         return Ok(SystemOutcome::Linear);
     }
 
@@ -3748,7 +3833,14 @@ fn reduce_formulas_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::pro
         .sys
         .formulas
         .iter()
-        .filter(|f| reducible_formula(f))
+        .filter(|f| match f.as_ref() {
+            crate::guarded::Guarded::Disj(items) => !red.sys.goals.iter().any(|(goal, _)| {
+                goal == &crate::constraint::constraints::Goal::Disj(
+                    crate::constraint::constraints::Disj(items.to_vec()),
+                )
+            }),
+            _ => reducible_formula(f),
+        })
         .map(|f| f.as_ref().clone())
         .collect();
     to_decompose.sort();
@@ -3757,7 +3849,7 @@ fn reduce_formulas_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::pro
     }
     // Remove them, then re-insert via the decomposition logic.
     red.sys.invalidate_max_var_idx_cache();
-    red.sys.formulas_mut().retain(|f| !reducible_formula(f));
+    red.sys.formulas_mut().retain(|f| !to_decompose.contains(f));
     red.changed = ChangeIndicator::Changed;
     red.insert_formulas(&to_decompose)
 }
@@ -3866,12 +3958,15 @@ fn dedupe_formulas_pass(red: &mut Reduction) {
 /// difference (HS `oldNegSubterms`, SubtermStore.hs; taken
 /// by `simpSplitNegSt`, SubtermStore.hs) decides
 /// which entries this pass (re-)splits.
-fn propagate_subterm_obvious(red: &mut Reduction) {
+fn propagate_subterm_obvious(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::tools::subterm_store::{split_subterm, subterm_step, SubtermSplit};
-    use tamarin_term::lterm::{is_msg_var, sort_of_lnterm, LSort};
-    let mut changed = ChangeIndicator::Unchanged;
+    use tamarin_term::lterm::{sort_of_lnterm, LSort};
+    let previous_store = red.sys.subterm_store.clone();
+    let mut changed_goals = false;
     if red.sys.subterm_store.contradictory {
-        return;
+        return Ok(SystemOutcome::Linear);
     }
     let reducible = red.ctx.maude.maude_sig().reducible_fun_syms_fast.clone();
 
@@ -3932,8 +4027,8 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
     //   - recursive splitSubterm on each changed `¬(s ⊏ t)`;
     //   - `TrueD ∈ splits` ⇒ isContradictory;
     //   - `EqualD (x,y)` ⇒ emit `¬(x = y)`;
-    //   - `NatSubtermD (s,t)` with isNatSubterm ⇒ flip into posSubterms
-    //     as `(t, s %+ 1)`;
+    //   - `NatSubtermD (s,t)` with natural s ⇒ flip into posSubterms
+    //     as `(t, s %+ 1)`; message-sorted s stays deferred (#958);
     //   - SubD/NatD leaves union back into negSubterms;
     //   - changed entries whose split is empty are already-false ⇒
     //     removed from negSubterms;
@@ -3967,63 +4062,51 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
         }
         if splits_all.iter().any(|x| matches!(x, SubtermSplit::TrueD)) {
             contradictory = true;
-            changed = ChangeIndicator::Changed;
         }
         // eqFormulas — ¬(x = y) for each EqualD.
         for x in &splits_all {
             if let SubtermSplit::EqualD(l, r) = x {
-                let prev = new_formulas.len();
                 emit_neg_eq(l.clone(), r.clone(), &mut new_formulas);
-                if new_formulas.len() > prev {
-                    changed = ChangeIndicator::Changed;
-                }
             }
         }
         // acFormulas — `∀ newVar. smallPlus = big ⇒ ⊥` for each
         // ACNewVarD.
         for x in &splits_all {
             if let SubtermSplit::AcNewVarD(small_plus, big, new_var) = x {
-                let prev = new_formulas.len();
                 emit_ac_neg(small_plus, big, new_var, &mut new_formulas);
-                if new_formulas.len() > prev {
-                    changed = ChangeIndicator::Changed;
-                }
             }
         }
-        // flippedNatSubterms — `(t, s %+ 1)` for NatSubtermD with
-        // isNatSubterm, unioned into posSubterms.
+        // Upstream #958: flip a negative natural order only when its
+        // smaller operand is already natural, not an unconstrained message.
         for x in &splits_all {
-            if let SubtermSplit::NatSubtermD(ns, nt) = x {
-                let s_is_nat_or_msg = matches!(sort_of_lnterm(ns), LSort::Nat) || is_msg_var(ns);
-                let t_is_nat = matches!(sort_of_lnterm(nt), LSort::Nat);
-                if s_is_nat_or_msg && t_is_nat {
-                    use tamarin_term::function_symbols::{nat_one_sym, AcSym};
-                    use tamarin_term::term::{f_app_ac, f_app_no_eq};
-                    let one_term: tamarin_term::lterm::LNTerm = f_app_no_eq(nat_one_sym(), vec![]);
-                    let s_plus_one = f_app_ac(AcSym::NatPlus, vec![ns.clone(), one_term]);
-                    let exists = red
+            if let SubtermSplit::NatSubtermD(ns, nt) = x
+                && sort_of_lnterm(ns) == LSort::Nat
+            {
+                use tamarin_term::function_symbols::{nat_one_sym, AcSym};
+                use tamarin_term::term::{f_app_ac, f_app_no_eq};
+                let one_term: tamarin_term::lterm::LNTerm = f_app_no_eq(nat_one_sym(), vec![]);
+                let s_plus_one = f_app_ac(AcSym::NatPlus, vec![ns.clone(), one_term]);
+                let exists = red
+                    .sys
+                    .subterm_store
+                    .subterms
+                    .iter()
+                    .any(|c| c.small == *nt && c.big == s_plus_one)
+                    || red
                         .sys
                         .subterm_store
-                        .subterms
+                        .solved_subterms
                         .iter()
-                        .any(|c| c.small == *nt && c.big == s_plus_one)
-                        || red
-                            .sys
-                            .subterm_store
-                            .solved_subterms
-                            .iter()
-                            .any(|c| c.small == *nt && c.big == s_plus_one);
-                    if !exists {
-                        red.sys.invalidate_max_var_idx_cache();
-                        red.sys.subterm_store_mut().subterms.push(
-                            crate::tools::subterm_store::SubtermConstraint {
-                                small: nt.clone(),
-                                big: s_plus_one,
-                                propagated: false,
-                            },
-                        );
-                        changed = ChangeIndicator::Changed;
-                    }
+                        .any(|c| c.small == *nt && c.big == s_plus_one);
+                if !exists {
+                    red.sys.invalidate_max_var_idx_cache();
+                    red.sys.subterm_store_mut().subterms.push(
+                        crate::tools::subterm_store::SubtermConstraint {
+                            small: nt.clone(),
+                            big: s_plus_one,
+                            propagated: false,
+                        },
+                    );
                 }
             }
         }
@@ -4031,9 +4114,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
         for x in &splits_all {
             if let SubtermSplit::SubtermD(s, t) | SubtermSplit::NatSubtermD(s, t) = x {
                 red.sys.invalidate_max_var_idx_cache();
-                if red.sys.subterm_store_mut().add_neg(s.clone(), t.clone()) {
-                    changed = ChangeIndicator::Changed;
-                }
+                red.sys.subterm_store_mut().add_neg(s.clone(), t.clone());
             }
         }
         // negSubterms \ alreadyFalse.
@@ -4041,7 +4122,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
             if let Ok(pos) = red.sys.subterm_store.neg_subterms.binary_search(p) {
                 red.sys.invalidate_max_var_idx_cache();
                 red.sys.subterm_store_mut().neg_subterms.remove_at(pos);
-                changed = ChangeIndicator::Changed;
             }
         }
         // oldNegSubterms := original negSubterms.  This is
@@ -4093,11 +4173,9 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
                 // goal), never by the trivially-true simp path.  Moving
                 // it to solved_subterms here rendered a spurious
                 // `Solved Subterms: 1. …` section HS doesn't show.
-                changed = ChangeIndicator::Changed;
             }
             Some(ref entries) if entries.is_empty() => {
                 contradictory = true;
-                changed = ChangeIndicator::Changed;
                 subterm_goals.push(crate::constraint::constraints::Goal::Subterm((
                     c.small.clone(),
                     c.big.clone(),
@@ -4137,7 +4215,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
                         let f = crate::guarded::Guarded::Atom(atom);
                         if !new_formulas.contains(&f) {
                             new_formulas.push(f);
-                            changed = ChangeIndicator::Changed;
                         }
                     }
                 }
@@ -4174,16 +4251,10 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
             for (ps, pr) in &pos {
                 if nr == pr {
                     // emit ¬(ns = ps)
-                    let prev = new_formulas.len();
                     emit_neg_eq(ns.clone(), ps.clone(), &mut new_formulas);
-                    if new_formulas.len() > prev {
-                        changed = ChangeIndicator::Changed;
-                    }
                     // negSubterms ∪ {(ns, ps)}.
                     red.sys.invalidate_max_var_idx_cache();
-                    if red.sys.subterm_store_mut().add_neg(ns.clone(), ps.clone()) {
-                        changed = ChangeIndicator::Changed;
-                    }
+                    red.sys.subterm_store_mut().add_neg(ns.clone(), ps.clone());
                 }
             }
         }
@@ -4202,7 +4273,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
         && crate::tools::subterm_store::has_subterm_cycle(&reducible, &red.sys.subterm_store)
     {
         contradictory = true;
-        changed = ChangeIndicator::Changed;
     }
 
     // -------------------------------------------------------------
@@ -4227,7 +4297,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
         match nat_subterm_equalities(&pos_pairs) {
             None => {
                 contradictory = true;
-                changed = ChangeIndicator::Changed;
             }
             Some(eqs) => {
                 for (l, r) in eqs {
@@ -4235,7 +4304,6 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
                     let f = crate::guarded::Guarded::Atom(atom);
                     if !new_formulas.contains(&f) {
                         new_formulas.push(f);
-                        changed = ChangeIndicator::Changed;
                     }
                 }
             }
@@ -4273,7 +4341,7 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
             .cloned()
             .collect();
         if !to_remove.is_empty() || !to_add.is_empty() {
-            changed = ChangeIndicator::Changed;
+            changed_goals = true;
         }
         for g in &to_remove {
             red.sys.invalidate_max_var_idx_cache();
@@ -4287,26 +4355,38 @@ fn propagate_subterm_obvious(red: &mut Reduction) {
     if contradictory {
         red.sys.subterm_store_mut().contradictory = true;
     }
-    // Push emitted formulas directly to `sys.formulas` (NOT via
-    // `insert_formula`, which routes negated-atom universals through
-    // the `Subterm` arm of `insert_atom`'s caller — that path pushes
-    // the formula into `solved_formulas` as well, after which a
-    // subsequent `reduce_formulas_pass` round strips it back out of
-    // `formulas` via the solved-dedup short-circuit in
-    // `insert_formula`).  HS's `simpSubterms` (Simplify.hs)
-    // funnels emitted formulas through `insertFormula` only ONCE per
-    // simplify iteration and relies on the negSubterms set surviving
-    // in `_negSubterms`; we mirror the same single-pass placement by
-    // keeping the formula in `sys.formulas` only.
-    for f in new_formulas {
-        if red.sys.insert_formula(f) {
-            red.changed = ChangeIndicator::Changed;
-            changed = ChangeIndicator::Changed;
-        }
-    }
-    if matches!(changed, ChangeIndicator::Changed) {
+    // Match simpSubterms: compare the resulting constraints, ignoring the
+    // old-negative bookkeeping and Rust's propagation markers. Intermediate
+    // removal/reinsertion of an already-false negative is not a change.
+    let same_pairs = |a: &[crate::tools::subterm_store::SubtermConstraint],
+                      b: &[crate::tools::subterm_store::SubtermConstraint]| {
+        a.iter()
+            .map(|c| (&c.small, &c.big))
+            .collect::<std::collections::BTreeSet<_>>()
+            == b.iter()
+                .map(|c| (&c.small, &c.big))
+                .collect::<std::collections::BTreeSet<_>>()
+    };
+    let store = &red.sys.subterm_store;
+    let changed_store = store.contradictory != previous_store.contradictory
+        || store.neg_subterms != previous_store.neg_subterms
+        || !same_pairs(&store.subterms, &previous_store.subterms)
+        || !same_pairs(&store.solved_subterms, &previous_store.solved_subterms);
+    let changed_formulas = new_formulas.iter().any(|f| {
+        !red.sys
+            .formulas
+            .iter()
+            .chain(red.sys.solved_formulas.iter())
+            .any(|known| known.as_ref() == f)
+    });
+    if changed_store || changed_goals || changed_formulas {
         red.changed = ChangeIndicator::Changed;
     }
+    // HS simpSubterms inserts these immediately, in derivation order. Merely
+    // storing them until reduceFormulas runs again delays equality solving
+    // past other passes, changing goal ages (and potentially goal ranking).
+    // Equality insertion may branch, so preserve every branch and its counter.
+    red.insert_formulas(&new_formulas)
 }
 
 /// `natSubtermEqualities` — UTVPI-based cycle detection and equality
@@ -4358,9 +4438,7 @@ fn nat_subterm_equalities(
     relation: &[(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)],
 ) -> Option<Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)>> {
     use tamarin_term::function_symbols::{nat_one_sym, AcSym};
-    use tamarin_term::lterm::{
-        flattened_ac_terms, get_var, is_msg_var, sort_of_lnterm, LNTerm, LSort, LVar,
-    };
+    use tamarin_term::lterm::{flattened_ac_terms, get_var, LNTerm, LSort, LVar};
     use tamarin_term::term::{f_app_ac, f_app_no_eq, Term};
 
     // ---- helpers ----------------------------------------------------------
@@ -4368,12 +4446,6 @@ fn nat_subterm_equalities(
     // `fAppNatOne = fAppNoEq natOneSym []` — the surface form of `%1`.
     fn nat_one_term() -> LNTerm {
         f_app_no_eq(nat_one_sym(), vec![])
-    }
-
-    // `isNatSubterm (small, big) = (Nat small || msgVar small) && Nat big`
-    // (SubtermStore.hs).
-    fn is_nat_subterm(s: &LNTerm, t: &LNTerm) -> bool {
-        (sort_of_lnterm(s) == LSort::Nat || is_msg_var(s)) && sort_of_lnterm(t) == LSort::Nat
     }
 
     // Vertex = (Bool sign, LVar var).  We use `(bool, LVar)` directly.
@@ -4388,14 +4460,20 @@ fn nat_subterm_equalities(
     // Returns a list of `((from, to), weight)`.
     fn format_edge(st: &(LNTerm, LNTerm)) -> Vec<((Vertex, Vertex), i64)> {
         let (a, b) = st;
-        if !is_nat_subterm(a, b) {
-            return Vec::new();
-        }
         let one = nat_one_term();
         // `flattened_ac_terms` borrows out of `a`/`b`, so the summands are
         // inspected in place — no per-summand clone.
         let l_flat: Vec<&LNTerm> = flattened_ac_terms(AcSym::NatPlus, a);
         let r_flat: Vec<&LNTerm> = flattened_ac_terms(AcSym::NatPlus, b);
+        // Upstream #958: do not silently discard non-natural summands or
+        // encode message variables as natural-number ordering vertices.
+        if !l_flat
+            .iter()
+            .chain(&r_flat)
+            .all(|t| **t == one || matches!(get_var(t), Some(v) if v.sort == LSort::Nat))
+        {
+            return Vec::new();
+        }
         let l_vars: Vec<LVar> = l_flat
             .iter()
             .copied()

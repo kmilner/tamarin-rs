@@ -24,6 +24,21 @@ pub const SKIP_ELAB: &str = "elaboration rejects this upstream example";
 /// review instead of being hidden by an aggregate coverage percentage.
 pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
     ("features/predicates/functionappl.spthy", SKIP_PARSE),
+    // This diff-only theory has side-specific lemma attributes but no
+    // diff(...) term, so the corpus loader uses the trace parser.
+    ("regression/diff/last.spthy", SKIP_PARSE),
+    // Intentional rejection fixtures introduced by the updated upstream pin.
+    (
+        "regression/negative/issue905-undeclared-em.spthy",
+        SKIP_PARSE,
+    ),
+    ("regression/negative/issue906-end-prefix.spthy", SKIP_PARSE),
+    ("regression/negative/issue907-variable-lhs.spthy", SKIP_ELAB),
+    (
+        "regression/negative/manual-variant-embedded-restriction.spthy",
+        SKIP_PARSE,
+    ),
+    ("regression/negative/missing-end.spthy", SKIP_PARSE),
     ("regression/trace/issue834-2.spthy", SKIP_PARSE),
     ("regression/trace/issue834-3.spthy", SKIP_PARSE),
     (
@@ -45,6 +60,11 @@ pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
     ),
     (
         "sapic/not-working/envelope/envelope_simpler.spthy",
+        SKIP_PARSE,
+    ),
+    // Both parsers reject the repeated TTPID input binder at line 193.
+    (
+        "sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy",
         SKIP_PARSE,
     ),
     ("testParser/Yubikey.spthy", SKIP_PARSE),

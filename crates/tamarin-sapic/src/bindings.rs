@@ -7,14 +7,17 @@
 //! (via [`captured_variables`]) the variables that are bound twice on a single
 //! path through the process — i.e. captured by a binder lower in the tree.
 
+use std::collections::BTreeMap;
+#[cfg(test)]
 use std::collections::BTreeSet;
+use tamarin_term::lterm::LVar;
 
-use crate::base_translation::{list_intersect, list_union};
-use tamarin_theory::sapic::{
-    for_each_process, frees_sapic_fact, frees_sapic_term, GoodAnnotation, Process,
-    ProcessCombinator, SapicAction, SapicLVar,
+#[cfg(test)]
+use tamarin_theory::sapic::ProcessCombinator;
+use tamarin_theory::sapic::{for_each_process, GoodAnnotation, Process, SapicLVar};
+pub(crate) use tamarin_theory::sapic_scope::{
+    action_binders as bindings_act, combinator_binders as bindings_comb,
 };
-use tamarin_utils::prelude_ext::nub_on;
 
 /// `bindings`: variables bound *precisely at this point* in `p`.
 pub(crate) fn bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
@@ -22,60 +25,6 @@ pub(crate) fn bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<Sapi
         Process::Null(_) => Vec::new(),
         Process::Comb(c, _, _, _) => bindings_comb(c),
         Process::Action(a, _, _) => bindings_act(a),
-    }
-}
-
-/// `bindingsAct`: variables bound by an action (`new x`, `in(c, t)`, etc.).
-pub(crate) fn bindings_act(a: &SapicAction<SapicLVar>) -> Vec<SapicLVar> {
-    match a {
-        // HS: `(New v) -> [v]` (Bindings.hs).
-        SapicAction::New(v) => vec![v.clone()],
-        // HS: `nub (freesSapicTerm t) \\ S.toList vs` (Bindings.hs).
-        SapicAction::ChIn {
-            msg, match_vars, ..
-        } => nub_difference(frees_sapic_term(msg), match_vars),
-        // HS: `nub (foldMap freesSapicFact l) \\ S.toList mv` (Bindings.hs).
-        // `nub` is applied AFTER concatenating across all premises (not
-        // per-fact), so accumulate first, then nub-and-difference.
-        SapicAction::Msr {
-            prems, match_vars, ..
-        } => {
-            let mut all = Vec::new();
-            for f in prems {
-                all.extend(frees_sapic_fact(f));
-            }
-            nub_difference(all, match_vars)
-        }
-        // HS `bindingsAct _ = []` (Bindings.hs): every other action binds
-        // nothing.  Enumerated (no wildcard) so a new binding-carrying variant
-        // must decide its bound set here.
-        SapicAction::Rep
-        | SapicAction::ChOut { .. }
-        | SapicAction::Insert(..)
-        | SapicAction::Delete(..)
-        | SapicAction::Lock(..)
-        | SapicAction::Unlock(..)
-        | SapicAction::Event(..)
-        | SapicAction::ProcessCall(..) => Vec::new(),
-    }
-}
-
-/// `bindingsComb`: variables bound by a process combinator (`lookup`, `let`).
-pub(crate) fn bindings_comb(c: &ProcessCombinator<SapicLVar>) -> Vec<SapicLVar> {
-    match c {
-        // HS: `(Lookup _ v) -> [v]` (Bindings.hs).
-        ProcessCombinator::Lookup(_, v) => vec![v.clone()],
-        // HS: `nub (freesSapicTerm t1) \\ S.toList mv` (Bindings.hs).
-        ProcessCombinator::Let {
-            left, match_vars, ..
-        } => nub_difference(frees_sapic_term(left), match_vars),
-        // HS `bindingsComb _ = []` (Bindings.hs): no other combinator binds a
-        // variable.  Enumerated (no wildcard) so a new binding-carrying variant
-        // must decide its bound set here.
-        ProcessCombinator::Parallel
-        | ProcessCombinator::Ndc
-        | ProcessCombinator::Cond(_)
-        | ProcessCombinator::CondEq(..) => Vec::new(),
     }
 }
 
@@ -92,48 +41,33 @@ pub(crate) fn acc_bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<
     out
 }
 
-/// `capturedVariablesAt` (Bindings.hs): the variables bound *at this
-/// node* that are *also* bound somewhere below it — i.e. captured by a deeper
-/// binder on the same path:
-///
-/// ```text
-/// capturedVariablesAt (ProcessAction ac _ p)  = bindingsAct ac `intersect` accBindings p
-/// capturedVariablesAt (ProcessComb c _ pl pr) = bindingsComb c `intersect` (accBindings pl `union` accBindings pr)
-/// capturedVariablesAt (ProcessNull _) = []
-/// ```
-fn captured_variables_at<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
-    match p {
-        Process::Null(_) => Vec::new(),
-        // `bindingsAct ac \`intersect\` accBindings body`.
-        Process::Action(a, _, body) => list_intersect(&bindings_act(a), &acc_bindings(body)),
-        // `bindingsComb c \`intersect\` (accBindings pl \`union\` accBindings pr)`.
-        Process::Comb(c, _, pl, pr) => {
-            let below = list_union(&acc_bindings(pl), &acc_bindings(pr));
-            list_intersect(&bindings_comb(c), &below)
+/// Detect rebinding along one scoped path, comparing type-independent identities.
+pub(crate) fn captured_variables<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
+    fn go<A: GoodAnnotation>(
+        p: &Process<A, SapicLVar>,
+        bound: &BTreeMap<LVar, SapicLVar>,
+        out: &mut Vec<SapicLVar>,
+    ) {
+        let vars = bindings(p);
+        let mut next = bound.clone();
+        for v in vars {
+            if let Some(original) = bound.get(&v.var) {
+                out.push(original.clone());
+            }
+            next.entry(v.var).or_insert(v);
+        }
+        match p {
+            Process::Null(_) => {}
+            Process::Action(_, _, rest) => go(rest, &next, out),
+            Process::Comb(_, _, left, right) => {
+                go(left, &next, out);
+                go(right, bound, out);
+            }
         }
     }
-}
-
-/// `capturedVariables = pfoldMap capturedVariablesAt` (Bindings.hs):
-/// run `capturedVariablesAt` at every node and concatenate the results in
-/// `pfoldMap` order.  A variable appearing here is bound twice (captured) on
-/// some path and yields a `WFBoundTwice` warning.
-pub(crate) fn captured_variables<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
-    let mut out = Vec::new();
-    for_each_process(p, &mut |node| out.extend(captured_variables_at(node)));
+    let mut out = vec![];
+    go(p, &BTreeMap::new(), &mut out);
     out
-}
-
-/// HS `nub xs \\ S.toList drop`: keep the first occurrence of each variable
-/// (order-preserving `nub`), then remove members of `drop`. Because the list
-/// is already deduplicated, removing the (single) first occurrence of each
-/// `drop` member is equivalent to filtering all members out, so the result
-/// matches HS `Data.List.(\\)` byte-for-byte while preserving source order.
-fn nub_difference(xs: Vec<SapicLVar>, drop: &BTreeSet<SapicLVar>) -> Vec<SapicLVar> {
-    nub_on(&xs, |v| v.clone())
-        .into_iter()
-        .filter(|v| !drop.contains(v))
-        .collect()
 }
 
 #[cfg(test)]
@@ -152,6 +86,33 @@ mod tests {
         let v = slv("k");
         let act: SapicAction<SapicLVar> = SapicAction::New(v.clone());
         assert_eq!(bindings_act(&act), vec![v]);
+    }
+
+    #[test]
+    fn capture_checks_respect_failure_scope_and_ignore_types() {
+        let ann = ProcessParsedAnnotation::empty;
+        let x = slv("x");
+        let typed = SapicLVar::new(x.var, Some("bitstring".into()));
+        let new_x = || {
+            Process::Action(
+                SapicAction::New(typed.clone()),
+                ann(),
+                Box::new(Process::Null(ann())),
+            )
+        };
+        let branch = |left, right| {
+            Process::Comb(
+                ProcessCombinator::Lookup(var_term(slv("key")), x.clone()),
+                ann(),
+                Box::new(left),
+                Box::new(right),
+            )
+        };
+        assert!(captured_variables(&branch(Process::Null(ann()), new_x())).is_empty());
+        assert_eq!(
+            captured_variables(&branch(new_x(), Process::Null(ann()))),
+            vec![x]
+        );
     }
 
     #[test]

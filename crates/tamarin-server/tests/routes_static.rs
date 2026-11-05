@@ -71,8 +71,7 @@ async fn embedded_gui_serves_page_dependencies_and_cache_validators() {
 }
 
 /// Each `/static/<p>` must serve `data/<p>`.  It must serve the exact bytes
-/// on disk, plus PR #928’s lemma CSS until the submodule includes it. Every page this
-/// crate renders links to the two assets below.
+/// on disk. Every page this crate renders links to the two assets below.
 ///
 /// A missing `data/` is a misconfiguration.  It is not a reason to skip the
 /// test.  The directory belongs to the submodule, whose checkout is validated
@@ -94,15 +93,12 @@ async fn test_static_assets_are_served_from_the_data_dir() {
             "javascript",
         ),
     ] {
-        let mut on_disk = std::fs::read_to_string(data_dir().join(rel)).unwrap_or_else(|e| {
+        let on_disk = std::fs::read_to_string(data_dir().join(rel)).unwrap_or_else(|e| {
             panic!(
                 "read {}: {e} — run ./setup.sh to initialise the submodule",
                 data_dir().join(rel).display()
             )
         });
-        if rel == "css/tamarin-prover-ui.css" {
-            on_disk.push_str(include_str!("../src/handlers/lemma_instructions.css"));
-        }
         let res = s.get(url).await;
         assert_eq!(res.status(), 200, "{url}");
         let ct = content_type(&res);
@@ -111,7 +107,7 @@ async fn test_static_assets_are_served_from_the_data_dir() {
         assert_eq!(
             res.text().await.expect("read"),
             on_disk,
-            "{url} must serve data/{rel} with the upstream CSS fix"
+            "{url} must serve data/{rel} unchanged"
         );
         let cached = s
             .client
@@ -158,11 +154,8 @@ async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
     std::fs::write(data.join("js/ordinary.js"), b"ordinary-data").unwrap();
     std::fs::write(root.join("outside.js"), b"must not be served").unwrap();
 
-    let patched_css = format!(
-        "custom {{ color: blue; }}{}",
-        include_str!("../src/handlers/lemma_instructions.css")
-    );
-    std::fs::write(data.join("css/tamarin-prover-ui.css"), &patched_css).unwrap();
+    let custom_css = "custom { color: blue; }";
+    std::fs::write(data.join("css/tamarin-prover-ui.css"), custom_css).unwrap();
 
     let s = start_server_with_theory_and("issue193.spthy", |cfg| {
         cfg.data_dir = Some(data);
@@ -199,7 +192,7 @@ async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
 
     let css = s.get("/static/css/tamarin-prover-ui.css").await;
     assert_eq!(css.status(), 200);
-    assert_eq!(css.text().await.unwrap(), patched_css);
+    assert_eq!(css.text().await.unwrap(), custom_css);
 
     drop(s);
     std::fs::remove_dir_all(root).unwrap();

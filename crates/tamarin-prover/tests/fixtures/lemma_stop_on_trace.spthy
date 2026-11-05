@@ -1,0 +1,14 @@
+theory LemmaStopOnTrace
+configuration: "--stop-on-trace=NONE"
+begin
+
+rule A: [] --[ Seen('a') ]-> []
+rule B: [] --[ Seen('b') ]-> []
+
+lemma selected [stop-on-trace=seqdfs]:
+  exists-trace "Ex x #i. Seen(x) @ i"
+
+lemma fallback:
+  exists-trace "Ex x #i. Seen(x) @ i"
+
+end

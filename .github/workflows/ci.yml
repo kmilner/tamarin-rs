@@ -137,6 +137,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
+      # The fast corpus includes fixtures supplied by our upstream patches.
+      # Only their sources are needed: CI uses committed oracle hashes and
+      # upstream command assertions, without compiling Haskell.
+      - run: ./setup.sh testing-sources
       - run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
@@ -159,7 +163,9 @@ jobs:
           echo /opt/maude >> "$GITHUB_PATH"
       - run: cargo build --release
       - name: Parity harness regression tests
-        run: python3 scripts/test_web_harness.py
+        run: scripts/test.sh harness
+      - name: Upstream command regressions (all supported scenarios)
+        run: scripts/test.sh regressions
       # Prove-output parity: this branch's binary vs the committed reference
       # of main's outputs (scripts/ci_ref_fast.tsv over
       # scripts/parity_corpus_fast.txt).  On DIFF: reproduce locally with

@@ -42,7 +42,7 @@ use crate::typing::{
 /// HS's first return component.  The second, the environment the whole theory
 /// was typed against, is handed back: no RS caller reads it, but its consumers
 /// are the ProVerif / DeepSec exporters (`loadHeaders` folds over `events`,
-/// Export.hs), which are unported.  `typeTheory`
+/// Export/Sapic.hs), which are unported.  `typeTheory`
 /// (Typing.hs) is this function with the environment discarded.
 ///
 /// Runs on EVERY theory — a process-free (non-SAPIC) theory still gets its
@@ -100,6 +100,89 @@ pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError>
     Ok(env)
 }
 
+/// HS `typeTheoryForExport` (upstream #960): open definitions depend on the
+/// caller's bindings, and pattern formals stand for syntax rather than values.
+/// Export their instantiated bodies, retaining ordinary closed named calls.
+/// MSR translation continues to use [`type_theory_env`] without this rewrite.
+pub fn type_theory_for_export(thy: &mut Theory) -> Result<(), ElabError> {
+    let expanded: BTreeSet<_> = thy
+        .process_defs()
+        .filter(|pd| {
+            pd.vars.as_ref().is_none_or(|params| {
+                let formals: BTreeSet<_> = params.iter().map(|v| v.var).collect();
+                crate::bindings::acc_bindings(&pd.body)
+                    .iter()
+                    .any(|v| formals.contains(&v.var))
+            })
+        })
+        .map(|pd| pd.name.clone())
+        .collect();
+    // Validate declarations and every call argument before removing any:
+    // unused definitions can constrain types, and unused arguments can be bad.
+    type_theory_env(thy)?;
+    let inline = |p: &mut PlainProcess| {
+        *p = inline_export_calls(p.clone(), &expanded, ProcessParsedAnnotation::empty());
+    };
+    thy.items.retain_mut(|item| {
+        match item {
+            TheoryItem::Translation(
+                TranslationElement::Process(p) | TranslationElement::DiffEquivLemma(p),
+            ) => inline(p),
+            TheoryItem::Translation(TranslationElement::EquivLemma(left, right)) => {
+                inline(left);
+                inline(right);
+            }
+            TheoryItem::Translation(TranslationElement::ProcessDef(pd)) => {
+                if expanded.contains(&pd.name) {
+                    return false;
+                }
+                inline(&mut pd.body);
+            }
+            _ => {}
+        }
+        true
+    });
+    Ok(())
+}
+
+fn inline_export_calls(
+    p: PlainProcess,
+    expanded: &BTreeSet<String>,
+    carried: ProcessParsedAnnotation,
+) -> PlainProcess {
+    match p {
+        Process::Action(SapicAction::ProcessCall(name, _), here, rest)
+            if expanded.contains(&name) =>
+        {
+            inline_export_calls(*rest, expanded, carried.append(here))
+        }
+        Process::Action(ac, here, rest) => Process::Action(
+            ac,
+            carried.append(here),
+            Box::new(inline_export_calls(
+                *rest,
+                expanded,
+                ProcessParsedAnnotation::empty(),
+            )),
+        ),
+        Process::Comb(c, here, left, right) => Process::Comb(
+            c,
+            carried.append(here),
+            Box::new(inline_export_calls(
+                *left,
+                expanded,
+                ProcessParsedAnnotation::empty(),
+            )),
+            Box::new(inline_export_calls(
+                *right,
+                expanded,
+                ProcessParsedAnnotation::empty(),
+            )),
+        ),
+        Process::Null(here) => Process::Null(carried.append(here)),
+    }
+}
+
 /// Run `typeAndRenameProcess` on one process against the shared environment.
 fn type_one(env: &mut TypingEnvironment, proc: &PlainProcess) -> Result<PlainProcess, ElabError> {
     type_and_rename_process_in(env, proc).map_err(|e| ElabError {
@@ -110,7 +193,8 @@ fn type_one(env: &mut TypingEnvironment, proc: &PlainProcess) -> Result<PlainPro
 /// `typeAndRenameProcessDef` (Typing.hs):
 ///
 /// ```haskell
-/// let pvars = fromMaybe (S.toList (varsProc pr) List.\\ accBindings pr) p._pVars
+/// let bound = S.fromList $ map toLVar $ accBindings pr
+/// let pvars = fromMaybe (filter ((`S.notMember` bound) . toLVar) $ S.toList (varsProc pr)) p._pVars
 /// let aux_pr = ProcessAction (ChIn Nothing (fAppList (map varTerm pvars)) S.empty) mempty pr
 /// renamedP <- typeAndRenameProcess aux_pr
 /// case renamedP of
@@ -135,13 +219,14 @@ fn type_process_def(
     let pvars: Vec<SapicLVar> = match &declared {
         Some(vs) => vs.clone(),
         None => {
-            // `S.toList (varsProc pr) List.\\ accBindings pr` — the left list
-            // is a dup-free set list, so `\\` (remove ONE occurrence per
-            // right-hand element) equals membership filtering.
-            let acc = crate::bindings::acc_bindings(&pr);
+            // Type annotations constrain types, not binding identities.
+            let bound: BTreeSet<_> = crate::bindings::acc_bindings(&pr)
+                .into_iter()
+                .map(|v| v.var)
+                .collect();
             vars_proc(&pr)
                 .into_iter()
-                .filter(|v| !acc.contains(v))
+                .filter(|v| !bound.contains(&v.var))
                 .collect()
         }
     };

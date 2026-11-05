@@ -65,6 +65,19 @@ fn ground_truth() {
     assert_eq!(r, gtrue());
 }
 
+#[test]
+fn last_atoms_are_not_safety_even_when_closed() {
+    for formula in [
+        "All #i. K('a') @ i ==> last(i)",
+        "All #i. K('a') @ i & last(i) ==> F",
+        "All #i. K('a') @ i ==> not last(i)",
+    ] {
+        let guarded = g(formula).unwrap();
+        assert!(is_closed(&guarded));
+        assert!(!is_safety_formula(&guarded), "{formula}");
+    }
+}
+
 // A guarded fact with the given multiplicity, name and argument count. The
 // tag is whatever `fact_tag_of` gives the parser fact, so a reserved name
 // reaches its own `FactTag` constructor and every other name stays a
@@ -278,6 +291,27 @@ fn satisfied_by_empty_trace_handles_quants() {
         satisfied_by_empty_trace(&atom).is_err(),
         "a quantifier-free atom is not doubly guarded"
     );
+}
+
+#[test]
+fn empty_trace_rejects_equality_only_guards() {
+    // Equality-only guards can have witnesses without any trace actions.
+    // Neither quantifier may be decided by vacuity in this case (#958).
+    let term = crate::formula::lift_free(&tamarin_term::builtin::msg_var("x", 0));
+    for qua in [Quantifier::All, Quantifier::Ex] {
+        let formula = Guarded::GGuarded {
+            qua,
+            vars: Vec::new().into(),
+            guards: vec![Atom::EqE(term.clone(), term.clone())].into(),
+            body: std::sync::Arc::new(gtrue()),
+        };
+        assert!(satisfied_by_empty_trace(&formula).is_err());
+        // Do not short-circuit a Boolean fold before checking every child.
+        let disj = Guarded::Disj(vec![gtrue(), formula.clone()].into());
+        let conj = Guarded::Conj(vec![gfalse(), formula].into());
+        assert!(satisfied_by_empty_trace(&disj).is_err());
+        assert!(satisfied_by_empty_trace(&conj).is_err());
+    }
 }
 
 #[test]
@@ -910,6 +944,12 @@ fn gconj_duplicates_collapse_to_bare_item() {
     assert_eq!(out, a, "gconj must dedupe before the singleton unwrap");
 }
 
+#[test]
+fn gdisj_duplicates_collapse_to_bare_item() {
+    let a = g("last(#i)").unwrap();
+    assert_eq!(gdisj(vec![a.clone(), a.clone()]), a);
+}
+
 /// `gdisj` deduplicates syntactically-equal items.  Same as above,
 /// for disjunction.  Without this dedup, `verify_checksign_test`-class
 /// SplitG variants double up.
@@ -1432,9 +1472,8 @@ fn rejects_a_universal_without_a_toplevel_implication() {
     );
 }
 
-/// HS `convert polarity (Conn Iff f1 f2)` is `gconj` of the two implications
-/// (Guarded.hs), which at the entry polarity is what the written
-/// conjunction of them converts to.
+/// At positive polarity, equivalence conjoins its two implications
+/// (Guarded.hs).
 #[test]
 fn treats_iff_as_two_implications() {
     let iff = g("(Ex x #i. A(x) @ #i) <=> (Ex y #j. B(y) @ #j)").expect("both sides are guarded");
@@ -1446,6 +1485,36 @@ fn treats_iff_as_two_implications() {
         matches!(&iff, Guarded::Conj(items) if items.len() == 2),
         "the two implications are conjoined, got {iff:?}"
     );
+}
+
+#[test]
+fn negated_equivalence_disjoins_negated_implications() {
+    let iff =
+        g("not ((Ex x #i. A(x) @ #i) <=> (Ex y #j. B(y) @ #j))").expect("both sides are guarded");
+    let expanded = g("not (((Ex x #i. A(x) @ #i) ==> (Ex y #j. B(y) @ #j)) & \
+        ((Ex y #j. B(y) @ #j) ==> (Ex x #i. A(x) @ #i)))")
+    .expect("both sides are guarded");
+    assert_eq!(iff, expanded);
+    assert!(matches!(iff, Guarded::Disj(items) if items.len() == 2));
+}
+
+#[test]
+fn equivalence_truth_table_respects_both_polarities() {
+    for left in [false, true] {
+        for right in [false, true] {
+            let formula = format!(
+                "({} <=> {})",
+                if left { "T" } else { "F" },
+                if right { "T" } else { "F" }
+            );
+            assert_eq!(g(&formula).unwrap(), gtf(left == right));
+            assert_eq!(g(&format!("not {formula}")).unwrap(), gtf(left != right));
+            assert_eq!(
+                g(&format!("not (not {formula})")).unwrap(),
+                gtf(left == right)
+            );
+        }
+    }
 }
 
 // =============================================================================

@@ -229,25 +229,15 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
             return gtrue();
         }
     }
-    // HS-faithful: the `[gf] -> gf` singleton unwrap matches the FLATTENED,
-    // non-nubbed list (Guarded.hs); `nub` is applied only in the
-    // otherwise branch (`GDisj $ Disj $ nub gfs`, Guarded.hs).  So a
-    // flattened list like `[a,a]` is not a singleton and yields
-    // `Disj (nub [a,a]) = Disj [a]`, NOT bare `a`.  (Note: this `out`
-    // already has `gfalse` items dropped — see flatten above — so the
-    // empty case below collapses an all-`gfalse` disjunction to `gfalse`.)
-    if out.len() == 1 {
-        return out.into_iter().next().unwrap();
-    }
-    // Mirror Haskell `gdisj`'s `nub gfs` (Guarded.hs).
+    // Deduplicate before collapsing a singleton so normalization is idempotent.
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) {
             deduped.push(x);
         }
     }
-    if deduped.is_empty() {
-        gfalse()
+    if deduped.len() == 1 {
+        deduped.pop().unwrap()
     } else {
         Guarded::Disj(deduped.into())
     }
@@ -606,21 +596,25 @@ fn map_guarded_atoms<F: FnMut(u64, &Atom<BLNTerm>) -> Atom<BLNTerm>>(
 }
 
 /// Returns `true` if the formula is "safety": closed (no free vars)
-/// and contains no existential quantifier in its guarded form.  HS
+/// and contains neither an existential quantifier nor a last atom. HS
 /// `isSafetyFormula` (Guarded.hs).
 pub fn is_safety_formula(g: &Guarded) -> bool {
     fn no_existential(g: &Guarded) -> bool {
         match g {
-            Guarded::Atom(_) => true,
+            Guarded::Atom(atom) => !matches!(atom, ProtoAtom::Last(_)),
             Guarded::GGuarded {
                 qua: Quantifier::Ex,
                 ..
             } => false,
             Guarded::GGuarded {
                 qua: Quantifier::All,
+                guards,
                 body,
                 ..
-            } => no_existential(body),
+            } => {
+                !guards.iter().any(|atom| matches!(atom, ProtoAtom::Last(_)))
+                    && no_existential(body)
+            }
             Guarded::Disj(inner) => inner.iter().all(no_existential),
             Guarded::Conj(inner) => inner.iter().all(no_existential),
         }
@@ -1041,15 +1035,16 @@ fn convert(
             let sub = vec![nag, cag];
             Ok(if polarity { gconj(sub) } else { gdisj(sub) })
         }
-        // p ↔ q is (p ⇒ q) ∧ (q ⇒ p), and HS conjoins the two arms at both
-        // polarities (Guarded.hs).
+        // p ↔ q is (p ⇒ q) ∧ (q ⇒ p). Under negation the two
+        // negated implications are disjoined (Guarded.hs).
         ProtoFormula::Conn(Connective::Iff, a, b) => {
             let lhs = ProtoFormula::Conn(Connective::Imp, a.clone(), b.clone());
             let rhs = ProtoFormula::Conn(Connective::Imp, b.clone(), a.clone());
-            Ok(gconj(vec![
+            let sub = vec![
                 convert(polarity, &lhs, fresh)?,
                 convert(polarity, &rhs, fresh)?,
-            ]))
+            ];
+            Ok(if polarity { gdisj(sub) } else { gconj(sub) })
         }
         // The quantifier decides whether the body must be a top-level
         // implication (`convAll`) or a conjunction (`convEx`); the polarity
@@ -1432,7 +1427,8 @@ pub fn gnot(g: &Guarded) -> Guarded {
 
 /// `satisfiedByEmptyTrace`: does the formula hold under the empty
 /// trace (no actions)? Returns `Err` for atoms outside the scope of a
-/// quantifier (formula is not doubly guarded).
+/// quantifier (formula is not doubly guarded), or an equality-only guard
+/// whose truth on the empty trace has not been established (upstream #958).
 pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
     match g {
         Guarded::Atom(_) => Err("atom outside the scope of a quantifier".to_string()),
@@ -1459,7 +1455,16 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
             }
             Ok(all)
         }
-        Guarded::GGuarded { qua, .. } => Ok(matches!(qua, Quantifier::All)),
+        Guarded::GGuarded { qua, guards, .. } => {
+            if guards.iter().any(|atom| matches!(atom, Atom::Action(_, _))) {
+                Ok(matches!(qua, Quantifier::All))
+            } else {
+                Err(
+                    "formula has an equality-only guard whose value on the empty trace is unknown"
+                        .to_string(),
+                )
+            }
+        }
     }
 }
 

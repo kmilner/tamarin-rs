@@ -9,56 +9,43 @@ Commands below run from the repository root.
 The correctness criterion is byte-identical raw `--prove` output, ignoring
 the volatile header lines (Git revision, compile time, processing time, and
 the `analyzed:` path).
-The batch gate (`scripts/corpus_file_diff.sh`, corpus in
-`scripts/parity_corpus.txt`) currently reports:
-
-| Result | Files | Meaning |
-|--------|------:|---------|
-| MATCH | 432 | Rust output byte-identical to Haskell |
-| DIFF  |   0 | — |
-| SKIP  |   0 | — |
-
-The corpus spans every feature-complete theory family under `tamarin-prover/examples/` —
-classic and AKE protocols, XOR / bilinear-pairing / multiset theories, the
-auto-sources suites, accountability case studies, and 79 SAPiC `process:`
-theories — each run under its canonical upstream invocation: bare `--prove`,
-plus the extra flags `scripts/file_flags.tsv` records for the 40 theories
-whose upstream recipe needs them. Theories outside the corpus need an unported
-feature (`--diff`), hit a known auto-prover or SAPiC-rendering divergence
-tracked for porting, exceed the gate's per-file Haskell time budget under
-their canonical flags, or are the same files upstream's own regression
-suite excludes as non-terminating.
+The proof gate (`scripts/test.sh proof`) compares stdout and exit status for
+the 523 theories in `scripts/parity_corpus.txt`. The explicit list covers
+classic and AKE protocols, XOR / bilinear-pairing / multiset theories,
+auto-sources, accountability, SAPiC and upstream/patch regressions. Each runs
+with `--prove` and any per-theory options in `scripts/file_flags.tsv`.
+Patch-only fixtures are read from `tamarin-prover-testing/examples/`.
+Equivalence mode, negative inputs, export-only scenarios and extra command
+sidecar options require separate coverage; see
+[regression coverage](../TESTING.md#upstream-regression-coverage).
 
 Stored proofs are validated, not just displayed: loading a proof-carrying
 file replays every stored step against a freshly derived constraint system,
-and proof files are cross-compatible in both directions with byte-identical
-analysis output from either loader.
+with cross-prover replay checked by focused regressions.
 
 The interactive web UI (`interactive` subcommand) is verified by a crawl
-gate (`scripts/web_parity.sh`): both servers load the same theory with the
-same flags, autoprove each lemma, and compare proof-tree, constraint-system,
+gate (`scripts/test.sh web`) over 78 theories: both servers load the same theory
+with the same flags, autoprove each lemma, and compare proof-tree, constraint-system,
 graph and source pages. HTML is compared byte for byte, including highlighting,
 markup and whitespace, except for environment fields such as timestamps and
 work-directory paths. JSON envelopes also allow different key order and
 encoding. Proof-node visits are capped at 400 per theory by default; truncated
 crawls are reported, and `FAIL_ON_CAPPED=1` makes them fail the gate. Within
-that coverage, the two UIs agree except for a small documented residue that
-renders *identical* proof states with different internal
-counter values (fresh-variable witness indices, goal-creation numbers,
-term-abbreviation picks on a few AC-heavy theories); these never appear in
-proof scripts, proof structure, or verdicts.
+that coverage, `scripts/websweep_ledger.tsv` records accepted differences;
+unexplained differences and missing comparisons fail the gate. The ledger is
+not a claim that a fresh run passes.
+
+Each gate saves its log, results and exit status under `scripts/results/`.
+Use the final verdict to assess parity; neither warm caches nor focused
+regression passes certify a full corpus. See [TESTING.md](../TESTING.md) for
+the verification policy.
 
 ## Proof reverification
 
-At time of writing there are two upstream issues in Haskell affecting proof
-reverifiability: https://github.com/tamarin-prover/tamarin-prover/issues/871
-(fixed on the develop branch, not yet in a release) and
-https://github.com/tamarin-prover/tamarin-prover/issues/881 (fix pending in
-https://github.com/tamarin-prover/tamarin-prover/pull/882). If you'd like to
-build a version of tamarin-prover that has the fixes applied already, you can
-use `./setup.sh testing`; we use this patched version for internal testing.
-These fixes address the affected proof-replay cases. Please report any
-remaining output differences in GitHub issues, even if the proofs cross-verify.
+Use `./setup.sh testing` to build the pinned, patched Haskell prover used for
+internal testing. Released Haskell versions may lack fixes required to replay
+some proofs; [patches/README.md](../patches/README.md) documents the oracle's
+patch series. Please report output differences even if the proofs cross-verify.
 
 ## Implemented
 
@@ -136,12 +123,7 @@ all other text is ignored, including incomplete declarations, quotes, and bracke
   satellite flags (`--replication-bound`, the `--proverif-no-*`
   family) — the HS `Export.hs` backend. The three values parse; a run
   that reaches them fails with a "not yet ported" message. The reference
-  output the pinned oracle offers is thin: over the 1042-file corpus
-  `-m proverif` and `-m proverifequiv` produce output for the same 44
-  files, none of which has an `equivLemma`; `-m deepsec` emits nothing
-  anywhere; and 38 of the 123 process-bearing files, including all 21
-  under `examples/sapic/export/`, crash the oracle, whose `builtins`
-  table has no arm for the `dest-*` or `natural-numbers` names.
+  output for these backends is outside the proof and web parity gates.
 
 Diff theories are recorded with their canonical `--diff` invocation in
 `scripts/file_flags.tsv`; they join `scripts/parity_corpus.txt` once the

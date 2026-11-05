@@ -18,6 +18,9 @@
 //! injection applies them here too, recording the pre-macro rule as the
 //! `cprRuleE` half `closeProtoRule` keeps (lib/theory/src/Rule.hs).
 
+use std::collections::BTreeSet;
+use tamarin_theory::fact::fact_tag_name;
+use tamarin_theory::sapic::{PlainProcess, Process, SapicAction};
 use tamarin_theory::wellformedness::WfError;
 
 use tamarin_theory::elaborate::ElabError;
@@ -75,6 +78,8 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         return Ok(Vec::new());
     };
     let wf_report = sapic_pre_report(thy);
+    let user_names = user_names(thy, &plain);
+    let mut restriction_names: BTreeSet<_> = thy.restrictions().map(|r| r.name.clone()).collect();
 
     // `typeTheory` (renameUnique + type inference), using the theory
     // signature's MaudeSig (HS `initTEFromSig`).  The user `functions:` typing
@@ -105,9 +110,11 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         trans_report: thy.has_signature_builtin("locations-report"),
         state_channel_opt: thy.options.state_channel_opt(),
     };
-    let translation = translate(&typed, needs_in_ev, st_rules, opts).map_err(|e| ElabError {
-        message: format!("SAPIC translation: {e}"),
-    })?;
+    let macros: Vec<LNMacro> = thy.macros().cloned().collect();
+    let translation =
+        translate(&typed, needs_in_ev, st_rules, &macros, opts).map_err(|e| ElabError {
+            message: format!("SAPIC translation: {e}"),
+        })?;
 
     // The `predicate:` declarations the embedded `_restrict` formulas expand
     // against: HS `liftedExpandFormula` reads `theoryPredicates thy`
@@ -116,7 +123,6 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     let predicates: Vec<Predicate> = thy.predicates().cloned().collect();
     // The `macros:` declarations `closeTheoryItem` applies to every rule and
     // restriction of the translated theory (CloseRule.hs).
-    let macros: Vec<LNMacro> = thy.macros().cloned().collect();
 
     // Inject each generated rule, running the `_restrict` expansion HS
     // `liftedAddProtoRule` (Theory/Text/Parser.hs) performs per rule:
@@ -124,6 +130,7 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     // `Restr_<rule>_<i>` + a global restriction `∀ … #NOW. Restr…@#NOW ⇒ φ`,
     // insert the restrictions BEFORE the rule, and append the actions to the
     // rule.
+    let mut restricted_actions = BTreeSet::new();
     for (rule, restr_formulas) in &translation.rules {
         let rname = match rule.info.name {
             ProtoRuleName::Stand(n) => n,
@@ -151,6 +158,7 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         }
         let mut generated: Vec<Restriction> = Vec::with_capacity(closed.len());
         for (restr, action) in rule_restrictions(rname, &closed) {
+            restricted_actions.insert(fact_tag_name(&action.tag).to_owned());
             generated.push(restr);
             lifted.actions.push(action);
         }
@@ -182,10 +190,7 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
 
         // The restrictions precede the rule (Theory/Text/Parser.hs).
         for restr in generated {
-            thy.items
-                .push(TheoryItem::Restriction(apply_macro_in_restriction(
-                    &macros, restr,
-                )));
+            add_generated_restriction(thy, &macros, &mut restriction_names, restr)?;
         }
         let mut opr = OpenProtoRule::new(apply_macro_in_rule(&macros, lifted.clone()));
         if opr.rule != lifted {
@@ -194,14 +199,26 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         thy.items.push(TheoryItem::Rule(opr));
     }
 
+    for restriction in &translation.restrictions {
+        formula_action_names(&restriction.formula, &mut restricted_actions);
+    }
+    for (kind, name) in user_names {
+        let reserved = if kind == "action" {
+            &restricted_actions
+        } else {
+            &translation.internal_facts
+        };
+        if reserved.contains(&name) {
+            return Err(ElabError { message: format!(
+                "The {kind} name {name} is reserved: the process translation uses it for {kind}s of its own. Rename the {kind} in the process or rule that uses it."
+            ) });
+        }
+    }
+
     // Inject the global restrictions (set_in/set_notin, predicate_eq/not_eq,
     // single_session).
     for restr in &translation.restrictions {
-        thy.items
-            .push(TheoryItem::Restriction(apply_macro_in_restriction(
-                &macros,
-                restr.clone(),
-            )));
+        add_generated_restriction(thy, &macros, &mut restriction_names, restr.clone())?;
     }
 
     // `addHeuristic [SapicRanking]` unless a heuristic is already set
@@ -215,9 +232,146 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     Ok(wf_report)
 }
 
+/// Match HS `addRestriction`: even an identical existing restriction reserves its name.
+fn add_generated_restriction(
+    thy: &mut Theory,
+    macros: &[LNMacro],
+    names: &mut BTreeSet<String>,
+    restriction: Restriction,
+) -> Result<(), ElabError> {
+    if !names.insert(restriction.name.clone()) {
+        return Err(ElabError {
+            message: format!("duplicate restriction: {}", restriction.name),
+        });
+    }
+    thy.items
+        .push(TheoryItem::Restriction(apply_macro_in_restriction(
+            macros,
+            restriction,
+        )));
+    Ok(())
+}
+
+fn formula_action_names(f: &LNFormula, names: &mut BTreeSet<String>) {
+    use tamarin_theory::{atom::ProtoAtom, formula::ProtoFormula};
+    match f {
+        ProtoFormula::Atom(ProtoAtom::Action(_, fact)) => {
+            names.insert(fact_tag_name(&fact.tag).to_owned());
+        }
+        ProtoFormula::Not(f) | ProtoFormula::Qua(_, _, f) => formula_action_names(f, names),
+        ProtoFormula::Conn(_, l, r) => {
+            formula_action_names(l, names);
+            formula_action_names(r, names);
+        }
+        _ => {}
+    }
+}
+
+fn user_names(thy: &Theory, process: &PlainProcess) -> Vec<(&'static str, String)> {
+    let mut actions = Vec::new();
+    let mut facts = Vec::new();
+    tamarin_theory::sapic::for_each_process(process, &mut |node| match node {
+        Process::Action(SapicAction::Event(f), _, _) => {
+            actions.push(("action", fact_tag_name(&f.tag).to_owned()))
+        }
+        Process::Action(
+            SapicAction::Msr {
+                prems, acts, concs, ..
+            },
+            _,
+            _,
+        ) => {
+            actions.extend(
+                acts.iter()
+                    .map(|f| ("action", fact_tag_name(&f.tag).to_owned())),
+            );
+            facts.extend(
+                prems
+                    .iter()
+                    .chain(concs)
+                    .map(|f| ("fact", fact_tag_name(&f.tag).to_owned())),
+            );
+        }
+        _ => {}
+    });
+    actions.extend(facts);
+    for rule in thy.rules() {
+        for member in std::iter::once(rule.rule_e()).chain(&rule.rule_ac) {
+            actions.extend(
+                member
+                    .actions
+                    .iter()
+                    .map(|f| ("action", fact_tag_name(&f.tag).to_owned())),
+            );
+            actions.extend(
+                member
+                    .premises
+                    .iter()
+                    .chain(&member.conclusions)
+                    .map(|f| ("fact", fact_tag_name(&f.tag).to_owned())),
+            );
+        }
+    }
+    actions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_restrictions_reject_existing_names() {
+        for source in [
+            "restriction Restr_letywz_2_1_1: \"T\" \
+             rule User: [] --[ Restr_letywz_2_1_1(<'a','b'>) ]-> [] \
+             process: in(z); let <y,w> = z in out(y) else out('n')",
+            "restriction single_session: \"T\" process: 0",
+            "restriction single_session: \
+             \"All #i #j. Init() @ #i & Init() @ #j ==> #i = #j\" process: 0",
+        ] {
+            let parsed =
+                tamarin_parser::parse_theory(&format!("theory T begin {source} end"), &[]).unwrap();
+            let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+            let duplicate = thy.restrictions().next().unwrap().name.clone();
+            let error = apply_sapic(&mut thy, false).unwrap_err();
+            assert_eq!(error.message, format!("duplicate restriction: {duplicate}"));
+            assert_eq!(
+                thy.restrictions().filter(|r| r.name == duplicate).count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn generated_restriction_guards_are_reserved_actions() {
+        let source = "theory T begin \
+            rule User: [] --[ Restr_letywz_2_1_1(<'a','b'>) ]-> [] \
+            process: in(z); let <y,w> = z in out(y) else out('n') end";
+        let parsed = tamarin_parser::parse_theory(source, &[]).unwrap();
+        let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+        assert!(apply_sapic(&mut thy, false)
+            .unwrap_err()
+            .message
+            .contains("action name Restr_letywz_2_1_1 is reserved"));
+    }
+
+    #[test]
+    fn generated_names_are_reserved_in_their_own_namespace() {
+        for (source, collision) in [
+            ("process: event Init()", Some("action name Init")),
+            ("rule User: [] --> [State_1()] process: event Fine()", Some("fact name State_1")),
+            ("options: translation-state-optimisation rule User: [] --> [L_PureState('a','b')] process: 0", Some("fact name L_PureState")),
+            ("rule User: [] --> [L_PureState('a','b')] process: 0", None),
+            ("process: event State_1()", None),
+        ] {
+            let parsed = tamarin_parser::parse_theory(&format!("theory T begin {source} end"), &[]).unwrap();
+            let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+            let result = apply_sapic(&mut thy, false);
+            if let Some(expected) = collision {
+                assert!(result.unwrap_err().message.contains(expected), "{source}");
+            } else { result.unwrap(); }
+        }
+    }
 
     /// The `else` arm of a pattern `let` carries the restriction
     /// `∀ y w. (<y, w> = z) ⇒ ⊥` (Basetranslation.hs), so the
@@ -248,6 +402,7 @@ mod tests {
             &typed,
             false,
             &maude_sig.st_rules,
+            &[],
             TranslateOptions::default(),
         )
         .unwrap();

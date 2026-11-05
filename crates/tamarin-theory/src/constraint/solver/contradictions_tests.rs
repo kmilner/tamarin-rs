@@ -116,7 +116,7 @@ fn non_injective_fact_witness_emitted() {
         .expect("a fresh context uniquely owns its shared data")
         .injective_fact_insts = [(inj_tag, Vec::new())].into_iter().collect();
 
-    let cs = contradictions(&ctx, &sys);
+    let cs = contradictions(&ctx, &sys).unwrap();
     let injs: Vec<_> = cs
         .iter()
         .filter(|c| matches!(c, Contradiction::NonInjectiveFactInstance(_, _, _)))

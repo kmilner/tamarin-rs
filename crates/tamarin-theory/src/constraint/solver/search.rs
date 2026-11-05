@@ -42,7 +42,7 @@ use std::collections::BTreeMap;
 
 use crate::constraint::solver::context::{CutStrategy, ProofContext};
 use crate::constraint::solver::proof_method::{
-    exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
+    exec_proof_method, is_finished, is_finished_or_stuck, ProofMethod, Result as MethodResult,
 };
 use crate::constraint::system::System;
 use crate::prove::ProveError;
@@ -452,6 +452,10 @@ impl Drop for SearchTlsGuard {
     }
 }
 
+#[path = "saved_search.rs"]
+mod saved_search;
+pub(crate) use saved_search::extend_saved_proof;
+
 /// Run an iterative-deepening search.  Heuristic: try `Simplify`
 /// once, then pick the first ranked open goal each round.
 ///
@@ -718,7 +722,8 @@ fn bfs_check_level(
     build: bool,
 ) -> Option<ProofNode> {
     if remaining == 0 {
-        let solved_leaf = matches!(&node.method, ProofMethod::Finished(MethodResult::Solved));
+        let solved_leaf =
+            node.annotated && matches!(&node.method, ProofMethod::Finished(MethodResult::Solved));
         if solved_leaf {
             *found = true;
             return build.then(|| node.clone());
@@ -745,7 +750,9 @@ fn bfs_check_level(
         }
         return build.then(|| node.clone());
     }
-    if node.children.is_empty() {
+    // Positive-depth traversal must not descend into a stale saved subtree:
+    // HS checkLevel preserves proofs whose psInfo is Nothing unchanged.
+    if !node.annotated || node.children.is_empty() {
         return build.then(|| node.clone());
     }
     let mut new_children: BTreeMap<String, ProofNode> = BTreeMap::new();
@@ -1023,7 +1030,7 @@ fn expand_inner(
         return Ok(());
     }
     // Already terminal.
-    let finished = is_finished(ctx, &node.sys);
+    let finished = is_finished(ctx, &node.sys)?;
     if let Some(r) = finished {
         node.status = node_status_of(&r);
         node.method = ProofMethod::Finished(r);
@@ -1060,8 +1067,13 @@ fn expand_inner(
     // `is_finished(ctx, &node.sys)` is `None`, and nothing has touched
     // `node.sys` since — skip the guarded entry's redundant re-sweep.
     let Some((method, mut cases)) = select_open_method(&node.sys, ctx, depth)? else {
-        node.method = ProofMethod::Sorry(Some("no method".into()));
-        node.status = NodeStatus::Sorry;
+        if let Some(result) = is_finished_or_stuck(ctx, &node.sys)? {
+            node.status = node_status_of(&result);
+            node.method = ProofMethod::Finished(result);
+        } else {
+            node.method = ProofMethod::Sorry(Some("Cannot prove".into()));
+            node.status = NodeStatus::Sorry;
+        }
         return Ok(());
     };
     node.method = method;
@@ -1285,12 +1297,24 @@ fn expand_inner(
                         // NSPK3 renders `by contradiction /* cyclic */`
                         // leaves amid the sorry stubs — while every
                         // still-open node becomes a bare `sorry` leaf.
-                        let (method, status) = match is_finished(ctx, &sys) {
-                            Some(r) => {
-                                let st = node_status_of(&r);
-                                (ProofMethod::Finished(r), st)
+                        let proof_bound = PROOF_BOUND.with(|b| b.get());
+                        let (method, status) = if depth + 1 >= proof_bound {
+                            // boundProofDepth wraps the lazy replacement
+                            // before cutAfterFirstSorry inspects its methods.
+                            // Even an ignored finished sibling at this depth
+                            // must therefore retain the bound-sorry marker.
+                            (
+                                ProofMethod::Sorry(Some(format!("bound {proof_bound} hit"))),
+                                NodeStatus::Sorry,
+                            )
+                        } else {
+                            match is_finished(ctx, &sys)? {
+                                Some(r) => {
+                                    let st = node_status_of(&r);
+                                    (ProofMethod::Finished(r), st)
+                                }
+                                None => (ProofMethod::Sorry(None), NodeStatus::Sorry),
                             }
-                            None => (ProofMethod::Sorry(None), NodeStatus::Sorry),
                         };
                         node.children.insert(
                             name,
@@ -1442,7 +1466,7 @@ pub fn candidate_methods(
     // accountability `⊤` VC lemma's root, whose one applicable method is
     // `contradiction` (HS redirects on it; an empty list here made RS
     // alert "prover failed").
-    if let Some(r) = is_finished(ctx, sys) {
+    if let Some(r) = is_finished(ctx, sys)? {
         return Ok(vec![ProofMethod::Finished(r)]);
     }
     candidate_methods_open(sys, ctx, depth)
@@ -1513,7 +1537,7 @@ pub fn candidate_methods_with_expl(
     use crate::constraint::solver::annotated_goals::Usefulness;
     // HS `stoppingMethod` — see `candidate_methods`; keeps the DISPLAYED
     // numbering in lockstep with the apply path.
-    if let Some(r) = is_finished(ctx, sys) {
+    if let Some(r) = is_finished(ctx, sys)? {
         return Ok(vec![(ProofMethod::Finished(r), String::new())]);
     }
     // The selected ranking produced no matches with quitOnEmpty →

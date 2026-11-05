@@ -1,4 +1,4 @@
-# source: oracle ef3f0468, plain load
+# source: patched oracle 4c658fcf, -m=msr --derivcheck-timeout=0 (2026-11-03)
 /*
 WARNING: the following wellformedness checks failed!
 

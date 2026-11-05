@@ -52,7 +52,7 @@ pub fn load_from_path(path: &Path, cfg: &crate::ServerConfig) -> Result<TheoryEn
 /// can emit the `variants (modulo AC)` blocks byte-for-byte.  Variant
 /// computation is best-effort: if Maude can't be started the theory is
 /// still usable (rules just render without their variants block), unless
-/// auto-sources was requested, which requires Maude.
+/// auto-sources or explicit rule variants require Maude-backed validation.
 pub(crate) fn load_from_source(
     src: &str,
     origin: TheoryOrigin,
@@ -252,12 +252,22 @@ pub(crate) fn load_from_source(
             .map_err(|error| LoadError::Elaborate(error.to_string()))?;
         }
     } else {
-        // Loading remains best-effort when Maude is unavailable. All
-        // Maude-independent checks still run; only the variant report/filter
-        // and the later Maude-backed close passes are absent.
-        wf_report.extend(tamarin_theory::wellformedness::check_wellformedness(
-            &typed, None,
-        ));
+        // Static checks remain available without Maude, but explicit families
+        // require validation now: a recovered proof session must never inherit
+        // unchecked variants from this load.
+        wf_report.extend(
+            tamarin_theory::wellformedness::check_wellformedness(&typed, None)
+                .map_err(|error| LoadError::Elaborate(error.to_string()))?,
+        );
+        // Best-effort loading may skip Maude, but cannot turn a known unsafe
+        // rule into a usable theory. Match prepare_theory_rules' fatal policy.
+        let fatal = tamarin_theory::wellformedness::variants::fatal_wf_errors(&wf_report);
+        if !fatal.is_empty() {
+            return Err(LoadError::Elaborate(
+                tamarin_theory::tools::rule_variants::VariantsError::UnsupportedInput(fatal)
+                    .to_string(),
+            ));
+        }
     }
 
     // HS `makeWfErrorsHtml` (src/Web/Handler.hs) — the header-banner
@@ -386,6 +396,32 @@ mod tests {
         let entry = load_from_path(&main, &cfg).expect("include resolves against the theory's dir");
         assert_eq!(rule_count(&entry), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn web_load_does_not_store_unchecked_explicit_variants_without_maude() {
+        let complete = include_str!("../../tamarin-theory/tests/fixtures/manual_variants.spthy");
+        let incomplete = format!(
+            "{}\nend",
+            complete.split(",\n  rule (modulo AC)").next().unwrap()
+        );
+        let cfg = test_config("/nonexistent/maude-for-test");
+        for source in [complete, &incomplete] {
+            let error = match load_from_source(
+                source,
+                TheoryOrigin::Upload("manual-variants.spthy".into()),
+                &cfg,
+            ) {
+                Ok(_) => panic!("unchecked family must not reach a later recovered proof session"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("Maude is required to validate explicit rule variants"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

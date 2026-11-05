@@ -19,9 +19,9 @@
 //! call it once, after the SAPIC and accountability translations, so the
 //! rules SAPIC generated and the lemmas accountability appended are in
 //! scope.  Both paths hand it the file's live Maude handle when startup
-//! succeeds, which HS's `ruleVariantsReport` needs.  The web path falls back
-//! to `None` only when Maude is unavailable, and that one check then reports
-//! nothing.
+//! succeeds, which variant validation needs. Without Maude, static checks
+//! remain available, but explicit variant families cannot be validated and
+//! must not be admitted for later proof search.
 //!
 //! Every check reads the theory's items through `Theory::items`,
 //! [`Theory::rules`] and [`Theory::lemmas`], which hand them out in item
@@ -35,6 +35,7 @@ use tamarin_term::maude_proc::MaudeHandle;
 use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{pretty_proto_rule_name, ProtoRuleE};
 use crate::theory::Theory;
+use crate::tools::rule_variants::VariantsError;
 
 pub mod check_terms;
 pub mod equations;
@@ -43,6 +44,7 @@ pub mod formulas;
 pub mod lemmas;
 pub mod mult;
 pub mod rules;
+pub mod variants;
 
 // =============================================================================
 // Error type
@@ -72,12 +74,23 @@ impl WfError {
     }
 
     /// A `WfError` whose body is a ready `Doc`, framed the way
-    /// `prettyWfErrorReport` frames a topic group: `text topic $-$ nest 2
-    /// body` (Wellformedness.hs), rendered into
+    /// `prettyWfErrorReport` frames a plain topic group:
+    /// `text topic $-$ nest 2 body`, rendered into
     /// [`WfError::message`].
     pub fn block(topic: impl Into<String>, body: Doc) -> Self {
         let topic = topic.into();
         let message = Doc::text(&topic)
+            .above_g(body.nest(2))
+            .render_with(WF_LINE_LENGTH, WF_RIBBON);
+        WfError { topic, message }
+    }
+
+    /// A block with an underlined heading, retaining the bare grouping topic.
+    /// Haskell opts into `underlineTopic` per check; accountability uses plain
+    /// headings and must not inherit the rule checks' formatting.
+    pub fn underlined_block(topic: impl Into<String>, body: Doc) -> Self {
+        let topic = topic.into();
+        let message = Doc::text(underline_topic(&topic))
             .above_g(body.nest(2))
             .render_with(WF_LINE_LENGTH, WF_RIBBON);
         WfError { topic, message }
@@ -147,27 +160,42 @@ pub type WfReport = Vec<WfError>;
 /// Wellformedness.hs), which is what
 /// `thy.signature` is here.
 ///
-/// `ruleVariantsReport` (HS position 6) is the one check that needs a live
-/// Maude process, hence `maude`: the batch driver passes the handle it
-/// spawned for the file, and the web load path passes its load-time handle.
-pub fn check_wellformedness(thy: &Theory, maude: Option<&MaudeHandle>) -> WfReport {
+/// Variant checks need a live Maude process. Without it, theories declaring
+/// explicit families return an error, even if those families might be valid:
+/// missing validation must not become permission to use them after recovery.
+/// With a handle, call [`crate::tools::rule_variants::populate_rule_variants`]
+/// first: the no-variant check reads those cached computation results.
+/// Frontends normally use [`crate::tools::rule_variants::prepare_theory_rules`],
+/// which owns that ordering and the subsequent fatal-error policy.
+pub fn check_wellformedness(
+    thy: &Theory,
+    maude: Option<&MaudeHandle>,
+) -> Result<WfReport, VariantsError> {
     // WF reports are plain text even when the interactive caller is building
     // an HTML document. Keep that invariant at the pass boundary so every
     // current and future sub-report is covered uniformly.
     let _plain = crate::pretty_hpj::HtmlDocGuard::disable();
+    let mut variants = match maude {
+        Some(maude) => variants::explicit_variants_report(thy, maude)?,
+        None if thy.rules().any(|r| !r.rule_ac.is_empty()) => {
+            return Err(VariantsError::MissingMaudeForExplicitVariants);
+        }
+        None => Vec::new(),
+    };
+    variants.extend(rules::rule_variants_report(thy, maude));
     let mut report = lemmas::check_if_lemmas_in_theory(thy);
     report.extend(rules::unbound_report(thy));
     report.extend(rules::fresh_names_report(thy));
     report.extend(rules::public_names_report(thy));
     report.extend(rules::rule_sorts_report(thy));
-    report.extend(rules::rule_variants_report(thy, maude));
+    report.extend(variants);
     report.extend(facts::fact_reports(thy));
     report.extend(formulas::formula_reports(thy));
     report.extend(lemmas::lemma_attribute_report(thy));
     report.extend(mult::mult_restricted_report(thy));
     report.extend(rules::nat_well_sorted_report(thy));
     report.extend(equations::subterm_convergence_report(&thy.signature));
-    report
+    Ok(report)
 }
 
 /// The ordered set of distinct topic strings present in `report`.
@@ -218,4 +246,18 @@ pub fn underline_topic(title: &str) -> String {
 /// so a 1-of-10+ list prints ` 1.`…`10.`.
 fn numbered_index_width(count: usize) -> usize {
     count.to_string().len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_heading_style_is_explicit() {
+        let plain = WfError::block("Topic", Doc::text("body"));
+        let underlined = WfError::underlined_block("Topic", Doc::text("body"));
+        assert_eq!(plain.topic, underlined.topic);
+        assert_eq!(plain.message, "Topic\n  body");
+        assert_eq!(underlined.message, "Topic\n=====\n\n  body");
+    }
 }

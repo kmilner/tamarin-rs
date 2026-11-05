@@ -5,6 +5,32 @@ use super::*;
 use crate::fact::{fresh_fact, in_fact, out_fact};
 use tamarin_term::builtin::msg_var;
 
+#[test]
+fn products_are_supported_only_in_exponents() {
+    use tamarin_term::builtin::{exp, mult, pair};
+    let product = mult(msg_var("x", 0), msg_var("y", 0));
+    let safe = exp(msg_var("g", 0), product.clone());
+    let bad_base = exp(product.clone(), msg_var("z", 0));
+    let mut rule = Rule::new(
+        (),
+        vec![in_fact(safe.clone())],
+        vec![out_fact(safe)],
+        vec![],
+    );
+    assert!(rule_products_outside_exponents(&rule).is_empty());
+    rule.premises.push(in_fact(product.clone()));
+    rule.actions.push(out_fact(pair(bad_base, msg_var("z", 0))));
+    assert_eq!(
+        rule_products_outside_exponents(&rule),
+        vec![product.clone(), product.clone()]
+    );
+    rule.conclusions.push(out_fact(product.clone()));
+    assert_eq!(
+        rule_products_outside_exponents(&rule),
+        vec![product.clone(), product.clone(), product]
+    );
+}
+
 /// `Rule::new` puts each argument into its own field.  The lists have distinct
 /// lengths and distinct contents.  A swap of the premises and the conclusions
 /// therefore cannot hide behind two lists of the same shape.
@@ -803,8 +829,9 @@ fn manual_variant_keeps_the_trivial_disjunction() {
         vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()]
     );
     let out = pretty_open_proto_rule_as_closed_rule(&merged).render();
-    assert!(out.contains("has exactly the trivial AC variant"), "{out}");
-    assert!(!out.contains("variants (modulo AC)"), "{out}");
+    assert!(out.contains("rule (modulo E) R:"), "{out}");
+    assert!(out.contains("rule (modulo AC) R___VARIANT_1:"), "{out}");
+    assert!(out.contains("variants"), "{out}");
 }
 
 /// HS `frees` at `Rule ProtoRuleEInfo` folds the info before the four fact

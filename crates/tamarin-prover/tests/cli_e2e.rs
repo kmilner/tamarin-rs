@@ -22,6 +22,46 @@ fn args_from(args: &[&str]) -> tamarin_prover::Args {
     parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
 }
 
+#[test]
+fn saved_unfinishable_requires_exhausted_proof_methods() {
+    if !maude_available() {
+        return;
+    }
+    let source = r#"theory ExhaustedReplay begin
+        rule A: [] --[A()]-> []
+        lemma exhausted: "Ex x. x='a' & x='b'"
+        by UNFINISHABLE
+        lemma simplifiable: "All x. x='a' ==> x='a'"
+        by UNFINISHABLE
+        lemma inductive: exists-trace "All #i. A()@i ==> F"
+        by UNFINISHABLE
+        end"#;
+    let (code, output, error) = common::run_raw(
+        "tamarin_exhausted_replay",
+        "saved",
+        source,
+        &["--quit-on-warning"],
+    );
+    assert_eq!(code, 0, "{error}");
+    assert!(
+        output.contains("exhausted (all-traces): analysis cannot be finished"),
+        "{output}"
+    );
+    assert!(
+        output.contains("simplifiable (all-traces): analysis incomplete"),
+        "{output}"
+    );
+    assert!(
+        output.contains("inductive (exists-trace): analysis incomplete"),
+        "{output}"
+    );
+    assert_eq!(
+        output.matches("invalid proof step encountered").count(),
+        2,
+        "{output}"
+    );
+}
+
 /// Run the CLI in-process on `extra`, with `--with-maude` for the maude the
 /// harness resolved threaded ahead of it, and return the exit code.
 fn run_cli(extra: &[&str]) -> i32 {
@@ -36,6 +76,69 @@ fn run_error(extra: &[&str]) -> RunError {
     let mut argv: Vec<&str> = maude.as_deref().into_iter().collect();
     argv.extend_from_slice(extra);
     run(&args_from(&argv)).expect_err("run should fail")
+}
+
+#[test]
+fn unsupported_products_report_on_stdout_and_abort_on_stderr() {
+    if !maude_available() {
+        return;
+    }
+    let theory = fixture("unsupported_products.spthy");
+    let topic = "Unsupported multiplication outside exponents";
+    let expected = format!(
+        "\nERROR: unsupported rule semantics in {}:\n\n{topic}\n{}\n\n  \
+         Rule ActionProduct has products outside exponents: (x*y)\n  \n  \
+         Rule ConclusionProduct has products outside exponents: (x*y)\n\n",
+        theory.display(),
+        "=".repeat(topic.len())
+    );
+    for flags in [
+        vec!["--prove"],
+        vec!["--prove", "--quit-on-warning"],
+        vec!["--precompute-only"],
+    ] {
+        let (code, stdout, stderr) = run_binary(&flags, &[&theory]);
+        assert_eq!(code, 1, "{flags:?}: {stderr}");
+        assert_eq!(stdout, expected, "{flags:?}");
+        assert!(stderr.ends_with("Unsupported rule semantics - aborting before proof search.\n"));
+        assert!(!stderr.contains("error:"), "{stderr}");
+        assert!(!stderr.contains("Theory closed"), "{stderr}");
+        assert!(!stderr.contains("Derivation checks started"), "{stderr}");
+    }
+
+    // Translate-only mode deliberately warns rather than rejecting the input.
+    let (code, stdout, stderr) = run_binary(&["--output-module=msr"], &[&theory]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("theory UnsupportedProducts"), "{stdout}");
+    assert!(stdout.contains(topic), "{stdout}");
+    assert!(!stdout.contains("ERROR:"), "{stdout}");
+}
+
+#[test]
+fn upstream_gdh_rejects_unsupported_products_before_proving() {
+    if !maude_available() {
+        return;
+    }
+    // Keep CI coverage when this previously accepted theory leaves the
+    // successful-proof fast reference. The full oracle gate also retains it.
+    let theory =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples/sp14/GDH.spthy");
+    let (code, stdout, stderr) = run_binary(&["--prove"], &[&theory]);
+    let topic = "Unsupported multiplication outside exponents";
+    assert_eq!(code, 1, "{stderr}");
+    assert_eq!(
+        stdout,
+        format!(
+            "\nERROR: unsupported rule semantics in {}:\n\n{topic}\n{}\n\n  \
+             Rule RecvOthers has products outside exponents: (~esk*y)\n  \n  \
+             Rule RecvRoundkey has products outside exponents: (~esk*y)\n\n",
+            theory.display(),
+            "=".repeat(topic.len()),
+        ),
+    );
+    assert!(stderr.ends_with("Unsupported rule semantics - aborting before proof search.\n"));
+    assert!(!stderr.contains("Theory closed"), "{stderr}");
+    assert!(!stdout.contains("summary of summaries:"), "{stdout}");
 }
 
 #[test]
@@ -855,7 +958,7 @@ fn run_pinned_case(name: &str) -> Option<(String, String)> {
 
 /// `--lemma=NAME` narrows what gets proven.  HS appends `--lemma` values to
 /// the SAME `lemmaNames` list `--prove` fills (`TheoryLoader.hs`), and
-/// `lemmaSelector` (TheoryLoader.hs) matches a name exactly unless it
+/// `lemmaSelector` (TheoryLoader.hs#lemmaSelector) matches a name exactly unless it
 /// ends in `*` — so the bare `--prove`'s recorded `""` matches nothing and
 /// `reach` alone is proven, leaving `leaks` at `by sorry` / `analysis
 /// incomplete`.  The `''` that no lemma matches is also what makes
@@ -1079,6 +1182,25 @@ fn open_chains_flag_caps_the_precomputed_chain_resolution() {
              Open Chains limits (can be changed with -c=): 0"
         ),
         "`--open-chains=0` must report the cap it hit:\n{stderr}"
+    );
+
+    // The same cap is exercised while checking variable derivability, but
+    // auxiliary closes suppress saturation diagnostics (Sources.hs).
+    let theory = fixture("cli_flags_chan.spthy");
+    let (code, _, stderr) = run_binary(
+        &[
+            "--output-module=msr",
+            "--open-chains=0",
+            "--derivcheck-timeout=300",
+        ],
+        &[&theory],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stderr.contains("Derivation checks started"), "{stderr}");
+    assert!(stderr.contains("Derivation checks ended"), "{stderr}");
+    assert!(
+        !stderr.contains("[Open Chains]"),
+        "translate-only derivation checks must not emit chain-limit diagnostics:\n{stderr}"
     );
 }
 

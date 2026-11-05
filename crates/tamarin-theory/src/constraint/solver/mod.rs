@@ -39,6 +39,7 @@ pub mod rename_precise;
 pub mod search;
 pub mod simplify;
 pub mod sources;
+mod subterm_witness;
 pub mod tactic_show;
 pub mod trace;
 

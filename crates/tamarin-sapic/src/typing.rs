@@ -19,15 +19,21 @@ use tamarin_term::lterm::{LSort, LVar, Name};
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 use tamarin_utils::fresh::PreciseFreshState;
 
-use tamarin_theory::formula::{apply_rename, formula_frees};
-use tamarin_theory::sapic::PlainProcess;
+#[cfg(test)]
+use tamarin_theory::formula::formula_frees;
+use tamarin_theory::sapic::{map_process, map_terms_action, map_terms_comb, PlainProcess};
 use tamarin_theory::sapic::{
-    map_process, map_terms_action, map_terms_comb, traverse_terms_action, traverse_terms_comb,
-    Process, ProcessCombinator, ProcessParsedAnnotation, SapicAction, SapicLVar, SapicTerm,
-    SapicType,
+    traverse_terms_action, traverse_terms_comb, Process, ProcessCombinator, SapicAction, SapicLVar,
+    SapicTerm, SapicType,
 };
 
 use crate::bindings::{bindings_act, bindings_comb};
+pub(crate) use tamarin_theory::sapic_scope::vars_proc;
+use tamarin_theory::sapic_scope::{
+    action_binder_declarations, combinator_binder_declarations, compose_renaming, rename_action,
+    rename_action_binders, rename_annotation, rename_comb, rename_combinator_binders,
+    vars_proc_with_annotations,
+};
 
 // =============================================================================
 // renameUnique (Typing.hs)
@@ -39,191 +45,10 @@ use crate::bindings::{bindings_act, bindings_comb};
 /// avoidance state for `renameUnique`.
 fn proc_lvars(p: &PlainProcess) -> Vec<LVar> {
     // `avoidPreciseVars . map (\(SapicLVar lvar _) -> lvar)` — strip types.
-    vars_proc(p).into_iter().map(|sv| sv.var).collect()
-}
-
-fn collect_proc_vars<A>(
-    p: &Process<A, SapicLVar>,
-    out: &mut std::collections::BTreeSet<SapicLVar>,
-) {
-    match p {
-        Process::Null(_) => {}
-        Process::Action(a, _, body) => {
-            collect_action_vars(a, out);
-            collect_proc_vars(body, out);
-        }
-        Process::Comb(c, _, l, r) => {
-            collect_comb_vars(c, out);
-            collect_proc_vars(l, out);
-            collect_proc_vars(r, out);
-        }
-    }
-}
-
-fn collect_term_vars(t: &SapicTerm, out: &mut std::collections::BTreeSet<SapicLVar>) {
-    for v in tamarin_term::vterm::vars_vterm(t) {
-        out.insert(v);
-    }
-}
-
-fn collect_fact_vars(
-    f: &tamarin_theory::sapic::SapicLNFact,
-    out: &mut std::collections::BTreeSet<SapicLVar>,
-) {
-    for t in f.terms.iter() {
-        collect_term_vars(t, out);
-    }
-}
-
-fn collect_action_vars(
-    a: &SapicAction<SapicLVar>,
-    out: &mut std::collections::BTreeSet<SapicLVar>,
-) {
-    match a {
-        SapicAction::New(v) => {
-            out.insert(v.clone());
-        }
-        SapicAction::Event(f) => collect_fact_vars(f, out),
-        SapicAction::ChOut { chan, msg } => {
-            if let Some(c) = chan {
-                collect_term_vars(c, out);
-            }
-            collect_term_vars(msg, out);
-        }
-        SapicAction::ChIn {
-            chan,
-            msg,
-            match_vars,
-        } => {
-            if let Some(c) = chan {
-                collect_term_vars(c, out);
-            }
-            collect_term_vars(msg, out);
-            for v in match_vars {
-                out.insert(v.clone());
-            }
-        }
-        SapicAction::Insert(a, b) => {
-            collect_term_vars(a, out);
-            collect_term_vars(b, out);
-        }
-        SapicAction::Delete(t) | SapicAction::Lock(t) | SapicAction::Unlock(t) => {
-            collect_term_vars(t, out)
-        }
-        SapicAction::ProcessCall(_, ts) => {
-            for t in ts {
-                collect_term_vars(t, out);
-            }
-        }
-        SapicAction::Msr {
-            prems,
-            acts,
-            concs,
-            rest,
-            ..
-        } => {
-            for f in prems.iter().chain(acts).chain(concs) {
-                collect_fact_vars(f, out);
-            }
-            // HS's derived `Foldable (SapicAction v)` reaches the `iRest ::
-            // [SapicNFormula v]` field too, so `varsProc` counts the embedded
-            // `_restrict` formulas' FREE variables (bound `BVar` quantifier vars
-            // are not `v`).  They seed the `renameUnique` avoidance set, so a
-            // variable occurring ONLY in a restriction still shifts the fresh
-            // indices minted for the rest of the process.
-            for f in rest {
-                for v in formula_frees(f) {
-                    out.insert(v);
-                }
-            }
-        }
-        SapicAction::Rep => {}
-    }
-}
-
-fn collect_comb_vars(
-    c: &ProcessCombinator<SapicLVar>,
-    out: &mut std::collections::BTreeSet<SapicLVar>,
-) {
-    match c {
-        ProcessCombinator::Lookup(t, v) => {
-            collect_term_vars(t, out);
-            out.insert(v.clone());
-        }
-        ProcessCombinator::Let {
-            left,
-            right,
-            match_vars,
-        } => {
-            collect_term_vars(left, out);
-            collect_term_vars(right, out);
-            for v in match_vars {
-                out.insert(v.clone());
-            }
-        }
-        ProcessCombinator::CondEq(a, b) => {
-            collect_term_vars(a, out);
-            collect_term_vars(b, out);
-        }
-        // HS `varsProc = foldMap singleton` over the derived `Foldable (Process)`
-        // folds the `v` occurrences inside `Cond (SapicNFormula v)` too — i.e.
-        // the formula's FREE variables (bound `BVar` quantifier vars are not
-        // `v`).  Collect them so they seed the `renameUnique` avoidance set and
-        // reach `type_process_def`'s formals, which print with their tag.
-        ProcessCombinator::Cond(f) => {
-            for v in formula_frees(f) {
-                out.insert(v);
-            }
-        }
-        ProcessCombinator::Parallel | ProcessCombinator::Ndc => {}
-    }
-}
-
-/// Rename a SAPIC term's variables according to `subst` (`LVar -> LVar`),
-/// preserving each variable's SAPIC type.  HS `renameUnique'` uses
-/// `apply subst`, where `subst` only ever maps to `varTerm v'` (a renaming),
-/// so a structural LVar→LVar rewrite is faithful.
-fn rename_term(subst: &BTreeMap<LVar, LVar>, t: &SapicTerm) -> SapicTerm {
-    tamarin_term::term::map_lits(t, &mut |lit| match lit {
-        Lit::Var(sv) => {
-            let new_lv = subst.get(&sv.var).copied().unwrap_or(sv.var);
-            Lit::Var(SapicLVar::new(new_lv, sv.stype.clone()))
-        }
-        Lit::Con(c) => Lit::Con(*c),
-    })
-}
-
-fn rename_sv(subst: &BTreeMap<LVar, LVar>, sv: &SapicLVar) -> SapicLVar {
-    let new_lv = subst.get(&sv.var).copied().unwrap_or(sv.var);
-    SapicLVar::new(new_lv, sv.stype.clone())
-}
-
-fn rename_action(
-    subst: &BTreeMap<LVar, LVar>,
-    a: &SapicAction<SapicLVar>,
-) -> SapicAction<SapicLVar> {
-    map_terms_action(
-        |t| rename_term(subst, t),
-        // HS `apply subst` on a formula (Sapic/Process.hs) renames the
-        // free variables of an embedded `_restrict` along with the fact rows
-        // that mention them; a bound De Bruijn index and its binder hint cross
-        // unchanged.
-        |f| apply_rename(f.clone(), &mut |v| rename_sv(subst, v)),
-        |v| rename_sv(subst, v),
-        a,
-    )
-}
-
-fn rename_comb(
-    subst: &BTreeMap<LVar, LVar>,
-    c: &ProcessCombinator<SapicLVar>,
-) -> ProcessCombinator<SapicLVar> {
-    map_terms_comb(
-        |t| rename_term(subst, t),
-        |f| apply_rename(f.clone(), &mut |v| rename_sv(subst, v)),
-        |v| rename_sv(subst, v),
-        c,
-    )
+    vars_proc_with_annotations(p)
+        .into_iter()
+        .map(|sv| sv.var)
+        .collect()
 }
 
 /// `renameUnique'` (Typing.hs).  `subst` is the *outstanding* renaming
@@ -236,53 +61,28 @@ fn rename_unique_go(
     subst: &BTreeMap<LVar, LVar>,
     p: &PlainProcess,
 ) -> PlainProcess {
-    // `let p' = apply initSubst p` — apply the outstanding renaming to the
-    // WHOLE subtree (HS Typing.hs); the children inherit the rename, then
-    // are descended into with only the NEW fresh subst for this node's binders.
-    let p_prime = rename_process_full(subst, p);
-    match p_prime {
-        Process::Null(ann) => Process::Null(ann),
+    match p {
+        Process::Null(ann) => Process::Null(ann.clone()),
         Process::Action(ac, ann, body) => {
-            let bvars = bindings_act(&ac);
-            let (new_subst, inv) = mk_subst(fresh, &bvars);
-            let mut ann2 = ann;
-            ann2.back_substitution = ann2.back_substitution.compose(&inv);
-            let ac1 = rename_action(&new_subst, &ac);
-            let body1 = rename_unique_go(fresh, &new_subst, &body);
-            Process::Action(ac1, ann2, Box::new(body1))
+            let ac = rename_action(subst, ac);
+            let mut ann = rename_annotation(subst, ann);
+            let (ren, inv) = mk_subst(fresh, &bindings_act(&ac));
+            ann.back_substitution = ann.back_substitution.compose(&inv);
+            let ac = rename_action_binders(&ren, &ac);
+            let body = rename_unique_go(fresh, &compose_renaming(&ren, subst), body);
+            Process::Action(ac, ann, Box::new(body))
         }
         Process::Comb(c, ann, l, r) => {
-            let bvars = bindings_comb(&c);
-            let (new_subst, inv) = mk_subst(fresh, &bvars);
-            let mut ann2 = ann;
-            ann2.back_substitution = ann2.back_substitution.compose(&inv);
-            let c1 = rename_comb(&new_subst, &c);
-            let l1 = rename_unique_go(fresh, &new_subst, &l);
-            let r1 = rename_unique_go(fresh, &new_subst, &r);
-            Process::Comb(c1, ann2, Box::new(l1), Box::new(r1))
+            let c = rename_comb(subst, c);
+            let mut ann = rename_annotation(subst, ann);
+            let (ren, inv) = mk_subst(fresh, &bindings_comb(&c));
+            ann.back_substitution = ann.back_substitution.compose(&inv);
+            let c = rename_combinator_binders(&ren, &c);
+            let l = rename_unique_go(fresh, &compose_renaming(&ren, subst), l);
+            let r = rename_unique_go(fresh, subst, r);
+            Process::Comb(c, ann, Box::new(l), Box::new(r))
         }
     }
-}
-
-/// `apply subst p` over an entire process subtree (terms + bound vars), used to
-/// mirror HS's `apply initSubst p` (Typing.hs).
-/// Parsed location annotations are terms too, so they receive the same rename;
-/// `renameUnique_go` updates `back_substitution` per node afterwards.
-fn rename_process_full(subst: &BTreeMap<LVar, LVar>, p: &PlainProcess) -> PlainProcess {
-    map_process(
-        p,
-        &mut |action| rename_action(subst, action),
-        &mut |comb| rename_comb(subst, comb),
-        &mut |ann| rename_annotation(subst, ann),
-    )
-}
-
-fn rename_annotation(
-    subst: &BTreeMap<LVar, LVar>,
-    ann: &ProcessParsedAnnotation,
-) -> ProcessParsedAnnotation {
-    ann.clone()
-        .map_location(|location| rename_term(subst, &location))
 }
 
 /// `mkSubst` (Typing.hs): for each bound variable mint a fresh LVar
@@ -327,7 +127,7 @@ pub(crate) fn rename_unique(p: &PlainProcess) -> PlainProcess {
 /// tag, the inferred argument types of its LAST typed occurrence (HS
 /// `Map.insert tag …`, Typing.hs — later events overwrite earlier ones).
 /// `events` has no RS reader: its consumer is `loadHeaders`'
-/// `event e(t1,…)` emission (Export.hs), part of the unported
+/// `event e(t1,…)` emission (Export/Sapic.hs), part of the unported
 /// ProVerif / DeepSec export backends.
 pub struct TypingEnvironment {
     pub vars: BTreeMap<LVar, SapicType>,
@@ -353,6 +153,20 @@ fn sqcap(t1: &SapicType, t2: &SapicType) -> Result<SapicType, String> {
     } else {
         Err(format!("Cannot merge types {t1:?} and {t2:?}."))
     }
+}
+
+/// `sqHandler` adds the offending term to type conflicts during `typeWith`.
+fn sqcap_for_term(
+    t: &SapicTerm,
+    actual: &SapicType,
+    expected: &SapicType,
+) -> Result<SapicType, String> {
+    sqcap(actual, expected).map_err(|_| {
+        format!(
+            "Typing error: expected term {} to have type {expected:?}, but found {actual:?}",
+            tamarin_term::pretty::pretty_nterm(t).render(),
+        )
+    })
 }
 
 /// `defaultFunctionType n = (replicate n Nothing, Nothing)` (Typing.hs).
@@ -397,11 +211,11 @@ fn type_with(
                 None
             } else {
                 match env.vars.get(lvar) {
-                    None => return Err(format!("unbound variable {lvar:?}")),
+                    None => return Err(format!("The variable(s) {lvar} are not bound.")),
                     Some(ty) => ty.clone(),
                 }
             };
-            let merged = sqcap(&stype, tt)?;
+            let merged = sqcap_for_term(t, &stype, tt)?;
             env.vars.insert(*lvar, merged.clone());
             Ok((var_term(SapicLVar::new(*lvar, merged.clone())), merged))
         }
@@ -426,7 +240,7 @@ fn type_with(
                     let key = UserDefinedSym::NoEqUser(*fs);
                     // First pass: refine output type from target.
                     let (intypes1, outtype1) = get_fun(env, n, &key);
-                    let mintype1 = sqcap(&outtype1, tt)?;
+                    let mintype1 = sqcap_for_term(t, &outtype1, tt)?;
                     insert_fun(env, &key, (intypes1.clone(), mintype1))?;
                     // Type args (discard results, just to learn input types).
                     let ts: Vec<SapicTerm> = args.to_vec();
@@ -437,7 +251,7 @@ fn type_with(
                     }
                     // Recompute output type, having learnt arg types.
                     let (intypes2, outtype2) = get_fun(env, n, &key);
-                    let mintype2 = sqcap(&outtype2, tt)?;
+                    let mintype2 = sqcap_for_term(t, &outtype2, tt)?;
                     insert_fun(env, &key, (ptypes, mintype2))?;
                     // Type args for real.
                     let mut ts_new: Vec<SapicTerm> = Vec::with_capacity(ts.len());
@@ -517,15 +331,44 @@ fn merge_fun_types(
 /// shared `vars` env, and the earlier `out(y)` — reconstructed afterwards — then
 /// renders `out(y:bitstring)`.  A pre-order single pass would miss this.
 fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainProcess, String> {
+    let typed = type_process_go(env, p)?;
+    let final_var = |v: &SapicLVar| {
+        SapicLVar::new(
+            v.var,
+            env.vars
+                .get(&v.var)
+                .cloned()
+                .unwrap_or_else(|| v.stype.clone()),
+        )
+    };
+    let final_term = |t: &SapicTerm| {
+        tamarin_term::term::map_lits(t, &mut |lit| match lit {
+            Lit::Var(v) => Lit::Var(final_var(v)),
+            Lit::Con(c) => Lit::Con(*c),
+        })
+    };
+    // An earlier action can refine a variable after reconstructing its
+    // continuation. Apply final types everywhere except quantified formulas.
+    Ok(map_process(
+        &typed,
+        &mut |a| map_terms_action(final_term, |f| f.clone(), final_var, a),
+        &mut |c| map_terms_comb(final_term, |f| f.clone(), final_var, c),
+        &mut |ann| {
+            let mut ann = ann.clone();
+            ann.location = ann.location.as_ref().map(final_term);
+            ann
+        },
+    ))
+}
+
+fn type_process_go(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainProcess, String> {
     match p {
         Process::Null(ann) => Ok(Process::Null(ann.clone())),
         Process::Action(ac, ann, body) => {
             // 1. fAct: insert bound vars (with their declared types).
-            for v in bindings_act(ac) {
-                insert_var(env, &v)?;
-            }
+            insert_declarations(env, action_binder_declarations(ac))?;
             // 2. recurse into the subtree FIRST (learns deeper types into `env`).
-            let body1 = type_process(env, body)?;
+            let body1 = type_process_go(env, body)?;
             // 3. gAct: type the action's terms, with the now-complete `env`.
             let ac1 = type_action(env, ac)?;
             // The `gAct ac@(Event (Fact tag _ ts))` case (Typing.hs):
@@ -545,12 +388,10 @@ fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainPr
         }
         Process::Comb(c, ann, l, r) => {
             // 1. fComb: insert bound vars.
-            for v in bindings_comb(c) {
-                insert_var(env, &v)?;
-            }
+            insert_declarations(env, combinator_binder_declarations(c))?;
             // 2. recurse into BOTH children first.
-            let l1 = type_process(env, l)?;
-            let r1 = type_process(env, r)?;
+            let l1 = type_process_go(env, l)?;
+            let r1 = type_process_go(env, r)?;
             // 3. gComb: type this node's terms with the completed `env`.
             let c1 = type_comb(env, c)?;
             Ok(Process::Comb(c1, ann.clone(), Box::new(l1), Box::new(r1)))
@@ -559,6 +400,26 @@ fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainPr
 }
 
 /// `insertVar` (Typing.hs).
+fn insert_declarations(env: &mut TypingEnvironment, vars: Vec<SapicLVar>) -> Result<(), String> {
+    let mut local: BTreeMap<LVar, SapicType> = BTreeMap::new();
+    for v in vars {
+        let ty = match local.get(&v.var) {
+            None => v.stype,
+            Some(previous) => sqcap(previous, &v.stype).map_err(|_| {
+                format!(
+                    "Typing error: expected term {} to have type {:?}, but found {:?}",
+                    v.var, previous, v.stype,
+                )
+            })?,
+        };
+        local.insert(v.var, ty);
+    }
+    for (var, ty) in local {
+        insert_var(env, &SapicLVar::new(var, ty))?;
+    }
+    Ok(())
+}
+
 fn insert_var(env: &mut TypingEnvironment, v: &SapicLVar) -> Result<(), String> {
     if env.vars.contains_key(&v.var) {
         return Err(format!("variable bound twice: {:?}", v.var));
@@ -751,17 +612,6 @@ pub(crate) fn type_and_rename_process(
     type_and_rename_process_in(&mut env, p)
 }
 
-/// `S.toList (varsProc p)` (Sapic/Process.hs): every SAPIC variable that
-/// occurs anywhere in `p`, as the sorted deduplicated `Set` list.  Two
-/// occurrences of the same `LVar` under DIFFERENT `stype` tags are distinct
-/// set elements, exactly as in HS.  Generic in the annotation, as HS's
-/// `Foldable (Process ann)` is.
-pub(crate) fn vars_proc<A>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
-    let mut set = std::collections::BTreeSet::new();
-    collect_proc_vars(p, &mut set);
-    set.into_iter().collect()
-}
-
 /// The theory's `FunctionTypingInfo` items (HS `theoryFunctionTypingInfos`,
 /// TheoryObject.hs) as the `(name, arg_types, out_type)` triples
 /// [`init_te_from_sig`] overlays.  Plain `f/2` declarations carry `Nothing`
@@ -807,13 +657,44 @@ mod tests {
     }
 
     #[test]
+    fn inferred_types_reach_binders_and_earlier_reconstructed_unlocks() {
+        let parsed = tamarin_parser::parse_theory(
+            "theory T begin functions: f(a):a process: new s; lock s; out(f(s)); unlock s end",
+            &[],
+        )
+        .unwrap();
+        let thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+        let typed = type_and_rename_process(
+            &thy.signature,
+            &collect_user_fun_typings(&thy),
+            thy.processes().next().unwrap(),
+        )
+        .unwrap();
+        let vars = vars_proc(&typed);
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].stype.as_deref(), Some("a"));
+        let mut keys = vec![];
+        tamarin_theory::sapic::for_each_process(&typed, &mut |node| {
+            if let Process::Action(SapicAction::Lock(t) | SapicAction::Unlock(t), _, _) = node {
+                keys.push(t.clone());
+            }
+        });
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], keys[1]);
+    }
+
+    #[test]
     fn rename_unique_renames_location_terms() {
         let mut body_ann = ProcessParsedAnnotation::empty();
         body_ann.location = Some(var_term(slv("x", 0, None)));
         let proc = Process::Action(
             SapicAction::New(slv("x", 0, None)),
             ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(body_ann)),
+            Box::new(Process::Action(
+                SapicAction::Rep,
+                body_ann.clone(),
+                Box::new(Process::Null(body_ann)),
+            )),
         );
 
         let Process::Action(_, _, body) = rename_unique(&proc) else {
@@ -822,6 +703,14 @@ mod tests {
         assert_eq!(
             body.annotation().location,
             Some(var_term(slv("x", 1, None)))
+        );
+        let Process::Action(_, _, null) = *body else {
+            panic!("expected replication");
+        };
+        // Null annotations are deliberately untouched by uniqueness renaming.
+        assert_eq!(
+            null.annotation().location,
+            Some(var_term(slv("x", 0, None)))
         );
     }
 

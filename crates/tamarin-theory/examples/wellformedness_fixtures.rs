@@ -188,11 +188,12 @@ fn main() {
                 continue;
             }
         };
-        let rust_topics: BTreeSet<String> =
-            wf::topics(&wf::check_wellformedness(&elaborated, None))
-                .into_iter()
-                .map(|s| norm(&s))
-                .collect();
+        let rust_topics: BTreeSet<String> = wf::topics(
+            &wf::check_wellformedness(&elaborated, None).expect("static wellformedness checks"),
+        )
+        .into_iter()
+        .map(|s| norm(&s))
+        .collect();
         let rust_expected = &fx.expected;
         let negative = negatives.get(name).cloned().unwrap_or_default();
         negatives_checked += negative.len();

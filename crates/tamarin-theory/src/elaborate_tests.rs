@@ -127,11 +127,8 @@ fn a_name_declared_twice_resolves_prefix_free_and_infix_ac() {
 }
 
 /// `em(a, b)` is the bilinear-pairing C symbol (HS `naryOpApp`'s
-/// `o == emapSymString` arm, Theory/Text/Parser/Term.hs).  HS applies
-/// that arm with no builtin gate; the port gates it on the builtin, because
-/// the Maude operator `tamem` is declared only under `enableBP` and a term
-/// carrying it without the builtin crashes the first `get variants` query.
-/// Without the builtin, `em` is an ordinary free symbol.
+/// `o == emapSymString` arm, Theory/Text/Parser/Term.hs). Without the
+/// builtin, an explicitly declared `em` is an ordinary free symbol.
 #[test]
 fn em_is_the_emap_symbol_only_under_bilinear_pairing() {
     use tamarin_term::function_symbols::{CSym, FunSym};
@@ -155,7 +152,7 @@ fn em_is_the_emap_symbol_only_under_bilinear_pairing() {
         other => panic!("expected an EMap application, got {other:?}"),
     }
 
-    let plain_src = format!("theory T begin\n{rule}end");
+    let plain_src = format!("theory T begin\nfunctions: em/2\n{rule}end");
     match term_to_lnterm(&term(&plain_src), &theory_msig(&plain_src)).unwrap() {
         Term::App(FunSym::NoEq(sym), args) => {
             assert_eq!(String::from_utf8_lossy(sym.name), "em");
@@ -964,10 +961,9 @@ end\n";
 }
 
 /// A `variants` block is parsed into `_oprRuleAC` (`protoRule`,
-/// Theory/Text/Parser/Rule.hs) and reaches the close
-/// untouched: `closeProtoRule`'s third equation maps `ClosedProtoRule ruE`
-/// over the list instead of computing variants or applying the macros
-/// (lib/theory/src/Rule.hs).
+/// Theory/Text/Parser/Rule.hs) and kept as explicit variants rather than
+/// recomputed. Macros are expanded in each supplied variant as well as
+/// the original rule before variant validation (lib/theory/src/Rule.hs).
 #[test]
 fn manual_variants_reach_the_internal_rule() {
     use crate::pretty_hpj::FLAT_WIDTH;
@@ -989,7 +985,7 @@ end\n";
 
     assert_eq!(rule.rule_ac.len(), 2);
     assert_eq!(rule.rule_ac[0].info.name, ProtoRuleName::Stand("R"));
-    assert_eq!(shown(&rule.rule_ac[0].actions[0]), "A( m(y) )");
+    assert_eq!(shown(&rule.rule_ac[0].actions[0]), "A( f(y) )");
     assert_eq!(shown(&rule.rule_ac[0].conclusions[0]), "Out( f(y) )");
     assert_eq!(shown(&rule.rule_ac[1].actions[0]), "A( f(z) )");
 }
