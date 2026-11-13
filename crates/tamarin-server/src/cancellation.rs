@@ -82,16 +82,12 @@ impl ProofRequests {
 /// cleanup (for example when the HTTP request itself is abandoned).
 fn cancel_in_background(requests: Vec<Arc<RequestState>>) -> tokio::sync::oneshot::Receiver<()> {
     let (done, receiver) = tokio::sync::oneshot::channel();
-    if requests.is_empty() {
+    std::thread::spawn(move || {
+        for request in requests {
+            request.cancelled.cancel();
+        }
         let _ = done.send(());
-    } else {
-        std::thread::spawn(move || {
-            for request in requests {
-                request.cancelled.cancel();
-            }
-            let _ = done.send(());
-        });
-    }
+    });
     receiver
 }
 
