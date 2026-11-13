@@ -580,12 +580,12 @@ fn refined_slot_derives_from_the_single_raw_slot() {
         .source_cache
         .refined
         .get()
-        .and_then(|result| result.as_ref().ok())
-        .and_then(|sources| sources.first())
+        .and_then(Result::ok)
+        .and_then(|sources| sources.first().cloned())
         .expect("cached refined source");
     let restored = ctx.full_sources.iter().next().expect("restored source");
     assert!(std::sync::Arc::ptr_eq(
-        cached,
+        &cached,
         &restored.cases_shared_or_empty()
     ));
 }
@@ -683,7 +683,7 @@ fn source_pool_work_returns_to_a_lemma_pool_worker() {
     let sums = lemma_pool.install(|| {
         (0..2)
             .into_par_iter()
-            .map(|_| in_source_pool(|| (0..8).into_par_iter().sum::<usize>()))
+            .map(|_| in_source_pool(|| Ok((0..8).into_par_iter().sum::<usize>())).unwrap())
             .collect::<Vec<_>>()
     });
     assert_eq!(sums, vec![28, 28]);
@@ -1107,4 +1107,189 @@ fn scratch_proof_checks_return_backend_errors() {
             }
         }
     }
+}
+
+#[test]
+fn cancel_active_parallel_sources_then_retry_the_same_session() {
+    use crate::constraint::solver::cancellation_tests::{Work, WorkerGate};
+    use std::time::Duration;
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
+    };
+    let participants = source_pool().current_num_threads().min(2);
+    let (gate, entered) = WorkerGate::new(Work::Sources, participants);
+    *session.template_ctx.worker_gate.lock().unwrap() = Some(gate.clone());
+    let token = CancellationToken::default();
+    std::thread::scope(|scope| {
+        let worker_token = token.clone();
+        let worker = scope.spawn(|| {
+            let _guard = CancellationGuard::new(Some(worker_token));
+            raw_sources(
+                &session.template_ctx,
+                session.setup_counter_before,
+                &session.source_cache,
+            )
+        });
+        let first = entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_ne!(first, std::thread::current().id());
+        if participants == 2 {
+            let second = entered.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_ne!(first, second, "source fan-out must reach distinct workers");
+        }
+        token.cancel();
+        gate.release();
+        assert!(matches!(worker.join().unwrap(), Err(ProveError::Cancelled)));
+    });
+    *session.template_ctx.worker_gate.lock().unwrap() = None;
+    assert!(
+        session.source_cache.raw.get().is_none(),
+        "no partial sources may be published"
+    );
+    assert!(source_pool()
+        .broadcast(|_| tamarin_utils::cancellation::current().is_none())
+        .into_iter()
+        .all(|clear| clear));
+    session
+        .context_for_lemma("goal")
+        .unwrap()
+        .ensure_saturated()
+        .unwrap();
+    let retry = prove_lemma_in_session(&session, "goal", 12).unwrap();
+    let Some(clean) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
+    };
+    clean
+        .context_for_lemma("goal")
+        .unwrap()
+        .ensure_saturated()
+        .unwrap();
+    let baseline = prove_lemma_in_session(&clean, "goal", 12).unwrap();
+    assert_eq!(format!("{retry:?}"), format!("{baseline:?}"));
+    assert_eq!(session.source_stats().raw, clean.source_stats().raw);
+    assert_eq!(session.source_stats().refined, clean.source_stats().refined);
+}
+
+#[test]
+fn queued_source_initializer_can_be_cancelled_and_retried() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    };
+    use std::time::Duration;
+    use tamarin_utils::cancellation::{CancellableOnce, CancellationGuard, CancellationToken};
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap(),
+    );
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    pool.spawn(move || {
+        entered_tx.send(()).unwrap();
+        let _ = release_rx.recv();
+    });
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let cache = Arc::new(CancellableOnce::<usize, ProveError>::default());
+    let token = CancellationToken::default();
+    let ran = Arc::new(AtomicBool::new(false));
+    let worker_pool = pool.clone();
+    let worker_cache = cache.clone();
+    let worker_token = token.clone();
+    let job_ran = ran.clone();
+    let (submitted_tx, submitted_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _guard = CancellationGuard::new(Some(worker_token));
+        let result = worker_cache.get_or_init(|| {
+            submitted_tx.send(()).unwrap();
+            in_source_pool_on(&worker_pool, move || {
+                job_ran.store(true, Ordering::Relaxed);
+                Ok(13)
+            })
+        });
+        done_tx.send(result).unwrap();
+    });
+    submitted_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+    token.cancel();
+    assert_eq!(
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+        Err(ProveError::Cancelled)
+    );
+    worker.join().unwrap();
+    assert!(cache.get().is_none());
+    // The unrelated initializer is still occupying the pool. Release it
+    // only after cancellation has finished, then retry the same cache slot.
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        cache.get_or_init(|| in_source_pool_on(&pool, || Ok(42))),
+        Ok(42)
+    );
+    assert!(!ran.load(Ordering::Relaxed));
+    assert_eq!(cache.get(), Some(Ok(42)));
+}
+
+#[test]
+fn running_source_work_is_cleaned_up_before_cancellation_returns() {
+    use std::sync::{mpsc, Arc};
+    use std::time::Duration;
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap(),
+    );
+    let worker_pool = pool.clone();
+    let token = CancellationToken::default();
+    let worker_token = token.clone();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _guard = CancellationGuard::new(Some(worker_token));
+        let result = in_source_pool_on(&worker_pool, move || {
+            entered_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+            Ok(13)
+        });
+        done_tx.send(result).unwrap();
+    });
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    token.cancel();
+    assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+        Err(ProveError::Cancelled)
+    );
+    worker.join().unwrap();
+    assert_eq!(in_source_pool_on(&pool, || Ok(42)), Ok(42));
+    assert!(pool
+        .broadcast(|_| tamarin_utils::cancellation::current().is_none())
+        .into_iter()
+        .all(|clear| clear));
+}
+
+#[test]
+fn source_job_panics_return_to_the_caller_and_restore_worker_state() {
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = CancellationGuard::new(Some(CancellationToken::default()));
+        in_source_pool_on(&pool, || -> Result<(), ProveError> {
+            panic!("source job failed")
+        })
+    }));
+    assert!(panic.is_err());
+    assert_eq!(in_source_pool_on(&pool, || Ok(42)), Ok(42));
+    assert!(pool
+        .broadcast(|_| tamarin_utils::cancellation::current().is_none())
+        .into_iter()
+        .all(|clear| clear));
 }

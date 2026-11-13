@@ -566,8 +566,7 @@ fn oracle_ranking(
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
     _sys: &System,
 ) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
 
     let lemma_name = ctx.map(|c| c.lemma_name.as_str()).unwrap_or("");
 
@@ -586,24 +585,9 @@ fn oracle_ranking(
         .collect();
 
     // Step 3: exec oracle
-    let mut child = Command::new(oracle_path)
-        .arg(lemma_name)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|e| RankingError(format!("oracle exec error: {}: {}", oracle_path, e)))?;
-
-    // Write stdin and close pipe
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(inp.as_bytes())
-            .map_err(|e| RankingError(format!("oracle stdin write error: {}", e)))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| RankingError(format!("oracle wait error: {}", e)))?;
+    let output =
+        tamarin_utils::process::output(Command::new(oracle_path).arg(lemma_name), inp.as_bytes())
+            .map_err(|e| RankingError(format!("oracle exec error: {oracle_path}: {e}")))?;
 
     if !output.status.success() {
         return Err(RankingError(format!(

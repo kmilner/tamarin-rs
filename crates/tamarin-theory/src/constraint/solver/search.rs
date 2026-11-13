@@ -39,6 +39,8 @@
 //! `proof_deadline`.
 
 use std::collections::BTreeMap;
+use tamarin_utils::cancellation;
+pub use tamarin_utils::cancellation::CancellationGuard as ProofCancellationGuard;
 
 use crate::constraint::solver::context::{CutStrategy, ProofContext};
 use crate::constraint::solver::proof_method::{
@@ -404,6 +406,10 @@ thread_local! {
 
     /// Absolute proof depth represented by the root of a focused search.
     static RANKING_DEPTH_OFFSET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn check_cancelled() -> Result<(), ProveError> {
+    cancellation::check().map_err(Into::into)
 }
 
 /// True iff the current search is past its wall-clock deadline.
@@ -833,6 +839,7 @@ fn re_expand_depth_limited(
     deadline: &std::time::Instant,
     depth: usize,
 ) -> Result<(), ProveError> {
+    check_cancelled()?;
     // Was this node stalled at the depth limit on the previous iteration?
     if is_depth_limited(node) {
         // Re-expand from scratch at this depth.  The deeper `MAX_DEPTH`
@@ -928,6 +935,8 @@ fn expand(
     depth: usize,
 ) -> Result<(), ProveError> {
     expand_inner(ctx, node, budget, deadline, depth)?;
+    // Boolean terminal checks can suppress a cancelled Maude query.
+    check_cancelled()?;
     // After expansion, `sys` is no longer read EXCEPT on
     // `Sorry: depth limit` leaves, which `re_expand_depth_limited`
     // (defined below in this file) re-runs `expand` on during the next
@@ -974,6 +983,7 @@ fn expand_inner(
     deadline: &std::time::Instant,
     depth: usize,
 ) -> Result<(), ProveError> {
+    check_cancelled()?;
     // `--bound=N` (HS `boundProofDepth`, Theory/Proof.hs): `go n`'s
     // `0 < n` guard fires before the node is even inspected, so ANY node at
     // depth `bound` — a would-be Solved leaf included — becomes
@@ -1167,85 +1177,109 @@ fn expand_inner(
         // own thread-local stack and produce coherent trace output.
         let path_snapshot = crate::constraint::solver::trace::case_path_snapshot();
         let deadline_snapshot = *deadline;
+        let cancellation = cancellation::current();
         // A rayon closure may run on this same thread. Its guards restore the
         // parent's TLS and case path; retain only the worker results that must
         // be aggregated into the parent search.
         let parent_depth_limit_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
-        let results: Result<Vec<(String, ProofNode, bool)>, ProveError> = cases
-            .into_par_iter()
-            .map(|(name, sys)| {
-                // Each rayon worker has its own thread-locals.  Initialise
-                // them from the parent's captured state so downstream code
-                // (depth-limit check, DEPTH_LIMIT_HIT bookkeeping, trace
-                // case path) sees the correct values regardless of which
-                // worker thread we land on.
-                let _tls = SearchTlsGuard::install(SearchTlsState {
-                    deadline: Some(deadline_snapshot),
-                    max_depth: mp_snapshot,
-                    depth_limit_hit: false,
-                    proof_bound: bound_snapshot,
-                    ranking_depth_offset: ranking_offset_snapshot,
-                });
-                let _path = crate::constraint::solver::trace::CasePathGuard::set_child(
-                    path_snapshot.clone(),
-                    &name,
-                );
-                // Per-worker MaudeHandle: siblings must not share `ctx.maude`'s
-                // `fresh_counter` -- concurrent mutation would make LVar.idx
-                // allocation (and proof-tree shape) depend on worker interleaving,
-                // breaking deterministic output.
-                //
-                // HS-faithful: HS seeds a fresh FreshT counter per child case from
-                // `avoid sys` (ProofMethod.hs).  Mirror by cloning `ctx.maude`
-                // with its own `fresh_counter` per worker (bounds_max(sys) + 1).
-                //
-                // If a `maude_pool` is configured, also borrow a per-worker
-                // Maude subprocess so workers don't serialise on the
-                // single shared IPC mutex.  Without a pool we share the
-                // single Maude process; the IPC mutex serialises queries,
-                // which is correctness-safe (just slower).
-                // HS `avoid sys` next-draw seed (0 for a frees-less system —
-                // see `avoid_fresh_state`), matching `Reduction::new`.
-                let avoid_next = crate::constraint::solver::reduction::avoid_fresh_state(&sys);
-                // Non-blocking: with B1 lemma-level parallelism the pool may be
-                // fully drained by sibling lemma tasks.  A blocking `acquire`
-                // here could deadlock the nested fan-out; fall back to the shared
-                // `ctx.maude` (output-identical — both branches seed via
-                // `with_fresh_counter_next(avoid_next)`).
-                let pool_guard = ctx.maude_pool.as_ref().and_then(|pool| pool.try_acquire());
-                let worker_maude = match &pool_guard {
-                    Some(pooled) => pooled.handle().with_fresh_counter_next(avoid_next),
-                    None => ctx.maude.with_fresh_counter_next(avoid_next),
-                };
-                let worker_ctx = ctx.with_swapped_maude(worker_maude);
-                let mut child = ProofNode {
-                    method: ProofMethod::Sorry(None),
-                    sys,
-                    children: BTreeMap::new(),
-                    status: NodeStatus::Open,
-                    annotated: true,
-                };
-                // Each worker gets its own budget cell — siblings do not
-                // share a single counter, but with the default usize::MAX
-                // (no terminal cutoff) that's faithful: HS's lazy Disj
-                // exploration also doesn't share a counter.
-                let mut local_budget = *budget;
-                expand(
-                    &worker_ctx,
-                    &mut child,
-                    &mut local_budget,
-                    &deadline_snapshot,
-                    depth + 1,
-                )?;
-                // Drop the pooled Maude back to the pool only after expand
-                // returns — any Maude IPC inside expand uses the pooled
-                // handle via `worker_ctx.maude`.
-                drop(pool_guard);
-                let local_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
-                Ok((name, child, local_hit))
-            })
-            .collect();
-        let results = results?;
+        let budget_snapshot = *budget;
+        let queued_entry = cancellation.is_some() && rayon::current_thread_index().is_none();
+        let expand_cases =
+            move |ctx: &ProofContext| -> Result<Vec<(String, ProofNode, bool)>, ProveError> {
+                cases
+                    .into_par_iter()
+                    .map(|(name, sys)| {
+                        // Each rayon worker has its own thread-locals.  Initialise
+                        // them from the parent's captured state so downstream code
+                        // (depth-limit check, DEPTH_LIMIT_HIT bookkeeping, trace
+                        // case path) sees the correct values regardless of which
+                        // worker thread we land on.
+                        let _cancellation = ProofCancellationGuard::new(cancellation.clone());
+                        let _tls = SearchTlsGuard::install(SearchTlsState {
+                            deadline: Some(deadline_snapshot),
+                            max_depth: mp_snapshot,
+                            depth_limit_hit: false,
+                            proof_bound: bound_snapshot,
+                            ranking_depth_offset: ranking_offset_snapshot,
+                        });
+                        let _path = crate::constraint::solver::trace::CasePathGuard::set_child(
+                            path_snapshot.clone(),
+                            &name,
+                        );
+                        // Per-worker MaudeHandle: siblings must not share `ctx.maude`'s
+                        // `fresh_counter` -- concurrent mutation would make LVar.idx
+                        // allocation (and proof-tree shape) depend on worker interleaving,
+                        // breaking deterministic output.
+                        //
+                        // HS-faithful: HS seeds a fresh FreshT counter per child case from
+                        // `avoid sys` (ProofMethod.hs).  Mirror by cloning `ctx.maude`
+                        // with its own `fresh_counter` per worker (bounds_max(sys) + 1).
+                        //
+                        // If a `maude_pool` is configured, also borrow a per-worker
+                        // Maude subprocess so workers don't serialise on the
+                        // single shared IPC mutex.  Without a pool we share the
+                        // single Maude process; the IPC mutex serialises queries,
+                        // which is correctness-safe (just slower).
+                        // HS `avoid sys` next-draw seed (0 for a frees-less system —
+                        // see `avoid_fresh_state`), matching `Reduction::new`.
+                        let avoid_next =
+                            crate::constraint::solver::reduction::avoid_fresh_state(&sys);
+                        // Non-blocking: with B1 lemma-level parallelism the pool may be
+                        // fully drained by sibling lemma tasks.  A blocking `acquire`
+                        // here could deadlock the nested fan-out; fall back to the shared
+                        // `ctx.maude` (output-identical — both branches seed via
+                        // `with_fresh_counter_next(avoid_next)`).
+                        let pool_guard =
+                            ctx.maude_pool.as_ref().and_then(|pool| pool.try_acquire());
+                        let worker_maude = match &pool_guard {
+                            Some(pooled) => pooled.handle().with_fresh_counter_next(avoid_next),
+                            None => ctx.maude.with_fresh_counter_next(avoid_next),
+                        };
+                        let worker_ctx = ctx.with_swapped_maude(worker_maude);
+                        let mut child = ProofNode {
+                            method: ProofMethod::Sorry(None),
+                            sys,
+                            children: BTreeMap::new(),
+                            status: NodeStatus::Open,
+                            annotated: true,
+                        };
+                        // Each worker gets its own budget cell — siblings do not
+                        // share a single counter, but with the default usize::MAX
+                        // (no terminal cutoff) that's faithful: HS's lazy Disj
+                        // exploration also doesn't share a counter.
+                        #[cfg(test)]
+                        super::cancellation_tests::checkpoint(
+                            &worker_ctx,
+                            super::cancellation_tests::Work::Search,
+                        );
+                        let mut local_budget = budget_snapshot;
+                        expand(
+                            &worker_ctx,
+                            &mut child,
+                            &mut local_budget,
+                            &deadline_snapshot,
+                            depth + 1,
+                        )?;
+                        // Drop the pooled Maude back to the pool only after expand
+                        // returns — any Maude IPC inside expand uses the pooled
+                        // handle via `worker_ctx.maude`.
+                        drop(pool_guard);
+                        let local_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
+                        Ok((name, child, local_hit))
+                    })
+                    .collect()
+            };
+        let results = if queued_entry {
+            // A non-Rayon caller otherwise waits uninterruptibly for a free
+            // worker. Share source admission's cancellation protocol, keeping
+            // the existing parallel iterator and its nested work stealing.
+            check_cancelled()?;
+            let mut owned_ctx = ctx.with_swapped_maude(ctx.maude.clone());
+            owned_ctx.maude_pool = ctx.maude_pool.clone();
+            crate::prove::run_cancellable_job(rayon::spawn, move || expand_cases(&owned_ctx))?
+        } else {
+            expand_cases(ctx)?
+        };
         // Aggregate worker DEPTH_LIMIT_HIT into the parent thread —
         // run_proof_search's ID-DFS loop reads this to decide whether
         // to grow MAX_DEPTH for the next iteration.  Fold the workers'
@@ -1557,6 +1591,7 @@ pub fn candidate_methods_with_expl(
 mod tests {
     use super::*;
     use tamarin_term::maude_sig::pair_maude_sig;
+    use tamarin_utils::cancellation::CancellationToken;
 
     use tamarin_test_support::require_maude_path;
 
@@ -1615,6 +1650,190 @@ mod tests {
             .map(|_| crate::elaborate::term_to_lnterm(&term, &msig).expect("converts"))
             .collect();
         assert!(on_workers.iter().all(|t| *t == on_caller));
+    }
+
+    #[test]
+    fn cancelled_searches_fail_and_restore_worker_state() {
+        let Some(mut ctx) = ctx() else { return };
+        for cut in [
+            CutStrategy::Dfs,
+            CutStrategy::Bfs,
+            CutStrategy::SeqDfs,
+            CutStrategy::Nothing,
+            CutStrategy::AfterSorry,
+        ] {
+            ctx.cut = cut;
+            let token = CancellationToken::default();
+            token.cancel();
+            let guard = ProofCancellationGuard::new(Some(token));
+            assert!(matches!(
+                run_proof_search(&ctx, System::empty(), usize::MAX),
+                Err(ProveError::Cancelled)
+            ));
+            // A nested worker scope must restore its parent's cancellation.
+            {
+                let _nested = ProofCancellationGuard::new(Some(CancellationToken::default()));
+                assert_eq!(check_cancelled(), Ok(()));
+            }
+            assert_eq!(check_cancelled(), Err(ProveError::Cancelled));
+            drop(guard);
+            assert!(run_proof_search(&ctx, System::empty(), 1).is_ok());
+        }
+    }
+
+    fn branching_search() -> Option<(ProofContext, System)> {
+        let mut ctx = ctx()?;
+        ctx.cut = CutStrategy::Dfs;
+        ctx.is_exists_trace = false;
+        let mut sys = System::empty();
+        sys.add_less(crate::constraint::constraints::LessAtom::new(
+            tamarin_term::lterm::LVar::new("a", tamarin_term::lterm::LSort::Node, 0),
+            tamarin_term::lterm::LVar::new("b", tamarin_term::lterm::LSort::Node, 0),
+            crate::constraint::constraints::Reason::Fresh,
+        ));
+        sys.add_goal(crate::constraint::constraints::Goal::Disj(
+            crate::constraint::constraints::Disj::new(vec![
+                crate::guarded::gtrue(),
+                crate::guarded::gfalse(),
+            ]),
+        ));
+        Some((ctx, sys))
+    }
+
+    #[test]
+    fn cancel_active_parallel_search_then_retry_on_the_same_workers() {
+        use super::super::cancellation_tests::{Work, WorkerGate};
+        use std::time::Duration;
+        let Some((ctx, sys)) = branching_search() else {
+            return;
+        };
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let (gate, entered) = WorkerGate::new(Work::Search, 2);
+        *ctx.worker_gate.lock().unwrap() = Some(gate.clone());
+        let token = CancellationToken::default();
+        std::thread::scope(|scope| {
+            let worker_token = token.clone();
+            let cancelled_sys = sys.clone();
+            let worker = scope.spawn(|| {
+                pool.install(|| {
+                    let _guard = ProofCancellationGuard::new(Some(worker_token));
+                    run_proof_search(&ctx, cancelled_sys, 10)
+                })
+            });
+            let first = entered.recv_timeout(Duration::from_secs(5)).unwrap();
+            let second = entered.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_ne!(first, second, "both Rayon workers must be active");
+            token.cancel();
+            gate.release();
+            assert!(matches!(worker.join().unwrap(), Err(ProveError::Cancelled)));
+        });
+        *ctx.worker_gate.lock().unwrap() = None;
+        assert!(pool
+            .broadcast(|_| cancellation::current().is_none())
+            .into_iter()
+            .all(|clear| clear));
+        let retry_sys = sys.clone();
+        let retry = pool
+            .install(|| run_proof_search(&ctx, retry_sys, 10))
+            .unwrap();
+        let Some(clean_ctx) = self::ctx() else { return };
+        let clean = pool
+            .install(|| run_proof_search(&clean_ctx, sys, 10))
+            .unwrap();
+        assert_eq!(format!("{retry:?}"), format!("{clean:?}"));
+    }
+
+    #[test]
+    fn queued_search_cancels_and_parallel_restart_remains_sound() {
+        use super::super::cancellation_tests::{Work, WorkerGate};
+        use std::sync::mpsc;
+        use std::time::Duration;
+        // Isolate the global Rayon pool from other tests so every worker can
+        // be occupied without changing the rest of the suite's scheduler.
+        const CHILD: &str = "TAM_TEST_QUEUED_SEARCH_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "constraint::solver::search::tests::queued_search_cancels_and_parallel_restart_remains_sound", "--nocapture"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build_global()
+            .unwrap();
+        let Some((ctx, sys)) = branching_search() else {
+            return;
+        };
+        let baseline = run_proof_search(&ctx, sys.clone(), 10).unwrap();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let mut releases = Vec::new();
+        for _ in 0..2 {
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            releases.push(release_tx);
+            let entered_tx = entered_tx.clone();
+            rayon::spawn(move || {
+                entered_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            });
+        }
+        for _ in 0..2 {
+            entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
+        let token = CancellationToken::default();
+        let worker_token = token.clone();
+        let queued_sys = sys.clone();
+        let (done_tx, done_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _guard = ProofCancellationGuard::new(Some(worker_token));
+            let result = run_proof_search(&ctx, queued_sys, 10);
+            done_tx.send((ctx, result)).unwrap();
+        });
+        assert!(done_rx.recv_timeout(Duration::from_millis(100)).is_err());
+        token.cancel();
+        let (ctx, result) = done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("cancellation must finish while unrelated workers remain blocked");
+        assert!(matches!(result, Err(ProveError::Cancelled)));
+        worker.join().unwrap();
+        drop(releases);
+
+        // The replacement also enters from outside Rayon. Require both workers
+        // to run, cancel active work, then retry against the clean result.
+        let (gate, entered) = WorkerGate::new(Work::Search, 2);
+        *ctx.worker_gate.lock().unwrap() = Some(gate.clone());
+        let token = CancellationToken::default();
+        let worker_token = token.clone();
+        let active_sys = sys.clone();
+        let worker = std::thread::spawn(move || {
+            let _guard = ProofCancellationGuard::new(Some(worker_token));
+            let result = run_proof_search(&ctx, active_sys, 10);
+            (ctx, result)
+        });
+        let first = entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        let second = entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_ne!(first, second, "replacement must still expand in parallel");
+        token.cancel();
+        gate.release();
+        let (ctx, result) = worker.join().unwrap();
+        assert!(matches!(result, Err(ProveError::Cancelled)));
+        *ctx.worker_gate.lock().unwrap() = None;
+        let _guard = ProofCancellationGuard::new(Some(CancellationToken::default()));
+        let retry = run_proof_search(&ctx, sys, 10).unwrap();
+        assert_eq!(format!("{retry:?}"), format!("{baseline:?}"));
+        assert!(rayon::broadcast(|_| cancellation::current().is_none())
+            .into_iter()
+            .all(|clear| clear));
     }
 
     #[test]

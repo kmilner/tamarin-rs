@@ -150,6 +150,7 @@ fn simplify_system_fan_out_inner_with_passes(
     // HS-faithful (Simplify.hs): no iteration cap — the loop
     // terminates only when a full pass reports `Unchanged`.
     loop {
+        super::search::check_cancelled()?;
         red.changed = ChangeIndicator::Unchanged;
         red.subst_system()?;
         if let Some(branches) = continue_simplify_iteration(red, passes, 0)? {
@@ -177,6 +178,7 @@ fn continue_simplify_iteration(
     mut next_pass: usize,
 ) -> Result<Option<Vec<SystemBranch>>, crate::prove::ProveError> {
     while let Some(pass) = passes.get(next_pass) {
+        super::search::check_cancelled()?;
         let outcome = pass.run(red)?;
         next_pass += 1;
         let arms = match outcome {

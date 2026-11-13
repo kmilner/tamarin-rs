@@ -21,6 +21,7 @@ use crate::maude_print::{pp_mterm_into, pp_mterm_list_into, pp_theory};
 use crate::maude_sig::MaudeSig;
 use crate::maude_types::{lterm_to_mterm_global, mterm_to_lnterm, ConvCtx, MSubst, MTerm};
 use crate::rewriting::Equal;
+use tamarin_utils::cancellation;
 use tamarin_utils::fresh::MonadFresh;
 
 const PROMPT: &[u8] = b"Maude> ";
@@ -28,6 +29,7 @@ const PROMPT: &[u8] = b"Maude> ";
 /// Errors that can arise from the Maude bridge.
 #[derive(Debug)]
 pub enum MaudeError {
+    Cancelled,
     /// stdin/stdout I/O failure talking to the Maude subprocess.
     Io(std::io::Error),
     /// The `maude` binary could not be launched (e.g. not found on PATH).
@@ -41,6 +43,7 @@ pub enum MaudeError {
 impl std::fmt::Display for MaudeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            MaudeError::Cancelled => f.write_str("request cancelled"),
             MaudeError::Io(e) => write!(f, "io error: {}", e),
             MaudeError::Spawn(s) => write!(f, "spawn error: {}", s),
             MaudeError::Parse(e) => write!(f, "parse error: {}", e),
@@ -49,6 +52,11 @@ impl std::fmt::Display for MaudeError {
     }
 }
 impl std::error::Error for MaudeError {}
+impl From<cancellation::Cancelled> for MaudeError {
+    fn from(_: cancellation::Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
 impl From<std::io::Error> for MaudeError {
     fn from(e: std::io::Error) -> Self {
         MaudeError::Io(e)
@@ -190,6 +198,9 @@ pub struct SharedMaudeCaches {
 }
 
 struct MaudeProcessInner {
+    maude_path: String,
+    child: Arc<Mutex<MaudeChildReaper>>,
+    initialized: bool,
     stdin: ChildStdin,
     stdout: ChildStdout,
     stats: MaudeStats,
@@ -229,6 +240,84 @@ fn maude_io_trace_config() -> &'static (bool, bool, String) {
 }
 
 impl MaudeProcessInner {
+    fn with_cancellation<T>(
+        &mut self,
+        work: impl FnOnce(&mut Self) -> Result<T, MaudeError>,
+    ) -> Result<T, MaudeError> {
+        cancellation::check()?;
+        let child = self.child.clone();
+        let _registration = cancellation::current().map(|token| {
+            token.on_cancel(move || {
+                let mut child = child.lock().unwrap();
+                child.kill_and_wait();
+                child.restart = true;
+            })
+        });
+        // The timed I/O mutex does not poison on panic. Fail closed if an
+        // exchange unwinds, so its unread reply can never reach another job.
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(self))) {
+            Ok(result) => result,
+            Err(panic) => {
+                self.initialized = false;
+                self.child.lock().unwrap().kill_and_wait();
+                std::panic::resume_unwind(panic);
+            }
+        };
+        // Any interrupted or failed exchange invalidates this connection.
+        // Keep complete memo entries, but discard its pipes before reuse.
+        if result.is_err() {
+            self.initialized = false;
+            let mut child = self.child.lock().unwrap();
+            // A cancellation checkpoint can win the race with deferred
+            // callback cleanup. Its registration will be removed on return,
+            // so recovery must not depend on that callback being invoked.
+            if matches!(&result, Err(MaudeError::Cancelled)) {
+                child.restart = true;
+            }
+            child.kill_and_wait();
+        }
+        cancellation::check()?;
+        result
+    }
+
+    fn initialize(&mut self) -> Result<(), MaudeError> {
+        {
+            let mut reaper = self.child.lock().unwrap();
+            cancellation::check()?;
+            if reaper.child.is_none() {
+                if !reaper.restart {
+                    return Err(MaudeError::Other("Maude exited unexpectedly".into()));
+                }
+                let (stdin, stdout, child) = spawn_maude(&self.maude_path)?;
+                self.stdin = stdin;
+                self.stdout = stdout;
+                reaper.child = Some(child);
+                reaper.restart = false;
+                self.initialized = false;
+            }
+        }
+        if !self.initialized {
+            self.read_until_prompt()?;
+            for cmd in [
+                "set show command off .\n",
+                "set show timing off .\n",
+                "set show stats off .\n",
+            ] {
+                self.execute_raw(cmd.as_bytes())?;
+            }
+            self.execute_raw(pp_theory(&self.sig).as_bytes())?;
+            self.initialized = true;
+        }
+        Ok(())
+    }
+
+    fn execute(&mut self, cmd: &[u8]) -> Result<Vec<u8>, MaudeError> {
+        self.with_cancellation(|inner| {
+            inner.initialize()?;
+            inner.execute_raw(cmd)
+        })
+    }
+
     fn write_line(&mut self, line: &[u8]) -> Result<(), MaudeError> {
         self.stdin.write_all(line)?;
         self.stdin.flush()?;
@@ -261,7 +350,7 @@ impl MaudeProcessInner {
         }
     }
 
-    fn execute(&mut self, cmd: &[u8]) -> Result<Vec<u8>, MaudeError> {
+    fn execute_raw(&mut self, cmd: &[u8]) -> Result<Vec<u8>, MaudeError> {
         // `TAM_DBG_MAUDE_IO=1` — truncated trace (200 chars).
         // `TAM_DBG_MAUDE_IO=full` — full command + response.
         // `TAM_DBG_MAUDE_IO_FILTER=unify` — only dump unify calls
@@ -363,24 +452,45 @@ impl Drop for MaudeProcessInner {
     }
 }
 
+fn spawn_maude(maude_path: &str) -> Result<(ChildStdin, ChildStdout, Child), MaudeError> {
+    let mut command = Command::new(maude_path);
+    tamarin_utils::process::isolate_process_group(&mut command);
+    let mut child = command
+        .args([
+            "-interactive",
+            "-no-tecla",
+            "-no-banner",
+            "-no-wrap",
+            "-batch",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| MaudeError::Spawn(format!("{maude_path}: {e}")))?;
+    Ok((
+        child.stdin.take().expect("piped stdin"),
+        child.stdout.take().expect("piped stdout"),
+        child,
+    ))
+}
+
 /// Reaper for the Maude `Child` handle.  Lives in its own `Arc<Mutex<...>>`
 /// separate from the I/O mutex so that a watchdog can kill the
 /// subprocess WITHOUT contending with a reader thread that's blocked
 /// inside `read_until_prompt` while holding the I/O lock.
 struct MaudeChildReaper {
     child: Option<Child>,
+    // Only request cancellation asks for transparent recovery. Explicit
+    // watchdog kills and unrelated I/O errors retain their error semantics.
+    restart: bool,
 }
 
 impl MaudeChildReaper {
     fn kill_and_wait(&mut self) {
         if let Some(mut c) = self.child.take() {
-            match c.try_wait() {
-                Ok(Some(_)) => {}
-                _ => {
-                    let _ = c.kill();
-                    let _ = c.wait();
-                }
-            }
+            tamarin_utils::process::kill_process_group(&mut c);
+            let _ = c.wait();
         }
     }
 }
@@ -409,7 +519,7 @@ fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// trying to acquire the same mutex the blocked reader holds.
 #[derive(Clone)]
 pub struct MaudeHandle {
-    inner: Arc<Mutex<MaudeProcessInner>>,
+    inner: Arc<parking_lot::Mutex<MaudeProcessInner>>,
     child: Arc<Mutex<MaudeChildReaper>>,
     /// Monotonically-increasing counter for fresh-variable allocation.
     ///
@@ -486,21 +596,16 @@ impl MaudeHandle {
         // Scott.spthy::key_secrecy where the RS process sat at 0% CPU
         // for 55s of a 60s timeout while Maude's wchan was
         // `anon_pipe_write` and the RS reader was `anon_pipe_read`.
-        let mut child = Command::new(maude_path)
-            .arg("-interactive")
-            .arg("-no-tecla")
-            .arg("-no-banner")
-            .arg("-no-wrap")
-            .arg("-batch")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|e| MaudeError::Spawn(format!("{}: {}", maude_path, e)))?;
-        let stdin = child.stdin.take().expect("piped stdin");
-        let stdout = child.stdout.take().expect("piped stdout");
-        let reaper = MaudeChildReaper { child: Some(child) };
+        cancellation::check()?;
+        let (stdin, stdout, child) = spawn_maude(maude_path)?;
+        let reaper = Arc::new(Mutex::new(MaudeChildReaper {
+            child: Some(child),
+            restart: false,
+        }));
         let mut inner = MaudeProcessInner {
+            maude_path: maude_path.to_owned(),
+            child: reaper.clone(),
+            initialized: false,
             stdin,
             stdout,
             stats: MaudeStats::default(),
@@ -509,22 +614,10 @@ impl MaudeHandle {
             sig: Arc::clone(&sig),
             caches,
         };
-        // Banner / initial prompt.
-        let _ = inner.read_until_prompt()?;
-        // Quiet mode.
-        for cmd in [
-            "set show command off .\n",
-            "set show timing off .\n",
-            "set show stats off .\n",
-        ] {
-            let _ = inner.execute(cmd.as_bytes())?;
-        }
-        // Load the theory.
-        let theory = pp_theory(&sig);
-        let _ = inner.execute(theory.as_bytes())?;
+        inner.with_cancellation(MaudeProcessInner::initialize)?;
         Ok(MaudeHandle {
-            inner: Arc::new(Mutex::new(inner)),
-            child: Arc::new(Mutex::new(reaper)),
+            inner: Arc::new(parking_lot::Mutex::new(inner)),
+            child: reaper,
             // The global fresh counter starts at 0 (HS-faithful: HS's
             // `MonadFresh` global counter starts at 0).
             fresh_counter: Arc::new(AtomicU64::new(0)),
@@ -638,9 +731,9 @@ impl MaudeHandle {
     /// prove_lemma call is blocked inside a synchronous Maude IPC read
     /// (no internal deadline can catch that — the read just sits there
     /// waiting for stdout bytes).  After kill, any pending read returns
-    /// EOF, the worker thread unwinds with an error, and the handle's
-    /// `Drop` reaps the zombie.  Idempotent — try_wait first so we
-    /// don't error on an already-exited child.
+    /// EOF and the worker thread unwinds with an error. The owned process
+    /// group is killed before reaping its leader, including wrapper children
+    /// holding the pipes open. Repeated calls are harmless.
     ///
     /// Locks ONLY `self.child` (the dedicated reaper mutex), NOT
     /// `self.inner`, so it can fire while a reader thread holds the
@@ -654,7 +747,7 @@ impl MaudeHandle {
 
     /// Snapshot of the per-operation Maude call counters for this handle.
     pub fn stats(&self) -> MaudeStats {
-        self.inner.lock().unwrap().stats
+        self.inner.lock().stats
     }
 
     /// Reduce a term to normal form modulo the theory.  Memoized via
@@ -668,7 +761,7 @@ impl MaudeHandle {
     pub fn reduce(&self, t: &LNTerm) -> Result<LNTerm, MaudeError> {
         let mut ctx = ConvCtx::new();
         let reply = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = cancellation::lock(&self.inner)?;
             let hit = inner.caches.reduce.lock().unwrap().get(t).cloned();
             if let Some(cached) = hit {
                 inner.cache_stats.reduce_hits += 1;
@@ -744,7 +837,7 @@ impl MaudeHandle {
         let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &self.sig)?;
         let mut next = 0;
         let result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = cancellation::lock(&self.inner)?;
         inner.cache_stats.reduce_misses += 1;
         inner
             .caches
@@ -784,7 +877,7 @@ impl MaudeHandle {
         // before any Maude IPC (lock-order invariant on
         // `SharedMaudeCaches`).
         {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = cancellation::lock(&self.inner)?;
             let hit = inner.caches.unifiable.lock().unwrap().get(&key).copied();
             if let Some(hit) = hit {
                 inner.cache_stats.unifiable_hits += 1;
@@ -793,7 +886,7 @@ impl MaudeHandle {
         }
         let res = self.unify(eqs)?;
         let answer = !res.is_empty();
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = cancellation::lock(&self.inner)?;
         inner.cache_stats.unifiable_misses += 1;
         inner.caches.unifiable.lock().unwrap().insert(key, answer);
         Ok(answer)
@@ -820,8 +913,7 @@ impl MaudeHandle {
     /// produces a surviving Resolve2 case where xm doesn't bind to ct,
     /// missing the N6 contradiction.
     fn is_ac_free(&self) -> bool {
-        let g = self.inner.lock().unwrap();
-        g.sig.has_no_ac_operators() && g.sig.st_rules.is_empty()
+        self.sig.has_no_ac_operators() && self.sig.st_rules.is_empty()
     }
 
     /// Unify a list of equations modulo the theory, returning one
@@ -969,7 +1061,7 @@ impl MaudeHandle {
         }
         // The equations actually sent to Maude are the AC residuals.
         let maude_eqs: &[Equal<LNTerm>] = &residual_eqs;
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         let cmd = build_conj_eqs_cmd(b"unify in MSG : ", maude_eqs, &mut ctx);
         // Raw-reply memo (see `SharedMaudeCaches::reply`): identical `unify in MSG` command
@@ -1131,7 +1223,7 @@ impl MaudeHandle {
             let matched = eqs.iter().all(|eq| eq.lhs == eq.rhs);
             return Ok(if matched { vec![Vec::new()] } else { vec![] });
         }
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         // `subjs` ← each `eq.lhs` (HS `t1s = a = subject`);
         // `pats`  ← each `eq.rhs` (HS `t2s = b = pattern`).
@@ -1238,7 +1330,7 @@ impl MaudeHandle {
             })
             .collect();
 
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         let mut pats: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
         let mut subjs: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
@@ -1277,7 +1369,7 @@ impl MaudeHandle {
         &self,
         t: &LNTerm,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         let mt = lterm_to_mterm_global(t, &mut ctx);
         let mut cmd = b"get variants in MSG : ".to_vec();

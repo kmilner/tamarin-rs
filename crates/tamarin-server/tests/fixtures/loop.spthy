@@ -1,0 +1,12 @@
+theory Loop
+begin
+
+builtins: diffie-hellman
+
+rule R: [ In(x), In(y), L(t) ] --[ P() ]-> [ L(x^y) ]
+
+lemma exec:
+  exists-trace
+  "Ex #x. P()@ #x"
+
+end

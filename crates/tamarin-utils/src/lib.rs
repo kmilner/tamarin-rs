@@ -2,6 +2,7 @@
 //!
 //! Modules ported from `lib/utils/src/` of the upstream Haskell tree.
 
+pub mod cancellation;
 pub mod color;
 pub mod cow;
 pub mod dag;
@@ -13,6 +14,7 @@ pub mod fresh;
 pub mod prelude_ext;
 pub mod pretty_hpj;
 pub mod pretty_html;
+pub mod process;
 pub mod unicode;
 
 /// Fast non-cryptographic hash map for internal *lookup-only* uses

@@ -50,6 +50,7 @@
 // the `disallowed_macros` freeze is allowed for this file.
 #![allow(clippy::disallowed_macros)]
 
+pub mod cancellation;
 pub mod handlers;
 pub mod routes;
 pub mod state;
@@ -200,6 +201,7 @@ pub async fn serve(
     let state = Arc::new(AppState {
         cfg: cfg.clone(),
         store,
+        proof_requests: Default::default(),
     });
 
     let app = router(state.clone());

@@ -71,14 +71,14 @@ enum LemmaProofState {
     Live(Arc<Mutex<ProofNode>>),
 }
 
-fn copy_on_write(root: &mut Arc<Mutex<ProofNode>>) -> &mut ProofNode {
+fn copy_on_write(root: &mut Arc<Mutex<ProofNode>>) -> Result<&mut ProofNode, String> {
     if Arc::get_mut(root).is_none() {
-        let cloned = root.lock().clone();
+        let cloned = crate::cancellation::lock(root)?.clone();
         *root = Arc::new(Mutex::new(cloned));
     }
-    Arc::get_mut(root)
+    Ok(Arc::get_mut(root)
         .expect("the copied root is uniquely owned")
-        .get_mut()
+        .get_mut())
 }
 
 impl ProofSnapshot {
@@ -271,7 +271,7 @@ impl ProofState {
         let LemmaProofState::Live(root) = &mut *state else {
             return Err(format!("unknown lemma: {lemma}"));
         };
-        let root_guard = root.lock();
+        let root_guard = crate::cancellation::lock(root)?;
         let selected =
             navigate_at(&root_guard, path).ok_or_else(|| format!("path not found: {:?}", path))?;
         if !selected.annotated {
@@ -314,7 +314,7 @@ impl ProofState {
             }
             (rollup_status(&children), children)
         };
-        let root = copy_on_write(root);
+        let root = copy_on_write(root)?;
         let node = navigate_mut(root, path).expect("path was checked before copy-on-write");
         node.method = method;
         node.children = children;
@@ -338,7 +338,7 @@ impl ProofState {
         let LemmaProofState::Live(root) = &mut *state else {
             return Ok(false);
         };
-        let root_guard = root.lock();
+        let root_guard = crate::cancellation::lock(root)?;
         let Some(selected) = navigate_at(&root_guard, path) else {
             return Ok(false);
         };
@@ -346,7 +346,7 @@ impl ProofState {
             return Ok(false);
         }
         drop(root_guard);
-        let root = copy_on_write(root);
+        let root = copy_on_write(root)?;
         let node = navigate_mut(root, path).expect("path was checked before copy-on-write");
         node.method = ProofMethod::Sorry(Some("removed".to_string()));
         node.children.clear();
@@ -377,14 +377,14 @@ impl ProofState {
         let LemmaProofState::Live(root) = &mut *state else {
             return Err(format!("unknown lemma: {lemma}"));
         };
-        let root_guard = root.lock();
+        let root_guard = crate::cancellation::lock(root)?;
         let selected =
             navigate_at(&root_guard, path).ok_or_else(|| format!("path not found: {:?}", path))?;
         if !selected.annotated {
             return Err(format!("no annotated system at path: {:?}", path));
         }
         drop(root_guard);
-        let root = copy_on_write(root);
+        let root = copy_on_write(root)?;
         if path.is_empty() {
             *root = subtree;
             return Ok(());
@@ -401,18 +401,23 @@ impl ProofState {
     /// Mirrors Haskell `modifyTheory`'s value-typed
     /// `IncrementalProof` semantics: each version-fork sees the source
     /// tree at the moment of fork, then evolves independently.
-    pub(crate) fn fork(&self) -> Self {
+    pub(crate) fn fork(&self) -> Result<Self, String> {
         let by_lemma = self
             .by_lemma
             .iter()
-            .map(|(name, state)| (name.clone(), Mutex::new(state.lock().clone())))
-            .collect();
-        ProofState {
+            .map(|(name, state)| {
+                Ok((
+                    name.clone(),
+                    Mutex::new(crate::cancellation::lock(state)?.clone()),
+                ))
+            })
+            .collect::<Result<_, String>>()?;
+        Ok(ProofState {
             by_lemma,
             session: self.session.clone(),
             #[cfg(test)]
             replay_calls: std::sync::atomic::AtomicUsize::new(0),
-        }
+        })
     }
 
     /// Build a session for a modified theory while preserving the proof roots
@@ -444,7 +449,7 @@ impl ProofState {
             };
             // Do not block readers of the published theory while a stale
             // proof is reconstructed and replayed into the edited version.
-            let state = slot.lock().clone();
+            let state = crate::cancellation::lock(slot)?.clone();
             if !invalidated.contains(&lemma.name) {
                 *rebased.by_lemma[&lemma.name].lock() = state;
                 continue;
@@ -458,7 +463,7 @@ impl ProofState {
                     Arc::new(Mutex::new(root))
                 }
             };
-            let old = root.lock();
+            let old = crate::cancellation::lock(&root)?;
             let wrap_invalidated = !matches!(old.method, ProofMethod::Sorry(None));
             let payload = if matches!(old.method, ProofMethod::Invalidated) {
                 old.children.get("").unwrap_or(&old)
@@ -511,7 +516,7 @@ impl ProofState {
         let LemmaProofState::Live(root) = &*state else {
             unreachable!("live_state materialises its result")
         };
-        let root = root.lock().clone();
+        let root = crate::cancellation::lock(root)?.clone();
         Ok(Some(root))
     }
 
@@ -529,7 +534,7 @@ impl ProofState {
         let LemmaProofState::Live(root) = &mut *state else {
             panic!("lemma root is not materialised");
         };
-        f(copy_on_write(root));
+        f(copy_on_write(root).unwrap());
     }
 
     /// Return the tree needed by the overview's proof index.
@@ -549,10 +554,10 @@ impl ProofState {
             .by_lemma
             .get(lemma)
             .expect("the proof-state map covers every session lemma");
-        let mut state = slot.lock();
+        let mut state = crate::cancellation::lock(slot)?;
         match &*state {
             LemmaProofState::Live(root) => Ok(Some(Arc::new(ProofIndexNode::from_proof_node(
-                &root.lock(),
+                &*crate::cancellation::lock(root)?,
             )))),
             LemmaProofState::Snapshot(snapshot) if lemma_item.proof.is_some() => {
                 Ok(Some(snapshot.root.clone()))
@@ -577,11 +582,11 @@ impl ProofState {
             .by_lemma
             .get(lemma)
             .expect("the proof-state map covers every session lemma");
-        let mut state = slot.lock();
+        let mut state = crate::cancellation::lock(slot)?;
         match &*state {
             LemmaProofState::Snapshot(snapshot) => Ok(Some(snapshot.body())),
             LemmaProofState::Live(root) => {
-                let root = root.lock();
+                let root = crate::cancellation::lock(root)?;
                 Ok(Some(Arc::from(
                     tamarin_theory::pretty_theory::pretty_proof_body(&*root),
                 )))
@@ -620,7 +625,7 @@ impl ProofState {
         let Some(slot) = self.by_lemma.get(lemma) else {
             return Ok(None);
         };
-        let mut state = slot.lock();
+        let mut state = crate::cancellation::lock(slot)?;
         self.materialize_locked(lemma, &mut state)?;
         Ok(Some(state))
     }
@@ -678,9 +683,16 @@ impl ProofState {
             return Ok(None);
         };
         let has_stored_proof = lemma_item.proof.is_some();
-        tamarin_theory::prove::check_and_extend_lemma_in_session(&self.session, lemma, usize::MAX)
-            .map(|root| Some((root, has_stored_proof)))
-            .map_err(|error| format!("initial proof for {lemma}: {error}"))
+        let root = tamarin_theory::prove::check_and_extend_lemma_in_session(
+            &self.session,
+            lemma,
+            usize::MAX,
+        )
+        .map_err(|error| format!("initial proof for {lemma}: {error}"))?;
+        // Both Live and Snapshot write back into the published theory's
+        // lazy cache. Cancelled replay must leave that cache retryable.
+        tamarin_utils::cancellation::check().map_err(|error| error.to_string())?;
+        Ok(Some((root, has_stored_proof)))
     }
 
     pub(crate) fn template_context(&self) -> &ProofContext {
@@ -723,7 +735,7 @@ impl ProofState {
         let LemmaProofState::Live(root) = &*state else {
             unreachable!("live_state materialises its result")
         };
-        let root = root.lock();
+        let root = crate::cancellation::lock(root)?;
         let Some(node) = navigate_at(&root, path) else {
             return Ok(None);
         };
@@ -1263,6 +1275,85 @@ end
     }
 
     #[test]
+    fn cancelled_fork_and_reader_stop_waiting_for_a_busy_lemma() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+        let Some(mp) = require_maude_path() else {
+            return;
+        };
+        let state = Arc::new(trivial_proof_state(&mp));
+        let owner = state.by_lemma["stored"].lock();
+        for fork in [true, false] {
+            let token = CancellationToken::default();
+            let worker_token = token.clone();
+            let worker_state = state.clone();
+            let (started_tx, started_rx) = mpsc::channel();
+            let (done_tx, done_rx) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let _guard = CancellationGuard::new(Some(worker_token));
+                started_tx.send(()).unwrap();
+                let result = if fork {
+                    worker_state.fork().map(|_| ())
+                } else {
+                    worker_state.proof_index_root("stored").map(|_| ())
+                };
+                done_tx.send(result).unwrap();
+            });
+            started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
+            token.cancel();
+            assert_eq!(
+                done_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                Err("request cancelled".into())
+            );
+            worker.join().unwrap();
+        }
+        assert!(matches!(*owner, LemmaProofState::Lazy));
+        drop(owner);
+        assert!(state.fork().is_ok());
+        assert!(state.proof_index_root("stored").unwrap().is_some());
+    }
+
+    #[test]
+    fn cancelled_terminal_replay_leaves_both_shared_cache_forms_retryable() {
+        use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+        let Some(mp) = require_maude_path() else {
+            return;
+        };
+        let source = "theory T begin lemma done: \"T\" by contradiction end";
+        let clean = proof_state_from_source(source, &mp);
+        let expected = clean.proof_body("done").unwrap().unwrap();
+        for snapshot in [false, true] {
+            let state = proof_state_from_source(source, &mp);
+            {
+                // Cancellation after acquiring the lemma lock must still
+                // prevent replay from filling its shared lazy slot.
+                let mut slot = state.by_lemma["done"].lock();
+                let token = CancellationToken::default();
+                let _guard = CancellationGuard::new(Some(token.clone()));
+                token.cancel();
+                let result = if snapshot {
+                    state.snapshot_locked("done", &mut slot).map(|_| ())
+                } else {
+                    state.materialize_locked("done", &mut slot)
+                };
+                assert!(result.unwrap_err().contains("cancelled"));
+                assert!(matches!(*slot, LemmaProofState::Lazy));
+            }
+            // Retry through the same cache path that was interrupted.
+            if snapshot {
+                let root = state.proof_index_root("done").unwrap().unwrap();
+                assert!(matches!(root.method, ProofMethod::Finished(_)));
+            } else {
+                let root = state.get_root("done").unwrap().unwrap();
+                assert_eq!(root.status, NodeStatus::Contradictory);
+            }
+            assert_eq!(state.proof_body("done").unwrap().unwrap(), expected);
+        }
+    }
+
+    #[test]
     fn build_state_for_trivial_theory() {
         let mp = match require_maude_path() {
             Some(p) => p,
@@ -1630,7 +1721,7 @@ end"#,
         };
         let state = trivial_proof_state(&mp);
         state.get_root("trivial").expect("trivial root");
-        let fork = state.fork();
+        let fork = state.fork().unwrap();
 
         assert!(fork.peek_root("trivial").is_some());
         assert!(roots_are_shared(&state, &fork, "trivial"));
