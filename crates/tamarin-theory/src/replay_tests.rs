@@ -469,3 +469,107 @@ fn parsed_to_unannotated_marks_whole_subtree() {
         assert!(matches!(child.method, ProofMethod::Sorry(None)));
     }
 }
+
+#[test]
+fn cancellation_during_terminal_classification_cannot_change_the_verdict() {
+    use crate::constraint::solver::cancellation_tests::{Work, WorkerGate};
+    use crate::fact::{Fact, FactTag, Multiplicity};
+    use crate::rule::{
+        IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
+    };
+    use std::time::Duration;
+    use tamarin_term::builtin::{fresh_var, msg_var};
+    use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
+    use tamarin_term::rewriting::RRule;
+    use tamarin_term::term::{f_app_acfct, f_app_no_eq};
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+
+    let Some(path) = tamarin_test_support::require_maude_path() else {
+        return;
+    };
+    let xorr = AcFctSym::new(
+        b"xorr".to_vec(),
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::IsNdc,
+    );
+    let zeroo = NoEqSym::new(
+        b"zeroo".to_vec(),
+        0,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let mut sig = pair_maude_sig();
+    sig.st_ac_fun_syms.insert(xorr);
+    sig.st_fun_syms.insert(zeroo);
+    let x = msg_var("x", 0);
+    sig.st_rules.insert(
+        tamarin_term::subterm_rule::rrule_to_ctxt_st_rule(&RRule::new(
+            f_app_acfct(xorr, vec![x.clone(), x]),
+            f_app_no_eq(zeroo, vec![]),
+        ))
+        .unwrap(),
+    );
+    let ctx = ProofContext::new(MaudeHandle::start(&path, sig.refresh()).unwrap(), vec![]);
+    let k = fresh_var("k", 0);
+    let mut sys = past_initial_system();
+    sys.add_node(
+        LVar::new("i", LSort::Node, 0),
+        Rule::new(
+            RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
+                name: ProtoRuleName::Stand("R"),
+                attributes: RuleAttributes::empty(),
+                loop_breakers: vec![],
+            }),
+            vec![],
+            vec![Fact::new(
+                FactTag::Proto(Multiplicity::Linear, "F", 1),
+                vec![f_app_acfct(xorr, vec![k.clone(), k])],
+            )],
+            vec![],
+        ),
+    );
+    // The non-normal xorr(k,k) makes this system contradictory. Swallowing
+    // cancellation in its AC match used to reject the valid contradiction
+    // and, worse, accept an invalid stored SOLVED claim.
+    for stored in [
+        Some(MethodResult::Contradictory(None)),
+        Some(MethodResult::Solved),
+        None,
+    ] {
+        let skeleton = stored.clone().map(|method| ProofTree {
+            method: ProofMethod::Finished(method),
+            cases: vec![],
+        });
+        let run = |sys| match &skeleton {
+            Some(skeleton) => check_and_extend(&ctx, sys, skeleton, usize::MAX),
+            None => run_proof_search(&ctx, sys, usize::MAX),
+        };
+        let baseline = run(sys.clone()).unwrap();
+        if matches!(stored, Some(MethodResult::Solved)) {
+            assert!(matches!(baseline.method, ProofMethod::Sorry(_)));
+        } else {
+            assert_eq!(baseline.status, NodeStatus::Contradictory);
+        }
+        let (gate, entered) = WorkerGate::new(Work::Terminal, 1);
+        *ctx.worker_gate.lock().unwrap() = Some(gate.clone());
+        let token = CancellationToken::default();
+        std::thread::scope(|scope| {
+            let worker_token = token.clone();
+            let cancelled_sys = sys.clone();
+            let worker = scope.spawn(|| {
+                let _guard = CancellationGuard::new(Some(worker_token));
+                run(cancelled_sys)
+            });
+            // The solver has passed its entry check. Interrupt terminal
+            // classification, before its boolean normal-form queries.
+            entered.recv_timeout(Duration::from_secs(5)).unwrap();
+            token.cancel();
+            gate.release();
+            assert!(matches!(worker.join().unwrap(), Err(ProveError::Cancelled)));
+        });
+        *ctx.worker_gate.lock().unwrap() = None;
+        let retried = run(sys.clone()).unwrap();
+        assert_eq!(format!("{retried:?}"), format!("{baseline:?}"));
+    }
+}

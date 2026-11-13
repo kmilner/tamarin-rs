@@ -141,6 +141,7 @@ pub async fn start_server_with_theory_and(
         ndc_check: true,
         lemmas_to_prove: Vec::new(),
         parser_flags: Vec::new(),
+        cancel_cleanup: None,
     };
     mutate(&mut cfg);
 
@@ -150,7 +151,12 @@ pub async fn start_server_with_theory_and(
         .expect("fixture should parse + elaborate");
     let _idx = store.insert(entry);
 
-    let state = Arc::new(AppState { cfg, store });
+    let proof_requests = tamarin_server::cancellation::ProofRequests::new(cfg.cancel_cleanup);
+    let state = Arc::new(AppState {
+        cfg,
+        store,
+        proof_requests,
+    });
     let app = router(state);
 
     // Bind to an ephemeral port; remember the resolved socket addr.
@@ -237,7 +243,7 @@ pub fn haskell_capture(name: &str) -> String {
 /// Replace every `HH:MM:SS` run with `<TIME>`.  The pages compared below hold
 /// only one such run, the theory's load time.  It appears in `theoryTpl`'s
 /// `%T` column and in the `Loaded at …` line of the theory header.
-fn blank_times(s: &str) -> String {
+pub fn blank_times(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;

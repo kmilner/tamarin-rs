@@ -46,3 +46,6 @@ pub use context::ProofContext;
 pub use contradictions::{contradictions, Contradiction};
 pub use proof_method::{exec_proof_method, is_finished, ProofMethod, Result as ProofResult};
 pub use search::{run_proof_search, NodeStatus, ProofNode};
+
+#[cfg(test)]
+pub(crate) mod cancellation_tests;

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
 use serde_json::Value;
@@ -62,6 +62,7 @@ fn not_found() -> Response {
 
 /// `GET /thy/trace/<idx>/overview/*path` — full framed page.
 pub async fn interactive_overview(
+    uri: Uri,
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
@@ -77,12 +78,21 @@ pub async fn interactive_overview(
     // needs no proof state (help/edit/add/delete) would show `(0 cases)` and a
     // proto-only rule count. Build and render together on a blocking worker:
     // both source materialisation and the pretty-printers may block.
-    match tokio::task::spawn_blocking(move || {
-        let entry = state.store.materialized_snapshot(idx, &state.cfg)?;
-        theory_html::overview_page(&entry, &path).map_err(crate::state::StoreError::Build)
-    })
-    .await
-    {
+    let mut request = state.proof_requests.register(uri.path().to_owned());
+    let worker_state = state.clone();
+    let result = request
+        .run(move || {
+            let entry = worker_state
+                .store
+                .materialized_snapshot(idx, &worker_state.cfg)?;
+            theory_html::overview_page(&entry, &path).map_err(crate::state::StoreError::Build)
+        })
+        .await;
+    if !request.finish() {
+        // No navigation target/body: retain the current page after Cancel.
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    match result {
         Ok(Ok(html)) => html_response(html),
         Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
         Ok(Err(error)) => internal_server_error(&error.to_string()),
@@ -100,12 +110,15 @@ pub async fn interactive_overview(
 /// theory idx for the post-step state, and return a `{redirect}` JSON
 /// envelope pointing at `/thy/trace/<newIdx>/overview/proof/...`.
 pub async fn theory_path_main(
+    uri: Uri,
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
+    let mut request = state.proof_requests.register(uri.path().to_owned());
+    let worker_state = state.clone();
     // Method paths mutate the proof tree; dispatch separately.
     if let path_parse::TheoryPath::Method {
         lemma,
@@ -113,15 +126,16 @@ pub async fn theory_path_main(
         sub,
     } = &path
     {
-        let worker_state = state.clone();
         let lemma = lemma.clone();
         let sub = sub.clone();
         let method_nr = *method_nr;
-        return match tokio::task::spawn_blocking(move || {
-            apply_method(&worker_state, idx, &lemma, method_nr, &sub)
-        })
-        .await
-        {
+        let result = request
+            .run(move || apply_method(&worker_state, idx, &lemma, method_nr, &sub))
+            .await;
+        if !request.finish() {
+            return json_resp::alert("Canceled request!").into_response();
+        }
+        return match result {
             Ok(Ok((detached, target))) => {
                 let new_idx = state.store.insert(detached);
                 match target {
@@ -138,15 +152,19 @@ pub async fn theory_path_main(
             Err(error) => json_resp::alert(format!("internal error: {error}")).into_response(),
         };
     }
-    match tokio::task::spawn_blocking(move || {
-        let entry = entry_for_path(&state, idx, &path)?;
-        let body =
-            theory_html::path_html(&entry, &path).map_err(crate::state::StoreError::Build)?;
-        let title = title_for(&entry, &path).map_err(crate::state::StoreError::Build)?;
-        Ok::<_, crate::state::StoreError>(json_resp::html(title, body))
-    })
-    .await
-    {
+    let result = request
+        .run(move || {
+            let entry = entry_for_path(&worker_state, idx, &path)?;
+            let body =
+                theory_html::path_html(&entry, &path).map_err(crate::state::StoreError::Build)?;
+            let title = title_for(&entry, &path).map_err(crate::state::StoreError::Build)?;
+            Ok::<_, crate::state::StoreError>(json_resp::html(title, body))
+        })
+        .await;
+    if !request.finish() {
+        return json_resp::alert("Canceled request!").into_response();
+    }
+    match result {
         Ok(Ok(response)) => response.into_response(),
         Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
         Ok(Err(error)) => json_resp::alert(error.to_string()).into_response(),
@@ -550,6 +568,7 @@ fn web_search_options(
 ///   handler runs.
 /// `path`'s first segment is typically `proof/<lemma-name>`.
 pub async fn autoprove(
+    uri: Uri,
     State(state): State<Arc<AppState>>,
     Path((idx, extractor, raw_bound, quit, raw_path)): Path<(
         usize,
@@ -620,52 +639,57 @@ pub async fn autoprove(
     // Keep the complete detached transaction on one blocking worker. Besides
     // keeping Maude/source work off Tokio, this means cancellation can only
     // discard an unpublished value; publication happens below after await.
+    let mut request = state.proof_requests.register(uri.path().to_owned());
     let worker_state = state.clone();
     let lemma_owned = lemma_name.clone();
     let sub_owned = sub.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<_, crate::state::StoreError> {
-        let detached = worker_state.store.detached_fork(idx, &worker_state.cfg)?;
-        let proof = detached
-            .proof_state
-            .clone()
-            .expect("detached_fork always materialises a proof state");
-        let sys_at_path = proof
-            .get_system_at(&lemma_owned, &sub_owned)
-            .map_err(crate::state::StoreError::Build)?
-            .ok_or_else(|| {
-                crate::state::StoreError::Build("proof path did not resolve".to_string())
-            })?;
-        let session = proof.session.clone();
-        let subtree = tamarin_theory::prove::prove_system_in_session_with_options(
-            &session,
-            &lemma_owned,
-            sys_at_path,
-            search_options,
-        )
-        .map_err(|e| crate::state::StoreError::Build(format!("prove failed: {e}")))?;
-        let status = subtree.status;
-        // Graft the search result back at the URL's proof path (HS
-        // `focus` → `modifyAtPath`; siblings untouched).
-        proof
-            .graft_at_path(&lemma_owned, &sub_owned, subtree)
-            .map_err(crate::state::StoreError::Build)?;
-        let is_exists = detached
-            .typed_theory
-            .lookup_lemma(&lemma_owned)
-            .is_some_and(|lemma| {
-                matches!(
-                    lemma.trace_quantifier,
-                    tamarin_theory::theory::TraceQuantifier::ExistsTrace
-                )
-            });
-        let source = path_parse::TheoryPath::Proof {
-            lemma: lemma_owned,
-            sub: sub_owned,
-        };
-        let target = next_thy_path_inner(&source, &detached, true)?;
-        Ok((detached, status, is_exists, target))
-    })
-    .await;
+    let result = request
+        .run(move || -> Result<_, crate::state::StoreError> {
+            let detached = worker_state.store.detached_fork(idx, &worker_state.cfg)?;
+            let proof = detached
+                .proof_state
+                .clone()
+                .expect("detached_fork always materialises a proof state");
+            let sys_at_path = proof
+                .get_system_at(&lemma_owned, &sub_owned)
+                .map_err(crate::state::StoreError::Build)?
+                .ok_or_else(|| {
+                    crate::state::StoreError::Build("proof path did not resolve".to_string())
+                })?;
+            let session = proof.session.clone();
+            let subtree = tamarin_theory::prove::prove_system_in_session_with_options(
+                &session,
+                &lemma_owned,
+                sys_at_path,
+                search_options,
+            )
+            .map_err(|e| crate::state::StoreError::Build(format!("prove failed: {e}")))?;
+            let status = subtree.status;
+            // Graft the search result back at the URL's proof path (HS
+            // `focus` → `modifyAtPath`; siblings untouched).
+            proof
+                .graft_at_path(&lemma_owned, &sub_owned, subtree)
+                .map_err(crate::state::StoreError::Build)?;
+            let is_exists = detached
+                .typed_theory
+                .lookup_lemma(&lemma_owned)
+                .is_some_and(|lemma| {
+                    matches!(
+                        lemma.trace_quantifier,
+                        tamarin_theory::theory::TraceQuantifier::ExistsTrace
+                    )
+                });
+            let source = path_parse::TheoryPath::Proof {
+                lemma: lemma_owned,
+                sub: sub_owned,
+            };
+            let target = next_thy_path_inner(&source, &detached, true)?;
+            Ok((detached, status, is_exists, target))
+        })
+        .await;
+    if !request.finish() {
+        return json_resp::alert("Canceled request!").into_response();
+    }
 
     match result {
         Err(join_err) => json_resp::alert(format!("internal error: {}", join_err)).into_response(),
@@ -795,6 +819,7 @@ fn autoprover_name(extractor: &str, bound: usize) -> Option<String> {
 /// `autoprove`: fork the proof state at a fresh idx (HS `modifyTheory`)
 /// and `run_proof_search` + `graft_at_path` at `[]` per lemma.
 pub async fn autoprove_all(
+    uri: Uri,
     State(state): State<Arc<AppState>>,
     Path((idx, extractor, raw_bound, raw_path)): Path<(usize, String, String, String)>,
 ) -> Response {
@@ -818,57 +843,64 @@ pub async fn autoprove_all(
     let search_options = web_search_options(&extractor, bound, false, 0)
         .expect("extractor was validated by autoprover_name");
 
+    let mut request = state.proof_requests.register(uri.path().to_owned());
     let worker_state = state.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<_, crate::state::StoreError> {
-        let detached = worker_state.store.detached_fork(idx, &worker_state.cfg)?;
-        let lemma_names: Vec<String> = detached
-            .typed_theory
-            .lemmas()
-            .map(|lemma| lemma.name.clone())
-            .collect();
-        let proof = detached
-            .proof_state
-            .clone()
-            .expect("detached_fork always materialises a proof state");
-        // Per-lemma contexts from the retained session, exactly as
-        // `autoprove` (HS runs each fold step under `getProofContext`).
-        let session = proof.session.clone();
-        for lname in &lemma_names {
-            // Root system for this lemma — path `[]` is HS's
-            // `focus [] prover = prover`, run on `psInfo (root prf)`.
-            // Any missing or invalid lemma aborts the detached transaction.
-            let sys = proof
-                .get_system_at(lname, &[])
-                .map_err(crate::state::StoreError::Build)?
-                .ok_or_else(|| {
-                    crate::state::StoreError::Build(format!(
-                        "missing root system for lemma {lname}"
-                    ))
+    let result = request
+        .run(move || -> Result<_, crate::state::StoreError> {
+            let detached = worker_state.store.detached_fork(idx, &worker_state.cfg)?;
+            let lemma_names: Vec<String> = detached
+                .typed_theory
+                .lemmas()
+                .map(|lemma| lemma.name.clone())
+                .collect();
+            let proof = detached
+                .proof_state
+                .clone()
+                .expect("detached_fork always materialises a proof state");
+            // Per-lemma contexts from the retained session, exactly as
+            // `autoprove` (HS runs each fold step under `getProofContext`).
+            let session = proof.session.clone();
+            for lname in &lemma_names {
+                // Root system for this lemma — path `[]` is HS's
+                // `focus [] prover = prover`, run on `psInfo (root prf)`.
+                // Any missing or invalid lemma aborts the detached transaction.
+                let sys = proof
+                    .get_system_at(lname, &[])
+                    .map_err(crate::state::StoreError::Build)?
+                    .ok_or_else(|| {
+                        crate::state::StoreError::Build(format!(
+                            "missing root system for lemma {lname}"
+                        ))
+                    })?;
+                let subtree = tamarin_theory::prove::prove_system_in_session_with_options(
+                    &session,
+                    lname,
+                    sys,
+                    search_options,
+                )
+                .map_err(|error| {
+                    crate::state::StoreError::Build(format!("prove {lname}: {error}"))
                 })?;
-            let subtree = tamarin_theory::prove::prove_system_in_session_with_options(
-                &session,
-                lname,
-                sys,
-                search_options,
-            )
-            .map_err(|error| crate::state::StoreError::Build(format!("prove {lname}: {error}")))?;
-            proof
-                .graft_at_path(lname, &[], subtree)
-                .map_err(crate::state::StoreError::Build)?;
-        }
-        let target = match lemma_names.last() {
-            Some(last) => {
-                let source = path_parse::TheoryPath::Proof {
-                    lemma: last.clone(),
-                    sub: Vec::new(),
-                };
-                next_thy_path_inner(&source, &detached, true)?
+                proof
+                    .graft_at_path(lname, &[], subtree)
+                    .map_err(crate::state::StoreError::Build)?;
             }
-            None => path_parse::TheoryPath::Help,
-        };
-        Ok((detached, target))
-    })
-    .await;
+            let target = match lemma_names.last() {
+                Some(last) => {
+                    let source = path_parse::TheoryPath::Proof {
+                        lemma: last.clone(),
+                        sub: Vec::new(),
+                    };
+                    next_thy_path_inner(&source, &detached, true)?
+                }
+                None => path_parse::TheoryPath::Help,
+            };
+            Ok((detached, target))
+        })
+        .await;
+    if !request.finish() {
+        return json_resp::alert("Canceled request!").into_response();
+    }
     let (detached, target) = match result {
         Ok(Ok(result)) => result,
         Ok(Err(crate::state::StoreError::NotFound(_))) => return not_found(),
@@ -1081,25 +1113,35 @@ fn stub_alert(what: &str) -> axum::Json<Value> {
 /// and the traversal falls through to the lemma jump, exactly as HS's
 /// `getNextElement` does when no sibling exists.
 pub async fn next_path(
+    uri: Uri,
     State(state): State<Arc<AppState>>,
     Path((idx, section, raw_path)): Path<(usize, String, String)>,
 ) -> Response {
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
-    match tokio::task::spawn_blocking(move || {
-        let entry = if matches!(section.as_str(), "normal" | "smart")
-            && matches!(&path, path_parse::TheoryPath::Proof { .. })
-        {
-            state.store.materialized_snapshot(idx, &state.cfg)?
-        } else {
-            state.store.snapshot(idx)?.entry
-        };
-        let new_path = next_theory_path(&path, &section, &entry)?;
-        Ok::<_, crate::state::StoreError>(render_main_url(idx, &new_path))
-    })
-    .await
-    {
+    let mut request = state.proof_requests.register(uri.path().to_owned());
+    let worker_state = state.clone();
+    let result = request
+        .run(move || {
+            let entry = if matches!(section.as_str(), "normal" | "smart")
+                && matches!(&path, path_parse::TheoryPath::Proof { .. })
+            {
+                worker_state
+                    .store
+                    .materialized_snapshot(idx, &worker_state.cfg)?
+            } else {
+                worker_state.store.snapshot(idx)?.entry
+            };
+            let new_path = next_theory_path(&path, &section, &entry)?;
+            Ok::<_, crate::state::StoreError>(render_main_url(idx, &new_path))
+        })
+        .await;
+    if !request.finish() {
+        // No navigation target/body: retain the current page after Cancel.
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    match result {
         Ok(Ok(url)) => text_response(url),
         Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
         Ok(Err(error)) => internal_server_error(&error.to_string()),
@@ -1109,27 +1151,37 @@ pub async fn next_path(
 
 /// `GET /thy/trace/<idx>/prev/<section>/*path` — symmetric to `next`.
 pub async fn prev_path(
+    uri: Uri,
     State(state): State<Arc<AppState>>,
     Path((idx, section, raw_path)): Path<(usize, String, String)>,
 ) -> Response {
     let Some(path) = parse_path(&raw_path) else {
         return not_found();
     };
-    match tokio::task::spawn_blocking(move || {
-        let entry = if matches!(section.as_str(), "normal" | "smart")
-            && matches!(
-                &path,
-                path_parse::TheoryPath::Proof { .. } | path_parse::TheoryPath::Lemma(_)
-            ) {
-            state.store.materialized_snapshot(idx, &state.cfg)?
-        } else {
-            state.store.snapshot(idx)?.entry
-        };
-        let new_path = prev_theory_path(&path, &section, &entry)?;
-        Ok::<_, crate::state::StoreError>(render_main_url(idx, &new_path))
-    })
-    .await
-    {
+    let mut request = state.proof_requests.register(uri.path().to_owned());
+    let worker_state = state.clone();
+    let result = request
+        .run(move || {
+            let entry = if matches!(section.as_str(), "normal" | "smart")
+                && matches!(
+                    &path,
+                    path_parse::TheoryPath::Proof { .. } | path_parse::TheoryPath::Lemma(_)
+                ) {
+                worker_state
+                    .store
+                    .materialized_snapshot(idx, &worker_state.cfg)?
+            } else {
+                worker_state.store.snapshot(idx)?.entry
+            };
+            let new_path = prev_theory_path(&path, &section, &entry)?;
+            Ok::<_, crate::state::StoreError>(render_main_url(idx, &new_path))
+        })
+        .await;
+    if !request.finish() {
+        // No navigation target/body: retain the current page after Cancel.
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    match result {
         Ok(Ok(url)) => text_response(url),
         Ok(Err(crate::state::StoreError::NotFound(_))) => not_found(),
         Ok(Err(error)) => internal_server_error(&error.to_string()),
@@ -1985,6 +2037,7 @@ pub async fn edit_stub(_: State<Arc<AppState>>, _: Path<(usize, String)>) -> axu
 /// post-delete state. We likewise publish a detached snapshot only after the
 /// requested deletion succeeds.
 pub async fn delete_step(
+    uri: Uri,
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
 ) -> Response {
@@ -1995,62 +2048,67 @@ pub async fn delete_step(
     match &path {
         // Haskell `removeLemma`-branch.
         path_parse::TheoryPath::Lemma(name) => {
+            let mut request = state.proof_requests.register(uri.path().to_owned());
             let delete_state = state.clone();
             let name_owned = name.clone();
-            let detached = match tokio::task::spawn_blocking(move || {
-                let mut detached = delete_state
-                    .store
-                    .materialized_snapshot(idx, &delete_state.cfg)?;
-                detached.idx = 0;
-                detached.primary = false;
-                let lemmas: Vec<_> = detached.typed_theory.lemmas().collect();
-                let Some((removed_idx, removed_lemma)) = lemmas
-                    .iter()
-                    .enumerate()
-                    .find(|(_, lemma)| lemma.name == name_owned)
-                else {
-                    return Err(crate::state::StoreError::Build(
-                        "Sorry, but removing the selected lemma failed!".to_string(),
-                    ));
-                };
-                if removed_lemma.attributes.iter().any(|attribute| {
-                    matches!(attribute, tamarin_theory::theory::LemmaAttr::Sources)
-                }) {
-                    return Err(crate::state::StoreError::Build(
-                        "Can't edit or remove source lemmas for now".to_string(),
-                    ));
-                }
-                let invalidated: std::collections::BTreeSet<String> =
-                    if removed_lemma.attributes.iter().any(|attribute| {
-                        matches!(attribute, tamarin_theory::theory::LemmaAttr::Reuse)
-                    }) {
-                        lemmas[removed_idx + 1..]
-                            .iter()
-                            .map(|lemma| lemma.name.clone())
-                            .collect()
-                    } else {
-                        std::collections::BTreeSet::new()
+            let result = request
+                .run(move || {
+                    let mut detached = delete_state
+                        .store
+                        .materialized_snapshot(idx, &delete_state.cfg)?;
+                    detached.idx = 0;
+                    detached.primary = false;
+                    let lemmas: Vec<_> = detached.typed_theory.lemmas().collect();
+                    let Some((removed_idx, removed_lemma)) = lemmas
+                        .iter()
+                        .enumerate()
+                        .find(|(_, lemma)| lemma.name == name_owned)
+                    else {
+                        return Err(crate::state::StoreError::Build(
+                            "Sorry, but removing the selected lemma failed!".to_string(),
+                        ));
                     };
-                let mut theory = (*detached.typed_theory).clone();
-                let removed = theory.remove_lemma(&name_owned);
-                debug_assert!(removed);
-                detached.typed_theory = Arc::new(theory);
-                if let Some(previous) = detached.proof_state.take() {
-                    detached.proof_state = Some(Arc::new(
-                        previous
-                            .rebase_onto(
-                                &detached.typed_theory,
-                                detached.ndc_cache.as_ref(),
-                                &delete_state.cfg,
-                                &invalidated,
-                            )
-                            .map_err(crate::state::StoreError::Build)?,
-                    ));
-                }
-                Ok(detached)
-            })
-            .await
-            {
+                    if removed_lemma.attributes.iter().any(|attribute| {
+                        matches!(attribute, tamarin_theory::theory::LemmaAttr::Sources)
+                    }) {
+                        return Err(crate::state::StoreError::Build(
+                            "Can't edit or remove source lemmas for now".to_string(),
+                        ));
+                    }
+                    let invalidated: std::collections::BTreeSet<String> =
+                        if removed_lemma.attributes.iter().any(|attribute| {
+                            matches!(attribute, tamarin_theory::theory::LemmaAttr::Reuse)
+                        }) {
+                            lemmas[removed_idx + 1..]
+                                .iter()
+                                .map(|lemma| lemma.name.clone())
+                                .collect()
+                        } else {
+                            std::collections::BTreeSet::new()
+                        };
+                    let mut theory = (*detached.typed_theory).clone();
+                    let removed = theory.remove_lemma(&name_owned);
+                    debug_assert!(removed);
+                    detached.typed_theory = Arc::new(theory);
+                    if let Some(previous) = detached.proof_state.take() {
+                        detached.proof_state = Some(Arc::new(
+                            previous
+                                .rebase_onto(
+                                    &detached.typed_theory,
+                                    detached.ndc_cache.as_ref(),
+                                    &delete_state.cfg,
+                                    &invalidated,
+                                )
+                                .map_err(crate::state::StoreError::Build)?,
+                        ));
+                    }
+                    Ok(detached)
+                })
+                .await;
+            if !request.finish() {
+                return json_resp::alert("Canceled request!").into_response();
+            }
+            let detached = match result {
                 Ok(Ok(entry)) => entry,
                 Ok(Err(crate::state::StoreError::NotFound(_))) => return not_found(),
                 Ok(Err(error)) => return json_resp::alert(error.to_string()).into_response(),
@@ -2076,11 +2134,12 @@ pub async fn delete_step(
         // the targeted proof step `sorry`.  Redirect target = same
         // proof path.
         path_parse::TheoryPath::Proof { lemma, sub } => {
+            let mut request = state.proof_requests.register(uri.path().to_owned());
             let delete_state = state.clone();
             let lemma_owned = lemma.clone();
             let sub_owned = sub.clone();
-            let detached =
-                match tokio::task::spawn_blocking(move || -> Result<_, crate::state::StoreError> {
+            let result = request
+                .run(move || -> Result<_, crate::state::StoreError> {
                     let detached = delete_state.store.detached_fork(idx, &delete_state.cfg)?;
                     let proof = detached
                         .proof_state
@@ -2096,16 +2155,18 @@ pub async fn delete_step(
                     }
                     Ok(detached)
                 })
-                .await
-                {
-                    Ok(Ok(entry)) => entry,
-                    Ok(Err(crate::state::StoreError::NotFound(_))) => return not_found(),
-                    Ok(Err(error)) => return json_resp::alert(error.to_string()).into_response(),
-                    Err(error) => {
-                        return json_resp::alert(format!("internal error: {error}"))
-                            .into_response();
-                    }
-                };
+                .await;
+            if !request.finish() {
+                return json_resp::alert("Canceled request!").into_response();
+            }
+            let detached = match result {
+                Ok(Ok(entry)) => entry,
+                Ok(Err(crate::state::StoreError::NotFound(_))) => return not_found(),
+                Ok(Err(error)) => return json_resp::alert(error.to_string()).into_response(),
+                Err(error) => {
+                    return json_resp::alert(format!("internal error: {error}")).into_response();
+                }
+            };
             let new_idx = state.store.insert(detached);
             // URL goes through Yesod `getUrlRender`; percent-encode each
             // segment via the shared `overview_proof_url` helper.

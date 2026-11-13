@@ -19,7 +19,8 @@ use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+use tamarin_utils::cancellation::{CancellableOnce, Cancelled};
 
 use chrono::{DateTime, Local};
 
@@ -129,14 +130,22 @@ struct StoredTheory {
 /// concurrent replacement of the theory being operated on.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StoreError {
+    Cancelled,
     NotFound(usize),
     Build(String),
     Stale(usize),
 }
 
+impl From<Cancelled> for StoreError {
+    fn from(_: Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
+
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("Canceled request!"),
             Self::NotFound(idx) => write!(f, "theory index {idx} not found"),
             Self::Build(error) => f.write_str(error),
             Self::Stale(idx) => write!(f, "theory index {idx} changed during the operation"),
@@ -163,14 +172,14 @@ struct StoredGeneration {
 /// One single-flight attempt at a time. Callers which observed the same slot
 /// share its result; a failed slot is replaced so the next request can retry.
 struct RetryCell<T, E> {
-    attempt: Mutex<Arc<OnceLock<Result<T, E>>>>,
+    attempt: Mutex<Arc<CancellableOnce<Result<T, E>, Cancelled>>>,
 }
 
-impl<T: Clone, E: Clone> RetryCell<T, E> {
+impl<T: Clone, E: Clone + From<Cancelled>> RetryCell<T, E> {
     fn new(value: Option<T>) -> Self {
         let attempt = Arc::new(match value {
-            Some(value) => OnceLock::from(Ok(value)),
-            None => OnceLock::new(),
+            Some(value) => CancellableOnce::from_result(Ok(Ok(value))),
+            None => CancellableOnce::default(),
         });
         Self {
             attempt: Mutex::new(attempt),
@@ -184,14 +193,14 @@ impl<T: Clone, E: Clone> RetryCell<T, E> {
 
     fn run_attempt(
         &self,
-        attempt: Arc<OnceLock<Result<T, E>>>,
+        attempt: Arc<CancellableOnce<Result<T, E>, Cancelled>>,
         build: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, E> {
-        let result = attempt.get_or_init(build).clone();
+        let result = attempt.get_or_init(|| Ok(build()))?;
         if result.is_err() {
             let mut current = self.attempt.lock();
             if Arc::ptr_eq(&current, &attempt) {
-                *current = Arc::new(OnceLock::new());
+                *current = Arc::new(CancellableOnce::default());
             }
         }
         result
@@ -288,7 +297,7 @@ impl TheoryStore {
             .proof_state
             .clone()
             .expect("materialized_snapshot always has a proof state");
-        clone.proof_state = Some(Arc::new(proof.fork()));
+        clone.proof_state = Some(Arc::new(proof.fork().map_err(StoreError::Build)?));
         clone.idx = 0;
         clone.primary = false;
         Ok(clone)
@@ -398,6 +407,7 @@ impl StoredGeneration {
 
 /// App-wide state, used by every handler.
 pub struct AppState {
+    pub proof_requests: crate::cancellation::ProofRequests,
     pub cfg: crate::ServerConfig,
     pub store: TheoryStore,
 }
@@ -467,27 +477,27 @@ mod tests {
 
     #[test]
     fn failed_single_flight_build_can_be_retried() {
-        let cell = RetryCell::<usize, &str>::new(None);
+        let cell = RetryCell::<usize, StoreError>::new(None);
         let attempts = AtomicUsize::new(0);
 
         assert_eq!(
             cell.get_or_try_init(|| {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                Err::<usize, _>("transient")
+                Err::<usize, _>(StoreError::Build("transient".into()))
             }),
-            Err("transient")
+            Err(StoreError::Build("transient".into()))
         );
         assert_eq!(
             cell.get_or_try_init(|| {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, &str>(7)
+                Ok::<_, StoreError>(7)
             }),
             Ok(7)
         );
         assert_eq!(
             cell.get_or_try_init(|| {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                Ok::<_, &str>(8)
+                Ok::<_, StoreError>(8)
             }),
             Ok(7)
         );
@@ -495,8 +505,39 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_session_build_is_retryable_for_a_concurrent_request() {
+        use std::sync::mpsc;
+        use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+        let cell = Arc::new(RetryCell::<usize, StoreError>::new(None));
+        let token = CancellationToken::default();
+        let owner_token = token.clone();
+        let owner_cell = cell.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            let _guard = CancellationGuard::new(Some(owner_token));
+            owner_cell.get_or_try_init(|| {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Err(StoreError::Build("interrupted Maude".into()))
+            })
+        });
+        started_rx.recv().unwrap();
+        let waiter_cell = cell.clone();
+        let waiter = std::thread::spawn(move || waiter_cell.get_or_try_init(|| Ok(42)));
+        token.cancel();
+        release_tx.send(()).unwrap();
+        assert_eq!(owner.join().unwrap(), Err(StoreError::Cancelled));
+        assert_eq!(waiter.join().unwrap(), Ok(42));
+        assert_eq!(
+            cell.get_or_try_init(|| panic!("successful retry was lost")),
+            Ok(42)
+        );
+    }
+
+    #[test]
     fn seeded_single_flight_value_skips_build() {
-        let cell = RetryCell::<usize, ()>::new(Some(7));
+        let cell = RetryCell::<usize, StoreError>::new(Some(7));
         assert_eq!(
             cell.get_or_try_init(|| panic!("seeded cell rebuilt")),
             Ok(7)
@@ -507,7 +548,7 @@ mod tests {
     fn concurrent_successful_build_is_single_flight() {
         use std::sync::mpsc;
 
-        let cell = Arc::new(RetryCell::<usize, ()>::new(None));
+        let cell = Arc::new(RetryCell::<usize, StoreError>::new(None));
         let attempts = Arc::new(AtomicUsize::new(0));
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -547,7 +588,7 @@ mod tests {
     fn concurrent_callers_share_a_failed_attempt_before_retry() {
         use std::sync::mpsc;
 
-        let cell = Arc::new(RetryCell::<usize, &str>::new(None));
+        let cell = Arc::new(RetryCell::<usize, StoreError>::new(None));
         let attempt = cell.attempt.lock().clone();
         let attempts = Arc::new(AtomicUsize::new(0));
         let (started_tx, started_rx) = mpsc::channel();
@@ -561,7 +602,7 @@ mod tests {
                 first_attempts.fetch_add(1, Ordering::SeqCst);
                 started_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
-                Err("transient")
+                Err(StoreError::Build("transient".into()))
             })
         });
         started_rx.recv().unwrap();
@@ -576,8 +617,14 @@ mod tests {
         });
 
         release_tx.send(()).unwrap();
-        assert_eq!(first.join().unwrap(), Err("transient"));
-        assert_eq!(second.join().unwrap(), Err("transient"));
+        assert_eq!(
+            first.join().unwrap(),
+            Err(StoreError::Build("transient".into()))
+        );
+        assert_eq!(
+            second.join().unwrap(),
+            Err(StoreError::Build("transient".into()))
+        );
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
         assert_eq!(
             cell.get_or_try_init(|| {
