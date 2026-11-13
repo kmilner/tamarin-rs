@@ -3225,10 +3225,7 @@ fn forbidden_edge(c_rule: &RuleACInst, p_rule: &RuleACInst) -> bool {
         return true;
     }
     let c_ndc = is_ndc_rule(c_rule);
-    if c_ndc.is_some() && c_ndc == is_ndc_rule(p_rule) {
-        return true;
-    }
-    false
+    c_ndc.is_some() && c_ndc == is_ndc_rule(p_rule)
 }
 
 /// `illegalCoerce` — port of the chain-goal illegal coerce check
