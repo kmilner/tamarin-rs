@@ -259,7 +259,11 @@ impl MaudeProcessInner {
             Ok(result) => result,
             Err(panic) => {
                 self.initialized = false;
-                self.child.lock().unwrap().kill_and_wait();
+                {
+                    let mut child = self.child.lock().unwrap();
+                    child.kill_and_wait();
+                    child.restart = true;
+                }
                 std::panic::resume_unwind(panic);
             }
         };
@@ -481,8 +485,8 @@ fn spawn_maude(maude_path: &str) -> Result<(ChildStdin, ChildStdout, Child), Mau
 /// inside `read_until_prompt` while holding the I/O lock.
 struct MaudeChildReaper {
     child: Option<Child>,
-    // Only request cancellation asks for transparent recovery. Explicit
-    // watchdog kills and unrelated I/O errors retain their error semantics.
+    // Request cancellation and panicking exchanges ask for transparent recovery.
+    // Explicit watchdog kills and unrelated I/O errors retain their error semantics.
     restart: bool,
 }
 
@@ -1985,27 +1989,11 @@ impl<'a> Drop for PooledMaude<'a> {
     fn drop(&mut self) {
         if let Some(h) = self.inner.take() {
             let mut state = self.pool.state.lock().unwrap();
-            // A panic in the middle of one of its calls poisoned the handle
-            // and may have left the process mid-reply: every later call on
-            // it would fail.  Retire it (its process ends when the last
-            // clone drops) and free the slot for a lazy spawn.  Only a
-            // caller that survives panics, such as the RL API's request
-            // threads, ever gets here.
-            let retired = if h.inner.is_poisoned() {
-                state.spawned -= 1;
-                Some(h)
-            } else {
-                // LIFO reuse: the most recently released (warmest) member is
-                // the next one popped, keeping queries concentrated on warm
-                // members.
-                state.free.push(h);
-                None
-            };
-            // Only one waiter can take the handle we just pushed (or the
-            // slot we just freed).
+            // LIFO reuse: the most recently released (warmest) member is the
+            // next one popped, keeping queries concentrated on warm members.
+            state.free.push(h);
+            // Only one waiter can take the handle we just pushed.
             self.pool.notify.notify_one();
-            drop(state);
-            drop(retired);
         }
     }
 }

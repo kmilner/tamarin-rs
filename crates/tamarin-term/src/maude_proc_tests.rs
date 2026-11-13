@@ -321,12 +321,11 @@ fn pool_sequential_reuse_stays_at_one_spawned() {
     assert_eq!(pool.size(), 4, "size() still reports the target");
 }
 
-/// A thread that panics while one of the handle's calls holds its lock
-/// poisons the handle.  The pool must not hand it out again: the next
-/// `acquire` gets a new process that answers.  A healthy handle released by
-/// a panicking thread is still reused.
+/// A panic during an exchange leaves the pooled handle ready to restart its
+/// process before the next query. A panic outside an exchange reuses the
+/// healthy process.
 #[test]
-fn pool_retires_a_handle_poisoned_by_a_panic() {
+fn pool_recovers_after_a_panicking_exchange() {
     let path = match require_maude_path() {
         Some(p) => p,
         None => {
@@ -341,19 +340,26 @@ fn pool_retires_a_handle_poisoned_by_a_panic() {
         Arc::new(SharedMaudeCaches::default()),
     )
     .expect("pool");
+    let old_pid = {
+        let h = pool.acquire();
+        h.child.lock().unwrap().child.as_ref().unwrap().id()
+    };
     let panicked = std::thread::scope(|s| {
         s.spawn(|| {
             let h = pool.acquire();
-            let _call = h.handle().inner.lock().unwrap();
-            panic!("panic inside a Maude call");
+            h.handle().inner.lock().with_cancellation::<()>(|inner| {
+                inner.initialize()?;
+                inner.write_line(b"show modules .\n")?;
+                panic!("abandon an exchange before reading its reply");
+            })
         })
         .join()
         .is_err()
     });
     assert!(panicked);
-    assert_eq!(pool.spawned(), 0, "the poisoned handle is retired");
+    assert_eq!(pool.spawned(), 1, "the pool keeps its member");
     let h = pool.acquire();
-    assert!(!h.handle().inner.is_poisoned());
+    assert!(h.child.lock().unwrap().child.is_none());
     let r = h.reduce(&reducible_fst_pair("a", "b")).expect("reduce");
     assert_eq!(
         r,
@@ -362,6 +368,8 @@ fn pool_retires_a_handle_poisoned_by_a_panic() {
             "a"
         )))
     );
+    let new_pid = h.child.lock().unwrap().child.as_ref().unwrap().id();
+    assert_ne!(old_pid, new_pid, "the interrupted process was replaced");
     drop(h);
 
     let panicked = std::thread::scope(|s| {
@@ -374,6 +382,13 @@ fn pool_retires_a_handle_poisoned_by_a_panic() {
     });
     assert!(panicked);
     assert_eq!(pool.spawned(), 1, "a healthy handle goes back to the pool");
+    let h = pool.acquire();
+    assert_eq!(
+        new_pid,
+        h.child.lock().unwrap().child.as_ref().unwrap().id()
+    );
+    h.reduce(&reducible_fst_pair("healthy", "b"))
+        .expect("healthy process still answers");
 }
 
 /// Six threads share a two-member pool.  Each thread gets its own answer
@@ -910,6 +925,7 @@ fn panicking_exchange_cannot_leave_a_reply_for_the_next_request() {
         return;
     };
     let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let old_pid = handle.child.lock().unwrap().child.as_ref().unwrap().id();
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle.inner.lock().with_cancellation::<()>(|inner| {
             inner.initialize()?;
@@ -919,7 +935,16 @@ fn panicking_exchange_cannot_leave_a_reply_for_the_next_request() {
     }));
     assert!(panic.is_err());
     assert!(handle.child.lock().unwrap().child.is_none());
-    assert!(handle
+    let result = handle
         .reduce(&reducible_fst_pair("after_panic", "b"))
-        .is_err());
+        .expect("restart after panic");
+    assert_eq!(
+        result,
+        crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+            crate::lterm::NameTag::Pub,
+            "after_panic"
+        )))
+    );
+    let new_pid = handle.child.lock().unwrap().child.as_ref().unwrap().id();
+    assert_ne!(old_pid, new_pid, "the interrupted process was replaced");
 }
