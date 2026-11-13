@@ -141,6 +141,7 @@ pub async fn start_server_with_theory_and(
         ndc_check: true,
         lemmas_to_prove: Vec::new(),
         parser_flags: Vec::new(),
+        cancel_cleanup: None,
     };
     mutate(&mut cfg);
 
@@ -150,10 +151,11 @@ pub async fn start_server_with_theory_and(
         .expect("fixture should parse + elaborate");
     let _idx = store.insert(entry);
 
+    let proof_requests = tamarin_server::cancellation::ProofRequests::new(cfg.cancel_cleanup);
     let state = Arc::new(AppState {
         cfg,
         store,
-        proof_requests: Default::default(),
+        proof_requests,
     });
     let app = router(state);
 

@@ -596,6 +596,13 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
 
     let mut cfg =
         tamarin_server::ServerConfig::new(bind_addr, data_dir, maude_invocation_path(args));
+    // Best effort: release this worker's unused pages and purge shared arenas
+    // after cancellation. Leave the allocator's proving-time policy unchanged.
+    cfg.cancel_cleanup = Some(|| {
+        // SAFETY: mi_collect takes no pointers and preserves live allocations.
+        // It collects the calling thread's heap and synchronizes arena purging.
+        unsafe { rustfs_mimalloc_sys::mi_collect(true) }
+    });
     cfg.frontend_dist = frontend_dist;
     // `--bound` is accepted here but NOT routed anywhere: HS interactive
     // stores it in the App autoprover's `apBound`, which every autoprove

@@ -11,13 +11,22 @@ use parking_lot::Mutex;
 #[derive(Default)]
 pub struct ProofRequests {
     active: Mutex<BTreeMap<String, Vec<Arc<RequestState>>>>,
+    cancel_cleanup: Option<fn()>,
 }
 
 impl ProofRequests {
+    pub fn new(cancel_cleanup: Option<fn()>) -> Self {
+        Self {
+            cancel_cleanup,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn register(&self, path: String) -> ProofRequest<'_> {
         let state = Arc::new(RequestState {
             cancelled: CancellationToken::default(),
             phase: tokio::sync::watch::channel(WorkerPhase::Queued).0,
+            cancel_cleanup: self.cancel_cleanup,
         });
         self.active
             .lock()
@@ -84,6 +93,7 @@ enum WorkerPhase {
 struct RequestState {
     cancelled: CancellationToken,
     phase: tokio::sync::watch::Sender<WorkerPhase>,
+    cancel_cleanup: Option<fn()>,
 }
 
 impl RequestState {
@@ -134,6 +144,11 @@ impl ProofWorker {
 }
 impl Drop for ProofWorker {
     fn drop(&mut self) {
+        let cancelled =
+            self.0.cancelled.is_cancelled() && *self.0.phase.borrow() == WorkerPhase::Running;
+        if cancelled && let Some(cleanup) = self.0.cancel_cleanup {
+            cleanup();
+        }
         self.0.phase.send_replace(WorkerPhase::Finished);
     }
 }
@@ -166,7 +181,13 @@ impl ProofRequest<'_> {
         let task = tokio::task::spawn_blocking(move || {
             let _guard = worker.enter().map_err(E::from)?;
             tamarin_utils::cancellation::check().map_err(E::from)?;
-            work()
+            let result = work();
+            if worker.0.cancelled.is_cancelled() {
+                // Release even a completed result before allocator cleanup.
+                drop(result);
+                return Err(E::from(Cancelled));
+            }
+            result
         });
         self.state.wait_done().await;
         if self.state.cancelled.is_cancelled() {
@@ -220,6 +241,49 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> Result<parking_lot::MutexGuard<'_, T>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn allocator_cleanup_follows_cancelled_result_drop_on_the_worker() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        static DROPPED: AtomicBool = AtomicBool::new(false);
+        static CLEANED: AtomicUsize = AtomicUsize::new(0);
+        static WORKER: std::sync::Mutex<Option<std::thread::ThreadId>> =
+            std::sync::Mutex::new(None);
+        struct ResultData;
+        impl Drop for ResultData {
+            fn drop(&mut self) {
+                DROPPED.store(true, Ordering::SeqCst);
+            }
+        }
+        let requests = ProofRequests::new(Some(|| {
+            assert!(DROPPED.load(Ordering::SeqCst));
+            assert_eq!(*WORKER.lock().unwrap(), Some(std::thread::current().id()));
+            CLEANED.fetch_add(1, Ordering::SeqCst);
+        }));
+        let mut successful = requests.register("/proof".into());
+        assert_eq!(
+            successful.run(|| Ok::<_, Cancelled>(42)).await.unwrap(),
+            Ok(42)
+        );
+        assert!(successful.finish());
+        assert_eq!(CLEANED.load(Ordering::SeqCst), 0);
+
+        let mut cancelled = requests.register("/proof".into());
+        let result = cancelled
+            .run(|| {
+                *WORKER.lock().unwrap() = Some(std::thread::current().id());
+                tamarin_utils::cancellation::current()
+                    .unwrap()
+                    .request_cancel();
+                // Model a cancellation racing with a successfully computed result.
+                Ok::<_, Cancelled>(ResultData)
+            })
+            .await
+            .unwrap();
+        assert!(matches!(result, Err(Cancelled)));
+        assert!(!cancelled.finish());
+        assert_eq!(CLEANED.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn cancellation_is_scoped_and_completed_requests_are_removed() {

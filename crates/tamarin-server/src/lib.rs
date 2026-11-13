@@ -109,6 +109,9 @@ pub struct ServerConfig {
     pub lemmas_to_prove: Vec<String>,
     /// Parser defines and warning behavior.
     pub parser_flags: Vec<String>,
+    /// Optional allocator cleanup after a cancelled blocking proof unwinds.
+    /// Runs on that worker, before completion is signalled; must not panic.
+    pub cancel_cleanup: Option<fn()>,
 }
 
 impl ServerConfig {
@@ -132,6 +135,7 @@ impl ServerConfig {
             ndc_check: true,
             lemmas_to_prove: Vec::new(),
             parser_flags: Vec::new(),
+            cancel_cleanup: None,
         }
     }
 }
@@ -201,7 +205,7 @@ pub async fn serve(
     let state = Arc::new(AppState {
         cfg: cfg.clone(),
         store,
-        proof_requests: Default::default(),
+        proof_requests: cancellation::ProofRequests::new(cfg.cancel_cleanup),
     });
 
     let app = router(state.clone());

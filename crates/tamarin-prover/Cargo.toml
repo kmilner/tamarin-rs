@@ -29,6 +29,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # 16 GiB arena (mimalloc issue #1309), so a process aborted on a small
 # allocation at ~160 GiB RSS. Go back to `mimalloc` once it ships >= v3.4.
 mimalloc = { package = "rustfs-mimalloc", version = "=0.5.6" }
+# Access collection in the same allocator already linked above.
+rustfs-mimalloc-sys = "=0.5.6"
 # Errno constants for the `IOException` reason table in `run.rs`: the numbers
 # differ across platforms, and libc is already in the tree via the deps above.
 libc = "0.2"

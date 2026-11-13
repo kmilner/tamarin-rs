@@ -1393,6 +1393,7 @@ dependencies = [
  "libc",
  "rayon",
  "rustfs-mimalloc",
+ "rustfs-mimalloc-sys",
  "tamarin-accountability",
  "tamarin-parser",
  "tamarin-sapic",
