@@ -596,12 +596,12 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
 
     let mut cfg =
         tamarin_server::ServerConfig::new(bind_addr, data_dir, maude_invocation_path(args));
-    // Best effort: release this worker's unused pages and purge shared arenas
-    // after cancellation. Leave the allocator's proving-time policy unchanged.
+    // One best-effort collection after Stop completes proof cleanup.
     cfg.cancel_cleanup = Some(|| {
-        // SAFETY: mi_collect takes no pointers and preserves live allocations.
-        // It collects the calling thread's heap and synchronizes arena purging.
-        unsafe { rustfs_mimalloc_sys::mi_collect(true) }
+        // Initialize the cleanup thread's heap before collecting.
+        // SAFETY: the process main heap remains valid; collection preserves live
+        // allocations and attempts to purge shared arenas.
+        unsafe { rustfs_mimalloc_sys::mi_heap_collect(rustfs_mimalloc_sys::mi_heap_main(), true) }
     });
     cfg.frontend_dist = frontend_dist;
     // `--bound` is accepted here but NOT routed anywhere: HS interactive

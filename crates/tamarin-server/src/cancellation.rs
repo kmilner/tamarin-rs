@@ -26,7 +26,6 @@ impl ProofRequests {
         let state = Arc::new(RequestState {
             cancelled: CancellationToken::default(),
             phase: tokio::sync::watch::channel(WorkerPhase::Queued).0,
-            cancel_cleanup: self.cancel_cleanup,
         });
         self.active
             .lock()
@@ -55,11 +54,24 @@ impl ProofRequests {
 
     pub(crate) async fn cancel(&self, path: &str) {
         let requests = self.signal(path);
+        if requests.is_empty() {
+            return;
+        }
         cancel_in_background(requests.clone())
             .await
             .expect("cancellation cleanup panicked");
         for request in requests {
             request.wait_done().await;
+        }
+        // One best-effort collection after callbacks and proof workers finish.
+        // Keep it off both the async executor and the possibly saturated pool.
+        if let Some(cleanup) = self.cancel_cleanup {
+            let (done, receiver) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                cleanup();
+                let _ = done.send(());
+            });
+            receiver.await.expect("allocator cleanup panicked");
         }
     }
 }
@@ -93,7 +105,6 @@ enum WorkerPhase {
 struct RequestState {
     cancelled: CancellationToken,
     phase: tokio::sync::watch::Sender<WorkerPhase>,
-    cancel_cleanup: Option<fn()>,
 }
 
 impl RequestState {
@@ -144,11 +155,6 @@ impl ProofWorker {
 }
 impl Drop for ProofWorker {
     fn drop(&mut self) {
-        let cancelled =
-            self.0.cancelled.is_cancelled() && *self.0.phase.borrow() == WorkerPhase::Running;
-        if cancelled && let Some(cleanup) = self.0.cancel_cleanup {
-            cleanup();
-        }
         self.0.phase.send_replace(WorkerPhase::Finished);
     }
 }
@@ -183,7 +189,7 @@ impl ProofRequest<'_> {
             tamarin_utils::cancellation::check().map_err(E::from)?;
             let result = work();
             if worker.0.cancelled.is_cancelled() {
-                // Release even a completed result before allocator cleanup.
+                // Release a completed result when cancellation wins this race.
                 drop(result);
                 return Err(E::from(Cancelled));
             }
@@ -243,12 +249,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn allocator_cleanup_follows_cancelled_result_drop_on_the_worker() {
+    async fn allocator_cleanup_follows_callbacks_and_cancelled_result_drop() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         static DROPPED: AtomicBool = AtomicBool::new(false);
+        static CALLBACK_FINISHED: AtomicBool = AtomicBool::new(false);
         static CLEANED: AtomicUsize = AtomicUsize::new(0);
-        static WORKER: std::sync::Mutex<Option<std::thread::ThreadId>> =
-            std::sync::Mutex::new(None);
         struct ResultData;
         impl Drop for ResultData {
             fn drop(&mut self) {
@@ -257,7 +262,7 @@ mod tests {
         }
         let requests = ProofRequests::new(Some(|| {
             assert!(DROPPED.load(Ordering::SeqCst));
-            assert_eq!(*WORKER.lock().unwrap(), Some(std::thread::current().id()));
+            assert!(CALLBACK_FINISHED.load(Ordering::SeqCst));
             CLEANED.fetch_add(1, Ordering::SeqCst);
         }));
         let mut successful = requests.register("/proof".into());
@@ -266,22 +271,37 @@ mod tests {
             Ok(42)
         );
         assert!(successful.finish());
+        requests.cancel("/missing").await;
         assert_eq!(CLEANED.load(Ordering::SeqCst), 0);
 
-        let mut cancelled = requests.register("/proof".into());
-        let result = cancelled
-            .run(|| {
-                *WORKER.lock().unwrap() = Some(std::thread::current().id());
-                tamarin_utils::cancellation::current()
-                    .unwrap()
-                    .request_cancel();
-                // Model a cancellation racing with a successfully computed result.
-                Ok::<_, Cancelled>(ResultData)
-            })
-            .await
-            .unwrap();
-        assert!(matches!(result, Err(Cancelled)));
-        assert!(!cancelled.finish());
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let proof = async {
+            let mut cancelled = requests.register("/proof".into());
+            let result = cancelled
+                .run(move || {
+                    let (release_tx, release_rx) = std::sync::mpsc::channel();
+                    let token = tamarin_utils::cancellation::current().unwrap();
+                    let _registration = token.on_cancel(move || {
+                        release_tx.send(()).unwrap();
+                        CALLBACK_FINISHED.store(true, Ordering::SeqCst);
+                    });
+                    entered_tx.send(()).unwrap();
+                    release_rx
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap();
+                    // Even a completed result must be discarded on cancellation.
+                    Ok::<_, Cancelled>(ResultData)
+                })
+                .await
+                .unwrap();
+            assert!(matches!(result, Err(Cancelled)));
+            assert!(!cancelled.finish());
+        };
+        let stop = async {
+            entered_rx.await.unwrap();
+            requests.cancel("/proof").await;
+        };
+        tokio::join!(proof, stop);
         assert_eq!(CLEANED.load(Ordering::SeqCst), 1);
     }
 
@@ -453,7 +473,7 @@ mod tests {
                 let _ = release_rx.recv();
             });
             entered_rx.await.unwrap();
-            let requests = ProofRequests::default();
+            let requests = ProofRequests::new(Some(|| {}));
             let mut request = requests.register("/proof".into());
             let old_state = request.state.clone();
             let ran = Arc::new(AtomicBool::new(false));

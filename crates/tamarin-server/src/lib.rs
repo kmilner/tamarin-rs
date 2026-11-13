@@ -109,8 +109,8 @@ pub struct ServerConfig {
     pub lemmas_to_prove: Vec<String>,
     /// Parser defines and warning behavior.
     pub parser_flags: Vec<String>,
-    /// Optional allocator cleanup after a cancelled blocking proof unwinds.
-    /// Runs on that worker, before completion is signalled; must not panic.
+    /// Optional allocator cleanup after Stop's callbacks and proof workers finish.
+    /// Runs once on a separate thread before Stop responds; must not panic.
     pub cancel_cleanup: Option<fn()>,
 }
 
