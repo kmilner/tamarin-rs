@@ -259,7 +259,11 @@ impl MaudeProcessInner {
             Ok(result) => result,
             Err(panic) => {
                 self.initialized = false;
-                self.child.lock().unwrap().kill_and_wait();
+                {
+                    let mut child = self.child.lock().unwrap();
+                    child.kill_and_wait();
+                    child.restart = true;
+                }
                 std::panic::resume_unwind(panic);
             }
         };
@@ -481,8 +485,8 @@ fn spawn_maude(maude_path: &str) -> Result<(ChildStdin, ChildStdout, Child), Mau
 /// inside `read_until_prompt` while holding the I/O lock.
 struct MaudeChildReaper {
     child: Option<Child>,
-    // Only request cancellation asks for transparent recovery. Explicit
-    // watchdog kills and unrelated I/O errors retain their error semantics.
+    // Request cancellation and panicking exchanges ask for transparent recovery.
+    // Explicit watchdog kills and unrelated I/O errors retain their error semantics.
     restart: bool,
 }
 
