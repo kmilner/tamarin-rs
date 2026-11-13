@@ -1,5 +1,5 @@
 //! Opt-in batch supervisor. The same executable runs the proof in a separate
-//! process group; the parent samples that group's RSS and owns its lifetime.
+//! process group; the parent samples that group's memory and owns its lifetime.
 //! No allocator hooks or solver changes are needed. This is a sampled stop
 //! threshold, not an OS-enforced cap, and does not recover unfinished proofs.
 

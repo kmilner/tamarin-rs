@@ -170,7 +170,7 @@ pub struct Args {
     /// `Some(1)` = single-threaded, byte-identical to sequential output.
     pub processors: Option<usize>,
 
-    /// Batch supervisor's sampled RSS limit in bytes (0 disables it).
+    /// Batch supervisor's sampled memory limit in bytes (0 disables it).
     /// Includes Maude and other helpers in the prover's process group.
     pub memory_limit: Option<u64>,
 
@@ -351,7 +351,7 @@ struct ToolOpts {
     #[arg(long, global = true, value_parser = positive_usize, value_name = "N")]
     processors: Option<usize>,
 
-    /// Stop batch job above sampled total RSS (Linux/macOS; also +RTS -M<SIZE>
+    /// Stop batch job above sampled total memory (Linux RSS/macOS footprint; also +RTS -M<SIZE>
     /// -RTS). Bytes or K/M/G/T, KiB/MiB/GiB/TiB; 0 disables. Approximate,
     /// includes Maude; unfinished proofs are lost
     #[arg(long, global = true, value_parser = memory_size, value_name = "SIZE")]

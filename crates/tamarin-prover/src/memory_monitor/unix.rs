@@ -60,7 +60,7 @@ pub(super) fn run(raw: &[String], limit: u64) -> io::Result<u8> {
         // Inherited stderr can be a full pipe. Never let reporting delay
         // enforcement; the prover and helpers have already been stopped.
         // Reporting failures (e.g. EPIPE) must not replace exit 251 with a panic.
-        let _ = writeln!(io::stderr().lock(), "error: memory limit exceeded: job RSS {used} bytes > {limit} bytes; stopped prover and helpers");
+        let _ = writeln!(io::stderr().lock(), "error: memory limit exceeded: job memory {used} bytes > {limit} bytes; stopped prover and helpers");
     }
     result
 }
@@ -99,7 +99,7 @@ fn supervise(job: &mut Job, limit: u64, exceeded: &mut Option<u64>) -> io::Resul
                 return job.finish(Some(code));
             }
         } else {
-            let used = group_rss(&mut system, job.pid());
+            let used = group_memory(&mut system, job.pid())?;
             if used > limit {
                 *exceeded = Some(used);
                 job.signal(libc::SIGTERM)?;
@@ -110,22 +110,44 @@ fn supervise(job: &mut Job, limit: u64, exceeded: &mut Option<u64>) -> io::Resul
     }
 }
 
-fn group_rss(system: &mut System, group: libc::pid_t) -> u64 {
-    // Refresh memory only, excluding Linux threads so shared address spaces
-    // aren't counted once per thread. sysinfo handles platform-specific reads;
-    // unavailable samples may be omitted or retain their previous values.
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::All,
-        true,
-        ProcessRefreshKind::nothing().with_memory().without_tasks(),
-    );
-    system
-        .processes()
-        .iter()
+fn group_memory(system: &mut System, group: libc::pid_t) -> io::Result<u64> {
+    // Exclude Linux threads so shared address spaces aren't counted per thread.
+    let refresh = ProcessRefreshKind::nothing().without_tasks();
+    #[cfg(target_os = "linux")]
+    let refresh = refresh.with_memory();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
+    let mut total = 0u64;
+    for process in system.processes().values() {
+        let pid = process.pid().as_u32() as libc::pid_t;
         // sysinfo's group_id is a Unix user group, not a process group.
-        .filter(|(pid, _)| unsafe { libc::getpgid(pid.as_u32() as libc::pid_t) } == group)
-        .map(|(_, process)| process.memory())
-        .fold(0, u64::saturating_add)
+        if unsafe { libc::getpgid(pid) } != group {
+            continue;
+        }
+        #[cfg(target_os = "linux")]
+        let used = process.memory();
+        #[cfg(target_os = "macos")]
+        let used = physical_footprint(pid)?;
+        total = total.saturating_add(used);
+    }
+    Ok(total)
+}
+
+#[cfg(target_os = "macos")]
+fn physical_footprint(pid: libc::pid_t) -> io::Result<u64> {
+    // Footprint includes compressed memory and excludes reusable pages.
+    let mut usage = std::mem::MaybeUninit::<libc::rusage_info_v0>::uninit();
+    // SAFETY: the buffer has the size and alignment required by RUSAGE_INFO_V0;
+    // proc_pid_rusage initializes it on success. The API takes the buffer itself,
+    // despite its pointer-to-pointer signature.
+    if unsafe { libc::proc_pid_rusage(pid, libc::RUSAGE_INFO_V0, usage.as_mut_ptr().cast()) } != 0 {
+        let error = io::Error::last_os_error();
+        // A process can exit between enumeration and sampling.
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(0);
+        }
+        return Err(error);
+    }
+    Ok(unsafe { usage.assume_init() }.ri_phys_footprint)
 }
 
 struct Job {
@@ -291,6 +313,69 @@ impl Drop for SignalHandlers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_footprint_excludes_reusable_pages() {
+        // Isolate memory accounting from other tests and give the helper its
+        // own process group, exercising the monitor's full sampling path.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "memory_monitor::unix::tests::macos_footprint_helper",
+                "--ignored",
+                "--nocapture",
+            ])
+            .process_group(0)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore]
+    fn macos_footprint_helper() {
+        let mut system = System::new();
+        let group = std::process::id() as libc::pid_t;
+        let before = group_memory(&mut system, group).unwrap();
+        let size = 64 * 1024 * 1024;
+        // SAFETY: mmap owns this page-aligned region until munmap below. Each
+        // volatile write touches a byte within it; no access follows madvise.
+        let (allocated, reusable) = unsafe {
+            let memory = libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            );
+            assert_ne!(memory, libc::MAP_FAILED);
+            let page_size = libc::sysconf(libc::_SC_PAGESIZE);
+            assert!(page_size > 0);
+            for offset in (0..size).step_by(page_size as usize) {
+                memory.cast::<u8>().add(offset).write_volatile(1);
+            }
+            let allocated = group_memory(&mut system, group).unwrap();
+            assert_eq!(libc::madvise(memory, size, libc::MADV_FREE_REUSABLE), 0);
+            let reusable = group_memory(&mut system, group);
+            assert_eq!(libc::munmap(memory, size), 0);
+            (allocated, reusable.unwrap())
+        };
+        let tolerance = 16 * 1024 * 1024;
+        assert!(allocated > before + size as u64 - tolerance);
+        assert!(
+            reusable < before + tolerance,
+            "before={before}, allocated={allocated}, reusable={reusable}"
+        );
+    }
 
     #[test]
     fn cleanup_preserves_status_when_only_the_zombie_worker_remains() {

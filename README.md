@@ -46,8 +46,9 @@ batch-tamarin 1.2.0.
 ## Memory limits
 
 For batch runs on Linux and macOS, `--memory-limit=<size>` (or `+RTS -M<size> -RTS`)
-sets a threshold for the combined resident memory of the prover and its Maude
-helpers; for example, `--memory-limit=4GiB`. The job stops when sampled usage
+sets a threshold for the combined memory of the prover and its Maude helpers:
+RSS on Linux, physical footprint on macOS. For example, `--memory-limit=4GiB`.
+The job stops when sampled usage
 exceeds the threshold. Usage can overshoot between samples; unfinished
 proofs are lost. See [memory-limit behavior and limitations](docs/PERFORMANCE.md#memory-limits).
 

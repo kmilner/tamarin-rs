@@ -121,8 +121,10 @@ refined sources are computed once and shared across lemmas.
 
 ## Memory limits
 
-On Linux and macOS, `--memory-limit=<size>` monitors the combined resident
-memory (RSS) of a batch run, including Maude and other helpers:
+On Linux and macOS, `--memory-limit=<size>` monitors the combined memory of a
+batch run, including Maude and other helpers. It measures RSS on Linux and
+physical footprint on macOS. The macOS metric includes compressed memory and
+excludes pages marked reusable, even when those pages remain resident:
 
 ```bash
 tamarin-rs --memory-limit=4GiB --prove theory.spthy
@@ -135,6 +137,8 @@ Unlike GHC's `-M`, this measures the prover and helpers, not just the language h
 
 Exceeding the threshold stops the job and exits **251**, matching GHC heap
 exhaustion. Unfinished proofs are lost. This is an approximate limit: usage
-can overshoot, shared pages can be counted more than once, and swapped-out
-memory, detached helpers, or unavailable process data may be missed.
+can overshoot, shared pages can be counted more than once, and detached helpers
+or unavailable process data may be missed. Linux RSS excludes swapped-out memory.
+On macOS, a footprint query failure stops the job with an error unless the
+sampled process has already exited.
 Reducing `--maude-processes` also reduces baseline memory use.
