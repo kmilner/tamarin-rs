@@ -873,13 +873,10 @@ fn ac_constr_chain_fixpoint(extracted: &[AcConstrPair]) -> bool {
 ///      `nodeConcNode c`.
 ///
 /// All three conditions together violate normal form invariant
-/// N6: if the adversary already knew `t_start` (KU before), they
+/// N6′: if the adversary already knew `t_start` (KU before), they
 /// shouldn't be deconstructing it (KD chain) afterwards.  Hits an
 /// otherwise-undetected contradiction earlier than the search
 /// would, pruning a search branch.
-// equivalence-class value set; membership/union only, never iterated into output;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
 fn has_forbidden_chain<'a>(
     sys: &'a System,
     ab_adj: &crate::constraint::system::PrebuiltAdj,
@@ -887,77 +884,6 @@ fn has_forbidden_chain<'a>(
 ) -> bool {
     use crate::fact::FactTag;
     use tamarin_term::lterm::is_msg_var;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-
-    // Build a disj-equivalence relation over Msg-Vars: two vars are
-    // equivalent if, in some disj subst, they both have the same
-    // non-trivial image.  Mirrors HS's behavior at this case state
-    // where simp would have folded the disj down to one subst before
-    // the contradictions check — but RS's variant-pick produces a
-    // 2-subst disj that simp doesn't fold (subst[0] keeps the var,
-    // subst[1] binds it to a concrete term).  HS's path commits to
-    // subst[0] via simpMinimize+substCreatesNonNormalTerms on subst[1];
-    // since RS's NF check doesn't catch this case, walk the disj
-    // substs directly and treat vars that coincide in any branch as
-    // equivalent.
-    //
-    // For each disj subst, group vars by their image term.  Vars
-    // sharing a non-trivial image in some subst are equivalent under
-    // that branch.  Conservative: treat them as equivalent for the
-    // ForbiddenChain check, which means firing on chains where t_start
-    // would equal a KU-action term in any branch.  Root cause of
-    // StatVerif Resolve2_d_1_check_getmsg_d_0_fst_d_1_check_getmsg
-    // case survival.
-    let mut equivalence_classes: tamarin_utils::FastMap<
-        tamarin_term::lterm::LVar,
-        std::collections::HashSet<tamarin_term::lterm::LVar>,
-    > = tamarin_utils::FastMap::default();
-    // Compute a coarse "head signature" of a term for grouping: the
-    // outermost function symbol (or Var/Const tag).  Two Msg-Vars
-    // mapped to App-headed terms with the same outer function symbol
-    // in the same disj subst are treated as candidate-equivalent — they
-    // would unify modulo the inner witness aliasing.  This catches HS's
-    // variant-pick behavior where Maude returns multiple unifiers but
-    // simp collapses them to a single canonical form.
-    let term_head_sig = |t: &tamarin_term::lterm::LNTerm| -> Option<Vec<u8>> {
-        match t {
-            Term::App(tamarin_term::function_symbols::FunSym::NoEq(sym), _) => {
-                Some(sym.name.to_vec())
-            }
-            _ => None,
-        }
-    };
-    for disj in &sys.eq_store().conj {
-        for subst in &disj.substs {
-            // Group Msg-vars by their image's outermost function symbol.
-            let mut by_head: tamarin_utils::FastMap<Vec<u8>, Vec<tamarin_term::lterm::LVar>> =
-                tamarin_utils::FastMap::default();
-            for (v, t) in subst.iter() {
-                if v.sort != tamarin_term::lterm::LSort::Msg {
-                    continue;
-                }
-                let head = match term_head_sig(t) {
-                    Some(h) => h,
-                    None => continue,
-                };
-                by_head.entry(head).or_default().push(*v);
-            }
-            for (_, vars) in by_head {
-                if vars.len() < 2 {
-                    continue;
-                }
-                for vi in &vars {
-                    for vj in &vars {
-                        if vi == vj {
-                            continue;
-                        }
-                        equivalence_classes.entry(*vi).or_default().insert(*vj);
-                    }
-                }
-            }
-        }
-    }
 
     // The `alwaysBefore` adjacency (`ab_adj`) is built once by the caller
     // (`contradictions`) and shared across all ordering checks; queried here
@@ -1003,28 +929,14 @@ fn has_forbidden_chain<'a>(
         ) {
             continue;
         }
-        let t_start_var = match t_start {
-            Term::Lit(Lit::Var(v)) => *v,
-            _ => continue,
-        };
-        // Build the set of candidate-equal Msg-Vars: t_start itself
-        // plus any var in its disj-equivalence class.
-        let mut candidate_vars: tamarin_utils::FastSet<tamarin_term::lterm::LVar> =
-            tamarin_utils::FastSet::default();
-        candidate_vars.insert(t_start_var);
-        if let Some(eqs) = equivalence_classes.get(&t_start_var) {
-            for v in eqs {
-                candidate_vars.insert(*v);
-            }
-        }
-        let candidate_terms: Vec<tamarin_term::lterm::LNTerm> = candidate_vars
-            .iter()
-            .map(|v| Term::Lit(Lit::Var(*v)))
-            .collect();
         // (3) Some KU(t_start) action node precedes the chain
         // start `c.0`.  HS-faithful: `allKUActions` (System.hs)
         // unions BOTH `unsolvedActionAtoms` (unsolved ActionG goals)
         // AND node `rActs` lists.
+        //
+        // Only a KU of exactly `t_start` counts (HS `fst x == t_start`).
+        // Treating other variables as equal because one case of an open
+        // split maps them alike closes branches that hold real traces.
         //
         // Walk node actions first:
         for (id, rule) in sys.nodes.iter() {
@@ -1036,7 +948,7 @@ fn has_forbidden_chain<'a>(
                     Some(t) => t,
                     None => continue,
                 };
-                if !candidate_terms.contains(t_ku) {
+                if t_ku != t_start {
                     continue;
                 }
                 if id == &c.0 {
@@ -1056,7 +968,7 @@ fn has_forbidden_chain<'a>(
                 Some(t) => t,
                 None => continue,
             };
-            if !candidate_terms.contains(t_ku) {
+            if t_ku != t_start {
                 continue;
             }
             if id == c.0 {

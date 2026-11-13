@@ -118,3 +118,27 @@ saturation run in parallel over a pool of Maude subprocesses
 the pool size). Multi-lemma theories gain the most across cores; theories
 dominated by source saturation also speed up at a single core because
 refined sources are computed once and shared across lemmas.
+
+## Memory limits
+
+On Linux and macOS, `--memory-limit=<size>` monitors the combined memory of a
+batch run, including Maude and other helpers. It measures RSS on Linux and
+physical footprint on macOS. The macOS metric includes compressed memory and
+excludes pages marked reusable, even when those pages remain resident:
+
+```bash
+tamarin-rs --memory-limit=4GiB --prove theory.spthy
+```
+
+`+RTS -M4G -RTS` is equivalent. Sizes accept bytes or binary K/M/G/T suffixes
+(case-insensitive), also spelled KiB/MiB/GiB/TiB. Decimal quantities such as
+`1.5G` work; `0` disables the limit. The last native or RTS memory setting wins.
+Unlike GHC's `-M`, this measures the prover and helpers, not just the language heap.
+
+Exceeding the threshold stops the job and exits **251**, matching GHC heap
+exhaustion. Unfinished proofs are lost. This is an approximate limit: usage
+can overshoot, shared pages can be counted more than once, and detached helpers
+or unavailable process data may be missed. Linux RSS excludes swapped-out memory.
+On macOS, a footprint query failure stops the job with an error unless the
+sampled process has already exited.
+Reducing `--maude-processes` also reduces baseline memory use.

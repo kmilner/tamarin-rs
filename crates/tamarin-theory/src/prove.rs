@@ -26,11 +26,18 @@ use crate::theory::OpenProtoRule;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProveError {
+    Cancelled,
     LemmaNotFound(String),
     Guarded(String),
     InvalidHeuristic(String),
     Ranking(RankingError),
     Maude(String),
+}
+
+impl From<tamarin_utils::cancellation::Cancelled> for ProveError {
+    fn from(_: tamarin_utils::cancellation::Cancelled) -> Self {
+        Self::Cancelled
+    }
 }
 
 impl From<crate::tools::equation_store::AddEqsError> for ProveError {
@@ -79,6 +86,7 @@ fn guarded_or_error(f: &crate::formula::LNFormula) -> Result<Guarded, ProveError
 impl std::fmt::Display for ProveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ProveError::Cancelled => f.write_str("proof cancelled"),
             ProveError::LemmaNotFound(n) => write!(f, "lemma not found: {}", n),
             ProveError::Guarded(m) => write!(f, "guarded conversion: {}", m),
             ProveError::InvalidHeuristic(m) => f.write_str(m),
@@ -92,7 +100,8 @@ impl std::error::Error for ProveError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ProveError::Ranking(error) => Some(error),
-            ProveError::LemmaNotFound(_)
+            ProveError::Cancelled
+            | ProveError::LemmaNotFound(_)
             | ProveError::Guarded(_)
             | ProveError::InvalidHeuristic(_)
             | ProveError::Maude(_) => None,
@@ -538,8 +547,10 @@ type CachedSources = Vec<crate::constraint::solver::sources::SourceCases>;
 
 #[derive(Default)]
 struct SourceCache {
-    raw: std::sync::OnceLock<Result<CachedSources, ProveError>>,
-    refined: std::sync::OnceLock<Result<CachedSources, ProveError>>,
+    // Clone one handle under the cache lock; restore individual cases outside it.
+    raw: tamarin_utils::cancellation::CancellableOnce<std::sync::Arc<CachedSources>, ProveError>,
+    refined:
+        tamarin_utils::cancellation::CancellableOnce<std::sync::Arc<CachedSources>, ProveError>,
 }
 
 impl SourceCache {
@@ -573,18 +584,78 @@ fn source_pool() -> &'static rayon::ThreadPool {
     })
 }
 
-/// Enter the source pool from an ordinary scoped thread. Calling
-/// `ThreadPool::install` directly from a worker of the lemma pool can leave
-/// that cross-pool caller parked after the installed job completes. A tiny
-/// coordinator thread keeps the two Rayon schedulers independent; source
-/// initialization happens at most twice per theory.
-fn in_source_pool<R: Send>(f: impl FnOnce() -> R + Send) -> R {
-    std::thread::scope(
-        |scope| match scope.spawn(|| source_pool().install(f)).join() {
-            Ok(result) => result,
-            Err(panic) => std::panic::resume_unwind(panic),
-        },
-    )
+/// Submit owned work to the separate source pool. Queue admission can be
+/// cancelled without waiting for unrelated jobs; once admitted, wait for
+/// cleanup before returning. A channel also keeps the two Rayon schedulers
+/// independent, without parking a lemma worker inside `ThreadPool::install`.
+fn in_source_pool<R: Send + 'static>(
+    f: impl FnOnce() -> Result<R, ProveError> + Send + 'static,
+) -> Result<R, ProveError> {
+    in_source_pool_on(source_pool(), f)
+}
+
+fn in_source_pool_on<R: Send + 'static>(
+    pool: &rayon::ThreadPool,
+    f: impl FnOnce() -> Result<R, ProveError> + Send + 'static,
+) -> Result<R, ProveError> {
+    run_cancellable_job(|work| pool.spawn(work), f)
+}
+
+/// Cancel queued owned work without waiting for its executor to admit it.
+/// Once admitted, wait for completion so no worker outlives its caller's
+/// cleanup. Used at the source and proof-search pool entry points.
+pub(crate) fn run_cancellable_job<R: Send + 'static>(
+    submit: impl FnOnce(Box<dyn FnOnce() + Send>),
+    f: impl FnOnce() -> Result<R, ProveError> + Send + 'static,
+) -> Result<R, ProveError> {
+    use std::sync::{mpsc, Arc, Mutex};
+    use tamarin_utils::cancellation::{self, CancellationGuard};
+    cancellation::check()?;
+    let token = cancellation::current();
+    // Taking the closure is the admission decision: exactly one of the
+    // caller cancelling it and a worker starting it can acquire its payload.
+    let pending = Arc::new(Mutex::new(Some(f)));
+    let worker_pending = pending.clone();
+    let mut cancellable_wait = token.is_some();
+    let (completed, result) = mpsc::channel();
+    submit(Box::new(move || {
+        let work = worker_pending.lock().unwrap().take();
+        let Some(work) = work else { return };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = CancellationGuard::new(token);
+            cancellation::check()?;
+            work()
+        }));
+        let _ = completed.send(outcome);
+    }));
+    loop {
+        let received = if cancellable_wait {
+            result.recv_timeout(std::time::Duration::from_millis(250))
+        } else {
+            result
+                .recv()
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+        };
+        match received {
+            Ok(Ok(outcome)) => {
+                cancellation::check()?;
+                return outcome;
+            }
+            Ok(Err(panic)) => std::panic::resume_unwind(panic),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if cancellation::check().is_err() {
+                    let work = pending.lock().unwrap().take();
+                    if work.is_some() {
+                        return Err(ProveError::Cancelled);
+                    }
+                    // Already running: its token stops the solver/I/O, and
+                    // the result channel acknowledges actual worker cleanup.
+                    cancellable_wait = false;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => panic!("worker lost its result"),
+        }
+    }
 }
 
 /// Per-file shared prover state — the bits of work that depend only on
@@ -710,7 +781,7 @@ impl crate::constraint::solver::context::SourceProvider for SessionSourceProvide
             cache,
             &self.source_assumptions,
         )?;
-        restore_sources(ctx, cached);
+        restore_sources(ctx, &cached);
         Ok(())
     }
 }
@@ -1065,7 +1136,8 @@ impl ProverSession {
             self.source_cache.as_ref()
         };
         SourceStats {
-            raw: raw_sources(&self.template_ctx, self.setup_counter_before, cache).map(count),
+            raw: raw_sources(&self.template_ctx, self.setup_counter_before, cache)
+                .map(|sources| count(&sources)),
             refined: session_sources(
                 SourceKind::RefinedSources,
                 &self.template_ctx,
@@ -1073,7 +1145,7 @@ impl ProverSession {
                 cache,
                 &self.source_assumptions,
             )
-            .map(count),
+            .map(|sources| count(&sources)),
         }
     }
 
@@ -1251,60 +1323,51 @@ fn fresh_source_context(template: &ProofContext, setup_counter_before: u64) -> P
     ctx
 }
 
-fn raw_sources<'a>(
-    template: &ProofContext,
+fn raw_sources(
+    template: &std::sync::Arc<ProofContext>,
     setup_counter_before: u64,
-    cache: &'a SourceCache,
-) -> Result<&'a CachedSources, ProveError> {
-    cache
-        .raw
-        .get_or_init(|| {
-            in_source_pool(|| {
-                let raw_ctx = fresh_source_context(template, setup_counter_before);
-                raw_ctx.ensure_saturated()?;
-                Ok(snapshot_sources(&raw_ctx.full_sources))
-            })
+    cache: &SourceCache,
+) -> Result<std::sync::Arc<CachedSources>, ProveError> {
+    cache.raw.get_or_init(|| {
+        let template = template.clone();
+        in_source_pool(move || {
+            let raw_ctx = fresh_source_context(&template, setup_counter_before);
+            raw_ctx.ensure_saturated()?;
+            Ok(std::sync::Arc::new(snapshot_sources(&raw_ctx.full_sources)))
         })
-        .as_ref()
-        .map_err(Clone::clone)
+    })
 }
 
-fn session_sources<'a>(
+fn session_sources(
     kind: SourceKind,
-    template: &ProofContext,
+    template: &std::sync::Arc<ProofContext>,
     setup_counter_before: u64,
-    cache: &'a SourceCache,
+    cache: &SourceCache,
     source_assumptions: &Result<Vec<std::sync::Arc<Guarded>>, ProveError>,
-) -> Result<&'a CachedSources, ProveError> {
+) -> Result<std::sync::Arc<CachedSources>, ProveError> {
     if kind == SourceKind::RawSources {
         return raw_sources(template, setup_counter_before, cache);
     }
-    cache
-        .refined
-        .get_or_init(|| {
-            let assumptions = source_assumptions.as_ref().map_err(Clone::clone)?;
-            // Resolve the raw dependency before entering the source pool.
-            // `ThreadPool::install` may execute another installed job while
-            // its caller waits, even in a one-thread pool. Waiting for an
-            // in-progress raw OnceLock from inside that pool could therefore
-            // wait on a suspended raw initializer on the same worker.
-            let raw = raw_sources(template, setup_counter_before, cache)?;
-            in_source_pool(|| {
-                let refinement_ctx = fresh_source_context(template, setup_counter_before);
-                restore_sources(&refinement_ctx, raw);
-                // This internal refinement starts from a fully restored raw snapshot;
-                // no outer saturation run owns its gate.
-                refinement_ctx.mark_saturated_done();
-                let refined = crate::constraint::solver::sources::refine_with_source_asms(
-                    refinement_ctx.full_sources.to_vec(),
-                    assumptions,
-                    &refinement_ctx,
-                )?;
-                Ok(snapshot_sources(&refined))
-            })
+    cache.refined.get_or_init(|| {
+        let assumptions = source_assumptions.as_ref().map_err(Clone::clone)?.clone();
+        // Resolve the raw dependency before entering the source pool, so a
+        // source worker never waits for an initializer queued behind it.
+        let raw = raw_sources(template, setup_counter_before, cache)?;
+        let template = template.clone();
+        in_source_pool(move || {
+            let refinement_ctx = fresh_source_context(&template, setup_counter_before);
+            restore_sources(&refinement_ctx, &raw);
+            // This internal refinement starts from a fully restored raw snapshot;
+            // no outer saturation run owns its gate.
+            refinement_ctx.mark_saturated_done();
+            let refined = crate::constraint::solver::sources::refine_with_source_asms(
+                refinement_ctx.full_sources.to_vec(),
+                &assumptions,
+                &refinement_ctx,
+            )?;
+            Ok(std::sync::Arc::new(snapshot_sources(&refined)))
         })
-        .as_ref()
-        .map_err(Clone::clone)
+    })
 }
 
 fn snapshot_sources(sources: &[crate::constraint::solver::sources::Source]) -> CachedSources {

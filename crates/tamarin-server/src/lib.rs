@@ -50,6 +50,7 @@
 // the `disallowed_macros` freeze is allowed for this file.
 #![allow(clippy::disallowed_macros)]
 
+pub mod cancellation;
 pub mod handlers;
 pub mod routes;
 pub mod state;
@@ -77,9 +78,9 @@ pub struct ServerConfig {
     /// Path to the Maude binary.
     pub maude_path: String,
     /// `--derivcheck-timeout` for the dynamic message-derivation checks
-    /// run at theory load (HS interactive default 5s; 0 disables).  Set
-    /// from the CLI flag by `interactive` setup.
-    pub derivcheck_timeout: u32,
+    /// run at theory load (HS interactive default 5s; 0 disables, negative
+    /// is unbounded).  Set from the CLI flag by `interactive` setup.
+    pub derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout,
     /// Source-solver limits from `-c/--open-chains` and `-s/--saturation`.
     pub solver_parameters: tamarin_theory::constraint::solver::sources::IntegerParameters,
     /// CLI `--stop-on-trace` (None = flag absent).  Merged with each
@@ -108,6 +109,9 @@ pub struct ServerConfig {
     pub lemmas_to_prove: Vec<String>,
     /// Parser defines and warning behavior.
     pub parser_flags: Vec<String>,
+    /// Optional allocator cleanup after Stop's callbacks and proof workers finish.
+    /// Runs once on a separate thread before Stop responds; must not panic.
+    pub cancel_cleanup: Option<fn()>,
 }
 
 impl ServerConfig {
@@ -121,7 +125,7 @@ impl ServerConfig {
             data_dir: data_dir.into(),
             frontend_dist: None,
             maude_path,
-            derivcheck_timeout: 5,
+            derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT,
             solver_parameters:
                 tamarin_theory::constraint::solver::sources::IntegerParameters::default(),
             stop_on_trace: None,
@@ -131,6 +135,7 @@ impl ServerConfig {
             ndc_check: true,
             lemmas_to_prove: Vec::new(),
             parser_flags: Vec::new(),
+            cancel_cleanup: None,
         }
     }
 }
@@ -200,6 +205,7 @@ pub async fn serve(
     let state = Arc::new(AppState {
         cfg: cfg.clone(),
         store,
+        proof_requests: cancellation::ProofRequests::new(cfg.cancel_cleanup),
     });
 
     let app = router(state.clone());

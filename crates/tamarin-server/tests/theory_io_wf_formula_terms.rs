@@ -72,7 +72,7 @@ fn web_load_reports_formula_terms_for_sapic_else_restriction() {
         std::path::PathBuf::new(),
         NO_MAUDE.to_string(),
     );
-    cfg.derivcheck_timeout = 0;
+    cfg.derivcheck_timeout = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
     let entry = theory_io::load_from_path(&fixture(), &cfg).expect("fixture loads");
 
     assert!(

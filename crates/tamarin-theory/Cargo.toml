@@ -24,7 +24,8 @@ tamarin-test-support = { workspace = true }
 tamarin-sapic = { workspace = true }
 tamarin-accountability = { workspace = true }
 walkdir = "2"
-mimalloc = { version = "0.1", default-features = false }
+# Same allocator as the prover binary; see crates/tamarin-prover/Cargo.toml.
+mimalloc = { package = "rustfs-mimalloc", version = "=0.5.6" }
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]

@@ -746,3 +746,180 @@ fn match_eqs_direction_matches_hs() {
     assert!(!matches(&t_gen, &t_gen2).is_empty());
     assert!(!matches(&t_gen2, &t_gen).is_empty());
 }
+
+#[test]
+fn cancellation_restarts_maude_before_a_concurrent_request_reuses_it() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    check_cancellation_restart(&path);
+}
+
+#[cfg(unix)]
+#[test]
+fn cancellation_restarts_maude_through_a_wrapper_with_inherited_pipes() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("maude-wrapper");
+    let quoted = path.replace("'", "'\"'\"'");
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\nexec 3<&0\n'{quoted}' \"$@\" <&3 &\nwait\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    check_cancellation_restart(wrapper.to_str().unwrap());
+}
+
+fn check_cancellation_restart(path: &str) {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+    let handle = MaudeHandle::start(path, pair_maude_sig()).unwrap();
+    let old_pid = handle.child.lock().unwrap().child.as_ref().unwrap().id();
+    handle
+        .inner
+        .lock()
+        .execute(b"fmod CANCEL is sort S . op spin : -> S . eq spin = spin . endfm\n")
+        .unwrap();
+    let token = CancellationToken::default();
+    let owner_token = token.clone();
+    let owner_handle = handle.clone();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let owner = std::thread::spawn(move || {
+        let _guard = CancellationGuard::new(Some(owner_token));
+        let result = owner_handle.inner.lock().with_cancellation(|inner| {
+            started_tx.send(()).unwrap();
+            inner.execute_raw(b"reduce in CANCEL : spin .\n")
+        });
+        done_tx
+            .send(matches!(result, Err(MaudeError::Cancelled)))
+            .unwrap();
+    });
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let other_handle = handle.clone();
+    let other =
+        std::thread::spawn(move || other_handle.reduce(&reducible_fst_pair("after_cancel", "b")));
+    token.cancel();
+    assert!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+    owner.join().unwrap();
+    let actual = other.join().unwrap().unwrap();
+    let fresh = MaudeHandle::start(path, pair_maude_sig()).unwrap();
+    assert_eq!(
+        actual,
+        fresh
+            .reduce(&reducible_fst_pair("after_cancel", "b"))
+            .unwrap()
+    );
+    let new_pid = handle.child.lock().unwrap().child.as_ref().unwrap().id();
+    assert_ne!(old_pid, new_pid, "cancelled connection must be replaced");
+    // A late repeat cancellation cannot kill the replacement subprocess.
+    token.cancel();
+    assert_eq!(
+        handle.reduce(&reducible_fst_pair("next", "b")).unwrap(),
+        fresh.reduce(&reducible_fst_pair("next", "b")).unwrap()
+    );
+}
+
+#[test]
+fn cancelling_a_maude_lock_waiter_does_not_interrupt_the_owner() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let lock = handle.inner.lock();
+    let token = CancellationToken::default();
+    let waiter_token = token.clone();
+    let waiter_handle = handle.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let _guard = CancellationGuard::new(Some(waiter_token));
+        done_tx
+            .send(matches!(
+                waiter_handle.reduce(&reducible_fst_pair("waiter", "b")),
+                Err(MaudeError::Cancelled)
+            ))
+            .unwrap();
+    });
+    token.cancel();
+    assert!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+    waiter.join().unwrap();
+    assert!(handle
+        .child
+        .lock()
+        .unwrap()
+        .child
+        .as_mut()
+        .unwrap()
+        .try_wait()
+        .unwrap()
+        .is_none());
+    drop(lock);
+    assert!(handle.reduce(&reducible_fst_pair("owner", "b")).is_ok());
+}
+
+#[test]
+fn deferred_cancellation_before_initialize_preserves_recovery() {
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let old_pid = handle.child.lock().unwrap().child.as_ref().unwrap().id();
+    let token = CancellationToken::default();
+    {
+        let _guard = CancellationGuard::new(Some(token.clone()));
+        let result = handle.inner.lock().with_cancellation(|inner| {
+            // /kill signals after callback registration, but its deferred
+            // cleanup has not run when initialize checks cancellation.
+            token.request_cancel();
+            inner.initialize()
+        });
+        assert!(matches!(result, Err(MaudeError::Cancelled)));
+    }
+    let fresh = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    assert_eq!(
+        handle.reduce(&reducible_fst_pair("retry", "b")).unwrap(),
+        fresh.reduce(&reducible_fst_pair("retry", "b")).unwrap()
+    );
+    let new_pid = handle.child.lock().unwrap().child.as_ref().unwrap().id();
+    assert_ne!(old_pid, new_pid);
+    // Even cleanup delayed until after the replacement is in use must not
+    // kill it or make a subsequent request inherit the old cancellation.
+    token.cancel();
+    assert_eq!(
+        handle.reduce(&reducible_fst_pair("next", "b")).unwrap(),
+        fresh.reduce(&reducible_fst_pair("next", "b")).unwrap()
+    );
+    assert_eq!(
+        new_pid,
+        handle.child.lock().unwrap().child.as_ref().unwrap().id()
+    );
+}
+
+#[test]
+fn panicking_exchange_cannot_leave_a_reply_for_the_next_request() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle.inner.lock().with_cancellation::<()>(|inner| {
+            inner.initialize()?;
+            inner.write_line(b"show modules .\n")?;
+            panic!("abandon an exchange before reading its reply");
+        })
+    }));
+    assert!(panic.is_err());
+    assert!(handle.child.lock().unwrap().child.is_none());
+    assert!(handle
+        .reduce(&reducible_fst_pair("after_panic", "b"))
+        .is_err());
+}

@@ -58,6 +58,8 @@ pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
     if sys.is_initial() {
         return None;
     }
+    #[cfg(test)]
+    super::cancellation_tests::checkpoint(ctx, super::cancellation_tests::Work::Terminal);
     let cs = contradictions(ctx, sys);
     if let Some(c) = cs.into_iter().next() {
         // Mirror Haskell `contradictorySystem`: any contradiction
@@ -286,6 +288,7 @@ pub fn exec_proof_method(
 ) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
 
+    crate::constraint::solver::search::check_cancelled()?;
     // Deadline short-circuit (entry-guard).  Without this, a single
     // `exec_proof_method` invocation that internally enumerates many
     // Maude unifiers / source-case branches (e.g. bilinear-pairing

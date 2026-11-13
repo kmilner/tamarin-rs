@@ -94,7 +94,7 @@ fn ndc_check_flag_gates_the_web_load_ndc_pass() {
         std::path::PathBuf::new(),
         maude,
     );
-    cfg.derivcheck_timeout = 0;
+    cfg.derivcheck_timeout = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
 
     // Flag absent — HS `ndcCheck = True` (TheoryLoader.hs), the pass runs.
     let checked = theory_io::load_from_path(&path, &cfg).expect("fixture loads");
