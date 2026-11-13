@@ -3,7 +3,7 @@
 
 //! Binary entry-point for the Rust `tamarin-prover` port.
 //!
-//! Stays small: parse argv → dispatch to [`tamarin_prover::run::run`]
+//! Stays small: parse argv → optional memory supervisor → [`tamarin_prover::run::run`]
 //! → translate errors into a stderr message + non-zero exit code.
 //!
 //! Uses `mimalloc` as the global allocator, matching every other
@@ -19,6 +19,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::io::Write;
 use std::process::ExitCode;
+
+mod memory_monitor;
 
 /// Does this panic payload come from a `print!`/`println!` whose write to a
 /// closed stdout failed?
@@ -78,6 +80,18 @@ fn main() -> ExitCode {
     // clap renders its own usage errors (stderr, exit 2) and handles
     // `--help`/`--version` (stdout, exit 0) inside `exit()`.
     let args = tamarin_prover::parse_args(&raw).unwrap_or_else(|e| e.exit());
+    if let Some(result) = memory_monitor::run(&raw, args.memory_limit) {
+        return match result {
+            Ok(code) => ExitCode::from(code),
+            Err(e) => {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "error: memory monitor failed: {e}"
+                );
+                ExitCode::from(1)
+            }
+        };
+    }
     match tamarin_prover::run(&args) {
         Ok(0) => ExitCode::SUCCESS,
         Ok(n) => ExitCode::from(n.try_into().unwrap_or(1)),
