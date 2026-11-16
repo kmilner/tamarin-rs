@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         data_dir: None,
         frontend_dist: None,
         maude_path,
-        derivcheck_timeout: 5,
+        derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT,
         solver_parameters: Default::default(),
         stop_on_trace: None,
         dot_path: "dot".to_string(),
@@ -44,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ndc_check: true,
         lemmas_to_prove: Vec::new(),
         parser_flags: Vec::new(),
+        cancel_cleanup: None,
     };
     tamarin_server::serve(cfg, theories).await
 }

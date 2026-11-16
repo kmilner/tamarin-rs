@@ -596,6 +596,13 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
 
     let mut cfg =
         tamarin_server::ServerConfig::new(bind_addr, data_dir, maude_invocation_path(args));
+    // One best-effort collection after Stop completes proof cleanup.
+    cfg.cancel_cleanup = Some(|| {
+        // Initialize the cleanup thread's heap before collecting.
+        // SAFETY: the process main heap remains valid; collection preserves live
+        // allocations and attempts to purge shared arenas.
+        unsafe { rustfs_mimalloc_sys::mi_heap_collect(rustfs_mimalloc_sys::mi_heap_main(), true) }
+    });
     cfg.frontend_dist = frontend_dist;
     // `--bound` is accepted here but NOT routed anywhere: HS interactive
     // stores it in the App autoprover's `apBound`, which every autoprove
@@ -603,7 +610,9 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // Web/Handler.hs) — so the CLI value is dead in this mode.
     // `-d/--derivcheck-timeout` — same default expression as the batch
     // path's derivation-check block (default 5).
-    cfg.derivcheck_timeout = args.derivcheck_timeout.unwrap_or(5);
+    cfg.derivcheck_timeout = args
+        .derivcheck_timeout
+        .unwrap_or(tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT);
     cfg.solver_parameters =
         tamarin_theory::constraint::solver::sources::IntegerParameters::with_overrides(
             args.open_chains,
@@ -1159,8 +1168,9 @@ struct TheoryLoadOptions {
     /// HS `precomputeOnlyMode`.
     precompute_only_mode: bool,
     /// HS `derivationChecks` with its default already resolved
-    /// (`derivDefault = 5`, TheoryLoader.hs; 0 disables).
-    derivation_checks: u32,
+    /// (`derivDefault = 5`, TheoryLoader.hs; 0 disables, negative is
+    /// unbounded).
+    derivation_checks: tamarin_theory::deriv_check::DerivCheckTimeout,
     /// HS `ndcCheck` — enabled by default, `--no-ndc` clears it
     /// (TheoryLoader.hs).
     ndc_check: bool,
@@ -1198,7 +1208,9 @@ fn mk_theory_load_options(args: &Args) -> Result<TheoryLoadOptions, RunError> {
         output_module,
         parse_only_mode: args.parse_only,
         precompute_only_mode: args.precompute_only,
-        derivation_checks: args.derivcheck_timeout.unwrap_or(5),
+        derivation_checks: args
+            .derivcheck_timeout
+            .unwrap_or(tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT),
         ndc_check: !args.no_ndc,
         parameters: tamarin_theory::constraint::solver::sources::IntegerParameters::with_overrides(
             args.open_chains,
@@ -1674,10 +1686,11 @@ impl TheoryPipeline<'_> {
         // Dynamic Message Derivation Checks (mirrors HS
         // `checkVariableDeducability`, gated by `--derivcheck-timeout`,
         // default 5s).  Needs Maude, so we run it AFTER elaboration
-        // and BEFORE the main prove loop.  HS default is 5s; 0 disables.
-        // Each per-variable proof attempt is capped at this timeout.
+        // and BEFORE the main prove loop.  HS default is 5s; 0 disables,
+        // negative runs uncapped.  Each per-variable proof attempt is
+        // capped at this timeout.
         let deriv_timeout = self.opts.derivation_checks;
-        if deriv_timeout > 0 {
+        if deriv_timeout.is_enabled() {
             // HS emits these markers around the per-variable derivability
             // check (TheoryLoader.hs).
             self.marker("Derivation checks started");

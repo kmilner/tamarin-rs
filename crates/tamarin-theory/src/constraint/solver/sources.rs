@@ -1069,6 +1069,7 @@ pub(crate) fn saturate_sources_with_simp(
     // Ku(sign) source one refinement short (29 vs HS's 33 cases), dropping
     // the deepest nested-blind C_2 source cases.
     for iter_n in 0..=limit {
+        super::search::check_cancelled()?;
         // Haskell-faithful `goodTh` filter (Sources.hs):
         //
         //   goodTh th = length (getDisj (get cdCases th)) <= 1
@@ -1159,12 +1160,21 @@ pub(crate) fn saturate_sources_with_simp(
         // We build a per-task context with the pooled handle swapped
         // in via `ctx.with_swapped_maude(...)`.  The PooledMaude guard
         // releases back to the pool on drop at end of the closure.
+        let cancellation = tamarin_utils::cancellation::current();
         let per_source: Result<
             Vec<(Vec<(Vec<String>, System)>, bool, usize)>,
             crate::prove::ProveError,
         > = saturated_indexed
             .into_par_iter()
             .map(|(_i, src)| {
+                let _guard =
+                    tamarin_utils::cancellation::CancellationGuard::new(cancellation.clone());
+                #[cfg(test)]
+                super::cancellation_tests::checkpoint(
+                    ctx,
+                    super::cancellation_tests::Work::Sources,
+                );
+                super::search::check_cancelled()?;
                 let pooled = ctx.maude_pool.as_ref().and_then(|pool| pool.try_acquire());
                 let task_maude = if let Some(pooled) = &pooled {
                     // Give the worker a FRESH counter (not the pooled handle's

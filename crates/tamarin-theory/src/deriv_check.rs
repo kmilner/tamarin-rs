@@ -47,10 +47,12 @@
 //! shared, already-saturated context, so a rule with N free vars incurs N
 //! proof attempts but only one context build.  Each attempt is bounded by
 //! the user's timeout (default 5s, mirrored on the HS side).  The check is
-//! gated by `args.derivcheck_timeout`; passing `0` disables it entirely (HS:
-//! `Main.TheoryLoader.hs`).
+//! gated by `args.derivcheck_timeout`; passing `0` disables it entirely and
+//! a negative value runs it without a time limit (HS:
+//! `Main.TheoryLoader.hs`).  See [`DerivCheckTimeout`].
 
 use crate::wellformedness::WfError;
+use std::num::NonZeroU32;
 use std::time::Duration;
 use tamarin_term::lterm::{HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
@@ -62,11 +64,70 @@ use crate::formula::{exists_var, lift_free, LNFormula};
 use crate::rule::{ProtoRuleE, ProtoRuleEInfo};
 use crate::theory::{Theory, TraceQuantifier};
 
+/// `--derivcheck-timeout`, with HS's three readings of its `Int` kept
+/// apart instead of folded into one integer sentinel.
+///
+/// HS (TheoryLoader.hs) skips the check on `compare derivChecks 0 == EQ`
+/// and otherwise wraps it in `timeout (1000000 * derivChecks)`; GHC's
+/// `System.Timeout.timeout` treats a negative duration as "no timeout", so
+/// every negative value means unbounded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DerivCheckTimeout {
+    /// `0`: skip the checks.
+    Disabled,
+    /// `N > 0`: cap each per-variable probe proof at N seconds.
+    Secs(NonZeroU32),
+    /// `N < 0`: run the checks without a time limit.
+    Unbounded,
+}
+
+impl DerivCheckTimeout {
+    /// HS `defaultTheoryLoadOptions.derivationChecks`: 5 seconds.
+    pub const DEFAULT: Self = match NonZeroU32::new(5) {
+        Some(n) => Self::Secs(n),
+        None => unreachable!(),
+    };
+
+    /// False only for [`Self::Disabled`]: whether the check runs at all.
+    pub fn is_enabled(self) -> bool {
+        self != Self::Disabled
+    }
+
+    /// The per-probe wall-clock cap, `None` when unbounded or disabled.
+    fn per_probe(self) -> Option<Duration> {
+        match self {
+            Self::Secs(s) => Some(Duration::from_secs(s.get().into())),
+            Self::Disabled | Self::Unbounded => None,
+        }
+    }
+}
+
+impl std::str::FromStr for DerivCheckTimeout {
+    type Err = String;
+
+    /// Any `i64`: `0` disables, negatives are unbounded, and positives
+    /// must fit a `u32` — HS would accept larger values as a long timeout,
+    /// but a positive value is never silently narrowed here.
+    fn from_str(s: &str) -> Result<Self, String> {
+        let n: i64 = s.parse().map_err(|e| format!("{e}"))?;
+        match n {
+            0 => Ok(Self::Disabled),
+            n if n < 0 => Ok(Self::Unbounded),
+            n => u32::try_from(n)
+                .ok()
+                .and_then(NonZeroU32::new)
+                .map(Self::Secs)
+                .ok_or_else(|| format!("{n} seconds exceeds the maximum of {}", u32::MAX)),
+        }
+    }
+}
+
 /// Run HS's per-variable derivability check on every rule.
 ///
-/// `timeout_secs == 0` disables the check (returns `vec![]`).  Otherwise
-/// each per-variable prove call is bounded by `timeout_secs` of wall-clock
-/// time (mirrors HS's `--derivcheck-timeout`).
+/// [`DerivCheckTimeout::Disabled`] skips the check (returns `vec![]`).
+/// [`DerivCheckTimeout::Secs`] bounds each per-variable prove call by that
+/// many seconds of wall-clock time; [`DerivCheckTimeout::Unbounded`]
+/// installs no cap (mirrors HS's `--derivcheck-timeout`).
 ///
 /// `ndc_cache` is the parent theory's once-per-load NDC-checked intruder
 /// cache: HS's probe theories inherit the parent's checked `_thyCache`
@@ -81,14 +142,14 @@ use crate::theory::{Theory, TraceQuantifier};
 pub fn check_message_derivation(
     thy: &Theory,
     maude: &MaudeHandle,
-    timeout_secs: u32,
+    timeout: DerivCheckTimeout,
     ndc_cache: Option<IntrRuleCache>,
     parameters: crate::constraint::solver::sources::IntegerParameters,
 ) -> Result<Vec<WfError>, crate::prove::ProveError> {
-    if timeout_secs == 0 {
+    if !timeout.is_enabled() {
         return Ok(Vec::new());
     }
-    let timeout = Duration::from_secs(timeout_secs as u64);
+    let timeout = timeout.per_probe();
     let mut per_rule: Vec<(String, Vec<String>)> = Vec::new();
     // HS `originalRules = map (applyMacroInProtoRule (theoryMacros thy)) $
     // theoryRules thy` (MessageDerivationChecks.hs): the
@@ -378,7 +439,7 @@ fn prove_probe(
     probe: &Probe,
     maude: MaudeHandle,
     free_vars: &[LVar],
-    timeout: Duration,
+    timeout: Option<Duration>,
     ndc_cache: Option<&IntrRuleCache>,
     parameters: crate::constraint::solver::sources::IntegerParameters,
 ) -> Result<Vec<String>, crate::prove::ProveError> {
@@ -394,8 +455,13 @@ fn prove_probe(
     // below and cannot truncate an unrelated search another thread starts
     // while a probe is running.  The RAII guard restores the prior cap on
     // EVERY exit path, so the deadline cannot leak into the main prove loop.
-    let ms = (timeout.as_millis() as u64).max(1);
-    let _deadline_guard = crate::constraint::solver::search::ProofDeadlineGuard::set_ms(ms);
+    // `None` (a negative `--derivcheck-timeout`) lifts every cap, so the
+    // probes cannot inherit one from an outer guard or the env var.
+    use crate::constraint::solver::search::ProofDeadlineGuard;
+    let _deadline_guard = match timeout {
+        Some(t) => ProofDeadlineGuard::set_ms((t.as_millis() as u64).max(1)),
+        None => ProofDeadlineGuard::unbounded(),
+    };
 
     let rules = vec![OpenProtoRule::new(probe.rule.clone())];
     // Probe contexts inherit the parent theory's checked cache verbatim
@@ -508,6 +574,10 @@ mod tests {
         })
     }
 
+    fn secs(n: u32) -> DerivCheckTimeout {
+        DerivCheckTimeout::Secs(NonZeroU32::new(n).expect("nonzero"))
+    }
+
     /// The internal theory the driver hands the check.
     fn theory(src: &str) -> Theory {
         let parsed = parse_theory(src, &[]).expect("parse");
@@ -523,7 +593,7 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default())
+        let report = check_message_derivation(&theory(src), &m, secs(5), None, Default::default())
             .expect("solver operation");
         // `x` appears in `In(x)` which is intruder-known → derivable.
         assert!(report.is_empty(), "expected no warnings, got {:?}", report);
@@ -538,7 +608,7 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default())
+        let report = check_message_derivation(&theory(src), &m, secs(5), None, Default::default())
             .expect("solver operation");
         // Free `unbound` has no premise → not derivable.
         assert_eq!(report.len(), 1);
@@ -558,9 +628,82 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 0, None, Default::default())
-            .expect("solver operation");
+        let report = check_message_derivation(
+            &theory(src),
+            &m,
+            DerivCheckTimeout::Disabled,
+            None,
+            Default::default(),
+        )
+        .expect("solver operation");
         assert!(report.is_empty(), "timeout=0 should disable the check");
+    }
+
+    /// A negative `--derivcheck-timeout` still runs the check (HS only
+    /// skips on `EQ 0`), just without a per-probe cap.
+    #[test]
+    fn deriv_check_runs_without_a_cap_when_unbounded() {
+        let Some(m) = maude() else { return };
+        let src = r#"
+            theory T begin
+              rule R: [] --[Use(unbound)]-> [Out(unbound)]
+              lemma trivial: "T"
+            end
+        "#;
+        let report = check_message_derivation(
+            &theory(src),
+            &m,
+            DerivCheckTimeout::Unbounded,
+            None,
+            Default::default(),
+        )
+        .expect("solver operation");
+        assert_eq!(
+            report.len(),
+            1,
+            "expected 'unbound' reported, got {report:?}"
+        );
+    }
+
+    /// An unbounded check is never cut short by a wall-clock cap.  A 0 ms
+    /// cap on this thread kills every search that inherits it the moment it
+    /// starts, which would turn the derivable `x` into a reported variable;
+    /// `Unbounded` must lift it so the probe runs to its trace.
+    #[test]
+    fn deriv_check_unbounded_is_not_killed_by_a_deadline() {
+        use crate::constraint::solver::search::ProofDeadlineGuard;
+        let Some(m) = maude() else { return };
+        let src = r#"
+            theory T begin
+              rule R: [In(x)] --[Use(x)]-> [Out(x)]
+              lemma trivial: "T"
+            end
+        "#;
+        let _instant_kill = ProofDeadlineGuard::set_ms(0);
+        let report = check_message_derivation(
+            &theory(src),
+            &m,
+            DerivCheckTimeout::Unbounded,
+            None,
+            Default::default(),
+        )
+        .expect("solver operation");
+        assert!(
+            report.is_empty(),
+            "the unbounded probe was cut short: {report:?}"
+        );
+    }
+
+    #[test]
+    fn deriv_check_timeout_parses_hs_int_readings() {
+        assert_eq!("0".parse(), Ok(DerivCheckTimeout::Disabled));
+        assert_eq!("5".parse(), Ok(secs(5)));
+        assert_eq!("-1".parse(), Ok(DerivCheckTimeout::Unbounded));
+        assert_eq!("-300".parse(), Ok(DerivCheckTimeout::Unbounded));
+        assert_eq!("4294967295".parse(), Ok(secs(u32::MAX)));
+        assert!("4294967296".parse::<DerivCheckTimeout>().is_err());
+        assert!("five".parse::<DerivCheckTimeout>().is_err());
+        assert_eq!(DerivCheckTimeout::DEFAULT, secs(5));
     }
 
     /// `ignoreDerivChecks` on the rule's attributes keeps the rule out of
@@ -575,7 +718,7 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, 5, None, Default::default())
+        let report = check_message_derivation(&theory(src), &m, secs(5), None, Default::default())
             .expect("solver operation");
         assert!(
             report.is_empty(),
@@ -669,7 +812,7 @@ mod tests {
         let Some((thy, m)) = theory_and_maude(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, 10, None, Default::default())
+        let report = check_message_derivation(&thy, &m, secs(10), None, Default::default())
             .expect("solver operation");
         assert_eq!(report.len(), 1, "expected one report, got {:?}", report);
         assert!(
@@ -700,7 +843,7 @@ mod tests {
         let Some((thy, m)) = theory_and_maude(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, 10, None, Default::default())
+        let report = check_message_derivation(&thy, &m, secs(10), None, Default::default())
             .expect("solver operation");
         assert!(
             report.is_empty(),

@@ -302,3 +302,206 @@ async fn terminal_proof_view_does_not_force_its_heuristic() {
     );
     assert!(!html.contains("No such lemma or proof path"));
 }
+
+/// Issue #50: acknowledging /kill must stop the blocking worker, and must
+/// not publish its partial proof. Repeating the request also checks cleanup.
+#[tokio::test]
+async fn cancel_autoprove_stops_loop_without_publishing() {
+    use std::time::Duration;
+
+    let s = start_server_with_theory("loop.spthy").await;
+    for path in [
+        "/thy/trace/1/autoprove/idfs/0/False/proof/exec",
+        "/thy/trace/1/autoproveAll/idfs/0/proof/exec",
+        "/thy/trace/1/autoprove/idfs/0/False/proof/exec",
+    ] {
+        let client = s.client.clone();
+        // jQuery adds a cache-busting query, absent from the UI cancel key.
+        let url = format!("{}?_=123456789", s.url(path));
+        let mut proof = tokio::spawn(async move {
+            client
+                .get(url)
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        });
+        // Let the worker enter the nonterminating search before cancelling.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(!proof.is_finished(), "loop unexpectedly finished");
+        let response = s
+            .client
+            .get(s.url(&format!(
+                "/kill?path={}",
+                percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC)
+            )))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "Canceled request!");
+        // The handler awaits spawn_blocking: this response proves the worker
+        // exited, rather than just abandoning its JoinHandle.
+        let result = tokio::time::timeout(Duration::from_secs(10), &mut proof).await;
+        if result.is_err() {
+            proof.abort();
+        }
+        assert_eq!(
+            result.expect("cancelled worker exits promptly").unwrap()["alert"],
+            "Canceled request!"
+        );
+        assert_eq!(s.get("/thy/trace/2/overview/help").await.status(), 404);
+    }
+    // A subsequent bounded search on the original theory still works.
+    let response: serde_json::Value = s
+        .get("/thy/trace/1/autoprove/idfs/1/False/proof/exec")
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(redirect_idx(&response, "overview/proof/exec"), 2);
+}
+
+/// A blocked oracle must be terminated, and subsequent requests on the same
+/// retained session must produce the same proof as a clean session.
+#[cfg(unix)]
+#[tokio::test]
+async fn cancel_oracle_then_restart_preserves_proofs() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+    let dir = tempfile::tempdir().unwrap();
+    let theory = dir.path().join("theory.spthy");
+    std::fs::write(
+        &theory,
+        std::fs::read(fixture_path("oracle_missing.spthy")).unwrap(),
+    )
+    .unwrap();
+    let oracle = dir.path().join("oracle");
+    std::fs::write(&oracle, "#!/bin/sh\ncd \"$(dirname \"$0\")\"\nif mkdir blocked 2>/dev/null; then\n  touch ready\n  sleep 60\nfi\ncat >/dev/null\nprintf '0\\n'\n").unwrap();
+    std::fs::set_permissions(&oracle, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let s = start_server_with_theory(theory.to_str().unwrap()).await;
+    for path in [
+        "/thy/trace/1/autoprove/idfs/0/False/proof/test",
+        "/thy/trace/1/main/method/test/1",
+        "/thy/trace/1/main/proof/test",
+    ] {
+        let client = s.client.clone();
+        let url = s.url(path);
+        let pending = tokio::spawn(async move {
+            client
+                .get(url)
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        });
+        let entered = tokio::time::timeout(Duration::from_secs(5), async {
+            while !dir.path().join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        let kill = format!(
+            "/kill?path={}",
+            percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC)
+        );
+        let killed = tokio::time::timeout(Duration::from_secs(5), s.get(&kill)).await;
+        assert!(entered.is_ok(), "oracle never entered");
+        assert_eq!(
+            killed
+                .expect("cancel waits for prompt worker exit")
+                .text()
+                .await
+                .unwrap(),
+            "Canceled request!"
+        );
+        // Start again before even consuming the old request's response.
+        let retried: serde_json::Value = s
+            .get("/thy/trace/1/autoprove/idfs/0/False/proof/test")
+            .await
+            .json()
+            .await
+            .unwrap();
+        let idx = redirect_idx(&retried, "overview/proof/test");
+        assert_eq!(pending.await.unwrap()["alert"], "Canceled request!");
+        let clean = start_server_with_theory(theory.to_str().unwrap()).await;
+        let baseline: serde_json::Value = clean
+            .get("/thy/trace/1/autoprove/idfs/0/False/proof/test")
+            .await
+            .json()
+            .await
+            .unwrap();
+        let baseline_idx = redirect_idx(&baseline, "overview/proof/test");
+        assert_eq!(
+            s.get(&format!("/thy/trace/{idx}/source"))
+                .await
+                .text()
+                .await
+                .unwrap(),
+            clean
+                .get(&format!("/thy/trace/{baseline_idx}/source"))
+                .await
+                .text()
+                .await
+                .unwrap()
+        );
+        std::fs::remove_file(dir.path().join("ready")).unwrap();
+        std::fs::remove_dir(dir.path().join("blocked")).unwrap();
+    }
+}
+
+/// Navigation also offers Cancel while lazily starting the proof session.
+#[cfg(unix)]
+#[tokio::test]
+async fn cancel_navigation_during_session_start_then_retry() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+    for path in [
+        "/thy/trace/1/overview/help",
+        "/thy/trace/1/next/normal/proof/debug",
+        "/thy/trace/1/prev/normal/proof/debug",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let wrapper = dir.path().join("maude");
+        let s = start_server_with_theory_and("issue193.spthy", |cfg| {
+            let maude = cfg.maude_path.replace("'", "'\"'\"'");
+            let cwd = dir.path().to_str().unwrap().replace("'", "'\"'\"'");
+            std::fs::write(&wrapper, format!(
+                "#!/bin/sh\ncd '{cwd}'\nif [ -f block ]; then\n touch ready\n sleep 60 &\n wait\n exit 1\nfi\nexec '{maude}' \"$@\"\n"
+            )).unwrap();
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+            cfg.maude_path = wrapper.to_str().unwrap().to_owned();
+        }).await;
+        std::fs::write(dir.path().join("block"), "").unwrap();
+        let client = s.client.clone();
+        let url = format!("{}?_=123456789", s.url(path));
+        let pending = tokio::spawn(async move { client.get(url).send().await.unwrap() });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !dir.path().join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("navigation entered Maude startup");
+        let kill = format!(
+            "/kill?path={}",
+            percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC)
+        );
+        let response = tokio::time::timeout(Duration::from_secs(5), s.get(&kill))
+            .await
+            .expect("navigation stops promptly");
+        assert_eq!(response.text().await.unwrap(), "Canceled request!");
+        assert_eq!(pending.await.unwrap().status(), 204);
+        std::fs::remove_file(dir.path().join("block")).unwrap();
+        let retry = s.get(path).await;
+        assert_eq!(retry.status(), 200);
+        let clean = start_server_with_theory("issue193.spthy").await;
+        assert_eq!(
+            blank_times(&retry.text().await.unwrap()),
+            blank_times(&clean.get(path).await.text().await.unwrap())
+        );
+    }
+}

@@ -259,6 +259,21 @@ fn replay_node(
     proof_bound: usize,
     auto_prove: bool,
 ) -> Result<ProofNode, ProveError> {
+    tamarin_utils::cancellation::check()?;
+    let result = replay_node_inner(ctx, sys, node, proof_bound, auto_prove);
+    // Terminal classification includes legacy boolean Maude queries. A
+    // cancellation error there must never become a changed proof verdict.
+    tamarin_utils::cancellation::check()?;
+    result
+}
+
+fn replay_node_inner(
+    ctx: &ProofContext,
+    sys: System,
+    node: &ProofTree,
+    proof_bound: usize,
+    auto_prove: bool,
+) -> Result<ProofNode, ProveError> {
     // ---- Sorry cases first (HS `replace prf@(... Sorry ...)`). ----
     // Any `Sorry` node → invoke the auto-prover on `sys`. HS:
     //   replace prf@(LNode (ProofStep (Sorry _) (Just se)) _) =

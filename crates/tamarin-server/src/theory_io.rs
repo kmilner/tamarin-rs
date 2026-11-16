@@ -226,7 +226,7 @@ pub(crate) fn load_from_source(
         // (TheoryLoader.hs) — emitted for every close (initial
         // load, upload, reload), and only when derivChecks != 0
         // (TheoryLoader.hs skips the whole block on EQ).
-        if cfg.derivcheck_timeout > 0 {
+        if cfg.derivcheck_timeout.is_enabled() {
             eprintln!("[Theory {}] Derivation checks started", typed.name);
         }
         let extra = tamarin_theory::deriv_check::check_message_derivation(
@@ -238,7 +238,7 @@ pub(crate) fn load_from_source(
         )
         .map_err(|error| LoadError::Elaborate(error.to_string()))?;
         wf_report.extend(extra);
-        if cfg.derivcheck_timeout > 0 {
+        if cfg.derivcheck_timeout.is_enabled() {
             eprintln!("[Theory {}] Derivation checks ended", typed.name);
         }
         if auto_sources {
@@ -342,7 +342,7 @@ mod tests {
             PathBuf::new(),
             maude.to_string(),
         );
-        cfg.derivcheck_timeout = 0;
+        cfg.derivcheck_timeout = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
         cfg
     }
 

@@ -41,6 +41,9 @@ async fn embedded_gui_serves_page_dependencies_and_cache_validators() {
         let etag = response.headers()["etag"].clone();
         let bytes = response.bytes().await.unwrap();
         assert!(!bytes.is_empty(), "{path}");
+        if path == "/static/js/tamarin-prover-ui.js" {
+            assert!(bytes.ends_with(include_bytes!("../src/handlers/cancel_request.js")));
+        }
         let cached = s
             .client
             .get(s.url(path))
@@ -71,7 +74,7 @@ async fn embedded_gui_serves_page_dependencies_and_cache_validators() {
 }
 
 /// Each `/static/<p>` must serve `data/<p>`.  It must serve the exact bytes
-/// on disk, plus PR #928’s lemma CSS until the submodule includes it. Every page this
+/// on disk, plus the local CSS and cancellation corrections. Every page this
 /// crate renders links to the two assets below.
 ///
 /// A missing `data/` is a misconfiguration.  It is not a reason to skip the
@@ -102,6 +105,8 @@ async fn test_static_assets_are_served_from_the_data_dir() {
         });
         if rel == "css/tamarin-prover-ui.css" {
             on_disk.push_str(include_str!("../src/handlers/lemma_instructions.css"));
+        } else if rel == "js/tamarin-prover-ui.js" {
+            on_disk.push_str(include_str!("../src/handlers/cancel_request.js"));
         }
         let res = s.get(url).await;
         assert_eq!(res.status(), 200, "{url}");
@@ -111,7 +116,7 @@ async fn test_static_assets_are_served_from_the_data_dir() {
         assert_eq!(
             res.text().await.expect("read"),
             on_disk,
-            "{url} must serve data/{rel} with the upstream CSS fix"
+            "{url} must serve data/{rel} with the UI corrections"
         );
         let cached = s
             .client
@@ -163,6 +168,11 @@ async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
         include_str!("../src/handlers/lemma_instructions.css")
     );
     std::fs::write(data.join("css/tamarin-prover-ui.css"), &patched_css).unwrap();
+    let patched_js = format!(
+        "// custom UI\n{}",
+        include_str!("../src/handlers/cancel_request.js")
+    );
+    std::fs::write(data.join("js/tamarin-prover-ui.js"), &patched_js).unwrap();
 
     let s = start_server_with_theory_and("issue193.spthy", |cfg| {
         cfg.data_dir = Some(data);
@@ -200,6 +210,9 @@ async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
     let css = s.get("/static/css/tamarin-prover-ui.css").await;
     assert_eq!(css.status(), 200);
     assert_eq!(css.text().await.unwrap(), patched_css);
+    let js = s.get("/static/js/tamarin-prover-ui.js").await;
+    assert_eq!(js.status(), 200);
+    assert_eq!(js.text().await.unwrap(), patched_js);
 
     drop(s);
     std::fs::remove_dir_all(root).unwrap();

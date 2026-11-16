@@ -1356,3 +1356,40 @@ fn insert_formula_negated_less_mark_true_pushes_solved() {
     // decomposition is the same on both paths.
     assert_disj_decomposition(&r);
 }
+
+/// `first_occurrences` marks the first of each group of equal items, in
+/// order, exactly like comparing each item with every earlier one, for
+/// short lists (compared directly) and long ones (grouped by hash).
+/// `SameHash` gives every item the same hash, so `==` alone decides: a
+/// hash collision never merges different items.
+#[test]
+fn first_occurrences_keeps_the_first_of_each_equal_group() {
+    #[derive(PartialEq)]
+    struct SameHash(u32);
+    impl std::hash::Hash for SameHash {
+        fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+    }
+    fn every_earlier<T: PartialEq>(items: &[T]) -> Vec<bool> {
+        (0..items.len())
+            .map(|i| !(0..i).any(|k| items[k] == items[i]))
+            .collect()
+    }
+    for len in 0..100u32 {
+        let values: Vec<u32> = (0..len).map(|i| (i * 7 + i / 3) % 23).collect();
+        assert_eq!(
+            first_occurrences(&values),
+            every_earlier(&values),
+            "len {len}"
+        );
+        let same: Vec<SameHash> = values.iter().map(|&v| SameHash(v)).collect();
+        assert_eq!(first_occurrences(&same), every_earlier(&same), "len {len}");
+    }
+    assert_eq!(
+        first_occurrences(&[3, 1, 3, 2, 1, 3]),
+        [true, true, false, true, false, false]
+    );
+
+    let mut v: Vec<u32> = (0..60).map(|i| i % 25).collect();
+    dedup_preserve_order(&mut v);
+    assert_eq!(v, (0..25).collect::<Vec<_>>());
+}

@@ -10,7 +10,7 @@ fn auto_sources_reaches_interactive_loading_from_cli_and_configuration() {
         "../../../tamarin-prover/examples/features/auto-sources/running-example/running.spthy"
     );
     let mut cfg = crate::ServerConfig::new("127.0.0.1:0".parse().unwrap(), PathBuf::new(), maude);
-    cfg.derivcheck_timeout = 0;
+    cfg.derivcheck_timeout = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
     for (cli, block) in [(false, false), (true, false), (false, true), (true, true)] {
         cfg.auto_sources = cli;
         let source = if block {

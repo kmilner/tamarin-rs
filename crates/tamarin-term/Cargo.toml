@@ -9,8 +9,10 @@ description = "Term language for the Tamarin prover (Rust port)."
 
 [dependencies]
 tamarin-utils = { workspace = true }
+parking_lot = "0.13"
 
 [dev-dependencies]
+tempfile = "3.27"
 tamarin-test-support = { workspace = true }
 
 [build-dependencies]

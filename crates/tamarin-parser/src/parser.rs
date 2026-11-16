@@ -5167,8 +5167,9 @@ impl<'a> Parser<'a> {
             }
             // HS `sortedLVar`'s `mkPrefixParser LSortMsg` arm is the bare
             // `LSortMsg -> pure ()` case (Token.hs): a prefixless
-            // identifier is message-sorted.
-            Some(c) if c.is_alphabetic() => LSort::Msg,
+            // identifier is message-sorted. HS identifiers may start with a
+            // digit (`identStart = alphaNum`), e.g. `let 5G_AV = ...`.
+            Some(c) if c.is_alphanumeric() => LSort::Msg,
             _ => return Ok(None),
         };
         let (id, name_start) = match self.lx.identifier_spanned() {

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::cli::parse_args;
+use tamarin_theory::deriv_check::DerivCheckTimeout;
 
 fn parse(args: &[&str]) -> Args {
     parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
@@ -225,13 +226,13 @@ fn mk_theory_load_options_accepts_valid_values() {
     assert_eq!(o.output_module, Some(ModuleType::Msr));
     // HS `derivDefault = 5` (TheoryLoader.hs) is resolved into
     // the record; `ndcCheck` defaults on.
-    assert_eq!(o.derivation_checks, 5);
+    assert_eq!(o.derivation_checks, DerivCheckTimeout::DEFAULT);
     assert!(o.ndc_check);
     assert_eq!(o.parameters.open_chains_limit(), 7);
     assert_eq!(o.parameters.saturation_limit(), 3);
     let a = parse(&["--no-ndc", "-d=0", "x.spthy"]);
     let o = mk_theory_load_options(&a).expect("valid values");
-    assert_eq!(o.derivation_checks, 0);
+    assert_eq!(o.derivation_checks, DerivCheckTimeout::Disabled);
     assert!(!o.ndc_check);
     assert_eq!(o.output_module, None);
     assert_eq!(o.partial_evaluation, None);

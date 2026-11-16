@@ -106,33 +106,51 @@ pub fn serve(state: Arc<AppState>) -> axum::Router<Arc<AppState>> {
             .route("/css/{name}", axum::routing::get(intdot_css_or_data));
     }
 
-    match patched_ui_css(data_dir) {
-        Ok(Some(file)) => {
-            let service = ServeFile::new(file.path());
-            router = router.route(
-                "/css/tamarin-prover-ui.css",
-                axum::routing::get_service(service).layer(axum::Extension(Arc::new(file))),
-            );
-        }
-        Ok(None) => {}
-        Err(error) => {
-            tracing::warn!(%error, "Could not prepare lemma CSS; serving original assets")
+    for (name, patch) in [
+        (
+            "css/tamarin-prover-ui.css",
+            include_bytes!("lemma_instructions.css").as_slice(),
+        ),
+        (
+            "js/tamarin-prover-ui.js",
+            include_bytes!("cancel_request.js").as_slice(),
+        ),
+    ] {
+        match patched_ui_asset(data_dir, name, patch) {
+            Ok(Some(file)) => {
+                let service = ServeFile::new(file.path());
+                router = router.route(
+                    &format!("/{name}"),
+                    axum::routing::get_service(service).layer(axum::Extension(Arc::new(file))),
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, name, "Could not patch UI asset; serving original")
+            }
         }
     }
     router.fallback_service(serve_data)
 }
 
-/// Until the submodule includes PR #928, prepare its CSS addition once.
+/// Prepare local corrections without modifying the upstream submodule.
 /// The route owns the temporary file and ServeFile supplies normal HTTP caching.
-fn patched_ui_css(data_dir: &Path) -> std::io::Result<Option<tempfile::NamedTempFile>> {
-    let css = std::fs::read(data_dir.join("css/tamarin-prover-ui.css"))?;
-    let instructions = include_bytes!("lemma_instructions.css");
-    if css.ends_with(instructions) {
+fn patched_ui_asset(
+    data_dir: &Path,
+    name: &str,
+    patch: &[u8],
+) -> std::io::Result<Option<tempfile::NamedTempFile>> {
+    let bytes = std::fs::read(data_dir.join(name))?;
+    if bytes.ends_with(patch) {
         return Ok(None);
     }
-    let mut file = tempfile::Builder::new().suffix(".css").tempfile()?;
-    file.write_all(&css)?;
-    file.write_all(instructions)?;
+    let suffix = format!(
+        ".{}",
+        Path::new(name).extension().unwrap().to_str().unwrap()
+    );
+    let mut file = tempfile::Builder::new().suffix(&suffix).tempfile()?;
+    file.write_all(&bytes)?;
+    file.write_all(patch)?;
     Ok(Some(file))
 }
 

@@ -119,19 +119,21 @@ pub async fn robots() -> impl IntoResponse {
 ///
 /// See `getKillThreadR` in `src/Web/Handler.hs`.
 ///
-/// We don't yet wire a `tokio_util::sync::CancellationToken` registry,
-/// so the "cancel" is a soft ack — but the 400-on-missing-path
-/// semantics match Haskell exactly so frontend dispatch works.
+/// Signal the blocking prover worker registered for this request URL.
 pub(crate) async fn kill_thread(
+    State(state): State<Arc<AppState>>,
     axum::extract::Query(q): axum::extract::Query<KillQuery>,
 ) -> impl IntoResponse {
     match q.path {
-        Some(_key) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            "Canceled request!",
-        )
-            .into_response(),
+        Some(key) => {
+            state.proof_requests.cancel(&key).await;
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                "Canceled request!",
+            )
+                .into_response()
+        }
         None => (
             StatusCode::BAD_REQUEST,
             [(header::CONTENT_TYPE, "text/html; charset=utf-8")],

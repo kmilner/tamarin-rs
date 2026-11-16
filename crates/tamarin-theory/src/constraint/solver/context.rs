@@ -71,6 +71,9 @@ impl<'a> IntoIterator for &'a IntrRuleCache {
 /// directly on [`ProofContext`], outside this bundle.
 #[derive(Debug)]
 pub struct ProofContextShared {
+    #[cfg(test)]
+    pub(crate) worker_gate:
+        std::sync::Mutex<Option<std::sync::Arc<super::cancellation_tests::WorkerGate>>>,
     /// Protocol rules after loop-breaker and variant annotation. They become
     /// immutable before source precomputation and are shared by every lemma
     /// and proof-search worker.
@@ -1053,6 +1056,8 @@ impl ProofContext {
             source_provider: None,
             saturate_gate: SaturateGate::new(SaturateState::Pending),
             shared: std::sync::Arc::new(ProofContextShared {
+                #[cfg(test)]
+                worker_gate: std::sync::Mutex::new(None),
                 rules,
                 intruder_rules,
                 unique_action_shapes,

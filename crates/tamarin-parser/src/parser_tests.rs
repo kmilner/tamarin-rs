@@ -1794,6 +1794,24 @@ fn let_inlining_is_sequential() {
 }
 
 #[test]
+fn let_binder_may_start_with_a_digit() {
+    // HS identifiers start with any alphanumeric character, so upstream's
+    // ccs18-5G models bind `let 5G_AV = ...`.
+    let r = only_rule(
+        r#"theory T begin
+            rule R: let 5G_AV = <'a', ~k> in [Fr(~k)] --[]-> [Out(5G_AV)]
+        end"#,
+    );
+    match &r.conclusions[0].args[0] {
+        Term::Pair(items) => match items.last() {
+            Some(Term::Var(vs)) if vs.name == "k" && vs.sort == LSort::Fresh => {}
+            other => panic!("expected <'a', ~k>, got <.., {other:?}>"),
+        },
+        other => panic!("expected <'a', ~k> after subst, got {other:?}"),
+    }
+}
+
+#[test]
 fn let_inlining_leaves_a_forward_reference_free() {
     // A binding whose right-hand side names a LATER binding keeps that name as
     // a free variable: by the time `a`'s singleton introduces `b` into the

@@ -285,20 +285,46 @@ fn saturation_and_open_chains_inline_short_and_long() {
     assert_eq!(parse(&["-s", "x.spthy"]).saturation, Some(5));
 }
 
+fn deriv_secs(n: u32) -> Option<DerivCheckTimeout> {
+    Some(DerivCheckTimeout::Secs(
+        std::num::NonZeroU32::new(n).expect("nonzero"),
+    ))
+}
+
 #[test]
 fn derivcheck_timeout_zero_disables_and_bare_is_five() {
-    assert_eq!(parse(&["-d=0", "x.spthy"]).derivcheck_timeout, Some(0));
-    assert_eq!(parse(&["-d", "x.spthy"]).derivcheck_timeout, Some(5));
+    assert_eq!(
+        parse(&["-d=0", "x.spthy"]).derivcheck_timeout,
+        Some(DerivCheckTimeout::Disabled)
+    );
+    assert_eq!(parse(&["-d", "x.spthy"]).derivcheck_timeout, deriv_secs(5));
     assert_eq!(
         parse(&["--derivcheck-timeout=30", "x.spthy"]).derivcheck_timeout,
-        Some(30)
+        deriv_secs(30)
     );
+}
+
+// HS hands a negative `derivChecks` to `System.Timeout.timeout`, which
+// treats it as "no timeout"; every negative value is accepted as that.
+#[test]
+fn derivcheck_timeout_negative_is_unbounded() {
+    for argv in [
+        ["-d=-1", "x.spthy"],
+        ["--derivcheck-timeout=-1", "x.spthy"],
+        ["--derivcheck-timeout=-300", "x.spthy"],
+    ] {
+        assert_eq!(
+            parse(&argv).derivcheck_timeout,
+            Some(DerivCheckTimeout::Unbounded),
+            "{argv:?}"
+        );
+    }
 }
 
 // The numeric-tightening deltas from the module doc: values HS's
 // `read @Int` would wrap or accept as huge are LOUD rc-2 rejections here,
-// never silent truncations.  `-d=2^32` would otherwise wrap onto the
-// 0-disables sentinel and skip the derivation checks; `-c`/`-s` past
+// never silent truncations.  `-d=2^32` would otherwise be narrowed onto
+// some shorter timeout or the disabled state; `-c`/`-s` past
 // i64::MAX would wrap negative and be dropped by the solver's `>= 0`
 // override guard.
 #[test]
@@ -323,7 +349,7 @@ fn oversized_numeric_values_are_rejected_loudly() {
     // The largest accepted values sit exactly on the type bounds.
     assert_eq!(
         parse(&["-d=4294967295", "x.spthy"]).derivcheck_timeout,
-        Some(u32::MAX)
+        deriv_secs(u32::MAX)
     );
     assert_eq!(parse(&["-b=4294967295", "x.spthy"]).bound, Some(u32::MAX));
     assert_eq!(
@@ -743,12 +769,105 @@ fn rts_rejects_invalid_counts_and_unsupported_options() {
             "{option}",
         );
     }
-    for option in ["-M1G", "-s", "--processors=2", "x.spthy"] {
+    for option in ["-s", "--processors=2", "x.spthy"] {
         let err = parse_err(&["+RTS", option, "-RTS", "x.spthy"]);
         assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
         assert!(err.to_string().contains("unsupported RTS option"));
     }
     assert!(parse_args(&["-N2".into(), "x.spthy".into()]).is_err());
+}
+
+#[test]
+fn memory_limits_accept_native_and_rts_sizes() {
+    for (size, bytes) in [
+        ("4096", 4096),
+        ("4k", 4096),
+        ("4KiB", 4096),
+        ("512M", 512 << 20),
+        ("1.5g", 3 << 29),
+        (".5GiB", 1 << 29),
+        ("2T", 2 << 40),
+        ("0", 0),
+        ("0MiB", 0),
+        ("18446744073709551615", u64::MAX),
+    ] {
+        assert_eq!(
+            parse(&[&format!("--memory-limit={size}"), "x.spthy"]).memory_limit,
+            Some(bytes)
+        );
+        assert_eq!(
+            parse(&["x.spthy", "+RTS", &format!("-M{size}")]).memory_limit,
+            Some(bytes)
+        );
+    }
+    let a = parse(&["+RTS", "-N2", "-M4G", "-RTS", "--prove", "x.spthy"]);
+    assert_eq!(a.processors, Some(2));
+    assert_eq!(a.memory_limit, Some(4 << 30));
+    assert!(a.prove_mode);
+}
+
+#[test]
+fn memory_limit_last_setting_wins_without_disturbing_rts_delimiters() {
+    for argv in [
+        vec!["--memory-limit=1G", "+RTS", "-M2G", "-RTS", "x.spthy"],
+        vec!["+RTS", "-M1G", "-RTS", "--memory-limit", "2G", "x.spthy"],
+        vec!["--memory-limit", "+RTS", "-M2G", "-RTS", "1G", "x.spthy"],
+        vec!["+RTS", "-M1G", "-M2G", "--RTS", "x.spthy"],
+    ] {
+        assert_eq!(parse(&argv).memory_limit, Some(2 << 30), "{argv:?}");
+    }
+    assert_eq!(
+        parse(&["--memory-limit=1G", "+RTS", "-M0"]).memory_limit,
+        Some(0)
+    );
+    assert_eq!(
+        parse(&["+RTS", "-M1G", "-RTS", "--memory-limit=0"]).memory_limit,
+        Some(0)
+    );
+    let a = parse(&["+RTS", "-M2G", "--", "--memory-limit=1G"]);
+    assert_eq!(a.memory_limit, Some(2 << 30));
+    assert_eq!(a.in_files, ["--memory-limit=1G"]);
+    assert_eq!(parse(&["--", "+RTS", "-M2G"]).memory_limit, None);
+    assert_eq!(parse(&["--RTS", "+RTS", "--", "-M2G"]).memory_limit, None);
+}
+
+#[test]
+fn memory_limits_reject_bad_sizes_and_non_batch_modes() {
+    for size in [
+        "",
+        "-1",
+        "+1G",
+        "1e3",
+        "1Gjunk",
+        "NaN",
+        "inf",
+        ".",
+        "1.2.3G",
+        "0.1",
+        "18446744073709551616",
+        "18446744073709551615G",
+    ] {
+        for argv in [
+            vec![format!("--memory-limit={size}")],
+            vec!["+RTS".into(), format!("-M{size}")],
+        ] {
+            assert_eq!(
+                parse_args(&argv).unwrap_err().kind(),
+                clap::error::ErrorKind::ValueValidation,
+                "{argv:?}"
+            );
+        }
+    }
+    for mode in ["interactive", "test", "variants"] {
+        for argv in [vec!["--memory-limit=1G", mode], vec![mode, "+RTS", "-M1G"]] {
+            assert_eq!(
+                parse_err(&argv).kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{argv:?}"
+            );
+        }
+    }
+    assert!(parse_args(&["-M1G".into()]).is_err());
 }
 
 #[test]
