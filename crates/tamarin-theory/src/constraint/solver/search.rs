@@ -266,19 +266,24 @@ fn disable_parallel_expand() -> bool {
     tamarin_utils::env_gate!("TAM_RS_DISABLE_PARALLEL_EXPAND")
 }
 
+/// Along one branch, halving a budget of 4 × workers at each local fork
+/// permits floor(log2(4 × workers)) forks. A single worker searches serially
+/// so it can stop as soon as a sibling yields a counterexample.
+fn split_levels(workers: usize) -> u32 {
+    if workers == 1 {
+        0
+    } else {
+        workers.ilog2() + 2
+    }
+}
+
 #[inline]
-fn should_parallel_expand(
-    ctx: &ProofContext,
-    n_cases: usize,
-    depth: usize,
-    serial_only: bool,
-) -> bool {
+fn should_parallel_expand(ctx: &ProofContext, n_cases: usize, serial_only: bool) -> bool {
     !serial_only
         && !ctx.is_exists_trace
         && !ctx.proving_may_fail()
         && matches!(ctx.cut, CutStrategy::Dfs)
         && n_cases >= 2
-        && depth <= 16
 }
 
 /// Per-lemma wall-clock cap on `run_proof_search`. This is a Rust-only,
@@ -552,7 +557,7 @@ pub(crate) fn run_proof_search_at_depth(
             MAX_DEPTH.with(|m| m.set(usize::MAX));
             DEPTH_LIMIT_HIT.with(|f| f.set(false));
             let mut budget = usize::MAX;
-            expand(ctx, &mut root, &mut budget, &deadline, 0)?;
+            expand(ctx, &mut root, &mut budget, &deadline, 0, 0)?;
         }
         CutStrategy::Nothing => {
             // HS `CutNothing` → `id` (Theory/Proof.hs): the full DFS proof
@@ -564,7 +569,7 @@ pub(crate) fn run_proof_search_at_depth(
             MAX_DEPTH.with(|m| m.set(usize::MAX));
             DEPTH_LIMIT_HIT.with(|f| f.set(false));
             let mut budget = usize::MAX;
-            expand(ctx, &mut root, &mut budget, &deadline, 0)?;
+            expand(ctx, &mut root, &mut budget, &deadline, 0, 0)?;
         }
         CutStrategy::AfterSorry => {
             // HS `CutAfterSorry` → `cutAfterFirstSorry` (Theory/Proof.hs).
@@ -577,7 +582,7 @@ pub(crate) fn run_proof_search_at_depth(
             MAX_DEPTH.with(|m| m.set(usize::MAX));
             DEPTH_LIMIT_HIT.with(|f| f.set(false));
             let mut budget = usize::MAX;
-            expand(ctx, &mut root, &mut budget, &deadline, 0)?;
+            expand(ctx, &mut root, &mut budget, &deadline, 0, 0)?;
         }
         CutStrategy::Bfs => {
             // HS `cutOnSolvedBFS` (Theory/Proof.hs): force the tree one
@@ -599,7 +604,7 @@ pub(crate) fn run_proof_search_at_depth(
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
                 let mut budget = usize::MAX;
                 if level == 1 {
-                    expand(ctx, &mut root, &mut budget, &deadline, 0)?;
+                    expand(ctx, &mut root, &mut budget, &deadline, 0, 0)?;
                 } else {
                     re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0)?;
                 }
@@ -661,7 +666,7 @@ pub(crate) fn run_proof_search_at_depth(
                 // `deadline` catching wall-clock runaway.
                 let mut budget = usize::MAX;
                 if first_iter {
-                    expand(ctx, &mut root, &mut budget, &deadline, 0)?;
+                    expand(ctx, &mut root, &mut budget, &deadline, 0, 0)?;
                     first_iter = false;
                 } else {
                     // Re-expand only `Sorry: depth limit` leaves
@@ -847,7 +852,8 @@ fn re_expand_depth_limited(
         node.method = ProofMethod::Sorry(None);
         node.children = BTreeMap::new();
         node.status = NodeStatus::Open;
-        return expand(ctx, node, budget, deadline, depth);
+        // The cached prefix is traversed serially. Start fresh at its frontier.
+        return expand(ctx, node, budget, deadline, depth, 0);
     }
     // Already resolved — return cached subtree.
     if matches!(
@@ -933,8 +939,9 @@ fn expand(
     budget: &mut usize,
     deadline: &std::time::Instant,
     depth: usize,
+    local_forks: u32,
 ) -> Result<(), ProveError> {
-    expand_inner(ctx, node, budget, deadline, depth)?;
+    expand_inner(ctx, node, budget, deadline, depth, local_forks)?;
     // Boolean terminal checks can suppress a cancelled Maude query.
     check_cancelled()?;
     // After expansion, `sys` is no longer read EXCEPT on
@@ -982,6 +989,7 @@ fn expand_inner(
     budget: &mut usize,
     deadline: &std::time::Instant,
     depth: usize,
+    local_forks: u32,
 ) -> Result<(), ProveError> {
     check_cancelled()?;
     // `--bound=N` (HS `boundProofDepth`, Theory/Proof.hs): `go n`'s
@@ -1153,16 +1161,15 @@ fn expand_inner(
     // siblings would invalidate that pruning and explore branches HS
     // would skip — observable as an 8× user-CPU blow-up on wireguard
     // exists_two_sessions when parallel was enabled unconditionally.
-    // All-traces lemmas never short-circuit on Solved (Solved means a
-    // counter-example was found; valid lemmas never see this), so for
-    // those parallel exploration of every sibling matches HS exactly.
+    // Valid all-traces proofs need every sibling. For a false lemma, later
+    // siblings may do extra work after an earlier one finds a counterexample.
     // Fallible rankings and guarded conversions also stay serial: Rayon
     // waits for every in-flight sibling before returning an error, so an
     // unbounded sibling could otherwise hide a prompt failure indefinitely.
     // Only `Dfs` uses HS's parallel extractor; the other cuts depend on the
-    // serial branch's abort policy. Limit fan-out to shallow levels because
-    // deeper splits cost more than they save under work stealing.
-    let parallel = should_parallel_expand(ctx, n_cases, depth, serial_only);
+    // serial branch's abort policy.
+    let parallel = should_parallel_expand(ctx, n_cases, serial_only)
+        && local_forks < split_levels(rayon::current_num_threads());
     if parallel {
         use rayon::prelude::*;
         // Snapshot data needed by each worker.  MAX_DEPTH is a per-
@@ -1183,7 +1190,8 @@ fn expand_inner(
         // be aggregated into the parent search.
         let parent_depth_limit_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
         let budget_snapshot = *budget;
-        let queued_entry = cancellation.is_some() && rayon::current_thread_index().is_none();
+        let parent_worker = rayon::current_thread_index();
+        let queued_entry = cancellation.is_some() && parent_worker.is_none();
         let expand_cases =
             move |ctx: &ProofContext| -> Result<Vec<(String, ProofNode, bool)>, ProveError> {
                 cases
@@ -1253,12 +1261,19 @@ fn expand_inner(
                             super::cancellation_tests::Work::Search,
                         );
                         let mut local_budget = budget_snapshot;
+                        // A worker taking over a branch can expose fresh work to steal.
+                        let child_forks = if rayon::current_thread_index() == parent_worker {
+                            local_forks + 1
+                        } else {
+                            0
+                        };
                         expand(
                             &worker_ctx,
                             &mut child,
                             &mut local_budget,
                             &deadline_snapshot,
                             depth + 1,
+                            child_forks,
                         )?;
                         // Drop the pooled Maude back to the pool only after expand
                         // returns — any Maude IPC inside expand uses the pooled
@@ -1351,7 +1366,7 @@ fn expand_inner(
             // Track proof-tree paths and restore them if recursive solver
             // work unwinds. Empty Simplify cases are transparent.
             let _path = crate::constraint::solver::trace::CasePathGuard::push(&name);
-            expand(ctx, &mut child, budget, deadline, depth + 1)?;
+            expand(ctx, &mut child, budget, deadline, depth + 1, local_forks)?;
             abort = match ctx.cut {
                 CutStrategy::Dfs | CutStrategy::SeqDfs => {
                     matches!(child.status, NodeStatus::Solved)
@@ -1612,6 +1627,96 @@ mod tests {
         Some(ProofContext::new(h, Vec::new()))
     }
 
+    #[test]
+    fn local_split_levels_scale_with_workers() {
+        assert_eq!(split_levels(1), 0);
+        assert_eq!(split_levels(3), 3); // 12 -> 6 -> 3 -> 1
+        assert_eq!(split_levels(8), 5); // 32 -> 16 -> 8 -> 4 -> 2 -> 1
+    }
+
+    #[test]
+    fn deep_forks_preserve_the_first_trace() {
+        use super::super::cancellation_tests::{Work, WorkerGate};
+        use crate::prove::{prove_lemma_in_session, ProverSession, ProverSessionOptions};
+        use std::fmt::Write;
+
+        let Some(ctx) = ctx() else { return };
+        // Keep the first fork beyond the former depth cutoff. no_precomp
+        // prevents source construction from collapsing the linear prefix.
+        let mut src = String::from(
+            "theory DeepFork begin\n\
+             rule A_Quick: [] --[ Choice('a') ]-> [ Gate('x') ]\n\
+             rule Z_Alternative: [ Work3('x')[no_precomp] ] --> [ Gate('x') ]\n\
+             rule WorkBase: [] --> [ Work0('x') ]\n",
+        );
+        for i in 1..=3 {
+            for side in ["left", "right"] {
+                writeln!(src, "rule Work{i}_{side}: [ Work{}('x')[no_precomp] ] --[ Choice('{side}') ]-> [ Work{i}('x') ]", i - 1).unwrap();
+            }
+        }
+        let mut previous = String::from("Gate");
+        for i in 1..=36 {
+            writeln!(
+                src,
+                "rule Step{i}: [ {previous}('x')[no_precomp] ] --> [ Prefix{i}('x') ]"
+            )
+            .unwrap();
+            previous = format!("Prefix{i}");
+        }
+        src.push_str(
+            "rule Finish: [ Prefix36('x')[no_precomp] ] --[ Attack() ]-> []\n\
+             lemma no_attack: \"not (Ex #i. Attack()@i)\"\n\
+             lemma attack: exists-trace \"Ex #i. Attack()@i\"\nend",
+        );
+        let parsed = tamarin_parser::parse_theory(&src, &[]).unwrap();
+        let theory = std::sync::Arc::new(crate::elaborate::elaborate(&parsed).unwrap());
+        let session =
+            ProverSession::build(theory, ctx.maude.clone(), ProverSessionOptions::default())
+                .unwrap();
+        let (gate, entered) = WorkerGate::new(Work::Search, usize::MAX);
+        // Observe the parallel-child checkpoints without blocking workers.
+        gate.release();
+        *session.template_context().worker_gate.lock().unwrap() = Some(gate);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        // Keep the second worker occupied so no steal can reset the fork count.
+        let (ready, started) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        pool.spawn(move || {
+            ready.send(()).unwrap();
+            let _ = wait.recv();
+        });
+        started.recv().unwrap();
+        let parallel = pool
+            .install(|| prove_lemma_in_session(&session, "no_attack", usize::MAX))
+            .unwrap();
+        drop(release);
+        // Gate, Work3, then two Work2 forks enqueue 2 + 2 + 4 children.
+        // The next level (Work1) must run serially.
+        assert_eq!(entered.try_iter().count(), 8);
+        let serial = pool
+            .install(|| prove_lemma_in_session(&session, "attack", usize::MAX))
+            .unwrap();
+        assert_eq!(entered.try_iter().count(), 0, "exists-trace stays serial");
+        assert_eq!(proof_status(&parallel), ProofStatus::TraceFound);
+        let body = crate::pretty_theory::pretty_proof_body(&parallel);
+        assert_eq!(body, crate::pretty_theory::pretty_proof_body(&serial));
+        assert!(body.contains("case A_Quick"));
+        assert!(!body.contains("case Z_Alternative"));
+        // A lone worker can stop at A_Quick without exploring Z_Alternative.
+        let single = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let backed_off = single
+            .install(|| prove_lemma_in_session(&session, "no_attack", usize::MAX))
+            .unwrap();
+        assert_eq!(entered.try_iter().count(), 0, "a lone worker stays serial");
+        assert_eq!(body, crate::pretty_theory::pretty_proof_body(&backed_off));
+    }
+
     /// The per-child fan-out (`expand_children`) converts terms on rayon
     /// worker threads.  The converter answers from the signature it is
     /// handed, which the workers share with the caller, so a declared 0-arity
@@ -1856,10 +1961,10 @@ mod tests {
         };
         parallel_ctx.cut = CutStrategy::Dfs;
         parallel_ctx.is_exists_trace = false;
-        assert!(should_parallel_expand(&parallel_ctx, 2, 0, false));
+        assert!(should_parallel_expand(&parallel_ctx, 2, false));
 
         parallel_ctx.set_source_provider(std::sync::Arc::new(FallibleProvider));
-        assert!(!should_parallel_expand(&parallel_ctx, 2, 0, false));
+        assert!(!should_parallel_expand(&parallel_ctx, 2, false));
 
         let Some(mut ctx) = ctx() else { return };
         ctx.cut = CutStrategy::Dfs;
@@ -1871,7 +1976,7 @@ mod tests {
                 oracle_path: "oracle".into(),
             },
         ]);
-        assert!(!should_parallel_expand(&ctx, 2, 0, false));
+        assert!(!should_parallel_expand(&ctx, 2, false));
     }
 
     #[test]
