@@ -35,6 +35,62 @@ fn ctx() -> Option<ProofContext> {
     Some(ProofContext::new(maude()?, Vec::new()))
 }
 
+#[test]
+fn implied_atoms_with_distinct_x_variables_reach_a_fixed_point() {
+    use crate::atom::ProtoAtom;
+    use crate::guarded::{close_guarded, lift_free_atom, Guarded};
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+
+    let Some(ctx) = ctx() else { return };
+    let atom = |index| {
+        let term = var_term(LVar::new("x", LSort::Fresh, index));
+        lift_free_atom(&ProtoAtom::EqE(term.clone(), term))
+    };
+    let mut red = Reduction::new(&ctx, System::empty());
+    assert!(matches!(
+        red.insert_formula(Guarded::Atom(atom(21))).unwrap(),
+        SystemOutcome::Linear
+    ));
+    // All x #i. A(x) @ i ==> x = x, applied to a second, distinct x.
+    let fact = |index| {
+        crate::fact::proto_fact(
+            crate::fact::Multiplicity::Linear,
+            "A",
+            vec![var_term(LVar::new("x", LSort::Fresh, index))],
+        )
+    };
+    let time = LVar::new("i", LSort::Node, 0);
+    red.sys.insert_lemmas([std::sync::Arc::new(close_guarded(
+        crate::formula::Quantifier::All,
+        vec![LVar::new("x", LSort::Fresh, 0), time],
+        vec![ProtoAtom::Action(var_term(time), fact(0))],
+        Guarded::Atom(atom(0)),
+    ))]);
+    red.insert_goal(crate::constraint::constraints::Goal::Action(
+        LVar::new("trace", LSort::Node, 1),
+        fact(31),
+    ));
+    red.changed = ChangeIndicator::Unchanged;
+    assert!(matches!(
+        insert_implied_formulas_pass(&mut red).unwrap(),
+        SystemOutcome::Linear
+    ));
+    assert_eq!(red.changed, ChangeIndicator::Changed);
+    assert!(crate::guarded::stores_contains(
+        &red.sys.solved_formulas,
+        &Guarded::Atom(atom(31))
+    ));
+    let after = red.sys.clone();
+    red.changed = ChangeIndicator::Unchanged;
+    assert!(matches!(
+        insert_implied_formulas_pass(&mut red).unwrap(),
+        SystemOutcome::Linear
+    ));
+    assert_eq!(red.changed, ChangeIndicator::Unchanged);
+    assert_eq!(red.sys, after);
+}
+
 /// Run the production simplifier in tests that intentionally construct a
 /// linear case. A surprise split is itself a regression in these fixtures.
 fn simplify_one(ctx: &ProofContext, sys: System) -> System {

@@ -1763,51 +1763,15 @@ impl<'ctx> Reduction<'ctx> {
                 // `insert_implied_formulas_pass` outputs reach the Atom
                 // branch with mark=True.
                 //
-                // Dedup-by-normalize still applies at mark=True: Maude
-                // unification mints fresh `~mw#N` witnesses per call,
-                // so structurally-identical derivations from
-                // `insert_implied_formulas_pass` would otherwise
-                // accumulate.  Compare normalized form (apply eq-store,
-                // then normalize witness LVars `~mw#N → ~mw#0`, then
-                // alpha-canon GGuarded bound vars).
+                // The entry guard already checked structural membership in
+                // both formula stores. Keep every distinct free-variable
+                // instance: variables named `x` are protocol variables too,
+                // and collapsing their indices can discard a newly implied
+                // formula that the simplifier will then rederive forever.
+                // HS `markAsSolved` likewise inserts the original formula.
                 if mark {
-                    // COW canon.  No bound-var canonicalisation: `Guarded`
-                    // binders are DeBruijn, so `Bound` vars carry no idx and
-                    // alpha-equivalent formulas already compare `==` (matching
-                    // the `implied_apply_canon_cow` twin in simplify.rs).  The two
-                    // stages reuse the borrowed input when they touch no leaf,
-                    // so an already-canonical formula pays zero clones.
-                    // (Nested `fn` with an explicit lifetime so the returned `Cow`
-                    // can borrow the input `f`; a closure cannot express that.)
-                    fn apply_canon<'f>(
-                        f: &'f crate::guarded::Guarded,
-                        eq_vs: &crate::tools::equation_store::LNSubst,
-                    ) -> std::borrow::Cow<'f, crate::guarded::Guarded> {
-                        let f1: std::borrow::Cow<crate::guarded::Guarded> = if eq_vs.is_empty() {
-                            std::borrow::Cow::Borrowed(f)
-                        } else {
-                            match crate::guarded::subst_guarded_cow(f, eq_vs) {
-                                None => std::borrow::Cow::Borrowed(f),
-                                Some(g) => std::borrow::Cow::Owned(g),
-                            }
-                        };
-                        match crate::guarded::normalize_witness_lvars_cow(f1.as_ref()) {
-                            None => f1,
-                            Some(g) => std::borrow::Cow::Owned(g),
-                        }
-                    }
-                    let already_solved = {
-                        let eq_vs = &self.sys.eq_store().subst;
-                        let canon = apply_canon(&g, eq_vs);
-                        self.sys
-                            .solved_formulas
-                            .iter()
-                            .any(|f| apply_canon(f, eq_vs).as_ref() == canon.as_ref())
-                    };
-                    if !already_solved {
-                        self.sys.push_solved_formula_normalized_absent(g);
-                        self.changed = ChangeIndicator::Changed;
-                    }
+                    self.sys.push_solved_formula_normalized_absent(g);
+                    self.changed = ChangeIndicator::Changed;
                 }
                 // Keep this after markAsSolved, as in HS.  `insert_atom` may
                 // split equality solving into several pending branches; each

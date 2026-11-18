@@ -1392,78 +1392,11 @@ fn try_match_all_guards(
             //   gall _ _    gf | gf == gtrue = gtrue
             //   gall ss atos gf             = GGuarded All ss atos gf
             let implied = crate::guarded::gall(Vec::new(), surviving_gatoms, body_subst);
-            // Maude unification mints fresh `~mw#N` witnesses on every
-            // call, so structurally-identical derivations from the
-            // same (restriction, action-node) pair would otherwise
-            // bypass `Vec::contains` (different witness idx each
-            // call) and re-fire forever — see the alive/recentalive
-            // regressions where solved_formulas grew by ~30 entries
-            // per simplify iteration.  Conservative fix: normalize
-            // ONLY `~mw#*` witness LVars to a canonical `~mw#0`
-            // before comparing.  Anything else (real protocol vars,
-            // distinct fresh-named values) keeps its identity, so
-            // dedup doesn't over-merge legitimately-distinct
-            // implications (which would unsoundly drop typing
-            // refinements on [sources] lemmas).
-            // HS-faithful dedup: HS uses bare `Eq Guarded` (structural)
-            // for the `S.member sFormulas` / `S.member sSolvedFormulas`
-            // checks in `insertFormula`.  Two HS firings whose only
-            // difference is bound-var indices ARE structurally identical
-            // because HS uses DeBruijn `BVar Bound`.  Two HS firings with
-            // different FREE-var bindings (from different action-subject
-            // matches) ARE structurally distinct, so HS keeps both.
-            //
-            // Rust's `Guarded` binders are DeBruijn as well: `BVar::Bound`
-            // carries no idx, so alpha-equivalent formulas already compare
-            // `==` without a bound-var canonicalisation step.
-            //
-            // `normalize_witness_lvars_cow` collapses Maude-minted `~mw#N`
-            // witnesses — necessary because Rust's Maude `unify` mints
-            // fresh witnesses per call, breaking structural Eq.  HS's
-            // matchAction is pure matching (no witnesses).
-            //
-            // Do NOT apply `eq_store.subst` before comparing: that would
-            // over-collapse structurally-distinct firings (eq-store
-            // bindings can unify two distinct firings to the same
-            // canonical form), whereas HS's bare structural `Eq` keeps
-            // them apart — dedup here uses witness+bound normalisation
-            // only.
-            // Per-candidate canon via the shared `implied_apply_canon_cow` —
-            // guaranteed lock-step with the `ImpliedDedupTables` entries and
-            // the threaded `out_canon` (single source of truth).  It
-            // collapses AC-`BinOp` permutations (so `Mult(ltkI, ekR)` and
-            // `Mult(ekR, ltkI)` compare equal after `rename_precise_system`
-            // reorders the LVar `Ord`, matching a freshly built `f_app_ac`
-            // form — without which `insertImpliedFormulas` re-adds a duplicate
-            // every `simplifySystem` call, breaking idempotency:
-            // wireguard::key_secrecy) and compares in stored normal form
-            // (HS 150f5eba pre-check normalisation).  Held as `Cow` so an
-            // already-canonical candidate is borrowed until it survives dedup.
+            // Compare in the same stored normal form as the formula tables.
+            // AC permutations compare equal. Free variables retain their indices,
+            // even if the equation store maps two variables to the same term.
             let canon = implied_apply_canon_cow(&implied);
-            // Canonicalisation-based dedup is necessary in RS (vs HS's
-            // bare `Eq Guarded`): RS's Maude unification draws witness
-            // idxs from a GLOBAL atomic `fresh_counter` (maude_proc.rs),
-            // so every call mints fresh idxs and structurally-equal
-            // re-fires would never dedup via bare `==`, causing an
-            // infinite-fire loop on RFID_Simple etc.
-            //
-            // Dedup against the LAZILY-built canon tables (zipped 1:1 with
-            // their source stores — see `ImpliedDedupTables`), so
-            // `apply_canon` runs at most once per existing formula per pass.
-            // Each membership probe compares the u64 prefilter hash first;
-            // the deep canon-equality walk only runs on hash agreement
-            // (hash inequality proves value inequality, so the accept/
-            // reject decision is untouched).
-            //
-            // No separate raw structural check (`f == &implied`) is needed:
-            // `implied_apply_canon_cow` is a pure function of the formula
-            // value, and every table entry is the canon of its source
-            // formula, so `f == implied` forces `canon(f) == canon(implied)`
-            // — the canon comparison already answers `true` for every
-            // structurally-equal pair.
-            //
-            // Short-circuiting `||` is unobservable: the probes are pure,
-            // so evaluation order cannot change the combined boolean.
+            // Hashes filter candidates. Equality decides membership on a hash match.
             let canon_hash = tamarin_utils::fx_hash_one(canon.as_ref());
             let already = dedup_tables
                 .formulas_canon()

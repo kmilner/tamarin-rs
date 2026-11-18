@@ -1298,48 +1298,6 @@ pub fn subst_guarded_cow(g: &Guarded, s: &LNSubst) -> Option<Guarded> {
     }
 }
 
-/// Rewrite every Maude-witness LVar named `x` (any idx) to its canonical
-/// `idx == 0` form.  Used to dedup implied formulas in
-/// `insertImpliedFormulas` where Maude unification mints a fresh witness
-/// per call: two structurally-identical derivations from the same
-/// (restriction, action-node) pair would otherwise have different witness
-/// idx and bypass `Vec::contains`, causing solved_formulas to grow without
-/// bound and the simplify loop to never converge.
-///
-/// We touch ONLY witness vars (name == "x"), canonicalising their idx to 0
-/// while preserving name and sort — every other LVar (real protocol vars,
-/// distinct named fresh values) keeps its identity, so the dedup doesn't
-/// over-merge legitimately-distinct implications.
-///
-/// Copy-on-write: returns `None` when `g` carries no `x`-named witness var
-/// with a non-zero idx (the common case — [`collect_witness_vars`] finds
-/// nothing) OR when the witness substitution touches no leaf
-/// (`subst_guarded_cow` returns `None`), so a caller can reuse `g` by
-/// move/borrow instead of cloning.
-pub fn normalize_witness_lvars_cow(g: &Guarded) -> Option<Guarded> {
-    let subst = collect_witness_vars(g);
-    if subst.is_empty() {
-        return None;
-    }
-    subst_guarded_cow(g, &subst)
-}
-
-/// The `x`-named free leaves of `g`, each mapped to its own `idx == 0` form.
-///
-/// The witness set is exactly the free-leaf set `HasFrees` enumerates
-/// (guards + body, all atom variants).  Keying by the whole `LVar` gives two
-/// leaves that share a name and an index but differ in sort their own
-/// canonical images, so visitation order is irrelevant to the result.
-fn collect_witness_vars(g: &Guarded) -> LNSubst {
-    let mut out: std::collections::BTreeMap<LVar, LNTerm> = std::collections::BTreeMap::new();
-    g.for_each_free(&mut |v| {
-        if v.name == "x" {
-            out.insert(*v, var_term(LVar::new(v.name, v.sort, 0)));
-        }
-    });
-    LNSubst::from_map(out)
-}
-
 // =============================================================================
 // Free variables
 // =============================================================================
