@@ -8,6 +8,145 @@ use crate::vterm::Lit;
 
 use tamarin_test_support::require_maude_path;
 
+#[test]
+fn variable_sort_order_is_independent_of_history() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    for enable_nat in [false, true] {
+        let mut sig = crate::maude_sig::minimal_maude_sig(false);
+        sig.enable_mset = true;
+        sig.enable_nat = enable_nat;
+        let first = MaudeHandle::start(&path, sig.clone()).unwrap();
+        let second = MaudeHandle::start(&path, sig).unwrap();
+        // Even with identical name order, creating Fresh's variable symbol
+        // before Pub's (versus the reverse) used to change the unifiers.
+        first
+            .inner
+            .lock()
+            .execute(b"parse in MSG : x0:Fresh .\n", 1)
+            .unwrap();
+        second
+            .inner
+            .lock()
+            .execute(b"parse in MSG : x0:Pub .\n", 1)
+            .unwrap();
+        if enable_nat {
+            second
+                .inner
+                .lock()
+                .execute(b"parse in MSG : x0:TamNat .\n", 1)
+                .unwrap();
+        }
+        let cmd = b"unify in MSG : tammun(x0:Fresh,x1:Pub,x2:Msg) =? tammun(x3:Msg,x4:Msg) .\n";
+        let expected = first.inner.lock().execute(cmd, 5).unwrap();
+        assert!(expected
+            .windows(b"Unifier 10".len())
+            .any(|w| w == b"Unifier 10"));
+        assert_eq!(second.inner.lock().execute(cmd, 5).unwrap(), expected);
+    }
+}
+
+#[test]
+fn variable_order_is_independent_of_history_beyond_2000_names() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let mut sig = crate::maude_sig::xor_maude_sig();
+    sig.enable_mset = true;
+    let fresh = MaudeHandle::start(&path, sig.clone()).unwrap();
+    let used = MaudeHandle::start(&path, sig).unwrap();
+    // Generate # and % names before extending the input-name range.
+    for cmd in [
+        "unify in MSG : tamxor(x0:Msg,x1:Msg) =? tamxor(x2:Msg,x3:Msg) .\n",
+        "get variants in MSG : tamxor(x0:Msg,x1:Msg) .\n",
+    ] {
+        used.inner.lock().execute(cmd.as_bytes(), 4).unwrap();
+    }
+    for base in [0, 2048, 8192] {
+        let [a, b, c, d] = [base, base + 1, base + 2, base + 3];
+        // A query whose text first mentions the new names in reverse order.
+        let reverse =
+            format!("parse in MSG : cons(x{d}:Msg,cons(x{c}:Msg,cons(x{b}:Msg,x{a}:Msg))) .\n");
+        used.inner
+            .lock()
+            .execute(reverse.as_bytes(), d + 1)
+            .unwrap();
+        for (cmd, success_marker) in [
+            (format!("unify in MSG : tamxor(x{a}:Msg,x{b}:Msg) =? tamxor(x{c}:Msg,x{d}:Msg) .\n"), "Unifier 1"),
+            (format!("unify in MSG : tammun(x{a}:Fresh,x{b}:Msg,x{c}:Msg,p(0)) =? tammun(x{d}:Msg,x{}:Msg) .\n", d + 1), "Unifier 1"),
+            (format!("get variants in MSG : tamxor(x{b}:Msg,x{a}:Msg) .\n"), "Variant 1"),
+            (format!("match in MSG : tammun(x{a}:Msg,x{b}:Msg) <=? tammun(p(0),p(1),p(2)) .\n"), "Matcher 1"),
+            (format!("reduce in MSG : tamxor(x{b}:Msg,x{a}:Msg,x{b}:Msg) .\n"), "result Msg:"),
+        ] {
+            let expected = fresh.inner.lock().execute(cmd.as_bytes(), d + 2).unwrap();
+            let actual = used.inner.lock().execute(cmd.as_bytes(), d + 2).unwrap();
+            assert!(
+                String::from_utf8_lossy(&expected).contains(success_marker),
+                "{cmd}: {}",
+                String::from_utf8_lossy(&expected)
+            );
+            assert_eq!(actual, expected, "{cmd}");
+        }
+    }
+}
+
+#[test]
+fn variable_order_cache_hits_and_restarts() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = crate::maude_sig::xor_maude_sig();
+    let caches = Arc::new(SharedMaudeCaches::default());
+    let first = MaudeHandle::start_with_caches(&path, sig.clone(), caches.clone()).unwrap();
+    let second = MaudeHandle::start_with_caches(&path, sig, caches).unwrap();
+    let cmd = b"unify in MSG : tamxor(x2048:Msg,x2049:Msg) =? tamxor(x2050:Msg,x2051:Msg) .\n";
+    let expected = first.inner.lock().execute_memo(cmd, 2052, |_| {}).unwrap();
+    assert_eq!(
+        second.inner.lock().execute_memo(cmd, 2052, |_| {}).unwrap(),
+        expected
+    );
+    assert_eq!(
+        second.inner.lock().ordered_variables,
+        1,
+        "cache hits do no registration"
+    );
+    let reverse = b"parse in MSG : cons(x2051:Msg,cons(x2050:Msg,cons(x2049:Msg,x2048:Msg))) .\n";
+    second.inner.lock().execute(reverse, 2052).unwrap();
+    assert_eq!(second.inner.lock().execute(cmd, 2052).unwrap(), expected);
+    assert_eq!(second.inner.lock().ordered_variables, 4096);
+    {
+        let mut reaper = second.child.lock().unwrap();
+        reaper.kill_and_wait();
+        reaper.restart = true;
+    }
+    // A cache hit can still bypass a dead child. The first real exchange must
+    // re-register names even though the old child had the same watermark.
+    assert_eq!(
+        second.inner.lock().execute_memo(cmd, 2052, |_| {}).unwrap(),
+        expected
+    );
+    second.inner.lock().execute(reverse, 2052).unwrap();
+    assert_eq!(second.inner.lock().execute(cmd, 2052).unwrap(), expected);
+}
+
+#[test]
+fn variable_registration_grows_only_as_needed() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let h = MaudeHandle::start(&path, crate::maude_sig::minimal_maude_sig(false)).unwrap();
+    let mut inner = h.inner.lock();
+    inner.execute(b"reduce in MSG : p(0) .\n", 0).unwrap();
+    assert_eq!(inner.ordered_variables, 1, "only the sort initializer's x0");
+    for (required, expected) in [(1, 1), (2, 2), (3, 4), (4, 4), (5, 8), (2, 8)] {
+        let cmd = format!("reduce in MSG : x{}:Msg .\n", required - 1);
+        let reply = inner.execute(cmd.as_bytes(), required).unwrap();
+        assert!(String::from_utf8_lossy(&reply).contains(&format!("x{}:Msg", required - 1)));
+        assert_eq!(inner.ordered_variables, expected);
+    }
+}
+
 /// `fst(pair(a, b))` over [`pair_maude_sig`].  The pairing signature really
 /// rewrites this term.  `reduce` therefore cannot answer it from either of
 /// its fast paths that use no IPC.  The round trip through the subprocess
@@ -798,7 +937,10 @@ fn check_cancellation_restart(path: &str) {
     handle
         .inner
         .lock()
-        .execute(b"fmod CANCEL is sort S . op spin : -> S . eq spin = spin . endfm\n")
+        .execute(
+            b"fmod CANCEL is sort S . op spin : -> S . eq spin = spin . endfm\n",
+            0,
+        )
         .unwrap();
     let token = CancellationToken::default();
     let owner_token = token.clone();
