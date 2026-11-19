@@ -1,6 +1,7 @@
 import Tamarin.NarrowingFrontier
 import Tamarin.VariantJoinSubsumption
 import Tamarin.VariantJoinPacked
+import Tamarin.VariantJoinAmbient
 
 /-! From complete symbolic one-step successors to exact variant families.
 Search order and the number of folded states are immaterial. The inputs of
@@ -67,13 +68,23 @@ def CompatibleValues (R : Root s) (p q : State s I) : Prop :=
 
 theorem compatible_of_csu (vars : Normalized (ruleRoot rules) Substitution.identity)
     (p q fresh : State s I) (rename : q.Relabels fresh) (apart : ∀ v, p.Uses v → ¬fresh.Uses v)
-    (keys : List I) (allKeys : ∀ i, i ∈ keys) (anchors : List (Term s))
-    (tracked : ∀ v, p.Uses v ∨ fresh.Uses v → (problem p fresh keys anchors).Occurs v)
-    (answers : List (Substitution s)) (checked : CompleteSet (problem p fresh keys anchors) answers)
+    (keys : List I) (allKeys : ∀ i, i ∈ keys)
+    (answers : List (Substitution s)) (inputs : CompleteSet (problem p fresh keys []) answers)
+    (reserved : ∀ μ ∈ answers, Reserves (problem p fresh keys []) [p.value (),fresh.value ()] μ)
     (agree : ∀ μ ∈ answers, (join p fresh μ).IsNormal (ruleRoot rules) →
       EquivB (μ.apply (p.value ())) (μ.apply (fresh.value ()))) :
     CompatibleValues (ruleRoot rules) p q := by
   intro x a b nx na nb lp rq
+  let anchors := [p.value (),fresh.value ()]
+  have checked := join_csu inputs anchors reserved
+  have tracked (v) (live : p.Uses v ∨ fresh.Uses v) : (problem p fresh keys anchors).Occurs v := by
+    have arg (i) : (⟨p.input i,fresh.input i⟩ : Equation s) ∈ problem p fresh keys anchors :=
+      List.mem_append_left _ (List.mem_map_of_mem (allKeys i))
+    rcases live with (⟨i,h⟩ | ⟨⟨⟩,h⟩) | (⟨i,h⟩ | ⟨⟨⟩,h⟩)
+    · exact ⟨_,arg i,.inl h⟩
+    · exact ⟨⟨p.value (),p.value ()⟩,List.mem_append_right _ (by simp [anchors]),.inl h⟩
+    · exact ⟨_,arg i,.inr h⟩
+    · exact ⟨⟨fresh.value (),fresh.value ()⟩,List.mem_append_right _ (by simp [anchors]),.inl h⟩
   have fr := (rename.denotes x _).mp rq
   obtain ⟨μ,hm,normal,δ,_,fit⟩ := (exact_join vars p fresh apart keys allKeys anchors tracked answers checked x
     (fun _ => a) (fun _ => b) nx (fun _ => na) (fun _ => nb)).mp ⟨lp,fr⟩

@@ -2900,15 +2900,25 @@ fn native_oracle_free_exponent_preserves_joint_gdh_observations() {
             }
         }
     }
+    for query in [power.clone(), exp(power.clone(), hash(y.clone()))] {
+        let slots = [query];
+        let expected = valued_variant_rows(&oracle, &slots);
+        assert_eq!(expected.len(), 2);
+        assert_eq!(valued_variant_rows(&native, &slots), expected);
+    }
+    for (slots, count) in [
+        (vec![tower.clone(), exp(power.clone(), a.clone())], 14),
+        (
+            vec![tower.clone(), exp(g.clone(), var("other", LSort::Msg))],
+            12,
+        ),
+    ] {
+        let expected = valued_variant_rows(&oracle, &slots);
+        assert_eq!(expected.len(), count);
+        assert_eq!(valued_variant_rows(&native, &slots), expected);
+    }
     for query in [
-        power.clone(),
-        exp(power.clone(), hash(y.clone())),
         exp(power.clone(), inv(r.clone())),
-        f_app_list(vec![tower.clone(), exp(power.clone(), a.clone())]),
-        f_app_list(vec![
-            tower.clone(),
-            exp(g.clone(), var("other", LSort::Msg)),
-        ]),
         exp(exp(var("base", LSort::Msg), y), r),
     ] {
         assert_eq!(
@@ -6900,3 +6910,6 @@ fn native_oracle_wide_nested_cancellation_with_fresh_variables() {
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);
 }
+
+#[path = "lean_variant_frontier_tests.rs"]
+mod frontier;

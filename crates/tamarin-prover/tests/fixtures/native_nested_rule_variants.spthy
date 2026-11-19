@@ -1,0 +1,15 @@
+theory NativeNestedRuleVariants
+begin
+functions: box/1, wrap/1, unwrap/1
+equations: unwrap(box(x)) = x, unwrap(wrap(x)) = x
+
+rule Source:
+  [] --> [ Ready(wrap(box('payload'))) ]
+
+rule Inspect:
+  [ Ready(x) ] --[ Seen(x,unwrap(unwrap(x))) ]-> []
+
+lemma nested_value:
+  exists-trace "Ex #i. Seen(wrap(box('payload')),'payload') @ i"
+
+end

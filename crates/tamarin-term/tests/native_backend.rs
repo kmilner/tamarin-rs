@@ -1280,10 +1280,30 @@ fn constructor_variants_check_declared_operators_and_all_rule_heads() {
     ));
     let h =
         MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
-    assert!(matches!(
-        h.variants(&f_app_list(vec![x.clone(), pk(hash(x.clone()))])),
-        Err(MaudeError::UnsupportedOperation("variant generation"))
-    ));
+    let rows = h
+        .variants(&f_app_list(vec![x.clone(), pk(hash(x.clone()))]))
+        .unwrap();
+    let mut seen = [0; 2];
+    for row in rows {
+        let image = tamarin_term::subst::apply_vterm(
+            &tamarin_term::subst::Subst::from_list(row),
+            x.clone(),
+        );
+        let value = h.reduce(&pk(hash(image.clone()))).unwrap();
+        match &image {
+            Term::Lit(Lit::Var(_)) => {
+                assert_eq!(value, pk(hash(image)));
+                seen[0] += 1;
+            }
+            Term::App(_, args) if args.len() == 1 && matches!(&args[0], Term::Lit(Lit::Var(_))) => {
+                assert_eq!(image, hash(args[0].clone()));
+                assert_eq!(value, pk(args[0].clone()));
+                seen[1] += 1;
+            }
+            _ => panic!("unexpected hash variant image {image}"),
+        }
+    }
+    assert_eq!(seen, [1, 1]);
     // A variable-headed rule can fire after any substitution.
     sig.st_rules.insert(CtxtStRule::new(
         x.clone(),
@@ -2309,10 +2329,44 @@ fn received_dh_variants_share_the_exponent_and_defer_uncertified_tuples() {
             term: x,
         },
     ));
-    assert!(matches!(
-        native(changed).variants(&power),
-        Err(MaudeError::UnsupportedOperation("variant generation"))
-    ));
+    let changed = native(changed);
+    let rows = changed.variants(&power).unwrap();
+    // No normalized input can contain an inverse. The fresh factor can no
+    // longer cancel an earlier signed exponent, leaving three base cases.
+    let mut seen = [0; 3];
+    for row in rows {
+        let subst = Subst::from_list(row);
+        let base = tamarin_term::subst::apply_vterm(&subst, var(peer));
+        let exponent = tamarin_term::subst::apply_vterm(&subst, var(r));
+        assert!(matches!(&exponent, Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh));
+        let value = changed
+            .reduce(&exp(base.clone(), exponent.clone()))
+            .unwrap();
+        match &base {
+            Term::Lit(Lit::Var(_)) => {
+                assert_eq!(value, exp(base, exponent));
+                seen[0] += 1;
+            }
+            t if *t == tamarin_term::builtin::dh_neutral() => {
+                assert_eq!(value, base);
+                seen[1] += 1;
+            }
+            Term::App(_, args) if args.len() == 2 => {
+                let (g, e) = (&args[0], &args[1]);
+                assert_eq!(base, exp(g.clone(), e.clone()));
+                assert!(
+                    matches!((g,e), (Term::Lit(Lit::Var(g)), Term::Lit(Lit::Var(e))) if g != e)
+                );
+                assert_eq!(
+                    value,
+                    exp(g.clone(), tamarin_term::builtin::mult(e.clone(), exponent))
+                );
+                seen[2] += 1;
+            }
+            _ => panic!("unexpected DH base {base}"),
+        }
+    }
+    assert_eq!(seen, [1, 1, 1]);
 }
 
 #[test]

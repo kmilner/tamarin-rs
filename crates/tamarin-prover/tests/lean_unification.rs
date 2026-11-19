@@ -118,6 +118,14 @@ fn joint_projection_variants_and_proof_match_maude_and_hybrid() {
 }
 
 #[test]
+fn nested_user_rules_preserve_the_input_and_twice_rewritten_value() {
+    assert_native_parity(
+        "native_nested_rule_variants.spthy",
+        &["nested_value (exists-trace): verified"],
+    );
+}
+
+#[test]
 fn cancellation_below_free_constructors_preserves_the_protocol_proof() {
     assert_native_parity(
         "native_free_variant_context.spthy",

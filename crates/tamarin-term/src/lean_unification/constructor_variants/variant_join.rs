@@ -1,6 +1,8 @@
 //! Join complete variant families on the images of all caller variables.
 //! Each row also carries its predicted normal values so a specialization
 //! that introduces a redex in an earlier observation can be discarded.
+mod finite_narrowing;
+
 use super::{InputDomain, RuleTable};
 use crate::function_symbols::FunSym;
 use crate::lean_unification::{initialize, residual, Error, Outcome, WordSlice, LEAN_THREAD};
@@ -43,24 +45,28 @@ struct Row {
     values: Vec<LNTerm>,
 }
 
+fn fresh_renaming(reserved: &FxHashSet<u64>) -> impl FnMut(&LNTerm) -> LNTerm + '_ {
+    let mut names = FxHashMap::default();
+    let mut available = (0..=u64::MAX).filter(|i| !reserved.contains(i));
+    move |t| {
+        t.clone().map_free(&mut |v| {
+            *names.entry(v).or_insert_with(|| {
+                LVar::new(
+                    "x",
+                    v.sort,
+                    available.next().expect("bounded variant variables"),
+                )
+            })
+        })
+    }
+}
+
 impl Row {
     fn iter(&self) -> impl Iterator<Item = &LNTerm> {
         self.images.iter().chain(&self.values)
     }
     fn rename(&self, reserved: &FxHashSet<u64>) -> Self {
-        let mut names = FxHashMap::default();
-        let mut available = (0..=u64::MAX).filter(|i| !reserved.contains(i));
-        let mut rename = |t: &LNTerm| {
-            t.clone().map_free(&mut |v| {
-                *names.entry(v).or_insert_with(|| {
-                    LVar::new(
-                        "x",
-                        v.sort,
-                        available.next().expect("bounded variant variables"),
-                    )
-                })
-            })
-        };
+        let mut rename = fresh_renaming(reserved);
         Self {
             images: self.images.iter().map(&mut rename).collect(),
             values: self.values.iter().map(rename).collect(),
@@ -362,6 +368,19 @@ impl RuleTable {
         if let Some(rows) = self.direct_rows(keys, original, app)? {
             return Ok(Some(rows));
         }
+        if let Some(rows) = self.staged_rows(keys, original, app, search)? {
+            return Ok(Some(rows));
+        }
+        self.finite_narrowing(keys, original, app, search)
+    }
+
+    fn staged_rows(
+        &self,
+        keys: &[LVar],
+        original: &FxHashSet<u64>,
+        app: &LNTerm,
+        search: &mut JoinSearch,
+    ) -> Result<Option<Vec<Row>>, Error> {
         let Term::App(head, args) = app else {
             return Ok(None);
         };
@@ -486,6 +505,18 @@ impl RuleTable {
         Ok(Some(joined))
     }
 
+    fn index_row(&self, mut row: Row) -> Option<IndexedRow> {
+        // Validate each row once, then compare canonical subjects directly.
+        if !self.admits_sorted(row.iter()) {
+            return None;
+        }
+        for t in row.images.iter_mut().chain(&mut row.values) {
+            *t = super::super::canonical_capture(t);
+        }
+        let sizes = row.iter().map(rigid_size).collect();
+        Some(IndexedRow { row, sizes })
+    }
+
     /// Specialization can turn distinct generic cases into instances of each
     /// other. Compare every input image and output under one rigid-subject
     /// match (Row.Subsumes). Transitivity covers earlier deletions if their
@@ -495,21 +526,12 @@ impl RuleTable {
         projected: BTreeSet<Row>,
         budget: &mut usize,
     ) -> Result<Option<Vec<Row>>, Error> {
-        let index = |mut row: Row| -> Option<IndexedRow> {
-            // Validate each row once, then compare canonical subjects directly.
-            if !self.admits_sorted(row.iter()) {
-                return None;
-            }
-            for t in row.images.iter_mut().chain(&mut row.values) {
-                *t = super::super::canonical_capture(t);
-            }
-            let sizes = row.iter().map(rigid_size).collect();
-            Some(IndexedRow { row, sizes })
-        };
         let mut kept: Vec<IndexedRow> = Vec::new();
         'candidate: for r in projected {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-            let Some(row) = index(r) else { return Ok(None) };
+            let Some(row) = self.index_row(r) else {
+                return Ok(None);
+            };
             let mut i = 0;
             while i < kept.len() {
                 match kept[i].subsumes(&row, budget)? {
@@ -571,6 +593,12 @@ impl RuleTable {
         }
         let family = if let Some((base, factors)) = self.dh_peer_factors(app)? {
             super::dh_peer::received_base_rows(app, base, &factors)?
+        } else if self.builtin_dh
+            && let family @ Outcome::Complete(_) = self.dh_exponent_variants(app, &[app])?
+        {
+            // A complete exponent family can be a component of any joint
+            // observation. open_row keeps unrelated caller inputs independent.
+            family
         } else if let family @ Outcome::Complete(_) = self.fresh_xor_variants(app)? {
             family
         } else {
@@ -693,9 +721,17 @@ impl RuleTable {
             if self
                 .collect(t, &mut Vec::new(), InputDomain::Sorted)
                 .is_none()
-                || !self.collect_variant_applications(t, None, &mut applications)?
             {
                 return Ok(Outcome::Unsupported);
+            }
+            let before = applications.len();
+            if !self.collect_variant_applications(t, None, &mut applications)? {
+                // Projection through a wider parent sort can lose the child's
+                // sort requirement. Narrowing the original observation keeps it.
+                applications.truncate(before);
+                if !applications.contains(&t) {
+                    applications.push(t);
+                }
             }
         }
         let Some((first, others)) = applications.split_first() else {
