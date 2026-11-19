@@ -28,6 +28,7 @@ import TamarinRuntime.DHTower
 import TamarinRuntime.ACSubgroups
 import TamarinRuntime.ReductionGraph
 import TamarinRuntime.OperandUnification
+import TamarinRuntime.ForcedOperandClasses
 import TamarinRuntime.MaskedOperands
 import TamarinRuntime.OperandRefinement
 
@@ -223,6 +224,10 @@ def graphACFeasible (width symbol sort : UInt64) (decls : Array UInt64)
 
 @[export tamarin_operand_refine]
 def operandRefine (sides : Array UInt64) : Array UInt64 := OperandRefinementCandidate.keep sides
+
+@[export tamarin_forced_operand_classes]
+def forcedOperandClasses (width : UInt64) (sides : Array (Array UInt64)) : Option (Array UInt64) :=
+  ForcedOperandClasses.run width sides
 
 @[export tamarin_operand_unify]
 def operandUnify (width : UInt64) (sides : Array (Array UInt64)) : Option Homogeneous.Answers :=
