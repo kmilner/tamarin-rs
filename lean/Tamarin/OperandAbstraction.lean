@@ -111,6 +111,28 @@ private theorem extend_solution (q pending : Problem sig) (cols : List Variable)
     exact .refl _
   exact ⟨σ, hσ, δ, (solves_append ..).mpr ⟨hr, hp⟩, keep⟩
 
+/-- Interpret one complete abstract family as a worklist transition. One
+continuation must preserve both the pending equations and all previous images. -/
+theorem split (q pending : Problem sig) (cols : List Variable) (θ : Substitution sig)
+    (live : ∀ v, v ∈ cols ↔ q.Occurs v) (branches : List (Substitution sig))
+    (outer : CompleteSet q branches) (observe : Variable → Prop) (bindings : Substitution sig)
+    (apart : ∀ σ ∈ branches, ∀ v ∈ cols, ∀ w, (σ.image v).Occurs w →
+      ¬ (Observed cols θ pending w ∨ ∃ x, observe x ∧ (bindings.image x).Occurs w))
+    (ρ : Substitution sig) :
+    Residual.Denotes observe (q.substitute θ ++ pending) bindings ρ ↔
+      ∃ σ ∈ branches, Residual.Denotes observe (residual cols θ σ ++ pending) bindings ρ := by
+  constructor
+  · rintro ⟨δ, hd, agree⟩
+    obtain ⟨σ, hσ, ε, he, keep⟩ := extend_solution q pending cols θ live branches outer _
+      (fun _ h => .inl h) apart δ hd
+    refine ⟨σ, hσ, ε, he, ?_⟩
+    intro x hx
+    have same : ε.apply (bindings.image x) = δ.apply (bindings.image x) :=
+      Term.subst_eq_of_agree _ _ _ (fun v hv => keep v (.inr ⟨x, hx, hv⟩))
+    exact same.symm ▸ agree x hx
+  · rintro ⟨σ, hσ, δ, hd, agree⟩
+    exact ⟨δ, branch_sound _ _ _ _ _ _ live (outer.sound σ hσ) hd, agree⟩
+
 /-- The residual solver can use any search order or algorithm. Each branch
 gets its own witnesses. One factorization must cover all original variables,
 even when several operands contain the same variable. Output restriction and
@@ -284,28 +306,20 @@ theorem nested_lifting {run} (correct : Homogeneous.Correct run) : NestedLifting
     obtain ⟨p, hp, rfl⟩ := List.mem_map.mp ha
     simp [decoded p hp]
   · intro ρ
+    rw [split _ pending cols θ live _ hc observe bindings (by
+      intro σ hs v hv z hz keep
+      obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hs
+      obtain ⟨j, rfl⟩ := slots p hp v hv z hz
+      rcases keep with h | ⟨x, hx, h⟩
+      · exact separate j h
+      · exact retained j x hx h) ρ]
     constructor
-    · rintro ⟨δ, hd, agree⟩
-      let kept := fun v => Observed cols θ pending v ∨ ∃ x, observe x ∧ (bindings.image x).Occurs v
-      obtain ⟨σ, hσ, ε, he, keep⟩ := extend_solution (problem f rows) pending cols θ live
-        (pairs.map Prod.snd) hc kept (fun _ h => .inl h) (by
-          rintro σ hm v hv z hz keep
-          obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hm
-          obtain ⟨j, rfl⟩ := slots p hp v hv z hz
-          rcases keep with h | ⟨x, hx, h⟩
-          · exact separate j h
-          · exact retained j x hx h) δ hd
-      obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hσ
-      refine ⟨p.1, List.mem_map_of_mem hp, _, decoded p hp, ε, he, ?_⟩
-      intro x hx
-      have same : ε.apply (bindings.image x) = δ.apply (bindings.image x) := by
-        apply Term.subst_eq_of_agree
-        exact fun v hv => keep v (.inr ⟨x, hx, hv⟩)
-      rw [same]
-      exact agree x hx
-    · rintro ⟨arm, ha, q, hq, δ, hd, agree⟩
+    · rintro ⟨σ, hs, den⟩
+      obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hs
+      exact ⟨p.1, List.mem_map_of_mem hp, _, decoded p hp, den⟩
+    · rintro ⟨arm, ha, q, hq, den⟩
       obtain ⟨p, hp, rfl⟩ := List.mem_map.mp ha
       obtain rfl := Option.some.inj ((decoded p hp).symm.trans hq)
-      exact ⟨δ, branch_sound _ _ _ _ _ _ live (hc.sound p.2 (List.mem_map_of_mem hp)) hd, agree⟩
+      exact ⟨_, List.mem_map_of_mem hp, den⟩
 
 end Tamarin.OperandAbstraction

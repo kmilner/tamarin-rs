@@ -10,6 +10,25 @@ import Tamarin.ACBagAnswers
 import Tamarin.ACBagSearch
 import Lean
 
+/-- The proof-only CI target also pins the total AC reference at its two
+source-level interfaces. Neither obligation has a successful-run premise. -/
+theorem Tamarin.referenceHomogeneous_correct {s : Tamarin.Signature} (f : s.ACSym)
+    (rows : List Tamarin.ACSystem.Row) (sorted : ∀ v ∈ Tamarin.ACSystem.variables rows,
+      v.sort = s.acSort f) (avoid : List Tamarin.Variable) :
+    (Tamarin.Outcome.complete (Tamarin.ACSystem.Reference.solve f rows sorted avoid)).CorrectIn
+      (Tamarin.ACSystem.problem f rows) avoid :=
+  Tamarin.ACSystem.Reference.correct f rows sorted avoid
+
+namespace Tamarin
+theorem referenceOperandSplit_correct {s : Signature} [DecidableEq s.ACSym] [DecidableEq (Term s)]
+    (f : s.ACSym) (selected pending : Problem s) (hs : OperandBatch.Reference.SortedAt f selected)
+    (observe avoid : List Variable) (bindings ρ : Substitution s) :
+    Residual.Denotes (· ∈ observe) (selected ++ pending) bindings ρ ↔
+      ∃ child ∈ OperandBatch.Reference.splitProblem f selected hs pending observe avoid bindings,
+        Residual.Denotes (· ∈ observe) child bindings ρ :=
+  OperandBatch.Reference.splitProblem_correct f selected hs pending _ (.refl _) observe avoid bindings ρ
+end Tamarin
+
 /-- Required CI witness for the actual exported functions, with a type owned
 by the specification. Deleting or weakening a candidate theorem cannot remove
 this obligation. Ordinary runtime builds do not import this module. -/

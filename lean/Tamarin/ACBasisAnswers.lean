@@ -131,8 +131,9 @@ theorem domain : DomainRestricted (problem f rows) b.answer := by
   intro v hv
   exact b.answer.outside v (fun h => hv ((occurs_iff_mem f rows v).mpr h))
 
-theorem freshFor : FreshFor (problem f rows) avoid b.answer := by
-  intro v hv w hw _ ha
+theorem range_fresh {v w : Variable} (hv : (problem f rows).Occurs v)
+    (hw : (b.answer.image v).Occurs w) : w ∉ variables rows ++ avoid := by
+  intro ha
   have mem := (occurs_iff_mem f rows v).mp hv
   change (b.image v).Occurs w at hw
   rw [image, ite_eq_left mem] at hw
@@ -141,7 +142,10 @@ theorem freshFor : FreshFor (problem f rows) avoid b.answer := by
   | cons u us =>
     rw [h] at hw
     obtain ⟨g,hg,e⟩ := b.slot_source v (by rw [h]; exact (Side.occurs_iff ⟨u,us⟩ f w).mp hw)
-    exact b.fresh g hg (List.mem_append_right _ (e ▸ ha))
+    exact b.fresh g hg (e ▸ ha)
+
+theorem freshFor : FreshFor (problem f rows) avoid b.answer :=
+  fun _ hv _ hw _ ha => b.range_fresh hv hw (List.mem_append_right _ ha)
 
 end Branch
 /-- A selected numeric generator receives one caller-chosen witness, shared

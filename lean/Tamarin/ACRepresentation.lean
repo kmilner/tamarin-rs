@@ -2,8 +2,7 @@ import Tamarin.SortCheck
 
 /-!
 Interpretation of Rust-style nonempty AC argument arrays. Entries may be
-arbitrary compound terms, not just the rigid atoms handled by today's native
-solver. There is no empty product. A singleton is its sole child.
+open compound terms. There is no empty product. A singleton is its sole child.
 -/
 namespace Tamarin.ACRepresentation
 variable {sig : Signature}

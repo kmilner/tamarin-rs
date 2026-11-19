@@ -28,6 +28,7 @@ jobs:
           lake env lean Tests/ExistingSpecAudit.lean
           lake env lean Tests/WeightedComposition.lean
           lake env lean Tests/ACSystem.lean
+          lake env lean Tests/ACReference.lean
           lake env lean Tests/ACRowElimination.lean
           lake env lean --run Tests/ACPivot.lean
           lake env lean Tests/WholeProblem.lean

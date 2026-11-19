@@ -166,20 +166,39 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Operation | Native coverage today | Next milestone |
 | --- | --- | --- |
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
-| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Independent equation groups contribute the full product of their unifiers after their witness names are separated. Shared variables keep equations together. Full unification enumerates bounded Hilbert bases through 64 variables and can recover a complete single-witness family through 65. A checked contradiction also yields a complete empty family. Mixed open equations can also be refuted together when their shared variable images would need incompatible sizes. Simultaneous rows can force equalities between compound operands. Free factoring can then expose a smaller AC system. Boolean queries use checked positive assignments or signed contradictions at arbitrary rank. Completion is guaranteed at rank at most two, at width at most three, and on further certificate domains. Larger conjunctions inherit the decision guarantees of their matrix after merging identical columns. | Make the generic residual search complete on a stated input domain with the shape-specific shortcuts disabled. Verify operand interning and traversal of every live branch. |
+| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Independent equation groups contribute the full product of their unifiers after their witness names are separated. Shared variables keep equations together. Full unification enumerates bounded Hilbert bases through 64 variables and can recover a complete single-witness family through 65. A checked contradiction also yields a complete empty family. Mixed open equations can also be refuted together when their shared variable images would need incompatible sizes. Simultaneous rows can force equalities between compound operands. Free factoring can then expose a smaller AC system. Boolean queries use checked positive assignments or signed contradictions at arbitrary rank. Completion is guaranteed at rank at most two, at width at most three, and on further certificate domains. Larger conjunctions inherit the decision guarantees of their matrix after merging identical columns. | Finish the terminating mixed-term reference solver and prove it meets `VerifiedUnifier` on every well-formed conjunction. Connect the Rust caller to this solver. |
 | Directional matching | Free, binary C and AC constructors may nest. Independent groups can use different symbols. Only shared pattern variables connect groups, even when a frozen subject contains the same name. Repeated AC captures share one well-sorted image across all equations. Existence checks combine factor counts, and full matching can read complete families in pages. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Factors beneath C/AC heads with no root rewrite can normalize independently. Rule matching can decide the existence of independent bindings erased by the right side. A sole total left-linear free rule can contract before its children. Other paths cover positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
 | Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. An unconditional free-root contraction can transfer the variant family while retaining erased caller keys. At C/AC heads with no root rewrite, child families can be joined on shared input images. Lean checks overlap agreement using free-constructor paths and signed linear consequences of AC observations. Staged paths cover cancellation, positional destructors, signed DH products, powers, scalar actions and pairing. | Extend overlap checks to further user equations with shared AC variables. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
 
-For ordinary unification, the next architectural milestone is a reference path for
-simultaneous AC equations with shared variables and free constructors. The finite-basis
-theorem already supplies the flat AC step. The remaining proof connects operand
-abstraction, free decomposition and the search of all resulting branches back to
-the original conjunction. State the completion domain on the input independently
-of the implementation. Exercise that domain in CI with the shortcuts disabled,
-then check optimizations against the same answer contract. The three-variable
-case that forces `Z = a + b` should become a regression for this path.
-[Finite-basis theorem](Tamarin/ACBasisComplete.lean) · [Residual search contract](Tamarin/ResidualSearch.lean)
+The acceptance condition for the ordinary unification reference is
+`VerifiedUnifier` for the sorted free/C/AC signature. Its terminating function
+takes every well-formed conjunction and returns a finite, sound and complete
+family with the required variable scope. A query-size threshold or an
+`Unsupported` reply cannot discharge this obligation. The linked runtime
+still has partial coverage. Optimize individual cases after the reference meets
+the contract. [Unification specification](Tamarin/Unification.lean)
+
+The Lean reference computes a full basis and all covering selections for
+every finite system of variable products at one AC head when the variables
+have the operator's sort. It constructs ordinary substitutions and proves
+coverage even for nonground instances. For arbitrary sorted operands, the
+reference flattens the selected source equations, interns equal operands and
+returns all residual conjunctions. A proof relates the union of these
+branches to the original conjunction with its pending equations and bindings.
+[Homogeneous reference](Tamarin/ACReference.lean) · [Source-level AC step](Tamarin/ACReferenceBranch.lean)
+
+The open obligation is a terminating driver that reconciles those residuals
+across free, C and AC heads, with sort restrictions and occurs checks.
+Maude folds earlier same-head bindings back into the current simultaneous
+system and delays expansion of other bindings. Its source gives a
+two-operator dependency cycle as an example of how eager expansion can loop.
+The reference needs a progress argument for these interactions. The ordinary
+AC declarations here admit only nonempty products. The three-variable case
+that entails `Z = a + b` belongs in the end-to-end regressions.
+[Maude binding and cycle handling](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L173-L210) ·
+[Reopening same-head bindings](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L277-L343) ·
+[Residual search contract](Tamarin/ResidualSearch.lean)
 
 Run the generated coverage test from the repository root.
 

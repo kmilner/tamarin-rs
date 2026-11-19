@@ -192,9 +192,12 @@ example : ratioRow.boxSize = 123904 := by decide
 
 example (run) (cert : Correct run) : (run 2 #[lhs,rhs]).isSome := by
   apply cert.completes
-  refine ⟨by decide, by decide, by decide, [ratioRow], ?_, ?_, Or.inl ⟨?_, ?_⟩⟩
+  refine ⟨by decide, by decide, by decide, [ratioRow], ?_, Or.inl ?_, Or.inl ⟨?_, ?_⟩⟩
   · simp [readRows, ratioRow, lhs, rhs, guard]
-  · refine ⟨trivial, by decide, Or.inr (Or.inl (Or.inl ⟨Or.inr ⟨⟨0, by decide⟩, Or.inl (by decide), by decide⟩, ?_⟩))⟩
+  · refine ⟨trivial, by decide, ?_⟩
+    -- Use the dense projected grid on the first coordinate.
+    right; right; right; left; left
+    refine ⟨Or.inr ⟨⟨0, by decide⟩, Or.inl (by decide), by decide⟩, ?_⟩
     rw [← ACBasis.Row.planeGenerators_eq]
     decide
   all_goals

@@ -32,7 +32,7 @@ def sides (rows : List (Row n)) := (rows.flatMap fun (l,r) => [l.words, r.words]
 
 def used (rows : List (Row n)) := rows.flatMap fun (l,r) => l.ids ++ r.ids
 
-private theorem abstract_vars (f : sig.ACSym) (rows : List (Row n)) :
+theorem abstract_vars (f : sig.ACSym) (rows : List (Row n)) :
     variables (abstractRows base f rows) = (used rows).map (column base f) := by
   induction rows with
   | nil => rfl
