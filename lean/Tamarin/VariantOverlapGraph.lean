@@ -164,9 +164,11 @@ def Structural (candidate : Kernel) : Prop := ∀ ds ns es, candidate ds ns es =
   ds.size ≤ 32768 ∧ MixedSizeGraph.GraphWithin ns es ∧ ∃ inputs a b,
     Wire.decodeProblem ds ns es = some (inputs ++ [(a,b)]) ∧ Common inputs a b
 
-theorem run_structural : Structural run := by
-  intro ds ns es
-  simp only [run,Bool.and_eq_true,decide_eq_true_eq,MixedSizeGraph.withinGraph_iff]
+theorem runWith_iff (extra : Observations → Tree → Tree → Bool) (ds ns es) :
+    runWith extra ds ns es = true ↔ ds.size ≤ 32768 ∧ MixedSizeGraph.GraphWithin ns es ∧
+      ∃ inputs a b, Wire.decodeProblem ds ns es = some (inputs ++ [(a,b)]) ∧
+        (Common inputs a b ∨ extra inputs a b = true) := by
+  simp only [runWith,Bool.and_eq_true,decide_eq_true_eq,MixedSizeGraph.withinGraph_iff]
   constructor
   · rintro ⟨⟨size,graph⟩,ok⟩
     cases parsed : Wire.decodeProblem ds ns es with
@@ -177,9 +179,16 @@ theorem run_structural : Structural run := by
       | cons pair rest =>
         have orig := congrArg List.reverse rev
         simp at orig
-        exact ⟨size,graph,rest.reverse,pair.1,pair.2,by rw [orig],read_pair _ _ _ (by simpa [parsed,rev] using ok)⟩
+        refine ⟨size,graph,rest.reverse,pair.1,pair.2,by rw [orig],?_⟩
+        simp only [parsed,rev,Option.any_some,Bool.or_eq_true] at ok
+        exact ok.imp (fun h => read_pair _ _ _ h) id
   · rintro ⟨size,graph,obs,a,b,parsed,h⟩
-    exact ⟨⟨size,graph⟩,by simp [parsed,List.reverse_append,write_pair h]⟩
+    have yes := h.imp (fun d => write_pair d) id
+    exact ⟨⟨size,graph⟩,by simpa [parsed,List.reverse_append] using yes⟩
+
+theorem run_structural : Structural run := by
+  intro ds ns es
+  simpa [run] using runWith_iff (fun _ _ _ => false) ds ns es
 
 mutual
   private theorem value_eq {α} (m n : Interpretation α) (apps : m.app = n.app)

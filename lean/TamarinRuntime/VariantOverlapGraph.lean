@@ -43,11 +43,15 @@ end
 
 /-- All pairs preceding the final pair are observed inputs. Bound the shared
 graph before decoding its term trees or constructing structural keys. -/
-def run : Kernel := fun ds ns es =>
+def runWith (extra : Observations → Tree → Tree → Bool) : Kernel := fun ds ns es =>
   decide (ds.size ≤ 32768) && MixedSizeGraph.withinGraph ns es &&
   ((Wire.decodeProblem ds ns es).any fun raw =>
     match raw.reverse with
     | [] => false
-    | (a,b) :: inputs => checkPair (index inputs.reverse) a b)
+    | (a,b) :: inputs =>
+      let obs := inputs.reverse
+      checkPair (index obs) a b || extra obs a b)
+
+def run := runWith (fun _ _ _ => false)
 
 end Tamarin.VariantOverlapGraph
