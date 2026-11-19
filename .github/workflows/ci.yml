@@ -32,6 +32,7 @@ jobs:
           lake env lean --run Tests/ACPivot.lean
           lake env lean Tests/WholeProblem.lean
           lake env lean Tests/FactoredUnification.lean
+          lake env lean Tests/IndependentUnification.lean
           lake env lean Tests/FactorReplay.lean
           lake env lean Tests/GraphUnification.lean
           lake env lean Tests/ACColumnSupport.lean

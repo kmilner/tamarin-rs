@@ -8,6 +8,7 @@ import Tamarin.SpecChecks
 import Tamarin.Executable
 import Tamarin.ExecutableChecks
 import Tamarin.GroundConjunction
+import Tamarin.IndependentUnification
 import Tamarin.CandidateProofs
 import Tamarin.FreshSubstitution
 import Tamarin.TermEncoding
