@@ -19,10 +19,10 @@ endfm
 """
 
 
-def reply(command):
+def reply(command, module=MODULE):
     process = subprocess.run(
         [sys.argv[1], "-no-banner", "-no-advise"],
-        input=MODULE + command + " .\nquit\n",
+        input=module + command + " .\nquit\n",
         capture_output=True, text=True, check=True, timeout=10,
     )
     if process.stderr.strip():
@@ -53,6 +53,18 @@ def main():
     # The selected factors need not be siblings in the original syntax.
     output = reply("reduce in MSG : plus(f(c),plus(b,a))")
     assert re.search(r"result Msg: plus\((?:b, g\(c\)|g\(c\), b)\)", output), output
+
+    # Variant narrowing in Core Maude requires explicit AC coherence. Reduction
+    # already uses extension. The open row alone cannot cover the X = a case.
+    query = "get variants in MSG : plus(f(c),b,X:Msg)"
+    bare = reply(query)
+    assert "No more variants." in bare and len(re.findall(r"^Variant ", bare, re.MULTILINE)) == 1, bare
+    assert re.search(r"^X:Msg --> [#%]\d+:Msg$", bare, re.MULTILINE), bare
+    completion = "  eq plus(f(Z:Msg),a,R:Msg) = plus(g(Z:Msg),R:Msg) [variant] ."
+    extended = reply(query, MODULE.replace("endfm", completion + "\nendfm"))
+    assert "No more variants." in extended, extended
+    assert re.search(r"^Msg: plus\((?:b, g\(c\)|g\(c\), b)\)\nX:Msg --> a$", extended, re.MULTILINE), extended
+    assert re.search(r"^X:Msg --> plus\((?:a, ([#%]\d+:Msg)|([#%]\d+:Msg), a)\)$", extended, re.MULTILINE), extended
 
     output = reply("get variants in MSG : list(cons(h(X:Msg),cons(X:Msg,nil)))")
     assert "No more variants." in output, output

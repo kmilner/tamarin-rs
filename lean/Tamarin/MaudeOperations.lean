@@ -70,7 +70,8 @@ def VerifiedReducer.ofNormalizer {R : Root sig} (n : Normalizer R (fun _ => True
     rw [hu] at nf ⊢
     exact ⟨nf, fun v hv => unique t v u hv nf⟩
 
-/-- The complete family from plain get variants, together with Tamarin's
+/-- The algebraic family required of plain get variants on an explicitly
+coherent presentation, together with Tamarin's
 freshness and substitution-only decoding obligations for each returned row. -/
 structure VariantReply (R : Root sig) (q : List (Term sig)) (avoid : List Variable)
     (rows : List (Variant sig)) : Prop where

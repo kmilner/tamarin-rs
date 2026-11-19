@@ -148,6 +148,4 @@ import Tamarin.BilinearMapStaging
 import Tamarin.MaudeOperationRefinements
 import Tamarin.MatchViaUnification
 import Tamarin.ReduceViaSteps
-import Tamarin.ReferenceReduction
-import Tamarin.ReferenceVariantFrontier
-import Tamarin.UnifierSorts
+import Tamarin.TableNarrowing

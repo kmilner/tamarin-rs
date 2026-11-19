@@ -4,7 +4,8 @@ This Lake package specifies the algebra operations that Tamarin currently asks M
 Rust links selected Lean kernels in-process with the `lean-unification` feature. The goal is to run
 the prover with no Maude binary and let developers replace the search algorithms under fixed
 correctness and completion contracts. Today, native-only mode completes some full protocol proofs.
-General simultaneous AC unification, normalization and variant generation are still in progress.
+The main reference gaps are mixed free/C/AC unification and complete one-step narrowing.
+Rust still uses partial native paths for all four commands.
 
 ## Run the experimental backend
 
@@ -38,7 +39,7 @@ The acceptance target is `MaudeOperations.Reference sig rules` for the module Ta
 The upstream Haskell and Rust adapters issue the same four algebra commands. Installation probes
 and module initialization are separate. Rules and enabled builtins determine the active theory,
 including DH, bilinear pairing, multiset, natural numbers, XOR and user-declared free or AC symbols.
-[Whole-module contract](Tamarin/MaudeOperations.lean) · [Upstream command builders](../tamarin-prover/lib/term/src/Term/Maude/Process.hs#L194) · [Rust adapter](../crates/tamarin-term/src/maude_proc.rs) · [Module printer](../crates/tamarin-term/src/maude_print.rs#L344) · [Active equations](../crates/tamarin-term/src/maude_sig.rs#L285) · [Upstream signature](../tamarin-prover/lib/term/src/Term/Maude/Signature.hs#L187)
+[Whole-module contract](Tamarin/MaudeOperations.lean) · [Reference assembly](Tamarin/FoldingNarrowing.lean#L161) · [Upstream command builders](../tamarin-prover/lib/term/src/Term/Maude/Process.hs#L194) · [Rust adapter](../crates/tamarin-term/src/maude_proc.rs) · [Module printer](../crates/tamarin-term/src/maude_print.rs#L344) · [Active equations](../crates/tamarin-term/src/maude_sig.rs#L285) · [Upstream signature](../tamarin-prover/lib/term/src/Term/Maude/Signature.hs#L187)
 
 The basis B consists of the declared free, binary commutative (C) and associative-commutative (AC)
 symbols. Pure AC preserves multiplicities and has no unit. The command domain includes arity-correct
@@ -55,6 +56,17 @@ itself modulo AC even though it has no Tamarin sort. A `Msg` variable cannot bin
 
 Maude reduces the initial variant and narrows with executable equations marked `[variant]`.
 Tamarin marks every emitted equation this way, so reduction and variants share one table.
+Core Maude additionally requires explicit coherence modulo the axioms for variant narrowing.
+Tamarin emits the active rules directly. Some builtin tables include AC extension equations.
+User tables receive no general coherence completion in the printer. With the bare rule
+`plus(f(Z),a) = g(Z)`, Maude 3.5.1 reduces inside a larger AC product and omits the
+`X = a` variant of `plus(f(c),b,X)`. Adding the explicit remainder to both sides recovers it.
+The Lean contract requires this solution. Lean proves that adding the remainder rule preserves
+every contextual rewrite and the full variant contract. It also exposes every such rewrite at
+the whole root of a well-sorted AC product. Matching the observed Maude answers requires a
+coherence argument for the actual emitted table.
+[Conservative equation extensions](Tamarin/ACEquationExtensions.lean) · [Maude’s explicit coherence requirement](https://maude.lcc.uma.es/maude31-manual-html/maude-manualch21.html) · [Pinned Maude probe](Tests/check_maude_operations.py) · [Active tables](../crates/tamarin-term/src/maude_sig.rs#L285) · [Equation emission](../crates/tamarin-term/src/maude_print.rs#L511)
+
 Tamarin uses plain `get variants`, which permits redundant answers. Tamarin requires convergent user theories with the
 finite variant property and leaves these conditions unchecked. The total reference must establish
 completion on its full domain. A bounded export must establish completion on its advertised domain
@@ -157,7 +169,7 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | Simultaneous AC unification | Shares operands across nested systems and combines independent groups with disjoint witnesses. Full enumeration supports bounded bases through 64 variables and some single-witness families through 65. Boolean decisions include rank at most two, width at most three, and larger systems with certificates or identical columns. | Prove a terminating mixed free/C/AC component solver, including cyclic dependencies. The sort-assignment proof then gives `VerifiedUnifier` for all arity-correct inputs. Connect the resulting solver to Rust. |
 | Directional matching | Matches nested free/C/AC terms, including repeated or shared captures. Boolean queries use factor counts and full queries can page through the answer family. | The total Lean matcher handles all arity-correct conjunctions independently of unification. Connect that reference to Rust and establish first-match behavior on ambiguous queries. [Reference matcher](Tamarin/ReferenceMatching.lean) · [Alternative via unification](Tamarin/MatchViaUnification.lean) |
 | Reduction | Bounded graphs cover root and argument rewrites and proper AC subproducts. Other paths cover projected or erased arguments, independent factors, positional destructors, cancellation and DH powers and products. | Lean enumerates every live rewrite at every position, including proper AC subproducts. The driver is total for convergent sort-preserving tables. Connect its equation table and results to Rust, or prove the existing graph traversal equivalent. [Reference steps](Tamarin/ReferenceReduction.lean) · [Reduction driver](Tamarin/ReduceViaSteps.lean) |
-| Variants | Finite narrowing frontiers cover free/C/AC heads and proper subproducts. Shared input images survive child joins and free-root contraction. Overlap checks cover free paths and signed AC consequences. Specialized paths include cancellation, destructors, signed DH products, powers, scalar actions and pairing. | Lean checks proposed finite frontiers for whole tuples, including global coverage, replay and freshness, given complete one-step narrowing. Implement those successors and prove termination of normalized folding search on finite-variant presentations. Verify substitution-only decoding, witness scope and answer order where callers observe it. [Frontier checker](Tamarin/ReferenceVariantFrontier.lean) · [Reference folding](Tamarin/ReferenceVariantFolding.lean) |
+| Variants | Finite narrowing frontiers cover free/C/AC heads and proper subproducts. Shared input images survive child joins and free-root contraction. Overlap checks cover free paths and signed AC consequences. Specialized paths include cancellation, destructors, signed DH products, powers, scalar actions and pairing. | The general Lean driver terminates under the finite variant property given sound, complete one-step narrowing. Implement that local narrower over the active tables, establish their presentation properties and connect the driver to Rust. Verify decoding and observable ordering at the adapter. [Folding search](Tamarin/FoldingNarrowing.lean) · [Frontier checker](Tamarin/ReferenceVariantFrontier.lean) |
 
 **AC reference.** The homogeneous solver is total for any finite system of variable products
 at one AC head when every variable has the operator’s sort. For arbitrary sorted operands,
@@ -186,10 +198,25 @@ complete variant replies on their proven domains. For any finite tuple, a propos
 verified reducer and a complete one-step narrowing procedure. The checker includes the seed,
 requires a representative of every live successor, and replays every normal row. One witness
 must preserve all untouched slots and input images. Rejection leaves the query unresolved.
-This finite check follows every concrete step. Maude also normalizes symbolic successors
-before folding them. Termination of that search under the finite variant property remains open.
+This certificate checks individual concrete steps. The total reference follows Maude’s
+separate strategy of normalizing the seed and newly narrowed tuples before comparing variants.
 [Tuple closure proof](Tamarin/TupleNarrowingFrontier.lean) · [Certified checker](Tamarin/ReferenceVariantFrontier.lean) · [Maude expansion and reduction](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantSearch.cc#L397-L490)
 [Reference instances](Tamarin/MaudeOperationRefinements.lean) · [Pairing table correspondence](Tamarin/PairingRewriting.lean#L37) · [CI export theorem](TamarinCI.lean#L918)
+
+**Termination of variant search.** A local narrower must prove that each branch replays one
+rewrite and that some branch covers every concrete step exposed by specializing a symbolic term.
+The driver carries all inputs and untouched tuple positions through the same branch substitution.
+The sum of the concrete rewrite heights decreases after narrowing and normalizing. This proves
+that every actual normal result has a representative at a finite depth. Applying this to a finite
+covering family proves that a breadth-first layer will eventually be covered by earlier or current
+rows. The reference tests subsumption at layer boundaries and permits redundant rows, as Tamarin’s
+plain command does. It needs no depth bound or supplied set of expected answers.
+A final renaming protects the caller’s scope across bindings and values. The local root search already uses the ordinary unifier, including standardizing each rule
+apart and retaining the other tuple slots. Adding AC remainder rules covers proper subproducts
+of well-sorted specialized products. Completing local narrowing still requires a certified
+traversal of all positions and coverage for remainders in kind-level products. The active table
+must also satisfy the presentation assumptions.
+[Local root search](Tamarin/TableNarrowing.lean) · [Local obligations and command implementation](Tamarin/FoldingNarrowing.lean) · [Finite variant property to finite search](Tamarin/VariantSaturation.lean) · [Breadth-first loop](Tamarin/VariantLayers.lean) · [Rewrite heights](Tamarin/ReductionHeight.lean) · [Freshening](Tamarin/VariantFreshening.lean)
 
 ### Specification-generated coverage
 

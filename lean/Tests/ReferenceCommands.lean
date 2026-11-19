@@ -1,5 +1,5 @@
-import Tamarin.ReferenceReduction
-import Tamarin.ReferenceVariantFrontier
+import Tamarin.ACEquationExtensions
+import Tamarin.FoldingNarrowing
 import Tamarin.MaudeOperationRefinements
 import Tamarin.Pairing
 import Tamarin.UnifierSorts
@@ -47,6 +47,13 @@ private def edges := ReferenceReduction.successors rules subject
 #guard edges.all (fun u => eqB u (plus (h c) b) || eqB u (plus c (plus b a)))
 #guard (ReferenceReduction.successors rules (h c)).isEmpty
 
+-- Giving the same rule an explicit remainder makes the crossing rewrite
+-- available at the whole root, while preserving all concrete successors.
+private def augmented := ACEquationExtensions.extended rules
+#guard augmented.length == rules.length + 1
+#guard (ReferenceReduction.successors augmented subject).all (fun u => edges.any (eqB u))
+#guard edges.all (fun u => (ReferenceReduction.successors augmented subject).any (eqB u))
+
 private abbrev VRow := VariantJoin.Row S Unit Unit
 private def row (input value : Term S) : VRow := ⟨fun _ => input,fun _ => value⟩
 private def gen := row (plus (.var x) a) (f (.var x))
@@ -92,5 +99,53 @@ private def aliasRow : ReferenceVariantFrontier.Point S 2 := ⟨alias,fun i => a
 #guard (certifyEmpty pairQuery [y] [aliasRow] (fun _ => [])).isNone
 #guard (certifyEmpty (fun _ : Fin 2 => ill) [] [] (fun _ => [])).isSome
 #guard (certifyEmpty (s := S) (fun i : Fin 0 => i.elim0) [] [] (fun _ => [])).isSome
+
+-- Exercise the actual unbounded loop on a cycle with a newly subsumed
+-- successor. The covering family is a proof, erased from the executable.
+private def graphNext : Nat → List Nat
+  | 0 => [1]
+  | 1 => [2]
+  | _ => [0,3]
+private def graphCover (p q : Nat) := p == q || p == 2 && 2 ≤ q
+private def graph :=
+  VariantLayers.search 0 graphNext graphCover (by simp [graphCover]) (by
+    have z : VariantLayers.Reachable 0 graphNext 0 := .seed
+    have o := z.child 1 (by decide)
+    have t := o.child 2 (by decide)
+    refine ⟨[0,1,2],?_,?_⟩
+    · intro p hp
+      simp at hp
+      rcases hp with rfl|rfl|rfl <;> assumption
+    · intro p _
+      match p with
+      | 0 => exact ⟨0,by decide,by decide⟩
+      | 1 => exact ⟨1,by decide,by decide⟩
+      | n+2 => exact ⟨2,by decide,by simp [graphCover]⟩)
+#guard graph.val == [2,1,0]
+
+private theorem emptyNormal {s : Signature} (t : Term s) : Normal (ruleRoot []) t :=
+  ((MaudeOperations.emptyReducer s).correct t).normalForm.2.1
+
+private theorem emptyCanonical (s : Signature) : MaudeOperations.CanonicalPresentation (ruleRoot (sig := s) []) where
+  terminating := ⟨fun a => .intro a (fun b step => (emptyNormal a b step).elim)⟩
+  confluent h k := ⟨_,.basis ((normal_reduces_equiv h (emptyNormal _)).symm.trans
+    (normal_reduces_equiv k (emptyNormal _))),.basis (.refl _)⟩
+  sortPreserving := fun step => (emptyNormal _ _ step).elim
+
+private def generated {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym]
+    [DecidableEq s.ACSym] [DecidableEq s.Atom] :=
+  FoldingNarrowing.generator (rules := []) (by simp [ReferenceReduction.Bound]) (emptyCanonical s)
+    (fun v => emptyNormal (.var v)) (MaudeOperations.emptyVariants s).finiteVariantProperty fun _ =>
+      { branches := fun _ _ => []
+        genuine := by simp
+        lifts := fun _ _ _ δ _ u step => (emptyNormal (δ.apply _) u step).elim }
+
+private def generatedRows := (generated (s := S)).variants [f (.var x),.var x,f (.var x)] [⟨25,.msg⟩]
+#guard generatedRows.length == 1 && generatedRows.all (fun a =>
+  match a.subst.image x, a.values with
+  | .var w, [u,v,z] => w.id > 25 && eqB u (f (.var w)) && eqB v (.var w) && eqB z u
+  | _,_ => false)
+#guard ((generated (s := N)).variants [ill,ill] []).length == 1
+#guard ((generated (s := S)).variants [] []).length == 1
 
 end Tamarin.ReferenceCommands.Tests

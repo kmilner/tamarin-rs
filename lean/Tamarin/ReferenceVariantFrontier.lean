@@ -16,7 +16,7 @@ structure Point (s : Signature) (n : Nat) where
 def Point.row (p : Point s n) (keys : List Variable) : Row s (Key keys) (Fin n) :=
   ⟨fun i => p.assignment.image i.val, p.value⟩
 
-private def Point.answer (p : Point s n) (keys : List Variable) : Variant s :=
+def Point.answer (p : Point s n) (keys : List Variable) : Variant s :=
   ⟨(p.row keys).project (fun i => p.assignment.sorted i.val), List.ofFn p.value⟩
 
 def seed (query : Fin n → Term s) : Point s n := ⟨.identity,query⟩
@@ -49,11 +49,11 @@ theorem expand_covers {rules : List (Equation s)} (keys : List Variable) (p : Po
     · simpa [Point.row,replace,same] using value
     · simpa [Point.row,replace,same] using sibling (p.value i) (fun _ hv => .inr ⟨i,hv⟩)
 
-private theorem observed (query : Fin n → Term s) (v : Variable) :
+theorem observed (query : Fin n → Term s) (v : Variable) :
     v ∈ keysOf query ↔ Observed (List.ofFn query) v := by
   simp [keysOf,Observed,List.mem_flatMap]
 
-private theorem alignedFn {α β : Type} {rel : α → β → Prop} (f : Fin n → α) (g : Fin n → β)
+theorem alignedFn {α β : Type} {rel : α → β → Prop} (f : Fin n → α) (g : Fin n → β)
     (h : ∀ i, rel (f i) (g i)) : Aligned rel (List.ofFn f) (List.ofFn g) := by
   induction n with
   | zero => simp [Aligned]
@@ -61,7 +61,7 @@ private theorem alignedFn {α β : Type} {rel : α → β → Prop} (f : Fin n �
     rw [List.ofFn_succ,List.ofFn_succ (f := g)]
     exact ⟨h 0,ih _ _ (fun i => h i.succ)⟩
 
-private theorem read_aligned {α β : Type} {rel : α → β → Prop} (f : Fin n → α)
+theorem read_aligned {α β : Type} {rel : α → β → Prop} (f : Fin n → α)
     (ys : List β) (h : Aligned rel (List.ofFn f) ys) :
     ∃ g, ys = List.ofFn g ∧ ∀ i, rel (f i) (g i) := by
   induction n generalizing ys with
