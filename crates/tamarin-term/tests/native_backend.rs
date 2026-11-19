@@ -3537,3 +3537,6 @@ mod paged_bag_matches;
 
 #[path = "native_backend/low_rank_feasibility.rs"]
 mod low_rank_feasibility;
+
+#[path = "native_backend/simplex_feasibility.rs"]
+mod simplex_feasibility;
