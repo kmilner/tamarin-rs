@@ -35,7 +35,7 @@ private theorem filter_const {α} (xs : List α) (b : Bool) :
     xs.filter (fun _ => b) = if b then xs else [] := by
   cases b <;> induction xs <;> simp_all
 
-private theorem balancedBox_eq (n : Nat) (lim p q : Vec n)
+theorem balancedBox_eq (n : Nat) (lim p q : Vec n)
     (disjoint : ∀ i, p i = 0 ∨ q i = 0) (a b : Nat) :
     balancedBox n lim p q a b = (box n lim).filter (fun x => a + dot p x == b + dot q x) := by
   induction n generalizing a b with
