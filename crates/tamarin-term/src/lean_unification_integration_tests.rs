@@ -6779,11 +6779,12 @@ fn valued_variant_rows(
                     .iter()
                     .map(|&k| apply_vterm(&subst, Term::Lit(Lit::Var(k))))
                     .collect();
-                values.extend(
-                    slots
-                        .iter()
-                        .map(|t| handle.reduce(&apply_vterm(&subst, t.clone())).unwrap()),
-                );
+                values.extend(slots.iter().map(|t| {
+                    let instance = apply_vterm(&subst, t.clone());
+                    handle
+                        .reduce(&instance)
+                        .unwrap_or_else(|err| panic!("{query}: {instance}: {err}"))
+                }));
                 vec![(LVar::new("row", LSort::Msg, 0), f_app_list(values))]
             })
             .collect(),
@@ -7057,4 +7058,71 @@ fn native_oracle_narrowing_preserves_signed_dh_products_and_powers() {
     }
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);
+}
+
+#[test]
+fn native_oracle_scalar_action_rows_share_inputs_and_outputs() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{emap, hash, msg_var, pmult};
+    use crate::maude_sig::{bp_maude_sig, hash_maude_sig};
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = bp_maude_sig().merge(hash_maude_sig());
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    // Names deliberately overlap the implementation's fresh point and scalar
+    // variables. A third, unobserved-by-the-component variable remains independent.
+    let x = msg_var("point", 0);
+    let y = msg_var("scalar", 0);
+    let unrelated = msg_var("x", 1);
+    for (app, count) in [
+        (pmult(x.clone(), y.clone()), 47),
+        (emap(x.clone(), y.clone()), 48),
+    ] {
+        for slots in [
+            vec![app.clone(), x.clone(), y.clone()],
+            vec![
+                hash(unrelated.clone()),
+                y.clone(),
+                hash(app.clone()),
+                x.clone(),
+                app.clone(),
+            ],
+        ] {
+            let wanted = valued_variant_rows(&oracle, &slots);
+            assert_eq!(wanted.len(), count);
+            assert_eq!(valued_variant_rows(&native, &slots), wanted, "{slots:?}");
+        }
+    }
+    assert_eq!(native.stats().var_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
+}
+
+#[test]
+fn native_point_reduction_uses_changed_rules_even_without_refresh() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{emap, msg_var, pmult};
+    use crate::maude_sig::bp_maude_sig;
+    use crate::rewriting::RRule;
+    use crate::subterm_rule::rrule_to_ctxt_st_rule;
+    let x = msg_var("x", 0);
+    let y = msg_var("y", 0);
+    let a = pub_term("a");
+    let b = pub_term("b");
+    for (lhs, query) in [
+        (emap(x.clone(), x.clone()), emap(a.clone(), a.clone())),
+        (pmult(x.clone(), y), pmult(a.clone(), b)),
+    ] {
+        let mut sig = bp_maude_sig();
+        sig.st_rules
+            .insert(rrule_to_ctxt_st_rule(&RRule::new(lhs, x.clone())).unwrap());
+        let h = MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly)
+            .unwrap();
+        assert_eq!(h.reduce(&query).unwrap(), a, "{query}");
+        assert_eq!(h.stats().norm_count, 0);
+    }
 }

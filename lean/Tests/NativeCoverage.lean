@@ -10,7 +10,7 @@ The public Rust adapter consumes this test format. -/
 namespace Tamarin.NativeCoverage
 open Rewriting ConstructorVariants
 
-inductive Symbol where | hash | zero | pair | fst | snd | red | blue | pmult | pow | one
+inductive Symbol where | hash | zero | pair | fst | snd | red | blue | pmult | pow | one | inv
   deriving DecidableEq
 
 abbrev sig : Signature where
@@ -18,7 +18,7 @@ abbrev sig : Signature where
   CSym := Unit
   ACSym := Unit
   Atom := Bool
-  arity := fun | .hash | .fst | .snd => 1 | .zero | .red | .blue | .one => 0 | .pair | .pmult | .pow => 2
+  arity := fun | .hash | .fst | .snd | .inv => 1 | .zero | .red | .blue | .one => 0 | .pair | .pmult | .pow => 2
   inputSort := fun _ _ => .msg
   outputSort := fun _ => .msg
   cSort := fun _ => .msg
@@ -122,7 +122,7 @@ theorem hash_normalForm (th : Theory) {t u : Expr} (child : NormalForm (ruleRoot
     cases th <;> intro h <;> repeat' cases ‹List.Mem _ _›
 
 def code : Expr → String
-  | .var v => (if v.sort == .fresh then "f" else "m") ++ toString v.id
+  | .var v => (if v.sort == .fresh then "f" else if v.sort == .pub then "u" else "m") ++ toString v.id
   | .atom b => if b then "b" else "a"
   | .free .hash args => code (args 0) ++ ".h"
   | .free .zero _ => "z"
@@ -132,6 +132,7 @@ def code : Expr → String
   | .free .snd args => code (args 0) ++ ".r"
   | .free .pair args => code (args 0) ++ "." ++ code (args 1) ++ ".p"
   | .free .one _ => "one"
+  | .free .inv args => code (args 0) ++ ".inv"
   | .free .pmult args => code (args 0) ++ "." ++ code (args 1) ++ ".pmult"
   | .free .pow args => code (args 0) ++ "." ++ code (args 1) ++ ".pow"
   | .comm _ l r => code l ++ "." ++ code r ++ ".emap"
@@ -309,7 +310,28 @@ def bpCoverage : IO Unit := do
       ([e x a,e x b,x],2), ([p one x,x],1)] do
     emitBP "variants" ("rows=" ++ toString count) slots
   for (slots,count) in [([e x y,x,y],48), ([p x y,x,y],47)] do
-    emitBP "variants" ("probe-rows=" ++ toString count) slots
+    emitBP "variants" ("rows=" ++ toString count) slots
+  -- One unary group operation already distinguishes the two argument roles
+  -- of the action. A repeated operand and independent operands need different families.
+  let neg (a : Expr) : Expr := .free .inv (fun _ => a)
+  for (body,count) in [(p (neg x) x,7), (p x (neg x),7), (e x (neg x),6)] do
+    emitBP "variants" ("rows=" ++ toString count) [body]
+  for (body,count) in [(p (neg x) y,47), (p y (neg x),53), (e y (neg x),54)] do
+    emitBP "variants" ("probe-rows=" ++ toString count) [body]
+  -- A power can observe a computed pairing under a fresh scalar. Cover both
+  -- open received points and point constructors over an opaque function.
+  let u : Expr := .var ⟨0,.pub⟩
+  let v : Expr := .var ⟨1,.pub⟩
+  for (body,count) in [(p r (hash u),1), (e (p r (hash u)) (hash v),1),
+      (pow (e (p r (hash u)) (hash v)) s,1), (pow (e (p x (hash u)) (hash v)) s,6),
+      (pow (e x (hash a)) r,6), (pow (e (hash x) (hash y)) r,1)] do
+    emitBP "variants" ("rows=" ++ toString count) [body]
+  for (body,count) in [(pow (e x y) r,160), (pow (e x x) r,8)] do
+    emitBP "variants" ("probe-rows=" ++ toString count) [body]
+  -- Exercise the next depth with a received scalar, retaining both caller
+  -- images even on the diagonal, where only one affects the point expression.
+  for (body,count) in [(p x (p r y),159), (e (p r x) y,160), (e x (p r x),8)] do
+    emitBP "variants" ("probe-rows=" ++ toString count) [body,x,y]
 
 def generate : IO Unit := do
   bpCoverage

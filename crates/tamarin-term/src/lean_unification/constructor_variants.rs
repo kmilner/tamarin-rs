@@ -47,6 +47,7 @@ pub(crate) struct RuleTable {
     nat: bool,
     builtin_xor: bool,
     pub(crate) builtin_dh: bool,
+    builtin_bp: bool,
 }
 
 impl RuleTable {
@@ -96,6 +97,16 @@ impl RuleTable {
         // pp_theory emits exactly rrules(), including builtin DH, BP and XOR.
         let rules = sig.rrules();
         let builtin_dh = sig.enable_dh && dh_product::exact_rules(&rules);
+        let builtin_bp = sig.enable_bp && builtin_dh && {
+            let point_heads = [
+                FunSym::NoEq(crate::function_symbols::pmult_sym()),
+                FunSym::C(crate::function_symbols::CSym::EMap),
+            ];
+            rules
+                .iter()
+                .filter(|r| matches!(&r.lhs, Term::App(head, _) if point_heads.contains(head)))
+                .eq(crate::builtin::bp_rules().iter())
+        };
         let builtin_xor = sig.enable_xor
             && rules
                 .iter()
@@ -178,6 +189,7 @@ impl RuleTable {
             narrowing,
             nat: sig.enable_nat,
             builtin_dh,
+            builtin_bp,
             builtin_xor: builtin_xor
                 && !by_head.contains_key(&FunSym::NoEq(crate::function_symbols::zero_sym())),
         };
@@ -463,6 +475,9 @@ impl RuleTable {
         }
         if matches!(term, Term::Lit(_)) {
             return Ok(Some(term.clone()));
+        }
+        if let Some(normal) = self.scalar_action_normal(term)? {
+            return Ok(Some(normal));
         }
         if let Some(normal) = self.fresh_xor_reduce(term)? {
             return Ok(Some(normal));

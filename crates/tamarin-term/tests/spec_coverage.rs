@@ -9,7 +9,7 @@ use std::process::Command;
 use tamarin_term::algebra_backend::AlgebraBackend;
 use tamarin_term::builtin::{
     bp_rules, dh_neutral, emap, exp, fresh_var, fst, hash, inv, msg_var, one_const, pair, pmult,
-    snd, zero_const,
+    pub_var, snd, zero_const,
 };
 use tamarin_term::function_symbols::{
     AcFctSym, AcSym, Constructability, NdcState, NoEqSym, Privacy,
@@ -121,6 +121,7 @@ fn term(text: &str, symbol: AcSym) -> LNTerm {
                 f_app_ac(symbol, vec![l, r])
             }
             _ if token.starts_with('f') => fresh_var("f", token[1..].parse().unwrap()),
+            _ if token.starts_with('u') => pub_var("u", token[1..].parse().unwrap()),
             _ if token.starts_with('m') => msg_var("m", token[1..].parse().unwrap()),
             _ => panic!("unknown term token {token}"),
         };

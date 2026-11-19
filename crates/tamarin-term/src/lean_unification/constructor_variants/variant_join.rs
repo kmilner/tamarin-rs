@@ -3,6 +3,7 @@
 //! that introduces a redex in an earlier observation can be discarded.
 mod finite_narrowing;
 mod residual_match;
+mod scalar_action;
 use residual_match::{residual_row_matches, RowMatch};
 
 use super::{InputDomain, RuleTable};
@@ -393,6 +394,9 @@ impl RuleTable {
         search: &mut JoinSearch,
     ) -> Result<Option<Vec<Row>>, Error> {
         if let Some(rows) = self.direct_rows(keys, original, app)? {
+            return Ok(Some(rows));
+        }
+        if let Some(rows) = self.scalar_action_rows(keys, original, app, search)? {
             return Ok(Some(rows));
         }
         if let Some(rows) = self.staged_rows(keys, original, app, search)? {
