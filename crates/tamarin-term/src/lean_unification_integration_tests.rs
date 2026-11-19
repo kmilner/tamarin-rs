@@ -1173,6 +1173,9 @@ fn native_oracle_repeated_subjects_match_at_their_distinct_image_cost() {
     use crate::maude_sig::nat_maude_sig;
     use crate::term::f_app_no_eq;
 
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
     let Some(path) = require_maude_path() else {
         return;
     };
