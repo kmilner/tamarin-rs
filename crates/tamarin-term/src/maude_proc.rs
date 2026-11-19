@@ -1798,6 +1798,14 @@ impl MaudeHandle {
             if let Some(answers) = completed(result) {
                 return Ok(Some(answers));
             }
+            // Both enumeration APIs sort the complete NativeOnly family in
+            // caller space. Boolean matching has its own cheaper bag kernel.
+            if ordered
+                && let Some(answers) =
+                    completed(table.ac_bag_answers(equations).map_err(match_error)?)
+            {
+                return Ok(Some(answers));
+            }
         }
         // Keep compound AC leaves after decomposing declared free constructors.
         let children;

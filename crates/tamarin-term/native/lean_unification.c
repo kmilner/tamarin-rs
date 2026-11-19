@@ -304,6 +304,12 @@ static lean_object *take_some(lean_object *option) {
     return value;
 }
 
+extern lean_object *tamarin_ac_bag_answers(lean_object *rows);
+void *tamarin_lean_ac_bag_answers(const whole_word_slice *rows, size_t count) {
+    lean_object *reply = tamarin_ac_bag_answers(word_rows(rows, count));
+    return lean_is_scalar(reply) ? NULL : take_some(reply);
+}
+
 extern lean_object *tamarin_open_match_select(uint64_t rigid, uint64_t subject);
 
 /* Transfer the row array into the same opaque row reader as flat matching. */

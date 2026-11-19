@@ -1,20 +1,21 @@
-//! Boolean matching of AC patterns with ground factors and full-sort captures.
+//! Directional matching of AC patterns with ground factors and full-sort captures.
 //! Each occurrence of a capture must receive the same nonempty bag of frozen
 //! subject factors in every equation. The numeric alphabet is request-local.
 use super::{
     ac_sort, canonical_capture, common_children, initialize, match_size, operands, residual,
-    subsort, Error, RuleTable, WordSlice, LEAN_THREAD,
+    subsort, Error, MatchRows, Outcome, RuleTable, Substitutions, WordSlice, LEAN_THREAD,
 };
 use crate::function_symbols::{AcSym, FunSym};
 use crate::lean_identity::IdentityTable;
-use crate::lterm::{sort_of_lterm, LNTerm};
+use crate::lterm::{sort_of_lterm, LNTerm, LVar};
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
-use crate::term::Term;
+use crate::term::{f_app_ac, Term};
 use crate::vterm::{is_ground_vterm, Lit};
 
 unsafe extern "C" {
     fn tamarin_lean_ac_bag_match(rows: *const WordSlice, count: usize) -> u8;
+    fn tamarin_lean_ac_bag_answers(rows: *const WordSlice, count: usize) -> *mut std::ffi::c_void;
 }
 
 struct Row<'a> {
@@ -57,29 +58,42 @@ fn ac_root(t: &LNTerm) -> Option<AcSym> {
     }
 }
 
+struct BagRows<'a> {
+    symbol: AcSym,
+    vars: IdentityTable<LVar>,
+    occurrences: usize,
+    rows: Vec<Row<'a>>,
+}
+
+fn may_apply(pattern: &LNTerm, subject: &LNTerm) -> bool {
+    match pattern {
+        Term::App(FunSym::Ac(f), args) => {
+            args.len() <= residual::MAX_EXPANDED
+                && args.iter().any(|t| match t {
+                    Term::Lit(Lit::Var(_)) => true,
+                    Term::App(FunSym::Ac(g), _) => g == f,
+                    _ => false,
+                })
+        }
+        Term::Lit(Lit::Var(_)) => ac_root(subject).is_some(),
+        _ => false,
+    }
+}
+
 impl RuleTable {
-    // A flat ground row already has a direct equality check. Raw nested AC
-    // children can contain captures even when none is visible at the root.
     pub(crate) fn may_be_ac_bag_match(eqs: &[Equal<LNTerm>]) -> bool {
-        eqs.iter().any(|eq| match &eq.rhs {
-            Term::App(FunSym::Ac(f), args) => {
-                args.len() <= residual::MAX_EXPANDED
-                    && args.iter().any(|t| match t {
-                        Term::Lit(Lit::Var(_)) => true,
-                        Term::App(FunSym::Ac(g), _) => g == f,
-                        _ => false,
-                    })
-            }
-            Term::Lit(Lit::Var(_)) => ac_root(&eq.lhs).is_some(),
-            _ => false,
-        })
+        eqs.iter().any(|e| may_apply(&e.rhs, &e.lhs))
     }
 
-    /// Public matching orientation is subject on the left, pattern on the right.
-    pub(crate) fn ac_bag_has_match(&self, eqs: &[Equal<LNTerm>]) -> Result<Option<bool>, Error> {
+    fn prepare_bag_rows<'a>(
+        &self,
+        eqs: &'a [Equal<LNTerm>],
+        orient: impl Fn(&'a Equal<LNTerm>) -> (&'a LNTerm, &'a LNTerm),
+    ) -> Result<Option<BagRows<'a>>, Error> {
         let Some(default_head) = eqs
             .iter()
-            .find_map(|e| ac_root(&e.rhs).or_else(|| ac_root(&e.lhs)))
+            .map(&orient)
+            .find_map(|(p, s)| ac_root(p).or_else(|| ac_root(s)))
         else {
             return Ok(None);
         };
@@ -95,17 +109,17 @@ impl RuleTable {
         let mut vars = IdentityTable::default();
         let mut occurrences = 0;
         let mut rows = Vec::with_capacity(eqs.len());
-        for eq in eqs {
+        for (pattern_term, subject_term) in eqs.iter().map(orient) {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-            let symbol = ac_root(&eq.rhs)
-                .or_else(|| ac_root(&eq.lhs))
+            let symbol = ac_root(pattern_term)
+                .or_else(|| ac_root(subject_term))
                 .unwrap_or(default_head);
             let sort = ac_sort(symbol);
-            if !subsort(sort_of_lterm(&eq.lhs, sort_of_name), sort) {
+            if !subsort(sort_of_lterm(subject_term, sort_of_name), sort) {
                 return Ok(None);
             }
             let mut pattern = Vec::new();
-            operands::flatten(symbol, &eq.rhs, &mut pattern);
+            operands::flatten(symbol, pattern_term, &mut pattern);
             let mut row = Row {
                 symbol,
                 keys: Vec::new(),
@@ -122,34 +136,90 @@ impl RuleTable {
                     _ => return Ok(None),
                 }
             }
-            operands::flatten(symbol, &eq.lhs, &mut row.subject);
+            operands::flatten(symbol, subject_term, &mut row.subject);
             occurrences += row.keys.len();
             rows.push(row);
         }
+        Ok(Some(BagRows {
+            symbol: default_head,
+            vars,
+            occurrences,
+            rows,
+        }))
+    }
+
+    /// Public matching orientation is subject on the left, pattern on the right.
+    pub(crate) fn ac_bag_has_match(&self, eqs: &[Equal<LNTerm>]) -> Result<Option<bool>, Error> {
+        let Some(data) = self.prepare_bag_rows(eqs, |e| (&e.rhs, &e.lhs))? else {
+            return Ok(None);
+        };
         // Each capture occurs exactly once. No rigid term identities need
         // to cross the ABI on rows without fixed factors.
-        if occurrences == vars.len() && rows.iter().all(|r| !r.keys.is_empty()) {
-            for row in rows {
+        if data.occurrences == data.vars.len() && data.rows.iter().all(|r| !r.keys.is_empty()) {
+            for row in &data.rows {
                 if !row.linear_match()? {
                     return Ok(Some(false));
                 }
             }
             return Ok(Some(true));
         }
+        data.with_packet(false, |_, _, _, slices| {
+            initialize()?;
+            // SAFETY: both the slice descriptors and their occurrence rows stay
+            // live until the shim has copied them. Only a scalar tag is returned.
+            let tag = LEAN_THREAD
+                .with(|_| unsafe { tamarin_lean_ac_bag_match(slices.as_ptr(), slices.len()) });
+            match tag {
+                0 => Ok(None),
+                1 => Ok(Some(false)),
+                2 => Ok(Some(true)),
+                other => Err(Error::InvalidStatus(other)),
+            }
+        })
+    }
+
+    /// The internal tree matcher puts patterns on the left in both public APIs.
+    pub(crate) fn ac_bag_answers(&self, eqs: &[Equal<LNTerm>]) -> Result<Outcome, Error> {
+        if !eqs.iter().any(|e| may_apply(&e.lhs, &e.rhs)) {
+            return Ok(Outcome::Unsupported);
+        }
+        let Some(data) = self.prepare_bag_rows(eqs, |e| (&e.lhs, &e.rhs))? else {
+            return Ok(Outcome::Unsupported);
+        };
+        Ok(match data.with_packet(Vec::new(), read_answers)? {
+            Some(arms) => Outcome::Complete(arms),
+            None => Outcome::Unsupported,
+        })
+    }
+}
+
+impl BagRows<'_> {
+    /// Keep the canonical subject factors and their request-local identities
+    /// alive through the entire call, including decoding any returned bags.
+    fn with_packet<T>(
+        self,
+        no_matches: T,
+        run: impl FnOnce(
+            AcSym,
+            &IdentityTable<LVar>,
+            &IdentityTable<&LNTerm>,
+            &[WordSlice],
+        ) -> Result<Option<T>, Error>,
+    ) -> Result<Option<T>, Error> {
         // A single bag algebra must interpret repeated images in every row.
-        if rows.len() > 64 || rows.iter().any(|r| r.symbol != default_head) {
+        if self.rows.len() > 64 || self.rows.iter().any(|r| r.symbol != self.symbol) {
             return Ok(None);
         }
-        let mut residuals = Vec::with_capacity(rows.len());
-        for row in &rows {
+        let mut residuals = Vec::with_capacity(self.rows.len());
+        for row in &self.rows {
             let Some(rest) = row.remainder()? else {
-                return Ok(Some(false));
+                return Ok(Some(no_matches));
             };
             residuals.push(rest);
         }
         let mut factors = IdentityTable::default();
-        let mut packet = Vec::with_capacity(2 * rows.len());
-        for (row, rest) in rows.into_iter().zip(&residuals) {
+        let mut packet = Vec::with_capacity(2 * self.rows.len());
+        for (row, rest) in self.rows.into_iter().zip(&residuals) {
             packet.push(row.keys);
             packet.push(
                 rest.iter()
@@ -158,18 +228,72 @@ impl RuleTable {
             );
         }
         let slices: Vec<_> = packet.iter().map(|row| WordSlice::new(row)).collect();
-        initialize()?;
-        // SAFETY: both the slice descriptors and their occurrence rows stay
-        // live until the shim has copied them. Only a scalar tag is returned.
-        let tag = LEAN_THREAD
-            .with(|_| unsafe { tamarin_lean_ac_bag_match(slices.as_ptr(), slices.len()) });
-        match tag {
-            0 => Ok(None),
-            1 => Ok(Some(false)),
-            2 => Ok(Some(true)),
-            other => Err(Error::InvalidStatus(other)),
-        }
+        run(self.symbol, &self.vars, &factors, &slices)
     }
+}
+
+fn read_answers(
+    head: AcSym,
+    vars: &IdentityTable<LVar>,
+    factors: &IdentityTable<&LNTerm>,
+    slices: &[WordSlice],
+) -> Result<Option<Substitutions>, Error> {
+    initialize()?;
+    LEAN_THREAD.with(|_| {
+        // SAFETY: the descriptors and words are live for this synchronous
+        // call. The shim transfers one owned array, or NULL for deferral.
+        let raw = unsafe { tamarin_lean_ac_bag_answers(slices.as_ptr(), slices.len()) };
+        if raw.is_null() {
+            return Ok(None);
+        }
+        let reply = MatchRows::new(raw)?;
+        let count = reply.count();
+        let Some(mut available) = residual::MAX_EXPANDED.checked_sub(count) else {
+            return Ok(None);
+        };
+        let mut arms = Vec::with_capacity(count);
+        let mut ids = Vec::new();
+        for i in 0..count {
+            tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
+            if reply.rows(i) != vars.len() {
+                return Err(Error::InvalidStatus(255));
+            }
+            let mut arm = Vec::with_capacity(vars.len());
+            for (k, &var) in vars.values().iter().enumerate() {
+                // Lean places keys in first-encounter order. This matches
+                // interning during pattern traversal, independently of Ord.
+                let len = reply.row_size(i, k)?;
+                // A singleton is returned directly; a larger bag also
+                // allocates a product node above the decoded factors.
+                if len > 1 {
+                    available = available.saturating_sub(1);
+                }
+                if len > available {
+                    return Ok(None);
+                }
+                ids.resize(len, 0);
+                if reply.copy_row(i, k, &mut ids)? != len {
+                    return Err(Error::InvalidStatus(255));
+                }
+                let values = ids
+                    .iter()
+                    .map(|&id| factors.get(id).cloned().ok_or(Error::InvalidStatus(255)))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if !residual::charge_expansion(&mut available, &values, None)? {
+                    return Ok(None);
+                }
+                let image = f_app_ac(head, values);
+                if !subsort(sort_of_lterm(&image, sort_of_name), var.sort) {
+                    return Err(Error::InvalidStatus(255));
+                }
+                // Matching returns every observed key, including X -> X.
+                // Variables occurring in the image are frozen subject data.
+                arm.push((var, image));
+            }
+            arms.push(arm);
+        }
+        Ok(Some(arms))
+    })
 }
 
 #[cfg(test)]
@@ -203,6 +327,56 @@ mod tests {
         assert_eq!(
             table.ac_bag_has_match(&[missing, unsupported]).unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn answer_rows_restore_full_captures_including_identity_and_shared_frozen_ids() {
+        let table = RuleTable::new(&mset_maude_sig()).unwrap();
+        // First encounter order (z, a) differs from variable sort order.
+        let z = LVar::new("z", crate::lterm::LSort::Msg, 7);
+        let a = LVar::new("a", crate::lterm::LSort::Msg, 7);
+        let var = |v| Term::Lit(Lit::Var(v));
+        let sum = |ts| f_app_ac(AcSym::Union, ts);
+        let fixed = pub_term("marker");
+        let plain = pub_term("frozen");
+        // Raw reversed input verifies encounter order for shared captures.
+        let pattern = Term::App(
+            FunSym::Ac(AcSym::Union),
+            vec![var(z), var(a), fixed.clone()].into(),
+        );
+        let subjects = [var(z), var(a), plain];
+        let mut all = subjects.to_vec();
+        all.push(fixed);
+        let row = Equal {
+            lhs: pattern,
+            rhs: sum(all),
+        };
+        let Outcome::Complete(mut arms) = table.ac_bag_answers(std::slice::from_ref(&row)).unwrap()
+        else {
+            panic!("small bag enumeration deferred");
+        };
+        let mut expected = Vec::new();
+        for mask in 1..7 {
+            let (lhs, rhs): (Vec<_>, Vec<_>) = subjects
+                .iter()
+                .enumerate()
+                .partition(|(i, _)| mask & (1 << i) != 0);
+            let bag =
+                |xs: Vec<(usize, &LNTerm)>| sum(xs.into_iter().map(|(_, t)| t.clone()).collect());
+            expected.push(vec![(z, bag(lhs)), (a, bag(rhs))]);
+        }
+        expected.sort();
+        arms.sort();
+        assert_eq!(arms, expected);
+
+        let row = Equal {
+            lhs: sum(vec![var(z), var(z), var(a)]),
+            rhs: sum(subjects.to_vec()),
+        };
+        assert_eq!(
+            table.ac_bag_answers(&[row]).unwrap(),
+            Outcome::Complete(vec![])
         );
     }
 }

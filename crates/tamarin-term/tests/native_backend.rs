@@ -803,11 +803,13 @@ fn expensive_matching_is_explicitly_unsupported_not_unsatisfiable() {
         AcSym::Union,
         (0..8).map(|i| pub_term(format!("a{i}"))).collect(),
     );
+    let query = [Equal {
+        lhs: subject,
+        rhs: pattern,
+    }];
+    assert!(h.has_match_eqs(&query).unwrap());
     assert!(matches!(
-        h.match_eqs(&[Equal {
-            lhs: subject,
-            rhs: pattern
-        }]),
+        h.match_eqs(&query),
         Err(MaudeError::UnsupportedOperation("matching"))
     ));
     assert!(h.check_backend_status().is_err());
@@ -3423,7 +3425,7 @@ fn boolean_linear_ac_counts_agree_with_small_matcher_families() {
 }
 
 #[test]
-fn boolean_ac_matching_keeps_one_image_per_repeated_capture_across_rows() {
+fn ac_matching_keeps_one_image_per_repeated_capture_across_rows() {
     use tamarin_term::builtin::msg_var;
 
     let h = native();
@@ -3434,12 +3436,19 @@ fn boolean_ac_matching_keeps_one_image_per_repeated_capture_across_rows() {
     for expected in [true, false] {
         let mut left = vec![fixed.clone()];
         let mut right = vec![fixed.clone(), fixed.clone()];
+        let mut evens = Vec::new();
+        let mut odds = Vec::new();
         for i in 0..48 {
             let item = if i == 0 {
                 x.clone()
             } else {
                 msg_var("subject", i)
             };
+            if i % 2 == 0 {
+                evens.push(item.clone());
+            } else {
+                odds.push(item.clone());
+            }
             left.extend(std::iter::repeat_n(
                 item.clone(),
                 if i % 2 == 0 { 2 } else { 1 },
@@ -3472,9 +3481,49 @@ fn boolean_ac_matching_keeps_one_image_per_repeated_capture_across_rows() {
                 ]),
             },
         ];
+        let answers = if expected {
+            vec![vec![
+                (LVar::new("x", LSort::Msg, 0), bag(evens)),
+                (LVar::new("y", LSort::Msg, 0), bag(odds)),
+            ]]
+        } else {
+            Vec::new()
+        };
+        let bindable = [("x", 0), ("y", 0)].into_iter().collect();
         for _ in 0..2 {
             assert_eq!(h.has_match_eqs(&rows).unwrap(), expected);
+            assert_eq!(h.match_eqs(&rows).unwrap(), answers);
+            let scoped = rows.each_ref().map(|eq| Equal {
+                lhs: eq.rhs.clone(),
+                rhs: eq.lhs.clone(),
+            });
+            assert_eq!(
+                h.match_eqs_skolemize_both(&scoped, &bindable).unwrap(),
+                answers
+            );
             rows.reverse();
+        }
+        if expected {
+            // Force a two-arm family from the same wide conjunction. One
+            // answer explicitly maps p to its identically named frozen leaf.
+            let p = LVar::new("p", LSort::Msg, 0);
+            let q = LVar::new("q", LSort::Msg, 0);
+            let p_term = Term::Lit(Lit::Var(p));
+            let frozen = pub_term("loose");
+            let mut conjunction = rows.to_vec();
+            conjunction.push(Equal {
+                lhs: sum(p_term.clone(), frozen.clone()),
+                rhs: sum(p_term.clone(), Term::Lit(Lit::Var(q))),
+            });
+            let mut choices = Vec::new();
+            for (left, right) in [(p_term.clone(), frozen.clone()), (frozen, p_term)] {
+                let mut arm = answers[0].clone();
+                arm.extend([(p, left), (q, right)]);
+                arm.sort();
+                choices.push(arm);
+            }
+            choices.sort();
+            assert_eq!(h.match_eqs(&conjunction).unwrap(), choices);
         }
     }
     assert_eq!(h.stats().match_count, 0);
