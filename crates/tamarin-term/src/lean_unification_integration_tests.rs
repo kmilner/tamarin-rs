@@ -2812,7 +2812,6 @@ fn dh_reconstructs_each_maude_peer_variant_in_its_original_tuple() {
 fn native_oracle_received_base_towers_cover_all_cancellation_subsets() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{exp, hash, inv, mult};
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::{dh_maude_sig, hash_maude_sig};
     use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
@@ -7010,6 +7009,60 @@ fn native_oracle_wide_nested_cancellation_with_fresh_variables() {
     }
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);
+}
+
+#[test]
+fn native_oracle_signed_graph_compares_all_caller_and_observation_coordinates() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{inv, msg_var, mult};
+    use crate::lean_unification::RuleTable;
+    use crate::maude_sig::dh_maude_sig;
+    use crate::term::f_app_list;
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = dh_maude_sig();
+    let table = RuleTable::new(&sig).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let x = msg_var("caller", 0);
+    let sq = mult(x.clone(), x.clone());
+    let cube = mult(x.clone(), sq.clone());
+    for slots in [
+        vec![cube.clone(), x.clone(), cube.clone()],
+        vec![inv(cube.clone()), x.clone()],
+        vec![msg_var("other", 1), cube.clone(), x.clone()],
+        vec![crate::builtin::fresh_var("caller", 0), cube, x.clone()],
+        vec![inv(x.clone()), sq],
+        vec![mult(x.clone(), inv(x.clone())), x.clone()],
+    ] {
+        let query = f_app_list(slots.clone());
+        let mut keys = crate::lterm::frees_list(&query);
+        keys.sort();
+        keys.dedup();
+        let expected = valued_variant_rows(&oracle, &slots);
+        let packet = table
+            .signed_graph_probe(&keys, &slots)
+            .unwrap()
+            .unwrap_or_else(|| panic!("deferred {query} (Maude produced {} rows)", expected.len()));
+        let got = canonical_small_ac_answers(
+            packet
+                .into_iter()
+                .map(|terms| vec![(LVar::new("row", LSort::Msg, 0), f_app_list(terms))])
+                .collect(),
+        );
+        assert_eq!(got, expected, "{query}");
+        assert_eq!(
+            valued_variant_rows(&native, &slots),
+            expected,
+            "public {query}"
+        );
+    }
 }
 
 #[path = "lean_variant_frontier_tests.rs"]

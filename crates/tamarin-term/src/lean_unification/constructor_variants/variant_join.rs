@@ -4,6 +4,7 @@
 mod finite_narrowing;
 mod residual_match;
 mod scalar_action;
+mod signed_graph;
 use residual_match::{residual_row_matches, RowMatch};
 
 use super::{InputDomain, RuleTable};
@@ -213,6 +214,7 @@ struct JoinSearch {
     // All ordinary narrowing frontiers in this query share this allowance
     // for expanded terms, concrete rewrites and state/terminal comparisons.
     frontier_nodes: usize,
+    graph_work: usize,
 }
 
 /// A known root redex or child redex suffices regardless of any undecided
@@ -245,6 +247,7 @@ impl JoinSearch {
             normal: FxHashMap::default(),
             pairs: 4096,
             matching: 100_000,
+            graph_work: residual::MAX_EXPANDED,
             frontier_nodes: 1 << 21,
         }
     }
@@ -397,6 +400,16 @@ impl RuleTable {
             return Ok(Some(rows));
         }
         if let Some(rows) = self.scalar_action_rows(keys, original, app, search)? {
+            return Ok(Some(rows));
+        }
+        // At most eight sign profiles. Larger matrices are attempted only
+        // after the existing component solvers defer on the entire operation.
+        if let Some(rows) = self.signed_graph_rows(
+            keys,
+            std::slice::from_ref(app),
+            signed_graph::QUICK_COORDINATES,
+            search,
+        )? {
             return Ok(Some(rows));
         }
         if let Some(rows) = self.staged_rows(keys, original, app, search)? {
@@ -820,20 +833,50 @@ impl RuleTable {
         keys.retain(|v| seen.insert(*v));
         let original = keys.iter().map(|v| v.idx).collect();
         let mut search = JoinSearch::new();
-        let Some(mut rows) = self.single_rows(&keys, &original, first, &mut search)? else {
-            return Ok(Outcome::Unsupported);
+        let mut result = None;
+        if !others.is_empty() {
+            result =
+                self.signed_graph_rows(&keys, terms, signed_graph::QUICK_COORDINATES, &mut search)?;
+        }
+        if result.is_none() {
+            result = self.join_applications(&keys, &original, first, others, &mut search)?;
+        }
+        if result.is_none() {
+            result =
+                self.signed_graph_rows(&keys, terms, signed_graph::MAX_COORDINATES, &mut search)?;
+        }
+        Ok(match result {
+            Some(rows) => Outcome::Complete(
+                rows.into_iter()
+                    .map(|r| keys.iter().copied().zip(r.images).collect())
+                    .collect(),
+            ),
+            None => Outcome::Unsupported,
+        })
+    }
+
+    fn join_applications(
+        &self,
+        keys: &[LVar],
+        original: &FxHashSet<u64>,
+        first: &LNTerm,
+        others: &[&LNTerm],
+        search: &mut JoinSearch,
+    ) -> Result<Option<Vec<Row>>, Error> {
+        let Some(mut rows) = self.single_rows(keys, original, first, search)? else {
+            return Ok(None);
         };
         if others.is_empty() {
             for row in &mut rows {
-                *row = row.rename(&original);
+                *row = row.rename(original);
             }
         }
         for app in others {
-            let Some(right) = self.single_rows(&keys, &original, app, &mut search)? else {
-                return Ok(Outcome::Unsupported);
+            let Some(right) = self.single_rows(keys, original, app, search)? else {
+                return Ok(None);
             };
-            let Some(answers) = self.join_families(&rows, &right, &original, &mut search)? else {
-                return Ok(Outcome::Unsupported);
+            let Some(answers) = self.join_families(&rows, &right, original, search)? else {
+                return Ok(None);
             };
             rows = answers.into_iter().collect();
         }
@@ -841,14 +884,10 @@ impl RuleTable {
             let Some(kept) =
                 self.prune_specializations(rows.into_iter().collect(), &mut search.matching)?
             else {
-                return Ok(Outcome::Unsupported);
+                return Ok(None);
             };
             rows = kept;
         }
-        Ok(Outcome::Complete(
-            rows.into_iter()
-                .map(|r| keys.iter().copied().zip(r.images).collect())
-                .collect(),
-        ))
+        Ok(Some(rows))
     }
 }

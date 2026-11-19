@@ -308,6 +308,15 @@ static void *wrap_rows(lean_object *rows) {
     return outer;
 }
 
+extern lean_object *tamarin_signed_graph_variants(uint64_t inputs, lean_object *observations);
+
+/* A flat reply is one row of one arm for the existing checked row reader. */
+void *tamarin_lean_signed_graph_variants(uint64_t inputs, const whole_word_slice *observations,
+                                         size_t count) {
+    lean_object *reply = tamarin_signed_graph_variants(inputs, word_rows(observations, count));
+    return wrap_rows(wrap_rows(reply));
+}
+
 static void *selection_rows(lean_object *reply) {
     return lean_is_scalar(reply) ? NULL : wrap_rows(take_some(reply));
 }
