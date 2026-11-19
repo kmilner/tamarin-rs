@@ -178,4 +178,14 @@ example : ¬Normal R (op.point a (op.point a p)) := fun n =>
 example : ¬Normal R (op.map p (op.point a p)) := fun n =>
   ((bp.map_normal_iff (atomT 1) (op.point_sorted (atomT 0) (atomT 1))).mp n).2.2.2 rfl
 
+-- Adding a second emap rule that erases its arguments invalidates the
+-- exact table premise, even though every DH equation still has its old head.
+private def erases : Equation sig := ⟨.comm () (x 1) (x 2),x 1⟩
+example : ¬ Nonempty (Rewriting.Bilinear.Inventory s op (erases :: rules)) := by
+  rintro ⟨bad⟩
+  have impossible := bad.onlyMap erases List.mem_cons_self rfl
+  have left := congrArg Equation.lhs impossible
+  have kids : x 2 = op.point (.var (bad.keys .extract 1)) (.var (bad.keys .extract 2)) := (Term.comm.inj left).2.2
+  cases kids
+
 end Tamarin.BilinearTests
