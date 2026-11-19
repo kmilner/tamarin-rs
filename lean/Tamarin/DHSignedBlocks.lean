@@ -31,12 +31,12 @@ structure Blocks {α : Type} [DecidableEq α] (basis : (Fin n → Bool) → List
   conformal : ∀ g k, k ∈ bag g → signs k = g.1
   counts : ∀ k, mix (basis (signs k)).get (fun j => (bag ⟨signs k,j⟩).count k) = mag k
 
-private theorem nodup {α : Type} [DecidableEq α] (xs : List α) : xs.eraseDups.Nodup := by
+theorem eraseDups_nodup {α : Type} [DecidableEq α] (xs : List α) : xs.eraseDups.Nodup := by
   cases xs with
   | nil => simp
   | cons x xs =>
     rw [List.eraseDups_cons,List.nodup_cons]
-    exact ⟨by simp [List.mem_eraseDups],nodup _⟩
+    exact ⟨by simp [List.mem_eraseDups],eraseDups_nodup _⟩
 termination_by xs.length
 decreasing_by have := List.length_filter_le (fun (v : α) => !v == x) xs; simp; omega
 
@@ -65,7 +65,7 @@ theorem blocks_iff {α : Type} [DecidableEq α] (basis : (Fin n → Bool) → Li
   · intro k
     have count (j : Fin (basis (signs k)).length) :
         (bag ⟨signs k,j⟩).count k = if k ∈ support then (spans k).choose j else 0 := by
-      simp [bag,ACSystem.parts_count _ (nodup _),List.mem_eraseDups,co]
+      simp [bag,ACSystem.parts_count _ (eraseDups_nodup _),List.mem_eraseDups,co]
     simp only [count]
     by_cases h : k ∈ support
     · simpa [h] using (spans k).choose_spec

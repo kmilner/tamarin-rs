@@ -6,7 +6,7 @@ namespace Tamarin.Rewriting.DHPeer.SignedMatrix
 open ACBasis Cancellation Balance Classical
 variable {n : Nat} {sig : Signature}
 
-private theorem column_counts (basis : (Fin n → Bool) → List (Vec n)) (active)
+theorem column_counts (basis : (Fin n → Bool) → List (Vec n)) (active)
     (branch : active ∈ FlatMatchSearch.sublists (columns basis)) (g : Column basis) (i : Fin n) (d : Bool) :
     (slots basis active i d).count g =
       if g.1 i = d ∧ g ∈ active then (basis g.1).get g.2 i else 0 := by
