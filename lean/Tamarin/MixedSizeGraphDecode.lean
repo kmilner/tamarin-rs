@@ -1,7 +1,9 @@
 import TamarinRuntime.MixedSizeGraph
+import Tamarin.ACBagSearch
+import Tamarin.ACFeasibility
 
 namespace Tamarin.MixedSizeGraph
-open Whole
+open Whole ACBasis ACFeasibility
 
 /-- Replay one physical row against the earlier rows. Each shared edge
 contributes its child's full size again, including repeated edges. -/
@@ -83,13 +85,68 @@ theorem withinGraph_iff (ns roots) : withinGraph ns roots = true ↔ GraphWithin
   · rintro ⟨sn,sr,sw,table,cs,hc,hr,total⟩
     exact ⟨⟨sn,sr,sw⟩,by simp [(table_correct ..).mpr hc,(reads ..).mpr hr,total]⟩
 
+theorem count_weight (ks xs : List UInt64) (f : UInt64 → Nat) (distinct : ks.Nodup) (live : xs ⊆ ks) :
+    dot (fun i : Fin ks.length => xs.count (ks.get i)) (fun i => f (ks.get i)) = (xs.map f).sum := by
+  induction xs with
+  | nil => simp [dot,total,List.sum_eq_zero_iff_forall_eq_nat]
+  | cons a xs ih =>
+    obtain ⟨j,hj⟩ := List.get_of_mem (live List.mem_cons_self)
+    have incr : (fun i : Fin ks.length => (a::xs).count (ks.get i)) =
+        fun i => spike j 1 i + xs.count (ks.get i) := by
+      funext i
+      by_cases eq : i = j
+      · subst i; rw [hj,List.count_cons_self]; simp [spike,Nat.add_comm]
+      · have ne : a ≠ ks.get i := by
+          intro same
+          apply eq
+          exact Fin.ext (distinct.eq_of_getElem_eq i.isLt j.isLt (same.symm.trans hj.symm))
+        rw [List.count_cons_of_ne ne]
+        simp [spike,eq]
+    let values := fun i => f (ks.get i)
+    have one : dot (spike j 1) values = f a := by
+      change total (fun i => spike j 1 i * values i) = _
+      simp only [Nat.mul_comm (spike j 1 _) _,←show dot values (spike j 1) = total (fun i => values i * spike j 1 i) from rfl,
+        dot_spike,Nat.mul_one,values,hj]
+    rw [incr]
+    have tail := ih (fun _ hv => live (List.mem_cons_of_mem _ hv))
+    simpa only [dot,Nat.add_mul,total_add,List.map_cons,List.sum_cons,values] using
+      congr (congrArg (fun a b : Nat => a + b) one) tail
+
+private theorem balanced_feasible (s : List (Profile × Profile)) (ok : balanced s = true) :
+    Feasible (s.map (row (keys s))) := by
+  let ks := keys s
+  let x : Vec (ks.length+1) := prepend 1 (fun _ => 1)
+  have dist : ks.Nodup := Matching.ACBagSearch.dedup_distinct _
+  have size (p : Profile) (live : p.vars ⊆ ks) : dot (weights ks p) x = p.fixed + p.vars.length := by
+    have v := count_weight ks p.vars (fun _ => 1) dist live
+    have ones (xs : List UInt64) : (xs.map (fun _ => 1)).sum = xs.length := by
+      induction xs with
+      | nil => rfl
+      | cons _ _ ih => simp [ih,Nat.add_comm]
+    calc
+      _ = p.fixed + dot (fun i : Fin ks.length => p.vars.count (ks.get i)) (fun _ => 1) := by
+        simp [weights,x,dot,total,List.ofFn_succ,prepend]
+      _ = _ := congrArg (p.fixed + ·) (v.trans (ones _))
+  refine ⟨x,?_,Fin.cases (show 0 < 1 by decide) (fun _ => (show 0 < 1 by decide))⟩
+  intro r hr
+  obtain ⟨⟨l,r⟩,mem,rfl⟩ := List.mem_map.mp hr
+  have live : l.vars ++ r.vars ⊆ ks := fun _ h =>
+    List.mem_eraseDups.mpr (List.mem_flatMap.mpr ⟨(l,r),mem,h⟩)
+  rw [row,Row.ofWeights_holds,size l (fun _ h => live (List.mem_append_left _ h)),
+    size r (fun _ h => live (List.mem_append_right _ h))]
+  exact beq_iff_eq.mp ((List.all_eq_true.mp ok) (l,r) mem)
+
 theorem refutesDecoded_iff (ns roots p) :
     refutesDecoded ns roots p = true ↔ GraphWithin ns roots ∧
       (system p).length ≤ 64 ∧ (keys (system p)).length + 1 ≤ 4096 ∧
       (system p).length * ((keys (system p)).length + 1) ≤ 8192 ∧
       ACFeasibility.checkRows ((system p).map (row (keys (system p)))) = some false := by
-  simp only [refutesDecoded,numericWithin,Bool.and_eq_true,decide_eq_true_eq,beq_iff_eq,withinGraph_iff]
-  simp only [and_assoc]
+  by_cases ok : balanced (system p) = true
+  · have possible := balanced_feasible _ ok
+    have never : checkRows ((system p).map (row (keys (system p)))) ≠ some false :=
+      fun h => Bool.noConfusion ((checkedRows _ _ h).mpr possible)
+    simp [refutesDecoded,ok,never]
+  · simp [refutesDecoded,ok,numericWithin,withinGraph_iff,and_assoc]
 
 theorem refutes_iff (ds ns roots) :
     refutes ds ns roots = true ↔ ds.size ≤ 32768 ∧

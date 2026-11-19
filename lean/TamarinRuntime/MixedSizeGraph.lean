@@ -102,11 +102,17 @@ def withinGraph (ns : Array (Array UInt64)) (roots : Array UInt64) : Bool :=
 def numericWithin (s : List (Profile × Profile)) (ks : List UInt64) : Bool :=
   decide (s.length ≤ 64 ∧ ks.length + 1 ≤ 4096 ∧ s.length * (ks.length + 1) ≤ 8192)
 
+/-- Giving every variable image one node is a strictly positive assignment.
+If it balances every observation, skip column construction as well as search. -/
+def balanced (s : List (Profile × Profile)) := s.all fun (a,b) =>
+  a.fixed + a.vars.length == b.fixed + b.vars.length
+
 /-- Called with the problem decoded from these exact rows and roots. Check
 the graph before visiting any expanded term, including a repeated root. -/
 def refutesDecoded (ns : Array (Array UInt64)) (roots : Array UInt64) (p : List (Tree × Tree)) : Bool :=
   withinGraph ns roots &&
     (let s := system p
+     if balanced s then false else
      let ks := keys s
      numericWithin s ks && ACFeasibility.checkRows (s.map (row ks)) == some false)
 

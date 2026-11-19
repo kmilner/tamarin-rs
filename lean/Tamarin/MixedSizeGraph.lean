@@ -158,33 +158,6 @@ private theorem source_rows (c : Codec sig) (p : Problem sig) :
       sourceRows c p := by
   simp [sourceRows,row,weights,sourceWeights,sourceProfile,List.map_map,Function.comp_def]
 
-private theorem count_weight (ks xs : List UInt64) (f : UInt64 → Nat) (distinct : ks.Nodup) (live : xs ⊆ ks) :
-    dot (fun i : Fin ks.length => xs.count (ks.get i)) (fun i => f (ks.get i)) = (xs.map f).sum := by
-  induction xs with
-  | nil => simp [dot,total,List.sum_eq_zero_iff_forall_eq_nat]
-  | cons a xs ih =>
-    obtain ⟨j,hj⟩ := List.get_of_mem (live List.mem_cons_self)
-    have incr : (fun i : Fin ks.length => (a::xs).count (ks.get i)) =
-        fun i => spike j 1 i + xs.count (ks.get i) := by
-      funext i
-      by_cases eq : i = j
-      · subst i; rw [hj,List.count_cons_self]; simp [spike,Nat.add_comm]
-      · have ne : a ≠ ks.get i := by
-          intro same
-          apply eq
-          exact Fin.ext (distinct.eq_of_getElem_eq i.isLt j.isLt (same.symm.trans hj.symm))
-        rw [List.count_cons_of_ne ne]
-        simp [spike,eq]
-    let values := fun i => f (ks.get i)
-    have one : dot (spike j 1) values = f a := by
-      change total (fun i => spike j 1 i * values i) = _
-      simp only [Nat.mul_comm (spike j 1 _) _,←show dot values (spike j 1) = total (fun i => values i * spike j 1 i) from rfl,
-        dot_spike,Nat.mul_one,values,hj]
-    rw [incr]
-    have tail := ih (fun _ hv => live (List.mem_cons_of_mem _ hv))
-    simpa only [dot,Nat.add_mul,total_add,List.map_cons,List.sum_cons,values] using
-      congr (congrArg (fun a b : Nat => a + b) one) tail
-
 private def imageSize (c : Codec sig) (σ : Substitution sig) (id : UInt64) : Nat :=
   ((c.vars.get id).map fun v => nodes (σ.image v)).getD 1
 
