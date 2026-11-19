@@ -34,26 +34,32 @@ output. Library callers that recover from algebra errors must likewise call
 
 ## What an implementation must prove
 
-Ordinary unification operates modulo the declared free, binary commutative (C) and
-associative-commutative (AC) symbols, collectively called B. Pure AC preserves multiplicities and
-has no unit. Additional equations such as XOR cancellation participate in rewriting and variants.
-[Algebra](Tamarin/Algebra.lean) · [Rewriting modulo B](Tamarin/Rewriting.lean)
+The acceptance target is `MaudeOperations.Reference sig rules` for the module Tamarin emits.
+The upstream Haskell and Rust adapters issue the same four algebra commands. Installation probes
+and module initialization are separate. Rules and enabled builtins determine the active theory,
+including DH, bilinear pairing, multiset, natural numbers, XOR and user-declared free or AC symbols.
+[Whole-module contract](Tamarin/MaudeOperations.lean) · [Upstream command builders](../tamarin-prover/lib/term/src/Term/Maude/Process.hs#L194) · [Rust adapter](../crates/tamarin-term/src/maude_proc.rs) · [Module printer](../crates/tamarin-term/src/maude_print.rs#L344) · [Active equations](../crates/tamarin-term/src/maude_sig.rs#L285) · [Upstream signature](../tamarin-prover/lib/term/src/Term/Maude/Signature.hs#L187)
 
-- **Unification.** Every returned substitution must solve all the equations. Every sorted solution,
-  including a nonground one, must factor through a returned answer using one shared substitution on
-  all observed variables. A complete empty set proves the conjunction impossible. Unsupported input,
-  interruption and resource exhaustion are separate outcomes. Each export also has a completion
-  obligation on its advertised domain. [Unification contract](Tamarin/Unification.lean) ·
-  [Whole-problem contract](Tamarin/WholeContract.lean)
-- **Matching.** Only the designated pattern variables may bind. Each match preserves the rigid
-  subject, and one substitution accounts for every occurrence across the query.
-  [Matching contract](Tamarin/Matching.lean)
-- **Reduction and variants.** A normal form must be reachable and globally irreducible modulo B. For
-  variants, a single substitution must explain the normalized values of the entire query tuple.
-  Where Rust reconstructs values by normalizing again, Lean also requires that those values are
-  recoverable. A finite rule table alone gives no guarantee of termination, confluence or finitely
-  many variants. [Rewriting and variants](Tamarin/Rewriting.lean) ·
-  [Reconstruction](Tamarin/VariantReconstruction.lean)
+The basis B consists of the declared free, binary commutative (C) and associative-commutative (AC)
+symbols. Pure AC preserves multiplicities and has no unit. The command domain includes arity-correct
+applications at Maude's kind level. A ground natural-number sum containing a public name can match
+itself modulo AC even though it has no Tamarin sort. A `Msg` variable cannot bind to that sum.
+[Algebra](Tamarin/Algebra.lean) · [Lean regression proofs](Tests/MaudeOperations.lean) · [Maude 3.5.1 regression queries](Tests/check_maude_operations.py)
+
+| Command | Required answer | Lean and Maude 3.5.1 sources |
+| --- | --- | --- |
+| `unify` | A finite family of sort-respecting substitutions that solve the whole conjunction modulo B. Every solution, including a nonground one, factors through one answer using one substitution on all query variables. A complete empty family proves impossibility. | [Unification](Tamarin/Unification.lean) · [Whole-problem contract](Tamarin/WholeContract.lean) · [Maude unification](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/unify.cc) |
+| `match` | All assignments to the bindable pattern variables, up to B on their images. The subject and any pattern variables frozen by the caller stay rigid. A Boolean query asks whether an assignment exists. | [Matching](Tamarin/Matching.lean) · [Maude pattern and subject search](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/match.cc#L42-L127) |
+| `reduce` | A reachable, irreducible result for the input, including open terms, using the active rewrite equations modulo B. On a convergent, sort-preserving presentation, all normal forms agree modulo B. | [Rewriting](Tamarin/Rewriting.lean) · [Maude reduction](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/execute.cc#L245-L269) |
+| `get variants` | A finite covering family of normalized substitutions and values. A single further substitution explains every binding and position in a packed query modulo B, without another reduction. Rust retains the bindings and must be able to recover the values by substituting and reducing. | [Reconstruction](Tamarin/VariantReconstruction.lean) · [Packed rule queries](../crates/tamarin-theory/src/tools/rule_variants.rs#L125) · [Rust reply parser](../crates/tamarin-term/src/maude_parse.rs#L218-L250) · [Maude initialization](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantSearch.cc#L215-L295) · [Printed rows and incomplete search](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/getVariants.cc#L119-L174) |
+
+Maude reduces the initial variant and narrows with executable equations marked `[variant]`.
+Tamarin marks every emitted equation this way, so reduction and variants share one table.
+Tamarin uses plain `get variants`, which permits redundant answers. Tamarin requires convergent user theories with the
+finite variant property and leaves these conditions unchecked. The total reference must establish
+completion on its full domain. A bounded export must establish completion on its advertised domain
+and distinguish exhaustion, interruption and unsupported input from a complete answer.
+[Maude narrowing equation selection](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantNarrowingSearchState.cc#L150-L175) · [Equation printer](../crates/tamarin-term/src/maude_print.rs#L511-L523) · [Tamarin's theory assumptions](../tamarin-prover/manual/src/004_cryptographic-messages.md#L129-L143)
 
 **For an optimization**, change the candidate and its proof. CI checks the actual exported functions
 against their contracts, audits dependencies and export names, rejects unchecked overrides, and
@@ -145,95 +151,42 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 
 ## Coverage and remaining work
 
-The replacement targets four algebra commands. The upstream Haskell process adapter emits
-`unify in MSG`, `match in MSG`, `reduce` and `get variants in MSG`. Rust emits the same
-four. Existence checks project the answers from unification or matching. Restriction
-matching can first make caller variables rigid. Rule closure packs terms into a single
-variant request so that all positions share a substitution. Installation probes and module
-initialization are separate from these algebra operations.
-[Upstream command builders](../tamarin-prover/lib/term/src/Term/Maude/Process.hs#L194) ·
-[Rust adapter](../crates/tamarin-term/src/maude_proc.rs) · [Packed rule queries](../crates/tamarin-theory/src/tools/rule_variants.rs#L125)
-
-The input domain comes from the declarations and equations emitted for the active signature.
-It includes the DH, bilinear pairing, multiset, natural-number and XOR operators, user-declared
-free and AC operators, and their permitted combinations. The rule table combines user-supplied
-rules with the enabled builtin equations. An ordinary unification or matching query uses the
-declared C/AC axioms. Reduction and variants also use the active rewrite equations.
-[Rust module printer](../crates/tamarin-term/src/maude_print.rs#L344) ·
-[Active equations](../crates/tamarin-term/src/maude_sig.rs#L285) ·
-[Upstream signature](../tamarin-prover/lib/term/src/Term/Maude/Signature.hs#L187)
-
-The Lean acceptance target for these commands is `MaudeOperations.Reference sig rules`.
-The same signature supplies the C/AC axioms for all four commands. Only reduction and
-variants use the oriented equation table. The target includes arity-correct applications
-at Maude's kind level. For example, a ground natural-number sum containing a public name
-can match itself modulo AC even though it has no Tamarin sort. A `Msg` variable cannot
-bind to that sum. Sorted-only solvers remain useful intermediate milestones.
-[Whole-module Lean contract](Tamarin/MaudeOperations.lean) · [Lean regression proofs](Tests/MaudeOperations.lean) ·
-[Maude 3.5.1 regression queries](Tests/check_maude_operations.py) · [Maude module declarations](../crates/tamarin-term/src/maude_print.rs#L344)
-
-| Maude 3.5.1 command | What the reference must return | Where the requirement comes from |
+| Operation | Native coverage today | Remaining completeness work |
 | --- | --- | --- |
-| `unify` | A finite complete set of sort-respecting substitutions for the simultaneous equations modulo B. Every solution factors through one answer on all query variables. | [Maude ordinary unification](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/unify.cc) |
-| `match` | All assignments to the bindable pattern variables, up to B on their images. Subject variables are rigid. A Boolean query asks whether this set is inhabited. | [Maude pattern, subject and whole-term search](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/match.cc#L42-L127) |
-| `reduce` | One reachable, irreducible result for the supplied term, including open terms. On a sort-preserving convergent presentation, all normal forms agree modulo B. | [Maude reduction command](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/execute.cc#L245-L269) |
-| `get variants` | A finite covering family of normalized substitutions **and values**. One further substitution must explain all input bindings and all tuple components, modulo B, without another reduction. Rust keeps only the bindings. Reapplying those bindings and reducing must recover each row’s values. | [Maude initialization](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantSearch.cc#L215-L295) · [Printed rows and incomplete search](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Mixfix/getVariants.cc#L119-L174) · [Rust reply parser](../crates/tamarin-term/src/maude_parse.rs#L218-L250) |
+| Free and C unification | Free factoring, binary C branching, identities and ground clashes. Residual steps check heads, operands, bindings, sorts and occurrences against the pending conjunction. | Verify operand interning and traversal of every live branch. |
+| Simultaneous AC unification | Shares operands across nested systems and combines independent groups with disjoint witnesses. Full enumeration supports bounded bases through 64 variables and some single-witness families through 65. Boolean decisions include rank at most two, width at most three, and larger systems with certificates or identical columns. | Prove a terminating mixed free/C/AC component solver, including cyclic dependencies. The sort-assignment proof then gives `VerifiedUnifier` for all arity-correct inputs. Connect the resulting solver to Rust. |
+| Directional matching | Matches nested free/C/AC terms, including repeated or shared captures. Boolean queries use factor counts and full queries can page through the answer family. | The total Lean matcher handles all arity-correct conjunctions independently of unification. Connect that reference to Rust and establish first-match behavior on ambiguous queries. [Reference matcher](Tamarin/ReferenceMatching.lean) · [Alternative via unification](Tamarin/MatchViaUnification.lean) |
+| Reduction | Bounded graphs cover root and argument rewrites and proper AC subproducts. Other paths cover projected or erased arguments, independent factors, positional destructors, cancellation and DH powers and products. | Lean enumerates every live rewrite at every position, including proper AC subproducts. The driver is total for convergent sort-preserving tables. Connect its equation table and results to Rust, or prove the existing graph traversal equivalent. [Reference steps](Tamarin/ReferenceReduction.lean) · [Reduction driver](Tamarin/ReduceViaSteps.lean) |
+| Variants | Finite narrowing frontiers cover free/C/AC heads and proper subproducts. Shared input images survive child joins and free-root contraction. Overlap checks cover free paths and signed AC consequences. Specialized paths include cancellation, destructors, signed DH products, powers, scalar actions and pairing. | Lean now decides row subsumption and preserves the coverage of any folded finite family. Prove complete narrowing successors and termination of the entire search under the finite variant property. Verify substitution-only decoding, witness scope and answer order where callers observe it. [Reference folding](Tamarin/ReferenceVariantFolding.lean) |
 
-Maude reduces the initial variant and narrows with executable equations marked `[variant]`.
-Tamarin marks every equation it emits this way, so one table suffices here. Maude also offers a separate
-`get irredundant variants` command. The algebraic contract allows alternative
-covering families and enumeration orders. First-answer selection, witness encoding and
-other caller-visible ordering still need their adapter proofs. Tamarin requires user
-equations to be convergent with the finite variant property and does not check these
-conditions. A total reference for a particular module must establish completion.
-[Maude narrowing equation selection](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantNarrowingSearchState.cc#L150-L175) ·
-[Equation printer](../crates/tamarin-term/src/maude_print.rs#L511-L523) ·
-[Tamarin's theory assumptions](../tamarin-prover/manual/src/004_cryptographic-messages.md#L129-L143)
+**AC reference.** The homogeneous solver is total for any finite system of variable products
+at one AC head when every variable has the operator’s sort. For arbitrary sorted operands,
+the reference flattens and interns equal operands, then returns residual conjunctions whose
+union preserves the original solutions and pending bindings. The outstanding termination
+argument concerns interactions between operators. Any complete raw
+component solver now gives a total order-sorted solver, including on kind-level inputs.
+The proved refinement assigns fresh sorts to shared parameters and checks the resulting
+image of every observed variable. Maude reopens earlier same-head bindings
+and delays expanding others to handle dependency cycles. The three-variable regression
+must recover the implied binding `Z = a + b`.
+[Sort refinement](Tamarin/UnifierSorts.lean) · [Maude sort assignment](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/unificationProblem.cc#L306-L442) · [Homogeneous reference](Tamarin/ACReference.lean) · [Source-level AC step](Tamarin/ACReferenceBranch.lean) · [Maude dependency cycle](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L173-L210) · [Reopening same-head bindings](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L277-L343) · [Residual search contract](Tamarin/ResidualSearch.lean)
 
-| Operation | Native coverage today | Next milestone |
-| --- | --- | --- |
-| Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
-| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Independent equation groups contribute the full product of their unifiers after their witness names are separated. Shared variables keep equations together. Full unification enumerates bounded Hilbert bases through 64 variables and can recover a complete single-witness family through 65. A checked contradiction also yields a complete empty family. Mixed open equations can also be refuted together when their shared variable images would need incompatible sizes. Simultaneous rows can force equalities between compound operands. Free factoring can then expose a smaller AC system. Boolean queries use checked positive assignments or signed contradictions at arbitrary rank. Completion is guaranteed at rank at most two, at width at most three, and on further certificate domains. Larger conjunctions inherit the decision guarantees of their matrix after merging identical columns. | Finish the terminating mixed-term reference solver and prove it meets `VerifiedUnifier` on every well-formed conjunction. Extend it to the kind-level inputs in the full module target and connect the Rust caller. |
-| Directional matching | Free, binary C and AC constructors may nest. Independent groups can use different symbols. Only shared pattern variables connect groups, even when a frozen subject contains the same name. Repeated AC captures share one well-sorted image across all equations. Existence checks combine factor counts, and full matching can read complete families in pages. | A proved matcher for every scoped conjunction now follows from a total ordinary unifier over an extended rigid-atom signature. Supply that unifier and connect the caller, including first-match selection on ambiguous queries. [Matcher construction](Tamarin/MatchViaUnification.lean) |
-| Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Factors beneath C/AC heads with no root rewrite can normalize independently. Rule matching can decide the existence of independent bindings erased by the right side. A sole total left-linear free rule can contract before its children. Other paths cover positional destructors, cancellation, DH power towers and signed exponent products. | The graph theorem delivers the reference reduction reply when its successor rows cover exactly the live rewrite steps. For a convergent, sort-preserving table, a verified strategy that finds one rewrite or proves irreducibility now gives a total reducer. Implement that step finder for the emitted table, including proper AC subproducts. [General reduction driver](Tamarin/ReduceViaSteps.lean) |
-| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. An unconditional free-root contraction can transfer the variant family while retaining erased caller keys. At C/AC heads with no root rewrite, child families can be joined on shared input images. Lean checks overlap agreement using free-constructor paths and signed linear consequences of AC observations. Staged paths cover cancellation, positional destructors, signed DH products, powers, scalar actions and pairing. | Prove complete narrowing successors and completeness-preserving folding for the active table, and termination of the resulting search under the finite variant property. Connect its rows to the substitution-only caller and check ordered hybrid compatibility. |
+The matcher enumerates binary partitions of the flattened operands, with both sides
+nonempty, and checks every occurrence of a captured variable. Reduction uses the same
+partitions to expose a redex with its untouched complement, just as Maude rewrites AC
+terms with extension. The variant folder checks bindings and values together before
+dropping a subsumed row. The source-level probes exercise both the reference and Maude.
+[AC partition proof](Tamarin/ACSplits.lean) · [Maude AC equation application](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/ACU_Theory/ACU_Symbol.cc#L91-L112) · [Maude variant folding](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantFolder.cc#L173-L217) · [Executable reference tests](Tests/ReferenceCommands.lean)
 
-With an empty equation table the reducer and variant generator already satisfy their
-total contracts for **every** tuple and free/C/AC signature. Pairing has a total reducer
-for its abstract projection relation, whose correspondence with the sorted rule table
-is proved on well-sorted inputs. For nonempty tables the stable-tuple and linked constructor
-proofs deliver the variant reply on their respective domains. A closed single-term
-narrowing frontier also delivers it given safe rows and a reducer for the same table.
+**Reduction and variant references.** With an empty rule table, the total reducer returns
+its input and the total variant generator returns the identity family for every tuple and
+free/C/AC signature. The abstract pairing reducer is total, with rule-table correspondence
+on well-sorted inputs. For nonempty tables, stable tuples and linked constructor checks give
+complete variant replies on their proven domains. A closed single-term frontier suffices given
+safe rows and a reducer for that table.
 [Reference instances](Tamarin/MaudeOperationRefinements.lean) · [Pairing table correspondence](Tamarin/PairingRewriting.lean#L37) · [CI export theorem](TamarinCI.lean#L918)
 
-The acceptance condition for the ordinary unification reference is
-`VerifiedUnifier` for the sorted free/C/AC signature. Its terminating function
-takes every well-formed conjunction and returns a finite, sound and complete
-family with the required variable scope. A query-size threshold or an
-`Unsupported` reply cannot discharge this obligation. The linked runtime
-still has partial coverage. Optimize individual cases after the reference meets
-the contract. [Unification specification](Tamarin/Unification.lean)
-
-The Lean reference computes a full basis and all covering selections for
-every finite system of variable products at one AC head when the variables
-have the operator's sort. It constructs ordinary substitutions and proves
-coverage even for nonground instances. For arbitrary sorted operands, the
-reference flattens the selected source equations, interns equal operands and
-returns all residual conjunctions. A proof relates the union of these
-branches to the original conjunction with its pending equations and bindings.
-[Homogeneous reference](Tamarin/ACReference.lean) · [Source-level AC step](Tamarin/ACReferenceBranch.lean)
-
-The open obligation is a terminating driver that reconciles those residuals
-across free, C and AC heads, with sort restrictions and occurs checks.
-Maude folds earlier same-head bindings back into the current simultaneous
-system and delays expansion of other bindings. Its source gives a
-two-operator dependency cycle as an example of how eager expansion can loop.
-The reference needs a progress argument for these interactions. The ordinary
-AC declarations here admit only nonempty products. The three-variable case
-that entails `Z = a + b` belongs in the end-to-end regressions.
-[Maude binding and cycle handling](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L173-L210) ·
-[Reopening same-head bindings](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L277-L343) ·
-[Residual search contract](Tamarin/ResidualSearch.lean)
+### Specification-generated coverage
 
 Run the generated coverage test from the repository root.
 
@@ -294,6 +247,8 @@ The report counts syntactic requests in this bounded grammar. Protocol regressio
 separately exercise ordering and proof search.
 [Lean generator and expectations](Tests/NativeCoverage.lean) ·
 [Public API check](../crates/tamarin-term/tests/spec_coverage.rs)
+
+### Native algorithms and protocol regressions
 
 For flat directional matching, a singleton image retains the literal’s sort and a product takes
 the AC operator’s result sort. Lean proves exact coverage after this sort check. In `x+x+y`

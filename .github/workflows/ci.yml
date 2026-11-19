@@ -65,6 +65,7 @@ jobs:
           lake env lean Tests/Pairing.lean
           lake env lean Tests/CorrelatedVariantsAudit.lean
           lake env lean Tests/MaudeOperations.lean
+          lake env lean Tests/ReferenceCommands.lean
           lake env lean Tests/Rewriting.lean
           lake env lean Tests/StableDH.lean
           lake env lean Tests/DHProductUnique.lean

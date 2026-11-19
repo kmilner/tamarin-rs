@@ -8,11 +8,13 @@ set show timing off .
 fmod MSG is
   sorts Pub TamNat Msg TOP .
   subsorts Pub TamNat < Msg < TOP .
-  ops a b : -> Msg . op h : Msg -> Msg .
+  ops a b c : -> Msg . ops h f g : Msg -> Msg .
+  ops plus times : Msg Msg -> Msg [assoc comm] .
   op public : -> Pub . op one : -> TamNat .
   op tplus : TamNat TamNat -> TamNat [assoc comm] .
   op list : TOP -> TOP . op cons : TOP TOP -> TOP . op nil : -> TOP .
   eq h(a) = b [variant] .
+  eq plus(f(Z:Msg),a) = g(Z:Msg) [variant] .
 endfm
 """
 
@@ -42,6 +44,15 @@ def main():
     check(f"match in MSG : {ill} <=? {swapped}", "empty substitution")
     check(f"match in MSG : X:Msg <=? {ill}", "No match.")
     check(f"unify in MSG : {ill} =? {swapped}", "empty substitution")
+
+    # A repeated capture must agree across both AC operators.
+    output = reply("match in MSG : list(cons(plus(X:Msg,Y:Msg),cons(times(X:Msg,a),nil)))"
+                   " <=? list(cons(plus(b,a,c),cons(times(a,plus(c,a)),nil)))")
+    assert len(re.findall(r"^Matcher ", output, re.MULTILINE)) == 1, output
+    assert "Y:Msg --> b" in output and re.search(r"X:Msg --> plus\((?:a, c|c, a)\)", output), output
+    # The selected factors need not be siblings in the original syntax.
+    output = reply("reduce in MSG : plus(f(c),plus(b,a))")
+    assert re.search(r"result Msg: plus\((?:b, g\(c\)|g\(c\), b)\)", output), output
 
     output = reply("get variants in MSG : list(cons(h(X:Msg),cons(X:Msg,nil)))")
     assert "No more variants." in output, output
