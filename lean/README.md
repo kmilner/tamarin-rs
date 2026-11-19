@@ -167,7 +167,7 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | --- | --- | --- |
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Independent equation groups contribute the full product of their unifiers after their witness names are separated. Shared variables keep equations together. The numeric solver supports uniform and mixed weights. Full unification can distribute a quotient generator across variables with identical columns, retaining each original variable in the answer. Boolean queries decide every admitted homogeneous system with at most two equations across the full graph width, independently of the number of substitutions. Larger conjunctions inherit the decision guarantees of their matrix after merging identical columns. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
-| Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid, refutes oversized patterns, and counts occurrences to decide existence for independent linear AC patterns. A bounded numeric solver decides matching and enumerates complete substitution families for repeated captures shared across equations. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
+| Directional matching | Free, binary C and AC constructors may nest. Independent groups can use different symbols. Only shared pattern variables connect groups, even when a frozen subject contains the same name. Repeated AC captures share one well-sorted image across all equations. Existence checks combine factor counts, and full matching can read complete families in pages. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Factors beneath C/AC heads with no root rewrite can normalize independently. Other paths cover positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
 | Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. At C/AC heads with no root rewrite, child families can be joined while preserving shared input images. Staged paths cover cancellation, positional destructors, signed DH products, powers, scalar actions and pairing. | Extend overlap checks to further user equations with shared AC variables. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
 
@@ -183,10 +183,11 @@ including shared captures in conjunctions and packed variant observations. Lean 
 mandatory cases from constructor normality, incompatible matching heads and ground AC
 multiset equality. CI fails if native-only defers one of those cases or returns an answer
 that contradicts the expectation. Every reduction in the bounded grammar must complete.
-The generated set has bounded term size and answer multiplicity. For example, matching
-three distinct variables against eight distinct AC factors has 5,796 answers. The
-full public matcher still defers that request, although its existence check succeeds.
-[Public regression](../crates/tamarin-term/tests/native_backend.rs#L796)
+The generated set has bounded term size and answer multiplicity. Separate regressions
+exercise larger families. Matching three distinct variables against eight distinct AC factors
+returns all 5,796 substitutions. With two variables and 64 distinct factors, existence
+succeeds and the collecting API defers the full family at its work limit.
+[Public regressions](../crates/tamarin-term/tests/native_backend/paged_bag_matches.rs)
 
 The test checks that wrapping a term in hash wraps its normal form in the same hash.
 This follows from the [free constructor reduction theorem](Tamarin/ConstructorReduction.lean).
@@ -262,19 +263,27 @@ pattern variables. The public test uses 12 captures and 64 available factors. [L
 
 For repeated and shared captures, Lean characterizes simultaneous matching by one
 nonempty bag of rigid factors per variable. Each pattern occurrence contributes the
-same bag in every equation. After cancellation, Rust passes only the two lists of occurrence IDs
-per equation. Lean solves the multiplicity equations for each rigid factor and combines their
+same bag in every equation. After cancellation, Rust passes pattern and frozen-factor occurrence IDs.
+For a restricted capture, a Boolean query also supplies the IDs of factors with a compatible sort. Lean solves the multiplicity equations for each rigid factor and combines their
 supports so every capture is nonempty. The completion envelope includes up to five keys and
 128 factor classes when the per-factor integer box has at most 256 entries, within the
 64-equation and 4,096-occurrence bounds. [General matching equivalence](Tamarin/ACMatchBagsRefinement.lean) ·
-[Numeric decision](Tamarin/ACBagSearch.lean)
+[Numeric decision](Tamarin/ACBagSearch.lean) · [Singleton restrictions and sort refinement](Tamarin/ACSortedBagPacket.lean)
 
 For full matching, each factor contributes its possible multiplicities for all variables.
 Lean combines those choices across factors and returns each variable’s image in first-occurrence
 order. Rust rebuilds the images from the original frozen subject terms. The regression uses
-two equations sharing repeated variables across 48 distinct factors. A separate case has six
-answers and includes a variable that also occurs on the frozen side.
-[Packet and term-level completeness](Tamarin/ACMatchAnswerPacket.lean)
+two equations sharing repeated variables across 48 distinct factors. A narrower capture
+can bind to a compatible singleton. Rust checks each candidate’s principal sort before
+counting it toward the output limit. [Sorted matcher proof](Tamarin/ACMatchSortedBags.lean)
+
+The stateless page interface can seek directly to any raw candidate position. Each page
+advances a cursor, including pages whose candidates all have empty images. The collecting
+API allows 65,536 candidate positions and 262,144 retained nodes in its paged fallback.
+A page processes at most 256 positions within a 65,536-word construction budget.
+Lean proves that reading through the final page gives a complete family for any
+implementation satisfying the packet contract. [Physical contract](Tamarin/ACPagePacket.lean) ·
+[Enumeration proof](Tamarin/ACBagPages.lean)
 
 For distinct atoms, matching `H(x+y)+x` against `H(a+b+c)+a+b` forces
 `x=a+b, y=c`. At each AC head the matcher flattens occurrences of that symbol and cancels
