@@ -21,7 +21,7 @@ theorem run_sound {rs : List (Row n)} {q c} (h : run rs q = some c) : Valid rs q
   cases eq
   exact (check_iff ..).mp (by simpa [guard] using ok)
 
-private def Witness (rs : List (ZRow n)) (q : ZRow n) (c : Certificate) : Prop :=
+def Witness (rs : List (ZRow n)) (q : ZRow n) (c : Certificate) : Prop :=
   c.scale ≠ 0 ∧ c.weights.length = rs.length ∧ ∀ i, c.scale*q[i] = linear c.weights rs i
 
 private theorem linear_original (ws : List Int) (rs : List (Row n)) (i : Fin n) :
@@ -33,7 +33,7 @@ private theorem linear_original (ws : List Int) (rs : List (Row n)) (i : Fin n) 
     | nil => rfl
     | cons r rs => simp [linear,signed,Separation.combination,LowRank.coeff,ih]
 
-private theorem original (rs : List (Row n)) (q : Row n) (c : Certificate) :
+theorem original (rs : List (Row n)) (q : Row n) (c : Certificate) :
     Witness (rs.map signed) (signed q) c ↔ Valid rs q c := by
   simp [Witness,Valid,signed,linear_original]
 
@@ -55,7 +55,7 @@ private theorem eliminated (p : ZRow n) (j : Fin n) (ws : List Int) (rs : List (
     | nil => simp [linear]
     | cons r rs => simp only [List.map_cons,linear,eliminate,ih]; grind
 
-private theorem drop_pivot (p : ZRow n) (j : Fin n) (q : ZRow n) (rs : List (ZRow n))
+theorem drop_pivot (p : ZRow n) (j : Fin n) (q : ZRow n) (rs : List (ZRow n))
     {c} (h : Witness (p::rs) q c) :
     ∃ d, Witness (rs.map (eliminate p j)) (eliminate p j q) d := by
   obtain ⟨nz,len,eq⟩ := h
@@ -70,7 +70,7 @@ private theorem drop_pivot (p : ZRow n) (j : Fin n) (q : ZRow n) (rs : List (ZRo
     simp only [eliminated,eliminate]
     grind
 
-private theorem lift_witness (p : ZRow n) (j : Fin n) (nz : p[j] ≠ 0) (rs : List (ZRow n))
+theorem lift_witness (p : ZRow n) (j : Fin n) (nz : p[j] ≠ 0) (rs : List (ZRow n))
     (q : ZRow n) {c} (h : Witness (rs.map (eliminate p j)) (eliminate p j q) c) :
     Witness (p::rs) q (lift p j rs q c) := by
   obtain ⟨nonzero,len,eq⟩ := h
@@ -81,13 +81,13 @@ private theorem lift_witness (p : ZRow n) (j : Fin n) (nz : p[j] ≠ 0) (rs : Li
   simp only [lift,linear,scaled]
   grind
 
-private theorem zero_coeffs (rs : List (ZRow n)) (i : Fin n) :
+theorem zero_coeffs (rs : List (ZRow n)) (i : Fin n) :
     linear (List.replicate rs.length 0) rs i = 0 := by
   induction rs with
   | nil => rfl
   | cons r rs ih => simp [List.replicate_succ,linear,ih]
 
-private theorem no_pivot (p : ZRow n) : pivot p = none ↔ ∀ i : Fin n, p[i] = 0 := by
+theorem no_pivot (p : ZRow n) : pivot p = none ↔ ∀ i : Fin n, p[i] = 0 := by
   simp [pivot,List.find?_eq_none]
 
 /-- A fixed arithmetic work envelope on the input tableau. Each column
