@@ -116,3 +116,4 @@ import Tamarin.VariantAntichain
 import Tamarin.StagedExpression
 import Tamarin.VariantRowRenaming
 import Tamarin.ReductionGraph
+import Tamarin.SymbolicNarrowing

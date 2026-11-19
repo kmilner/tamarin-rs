@@ -75,7 +75,7 @@ private theorem flatten_plug (f : s.ACSym) (k : Option (Term s)) (p : Term s) :
 /-- Replacing equivalent selected bags gives equivalent successor products
 only when the complements agree as well. The common original product fixes
 that complement, even in the presence of repeated equal occurrences. -/
-private theorem same_context (f : s.ACSym) {a p q : Term s} {l r : Option (Term s)}
+theorem same_context (f : s.ACSym) {a p q : Term s} {l r : Option (Term s)}
     (left : EquivB a (plug f l p)) (right : EquivB a (plug f r q)) (pieces : EquivB p q)
     (v : Term s) : EquivB (plug f l v) (plug f r v) := by
   have h := Cancellation.flatten_equiv f (left.symm.trans right)
@@ -98,7 +98,7 @@ def FactorStep [DecidableEq s.ACSym] (R : Root s) (f : s.ACSym) (a b : Term s) :
   ∃ p ∈ ACRepresentation.flatten f a, ∃ q rest,
     StepModulo R p q ∧ EquivB a (plug f rest p) ∧ EquivB (plug f rest q) b
 
-private theorem lift_step (f : s.ACSym) (k : Option (Term s)) {a b : Term s}
+theorem lift_step (f : s.ACSym) (k : Option (Term s)) {a b : Term s}
     (st : StepModulo R a b) : StepModulo R (plug f k a) (plug f k b) := by
   obtain ⟨p,q,before,step,after⟩ := st
   cases k with
@@ -282,6 +282,38 @@ private theorem RuleMatches.outputs {rule : Equation s} {a : Term s} {answers}
     exact ⟨θ,hm,(rule.rhs.subst_equiv _ _ (fun v hv => (agree v (bound v hv)).symm)).trans r⟩
   · rintro ⟨θ,hm,r⟩; exact ⟨θ,h.sound _ hm,r⟩
 
+/-- At a sorted product, the plain rule and its one-variable extension
+denote exactly the same concrete successors as matching an arbitrary
+subbag. The bound remainder is shared by both sides of the rule. -/
+theorem occurrence_iff_instances (f : s.ACSym)
+    (rules : List (Equation s)) (apps : ∀ r ∈ rules, Application r.lhs)
+    (scope : ∀ r ∈ rules, head r.lhs = .ac f → ∀ v, r.rhs.Occurs v → r.lhs.Occurs v)
+    (a b : Term s) (typed : HasSort a (s.acSort f))
+    (z : Equation s → Variable) (sort : ∀ r ∈ rules, (z r).sort = s.acSort f)
+    (fresh : ∀ r ∈ rules, ¬r.lhs.Occurs (z r)) :
+    Occurrence (ruleRoot rules) f a b ↔ ∃ r ∈ rules, head r.lhs = .ac f ∧ ∃ ext,
+      ∃ τ : Substitution s, EquivB a (τ.apply (pattern f (z r) r ext).lhs) ∧
+        EquivB (τ.apply (pattern f (z r) r ext).rhs) b := by
+  constructor
+  · rintro ⟨_,_,k,hd,⟨r,hr,σ,rfl,rfl⟩,l,right⟩
+    have hhead := (instance_head r (apps r hr) σ).symm.trans hd
+    refine ⟨r,hr,hhead,?_⟩
+    cases k with
+    | none => exact ⟨false,σ,l,right⟩
+    | some t =>
+      have shape : (Term.ac f (σ.apply r.lhs) t).checkSort (s.acSort f) = true :=
+        SortClash.check_equiv l _ ▸ Term.checkSort_complete typed
+      simp only [Term.checkSort,Bool.and_eq_true] at shape
+      obtain ⟨η,el,er⟩ := RootNarrowing.extend_assignment r.lhs r.rhs (scope r hr hhead) f
+        (z r) (fresh r hr) σ t (sort r hr ▸ Term.checkSort_sound _ _ shape.2)
+      exact ⟨true,η,el ▸ l,er ▸ right⟩
+  · rintro ⟨r,hr,hd,ext,θ,l,right⟩
+    have root : ruleRoot rules (θ.apply r.lhs) (θ.apply r.rhs) := ⟨r,hr,θ,rfl,rfl⟩
+    have hhead := (instance_head r (apps r hr) θ).trans hd
+    cases ext with
+    | false => exact ⟨_,_,none,hhead,root,l,right⟩
+    | true => exact ⟨_,_,some (θ.image (z r)),hhead,root,l,right⟩
+
 theorem extended_successors_iff [DecidableEq s.ACSym] (f : s.ACSym)
     (rules : List (Equation s)) (apps : ∀ r ∈ rules, Application r.lhs)
     (scope : ∀ r ∈ rules, head r.lhs = .ac f → ∀ v, r.rhs.Occurs v → r.lhs.Occurs v)
@@ -298,26 +330,13 @@ theorem extended_successors_iff [DecidableEq s.ACSym] (f : s.ACSym)
       cases ext with
       | false => exact scope r hr hd
       | true => exact fun v hv => hv.imp (scope r hr hd v) id) b
+  rw [occurrence_iff_instances f rules apps scope a b typed z sort fresh]
   constructor
-  · rintro ⟨_,_,k,hd,⟨r,hr,σ,rfl,rfl⟩,l,right⟩
-    have hhead := (instance_head r (apps r hr) σ).symm.trans hd
-    refine ⟨r,hr,hhead,?_⟩
-    cases k with
-    | none => exact ⟨false,(output r hr hhead false).mp ⟨σ,l.symm,right⟩⟩
-    | some t =>
-      have shape : (Term.ac f (σ.apply r.lhs) t).checkSort (s.acSort f) = true :=
-        SortClash.check_equiv l _ ▸ Term.checkSort_complete typed
-      simp only [Term.checkSort,Bool.and_eq_true] at shape
-      obtain ⟨η,el,er⟩ := RootNarrowing.extend_assignment r.lhs r.rhs (scope r hr hhead) f
-        (z r) (fresh r hr) σ t (sort r hr ▸ Term.checkSort_sound _ _ shape.2)
-      exact ⟨true,(output r hr hhead true).mp ⟨η,el ▸ l.symm,er ▸ right⟩⟩
+  · rintro ⟨r,hr,hd,ext,σ,l,right⟩
+    exact ⟨r,hr,hd,ext,(output r hr hd ext).mp ⟨σ,l.symm,right⟩⟩
   · rintro ⟨r,hr,hd,ext,hit⟩
     obtain ⟨θ,l,right⟩ := (output r hr hd ext).mpr hit
-    have root : ruleRoot rules (θ.apply r.lhs) (θ.apply r.rhs) := ⟨r,hr,θ,rfl,rfl⟩
-    have hhead := (instance_head r (apps r hr) θ).trans hd
-    cases ext with
-    | false => exact ⟨_,_,none,hhead,root,l.symm,right⟩
-    | true => exact ⟨_,_,some (θ.image (z r)),hhead,root,l.symm,right⟩
+    exact ⟨r,hr,hd,ext,θ,l.symm,right⟩
 
 /-- A finite completed search has one observable answer if every terminal
 agrees and the returned terminal has a replay. Cycles need no semantic

@@ -97,7 +97,7 @@ private theorem transfer {f : s.ACSym} {t u : Term s} (e : EquivB t u)
   obtain ⟨a, ha, he⟩ := List.mem_map.mp (perm.mem_iff.mpr (List.mem_map_of_mem hb))
   exact invariant a b (Quotient.exact he) (ht a ha)
 
-private theorem flatten_apply (f : s.ACSym) (t : Term s) (ρ : Substitution s) :
+theorem flatten_apply (f : s.ACSym) (t : Term s) (ρ : Substitution s) :
     flatten f (ρ.apply t) = (flatten f t).flatMap (fun u => flatten f (ρ.apply u)) := by
   induction t with
   | ac g a b ia ib =>
