@@ -235,7 +235,7 @@ fn public_backend_meets_generated_coverage_floor() {
                 .collect::<Vec<_>>()
                 .join(", ");
             println!("  smallest generated deferral: {op}({terms})");
-            if let Ok(path) = std::env::var("MAUDE_PATH") {
+            if let Some(path) = tamarin_test_support::configured_maude_path() {
                 let oracle =
                     MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude)
                         .unwrap();

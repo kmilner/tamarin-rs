@@ -48,7 +48,7 @@ fn main() {
         .map(|text| text.parse::<usize>().expect("query count"))
         .unwrap_or(1000);
     assert!((1..=4096).contains(&count), "query count must be 1..=4096");
-    let maude_path = std::env::var("MAUDE_PATH").unwrap_or_else(|_| "maude".into());
+    let maude_path = tamarin_test_support::maude_path().unwrap_or_else(|| "maude".into());
     println!(
         "workload,cache,queries,lean_us_per_query,maude_us_per_query,speedup,lean_completions"
     );

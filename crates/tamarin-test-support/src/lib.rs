@@ -65,6 +65,16 @@ fn maude_on_path() -> Option<String> {
         .map(|c| c.to_string_lossy().into_owned())
 }
 
+/// Explicit oracle opt-in for tests that also run in a native-only CI job.
+pub fn configured_maude_path() -> Option<String> {
+    let path = std::env::var("MAUDE_PATH").ok()?;
+    assert!(
+        std::path::Path::new(&path).exists(),
+        "MAUDE_PATH={path} does not exist; unset it or point it at a real maude"
+    );
+    Some(path)
+}
+
 /// The maude a test runs against: `$MAUDE_PATH` when set, else the first of
 /// [`MAUDE_CANDIDATES`], `$PATH`, [`MAUDE_PREFIXES`] that exists.
 ///
@@ -80,14 +90,7 @@ fn maude_on_path() -> Option<String> {
 /// path handed to a server config — stay usable in a run that has no maude
 /// and no maude-backed pins.
 pub fn maude_path() -> Option<String> {
-    if let Ok(p) = std::env::var("MAUDE_PATH") {
-        assert!(
-            std::path::Path::new(&p).exists(),
-            "MAUDE_PATH={p} does not exist; unset it to fall back to \
-             {MAUDE_CANDIDATES:?} / $PATH / {MAUDE_PREFIXES:?}, or point it \
-             at a real maude — skipping every maude-backed test would report \
-             green vacuously"
-        );
+    if let Some(p) = configured_maude_path() {
         return Some(p);
     }
     if let Some(c) = MAUDE_CANDIDATES

@@ -2076,7 +2076,7 @@ fn reduction_lifts_through_declared_free_constructors() {
     let h = native(sig.clone());
     test(&h);
     assert_eq!(h.stats().norm_count, 0);
-    if let Ok(path) = std::env::var("MAUDE_PATH") {
+    if let Some(path) = tamarin_test_support::configured_maude_path() {
         let oracle =
             MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
         test(&oracle);
