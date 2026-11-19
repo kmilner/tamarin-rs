@@ -15,11 +15,11 @@ def Input (width bits : UInt64) (sides : Array (Array UInt64)) :=
 generator order, search strategy and choice of witness ordinals. -/
 structure Correct (solver : Kernel) : Prop where
   valid : ∀ w bits sides raw, solver w bits sides = some raw → Input w bits sides ∧
-    AnswerProjection.Shape w raw ∧ ∀ a ∈ raw.toList, IndivisibleOperands.keeps (wordMask w.toNat bits) a = true
+    AnswerProjection.Shape w raw ∧ ∀ a ∈ raw.toList, IndivisibleOperands.keeps (IndivisibleOperands.wordMask w bits) a = true
   semantic : ∀ {sig : Signature} [DecidableEq sig.ACSym] (f : sig.ACSym) (w bits : UInt64)
     (rows : List (OperandBatch.Row w.toNat)) (used : ∀ i, i ∈ OperandBatch.used rows)
     (term : Fin w.toNat → Term sig) (typed : ∀ i, HasSort (term i) (sig.acSort f)),
-    IndivisibleOperands.SoundMask f term (wordMask w.toNat bits) →
+    IndivisibleOperands.SoundMask f term (IndivisibleOperands.wordMask w bits) →
     ∀ {selected : Problem sig}, OperandBatch.Represents f term rows selected →
     ∀ (pending original : Problem sig), original.Perm (selected ++ pending) →
     ∀ raw, solver w bits (OperandBatch.sides rows) = some raw →
@@ -27,7 +27,7 @@ structure Correct (solver : Kernel) : Prop where
   completes : ∀ w bits sides, Input w bits sides → ∀ rs,
     readRows w.toNat (OperandUnification.matrix w sides).toList = some rs →
     Within rs → (generate rs).length ≤ 64 →
-    (OutputWithin (generate rs) ∨ WorkBound (generate rs) (wordMask w.toNat bits) ≤ 131072) →
+    (OutputWithin (generate rs) ∨ WorkBound (generate rs) (IndivisibleOperands.wordMask w bits) ≤ 131072) →
     (solver w bits sides).isSome
 
 private theorem emitted {w bits sides raw} (result : run w bits sides = some raw) :

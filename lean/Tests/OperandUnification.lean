@@ -1,3 +1,4 @@
+import Tamarin.MaskedOperandContract
 import TamarinRuntime
 
 namespace Tamarin.OperandUnificationTests
@@ -15,6 +16,19 @@ private def fourByFour : Array (Array UInt64) := #[#[0,1,2,3], #[4,5,6,7]]
 #guard (maskedOperandUnify 8 255 fourByFour).map Array.size == some 24
 #guard maskedOperandUnify 8 256 fourByFour == none
 #guard maskedOperandUnify 2 1 #[#[0,0], #[1,1,1]] == some #[]
+
+-- Even a replacement with a different proof cannot reuse the unmasked
+-- answer here. Three occurrences of one witness violate the singleton constraint.
+private def scaledSides : Array (Array UInt64) := #[#[0,0],#[1,1,1]]
+private def scaledArm : Arm := #[#[0,0,0],#[0,0]]
+#guard operandUnify 2 scaledSides == some #[scaledArm]
+example (solver : MaskedOperands.Kernel) (ran : solver 2 1 scaledSides = some #[scaledArm]) :
+    ¬ MaskedOperands.Correct solver := by
+  intro ok
+  have kept := (ok.valid 2 1 scaledSides _ ran).2.2 scaledArm (by simp)
+  have excluded : IndivisibleOperands.keeps (IndivisibleOperands.wordMask 2 1) scaledArm = false := by decide
+  rw [excluded] at kept
+  contradiction
 
 -- Interpret the tagged residual equation for each operand in the positive
 -- integers under addition. All witnesses in a realizable arm have size at most
