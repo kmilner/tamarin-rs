@@ -1,4 +1,5 @@
 import Tamarin.ConstructorReduction
+import Tamarin.DHPeer
 import Tamarin.MatchingFree
 import Tamarin.SortCheck
 import Tamarin.VariablePermutation
@@ -216,11 +217,46 @@ def markerCoverage : IO Unit := do
   -- explain substitutions that introduce new marker occurrences at this head.
   for fixedSlot in [hash x,plus red red] do
     emit .markers "variants" "identity" [fixedSlot,x]
-  for active in [plus x red, plus x x, plus x y, plus (plus red x) blue] do
-    emit .markers "variants" "probe" [active,x]
+  for (active,count) in [(plus x red,3), (plus x x,7), (plus x y,13), (plus (plus red x) blue,7)] do
+    emit .markers "variants" ("rows=" ++ toString count) [active,x]
+
+/-- Serialize the same DH expression language used by the rule proofs. Leaves
+refer to ordinary sorted terms, so repeated occurrences share caller variables. -/
+def dhCode {α} (leaf : α → String) : DHPeer.Expr α → String
+  | .var a => leaf a
+  | .pow a b => dhCode leaf a ++ "." ++ dhCode leaf b ++ ".pow"
+  | .mul a b => dhCode leaf a ++ "." ++ dhCode leaf b ++ ".+"
+  | .inv a => dhCode leaf a ++ ".inv"
+  | .one => "one"
+  | .neutral => "neutral"
+
+def dhCoverage : IO Unit := do
+  let emitDH (op expect : String) (ts : List (DHPeer.Expr Expr)) :=
+    IO.println (String.intercalate "\t" (["dh",op,expect] ++ ts.map (dhCode code)))
+  let g : DHPeer.Expr Expr := .var (.atom false)
+  let m : DHPeer.Expr Expr := .var x
+  let n : DHPeer.Expr Expr := .var y
+  let r : DHPeer.Expr Expr := .var (.var ⟨0,.fresh⟩)
+  for rule in [DHPeer.Rule.expOne,.tower,.neutral,.inverse,.inverseRest,.inside,.insideRest] do
+    let slot := fun (i : Fin 3) => code (if i.val = 0 then x else if i.val = 1 then y else .var ⟨0,.fresh⟩)
+    IO.println (String.intercalate "\t" ["dh","reduce","exact",
+      dhCode slot rule.equation.1, dhCode slot rule.equation.2])
+  let tower := DHPeer.Expr.pow (.pow g m) r
+  for (t,count) in [(DHPeer.Expr.pow g m,2), (.pow m r,7), (.inv r,1), (.inv m,4), (.mul m r,6),
+      (.mul m m,4), (.pow (.pow g m) (.inv r),6), (.mul m (.inv r),6), (.inv (.mul m r),8)] do
+    emitDH "variants" ("rows=" ++ toString count) [t,m]
+  emitDH "variants" "rows=12" [tower,.pow g n]
+  emitDH "variants" "rows=14" [tower,.pow (.pow g m) (.var (.atom true))]
+  for t in [DHPeer.Expr.mul m n, .pow m n, .pow (.pow g m) n, .pow g (.mul m n), .pow (.pow n m) r] do
+    emitDH "variants" "probe" [t,m]
+  for t in [DHPeer.Expr.pow g r,.inv r,.mul r r] do
+    for op in ["unify","match"] do
+      emitDH op "yes" [m,t,m,t]
+      emitDH op "no" [m,t,m,.neutral]
 
 def generate : IO Unit := do
   markerCoverage
+  dhCoverage
   for th in [Theory.ac,.xor] do
     let terms := layers th 5
     for layer in terms do

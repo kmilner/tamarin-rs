@@ -7,14 +7,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 use tamarin_term::algebra_backend::AlgebraBackend;
-use tamarin_term::builtin::{fresh_var, fst, hash, msg_var, pair, snd, zero_const};
+use tamarin_term::builtin::{
+    dh_neutral, exp, fresh_var, fst, hash, inv, msg_var, one_const, pair, snd, zero_const,
+};
 use tamarin_term::function_symbols::{
     AcFctSym, AcSym, Constructability, NdcState, NoEqSym, Privacy,
 };
 use tamarin_term::lterm::{frees, pub_term, LNTerm, LVar, Name};
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
 use tamarin_term::maude_sig::{
-    hash_maude_sig, mset_maude_sig, pair_maude_sig, xor_maude_sig, MaudeSig,
+    dh_maude_sig, hash_maude_sig, mset_maude_sig, pair_maude_sig, xor_maude_sig, MaudeSig,
 };
 use tamarin_term::rewriting::{Equal, RRule};
 use tamarin_term::subst::{apply_vterm, Subst};
@@ -42,6 +44,7 @@ fn generated_requests() -> String {
     run(&[
         "build",
         "Tamarin.ConstructorReduction",
+        "Tamarin.DHPeer",
         "Tamarin.MatchingFree",
         "Tamarin.SortCheck",
         "Tamarin.VariablePermutation",
@@ -91,6 +94,13 @@ fn term(text: &str, symbol: AcSym) -> LNTerm {
             "R" => f_app_no_eq(marker(b"a"), vec![]),
             "B" => f_app_no_eq(marker(b"b"), vec![]),
             "z" => zero_const(),
+            "one" => one_const(),
+            "neutral" => dh_neutral(),
+            "inv" => inv(stack.pop().unwrap()),
+            "pow" => {
+                let exponent = stack.pop().unwrap();
+                exp(stack.pop().unwrap(), exponent)
+            }
             "h" => hash(stack.pop().unwrap()),
             "l" => fst(stack.pop().unwrap()),
             "r" => snd(stack.pop().unwrap()),
@@ -166,6 +176,9 @@ fn exercise(h: &MaudeHandle, op: &str, expected: &str, ts: &[LNTerm]) -> Result<
                         .any(|a| covers_identity(&q, &Subst::from_list(a))),
                     "{q:?}"
                 ),
+                count if count.starts_with("rows=") => {
+                    assert_eq!(arms.len(), count[5..].parse::<usize>().unwrap(), "{q}");
+                }
                 "complete" | "probe" => {}
                 _ => panic!("invalid variant expectation {expected}"),
             }
@@ -223,14 +236,24 @@ struct Coverage<'a> {
 fn public_backend_meets_generated_coverage_floor() {
     let cases = generated_requests();
     let mut report = BTreeMap::new();
+    let dh = dh_maude_sig().merge(hash_maude_sig());
     let plain = mset_maude_sig().merge(hash_maude_sig());
     let cancellation = xor_maude_sig().merge(hash_maude_sig());
     let mixed = cancellation.clone().merge(pair_maude_sig());
     let (markers, merge) = marker_presentation(&cases);
-    let marker_oracle = tamarin_test_support::configured_maude_path().map(|path| {
-        MaudeHandle::start_with_backend(&path, markers.clone(), AlgebraBackend::Maude).unwrap()
+    let oracles = tamarin_test_support::configured_maude_path().map(|path| {
+        [("markers", &markers), ("dh", &dh)]
+            .map(|(name, sig)| {
+                let handle =
+                    MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude)
+                        .unwrap();
+                (name, handle)
+            })
+            .into_iter()
+            .collect::<BTreeMap<_, _>>()
     });
     let presentation = |name: &str| match name {
+        "dh" => (&dh, AcSym::Mult),
         "ac" => (&plain, AcSym::Union),
         "xor" => (&cancellation, AcSym::Xor),
         "xor-pair" => (&mixed, AcSym::Xor),
@@ -247,8 +270,8 @@ fn public_backend_meets_generated_coverage_floor() {
         }
         let (sig, symbol) = presentation(theory);
         let ts: Vec<_> = fields.map(|e| term(e, symbol)).collect();
-        if (theory, op, expected) == ("markers", "reduce", "exact")
-            && let Some(oracle) = &marker_oracle
+        if (op, expected) == ("reduce", "exact")
+            && let Some(oracle) = oracles.as_ref().and_then(|handles| handles.get(theory))
         {
             exercise(oracle, op, expected, &ts).expect(line);
         }
@@ -279,7 +302,7 @@ fn public_backend_meets_generated_coverage_floor() {
             Err(err) => panic!("{line}: {err}"),
         }
     }
-    assert_eq!(report.len(), 12);
+    assert_eq!(report.len(), 16);
     for ((theory, op), c) in report {
         assert!(c.required > 0, "missing guaranteed {theory} {op} cases");
         println!(

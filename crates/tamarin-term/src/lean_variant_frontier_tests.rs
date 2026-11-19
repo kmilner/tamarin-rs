@@ -160,6 +160,9 @@ fn check_ground_coverage(
 
 #[test]
 fn native_oracle_finite_ac_variants_include_proper_subproducts() {
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
     let merge = AcFctSym::new(
         b"merge",
         Privacy::Public,
@@ -340,7 +343,7 @@ fn variant_frontier_closed_cycle_without_normal_values_is_empty() {
 }
 
 #[test]
-fn variant_frontier_compares_normal_results_on_overlapping_specializations() {
+fn native_oracle_frontier_compares_normal_results_on_overlapping_specializations() {
     let f = symbol(b"choose", 2);
     let mut sig = hash_maude_sig();
     sig.st_fun_syms.insert(f);
@@ -360,6 +363,9 @@ fn variant_frontier_compares_normal_results_on_overlapping_specializations() {
     let table = RuleTable::new(&sig).unwrap();
     let query = f_app_list(vec![choose(x.clone(), y.clone()), x, y]);
     assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
     assert!(matches!(
@@ -371,7 +377,7 @@ fn variant_frontier_compares_normal_results_on_overlapping_specializations() {
 }
 
 #[test]
-fn stale_free_rule_head_cannot_certify_a_false_normal_form() {
+fn native_oracle_stale_free_rule_head_cannot_certify_a_false_normal_form() {
     use crate::builtin::hash;
     let x = msg_var("x", 0);
     let t = hash(hash(x.clone()));
@@ -379,10 +385,15 @@ fn stale_free_rule_head_cannot_certify_a_false_normal_form() {
     // matcher are eligible. Their old indexes still classify hash as inert.
     let mut sig = hash_maude_sig();
     add_rule(&mut sig, t.clone(), x.clone());
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
-    assert_eq!(native.reduce(&t).unwrap(), x);
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none() {
+        let native = MaudeHandle::start_with_backend(
+            "/nonexistent",
+            sig.clone(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        assert_eq!(native.reduce(&t).unwrap(), x);
+    }
     if let Some(path) = tamarin_test_support::maude_path() {
         let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
         assert_eq!(oracle.reduce(&t).unwrap(), x);

@@ -168,8 +168,8 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
-| Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. It returns the unique normal value of the completed search. Dedicated paths handle positional destructors, cancellation, DH power towers and signed exponent products. | Extend the same rule inventory to variant narrowing, and verify that Rust builds the complete reduction graph described by Lean. |
-| Variants | Native-only joins positional destructors, flat XORs of Fresh variables and received-base DH powers on shared inputs. Positional destructors, inert constructors and declared unit/cancellation heads can nest in any order, including a destructor returning a whole AC product. Packed observations can include unique closed reductions and changing children under inert free constructors or guarded binary AC parents. | Extend narrowing to arbitrary active equations, DH to unrestricted exponents, and ordering compatibility to joined answers in hybrid mode. |
+| Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Dedicated paths handle positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
+| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. Dedicated paths also cover cancellation, positional destructors and several DH power families. | Close the remaining signed DH product and exponent cases. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
 
 Run the generated coverage test from the repository root.
 
@@ -197,11 +197,20 @@ presentation requires all 16 staged expressions to reduce and all 16 joint varia
 Two larger mixed variants have 71 and 72 rows. A separate user-defined AC presentation
 has 345 mandatory exact reductions, each also checked under a hash. The expected answer
 comes from the multiplicities of two declared constants, public names and rigid variables.
-Four open variant probes in this presentation still defer. The smallest observes
-`merge(m, a)` alongside `m`, where `a` is a declared marker and `merge(a,a) = a`.
-A normalized substitution for `m` can introduce another `a` into the product. The report
-prints the smallest generated deferral by syntax size for each theory and operation.
-Setting `MAUDE_PATH` also replays those witnesses against an independent Maude handle.
+All four open marker variant families are mandatory. They have 3, 7, 13 and 7 distinct
+rows. For example, a normalized input `m = merge(a,c)` makes `merge(m,a)` reduce to
+`merge(a,c)`. With only the bare marker equations Maude 3.5.1 omits this variant.
+Adding the equivalent proper-subproduct equations makes Maude agree with the independent
+multiplicity model and the native rows. This difference applies to experimental native-only
+answers. [Variant comparisons](../crates/tamarin-term/src/lean_variant_frontier_tests.rs)
+
+The DH generator uses the expression language of the power proofs and Rust’s full builtin
+DH signature. It exercises all four public operations, including both sides of seven DH
+equations. Joint observations of two distinct stable factors on the same open exponent
+give 14 variants. An observation with an independent exponent gives 12. Each count is
+mandatory, and separate Maude comparisons check all input images and reduced values.
+The report prints the smallest deferred request per operation and compares it with Maude
+when `MAUDE_PATH` is set.
 The report counts syntactic requests in this bounded grammar. Protocol regressions
 separately exercise ordering and proof search.
 [Lean generator and expectations](Tests/NativeCoverage.lean) ·
@@ -393,14 +402,21 @@ For admitted ordinary equations, the native reducer explores root, AC subproduct
 and child rewrites before selecting a normal value. For example, a parent may fire before
 a child and reach a different normal form. The reducer defers such a request, as well as a
 cycle or an unfinished search. Lean proves exact one-step coverage and unique normal output
-for a completed graph, including steps under free and commutative heads. Rust owns
-graph construction and traversal. [Whole-term reduction](Tamarin/ContextualReduction.lean) · [AC reduction refinement](Tamarin/ACSubproductReduction.lean)
+for a completed graph, including steps under free and commutative heads. Rust builds the
+successor rows. Lean checks the integer edges and proves the selected terminal is the unique
+normal value when those rows describe the live term steps. [Graph check](Tamarin/ReductionGraph.lean) ·
+[Whole-term reduction](Tamarin/ContextualReduction.lean) · [AC reduction](Tamarin/ACSubproductReduction.lean)
 
-For variant generation in other AC theories, the narrowing specification shows how complete ordinary
-unifiers lift rewrites on proper subproducts and states sufficient conditions for a
-finite search to cover all reachable normal forms. The lifting proof preserves the images
-of variables in untouched siblings and other caller observations. Reserving their names suffices
-without adding those terms to the unifier input. An executable general variant search remains open. [AC narrowing](Tamarin/RootNarrowing.lean) · [Completeness conditions](Tamarin/NarrowingFrontier.lean)
+The native-only variant search opens each live rule apart from the caller. At an AC head it
+also considers a fresh operand for the entire remainder. A rule that reproduces both
+extended sides with one sorted substitution already covers that branch. A single substitution
+rebuilds the changed term and all caller images. The search can fold a state only when one
+earlier row covers all those terms together. It checks whether two terminal rows, including
+fresh copies of the same row, can give different normal values at the same input. Missing
+rule buckets, incomplete unification and exhausted budgets defer the query. Lean proves these
+conditions suffice for exact coverage and unique values. Rust still enumerates and checks the
+frontier. [Position coverage](Tamarin/NarrowingPositions.lean) ·
+[Symbolic successors](Tamarin/SymbolicNarrowing.lean) · [Closed frontier and overlap proofs](Tamarin/VariantFrontier.lean)
 
 Broader deployment still requires checking the Rust representation against its Lean model
 and carrying native-only failure handling through interactive proof publication. The live
