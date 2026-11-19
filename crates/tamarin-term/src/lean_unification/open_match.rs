@@ -240,12 +240,15 @@ impl Collectors {
         if self.keys.len() < self.occurrences.len() && self.refuted(&rhs)? {
             return Ok(true);
         }
-        let Some(left) = partition_work(self.occurrences.len(), self.keys.len(), &rhs)
-            .and_then(|work| search.budget.checked_sub(work))
-        else {
+        let Some(work) = partition_work(
+            self.occurrences.len(),
+            self.keys.len(),
+            &rhs,
+            *search.budget,
+        ) else {
             return Ok(false);
         };
-        *search.budget = left;
+        *search.budget -= work;
         let packet = MatchRows::new(flat_rows(self.keys.len(), &self.occurrences, &[], &rhs))?;
         let mut row = vec![0; rhs.len()];
         'branches: for i in 0..packet.count() {
@@ -388,11 +391,12 @@ impl<'a> Search<'a, '_> {
             subject,
         } = problem;
         if rigid.is_empty() {
-            match collectors.occurrences.len() {
-                0 => return Ok(self.resume(pending, arm)),
-                1 => return collectors.extend(&subject, arm, pending, self),
-                _ => {}
+            if collectors.occurrences.is_empty() {
+                return Ok(self.resume(pending, arm));
             }
+            // Selecting zero rigid positions leaves the entire subject for
+            // the collectors, at every width.
+            return collectors.extend(&subject, arm, pending, self);
         }
         let collectors = Rc::new(collectors);
         // SAFETY: the shim returns null on deferral and otherwise transfers
@@ -400,13 +404,6 @@ impl<'a> Search<'a, '_> {
         let raw =
             unsafe { tamarin_lean_open_match_select(rigid.len() as u64, subject.len() as u64) };
         if raw.is_null() {
-            // With no structural factors left, the subject is the exact
-            // remainder. A certified refutation can finish this branch even
-            // when the selector declines. Every live partition still defers.
-            if rigid.is_empty() && collectors.keys.len() < collectors.occurrences.len() {
-                let (_, rhs) = Collectors::encode_remainder(&subject)?;
-                return collectors.refuted(&rhs);
-            }
             return Ok(false);
         }
         let selections = MatchRows::new(raw)?;

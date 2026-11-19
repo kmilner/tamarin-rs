@@ -36,11 +36,11 @@ def weights : Nat → List Nat → List Nat
 
 /-- Each image uses its length in subject positions on every occurrence.
 Enumerate only assignments whose total length fills the remaining subject. -/
-def fitting (images : List (List UInt64)) : List Nat → Nat → List (List (List UInt64))
+def fitting (images : List (Nat × List UInt64)) : List Nat → Nat → List (List (List UInt64))
   | [], room => if room = 0 then [[]] else []
   | w :: ws, room => images.flatMap fun row =>
-    let cost := w * row.length
-    if cost ≤ room then (fitting images ws (room - cost)).map (row :: ·) else []
+    let cost := w * row.1
+    if cost ≤ room then (fitting images ws (room - cost)).map (row.2 :: ·) else []
 
 /-- Use the earliest occurrence of the first atom. A subsequence beginning
 with that atom can always use the new head, even for interleaved duplicates. -/
@@ -52,7 +52,8 @@ def images : List UInt64 → List (List UInt64)
 
 def partitionMatch (n : Nat) (occ : List Nat) (tail rhs : List UInt64) : List (List (List UInt64)) :=
   let domain := (images rhs).filter (fun row => !row.isEmpty)
-  (fitting domain (weights n occ) (rhs.length - tail.length)).filter fun rows =>
+  let sized := domain.map fun row => (row.length, row)
+  (fitting sized (weights n occ) (rhs.length - tail.length)).filter fun rows =>
     decide ((FlatMatchSearch.expand rows occ ++ tail).Perm rhs)
 
 /-- AC has no unit. When the subject just fits, each observed image is a

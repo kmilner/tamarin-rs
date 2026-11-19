@@ -52,7 +52,8 @@ private theorem expand_cons (row : List UInt64) (rows : List (List UInt64)) (occ
 
 private theorem mem_fitting (images : List (List UInt64)) (n : Nat) (occ : List Nat)
     (room : Nat) (rows : List (List UInt64)) :
-    rows ∈ RuntimeCandidate.fitting images (RuntimeCandidate.weights n occ) room ↔
+    rows ∈ RuntimeCandidate.fitting (images.map fun r => (r.length, r))
+        (RuntimeCandidate.weights n occ) room ↔
       rows.length = n ∧ (∀ r ∈ rows, r ∈ images) ∧ (FlatMatchSearch.expand rows occ).length = room := by
   induction n generalizing occ room rows with
   | zero =>
@@ -62,12 +63,12 @@ private theorem mem_fitting (images : List (List UInt64)) (n : Nat) (occ : List 
   | succ n ih =>
     cases rows with
     | nil =>
-      simp only [RuntimeCandidate.weights, RuntimeCandidate.fitting, List.mem_flatMap,
+      simp only [RuntimeCandidate.weights, RuntimeCandidate.fitting, List.flatMap_map, List.mem_flatMap,
         List.length_nil, Nat.zero_ne_add_one, false_and, iff_false]
       rintro ⟨r, _, h⟩
       split at h <;> simp at h
     | cons r rs =>
-      simp only [RuntimeCandidate.weights, RuntimeCandidate.fitting, List.mem_flatMap,
+      simp only [RuntimeCandidate.weights, RuntimeCandidate.fitting, List.flatMap_map, List.mem_flatMap,
         List.length_cons, Nat.succ.injEq, List.forall_mem_cons, expand_cons]
       constructor
       · rintro ⟨s, hs, branch⟩
@@ -103,6 +104,31 @@ private theorem mem_images (rhs row : List UInt64) :
             exact Or.inr ⟨bs, (List.tail_sublist _).trans sub, by rw [eq]⟩
         · exact Or.inl ⟨sub, h⟩
       | cons_cons _ sub => exact Or.inr ⟨_, sub, rfl⟩
+
+def imageHeads (a : UInt64) (rows : List (List UInt64)) : Nat :=
+  rows.countP fun r => r.head? == some a
+
+private theorem prefix_counts (a b : UInt64) (rows : List (List UInt64)) :
+    let kept := rows.filter fun r => r.head? != some a
+    kept.length + imageHeads a rows = rows.length ∧
+    imageHeads b (kept ++ rows.map (a :: ·)) = if a = b then rows.length else imageHeads b rows := by
+  induction rows with
+  | nil => simp [imageHeads]
+  | cons r rs ih =>
+    by_cases h : a = b <;> by_cases ha : r.head? = some a <;> by_cases hb : r.head? = some b <;>
+      simp_all [imageHeads, List.countP_append] <;> omega
+
+/-- The Rust work estimate can count the exact image domain during a right-to-left scan.
+Every step visits the previous domain and keeps one bucket per leading factor. -/
+theorem image_counts_cons (a b : UInt64) (rhs : List UInt64) :
+    let old := RuntimeCandidate.images rhs
+    let newRows := RuntimeCandidate.images (a :: rhs)
+    newRows.length = old.length + (old.length - imageHeads a old) ∧
+    imageHeads b newRows = if a = b then old.length else imageHeads b old := by
+  obtain ⟨length, heads⟩ := prefix_counts a b (RuntimeCandidate.images rhs)
+  refine ⟨?_, heads⟩
+  simp only [RuntimeCandidate.images, List.length_append, List.length_map]
+  omega
 
 private theorem mem_partition (n : Nat) (occ : List Nat) (tail rhs : List UInt64)
     (rows : List (List UInt64)) :

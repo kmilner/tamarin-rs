@@ -817,18 +817,62 @@ pub(super) fn uses_sorted_partition(eq: &Equal<LNTerm>) -> bool {
     sorts().take(2).count() == 2 && sorts().any(|s| s != ac_sort(symbol))
 }
 
-fn partition_work(pattern: usize, variables: usize, rhs: &[u64]) -> Option<usize> {
+const PARTITION_BUDGET: usize = 100_000;
+
+fn partition_work(pattern: usize, variables: usize, rhs: &[u64], budget: usize) -> Option<usize> {
     let exponent = variables.try_into().unwrap_or(u32::MAX);
-    match pattern.cmp(&rhs.len()) {
-        std::cmp::Ordering::Greater => Some(0),
+    let work = match pattern.cmp(&rhs.len()) {
+        std::cmp::Ordering::Greater => 0,
         std::cmp::Ordering::Equal => {
             let distinct = rhs.iter().collect::<rustc_hash::FxHashSet<_>>().len();
-            distinct.checked_pow(exponent)
+            // The singleton shortcut also checks that each slot occurs.
+            distinct
+                .checked_pow(exponent)?
+                .max(pattern.checked_mul(variables)?)
         }
-        std::cmp::Ordering::Less => 1_usize
-            .checked_shl(rhs.len().try_into().unwrap_or(u32::MAX))
-            .and_then(|n| (n - 1).checked_pow(exponent)),
+        std::cmp::Ordering::Less => {
+            // Lean builds the distinct ordered subsequences of each suffix.
+            // Prepending an atom creates one new head choice for every old
+            // row, replacing the rows that already started with this atom.
+            let mut by_head = rustc_hash::FxHashMap::default();
+            let mut rows = 1usize; // includes the empty row
+            let mut visits = 0usize;
+            for atom in rhs.iter().rev() {
+                visits = visits.checked_add(rows)?;
+                if visits > budget {
+                    return None;
+                }
+                let old_heads = by_head.insert(atom, rows).unwrap_or(0);
+                rows = rows.checked_add(rows - old_heads)?;
+            }
+            // One work allowance bounds each phase. For distinct factors the
+            // assignment bound already covers all visited suffix rows.
+            visits.max((rows - 1).checked_pow(exponent)?)
+        }
+    };
+    (work <= budget).then_some(work)
+}
+
+/// Hybrid's ordered callers can observe Maude's first arm. Keep their former
+/// dispatch boundary when the larger distinct-image search finds several arms.
+pub(super) fn needs_wider_partition(eq: &Equal<LNTerm>) -> bool {
+    let Some((_, pattern, subject)) = ac_children(eq) else {
+        return false;
+    };
+    if pattern.len() >= subject.len() {
+        return false;
     }
+    let variables: rustc_hash::FxHashSet<_> = pattern
+        .iter()
+        .filter_map(|term| match term {
+            Term::Lit(Lit::Var(v)) => Some(v),
+            _ => None,
+        })
+        .collect();
+    1usize
+        .checked_shl(subject.len().try_into().unwrap_or(u32::MAX))
+        .and_then(|n| (n - 1).checked_pow(variables.len().try_into().unwrap_or(u32::MAX)))
+        .is_none_or(|n| n > PARTITION_BUDGET)
 }
 
 fn flat_rows(variables: usize, occ: &[u64], tail: &[u64], rhs: &[u64]) -> *mut std::ffi::c_void {
@@ -883,8 +927,7 @@ fn match_flat(symbol: AcSym, pattern: &[LNTerm], subject: &[LNTerm]) -> Result<O
     // The candidate can therefore reject a shorter subject immediately, and
     // needs only singleton rows on an exact fit. In all cases Lean decides
     // membership. This estimate controls admission to the in-process search.
-    let work = partition_work(pattern.len(), variables.len(), &rhs);
-    if work.is_none_or(|n| n > 100_000) {
+    if partition_work(pattern.len(), variables.len(), &rhs, PARTITION_BUDGET).is_none() {
         return Ok(Outcome::Unsupported);
     }
     initialize()?;
@@ -1161,6 +1204,34 @@ mod tests {
             lhs: f_app_ac(AcSym::Union, lhs),
             rhs: f_app_ac(AcSym::Union, rhs),
         }
+    }
+
+    #[test]
+    fn partition_budget_counts_ordered_images_and_every_suffix() {
+        use std::collections::BTreeSet;
+        // Include interleaved equal atoms and compare with independent
+        // positional subset enumeration. The empty choice costs one visit
+        // during image construction and is removed before assignment.
+        for word in 0..64 {
+            let rhs: Vec<_> = (0..6).map(|i| (word >> i) & 1).collect();
+            let images = |xs: &[u64]| -> usize {
+                (0..1usize << xs.len())
+                    .map(|mask| {
+                        xs.iter()
+                            .enumerate()
+                            .filter_map(|(i, &a)| (mask & (1 << i) != 0).then_some(a))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<BTreeSet<_>>()
+                    .len()
+            };
+            let work = (images(&rhs) - 1)
+                .pow(2)
+                .max((1..=rhs.len()).map(|i| images(&rhs[i..])).sum());
+            assert_eq!(partition_work(2, 2, &rhs, work), Some(work));
+            assert_eq!(partition_work(2, 2, &rhs, work - 1), None);
+        }
+        assert_eq!(partition_work(2, 1, &[0; 1024], PARTITION_BUDGET), None);
     }
 
     #[test]

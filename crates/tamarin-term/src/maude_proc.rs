@@ -1827,7 +1827,10 @@ impl MaudeHandle {
                         || !fixed.is_empty()
                         || leaves
                             .iter()
-                            .any(crate::lean_unification::uses_sorted_partition)) =>
+                            .any(crate::lean_unification::uses_sorted_partition)
+                        || leaves
+                            .iter()
+                            .any(crate::lean_unification::needs_wider_partition)) =>
             {
                 None
             }

@@ -94,6 +94,11 @@ inductive Search [DecidableEq sig.ACSym] (select : OpenMatchSelect.Kernel)
         Search select flat orient cancel enc r (l.subject i) (child r (l.subject i))) :
       Search select flat orient cancel enc p t (l.read flat out child)
 
+  | collectors {f p t} (l : Layout (sig := sig) f p t) (noRigid : l.rigid = []) :
+      Search select flat orient cancel enc p t (fun σ =>
+        let indices := List.range l.n.toNat
+        OpenMatchAdapter.Remainder flat f l.vars l.occ (indices.map l.subject) (l.pack indices) σ)
+
   | cardinality (f : sig.ACSym) (p t : Term sig) (ps ts : List (Term sig))
       (pl : ps.Perm (ACRepresentation.flatten f p)) (sl : ts.Perm (ACRepresentation.flatten f t))
       (target : ∀ a ∈ ts, CompoundOffset.Fixed f a)
@@ -141,6 +146,24 @@ theorem search_iff {select flat orient cancel} (sel : OpenMatchSelect.Correct se
       (fun i hi j hj => (l.canonical i hi).unique l.antisymmetric (l.canonical j hj)) out ran [] σ (fun r s => child r s σ) ih
     simpa only [Layout.read, Matches,List.forall_mem_cons,List.not_mem_nil,false_implies,
       implies_true,and_true,true_and] using complete.symm
+
+  | collectors l empty =>
+    have pl := l.patternLayout
+    rw [empty, List.nil_append] at pl
+    rw [OpenMatch.layout_iff _ σ _ _ _ _ pl l.subjectLayout]
+    apply Iff.symm
+    apply OpenMatchAdapter.remainder_iff part _ _ _ l.used
+    · intro t ht
+      obtain ⟨i, hi, rfl⟩ := List.mem_map.mp ht
+      exact (l.canonical i (List.mem_range.mp hi)).ground
+    · intro t ht
+      obtain ⟨i, hi, rfl⟩ := List.mem_map.mp ht
+      exact CanonicalTree.alien_factor _ (l.subjectHead i (List.mem_range.mp hi))
+    · intro t ht u hu
+      obtain ⟨i, hi, rfl⟩ := List.mem_map.mp ht
+      obtain ⟨j, hj, rfl⟩ := List.mem_map.mp hu
+      exact (l.canonical i (List.mem_range.mp hi)).unique l.antisymmetric
+        (l.canonical j (List.mem_range.mp hj))
 
   | cardinality f p t ps ts pl sl target clash =>
     refine ⟨False.elim, fun e => ?_⟩

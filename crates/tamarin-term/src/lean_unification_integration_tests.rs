@@ -1167,6 +1167,105 @@ fn mixed_literal_and_compound_leaves_under_free_heads_use_lean_in_hybrid() {
 }
 
 #[test]
+fn native_oracle_repeated_subjects_match_at_their_distinct_image_cost() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::function_symbols::nat_one_sym;
+    use crate::maude_sig::nat_maude_sig;
+    use crate::term::f_app_no_eq;
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = nat_maude_sig().merge(mset_maude_sig());
+    let hybrid =
+        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    for (symbol, sort, constant) in [
+        (
+            AcSym::NatPlus,
+            LSort::Nat,
+            f_app_no_eq(nat_one_sym(), vec![]),
+        ),
+        (AcSym::Union, LSort::Msg, pub_term("a")),
+    ] {
+        let x = LVar::new("x", sort, 0);
+        let y = LVar::new("y", sort, 1);
+        let vars = [(x.name, x.idx), (y.name, y.idx)].into_iter().collect();
+        let sum = |terms| f_app_ac(symbol, terms);
+        for atom in [constant, Term::Lit(Lit::Var(LVar::new("rigid", sort, 2)))] {
+            for (p, q, width) in [(2, 3, 9), (1, 1, 9), (2, 0, 65), (2, 0, 66), (32, 33, 65)] {
+                let pattern = sum([
+                    vec![Term::Lit(Lit::Var(x)); p],
+                    vec![Term::Lit(Lit::Var(y)); q],
+                ]
+                .concat());
+                let subject = sum(vec![atom.clone(); width]);
+                let expected = canonical_ground_answers(
+                    (1..=width / p)
+                        .filter_map(|i| {
+                            let rest = width - p * i;
+                            let mut arm = vec![(x, sum(vec![atom.clone(); i]))];
+                            if q > 0 {
+                                if rest == 0 || rest % q != 0 {
+                                    return None;
+                                }
+                                arm.push((y, sum(vec![atom.clone(); rest / q])));
+                            } else if rest != 0 {
+                                return None;
+                            }
+                            Some(arm)
+                        })
+                        .collect(),
+                );
+                let plain = [Equal {
+                    lhs: subject.clone(),
+                    rhs: pattern.clone(),
+                }];
+                let restricted = [Equal {
+                    lhs: pattern,
+                    rhs: subject,
+                }];
+                for h in [&native, &oracle] {
+                    assert_eq!(
+                        canonical_ground_answers(h.match_eqs(&plain).unwrap()),
+                        expected
+                    );
+                    assert_eq!(
+                        canonical_ground_answers(
+                            h.match_eqs_skolemize_both(&restricted, &vars).unwrap()
+                        ),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(native.stats().match_count, 0);
+    assert!(oracle.stats().match_count > 0);
+
+    let ambiguous = [Equal {
+        lhs: f_app_ac(AcSym::Union, vec![pub_term("a"); 9]),
+        rhs: f_app_ac(
+            AcSym::Union,
+            vec![
+                crate::builtin::msg_var("x", 0),
+                crate::builtin::msg_var("y", 0),
+            ],
+        ),
+    }];
+    assert!(hybrid.has_match_eqs(&ambiguous).unwrap());
+    assert_eq!(hybrid.stats().match_count, 0);
+    assert_eq!(
+        hybrid.match_eqs(&ambiguous).unwrap(),
+        oracle.match_eqs(&ambiguous).unwrap()
+    );
+    assert_eq!(hybrid.stats().match_count, 1);
+}
+
+#[test]
 fn multi_variable_flat_matching_matches_maude_exhaustively() {
     use crate::algebra_backend::AlgebraBackend;
     let Some(path) = require_maude_path() else {
