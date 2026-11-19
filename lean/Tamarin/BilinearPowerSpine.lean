@@ -1,4 +1,4 @@
-import Tamarin.BilinearScalars
+import Tamarin.BilinearPointSpine
 
 /-! A power spine can race with extraction of either scalar from its
 bilinear-map base. Track the plain underlying pairing and the total signed
@@ -8,30 +8,17 @@ open DHPeer ConstructorVariants Cancellation DHTower
 variable {sig : Signature} {s : Symbols sig} {β : Operators sig} {T : Table s} {E : ExtraTable T}
 variable {R : Root sig} {k : Class sig} {p q : Term sig}
 
-private inductive Side (s : Symbols sig) (β : Operators sig) (R : Root sig) (k : Class sig) (p : Term sig) :
-    Term sig → Int → Prop where
-  | plain {u} (plain : EquivB u p) : Side s β R k p u 0
-  | scaled {u e z} (point : EquivB u (β.point e p)) (read : Balance.read s R k e = some z) : Side s β R k p u z
-
-private theorem Side.take {u e v : Term sig} {z : Int} (h : Side s β R k p u z) (plain : head p ≠ .free β.pmult)
-    (hit : EquivB u (β.point e v)) : EquivB p v ∧ Balance.read s R k e = some z := by
-  cases h with
-  | plain eq => exact (plain (eq.symm.trans hit).head_eq).elim
-  | scaled eq rd =>
-    obtain ⟨l,r⟩ := β.point_equiv (eq.symm.trans hit)
-    exact ⟨r,(Balance.equiv s R k l).symm.trans rd⟩
-
 private inductive Track (s : Symbols sig) (β : Operators sig) (R : Root sig) (k : Class sig) (p q : Term sig) :
     Term sig → Int → Prop where
-  | map {x y t i j} (shape : EquivB (β.map x y) t) (sx : HasSort x .msg) (sy : HasSort y .msg)
-      (nx : Normal R x) (ny : Normal R y) (l : Side s β R k p x i) (r : Side s β R k q y j) :
+  | map {x y t i j} (shape : EquivB (β.map x y) t)
+      (l : PointSpine.Trace s β R k p x i) (r : PointSpine.Trace s β R k q y j) :
       Track s β R k p q t (i+j)
   | power {b e t i j} (shape : EquivB (s.power b e) t) (base : Track s β R k p q b i)
       (exp : Balance.read s R k e = some j) : Track s β R k p q t (i+j)
 
 private theorem Track.rebase {u v z} (h : Track s β R k p q u z) (eq : EquivB u v) : Track s β R k p q v z := by
   cases h with
-  | map e sx sy nx ny l r => exact .map (e.trans eq) sx sy nx ny l r
+  | map e l r => exact .map (e.trans eq) l r
   | power e b r => exact .power (e.trans eq) b r
 
 private def powerOp (β : Operators sig) (s : Symbols sig) : Operators sig :=
@@ -49,25 +36,23 @@ private theorem change_source {u v w : Term sig} (eq : EquivB u v) (st : StepMod
   obtain ⟨a,b,l,h,r⟩ := st; exact ⟨a,b,eq.trans l,h,r⟩
 
 private theorem Track.step (I : Inventory s β T.rules) (pow : PowerBucket T) (group : Balance.Inventory E)
-    (sp : HasSort p .msg) (sq : HasSort q .msg) (np : Normal (ruleRoot T.rules) p) (nq : Normal (ruleRoot T.rules) q)
-    (plainP : head p ≠ .free β.pmult) (plainQ : head q ≠ .free β.pmult)
     {u v : Term sig} {z : Int} (h : Track s β (ruleRoot T.rules) k p q u z)
     (st : StepModulo (ruleRoot T.rules) u v) : Track s β (ruleRoot T.rules) k p q v z := by
   induction h generalizing v with
-  | @map x y t i j shape sx sy nx ny l r =>
-    rcases (ContextualReduction.comm_iff ..).mp (change_source shape st) with ⟨_,_,before,hit,after⟩|⟨_,st,_⟩|⟨_,st,_⟩
+  | @map x y t i j shape l r =>
+    rcases (ContextualReduction.comm_iff ..).mp (change_source shape st) with
+      ⟨_,_,before,hit,after⟩|⟨_,st,out⟩|⟨_,st,out⟩
     · cases I.map_root before hit with
       | left take dst =>
-        have ⟨e,read⟩ := l.take plainP take
-        have base := Track.map (.comm_congr _ e (.refl y)) sp sy np ny (.plain (.refl _)) r
-        have more := Track.power (dst.symm.trans after) base read
-        simpa [Int.add_comm] using more
+        obtain ⟨a,d,tr,read,rfl⟩ := l.parts take
+        have more := Track.power (dst.symm.trans after) (Track.map (.refl _) tr r) read
+        simpa [Int.add_assoc,Int.add_comm,Int.add_left_comm] using more
       | right take dst =>
-        have ⟨e,read⟩ := r.take plainQ take
-        have base := Track.map (.comm_congr _ (.refl x) e) sx sq nx nq l (.plain (.refl _))
-        simpa using Track.power (dst.symm.trans after) base read
-    · exact (nx _ st).elim
-    · exact (ny _ st).elim
+        obtain ⟨a,d,tr,read,rfl⟩ := r.parts take
+        have more := Track.power (dst.symm.trans after) (Track.map (.refl _) l tr) read
+        simpa [Int.add_assoc] using more
+    · exact .map out (l.step I group st) r
+    · exact .map out l (r.step I group st)
   | @power b e t i j shape base count ih =>
     rcases (powerOp β s).steps (change_source shape st) with ⟨_,_,before,hit,after⟩|⟨v,st,out⟩|⟨v,st,out⟩
     · cases pow.root _ _ before hit with
@@ -90,20 +75,18 @@ private theorem Track.step (I : Inventory s β T.rules) (pow : PowerBucket T) (g
     · exact .power out (ih st) count
     · exact .power out base (group.reduces k (.step st) j count)
 
-private theorem Track.normal_read (I : Inventory s β T.rules) {t z}
+private theorem Track.normal_read (I : Inventory s β T.rules) (sp : HasSort p .msg) (sq : HasSort q .msg) {t z}
     (h : Track s β (ruleRoot T.rules) k p q t z) (nt : Normal (ruleRoot T.rules) t) :
     Spine.read s (ruleRoot T.rules) k t = some (classOf (β.map p q),z) := by
   induction h with
-  | map shape sx sy nx ny l r =>
+  | map shape l r =>
     have norm := (normal_equiv _ shape).mpr nt
-    obtain ⟨_,_,plainX,plainY⟩ := (I.map_normal_iff sx sy).mp norm
-    rw [← Spine.equiv s _ k shape,Spine.read_plain s _ k (by intro e; cases e) norm]
-    cases l with
-    | scaled eq => exact (plainX eq.head_eq).elim
-    | plain eq =>
-      cases r with
-      | scaled eq => exact (plainY eq.head_eq).elim
-      | plain other => rw [show classOf _ = classOf (β.map p q) from Quotient.sound (.comm_congr _ eq other)]; rfl
+    obtain ⟨nx,ny,plainX,plainY⟩ := (I.map_normal_iff (l.typed sp) (r.typed sq)).mp norm
+    obtain ⟨hl,rfl⟩ := l.unscaled nx plainX
+    obtain ⟨hr,rfl⟩ := r.unscaled ny plainY
+    rw [← Spine.equiv s _ k shape,Spine.read_plain s _ k (by intro e; cases e) norm,
+      show classOf _ = classOf (β.map p q) from Quotient.sound (.comm_congr _ hl hr)]
+    rfl
   | @power b e t i j shape base exp ih =>
     have norm := (normal_equiv _ shape).mpr nt
     let zero : Fin (sig.arity s.pow) := ⟨0,by have := s.powArity; omega⟩
@@ -112,17 +95,15 @@ private theorem Track.normal_read (I : Inventory s β T.rules) {t z}
     apply Spine.read_extend (ih nb) _ exp
     intro clash; cases (Quotient.exact clash : EquivB _ _).head_eq
 
-private theorem view (I : Inventory s β T.rules) {x : Term sig} (sx : HasSort x .msg) (nx : Normal (ruleRoot T.rules) x) :
-    ∃ p, HasSort p .msg ∧ Normal (ruleRoot T.rules) p ∧ head p ≠ .free β.pmult ∧
-      ∀ k, ∃ z, Side s β (ruleRoot T.rules) k p x z := by
-  by_cases h : head x = .free β.pmult
-  · obtain ⟨a,p,rfl⟩ := β.split h
-    obtain ⟨sa,sp⟩ := β.point_types sx
-    obtain ⟨na,np,_,plain⟩ := (I.point_normal_iff sa sp).mp nx
-    refine ⟨p,sp,np,plain,fun k => ?_⟩
-    obtain ⟨z,rd⟩ := Balance.defined s _ k na
-    exact ⟨z,.scaled (.refl _) rd⟩
-  · exact ⟨x,sx,nx,h,fun _ => ⟨0,.plain (.refl _)⟩⟩
+/-- Every class is read from the same underlying plain point. This point may
+be reached via any number of bilinear actions. -/
+def PointView (s : Symbols sig) (β : Operators sig) (R : Root sig) (t : Term sig) : Prop :=
+  ∃ p, HasSort p .msg ∧ Normal R p ∧ head p ≠ .free β.pmult ∧
+    ∀ k, ∃ z, PointSpine.Trace s β R k p t z
+
+private theorem normal_view (I : Inventory s β T.rules) {x : Term sig}
+    (sx : HasSort x .msg) (nx : Normal (ruleRoot T.rules) x) : PointView s β (ruleRoot T.rules) x :=
+  PointSpine.view I sx nx [] (by simp) (by simp)
 
 private theorem Track.fold {b : Term sig} (base : ∃ z, Track s β R k p q b z) (exps : List (Term sig))
     (rd : ∀ e ∈ exps, Staging.Signed s R e) : ∃ z, Track s β R k p q (exps.foldl s.power b) z := by
@@ -146,6 +127,28 @@ private theorem fold_root {b : Term sig} (sb : b.rootSort = .msg) (exps : List (
   | cons e rest ih => exact ih s.powSort
 
 /-- Powers of a pairing have a unique normal result for any finite signed
+exponent spine. Either operand of the map may first extract or reduce any
+number of signed point actions. -/
+theorem unique_viewed (I : Inventory s β T.rules) (pow : PowerBucket T) (group : Balance.Inventory E)
+    (unit : Normal (ruleRoot T.rules) s.product.one) {x y : Term sig}
+    (sx : HasSort x .msg) (sy : HasSort y .msg) (vx : PointView s β (ruleRoot T.rules) x) (vy : PointView s β (ruleRoot T.rules) y)
+    (exps : List (Term sig)) (se : ∀ e ∈ exps, HasSort e .msg) (rd : ∀ e ∈ exps, Staging.Signed s (ruleRoot T.rules) e)
+    {u v} (nu : NormalForm (ruleRoot T.rules) (exps.foldl s.power (β.map x y)) u)
+    (nv : NormalForm (ruleRoot T.rules) (exps.foldl s.power (β.map x y)) v) : EquivB u v := by
+  obtain ⟨p,sp,np,hp,vl⟩ := vx
+  obtain ⟨q,sq,nq,hq,vr⟩ := vy
+  have t := fold_type (s := s) (β.map_sorted sx sy) exps se
+  apply Spine.injective pow unit (nu.2.2 _ t) (nv.2.2 _ t) nu.2.1 nv.2.1 _ E
+  intro k
+  obtain ⟨i,li⟩ := vl k
+  obtain ⟨j,rj⟩ := vr k
+  obtain ⟨z,track⟩ := Track.fold ⟨i+j,Track.map (.refl _) li rj⟩ exps rd
+  have endpoint {o} (form : NormalForm (ruleRoot T.rules) (exps.foldl s.power (β.map x y)) o) :=
+    (RootNarrowing.reduction_invariant (fun b => Track s β (ruleRoot T.rules) k p q b z)
+      (fun h e => h.rebase e) (fun h e => h.step I pow group e) form.1 track).normal_read I sp sq form.2.1
+  exact (endpoint nu).trans (endpoint nv).symm
+
+/-- Powers of a pairing have a unique normal result for any finite signed
 exponent spine. Each normalized operand of the map can be an arbitrary
 message, including an existing point action. -/
 theorem unique (I : Inventory s β T.rules) (pow : PowerBucket T) (group : Balance.Inventory E)
@@ -153,19 +156,8 @@ theorem unique (I : Inventory s β T.rules) (pow : PowerBucket T) (group : Balan
     (sx : HasSort x .msg) (sy : HasSort y .msg) (nx : Normal (ruleRoot T.rules) x) (ny : Normal (ruleRoot T.rules) y)
     (exps : List (Term sig)) (se : ∀ e ∈ exps, HasSort e .msg) (rd : ∀ e ∈ exps, Staging.Signed s (ruleRoot T.rules) e)
     {u v} (nu : NormalForm (ruleRoot T.rules) (exps.foldl s.power (β.map x y)) u)
-    (nv : NormalForm (ruleRoot T.rules) (exps.foldl s.power (β.map x y)) v) : EquivB u v := by
-  obtain ⟨p,sp,np,hp,vl⟩ := view I sx nx
-  obtain ⟨q,sq,nq,hq,vr⟩ := view I sy ny
-  have t := fold_type (s := s) (β.map_sorted sx sy) exps se
-  apply Spine.injective pow unit (nu.2.2 _ t) (nv.2.2 _ t) nu.2.1 nv.2.1 _ E
-  intro k
-  obtain ⟨i,li⟩ := vl k
-  obtain ⟨j,rj⟩ := vr k
-  obtain ⟨z,track⟩ := Track.fold ⟨i+j,Track.map (.refl _) sx sy nx ny li rj⟩ exps rd
-  have endpoint {o} (form : NormalForm (ruleRoot T.rules) (exps.foldl s.power (β.map x y)) o) :=
-    (RootNarrowing.reduction_invariant (fun b => Track s β (ruleRoot T.rules) k p q b z)
-      (fun h e => h.rebase e) (fun h e => h.step I pow group sp sq np nq hp hq e) form.1 track).normal_read I form.2.1
-  exact (endpoint nu).trans (endpoint nv).symm
+    (nv : NormalForm (ruleRoot T.rules) (exps.foldl s.power (β.map x y)) v) : EquivB u v :=
+  unique_viewed I pow group unit sx sy (normal_view I sx nx) (normal_view I sy ny) exps se rd nu nv
 
 private theorem signed_form (group : Balance.Inventory E) {e : Term sig} (se : HasSort e .msg)
     (rd : Staging.Signed s (ruleRoot T.rules) e) : ∃ z, NormalForm (ruleRoot T.rules) e z := by
@@ -211,6 +203,27 @@ theorem map_exists (I : Inventory s β T.rules) (pow : PowerBucket T) (group : B
       exact ⟨_,.right rfl l (.refl _)⟩
     · exact ⟨_,.plain l r (.refl _)⟩
 
+/-- The map may extract from either point spine before its operands finish
+reducing. Normalizing both operands first preserves the entire normal-form
+relation, with one arbitrary normalization choice for each operand. -/
+theorem map_stage_viewed (I : Inventory s β T.rules) (pow : PowerBucket T) (group : Balance.Inventory E)
+    (unit : Normal (ruleRoot T.rules) s.product.one) {x y a b out : Term sig}
+    (sx : HasSort x .msg) (sy : HasSort y .msg)
+    (vx : PointView s β (ruleRoot T.rules) x) (vy : PointView s β (ruleRoot T.rules) y)
+    (l : NormalForm (ruleRoot T.rules) x a) (r : NormalForm (ruleRoot T.rules) y b) :
+    NormalForm (ruleRoot T.rules) (β.map x y) out ↔ NormalForm (ruleRoot T.rules) (β.map a b) out := by
+  have sa := l.2.2 _ sx
+  have sb := r.2.2 _ sy
+  have replay {u} (nf : NormalForm (ruleRoot T.rules) (β.map a b) u) :
+      NormalForm (ruleRoot T.rules) (β.map x y) u :=
+    ⟨(Reduces.comm _ l.1 r.1).trans nf.1,nf.2.1,fun _ h =>
+      .widen (nf.2.2 _ (β.map_sorted sa sb)) (β.mapSort ▸ Term.rootSort_le h)⟩
+  refine ⟨fun nf => ?_,replay⟩
+  obtain ⟨v,both⟩ := map_exists I pow group unit sa sb l.2.1 r.2.1
+  have eq := unique_viewed I pow group unit sx sy vx vy [] (by simp) (by simp) (replay both) nf
+  exact ⟨both.1.trans (.basis eq),nf.2.1,fun k h =>
+    Term.checkSort_sound _ _ (SortClash.check_equiv eq k ▸ Term.checkSort_complete (both.2.2 k h))⟩
+
 private theorem power_red {a b c d : Term sig} (l : Reduces R a b) (r : Reduces R c d) :
     Reduces R (s.power a c) (s.power b d) := by apply Reduces.free; intro i; split <;> assumption
 
@@ -249,9 +262,9 @@ private theorem fold_red (es : List (Term sig)) (val : Term sig → Term sig)
 /-- Normalizing the bilinear map and any signed exponents first preserves
 every normal result of the original power spine. This includes a pairing
 that becomes a power and an exponent that becomes one. -/
-theorem stage (I : Inventory s β T.rules) (pow : PowerBucket T) (group : Balance.Inventory E)
+theorem stage_viewed (I : Inventory s β T.rules) (pow : PowerBucket T) (group : Balance.Inventory E)
     (unit : Normal (ruleRoot T.rules) s.product.one) {x y b : Term sig}
-    (sx : HasSort x .msg) (sy : HasSort y .msg) (nx : Normal (ruleRoot T.rules) x) (ny : Normal (ruleRoot T.rules) y)
+    (sx : HasSort x .msg) (sy : HasSort y .msg) (vx : PointView s β (ruleRoot T.rules) x) (vy : PointView s β (ruleRoot T.rules) y)
     (es : List (Term sig)) (se : ∀ e ∈ es, HasSort e .msg) (rd : ∀ e ∈ es, Staging.Signed s (ruleRoot T.rules) e)
     (val : Term sig → Term sig) (forms : ∀ e ∈ es, NormalForm (ruleRoot T.rules) e (val e))
     (base : NormalForm (ruleRoot T.rules) (β.map x y) b) (out : Term sig) :
@@ -272,10 +285,23 @@ theorem stage (I : Inventory s β T.rules) (pow : PowerBucket T) (group : Balanc
   constructor
   · intro nf
     obtain ⟨v,hv⟩ := fold_normal group pow sb base.2.1 (es.map val) ty nn
-    have eq := unique I pow group unit sx sy nx ny es se rd (replay hv) nf
+    have eq := unique_viewed I pow group unit sx sy vx vy es se rd (replay hv) nf
     exact ⟨hv.1.trans (.basis eq),nf.2.1,fun k h =>
       Term.checkSort_sound _ _ (SortClash.check_equiv eq k ▸ Term.checkSort_complete (hv.2.2 _ h))⟩
   · exact replay
+
+/-- Normalizing the bilinear map and any signed exponents first preserves
+every normal result of the original power spine. This includes a pairing
+that becomes a power and an exponent that becomes one. -/
+theorem stage (I : Inventory s β T.rules) (pow : PowerBucket T) (group : Balance.Inventory E)
+    (unit : Normal (ruleRoot T.rules) s.product.one) {x y b : Term sig}
+    (sx : HasSort x .msg) (sy : HasSort y .msg) (nx : Normal (ruleRoot T.rules) x) (ny : Normal (ruleRoot T.rules) y)
+    (es : List (Term sig)) (se : ∀ e ∈ es, HasSort e .msg) (rd : ∀ e ∈ es, Staging.Signed s (ruleRoot T.rules) e)
+    (val : Term sig → Term sig) (forms : ∀ e ∈ es, NormalForm (ruleRoot T.rules) e (val e))
+    (base : NormalForm (ruleRoot T.rules) (β.map x y) b) (out : Term sig) :
+    NormalForm (ruleRoot T.rules) (es.foldl s.power (β.map x y)) out ↔
+      NormalForm (ruleRoot T.rules) ((es.map val).foldl s.power b) out :=
+  stage_viewed I pow group unit sx sy (normal_view I sx nx) (normal_view I sy ny) es se rd val forms base out
 
 /-- One child-first evaluation step for the common pairing-power operation.
 All intermediate normal forms exist for the specified grammar. -/

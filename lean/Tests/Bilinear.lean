@@ -225,6 +225,22 @@ example (out : Term') :
   exact (bp.point_argument_stage inventory sx sy dy ny).trans ((bp.point_scalar_stage inventory sx st actionA unitN dx cancels).trans
     (bp.point_one inventory st actionA unitN))
 
+-- Each point can extract its unit action before it collapses, and both
+-- received scalars occur with opposite signs in the resulting outer power.
+example (out : Term') :
+    NormalForm R (op.map (op.point one (op.point a p)) (op.point one (op.point (s.product.inv a) q))) out ↔
+      EquivB out (op.map p q) := by
+  have so : HasSort one .msg := HasSort.free (sig := sig) F.one _ (fun i => Fin.elim0 i)
+  have ds : Staging.Signed s R one := fun k => Balance.defined s R k unitN
+  have sp := op.point_sorted (atomT 0) (atomT 1)
+  have sq := op.point_sorted invT (atomT 2)
+  have left := Rewriting.Bilinear.PointSpine.view (T := T) bp sp actionA [one] (by simpa using so) (by intro u hu; cases List.mem_singleton.mp hu; exact ds)
+  have right := Rewriting.Bilinear.PointSpine.view (T := T) bp sq actionInv [one] (by simpa using so) (by intro u hu; cases List.mem_singleton.mp hu; exact ds)
+  have ln := (bp.point_one inventory sp actionA unitN).mpr (EquivB.refl _)
+  have rn := (bp.point_one inventory sq actionInv unitN).mpr (EquivB.refl _)
+  exact (Rewriting.Bilinear.PowerSpine.map_stage_viewed bp powers inventory unitN
+    (op.point_sorted so sp) (op.point_sorted so sq) left right ln rn).trans (cancelled_pair out)
+
 -- The unit and nesting rules overlap on the same sorted input.
 example (out : Term') : NormalForm R (op.point one (op.point a p)) out ↔ EquivB out (op.point a p) :=
   bp.point_one inventory (op.point_sorted (atomT 0) (atomT 1)) actionA unitN
