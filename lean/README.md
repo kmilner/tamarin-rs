@@ -166,10 +166,10 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Operation | Native coverage today | Next milestone |
 | --- | --- | --- |
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
-| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Independent equation groups contribute the full product of their unifiers after their witness names are separated. Shared variables keep equations together. The numeric solver supports uniform and mixed weights. Boolean queries decide every admitted homogeneous system with at most two equations across the full graph width, independently of the number of substitutions. Larger conjunctions inherit the decision guarantees of their matrix after merging identical columns. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
-| Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid, refutes oversized patterns, and decides existence for independent linear AC patterns by counting occurrences after exact cancellation. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
+| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Independent equation groups contribute the full product of their unifiers after their witness names are separated. Shared variables keep equations together. The numeric solver supports uniform and mixed weights. Full unification can distribute a quotient generator across variables with identical columns, retaining each original variable in the answer. Boolean queries decide every admitted homogeneous system with at most two equations across the full graph width, independently of the number of substitutions. Larger conjunctions inherit the decision guarantees of their matrix after merging identical columns. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
+| Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid, refutes oversized patterns, and counts occurrences to decide existence for independent linear AC patterns. A bounded numeric solver decides matching and enumerates complete substitution families for repeated captures shared across equations. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Factors beneath C/AC heads with no root rewrite can normalize independently. Other paths cover positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
-| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. Staged paths cover cancellation, positional destructors, signed DH products with shared stable operands, powers, scalar actions and pairing. | Extend overlap checks to further user equations with shared AC variables. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
+| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. At C/AC heads with no root rewrite, child families can be joined while preserving shared input images. Staged paths cover cancellation, positional destructors, signed DH products, powers, scalar actions and pairing. | Extend overlap checks to further user equations with shared AC variables. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
 
 Run the generated coverage test from the repository root.
 
@@ -183,6 +183,11 @@ including shared captures in conjunctions and packed variant observations. Lean 
 mandatory cases from constructor normality, incompatible matching heads and ground AC
 multiset equality. CI fails if native-only defers one of those cases or returns an answer
 that contradicts the expectation. Every reduction in the bounded grammar must complete.
+The generated set has bounded term size and answer multiplicity. For example, matching
+three distinct variables against eight distinct AC factors has 5,796 answers. The
+full public matcher still defers that request, although its existence check succeeds.
+[Public regression](../crates/tamarin-term/tests/native_backend.rs#L796)
+
 The test checks that wrapping a term in hash wraps its normal form in the same hash.
 This follows from the [free constructor reduction theorem](Tamarin/ConstructorReduction.lean).
 Packed queries consisting of ground or constructor-only slots in these two presentations must
@@ -257,8 +262,19 @@ pattern variables. The public test uses 12 captures and 64 available factors. [L
 
 For repeated and shared captures, Lean characterizes simultaneous matching by one
 nonempty bag of rigid factors per variable. Each pattern occurrence contributes the
-same bag in every equation. This gives a numeric solver a contract with no
-term trees or witness names in its input. [General matching equivalence](Tamarin/ACMatchBagsRefinement.lean)
+same bag in every equation. After cancellation, Rust passes only the two lists of occurrence IDs
+per equation. Lean solves the multiplicity equations for each rigid factor and combines their
+supports so every capture is nonempty. The completion envelope includes up to five keys and
+128 factor classes when the per-factor integer box has at most 256 entries, within the
+64-equation and 4,096-occurrence bounds. [General matching equivalence](Tamarin/ACMatchBagsRefinement.lean) ·
+[Numeric decision](Tamarin/ACBagSearch.lean)
+
+For full matching, each factor contributes its possible multiplicities for all variables.
+Lean combines those choices across factors and returns each variable’s image in first-occurrence
+order. Rust rebuilds the images from the original frozen subject terms. The regression uses
+two equations sharing repeated variables across 48 distinct factors. A separate case has six
+answers and includes a variable that also occurs on the frozen side.
+[Packet and term-level completeness](Tamarin/ACMatchAnswerPacket.lean)
 
 For distinct atoms, matching `H(x+y)+x` against `H(a+b+c)+a+b` forces
 `x=a+b, y=c`. At each AC head the matcher flattens occurrences of that symbol and cancels
@@ -306,6 +322,13 @@ without materializing their substitutions. A rational cone projection also decid
 conjunctions whose intermediate integer basis exceeds the search budget.
 [Rational cone proof](Tamarin/ACRationalProjection.lean) · [Existence contract](Tamarin/ACFeasibility.lean) ·
 [Positive witness](Tamarin/ACPositiveWitness.lean)
+
+For full unification, identical columns share a total multiplicity at each generator.
+Distributing that total over the original coordinates recovers the exact Hilbert basis.
+Lean precomputes the number of distributions before constructing the answer packet.
+For two weighted equations sharing all their variables and forcing the sum of six inputs
+to equal each of two more inputs, the distributed basis has six generators and yields one most general unifier.
+[Generator proof](Tamarin/ACDistributedBasis.lean) · [Enumeration and coverage](Tamarin/ACDistributedBasisEnumeration.lean)
 
 An integer row operation can expose a strictly one-sided equation in a conjunction. If
 elimination suggests a positive solution, the checker evaluates it on every original row.
@@ -496,6 +519,13 @@ extended sides with one sorted substitution already covers that branch. A single
 rebuilds the changed term and all caller images. The search can fold a state only when one
 earlier row covers all those terms together. It checks whether two terminal rows, including
 fresh copies of the same row, can give different normal values at the same input.
+
+For a product whose head has no rewrite rule, native-only can combine the child
+variant families on their shared inputs. The regression for five inputs observed
+through both projections produces 32 distinct rows. Repeated slots may reuse a
+child value when each input assignment determines that value uniquely.
+[Inert product variants](Tamarin/InertProductVariants.lean)
+
 For trees of free heads, it can instead compare the live rules at each head once,
 including each rule with a fresh copy of itself. Their outputs must project
 normal arguments or return fixed normal terms. Each parent's patterns must exclude
