@@ -37,6 +37,16 @@ fn check_native(columns: &[Column], expected: bool) {
         }
         let h = native();
         assert_eq!(h.unifiable(&rows).unwrap(), expected);
+        let full = native();
+        if expected {
+            assert!(matches!(
+                full.unify(&rows),
+                Err(MaudeError::UnsupportedOperation("AC/C unification"))
+            ));
+        } else {
+            assert!(full.unify(&rows).unwrap().is_empty());
+        }
+        assert_eq!(full.stats().unify_count, 0);
         assert_eq!(h.stats().unify_count, 0);
     }
 }

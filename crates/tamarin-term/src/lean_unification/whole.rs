@@ -19,7 +19,7 @@ const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 128;
 
 #[derive(Default)]
-struct Packet {
+pub(crate) struct Packet {
     variables: IdentityTable<LVar>,
     names: IdentityTable<Name>,
     symbols: IdentityTable<FunSym>,
@@ -235,36 +235,7 @@ impl RuleTable {
         let Some(packet) = Packet::encode(self, eqs)? else {
             return Ok(None);
         };
-        let Some((symbol, width)) = packet.matrix_shape() else {
-            return Ok(None);
-        };
-        if !(1..=MAX_NODES).contains(&width) {
-            return Ok(None);
-        }
-        let symbol_id = packet
-            .symbols
-            .id(FunSym::Ac(symbol))
-            .ok_or(Error::InvalidStatus(255))?;
-        initialize()?;
-        let rows = packet.rows();
-        // SAFETY: the shim copies all borrowed rows and roots before returning its tag.
-        let status = LEAN_THREAD.with(|_| unsafe {
-            tamarin_lean_graph_ac_feasible(
-                width as u64,
-                symbol_id,
-                sort_word(ac_sort(symbol)),
-                WordSlice::new(&packet.declarations),
-                rows.as_ptr(),
-                rows.len(),
-                WordSlice::new(&packet.equations),
-            )
-        });
-        match status {
-            0 => Ok(None),
-            1 => Ok(Some(false)),
-            2 => Ok(Some(true)),
-            status => Err(Error::InvalidStatus(status)),
-        }
+        packet.ac_feasible()
     }
 
     /// Collect the scope before removing reflexive and repeated equations.
@@ -309,11 +280,23 @@ impl RuleTable {
     }
 
     pub(crate) fn whole_unify(&self, equations: &[Equal<LNTerm>]) -> Result<Outcome, Error> {
+        self.try_whole_unify(equations).map(|(outcome, _)| outcome)
+    }
+
+    /// Retain a homogeneous graph after inconclusive whole-family search so a
+    /// caller can try a definitive negative once other complete solvers defer.
+    pub(crate) fn try_whole_unify(
+        &self,
+        equations: &[Equal<LNTerm>],
+    ) -> Result<(Outcome, Option<Packet>), Error> {
         let Some(packet) = Packet::encode(self, equations)? else {
-            return Ok(Outcome::Unsupported);
+            return Ok((Outcome::Unsupported, None));
         };
         initialize()?;
-        packet.solve(&packet.rows(), packet.matrix_shape())
+        let shape = packet.matrix_shape();
+        let outcome = packet.solve(&packet.rows(), shape)?;
+        let pending = (outcome == Outcome::Unsupported && shape.is_some()).then_some(packet);
+        Ok((outcome, pending))
     }
 
     pub(crate) fn factored_unify(
@@ -372,6 +355,41 @@ impl RuleTable {
 }
 
 impl Packet {
+    /// Read feasibility from these exact equation roots. A positive verdict
+    /// certifies existence and carries no substitution family.
+    pub(crate) fn ac_feasible(&self) -> Result<Option<bool>, Error> {
+        let Some((symbol, width)) = self.matrix_shape() else {
+            return Ok(None);
+        };
+        if !(1..=MAX_NODES).contains(&width) {
+            return Ok(None);
+        }
+        let symbol_id = self
+            .symbols
+            .id(FunSym::Ac(symbol))
+            .ok_or(Error::InvalidStatus(255))?;
+        initialize()?;
+        let rows = self.rows();
+        // SAFETY: the shim copies all borrowed rows and roots before returning its tag.
+        let status = LEAN_THREAD.with(|_| unsafe {
+            tamarin_lean_graph_ac_feasible(
+                width as u64,
+                symbol_id,
+                sort_word(ac_sort(symbol)),
+                WordSlice::new(&self.declarations),
+                rows.as_ptr(),
+                rows.len(),
+                WordSlice::new(&self.equations),
+            )
+        });
+        match status {
+            0 => Ok(None),
+            1 => Ok(Some(false)),
+            2 => Ok(Some(true)),
+            status => Err(Error::InvalidStatus(status)),
+        }
+    }
+
     fn matrix_shape(&self) -> Option<(AcSym, usize)> {
         match self.symbols.values() {
             [FunSym::Ac(symbol)] if self.names.len() == 0 => Some((*symbol, self.variables.len())),

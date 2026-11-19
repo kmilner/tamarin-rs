@@ -230,3 +230,31 @@ fn repeated_column_profiles_decide_a_wide_three_equation_system() {
     }
     assert_eq!(native.stats().unify_count, 0);
 }
+
+#[test]
+fn native_oracle_hybrid_full_unification_uses_only_negative_ac_decisions() {
+    let Some(path) = tamarin_test_support::require_maude_path() else {
+        return;
+    };
+    let sig = mset_maude_sig();
+    let hybrid =
+        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let possible = equation(&[0, 1], &[2, 3]);
+    let impossible = [possible.clone(), equation(&[0, 1], &[2, 3, 4])];
+    let before = hybrid.stats();
+    let negative = hybrid.unify(&impossible).unwrap();
+    assert!(negative.is_empty());
+    assert_eq!(negative, oracle.unify(&impossible).unwrap());
+    let after = hybrid.stats();
+    assert!(after.lean_unify_count > before.lean_unify_count);
+    if tamarin_utils::env_gate!("TAM_RS_VERIFY_LEAN_UNIFY") {
+        assert!(after.unify_count > before.unify_count);
+    } else {
+        assert_eq!(after.unify_count, before.unify_count);
+    }
+    let positive = hybrid.unify(std::slice::from_ref(&possible)).unwrap();
+    assert!(positive.len() > 1);
+    assert_eq!(positive, oracle.unify(&[possible]).unwrap());
+    assert!(hybrid.stats().unify_count > after.unify_count);
+}

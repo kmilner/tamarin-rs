@@ -1356,19 +1356,24 @@ impl MaudeHandle {
         #[cfg(feature = "lean-unification")]
         let lean_error = |error| self.lean_error(error);
         #[cfg(feature = "lean-unification")]
-        if use_lean && self.backend == AlgebraBackend::NativeOnly {
+        let deferred_graph = if use_lean && self.backend == AlgebraBackend::NativeOnly {
             cancellation::check()?;
             let result = self
                 .native_rules()
-                .map(|table| table.whole_unify(eqs))
-                .transpose();
-            if let Some(crate::lean_unification::Outcome::Complete(answers)) =
-                result.map_err(lean_error)?
-            {
-                cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
-                return Ok(answers);
+                .map(|table| table.try_whole_unify(eqs))
+                .transpose()
+                .map_err(lean_error)?;
+            match result {
+                Some((crate::lean_unification::Outcome::Complete(answers), _)) => {
+                    cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+                    return Ok(answers);
+                }
+                Some((_, pending)) if ordered => pending,
+                _ => None,
             }
-        }
+        } else {
+            None
+        };
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
@@ -1515,7 +1520,7 @@ impl MaudeHandle {
         // unsupported fragments. Only a completed result can replace Maude;
         // a runtime failure remains an error, never a contradiction.
         #[cfg(feature = "lean-unification")]
-        let lean_expected = if use_lean && lean_signature_supports(&self.sig, &residual_eqs) {
+        let mut lean_expected = if use_lean && lean_signature_supports(&self.sig, &residual_eqs) {
             cancellation::check()?;
             // Shared-witness packets must be decoded in the original query
             // and factoring context. Only the ground/identity path below
@@ -1638,6 +1643,31 @@ impl MaudeHandle {
         {
             cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
             return Ok(answers);
+        }
+        // A certified contradiction has the same empty family in every order.
+        // Boolean callers have already tried the decision kernel on this query.
+        #[cfg(feature = "lean-unification")]
+        if use_lean && ordered && lean_expected.is_none() {
+            let verdict = if let Some(packet) = deferred_graph {
+                packet.ac_feasible().map_err(lean_error)?
+            } else if self.backend == AlgebraBackend::Hybrid
+                && crate::lean_unification::RuleTable::may_be_homogeneous(eqs)
+                && let Some(table) = self.native_rules()
+            {
+                table.ac_feasible(eqs).map_err(lean_error)?
+            } else {
+                None
+            };
+            if verdict == Some(false) {
+                cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+                if self.backend == AlgebraBackend::Hybrid
+                    && tamarin_utils::env_gate!("TAM_RS_VERIFY_LEAN_UNIFY")
+                {
+                    lean_expected = Some(Vec::new());
+                } else {
+                    return Ok(Vec::new());
+                }
+            }
         }
         let renamed = self.unify_residuals_with_maude(&residual_eqs, &factored_m)?;
         #[cfg(feature = "lean-unification")]
