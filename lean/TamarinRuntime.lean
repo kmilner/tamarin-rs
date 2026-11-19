@@ -7,6 +7,7 @@ import TamarinRuntime.Residual
 import TamarinRuntime.ResidualVariable
 import TamarinRuntime.ResidualRigid
 import TamarinRuntime.GraphUnification
+import TamarinRuntime.ACFeasibility
 import TamarinRuntime.AnswerProjection
 import TamarinRuntime.SortedMatch
 import TamarinRuntime.OpenMatchSelect
@@ -182,6 +183,11 @@ def homogeneousUnify (width : UInt64) (m : Homogeneous.Matrix) : Option Homogene
 def graphHomogeneousUnify (width symbol sort : UInt64) (decls : Array UInt64)
     (nodes : Array (Array UInt64)) (roots : Array UInt64) : Option Homogeneous.Answers :=
   GraphUnification.run width symbol sort decls nodes roots
+
+@[export tamarin_graph_ac_feasible]
+def graphACFeasible (width symbol sort : UInt64) (decls : Array UInt64)
+    (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
+  ACFeasibility.run width symbol sort decls nodes roots
 
 @[export tamarin_operand_refine]
 def operandRefine (sides : Array UInt64) : Array UInt64 := OperandRefinementCandidate.keep sides

@@ -432,6 +432,18 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedHomogeneousUnify_correct"),
 ])
 
+FEASIBLE_RUN = "  ACFeasibility.run width symbol sort decls nodes roots"
+EXECUTABLE = ("import Tamarin.ACFeasibility\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedGraphACFeasible_correct") + "end Tamarin\n")
+EXPORT_MUTATIONS.extend([
+    ("feasibility_always_yes", FEASIBLE_RUN, "  2", "theorem exportedGraphACFeasible_correct"),
+    ("feasibility_always_no", FEASIBLE_RUN, "  1", "theorem exportedGraphACFeasible_correct"),
+    ("feasibility_always_defers", FEASIBLE_RUN, "  0", "theorem exportedGraphACFeasible_correct"),
+    ("feasibility_ignores_conjunction", FEASIBLE_RUN,
+     "  ACFeasibility.run width symbol sort decls nodes (roots.extract 0 2)",
+     "theorem exportedGraphACFeasible_correct"),
+])
+
 graph_start = SOURCE.index("theorem exportedGraphHomogeneous_correct")
 graph_obligation = SOURCE[graph_start:SOURCE.index("\n\n", graph_start) + 1]
 EXECUTABLE = ("import Tamarin.GraphUnification\n" + EXECUTABLE

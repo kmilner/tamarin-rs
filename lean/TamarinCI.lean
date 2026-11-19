@@ -488,6 +488,9 @@ the same equation roots used by the whole-problem and factor contracts. -/
 theorem exportedGraphHomogeneous_correct : GraphUnification.Correct Executable.graphHomogeneousUnify :=
   GraphUnification.run_correct
 
+theorem exportedGraphACFeasible_correct : ACFeasibility.Correct Executable.graphACFeasible :=
+  ACFeasibility.run_correct
+
 theorem exportedCheckedGraphHomogeneous_correct :
     GraphUnification.Checked Executable.checkFactors Executable.graphHomogeneousUnify :=
   GraphUnification.checked_correct exportedCheckFactors_correct exportedGraphHomogeneous_correct
@@ -1048,6 +1051,7 @@ run_cmd do
     (``Tamarin.Executable.wholeUnify, `tamarin_whole_unify),
     (``Tamarin.Executable.checkFactors, `tamarin_check_factors),
     (``Tamarin.Executable.graphHomogeneousUnify, `tamarin_graph_homogeneous_unify),
+    (``Tamarin.Executable.graphACFeasible, `tamarin_graph_ac_feasible),
     (``Tamarin.Executable.operandRefine, `tamarin_operand_refine),
     (``Tamarin.Executable.operandUnify, `tamarin_operand_unify),
     (``Tamarin.Executable.projectAnswers, `tamarin_project_answers),

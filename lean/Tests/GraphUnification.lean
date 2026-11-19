@@ -7,11 +7,18 @@ open Executable
 private def ds : Array UInt64 := #[4,7,2,2,2,2]
 private def vars : Array (Array UInt64) := #[#[0,0,2],#[0,1,2]]
 private def nodes := vars ++ #[#[4,7,0,0],#[4,7,1,1,1],#[4,7,1,0],#[4,7,0,1]]
+private def feasible := graphACFeasible 2 7 2 ds nodes
 private def run := graphHomogeneousUnify 2 7 2 ds nodes
 
 -- One solution for 2x = 3y. Adding x = y eliminates it in a semigroup with no unit.
 #guard run #[2,3] == some #[#[#[0,0,0],#[0,0]]]
 #guard run #[2,3,0,1] == some #[]
+#guard feasible #[2,3] == 2
+#guard feasible #[2,3,0,1] == 1
+#guard feasible #[4,5] == 2
+#guard feasible #[2,9] == 0
+#guard feasible #[2] == 0
+#guard graphACFeasible 2 7 2 ds #[#[0,0,0],#[0,1,2],#[4,7,0,0]] #[2,1] == 0
 -- Swapped children are identical modulo AC. The whole-graph path supplies its identity answer.
 #guard run #[4,5] == none
 #guard run #[2] == none

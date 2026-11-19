@@ -1,0 +1,37 @@
+import TamarinRuntime.GraphMatrix
+
+namespace Tamarin.ACFeasibility
+open ACBasis Homogeneous
+
+/-- The last intersection needs only the union of the supports that can
+participate in a balanced combination. It never constructs the answer packet. -/
+def rowFeasible {n} (r : Row n) (gs : List (Vec n)) : Bool :=
+  let basis := gs.toArray
+  let get := fun j : Fin gs.length => basis[j.val]'(by simp [basis])
+  let p := r.pullback get
+  let pos := Vector.ofFn p.pos
+  let neg := Vector.ofFn p.neg
+  let ids := List.finRange gs.length
+  let mixed := ids.any (fun j => 0 < pos[j]) && ids.any (fun j => 0 < neg[j])
+  let enabled := ids.filter fun j => mixed || (pos[j] == 0 && neg[j] == 0)
+  (List.finRange n).all fun i => enabled.any fun j => 0 < get j i
+
+def feasibleRows {n} : List (Row n) → Option Bool
+  | [] => some true
+  | r :: rs => do
+    let gs ← boundedBasis rs
+    return rowFeasible r gs
+
+/-- Tags are deferred, unsatisfiable, and satisfiable respectively. -/
+def run (width symbol sort : UInt64) (decls : Array UInt64)
+    (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
+  let result := do
+    let m ← GraphMatrix.build width symbol sort decls nodes roots
+    let rows ← readRows width.toNat m.toList
+    feasibleRows rows
+  match result with
+  | none => 0
+  | some false => 1
+  | some true => 2
+
+end Tamarin.ACFeasibility
