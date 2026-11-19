@@ -166,10 +166,10 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Operation | Native coverage today | Next milestone |
 | --- | --- | --- |
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
-| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Independent equation groups contribute the full product of their unifiers after their witness names are separated. Shared variables keep equations together. The numeric solver supports uniform and mixed weights. Full unification can distribute a quotient generator across variables with identical columns, retaining each original variable in the answer. Boolean queries decide every admitted homogeneous system with at most two equations across the full graph width, independently of the number of substitutions. Larger conjunctions inherit the decision guarantees of their matrix after merging identical columns. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
+| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Independent equation groups contribute the full product of their unifiers after their witness names are separated. Shared variables keep equations together. The numeric solver supports uniform and mixed weights. Full unification can distribute a quotient generator across variables with identical columns, retaining each original variable in the answer. Boolean queries decide every admitted homogeneous system of rank at most two across the full graph width, independently of the number of equations or substitutions. Larger conjunctions inherit the decision guarantees of their matrix after merging identical columns. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Free, binary C and AC constructors may nest. Independent groups can use different symbols. Only shared pattern variables connect groups, even when a frozen subject contains the same name. Repeated AC captures share one well-sorted image across all equations. Existence checks combine factor counts, and full matching can read complete families in pages. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
-| Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Factors beneath C/AC heads with no root rewrite can normalize independently. Other paths cover positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
-| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. At C/AC heads with no root rewrite, child families can be joined while preserving shared input images. Staged paths cover cancellation, positional destructors, signed DH products, powers, scalar actions and pairing. | Extend overlap checks to further user equations with shared AC variables. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
+| Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Factors beneath C/AC heads with no root rewrite can normalize independently. A sole total left-linear free rule can contract before its children. Other paths cover positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
+| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. An unconditional free-root contraction can transfer the variant family while retaining erased caller keys. At C/AC heads with no root rewrite, child families can be joined on shared input images. Staged paths cover cancellation, positional destructors, signed DH products, powers, scalar actions and pairing. | Extend overlap checks to further user equations with shared AC variables. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
 
 Run the generated coverage test from the repository root.
 
@@ -356,6 +356,12 @@ Rust API took median 0.12 ms for yes and 0.11 ms for no at 89 variables (previou
 61 ms and 64 ms), and 0.66–0.67 ms at 513 variables in the CI build. [Term-level theorem](Tamarin/ACFeasibility.lean) ·
 [Two-row proof](Tamarin/ACTwoRowFeasibility.lean)
 
+The same decision covers any number of equations when their coefficient rows span
+at most two independent directions. Lean finds representative rows and checks every
+original coefficient by cross multiplication. Public 45- and 47-variable regressions
+exercise both verdicts with six distinct row directions. [Rank criterion](Tamarin/ACLowRank.lean) ·
+[Public regressions](../crates/tamarin-term/tests/native_backend/low_rank_feasibility.rs)
+
 For longer systems a positive solution can start with a common nonzero value in every column and
 adjust at most as many columns as there are equations. The bounded search projects these choices
 without storing the list of subsets. [Support dimension bound](Tamarin/ACColumnCone.lean) ·
@@ -521,6 +527,14 @@ for a completed graph, including steps under free and commutative heads. Rust bu
 successor rows. Lean checks the integer edges and proves the selected terminal is the unique
 normal value when those rows describe the live term steps. [Graph check](Tamarin/ReductionGraph.lean) ·
 [Whole-term reduction](Tamarin/ContextualReduction.lean) · [AC reduction](Tamarin/ACSubproductReduction.lean)
+
+A sole free-head rule with distinct full-sort variables as arguments can fire before
+its children. Every reachable normal result is then reachable from that immediate
+contraction. Reduction checks the output sort. Variant enumeration can reuse the
+contracted observation's complete family, retaining the original caller keys. With
+`select(X,Y) → Y`, a regression erases ten nested destructors on one input and
+returns all three variants of the retained destructor on another.
+[Reduction proof](Tamarin/TotalFree.lean) · [Variant-family transfer](Tamarin/TotalFreeVariants.lean)
 
 The native-only variant search opens each live rule apart from the caller. At an AC head it
 also considers a fresh operand for the entire remainder. A rule that reproduces both

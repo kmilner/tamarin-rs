@@ -525,3 +525,35 @@ fn native_oracle_guarded_multi_rule_frontier_preserves_shared_inputs_and_rejects
 
 #[path = "lean_inert_product_variant_tests.rs"]
 mod inert_product_variants;
+
+#[test]
+fn total_free_variants_preserve_erased_keys_and_retained_narrowing_choices() {
+    let (mut sig, unwrap, _) = unwrap_signature();
+    let select = symbol(b"choose_right", 2);
+    sig.st_fun_syms.insert(select);
+    let at = |a, b| f_app_no_eq(select, vec![a, b]);
+    let unbox = |a| f_app_no_eq(unwrap, vec![a]);
+    let x = msg_var("erased", 0);
+    let y = msg_var("kept", 1);
+    add_rule(&mut sig, at(x.clone(), y.clone()), y.clone());
+    let sig = sig.refresh();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let erased = (0..10).fold(x.clone(), |t, _| unbox(t));
+    let expected = valued_variant_rows(&native, &[unbox(y.clone()), x.clone(), y.clone()]);
+    assert_eq!(expected.len(), 3);
+    let query = [at(erased.clone(), unbox(y.clone())), x.clone(), y.clone()];
+    assert_eq!(valued_variant_rows(&native, &query), expected);
+    let stable = [at(erased, y.clone()), x.clone(), y.clone()];
+    assert_eq!(
+        valued_variant_rows(&native, &stable),
+        valued_variant_rows(&native, &[y.clone(), x.clone(), y.clone()])
+    );
+    assert_eq!(native.stats().var_count, 0);
+    if let Some(path) = tamarin_test_support::configured_maude_path() {
+        let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+        let small = [at(unbox(x.clone()), unbox(y.clone())), x, y];
+        assert_eq!(valued_variant_rows(&oracle, &small), expected);
+    }
+}

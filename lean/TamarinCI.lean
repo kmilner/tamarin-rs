@@ -3,6 +3,7 @@ import Tamarin.ACMatchPacket
 import Tamarin.ACMatchAnswerPacket
 import Tamarin.ACPagePacket
 import Tamarin.ACSortedBagPacket
+import Tamarin.TotalFreeVariants
 import Tamarin.ACMatchSortedBags
 import Tamarin.ACBagAnswers
 import Tamarin.ACBagSearch

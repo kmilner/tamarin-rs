@@ -417,6 +417,49 @@ impl RuleTable {
         app: &LNTerm,
         search: &mut JoinSearch,
     ) -> Result<Option<Vec<Row>>, Error> {
+        let mut contracted = None;
+        loop {
+            let current = contracted.as_ref().unwrap_or(app);
+            if let Some(rows) = self.specialized_rows(keys, original, current, search)? {
+                return Ok(Some(rows));
+            }
+            let Some(next) = self.total_free_contract(current)? else {
+                break;
+            };
+            // The family retains the original caller keys, even when a
+            // contraction drops their last occurrence from the observation.
+            if self.stably_normal_native(&next)? {
+                return Ok(Some(vec![Row {
+                    images: keys.iter().map(|&v| Term::Lit(Lit::Var(v))).collect(),
+                    values: vec![next],
+                }]));
+            }
+            // Nonvariable roots keep their principal sort under every
+            // substitution. Strict contraction bounds a chain of restarts.
+            if !matches!(next, Term::App(_, _))
+                || sort_of_lterm(&next, sort_of_name) != sort_of_lterm(current, sort_of_name)
+                || rigid_size(&next) >= rigid_size(current)
+                || !residual::charge_expansion(&mut search.frontier_nodes, [&next], None)?
+            {
+                break;
+            }
+            contracted = Some(next);
+        }
+        if let Some(value) = contracted
+            && let Some(rows) = self.finite_narrowing(keys, original, &value, search)?
+        {
+            return Ok(Some(rows));
+        }
+        self.finite_narrowing(keys, original, app, search)
+    }
+
+    fn specialized_rows(
+        &self,
+        keys: &[LVar],
+        original: &FxHashSet<u64>,
+        app: &LNTerm,
+        search: &mut JoinSearch,
+    ) -> Result<Option<Vec<Row>>, Error> {
         if let Some(rows) = self.direct_rows(keys, original, app)? {
             return Ok(Some(rows));
         }
@@ -436,10 +479,7 @@ impl RuleTable {
         if let Some(rows) = self.staged_rows(keys, original, app, search)? {
             return Ok(Some(rows));
         }
-        if let Some(rows) = self.inert_product_rows(keys, original, app, search)? {
-            return Ok(Some(rows));
-        }
-        self.finite_narrowing(keys, original, app, search)
+        self.inert_product_rows(keys, original, app, search)
     }
 
     fn staged_rows(
