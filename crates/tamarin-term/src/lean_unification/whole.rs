@@ -85,13 +85,13 @@ impl Packet {
         Some(*self.nodes.entry(row.into_boxed_slice()).or_insert(next))
     }
 
-    fn roots(
+    fn roots<'a>(
         &mut self,
         table: &RuleTable,
-        equations: &[Equal<LNTerm>],
+        equations: impl IntoIterator<Item = (&'a LNTerm, &'a LNTerm)>,
     ) -> Result<Option<Vec<u64>>, Error> {
         let mut roots = Vec::new();
-        for Equal { lhs, rhs } in equations {
+        for (lhs, rhs) in equations {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
             let (Some(lhs), Some(rhs)) = (self.term(table, lhs, 0), self.term(table, rhs, 0))
             else {
@@ -104,7 +104,8 @@ impl Packet {
 
     fn encode(table: &RuleTable, equations: &[Equal<LNTerm>]) -> Result<Option<Self>, Error> {
         let mut packet = Self::default();
-        let Some(roots) = packet.roots(table, equations)? else {
+        let Some(roots) = packet.roots(table, equations.iter().map(|eq| (&eq.lhs, &eq.rhs)))?
+        else {
             return Ok(None);
         };
         packet.equations = roots;
@@ -143,6 +144,12 @@ unsafe extern "C" {
         width: u64,
         symbol: u64,
         sort: u64,
+        declarations: WordSlice,
+        rows: *const WordSlice,
+        count: usize,
+        roots: WordSlice,
+    ) -> u8;
+    fn tamarin_lean_variant_overlap_agrees(
         declarations: WordSlice,
         rows: *const WordSlice,
         count: usize,
@@ -204,6 +211,44 @@ fn select_rows(eqs: &[Equal<LNTerm>], roots: &[u64]) -> Result<Option<Vec<Equal<
 }
 
 impl RuleTable {
+    /// Each row has its own substitution. Earlier pairs are observations
+    /// required to agree. The final pair is the proposed common output.
+    pub(super) fn variant_overlap_agrees(
+        &self,
+        left_inputs: &[LNTerm],
+        right_inputs: &[LNTerm],
+        left_output: &LNTerm,
+        right_output: &LNTerm,
+    ) -> Result<bool, Error> {
+        if left_inputs.len() != right_inputs.len() {
+            return Err(Error::InvalidStatus(255));
+        }
+        let pairs = left_inputs
+            .iter()
+            .zip(right_inputs)
+            .chain(std::iter::once((left_output, right_output)));
+        let mut packet = Packet::default();
+        let Some(roots) = packet.roots(self, pairs)? else {
+            return Ok(false);
+        };
+        initialize()?;
+        let rows = packet.rows();
+        // SAFETY: the shim copies the declarations, node rows and root IDs during the call.
+        let verdict = LEAN_THREAD.with(|_| unsafe {
+            tamarin_lean_variant_overlap_agrees(
+                WordSlice::new(&packet.declarations),
+                rows.as_ptr(),
+                rows.len(),
+                WordSlice::new(&roots),
+            )
+        });
+        match verdict {
+            0 => Ok(false),
+            1 => Ok(true),
+            status => Err(Error::InvalidStatus(status)),
+        }
+    }
+
     /// Skip rule-table initialization and graph construction for ordinary mixed
     /// terms. Nested occurrences of the same AC symbol are valid raw input.
     pub(crate) fn may_be_homogeneous(eqs: &[Equal<LNTerm>]) -> bool {
@@ -313,7 +358,9 @@ impl RuleTable {
             return Ok(Outcome::Unsupported);
         };
         let matrix = packet.matrix_shape();
-        let Some(original_roots) = packet.roots(self, original)? else {
+        let Some(original_roots) =
+            packet.roots(self, original.iter().map(|eq| (&eq.lhs, &eq.rhs)))?
+        else {
             return Ok(Outcome::Unsupported);
         };
         let mut bindings = Vec::new();

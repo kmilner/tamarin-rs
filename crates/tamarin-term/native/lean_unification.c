@@ -275,6 +275,14 @@ uint8_t tamarin_lean_check_factors(whole_word_slice decls, const whole_word_slic
         atom_array(residual.data, residual.size));
 }
 
+extern uint8_t tamarin_variant_overlap_agrees(lean_object *decls, lean_object *nodes, lean_object *roots);
+
+uint8_t tamarin_lean_variant_overlap_agrees(whole_word_slice decls, const whole_word_slice *rows,
+                                           size_t count, whole_word_slice roots) {
+    return tamarin_variant_overlap_agrees(atom_array(decls.data, decls.size), word_rows(rows, count),
+        atom_array(roots.data, roots.size));
+}
+
 /* All input rows are borrowed for this call only. The Lean export consumes
  * its copies. The current reply format has exactly one row and one word. */
 uint8_t tamarin_lean_whole_unify(whole_word_slice decls, const whole_word_slice *rows,

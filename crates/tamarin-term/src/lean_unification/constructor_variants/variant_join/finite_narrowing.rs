@@ -371,6 +371,18 @@ impl Frontier<'_> {
         if !self.charge() {
             return Ok(false);
         }
+        let ([left_output], [right_output]) = (left.values.as_slice(), right.values.as_slice())
+        else {
+            return Err(Error::InvalidStatus(255));
+        };
+        if self.table.variant_overlap_agrees(
+            &left.images,
+            &right.images,
+            left_output,
+            right_output,
+        )? {
+            return Ok(true);
+        }
         let mut reserved = self.original.clone();
         for t in left.iter() {
             t.for_each_free(&mut |v| {

@@ -3,6 +3,7 @@ import TamarinRuntime.BinaryCancellation
 import TamarinRuntime.XorMatchings
 import TamarinRuntime.Whole
 import TamarinRuntime.MixedSizeGraph
+import TamarinRuntime.VariantOverlapGraph
 import TamarinRuntime.FactorCheck
 import TamarinRuntime.Residual
 import TamarinRuntime.ResidualVariable
@@ -196,6 +197,10 @@ def cancelCommon (lhs rhs : Array UInt64) : Array (Array UInt64) :=
 def wholeUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (equations : Array UInt64) :
     Array (Array UInt64) :=
   Whole.runRefining MixedSizeGraph.refutesDecoded decls nodes equations
+
+@[export tamarin_variant_overlap_agrees]
+def variantOverlapAgrees (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) : Bool :=
+  VariantOverlapGraph.run decls nodes roots
 
 @[export tamarin_check_factors]
 def checkFactors (decls : Array UInt64) (nodes : Array (Array UInt64))

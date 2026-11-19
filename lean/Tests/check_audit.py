@@ -540,6 +540,19 @@ EXPORT_MUTATIONS.extend([
     ("graph_always_defers", GRAPH_RUN, "  none", "theorem exportedGraphHomogeneous_correct"),
 ])
 
+EXECUTABLE = ("import Tamarin.VariantOverlapGraph\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedVariantOverlap_correct") + "end Tamarin\n")
+OVERLAP_RUN = "  VariantOverlapGraph.run decls nodes roots"
+EXPORT_MUTATIONS.extend([
+    ("overlap_assumes_equal_raw_variables", OVERLAP_RUN,
+     "  roots.size >= 2 && roots[roots.size - 2]? == roots[roots.size - 1]? || " + OVERLAP_RUN.strip(),
+     "theorem exportedVariantOverlap_correct"),
+    ("overlap_promotes_output_to_observation", OVERLAP_RUN,
+     "  VariantOverlapGraph.run decls nodes (roots ++ roots.extract (roots.size - 2) roots.size)",
+     "theorem exportedVariantOverlap_correct"),
+    ("overlap_never_agrees", OVERLAP_RUN, "  false", "theorem exportedVariantOverlap_correct"),
+])
+
 selection_start = SOURCE.index("theorem exportedOpenMatchSelect_correct")
 selection_contract = SOURCE[selection_start:SOURCE.index("\n\n", selection_start) + 1]
 EXECUTABLE = ("import Tamarin.OpenMatchSelect\n" + EXECUTABLE

@@ -123,6 +123,7 @@ import Tamarin.GuardedACContext
 import Tamarin.CancellationConvergence
 import Tamarin.UnifierSize
 import Tamarin.MixedSizeWhole
+import Tamarin.VariantOverlapGraph
 import Tamarin.MatchPrefilter
 import Tamarin.MatchLeafCounts
 import Tamarin.MatchRigidFactors

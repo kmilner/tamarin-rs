@@ -510,6 +510,17 @@ theorem exportedWholeUnify_correct : WholeProblem.Correct Executable.wholeUnify 
 theorem exportedWholeUnify_mixedRequired : MixedSizeWhole.Required Executable.wholeUnify :=
   MixedSizeWhole.required
 
+theorem exportedVariantOverlap_correct : VariantOverlapGraph.Correct Executable.variantOverlapAgrees :=
+  VariantOverlapGraph.run_correct
+
+theorem exportedVariantOverlap_compatible {s : Signature} {I : Type} {R : Rewriting.Root s}
+    (c : WholeProblem.Codec s) (ids : List I) (p q : Rewriting.RootNarrowing.State s I)
+    {ds ns es raw} (decoded : Whole.Wire.decodeProblem ds ns es = some raw)
+    (represented : CheckedFactoring.Rows c (VariantOverlapGraph.equations ids p.input q.input
+      (p.value ()) (q.value ())) raw) (hit : Executable.variantOverlapAgrees ds ns es = true) :
+    Rewriting.RootNarrowing.CompatibleValues R p q :=
+  (exportedVariantOverlap_correct.semantic c ids _ _ _ _ ds ns es raw decoded represented hit).compatible
+
 theorem exportedHomogeneousUnify_correct : Homogeneous.Correct Executable.homogeneousUnify :=
   Homogeneous.solve_correct
 
@@ -1097,6 +1108,7 @@ run_cmd do
     (``Tamarin.Executable.flatACMatch, `tamarin_flat_ac_match),
     (``Tamarin.Executable.homogeneousUnify, `tamarin_homogeneous_unify),
     (``Tamarin.Executable.wholeUnify, `tamarin_whole_unify),
+    (``Tamarin.Executable.variantOverlapAgrees, `tamarin_variant_overlap_agrees),
     (``Tamarin.Executable.checkFactors, `tamarin_check_factors),
     (``Tamarin.Executable.graphHomogeneousUnify, `tamarin_graph_homogeneous_unify),
     (``Tamarin.Executable.graphACFeasible, `tamarin_graph_ac_feasible),
