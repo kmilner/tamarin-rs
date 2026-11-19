@@ -24,11 +24,11 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
     i
 }
 
-fn partition(equations: &[Equal<LNTerm>]) -> Vec<Component> {
+fn partition_by_variables(equations: &[Equal<LNTerm>], include_subjects: bool) -> Vec<Component> {
     let mut parent: Vec<_> = (0..equations.len()).collect();
     let mut owners = FxHashMap::default();
     for (i, eq) in equations.iter().enumerate() {
-        for side in [&eq.lhs, &eq.rhs] {
+        for side in std::iter::once(&eq.lhs).chain(include_subjects.then_some(&eq.rhs)) {
             side.for_each_free(&mut |v| {
                 let previous = *owners.entry(*v).or_insert(i);
                 let a = root(&mut parent, previous);
@@ -48,13 +48,28 @@ fn partition(equations: &[Equal<LNTerm>]) -> Vec<Component> {
             .equations
             .push(eq.clone());
     }
-    for (v, i) in owners {
-        parts.get_mut(&root(&mut parent, i)).unwrap().vars.push(v);
-    }
-    for part in parts.values_mut() {
-        part.vars.sort_unstable();
+    if include_subjects {
+        // Ordinary unification reopens witnesses using the component's whole
+        // variable scope. Directional matching keeps its subject images frozen.
+        for (v, i) in owners {
+            parts.get_mut(&root(&mut parent, i)).unwrap().vars.push(v);
+        }
+        for part in parts.values_mut() {
+            part.vars.sort_unstable();
+        }
     }
     parts.into_values().collect()
+}
+
+fn partition(equations: &[Equal<LNTerm>]) -> Vec<Component> {
+    partition_by_variables(equations, true)
+}
+
+pub(super) fn pattern_components(equations: &[Equal<LNTerm>]) -> Vec<Vec<Equal<LNTerm>>> {
+    partition_by_variables(equations, false)
+        .into_iter()
+        .map(|c| c.equations)
+        .collect()
 }
 
 // The local kernel returns ordinary substitutions. If an input survives

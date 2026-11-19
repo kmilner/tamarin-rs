@@ -33,6 +33,7 @@ pub(crate) use commutative::solve as unify_structured;
 mod constructor_variants;
 pub(crate) use constructor_variants::RuleTable;
 mod ac_bag_match;
+mod component_match;
 mod homogeneous;
 mod match_size;
 mod narrowing;

@@ -84,7 +84,7 @@ jobs:
           python3 Tests/check_audit.py
       - run: rustup update stable --no-self-update && rustup default stable
       - name: Native-only operations without a Maude binary
-        run: cargo test --profile ci -p tamarin-term --features lean-unification --test native_backend -- --test-threads=1
+        run: cargo test --profile ci -p tamarin-term --features lean-unification --test native_backend --test native_match_components -- --test-threads=1
       - name: Measure the public native backend against Lean-generated algebra queries
         run: cargo test --profile ci -p tamarin-term --features lean-unification --test spec_coverage -- --nocapture
       - name: Install Maude oracle

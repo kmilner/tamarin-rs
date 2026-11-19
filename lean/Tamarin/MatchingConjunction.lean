@@ -129,4 +129,49 @@ theorem join_complete (p q : Problem sig) (left right : List (Substitution sig))
       · have hq := (observed_append p q v).mp hv |>.resolve_left hp
         simpa [merge, hp] using atg v hq
 
+/-- Regrouping or deduplicating equations keeps the observable domain and the
+complete answer family unchanged, even for a restricted caller scope. -/
+theorem complete_iff_of_same_pairs {p q : Problem sig}
+    (pairs : ∀ e, e ∈ p ↔ e ∈ q) (bindable : Variable → Prop)
+    (answers : List (Substitution sig)) :
+    Complete p bindable answers ↔ Complete q bindable answers := by
+  have obs : Observed p = Observed q := funext fun v => propext (by
+    simp only [Observed, pairs])
+  have scope (σ : Substitution sig) : Scoped p bindable σ ↔ Scoped q bindable σ := by
+    simp only [Scoped, obs]
+  constructor <;> intro h
+  · refine ⟨fun σ hσ => ⟨(matches_iff_of_same_pairs pairs σ).mp (h.sound σ hσ).1,
+      (scope σ).mp (h.sound σ hσ).2⟩, ?_⟩
+    intro σ hm hs
+    simpa only [obs] using h.covers σ ((matches_iff_of_same_pairs pairs σ).mpr hm) ((scope σ).mpr hs)
+  · refine ⟨fun σ hσ => ⟨(matches_iff_of_same_pairs pairs σ).mpr (h.sound σ hσ).1,
+      (scope σ).mpr (h.sound σ hσ).2⟩, ?_⟩
+    intro σ hm hs
+    simpa only [obs] using h.covers σ ((matches_iff_of_same_pairs pairs σ).mp hm) ((scope σ).mp hs)
+
+/-- Only pattern occurrences connect directional matching components. A variable
+in a frozen subject can freely name an observed variable of another component. -/
+def Independent (p q : Problem sig) : Prop :=
+  ∀ v, Observed p v → ¬ Observed q v
+
+theorem independent_product_complete {p q : Problem sig} (ind : Independent p q)
+    {left right : List (Substitution sig)} (hl : Complete p (fun _ => True) left)
+    (hr : Complete q (fun _ => True) right) :
+    Complete (p ++ q) (fun _ => True)
+      (left.flatMap fun σ => right.map fun τ => merge p σ τ) := by
+  have hc (σ τ : Substitution sig) : Compatible p q σ τ :=
+    fun v hp hq => False.elim (ind v hp hq)
+  simpa [join, hc, List.filterMap_eq_map] using join_complete p q left right hl hr
+
+/-- A Boolean caller may check each component independently, without enumerating
+the Cartesian product or materializing a common witness. -/
+theorem independent_exists_iff {p q : Problem sig} (ind : Independent p q) :
+    (∃ σ, Matches (p ++ q) σ) ↔ (∃ σ, Matches p σ) ∧ (∃ τ, Matches q τ) := by
+  constructor
+  · rintro ⟨σ, hm⟩
+    exact ⟨⟨σ, fun e h => hm e (List.mem_append_left _ h)⟩,
+      ⟨σ, fun e h => hm e (List.mem_append_right _ h)⟩⟩
+  · rintro ⟨⟨σ, hs⟩, ⟨τ, ht⟩⟩
+    exact ⟨merge p σ τ, merge_matches hs ht (fun v hp hq => False.elim (ind v hp hq))⟩
+
 end Tamarin.Matching

@@ -1806,6 +1806,12 @@ impl MaudeHandle {
             {
                 return Ok(Some(answers));
             }
+            if ordered
+                && let Some(answers) =
+                    completed(table.component_match(equations).map_err(match_error)?)
+            {
+                return Ok(Some(answers));
+            }
         }
         // Keep compound AC leaves after decomposing declared free constructors.
         let children;
@@ -1933,15 +1939,25 @@ impl MaudeHandle {
         #[cfg(feature = "lean-unification")]
         if self.backend == AlgebraBackend::NativeOnly
             && !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
-            && crate::lean_unification::RuleTable::may_be_ac_bag_match(eqs)
         {
+            let may_be_bags = crate::lean_unification::RuleTable::may_be_ac_bag_match(eqs);
             self.check_backend_status()?;
-            if let Some(table) = self.native_rules()
-                && let Some(found) = table
-                    .ac_bag_has_match(eqs)
-                    .map_err(|e| self.lean_error(e))?
+            if (may_be_bags || (2..=64).contains(&eqs.len()))
+                && let Some(table) = self.native_rules()
             {
-                return Ok(found);
+                if may_be_bags
+                    && let Some(found) = table
+                        .ac_bag_has_match(eqs)
+                        .map_err(|e| self.lean_error(e))?
+                {
+                    return Ok(found);
+                }
+                if let Some(found) = table
+                    .component_has_match(eqs)
+                    .map_err(|e| self.lean_error(e))?
+                {
+                    return Ok(found);
+                }
             }
         }
         self.match_eqs_impl(eqs, false)
