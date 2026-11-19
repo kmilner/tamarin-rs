@@ -6,7 +6,7 @@ variable {n : Nat}
 
 private theorem enumerate_cons (r : Row n) (i : Fin n) (is : List (Fin n)) :
     enumerate r (i::is) = enumerate r is ++ block r i is := by
-  simp [enumerate,blocks]
+  simp [enumerate,enumerateWith,blocksWith]
 
 private theorem pair_comm (i j : Fin n) : pair i j = pair j i := by
   funext k; simp [pair,Nat.add_comm]
@@ -18,19 +18,19 @@ private theorem mem_enumerate (r : Row n) (is : List (Fin n)) (v : Vec n) :
       (∃ i ∈ is, r.pos i = 0 ∧ r.neg i = 0 ∧ v = spike i 1) ∨
       ∃ i ∈ is, ∃ j ∈ is, 0 < r.pos i ∧ 0 < r.neg j ∧ v = pair i j := by
   induction is with
-  | nil => simp [enumerate,blocks]
+  | nil => simp [enumerate,enumerateWith,blocksWith]
   | cons k ks ih =>
     rw [enumerate_cons,List.mem_append,ih]
     simp only [List.mem_cons,exists_eq_or_imp]
     by_cases p : 0 < r.pos k
     · have z := (r.disjoint k).resolve_left (Nat.ne_of_gt p)
-      simp [block,p,z,Nat.ne_of_gt p,List.mem_map,List.mem_filter]
+      simp [block,blockWith,p,z,Nat.ne_of_gt p,List.mem_map,List.mem_filter]
       grind
     · have z := Nat.eq_zero_of_not_pos p
       by_cases q : 0 < r.neg k
-      · simp [block,z,q,Nat.ne_of_gt q,List.mem_map,List.mem_filter]
+      · simp [block,blockWith,z,q,Nat.ne_of_gt q,List.mem_map,List.mem_filter]
         grind [pair_comm]
-      · simp [block,z,Nat.eq_zero_of_not_pos q]
+      · simp [block,blockWith,z,Nat.eq_zero_of_not_pos q]
         grind
 
 private abbrev Before (v w : Vec n) := List.ofFn v < List.ofFn w
@@ -65,7 +65,7 @@ private theorem pairs_sorted (i : Fin n) (xs : List (Fin n)) (h : xs.Pairwise (�
 
 private theorem block_cases (r : Row n) (i : Fin n) (xs : List (Fin n)) {v : Vec n}
     (h : v ∈ block r i xs) : v = spike i 1 ∨ ∃ j ∈ xs, v = pair i j := by
-  unfold block at h
+  unfold block blockWith at h
   split at h
   · obtain ⟨j,hj,rfl⟩ := List.mem_map.mp h
     exact .inr ⟨j,(List.mem_filter.mp (List.mem_reverse.mp hj)).1,rfl⟩
@@ -77,7 +77,7 @@ private theorem block_cases (r : Row n) (i : Fin n) (xs : List (Fin n)) {v : Vec
 private theorem enum_sorted (r : Row n) (xs : List (Fin n)) (ordered : xs.Pairwise (· < ·)) :
     (enumerate r xs).Pairwise Before := by
   induction xs with
-  | nil => simp [enumerate,blocks]
+  | nil => simp [enumerate,enumerateWith,blocksWith]
   | cons i xs ih =>
     obtain ⟨later,tail⟩ := List.pairwise_cons.mp ordered
     rw [enumerate_cons,List.pairwise_append]
@@ -85,7 +85,7 @@ private theorem enum_sorted (r : Row n) (xs : List (Fin n)) (ordered : xs.Pairwi
         ((xs.filter p).reverse.map (pair i)).Pairwise Before :=
       pairs_sorted i _ (tail.sublist List.filter_sublist) (fun j hj => later j (List.mem_filter.mp hj).1)
     refine ⟨ih tail,?_,?_⟩
-    · unfold block
+    · unfold block blockWith
       split
       · exact blocks_ordered _
       · split
@@ -207,19 +207,19 @@ private theorem counts (r : Row n) (xs : List (Fin n)) :
     (enumerate r xs).length = neutral + pos*neg ∧ neutral + pos + neg = xs.length := by
   dsimp only
   induction xs with
-  | nil => simp [enumerate,blocks]
+  | nil => simp [enumerate,enumerateWith,blocksWith]
   | cons i xs ih =>
     rw [enumerate_cons,List.length_append,ih.1]
     simp only [Row.neutralAt] at ih
     by_cases p : 0 < r.pos i
     · have z := (r.disjoint i).resolve_left (Nat.ne_of_gt p)
-      simp [Row.neutralAt,block,p,z,Nat.ne_of_gt p,Nat.succ_mul]
+      simp [Row.neutralAt,block,blockWith,p,z,Nat.ne_of_gt p,Nat.succ_mul]
       omega
     · have z := Nat.eq_zero_of_not_pos p
       by_cases q : 0 < r.neg i
-      · simp [Row.neutralAt,block,z,q,Nat.ne_of_gt q,Nat.mul_succ]
+      · simp [Row.neutralAt,block,blockWith,z,q,Nat.ne_of_gt q,Nat.mul_succ]
         omega
-      · simp [Row.neutralAt,block,z,Nat.eq_zero_of_not_pos q]
+      · simp [Row.neutralAt,block,blockWith,z,Nat.eq_zero_of_not_pos q]
         omega
 
 theorem length_eq (r : Row n) :
@@ -252,5 +252,137 @@ theorem length_le_1024 (r : Row n) (width : n ≤ 64) : r.unitGenerators.length 
     rw [Nat.mul_assoc,Nat.add_mul] at area
     omega
   · simp [Nat.eq_zero_of_not_pos nonzero]; omega
+
+theorem count_eq (r : Row n) : count r = r.unitGenerators.length := by
+  obtain ⟨num,part⟩ := counts r (List.finRange n)
+  simp only [List.length_finRange] at part
+  change _ = (enumerate _ _).length
+  rw [num]
+  simp only [count,List.countP_eq_length_filter]
+  omega
+
+private theorem mapped {β} (r : Row n) (f : Vec n → β) (one : Fin n → β) (two : Fin n → Fin n → β)
+    (fstEq : ∀ i, f (spike i 1) = one i) (sndEq : ∀ i j, f (pair i j) = two i j)
+    (xs : List (Fin n)) :
+    enumerateWith r one two xs = (enumerate r xs).map f := by
+  induction xs with
+  | nil => rfl
+  | cons i xs ih =>
+    rw [enumerate_cons,List.map_append]
+    have step : enumerateWith r one two (i::xs) = enumerateWith r one two xs ++ blockWith r one two i xs := by
+      simp [enumerateWith,blocksWith]
+    rw [step,ih]
+    apply congrArg (_ ++ ·)
+    simp only [block,blockWith]
+    split
+    · simp [List.map_map,Function.comp_def,sndEq]
+    · split
+      · simp [List.map_map,Function.comp_def,sndEq]
+      · simp [fstEq]
+
+/-- A singleton contributes the previous generator directly; an opposite
+pair contributes their pointwise sum. No dense coefficient dot product is
+required for either projection. -/
+theorem unitLift_eq {k n} (r : Row k) (basis : Vector (Vec n) k) :
+    r.unitLift basis = lift (fun i => basis[i]) r.unitGenerators := by
+  apply mapped
+  · intro i; funext c; simp [mix,dot_spike]
+  · intro i j; funext c; simp [mix,dot_pair]
+
+private theorem antichain (r : Row n) {x y : Vec n} (hx : x ∈ r.unitGenerators)
+    (hy : y ∈ r.unitGenerators) (small : ∀ i, x i ≤ y i) : x = y := by
+  rcases (mem_units ..).mp hx with ⟨i,pi,ni,rfl⟩ | ⟨i,j,pi,nj,rfl⟩ <;>
+    rcases (mem_units ..).mp hy with ⟨k,pk,nk,rfl⟩ | ⟨k,l,pk,nl,rfl⟩
+  · have h := small i
+    by_cases e : i = k <;> simp_all [spike]
+  · have h := small i
+    have ik : i ≠ k := fun eq => Nat.ne_of_gt pk (eq ▸ pi)
+    have il : i ≠ l := fun eq => Nat.ne_of_gt nl (eq ▸ ni)
+    simp [pair,spike,ik,il] at h
+  · have h := small i
+    have ik : i ≠ k := fun eq => Nat.ne_of_gt pi (eq ▸ pk)
+    simp [pair,spike,ik] at h
+  · have hi := small i
+    have hj := small j
+    have il : i ≠ l := by rintro rfl; have := r.disjoint i; omega
+    have jk : j ≠ k := by rintro rfl; have := r.disjoint j; omega
+    have ik : i = k := by apply Classical.byContradiction; intro e; simp [pair,spike,e,il] at hi
+    have jl : j = l := by apply Classical.byContradiction; intro e; simp [pair,spike,e,jk] at hj
+    rw [ik,jl]
+
+private theorem mix_at {n k} (basis : Vector (Vec n) k) {j : Fin k} {c : Fin n}
+    (only : ∀ y : Fin k, j ≠ y → basis[y] c = 0) (v : Vec k) :
+    mix (fun i => basis[i]) v c = basis[j] c * v j := by
+  have coords : (fun i : Fin k => basis[i] c) = spike j (basis[j] c) := by
+    funext i
+    by_cases e : i = j
+    · subst i; simp [spike]
+    · simp [spike,e,only i (Ne.symm e)]
+  unfold mix
+  rw [coords]
+  calc
+    _ = dot v (spike j (basis[j] c)) := by simp only [dot,Nat.mul_comm]
+    _ = _ := by simp [dot_spike,Nat.mul_comm]
+
+/-- A private coordinate is a positive observation belonging to exactly one
+old generator. It witnesses order reflection regardless of overlap elsewhere. -/
+theorem reflects {k n} (basis : Vector (Vec n) k) (apart : separates basis = true) {a b : Vec k}
+    (le : ∀ c, mix (fun j => basis[j]) a c ≤ mix (fun j => basis[j]) b c) : ∀ j, a j ≤ b j := by
+  have unique := of_decide_eq_true (Bool.and_eq_true_iff.mp apart).2
+  intro j
+  obtain ⟨c,pos,only⟩ := unique j
+  have witness := le c
+  simp only [mix_at basis only] at witness
+  exact Nat.le_of_mul_le_mul_left witness pos
+
+private theorem erase_eq {α} [BEq α] [LawfulBEq α] (xs : List α) (nd : xs.Nodup) : xs.eraseDups = xs := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih =>
+    rw [List.eraseDups_cons,List.filter_eq_self.mpr,ih nd.tail]
+    intro y hy
+    by_cases e : y = x
+    · exact ((List.nodup_cons.mp nd).1 (e ▸ hy)).elim
+    · simp [e]
+
+theorem minimize_unitLift {k n} (r : Row k) (basis : Vector (Vec n) k) (apart : separates basis = true) :
+    minimize (r.unitLift basis) = r.unitLift basis := by
+  let combine := mix (fun i : Fin k => basis[i])
+  have injective : Function.Injective combine := by
+    intro a b eq
+    funext j
+    exact Nat.le_antisymm (reflects basis apart (fun c => Nat.le_of_eq (congrFun eq c)) j)
+      (reflects basis apart (fun c => Nat.le_of_eq (congrFun eq c).symm) j)
+  have distinct : r.unitGenerators.Nodup :=
+    (enum_sorted r _ (List.pairwise_lt_finRange k)).imp fun {a b} ab eq => by subst b; exact List.lt_irrefl _ ab
+  have nd : (r.unitLift basis).Nodup := by
+    rw [unitLift_eq,lift]
+    apply List.pairwise_map.mpr
+    exact distinct.imp fun ne eq => ne (injective eq)
+  unfold minimize
+  rw [List.filter_eq_self.mpr,erase_eq _ nd]
+  intro x hx
+  rw [unitLift_eq,lift] at hx
+  obtain ⟨v,hv,rfl⟩ := List.mem_map.mp hx
+  have vn : ∃ i, 0 < v i := by
+    rcases (mem_units ..).mp hv with ⟨i,_,_,rfl⟩ | ⟨i,j,_,_,rfl⟩
+    · exact ⟨i,by simp [spike]⟩
+    · exact ⟨i,by simp [pair,spike]; omega⟩
+  obtain ⟨i,vi⟩ := vn
+  obtain ⟨c,positive,only⟩ := (of_decide_eq_true (Bool.and_eq_true_iff.mp apart).2) i
+  have pos : 0 < mix (fun j => basis[j]) v c := by rw [mix_at basis only v]; exact Nat.mul_pos positive vi
+  simp only [Bool.and_eq_true,decide_eq_true_eq,Bool.not_eq_true',List.any_eq_false]
+  refine ⟨⟨c,pos⟩,?_⟩
+  intro y hy bad
+  rw [unitLift_eq,lift] at hy
+  obtain ⟨u,hu,rfl⟩ := List.mem_map.mp hy
+  obtain ⟨_,le,neq⟩ := bad
+  exact neq (congrArg combine (antichain r hu hv (reflects basis apart le)))
+
+/-- Decide size before constructing any lifted candidate. This guard can
+be used precisely when the next stage requires a bounded basis. -/
+theorem minimized_length {k n} (r : Row k) (basis : Vector (Vec n) k) (apart : separates basis = true) :
+    (minimize (r.unitLift basis)).length = count r := by
+  rw [minimize_unitLift r basis apart,unitLift_eq,lift,List.length_map,count_eq]
 
 end Tamarin.ACBasis.UnitBalance
