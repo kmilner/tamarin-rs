@@ -89,9 +89,11 @@ def OutputWithin {n} (gs : List (Vec n)) : Prop :=
   (gs.length ≤ 12 ∧ 2 ^ gs.length * (gs.map total).sum ≤ 65536) ∨
   (gs.length ≤ 64 ∧ ((selections gs).map (selectionWords gs)).sum ≤ 65536)
 
-def Admitted (width : UInt64) (m : Matrix) : Prop :=
-  0 < width ∧ width ≤ 32 ∧ m.size ≤ 128 ∧ ∃ rs, readRows width.toNat m.toList = some rs ∧
+def AdmittedUpTo (limit width : UInt64) (m : Matrix) : Prop :=
+  0 < width ∧ width ≤ limit ∧ m.size ≤ 128 ∧ ∃ rs, readRows width.toNat m.toList = some rs ∧
     (Within rs ∨ Distributed.RunWithin (@Within) rs 64) ∧ OutputWithin (generate rs)
+
+abbrev Admitted := AdmittedUpTo 32
 
 /-- Reference encoding of a flat matrix. A representable variable count
 survives the word boundary without truncation. -/
@@ -146,9 +148,9 @@ def Represents {f : sig.ACSym} {rows : List ACSystem.Row} {n}
     (a[i.val]?.map (fun r => r.toList.map w)) = some (x :: xs) ∧
     σ.image (fr.names i) = (Side.mk x xs).term f
 
-structure Correct (run : UInt64 → Matrix → Option Answers) : Prop where
+structure CorrectUpTo (limit : UInt64) (run : UInt64 → Matrix → Option Answers) : Prop where
   malformed : ∀ n m, readRows n.toNat m.toList = none → run n m = none
-  completes : ∀ n m, Admitted n m → (run n m).isSome
+  completes : ∀ n m, AdmittedUpTo limit n m → (run n m).isSome
   semantic : ∀ {s : Signature} (f : s.ACSym) (rows : List ACSystem.Row) (avoid : List Variable)
     (n : UInt64) (fr : Frame f rows n.toNat) (m : Matrix)
     (_input : readRows n.toNat m.toList = some (rows.map (encode fr.names))) (out : Answers),
@@ -158,6 +160,18 @@ structure Correct (run : UInt64 → Matrix → Option Answers) : Prop where
     ∃ pairs : List (Arm × Substitution s), out = (pairs.map Prod.fst).toArray ∧
       (∀ p ∈ pairs, Represents fr w p.1 p.2) ∧
       (Outcome.complete (pairs.map Prod.snd)).CorrectIn (problem f rows) avoid
+
+abbrev Correct := CorrectUpTo 32
+
+theorem AdmittedUpTo.mono {a b width : UInt64} {m : Matrix} (h : AdmittedUpTo a width m)
+    (le : a ≤ b) : AdmittedUpTo b width m :=
+  ⟨h.1,UInt64.le_trans h.2.1 le,h.2.2⟩
+
+theorem CorrectUpTo.restrict {a b : UInt64} {run : UInt64 → Matrix → Option Answers}
+    (ok : CorrectUpTo b run) (le : a ≤ b) : CorrectUpTo a run where
+  malformed := ok.malformed
+  completes n m domain := ok.completes n m (domain.mono le)
+  semantic := ok.semantic
 
 private theorem stored_get {n} (f : Vec n) : coordinates (Vector.ofFn f) = f := by
   funext i
@@ -335,31 +349,48 @@ theorem outputWithin_perm {n} {xs ys : List (Vec n)} (p : xs.Perm ys) :
     OutputWithin xs ↔ OutputWithin ys := by
   simp only [OutputWithin,p.length_eq,(p.map total).sum_nat,outputWords_perm p]
 
-theorem solve_correct : Correct solve where
+/-- Every successful matrix packet encodes a complete Hilbert basis of the
+decoded system. The bounded number of generators also bounds fresh slots. -/
+theorem solveUpTo_returned {limit width : UInt64} {m : Matrix} {out : Answers}
+    (done : solveUpTo limit width m = some out) :
+    ∃ rs gs, (0 < width ∧ width ≤ limit ∧ m.size ≤ 128) ∧
+      readRows width.toNat m.toList = some rs ∧
+      gs.Perm (generate rs) ∧ gs.length ≤ 64 ∧ emit gs = out := by
+  by_cases size : (0 < width ∧ width ≤ limit) ∧ m.size ≤ 128
+  · cases read : readRows width.toNat m.toList with
+    | none => simp [solveUpTo,size,read,guard] at done
+    | some rs =>
+      cases hg : answerBasis rs with
+      | none => simp [solveUpTo,size,read,hg,guard] at done
+      | some gs =>
+        by_cases fit : fitsOutput gs = true
+        · have emitted : emit gs = out := by simpa [solveUpTo,read,guard,size,hg,fit] using done
+          have bounds := fit
+          simp [fitsOutput] at bounds
+          exact ⟨rs,gs,⟨size.1.1,size.1.2,size.2⟩,rfl,basis_valid rs gs hg,
+            bounds.elim (fun h => Nat.le_trans h.1 (by decide : 12 ≤ 64)) And.left,emitted⟩
+        · simp [solveUpTo,size,read,hg,fit,guard,failure] at done
+  · simp [solveUpTo,size,guard,failure] at done
+
+theorem solveUpTo_correct (limit : UInt64) : CorrectUpTo limit (solveUpTo limit) where
   malformed := by
     intro n m h
-    simp [solve,h,guard]
+    simp [solveUpTo,h,guard]
   completes := by
     rintro n m ⟨hp,hn,hm,rs,read,old | new,words⟩
     · have basis := (bounded_spec rs).2 old
-      simp [solve,answerBasis,hp,hn,hm,read,basis,output_fits _ words,guard]
+      simp [solveUpTo,answerBasis,hp,hn,hm,read,basis,output_fits _ words,guard]
     · obtain ⟨gs,h⟩ := Option.isSome_iff_exists.mp (basis_complete rs new)
       have fit := output_fits gs ((outputWithin_perm (basis_valid rs gs h)).mpr words)
-      simp [solve,hp,hn,hm,read,h,fit,guard]
+      simp [solveUpTo,hp,hn,hm,read,h,fit,guard]
   semantic := by
     intro s f rows avoid n fr m input out result w inj typed fresh
-    by_cases size : (0 < n ∧ n ≤ 32) ∧ m.size ≤ 128
-    · cases hg : answerBasis (rows.map (encode fr.names)) with
-      | none => simp [solve,input,guard,size,hg] at result
-      | some gs =>
-        by_cases fit : fitsOutput gs = true
-        · have eo : emit gs = out := by simpa [solve,input,guard,size,hg,fit] using result
-          subst out
-          have basis := BasisCorrect.of_mem (generate_correct _) (fun _ => (basis_valid _ gs hg).mem_iff)
-          simp [fitsOutput] at fit
-          have width := fit.elim (fun h => Nat.le_trans h.1 (by decide : 12 ≤ 64)) And.left
-          exact emit_correct f rows avoid fr gs basis width w inj typed fresh
-        · simp [solve,input,guard,size,hg,fit] at result; contradiction
-    · simp [solve,guard,size] at result; contradiction
+    obtain ⟨rs,gs,_,decoded,perm,small,rfl⟩ := solveUpTo_returned result
+    rw [input] at decoded
+    cases decoded
+    have basis := BasisCorrect.of_mem (generate_correct _) (fun _ => perm.mem_iff)
+    exact emit_correct f rows avoid fr gs basis small w inj typed fresh
+
+theorem solve_correct : Correct solve := solveUpTo_correct 32
 
 end Tamarin.Homogeneous

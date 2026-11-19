@@ -136,11 +136,14 @@ coordinates. At most 64 generators can pass the packet check. -/
 def answerBasis {n} (rows : List (Row n)) : Option (List (Vec n)) :=
   boundedBasis rows <|> Distributed.run (@boundedBasis) rows 64
 
-def solve (width : UInt64) (m : Matrix) : Option Answers := do
-  guard (0 < width && width ≤ 32 && m.size ≤ 128)
+def solveUpTo (limit width : UInt64) (m : Matrix) : Option Answers := do
+  guard (0 < width && width ≤ limit && m.size ≤ 128)
   let rows ← readRows width.toNat m.toList
   let gs ← answerBasis rows
   guard (fitsOutput gs)
   return emit gs
+
+/-- Published matrix entry point with its original width limit. -/
+abbrev solve := solveUpTo 32
 
 end Tamarin.Homogeneous
