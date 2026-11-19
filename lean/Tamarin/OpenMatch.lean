@@ -267,7 +267,7 @@ private theorem occurs_fold (f : sig.ACSym) (v : Variable) (a : Term sig) (xs : 
     change a.Occurs v ∨ (ACRepresentation.fold f b bs).Occurs v ↔ _
     simp only [ih, List.mem_cons, exists_eq_or_imp]
 
-private theorem occurs_flatten [DecidableEq sig.ACSym] (f : sig.ACSym) (v : Variable) (p : Term sig) :
+theorem occurs_flatten [DecidableEq sig.ACSym] (f : sig.ACSym) (v : Variable) (p : Term sig) :
     (∃ t ∈ ACRepresentation.flatten f p, t.Occurs v) ↔ p.Occurs v := by
   induction p with
   | ac g a b ha hb =>

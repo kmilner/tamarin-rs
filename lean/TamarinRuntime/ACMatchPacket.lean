@@ -16,4 +16,12 @@ def runWith (solve : List Row → Option Bool) (packet : Packet) : UInt8 :=
   | some false => 1
   | some true => 2
 
+abbrev Answers := Array (Array (Array UInt64))
+
+def runAnswersWith (solve : List Row → Option (List (List (List UInt64)))) (packet : Packet) :
+    Option Answers := do
+  let rows ← decode packet.toList
+  let arms ← solve rows
+  return (arms.map (fun arm => (arm.map List.toArray).toArray)).toArray
+
 end Tamarin.Matching.ACMatchPacket

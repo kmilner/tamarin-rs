@@ -28,7 +28,7 @@ theorem possible_of_matches [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : P
       EquivB (term a) (term b) → a = b)
     (σ : Substitution sig) (matched : Matching.Matches problem σ) :
     Possible (layout pivot).1 (layout pivot).2 (problem.map layout) := by
-  obtain ⟨im,nonempty,all⟩ := Matching.ACBags.of_matches f problem layout id term (fun _ => [])
+  obtain ⟨im,⟨nonempty,all⟩,_⟩ := Matching.ACBags.of_matches f problem layout id term (fun _ => [])
     (by simp) (by simpa using left) (by simpa using right) reflects σ matched
   have atPivot := List.mem_map_of_mem (f := layout) used
   exact necessary _ _ _ im (nonempty _ atPivot) distinct (all _ atPivot)
