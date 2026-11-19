@@ -6071,3 +6071,109 @@ fn native_oracle_binary_msg_cancellation_packed_seven_preserve_ambient_values() 
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);
 }
+
+#[test]
+fn native_oracle_open_subject_matching_preserves_joint_rigid_images() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{emap, pair};
+    use crate::maude_sig::{bp_maude_sig, dh_maude_sig, pair_maude_sig};
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = mset_maude_sig()
+        .merge(bp_maude_sig())
+        .merge(dh_maude_sig())
+        .merge(pair_maude_sig());
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let maude = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let x = LVar::new("x", LSort::Msg, 2);
+    let y = LVar::new("y", LSort::Msg, 2);
+    let p = LVar::new("x", LSort::Pub, 2);
+    let var = |v| Term::Lit(Lit::Var(v));
+    let supplied = Term::Lit(Lit::Con(super::skolem_name(0, &x)));
+    let bag = |a, b| f_app_ac(AcSym::Union, vec![a, b]);
+    let eq = |lhs, rhs| Equal { lhs, rhs }; // subject, pattern
+    let matched = |qs: &[Equal<LNTerm>], expected: Vec<Vec<(LVar, LNTerm)>>| {
+        let expected = canonical_ground_answers(expected);
+        assert_eq!(
+            canonical_ground_answers(maude.match_eqs(qs).unwrap()),
+            expected,
+            "{qs:?}"
+        );
+        assert_eq!(native.match_eqs(qs).unwrap(), expected, "{qs:?}");
+        assert_eq!(native.has_match_eqs(qs).unwrap(), !expected.is_empty());
+    };
+    // A simultaneous image may contain its own domain variable. Matching
+    // never chases y in x's image, including across separate equations.
+    let image = pair(var(x), var(y));
+    matched(
+        &[eq(image.clone(), var(x)), eq(var(x), var(y))],
+        vec![vec![(x, image), (y, var(x))]],
+    );
+    matched(&[eq(var(x), var(p))], vec![]);
+    matched(&[eq(var(p), var(x))], vec![vec![(x, var(p))]]);
+    matched(&[eq(var(x), bag(var(y), supplied.clone()))], vec![]);
+    // Even an atom with an internal-looking spelling is distinct from the
+    // subject variable in the other AC factor.
+    matched(
+        &[eq(
+            bag(supplied.clone(), var(x)),
+            bag(supplied.clone(), var(y)),
+        )],
+        vec![vec![(y, var(x))]],
+    );
+    matched(&[eq(var(x), var(y)), eq(supplied, var(y))], vec![]);
+
+    // The common x belongs to different namespaces. Both orientations must
+    // survive under C and under AC, also when that choice sits below a free head.
+    let arms = [
+        vec![(x, var(x)), (y, var(p))],
+        vec![(x, var(p)), (y, var(x))],
+    ];
+    for (pattern, subject) in [
+        (emap(var(x), var(y)), emap(var(x), var(p))),
+        (bag(var(x), var(y)), bag(var(x), var(p))),
+    ] {
+        matched(
+            &[eq(pair(subject, var(p)), pair(pattern, var(p)))],
+            arms.iter()
+                .map(|a| {
+                    let mut a = a.clone();
+                    a.push((p, var(p)));
+                    a
+                })
+                .collect(),
+        );
+    }
+    // AC partitions can put an entire nonempty product in one binding.
+    // Exercise every pair of patterns/subjects, including repeated variables
+    // inside C factors and cross-equation constraints on a surviving witness.
+    let terms = [
+        var(x),
+        var(p),
+        bag(var(x), var(y)),
+        bag(var(x), var(x)),
+        bag(bag(var(p), var(y)), var(x)),
+        emap(var(p), var(x)),
+        bag(emap(var(p), var(x)), var(y)),
+        bag(emap(var(p), var(x)), emap(var(y), var(p))),
+    ];
+    for pattern in &terms {
+        for subject in &terms {
+            let first = eq(subject.clone(), pattern.clone());
+            for query in [vec![first.clone()], vec![first.clone(), eq(var(p), var(y))]] {
+                assert_eq!(
+                    native.match_eqs(&query).unwrap(),
+                    canonical_ground_answers(maude.match_eqs(&query).unwrap()),
+                    "{query:?}"
+                );
+            }
+        }
+    }
+    assert_eq!(native.stats().match_count, 0);
+}

@@ -81,7 +81,7 @@ import Tamarin.FreeTreeMatch
 import Tamarin.OpenMatchAdapter
 import Tamarin.MatchOrder
 import Tamarin.NestedTreeMatch
-import Tamarin.RecursiveACMatch
+import Tamarin.RigidSubject
 import Tamarin.UniformReduction
 import Tamarin.PowerNormalization
 import Tamarin.DHPeerComplete

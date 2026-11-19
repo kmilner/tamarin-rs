@@ -149,7 +149,7 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | --- | --- | --- |
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
-| Directional matching | Under an AC head, free, binary C and AC constructors may nest. One sorted binding per variable applies across every level and equation, including supported source node bindings. Native-only propagates ground captures across open free, C and AC patterns and closed guards in the same query. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
+| Directional matching | Under an AC head, free, binary C and AC constructors may nest. One sorted binding per variable applies across every level and equation, including supported source node bindings. Native-only also matches open subjects across whole conjunctions, preserving subject variables as rigid leaves and sharing pattern bindings across equations. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | Pair projections, selected constructor rules, flat products of normal message factors under a validated AC unit and cancellation presentation, DH power towers and signed exponent products. For binary AC roots, native-only can match active equations and instantiate the RHS when every match yields the same normal value. | Extend positive rewriting to proper AC subproducts and multi-step results. |
 | Variants | Native-only joins supported positional destructors, flat XORs of Fresh variables, binary cancellation over two independent Msg variables and received-base DH powers on their shared inputs. For any declared AC operator it can also prove an identity variant by ruling out all active rules under sorted substitution. | Extend certified narrowing to arbitrary active AC equations. Extend nested narrowing and unrestricted DH exponents. Establish ordering compatibility for joined answers in hybrid mode. |
 
@@ -301,11 +301,17 @@ and their unit, including for a user-declared AC operator. An additional rule at
 disables this path. [Row generator](TamarinRuntime/BinaryCancellation.lean) ·
 [Classification](Tamarin/BinaryXorClassification.lean) · [Wire contract](Tamarin/BinaryCancellationPacket.lean)
 
-Native-only closes every rule in `NSLPK3xor`. Source precomputation matches Maude's
-11 refined cases with no partial deconstructions left. Printed variant order and witness
-names differ. The first unsupported proof query is a directional match with an open
-subject. It includes `u XOR v` matched against a rigid subject variable and another
-constraint on the same `v`. The ground-capture matcher currently defers this conjunction.
+Native-only completes all four proofs in `NSLPK3xor` with the same proof trees as Maude
+and 11 refined source cases. Printed rule-variant order and witness names differ. During
+proof search a variable can occur on both sides of an ordinary match. Lean models the
+subject occurrence as a rigid atom of the same sort, while the pattern occurrence remains
+bindable. Rust keeps the original subject terms in the bindings. At a commutative head,
+equality across the two sides can eliminate an alignment only for a ground common child.
+[Matching refinement](Tamarin/RigidSubject.lean) · [Protocol regression](../crates/tamarin-prover/tests/lean_unification.rs)
+
+The upstream `CRxor` model still defers on a variant query for
+`Fresh XOR Fresh XOR Msg`. Maude returns nine variants. Both the equality of the Fresh
+inputs and how the unrestricted message overlaps them can affect the normal value.
 For other AC theories, the narrowing specification now shows how complete ordinary
 unifiers lift rewrites on proper subproducts and states sufficient conditions for a
 finite search to cover all reachable normal forms. An executable general search remains

@@ -67,4 +67,17 @@ example {sig : Signature} (f : sig.FreeSym) (a b : Fin (sig.arity f) → Term si
     Complete (⟨.free f a, .free f b⟩ :: rest) bindable answers :=
   (free_complete_iff f a b rest bindable answers).mpr h
 
+-- Matching a compound subject can return an image mentioning the very
+-- pattern variable being bound. Take the ground solver's actual singleton
+-- and decode it through the rigid-subject refinement.
+example (s : Signature) (v : Variable) (subject : Term s) (typed : HasSort subject v.sort) :
+    Complete [⟨.var v,subject⟩] (fun _ => True)
+      [RigidSubject.decode s (Substitution.binding v (RigidSubject.freeze s subject)
+        (RigidSubject.freeze_sorted s typed))] :=
+  RigidSubject.complete s [⟨.var v,subject⟩] _ (variable_match v _ _)
+
+-- A common variable on opposite sides cannot justify suppressing a C alignment.
+example (s : Signature) (v : Variable) : RigidSubject.pattern s (.var v) ≠ RigidSubject.freeze s (.var v) :=
+  fun eq => ((RigidSubject.same_across s _ _).mp eq).2 v rfl
+
 end Tamarin.Matching.Tests

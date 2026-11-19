@@ -446,6 +446,26 @@ pub(super) fn solve(
 }
 
 impl super::RuleTable {
+    /// Interpret variables on the subject side as rigid atoms of their own sort.
+    /// The tree matcher keeps subject terms in caller representation, so bound
+    /// images already contain the original variables, including self occurrences.
+    pub(crate) fn match_open_subjects(
+        &self,
+        equations: &[Equal<LNTerm>],
+    ) -> Result<super::Outcome, Error> {
+        if !Budget::new().charge(sides(equations), None)? || !self.admits_terms(equations) {
+            return Ok(super::Outcome::Unsupported);
+        }
+        let canonical = equations
+            .iter()
+            .map(|eq| Equal {
+                lhs: super::canonical_capture(&eq.lhs),
+                rhs: super::canonical_capture(&eq.rhs),
+            })
+            .collect::<Vec<_>>();
+        super::open_match::with_captures(&canonical, Vec::new())
+    }
+
     /// Bare captures are forced by the ground subjects. Seed the remaining
     /// structural matches with those images, including when a variable also
     /// occurs below a constructor or in several AC partitions.

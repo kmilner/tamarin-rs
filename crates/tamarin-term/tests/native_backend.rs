@@ -84,7 +84,7 @@ fn missing_operations_return_explicit_errors() {
     let h = native();
     assert!(matches!(
         h.match_eqs(&[Equal {
-            lhs: sum(variable("subject"), pub_term("b")),
+            lhs: tamarin_term::builtin::fst(variable("subject")), // undeclared in this signature
             rhs: variable("x")
         }]),
         Err(MaudeError::UnsupportedOperation("matching"))
@@ -513,15 +513,16 @@ fn directional_ac_matching_preserves_subjects_and_shared_bindings_without_maude(
         .is_empty());
     assert_eq!(h.stats().match_count, 0);
     h.check_backend_status().unwrap();
-    // A nonground subject must never be solved by reversing the equation.
-    let h = native();
-    assert!(matches!(
+    // The variable in the subject stays rigid and retains its full identity.
+    assert_eq!(
         h.match_eqs(&[Equal {
             lhs: sum(variable("y"), pub_term("tail")),
             rhs: pattern,
-        }]),
-        Err(MaudeError::UnsupportedOperation("matching"))
-    ));
+        }])
+        .unwrap(),
+        vec![vec![(LVar::new("x", LSort::Msg, 0), variable("y"))]]
+    );
+    assert_eq!(h.stats().match_count, 0);
 }
 
 #[test]

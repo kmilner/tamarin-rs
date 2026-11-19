@@ -538,7 +538,7 @@ fn nslpk_xor_responder_preserves_sources_and_the_complete_reachability_proof() {
 }
 
 #[test]
-fn nslpk_xor_closes_all_rules_and_precomputes_sources_without_maude() {
+fn nslpk_xor_preserves_sources_and_all_four_proofs_without_maude() {
     let example = "features/xor/NSLPK3xor.spthy";
     let (theory, log) = run_corpus(example, "native-only", &[]);
     assert!(!log.contains("[maude>]"), "{log}");
@@ -557,9 +557,24 @@ fn nslpk_xor_closes_all_rules_and_precomputes_sources_without_maude() {
         sources.contains("Refined sources: 11 cases, deconstructions complete"),
         "{sources}"
     );
+    let (proof, log) = run_corpus(example, "native-only", &["--prove"]);
+    assert!(!log.contains("[maude>]"), "{log}");
+    for verdict in [
+        "types (all-traces): falsified - found trace (12 steps)",
+        "nonce_secrecy (all-traces): falsified - found trace (11 steps)",
+        "injective_agree (all-traces): falsified - found trace (13 steps)",
+        "session_key_setup_possible (exists-trace): verified (6 steps)",
+    ] {
+        assert!(proof.contains(verdict), "{proof}");
+    }
     if common::maude_available() {
         let (reference, _) = run_corpus(example, "maude", &["--precompute-only"]);
         assert_eq!(comparable_proof(&sources), comparable_proof(&reference));
+        let (reference, _) = run_corpus(example, "maude", &["--prove"]);
+        // The rule listing above the first lemma uses different variant witness names.
+        let lemmas =
+            |out: &str| comparable_proof(out.split_once("lemma types [sources]").unwrap().1);
+        assert_eq!(lemmas(&proof), lemmas(&reference));
     }
 }
 

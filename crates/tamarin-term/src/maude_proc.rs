@@ -1700,10 +1700,10 @@ impl MaudeHandle {
         Ok(compose_residual_arms(out, factored_m))
     }
 
-    /// Attempt the checked ground-subject fragment. Callers supply explicit
+    /// Match a sorted conjunction in-process. Callers supply explicit
     /// (pattern, subject) orientation; the two public matching APIs differ.
     #[cfg(feature = "lean-unification")]
-    fn native_match_ground(
+    fn native_match(
         &self,
         equations: &[Equal<LNTerm>],
         ordered: bool,
@@ -1733,14 +1733,22 @@ impl MaudeHandle {
         };
         if self.backend == AlgebraBackend::NativeOnly
             && let Some(table) = self.native_rules()
-            && let crate::lean_unification::Outcome::Complete(mut answers) = table
-                .match_ground_captures(equations)
-                .map_err(match_error)?
         {
-            for answer in &mut answers {
-                order_match_bindings(answer);
+            let result = if equations
+                .iter()
+                .all(|e| crate::vterm::is_ground_vterm(&e.rhs))
+            {
+                table.match_ground_captures(equations)
+            } else {
+                table.match_open_subjects(equations)
             }
-            return Ok(Some(answers));
+            .map_err(match_error)?;
+            if let crate::lean_unification::Outcome::Complete(mut answers) = result {
+                for answer in &mut answers {
+                    order_match_bindings(answer);
+                }
+                return Ok(Some(answers));
+            }
         }
         // Keep compound AC leaves after decomposing declared free constructors.
         let children;
@@ -1932,7 +1940,7 @@ impl MaudeHandle {
                     rhs: eq.lhs.clone(),
                 })
                 .collect();
-            if let Some(answers) = self.native_match_ground(&oriented, _ordered)? {
+            if let Some(answers) = self.native_match(&oriented, _ordered)? {
                 return Ok(answers);
             }
         }
@@ -2035,7 +2043,7 @@ impl MaudeHandle {
             .collect();
 
         #[cfg(feature = "lean-unification")]
-        if !rigid && let Some(answers) = self.native_match_ground(&rewritten_eqs, true)? {
+        if !rigid && let Some(answers) = self.native_match(&rewritten_eqs, true)? {
             let mut answers = answers
                 .into_iter()
                 .map(|answer| unskolemize_subst(answer, &reverse))

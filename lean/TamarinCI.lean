@@ -360,6 +360,11 @@ theorem exportedRecursiveACMatch_correct :
   RecursiveACMatch.correct exportedOpenMatchSelect_correct exportedCompoundPartitions_correct
     exportedCommOrientations_correct exportedCancelCommon_correct
 
+theorem exportedOpenSubjectMatch_correct :
+    Matching.RigidSubject.SearchCorrect Executable.openMatchSelect Executable.flatACMatch
+      Executable.commOrientations Executable.cancelCommon :=
+  Matching.RigidSubject.of_recursive exportedRecursiveACMatch_correct
+
 theorem exportedSeededMatch_correct :
     RecursiveACMatch.SeededCorrect Executable.openMatchSelect Executable.flatACMatch
       Executable.commOrientations Executable.cancelCommon :=

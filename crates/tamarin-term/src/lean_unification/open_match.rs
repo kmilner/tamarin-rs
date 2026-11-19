@@ -1,4 +1,4 @@
-//! Match trees built from free, C and AC symbols against ground occurrences.
+//! Match trees built from free, C and AC symbols against rigid subject occurrences.
 //! The selector keeps positions distinct. The partition kernel shares one row
 //! per actual variable, including variables also bound in a constructor.
 use super::{
@@ -88,7 +88,7 @@ fn bind(v: LVar, t: &LNTerm, arm: &mut Arm) -> bool {
     }
     if let Some((_, old)) = arm.iter().find(|(key, _)| *key == v) {
         // Both the selected subtrees and the products of residual factors
-        // are canonical ground terms, including products bound at nested heads.
+        // are canonical subject terms, including products bound at nested heads.
         return old == t;
     }
     arm.push((v, t.clone()));
@@ -102,7 +102,7 @@ struct Collectors {
 }
 
 impl Collectors {
-    // Subject terms are canonical ground trees. Equal full terms receive the same
+    // Subject variables are rigid leaves. Equal canonical terms receive the same
     // numeric ID, so counts preserve multiplicity even for repeated variables.
     fn extend<'a>(
         &self,
@@ -349,7 +349,7 @@ impl<'a> Search<'a, '_> {
                     }
                     (Term::App(FunSym::C(f), ps), Term::App(FunSym::C(g), ss)) if f == g => {
                         let (a, b, c, d) = (&ps[0], &ps[1], &ss[0], &ss[1]);
-                        match super::commutative::orientations([a, b, c, d])? {
+                        match super::commutative::match_orientations([a, b, c, d])? {
                             0 => continue 'branch,
                             1 => pending.extend([Task::Pair(b, d), Task::Pair(a, c)]),
                             2 => pending.extend([Task::Pair(b, c), Task::Pair(a, d)]),
@@ -433,7 +433,7 @@ pub(super) fn root(
     search(vec![Task::Pair(pattern, subject)], Arm::new(), cost, budget)
 }
 
-/// Match the unresolved part of a ground conjunction. Every continuation
+/// Match a conjunction against canonical rigid subjects. Every continuation
 /// carries the initial forced images alongside all later variable bindings.
 pub(super) fn with_captures(
     equations: &[crate::rewriting::Equal<LNTerm>],
