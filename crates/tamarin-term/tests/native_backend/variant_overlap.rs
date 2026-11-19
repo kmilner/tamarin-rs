@@ -171,3 +171,6 @@ fn agreeing_self_overlaps_do_not_hide_divergent_branches() {
         ));
     }
 }
+
+#[path = "variant_overlap_ac.rs"]
+mod ac_inputs;
