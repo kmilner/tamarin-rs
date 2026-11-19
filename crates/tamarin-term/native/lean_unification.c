@@ -310,6 +310,21 @@ void *tamarin_lean_ac_bag_answers(const whole_word_slice *rows, size_t count) {
     return lean_is_scalar(reply) ? NULL : take_some(reply);
 }
 
+extern lean_object *tamarin_ac_bag_page(lean_object *rows, lean_object *cursor, uint64_t requested);
+
+/* The request owns one immutable packet across the page calls. Both this
+ * reference and returned page arrays use tamarin_lean_match_release. */
+void *tamarin_lean_ac_bag_packet(const whole_word_slice *rows, size_t count) {
+    return word_rows(rows, count);
+}
+
+void *tamarin_lean_ac_bag_page(void *packet, whole_word_slice cursor, uint64_t requested) {
+    lean_object *rows = (lean_object *)packet;
+    lean_inc(rows);
+    lean_object *reply = tamarin_ac_bag_page(rows, atom_array(cursor.data, cursor.size), requested);
+    return lean_is_scalar(reply) ? NULL : take_some(reply);
+}
+
 extern lean_object *tamarin_open_match_select(uint64_t rigid, uint64_t subject);
 
 /* Transfer the row array into the same opaque row reader as flat matching. */

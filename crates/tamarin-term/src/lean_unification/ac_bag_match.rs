@@ -3,19 +3,20 @@
 //! subject factors in every equation. The numeric alphabet is request-local.
 use super::{
     ac_sort, canonical_capture, common_children, initialize, match_size, operands, residual,
-    subsort, Error, MatchRows, Outcome, RuleTable, Substitutions, WordSlice, LEAN_THREAD,
+    subsort, Error, Outcome, RuleTable, Substitutions, WordSlice, LEAN_THREAD,
 };
 use crate::function_symbols::{AcSym, FunSym};
 use crate::lean_identity::IdentityTable;
 use crate::lterm::{sort_of_lterm, LNTerm, LVar};
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
-use crate::term::{f_app_ac, Term};
+use crate::term::Term;
 use crate::vterm::{is_ground_vterm, Lit};
+
+mod paged;
 
 unsafe extern "C" {
     fn tamarin_lean_ac_bag_match(rows: *const WordSlice, count: usize) -> u8;
-    fn tamarin_lean_ac_bag_answers(rows: *const WordSlice, count: usize) -> *mut std::ffi::c_void;
 }
 
 struct Row<'a> {
@@ -204,7 +205,7 @@ impl RuleTable {
 
 impl BagRows<'_> {
     fn answers(self) -> Result<Option<Substitutions>, Error> {
-        self.with_packet(Vec::new(), read_answers)
+        self.with_packet(Vec::new(), paged::read_answers)
     }
 
     /// Keep the canonical subject factors and their request-local identities
@@ -243,71 +244,6 @@ impl BagRows<'_> {
         let slices: Vec<_> = packet.iter().map(|row| WordSlice::new(row)).collect();
         run(self.symbol, &self.vars, &factors, &slices)
     }
-}
-
-fn read_answers(
-    head: AcSym,
-    vars: &IdentityTable<LVar>,
-    factors: &IdentityTable<&LNTerm>,
-    slices: &[WordSlice],
-) -> Result<Option<Substitutions>, Error> {
-    initialize()?;
-    LEAN_THREAD.with(|_| {
-        // SAFETY: the descriptors and words are live for this synchronous
-        // call. The shim transfers one owned array, or NULL for deferral.
-        let raw = unsafe { tamarin_lean_ac_bag_answers(slices.as_ptr(), slices.len()) };
-        if raw.is_null() {
-            return Ok(None);
-        }
-        let reply = MatchRows::new(raw)?;
-        let count = reply.count();
-        let Some(mut available) = residual::MAX_EXPANDED.checked_sub(count) else {
-            return Ok(None);
-        };
-        let mut arms = Vec::with_capacity(count);
-        let mut ids = Vec::new();
-        for i in 0..count {
-            tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-            if reply.rows(i) != vars.len() {
-                return Err(Error::InvalidStatus(255));
-            }
-            let mut arm = Vec::with_capacity(vars.len());
-            let mut well_sorted = true;
-            for (k, &var) in vars.values().iter().enumerate() {
-                // Lean places keys in first-encounter order. This matches
-                // interning during pattern traversal, independently of Ord.
-                let len = reply.row_size(i, k)?;
-                // A singleton is returned directly; a larger bag also
-                // allocates a product node above the decoded factors.
-                if len > 1 {
-                    available = available.saturating_sub(1);
-                }
-                if len > available {
-                    return Ok(None);
-                }
-                ids.resize(len, 0);
-                if reply.copy_row(i, k, &mut ids)? != len {
-                    return Err(Error::InvalidStatus(255));
-                }
-                let values = ids
-                    .iter()
-                    .map(|&id| factors.get(id).cloned().ok_or(Error::InvalidStatus(255)))
-                    .collect::<Result<Vec<_>, _>>()?;
-                if !residual::charge_expansion(&mut available, &values, None)? {
-                    return Ok(None);
-                }
-                let image = f_app_ac(head, values);
-                well_sorted &= subsort(sort_of_lterm(&image, sort_of_name), var.sort);
-                // Matching returns every observed key, including X -> X.
-                // Variables occurring in the image are frozen subject data.
-                arm.push((var, image));
-            }
-            if well_sorted {
-                arms.push(arm);
-            }
-        }
-        Ok(Some(arms))
-    })
 }
 
 #[cfg(test)]

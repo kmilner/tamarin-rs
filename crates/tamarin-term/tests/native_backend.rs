@@ -793,7 +793,7 @@ fn mixed_sort_matching_restores_rigid_subject_variables() {
 }
 
 #[test]
-fn expensive_matching_is_explicitly_unsupported_not_unsatisfiable() {
+fn ac_match_collection_discards_earlier_pages_when_the_full_result_exceeds_storage() {
     let h = native();
     let pattern = f_app_ac(
         AcSym::Union,
@@ -801,7 +801,7 @@ fn expensive_matching_is_explicitly_unsupported_not_unsatisfiable() {
     );
     let subject = f_app_ac(
         AcSym::Union,
-        (0..8).map(|i| pub_term(format!("a{i}"))).collect(),
+        (0..10).map(|i| pub_term(format!("a{i}"))).collect(),
     );
     let query = [Equal {
         lhs: subject,
@@ -3531,3 +3531,6 @@ fn ac_matching_keeps_one_image_per_repeated_capture_across_rows() {
 
 #[path = "native_backend/sorted_bag_matches.rs"]
 mod sorted_bag_matches;
+
+#[path = "native_backend/paged_bag_matches.rs"]
+mod paged_bag_matches;
