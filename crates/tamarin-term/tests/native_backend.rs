@@ -3534,3 +3534,6 @@ mod sorted_bag_matches;
 
 #[path = "native_backend/paged_bag_matches.rs"]
 mod paged_bag_matches;
+
+#[path = "native_backend/low_rank_feasibility.rs"]
+mod low_rank_feasibility;
