@@ -125,3 +125,4 @@ import Tamarin.DHSignedBlocks
 import Tamarin.DHSignedVariantFamily
 import Tamarin.SignedGraphContract
 import Tamarin.DHStaging
+import Tamarin.BilinearRows

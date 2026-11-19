@@ -263,4 +263,9 @@ private def kind : Term' → Nat
 #guard (SignedGraph.run 1 #[#[3,3,2,3,2]]).extract 0 2 == #[1,4]
 #guard (SignedGraph.run 1 #[#[3,3,2],#[3,1]]).extract 0 2 == #[1,4]
 
+-- Distinct orthants agree where an input or result coordinate is zero.
+-- Counting their identical columns twice used to exceed the response budget.
+#guard (SignedGraph.run 2 #[#[3,4,2]]).extract 0 2 == #[1,64]
+#guard (SignedGraph.run 2 #[#[3,4,2],#[3,4,1,2]]).extract 0 2 == #[1,256]
+
 end Tamarin.DHProductUniquenessTests

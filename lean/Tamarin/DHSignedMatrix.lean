@@ -96,9 +96,6 @@ theorem spine_pointwise_unique [DecidableEq sig.ACSym] {s : Symbols sig} {T : Ta
       rw [DHExponent.Caller.apply_pow]
       exact DHTower.Spine.defined_power start (e.defined s _ env stable ρ hn)
 
-def signed (negative : Fin n → Bool) (x : Vec n) (i : Fin n) : Int :=
-  if negative i then -(x i : Int) else (x i : Int)
-
 theorem normal_readings (s : Symbols sig) (R : Root sig) (env : Fin n → Term sig)
     (normal : ∀ i, Normal R (env i)) : ∃ (signs : Class sig → Fin n → Bool) (mag : Class sig → Vec n), ∀ k i,
       Balance.read s R k (env i) = some (signed (signs k) (mag k) i) := by

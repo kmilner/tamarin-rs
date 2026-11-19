@@ -169,7 +169,7 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. Unit coefficients on one side of a balance equation give a tighter complete basis bound. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Dedicated paths handle positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
-| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. Dedicated paths also cover cancellation, positional destructors and staged DH power families. | Link the general signed-product template solver and extend scalar-action coverage for bilinear pairing. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
+| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. Dedicated paths also cover cancellation, positional destructors and staged DH power families. | Extend the linked signed-product solver to correlated stable operands and compose scalar actions and pairing under further active heads. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
 
 Run the generated coverage test from the repository root.
 
@@ -212,11 +212,13 @@ mandatory, and separate Maude comparisons check all input images and reduced val
 The product of two independent Msg variables has 47 variants. Their power `X^Y`,
 the tower `(g^X)^Y` and the flat power `g^(X*Y)` each have 48. Observing
 `(B^Y)^r` alongside `Y`, with independent Msg inputs and a Fresh exponent
-`r`, yields all 160 Maude rows. The bilinear-pairing grammar also exercises
+`r`, yields all 160 Maude rows. The bilinear-pairing grammar exercises
 the three rules at `pmult` and `emap`, with joint comparisons of bindings and
-normal values. Across the six presentations, 24,643 of 24,645 requests complete
-in native-only mode. The two remaining generated requests are the unrestricted
-two-variable variant families for `pmult` and `emap` (47 and 48 Maude rows).
+normal values. Native-only completes the unrestricted two-variable families for
+both operations (47 and 48 Maude rows). Across six presentations, 24,656 of 24,664
+requests complete, including every mandatory case. Eight exploratory requests defer.
+The smallest is `pmult(inv(X),Y)`. Other examples include `emap(X,Y)^~k` and
+nested scalar actions. [Bilinear family proof](Tamarin/BilinearRows.lean)
 The report prints the smallest deferred request per operation and compares it with Maude
 when `MAUDE_PATH` is set.
 The report counts syntactic requests in this bounded grammar. Protocol regressions
@@ -441,8 +443,15 @@ sorted substitution, modulo structural AC in every input. The empty branch repre
 the all-unit assignment. Every emitted symbolic coordinate is sorted and normal. Giving each observation
 a result coordinate yields a finite executable reference family in Lean. Its denotation
 equals the graph of simultaneous signed-product normalization in both directions.
-The reference enumerates a powerset. Efficient numeric enumeration, pruning, Rust
-integration and composition with the possible power-base shapes remain open.
+Rust now calls a bounded Lean solver in-process with numeric postfix programs.
+Lean checks the packet against the original expressions. It merges columns with the
+same signed counts in every coordinate before enumerating subsets. The proof combines
+their witnesses into a nonempty product, preserving each input and output modulo AC.
+For `X*Y`, this reduces twelve columns to six and returns 64 symbolic rows in 770 words.
+The public adapter keeps 47 distinct, mutually incomparable variants. One local
+comparison took 12 ms through the new adapter and 462 ms through the previous native
+search. Larger joint packets can still exhaust Rust’s specialization checks.
+[Linked packet contract](Tamarin/SignedGraphContract.lean) · [Witness merging](Tamarin/DHSignedColumnQuotient.lean)
 [Signed multiplicities](Tamarin/DHSignedMatrix.lean) · [Exact finite family](Tamarin/DHSignedVariantFamily.lean) · [Power cases](Tamarin/DHBase.lean)
 
 Broader deployment still requires checking the Rust representation against its Lean model

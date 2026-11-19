@@ -1,4 +1,5 @@
 import TamarinRuntime.Homogeneous
+import Std.Data.HashSet.Basic
 
 /-! Numeric signed-product expressions and the finite branch layouts used by
 the semantic specification and the bounded in-process backend. -/
@@ -31,6 +32,9 @@ def row (signs : Fin n → Bool) (eq : Constraint n) : ACBasis.Row n :=
 def profiles : (n : Nat) → List (Fin n → Bool)
   | 0 => [Fin.elim0]
   | n+1 => [false,true].flatMap fun b => (profiles n).map fun tail => Fin.cases b tail
+
+def signed (negative : Fin n → Bool) (x : Vec n) (i : Fin n) : Int :=
+  if negative i then -(x i : Int) else (x i : Int)
 
 abbrev Column (basis : (Fin n → Bool) → List (Vec n)) :=
   (d : Fin n → Bool) × Fin (basis d).length
@@ -86,13 +90,29 @@ def encode {n} (basis : (Fin n → Bool) → List (Vec n)) (all : List (Column b
     entries.length :: entries.map all.idxOf
   (List.finRange n).flatMap fun i => side i false ++ side i true
 
+/-- Equal signed multiplicities in every input and output describe the same
+generator even when the underlying sign profiles differ at zero entries. -/
+def columnKey {n} (basis : (Fin n → Bool) → List (Vec n)) (g : Column basis) :=
+  List.ofFn (signed g.1 ((basis g.1).get g.2))
+
+def firstKeys {α : Type} (key : α → List Int) (seen : Std.HashSet (List Int)) : List α → List α
+  | [] => []
+  | a :: tail =>
+    let k := key a
+    if k ∈ seen then firstKeys key seen tail
+    else a :: firstKeys key (seen.insert k) tail
+
+def representatives {n} (basis : (Fin n → Bool) → List (Vec n)) :=
+  firstKeys (columnKey basis) ∅ (columns basis)
+
 def packet {n} (basis : (Fin n → Bool) → List (Vec n)) : Option (Array UInt64) := do
   let all := columns basis
-  guard (all.length ≤ 12)
-  let arms := 2 ^ all.length
-  let weight := (all.map fun g => total ((basis g.1).get g.2)).sum
+  let reps := representatives basis
+  guard (reps.length ≤ 12)
+  let arms := 2 ^ reps.length
+  let weight := (reps.map fun g => total ((basis g.1).get g.2)).sum
   guard (2 + arms * (2*n + weight) ≤ 65536)
-  let selections := FlatMatchSearch.sublists all
+  let selections := FlatMatchSearch.sublists reps
   let words := 1 :: selections.length :: selections.flatMap (encode basis all)
   guard (words.all (· < UInt64.size))
   return (words.map Nat.toUInt64).toArray

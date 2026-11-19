@@ -1,4 +1,5 @@
-import Tamarin.DHSignedVariantFamily
+import Tamarin.DHSignedColumnQuotient
+import Std.Data.HashSet.Lemmas
 import Tamarin.HomogeneousContract
 
 /-! Public complete answers may use any order, parameter numbering or
@@ -191,11 +192,63 @@ private theorem encode_eq (basis : (Fin n → Bool) → List (Vec n)) (arm : Lis
   unfold encode imageWords layout
   simp only [List.length_map]
 
+/-- The mandatory completion envelope counts only the first occurrence of
+each distinct signed vector in the mathematical reference bases. -/
+private def referenceColumns (basis : (Fin n → Bool) → List (Vec n)) :=
+  (columns basis).eraseDupsBy fun a b =>
+    (List.ofFn (signed a.1 ((basis a.1).get a.2))) == (List.ofFn (signed b.1 ((basis b.1).get b.2)))
+
+private theorem firstKeys_reference {α : Type} (key : α → List Int) (seen : Std.HashSet (List Int)) (xs : List α) :
+    firstKeys key seen xs = (xs.filter fun x => decide (key x ∉ seen)).eraseDupsBy (fun a b => key a == key b) := by
+  induction xs generalizing seen with
+  | nil => rfl
+  | cons a xs ih =>
+    by_cases h : key a ∈ seen
+    · simp [firstKeys,h,ih]
+    · simp [firstKeys,h,List.eraseDupsBy_cons,ih]
+      congr 2
+      funext b
+      simp only [eq_comm]
+
+private theorem representatives_eq (basis : (Fin n → Bool) → List (Vec n)) :
+    representatives basis = referenceColumns basis := by
+  simp [representatives,firstKeys_reference,referenceColumns,columnKey,List.filter_eq_self.mpr]
+
+private theorem firstKeys_properties {α : Type} (key : α → List Int) (seen : Std.HashSet (List Int)) (xs : List α) :
+    (firstKeys key seen xs).Sublist xs ∧
+      ∀ x ∈ xs, key x ∉ seen → ∃ r ∈ firstKeys key seen xs, key x = key r := by
+  induction xs generalizing seen with
+  | nil => simp [firstKeys]
+  | cons a xs ih =>
+    by_cases ha : key a ∈ seen
+    · simp only [firstKeys,ha,ite_true]
+      have ⟨sub,cover⟩ := ih seen
+      refine ⟨sub.cons _,?_⟩
+      intro x hx fresh
+      rcases List.mem_cons.mp hx with rfl | hx
+      · contradiction
+      · exact cover x hx fresh
+    · simp only [firstKeys,ha,ite_false]
+      have ⟨sub,cover⟩ := ih (seen.insert (key a))
+      refine ⟨sub.cons_cons _,?_⟩
+      intro x hx fresh
+      by_cases eq : key x = key a
+      · exact ⟨a,List.mem_cons_self,eq⟩
+      · have tail : x ∈ xs := (List.mem_cons.mp hx).resolve_left (fun h => eq (congrArg key h))
+        obtain ⟨r,hr,same⟩ := cover x tail (by simp [Ne.symm eq,fresh])
+        exact ⟨r,List.mem_cons_of_mem _ hr,same⟩
+
+private theorem representative_cover (basis : (Fin n → Bool) → List (Vec n)) (g : Column basis) :
+    ∃ r ∈ representatives basis, ∀ i, signed g.1 ((basis g.1).get g.2) i = signed r.1 ((basis r.1).get r.2) i := by
+  obtain ⟨r,hr,eq⟩ := (firstKeys_properties (columnKey basis) ∅ (columns basis)).2 g (mem_columns basis g) (by simp)
+  refine ⟨r,hr,fun i => ?_⟩
+  simpa [columnKey,i.isLt] using congrArg (fun xs : List Int => xs[i.val]?) eq
+
 private theorem packet_correct {basis : (Fin n → Bool) → List (Vec n)} {out} (h : packet basis = some out) :
-    represents ((FlatMatchSearch.sublists (columns basis)).map (layout basis)) out := by
+    represents ((FlatMatchSearch.sublists (representatives basis)).map (layout basis)) out := by
   simp only [packet, Option.bind_eq_bind,Option.bind_eq_some_iff,guard,Option.pure_def,Option.some.injEq] at h
   obtain ⟨_,_,_,_,_,fits,rfl⟩ := h
-  let arms := FlatMatchSearch.sublists (columns basis)
+  let arms := FlatMatchSearch.sublists (representatives basis)
   let words := 1 :: arms.length :: arms.flatMap (encode basis (columns basis))
   have fit : ∀ w ∈ words, w < UInt64.size := by
     split at fits
@@ -220,7 +273,7 @@ theorem run_correct : Correct run := by
     simp only [candidate,Option.bind_eq_bind,Option.bind_eq_some_iff] at h
     obtain ⟨_,size,qs,hq,bs,hb,hp⟩ := h
     let basis := fun d => (bs.lookup d).getD []
-    let arms := FlatMatchSearch.sublists (columns basis)
+    let arms := FlatMatchSearch.sublists (representatives basis)
     refine ⟨qs,graph_source _ _ hq,arms.map (layout basis),?_,?_⟩
     · have hh : candidate inputs obs = some out := by
         simp only [candidate,Option.bind_eq_bind,Option.bind_eq_some_iff]
@@ -236,7 +289,8 @@ theorem run_correct : Correct run := by
         rw [term_layout]
         exact template_normal mul inv unit basis a (param basis) (param_injective _) (fun _ => rfl) i
       · intro env typed norm
-        rw [exact_graph inventory mul inv unit qs basis ok (param basis) (param_injective _) (fun _ => rfl) env typed norm]
+        rw [exact_graph_representatives inventory mul inv unit qs basis ok (representatives basis)
+          (firstKeys_properties (columnKey basis) ∅ (columns basis)).1 (representative_cover basis) (param basis) (param_injective _) (fun _ => rfl) env typed norm]
         constructor
         · rintro ⟨a,ha,δ,hn,fit⟩
           exact ⟨_,List.mem_map_of_mem (f := layout basis) ha,δ,hn,fun i => term_layout s basis a i ▸ fit i⟩
@@ -253,7 +307,7 @@ def Within (inputs : UInt64) (obs : Array (Array UInt64)) : Prop :=
   ∃ qs, Source inputs.toNat obs qs ∧
     (∀ d, Homogeneous.Within (qs.map fun p => row d (p.1,.input p.2))) ∧
     let basis := graphBasis qs
-    let cs := columns basis
+    let cs := referenceColumns basis
     let selections := FlatMatchSearch.sublists cs
     cs.length ≤ 12 ∧ 2 + 2 ^ cs.length * (2 * (inputs.toNat + obs.size) +
         (cs.map fun g => total ((basis g.1).get g.2)).sum) ≤ 65536 ∧
@@ -278,8 +332,10 @@ theorem run_total : Total run := by
       simp only [List.mapM_cons,Option.bind_eq_bind,Option.bind_eq_some_iff,Option.pure_def,Option.some.injEq]
       exact ⟨_,⟨_,(Homogeneous.bounded_spec _).2 (bases d),rfl⟩,_,ih,rfl⟩
   have lookup : (fun d => (store.lookup d).getD []) = basis := funext (table_correct ht)
-  have result : candidate m obs = some ((1 :: (FlatMatchSearch.sublists (columns basis)).length ::
-      (FlatMatchSearch.sublists (columns basis)).flatMap (encode basis (columns basis))).map Nat.toUInt64).toArray := by
+  change (referenceColumns basis).length ≤ 12 at columnsCap
+  rw [← representatives_eq] at columnsCap wordsCap fit
+  have result : candidate m obs = some ((1 :: (FlatMatchSearch.sublists (representatives basis)).length ::
+      (FlatMatchSearch.sublists (representatives basis)).flatMap (encode basis (columns basis))).map Nat.toUInt64).toArray := by
     have programs : (obs.all fun p => p.size ≤ 256) = true := Array.all_eq_true.mpr fun p h => decide_eq_true (codeSize obs[p] (Array.getElem_mem h))
     simp only [candidate,Option.bind_eq_bind,Option.bind_eq_some_iff]
     refine ⟨(),by simp [guard,width,nonempty,programs],qs,hq,store,ht,?_⟩
