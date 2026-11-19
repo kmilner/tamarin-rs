@@ -208,6 +208,8 @@ impl Budget {
     }
 }
 
+pub(super) const MAX_EXPANDED: usize = 65_536;
+
 /// Bound an actual simultaneous substitution before materializing it.
 /// A mapped variable is charged for its whole image at that occurrence;
 /// the image itself is already in solved form. AC flattening can only
@@ -218,7 +220,6 @@ pub(super) fn charge_expansion<'a>(
     terms: impl IntoIterator<Item = &'a LNTerm>,
     bindings: Option<&Bindings>,
 ) -> Result<bool, Error> {
-    const MAX_EXPANDED: usize = 65_536;
     const MAX_DEPTH: usize = 256;
 
     fn visit(t: &LNTerm, bindings: Option<&Bindings>, remaining: &mut usize, depth: usize) -> bool {

@@ -49,14 +49,36 @@ fn canonical_variants(
 }
 
 // In an AC image, changing witness names can change their traversal order.
-// For these small oracle cases, try every bijection and compare entire arms.
+// An alpha-renaming preserves each witness's sort and its multiset of
+// ordered-context positions. Try every bijection inside those classes.
 fn canonical_small_ac_answers(
     arms: crate::lean_unification::Substitutions,
 ) -> crate::lean_unification::Substitutions {
     use crate::lterm::HasFrees;
     use crate::subst_vfresh::LNSubstVFresh;
     type Arm = Vec<(LVar, LNTerm)>;
-    fn visit(arm: &Arm, names: &mut [LVar], pos: usize, best: &mut Option<Arm>) {
+    fn positions(
+        t: &LNTerm,
+        path: &mut Vec<usize>,
+        classes: &mut std::collections::BTreeMap<LVar, Vec<Vec<usize>>>,
+    ) {
+        match t {
+            Term::Lit(Lit::Var(v)) => classes.entry(*v).or_default().push(path.clone()),
+            Term::Lit(_) => {}
+            Term::App(f, args) => {
+                for (i, arg) in args.iter().enumerate() {
+                    path.push(if matches!(f, FunSym::Ac(_) | FunSym::C(_)) {
+                        0
+                    } else {
+                        i + 1
+                    });
+                    positions(arg, path, classes);
+                    path.pop();
+                }
+            }
+        }
+    }
+    fn visit(arm: &Arm, names: &mut [LVar], ends: &[usize], pos: usize, best: &mut Option<Arm>) {
         if pos == names.len() {
             let renamed = arm
                 .iter()
@@ -75,22 +97,36 @@ fn canonical_small_ac_answers(
             }
             return;
         }
-        for i in pos..names.len() {
+        for i in pos..ends[pos] {
             names.swap(pos, i);
-            visit(arm, names, pos + 1, best);
+            visit(arm, names, ends, pos + 1, best);
             names.swap(pos, i);
         }
     }
 
     let mut answers = Vec::new();
     for arm in arms {
-        let arm = LNSubstVFresh::from_list(arm).remove_renamings();
-        let mut names = arm.vars_range();
-        // A general DH power can carry a base witness as well as the six
-        // witnesses of its two unrestricted exponent products.
-        assert!(names.len() <= 7, "{} witnesses in oracle arm", names.len());
+        let arm = LNSubstVFresh::from_list(arm).remove_renamings().to_list();
+        let mut classes = std::collections::BTreeMap::new();
+        for (i, (_, t)) in arm.iter().enumerate() {
+            positions(t, &mut vec![i], &mut classes);
+        }
+        let mut groups = std::collections::BTreeMap::new();
+        for (v, mut paths) in classes {
+            paths.sort_unstable();
+            groups
+                .entry((v.sort, paths))
+                .or_insert_with(Vec::new)
+                .push(v);
+        }
+        let mut names = Vec::new();
+        let mut ends = Vec::new();
+        for group in groups.into_values() {
+            names.extend(group);
+            ends.resize(names.len(), names.len());
+        }
         let mut best = None;
-        visit(&arm.to_list(), &mut names, 0, &mut best);
+        visit(&arm, &mut names, &ends, 0, &mut best);
         answers.push(best.unwrap());
     }
     answers.sort();
@@ -2847,14 +2883,13 @@ fn native_oracle_received_base_towers_cover_all_cancellation_subsets() {
         (base.clone(), 12),
         (inv(a.clone()), 1),
         (hash(base.clone()), 7),
+        (var("arbitrary", LSort::Msg), 160),
     ] {
         let slots = [exp(exp(base.clone(), a.clone()), exponent)];
         let expected = valued_variant_rows(&oracle, &slots);
         assert_eq!(expected.len(), count);
         assert_eq!(valued_variant_rows(&native, &slots), expected);
     }
-    let query = exp(exp(base, a), var("arbitrary", LSort::Msg));
-    assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
 }
 
 #[test]
@@ -2978,8 +3013,20 @@ fn native_oracle_free_exponent_preserves_joint_gdh_observations() {
         assert_eq!(expected.len(), count);
         assert_eq!(valued_variant_rows(&native, &slots), expected);
     }
-    let query = exp(exp(var("base", LSort::Msg), y), r);
-    assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
+    let base = var("base", LSort::Msg);
+    for app in [
+        exp(exp(base.clone(), y.clone()), r.clone()),
+        exp(base.clone(), mult(y.clone(), r)),
+    ] {
+        for slots in [
+            [app.clone(), base.clone(), y.clone()],
+            [y.clone(), base.clone(), app.clone()],
+        ] {
+            let expected = valued_variant_rows(&oracle, &slots);
+            assert_eq!(expected.len(), 160);
+            assert_eq!(valued_variant_rows(&native, &slots), expected);
+        }
+    }
 }
 
 #[test]
@@ -6991,6 +7038,10 @@ fn native_oracle_narrowing_preserves_signed_dh_products_and_powers() {
         (mult(x.clone(), x.clone()), 4),
         (inv(mult(x.clone(), x.clone())), 4),
         (mult(x.clone(), y.clone()), 47),
+        (mult(x.clone(), inv(y.clone())), 47),
+        (inv(mult(x.clone(), y.clone())), 64),
+        (mult(inv(x.clone()), inv(y.clone())), 64),
+        (mult(mult(x.clone(), y.clone()), r.clone()), 158),
         (exp(x.clone(), y.clone()), 48),
         (exp(pub_term("g"), mult(x.clone(), y.clone())), 48),
         (exp(exp(pub_term("g"), x.clone()), y), 48),

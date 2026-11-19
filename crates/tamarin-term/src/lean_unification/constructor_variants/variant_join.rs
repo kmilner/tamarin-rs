@@ -2,9 +2,11 @@
 //! Each row also carries its predicted normal values so a specialization
 //! that introduces a redex in an earlier observation can be discarded.
 mod finite_narrowing;
+mod residual_match;
+use residual_match::{residual_row_matches, RowMatch};
 
 use super::{InputDomain, RuleTable};
-use crate::function_symbols::FunSym;
+use crate::function_symbols::{exp_sym, inv_sym, AcSym, FunSym};
 use crate::lean_unification::{initialize, residual, Error, Outcome, WordSlice, LEAN_THREAD};
 use crate::lterm::{frees_list, sort_of_lterm, HasFrees, LNTerm, LSort, LVar, Name};
 use crate::maude_types::sort_of_name;
@@ -157,28 +159,21 @@ impl IndexedRow {
         if pending.is_empty() {
             return Ok(Some(true));
         }
-        let subst = Subst::from_list(captures.iter().map(|(v, t)| (*v, (*t).clone())));
-        let mut equations = Vec::new();
-        for (p, s) in pending {
-            let mut determined = true;
-            p.for_each_free(&mut |v| determined &= captures.contains_key(v));
-            if determined {
-                if apply_vterm(&subst, p.clone()) != *s {
-                    return Ok(Some(false));
-                }
-            } else {
-                equations.push(Equal {
-                    lhs: p.clone(),
-                    rhs: s.clone(),
-                });
-            }
-        }
+        let mut seed = captures.into_iter().map(|(v, t)| (v, t.clone())).collect();
+        let equations = match residual_row_matches(pending, &mut seed)? {
+            RowMatch::Clash => return Ok(Some(false)),
+            RowMatch::Deferred => return Ok(None),
+            RowMatch::Pending(eqs) => eqs,
+        };
         if equations.is_empty() {
             return Ok(Some(true));
         }
-        let seed = captures.into_iter().map(|(k, v)| (k, v.clone())).collect();
         Ok(
-            match super::super::open_match::with_captures_budget(&equations, seed, budget)? {
+            match super::super::open_match::with_captures_budget(
+                &equations,
+                seed.into_iter().collect(),
+                budget,
+            )? {
                 Outcome::Complete(rows) => Some(!rows.is_empty()),
                 Outcome::Unsupported => None,
             },
@@ -217,6 +212,29 @@ struct JoinSearch {
     // All ordinary narrowing frontiers in this query share this allowance
     // for expanded terms, concrete rewrites and state/terminal comparisons.
     frontier_nodes: usize,
+}
+
+/// A known root redex or child redex suffices regardless of any undecided
+/// sibling. With a clear root, normality requires all children to be normal.
+fn normal_with_root(
+    term: &LNTerm,
+    root_clear: bool,
+    mut child_normal: impl FnMut(&LNTerm) -> Result<Option<bool>, Error>,
+) -> Result<Option<bool>, Error> {
+    if !root_clear {
+        return Ok(Some(false));
+    }
+    let mut result = Some(true);
+    if let Term::App(_, args) = term {
+        for arg in args.iter() {
+            match child_normal(arg)? {
+                Some(false) => return Ok(Some(false)),
+                Some(true) => {}
+                None => result = None,
+            }
+        }
+    }
+    Ok(result)
 }
 
 impl JoinSearch {
@@ -299,21 +317,26 @@ impl RuleTable {
     }
 
     fn join_normal(&self, t: &LNTerm) -> Result<Option<bool>, Error> {
+        self.canonical_join_normal(&super::super::canonical_capture(t))
+    }
+
+    fn canonical_join_normal(&self, t: &LNTerm) -> Result<Option<bool>, Error> {
+        if let Some(root) = self.dh_root_normal(t) {
+            return normal_with_root(t, root, |arg| self.canonical_join_normal(arg));
+        }
         if self.irreducible_native(t)? {
             return Ok(Some(true));
         }
         if let Some(n) = self.reduce_native(t)? {
             // Normal forms compare modulo B. A component with a normal form
             // in its own B-class is normal (Select.normal_iff_same).
-            return Ok(Some(
-                super::super::canonical_capture(&n) == super::super::canonical_capture(t),
-            ));
+            return Ok(Some(super::super::canonical_capture(&n) == *t));
         }
         // A known step below the root refutes normality even if this head's
         // reduction is unsupported. No absence of steps follows from deferral.
         if let Term::App(_, xs) = t {
             for x in xs.iter() {
-                if self.join_normal(x)? == Some(false) {
+                if self.canonical_join_normal(x)? == Some(false) {
                     return Ok(Some(false));
                 }
             }
@@ -388,30 +411,65 @@ impl RuleTable {
         let Term::App(head, args) = app else {
             return Ok(None);
         };
-        // The packet and positional narrowing providers both have families at
-        // distinct formal arguments. Specialization itself is independent of
-        // the equations used to obtain that family.
+        let dh = self.builtin_dh
+            && match head {
+                FunSym::Ac(AcSym::Mult) => true,
+                FunSym::NoEq(f) => *f == exp_sym() || *f == inv_sym(),
+                _ => false,
+            };
         let arity = match head {
+            _ if dh && self.dh_unique_instances(app)? => {
+                let Some((_, arity, _)) = self.declaration(*head) else {
+                    return Ok(None);
+                };
+                arity
+            }
             FunSym::Ac(f) if self.cancellation_units.contains_key(f) => 2,
             FunSym::NoEq(f) if self.narrowing.get(f).is_some_and(|r| r.positional()) => args.len(),
             _ => return Ok(None),
         };
         let mut children = Vec::new();
         for arg in args.iter() {
-            if !self.staged_children(arg, Some(&mut children))? {
+            if dh {
+                if !self.stably_normal_native(arg)? && !children.contains(&arg) {
+                    children.push(arg);
+                }
+            } else if !self.staged_children(arg, Some(&mut children))? {
                 return Ok(None);
             }
         }
-        // Both providers declare Msg arguments. Work in a local namespace;
-        // join_rows opens the entire schema range apart from the caller.
-        let formals: Vec<_> = (0..arity)
-            .map(|i| LVar::new("x", LSort::Msg, i as u64))
-            .collect();
+        // A flat product wider than the binary schema still has intermediate
+        // products to normalize, even when all original operands are stable.
+        if dh && children.is_empty() && args.len() == arity {
+            return Ok(None);
+        }
+        // Message arguments can be specialized to their original sorts. A
+        // folded AC application reuses the same schema at each binary split.
+        let mut formals = Vec::with_capacity(arity);
+        for (i, arg) in args.iter().take(arity).enumerate() {
+            let sort = if dh && arity == args.len() {
+                let Some(sort) = self.collect(arg, &mut Vec::new(), InputDomain::Sorted) else {
+                    return Ok(None);
+                };
+                sort
+            } else {
+                LSort::Msg
+            };
+            formals.push(LVar::new("x", sort, i as u64));
+        }
         let variable = |v| Term::Lit(Lit::Var(v));
         let template = crate::term::f_app(*head, formals.iter().copied().map(variable).collect());
         let reserved = formals.iter().map(|v| v.idx).collect();
-        let Some(family) = self.direct_rows(&formals, &reserved, &template)? else {
-            return Ok(None);
+        let family = match self.direct_rows(&formals, &reserved, &template)? {
+            Some(rows) => rows,
+            None if dh => {
+                let Some(rows) = self.finite_narrowing(&formals, &reserved, &template, search)?
+                else {
+                    return Ok(None);
+                };
+                rows
+            }
+            None => return Ok(None),
         };
         let mut operands = if let Some((first, others)) = children.split_first() {
             let Some(mut rows) = self.single_rows(keys, original, first, search)? else {

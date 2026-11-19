@@ -161,23 +161,7 @@ impl Frontier<'_> {
             if !residual::charge_expansion(&mut self.search.frontier_nodes, [t], None)? {
                 return Ok(None);
             }
-            let Term::App(_, args) = t else {
-                unreachable!()
-            };
-            let mut result = Some(root);
-            if root {
-                for arg in args.iter() {
-                    match self.normal(arg)? {
-                        Some(false) => {
-                            result = Some(false);
-                            break;
-                        }
-                        Some(true) => {}
-                        None => result = None,
-                    }
-                }
-            }
-            result
+            super::normal_with_root(t, root, |arg| self.normal(arg))?
         } else {
             self.table
                 .successors(t, &mut self.search.frontier_nodes)?
