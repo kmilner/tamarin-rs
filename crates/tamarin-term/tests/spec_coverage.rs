@@ -12,13 +12,13 @@ use tamarin_term::builtin::{
     pub_var, snd, zero_const,
 };
 use tamarin_term::function_symbols::{
-    AcFctSym, AcSym, Constructability, NdcState, NoEqSym, Privacy,
+    nat_one_sym, AcFctSym, AcSym, Constructability, NdcState, NoEqSym, Privacy,
 };
-use tamarin_term::lterm::{frees, pub_term, HasFrees, LNTerm, LVar, Name};
+use tamarin_term::lterm::{frees, pub_term, HasFrees, LNTerm, LSort, LVar, Name};
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
 use tamarin_term::maude_sig::{
-    bp_maude_sig, dh_maude_sig, hash_maude_sig, mset_maude_sig, pair_maude_sig, xor_maude_sig,
-    MaudeSig,
+    bp_maude_sig, dh_maude_sig, hash_maude_sig, mset_maude_sig, nat_maude_sig, pair_maude_sig,
+    xor_maude_sig, MaudeSig,
 };
 use tamarin_term::rewriting::{Equal, RRule};
 use tamarin_term::subst::{apply_vterm, Subst};
@@ -45,6 +45,7 @@ fn generated_requests() -> String {
     };
     run(&[
         "build",
+        "Tamarin.Cancellation",
         "Tamarin.ConstructorReduction",
         "Tamarin.DHPeer",
         "Tamarin.MatchingFree",
@@ -97,6 +98,7 @@ fn term(text: &str, symbol: AcSym) -> LNTerm {
             "B" => f_app_no_eq(marker(b"b"), vec![]),
             "z" => zero_const(),
             "one" => one_const(),
+            "nat1" => f_app_no_eq(nat_one_sym(), vec![]),
             "neutral" => dh_neutral(),
             "inv" => inv(stack.pop().unwrap()),
             "pow" | "pmult" | "emap" => {
@@ -123,6 +125,11 @@ fn term(text: &str, symbol: AcSym) -> LNTerm {
             _ if token.starts_with('f') => fresh_var("f", token[1..].parse().unwrap()),
             _ if token.starts_with('u') => pub_var("u", token[1..].parse().unwrap()),
             _ if token.starts_with('m') => msg_var("m", token[1..].parse().unwrap()),
+            _ if token.starts_with('n') => Term::Lit(Lit::Var(LVar::new(
+                "n",
+                LSort::Nat,
+                token[1..].parse().unwrap(),
+            ))),
             _ => panic!("unknown term token {token}"),
         };
         stack.push(value);
@@ -269,11 +276,16 @@ fn exercise(
                 "{q:?}"
             );
             match expected {
-                "identity" => assert!(
-                    arms.iter()
-                        .any(|a| covers_identity(&q, &Subst::from_list(a.iter().cloned()))),
-                    "{q:?}"
-                ),
+                "identity" | "identity-only" => {
+                    if expected == "identity-only" {
+                        assert_eq!(arms.len(), 1, "{q}");
+                    }
+                    assert!(
+                        arms.iter()
+                            .any(|a| covers_identity(&q, &Subst::from_list(a.iter().cloned()))),
+                        "{q:?}"
+                    );
+                }
                 count if count.starts_with("rows=") => {
                     assert_eq!(arms.len(), count[5..].parse::<usize>().unwrap(), "{q}");
                 }
@@ -304,7 +316,12 @@ fn exercise(
                 h.unify(&eqs)?
             } else {
                 let arms = h.match_eqs(&eqs)?;
+                let pattern_keys: BTreeSet<_> = pairs.iter().flat_map(|[p, _]| frees(p)).collect();
                 for arm in &arms {
+                    assert!(
+                        arm.iter().all(|(v, _)| pattern_keys.contains(v)),
+                        "unexpected match key: {eqs:?}"
+                    );
                     let subst = Subst::from_list(arm.iter().cloned());
                     for e in &eqs {
                         assert_eq!(apply_vterm(&subst, e.rhs.clone()), e.lhs, "match {eqs:?}");
@@ -316,14 +333,14 @@ fn exercise(
                 "yes" | "no" => assert_eq!(!arms.is_empty(), expected == "yes", "{op} {eqs:?}"),
                 "probe" => {}
                 count if count.starts_with("rows=") => {
-                    // These exact-count cases have ground subjects, so distinct
-                    // satisfying tuples of caller images are distinct solutions.
-                    let keys = frees(&f_app_list(terms.to_vec()));
+                    // Matching keeps every subject rigid. Ground-sided
+                    // unification has the same exact caller-image interpretation.
+                    let keys = frees(&f_app_list(pairs.iter().map(|[p, _]| p.clone()).collect()));
                     let mut distinct = BTreeSet::new();
                     for arm in &arms {
                         let subst = Subst::from_list(arm.iter().cloned());
                         for [pattern, subject] in pairs {
-                            assert!(frees(subject).is_empty());
+                            assert!(op == "match" || frees(subject).is_empty());
                             assert_eq!(
                                 apply_vterm(&subst, pattern.clone()),
                                 *subject,
@@ -382,6 +399,11 @@ fn public_backend_meets_generated_coverage_floor() {
     assert!(rules.is_subset(&bp.rrules()));
     let dh = dh_maude_sig().merge(hash_maude_sig());
     let plain = mset_maude_sig().merge(hash_maude_sig());
+    let nat = nat_maude_sig().merge(hash_maude_sig());
+    assert!(
+        nat.rrules().is_empty(),
+        "generated Nat cases assume constructor-only addition and one"
+    );
     let cancellation = xor_maude_sig().merge(hash_maude_sig());
     let mixed = cancellation.clone().merge(pair_maude_sig());
     let (markers, merge) = marker_presentation(&cases);
@@ -393,6 +415,7 @@ fn public_backend_meets_generated_coverage_floor() {
         "bp" => (&bp, AcSym::Mult),
         "dh" => (&dh, AcSym::Mult),
         "ac" => (&plain, AcSym::Union),
+        "nat" => (&nat, AcSym::NatPlus),
         "xor" => (&cancellation, AcSym::Xor),
         "xor-pair" => (&mixed, AcSym::Xor),
         "markers" => (&markers, merge),
@@ -413,7 +436,7 @@ fn public_backend_meets_generated_coverage_floor() {
         let ts: Vec<_> = fields.map(|e| term(e, symbol)).collect();
         let exploratory = expected == "probe" || expected.starts_with("probe-");
         let check = expected.strip_prefix("probe-").unwrap_or(expected);
-        let compare = theory == "bp"
+        let compare = matches!(theory, "bp" | "nat")
             || theory == "dh" && (op == "variants" || (op, check) == ("reduce", "exact"))
             || theory == "markers" && (op, check) == ("reduce", "exact");
         let reference = if let Some(path) = maude_path.as_ref().filter(|_| compare) {
@@ -442,7 +465,7 @@ fn public_backend_meets_generated_coverage_floor() {
         let coverage = report.entry((theory, op)).or_insert_with(Coverage::default);
         match exercise(&h, op, check, &ts) {
             Ok(arms) => {
-                if theory == "bp"
+                if matches!(theory, "bp" | "nat")
                     && op != "reduce"
                     && let Some((oracle, oracle_arms)) = reference
                 {
@@ -471,7 +494,7 @@ fn public_backend_meets_generated_coverage_floor() {
         }
     }
     drop(active_oracle);
-    assert_eq!(report.len(), 20);
+    assert_eq!(report.len(), 24);
     for ((theory, op), c) in report {
         assert!(c.required > 0, "missing guaranteed {theory} {op} cases");
         println!(

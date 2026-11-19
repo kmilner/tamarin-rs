@@ -1,3 +1,4 @@
+import Tamarin.Cancellation
 import Tamarin.ConstructorReduction
 import Tamarin.DHPeer
 import Tamarin.MatchingFree
@@ -346,7 +347,169 @@ def bpCoverage : IO Unit := do
   for (body,count) in [(e (p r x) (p r y),336), (e x (p r (p r x)),8)] do
     emitBP "variants" ("rows=" ++ toString count) [body]
 
+namespace Natural
+
+/-- The formal language emitted for the builtin natural numbers, with a nullary
+one and binary same-sort AC addition. Neither operator has an oriented rule. -/
+abbrev signature : Signature where
+  FreeSym := Unit
+  CSym := Empty
+  ACSym := Unit
+  Atom := Empty
+  arity := fun _ => 0
+  inputSort := fun _ i => Fin.elim0 i
+  outputSort := fun _ => .nat
+  cSort := Empty.elim
+  acSort := fun _ => .nat
+  atomSort := Empty.elim
+
+abbrev NTerm := Term signature
+
+def one : NTerm := .free () Fin.elim0
+def natVar (i : Nat) : NTerm := .var ⟨i,.nat⟩
+def add (a b : NTerm) : NTerm := .ac () a b
+
+/-- Nonunit addition represents exactly n+1 copies, even for n = 0. -/
+def copies (a : NTerm) : Nat → NTerm
+  | 0 => a
+  | n+1 => add a (copies a n)
+
+def code : NTerm → String
+  | .var v => "n" ++ toString v.id
+  | .free _ _ => "nat1"
+  | .ac _ a b => code a ++ "." ++ code b ++ ".+"
+  | .atom s => s.elim
+  | .comm s _ _ => s.elim
+
+def emit (op expected : String) (ts : List NTerm) : IO Unit := do
+  unless ts.all (fun t => t.checkSort .nat) do throw (IO.userError "ill-sorted natural-number request")
+  IO.println (String.intercalate "\t" (["nat",op,expected] ++ ts.map code))
+
+theorem identity_family (ts : List NTerm) :
+    CompleteVariants (ruleRoot []) ts [⟨Substitution.identity,ts⟩] := by
+  exact (identity_variants [] ts (by simp) (by intro t ht f hf h; cases h) []).1
+
+def parts (p q width : Nat) : List (Nat × Nat) :=
+  ((List.range width).flatMap fun i => (List.range width).map fun j => (i+1,j+1)).filter
+    fun (a,b) => p*a + q*b == width
+
+theorem mem_parts {p q width a b : Nat} (hp : 0 < p) (hq : 0 < q) :
+    (a,b) ∈ parts p q width ↔ 0 < a ∧ 0 < b ∧ p*a + q*b = width := by
+  simp only [parts,List.mem_filter,beq_iff_eq,List.mem_flatMap,List.mem_map,List.mem_range,Prod.mk.injEq]
+  constructor
+  · rintro ⟨⟨i,_,j,_,rfl,rfl⟩,e⟩; exact ⟨by omega,by omega,e⟩
+  · rintro ⟨ha,hb,e⟩
+    have := Nat.le_mul_of_pos_left a hp
+    have := Nat.le_mul_of_pos_left b hq
+    exact ⟨⟨a-1,by omega,b-1,by omega,by omega,by omega⟩,e⟩
+
+theorem parts_nodup (p q width : Nat) : (parts p q width).Nodup := by
+  unfold parts
+  apply List.Pairwise.filter
+  apply List.pairwise_flatMap.mpr
+  constructor
+  · intro i _
+    apply List.pairwise_map.mpr
+    exact List.nodup_range.imp fun h eq => h (by simpa using congrArg Prod.snd eq)
+  · apply List.nodup_range.imp
+    intro i j different x hx y hy equal
+    obtain ⟨a,_,rfl⟩ := List.mem_map.mp hx
+    obtain ⟨b,_,rfl⟩ := List.mem_map.mp hy
+    exact different (by simpa using congrArg Prod.fst equal)
+
+private theorem copies_length (t : NTerm) (n : Nat) :
+    (Cancellation.flatten () (copies t n)).length = (n+1) * (Cancellation.flatten () t).length := by
+  induction n with
+  | zero => simp [copies]
+  | succ n ih =>
+    simp only [copies,add,Cancellation.flatten_ac,List.length_append,ih,Nat.succ_mul]
+    omega
+
+private theorem copies_replicate (t : NTerm) (c : Cancellation.Class signature) (w n : Nat)
+    (h : Cancellation.flatten () t = List.replicate w c) :
+    Cancellation.flatten () (copies t n) = List.replicate ((n+1)*w) c := by
+  induction n with
+  | zero => simpa [copies] using h
+  | succ n ih =>
+    rw [copies, add, Cancellation.flatten_ac, h, ih, List.replicate_append_replicate]
+    congr 1
+    simp only [Nat.succ_mul]
+    omega
+
+private theorem live_factor (t : NTerm) (n : Nat) :
+    Cancellation.flatten () t ⊆ Cancellation.flatten () (copies t n) := by
+  cases n with
+  | zero => exact List.Subset.refl _
+  | succ n =>
+    rw [copies, add, Cancellation.flatten_ac]
+    intro v h
+    exact List.mem_append_left _ h
+
+/-- For an arbitrary pair of input images, matching a repeated rigid factor is
+exactly a positive integral width allocation with that same factor in both
+images. Thus a tuple of widths determines each capture modulo AC. -/
+theorem matches_parts (a b atom : NTerm) (p q n : Nat) (c : Cancellation.Class signature)
+    (rigid : Cancellation.flatten () atom = [c]) :
+    EquivB (add (copies a p) (copies b q)) (copies atom n) ↔
+      ((Cancellation.flatten () a).length, (Cancellation.flatten () b).length) ∈ parts (p+1) (q+1) (n+1) ∧
+      (∀ v ∈ Cancellation.flatten () a, v = c) ∧ (∀ v ∈ Cancellation.flatten () b, v = c) := by
+  have target := copies_replicate atom c 1 n (by simpa using rigid)
+  simp only [Nat.mul_one] at target
+  rw [mem_parts (by omega) (by omega)]
+  constructor
+  · intro match'
+    have pos (t : NTerm) : 0 < (Cancellation.flatten () t).length := by
+      apply List.length_pos_iff.mpr
+      intro nil
+      have h := Cancellation.fold_flatten () t
+      rw [nil] at h
+      cases h
+    have perm := Cancellation.flatten_equiv () match'
+    rw [add, Cancellation.flatten_ac, target] at perm
+    have only := (List.eq_replicate_iff.mp (List.perm_replicate.mp perm)).2
+    have len := perm.length_eq
+    simp only [List.length_append, copies_length, List.length_replicate] at len
+    exact ⟨⟨pos a, pos b, len⟩, fun v h => only v (List.mem_append_left _ (live_factor a p h)),
+      fun v h => only v (List.mem_append_right _ (live_factor b q h))⟩
+  · rintro ⟨⟨_,_,w⟩, ha, hb⟩
+    apply Cancellation.equiv_of_flatten_perm ()
+    rw [add, Cancellation.flatten_ac, copies_replicate a c _ p (List.eq_replicate_of_mem ha),
+      copies_replicate b c _ q (List.eq_replicate_of_mem hb), List.replicate_append_replicate,
+      w, target]
+
+def coverage : IO Unit := do
+  let x := natVar 0
+  let y := natVar 1
+  let rigid := natVar 2
+  let rows (n : Nat) := "rows=" ++ toString n
+  for t in [one,x,add x one,add x (add one x),add (add y x) one] do
+    emit "reduce" "identity" [t]
+    emit "variants" "identity-only" [t,x,t]
+  -- A rigid subject factor can be the actual declared one or a Nat variable.
+  -- Only ground-sided unification has the same partition family as matching.
+  for (p,q) in [(0,0),(1,2),(2,1)] do
+    let pattern := add (copies x p) (copies y q)
+    for n in [0,1,2,4,7,8] do
+      let expected := rows (parts (p+1) (q+1) (n+1)).length
+      for atom in [one,rigid] do
+        emit "match" expected [pattern,copies atom n]
+      emit "unify" expected [pattern,copies one n]
+  for n in [64,65] do
+    let expected := rows (if (n+1) % 2 == 0 then 1 else 0)
+    for atom in [one,rigid] do emit "match" expected [add x x,copies atom n]
+  -- Ordinary unification can bind the variable on the right; directional
+  -- matching treats it as a single occurrence, which cannot fill two slots.
+  emit "unify" "yes" [add x y,rigid]
+  emit "match" "rows=0" [add x y,rigid]
+  -- A positive number cannot equal itself plus one.
+  emit "unify" "no" [x,add x one]
+  emit "match" "rows=1" [add x y,add rigid one,x,rigid]
+  emit "match" "rows=0" [add x x,add rigid one]
+
+end Natural
+
 def generate : IO Unit := do
+  Natural.coverage
   bpCoverage
   markerCoverage
   dhCoverage
