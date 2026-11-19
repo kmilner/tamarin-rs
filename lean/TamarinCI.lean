@@ -64,6 +64,9 @@ theorem exportedMatchSizeExcludes_correct :
     Matching.Prefilter.SizeExclusion Executable.matchSizeExcludes :=
   Matching.Prefilter.size_exclusion_correct
 
+theorem exportedLinearACMatch_correct : Matching.LinearAC.Correct Executable.matchSizeExcludes :=
+  Matching.LinearAC.correct
+
 theorem exportedOperandRefine_correct : OperandRefinement.Correct Executable.operandRefine :=
   OperandRefinement.correct
 
@@ -277,6 +280,10 @@ theorem exportedCancellation_semantic {sig : Signature} (f : sig.ACSym)
 
 theorem exportedCancelCommon_correct : CommonCancellation.Correct Executable.cancelCommon :=
   CancelCommonCandidateProofs.correct
+
+theorem exportedLinearACMatch_packet : Matching.LinearAC.PacketCorrect Executable.cancelCommon
+    Executable.matchSizeExcludes :=
+  Matching.LinearAC.packet_correct exportedCancelCommon_correct exportedLinearACMatch_correct
 
 theorem exportedACRowClash {sig : Signature} {pivot target : ACRowElimination.Row UInt64}
     {f : sig.ACSym} {get : UInt64 → Term sig} {p : Problem sig} {a b : Equation sig}

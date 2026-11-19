@@ -21,9 +21,19 @@ private theorem flat_fold (f : sig.ACSym) (σ : Substitution sig) (x : Term sig)
     rw [Cancellation.flatten_ac, ih]
     rfl
 
-private theorem subject_flat (f : sig.ACSym) (x : Term sig) (xs : List (Term sig)) :
+theorem subject_flat (f : sig.ACSym) (x : Term sig) (xs : List (Term sig)) :
     Cancellation.flatten f (ACRepresentation.fold f x xs) = (x :: xs).flatMap (Cancellation.flatten f) := by
   simpa [images, Substitution.apply_identity] using flat_fold f (.identity) x xs
+
+theorem factor_of_mem_flatten [DecidableEq sig.ACSym] (f : sig.ACSym) (t : Term sig) :
+    ∀ u ∈ ACRepresentation.flatten f t, Cancellation.flatten f u = [Cancellation.classOf u] := by
+  induction t with
+  | var | atom | free | comm => simp [ACRepresentation.flatten,Cancellation.flatten]
+  | ac g a b ia ib =>
+    by_cases same : f = g
+    · simpa [ACRepresentation.flatten,same] using fun u (h : u ∈ ACRepresentation.flatten f a ∨
+          u ∈ ACRepresentation.flatten f b) => h.elim (ia u) (ib u)
+    · simp [ACRepresentation.flatten,Cancellation.flatten,same]
 
 private theorem flat_nonempty (f : sig.ACSym) (t : Term sig) : Cancellation.flatten f t ≠ [] := by
   intro he

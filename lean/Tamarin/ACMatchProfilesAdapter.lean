@@ -14,16 +14,6 @@ def Possible (keys : List Variable) (atoms : List α) (rows : List (List Variabl
   ∀ group, (keys.filter (fun a => profile (rows.map Prod.fst) a == group)).length ≤
     (atoms.filter (fun b => profile (rows.map Prod.snd) b == group)).length
 
-private theorem factor_of_mem_flatten [DecidableEq sig.ACSym] (f : sig.ACSym) (t : Term sig) :
-    ∀ u ∈ ACRepresentation.flatten f t, Cancellation.flatten f u = [Cancellation.classOf u] := by
-  induction t with
-  | var | atom | free | comm => simp [ACRepresentation.flatten,Cancellation.flatten]
-  | ac g a b ia ib =>
-    by_cases same : f = g
-    · simpa [ACRepresentation.flatten,same] using fun u (h : u ∈ ACRepresentation.flatten f a ∨
-          u ∈ ACRepresentation.flatten f b) => h.elim (ia u) (ib u)
-    · simp [ACRepresentation.flatten,Cancellation.flatten,same]
-
 /-- A failed profile or capacity check rules out every simultaneous match.
 The caller may use any factor identifiers that distinguish B classes on the
 observed subjects. Their order and all identifiers outside these equations

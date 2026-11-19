@@ -432,6 +432,16 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedHomogeneousUnify_correct"),
 ])
 
+MATCH_CAPACITY = "def matchSizeExcludes (pattern subject : UInt64) : Bool := decide (subject < pattern)"
+EXECUTABLE = ("import Tamarin.LinearACMatch\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedLinearACMatch_correct") + "end Tamarin\n")
+EXPORT_MUTATIONS.extend([
+    ("linear_match_rejects_exact_capacity", MATCH_CAPACITY,
+     MATCH_CAPACITY.replace("subject < pattern", "subject ≤ pattern"), "theorem exportedLinearACMatch_correct"),
+    ("linear_match_accepts_short_subject", MATCH_CAPACITY,
+     MATCH_CAPACITY.replace("decide (subject < pattern)", "false"), "theorem exportedLinearACMatch_correct"),
+])
+
 FEASIBLE_RUN = "  ACFeasibility.run width symbol sort decls nodes roots"
 EXECUTABLE = ("import Tamarin.ACFeasibility\n" + EXECUTABLE + "\nnamespace Tamarin\n"
               + obligation("exportedGraphACFeasible_correct") + "end Tamarin\n")

@@ -8,6 +8,7 @@ import Tamarin.SpecChecks
 import Tamarin.Executable
 import Tamarin.ExecutableChecks
 import Tamarin.GroundConjunction
+import Tamarin.LinearACMatch
 import Tamarin.IndependentUnification
 import Tamarin.CandidateProofs
 import Tamarin.FreshSubstitution
@@ -101,6 +102,7 @@ import Tamarin.ACRootReduction
 import Tamarin.ACSubgroups
 import Tamarin.ACSubproductReduction
 import Tamarin.ContextualReduction
+import Tamarin.InertProductReduction
 import Tamarin.ACUnifierExclusion
 import Tamarin.NarrowingFrontier
 import Tamarin.BinaryXorJoined
