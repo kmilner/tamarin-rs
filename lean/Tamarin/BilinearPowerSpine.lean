@@ -338,4 +338,78 @@ theorem caller_power_map {m : Nat} (I : Inventory s β T.rules) (pow : PowerBuck
   exact power_map I pow group unit (sx.subst ρ.image ρ.sorted) (sy.subst ρ.image ρ.sorted)
     ((e.sorted s env se).subst ρ.image ρ.sorted) (nx ρ hn) (ny ρ hn) (e.defined s _ env ne ρ hn) out
 
+private theorem subst_point_spine (β : Operators sig) (ρ : Substitution sig)
+    (p : Term sig) (xs : List (Term sig)) :
+    ρ.apply (PointSpine.spine β p xs) = PointSpine.spine β (ρ.apply p) (xs.map ρ.apply) := by
+  induction xs generalizing p with
+  | nil => rfl
+  | cons e es ih =>
+    change ρ.apply (PointSpine.spine β (β.point e p) es) = _
+    rw [ih,β.point_subst]; rfl
+
+private theorem subst_power_spine (s : Symbols sig) (ρ : Substitution sig)
+    (b : Term sig) (xs : List (Term sig)) :
+    ρ.apply (xs.foldl s.power b) = (xs.map ρ.apply).foldl s.power (ρ.apply b) := by
+  induction xs generalizing b with
+  | nil => rfl
+  | cons e es ih =>
+    change ρ.apply (es.foldl s.power (s.power b e)) = _
+    rw [ih,DHExponent.Caller.apply_pow]; rfl
+
+/-- A symbolic point built from signed scalar expressions has a point view
+at every normalized caller substitution. The underlying point can itself
+be a signed expression reducing to an action. All expressions may share variables. -/
+theorem caller_point_view [DecidableEq sig.ACSym] {m : Nat} (I : Inventory s β T.rules) (g : Balance.Inventory E)
+    (env : Fin m → Term sig) (se : ∀ i, HasSort (env i) .msg)
+    (ne : ∀ i, StableVariants.Stable (ruleRoot T.rules) (env i))
+    (x : SignedMatrix.Expr m) (xs : List (SignedMatrix.Expr m))
+    (ρ : Substitution sig) (hn : Normalized (ruleRoot T.rules) ρ) :
+    PointView s β (ruleRoot T.rules) (ρ.apply (PointSpine.spine β (x.term s env) (xs.map (·.term s env)))) := by
+  rw [subst_point_spine]
+  apply PointSpine.signed_view I g ((x.sorted s env se).subst ρ.image ρ.sorted) (x.defined s _ env ne ρ hn)
+  · intro a ha
+    obtain ⟨t,ht,rfl⟩ := List.mem_map.mp ha
+    obtain ⟨e,_,rfl⟩ := List.mem_map.mp ht
+    exact (e.sorted s env se).subst ρ.image ρ.sorted
+  · intro a ha
+    obtain ⟨t,ht,rfl⟩ := List.mem_map.mp ha
+    obtain ⟨e,_,rfl⟩ := List.mem_map.mp ht
+    exact e.defined s _ env ne ρ hn
+
+/-- End-to-end child-first evaluation for a symbolic power tower over a
+pairing. Both point computations, each signed exponent, and the normalized
+result use one caller substitution. The point grammar may be enlarged
+independently by proving the point-view premise. -/
+theorem caller_stage_spines {m : Nat} (I : Inventory s β T.rules) (pow : PowerBucket T)
+    (g : Balance.Inventory E) (unit : Normal (ruleRoot T.rules) s.product.one) {x y : Term sig}
+    (env : Fin m → Term sig) (se : ∀ i, HasSort (env i) .msg)
+    (ne : ∀ i, StableVariants.Stable (ruleRoot T.rules) (env i)) (es : List (SignedMatrix.Expr m))
+    (ρ : Substitution sig) (hn : Normalized (ruleRoot T.rules) ρ)
+    (vx : PointView s β (ruleRoot T.rules) (ρ.apply x)) (vy : PointView s β (ruleRoot T.rules) (ρ.apply y))
+    (a b n : Term sig) (nx : NormalForm (ruleRoot T.rules) (ρ.apply x) a)
+    (ny : NormalForm (ruleRoot T.rules) (ρ.apply y) b) (map : NormalForm (ruleRoot T.rules) (β.map a b) n)
+    (val : Term sig → Term sig)
+    (values : ∀ e ∈ es, NormalForm (ruleRoot T.rules) (ρ.apply (e.term s env)) (val (ρ.apply (e.term s env))))
+    (out : Term sig) :
+    NormalForm (ruleRoot T.rules) (ρ.apply ((es.map (·.term s env)).foldl s.power (β.map x y))) out ↔
+      NormalForm (ruleRoot T.rules) ((es.map (fun e => val (ρ.apply (e.term s env)))).foldl s.power n) out := by
+  have sorted {t} (view : PointView s β (ruleRoot T.rules) t) : HasSort t .msg := by
+    obtain ⟨p,sp,_,_,trace⟩ := view
+    obtain ⟨_,h⟩ := trace (classOf s.product.one)
+    exact h.typed sp
+  have sx := sorted vx
+  have sy := sorted vy
+  have base := (map_stage_viewed I pow g unit sx sy vx vy nx ny).mpr map
+  rw [subst_power_spine,show ρ.apply (β.map x y) = β.map (ρ.apply x) (ρ.apply y) from rfl]
+  let terms := (es.map (·.term s env)).map ρ.apply
+  have inst {t} (h : t ∈ terms) : ∃ e ∈ es, t = ρ.apply (e.term s env) := by
+    obtain ⟨u,hu,rfl⟩ := List.mem_map.mp h
+    obtain ⟨e,he,rfl⟩ := List.mem_map.mp hu
+    exact ⟨e,he,rfl⟩
+  have equiv := stage_viewed I pow g unit sx sy vx vy terms
+    (fun _ h => let ⟨e,_,eq⟩ := inst h; eq ▸ (e.sorted s env se).subst ρ.image ρ.sorted)
+    (fun _ h => let ⟨e,_,eq⟩ := inst h; eq ▸ e.defined s _ env ne ρ hn) val
+    (fun _ h => let ⟨e,he,eq⟩ := inst h; eq ▸ values e he) base out
+  simpa [terms,List.map_map,Function.comp_def] using equiv
+
 end Tamarin.Rewriting.Bilinear.PowerSpine
