@@ -58,6 +58,25 @@ theorem size_match {p t : Term s} {σ : Substitution s} (matched : EquivB (σ.ap
   rw [size_equiv matched] at h
   omega
 
+/-- A failed necessary size comparison in any conjunct refutes the whole
+scoped match. The reader may saturate both syntax-tree counts at any one limit. -/
+def SizeExclusion (run : UInt64 → UInt64 → Bool) : Prop :=
+  (∀ left right, right < left → run left right = true) ∧
+  ∀ {s : Signature} (q : Problem s) (e : Equation s) (bindable : Variable → Prop)
+    (limit : Nat) (left right : UInt64), e ∈ q →
+    left.toNat = min (rigidSize e.lhs) limit →
+    right.toNat = min (rigidSize e.rhs) limit →
+    run left right = true → Complete q bindable []
+
+theorem size_exclusion_correct : SizeExclusion (fun left right => decide (right < left)) := by
+  refine ⟨fun _ _ h => decide_eq_true h, ?_⟩
+  intro s q e bindable limit left right mem hl hr rejected
+  apply (empty_iff ..).mpr
+  rintro ⟨σ,hit,_⟩
+  have bound := size_match (hit e mem) limit
+  have lt : right.toNat < left.toNat := UInt64.lt_iff_toNat_lt.mp (of_decide_eq_true rejected)
+  omega
+
 /-- The directional analogue of Part.solves: only the pattern is instantiated,
 even if a variable identity occurs both in a pattern and in a subject. -/
 theorem part_matches {q : Problem s} {e : Equation s} (part : Part q e) {σ : Substitution s}

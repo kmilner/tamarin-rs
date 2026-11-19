@@ -30,6 +30,9 @@ harness. TamarinCI separately verifies these exact entry points before merge.
 -/
 namespace Tamarin.Executable
 
+@[export tamarin_match_size_excludes]
+def matchSizeExcludes (pattern subject : UInt64) : Bool := decide (subject < pattern)
+
 @[export tamarin_flat_ac_equal]
 def flatACEqual (lhs rhs : Array UInt64) : UInt8 :=
   RuntimeCandidate.backend.equal lhs rhs

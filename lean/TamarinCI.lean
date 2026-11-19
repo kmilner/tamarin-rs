@@ -60,6 +60,10 @@ theorem Tamarin.exportedFlatMatcher_correct (n : UInt64) (occ tail rhs : Array U
 
 namespace Tamarin
 
+theorem exportedMatchSizeExcludes_correct :
+    Matching.Prefilter.SizeExclusion Executable.matchSizeExcludes :=
+  Matching.Prefilter.size_exclusion_correct
+
 theorem exportedOperandRefine_correct : OperandRefinement.Correct Executable.operandRefine :=
   OperandRefinement.correct
 
@@ -1047,6 +1051,7 @@ run_cmd do
     (``Tamarin.Executable.reductionGraph, `tamarin_reduction_graph),
     (``Tamarin.Executable.acSubgroups, `tamarin_ac_subgroups),
     (``Tamarin.Executable.openMatchSelect, `tamarin_open_match_select),
+    (``Tamarin.Executable.matchSizeExcludes, `tamarin_match_size_excludes),
     (``Tamarin.Executable.collectorPossible, `tamarin_collector_possible),
     (``Tamarin.Executable.sortedACMatch, `tamarin_sorted_ac_match),
     (``Tamarin.Executable.flatACMatch, `tamarin_flat_ac_match),

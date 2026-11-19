@@ -1916,6 +1916,18 @@ impl MaudeHandle {
             .map(|answers| !answers.is_empty())
     }
 
+    #[cfg(feature = "lean-unification")]
+    fn match_size_excluded(&self, oriented: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
+        if self.backend == AlgebraBackend::NativeOnly
+            && let Some(table) = self.native_rules()
+        {
+            return table
+                .refutes_match_size(oriented)
+                .map_err(|e| self.lean_error(e));
+        }
+        Ok(false)
+    }
+
     // With no bindable variables, matching reduces to equality modulo C and AC.
     // Smart constructors already produce the canonical representation. A library
     // caller can also supply valid raw trees with unsorted or nested AC children.
@@ -1997,6 +2009,9 @@ impl MaudeHandle {
                 .collect();
             if let Some(answers) = self.native_match(&oriented, _ordered)? {
                 return Ok(answers);
+            }
+            if self.match_size_excluded(&oriented)? {
+                return Ok(Vec::new());
             }
         }
         let mut inner = cancellation::lock(&self.inner)?;
@@ -2105,6 +2120,13 @@ impl MaudeHandle {
                 .collect();
             self.order_native_alternatives(&mut answers);
             return Ok(answers);
+        }
+
+        // Use the original shared DAG. Skolemization can rebuild repeated
+        // subterms; the unscoped size bound also refutes every scoped matcher.
+        #[cfg(feature = "lean-unification")]
+        if !rigid && self.match_size_excluded(eqs)? {
+            return Ok(Vec::new());
         }
 
         let mut inner = cancellation::lock(&self.inner)?;

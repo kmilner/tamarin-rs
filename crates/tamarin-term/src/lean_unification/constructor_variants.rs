@@ -57,19 +57,22 @@ impl RuleTable {
 
     fn admits_sorted<'a>(&self, mut terms: impl Iterator<Item = &'a LNTerm>) -> bool {
         let mut used = Vec::new();
-        // The free unifier recognizes the natural constant by its bare name
-        // when checking an image's sort. Only the declared Nat constant can
-        // use that spelling here.
-        let unambiguous = |f: &FunSym| match f {
+        terms.all(|t| {
+            used.clear();
+            t.all_fun_syms(|f| self.unambiguous_head(f))
+                && self.collect(t, &mut used, InputDomain::Sorted).is_some()
+        })
+    }
+
+    // The free unifier recognizes the natural constant by its bare name.
+    // Only the declared Nat constant can use that spelling in a sorted query.
+    pub(super) fn unambiguous_head(&self, f: &FunSym) -> bool {
+        match f {
             FunSym::NoEq(s) if s.name == crate::function_symbols::NAT_ONE_SYM_STRING => {
                 self.nat && *s == nat_one_sym()
             }
             _ => true,
-        };
-        terms.all(|t| {
-            used.clear();
-            t.all_fun_syms(unambiguous) && self.collect(t, &mut used, InputDomain::Sorted).is_some()
-        })
+        }
     }
 
     pub(crate) fn new(sig: &MaudeSig) -> Option<Self> {
@@ -240,6 +243,15 @@ impl RuleTable {
         Some((id, arity, sort))
     }
 
+    pub(super) fn input_declaration(&self, head: FunSym, width: usize) -> Option<(u64, LSort)> {
+        let (id, arity, sort) = self.declaration(head)?;
+        let valid = match head {
+            FunSym::Ac(_) => width >= arity,
+            _ => width == arity,
+        };
+        valid.then_some((id, sort))
+    }
+
     fn collect(&self, term: &LNTerm, used: &mut Vec<u64>, domain: InputDomain) -> Option<LSort> {
         let (head, args) = match term {
             Term::Lit(lit) => {
@@ -251,14 +263,7 @@ impl RuleTable {
             }
             Term::App(f, args) => (*f, args),
         };
-        let (id, arity, sort) = self.declaration(head)?;
-        let valid_arity = match head {
-            FunSym::Ac(_) => args.len() >= arity,
-            _ => args.len() == arity,
-        };
-        if !valid_arity {
-            return None;
-        }
+        let (id, sort) = self.input_declaration(head, args.len())?;
         used.push(id);
         let expected = if domain == InputDomain::ConstructorKind && sort == LSort::Nat {
             LSort::Msg

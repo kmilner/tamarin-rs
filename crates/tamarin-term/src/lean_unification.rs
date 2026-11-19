@@ -32,6 +32,7 @@ pub(crate) use commutative::solve as unify_structured;
 mod constructor_variants;
 pub(crate) use constructor_variants::RuleTable;
 mod homogeneous;
+mod match_size;
 mod narrowing;
 mod open_match;
 mod operands;
