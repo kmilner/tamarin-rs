@@ -398,6 +398,11 @@ pub(super) fn solve(
         if !budget.charge(sides(&state.deferred).chain(state.bindings.range()), None)? {
             return Ok(None);
         }
+        // A homogeneous matrix hides variables below operand constructors.
+        // Check their contribution to finite term size before allocating it.
+        if state.deferred.iter().any(operands::refutes_size) {
+            continue;
+        }
         // Earlier witnesses may survive only in the image of an original
         // variable. Reusing such a witness would silently constrain that image.
         let mut reserved = original.clone();

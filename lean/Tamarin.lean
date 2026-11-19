@@ -106,3 +106,7 @@ import Tamarin.MixedCancellationPacket
 import Tamarin.MixedCancellationJoined
 import Tamarin.VariantComposition
 import Tamarin.GuardedACContext
+import Tamarin.CancellationConvergence
+import Tamarin.UnifierSize
+import Tamarin.MatchPrefilter
+import Tamarin.VariantAntichain

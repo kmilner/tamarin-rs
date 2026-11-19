@@ -83,6 +83,12 @@ private theorem thaw_freeze (t : Term s) : thaw s (freeze s t) = t := by
   | comm f _ _ l r => exact congr (congrArg (Term.comm (sig := s) f) l) r
   | ac f _ _ l r => exact congr (congrArg (Term.ac (sig := s) f) l) r
 
+theorem freeze_equiv {a b : Term s} (eq : EquivB a b) : EquivB (freeze s a) (freeze s b) :=
+  leaves_equiv s _ _ eq
+
+theorem freeze_inj {a b : Term s} (eq : freeze s a = freeze s b) : a = b := by
+  simpa only [thaw_freeze] using congrArg (thaw s) eq
+
 private theorem occurs_pattern (t : Term s) (w : Variable) : (pattern s t).Occurs w ↔ t.Occurs w := by
   induction t with
   | var | atom => rfl

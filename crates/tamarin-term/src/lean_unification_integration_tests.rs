@@ -6634,12 +6634,140 @@ fn native_oracle_staged_cancellation_and_guarded_ac_contexts() {
         // wrongly reconstruct the unreduced pair.
         let z = hash(sum(vec![a.clone(), a.clone(), b.clone()]));
         let reducible = sum(vec![z, hash(b.clone())]);
-        match native.reduce(&reducible) {
-            Ok(value) => assert_eq!(value, oracle.reduce(&reducible).unwrap()),
-            Err(crate::maude_proc::MaudeError::UnsupportedOperation(_)) => {}
-            Err(e) => panic!("{e}"),
+        assert_eq!(
+            native.reduce(&reducible).unwrap(),
+            oracle.reduce(&reducible).unwrap()
+        );
+        assert_eq!(native.stats().var_count, 0);
+        assert_eq!(native.stats().norm_count, 0);
+    }
+}
+
+#[test]
+fn native_oracle_nested_cancellation_shares_normal_values_and_images() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::hash;
+    use crate::maude_sig::{hash_maude_sig, xor_maude_sig};
+    use crate::subst::{apply_vterm, Subst};
+    use crate::term::f_app_list;
+
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let (custom_signature, custom, _) = renamed_cancellation_signature();
+    for (signature, symbol) in [
+        (xor_maude_sig().merge(hash_maude_sig()), AcSym::Xor),
+        (custom_signature, custom),
+    ] {
+        let native = MaudeHandle::start_with_backend(
+            "/nonexistent",
+            signature.clone(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        let reference =
+            MaudeHandle::start_with_backend(&path, signature, AlgebraBackend::Maude).unwrap();
+        let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 7)));
+        let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 8)));
+        let sum = |a, b| f_app_ac(symbol, vec![a, b]);
+        let inners = [
+            sum(x.clone(), pub_term("a")),
+            sum(y.clone(), pub_term("b")),
+            sum(x.clone(), y.clone()),
+        ];
+        // Both local families are irredundant. Joining them introduces an
+        // extra (x=0,y=0) row already covered by another joint variant.
+        let joined = vec![sum(x.clone(), y.clone()), sum(x.clone(), pub_term("a"))];
+        assert_eq!(
+            native.variants(&f_app_list(joined.clone())).unwrap().len(),
+            23
+        );
+        let mut cases = vec![joined];
+        for outer in [x.clone(), y.clone(), hash(x.clone())] {
+            for inner in &inners {
+                cases.push(vec![sum(outer.clone(), hash(inner.clone())), inner.clone()]);
+            }
+        }
+        cases.push(vec![sum(hash(inners[0].clone()), hash(inners[0].clone()))]);
+        cases.push(vec![
+            sum(hash(inners[0].clone()), hash(inners[1].clone())),
+            inners[1].clone(),
+        ]);
+        let deep = sum(x.clone(), hash(sum(x.clone(), hash(inners[0].clone()))));
+        cases.push(vec![deep, inners[0].clone()]);
+        cases.push(vec![f_app_ac(
+            symbol,
+            vec![pub_term("a"), x.clone(), hash(inners[1].clone())],
+        )]);
+        for slots in cases {
+            let query = f_app_list(slots.clone());
+            let valued = |handle: &MaudeHandle| {
+                let rows = handle
+                    .variants(&query)
+                    .unwrap_or_else(|e| panic!("{query}: {e}"));
+                let mut inputs = crate::lterm::frees_list(&query);
+                inputs.sort();
+                inputs.dedup();
+                canonical_small_ac_answers(
+                    rows.into_iter()
+                        .map(|row| {
+                            for (key, image) in &row {
+                                assert!(inputs.contains(key), "{query}: unexpected binding {key}");
+                                assert_eq!(
+                                    handle.reduce(image).unwrap(),
+                                    crate::term::map_lits(image, &mut |lit| *lit),
+                                    "{query}: reducible image for {key}"
+                                );
+                            }
+                            let subst = Subst::from_list(row);
+                            let mut values: Vec<_> = inputs
+                                .iter()
+                                .map(|&k| apply_vterm(&subst, Term::Lit(Lit::Var(k))))
+                                .collect();
+                            values.extend(
+                                slots.iter().map(|t| {
+                                    handle.reduce(&apply_vterm(&subst, t.clone())).unwrap()
+                                }),
+                            );
+                            vec![(LVar::new("row", LSort::Msg, 0), f_app_list(values))]
+                        })
+                        .collect(),
+                )
+            };
+            assert_eq!(valued(&native), valued(&reference), "{query}");
         }
         assert_eq!(native.stats().var_count, 0);
         assert_eq!(native.stats().norm_count, 0);
     }
+}
+
+#[test]
+fn nested_cancellation_does_not_assume_a_unique_value_for_unrelated_rules() {
+    use crate::builtin::hash;
+    use crate::function_symbols::{Constructability, NoEqSym, Privacy};
+    use crate::lean_unification::{Outcome, RuleTable};
+    use crate::rewriting::RRule;
+    use crate::subterm_rule::rrule_to_ctxt_st_rule;
+    use crate::term::f_app_no_eq;
+
+    let (mut sig, symbol, _) = renamed_cancellation_signature();
+    let choice = NoEqSym::new(b"choice", 2, Privacy::Public, Constructability::Constructor);
+    let apply = |l, r| f_app_no_eq(choice, vec![l, r]);
+    let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 1)));
+    let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 2)));
+    sig.st_fun_syms.insert(choice);
+    for result in [x.clone(), y.clone()] {
+        sig.st_rules.insert(
+            rrule_to_ctxt_st_rule(&RRule::new(apply(x.clone(), y.clone()), result)).unwrap(),
+        );
+    }
+    let table = RuleTable::new(&sig.refresh()).unwrap();
+    // Root cancellation and independent rewrites in the two copies can lead
+    // to different normal values for exactly the same caller substitution.
+    let child = apply(x.clone(), hash(x));
+    let query = f_app_ac(symbol, vec![child.clone(), child]);
+    assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
 }

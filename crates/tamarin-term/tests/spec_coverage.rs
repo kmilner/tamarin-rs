@@ -7,11 +7,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 use tamarin_term::algebra_backend::AlgebraBackend;
-use tamarin_term::builtin::{fresh_var, hash, msg_var, zero_const};
+use tamarin_term::builtin::{fresh_var, fst, hash, msg_var, pair, snd, zero_const};
 use tamarin_term::function_symbols::AcSym;
 use tamarin_term::lterm::{frees, pub_term, LNTerm, LVar, Name};
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
-use tamarin_term::maude_sig::{hash_maude_sig, mset_maude_sig, xor_maude_sig};
+use tamarin_term::maude_sig::{hash_maude_sig, mset_maude_sig, pair_maude_sig, xor_maude_sig};
 use tamarin_term::rewriting::Equal;
 use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::term::{f_app_ac, f_app_list, Term};
@@ -58,6 +58,12 @@ fn term(text: &str, symbol: AcSym) -> LNTerm {
             "a" | "b" => pub_term(token),
             "z" => zero_const(),
             "h" => hash(stack.pop().unwrap()),
+            "l" => fst(stack.pop().unwrap()),
+            "r" => snd(stack.pop().unwrap()),
+            "p" => {
+                let right = stack.pop().unwrap();
+                pair(stack.pop().unwrap(), right)
+            }
             "+" => {
                 let r = stack.pop().unwrap();
                 let l = stack.pop().unwrap();
@@ -97,7 +103,7 @@ fn exercise(h: &MaudeHandle, op: &str, expected: &str, ts: &[LNTerm]) -> Result<
                 "probe" => {}
                 _ => panic!("invalid reduction expectation {expected}"),
             }
-            // In both generated signatures hash is absent from every rule head.
+            // In the generated signatures hash is absent from every rule head.
             // Each supported child must therefore also be supported under hash.
             let wrapped = hash(t.clone());
             assert_eq!(
@@ -181,9 +187,11 @@ fn public_backend_meets_generated_coverage_floor() {
     let mut report = BTreeMap::new();
     let plain = mset_maude_sig().merge(hash_maude_sig());
     let cancellation = xor_maude_sig().merge(hash_maude_sig());
+    let mixed = cancellation.clone().merge(pair_maude_sig());
     let presentation = |name: &str| match name {
         "ac" => (&plain, AcSym::Union),
         "xor" => (&cancellation, AcSym::Xor),
+        "xor-pair" => (&mixed, AcSym::Xor),
         _ => panic!("unknown theory {name}"),
     };
     for line in cases.lines() {
@@ -220,7 +228,7 @@ fn public_backend_meets_generated_coverage_floor() {
             Err(err) => panic!("{line}: {err}"),
         }
     }
-    assert_eq!(report.len(), 8);
+    assert_eq!(report.len(), 10);
     for ((theory, op), c) in report {
         assert!(c.required > 0, "missing guaranteed {theory} {op} cases");
         println!(

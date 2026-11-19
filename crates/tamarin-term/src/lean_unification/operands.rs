@@ -101,8 +101,10 @@ pub(super) fn allocate<'a>(
 mod ground_branches;
 mod pivot;
 mod row_clash;
+mod size_clash;
 pub(super) use ground_branches::split as split_ground;
 pub(super) use pivot::{split_indivisible, split_owner};
+pub(super) use size_clash::refutes as refutes_size;
 
 impl RuleTable {
     /// A contradiction in one conjunct or underneath matching free heads
@@ -164,7 +166,7 @@ impl RuleTable {
         });
         let mut budget = residual::Budget::new();
         if let Some(symbol) = top {
-            if row_clash::refutes(eqs)? {
+            if eqs.iter().any(refutes_size) || row_clash::refutes(eqs)? {
                 return Ok(Outcome::Complete(vec![]));
             }
             if let Allocation::Complete(branches) =

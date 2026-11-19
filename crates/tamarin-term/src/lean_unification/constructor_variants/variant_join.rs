@@ -2,9 +2,9 @@
 //! Each row also carries its predicted normal values so a specialization
 //! that introduces a redex in an earlier observation can be discarded.
 use super::{InputDomain, RuleTable};
-use crate::function_symbols::FunSym;
+use crate::function_symbols::{AcSym, FunSym};
 use crate::lean_unification::{initialize, residual, Error, Outcome, WordSlice, LEAN_THREAD};
-use crate::lterm::{frees_list, HasFrees, LNTerm, LSort, LVar, Name};
+use crate::lterm::{frees_list, sort_of_lterm, HasFrees, LNTerm, LSort, LVar, Name};
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
 use crate::subst::{apply_vterm, Subst};
@@ -68,51 +68,146 @@ impl Row {
     }
 }
 
-/// A variable-to-variable specialization is safe to discard only when the
-/// very same renaming also reproduces every output, without reducing it.
-fn subsumes_variable_row(general: &Row, specific: &Row) -> bool {
-    let mut names = FxHashMap::default();
-    for (a, b) in general.images.iter().zip(&specific.images) {
-        let (Term::Lit(Lit::Var(a)), Term::Lit(Lit::Var(b))) = (a, b) else {
-            return false;
-        };
-        if a.sort != b.sort || *names.entry(*a).or_insert(*b) != *b {
-            return false;
+/// Count rigid symbols in a B representative. A flattened AC application
+/// represents arity - 1 binary symbols. Substitution can only add symbols.
+fn rigid_size(t: &LNTerm) -> usize {
+    match t {
+        Term::Lit(Lit::Var(_)) => 0,
+        Term::Lit(Lit::Con(_)) => 1,
+        Term::App(head, args) => {
+            let root = if matches!(head, FunSym::Ac(_)) {
+                args.len() - 1
+            } else {
+                1
+            };
+            args.iter()
+                .fold(root, |n, child| n.saturating_add(rigid_size(child)))
         }
     }
-    general.values.iter().zip(&specific.values).all(|(a, b)| {
-        a.clone()
-            .map_free(&mut |v| names.get(&v).copied().unwrap_or(v))
-            == *b
-    })
 }
 
-fn prune_variable_instances(rows: &mut Vec<Row>) -> Result<(), Error> {
-    let ranks: Vec<_> = rows
-        .iter()
-        .map(|row| {
-            row.images
-                .iter()
-                .map(|t| match t {
-                    Term::Lit(Lit::Var(v)) => Some(*v),
-                    _ => None,
-                })
-                .collect::<Option<FxHashSet<_>>>()
-                .map(|vars| vars.len())
-        })
-        .collect();
-    let mut dominated = vec![false; rows.len()];
-    for (i, target) in rows.iter().enumerate() {
-        tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-        if let Some(rank) = ranks[i] {
-            dominated[i] = rows.iter().enumerate().any(|(j, general)| {
-                ranks[j].is_some_and(|other| other > rank) && subsumes_variable_row(general, target)
-            });
+struct IndexedRow {
+    row: Row,
+    sizes: Vec<usize>,
+}
+
+/// Free argument positions and bare captures force the same bindings across
+/// the complete row. C/AC equations wait until all those bindings are known.
+fn compare_rigid<'a>(
+    p: &'a LNTerm,
+    s: &'a LNTerm,
+    captures: &mut FxHashMap<LVar, &'a LNTerm>,
+    pending: &mut Vec<(&'a LNTerm, &'a LNTerm)>,
+) -> bool {
+    match (p, s) {
+        (Term::Lit(Lit::Var(v)), _) => {
+            super::super::subsort(sort_of_lterm(s, sort_of_name), v.sort)
+                && *captures.entry(*v).or_insert(s) == s
+        }
+        (Term::Lit(Lit::Con(a)), Term::Lit(Lit::Con(b))) => a == b,
+        (Term::App(f, ps), Term::App(g, ss)) if f == g => {
+            if matches!(f, FunSym::NoEq(_)) {
+                return ps
+                    .iter()
+                    .zip(ss.iter())
+                    .all(|(a, b)| compare_rigid(a, b, captures, pending));
+            }
+            if ps.len() > ss.len() {
+                return false;
+            }
+            pending.push((p, s));
+            true
+        }
+        _ => false,
+    }
+}
+
+impl IndexedRow {
+    fn subsumes(&self, other: &Self, budget: &mut usize) -> Result<Option<bool>, Error> {
+        if self.sizes.iter().zip(&other.sizes).any(|(p, s)| p > s) {
+            return Ok(Some(false));
+        }
+        let mut captures = FxHashMap::default();
+        let mut pending = Vec::new();
+        if !self
+            .row
+            .iter()
+            .zip(other.row.iter())
+            .all(|(p, s)| compare_rigid(p, s, &mut captures, &mut pending))
+        {
+            return Ok(Some(false));
+        }
+        if pending.is_empty() {
+            return Ok(Some(true));
+        }
+        let subst = Subst::from_list(captures.iter().map(|(v, t)| (*v, (*t).clone())));
+        let mut equations = Vec::new();
+        for (p, s) in pending {
+            let mut determined = true;
+            p.for_each_free(&mut |v| determined &= captures.contains_key(v));
+            if determined {
+                if apply_vterm(&subst, p.clone()) != *s {
+                    return Ok(Some(false));
+                }
+            } else {
+                equations.push(Equal {
+                    lhs: p.clone(),
+                    rhs: s.clone(),
+                });
+            }
+        }
+        if equations.is_empty() {
+            return Ok(Some(true));
+        }
+        let seed = captures.into_iter().map(|(k, v)| (k, v.clone())).collect();
+        Ok(
+            match super::super::open_match::with_captures_budget(&equations, seed, budget)? {
+                Outcome::Complete(rows) => Some(!rows.is_empty()),
+                Outcome::Unsupported => None,
+            },
+        )
+    }
+}
+
+/// Rebuild a context from its already normalized child observations. Only
+/// original nodes are replaced. Variables inside a captured image belong to
+/// the row witnesses, so another caller binding must never be applied there.
+fn operand_value(
+    t: &LNTerm,
+    subst: &Subst<Name, LVar>,
+    values: &FxHashMap<&LNTerm, &LNTerm>,
+) -> LNTerm {
+    if let Some(value) = values.get(t) {
+        return (*value).clone();
+    }
+    match t {
+        Term::Lit(Lit::Var(v)) => subst.image_of(v).unwrap_or(t).clone(),
+        Term::Lit(_) => t.clone(),
+        Term::App(head, args) => crate::term::f_app(
+            *head,
+            args.iter()
+                .map(|a| operand_value(a, subst, values))
+                .collect(),
+        ),
+    }
+}
+
+struct JoinSearch {
+    budget: residual::Budget,
+    normal: FxHashMap<LNTerm, Option<bool>>,
+    pairs: usize,
+    matching: usize,
+}
+
+impl JoinSearch {
+    fn new() -> Self {
+        Self {
+            budget: residual::Budget::new(),
+            normal: FxHashMap::default(),
+            pairs: 4096,
+            matching: 100_000,
         }
     }
-    let mut flags = dominated.into_iter();
-    rows.retain(|_| !flags.next().unwrap());
-    Ok(())
 }
 
 impl RuleTable {
@@ -205,11 +300,44 @@ impl RuleTable {
         Ok(None)
     }
 
+    /// Collect the changing children of one cancellation expression. Each
+    /// collected head is strictly below the parent. Repeated children use one
+    /// normal value; arbitrary opaque leaves must remain normal under every
+    /// normalized substitution.
+    fn cancellation_children<'a>(
+        &self,
+        t: &'a LNTerm,
+        head: AcSym,
+        children: &mut Vec<&'a LNTerm>,
+    ) -> Result<bool, Error> {
+        if self.stably_normal_native(t)? {
+            return Ok(true);
+        }
+        match t {
+            Term::App(FunSym::Ac(f), _) if *f == head => {
+                if !children.contains(&t) {
+                    children.push(t);
+                }
+                Ok(true)
+            }
+            Term::App(FunSym::NoEq(f), args) if !self.patterns.contains_key(f) => {
+                for arg in args.iter() {
+                    if !self.cancellation_children(arg, head, children)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
     fn single_rows(
         &self,
         keys: &[LVar],
         original: &FxHashSet<u64>,
         app: &LNTerm,
+        search: &mut JoinSearch,
     ) -> Result<Option<Vec<Row>>, Error> {
         if let Some(rows) = self.direct_rows(keys, original, app)? {
             return Ok(Some(rows));
@@ -225,8 +353,13 @@ impl RuleTable {
             FunSym::NoEq(f) if self.narrowing.contains_key(f) => args.len(),
             _ => return Ok(None),
         };
+        let mut children = Vec::new();
         for arg in args.iter() {
-            if !self.stably_normal_native(arg)? {
+            let supported = match head {
+                FunSym::Ac(f) => self.cancellation_children(arg, *f, &mut children)?,
+                _ => self.stably_normal_native(arg)?,
+            };
+            if !supported {
                 return Ok(None);
             }
         }
@@ -241,64 +374,100 @@ impl RuleTable {
         let Some(family) = self.direct_rows(&formals, &reserved, &template)? else {
             return Ok(None);
         };
-        let mut operands = vec![Row {
-            images: args[..arity].to_vec(),
-            values: keys.iter().copied().map(variable).collect(),
-        }];
-        let mut budget = residual::Budget::new();
-        let mut normal = FxHashMap::default();
-        let mut remaining = 4096;
-        let mut matching_budget = 100_000;
-        // One ordinary specialization for a fixed arity. A flattened AC sum
-        // uses the same binary family at every node, sharing one search budget.
-        let mut tail = args[arity..].iter();
-        loop {
-            let mut joined = BTreeSet::new();
-            for child in &operands {
-                for schema in &family {
-                    if remaining == 0 {
-                        return Ok(None);
-                    }
-                    remaining -= 1;
-                    if !self.join_rows(
-                        child,
-                        schema,
-                        original,
-                        &mut budget,
-                        &mut normal,
-                        &mut joined,
-                    )? {
-                        return Ok(None);
-                    }
-                }
+        let mut operands = if let Some((first, others)) = children.split_first() {
+            let Some(mut rows) = self.single_rows(keys, original, first, search)? else {
+                return Ok(None);
+            };
+            for child in others {
+                let Some(right) = self.single_rows(keys, original, child, search)? else {
+                    return Ok(None);
+                };
+                let Some(joined) = self.join_families(&rows, &right, original, search)? else {
+                    return Ok(None);
+                };
+                rows = joined.into_iter().collect();
             }
+            // The joint witnesses determine all child values. Reconstruct the
+            // operand vector including every free wrapper and repeated slot.
+            for row in &mut rows {
+                let subst = Subst::from_list(keys.iter().copied().zip(row.images.iter().cloned()));
+                let values = children.iter().copied().zip(&row.values).collect();
+                row.values = args
+                    .iter()
+                    .map(|arg| operand_value(arg, &subst, &values))
+                    .collect();
+            }
+            rows
+        } else {
+            vec![Row {
+                images: keys.iter().copied().map(variable).collect(),
+                values: args.to_vec(),
+            }]
+        };
+
+        // The operation family is reused at every split. Keep unconsumed
+        // operands in the visible tuple while pruning, so later stages share
+        // the same substitution even when their operands can themselves narrow.
+        let mut width = args.len();
+        loop {
+            for row in &mut operands {
+                // The operation sees the first operands as its input columns.
+                // Its join retains the caller images, then the pending operands.
+                let pending = row.values.split_off(arity);
+                std::mem::swap(&mut row.images, &mut row.values);
+                row.values.extend(pending);
+            }
+            let Some(joined) = self.join_families(&operands, &family, original, search)? else {
+                return Ok(None);
+            };
             let projected = joined
                 .into_iter()
                 .map(|row| {
                     let mut images = row.values;
-                    let values = images.split_off(keys.len());
+                    let mut values = images.split_off(keys.len());
+                    // Move the operation's last output before the pending operands.
+                    values.rotate_right(1);
                     Row { images, values }.rename(original)
                 })
                 .collect();
-            let Some(rows) = self.prune_specializations(projected, &mut matching_budget)? else {
+            let Some(rows) = self.prune_specializations(projected, &mut search.matching)? else {
                 return Ok(None);
             };
-            let Some(next) = tail.next() else {
+            if width == arity {
                 return Ok(Some(rows));
-            };
-            operands = Vec::with_capacity(rows.len());
-            for row in rows {
-                let subst = Subst::from_list(keys.iter().copied().zip(row.images.iter().cloned()));
-                // Use the same caller images in the next factor as in the
-                // prefix. The join checks both intermediate values for normality.
-                let mut images = row.values;
-                images.push(apply_vterm(&subst, next.clone()));
-                operands.push(Row {
-                    images,
-                    values: row.images,
-                });
+            }
+            width -= arity - 1;
+            operands = rows;
+        }
+    }
+
+    fn join_families(
+        &self,
+        left: &[Row],
+        right: &[Row],
+        original: &FxHashSet<u64>,
+        search: &mut JoinSearch,
+    ) -> Result<Option<BTreeSet<Row>>, Error> {
+        let mut joined = BTreeSet::new();
+        for l in left {
+            for r in right {
+                tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
+                if search.pairs == 0
+                    || !self.join_rows(
+                        l,
+                        r,
+                        original,
+                        &mut search.budget,
+                        &mut search.normal,
+                        &mut joined,
+                    )?
+                {
+                    return Ok(None);
+                }
+                search.pairs -= 1;
             }
         }
+        Ok(Some(joined))
     }
 
     /// Specialization can turn distinct generic cases into instances of each
@@ -310,35 +479,29 @@ impl RuleTable {
         projected: BTreeSet<Row>,
         budget: &mut usize,
     ) -> Result<Option<Vec<Row>>, Error> {
-        let mut subsumes = |general: &Row, specific: &Row| -> Result<Option<bool>, Error> {
-            let eqs: Vec<_> = general
-                .iter()
-                .zip(specific.iter())
-                .map(|(l, r)| Equal {
-                    lhs: super::super::canonical_capture(l),
-                    rhs: super::super::canonical_capture(r),
-                })
-                .collect();
-            if !self.admits_terms(&eqs) {
-                return Ok(None);
+        let index = |mut row: Row| -> Option<IndexedRow> {
+            // Validate each row once, then compare canonical subjects directly.
+            if !self.admits_sorted(row.iter()) {
+                return None;
             }
-            Ok(
-                match super::super::open_match::with_captures_budget(&eqs, Vec::new(), budget)? {
-                    Outcome::Complete(matches) => Some(!matches.is_empty()),
-                    Outcome::Unsupported => None,
-                },
-            )
+            for t in row.images.iter_mut().chain(&mut row.values) {
+                *t = super::super::canonical_capture(t);
+            }
+            let sizes = row.iter().map(rigid_size).collect();
+            Some(IndexedRow { row, sizes })
         };
-        let mut kept = Vec::new();
-        'candidate: for row in projected {
+        let mut kept: Vec<IndexedRow> = Vec::new();
+        'candidate: for r in projected {
+            tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
+            let Some(row) = index(r) else { return Ok(None) };
             let mut i = 0;
             while i < kept.len() {
-                match subsumes(&kept[i], &row)? {
+                match kept[i].subsumes(&row, budget)? {
                     Some(true) => continue 'candidate,
                     Some(false) => {}
                     None => return Ok(None),
                 }
-                match subsumes(&row, &kept[i])? {
+                match row.subsumes(&kept[i], budget)? {
                     Some(true) => {
                         kept.swap_remove(i);
                     }
@@ -348,7 +511,7 @@ impl RuleTable {
             }
             kept.push(row);
         }
-        Ok(Some(kept))
+        Ok(Some(kept.into_iter().map(|r| r.row).collect()))
     }
 
     fn direct_rows(
@@ -538,7 +701,8 @@ impl RuleTable {
         let mut seen = BTreeSet::new();
         keys.retain(|v| seen.insert(*v));
         let original = keys.iter().map(|v| v.idx).collect();
-        let Some(mut rows) = self.single_rows(&keys, &original, first)? else {
+        let mut search = JoinSearch::new();
+        let Some(mut rows) = self.single_rows(&keys, &original, first, &mut search)? else {
             return Ok(Outcome::Unsupported);
         };
         if others.is_empty() {
@@ -546,39 +710,22 @@ impl RuleTable {
                 *row = row.rename(&original);
             }
         }
-        let mut budget = residual::Budget::new();
-        let mut remaining = 4096;
-        let mut normal = FxHashMap::default();
-        let wide_xor = applications
-            .iter()
-            .any(|t| self.flat_xor_args(t).is_some_and(|args| args.len() > 2));
         for app in others {
-            let Some(right) = self.single_rows(&keys, &original, app)? else {
+            let Some(right) = self.single_rows(&keys, &original, app, &mut search)? else {
                 return Ok(Outcome::Unsupported);
             };
-            let mut answers = BTreeSet::new();
-            for l in &rows {
-                for r in &right {
-                    tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-                    if remaining == 0
-                        || !self.join_rows(
-                            l,
-                            r,
-                            &original,
-                            &mut budget,
-                            &mut normal,
-                            &mut answers,
-                        )?
-                    {
-                        return Ok(Outcome::Unsupported);
-                    }
-                    remaining -= 1;
-                }
-            }
+            let Some(answers) = self.join_families(&rows, &right, &original, &mut search)? else {
+                return Ok(Outcome::Unsupported);
+            };
             rows = answers.into_iter().collect();
         }
-        if wide_xor && !others.is_empty() {
-            prune_variable_instances(&mut rows)?;
+        if !others.is_empty() {
+            let Some(kept) =
+                self.prune_specializations(rows.into_iter().collect(), &mut search.matching)?
+            else {
+                return Ok(Outcome::Unsupported);
+            };
+            rows = kept;
         }
         Ok(Outcome::Complete(
             rows.into_iter()

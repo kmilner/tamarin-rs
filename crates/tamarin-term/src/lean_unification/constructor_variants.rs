@@ -49,6 +49,10 @@ pub(crate) struct RuleTable {
 
 impl RuleTable {
     pub(crate) fn admits_terms(&self, equations: &[crate::rewriting::Equal<LNTerm>]) -> bool {
+        self.admits_sorted(equations.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]))
+    }
+
+    fn admits_sorted<'a>(&self, mut terms: impl Iterator<Item = &'a LNTerm>) -> bool {
         let mut used = Vec::new();
         // The free unifier recognizes the natural constant by its bare name
         // when checking an image's sort. Only the declared Nat constant can
@@ -59,7 +63,7 @@ impl RuleTable {
             }
             _ => true,
         };
-        equations.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]).all(|t| {
+        terms.all(|t| {
             used.clear();
             t.all_fun_syms(unambiguous) && self.collect(t, &mut used, InputDomain::Sorted).is_some()
         })

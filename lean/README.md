@@ -169,7 +169,7 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | Pair projections, selected constructor rules, AC unit and cancellation, DH power towers and signed exponent products. Native-only lifts supported reductions through inert free symbols and binary AC contexts whose persistent operand heads exclude every active rule. At binary AC roots it can instantiate the RHS when every match yields the same normal value. | Extend positive rewriting to proper AC subproducts and multi-step results at active heads. |
-| Variants | Native-only joins positional destructors, flat XORs of Fresh variables and received-base DH powers on shared inputs. It composes the binary unit/cancellation family across flattened sums with stable factors and specializes positional destructor families to stable operands. Packed observations can include unique closed reductions and changing children under inert free constructors or guarded binary AC parents. | Compose changing children with a parent that may cancel them. Extend narrowing to arbitrary active equations, DH to unrestricted exponents, and ordering compatibility to joined answers in hybrid mode. |
+| Variants | Native-only joins positional destructors, flat XORs of Fresh variables and received-base DH powers on shared inputs. It composes the binary unit/cancellation family through nested sums and inert constructors, including changing operands that cancel at the parent. Positional destructors specialize to stable operands. Packed observations can include unique closed reductions and changing children under inert free constructors or guarded binary AC parents. | Compose changing children with positional destructor families. Extend narrowing to arbitrary active equations, DH to unrestricted exponents, and ordering compatibility to joined answers in hybrid mode. |
 
 Run the generated coverage test from the repository root.
 
@@ -191,8 +191,9 @@ The [observation proof](Tamarin/ObservationRepresentative.lean) requires a uniqu
 modulo C/AC for that slot. Other slots may still constrain shared variables.
 Flattened cancellation sums with constructor-only factors are mandatory throughout the
 five-node grammar, including packed and hash-wrapped observations. All 24,154 original
-requests complete. Nine larger probes cross a hash boundary where an outer operand may
-cancel the changing hash. All nine currently defer.
+requests complete. Nine larger mandatory queries cross a hash boundary where an outer
+operand may cancel the changing hash. The generator also probes wider shared-variable
+sums and a mixed presentation with both pairing projections and cancellation.
 Exploratory cases can gain coverage freely. The report
 prints the smallest generated deferral by syntax size for each theory and operation.
 Setting `MAUDE_PATH` also replays those witnesses against an independent Maude handle.
@@ -433,20 +434,27 @@ narrower sorts, and repeated variables. Native-only unifies all actual operands 
 freshened row, retains normal joint instances, and projects back to the caller variables.
 The adapter checks each surviving pair in both directions for subsumption of all inputs and
 predicted outputs by one sorted match. Lean proves that empty match sets for those comparisons
-imply pairwise irredundancy. The Rust loop that constructs the comparisons is part of the trust boundary. For example, `'a' XOR m` has four variants, and `m XOR m` has one.
+imply pairwise irredundancy. The Rust loop that constructs the comparisons is part of the trust boundary. Joint families
+also require subsumption checks after the last join. For example, `x+y, 'a'+x` has 23
+variants, and the joint instance `x=0, y=0` already has a representative. Lean proves
+that exact irredundant, sorted, normal families for the same query agree up to permutation
+and mutual subsumption of whole rows. [Family uniqueness](Tamarin/VariantAntichain.lean) For example, `'a' XOR m` has four variants, and `m XOR m` has one.
 The specialization theorem works for any arity and rewrite presentation. Its operand
 hypothesis requires normality under every normalized substitution. A nested operation that
 can narrow needs its own variant family. [Specialization and uniqueness](Tamarin/VariantSpecialization.lean) ·
 [Row subsumption](Tamarin/VariantJoinSubsumption.lean)
 
-A flattened cancellation sum can reuse that binary family at each split. Lean proves that
+A flattened or nested cancellation sum can reuse that binary family at each split. Lean proves that
 all normal forms remain reachable after normalizing the two subproducts first, even if a
 factor from each side cancels. Each join shares one substitution across the prefix, the next
 operand and the caller's images. Intermediate values are hidden only after the join. Rust
 shares its work limits across the stages and defers the whole query on exhaustion.
 For any binary AC presentation, the dispatcher can also expose two changing operands when
 their distinct free heads persist and exclude every active root rule in both orders. This
-admits `h(t) XOR rot(k,h(t))` even when `t` has multiple variants.
+admits `h(t) XOR rot(k,h(t))` even when `t` has multiple variants. For an active
+cancellation parent, Lean proves local convergence through inert constructors by counting
+factors modulo two according to their eventual normal values. The Rust adapter reconstructs
+the operand vector using the joint child witnesses. [Local convergence](Tamarin/CancellationConvergence.lean)
 [Staged composition](Tamarin/VariantComposition.lean) · [AC context proof](Tamarin/GuardedACContext.lean)
 
 In both upstream

@@ -88,25 +88,57 @@ impl RuleTable {
         }
         // All equality tests on factors must agree with equality modulo B, including
         // commutative applications nested inside a raw caller-supplied term.
-        let canonical = canonical_capture(term);
-        let Term::App(_, args) = &canonical else {
-            return Ok(None);
-        };
-        for factor in args.iter() {
-            if !self.irreducible_native(factor)? {
-                return Ok(None);
+        self.normalize_cancellation_tree(*head, unit, &canonical_capture(term))
+    }
+
+    /// Opaque terms must already be normal. The other admitted nodes are
+    /// inert free constructors or the same recognized cancellation operation.
+    fn normalize_cancellation_tree(
+        &self,
+        head: AcSym,
+        unit: &LNTerm,
+        t: &LNTerm,
+    ) -> Result<Option<LNTerm>, Error> {
+        tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
+        match t {
+            Term::App(FunSym::Ac(f), args) if *f == head => {
+                let mut factors = Vec::with_capacity(args.len());
+                for arg in args.iter() {
+                    let Some(value) = self.normalize_cancellation_tree(head, unit, arg)? else {
+                        return Ok(None);
+                    };
+                    match value {
+                        Term::App(FunSym::Ac(f), xs) if f == head => {
+                            factors.extend(xs.iter().cloned())
+                        }
+                        t if t != *unit => factors.push(t),
+                        _ => {}
+                    }
+                }
+                let survivors: Vec<_> = flat_xor::odd_operands(&factors)?
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                Ok(Some(if survivors.is_empty() {
+                    unit.clone()
+                } else {
+                    f_app_ac(head, survivors)
+                }))
             }
+            Term::App(FunSym::NoEq(f), args)
+                if !self.patterns.contains_key(f) && !args.is_empty() =>
+            {
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args.iter() {
+                    let Some(value) = self.normalize_cancellation_tree(head, unit, arg)? else {
+                        return Ok(None);
+                    };
+                    values.push(value);
+                }
+                Ok(Some(crate::term::f_app_no_eq(*f, values)))
+            }
+            _ => Ok(self.irreducible_native(t)?.then(|| t.clone())),
         }
-        let survivors: Vec<_> = flat_xor::odd_operands(args)?
-            .into_iter()
-            .filter(|t| *t != unit)
-            .cloned()
-            .collect();
-        Ok(Some(if survivors.is_empty() {
-            unit.clone()
-        } else {
-            f_app_ac(*head, survivors)
-        }))
     }
 
     pub(super) fn cancellation_rows(&self, term: &LNTerm) -> Result<Option<Vec<ValuedArm>>, Error> {

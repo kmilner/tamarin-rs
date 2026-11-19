@@ -9,7 +9,7 @@ The public Rust adapter consumes this test format. -/
 namespace Tamarin.NativeCoverage
 open Rewriting ConstructorVariants
 
-inductive Symbol where | hash | zero
+inductive Symbol where | hash | zero | pair | fst | snd
   deriving DecidableEq
 
 abbrev sig : Signature where
@@ -17,7 +17,7 @@ abbrev sig : Signature where
   CSym := Empty
   ACSym := Unit
   Atom := Bool
-  arity := fun | .hash => 1 | .zero => 0
+  arity := fun | .hash | .fst | .snd => 1 | .zero => 0 | .pair => 2
   inputSort := fun _ _ => .msg
   outputSort := fun _ => .msg
   cSort := Empty.elim
@@ -31,12 +31,19 @@ def zero : Expr := .free .zero Fin.elim0
 def x : Expr := .var ⟨0,.msg⟩
 def y : Expr := .var ⟨1,.msg⟩
 
-inductive Theory where | ac | xor
+def pair (a b : Expr) : Expr := .free .pair (fun i => if i.val = 0 then a else b)
+def first (t : Expr) : Expr := .free .fst (fun _ => t)
+def second (t : Expr) : Expr := .free .snd (fun _ => t)
+
+inductive Theory where | ac | xor | xorPair
   deriving DecidableEq
+
+def xorRules : List (Equation sig) := [⟨plus x zero,x⟩, ⟨plus x x,zero⟩, ⟨plus x (plus x y),y⟩]
 
 def rules : Theory → List (Equation sig)
   | .ac => []
-  | .xor => [⟨plus x zero,x⟩, ⟨plus x x,zero⟩, ⟨plus x (plus x y),y⟩]
+  | .xorPair => xorRules ++ [⟨first (pair x y),x⟩, ⟨second (pair x y),y⟩]
+  | .xor => xorRules
 
 private def sameHead : DecidableEq (Head sig) := fun a b => by
   cases a <;> cases b <;> simp <;> infer_instance
@@ -48,29 +55,18 @@ def constructorOnly (th : Theory) (t : Expr) : Bool :=
 normal value, including when their active AC root actually rewrites. -/
 def identitySlot (th : Theory) (t : Expr) := t.variables.isEmpty || constructorOnly th t
 
-/-- Flattening is independent of how the generator parenthesized a sum. -/
-def stableFactors (th : Theory) : Expr → Bool
-  | .ac _ l r => stableFactors th l && stableFactors th r
-  | t => constructorOnly th t
-
-/-- An inert hash can surround a supported observation at any depth. -/
-def coveredSlot (th : Theory) (t : Expr) : Bool :=
-  identitySlot th t || match t with
-    | .free .hash args => coveredSlot th (args 0)
-    | .ac _ l r => stableFactors th l && stableFactors th r
-    | _ => false
-
+/-- Every expression emitted in this bounded grammar lies in the stable,
+inert-constructor and single-cancellation fragment. Require completion on
+these concrete requests, including when one variable appears at two depths. -/
 def variantExpectation (th : Theory) (ts : List Expr) : String :=
-  if ts.all (identitySlot th) then "identity"
-  else if ts.all (coveredSlot th) then "complete"
-  else "probe"
+  if ts.all (identitySlot th) then "identity" else "complete"
 
 /-- The mandatory constructor cases have an identity variant for every
 normalized valuation. Adding repeated observations preserves this fact. -/
 theorem constructor_family (th : Theory) (ts : List Expr) (safe : ∀ t ∈ ts, constructorOnly th t = true) :
     CompleteVariants (ruleRoot (rules th)) ts [⟨Substitution.identity, ts⟩] := by
   apply (identity_variants (rules th) ts ?_ ?_ []).1
-  · cases th <;> simp [rules,Application,plus]
+  · cases th <;> simp [rules,xorRules,Application,plus,first,second]
   · intro t ht f hf mem
     have h := safe t ht
     simp [constructorOnly] at h
@@ -116,7 +112,7 @@ theorem hash_equiv_iff (a b : Expr) : EquivB (hash a) (hash b) ↔ EquivB a b :=
 theorem hash_normalForm (th : Theory) {t u : Expr} (child : NormalForm (ruleRoot (rules th)) t u) :
     NormalForm (ruleRoot (rules th)) (hash t) (hash u) := by
   apply free_normalForm (rules th) _ .hash _ _ _ (fun _ => child)
-  · cases th <;> simp [rules, Application, plus]
+  · cases th <;> simp [rules,xorRules,Application,plus,first,second]
   · change ¬ List.Mem (Head.free (sig := sig) .hash) (ruleHeads (rules th))
     cases th <;> intro h <;> repeat' cases ‹List.Mem _ _›
 
@@ -125,6 +121,9 @@ def code : Expr → String
   | .atom b => if b then "b" else "a"
   | .free .hash args => code (args 0) ++ ".h"
   | .free .zero _ => "z"
+  | .free .fst args => code (args 0) ++ ".l"
+  | .free .snd args => code (args 0) ++ ".r"
+  | .free .pair args => code (args 0) ++ "." ++ code (args 1) ++ ".p"
   | .comm f _ _ => nomatch f
   | .ac _ l r => code l ++ "." ++ code r ++ ".+"
 
@@ -140,7 +139,7 @@ def layers (th : Theory) (maxSize : Nat) : Array (List Expr) := Id.run do
   return out
 
 def emit (th : Theory) (op expected : String) (ts : List Expr) : IO Unit := do
-  let name := if th == .ac then "ac" else "xor"
+  let name := match th with | .ac => "ac" | .xor => "xor" | .xorPair => "xor-pair"
   IO.println (String.intercalate "\t" ([name,op,expected] ++ ts.map code))
 
 def generate : IO Unit := do
@@ -159,6 +158,10 @@ def generate : IO Unit := do
         for inner in [plus x (.atom false),plus y (.atom true),plus x y] do
           let t := plus outer (hash inner)
           emit th "variants" (variantExpectation th [t,inner]) [t,inner]
+      -- Larger correlated instances also exercise ordinary unifier and search
+      -- budgets. Keep these exploratory even on the same semantic fragment.
+      for a in [x,y] do
+        emit th "variants" "probe" [plus (.var ⟨0,.fresh⟩) (plus a (hash (plus x y)))]
     -- Joint node budget for an ordinary equation. Operands on the right
     -- of a matching request remain rigid, including their variables.
     for leftSize in [1:5] do
@@ -180,6 +183,15 @@ def generate : IO Unit := do
           emit th op expected [a,b]
           emit th op expected [x,a,x,b]
           emit th op expected [hash x,hash a,hash x,hash b]
+
+  -- Compose active operations from the mixed table in both orders. Each
+  -- pack observes the outer value alongside its changing argument.
+  for inner in [first x,second x,plus x (.atom false),hash (plus x y)] do
+    for outer in [first inner,second inner,plus y inner,plus inner (hash inner)] do
+      emit .xorPair "variants" "probe" [outer,inner]
+      emit .xorPair "reduce" "probe" [outer]
+  emit .xorPair "reduce" "complete" [first (pair x y)]
+  emit .xorPair "variants" "complete" [first x,second x]
 
 end Tamarin.NativeCoverage
 
