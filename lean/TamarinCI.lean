@@ -1,6 +1,7 @@
 import Tamarin
 import Tamarin.ACMatchPacket
 import Tamarin.ACMatchAnswerPacket
+import Tamarin.ACMatchSortedBags
 import Tamarin.ACBagAnswers
 import Tamarin.ACBagSearch
 import Lean

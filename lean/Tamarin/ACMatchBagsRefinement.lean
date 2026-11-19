@@ -88,16 +88,16 @@ theorem of_matches [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : Problem si
 /-- Realize a numeric solution by simultaneous substitution. Every occurrence
 of a key uses the same decoded product, even in different equations. No
 restriction on repetitions in either side or sharing among right-hand terms. -/
-theorem to_matches [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : Problem sig)
+theorem to_matches_of_typed [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : Problem sig)
     (layout : Equation sig → List κ × List α) (name : κ → Variable) (term : α → Term sig)
     (fixed : Equation sig → List (Term sig)) (ground : ∀ e ∈ problem, ∀ t ∈ fixed e, t.Ground)
     (left : ∀ e ∈ problem, (fixed e ++ ((layout e).1.map name).map Term.var).Perm (ACRepresentation.flatten f e.lhs))
     (right : ∀ e ∈ problem, (fixed e ++ (layout e).2.map term).Perm (ACRepresentation.flatten f e.rhs))
-    (sorts : ∀ e ∈ problem, ∀ k ∈ (layout e).1, Subsort (sig.acSort f) (name k).sort)
-    (subjects : ∀ e ∈ problem, HasSort e.rhs (sig.acSort f))
     (keys : ∀ e ∈ problem, ∀ k ∈ (layout e).1, ∀ d ∈ problem, ∀ j ∈ (layout d).1,
       name k = name j → k = j)
-    (im : κ → List α) (solution : Solution (problem.map layout) im) :
+    (im : κ → List α) (solution : Solution (problem.map layout) im)
+    (typed : ∀ e ∈ problem, ∀ k ∈ (layout e).1, ∀ a tail, im k = a :: tail →
+      HasSort (ACRepresentation.fold f (term a) (tail.map term)) (name k).sort) :
     ∃ σ, Matches problem σ ∧ Scoped problem (fun _ => True) σ ∧
       Represents f (problem.map layout) name term σ im := by
   classical
@@ -111,20 +111,12 @@ theorem to_matches [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : Problem si
       HasSort (value k) (name k).sort ∧
       Cancellation.flatten f (value k) = (im k).flatMap (fun a => Cancellation.flatten f (term a)) := by
     obtain ⟨e,he,mem⟩ := List.mem_flatMap.mp hk
-    have sorted a (ha : a ∈ im k) : HasSort (term a) (sig.acSort f) :=
-      ACRepresentation.flatten_hasSort f e.rhs (subjects e he) _
-        ((right e he).subset (List.mem_append_right _ (List.mem_map_of_mem ((row e he).subset (List.mem_flatMap.mpr ⟨k,mem,ha⟩)))))
     cases eq : im k with
     | nil => exact False.elim (pos _ (List.mem_map_of_mem (f := layout) he) k mem eq)
     | cons a tail =>
       refine ⟨?_,?_⟩
       · simp only [value,eq]
-        apply HasSort.widen _ (sorts e he k mem)
-        apply ACRepresentation.fold_hasSort
-        · exact sorted a (by simp [eq])
-        · intro u hu
-          obtain ⟨b,hb,rfl⟩ := List.mem_map.mp hu
-          exact sorted b (by simp [eq,hb])
+        exact typed e he k mem a tail eq
       · simpa [value,eq,List.flatMap_map] using OpenMatch.subject_flat f (term a) (tail.map term)
   let domain := used.map name
   let rep (v) (h : v ∈ domain) := (List.mem_map.mp h).choose
@@ -185,9 +177,33 @@ theorem to_matches [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : Problem si
     apply congrArg List.flatten
     exact List.map_congr_left atomic
 
+theorem to_matches [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : Problem sig)
+    (layout : Equation sig → List κ × List α) (name : κ → Variable) (term : α → Term sig)
+    (fixed : Equation sig → List (Term sig)) (ground : ∀ e ∈ problem, ∀ t ∈ fixed e, t.Ground)
+    (left : ∀ e ∈ problem, (fixed e ++ ((layout e).1.map name).map Term.var).Perm (ACRepresentation.flatten f e.lhs))
+    (right : ∀ e ∈ problem, (fixed e ++ (layout e).2.map term).Perm (ACRepresentation.flatten f e.rhs))
+    (sorts : ∀ e ∈ problem, ∀ k ∈ (layout e).1, Subsort (sig.acSort f) (name k).sort)
+    (subjects : ∀ e ∈ problem, HasSort e.rhs (sig.acSort f))
+    (keys : ∀ e ∈ problem, ∀ k ∈ (layout e).1, ∀ d ∈ problem, ∀ j ∈ (layout d).1,
+      name k = name j → k = j)
+    (im : κ → List α) (solution : Solution (problem.map layout) im) :
+    ∃ σ, Matches problem σ ∧ Scoped problem (fun _ => True) σ ∧
+      Represents f (problem.map layout) name term σ im := by
+  apply to_matches_of_typed f problem layout name term fixed ground left right keys im solution
+  intro e he k hk a tail h
+  have sorted b (hb : b ∈ im k) := ACRepresentation.flatten_hasSort f e.rhs (subjects e he) (term b)
+    ((right e he).subset (List.mem_append_right _ (List.mem_map_of_mem
+      ((solution.2 _ (List.mem_map_of_mem (f := layout) he)).subset (List.mem_flatMap.mpr ⟨k,hk,hb⟩)))))
+  apply HasSort.widen _ (sorts e he k hk)
+  apply ACRepresentation.fold_hasSort
+  · exact sorted a (by simp [h])
+  · intro u hu
+    obtain ⟨b,hb,rfl⟩ := List.mem_map.mp hu
+    exact sorted b (by simp [h,hb])
+
 /-- The reader only needs to identify the variables and structural classes
 actually used by the query. Subject classes may contain caller variables. -/
-structure Layout [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : Problem sig)
+structure Presentation [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : Problem sig)
     (row : Equation sig → List κ × List α) (name : κ → Variable) (term : α → Term sig)
     (fixed : Equation sig → List (Term sig)) : Prop where
   ground : ∀ e ∈ problem, ∀ t ∈ fixed e, t.Ground
@@ -196,8 +212,12 @@ structure Layout [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : Problem sig)
   keys : ∀ e ∈ problem, ∀ k ∈ (row e).1, ∀ d ∈ problem, ∀ j ∈ (row d).1, name k = name j → k = j
   factors : ∀ e ∈ problem, ∀ a ∈ (row e).2, ∀ d ∈ problem, ∀ b ∈ (row d).2,
     EquivB (term a) (term b) → a = b
-  sorts : ∀ e ∈ problem, ∀ k ∈ (row e).1, Subsort (sig.acSort f) (name k).sort
   subjects : ∀ e ∈ problem, HasSort e.rhs (sig.acSort f)
+
+structure Layout [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : Problem sig)
+    (row : Equation sig → List κ × List α) (name : κ → Variable) (term : α → Term sig)
+    (fixed : Equation sig → List (Term sig)) : Prop extends Presentation f problem row name term fixed where
+  sorts : ∀ e ∈ problem, ∀ k ∈ (row e).1, Subsort (sig.acSort f) (name k).sort
 
 /-- Sound and complete term-level interpretation of repeated and shared
 ordinary AC captures across all rows, independent of search or packing order. -/
@@ -211,8 +231,8 @@ theorem Layout.exact [DecidableEq sig.ACSym] {f : sig.ACSym} {problem : Problem 
 
 /-- Reconstructing each variable image by folding its returned factor IDs is
 sufficient, including a caller that canonically reorders those terms. -/
-theorem Layout.represents_fold [DecidableEq sig.ACSym] {f : sig.ACSym} {problem : Problem sig}
-    {row : Equation sig → List κ × List α} {name term fixed} (layout : Layout f problem row name term fixed)
+theorem Presentation.represents_fold [DecidableEq sig.ACSym] {f : sig.ACSym} {problem : Problem sig}
+    {row : Equation sig → List κ × List α} {name term fixed} (layout : Presentation f problem row name term fixed)
     {out : Substitution sig} {im : κ → List α} (sol : Solution (problem.map row) im)
     (read : ∀ e ∈ problem, ∀ k ∈ (row e).1, ∀ a tail, im k = a :: tail →
       EquivB (out.image (name k)) (ACRepresentation.fold f (term a) (tail.map term))) :
@@ -235,8 +255,8 @@ theorem Layout.represents_fold [DecidableEq sig.ACSym] {f : sig.ACSym} {problem 
     apply congrArg List.flatten
     exact List.map_congr_left (fun t ht => atomic t (h ▸ ht))
 
-private theorem Layout.agrees [DecidableEq sig.ACSym] {f : sig.ACSym} {problem : Problem sig}
-    {row : Equation sig → List κ × List α} {name term fixed} (layout : Layout f problem row name term fixed)
+theorem Presentation.agrees [DecidableEq sig.ACSym] {f : sig.ACSym} {problem : Problem sig}
+    {row : Equation sig → List κ × List α} {name term fixed} (layout : Presentation f problem row name term fixed)
     {σ τ : Substitution sig} {im arm : κ → List α}
     (src : Represents f (problem.map row) name term σ im) (dst : Represents f (problem.map row) name term τ arm)
     (same : ∀ r ∈ problem.map row, ∀ k ∈ r.1, (im k).Perm (arm k)) :
