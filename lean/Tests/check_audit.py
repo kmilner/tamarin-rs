@@ -443,6 +443,17 @@ EXPORT_MUTATIONS.extend([
      BAG_DECISION + " |> fun tag => if tag == 1 then 2 else tag", "theorem exportedACBagMatch_correct"),
 ])
 
+BAG_ANSWERS = "  Matching.ACMatchPacket.runAnswersWith Matching.ACBagAnswers.run packet"
+EXECUTABLE = ("import Tamarin.ACMatchAnswerPacket\nimport Tamarin.ACBagAnswers\n" + EXECUTABLE
+              + "\nnamespace Tamarin\n" + obligation("exportedACBagAnswers_correct") + "end Tamarin\n")
+EXPORT_MUTATIONS.extend([
+    ("bag_answers_drop_alternatives", BAG_ANSWERS, BAG_ANSWERS + " |>.map (fun a => a.extract 0 1)",
+     "theorem exportedACBagAnswers_correct"),
+    ("bag_answers_reverse_variable_slots", BAG_ANSWERS, BAG_ANSWERS + " |>.map (fun a => a.map Array.reverse)",
+     "theorem exportedACBagAnswers_correct"),
+    ("bag_answers_always_defer", BAG_ANSWERS, "  none", "theorem exportedACBagAnswers_correct"),
+])
+
 MATCH_CAPACITY = "def matchSizeExcludes (pattern subject : UInt64) : Bool := decide (subject < pattern)"
 EXECUTABLE = ("import Tamarin.LinearACMatch\n" + EXECUTABLE + "\nnamespace Tamarin\n"
               + obligation("exportedLinearACMatch_correct") + "end Tamarin\n")

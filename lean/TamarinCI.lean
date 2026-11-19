@@ -1,5 +1,7 @@
 import Tamarin
 import Tamarin.ACMatchPacket
+import Tamarin.ACMatchAnswerPacket
+import Tamarin.ACBagAnswers
 import Tamarin.ACBagSearch
 import Lean
 
@@ -66,6 +68,11 @@ theorem exportedACBagMatch_correct : Matching.ACMatchPacket.Correct Matching.ACB
     Executable.acBagMatch :=
   Matching.ACMatchPacket.runWith_correct _ _ Matching.ACBagSearch.run_correct.exact
     Matching.ACBagSearch.run_correct.completes
+
+theorem exportedACBagAnswers_correct : Matching.ACMatchPacket.FamilyCorrect Matching.ACBagAnswers.Within
+    Executable.acBagAnswers :=
+  Matching.ACMatchPacket.runAnswersWith_correct _ _ Matching.ACBagAnswers.run_correct.sound_complete
+    Matching.ACBagAnswers.run_correct.shape Matching.ACBagAnswers.run_correct.completes
 
 theorem exportedMatchSizeExcludes_correct :
     Matching.Prefilter.SizeExclusion Executable.matchSizeExcludes :=
@@ -1066,6 +1073,7 @@ run_cmd do
     (``Tamarin.Executable.acSubgroups, `tamarin_ac_subgroups),
     (``Tamarin.Executable.openMatchSelect, `tamarin_open_match_select),
     (``Tamarin.Executable.acBagMatch, `tamarin_ac_bag_match),
+    (``Tamarin.Executable.acBagAnswers, `tamarin_ac_bag_answers),
     (``Tamarin.Executable.matchSizeExcludes, `tamarin_match_size_excludes),
     (``Tamarin.Executable.collectorPossible, `tamarin_collector_possible),
     (``Tamarin.Executable.sortedACMatch, `tamarin_sorted_ac_match),

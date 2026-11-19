@@ -275,4 +275,21 @@ theorem Layout.complete [DecidableEq sig.ACSym] {f : sig.ACSym} {problem : Probl
     obtain ⟨a,ha,rfl⟩ := List.mem_map.mp hm
     exact ⟨out a,List.mem_map_of_mem ha,layout.agrees rep (reads a ha).2 same⟩
 
+/-- Every valid numeric family can be decoded into sorted substitutions.
+No assumption about the existence of a successful caller-side decoder is needed. -/
+theorem Layout.realizable [DecidableEq sig.ACSym] {f : sig.ACSym} {problem : Problem sig}
+    {row : Equation sig → List κ × List α} {name term fixed} (layout : Layout f problem row name term fixed)
+    {ι : Type} (arms : List ι) (source : ι → κ → List α)
+    (numeric : Complete (problem.map row) (arms.map source)) :
+    ∃ out : ι → Substitution sig, Matching.Complete problem (fun _ => True) (arms.map out) ∧
+      ∀ a ∈ arms, Represents f (problem.map row) name term (out a) (source a) := by
+  classical
+  have build a (ha : a ∈ arms) := to_matches f problem row name term fixed layout.ground layout.left
+    layout.right layout.sorts layout.subjects layout.keys (source a) (numeric.sound _ (List.mem_map_of_mem ha))
+  let out (a : ι) := if ha : a ∈ arms then (build a ha).choose else Substitution.identity
+  have reads a (ha : a ∈ arms) : Scoped problem (fun _ => True) (out a) ∧
+      Represents f (problem.map row) name term (out a) (source a) := by
+    simpa only [out,dite_eq_left ha] using (build a ha).choose_spec.2
+  exact ⟨out,layout.complete _ _ _ numeric reads,fun a h => (reads a h).2⟩
+
 end Tamarin.Matching.ACBags

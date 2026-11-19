@@ -54,4 +54,17 @@ theorem FamilyCorrect.term {floor run} (ok : FamilyCorrect floor run)
   exact layout.complete _ _ _ complete (fun a ha => ⟨scope a ha,
     layout.represents_fold (complete.sound _ (List.mem_map_of_mem ha)) (images a ha)⟩)
 
+/-- On the mandatory input domain there is a returned packet and every one
+of its arms has a well-sorted reading on the caller's equations. -/
+theorem FamilyCorrect.term_required {floor run} (ok : FamilyCorrect floor run)
+    {sig : Signature} [DecidableEq sig.ACSym] {f : sig.ACSym} {problem : Problem sig}
+    {row : Equation sig → Row} {name term fixed} (layout : ACBags.Layout f problem row name term fixed)
+    {packet rows} (read : decode packet.toList = some rows) (order : rows.Perm (problem.map row))
+    (covered : floor rows) :
+    ∃ arms, run packet = some arms ∧ ∃ out : List (List UInt64) → Substitution sig,
+      Matching.Complete problem (fun _ => True) ((unpack arms).map out) ∧
+      ∀ a ∈ unpack arms, ACBags.Represents f (problem.map row) name term (out a) (readArm rows a) := by
+  obtain ⟨arms,done⟩ := Option.isSome_iff_exists.mp (ok.required _ _ read covered)
+  exact ⟨arms,done,layout.realizable _ _ (ACBags.complete_perm order (ok.exact _ _ _ read done).1)⟩
+
 end Tamarin.Matching.ACMatchPacket

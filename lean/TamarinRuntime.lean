@@ -9,6 +9,7 @@ import TamarinRuntime.ResidualRigid
 import TamarinRuntime.GraphUnification
 import TamarinRuntime.ACMatchPacket
 import TamarinRuntime.ACBagSearch
+import TamarinRuntime.ACBagAnswers
 import TamarinRuntime.ACFeasibility
 import TamarinRuntime.AnswerProjection
 import TamarinRuntime.SortedMatch
@@ -35,6 +36,10 @@ namespace Tamarin.Executable
 @[export tamarin_ac_bag_match]
 def acBagMatch (packet : Matching.ACMatchPacket.Packet) : UInt8 :=
   Matching.ACMatchPacket.runWith Matching.ACBagSearch.run packet
+
+@[export tamarin_ac_bag_answers]
+def acBagAnswers (packet : Matching.ACMatchPacket.Packet) : Option Matching.ACMatchPacket.Answers :=
+  Matching.ACMatchPacket.runAnswersWith Matching.ACBagAnswers.run packet
 
 @[export tamarin_match_size_excludes]
 def matchSizeExcludes (pattern subject : UInt64) : Bool := decide (subject < pattern)
