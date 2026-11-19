@@ -150,3 +150,62 @@ fn allocation_connected_to_a_returned_key_keeps_its_full_matching_constraints() 
     let miss = app(pub_term("missing"));
     assert_eq!(native.reduce(&miss).unwrap(), miss);
 }
+
+#[test]
+fn projected_values_agree_with_every_full_match_on_small_multisets() {
+    use crate::builtin::emap;
+    use crate::maude_sig::bp_maude_sig;
+
+    let table = RuleTable::new(&with_rules([]).merge(bp_maude_sig())).unwrap();
+    let (x, y, r, s) = (var("x"), var("y"), var("r"), var("s"));
+    // The frozen "r" can also appear as the image of the rule variable "r".
+    let (a, b) = (r.clone(), pub_term("b"));
+    for copies in 1..=2 {
+        let mut captures = vec![x.clone(); copies];
+        captures.push(y.clone());
+        let pattern = select(
+            pair(f_app_ac(AcSym::Union, captures), x.clone()),
+            emap(r.clone(), s.clone()),
+        );
+        for n in 2..=5 {
+            for count_a in 0..=n {
+                let mut factors = vec![a.clone(); count_a];
+                factors.resize(n, b.clone());
+                let subject_bag = f_app_ac(AcSym::Union, factors);
+                for (anchor, available) in [(&a, count_a), (&b, n - count_a)] {
+                    for other in [&a, &b] {
+                        let subject = select(
+                            pair(subject_bag.clone(), anchor.clone()),
+                            emap(a.clone(), other.clone()),
+                        );
+                        let Outcome::Complete(arms) =
+                            open_match::root(&pattern, &subject, &mut 100_000).unwrap()
+                        else {
+                            panic!("small reference did not finish: {pattern} at {subject}")
+                        };
+                        // Each copy of X consumes the frozen anchor once, and Y is nonempty.
+                        let feasible = available >= copies && n > copies;
+                        assert_eq!(!arms.is_empty(), feasible);
+                        for rhs in [
+                            pub_term("fixed"),
+                            pair(r.clone(), s.clone()),
+                            pair(r.clone(), r.clone()),
+                        ] {
+                            let expect: BTreeSet<_> = arms
+                                .iter()
+                                .map(|arm| apply_vterm(&Subst::from_list(arm.clone()), rhs.clone()))
+                                .collect();
+                            assert_eq!(
+                                table
+                                    .projected_rule_values(&pattern, &rhs, &subject, &mut 100_000)
+                                    .unwrap(),
+                                Some(expect),
+                                "{pattern} -> {rhs} at {subject}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
