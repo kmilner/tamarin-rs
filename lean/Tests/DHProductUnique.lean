@@ -1,4 +1,4 @@
-import Tamarin.DHSignedMatrix
+import Tamarin.DHSignedBlocks
 
 /-! A DH table with a deliberately nonconfluent unrelated operator. Repeated
 opaque factors compare modulo B, even when their children have opposite orders. -/
@@ -221,5 +221,27 @@ private def checksMatrix (a b c : Int) : Bool := Id.run do
 #guard ([-3,-2,-1,0,1,2,3] : List Int).all fun a =>
   ([-3,-2,-1,0,1,2,3] : List Int).all fun b =>
     ([-3,-2,-1,0,1,2,3] : List Int).all (checksMatrix a b)
+
+-- Two shared columns occur twice in coordinate 0. The first changes sign in
+-- coordinate 1. The empty branch produces the DH unit in both coordinates.
+private def sampleBasis (_ : Fin 2 → Bool) : List (ACBasis.Vec 2) :=
+  [fun i => if i.val = 0 then 2 else 1]
+private def chosen : List (SignedMatrix.Column sampleBasis) :=
+  [⟨fun i => i.val == 1, ⟨0,by decide⟩⟩, ⟨fun _ => false, ⟨0,by decide⟩⟩]
+private def parameterIds (i : Fin 2) (negative : Bool) :=
+  (SignedMatrix.slots sampleBasis chosen i negative).map fun g => g.1 1
+
+#guard parameterIds 0 false == [false,false,true,true]
+#guard parameterIds 0 true == []
+#guard parameterIds 1 false == [false]
+#guard parameterIds 1 true == [true]
+
+example (i : Fin 2) (name : SignedMatrix.Column sampleBasis → Variable) :
+    SignedMatrix.template s sampleBasis [] name i = s.product.one := by
+  cases i using Fin.cases with
+  | zero => rfl
+  | succ j => cases j using Fin.cases with
+              | zero => rfl
+              | succ k => exact k.elim0
 
 end Tamarin.DHProductUniquenessTests

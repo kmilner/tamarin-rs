@@ -120,3 +120,4 @@ import Tamarin.SymbolicNarrowing
 import Tamarin.ACContextAbsorption
 import Tamarin.DHGroupRootNormal
 import Tamarin.DHSignedMatrix
+import Tamarin.DHSignedBlocks

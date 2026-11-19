@@ -8,7 +8,7 @@ namespace Tamarin.ACSystem
 open Cancellation
 variable {sig : Signature}
 
-private theorem factor_atom (f : sig.ACSym) (t : Term sig) (ht : HasSort t (sig.acSort f))
+theorem factor_atom (f : sig.ACSym) (t : Term sig) (ht : HasSort t (sig.acSort f))
     (a : Class sig) (ha : a ∈ flatten f t) :
     ∃ u : Term sig, HasSort u (sig.acSort f) ∧ flatten f u = [a] := by
   classical
@@ -26,7 +26,7 @@ private theorem factor_atom (f : sig.ACSym) (t : Term sig) (ht : HasSort t (sig.
   | var | atom | free | comm =>
     exact ⟨_, ht, by rw [List.mem_singleton.mp ha]; rfl⟩
 
-private theorem realize (f : sig.ACSym) (xs : List (Class sig)) (hne : xs ≠ [])
+theorem realize (f : sig.ACSym) (xs : List (Class sig)) (hne : xs ≠ [])
     (atom : ∀ a ∈ xs, ∃ t : Term sig, HasSort t (sig.acSort f) ∧ flatten f t = [a]) :
     ∃ t : Term sig, HasSort t (sig.acSort f) ∧ flatten f t = xs := by
   induction xs with
@@ -38,10 +38,10 @@ private theorem realize (f : sig.ACSym) (xs : List (Class sig)) (hne : xs ≠ []
     · obtain ⟨u,hu,eu⟩ := ih h (fun b hb => atom b (List.mem_cons_of_mem _ hb))
       exact ⟨.ac f t u,.ac _ _ _ ht hu,by rw [flatten_ac,et,eu]; rfl⟩
 
-private def expand {α β : Type} (xs : List α) (weight : α → Nat) (value : α → List β) :=
+def expand {α β : Type} (xs : List α) (weight : α → Nat) (value : α → List β) :=
   xs.flatMap fun j => (List.replicate (weight j) (value j)).flatten
 
-private theorem count_expand {α β : Type} [DecidableEq β] (xs : List α) (w : α → Nat)
+theorem count_expand {α β : Type} [DecidableEq β] (xs : List α) (w : α → Nat)
     (v : α → List β) (a : β) :
     (expand xs w v).count a = (xs.map fun j => w j * (v j).count a).sum := by
   have rep (n : Nat) (ys : List β) :
@@ -62,7 +62,7 @@ private theorem expand_active {α β : Type} (xs : List α) (w : α → Nat) (v 
     unfold expand at ih ⊢
     cases h : v x <;> simp [h, ih]
 
-private theorem parts_count {α : Type} [DecidableEq α] (ats : List α) (unique : ats.Nodup)
+theorem parts_count {α : Type} [DecidableEq α] (ats : List α) (unique : ats.Nodup)
     (c : α → Nat) (a : α) :
     (ats.flatMap fun b => List.replicate (c b) b).count a = if a ∈ ats then c a else 0 := by
   induction ats with
@@ -124,6 +124,32 @@ private theorem instantiate_image {f : sig.ACSym} {rows avoid} (b : Branch f row
   | nil => exact False.elim (b.nonempty v hv e)
   | cons x xs =>
     exact flatten_side f ⟨x,xs⟩ δ
+
+/-- Realize one sorted image for each shared parameter in the active family. -/
+theorem instantiate_witnesses {ι : Type} (f : sig.ACSym) (js : List ι)
+    (w : ι → Variable) (inj : Function.Injective w) (typed : ∀ j, (w j).sort = sig.acSort f)
+    {block : ι → List (Class sig)}
+    (realized : ∀ j ∈ js, ∃ t : Term sig, HasSort t (sig.acSort f) ∧ flatten f t = block j) :
+    ∃ δ : Substitution sig, ∀ j ∈ js, flatten f (δ.image (w j)) = block j := by
+  classical
+  let lookup (v : Variable) := ∃ j ∈ js, w j = v
+  let image (v : Variable) : Term sig := if h : lookup v then
+    Classical.choose (realized h.choose h.choose_spec.1) else .var v
+  let δ : Substitution sig := {
+    image := image, support := js.map w
+    outside := by intro v hv; apply dite_eq_right; rintro ⟨j,hj,rfl⟩; exact hv (List.mem_map_of_mem hj)
+    sorted := by
+      intro v; dsimp only [image]; split
+      · next h =>
+        have hs : v.sort = sig.acSort f := (congrArg Variable.sort h.choose_spec.2).symm.trans (typed _)
+        rw [hs]
+        exact (Classical.choose_spec (realized h.choose h.choose_spec.1)).1
+      · exact .var _ }
+  have inst (j) (hj : j ∈ js) : flatten f (δ.image (w j)) = block j := by
+    have h : lookup (w j) := ⟨j,hj,rfl⟩
+    change flatten f (image _) = _
+    dsimp only [image]; rw [dite_eq_left h, (Classical.choose_spec (realized h.choose h.choose_spec.1)).2, inj h.choose_spec.2]
+  exact ⟨δ,inst⟩
 
 /-- A sorted solution factors through one covering subset, using a single
 instantiating substitution even when different input variables share factors. -/
@@ -199,23 +225,7 @@ theorem factor_through_subset {n} (f : sig.ACSym) (rows : List Row) (avoid : Lis
       obtain ⟨_,rfl⟩ := List.mem_replicate.mp hm
       obtain ⟨v,hv,ht⟩ := List.mem_flatMap.mp ((present a).mp hb)
       exact factor_atom f _ ((fr.sort_of_mem v hv) ▸ ρ.sorted v) a ht
-  let lookup (v : Variable) := ∃ j ∈ js, w j = v
-  let image (v : Variable) : Term sig := if h : lookup v then
-    Classical.choose (realized h.choose h.choose_spec.1) else .var v
-  let δ : Substitution sig := {
-    image := image, support := js.map w
-    outside := by intro v hv; apply dite_eq_right; rintro ⟨j,hj,rfl⟩; exact hv (List.mem_map_of_mem hj)
-    sorted := by
-      intro v; dsimp only [image]; split
-      · next h =>
-        have hs : v.sort = sig.acSort f := (congrArg Variable.sort h.choose_spec.2).symm.trans (typed _)
-        rw [hs]
-        exact (Classical.choose_spec (realized h.choose h.choose_spec.1)).1
-      · exact .var _ }
-  have inst (j) (hj : j ∈ js) : flatten f (δ.image (w j)) = block j := by
-    have h : lookup (w j) := ⟨j,hj,rfl⟩
-    change flatten f (image _) = _
-    dsimp only [image]; rw [dite_eq_left h, (Classical.choose_spec (realized h.choose h.choose_spec.1)).2, inj h.choose_spec.2]
+  obtain ⟨δ,inst⟩ := instantiate_witnesses f js w inj typed realized
   refine ⟨δ, fun v hv => ?_⟩
   have hv := (occurs_iff_mem f rows v).mp hv
   obtain ⟨i,rfl⟩ := fr.live v hv

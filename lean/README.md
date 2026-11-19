@@ -430,11 +430,13 @@ For unrestricted signed products the Lean specification also relates simultaneou
 normal-value equations to nonnegative integer matrices. Each opaque factor has a
 signed multiplicity in each caller input. Its signs select a matrix, and its absolute
 multiplicities must lie in that matrix’s span. The proof covers repeated variables,
-nested inverses and shared outputs together. Constructing a finite substitution family
-from these per-factor generators is still open. The next DH milestone is to combine
-those families with the possible shapes of a normalized message base (neutral, a
-previous power, or another head), carrying one substitution through all observations.
-[Signed multiplicity refinement](Tamarin/DHSignedMatrix.lean) · [Power cases](Tamarin/DHBase.lean)
+nested inverses and shared outputs together. Lean constructs a finite family of templates
+from the bases. Every normalized solution factors through one template with a single
+sorted substitution, modulo structural AC in every input. The empty branch represents
+the all-unit assignment. The remaining steps are to certify which templates yield
+normal variants, connect their enumeration to the linked solver, and combine them with
+the possible shapes of a normalized power base (neutral, a previous power, or another head).
+[Signed multiplicities](Tamarin/DHSignedMatrix.lean) · [Shared templates](Tamarin/DHSignedBlocks.lean) · [Power cases](Tamarin/DHBase.lean)
 
 Broader deployment still requires checking the Rust representation against its Lean model
 and carrying native-only failure handling through interactive proof publication. The live

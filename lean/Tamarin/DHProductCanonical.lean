@@ -84,6 +84,17 @@ private theorem bag_equiv (s : Symbols sig) {a b : Option (Term sig)}
     | none => exact False.elim (bag_nonempty s a (List.perm_nil.mp h))
     | some b => exact .some (Cancellation.equiv_of_flatten_perm s.mul h)
 
+theorem assemble_equiv (s : Symbols sig) {p n q m : Option (Term sig)}
+    (pos : (bag s p).Perm (bag s q)) (neg : (bag s n).Perm (bag s m)) :
+    EquivB (assemble s p n) (assemble s q m) := by
+  have ep := bag_equiv s pos
+  have en := bag_equiv s neg
+  cases ep <;> cases en
+  · apply EquivB.ac_congr <;> first | assumption | exact .free _ _ _ (fun _ => by assumption)
+  · assumption
+  · exact .free _ _ _ (fun _ => by assumption)
+  · exact .refl _
+
 theorem Canonical.injective [DecidableEq sig.ACSym] {s : Symbols sig} {R : Root sig} {t u p n q m}
     (ct : Canonical s R t p n) (cu : Canonical s R u q m)
     (same : ∀ k, read s R k t = read s R k u) : EquivB t u := by
@@ -96,14 +107,9 @@ theorem Canonical.injective [DecidableEq sig.ACSym] {s : Symbols sig} {R : Root 
       · exact .inr (List.count_eq_zero.mpr (h k mem))
       · exact .inl (List.count_eq_zero.mpr mem)
     rcases separate ct.disjoint with a|a <;> rcases separate cu.disjoint with b|b <;> omega
-  have ep := bag_equiv s (List.perm_iff_count.mpr (fun k => (part k).1))
-  have en := bag_equiv s (List.perm_iff_count.mpr (fun k => (part k).2))
-  apply ct.value.trans; apply EquivB.trans _ cu.value.symm
-  cases ep <;> cases en
-  · apply EquivB.ac_congr <;> first | assumption | exact .free _ _ _ (fun _ => by assumption)
-  · assumption
-  · exact .free _ _ _ (fun _ => by assumption)
-  · exact .refl _
+  exact ct.value.trans ((assemble_equiv s
+    (List.perm_iff_count.mpr fun k => (part k).1)
+    (List.perm_iff_count.mpr fun k => (part k).2)).trans cu.value.symm)
 
 private theorem inv_term {s : Symbols sig} {t : Term sig} (h : head t = .free s.inv) :
     ∃ n, t = s.product.inv n := by
