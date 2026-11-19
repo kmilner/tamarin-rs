@@ -19,7 +19,7 @@ pub(super) fn indivisible(symbol: AcSym, t: &LNTerm) -> bool {
     }
 }
 
-fn flatten<'a>(symbol: AcSym, t: &'a LNTerm, factors: &mut Vec<&'a LNTerm>) {
+pub(super) fn flatten<'a>(symbol: AcSym, t: &'a LNTerm, factors: &mut Vec<&'a LNTerm>) {
     if let Term::App(FunSym::Ac(f), args) = t
         && *f == symbol
     {

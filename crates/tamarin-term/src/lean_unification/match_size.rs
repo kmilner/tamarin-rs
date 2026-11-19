@@ -12,6 +12,16 @@ unsafe extern "C" {
     fn tamarin_match_size_excludes(pattern: u64, subject: u64) -> u8;
 }
 
+pub(super) fn excludes(pattern: u64, subject: u64) -> Result<bool, Error> {
+    super::initialize()?;
+    // SAFETY: the export takes two unboxed UInt64 words and returns a Bool.
+    match LEAN_THREAD.with(|_| unsafe { tamarin_match_size_excludes(pattern, subject) }) {
+        0 => Ok(false),
+        1 => Ok(true),
+        other => Err(Error::InvalidStatus(other)),
+    }
+}
+
 struct Sizes {
     // The request owns these child slices throughout the query. A public caller
     // can use the same slice with different heads; include the head in its key.
@@ -73,7 +83,6 @@ impl RuleTable {
             remaining: MAX_EXPANDED,
         };
         let mut excluded = false;
-        super::initialize()?;
         for eq in eqs {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
             let (Some((_, left)), Some((_, right))) =
@@ -82,15 +91,7 @@ impl RuleTable {
                 return Ok(false);
             };
             if !excluded {
-                // SAFETY: the initialized Lean export takes only two unboxed
-                // UInt64 words and returns an unboxed Bool.
-                let result =
-                    LEAN_THREAD.with(|_| unsafe { tamarin_match_size_excludes(left, right) });
-                match result {
-                    0 => {}
-                    1 => excluded = true,
-                    other => return Err(Error::InvalidStatus(other)),
-                }
+                excluded = excludes(left, right)?;
             }
         }
         Ok(excluded)

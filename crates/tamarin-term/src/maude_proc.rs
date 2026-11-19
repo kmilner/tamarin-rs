@@ -1922,6 +1922,20 @@ impl MaudeHandle {
 
     /// Determine whether any match exists, independent of arm order.
     pub fn has_match_eqs(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
+        #[cfg(feature = "lean-unification")]
+        if self.backend == AlgebraBackend::NativeOnly
+            && !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
+            && crate::lean_unification::RuleTable::may_be_linear_ac_match(eqs)
+        {
+            self.check_backend_status()?;
+            if let Some(table) = self.native_rules()
+                && let Some(found) = table
+                    .linear_ac_has_match(eqs)
+                    .map_err(|e| self.lean_error(e))?
+            {
+                return Ok(found);
+            }
+        }
         self.match_eqs_impl(eqs, false)
             .map(|answers| !answers.is_empty())
     }

@@ -3304,3 +3304,120 @@ fn independent_ac_components_preserve_all_witnesses_and_branches() {
     assert_eq!(patterns.len(), 4);
     assert_eq!(h.stats().unify_count, 0);
 }
+
+#[test]
+fn boolean_linear_ac_matches_wide_frozen_subjects_without_enumerating() {
+    use tamarin_term::builtin::pair;
+    use tamarin_term::function_symbols::{AcFctSym, Constructability, FunSym, NdcState, Privacy};
+    use tamarin_term::vterm::var_term;
+    let declared = AcFctSym::new(
+        b"combine",
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    let mut sig = mset_maude_sig().merge(pair_maude_sig());
+    sig.st_ac_fun_syms.insert(declared);
+    let sig = sig.refresh();
+    let backend = || {
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap()
+    };
+    let h = backend();
+    for outer in [AcSym::Union, AcSym::AcFct(declared)] {
+        let raw = |xs: Vec<_>| Term::App(FunSym::Ac(outer), xs.into());
+        let key = |i| var_term(LVar::new("x", LSort::Msg, i));
+        let a = pub_term("a");
+        let b = pub_term("b");
+        let fixed = pair(sum(a.clone(), b.clone()), a.clone());
+        let reordered = pair(
+            Term::App(FunSym::Ac(AcSym::Union), vec![b, a.clone()].into()),
+            a.clone(),
+        );
+        let mut holes: Vec<_> = (0..12).map(key).collect();
+        holes.push(raw(vec![fixed.clone(), fixed.clone()]));
+        let pattern = raw(holes);
+        let row = |n, copies| {
+            let mut xs: Vec<_> = (0..n).map(|i| pair(key(i), a.clone())).collect();
+            xs.push(if copies == 1 {
+                reordered.clone()
+            } else {
+                raw(vec![reordered.clone(); copies])
+            });
+            Equal {
+                lhs: raw(xs),
+                rhs: pattern.clone(),
+            }
+        };
+        // K distinct nonempty images can divide N frozen factors iff K ≤ N.
+        // Compound subject factors contain some of the very same variable keys.
+        assert!(h.has_match_eqs(&[row(64, 2)]).unwrap());
+        assert!(h.has_match_eqs(&[row(12, 2)]).unwrap());
+        assert!(!h.has_match_eqs(&[row(11, 2)]).unwrap());
+        assert!(!h.has_match_eqs(&[row(64, 1)]).unwrap());
+        assert_eq!(h.stats().match_count, 0);
+        assert!(matches!(
+            backend().match_eqs(&[row(64, 2)]),
+            Err(MaudeError::UnsupportedOperation("matching"))
+        ));
+    }
+}
+
+#[test]
+fn boolean_linear_ac_counts_agree_with_small_matcher_families() {
+    use tamarin_term::vterm::var_term;
+    let h = native();
+    let tag = pub_term("fixed");
+    let key = |i| var_term(LVar::new("x", LSort::Msg, i));
+    let bag = |ts| f_app_ac(AcSym::Union, ts);
+    for width in 1..=4 {
+        for captures in 1..=3 {
+            for fixed in 1..=2 {
+                let mut items: Vec<_> = (0..width)
+                    .map(|i| {
+                        if i % 2 == 0 {
+                            key(i)
+                        } else {
+                            pub_term("frozen")
+                        }
+                    })
+                    .collect();
+                items.push(tag.clone());
+                let mut pattern: Vec<_> = (0..captures).map(key).collect();
+                pattern.extend(std::iter::repeat_n(tag.clone(), fixed));
+                let row = Equal {
+                    lhs: bag(items),
+                    rhs: bag(pattern),
+                };
+                let exists = h.has_match_eqs(std::slice::from_ref(&row)).unwrap();
+                assert_eq!(exists, fixed == 1 && captures <= width);
+                assert_eq!(exists, !h.match_eqs(&[row]).unwrap().is_empty());
+            }
+        }
+    }
+    let a = pub_term("a");
+    let b = pub_term("b");
+    let with_tag = |v| sum(tag.clone(), v);
+    let row = |x: LNTerm, term: LNTerm| Equal {
+        lhs: with_tag(term),
+        rhs: with_tag(x),
+    };
+    assert!(h
+        .has_match_eqs(&[row(key(0), key(1)), row(key(1), key(0))])
+        .unwrap());
+    assert!(!h
+        .has_match_eqs(&[row(key(0), a.clone()), row(key(0), b.clone())])
+        .unwrap());
+    assert!(!h
+        .has_match_eqs(&[Equal {
+            lhs: sum(a.clone(), b.clone()),
+            rhs: sum(key(0), key(0))
+        }])
+        .unwrap());
+    let fresh = var_term(LVar::new("x", LSort::Fresh, 0));
+    assert!(!h
+        .has_match_eqs(&[Equal {
+            lhs: sum(a, b),
+            rhs: sum(fresh, key(1))
+        }])
+        .unwrap());
+}
