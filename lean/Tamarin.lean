@@ -129,3 +129,4 @@ import Tamarin.SignedGraphContract
 import Tamarin.DHStaging
 import Tamarin.BilinearRows
 import Tamarin.BilinearPowerSpine
+import Tamarin.BilinearMapStaging

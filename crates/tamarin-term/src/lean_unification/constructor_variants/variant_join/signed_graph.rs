@@ -180,13 +180,13 @@ fn decode(
 impl RuleTable {
     /// An input that is only observed stays independent of the graph. All
     /// occurrences inside signed expressions refer to the same local coordinate.
-    pub(super) fn signed_graph_rows(
+    pub(super) fn signed_graph_candidates(
         &self,
         keys: &[LVar],
         observed: &[LNTerm],
         max_coordinates: usize,
         search: &mut JoinSearch,
-    ) -> Result<Option<Vec<Row>>, Error> {
+    ) -> Result<Option<BTreeSet<Row>>, Error> {
         if !self.builtin_dh || keys.len() > MAX_RESPONSE || observed.len() > MAX_RESPONSE {
             return Ok(None);
         }
@@ -239,10 +239,10 @@ impl RuleTable {
             slots.push(keys.len() + slot);
         }
         if programs.is_empty() {
-            return Ok(Some(vec![Row {
+            return Ok(Some(BTreeSet::from([Row {
                 images: keys.iter().map(|&v| Term::Lit(Lit::Var(v))).collect(),
                 values: observed.to_vec(),
-            }]));
+            }])));
         }
         let original = keys.iter().map(|v| v.idx).collect();
         let Some(packet) = read_packet(active.len(), &programs)? else {
@@ -281,6 +281,21 @@ impl RuleTable {
                 .rename(&original),
             );
         }
+        Ok(Some(projected))
+    }
+
+    pub(super) fn signed_graph_rows(
+        &self,
+        keys: &[LVar],
+        observed: &[LNTerm],
+        max_coordinates: usize,
+        search: &mut JoinSearch,
+    ) -> Result<Option<Vec<Row>>, Error> {
+        let Some(projected) =
+            self.signed_graph_candidates(keys, observed, max_coordinates, search)?
+        else {
+            return Ok(None);
+        };
         let Some(kept) = self.prune_specializations(projected, &mut search.graph_matching)? else {
             return Ok(None);
         };
@@ -445,6 +460,14 @@ mod tests {
         // oracle's time budget. Check every public substitution and both
         // outputs with ordinary Maude reduction, then test concrete coverage.
         let public = native.variants(&f_app_list(obs.to_vec())).unwrap();
+        let mut repeated = obs.to_vec();
+        repeated.extend(keys.map(|v| Term::Lit(Lit::Var(v))));
+        repeated.extend_from_slice(&obs);
+        let duplicate = native.variants(&f_app_list(repeated)).unwrap();
+        assert_eq!(
+            duplicate.into_iter().collect::<BTreeSet<_>>(),
+            public.iter().cloned().collect()
+        );
         let mut valued = BTreeSet::new();
         let original = keys.iter().map(|v| v.idx).collect();
         for arm in public {

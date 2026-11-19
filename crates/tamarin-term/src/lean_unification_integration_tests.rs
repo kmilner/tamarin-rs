@@ -7074,6 +7074,9 @@ fn native_oracle_signed_graph_compares_all_caller_and_observation_coordinates() 
 #[path = "lean_variant_frontier_tests.rs"]
 mod frontier;
 
+#[path = "lean_pairing_power_tests.rs"]
+mod pairing_power;
+
 #[test]
 fn native_oracle_narrowing_preserves_signed_dh_products_and_powers() {
     use crate::algebra_backend::AlgebraBackend;
@@ -7195,5 +7198,74 @@ fn native_point_reduction_uses_changed_rules_even_without_refresh() {
             .unwrap();
         assert_eq!(h.reduce(&query).unwrap(), a, "{query}");
         assert_eq!(h.stats().norm_count, 0);
+    }
+}
+
+#[test]
+fn native_oracle_signed_stable_leaves_share_subterms_and_sorted_variables() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{fresh_var, hash, inv, msg_var, mult};
+    use crate::lean_unification::RuleTable;
+    use crate::maude_sig::{dh_maude_sig, hash_maude_sig};
+    use crate::term::f_app_list;
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = dh_maude_sig().merge(hash_maude_sig());
+    let table = RuleTable::new(&sig).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let x = msg_var("shared", 0);
+    let r = fresh_var("shared", 0);
+    let h = hash(x.clone());
+    let c = pub_term("c");
+    for slots in [
+        vec![mult(x.clone(), r.clone()), r.clone(), x.clone()],
+        vec![mult(x.clone(), h.clone()), h.clone(), x.clone()],
+        vec![mult(x.clone(), inv(h.clone())), x.clone()],
+        vec![mult(c.clone(), inv(r.clone())), r.clone(), c],
+        vec![
+            mult(mult(x.clone(), x.clone()), r.clone()),
+            x.clone(),
+            r.clone(),
+        ],
+        vec![
+            mult(mult(x.clone(), x.clone()), h.clone()),
+            x.clone(),
+            h.clone(),
+        ],
+        vec![
+            mult(r.clone(), inv(fresh_var("other", 1))),
+            r.clone(),
+            fresh_var("other", 1),
+        ],
+        vec![inv(mult(r.clone(), r.clone())), r.clone()],
+    ] {
+        let query = f_app_list(slots.clone());
+        let mut keys = crate::lterm::frees_list(&query);
+        keys.sort();
+        keys.dedup();
+        let expected = valued_variant_rows(&oracle, &slots);
+        let packet = table
+            .signed_leaf_probe(&keys, &slots)
+            .unwrap()
+            .unwrap_or_else(|| panic!("leaf graph deferred {query}"));
+        let got = canonical_small_ac_answers(
+            packet
+                .into_iter()
+                .map(|terms| vec![(LVar::new("row", LSort::Msg, 0), f_app_list(terms))])
+                .collect(),
+        );
+        assert_eq!(got, expected, "stable leaf graph for {query}");
+        assert_eq!(
+            valued_variant_rows(&native, &slots),
+            expected,
+            "public {query}"
+        );
     }
 }

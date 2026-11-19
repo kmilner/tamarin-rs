@@ -6,6 +6,7 @@ mod leaf_occurrences;
 mod residual_match;
 mod scalar_action;
 mod signed_graph;
+mod signed_leaves;
 use residual_match::{residual_row_matches, RowMatch};
 
 use super::{InputDomain, RuleTable};
@@ -879,6 +880,9 @@ impl RuleTable {
         if result.is_none() {
             result =
                 self.signed_graph_rows(&keys, terms, signed_graph::MAX_COORDINATES, &mut search)?;
+        }
+        if result.is_none() {
+            result = self.signed_leaf_rows(&keys, &original, terms)?;
         }
         Ok(match result {
             Some(rows) => Outcome::Complete(

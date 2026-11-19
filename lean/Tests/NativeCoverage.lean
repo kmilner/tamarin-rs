@@ -252,6 +252,10 @@ def dhCoverage : IO Unit := do
   let cube := DHPeer.Expr.mul (.mul m m) m
   for t in [cube,.inv cube] do
     emitDH "variants" "rows=4" [t,m]
+  -- The same caller may occur twice in the scalar product and inside
+  -- a stable operand. Keep all its occurrences coupled during specialization.
+  for (leaf,count) in [(r,8),(DHPeer.Expr.var (hash x),4)] do
+    emitDH "variants" ("rows=" ++ toString count) [.mul (.mul m m) leaf,m,leaf]
   emitDH "variants" "rows=12" [tower,.pow g n]
   emitDH "variants" "rows=14" [tower,.pow (.pow g m) (.var (.atom true))]
   for t in [DHPeer.Expr.pow m n, .pow (.pow g m) n, .pow g (.mul m n)] do
