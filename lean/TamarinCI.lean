@@ -383,6 +383,10 @@ theorem exportedACSubgroupNormal :
       Executable.flatACMatch Executable.commOrientations Executable.cancelCommon :=
   ACSubgroups.normal exportedACSubgroups_correct exportedRecursiveACMatch_correct
 
+theorem exportedACSubproductSuccessors :
+    Rewriting.ACSubproductReduction.Successors Executable.acSubgroups :=
+  Rewriting.ACSubproductReduction.successors_iff exportedACSubgroups_correct
+
 /-- A binary root match against the active AC equations has one observable
 normal value across both alignments and all matching rule instances. -/
 theorem exportedBinaryACReduction_semantic :

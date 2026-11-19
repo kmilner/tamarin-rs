@@ -53,7 +53,7 @@ private theorem nonempty (f : s.ACSym) (t : Term s) : 0 < (Cancellation.flatten 
   | nil => rw [h] at hf; contradiction
   | cons => simp
 
-private theorem binary {f : s.ACSym} {t : Term s} (h : ConstructorVariants.head t = .ac f) :
+theorem binary {f : s.ACSym} {t : Term s} (h : ConstructorVariants.head t = .ac f) :
     2 ≤ (Cancellation.flatten f t).length := by
   cases t with
   | ac g a b =>

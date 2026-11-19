@@ -199,49 +199,52 @@ impl Budget {
         }
     }
 
-    /// Bound an actual simultaneous substitution before materializing it.
-    /// A mapped variable is charged for its whole image at that occurrence;
-    /// the image itself is already in solved form. AC flattening can only
-    /// shorten this count. The per-operation bound also limits traversal of
-    /// heavily shared input terms when the request is already too large.
     fn charge<'a>(
         &mut self,
         terms: impl IntoIterator<Item = &'a LNTerm>,
         bindings: Option<&Bindings>,
     ) -> Result<bool, Error> {
-        const MAX_EXPANDED: usize = 65_536;
-        const MAX_DEPTH: usize = 256;
-
-        fn visit(
-            t: &LNTerm,
-            bindings: Option<&Bindings>,
-            remaining: &mut usize,
-            depth: usize,
-        ) -> bool {
-            if *remaining == 0 || depth > MAX_DEPTH {
-                return false;
-            }
-            if let Term::Lit(Lit::Var(v)) = t
-                && let Some(image) = bindings.and_then(|s| s.image_of(v))
-            {
-                return visit(image, None, remaining, depth);
-            }
-            *remaining -= 1;
-            match t {
-                Term::Lit(_) => true,
-                Term::App(_, xs) => xs.iter().all(|x| visit(x, bindings, remaining, depth + 1)),
-            }
-        }
-
-        let limit = MAX_EXPANDED.min(self.nodes);
-        let mut remaining = limit;
-        let fits = terms
-            .into_iter()
-            .all(|t| visit(t, bindings, &mut remaining, 0));
-        self.nodes -= limit - remaining;
-        tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-        Ok(fits)
+        charge_expansion(&mut self.nodes, terms, bindings)
     }
+}
+
+/// Bound an actual simultaneous substitution before materializing it.
+/// A mapped variable is charged for its whole image at that occurrence;
+/// the image itself is already in solved form. AC flattening can only
+/// shorten this count. The per-operation bound also limits traversal of
+/// heavily shared input terms when the request is already too large.
+pub(super) fn charge_expansion<'a>(
+    nodes: &mut usize,
+    terms: impl IntoIterator<Item = &'a LNTerm>,
+    bindings: Option<&Bindings>,
+) -> Result<bool, Error> {
+    const MAX_EXPANDED: usize = 65_536;
+    const MAX_DEPTH: usize = 256;
+
+    fn visit(t: &LNTerm, bindings: Option<&Bindings>, remaining: &mut usize, depth: usize) -> bool {
+        if *remaining == 0 || depth > MAX_DEPTH {
+            return false;
+        }
+        if let Term::Lit(Lit::Var(v)) = t
+            && let Some(image) = bindings.and_then(|s| s.image_of(v))
+        {
+            return visit(image, None, remaining, depth);
+        }
+        *remaining -= 1;
+        match t {
+            Term::Lit(_) => true,
+            Term::App(_, xs) => xs.iter().all(|x| visit(x, bindings, remaining, depth + 1)),
+        }
+    }
+
+    let limit = MAX_EXPANDED.min(*nodes);
+    let mut remaining = limit;
+    let fits = terms
+        .into_iter()
+        .all(|t| visit(t, bindings, &mut remaining, 0));
+    *nodes -= limit - remaining;
+    tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
+    Ok(fits)
 }
 
 fn sides(equations: &[Equal<LNTerm>]) -> impl Iterator<Item = &LNTerm> {

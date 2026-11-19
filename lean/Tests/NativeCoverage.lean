@@ -9,7 +9,7 @@ The public Rust adapter consumes this test format. -/
 namespace Tamarin.NativeCoverage
 open Rewriting ConstructorVariants
 
-inductive Symbol where | hash | zero | pair | fst | snd
+inductive Symbol where | hash | zero | pair | fst | snd | red | blue
   deriving DecidableEq
 
 abbrev sig : Signature where
@@ -17,7 +17,7 @@ abbrev sig : Signature where
   CSym := Empty
   ACSym := Unit
   Atom := Bool
-  arity := fun | .hash | .fst | .snd => 1 | .zero => 0 | .pair => 2
+  arity := fun | .hash | .fst | .snd => 1 | .zero | .red | .blue => 0 | .pair => 2
   inputSort := fun _ _ => .msg
   outputSort := fun _ => .msg
   cSort := Empty.elim
@@ -35,13 +35,17 @@ def pair (a b : Expr) : Expr := .free .pair (fun i => if i.val = 0 then a else b
 def first (t : Expr) : Expr := .free .fst (fun _ => t)
 def second (t : Expr) : Expr := .free .snd (fun _ => t)
 
-inductive Theory where | ac | xor | xorPair
+def red : Expr := .free .red Fin.elim0
+def blue : Expr := .free .blue Fin.elim0
+
+inductive Theory where | ac | xor | xorPair | markers
   deriving DecidableEq
 
 def xorRules : List (Equation sig) := [⟨plus x zero,x⟩, ⟨plus x x,zero⟩, ⟨plus x (plus x y),y⟩]
 
 def rules : Theory → List (Equation sig)
   | .ac => []
+  | .markers => [⟨plus red red, red⟩, ⟨plus blue blue, blue⟩]
   | .xorPair => xorRules ++ [⟨first (pair x y),x⟩, ⟨second (pair x y),y⟩]
   | .xor => xorRules
 
@@ -51,8 +55,8 @@ private def sameHead : DecidableEq (Head sig) := fun a b => by
 def constructorOnly (th : Theory) (t : Expr) : Bool :=
   !(operators t).any fun f => (ruleHeads (rules th)).any fun g => @decide _ (sameHead f g)
 
-/-- In these two bounded presentations the ground observations have a unique
-normal value, including when their active AC root actually rewrites. -/
+/-- Ground observations in the generated variant presentations have a unique
+normal value, including when their active AC root rewrites. -/
 def identitySlot (th : Theory) (t : Expr) := t.variables.isEmpty || constructorOnly th t
 
 /-- Every expression emitted in this bounded grammar lies in the stable,
@@ -121,6 +125,8 @@ def code : Expr → String
   | .atom b => if b then "b" else "a"
   | .free .hash args => code (args 0) ++ ".h"
   | .free .zero _ => "z"
+  | .free .red _ => "R"
+  | .free .blue _ => "B"
   | .free .fst args => code (args 0) ++ ".l"
   | .free .snd args => code (args 0) ++ ".r"
   | .free .pair args => code (args 0) ++ "." ++ code (args 1) ++ ".p"
@@ -139,10 +145,76 @@ def layers (th : Theory) (maxSize : Nat) : Array (List Expr) := Id.run do
   return out
 
 def emit (th : Theory) (op expected : String) (ts : List Expr) : IO Unit := do
-  let name := match th with | .ac => "ac" | .xor => "xor" | .xorPair => "xor-pair"
+  let name := match th with | .ac => "ac" | .xor => "xor" | .xorPair => "xor-pair" | .markers => "markers"
   IO.println (String.intercalate "\t" ([name,op,expected] ++ ts.map code))
 
+/-- Two independent idempotent markers share an otherwise free AC operation.
+The two constructor symbols differ from public names, including names with
+the same displayed spelling. Reduction keeps rigid variables unchanged. -/
+inductive Factor where | red | blue | name | message | fresh
+  deriving DecidableEq
+
+def Factor.term : Factor → Expr
+  | .red => NativeCoverage.red | .blue => NativeCoverage.blue | .name => .atom true
+  | .message => x | .fresh => .var ⟨0,.fresh⟩
+
+def Factor.marker : Factor → Bool
+  | .red | .blue => true
+  | _ => false
+
+def normalCount (xs : List Factor) (f : Factor) : Nat :=
+  if f.marker then min 1 (xs.count f) else xs.count f
+
+/-- A marker step consumes one of two equal occurrences. Every projected
+normal-form count is invariant under either rule in an arbitrary context. -/
+theorem normalCount_step (xs : List Factor) (m f : Factor) (hm : m.marker = true) :
+    normalCount (m::m::xs) f = normalCount (m::xs) f := by
+  by_cases e : m = f
+  · subst f; simp [normalCount,hm]
+  · simp [normalCount,e]
+
+theorem normalCount_perm {xs ys : List Factor} (perm : xs.Perm ys) (f : Factor) :
+    normalCount xs f = normalCount ys f := by simp [normalCount,perm.count_eq f]
+
+/-- When no marker pair remains, the invariant reads back the exact
+multiplicity of every operand, including unbounded duplicates of names or variables. -/
+theorem normalCount_irreducible (xs : List Factor)
+    (normal : ∀ m : Factor, m.marker = true → xs.count m ≤ 1) (f : Factor) :
+    normalCount xs f = xs.count f := by
+  cases h : f.marker with
+  | false => simp [normalCount,h]
+  | true => simp [normalCount,h,Nat.min_eq_right (normal f h)]
+
+def normalWord (xs : List Factor) : List Factor :=
+  [.red,.blue,.name,.message,.fresh].flatMap fun f => List.replicate (normalCount xs f) f
+
+theorem normalWord_count (xs : List Factor) (f : Factor) :
+    (normalWord xs).count f = normalCount xs f := by
+  cases f <;> simp [normalWord,List.count_replicate]
+
+def markerCase (xs : List Factor) : IO Unit := do
+  let (a::args, b::rest) := (xs,normalWord xs) | throw (IO.userError "empty marker product")
+  let input := args.foldl (fun acc f => plus acc f.term) a.term
+  let nf := rest.foldl (fun acc f => plus acc f.term) b.term
+  emit .markers "reduce" "exact" [input,nf]
+
+def markerCoverage : IO Unit := do
+  for rule in rules .markers do
+    emit .markers "rule" "oriented" [rule.lhs,rule.rhs]
+  let mut words : List (List Factor) := [[]]
+  for _ in [:4] do
+    words := words.flatMap fun w => [.red,.blue,.name,.message].map (fun f => f::w)
+    for w in words do markerCase w
+  for w in [[.fresh,.fresh,.red,.red], [.red,.blue,.fresh,.red,.blue,.red],
+      [.blue,.blue,.blue,.blue,.message,.message], [.fresh,.name,.fresh,.name]] do
+    markerCase w
+  -- A reducible child and a reducible parent require nested one-step coverage.
+  let inner := plus blue (plus x blue)
+  emit .markers "reduce" "exact"
+    [plus red (plus (hash inner) red), plus red (hash (plus x blue))]
+
 def generate : IO Unit := do
+  markerCoverage
   for th in [Theory.ac,.xor] do
     let terms := layers th 5
     for layer in terms do

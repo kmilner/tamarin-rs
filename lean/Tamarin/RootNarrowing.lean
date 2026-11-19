@@ -88,20 +88,27 @@ theorem Schema.lift_iff (p : Schema R) (q : Term sig)
 /-- A concrete AC remainder can be added to a rule assignment without
 changing any of the rule's existing bindings, even when it contains caller
 variables. Its fresh placeholder has the sort of the AC operator. -/
-theorem Schema.extend_witness (p : Schema R) (f : sig.ACSym) (z : Variable)
-    (fresh : ¬p.lhs.Occurs z) (τ : Substitution sig) (rest : Term sig) (typed : HasSort rest z.sort) :
-    ∃ τ' : Substitution sig, τ'.apply (p.extend f z).lhs = .ac f (τ.apply p.lhs) rest ∧
-      τ'.apply (p.extend f z).rhs = .ac f (τ.apply p.rhs) rest := by
+theorem extend_assignment (lhs rhs : Term sig) (bound : ∀ v, rhs.Occurs v → lhs.Occurs v)
+    (f : sig.ACSym) (z : Variable) (fresh : ¬lhs.Occurs z)
+    (τ : Substitution sig) (rest : Term sig) (typed : HasSort rest z.sort) :
+    ∃ η : Substitution sig, η.apply (.ac f lhs (.var z)) = .ac f (τ.apply lhs) rest ∧
+      η.apply (.ac f rhs (.var z)) = .ac f (τ.apply rhs) rest := by
   let image := Substitution.binding z rest typed
   let η := VariantJoin.choose (· = z) image τ
   have on (t : Term sig) (ht : ¬t.Occurs z) : η.apply t = τ.apply t :=
     (VariantJoin.choose_apply _ _ _ t).2 fun _ occ eq => ht (eq ▸ occ)
   have h : η.image z = rest := by simp [η,VariantJoin.choose,image,Substitution.binding]
   refine ⟨η,?_,?_⟩
-  · change Term.ac f (η.apply p.lhs) (η.image z) = _
-    rw [on p.lhs fresh,h]
-  · change Term.ac f (η.apply p.rhs) (η.image z) = _
-    rw [on p.rhs (fun hv => fresh (p.bound z hv)),h]
+  · change Term.ac f (η.apply lhs) (η.image z) = _
+    rw [on lhs fresh,h]
+  · change Term.ac f (η.apply rhs) (η.image z) = _
+    rw [on rhs (fun hv => fresh (bound z hv)),h]
+
+theorem Schema.extend_witness (p : Schema R) (f : sig.ACSym) (z : Variable)
+    (fresh : ¬p.lhs.Occurs z) (τ : Substitution sig) (rest : Term sig) (typed : HasSort rest z.sort) :
+    ∃ τ' : Substitution sig, τ'.apply (p.extend f z).lhs = .ac f (τ.apply p.lhs) rest ∧
+      τ'.apply (p.extend f z).rhs = .ac f (τ.apply p.rhs) rest :=
+  extend_assignment p.lhs p.rhs p.bound f z fresh τ rest typed
 
 /-- Every actual application of this rule to an AC subbag after
 specialization lifts to the whole-root or the fresh-remainder CSU. The

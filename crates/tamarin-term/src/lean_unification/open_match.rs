@@ -502,9 +502,8 @@ pub(super) fn component(
     })
 }
 
-/// Match one canonical pattern against a canonical ground subject using the
-/// same sorted branch search as the AC adapter. The caller shares one budget
-/// across every candidate rule and every AC subgroup in a reduction.
+/// Match one canonical pattern against a canonical subject with rigid variables.
+/// Rule candidates and subgroups in a reduction consume the same search budget.
 pub(super) fn root(
     pattern: &LNTerm,
     subject: &LNTerm,

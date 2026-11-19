@@ -8,13 +8,18 @@ use std::path::Path;
 use std::process::Command;
 use tamarin_term::algebra_backend::AlgebraBackend;
 use tamarin_term::builtin::{fresh_var, fst, hash, msg_var, pair, snd, zero_const};
-use tamarin_term::function_symbols::AcSym;
+use tamarin_term::function_symbols::{
+    AcFctSym, AcSym, Constructability, NdcState, NoEqSym, Privacy,
+};
 use tamarin_term::lterm::{frees, pub_term, LNTerm, LVar, Name};
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
-use tamarin_term::maude_sig::{hash_maude_sig, mset_maude_sig, pair_maude_sig, xor_maude_sig};
-use tamarin_term::rewriting::Equal;
+use tamarin_term::maude_sig::{
+    hash_maude_sig, mset_maude_sig, pair_maude_sig, xor_maude_sig, MaudeSig,
+};
+use tamarin_term::rewriting::{Equal, RRule};
 use tamarin_term::subst::{apply_vterm, Subst};
-use tamarin_term::term::{f_app_ac, f_app_list, Term};
+use tamarin_term::subterm_rule::rrule_to_ctxt_st_rule;
+use tamarin_term::term::{f_app_ac, f_app_list, f_app_no_eq, Term};
 use tamarin_term::vterm::Lit;
 
 fn generated_requests() -> String {
@@ -50,12 +55,41 @@ fn generated_requests() -> String {
     ])
 }
 
+// These nullary constructors deliberately share the spelling of public names.
+fn marker(name: &'static [u8]) -> NoEqSym {
+    NoEqSym::new(name, 0, Privacy::Public, Constructability::Constructor)
+}
+
+fn marker_presentation(cases: &str) -> (MaudeSig, AcSym) {
+    let f = AcFctSym::new(
+        b"merge",
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    let symbol = AcSym::AcFct(f);
+    let mut sig = hash_maude_sig();
+    sig.st_ac_fun_syms.insert(f);
+    sig.st_fun_syms.extend([marker(b"a"), marker(b"b")]);
+    for line in cases.lines() {
+        if let Some(sides) = line.strip_prefix("markers\trule\toriented\t") {
+            let (lhs, rhs) = sides.split_once('\t').unwrap();
+            let rule = RRule::new(term(lhs, symbol), term(rhs, symbol));
+            sig.st_rules.insert(rrule_to_ctxt_st_rule(&rule).unwrap());
+        }
+    }
+    assert_eq!(sig.st_rules.len(), 2);
+    (sig.refresh(), symbol)
+}
+
 // Test-only postfix decoding. Rust smart constructors choose the AC representative.
 fn term(text: &str, symbol: AcSym) -> LNTerm {
     let mut stack = Vec::new();
     for token in text.split('.') {
         let value = match token {
             "a" | "b" => pub_term(token),
+            "R" => f_app_no_eq(marker(b"a"), vec![]),
+            "B" => f_app_no_eq(marker(b"b"), vec![]),
             "z" => zero_const(),
             "h" => hash(stack.pop().unwrap()),
             "l" => fst(stack.pop().unwrap()),
@@ -95,6 +129,10 @@ fn covers_identity(query: &LNTerm, subst: &Subst<Name, LVar>) -> bool {
 
 fn exercise(h: &MaudeHandle, op: &str, expected: &str, ts: &[LNTerm]) -> Result<(), MaudeError> {
     match (op, ts) {
+        ("reduce", [t, nf]) if expected == "exact" => {
+            assert_eq!(&h.reduce(t)?, nf, "{t}");
+            assert_eq!(h.reduce(&hash(t.clone()))?, hash(nf.clone()), "hash({t})");
+        }
         ("reduce", [t]) => {
             let result = h.reduce(t)?;
             match expected {
@@ -188,10 +226,12 @@ fn public_backend_meets_generated_coverage_floor() {
     let plain = mset_maude_sig().merge(hash_maude_sig());
     let cancellation = xor_maude_sig().merge(hash_maude_sig());
     let mixed = cancellation.clone().merge(pair_maude_sig());
+    let (markers, merge) = marker_presentation(&cases);
     let presentation = |name: &str| match name {
         "ac" => (&plain, AcSym::Union),
         "xor" => (&cancellation, AcSym::Xor),
         "xor-pair" => (&mixed, AcSym::Xor),
+        "markers" => (&markers, merge),
         _ => panic!("unknown theory {name}"),
     };
     for line in cases.lines() {
@@ -199,6 +239,9 @@ fn public_backend_meets_generated_coverage_floor() {
         let theory = fields.next().unwrap();
         let op = fields.next().unwrap();
         let expected = fields.next().unwrap();
+        if (theory, op, expected) == ("markers", "rule", "oriented") {
+            continue;
+        }
         let (sig, symbol) = presentation(theory);
         let ts: Vec<_> = fields.map(|e| term(e, symbol)).collect();
         let h = MaudeHandle::start_with_backend(
@@ -228,7 +271,7 @@ fn public_backend_meets_generated_coverage_floor() {
             Err(err) => panic!("{line}: {err}"),
         }
     }
-    assert_eq!(report.len(), 10);
+    assert_eq!(report.len(), 11);
     for ((theory, op), c) in report {
         assert!(c.required > 0, "missing guaranteed {theory} {op} cases");
         println!(

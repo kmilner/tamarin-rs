@@ -80,6 +80,18 @@ private theorem path_of_reduces {a b : Term sig} (h : Reduces R a b) : Path R a 
     exact (ih.context (fun x => .comm f x c) (fun e => .comm_congr f e (.refl _)) (Step.comm_left f c)).trans
       (ik.context (fun x => .comm f b x) (fun e => .comm_congr f (.refl _) e) (Step.comm_right f b))
 
+/-- A property preserved by basis changes and every contextual one-step
+rewrite is preserved by all reference reductions, including congruence. -/
+theorem reduction_invariant (P : Term sig → Prop)
+    (basis : ∀ {a b}, P a → EquivB a b → P b)
+    (next : ∀ {a b}, P a → StepModulo R a b → P b)
+    {a b} (red : Reduces R a b) (start : P a) : P b := by
+  have path := path_of_reduces red
+  clear red
+  induction path with
+  | basis eq => exact basis start eq
+  | next st _ ih => exact ih (next start st)
+
 /-- A state retains one result and all input images. Closure can use any
 state in the finite family (including an older more general state). Each
 new factor substitution must still explain all input images together. -/

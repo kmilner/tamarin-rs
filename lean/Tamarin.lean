@@ -91,6 +91,7 @@ import Tamarin.PowerNormalization
 import Tamarin.DHPeerComplete
 import Tamarin.ACRootReduction
 import Tamarin.ACSubgroups
+import Tamarin.ACSubproductReduction
 import Tamarin.ACUnifierExclusion
 import Tamarin.NarrowingFrontier
 import Tamarin.BinaryXorJoined
