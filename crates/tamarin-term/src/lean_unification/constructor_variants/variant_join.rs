@@ -2,6 +2,7 @@
 //! Each row also carries its predicted normal values so a specialization
 //! that introduces a redex in an earlier observation can be discarded.
 mod finite_narrowing;
+mod leaf_occurrences;
 mod residual_match;
 mod scalar_action;
 mod signed_graph;
@@ -99,6 +100,7 @@ fn rigid_size(t: &LNTerm) -> usize {
 struct IndexedRow {
     row: Row,
     sizes: Vec<usize>,
+    leaves: std::cell::OnceCell<Option<leaf_occurrences::Counts>>,
 }
 
 /// Free argument positions and bare captures force the same bindings across
@@ -161,6 +163,17 @@ impl IndexedRow {
         if pending.is_empty() {
             return Ok(Some(true));
         }
+        let source = self
+            .leaves
+            .get_or_init(|| leaf_occurrences::Counts::new(&self.row));
+        let target = other
+            .leaves
+            .get_or_init(|| leaf_occurrences::Counts::new(&other.row));
+        if let (Some(source), Some(target)) = (source, target)
+            && !source.fits(target)
+        {
+            return Ok(Some(false));
+        }
         let mut seed = captures.into_iter().map(|(v, t)| (v, t.clone())).collect();
         let equations = match residual_row_matches(pending, &mut seed)? {
             RowMatch::Clash => return Ok(Some(false)),
@@ -215,6 +228,7 @@ struct JoinSearch {
     // for expanded terms, concrete rewrites and state/terminal comparisons.
     frontier_nodes: usize,
     graph_work: usize,
+    graph_matching: usize,
 }
 
 /// A known root redex or child redex suffices regardless of any undecided
@@ -248,6 +262,7 @@ impl JoinSearch {
             pairs: 4096,
             matching: 100_000,
             graph_work: residual::MAX_EXPANDED,
+            graph_matching: 1 << 21,
             frontier_nodes: 1 << 21,
         }
     }
@@ -402,8 +417,8 @@ impl RuleTable {
         if let Some(rows) = self.scalar_action_rows(keys, original, app, search)? {
             return Ok(Some(rows));
         }
-        // At most eight sign profiles. Larger matrices are attempted only
-        // after the existing component solvers defer on the entire operation.
+        // Try small sign tables before narrowing. Larger matrices remain a
+        // whole-query fallback after the existing component solvers defer.
         if let Some(rows) = self.signed_graph_rows(
             keys,
             std::slice::from_ref(app),
@@ -593,7 +608,11 @@ impl RuleTable {
             *t = super::super::canonical_capture(t);
         }
         let sizes = row.iter().map(rigid_size).collect();
-        Some(IndexedRow { row, sizes })
+        Some(IndexedRow {
+            row,
+            sizes,
+            leaves: std::cell::OnceCell::new(),
+        })
     }
 
     /// Specialization can turn distinct generic cases into instances of each

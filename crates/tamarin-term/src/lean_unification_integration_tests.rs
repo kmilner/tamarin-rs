@@ -7031,6 +7031,9 @@ fn native_oracle_signed_graph_compares_all_caller_and_observation_coordinates() 
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = msg_var("caller", 0);
+    let y = msg_var("caller", 1);
+    let direct = mult(x.clone(), y.clone());
+    let quotient = mult(x.clone(), inv(y.clone()));
     let sq = mult(x.clone(), x.clone());
     let cube = mult(x.clone(), sq.clone());
     for slots in [
@@ -7039,6 +7042,9 @@ fn native_oracle_signed_graph_compares_all_caller_and_observation_coordinates() 
         vec![msg_var("other", 1), cube.clone(), x.clone()],
         vec![crate::builtin::fresh_var("caller", 0), cube, x.clone()],
         vec![inv(x.clone()), sq],
+        vec![x.clone(), direct.clone(), y.clone()],
+        vec![inv(direct.clone()), y.clone(), x.clone()],
+        vec![x.clone(), quotient, y.clone()],
         vec![mult(x.clone(), inv(x.clone())), x.clone()],
     ] {
         let query = f_app_list(slots.clone());

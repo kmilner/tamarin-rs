@@ -195,6 +195,47 @@ impl Collectors {
             }
             return Ok(true);
         }
+        // Earlier coordinates may already have fixed collectors in this AC
+        // equation. Remove their exact flattened images before partitioning.
+        // Subject variables in those captures remain rigid.
+        if self
+            .keys
+            .values()
+            .iter()
+            .any(|key| arm.iter().any(|(v, _)| v == key))
+        {
+            let mut fixed = Vec::new();
+            let mut open = Collectors {
+                symbol: self.symbol,
+                keys: IdentityTable::default(),
+                occurrences: Vec::new(),
+            };
+            for &index in &self.occurrences {
+                let key = self.keys.get(index).ok_or(Error::InvalidStatus(255))?;
+                if let Some((_, image)) = arm.iter().find(|(v, _)| *v == key) {
+                    let pieces = match image {
+                        Term::App(FunSym::Ac(head), xs) if *head == self.symbol => xs.as_ref(),
+                        atom => std::slice::from_ref(atom),
+                    };
+                    if pieces.len() > rest.len() - fixed.len() {
+                        return Ok(true);
+                    }
+                    fixed.extend(pieces);
+                } else {
+                    open.occurrences
+                        .push(open.keys.intern(key).ok_or(Error::InvalidStatus(255))?);
+                }
+            }
+            let (missing, remaining) =
+                super::common_children::residual_refs(fixed, rest.iter().copied())?;
+            if !missing.is_empty() || remaining.len() < open.occurrences.len() {
+                return Ok(true);
+            }
+            if open.occurrences.is_empty() {
+                return Ok(!remaining.is_empty() || search.resume(pending, arm));
+            }
+            return open.extend(&remaining, arm.clone(), pending, search);
+        }
         let (factors, rhs) = Self::encode_remainder(rest)?;
         if self.keys.len() < self.occurrences.len() && self.refuted(&rhs)? {
             return Ok(true);
@@ -574,6 +615,32 @@ mod tests {
     use super::align_rigid_factors;
     use crate::builtin::{hash, msg_var, pair};
     use crate::lterm::pub_term;
+
+    #[test]
+    fn already_bound_collectors_consume_their_full_bag_at_each_occurrence() {
+        use super::{with_captures, Outcome};
+        use crate::builtin::mult;
+        use crate::lterm::{LSort, LVar};
+        use crate::rewriting::Equal;
+        let x = LVar::new("x", LSort::Msg, 0);
+        let y = LVar::new("x", LSort::Msg, 1);
+        let xy = mult(msg_var("x", 0), mult(msg_var("x", 0), msg_var("x", 1)));
+        let image = mult(pub_term("a"), pub_term("b"));
+        let target = mult(image.clone(), mult(image.clone(), pub_term("c")));
+        let eq = |t| Equal {
+            lhs: xy.clone(),
+            rhs: t,
+        };
+        let seed = vec![(x, image.clone())];
+        assert_eq!(
+            with_captures(&[eq(target)], seed.clone()).unwrap(),
+            Outcome::Complete(vec![vec![(x, image.clone()), (y, pub_term("c"))]])
+        );
+        assert_eq!(
+            with_captures(&[eq(mult(image, pub_term("c")))], seed).unwrap(),
+            Outcome::Complete(vec![])
+        );
+    }
 
     #[test]
     fn forced_ac_factors_preserve_ambiguous_occurrences() {

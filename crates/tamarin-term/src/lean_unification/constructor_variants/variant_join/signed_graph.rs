@@ -23,8 +23,8 @@ unsafe extern "C" {
 
 // The checked candidate also bounds basis enumeration before allocating rows.
 pub(super) const MAX_COORDINATES: usize = 8;
-// Up to eight sign profiles are cheap enough to try before general narrowing.
-pub(super) const QUICK_COORDINATES: usize = 3;
+// Up to sixteen sign profiles are cheap enough to try before general narrowing.
+pub(super) const QUICK_COORDINATES: usize = 4;
 const MAX_PROGRAM: usize = 256;
 const MAX_RESPONSE: usize = 65_536;
 
@@ -281,7 +281,7 @@ impl RuleTable {
                 .rename(&original),
             );
         }
-        let Some(kept) = self.prune_specializations(projected, &mut search.graph_work)? else {
+        let Some(kept) = self.prune_specializations(projected, &mut search.graph_matching)? else {
             return Ok(None);
         };
         for row in &kept {
@@ -406,6 +406,115 @@ mod tests {
             .into_iter()
             .collect();
             assert_eq!(rows.into_iter().collect::<BTreeSet<_>>(), expected);
+        }
+    }
+
+    #[test]
+    fn signed_graph_joint_product_and_quotient_share_all_valued_witnesses() {
+        use crate::algebra_backend::AlgebraBackend;
+        use crate::lean_unification::{open_match, Outcome};
+        use crate::maude_proc::MaudeHandle;
+        use crate::rewriting::Equal;
+        use crate::term::f_app_list;
+
+        if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+            return;
+        }
+        let Some(path) = tamarin_test_support::require_maude_path() else {
+            return;
+        };
+        let sig = dh_maude_sig();
+        let table = RuleTable::new(&sig).unwrap();
+        let native = MaudeHandle::start_with_backend(
+            "/nonexistent",
+            sig.clone(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+        let keys = [LVar::new("x", LSort::Msg, 0), LVar::new("x", LSort::Msg, 1)];
+        let [x, y] = keys.map(|v| Term::Lit(Lit::Var(v)));
+        let obs = [mult(x.clone(), y.clone()), mult(x, inv(y))];
+        let rows = table
+            .signed_graph_rows(&keys, &obs, MAX_COORDINATES, &mut JoinSearch::new())
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 247);
+
+        // Full live variant enumeration for this conjunction exceeds the
+        // oracle's time budget. Check every public substitution and both
+        // outputs with ordinary Maude reduction, then test concrete coverage.
+        let public = native.variants(&f_app_list(obs.to_vec())).unwrap();
+        let mut valued = BTreeSet::new();
+        let original = keys.iter().map(|v| v.idx).collect();
+        for arm in public {
+            let subst = Subst::from_list(arm);
+            let images: Vec<_> = keys
+                .iter()
+                .map(|&v| apply_vterm(&subst, Term::Lit(Lit::Var(v))))
+                .collect();
+            for image in &images {
+                assert_eq!(&oracle.reduce(image).unwrap(), image);
+            }
+            let values = obs
+                .iter()
+                .map(|t| oracle.reduce(&apply_vterm(&subst, t.clone())).unwrap())
+                .collect();
+            valued.insert(Row { images, values }.rename(&original));
+        }
+        assert!(valued == rows.iter().map(|r| r.rename(&original)).collect());
+
+        let a = pub_term("a");
+        let b = pub_term("b");
+        let domain = [
+            one_const(),
+            a.clone(),
+            b.clone(),
+            inv(a.clone()),
+            inv(b.clone()),
+            mult(a.clone(), b.clone()),
+            inv(mult(a.clone(), b.clone())),
+            mult(a.clone(), inv(b.clone())),
+            mult(a.clone(), a),
+        ];
+        for x in &domain {
+            for y in &domain {
+                let input = [x, y];
+                let expected = [
+                    oracle.reduce(&mult(x.clone(), y.clone())).unwrap(),
+                    oracle.reduce(&mult(x.clone(), inv(y.clone()))).unwrap(),
+                ];
+                let mut covered = false;
+                for row in &rows {
+                    let eqs: Vec<_> = row
+                        .images
+                        .iter()
+                        .zip(input)
+                        .map(|(p, s)| Equal {
+                            lhs: p.clone(),
+                            rhs: s.clone(),
+                        })
+                        .collect();
+                    let Outcome::Complete(captures) =
+                        open_match::with_captures(&eqs, Vec::new()).unwrap()
+                    else {
+                        panic!("bounded concrete input match deferred");
+                    };
+                    for capture in captures {
+                        let subst = Subst::from_list(capture);
+                        let values: Vec<_> = row
+                            .values
+                            .iter()
+                            .map(|v| apply_vterm(&subst, v.clone()))
+                            .collect();
+                        if values.iter().all(|v| oracle.reduce(v).unwrap() == *v) {
+                            assert_eq!(values, expected, "{x} and {y}");
+                            covered = true;
+                        }
+                    }
+                }
+                assert!(covered, "{x} and {y}");
+            }
         }
     }
 
