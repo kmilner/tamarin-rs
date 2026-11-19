@@ -37,6 +37,19 @@ private theorem factor_nonempty (f : sig.ACSym) (t : Term sig) : flatten f t ≠
   have h := fold_flatten f t
   rw [he] at h; cases h
 
+/-- A matrix assignment that maps an indivisible input column to two or
+more AC witnesses cannot extend to a solution of its residual equations. -/
+theorem atomic_ne_product {f : sig.ACSym} {t : Term sig} (atom : Atomic f t)
+    (a b : Term sig) (σ : Substitution sig) : ¬ EquivB (σ.apply (.ac f a b)) (σ.apply t) := by
+  intro eq
+  have same := (flatten_equiv f eq).length_eq
+  change (flatten f (.ac f (σ.apply a) (σ.apply b))).length = _ at same
+  rw [flatten_ac,atom σ,List.length_append] at same
+  have l := List.length_pos_iff.mpr (factor_nonempty f (σ.apply a))
+  have r := List.length_pos_iff.mpr (factor_nonempty f (σ.apply b))
+  simp only [List.length_singleton] at same
+  omega
+
 private theorem singleton_of_length {f : sig.ACSym} {t : Term sig} (length : (flatten f t).length = 1) :
     flatten f t = [classOf t] := by
   obtain ⟨w, he⟩ := List.length_eq_one_iff.mp length

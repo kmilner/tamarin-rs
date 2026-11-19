@@ -260,9 +260,28 @@ fn push_pair(pending: &mut Vec<Equal<LNTerm>>, a: &LNTerm, b: &LNTerm) {
 }
 
 pub(super) fn solve(
+    equations: Vec<Equal<LNTerm>>,
+    original: &FxHashSet<u64>,
+    budget: &mut Budget,
+) -> Result<Option<Vec<Bindings>>, Error> {
+    solve_with(equations, original, budget, false)
+}
+
+/// Variant joins collect a set of simultaneous instances. They can select
+/// a smaller complete pivot before a matrix without exposing branch order.
+pub(super) fn solve_join(
+    equations: Vec<Equal<LNTerm>>,
+    original: &FxHashSet<u64>,
+    budget: &mut Budget,
+) -> Result<Option<Vec<Bindings>>, Error> {
+    solve_with(equations, original, budget, true)
+}
+
+fn solve_with(
     mut equations: Vec<Equal<LNTerm>>,
     original: &FxHashSet<u64>,
     budget: &mut Budget,
+    pivot_first: bool,
 ) -> Result<Option<Vec<Bindings>>, Error> {
     super::initialize()?;
     if !budget.charge(sides(&equations), None)? {
@@ -418,24 +437,38 @@ pub(super) fn solve(
             eq.lhs.for_each_free(&mut reserve);
             eq.rhs.for_each_free(&mut reserve);
         }
-        let branches: Box<dyn DoubleEndedIterator<Item = _>> = match operands::allocate(
-            symbol,
-            &state.deferred,
-            &reserved,
-            &mut budget.matrices,
-            &mut budget.nested_matrices,
-        )? {
-            super::homogeneous::Allocation::Complete(branches) => Box::new(branches),
-            super::homogeneous::Allocation::Exhausted => return Ok(None),
-            super::homogeneous::Allocation::Unsupported => {
-                if let Some(branches) = operands::split_ground(&state.deferred)? {
-                    Box::new(branches)
-                } else if let Some(branches) = operands::split_indivisible(&state.deferred)? {
-                    Box::new(branches.into_iter())
-                } else if let Some(branches) = operands::split_owner(&state.deferred, &reserved)? {
-                    Box::new(branches.into_iter())
-                } else {
-                    return Ok(None);
+        let pivot = if pivot_first {
+            match operands::split_binary_pivot(&state.deferred, &reserved)? {
+                Some(branches) => Some(branches),
+                None => operands::split_indivisible(&state.deferred)?,
+            }
+        } else {
+            None
+        };
+        let branches: Box<dyn DoubleEndedIterator<Item = _>> = if let Some(branches) = pivot {
+            Box::new(branches.into_iter())
+        } else {
+            match operands::allocate(
+                symbol,
+                &state.deferred,
+                &reserved,
+                &mut budget.matrices,
+                &mut budget.nested_matrices,
+            )? {
+                super::homogeneous::Allocation::Complete(branches) => Box::new(branches),
+                super::homogeneous::Allocation::Exhausted => return Ok(None),
+                super::homogeneous::Allocation::Unsupported => {
+                    if let Some(branches) = operands::split_ground(&state.deferred)? {
+                        Box::new(branches)
+                    } else if let Some(branches) = operands::split_indivisible(&state.deferred)? {
+                        Box::new(branches.into_iter())
+                    } else if let Some(branches) =
+                        operands::split_owner(&state.deferred, &reserved)?
+                    {
+                        Box::new(branches.into_iter())
+                    } else {
+                        return Ok(None);
+                    }
                 }
             }
         };
@@ -728,6 +761,34 @@ mod tests {
             classify(&repeated, &union(vec![x, y.clone(), y])),
             Ok(OPEN_AC)
         );
+    }
+
+    #[test]
+    fn joined_rigid_pivot_needs_no_general_matrix() {
+        use crate::builtin::{hash, msg_var};
+        let var = |k| msg_var("x", k);
+        let product = |a, b| f_app_ac(AcSym::Union, vec![a, b]);
+        let eq = Equal {
+            lhs: product(var(0), hash(var(1))),
+            rhs: product(var(2), hash(var(3))),
+        };
+        let used = FxHashSet::from_iter(0..4);
+        let mut budget = Budget {
+            nested_matrices: 0,
+            ..Budget::new()
+        };
+        let rows = solve_join(vec![eq.clone()], &used, &mut budget)
+            .unwrap()
+            .unwrap();
+        // Either the two hashes match, or the variables supply the opposite
+        // hashes with an empty or nonempty common remaining product.
+        assert_eq!(rows.len(), 3);
+        for row in rows {
+            assert_eq!(
+                apply_vterm(&row, eq.lhs.clone()),
+                apply_vterm(&row, eq.rhs.clone())
+            );
+        }
     }
 
     #[test]

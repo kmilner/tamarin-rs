@@ -344,7 +344,7 @@ def bpCoverage : IO Unit := do
   for (body,count) in [(e (neg x) (p r y),178), (e (neg x) (p r x),14), (p r (p r (neg x)),13)] do
     emitBP "variants" ("rows=" ++ toString count) [body]
   for (body,count) in [(e (p r x) (p r y),336), (e x (p r (p r x)),8)] do
-    emitBP "variants" ("probe-rows=" ++ toString count) [body]
+    emitBP "variants" ("rows=" ++ toString count) [body]
 
 def generate : IO Unit := do
   bpCoverage

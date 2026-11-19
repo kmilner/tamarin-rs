@@ -777,7 +777,7 @@ impl RuleTable {
         // Reserving variables from output values protects them through factor
         // composition even when they do not occur in the input equations.
         // VariantJoin.join_csu proves this is equivalent to reflexive anchors.
-        let Some(rest) = residual::solve(pending, &used, budget)? else {
+        let Some(rest) = residual::solve_join(pending, &used, budget)? else {
             return Ok(false);
         };
         let mut candidates = Vec::with_capacity(rest.len());

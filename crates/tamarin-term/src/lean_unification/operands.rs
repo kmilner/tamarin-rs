@@ -83,17 +83,26 @@ pub(super) fn allocate<'a>(
     initialize()?;
     let result = matrices.images(remaining_calls, symbol, reserved, width, rows)?;
     Ok(result.map(|branches| {
-        branches.into_iter().map(move |branch| {
-            columns
-                .values()
-                .iter()
-                .zip(branch)
-                .map(|(&t, image)| Equal {
-                    lhs: image,
-                    rhs: t.clone(),
-                })
-                .chain(pending.iter().map(|&eq| eq.clone()))
-                .collect()
+        branches.into_iter().filter_map(move |branch| {
+            // A product of two or more nonempty witnesses cannot instantiate
+            // a column that remains a single factor under every substitution.
+            if columns.values().iter().zip(&branch).any(|(t, image)| {
+                matches!(image, Term::App(f, _) if *f == outer) && indivisible(symbol, t)
+            }) {
+                return None;
+            }
+            Some(
+                columns
+                    .values()
+                    .iter()
+                    .zip(branch)
+                    .map(|(&t, image)| Equal {
+                        lhs: image,
+                        rhs: t.clone(),
+                    })
+                    .chain(pending.iter().map(|&eq| eq.clone()))
+                    .collect(),
+            )
         })
     }))
 }
@@ -103,7 +112,7 @@ mod pivot;
 mod row_clash;
 mod size_clash;
 pub(super) use ground_branches::split as split_ground;
-pub(super) use pivot::{split_indivisible, split_owner};
+pub(super) use pivot::{split as split_binary_pivot, split_indivisible, split_owner};
 pub(super) use size_clash::refutes as refutes_size;
 
 impl RuleTable {

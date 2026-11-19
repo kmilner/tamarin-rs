@@ -25,6 +25,12 @@ private theorem rigid_head {h : Head s} {p : Term s} (nonvar : ∀ v, h ≠ .var
   | var v => exact False.elim (nonvar v hp.symm)
   | _ => exact hp
 
+/-- A selected rigid AC factor and its chosen subject must already have
+the same head before any simultaneous capture is extended. -/
+theorem selected_head {p t : Term s} (rigid : ∀ v, head p ≠ .var v)
+    (σ : Substitution s) (hit : EquivB (σ.apply p) t) : head p = head t :=
+  (rigid_head rigid rfl σ).symm.trans hit.head_eq
+
 private theorem map_singletons {α β} (xs : List α) (g : α → List β) (v : α → β)
     (one : ∀ x ∈ xs, g x = [v x]) : xs.flatMap g = xs.map v := by
   induction xs with

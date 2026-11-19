@@ -418,11 +418,8 @@ impl<'a> Search<'a, '_> {
             return Ok(true);
         }
         let mut row = vec![0; subject.len()];
-        for i in 0..count {
+        'selection: for i in 0..count {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-            if !self.charge_branch() {
-                return Ok(false);
-            }
             let len = selections.copy_row(0, i, &mut row)?;
             if len != subject.len() || len < rigid.len() {
                 return Err(Error::InvalidStatus(255));
@@ -434,6 +431,22 @@ impl<'a> Search<'a, '_> {
                     .ok_or(Error::InvalidSubject(id))
             };
             let (selected, rest) = row.split_at(rigid.len());
+            // Reject a wrong-head selection before allocating and charging
+            // for an entire continuation. Both subjects and ground names
+            // remain rigid; each comparison only inspects the root.
+            for (pattern, id) in rigid.iter().zip(selected) {
+                let candidate = get(id)?;
+                if !matches!((pattern, candidate), (Term::App(f, _), Term::App(g, _)) if f == g) {
+                    let Some(left) = self.budget.checked_sub(len + 1) else {
+                        return Ok(false);
+                    };
+                    *self.budget = left;
+                    continue 'selection;
+                }
+            }
+            if !self.charge_branch() {
+                return Ok(false);
+            }
             let mut next = pending.to_vec();
             if !collectors.occurrences.is_empty() {
                 let rest = rest.iter().map(get).collect::<Result<Rc<[_]>, _>>()?;
@@ -639,6 +652,31 @@ mod tests {
         assert_eq!(
             with_captures(&[eq(mult(image, pub_term("c")))], seed).unwrap(),
             Outcome::Complete(vec![])
+        );
+    }
+
+    #[test]
+    fn wrong_heads_do_not_materialize_ac_continuations() {
+        use super::{with_captures_budget, Outcome};
+        use crate::function_symbols::AcSym;
+        use crate::lterm::{LSort, LVar};
+        use crate::rewriting::Equal;
+        use crate::term::f_app_ac;
+        let sum = |args| f_app_ac(AcSym::Union, args);
+        let fixed = hash(pub_term("hit"));
+        let others: Vec<_> = (0..7).map(|i| msg_var("subject", i)).collect();
+        let subject = sum(std::iter::once(fixed).chain(others.clone()).collect());
+        let pattern = sum(vec![hash(msg_var("x", 0)), msg_var("x", 1)]);
+        let eq = Equal {
+            lhs: pattern,
+            rhs: subject,
+        };
+        assert_eq!(
+            with_captures_budget(&[eq], vec![], &mut 100).unwrap(),
+            Outcome::Complete(vec![vec![
+                (LVar::new("x", LSort::Msg, 0), pub_term("hit")),
+                (LVar::new("x", LSort::Msg, 1), sum(others)),
+            ]])
         );
     }
 
