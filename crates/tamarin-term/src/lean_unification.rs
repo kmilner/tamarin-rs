@@ -27,6 +27,7 @@
 
 mod common_children;
 mod commutative;
+mod components;
 mod whole;
 pub(crate) use commutative::solve as unify_structured;
 mod constructor_variants;

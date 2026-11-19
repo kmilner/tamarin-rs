@@ -3212,3 +3212,95 @@ fn rigid_match_defers_undeclared_raw_operators_and_invalid_arities() {
         Err(MaudeError::UnsupportedOperation("rigid-context matching"))
     ));
 }
+
+#[test]
+fn independent_ac_components_preserve_all_witnesses_and_branches() {
+    use std::collections::{BTreeMap, BTreeSet};
+    use tamarin_term::lterm::HasFrees;
+
+    // All caller keys deliberately share an index, including an identity-only
+    // key. All 17 components need a witness shared in the ratio 3:2.
+    let mut equations = Vec::new();
+    let mut pairs = Vec::new();
+    for i in 0..17 {
+        let x = LVar::new(format!("x{i}"), LSort::Msg, 0);
+        let y = LVar::new(format!("y{i}"), LSort::Msg, 0);
+        let v = |key| Term::Lit(Lit::Var(key));
+        equations.push(Equal {
+            lhs: f_app_ac(AcSym::Union, vec![v(x); 2]),
+            rhs: f_app_ac(AcSym::Union, vec![v(y); 3]),
+        });
+        pairs.push((x, y));
+    }
+    let mut offsets = Vec::new();
+    for i in 0..2 {
+        let x = LVar::new(format!("p{i}"), LSort::Msg, 0);
+        let y = LVar::new(format!("q{i}"), LSort::Msg, 0);
+        equations.push(Equal {
+            lhs: sum(Term::Lit(Lit::Var(x)), pub_term("a")),
+            rhs: sum(Term::Lit(Lit::Var(y)), pub_term("b")),
+        });
+        offsets.push((x, y));
+    }
+    let id = LVar::new("unconstrained", LSort::Fresh, 0);
+    equations.push(Equal {
+        lhs: Term::Lit(Lit::Var(id)),
+        rhs: Term::Lit(Lit::Var(id)),
+    });
+    let h = native();
+    let answers = h.unify(&equations).unwrap();
+    let mut patterns = BTreeSet::new();
+    for arm in answers {
+        let row: BTreeMap<_, _> = arm.into_iter().collect();
+        let mut distinct = BTreeSet::new();
+        for (x, y) in &pairs {
+            let Term::App(_, factors) = &row[x] else {
+                panic!("expected three copies")
+            };
+            let Term::Lit(Lit::Var(w)) = factors[0] else {
+                panic!("expected witness")
+            };
+            assert_eq!(
+                row[x],
+                f_app_ac(AcSym::Union, vec![Term::Lit(Lit::Var(w)); 3])
+            );
+            assert_eq!(
+                row[y],
+                f_app_ac(AcSym::Union, vec![Term::Lit(Lit::Var(w)); 2])
+            );
+            assert!(
+                distinct.insert(w),
+                "independent ratios require independent witnesses"
+            );
+        }
+        let mut choices = Vec::new();
+        for (x, y) in &offsets {
+            let mut names = Vec::new();
+            row[x].for_each_free(&mut |v| names.push(*v));
+            choices.push(match names.as_slice() {
+                [] => {
+                    assert_eq!(row[x], pub_term("b"));
+                    assert_eq!(row[y], pub_term("a"));
+                    false
+                }
+                [w] => {
+                    assert!(distinct.insert(*w));
+                    let w = Term::Lit(Lit::Var(*w));
+                    assert_eq!(row[x], sum(pub_term("b"), w.clone()));
+                    assert_eq!(row[y], sum(pub_term("a"), w));
+                    true
+                }
+                _ => panic!("one optional common tail"),
+            });
+        }
+        let Term::Lit(Lit::Var(w)) = row[&id] else {
+            panic!("expected free Fresh input image")
+        };
+        assert_eq!(w.sort, id.sort);
+        assert!(distinct.insert(w));
+        assert!(distinct.iter().all(|v| v.idx != 0));
+        assert!(patterns.insert(choices));
+    }
+    assert_eq!(patterns.len(), 4);
+    assert_eq!(h.stats().unify_count, 0);
+}

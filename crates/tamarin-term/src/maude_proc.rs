@@ -1629,6 +1629,16 @@ impl MaudeHandle {
             cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
             return Ok(Vec::new());
         }
+        #[cfg(feature = "lean-unification")]
+        if try_structured
+            && self.backend == AlgebraBackend::NativeOnly
+            && let Some(table) = self.native_rules()
+            && let crate::lean_unification::Outcome::Complete(answers) =
+                table.component_unify(eqs).map_err(lean_error)?
+        {
+            cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+            return Ok(answers);
+        }
         let renamed = self.unify_residuals_with_maude(&residual_eqs, &factored_m)?;
         #[cfg(feature = "lean-unification")]
         if let Some(expected) = lean_expected

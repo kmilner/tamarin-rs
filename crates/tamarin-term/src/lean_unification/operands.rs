@@ -250,7 +250,7 @@ impl FlatProductKey {
     }
 }
 
-fn solve_branches(
+pub(super) fn solve_branches(
     branches: impl Iterator<Item = Vec<Equal<LNTerm>>>,
     vars: &[LVar],
     used: &FxHashSet<u64>,
