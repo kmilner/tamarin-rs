@@ -3,7 +3,7 @@ import Tamarin.ACCompactPlane
 import Tamarin.ACPrimitiveRow
 import Tamarin.ACGridBudget
 import Tamarin.ACBalanceBound
-import Tamarin.ACCompactBasis
+import Tamarin.ACNeutralBasis
 import Tamarin.ACCoverage
 import TamarinRuntime.Homogeneous
 
@@ -51,18 +51,18 @@ private theorem kept_mono {n} (p : Row n) {lo hi : Nat} (le : lo ≤ hi) :
         · simpa [l,h] using ih
   exact (subset _).length_le
 
-/-- The original projected grid remains mandatory. The second clause admits
-all previous twice-maximum boxes as well: primitive_cap_le implies that
-twice the old cap is a valid upper bound. Within each box the mathematical
-reference determines which coefficients fit. -/
+/-- A one-sided intersection requires only a scan of the previous basis.
+Mixed rows admit the original projected grid and any bounded box that
+contains the primitive coordinate bound. Both counts use the reference basis. -/
 def Within {n} : List (Row n) → Prop
   | [] => True
   | r :: rs => Within rs ∧
     let gs := generate rs
     let p := r.pullback gs.get
-    gs.length ≤ 12 ∧ ((GridFits p 16384 ∧ (intersect r gs).length ≤ 2048) ∨
+    (gs.length ≤ 64 ∧ ((∀ i, p.pos i = 0) ∨ (∀ i, p.neg i = 0))) ∨
+    (gs.length ≤ 12 ∧ ((GridFits p 16384 ∧ (intersect r gs).length ≤ 2048) ∨
       (∃ cap, p.primitive.cap ≤ cap ∧ GridBudget p (refLimits p cap) 16384 ∧
-        (keptCoefficients p cap).length ≤ 2048))
+        (keptCoefficients p cap).length ≤ 2048)))
 
 def Admitted (width : UInt64) (m : Matrix) : Prop :=
   0 < width ∧ width ≤ 32 ∧ m.size ≤ 128 ∧ ∃ rs, readRows width.toNat m.toList = some rs ∧
@@ -167,12 +167,25 @@ theorem bounded_spec {n} (rs : List (Row n)) :
       rw [ih.1 _ hp] at h
       let prev := generate rs
       have live (j : Fin prev.length) := ((mem_generate rs _).mp (List.get_mem prev j)).2.1
-      simp [stored_get,guard,List.map_map,Function.comp_def] at h
-      exact h.2.2.2.symm.trans (minimize_compact _ prev.get live)
-    · rintro ⟨tail,hg,area⟩
+      let p := r.pullback prev.get
+      by_cases sided : (∀ i, p.pos i = 0) ∨ (∀ i, p.neg i = 0)
+      · dsimp only [p,prev] at sided
+        simp [stored_get,guard,sided] at h
+        apply h.2.symm.trans
+        simpa [p,prev,List.map_reverse,generate,intersect] using (neutral_basis_ordered rs p sided).symm
+      · dsimp only [p,prev] at sided
+        simp [stored_get,guard,sided,List.map_map,Function.comp_def,Option.bind_eq_some_iff] at h
+        exact h.2.2.2.2.symm.trans (minimize_compact _ prev.get live)
+    · rintro ⟨tail,domain⟩
       let prev := generate rs
       let p := r.pullback prev.get
       have live (j : Fin prev.length) := ((mem_generate rs _).mp (List.get_mem prev j)).2.1
+      have width : (generate rs).length ≤ 64 := domain.elim And.left (fun h => Nat.le_trans h.1 (by decide))
+      by_cases sided : (∀ i, p.pos i = 0) ∨ (∀ i, p.neg i = 0)
+      · have ordered := neutral_basis_ordered rs p sided
+        dsimp only [p,prev] at sided
+        simpa [boundedBasis,ih.2 tail,stored_get,guard,width,sided,p,prev,generate,intersect] using ordered.symm
+      have ⟨hg,area⟩ := domain.resolve_left (fun h => sided h.2)
       have checks : p.cappedFits p.primitive.cap 16384 = true ∧ (p.cappedGenerators p.primitive.cap).length ≤ 2048 := by
         rw [cappedFits_iff,p.cappedGenerators_eq]
         rcases area with ⟨grid,cap⟩|⟨lim,le,grid,cap⟩
@@ -181,7 +194,8 @@ theorem bounded_spec {n} (rs : List (Row n)) :
           simpa [intersect,lift,p,prev] using cap
         · exact ⟨grid.shrink (fun i => by dsimp [refLimits,p,prev]; omega),Nat.le_trans (kept_mono p le) cap⟩
       have minimized := minimize_compact p prev.get live
-      simp [boundedBasis,ih.2 tail,stored_get,guard,hg,
+      dsimp only [p,prev] at sided
+      simp [boundedBasis,ih.2 tail,stored_get,guard,width,sided,hg,
         show (r.pullback (generate rs).get).cappedFits (r.pullback (generate rs).get).primitive.cap 16384 = true from checks.1,
         show ((r.pullback (generate rs).get).cappedGenerators (r.pullback (generate rs).get).primitive.cap).length ≤ 2048 from checks.2,
         List.map_map,Function.comp_def]

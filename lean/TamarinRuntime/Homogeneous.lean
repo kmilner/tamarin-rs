@@ -26,12 +26,17 @@ def boundedBasis {n} : List (Row n) → Option (List (Vec n))
   | [] => some (minimize (units n))
   | r :: rs => do
     let gs ← boundedBasis rs
-    guard (gs.length ≤ 12)
+    guard (gs.length ≤ 64)
     let weights := r.pullback gs.get
     let positive := Vector.ofFn weights.pos
     let negative := Vector.ofFn weights.neg
     let pulled : Row gs.length := ⟨coordinates positive, coordinates negative, by
       simpa [positive, negative, coordinates] using weights.disjoint⟩
+    if (∀ i, pulled.pos i = 0) ∨ (∀ i, pulled.neg i = 0) then
+      let neutral := (List.finRange gs.length).reverse.filter fun i =>
+        pulled.pos i == 0 && pulled.neg i == 0
+      return neutral.map gs.get
+    guard (gs.length ≤ 12)
     let cap := pulled.primitive.cap
     guard (pulled.cappedFits cap 16384)
     let coeffs := pulled.cappedGenerators cap

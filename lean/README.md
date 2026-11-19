@@ -166,10 +166,10 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Operation | Native coverage today | Next milestone |
 | --- | --- | --- |
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
-| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. Unit coefficients on one side of a balance equation give a tighter complete basis bound. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
+| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. The coefficient search divides out the row gcd and bounds each primitive coordinate by the largest remaining coefficient. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Dedicated paths handle positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
-| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. Dedicated paths also cover cancellation, positional destructors and staged DH power families. | Extend the linked signed-product solver to correlated stable operands and compose scalar actions and pairing under further active heads. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
+| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. Staged paths cover cancellation, positional destructors, signed DH products with shared stable operands, powers, scalar actions and pairing. | Extend finite narrowing for nested user equations with repeated AC variables. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
 
 Run the generated coverage test from the repository root.
 
@@ -215,10 +215,9 @@ the tower `(g^X)^Y` and the flat power `g^(X*Y)` each have 48. Observing
 `r`, yields all 160 Maude rows. The bilinear-pairing grammar exercises
 the three rules at `pmult` and `emap`, with joint comparisons of bindings and
 normal values. Native-only completes the unrestricted two-variable families for
-both operations (47 and 48 Maude rows). Across six presentations, 24,656 of 24,664
-requests complete, including every mandatory case. Eight exploratory requests defer.
-The smallest is `pmult(inv(X),Y)`. Other examples include `emap(X,Y)^~k` and
-nested scalar actions. [Bilinear family proof](Tamarin/BilinearRows.lean)
+both operations (47 and 48 Maude rows). All 47 bilinear variant queries are mandatory,
+including a pairing of two point actions with 336 variants. Across six presentations
+all 24,671 requests complete (16,403 mandatory and 8,268 exploratory). [Bilinear family proof](Tamarin/BilinearRows.lean)
 The report prints the smallest deferred request per operation and compares it with Maude
 when `MAUDE_PATH` is set.
 The report counts syntactic requests in this bounded grammar. Protocol regressions
@@ -271,8 +270,12 @@ of the simultaneous equations factors through one answer and one shared substitu
 spanning all nonnegative solutions suffices. CI checks the actual numeric export, including its
 completion domain. A nonzero coefficient determines one coordinate after the others are chosen.
 The budget allows 16,384 assignments to the remaining coordinates and retains separate limits for
-intermediate candidates and output. For example, `11x = 13y` checks 352 assignments and returns one
-shared witness, repeated 13 times in `x` and 11 times in `y`. [Enumeration proof](Tamarin/ACPlane.lean) · [Factorization proof](Tamarin/ACBasisComplete.lean) ·
+intermediate candidates and output. Dividing out the coefficient gcd and bounding each coordinate
+by the largest resulting coefficient preserves the ordered basis. For example,
+`60x + 61y = 121z` yields the same five substitutions as Maude in either orientation.
+When either side vanishes on the previous basis, only neutral columns survive, in reverse
+coordinate order. This step accepts up to 64 previous generators.
+[Coefficient bound](Tamarin/ACBalanceBound.lean) · [Neutral columns](Tamarin/ACNeutralBasis.lean) · [Enumeration proof](Tamarin/ACPlane.lean) · [Factorization proof](Tamarin/ACBasisComplete.lean) ·
 [Packet contract](Tamarin/HomogeneousContract.lean) · [Executable](TamarinRuntime/Homogeneous.lean)
 
 A bit mask on each suffix records the coordinates its generators can still cover. The selector
@@ -346,6 +349,9 @@ cancelling, or all three inputs coinciding. The three-edge triangle in `xor3` gi
 and the four-edge cycle in `xor-basic` gives twelve. All three reproduce Maude’s source cases
 and complete proofs. The wider XORs in `xor4` and `xor5` give 16 and 28 joint variants.
 Native-only reproduces their 11- and 16-step proofs and all three proofs in `testConstructor`.
+For the Joux and Scott bilinear protocols, both backends produce identical source cases and
+agree on all four proof verdicts and step counts. Scott visits some branches in a different order.
+[Protocol regressions](../crates/tamarin-prover/tests/lean_unification.rs)
 
 For a flat XOR of Fresh operands, Lean selects the leaves with odd multiplicity. For variant
 generation, it enumerates disjoint pairs among the remaining variables. A pair shares a
@@ -450,7 +456,10 @@ their witnesses into a nonempty product, preserving each input and output modulo
 For `X*Y`, this reduces twelve columns to six and returns 64 symbolic rows in 770 words.
 The public adapter keeps 47 distinct, mutually incomparable variants. One local
 comparison took 12 ms through the new adapter and 462 ms through the previous native
-search. Larger joint packets can still exhaust Rust’s specialization checks.
+search. Jointly observing `X*Y` and `X*inv(Y)` gives 247 native variants. The regression checks
+all their values by Maude reduction and covers 81 concrete assignments. Full Maude enumeration
+exceeded the oracle time limit on that query. Stable sorted operands such as `h(X)` can also
+share variables with the product. [Stable operand specialization](Tamarin/DHSignedLeaves.lean)
 [Linked packet contract](Tamarin/SignedGraphContract.lean) · [Witness merging](Tamarin/DHSignedColumnQuotient.lean)
 [Signed multiplicities](Tamarin/DHSignedMatrix.lean) · [Exact finite family](Tamarin/DHSignedVariantFamily.lean) · [Power cases](Tamarin/DHBase.lean)
 

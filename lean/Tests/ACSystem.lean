@@ -194,7 +194,7 @@ example (run) (cert : Correct run) : (run 2 #[lhs,rhs]).isSome := by
   apply cert.completes
   refine ⟨by decide, by decide, by decide, [ratioRow], ?_, ?_, ?_, ?_⟩
   · simp [readRows, ratioRow, lhs, rhs, guard]
-  · refine ⟨trivial, by decide, Or.inl ⟨Or.inr ⟨⟨0, by decide⟩, Or.inl (by decide), by decide⟩, ?_⟩⟩
+  · refine ⟨trivial, Or.inr ⟨by decide, Or.inl ⟨Or.inr ⟨⟨0, by decide⟩, Or.inl (by decide), by decide⟩, ?_⟩⟩⟩
     unfold ACBasis.intersect
     rw [← ACBasis.Row.planeGenerators_eq]
     decide
@@ -209,5 +209,20 @@ example (run) (cert : Correct run) : (run 2 #[lhs,rhs]).isSome := by
 #guard (solve 3 #[#[60,61,0],#[0,0,121]]).map Array.size == some 5
 -- Scaling both sides must preserve all slot identities and their order.
 #guard solve 3 #[#[140,160,0],#[0,0,300]] == solve 3 #[#[7,8,0],#[0,0,15]]
+
+-- The last row has sixteen primitive generators, one for each left/right pair.
+-- The other row forces three right variables empty, in either orientation.
+private def fourLeft : Array UInt64 := #[1,1,1,1,0,0,0,0]
+private def fourRight : Array UInt64 := #[0,0,0,0,1,1,1,1]
+private def oneRight : Array UInt64 := #[0,0,0,0,1,0,0,0]
+#guard homogeneousUnify 8 #[fourLeft,oneRight,fourLeft,fourRight] == some #[]
+#guard homogeneousUnify 8 #[oneRight,fourLeft,fourLeft,fourRight] == some #[]
+
+-- A redundant row keeps every prior generator in the reference order.
+#guard Id.run do
+  let some rows := readRows 8 [fourLeft,fourRight] | return false
+  let some prev := boundedBasis rows | return false
+  let some next := boundedBasis (rows ++ rows) | return false
+  return prev.length == 16 && next.map List.ofFn == (prev.map List.ofFn).reverse
 
 end Tamarin.Homogeneous.Tests
