@@ -487,6 +487,22 @@ theorem generate_correct {n} (rows : List (Row n)) : BasisCorrect rows (generate
   | nil => exact minimize_correct _ _ (units_correct n)
   | cons r rs ih => exact minimize_correct _ _ (intersect_correct r rs _ ih)
 
+/-- Basis correctness is invariant under changing the table order, including
+the choice of concrete witness indices. -/
+theorem BasisCorrect.of_mem {n} {rows : List (Row n)} {gs hs : List (Vec n)}
+    (correct : BasisCorrect rows hs) (members : ∀ g, g ∈ gs ↔ g ∈ hs) : BasisCorrect rows gs := by
+  have sound (g) (m : g ∈ hs) : SystemHolds rows g := by
+    obtain ⟨j,rfl⟩ := List.get_of_mem m
+    exact mem_sol rows hs correct j
+  intro x
+  constructor
+  · apply generate_of_dominated
+    intro y sol live
+    obtain ⟨g,m,h,pos⟩ := below hs y ((correct y).mp sol) live
+    exact ⟨g,(members g).mpr m,sound g m,h,pos⟩
+  · rintro ⟨c,rfl⟩
+    exact system_mix rows _ c (fun j => sound _ ((members _).mp (List.get_mem _ j)))
+
 /-- A nonzero kernel vector belongs to the Hilbert basis precisely when it
 dominates no smaller nonzero solution. -/
 def Irreducible {n} (rows : List (Row n)) (x : Vec n) : Prop :=

@@ -108,6 +108,10 @@ private theorem ofFn_inj {a b : Vec n} (h : List.ofFn a = List.ofFn b) : a = b :
 theorem filtered (r : Row n) (cap : Nat) :
     r.sparseGenerators cap = (r.cappedGenerators cap).filter (keep r) := by
   classical
+  have merge : r.sparseGenerators cap =
+      (r.sparseActive cap).merge (r.sparseUnits cap) (fun a b => decide (List.ofFn a ≤ List.ofFn b)) := by
+    unfold Row.sparseGenerators; cases r.sparseUnits cap <;> simp
+  rw [merge]
   have act : (r.sparseActive cap).Pairwise Before := plane_sorted r _
   have units := units_sorted r cap
   have ref : ((r.cappedGenerators cap).filter (keep r)).Pairwise Before :=

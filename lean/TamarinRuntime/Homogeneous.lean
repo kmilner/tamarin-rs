@@ -1,3 +1,4 @@
+import TamarinRuntime.ACDistributedBasis
 import TamarinRuntime.ACWeightedComposition
 import TamarinRuntime.ACUnitBalance
 import TamarinRuntime.ACSparsePlane
@@ -129,10 +130,16 @@ def fitsOutput {n} (gs : List (Vec n)) : Bool :=
   (gs.length ≤ 12 && (2 ^ gs.length) * (gs.map total).sum ≤ 65536) ||
     (gs.length ≤ 64 && packetFits gs 65536)
 
+/-- Preserve the order of all previously completed matrices. When basis
+construction defers, distribute each quotient generator over the original
+coordinates. At most 64 generators can pass the packet check. -/
+def answerBasis {n} (rows : List (Row n)) : Option (List (Vec n)) :=
+  boundedBasis rows <|> Distributed.run (@boundedBasis) rows 64
+
 def solve (width : UInt64) (m : Matrix) : Option Answers := do
   guard (0 < width && width ≤ 32 && m.size ≤ 128)
   let rows ← readRows width.toNat m.toList
-  let gs ← boundedBasis rows
+  let gs ← answerBasis rows
   guard (fitsOutput gs)
   return emit gs
 

@@ -7450,3 +7450,112 @@ fn native_oracle_signed_stable_leaves_share_subterms_and_sorted_variables() {
         );
     }
 }
+
+fn distributed_class_equation(vars: &[LNTerm], a: usize, b: usize, c: usize) -> Equal<LNTerm> {
+    let split = vars.len() - 2;
+    Equal {
+        lhs: f_app_ac(
+            AcSym::Union,
+            vars[..split]
+                .iter()
+                .flat_map(|v| std::iter::repeat_n(v.clone(), a))
+                .chain(std::iter::repeat_n(vars[split].clone(), b))
+                .collect(),
+        ),
+        rhs: f_app_ac(AcSym::Union, vec![vars[split + 1].clone(); c]),
+    }
+}
+
+#[test]
+fn public_full_unifiers_distribute_a_mixed_weight_column_class() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::subst::{apply_vterm, Subst};
+    use std::collections::BTreeSet;
+
+    let native = MaudeHandle::start_with_backend(
+        "/nonexistent",
+        mset_maude_sig(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
+    let vars: Vec<_> = (0..8)
+        .map(|i| Term::Lit(Lit::Var(LVar::new("v", LSort::Msg, i))))
+        .collect();
+    // Let S be the sum of the first six images, B and C the remaining two.
+    // The equations 29S+31B=60C and 17S+16B=33C force S=B=C for each
+    // atom separately. Thus the unique most general answer has one distinct
+    // witness per original summand, with both B and C equal to their sum.
+    let rows = [
+        distributed_class_equation(&vars, 29, 31, 60),
+        distributed_class_equation(&vars, 17, 16, 33),
+    ];
+    let arms = native.unify(&rows).unwrap();
+    assert_eq!(arms.len(), 1);
+    let subst = Subst::from_list(arms.into_iter().next().unwrap());
+    let images: Vec<_> = vars
+        .iter()
+        .map(|v| apply_vterm(&subst, v.clone()))
+        .collect();
+    assert!(images[..6]
+        .iter()
+        .all(|t| matches!(t, Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg)));
+    assert_eq!(images[..6].iter().collect::<BTreeSet<_>>().len(), 6);
+    let joined = f_app_ac(AcSym::Union, images[..6].to_vec());
+    assert_eq!(images[6], joined);
+    assert_eq!(images[7], joined);
+    assert_eq!(native.stats().unify_count, 0);
+}
+
+#[test]
+fn public_full_unifiers_keep_all_five_covering_distributions() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::subst::{apply_vterm, Subst};
+    use std::collections::BTreeMap;
+
+    let native = MaudeHandle::start_with_backend(
+        "/nonexistent",
+        mset_maude_sig(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
+    let vars: Vec<_> = (0..4)
+        .map(|i| Term::Lit(Lit::Var(LVar::new("u", LSort::Msg, i))))
+        .collect();
+    let rows = [
+        distributed_class_equation(&vars, 29, 31, 89),
+        distributed_class_equation(&vars, 17, 16, 50),
+    ];
+    let mut actual = Vec::new();
+    for arm in native.unify(&rows).unwrap() {
+        let subst = Subst::from_list(arm);
+        let mut witnesses = BTreeMap::new();
+        for (i, v) in vars.iter().enumerate() {
+            let image = apply_vterm(&subst, v.clone());
+            let parts = match &image {
+                Term::App(FunSym::Ac(AcSym::Union), factors) => factors.as_ref(),
+                t => std::slice::from_ref(t),
+            };
+            for t in parts {
+                let Term::Lit(Lit::Var(w)) = t else {
+                    panic!("unexpected AC factor {t:?}")
+                };
+                assert_eq!(w.sort, LSort::Msg);
+                witnesses.entry(*w).or_insert([0; 4])[i] += 1;
+            }
+        }
+        let mut signature = witnesses.into_values().collect::<Vec<_>>();
+        signature.sort();
+        actual.push(signature);
+    }
+    // Writing S = u0+u1, the equations imply S=2u2 and u2=u3.
+    // An irreducible atom therefore takes one of these three columns.
+    // Exactly five subsets cover all four nonempty images.
+    let a = [0, 2, 1, 1];
+    let b = [1, 1, 1, 1];
+    let c = [2, 0, 1, 1];
+    let mut expected = vec![vec![b], vec![a, c], vec![a, b], vec![b, c], vec![a, b, c]];
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
+    assert_eq!(native.stats().unify_count, 0);
+}

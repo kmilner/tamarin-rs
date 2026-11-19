@@ -1,4 +1,5 @@
 import Tamarin.ACBasisComplete
+import Tamarin.ACDistributedBasisEnumeration
 import Tamarin.ACCompactPlane
 import Tamarin.ACPrimitiveRow
 import Tamarin.ACGridBudget
@@ -90,7 +91,7 @@ def OutputWithin {n} (gs : List (Vec n)) : Prop :=
 
 def Admitted (width : UInt64) (m : Matrix) : Prop :=
   0 < width ∧ width ≤ 32 ∧ m.size ≤ 128 ∧ ∃ rs, readRows width.toNat m.toList = some rs ∧
-    Within rs ∧ OutputWithin (generate rs)
+    (Within rs ∨ Distributed.RunWithin (@Within) rs 64) ∧ OutputWithin (generate rs)
 
 /-- Reference encoding of a flat matrix. A representable variable count
 survives the word boundary without truncation. -/
@@ -310,29 +311,54 @@ theorem emit_correct {n} (f : sig.ACSym) (rows : List ACSystem.Row) (avoid : Lis
     rw [answers]
     exact basis_answers_correct fr gs hc slot inj (fun _ => wt _) (fun _ => wf _)
 
+private theorem basis_valid {n} (rs : List (Row n)) (gs : List (Vec n))
+    (result : answerBasis rs = some gs) : gs.Perm (generate rs) := by
+  cases old : boundedBasis rs with
+  | some original =>
+    have eq : original = gs := by simpa [answerBasis,old] using result
+    rw [←eq,(bounded_spec rs).1 original old]
+  | none =>
+    apply (Distributed.run_permutation (@boundedBasis) _ rs (by simpa [answerBasis,old] using result)).1
+    intro k rows basis got
+    rw [(bounded_spec rows).1 basis got]
+
+private theorem basis_complete {n} (rs : List (Row n)) (floor : Distributed.RunWithin (@Within) rs 64) :
+    (answerBasis rs).isSome := by
+  have done := Distributed.run_complete (@boundedBasis) (@Within)
+    (fun rows h => ⟨_,(bounded_spec rows).2 h,List.Perm.refl _⟩) rs 64 floor
+  simp [answerBasis,done]
+
+private theorem output_fits {n} (gs : List (Vec n)) (h : OutputWithin gs) : fitsOutput gs = true := by
+  simpa [OutputWithin,fitsOutput,Coverage.packetFits_iff] using h
+
+theorem outputWithin_perm {n} {xs ys : List (Vec n)} (p : xs.Perm ys) :
+    OutputWithin xs ↔ OutputWithin ys := by
+  simp only [OutputWithin,p.length_eq,(p.map total).sum_nat,outputWords_perm p]
+
 theorem solve_correct : Correct solve where
   malformed := by
     intro n m h
     simp [solve,h,guard]
   completes := by
-    rintro n m ⟨hp,hn,hm,rs,read,within,output⟩
-    have fit : fitsOutput (generate rs) = true := by
-      simpa [OutputWithin,fitsOutput,Coverage.packetFits_iff] using output
-    simp [solve,hp,hn,hm,read,(bounded_spec rs).2 within,fit,guard]
+    rintro n m ⟨hp,hn,hm,rs,read,old | new,words⟩
+    · have basis := (bounded_spec rs).2 old
+      simp [solve,answerBasis,hp,hn,hm,read,basis,output_fits _ words,guard]
+    · obtain ⟨gs,h⟩ := Option.isSome_iff_exists.mp (basis_complete rs new)
+      have fit := output_fits gs ((outputWithin_perm (basis_valid rs gs h)).mpr words)
+      simp [solve,hp,hn,hm,read,h,fit,guard]
   semantic := by
     intro s f rows avoid n fr m input out result w inj typed fresh
     by_cases size : (0 < n ∧ n ≤ 32) ∧ m.size ≤ 128
-    · cases hg : boundedBasis (rows.map (encode fr.names)) with
+    · cases hg : answerBasis (rows.map (encode fr.names)) with
       | none => simp [solve,input,guard,size,hg] at result
       | some gs =>
         by_cases fit : fitsOutput gs = true
         · have eo : emit gs = out := by simpa [solve,input,guard,size,hg,fit] using result
           subst out
-          have eq := (bounded_spec _).1 gs hg
-          subst gs
+          have basis := BasisCorrect.of_mem (generate_correct _) (fun _ => (basis_valid _ gs hg).mem_iff)
           simp [fitsOutput] at fit
           have width := fit.elim (fun h => Nat.le_trans h.1 (by decide : 12 ≤ 64)) And.left
-          exact emit_correct f rows avoid fr _ (generate_correct _) width w inj typed fresh
+          exact emit_correct f rows avoid fr gs basis width w inj typed fresh
         · simp [solve,input,guard,size,hg,fit] at result; contradiction
     · simp [solve,guard,size] at result; contradiction
 

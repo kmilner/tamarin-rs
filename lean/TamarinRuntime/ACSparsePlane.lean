@@ -25,6 +25,9 @@ def Row.sparseUnits {n} (r : Row n) (cap : Nat) : List (Vec n) :=
 /-- A mixed vector with a nonzero neutral coordinate is dominated by that
 coordinate's unit. Merge units at their original lexicographic positions. -/
 def Row.sparseGenerators {n} (r : Row n) (cap : Nat) : List (Vec n) :=
-  (r.sparseActive cap).merge (r.sparseUnits cap) (fun a b => decide (List.ofFn a ≤ List.ofFn b))
+  let active := r.sparseActive cap
+  match r.sparseUnits cap with
+  | [] => active
+  | u :: us => active.merge (u :: us) (fun a b => decide (List.ofFn a ≤ List.ofFn b))
 
 end Tamarin.ACBasis

@@ -28,7 +28,7 @@ private theorem shaped {width : UInt64} {m out} (h : solve width m = some out) :
   · cases rd : readRows width.toNat m.toList with
     | none => simp [solve, rd, guard, size] at h
     | some rs =>
-      cases basis : boundedBasis rs with
+      cases basis : answerBasis rs with
       | none => simp [solve, rd, basis, guard, size] at h
       | some gs =>
         by_cases fits : fitsOutput gs = true
