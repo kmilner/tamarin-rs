@@ -6562,3 +6562,84 @@ fn check_mixed_cancellation_rows(
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);
 }
+
+#[test]
+fn native_oracle_staged_cancellation_and_guarded_ac_contexts() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{hash, pair};
+    use crate::maude_sig::{hash_maude_sig, pair_maude_sig, xor_maude_sig};
+    use crate::subst::{apply_vterm, Subst};
+    use crate::term::f_app_list;
+
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let (renamed, custom, _) = renamed_cancellation_signature();
+    for (signature, symbol) in [
+        (xor_maude_sig().merge(hash_maude_sig()), AcSym::Xor),
+        (renamed, custom),
+    ] {
+        let signature = signature.merge(pair_maude_sig());
+        let native = MaudeHandle::start_with_backend(
+            "/nonexistent",
+            signature.clone(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        let oracle =
+            MaudeHandle::start_with_backend(&path, signature, AlgebraBackend::Maude).unwrap();
+        let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 2)));
+        let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Fresh, 2)));
+        let a = pub_term("a");
+        let b = pub_term("b");
+        let sum = |args| f_app_ac(symbol, args);
+        let inner = sum(vec![x.clone(), a.clone(), b.clone()]);
+        let guarded = sum(vec![hash(inner.clone()), pair(y.clone(), inner.clone())]);
+        let observation = LVar::new("row", LSort::Msg, 0);
+        for t in [
+            inner.clone(),
+            sum(vec![x.clone(), y.clone(), a.clone(), y.clone()]),
+            sum(vec![x.clone(), hash(y.clone()), a.clone(), b.clone()]),
+            sum(vec![x.clone(), a.clone(), b.clone(), a.clone(), b.clone()]),
+            guarded.clone(),
+        ] {
+            // Observe all caller images and the final value under a single
+            // witness renaming, retaining the raw number of returned rows.
+            let slots = [x.clone(), y.clone(), t];
+            let query = f_app_list(slots.to_vec());
+            let valued = |backend: &MaudeHandle| {
+                let rows = backend
+                    .variants(&query)
+                    .unwrap_or_else(|e| panic!("{query}: {e}"));
+                canonical_small_ac_answers(
+                    rows.into_iter()
+                        .map(|arm| {
+                            let subst = Subst::from_list(arm);
+                            let values = slots
+                                .iter()
+                                .map(|t| backend.reduce(&apply_vterm(&subst, t.clone())).unwrap())
+                                .collect();
+                            vec![(observation, f_app_list(values))]
+                        })
+                        .collect(),
+                )
+            };
+            assert_eq!(valued(&native), valued(&oracle), "{query}");
+        }
+        // Equal heads permit a real root cancellation after the inner sum
+        // reduces. A guard that only checked constructor stability would
+        // wrongly reconstruct the unreduced pair.
+        let z = hash(sum(vec![a.clone(), a.clone(), b.clone()]));
+        let reducible = sum(vec![z, hash(b.clone())]);
+        match native.reduce(&reducible) {
+            Ok(value) => assert_eq!(value, oracle.reduce(&reducible).unwrap()),
+            Err(crate::maude_proc::MaudeError::UnsupportedOperation(_)) => {}
+            Err(e) => panic!("{e}"),
+        }
+        assert_eq!(native.stats().var_count, 0);
+        assert_eq!(native.stats().norm_count, 0);
+    }
+}

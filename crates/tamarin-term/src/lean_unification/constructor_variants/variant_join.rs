@@ -154,6 +154,20 @@ impl RuleTable {
         {
             return Ok(true);
         }
+        if let FunSym::Ac(f) = head
+            && self.guarded_pair(*f, args)
+        {
+            for child in args.iter() {
+                if !self.collect_variant_applications(
+                    child,
+                    Some(super::super::ac_sort(*f)),
+                    applications,
+                )? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
         if crate::vterm::is_ground_vterm(t) {
             // These reducers establish uniqueness as well as reachability.
             let value = match self.cancellation_normal(t)? {
@@ -206,14 +220,11 @@ impl RuleTable {
         // The packet and positional narrowing providers both have families at
         // distinct formal arguments. Specialization itself is independent of
         // the equations used to obtain that family.
-        let eligible = match head {
-            FunSym::Ac(f) => args.len() == 2 && self.cancellation_units.contains_key(f),
-            FunSym::NoEq(f) => self.narrowing.contains_key(f),
-            _ => false,
+        let arity = match head {
+            FunSym::Ac(f) if self.cancellation_units.contains_key(f) => 2,
+            FunSym::NoEq(f) if self.narrowing.contains_key(f) => args.len(),
+            _ => return Ok(None),
         };
-        if !eligible {
-            return Ok(None);
-        }
         for arg in args.iter() {
             if !self.stably_normal_native(arg)? {
                 return Ok(None);
@@ -221,7 +232,7 @@ impl RuleTable {
         }
         // Both providers declare Msg arguments. Work in a local namespace;
         // join_rows opens the entire schema range apart from the caller.
-        let formals: Vec<_> = (0..args.len())
+        let formals: Vec<_> = (0..arity)
             .map(|i| LVar::new("x", LSort::Msg, i as u64))
             .collect();
         let variable = |v| Term::Lit(Lit::Var(v));
@@ -230,42 +241,75 @@ impl RuleTable {
         let Some(family) = self.direct_rows(&formals, &reserved, &template)? else {
             return Ok(None);
         };
-        let operands = Row {
-            images: args.to_vec(),
+        let mut operands = vec![Row {
+            images: args[..arity].to_vec(),
             values: keys.iter().copied().map(variable).collect(),
-        };
-        let mut joined = BTreeSet::new();
+        }];
         let mut budget = residual::Budget::new();
         let mut normal = FxHashMap::default();
-        for schema in family {
-            if !self.join_rows(
-                &operands,
-                &schema,
-                original,
-                &mut budget,
-                &mut normal,
-                &mut joined,
-            )? {
+        let mut remaining = 4096;
+        let mut matching_budget = 100_000;
+        // One ordinary specialization for a fixed arity. A flattened AC sum
+        // uses the same binary family at every node, sharing one search budget.
+        let mut tail = args[arity..].iter();
+        loop {
+            let mut joined = BTreeSet::new();
+            for child in &operands {
+                for schema in &family {
+                    if remaining == 0 {
+                        return Ok(None);
+                    }
+                    remaining -= 1;
+                    if !self.join_rows(
+                        child,
+                        schema,
+                        original,
+                        &mut budget,
+                        &mut normal,
+                        &mut joined,
+                    )? {
+                        return Ok(None);
+                    }
+                }
+            }
+            let projected = joined
+                .into_iter()
+                .map(|row| {
+                    let mut images = row.values;
+                    let values = images.split_off(keys.len());
+                    Row { images, values }.rename(original)
+                })
+                .collect();
+            let Some(rows) = self.prune_specializations(projected, &mut matching_budget)? else {
                 return Ok(None);
+            };
+            let Some(next) = tail.next() else {
+                return Ok(Some(rows));
+            };
+            operands = Vec::with_capacity(rows.len());
+            for row in rows {
+                let subst = Subst::from_list(keys.iter().copied().zip(row.images.iter().cloned()));
+                // Use the same caller images in the next factor as in the
+                // prefix. The join checks both intermediate values for normality.
+                let mut images = row.values;
+                images.push(apply_vterm(&subst, next.clone()));
+                operands.push(Row {
+                    images,
+                    values: row.images,
+                });
             }
         }
-        // Exact.specialize projects away the intermediate operand images.
-        // Canonicalize witness names again in the projected row's own order.
-        let mut projected = BTreeSet::new();
-        for row in joined {
-            let mut images = row.values;
-            let values = images.split_off(keys.len());
-            projected.insert(Row { images, values }.rename(original));
-        }
-        self.prune_specializations(projected)
     }
 
     /// Specialization can turn distinct generic cases into instances of each
     /// other. Compare every input image and output under one rigid-subject
     /// match (Row.Subsumes). Transitivity covers earlier deletions if their
     /// representative is itself replaced.
-    fn prune_specializations(&self, projected: BTreeSet<Row>) -> Result<Option<Vec<Row>>, Error> {
-        let mut budget = 100_000;
+    fn prune_specializations(
+        &self,
+        projected: BTreeSet<Row>,
+        budget: &mut usize,
+    ) -> Result<Option<Vec<Row>>, Error> {
         let mut subsumes = |general: &Row, specific: &Row| -> Result<Option<bool>, Error> {
             let eqs: Vec<_> = general
                 .iter()
@@ -279,8 +323,7 @@ impl RuleTable {
                 return Ok(None);
             }
             Ok(
-                match super::super::open_match::with_captures_budget(&eqs, Vec::new(), &mut budget)?
-                {
+                match super::super::open_match::with_captures_budget(&eqs, Vec::new(), budget)? {
                     Outcome::Complete(matches) => Some(!matches.is_empty()),
                     Outcome::Unsupported => None,
                 },

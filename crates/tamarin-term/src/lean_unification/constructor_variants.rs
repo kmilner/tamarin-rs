@@ -421,6 +421,18 @@ impl RuleTable {
                 None => term.clone(),
             }));
         }
+        if let Term::App(FunSym::Ac(f), args) = term
+            && self.guarded_pair(*f, args)
+        {
+            let mut values = Vec::with_capacity(args.len());
+            for child in args.iter() {
+                let Some(value) = self.reduce_native_sorted(child)? else {
+                    return Ok(None);
+                };
+                values.push(value);
+            }
+            return Ok(Some(crate::term::f_app_ac(*f, values)));
+        }
         if matches!(term, Term::Lit(_)) {
             return Ok(Some(term.clone()));
         }

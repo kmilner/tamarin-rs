@@ -456,6 +456,16 @@ impl super::RuleTable {
         if !Budget::new().charge(sides(equations), None)? || !self.admits_terms(equations) {
             return Ok(super::Outcome::Unsupported);
         }
+        // Check the entire conjunction before spending the search budget on
+        // earlier AC partitions. A subject variable is rigid at this point.
+        if equations.iter().any(|eq| match (&eq.lhs, &eq.rhs) {
+            (Term::Lit(Lit::Var(_)), _) => false,
+            (Term::App(f, _), Term::App(g, _)) => f != g,
+            (Term::Lit(Lit::Con(a)), Term::Lit(Lit::Con(b))) => a != b,
+            _ => true,
+        }) {
+            return Ok(super::Outcome::Complete(Vec::new()));
+        }
         let canonical = equations
             .iter()
             .map(|eq| Equal {
@@ -463,6 +473,15 @@ impl super::RuleTable {
                 rhs: super::canonical_capture(&eq.rhs),
             })
             .collect::<Vec<_>>();
+        // This count is valid on flattened representatives, even when later
+        // pattern variables can expand to AC products. B has no empty factor.
+        if canonical.iter().any(|e| {
+            matches!((&e.lhs, &e.rhs),
+            (Term::App(FunSym::Ac(f), ps), Term::App(FunSym::Ac(g), ss))
+                if f == g && ps.len() > ss.len())
+        }) {
+            return Ok(super::Outcome::Complete(Vec::new()));
+        }
         super::open_match::with_captures(&canonical, Vec::new())
     }
 

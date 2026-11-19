@@ -520,6 +520,40 @@ fn declared_ac_crxor_preserves_sources_and_all_three_proofs_without_maude() {
     assert_crxor_parity("csf26-ac/fast/CRxor.spthy", "case c_xorr_case_1");
 }
 
+#[test]
+fn ch07_preserves_sources_and_all_five_proof_trees_without_maude() {
+    let example = "features/xor/CH07.spthy";
+    let (sources, log) = run_corpus(example, "native-only", &["--precompute-only"]);
+    assert!(!log.contains("[maude>]"), "{log}");
+    for kind in ["Raw", "Refined"] {
+        assert!(
+            sources.contains(&format!(
+                "{kind} sources: 11 cases, deconstructions complete"
+            )),
+            "{sources}"
+        );
+    }
+    if common::maude_available() {
+        let (reference, _) = run_corpus(example, "maude", &["--precompute-only"]);
+        assert_eq!(sources, reference);
+    }
+    let (proof, log) = run_corpus(example, "native-only", &["--prove"]);
+    assert!(!log.contains("[maude>]"), "{log}");
+    if common::maude_available() {
+        let (reference, _) = run_corpus(example, "maude", &["--prove"]);
+        assert_eq!(comparable_proof(&proof), comparable_proof(&reference));
+    }
+    for verdict in [
+        "recentalive_tag (all-traces): falsified - found trace (11 steps)",
+        "recentalive_reader (all-traces): verified (23 steps)",
+        "noninjectiveagreement_tag (all-traces): verified (19 steps)",
+        "noninjectiveagreement_reader (all-traces): verified (15 steps)",
+        "executable (exists-trace): verified (12 steps)",
+    ] {
+        assert!(proof.contains(verdict), "{proof}");
+    }
+}
+
 fn assert_crxor_parity(example: &str, first_case: &str) {
     let (sources, log) = run_corpus(example, "native-only", &["--precompute-only"]);
     assert!(!log.contains("[maude>]"), "{log}");

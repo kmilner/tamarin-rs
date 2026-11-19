@@ -33,7 +33,7 @@ def Row.project (row : Row sig (Key keys) A) (typed : row.Sorted) : Substitution
 theorem Row.project_key (row : Row sig (Key keys) A) (typed : row.Sorted) (i : Key keys) :
     (row.project typed).image i.val = row.input i := by simp [Row.project,i.property]
 
-private theorem Row.project_normal (row : Row sig (Key keys) A) (typed : row.Sorted)
+theorem Row.project_normal (row : Row sig (Key keys) A) (typed : row.Sorted)
     (vars : Normalized R Substitution.identity) (normal : row.IsNormal R) :
     Normalized R (row.project typed) := by
   intro v

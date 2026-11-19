@@ -10,6 +10,42 @@ use crate::term::{f_app_ac, Term};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 impl RuleTable {
+    /// A binary AC context is transparent if its operands retain their free
+    /// heads through rewriting and no active root rule can match either
+    /// alignment, even after replacing every argument below those heads.
+    pub(super) fn guarded_pair(&self, symbol: AcSym, args: &[LNTerm]) -> bool {
+        let [Term::App(left @ FunSym::NoEq(l), _), Term::App(right @ FunSym::NoEq(r), _)] = args
+        else {
+            return false;
+        };
+        // Distinct heads recover the two observed slots even modulo AC.
+        if l == r || self.patterns.contains_key(l) || self.patterns.contains_key(r) {
+            return false;
+        }
+        let Some(rules) = self.ac_rules.get(&symbol) else {
+            return !self.ac_patterns.contains_key(&symbol);
+        };
+        let compatible = |pattern: &LNTerm, head: &FunSym| match pattern {
+            Term::Lit(crate::vterm::Lit::Var(_)) => true,
+            Term::App(f, _) => f == head,
+            Term::Lit(crate::vterm::Lit::Con(_)) => false,
+        };
+        rules.iter().all(|rule| {
+            let Term::App(_, factors) = &rule.lhs else {
+                return false;
+            };
+            match factors.as_ref() {
+                [x, y] => {
+                    x == y
+                        || !(compatible(x, left) && compatible(y, right)
+                            || compatible(x, right) && compatible(y, left))
+                }
+                // Substitution cannot shrink a nonempty AC factor.
+                other => other.len() > 2,
+            }
+        })
+    }
+
     pub(super) fn excludes_ac_instances(
         &self,
         symbol: AcSym,
@@ -126,4 +162,33 @@ fn root_excluded(
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builtin::{hash, pair};
+    use crate::lterm::{pub_term, LSort};
+    use crate::maude_sig::{hash_maude_sig, mset_maude_sig, pair_maude_sig};
+    use crate::rewriting::RRule;
+    use crate::subterm_rule::rrule_to_ctxt_st_rule;
+    use crate::vterm::Lit;
+
+    #[test]
+    fn guarded_pair_checks_both_alignments_and_the_full_active_bucket() {
+        let mut sig = mset_maude_sig()
+            .merge(hash_maude_sig())
+            .merge(pair_maude_sig());
+        let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 1)));
+        let h = hash(x.clone());
+        let p = pair(x.clone(), pub_term("p"));
+        let lhs = f_app_ac(AcSym::Union, vec![h.clone(), pair(x.clone(), x.clone())]);
+        let context = RuleTable::new(&sig).unwrap();
+        assert!(context.guarded_pair(AcSym::Union, &[h.clone(), p.clone()]));
+        sig.st_rules
+            .insert(rrule_to_ctxt_st_rule(&RRule::new(lhs, x)).unwrap());
+        let active = RuleTable::new(&sig.refresh()).unwrap();
+        assert!(!active.guarded_pair(AcSym::Union, &[h.clone(), p.clone()]));
+        assert!(!active.guarded_pair(AcSym::Union, &[p, h]));
+    }
 }

@@ -104,3 +104,5 @@ import Tamarin.VariantJoinSubsumption
 import Tamarin.BinaryCancellationPacket
 import Tamarin.MixedCancellationPacket
 import Tamarin.MixedCancellationJoined
+import Tamarin.VariantComposition
+import Tamarin.GuardedACContext

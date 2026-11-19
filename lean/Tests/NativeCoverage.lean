@@ -48,11 +48,16 @@ def constructorOnly (th : Theory) (t : Expr) : Bool :=
 normal value, including when their active AC root actually rewrites. -/
 def identitySlot (th : Theory) (t : Expr) := t.variables.isEmpty || constructorOnly th t
 
-/-- Any number of inert hash constructors can surround a supported observation. -/
+/-- Flattening is independent of how the generator parenthesized a sum. -/
+def stableFactors (th : Theory) : Expr → Bool
+  | .ac _ l r => stableFactors th l && stableFactors th r
+  | t => constructorOnly th t
+
+/-- An inert hash can surround a supported observation at any depth. -/
 def coveredSlot (th : Theory) (t : Expr) : Bool :=
   identitySlot th t || match t with
     | .free .hash args => coveredSlot th (args 0)
-    | .ac _ l r => constructorOnly th l && constructorOnly th r
+    | .ac _ l r => stableFactors th l && stableFactors th r
     | _ => false
 
 def variantExpectation (th : Theory) (ts : List Expr) : String :=
@@ -147,6 +152,13 @@ def generate : IO Unit := do
         let ctor := constructorOnly th t
         emit th "reduce" (if ctor then "identity" else "complete") [t]
         emit th "variants" (variantExpectation th [t,t]) [t,t]
+    -- Cross one constructor boundary beyond the exhaustive node budget.
+    -- The outer sum can still cancel a hash against a caller-supplied factor.
+    if th == .xor then
+      for outer in [x,y,hash x] do
+        for inner in [plus x (.atom false),plus y (.atom true),plus x y] do
+          let t := plus outer (hash inner)
+          emit th "variants" (variantExpectation th [t,inner]) [t,inner]
     -- Joint node budget for an ordinary equation. Operands on the right
     -- of a matching request remain rigid, including their variables.
     for leftSize in [1:5] do

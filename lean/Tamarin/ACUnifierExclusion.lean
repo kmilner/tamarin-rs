@@ -167,6 +167,17 @@ theorem factor_lower_bound (f : s.ACSym) (t : Term s) (τ : Substitution s) :
   | var v => exact positive f (τ.image v)
   | atom | free | comm => exact Nat.le_refl _
 
+/-- The subject of an ordinary match stays rigid, so an individual conjunct
+can refute the full search using just the widths of its two AC normalizations
+modulo B. Additional rewrite equations never participate in this comparison. -/
+theorem refute_directional_width (f : s.ACSym) {p t : Term s}
+    (smaller : (flatten f t).length < (flatten f p).length) (σ : Substitution s) :
+    ¬ EquivB (σ.apply p) t := by
+  intro eq
+  have width := (flatten_equiv f eq).length_eq
+  have bound := factor_lower_bound f p σ
+  omega
+
 /-- Each operand position is visible separately even when two positions
 carry the same term. Reordering or reassociating the packed term is allowed. -/
 def Represents (f : s.ACSym) (actual : Term s) (positions : List (Term s)) : Prop :=

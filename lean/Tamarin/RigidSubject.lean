@@ -1,5 +1,6 @@
 import Tamarin.RecursiveACMatch
 import Tamarin.VariablePermutation
+import Tamarin.GroundACEquality
 
 /-! Reduce ordinary directional matching on open subjects to ground-subject
 matching. Subject variables become rigid atoms disjoint from every original
@@ -7,6 +8,16 @@ atom. The very same variable can remain bindable on the pattern side. -/
 namespace Tamarin.Matching.RigidSubject
 
 variable (s : Signature)
+
+/-- A clash in any conjunct refutes the entire directional match before
+partition search. A bare subject variable still has its own rigid head. -/
+theorem head_clash {p t : Term s} (rigid : ∀ v, p ≠ .var v)
+    (clash : (headModel s).eval Head.var p ≠ (headModel s).eval Head.var t) (σ : Substitution s) : ¬EquivB (σ.apply p) t := by
+  intro eq
+  apply clash
+  cases p with
+  | var v => exact (rigid v rfl).elim
+  | atom | free | comm | ac => exact eq.head_eq
 
 /-- Extending the atom namespace preserves all operator declarations. -/
 abbrev withAtoms (α : Type) (sort : α → SortId) : Signature := { s with Atom := α, atomSort := sort }
