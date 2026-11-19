@@ -1,4 +1,4 @@
-import Tamarin.DHProductUnique
+import Tamarin.DHSignedMatrix
 
 /-! A DH table with a deliberately nonconfluent unrelated operator. Repeated
 opaque factors compare modulo B, even when their children have opposite orders. -/
@@ -192,5 +192,34 @@ example (v : Variable) (sort : v.sort = .msg) (σ : Substitution sig) (hn : Norm
 -- condition, even when the product or inverse is already irreducible.
 example (a b : Term') : ¬Factor s (s.product.mul a b) ∧ ¬Factor s (s.product.inv a) ∧ ¬Factor s s.product.one :=
   ⟨fun h => h.nonMul rfl,fun h => h.nonInv rfl,fun h => h.nonUnit rfl⟩
+
+-- Repeated inputs and two correlated observations under the nonconfluent
+-- ambient table. Variables of sort Msg can specialize to any signed product.
+example (e : SignedMatrix.Expr 3) (ρ : Substitution sig) (hne : Normalized R ρ) {a b}
+    (l : NormalForm R (ρ.apply (e.term s (fun i => .var (keys i)))) a)
+    (r : NormalForm R (ρ.apply (e.term s (fun i => .var (keys i)))) b) : EquivB a b :=
+  e.pointwise_unique inventory _ (fun i => HasSort.var (keys i)) (fun i _ hn => hn (keys i)) ρ hne l r
+
+example (es : List (SignedMatrix.Expr 3)) (ρ : Substitution sig) (hn : Normalized R ρ) {u v} :
+    let input := es.foldl (fun t e => s.power t (e.term s (fun i => .var (keys i)))) (.var (keys 0))
+    NormalForm R (ρ.apply input) u → NormalForm R (ρ.apply input) v → EquivB u v :=
+  SignedMatrix.spine_pointwise_unique inventory powers unitN _ (fun i => HasSort.var (keys i))
+    (fun i _ h => h (keys i)) _ (HasSort.var (keys 0)) (fun _ h => h (keys 0)) es ρ hn
+
+private def signedConstraints : List (SignedMatrix.Constraint 3) :=
+  [(.mul (.inv (.input 0)) (.input 1), .input 2), (.mul (.input 2) (.input 2), .input 1)]
+
+-- Check the compiled rows against -a + b = c and 2c = b directly, including
+-- the all-unit assignment and a different sign in each input position.
+private def checksMatrix (a b c : Int) : Bool := Id.run do
+  let counts : Fin 3 → Int := fun i => if i.val == 0 then a else if i.val == 1 then b else c
+  let mag := fun i => (counts i).natAbs
+  let rows := signedConstraints.map (SignedMatrix.row (fun i => decide (counts i < 0)))
+  let accepted := rows.all fun r => ACBasis.dot r.pos mag == ACBasis.dot r.neg mag
+  return accepted == (b - a == c && 2*c == b)
+
+#guard ([-3,-2,-1,0,1,2,3] : List Int).all fun a =>
+  ([-3,-2,-1,0,1,2,3] : List Int).all fun b =>
+    ([-3,-2,-1,0,1,2,3] : List Int).all (checksMatrix a b)
 
 end Tamarin.DHProductUniquenessTests
