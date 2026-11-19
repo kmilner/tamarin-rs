@@ -131,7 +131,7 @@ private theorem erase_id {α} [DecidableEq α] (xs : List α) (nd : xs.Nodup) : 
     · exact ((List.nodup_cons.mp nd).1 (eq ▸ hy)).elim
     · simp [eq]
 
-private theorem generate_distinct {n} (rs : List (Row n)) : (generate rs).Nodup := by
+theorem generate_distinct {n} (rs : List (Row n)) : (generate rs).Nodup := by
   cases rs <;> apply erase_nodup
 
 private theorem minimize_subset {n} (rs : List (Row n)) (xs : List (Vec n))

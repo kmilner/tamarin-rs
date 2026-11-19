@@ -53,7 +53,7 @@ private theorem counts_eq (q d : Nat) : counts q d = (List.range (q+1)).map (way
       simp only [List.append_cancel_left_eq,Nat.zero_add]
       exact congrArg (fun x => [x]) (ways_succ (d+1) q).symm
 
-private theorem waysWithin_some (k q budget : Nat) (bound : ways k q ≤ budget) :
+theorem waysWithin_some (k q budget : Nat) (bound : ways k q ≤ budget) :
     waysWithin k q budget = some (ways k q) := by
   cases k with
   | zero => rfl
@@ -137,7 +137,7 @@ theorem enumerate_length (r : Row n) (a b : Nat) :
   simp only [List.length_merge,draw_length,distributions]
   simp [active,singleton,ways_zero,ways_unit]
 
-private theorem waysWithin_exact (k q budget w : Nat) (h : waysWithin k q budget = some w) :
+theorem waysWithin_exact (k q budget w : Nat) (h : waysWithin k q budget = some w) :
     w = ways k q := by
   cases k with
   | zero => exact (Option.some.inj h).symm
