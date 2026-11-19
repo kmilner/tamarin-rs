@@ -3540,3 +3540,5 @@ mod low_rank_feasibility;
 
 #[path = "native_backend/simplex_feasibility.rs"]
 mod simplex_feasibility;
+#[path = "native_backend/principal_ray.rs"]
+mod principal_ray;
