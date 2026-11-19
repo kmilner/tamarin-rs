@@ -1,5 +1,7 @@
 //! Explore every ordinary root rewrite and every change in a child modulo B.
 //! At an AC head a rule can consume any subbag of two or more occurrences.
+mod projected;
+
 use super::{subgroups::ProperSubgroups, InputDomain, RuleTable};
 use crate::function_symbols::{AcSym, FunSym};
 use crate::lean_unification::{
@@ -245,6 +247,22 @@ impl RuleMatches<'_> {
         piece: &LNTerm,
         rest: Option<(AcSym, &[LNTerm])>,
     ) -> Result<bool, Error> {
+        if let Some(values) = self
+            .table
+            .projected_rule_values(pattern, rhs, piece, self.budget)?
+        {
+            for value in values {
+                if let Some((_, factors)) = rest
+                    && !charge_expansion(self.budget, factors, None)?
+                {
+                    return Ok(false);
+                }
+                if !self.record(value, rest) {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
         let Outcome::Complete(arms) = open_match::root(pattern, piece, self.budget)? else {
             return Ok(false);
         };
@@ -259,23 +277,30 @@ impl RuleMatches<'_> {
                 return Err(Error::InvalidStatus(255));
             }
             let value = apply_vterm(&subst, rhs.clone());
-            if !self
-                .table
-                .collect(&value, &mut Vec::new(), InputDomain::Sorted)
-                .is_some_and(|s| subsort(s, self.sort))
-            {
+            if !self.record(value, rest) {
                 return Ok(false);
             }
-            let state = if let Some((head, rest)) = rest {
-                let mut whole = rest.to_vec();
-                whole.push(value);
-                f_app_ac(head, whole)
-            } else {
-                value
-            };
-            self.next.insert(state);
         }
         Ok(true)
+    }
+
+    fn record(&mut self, value: LNTerm, rest: Option<(AcSym, &[LNTerm])>) -> bool {
+        if !self
+            .table
+            .collect(&value, &mut Vec::new(), InputDomain::Sorted)
+            .is_some_and(|s| subsort(s, self.sort))
+        {
+            return false;
+        }
+        let state = if let Some((head, rest)) = rest {
+            let mut whole = rest.to_vec();
+            whole.push(value);
+            f_app_ac(head, whole)
+        } else {
+            value
+        };
+        self.next.insert(state);
+        true
     }
 }
 

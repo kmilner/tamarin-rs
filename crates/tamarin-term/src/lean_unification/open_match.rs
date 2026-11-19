@@ -252,6 +252,9 @@ impl Collectors {
         let packet = MatchRows::new(flat_rows(self.keys.len(), &self.occurrences, &[], &rhs))?;
         let mut row = vec![0; rhs.len()];
         'branches: for i in 0..packet.count() {
+            if search.has_witness() {
+                break;
+            }
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
             if packet.rows(i) != self.keys.len() {
                 return Err(Error::InvalidStatus(255));
@@ -351,9 +354,14 @@ struct Search<'a, 'b> {
     answers: BTreeSet<Arm>,
     cost: usize,
     budget: &'b mut usize,
+    first_only: bool,
 }
 
 impl<'a> Search<'a, '_> {
+    fn has_witness(&self) -> bool {
+        self.first_only && !self.answers.is_empty()
+    }
+
     fn charge_branch(&mut self) -> bool {
         let Some(left) = self.budget.checked_sub(self.cost) else {
             return false;
@@ -459,6 +467,9 @@ impl<'a> Search<'a, '_> {
 
     fn run(&mut self) -> Result<bool, Error> {
         'branch: while let Some((mut pending, mut arm)) = self.work.pop() {
+            if self.has_witness() {
+                break;
+            }
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
             while let Some(task) = pending.pop() {
                 let (p, s) = match task {
@@ -545,6 +556,7 @@ pub(super) fn component(
             answers: BTreeSet::new(),
             cost,
             budget,
+            first_only: false,
         };
         if !search.select(problem, &[], Arm::new())? || !search.run()? {
             return Ok(Outcome::Unsupported);
@@ -580,19 +592,65 @@ pub(super) fn with_captures_budget(
     captures: Arm,
     budget: &mut usize,
 ) -> Result<Outcome, Error> {
-    let terms = equations.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]);
-    let Some(cost) = terms
-        .chain(captures.iter().map(|(_, t)| t))
-        .try_fold(0usize, |n, t| n.checked_add(tree_nodes(t)?))
-    else {
+    let Some((tasks, cost)) = conjunction_tasks(equations, &captures) else {
         return Ok(Outcome::Unsupported);
     };
+    search(tasks, captures, cost, budget)
+}
+
+fn conjunction_tasks<'a>(
+    equations: &'a [crate::rewriting::Equal<LNTerm>],
+    captures: &[(LVar, LNTerm)],
+) -> Option<(Vec<Task<'a>>, usize)> {
+    let terms = equations.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]);
+    let cost = terms
+        .chain(captures.iter().map(|(_, t)| t))
+        .try_fold(0usize, |n, t| n.checked_add(tree_nodes(t)?))?;
     let tasks = equations
         .iter()
         .rev()
         .map(|eq| Task::Pair(&eq.lhs, &eq.rhs))
         .collect();
-    search(tasks, captures, cost, budget)
+    Some((tasks, cost))
+}
+
+/// A found witness decides existence without visiting its siblings. Exhaustion
+/// without a witness remains distinct from a completed empty search.
+pub(super) fn has_match_budget(
+    equations: &[crate::rewriting::Equal<LNTerm>],
+    budget: &mut usize,
+) -> Result<Option<bool>, Error> {
+    let Some((tasks, cost)) = conjunction_tasks(equations, &[]) else {
+        return Ok(None);
+    };
+    initialize()?;
+    LEAN_THREAD.with(|_| {
+        let mut search = Search {
+            work: Vec::new(),
+            answers: BTreeSet::new(),
+            cost,
+            budget,
+            first_only: true,
+        };
+        if !search.charge_branch() {
+            return Ok(None);
+        }
+        search.work.push((tasks, Vec::new()));
+        let finished = search.run()?;
+        let Some(witness) = search.answers.pop_first() else {
+            return Ok(finished.then_some(false));
+        };
+        let subst = crate::subst::Subst::from_list(witness);
+        for eq in equations {
+            if !super::residual::charge_expansion(search.budget, [&eq.lhs], Some(&subst))? {
+                return Ok(None);
+            }
+            if crate::subst::apply_vterm(&subst, eq.lhs.clone()) != eq.rhs {
+                return Err(Error::InvalidStatus(255));
+            }
+        }
+        Ok(Some(true))
+    })
 }
 
 fn search(
@@ -608,6 +666,7 @@ fn search(
             answers: BTreeSet::new(),
             cost,
             budget,
+            first_only: false,
         };
         if !search.charge_branch() {
             return Ok(Outcome::Unsupported);
