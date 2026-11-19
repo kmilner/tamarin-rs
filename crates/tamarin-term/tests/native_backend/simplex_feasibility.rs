@@ -38,13 +38,25 @@ fn check_native(columns: &[Column], expected: bool) {
         let h = native();
         assert_eq!(h.unifiable(&rows).unwrap(), expected);
         let full = native();
-        if expected {
-            assert!(matches!(
-                full.unify(&rows),
-                Err(MaudeError::UnsupportedOperation("AC/C unification"))
-            ));
-        } else {
-            assert!(full.unify(&rows).unwrap().is_empty());
+        match full.unify(&rows) {
+            Ok(arms) => {
+                assert_eq!(!arms.is_empty(), expected);
+                let inputs: Vec<_> = (0..columns.len())
+                    .map(|i| LVar::new("v", LSort::Msg, i as u64))
+                    .collect();
+                for arm in arms {
+                    let subst = tamarin_term::subst_vfresh::LNSubstVFresh::from_list(arm)
+                        .fresh_to_free_avoiding_vars(&inputs);
+                    for eq in &rows {
+                        assert_eq!(
+                            tamarin_term::subst::apply_vterm(&subst, eq.lhs.clone()),
+                            tamarin_term::subst::apply_vterm(&subst, eq.rhs.clone())
+                        );
+                    }
+                }
+            }
+            Err(MaudeError::UnsupportedOperation("AC/C unification")) if expected => {}
+            Err(err) => panic!("full AC unification failed: {err}"),
         }
         assert_eq!(full.stats().unify_count, 0);
         assert_eq!(h.stats().unify_count, 0);
