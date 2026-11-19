@@ -95,6 +95,9 @@ impl Reducer<'_> {
     }
 
     fn step(&mut self, t: &LNTerm) -> Result<Next, Error> {
+        if self.table.dh_group_root_normal(t) == Some(true) {
+            return Ok(Next::Normal);
+        }
         let Term::App(FunSym::Ac(AcSym::Mult), factors) = t else {
             return self.at_root(t);
         };
@@ -165,6 +168,69 @@ impl Reducer<'_> {
 }
 
 impl RuleTable {
+    /// For a sorted substitution with normal images, these expressions have
+    /// a defined signed count for every opaque factor class. The inventory's
+    /// signed-count invariant makes all reachable normal values agree.
+    pub(super) fn dh_unique_instances(&self, t: &LNTerm) -> Result<bool, Error> {
+        if !self.builtin_dh {
+            return Ok(false);
+        }
+        if is_group_operation(t) {
+            let Term::App(_, args) = t else { unreachable!() };
+            for arg in args.iter() {
+                if !self.dh_unique_instances(arg)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        self.stably_normal_native(t)
+    }
+
+    /// Root normality for a sorted canonical term. Under the exact signed
+    /// product inventory every proper-subbag redex violates the same
+    /// no-unit, single-inverse, disjoint-occurrence conditions as a root redex.
+    pub(super) fn dh_group_root_normal(&self, t: &LNTerm) -> Option<bool> {
+        if !self.builtin_dh {
+            return None;
+        }
+        let inverse =
+            |term: &LNTerm| matches!(term, Term::App(FunSym::NoEq(f), _) if *f == inv_sym());
+        match t {
+            Term::App(FunSym::NoEq(f), _) if *f == one_sym() => Some(true),
+            Term::App(FunSym::NoEq(f), args) if *f == inv_sym() => {
+                let [arg] = args.as_ref() else { return None };
+                Some(
+                    arg != &one_const()
+                        && !inverse(arg)
+                        && !matches!(arg, Term::App(FunSym::Ac(AcSym::Mult), xs)
+                        if xs.iter().any(inverse)),
+                )
+            }
+            Term::App(FunSym::Ac(AcSym::Mult), factors) => {
+                if factors.binary_search(&one_const()).is_ok() {
+                    return Some(false);
+                }
+                let mut inverses = factors.iter().filter(|t| inverse(t));
+                let Some(Term::App(_, args)) = inverses.next() else {
+                    return Some(true);
+                };
+                if inverses.next().is_some() {
+                    return Some(false);
+                }
+                let [negative] = args.as_ref() else {
+                    return None;
+                };
+                let negative = match negative {
+                    Term::App(FunSym::Ac(AcSym::Mult), xs) => xs.as_ref(),
+                    atom => std::slice::from_ref(atom),
+                };
+                Some(negative.iter().all(|x| factors.binary_search(x).is_err()))
+            }
+            _ => None,
+        }
+    }
+
     pub(super) fn dh_product_context(&self, t: &LNTerm) -> bool {
         is_group_operation(t)
             || matches!(t, Term::App(f @ FunSym::NoEq(_), _)
@@ -248,6 +314,7 @@ mod tests {
         ));
         let changed = RuleTable::new(&sig).unwrap();
         assert!(!changed.builtin_dh);
+        assert_eq!(changed.dh_group_root_normal(&input), None);
         assert_eq!(changed.dh_product_normal(&input).unwrap(), None);
     }
 
@@ -273,6 +340,44 @@ mod tests {
         let table = RuleTable::new(&sig).unwrap();
         assert!(table.builtin_dh);
         assert_eq!(table.dh_product_normal(&input).unwrap(), None);
+    }
+
+    #[test]
+    fn dh_guard_checks_occurrences_and_the_reducer_checks_children_and_arity() {
+        let table = RuleTable::new(&dh_maude_sig()).unwrap();
+        let a = pub_term("a");
+        let b = pub_term("b");
+        let c = pub_term("c");
+        let one = one_const();
+        let negative = inv(mult(a.clone(), b.clone()));
+        let dirty = inv(mult(a.clone(), one.clone()));
+        for (term, clear) in [
+            (one.clone(), true),
+            (inv(a.clone()), true),
+            (inv(one.clone()), false),
+            (inv(inv(a.clone())), false),
+            (dirty.clone(), true),
+            (inv(mult(c.clone(), mult(b.clone(), inv(a.clone())))), false),
+            (mult(a.clone(), a.clone()), true),
+            (mult(a.clone(), one.clone()), false),
+            (mult(inv(a.clone()), inv(a.clone())), false),
+            (mult(c.clone(), negative.clone()), true),
+            (mult(c.clone(), mult(b.clone(), negative)), false),
+        ] {
+            assert_eq!(table.dh_group_root_normal(&term), Some(clear), "{term}");
+        }
+        assert_eq!(table.dh_product_normal(&dirty).unwrap(), Some(inv(a.clone())));
+
+        for (head, args) in [
+            (FunSym::NoEq(one_sym()), vec![a.clone()]),
+            (FunSym::NoEq(inv_sym()), vec![]),
+            (FunSym::NoEq(inv_sym()), vec![a.clone(), b]),
+            (FunSym::Ac(AcSym::Mult), vec![]),
+            (FunSym::Ac(AcSym::Mult), vec![a]),
+        ] {
+            let malformed = Term::App(head, args.into());
+            assert_eq!(table.dh_product_normal(&malformed).unwrap(), None);
+        }
     }
 
     #[test]
@@ -309,6 +414,20 @@ mod tests {
         inputs.insert(inv(one_const()));
         for input in inputs {
             let expected = maude.reduce(&input).unwrap();
+            // With normal arguments, any change Maude makes must be at the
+            // root or an AC subbag. Comparing both directions exercises the
+            // shortcut independently of the native reducer using it.
+            if let Term::App(head, args) = &input {
+                let ready = f_app(
+                    *head,
+                    args.iter().map(|arg| maude.reduce(arg).unwrap()).collect(),
+                );
+                assert_eq!(
+                    table.dh_group_root_normal(&ready),
+                    Some(ready == expected),
+                    "root normality of {ready:?}"
+                );
+            }
             let actual = table.dh_product_normal(&input).unwrap();
             assert_eq!(actual, Some(expected), "input {input:?}");
         }

@@ -24,6 +24,30 @@ fn variable(v: LVar) -> LNTerm {
     Term::Lit(Lit::Var(v))
 }
 
+/// Replay an ordinary rule instance on the extended rule itself. Every
+/// further instance then factors through that very same ordinary rule.
+fn absorbs_extension(
+    rule: &RRule<LNTerm>,
+    extended: &RRule<LNTerm>,
+    sort: LSort,
+    rest: &LNTerm,
+) -> bool {
+    let Term::App(FunSym::Ac(ac), args) = &rule.lhs else {
+        return false;
+    };
+    args.iter().any(|arg| {
+        let Term::Lit(Lit::Var(v)) = arg else {
+            return false;
+        };
+        if !subsort(sort, v.sort) {
+            return false;
+        }
+        let subst = Subst::from_list([(*v, f_app_ac(*ac, vec![arg.clone(), rest.clone()]))]);
+        apply_vterm(&subst, rule.lhs.clone()) == extended.lhs
+            && apply_vterm(&subst, rule.rhs.clone()) == extended.rhs
+    })
+}
+
 fn replace_at(t: &LNTerm, path: &[usize], rhs: &LNTerm) -> LNTerm {
     let Some((&i, tail)) = path.split_first() else {
         return rhs.clone();
@@ -122,10 +146,32 @@ impl Frontier<'_> {
         if let Some(&Some(known)) = self.search.normal.get(t) {
             return Ok(Some(known));
         }
-        let status = self
-            .table
-            .successors(t, &mut self.search.matching)?
-            .map(|xs| xs.is_empty());
+        let status = if let Some(root) = self.table.dh_group_root_normal(t) {
+            if !residual::charge_expansion(&mut self.search.matching, [t], None)? {
+                return Ok(None);
+            }
+            let Term::App(_, args) = t else {
+                unreachable!()
+            };
+            let mut result = Some(root);
+            if root {
+                for arg in args.iter() {
+                    match self.normal(arg)? {
+                        Some(false) => {
+                            result = Some(false);
+                            break;
+                        }
+                        Some(true) => {}
+                        None => result = None,
+                    }
+                }
+            }
+            result
+        } else {
+            self.table
+                .successors(t, &mut self.search.matching)?
+                .map(|xs| xs.is_empty())
+        };
         self.search.normal.insert(t.clone(), status);
         Ok(status)
     }
@@ -197,10 +243,12 @@ impl Frontier<'_> {
                 if let FunSym::Ac(ac) = head {
                     let rest = variable(LVar::new("rest", sort, index));
                     let extended = RRule::new(
-                        f_app_ac(*ac, vec![rule.lhs, rest.clone()]),
-                        f_app_ac(*ac, vec![rule.rhs, rest]),
+                        f_app_ac(*ac, vec![rule.lhs.clone(), rest.clone()]),
+                        f_app_ac(*ac, vec![rule.rhs.clone(), rest.clone()]),
                     );
-                    if !self.narrow(row, path, t, &extended, sort, &used)? {
+                    if !absorbs_extension(&rule, &extended, sort, &rest)
+                        && !self.narrow(row, path, t, &extended, sort, &used)?
+                    {
                         return Ok(false);
                     }
                 }
@@ -357,6 +405,28 @@ mod tests {
     use crate::maude_sig::{hash_maude_sig, nat_maude_sig};
     use crate::subterm_rule::{CtxtStRule, StRhs};
     use crate::term::{f_app_list, f_app_no_eq};
+
+    #[test]
+    fn omits_only_extensions_replayed_on_both_sides_with_one_sorted_substitution() {
+        use crate::builtin::xor;
+        let x = variable(LVar::new("x", LSort::Msg, 1));
+        let fresh = variable(LVar::new("x", LSort::Fresh, 1));
+        let r = variable(LVar::new("rest", LSort::Msg, 9));
+        let a = crate::lterm::pub_term("a");
+        let check = |lhs: LNTerm, rhs: LNTerm| {
+            let extended = RRule::new(xor(lhs.clone(), r.clone()), xor(rhs.clone(), r.clone()));
+            absorbs_extension(&RRule::new(lhs, rhs), &extended, LSort::Msg, &r)
+        };
+        assert!(check(xor(x.clone(), a.clone()), x.clone()));
+        assert!(check(
+            xor(x.clone(), a.clone()),
+            xor(x.clone(), hash(a.clone()))
+        ));
+        assert!(!check(xor(x.clone(), a.clone()), a.clone()));
+        assert!(!check(xor(x.clone(), x.clone()), x.clone()));
+        assert!(!check(xor(x.clone(), a.clone()), hash(x)));
+        assert!(!check(xor(fresh.clone(), a), fresh));
+    }
 
     #[test]
     fn wider_constructor_slot_keeps_narrower_changing_child_intact() {

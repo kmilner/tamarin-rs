@@ -240,6 +240,37 @@ fn native_oracle_finite_ac_variants_include_proper_subproducts() {
     assert_eq!(native.stats().var_count, 0);
 }
 
+#[test]
+fn native_oracle_finite_commutative_frontier_keeps_both_orientations() {
+    use crate::builtin::{emap, hash};
+    use crate::maude_sig::bp_maude_sig;
+
+    let mut sig = bp_maude_sig().merge(hash_maude_sig());
+    let [red, result] = [b"red".as_slice(), b"result"].map(|name| {
+        let k = symbol(name, 0);
+        sig.st_fun_syms.insert(k);
+        f_app_no_eq(k, vec![])
+    });
+    let x = msg_var("x", 0);
+    let y = msg_var("y", 1);
+    let observe = |a, b| emap(hash(a), hash(b));
+    add_rule(&mut sig, observe(red.clone(), x.clone()), result.clone());
+    let Some((native, maude)) = handles(sig.refresh()) else {
+        return;
+    };
+    // The rigid hash heads exclude point multiplication. Either observed
+    // message can specialize to red, and the overlapping cases agree.
+    for (other, count) in [(y.clone(), 3), (x.clone(), 2)] {
+        let slots = [observe(x.clone(), other.clone()), x.clone(), other];
+        let expected = valued_variant_rows(&maude, &slots);
+        assert_eq!(expected.len(), count);
+        assert_eq!(valued_variant_rows(&native, &slots), expected);
+    }
+    for t in [observe(red.clone(), y.clone()), observe(x, red)] {
+        assert_eq!(native.reduce(&t).unwrap(), result);
+    }
+}
+
 fn unwrap_signature() -> (MaudeSig, NoEqSym, NoEqSym) {
     let unwrap = symbol(b"unwrap", 1);
     let box_ = symbol(b"box", 1);

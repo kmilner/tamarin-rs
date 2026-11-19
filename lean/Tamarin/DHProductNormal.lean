@@ -124,17 +124,11 @@ private theorem typed_factor [DecidableEq s.ACSym] {f : s.ACSym} (hs : s.acSort 
   obtain ⟨u,hu,eq⟩ := List.mem_map.mp mem
   exact sort_of_equiv (Quotient.exact eq) (hs ▸ ACRepresentation.flatten_hasSort f whole (hs ▸ typed) u hu)
 
-private theorem no_fire [DecidableEq s.ACSym] {R : Root s} {f : s.ACSym}
-    {t p q : Term s} (hn : Normal R t) (sub : Subbag f p t) (fire : R p q) : False := by
-  rcases sub.context with e|⟨rest,e⟩
-  · exact hn _ ⟨_,_,e,.root fire,.refl _⟩
-  · exact hn _ ⟨_,_,e,.ac_left _ _ (.root fire),.refl _⟩
-
-/-- Every non-unit normal exponent satisfies the signed-product conditions.
-This direction only needs presence of the simplifying equations, so holds
-even with additional active rules. -/
-theorem clean_of_normal [DecidableEq s.ACSym] {a : Ops s} {R : Root s}
-    (T : Presentation a R) {e : Term s} (typed : HasSort e .msg) (normal : Normal R e)
+/-- Exclusion of root rules at every multiplication subbag suffices for the
+signed-factor conditions, including when alien factors can still rewrite. -/
+theorem clean_of_blocked [DecidableEq s.ACSym] {a : Ops s} {R : Root s}
+    (T : Presentation a R) {e : Term s} (typed : HasSort e .msg)
+    (blocked : ∀ x y, Subbag a.mult (a.mul x y) e → ∀ out, ¬R (a.mul x y) out)
     (nonunit : ¬EquivB e a.one) : Clean a (Cancellation.flatten a.mult e) := by
   classical
   let xs := Cancellation.flatten a.mult e
@@ -148,11 +142,11 @@ theorem clean_of_normal [DecidableEq s.ACSym] {a : Ops s} {R : Root s}
       change (_ && _ && rem.checkSort (s.acSort a.mult)) = true at sort
       simp only [Bool.and_eq_true] at sort
       have hrem := Term.checkSort_sound _ _ sort.2
-      exact normal _ ⟨_,_,eq.trans (.ac_swap _ _ _),.root (T.unitRule rem (T.multSort ▸ hrem)),.refl _⟩
+      have selected := Cancellation.flatten_equiv a.mult (eq.trans (.ac_swap _ _ _))
+      exact blocked rem a.one ⟨[],by simpa [Ops.mul] using selected⟩ _ (T.unitRule rem (T.multSort ▸ hrem))
   · intro n m rest perm
     have typedInv (z : Term s) (h : classOf (a.inv z) ∈ xs) := T.invChild z (typed_factor T.multSort typed h)
-    apply no_fire normal (p := a.mul (a.inv n) (a.inv m))
-      (f := a.mult) ⟨rest,by simpa [Ops.mul,flatten_ac,T.invFactor] using perm⟩
+    apply blocked (a.inv n) (a.inv m) ⟨rest,by simpa [Ops.mul,flatten_ac,T.invFactor] using perm⟩
     apply T.joinRule
     · exact typedInv n (perm.mem_iff.mpr (by simp))
     · exact typedInv m (perm.mem_iff.mpr (by simp))
@@ -187,7 +181,7 @@ theorem clean_of_normal [DecidableEq s.ACSym] {a : Ops s} {R : Root s}
         rw [show Cancellation.flatten a.mult e = xs from rfl,show Cancellation.flatten a.mult (a.mul z (a.inv z)) = [key,classOf (a.inv z)] by simp [Ops.mul,flatten_ac,T.invFactor,atomZ,key]]
         rw [← replace]
         exact perm.trans (.swap key inv _)
-      exact no_fire normal sub (T.roots.direct z zsort)
+      exact blocked _ _ sub _ (T.roots.direct z zsort)
     | cons v vs =>
       rw [tail] at pn
       let w := ACRepresentation.fold a.mult v vs
@@ -202,7 +196,16 @@ theorem clean_of_normal [DecidableEq s.ACSym] {a : Ops s} {R : Root s}
           (a.mul (a.inv (a.mul w z)) z) = [classOf (a.inv (a.mul w z)),key] by
             simp [Ops.mul,flatten_ac,T.invFactor,atomZ,key]]
         rw [← replace]; exact perm
-      exact no_fire normal sub (T.roots.inside w z wsort zsort)
+      exact blocked _ _ sub _ (T.roots.inside w z wsort zsort)
+
+/-- Every non-unit normal exponent satisfies the signed-product conditions.
+This direction only needs presence of the simplifying equations, so holds
+even with additional active rules. -/
+theorem clean_of_normal [DecidableEq s.ACSym] {a : Ops s} {R : Root s}
+    (T : Presentation a R) {e : Term s} (typed : HasSort e .msg) (normal : Normal R e)
+    (nonunit : ¬EquivB e a.one) : Clean a (Cancellation.flatten a.mult e) :=
+  clean_of_blocked T typed (fun _ _ sub out =>
+    ((subgroup_normal_iff a.mult e).mp normal).2 _ out rfl sub) nonunit
 
 /-- A fresh factor with no counterpart inside an inverse leaves the signed
 product irreducible. Distinct variable names alone would not imply this

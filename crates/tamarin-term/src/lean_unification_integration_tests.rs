@@ -2960,6 +2960,7 @@ fn native_oracle_free_exponent_preserves_joint_gdh_observations() {
     }
     for (slots, count) in [
         (vec![tower.clone(), exp(power.clone(), a.clone())], 14),
+        (vec![exp(power.clone(), inv(r.clone()))], 6),
         (
             vec![tower.clone(), exp(g.clone(), var("other", LSort::Msg))],
             12,
@@ -2969,16 +2970,8 @@ fn native_oracle_free_exponent_preserves_joint_gdh_observations() {
         assert_eq!(expected.len(), count);
         assert_eq!(valued_variant_rows(&native, &slots), expected);
     }
-    for query in [
-        exp(power.clone(), inv(r.clone())),
-        exp(exp(var("base", LSort::Msg), y), r),
-    ] {
-        assert_eq!(
-            table.joined_variants(&query).unwrap(),
-            Outcome::Unsupported,
-            "{query:?}"
-        );
-    }
+    let query = exp(exp(var("base", LSort::Msg), y), r);
+    assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
 }
 
 #[test]
@@ -6965,3 +6958,38 @@ fn native_oracle_wide_nested_cancellation_with_fresh_variables() {
 
 #[path = "lean_variant_frontier_tests.rs"]
 mod frontier;
+
+#[test]
+fn native_oracle_narrowing_preserves_signed_dh_products_and_inverses() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{fresh_var, inv, msg_var, mult};
+    use crate::maude_sig::dh_maude_sig;
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", dh_maude_sig(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle =
+        MaudeHandle::start_with_backend(&path, dh_maude_sig(), AlgebraBackend::Maude).unwrap();
+    let x = msg_var("x", 0);
+    let r = fresh_var("r", 0);
+    for (app, count) in [
+        (inv(x.clone()), 4),
+        (mult(x.clone(), x.clone()), 4),
+        (mult(x.clone(), r.clone()), 6),
+        (mult(x.clone(), inv(r.clone())), 6),
+        (inv(mult(x.clone(), r.clone())), 8),
+    ] {
+        for slots in [[app.clone(), x.clone()], [x.clone(), app.clone()]] {
+            let expected = valued_variant_rows(&oracle, &slots);
+            assert_eq!(expected.len(), count, "{slots:?}");
+            assert_eq!(valued_variant_rows(&native, &slots), expected, "{slots:?}");
+        }
+    }
+    assert_eq!(native.stats().var_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
+}
