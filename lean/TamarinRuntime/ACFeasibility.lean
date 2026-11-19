@@ -1,4 +1,4 @@
-import TamarinRuntime.ACTwoRowFeasibility
+import TamarinRuntime.ACLowRank
 import TamarinRuntime.ACColumnQuotient
 import TamarinRuntime.ACColumnSupport
 import TamarinRuntime.ACReducedFeasibility
@@ -34,7 +34,7 @@ def graphWidth : UInt64 := 4096
 def initialRows {n} (rs : List (Row n)) : Option Bool :=
   match rs with
   | [p,q] => some (TwoRow.decidePair p q)
-  | _ => direct rs
+  | _ => direct rs <|> LowRank.run rs
 
 def fastRows {n} (rs : List (Row n)) : Option Bool :=
   initialRows rs <|> (if n ≤ 32 then feasibleRows rs else none) <|> reducedFeasible rs

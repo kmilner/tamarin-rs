@@ -1,5 +1,5 @@
 import TamarinRuntime.ACFeasibility
-import Tamarin.ACTwoRowFeasibility
+import Tamarin.ACLowRank
 import Tamarin.ACColumnQuotient
 import Tamarin.ACColumnSupport
 import Tamarin.ACAdjustmentCoverage
@@ -32,6 +32,7 @@ inductive BaseRequired {n} (rs : List (Row n)) : Prop where
   | reduced : RowReduction.Within rs → BaseRequired rs
   | triangular : Adjustment.Within rs → BaseRequired rs
   | twoRows : rs.length ≤ 2 → BaseRequired rs
+  | lowRank : LowRank.Within rs → BaseRequired rs
 
 /-- Each established domain also applies to the canonical quotient of an
 input containing repeated columns, independently of its original width. -/
@@ -48,6 +49,8 @@ theorem basis (width : n ≤ 32) (h : TailWithin rs ∨ ConeTailWithin rs) : Req
 theorem reduced (h : RowReduction.Within rs) : Required rs := .original (.reduced h)
 theorem triangular (h : Adjustment.Within rs) : Required rs := .original (.triangular h)
 theorem twoRows (few : rs.length ≤ 2) : Required rs := .original (.twoRows few)
+
+theorem lowRank (h : LowRank.Within rs) : Required rs := .original (.lowRank h)
 
 end Required
 
@@ -142,13 +145,14 @@ private theorem initial_sound {n} (rs : List (Row n)) : Decides (initialRows rs)
     intro b h
     cases Option.some.inj h
     exact TwoRow.decidePair_iff p q
-  · exact direct_sound _
+  · exact fallback (direct_sound _) (fun _ => LowRank.run_sound)
 
 private theorem initial_direct {n} (rs : List (Row n)) (h : DirectWithin rs) : (initialRows rs).isSome := by
   unfold initialRows
   split
   · rfl
-  · exact direct_complete _ h
+  · obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (direct_complete _ h)
+    simp [got]
 
 private theorem initial_two {n} (rs : List (Row n)) (few : rs.length ≤ 2) : (initialRows rs).isSome := by
   match rs with
@@ -189,6 +193,15 @@ private theorem base_complete {n} (rs : List (Row n)) (domain : BaseRequired rs)
   | triangular h => simp [baseRows,fastRows,Adjustment.completes rs h]
   | twoRows few =>
     obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (initial_two rs few)
+    simp [baseRows,fastRows,got]
+  | lowRank h =>
+    have decided : (initialRows rs).isSome := by
+      unfold initialRows
+      split
+      · rfl
+      · obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (LowRank.run_complete rs h)
+        simp [got]
+    obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp decided
     simp [baseRows,fastRows,got]
   | reduced h =>
     obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (reduced_complete rs h)
