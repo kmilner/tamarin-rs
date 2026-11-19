@@ -17,6 +17,12 @@ mod paged;
 
 unsafe extern "C" {
     fn tamarin_lean_ac_bag_match(rows: *const WordSlice, count: usize) -> u8;
+    fn tamarin_lean_ac_bag_typed_match(
+        rows: *const WordSlice,
+        count: usize,
+        restrictions: *const WordSlice,
+        restricted: usize,
+    ) -> u8;
 }
 
 struct Row<'a> {
@@ -158,14 +164,12 @@ impl RuleTable {
         let Some(data) = self.prepare_bag_rows(eqs, |e| (&e.rhs, &e.lhs))? else {
             return Ok(None);
         };
-        if !data.all_full_sort {
-            // A numeric witness can assign a capture an image outside its sort.
-            // Decide existence over the entire family of well-sorted arms.
-            return Ok(data.answers()?.map(|arms| !arms.is_empty()));
-        }
         // Each capture occurs exactly once. No rigid term identities need
         // to cross the ABI on rows without fixed factors.
-        if data.occurrences == data.vars.len() && data.rows.iter().all(|r| !r.keys.is_empty()) {
+        if data.all_full_sort
+            && data.occurrences == data.vars.len()
+            && data.rows.iter().all(|r| !r.keys.is_empty())
+        {
             for row in &data.rows {
                 if !row.linear_match()? {
                     return Ok(Some(false));
@@ -173,19 +177,7 @@ impl RuleTable {
             }
             return Ok(Some(true));
         }
-        data.with_packet(false, |_, _, _, slices| {
-            initialize()?;
-            // SAFETY: both the slice descriptors and their occurrence rows stay
-            // live until the shim has copied them. Only a scalar tag is returned.
-            let tag = LEAN_THREAD
-                .with(|_| unsafe { tamarin_lean_ac_bag_match(slices.as_ptr(), slices.len()) });
-            match tag {
-                0 => Ok(None),
-                1 => Ok(Some(false)),
-                2 => Ok(Some(true)),
-                other => Err(Error::InvalidStatus(other)),
-            }
-        })
+        data.with_packet(false, decide)
     }
 
     /// The internal tree matcher puts patterns on the left in both public APIs.
@@ -200,6 +192,59 @@ impl RuleTable {
             Some(arms) => Outcome::Complete(arms),
             None => Outcome::Unsupported,
         })
+    }
+}
+
+fn decide(
+    head: AcSym,
+    vars: &IdentityTable<LVar>,
+    factors: &IdentityTable<&LNTerm>,
+    slices: &[WordSlice],
+) -> Result<Option<bool>, Error> {
+    let narrow = vars
+        .values()
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| !subsort(ac_sort(head), v.sort));
+    // Each narrow capture transmits a key followed by the IDs of all eligible
+    // singleton factors. The checked inventory currently needs at most 5 × 129
+    // words. Bound the attempted construction for inputs outside that domain.
+    if narrow.clone().count().saturating_mul(1 + factors.len()) > residual::MAX_EXPANDED {
+        return Ok(None);
+    }
+    let mut restrictions = Vec::new();
+    for (key, var) in narrow {
+        tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
+        let mut allowed = vec![key as u64];
+        for (id, factor) in factors.values().iter().enumerate() {
+            if subsort(sort_of_lterm(factor, sort_of_name), var.sort) {
+                allowed.push(id as u64);
+            }
+        }
+        restrictions.push(allowed);
+    }
+    initialize()?;
+    let descriptors: Vec<_> = restrictions.iter().map(|row| WordSlice::new(row)).collect();
+    // SAFETY: the shim copies both descriptor lists and their words. Only a
+    // scalar decision is returned, including for requests with many matches.
+    let tag = LEAN_THREAD.with(|_| unsafe {
+        if descriptors.is_empty() {
+            tamarin_lean_ac_bag_match(slices.as_ptr(), slices.len())
+        } else {
+            tamarin_lean_ac_bag_typed_match(
+                slices.as_ptr(),
+                slices.len(),
+                descriptors.as_ptr(),
+                descriptors.len(),
+            )
+        }
+    });
+    tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
+    match tag {
+        0 => Ok(None),
+        1 => Ok(Some(false)),
+        2 => Ok(Some(true)),
+        other => Err(Error::InvalidStatus(other)),
     }
 }
 

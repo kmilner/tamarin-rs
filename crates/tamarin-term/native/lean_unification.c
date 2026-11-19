@@ -235,6 +235,13 @@ uint8_t tamarin_lean_ac_bag_match(const whole_word_slice *rows, size_t count) {
     return tamarin_ac_bag_match(word_rows(rows, count));
 }
 
+extern uint8_t tamarin_ac_bag_typed_match(lean_object *rows, lean_object *restrictions);
+uint8_t tamarin_lean_ac_bag_typed_match(const whole_word_slice *rows, size_t count,
+                                       const whole_word_slice *restrictions, size_t restricted) {
+    return tamarin_ac_bag_typed_match(word_rows(rows, count),
+                                     word_rows(restrictions, restricted));
+}
+
 extern lean_object *tamarin_select_joined_variants(lean_object *rows);
 uint8_t tamarin_lean_select_joined_variants(const whole_word_slice *rows, size_t count,
                                            uint8_t *mask) {

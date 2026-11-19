@@ -93,8 +93,9 @@ fn shared_narrow_capture_accepts_its_single_frozen_image() {
 #[test]
 fn shared_narrow_capture_rejects_a_message_product_of_fresh_terms() {
     let x = LVar::new("x", LSort::Fresh, 1);
-    let case = Case::forced(x, vec![fresh_term("first"), fresh_term("second")]);
-    case.check(vec![]);
+    for second in ["first", "other"] {
+        Case::forced(x, vec![fresh_term("first"), fresh_term(second)]).check(vec![]);
+    }
 }
 
 #[test]
@@ -138,4 +139,31 @@ fn shared_narrow_capture_filters_specific_arms_and_keeps_all_other_bindings() {
         })
         .collect();
     case.check(expected);
+}
+
+#[test]
+fn narrow_captures_compete_for_singletons_without_enumerating_the_full_family() {
+    let x = LVar::new("x", LSort::Fresh, 0);
+    let y = LVar::new("y", LSort::Fresh, 0);
+    let z = LVar::new("z", LSort::Msg, 0);
+    let pattern = bag(vec![var_term(x), var_term(y), var_term(z)]);
+    // The all-distinct input has 3^64 raw placements. X and Y need two
+    // eligible occurrences, which may be copies of the same frozen term.
+    for extra in [None, Some(fresh_term("other")), Some(var_term(x))] {
+        let h = native();
+        let expected = extra.is_some();
+        let mut atoms = vec![var_term(x)];
+        atoms.extend(extra);
+        atoms.extend((atoms.len()..64).map(|i| pub_term(format!("p{i}"))));
+        assert_eq!(
+            h.has_match_eqs(&[Equal {
+                lhs: bag(atoms),
+                rhs: pattern.clone()
+            }])
+            .unwrap(),
+            expected
+        );
+        assert_eq!(h.stats().match_count, 0);
+        h.check_backend_status().unwrap();
+    }
 }
