@@ -10,12 +10,24 @@ abbrev Index := Std.HashSet (List UInt64 × List UInt64)
 
 def key (a b : Tree) := (a.key,b.key)
 
-def index (inputs : Observations) : Index :=
-  .ofList (inputs.map fun (a,b) => key a b)
+/- A shared free head determines its aligned arguments. Keep the original
+pair as well, since an output can use the entire observed term. -/
+mutual
+  def projections (a b : Tree) : Observations :=
+    (a,b) :: (match a,b with
+      | .app k f xs, .app l g ys =>
+        if k = 2 ∧ l = 2 ∧ f = g then projectArgs xs ys else []
+      | _, _ => [])
+  def projectArgs : List Tree → List Tree → Observations
+    | a :: as, b :: bs => projections a b ++ projectArgs as bs
+    | _, _ => []
+end
 
-/- The two variable namespaces are independent. Only a whole observed
-pair identifies subterms across rows; rigid leaves and common application
-contexts can then rebuild equal values under the independent substitutions. -/
+def index (inputs : Observations) : Index :=
+  .ofList ((inputs.flatMap fun (a,b) => projections a b).map fun (a,b) => key a b)
+
+/- The two variable namespaces are independent. Observed pairs and their
+aligned free subterms can be used in common output contexts. -/
 mutual
   def checkPair (seen : Index) (a b : Tree) : Bool :=
     seen.contains (key a b) ||

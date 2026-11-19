@@ -595,8 +595,10 @@ The frontier checks whether overlapping rows always produce equivalent outputs u
 independent substitutions. If both outputs are built the same way from corresponding
 input images and rigid constructors, the linked Lean checker can prove agreement
 directly. For `select(A+B+C+D,W) → W`, native-only now returns both variants for
-`select(X,Y)`. The same check handles a constant or `wrap(W)` on the right. A conflicting
-rule that can give a different normal value still causes a deferral.
+`select(X,Y)`. The same check handles a constant or `wrap(W)` on the right.
+It can also follow corresponding argument positions through any number of free
+constructors, so `select(A+B+C+D,box(W)) → W` completes on the same open query.
+A conflicting rule that can give a different normal value still causes a deferral.
 [Overlap specification](Tamarin/VariantOverlapAgreement.lean) · [Graph refinement](Tamarin/VariantOverlapGraph.lean)
 
 For trees of free heads, it can instead compare the live rules at each head once,

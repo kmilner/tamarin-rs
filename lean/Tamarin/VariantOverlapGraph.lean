@@ -6,11 +6,91 @@ import Tamarin.VariantOverlapAgreement
 namespace Tamarin.VariantOverlapGraph
 open Whole WholeProblem FactorCheck FactorInterpretation Cancellation
 
+/-- An observation can be followed to the same child position through
+any number of shared free heads. Commutative heads have no such positions. -/
+inductive Projects (x y : Tree) : Tree → Tree → Prop where
+  | root : Projects x y x y
+  | child {f xs ys a b} (aligned : (a,b) ∈ xs.zip ys) (next : Projects x y a b) :
+      Projects x y (.app 2 f xs) (.app 2 f ys)
+
+def Observed (inputs : Observations) (x y : Tree) : Prop :=
+  ∃ e ∈ inputs, Projects x y e.1 e.2
+
+mutual
+  private theorem read_projection (a b x y : Tree) (mem : (x,y) ∈ projections a b) :
+      Projects x y a b := by
+    rw [projections.eq_def,List.mem_cons] at mem
+    rcases mem with e | more
+    · cases e; exact .root
+    · cases a <;> cases b <;> try contradiction
+      rename_i k f xs l g ys
+      change (x,y) ∈ (if k = 2 ∧ l = 2 ∧ f = g then projectArgs xs ys else []) at more
+      split at more
+      · obtain ⟨rfl,rfl,rfl⟩ := ‹_ ∧ _ ∧ _›
+        obtain ⟨u,v,member,d⟩ := read_projectArgs _ _ x y more
+        exact .child member d
+      · contradiction
+  private theorem read_projectArgs (xs ys : List Tree) (x y : Tree) (mem : (x,y) ∈ projectArgs xs ys) :
+      ∃ u v, (u,v) ∈ xs.zip ys ∧ Projects x y u v := by
+    cases xs with
+    | nil => contradiction
+    | cons a as =>
+      cases ys with
+      | nil => contradiction
+      | cons b bs =>
+        rcases List.mem_append.mp mem with head | tail
+        · exact ⟨a,b,List.mem_cons_self,read_projection _ _ _ _ head⟩
+        · obtain ⟨u,v,h,d⟩ := read_projectArgs _ _ _ _ tail
+          exact ⟨u,v,List.mem_cons_of_mem _ h,d⟩
+end
+
+private theorem in_projection_args {xs ys : List Tree} {a b x y : Tree}
+    (aligned : (a,b) ∈ xs.zip ys) (mem : (x,y) ∈ projections a b) : (x,y) ∈ projectArgs xs ys := by
+  induction xs generalizing ys with
+  | nil => simp at aligned
+  | cons l ls ih =>
+    cases ys with
+    | nil => simp at aligned
+    | cons r rs =>
+      rcases List.mem_cons.mp aligned with eq | tail
+      · cases eq; exact List.mem_append_left _ mem
+      · exact List.mem_append_right _ (ih tail)
+
+private theorem write_projection {a b x y : Tree} (h : Projects x y a b) :
+    (x,y) ∈ projections a b := by
+  induction h with
+  | root => rw [projections.eq_def]; exact List.mem_cons_self
+  | child aligned _ ih =>
+    rw [projections]
+    exact List.mem_cons_of_mem _ (by simpa using in_projection_args aligned ih)
+
+private theorem eval_aligned {α} (m n : Interpretation α) {xs ys a b}
+    (entry : (a,b) ∈ xs.zip ys) (eq : m.evalArgs xs = n.evalArgs ys) : m.eval a = n.eval b := by
+  induction xs generalizing ys with
+  | nil => simp at entry
+  | cons l ls ih =>
+    cases ys with
+    | nil => simp at entry
+    | cons r rs =>
+      obtain ⟨head,tail⟩ := List.cons.inj eq
+      rcases List.mem_cons.mp entry with pair | child
+      · cases pair; exact head
+      · exact ih child tail
+
+private theorem Projects.eval_eq {α} (m n : Interpretation α) (apps : m.app = n.app)
+    {a b x y} (path : Projects x y a b) : m.eval a = n.eval b → m.eval x = n.eval y := by
+  induction path with
+  | root => exact id
+  | child aligned _ ih =>
+    intro parent
+    simp only [Interpretation.eval,apps] at parent
+    exact ih (eval_aligned m n aligned ((n.free_inj _) parent))
+
 /- Derivations remember which input pair was used at each hole. The two
 members of a hole may contain wholly independent variable names. -/
 mutual
   inductive Common (inputs : Observations) : Tree → Tree → Prop
-    | input {a b} : (a,b) ∈ inputs → Common inputs a b
+    | input {a b} : Observed inputs a b → Common inputs a b
     | atom (i s) : Common inputs (.leaf 1 i s) (.leaf 1 i s)
     | app (k f) {xs ys} : CommonArgs inputs xs ys → Common inputs (.app k f xs) (.app k f ys)
   inductive CommonArgs (inputs : Observations) : List Tree → List Tree → Prop
@@ -19,14 +99,16 @@ mutual
 end
 
 private theorem hit (inputs : Observations) (a b : Tree) :
-    (index inputs).contains (key a b) = true ↔ (a,b) ∈ inputs := by
+    (index inputs).contains (key a b) = true ↔ Observed inputs a b := by
   simp only [index,Std.HashSet.contains_iff_mem,Std.HashSet.mem_ofList,List.contains_iff_mem,List.mem_map]
   constructor
   · rintro ⟨⟨x,y⟩,mem,eq⟩
     have le : x = a := Tree.key_injective (congrArg Prod.fst eq)
     have re : y = b := Tree.key_injective (congrArg Prod.snd eq)
-    exact le ▸ re ▸ mem
-  · exact fun h => ⟨(a,b),h,rfl⟩
+    obtain ⟨e,entry,proj⟩ := List.mem_flatMap.mp mem
+    exact ⟨e,entry,le ▸ re ▸ read_projection _ _ _ _ proj⟩
+  · rintro ⟨e,entry,proj⟩
+    exact ⟨(a,b),List.mem_flatMap.mpr ⟨e,entry,write_projection proj⟩,rfl⟩
 
 mutual
   private theorem read_pair (inputs : Observations) (a b : Tree)
@@ -104,7 +186,9 @@ mutual
       (atoms : m.leaf 1 = n.leaf 1) {obs} (inputs : ∀ e ∈ obs, m.eval e.1 = n.eval e.2)
       {a b} (d : Common obs a b) : m.eval a = n.eval b := by
     cases d with
-    | input h => exact inputs _ h
+    | input h =>
+      obtain ⟨e,entry,proj⟩ := h
+      exact proj.eval_eq m n apps (inputs e entry)
     | atom => simp [Interpretation.eval,atoms]
     | app k f args => simp only [Interpretation.eval,apps,values_eq m n apps atoms inputs args]
   private theorem values_eq {α} (m n : Interpretation α) (apps : m.app = n.app)

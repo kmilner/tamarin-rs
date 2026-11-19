@@ -20,6 +20,11 @@ private def nodes : Array (Array UInt64) :=
 #guard !variantOverlapAgrees decls nodes #[0,0,1]
 #guard !variantOverlapAgrees decls nodes #[100,100]
 #guard variantOverlapAgrees decls nodes #[2,2]
+-- Equality of corresponding unary free applications determines their arguments.
+#guard variantOverlapAgrees decls nodes #[4,5,0,1]
+-- A commutative application may have been matched in the opposite orientation.
+#guard !variantOverlapAgrees decls nodes #[6,6,0,0]
+#guard !variantOverlapAgrees decls nodes #[7,7,0,0]
 
 -- Instantiate the original graph into a finite part of the free/C/AC algebra.
 -- Both variables range independently over two distinct atoms in each row.
