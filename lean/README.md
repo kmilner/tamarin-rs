@@ -169,7 +169,7 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | Pair projections, selected constructor rules, AC unit and cancellation, DH power towers and signed exponent products. Native-only lifts supported reductions through any declared free symbol absent from the active rule heads. At binary AC roots it can instantiate the RHS when every match yields the same normal value. | Extend positive rewriting to proper AC subproducts and multi-step results at active heads. |
-| Variants | Native-only joins positional destructors, flat XORs of Fresh variables and received-base DH powers on shared inputs. It specializes binary AC unit/cancellation families and positional destructor families to stable caller operands, including shared variables and constructor terms. Cancellation also supports two distinct Fresh variables and a Msg variable. Packed observations can include closed AC reductions with a unique normal value and free constructors around uniformly reducible terms. | Lift variant families through free constructors and compose them with outer operations when operands can narrow. Extend narrowing to arbitrary active equations, DH to unrestricted exponents, and ordering compatibility to joined answers in hybrid mode. |
+| Variants | Native-only joins positional destructors, flat XORs of Fresh variables and received-base DH powers on shared inputs. It specializes binary AC unit/cancellation families and positional destructor families to stable caller operands, including shared variables and constructor terms. Cancellation also supports two distinct Fresh variables and a Msg variable. Packed observations can include unique closed AC reductions and nested inert free constructors around any supported joint family. | Compose child families with outer operations that can themselves rewrite, including wider AC cancellation sums. Extend narrowing to arbitrary active equations, DH to unrestricted exponents, and ordering compatibility to joined answers in hybrid mode. |
 
 Run the generated coverage test from the repository root.
 
@@ -190,7 +190,8 @@ admit the identity substitution. A ground slot may rewrite before its value is r
 The [observation proof](Tamarin/ObservationRepresentative.lean) requires a unique normal value
 modulo C/AC for that slot. Other slots may still constrain shared variables.
 Binary cancellation observations with constructor-only operands are also mandatory in the
-bounded tuples alongside other such observations or identity slots.
+bounded tuples alongside other such observations or identity slots. The same requirement
+applies under nested hash constructors.
 Exploratory cases can gain coverage freely. The report
 prints the smallest generated deferral by syntax size for each theory and operation.
 Setting `MAUDE_PATH` also replays those witnesses against an independent Maude handle.
@@ -412,6 +413,16 @@ normalized assignment. Two independent projections `fst(x), snd(y)` yield four v
 while `fst(x), snd(x)` yield two. A received DH power `Y^r` paired with `r XOR s` gives 14
 variants in either observation order. Nested open projections such as `fst(snd(x))` and
 the mixed tuple `fst(Y), Y^a, a XOR b` still defer. [Leaf extension](Tamarin/VariantJoinLeaf.lean) · [Native join](../crates/tamarin-term/src/lean_unification/constructor_variants/variant_join.rs)
+
+Native-only can expose the children of a declared free constructor that has no active root
+rule. It solves all exposed observations together in their original order, preserving variables
+shared across siblings and the surrounding tuple. Thus `hash('a' XOR m)` has the same four
+variants as its child. A three-argument constructor containing `fst(x)` and `snd(x)` has two
+joint alternatives when its third argument is an independent variable. Lean proves that each
+constructor layer preserves exact coverage, unique reconstruction and pairwise irredundancy.
+A changing child must have the sort required by its slot. A protocol that records
+`box(h(x XOR 'a'), x)` reproduces Maude’s three-step cancellation proof in native-only mode.
+[Free constructor families](Tamarin/VariantFreeContext.lean) · [Protocol regression](../crates/tamarin-prover/tests/fixtures/native_free_variant_context.spthy)
 
 A complete operation family on distinct formal arguments also serves calls with fixed terms,
 narrower sorts, and repeated variables. Native-only unifies all actual operands with each

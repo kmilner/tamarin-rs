@@ -1,0 +1,16 @@
+theory FreeVariantContext
+begin
+
+builtins: hashing, xor
+functions: box/2
+
+rule Seed:
+  [ ] --> [ Pending('a') ]
+
+rule Observe:
+  [ Pending(x) ] --[ Seen(box(h(x XOR 'a'), x)) ]-> []
+
+lemma cancelled:
+  exists-trace "Ex #i. Seen(box(h(zero), 'a')) @ i"
+
+end

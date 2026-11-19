@@ -2864,6 +2864,10 @@ fn native_oracle_free_exponent_preserves_joint_gdh_observations() {
         vec![projection.clone(), product.clone(), power.clone()],
         vec![hash(projection.clone()), product.clone(), power.clone()],
         vec![
+            pair(hash(product.clone()), projection.clone()),
+            hash(power.clone()),
+        ],
+        vec![
             product.clone(),
             y.clone(),
             exp(a.clone(), product.clone()),
@@ -2951,6 +2955,7 @@ fn native_oracle_mixed_uniform_reductions_and_dh_powers_preserve_all_query_bindi
     for observed in [
         vec![erased.clone(), tower.clone(), peer.clone(), tower.clone()],
         vec![pair(erased.clone(), b.clone()), peer.clone()],
+        vec![pair(peer.clone(), erased.clone()), tower.clone()],
         vec![
             peer.clone(),
             tower.clone(),
@@ -5807,11 +5812,13 @@ fn native_oracle_specializes_variant_families_to_caller_operands() {
     for slots in cases {
         let q = f_app_list(slots.clone());
         let rows = native.variants(&q).unwrap_or_else(|e| panic!("{q}: {e}"));
-        let reference = oracle.variants(&q).unwrap();
+        let reference = canonical_small_ac_answers(oracle.variants(&q).unwrap());
+        assert_eq!(canonical_small_ac_answers(rows.clone()), reference, "{q}");
+        let wrapped = f_app_list(slots.iter().cloned().map(hash).collect());
         assert_eq!(
-            canonical_small_ac_answers(rows.clone()),
-            canonical_small_ac_answers(reference),
-            "{q}"
+            canonical_small_ac_answers(native.variants(&wrapped).unwrap()),
+            reference,
+            "{wrapped}"
         );
         for arm in rows {
             let subst = Subst::from_list(arm);
@@ -5824,6 +5831,91 @@ fn native_oracle_specializes_variant_families_to_caller_operands() {
                 );
             }
         }
+    }
+    assert_eq!(native.stats().var_count, 0);
+}
+
+#[test]
+fn native_oracle_free_variant_contexts_preserve_every_observation() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{fst, hash, snd, xor};
+    use crate::function_symbols::{Constructability, NoEqSym, Privacy};
+    use crate::maude_proc::MaudeError;
+    use crate::maude_sig::{hash_maude_sig, pair_maude_sig, xor_maude_sig};
+    use crate::subst::{apply_vterm, Subst};
+    use crate::term::{f_app_list, f_app_no_eq};
+
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let wrap = NoEqSym::new("record", 3, Privacy::Public, Constructability::Constructor);
+    let mut sig = hash_maude_sig()
+        .merge(xor_maude_sig())
+        .merge(pair_maude_sig());
+    sig.st_fun_syms.insert(wrap);
+    let sig = sig.refresh();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
+    let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 0)));
+    let a = pub_term("a");
+    let sum = xor(a.clone(), x.clone());
+    let record = |a, b, c| f_app_no_eq(wrap, vec![a, b, c]);
+    for (slots, count) in [
+        (vec![a.clone(), hash(sum.clone())], 4),
+        (
+            vec![record(hash(hash(sum.clone())), y.clone(), sum.clone())],
+            4,
+        ),
+        (
+            vec![
+                record(fst(x.clone()), snd(x.clone()), y.clone()),
+                hash(fst(x.clone())),
+            ],
+            2,
+        ),
+        (
+            vec![record(fst(x.clone()), snd(y.clone()), x.clone()), y.clone()],
+            4,
+        ),
+    ] {
+        let query = f_app_list(slots.clone());
+        let rows = native.variants(&query).unwrap();
+        assert_eq!(rows.len(), count, "{query}");
+        assert_eq!(
+            canonical_small_ac_answers(rows.clone()),
+            canonical_small_ac_answers(oracle.variants(&query).unwrap()),
+            "{query}"
+        );
+        for arm in rows {
+            let subst = Subst::from_list(arm);
+            for t in &slots {
+                let instance = apply_vterm(&subst, t.clone());
+                assert_eq!(
+                    native.reduce(&instance).unwrap(),
+                    oracle.reduce(&instance).unwrap(),
+                    "{instance}"
+                );
+            }
+        }
+    }
+    // An active parent can introduce its own root variants after the child
+    // narrows. Transparently exposing the child would lose these answers.
+    let active = hash(fst(sum.clone()));
+    let expected = oracle.variants(&active).unwrap();
+    assert!(expected.len() > oracle.variants(&sum).unwrap().len());
+    match native.variants(&active) {
+        Ok(rows) => assert_eq!(
+            canonical_small_ac_answers(rows),
+            canonical_small_ac_answers(expected)
+        ),
+        Err(MaudeError::UnsupportedOperation("variant generation")) => {}
+        other => panic!("{active}: {other:?}"),
     }
     assert_eq!(native.stats().var_count, 0);
 }

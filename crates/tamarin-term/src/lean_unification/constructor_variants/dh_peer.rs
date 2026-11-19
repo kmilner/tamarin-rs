@@ -153,10 +153,6 @@ impl RuleTable {
     }
 
     pub(super) fn dh_peer_variants(&self, query: &LNTerm) -> Result<Outcome, Error> {
-        self.dh_peer_rows(query, true)
-    }
-
-    pub(super) fn dh_peer_rows(&self, query: &LNTerm, ordered: bool) -> Result<Outcome, Error> {
         if !self.builtin_dh {
             return Ok(Outcome::Unsupported);
         }
@@ -169,18 +165,13 @@ impl RuleTable {
             if candidate.as_ref().is_some_and(|(seen, _, _)| *seen == t) {
                 continue;
             }
-            let fixed = if ordered {
-                self.stably_normal(t)?
-            } else {
-                self.has_representative(t, None)?
-            };
-            if fixed {
+            if self.stably_normal(t)? {
                 continue;
             }
             let Some((base, factors)) = self.dh_peer_factors(t)? else {
                 return Ok(Outcome::Unsupported);
             };
-            if (ordered && factors.len() != 1) || candidate.replace((t, base, factors)).is_some() {
+            if factors.len() != 1 || candidate.replace((t, base, factors)).is_some() {
                 return Ok(Outcome::Unsupported);
             }
         }
@@ -191,7 +182,7 @@ impl RuleTable {
         // on first use within each arm. This ordering is visible when the
         // prover prints a closed rule, even for alpha-equivalent answers.
         let vars = query_vars(query);
-        if ordered && !matches!(factors[0], Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh) {
+        if !matches!(factors[0], Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh) {
             let mut prior = BTreeSet::new();
             prior.extend(vars.iter().copied().take_while(|v| *v != base));
             if !fixed_name_order(query, &mut BTreeSet::new())
@@ -202,6 +193,14 @@ impl RuleTable {
         }
         ImageFamily::ReceivedBase(&factors).instantiate(&vars, base)
     }
+}
+
+pub(super) fn received_base_rows(
+    query: &LNTerm,
+    base: LVar,
+    factors: &[&LNTerm],
+) -> Result<Outcome, Error> {
+    ImageFamily::ReceivedBase(factors).instantiate(&query_vars(query), base)
 }
 
 pub(super) fn free_exponent_rows(

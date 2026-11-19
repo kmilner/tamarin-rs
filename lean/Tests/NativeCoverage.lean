@@ -48,11 +48,16 @@ def constructorOnly (th : Theory) (t : Expr) : Bool :=
 normal value, including when their active AC root actually rewrites. -/
 def identitySlot (th : Theory) (t : Expr) := t.variables.isEmpty || constructorOnly th t
 
+/-- Any number of inert hash constructors can surround a supported observation. -/
+def coveredSlot (th : Theory) (t : Expr) : Bool :=
+  identitySlot th t || match t with
+    | .free .hash args => coveredSlot th (args 0)
+    | .ac _ l r => constructorOnly th l && constructorOnly th r
+    | _ => false
+
 def variantExpectation (th : Theory) (ts : List Expr) : String :=
   if ts.all (identitySlot th) then "identity"
-  else if ts.all (fun t => identitySlot th t || match t with
-    | .ac _ l r => constructorOnly th l && constructorOnly th r
-    | _ => false) then "complete"
+  else if ts.all (coveredSlot th) then "complete"
   else "probe"
 
 /-- The mandatory constructor cases have an identity variant for every

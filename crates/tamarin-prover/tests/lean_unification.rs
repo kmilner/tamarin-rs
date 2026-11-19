@@ -118,6 +118,14 @@ fn joint_projection_variants_and_proof_match_maude_and_hybrid() {
 }
 
 #[test]
+fn cancellation_below_free_constructors_preserves_the_protocol_proof() {
+    assert_native_parity(
+        "native_free_variant_context.spthy",
+        &["cancelled (exists-trace): verified (3 steps)"],
+    );
+}
+
+#[test]
 fn dh_exchange_commutes_the_two_secret_exponents_without_maude() {
     assert_native_parity(
         "native_dh_agreement.spthy",

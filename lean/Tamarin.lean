@@ -65,6 +65,7 @@ import Tamarin.ResidualSearch
 import Tamarin.RootExclusion
 import Tamarin.ObservationRepresentative
 import Tamarin.VariantSpecialization
+import Tamarin.VariantFreeContext
 import Tamarin.FactoredAC
 import Tamarin.FactorAdmission
 import Tamarin.GraphUnification

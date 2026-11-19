@@ -1,4 +1,5 @@
 import Tamarin.ConstructorReduction
+import Tamarin.SortClash
 import Tamarin.SpecializedRule
 import Tamarin.StableVariants
 
@@ -47,6 +48,36 @@ theorem reduces_free_view (f : s.FreeSym) (inert : ∀ xs b, ¬ R (.free f xs) b
     | comm | ac => rintro _ ⟨⟩
   exact go red xs rfl
 
+/-- Project an arbitrary normal form back to its child normal forms. The
+parent's slot gives the sort of a changing child. A stable child's reduction
+is a basis equivalence and hence preserves even a narrower input sort. -/
+theorem normalForm_free_view (rules : List (Equation s)) (apps : ∀ r ∈ rules, Application r.lhs)
+    (f : s.FreeSym) (absent : Head.free f ∉ ruleHeads rules) (xs : Fin (s.arity f) → Term s)
+    (typed : ∀ i, HasSort (xs i) (s.inputSort f i))
+    (slots : ∀ i, Stable (ruleRoot rules) (xs i) ∨ ∀ ρ : Substitution s,
+      (ρ.apply (xs i)).rootSort = s.inputSort f i)
+    (ρ : Substitution s) (hn : Normalized (ruleRoot rules) ρ) {u : Term s}
+    (nf : NormalForm (ruleRoot rules) (ρ.apply (.free f xs)) u) :
+    ∃ us, u = .free f us ∧ ∀ i, NormalForm (ruleRoot rules) (ρ.apply (xs i)) (us i) := by
+  have inert as b : ¬ ruleRoot rules (.free f as) b := by
+    rintro ⟨r,mem,σ,eq,_⟩
+    apply absent
+    have hh := (congrArg head eq).trans (instance_head r (apps r mem) σ)
+    change head (.free f as) ∈ ruleHeads rules
+    rw [hh]
+    exact List.mem_map_of_mem mem
+  obtain ⟨us,rfl,red⟩ := reduces_free_view f inert nf.1
+  have out := Term.checkSort_complete (nf.2.2 _ ((HasSort.free f xs typed).subst ρ.image ρ.sorted))
+  simp only [Term.checkSort, Bool.and_eq_true, List.all_eq_true] at out
+  refine ⟨us,rfl,fun i => ⟨red i,normal_free_child f us nf.2.1 i,?_⟩⟩
+  intro sort hs
+  rcases slots i with stable | same
+  · have eq := normal_reduces_equiv (red i) (stable ρ hn)
+    exact Term.checkSort_sound _ _ ((SortClash.check_equiv eq sort) ▸ Term.checkSort_complete hs)
+  · apply HasSort.widen _ (Term.rootSort_le hs)
+    rw [same ρ]
+    exact Term.checkSort_sound _ _ (out.2 i (List.mem_finRange i))
+
 /-- Representatives compose below an inert free symbol. An already-stable
 child may have a narrower sort. For a changing child, the slot must certify
 every sort needed to project a full normal form back to that child. -/
@@ -59,26 +90,8 @@ theorem Representative.free (rules : List (Equation s)) (apps : ∀ r ∈ rules,
     Representative (ruleRoot rules) (.free f xs) (.free f ys) := by
   refine ⟨fun ρ hn => free_normalForm rules apps f absent _ _ (fun i => (reps i).normal ρ hn), ?_, ?_⟩
   · intro ρ hn u nf
-    have inert as b : ¬ ruleRoot rules (.free f as) b := by
-      rintro ⟨r,mem,σ,eq,_⟩
-      apply absent
-      have hh := (congrArg head eq).trans (instance_head r (apps r mem) σ)
-      change head (.free f as) ∈ ruleHeads rules
-      rw [hh]
-      exact List.mem_map_of_mem mem
-    obtain ⟨us,rfl,red⟩ := reduces_free_view f inert nf.1
-    have out := Term.checkSort_complete (nf.2.2 _ ((HasSort.free f xs typed).subst ρ.image ρ.sorted))
-    simp only [Term.checkSort, Bool.and_eq_true, List.all_eq_true] at out
-    apply EquivB.free
-    intro i
-    have ni := normal_free_child f us nf.2.1 i
-    rcases slots i with stable | same
-    · have before := stable ρ hn
-      exact (normal_reduces_equiv (red i) before).symm.trans
-        (normal_reduces_equiv ((reps i).normal ρ hn).1 before)
-    · apply (reps i).unique ρ hn _ ⟨red i,ni,fun _ h => .widen ?_ (Term.rootSort_le h)⟩
-      rw [same ρ]
-      exact Term.checkSort_sound _ _ (out.2 i (List.mem_finRange i))
+    obtain ⟨us,rfl,forms⟩ := normalForm_free_view rules apps f absent xs typed slots ρ hn nf
+    exact .free _ _ _ (fun i => (reps i).unique ρ hn _ (forms i))
   · rintro v ⟨i,occ⟩
     exact ⟨i,(reps i).variables v occ⟩
 

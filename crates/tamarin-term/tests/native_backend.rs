@@ -1265,10 +1265,10 @@ fn constructor_variants_check_declared_operators_and_all_rule_heads() {
         ]
     );
     assert_eq!(h.stats().var_count, 0);
-    assert!(matches!(
-        h.variants(&open),
-        Err(MaudeError::UnsupportedOperation("variant generation"))
-    ));
+    let exposed = f_app_list(vec![x.clone(), sdec(x.clone(), k.clone())]);
+    let expected = h.variants(&exposed).unwrap();
+    assert_eq!(expected.len(), 2);
+    assert_eq!(h.variants(&open).unwrap(), expected);
     // Turning a former constructor into a defined head must invalidate the
     // identity recipe even if the caller didn't refresh derived symbol sets.
     sig.st_rules.insert(CtxtStRule::new(

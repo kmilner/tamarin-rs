@@ -116,12 +116,14 @@ fn prune_variable_instances(rows: &mut Vec<Row>) -> Result<(), Error> {
 }
 
 impl RuleTable {
-    /// A packed slot can omit narrowing only if its normal value commutes
-    /// with every normalized caller substitution. Inputs are already sorted.
-    pub(super) fn has_representative(
+    /// Collect the narrowing problems for a sorted observation, borrowing the
+    /// original nodes. Exact.wrapFree exposes every child of an inert free
+    /// head. The tuple join supplies one shared substitution for all leaves.
+    fn collect_variant_applications<'a>(
         &self,
-        t: &LNTerm,
+        t: &'a LNTerm,
         slot: Option<LSort>,
+        applications: &mut Vec<&'a LNTerm>,
     ) -> Result<bool, Error> {
         let Term::App(head, args) = t else {
             return Ok(true);
@@ -131,34 +133,39 @@ impl RuleTable {
                 .declaration(*head)
                 .is_none_or(|(_, _, sort)| sort != required)
         {
-            // A stable child remains normal even at a narrower sort. A changing
-            // child needs its slot to establish every sort of its result.
+            // The parent slot cannot certify the narrower result sort of a
+            // changing child. A stable child always retains its input sorts.
             return self.stably_normal_native(t);
         }
         if let FunSym::NoEq(f) = head
             && !self.patterns.contains_key(f)
         {
-            // All non-nullary free declarations in the emitted module take Msg arguments.
-            for arg in args.iter() {
-                if !self.has_representative(arg, Some(LSort::Msg))? {
+            for child in args.iter() {
+                // Every non-nullary free declaration in the module takes Msg arguments.
+                if !self.collect_variant_applications(child, Some(LSort::Msg), applications)? {
                     return Ok(false);
                 }
             }
             return Ok(true);
         }
-        if self.stably_normal_native(t)? || self.uniform_reduct(t)?.is_some() {
+        if applications.contains(&t)
+            || self.stably_normal_native(t)?
+            || self.uniform_reduct(t)?.is_some()
+        {
             return Ok(true);
         }
-        if !crate::vterm::is_ground_vterm(t) {
-            return Ok(false);
+        if crate::vterm::is_ground_vterm(t) {
+            // These reducers establish uniqueness as well as reachability.
+            let value = match self.cancellation_normal(t)? {
+                Some(n) => Some(n),
+                None => self.ac_root_reduce(t)?,
+            };
+            if value.as_ref().is_some_and(crate::vterm::is_ground_vterm) {
+                return Ok(true);
+            }
         }
-        // These reducers certify uniqueness modulo B as well as reachability.
-        // An arbitrary successful ordinary reduction supplies only one value.
-        let value = match self.cancellation_normal(t)? {
-            Some(n) => Some(n),
-            None => self.ac_root_reduce(t)?,
-        };
-        Ok(value.as_ref().is_some_and(crate::vterm::is_ground_vterm))
+        applications.push(t);
+        Ok(true)
     }
 
     fn join_normal(&self, t: &LNTerm) -> Result<Option<bool>, Error> {
@@ -340,8 +347,8 @@ impl RuleTable {
                 arms.into_iter().map(|(s, v)| open_row(&s, v)).collect(),
             ));
         }
-        let family = if self.dh_peer_factors(app)?.is_some() {
-            self.dh_peer_rows(app, false)?
+        let family = if let Some((base, factors)) = self.dh_peer_factors(app)? {
+            super::dh_peer::received_base_rows(app, base, &factors)?
         } else if let family @ Outcome::Complete(_) = self.fresh_xor_variants(app)? {
             family
         } else {
@@ -464,26 +471,23 @@ impl RuleTable {
             if self
                 .collect(t, &mut Vec::new(), InputDomain::Sorted)
                 .is_none()
+                || !self.collect_variant_applications(t, None, &mut applications)?
             {
                 return Ok(Outcome::Unsupported);
             }
-            // A uniform reduction has a stable normal value. Its original
-            // variables are still part of the final binding projection.
-            if applications.contains(&t) || self.has_representative(t, None)? {
-                continue;
-            }
-            applications.push(t);
         }
         let Some((first, others)) = applications.split_first() else {
             return Ok(Outcome::Complete(vec![vec![]]));
         };
         if self.builtin_dh {
             if others.is_empty()
-                && let done @ Outcome::Complete(_) = self.dh_peer_rows(query, false)?
+                && let Some((base, factors)) = self.dh_peer_factors(first)?
+                && let done @ Outcome::Complete(_) =
+                    super::dh_peer::received_base_rows(query, base, &factors)?
             {
                 return Ok(done);
             }
-            if let done @ Outcome::Complete(_) = self.dh_exponent_variants(query)? {
+            if let done @ Outcome::Complete(_) = self.dh_exponent_variants(query, &applications)? {
                 return Ok(done);
             }
         }

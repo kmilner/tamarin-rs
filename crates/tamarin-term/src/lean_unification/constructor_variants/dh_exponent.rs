@@ -1,7 +1,7 @@
 //! Joint observations of an unconstrained exponent and its product with
 //! one positive factor. All varying observations must use the same pair.
 //! An opaque power base can never specialize to another power or DH-neutral.
-use super::{dh_peer::free_exponent_rows, InputDomain, RuleTable};
+use super::{dh_peer::free_exponent_rows, RuleTable};
 use crate::function_symbols::{dh_neutral_sym, exp_sym, AcSym, FunSym};
 use crate::lean_unification::{Error, Outcome};
 use crate::lterm::{LNTerm, LSort, LVar};
@@ -70,25 +70,16 @@ impl RuleTable {
         Ok(None)
     }
 
-    pub(super) fn dh_exponent_variants(&self, query: &LNTerm) -> Result<Outcome, Error> {
-        let terms = match query {
-            Term::App(FunSym::List, xs) => xs.as_ref(),
-            _ => std::slice::from_ref(query),
-        };
+    /// The caller validated the full query and collected its varying leaves.
+    /// Witnesses are opened against every variable in the original query.
+    pub(super) fn dh_exponent_variants(
+        &self,
+        query: &LNTerm,
+        applications: &[&LNTerm],
+    ) -> Result<Outcome, Error> {
         let mut variable = None;
         let mut factor = None;
-        for t in terms {
-            // The peer-family dispatcher can transfer control on its first
-            // unsupported root, before it checks the rest of the tuple.
-            if self
-                .collect(t, &mut Vec::new(), InputDomain::Sorted)
-                .is_none()
-            {
-                return Ok(Outcome::Unsupported);
-            }
-            if self.has_representative(t, None)? {
-                continue;
-            }
+        for &t in applications {
             let Some((v, next)) = self.exponent_observation(t)? else {
                 return Ok(Outcome::Unsupported);
             };
