@@ -243,12 +243,13 @@ def dhCoverage : IO Unit := do
       dhCode slot rule.equation.1, dhCode slot rule.equation.2])
   let tower := DHPeer.Expr.pow (.pow g m) r
   for (t,count) in [(DHPeer.Expr.pow g m,2), (.pow m r,7), (.inv r,1), (.inv m,4), (.mul m r,6),
-      (.mul m m,4), (.pow (.pow g m) (.inv r),6), (.mul m (.inv r),6), (.inv (.mul m r),8)] do
+      (.mul m m,4), (.mul m n,47), (.pow (.pow g m) (.inv r),6), (.mul m (.inv r),6), (.inv (.mul m r),8)] do
     emitDH "variants" ("rows=" ++ toString count) [t,m]
   emitDH "variants" "rows=12" [tower,.pow g n]
   emitDH "variants" "rows=14" [tower,.pow (.pow g m) (.var (.atom true))]
-  for t in [DHPeer.Expr.mul m n, .pow m n, .pow (.pow g m) n, .pow g (.mul m n), .pow (.pow n m) r] do
-    emitDH "variants" "probe" [t,m]
+  for t in [DHPeer.Expr.pow m n, .pow (.pow g m) n, .pow g (.mul m n)] do
+    emitDH "variants" "rows=48" [t,m]
+  emitDH "variants" "probe-rows=160" [.pow (.pow n m) r,m]
   for t in [DHPeer.Expr.pow g r,.inv r,.mul r r] do
     for op in ["unify","match"] do
       emitDH op "yes" [m,t,m,t]

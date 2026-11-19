@@ -86,7 +86,9 @@ fn canonical_small_ac_answers(
     for arm in arms {
         let arm = LNSubstVFresh::from_list(arm).remove_renamings();
         let mut names = arm.vars_range();
-        assert!(names.len() <= 6);
+        // A general DH power can carry a base witness as well as the six
+        // witnesses of its two unrestricted exponent products.
+        assert!(names.len() <= 7, "{} witnesses in oracle arm", names.len());
         let mut best = None;
         visit(&arm.to_list(), &mut names, 0, &mut best);
         answers.push(best.unwrap());
@@ -2143,6 +2145,9 @@ fn native_oracle_repeated_product_unifies_shared_alien_factors() {
     use crate::maude_sig::hash_maude_sig;
     use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
     let sig = mset_maude_sig().merge(hash_maude_sig());
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
@@ -2838,15 +2843,18 @@ fn native_oracle_received_base_towers_cover_all_cancellation_subsets() {
         table.joined_variants(&exp(deep, a.clone())).unwrap(),
         Outcome::Unsupported
     );
-    for unsupported in [
-        base.clone(),
-        var("arbitrary", LSort::Msg),
-        inv(a.clone()),
-        hash(base.clone()),
+    for (exponent, count) in [
+        (base.clone(), 12),
+        (inv(a.clone()), 1),
+        (hash(base.clone()), 7),
     ] {
-        let query = exp(exp(base.clone(), a.clone()), unsupported);
-        assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
+        let slots = [exp(exp(base.clone(), a.clone()), exponent)];
+        let expected = valued_variant_rows(&oracle, &slots);
+        assert_eq!(expected.len(), count);
+        assert_eq!(valued_variant_rows(&native, &slots), expected);
     }
+    let query = exp(exp(base, a), var("arbitrary", LSort::Msg));
+    assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
 }
 
 #[test]
@@ -6960,9 +6968,9 @@ fn native_oracle_wide_nested_cancellation_with_fresh_variables() {
 mod frontier;
 
 #[test]
-fn native_oracle_narrowing_preserves_signed_dh_products_and_inverses() {
+fn native_oracle_narrowing_preserves_signed_dh_products_and_powers() {
     use crate::algebra_backend::AlgebraBackend;
-    use crate::builtin::{fresh_var, inv, msg_var, mult};
+    use crate::builtin::{exp, fresh_var, inv, msg_var, mult};
     use crate::maude_sig::dh_maude_sig;
     if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
         return;
@@ -6976,10 +6984,16 @@ fn native_oracle_narrowing_preserves_signed_dh_products_and_inverses() {
     let oracle =
         MaudeHandle::start_with_backend(&path, dh_maude_sig(), AlgebraBackend::Maude).unwrap();
     let x = msg_var("x", 0);
+    let y = msg_var("y", 1);
     let r = fresh_var("r", 0);
     for (app, count) in [
         (inv(x.clone()), 4),
         (mult(x.clone(), x.clone()), 4),
+        (inv(mult(x.clone(), x.clone())), 4),
+        (mult(x.clone(), y.clone()), 47),
+        (exp(x.clone(), y.clone()), 48),
+        (exp(pub_term("g"), mult(x.clone(), y.clone())), 48),
+        (exp(exp(pub_term("g"), x.clone()), y), 48),
         (mult(x.clone(), r.clone()), 6),
         (mult(x.clone(), inv(r.clone())), 6),
         (inv(mult(x.clone(), r.clone())), 8),

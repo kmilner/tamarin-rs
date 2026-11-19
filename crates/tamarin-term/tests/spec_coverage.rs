@@ -270,10 +270,12 @@ fn public_backend_meets_generated_coverage_floor() {
         }
         let (sig, symbol) = presentation(theory);
         let ts: Vec<_> = fields.map(|e| term(e, symbol)).collect();
-        if (op, expected) == ("reduce", "exact")
+        let exploratory = expected == "probe" || expected.starts_with("probe-rows=");
+        let check = expected.strip_prefix("probe-").unwrap_or(expected);
+        if ((op, check) == ("reduce", "exact") || (theory, op) == ("dh", "variants"))
             && let Some(oracle) = oracles.as_ref().and_then(|handles| handles.get(theory))
         {
-            exercise(oracle, op, expected, &ts).expect(line);
+            exercise(oracle, op, check, &ts).expect(line);
         }
         let h = MaudeHandle::start_with_backend(
             "/nonexistent",
@@ -282,16 +284,16 @@ fn public_backend_meets_generated_coverage_floor() {
         )
         .unwrap();
         let coverage = report.entry((theory, op)).or_insert_with(Coverage::default);
-        match exercise(&h, op, expected, &ts) {
+        match exercise(&h, op, check, &ts) {
             Ok(()) => {
                 h.check_backend_status().unwrap();
-                if expected == "probe" {
+                if exploratory {
                     coverage.extra += 1
                 } else {
                     coverage.required += 1
                 }
             }
-            Err(MaudeError::UnsupportedOperation(_)) if expected == "probe" => {
+            Err(MaudeError::UnsupportedOperation(_)) if exploratory => {
                 coverage.deferred += 1;
                 let size = line.split('\t').skip(3).map(|t| t.split('.').count()).sum();
                 let witness = (size, line);

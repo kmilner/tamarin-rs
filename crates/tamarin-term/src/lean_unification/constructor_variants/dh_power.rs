@@ -1,7 +1,7 @@
 //! Normalize a DH power by root rewrites and normalization of its operands.
 use super::RuleTable;
 use crate::builtin::exp;
-use crate::function_symbols::{exp_sym, FunSym};
+use crate::function_symbols::{dh_neutral_sym, exp_sym, one_sym, FunSym};
 use crate::lean_unification::Error;
 use crate::lterm::LNTerm;
 use crate::term::Term;
@@ -14,6 +14,43 @@ fn power_args(t: &LNTerm) -> Option<&[LNTerm]> {
 }
 
 impl RuleTable {
+    /// PowerBucket.normal_iff reduces a sorted power's normality check to
+    /// its three root rules and normal children. Group heads have their own
+    /// corresponding criterion. The caller checks the children in both cases.
+    pub(super) fn dh_root_normal(&self, t: &LNTerm) -> Option<bool> {
+        if !self.builtin_dh {
+            return None;
+        }
+        let Some(args) = power_args(t) else {
+            return self.dh_group_root_normal(t);
+        };
+        let base_rewrites = matches!(&args[0], Term::App(FunSym::NoEq(f), _)
+            if *f == exp_sym() || *f == dh_neutral_sym());
+        let exponent_is_unit = matches!(&args[1], Term::App(FunSym::NoEq(f), _) if *f == one_sym());
+        Some(!base_rewrites && !exponent_is_unit)
+    }
+
+    /// An exact DH inventory gives signed expressions a unique normal value.
+    /// A power spine also has a unique value when its base stays normal and
+    /// every exponent has a defined signed count under the same substitution.
+    pub(super) fn dh_unique_instances(&self, t: &LNTerm) -> Result<bool, Error> {
+        if !self.builtin_dh {
+            return Ok(false);
+        }
+        let Some(mut args) = power_args(t) else {
+            return self.dh_signed_expression(t);
+        };
+        loop {
+            if !self.dh_signed_expression(&args[1])? {
+                return Ok(false);
+            }
+            let Some(inner) = power_args(&args[0]) else {
+                return self.stably_normal_native(&args[0]);
+            };
+            args = inner;
+        }
+    }
+
     fn rewrite_power_root(&self, t: &LNTerm) -> Result<Option<LNTerm>, Error> {
         if let Some(rules) = self.free_rules.get(&exp_sym()) {
             for rule in rules {
@@ -66,5 +103,38 @@ impl RuleTable {
             current = next;
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::builtin::{fst, hash, inv, msg_var, mult};
+    use crate::maude_sig::{dh_maude_sig, hash_maude_sig, pair_maude_sig};
+    use crate::subterm_rule::{CtxtStRule, StRhs};
+
+    #[test]
+    fn power_spine_uniqueness_requires_stable_leaves_and_exact_live_rules() {
+        let mut sig = dh_maude_sig()
+            .merge(hash_maude_sig())
+            .merge(pair_maude_sig());
+        let table = RuleTable::new(&sig).unwrap();
+        let x = msg_var("x", 0);
+        let product = mult(x.clone(), hash(x.clone()));
+        let power = exp(exp(x.clone(), product.clone()), inv(x.clone()));
+        assert!(table.dh_unique_instances(&power).unwrap());
+        assert!(!table.dh_unique_instances(&exp(product, x.clone())).unwrap());
+        assert!(!table
+            .dh_unique_instances(&exp(x.clone(), fst(x.clone())))
+            .unwrap());
+        sig.st_rules.insert(CtxtStRule::new(
+            exp(x.clone(), x.clone()),
+            StRhs {
+                positions: vec![vec![0]],
+                term: x,
+            },
+        ));
+        let changed = RuleTable::new(&sig).unwrap();
+        assert!(!changed.dh_unique_instances(&power).unwrap());
     }
 }

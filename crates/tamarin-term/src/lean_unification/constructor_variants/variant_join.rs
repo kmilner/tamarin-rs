@@ -214,6 +214,9 @@ struct JoinSearch {
     normal: FxHashMap<LNTerm, Option<bool>>,
     pairs: usize,
     matching: usize,
+    // All ordinary narrowing frontiers in this query share this allowance
+    // for expanded terms, concrete rewrites and state/terminal comparisons.
+    frontier_nodes: usize,
 }
 
 impl JoinSearch {
@@ -223,6 +226,7 @@ impl JoinSearch {
             normal: FxHashMap::default(),
             pairs: 4096,
             matching: 100_000,
+            frontier_nodes: 1 << 21,
         }
     }
 }

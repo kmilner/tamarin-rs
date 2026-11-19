@@ -171,14 +171,13 @@ impl RuleTable {
     /// For a sorted substitution with normal images, these expressions have
     /// a defined signed count for every opaque factor class. The inventory's
     /// signed-count invariant makes all reachable normal values agree.
-    pub(super) fn dh_unique_instances(&self, t: &LNTerm) -> Result<bool, Error> {
-        if !self.builtin_dh {
-            return Ok(false);
-        }
+    pub(super) fn dh_signed_expression(&self, t: &LNTerm) -> Result<bool, Error> {
         if is_group_operation(t) {
-            let Term::App(_, args) = t else { unreachable!() };
+            let Term::App(_, args) = t else {
+                unreachable!()
+            };
             for arg in args.iter() {
-                if !self.dh_unique_instances(arg)? {
+                if !self.dh_signed_expression(arg)? {
                     return Ok(false);
                 }
             }
@@ -366,7 +365,10 @@ mod tests {
         ] {
             assert_eq!(table.dh_group_root_normal(&term), Some(clear), "{term}");
         }
-        assert_eq!(table.dh_product_normal(&dirty).unwrap(), Some(inv(a.clone())));
+        assert_eq!(
+            table.dh_product_normal(&dirty).unwrap(),
+            Some(inv(a.clone()))
+        );
 
         for (head, args) in [
             (FunSym::NoEq(one_sym()), vec![a.clone()]),

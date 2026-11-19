@@ -209,6 +209,11 @@ DH signature. It exercises all four public operations, including both sides of s
 equations. Joint observations of two distinct stable factors on the same open exponent
 give 14 variants. An observation with an independent exponent gives 12. Each count is
 mandatory, and separate Maude comparisons check all input images and reduced values.
+The product of two independent Msg variables has 47 variants. Their power `X^Y`,
+the tower `(g^X)^Y` and the flat power `g^(X*Y)` each have 48. Across these five
+presentations, 24,586 of 24,587 generated requests complete in native-only mode.
+The remaining request observes `(B^Y)^r` alongside `Y`, with independent Msg inputs
+and a Fresh exponent `r`. Maude returns 160 rows.
 The report prints the smallest deferred request per operation and compares it with Maude
 when `MAUDE_PATH` is set.
 The report counts syntactic requests in this bounded grammar. Protocol regressions
@@ -412,11 +417,24 @@ also considers a fresh operand for the entire remainder. A rule that reproduces 
 extended sides with one sorted substitution already covers that branch. A single substitution
 rebuilds the changed term and all caller images. The search can fold a state only when one
 earlier row covers all those terms together. It checks whether two terminal rows, including
-fresh copies of the same row, can give different normal values at the same input. Missing
+fresh copies of the same row, can give different normal values at the same input.
+Products and inverses over stably normal leaves have a separate proof that all normal
+results agree. The proof extends to a tower with a stably normal base and arbitrary
+signed exponents, so these expressions can skip the pairwise overlap check. Missing
 rule buckets, incomplete unification and exhausted budgets defer the query. Lean proves these
 conditions suffice for exact coverage and unique values. Rust still enumerates and checks the
 frontier. [Position coverage](Tamarin/NarrowingPositions.lean) ·
 [Symbolic successors](Tamarin/SymbolicNarrowing.lean) · [Closed frontier and overlap proofs](Tamarin/VariantFrontier.lean)
+
+For unrestricted signed products the Lean specification also relates simultaneous
+normal-value equations to nonnegative integer matrices. Each opaque factor has a
+signed multiplicity in each caller input. Its signs select a matrix, and its absolute
+multiplicities must lie in that matrix’s span. The proof covers repeated variables,
+nested inverses and shared outputs together. Constructing a finite substitution family
+from these per-factor generators is still open. The next DH milestone is to combine
+those families with the possible shapes of a normalized message base (neutral, a
+previous power, or another head), carrying one substitution through all observations.
+[Signed multiplicity refinement](Tamarin/DHSignedMatrix.lean) · [Power cases](Tamarin/DHBase.lean)
 
 Broader deployment still requires checking the Rust representation against its Lean model
 and carrying native-only failure handling through interactive proof publication. The live
@@ -661,6 +679,11 @@ On `experiments/A-GDH2`, generating the closed theory took a median of 1.15 s
 native-only and 15.09 s with Maude across three fresh, single-worker runs per backend
 after warm-up on the final build, during local verification. This measures rule variants
 and theory closure, before source saturation.
+
+For the 47 variants of `[X*Y, X]` under DH, the native median was 414 ms and the
+Maude median was 275 ms. Five alternating fresh-handle measurements followed one
+warm-up per backend in the optimized `ci` profile. Timing covered the public variants
+call, excluding handle startup and the independent answer comparison.
 
 On the captured 16-equation GDH query, native unification took about 0.35 s after
 context selection and query-local packet reuse, down from 3.52 s with the initial

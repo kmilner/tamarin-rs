@@ -17,6 +17,7 @@ struct Frontier<'a> {
     search: &'a mut JoinSearch,
     original: &'a FxHashSet<u64>,
     states: Vec<IndexedRow>,
+    seen_normal_inputs: BTreeSet<Row>,
     terminals: BTreeSet<Row>,
 }
 
@@ -73,6 +74,7 @@ impl RuleTable {
             search,
             original,
             states: Vec::new(),
+            seen_normal_inputs: BTreeSet::new(),
             terminals: BTreeSet::new(),
         };
         let seed = Row {
@@ -105,13 +107,19 @@ impl RuleTable {
             i += 1;
         }
         let terminals = std::mem::take(&mut frontier.terminals);
-        let Some(kept) = self.prune_specializations(terminals, &mut frontier.search.matching)?
+        let Some(kept) =
+            self.prune_specializations(terminals, &mut frontier.search.frontier_nodes)?
         else {
             return Ok(None);
         };
+        let unique_instances = self.dh_unique_instances(app)?;
         for (i, r) in kept.iter().enumerate() {
             let subst = Subst::from_list(keys.iter().copied().zip(r.images.iter().cloned()));
-            if !residual::charge_expansion(&mut frontier.search.matching, [app], Some(&subst))? {
+            if !residual::charge_expansion(
+                &mut frontier.search.frontier_nodes,
+                [app],
+                Some(&subst),
+            )? {
                 return Ok(None);
             }
             let instantiated = apply_vterm(&subst, app.clone());
@@ -122,10 +130,13 @@ impl RuleTable {
                 return Ok(None);
             }
             // Packed observations may reuse this value for every appearance
-            // of the input. Check all overlaps, including a fresh self-copy.
-            for other in &kept[..=i] {
-                if !frontier.functional(r, other)? {
-                    return Ok(None);
+            // of the input. Without a uniqueness theorem, check all overlaps,
+            // including one with a fresh copy of this very row.
+            if !unique_instances {
+                for other in &kept[..=i] {
+                    if !frontier.functional(r, other)? {
+                        return Ok(None);
+                    }
                 }
             }
         }
@@ -146,8 +157,8 @@ impl Frontier<'_> {
         if let Some(&Some(known)) = self.search.normal.get(t) {
             return Ok(Some(known));
         }
-        let status = if let Some(root) = self.table.dh_group_root_normal(t) {
-            if !residual::charge_expansion(&mut self.search.matching, [t], None)? {
+        let status = if let Some(root) = self.table.dh_root_normal(t) {
+            if !residual::charge_expansion(&mut self.search.frontier_nodes, [t], None)? {
                 return Ok(None);
             }
             let Term::App(_, args) = t else {
@@ -169,7 +180,7 @@ impl Frontier<'_> {
             result
         } else {
             self.table
-                .successors(t, &mut self.search.matching)?
+                .successors(t, &mut self.search.frontier_nodes)?
                 .map(|xs| xs.is_empty())
         };
         self.search.normal.insert(t.clone(), status);
@@ -177,9 +188,6 @@ impl Frontier<'_> {
     }
 
     fn insert(&mut self, r: Row) -> Result<bool, Error> {
-        if !self.charge() {
-            return Ok(false);
-        }
         let Some(row) = self.table.index_row(r) else {
             return Ok(false);
         };
@@ -194,12 +202,22 @@ impl Frontier<'_> {
         if unknown {
             return Ok(false);
         }
+        // The same fully renamed candidate can arise through several rules
+        // or CSU arms. Its already-checked fold remains valid as states grow.
+        if !self.seen_normal_inputs.insert(row.row.clone()) {
+            return Ok(true);
+        }
         for prior in &self.states {
-            match prior.subsumes(&row, &mut self.search.matching)? {
+            match prior.subsumes(&row, &mut self.search.frontier_nodes)? {
                 Some(true) => return Ok(true),
                 Some(false) => {}
                 None => return Ok(false),
             }
+        }
+        // Each actual state, CSU and overlap counts once. Instantiated arms
+        // (including discarded ones) were already charged by expanded size.
+        if !self.charge() {
+            return Ok(false);
         }
         self.states.push(row);
         Ok(true)
@@ -296,7 +314,7 @@ impl Frontier<'_> {
         let context = replace_at(&row.values[0], path, &rule.rhs);
         for subst in arms {
             if !residual::charge_expansion(
-                &mut self.search.matching,
+                &mut self.search.frontier_nodes,
                 row.images
                     .iter()
                     .chain([&context, &rule.rhs, &rule.lhs, source]),
@@ -361,7 +379,7 @@ impl Frontier<'_> {
         };
         for subst in arms {
             if !residual::charge_expansion(
-                &mut self.search.matching,
+                &mut self.search.frontier_nodes,
                 left.iter().chain(right.iter()),
                 Some(&subst),
             )? {
