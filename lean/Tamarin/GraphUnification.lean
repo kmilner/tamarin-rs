@@ -1,6 +1,5 @@
 import TamarinRuntime.GraphUnification
-import Tamarin.ACPrincipalRay
-import Tamarin.ACRayPacket
+import Tamarin.ACGraphAnswers
 import Tamarin.GraphMatrixRefinement
 import Tamarin.FactoredAC
 
@@ -20,7 +19,7 @@ theorem hasConstraint_iff : ∀ rows, hasConstraint rows = true ↔ Nontrivial r
       fun h => by cases h with | here h => exact Or.inl h | later h => exact Or.inr h⟩
 
 def Required (width : UInt64) (m : Matrix) : Prop :=
-  Homogeneous.Admitted width m ∨ RayPacket.Admitted @ACBasis.PrincipalRay.Within width m
+  Homogeneous.AdmittedUpTo 64 width m ∨ RayPacket.Admitted @ACBasis.PrincipalRay.Within width m
 
 abbrev RepresentsMatrix := GraphMatrix.RepresentsUpTo RayPacket.maxWidth
 
@@ -62,7 +61,7 @@ structure Correct (run : Kernel) : Prop where
     Result r θ fr w out
 
 theorem runWith_correct {build solve} (counts : GraphMatrix.CorrectUpTo RayPacket.maxWidth build)
-    (solver : Homogeneous.Correct solve)
+    (solver : Homogeneous.CorrectUpTo 64 solve)
     (principal : ∀ n m, RayPacket.Admitted @ACBasis.PrincipalRay.Within n m → (solve n m).isSome) :
     Correct (runWith build solve) where
   wire.valid := by
@@ -78,11 +77,10 @@ theorem runWith_correct {build solve} (counts : GraphMatrix.CorrectUpTo RayPacke
     obtain ⟨m, hm, _, solved⟩ := ran_with ran
     obtain ⟨matrix, fits⟩ := GraphMatrixRefinement.matrix_of_build counts c f rows n fr columns
       decoded represented.layout hm
-    exact of_factoring_slots solver r f rows n fr θ fact m matrix fits out solved w inj typed fresh
+    exact of_factoring_slots (solver.restrict (by decide)) r f rows n fr θ fact m matrix fits out solved w inj typed fresh
 
 theorem run_correct : Correct run := runWith_correct (GraphMatrix.buildUpTo_correct _)
-  (RayPacket.correct ACBasis.PrincipalRay.run_sound)
-  (RayPacket.completes ACBasis.PrincipalRay.run_sound ACBasis.PrincipalRay.run_complete)
+  GraphAnswers.correct GraphAnswers.principal
 
 /-- For an unfactored query the returned packet denotes precisely all sorted solutions.
 A single instantiation explains every variable of a solution on the chosen arm. -/

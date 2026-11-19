@@ -536,6 +536,8 @@ EXPORT_MUTATIONS.extend([
      "  GraphUnification.run width symbol sort decls (nodes.map fun row => "
      "if row[0]? == some 4 then row.extract 0 4 else row) roots",
      "theorem exportedGraphHomogeneous_correct"),
+    ("graph_reinstates_32_column_limit", GRAPH_RUN, "  if width ≤ 32 then " + GRAPH_RUN.strip() + " else none",
+     "theorem exportedGraphHomogeneous_correct"),
     ("graph_always_defers", GRAPH_RUN, "  none", "theorem exportedGraphHomogeneous_correct"),
 ])
 
@@ -715,6 +717,8 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedAnswerProjection_correct"),
     ("projection_collapses_distinct_witnesses", PROJECT,
      "  AnswerProjection.project width (answers.map fun a => a.map fun r => r.map fun _ => 0)",
+     "theorem exportedAnswerProjection_correct"),
+    ("projection_reinstates_32_column_limit", PROJECT, "  if width ≤ 32 then " + PROJECT.strip() + " else none",
      "theorem exportedAnswerProjection_correct"),
     ("projection_always_fails", PROJECT, "  none", "theorem exportedAnswerProjection_correct"),
 ])

@@ -1,5 +1,4 @@
 import Tamarin.GraphUnification
-import Tamarin.ACRayPacket
 import Tamarin.AnswerProjection
 import Tamarin.OperandUnification
 
@@ -25,18 +24,8 @@ theorem shaped_emit {width : UInt64} (gs : List (ACBasis.Vec width.toNat))
 
 private theorem shaped {width : UInt64} {m out} (h : solve width m = some out) :
     AnswerProjection.Shape width out := by
-  by_cases size : (0 < width ∧ width ≤ 32) ∧ m.size ≤ 128
-  · cases rd : readRows width.toNat m.toList with
-    | none => simp [solve, rd, guard, size] at h
-    | some rs =>
-      cases basis : answerBasis rs with
-      | none => simp [solve, rd, basis, guard, size] at h
-      | some gs =>
-        by_cases fits : fitsOutput gs = true
-        · have emitted : emit gs = out := by simpa [solve, rd, basis, fits, guard, size] using h
-          exact ⟨size.1.1, UInt64.le_trans size.1.2 (by decide), emitted ▸ shaped_emit gs⟩
-        · simp [solve, rd, basis, fits, guard, size] at h; contradiction
-  · simp [solve, guard, size] at h; contradiction
+  obtain ⟨_,gs,bounds,_,_,_,rfl⟩ := solveUpTo_returned h
+  exact ⟨bounds.1,UInt64.le_trans bounds.2.1 (by decide),shaped_emit gs⟩
 
 abbrev Project := UInt64 → Answers → Option Answers
 
@@ -64,17 +53,11 @@ theorem graph_total {project : Project} (verified : AnswerProjection.Correct pro
     cases active : GraphUnification.hasConstraint m.toList with
     | false => simp [GraphUnification.run, GraphUnification.runWith, built, active, guard, failure] at returned
     | true =>
-      have solved : RayPacket.solve @ACBasis.PrincipalRay.run n m = some out := by
+      have solved : GraphAnswers.solve n m = some out := by
         simpa [GraphUnification.run,GraphUnification.runWith,built,active,guard] using returned
-      cases old : solve n m with
-      | some a =>
-        have eq : a = out := by simpa [RayPacket.solve,old] using solved
-        exact matrix_total verified n m out (eq ▸ old)
-      | none =>
-        obtain ⟨_,v,limits,_,_,_,rfl⟩ := RayPacket.returned (by simpa [RayPacket.solve,old] using solved)
-        have shape : AnswerProjection.Shape n (emit [coordinates v]) :=
-          ⟨limits.1,limits.2.1,shaped_emit _⟩
-        exact Option.isSome_iff_exists.mpr ⟨_,(verified n _ _).mpr ⟨⟨shape,AnswerProjection.keys_fit _⟩,rfl⟩⟩
+      obtain ⟨pos,bound,gs,rfl⟩ := GraphAnswers.emitted solved
+      have shape : AnswerProjection.Shape n (emit gs) := ⟨pos,bound,shaped_emit gs⟩
+      exact Option.isSome_iff_exists.mpr ⟨_,(verified n _ _).mpr ⟨⟨shape,AnswerProjection.keys_fit _⟩,rfl⟩⟩
 
 /-- Reconciliation receives a projected packet for every completed operand search. -/
 def OperandTotal (run : OperandUnification.Kernel) (project : Project) : Prop :=
