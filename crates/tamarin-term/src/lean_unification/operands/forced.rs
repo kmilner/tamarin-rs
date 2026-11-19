@@ -23,11 +23,28 @@ fn head(term: &LNTerm) -> Option<AcSym> {
     }
 }
 
-fn factors(symbol: AcSym, term: &LNTerm) -> &[LNTerm] {
-    match term {
-        Term::App(FunSym::Ac(f), xs) if *f == symbol => xs,
-        _ => std::slice::from_ref(term),
+fn side<'a>(
+    symbol: AcSym,
+    term: &'a LNTerm,
+    columns: &mut IdentityTable<&'a LNTerm>,
+) -> Option<Vec<u64>> {
+    let mut row = Vec::new();
+    let mut pending = vec![term];
+    while let Some(t) = pending.pop() {
+        if let Term::App(FunSym::Ac(f), xs) = t
+            && *f == symbol
+        {
+            // Each pending term contributes at least one factor. Check the
+            // expanded size before following shared or nested applications.
+            if xs.len() < 2 || xs.len() > 4096 - row.len() - pending.len() {
+                return None;
+            }
+            pending.extend(xs.iter().rev());
+        } else {
+            row.push(columns.intern(t).filter(|&id| id < 4096)?);
+        }
     }
+    Some(row)
 }
 
 /// Every ID refers to one term across both sides of all rows in this group.
@@ -41,17 +58,9 @@ fn collect(
     let mut columns = IdentityTable::default();
     let mut sides = Vec::with_capacity(2 * equations.len());
     for term in equations.iter().flat_map(|e| [&e.lhs, &e.rhs]) {
-        let factors = factors(symbol, term);
-        if factors.is_empty() || factors.len() > 4096 {
+        let Some(row) = side(symbol, term, &mut columns) else {
             return Ok(());
-        }
-        let mut row = Vec::with_capacity(factors.len());
-        for factor in factors {
-            let Some(id) = columns.intern(factor).filter(|&id| id < 4096) else {
-                return Ok(());
-            };
-            row.push(id);
-        }
+        };
         sides.push(row);
     }
     initialize()?;
@@ -112,4 +121,23 @@ pub(in crate::lean_unification) fn consequences(
         collect(f, &rows, &mut added)?;
     }
     Ok(added)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lterm::pub_term;
+
+    #[test]
+    fn counts_every_occurrence_under_shared_nested_ac_nodes() {
+        let raw = |xs: Vec<LNTerm>| Term::App(FunSym::Ac(AcSym::Union), xs.into());
+        let pair = raw(vec![pub_term("a"), pub_term("b")]);
+        let nested = raw(vec![pair.clone(), pair]);
+        assert_eq!(
+            side(AcSym::Union, &nested, &mut IdentityTable::default()),
+            Some(vec![0, 1, 0, 1])
+        );
+        let wide = (0..11).fold(nested, |t, _| raw(vec![t.clone(), t]));
+        assert!(side(AcSym::Union, &wide, &mut IdentityTable::default()).is_none());
+    }
 }
