@@ -241,6 +241,23 @@ example (out : Term') :
   exact (Rewriting.Bilinear.PowerSpine.map_stage_viewed bp powers inventory unitN
     (op.point_sorted so sp) (op.point_sorted so sq) left right ln rn).trans (cancelled_pair out)
 
+-- A group at the bottom of a point spine can hide an active point until
+-- after the other side of the map has extracted its opposing scalar.
+example (out : Term') :
+    NormalForm R (op.map (op.point one (s.product.mul (op.point a p) one)) (op.point (s.product.inv a) q)) out ↔
+      EquivB out (op.map p q) := by
+  have so : HasSort one .msg := HasSort.free (sig := sig) F.one _ (fun i => Fin.elim0 i)
+  have ds : Staging.Signed s R one := fun k => Balance.defined s R k unitN
+  have sp := op.point_sorted (atomT 0) (atomT 1)
+  have sq := op.point_sorted invT (atomT 2)
+  obtain ⟨sx,dx,nx⟩ := with_unit _ sp actionA
+  have left := Rewriting.Bilinear.PointSpine.signed_view bp inventory sx dx [one]
+    (by simpa using so) (by intro u hu; cases List.mem_singleton.mp hu; exact ds)
+  have right := Rewriting.Bilinear.PointSpine.view (T := T) bp sq actionInv [] (by simp) (by simp)
+  have ln := (bp.point_argument_stage inventory so sx dx nx).mpr ((bp.point_one inventory sp actionA unitN).mpr (.refl _))
+  exact (Rewriting.Bilinear.PowerSpine.map_stage_viewed bp powers inventory unitN
+    (op.point_sorted so sx) sq left right ln ⟨.basis (.refl _),actionInv,fun _ h => h⟩).trans (cancelled_pair out)
+
 -- The unit and nesting rules overlap on the same sorted input.
 example (out : Term') : NormalForm R (op.point one (op.point a p)) out ↔ EquivB out (op.point a p) :=
   bp.point_one inventory (op.point_sorted (atomT 0) (atomT 1)) actionA unitN

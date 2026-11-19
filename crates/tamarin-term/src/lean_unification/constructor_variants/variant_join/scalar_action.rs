@@ -134,8 +134,8 @@ impl RuleTable {
         }
     }
 
-    /// Any number of signed scalars acting on one stable (or rigid normal)
-    /// leaf. A concrete normal leaf may itself already be a point action.
+    /// Signed scalar actions on a signed operand. Its opaque leaves are
+    /// stable for variants and normal in the concrete reduction query.
     pub(in crate::lean_unification::constructor_variants) fn bp_point_spine(
         &self,
         mut t: &LNTerm,
@@ -156,11 +156,7 @@ impl RuleTable {
             }
             t = p;
         }
-        if stable {
-            self.stably_normal_native(t)
-        } else {
-            Ok(self.join_normal(t)? == Some(true))
-        }
+        self.signed_operand(t, stable)
     }
 
     pub(super) fn admits_point_inputs(
@@ -176,16 +172,11 @@ impl RuleTable {
         if !self.builtin_bp {
             return Ok(false);
         }
-        let signed_l = self.signed_operand(l, stable)?;
-        if signed_l && self.signed_operand(r, stable)? {
-            return Ok(true);
-        }
-        Ok(match op {
-            Operation::Action => signed_l && self.bp_point_spine(r, stable)?,
-            Operation::Pairing => {
-                self.bp_point_spine(l, stable)? && self.bp_point_spine(r, stable)?
-            }
-        })
+        let left = match op {
+            Operation::Action => self.signed_operand(l, stable)?,
+            Operation::Pairing => self.bp_point_spine(l, stable)?,
+        };
+        Ok(left && self.bp_point_spine(r, stable)?)
     }
 
     fn point_operand<'a>(&self, t: &'a LNTerm) -> Result<Option<Cow<'a, LNTerm>>, Error> {

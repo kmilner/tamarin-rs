@@ -15,39 +15,57 @@ inductive Trace (s : Symbols sig) (β : Operators sig) (R : Root sig) (k : Class
   | action {a q t i j} (shape : EquivB (β.point a q) t) (inner : Trace s β R k p q i)
       (typed : HasSort a .msg) (signed : Staging.Signed s R a) (count : Balance.read s R k a = some j) :
       Trace s β R k p t (i+j)
+  | delayed {v t z} (value : Trace s β R k p v z) (normal : Normal R v) (typed : HasSort t .msg)
+      (signed : Staging.Signed s R t) (settles : ∀ {u}, Reduces R t u → Normal R u → EquivB v u) :
+      Trace s β R k p t z
+
+private theorem type_b {t u : Term sig} (eq : EquivB t u) (ty : HasSort t .msg) : HasSort u .msg :=
+  Term.checkSort_sound _ _ ((SortClash.check_equiv eq _) ▸ Term.checkSort_complete ty)
 
 theorem Trace.rebase {t u z} (h : Trace s β R k p t z) (eq : EquivB t u) : Trace s β R k p u z := by
   cases h with
   | bare e n hp => exact .bare (e.trans eq) n hp
   | action e h ty rd cnt => exact .action (e.trans eq) h ty rd cnt
 
-private theorem type_b {t u : Term sig} (eq : EquivB t u) (ty : HasSort t .msg) : HasSort u .msg :=
-  Term.checkSort_sound _ _ ((SortClash.check_equiv eq _) ▸ Term.checkSort_complete ty)
+  | delayed h n ty d fixed =>
+    exact .delayed h n (type_b eq ty)
+      (fun k => let ⟨z,r⟩ := d k; ⟨z,(Balance.equiv s R k eq).symm.trans r⟩)
+      (fun r nt => fixed ((Reduces.basis eq).trans r) nt)
 
 theorem Trace.typed {t z} (h : Trace s β R k p t z) (sp : HasSort p .msg) : HasSort t .msg := by
   induction h with
   | bare eq => exact type_b eq sp
   | action eq h st _ _ ih => exact type_b eq (β.point_sorted st ih)
+  | delayed _ _ st => exact st
 
 private theorem Trace.split_action {t z a q} (h : Trace s β R k p t z) (eq : EquivB t (β.point a q)) :
     ∃ i j, Trace s β R k p q i ∧ HasSort a .msg ∧ Staging.Signed s R a ∧ Balance.read s R k a = some j ∧ z = i+j := by
-  cases h with
+  induction h with
   | bare e _ plain => exact (plain (e.trans eq).head_eq).elim
-  | action e h ty rd cnt =>
+  | action e h ty rd cnt _ =>
     obtain ⟨l,r⟩ := β.point_equiv (e.trans eq)
     exact ⟨_,_,h.rebase r,type_b l ty,
       fun k => let ⟨z,h⟩ := rd k; ⟨z,(Balance.equiv s R k l).symm.trans h⟩,
       (Balance.equiv s R k l).symm.trans cnt,rfl⟩
 
+  | delayed _ _ _ rd settles ih =>
+    have e := settles (.basis (.refl _)) (signed_point_normal β rd eq.head_eq)
+    exact ih (e.trans eq)
+
 theorem Trace.parts {t z a q} (h : Trace s β R k p t z) (eq : EquivB t (β.point a q)) :
     ∃ i j, Trace s β R k p q i ∧ Balance.read s R k a = some j ∧ z = i+j := by
   obtain ⟨i,j,h,_,_,r,e⟩ := h.split_action eq; exact ⟨i,j,h,r,e⟩
 
-theorem Trace.unscaled {t z} (h : Trace s β R k p t z) (_ : Normal R t) (plain : head t ≠ .free β.pmult) :
+theorem Trace.unscaled {t z} (h : Trace s β R k p t z) (nt : Normal R t) (plain : head t ≠ .free β.pmult) :
     EquivB t p ∧ z = 0 := by
-  cases h with
+  induction h with
   | bare e => exact ⟨e.symm,rfl⟩
   | action e => exact (plain e.head_eq.symm).elim
+
+  | delayed _ nv _ _ settles ih =>
+    have f := settles (.basis (.refl _)) nt
+    obtain ⟨e,z⟩ := ih nv (fun h => plain (f.head_eq.symm.trans h))
+    exact ⟨f.symm.trans e,z⟩
 
 theorem Trace.step (I : Inventory s β T.rules) (g : Balance.Inventory E) {t u z}
     (h : Trace s β (ruleRoot T.rules) k p t z) (st : StepModulo (ruleRoot T.rules) t u) :
@@ -73,6 +91,11 @@ theorem Trace.step (I : Inventory s β T.rules) (g : Balance.Inventory E) {t u z
         (fun k => let ⟨z,h⟩ := rd k; ⟨z,g.reduces k (.step st) z h⟩) (g.reduces k (.step st) j cnt)
     · exact .action res (ih st) ty rd cnt
 
+  | delayed h n ty rd fixed _ =>
+    exact .delayed h n (g.reduces_sorted ty (rd _) (.step st))
+      (fun k => let ⟨z,r⟩ := rd k; ⟨z,g.reduces k (.step st) z r⟩)
+      (fun r nt => fixed ((Reduces.step st).trans r) nt)
+
 private theorem Trace.fold {b : Term sig} (base : ∃ z, Trace s β R k p b z) (es : List (Term sig))
     (se : ∀ e ∈ es, HasSort e .msg) (rd : ∀ e ∈ es, Staging.Signed s R e) :
     ∃ z, Trace s β R k p (spine β b es) z := by
@@ -97,6 +120,23 @@ theorem view (I : Inventory s β T.rules) {x : Term sig} (sx : HasSort x .msg) (
     exact Trace.fold ⟨0+j,.action (.refl _) (.bare (.refl _) np hp) sa (fun k => Balance.defined s _ k na) h⟩ es se rd
   · exact ⟨x,sx,nx,point,fun _ => Trace.fold ⟨0,.bare (.refl _) nx point⟩ es se rd⟩
 
+
+/-- A signed expression used as the underlying point may expose an action
+after reduction. Every normal result of that expression gives the same
+point view, even when an outer action or map has already started reducing. -/
+theorem signed_view [DecidableEq sig.ACSym] (I : Inventory s β T.rules) (g : Balance.Inventory E) {x : Term sig}
+    (sx : HasSort x .msg) (dx : Staging.Signed s (ruleRoot T.rules) x) (es : List (Term sig))
+    (se : ∀ e ∈ es, HasSort e .msg) (rd : ∀ e ∈ es, Staging.Signed s (ruleRoot T.rules) e) :
+    ∃ p, HasSort p .msg ∧ Normal (ruleRoot T.rules) p ∧ head p ≠ .free β.pmult ∧
+      ∀ k, ∃ z, Trace s β (ruleRoot T.rules) k p (spine β x es) z := by
+  obtain ⟨v,red,nv,sv⟩ := g.normal_exists sx (dx _)
+  obtain ⟨p,sp,np,hp,cases⟩ := view I sv nv [] (by simp) (by simp)
+  refine ⟨p,sp,np,hp,fun k => ?_⟩
+  obtain ⟨z,h⟩ := cases k
+  apply Trace.fold (b := x) _ es se rd
+  exact ⟨z,.delayed (v := v) h nv sx dx (fun r n =>
+    Balance.normal_unique g E.presentation (fun _ => Balance.plain_of_inverse E) dx sv
+      (g.reduces_sorted sx (dx _) r) nv n red r)⟩
 
 private inductive Form (s : Symbols sig) (β : Operators sig) : Term sig → Term sig → Term sig → Prop where
   | plain {p : Term sig} : Form s β p s.product.one p
@@ -175,14 +215,14 @@ theorem point_exists [DecidableEq sig.ACSym] (I : Inventory s β T.rules) (g : B
 
 /-- A point-spine child can be normalized before applying the next signed
 scalar, even when two adjacent actions could have merged earlier. -/
-theorem stage [DecidableEq sig.ACSym] (I : Inventory s β T.rules) (g : Balance.Inventory E)
+theorem stage_signed [DecidableEq sig.ACSym] (I : Inventory s β T.rules) (g : Balance.Inventory E)
     (unit : Normal (ruleRoot T.rules) s.product.one) {a x v p out : Term sig}
     (sa : HasSort a .msg) (da : Staging.Signed s (ruleRoot T.rules) a)
-    (sx : HasSort x .msg) (nx : Normal (ruleRoot T.rules) x) (es : List (Term sig))
+    (sx : HasSort x .msg) (dx : Staging.Signed s (ruleRoot T.rules) x) (es : List (Term sig))
     (se : ∀ e ∈ es, HasSort e .msg) (rd : ∀ e ∈ es, Staging.Signed s (ruleRoot T.rules) e)
     (scalar : NormalForm (ruleRoot T.rules) a v) (point : NormalForm (ruleRoot T.rules) (spine β x es) p) :
     NormalForm (ruleRoot T.rules) (β.point a (spine β x es)) out ↔ NormalForm (ruleRoot T.rules) (β.point v p) out := by
-  obtain ⟨base,sb,_,_,init⟩ := view I sx nx es se rd
+  obtain ⟨base,sb,_,_,init⟩ := signed_view I g sx dx es se rd
   obtain ⟨_,tr⟩ := init (classOf base)
   have st := tr.typed sb
   have sv := scalar.2.2 _ sa
@@ -203,5 +243,15 @@ theorem stage [DecidableEq sig.ACSym] (I : Inventory s β T.rules) (g : Balance.
       exact ⟨i+j,.action (.refl _) h sa da c⟩) (replay nb) nf
     exact ⟨nb.1.trans (.basis eq),nf.2.1,fun _ h => .widen (nf.2.2 _ source) (β.pointSort ▸ Term.rootSort_le h)⟩
   · exact replay
+
+/-- A stable normal point is also an admissible signed base. -/
+theorem stage [DecidableEq sig.ACSym] (I : Inventory s β T.rules) (g : Balance.Inventory E)
+    (unit : Normal (ruleRoot T.rules) s.product.one) {a x v p out : Term sig}
+    (sa : HasSort a .msg) (da : Staging.Signed s (ruleRoot T.rules) a)
+    (sx : HasSort x .msg) (nx : Normal (ruleRoot T.rules) x) (es : List (Term sig))
+    (se : ∀ e ∈ es, HasSort e .msg) (rd : ∀ e ∈ es, Staging.Signed s (ruleRoot T.rules) e)
+    (scalar : NormalForm (ruleRoot T.rules) a v) (point : NormalForm (ruleRoot T.rules) (spine β x es) p) :
+    NormalForm (ruleRoot T.rules) (β.point a (spine β x es)) out ↔ NormalForm (ruleRoot T.rules) (β.point v p) out :=
+  stage_signed I g unit sa da sx (fun k => Balance.defined s _ k nx) es se rd scalar point
 
 end Tamarin.Rewriting.Bilinear.PointSpine
