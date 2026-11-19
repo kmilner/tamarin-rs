@@ -646,20 +646,23 @@ fn repeated_ac_collectors_refute_wide_rigid_remainders() {
 }
 
 #[test]
-fn a_live_repeated_collector_partition_still_obeys_the_selection_limit() {
+fn exact_collector_partition_binds_all_variables_beyond_the_rigid_selection_limit() {
     let pattern = (0u64..65)
         .map(|i| Term::Lit(Lit::Var(LVar::new("key", LSort::Msg, i.saturating_sub(1)))))
         .collect();
-    // All 64 variables could bind the same rigid factor. The refutation must
-    // let the original admission limit decide whether to enumerate that answer.
+    // Each occurrence must consume one factor. All 64 variables therefore
+    // have exactly the same singleton image.
     let equation = Equal {
         lhs: f_app_ac(AcSym::Union, vec![variable("rigid"); 65]),
         rhs: f_app_ac(AcSym::Union, pattern),
     };
-    assert!(matches!(
-        native().match_eqs(&[equation]),
-        Err(MaudeError::UnsupportedOperation("matching"))
-    ));
+    let mut answers = native().match_eqs(&[equation]).unwrap();
+    assert_eq!(answers.len(), 1);
+    answers[0].sort();
+    let expected: Vec<_> = (0..64)
+        .map(|i| (LVar::new("key", LSort::Msg, i), variable("rigid")))
+        .collect();
+    assert_eq!(answers[0], expected);
 }
 
 #[test]
@@ -2532,11 +2535,12 @@ fn sparse_ac_system_keeps_sixteen_witnesses_independent() {
         .map(|i| LVar::new("column", LSort::Msg, i))
         .collect();
     let multiple = |key, n| f_app_ac(AcSym::Union, vec![Term::Lit(Lit::Var(key)); n]);
-    let equations: Vec<_> = keys
-        .chunks_exact(2)
-        .map(|p| Equal {
-            lhs: multiple(p[0], 2),
-            rhs: multiple(p[1], 3),
+    let pairs = keys.as_chunks::<2>().0;
+    let equations: Vec<_> = pairs
+        .iter()
+        .map(|&[x, y]| Equal {
+            lhs: multiple(x, 2),
+            rhs: multiple(y, 3),
         })
         .collect();
     let answers = h.unify(&equations).unwrap();
@@ -2544,16 +2548,16 @@ fn sparse_ac_system_keeps_sixteen_witnesses_independent() {
         panic!("expected the principal substitution")
     };
     let mut witnesses = BTreeSet::new();
-    for p in keys.chunks_exact(2) {
+    for &[x, y] in pairs {
         let image = |v| &arm.iter().find(|(key, _)| *key == v).unwrap().1;
-        let Term::App(_, children) = image(p[0]) else {
+        let Term::App(_, children) = image(x) else {
             panic!("expected three copies of a witness")
         };
         let Term::Lit(Lit::Var(w)) = &children[0] else {
             panic!("expected a variable")
         };
-        assert_eq!(image(p[0]), &multiple(*w, 3));
-        assert_eq!(image(p[1]), &multiple(*w, 2));
+        assert_eq!(image(x), &multiple(*w, 3));
+        assert_eq!(image(y), &multiple(*w, 2));
         assert!(!keys.contains(w));
         assert!(witnesses.insert(*w));
     }

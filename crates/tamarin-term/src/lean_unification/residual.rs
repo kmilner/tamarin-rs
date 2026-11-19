@@ -456,8 +456,10 @@ fn solve_with(
                 &mut budget.nested_matrices,
             )? {
                 super::homogeneous::Allocation::Complete(branches) => Box::new(branches),
-                super::homogeneous::Allocation::Exhausted => return Ok(None),
-                super::homogeneous::Allocation::Unsupported => {
+                // Exhausting matrix calls leaves the shared term and branching
+                // budgets available for complete matching and factor splits.
+                super::homogeneous::Allocation::Exhausted
+                | super::homogeneous::Allocation::Unsupported => {
                     if let Some(branches) = operands::split_ground(&state.deferred)? {
                         Box::new(branches)
                     } else if let Some(branches) = operands::split_indivisible(&state.deferred)? {
@@ -837,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_ground_split_discards_every_branch_on_budget_exhaustion() {
+    fn nested_ground_split_can_finish_after_the_matrix_budget_is_spent() {
         let v = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Msg, 0)));
         let atom = crate::lterm::pub_term;
         let sum = |a, b| f_app_ac(crate::function_symbols::AcSym::Union, vec![a, b]);
@@ -853,8 +855,8 @@ mod tests {
                 rhs: f_app_ac(AcSym::Mult, vec![v("z"), atom("b")]),
             },
         ];
-        // x=b finishes by cancellation. x=a still needs a matrix to establish
-        // a clash. A budget that cannot settle both must defer the conjunction.
+        // There is a complete ground match on the first equation. A factor
+        // split can settle the other head even after the last matrix call.
         let run = |limit| {
             solve(
                 query.clone(),
@@ -866,8 +868,16 @@ mod tests {
             )
             .unwrap()
         };
-        assert_eq!(run(1), None);
-        assert_eq!(run(2).unwrap().len(), 1);
+        for limit in 0..=2 {
+            let arms = run(limit).unwrap();
+            assert_eq!(arms.len(), 1);
+            for e in &query {
+                assert_eq!(
+                    apply_vterm(&arms[0], e.lhs.clone()),
+                    apply_vterm(&arms[0], e.rhs.clone())
+                );
+            }
+        }
     }
 
     #[test]
