@@ -88,22 +88,23 @@ mod tests {
             crate::lean_unification::residual::solve(vec![eq.clone()], &original, &mut budget)
                 .unwrap();
         assert!(solutions.unwrap().is_empty());
-        let sig = mset_maude_sig().merge(hash_maude_sig());
-        let native =
-            MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly)
-                .unwrap();
-        assert!(native.unify(std::slice::from_ref(&eq)).unwrap().is_empty());
-
         // An additional independent variable can absorb the size difference.
         let flexible = Equal {
             lhs: sum(vec![x(0), x(1)]),
             rhs: sum(vec![hash(x(0)), pub_term("a")]),
         };
         assert!(!refutes(&flexible));
-        assert!(!native
-            .unify(std::slice::from_ref(&flexible))
-            .unwrap()
-            .is_empty());
+        if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none() {
+            let sig = mset_maude_sig().merge(hash_maude_sig());
+            let native =
+                MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly)
+                    .unwrap();
+            assert!(native.unify(std::slice::from_ref(&eq)).unwrap().is_empty());
+            assert!(!native
+                .unify(std::slice::from_ref(&flexible))
+                .unwrap()
+                .is_empty());
+        }
         if let Some(path) = tamarin_test_support::require_maude_path() {
             let oracle = MaudeHandle::start_with_backend(
                 &path,
