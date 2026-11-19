@@ -1,3 +1,5 @@
+mod inert_products;
+
 use super::*;
 use crate::algebra_backend::AlgebraBackend;
 use crate::builtin::{fst, hash, pair};

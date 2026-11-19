@@ -502,6 +502,38 @@ impl RuleTable {
         if self.normal_tree(term, false, &mut Some(super::residual::Budget::new()))? {
             return Ok(Some(term.clone()));
         }
+        if let Term::App(head @ (FunSym::Ac(_) | FunSym::C(_)), args) = term
+            && let Some((id, _, slot)) = self.declaration(*head)
+            && self.roots.binary_search(&id).is_err()
+        {
+            // An inert C/AC head cannot consume any combination of changing
+            // factors. Each child may itself expose a product of this head.
+            // The test against roots includes uncompiled rule buckets.
+            let mut available = super::residual::MAX_EXPANDED - 1;
+            let mut values = Vec::new();
+            for child in args.iter() {
+                if let Term::App(child_head, _) = child
+                    && self
+                        .declaration(*child_head)
+                        .is_none_or(|(_, _, s)| s != slot)
+                    && !self.irreducible_native(child)?
+                {
+                    // A wider result slot alone cannot certify every sort of
+                    // this changing child. Keep the whole-term graph available.
+                    break;
+                }
+                let Some(value) = self.reduce_native_sorted(child)? else {
+                    break;
+                };
+                if !super::residual::charge_expansion(&mut available, [&value], None)? {
+                    break;
+                }
+                values.push(value);
+            }
+            if values.len() == args.len() {
+                return Ok(Some(crate::term::f_app(*head, values)));
+            }
+        }
         self.search_reduction(term)
     }
 
