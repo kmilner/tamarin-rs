@@ -3,7 +3,8 @@
 use super::{subgroups::ProperSubgroups, InputDomain, RuleTable};
 use crate::function_symbols::{AcSym, FunSym};
 use crate::lean_unification::{
-    canonical_capture, open_match, residual::charge_expansion, subsort, Error, Outcome,
+    canonical_capture, initialize, open_match, residual::charge_expansion, subsort, Error, Outcome,
+    WordSlice, LEAN_THREAD,
 };
 use crate::lterm::{frees, LNTerm, LSort, LVar};
 use crate::rewriting::RRule;
@@ -13,9 +14,37 @@ use crate::vterm::Lit;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeSet;
 
-enum Visit {
-    Enter(LNTerm),
-    Leave(LNTerm),
+unsafe extern "C" {
+    fn tamarin_lean_reduction_graph(rows: *const WordSlice, count: usize) -> u8;
+}
+
+fn certified_graph(rows: &[Vec<u64>]) -> Result<bool, Error> {
+    initialize()?;
+    let packet: Vec<_> = rows.iter().map(|row| WordSlice::new(row)).collect();
+    LEAN_THREAD.with(|_| {
+        // SAFETY: the row descriptors and their data outlive this synchronous call.
+        match unsafe { tamarin_lean_reduction_graph(packet.as_ptr(), packet.len()) } {
+            0 => Ok(false),
+            1 => Ok(true),
+            status => Err(Error::InvalidStatus(status)),
+        }
+    })
+}
+
+struct Frame {
+    term: LNTerm,
+    remaining: std::collections::btree_set::IntoIter<LNTerm>,
+    edges: Vec<u64>,
+}
+
+impl Frame {
+    fn new(term: LNTerm, successors: BTreeSet<LNTerm>) -> Self {
+        Self {
+            term,
+            edges: Vec::with_capacity(successors.len()),
+            remaining: successors.into_iter(),
+        }
+    }
 }
 
 impl RuleTable {
@@ -31,45 +60,50 @@ impl RuleTable {
         if !self.admits_sorted(std::iter::once(term)) {
             return Ok(None);
         }
-        let mut visits = vec![Visit::Enter(canonical_capture(term))];
-        // An unfinished node is on the active DFS path. Reaching a finished
-        // node shares its completed search, while a back edge defers the query.
-        let mut finished = FxHashMap::default();
-        let mut normal = None;
-        while let Some(visit) = visits.pop() {
+        let root = canonical_capture(term);
+        let Some(successors) = self.successors(&root, &mut budget)? else {
+            return Ok(None);
+        };
+        // Completed states have their postorder ID. An edge to a state on
+        // the current path retains an out-of-range target for the Lean check.
+        let mut ids = FxHashMap::default();
+        ids.insert(root.clone(), u64::MAX);
+        let mut path = vec![Frame::new(root, successors)];
+        let mut rows = Vec::new();
+        let mut candidate = None;
+        while let Some(frame) = path.last_mut() {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-            let state = match visit {
-                Visit::Enter(t) => t,
-                Visit::Leave(t) => {
-                    finished.insert(t, true);
-                    continue;
+            if let Some(child) = frame.remaining.next_back() {
+                if let Some(&id) = ids.get(&child) {
+                    frame.edges.push(id);
+                } else {
+                    let Some(next) = self.successors(&child, &mut budget)? else {
+                        return Ok(None);
+                    };
+                    ids.insert(child.clone(), u64::MAX);
+                    path.push(Frame::new(child, next));
                 }
-            };
-            if let Some(done) = finished.get(&state) {
-                if !done {
-                    return Ok(None);
-                }
-                continue;
-            }
-            let Some(next) = self.successors(&state, &mut budget)? else {
-                return Ok(None);
-            };
-            if next.is_empty() {
-                if normal.as_ref().is_some_and(|prior| prior != &state) {
-                    return Ok(None);
-                }
-                normal.get_or_insert_with(|| state.clone());
-                finished.insert(state, true);
             } else {
-                finished.insert(state.clone(), false);
-                visits.push(Visit::Leave(state));
-                visits.extend(next.into_iter().map(Visit::Enter));
+                let frame = path.pop().expect("visited frame");
+                let id = rows.len() as u64;
+                if rows.is_empty() {
+                    candidate = Some(frame.term.clone());
+                }
+                ids.insert(frame.term, id);
+                rows.push(frame.edges);
+                if let Some(parent) = path.last_mut() {
+                    parent.edges.push(id);
+                }
             }
         }
-        Ok(normal)
+        Ok(if certified_graph(&rows)? {
+            candidate
+        } else {
+            None
+        })
     }
 
-    fn successors(
+    pub(super) fn successors(
         &self,
         state: &LNTerm,
         budget: &mut usize,

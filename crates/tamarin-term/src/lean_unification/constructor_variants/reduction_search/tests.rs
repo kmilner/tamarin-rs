@@ -434,3 +434,19 @@ fn commutative_rule_can_have_distinct_normal_images_on_its_two_orientations() {
         Some(a)
     );
 }
+
+#[test]
+fn linked_postorder_graph_checks_all_edges_and_terminals() {
+    for (rows, accepted) in [
+        (vec![], false),
+        (vec![vec![]], true),
+        (vec![vec![], vec![0], vec![0], vec![1, 2]], true),
+        (vec![vec![], vec![0, 0]], true),
+        (vec![vec![], vec![], vec![0, 1]], false),
+        (vec![vec![], vec![1, 0]], false),
+        (vec![vec![], vec![u64::MAX]], false),
+        (vec![vec![9]], false),
+    ] {
+        assert_eq!(certified_graph(&rows).unwrap(), accepted, "{rows:?}");
+    }
+}

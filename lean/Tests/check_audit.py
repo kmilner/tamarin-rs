@@ -542,6 +542,18 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedDHTowerImages_correct"),
 ])
 
+EXECUTABLE = ("import Tamarin.ReductionGraph\n" + EXECUTABLE
+              + "\nnamespace Tamarin\n" + obligation("exportedReductionGraph_correct") + "end Tamarin\n")
+GRAPH = ":= ReductionGraph.run rows"
+EXPORT_MUTATIONS.extend([
+    ("reduction_graph_accepts_open_edge", GRAPH, ":= !rows.isEmpty",
+     "theorem exportedReductionGraph_correct"),
+    ("reduction_graph_hides_second_terminal", GRAPH, ":= ReductionGraph.run (rows.take 1)",
+     "theorem exportedReductionGraph_correct"),
+    ("reduction_graph_always_defers", GRAPH, ":= false",
+     "theorem exportedReductionGraph_correct"),
+])
+
 subgroup_start = SOURCE.index("theorem exportedACSubgroups_correct")
 subgroup_contract = SOURCE[subgroup_start:SOURCE.index("\n\n", subgroup_start) + 1]
 EXECUTABLE = ("import Tamarin.ACSubgroups\n" + EXECUTABLE

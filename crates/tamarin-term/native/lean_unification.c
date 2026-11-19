@@ -358,6 +358,12 @@ void *tamarin_lean_dh_peer_images(void) {
     return selection_rows(tamarin_dh_peer_images(1));
 }
 
+extern uint8_t tamarin_reduction_graph(lean_object *rows);
+
+uint8_t tamarin_lean_reduction_graph(const whole_word_slice *rows, size_t count) {
+    return tamarin_reduction_graph(word_rows(rows, count));
+}
+
 extern lean_object *tamarin_ac_subgroups(uint64_t size);
 
 void *tamarin_lean_ac_subgroups(uint64_t size) {

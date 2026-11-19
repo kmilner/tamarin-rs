@@ -17,6 +17,7 @@ import TamarinRuntime.DHPeer
 import TamarinRuntime.DHExponent
 import TamarinRuntime.DHTower
 import TamarinRuntime.ACSubgroups
+import TamarinRuntime.ReductionGraph
 import TamarinRuntime.OperandUnification
 import TamarinRuntime.OperandRefinement
 
@@ -66,6 +67,9 @@ def dhExponentImages (u : Unit) : Array (Array UInt64) := DHExponentCandidate.im
 
 @[export tamarin_dh_tower_images]
 def dhTowerImages (width : UInt64) : Option (Array (Array UInt64)) := DHTowerCandidate.images width
+
+@[export tamarin_reduction_graph]
+def reductionGraph (rows : Array (Array UInt64)) : Bool := ReductionGraph.run rows
 
 @[export tamarin_ac_subgroups]
 def acSubgroups (n : UInt64) : Option (Array (Array UInt64)) := ACSubgroups.run n
