@@ -1731,22 +1731,30 @@ impl MaudeHandle {
                 MaudeError::Other(error.to_string())
             }
         };
-        if self.backend == AlgebraBackend::NativeOnly
-            && let Some(table) = self.native_rules()
-        {
-            let result = if equations
+        let native_table = (self.backend == AlgebraBackend::NativeOnly)
+            .then(|| self.native_rules())
+            .flatten();
+        let ground_subjects = native_table.is_some()
+            && equations
                 .iter()
-                .all(|e| crate::vterm::is_ground_vterm(&e.rhs))
-            {
-                table.match_ground_captures(equations)
-            } else {
-                table.match_open_subjects(equations)
-            }
-            .map_err(match_error)?;
-            if let crate::lean_unification::Outcome::Complete(mut answers) = result {
+                .all(|e| crate::vterm::is_ground_vterm(&e.rhs));
+        let completed = |result| match result {
+            crate::lean_unification::Outcome::Complete(mut answers) => {
                 for answer in &mut answers {
                     order_match_bindings(answer);
                 }
+                Some(answers)
+            }
+            crate::lean_unification::Outcome::Unsupported => None,
+        };
+        if let Some(table) = native_table {
+            let result = if ground_subjects {
+                table.match_ground_captures(equations)
+            } else {
+                table.match_rigid_subjects(equations)
+            }
+            .map_err(match_error)?;
+            if let Some(answers) = completed(result) {
                 return Ok(Some(answers));
             }
         }
@@ -1762,6 +1770,19 @@ impl MaudeHandle {
             equations
         } else {
             let Some(decomposed) = free_match_children(&self.sig, equations, &mut fixed) else {
+                // A ground subject can also be matched by the rigid-subject
+                // tree search. Restart from the original conjunction; free
+                // decomposition can have accumulated partial bindings.
+                if let Some(table) = native_table
+                    && ground_subjects
+                    && !equations
+                        .iter()
+                        .any(|e| matches!(e.lhs, Term::Lit(crate::vterm::Lit::Var(_))))
+                {
+                    return Ok(completed(
+                        table.match_rigid_subjects(equations).map_err(match_error)?,
+                    ));
+                }
                 return Ok(None);
             };
             children = decomposed;

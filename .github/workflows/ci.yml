@@ -76,6 +76,8 @@ jobs:
       - run: rustup update stable --no-self-update && rustup default stable
       - name: Native-only operations without a Maude binary
         run: cargo test --profile ci -p tamarin-term --features lean-unification --test native_backend -- --test-threads=1
+      - name: Measure the public native backend against Lean-generated algebra queries
+        run: cargo test --profile ci -p tamarin-term --features lean-unification --test spec_coverage -- --nocapture
       - name: Install Maude oracle
         run: |
           curl -sSL -o /tmp/maude.zip https://github.com/maude-lang/Maude/releases/download/Maude3.5.1/Maude-3.5.1-linux-x86_64.zip

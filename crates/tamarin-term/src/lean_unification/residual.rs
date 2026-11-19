@@ -449,7 +449,7 @@ impl super::RuleTable {
     /// Interpret variables on the subject side as rigid atoms of their own sort.
     /// The tree matcher keeps subject terms in caller representation, so bound
     /// images already contain the original variables, including self occurrences.
-    pub(crate) fn match_open_subjects(
+    pub(crate) fn match_rigid_subjects(
         &self,
         equations: &[Equal<LNTerm>],
     ) -> Result<super::Outcome, Error> {

@@ -145,6 +145,24 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 
 ## Coverage and remaining work
 
+The replacement targets four algebra commands. The upstream Haskell process adapter emits
+`unify in MSG`, `match in MSG`, `reduce` and `get variants in MSG`. Rust emits the same
+four. Existence checks project the answers from unification or matching. Restriction
+matching can first make caller variables rigid. Rule closure packs terms into a single
+variant request so that all positions share a substitution. Installation probes and module
+initialization are separate from these algebra operations.
+[Upstream command builders](../tamarin-prover/lib/term/src/Term/Maude/Process.hs#L194) ·
+[Rust adapter](../crates/tamarin-term/src/maude_proc.rs) · [Packed rule queries](../crates/tamarin-theory/src/tools/rule_variants.rs#L125)
+
+The input domain comes from the declarations and equations emitted for the active signature.
+It includes the DH, bilinear pairing, multiset, natural-number and XOR operators, user-declared
+free and AC operators, and their permitted combinations. The rule table combines user-supplied
+rules with the enabled builtin equations. An ordinary unification or matching query uses the
+declared C/AC axioms. Reduction and variants also use the active rewrite equations.
+[Rust module printer](../crates/tamarin-term/src/maude_print.rs#L344) ·
+[Active equations](../crates/tamarin-term/src/maude_sig.rs#L285) ·
+[Upstream signature](../tamarin-prover/lib/term/src/Term/Maude/Signature.hs#L187)
+
 | Operation | Native coverage today | Next milestone |
 | --- | --- | --- |
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
@@ -152,6 +170,25 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | Pair projections, selected constructor rules, flat products of normal message factors under a validated AC unit and cancellation presentation, DH power towers and signed exponent products. For binary AC roots, native-only can match active equations and instantiate the RHS when every match yields the same normal value. | Extend positive rewriting to proper AC subproducts and multi-step results. |
 | Variants | Native-only joins positional destructors, flat XORs of Fresh variables and received-base DH powers on shared inputs. Under a validated AC unit and cancellation presentation it also handles two independent Msg variables, or two distinct Fresh variables and a Msg variable. Any declared AC operator can admit an identity variant when sorted substitution excludes all its active rules. | Extend certified narrowing to nested active AC terms and arbitrary active equations. Extend DH to unrestricted exponents. Establish ordering compatibility for joined answers in hybrid mode. |
+
+Run the generated coverage test from the repository root.
+
+```sh
+cargo test --profile ci -p tamarin-term --features lean-unification --test spec_coverage -- --nocapture
+```
+
+Lean generates sorted terms through five syntax nodes for two signatures, plain AC with a
+free hash and XOR with the same hash. The test exercises all four public operations,
+including shared captures in conjunctions and packed variant observations. Lean marks
+mandatory cases from constructor normality, incompatible matching heads and ground AC
+multiset equality. CI fails if native-only defers one of those cases or returns an answer
+that contradicts the expectation. Exploratory cases can gain coverage freely. The report
+prints the smallest generated deferral by syntax size for each theory and operation.
+Setting `MAUDE_PATH` also replays those witnesses against an independent Maude handle.
+The report counts syntactic requests in this bounded grammar. Protocol regressions
+separately exercise ordering and proof search.
+[Lean generator and expectations](Tests/NativeCoverage.lean) ·
+[Public API check](../crates/tamarin-term/tests/spec_coverage.rs)
 
 For flat directional matching, a singleton image retains the literal’s sort and a product takes
 the AC operator’s result sort. Lean proves exact coverage after this sort check. In `x+x+y`
