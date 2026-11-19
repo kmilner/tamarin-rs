@@ -338,7 +338,7 @@ def bpCoverage : IO Unit := do
   -- Exercise the next depth with a received scalar, retaining both caller
   -- images even on the diagonal, where only one affects the point expression.
   for (body,count) in [(p x (p r y),159), (e (p r x) y,160), (e x (p r x),8)] do
-    emitBP "variants" ("probe-rows=" ++ toString count) [body,x,y]
+    emitBP "variants" ("rows=" ++ toString count) [body,x,y]
 
 def generate : IO Unit := do
   bpCoverage

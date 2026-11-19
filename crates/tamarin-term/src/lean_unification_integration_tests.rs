@@ -7172,6 +7172,17 @@ fn native_oracle_scalar_action_rows_share_inputs_and_outputs() {
         assert!(!wanted.is_empty());
         assert_eq!(valued_variant_rows(&native, &slots), wanted, "{slots:?}");
     }
+    let f = crate::builtin::fresh_var("point", 0);
+    for (app, count) in [
+        (pmult(x.clone(), pmult(f.clone(), y.clone())), 159),
+        (emap(pmult(f.clone(), x.clone()), y.clone()), 160),
+        (emap(x.clone(), pmult(f.clone(), x.clone())), 8),
+    ] {
+        let slots = [app, x.clone(), y.clone(), f.clone()];
+        let wanted = valued_variant_rows(&oracle, &slots);
+        assert_eq!(wanted.len(), count, "{slots:?}");
+        assert_eq!(valued_variant_rows(&native, &slots), wanted, "{slots:?}");
+    }
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);
 }

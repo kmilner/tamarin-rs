@@ -10,7 +10,7 @@ mod signed_leaves;
 use residual_match::{residual_row_matches, RowMatch};
 
 use super::{InputDomain, RuleTable};
-use crate::function_symbols::{exp_sym, inv_sym, pmult_sym, AcSym, CSym, FunSym};
+use crate::function_symbols::{exp_sym, inv_sym, AcSym, FunSym};
 use crate::lean_unification::{initialize, residual, Error, Outcome, WordSlice, LEAN_THREAD};
 use crate::lterm::{frees_list, sort_of_lterm, HasFrees, LNTerm, LSort, LVar, Name};
 use crate::maude_types::sort_of_name;
@@ -341,7 +341,7 @@ impl RuleTable {
     }
 
     fn canonical_join_normal(&self, t: &LNTerm) -> Result<Option<bool>, Error> {
-        if let Some(root) = self.dh_root_normal(t) {
+        if let Some(root) = self.dh_root_normal(t).or_else(|| self.bp_root_normal(t)) {
             return normal_with_root(t, root, |arg| self.canonical_join_normal(arg));
         }
         if self.irreducible_native(t)? {
@@ -450,14 +450,7 @@ impl RuleTable {
                 FunSym::NoEq(f) => *f == exp_sym() || *f == inv_sym(),
                 _ => false,
             };
-        // Both operations admit arbitrary signed operands, including those
-        // that expose point actions only after normalization.
-        let bilinear = self.builtin_bp
-            && (matches!(head, FunSym::NoEq(f) if *f == pmult_sym())
-                || matches!(head, FunSym::C(CSym::EMap)))
-            && args.len() == 2
-            && self.dh_signed_expression(&args[0])?
-            && self.dh_signed_expression(&args[1])?;
+        let bilinear = self.admits_point_inputs(*head, args, true)?;
         let arity = match head {
             _ if bilinear => 2,
             _ if dh && self.dh_unique_instances(app)? => {

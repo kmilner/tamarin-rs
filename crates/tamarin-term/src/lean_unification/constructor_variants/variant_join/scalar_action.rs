@@ -87,6 +87,27 @@ fn var(v: LVar) -> LNTerm {
 }
 
 impl RuleTable {
+    /// The exact bilinear root tests in Inventory.point_normal_iff and
+    /// Inventory.map_normal_iff. The caller checks each child separately.
+    pub(super) fn bp_root_normal(&self, t: &LNTerm) -> Option<bool> {
+        if !self.builtin_bp {
+            return None;
+        }
+        let Term::App(head, args) = t else {
+            return None;
+        };
+        let op = Operation::from_head(*head)?;
+        let [l, r] = args.as_ref() else { return None };
+        let point = |a: &LNTerm| matches!(a, Term::App(FunSym::NoEq(f), _) if *f == pmult_sym());
+        Some(
+            !point(r)
+                && match op {
+                    Operation::Action => l != &one_const(),
+                    Operation::Pairing => !point(l),
+                },
+        )
+    }
+
     fn rigid_signed_operand(&self, t: &LNTerm) -> Result<bool, Error> {
         if super::super::dh_product::is_group_operation(t)
             && let Term::App(_, xs) = t
@@ -101,14 +122,80 @@ impl RuleTable {
         Ok(self.join_normal(t)? == Some(true))
     }
 
+    pub(in crate::lean_unification::constructor_variants) fn signed_operand(
+        &self,
+        t: &LNTerm,
+        stable: bool,
+    ) -> Result<bool, Error> {
+        if stable {
+            self.dh_signed_expression(t)
+        } else {
+            self.rigid_signed_operand(t)
+        }
+    }
+
+    /// Any number of signed scalars acting on one stable (or rigid normal)
+    /// leaf. A concrete normal leaf may itself already be a point action.
+    pub(in crate::lean_unification::constructor_variants) fn bp_point_spine(
+        &self,
+        mut t: &LNTerm,
+        stable: bool,
+    ) -> Result<bool, Error> {
+        if !self.builtin_bp {
+            return Ok(false);
+        }
+        while let Term::App(FunSym::NoEq(f), xs) = t {
+            if *f != pmult_sym() {
+                break;
+            }
+            let [a, p] = xs.as_ref() else {
+                return Ok(false);
+            };
+            if !self.signed_operand(a, stable)? {
+                return Ok(false);
+            }
+            t = p;
+        }
+        if stable {
+            self.stably_normal_native(t)
+        } else {
+            Ok(self.join_normal(t)? == Some(true))
+        }
+    }
+
+    pub(super) fn admits_point_inputs(
+        &self,
+        head: FunSym,
+        args: &[LNTerm],
+        stable: bool,
+    ) -> Result<bool, Error> {
+        let Some(op) = Operation::from_head(head) else {
+            return Ok(false);
+        };
+        let [l, r] = args else { return Ok(false) };
+        if !self.builtin_bp {
+            return Ok(false);
+        }
+        let signed_l = self.signed_operand(l, stable)?;
+        if signed_l && self.signed_operand(r, stable)? {
+            return Ok(true);
+        }
+        Ok(match op {
+            Operation::Action => signed_l && self.bp_point_spine(r, stable)?,
+            Operation::Pairing => {
+                self.bp_point_spine(l, stable)? && self.bp_point_spine(r, stable)?
+            }
+        })
+    }
+
     fn point_operand<'a>(&self, t: &'a LNTerm) -> Result<Option<Cow<'a, LNTerm>>, Error> {
         if self.join_normal(t)? == Some(true) {
             return Ok(Some(Cow::Borrowed(t)));
         }
-        if self.rigid_signed_operand(t)? {
-            return Ok(self.dh_product_normal(t)?.map(Cow::Owned));
+        if matches!(t, Term::App(FunSym::NoEq(f), _) if *f == pmult_sym()) {
+            return Ok(self.scalar_action_normal(t)?.map(Cow::Owned));
         }
-        Ok(None)
+        Ok(self.dh_product_normal(t)?.map(Cow::Owned))
     }
 
     // A normal point exposes at most one nonunit scalar. Extract from either
@@ -126,7 +213,7 @@ impl RuleTable {
         let [l, r] = args.as_ref() else {
             return Ok(None);
         };
-        if !self.builtin_bp {
+        if !self.admits_point_inputs(*head, args, false)? {
             return Ok(None);
         }
         let Some(l) = self.point_operand(l)? else {
