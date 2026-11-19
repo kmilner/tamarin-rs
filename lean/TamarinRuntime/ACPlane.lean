@@ -37,4 +37,20 @@ def balancedBox : (n : Nat) → Vec n → Vec n → Vec n → Nat → Nat → Li
 def Row.planeGenerators {n} (r : Row n) : List (Vec n) :=
   (balancedBox n r.limits r.pos r.neg 0 0).filter fun v => (List.ofFn v).any (0 < ·)
 
+/-- A minimal nonzero balance uses at most twice the largest absolute
+coefficient in total. Keep any narrower per-coordinate reference limit. -/
+def Row.compactLimits {n} (r : Row n) : Vec n :=
+  let cap := 2 * r.cap
+  let limits := r.limits
+  fun i => min (limits i) cap
+
+def Row.compactFits {n} (r : Row n) (budget : Nat) : Bool :=
+  let limits := r.compactLimits
+  let size := (List.ofFn (fun i => limits i + 1)).prod
+  size ≤ budget || (List.finRange n).any fun i =>
+    (0 < r.pos i || 0 < r.neg i) && size ≤ budget * (limits i + 1)
+
+def Row.compactGenerators {n} (r : Row n) : List (Vec n) :=
+  (balancedBox n r.compactLimits r.pos r.neg 0 0).filter fun v => (List.ofFn v).any (0 < ·)
+
 end Tamarin.ACBasis

@@ -1,5 +1,7 @@
 import Tamarin.ACBasisComplete
-import Tamarin.ACPlane
+import Tamarin.ACCompactPlane
+import Tamarin.ACBalanceBound
+import Tamarin.ACCompactBasis
 import Tamarin.ACCoverage
 import TamarinRuntime.Homogeneous
 
@@ -15,14 +17,33 @@ def GridFits {n} (r : Row n) (budget : Nat) : Prop :=
 private theorem fitsPlane_iff {n} (r : Row n) (b : Nat) : r.fitsPlane b ↔ GridFits r b := by
   simp [Row.fitsPlane, GridFits, List.any_eq_true]
 
+/-- The reference envelope is stated in terms of coefficient values, independently
+of how the candidate searches the integer kernel. -/
+def CompactGridFits {n} (r : Row n) (budget : Nat) : Prop :=
+  let lim i := min (r.limits i) (2*r.cap)
+  let size := (List.ofFn fun i => lim i + 1).prod
+  size ≤ budget ∨ ∃ i, (0 < r.pos i ∨ 0 < r.neg i) ∧ size ≤ budget * (lim i + 1)
+
+private theorem compactFits_iff {n} (r : Row n) (b : Nat) : r.compactFits b ↔ CompactGridFits r b := by
+  let lim := r.compactLimits
+  let size := (List.ofFn fun i => lim i + 1).prod
+  change (decide (size ≤ b) || (List.finRange n).any fun i =>
+    (decide (0 < r.pos i) || decide (0 < r.neg i)) && decide (size ≤ b * (lim i + 1))) = true ↔
+    size ≤ b ∨ ∃ i, (0 < r.pos i ∨ 0 < r.neg i) ∧ size ≤ b * (lim i + 1)
+  simp [List.any_eq_true]
+
+private def compactReference {n} (r : Row n) :=
+  r.generators.filter fun v => decide (∀ i, v i ≤ 2*r.cap)
+
 /-- This domain is defined with the mathematical reference basis, independently
 of the selected executable. A replacement may complete larger systems. -/
 def Within {n} : List (Row n) → Prop
   | [] => True
   | r :: rs => Within rs ∧
     let gs := generate rs
-    gs.length ≤ 12 ∧ GridFits (r.pullback gs.get) 16384 ∧
-      (intersect r gs).length ≤ 2048
+    let p := r.pullback gs.get
+    gs.length ≤ 12 ∧ ((GridFits p 16384 ∧ (intersect r gs).length ≤ 2048) ∨
+      (CompactGridFits p 16384 ∧ (compactReference p).length ≤ 2048))
 
 def Admitted (width : UInt64) (m : Matrix) : Prop :=
   0 < width ∧ width ≤ 32 ∧ m.size ≤ 128 ∧ ∃ rs, readRows width.toNat m.toList = some rs ∧
@@ -99,6 +120,19 @@ private theorem stored_get {n} (f : Vec n) : coordinates (Vector.ofFn f) = f := 
   funext i
   simp [coordinates]
 
+private theorem minimize_compact {k n} (r : Row k) (g : Fin k → Vec n)
+    (live : ∀ j, ∃ i, 0 < g j i) :
+    minimize (lift g r.compactGenerators) = minimize (lift g r.generators) := by
+  rw [r.compactGenerators_eq]
+  apply minimize_lift_filter _ _ _ live
+  intro c hc skip
+  have ⟨limit,holds,nz⟩ := (r.mem_generators c).mp hc
+  obtain ⟨d,hd,dnz,le,size⟩ := BalanceBound.dominated_compact r c holds nz
+  refine ⟨d,(r.mem_generators _).mpr ⟨fun i => Nat.le_trans (le i) (limit i),hd,dnz⟩,
+    decide_eq_true size,dnz,le,?_⟩
+  rintro rfl
+  simp [size] at skip
+
 theorem bounded_spec {n} (rs : List (Row n)) :
     (∀ gs, boundedBasis rs = some gs → gs = generate rs) ∧
     (Within rs → boundedBasis rs = some (generate rs)) := by
@@ -110,12 +144,26 @@ theorem bounded_spec {n} (rs : List (Row n)) :
       simp only [boundedBasis, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
       obtain ⟨prev, hp, h⟩ := h
       rw [ih.1 _ hp] at h
-      simp [stored_get, Row.planeGenerators_eq, guard, List.map_map, Function.comp_def] at h
-      exact h.2.2.2.symm
-    · rintro ⟨tail,hg,hb,hc⟩
-      simp only [intersect, lift, List.length_map] at hc
-      simp [boundedBasis, ih.2 tail, stored_get, Row.planeGenerators_eq, intersect, generate,
-        hg, (fitsPlane_iff _ _).mpr hb, hc, guard, List.map_map, Function.comp_def, lift]
+      let prev := generate rs
+      have live (j : Fin prev.length) := ((mem_generate rs _).mp (List.get_mem prev j)).2.1
+      simp [stored_get,guard,List.map_map,Function.comp_def] at h
+      exact h.2.2.2.symm.trans (minimize_compact _ prev.get live)
+    · rintro ⟨tail,hg,area⟩
+      let prev := generate rs
+      let p := r.pullback prev.get
+      have live (j : Fin prev.length) := ((mem_generate rs _).mp (List.get_mem prev j)).2.1
+      have checks : (p.compactFits 16384 || p.fitsPlane 16384) = true ∧ p.compactGenerators.length ≤ 2048 := by
+        rcases area with ⟨grid,cap⟩|⟨grid,cap⟩
+        · refine ⟨by simp [(fitsPlane_iff _ _).mpr grid,p,prev],?_⟩
+          rw [p.compactGenerators_eq]
+          exact Nat.le_trans (List.length_filter_le ..) (by simpa [intersect,lift,p,prev] using cap)
+        · exact ⟨by simp [(compactFits_iff _ _).mpr grid,p,prev],by simpa [compactReference,p.compactGenerators_eq] using cap⟩
+      have minimized := minimize_compact p prev.get live
+      simp [boundedBasis,ih.2 tail,stored_get,guard,hg,
+        show (r.pullback (generate rs).get).compactFits 16384 = true ∨ (r.pullback (generate rs).get).fitsPlane 16384 = true from Bool.or_eq_true_iff.mp checks.1,
+        show (r.pullback (generate rs).get).compactGenerators.length ≤ 2048 from checks.2,
+        List.map_map,Function.comp_def]
+      exact minimized
 
 private theorem emit_correct {n} (f : sig.ACSym) (rows : List ACSystem.Row) (avoid : List Variable)
     (fr : Frame f rows n) (gs : List (Vec n)) (hc : BasisCorrect (rows.map (encode fr.names)) gs)

@@ -194,12 +194,17 @@ example (run) (cert : Correct run) : (run 2 #[lhs,rhs]).isSome := by
   apply cert.completes
   refine ⟨by decide, by decide, by decide, [ratioRow], ?_, ?_, ?_, ?_⟩
   · simp [readRows, ratioRow, lhs, rhs, guard]
-  · refine ⟨trivial, by decide, Or.inr ⟨⟨0, by decide⟩, Or.inl (by decide), by decide⟩, ?_⟩
+  · refine ⟨trivial, by decide, Or.inl ⟨Or.inr ⟨⟨0, by decide⟩, Or.inl (by decide), by decide⟩, ?_⟩⟩
     unfold ACBasis.intersect
     rw [← ACBasis.Row.planeGenerators_eq]
     decide
   all_goals
     simp only [ACBasis.generate, ACBasis.intersect, ← ACBasis.Row.planeGenerators_eq]
     decide
+
+-- All three coefficients exceed one, and no side has a single unit
+-- occurrence. The old projected box for either row exceeded the work cap.
+#guard (solve 3 #[#[7,8,0],#[0,0,15]]).map Array.size == some 5
+#guard (solve 3 #[#[24,25,0],#[0,0,49]]).map Array.size == some 5
 
 end Tamarin.Homogeneous.Tests
