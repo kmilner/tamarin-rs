@@ -139,6 +139,10 @@ private theorem source_graph (m : Nat) (obs : Array (Array UInt64)) {qs} (small 
     have eq : (⟨m+i.val,by omega⟩ : Fin (m+obs.size)) = j := Fin.ext slot.symm
     rw [eq]
 
+theorem Source.unique {m obs qs rs} (bound : 3 + m ≤ UInt64.size)
+    (left : Source m obs qs) (right : Source m obs rs) : qs = rs :=
+  Option.some.inj ((source_graph _ _ bound left).symm.trans (source_graph _ _ bound right))
+
 def Correct (solve : UInt64 → Array (Array UInt64) → Array UInt64) : Prop :=
   ∀ inputs obs, solve inputs obs = #[0] ∨
     ∃ qs, Source inputs.toNat obs qs ∧ ∃ rows, represents rows (solve inputs obs) ∧

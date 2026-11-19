@@ -43,7 +43,7 @@ private theorem evaluator [DecidableEq sig.ACSym] (inventory : Inventory E) (env
     have red := (nf e).1.trans (.basis (h.trans atInput.symm))
     exact ⟨red,norm i,sort_result norm e red (typed i)⟩
 
-private theorem transport (e : Expr n) {a b : Fin n → Term sig} (eq : ∀ i, EquivB (a i) (b i)) :
+theorem Expr.term_equiv (e : Expr n) {a b : Fin n → Term sig} (eq : ∀ i, EquivB (a i) (b i)) :
     EquivB (e.term s a) (e.term s b) := by
   induction e with
   | input i => exact eq i
@@ -85,7 +85,7 @@ theorem exact_graph [DecidableEq sig.ACSym] (inventory : Inventory E) (mul : Mul
     obtain ⟨val,nf,rel⟩ := evaluator inventory t (fun i => (nt i).2) (fun i => (nt i).1)
     have equal := template_sound inventory mul inv unit system basis correct active branch name inj sort val (fun _ _ e _ => nf e)
     have form := (rel p.1 p.2).mpr (equal _ (List.mem_map_of_mem (f := fun p : Expr n × Fin n => (p.1,Expr.input p.2)) hp))
-    have source := transport (s := s) p.1 fit
+    have source := p.1.term_equiv (s := s) fit
     rw [← p.1.subst_term] at source
     have red := (Reduces.basis source).trans ((SpecializedFresh.reduces_subst _ δ form.1).trans (.basis (fit p.2).symm))
     exact ⟨red,norm _,sort_result norm p.1 red (typed _)⟩
