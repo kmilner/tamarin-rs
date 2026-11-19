@@ -1,4 +1,4 @@
-import Tamarin.DHSignedBlocks
+import Tamarin.DHSignedVariantFamily
 
 /-! A DH table with a deliberately nonconfluent unrelated operator. Repeated
 opaque factors compare modulo B, even when their children have opposite orders. -/
@@ -243,5 +243,18 @@ example (i : Fin 2) (name : SignedMatrix.Column sampleBasis → Variable) :
   | succ j => cases j using Fin.cases with
               | zero => rfl
               | succ k => exact k.elim0
+
+-- x = inv(x) has only the unit solution. For y = inv(x) the
+-- reference family represents the unit, each single sign, and a mixture.
+private def kind : Term' → Nat
+  | .free .one _ => 0
+  | .var _ => 1
+  | .free .inv _ => 2
+  | .ac _ _ _ => 3
+  | _ => 4
+#guard ((SignedMatrix.referenceFamily (n := 1) s [(.inv (.input 0),0)]).map
+  (fun r => kind (r 0))) == [0]
+#guard (((SignedMatrix.referenceFamily (n := 2) s [(.inv (.input 0),1)]).map
+  (fun r => 10 * kind (r 0) + kind (r 1))).mergeSort) == [0,12,21,33]
 
 end Tamarin.DHProductUniquenessTests

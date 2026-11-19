@@ -82,6 +82,7 @@ import Tamarin.CompoundImages
 import Tamarin.OpenMatchCancellation
 import Tamarin.FreeTreeMatch
 import Tamarin.OpenMatchAdapter
+import Tamarin.SeededACMatching
 import Tamarin.CollectorMultiplicityMatching
 import Tamarin.MatchOrder
 import Tamarin.NestedTreeMatch
@@ -121,3 +122,5 @@ import Tamarin.ACContextAbsorption
 import Tamarin.DHGroupRootNormal
 import Tamarin.DHSignedMatrix
 import Tamarin.DHSignedBlocks
+import Tamarin.DHSignedVariantFamily
+import Tamarin.DHStaging

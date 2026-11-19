@@ -288,6 +288,9 @@ theorem exportedCancelCommon_semantic {sig : Signature} (decode : UInt64 → Ter
         ACResidual.Holds f σ (left.map decode) (right.map decode) :=
   ACResidual.run_correct exportedCancelCommon_correct decode f lhs rhs
 
+theorem exportedSeededCancellation_correct : OpenMatch.SeededCancellationCorrect Executable.cancelCommon :=
+  OpenMatch.seeded_correct exportedCancelCommon_correct
+
 theorem exportedOpenMatchCancellation_correct : OpenMatchCancellation.Correct Executable.cancelCommon :=
   OpenMatchCancellation.correct exportedCancelCommon_correct
 

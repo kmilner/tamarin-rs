@@ -168,15 +168,15 @@ theorem Blocks.coordinate_count {α : Type} [DecidableEq α] {basis : (Fin n →
 
 open Classical
 
-private theorem slot_mem {basis : (Fin n → Bool) → List (Vec n)} {active : List (Column basis)}
-    {i negative g} (used : g ∈ slots basis active i negative) : g ∈ active := by
+theorem slot_properties {basis : (Fin n → Bool) → List (Vec n)} {active : List (Column basis)}
+    {i negative g} (used : g ∈ slots basis active i negative) : g ∈ active ∧ g.1 i = negative := by
   classical
   obtain ⟨d,_,ds⟩ := List.mem_flatMap.mp used
   split at ds <;> try contradiction
   obtain ⟨j,_,js⟩ := List.mem_flatMap.mp ds
   split at js <;> try contradiction
   obtain ⟨_,rfl⟩ := List.mem_replicate.mp js
-  assumption
+  constructor <;> assumption
 
 private def side (f : sig.ACSym) : List Variable → Option (Term sig)
   | [] => none
@@ -186,6 +186,68 @@ def template (s : Symbols sig) (basis : (Fin n → Bool) → List (Vec n))
     (active : List (Column basis)) (name : Column basis → Variable) (i : Fin n) : Term sig :=
   Balance.assemble s (side s.mul ((slots basis active i false).map name))
     (side s.mul ((slots basis active i true).map name))
+
+/-- Every symbolic coordinate is already normal at the branch, including
+empty coordinates and parameters repeated with multiplicity greater than one. -/
+theorem template_normal {s : Symbols sig} {T : Table s} {E : ExtraTable T}
+    (mul : MulBucket E) (inv : InverseBucket E) (unit : Normal (ruleRoot T.rules) s.product.one)
+    (basis : (Fin n → Bool) → List (Vec n)) (active : List (Column basis))
+    (name : Column basis → Variable) (inj : Function.Injective name) (sort : ∀ g, (name g).sort = .msg)
+    (i : Fin n) : HasSort (template s basis active name i) .msg ∧
+      Normal (ruleRoot T.rules) (template s basis active name i) := by
+  let entries (d : Bool) := (slots basis active i d).map fun g => (Term.var (name g) : Term sig)
+  have packed (d : Bool) : side s.mul ((slots basis active i d).map name) = DHTower.packed s (entries d) := by
+    unfold entries
+    cases slots basis active i d <;> simp [side,DHTower.packed,ACRepresentation.decode,ACSystem.Side.term,List.map_map,Function.comp_def]
+  have fact d : ∀ t ∈ entries d, Factor s t := by
+    rintro t h
+    obtain ⟨_,_,rfl⟩ := List.mem_map.mp h
+    constructor <;> intro eq <;> cases eq
+  have pos d := DHTower.Positive.packed mul (ts := entries d) (by
+    rintro t h; obtain ⟨g,_,rfl⟩ := List.mem_map.mp h
+    exact sort g ▸ HasSort.var (name g)) (by
+    rintro t h; obtain ⟨_,_,rfl⟩ := List.mem_map.mp h
+    exact (ConstructorVariants.constructor_normal _ mul.1).1 _) (fact d)
+  have disjoint : ∀ k ∈ Balance.bag s (DHTower.packed s (entries true)),
+      k ∉ Balance.bag s (DHTower.packed s (entries false)) := by
+    intro k hn hp
+    rw [DHTower.bag_factors _ _ (fact true)] at hn
+    rw [DHTower.bag_factors _ _ (fact false)] at hp
+    obtain ⟨t,ht,rfl⟩ := List.mem_map.mp hn
+    obtain ⟨u,hu,eq⟩ := List.mem_map.mp hp
+    obtain ⟨g,hg,rfl⟩ := List.mem_map.mp ht
+    obtain ⟨j,hj,rfl⟩ := List.mem_map.mp hu
+    have id := inj (Head.var.inj (Quotient.exact eq).head_eq)
+    subst j
+    exact Bool.noConfusion ((slot_properties hj).2.symm.trans (slot_properties hg).2)
+  unfold template
+  rw [packed,packed]
+  have h := DHTower.assembled_normal mul inv unit (pos false) (pos true) disjoint
+  exact ⟨h.1,h.2.1⟩
+
+theorem template_read (s : Symbols sig) (R : Root sig) (vars : ∀ v, Normal R (.var v))
+    (basis : (Fin n → Bool) → List (Vec n)) (active) (name : Column basis → Variable) (i : Fin n)
+    (k : Cancellation.Class sig) :
+    Balance.read s R k (template s basis active name i) =
+      some ((((slots basis active i false).map fun g => Cancellation.classOf (.var (name g))).count k : Int) -
+        (((slots basis active i true).map fun g => Cancellation.classOf (.var (name g))).count k : Int)) := by
+  let cls (v : Variable) := Cancellation.classOf (sig := sig) (.var v)
+  have formula (v : Variable) (vs : List Variable) :
+      Balance.read s R k ((ACSystem.Side.mk v vs).term s.mul) = some ((((v::vs).map cls).count k : Nat) : Int) := by
+    induction vs generalizing v with
+    | nil => by_cases eq : cls v = k <;> simp [cls] at eq <;>
+        simp [ACSystem.Side.term,ACRepresentation.fold,Balance.read,Balance.alien,vars,cls,eq]
+    | cons a as ih =>
+      change Balance.read s R k (s.product.mul (.var v) ((ACSystem.Side.mk a as).term s.mul)) = _
+      rw [Balance.read_mul,ih]
+      by_cases eq : cls v = k <;> simp [cls] at eq <;>
+        simp [Balance.read,Balance.alien,vars,cls,eq,Balance.plus,List.count_cons,Int.add_comm]
+  have assembled (ps ns : List Variable) :
+      Balance.read s R k (Balance.assemble s (side s.mul ps) (side s.mul ns)) =
+        some (((ps.map cls).count k : Int) - ((ns.map cls).count k : Int)) := by
+    cases ps <;> cases ns <;> simp [side,Balance.assemble,formula,Balance.minus,Balance.plus,Int.sub_eq_add_neg]
+  simpa [template,List.map_map,Function.comp_def,cls] using assembled
+    ((slots basis active i false).map name) ((slots basis active i true).map name)
 
 /-- Substituting one term per active witness reconstructs the original
 normal input modulo structural AC alone. No cancellation after substitution
@@ -214,7 +276,7 @@ theorem Blocks.instantiate [DecidableEq sig.ACSym] {s : Symbols sig} {R : Root s
     apply congrArg List.flatten
     apply List.map_congr_left
     intro g h
-    exact realized g (slot_mem h)
+    exact realized g (slot_properties h).1
   have splitCounts (k) :
       (Balance.bag s p).count k = (if signs k i = false then mag k i else 0) ∧
       (Balance.bag s neg).count k = (if signs k i = true then mag k i else 0) := by
