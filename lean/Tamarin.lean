@@ -103,6 +103,7 @@ import Tamarin.ACSubgroups
 import Tamarin.ACSubproductReduction
 import Tamarin.ContextualReduction
 import Tamarin.InertProductReduction
+import Tamarin.InertProductVariants
 import Tamarin.ACUnifierExclusion
 import Tamarin.NarrowingFrontier
 import Tamarin.BinaryXorJoined

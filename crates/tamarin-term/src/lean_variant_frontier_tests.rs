@@ -522,3 +522,6 @@ fn native_oracle_guarded_multi_rule_frontier_preserves_shared_inputs_and_rejects
         assert_eq!(native.stats().var_count, 0);
     }
 }
+
+#[path = "lean_inert_product_variant_tests.rs"]
+mod inert_product_variants;

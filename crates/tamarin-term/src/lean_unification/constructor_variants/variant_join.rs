@@ -2,6 +2,7 @@
 //! Each row also carries its predicted normal values so a specialization
 //! that introduces a redex in an earlier observation can be discarded.
 mod finite_narrowing;
+mod inert_product;
 mod leaf_occurrences;
 mod pivot_match;
 mod residual_match;
@@ -433,6 +434,9 @@ impl RuleTable {
             return Ok(Some(rows));
         }
         if let Some(rows) = self.staged_rows(keys, original, app, search)? {
+            return Ok(Some(rows));
+        }
+        if let Some(rows) = self.inert_product_rows(keys, original, app, search)? {
             return Ok(Some(rows));
         }
         self.finite_narrowing(keys, original, app, search)
