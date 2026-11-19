@@ -454,6 +454,17 @@ EXPORT_MUTATIONS.extend([
     ("bag_answers_always_defer", BAG_ANSWERS, "  none", "theorem exportedACBagAnswers_correct"),
 ])
 
+BAG_PAGE = "  Matching.ACPagePacket.runWith Matching.ACBagPages.run packet start requested"
+EXECUTABLE = ("import Tamarin.ACPagePacket\n" + EXECUTABLE
+              + "\nnamespace Tamarin\n" + obligation("exportedACBagPage_correct") + "end Tamarin\n")
+EXPORT_MUTATIONS.extend([
+    ("bag_page_restarts_at_zero", BAG_PAGE, BAG_PAGE.replace("packet start requested", "packet #[] requested"),
+     "theorem exportedACBagPage_correct"),
+    ("bag_page_discards_header", BAG_PAGE, BAG_PAGE + " |>.map (fun p => p.extract 1 p.size)",
+     "theorem exportedACBagPage_correct"),
+    ("bag_page_always_defers", BAG_PAGE, "  none", "theorem exportedACBagPage_correct"),
+])
+
 MATCH_CAPACITY = "def matchSizeExcludes (pattern subject : UInt64) : Bool := decide (subject < pattern)"
 EXECUTABLE = ("import Tamarin.LinearACMatch\n" + EXECUTABLE + "\nnamespace Tamarin\n"
               + obligation("exportedLinearACMatch_correct") + "end Tamarin\n")

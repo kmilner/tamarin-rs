@@ -39,6 +39,7 @@ jobs:
           lake env lean Tests/ACMatchBags.lean
           lake env lean --run Tests/ACBagSearch.lean
           lake env lean --run Tests/ACBagAnswers.lean
+          lake env lean --run Tests/ACBagPages.lean
           lake env lean Tests/ACTwoRowFeasibility.lean
           lake env lean Tests/AnswerProjection.lean
           lake env lean Tests/OperandRefinement.lean
