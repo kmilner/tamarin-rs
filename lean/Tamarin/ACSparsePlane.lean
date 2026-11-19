@@ -11,7 +11,7 @@ variable {n : Nat}
 private abbrev Before (v w : Vec n) := List.ofFn v < List.ofFn w
 private abbrev Ordered (v w : Vec n) := decide (List.ofFn v ≤ List.ofFn w) = true
 
-private theorem box_sorted (n : Nat) (lim : Vec n) : (box n lim).Pairwise Before := by
+theorem box_sorted (n : Nat) (lim : Vec n) : (box n lim).Pairwise Before := by
   induction n with
   | zero => simp [box]
   | succ n ih =>
