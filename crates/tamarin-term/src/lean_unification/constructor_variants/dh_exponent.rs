@@ -86,7 +86,7 @@ impl RuleTable {
             {
                 return Ok(Outcome::Unsupported);
             }
-            if self.stably_normal(t)? || self.uniform_reduct(t)?.is_some() {
+            if self.has_representative(t, None)? {
                 continue;
             }
             let Some((v, next)) = self.exponent_observation(t)? else {

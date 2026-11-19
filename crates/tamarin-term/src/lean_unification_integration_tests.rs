@@ -2862,6 +2862,7 @@ fn native_oracle_free_exponent_preserves_joint_gdh_observations() {
         corpus,
         vec![product.clone()],
         vec![projection.clone(), product.clone(), power.clone()],
+        vec![hash(projection.clone()), product.clone(), power.clone()],
         vec![
             product.clone(),
             y.clone(),
@@ -2949,6 +2950,7 @@ fn native_oracle_mixed_uniform_reductions_and_dh_powers_preserve_all_query_bindi
     let peer = exp(y.clone(), a.clone());
     for observed in [
         vec![erased.clone(), tower.clone(), peer.clone(), tower.clone()],
+        vec![pair(erased.clone(), b.clone()), peer.clone()],
         vec![
             peer.clone(),
             tower.clone(),
@@ -5752,6 +5754,86 @@ fn independent_and_shared_peer_exponents_preserve_the_entire_product_family() {
             canonical_variants(oracle.variants(&query).unwrap())
         );
     }
+}
+
+#[test]
+fn native_oracle_packed_variants_keep_shared_variables_beside_unique_ground_observations() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{fst, pair, xor};
+    use crate::maude_proc::MaudeError;
+    use crate::maude_sig::{pair_maude_sig, xor_maude_sig};
+    use crate::rewriting::RRule;
+    use crate::subst::{apply_vterm, Subst};
+    use crate::subterm_rule::rrule_to_ctxt_st_rule;
+    use crate::term::f_app_list;
+
+    // The native-oracle CI job exercises both separate sessions. Hybrid
+    // verification intentionally rejects creating a native-only handle.
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let union = |a, b| f_app_ac(AcSym::Union, vec![a, b]);
+    let var = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 0)));
+    let u = var("u", LSort::Msg);
+    let v = var("v", LSort::Msg);
+    let a = pub_term("a");
+    let b = pub_term("b");
+    let closed = union(pair(a.clone(), b.clone()), b.clone());
+    let mut sig = mset_maude_sig()
+        .merge(pair_maude_sig())
+        .merge(xor_maude_sig());
+    // A user equation independent of XOR. Its only match on closed yields a.
+    sig.st_rules.insert(
+        rrule_to_ctxt_st_rule(&RRule::new(
+            union(pair(u.clone(), v.clone()), v.clone()),
+            u.clone(),
+        ))
+        .unwrap(),
+    );
+    let sig = sig.refresh();
+    let native =
+        |s| MaudeHandle::start_with_backend("/nonexistent", s, AlgebraBackend::NativeOnly).unwrap();
+    let h = native(sig.clone());
+    let x = var("x", LSort::Fresh);
+    let erased = var("erased", LSort::Msg);
+    let projection = fst(pair(x.clone(), erased));
+    let fixed = pair(closed.clone(), projection);
+    let active = xor(x.clone(), var("y", LSort::Fresh));
+    let observations = [fixed.clone(), active, closed.clone(), fixed];
+    let q = f_app_list(observations.to_vec());
+    let arms = h.variants(&q).unwrap();
+    assert_eq!(arms.len(), 2);
+    if let Some(path) = require_maude_path() {
+        let oracle =
+            MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
+        assert_eq!(
+            canonical_variants(arms.clone()),
+            canonical_variants(oracle.variants(&q).unwrap())
+        );
+        for arm in arms {
+            let subst = Subst::from_list(arm);
+            for t in &observations {
+                let instance = apply_vterm(&subst, t.clone());
+                assert_eq!(
+                    h.reduce(&instance).unwrap(),
+                    oracle.reduce(&instance).unwrap()
+                );
+            }
+        }
+    }
+    assert_eq!(h.stats().var_count, 0);
+
+    // The second rule yields b on the very same closed term. Neither the
+    // closed slot nor its enclosing free constructor may now be skipped.
+    let mut ambiguous = sig;
+    ambiguous.st_rules.insert(
+        rrule_to_ctxt_st_rule(&RRule::new(union(pair(u.clone(), v.clone()), v.clone()), v))
+            .unwrap(),
+    );
+    assert!(matches!(
+        native(ambiguous.refresh()).variants(&f_app_list(vec![pair(x, closed)])),
+        Err(MaudeError::UnsupportedOperation("variant generation"))
+    ));
 }
 
 #[test]

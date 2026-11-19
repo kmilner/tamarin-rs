@@ -4,7 +4,7 @@
 use super::{InputDomain, RuleTable};
 use crate::function_symbols::FunSym;
 use crate::lean_unification::{initialize, residual, Error, Outcome, WordSlice, LEAN_THREAD};
-use crate::lterm::{frees_list, HasFrees, LNTerm, LVar, Name};
+use crate::lterm::{frees_list, HasFrees, LNTerm, LSort, LVar, Name};
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
 use crate::subst::{apply_vterm, Subst};
@@ -116,6 +116,51 @@ fn prune_variable_instances(rows: &mut Vec<Row>) -> Result<(), Error> {
 }
 
 impl RuleTable {
+    /// A packed slot can omit narrowing only if its normal value commutes
+    /// with every normalized caller substitution. Inputs are already sorted.
+    pub(super) fn has_representative(
+        &self,
+        t: &LNTerm,
+        slot: Option<LSort>,
+    ) -> Result<bool, Error> {
+        let Term::App(head, args) = t else {
+            return Ok(true);
+        };
+        if let Some(required) = slot
+            && self
+                .declaration(*head)
+                .is_none_or(|(_, _, sort)| sort != required)
+        {
+            // A stable child remains normal even at a narrower sort. A changing
+            // child needs its slot to establish every sort of its result.
+            return self.stably_normal_native(t);
+        }
+        if let FunSym::NoEq(f) = head
+            && !self.patterns.contains_key(f)
+        {
+            // All non-nullary free declarations in the emitted module take Msg arguments.
+            for arg in args.iter() {
+                if !self.has_representative(arg, Some(LSort::Msg))? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        if self.stably_normal_native(t)? || self.uniform_reduct(t)?.is_some() {
+            return Ok(true);
+        }
+        if !crate::vterm::is_ground_vterm(t) {
+            return Ok(false);
+        }
+        // These reducers certify uniqueness modulo B as well as reachability.
+        // An arbitrary successful ordinary reduction supplies only one value.
+        let value = match self.cancellation_normal(t)? {
+            Some(n) => Some(n),
+            None => self.ac_root_reduce(t)?,
+        };
+        Ok(value.as_ref().is_some_and(crate::vterm::is_ground_vterm))
+    }
+
     fn join_normal(&self, t: &LNTerm) -> Result<Option<bool>, Error> {
         if self.irreducible_native(t)? {
             return Ok(Some(true));
@@ -304,10 +349,7 @@ impl RuleTable {
             }
             // A uniform reduction has a stable normal value. Its original
             // variables are still part of the final binding projection.
-            if applications.contains(&t)
-                || self.stably_normal_native(t)?
-                || self.uniform_reduct(t)?.is_some()
-            {
+            if applications.contains(&t) || self.has_representative(t, None)? {
                 continue;
             }
             applications.push(t);

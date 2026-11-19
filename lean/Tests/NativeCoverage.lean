@@ -1,7 +1,7 @@
 import Tamarin.ConstructorReduction
 import Tamarin.MatchingFree
 import Tamarin.SortCheck
-import Tamarin.VariableElimination
+import Tamarin.VariablePermutation
 
 /-! Generate well-sorted algebra requests directly from the specification. Each
 line carries its active theory, operation, expectation and postfix term(s).
@@ -43,6 +43,10 @@ private def sameHead : DecidableEq (Head sig) := fun a b => by
 
 def constructorOnly (th : Theory) (t : Expr) : Bool :=
   !(operators t).any fun f => (ruleHeads (rules th)).any fun g => @decide _ (sameHead f g)
+
+/-- In these two bounded presentations the ground observations have a unique
+normal value, including when their active AC root actually rewrites. -/
+def identitySlot (th : Theory) (t : Expr) := t.variables.isEmpty || constructorOnly th t
 
 /-- The mandatory constructor cases have an identity variant for every
 normalized valuation. Adding repeated observations preserves this fact. -/
@@ -130,7 +134,7 @@ def generate : IO Unit := do
         if !(t.checkSort .msg) then throw (IO.userError "ill-sorted coverage term")
         let ctor := constructorOnly th t
         emit th "reduce" (if ctor then "identity" else "complete") [t]
-        emit th "variants" (if ctor then "identity" else "probe") [t,t]
+        emit th "variants" (if identitySlot th t then "identity" else "probe") [t,t]
     -- Joint node budget for an ordinary equation. Operands on the right
     -- of a matching request remain rigid, including their variables.
     for leftSize in [1:5] do
@@ -139,7 +143,7 @@ def generate : IO Unit := do
           for s in terms[rightSize]! do
             emit th "unify" "probe" [p,s]
             emit th "match" (if matchClash p s then "no" else "probe") [p,s]
-            emit th "variants" (if constructorOnly th p && constructorOnly th s then "identity" else "probe") [p,s]
+            emit th "variants" (if identitySlot th p && identitySlot th s then "identity" else "probe") [p,s]
     -- Ground words admit an independent exact answer under both theories.
     let words : List (List sig.Atom) := [[false],[true],[false,false],[false,true],[true,false],
       [true,true],[false,false,false],[true,false,true]]

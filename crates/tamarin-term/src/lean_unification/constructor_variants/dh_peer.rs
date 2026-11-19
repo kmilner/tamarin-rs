@@ -166,10 +166,15 @@ impl RuleTable {
         };
         let mut candidate = None;
         for t in terms {
-            if candidate.as_ref().is_some_and(|(seen, _, _)| *seen == t)
-                || self.stably_normal(t)?
-                || (!ordered && self.uniform_reduct(t)?.is_some())
-            {
+            if candidate.as_ref().is_some_and(|(seen, _, _)| *seen == t) {
+                continue;
+            }
+            let fixed = if ordered {
+                self.stably_normal(t)?
+            } else {
+                self.has_representative(t, None)?
+            };
+            if fixed {
                 continue;
             }
             let Some((base, factors)) = self.dh_peer_factors(t)? else {

@@ -39,7 +39,7 @@ fn generated_requests() -> String {
         "Tamarin.ConstructorReduction",
         "Tamarin.MatchingFree",
         "Tamarin.SortCheck",
-        "Tamarin.VariableElimination",
+        "Tamarin.VariablePermutation",
     ]);
     run(&[
         "env",
@@ -111,6 +111,11 @@ fn exercise(h: &MaudeHandle, op: &str, expected: &str, ts: &[LNTerm]) -> Result<
             let q = f_app_list(ts.to_vec());
             let arms = h.variants(&q)?;
             assert!(!arms.is_empty(), "empty variant family for {q:?}");
+            let visible = frees(&q);
+            assert!(
+                arms.iter().flatten().all(|(v, _)| visible.contains(v)),
+                "{q:?}"
+            );
             match expected {
                 "identity" => assert!(
                     arms.into_iter()

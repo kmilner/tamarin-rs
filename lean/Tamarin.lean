@@ -63,7 +63,7 @@ import Tamarin.CallerFreshening
 import Tamarin.OperandAbstraction
 import Tamarin.ResidualSearch
 import Tamarin.RootExclusion
-import Tamarin.ConstructorReduction
+import Tamarin.ObservationRepresentative
 import Tamarin.FactoredAC
 import Tamarin.FactorAdmission
 import Tamarin.GraphUnification
