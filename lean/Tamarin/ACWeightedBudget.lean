@@ -133,7 +133,7 @@ theorem enumerate_length (r : Row n) (a b : Nat) :
     (enumerate r a b).length =
       ways (slots (side r) .pos) (active a b .pos) * ways (slots (side r) .neg) (active a b .neg) +
         slots (side r) .neutral := by
-  change (List.merge (draw n (side r) (active a b)) (draw n (side r) singleton) _).length = _
+  rw [enumerate_eq_merge]
   simp only [List.length_merge,draw_length,distributions]
   simp [active,singleton,ways_zero,ways_unit]
 

@@ -97,8 +97,16 @@ private theorem member (r : Row n) {a b} (u : Uniform r a b) {v} (p : Primitive 
 private noncomputable def keep (r : Row n) (a b : Nat) (v : Vec n) : Bool := by
   classical exact decide (Primitive r a b v)
 
+theorem enumerate_eq_merge (r : Row n) (a b : Nat) :
+    enumerate r a b = (draw n (side r) (active a b)).merge (draw n (side r) singleton)
+      (fun l r => decide (List.ofFn l ≤ List.ofFn r)) := by
+  unfold enumerate draw
+  dsimp only
+  cases (plan n (side r)).draw singleton <;> simp
+
 theorem ordered (r : Row n) {a b} (u : Uniform r a b) :
     enumerate r a b = r.generators.filter (keep r a b) := by
+  rw [enumerate_eq_merge]
   let L := draw n (side r) (active a b)
   let R := draw n (side r) singleton
   have sl := sorted_draw (side r) (active a b)

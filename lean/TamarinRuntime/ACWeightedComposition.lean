@@ -46,7 +46,10 @@ def draw (n : Nat) (tag : Fin n → Side) (q : Quota) := (plan n tag).draw q
 
 def enumerate {n} (r : Row n) (a b : Nat) : List (Vec n) :=
   let suffix := plan n (side r)
-  (suffix.draw (active a b)).merge (suffix.draw singleton) (fun l r => decide (List.ofFn l ≤ List.ofFn r))
+  let mixed := suffix.draw (active a b)
+  match suffix.draw singleton with
+  | [] => mixed
+  | x :: xs => mixed.merge (x :: xs) (fun l r => decide (List.ofFn l ≤ List.ofFn r))
 
 def slots {n} (tag : Fin n → Side) (s : Side) := (List.ofFn tag).count s
 
