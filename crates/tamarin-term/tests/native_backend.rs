@@ -3421,3 +3421,61 @@ fn boolean_linear_ac_counts_agree_with_small_matcher_families() {
         }])
         .unwrap());
 }
+
+#[test]
+fn boolean_ac_matching_keeps_one_image_per_repeated_capture_across_rows() {
+    use tamarin_term::builtin::msg_var;
+
+    let h = native();
+    let x = msg_var("x", 0);
+    let y = msg_var("y", 0);
+    let fixed = pub_term("tag");
+    let bag = |ts| f_app_ac(AcSym::Union, ts);
+    for expected in [true, false] {
+        let mut left = vec![fixed.clone()];
+        let mut right = vec![fixed.clone(), fixed.clone()];
+        for i in 0..48 {
+            let item = if i == 0 {
+                x.clone()
+            } else {
+                msg_var("subject", i)
+            };
+            left.extend(std::iter::repeat_n(
+                item.clone(),
+                if i % 2 == 0 { 2 } else { 1 },
+            ));
+            right.extend(std::iter::repeat_n(
+                item,
+                if i % 2 == 0 && (expected || i != 0) {
+                    1
+                } else {
+                    2
+                },
+            ));
+        }
+        // For every frozen factor its multiplicities in X,Y must explain both
+        // 2X+Y and X+2Y. On the failing input one factor demands counts (2,2),
+        // whose unique rational solution gives it multiplicity 2/3 in each.
+        let mut rows = [
+            Equal {
+                lhs: bag(left),
+                rhs: bag(vec![fixed.clone(), x.clone(), x.clone(), y.clone()]),
+            },
+            Equal {
+                lhs: bag(right),
+                rhs: bag(vec![
+                    fixed.clone(),
+                    fixed.clone(),
+                    x.clone(),
+                    y.clone(),
+                    y.clone(),
+                ]),
+            },
+        ];
+        for _ in 0..2 {
+            assert_eq!(h.has_match_eqs(&rows).unwrap(), expected);
+            rows.reverse();
+        }
+    }
+    assert_eq!(h.stats().match_count, 0);
+}

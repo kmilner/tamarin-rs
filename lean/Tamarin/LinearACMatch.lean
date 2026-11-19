@@ -112,6 +112,48 @@ theorem presented {excludes} (checked : Correct excludes) [DecidableEq sig.ACSym
   exact exists_congr fun σ => ⟨fun h => (hp.subst σ.image).trans (h.trans ht.symm),
     fun h => (hp.subst σ.image).symm.trans (h.trans ht)⟩
 
+/-- A missing fixed operand refutes any remaining open patterns, including
+repetitions or captures shared with other rows. The subject is never
+instantiated when cancelling factors. -/
+theorem missing_refutes {cancel} (hc : CommonCancellation.Correct cancel) [DecidableEq sig.ACSym]
+    (f : sig.ACSym) (p t : Term sig) (d : UInt64 → Term sig) (fixed subject : Array UInt64)
+    (extra : List (Term sig)) (pl : (fixed.toList.map d ++ extra).Perm (ACRepresentation.flatten f p))
+    (sl : (subject.toList.map d).Perm (ACRepresentation.flatten f t)) (ground : ∀ i ∈ fixed.toList, (d i).Ground)
+    (reflects : ∀ i ∈ fixed.toList, ∀ j ∈ subject.toList, EquivB (d i) (d j) → i = j)
+    {l r : Array UInt64} (packet : cancel fixed subject = #[l,r]) (missingOne : l ≠ #[]) :
+    ∀ σ : Substitution sig, ¬ EquivB (σ.apply p) t := by
+  obtain ⟨common,missing,rest,out,left,right,apart⟩ := hc fixed subject
+  have atLeft := congrArg (fun rows : Array (Array UInt64) => rows[0]?) (out.symm.trans packet)
+  have inFix i (mem : i ∈ common ++ missing) := left.mem_iff.mpr mem
+  have inSub j (mem : j ∈ rest) := right.mem_iff.mpr (List.mem_append_right common mem)
+  have commonGround u (hu : u ∈ common.map d) : u.Ground := by
+    obtain ⟨i,hi,rfl⟩ := List.mem_map.mp hu
+    exact ground i (inFix _ (List.mem_append_left _ hi))
+  have lp : (common.map d ++ (missing.map d ++ extra)).Perm (ACRepresentation.flatten f p) := by
+    apply List.Perm.trans _ pl
+    simpa [List.append_assoc] using ((left.map d).symm.append_right extra)
+  have rp : (common.map d ++ rest.map d).Perm (ACRepresentation.flatten f t) := by
+    exact (by simpa using (right.map d).symm : (common.map d ++ rest.map d).Perm (subject.toList.map d)) |>.trans sl
+  cases missing with
+  | nil => simp at atLeft; exact False.elim (missingOne atLeft)
+  | cons i is =>
+    intro σ hit
+    have h := (remainder f p t _ _ _ lp rp commonGround σ).1 hit
+    have perm := (OpenMatch.holds_iff ..).1 h
+    have input := inFix i (List.mem_append_right _ List.mem_cons_self)
+    have pat := pl.subset (List.mem_append_left _ (List.mem_map_of_mem (f := d) input))
+    have src : classOf (d i) ∈ (((i :: is).map d ++ extra).flatMap
+        fun a => flatten f (σ.apply a)) := by
+      apply List.mem_flatMap.mpr
+      refine ⟨d i,by simp,?_⟩
+      rw [(ground i input).apply_eq,OpenMatch.factor_of_mem_flatten f p _ pat]
+      simp
+    obtain ⟨a,ha,belongs⟩ := List.mem_flatMap.mp (perm.subset src)
+    obtain ⟨j,hj,rfl⟩ := List.mem_map.mp ha
+    have factor := OpenMatch.factor_of_mem_flatten f t _ (sl.subset (List.mem_map_of_mem (f := d) (inSub _ hj)))
+    rw [factor,List.mem_singleton] at belongs
+    exact apart i List.mem_cons_self ((reflects i input j (inSub _ hj) (Quotient.exact belongs)).symm ▸ hj)
+
 /-- Connect the two physical results to the original pattern and rigid
 subject. Multiplicities count separately even for equivalent ground terms.
 A missing fixed occurrence rules out every assignment. -/
@@ -132,11 +174,10 @@ def PacketCorrect (cancel : Array UInt64 → Array UInt64 → Array (Array UInt6
 theorem packet_correct {cancel excludes} (hc : CommonCancellation.Correct cancel)
     (hk : Correct excludes) : PacketCorrect cancel excludes := by
   intro sig _ f p t d fixed subject vs k pl sl ground reflects ne distinct sorts typed keys
-  obtain ⟨common,missing,rest,out,left,right,apart⟩ := hc fixed subject
+  obtain ⟨common,missing,rest,out,left,right,_⟩ := hc fixed subject
   refine ⟨missing,rest,out,?_⟩
   intro n count
   have inFix i (mem : i ∈ common ++ missing) := left.mem_iff.mpr mem
-  have inSub j (mem : j ∈ rest) := right.mem_iff.mpr (List.mem_append_right common mem)
   have commonGround u (hu : u ∈ common.map d) : u.Ground := by
     obtain ⟨i,hi,rfl⟩ := List.mem_map.mp hu
     exact ground i (inFix _ (List.mem_append_left _ hi))
@@ -151,22 +192,7 @@ theorem packet_correct {cancel excludes} (hc : CommonCancellation.Correct cancel
       commonGround ne distinct sorts typed keys (by simpa using count)
   | cons i is =>
     simp only [List.cons_ne_nil,false_and,false_iff,not_exists]
-    intro σ hit
-    have h := (remainder f p t _ _ _ lp rp commonGround σ).1 hit
-    have perm := (OpenMatch.holds_iff ..).1 h
-    have input := inFix i (List.mem_append_right _ List.mem_cons_self)
-    have pat := pl.subset (List.mem_append_left _ (List.mem_map_of_mem (f := d) input))
-    have src : classOf (d i) ∈ (((i :: is).map d ++ vs.map Term.var).flatMap
-        fun a => flatten f (σ.apply a)) := by
-      apply List.mem_flatMap.mpr
-      refine ⟨d i,by simp,?_⟩
-      rw [(ground i input).apply_eq,OpenMatch.factor_of_mem_flatten f p _ pat]
-      simp
-    obtain ⟨a,ha,belongs⟩ := List.mem_flatMap.mp (perm.subset src)
-    obtain ⟨j,hj,rfl⟩ := List.mem_map.mp ha
-    have factor := OpenMatch.factor_of_mem_flatten f t _ (sl.subset (List.mem_map_of_mem (f := d) (inSub _ hj)))
-    rw [factor,List.mem_singleton] at belongs
-    exact apart i List.mem_cons_self ((reflects i input j (inSub _ hj) (Quotient.exact belongs)).symm ▸ hj)
+    exact missing_refutes hc f p t d fixed subject (vs.map Term.var) pl sl ground reflects out (by simp)
 
 /-- Variables are shared through patterns. A name occurring in one pattern
 and another row's rigid subject does not couple the assignments. -/

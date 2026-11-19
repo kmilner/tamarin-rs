@@ -230,6 +230,11 @@ static lean_object *word_rows(const whole_word_slice *rows, size_t count) {
     return nodes;
 }
 
+extern uint8_t tamarin_ac_bag_match(lean_object *rows);
+uint8_t tamarin_lean_ac_bag_match(const whole_word_slice *rows, size_t count) {
+    return tamarin_ac_bag_match(word_rows(rows, count));
+}
+
 extern lean_object *tamarin_select_joined_variants(lean_object *rows);
 uint8_t tamarin_lean_select_joined_variants(const whole_word_slice *rows, size_t count,
                                            uint8_t *mask) {

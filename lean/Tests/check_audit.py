@@ -432,6 +432,17 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedHomogeneousUnify_correct"),
 ])
 
+BAG_DECISION = "  Matching.ACMatchPacket.runWith Matching.ACBagSearch.run packet"
+EXECUTABLE = ("import Tamarin.ACMatchPacket\nimport Tamarin.ACBagSearch\n" + EXECUTABLE
+              + "\nnamespace Tamarin\n" + obligation("exportedACBagMatch_correct") + "end Tamarin\n")
+EXPORT_MUTATIONS.extend([
+    ("bag_match_ignores_shared_rows", BAG_DECISION, BAG_DECISION.replace("run packet", "run (packet.extract 0 2)"),
+     "theorem exportedACBagMatch_correct"),
+    ("bag_match_always_defers", BAG_DECISION, "  0", "theorem exportedACBagMatch_correct"),
+    ("bag_match_confuses_failure_with_success", BAG_DECISION,
+     BAG_DECISION + " |> fun tag => if tag == 1 then 2 else tag", "theorem exportedACBagMatch_correct"),
+])
+
 MATCH_CAPACITY = "def matchSizeExcludes (pattern subject : UInt64) : Bool := decide (subject < pattern)"
 EXECUTABLE = ("import Tamarin.LinearACMatch\n" + EXECUTABLE + "\nnamespace Tamarin\n"
               + obligation("exportedLinearACMatch_correct") + "end Tamarin\n")

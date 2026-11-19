@@ -1,4 +1,6 @@
 import Tamarin
+import Tamarin.ACMatchPacket
+import Tamarin.ACBagSearch
 import Lean
 
 /-- Required CI witness for the actual exported functions, with a type owned
@@ -59,6 +61,11 @@ theorem Tamarin.exportedFlatMatcher_correct (n : UInt64) (occ tail rhs : Array U
   Tamarin.FlatMatchCandidateProofs.exported n occ tail rhs rows
 
 namespace Tamarin
+
+theorem exportedACBagMatch_correct : Matching.ACMatchPacket.Correct Matching.ACBagSearch.Within
+    Executable.acBagMatch :=
+  Matching.ACMatchPacket.runWith_correct _ _ Matching.ACBagSearch.run_correct.exact
+    Matching.ACBagSearch.run_correct.completes
 
 theorem exportedMatchSizeExcludes_correct :
     Matching.Prefilter.SizeExclusion Executable.matchSizeExcludes :=
@@ -1058,6 +1065,7 @@ run_cmd do
     (``Tamarin.Executable.reductionGraph, `tamarin_reduction_graph),
     (``Tamarin.Executable.acSubgroups, `tamarin_ac_subgroups),
     (``Tamarin.Executable.openMatchSelect, `tamarin_open_match_select),
+    (``Tamarin.Executable.acBagMatch, `tamarin_ac_bag_match),
     (``Tamarin.Executable.matchSizeExcludes, `tamarin_match_size_excludes),
     (``Tamarin.Executable.collectorPossible, `tamarin_collector_possible),
     (``Tamarin.Executable.sortedACMatch, `tamarin_sorted_ac_match),

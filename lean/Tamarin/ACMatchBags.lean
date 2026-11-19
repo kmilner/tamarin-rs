@@ -7,4 +7,8 @@ def Feasible {κ α : Type} (rows : List (List κ × List α)) : Prop :=
   ∃ image : κ → List α, (∀ r ∈ rows, ∀ k ∈ r.1, image k ≠ []) ∧
     ∀ r ∈ rows, (r.1.flatMap image).Perm r.2
 
+theorem feasible_perm {κ α : Type} {rs ss : List (List κ × List α)} (order : rs.Perm ss) :
+    Feasible rs ↔ Feasible ss := by
+  simp only [Feasible,order.mem_iff]
+
 end Tamarin.Matching.ACBags
