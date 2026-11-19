@@ -1,7 +1,7 @@
 //! Normalize a DH power by root rewrites and normalization of its operands.
 use super::RuleTable;
 use crate::builtin::exp;
-use crate::function_symbols::{dh_neutral_sym, exp_sym, one_sym, FunSym};
+use crate::function_symbols::{dh_neutral_sym, exp_sym, one_sym, CSym, FunSym};
 use crate::lean_unification::Error;
 use crate::lterm::LNTerm;
 use crate::term::Term;
@@ -33,6 +33,8 @@ impl RuleTable {
     /// An exact DH inventory gives signed expressions a unique normal value.
     /// A power spine also has a unique value when its base stays normal and
     /// every exponent has a defined signed count under the same substitution.
+    /// Bilinear.PowerSpine.caller_power_map also covers a pairing of stable
+    /// operands under the exact joint DH and bilinear inventories.
     pub(super) fn dh_unique_instances(&self, t: &LNTerm) -> Result<bool, Error> {
         if !self.builtin_dh {
             return Ok(false);
@@ -45,6 +47,14 @@ impl RuleTable {
                 return Ok(false);
             }
             let Some(inner) = power_args(&args[0]) else {
+                if self.builtin_bp
+                    && let Term::App(FunSym::C(CSym::EMap), points) = &args[0]
+                    && let [left, right] = points.as_ref()
+                {
+                    return Ok(
+                        self.stably_normal_native(left)? && self.stably_normal_native(right)?
+                    );
+                }
                 return self.stably_normal_native(&args[0]);
             };
             args = inner;
@@ -84,7 +94,17 @@ impl RuleTable {
                 current = next;
                 continue;
             }
-            let Some(base) = self.dh_product_normal(&args[0])? else {
+            let base = if self.builtin_bp
+                && let Term::App(FunSym::C(CSym::EMap), points) = &args[0]
+                && let [left, right] = points.as_ref()
+                && self.join_normal(left)? == Some(true)
+                && self.join_normal(right)? == Some(true)
+            {
+                self.scalar_action_normal(&args[0])?
+            } else {
+                self.dh_product_normal(&args[0])?
+            };
+            let Some(base) = base else {
                 return Ok(None);
             };
             let Some(exponent) = self.dh_product_normal(&args[1])? else {
@@ -109,9 +129,31 @@ impl RuleTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builtin::{fst, hash, inv, msg_var, mult};
-    use crate::maude_sig::{dh_maude_sig, hash_maude_sig, pair_maude_sig};
+    use crate::builtin::{emap, fst, hash, inv, msg_var, mult};
+    use crate::maude_sig::{bp_maude_sig, dh_maude_sig, hash_maude_sig, pair_maude_sig};
     use crate::subterm_rule::{CtxtStRule, StRhs};
+
+    #[test]
+    fn pairing_power_spine_checks_its_operands_and_live_rules() {
+        let mut sig = bp_maude_sig().merge(pair_maude_sig());
+        let table = RuleTable::new(&sig).unwrap();
+        let x = msg_var("x", 0);
+        let y = msg_var("y", 1);
+        let pairing = emap(x.clone(), x.clone());
+        let tower = exp(exp(pairing.clone(), inv(y.clone())), x.clone());
+        assert!(table.dh_unique_instances(&tower).unwrap());
+        let changing = exp(emap(x.clone(), fst(y.clone())), x.clone());
+        assert!(!table.dh_unique_instances(&changing).unwrap());
+        sig.st_rules.insert(CtxtStRule::new(
+            pairing,
+            StRhs {
+                positions: vec![vec![0]],
+                term: x,
+            },
+        ));
+        let changed = RuleTable::new(&sig).unwrap();
+        assert!(!changed.dh_unique_instances(&tower).unwrap());
+    }
 
     #[test]
     fn power_spine_uniqueness_requires_stable_leaves_and_exact_live_rules() {
