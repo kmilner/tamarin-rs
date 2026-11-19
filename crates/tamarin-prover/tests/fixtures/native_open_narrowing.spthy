@@ -1,0 +1,21 @@
+theory NativeOpenNarrowing
+begin
+functions: box/2, openbox/2
+equations: openbox(box(m,k),k) = m
+
+rule Source:
+  [ Fr(~k) ] --> [ Ready(box('payload',~k),~k) ]
+
+rule WrongKey:
+  [] --> [ Ready(box('hidden','left'),'right') ]
+
+rule Open:
+  [ Ready(x,y) ] --[ Opened(openbox(x,y)) ]-> []
+
+lemma shared_key_branch:
+  exists-trace "Ex #i. Opened('payload') @ i"
+
+lemma mismatched_keys:
+  "not (Ex #i. Opened('hidden') @ i)"
+
+end

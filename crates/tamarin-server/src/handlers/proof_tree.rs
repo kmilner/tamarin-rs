@@ -193,8 +193,15 @@ impl ProofState {
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
         cfg: &crate::ServerConfig,
     ) -> Result<Self, String> {
-        let maude = tamarin_term::maude_proc::MaudeHandle::start(&cfg.maude_path, maude_sig)
-            .map_err(|e| format!("maude start: {:?}", e))?;
+        if cfg.algebra_backend == tamarin_term::algebra_backend::AlgebraBackend::NativeOnly {
+            return Err("native-only interactive mode is not yet supported".into());
+        }
+        let maude = tamarin_term::maude_proc::MaudeHandle::start_with_backend(
+            &cfg.maude_path,
+            maude_sig,
+            cfg.algebra_backend,
+        )
+        .map_err(|e| format!("maude start: {:?}", e))?;
         Self::new_with_maude(typed, maude, ndc_cache, cfg)
     }
 

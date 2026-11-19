@@ -1,11 +1,13 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of `Term.Maude.Process` — a subprocess driver for Maude.
+//! Port of `Term.Maude.Process` — an algebra session with optional Maude transport.
 //!
 //! Spawns `maude -interactive -no-tecla -no-banner -no-wrap -batch`,
 //! feeds it a `fmod MSG ... endfm` module describing the term algebra,
 //! and exposes `unify`, `match`, `variants`, and `reduce` operations.
+//! Experimental native-only sessions create no process and fail explicitly
+//! when an operation exceeds the supported in-process fragment.
 //!
 //! The protocol is line-oriented: every command ends with `.\n` and
 //! Maude's response ends with the prompt `Maude> `.
@@ -15,6 +17,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
+use crate::algebra_backend::AlgebraBackend;
 use crate::lterm::LNTerm;
 use crate::maude_parse;
 use crate::maude_print::{pp_mterm_into, pp_mterm_list_into, pp_theory};
@@ -26,10 +29,23 @@ use tamarin_utils::fresh::MonadFresh;
 
 const PROMPT: &[u8] = b"Maude> ";
 
+/// A single open application result and the argument bindings used to obtain
+/// it. Range variables are shared between the bindings and the result. A
+/// branch is scoped to the query. Rename both together in any larger scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationVariant {
+    pub bindings: Vec<(crate::lterm::LVar, LNTerm)>,
+    pub value: LNTerm,
+}
+
 /// Errors that can arise from the Maude bridge.
 #[derive(Debug)]
 pub enum MaudeError {
     Cancelled,
+    /// Experimental native-only mode cannot complete this operation.
+    UnsupportedOperation(&'static str),
+    /// A native runtime/packet error invalidated this session.
+    NativeFailure(String),
     /// stdin/stdout I/O failure talking to the Maude subprocess.
     Io(std::io::Error),
     /// The `maude` binary could not be launched (e.g. not found on PATH).
@@ -43,6 +59,10 @@ pub enum MaudeError {
 impl std::fmt::Display for MaudeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            MaudeError::UnsupportedOperation(op) => {
+                write!(f, "native-only backend does not support {op}")
+            }
+            MaudeError::NativeFailure(reason) => write!(f, "native-only backend failed: {reason}"),
             MaudeError::Cancelled => f.write_str("request cancelled"),
             MaudeError::Io(e) => write!(f, "io error: {}", e),
             MaudeError::Spawn(s) => write!(f, "spawn error: {}", s),
@@ -68,6 +88,26 @@ impl From<maude_parse::ParseError> for MaudeError {
     }
 }
 
+// An open natural sum can belong to Maude's kind without having a declared
+// sort. The free factorer only looks at an application's result sort.
+fn contains_kind_sum(t: &LNTerm) -> bool {
+    use crate::function_symbols::{nat_one_sym, AcSym, FunSym};
+    use crate::lterm::LSort;
+    use crate::maude_types::sort_of_name;
+    use crate::term::Term;
+    use crate::vterm::Lit;
+    let Term::App(f, args) = t else { return false };
+    (*f == FunSym::Ac(AcSym::NatPlus)
+        && (args.len() < 2
+            || args.iter().any(|a| match a {
+                Term::Lit(Lit::Var(v)) => v.sort != LSort::Nat,
+                Term::Lit(Lit::Con(c)) => sort_of_name(c) != LSort::Nat,
+                Term::App(FunSym::NoEq(g), xs) => *g != nat_one_sym() || !xs.is_empty(),
+                Term::App(h, _) => *h != FunSym::Ac(AcSym::NatPlus),
+            })))
+        || args.iter().any(contains_kind_sum)
+}
+
 /// True if `t` contains any function symbol whose head matches one in
 /// `reducible`.  Used as a fast-path predicate for `reduce`: if the
 /// term contains no reducible symbols at all, `reduce` is the
@@ -90,10 +130,116 @@ pub(crate) fn term_ac_c_free(t: &LNTerm) -> bool {
     t.all_fun_syms(|f| !matches!(f, FunSym::Ac(_) | FunSym::C(_)))
 }
 
+/// Match the source declarations printed by `pp_theory`, rather than derived
+/// signature caches that a caller may not have refreshed. The native adapter
+/// checks term shape/sorts separately; undeclared inputs retain Maude's error
+/// behavior instead of being silently accepted by a more permissive algebra.
+#[cfg(feature = "lean-unification")]
+fn lean_signature_supports(sig: &MaudeSig, equations: &[Equal<LNTerm>]) -> bool {
+    use crate::function_symbols::{AcSym, FunSym};
+    use crate::lterm::{LSort, NameTag};
+    use crate::term::Term;
+    use crate::vterm::Lit;
+
+    equations.iter().all(|eq| {
+        [&eq.lhs, &eq.rhs].into_iter().all(|term| {
+            let Term::App(FunSym::Ac(symbol), children) = term else {
+                return false;
+            };
+            let declared = match symbol {
+                AcSym::Mult => sig.enable_dh,
+                AcSym::Union => sig.enable_mset,
+                AcSym::Xor => sig.enable_xor,
+                AcSym::NatPlus => sig.enable_nat,
+                AcSym::AcFct(symbol) => sig.st_ac_fun_syms.contains(symbol),
+            };
+            declared
+                && children.iter().all(|child| match child {
+                    Term::Lit(Lit::Con(name)) => sig.enable_nat || name.tag != NameTag::Nat,
+                    Term::Lit(Lit::Var(var)) => sig.enable_nat || var.sort != LSort::Nat,
+                    _ => false,
+                })
+        })
+    })
+}
+
+/// Decompose equal declared free heads positionally. Keep AC siblings together.
+/// A top-level variable-to-literal equation supplies a forced binding when
+/// its domain is independent of the remaining patterns. Source matching
+/// includes a node-to-node equation of this kind alongside the fact equations.
+#[cfg(feature = "lean-unification")]
+fn free_match_children(
+    sig: &MaudeSig,
+    equations: &[Equal<LNTerm>],
+    bindings: &mut std::collections::BTreeMap<crate::lterm::LVar, LNTerm>,
+) -> Option<Vec<Equal<LNTerm>>> {
+    use crate::lterm::{sort_compare, sort_of_lterm, HasFrees, LSort};
+    use crate::{function_symbols::FunSym, lterm::NameTag, term::Term, vterm::Lit};
+    let mut pending = Vec::with_capacity(equations.len());
+    for eq in equations.iter().rev() {
+        if let (Term::Lit(Lit::Var(v)), Term::Lit(_)) = (&eq.lhs, &eq.rhs) {
+            let sort = sort_of_lterm(&eq.rhs, crate::maude_types::sort_of_name);
+            if (!sig.enable_nat && (v.sort == LSort::Nat || sort == LSort::Nat))
+                || !sort_compare(sort, v.sort).is_some_and(|ord| ord.is_le())
+                || eq.lhs == eq.rhs
+            {
+                return None;
+            }
+            if bindings
+                .insert(*v, eq.rhs.clone())
+                .is_some_and(|old| old != eq.rhs)
+            {
+                return None;
+            }
+        } else {
+            pending.push((&eq.lhs, &eq.rhs));
+        }
+    }
+    let mut children = Vec::new();
+    while let Some((pattern, subject)) = pending.pop() {
+        match (pattern, subject) {
+            (Term::App(FunSym::NoEq(f), p), Term::App(FunSym::NoEq(g), s))
+                if f == g
+                    && sig.st_fun_syms.contains(f)
+                    && p.len() == f.arity
+                    && s.len() == f.arity =>
+            {
+                pending.extend(p.iter().zip(s.iter()).rev());
+            }
+            (Term::Lit(Lit::Con(a)), Term::Lit(Lit::Con(b)))
+                if a == b
+                    && a.tag != NameTag::Node
+                    && (sig.enable_nat || a.tag != NameTag::Nat) => {}
+            (Term::App(FunSym::Ac(_), _), Term::App(FunSym::Ac(_), _)) => {
+                children.push(Equal {
+                    lhs: pattern.clone(),
+                    rhs: subject.clone(),
+                });
+            }
+            _ => return None,
+        }
+    }
+    if !bindings.is_empty()
+        && children.iter().any(|eq| {
+            let mut shared = false;
+            eq.lhs
+                .for_each_free(&mut |v| shared |= bindings.contains_key(v));
+            shared
+        })
+    {
+        return None;
+    }
+    // All free declarations take Msg arguments. The admitted AC result sorts
+    // (Msg and Nat) widen to Msg, as do all admitted literal siblings.
+    Some(children)
+}
+
 /// Statistics on Maude operations performed via this handle.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MaudeStats {
     pub unify_count: u64,
+    /// Residual equation batches completed by the in-process Lean backend.
+    pub lean_unify_count: u64,
     pub match_count: u64,
     pub norm_count: u64,
     pub var_count: u64,
@@ -117,7 +263,7 @@ struct MaudeCacheStats {
     reply_misses: u64,
 }
 
-/// The three memo caches for one theory session, shared (`Arc`) by the
+/// The memo caches for one theory session, shared (`Arc`) by the
 /// session's sequential `file_maude` handle AND every `MaudePool` member
 /// (run.rs wires one instance into both).  Under `--processors=N`,
 /// parallel tasks draw different pool members; sharing lets a value
@@ -149,6 +295,16 @@ struct MaudeCacheStats {
 /// duplication is harmless, so there is no single-flight machinery.
 #[derive(Default)]
 pub struct SharedMaudeCaches {
+    /// Latch failures across workers: legacy callers sometimes recover from errors.
+    /// Native-only consumers must check this before publishing any result.
+    native_failure: std::sync::OnceLock<NativeFailure>,
+    /// Completed ground and identity answers keyed by full terms. Native
+    /// answers carrying a branch-local witness bypass this cache. Factored
+    /// free substitutions are composed afresh by the caller after every hit.
+    #[cfg(feature = "lean-unification")]
+    lean_unify: Mutex<
+        tamarin_utils::FastMap<Vec<(LNTerm, LNTerm)>, Vec<Vec<(crate::lterm::LVar, LNTerm)>>>,
+    >,
     /// Memo for `reduce(...)` queries.  Maude `reduce` is a pure
     /// function of the input term modulo the (fixed-per-session) theory
     /// signature, so successful reductions can be cached across calls.
@@ -197,12 +353,30 @@ pub struct SharedMaudeCaches {
     reply: Mutex<tamarin_utils::FastMap<Vec<u8>, Vec<u8>>>,
 }
 
+#[derive(Debug)]
+enum NativeFailure {
+    Unsupported(&'static str),
+    #[cfg(feature = "lean-unification")]
+    Runtime(String),
+}
+
+impl NativeFailure {
+    fn error(&self) -> MaudeError {
+        match self {
+            Self::Unsupported(operation) => MaudeError::UnsupportedOperation(operation),
+            #[cfg(feature = "lean-unification")]
+            Self::Runtime(reason) => MaudeError::NativeFailure(reason.clone()),
+        }
+    }
+}
+
 struct MaudeProcessInner {
+    backend: AlgebraBackend,
     maude_path: String,
     child: Arc<Mutex<MaudeChildReaper>>,
     initialized: bool,
-    stdin: ChildStdin,
-    stdout: ChildStdout,
+    stdin: Option<ChildStdin>,
+    stdout: Option<ChildStdout>,
     stats: MaudeStats,
     /// Memo cache hit/miss tallies — see `MaudeCacheStats`.
     cache_stats: MaudeCacheStats,
@@ -240,6 +414,17 @@ fn maude_io_trace_config() -> &'static (bool, bool, String) {
 }
 
 impl MaudeProcessInner {
+    fn require_maude(&self, operation: &'static str) -> Result<(), MaudeError> {
+        if self.backend == AlgebraBackend::NativeOnly {
+            let first = self
+                .caches
+                .native_failure
+                .get_or_init(|| NativeFailure::Unsupported(operation));
+            return Err(first.error());
+        }
+        Ok(())
+    }
+
     fn with_cancellation<T>(
         &mut self,
         work: impl FnOnce(&mut Self) -> Result<T, MaudeError>,
@@ -285,6 +470,7 @@ impl MaudeProcessInner {
     }
 
     fn initialize(&mut self) -> Result<(), MaudeError> {
+        self.require_maude("Maude initialization")?;
         {
             let mut reaper = self.child.lock().unwrap();
             cancellation::check()?;
@@ -293,8 +479,8 @@ impl MaudeProcessInner {
                     return Err(MaudeError::Other("Maude exited unexpectedly".into()));
                 }
                 let (stdin, stdout, child) = spawn_maude(&self.maude_path)?;
-                self.stdin = stdin;
-                self.stdout = stdout;
+                self.stdin = Some(stdin);
+                self.stdout = Some(stdout);
                 reaper.child = Some(child);
                 reaper.restart = false;
                 self.initialized = false;
@@ -316,6 +502,7 @@ impl MaudeProcessInner {
     }
 
     fn execute(&mut self, cmd: &[u8]) -> Result<Vec<u8>, MaudeError> {
+        self.require_maude("Maude execution")?;
         self.with_cancellation(|inner| {
             inner.initialize()?;
             inner.execute_raw(cmd)
@@ -323,8 +510,12 @@ impl MaudeProcessInner {
     }
 
     fn write_line(&mut self, line: &[u8]) -> Result<(), MaudeError> {
-        self.stdin.write_all(line)?;
-        self.stdin.flush()?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| MaudeError::Other("missing Maude stdin".into()))?;
+        stdin.write_all(line)?;
+        stdin.flush()?;
         Ok(())
     }
 
@@ -340,7 +531,11 @@ impl MaudeProcessInner {
             // `find_subseq` returns the first match and earlier prefixes
             // were already scanned (and rejected) on prior iterations.
             let start = buf.len().saturating_sub(PROMPT.len() - 1);
-            let n = self.stdout.read(&mut tmp)?;
+            let n = self
+                .stdout
+                .as_mut()
+                .ok_or_else(|| MaudeError::Other("missing Maude stdout".into()))?
+                .read(&mut tmp)?;
             if n == 0 {
                 return Err(MaudeError::Other("Maude exited unexpectedly".into()));
             }
@@ -417,6 +612,7 @@ impl MaudeProcessInner {
         cmd: &[u8],
         bump: impl FnOnce(&mut MaudeStats),
     ) -> Result<Vec<u8>, MaudeError> {
+        self.require_maude("Maude execution")?;
         let hit = self.caches.reply.lock().unwrap().get(cmd).cloned();
         if let Some(cached) = hit {
             self.cache_stats.reply_hits += 1;
@@ -444,13 +640,14 @@ impl Drop for MaudeProcessInner {
         if tamarin_utils::env_gate!("TAM_MAUDE_CACHE_STATS") {
             let s = &self.cache_stats;
             eprintln!(
-                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{}",
+                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} lean_unify={}",
                 s.reduce_hits,
                 s.reduce_misses,
                 s.unifiable_hits,
                 s.unifiable_misses,
                 s.reply_hits,
                 s.reply_misses,
+                self.stats.lean_unify_count,
             );
         }
     }
@@ -515,14 +712,16 @@ fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Handle to a running Maude subprocess. Cloneable; uses an `Arc<Mutex<...>>`
-/// internally so calls from multiple owners are serialised.
+/// Handle to an algebra session (no subprocess in native-only mode).
+/// Cloneable; uses an `Arc<Mutex<...>>`
+/// internally to serialize exchanges with the Maude subprocess.
 /// The `Child` reaper sits in its OWN mutex so a watchdog can
 /// `kill_subprocess()` even while a reader thread is blocked on Maude
 /// IPC inside `inner` — without this split, the watchdog deadlocks
 /// trying to acquire the same mutex the blocked reader holds.
 #[derive(Clone)]
 pub struct MaudeHandle {
+    backend: AlgebraBackend,
     inner: Arc<parking_lot::Mutex<MaudeProcessInner>>,
     child: Arc<Mutex<MaudeChildReaper>>,
     /// Monotonically-increasing counter for fresh-variable allocation.
@@ -553,15 +752,56 @@ pub struct MaudeHandle {
     /// `maude_sig()` hands out a cheap refcount-bumped clone WITHOUT taking the
     /// IPC mutex or deep-cloning the `BTreeSet`s.
     sig: Arc<MaudeSig>,
+    /// Immutable signature data used by native workers without the IPC mutex.
+    #[cfg(feature = "lean-unification")]
+    native_rules: Arc<std::sync::OnceLock<Option<crate::lean_unification::RuleTable>>>,
 }
 
 impl std::fmt::Debug for MaudeHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MaudeHandle(running)")
+        write!(f, "MaudeHandle({:?})", self.backend)
     }
 }
 
 impl MaudeHandle {
+    #[cfg(feature = "lean-unification")]
+    fn native_rules(&self) -> Option<&crate::lean_unification::RuleTable> {
+        self.native_rules
+            .get_or_init(|| crate::lean_unification::RuleTable::new(&self.sig))
+            .as_ref()
+    }
+
+    /// Narrow one free application on distinct message variables and retain
+    /// its normal result. Unsupported inputs use the caller's ordinary path.
+    pub fn observed_application_variants(
+        &self,
+        application: &LNTerm,
+    ) -> Result<Option<Vec<ApplicationVariant>>, MaudeError> {
+        self.check_backend_status()?;
+        cancellation::check()?;
+        #[cfg(feature = "lean-unification")]
+        if self.backend != AlgebraBackend::Maude
+            && let Some(table) = self.native_rules()
+        {
+            return table
+                .observed_application_variants(application)
+                .map_err(|e| {
+                    if self.backend == AlgebraBackend::NativeOnly {
+                        self.inner
+                            .lock()
+                            .caches
+                            .native_failure
+                            .get_or_init(|| NativeFailure::Runtime(e.to_string()))
+                            .error()
+                    } else {
+                        MaudeError::Other(e.to_string())
+                    }
+                });
+        }
+        let _ = application;
+        Ok(None)
+    }
+
     /// Start a new Maude process and load the theory module for `sig`,
     /// with a fresh private cache set (see [`Self::start_with_caches`]).
     /// The entry point for standalone handles — one-shot commands, tests,
@@ -581,6 +821,31 @@ impl MaudeHandle {
         sig: MaudeSig,
         caches: Arc<SharedMaudeCaches>,
     ) -> Result<Self, MaudeError> {
+        Self::start_with_backend_and_caches(maude_path, sig, AlgebraBackend::default(), caches)
+    }
+
+    pub fn start_with_backend(
+        maude_path: &str,
+        sig: MaudeSig,
+        backend: AlgebraBackend,
+    ) -> Result<Self, MaudeError> {
+        Self::start_with_backend_and_caches(
+            maude_path,
+            sig,
+            backend,
+            Arc::new(SharedMaudeCaches::default()),
+        )
+    }
+
+    /// Start a backend session. Native-only creates no subprocess or pipes.
+    /// All handles sharing caches must use the same signature and backend.
+    pub fn start_with_backend_and_caches(
+        maude_path: &str,
+        sig: MaudeSig,
+        backend: AlgebraBackend,
+        caches: Arc<SharedMaudeCaches>,
+    ) -> Result<Self, MaudeError> {
+        backend.validate().map_err(MaudeError::Other)?;
         // Wrap once: `inner`, the handle, and every `with_fresh_counter_from`
         // clone share this single immutable signature.
         let sig = Arc::new(sig);
@@ -601,12 +866,18 @@ impl MaudeHandle {
         // for 55s of a 60s timeout while Maude's wchan was
         // `anon_pipe_write` and the RS reader was `anon_pipe_read`.
         cancellation::check()?;
-        let (stdin, stdout, child) = spawn_maude(maude_path)?;
+        let (stdin, stdout, child) = if backend.uses_maude() {
+            let (stdin, stdout, child) = spawn_maude(maude_path)?;
+            (Some(stdin), Some(stdout), Some(child))
+        } else {
+            (None, None, None)
+        };
         let reaper = Arc::new(Mutex::new(MaudeChildReaper {
-            child: Some(child),
+            child,
             restart: false,
         }));
         let mut inner = MaudeProcessInner {
+            backend,
             maude_path: maude_path.to_owned(),
             child: reaper.clone(),
             initialized: false,
@@ -618,15 +889,35 @@ impl MaudeHandle {
             sig: Arc::clone(&sig),
             caches,
         };
-        inner.with_cancellation(MaudeProcessInner::initialize)?;
+        if backend.uses_maude() {
+            inner.with_cancellation(MaudeProcessInner::initialize)?;
+        }
         Ok(MaudeHandle {
+            backend,
             inner: Arc::new(parking_lot::Mutex::new(inner)),
             child: reaper,
             // The global fresh counter starts at 0 (HS-faithful: HS's
             // `MonadFresh` global counter starts at 0).
             fresh_counter: Arc::new(AtomicU64::new(0)),
             sig,
+            #[cfg(feature = "lean-unification")]
+            native_rules: Default::default(),
         })
+    }
+
+    pub fn backend(&self) -> AlgebraBackend {
+        self.backend
+    }
+
+    /// Must succeed before a native-only consumer publishes a result, even
+    /// if a legacy helper recovered from an unsupported-operation error.
+    pub fn check_backend_status(&self) -> Result<(), MaudeError> {
+        if self.backend == AlgebraBackend::NativeOnly
+            && let Some(operation) = self.inner.lock().caches.native_failure.get()
+        {
+            return Err(operation.error());
+        }
+        Ok(())
     }
 
     /// Return the next unique idx and increment the counter.
@@ -701,10 +992,13 @@ impl MaudeHandle {
     /// tracks across calls.
     pub fn with_fresh_counter_from(&self, avoid_max: u64) -> MaudeHandle {
         MaudeHandle {
+            backend: self.backend,
             inner: self.inner.clone(),
             child: self.child.clone(),
             fresh_counter: Arc::new(AtomicU64::new(avoid_max.saturating_add(1))),
             sig: Arc::clone(&self.sig),
+            #[cfg(feature = "lean-unification")]
+            native_rules: Arc::clone(&self.native_rules),
         }
     }
 
@@ -715,10 +1009,13 @@ impl MaudeHandle {
     /// formula, no nodes), which the `avoid_max + 1` form cannot express.
     pub fn with_fresh_counter_next(&self, next: u64) -> MaudeHandle {
         MaudeHandle {
+            backend: self.backend,
             inner: self.inner.clone(),
             child: self.child.clone(),
             fresh_counter: Arc::new(AtomicU64::new(next)),
             sig: Arc::clone(&self.sig),
+            #[cfg(feature = "lean-unification")]
+            native_rules: Arc::clone(&self.native_rules),
         }
     }
 
@@ -763,6 +1060,7 @@ impl MaudeHandle {
     /// mutex and never across the IPC wait (lock-order invariant on
     /// `SharedMaudeCaches`).
     pub fn reduce(&self, t: &LNTerm) -> Result<LNTerm, MaudeError> {
+        self.check_backend_status()?;
         let mut ctx = ConvCtx::new();
         let reply = {
             let mut inner = cancellation::lock(&self.inner)?;
@@ -772,9 +1070,10 @@ impl MaudeHandle {
                 return Ok(cached);
             }
             // Fast path: if the term contains NO reducible function
-            // symbols anywhere (and the signature has no AC theories
-            // that could rewrite via narrowing), `reduce` is the
-            // identity.  Avoids the ~0.7ms Maude IPC round-trip on the
+            // symbols anywhere, and the signature passes this path's
+            // no-AC/C gate, `reduce` is the identity. Reduction applies
+            // rewrite equations by matching; it does not narrow query
+            // variables. Avoids the ~0.7ms Maude IPC round-trip on the
             // overwhelming majority of fact-term normalisations we
             // perform during subst_system.
             if inner.sig.has_no_ac_operators()
@@ -830,6 +1129,38 @@ impl MaudeHandle {
                 }
                 return Ok(t.clone());
             }
+            #[cfg(feature = "lean-unification")]
+            if self.backend != AlgebraBackend::Maude {
+                let result = crate::lean_unification::pairing_reduce(&inner.sig, t)
+                    .and_then(|result| {
+                        if result.is_none()
+                            && let Some(theory) = self.native_rules()
+                        {
+                            if self.backend == AlgebraBackend::NativeOnly {
+                                theory.reduce_native(t)
+                            } else {
+                                theory.reduce(t)
+                            }
+                        } else {
+                            Ok(result)
+                        }
+                    })
+                    .map_err(|error| {
+                        if self.backend == AlgebraBackend::NativeOnly {
+                            inner
+                                .caches
+                                .native_failure
+                                .get_or_init(|| NativeFailure::Runtime(error.to_string()))
+                                .error()
+                        } else {
+                            MaudeError::Other(error.to_string())
+                        }
+                    })?;
+                if let Some(result) = result {
+                    return Ok(result);
+                }
+            }
+            inner.require_maude("normalization")?;
             let mt = lterm_to_mterm_global(t, &mut ctx);
             let mut cmd = b"reduce ".to_vec();
             pp_mterm_into(&mt, &mut cmd);
@@ -852,19 +1183,21 @@ impl MaudeHandle {
         Ok(result)
     }
 
-    /// Whether *any* unifier of `eqs` exists, modulo the theory.
+    /// Whether *any* unifier of `eqs` exists modulo the signature's AC/C
+    /// attributes. Ordinary `unify` ignores the signature's rewrite equations.
     ///
     /// Memoised via `SharedMaudeCaches::unifiable`, so a repeat query skips
     /// the subprocess round-trip.  Safe to cache because the result is a
     /// context-free boolean (no witness LVars leak across calls).
     ///
-    /// Fast path: when the signature has no AC operators (DH / XOR /
-    /// multiset / nat) we can answer unifiability with the local
+    /// Fast path: when `is_ac_free()` accepts the signature (no AC/C
+    /// operators and no `st_rules`) we answer unifiability with the local
     /// Robinson-style algorithm in `unification.rs`, completely
     /// skipping Maude.  Hashing / asymmetric-encryption / pair-only
     /// protocols hit this fast path almost exclusively, cutting the
     /// per-step Maude call count by orders of magnitude.
     pub fn unifiable(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
+        self.check_backend_status()?;
         if eqs.is_empty() {
             return Ok(true);
         }
@@ -888,40 +1221,36 @@ impl MaudeHandle {
                 return Ok(hit);
             }
         }
-        let res = self.unify(eqs)?;
-        let answer = !res.is_empty();
+        let answer = !self.unify_for(eqs, false)?.is_empty();
+        #[cfg(feature = "lean-unification")]
+        if self.backend == AlgebraBackend::Hybrid
+            && tamarin_utils::env_gate!("TAM_RS_VERIFY_LEAN_UNIFY")
+            && answer == self.unify_via_maude(eqs)?.is_empty()
+        {
+            return Err(MaudeError::Other(format!(
+                "Lean/Maude unifiability disagreement for {eqs:?}"
+            )));
+        }
         let mut inner = cancellation::lock(&self.inner)?;
         inner.cache_stats.unifiable_misses += 1;
         inner.caches.unifiable.lock().unwrap().insert(key, answer);
         Ok(answer)
     }
 
-    /// True when the local Robinson unifier is complete for this
-    /// signature, so every Maude unifiability query can be answered
-    /// locally.  Requires: no AC operators (DH/XOR/multiset/nat/BP)
-    /// AND no user-defined `[variant]` equations (`sig.st_rules` empty).
-    ///
-    /// When user equations are present (e.g.
-    /// `check_getmsg(pk(x), sign(x,m)) = m`, `convertpcs(...) = sign(...)`,
-    /// `checkpcs(...) = true`), Maude's `unify in MSG` narrows via the
-    /// `[variant]`-attributed equations (see ppTheory in HS's
-    /// Term.Maude.Parser, mirrored by Rust's maude_print.rs) — the local
-    /// fast path is incomplete because Robinson unification can't narrow
-    /// different-App-head equations like `true =? checkpcs(...)`.
-    ///
-    /// StatVerif_GM_Contract_Signing: keeping the variant disj alive
-    /// past `Eq_checks_succeed`'s `z.10 → true` propagation requires
-    /// Maude to narrow `true =? checkpcs(...)` via the `[variant]`
-    /// checkpcs equation, binding pcsig1 → pcs(sign(_, ct), _, _).
-    /// Without narrowing, that variant drops and the chain extension
-    /// produces a surviving Resolve2 case where xm doesn't bind to ct,
-    /// missing the N6 contradiction.
+    /// Conservative gate for the local Robinson unifiability fast path:
+    /// no AC/C operators and an empty `st_rules` set. The latter is an
+    /// existing routing restriction, not a requirement of ordinary Maude
+    /// unification. `unify in MSG` ignores equations, including those marked
+    /// `[variant]`; `variant unify` is the distinct command that uses them
+    /// (Maude manual §13.3 and §14.9). This bridge emits ordinary `unify`.
+    /// Reconsidering the extra gate requires separate compatibility checks.
     fn is_ac_free(&self) -> bool {
         self.sig.has_no_ac_operators() && self.sig.st_rules.is_empty()
     }
 
-    /// Unify a list of equations modulo the theory, returning one
-    /// substitution per Maude unifier.
+    /// Unify a list of equations modulo the signature's AC/C attributes,
+    /// returning one substitution per unifier. This does not perform
+    /// unification modulo rewrite equations or variant narrowing.
     ///
     /// Witness numbering is HS-faithful and COUNTER-NEUTRAL: HS's
     /// `unifyViaMaude` (Term/Maude/Process.hs) numbers each reply's
@@ -940,27 +1269,111 @@ impl MaudeHandle {
         &self,
         eqs: &[Equal<LNTerm>],
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        self.unify_for(eqs, true)
+    }
+
+    /// A boolean unifiability query observes only whether a complete result
+    /// contains an arm. It can consume native families in any order.
+    fn unify_for(
+        &self,
+        eqs: &[Equal<LNTerm>],
+        ordered: bool,
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        #[cfg(feature = "lean-unification")]
+        let use_lean = self.backend != AlgebraBackend::Maude
+            && !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY");
+        #[cfg(not(feature = "lean-unification"))]
+        let use_lean = false;
+        self.unify_backend(eqs, use_lean, ordered)
+    }
+
+    /// Run the existing Maude path for differential tests and benchmarks.
+    /// This keeps the same factoring, caches and witness conversion as `unify`.
+    #[cfg(feature = "lean-unification")]
+    pub fn unify_via_maude(
+        &self,
+        eqs: &[Equal<LNTerm>],
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        self.inner
+            .lock()
+            .require_maude("Maude unification oracle")?;
+        self.unify_backend(eqs, false, true)
+    }
+
+    fn unify_backend(
+        &self,
+        eqs: &[Equal<LNTerm>],
+        use_lean: bool,
+        ordered: bool,
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        self.check_backend_status()?;
+        #[cfg(not(feature = "lean-unification"))]
+        let _ = (use_lean, ordered);
+        #[cfg(feature = "lean-unification")]
+        let lean_error = |error: crate::lean_unification::Error| {
+            if error == crate::lean_unification::Error::Cancelled {
+                MaudeError::Cancelled
+            } else if self.backend == AlgebraBackend::NativeOnly {
+                self.inner
+                    .lock()
+                    .caches
+                    .native_failure
+                    .get_or_init(|| NativeFailure::Runtime(error.to_string()))
+                    .error()
+            } else {
+                MaudeError::Other(error.to_string())
+            }
+        };
+        #[cfg(feature = "lean-unification")]
+        if use_lean && self.backend == AlgebraBackend::NativeOnly {
+            cancellation::check()?;
+            let result = self
+                .native_rules()
+                .map(|table| table.whole_unify(eqs))
+                .transpose();
+            if let Some(crate::lean_unification::Outcome::Complete(answers)) =
+                result.map_err(lean_error)?
+            {
+                cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+                return Ok(answers);
+            }
+        }
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
-        // NOTE: no syntactic-equality fast path here.  HS's `unifyRaw`
-        // (Unification.hs) delays AC-headed and C-headed pairs
-        // to Maude UNCONDITIONALLY — even when lhs == rhs syntactically.
-        // Maude's complete unifier set for a self-equal AC/C term is
-        // NOT just the identity: e.g. `em(hp(a),hp(b)) =? em(hp(a),hp(b))`
-        // (C/comm) also has the "diagonal" unifier a=b, and
-        // `mult(x,y) =? mult(x,y)` has the x=y merge.  Do NOT add an
-        // `all(lhs == rhs) -> [identity]` fast path: it drops these
-        // diagonal arms — observable on Scott::key_secrecy where
-        // HS's refineSubst fan-out at /case_2/Init_2/Init_1/c_kdf/
-        // split_case_3 yields 4 unifier arms for em/Mult-headed source
-        // cases (the surviving Resp_1_case_01/06/09/10 arms) while a
-        // fast path yields only 2.  Self-equal NON-AC eq sets still avoid the
-        // Maude round-trip via the local unifier below (HS-faithful:
-        // unifyRaw solves them locally).
+        if self.sig.enable_nat
+            && eqs
+                .iter()
+                .any(|eq| contains_kind_sum(&eq.lhs) || contains_kind_sum(&eq.rhs))
+        {
+            #[cfg(feature = "lean-unification")]
+            if use_lean && self.backend == AlgebraBackend::NativeOnly {
+                cancellation::check()?;
+                let result = self
+                    .native_rules()
+                    .map(|table| table.unify_kind_sum(eqs))
+                    .transpose();
+                if let Some(crate::lean_unification::Outcome::Complete(arms)) =
+                    result.map_err(lean_error)?
+                {
+                    cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+                    return Ok(arms);
+                }
+            }
+            // Factoring would allow binding a variable to an unsorted range.
+            return self.unify_residuals_with_maude(eqs, &crate::subst::Subst::empty());
+        }
+        // HS unifyRaw delays AC- and C-headed pairs even when the two sides
+        // are syntactically equal. The empty substitution is mathematically
+        // complete for a reflexive equation. Maude can spell out that same
+        // identity using explicit fresh renamings for its input variables.
+        // Keep the existing hybrid dispatch except for the checked fragment
+        // of reflexive AC equations with rigid literals and strictly subsorted variables.
+        // In native-only mode, cancellation and C orientation dominance may
+        // also remove reflexive equations in a larger conjunction.
         //
-        // Local non-AC unifier first, ALWAYS — mirroring HS's
-        // `unifyLTermFactored` (Unification.hs):
+        // Remaining queries use the local non-AC unifier first, mirroring
+        // HS's `unifyLTermFactored` (Unification.hs):
         //
         // ```haskell
         // unifyLTermFactored sortOf eqs = reader $ \h ->
@@ -987,15 +1400,16 @@ impl MaudeHandle {
         // renamed target (a SubstVFresh same-target collision, observed as
         // $R=$I on KAS_key_secrecy).
         //
-        // Step 4 is also why this is NOT gated on `is_ac_free()`:
-        // signatures WITH [variant] equations (e.g. StatVerif's
-        // convertpcs/checkpcs) must still try the local unifier first,
-        // otherwise every unification goes to Maude, which narrows via the
-        // [variant] equations and keeps variants HS would drop.
+        // This local-first path applies even when `is_ac_free()` is false:
+        // it follows HS's factoring and substitution-composition behavior
+        // for every signature. The presence of [variant] equations does
+        // not change ordinary `unify` semantics; Maude ignores those equations.
         {
-            let result = crate::unification::unify_lnterm_no_ac_with_counter(
+            // The Maude wire reserves a Pub-tagged spelling for Msg-sorted
+            // skolem constants. Use its true sort for every elimination.
+            let result = crate::unification::unify_lterm_no_ac(
+                &crate::maude_types::sort_of_name,
                 eqs.to_vec(),
-                &self.fresh_counter,
             );
             match result {
                 Ok(subst) => {
@@ -1006,8 +1420,8 @@ impl MaudeHandle {
                     return Ok(vec![folded.to_list()]);
                 }
                 Err(crate::unification::UnifyError::NoUnifier) => {
-                    // HS-faithful: unifyRaw failed.  Don't call Maude
-                    // (avoid spurious [variant] narrowing).  Return empty.
+                    // HS-faithful: unifyRaw failed. Return empty without
+                    // an unnecessary Maude call.
                     return Ok(Vec::new());
                 }
                 Err(crate::unification::UnifyError::NeedsAC) => {
@@ -1048,7 +1462,10 @@ impl MaudeHandle {
         let (factored_m, residual_eqs): (
             crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
             Vec<Equal<LNTerm>>,
-        ) = match crate::unification::unify_lnterm_factored(eqs.to_vec()) {
+        ) = match crate::unification::unify_lterm_factored(
+            &crate::maude_types::sort_of_name,
+            eqs.to_vec(),
+        ) {
             Some((m, leqs)) => (m, leqs),
             // unifyRaw failed during factoring → no unifier (HS `solve _
             // Nothing = (emptySubst, [])` → flattenUnif maps over []).
@@ -1063,8 +1480,143 @@ impl MaudeHandle {
             let composed = crate::subst_vfresh::compose_vfresh(&empty_vfresh, &factored_m);
             return Ok(vec![composed.to_list()]);
         }
-        // The equations actually sent to Maude are the AC residuals.
-        let maude_eqs: &[Equal<LNTerm>] = &residual_eqs;
+        // The feature is experimental and the Lean kernel explicitly reports
+        // unsupported fragments. Only a completed result can replace Maude;
+        // a runtime failure remains an error, never a contradiction.
+        #[cfg(feature = "lean-unification")]
+        let lean_expected = if use_lean && lean_signature_supports(&self.sig, &residual_eqs) {
+            cancellation::check()?;
+            // Shared-witness packets must be decoded in the original query
+            // and factoring context. Only the ground/identity path below
+            // caches reified substitutions.
+            if self.backend == AlgebraBackend::NativeOnly
+                && let crate::lean_unification::Outcome::Complete(answers) =
+                    crate::lean_unification::unify_with_witnesses(&residual_eqs, eqs, &factored_m)
+                        .map_err(lean_error)?
+            {
+                cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+                return Ok(answers);
+            }
+            let key: Vec<_> = residual_eqs
+                .iter()
+                .map(|eq| (eq.lhs.clone(), eq.rhs.clone()))
+                .collect();
+            let cached = {
+                let inner = cancellation::lock(&self.inner)?;
+                inner.caches.lean_unify.lock().unwrap().get(&key).cloned()
+            };
+            let outcome = if let Some(arms) = cached {
+                crate::lean_unification::Outcome::Complete(arms)
+            } else {
+                let outcome = crate::lean_unification::unify(&residual_eqs)
+                    .and_then(|outcome| {
+                        if self.backend == AlgebraBackend::NativeOnly
+                            && outcome == crate::lean_unification::Outcome::Unsupported
+                        {
+                            crate::lean_unification::unify_by_cancellation(&residual_eqs)
+                        } else {
+                            Ok(outcome)
+                        }
+                    })
+                    .map_err(lean_error)?;
+                if let crate::lean_unification::Outcome::Complete(arms) = &outcome {
+                    cancellation::lock(&self.inner)?
+                        .caches
+                        .lean_unify
+                        .lock()
+                        .unwrap()
+                        .insert(key, arms.clone());
+                }
+                outcome
+            };
+            match outcome {
+                crate::lean_unification::Outcome::Unsupported => None,
+                crate::lean_unification::Outcome::Complete(arms) => {
+                    // Arms either have ground ranges or are the empty identity
+                    // from reflexivity or cancellation. Neither introduces
+                    // nonground witness ranges at the SubstVFresh boundary.
+                    let result: Vec<_> = arms
+                        .into_iter()
+                        .map(|arm| {
+                            let vfresh = crate::subst_vfresh::LNSubstVFresh::from_list(arm);
+                            crate::subst_vfresh::compose_vfresh(&vfresh, &factored_m).to_list()
+                        })
+                        .collect();
+                    cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+                    if !tamarin_utils::env_gate!("TAM_RS_VERIFY_LEAN_UNIFY") {
+                        return Ok(result);
+                    }
+                    Some(result)
+                }
+            }
+        } else {
+            None
+        };
+        #[cfg(feature = "lean-unification")]
+        let try_structured = use_lean
+            && (self.backend == AlgebraBackend::NativeOnly || !ordered)
+            && self
+                .native_rules()
+                .is_some_and(|table| table.admits_terms(eqs));
+        #[cfg(feature = "lean-unification")]
+        if try_structured
+            && let crate::lean_unification::Outcome::Complete(answers) =
+                crate::lean_unification::unify_structured(&residual_eqs, eqs, &factored_m)
+                    .map_err(lean_error)?
+        {
+            cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+            return Ok(answers);
+        }
+        #[cfg(feature = "lean-unification")]
+        // Free factoring can expose a simultaneous AC matrix under other constructors.
+        // Validate the proposed bindings and residual against the original conjunction
+        // before accepting this path, including a complete empty answer set.
+        if try_structured
+            && residual_eqs != eqs
+            && let Some(table) = self.native_rules()
+            && let crate::lean_unification::Outcome::Complete(arms) = table
+                .factored_unify(eqs, &factored_m, &residual_eqs)
+                .map_err(lean_error)?
+        {
+            cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+            return Ok(compose_checked_factor(eqs, arms, &factored_m));
+        }
+        #[cfg(feature = "lean-unification")]
+        if try_structured
+            && let Some(table) = self.native_rules()
+            && let crate::lean_unification::Outcome::Complete(answers) =
+                table.unify_operands(eqs).map_err(lean_error)?
+        {
+            cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+            return Ok(answers);
+        }
+        #[cfg(feature = "lean-unification")]
+        if try_structured
+            && let Some(table) = self.native_rules()
+            && table.refutes_ac_conjunct(eqs).map_err(lean_error)?
+        {
+            cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+            return Ok(Vec::new());
+        }
+        let renamed = self.unify_residuals_with_maude(&residual_eqs, &factored_m)?;
+        #[cfg(feature = "lean-unification")]
+        if let Some(expected) = lean_expected
+            && expected != renamed
+        {
+            return Err(MaudeError::Other(format!(
+                "Lean/Maude unifier disagreement: equations {residual_eqs:?}, \
+                 Lean {expected:?}, Maude {renamed:?}"
+            )));
+        }
+        Ok(renamed)
+    }
+
+    fn unify_residuals_with_maude(
+        &self,
+        maude_eqs: &[Equal<LNTerm>],
+        factored_m: &crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        self.inner.lock().require_maude("AC/C unification")?;
         let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         let cmd = build_conj_eqs_cmd(b"unify in MSG : ", maude_eqs, &mut ctx);
@@ -1145,35 +1697,110 @@ impl MaudeHandle {
         // that filter, so it is applied here: left in, the trivial rename
         // entries reach the disjunction's substs as extra node-id bindings
         // and drive spurious `setNodes` collisions.
-        out = out
-            .into_iter()
-            .map(|arm| {
-                let vfresh =
-                    crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::from_list(arm);
-                vfresh.remove_renamings().to_list()
-            })
-            .collect();
-        // HS `flattenUnif (subst, substs) = map (`composeVFresh` subst) substs`
-        // (Unification.hs) composes each Maude arm with `subst = m`, the
-        // non-AC factored substitution — so `factored_m` MUST be the second
-        // argument here.  The composition also RENAMES the arm's range vars
-        // (the Maude witnesses) via HS's `freshToFreeAvoidingFast` uniform
-        // shift seeded by `succ (max idx in (s2, s1_0=arm) domain)`, re-basing
-        // the Maude-allocated idxs above just the relevant domain.  That
-        // re-basing, together with sending only the AC residuals to Maude,
-        // is what keeps witness idxs aligned with HS, so alpha-equivalent
-        // substs sort identically and `perform_split` picks the same case
-        // order.
-        let renamed: Vec<Vec<(crate::lterm::LVar, LNTerm)>> = out
-            .into_iter()
-            .map(|arm| {
-                let arm_vfresh =
-                    crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::from_list(arm);
-                let composed = crate::subst_vfresh::compose_vfresh(&arm_vfresh, &factored_m);
-                composed.to_list()
-            })
-            .collect();
-        Ok(renamed)
+        Ok(compose_residual_arms(out, factored_m))
+    }
+
+    /// Attempt the checked ground-subject fragment. Callers supply explicit
+    /// (pattern, subject) orientation; the two public matching APIs differ.
+    #[cfg(feature = "lean-unification")]
+    fn native_match_ground(
+        &self,
+        equations: &[Equal<LNTerm>],
+        ordered: bool,
+    ) -> Result<Option<Vec<Vec<(crate::lterm::LVar, LNTerm)>>>, MaudeError> {
+        use crate::function_symbols::FunSym;
+        use crate::term::Term;
+
+        if self.backend == AlgebraBackend::Maude || tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
+        {
+            return Ok(None);
+        }
+        cancellation::check()?;
+
+        let match_error = |error: crate::lean_unification::Error| {
+            if error == crate::lean_unification::Error::Cancelled {
+                MaudeError::Cancelled
+            } else if self.backend == AlgebraBackend::NativeOnly {
+                self.inner
+                    .lock()
+                    .caches
+                    .native_failure
+                    .get_or_init(|| NativeFailure::Runtime(error.to_string()))
+                    .error()
+            } else {
+                MaudeError::Other(error.to_string())
+            }
+        };
+        if self.backend == AlgebraBackend::NativeOnly
+            && let Some(table) = self.native_rules()
+            && let crate::lean_unification::Outcome::Complete(mut answers) = table
+                .match_ground_captures(equations)
+                .map_err(match_error)?
+        {
+            for answer in &mut answers {
+                order_match_bindings(answer);
+            }
+            return Ok(Some(answers));
+        }
+        // Keep compound AC leaves after decomposing declared free constructors.
+        let children;
+        let mut fixed = std::collections::BTreeMap::new();
+        let leaves = if equations.iter().all(|eq| {
+            matches!(
+                (&eq.lhs, &eq.rhs),
+                (Term::App(FunSym::Ac(_), _), Term::App(FunSym::Ac(_), _))
+            )
+        }) {
+            equations
+        } else {
+            let Some(decomposed) = free_match_children(&self.sig, equations, &mut fixed) else {
+                return Ok(None);
+            };
+            children = decomposed;
+            &children
+        };
+        let literal = lean_signature_supports(&self.sig, leaves);
+        let result = if literal {
+            crate::lean_unification::match_ground(leaves)
+        } else if self
+            .native_rules()
+            .is_some_and(|table| table.admits_terms(equations))
+        {
+            crate::lean_unification::match_compound_ground(leaves)
+        } else {
+            return Ok(None);
+        }
+        .map_err(match_error)?;
+        Ok(match result {
+            crate::lean_unification::Outcome::Unsupported => None,
+            // These searches enumerate a set of alternatives. An ordered
+            // hybrid caller can observe Maude's first answer to the full query.
+            crate::lean_unification::Outcome::Complete(answers)
+                if self.backend == AlgebraBackend::Hybrid
+                    && ordered
+                    && answers.len() > 1
+                    && (!literal
+                        || !fixed.is_empty()
+                        || leaves
+                            .iter()
+                            .any(crate::lean_unification::uses_sorted_partition)) =>
+            {
+                None
+            }
+            crate::lean_unification::Outcome::Complete(mut answers) => {
+                if !ordered {
+                    // Only has_match_eqs requests an unordered result.
+                    answers.truncate(1);
+                }
+                for answer in &mut answers {
+                    answer.extend(fixed.iter().map(|(v, image)| (*v, image.clone())));
+                    if ordered {
+                        order_match_bindings(answer);
+                    }
+                }
+                Some(answers)
+            }
+        })
     }
 
     /// Compute AC matchers for a batch of `(subject, pattern)` problems.
@@ -1201,36 +1828,119 @@ impl MaudeHandle {
     /// holds `(subject, pattern)`, and so does this routine. Callers
     /// constructed from `matchFact`/`matchWith` (e.g. `sources.rs`) MUST
     /// therefore put the subject in `lhs` and the pattern in `rhs`.
+    /// Each match lists its bindings in variable order, as in HS `substToList`.
     pub fn match_eqs(
         &self,
         eqs: &[Equal<LNTerm>],
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        let mut answers = self.match_eqs_impl(eqs, true)?;
+        self.order_native_alternatives(&mut answers);
+        Ok(answers)
+    }
+
+    /// The experimental backend exposes the lexicographic order of complete
+    /// binding maps in the caller's scope. This also removes repeat answers.
+    fn order_native_alternatives(&self, answers: &mut Vec<Vec<(crate::lterm::LVar, LNTerm)>>) {
+        if self.backend == AlgebraBackend::NativeOnly && answers.len() > 1 {
+            answers.sort_unstable();
+            answers.dedup();
+        }
+    }
+
+    /// Determine whether any match exists, independent of arm order.
+    pub fn has_match_eqs(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
+        self.match_eqs_impl(eqs, false)
+            .map(|answers| !answers.is_empty())
+    }
+
+    // With no bindable variables, matching reduces to equality modulo C and AC.
+    // Smart constructors already produce the canonical representation. A library
+    // caller can also supply valid raw trees with unsorted or nested AC children.
+    fn rigid_match_equal(
+        &self,
+        eqs: &[Equal<LNTerm>],
+        operation: &'static str,
+    ) -> Result<Option<bool>, MaudeError> {
+        fn canonical(t: &LNTerm) -> Option<bool> {
+            use crate::{function_symbols::FunSym, term::Term};
+            let Term::App(f, args) = t else {
+                return Some(true);
+            };
+            let mut sorted = match f {
+                FunSym::Ac(_) if args.len() >= 2 => {
+                    args.is_sorted() && !args.iter().any(|a| matches!(a, Term::App(g, _) if g == f))
+                }
+                FunSym::C(_) if args.len() == 2 => args[0] <= args[1],
+                FunSym::NoEq(head) if args.len() == head.arity => true,
+                FunSym::List => true,
+                _ => return None,
+            };
+            for arg in args.iter() {
+                sorted &= canonical(arg)?;
+            }
+            Some(sorted)
+        }
+
+        let mut raw = false;
+        for term in eqs.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]) {
+            let Some(already_sorted) = canonical(term) else {
+                // The wire encoder itself rebuilds through smart constructors.
+                // Empty or singleton AC nodes have no valid application to send.
+                self.inner.lock().require_maude(operation)?;
+                return Err(MaudeError::Other(
+                    "invalid operator arity in matching query".into(),
+                ));
+            };
+            raw |= !already_sorted;
+        }
+        if !raw {
+            return Ok(Some(eqs.iter().all(|eq| eq.lhs == eq.rhs)));
+        }
+        #[cfg(feature = "lean-unification")]
+        if self.backend != AlgebraBackend::Maude
+            && self
+                .native_rules()
+                .is_some_and(|table| table.admits_terms(eqs))
+        {
+            let normalize = |t: &LNTerm| crate::term::map_lits(t, &mut |lit| *lit);
+            return Ok(Some(eqs.iter().all(|eq| {
+                eq.lhs == eq.rhs || normalize(&eq.lhs) == normalize(&eq.rhs)
+            })));
+        }
+        Ok(None)
+    }
+
+    fn match_eqs_impl(
+        &self,
+        eqs: &[Equal<LNTerm>],
+        _ordered: bool,
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        self.check_backend_status()?;
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
-        // Ground-pattern short-circuit (provably equivalent to the Maude
-        // call below).  The generated MSG module declares AC/C operators
-        // `[comm assoc]` / `[comm]` and NO identity axiom
-        // (`maude_print.rs:op_ac`/`op_c`), so `match P <=? S` matches modulo
-        // AC/C only.  Here the pattern is `eq.rhs` (vars bind); when every
-        // pattern is ground there are no variables to bind, so the match
-        // succeeds with the empty substitution iff each pattern equals its
-        // subject modulo AC/C — and RS keeps AC/C terms flattened+sorted at
-        // construction (`f_app_ac`/`f_app_c`), so that is exactly structural
-        // `==`, the same canonical-form equality the solver uses for dedup.
-        // Maude returns exactly one (empty) solution or none for a ground
-        // match, so this is byte-identical.  On natural-numbers/multiset
-        // theories these ground multiset comparisons dominate and are
-        // re-issued thousands of times (gcm: ~99% of all `match` queries,
-        // ~3500x redundancy) — skipping the IPC is the bulk of the win.
-        if eqs.iter().all(|eq| crate::vterm::is_ground_vterm(&eq.rhs)) {
-            let matched = eqs.iter().all(|eq| eq.lhs == eq.rhs);
+        let rigid = eqs.iter().all(|eq| crate::vterm::is_ground_vterm(&eq.rhs));
+        if rigid && let Some(matched) = self.rigid_match_equal(eqs, "matching")? {
             return Ok(if matched { vec![Vec::new()] } else { vec![] });
+        }
+        #[cfg(feature = "lean-unification")]
+        if !rigid {
+            let oriented: Vec<_> = eqs
+                .iter()
+                .map(|eq| Equal {
+                    lhs: eq.rhs.clone(),
+                    rhs: eq.lhs.clone(),
+                })
+                .collect();
+            if let Some(answers) = self.native_match_ground(&oriented, _ordered)? {
+                return Ok(answers);
+            }
         }
         let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         // `subjs` ← each `eq.lhs` (HS `t1s = a = subject`);
         // `pats`  ← each `eq.rhs` (HS `t2s = b = pattern`).
+        inner.require_maude("matching")?;
         let mut subjs: Vec<MTerm> = Vec::with_capacity(eqs.len());
         let mut pats: Vec<MTerm> = Vec::with_capacity(eqs.len());
         for eq in eqs {
@@ -1275,30 +1985,19 @@ impl MaudeHandle {
     /// Used by `insert_implied_formulas_pass`'s Eq-guard branch to
     /// handle AC-symbol patterns (e.g. multiset `y++z` against
     /// `'1'++y++h(y)`) faithfully.
+    /// Each match lists its bindings in the same order as `match_eqs`.
     pub fn match_eqs_skolemize_both(
         &self,
         eqs: &[Equal<LNTerm>],
         pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        self.check_backend_status()?;
         use crate::lterm::LVar;
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
-        // Ground-pattern short-circuit (provably equivalent to the Maude
-        // call below).  The generated MSG module declares AC/C operators
-        // `[comm assoc]` / `[comm]` and NO identity axiom, so `match P <=? S`
-        // matches modulo AC/C only.  Here the pattern is `eq.lhs` and the
-        // only bindable variables are `pattern_vars` (every other var on
-        // either side is skolemized to a constant).  When no `eq.lhs`
-        // contains a `pattern_var` there is nothing to bind, so the match
-        // succeeds with the empty substitution iff each pattern equals its
-        // subject modulo AC/C.  Skolemization is a consistent var->const
-        // renaming applied to both sides, so it preserves structural
-        // equality — hence we can compare the ORIGINAL terms directly, and
-        // (canonical AC/C forms from `f_app_ac`/`f_app_c`) that equality is
-        // structural `==`.  Maude returns one (empty) solution or none for a
-        // ground match, so this is byte-identical and needs no
-        // un-skolemization (there are no bindings).
+        // Skolemization on both sides is injective on the rigid variables, so a
+        // query with no bindable pattern variable can compare the original terms.
         fn has_pattern_var(
             t: &LNTerm,
             pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
@@ -1312,8 +2011,8 @@ impl MaudeHandle {
                 _ => false,
             }
         }
-        if eqs.iter().all(|eq| !has_pattern_var(&eq.lhs, pattern_vars)) {
-            let matched = eqs.iter().all(|eq| eq.lhs == eq.rhs);
+        let rigid = eqs.iter().all(|eq| !has_pattern_var(&eq.lhs, pattern_vars));
+        if rigid && let Some(matched) = self.rigid_match_equal(eqs, "rigid-context matching")? {
             return Ok(if matched { vec![Vec::new()] } else { vec![] });
         }
         // Step 1: collect ALL non-pattern free vars from BOTH sides.
@@ -1324,7 +2023,8 @@ impl MaudeHandle {
             collect_free_non_pattern_vars(&eq.lhs, pattern_vars, &mut free_vars);
             collect_free_non_pattern_vars(&eq.rhs, pattern_vars, &mut free_vars);
         }
-        let (skolem_map, reverse) = build_skolem_maps(&free_vars);
+        let (skolem_map, reverse) =
+            build_skolem_maps(&free_vars, eqs.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]))?;
         // Step 2: rewrite BOTH sides via the shared skolem_map.
         let rewritten_eqs: Vec<Equal<LNTerm>> = eqs
             .iter()
@@ -1334,7 +2034,18 @@ impl MaudeHandle {
             })
             .collect();
 
+        #[cfg(feature = "lean-unification")]
+        if !rigid && let Some(answers) = self.native_match_ground(&rewritten_eqs, true)? {
+            let mut answers = answers
+                .into_iter()
+                .map(|answer| unskolemize_subst(answer, &reverse))
+                .collect();
+            self.order_native_alternatives(&mut answers);
+            return Ok(answers);
+        }
+
         let mut inner = cancellation::lock(&self.inner)?;
+        inner.require_maude("rigid-context matching")?;
         let mut ctx = ConvCtx::new();
         let mut pats: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
         let mut subjs: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
@@ -1365,15 +2076,57 @@ impl MaudeHandle {
         Ok(out)
     }
 
-    /// Get the variants of a term, one substitution per Maude `[variant]`.
-    /// Each variant is back-converted with its own fresh conversion
-    /// context (see the inline note) so that fresh witness vars do not
-    /// collide between variants.
+    /// Get one fresh substitution per variant. The native constructor path
+    /// returns the identity as an empty substitution. Maude may spell it out
+    /// with independent same-sort fresh variables. Each Maude answer has its
+    /// own local witness scope.
     pub fn variants(
         &self,
         t: &LNTerm,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        self.check_backend_status()?;
         let mut inner = cancellation::lock(&self.inner)?;
+        #[cfg(feature = "lean-unification")]
+        if self.backend != AlgebraBackend::Maude {
+            let result = crate::lean_unification::pairing_variants(&inner.sig, t)
+                .and_then(|result| {
+                    if result == crate::lean_unification::Outcome::Unsupported
+                        && let Some(theory) = self.native_rules()
+                    {
+                        if self.backend == AlgebraBackend::NativeOnly
+                            && let complete @ crate::lean_unification::Outcome::Complete(_) =
+                                theory.fresh_xor_variants(t)?
+                        {
+                            return Ok(complete);
+                        }
+                        let result = theory.variants(t)?;
+                        if self.backend == AlgebraBackend::NativeOnly
+                            && result == crate::lean_unification::Outcome::Unsupported
+                        {
+                            theory.joined_variants(t)
+                        } else {
+                            Ok(result)
+                        }
+                    } else {
+                        Ok(result)
+                    }
+                })
+                .map_err(|error| {
+                    if self.backend == AlgebraBackend::NativeOnly {
+                        inner
+                            .caches
+                            .native_failure
+                            .get_or_init(|| NativeFailure::Runtime(error.to_string()))
+                            .error()
+                    } else {
+                        MaudeError::Other(error.to_string())
+                    }
+                })?;
+            if let crate::lean_unification::Outcome::Complete(answers) = result {
+                return Ok(answers);
+            }
+        }
+        inner.require_maude("variant generation")?;
         let mut ctx = ConvCtx::new();
         let mt = lterm_to_mterm_global(t, &mut ctx);
         let mut cmd = b"get variants in MSG : ".to_vec();
@@ -1414,6 +2167,60 @@ impl MaudeHandle {
         }
         Ok(out)
     }
+}
+
+/// Encode the ordinary composition on the original variables as a fresh-range
+/// answer. A variable surviving only in a factor image needs its own row so
+/// opening the range later preserves its sharing with that image.
+#[cfg(feature = "lean-unification")]
+fn compose_checked_factor(
+    original: &[Equal<LNTerm>],
+    arms: crate::lean_unification::Substitutions,
+    factor: &crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
+) -> crate::lean_unification::Substitutions {
+    use crate::lterm::HasFrees;
+    use crate::term::Term;
+    use crate::vterm::Lit;
+
+    if arms.is_empty() {
+        return arms;
+    }
+    let mut observed = Vec::new();
+    for equation in original {
+        equation.lhs.for_each_free(&mut |v| observed.push(*v));
+        equation.rhs.for_each_free(&mut |v| observed.push(*v));
+    }
+    observed.sort_unstable();
+    observed.dedup();
+    arms.into_iter()
+        .map(|arm| {
+            let composed = crate::subst::Subst::from_list(arm).compose(factor);
+            observed
+                .iter()
+                .map(|&v| {
+                    let image = composed
+                        .image_of(&v)
+                        .cloned()
+                        .unwrap_or(Term::Lit(Lit::Var(v)));
+                    (v, image)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Convert residual witnesses into the caller's scope and compose with the
+/// free substitution obtained by factoring the original equations.
+fn compose_residual_arms(
+    arms: Vec<Vec<(crate::lterm::LVar, LNTerm)>>,
+    factored: &crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
+) -> Vec<Vec<(crate::lterm::LVar, LNTerm)>> {
+    arms.into_iter()
+        .map(|arm| {
+            let fresh = crate::subst_vfresh::LNSubstVFresh::from_list(arm).remove_renamings();
+            crate::subst_vfresh::compose_vfresh(&fresh, factored).to_list()
+        })
+        .collect()
 }
 
 /// The solver's fresh supply.  HS `Reduction` is
@@ -1477,21 +2284,52 @@ fn pp_match_cmd(pats: &[MTerm], subjs: &[MTerm]) -> Vec<u8> {
 
 /// Build the forward (LVar→skolem `Name`) and reverse (`Name`→LVar) skolem maps
 /// for `vars`, assigning synthetic constants in BTreeSet iteration order via
-/// `skolem_name`.  Used by `match_eqs_skolemize_both`.
-fn build_skolem_maps(
+/// `skolem_name`, avoiding every original constant and previously allocated
+/// identity. A reserved-looking string alone is not a disjoint namespace.
+pub(crate) fn build_skolem_maps<'a>(
     vars: &std::collections::BTreeSet<crate::lterm::LVar>,
-) -> (
-    std::collections::BTreeMap<crate::lterm::LVar, crate::lterm::Name>,
-    std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
-) {
+    terms: impl IntoIterator<Item = &'a LNTerm>,
+) -> Result<
+    (
+        std::collections::BTreeMap<crate::lterm::LVar, crate::lterm::Name>,
+        std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
+    ),
+    MaudeError,
+> {
+    fn constants(t: &LNTerm, out: &mut std::collections::BTreeSet<crate::lterm::Name>) {
+        match t {
+            crate::term::Term::Lit(crate::vterm::Lit::Con(name)) => {
+                out.insert(*name);
+            }
+            crate::term::Term::App(_, args) => {
+                for arg in args.iter() {
+                    constants(arg, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut occupied = std::collections::BTreeSet::new();
+    for term in terms {
+        constants(term, &mut occupied);
+    }
     let mut skolem_map = std::collections::BTreeMap::new();
     let mut reverse = std::collections::BTreeMap::new();
-    for (counter, lv) in (0_u64..).zip(vars.iter()) {
-        let n = skolem_name(counter, lv);
+    let mut counter = 0_u64;
+    for lv in vars {
+        let n = loop {
+            let n = skolem_name(counter, lv);
+            counter = counter.checked_add(1).ok_or_else(|| {
+                MaudeError::Other("rigid matching identity capacity exceeded".into())
+            })?;
+            if occupied.insert(n) {
+                break n;
+            }
+        };
         skolem_map.insert(*lv, n);
         reverse.insert(n, *lv);
     }
-    (skolem_map, reverse)
+    Ok((skolem_map, reverse))
 }
 
 /// Un-skolemize the range of each binding in `sub`, mapping synthetic
@@ -1515,7 +2353,7 @@ fn unskolemize_subst(
 /// `Msg`.  Maude's `match A <=? B` requires the pattern's declared sort
 /// to be a supersort of the subject's, so encoding a `Msg`-sorted
 /// subject variable as `Pub` (a strict subsort of `Msg`) would let it
-/// match a `Msg` pattern position that HS would reject — an over-match
+/// match a `Pub` pattern position that HS would reject — an over-match
 /// that can change `--prove` results.
 ///
 /// `NameTag` has no `Msg` variant, and adding one would break the many
@@ -1551,8 +2389,9 @@ fn skolem_name(counter: u64, lv: &crate::lterm::LVar) -> crate::lterm::Name {
 
 /// Walk an `LNTerm` and replace any `Lit::Con(name)` whose `name` is in
 /// `reverse` with the corresponding original `Lit::Var(lv)`.  Used to
-/// un-skolemize match results from `match_eqs_skolemize_both`.
-fn unskolemize(
+/// un-skolemize match results from `match_eqs_skolemize_both`. Rebuild AC/C
+/// applications canonically: replacing constants with variables changes ordering.
+pub(crate) fn unskolemize(
     t: &LNTerm,
     reverse: &std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
 ) -> LNTerm {
@@ -1567,7 +2406,7 @@ fn unskolemize(
         }
         crate::term::Term::App(sym, args) => {
             let new_args: Vec<LNTerm> = args.iter().map(|a| unskolemize(a, reverse)).collect();
-            crate::term::Term::App(*sym, new_args.into())
+            crate::term::f_app(*sym, new_args)
         }
         _ => t.clone(),
     }
@@ -1619,42 +2458,23 @@ fn rewrite_skolem(
     }
 }
 
-/// Convert a Maude substitution `[((sort, idx), mt)]` into a list of
-/// `(LVar, LNTerm)`.
-///
-/// **Witness naming**: Maude returns auxiliary witness variables when
-/// expressing unifiers.  We decode each witness as an `LVar` with a
-/// dedicated name `"x"` (Maude-Witness) that no input variable can
-/// ever have — this guarantees the witness's `(name, sort, idx)`
-/// triple cannot collide with any pre-existing system variable.
-/// Without this, `LVar`'s structural equality (name + sort + idx)
-/// could treat a witness as the same variable as an input or a
-/// witness generated by another call, silently conflating distinct
-/// semantic variables when source cases are grafted.
-///
-/// **Domain order**: entries are converted in Maude's RAW returned
-/// order (`0..ms.len()`).  Current HS `msubstToLSubstVFresh`
-/// (Maude/Types.hs) does NO sort either — upstream `c9d456b8`
-/// ("More general fix for substitution canonicalisation") REMOVED the old
-/// `sortBy (comparing (snd . fst))` from both the VFresh (unify/variants)
-/// and VFree (match) conversions, moving the split-disjunction
-/// canonicalisation into `performSplit` (`sortOnMemo
-/// dropNameHintsLNSubstVFresh`, EquationStore.hs; mirrored in RS
-/// `perform_split`, 631e0a85).  RS's Maude command stream is already
-/// aligned to HS, so the raw orders coincide.
-///
-/// Match-path conversion (HS `msubstToLSubstVFree`).
+/// Haskell constructs a map in `msubstToLSubstVFree`. Source refinement
+/// traverses it in ascending variable order via `substToList`.
+fn order_match_bindings(bindings: &mut [(crate::lterm::LVar, LNTerm)]) {
+    bindings.sort_unstable_by_key(|(variable, _)| *variable);
+}
+
+/// Decode in wire order, then present the directional match in domain order.
 fn msubst_to_lnsubst(
     ms: &MSubst,
     ctx: &mut ConvCtx,
 ) -> Result<Vec<(crate::lterm::LVar, LNTerm)>, MaudeError> {
-    msubst_to_lnsubst_with_avoid(ms, ctx, 0)
+    let mut bindings = msubst_to_lnsubst_with_avoid(ms, ctx, 0)?;
+    order_match_bindings(&mut bindings);
+    Ok(bindings)
 }
 
-/// Unify/variants-path conversion (HS `msubstToLSubstVFresh`).  Identical to
-/// `msubst_to_lnsubst` because neither path sorts the domain (see the
-/// `msubst_to_lnsubst` doc); kept as a separate name to mark the
-/// VFresh-vs-VFree call sites.
+/// Decode the witness-bearing variant substitution in wire order.
 fn msubst_to_lnsubst_unify(
     ms: &MSubst,
     ctx: &mut ConvCtx,
@@ -1695,15 +2515,12 @@ fn msubst_to_lnsubst_with_avoid(
                 && lv.name == "x"
                 && lv.idx >= n
             {
-                n = lv.idx + 1;
+                n = lv.idx.saturating_add(1);
             }
         }
         n
     };
-    // HS-faithful: both the unify/variants path (`msubstToLSubstVFresh`)
-    // and the match path (`msubstToLSubstVFree`) convert in Maude's raw
-    // returned order — neither sorts the domain (Maude/Types.hs;
-    // the unsorted order is deliberate upstream, so do not sort here).
+    // Fresh witness IDs follow their first occurrence during back-conversion.
     for ((sort, idx), mt) in ms {
         let lv = crate::maude_types::substitute_lookup_var(ctx, *sort, *idx).ok_or_else(|| {
             MaudeError::Other(format!("no binding for Maude variable x{}:{:?}", idx, sort))
@@ -1773,6 +2590,7 @@ struct PoolState {
 /// (≤ num_cpus) and `acquire` is rare on the hot path (it happens once per
 /// parallel task, not per Maude call).
 pub struct MaudePool {
+    backend: AlgebraBackend,
     state: Mutex<PoolState>,
     notify: Condvar,
     /// Target member count — the ceiling on lazy growth.  Constant after
@@ -1812,9 +2630,25 @@ impl MaudePool {
         n: usize,
         caches: Arc<SharedMaudeCaches>,
     ) -> Result<Self, MaudeError> {
+        Self::new_with_backend(path, sig, n, caches, AlgebraBackend::default())
+    }
+
+    pub fn new_with_backend(
+        path: &str,
+        sig: MaudeSig,
+        n: usize,
+        caches: Arc<SharedMaudeCaches>,
+        backend: AlgebraBackend,
+    ) -> Result<Self, MaudeError> {
         assert!(n >= 1, "MaudePool::new requires n >= 1");
-        let first = MaudeHandle::start_with_caches(path, sig.clone(), Arc::clone(&caches))?;
+        let first = MaudeHandle::start_with_backend_and_caches(
+            path,
+            sig.clone(),
+            backend,
+            Arc::clone(&caches),
+        )?;
         Ok(MaudePool {
+            backend,
             state: Mutex::new(PoolState {
                 free: vec![first],
                 spawned: 1,
@@ -1868,9 +2702,10 @@ impl MaudePool {
                 // other acquirers aren't blocked for the ~30ms startup.
                 state.spawned += 1;
                 drop(state);
-                match MaudeHandle::start_with_caches(
+                match MaudeHandle::start_with_backend_and_caches(
                     &self.path,
                     self.sig.clone(),
+                    self.backend,
                     Arc::clone(&self.caches),
                 ) {
                     Ok(h) => {
@@ -1918,9 +2753,10 @@ impl MaudePool {
         if state.spawned < self.size {
             state.spawned += 1;
             drop(state);
-            match MaudeHandle::start_with_caches(
+            match MaudeHandle::start_with_backend_and_caches(
                 &self.path,
                 self.sig.clone(),
+                self.backend,
                 Arc::clone(&self.caches),
             ) {
                 Ok(h) => {
@@ -1946,7 +2782,8 @@ impl MaudePool {
         self.size
     }
 
-    /// Number of members actually spawned so far (≤ `size`).  Grows lazily
+    /// Number of backend members created so far (≤ `size`), not subprocesses
+    /// in native-only mode. Grows lazily
     /// as `acquire`/`try_acquire` demand members beyond the eager first one.
     pub fn spawned(&self) -> usize {
         self.state.lock().unwrap().spawned
@@ -2001,3 +2838,7 @@ impl<'a> Drop for PooledMaude<'a> {
 #[cfg(test)]
 #[path = "maude_proc_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "lean-unification"))]
+#[path = "lean_unification_integration_tests.rs"]
+mod lean_integration_tests;

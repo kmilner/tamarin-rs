@@ -7,9 +7,18 @@ license.workspace = true
 repository.workspace = true
 description = "Term language for the Tamarin prover (Rust port)."
 
+[features]
+# Build and statically link the experimental, proof-checked Lean backend.
+lean-unification = []
+
+[[example]]
+name = "lean_unification_bench"
+required-features = ["lean-unification"]
+
 [dependencies]
 tamarin-utils = { workspace = true }
 parking_lot = "0.13"
+rustc-hash = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.27"

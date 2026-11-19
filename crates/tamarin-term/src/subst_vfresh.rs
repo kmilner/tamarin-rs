@@ -8,7 +8,7 @@
 //! substitutions cannot be applied directly; the caller must first convert
 //! them to a regular `Subst` by re-naming away from existing free vars.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_utils::fresh::FastFreshState;
 
@@ -127,11 +127,10 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     /// fresh variable with an EMPTY name hint, sort preserved, indices assigned
     /// 0,1,2,… in order of first appearance across the range terms (visited in
     /// domain-key order) — mirrors HS `renameDropNamehint` applied to
-    /// `map snd (substToListVFresh s)`. Domain keys are kept unchanged. Two
-    /// substitutions that are α-equivalent in their range map to the same
-    /// canonical form, so a stable `sort_by_cached_key(drop_name_hints)`
-    /// (= HS `sortOnMemo dropNameHintsLNSubstVFresh`) orders the split cases
-    /// structurally, independent of the fresh-allocation counter.
+    /// `map snd (substToListVFresh s)`. Domain keys are kept unchanged.
+    /// The traversal uses the stored order of AC and commutative children.
+    /// Renaming range variables can change that order, so α-equivalent
+    /// substitutions can have different split-case sort keys.
     pub fn drop_name_hints(&self) -> Self {
         let mut bindings = Bindings::new();
         let mut fresh = FastFreshState::nothing_used();
@@ -229,7 +228,8 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     /// `varsRangeVFresh self` (HS: `renameFreshAvoiding s2 (varsRangeVFresh s)`).
     /// The shift = freshStart - min(idx of vs_new); applied to each var in
     /// vs_new uniformly, preserving relative ordering — mirrors HS's
-    /// `rename` semantics (LTerm.hs).
+    /// `rename` semantics (LTerm.hs). If the shift exceeds u64 the
+    /// allocator uses unoccupied indices in the same relative order.
     pub fn extend_with_renaming(&self, vs: &[LVar]) -> Self {
         // Domain probes go straight to the map (`image_of` = `BTreeMap::get`)
         // and the first-appearance dedup uses a hash `seen` set: both are
@@ -248,11 +248,8 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         if vs_new.is_empty() {
             return self.clone();
         }
-        // Fresh state: `evalFreshAvoiding (varsRangeVFresh s)` =
-        //   succ . maxIdx . vars (or 0 if empty).  Only the max idx is
-        //   consumed, so fold it over the range terms directly instead of
-        //   materialising the sorted/deduped `vars_range` list (dedup and
-        //   order are irrelevant to a max).
+        // The usual shift needs only the maximum. Collect the occupied
+        // indices only if the full shift cannot be represented.
         let mut avoid_max: Option<u64> = None;
         for t in self.range() {
             use crate::lterm::HasFrees;
@@ -260,88 +257,47 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
                 avoid_max = Some(avoid_max.map_or(v.idx, |m| m.max(v.idx)));
             });
         }
-        let fresh_start: u64 = avoid_max.map(|m| m + 1).unwrap_or(0);
-        // HS's `rename`: minVar, maxVar; freshStart from monad; shift =
-        // freshStart - minVar; new idx = old idx + shift (signed).
-        let vs_min: u64 = vs_new.iter().map(|v| v.idx).min().unwrap();
-        // Signed math because shift may go negative when fresh_start < vs_min
-        // (e.g., self is empty so fresh_start=0 but vs_min > 0).  This is
-        // a faithful translation of HS's Integer math.
-        let shift: i128 = fresh_start as i128 - vs_min as i128;
-        let new_entries: Vec<(LVar, VTerm<C, LVar>)> = vs_new
-            .iter()
-            .map(|v| {
-                let new_idx = shifted_idx(v.idx, shift);
-                let v_new = LVar {
-                    name: v.name,
-                    sort: v.sort,
-                    idx: new_idx,
-                };
-                (*v, Term::Lit(Lit::Var(v_new)))
-            })
-            .collect();
-        // `from_list(to_list() ++ new_entries)` would rebuild the whole map from
-        // a Vec; the keys are disjoint (`vs_new` excludes `dom self`), so
-        // cloning the map and inserting the new entries yields the identical
-        // BTreeMap without the intermediate Vec + re-sort.
+        let indices = IndexRenaming::avoiding(&vs_new, avoid_max, || {
+            distinct_range_vars(self.range())
+                .into_iter()
+                .map(|v| v.idx)
+                .collect()
+        });
         let mut map = self.map.clone();
-        for (v, t) in new_entries {
-            map.insert(v, t);
+        for v in vs_new {
+            map.insert(v, Term::Lit(Lit::Var(indices.rename(v))));
         }
         SubstVFresh { map }
     }
 
-    /// HS-faithful `freshToFreeAvoidingFast`:  rename all range vars
-    /// uniformly via HS's `rename` shift (freshStart - minVar), where
-    /// `freshStart` = `succ . maxIdx . avoid` and `minVar`/`maxVar` are
-    /// across the bundled range terms.  Mirrors
-    /// `Term.Substitution.freshToFreeAvoidingFast` (Term/Substitution.hs).
-    ///
-    /// Differs from `fresh_to_free_avoiding` (preserve-set form): this one
-    /// uses HS's UNIFORM SHIFT (preserving relative ordering of range-var
-    /// idxs) rather than dense-packed sequential allocation.  Required for
-    /// `compose_vfresh` to produce structurally-equivalent SubstVFresh
-    /// shapes per variant.
-    ///
-    /// `fresh_start` is the precomputed `succ . maxIdx . frees(avoid)`: the
-    /// single value the rename actually needs from the avoid set (its max
-    /// idx + 1), passed directly so the avoid collection is never materialised.
-    pub fn fresh_to_free_uniform_shift(&self, fresh_start: u64) -> crate::subst::Subst<C, LVar> {
-        use crate::subst::Subst;
-        // Collect ALL distinct range vars in insertion order.
-        let range_vars: Vec<LVar> = distinct_range_vars(self.range());
-        if range_vars.is_empty() {
-            // No range vars to rename — just downgrade (through `from_list`,
-            // which drops trivial `x ~> x` mappings exactly as before).
-            return Subst::from_list(self.iter().map(|(v, t)| (*v, t.clone())));
-        }
-        // HS: `evalFreshAvoiding t` initial counter = succ . maxIdx . frees t,
-        // precomputed by the caller and handed in as `fresh_start`.
-        let min_idx = range_vars.iter().map(|v| v.idx).min().unwrap();
-        let shift: i128 = fresh_start as i128 - min_idx as i128;
-        // Lookup-only rename table: keyed by LVar (interned name, sort, idx),
-        // probed once per var occurrence in the range walk below — a hash map
-        // beats per-occurrence BTree descents and is never iterated.
-        let mut rename: tamarin_utils::FastMap<LVar, LVar> = Default::default();
-        for old in &range_vars {
-            let new_idx = shifted_idx(old.idx, shift);
-            let new = LVar {
-                name: old.name,
-                sort: old.sort,
-                idx: new_idx,
-            };
-            rename.insert(*old, new);
-        }
-        let mut pairs: Vec<(LVar, VTerm<C, LVar>)> = Vec::with_capacity(self.len());
-        // Borrow the entries in place; `map_free_monotone` takes only a shallow
-        // clone and reuses any unchanged subtree.
-        for (v, t) in self.iter() {
-            let renamed = t
-                .clone()
-                .map_free_monotone(&mut |v| rename.get(&v).copied().unwrap_or(v));
-            pairs.push((*v, renamed));
-        }
-        Subst::from_list(pairs)
+    /// Shift every range index by the same offset so the minimum lands at
+    /// `fresh_start`. Returns `None` if that uniform shift cannot fit in u64.
+    /// Callers with the actual finite scope can use `fresh_to_free_avoiding_vars`.
+    pub fn fresh_to_free_uniform_shift(
+        &self,
+        fresh_start: u64,
+    ) -> Option<crate::subst::Subst<C, LVar>> {
+        let vars = distinct_range_vars(self.range());
+        let indices = IndexRenaming::uniform(&vars, Some(fresh_start))?;
+        Some(self.rename_range(&indices))
+    }
+
+    /// Freshen all images together, preserving the upstream uniform shift
+    /// whenever it fits. At the index boundary the full scope identifies
+    /// unused indices which can be assigned in increasing order.
+    pub fn fresh_to_free_avoiding_vars(&self, avoid: &[LVar]) -> crate::subst::Subst<C, LVar> {
+        let vars = distinct_range_vars(self.range());
+        let indices = IndexRenaming::avoiding(&vars, avoid.iter().map(|v| v.idx).max(), || {
+            avoid.iter().map(|v| v.idx).collect()
+        });
+        self.rename_range(&indices)
+    }
+
+    fn rename_range(&self, indices: &IndexRenaming) -> crate::subst::Subst<C, LVar> {
+        crate::subst::Subst::from_list(
+            self.iter()
+                .map(|(v, t)| (*v, t.clone().map_free_monotone(&mut |w| indices.rename(w)))),
+        )
     }
 
     /// `freshToFree`: convert this VFresh substitution to a free `Subst`
@@ -455,18 +411,60 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
     }
 }
 
-/// Apply HS's `rename` shift to a single var index: `old + shift` in
-/// signed (HS Integer) math, saturating-clamped back into `u64`.  Shared
-/// by `extend_with_renaming` and `fresh_to_free_uniform_shift` so the
-/// load-bearing clamp can't drift between the two call sites.
-fn shifted_idx(idx: u64, shift: i128) -> u64 {
-    let new_idx_signed: i128 = idx as i128 + shift;
-    if new_idx_signed < 0 {
-        0
-    } else if new_idx_signed > u64::MAX as i128 {
-        u64::MAX
-    } else {
-        new_idx_signed as u64
+/// Both representations preserve the order of source indices, including ties
+/// between variables of different names or sorts at the same index.
+enum IndexRenaming {
+    Uniform { min: u64, start: u64 },
+    Sparse(BTreeMap<u64, u64>),
+}
+
+impl IndexRenaming {
+    fn uniform(vars: &[LVar], start: Option<u64>) -> Option<Self> {
+        let Some(first) = vars.first() else {
+            return Some(Self::Uniform { min: 0, start: 0 });
+        };
+        let (min, max) = vars.iter().fold((first.idx, first.idx), |(min, max), v| {
+            (min.min(v.idx), max.max(v.idx))
+        });
+        let start = start?;
+        start.checked_add(max - min)?;
+        Some(Self::Uniform { min, start })
+    }
+
+    fn avoiding(
+        vars: &[LVar],
+        avoid_max: Option<u64>,
+        occupied: impl FnOnce() -> BTreeSet<u64>,
+    ) -> Self {
+        let start = avoid_max.map_or(Some(0), |m| m.checked_add(1));
+        if let Some(shift) = Self::uniform(vars, start) {
+            return shift;
+        }
+        let used = occupied();
+        let sources: BTreeSet<_> = vars.iter().map(|v| v.idx).collect();
+        let mut free = (0..=u64::MAX).filter(|i| !used.contains(i));
+        // Both sets fit in addressable memory, so together they contain
+        // fewer than 2^64 indices. Each new source consumes one free index.
+        Self::Sparse(
+            sources
+                .into_iter()
+                .map(|i| {
+                    (
+                        i,
+                        free.next()
+                            .expect("finite witness scope exhausted all u64 indices"),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn rename(&self, v: LVar) -> LVar {
+        let idx = match self {
+            Self::Uniform { min, start } => start + (v.idx - min),
+            Self::Sparse(map) => map[&v.idx],
+        };
+        LVar { idx, ..v }
     }
 }
 
@@ -516,30 +514,13 @@ where
 
 /// Closed-form `composeVFresh ∅ s2`.
 ///
-/// For an empty `s1_0` the general pipeline's four intermediate structures
-/// collapse to a single uniform, order-preserving range-var rename.  Deriving
-/// it from the code (Term/Substitution.hs):
-///
-///  * `extendWithRenaming (varsRange s2) ∅` renames every distinct range var
-///    `w` of `s2` down by `vs_min = min idx of varsRange s2` (its avoid set is
-///    empty ⇒ `freshStart = 0`);
-///  * `freshToFreeAvoidingFast _ (s2, ∅)` then shifts every range var up by
-///    `fresh_start = maxIdx(frees s2) + 1` (the shifted-down vars have min idx
-///    0, so `shift = fresh_start`).  `frees ∅ = keys ∅ = {}`, so the avoid set
-///    is exactly `frees s2` (its domain and range vars).
-///
-/// The two shifts fold to one uniform delta `> 0`, so `w' = LVar{w.name,
-/// w.sort, w.idx - vs_min + maxIdx(frees s2) + 1}` for each range var `w`, with
-/// `w'.idx > maxIdx(frees s2) ≥` every domain key idx.  Hence:
-///
-///  * `s1 = {w -> Var(w') | w ∈ varsRange s2}` (nothing dropped: `w' ≠ w`);
-///  * `s1 `compose` s2` = `{k -> s2[k][w↦w'] | (k,_) ∈ s2}` (the `map_range`
-///    trivial-drop is vacuous — `w'.idx > k.idx` — but is still applied for
-///    definitional parity) `∪ {w -> Var(w') | w ∈ varsRange s2, w ∉ dom s2}`;
-///  * `freeToFreshRaw` re-tags without dropping.
-///
-/// The per-mapping term walk reuses `apply_vterm_map` — the exact primitive
-/// `Subst::compose` calls — so AC re-sorting and sharing are byte-identical.
+/// The two rebasing steps in the general pipeline collapse to a single
+/// order-preserving rename of the range variables of `s2`. The occupied
+/// indices come from the domain and range of `s2`. When the uniform shift
+/// overflows, ranking the original indices gives the same assignment as
+/// ranking them after subtracting their minimum. Applying the rename to
+/// each image and retaining its bindings outside the domain of `s2` gives
+/// the same substitution as the general composition.
 fn compose_vfresh_empty_s1<C>(s2: &crate::subst::Subst<C, LVar>) -> LSubstVFresh<C>
 where
     C: Ord + Clone,
@@ -571,22 +552,12 @@ where
             map: s2.clone().into_map(),
         };
     }
-    let vs_min: u64 = range_vars.iter().map(|v| v.idx).min().unwrap();
-    // `fresh_start` = succ . maxIdx . frees s2 (= maxIdx over dom+range + 1).
-    let fresh_start: u64 = max_idx.unwrap() + 1;
-    // Fold the two order-preserving shifts (down by vs_min, up by fresh_start)
-    // through the shared `shifted_idx` at each step so the load-bearing clamp
-    // cannot drift from the general path.  Step 1 never clamps (result ≤ idx),
-    // so this equals a single positive uniform shift `fresh_start - vs_min`.
+    let indices = IndexRenaming::avoiding(&range_vars, max_idx, || {
+        s2.dom().chain(range_vars.iter()).map(|v| v.idx).collect()
+    });
     let mut s1_map: BTreeMap<LVar, VTerm<C, LVar>> = BTreeMap::new();
     for w in &range_vars {
-        let down = shifted_idx(w.idx, -(vs_min as i128));
-        let up = shifted_idx(down, fresh_start as i128);
-        let w_prime = LVar {
-            name: w.name,
-            sort: w.sort,
-            idx: up,
-        };
+        let w_prime = indices.rename(*w);
         s1_map.insert(*w, Term::Lit(Lit::Var(w_prime)));
     }
     let mut out: Vec<(LVar, VTerm<C, LVar>)> = Vec::new();
@@ -679,31 +650,15 @@ where
     // would over-count the avoid set and inflate the re-based witnesses
     // (Responder_secrecy: the Setup_Key `~k` variant witnesses at ~k.30/42
     // vs HS's ~k.11/12/15, rotating the 3-way split via `Ord LNSubstVFresh`).
-    // `freshToFreeAvoidingFast` only consults the avoid set for its max idx
-    // (`succ . maxIdx`), so fold that max directly over the same three sources
-    // instead of materialising a BTreeSet + Vec.  Dedup/order are irrelevant
-    // to a max, so the resulting `fresh_start` matches the same-value
-    // computation via a max fold, without materialising a set/list.
-    let mut max_idx: Option<u64> = None;
-    let mut bump = |idx: u64| {
-        max_idx = Some(max_idx.map_or(idx, |m| m.max(idx)));
+    let occupied = || {
+        s2.dom()
+            .chain(s1_0.dom())
+            .chain(vs_in_range_s2.iter())
+            .map(|v| v.idx)
     };
-    // s2's domain
-    for v in s2.dom() {
-        bump(v.idx);
-    }
-    // s2's range vars — visited in place (`for_each_free`); `vars_vterm`'s
-    // per-term sort/dedup Vec is irrelevant to a max.
-    for t in s2.range() {
-        use crate::lterm::HasFrees;
-        t.for_each_free(&mut |v: &LVar| bump(v.idx));
-    }
-    // s1_0's domain keys ONLY (HS-faithful: frees of a SubstVFresh = keys).
-    for v in s1_0.dom() {
-        bump(v.idx);
-    }
-    let fresh_start: u64 = max_idx.map(|m| m + 1).unwrap_or(0);
-    let s1 = extended.fresh_to_free_uniform_shift(fresh_start);
+    let vars = distinct_range_vars(extended.range());
+    let indices = IndexRenaming::avoiding(&vars, occupied().max(), || occupied().collect());
+    let s1 = extended.rename_range(&indices);
     let composed = s1.compose(s2);
     free_to_fresh_raw(composed)
 }
@@ -809,6 +764,52 @@ mod tests {
     }
 
     #[test]
+    fn explicit_identity_binding_preserves_nonground_input_correlation() {
+        use crate::function_symbols::AcSym;
+        use crate::lterm::pub_term;
+        use crate::subst::apply_vterm;
+        use crate::term::f_app_ac;
+
+        // Ordinary {x -> y+a} solves x=y+a. VFresh treats every stored
+        // range variable as a witness, so y must have its own stored entry.
+        // This is the boundary example proved in Lean's SpecAudit.lean.
+        let x = lv("x", 0);
+        // Equal numeric indices must still preserve the full identities.
+        let y = lv("y", 0);
+        let lhs = var_term(x);
+        let rhs = f_app_ac(AcSym::Union, vec![var_term(y), pub_term("a")]);
+        let naive = SubstVFresh::from_list([(x, rhs.clone())]);
+        let closed = SubstVFresh::from_list([(x, rhs.clone()), (y, var_term(y))]);
+        assert_eq!(closed.image_of(&y), Some(&var_term(y)));
+        assert_eq!(closed.remove_renamings(), closed);
+
+        for decoded in [
+            naive.fresh_to_free_avoiding(|_| 20),
+            naive.fresh_to_free_uniform_shift(20).unwrap(),
+        ] {
+            assert_ne!(
+                apply_vterm(&decoded, lhs.clone()),
+                apply_vterm(&decoded, rhs.clone())
+            );
+        }
+        for decoded in [
+            closed.fresh_to_free_avoiding(|_| 20),
+            closed.fresh_to_free_uniform_shift(20).unwrap(),
+        ] {
+            assert_eq!(
+                apply_vterm(&decoded, lhs.clone()),
+                apply_vterm(&decoded, rhs.clone())
+            );
+            assert_ne!(decoded.image_of(&y), Some(&var_term(y)));
+            // An unrelated caller variable is untouched.
+            assert_eq!(
+                apply_vterm(&decoded, var_term(lv("caller", 10))),
+                var_term(lv("caller", 10))
+            );
+        }
+    }
+
+    #[test]
     fn extend_with_renaming_shifts_the_new_vars_uniformly_above_the_range() {
         // HS (SubstVFresh.hs):
         //   extendWithRenaming vs0 s = substFromListVFresh $
@@ -859,6 +860,88 @@ mod tests {
     }
 
     #[test]
+    fn checked_uniform_shift_preserves_distinct_slots_at_the_last_index() {
+        let pair = |x, y| f_app_no_eq(pair_sym(), vec![var_term(x), var_term(y)]);
+        let key = lv("k", 7);
+        let x = lv("w", 0);
+        let y = lv("w", 1);
+        let s = LSubstVFresh::<C>::from_list([(key, pair(x, y)), (lv("k", 8), var_term(x))]);
+        assert!(s.fresh_to_free_uniform_shift(u64::MAX).is_none());
+        let exact = s.fresh_to_free_uniform_shift(u64::MAX - 1).unwrap();
+        assert_eq!(
+            exact.image_of(&key),
+            Some(&pair(lv("w", u64::MAX - 1), lv("w", u64::MAX)))
+        );
+        let avoid = [lv("w", 0), lv("w", 2), lv("w", u64::MAX)];
+        let sparse = s.fresh_to_free_avoiding_vars(&avoid);
+        assert_eq!(sparse.image_of(&key), Some(&pair(lv("w", 1), lv("w", 3))));
+        assert_eq!(sparse.image_of(&lv("k", 8)), Some(&var_term(lv("w", 1))));
+        let ground = LSubstVFresh::<C>::empty();
+        assert!(ground
+            .fresh_to_free_uniform_shift(u64::MAX)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn sparse_rebasing_preserves_variable_order_sharing_and_sort() {
+        let indices = [0, 1, 2, u64::MAX - 2, u64::MAX - 1, u64::MAX];
+        for source_mask in 1..64 {
+            let vars: Vec<_> = indices
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| source_mask & (1 << i) != 0)
+                .flat_map(|(_, idx)| {
+                    [
+                        lv("x", *idx),
+                        lv("y", *idx),
+                        LVar::new("x", LSort::Fresh, *idx),
+                    ]
+                })
+                .collect();
+            for avoid_mask in 0..64 {
+                let occupied: BTreeSet<_> = indices
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| avoid_mask & (1 << i) != 0)
+                    .map(|(_, i)| *i)
+                    .collect();
+                let rebase =
+                    IndexRenaming::avoiding(&vars, occupied.last().copied(), || occupied.clone());
+                for &v in &vars {
+                    let new = rebase.rename(v);
+                    assert_eq!((v.name, v.sort), (new.name, new.sort));
+                    assert!(!occupied.contains(&new.idx));
+                    for &w in &vars {
+                        assert_eq!(v.cmp(&w), new.cmp(&rebase.rename(w)));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn both_composition_paths_avoid_occupied_indices_at_max() {
+        let x = lv("w", 0);
+        let y = lv("w", 1);
+        let k = lv("k", u64::MAX);
+        let pair = |x, y| f_app_no_eq(pair_sym(), vec![var_term(x), var_term(y)]);
+        let s2 = crate::subst::Subst::<C, LVar>::from_list([(k, pair(x, y))]);
+        let empty = LSubstVFresh::empty();
+        let actual = compose_vfresh(&empty, &s2);
+        assert_eq!(actual, compose_vfresh_general(&empty, &s2));
+        assert_eq!(actual.image_of(&k), Some(&pair(lv("w", 2), lv("w", 3))));
+        assert_eq!(actual.image_of(&x), Some(&var_term(lv("w", 2))));
+        assert_eq!(actual.image_of(&y), Some(&var_term(lv("w", 3))));
+
+        // Both extension and final freshening now encounter an occupied MAX.
+        let original = LSubstVFresh::from_list([(lv("z", 2), var_term(lv("w", u64::MAX)))]);
+        let actual = compose_vfresh(&original, &s2);
+        assert_eq!(actual.image_of(&k), Some(&pair(lv("w", 3), lv("w", 4))));
+        assert_eq!(actual.image_of(&lv("z", 2)), Some(&var_term(lv("w", 5))));
+    }
+
+    #[test]
     fn fresh_to_free_uniform_shift_rebases_the_range_and_drops_trivial_mappings() {
         // HS `freshToFreeAvoidingFast` (Term/Substitution.hs):
         //   freshToFreeAvoidingFast s t =
@@ -878,7 +961,7 @@ mod tests {
             ),
             (lv("b", 10), var_term(lv("b", 2))),
         ]);
-        let free = s.fresh_to_free_uniform_shift(10);
+        let free = s.fresh_to_free_uniform_shift(10).unwrap();
         // minVarIdx over the whole range = 2, so every range var moves by +8.
         // The spacing between y and z survives.  A per-entry allocation or a
         // dense allocation would put `z` next to `y`.  The two `y.2`
@@ -901,7 +984,7 @@ mod tests {
         let name = Name::new(crate::lterm::NameTag::Pub, "n");
         let konst: LSubstVFresh<C> =
             SubstVFresh::from_list(vec![(lv("c", 0), crate::vterm::const_term(name))]);
-        let free2 = konst.fresh_to_free_uniform_shift(10);
+        let free2 = konst.fresh_to_free_uniform_shift(10).unwrap();
         assert_eq!(
             free2.image_of(&lv("c", 0)),
             Some(&crate::vterm::const_term(name))

@@ -129,6 +129,7 @@ pub async fn start_server_with_theory_and(
         data_dir,
         frontend_dist: None,
         maude_path: maude_path.clone(),
+        algebra_backend: Default::default(),
         // Match ServerConfig::new's default (HS interactive default 5s).
         derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT,
         solver_parameters: Default::default(),

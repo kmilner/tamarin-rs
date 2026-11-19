@@ -35,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         data_dir: None,
         frontend_dist: None,
         maude_path,
+        algebra_backend: Default::default(),
         derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT,
         solver_parameters: Default::default(),
         stop_on_trace: None,

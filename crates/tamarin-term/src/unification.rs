@@ -3,20 +3,14 @@
 
 //! Port of `Term.Unification` from `lib/term/src/Term/Unification.hs`.
 //!
-//! Tamarin performs unification in two phases: free unification with
-//! delayed AC equations, then ships the AC equations off to Maude. This
-//! file ports both of those:
+//! The factored path (`unify_lterm_factored`, mirroring Haskell's
+//! `unifyLTermFactored`) solves free equations and collects residual AC/C
+//! equations. The active algebra backend handles those residuals. Native
+//! cancellation also reuses this factorer when removing common AC children
+//! exposes free equations.
 //!
-//! * The HS-faithful factored path (`unify_lterm_factored` /
-//!   `unify_raw_factored`, mirroring `unifyLTermFactored`) solves the
-//!   non-AC fragment and collects the residual AC/C equations into a
-//!   delayed list — `tell [Equal l r]` in the HS writer monad. Callers
-//!   (`maude_proc.rs`, `equation_store.rs`) ship those residuals to Maude,
-//!   exactly as HS does via `unifyViaMaude`. This is the primary path used
-//!   in solving.
-//! * The standalone non-AC helpers (`unify_lterm_no_ac` /
-//!   `solve_match_lterm_no_ac`) bail with `NeedsAC` / `None` on AC input;
-//!   they exist for callers that have no Maude bridge to fall back on.
+//! The standalone non-AC helpers (`unify_lterm_no_ac` and
+//! `solve_match_lterm_no_ac`) return `NeedsAC` or `None` on delayed equations.
 //!
 //! Matching follows the same split.
 
@@ -33,7 +27,7 @@ use crate::vterm::Lit;
 #[derive(Debug)]
 pub enum UnifyError {
     NoUnifier,
-    /// AC equation encountered — unsupported without Maude.
+    /// AC/C equation encountered by the standalone non-AC helper.
     NeedsAC,
 }
 
@@ -265,7 +259,7 @@ where
 
 /// `unifyLTermFactored` port (Unification.hs).  Returns the
 /// non-AC substitution and the residual AC equations (already with
-/// the non-AC subst applied).  Callers ship the residuals to Maude.
+/// the non-AC subst applied). The caller selects a backend for the residuals.
 ///
 /// Returns `None` if the non-AC fragment is unsatisfiable.
 pub fn unify_lterm_factored<C, F>(
@@ -288,7 +282,7 @@ where
         }
     }
     let subst = Subst::from_map(acc);
-    // Apply the freshly-built subst to the delayed residuals so Maude
+    // Apply the freshly-built subst to the delayed residuals so the backend
     // sees the most-refined form (mirrors Haskell's
     // `map (applyVTerm subst <$>) leqs`).
     let delayed = delayed

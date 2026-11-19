@@ -1,0 +1,16 @@
+theory NativeDHAgreement
+begin
+
+builtins: diffie-hellman
+
+rule Exchange:
+  [ Fr(~x), Fr(~y) ]
+  --[ Keys(('g'^~x)^~y, ('g'^~y)^~x) ]-> []
+
+lemma completes:
+  exists-trace "Ex k1 k2 #i. Keys(k1,k2) @ i"
+
+lemma same_key:
+  "All k1 k2 #i. Keys(k1,k2) @ i ==> k1 = k2"
+
+end

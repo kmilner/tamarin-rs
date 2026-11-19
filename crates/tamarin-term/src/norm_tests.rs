@@ -173,6 +173,41 @@ fn nf_via_haskell_maude_matches_user_ac_strule() {
     );
 }
 
+#[cfg(feature = "lean-unification")]
+#[test]
+fn normal_form_check_uses_existence_for_ambiguous_compound_rule() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{hash, msg_var};
+    use crate::function_symbols::{AcFctSym, Constructability, NdcState, Privacy};
+    use crate::lterm::pub_term;
+    use crate::rewriting::RRule;
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let op = AcFctSym::new(
+        b"mix".to_vec(),
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::IsNdc,
+    );
+    let mix = |a, b| crate::term::f_app_acfct(op, vec![a, b]);
+    let mut sig = crate::maude_sig::hash_maude_sig();
+    sig.st_ac_fun_syms.insert(op);
+    let y = msg_var("y", 1);
+    let rule = RRule::new(mix(hash(msg_var("x", 0)), y.clone()), y);
+    sig.st_rules
+        .insert(crate::subterm_rule::rrule_to_ctxt_st_rule(&rule).unwrap());
+    let sig = sig.refresh();
+    let hybrid =
+        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let subject = mix(hash(pub_term("a")), hash(pub_term("b")));
+    assert!(!nf_via_haskell_maude(&oracle, &subject));
+    assert!(!nf_via_haskell_maude(&hybrid, &subject));
+    assert!(oracle.stats().match_count > 0);
+    assert_eq!(hybrid.stats().match_count, 0);
+}
+
 // A term rooted at one user-`[AC]` symbol is never reducible by an st
 // rule rooted at a different one, however similarly shaped: `match`
 // solves modulo the MSG module's `[comm assoc]` axioms, which preserve

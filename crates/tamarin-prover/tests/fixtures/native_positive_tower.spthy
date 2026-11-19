@@ -1,0 +1,14 @@
+theory NativePositiveTower
+begin
+builtins: diffie-hellman
+
+rule Observe:
+  [ In(x), Fr(~a), Fr(~b) ]
+  --[ Keys((x^~a)^~b, x^(~a*~b)) ]-> []
+
+lemma reachable:
+  exists-trace "Ex k1 k2 #i. Keys(k1,k2) @ i"
+
+lemma tower:
+  "All k1 k2 #i. Keys(k1,k2) @ i ==> k1 = k2"
+end

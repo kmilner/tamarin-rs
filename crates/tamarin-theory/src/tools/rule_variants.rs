@@ -1330,7 +1330,12 @@ mod tests {
         let Some(path) = require_maude_path() else {
             return;
         };
-        let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+        let h = MaudeHandle::start_with_backend(
+            &path,
+            pair_maude_sig(),
+            tamarin_term::algebra_backend::AlgebraBackend::Maude,
+        )
+        .unwrap();
         let mut rule = empty_rule("R");
         rule.premises.push(Fact::new(
             FactTag::Out,

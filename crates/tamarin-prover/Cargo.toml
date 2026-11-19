@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "The Tamarin prover for security protocol verification (Rust port)."
 
+[features]
+lean-unification = ["tamarin-term/lean-unification"]
+
 [lib]
 name = "tamarin_prover"
 path = "src/lib.rs"

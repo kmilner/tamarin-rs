@@ -1008,3 +1008,30 @@ fn lemma_matches_three_empties_match_nothing() {
     assert!(!lemma_matches(&f, "anything"));
     assert!(lemma_matches(&f, ""));
 }
+
+#[test]
+fn algebra_backend_selection_is_explicit_and_global() {
+    use tamarin_term::algebra_backend::AlgebraBackend;
+    assert_eq!(
+        parse(&["x.spthy"]).algebra_backend,
+        AlgebraBackend::default()
+    );
+    for (name, expected) in [
+        ("maude", AlgebraBackend::Maude),
+        ("hybrid", AlgebraBackend::Hybrid),
+        ("native-only", AlgebraBackend::NativeOnly),
+    ] {
+        assert_eq!(
+            parse(&["--algebra-backend", name, "x.spthy"]).algebra_backend,
+            expected
+        );
+        assert_eq!(
+            parse(&["interactive", "--algebra-backend", name, "x.spthy"]).algebra_backend,
+            expected
+        );
+    }
+    assert_eq!(
+        parse_err(&["--algebra-backend=unknown", "x.spthy"]).kind(),
+        clap::error::ErrorKind::InvalidValue
+    );
+}

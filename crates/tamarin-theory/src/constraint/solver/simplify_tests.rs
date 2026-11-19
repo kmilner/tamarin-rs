@@ -1458,6 +1458,58 @@ fn dedupe_formulas_keeps_formulas_of_different_sort() {
 }
 
 #[test]
+fn restriction_guard_nested_ac_keeps_rigid_system_variables_and_time() {
+    use tamarin_term::algebra_backend::AlgebraBackend;
+    use tamarin_term::builtin::hash;
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::{pub_term, LSort, LVar};
+    use tamarin_term::maude_proc::MaudeHandle;
+    use tamarin_term::maude_sig::{hash_maude_sig, mset_maude_sig};
+    use tamarin_term::term::f_app_ac;
+    use tamarin_term::vterm::var_term;
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = mset_maude_sig().merge(hash_maude_sig());
+    let [x, y] = ["x", "y"].map(|s| LVar::new(s, LSort::Msg, 0));
+    let time = LVar::new("t", LSort::Node, 0);
+    let node = LVar::new("n", LSort::Node, 9);
+    let live = var_term(LVar::new("context", LSort::Msg, u64::MAX));
+    let u = |a, b| f_app_ac(AcSym::Union, vec![a, b]);
+    let pattern = u(hash(u(var_term(x), var_term(y))), var_term(x));
+    let fact = crate::fact::proto_fact(crate::fact::Multiplicity::Linear, "A", vec![pattern]);
+    let xs = u(live.clone(), live);
+    let a = pub_term("a");
+    let subject = u(hash(u(xs.clone(), a.clone())), xs.clone());
+    let vars = [x, y, time];
+    for backend in [AlgebraBackend::Maude, AlgebraBackend::default()] {
+        let h = MaudeHandle::start_with_backend(&path, sig.clone(), backend).unwrap();
+        let matches = match_atom_via_maude(
+            &h,
+            &vars,
+            &mk_pattern_vars(&vars),
+            &fact,
+            &var_term(time),
+            &node,
+            std::slice::from_ref(&subject),
+        )
+        .unwrap();
+        assert_eq!(
+            matches,
+            vec![LNSubst::from_list([
+                (x, xs.clone()),
+                (y, a.clone()),
+                (time, var_term(node))
+            ])]
+        );
+        assert_eq!(
+            h.stats().match_count,
+            u64::from(backend == AlgebraBackend::Maude)
+        );
+    }
+}
+
+#[test]
 fn restriction_guard_matching_preserves_backend_errors() {
     use crate::atom::ProtoAtom;
     use crate::fact::{proto_fact, Multiplicity};
@@ -1466,6 +1518,9 @@ fn restriction_guard_matching_preserves_backend_errors() {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::var_term;
 
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let x = LVar::new("x", LSort::Msg, 0);
     let y = LVar::new("y", LSort::Msg, 0);
     let t = LVar::new("t", LSort::Node, 0);
@@ -1490,9 +1545,12 @@ fn restriction_guard_matching_preserves_backend_errors() {
         for failed in [false, true] {
             // Fresh handles prevent a healthy query's memoized answer from
             // hiding the broken backend in the failure case.
-            let Some(h) = maude_with_sig(tamarin_term::maude_sig::mset_maude_sig()) else {
-                return;
-            };
+            let h = tamarin_term::maude_proc::MaudeHandle::start_with_backend(
+                &path,
+                tamarin_term::maude_sig::mset_maude_sig(),
+                tamarin_term::algebra_backend::AlgebraBackend::Maude,
+            )
+            .unwrap();
             if failed {
                 h.kill_subprocess();
             }

@@ -39,11 +39,14 @@
 //! - `Term.Narrowing.{Variants, Variants.Check, Variants.Compute, Narrow}`
 //!   (variant computation as a standalone module)
 
+pub mod algebra_backend;
 pub mod apply;
 pub mod bind;
 pub mod builtin;
 pub mod function_symbols;
 pub mod intern;
+#[cfg(feature = "lean-unification")]
+pub mod lean_unification;
 pub mod lterm;
 pub mod macro_expand;
 pub mod maude_parse;
@@ -63,3 +66,6 @@ pub mod tags;
 pub mod term;
 pub mod unification;
 pub mod vterm;
+
+#[cfg(feature = "lean-unification")]
+mod lean_identity;

@@ -58,6 +58,14 @@ pub(crate) fn load_from_source(
     origin: TheoryOrigin,
     cfg: &crate::ServerConfig,
 ) -> Result<TheoryEntry, LoadError> {
+    if cfg.algebra_backend == tamarin_term::algebra_backend::AlgebraBackend::NativeOnly {
+        return Err(LoadError::Elaborate(
+            "native-only interactive mode is not yet supported".into(),
+        ));
+    }
+    cfg.algebra_backend
+        .validate()
+        .map_err(LoadError::Elaborate)?;
     // Attach the local path or uploaded filename to the structured diagnostic.
     // Errors originating in an included file already carry that file's path
     // and source text, which `with_source` deliberately leaves unchanged.
@@ -173,7 +181,11 @@ pub(crate) fn load_from_source(
     // from, taken before the NDC join below — see
     // `TheoryEntry::prover_maude_sig` for why the join must not reach it.
     let prover_maude_sig = typed.signature.clone();
-    let started_maude = MaudeHandle::start(&cfg.maude_path, prover_maude_sig.clone());
+    let started_maude = MaudeHandle::start_with_backend(
+        &cfg.maude_path,
+        prover_maude_sig.clone(),
+        cfg.algebra_backend,
+    );
     if auto_sources {
         started_maude.as_ref().map_err(|error| {
             LoadError::Elaborate(format!("auto-sources requires Maude: {error}"))
@@ -344,6 +356,22 @@ mod tests {
         );
         cfg.derivcheck_timeout = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
         cfg
+    }
+
+    #[test]
+    fn native_only_web_load_does_not_silently_use_best_effort_fallback() {
+        let mut cfg = test_config("/nonexistent/maude-for-test");
+        cfg.algebra_backend = tamarin_term::algebra_backend::AlgebraBackend::NativeOnly;
+        let error = load_from_source(
+            "theory T begin end",
+            TheoryOrigin::Upload("t.spthy".into()),
+            &cfg,
+        )
+        .err()
+        .expect("native-only web load must fail");
+        assert!(error
+            .to_string()
+            .contains("native-only interactive mode is not yet supported"));
     }
 
     /// The interactive `TheoryLoadOptions` plumbing added for HS parity:

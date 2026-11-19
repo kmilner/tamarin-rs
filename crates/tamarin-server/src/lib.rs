@@ -77,6 +77,7 @@ pub struct ServerConfig {
     pub frontend_dist: Option<PathBuf>,
     /// Path to the Maude binary.
     pub maude_path: String,
+    pub algebra_backend: tamarin_term::algebra_backend::AlgebraBackend,
     /// `--derivcheck-timeout` for the dynamic message-derivation checks
     /// run at theory load (HS interactive default 5s; 0 disables, negative
     /// is unbounded).  Set from the CLI flag by `interactive` setup.
@@ -125,6 +126,7 @@ impl ServerConfig {
             data_dir: data_dir.into(),
             frontend_dist: None,
             maude_path,
+            algebra_backend: Default::default(),
             derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT,
             solver_parameters:
                 tamarin_theory::constraint::solver::sources::IntegerParameters::default(),

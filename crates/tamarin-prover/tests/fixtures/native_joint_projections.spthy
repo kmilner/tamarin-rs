@@ -1,0 +1,11 @@
+theory JointProjections
+begin
+
+rule NeedsBoth:
+  [ In(x), In(y) ] --[ Seen(fst(x), snd(y)) ]-> []
+
+lemma projected:
+  exists-trace
+  "Ex #i. Seen('a','b') @ i"
+
+end

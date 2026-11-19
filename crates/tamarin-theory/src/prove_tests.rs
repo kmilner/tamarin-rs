@@ -1067,15 +1067,21 @@ fn included_oracle_locations_are_preserved_and_frozen() {
 #[test]
 fn scratch_proof_checks_return_backend_errors() {
     use crate::constraint::solver::sources::IntegerParameters;
+    let Some(path) = require_maude_path() else {
+        return;
+    };
     let theory = elaborated(
         &tamarin_parser::parse_theory("theory T begin rule R: [In(x)] --> [F(x)] end", &[])
             .unwrap(),
     );
     for failed in [false, true] {
         for derivation in [false, true] {
-            let Some(h) = maude_with(theory.signature.clone()) else {
-                return;
-            };
+            let h = MaudeHandle::start_with_backend(
+                &path,
+                theory.signature.clone(),
+                tamarin_term::algebra_backend::AlgebraBackend::Maude,
+            )
+            .unwrap();
             if failed {
                 h.kill_subprocess();
             }

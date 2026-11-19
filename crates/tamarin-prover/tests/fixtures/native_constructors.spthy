@@ -1,0 +1,13 @@
+theory NativeConstructors
+begin
+builtins: hashing
+functions: wrap/1, combine/2 [AC]
+
+rule Emit:
+  [] --[ Hit(wrap(h(combine('a','b')))) ]-> []
+
+lemma reachable:
+  exists-trace
+  "Ex #i. Hit(wrap(h(combine('a','b')))) @ i"
+
+end

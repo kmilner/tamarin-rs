@@ -9,7 +9,7 @@
 //! (`subterm_constructor_rules` / `construction_rules`), and the
 //! narrowing-based destruction-rule generators for user-defined
 //! function symbols (`destruction_rules_no_eq` / `destruction_rules_ac`,
-//! all built on the `variants_intruder` pipeline that drives Maude).
+//! using native application values or the `variants_intruder` pipeline).
 //! The production BP intruder rules are loaded from the cached file via
 //! `intruder_variants.rs`.
 
@@ -1240,7 +1240,33 @@ pub fn destruction_rules_no_eq(
             let concfact = kd_fact(f_app_no_eq(*f, vec![]));
             Rule::new(info, vec![], vec![concfact.clone()], vec![concfact])
         };
-        let variants = variants_intruder(maude, true, diff, &base);
+        // The generic rule has variable premises and one conclusion, copied
+        // into its action. Decomposition observes only those premises and the
+        // conclusion. Carry the selected result alongside the argument images.
+        let variants = match maude.observed_application_variants(&base.conclusions[0].terms[0]) {
+            Ok(Some(arms)) => {
+                let candidates = arms.into_iter().map(|arm| {
+                    let bindings = tamarin_term::subst::Subst::from_list(arm.bindings);
+                    let prems = base
+                        .premises
+                        .iter()
+                        .map(|p| {
+                            p.clone()
+                                .map(|t| tamarin_term::subst::apply_vterm(&bindings, t))
+                        })
+                        .collect();
+                    let conclusion = kd_fact(arm.value);
+                    Rule::new(
+                        base.info.clone(),
+                        prems,
+                        vec![conclusion.clone()],
+                        vec![conclusion],
+                    )
+                });
+                filter_intruder_variants(maude, true, diff, &base, candidates)
+            }
+            _ => variants_intruder(maude, true, diff, &base),
+        };
         generated.extend(decompose_not_subterm(diff, FunSym::NoEq(*f), &variants));
     }
     minimize_intruder_rules(diff, maude, generated)
@@ -1429,11 +1455,10 @@ fn variants_intruder_with(
     diff: bool,
     ru: &IntrRuleAC,
 ) -> Vec<IntrRuleAC> {
-    use tamarin_term::function_symbols::AcSym;
     use tamarin_term::lterm::frees;
     use tamarin_term::subst::{apply_vterm, Subst};
     use tamarin_term::subst_vfresh::LNSubstVFresh;
-    use tamarin_term::term::{f_app_list, Term};
+    use tamarin_term::term::f_app_list;
 
     // `ruleTerms = concatMap factTerms (prems ++ concs ++ acts)`.
     // Note: HS does NOT include `nvs` here (only prems/concs/acts), even
@@ -1513,8 +1538,7 @@ fn variants_intruder_with(
     let minimized = minimize_variants(cleaned);
 
     // Build one candidate variant rule per (minimized) variant subst.
-    let mut produced: Vec<IntrRuleAC> = Vec::new();
-    for s_fresh in minimized {
+    let candidates = minimized.into_iter().map(|s_fresh| {
         // `freshToFreeAvoiding ruleTerms` — convert VFresh → free Subst,
         // allocating fresh idxs that avoid every var in `ruleTerms`.
         let sigma: Subst<tamarin_term::lterm::Name, LVar> = {
@@ -1552,14 +1576,30 @@ fn variants_intruder_with(
         let new_concs = map_facts(&ru.conclusions);
         let new_acts = map_facts(&ru.actions);
         let new_nvs: Vec<LNTerm> = ru.new_vars.iter().cloned().map(norm_t).collect();
-        let ruvariant: IntrRuleAC = Rule {
+        Rule {
             info: ru.info.clone(),
             premises: new_prems,
             conclusions: new_concs,
             actions: new_acts,
             new_vars: new_nvs,
-        };
+        }
+    });
+    filter_intruder_variants(maude, apply_filters, diff, ru, candidates)
+}
 
+fn filter_intruder_variants(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    apply_filters: bool,
+    diff: bool,
+    ru: &IntrRuleAC,
+    candidates: impl IntoIterator<Item = IntrRuleAC>,
+) -> Vec<IntrRuleAC> {
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::frees;
+    use tamarin_term::term::Term;
+
+    let mut produced = Vec::new();
+    for ruvariant in candidates {
         // Filter conditions (HS):
         //   guard (not applyFilters || (frees (rConcs ruvariant) /= [] || diff)
         //          && (not applyFilters || ruvariant /= ru)

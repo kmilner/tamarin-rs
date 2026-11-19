@@ -34,6 +34,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use tamarin_term::algebra_backend::AlgebraBackend;
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::elaborate::elaborate_with_in_file;
@@ -225,6 +226,15 @@ pub(crate) struct FileResult {
 /// `--help` and `--version` never reach this point — clap answers them
 /// inside `parse_args`' error path.
 pub fn run(args: &Args) -> Result<i32, RunError> {
+    args.algebra_backend.validate().map_err(RunError::Regular)?;
+    if args.algebra_backend == AlgebraBackend::NativeOnly
+        && matches!(args.subcommand, Subcommand::Interactive | Subcommand::Test)
+    {
+        return Err(RunError::Regular(
+            "native-only currently supports batch and variants modes; interactive and installation self-tests are not yet supported".into(),
+        ));
+    }
+
     match args.subcommand {
         Subcommand::Batch => run_batch(args),
         Subcommand::Interactive => run_interactive(args),
@@ -472,7 +482,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     // is discarded (`_ <- ensureMaude as`).
     let _ = ensure_maude(args, &maude_path);
     let start_maude = |sig| {
-        MaudeHandle::start(&maude_path, sig).map_err(|e| {
+        MaudeHandle::start_with_backend(&maude_path, sig, args.algebra_backend).map_err(|e| {
             RunError::Regular(format!(
                 "failed to start maude at {:?}: {:?}",
                 maude_path, e
@@ -511,6 +521,12 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     // so the DH and BP blocks abut (the DH `d_inv` body directly precedes the
     // BP `c_pmult` header with no separating newline).  `putStrLn` appends the
     // single trailing newline.
+    maude
+        .check_backend_status()
+        .map_err(|e| RunError::Regular(e.to_string()))?;
+    bp_maude
+        .check_backend_status()
+        .map_err(|e| RunError::Regular(e.to_string()))?;
     let dh_s = tamarin_theory::pretty_formula::pretty_intruder_variants(&dh_rules);
     let bp_s = tamarin_theory::pretty_formula::pretty_intruder_variants(&bp_rules);
     print!("{}{}", dh_s, bp_s);
@@ -604,6 +620,7 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
         unsafe { rustfs_mimalloc_sys::mi_heap_collect(rustfs_mimalloc_sys::mi_heap_main(), true) }
     });
     cfg.frontend_dist = frontend_dist;
+    cfg.algebra_backend = args.algebra_backend;
     // `--bound` is accepted here but NOT routed anywhere: HS interactive
     // stores it in the App autoprover's `apBound`, which every autoprove
     // route then REPLACES with the URL's bound (`getAutoProverR`'s `adapt`,
@@ -815,6 +832,9 @@ fn cli_cut(args: &Args) -> Option<tamarin_theory::constraint::solver::context::C
 /// a caller that already resolved it (resolving the default probes the
 /// filesystem) does not pay for it twice.
 fn ensure_maude(args: &Args, maude_path: &str) -> (bool, String) {
+    if !args.algebra_backend.uses_maude() {
+        return (true, "not used (native-only)".to_string());
+    }
     let reported: &str = if args.maude_path.is_some() {
         maude_path
     } else {
@@ -830,6 +850,10 @@ fn ensure_maude(args: &Args, maude_path: &str) -> (bool, String) {
 /// else the probed default.  HS `ensureMaude` reads the same `maudePath`
 /// for both the version check and every later maude spawn (Console.hs), so the reported version is always the invoked binary's.
 fn maude_invocation_path(args: &Args) -> String {
+    if !args.algebra_backend.uses_maude() {
+        // Do not even resolve/probe a default binary in native-only mode.
+        return args.maude_path.clone().unwrap_or_default();
+    }
     args.maude_path.clone().unwrap_or_else(default_maude_path)
 }
 
@@ -1348,6 +1372,15 @@ impl TheoryPipeline<'_> {
         })
     }
 
+    fn check_backend_status(&self) -> Result<(), RunError> {
+        if let Some(maude) = &self.file_maude {
+            maude
+                .check_backend_status()
+                .map_err(|e| RunError::Regular(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// The CLI half of HS `constructAutoProver` (TheoryLoader.hs).
     /// When `--heuristic` is given it OVERRIDES the per-lemma / theory
     /// heuristic for every lemma (HS `selectHeuristic`, Theory/Proof.hs).
@@ -1572,12 +1605,17 @@ impl TheoryPipeline<'_> {
         // (`--parse-only` never reaches here — it `continue`d before any
         // Maude is needed, Batch.hs.)
         let session_maude_caches = std::sync::Arc::new(SharedMaudeCaches::default());
-        self.file_maude = MaudeHandle::start_with_caches(
+        let started = MaudeHandle::start_with_backend_and_caches(
             self.maude_path,
             self.maude_sig.clone(),
+            self.args.algebra_backend,
             std::sync::Arc::clone(&session_maude_caches),
-        )
-        .ok();
+        );
+        self.file_maude = if self.args.algebra_backend == AlgebraBackend::NativeOnly {
+            Some(started.map_err(|e| RunError::Regular(e.to_string()))?)
+        } else {
+            started.ok()
+        };
 
         // Spawn an auxiliary MaudePool of `effective_maude_processes()`
         // EXTRA subprocesses for use at the rayon parallel sites
@@ -1598,12 +1636,13 @@ impl TheoryPipeline<'_> {
         // consult `session_maude_caches`, so a memo result computed on
         // any of the session's subprocesses is visible to all of them.
         let pool_size = self.args.effective_maude_processes();
-        self.file_maude_pool = if pool_size >= 2 {
-            match MaudePool::new(
+        self.file_maude_pool = if pool_size >= 2 && self.args.algebra_backend.uses_maude() {
+            match MaudePool::new_with_backend(
                 self.maude_path,
                 self.maude_sig.clone(),
                 pool_size,
                 std::sync::Arc::clone(&session_maude_caches),
+                self.args.algebra_backend,
             ) {
                 Ok(p) => Some(std::sync::Arc::new(p)),
                 Err(e) => {
@@ -1978,6 +2017,7 @@ impl TheoryPipeline<'_> {
                 // `check_and_extend_lemma_in_session`, which is why
                 // `_analyzed` theories carry traces without `--prove`.
                 let mut lemma_traces: Vec<(String, System)> = Vec::new();
+                self.check_backend_status()?;
                 let root = outcome.map_err(RunError::from)?;
                 let (verdict, proof_steps, proof_body) = {
                     let steps = count_proof_steps(&root);
@@ -2332,6 +2372,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         }
 
         st.check_translated_theory()?;
+        st.check_backend_status()?;
 
         // `--quit-on-warning` (HS `withVersionAndReport`, TheoryLoader.hs): a non-empty report throws `WarningError`
         // once the full `preReport ++ postReport` exists — i.e. right here,
@@ -2399,6 +2440,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             }
             None => {
                 let closed = st.close_translated_theory()?;
+                st.check_backend_status()?;
 
                 if opts.precompute_only_mode {
                     // HS `--precompute-only` (Batch.hs): the file's
@@ -2413,6 +2455,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     let session = st
                         .build_prover_session(maude, tamarin_theory::prove::CliHeuristic::default())
                         .map_err(RunError::from)?;
+                    st.check_backend_status()?;
                     let wf_len = st.wf_report.len();
                     precompute_pending.push((session, wf_len));
                 } else {
@@ -2495,6 +2538,11 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // left it on, matching HS, where this forcing happens inside the
             // same `showSaturation = True` close.
             let stats = session.precomputation_stats().map_err(RunError::from)?;
+            session
+                .template_context()
+                .maude
+                .check_backend_status()
+                .map_err(|e| RunError::Regular(e.to_string()))?;
             // HS `casesInfo` (ClosedTheory.hs).
             let chain_info = |n: usize| -> String {
                 if n == 0 {

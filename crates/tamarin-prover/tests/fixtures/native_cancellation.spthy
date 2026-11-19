@@ -1,0 +1,18 @@
+theory NativeCancellation
+begin
+builtins: multiset
+
+rule Produce:
+  [ Fr(~tag) ] --> [ Tagged(~tag, ~tag + 'a' + 'b') ]
+
+rule Consume:
+  [ Tagged(t, t + x) ] --[ Found(x) ]-> []
+
+lemma reachable:
+  exists-trace
+  "Ex x #i. Found(x) @ i"
+
+lemma only_residual:
+  "All x #i. Found(x) @ i ==> x = 'a' + 'b'"
+
+end

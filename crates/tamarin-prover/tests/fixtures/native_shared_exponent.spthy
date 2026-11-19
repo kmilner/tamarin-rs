@@ -1,0 +1,19 @@
+theory SharedExponent
+begin
+builtins: diffie-hellman
+
+rule Unit:
+  [ Fr(~r) ] --> [ Pending(~r, one) ]
+
+rule Inverse:
+  [ Fr(~r) ] --> [ Pending(~r, inv(~r)) ]
+
+rule Observe:
+  [ Pending(~r, y) ] --[ Keys('g'^y, ('g'^y)^~r) ]-> []
+
+lemma unit_before:
+  exists-trace "Ex k #i. Keys('g', k) @ i"
+
+lemma cancels_after:
+  exists-trace "Ex k #i. Keys(k, 'g') @ i"
+end

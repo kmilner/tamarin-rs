@@ -1,0 +1,12 @@
+theory NativePairing
+begin
+
+// Pair/fst/snd are implicit even though the protocol has no term arguments.
+rule Emit:
+  [] --[ Hit() ]-> []
+
+lemma reachable:
+  exists-trace
+  "Ex #i. Hit() @ i"
+
+end

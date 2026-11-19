@@ -1,0 +1,21 @@
+theory NestedACGuard
+begin
+
+builtins: multiset, hashing
+
+rule Allowed:
+  [] --[ Bag(h('a' + 'b' + 'c') + 'a' + 'b'), Good() ]-> []
+
+rule Rejected:
+  [] --[ Bag(h('a' + 'b' + 'd') + 'a' + 'b'), Bad() ]-> []
+
+restriction Keep:
+  "All x y #i. Bag(h(x + y) + x) @ i ==> y = 'c'"
+
+lemma allowed:
+  exists-trace "Ex #i. Good() @ i"
+
+lemma excluded:
+  "not (Ex #i. Bad() @ i)"
+
+end

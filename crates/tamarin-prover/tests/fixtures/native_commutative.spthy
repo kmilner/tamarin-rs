@@ -1,0 +1,13 @@
+theory NativeCommutative
+begin
+
+builtins: diffie-hellman, bilinear-pairing
+
+// Checking intruder derivations for bilinear-pairing requires unifying two open em terms.
+rule Record:
+    [ In(<x,y>) ] --[ Recorded(x,y) ]-> []
+
+lemma recorded:
+    exists-trace "Ex x y #i. Recorded(x,y) @ i & not (x = y)"
+
+end

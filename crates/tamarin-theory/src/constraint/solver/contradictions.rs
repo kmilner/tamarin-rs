@@ -1935,18 +1935,13 @@ pub struct SubstNfChecker {
     base: std::cell::OnceCell<Vec<tamarin_term::lterm::LNTerm>>,
     /// Per-snapshot cache keyed by the free subst.  Holds, for each
     /// `base` term, the `fsubst`-applied term `t` together with the pure
-    /// per-term quantities `check()` needs for every probe: `tvars =
-    /// freesList t` and `fresh_start = succ (maxIdx tvars)`.  `terms` is
+    /// variables `check()` must avoid when freshening a candidate. `terms` is
     /// fixed between `fsubst` refreshes, so these are computed once here
     /// instead of once per candidate probe.
     applied: std::cell::RefCell<
         Option<(
             crate::tools::equation_store::LNSubst,
-            Vec<(
-                tamarin_term::lterm::LNTerm,
-                Vec<tamarin_term::lterm::LVar>,
-                u64,
-            )>,
+            Vec<(tamarin_term::lterm::LNTerm, Vec<tamarin_term::lterm::LVar>)>,
         )>,
     >,
 }
@@ -1992,30 +1987,20 @@ impl SubstNfChecker {
         };
         if stale {
             // Precompute per snapshot: apply `fsubst`, then the pure
-            // per-term `tvars`/`fresh_start` every probe consumes.
-            let terms: Vec<(
-                tamarin_term::lterm::LNTerm,
-                Vec<tamarin_term::lterm::LVar>,
-                u64,
-            )> = base
+            // per-term `tvars` every probe consumes.
+            let terms: Vec<(tamarin_term::lterm::LNTerm, Vec<tamarin_term::lterm::LVar>)> = base
                 .iter()
                 .map(|t| {
                     let t = apply_vterm(fsubst, t.clone());
                     let tvars: Vec<tamarin_term::lterm::LVar> = vars_vterm(&t);
-                    let fresh_start = tvars
-                        .iter()
-                        .map(|v| v.idx)
-                        .max()
-                        .unwrap_or(0)
-                        .saturating_add(1);
-                    (t, tvars, fresh_start)
+                    (t, tvars)
                 })
                 .collect();
             *applied = Some((fsubst.clone(), terms));
         }
         let terms = &applied.as_ref().unwrap().1;
         let sig = self.maude.maude_sig();
-        for (t, tvars, fresh_start) in terms {
+        for (t, tvars) in terms {
             if tvars.is_empty() {
                 continue;
             }
@@ -2034,9 +2019,8 @@ impl SubstNfChecker {
             // NO fresh-counter state — the probe subst is local to this
             // predicate.  Drawing real idxs from the shared counter here would
             // advance it on every variant probed, shifting every later
-            // persisted mint above HS.  `fresh_start` is the per-term
-            // `succ (maxIdx tvars)` precomputed in the snapshot cache.
-            let free_subst = restricted.fresh_to_free_uniform_shift(*fresh_start);
+            // persisted mint above HS.
+            let free_subst = restricted.fresh_to_free_avoiding_vars(tvars);
             let t_prime = apply_vterm(&free_subst, t.clone());
             // Fast path: if subst doesn't change the term, it's still NF.
             if &t_prime == t {

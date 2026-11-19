@@ -198,8 +198,26 @@ fn import_mlit(
     }
     match ml {
         MaudeLit::FreshVar(_, sort) | MaudeLit::MaudeVar(_, sort) => {
-            let lit = Lit::Var(LVar::new(name_hint, *sort, *next_idx));
-            *next_idx += 1;
+            let idx = if let Some(next) = next_idx.checked_add(1) {
+                std::mem::replace(next_idx, next)
+            } else {
+                // At the upper bound the counter stays at MAX. The inverse
+                // table includes caller variables and all witnesses already
+                // minted in this arm, including any previous use of MAX.
+                let used: std::collections::BTreeSet<_> = ctx
+                    .inverse
+                    .values()
+                    .filter_map(|lit| match lit {
+                        Lit::Var(v) => Some(v.idx),
+                        Lit::Con(_) => None,
+                    })
+                    .collect();
+                std::iter::once(u64::MAX)
+                    .chain(0..u64::MAX)
+                    .find(|i| !used.contains(i))
+                    .expect("finite Maude reply exhausted all u64 indices")
+            };
+            let lit = Lit::Var(LVar::new(name_hint, *sort, idx));
             ctx.inverse.insert(ml.clone(), lit);
             lit
         }

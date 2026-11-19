@@ -1,0 +1,17 @@
+name = "tamarin-spec"
+version = "0.1.0"
+defaultTargets = ["TamarinRuntime"]
+
+[leanOptions]
+autoImplicit = false
+warningAsError = true
+
+[[lean_lib]]
+name = "Tamarin"
+
+[[lean_lib]]
+name = "TamarinRuntime"
+roots = ["TamarinRuntime", "TamarinWire"]
+
+[[lean_lib]]
+name = "TamarinCI"

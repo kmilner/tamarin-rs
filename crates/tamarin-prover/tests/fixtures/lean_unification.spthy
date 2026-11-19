@@ -1,0 +1,26 @@
+theory LeanUnification
+begin
+
+builtins: multiset
+
+rule Produce:
+  [] --> [ Bag('a' + 'b' + 'b') ]
+
+rule Consume:
+  [ Bag(x + 'a') ] --[ Found(x) ]-> []
+
+lemma reachable:
+  exists-trace
+  "Ex #i. Found('b' + 'b') @ i"
+
+rule ProducePair:
+  [] --> [ PairBag('a' + 'b' + 'b', 'c' + 'd' + 'd') ]
+
+rule ConsumePair:
+  [ PairBag(x + 'a', y + 'c') ] --[ FoundPair(x, y) ]-> []
+
+lemma conjunction_reachable:
+  exists-trace
+  "Ex #i. FoundPair('b' + 'b', 'd' + 'd') @ i"
+
+end

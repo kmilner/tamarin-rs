@@ -808,6 +808,63 @@ fn source_probe_rejects_incompatible_action_heads_early() {
 }
 
 #[test]
+fn natural_source_match_keeps_its_node_binding_and_first_alternative() {
+    use tamarin_term::algebra_backend::AlgebraBackend;
+    use tamarin_term::builtin::nat_plus;
+    use tamarin_term::function_symbols::nat_one_sym;
+    use tamarin_term::maude_proc::MaudeHandle;
+    use tamarin_term::maude_sig::nat_maude_sig;
+    use tamarin_term::term::f_app_no_eq;
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let context = |backend| {
+        let handle = MaudeHandle::start_with_backend(&path, nat_maude_sig(), backend).unwrap();
+        crate::constraint::solver::context::ProofContext::new(handle, Vec::new())
+    };
+    let ctx = context(AlgebraBackend::default());
+    let oracle = context(AlgebraBackend::Maude);
+    // The natural-number source installed by precompute_full_sources has
+    // two Nat pattern variables and a separate Node variable.
+    let v = |i| Term::Lit(Lit::Var(LVar::new("t", LSort::Nat, i)));
+    let source = Source::eager(
+        Goal::Action(nvar(0), crate::fact::ku_fact(nat_plus(v(1), v(2)))),
+        Vec::new(),
+    );
+    let one = f_app_no_eq(nat_one_sym(), vec![]);
+    let two = nat_plus(one.clone(), one.clone());
+    for (subject, unique) in [(two.clone(), true), (nat_plus(one, two), false)] {
+        let live = Goal::Action(nvar(7), crate::fact::ku_fact(subject.clone()));
+        let selected = prepare_source_match(&ctx, &source, &[], &live)
+            .unwrap()
+            .unwrap();
+        let node = selected.renamed_abstract_node;
+        let answers = oracle
+            .maude
+            .match_eqs(&[
+                tamarin_term::rewriting::Equal {
+                    lhs: subject,
+                    rhs: nat_plus(v(node.idx + 1), v(node.idx + 2)),
+                },
+                tamarin_term::rewriting::Equal {
+                    lhs: Term::Lit(Lit::Var(nvar(7))),
+                    rhs: Term::Lit(Lit::Var(node)),
+                },
+            ])
+            .unwrap();
+        assert_eq!(answers.len(), if unique { 1 } else { 2 });
+        assert!(selected
+            .match_pairs
+            .contains(&(selected.renamed_abstract_node, Term::Lit(Lit::Var(nvar(7))))));
+        assert_eq!(selected.match_pairs.len(), 3);
+        assert_eq!(selected.match_pairs, answers[0]);
+        if AlgebraBackend::default() == AlgebraBackend::Hybrid {
+            assert_eq!(ctx.maude.stats().match_count, u64::from(!unique));
+        }
+    }
+}
+
+#[test]
 fn source_probe_reports_ac_match_transport_failure() {
     use tamarin_term::function_symbols::AcSym;
     use tamarin_term::term::f_app_ac;

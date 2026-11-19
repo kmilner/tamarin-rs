@@ -8,10 +8,34 @@ use crate::vterm::Lit;
 
 use tamarin_test_support::require_maude_path;
 
+#[test]
+fn maude_reply_witnesses_avoid_full_width_caller_indices() {
+    use crate::maude_types::MaudeLit::{FreshVar, MaudeVar};
+    use crate::term::Term;
+
+    let mut ctx = ConvCtx::new();
+    let mut domains = Vec::new();
+    for idx in [0, 2, u64::MAX] {
+        let v = LVar::new("x", LSort::Msg, idx);
+        let Term::Lit(MaudeVar(id, sort)) =
+            lterm_to_mterm_global(&Term::Lit(Lit::Var(v)), &mut ctx)
+        else {
+            panic!("expected variable")
+        };
+        domains.push((sort, id));
+    }
+    let w = Term::Lit(FreshVar(1, LSort::Msg));
+    let z = Term::Lit(FreshVar(2, LSort::Msg));
+    let reply = vec![(domains[0], w.clone()), (domains[1], z), (domains[2], w)];
+    let result = msubst_to_lnsubst_with_avoid(&reply, &mut ctx, u64::MAX).unwrap();
+    let images: Vec<_> = result.iter().map(|(_, t)| t.clone()).collect();
+    let witness = |idx| Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, idx)));
+    assert_eq!(images, vec![witness(1), witness(3), witness(1)]);
+}
+
 /// `fst(pair(a, b))` over [`pair_maude_sig`].  The pairing signature really
-/// rewrites this term.  `reduce` therefore cannot answer it from either of
-/// its fast paths that use no IPC.  The round trip through the subprocess
-/// runs for real.
+/// rewrites this term. The subprocess test explicitly selects Maude, since
+/// the Lean pairing backend can also reduce it without IPC.
 fn reducible_fst_pair(a: &str, b: &str) -> LNTerm {
     use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
     let mk = |n: &str| -> LNTerm {
@@ -54,7 +78,8 @@ fn spawn_and_reduce_pair() {
             return;
         }
     };
-    let h = MaudeHandle::start(&path, pair_maude_sig()).expect("start");
+    let h = MaudeHandle::start_with_backend(&path, pair_maude_sig(), AlgebraBackend::Maude)
+        .expect("start");
     let r = h.reduce(&reducible_fst_pair("a", "b")).expect("reduce");
     let a: LNTerm = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
         crate::lterm::NameTag::Pub,
@@ -333,11 +358,12 @@ fn pool_recovers_after_a_panicking_exchange() {
             return;
         }
     };
-    let pool = MaudePool::new(
+    let pool = MaudePool::new_with_backend(
         &path,
         pair_maude_sig(),
         1,
         Arc::new(SharedMaudeCaches::default()),
+        AlgebraBackend::Maude,
     )
     .expect("pool");
     let old_pid = {
@@ -793,7 +819,8 @@ fn check_cancellation_restart(path: &str) {
     use std::sync::mpsc;
     use std::time::Duration;
     use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
-    let handle = MaudeHandle::start(path, pair_maude_sig()).unwrap();
+    let handle =
+        MaudeHandle::start_with_backend(path, pair_maude_sig(), AlgebraBackend::Maude).unwrap();
     let old_pid = handle.child.lock().unwrap().child.as_ref().unwrap().id();
     handle
         .inner
@@ -823,7 +850,8 @@ fn check_cancellation_restart(path: &str) {
     assert!(done_rx.recv_timeout(Duration::from_secs(5)).unwrap());
     owner.join().unwrap();
     let actual = other.join().unwrap().unwrap();
-    let fresh = MaudeHandle::start(path, pair_maude_sig()).unwrap();
+    let fresh =
+        MaudeHandle::start_with_backend(path, pair_maude_sig(), AlgebraBackend::Maude).unwrap();
     assert_eq!(
         actual,
         fresh
@@ -886,7 +914,8 @@ fn deferred_cancellation_before_initialize_preserves_recovery() {
     let Some(path) = require_maude_path() else {
         return;
     };
-    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let handle =
+        MaudeHandle::start_with_backend(&path, pair_maude_sig(), AlgebraBackend::Maude).unwrap();
     let old_pid = handle.child.lock().unwrap().child.as_ref().unwrap().id();
     let token = CancellationToken::default();
     {
@@ -899,7 +928,8 @@ fn deferred_cancellation_before_initialize_preserves_recovery() {
         });
         assert!(matches!(result, Err(MaudeError::Cancelled)));
     }
-    let fresh = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let fresh =
+        MaudeHandle::start_with_backend(&path, pair_maude_sig(), AlgebraBackend::Maude).unwrap();
     assert_eq!(
         handle.reduce(&reducible_fst_pair("retry", "b")).unwrap(),
         fresh.reduce(&reducible_fst_pair("retry", "b")).unwrap()
@@ -924,7 +954,8 @@ fn panicking_exchange_cannot_leave_a_reply_for_the_next_request() {
     let Some(path) = require_maude_path() else {
         return;
     };
-    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let handle =
+        MaudeHandle::start_with_backend(&path, pair_maude_sig(), AlgebraBackend::Maude).unwrap();
     let old_pid = handle.child.lock().unwrap().child.as_ref().unwrap().id();
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle.inner.lock().with_cancellation::<()>(|inner| {

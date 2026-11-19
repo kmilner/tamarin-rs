@@ -2476,8 +2476,7 @@ fn equal_subst_up_to_renaming(
         })
         .collect();
     maude
-        .match_eqs(&eqs)
-        .map(|sols| !sols.is_empty())
+        .has_match_eqs(&eqs)
         .map_err(|e| AddEqsError::Maude(format!("remove_permutations: {}", e)))
 }
 

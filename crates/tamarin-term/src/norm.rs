@@ -408,15 +408,10 @@ fn strule_rewrites(t: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
 
 /// `struleApplicable` for a rule whose LHS contains Ac-/C-headed subterms:
 /// the same HS `solveMatchLNTerm (t `matchWith` lhs)` semantics, with the
-/// 3-way native matcher first and a Maude `match` only on `NeedsAc`
-/// (mirroring HS `matchViaMaude` on `Left ACProblem`,
-/// Term/Unification.hs), minus the `NeedsAc` pairs the module's
-/// axioms already answer (see the root-symbol note below).  Subject vars
-/// are rigid in the Maude `match` command on both sides of the port, so the
-/// outcomes agree.
-/// A Maude transport error is folded to "no match" — the conservative
-/// answer (term stays NF), matching the port's other best-effort Maude
-/// fallbacks (e.g. simplify.rs `match_atom_via_maude`).
+/// 3-way structural matcher first. On `NeedsAc`, ask the algebra backend
+/// whether any match exists, except for the distinct roots handled below.
+/// Either arm suffices when multiple substitutions make the rule applicable.
+/// This boolean normal-form check treats a backend error as an inapplicable rule.
 fn rule_applies_ac(
     maude: &MaudeHandle,
     t: &LNTerm,
@@ -454,11 +449,11 @@ fn rule_applies_ac(
                 false
             }
             _ => maude
-                .match_eqs(&[crate::rewriting::Equal {
+                .has_match_eqs(&[crate::rewriting::Equal {
                     lhs: t.clone(),
                     rhs: lhs.clone(),
                 }])
-                .is_ok_and(|ms| !ms.is_empty()),
+                .unwrap_or(false),
         },
     };
     matched && strule_rewrites(t, rhs)

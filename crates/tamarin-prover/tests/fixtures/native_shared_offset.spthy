@@ -1,0 +1,23 @@
+theory NativeSharedOffset
+begin
+builtins: multiset
+
+rule Produce:
+  [ In(x) ] --[ Produced(x) ]-> [ Packed(x + 'a') ]
+
+rule Consume:
+  [ Packed(y + 'b') ] --[ Consumed(y) ]-> []
+
+lemma either_branch:
+  exists-trace
+  "Ex y #i. Consumed(y) @ i"
+
+lemma reachable:
+  exists-trace
+  "Ex #i. Consumed('a') @ i"
+
+lemma shared_reachable:
+  exists-trace
+  "Ex y #i. Consumed(y) @ i & not (y = 'a')"
+
+end

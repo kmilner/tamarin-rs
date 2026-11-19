@@ -190,6 +190,9 @@ pub struct Args {
     pub trace_json: Option<String>,
     pub trace_dot: Option<String>,
 
+    /// Algebra dispatch; native-only is experimental and never starts Maude.
+    pub algebra_backend: tamarin_term::algebra_backend::AlgebraBackend,
+
     // Tool paths.
     pub maude_path: Option<String>,
     pub dot_path: Option<String>,
@@ -330,9 +333,14 @@ struct LoadOpts {
 }
 
 /// External-tool paths and Rust-side parallelism knobs; `global` like the
-/// loader flags (every mode probes maude, interactive also renders graphs).
+/// loader flags (Maude-backed modes probe maude; interactive also renders graphs).
 #[derive(Debug, Clone, ClapArgs)]
 struct ToolOpts {
+    /// Algebra backend (default: hybrid with lean-unification, otherwise maude)
+    #[arg(long = "algebra-backend", global = true, value_name = "BACKEND",
+          value_parser = ["maude", "hybrid", "native-only"])]
+    algebra_backend: Option<String>,
+
     /// Path to the maude binary (default: `maude` on $PATH)
     #[arg(long = "with-maude", global = true, num_args = 0..=1, require_equals = true,
           default_missing_value = "maude", value_name = "PATH")]
@@ -728,6 +736,12 @@ pub fn parse_args(raw: &[String]) -> Result<Args, clap::Error> {
         output_module: cli.batch.output_module,
         trace_json: cli.batch.trace_json,
         trace_dot: cli.batch.trace_dot,
+        algebra_backend: cli
+            .tools
+            .algebra_backend
+            .as_deref()
+            .map(|value| value.parse().expect("clap validates algebra backend"))
+            .unwrap_or_default(),
         maude_path: cli.tools.maude_path,
         dot_path: cli.tools.dot_path,
         json_path: cli.tools.json_path,

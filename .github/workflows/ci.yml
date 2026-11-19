@@ -6,6 +6,102 @@ on:
   pull_request:
 
 jobs:
+  lean-spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: lean
+          auto-config: "false"
+          build: "false"
+          test: "false"
+          lint: "false"
+          use-mathlib-cache: "false"
+          leanchecker: "false"
+      - name: Verify Lean implementation contract and ABI
+        working-directory: lean
+        run: |
+          lake build TamarinCI
+          lake env leanchecker TamarinCI
+          lake env lean Tests/SpecAudit.lean
+          lake env lean Tests/ExistingSpecAudit.lean
+          lake env lean Tests/ACSystem.lean
+          lake env lean Tests/ACRowElimination.lean
+          lake env lean --run Tests/ACPivot.lean
+          lake env lean Tests/WholeProblem.lean
+          lake env lean Tests/FactoredUnification.lean
+          lake env lean Tests/FactorReplay.lean
+          lake env lean Tests/GraphUnification.lean
+          lake env lean Tests/AnswerProjection.lean
+          lake env lean Tests/OperandRefinement.lean
+          lake env lean Tests/OperandCounts.lean
+          lake env lean --run Tests/OperandRowStress.lean
+          lake env lean Tests/OperandUnification.lean
+          lake env lean Tests/ProjectedOperands.lean
+          lake env lean Tests/Residual.lean
+          lake env lean Tests/XorSpecAudit.lean
+          lake env lean --run Tests/XorVariants.lean
+          lake env lean Tests/BackendContract.lean
+          lake env lean Tests/FreshSubstitution.lean
+          lake env lean Tests/TermEncoding.lean
+          lake env lean Tests/WordEncoding.lean
+          lake env lean Tests/Pairing.lean
+          lake env lean Tests/CorrelatedVariantsAudit.lean
+          lake env lean Tests/Rewriting.lean
+          lake env lean Tests/StableDH.lean
+          lake env lean Tests/DHProductUnique.lean
+          lake env lean --run Tests/DHTower.lean
+          lake env lean --run Tests/DHExponent.lean
+          lake env lean Tests/VariantJoin.lean
+          lake env lean Tests/OpenNarrowing.lean
+          lake env lean Tests/GroundNarrowing.lean
+          lake env lean Tests/Matching.lean
+          lake env lean Tests/FlatMatching.lean
+          lake env lean Tests/SortedMatch.lean
+          lake env lean Tests/OpenMatchSelect.lean
+          lake env lean Tests/CompoundPartitions.lean
+          lake env lean Tests/OpenMatch.lean
+          lake env lean Tests/MatchOrder.lean
+          lake env lean Tests/NestedTreeMatch.lean
+          lake env lean Tests/CanonicalTree.lean
+          lake env lean Tests/RecursiveACMatch.lean
+          lake env lean --run Tests/MatchingStress.lean
+          lake env lean --run Tests/CommonCancellation.lean
+          lake env lean --run Tests/RigidAllocation.lean
+          lake env lean --run Tests/Commutative.lean
+          lake env lean --run Tests/SortClash.lean
+          lake env lean Tests/IdentityTable.lean
+          python3 Tests/check_audit.py
+      - run: rustup update stable --no-self-update && rustup default stable
+      - name: Native-only operations without a Maude binary
+        run: cargo test --profile ci -p tamarin-term --features lean-unification --test native_backend -- --test-threads=1
+      - name: Install Maude oracle
+        run: |
+          curl -sSL -o /tmp/maude.zip https://github.com/maude-lang/Maude/releases/download/Maude3.5.1/Maude-3.5.1-linux-x86_64.zip
+          sudo mkdir -p /opt/maude
+          sudo unzip -q /tmp/maude.zip -d /opt/maude
+          sudo chmod +x /opt/maude/maude
+      - name: Compare explicit native-only sessions with a separate Maude oracle
+        run: cargo test --profile ci -p tamarin-term --features lean-unification --lib native_oracle_
+        env:
+          MAUDE_PATH: /opt/maude/maude
+      - name: Native Lean bridge and differential tests
+        run: cargo test --profile ci -p tamarin-term --features lean-unification --lib -- --test-threads=1
+        env:
+          MAUDE_PATH: /opt/maude/maude
+          TAM_RS_VERIFY_LEAN_UNIFY: "1"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Protocol proof with native Lean dispatch
+        run: |
+          cargo test --profile ci -p tamarin-theory --features tamarin-term/lean-unification --lib natural_source_match_keeps_its_node_binding_and_first_alternative
+          cargo test --profile ci -p tamarin-theory --features tamarin-term/lean-unification --lib restriction_guard_nested_ac_keeps_rigid_system_variables_and_time
+          cargo test --profile ci -p tamarin-prover --features lean-unification --lib --test lean_unification --test native_backend
+        env:
+          MAUDE_PATH: /opt/maude/maude
+
   checks:
     runs-on: ubuntu-latest
     steps:
