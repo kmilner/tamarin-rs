@@ -4,6 +4,7 @@ import Tamarin.ACMatchAnswerPacket
 import Tamarin.ACPagePacket
 import Tamarin.ACSortedBagPacket
 import Tamarin.TotalFreeVariants
+import Tamarin.ProjectedRuleMatches
 import Tamarin.ACMatchSortedBags
 import Tamarin.ACBagAnswers
 import Tamarin.ACBagSearch
