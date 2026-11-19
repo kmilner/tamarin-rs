@@ -9,13 +9,13 @@ variable {κ α : Type} [DecidableEq α]
 def Balanced (rows : List (List κ × List α)) (a : α) (w : κ → Nat) :=
   ∀ r ∈ rows, (r.1.map w).sum = r.2.count a
 
-private theorem countExpanded (ks : List κ) (image : κ → List α) (a : α) :
+theorem countExpanded (ks : List κ) (image : κ → List α) (a : α) :
     (ks.flatMap image).count a = (ks.map fun k => (image k).count a).sum := by
   induction ks with
   | nil => rfl
   | cons k ks ih => simp [List.count_append,ih]
 
-private theorem countBag (w : α → Nat) (a : α) (as : List α) (nd : as.Nodup) :
+theorem countBag (w : α → Nat) (a : α) (as : List α) (nd : as.Nodup) :
     (as.flatMap fun b => List.replicate (w b) b).count a = if a ∈ as then w a else 0 := by
   induction as with
   | nil => simp

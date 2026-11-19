@@ -4,7 +4,7 @@ import Tamarin.ACMatchColumns
 namespace Tamarin.Matching.ACBagSearch
 open ACBags
 
-private def Keys (rows : Rows) (ks : List UInt64) :=
+def Keys (rows : Rows) (ks : List UInt64) :=
   ∀ k, k ∈ ks ↔ ∃ r ∈ rows, k ∈ r.1
 
 private theorem eqs_ok (rows : Rows) (a : UInt64) (v : Column) :
@@ -44,16 +44,12 @@ private theorem le_largest (eqs : List (List UInt64 × Nat)) (r) (hr : r ∈ eqs
     · exact Nat.le_max_left ..
     · exact Nat.le_trans (ih h) (Nat.le_max_right ..)
 
-private theorem mem_options {rows : Rows} {ks : List UInt64} {a : UInt64} {s : List UInt64}
-    (h : s ∈ options rows ks a) :
-    ∃ u : Column, Balanced rows a u ∧ ∀ k ∈ ks, k ∈ s ↔ 0 < u k := by
-  simp only [options,List.mem_eraseDups,List.mem_map,List.mem_filter] at h
-  obtain ⟨u,⟨_,ok⟩,rfl⟩ := h
-  exact ⟨u,(eqs_ok ..).1 ok,by intro k hk; simp [hk]⟩
+theorem balancedColumns_sound {rows : Rows} {ks : List UInt64} {a : UInt64} {u : Column}
+    (h : u ∈ balancedColumns rows ks a) : Balanced rows a u := (eqs_ok ..).1 (List.mem_filter.mp h).2
 
-private theorem options_cover {rows : Rows} {ks : List UInt64} (keys : Keys rows ks)
+theorem balancedColumns_cover {rows : Rows} {ks : List UInt64} (keys : Keys rows ks)
     (a : UInt64) (v : Column) (ok : Balanced rows a v) :
-    ∃ s ∈ options rows ks a, ∀ k ∈ ks, k ∈ s ↔ 0 < v k := by
+    ∃ u ∈ balancedColumns rows ks a, ∀ k ∈ ks, u k = v k := by
   have bound k (hk : k ∈ ks) : v k ≤ largest (equations rows a) := by
     obtain ⟨r,hr,hm⟩ := (keys k).1 hk
     apply Nat.le_trans (le_sum v hm)
@@ -65,7 +61,19 @@ private theorem options_cover {rows : Rows} {ks : List UInt64} (keys : Keys rows
     have eq := List.map_congr_left (f := u) (g := v) (l := r.1)
       (fun k hk => agree k ((keys k).2 ⟨r,hr,hk⟩))
     rw [eq,ok r hr]
-  refine ⟨_,List.mem_eraseDups.mpr (List.mem_map.mpr ⟨u,List.mem_filter.mpr ⟨hu,(eqs_ok ..).2 good⟩,rfl⟩),?_⟩
+  exact ⟨u,List.mem_filter.mpr ⟨hu,(eqs_ok ..).2 good⟩,agree⟩
+
+private theorem mem_options {rows : Rows} {ks : List UInt64} {a : UInt64} {s : List UInt64}
+    (h : s ∈ options rows ks a) :
+    ∃ u : Column, Balanced rows a u ∧ ∀ k ∈ ks, k ∈ s ↔ 0 < u k := by
+  obtain ⟨u,hu,rfl⟩ := List.mem_map.mp (List.mem_eraseDups.mp h)
+  exact ⟨u,balancedColumns_sound hu,by intro k hk; simp [hk]⟩
+
+private theorem options_cover {rows : Rows} {ks : List UInt64} (keys : Keys rows ks)
+    (a : UInt64) (v : Column) (ok : Balanced rows a v) :
+    ∃ s ∈ options rows ks a, ∀ k ∈ ks, k ∈ s ↔ 0 < v k := by
+  obtain ⟨u,hu,agree⟩ := balancedColumns_cover keys a v ok
+  refine ⟨_,List.mem_eraseDups.mpr (List.mem_map.mpr ⟨u,hu,rfl⟩),?_⟩
   intro k hk
   simp [hk,agree k hk]
 
@@ -119,7 +127,7 @@ private theorem supports_sound {rows : Rows} (ks as : List UInt64) (nd : as.Nodu
         ⟨fun ⟨b,hb,h⟩ => ⟨b,hb,other b hb ▸ h⟩,fun ⟨b,hb,h⟩ => ⟨b,hb,other b hb ▸ h⟩⟩
       simp [hk,cap k hk,prior k hk,hits_cons,prev,w]
 
-private theorem dedup_distinct {α} [DecidableEq α] (xs : List α) : xs.eraseDups.Nodup := by
+theorem dedup_distinct {α} [BEq α] [LawfulBEq α] (xs : List α) : xs.eraseDups.Nodup := by
   cases xs with
   | nil => simp
   | cons x xs =>
@@ -170,17 +178,17 @@ private theorem largest_le (xs : List (List UInt64 × Nat)) (b : Nat) (ok : ∀ 
   | cons x xs ih =>
     exact Nat.max_le.mpr ⟨ok x List.mem_cons_self,ih fun y hy => ok y (List.mem_cons_of_mem _ hy)⟩
 
-theorem run_correct : Correct run := by
-  constructor
-  · intro rows b out
-    unfold run at out
-    split at out <;> try contradiction
-    dsimp only at out
-    split at out <;> try contradiction
-    split at out <;> try contradiction
-    cases out
-    exact decision rows
-  · intro rows ⟨nr,size,nk,na,bounds⟩
+theorem inventories_eq {rows : Rows} {p} (out : inventories rows = some p) :
+    p = ((rows.flatMap Prod.fst).eraseDups,(rows.flatMap Prod.snd).eraseDups) := by
+  unfold inventories at out
+  split at out <;> try contradiction
+  dsimp only at out
+  split at out <;> try contradiction
+  split at out <;> try contradiction
+  exact (Option.some.inj out).symm
+
+theorem inventories_complete {rows : Rows} (within : Within rows) : (inventories rows).isSome := by
+    obtain ⟨nr,size,nk,na,bounds⟩ := within
     have box : ((rows.flatMap Prod.snd).eraseDups.all fun a =>
         (largest (equations rows a)+1)^(rows.flatMap Prod.fst).eraseDups.length ≤ 256) = true := by
       apply List.all_eq_true.mpr
@@ -191,6 +199,19 @@ theorem run_correct : Correct run := by
         obtain ⟨r,hr,rfl⟩ := List.mem_map.mp hx
         exact upper r hr)
       exact decide_eq_true (Nat.le_trans (Nat.pow_le_pow_left (Nat.succ_le_succ cap) _) limit)
-    simp [run,nr,size,nk,na,box]
+    simp [inventories,nr,size,nk,na,box]
+
+theorem run_correct : Correct run := by
+  constructor
+  · intro rows b out
+    cases h : inventories rows with
+    | none => simp [run,h] at out
+    | some p =>
+      rw [inventories_eq h] at h
+      simp [run,h] at out
+      exact out ▸ decision rows
+  · intro rows within
+    obtain ⟨⟨ks,as⟩,h⟩ := Option.isSome_iff_exists.mp (inventories_complete within)
+    simp [run,h]
 
 end Tamarin.Matching.ACBagSearch
