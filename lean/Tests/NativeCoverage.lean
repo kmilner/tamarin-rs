@@ -330,7 +330,7 @@ def bpCoverage : IO Unit := do
       (pow (e x (hash a)) r,6), (pow (e (hash x) (hash y)) r,1)] do
     emitBP "variants" ("rows=" ++ toString count) [body]
   for (body,count) in [(pow (e x y) r,160), (pow (e x x) r,8)] do
-    emitBP "variants" ("probe-rows=" ++ toString count) [body]
+    emitBP "variants" ("rows=" ++ toString count) [body]
   -- Exercise the next depth with a received scalar, retaining both caller
   -- images even on the diagonal, where only one affects the point expression.
   for (body,count) in [(p x (p r y),159), (e (p r x) y,160), (e x (p r x),8)] do
