@@ -7339,8 +7339,14 @@ fn native_oracle_scalar_action_rows_share_inputs_and_outputs() {
         (emap(pmult(f.clone(), x.clone()), y.clone()), 160),
         (emap(x.clone(), pmult(f.clone(), x.clone())), 8),
         (emap(inv(x.clone()), pmult(f.clone(), y.clone())), 178),
-        (emap(pmult(f.clone(), x.clone()), pmult(f.clone(), y.clone())), 336),
-        (emap(x.clone(), pmult(f.clone(), pmult(f.clone(), x.clone()))), 8),
+        (
+            emap(pmult(f.clone(), x.clone()), pmult(f.clone(), y.clone())),
+            336,
+        ),
+        (
+            emap(x.clone(), pmult(f.clone(), pmult(f.clone(), x.clone()))),
+            8,
+        ),
     ] {
         let slots = [app, x.clone(), y.clone(), f.clone()];
         let wanted = valued_variant_rows(&oracle, &slots);

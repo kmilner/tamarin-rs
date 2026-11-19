@@ -55,7 +55,9 @@ fn homogeneous_ac_existence_skips_substitution_enumeration_and_caches_both_answe
         lhs: side(&[0, 1]),
         rhs: f_app_ac(AcSym::Union, vec![crate::lterm::pub_term("a"); 2]),
     }];
-    assert!(!crate::lean_unification::RuleTable::may_be_homogeneous(&mixed));
+    assert!(!crate::lean_unification::RuleTable::may_be_homogeneous(
+        &mixed
+    ));
     assert!(native.unifiable(&mixed).unwrap());
 
     assert!(matches!(
