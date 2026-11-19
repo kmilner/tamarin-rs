@@ -4,8 +4,8 @@ namespace Tamarin.ACBasis.RationalProjection
 open Homogeneous
 variable {n k : Nat}
 
-/-- A graph has at most 32 variables and 64 equations. Each stage stores at
-most 256 dense rays with at most 128 bits per coordinate. -/
+/-- This dense projection starts with at most 32 variables. Each stage
+stores at most 256 rays with at most 128 bits per coordinate. -/
 def maxRays := 256
 def maxCoeff := 2^128 - 1
 

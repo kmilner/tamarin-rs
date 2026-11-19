@@ -511,7 +511,10 @@ theorem exportedWholeUnify_mixedRequired : MixedSizeWhole.Required Executable.wh
   MixedSizeWhole.required
 
 theorem exportedVariantOverlap_correct : VariantOverlapGraph.Correct Executable.variantOverlapAgrees :=
-  VariantOverlapGraph.run_correct
+  ACSpanWhole.correct
+
+theorem exportedVariantOverlap_spanRequired : ACSpanWhole.Required Executable.variantOverlapAgrees :=
+  ACSpanWhole.required
 
 theorem exportedVariantOverlap_compatible {s : Signature} {I : Type} {R : Rewriting.Root s}
     (c : WholeProblem.Codec s) (ids : List I) (p q : Rewriting.RootNarrowing.State s I)

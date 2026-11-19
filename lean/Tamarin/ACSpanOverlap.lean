@@ -81,15 +81,17 @@ private theorem extra_equal (c : Codec s) (σ τ : Substitution s) (raw : Observ
     (valid : ∀ e ∈ canonicalPairs raw, (evalClass c σ e.1).isSome ∧ (evalClass c τ e.2).isSome)
     (agree : ∀ e ∈ canonicalPairs raw, evalClass c σ e.1 = evalClass c τ e.2)
     (accepted : extra raw a b = true) : evalClass c σ (canonical a) = evalClass c τ (canonical b) := by
-  simp only [extra,Bool.and_eq_true,List.any_eq_true,Bool.or_eq_true] at accepted
-  obtain ⟨_,id,present,ok⟩ := accepted
-  obtain ⟨f,named⟩ := head_live c σ τ _ valid present
-  have transfer := fun a b => ACSpanGraph.linear_sound c σ τ named _ a b agree
-  rcases ok with whole|parts
+  have transfer (l r : Tree) (success : ∃ id ∈ ACSpanGraph.heads (canonicalPairs raw),
+      ACSpanGraph.linear id (canonicalPairs raw) l r = true) : evalClass c σ l = evalClass c τ r := by
+    obtain ⟨id,present,ok⟩ := success
+    obtain ⟨f,named⟩ := head_live c σ τ _ valid present
+    exact ACSpanGraph.linear_sound c σ τ named _ l r agree ok
+  simp only [extra,Bool.and_eq_true,List.any_eq_true,List.all_eq_true,Bool.or_eq_true] at accepted
+  rcases accepted.2 with whole|parts
   · exact transfer _ _ whole
   · apply eval_obligations
     intro e he
-    exact transfer _ _ (List.all_eq_true.mp parts.2 e (List.mem_eraseDups.mpr he))
+    exact transfer _ _ (parts.2 e (List.mem_eraseDups.mpr he))
 
 /-- The final pair is the requested pair of outputs. All preceding pairs
 refer to the same caller columns in the two rows, including shared caller

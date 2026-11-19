@@ -46,6 +46,7 @@ jobs:
           lake env lean --run Tests/ACCertificates.lean
           lake env lean --run Tests/MixedSizeSystem.lean
           lake env lean --run Tests/VariantOverlap.lean
+          lake env lean --run Tests/ACSpanCertificate.lean
           lake env lean Tests/AnswerProjection.lean
           lake env lean Tests/OperandRefinement.lean
           lake env lean Tests/OperandCounts.lean

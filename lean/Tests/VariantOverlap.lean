@@ -26,6 +26,16 @@ private def nodes : Array (Array UInt64) :=
 #guard !variantOverlapAgrees decls nodes #[6,6,0,0]
 #guard !variantOverlapAgrees decls nodes #[7,7,0,0]
 
+-- The two output positions are determined under different AC symbols.
+-- Each pair of observations recovers one value by 2*(a+b) - (a+2b).
+private def twoHeads : Array UInt64 :=
+  #[4,0,2,2,2,2, 4,1,2,2,2,2, 2,2,2,2,2,2]
+private def twoHeadNodes : Array (Array UInt64) :=
+  #[#[0,0,2],#[0,1,2],#[0,2,2],#[0,3,2],
+    #[4,0,0,1],#[4,0,0,1,1],#[4,1,2,3],#[4,1,2,3,3],#[2,2,0,2]]
+#guard variantOverlapAgrees twoHeads twoHeadNodes #[4,4,5,5,6,6,7,7,8,8]
+#guard !variantOverlapAgrees twoHeads twoHeadNodes #[4,4,5,5,6,6,8,8]
+
 -- Instantiate the original graph into a finite part of the free/C/AC algebra.
 -- Both variables range independently over two distinct atoms in each row.
 private def ground (tree : Tree) (bits : Nat) : Tree := match tree with

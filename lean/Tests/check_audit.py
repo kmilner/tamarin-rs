@@ -540,9 +540,9 @@ EXPORT_MUTATIONS.extend([
     ("graph_always_defers", GRAPH_RUN, "  none", "theorem exportedGraphHomogeneous_correct"),
 ])
 
-EXECUTABLE = ("import Tamarin.VariantOverlapGraph\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedVariantOverlap_correct") + "end Tamarin\n")
-OVERLAP_RUN = "  VariantOverlapGraph.run decls nodes roots"
+EXECUTABLE = ("import Tamarin.ACSpanWhole\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedVariantOverlap_correct") + obligation("exportedVariantOverlap_spanRequired") + "end Tamarin\n")
+OVERLAP_RUN = "  ACSpanOverlap.run decls nodes roots"
 EXPORT_MUTATIONS.extend([
     ("overlap_assumes_equal_raw_variables", OVERLAP_RUN,
      "  roots.size >= 2 && roots[roots.size - 2]? == roots[roots.size - 1]? || " + OVERLAP_RUN.strip(),
@@ -550,6 +550,8 @@ EXPORT_MUTATIONS.extend([
     ("overlap_promotes_output_to_observation", OVERLAP_RUN,
      "  VariantOverlapGraph.run decls nodes (roots ++ roots.extract (roots.size - 2) roots.size)",
      "theorem exportedVariantOverlap_correct"),
+    ("overlap_ignores_ac_consequences", OVERLAP_RUN, "  VariantOverlapGraph.run decls nodes roots",
+     "theorem exportedVariantOverlap_spanRequired"),
     ("overlap_never_agrees", OVERLAP_RUN, "  false", "theorem exportedVariantOverlap_correct"),
 ])
 

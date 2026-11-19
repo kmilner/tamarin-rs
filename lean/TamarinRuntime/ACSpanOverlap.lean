@@ -25,10 +25,11 @@ def extra (raw : Observations) (x y : Tree) : Bool :=
   let a := canonical x
   let b := canonical y
   let candidates := ACSpanGraph.heads obs
-  decide (candidates.length ≤ 8) && candidates.any fun f =>
-    ACSpanGraph.linear f obs a b ||
+  decide (candidates.length ≤ 8) &&
+    (candidates.any (fun f => ACSpanGraph.linear f obs a b) ||
       (let goals := (obligations a b).eraseDups
-       decide (goals.length ≤ 8) && goals.all fun (l,r) => ACSpanGraph.linear f obs l r)
+       decide (goals.length ≤ 8) &&
+         goals.all fun (l,r) => candidates.any fun f => ACSpanGraph.linear f obs l r))
 
 def run := VariantOverlapGraph.runWith extra
 
