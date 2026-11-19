@@ -5840,7 +5840,6 @@ fn native_oracle_free_variant_contexts_preserve_every_observation() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{fst, hash, snd, xor};
     use crate::function_symbols::{Constructability, NoEqSym, Privacy};
-    use crate::maude_proc::MaudeError;
     use crate::maude_sig::{hash_maude_sig, pair_maude_sig, xor_maude_sig};
     use crate::subst::{apply_vterm, Subst};
     use crate::term::{f_app_list, f_app_no_eq};
@@ -5909,14 +5908,10 @@ fn native_oracle_free_variant_contexts_preserve_every_observation() {
     let active = hash(fst(sum.clone()));
     let expected = oracle.variants(&active).unwrap();
     assert!(expected.len() > oracle.variants(&sum).unwrap().len());
-    match native.variants(&active) {
-        Ok(rows) => assert_eq!(
-            canonical_small_ac_answers(rows),
-            canonical_small_ac_answers(expected)
-        ),
-        Err(MaudeError::UnsupportedOperation("variant generation")) => {}
-        other => panic!("{active}: {other:?}"),
-    }
+    assert_eq!(
+        canonical_small_ac_answers(native.variants(&active).unwrap()),
+        canonical_small_ac_answers(expected)
+    );
     assert_eq!(native.stats().var_count, 0);
 }
 
@@ -6643,12 +6638,53 @@ fn native_oracle_staged_cancellation_and_guarded_ac_contexts() {
     }
 }
 
+/// Compare the raw caller images and every normalized observation together,
+/// up to a single witness renaming. A reducible image is an invalid row.
+fn valued_variant_rows(
+    handle: &MaudeHandle,
+    slots: &[LNTerm],
+) -> crate::lean_unification::Substitutions {
+    use crate::subst::{apply_vterm, Subst};
+    use crate::term::f_app_list;
+    let query = f_app_list(slots.to_vec());
+    let rows = handle
+        .variants(&query)
+        .unwrap_or_else(|e| panic!("{query}: {e}"));
+    let mut inputs = crate::lterm::frees_list(&query);
+    inputs.sort();
+    inputs.dedup();
+    canonical_small_ac_answers(
+        rows.into_iter()
+            .map(|row| {
+                for (key, image) in &row {
+                    assert!(inputs.contains(key), "{query}: unexpected binding {key}");
+                    assert_eq!(
+                        handle.reduce(image).unwrap(),
+                        crate::term::map_lits(image, &mut |lit| *lit),
+                        "{query}: reducible image for {key}"
+                    );
+                }
+                let subst = Subst::from_list(row);
+                let mut values: Vec<_> = inputs
+                    .iter()
+                    .map(|&k| apply_vterm(&subst, Term::Lit(Lit::Var(k))))
+                    .collect();
+                values.extend(
+                    slots
+                        .iter()
+                        .map(|t| handle.reduce(&apply_vterm(&subst, t.clone())).unwrap()),
+                );
+                vec![(LVar::new("row", LSort::Msg, 0), f_app_list(values))]
+            })
+            .collect(),
+    )
+}
+
 #[test]
 fn native_oracle_nested_cancellation_shares_normal_values_and_images() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::hash;
     use crate::maude_sig::{hash_maude_sig, xor_maude_sig};
-    use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
 
     if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
@@ -6704,40 +6740,11 @@ fn native_oracle_nested_cancellation_shares_normal_values_and_images() {
         )]);
         for slots in cases {
             let query = f_app_list(slots.clone());
-            let valued = |handle: &MaudeHandle| {
-                let rows = handle
-                    .variants(&query)
-                    .unwrap_or_else(|e| panic!("{query}: {e}"));
-                let mut inputs = crate::lterm::frees_list(&query);
-                inputs.sort();
-                inputs.dedup();
-                canonical_small_ac_answers(
-                    rows.into_iter()
-                        .map(|row| {
-                            for (key, image) in &row {
-                                assert!(inputs.contains(key), "{query}: unexpected binding {key}");
-                                assert_eq!(
-                                    handle.reduce(image).unwrap(),
-                                    crate::term::map_lits(image, &mut |lit| *lit),
-                                    "{query}: reducible image for {key}"
-                                );
-                            }
-                            let subst = Subst::from_list(row);
-                            let mut values: Vec<_> = inputs
-                                .iter()
-                                .map(|&k| apply_vterm(&subst, Term::Lit(Lit::Var(k))))
-                                .collect();
-                            values.extend(
-                                slots.iter().map(|t| {
-                                    handle.reduce(&apply_vterm(&subst, t.clone())).unwrap()
-                                }),
-                            );
-                            vec![(LVar::new("row", LSort::Msg, 0), f_app_list(values))]
-                        })
-                        .collect(),
-                )
-            };
-            assert_eq!(valued(&native), valued(&reference), "{query}");
+            assert_eq!(
+                valued_variant_rows(&native, &slots),
+                valued_variant_rows(&reference, &slots),
+                "{query}"
+            );
         }
         assert_eq!(native.stats().var_count, 0);
         assert_eq!(native.stats().norm_count, 0);
@@ -6746,7 +6753,7 @@ fn native_oracle_nested_cancellation_shares_normal_values_and_images() {
 
 #[test]
 fn nested_cancellation_does_not_assume_a_unique_value_for_unrelated_rules() {
-    use crate::builtin::hash;
+    use crate::builtin::{fst, hash, pair};
     use crate::function_symbols::{Constructability, NoEqSym, Privacy};
     use crate::lean_unification::{Outcome, RuleTable};
     use crate::rewriting::RRule;
@@ -6764,10 +6771,132 @@ fn nested_cancellation_does_not_assume_a_unique_value_for_unrelated_rules() {
             rrule_to_ctxt_st_rule(&RRule::new(apply(x.clone(), y.clone()), result)).unwrap(),
         );
     }
-    let table = RuleTable::new(&sig.refresh()).unwrap();
+    let sig = sig.merge(crate::maude_sig::pair_maude_sig()).refresh();
+    let table = RuleTable::new(&sig).unwrap();
     // Root cancellation and independent rewrites in the two copies can lead
     // to different normal values for exactly the same caller substitution.
     let child = apply(x.clone(), hash(x));
-    let query = f_app_ac(symbol, vec![child.clone(), child]);
-    assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
+    for arg in [
+        child.clone(),
+        fst(pair(child.clone(), y.clone())),
+        fst(hash(child.clone())),
+    ] {
+        let query = f_app_ac(symbol, vec![arg.clone(), arg]);
+        assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
+    }
+}
+
+#[test]
+fn native_oracle_positional_parents_stage_normal_values_and_repeated_keys() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{fst, hash, pair, pk, sdec, senc, sign, snd, verify, xor};
+    use crate::maude_sig::{
+        hash_maude_sig, pair_maude_sig, signature_maude_sig, sym_enc_maude_sig, xor_maude_sig,
+    };
+
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let (renamed, second, _) = renamed_cancellation_signature();
+    let sig = pair_maude_sig()
+        .merge(renamed)
+        .merge(signature_maude_sig())
+        .merge(xor_maude_sig())
+        .merge(hash_maude_sig())
+        .merge(sym_enc_maude_sig());
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let reference = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 7)));
+    let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 8)));
+    let a = pub_term("a");
+    let sum = xor(x.clone(), y.clone());
+    let combine = |left, right| f_app_ac(second, vec![left, right]);
+    let product = xor(x.clone(), a.clone());
+    let exposed = fst(pair(product.clone(), x.clone()));
+    let projected_sum = xor(exposed.clone(), a.clone());
+    let alternating = combine(
+        xor(
+            fst(pair(combine(x.clone(), a.clone()), y.clone())),
+            a.clone(),
+        ),
+        y.clone(),
+    );
+    assert_eq!(native.reduce(&projected_sum).unwrap(), x);
+    assert_eq!(reference.reduce(&projected_sum).unwrap(), x);
+    for slots in [
+        vec![verify(
+            sign(fst(x.clone()), y.clone()),
+            snd(x.clone()),
+            pk(y.clone()),
+        )],
+        vec![xor(y.clone(), fst(x.clone())), fst(x.clone())],
+        vec![projected_sum, exposed],
+        vec![combine(x.clone(), xor(x.clone(), a.clone())), x.clone()],
+        vec![alternating, x.clone()],
+        vec![fst(snd(x.clone()))],
+        vec![xor(y.clone(), hash(fst(x.clone()))), fst(x.clone())],
+        vec![
+            xor(hash(fst(x.clone())), hash(snd(x.clone()))),
+            snd(x.clone()),
+        ],
+        vec![fst(sum.clone()), sum],
+        vec![
+            sdec(senc(y.clone(), fst(x.clone())), snd(x.clone())),
+            x.clone(),
+        ],
+        vec![sdec(y.clone(), hash(fst(x.clone()))), fst(x.clone())],
+        vec![sdec(senc(snd(x.clone()), fst(x.clone())), fst(x.clone()))],
+        vec![fst(pair(snd(x.clone()), y.clone())), y.clone()],
+        vec![fst(hash(snd(x.clone()))), fst(snd(hash(a.clone())))],
+    ] {
+        assert_eq!(
+            valued_variant_rows(&native, &slots),
+            valued_variant_rows(&reference, &slots),
+            "{slots:?}"
+        );
+    }
+    assert_eq!(native.stats().var_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
+}
+
+#[test]
+fn native_oracle_wide_nested_cancellation_with_fresh_variables() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{fresh_var, hash, msg_var, pair};
+    use crate::maude_sig::{hash_maude_sig, pair_maude_sig, xor_maude_sig};
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = xor_maude_sig()
+        .merge(hash_maude_sig())
+        .merge(pair_maude_sig());
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let (x, y, z) = (msg_var("m", 0), msg_var("m", 1), fresh_var("f", 0));
+    let sum = |xs| f_app_ac(AcSym::Xor, xs);
+    let inner = sum(vec![x.clone(), y.clone()]);
+    let sibling = sum(vec![pub_term("b"), x.clone()]);
+    for variable in [&x, &y] {
+        for value in [hash(inner.clone()), pair(sibling.clone(), inner.clone())] {
+            let slots = [sum(vec![z.clone(), variable.clone(), value])];
+            assert_eq!(
+                valued_variant_rows(&native, &slots),
+                valued_variant_rows(&oracle, &slots),
+                "{}",
+                slots[0]
+            );
+        }
+    }
+    assert_eq!(native.stats().var_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
 }

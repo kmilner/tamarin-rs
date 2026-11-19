@@ -158,10 +158,9 @@ def generate : IO Unit := do
         for inner in [plus x (.atom false),plus y (.atom true),plus x y] do
           let t := plus outer (hash inner)
           emit th "variants" (variantExpectation th [t,inner]) [t,inner]
-      -- Larger correlated instances also exercise ordinary unifier and search
-      -- budgets. Keep these exploratory even on the same semantic fragment.
+      -- Wider correlated instances also exercise ordinary unifier and search budgets.
       for a in [x,y] do
-        emit th "variants" "probe" [plus (.var ⟨0,.fresh⟩) (plus a (hash (plus x y)))]
+        emit th "variants" "complete" [plus (.var ⟨0,.fresh⟩) (plus a (hash (plus x y)))]
     -- Joint node budget for an ordinary equation. Operands on the right
     -- of a matching request remain rigid, including their variables.
     for leftSize in [1:5] do
@@ -188,8 +187,13 @@ def generate : IO Unit := do
   -- pack observes the outer value alongside its changing argument.
   for inner in [first x,second x,plus x (.atom false),hash (plus x y)] do
     for outer in [first inner,second inner,plus y inner,plus inner (hash inner)] do
-      emit .xorPair "variants" "probe" [outer,inner]
-      emit .xorPair "reduce" "probe" [outer]
+      emit .xorPair "variants" "complete" [outer,inner]
+      emit .xorPair "reduce" "complete" [outer]
+  -- A rigid pair in the outer AC product contains two correlated inner sums.
+  -- Vary which inner variable also appears as an outer collector.
+  for a in [x,y] do
+    let child := pair (plus (.atom true) x) (plus x y)
+    emit .xorPair "variants" "complete" [plus (.var ⟨0,.fresh⟩) (plus a child)]
   emit .xorPair "reduce" "complete" [first (pair x y)]
   emit .xorPair "variants" "complete" [first x,second x]
 

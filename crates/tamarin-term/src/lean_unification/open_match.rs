@@ -101,6 +101,50 @@ fn bind(v: LVar, t: &LNTerm, arm: &mut Arm) -> bool {
     true
 }
 
+/// In a flat AC match every nonvariable pattern factor consumes exactly one
+/// subject factor with the same head. Return forced pairs to the caller while
+/// checking each head's available multiplicity. Subject variables stay rigid.
+pub(super) fn align_rigid_factors<'a>(
+    pattern: &'a [LNTerm],
+    subject: &'a [LNTerm],
+    mut compare: impl FnMut(&'a LNTerm, &'a LNTerm) -> bool,
+) -> bool {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+    enum Head {
+        Atom(crate::lterm::Name),
+        App(FunSym),
+    }
+    let head = |t: &LNTerm| match t {
+        Term::Lit(Lit::Var(_)) => None,
+        Term::Lit(Lit::Con(c)) => Some(Head::Atom(*c)),
+        Term::App(f, _) => Some(Head::App(*f)),
+    };
+    if pattern.iter().all(|t| head(t).is_none()) {
+        return true;
+    }
+    let mut buckets = rustc_hash::FxHashMap::default();
+    for s in subject {
+        if let Some(h) = head(s) {
+            let (count, only) = buckets.entry(h).or_insert((0usize, Some(s)));
+            *count += 1;
+            if *count > 1 {
+                *only = None;
+            }
+        }
+    }
+    for p in pattern {
+        let Some(h) = head(p) else { continue };
+        let Some((remaining, only)) = buckets.get_mut(&h) else {
+            return false;
+        };
+        if *remaining == 0 || only.is_some_and(|s| !compare(p, s)) {
+            return false;
+        }
+        *remaining -= 1;
+    }
+    true
+}
+
 struct Collectors {
     symbol: AcSym,
     keys: IdentityTable<LVar>,
@@ -524,4 +568,34 @@ fn search(
         }
         Ok(Outcome::Complete(search.answers.into_iter().collect()))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::align_rigid_factors;
+    use crate::builtin::{hash, msg_var, pair};
+    use crate::lterm::pub_term;
+
+    #[test]
+    fn forced_ac_factors_preserve_ambiguous_occurrences() {
+        let x = msg_var("x", 0);
+        let a = pub_term("a");
+        let px = pair(x.clone(), x.clone());
+        let pa = pair(a.clone(), a.clone());
+        let hx = hash(x);
+        let ha = hash(a);
+        let subject = [pa.clone(), ha.clone(), ha.clone()];
+        let mut forced = Vec::new();
+        let pattern = [hx.clone(), px.clone(), hx.clone()];
+        assert!(align_rigid_factors(&pattern, &subject, |p, s| {
+            forced.push((p, s));
+            true
+        }));
+        assert_eq!(forced, [(&px, &pa)]);
+        assert!(!align_rigid_factors(
+            &[hx.clone(), hx.clone(), hx],
+            &subject,
+            |_, _| true
+        ));
+    }
 }

@@ -41,22 +41,23 @@ theorem Converges.free_view (f : s.FreeSym) (inert : ∀ xs u, ¬R (.free f xs) 
   cases e
   simpa [ys] using h i
 
-/-- Children may change while the free head is still present. Once the
-first root rule fires, its output may itself reduce. Checking those early
-outputs against the same normal value is sufficient for every strategy. -/
-theorem Converges.active_free (d : s.FreeSym) (xs : Fin (s.arity d) → Term s) (n : Term s)
-    (finish : ∀ ys, (∀ i, Reduces R (xs i) (ys i)) → Reduces R (.free d ys) n)
-    (early : ∀ ys, (∀ i, Reduces R (xs i) (ys i)) → ∀ u, R (.free d ys) u → Converges R u n) :
-    Converges R (.free d xs) n := by
+/-- Up to the first root rewrite the original slots can be followed even
+through basis equivalences. After that rewrite any property closed under
+further reduction can be used to track the result. -/
+theorem reduces_free_until (d : s.FreeSym) (xs : Fin (s.arity d) → Term s) (P : Term s → Prop)
+    (closed : ∀ {a b}, P a → Reduces R a b → P b)
+    (early : ∀ ys, (∀ i, Reduces R (xs i) (ys i)) → ∀ u, R (.free d ys) u → P u)
+    {u : Term s} (red : Reduces R (.free d xs) u) :
+    (∃ ys, u = .free d ys ∧ ∀ i, Reduces R (xs i) (ys i)) ∨ P u := by
   let inside (t : Term s) := ∃ ys, t = .free d ys ∧ ∀ i, Reduces R (xs i) (ys i)
   have basis {a b : Term s} (h : inside a) (e : EquivB a b) : inside b := by
     obtain ⟨ys,rfl,rs⟩ := h
     obtain ⟨zs,rfl,eq⟩ := free_equiv_view e
     exact ⟨zs,rfl,fun i => (rs i).trans (.basis (eq i))⟩
-  have go {a b : Term s} (red : Reduces R a b) : inside a → inside b ∨ Converges R b n := by
+  have go {a b : Term s} (red : Reduces R a b) : inside a → inside b ∨ P b := by
     induction red with
     | basis e => exact fun h => .inl (basis h e)
-    | trans _ last ih ik => intro h; exact (ih h).elim ik (fun conv => .inr (conv.follow last))
+    | trans _ last ih ik => intro h; exact (ih h).elim ik (fun p => .inr (closed p last))
     | free f a b rs _ =>
       rintro ⟨_,⟨⟩,hs⟩; exact .inl ⟨_,rfl,fun i => (hs i).trans (rs i)⟩
     | comm | ac => rintro ⟨_,⟨⟩,_⟩
@@ -65,15 +66,24 @@ theorem Converges.active_free (d : s.FreeSym) (xs : Fin (s.arity d) → Term s) 
       obtain ⟨s,t,e,step,out⟩ := st
       obtain ⟨ys,rfl,rs⟩ := basis h e
       cases step with
-      | root r => exact .inr ((early _ rs _ r).follow (.basis out))
+      | root r => exact .inr (closed (early _ rs _ r) (.basis out))
       | free _ _ i child =>
         apply Or.inl (basis _ out)
         refine ⟨_,rfl,fun j => (rs j).trans ?_⟩
         by_cases he : j = i
         · subst j; simpa using (Reduces.step ⟨_,_,.refl _,child,.refl _⟩)
         · simp [he]; exact .basis (.refl _)
+  exact go red ⟨xs,rfl,fun _ => .basis (.refl _)⟩
+
+/-- Children may change while the free head is still present. Once the
+first root rule fires, its output may itself reduce. Checking those early
+outputs against the same normal value is sufficient for every strategy. -/
+theorem Converges.active_free (d : s.FreeSym) (xs : Fin (s.arity d) → Term s) (n : Term s)
+    (finish : ∀ ys, (∀ i, Reduces R (xs i) (ys i)) → Reduces R (.free d ys) n)
+    (early : ∀ ys, (∀ i, Reduces R (xs i) (ys i)) → ∀ u, R (.free d ys) u → Converges R u n) :
+    Converges R (.free d xs) n := by
   intro u red
-  rcases go red ⟨xs,rfl,fun _ => .basis (.refl _)⟩ with ⟨ys,rfl,rs⟩|conv
+  rcases reduces_free_until d xs (fun t => Converges R t n) (fun c h => c.follow h) early red with ⟨ys,rfl,rs⟩|conv
   · exact finish ys rs
   · exact conv _ (.basis (.refl _))
 

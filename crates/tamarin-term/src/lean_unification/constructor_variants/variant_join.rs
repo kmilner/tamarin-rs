@@ -2,7 +2,7 @@
 //! Each row also carries its predicted normal values so a specialization
 //! that introduces a redex in an earlier observation can be discarded.
 use super::{InputDomain, RuleTable};
-use crate::function_symbols::{AcSym, FunSym};
+use crate::function_symbols::FunSym;
 use crate::lean_unification::{initialize, residual, Error, Outcome, WordSlice, LEAN_THREAD};
 use crate::lterm::{frees_list, sort_of_lterm, HasFrees, LNTerm, LSort, LVar, Name};
 use crate::maude_types::sort_of_name;
@@ -114,6 +114,17 @@ fn compare_rigid<'a>(
             }
             if ps.len() > ss.len() {
                 return false;
+            }
+            if matches!(f, FunSym::Ac(_)) {
+                let before = pending.len();
+                if !super::super::open_match::align_rigid_factors(ps, ss, |p, s| {
+                    compare_rigid(p, s, captures, pending)
+                }) {
+                    return false;
+                }
+                // The parent match still covers these forced subequations.
+                // Carry their bindings without queuing the same checks twice.
+                pending.truncate(before);
             }
             pending.push((p, s));
             true
@@ -300,36 +311,45 @@ impl RuleTable {
         Ok(None)
     }
 
-    /// Collect the changing children of one cancellation expression. Each
-    /// collected head is strictly below the parent. Repeated children use one
-    /// normal value; arbitrary opaque leaves must remain normal under every
-    /// normalized substitution.
-    fn cancellation_children<'a>(
+    /// Validate hereditary convergence under this rule table all the way to
+    /// stably normal leaves. Only the outermost active terms need independent
+    /// variant families; their values rebuild every enclosing inert wrapper.
+    fn staged_children<'a>(
         &self,
         t: &'a LNTerm,
-        head: AcSym,
-        children: &mut Vec<&'a LNTerm>,
+        mut children: Option<&mut Vec<&'a LNTerm>>,
     ) -> Result<bool, Error> {
         if self.stably_normal_native(t)? {
             return Ok(true);
         }
-        match t {
-            Term::App(FunSym::Ac(f), _) if *f == head => {
-                if !children.contains(&t) {
-                    children.push(t);
-                }
-                Ok(true)
+        let Term::App(head, args) = t else {
+            return Ok(false);
+        };
+        let active = match head {
+            FunSym::Ac(f) if self.cancellation_units.contains_key(f) => true,
+            FunSym::NoEq(f) if self.narrowing.get(f).is_some_and(|r| r.positional()) => true,
+            FunSym::NoEq(f) if !self.patterns.contains_key(f) => false,
+            _ => return Ok(false),
+        };
+        for arg in args.iter() {
+            if !self.staged_children(
+                arg,
+                if active {
+                    None
+                } else {
+                    children.as_deref_mut()
+                },
+            )? {
+                return Ok(false);
             }
-            Term::App(FunSym::NoEq(f), args) if !self.patterns.contains_key(f) => {
-                for arg in args.iter() {
-                    if !self.cancellation_children(arg, head, children)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
-            _ => Ok(false),
         }
+        if active
+            && let Some(children) = children
+            && !children.contains(&t)
+        {
+            children.push(t);
+        }
+        Ok(true)
     }
 
     fn single_rows(
@@ -350,16 +370,12 @@ impl RuleTable {
         // the equations used to obtain that family.
         let arity = match head {
             FunSym::Ac(f) if self.cancellation_units.contains_key(f) => 2,
-            FunSym::NoEq(f) if self.narrowing.contains_key(f) => args.len(),
+            FunSym::NoEq(f) if self.narrowing.get(f).is_some_and(|r| r.positional()) => args.len(),
             _ => return Ok(None),
         };
         let mut children = Vec::new();
         for arg in args.iter() {
-            let supported = match head {
-                FunSym::Ac(f) => self.cancellation_children(arg, *f, &mut children)?,
-                _ => self.stably_normal_native(arg)?,
-            };
-            if !supported {
+            if !self.staged_children(arg, Some(&mut children))? {
                 return Ok(None);
             }
         }

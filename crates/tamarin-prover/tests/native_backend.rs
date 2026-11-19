@@ -84,7 +84,12 @@ fn native_parse_only_never_probes_or_starts_maude() {
 #[cfg(feature = "lean-unification")]
 #[test]
 fn pairing_and_bilinear_proofs_complete_without_probing_or_starting_maude() {
+    let nested = SIMPLE.replace(
+        "rule Emit:",
+        "rule NestedProjection:\n  [In(x)] --[ Seen(fst(snd(x))) ]-> []\n\nrule Emit:",
+    );
     for (theory, lemma) in [
+        (nested.as_str(), "reachable"),
         (SIMPLE, "reachable"),
         (
             include_str!("fixtures/native_joint_projections.spthy"),
@@ -115,10 +120,10 @@ fn pairing_and_bilinear_proofs_complete_without_probing_or_starting_maude() {
 #[cfg(feature = "lean-unification")]
 #[test]
 fn unsupported_theory_fails_without_publishing_proofs_or_output_files() {
-    // The outer projection must narrow the result of an inner projection.
+    // Two rules for the same redex give distinct irreducible observations.
     let fixture = Fixture::new(&SIMPLE.replace(
         "rule Emit:",
-        "rule NestedProjection:\n  [In(x)] --[ Seen(fst(snd(x))) ]-> []\n\nrule Emit:",
+        "functions: pick/1\nequations: pick(<x,y>) = x, pick(<x,y>) = y\n\nrule Pick:\n  [In(x)] --[ Seen(pick(x)) ]-> []\n\nrule Emit:",
     ));
     let out_path = fixture.dir.join("result.spthy");
     let output = fixture.run(&["--prove", &format!("--output={}", out_path.display())]);

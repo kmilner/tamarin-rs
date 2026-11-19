@@ -77,9 +77,9 @@ impl RuleTable {
         let Term::App(FunSym::Ac(head), _) = term else {
             return Ok(None);
         };
-        let Some(unit) = self.cancellation_units.get(head) else {
+        if !self.cancellation_units.contains_key(head) {
             return Ok(None);
-        };
+        }
         if self
             .collect(term, &mut Vec::new(), InputDomain::Sorted)
             .is_none()
@@ -88,57 +88,37 @@ impl RuleTable {
         }
         // All equality tests on factors must agree with equality modulo B, including
         // commutative applications nested inside a raw caller-supplied term.
-        self.normalize_cancellation_tree(*head, unit, &canonical_capture(term))
+        self.staged_normal_value(&canonical_capture(term))
     }
 
-    /// Opaque terms must already be normal. The other admitted nodes are
-    /// inert free constructors or the same recognized cancellation operation.
-    fn normalize_cancellation_tree(
+    /// A changing child can expose several factors of this head. Normalize
+    /// every child under the same rule table, then splice before cancellation.
+    pub(super) fn normalize_cancellation_operands(
         &self,
         head: AcSym,
         unit: &LNTerm,
-        t: &LNTerm,
+        args: &[LNTerm],
     ) -> Result<Option<LNTerm>, Error> {
-        tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-        match t {
-            Term::App(FunSym::Ac(f), args) if *f == head => {
-                let mut factors = Vec::with_capacity(args.len());
-                for arg in args.iter() {
-                    let Some(value) = self.normalize_cancellation_tree(head, unit, arg)? else {
-                        return Ok(None);
-                    };
-                    match value {
-                        Term::App(FunSym::Ac(f), xs) if f == head => {
-                            factors.extend(xs.iter().cloned())
-                        }
-                        t if t != *unit => factors.push(t),
-                        _ => {}
-                    }
-                }
-                let survivors: Vec<_> = flat_xor::odd_operands(&factors)?
-                    .into_iter()
-                    .cloned()
-                    .collect();
-                Ok(Some(if survivors.is_empty() {
-                    unit.clone()
-                } else {
-                    f_app_ac(head, survivors)
-                }))
+        let mut factors = Vec::with_capacity(args.len());
+        for arg in args {
+            let Some(value) = self.staged_normal_value(arg)? else {
+                return Ok(None);
+            };
+            match value {
+                Term::App(FunSym::Ac(f), xs) if f == head => factors.extend(xs.iter().cloned()),
+                t if t != *unit => factors.push(t),
+                _ => {}
             }
-            Term::App(FunSym::NoEq(f), args)
-                if !self.patterns.contains_key(f) && !args.is_empty() =>
-            {
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args.iter() {
-                    let Some(value) = self.normalize_cancellation_tree(head, unit, arg)? else {
-                        return Ok(None);
-                    };
-                    values.push(value);
-                }
-                Ok(Some(crate::term::f_app_no_eq(*f, values)))
-            }
-            _ => Ok(self.irreducible_native(t)?.then(|| t.clone())),
         }
+        let survivors: Vec<_> = flat_xor::odd_operands(&factors)?
+            .into_iter()
+            .cloned()
+            .collect();
+        Ok(Some(if survivors.is_empty() {
+            unit.clone()
+        } else {
+            f_app_ac(head, survivors)
+        }))
     }
 
     pub(super) fn cancellation_rows(&self, term: &LNTerm) -> Result<Option<Vec<ValuedArm>>, Error> {

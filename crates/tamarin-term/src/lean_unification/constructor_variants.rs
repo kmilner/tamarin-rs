@@ -446,6 +446,12 @@ impl RuleTable {
         if let Some(normal) = self.cancellation_normal(term)? {
             return Ok(Some(normal));
         }
+        if let Term::App(FunSym::NoEq(f), _) = term
+            && self.narrowing.get(f).is_some_and(NarrowingRule::positional)
+            && let Some(value) = self.staged_normal_value(&super::canonical_capture(term))?
+        {
+            return Ok(Some(value));
+        }
         if let Some(normal) = self.reduce_sorted(term)? {
             return Ok(Some(normal));
         }
@@ -453,6 +459,39 @@ impl RuleTable {
             return Ok(Some(term.clone()));
         }
         self.ac_root_reduce(term)
+    }
+
+    /// Normalize a canonical sorted term in the hereditary grammar of this
+    /// rule table. A positional match compares normal subterms modulo B by
+    /// direct equality, and a cancellation head may splice normal products.
+    fn staged_normal_value(&self, t: &LNTerm) -> Result<Option<LNTerm>, Error> {
+        tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
+        if let Term::App(FunSym::Ac(f), args) = t
+            && let Some(unit) = self.cancellation_units.get(f)
+        {
+            return self.normalize_cancellation_operands(*f, unit, args);
+        }
+        if let Term::App(FunSym::NoEq(f), args) = t {
+            let rule = self.narrowing.get(f).filter(|r| r.positional());
+            if rule.is_some() || !self.patterns.contains_key(f) {
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args.iter() {
+                    let Some(value) = self.staged_normal_value(arg)? else {
+                        return Ok(None);
+                    };
+                    values.push(value);
+                }
+                if let Some(rule) = rule
+                    && let Some(value) = rule.reduce(&values, |_| true)?
+                {
+                    return Ok(Some(value));
+                }
+                // A positional miss means a constructor clash or inconsistent
+                // repeated key. This rule accounts for the whole root bucket.
+                return Ok(Some(crate::term::f_app_no_eq(*f, values)));
+            }
+        }
+        Ok(self.irreducible_native(t)?.then(|| t.clone()))
     }
 
     pub(crate) fn reduce(&self, term: &LNTerm) -> Result<Option<LNTerm>, Error> {

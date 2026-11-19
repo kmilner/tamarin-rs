@@ -31,6 +31,10 @@ pub(super) struct NarrowingRule {
 }
 
 impl NarrowingRule {
+    pub(super) fn positional(&self) -> bool {
+        self.positional
+    }
+
     pub(super) fn from_rule(
         rule: &RRule<LNTerm>,
         constructor: impl Fn(FunSym) -> bool,
@@ -355,35 +359,40 @@ impl NarrowingRule {
             terms: &mut IdentityTable<&'a LNTerm>,
             subjects: &mut Vec<u64>,
             normal_message: &impl Fn(&LNTerm) -> bool,
-        ) -> Option<()> {
+        ) -> Result<bool, Error> {
             match (pattern, subject) {
                 (Term::Lit(_), term) if normal_message(term) => {
-                    subjects.push(terms.intern(term)?);
+                    subjects.push(terms.intern(term).ok_or(Error::InvalidStatus(255))?);
                 }
                 (Term::App(f, patterns), Term::App(g, children))
                     if f == g && patterns.len() == children.len() =>
                 {
                     for (p, t) in patterns.iter().zip(children.iter()) {
-                        collect(p, t, terms, subjects, normal_message)?;
+                        if !collect(p, t, terms, subjects, normal_message)? {
+                            return Ok(false);
+                        }
                     }
                 }
-                _ => return None,
+                _ => return Ok(false),
             }
-            Some(())
+            Ok(true)
         }
 
-        if !self.positional || self.images.len() != args.len() {
+        if !self.positional {
             return Ok(None);
+        }
+        if self.images.len() != args.len() {
+            return Err(Error::InvalidStatus(255));
         }
         let mut terms = IdentityTable::default();
         let mut subjects = Vec::with_capacity(self.keys.len());
         for (pattern, term) in self.images.iter().zip(args) {
-            if collect(pattern, term, &mut terms, &mut subjects, &normal_message).is_none() {
+            if !collect(pattern, term, &mut terms, &mut subjects, &normal_message)? {
                 return Ok(None);
             }
         }
         if subjects.len() != self.keys.len() {
-            return Ok(None);
+            return Err(Error::InvalidStatus(255));
         }
         initialize()?;
         LEAN_THREAD.with(|_| {
