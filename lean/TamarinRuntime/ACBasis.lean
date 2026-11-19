@@ -25,12 +25,20 @@ def Row.cap {n} (r : Row n) := (1 :: (List.ofFn r.pos ++ List.ofFn r.neg)).max (
 
 def Row.bound {n} (r : Row n) := r.cap + n * (r.cap * r.cap)
 
-/-- With unit coefficients a neutral unit or a single positive/negative
-pair suffices. Neutral coordinates always need at most a unit. -/
+/-- On a unit-weight side one can spend individual occurrences to balance
+one item from the other side. A generator then uses at most the largest
+coefficient in any coordinate. Neutral coordinates need at most one. -/
+def Row.unitSide {n} (r : Row n) : Prop :=
+  (∀ i, r.pos i ≤ 1) ∨ (∀ i, r.neg i ≤ 1)
+
+instance {n} (r : Row n) : Decidable r.unitSide :=
+  inferInstanceAs (Decidable ((∀ i, r.pos i ≤ 1) ∨ (∀ i, r.neg i ≤ 1)))
+
 def Row.limits {n} (r : Row n) : Vec n :=
   let cap := r.cap
   let bound := cap + n * (cap * cap)
-  fun i => if cap == 1 || (r.pos i == 0 && r.neg i == 0) then 1 else bound
+  let active := if r.unitSide then cap else bound
+  fun i => if r.pos i == 0 && r.neg i == 0 then 1 else active
 
 def box : (n : Nat) → Vec n → List (Vec n)
   | 0, _ => [Fin.elim0]

@@ -785,8 +785,10 @@ mod tests {
                 rhs: sum(atom("b"), atom("a")),
             },
             Equal {
-                lhs: sum(v("x"), atom("a")),
-                rhs: sum(v("z"), atom("b")),
+                // A distinct AC head prevents the outer matrix from settling
+                // both equations in one allocation.
+                lhs: f_app_ac(AcSym::Mult, vec![v("x"), atom("a")]),
+                rhs: f_app_ac(AcSym::Mult, vec![v("z"), atom("b")]),
             },
         ];
         // x=b finishes by cancellation. x=a still needs a matrix to establish

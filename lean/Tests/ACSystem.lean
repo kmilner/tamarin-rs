@@ -129,6 +129,39 @@ private def testVector (bits : Nat) : ACBasis.Vec 3 :=
 #guard !(ACBasis.Row.ofWeights (n := 2) (Fin.cases (2^64-1) (fun _ => 0))
   (Fin.cases 0 (fun _ => 1))).fitsPlane 16384
 
+-- Small intersections with a unit-weight side have bases small enough
+-- for an independent exhaustive oracle. Enumerate integer triples directly,
+-- retain minimal nonzero solutions, and compare every coordinate.
+private def triple (x y z : Nat) : ACBasis.Vec 3 :=
+  Fin.cases x (Fin.cases y (fun _ => z))
+
+private def checkUnitSide (pairs : List (ACBasis.Vec 3 × ACBasis.Vec 3)) : Bool := Id.run do
+  let rows := pairs.map fun (p,q) => ACBasis.Row.ofWeights p q
+  let some gs := boundedBasis rows | return false
+  let mut solutions : List (List Nat) := []
+  for x in [:4] do for y in [:4] do for z in [:4] do
+    if x+y+z > 0 && pairs.all (fun (p,q) =>
+      x*p 0 + y*p 1 + z*p 2 == x*q 0 + y*q 1 + z*q 2) then
+      solutions := [x,y,z] :: solutions
+  let primitive := solutions.filter fun s => !solutions.any fun t =>
+    t != s && (t.zip s).all fun (a,b) => a ≤ b
+  let actual := gs.map List.ofFn
+  return primitive.length == actual.length && primitive.all actual.contains
+
+-- Every signed coefficient triple in [-2,2] with a unit side, including
+-- neutral coordinates and rows with unequal coefficients on the other side.
+#guard (List.range 5).all fun i => (List.range 5).all fun j => (List.range 5).all fun k =>
+  let p := triple (i-2) (j-2) (k-2)
+  let q := triple (2-i) (2-j) (2-k)
+  (!decide (ACBasis.Row.ofWeights p q).unitSide) || checkUnitSide [(p,q)]
+
+#guard checkUnitSide [(triple 3 2 0,triple 0 0 1)]
+
+-- Intersecting two equations forces all three coordinates to agree.
+#guard checkUnitSide [(triple 2 0 0,triple 0 1 1),(triple 0 1 0,triple 0 0 1)]
+-- Two non-unit sides retain the general bound.
+#guard !(decide (ACBasis.Row.ofWeights (triple 2 0 0) (triple 0 3 0)).unitSide)
+
 -- An independent oracle for p*x = q*y. Every slot must balance its own
 -- multiplicities and at least one arm must realize the primitive ratio.
 private def ratioCorrect (p q : Nat) : Bool := Id.run do

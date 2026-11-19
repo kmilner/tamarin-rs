@@ -5,7 +5,7 @@ import TamarinRuntime.ACBasis
 and coefficients are natural numbers. The enumeration is a reference, and its
 completeness statement allows faster implementations to return other bases. -/
 namespace Tamarin.ACBasis
-private theorem total_add {n} (v w : Vec n) :
+theorem total_add {n} (v w : Vec n) :
     total (fun i => v i + w i) = total v + total w := by
   induction n with
   | zero => rfl
@@ -37,7 +37,7 @@ private theorem dot_add {n} (a x y : Vec n) :
     dot a (fun i => x i + y i) = dot a x + dot a y := by
   simp only [dot, Nat.mul_add, total_add]
 
-private theorem dot_spike {n} (v : Vec n) (i : Fin n) (m : Nat) :
+theorem dot_spike {n} (v : Vec n) (i : Fin n) (m : Nat) :
     dot v (spike i m) = v i * m := by
   induction n with
   | zero => exact Fin.elim0 i
@@ -125,42 +125,100 @@ theorem dominated {n} (r : Row n) (x : Vec n) (hx : r.Holds x) (nonzero : ∃ i,
   · exact ⟨x,hx,nonzero,fun _ => Nat.le_refl _, row_small _ _ _ _ (pos_le_cap r)
       (fun i hi => Nat.lt_of_not_ge (fun h => largeP ⟨i,hi,h⟩)) hx live⟩
 
+/-- Select exactly k unit occurrences from a sufficiently large inventory. -/
+private theorem take_total {n} (stock : Vec n) (k : Nat) (enough : k ≤ total stock) :
+    ∃ y : Vec n, total y = k ∧ ∀ i, y i ≤ stock i := by
+  induction n generalizing k with
+  | zero =>
+    have : k = 0 := by simpa [total] using enough
+    exact ⟨stock, by simp [total,this],fun _ => Nat.le_refl _⟩
+  | succ n ih =>
+    let h := min (stock 0) k
+    let tail := fun i : Fin n => stock i.succ
+    have sum : total stock = stock 0 + total tail := by simp [total,tail,List.ofFn_succ]
+    obtain ⟨y,hy,down⟩ := ih tail (k-h) (by dsimp [h]; omega)
+    refine ⟨Fin.cases h y, ?_,fun i => Fin.cases (Nat.min_le_left ..) down i⟩
+    simp only [total,List.ofFn_succ,List.sum_cons,Fin.cases_zero,Fin.cases_succ]
+    change h + total y = k
+    rw [hy]; dsimp [h]; omega
+
+private theorem dominated_unit_side {n} (p q x : Vec n) (cap : Nat)
+    (disjoint : ∀ i, p i = 0 ∨ q i = 0) (unit : ∀ i, q i ≤ 1)
+    (bound : ∀ i, p i ≤ cap) (balance : dot p x = dot q x) (active : 0 < dot p x) :
+    ∃ y : Vec n, dot p y = dot q y ∧ (∃ j, 0 < y j) ∧
+      (∀ i, y i ≤ x i) ∧ (∀ i, y i ≤ cap) := by
+  obtain ⟨_,mem,pos⟩ := List.sum_pos_iff_exists_pos_nat.mp active
+  obtain ⟨i,rfl⟩ := List.mem_ofFn.mp mem
+  have hp := Nat.pos_of_mul_pos_right pos
+  have hx := Nat.pos_of_mul_pos_left pos
+  have qi := (disjoint i).resolve_left (by omega)
+  have enough : p i ≤ dot q x := by
+    have := le_total (fun j => p j * x j) i
+    have step := Nat.mul_le_mul_left (p i) hx
+    change p i * x i ≤ dot p x at this
+    simp only [Nat.mul_one] at step
+    omega
+  obtain ⟨z,totalz,down⟩ := take_total (fun j => q j * x j) (p i) enough
+  have off (j) (h : q j = 0) : z j = 0 := by simpa [h] using down j
+  have qz : dot q z = p i := by
+    have same : (fun j => q j * z j) = z := by
+      funext j
+      by_cases h : q j = 0
+      · simp [h,off j h]
+      · have one : q j = 1 := by have := unit j; omega
+        simp [one]
+    simpa only [dot,same] using totalz
+  have pz : dot p z = 0 := by
+    apply List.sum_eq_zero_iff_forall_eq_nat.mpr
+    intro v hv
+    obtain ⟨j,rfl⟩ := List.mem_ofFn.mp hv
+    rcases disjoint j with h|h <;> simp_all
+  let y := fun j => spike i 1 j + z j
+  refine ⟨y, by simp [y,dot_add,dot_spike,pz,qz,qi], ⟨i,by simp [y,spike]; omega⟩, ?_, ?_⟩
+  · intro j
+    by_cases e : j = i
+    · subst j; simp [y,spike,off i qi]; omega
+    · have h := Nat.mul_le_mul_right (x j) (unit j)
+      simpa [y,spike,e] using (Nat.le_trans (down j) (by simpa using h : q j * x j ≤ x j))
+  · intro j
+    by_cases e : j = i
+    · subst j; have := bound i; simp [y,spike,off i qi]; omega
+    · have := le_total z j
+      simpa [y,spike,e] using (Nat.le_trans this (by rw [totalz]; exact bound i))
+
 private theorem dominated_limits {n} (r : Row n) (x : Vec n) (hx : r.Holds x) (nz : ∃ i, 0 < x i) :
     ∃ y : Vec n, r.Holds y ∧ (∃ i, 0 < y i) ∧ (∀ i, y i ≤ x i) ∧ (∀ i, y i ≤ r.limits i) := by
   have one (i) : 1 ≤ r.limits i := by
-    have := cap_pos r; unfold Row.limits; split <;> omega
+    have := cap_pos r; simp only [Row.limits]; split <;> (try split) <;> omega
   by_cases neutral : ∃ j, 0 < x j ∧ r.pos j = 0 ∧ r.neg j = 0
   · obtain ⟨j,hj,hp,hn⟩ := neutral
     exact ⟨spike j 1, by simp [Row.Holds, dot_spike, hp, hn], ⟨j,by simp [spike]⟩,
       fun i => by by_cases h : i = j <;> simp_all [spike] <;> omega,
       fun i => by unfold spike; split <;> first | exact one i | omega⟩
-  by_cases unit : r.cap = 1
-  · have nonzero : 0 < dot r.pos x := by
+  by_cases unit : r.unitSide
+  · have active : 0 < dot r.pos x := by
       obtain ⟨j,hj⟩ := nz
       have l := le_total (fun i => r.pos i * x i) j
-      have r' := le_total (fun i => r.neg i * x i) j
+      have b := le_total (fun i => r.neg i * x i) j
       change r.pos j * x j ≤ dot r.pos x at l
-      change r.neg j * x j ≤ dot r.neg x at r'
-      have hn : r.pos j ≠ 0 ∨ r.neg j ≠ 0 := by grind
-      rcases hn with hp | hq
-      · exact Nat.lt_of_lt_of_le (Nat.mul_pos (Nat.pos_of_ne_zero hp) hj) l
-      · rw [hx]; exact Nat.lt_of_lt_of_le (Nat.mul_pos (Nat.pos_of_ne_zero hq) hj) r'
-    have positive (p : Vec n) (h : 0 < dot p x) : ∃ i, 0 < p i ∧ 0 < x i := by
-      obtain ⟨z,hz,hp⟩ := List.sum_pos_iff_exists_pos_nat.mp h
-      obtain ⟨i,rfl⟩ := List.mem_ofFn.mp hz
-      exact ⟨i,Nat.pos_of_mul_pos_right hp,Nat.pos_of_mul_pos_left hp⟩
-    obtain ⟨i,hp,hi⟩ := positive _ nonzero
-    obtain ⟨j,hn,hj⟩ := positive _ (hx ▸ nonzero)
-    have hni := (r.disjoint i).resolve_left (by omega)
-    have hpj := (r.disjoint j).resolve_right (by omega)
-    have ne : i ≠ j := by rintro rfl; omega
-    have pi : r.pos i = 1 := by have := pos_le_cap r i; omega
-    have nj : r.neg j = 1 := by have := neg_le_cap r j; omega
-    let y := fun k => spike i 1 k + spike j 1 k
-    refine ⟨y, by simp [y,Row.Holds,dot_add,dot_spike,hni,hpj,pi,nj], ⟨i,by simp [y,spike,ne]⟩, ?_, ?_⟩
-    · intro k; by_cases a : k = i <;> by_cases b : k = j <;> simp_all [y,spike] <;> omega
-    · intro k; have := one k
-      by_cases a : k = i <;> by_cases b : k = j <;> simp_all [y,spike] <;> omega
+      change r.neg j * x j ≤ dot r.neg x at b
+      by_cases h : r.pos j = 0
+      · have hn : r.neg j ≠ 0 := fun hn => neutral ⟨j,hj,h,hn⟩
+        rw [hx]; exact Nat.lt_of_lt_of_le (Nat.mul_pos (Nat.pos_of_ne_zero hn) hj) b
+      · exact Nat.lt_of_lt_of_le (Nat.mul_pos (Nat.pos_of_ne_zero h) hj) l
+    have step : ∃ y : Vec n, r.Holds y ∧ (∃ i, 0 < y i) ∧
+        (∀ i, y i ≤ x i) ∧ (∀ i, y i ≤ r.cap) := by
+      rcases unit with u|u
+      · obtain ⟨y,h,nz,lo,hi⟩ := dominated_unit_side r.neg r.pos x r.cap
+          (fun i => (r.disjoint i).symm) u (neg_le_cap r) hx.symm (hx ▸ active)
+        exact ⟨y,h.symm,nz,lo,hi⟩
+      · exact dominated_unit_side r.pos r.neg x r.cap r.disjoint u (pos_le_cap r) hx active
+    obtain ⟨y,hy,ynz,down,small⟩ := step
+    refine ⟨y,hy,ynz,down,fun i => ?_⟩
+    by_cases h : r.pos i = 0 ∧ r.neg i = 0
+    · have hx0 : x i = 0 := by have hn : ¬0 < x i := fun hp => neutral ⟨i,hp,h⟩; omega
+      have hi := down i; simp [Row.limits,h.1,h.2]; omega
+    · simpa [Row.limits,h,unit] using small i
   · obtain ⟨y,hy,ynz,down,small⟩ := dominated r x hx nz
     refine ⟨y,hy,ynz,down,fun i => ?_⟩
     by_cases h : r.pos i = 0 ∧ r.neg i = 0

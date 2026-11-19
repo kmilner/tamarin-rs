@@ -2137,6 +2137,58 @@ fn ordered_witness_answers(
 }
 
 #[test]
+fn native_oracle_repeated_product_unifies_shared_alien_factors() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{hash, msg_var};
+    use crate::maude_sig::hash_maude_sig;
+    use crate::subst::{apply_vterm, Subst};
+    use crate::term::f_app_list;
+    let sig = mset_maude_sig().merge(hash_maude_sig());
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let (x, a, b, r) = (
+        msg_var("x", 0),
+        msg_var("a", 1),
+        msg_var("b", 2),
+        msg_var("r", 3),
+    );
+    let inputs = f_app_list(vec![x.clone(), a.clone(), b.clone(), r.clone()]);
+    let oracle = tamarin_test_support::maude_path()
+        .map(|path| MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap());
+    for alien in [hash(a.clone()), hash(hash(a.clone()))] {
+        let eq = Equal {
+            lhs: f_app_ac(AcSym::Union, vec![x.clone(), x.clone()]),
+            rhs: f_app_ac(AcSym::Union, vec![r.clone(), a.clone(), b.clone(), alien]),
+        };
+        let observed = |handle: &MaudeHandle| {
+            let projected = handle
+                .unify(std::slice::from_ref(&eq))
+                .unwrap()
+                .into_iter()
+                .map(|arm| {
+                    let subst = Subst::from_list(arm);
+                    assert_eq!(
+                        apply_vterm(&subst, eq.lhs.clone()),
+                        apply_vterm(&subst, eq.rhs.clone())
+                    );
+                    vec![(
+                        LVar::new("row", LSort::Msg, 0),
+                        apply_vterm(&subst, inputs.clone()),
+                    )]
+                })
+                .collect();
+            canonical_small_ac_answers(projected)
+        };
+        let arms = observed(&native);
+        assert_eq!(arms.len(), 100);
+        if let Some(oracle) = &oracle {
+            assert_eq!(arms, observed(oracle));
+        }
+    }
+}
+
+#[test]
 fn rigid_allocation_agrees_with_maude_after_factoring_and_reversing_the_query() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{hash, pair};
