@@ -11,6 +11,7 @@ import TamarinRuntime.ACMatchPacket
 import TamarinRuntime.ACBagSearch
 import TamarinRuntime.ACBagAnswers
 import TamarinRuntime.ACPagePacket
+import TamarinRuntime.ACSortedBagPacket
 import TamarinRuntime.ACFeasibility
 import TamarinRuntime.AnswerProjection
 import TamarinRuntime.SortedMatch
@@ -46,6 +47,10 @@ def acBagAnswers (packet : Matching.ACMatchPacket.Packet) : Option Matching.ACMa
 def acBagPage (packet : Matching.ACMatchPacket.Packet) (start : Array UInt64) (requested : UInt64) :
     Option Matching.ACMatchPacket.Answers :=
   Matching.ACPagePacket.runWith Matching.ACBagPages.run packet start requested
+
+@[export tamarin_ac_bag_typed_match]
+def acBagTypedMatch (rows limits : Matching.ACMatchPacket.Packet) : UInt8 :=
+  Matching.ACSortedBagPacket.runWith Matching.ACSortedBagSearch.run rows limits
 
 @[export tamarin_match_size_excludes]
 def matchSizeExcludes (pattern subject : UInt64) : Bool := decide (subject < pattern)

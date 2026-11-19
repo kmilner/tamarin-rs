@@ -465,6 +465,17 @@ EXPORT_MUTATIONS.extend([
     ("bag_page_always_defers", BAG_PAGE, "  none", "theorem exportedACBagPage_correct"),
 ])
 
+BAG_TYPED = "  Matching.ACSortedBagPacket.runWith Matching.ACSortedBagSearch.run rows limits"
+EXECUTABLE = ("import Tamarin.ACSortedBagPacket\n" + EXECUTABLE
+              + "\nnamespace Tamarin\n" + obligation("exportedACBagTypedMatch_correct") + "end Tamarin\n")
+EXPORT_MUTATIONS.extend([
+    ("bag_typed_match_ignores_sorts", BAG_TYPED, BAG_TYPED.replace("rows limits", "rows #[]"),
+     "theorem exportedACBagTypedMatch_correct"),
+    ("bag_typed_match_drops_other_captures", BAG_TYPED, BAG_TYPED.replace("rows limits", "rows (limits.extract 0 1)"),
+     "theorem exportedACBagTypedMatch_correct"),
+    ("bag_typed_match_always_defers", BAG_TYPED, "  0", "theorem exportedACBagTypedMatch_correct"),
+])
+
 MATCH_CAPACITY = "def matchSizeExcludes (pattern subject : UInt64) : Bool := decide (subject < pattern)"
 EXECUTABLE = ("import Tamarin.LinearACMatch\n" + EXECUTABLE + "\nnamespace Tamarin\n"
               + obligation("exportedLinearACMatch_correct") + "end Tamarin\n")

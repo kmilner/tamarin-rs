@@ -2,6 +2,7 @@ import Tamarin
 import Tamarin.ACMatchPacket
 import Tamarin.ACMatchAnswerPacket
 import Tamarin.ACPagePacket
+import Tamarin.ACSortedBagPacket
 import Tamarin.ACMatchSortedBags
 import Tamarin.ACBagAnswers
 import Tamarin.ACBagSearch
@@ -78,6 +79,10 @@ theorem exportedACBagAnswers_correct : Matching.ACMatchPacket.FamilyCorrect Matc
 
 theorem exportedACBagPage_correct : Matching.ACPagePacket.Correct Executable.acBagPage :=
   Matching.ACPagePacket.run_correct
+
+theorem exportedACBagTypedMatch_correct : Matching.ACSortedBagPacket.Correct Executable.acBagTypedMatch :=
+  Matching.ACSortedBagPacket.runWith_correct _ Matching.ACSortedBagSearch.run_correct.exact
+    Matching.ACSortedBagSearch.run_correct.completes
 
 theorem exportedMatchSizeExcludes_correct :
     Matching.Prefilter.SizeExclusion Executable.matchSizeExcludes :=
@@ -1080,6 +1085,7 @@ run_cmd do
     (``Tamarin.Executable.acBagMatch, `tamarin_ac_bag_match),
     (``Tamarin.Executable.acBagAnswers, `tamarin_ac_bag_answers),
     (``Tamarin.Executable.acBagPage, `tamarin_ac_bag_page),
+    (``Tamarin.Executable.acBagTypedMatch, `tamarin_ac_bag_typed_match),
     (``Tamarin.Executable.matchSizeExcludes, `tamarin_match_size_excludes),
     (``Tamarin.Executable.collectorPossible, `tamarin_collector_possible),
     (``Tamarin.Executable.sortedACMatch, `tamarin_sorted_ac_match),

@@ -36,6 +36,20 @@ private theorem folded (p : Presentation f problem row name term fixed)
   rw [List.flatMap_map,List.map_eq_flatMap]
   exact congrArg List.flatten (List.map_congr_left fun b hb => atomic b (h ▸ hb))
 
+theorem Presentation.fold_sorted (p : Presentation f problem row name term fixed)
+    {im : κ → List α} (good : Solution (problem.map row) im)
+    {e} (he : e ∈ problem) {k} (hk : k ∈ (row e).1) {a tail} (h : im k = a :: tail) :
+    HasSort (ACRepresentation.fold f (term a) (tail.map term)) (sig.acSort f) := by
+  have mem := List.mem_map_of_mem (f := row) he
+  have sorted b (hb : b ∈ im k) := ACRepresentation.flatten_hasSort f e.rhs (p.subjects e he) (term b)
+    ((p.right e he).subset (List.mem_append_right _ (List.mem_map_of_mem
+      ((good.2 _ mem).subset (List.mem_flatMap.mpr ⟨k,hk,hb⟩)))))
+  apply ACRepresentation.fold_hasSort
+  · exact sorted a (by simp [h])
+  · intro u hu
+    obtain ⟨b,hb,rfl⟩ := List.mem_map.mp hu
+    exact sorted b (by simp [h,hb])
+
 private theorem realizes (p : Presentation f problem row name term fixed)
     {im : κ → List α} (good : Solution (problem.map row) im)
     (fits : Fits f (problem.map row) name term im) :
@@ -44,16 +58,29 @@ private theorem realizes (p : Presentation f problem row name term fixed)
   apply to_matches_of_typed f problem row name term fixed p.ground p.left p.right p.keys im good
   intro e he k hk a tail h
   have mem := List.mem_map_of_mem (f := row) he
-  have sorted b (hb : b ∈ im k) := ACRepresentation.flatten_hasSort f e.rhs (p.subjects e he) (term b)
-    ((p.right e he).subset (List.mem_append_right _ (List.mem_map_of_mem
-      ((good.2 _ mem).subset (List.mem_flatMap.mpr ⟨k,hk,hb⟩)))))
-  apply HasSort.widen _ (fits _ mem k hk a tail h)
-  apply principal
-  apply ACRepresentation.fold_hasSort
-  · exact sorted a (by simp [h])
-  · intro u hu
-    obtain ⟨b,hb,rfl⟩ := List.mem_map.mp hu
-    exact sorted b (by simp [h,hb])
+  exact (principal (p.fold_sorted good he hk h)).widen (fits _ mem k hk a tail h)
+
+private theorem fits_of_agrees (p : Presentation f problem row name term fixed)
+    {σ : Substitution sig} {im arm : κ → List α} (ok : Solution (problem.map row) arm)
+    (rep : Represents f (problem.map row) name term σ im)
+    (same : ∀ r ∈ problem.map row, ∀ k ∈ r.1, (im k).Perm (arm k)) :
+    Fits f (problem.map row) name term arm := by
+  intro r hr k hk b tail h
+  obtain ⟨e,he,rfl⟩ := List.mem_map.mp hr
+  have flat := (rep _ (List.mem_map_of_mem he) k hk).trans
+    ((same _ (List.mem_map_of_mem he) k hk).map (fun u => Cancellation.classOf (term u)))
+  rw [← folded p ok he hk h] at flat
+  exact Term.rootSort_equiv (Cancellation.equiv_of_flatten_perm f flat) ▸ Term.rootSort_le (σ.sorted _)
+
+theorem Presentation.sorted_exact (p : Presentation f problem row name term fixed) :
+    (∃ im, Solution (problem.map row) im ∧ Fits f (problem.map row) name term im) ↔
+      ∃ σ, Matches problem σ := by
+  constructor
+  · rintro ⟨im,good,typed⟩
+    exact (realizes p good typed).imp (fun _ h => h.1)
+  · rintro ⟨σ,ok⟩
+    obtain ⟨im,good,rep⟩ := of_matches f problem row name term fixed p.ground p.left p.right p.factors σ ok
+    exact ⟨im,good,fits_of_agrees p good rep (fun _ _ _ _ => .refl _)⟩
 
 /-- Filtering the complete numerical family on the principal sort of every
 returned image gives the exact simultaneous sorted matcher family. In
@@ -75,15 +102,7 @@ theorem Presentation.sorted_complete (p : Presentation f problem row name term f
     obtain ⟨arm,mem,same⟩ := numeric.covers im good
     obtain ⟨a,ha,rfl⟩ := List.mem_map.mp mem
     have ok := numeric.sound _ (List.mem_map_of_mem ha)
-    have keep : a ∈ accepted := by
-      apply (retain a).2
-      refine ⟨ha,?_⟩
-      intro r hr k hk b tail h
-      obtain ⟨e,he,rfl⟩ := List.mem_map.mp hr
-      have flat := (rep _ (List.mem_map_of_mem he) k hk).trans
-        ((same _ (List.mem_map_of_mem he) k hk).map (fun u => Cancellation.classOf (term u)))
-      rw [← folded p ok he hk h] at flat
-      exact Term.rootSort_equiv (Cancellation.equiv_of_flatten_perm f flat) ▸ Term.rootSort_le (ρ.sorted _)
+    have keep := (retain a).2 ⟨ha,fits_of_agrees p ok rep same⟩
     exact ⟨out a,List.mem_map_of_mem keep,p.agrees rep (reads a keep).2 same⟩
 
 end Tamarin.Matching.ACBags
