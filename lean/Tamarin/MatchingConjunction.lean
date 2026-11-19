@@ -3,6 +3,16 @@ import Tamarin.Matching
 namespace Tamarin.Matching
 variable {sig : Signature}
 
+/-- A shared substitution checks each ordered pattern/subject pair. Its
+multiplicity in the conjunction has no effect on which substitutions match. -/
+theorem matches_iff_of_same_pairs {p q : Problem sig}
+    (pairs : ∀ e, e ∈ p ↔ e ∈ q) (σ : Substitution sig) : Matches p σ ↔ Matches q σ :=
+  ⟨fun h e he => h e ((pairs e).mpr he), fun h e he => h e ((pairs e).mp he)⟩
+
+theorem matches_eraseDups (p : Problem sig) [BEq (Equation sig)] [LawfulBEq (Equation sig)]
+    (σ : Substitution sig) : Matches p.eraseDups σ ↔ Matches p σ :=
+  matches_iff_of_same_pairs (fun _ => List.mem_eraseDups) σ
+
 noncomputable def merge (p : Problem sig) (σ τ : Substitution sig) : Substitution sig := by
   classical
   exact {

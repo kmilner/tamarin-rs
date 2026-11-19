@@ -7,7 +7,7 @@ use crate::rewriting::Equal;
 use crate::subst::{apply_vterm, Subst};
 use crate::term::{f_app_ac, Term};
 use crate::vterm::Lit;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub(super) enum RowMatch {
     Clash,
@@ -19,10 +19,16 @@ pub(super) enum RowMatch {
 /// variable must take the entire nonempty remainder. Its capture can settle
 /// other equations in the same row, including ones at different heads.
 pub(super) fn residual_row_matches(
-    pending: Vec<(&LNTerm, &LNTerm)>,
+    mut pending: Vec<(&LNTerm, &LNTerm)>,
     captures: &mut FxHashMap<LVar, LNTerm>,
 ) -> Result<RowMatch, Error> {
     let mut nodes = residual::MAX_EXPANDED;
+    // Repeated observations can give exactly the same ordered pair as a
+    // caller image. Keep one obligation for this shared directional match.
+    if pending.len() > 1 {
+        let mut unique = FxHashSet::default();
+        pending.retain(|pair| unique.insert(*pair));
+    }
     let mut equations: Vec<_> = pending
         .into_iter()
         .map(|(p, s)| Equal {
