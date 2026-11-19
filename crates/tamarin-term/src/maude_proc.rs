@@ -116,9 +116,25 @@ fn term_has_reducible_sym(t: &LNTerm, reducible: &crate::function_symbols::FunSi
     t.any_fun_sym(|f| reducible.contains(f))
 }
 
+/// Both structural reduction shortcuts read derived symbol sets. A caller can
+/// edit the source theory after its last refresh. Validate the live rule heads
+/// once when the immutable session is opened.
+fn reduction_heads_indexed(sig: &MaudeSig) -> bool {
+    use crate::function_symbols::{AcSym, FunSym};
+    use crate::term::Term;
+    sig.rrules().iter().all(|rule| {
+        let Term::App(head, _) = &rule.lhs else {
+            return false;
+        };
+        sig.reducible_fun_syms.contains(head)
+            && !(matches!(head, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_)))
+                && sig.irreducible_fun_syms.contains(head))
+    })
+}
+
 /// True if `t` contains NO Ac- or C-headed application anywhere.  Backs
 /// the per-rule LHS flags `maude_sig::StRules` carries — behind
-/// `MaudeProcessInner::st_lhs_ac_free` and `norm::go_nf`'s per-rule
+/// `MaudeProcessInner::reduce_by_structure` and `norm::go_nf`'s per-rule
 /// dispatch: `nf_via_haskell`'s pure st-rule arm matches with the no-AC
 /// matcher (`solve_match_lterm_no_ac`), whose `match_raw` raises
 /// `NeedsAC` only at Ac-vs-Ac / C-vs-C positions — so the matcher is
@@ -389,11 +405,10 @@ struct MaudeProcessInner {
     /// IPC mutex is always the outer lock; the cache mutexes are only
     /// ever taken strictly inside it).
     caches: Arc<SharedMaudeCaches>,
-    /// True iff every `sig.st_rules` LHS is Ac/C-free (`term_ac_c_free`),
-    /// i.e. `nf_via_haskell`'s no-AC st-rule matcher is complete for this
-    /// signature.  Gates `reduce`'s native normal-form fast path; computed
-    /// once at `start_with_caches` (the signature is immutable afterwards).
-    st_lhs_ac_free: bool,
+    /// The live rule heads permit the symbol-only or structural normal-form
+    /// shortcut, respectively. The latter also requires AC/C-free patterns.
+    reduce_by_symbol: bool,
+    reduce_by_structure: bool,
 }
 
 /// Cached `TAM_DBG_MAUDE_IO` / `TAM_DBG_MAUDE_IO_FILTER` configuration.
@@ -876,6 +891,7 @@ impl MaudeHandle {
             child,
             restart: false,
         }));
+        let indexed = reduction_heads_indexed(&sig);
         let mut inner = MaudeProcessInner {
             backend,
             maude_path: maude_path.to_owned(),
@@ -885,7 +901,8 @@ impl MaudeHandle {
             stdout,
             stats: MaudeStats::default(),
             cache_stats: MaudeCacheStats::default(),
-            st_lhs_ac_free: sig.st_lhs_all_ac_c_free(),
+            reduce_by_symbol: indexed && sig.has_no_ac_operators(),
+            reduce_by_structure: indexed && sig.st_lhs_all_ac_c_free(),
             sig: Arc::clone(&sig),
             caches,
         };
@@ -1076,9 +1093,7 @@ impl MaudeHandle {
             // variables. Avoids the ~0.7ms Maude IPC round-trip on the
             // overwhelming majority of fact-term normalisations we
             // perform during subst_system.
-            if inner.sig.has_no_ac_operators()
-                && !term_has_reducible_sym(t, &inner.sig.reducible_fun_syms)
-            {
+            if inner.reduce_by_symbol && !term_has_reducible_sym(t, &inner.sig.reducible_fun_syms) {
                 return Ok(t.clone());
             }
             // Native normal-form fast path for the cases the cheap check
@@ -1090,7 +1105,7 @@ impl MaudeHandle {
             // signature fires anywhere in `t`, so Maude's `reduce` is the
             // identity on it.  Its st-rule arm uses the no-AC matcher,
             // complete only for Ac/C-free rule LHSes — hence the
-            // `st_lhs_ac_free` gate (see `term_ac_c_free`).
+            // structural gate (see `term_ac_c_free`).
             //
             // Returning `t.clone()` is byte-identical to the round-trip
             // because both sides of the comparison are f_app-canonical:
@@ -1104,7 +1119,7 @@ impl MaudeHandle {
             // reach the result.  Mirrors the cheap fast path's
             // conventions: no reduce-cache insert, no `norm_count` /
             // cache-stat bump.
-            if inner.st_lhs_ac_free && crate::norm::nf_via_haskell(&inner.sig, t) {
+            if inner.reduce_by_structure && crate::norm::nf_via_haskell(&inner.sig, t) {
                 // `TAM_RS_VERIFY_REDUCE_NF` oracle: ALSO run the real
                 // Maude round-trip this fast path elides and panic if
                 // Maude's answer differs from `t`.  Dead-cheap when
