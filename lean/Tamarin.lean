@@ -112,6 +112,7 @@ import Tamarin.GuardedACContext
 import Tamarin.CancellationConvergence
 import Tamarin.UnifierSize
 import Tamarin.MatchPrefilter
+import Tamarin.MatchLeafCounts
 import Tamarin.MatchRigidFactors
 import Tamarin.VariantAntichain
 import Tamarin.StagedExpression
@@ -126,3 +127,4 @@ import Tamarin.DHSignedVariantFamily
 import Tamarin.SignedGraphContract
 import Tamarin.DHStaging
 import Tamarin.BilinearRows
+import Tamarin.BilinearPowerSpine
