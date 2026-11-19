@@ -1,5 +1,6 @@
 import Tamarin.ReferenceReduction
-import Tamarin.ReferenceVariantFolding
+import Tamarin.ReferenceVariantFrontier
+import Tamarin.MaudeOperationRefinements
 import Tamarin.Pairing
 import Tamarin.UnifierSorts
 
@@ -68,5 +69,28 @@ private def sortedRows := UnifierSorts.solve kindProblem [raw] [⟨10,.nat⟩]
   match σ.image y with
   | .var w => w.sort == .nat && w.id > 10 && ReferenceMatching.equal (σ.image x) (nsum (.var w) one)
   | _ => false)
+
+-- An overapproximating one-step oracle is complete for the empty table.
+-- The checker must still reject incorrect results and missing live successors.
+private def certifyEmpty {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym]
+    [DecidableEq s.ACSym] [DecidableEq s.Atom] {n : Nat} (query : Fin n → Term s) (avoid : List Variable)
+    (proposed : List (ReferenceVariantFrontier.Point s n)) (next : ReferenceVariantFrontier.Point s n →
+      List (ReferenceVariantFrontier.Point s n)) :=
+  ReferenceVariantFrontier.certify (rules := []) (by simp [ReferenceReduction.Bound]) (MaudeOperations.emptyReducer s)
+    (ConstructorVariants.constructor_normal (sig := s) [] (by simp)).1 query avoid proposed next (by
+      intro p _ δ _ j u step
+      exact False.elim (((MaudeOperations.emptyReducer s).correct (δ.apply (p.value j))).normalForm.2.1 u step))
+
+private def pairQuery : Fin 2 → Term S := fun i => if i = 0 then .var x else f (.var x)
+private def wrong : ReferenceVariantFrontier.Point S 2 := ⟨.identity,fun _ => a⟩
+#guard (certifyEmpty pairQuery [] [] (fun _ => [])).isSome
+#guard (certifyEmpty pairQuery [] [wrong] (fun _ => [])).isNone
+#guard (certifyEmpty pairQuery [] [] (fun _ => [wrong])).isNone
+private def alias : Substitution S := Substitution.binding x (.var y) (HasSort.var y)
+private def aliasRow : ReferenceVariantFrontier.Point S 2 := ⟨alias,fun i => alias.apply (pairQuery i)⟩
+#guard (certifyEmpty pairQuery [] [] (fun _ => [aliasRow])).isSome
+#guard (certifyEmpty pairQuery [y] [aliasRow] (fun _ => [])).isNone
+#guard (certifyEmpty (fun _ : Fin 2 => ill) [] [] (fun _ => [])).isSome
+#guard (certifyEmpty (s := S) (fun i : Fin 0 => i.elim0) [] [] (fun _ => [])).isSome
 
 end Tamarin.ReferenceCommands.Tests

@@ -149,5 +149,5 @@ import Tamarin.MaudeOperationRefinements
 import Tamarin.MatchViaUnification
 import Tamarin.ReduceViaSteps
 import Tamarin.ReferenceReduction
-import Tamarin.ReferenceVariantFolding
+import Tamarin.ReferenceVariantFrontier
 import Tamarin.UnifierSorts

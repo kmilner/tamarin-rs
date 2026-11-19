@@ -157,7 +157,7 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | Simultaneous AC unification | Shares operands across nested systems and combines independent groups with disjoint witnesses. Full enumeration supports bounded bases through 64 variables and some single-witness families through 65. Boolean decisions include rank at most two, width at most three, and larger systems with certificates or identical columns. | Prove a terminating mixed free/C/AC component solver, including cyclic dependencies. The sort-assignment proof then gives `VerifiedUnifier` for all arity-correct inputs. Connect the resulting solver to Rust. |
 | Directional matching | Matches nested free/C/AC terms, including repeated or shared captures. Boolean queries use factor counts and full queries can page through the answer family. | The total Lean matcher handles all arity-correct conjunctions independently of unification. Connect that reference to Rust and establish first-match behavior on ambiguous queries. [Reference matcher](Tamarin/ReferenceMatching.lean) · [Alternative via unification](Tamarin/MatchViaUnification.lean) |
 | Reduction | Bounded graphs cover root and argument rewrites and proper AC subproducts. Other paths cover projected or erased arguments, independent factors, positional destructors, cancellation and DH powers and products. | Lean enumerates every live rewrite at every position, including proper AC subproducts. The driver is total for convergent sort-preserving tables. Connect its equation table and results to Rust, or prove the existing graph traversal equivalent. [Reference steps](Tamarin/ReferenceReduction.lean) · [Reduction driver](Tamarin/ReduceViaSteps.lean) |
-| Variants | Finite narrowing frontiers cover free/C/AC heads and proper subproducts. Shared input images survive child joins and free-root contraction. Overlap checks cover free paths and signed AC consequences. Specialized paths include cancellation, destructors, signed DH products, powers, scalar actions and pairing. | Lean now decides row subsumption and preserves the coverage of any folded finite family. Prove complete narrowing successors and termination of the entire search under the finite variant property. Verify substitution-only decoding, witness scope and answer order where callers observe it. [Reference folding](Tamarin/ReferenceVariantFolding.lean) |
+| Variants | Finite narrowing frontiers cover free/C/AC heads and proper subproducts. Shared input images survive child joins and free-root contraction. Overlap checks cover free paths and signed AC consequences. Specialized paths include cancellation, destructors, signed DH products, powers, scalar actions and pairing. | Lean checks proposed finite frontiers for whole tuples, including global coverage, replay and freshness, given complete one-step narrowing. Implement those successors and prove termination of normalized folding search on finite-variant presentations. Verify substitution-only decoding, witness scope and answer order where callers observe it. [Frontier checker](Tamarin/ReferenceVariantFrontier.lean) · [Reference folding](Tamarin/ReferenceVariantFolding.lean) |
 
 **AC reference.** The homogeneous solver is total for any finite system of variable products
 at one AC head when every variable has the operator’s sort. For arbitrary sorted operands,
@@ -182,8 +182,13 @@ dropping a subsumed row. The source-level probes exercise both the reference and
 its input and the total variant generator returns the identity family for every tuple and
 free/C/AC signature. The abstract pairing reducer is total, with rule-table correspondence
 on well-sorted inputs. For nonempty tables, stable tuples and linked constructor checks give
-complete variant replies on their proven domains. A closed single-term frontier suffices given
-safe rows and a reducer for that table.
+complete variant replies on their proven domains. For any finite tuple, a proposed frontier can now be checked with a
+verified reducer and a complete one-step narrowing procedure. The checker includes the seed,
+requires a representative of every live successor, and replays every normal row. One witness
+must preserve all untouched slots and input images. Rejection leaves the query unresolved.
+This finite check follows every concrete step. Maude also normalizes symbolic successors
+before folding them. Termination of that search under the finite variant property remains open.
+[Tuple closure proof](Tamarin/TupleNarrowingFrontier.lean) · [Certified checker](Tamarin/ReferenceVariantFrontier.lean) · [Maude expansion and reduction](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantSearch.cc#L397-L490)
 [Reference instances](Tamarin/MaudeOperationRefinements.lean) · [Pairing table correspondence](Tamarin/PairingRewriting.lean#L37) · [CI export theorem](TamarinCI.lean#L918)
 
 ### Specification-generated coverage
