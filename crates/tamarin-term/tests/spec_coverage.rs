@@ -385,17 +385,10 @@ fn public_backend_meets_generated_coverage_floor() {
     let cancellation = xor_maude_sig().merge(hash_maude_sig());
     let mixed = cancellation.clone().merge(pair_maude_sig());
     let (markers, merge) = marker_presentation(&cases);
-    let oracles = tamarin_test_support::configured_maude_path().map(|path| {
-        [("markers", &markers), ("dh", &dh), ("bp", &bp)]
-            .map(|(name, sig)| {
-                let handle =
-                    MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude)
-                        .unwrap();
-                (name, handle)
-            })
-            .into_iter()
-            .collect::<BTreeMap<_, _>>()
-    });
+    let maude_path = tamarin_test_support::configured_maude_path();
+    // Generated requests are grouped by theory. Keep only the current
+    // presentation's reference process alive throughout that block.
+    let mut active_oracle: Option<(&str, MaudeHandle)> = None;
     let presentation = |name: &str| match name {
         "bp" => (&bp, AcSym::Mult),
         "dh" => (&dh, AcSym::Mult),
@@ -420,15 +413,26 @@ fn public_backend_meets_generated_coverage_floor() {
         let ts: Vec<_> = fields.map(|e| term(e, symbol)).collect();
         let exploratory = expected == "probe" || expected.starts_with("probe-");
         let check = expected.strip_prefix("probe-").unwrap_or(expected);
-        let reference = oracles
-            .as_ref()
-            .and_then(|handles| handles.get(theory))
-            .filter(|_| {
-                (op, check) == ("reduce", "exact")
-                    || (theory, op) == ("dh", "variants")
-                    || theory == "bp"
-            })
-            .map(|oracle| (oracle, exercise(oracle, op, check, &ts).expect(line)));
+        let compare = theory == "bp"
+            || theory == "dh" && (op == "variants" || (op, check) == ("reduce", "exact"))
+            || theory == "markers" && (op, check) == ("reduce", "exact");
+        let reference = if let Some(path) = maude_path.as_ref().filter(|_| compare) {
+            if active_oracle
+                .as_ref()
+                .is_none_or(|(name, _)| *name != theory)
+            {
+                drop(active_oracle.take());
+                active_oracle = Some((
+                    theory,
+                    MaudeHandle::start_with_backend(path, sig.clone(), AlgebraBackend::Maude)
+                        .unwrap(),
+                ));
+            }
+            let oracle = &active_oracle.as_ref().unwrap().1;
+            Some((oracle, exercise(oracle, op, check, &ts).expect(line)))
+        } else {
+            None
+        };
         let h = MaudeHandle::start_with_backend(
             "/nonexistent",
             sig.clone(),
@@ -466,6 +470,7 @@ fn public_backend_meets_generated_coverage_floor() {
             Err(err) => panic!("{line}: {err}"),
         }
     }
+    drop(active_oracle);
     assert_eq!(report.len(), 20);
     for ((theory, op), c) in report {
         assert!(c.required > 0, "missing guaranteed {theory} {op} cases");

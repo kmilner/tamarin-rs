@@ -9,7 +9,7 @@ mod signed_graph;
 use residual_match::{residual_row_matches, RowMatch};
 
 use super::{InputDomain, RuleTable};
-use crate::function_symbols::{exp_sym, inv_sym, AcSym, FunSym};
+use crate::function_symbols::{exp_sym, inv_sym, pmult_sym, AcSym, CSym, FunSym};
 use crate::lean_unification::{initialize, residual, Error, Outcome, WordSlice, LEAN_THREAD};
 use crate::lterm::{frees_list, sort_of_lterm, HasFrees, LNTerm, LSort, LVar, Name};
 use crate::maude_types::sort_of_name;
@@ -335,7 +335,7 @@ impl RuleTable {
         Ok(true)
     }
 
-    fn join_normal(&self, t: &LNTerm) -> Result<Option<bool>, Error> {
+    pub(super) fn join_normal(&self, t: &LNTerm) -> Result<Option<bool>, Error> {
         self.canonical_join_normal(&super::super::canonical_capture(t))
     }
 
@@ -449,7 +449,16 @@ impl RuleTable {
                 FunSym::NoEq(f) => *f == exp_sym() || *f == inv_sym(),
                 _ => false,
             };
+        // Both operations admit arbitrary signed operands, including those
+        // that expose point actions only after normalization.
+        let bilinear = self.builtin_bp
+            && (matches!(head, FunSym::NoEq(f) if *f == pmult_sym())
+                || matches!(head, FunSym::C(CSym::EMap)))
+            && args.len() == 2
+            && self.dh_signed_expression(&args[0])?
+            && self.dh_signed_expression(&args[1])?;
         let arity = match head {
+            _ if bilinear => 2,
             _ if dh && self.dh_unique_instances(app)? => {
                 let Some((_, arity, _)) = self.declaration(*head) else {
                     return Ok(None);
@@ -462,7 +471,7 @@ impl RuleTable {
         };
         let mut children = Vec::new();
         for arg in args.iter() {
-            if dh {
+            if dh || bilinear {
                 if !self.stably_normal_native(arg)? && !children.contains(&arg) {
                     children.push(arg);
                 }
@@ -494,6 +503,13 @@ impl RuleTable {
         let reserved = formals.iter().map(|v| v.idx).collect();
         let family = match self.direct_rows(&formals, &reserved, &template)? {
             Some(rows) => rows,
+            None if bilinear => {
+                let Some(rows) = self.scalar_action_rows(&formals, &reserved, &template, search)?
+                else {
+                    return Ok(None);
+                };
+                rows
+            }
             None if dh => {
                 let Some(rows) = self.finite_narrowing(&formals, &reserved, &template, search)?
                 else {

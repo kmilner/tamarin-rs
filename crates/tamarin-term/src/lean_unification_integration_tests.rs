@@ -7122,7 +7122,7 @@ fn native_oracle_narrowing_preserves_signed_dh_products_and_powers() {
 #[test]
 fn native_oracle_scalar_action_rows_share_inputs_and_outputs() {
     use crate::algebra_backend::AlgebraBackend;
-    use crate::builtin::{emap, hash, msg_var, pmult};
+    use crate::builtin::{emap, hash, inv, msg_var, pmult};
     use crate::maude_sig::{bp_maude_sig, hash_maude_sig};
 
     let Some(path) = require_maude_path() else {
@@ -7140,6 +7140,9 @@ fn native_oracle_scalar_action_rows_share_inputs_and_outputs() {
     let unrelated = msg_var("x", 1);
     for (app, count) in [
         (pmult(x.clone(), y.clone()), 47),
+        (pmult(inv(x.clone()), y.clone()), 47),
+        (pmult(y.clone(), inv(x.clone())), 53),
+        (emap(y.clone(), inv(x.clone())), 54),
         (emap(x.clone(), y.clone()), 48),
     ] {
         for slots in [
@@ -7156,6 +7159,15 @@ fn native_oracle_scalar_action_rows_share_inputs_and_outputs() {
             assert_eq!(wanted.len(), count);
             assert_eq!(valued_variant_rows(&native, &slots), wanted, "{slots:?}");
         }
+    }
+    for app in [
+        pmult(inv(x.clone()), inv(y.clone())),
+        emap(inv(x.clone()), inv(y.clone())),
+    ] {
+        let slots = [app, x.clone(), y.clone()];
+        let wanted = valued_variant_rows(&oracle, &slots);
+        assert!(!wanted.is_empty());
+        assert_eq!(valued_variant_rows(&native, &slots), wanted, "{slots:?}");
     }
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);

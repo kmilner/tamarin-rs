@@ -1,4 +1,5 @@
 import Tamarin.BilinearPowerSpine
+import Tamarin.BilinearMapStaging
 
 /-! Reify the three equations from Rust's `bp_rules()` independently of the
 Lean BP schema. The point nesting rule uses the reverse variable order, the
@@ -193,6 +194,36 @@ example (out : Term') :
   · intro val
     exact ⟨fold.1.trans (.basis val.symm),(normal_equiv _ val).mpr nm,fun k h =>
       Term.checkSort_sound _ _ ((SortClash.check_equiv val k).symm ▸ Term.checkSort_complete (fold.2.2 _ h))⟩
+
+-- Both signed arguments hide a normal point. Either extraction may fire
+-- while the other point still retains its redundant scalar-product unit.
+private theorem with_unit (v : Term') (sv : HasSort v .msg) (nv : Normal R v) :
+    HasSort (s.product.mul v one) .msg ∧ Staging.Signed s R (s.product.mul v one) ∧
+      NormalForm R (s.product.mul v one) v := by
+  have so : HasSort one .msg := HasSort.free (sig := sig) F.one _ (fun i => Fin.elim0 i)
+  exact ⟨.ac _ _ _ sv so,Staging.signed_mul (fun k => Balance.defined s R k nv)
+    (fun k => Balance.defined s R k unitN),.step ⟨_,_,.refl _,.root (E.presentation.unitRule v sv),.refl _⟩,
+    nv,fun _ h => .widen sv (Term.rootSort_le h)⟩
+
+example (out : Term') :
+    NormalForm R (op.map (s.product.mul (op.point a p) one) (s.product.mul (op.point (s.product.inv a) q) one)) out ↔
+      EquivB out (op.map p q) := by
+  obtain ⟨sx,dx,nx⟩ := with_unit _ (op.point_sorted (atomT 0) (atomT 1)) actionA
+  obtain ⟨sy,dy,ny⟩ := with_unit _ (op.point_sorted invT (atomT 2)) actionInv
+  exact (Rewriting.Bilinear.MapStaging.map_stage bp powers inventory sx sy dx dy nx ny).trans (cancelled_pair out)
+
+-- A cancelling scalar can expose the point before or after extraction of
+-- its own inner scalar. Each schedule has the entire original point as value.
+example (out : Term') :
+    NormalForm R (op.point (s.product.mul a (s.product.inv a)) (s.product.mul (op.point a p) one)) out ↔
+      EquivB out (op.point a p) := by
+  have st := op.point_sorted (atomT 0) (atomT 1)
+  obtain ⟨sy,dy,ny⟩ := with_unit _ st actionA
+  have sx : HasSort (s.product.mul a (s.product.inv a)) .msg := .ac _ _ _ (atomT 0) invT
+  have dx : Staging.Signed s R (s.product.mul a (s.product.inv a)) :=
+    Staging.signed_mul (fun k => Balance.defined s R k (atomN 0)) (fun k => Balance.defined s R k invN)
+  exact (bp.point_argument_stage inventory sx sy dy ny).trans ((bp.point_scalar_stage inventory sx st actionA unitN dx cancels).trans
+    (bp.point_one inventory st actionA unitN))
 
 -- The unit and nesting rules overlap on the same sorted input.
 example (out : Term') : NormalForm R (op.point one (op.point a p)) out ↔ EquivB out (op.point a p) :=

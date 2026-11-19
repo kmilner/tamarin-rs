@@ -75,7 +75,7 @@ private theorem nested_steps (I : Inventory s β T.rules) {a b p out : Term sig}
 
 /-- For a fixed normal plain point, all changes are changes of its scalar
 until a unit scalar exposes the point itself. -/
-private theorem fixed_point (I : Inventory s β T.rules) {a p out : Term sig}
+theorem fixed_point (I : Inventory s β T.rules) {a p out : Term sig}
     (np : Normal (ruleRoot T.rules) p) (plain : head p ≠ .free β.pmult)
     (red : Reduces (ruleRoot T.rules) (β.point a p) out) :
     (∃ b, Reduces (ruleRoot T.rules) a b ∧ EquivB (β.point b p) out) ∨

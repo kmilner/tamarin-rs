@@ -28,7 +28,7 @@ pub(super) fn exact_rules(rules: &BTreeSet<RRule<LNTerm>>) -> bool {
         .eq(dh_rules().iter())
 }
 
-fn is_group_operation(t: &LNTerm) -> bool {
+pub(super) fn is_group_operation(t: &LNTerm) -> bool {
     matches!(t, Term::App(FunSym::Ac(AcSym::Mult), _))
         || matches!(t, Term::App(FunSym::NoEq(f), _) if *f == inv_sym() || *f == one_sym())
 }
@@ -191,8 +191,14 @@ impl Reducer<'_> {
         // A free constructor absent from the active rule heads is normal as
         // soon as its children are normal. Keep replay and the work budget
         // shared across the entire term.
-        if fuel == 0 || self.work == 0 || !self.table.dh_product_context(&t) {
+        if fuel == 0 || self.work == 0 {
             return Ok(None);
+        }
+        if !self.table.dh_product_context(&t) {
+            // A group rule can expose a normal factor with its own active
+            // head. Check that factor in the caller's original namespace.
+            let original = unskolemize(&t, self.reverse);
+            return Ok((self.table.join_normal(&original)? == Some(true)).then_some(t));
         }
         self.work -= 1;
         if let Term::App(f, xs) = &t {

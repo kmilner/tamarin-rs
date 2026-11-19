@@ -1,4 +1,5 @@
 import Tamarin.DHProductUnique
+import Tamarin.NarrowingFrontier
 
 /-! Signed group reductions strictly decrease the number of nodes when
 every opaque operand is irreducible in the live theory. -/
@@ -140,6 +141,19 @@ private theorem step_decreases (table : Inventory E) {a b : Term sig} (step : St
 
 private theorem transport {t u : Term sig} (e : EquivB t u) (ht : HasSort t .msg) : HasSort u .msg :=
   Term.checkSort_sound _ _ (SortClash.check_equiv e _ ▸ Term.checkSort_complete ht)
+
+/-- Signed reductions preserve message sorting at every intermediate state,
+including opaque factors exposed by intermediate simplifications. -/
+theorem Inventory.reduces_sorted (table : Inventory E) {t u : Term sig}
+    (typed : HasSort t .msg) (reads : ∃ z, read s (ruleRoot T.rules) (classOf s.product.one) t = some z)
+    (red : Reduces (ruleRoot T.rules) t u) : HasSort u .msg := by
+  obtain ⟨z,hz⟩ := reads
+  let P (a : Term sig) := HasSort a .msg ∧ read s (ruleRoot T.rules) (classOf s.product.one) a = some z
+  exact (RootNarrowing.reduction_invariant P (fun h eq =>
+    ⟨transport eq h.1,(equiv s _ _ eq).symm.trans h.2⟩) (fun h st => by
+      obtain ⟨a,c,pre,raw,post⟩ := st
+      obtain ⟨_,sc⟩ := step_decreases table raw ⟨z,(equiv s _ _ pre).symm.trans h.2⟩ (transport pre h.1)
+      exact ⟨transport post sc,table.reduces _ (.step ⟨a,c,pre,raw,post⟩) z h.2⟩) red ⟨typed,hz⟩).1
 
 /-- Existence for an arbitrary signed term. One defined reading already
 ensures that every encountered opaque operand is normal. No positivity,

@@ -8,6 +8,7 @@ use crate::subst::{apply_vterm, Subst};
 use crate::term::Term;
 use crate::vterm::Lit;
 use rustc_hash::FxHashSet;
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy)]
@@ -86,6 +87,30 @@ fn var(v: LVar) -> LNTerm {
 }
 
 impl RuleTable {
+    fn rigid_signed_operand(&self, t: &LNTerm) -> Result<bool, Error> {
+        if super::super::dh_product::is_group_operation(t)
+            && let Term::App(_, xs) = t
+        {
+            for x in xs.iter() {
+                if !self.rigid_signed_operand(x)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        Ok(self.join_normal(t)? == Some(true))
+    }
+
+    fn point_operand<'a>(&self, t: &'a LNTerm) -> Result<Option<Cow<'a, LNTerm>>, Error> {
+        if self.join_normal(t)? == Some(true) {
+            return Ok(Some(Cow::Borrowed(t)));
+        }
+        if self.rigid_signed_operand(t)? {
+            return Ok(self.dh_product_normal(t)?.map(Cow::Owned));
+        }
+        Ok(None)
+    }
+
     // A normal point exposes at most one nonunit scalar. Extract from either
     // side of the commutative map before normalizing the common scalar product.
     pub(in crate::lean_unification::constructor_variants) fn scalar_action_normal(
@@ -101,12 +126,15 @@ impl RuleTable {
         let [l, r] = args.as_ref() else {
             return Ok(None);
         };
-        if !self.builtin_bp
-            || self.join_normal(l)? != Some(true)
-            || self.join_normal(r)? != Some(true)
-        {
+        if !self.builtin_bp {
             return Ok(None);
         }
+        let Some(l) = self.point_operand(l)? else {
+            return Ok(None);
+        };
+        let Some(r) = self.point_operand(r)? else {
+            return Ok(None);
+        };
         fn expose(t: &LNTerm) -> (Option<&LNTerm>, &LNTerm) {
             if let Term::App(FunSym::NoEq(head), args) = t
                 && *head == pmult_sym()
@@ -116,11 +144,11 @@ impl RuleTable {
             }
             (None, t)
         }
-        let (right, q) = expose(r);
+        let (right, q) = expose(&r);
         let (left, base) = match op {
-            Operation::Action => (Some(l), q.clone()),
+            Operation::Action => (Some(l.as_ref()), q.clone()),
             Operation::Pairing => {
-                let (k, p) = expose(l);
+                let (k, p) = expose(&l);
                 (k, emap(p.clone(), q.clone()))
             }
         };

@@ -320,7 +320,7 @@ def bpCoverage : IO Unit := do
   for (body,count) in [(p (neg x) x,7), (p x (neg x),7), (e x (neg x),6)] do
     emitBP "variants" ("rows=" ++ toString count) [body]
   for (body,count) in [(p (neg x) y,47), (p y (neg x),53), (e y (neg x),54)] do
-    emitBP "variants" ("probe-rows=" ++ toString count) [body]
+    emitBP "variants" ("rows=" ++ toString count) [body]
   -- A power can observe a computed pairing under a fresh scalar. Cover both
   -- open received points and point constructors over an opaque function.
   let u : Expr := .var ⟨0,.pub⟩
