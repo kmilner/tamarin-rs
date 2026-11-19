@@ -1,5 +1,6 @@
 import TamarinRuntime.ACFeasibility
-import Tamarin.ACDirectFeasibility
+import Tamarin.ACRowReductionCoverage
+import Tamarin.ACReducedFeasibility
 import Tamarin.ACRationalProjection
 import Tamarin.GraphMatrixRefinement
 
@@ -19,20 +20,19 @@ def ConeTailWithin {n} : List (Row n) → Prop
   | [] => True
   | _ :: rs => RationalProjection.Within rs
 
-/-- Accepted inputs have a valid graph and every definitive verdict decides
-strict positive feasibility. Either input-only resource domain suffices for
-mandatory completion. -/
+/-- Any of these input domains requires a definitive answer. An
+implementation may decide additional systems using any sound certificate. -/
+inductive Required {n} (rs : List (Row n)) : Prop where
+  | direct : DirectWithin rs → Required rs
+  | basis : n ≤ 32 → (TailWithin rs ∨ ConeTailWithin rs) → Required rs
+  | reduced : RowReduction.Within rs → Required rs
+
 structure Correct (kernel : Kernel) : Prop where
   valid : ∀ n sym s ds ns es, let tag := kernel n sym s ds ns es
-    tag ≠ 0 → ∃ m rs, GraphMatrix.RepresentsUpTo graphWidth n sym s ds ns es m ∧
+    tag ≠ 0 → ∃ m rs, GraphMatrix.RepresentsUpTo 4096 n sym s ds ns es m ∧
       readRows n.toNat m.toList = some rs ∧ Verdict tag (Feasible rs)
-  completes : ∀ n sym s ds ns es m rs, GraphMatrix.Represents n sym s ds ns es m →
-    readRows n.toNat m.toList = some rs → TailWithin rs → kernel n sym s ds ns es ≠ 0
-  coneCompletes : ∀ n sym s ds ns es m rs, GraphMatrix.Represents n sym s ds ns es m →
-    readRows n.toNat m.toList = some rs → ConeTailWithin rs → kernel n sym s ds ns es ≠ 0
-
-  directCompletes : ∀ n sym s ds ns es m rs, GraphMatrix.RepresentsUpTo graphWidth n sym s ds ns es m →
-    readRows n.toNat m.toList = some rs → DirectWithin rs → kernel n sym s ds ns es ≠ 0
+  required : ∀ n sym s ds ns es m rs, GraphMatrix.RepresentsUpTo 4096 n sym s ds ns es m →
+    readRows n.toNat m.toList = some rs → Required rs → kernel n sym s ds ns es ≠ 0
 
 private theorem rowFeasible_iff {n} (r : Row n) (rs : List (Row n)) (gs : List (Vec n))
     (basis : Cone.ScaleCorrect rs gs) : rowFeasible r gs = true ↔ Feasible (r :: rs) := by
@@ -77,24 +77,53 @@ private theorem rows_correct {n} (rs : List (Row n)) :
           simp [cone] at yes
 
 private theorem widen {w sym s ds ns es m} (rep : GraphMatrix.Represents w sym s ds ns es m) :
-    GraphMatrix.RepresentsUpTo graphWidth w sym s ds ns es m :=
+    GraphMatrix.RepresentsUpTo 4096 w sym s ds ns es m :=
   ⟨rep.1,UInt64.le_trans rep.2.1 (by decide),rep.2.2⟩
 
 private theorem total {n sym s ds ns es m rs}
-    (rep : GraphMatrix.RepresentsUpTo graphWidth n sym s ds ns es m)
+    (rep : GraphMatrix.RepresentsUpTo 4096 n sym s ds ns es m)
     (read : readRows n.toNat m.toList = some rs) (done : (checkRows rs).isSome) :
     run n sym s ds ns es ≠ 0 := by
   have g := (GraphMatrix.buildUpTo_correct graphWidth ..).mpr rep
   obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp done
   cases b <;> simp [run,g,read,h]
 
-private theorem narrow_total {n sym s ds ns es m rs} (rep : GraphMatrix.Represents n sym s ds ns es m)
-    (read : readRows n.toNat m.toList = some rs) (domain : TailWithin rs ∨ ConeTailWithin rs) :
-    run n sym s ds ns es ≠ 0 := by
-  apply total (widen rep) read
-  have small : n.toNat ≤ 32 := rep.2.1
-  obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp ((rows_correct rs).2 domain)
-  cases got : direct rs <;> simp [checkRows,got,small,h]
+theorem Correct.completes {kernel} (ok : Correct kernel) (n sym s ds ns es m rs)
+    (rep : GraphMatrix.Represents n sym s ds ns es m)
+    (read : readRows n.toNat m.toList = some rs) (within : TailWithin rs) : kernel n sym s ds ns es ≠ 0 :=
+  ok.required _ _ _ _ _ _ _ _ (widen rep) read (.basis rep.2.1 (.inl within))
+
+theorem Correct.coneCompletes {kernel} (ok : Correct kernel) (n sym s ds ns es m rs)
+    (rep : GraphMatrix.Represents n sym s ds ns es m)
+    (read : readRows n.toNat m.toList = some rs) (within : ConeTailWithin rs) : kernel n sym s ds ns es ≠ 0 :=
+  ok.required _ _ _ _ _ _ _ _ (widen rep) read (.basis rep.2.1 (.inr within))
+
+theorem Correct.directCompletes {kernel} (ok : Correct kernel) (n sym s ds ns es m rs)
+    (rep : GraphMatrix.RepresentsUpTo 4096 n sym s ds ns es m)
+    (read : readRows n.toNat m.toList = some rs) (within : DirectWithin rs) : kernel n sym s ds ns es ≠ 0 :=
+  ok.required _ _ _ _ _ _ _ _ rep read (.direct within)
+
+private def Decides (o : Option Bool) (p : Prop) := ∀ b, o = some b → (b = true ↔ p)
+
+private theorem fallback {a b : Option Bool} {p : Prop} (ha : Decides a p) (hb : Decides b p) :
+    Decides (a <|> b) p := by
+  cases h : a with
+  | none => simpa using hb
+  | some value => simpa [h] using ha
+
+private theorem checkedRows {n} (rs : List (Row n)) : Decides (checkRows rs) (Feasible rs) := by
+  apply fallback (direct_sound rs)
+  apply fallback _ (reducedFeasible_sound rs)
+  by_cases small : n ≤ 32
+  · simp only [small,↓reduceIte]
+    exact (rows_correct rs).1
+  · simp [small,Decides]
+
+private theorem reduced_complete {n} (rs : List (Row n)) (within : RowReduction.Within rs) :
+    (reducedFeasible rs).isSome := by
+  obtain ⟨out,h,covered⟩ := RowReduction.echelon_complete rs within
+  obtain ⟨b,yes⟩ := Option.isSome_iff_exists.mp (direct_complete out covered)
+  simp [reducedFeasible,within.1,guard,h,yes]
 
 theorem run_correct : Correct run where
   valid := by
@@ -111,23 +140,21 @@ theorem run_correct : Correct run where
         cases b : checkRows rs with
         | none => simp [run,g,h,b] at nonzero
         | some ans =>
-          have iff : ans = true ↔ Feasible rs := by
-            cases d : direct rs with
-            | some value =>
-              have e : value = ans := by simpa [checkRows,d] using b
-              exact e ▸ direct_sound rs value d
-            | none =>
-              by_cases small : n.toNat ≤ 32
-              · exact (rows_correct rs).1 ans (by simpa [checkRows,d,small] using b)
-              · simp [checkRows,d,small] at b
+          have iff := checkedRows rs ans b
           cases ans <;> simp_all [run,Verdict]
-  completes := fun _ _ _ _ _ _ _ _ mat read ok => narrow_total mat read (.inl ok)
-  coneCompletes := fun _ _ _ _ _ _ _ _ mat read ok => narrow_total mat read (.inr ok)
-  directCompletes := by
-    intro n sym s ds ns es m rs rep read ok
+  required := by
+    intro n sym s ds ns es m rs rep read domain
     apply total rep read
-    obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp (direct_complete rs ok)
-    simp [checkRows,h]
+    cases domain with
+    | direct h =>
+      obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (direct_complete rs h)
+      simp [checkRows,got]
+    | basis small h =>
+      obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp ((rows_correct rs).2 h)
+      cases d : direct rs <;> simp [checkRows,d,small,got]
+    | reduced h =>
+      obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (reduced_complete rs h)
+      simp [checkRows,got]
 
 /-- For the original sorted term problem the verdict means that a unifier
 exists (or that no unifier exists), independent of the number of unifiers. -/
@@ -140,8 +167,8 @@ theorem Correct.term {kernel} (ok : Correct kernel) {sig : Signature}
     Verdict (kernel n (c.acs.put f) (WholeProblem.sortWord (sig.acSort f)) ds ns roots)
       (ACSystem.problem f rows).Satisfiable := by
   obtain ⟨m,rs,rep,read,verdict⟩ := ok.valid _ _ _ _ _ _ used
-  obtain ⟨mat,counts⟩ := GraphMatrixRefinement.matrix_of_build (GraphMatrix.buildUpTo_correct graphWidth) c f rows n fr columns
-    decoded layout ((GraphMatrix.buildUpTo_correct graphWidth ..).mpr rep)
+  obtain ⟨mat,counts⟩ := GraphMatrixRefinement.matrix_of_build (GraphMatrix.buildUpTo_correct 4096) c f rows n fr columns
+    decoded layout ((GraphMatrix.buildUpTo_correct 4096 ..).mpr rep)
   rw [mat,read_matrixWords _ _ fr.live counts] at read
   obtain rfl := Option.some.inj read
   have live v : v ∈ ACSystem.variables rows ↔ ∃ i, fr.names i = v :=
@@ -153,5 +180,27 @@ theorem Correct.term {kernel} (ok : Correct kernel) {sig : Signature}
   have eq := (satisfiable_iff_basis_support f fr.names fr.injective rows live sorts _ basis).trans
     (coversCoordinates_iff _ _ basis)
   rwa [Feasible,←eq] at verdict
+
+/-- An admitted term problem receives the right verdict at its graph entry
+point. The caller supplies column identity and graph layout; matrix
+multiplicities, non-wrapping and the concrete decision follow from them. -/
+theorem Correct.term_required {kernel} (ok : Correct kernel) {sig : Signature}
+    (c : WholeProblem.Codec sig) (f : sig.ACSym) (rows : List ACSystem.Row) (n : UInt64)
+    (fr : ACSystem.Frame f rows n.toNat) (columns : ∀ i, c.vars.put (fr.names i) = i.val.toUInt64)
+    {ds ns roots raw} (decoded : Whole.Wire.decodeProblem ds ns roots = some raw)
+    (layout : WholeProblem.RowLayout (WholeProblem.encodeRows c (ACSystem.problem f rows)) raw)
+    (declared : GraphMatrix.Declared ds (c.acs.put f) (WholeProblem.sortWord (sig.acSort f)))
+    (width : 0 < n ∧ n ≤ 4096) (rootBound : roots.size ≤ 128) (fits : GraphMatrixRefinement.Fits rows)
+    (domain : Required (rows.map (encode fr.names))) :
+    Verdict (kernel n (c.acs.put f) (WholeProblem.sortWord (sig.acSort f)) ds ns roots)
+      (ACSystem.problem f rows).Satisfiable := by
+  have graph := GraphMatrixRefinement.build_of_matrix (GraphMatrix.buildUpTo_correct 4096) c f rows n
+    fr columns decoded layout declared width.1 width.2 rootBound fits
+  obtain ⟨mat,counts⟩ := GraphMatrixRefinement.matrix_of_build (GraphMatrix.buildUpTo_correct 4096)
+    c f rows n fr columns decoded layout graph
+  have read := read_matrixWords fr.names rows fr.live counts
+  rw [←mat] at read
+  exact ok.term c f rows n fr columns decoded layout
+    (ok.required _ _ _ _ _ _ _ _ ((GraphMatrix.buildUpTo_correct 4096 ..).mp graph) read domain)
 
 end Tamarin.ACFeasibility

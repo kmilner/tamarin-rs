@@ -3,7 +3,7 @@ import TamarinRuntime.ACBasis
 namespace Tamarin.ACFeasibility
 open ACBasis
 
-def oneSided {n} (r : Row n) : Bool := decide ((total r.pos = 0) ↔ ¬ (total r.neg = 0))
+def oneSided {n} (r : Row n) : Bool := decide (total r.pos = 0) != decide (total r.neg = 0)
 
 /-- A row with a positive and a negative coefficient admits a positive
 assignment. Check that same assignment against every other row before

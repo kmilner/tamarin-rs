@@ -144,15 +144,18 @@ fn wide_ac_feasibility_checks_shared_positive_assignments() {
         assert_eq!(native.unifiable(&query).unwrap(), expected);
     }
     assert_eq!(native.stats().unify_count, 0);
+    // Elimination leaves two pivot coordinates. Free coordinates of size
+    // six give x1=4 and x0=767, satisfying both original equations.
+    let tail = (1..257).collect::<Vec<_>>();
+    let triangular = [equation(&[0, 0], &tail), equation(&[1, 1, 1], &[2, 2])];
+    assert_eq!(table.ac_feasible(&triangular).unwrap(), Some(true));
+    assert!(native.unifiable(&triangular).unwrap());
     // This conjunction has no common positive assignment. The second row
     // would force the last variable empty after subtracting the first row.
     // Each row in isolation admits a positive assignment.
     let mut added = left;
     added.push(72);
-    assert_ne!(
-        table
-            .ac_feasible(&[wide, equation(&added, &right)])
-            .unwrap(),
-        Some(true)
-    );
+    let incompatible = [wide, equation(&added, &right)];
+    assert_eq!(table.ac_feasible(&incompatible).unwrap(), Some(false));
+    assert!(!native.unifiable(&incompatible).unwrap());
 }

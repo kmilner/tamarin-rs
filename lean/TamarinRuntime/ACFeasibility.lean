@@ -1,4 +1,4 @@
-import TamarinRuntime.ACDirectFeasibility
+import TamarinRuntime.ACReducedFeasibility
 import TamarinRuntime.GraphMatrix
 import TamarinRuntime.ACRationalProjection
 
@@ -29,7 +29,7 @@ Direct positive witnesses need only one coordinate per input variable. -/
 def graphWidth : UInt64 := 4096
 
 def checkRows {n} (rs : List (Row n)) : Option Bool :=
-  direct rs <|> (if n ≤ 32 then feasibleRows rs else none)
+  direct rs <|> (if n ≤ 32 then feasibleRows rs else none) <|> reducedFeasible rs
 
 /-- Tags are deferred, unsatisfiable, and satisfiable respectively. -/
 def run (width symbol sort : UInt64) (decls : Array UInt64)

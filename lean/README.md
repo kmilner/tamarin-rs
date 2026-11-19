@@ -283,7 +283,7 @@ witnesses distinct. [Sparse plane proof](Tamarin/ACSparsePlane.lean)
 [Coefficient bound](Tamarin/ACBalanceBound.lean) · [Neutral columns](Tamarin/ACNeutralBasis.lean) · [Enumeration proof](Tamarin/ACPlane.lean) · [Factorization proof](Tamarin/ACBasisComplete.lean) ·
 [Packet contract](Tamarin/HomogeneousContract.lean) · [Executable](TamarinRuntime/Homogeneous.lean)
 
-For an existence query the same checked term graph supplies the matrix. Every admitted single row has a decisive Boolean answer across the encoder’s 4,096-node request budget. For a conjunction, the direct check can refute a one-sided row or validate one common positive assignment against all rows. [Direct feasibility proof](Tamarin/ACDirectFeasibility.lean)
+For an existence query the same checked term graph supplies the matrix. Every admitted single row has a decisive Boolean answer within the encoder’s 4,096-node request budget. For a conjunction, the direct check can refute a one-sided row or validate one common positive assignment against all rows. [Direct feasibility proof](Tamarin/ACDirectFeasibility.lean)
  A maximal-support
 coefficient vector satisfies its final row and enables every previous generator that could
 participate in any solution. Tamarin can decide systems such as a four-by-four AC sum
@@ -291,6 +291,14 @@ without materializing their substitutions. A rational cone projection also decid
 conjunctions whose intermediate integer basis exceeds the search budget.
 [Rational cone proof](Tamarin/ACRationalProjection.lean) · [Existence contract](Tamarin/ACFeasibility.lean) ·
 [Positive witness](Tamarin/ACPositiveWitness.lean)
+
+An integer row operation can expose a strictly one-sided equation in a conjunction. If
+elimination suggests a positive solution, the checker evaluates it on every original row.
+A separate signed-integer reference fixes the completion domain. Three 257-variable Boolean
+queries took median 0.81 ms for a common witness, 0.86 ms for a contradiction after
+elimination and 1.06 ms for back substitution (32 renamed inputs each, public Rust API,
+CI profile, warm runtime). [Row elimination](Tamarin/ACRowReduction.lean) ·
+[Completion domain](Tamarin/ACRowReductionCoverage.lean)
 
 A bit mask on each suffix records the coordinates its generators can still cover. The selector
 stops a branch when those bits and the already covered bits leave a coordinate missing. Lean proves

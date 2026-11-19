@@ -62,7 +62,7 @@ theorem direct_sound {n} (rs : List (Row n)) (b : Bool) (h : direct rs = some b)
 /-- These guarantees refer only to input coefficients. Other conjunctions
 may also finish when a shared positive witness satisfies every row. -/
 def DirectWithin {n} (rs : List (Row n)) : Prop :=
-  rs.length ≤ 1 ∨ (∃ r ∈ rs, (total r.pos = 0) ≠ (total r.neg = 0)) ∨
+  rs.length ≤ 1 ∨ (∃ r ∈ rs, ¬ (total r.pos = 0 ↔ total r.neg = 0)) ∨
     ∀ r ∈ rs, total r.pos = total r.neg
 
 theorem direct_complete {n} (rs : List (Row n)) (domain : DirectWithin rs) : (direct rs).isSome := by
@@ -82,7 +82,7 @@ theorem direct_complete {n} (rs : List (Row n)) (domain : DirectWithin rs) : (di
     refine ⟨r,hr,?_⟩
     cases h : oneSided r with
     | true => rfl
-    | false => exact False.elim (side (propext ((side_iff r).mp h)))
+    | false => exact False.elim (side ((side_iff r).mp h))
   · have find : rs.find? (fun r => total r.pos != total r.neg) = none :=
       List.find?_eq_none.mpr (fun r hr => by simp [balanced r hr])
     simp [direct,bad,find]
