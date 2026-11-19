@@ -255,6 +255,11 @@ Boolean matching needs only the remaining factor count after cancellation. Every
 one factor and one capture can take the rest. Frozen subject factors may repeat or contain
 pattern variables. The public test uses 12 captures and 64 available factors. [Linear matching proof](Tamarin/LinearACMatch.lean)
 
+For repeated and shared captures, Lean characterizes simultaneous matching by one
+nonempty bag of rigid factors per variable. Each pattern occurrence contributes the
+same bag in every equation. This gives a numeric solver a contract with no
+term trees or witness names in its input. [General matching equivalence](Tamarin/ACMatchBagsRefinement.lean)
+
 For distinct atoms, matching `H(x+y)+x` against `H(a+b+c)+a+b` forces
 `x=a+b, y=c`. At each AC head the matcher flattens occurrences of that symbol and cancels
 closed factors with multiplicity. The linked selector admits up to 64 remaining subject

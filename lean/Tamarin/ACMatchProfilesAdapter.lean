@@ -1,4 +1,4 @@
-import Tamarin.ACMatchProfiles
+import Tamarin.ACMatchBagsRefinement
 import Tamarin.MatchPrefilter
 
 /-! The incidence test uses equality of the caller's factor identifiers.
@@ -28,56 +28,11 @@ theorem possible_of_matches [DecidableEq sig.ACSym] (f : sig.ACSym) (problem : P
       EquivB (term a) (term b) → a = b)
     (σ : Substitution sig) (matched : Matching.Matches problem σ) :
     Possible (layout pivot).1 (layout pivot).2 (problem.map layout) := by
-  classical
-  let cls (a : α) := Cancellation.classOf (term a)
-  let source := fun k => Cancellation.flatten f (σ.image k)
-  let Live (a : α) := ∃ e ∈ problem, a ∈ (layout e).2
-  let identify (c : Cancellation.Class sig) : List α :=
-    if h : ∃ a, Live a ∧ cls a = c then [h.choose] else []
-  have back (a : α) (ha : Live a) : identify (cls a) = [a] := by
-    have exists_key : ∃ b, Live b ∧ cls b = cls a := ⟨a,ha,rfl⟩
-    obtain ⟨e,he,hm⟩ := exists_key.choose_spec.1
-    obtain ⟨d,hd,hn⟩ := ha
-    have eq := reflects e he exists_key.choose hm d hd a hn (Quotient.exact exists_key.choose_spec.2)
-    simp [identify,exists_key,eq]
-  have source_eq (e : Equation sig) (he : e ∈ problem) :
-      ((layout e).1.flatMap source).Perm ((layout e).2.map cls) := by
-    have run := (OpenMatch.layout_iff f σ e.lhs e.rhs _ _ (left e he) (right e he)).mp (matched e he)
-    have perm := coordinate f (layout e).1 ((layout e).2.map term) (by
-      rintro _ ht
-      obtain ⟨a,ha,rfl⟩ := List.mem_map.mp ht
-      exact factor_of_mem_flatten f e.rhs _ ((right e he).subset (List.mem_map.mpr ⟨a,ha,rfl⟩))) σ run
-    simpa [cls,source,List.map_map,Function.comp_def] using perm
-  let im (k : Variable) := (source k).flatMap identify
-  have transported (e : Equation sig) (he : e ∈ problem) : ((layout e).1.flatMap im).Perm (layout e).2 := by
-    have perm := (source_eq e he).flatMap_right identify
-    have ret (ids : List α) (present : ∀ a ∈ ids, Live a) : (ids.map cls).flatMap identify = ids := by
-      induction ids with
-      | nil => rfl
-      | cons a tail ih =>
-        simp [back a (present a List.mem_cons_self),ih (fun b hb => present b (List.mem_cons_of_mem _ hb))]
-    rw [ret _ (fun a ha => ⟨e,he,ha⟩)] at perm
-    simpa [List.flatMap_assoc,im] using perm
-  apply necessary _ _ _ im _ distinct (transported pivot used)
-  · intro row hr
-    obtain ⟨e,he,rfl⟩ := List.mem_map.mp hr
-    exact covered e he
-  · intro row hr
-    obtain ⟨e,he,rfl⟩ := List.mem_map.mp hr
-    exact transported e he
-  · intro k hk
-    obtain ⟨c,hc⟩ : ∃ c, c ∈ source k := by
-      cases h : source k with
-      | cons c cs => exact ⟨c,List.mem_cons_self⟩
-      | nil =>
-        have impossible := Cancellation.fold_flatten f (σ.image k)
-        rw [show Cancellation.flatten f (σ.image k) = [] from h] at impossible
-        cases impossible
-    have mem := (source_eq pivot used).subset (List.mem_flatMap.mpr ⟨k,hk,hc⟩)
-    obtain ⟨a,ha,rfl⟩ := List.mem_map.mp mem
-    have belongs : a ∈ im k := List.mem_flatMap.mpr ⟨cls a,hc,by simp [back a ⟨pivot,used,ha⟩]⟩
-    intro empty
-    simp [empty] at belongs
+  obtain ⟨im,nonempty,all⟩ := Matching.ACBags.of_matches f problem layout id term (fun _ => [])
+    (by simp) (by simpa using left) (by simpa using right) reflects σ matched
+  have atPivot := List.mem_map_of_mem (f := layout) used
+  exact necessary _ _ _ im (nonempty _ atPivot) distinct (all _ atPivot)
+    (fun row hr => by obtain ⟨e,he,rfl⟩ := List.mem_map.mp hr; exact covered e he) all
 
 /-- Rust can use the structural term itself as the factor key on canonical
 C/AC representatives. Freezing the subject makes this criterion applicable
