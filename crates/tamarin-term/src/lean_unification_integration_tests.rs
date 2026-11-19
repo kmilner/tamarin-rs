@@ -3982,7 +3982,8 @@ fn native_oracle_compact_nonunit_plane_preserves_all_five_substitutions() {
     };
     // For coprime p,q, the primitive columns of pX+qY=(p+q)Z are
     // (p+q,0,p), (1,1,1) and (0,p+q,q). Exactly five subsets cover all inputs.
-    for (p, q) in [(7, 8), (24, 25)] {
+    // Scaling every coefficient by the same factor preserves the five substitutions.
+    for (p, q) in [(7, 8), (24, 25), (60, 61), (140, 160)] {
         let lhs = f_app_ac(
             AcSym::Union,
             [vec![vars[0].clone(); p], vec![vars[1].clone(); q]].concat(),
@@ -3998,7 +3999,8 @@ fn native_oracle_compact_nonunit_plane_preserves_all_five_substitutions() {
             let eqs = std::slice::from_ref(&equation);
             assert_eq!(
                 valued(native.unify(eqs).unwrap()),
-                valued(oracle.unify_via_maude(eqs).unwrap())
+                valued(oracle.unify_via_maude(eqs).unwrap()),
+                "coefficient pair ({p}, {q})"
             );
         }
     }
