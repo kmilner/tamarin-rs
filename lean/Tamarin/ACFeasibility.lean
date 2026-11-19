@@ -1,4 +1,5 @@
 import TamarinRuntime.ACFeasibility
+import Tamarin.ACColumnQuotient
 import Tamarin.ACColumnSupport
 import Tamarin.ACAdjustmentCoverage
 import Tamarin.ACRowReductionCoverage
@@ -24,13 +25,33 @@ def ConeTailWithin {n} : List (Row n) → Prop
 
 /-- Any of these input domains requires a definitive answer. An
 implementation may decide additional systems using any sound certificate. -/
-inductive Required {n} (rs : List (Row n)) : Prop where
-  | direct : DirectWithin rs → Required rs
-  | basis : n ≤ 32 → (TailWithin rs ∨ ConeTailWithin rs) → Required rs
-  | reduced : RowReduction.Within rs → Required rs
-  | triangular : Adjustment.Within rs → Required rs
+inductive BaseRequired {n} (rs : List (Row n)) : Prop where
+  | direct : DirectWithin rs → BaseRequired rs
+  | basis : n ≤ 32 → (TailWithin rs ∨ ConeTailWithin rs) → BaseRequired rs
+  | reduced : RowReduction.Within rs → BaseRequired rs
+  | triangular : Adjustment.Within rs → BaseRequired rs
   | twoRows : n ≤ 90 → rs.length ≤ 2 →
-      (∀ r ∈ rs, total r.pos ≤ 65536 ∧ total r.neg ≤ 65536) → Required rs
+      (∀ r ∈ rs, total r.pos ≤ 65536 ∧ total r.neg ≤ 65536) → BaseRequired rs
+
+/-- Each established domain also applies to the canonical quotient of an
+input containing repeated columns, independently of its original width. -/
+inductive Required {n} (rs : List (Row n)) : Prop where
+  | original : BaseRequired rs → Required rs
+  | quotient : ColumnQuotient.Within (@BaseRequired) rs → Required rs
+
+namespace Required
+variable {n : Nat} {rs : List (Row n)}
+
+theorem direct (h : DirectWithin rs) : Required rs := .original (.direct h)
+theorem basis (width : n ≤ 32) (h : TailWithin rs ∨ ConeTailWithin rs) : Required rs :=
+  .original (.basis width h)
+theorem reduced (h : RowReduction.Within rs) : Required rs := .original (.reduced h)
+theorem triangular (h : Adjustment.Within rs) : Required rs := .original (.triangular h)
+theorem twoRows (width : n ≤ 90) (few : rs.length ≤ 2)
+    (weights : ∀ r ∈ rs, total r.pos ≤ 65536 ∧ total r.neg ≤ 65536) : Required rs :=
+  .original (.twoRows width few weights)
+
+end Required
 
 structure Correct (kernel : Kernel) : Prop where
   valid : ∀ n sym s ds ns es, let tag := kernel n sym s ds ns es
@@ -116,19 +137,44 @@ private theorem fallback {a b : Option Bool} {p : Prop} (ha : Decides a p) (hb :
   | none => simpa using hb
   | some value => simpa [h] using ha
 
-private theorem checkedRows {n} (rs : List (Row n)) : Decides (checkRows rs) (Feasible rs) := by
+private theorem fast_sound {n} (rs : List (Row n)) : Decides (fastRows rs) (Feasible rs) := by
   apply fallback (direct_sound rs)
-  apply fallback _ (fallback (reducedFeasible_sound rs) (fun b h => ColumnSupport.run_correct rs 4096 h))
+  apply fallback _ (reducedFeasible_sound rs)
   by_cases small : n ≤ 32
   · simp only [small,↓reduceIte]
     exact (rows_correct rs).1
   · simp [small,Decides]
+
+private theorem base_sound {n} (rs : List (Row n)) : Decides (baseRows rs) (Feasible rs) :=
+  fallback (fast_sound rs) (fun _ h => ColumnSupport.run_correct rs 4096 h)
+
+private theorem checkedRows {n} (rs : List (Row n)) : Decides (checkRows rs) (Feasible rs) :=
+  fallback (fast_sound rs) (fallback (fun _ h => ColumnQuotient.run_sound (@baseRows) base_sound rs h)
+    (fun _ h => ColumnSupport.run_correct rs 4096 h))
 
 private theorem reduced_complete {n} (rs : List (Row n)) (within : RowReduction.Within rs) :
     (reducedFeasible rs).isSome := by
   obtain ⟨out,h,covered⟩ := RowReduction.echelon_complete rs within
   obtain ⟨b,yes⟩ := Option.isSome_iff_exists.mp (direct_complete out covered)
   simp [reducedFeasible,within.1,guard,h,yes]
+
+private theorem base_complete {n} (rs : List (Row n)) (domain : BaseRequired rs) : (baseRows rs).isSome := by
+  cases domain with
+  | direct h =>
+    obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (direct_complete rs h)
+    simp [baseRows,fastRows,got]
+  | basis small h =>
+    obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp ((rows_correct rs).2 h)
+    cases d : direct rs <;> simp [baseRows,fastRows,d,small,got]
+  | triangular h => simp [baseRows,fastRows,Adjustment.completes rs h]
+  | twoRows width few weights =>
+    have sq := Nat.mul_le_mul width width
+    obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (ColumnSupport.two_rows_floor rs 4096 (by omega)
+      few weights (by omega))
+    simp [baseRows,fastRows,got]
+  | reduced h =>
+    obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (reduced_complete rs h)
+    simp [baseRows,fastRows,got]
 
 theorem run_correct : Correct run where
   valid := by
@@ -151,21 +197,13 @@ theorem run_correct : Correct run where
     intro n sym s ds ns es m rs rep read domain
     apply definitive rep read
     cases domain with
-    | direct h =>
-      obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (direct_complete rs h)
-      simp [checkRows,got]
-    | basis small h =>
-      obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp ((rows_correct rs).2 h)
-      cases d : direct rs <;> simp [checkRows,d,small,got]
-    | triangular h => simp [checkRows,Adjustment.completes rs h]
-    | twoRows width few weights =>
-      have sq := Nat.mul_le_mul width width
-      obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (ColumnSupport.two_rows_floor rs 4096 (by omega)
-        few weights (by omega))
-      simp [checkRows,got]
-    | reduced h =>
-      obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (reduced_complete rs h)
-      simp [checkRows,got]
+    | original d =>
+      obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp (base_complete rs d)
+      cases fast : fastRows rs <;> simp_all [baseRows,checkRows]
+    | quotient d =>
+      obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp (ColumnQuotient.run_complete (@baseRows)
+        (@BaseRequired) base_complete rs d)
+      simp [checkRows,h]
 
 /-- For the original sorted term problem the verdict means that a unifier
 exists (or that no unifier exists), independent of the number of unifiers. -/

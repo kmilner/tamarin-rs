@@ -190,3 +190,41 @@ fn two_wide_ac_rows_decide_both_sides_of_a_shared_ratio() {
     }
     assert_eq!(native.stats().unify_count, 0);
 }
+
+#[test]
+fn repeated_column_profiles_decide_a_wide_three_equation_system() {
+    let sig = mset_maude_sig();
+    let table = crate::lean_unification::RuleTable::new(&sig).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+    let row = |coeffs: [i32; 6]| {
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for i in 0..96 {
+            let coefficient = coeffs[i % 6];
+            let side = if coefficient > 0 {
+                &mut left
+            } else {
+                &mut right
+            };
+            side.extend(std::iter::repeat_n(
+                i as u64,
+                coefficient.unsigned_abs() as usize,
+            ));
+        }
+        equation(&left, &right)
+    };
+    let first = row([4, 0, -2, 3, 0, -3]);
+    let second = row([1, -1, 3, -1, 1, 2]);
+    // The signed sum of the three equations has coefficients [1,3,5,5,1,1].
+    // A positive assignment would make this sum strictly positive.
+    let impossible = row([-4, 4, 4, 3, 0, 2]);
+    // Per-variable sizes [3,21,3,3,2,5], repeated sixteen times, satisfy all three.
+    let possible = row([0, 0, 0, 1, 1, -1]);
+    for (third, expected) in [(impossible, false), (possible, true)] {
+        let rows = [first.clone(), second.clone(), third];
+        assert_eq!(table.ac_feasible(&rows).unwrap(), Some(expected));
+        assert_eq!(native.unifiable(&rows).unwrap(), expected);
+    }
+    assert_eq!(native.stats().unify_count, 0);
+}
