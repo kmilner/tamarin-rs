@@ -166,7 +166,7 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Operation | Native coverage today | Next milestone |
 | --- | --- | --- |
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
-| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. With a common nonzero coefficient, each irreducible generator is a neutral singleton or a pair of opposite signs. Rows with distinct but constant weights on each side use fixed-sum distributions. General mixed rows use gcd and coordinate bounds. Subtracting two rows can expose a rigid factor-count clash. Boolean queries decide every admitted homogeneous system with at most two equations and 90 variables, independently of the number of substitutions. Larger conjunctions inherit the decision guarantees of their matrix after merging identical columns. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
+| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. With a common nonzero coefficient, each irreducible generator is a neutral singleton or a pair of opposite signs. Rows with distinct but constant weights on each side use fixed-sum distributions. General mixed rows use gcd and coordinate bounds. Subtracting two rows can expose a rigid factor-count clash. Boolean queries decide every admitted homogeneous system with at most two equations across the full graph width, independently of the number of substitutions. Larger conjunctions inherit the decision guarantees of their matrix after merging identical columns. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid, counts remaining AC factors before partition search, and can refute an oversized pattern from a checked lower bound on its instantiated size. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Dedicated paths handle positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
 | Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. Staged paths cover cancellation, positional destructors, signed DH products with shared stable operands, powers, scalar actions and pairing. | Handle overlapping user equations with shared AC variables. Nested repeated-variable projections now have 35- and 10-row Maude regressions. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
@@ -300,12 +300,19 @@ elimination and 1.06 ms for back substitution (32 renamed inputs each, public Ru
 CI profile, warm runtime). [Row elimination](Tamarin/ACRowReduction.lean) ·
 [Completion domain](Tamarin/ACRowReductionCoverage.lean)
 
-A positive solution can also start with a common nonzero value in every column and
-adjust at most as many columns as there are equations. The search projects these choices without storing the
-list of subsets. For **any two pure AC equations with up to 90 variables** the 4,096
-support checks suffice for a definitive verdict within the term graph limits. This
-guarantee follows from the input terms and counts. [Term-level theorem](Tamarin/ACFeasibility.lean) ·
-[Support dimension bound](Tamarin/ACColumnCone.lean) · [Bounded search](Tamarin/ACColumnSupport.lean)
+For two equations Lean scans the columns once. It compares the extreme signed
+coefficient ratios on each side and handles columns with zero first coefficient
+separately. Every admitted homogeneous pair gets a definite answer, irrespective
+of variable count or the number of unifiers. The public regression exercises
+513 variables in both equation orders. On 11 renamed queries per verdict, the public
+Rust API took median 0.12 ms for yes and 0.11 ms for no at 89 variables (previously
+61 ms and 64 ms), and 0.66–0.67 ms at 513 variables in the CI build. [Term-level theorem](Tamarin/ACFeasibility.lean) ·
+[Two-row proof](Tamarin/ACTwoRowFeasibility.lean)
+
+For longer systems a positive solution can start with a common nonzero value in every column and
+adjust at most as many columns as there are equations. The bounded search projects these choices
+without storing the list of subsets. [Support dimension bound](Tamarin/ACColumnCone.lean) ·
+[Bounded search](Tamarin/ACColumnSupport.lean)
 
 For three or more equations, variables with identical coefficients across every row
 can share one column in a Boolean query. An existence proof transfers positive

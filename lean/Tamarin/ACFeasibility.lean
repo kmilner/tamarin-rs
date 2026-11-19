@@ -1,4 +1,5 @@
 import TamarinRuntime.ACFeasibility
+import Tamarin.ACTwoRowFeasibility
 import Tamarin.ACColumnQuotient
 import Tamarin.ACColumnSupport
 import Tamarin.ACAdjustmentCoverage
@@ -30,8 +31,7 @@ inductive BaseRequired {n} (rs : List (Row n)) : Prop where
   | basis : n ≤ 32 → (TailWithin rs ∨ ConeTailWithin rs) → BaseRequired rs
   | reduced : RowReduction.Within rs → BaseRequired rs
   | triangular : Adjustment.Within rs → BaseRequired rs
-  | twoRows : n ≤ 90 → rs.length ≤ 2 →
-      (∀ r ∈ rs, total r.pos ≤ 65536 ∧ total r.neg ≤ 65536) → BaseRequired rs
+  | twoRows : rs.length ≤ 2 → BaseRequired rs
 
 /-- Each established domain also applies to the canonical quotient of an
 input containing repeated columns, independently of its original width. -/
@@ -47,9 +47,7 @@ theorem basis (width : n ≤ 32) (h : TailWithin rs ∨ ConeTailWithin rs) : Req
   .original (.basis width h)
 theorem reduced (h : RowReduction.Within rs) : Required rs := .original (.reduced h)
 theorem triangular (h : Adjustment.Within rs) : Required rs := .original (.triangular h)
-theorem twoRows (width : n ≤ 90) (few : rs.length ≤ 2)
-    (weights : ∀ r ∈ rs, total r.pos ≤ 65536 ∧ total r.neg ≤ 65536) : Required rs :=
-  .original (.twoRows width few weights)
+theorem twoRows (few : rs.length ≤ 2) : Required rs := .original (.twoRows few)
 
 end Required
 
@@ -137,8 +135,30 @@ private theorem fallback {a b : Option Bool} {p : Prop} (ha : Decides a p) (hb :
   | none => simpa using hb
   | some value => simpa [h] using ha
 
+private theorem initial_sound {n} (rs : List (Row n)) : Decides (initialRows rs) (Feasible rs) := by
+  unfold initialRows
+  split
+  · rename_i p q
+    intro b h
+    cases Option.some.inj h
+    exact TwoRow.decidePair_iff p q
+  · exact direct_sound _
+
+private theorem initial_direct {n} (rs : List (Row n)) (h : DirectWithin rs) : (initialRows rs).isSome := by
+  unfold initialRows
+  split
+  · rfl
+  · exact direct_complete _ h
+
+private theorem initial_two {n} (rs : List (Row n)) (few : rs.length ≤ 2) : (initialRows rs).isSome := by
+  match rs with
+  | [] => exact initial_direct _ (.inl (by simp))
+  | [_] => exact initial_direct _ (.inl (by simp))
+  | [_,_] => rfl
+  | _ :: _ :: _ :: _ => simp at few
+
 private theorem fast_sound {n} (rs : List (Row n)) : Decides (fastRows rs) (Feasible rs) := by
-  apply fallback (direct_sound rs)
+  apply fallback (initial_sound rs)
   apply fallback _ (reducedFeasible_sound rs)
   by_cases small : n ≤ 32
   · simp only [small,↓reduceIte]
@@ -161,16 +181,14 @@ private theorem reduced_complete {n} (rs : List (Row n)) (within : RowReduction.
 private theorem base_complete {n} (rs : List (Row n)) (domain : BaseRequired rs) : (baseRows rs).isSome := by
   cases domain with
   | direct h =>
-    obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (direct_complete rs h)
+    obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (initial_direct rs h)
     simp [baseRows,fastRows,got]
   | basis small h =>
     obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp ((rows_correct rs).2 h)
-    cases d : direct rs <;> simp [baseRows,fastRows,d,small,got]
+    cases d : initialRows rs <;> simp [baseRows,fastRows,d,small,got]
   | triangular h => simp [baseRows,fastRows,Adjustment.completes rs h]
-  | twoRows width few weights =>
-    have sq := Nat.mul_le_mul width width
-    obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (ColumnSupport.two_rows_floor rs 4096 (by omega)
-      few weights (by omega))
+  | twoRows few =>
+    obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (initial_two rs few)
     simp [baseRows,fastRows,got]
   | reduced h =>
     obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (reduced_complete rs h)
@@ -252,34 +270,10 @@ theorem Correct.term_required {kernel} (ok : Correct kernel) {sig : Signature}
   exact ok.term c f rows n fr columns decoded layout
     (ok.required _ _ _ _ _ _ _ _ ((GraphMatrix.buildUpTo_correct 4096 ..).mp graph) read domain)
 
-private theorem total_sub {n} (a b : Vec n) : total (fun i => a i - b i) ≤ total a := by
-  induction n with
-  | zero => simp [total]
-  | succ n ih =>
-    simp only [total,List.ofFn_succ,List.sum_cons]
-    exact Nat.add_le_add (Nat.sub_le ..) (ih (fun i => a i.succ) (fun i => b i.succ))
-
-/-- A pure AC conjunction of at most two equations and ninety variables is
-mandatory throughout the admitted term grammar, regardless of multiplicities,
-row order, or the size of its complete substitution set. -/
+/-- Every admitted homogeneous term conjunction with at most two equations
+gets a verdict, at every graph width and without a coefficient-side bound. -/
 theorem two_term_rows {sig : Signature} {f : sig.ACSym} {rows : List ACSystem.Row} {n : Nat}
-    (fr : ACSystem.Frame f rows n) (width : n ≤ 90) (few : rows.length ≤ 2)
-    (fits : GraphMatrixRefinement.Fits rows) : Required (rows.map (encode fr.names)) := by
-  apply Required.twoRows width (by simpa using few)
-  intro p hp
-  obtain ⟨r,hr,rfl⟩ := List.mem_map.mp hp
-  have bound (s : ACSystem.Side) (hs : s ∈ [r.lhs,r.rhs]) :
-      total (coefficients fr.names s.vars) ≤ 65536 := by
-    have live (v) (hv : v ∈ s.vars) : ∃ i, fr.names i = v := by
-      apply fr.live v
-      apply List.mem_flatMap.mpr
-      refine ⟨r,hr,?_⟩
-      rcases List.mem_cons.mp hs with h | h
-      · subst s; exact List.mem_append_left _ hv
-      · obtain rfl := List.mem_singleton.mp h; exact List.mem_append_right _ hv
-    rw [coefficients_total fr.names fr.injective s.vars live]
-    exact Nat.le_trans (fits r hr s hs) (by decide)
-  exact ⟨Nat.le_trans (total_sub _ _) (bound r.lhs (by simp)),
-    Nat.le_trans (total_sub _ _) (bound r.rhs (by simp))⟩
+    (fr : ACSystem.Frame f rows n) (few : rows.length ≤ 2) : Required (rows.map (encode fr.names)) :=
+  Required.twoRows (by simpa using few)
 
 end Tamarin.ACFeasibility

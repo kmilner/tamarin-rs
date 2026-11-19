@@ -167,8 +167,6 @@ fn two_wide_ac_rows_decide_both_sides_of_a_shared_ratio() {
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
             .unwrap();
     let table = crate::lean_unification::RuleTable::new(&sig).unwrap();
-    let v = (1..19).collect::<Vec<_>>();
-    let w = (19..37).collect::<Vec<_>>();
     let doubled = |keys: &[u64]| {
         keys.iter()
             .copied()
@@ -177,15 +175,19 @@ fn two_wide_ac_rows_decide_both_sides_of_a_shared_ratio() {
             .collect::<Vec<_>>()
     };
     // X+sum(V)=sum(W). With sum(W)=2sum(V), choose all V=1,
-    // all W=2 and X=18. Reversing the ratio forces X negative.
-    let base = equation(&(0..19).collect::<Vec<_>>(), &w);
-    for (ratio, expected) in [
-        (equation(&doubled(&v), &w), true),
-        (equation(&v, &doubled(&w)), false),
-    ] {
-        for rows in [[base.clone(), ratio.clone()], [ratio.clone(), base.clone()]] {
-            assert_eq!(table.ac_feasible(&rows).unwrap(), Some(expected));
-            assert_eq!(native.unifiable(&rows).unwrap(), expected);
+    // all W=2 and X=|V|. Reversing the ratio forces X negative.
+    for half in [18, 256] {
+        let v = (1..=half).collect::<Vec<_>>();
+        let w = (half + 1..=2 * half).collect::<Vec<_>>();
+        let base = equation(&(0..=half).collect::<Vec<_>>(), &w);
+        for (ratio, expected) in [
+            (equation(&doubled(&v), &w), true),
+            (equation(&v, &doubled(&w)), false),
+        ] {
+            for rows in [[base.clone(), ratio.clone()], [ratio.clone(), base.clone()]] {
+                assert_eq!(table.ac_feasible(&rows).unwrap(), Some(expected));
+                assert_eq!(native.unifiable(&rows).unwrap(), expected);
+            }
         }
     }
     assert_eq!(native.stats().unify_count, 0);
