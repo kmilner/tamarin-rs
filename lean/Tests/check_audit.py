@@ -93,9 +93,8 @@ rigid_start = SOURCE.index("theorem exportedRigidAllocation_correct")
 rigid_obligation = SOURCE[rigid_start:SOURCE.index("\n\n", rigid_start) + 1]
 EXECUTABLE = ("import Tamarin.RigidAllocationCandidateProofs\n" + EXECUTABLE
               + "\nnamespace Tamarin\n" + rigid_obligation + "end Tamarin\n")
-whole_start = SOURCE.index("theorem exportedWholeUnify_correct")
-whole_obligation = SOURCE[whole_start:SOURCE.index("\n\n", whole_start) + 1]
-EXECUTABLE = ("import Tamarin.WholeContract\n" + EXECUTABLE
+whole_obligation = obligation("exportedWholeUnify_correct") + obligation("exportedWholeUnify_mixedRequired")
+EXECUTABLE = ("import Tamarin.MixedSizeWhole\n" + EXECUTABLE
               + "\nnamespace Tamarin\n" + whole_obligation + "end Tamarin\n")
 xor_start = SOURCE.index("theorem exportedXorBranches_correct")
 xor_obligation = SOURCE[xor_start:SOURCE.index("\n\n", xor_start) + 1]
@@ -739,8 +738,13 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedCheckFactors_chain"),
 ])
 
-WHOLE_RUN = "  Whole.run decls nodes equations"
+WHOLE_RUN = "  Whole.runRefining MixedSizeGraph.refutesDecoded decls nodes equations"
 EXPORT_MUTATIONS.extend([
+    ("whole_ignores_mixed_clashes", WHOLE_RUN, "  Whole.run decls nodes equations",
+     "theorem exportedWholeUnify_mixedRequired"),
+    ("whole_treats_positive_sizes_as_a_clash", WHOLE_RUN,
+     "  Whole.runRefining (fun ns es rows => !MixedSizeGraph.refutesDecoded ns es rows) decls nodes equations",
+     "theorem exportedWholeUnify_correct"),
     ("whole_ignores_tail_equations", WHOLE_RUN, "  Whole.run decls nodes (equations.extract 0 2)",
      "theorem exportedWholeUnify_correct"),
     ("whole_truncates_flat_ac_rows", WHOLE_RUN,

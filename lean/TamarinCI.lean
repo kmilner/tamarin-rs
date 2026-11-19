@@ -505,7 +505,10 @@ theorem exportedCheckFactors_required : FactorAdmission.Required Executable.chec
 
 /-- Certify the actual request-wide export for every caller freshness scope. -/
 theorem exportedWholeUnify_correct : WholeProblem.Correct Executable.wholeUnify :=
-  WholeProblem.run_correct
+  MixedSizeWhole.correct
+
+theorem exportedWholeUnify_mixedRequired : MixedSizeWhole.Required Executable.wholeUnify :=
+  MixedSizeWhole.required
 
 theorem exportedHomogeneousUnify_correct : Homogeneous.Correct Executable.homogeneousUnify :=
   Homogeneous.solve_correct
