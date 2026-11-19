@@ -3549,3 +3549,6 @@ mod principal_ray;
 
 #[path = "native_backend/simplex_feasibility.rs"]
 mod simplex_feasibility;
+
+#[path = "native_backend/variant_overlap.rs"]
+mod variant_overlap;
