@@ -5,7 +5,7 @@ namespace Tamarin.Matching.ACBagAnswers
 open ACBags ACBagSearch
 
 def keys (rows : Rows) := (rows.flatMap Prod.fst).eraseDups
-private abbrev atoms (rows : Rows) := (rows.flatMap Prod.snd).eraseDups
+abbrev atoms (rows : Rows) := (rows.flatMap Prod.snd).eraseDups
 
 private theorem usedKeys (rows : Rows) : Keys rows (keys rows) := by
   intro k; simp [keys,List.mem_eraseDups,List.mem_flatMap]
@@ -28,7 +28,7 @@ theorem atKey_map {α : Type} (ks : List UInt64) (f : UInt64 → α) (fallback :
   have h := List.idxOf_lt_length_of_mem hk
   simp [atKey,List.getElem?_map,List.getElem?_eq_getElem h,List.getElem_idxOf h]
 
-private def batch (rs : Rows) (as : List UInt64) : Batch :=
+def batch (rs : Rows) (as : List UInt64) : Batch :=
   as.map fun a => (a,choices rs (keys rs) a)
 
 private def selected (ks as : List UInt64) (w : UInt64 → Column) : Pick :=
@@ -111,7 +111,7 @@ private theorem realize {rows : Rows} (image : UInt64 → List UInt64) (sol : So
       (sol.2 r hr).subset (List.mem_flatMap.mpr ⟨k,used,h⟩)⟩)
     simp [ha,List.count_eq_zero.mpr absent]
 
-private theorem exact_family (rows : Rows) :
+theorem exact_family (rows : Rows) :
     Complete rows ((family (keys rows) (batch rows (atoms rows))).map (decode (keys rows))) := by
   constructor
   · intro arm ha
@@ -152,7 +152,7 @@ private theorem exact_family (rows : Rows) :
     rw [atKey_map _ _ _ used]
     exact realize image sol used
 
-private theorem product_size (layers : Batch) :
+theorem product_size (layers : Batch) :
     (product layers).length = (layers.map (fun entry => entry.2.length)).prod := by
   induction layers with
   | nil => rfl
@@ -191,25 +191,27 @@ private theorem subset_mass {ks raw : List UInt64} (distinct : ks.Nodup) (sub : 
     rw [(perm.flatMap_right im).length_eq]
     simpa only [List.flatMap_cons,List.length_append,Nat.add_le_add_iff_left] using ih distinct.tail rest
 
-/-- Expanding a numerical bag repeats at most the number of factor occurrences
-present in the submitted target rows, even when a key is shared across rows. -/
+/-- Each generated capture is used in at least one equation. Consequently
+even a raw pick discarded for leaving another capture empty expands to no
+more factor occurrences than are present in the submitted target rows. -/
+theorem pick_mass {rows : Rows} {pick : Pick} (mem : pick ∈ product (batch rows (atoms rows))) :
+    ((materialize (keys rows) pick).map List.length).sum ≤ (rows.map fun r => r.2.length).sum := by
+  obtain ⟨w,balanced,rfl⟩ := product_sound (atoms rows) (dedup_distinct _) pick mem
+  let im := bag (atoms rows) w
+  have domain : keys rows ⊆ rows.flatMap Prod.fst := fun _ hk => List.mem_eraseDups.mp hk
+  have upper := subset_mass (dedup_distinct _) domain im
+  have targets : ((rows.flatMap Prod.fst).flatMap im).length = (rows.map fun r => r.2.length).sum := by
+    rw [List.flatMap_assoc,List.length_flatMap]
+    exact congrArg List.sum (List.map_congr_left fun r hr => (replay w balanced r hr).length_eq)
+  rw [emit,List.map_map]
+  simpa only [targets,List.length_flatMap,Function.comp_def,keys,im] using upper
+
 theorem arm_mass {rows : Rows} {out : List Arm} (h : run rows = some out) {arm} (mem : arm ∈ out) :
     (arm.map List.length).sum ≤ (rows.map fun r => r.2.length).sum := by
   rw [family_of_run h] at mem
   obtain ⟨appears,_⟩ := List.mem_filter.mp mem
-  obtain ⟨pick,_,rfl⟩ := List.mem_map.mp appears
-  let im := decode (keys rows) (materialize (keys rows) pick)
-  have sol := (exact_family rows).sound im (List.mem_map_of_mem (f := decode (keys rows)) mem)
-  have domain : keys rows ⊆ rows.flatMap Prod.fst := fun _ hk => List.mem_eraseDups.mp hk
-  have upper := subset_mass (dedup_distinct _) domain im
-  have images : (keys rows).map im = materialize (keys rows) pick := by
-    apply List.map_congr_left; intro k hk
-    exact atKey_map _ _ _ hk
-  have targets : ((rows.flatMap Prod.fst).flatMap im).length = (rows.map fun r => r.2.length).sum := by
-    rw [List.flatMap_assoc,List.length_flatMap]
-    exact congrArg List.sum (List.map_congr_left fun r hr => (sol.2 r hr).length_eq)
-  rw [←images, List.map_map]
-  simpa only [targets,List.length_flatMap,Function.comp_def,keys] using upper
+  obtain ⟨pick,inProduct,rfl⟩ := List.mem_map.mp appears
+  exact pick_mass inProduct
 
 /-- The lists of count vectors here are upper bounds on mathematical solutions
 of each individual factor column. They may include extra vectors. In particular,
@@ -255,6 +257,20 @@ private theorem prod_mono (as : List UInt64) (f g : UInt64 → Nat) (le : ∀ a 
   | nil => exact Nat.le_refl _
   | cons a as ih => exact Nat.mul_le_mul (le a List.mem_cons_self) (ih fun b hb => le b (List.mem_cons_of_mem _ hb))
 
+/-- A semantic column cover bounds the raw number of joint choices. The
+cover may contain duplicate or unrealizable count vectors. -/
+theorem product_bound (rs : Rows) (upper : UInt64 → List (List Nat))
+    (ub : ∀ a ∈ atoms rs, ∀ v, Balanced rs a v → (keys rs).map v ∈ upper a) :
+    ((atoms rs).map fun a => (choices rs (keys rs) a).length).prod ≤
+      ((atoms rs).map fun a => (upper a).length).prod := by
+  exact prod_mono (atoms rs) (fun a => (choices rs (keys rs) a).length) (fun a => (upper a).length) (by
+    intro a ha
+    have nodup : (choices rs (keys rs) a).Nodup := by exact dedup_distinct ((balancedColumns rs (keys rs) a).map fun v => (keys rs).map v)
+    apply nodup.length_le_of_subset
+    intro c hc
+    obtain ⟨v,bal,rfl⟩ := mem_choices.mp hc
+    exact ub a ha v bal)
+
 theorem run_correct : Correct run := by
   constructor
   · intro rs answers h; rw [family_of_run h]; exact exact_family rs
@@ -266,13 +282,7 @@ theorem run_correct : Correct run := by
   · intro rs ⟨admit,upper,ub,count,words⟩
     obtain ⟨ctx,hi⟩ := Option.isSome_iff_exists.mp (inventories_complete admit)
     rw [inventories_eq hi] at hi
-    have le := prod_mono (atoms rs) (fun a => (choices rs (keys rs) a).length) (fun a => (upper a).length) (by
-      intro a ha
-      have nodup : (choices rs (keys rs) a).Nodup := by exact dedup_distinct ((balancedColumns rs (keys rs) a).map fun v => (keys rs).map v)
-      apply nodup.length_le_of_subset
-      intro c hc
-      obtain ⟨v,bal,rfl⟩ := mem_choices.mp hc
-      exact ub a ha v bal)
+    have le := product_bound rs upper ub
     have cap := Nat.le_trans le count
     have fits := Nat.le_trans (Nat.mul_le_mul_right _ le) words
     rw [run,hi]
