@@ -2528,6 +2528,55 @@ fn native_homogeneous_system_preserves_shared_and_repeated_witnesses() {
 }
 
 #[test]
+fn uniform_ac_multiplicities_keep_wide_principal_sums() {
+    use std::collections::BTreeSet;
+    let h = native();
+    let vars: Vec<_> = (0..18)
+        .map(|i| LVar::new("column", LSort::Msg, i))
+        .collect();
+    let product = |terms| f_app_ac(AcSym::Union, terms);
+    let repeated = |keys: &[LVar], times| {
+        product(
+            keys.iter()
+                .flat_map(|&v| std::iter::repeat_n(Term::Lit(Lit::Var(v)), times))
+                .collect(),
+        )
+    };
+    // Both rows constrain the same sixteen independent inputs. Scaling and
+    // reversing rows preserve the principal sum but change the pulled basis.
+    let rows = [
+        Equal {
+            lhs: repeated(&vars[2..], 3),
+            rhs: repeated(&vars[..1], 3),
+        },
+        Equal {
+            lhs: repeated(&vars[1..2], 2),
+            rhs: repeated(&vars[2..], 2),
+        },
+    ];
+    for equations in [rows.to_vec(), rows.into_iter().rev().collect()] {
+        let answers = h.unify(&equations).unwrap();
+        let [arm] = answers.as_slice() else {
+            panic!("expected one principal substitution")
+        };
+        let image = |key| {
+            arm.iter()
+                .find(|(v, _)| *v == key)
+                .map_or_else(|| Term::Lit(Lit::Var(key)), |(_, value)| value.clone())
+        };
+        let witnesses: Vec<_> = vars[2..].iter().copied().map(image).collect();
+        assert!(witnesses
+            .iter()
+            .all(|t| matches!(t, Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg)));
+        assert_eq!(witnesses.iter().collect::<BTreeSet<_>>().len(), 16);
+        let expected = product(witnesses);
+        assert_eq!(image(vars[0]), expected);
+        assert_eq!(image(vars[1]), expected);
+    }
+    assert_eq!(h.stats().unify_count, 0);
+}
+
+#[test]
 fn sparse_ac_system_keeps_sixteen_witnesses_independent() {
     use std::collections::BTreeSet;
     let h = native();

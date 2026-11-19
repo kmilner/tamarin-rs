@@ -1,3 +1,4 @@
+import TamarinRuntime.ACUnitBalance
 import TamarinRuntime.ACSparsePlane
 import TamarinRuntime.FlatMatch
 
@@ -36,6 +37,9 @@ def boundedBasis {n} : List (Row n) → Option (List (Vec n))
       let neutral := (List.finRange gs.length).reverse.filter fun i =>
         pulled.pos i == 0 && pulled.neg i == 0
       return neutral.map gs.get
+    if pulled.equalMagnitude then
+      let candidates := (lift gs.get pulled.unitGenerators).map Vector.ofFn
+      return minimize (candidates.map coordinates)
     let cap := pulled.primitive.cap
     guard (pulled.sparseFits cap 16384)
     let coeffs := pulled.sparseGenerators cap

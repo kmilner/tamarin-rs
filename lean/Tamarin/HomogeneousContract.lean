@@ -3,6 +3,7 @@ import Tamarin.ACCompactPlane
 import Tamarin.ACPrimitiveRow
 import Tamarin.ACGridBudget
 import Tamarin.ACBalanceBound
+import Tamarin.ACUnitBalance
 import Tamarin.ACNeutralBasis
 import Tamarin.ACSparsePlane
 import Tamarin.ACOutputBudget
@@ -69,7 +70,7 @@ def Within {n} : List (Row n) → Prop
   | r :: rs => Within rs ∧
     let gs := generate rs
     let p := r.pullback gs.get
-    gs.length ≤ 64 ∧ (((∀ i, p.pos i = 0) ∨ (∀ i, p.neg i = 0)) ∨ DenseWithin p ∨ SparseWithin p)
+    gs.length ≤ 64 ∧ (((∀ i, p.pos i = 0) ∨ (∀ i, p.neg i = 0)) ∨ p.equalMagnitude = true ∨ DenseWithin p ∨ SparseWithin p)
 
 /-- Mandatory output bounds use the reference covering subsets and occurrence
 counts. The first clause preserves the previous inexpensive admission check. -/
@@ -199,7 +200,13 @@ theorem bounded_spec {n} (rs : List (Row n)) :
         apply h.2.symm.trans
         simpa [p,prev,List.map_reverse,generate,intersect] using (neutral_basis_ordered rs p sided).symm
       · dsimp only [p,prev] at sided
-        simp [stored_get,guard,sided,List.map_map,Function.comp_def,Option.bind_eq_some_iff] at h
+        by_cases uniform : p.equalMagnitude = true
+        · have exactBasis := UnitBalance.minimize_lift p uniform prev.get live
+          dsimp only [p,prev] at uniform
+          simp [stored_get,guard,sided,uniform,List.map_map,Function.comp_def] at h
+          exact h.2.symm.trans exactBasis
+        dsimp only [p,prev] at uniform
+        simp [stored_get,guard,sided,uniform,List.map_map,Function.comp_def,Option.bind_eq_some_iff] at h
         exact h.2.2.2.symm.trans ((SparsePlane.minimize_lift p _ _ live).trans (minimize_compact _ prev.get live))
     · rintro ⟨tail,width,domain⟩
       let prev := generate rs
@@ -209,10 +216,15 @@ theorem bounded_spec {n} (rs : List (Row n)) :
       · have ordered := neutral_basis_ordered rs p sided
         dsimp only [p,prev] at sided
         simpa [boundedBasis,ih.2 tail,stored_get,guard,width,sided,p,prev,generate,intersect] using ordered.symm
-      have checks := sparse_checks p (domain.resolve_left sided)
+      by_cases uniform : p.equalMagnitude = true
+      · have exactBasis := UnitBalance.minimize_lift p uniform prev.get live
+        dsimp only [p,prev] at sided uniform
+        simpa [boundedBasis,ih.2 tail,stored_get,guard,width,sided,uniform,List.map_map,
+          Function.comp_def,generate,intersect] using exactBasis
+      have checks := sparse_checks p ((domain.resolve_left sided).resolve_left uniform)
       have minimized := (SparsePlane.minimize_lift p _ _ live).trans (minimize_compact p prev.get live)
-      dsimp only [p,prev] at sided
-      simp [boundedBasis,ih.2 tail,stored_get,guard,width,sided,
+      dsimp only [p,prev] at sided uniform
+      simp [boundedBasis,ih.2 tail,stored_get,guard,width,sided,uniform,
         show (r.pullback (generate rs).get).sparseFits (r.pullback (generate rs).get).primitive.cap 16384 = true from checks.1,
         show ((r.pullback (generate rs).get).sparseGenerators (r.pullback (generate rs).get).primitive.cap).length ≤ 2048 from checks.2,
         List.map_map,Function.comp_def]
