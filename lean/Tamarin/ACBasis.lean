@@ -546,6 +546,16 @@ private theorem weight_eq {n} (names : Fin n → Variable)
     simp only [Nat.add_mul, total_add, List.map_cons, List.sum_cons]
     exact congr (congrArg Nat.add hs) (ih (fun v hv => live v (List.mem_cons_of_mem _ hv)))
 
+/-- The column frame accounts for every occurrence exactly once. -/
+theorem coefficients_total {n} (names : Fin n → Variable)
+    (unique : ∀ i j, names i = names j → i = j) (xs : List Variable)
+    (live : ∀ v ∈ xs, ∃ i, names i = v) : total (coefficients names xs) = xs.length := by
+  have ones (l : List Variable) : (l.map (fun _ => (1 : Nat))).sum = l.length := by
+    induction l with
+    | nil => rfl
+    | cons v tail ih => simp [ih,Nat.add_comm]
+  simpa [dot,ones] using weight_eq names unique xs live (fun _ => 1)
+
 theorem encode_iff {n} (names : Fin n → Variable) (unique : ∀ i j, names i = names j → i = j)
     (rows : List ACSystem.Row) (live : ∀ v ∈ ACSystem.variables rows, ∃ i, names i = v)
     (c : ACSystem.Column) :

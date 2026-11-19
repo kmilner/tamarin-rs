@@ -1,4 +1,6 @@
 import TamarinRuntime.ACFeasibility
+import Tamarin.ACColumnSupport
+import Tamarin.ACAdjustmentCoverage
 import Tamarin.ACRowReductionCoverage
 import Tamarin.ACReducedFeasibility
 import Tamarin.ACRationalProjection
@@ -26,6 +28,9 @@ inductive Required {n} (rs : List (Row n)) : Prop where
   | direct : DirectWithin rs → Required rs
   | basis : n ≤ 32 → (TailWithin rs ∨ ConeTailWithin rs) → Required rs
   | reduced : RowReduction.Within rs → Required rs
+  | triangular : Adjustment.Within rs → Required rs
+  | twoRows : n ≤ 90 → rs.length ≤ 2 →
+      (∀ r ∈ rs, total r.pos ≤ 65536 ∧ total r.neg ≤ 65536) → Required rs
 
 structure Correct (kernel : Kernel) : Prop where
   valid : ∀ n sym s ds ns es, let tag := kernel n sym s ds ns es
@@ -80,7 +85,7 @@ private theorem widen {w sym s ds ns es m} (rep : GraphMatrix.Represents w sym s
     GraphMatrix.RepresentsUpTo 4096 w sym s ds ns es m :=
   ⟨rep.1,UInt64.le_trans rep.2.1 (by decide),rep.2.2⟩
 
-private theorem total {n sym s ds ns es m rs}
+private theorem definitive {n sym s ds ns es m rs}
     (rep : GraphMatrix.RepresentsUpTo 4096 n sym s ds ns es m)
     (read : readRows n.toNat m.toList = some rs) (done : (checkRows rs).isSome) :
     run n sym s ds ns es ≠ 0 := by
@@ -113,7 +118,7 @@ private theorem fallback {a b : Option Bool} {p : Prop} (ha : Decides a p) (hb :
 
 private theorem checkedRows {n} (rs : List (Row n)) : Decides (checkRows rs) (Feasible rs) := by
   apply fallback (direct_sound rs)
-  apply fallback _ (reducedFeasible_sound rs)
+  apply fallback _ (fallback (reducedFeasible_sound rs) (fun b h => ColumnSupport.run_correct rs 4096 h))
   by_cases small : n ≤ 32
   · simp only [small,↓reduceIte]
     exact (rows_correct rs).1
@@ -144,7 +149,7 @@ theorem run_correct : Correct run where
           cases ans <;> simp_all [run,Verdict]
   required := by
     intro n sym s ds ns es m rs rep read domain
-    apply total rep read
+    apply definitive rep read
     cases domain with
     | direct h =>
       obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (direct_complete rs h)
@@ -152,6 +157,12 @@ theorem run_correct : Correct run where
     | basis small h =>
       obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp ((rows_correct rs).2 h)
       cases d : direct rs <;> simp [checkRows,d,small,got]
+    | triangular h => simp [checkRows,Adjustment.completes rs h]
+    | twoRows width few weights =>
+      have sq := Nat.mul_le_mul width width
+      obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (ColumnSupport.two_rows_floor rs 4096 (by omega)
+        few weights (by omega))
+      simp [checkRows,got]
     | reduced h =>
       obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (reduced_complete rs h)
       simp [checkRows,got]
@@ -202,5 +213,35 @@ theorem Correct.term_required {kernel} (ok : Correct kernel) {sig : Signature}
   rw [←mat] at read
   exact ok.term c f rows n fr columns decoded layout
     (ok.required _ _ _ _ _ _ _ _ ((GraphMatrix.buildUpTo_correct 4096 ..).mp graph) read domain)
+
+private theorem total_sub {n} (a b : Vec n) : total (fun i => a i - b i) ≤ total a := by
+  induction n with
+  | zero => simp [total]
+  | succ n ih =>
+    simp only [total,List.ofFn_succ,List.sum_cons]
+    exact Nat.add_le_add (Nat.sub_le ..) (ih (fun i => a i.succ) (fun i => b i.succ))
+
+/-- A pure AC conjunction of at most two equations and ninety variables is
+mandatory throughout the admitted term grammar, regardless of multiplicities,
+row order, or the size of its complete substitution set. -/
+theorem two_term_rows {sig : Signature} {f : sig.ACSym} {rows : List ACSystem.Row} {n : Nat}
+    (fr : ACSystem.Frame f rows n) (width : n ≤ 90) (few : rows.length ≤ 2)
+    (fits : GraphMatrixRefinement.Fits rows) : Required (rows.map (encode fr.names)) := by
+  apply Required.twoRows width (by simpa using few)
+  intro p hp
+  obtain ⟨r,hr,rfl⟩ := List.mem_map.mp hp
+  have bound (s : ACSystem.Side) (hs : s ∈ [r.lhs,r.rhs]) :
+      total (coefficients fr.names s.vars) ≤ 65536 := by
+    have live (v) (hv : v ∈ s.vars) : ∃ i, fr.names i = v := by
+      apply fr.live v
+      apply List.mem_flatMap.mpr
+      refine ⟨r,hr,?_⟩
+      rcases List.mem_cons.mp hs with h | h
+      · subst s; exact List.mem_append_left _ hv
+      · obtain rfl := List.mem_singleton.mp h; exact List.mem_append_right _ hv
+    rw [coefficients_total fr.names fr.injective s.vars live]
+    exact Nat.le_trans (fits r hr s hs) (by decide)
+  exact ⟨Nat.le_trans (total_sub _ _) (bound r.lhs (by simp)),
+    Nat.le_trans (total_sub _ _) (bound r.rhs (by simp))⟩
 
 end Tamarin.ACFeasibility

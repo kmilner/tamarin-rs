@@ -1,6 +1,7 @@
 import Tamarin.GraphUnification
 import Tamarin.ACRationalProjection
 import Tamarin.ACReducedFeasibility
+import Tamarin.ACColumnSupport
 import TamarinRuntime
 
 namespace Tamarin.GraphUnificationTests
@@ -30,6 +31,19 @@ private def wideNodes := wideVars ++ #[wideLeft,wideRight,wideLeft.push 0]
 #guard graphACFeasible 96 7 2 ds wideNodes #[96,97,96,98] == 1
 #guard graphACFeasible 97 7 2 ds wideNodes #[96,97] == 0
 #guard graphACFeasible 4097 7 2 ds wideNodes #[96,97] == 0
+private def groupRow (k : Fin 37 → Nat) (l : Fin 37 → Nat) : ACBasis.Row 37 := .ofWeights k l
+private def base37 := groupRow (fun i => if i.val < 19 then 1 else 0) (fun i => if 19 ≤ i.val then 1 else 0)
+private def ratio37 (a b : Nat) := groupRow (fun i => if 1 ≤ i.val ∧ i.val < 19 then a else 0)
+  (fun i => if 19 ≤ i.val then b else 0)
+private def pair37 (a b : Nat) := [base37, ratio37 a b]
+
+#guard (ACFeasibility.direct (pair37 2 1)).isNone
+#guard (ACFeasibility.reducedFeasible (pair37 2 1)).isNone
+#guard (ACFeasibility.reducedFeasible (pair37 1 2)).isNone
+#guard ACFeasibility.ColumnSupport.run (pair37 2 1) 4096 == some true
+#guard ACFeasibility.ColumnSupport.run (pair37 1 2) 4096 == some false
+#guard (ACFeasibility.ColumnSupport.run (pair37 1 2) 32).isNone
+
 -- Two variables with signed coefficients from -2 through 2. Every
 -- nonzero mixed row fixes a ratio represented in the 2×2 positive grid.
 private def smallRows : List (ACBasis.Row 2) :=

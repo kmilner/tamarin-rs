@@ -159,3 +159,34 @@ fn wide_ac_feasibility_checks_shared_positive_assignments() {
     assert_eq!(table.ac_feasible(&incompatible).unwrap(), Some(false));
     assert!(!native.unifiable(&incompatible).unwrap());
 }
+
+#[test]
+fn two_wide_ac_rows_decide_both_sides_of_a_shared_ratio() {
+    let sig = mset_maude_sig();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let table = crate::lean_unification::RuleTable::new(&sig).unwrap();
+    let v = (1..19).collect::<Vec<_>>();
+    let w = (19..37).collect::<Vec<_>>();
+    let doubled = |keys: &[u64]| {
+        keys.iter()
+            .copied()
+            .cycle()
+            .take(2 * keys.len())
+            .collect::<Vec<_>>()
+    };
+    // X+sum(V)=sum(W). With sum(W)=2sum(V), choose all V=1,
+    // all W=2 and X=18. Reversing the ratio forces X negative.
+    let base = equation(&(0..19).collect::<Vec<_>>(), &w);
+    for (ratio, expected) in [
+        (equation(&doubled(&v), &w), true),
+        (equation(&v, &doubled(&w)), false),
+    ] {
+        for rows in [[base.clone(), ratio.clone()], [ratio.clone(), base.clone()]] {
+            assert_eq!(table.ac_feasible(&rows).unwrap(), Some(expected));
+            assert_eq!(native.unifiable(&rows).unwrap(), expected);
+        }
+    }
+    assert_eq!(native.stats().unify_count, 0);
+}

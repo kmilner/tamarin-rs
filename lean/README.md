@@ -166,8 +166,8 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Operation | Native coverage today | Next milestone |
 | --- | --- | --- |
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
-| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. With a common nonzero coefficient, each irreducible generator is a neutral singleton or a pair of opposite signs. Rows with distinct but constant weights on each side use fixed-sum distributions. General mixed rows use gcd and coordinate bounds. Subtracting two rows can expose a rigid factor-count clash. For boolean queries the graph solver checks whether every variable can have a nonempty image, independently of how many substitutions that permits. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
-| Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
+| Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. With a common nonzero coefficient, each irreducible generator is a neutral singleton or a pair of opposite signs. Rows with distinct but constant weights on each side use fixed-sum distributions. General mixed rows use gcd and coordinate bounds. Subtracting two rows can expose a rigid factor-count clash. Boolean queries decide every admitted homogeneous system with at most two equations and 90 variables, independently of the number of substitutions. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
+| Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid, counts remaining AC factors before partition search, and can refute an oversized pattern from a checked lower bound on its instantiated size. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Dedicated paths handle positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
 | Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. Staged paths cover cancellation, positional destructors, signed DH products with shared stable operands, powers, scalar actions and pairing. | Handle overlapping user equations with shared AC variables. Nested repeated-variable projections now have 35- and 10-row Maude regressions. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
 
@@ -299,6 +299,13 @@ queries took median 0.81 ms for a common witness, 0.86 ms for a contradiction af
 elimination and 1.06 ms for back substitution (32 renamed inputs each, public Rust API,
 CI profile, warm runtime). [Row elimination](Tamarin/ACRowReduction.lean) ·
 [Completion domain](Tamarin/ACRowReductionCoverage.lean)
+
+A positive solution can also start with a common nonzero value in every column and
+adjust at most as many columns as there are equations. The search projects these choices without storing the
+list of subsets. For **any two pure AC equations with up to 90 variables** the 4,096
+support checks suffice for a definitive verdict within the term graph limits. This
+guarantee follows from the input terms and counts. [Term-level theorem](Tamarin/ACFeasibility.lean) ·
+[Support dimension bound](Tamarin/ACColumnCone.lean) · [Bounded search](Tamarin/ACColumnSupport.lean)
 
 A bit mask on each suffix records the coordinates its generators can still cover. The selector
 stops a branch when those bits and the already covered bits leave a coordinate missing. Lean proves
@@ -578,10 +585,12 @@ can include a uniformly reducible tower such as `(g^a)^b` alongside a narrowing 
 such as `Y^r`. Its original variables remain observable even if a reduction erases one.
 All nine models in the upstream `ake/dh` directory have identical native and Maude source
 precomputation output. Eight also reproduce Maude’s complete proof output. The remaining
-model, `UM_one_pass_attack`, reaches a rigid-context match beyond the native work budget
-during proof search. The first 354 proof states agree. All 20 rigid-context queries
-captured from Maude across the two one-pass models agree on replay, but native search
-builds a 65,544-node term at the next split. The source of that growth is still open.
+model, `UM_one_pass_attack`, agreed through the first 354 proof states. All 20
+rigid-context queries captured from Maude across the two one-pass models agree on replay.
+Native search then constructed a 65,544-node pattern against a 136-node subject.
+The checked size bound refutes that mismatch on an isolated algebra regression. The
+source of the term growth and completion of the full native proof remain open.
+[Matching size proof](Tamarin/MatchPrefilter.lean) · [Public regression](../crates/tamarin-term/tests/native_match_size.rs)
 Its sibling `UM_one_pass_fix` completes both proofs.
 The general tuple join runs in native-only mode. Ordered hybrid queries outside the earlier supported families still use Maude.
 In `experiments/A-GDH2`, a received base is raised to two Fresh exponents.
