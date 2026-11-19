@@ -3,6 +3,7 @@
 //! that introduces a redex in an earlier observation can be discarded.
 mod finite_narrowing;
 mod leaf_occurrences;
+mod pivot_match;
 mod residual_match;
 mod scalar_action;
 mod signed_graph;
@@ -183,6 +184,9 @@ impl IndexedRow {
         };
         if equations.is_empty() {
             return Ok(Some(true));
+        }
+        if let Some(matched) = pivot_match::decide(&equations, &seed, budget)? {
+            return Ok(Some(matched));
         }
         Ok(
             match super::super::open_match::with_captures_budget(

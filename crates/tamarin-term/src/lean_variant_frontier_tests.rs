@@ -430,3 +430,36 @@ fn native_oracle_stale_free_rule_head_cannot_certify_a_false_normal_form() {
         assert_eq!(oracle.reduce(&t).unwrap(), x);
     }
 }
+
+#[test]
+fn native_oracle_nested_repeated_ac_destructors() {
+    let merge = AcFctSym::new(
+        b"combine",
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    let extract = symbol(b"extract", 1);
+    let mut sig = hash_maude_sig();
+    sig.st_ac_fun_syms.insert(merge);
+    sig.st_fun_syms.insert(extract);
+    let sum = |terms| f_app_ac(AcSym::AcFct(merge), terms);
+    let d = |t| f_app_no_eq(extract, vec![t]);
+    let v = msg_var("v", 0);
+    add_rule(&mut sig, d(sum(vec![v.clone(), v.clone()])), v);
+    let Some((native, oracle)) = handles(sig.refresh()) else {
+        return;
+    };
+    let x = msg_var("x", 0);
+    let y = msg_var("y", 1);
+    for (copies, count) in [(1, 35), (3, 10)] {
+        let mut terms = vec![x.clone(); copies];
+        terms.push(y.clone());
+        let slots = [d(d(sum(terms))), x.clone(), y.clone()];
+        let expected = valued_variant_rows(&oracle, &slots);
+        assert_eq!(expected.len(), count);
+        assert_eq!(valued_variant_rows(&native, &slots), expected);
+    }
+    assert_eq!(native.stats().var_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
+}

@@ -20,6 +20,8 @@ import Tamarin.IdentityTable
 import Tamarin.FlatMatchCandidateProofs
 import Tamarin.MatchGroundGuards
 import Tamarin.MatchingConjunction
+import Tamarin.ACMatchProfilesAdapter
+import Tamarin.RepeatedACDecoder
 import Tamarin.GroundACEquality
 import Tamarin.MatchingFree
 import Tamarin.OneOpenPivot

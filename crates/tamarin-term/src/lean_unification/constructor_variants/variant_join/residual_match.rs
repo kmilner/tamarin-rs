@@ -103,6 +103,12 @@ pub(super) fn residual_row_matches(
             captures.insert(v, value);
         }
         if before == captures.len() {
+            // The same substitution must match every coordinate. Resolve a
+            // short AC subject first so later partitions can reuse its captures.
+            next.sort_by_key(|eq| match &eq.rhs {
+                Term::App(FunSym::Ac(_), factors) => factors.len(),
+                _ => 0,
+            });
             return Ok(RowMatch::Pending(next));
         }
         equations = next;

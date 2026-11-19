@@ -62,6 +62,36 @@ fn replace_at(t: &LNTerm, path: &[usize], rhs: &LNTerm) -> LNTerm {
 }
 
 impl RuleTable {
+    // RepeatedACDecoder.caller_unique: every live root here projects the sole
+    // capture from at least two identical AC factors. Different operations,
+    // factors and multiplicities may be used at successive levels.
+    fn decoder_unique_instances(&self, app: &LNTerm) -> Result<bool, Error> {
+        let mut current = app;
+        let mut recognized = false;
+        while let Term::App(head @ FunSym::NoEq(symbol), args) = current {
+            let Some([rule]) = self.ordinary_rules.get(head).map(Vec::as_slice) else {
+                break;
+            };
+            let Term::App(_, pattern) = &rule.lhs else {
+                break;
+            };
+            let [Term::App(FunSym::Ac(_), copies)] = pattern.as_ref() else {
+                break;
+            };
+            if symbol.arity != 1
+                || args.len() != 1
+                || copies.len() < 2
+                || !matches!(rule.rhs, Term::Lit(Lit::Var(_)))
+                || !copies.iter().all(|t| t == &rule.rhs)
+            {
+                break;
+            }
+            recognized = true;
+            current = &args[0];
+        }
+        Ok(recognized && self.stably_normal_native(current)?)
+    }
+
     pub(super) fn finite_narrowing(
         &self,
         keys: &[LVar],
@@ -112,7 +142,8 @@ impl RuleTable {
         else {
             return Ok(None);
         };
-        let unique_instances = self.dh_unique_instances(app)?;
+        let unique_instances =
+            self.dh_unique_instances(app)? || self.decoder_unique_instances(app)?;
         for (i, r) in kept.iter().enumerate() {
             let subst = Subst::from_list(keys.iter().copied().zip(r.images.iter().cloned()));
             if !residual::charge_expansion(
@@ -407,6 +438,38 @@ mod tests {
     use crate::maude_sig::{hash_maude_sig, nat_maude_sig};
     use crate::subterm_rule::{CtxtStRule, StRhs};
     use crate::term::{f_app_list, f_app_no_eq};
+
+    #[test]
+    fn decoder_requires_a_complete_projecting_bucket_and_a_stable_leaf() {
+        use crate::builtin::msg_var;
+        use crate::function_symbols::{AcSym, Constructability, NoEqSym, Privacy};
+        use crate::subterm_rule::rrule_to_ctxt_st_rule;
+        let op =
+            |name: &[u8]| NoEqSym::new(name, 1, Privacy::Public, Constructability::Constructor);
+        let d = op(b"decode_two");
+        let e = op(b"decode_three");
+        let changed = op(b"changed");
+        let call = |f, t| f_app_no_eq(f, vec![t]);
+        let v = msg_var("v", 0);
+        let marker = crate::lterm::pub_term("stop");
+        let rule = |lhs, rhs| rrule_to_ctxt_st_rule(&RRule::new(lhs, rhs)).unwrap();
+        let repeated = |n| f_app_ac(AcSym::Union, vec![v.clone(); n]);
+        let mut sig = hash_maude_sig().merge(crate::maude_sig::mset_maude_sig());
+        sig.st_fun_syms.extend([d, e, changed]);
+        sig.st_rules.insert(rule(call(d, repeated(2)), v.clone()));
+        sig.st_rules.insert(rule(call(e, repeated(3)), v.clone()));
+        sig.st_rules
+            .insert(rule(call(changed, marker.clone()), marker.clone()));
+        let query = |t| call(d, call(e, t));
+        let table = RuleTable::new(&sig.clone().refresh()).unwrap();
+        assert!(table.decoder_unique_instances(&query(v.clone())).unwrap());
+        assert!(!table
+            .decoder_unique_instances(&query(call(changed, marker.clone())))
+            .unwrap());
+        sig.st_rules.insert(rule(call(e, repeated(3)), marker));
+        let modified = RuleTable::new(&sig.refresh()).unwrap();
+        assert!(!modified.decoder_unique_instances(&query(v)).unwrap());
+    }
 
     #[test]
     fn omits_only_extensions_replayed_on_both_sides_with_one_sorted_substitution() {
