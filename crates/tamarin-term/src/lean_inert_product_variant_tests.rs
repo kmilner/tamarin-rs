@@ -138,3 +138,35 @@ fn native_oracle_user_ac_product_keeps_the_other_observations() {
     }
     assert_eq!(native.stats().var_count, 0);
 }
+
+#[test]
+fn inert_product_cannot_share_an_operand_with_two_possible_normal_values() {
+    use crate::builtin::hash;
+    use crate::maude_sig::hash_maude_sig;
+    use crate::rewriting::RRule;
+    use crate::subterm_rule::rrule_to_ctxt_st_rule;
+
+    let x = msg_var("x", 0);
+    let y = msg_var("y", 1);
+    let mut sig = mset_maude_sig()
+        .merge(pair_maude_sig())
+        .merge(hash_maude_sig());
+    let choose = hash(pair(x.clone(), y.clone()));
+    for output in [x.clone(), y] {
+        sig.st_rules
+            .insert(rrule_to_ctxt_st_rule(&RRule::new(choose.clone(), output)).unwrap());
+    }
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.refresh(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    // Distinct normal ground values for the two fields can expose three
+    // different products. Repeated slots do not justify choosing one value.
+    let product = f_app_ac(AcSym::Union, vec![choose.clone(), choose]);
+    let query = f_app_list(vec![product, x]);
+    assert!(matches!(
+        native.variants(&query),
+        Err(crate::maude_proc::MaudeError::UnsupportedOperation(
+            "variant generation"
+        ))
+    ));
+}
