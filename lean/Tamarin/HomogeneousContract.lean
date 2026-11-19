@@ -4,6 +4,7 @@ import Tamarin.ACPrimitiveRow
 import Tamarin.ACGridBudget
 import Tamarin.ACBalanceBound
 import Tamarin.ACNeutralBasis
+import Tamarin.ACSparsePlane
 import Tamarin.ACOutputBudget
 import TamarinRuntime.Homogeneous
 
@@ -51,18 +52,24 @@ private theorem kept_mono {n} (p : Row n) {lo hi : Nat} (le : lo ≤ hi) :
         · simpa [l,h] using ih
   exact (subset _).length_le
 
-/-- A one-sided intersection requires only a scan of the previous basis.
-Mixed rows admit the original projected grid and any bounded box that
-contains the primitive coordinate bound. Both counts use the reference basis. -/
+private def DenseWithin {n} (p : Row n) : Prop :=
+  (GridFits p 16384 ∧ p.generators.length ≤ 2048) ∨
+    ∃ cap, p.primitive.cap ≤ cap ∧ GridBudget p (refLimits p cap) 16384 ∧
+      (keptCoefficients p cap).length ≤ 2048
+
+/-- The sparse grid fixes neutral coordinates to zero. Their singleton
+generators enter the count separately, at their reference positions. -/
+private def SparseWithin {n} (p : Row n) : Prop :=
+  let cap := p.primitive.cap
+  GridBudget p (p.sparseLimits cap) 16384 ∧
+    ((keptCoefficients p cap).filter (SparsePlane.keep p)).length ≤ 2048
+
 def Within {n} : List (Row n) → Prop
   | [] => True
   | r :: rs => Within rs ∧
     let gs := generate rs
     let p := r.pullback gs.get
-    (gs.length ≤ 64 ∧ ((∀ i, p.pos i = 0) ∨ (∀ i, p.neg i = 0))) ∨
-    (gs.length ≤ 12 ∧ ((GridFits p 16384 ∧ (intersect r gs).length ≤ 2048) ∨
-      (∃ cap, p.primitive.cap ≤ cap ∧ GridBudget p (refLimits p cap) 16384 ∧
-        (keptCoefficients p cap).length ≤ 2048)))
+    gs.length ≤ 64 ∧ (((∀ i, p.pos i = 0) ∨ (∀ i, p.neg i = 0)) ∨ DenseWithin p ∨ SparseWithin p)
 
 /-- Mandatory output bounds use the reference covering subsets and occurrence
 counts. The first clause preserves the previous inexpensive admission check. -/
@@ -159,6 +166,19 @@ private theorem minimize_compact {k n} (r : Row k) (g : Fin k → Vec n)
   rintro rfl
   simp [size] at skip
 
+private theorem sparse_checks {n} (p : Row n) (area : DenseWithin p ∨ SparseWithin p) :
+    p.sparseFits p.primitive.cap 16384 = true ∧ (p.sparseGenerators p.primitive.cap).length ≤ 2048 := by
+  rcases area with dense | ⟨grid,count⟩
+  · have checks : p.cappedFits p.primitive.cap 16384 = true ∧ (p.cappedGenerators p.primitive.cap).length ≤ 2048 := by
+      rw [cappedFits_iff,p.cappedGenerators_eq]
+      rcases dense with ⟨grid,count⟩|⟨lim,le,grid,count⟩
+      · have old : GridBudget p p.limits 16384 := grid
+        exact ⟨old.shrink (fun i => Nat.min_le_left ..),Nat.le_trans (List.length_filter_le ..) count⟩
+      · exact ⟨grid.shrink (fun i => by dsimp [refLimits]; omega),Nat.le_trans (kept_mono p le) count⟩
+    exact ⟨SparsePlane.fits_of_capped p checks.1,Nat.le_trans (SparsePlane.length_le ..) checks.2⟩
+  · refine ⟨(SparsePlane.fits_iff ..).mpr grid,?_⟩
+    rwa [SparsePlane.filtered,p.cappedGenerators_eq]
+
 theorem bounded_spec {n} (rs : List (Row n)) :
     (∀ gs, boundedBasis rs = some gs → gs = generate rs) ∧
     (Within rs → boundedBasis rs = some (generate rs)) := by
@@ -180,29 +200,21 @@ theorem bounded_spec {n} (rs : List (Row n)) :
         simpa [p,prev,List.map_reverse,generate,intersect] using (neutral_basis_ordered rs p sided).symm
       · dsimp only [p,prev] at sided
         simp [stored_get,guard,sided,List.map_map,Function.comp_def,Option.bind_eq_some_iff] at h
-        exact h.2.2.2.2.symm.trans (minimize_compact _ prev.get live)
-    · rintro ⟨tail,domain⟩
+        exact h.2.2.2.symm.trans ((SparsePlane.minimize_lift p _ _ live).trans (minimize_compact _ prev.get live))
+    · rintro ⟨tail,width,domain⟩
       let prev := generate rs
       let p := r.pullback prev.get
       have live (j : Fin prev.length) := ((mem_generate rs _).mp (List.get_mem prev j)).2.1
-      have width : (generate rs).length ≤ 64 := domain.elim And.left (fun h => Nat.le_trans h.1 (by decide))
       by_cases sided : (∀ i, p.pos i = 0) ∨ (∀ i, p.neg i = 0)
       · have ordered := neutral_basis_ordered rs p sided
         dsimp only [p,prev] at sided
         simpa [boundedBasis,ih.2 tail,stored_get,guard,width,sided,p,prev,generate,intersect] using ordered.symm
-      have ⟨hg,area⟩ := domain.resolve_left (fun h => sided h.2)
-      have checks : p.cappedFits p.primitive.cap 16384 = true ∧ (p.cappedGenerators p.primitive.cap).length ≤ 2048 := by
-        rw [cappedFits_iff,p.cappedGenerators_eq]
-        rcases area with ⟨grid,cap⟩|⟨lim,le,grid,cap⟩
-        · have old : GridBudget p p.limits 16384 := grid
-          refine ⟨old.shrink (fun i => Nat.min_le_left ..),Nat.le_trans (List.length_filter_le ..) ?_⟩
-          simpa [intersect,lift,p,prev] using cap
-        · exact ⟨grid.shrink (fun i => by dsimp [refLimits,p,prev]; omega),Nat.le_trans (kept_mono p le) cap⟩
-      have minimized := minimize_compact p prev.get live
+      have checks := sparse_checks p (domain.resolve_left sided)
+      have minimized := (SparsePlane.minimize_lift p _ _ live).trans (minimize_compact p prev.get live)
       dsimp only [p,prev] at sided
-      simp [boundedBasis,ih.2 tail,stored_get,guard,width,sided,hg,
-        show (r.pullback (generate rs).get).cappedFits (r.pullback (generate rs).get).primitive.cap 16384 = true from checks.1,
-        show ((r.pullback (generate rs).get).cappedGenerators (r.pullback (generate rs).get).primitive.cap).length ≤ 2048 from checks.2,
+      simp [boundedBasis,ih.2 tail,stored_get,guard,width,sided,
+        show (r.pullback (generate rs).get).sparseFits (r.pullback (generate rs).get).primitive.cap 16384 = true from checks.1,
+        show ((r.pullback (generate rs).get).sparseGenerators (r.pullback (generate rs).get).primitive.cap).length ≤ 2048 from checks.2,
         List.map_map,Function.comp_def]
       exact minimized
 

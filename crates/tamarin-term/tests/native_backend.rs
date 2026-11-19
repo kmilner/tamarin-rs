@@ -2525,6 +2525,42 @@ fn native_homogeneous_system_preserves_shared_and_repeated_witnesses() {
 }
 
 #[test]
+fn sparse_ac_system_keeps_sixteen_witnesses_independent() {
+    use std::collections::BTreeSet;
+    let h = native();
+    let keys: Vec<_> = (0..32)
+        .map(|i| LVar::new("column", LSort::Msg, i))
+        .collect();
+    let multiple = |key, n| f_app_ac(AcSym::Union, vec![Term::Lit(Lit::Var(key)); n]);
+    let equations: Vec<_> = keys
+        .chunks_exact(2)
+        .map(|p| Equal {
+            lhs: multiple(p[0], 2),
+            rhs: multiple(p[1], 3),
+        })
+        .collect();
+    let answers = h.unify(&equations).unwrap();
+    let [arm] = answers.as_slice() else {
+        panic!("expected the principal substitution")
+    };
+    let mut witnesses = BTreeSet::new();
+    for p in keys.chunks_exact(2) {
+        let image = |v| &arm.iter().find(|(key, _)| *key == v).unwrap().1;
+        let Term::App(_, children) = image(p[0]) else {
+            panic!("expected three copies of a witness")
+        };
+        let Term::Lit(Lit::Var(w)) = &children[0] else {
+            panic!("expected a variable")
+        };
+        assert_eq!(image(p[0]), &multiple(*w, 3));
+        assert_eq!(image(p[1]), &multiple(*w, 2));
+        assert!(!keys.contains(w));
+        assert!(witnesses.insert(*w));
+    }
+    assert_eq!(h.stats().unify_count, 0);
+}
+
+#[test]
 fn ac_output_budget_covers_every_two_by_six_allocation() {
     use std::collections::{BTreeMap, BTreeSet};
     use tamarin_term::lterm::HasFrees;

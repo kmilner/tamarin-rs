@@ -194,8 +194,7 @@ example (run) (cert : Correct run) : (run 2 #[lhs,rhs]).isSome := by
   apply cert.completes
   refine ⟨by decide, by decide, by decide, [ratioRow], ?_, ?_, Or.inl ⟨?_, ?_⟩⟩
   · simp [readRows, ratioRow, lhs, rhs, guard]
-  · refine ⟨trivial, Or.inr ⟨by decide, Or.inl ⟨Or.inr ⟨⟨0, by decide⟩, Or.inl (by decide), by decide⟩, ?_⟩⟩⟩
-    unfold ACBasis.intersect
+  · refine ⟨trivial, by decide, Or.inr (Or.inl (Or.inl ⟨Or.inr ⟨⟨0, by decide⟩, Or.inl (by decide), by decide⟩, ?_⟩))⟩
     rw [← ACBasis.Row.planeGenerators_eq]
     decide
   all_goals

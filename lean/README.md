@@ -274,7 +274,10 @@ intermediate candidates and output. Dividing out the coefficient gcd and boundin
 by the largest resulting coefficient preserves the ordered basis. For example,
 `60x + 61y = 121z` yields the same five substitutions as Maude in either orientation.
 When either side vanishes on the previous basis, only neutral columns survive, in reverse
-coordinate order. This step accepts up to 64 previous generators.
+coordinate order. For mixed rows the search fixes neutral columns to zero and merges their singletons
+into the ordered result. Up to 64 previous generators can enter either kind of intersection.
+A 32-variable conjunction of sixteen independent equations `2xᵢ=3yᵢ` keeps all sixteen
+witnesses distinct. [Sparse plane proof](Tamarin/ACSparsePlane.lean)
 [Coefficient bound](Tamarin/ACBalanceBound.lean) · [Neutral columns](Tamarin/ACNeutralBasis.lean) · [Enumeration proof](Tamarin/ACPlane.lean) · [Factorization proof](Tamarin/ACBasisComplete.lean) ·
 [Packet contract](Tamarin/HomogeneousContract.lean) · [Executable](TamarinRuntime/Homogeneous.lean)
 
