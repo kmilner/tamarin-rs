@@ -5755,7 +5755,7 @@ fn independent_and_shared_peer_exponents_preserve_the_entire_product_family() {
 }
 
 #[test]
-fn native_binary_ac_reduction_agrees_with_maude_for_every_rule_and_alignment() {
+fn native_oracle_binary_ac_reduction_agrees_with_maude_for_every_rule_and_alignment() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{pair, xor, zero_const};
     use crate::lean_unification::RuleTable;

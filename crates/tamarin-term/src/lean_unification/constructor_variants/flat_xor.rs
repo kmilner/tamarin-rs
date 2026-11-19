@@ -14,6 +14,16 @@ unsafe extern "C" {
     fn tamarin_lean_xor_matchings(width: u64) -> *mut std::ffi::c_void;
 }
 
+/// Preserve the usual increasing names and reuse low IDs after wraparound.
+pub(super) fn witness_indices(
+    highest: u64,
+    occupied: impl Fn(u64) -> bool,
+) -> impl Iterator<Item = u64> {
+    (0..=u64::MAX)
+        .map(move |offset| highest.wrapping_add(1).wrapping_add(offset))
+        .filter(move |i| !occupied(*i))
+}
+
 impl RuleTable {
     pub(super) fn flat_xor_args<'a>(&self, t: &'a LNTerm) -> Option<&'a [LNTerm]> {
         let Term::App(FunSym::Ac(AcSym::Xor), args) = t else {
@@ -85,10 +95,7 @@ impl RuleTable {
                 if rows.copy_row(0, r, &mut partners)? != vars.len() {
                     return Err(Error::InvalidStatus(255));
                 }
-                // Reuse low unused indices if the caller already occupies u64::MAX.
-                let mut available = (0..=u64::MAX)
-                    .map(|offset| highest.wrapping_add(1).wrapping_add(offset))
-                    .filter(|index| !reserved.contains(index));
+                let mut available = witness_indices(highest, |i| reserved.contains(&i));
                 let mut arm = Vec::new();
                 for (i, &j) in partners.iter().enumerate() {
                     let j = j as usize;

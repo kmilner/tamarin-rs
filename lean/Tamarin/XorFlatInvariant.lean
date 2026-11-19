@@ -39,31 +39,34 @@ theorem not_zero {t : Term sig} (ht : HasSort t .fresh) : classOf t ≠ T.zeroCl
   rw [he,ez] at this
   exact this
 
-/-- Each opaque factor is either the unit or a normalized Fresh leaf. -/
-def Pure (t : Term sig) : Prop := ∀ k ∈ T.bag t, k = T.zeroClass ∨
-  ∃ a : Term sig, HasSort a .fresh ∧ Normal T.R a ∧ classOf a = k
+/-- Each opaque factor is either the unit or a normalized representative
+from the specified collection. -/
+def PureFrom (P : Term sig → Prop) (t : Term sig) : Prop := ∀ k ∈ T.bag t, k = T.zeroClass ∨
+  ∃ a : Term sig, P a ∧ Normal T.R a ∧ classOf a = k
 
-def Preserved (s t : Term sig) : Prop := T.Pure t ∧
+def PreservedFrom (P : Term sig → Prop) (s t : Term sig) : Prop := T.PureFrom P t ∧
   ∀ k, k ≠ T.zeroClass → (T.bag s).count k % 2 = (T.bag t).count k % 2
 
-theorem pure_zero : T.Pure T.zero := by
+variable {P : Term sig → Prop}
+
+theorem pure_zero : T.PureFrom P T.zero := by
   intro k hk
   exact Or.inl (by simpa [T.bag_zero] using hk)
 
-theorem pure_ac (a b : Term sig) : T.Pure (.ac T.f a b) ↔ T.Pure a ∧ T.Pure b := by
-  simp [Pure,bag,flatten_ac,List.mem_append,or_imp,forall_and]
+theorem pure_ac (a b : Term sig) : T.PureFrom P (.ac T.f a b) ↔ T.PureFrom P a ∧ T.PureFrom P b := by
+  simp [PureFrom,bag,flatten_ac,List.mem_append,or_imp,forall_and]
 
-theorem pure_normal {t : Term sig} (p : T.Pure t) (alien : T.bag t = [classOf t]) : Normal T.R t := by
+theorem pure_normal {t : Term sig} (p : T.PureFrom P t) (alien : T.bag t = [classOf t]) : Normal T.R t := by
   rcases p _ (alien ▸ List.mem_cons_self) with h | ⟨a,_,ha,h⟩
   · exact (normal_equiv _ (Quotient.exact h)).mpr T.toTable.zero_normal
   · exact (normal_equiv _ (Quotient.exact h)).mp ha
 
-theorem kept {s t : Term sig} (p : T.Pure s) (e : EquivB s t) : T.Preserved s t :=
+theorem kept {s t : Term sig} (p : T.PureFrom P s) (e : EquivB s t) : T.PreservedFrom P s t :=
   ⟨fun k hk => p k ((flatten_equiv T.f e).mem_iff.mpr hk),
    fun k _ => congrArg (· % 2) ((flatten_equiv T.f e).count_eq k)⟩
 
-theorem combine {a b c d : Term sig} (pa : T.Preserved a c) (pb : T.Preserved b d) :
-    T.Preserved (.ac T.f a b) (.ac T.f c d) := by
+theorem combine {a b c d : Term sig} (pa : T.PreservedFrom P a c) (pb : T.PreservedFrom P b d) :
+    T.PreservedFrom P (.ac T.f a b) (.ac T.f c d) := by
   refine ⟨(T.pure_ac ..).mpr ⟨pa.1,pb.1⟩,?_⟩
   intro k ne
   have ha := pa.2 k ne
@@ -71,8 +74,8 @@ theorem combine {a b c d : Term sig} (pa : T.Preserved a c) (pb : T.Preserved b 
   simp only [bag,flatten_ac,List.count_append] at *
   omega
 
-theorem through {a b c : Term sig} (p : T.Preserved a b) (q : T.Preserved b c) :
-    T.Preserved a c := ⟨q.1, fun k ne => (p.2 k ne).trans (q.2 k ne)⟩
+theorem through {a b c : Term sig} (p : T.PreservedFrom P a b) (q : T.PreservedFrom P b c) :
+    T.PreservedFrom P a c := ⟨q.1, fun k ne => (p.2 k ne).trans (q.2 k ne)⟩
 
 theorem root_cases {p q : Term sig} (atXor : head p = .ac T.f) (step : T.R p q) :
     (∃ a, p = .ac T.f a a ∧ q = T.zero) ∨
@@ -87,8 +90,8 @@ theorem root_cases {p q : Term sig} (atXor : head p = .ac T.f) (step : T.R p q) 
   · exact Or.inr (.inr (.inl ⟨_,_,rfl,rfl⟩))
   · exact Or.inr (.inr (.inr ⟨_,_,rfl,rfl⟩))
 
-theorem root_kept {p q : Term sig} (pure : T.Pure p) (atXor : head p = .ac T.f) (step : T.R p q) :
-    T.Preserved p q := by
+theorem root_kept {p q : Term sig} (pure : T.PureFrom P p) (atXor : head p = .ac T.f) (step : T.R p q) :
+    T.PreservedFrom P p q := by
   rcases T.root_cases atXor step with ⟨a,rfl,rfl⟩ | ⟨a,rfl,rfl⟩ | ⟨a,b,rfl,rfl⟩ | ⟨a,b,rfl,rfl⟩
   all_goals constructor
   · exact T.pure_zero
@@ -107,7 +110,7 @@ private theorem alien_bag {t : Term sig} (h : head t ≠ .ac T.f) : T.bag t = [c
     simp [bag,flatten,ne]
   | _ => rfl
 
-theorem step_kept {a b : Term sig} (step : Step T.R a b) (pure : T.Pure a) : T.Preserved a b := by
+theorem step_kept {a b : Term sig} (step : Step T.R a b) (pure : T.PureFrom P a) : T.PreservedFrom P a b := by
   by_cases he : head a = .ac T.f
   · induction step with
     | root hr => exact T.root_kept pure he hr
@@ -130,7 +133,7 @@ theorem step_kept {a b : Term sig} (step : Step T.R a b) (pure : T.Pure a) : T.P
     | free | comm_left | comm_right => contradiction
   · exact False.elim ((T.pure_normal pure (T.alien_bag he)) _ ⟨_,_,.refl _,step,.refl _⟩)
 
-theorem reduces_kept {a b : Term sig} (red : Reduces T.R a b) (pure : T.Pure a) : T.Preserved a b := by
+theorem reduces_kept {a b : Term sig} (red : Reduces T.R a b) (pure : T.PureFrom P a) : T.PreservedFrom P a b := by
   induction red with
   | basis e => exact T.kept pure e
   | step hs =>
@@ -147,6 +150,9 @@ theorem reduces_kept {a b : Term sig} (red : Reduces T.R a b) (pure : T.Pure a) 
     exact T.kept pure (normal_reduces_equiv (.free _ _ _ reds) (T.pure_normal pure rfl))
   | comm f l r il ir =>
     exact T.kept pure (normal_reduces_equiv (.comm _ l r) (T.pure_normal pure rfl))
+
+abbrev Pure (t : Term sig) := T.PureFrom (fun a => HasSort a .fresh) t
+abbrev Preserved (a b : Term sig) := T.PreservedFrom (fun t => HasSort t .fresh) a b
 
 end
 end Tamarin.Rewriting.FreshXor.Flat.Table

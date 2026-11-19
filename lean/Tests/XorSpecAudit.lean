@@ -1,4 +1,4 @@
-import Tamarin
+import TamarinCI
 import Tamarin.XorFlatNormal
 
 namespace Tamarin.XorSpecAudit
@@ -198,5 +198,91 @@ example :
       simp_all [List.count_cons]
   have h := forms typed normal (by simp [Ne.symm ac]) same
   exact ⟨(h _).mpr (.refl _),fun bad => by cases ((h _).mp bad).head_eq⟩
+
+open VariantJoin
+
+-- Two different wide observations share one input. Its odd multiplicity
+-- returns that still-open input, while its even multiplicity returns zero.
+-- Repeat the first observation after the second and preserve both values.
+private abbrev k : Variable := ⟨9, .fresh⟩
+private abbrev kv : PTerm := .var k
+private def op : Bool → PTerm
+  | false => table.value [kv, kv, kv]
+  | true => table.value [kv, kv, kv, kv]
+
+private theorem admitted (i : Bool) : FreshXor.Flat.Observation table (op i) := by
+  cases i
+  · exact .sum k k [k] (by intro v hv; simp at hv; subst v; rfl) (.refl _)
+  · exact .sum k k [k,k] (by intro v hv; simp at hv; subst v; rfl) (.refl _)
+
+private def joined : Row signature (Key [k]) Bool :=
+  ⟨fun _ => kv, fun i => if i then zero else kv⟩
+
+private theorem op_form (ρ : PSubst) (hn : Normalized table.R ρ) (i : Bool) (t : PTerm) :
+    NormalForm table.R (ρ.apply (op i)) t ↔
+      EquivB t (if i then zero else ρ.image k) := by
+  classical
+  have sort : HasSort (ρ.image k) .fresh := ρ.sorted k
+  have norm := hn k
+  cases i
+  · change NormalForm table.R (ρ.apply (table.value [kv,kv,kv])) t ↔ _
+    rw [FreshXor.Flat.Table.subst_value]
+    change NormalForm table.R (table.value [ρ.image k,ρ.image k,ρ.image k]) t ↔ _
+    apply table.normalForm_iff (ys := [ρ.image k]) (xs := [ρ.image k])
+    · simp_all
+    · simp_all
+    · simp
+    · intro t; by_cases e : ρ.image k = t <;> simp [e]
+  · change NormalForm table.R (ρ.apply (table.value [kv,kv,kv,kv])) t ↔ _
+    rw [FreshXor.Flat.Table.subst_value]
+    change NormalForm table.R (table.value [ρ.image k,ρ.image k,ρ.image k,ρ.image k]) t ↔ _
+    apply table.normalForm_iff (ys := []) (xs := [ρ.image k, ρ.image k])
+    · simp_all
+    · simp_all
+    · simp
+    · intro t; by_cases e : ρ.image k = t <;> simp [e]
+
+private theorem rows_exact : Exact table.R Subtype.val op [joined] := by
+  intro ρ hn values _
+  constructor
+  · intro forms
+    refine ⟨joined, List.mem_singleton_self _, ρ, hn, ?_, ?_⟩
+    · rintro ⟨v,hv⟩; obtain rfl := List.mem_singleton.mp hv; exact .refl _
+    · intro i; have eq := (op_form ρ hn i _).mp (forms i)
+      cases i
+      · exact eq
+      · change EquivB _ (ρ.apply table.zero)
+        rw [table.toTable.fixes_zero]; exact eq
+  · rintro ⟨_,mem,δ,_,fits⟩
+    obtain rfl := List.mem_singleton.mp mem
+    have image : EquivB (ρ.image k) (δ.image k) := fits.inputs ⟨k,List.mem_singleton_self _⟩
+    intro i; apply (op_form ρ hn i _).mpr
+    cases i
+    · exact (fits.values false).trans image.symm
+    · change EquivB _ zero
+      have eq : EquivB (values true) (δ.apply table.zero) := fits.values true
+      rw [table.toTable.fixes_zero] at eq; exact eq
+
+example :
+    let slots : List (Sum Bool PTerm) := [.inl false, .inl true, .inl false]
+    ∃ answers, CompleteVariants table.R (slots.map (packedInput op)) answers ∧
+      ∀ a ∈ answers, a.Reconstructible table.R (slots.map (packedInput op)) := by
+  intro slots
+  have typed : ∀ r ∈ [joined], r.Sorted := by
+    intro _ hm; obtain rfl := List.mem_singleton.mp hm
+    rintro ⟨v,hv⟩; obtain rfl := List.mem_singleton.mp hv; exact .var _
+  have normal : ∀ r ∈ [joined], r.IsNormal table.R := by
+    intro _ hm; obtain rfl := List.mem_singleton.mp hm
+    have vars := (ConstructorVariants.constructor_normal rules apps).1
+    exact ⟨fun _ => vars k, fun i => by cases i; exact vars k; exact zeroNormal⟩
+  refine ⟨_, joinedFlatXorVariants_packed table op admitted [joined] [joined] rows_exact
+    (fun _ hm => hm) (fun _ => 0) (fun _ h nh => (nh h).elim) typed normal slots
+    (fun i => by cases i <;> simp [slots]) ?_ id ?_⟩
+  · intro v h
+    obtain ⟨_,hm,hv⟩ := h
+    simp only [slots,List.map_cons,List.map_nil,List.mem_cons,List.not_mem_nil,or_false] at hm
+    rcases hm with rfl | rfl | rfl <;>
+      simpa [packedInput, op, FreshXor.Flat.Table.value, ACRepresentation.fold, Term.Occurs] using hv
+  · intro t h; simp [slots] at h
 
 end Tamarin.XorSpecAudit

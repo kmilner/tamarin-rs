@@ -2024,8 +2024,18 @@ fn fresh_xor_variants_share_a_fresh_witness_and_require_the_exact_live_rules() {
         vec![vec![]]
     );
     let h = new(sig);
-    assert!(h.variants(&xor(huge, var(y))).is_err());
-    assert!(h.check_backend_status().is_err());
+    let low = var(LVar::new("x", LSort::Fresh, 0));
+    let application = xor(huge.clone(), low.clone());
+    let [identity, diagonal]: [_; 2] = h.variants(&application).unwrap().try_into().unwrap();
+    assert!(identity.is_empty());
+    let [(left, first), (right, second)]: [_; 2] = diagonal.try_into().unwrap();
+    assert_eq!(xor(var(left), var(right)), application);
+    assert_eq!(first, second);
+    assert!(
+        matches!(first, Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh && v.idx != 0 && v.idx != u64::MAX)
+    );
+    assert_eq!(h.reduce(&xor(huge.clone(), huge)).unwrap(), zero_const());
+    h.check_backend_status().unwrap();
 }
 
 #[test]

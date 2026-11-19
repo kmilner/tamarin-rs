@@ -49,6 +49,7 @@ import Tamarin.SortClashCandidateProofs
 import Tamarin.CommutativeLinear
 import Tamarin.XorCandidateProofs
 import Tamarin.XorFlatScope
+import Tamarin.XorFlatPacked
 import Tamarin.AtomicACPair
 import Tamarin.ACRowElimination
 import Tamarin.VariantReconstruction

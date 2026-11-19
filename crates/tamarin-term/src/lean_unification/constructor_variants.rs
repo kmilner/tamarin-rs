@@ -349,10 +349,8 @@ impl RuleTable {
                 // The diagonal is already the identity on the single operand.
                 answers.push(vec![]);
             } else {
-                let idx = x
-                    .idx
-                    .max(y.idx)
-                    .checked_add(1)
+                let idx = flat_xor::witness_indices(x.idx.max(y.idx), |i| i == x.idx || i == y.idx)
+                    .next()
                     .ok_or(Error::FreshVariableOverflow)?;
                 let image = Term::Lit(Lit::Var(LVar::new("x", LSort::Fresh, idx)));
                 answers.push(vec![(x, image.clone()), (y, image)]);

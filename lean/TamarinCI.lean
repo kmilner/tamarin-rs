@@ -575,6 +575,25 @@ theorem joinedXorVariants_packed {sig : Signature} {A : Type} {keys : List Varia
   exactRows.packedRepresentatives (ConstructorVariants.constructor_normal T.rules T.apps).1
     typed normal slots used scope n stable fun ρ hn a _ _ => (admit a).unique ρ hn
 
+open Rewriting Rewriting.VariantJoin in
+/-- Packed flat XOR operations may have any arity ≥ 2, repeat variables across
+operations and share stable observers. Pruning can discard an intermediate
+row only when a more general row covers its inputs and every output. -/
+theorem joinedFlatXorVariants_packed {sig : Signature} {A : Type} {keys : List Variable}
+    (T : FreshXor.Flat.Table sig) (op : A → Term sig) (admit : ∀ a, FreshXor.Flat.Observation T (op a))
+    (rows kept : List (Row sig (Key keys) A)) (exactRows : Exact T.R Subtype.val op rows)
+    (subset : ∀ r ∈ kept, r ∈ rows) (measure : Row sig (Key keys) A → Nat)
+    (removed : ∀ r ∈ rows, r ∉ kept → ∃ p ∈ rows, measure p < measure r ∧ p.Subsumes r)
+    (typed : ∀ r ∈ kept, r.Sorted) (normal : ∀ r ∈ kept, r.IsNormal T.R)
+    (slots : List (Sum A (Term sig))) (used : ∀ a, .inl a ∈ slots)
+    (scope : ∀ v, Observed (slots.map (packedInput op)) v → v ∈ keys)
+    (n : Term sig → Term sig) (stable : ∀ t, .inr t ∈ slots → StableVariants.Representative T.R t (n t)) :
+    CompleteVariants T.R (slots.map (packedInput op)) (packRows kept typed slots n) ∧
+      ∀ answer ∈ packRows kept typed slots n, answer.Reconstructible T.R (slots.map (packedInput op)) := by
+  have vars := (ConstructorVariants.constructor_normal T.rules T.apps).1
+  exact (exactRows.prunedByRank vars subset measure removed).packedRepresentatives vars
+    typed normal slots used scope n stable fun ρ hn a _ _ => (admit a).unique ρ hn
+
 theorem exportedXorReduction_semantic {sig : Signature} (T : Rewriting.FreshXor.Table sig)
     {a b : Term sig} (ha : HasSort a .fresh) (hb : HasSort b .fresh)
     (na : Rewriting.Normal T.R a) (nb : Rewriting.Normal T.R b)
