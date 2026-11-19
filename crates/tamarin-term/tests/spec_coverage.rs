@@ -8,15 +8,17 @@ use std::path::Path;
 use std::process::Command;
 use tamarin_term::algebra_backend::AlgebraBackend;
 use tamarin_term::builtin::{
-    dh_neutral, exp, fresh_var, fst, hash, inv, msg_var, one_const, pair, snd, zero_const,
+    bp_rules, dh_neutral, emap, exp, fresh_var, fst, hash, inv, msg_var, one_const, pair, pmult,
+    snd, zero_const,
 };
 use tamarin_term::function_symbols::{
     AcFctSym, AcSym, Constructability, NdcState, NoEqSym, Privacy,
 };
-use tamarin_term::lterm::{frees, pub_term, LNTerm, LVar, Name};
+use tamarin_term::lterm::{frees, pub_term, HasFrees, LNTerm, LVar, Name};
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
 use tamarin_term::maude_sig::{
-    dh_maude_sig, hash_maude_sig, mset_maude_sig, pair_maude_sig, xor_maude_sig, MaudeSig,
+    bp_maude_sig, dh_maude_sig, hash_maude_sig, mset_maude_sig, pair_maude_sig, xor_maude_sig,
+    MaudeSig,
 };
 use tamarin_term::rewriting::{Equal, RRule};
 use tamarin_term::subst::{apply_vterm, Subst};
@@ -97,9 +99,14 @@ fn term(text: &str, symbol: AcSym) -> LNTerm {
             "one" => one_const(),
             "neutral" => dh_neutral(),
             "inv" => inv(stack.pop().unwrap()),
-            "pow" => {
-                let exponent = stack.pop().unwrap();
-                exp(stack.pop().unwrap(), exponent)
+            "pow" | "pmult" | "emap" => {
+                let right = stack.pop().unwrap();
+                let left = stack.pop().unwrap();
+                match token {
+                    "pow" => exp(left, right),
+                    "pmult" => pmult(left, right),
+                    _ => emap(left, right),
+                }
             }
             "h" => hash(stack.pop().unwrap()),
             "l" => fst(stack.pop().unwrap()),
@@ -137,7 +144,97 @@ fn covers_identity(query: &LNTerm, subst: &Subst<Name, LVar>) -> bool {
     })
 }
 
-fn exercise(h: &MaudeHandle, op: &str, expected: &str, ts: &[LNTerm]) -> Result<(), MaudeError> {
+type Answers = Vec<Vec<(LVar, LNTerm)>>;
+
+// Column order fixes caller identity. Use one witness renaming across every
+// input image and observed value, including both sides of a commutative head.
+fn canonical_row(columns: &[LNTerm]) -> LNTerm {
+    let row = f_app_list(columns.to_vec());
+    // Only witnesses with identical sort and occurrence counts in every
+    // column can exchange canonical positions. This also handles repeated
+    // variables in a single commutative subterm.
+    let fingerprint = |v: &LVar| {
+        let counts: Vec<_> = columns
+            .iter()
+            .map(|t| {
+                let mut count = 0usize;
+                t.for_each_free(&mut |w| count += usize::from(w == v));
+                count
+            })
+            .collect();
+        (v.sort, counts)
+    };
+    let mut names = frees(&row);
+    names.sort_by_cached_key(&fingerprint);
+    let classes: Vec<_> = names.iter().map(fingerprint).collect();
+    fn visit(
+        row: &LNTerm,
+        names: &mut [LVar],
+        ends: &[usize],
+        pos: usize,
+        best: &mut Option<LNTerm>,
+    ) {
+        if pos == names.len() {
+            let value = row.clone().map_free(&mut |v| {
+                LVar::new(
+                    "w",
+                    v.sort,
+                    names.iter().position(|w| *w == v).unwrap() as u64,
+                )
+            });
+            if best.as_ref().is_none_or(|current| value < *current) {
+                *best = Some(value);
+            }
+        } else {
+            for i in pos..ends[pos] {
+                names.swap(i, pos);
+                visit(row, names, ends, pos + 1, best);
+                names.swap(i, pos);
+            }
+        }
+    }
+    let ends = (0..classes.len())
+        .map(|i| classes.partition_point(|c| c <= &classes[i]))
+        .collect::<Vec<_>>();
+    let mut best = None;
+    visit(&row, &mut names, &ends, 0, &mut best);
+    best.unwrap()
+}
+
+fn valued_rows(h: &MaudeHandle, op: &str, ts: &[LNTerm], arms: Answers) -> Vec<LNTerm> {
+    let keys = frees(&f_app_list(ts.to_vec()));
+    let mut rows: Vec<_> = arms
+        .into_iter()
+        .map(|arm| {
+            let subst = Subst::from_list(arm);
+            let mut columns: Vec<_> = keys
+                .iter()
+                .map(|key| {
+                    let image = apply_vterm(&subst, Term::Lit(Lit::Var(*key)));
+                    if op == "variants" {
+                        assert_eq!(h.reduce(&image).unwrap(), image, "reducible image of {key}");
+                    }
+                    image
+                })
+                .collect();
+            if op == "variants" {
+                for t in ts {
+                    columns.push(h.reduce(&apply_vterm(&subst, t.clone())).unwrap());
+                }
+            }
+            canonical_row(&columns)
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+fn exercise(
+    h: &MaudeHandle,
+    op: &str,
+    expected: &str,
+    ts: &[LNTerm],
+) -> Result<Answers, MaudeError> {
     match (op, ts) {
         ("reduce", [t, nf]) if expected == "exact" => {
             assert_eq!(&h.reduce(t)?, nf, "{t}");
@@ -172,8 +269,8 @@ fn exercise(h: &MaudeHandle, op: &str, expected: &str, ts: &[LNTerm]) -> Result<
             );
             match expected {
                 "identity" => assert!(
-                    arms.into_iter()
-                        .any(|a| covers_identity(&q, &Subst::from_list(a))),
+                    arms.iter()
+                        .any(|a| covers_identity(&q, &Subst::from_list(a.iter().cloned()))),
                     "{q:?}"
                 ),
                 count if count.starts_with("rows=") => {
@@ -182,6 +279,7 @@ fn exercise(h: &MaudeHandle, op: &str, expected: &str, ts: &[LNTerm]) -> Result<
                 "complete" | "probe" => {}
                 _ => panic!("invalid variant expectation {expected}"),
             }
+            return Ok(arms);
         }
         ("unify" | "match", terms) => {
             let (pairs, tail) = terms.as_chunks::<2>();
@@ -216,12 +314,40 @@ fn exercise(h: &MaudeHandle, op: &str, expected: &str, ts: &[LNTerm]) -> Result<
             match expected {
                 "yes" | "no" => assert_eq!(!arms.is_empty(), expected == "yes", "{op} {eqs:?}"),
                 "probe" => {}
+                count if count.starts_with("rows=") => {
+                    // These exact-count cases have ground subjects, so distinct
+                    // satisfying tuples of caller images are distinct solutions.
+                    let keys = frees(&f_app_list(terms.to_vec()));
+                    let mut distinct = BTreeSet::new();
+                    for arm in &arms {
+                        let subst = Subst::from_list(arm.iter().cloned());
+                        for [pattern, subject] in pairs {
+                            assert!(frees(subject).is_empty());
+                            assert_eq!(
+                                apply_vterm(&subst, pattern.clone()),
+                                *subject,
+                                "{op} {eqs:?}"
+                            );
+                        }
+                        let images: Vec<_> = keys
+                            .iter()
+                            .map(|key| apply_vterm(&subst, Term::Lit(Lit::Var(*key))))
+                            .collect();
+                        assert!(distinct.insert(images), "duplicate {op} answer for {eqs:?}");
+                    }
+                    assert_eq!(
+                        arms.len(),
+                        count[5..].parse::<usize>().unwrap(),
+                        "{op} {eqs:?}"
+                    );
+                }
                 _ => panic!("invalid equation expectation {expected}"),
             }
+            return Ok(arms);
         }
         _ => panic!("invalid request for {op}: {ts:?}"),
     }
-    Ok(())
+    Ok(vec![])
 }
 
 #[derive(Default)]
@@ -236,13 +362,30 @@ struct Coverage<'a> {
 fn public_backend_meets_generated_coverage_floor() {
     let cases = generated_requests();
     let mut report = BTreeMap::new();
+    let bp = bp_maude_sig().merge(hash_maude_sig());
+    let rules: BTreeSet<_> = cases
+        .lines()
+        .filter_map(|line| line.strip_prefix("bp\trule\toriented\t"))
+        .map(|sides| {
+            let (lhs, rhs) = sides.split_once('\t').unwrap();
+            let schema =
+                |text| term(text, AcSym::Mult).map_free(&mut |v| LVar::new("x", v.sort, v.idx));
+            RRule::new(schema(lhs), schema(rhs))
+        })
+        .collect();
+    assert_eq!(
+        rules,
+        bp_rules(),
+        "generated pairing schemas must track Tamarin's rule table"
+    );
+    assert!(rules.is_subset(&bp.rrules()));
     let dh = dh_maude_sig().merge(hash_maude_sig());
     let plain = mset_maude_sig().merge(hash_maude_sig());
     let cancellation = xor_maude_sig().merge(hash_maude_sig());
     let mixed = cancellation.clone().merge(pair_maude_sig());
     let (markers, merge) = marker_presentation(&cases);
     let oracles = tamarin_test_support::configured_maude_path().map(|path| {
-        [("markers", &markers), ("dh", &dh)]
+        [("markers", &markers), ("dh", &dh), ("bp", &bp)]
             .map(|(name, sig)| {
                 let handle =
                     MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude)
@@ -253,6 +396,7 @@ fn public_backend_meets_generated_coverage_floor() {
             .collect::<BTreeMap<_, _>>()
     });
     let presentation = |name: &str| match name {
+        "bp" => (&bp, AcSym::Mult),
         "dh" => (&dh, AcSym::Mult),
         "ac" => (&plain, AcSym::Union),
         "xor" => (&cancellation, AcSym::Xor),
@@ -265,18 +409,25 @@ fn public_backend_meets_generated_coverage_floor() {
         let theory = fields.next().unwrap();
         let op = fields.next().unwrap();
         let expected = fields.next().unwrap();
-        if (theory, op, expected) == ("markers", "rule", "oriented") {
+        if matches!(
+            (theory, op, expected),
+            ("markers" | "bp", "rule", "oriented")
+        ) {
             continue;
         }
         let (sig, symbol) = presentation(theory);
         let ts: Vec<_> = fields.map(|e| term(e, symbol)).collect();
-        let exploratory = expected == "probe" || expected.starts_with("probe-rows=");
+        let exploratory = expected == "probe" || expected.starts_with("probe-");
         let check = expected.strip_prefix("probe-").unwrap_or(expected);
-        if ((op, check) == ("reduce", "exact") || (theory, op) == ("dh", "variants"))
-            && let Some(oracle) = oracles.as_ref().and_then(|handles| handles.get(theory))
-        {
-            exercise(oracle, op, check, &ts).expect(line);
-        }
+        let reference = oracles
+            .as_ref()
+            .and_then(|handles| handles.get(theory))
+            .filter(|_| {
+                (op, check) == ("reduce", "exact")
+                    || (theory, op) == ("dh", "variants")
+                    || theory == "bp"
+            })
+            .map(|oracle| (oracle, exercise(oracle, op, check, &ts).expect(line)));
         let h = MaudeHandle::start_with_backend(
             "/nonexistent",
             sig.clone(),
@@ -285,7 +436,17 @@ fn public_backend_meets_generated_coverage_floor() {
         .unwrap();
         let coverage = report.entry((theory, op)).or_insert_with(Coverage::default);
         match exercise(&h, op, check, &ts) {
-            Ok(()) => {
+            Ok(arms) => {
+                if theory == "bp"
+                    && op != "reduce"
+                    && let Some((oracle, oracle_arms)) = reference
+                {
+                    assert_eq!(
+                        valued_rows(&h, op, &ts, arms),
+                        valued_rows(oracle, op, &ts, oracle_arms),
+                        "{line}"
+                    );
+                }
                 h.check_backend_status().unwrap();
                 if exploratory {
                     coverage.extra += 1
@@ -304,7 +465,7 @@ fn public_backend_meets_generated_coverage_floor() {
             Err(err) => panic!("{line}: {err}"),
         }
     }
-    assert_eq!(report.len(), 16);
+    assert_eq!(report.len(), 20);
     for ((theory, op), c) in report {
         assert!(c.required > 0, "missing guaranteed {theory} {op} cases");
         println!(
@@ -328,7 +489,14 @@ fn public_backend_meets_generated_coverage_floor() {
                 let oracle =
                     MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude)
                         .unwrap();
-                exercise(&oracle, op, "probe", &ts).expect(witness);
+                let expected = witness.split('\t').nth(2).unwrap();
+                exercise(
+                    &oracle,
+                    op,
+                    expected.strip_prefix("probe-").unwrap_or(expected),
+                    &ts,
+                )
+                .expect(witness);
                 println!("  Maude completed this request");
             }
         }

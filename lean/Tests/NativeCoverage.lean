@@ -10,18 +10,18 @@ The public Rust adapter consumes this test format. -/
 namespace Tamarin.NativeCoverage
 open Rewriting ConstructorVariants
 
-inductive Symbol where | hash | zero | pair | fst | snd | red | blue
+inductive Symbol where | hash | zero | pair | fst | snd | red | blue | pmult | pow | one
   deriving DecidableEq
 
 abbrev sig : Signature where
   FreeSym := Symbol
-  CSym := Empty
+  CSym := Unit
   ACSym := Unit
   Atom := Bool
-  arity := fun | .hash | .fst | .snd => 1 | .zero | .red | .blue => 0 | .pair => 2
+  arity := fun | .hash | .fst | .snd => 1 | .zero | .red | .blue | .one => 0 | .pair | .pmult | .pow => 2
   inputSort := fun _ _ => .msg
   outputSort := fun _ => .msg
-  cSort := Empty.elim
+  cSort := fun _ => .msg
   acSort := fun _ => .msg
   atomSort := fun _ => .pub
 
@@ -131,7 +131,10 @@ def code : Expr → String
   | .free .fst args => code (args 0) ++ ".l"
   | .free .snd args => code (args 0) ++ ".r"
   | .free .pair args => code (args 0) ++ "." ++ code (args 1) ++ ".p"
-  | .comm f _ _ => nomatch f
+  | .free .one _ => "one"
+  | .free .pmult args => code (args 0) ++ "." ++ code (args 1) ++ ".pmult"
+  | .free .pow args => code (args 0) ++ "." ++ code (args 1) ++ ".pow"
+  | .comm _ l r => code l ++ "." ++ code r ++ ".emap"
   | .ac _ l r => code l ++ "." ++ code r ++ ".+"
 
 /-- Index by number of syntax nodes, so small witnesses are explored even
@@ -249,13 +252,67 @@ def dhCoverage : IO Unit := do
   emitDH "variants" "rows=14" [tower,.pow (.pow g m) (.var (.atom true))]
   for t in [DHPeer.Expr.pow m n, .pow (.pow g m) n, .pow g (.mul m n)] do
     emitDH "variants" "rows=48" [t,m]
-  emitDH "variants" "probe-rows=160" [.pow (.pow n m) r,m]
+  emitDH "variants" "rows=160" [.pow (.pow n m) r,m]
   for t in [DHPeer.Expr.pow g r,.inv r,.mul r r] do
     for op in ["unify","match"] do
       emitDH op "yes" [m,t,m,t]
       emitDH op "no" [m,t,m,.neutral]
 
+/-- Pairing extends the DH product with a positional scalar action and a
+commutative pairing. Exercise the three oriented schemas, their overlaps,
+and the ordinary B operations independently of variant narrowing. -/
+def bpCoverage : IO Unit := do
+  let p (a b : Expr) : Expr := .free .pmult (fun i => if i.val = 0 then a else b)
+  let e (a b : Expr) : Expr := .comm () a b
+  let pow (a b : Expr) : Expr := .free .pow (fun i => if i.val = 0 then a else b)
+  let one : Expr := .free .one Fin.elim0
+  let emitBP (op expected : String) (ts : List Expr) : IO Unit := do
+    unless ts.all (fun t => t.checkSort .msg) do throw (IO.userError "ill-sorted pairing case")
+    IO.println (String.intercalate "\t" (["bp",op,expected] ++ ts.map code))
+  let a : Expr := .atom false
+  let b : Expr := .atom true
+  let r : Expr := .var ⟨0,.fresh⟩
+  let s : Expr := .var ⟨1,.fresh⟩
+  let u : Expr := .var ⟨1,.msg⟩
+  let v : Expr := .var ⟨2,.msg⟩
+  let w : Expr := .var ⟨3,.msg⟩
+  for (lhs,rhs) in [(p one u,u), (p w (p v u),p (plus w v) u),
+      (e u (p v w),pow (e u w) v)] do
+    emitBP "rule" "oriented" [lhs,rhs]
+    emitBP "reduce" "exact" [lhs,rhs]
+  for (lhs,rhs) in [(p one a,a), (p r (p s a),p (plus s r) a),
+      (e a (p r b),pow (e a b) r), (e (p r b) a,pow (e a b) r),
+      (e (p r a) (p s b),pow (e a b) (plus r s)),
+      (e (p r a) (p r b),pow (e a b) (plus r r)),
+      (e (p r (p s a)) b,pow (e a b) (plus r s)), (e b a,e a b)] do
+    emitBP "reduce" "exact" [lhs,rhs]
+  for op in ["unify","match"] do
+    for subject in [e a b,e b a] do
+      emitBP op "rows=2" [e x y,subject]
+      emitBP op "rows=1" [e x y,subject,x,a]
+      emitBP op "rows=0" [e x y,subject,x,a,y,a]
+      emitBP op "rows=0" [e x x,subject]
+    emitBP op "rows=1" [e x x,e a a]
+    emitBP op "rows=1" [p x y,p a b]
+    emitBP op "rows=0" [p a b,p b a]
+  -- Cross the three operand classes at both argument positions. Using the
+  -- same message on the diagonal preserves its correlation through narrowing.
+  for (l,openL) in [(a,false),(r,false),(x,true)] do
+    for (t,openR) in [(a,false),(r,false),(x,true)] do
+      let actionRows := match openL, openR with
+        | false, false => 1 | true, false => 2 | false, true => 6 | true, true => 3
+      let pairingRows := match openL, openR with
+        | false, false => 1 | true, true => 4 | _, _ => 2
+      emitBP "variants" ("rows=" ++ toString actionRows) [p l t,l,t]
+      emitBP "variants" ("rows=" ++ toString pairingRows) [e l t,l,t]
+  for (slots,count) in [([e a b,x],1), ([e r s,r],1), ([e (p r x) a,p r x,x],6),
+      ([e x a,e x b,x],2), ([p one x,x],1)] do
+    emitBP "variants" ("rows=" ++ toString count) slots
+  for (slots,count) in [([e x y,x,y],48), ([p x y,x,y],47)] do
+    emitBP "variants" ("probe-rows=" ++ toString count) slots
+
 def generate : IO Unit := do
+  bpCoverage
   markerCoverage
   dhCoverage
   for th in [Theory.ac,.xor] do
