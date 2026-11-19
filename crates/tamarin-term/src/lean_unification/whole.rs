@@ -138,6 +138,15 @@ unsafe extern "C" {
         count: usize,
         roots: WordSlice,
     ) -> ProjectedAnswers;
+    fn tamarin_lean_graph_ac_feasible(
+        width: u64,
+        symbol: u64,
+        sort: u64,
+        declarations: WordSlice,
+        rows: *const WordSlice,
+        count: usize,
+        roots: WordSlice,
+    ) -> u8;
     fn tamarin_lean_whole_unify(
         declarations: WordSlice,
         rows: *const WordSlice,
@@ -194,6 +203,70 @@ fn select_rows(eqs: &[Equal<LNTerm>], roots: &[u64]) -> Result<Option<Vec<Equal<
 }
 
 impl RuleTable {
+    /// Skip rule-table initialization and graph construction for ordinary mixed
+    /// terms. Nested occurrences of the same AC symbol are valid raw input.
+    pub(crate) fn may_be_homogeneous(eqs: &[Equal<LNTerm>]) -> bool {
+        if eqs.len() > 64 {
+            return false;
+        }
+        let roots = || eqs.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]);
+        let Some(symbol) = roots().find_map(|t| match t {
+            Term::App(FunSym::Ac(symbol), _) => Some(*symbol),
+            _ => None,
+        }) else {
+            return false;
+        };
+        let sort = ac_sort(symbol);
+        let applicable = |t: &LNTerm| match t {
+            Term::Lit(Lit::Var(v)) => v.sort == sort,
+            Term::App(FunSym::Ac(f), _) => *f == symbol,
+            _ => false,
+        };
+        roots().all(|root| {
+            applicable(root)
+                && match root {
+                    Term::App(_, args) => args.len() <= MAX_NODES && args.iter().all(applicable),
+                    Term::Lit(_) => true,
+                }
+        })
+    }
+
+    pub(crate) fn ac_feasible(&self, eqs: &[Equal<LNTerm>]) -> Result<Option<bool>, Error> {
+        let Some(packet) = Packet::encode(self, eqs)? else {
+            return Ok(None);
+        };
+        let Some((symbol, width)) = packet.matrix_shape() else {
+            return Ok(None);
+        };
+        if !(1..=32).contains(&width) {
+            return Ok(None);
+        }
+        let symbol_id = packet
+            .symbols
+            .id(FunSym::Ac(symbol))
+            .ok_or(Error::InvalidStatus(255))?;
+        initialize()?;
+        let rows = packet.rows();
+        // SAFETY: the shim copies all borrowed rows and roots before returning its tag.
+        let status = LEAN_THREAD.with(|_| unsafe {
+            tamarin_lean_graph_ac_feasible(
+                width as u64,
+                symbol_id,
+                sort_word(ac_sort(symbol)),
+                WordSlice::new(&packet.declarations),
+                rows.as_ptr(),
+                rows.len(),
+                WordSlice::new(&packet.equations),
+            )
+        });
+        match status {
+            0 => Ok(None),
+            1 => Ok(Some(false)),
+            2 => Ok(Some(true)),
+            status => Err(Error::InvalidStatus(status)),
+        }
+    }
+
     /// Collect the scope before removing reflexive and repeated equations.
     /// Their variables remain reserved and visible in every projected answer.
     pub(super) fn ac_operand_query<'a>(

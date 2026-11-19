@@ -409,6 +409,16 @@ extern lean_object *tamarin_graph_homogeneous_unify(uint64_t width, uint64_t sym
                                                      lean_object *decls, lean_object *nodes,
                                                      lean_object *equations);
 
+extern uint8_t tamarin_graph_ac_feasible(uint64_t width, uint64_t symbol, uint64_t sort,
+                                         lean_object *decls, lean_object *nodes, lean_object *equations);
+
+uint8_t tamarin_lean_graph_ac_feasible(uint64_t width, uint64_t symbol, uint64_t sort,
+                                       whole_word_slice decls, const whole_word_slice *rows,
+                                       size_t count, whole_word_slice equations) {
+    return tamarin_graph_ac_feasible(width, symbol, sort, atom_array(decls.data, decls.size),
+        word_rows(rows, count), atom_array(equations.data, equations.size));
+}
+
 projected_answers tamarin_lean_graph_homogeneous_unify(uint64_t width, uint64_t symbol, uint64_t sort,
                                                        whole_word_slice decls, const whole_word_slice *rows,
                                                        size_t count, whole_word_slice equations) {

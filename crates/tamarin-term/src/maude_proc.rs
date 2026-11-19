@@ -254,7 +254,7 @@ fn free_match_children(
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MaudeStats {
     pub unify_count: u64,
-    /// Residual equation batches completed by the in-process Lean backend.
+    /// Unification or unifiability batches completed by the in-process Lean backend.
     pub lean_unify_count: u64,
     pub match_count: u64,
     pub norm_count: u64,
@@ -1236,6 +1236,19 @@ impl MaudeHandle {
                 return Ok(hit);
             }
         }
+        #[cfg(feature = "lean-unification")]
+        let answer = if self.backend != AlgebraBackend::Maude
+            && !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
+            && crate::lean_unification::RuleTable::may_be_homogeneous(eqs)
+            && let Some(table) = self.native_rules()
+            && let Some(answer) = table.ac_feasible(eqs).map_err(|e| self.lean_error(e))?
+        {
+            cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+            answer
+        } else {
+            !self.unify_for(eqs, false)?.is_empty()
+        };
+        #[cfg(not(feature = "lean-unification"))]
         let answer = !self.unify_for(eqs, false)?.is_empty();
         #[cfg(feature = "lean-unification")]
         if self.backend == AlgebraBackend::Hybrid
@@ -1315,6 +1328,22 @@ impl MaudeHandle {
         self.unify_backend(eqs, false, true)
     }
 
+    #[cfg(feature = "lean-unification")]
+    fn lean_error(&self, error: crate::lean_unification::Error) -> MaudeError {
+        if error == crate::lean_unification::Error::Cancelled {
+            MaudeError::Cancelled
+        } else if self.backend == AlgebraBackend::NativeOnly {
+            self.inner
+                .lock()
+                .caches
+                .native_failure
+                .get_or_init(|| NativeFailure::Runtime(error.to_string()))
+                .error()
+        } else {
+            MaudeError::Other(error.to_string())
+        }
+    }
+
     fn unify_backend(
         &self,
         eqs: &[Equal<LNTerm>],
@@ -1325,20 +1354,7 @@ impl MaudeHandle {
         #[cfg(not(feature = "lean-unification"))]
         let _ = (use_lean, ordered);
         #[cfg(feature = "lean-unification")]
-        let lean_error = |error: crate::lean_unification::Error| {
-            if error == crate::lean_unification::Error::Cancelled {
-                MaudeError::Cancelled
-            } else if self.backend == AlgebraBackend::NativeOnly {
-                self.inner
-                    .lock()
-                    .caches
-                    .native_failure
-                    .get_or_init(|| NativeFailure::Runtime(error.to_string()))
-                    .error()
-            } else {
-                MaudeError::Other(error.to_string())
-            }
-        };
+        let lean_error = |error| self.lean_error(error);
         #[cfg(feature = "lean-unification")]
         if use_lean && self.backend == AlgebraBackend::NativeOnly {
             cancellation::check()?;
@@ -2889,3 +2905,7 @@ mod tests;
 #[cfg(all(test, feature = "lean-unification"))]
 #[path = "lean_unification_integration_tests.rs"]
 mod lean_integration_tests;
+
+#[cfg(all(test, feature = "lean-unification"))]
+#[path = "lean_ac_feasibility_tests.rs"]
+mod ac_feasibility_tests;
