@@ -60,9 +60,9 @@ def constructorOnly (th : Theory) (t : Expr) : Bool :=
 normal value, including when their active AC root rewrites. -/
 def identitySlot (th : Theory) (t : Expr) := t.variables.isEmpty || constructorOnly th t
 
-/-- Every expression emitted in this bounded grammar lies in the stable,
-inert-constructor and single-cancellation fragment. Require completion on
-these concrete requests, including when one variable appears at two depths. -/
+/-- The plain AC and XOR grammars require a completed family on every
+generated observation. Ground and constructor-only slots must additionally
+admit the identity on the original variables. -/
 def variantExpectation (th : Theory) (ts : List Expr) : String :=
   if ts.all (identitySlot th) then "identity" else "complete"
 

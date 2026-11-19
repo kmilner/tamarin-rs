@@ -1,5 +1,6 @@
 //! Joint observations of an unconstrained exponent and its product with
-//! one positive factor. All varying observations must use the same pair.
+//! one positive factor. Each invocation covers one such pair. The general
+//! tuple solver can join several invocations on their shared inputs.
 //! An opaque power base can never specialize to another power or DH-neutral.
 use super::{dh_peer::free_exponent_rows, RuleTable};
 use crate::function_symbols::{dh_neutral_sym, exp_sym, AcSym, FunSym};
