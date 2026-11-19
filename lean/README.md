@@ -168,7 +168,7 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
-| Reduction | Pair projections, selected constructor rules, flat products of normal message factors under a validated AC unit and cancellation presentation, DH power towers and signed exponent products. For binary AC roots, native-only can match active equations and instantiate the RHS when every match yields the same normal value. | Extend positive rewriting to proper AC subproducts and multi-step results. |
+| Reduction | Pair projections, selected constructor rules, AC unit and cancellation, DH power towers and signed exponent products. Native-only lifts supported reductions through any declared free symbol absent from the active rule heads. At binary AC roots it can instantiate the RHS when every match yields the same normal value. | Extend positive rewriting to proper AC subproducts and multi-step results at active heads. |
 | Variants | Native-only joins positional destructors, flat XORs of Fresh variables and received-base DH powers on shared inputs. Under a validated AC unit and cancellation presentation it also handles two independent Msg variables, or two distinct Fresh variables and a Msg variable. Any declared AC operator can admit an identity variant when sorted substitution excludes all its active rules. | Extend certified narrowing to nested active AC terms and arbitrary active equations. Extend DH to unrestricted exponents. Establish ordering compatibility for joined answers in hybrid mode. |
 
 Run the generated coverage test from the repository root.
@@ -182,7 +182,10 @@ free hash and XOR with the same hash. The test exercises all four public operati
 including shared captures in conjunctions and packed variant observations. Lean marks
 mandatory cases from constructor normality, incompatible matching heads and ground AC
 multiset equality. CI fails if native-only defers one of those cases or returns an answer
-that contradicts the expectation. Exploratory cases can gain coverage freely. The report
+that contradicts the expectation. Every reduction in the bounded grammar must complete.
+The test checks that wrapping a term in hash wraps its normal form in the same hash.
+This follows from the [free constructor reduction theorem](Tamarin/ConstructorReduction.lean).
+Exploratory cases can gain coverage freely. The report
 prints the smallest generated deferral by syntax size for each theory and operation.
 Setting `MAUDE_PATH` also replays those witnesses against an independent Maude handle.
 The report counts syntactic requests in this bounded grammar. Protocol regressions

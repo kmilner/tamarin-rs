@@ -2041,6 +2041,72 @@ fn natural_kind_queries_preserve_variable_sorts_before_factoring() {
 }
 
 #[test]
+fn reduction_lifts_through_declared_free_constructors() {
+    use tamarin_term::builtin::{fst, hash, pair, xor, zero_const};
+    use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+    use tamarin_term::maude_sig::{hash_maude_sig, xor_maude_sig};
+    use tamarin_term::subterm_rule::{CtxtStRule, StRhs};
+    use tamarin_term::term::f_app_no_eq;
+
+    let wrap = NoEqSym::new(b"wrap", 3, Privacy::Public, Constructability::Constructor);
+    let mut sig = xor_maude_sig()
+        .merge(pair_maude_sig())
+        .merge(hash_maude_sig());
+    sig.st_fun_syms.insert(wrap);
+    let a = pub_term("a");
+    let x = variable("x");
+    let duplicate = xor(a.clone(), a.clone());
+    let projected = fst(pair(x.clone(), a.clone()));
+    let test = |h: &MaudeHandle| {
+        for (t, expected) in [
+            (hash(duplicate.clone()), hash(zero_const())),
+            (
+                f_app_no_eq(
+                    wrap,
+                    vec![a.clone(), hash(duplicate.clone()), hash(projected.clone())],
+                ),
+                f_app_no_eq(wrap, vec![a.clone(), hash(zero_const()), hash(x.clone())]),
+            ),
+        ] {
+            assert_eq!(h.reduce(&t).unwrap(), expected);
+        }
+    };
+    let native =
+        |s| MaudeHandle::start_with_backend(MISSING, s, AlgebraBackend::NativeOnly).unwrap();
+    let h = native(sig.clone());
+    test(&h);
+    assert_eq!(h.stats().norm_count, 0);
+    if let Ok(path) = std::env::var("MAUDE_PATH") {
+        let oracle =
+            MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
+        test(&oracle);
+        assert_eq!(oracle.stats().norm_count, 2);
+    }
+
+    // A formerly inert head can acquire a rule applicable after its child
+    // reduces. Rebuilding hash(zero) would report a reducible answer.
+    sig.st_rules.insert(CtxtStRule::new(
+        hash(zero_const()),
+        StRhs {
+            term: zero_const(),
+            positions: vec![vec![0]],
+        },
+    ));
+    let active = native(sig.refresh());
+    // The first sibling can complete. If the second defers, the whole
+    // request must defer, even though a prefix has already been rebuilt.
+    let packed = f_app_no_eq(wrap, vec![duplicate.clone(), hash(duplicate), a.clone()]);
+    match active.reduce(&packed) {
+        Ok(value) => assert_eq!(
+            value,
+            f_app_no_eq(wrap, vec![zero_const(), zero_const(), a])
+        ),
+        Err(MaudeError::UnsupportedOperation("normalization")) => {}
+        other => panic!("unexpected reduction result: {other:?}"),
+    }
+}
+
+#[test]
 fn fresh_xor_variants_share_a_fresh_witness_and_require_the_exact_live_rules() {
     use tamarin_term::builtin::{xor, zero_const};
     use tamarin_term::maude_sig::xor_maude_sig;

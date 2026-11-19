@@ -36,7 +36,7 @@ fn generated_requests() -> String {
     };
     run(&[
         "build",
-        "Tamarin.ConstructorVariants",
+        "Tamarin.ConstructorReduction",
         "Tamarin.MatchingFree",
         "Tamarin.SortCheck",
         "Tamarin.VariableElimination",
@@ -93,9 +93,19 @@ fn exercise(h: &MaudeHandle, op: &str, expected: &str, ts: &[LNTerm]) -> Result<
             let result = h.reduce(t)?;
             match expected {
                 "identity" => assert_eq!(&result, t),
+                "complete" => assert_eq!(h.reduce(&result).unwrap(), result, "{t}"),
                 "probe" => {}
                 _ => panic!("invalid reduction expectation {expected}"),
             }
+            // In both generated signatures hash is absent from every rule head.
+            // Each supported child must therefore also be supported under hash.
+            let wrapped = hash(t.clone());
+            assert_eq!(
+                h.reduce(&wrapped)
+                    .unwrap_or_else(|err| panic!("{wrapped}: {err}")),
+                hash(result),
+                "{wrapped}"
+            );
         }
         ("variants", [_, ..]) => {
             let q = f_app_list(ts.to_vec());

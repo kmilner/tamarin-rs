@@ -389,16 +389,51 @@ impl RuleTable {
     /// Use the same normalizer to reconstruct variant values and to decide
     /// whether a later binding made a previously normal observation reducible.
     pub(crate) fn reduce_native(&self, term: &LNTerm) -> Result<Option<LNTerm>, Error> {
+        if self
+            .collect(term, &mut Vec::new(), InputDomain::Sorted)
+            .is_none()
+        {
+            return Ok(None);
+        }
+        self.reduce_native_sorted(term)
+    }
+
+    fn reduce_native_sorted(&self, term: &LNTerm) -> Result<Option<LNTerm>, Error> {
+        tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
+        if let Term::App(FunSym::NoEq(f), args) = term
+            && !self.patterns.contains_key(f)
+        {
+            // free_normalForm: every active free rule has a bucket, even when
+            // its pattern cannot be compiled. No root step is possible here.
+            let mut changed = None;
+            for (i, arg) in args.iter().enumerate() {
+                let Some(value) = self.reduce_native_sorted(arg)? else {
+                    return Ok(None);
+                };
+                if changed.is_some() || value != *arg {
+                    changed
+                        .get_or_insert_with(|| args[..i].to_vec())
+                        .push(value);
+                }
+            }
+            return Ok(Some(match changed {
+                Some(values) => crate::term::f_app_no_eq(*f, values),
+                None => term.clone(),
+            }));
+        }
+        if matches!(term, Term::Lit(_)) {
+            return Ok(Some(term.clone()));
+        }
         if let Some(normal) = self.fresh_xor_reduce(term)? {
             return Ok(Some(normal));
         }
         if let Some(normal) = self.cancellation_normal(term)? {
             return Ok(Some(normal));
         }
-        if let Some(normal) = self.reduce(term)? {
+        if let Some(normal) = self.reduce_sorted(term)? {
             return Ok(Some(normal));
         }
-        if self.irreducible_native(term)? {
+        if self.normal_tree(term, false, &mut Some(super::residual::Budget::new()))? {
             return Ok(Some(term.clone()));
         }
         self.ac_root_reduce(term)
@@ -411,6 +446,10 @@ impl RuleTable {
         {
             return Ok(None);
         }
+        self.reduce_sorted(term)
+    }
+
+    fn reduce_sorted(&self, term: &LNTerm) -> Result<Option<LNTerm>, Error> {
         if let Some(value) = self.dh_power_normal(term)? {
             return Ok(Some(value));
         }

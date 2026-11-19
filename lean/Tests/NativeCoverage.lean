@@ -1,4 +1,4 @@
-import Tamarin.ConstructorVariants
+import Tamarin.ConstructorReduction
 import Tamarin.MatchingFree
 import Tamarin.SortCheck
 import Tamarin.VariableElimination
@@ -92,6 +92,13 @@ theorem hash_equiv_iff (a b : Expr) : EquivB (hash a) (hash b) ↔ EquivB a b :=
     exact ((Matching.free_equiv_iff ..).mp h) 0
   · exact fun h => .free _ _ _ (fun _ => h)
 
+theorem hash_normalForm (th : Theory) {t u : Expr} (child : NormalForm (ruleRoot (rules th)) t u) :
+    NormalForm (ruleRoot (rules th)) (hash t) (hash u) := by
+  apply free_normalForm (rules th) _ .hash _ _ _ (fun _ => child)
+  · cases th <;> simp [rules, Application, plus]
+  · change ¬ List.Mem (Head.free (sig := sig) .hash) (ruleHeads (rules th))
+    cases th <;> intro h <;> repeat' cases ‹List.Mem _ _›
+
 def code : Expr → String
   | .var v => (if v.sort == .fresh then "f" else "m") ++ toString v.id
   | .atom b => if b then "b" else "a"
@@ -121,9 +128,9 @@ def generate : IO Unit := do
     for layer in terms do
       for t in layer do
         if !(t.checkSort .msg) then throw (IO.userError "ill-sorted coverage term")
-        let expected := if constructorOnly th t then "identity" else "probe"
-        emit th "reduce" expected [t]
-        emit th "variants" expected [t,t]
+        let ctor := constructorOnly th t
+        emit th "reduce" (if ctor then "identity" else "complete") [t]
+        emit th "variants" (if ctor then "identity" else "probe") [t,t]
     -- Joint node budget for an ordinary equation. Operands on the right
     -- of a matching request remain rigid, including their variables.
     for leftSize in [1:5] do
