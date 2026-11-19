@@ -29,10 +29,10 @@ def balancedBox : (n : Nat) → Vec n → Vec n → Vec n → Nat → Nat → Li
     let v := fun i => q i.succ
     if neutral u v && (0 < p 0 || 0 < q 0) then
       let heads := if 0 < p 0 then forcedHead (lim 0) (p 0) a b else forcedHead (lim 0) (q 0) b a
-      heads.flatMap fun h => (box n l).map (Fin.cases h)
+      heads.flatMap fun h => (box n l).map (prepend h)
     else
       (List.range (lim 0 + 1)).flatMap fun h =>
-        (balancedBox n l u v (a + p 0 * h) (b + q 0 * h)).map (Fin.cases h)
+        (balancedBox n l u v (a + p 0 * h) (b + q 0 * h)).map (prepend h)
 
 def Row.planeGenerators {n} (r : Row n) : List (Vec n) :=
   (balancedBox n r.limits r.pos r.neg 0 0).filter fun v => (List.ofFn v).any (0 < ·)

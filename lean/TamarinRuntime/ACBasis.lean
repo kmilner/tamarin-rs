@@ -40,11 +40,24 @@ def Row.limits {n} (r : Row n) : Vec n :=
   let active := if r.unitSide then cap else bound
   fun i => if r.pos i == 0 && r.neg i == 0 then 1 else active
 
+/-- Prepending a coordinate has the same pointwise semantics as finitary case analysis. -/
+abbrev prepend {n} (h : Nat) (v : Vec n) : Vec (n+1) := Fin.cases h v
+
+private def prependDirect {n} (h : Nat) (v : Vec n) : Vec (n+1)
+  | ⟨0,_⟩ => h
+  | ⟨j+1,lt⟩ => v ⟨j,Nat.lt_of_succ_lt_succ lt⟩
+
+/-- `Fin.cases` uses induction on the index. Direct case analysis evaluates
+just the requested coordinate of a nested coefficient vector. -/
+@[csimp] theorem prepend_eq_direct : @prepend = @prependDirect := by
+  funext n h v i
+  cases i using Fin.cases <;> rfl
+
 def box : (n : Nat) → Vec n → List (Vec n)
   | 0, _ => [Fin.elim0]
   | n+1, limits =>
     let tail := box n (fun i => limits i.succ)
-    (List.range (limits 0 + 1)).flatMap (fun h => tail.map (Fin.cases h))
+    (List.range (limits 0 + 1)).flatMap (fun h => tail.map (prepend h))
 
 def Row.generators {n} (r : Row n) : List (Vec n) :=
   (box n r.limits).filter fun v => dot r.pos v == dot r.neg v && (List.ofFn v).any (0 < ·)
