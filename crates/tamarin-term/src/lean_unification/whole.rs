@@ -1,5 +1,6 @@
 //! Submit equations as a shared graph. Lean counts operands for homogeneous AC
-//! systems and decides identity and closed clashes on the same equation roots.
+//! systems and checks identity, closed clashes, and incompatible variable-image
+//! sizes on the original equation roots.
 use super::homogeneous::ProjectedAnswers;
 use super::{ac_sort, initialize, sort_word, Error, Outcome, RuleTable, WordSlice, LEAN_THREAD};
 use crate::function_symbols::{AcSym, FunSym};
@@ -231,11 +232,11 @@ impl RuleTable {
         })
     }
 
-    pub(crate) fn ac_feasible(&self, eqs: &[Equal<LNTerm>]) -> Result<Option<bool>, Error> {
+    pub(crate) fn graph_feasible(&self, eqs: &[Equal<LNTerm>]) -> Result<Option<bool>, Error> {
         let Some(packet) = Packet::encode(self, eqs)? else {
             return Ok(None);
         };
-        packet.ac_feasible()
+        packet.graph_feasible()
     }
 
     /// Collect the scope before removing reflexive and repeated equations.
@@ -357,9 +358,11 @@ impl RuleTable {
 impl Packet {
     /// Read feasibility from these exact equation roots. A positive verdict
     /// certifies existence and carries no substitution family.
-    pub(crate) fn ac_feasible(&self) -> Result<Option<bool>, Error> {
+    pub(crate) fn graph_feasible(&self) -> Result<Option<bool>, Error> {
+        initialize()?;
+        let rows = self.rows();
         let Some((symbol, width)) = self.matrix_shape() else {
-            return Ok(None);
+            return self.whole_verdict(&rows);
         };
         if !(1..=MAX_NODES).contains(&width) {
             return Ok(None);
@@ -368,8 +371,6 @@ impl Packet {
             .symbols
             .id(FunSym::Ac(symbol))
             .ok_or(Error::InvalidStatus(255))?;
-        initialize()?;
-        let rows = self.rows();
         // SAFETY: the shim copies all borrowed rows and roots before returning its tag.
         let status = LEAN_THREAD.with(|_| unsafe {
             tamarin_lean_graph_ac_feasible(
@@ -398,54 +399,60 @@ impl Packet {
     }
 
     fn solve(&self, rows: &[WordSlice], matrix: Option<(AcSym, usize)>) -> Result<Outcome, Error> {
-        LEAN_THREAD.with(|_| {
-            if let Some((symbol, width)) = matrix {
-                let symbol_id = self
-                    .symbols
-                    .id(FunSym::Ac(symbol))
-                    .expect("interned AC symbol");
-                // SAFETY: the graph and roots remain live while C copies them into Lean arrays.
-                let raw = unsafe {
-                    tamarin_lean_graph_homogeneous_unify(
-                        width as u64,
-                        symbol_id,
-                        sort_word(ac_sort(symbol)),
-                        WordSlice::new(&self.declarations),
-                        rows.as_ptr(),
-                        rows.len(),
-                        WordSlice::new(&self.equations),
-                    )
-                };
-                if let Some(packet) = raw.into_packet()? {
-                    let reserved = self.variables.values().iter().map(|v| v.idx).collect();
-                    let images = super::homogeneous::decode(symbol, &reserved, width, packet)?;
-                    let columns = &self.variables.values()[..width];
-                    return Ok(Outcome::Complete(
-                        images
-                            .into_iter()
-                            .map(|arm| columns.iter().copied().zip(arm).collect())
-                            .collect(),
-                    ));
-                }
-            }
-
-            // SAFETY: packet and rows both stay live across the call.
-            // C copies the input and validates/releases the entire reply.
-            let status = unsafe {
-                tamarin_lean_whole_unify(
+        if let Some((symbol, width)) = matrix {
+            let symbol_id = self
+                .symbols
+                .id(FunSym::Ac(symbol))
+                .expect("interned AC symbol");
+            // SAFETY: the graph and roots remain live while C copies them into Lean arrays.
+            let raw = LEAN_THREAD.with(|_| unsafe {
+                tamarin_lean_graph_homogeneous_unify(
+                    width as u64,
+                    symbol_id,
+                    sort_word(ac_sort(symbol)),
                     WordSlice::new(&self.declarations),
                     rows.as_ptr(),
                     rows.len(),
                     WordSlice::new(&self.equations),
                 )
-            };
-            match status {
-                0 => Ok(Outcome::Unsupported),
-                1 => Ok(Outcome::Complete(vec![])),
-                2 => Ok(Outcome::Complete(vec![vec![]])),
-                status => Err(Error::InvalidStatus(status)),
+            });
+            if let Some(packet) = raw.into_packet()? {
+                let reserved = self.variables.values().iter().map(|v| v.idx).collect();
+                let images = super::homogeneous::decode(symbol, &reserved, width, packet)?;
+                let columns = &self.variables.values()[..width];
+                return Ok(Outcome::Complete(
+                    images
+                        .into_iter()
+                        .map(|arm| columns.iter().copied().zip(arm).collect())
+                        .collect(),
+                ));
             }
+        }
+
+        Ok(match self.whole_verdict(rows)? {
+            None => Outcome::Unsupported,
+            Some(false) => Outcome::Complete(vec![]),
+            Some(true) => Outcome::Complete(vec![vec![]]),
         })
+    }
+
+    /// The only positive whole-query packet denotes the identity substitution.
+    fn whole_verdict(&self, rows: &[WordSlice]) -> Result<Option<bool>, Error> {
+        // SAFETY: all borrowed rows and roots remain live while the shim copies them.
+        let status = LEAN_THREAD.with(|_| unsafe {
+            tamarin_lean_whole_unify(
+                WordSlice::new(&self.declarations),
+                rows.as_ptr(),
+                rows.len(),
+                WordSlice::new(&self.equations),
+            )
+        });
+        match status {
+            0 => Ok(None),
+            1 => Ok(Some(false)),
+            2 => Ok(Some(true)),
+            status => Err(Error::InvalidStatus(status)),
+        }
     }
 }
 

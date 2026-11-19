@@ -114,7 +114,7 @@ fn rational_cone_decides_heavy_simultaneous_ac_rows_without_an_oracle() {
         (vec![compatible.clone(), conflict, base.clone()], false),
         (vec![base.clone(), compatible, base], true),
     ] {
-        assert_eq!(table.ac_feasible(&query).unwrap(), Some(expected));
+        assert_eq!(table.graph_feasible(&query).unwrap(), Some(expected));
     }
 }
 
@@ -140,7 +140,7 @@ fn wide_ac_feasibility_checks_shared_positive_assignments() {
         (vec![equal_left, wide.clone(), equal_right], true),
         (vec![wide.clone(), impossible], false),
     ] {
-        assert_eq!(table.ac_feasible(&query).unwrap(), Some(expected));
+        assert_eq!(table.graph_feasible(&query).unwrap(), Some(expected));
         assert_eq!(native.unifiable(&query).unwrap(), expected);
     }
     assert_eq!(native.stats().unify_count, 0);
@@ -148,7 +148,7 @@ fn wide_ac_feasibility_checks_shared_positive_assignments() {
     // six give x1=4 and x0=767, satisfying both original equations.
     let tail = (1..257).collect::<Vec<_>>();
     let triangular = [equation(&[0, 0], &tail), equation(&[1, 1, 1], &[2, 2])];
-    assert_eq!(table.ac_feasible(&triangular).unwrap(), Some(true));
+    assert_eq!(table.graph_feasible(&triangular).unwrap(), Some(true));
     assert!(native.unifiable(&triangular).unwrap());
     // This conjunction has no common positive assignment. The second row
     // would force the last variable empty after subtracting the first row.
@@ -156,7 +156,7 @@ fn wide_ac_feasibility_checks_shared_positive_assignments() {
     let mut added = left;
     added.push(72);
     let incompatible = [wide, equation(&added, &right)];
-    assert_eq!(table.ac_feasible(&incompatible).unwrap(), Some(false));
+    assert_eq!(table.graph_feasible(&incompatible).unwrap(), Some(false));
     assert!(!native.unifiable(&incompatible).unwrap());
 }
 
@@ -185,7 +185,7 @@ fn two_wide_ac_rows_decide_both_sides_of_a_shared_ratio() {
             (equation(&v, &doubled(&w)), false),
         ] {
             for rows in [[base.clone(), ratio.clone()], [ratio.clone(), base.clone()]] {
-                assert_eq!(table.ac_feasible(&rows).unwrap(), Some(expected));
+                assert_eq!(table.graph_feasible(&rows).unwrap(), Some(expected));
                 assert_eq!(native.unifiable(&rows).unwrap(), expected);
             }
         }
@@ -225,7 +225,7 @@ fn repeated_column_profiles_decide_a_wide_three_equation_system() {
     let possible = row([0, 0, 0, 1, 1, -1]);
     for (third, expected) in [(impossible, false), (possible, true)] {
         let rows = [first.clone(), second.clone(), third];
-        assert_eq!(table.ac_feasible(&rows).unwrap(), Some(expected));
+        assert_eq!(table.graph_feasible(&rows).unwrap(), Some(expected));
         assert_eq!(native.unifiable(&rows).unwrap(), expected);
     }
     assert_eq!(native.stats().unify_count, 0);
@@ -257,4 +257,38 @@ fn native_oracle_hybrid_full_unification_uses_only_negative_ac_decisions() {
     assert!(positive.len() > 1);
     assert_eq!(positive, oracle.unify(&[possible]).unwrap());
     assert!(hybrid.stats().unify_count > after.unify_count);
+}
+
+#[test]
+fn native_oracle_hybrid_skips_mixed_size_clashes_and_keeps_positive_order() {
+    use crate::builtin::hash;
+    use crate::maude_sig::hash_maude_sig;
+
+    let Some(path) = tamarin_test_support::require_maude_path() else {
+        return;
+    };
+    let sig = mset_maude_sig().merge(hash_maude_sig());
+    let hybrid =
+        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let row = |t| Equal {
+        lhs: f_app_ac(AcSym::Union, vec![msg_var("x", 0), t]),
+        rhs: side(&[2, 3]),
+    };
+    let heated = hash(msg_var("x", 1));
+    let possible = row(heated.clone());
+    let impossible = [possible.clone(), row(hash(heated))];
+    let before = hybrid.stats();
+    assert!(hybrid.unify(&impossible).unwrap().is_empty());
+    assert!(oracle.unify(&impossible).unwrap().is_empty());
+    let after = hybrid.stats();
+    assert!(after.lean_unify_count > before.lean_unify_count);
+    if tamarin_utils::env_gate!("TAM_RS_VERIFY_LEAN_UNIFY") {
+        assert!(after.unify_count > before.unify_count);
+    } else {
+        assert_eq!(after.unify_count, before.unify_count);
+    }
+    let ordered = hybrid.unify(std::slice::from_ref(&possible)).unwrap();
+    assert!(ordered.len() > 1);
+    assert_eq!(ordered, oracle.unify(&[possible]).unwrap());
 }

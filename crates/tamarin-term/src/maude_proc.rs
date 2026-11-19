@@ -1241,7 +1241,7 @@ impl MaudeHandle {
             && !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
             && crate::lean_unification::RuleTable::may_be_homogeneous(eqs)
             && let Some(table) = self.native_rules()
-            && let Some(answer) = table.ac_feasible(eqs).map_err(|e| self.lean_error(e))?
+            && let Some(answer) = table.graph_feasible(eqs).map_err(|e| self.lean_error(e))?
         {
             cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
             answer
@@ -1645,22 +1645,23 @@ impl MaudeHandle {
             return Ok(answers);
         }
         // A certified contradiction has the same empty family in every order.
-        // Boolean callers have already tried the decision kernel on this query.
+        // Boolean callers already tried the decision kernel on homogeneous input.
         #[cfg(feature = "lean-unification")]
-        if use_lean && ordered && lean_expected.is_none() {
+        if use_lean && lean_expected.is_none() {
             let verdict = if let Some(packet) = deferred_graph {
-                packet.ac_feasible().map_err(lean_error)?
+                packet.graph_feasible().map_err(lean_error)?
             } else if self.backend == AlgebraBackend::Hybrid
-                && crate::lean_unification::RuleTable::may_be_homogeneous(eqs)
+                && (ordered || !crate::lean_unification::RuleTable::may_be_homogeneous(eqs))
                 && let Some(table) = self.native_rules()
             {
-                table.ac_feasible(eqs).map_err(lean_error)?
+                table.graph_feasible(eqs).map_err(lean_error)?
             } else {
                 None
             };
             if verdict == Some(false) {
                 cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
-                if self.backend == AlgebraBackend::Hybrid
+                if ordered
+                    && self.backend == AlgebraBackend::Hybrid
                     && tamarin_utils::env_gate!("TAM_RS_VERIFY_LEAN_UNIFY")
                 {
                     lean_expected = Some(Vec::new());
