@@ -198,7 +198,7 @@ private theorem remaining_sound {n} (rs : List (Row n)) : Decides (remainingRows
 private theorem base_sound {n} (rs : List (Row n)) : Decides (baseRows rs) (Feasible rs) :=
   fallback (main_sound rs) (remaining_sound rs)
 
-private theorem checkedRows {n} (rs : List (Row n)) : Decides (checkRows rs) (Feasible rs) :=
+theorem checkedRows {n} (rs : List (Row n)) : ∀ b, checkRows rs = some b → (b = true ↔ Feasible rs) :=
   fallback (main_sound rs) (fallback (fun _ h => ColumnQuotient.run_sound (@baseRows) base_sound rs h)
     (remaining_sound rs))
 
@@ -239,6 +239,18 @@ private theorem base_complete {n} (rs : List (Row n)) (domain : BaseRequired rs)
   | pairCorrection h => simp [baseRows,remainingRows,PairCorrection.run_complete rs h]
   | separator h => simp [baseRows,remainingRows,SmallSeparator.run_complete rs h]
 
+/-- The mandatory numeric domain applies to any caller supplying these rows. -/
+theorem checkedRows_complete {n} {rs : List (Row n)} (domain : Required rs) :
+    (checkRows rs).isSome := by
+  cases domain with
+  | original d =>
+    obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp (base_complete rs d)
+    cases fast : mainRows rs <;> simp_all [baseRows,checkRows]
+  | quotient d =>
+    obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp (ColumnQuotient.run_complete (@baseRows)
+      (@BaseRequired) base_complete rs d)
+    simp [checkRows,h]
+
 theorem run_correct : Correct run where
   valid := by
     intro n sym s ds ns es
@@ -259,14 +271,7 @@ theorem run_correct : Correct run where
   required := by
     intro n sym s ds ns es m rs rep read domain
     apply definitive rep read
-    cases domain with
-    | original d =>
-      obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp (base_complete rs d)
-      cases fast : mainRows rs <;> simp_all [baseRows,checkRows]
-    | quotient d =>
-      obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp (ColumnQuotient.run_complete (@baseRows)
-        (@BaseRequired) base_complete rs d)
-      simp [checkRows,h]
+    exact checkedRows_complete domain
 
 theorem term_feasible_iff {sig : Signature} (f : sig.ACSym) (rows : List ACSystem.Row) {n}
     (fr : ACSystem.Frame f rows n) :

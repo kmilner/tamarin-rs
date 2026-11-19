@@ -136,4 +136,37 @@ theorem run_correct : Correct run where
     · exact ⟨.complete [], by rw [o]; rfl, correct_clash p avoid (one.mp o), fun _ => ⟨_, rfl⟩⟩
     · exact ⟨.complete [.identity], by rw [t]; rfl, correct_equal p avoid (two.mp t), fun _ => ⟨_, rfl⟩⟩
 
+/-- A completed negative refinement is a full empty family for the original
+problem and every set of reserved caller variables. -/
+def Refutes (f : Array (Array UInt64) → Array UInt64 → List (Tree × Tree) → Bool) : Prop :=
+  ∀ {s : Signature} (c : Codec s) (p : Problem s) ds ns es rows,
+    Wire.decodeProblem ds ns es = some rows → RowLayout (encodeRows c p) rows → Faithful c p →
+    f ns es rows = true → ¬ p.Satisfiable
+
+theorem runRefining_correct {f} (sound : Refutes f) : Correct (runRefining f) where
+  malformed := fun _ _ _ h => by simp [runRefining,decodeProblem,h]
+  valid := by
+    intro s c p avoid ds ns es rows dec layout faithful
+    by_cases refuted : classify rows = 0 ∧ f ns es rows = true
+    · have no := sound c p ds ns es rows dec layout faithful refuted.2
+      refine ⟨.complete [], ?_, ⟨(complete_empty_iff p).mpr no,by simp [Outcome.answers],by simp [Outcome.answers]⟩,
+        fun _ => ⟨_,rfl⟩⟩
+      simp [runRefining,decodeProblem,dec,refuted.1,refuted.2,reply]
+    · obtain ⟨out, packet, correct, complete⟩ := run_correct.valid c p avoid ds ns es rows dec layout faithful
+      exact ⟨out, by simpa [runRefining,run,decodeProblem,dec,refuted] using packet,correct,complete⟩
+
+/-- A certified refutation always emerges as an empty family, including
+when the old classifier could already discharge a closed clash. -/
+theorem runRefining_empty {f} (sound : Refutes f) (c : Codec sig) (p : Problem sig)
+    {ds ns es rows} (dec : Wire.decodeProblem ds ns es = some rows)
+    (layout : RowLayout (encodeRows c p) rows) (faithful : Faithful c p)
+    (refuted : f ns es rows = true) : runRefining f ds ns es = #[#[1]] := by
+  obtain ⟨two,_,valid⟩ := classify_spec c p faithful
+  rw [layout.classify_eq] at two valid
+  rcases valid with h | h | h
+  · simp [runRefining,decodeProblem,dec,h,refuted]
+  · simp [runRefining,decodeProblem,dec,h]
+  · exact False.elim (sound c p ds ns es rows dec layout faithful refuted
+      ⟨.identity,fun e he => (two.mp h e he).subst Substitution.identity.image⟩)
+
 end Tamarin.WholeProblem

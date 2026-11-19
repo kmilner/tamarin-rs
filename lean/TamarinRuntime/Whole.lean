@@ -69,4 +69,14 @@ def run (decls : Array UInt64) (nodes : Array (Array UInt64)) (equations : Array
   | some p => #[#[classify p]]
   | none => #[#[0]]
 
+/-- Refine a deferred classification using the original graph and its decoded roots. -/
+def runRefining (refutes : Array (Array UInt64) → Array UInt64 → List (Tree × Tree) → Bool)
+    (decls : Array UInt64) (nodes : Array (Array UInt64)) (equations : Array UInt64) :
+    Array (Array UInt64) :=
+  match decodeProblem decls nodes equations with
+  | none => #[#[0]]
+  | some rows =>
+    let status := classify rows
+    if status = 0 && refutes nodes equations rows then #[#[1]] else #[#[status]]
+
 end Tamarin.Whole
