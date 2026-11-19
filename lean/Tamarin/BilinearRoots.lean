@@ -94,20 +94,26 @@ structure Inventory (s : Symbols sig) (β : Operators sig) (rules : List (Equati
 
 variable {rules : List (Equation sig)}
 
+/-- Distinct sorted schematic slots admit a single simultaneous substitution
+even when the concrete values mention some of those same slots. -/
+theorem sorted_assignment {n : Nat} (keys : Fin n → Variable) (injective : Function.Injective keys)
+    (v : Fin n → Term sig) (typed : ∀ i, HasSort (v i) (keys i).sort) :
+    ∃ ρ : Substitution sig, (fun i => ρ.apply (.var (keys i))) = v := by
+  let bs := List.ofFn fun i => (keys i,v i)
+  let ρ := Substitution.fromBindings bs (by
+    intro k t h; obtain ⟨i,ei⟩ := List.mem_ofFn.mp h; cases ei; exact typed i)
+  refine ⟨ρ,funext fun i => ?_⟩
+  apply Substitution.lookupBinding_eq_of_mem
+  · intro k t u ht hu
+    obtain ⟨j,ej⟩ := List.mem_ofFn.mp ht
+    obtain ⟨l,el⟩ := List.mem_ofFn.mp hu
+    have eq := injective ((congrArg Prod.fst ej).trans (congrArg Prod.fst el).symm)
+    exact (congrArg Prod.snd ej).symm.trans (eq ▸ congrArg Prod.snd el)
+  · exact List.mem_ofFn.mpr ⟨i,rfl⟩
+
 theorem Inventory.fire (I : Inventory s β rules) (r : Rule) (v : Fin 3 → Term sig) (hv : ∀ i, HasSort (v i) .msg) :
     ruleRoot rules (r.equation s β v).lhs (r.equation s β v).rhs := by
-  let bs := List.ofFn fun i => (I.keys r i,v i)
-  let ρ := Substitution.fromBindings bs (by
-    intro k t h; obtain ⟨i,ei⟩ := List.mem_ofFn.mp h; cases ei; exact I.typed r i ▸ hv i)
-  have vals : (fun i => ρ.apply (.var (I.keys r i))) = v := by
-    funext i
-    apply Substitution.lookupBinding_eq_of_mem
-    · intro k t u ht hu
-      obtain ⟨j,ej⟩ := List.mem_ofFn.mp ht
-      obtain ⟨l,el⟩ := List.mem_ofFn.mp hu
-      have eq := I.distinct r ((congrArg Prod.fst ej).trans (congrArg Prod.fst el).symm)
-      exact (congrArg Prod.snd ej).symm.trans (eq ▸ congrArg Prod.snd el)
-    · exact List.mem_ofFn.mpr ⟨i,rfl⟩
+  obtain ⟨ρ,vals⟩ := sorted_assignment _ (I.distinct r) v (fun i => I.typed r i ▸ hv i)
   have act := apply_rule r s β (fun i => .var (I.keys r i)) ρ
   dsimp only at act
   rw [vals] at act
