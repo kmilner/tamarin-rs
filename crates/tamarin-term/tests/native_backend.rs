@@ -3538,6 +3538,9 @@ mod paged_bag_matches;
 #[path = "native_backend/low_rank_feasibility.rs"]
 mod low_rank_feasibility;
 
+#[path = "native_backend/mixed_size.rs"]
+mod mixed_size;
+
 #[path = "native_backend/multi_ray.rs"]
 mod multi_ray;
 
