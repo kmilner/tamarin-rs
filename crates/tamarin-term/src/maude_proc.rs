@@ -1619,6 +1619,16 @@ impl MaudeHandle {
         }
         #[cfg(feature = "lean-unification")]
         if try_structured
+            && self.backend == AlgebraBackend::NativeOnly
+            && let Some(table) = self.native_rules()
+            && let crate::lean_unification::Outcome::Complete(answers) =
+                table.unify_forced_operands(eqs).map_err(lean_error)?
+        {
+            cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+            return Ok(answers);
+        }
+        #[cfg(feature = "lean-unification")]
+        if try_structured
             && let Some(table) = self.native_rules()
             && let crate::lean_unification::Outcome::Complete(answers) =
                 table.unify_operands(eqs).map_err(lean_error)?
@@ -2337,7 +2347,7 @@ impl MaudeHandle {
 /// answer. A variable surviving only in a factor image needs its own row so
 /// opening the range later preserves its sharing with that image.
 #[cfg(feature = "lean-unification")]
-fn compose_checked_factor(
+pub(crate) fn compose_checked_factor(
     original: &[Equal<LNTerm>],
     arms: crate::lean_unification::Substitutions,
     factor: &crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,

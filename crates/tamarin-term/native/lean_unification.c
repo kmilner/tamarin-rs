@@ -230,6 +230,23 @@ static lean_object *word_rows(const whole_word_slice *rows, size_t count) {
     return nodes;
 }
 
+extern lean_object *tamarin_forced_operand_classes(uint64_t width, lean_object *sides);
+uint8_t tamarin_lean_forced_operand_classes(uint64_t width, const whole_word_slice *sides,
+                                           size_t count, uint64_t *labels) {
+    lean_object *reply = tamarin_forced_operand_classes(width, word_rows(sides, count));
+    if (lean_is_scalar(reply)) return 0;
+    lean_object *classes = lean_ctor_get(reply, 0);
+    uint8_t status = 255;
+    if (lean_array_size(classes) == width) {
+        status = 1;
+        for (size_t i = 0; i < width; ++i) {
+            labels[i] = lean_unbox_uint64(lean_array_get_core(classes, i));
+        }
+    }
+    lean_dec(reply);
+    return status;
+}
+
 extern uint8_t tamarin_ac_bag_match(lean_object *rows);
 uint8_t tamarin_lean_ac_bag_match(const whole_word_slice *rows, size_t count) {
     return tamarin_ac_bag_match(word_rows(rows, count));

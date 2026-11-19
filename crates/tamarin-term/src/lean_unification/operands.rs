@@ -104,6 +104,7 @@ pub(super) fn allocate<'a>(
     }))
 }
 
+mod forced;
 mod ground_branches;
 mod pivot;
 mod row_clash;
@@ -113,6 +114,31 @@ pub(super) use pivot::{split as split_binary_pivot, split_indivisible, split_own
 pub(super) use size_clash::refutes as refutes_size;
 
 impl RuleTable {
+    /// Use the original caller scope when factoring the stronger presentation.
+    /// The extra equations mention only operands in the original request and
+    /// are entailed by it (ACForcedEquations.Forced.prepend).
+    pub(crate) fn unify_forced_operands(&self, eqs: &[Equal<LNTerm>]) -> Result<Outcome, Error> {
+        let mut expanded = forced::consequences(eqs)?;
+        if expanded.is_empty() {
+            return Ok(Outcome::Unsupported);
+        }
+        expanded.extend_from_slice(eqs);
+        let Some((bindings, residual)) =
+            crate::unification::unify_lterm_factored(&sort_of_name, expanded.clone())
+        else {
+            return Ok(Outcome::Complete(Vec::new()));
+        };
+        if bindings.is_empty() {
+            return self.unify_operands(&expanded);
+        }
+        let Outcome::Complete(arms) = self.factored_unify(&expanded, &bindings, &residual)? else {
+            return Ok(Outcome::Unsupported);
+        };
+        Ok(Outcome::Complete(
+            crate::maude_proc::compose_checked_factor(eqs, arms, &bindings),
+        ))
+    }
+
     /// A contradiction in one conjunct or underneath matching free heads
     /// refutes the full request, even if unrelated factoring exceeds a budget.
     pub(crate) fn refutes_ac_conjunct(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, Error> {
