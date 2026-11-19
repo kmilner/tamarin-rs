@@ -218,7 +218,7 @@ theorem bounded_spec {n} (rs : List (Row n)) :
         List.map_map,Function.comp_def]
       exact minimized
 
-private theorem emit_correct {n} (f : sig.ACSym) (rows : List ACSystem.Row) (avoid : List Variable)
+theorem emit_correct {n} (f : sig.ACSym) (rows : List ACSystem.Row) (avoid : List Variable)
     (fr : Frame f rows n) (gs : List (Vec n)) (hc : BasisCorrect (rows.map (encode fr.names)) gs)
     (small : gs.length ≤ 64) (w : UInt64 → Variable) (wi : Function.Injective w)
     (wt : ∀ j, (w j).sort = sig.acSort f) (wf : ∀ j, w j ∉ variables rows ++ avoid) :

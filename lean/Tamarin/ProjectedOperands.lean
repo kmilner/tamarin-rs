@@ -92,11 +92,37 @@ def Correct (run : OperandUnification.Kernel) (project : AnswerProjection.Kernel
       ∃ a ∈ out.toList, ∃ q, readArm term f name order a = some q ∧
         Residual.Denotes (· ∈ observed) (q ++ pending) bindings ρ
 
-theorem correct {run solve project} (bridge : OperandUnification.Refines run solve)
-    (kernel : OperandAbstraction.NestedLifting solve) (proj : AnswerProjection.Correct project) :
-    Correct run project := by
-  intro sig _ f width rows allUsed term typed selected layout pending original partition raw ran
-    out hp observed bindings name order inj sorts fresh
+/-- Meaning of one raw arm family before compaction. Witness names may be
+chosen after seeing exactly the raw ordinals that survived the search. -/
+def Interprets (f : sig.ACSym) {width : UInt64} (rows : List (OperandBatch.Row width.toNat))
+    (used : ∀ i, i ∈ OperandBatch.used rows) (term : Fin width.toNat → Term sig)
+    (typed : ∀ i, HasSort (term i) (sig.acSort f)) (pending original : Problem sig)
+    (raw : Answers) (observe : Variable → Prop) (bindings : Substitution sig) : Prop :=
+  ∀ (base : Nat) (w : UInt64 → Variable), Function.Injective w →
+    (∀ j, (w j).sort = sig.acSort f) → (∀ j, w j ∉ variables (abstractRows base f rows)) →
+    (∀ j i, ¬ (term i).Occurs (w j)) → (∀ j, ¬ pending.Occurs (w j)) →
+    (∀ j v, observe v → ¬ (bindings.image v).Occurs (w j)) →
+    let decode := OperandAbstraction.decodeResidual (frame base f rows used) (operands base f term typed) w
+    (∀ a ∈ raw.toList, (decode a).isSome) ∧
+    ∀ ρ, Residual.Denotes observe original bindings ρ ↔
+      ∃ a ∈ raw.toList, ∃ q, decode a = some q ∧ Residual.Denotes observe (q ++ pending) bindings ρ
+
+/-- Compaction and caller-side AC ordering preserve any certified operand
+family. Allocation needs only the surviving ordinals. -/
+theorem project_family {project : AnswerProjection.Kernel} (proj : AnswerProjection.Correct project)
+    (f : sig.ACSym) (width : UInt64) (rows : List (OperandBatch.Row width.toNat))
+    (allUsed : ∀ i, i ∈ OperandBatch.used rows) (term : Fin width.toNat → Term sig)
+    (typed : ∀ i, HasSort (term i) (sig.acSort f)) (pending original : Problem sig) {raw out : Answers}
+    (hp : project width raw = some out) (observed : List Variable) (bindings : Substitution sig)
+    (family : Interprets f rows allUsed term typed pending original raw (· ∈ observed) bindings)
+    (name : UInt64 → Variable) (order : Order)
+    (inj : ∀ i ∈ ordinals out, ∀ j ∈ ordinals out, name i = name j → i = j)
+    (sorts : ∀ j ∈ ordinals out, (name j).sort = sig.acSort f)
+    (fresh : ∀ j ∈ ordinals out, name j ∉ occupied term pending observed bindings) :
+    (∀ a ∈ out.toList, (readArm term f name order a).isSome) ∧
+    ∀ ρ, Residual.Denotes (· ∈ observed) original bindings ρ ↔
+      ∃ a ∈ out.toList, ∃ q, readArm term f name order a = some q ∧
+        Residual.Denotes (· ∈ observed) (q ++ pending) bindings ρ := by
   obtain ⟨adm,rfl⟩ := (proj ..).mp hp
   let rank := AnswerProjection.rank raw
   let concrete (j) := name (rank j)
@@ -119,8 +145,7 @@ theorem correct {run solve project} (bridge : OperandUnification.Refines run sol
     (by intro j hj; exact fun h => (List.mem_append.mp h).elim (ghost hj) (fresh _ (live hj)))
   have apart (j) : w j ∉ occupied term pending observed bindings :=
     fun h => wf j (List.mem_append_right _ h)
-  have split := OperandBatch.nested base bridge kernel f rows allUsed term typed layout pending original
-    partition ran (· ∈ observed) bindings w wi ws (fun j h => wf j (List.mem_append_left _ h))
+  have split := family base w wi ws (fun j h => wf j (List.mem_append_left _ h))
     (by intro j i h; apply apart j; simp only [occupied, List.mem_append, List.mem_flatMap,
           Term.mem_variables]; exact .inl (.inl ⟨_,List.mem_ofFn.mpr ⟨i,rfl⟩,h⟩))
     (by intro j h; apply apart j; simp only [occupied, List.mem_append, Problem.mem_variables];
@@ -162,6 +187,16 @@ theorem correct {run solve project} (bridge : OperandUnification.Refines run sol
       intro δ
       simp only [Problem.Solves, List.mem_append, or_imp, forall_and]
       exact and_congr (holds δ) Iff.rfl
+
+theorem correct {run solve project} (bridge : OperandUnification.Refines run solve)
+    (kernel : OperandAbstraction.NestedLifting solve) (proj : AnswerProjection.Correct project) :
+    Correct run project := by
+  intro sig _ f width rows allUsed term typed selected layout pending original partition raw ran
+    out hp observed bindings name order inj sorts fresh
+  apply project_family proj f width rows allUsed term typed pending original hp observed bindings _ name order inj sorts fresh
+  intro base w wi ws wf ap af kept
+  exact OperandBatch.nested base bridge kernel f rows allUsed term typed layout pending original partition ran
+    (· ∈ observed) bindings w wi ws wf ap af kept
 
 /-- Specialization to the allocator used while materializing nested residual equations. -/
 theorem allocated {run project} (verified : Correct run project) (projection : AnswerProjection.Correct project)
