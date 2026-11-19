@@ -206,5 +206,8 @@ example (run) (cert : Correct run) : (run 2 #[lhs,rhs]).isSome := by
 -- occurrence. The old projected box for either row exceeded the work cap.
 #guard (solve 3 #[#[7,8,0],#[0,0,15]]).map Array.size == some 5
 #guard (solve 3 #[#[24,25,0],#[0,0,49]]).map Array.size == some 5
+#guard (solve 3 #[#[60,61,0],#[0,0,121]]).map Array.size == some 5
+-- Scaling both sides must preserve all slot identities and their order.
+#guard solve 3 #[#[140,160,0],#[0,0,300]] == solve 3 #[#[7,8,0],#[0,0,15]]
 
 end Tamarin.Homogeneous.Tests

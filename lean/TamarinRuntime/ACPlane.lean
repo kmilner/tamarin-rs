@@ -37,20 +37,27 @@ def balancedBox : (n : Nat) → Vec n → Vec n → Vec n → Nat → Nat → Li
 def Row.planeGenerators {n} (r : Row n) : List (Vec n) :=
   (balancedBox n r.limits r.pos r.neg 0 0).filter fun v => (List.ofFn v).any (0 < ·)
 
-/-- A minimal nonzero balance uses at most twice the largest absolute
-coefficient in total. Keep any narrower per-coordinate reference limit. -/
-def Row.compactLimits {n} (r : Row n) : Vec n :=
-  let cap := 2 * r.cap
+/-- Positive scaling preserves the natural solutions of a balance equation.
+For the zero row use divisor one. -/
+def Row.divisor {n} (r : Row n) : Nat :=
+  max 1 ((List.ofFn r.pos ++ List.ofFn r.neg).foldr Nat.gcd 0)
+
+def Row.primitive {n} (r : Row n) : Row n :=
+  let d := r.divisor
+  { pos := fun i => r.pos i / d, neg := fun i => r.neg i / d
+    disjoint := fun i => (r.disjoint i).imp (fun h => by simp [h]) (fun h => by simp [h]) }
+
+def Row.cappedLimits {n} (r : Row n) (cap : Nat) : Vec n :=
   let limits := r.limits
   fun i => min (limits i) cap
 
-def Row.compactFits {n} (r : Row n) (budget : Nat) : Bool :=
-  let limits := r.compactLimits
+def Row.cappedFits {n} (r : Row n) (cap budget : Nat) : Bool :=
+  let limits := r.cappedLimits cap
   let size := (List.ofFn (fun i => limits i + 1)).prod
   size ≤ budget || (List.finRange n).any fun i =>
     (0 < r.pos i || 0 < r.neg i) && size ≤ budget * (limits i + 1)
 
-def Row.compactGenerators {n} (r : Row n) : List (Vec n) :=
-  (balancedBox n r.compactLimits r.pos r.neg 0 0).filter fun v => (List.ofFn v).any (0 < ·)
+def Row.cappedGenerators {n} (r : Row n) (cap : Nat) : List (Vec n) :=
+  (balancedBox n (r.cappedLimits cap) r.pos r.neg 0 0).filter fun v => (List.ofFn v).any (0 < ·)
 
 end Tamarin.ACBasis

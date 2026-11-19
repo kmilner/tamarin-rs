@@ -43,9 +43,9 @@ theorem box_cap (n : Nat) (limits : Vec n) (cap : Nat) :
     rw [← filter_range_cap,ih tail]
     exact heads _
 
-theorem Row.compactGenerators_eq {n} (r : Row n) :
-    r.compactGenerators = r.generators.filter (fun v => decide (∀ i, v i ≤ 2 * r.cap)) := by
-  unfold Row.compactGenerators Row.generators Row.compactLimits
+theorem Row.cappedGenerators_eq {n} (r : Row n) (cap : Nat) :
+    r.cappedGenerators cap = r.generators.filter (fun v => decide (∀ i, v i ≤ cap)) := by
+  unfold Row.cappedGenerators Row.generators Row.cappedLimits
   rw [balancedBox_eq _ _ _ _ r.disjoint,box_cap]
   simp only [List.filter_filter,Nat.zero_add]
   apply List.filter_congr

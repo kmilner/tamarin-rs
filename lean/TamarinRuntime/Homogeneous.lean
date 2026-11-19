@@ -32,8 +32,9 @@ def boundedBasis {n} : List (Row n) → Option (List (Vec n))
     let negative := Vector.ofFn weights.neg
     let pulled : Row gs.length := ⟨coordinates positive, coordinates negative, by
       simpa [positive, negative, coordinates] using weights.disjoint⟩
-    guard (pulled.compactFits 16384 || pulled.fitsPlane 16384)
-    let coeffs := pulled.compactGenerators
+    let cap := pulled.primitive.cap
+    guard (pulled.cappedFits cap 16384)
+    let coeffs := pulled.cappedGenerators cap
     guard (coeffs.length ≤ 2048)
     let candidates := (lift gs.get coeffs).map Vector.ofFn
     return minimize (candidates.map coordinates)
