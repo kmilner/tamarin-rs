@@ -280,7 +280,12 @@ coordinate order. This step accepts up to 64 previous generators.
 
 A bit mask on each suffix records the coordinates its generators can still cover. The selector
 stops a branch when those bits and the already covered bits leave a coordinate missing. Lean proves
-equality with exhaustive enumeration, including answer order. On a replay of 568 YubiKey
+equality with exhaustive enumeration, including answer order. When the worst-case output estimate
+exceeds its budget, a second traversal counts the words needed by covering selections and stops at
+65,536. This admits all 727 substitutions of `x+y=a+b+c+d+e+f`.
+[Output budget proof](Tamarin/ACOutputBudget.lean)
+
+On a replay of 568 YubiKey
 unification requests, 557 reached selection after skipping identities. Both selectors produced
 the same 723 arms. With bases prepared in advance, median selection and packet construction
 fell from 3.00 to 2.58 ms per replay across six batches of 120 passes. Through the linked C shim, the full 557-request replay took a median 493 ms across six runs.

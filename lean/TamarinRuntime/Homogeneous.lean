@@ -84,6 +84,19 @@ def enumerate {α n} (full : BitVec n) : Plan α n → BitVec n → List (List �
 def support {n} (v : Vec n) : BitVec n :=
   (BitVec.ofBoolListLE (List.ofFn (fun i => decide (0 < v i)))).cast (by simp)
 
+/-- Charge only complete covering selections. A viable prefix always has a
+completion obtained by including its entire suffix, so a bounded traversal
+also limits work spent looking for the next answer. -/
+def remainingBudget {α n} (weight : α → Nat) (full : BitVec n) :
+    Plan α n → BitVec n → Nat → Nat → Option Nat
+  | .done, seen, cost, budget =>
+    if seen ≠ full then some budget
+    else if cost ≤ budget then some (budget - cost) else none
+  | .step x support remaining tail, seen, cost, budget => do
+    if seen ||| remaining ≠ full then return budget
+    let left ← remainingBudget weight full tail seen cost budget
+    remainingBudget weight full tail (seen ||| support) (cost + weight x) left
+
 end Coverage
 
 def coveringSelections {n} (gs : List (Vec n)) : List (List (Fin gs.length)) :=
@@ -92,8 +105,15 @@ def coveringSelections {n} (gs : List (Vec n)) : List (List (Fin gs.length)) :=
 
 def emit {n} (gs : List (Vec n)) : Answers := ((coveringSelections gs).map (arm gs)).toArray
 
+def packetFits {n} (gs : List (Vec n)) (budget : Nat) : Bool :=
+  let indices := List.finRange gs.length
+  let weights := Vector.ofFn (fun j => total (gs.get j))
+  let plan := Coverage.prepare (fun j => Coverage.support (gs.get j)) indices
+  (Coverage.remainingBudget (fun j => weights[j]) (BitVec.allOnes n) plan 0 (1 + 2*n) budget).isSome
+
 def fitsOutput {n} (gs : List (Vec n)) : Bool :=
-  gs.length ≤ 12 && (2 ^ gs.length) * (gs.map total).sum ≤ 65536
+  (gs.length ≤ 12 && (2 ^ gs.length) * (gs.map total).sum ≤ 65536) ||
+    (gs.length ≤ 64 && packetFits gs 65536)
 
 def solve (width : UInt64) (m : Matrix) : Option Answers := do
   guard (0 < width && width ≤ 32 && m.size ≤ 128)

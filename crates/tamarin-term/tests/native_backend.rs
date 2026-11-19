@@ -2525,6 +2525,60 @@ fn native_homogeneous_system_preserves_shared_and_repeated_witnesses() {
 }
 
 #[test]
+fn ac_output_budget_covers_every_two_by_six_allocation() {
+    use std::collections::{BTreeMap, BTreeSet};
+    use tamarin_term::lterm::HasFrees;
+    let h = native();
+    let vars = ["x", "y", "a", "b", "c", "d", "e", "f"].map(|name| LVar::new(name, LSort::Msg, 0));
+    let product = |keys: &[LVar]| {
+        f_app_ac(
+            AcSym::Union,
+            keys.iter().map(|v| Term::Lit(Lit::Var(*v))).collect(),
+        )
+    };
+    let answers = h
+        .unify(&[Equal {
+            lhs: product(&vars[..2]),
+            rhs: product(&vars[2..]),
+        }])
+        .unwrap();
+    let mut masks = BTreeSet::new();
+    for arm in answers {
+        let mut owners = BTreeMap::new();
+        for (key, image) in arm {
+            let coord = vars.iter().position(|v| *v == key).unwrap();
+            image.for_each_free(&mut |witness| {
+                assert_eq!(witness.sort, LSort::Msg);
+                assert!(!vars.contains(witness));
+                owners.entry(*witness).or_insert_with(Vec::new).push(coord);
+            });
+        }
+        let mut mask = 0u16;
+        for mut pair in owners.into_values() {
+            pair.sort();
+            let [left, right] = pair.as_slice() else {
+                panic!("each witness must occur once on each side")
+            };
+            assert!(*left < 2 && *right >= 2);
+            let bit = 1 << (6 * left + right - 2);
+            assert_eq!(mask & bit, 0);
+            mask |= bit;
+        }
+        assert!(masks.insert(mask));
+    }
+    let expected: BTreeSet<u16> = (0u16..4096)
+        .filter(|mask| {
+            let x = mask & 63;
+            let y = mask >> 6;
+            x != 0 && y != 0 && (x | y) == 63
+        })
+        .collect();
+    assert_eq!(expected.len(), 727);
+    assert_eq!(masks, expected);
+    assert_eq!(h.stats().unify_count, 0);
+}
+
+#[test]
 fn native_ac_operands_preserve_both_commutative_orientations() {
     use tamarin_term::builtin::emap;
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};

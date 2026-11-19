@@ -4,7 +4,7 @@ import Tamarin.ACPrimitiveRow
 import Tamarin.ACGridBudget
 import Tamarin.ACBalanceBound
 import Tamarin.ACNeutralBasis
-import Tamarin.ACCoverage
+import Tamarin.ACOutputBudget
 import TamarinRuntime.Homogeneous
 
 namespace Tamarin.Homogeneous
@@ -64,10 +64,15 @@ def Within {n} : List (Row n) → Prop
       (∃ cap, p.primitive.cap ≤ cap ∧ GridBudget p (refLimits p cap) 16384 ∧
         (keptCoefficients p cap).length ≤ 2048)))
 
+/-- Mandatory output bounds use the reference covering subsets and occurrence
+counts. The first clause preserves the previous inexpensive admission check. -/
+def OutputWithin {n} (gs : List (Vec n)) : Prop :=
+  (gs.length ≤ 12 ∧ 2 ^ gs.length * (gs.map total).sum ≤ 65536) ∨
+  (gs.length ≤ 64 ∧ ((selections gs).map (selectionWords gs)).sum ≤ 65536)
+
 def Admitted (width : UInt64) (m : Matrix) : Prop :=
   0 < width ∧ width ≤ 32 ∧ m.size ≤ 128 ∧ ∃ rs, readRows width.toNat m.toList = some rs ∧
-    Within rs ∧ (generate rs).length ≤ 12 ∧
-      2 ^ (generate rs).length * ((generate rs).map total).sum ≤ 65536
+    Within rs ∧ OutputWithin (generate rs)
 
 /-- Reference encoding of a flat matrix. A representable variable count
 survives the word boundary without truncation. -/
@@ -203,7 +208,7 @@ theorem bounded_spec {n} (rs : List (Row n)) :
 
 private theorem emit_correct {n} (f : sig.ACSym) (rows : List ACSystem.Row) (avoid : List Variable)
     (fr : Frame f rows n) (gs : List (Vec n)) (hc : BasisCorrect (rows.map (encode fr.names)) gs)
-    (small : gs.length ≤ 12) (w : UInt64 → Variable) (wi : Function.Injective w)
+    (small : gs.length ≤ 64) (w : UInt64 → Variable) (wi : Function.Injective w)
     (wt : ∀ j, (w j).sort = sig.acSort f) (wf : ∀ j, w j ∉ variables rows ++ avoid) :
     ∃ pairs : List (Arm × Substitution sig), emit gs = (pairs.map Prod.fst).toArray ∧
       (∀ p ∈ pairs, Represents fr w p.1 p.2) ∧
@@ -243,8 +248,10 @@ theorem solve_correct : Correct solve where
     intro n m h
     simp [solve,h,guard]
   completes := by
-    rintro n m ⟨hp,hn,hm,rs,read,within,slots,words⟩
-    simp [solve,hp,hn,hm,read,(bounded_spec rs).2 within,fitsOutput,slots,words,guard]
+    rintro n m ⟨hp,hn,hm,rs,read,within,output⟩
+    have fit : fitsOutput (generate rs) = true := by
+      simpa [OutputWithin,fitsOutput,Coverage.packetFits_iff] using output
+    simp [solve,hp,hn,hm,read,(bounded_spec rs).2 within,fit,guard]
   semantic := by
     intro s f rows avoid n fr m input out result w inj typed fresh
     by_cases size : (0 < n ∧ n ≤ 32) ∧ m.size ≤ 128
@@ -257,8 +264,8 @@ theorem solve_correct : Correct solve where
           have eq := (bounded_spec _).1 gs hg
           subst gs
           simp [fitsOutput] at fit
-          exact emit_correct f rows avoid fr _ (generate_correct _)
-            fit.1 w inj typed fresh
+          have width := fit.elim (fun h => Nat.le_trans h.1 (by decide : 12 ≤ 64)) And.left
+          exact emit_correct f rows avoid fr _ (generate_correct _) width w inj typed fresh
         · simp [solve,input,guard,size,hg,fit] at result; contradiction
     · simp [solve,guard,size] at result; contradiction
 

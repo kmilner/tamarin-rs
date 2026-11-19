@@ -192,7 +192,7 @@ example : ratioRow.boxSize = 123904 := by decide
 
 example (run) (cert : Correct run) : (run 2 #[lhs,rhs]).isSome := by
   apply cert.completes
-  refine ⟨by decide, by decide, by decide, [ratioRow], ?_, ?_, ?_, ?_⟩
+  refine ⟨by decide, by decide, by decide, [ratioRow], ?_, ?_, Or.inl ⟨?_, ?_⟩⟩
   · simp [readRows, ratioRow, lhs, rhs, guard]
   · refine ⟨trivial, Or.inr ⟨by decide, Or.inl ⟨Or.inr ⟨⟨0, by decide⟩, Or.inl (by decide), by decide⟩, ?_⟩⟩⟩
     unfold ACBasis.intersect
@@ -224,5 +224,17 @@ private def oneRight : Array UInt64 := #[0,0,0,0,1,0,0,0]
   let some prev := boundedBasis rows | return false
   let some next := boundedBasis (rows ++ rows) | return false
   return prev.length == 16 && next.map List.ofFn == (prev.map List.ofFn).reverse
+
+-- Every unit generator is forced, even though there are 2^32 potential subsets.
+#guard (solve 32 #[]).map Array.size == some 1
+-- Each right variable can use the first left input, the second, or both.
+-- Removing the two assignments that miss a left input leaves 3^6 - 2 arms.
+#guard (solve 8 #[#[1,1,0,0,0,0,0,0],#[0,0,1,1,1,1,1,1]]).map Array.size == some 727
+#guard solve 9 #[#[1,1,0,0,0,0,0,0,0],#[0,0,1,1,1,1,1,1,1]] == none
+
+#guard (List.range 8).all fun a => (List.range 8).all fun b =>
+  let gs := [testVector a, testVector b]
+  let cost := ((selections gs).map (selectionWords gs)).sum
+  packetFits gs cost && (cost == 0 || !packetFits gs (cost-1))
 
 end Tamarin.Homogeneous.Tests
