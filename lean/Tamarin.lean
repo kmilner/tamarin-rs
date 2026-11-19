@@ -46,6 +46,7 @@ import Tamarin.GroundVariantCandidateProofs
 import Tamarin.CancelCommonCandidateProofs
 import Tamarin.ACResidual
 import Tamarin.OperandRefinement
+import Tamarin.ForcedOperandClasses
 import Tamarin.CompoundMatching
 import Tamarin.RigidAllocationRefinement
 import Tamarin.CompoundOffsetRefinement

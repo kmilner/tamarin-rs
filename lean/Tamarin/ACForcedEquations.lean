@@ -49,32 +49,37 @@ private theorem factor_scope (f : s.ACSym) (get : Fin n → Term s) (p : Problem
 /-- A certified equality between two coordinate values is an equality of
 the original operands, including when an operand contains other variables
 or expands to another product under substitution. -/
+theorem forced_pair_of_holds (f : s.ACSym) (get : Fin n → Term s) (p : Problem s)
+    (rs : List (ACRowElimination.Row (Fin n)))
+    (sources : ∀ r ∈ rs, ∃ e ∈ p, ACRowElimination.Represents r f get e) (i j : Fin n)
+    (used : ∀ k ∈ [i,j], ∃ r ∈ rs, k ∈ r.lhs ++ r.rhs)
+    (equal : ∀ x, (∀ r ∈ rs.map ACLinearConsequence.incidence, r.Holds x) → x i = x j) :
+    Forced p [⟨get i,get j⟩] := by
+  let singleton : ACRowElimination.Row (Fin n) := ⟨[i],[j]⟩
+  constructor
+  · intro σ pos e he
+    obtain rfl := List.mem_singleton.mp he
+    exact ACLinearConsequence.equation f get p _ rs singleton sources (ACRowElimination.singleton f get i j)
+      (fun x common => (ACLinearConsequence.incidence_holds singleton x).mpr (by
+        simpa [singleton,ACRowElimination.Balanced,ACRowElimination.weight] using equal x common)) σ pos
+  · rintro v ⟨e,he,h⟩
+    obtain rfl := List.mem_singleton.mp he
+    rcases h with l|r
+    · exact factor_scope f get p sources (used i (by simp)) l
+    · exact factor_scope f get p sources (used j (by simp)) r
+
 theorem forced_pair (f : s.ACSym) (get : Fin n → Term s) (p : Problem s)
     (rs : List (ACRowElimination.Row (Fin n)))
     (sources : ∀ r ∈ rs, ∃ e ∈ p, ACRowElimination.Represents r f get e) (i j : Fin n)
     (used : ∀ k ∈ [i,j], ∃ r ∈ rs, k ∈ r.lhs ++ r.rhs)
     (certificate : ∃ c, SpanCertificate.Valid (rs.map ACLinearConsequence.incidence)
       (Row.ofWeights (spike i 1) (spike j 1)) c) : Forced p [⟨get i,get j⟩] := by
-  let singleton : ACRowElimination.Row (Fin n) := ⟨[i],[j]⟩
-  have offset (a : Fin n) : [a].count = spike a 1 := by
-    funext b
-    by_cases eq : b = a
-    · subst b; simp [spike]
-    · simp [spike,eq,Ne.symm eq]
-  have coefficients : ACLinearConsequence.incidence singleton = Row.ofWeights (spike i 1) (spike j 1) := by
-    simp [ACLinearConsequence.incidence,singleton,offset]
+  apply forced_pair_of_holds f get p rs sources i j used
+  intro x common
   obtain ⟨cert,nonzero,_,span⟩ := certificate
-  rw [←coefficients] at span
-  constructor
-  · intro σ pos e he
-    obtain rfl := List.mem_singleton.mp he
-    exact ACLinearConsequence.equation f get p _ rs singleton sources (ACRowElimination.singleton f get i j)
-      (ACLinearConsequence.holds_of_combination _ _ cert.weights cert.scale nonzero span) σ pos
-  · rintro v ⟨e,he,h⟩
-    obtain rfl := List.mem_singleton.mp he
-    rcases h with l|r
-    · exact factor_scope f get p sources (used i (by simp)) l
-    · exact factor_scope f get p sources (used j (by simp)) r
+  have h := ACLinearConsequence.holds_of_combination _ _ cert.weights cert.scale nonzero span x common
+  have swap (v w : Vec n) : dot v w = dot w v := by simp only [dot,Nat.mul_comm]
+  simpa only [Row.ofWeights_holds,swap (spike _ _) x,dot_spike,Nat.mul_one] using h
 
 /-- A factor may be replaced as a whole, under any constructor, in either
 direction and at any number of sites. Basis equivalence allows alternative

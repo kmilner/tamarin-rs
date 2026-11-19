@@ -50,6 +50,7 @@ jobs:
           lake env lean Tests/AnswerProjection.lean
           lake env lean Tests/OperandRefinement.lean
           lake env lean Tests/OperandCounts.lean
+          lake env lean Tests/ForcedOperandClasses.lean
           lake env lean --run Tests/OperandRowStress.lean
           lake env lean Tests/OperandUnification.lean
           lake env lean Tests/ProjectedOperands.lean

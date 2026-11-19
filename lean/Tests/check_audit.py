@@ -702,6 +702,16 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedOperandRefine_correct"),
 ])
 
+EXECUTABLE = ("import Tamarin.ForcedOperandClasses\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedForcedOperandClasses_correct") + "end Tamarin\n")
+FORCED_CLASSES = "  ForcedOperandClasses.run width sides"
+EXPORT_MUTATIONS.extend([
+    ("forced_classes_collapse_unrelated", FORCED_CLASSES, "  some (Array.replicate width.toNat 0)",
+     "theorem exportedForcedOperandClasses_correct"),
+    ("forced_classes_always_defer", FORCED_CLASSES, "  none",
+     "theorem exportedForcedOperandClasses_correct"),
+])
+
 operand_start = SOURCE.index("theorem exportedOperandUnify_refines")
 operand_obligation = SOURCE[operand_start:SOURCE.index("\n\n", operand_start) + 1]
 EXECUTABLE = ("import Tamarin.OperandUnification\n" + EXECUTABLE

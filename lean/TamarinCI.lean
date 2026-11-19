@@ -557,6 +557,12 @@ theorem exportedOperandUnify_refines : OperandUnification.Refines
     Executable.operandUnify Executable.homogeneousUnify :=
   OperandUnification.run_refines OperandCounts.run_correct Executable.homogeneousUnify
 
+theorem exportedForcedOperandClasses_correct : ForcedOperandClasses.Correct Executable.forcedOperandClasses :=
+  ForcedOperandClasses.run_correct
+
+theorem exportedForcedOperandClasses_source : ForcedOperandClasses.Source Executable.forcedOperandClasses :=
+  ForcedOperandClasses.source_of_correct exportedForcedOperandClasses_correct
+
 theorem exportedAnswerProjection_correct : AnswerProjection.Correct Executable.projectAnswers :=
   AnswerProjection.project_correct
 
@@ -1118,6 +1124,7 @@ run_cmd do
     (``Tamarin.Executable.operandRefine, `tamarin_operand_refine),
     (``Tamarin.Executable.maskedOperandUnify, `tamarin_masked_operand_unify),
     (``Tamarin.Executable.operandUnify, `tamarin_operand_unify),
+    (``Tamarin.Executable.forcedOperandClasses, `tamarin_forced_operand_classes),
     (``Tamarin.Executable.projectAnswers, `tamarin_project_answers),
     (``Tamarin.Executable.xorBranches, `tamarin_xor_branches),
     (``Tamarin.Executable.xorMatchings, `tamarin_xor_matchings),
