@@ -463,3 +463,62 @@ fn native_oracle_nested_repeated_ac_destructors() {
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);
 }
+
+#[test]
+fn native_oracle_guarded_multi_rule_frontier_preserves_shared_inputs_and_rejects_conflicts() {
+    let combine = AcFctSym::new(
+        b"combine",
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    let d = symbol(b"decode", 1);
+    let wrapper = symbol(b"wrap", 1);
+    let marker = symbol(b"marker", 0);
+    let mut sig = hash_maude_sig();
+    sig.st_ac_fun_syms.insert(combine);
+    sig.st_fun_syms.extend([d, wrapper, marker]);
+    let sum = |terms| f_app_ac(AcSym::AcFct(combine), terms);
+    let call = |f, t| f_app_no_eq(f, vec![t]);
+    let v = msg_var("v", 0);
+    add_rule(
+        &mut sig,
+        call(d, sum(vec![v.clone(), v.clone()])),
+        v.clone(),
+    );
+    add_rule(&mut sig, call(d, call(wrapper, v.clone())), v.clone());
+    let x = msg_var("x", 0);
+    let y = msg_var("y", 1);
+    let slots = [call(d, call(d, sum(vec![x.clone(), y.clone()]))), x, y];
+    let obs = f_app_list(slots.to_vec());
+    let positive = sig.clone().refresh();
+    let table = RuleTable::new(&positive).unwrap();
+    let Outcome::Complete(rows) = table.joined_variants(&obs).unwrap() else {
+        panic!("the live decode rules agree on normal inputs");
+    };
+    assert_eq!(rows.len(), 36);
+
+    // With x = y = wrap(a), the inner result is wrap(a). Two live
+    // rules can now give the distinct normal results a and marker.
+    add_rule(
+        &mut sig,
+        call(d, call(wrapper, v)),
+        f_app_no_eq(marker, vec![]),
+    );
+    let conflicting = RuleTable::new(&sig.refresh()).unwrap();
+    assert!(matches!(
+        conflicting.joined_variants(&obs).unwrap(),
+        Outcome::Unsupported
+    ));
+    let a = crate::lterm::pub_term("a");
+    let w = call(wrapper, a);
+    let concrete = call(d, call(d, sum(vec![w.clone(), w])));
+    assert_eq!(conflicting.reduce_native(&concrete).unwrap(), None);
+
+    if let Some((native, oracle)) = handles(positive) {
+        let expected = valued_variant_rows(&oracle, &slots);
+        assert_eq!(expected.len(), 36);
+        assert_eq!(valued_variant_rows(&native, &slots), expected);
+        assert_eq!(native.stats().var_count, 0);
+    }
+}

@@ -22,6 +22,7 @@ import Tamarin.MatchGroundGuards
 import Tamarin.MatchingConjunction
 import Tamarin.ACMatchProfilesAdapter
 import Tamarin.RepeatedACDecoder
+import Tamarin.GuardedRuleBuckets
 import Tamarin.GroundACEquality
 import Tamarin.MatchingFree
 import Tamarin.OneOpenPivot

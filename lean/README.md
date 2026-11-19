@@ -467,6 +467,10 @@ extended sides with one sorted substitution already covers that branch. A single
 rebuilds the changed term and all caller images. The search can fold a state only when one
 earlier row covers all those terms together. It checks whether two terminal rows, including
 fresh copies of the same row, can give different normal values at the same input.
+For trees of free heads, it can instead compare the live rules at each head once,
+including each rule with a fresh copy of itself. Their outputs must project
+normal arguments or return fixed normal terms. Each parent's patterns must exclude
+the heads of children that can still change. [Rule overlap and staging proof](Tamarin/GuardedRuleBuckets.lean)
 Products and inverses over stably normal leaves have a separate proof that all normal
 results agree. The proof extends to a tower with a stably normal base and arbitrary
 signed exponents, so these expressions can skip the pairwise overlap check. Lean also proves that a normal endpoint exists for each signed expression and

@@ -1,5 +1,7 @@
 //! Finite ordinary narrowing with extension at AC heads. Every node carries
 //! the original input images through each specialization and every fold.
+mod guarded_buckets;
+
 use super::{fresh_renaming, IndexedRow, JoinSearch, Row};
 use crate::function_symbols::FunSym;
 use crate::lean_unification::constructor_variants::{InputDomain, RuleTable};
@@ -142,8 +144,9 @@ impl RuleTable {
         else {
             return Ok(None);
         };
-        let unique_instances =
-            self.dh_unique_instances(app)? || self.decoder_unique_instances(app)?;
+        let unique_instances = self.dh_unique_instances(app)?
+            || self.decoder_unique_instances(app)?
+            || (kept.len() > 1 && frontier.bucket_unique_instances(app, kept.len())?);
         for (i, r) in kept.iter().enumerate() {
             let subst = Subst::from_list(keys.iter().copied().zip(r.images.iter().cloned()));
             if !residual::charge_expansion(
