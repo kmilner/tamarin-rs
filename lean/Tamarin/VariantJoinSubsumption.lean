@@ -1,4 +1,5 @@
 import Tamarin.VariantJoinFamily
+import Tamarin.MatchingConjunction
 
 namespace Tamarin.Rewriting.VariantJoin
 
@@ -9,6 +10,48 @@ returned values modulo the declared B axioms. This comparison leaves
 rewrite redexes intact, including ones created by the substitution. -/
 def Row.Subsumes (general specific : Row sig I A) : Prop :=
   ∃ σ : Substitution sig, Fits general specific.input specific.value σ
+
+/-- A rigid-subject match must relate every input and output at once.
+Checking just the images would, for example, equate variants with different
+normal values on a shared specialization. -/
+def rowMatch (ins : List I) (outs : List A) (g t : Row sig I A) : Problem sig :=
+  ins.map (fun i => ⟨g.input i,t.input i⟩) ++ outs.map (fun a => ⟨g.value a,t.value a⟩)
+
+theorem subsumes_iff_match {ins : List I} {outs : List A} (inputs : ∀ i, i ∈ ins)
+    (outputs : ∀ a, a ∈ outs) (g t : Row sig I A) {answers : List (Substitution sig)}
+    (checked : Matching.Complete (rowMatch ins outs g t) (fun _ => True) answers) :
+    g.Subsumes t ↔ answers ≠ [] := by
+  rw [← checked.exists_match_iff]
+  constructor
+  · rintro ⟨σ,h⟩
+    refine ⟨σ,fun e mem => ?_⟩
+    rcases List.mem_append.mp mem with m | m
+    · obtain ⟨i,_,rfl⟩ := List.mem_map.mp m
+      exact (h.inputs i).symm
+    · obtain ⟨a,_,rfl⟩ := List.mem_map.mp m
+      exact (h.values a).symm
+  · rintro ⟨σ,h⟩
+    refine ⟨σ,fun i => ?_,fun a => ?_⟩
+    · exact (h _ (List.mem_append_left _ (List.mem_map_of_mem (f := fun j =>
+        (⟨g.input j,t.input j⟩ : Equation sig)) (inputs i)))).symm
+    · exact (h _ (List.mem_append_right _ (List.mem_map_of_mem (f := fun b =>
+        (⟨g.value b,t.value b⟩ : Equation sig)) (outputs a)))).symm
+
+/-- An irredundant family contains no pair of rows for which either one is
+an instance of the other. This is an additional property beyond Exact. -/
+def Irredundant (rows : List (Row sig I A)) : Prop :=
+  rows.Pairwise (fun g t => ¬g.Subsumes t ∧ ¬t.Subsumes g)
+
+theorem irredundant_of_empty_matches {ins : List I} {outs : List A}
+    (inputs : ∀ i, i ∈ ins) (outputs : ∀ a, a ∈ outs) (rows : List (Row sig I A))
+    (checked : rows.Pairwise (fun g t =>
+      Matching.Complete (rowMatch ins outs g t) (fun _ => True) [] ∧
+      Matching.Complete (rowMatch ins outs t g) (fun _ => True) [])) :
+    Irredundant rows := by
+  apply checked.imp
+  intro g t pair
+  exact ⟨fun sub => (subsumes_iff_match inputs outputs g t pair.1).mp sub rfl,
+    fun sub => (subsumes_iff_match inputs outputs t g pair.2).mp sub rfl⟩
 
 theorem Fits.compose {general specific : Row sig I A} {x : I → Term sig} {y : A → Term sig}
     {σ δ : Substitution sig} (h : Fits general specific.input specific.value σ)

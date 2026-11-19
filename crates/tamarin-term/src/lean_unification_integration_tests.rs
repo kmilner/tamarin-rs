@@ -5757,6 +5757,78 @@ fn independent_and_shared_peer_exponents_preserve_the_entire_product_family() {
 }
 
 #[test]
+fn native_oracle_specializes_variant_families_to_caller_operands() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{hash, sdec, senc, xor, zero_const};
+    use crate::maude_sig::{hash_maude_sig, sym_enc_maude_sig, xor_maude_sig};
+    use crate::subst::{apply_vterm, Subst};
+    use crate::term::f_app_list;
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = xor_maude_sig()
+        .merge(hash_maude_sig())
+        .merge(sym_enc_maude_sig());
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let v = |i, sort| Term::Lit(Lit::Var(LVar::new("x", sort, i)));
+    let x = v(0, LSort::Msg);
+    let fresh = v(1, LSort::Fresh);
+    let a = pub_term("a");
+    let mut cases = vec![
+        vec![a.clone(), xor(a.clone(), x.clone())],
+        vec![
+            xor(fresh.clone(), x.clone()),
+            xor(fresh.clone(), v(2, LSort::Fresh)),
+        ],
+        vec![sdec(x.clone(), a.clone()), x.clone()],
+        vec![sdec(senc(x.clone(), a.clone()), v(2, LSort::Msg))],
+    ];
+    let operands = [
+        a,
+        zero_const(),
+        fresh,
+        x.clone(),
+        v(2, LSort::Msg),
+        hash(x.clone()),
+        hash(v(2, LSort::Msg)),
+        hash(pub_term("a")),
+    ];
+    for (i, left) in operands.iter().enumerate() {
+        for right in &operands[i..] {
+            cases.push(vec![x.clone(), xor(left.clone(), right.clone())]);
+        }
+    }
+    for slots in cases {
+        let q = f_app_list(slots.clone());
+        let rows = native.variants(&q).unwrap_or_else(|e| panic!("{q}: {e}"));
+        let reference = oracle.variants(&q).unwrap();
+        assert_eq!(
+            canonical_small_ac_answers(rows.clone()),
+            canonical_small_ac_answers(reference),
+            "{q}"
+        );
+        for arm in rows {
+            let subst = Subst::from_list(arm);
+            for t in &slots {
+                let instance = apply_vterm(&subst, t.clone());
+                assert_eq!(
+                    native.reduce(&instance).unwrap(),
+                    oracle.reduce(&instance).unwrap(),
+                    "{instance}"
+                );
+            }
+        }
+    }
+    assert_eq!(native.stats().var_count, 0);
+}
+
+#[test]
 fn native_oracle_packed_variants_keep_shared_variables_beside_unique_ground_observations() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{fst, pair, xor};
@@ -6054,6 +6126,13 @@ fn native_oracle_binary_msg_cancellation_recognizes_renamed_rules_and_checks_par
     // the unit even when both real factors disappear.
     let a = var("atom", 30);
     let b = hash(pub_term("b"));
+    let specialized = combine(vec![a.clone(), b.clone()]);
+    let rows = native.variants(&specialized).unwrap();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(
+        canonical_small_ac_answers(rows),
+        canonical_small_ac_answers(oracle.variants(&specialized).unwrap())
+    );
     for i in 0..=3 {
         for j in 0..=3 {
             let mut factors = vec![unit.clone(); 2];
@@ -6093,6 +6172,10 @@ fn native_oracle_binary_msg_cancellation_recognizes_renamed_rules_and_checks_par
     .unwrap();
     assert!(matches!(
         changed_native.variants(&open),
+        Err(MaudeError::UnsupportedOperation(_))
+    ));
+    assert!(matches!(
+        changed_native.variants(&specialized),
         Err(MaudeError::UnsupportedOperation(_))
     ));
     let changed_oracle =

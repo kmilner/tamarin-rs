@@ -190,6 +190,123 @@ impl RuleTable {
         original: &FxHashSet<u64>,
         app: &LNTerm,
     ) -> Result<Option<Vec<Row>>, Error> {
+        if let Some(rows) = self.direct_rows(keys, original, app)? {
+            return Ok(Some(rows));
+        }
+        let Term::App(head, args) = app else {
+            return Ok(None);
+        };
+        // The packet and positional narrowing providers both have families at
+        // distinct formal arguments. Specialization itself is independent of
+        // the equations used to obtain that family.
+        let eligible = match head {
+            FunSym::Ac(f) => args.len() == 2 && self.cancellation_units.contains_key(f),
+            FunSym::NoEq(f) => self.narrowing.contains_key(f),
+            _ => false,
+        };
+        if !eligible {
+            return Ok(None);
+        }
+        for arg in args.iter() {
+            if !self.stably_normal_native(arg)? {
+                return Ok(None);
+            }
+        }
+        // Both providers declare Msg arguments. Work in a local namespace;
+        // join_rows opens the entire schema range apart from the caller.
+        let formals: Vec<_> = (0..args.len())
+            .map(|i| LVar::new("x", LSort::Msg, i as u64))
+            .collect();
+        let variable = |v| Term::Lit(Lit::Var(v));
+        let template = crate::term::f_app(*head, formals.iter().copied().map(variable).collect());
+        let reserved = formals.iter().map(|v| v.idx).collect();
+        let Some(family) = self.direct_rows(&formals, &reserved, &template)? else {
+            return Ok(None);
+        };
+        let operands = Row {
+            images: args.to_vec(),
+            values: keys.iter().copied().map(variable).collect(),
+        };
+        let mut joined = BTreeSet::new();
+        let mut budget = residual::Budget::new();
+        let mut normal = FxHashMap::default();
+        for schema in family {
+            if !self.join_rows(
+                &operands,
+                &schema,
+                original,
+                &mut budget,
+                &mut normal,
+                &mut joined,
+            )? {
+                return Ok(None);
+            }
+        }
+        // Exact.specialize projects away the intermediate operand images.
+        // Canonicalize witness names again in the projected row's own order.
+        let mut projected = BTreeSet::new();
+        for row in joined {
+            let mut images = row.values;
+            let values = images.split_off(keys.len());
+            projected.insert(Row { images, values }.rename(original));
+        }
+        self.prune_specializations(projected)
+    }
+
+    /// Specialization can turn distinct generic cases into instances of each
+    /// other. Compare every input image and output under one rigid-subject
+    /// match (Row.Subsumes). Transitivity covers earlier deletions if their
+    /// representative is itself replaced.
+    fn prune_specializations(&self, projected: BTreeSet<Row>) -> Result<Option<Vec<Row>>, Error> {
+        let mut budget = 100_000;
+        let mut subsumes = |general: &Row, specific: &Row| -> Result<Option<bool>, Error> {
+            let eqs: Vec<_> = general
+                .iter()
+                .zip(specific.iter())
+                .map(|(l, r)| Equal {
+                    lhs: super::super::canonical_capture(l),
+                    rhs: super::super::canonical_capture(r),
+                })
+                .collect();
+            if !self.admits_terms(&eqs) {
+                return Ok(None);
+            }
+            Ok(
+                match super::super::open_match::with_captures_budget(&eqs, Vec::new(), &mut budget)?
+                {
+                    Outcome::Complete(matches) => Some(!matches.is_empty()),
+                    Outcome::Unsupported => None,
+                },
+            )
+        };
+        let mut kept = Vec::new();
+        'candidate: for row in projected {
+            let mut i = 0;
+            while i < kept.len() {
+                match subsumes(&kept[i], &row)? {
+                    Some(true) => continue 'candidate,
+                    Some(false) => {}
+                    None => return Ok(None),
+                }
+                match subsumes(&row, &kept[i])? {
+                    Some(true) => {
+                        kept.swap_remove(i);
+                    }
+                    Some(false) => i += 1,
+                    None => return Ok(None),
+                }
+            }
+            kept.push(row);
+        }
+        Ok(Some(kept))
+    }
+
+    fn direct_rows(
+        &self,
+        keys: &[LVar],
+        original: &FxHashSet<u64>,
+        app: &LNTerm,
+    ) -> Result<Option<Vec<Row>>, Error> {
         let used: FxHashSet<_> = frees_list(app).into_iter().collect();
         let local_keys: Vec<_> = keys.iter().copied().filter(|v| used.contains(v)).collect();
         let open_row = |subst: &Subst<Name, LVar>, value| {
@@ -276,7 +393,7 @@ impl RuleTable {
                 used.insert(v.idx);
             });
         }
-        let eqs = left
+        let eqs: Vec<_> = left
             .images
             .iter()
             .zip(&right.images)
@@ -285,6 +402,9 @@ impl RuleTable {
                 rhs: r.clone(),
             })
             .collect();
+        if !self.admits_terms(&eqs) {
+            return Ok(false);
+        }
         let Some((free, pending)) = crate::unification::unify_lterm_factored(&sort_of_name, eqs)
         else {
             return Ok(true);

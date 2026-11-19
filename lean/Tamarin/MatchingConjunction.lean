@@ -20,6 +20,26 @@ noncomputable def merge (p : Problem sig) (σ τ : Substitution sig) : Substitut
     · exact τ.sorted v
   }
 
+/-- When all pattern variables are bindable, existence of a match is independent
+of the scope condition: bindings outside the pattern can always be dropped. -/
+theorem Complete.exists_match_iff {p : Problem sig} {answers : List (Substitution sig)}
+    (h : Complete p (fun _ => True) answers) :
+    (∃ σ, Matches p σ) ↔ answers ≠ [] := by
+  classical
+  constructor
+  · rintro ⟨σ,hm⟩ rfl
+    let restricted := merge p σ Substitution.identity
+    apply (empty_iff p _).mp h
+    refine ⟨restricted,matches_of_agrees hm ?_,?_⟩
+    · intro v hv
+      simp [restricted,merge,hv,EquivB.refl]
+    · intro v hv
+      have absent : ¬ Observed p v := fun obs => hv ⟨obs,trivial⟩
+      simp [restricted,merge,absent,Substitution.identity]
+  · intro ne
+    obtain ⟨σ,mem⟩ := List.exists_mem_of_ne_nil answers ne
+    exact ⟨σ,(h.sound σ mem).1⟩
+
 def Compatible (p q : Problem sig) (σ τ : Substitution sig) : Prop :=
   ∀ v, Observed p v → Observed q v → EquivB (σ.image v) (τ.image v)
 

@@ -48,6 +48,13 @@ def constructorOnly (th : Theory) (t : Expr) : Bool :=
 normal value, including when their active AC root actually rewrites. -/
 def identitySlot (th : Theory) (t : Expr) := t.variables.isEmpty || constructorOnly th t
 
+def variantExpectation (th : Theory) (ts : List Expr) : String :=
+  if ts.all (identitySlot th) then "identity"
+  else if ts.all (fun t => identitySlot th t || match t with
+    | .ac _ l r => constructorOnly th l && constructorOnly th r
+    | _ => false) then "complete"
+  else "probe"
+
 /-- The mandatory constructor cases have an identity variant for every
 normalized valuation. Adding repeated observations preserves this fact. -/
 theorem constructor_family (th : Theory) (ts : List Expr) (safe : ∀ t ∈ ts, constructorOnly th t = true) :
@@ -134,7 +141,7 @@ def generate : IO Unit := do
         if !(t.checkSort .msg) then throw (IO.userError "ill-sorted coverage term")
         let ctor := constructorOnly th t
         emit th "reduce" (if ctor then "identity" else "complete") [t]
-        emit th "variants" (if identitySlot th t then "identity" else "probe") [t,t]
+        emit th "variants" (variantExpectation th [t,t]) [t,t]
     -- Joint node budget for an ordinary equation. Operands on the right
     -- of a matching request remain rigid, including their variables.
     for leftSize in [1:5] do
@@ -143,7 +150,7 @@ def generate : IO Unit := do
           for s in terms[rightSize]! do
             emit th "unify" "probe" [p,s]
             emit th "match" (if matchClash p s then "no" else "probe") [p,s]
-            emit th "variants" (if identitySlot th p && identitySlot th s then "identity" else "probe") [p,s]
+            emit th "variants" (variantExpectation th [p,s]) [p,s]
     -- Ground words admit an independent exact answer under both theories.
     let words : List (List sig.Atom) := [[false],[true],[false,false],[false,true],[true,false],
       [true,true],[false,false,false],[true,false,true]]

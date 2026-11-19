@@ -513,7 +513,12 @@ impl RuleTable {
         if self.roots.binary_search(&id).is_ok() {
             let excluded = match head {
                 FunSym::NoEq(f) => match self.patterns.get(f) {
-                    Some(Some(rows)) => self.excludes_free_rules(rows, args, stable)?,
+                    Some(Some(rows)) => {
+                        self.excludes_free_rules(rows, args, stable)?
+                            || (!stable
+                                && budget.is_some()
+                                && self.excludes_free_matches(*f, rows, term)?)
+                    }
                     _ => false,
                 },
                 FunSym::Ac(ac) => {
@@ -533,6 +538,33 @@ impl RuleTable {
         }
         for arg in args.iter() {
             if !self.normal_tree(arg, stable, budget)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Empty rigid-subject match sets exclude the root only if the compiled
+    /// patterns account for every active rule in this bucket.
+    fn excludes_free_matches(
+        &self,
+        f: NoEqSym,
+        rows: &[u64],
+        term: &LNTerm,
+    ) -> Result<bool, Error> {
+        let Some(rules) = self.free_rules.get(&f) else {
+            return Ok(false);
+        };
+        if f.arity == 0 || rules.len().checked_mul(f.arity) != Some(rows.len()) {
+            return Ok(false);
+        }
+        for rule in rules {
+            let query = crate::rewriting::Equal {
+                lhs: rule.pattern().clone(),
+                rhs: term.clone(),
+            };
+            if !matches!(self.match_rigid_subjects(&[query])?, Outcome::Complete(arms) if arms.is_empty())
+            {
                 return Ok(false);
             }
         }

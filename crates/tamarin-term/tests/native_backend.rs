@@ -2169,11 +2169,11 @@ fn fresh_xor_variants_share_a_fresh_witness_and_require_the_exact_live_rules() {
         assert_eq!(new(sig.clone()).variants(&q).unwrap().len(), 2);
     }
     let open_msg = xor(var(x), variable("m"));
-    for q in [open_msg.clone(), f_app_list(vec![term.clone(), open_msg])] {
-        assert!(matches!(
-            new(sig.clone()).variants(&q),
-            Err(MaudeError::UnsupportedOperation("variant generation"))
-        ));
+    for (q, count) in [
+        (open_msg.clone(), 4),
+        (f_app_list(vec![term.clone(), open_msg]), 8),
+    ] {
+        assert_eq!(new(sig.clone()).variants(&q).unwrap().len(), count);
     }
     let huge = var(LVar::new("huge", LSort::Fresh, u64::MAX));
     assert_eq!(

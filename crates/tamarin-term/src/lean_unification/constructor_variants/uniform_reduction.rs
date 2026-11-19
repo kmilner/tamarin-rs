@@ -52,6 +52,10 @@ impl FreeRule {
         })
     }
 
+    pub(super) fn pattern(&self) -> &LNTerm {
+        &self.rule.lhs
+    }
+
     pub(super) fn instantiate(&self, input: &LNTerm) -> Result<Option<LNTerm>, Error> {
         fn captures<'a>(p: &LNTerm, t: &'a LNTerm, out: &mut Vec<&'a LNTerm>) -> bool {
             match (p, t) {

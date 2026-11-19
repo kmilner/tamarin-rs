@@ -64,6 +64,7 @@ import Tamarin.OperandAbstraction
 import Tamarin.ResidualSearch
 import Tamarin.RootExclusion
 import Tamarin.ObservationRepresentative
+import Tamarin.VariantSpecialization
 import Tamarin.FactoredAC
 import Tamarin.FactorAdmission
 import Tamarin.GraphUnification

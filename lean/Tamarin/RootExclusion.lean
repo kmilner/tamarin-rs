@@ -1,3 +1,4 @@
+import Tamarin.MatchingConjunction
 import Tamarin.RootNormalForms
 import Tamarin.RuleAtHead
 import TamarinRuntime.Candidate
@@ -59,5 +60,24 @@ theorem normal {run} (hc : Correct run) (rules : List (Equation s))
   rw [getElem!_pos (Array.ofFn fun k => code (head (xs k))) i.val bound] at clash
   exact clash (by simpa [j] using
     (survives code (p j) σ nonzero).trans (congrArg code actual.symm))
+
+/-- A concrete free application with normal children is normal when complete
+rigid-subject matching refutes every rule at its head, including nonlinear
+patterns. Rule variables may share names with the subject. -/
+theorem normal_of_empty_matches (rules : List (Equation s)) (apps : ∀ r ∈ rules, Application r.lhs)
+    (f : s.FreeSym) (xs : Fin (s.arity f) → Term s) (children : ∀ i, Normal (ruleRoot rules) (xs i))
+    (empty : ∀ p rhs, (⟨.free f p,rhs⟩ : Equation s) ∈ rules →
+      Matching.Complete [⟨.free f p,.free f xs⟩] (fun _ => True) []) :
+    Normal (ruleRoot rules) (.free f xs) := by
+  classical
+  apply normal_free_no_root children
+  intro ys eqv b root
+  obtain ⟨p,rhs,mem,σ,eq,_⟩ := (ruleRoot_free_iff rules f apps ys b).mp root
+  let q : Problem s := [⟨.free f p,.free f xs⟩]
+  have hm : Matching.Matches q σ := by
+    intro e he
+    obtain rfl : e = _ := List.mem_singleton.mp he
+    exact .free _ _ _ fun i => by simpa only [eq i, Substitution.apply] using (eqv i).symm
+  exact ((empty p rhs mem).exists_match_iff.mp ⟨σ,hm⟩) rfl
 
 end Tamarin.Rewriting.RootExclusion

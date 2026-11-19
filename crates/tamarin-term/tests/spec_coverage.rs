@@ -122,7 +122,7 @@ fn exercise(h: &MaudeHandle, op: &str, expected: &str, ts: &[LNTerm]) -> Result<
                         .any(|a| covers_identity(&q, &Subst::from_list(a))),
                     "{q:?}"
                 ),
-                "probe" => {}
+                "complete" | "probe" => {}
                 _ => panic!("invalid variant expectation {expected}"),
             }
         }
