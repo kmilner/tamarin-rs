@@ -86,6 +86,7 @@ import Tamarin.DHPeerComplete
 import Tamarin.ACRootReduction
 import Tamarin.ACSubgroups
 import Tamarin.ACUnifierExclusion
+import Tamarin.NarrowingFrontier
 import Tamarin.DHBase
 import Tamarin.DHPeerPrograms
 import Tamarin.VariantJoinLeaf

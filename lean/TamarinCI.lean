@@ -100,6 +100,36 @@ opened answer must avoid those keys before the caller adds their identities. -/
 theorem variantJoinLeaf_complete : Rewriting.VariantJoin.LeafSemantic :=
   Rewriting.VariantJoin.leafSemantic
 
+open Rewriting Rewriting.RootNarrowing in
+theorem rootNarrowing_csu {s : Signature} {R : Root s} (p : Schema R) (q : Term s)
+    (apart : ∀ w, p.lhs.Occurs w → ¬q.Occurs w) {rows} (csu : CompleteSet (p.problem q) rows)
+    (ρ : Substitution s) (u : Term s) :
+    (∀ μ ∈ rows, StepModulo R (μ.apply q) (μ.apply p.rhs)) ∧
+    ((∃ τ : Substitution s, EquivB (ρ.apply q) (τ.apply p.lhs) ∧ EquivB u (τ.apply p.rhs)) ↔
+      ∃ μ ∈ rows, Fits q ρ u μ (μ.apply p.rhs)) :=
+  ⟨fun _ mem => p.replay q csu mem,p.lift_iff q apart csu ρ u⟩
+
+open Rewriting Rewriting.RootNarrowing in
+theorem acNarrowingCoversSubbag {s : Signature} [DecidableEq s.ACSym] {R : Root s} (p : Schema R)
+    (q : Term s) (f : s.ACSym) (z : Variable) (sort : z.sort = s.acSort f) (fresh : ¬p.lhs.Occurs z)
+    (apart : ∀ v, (p.extend f z).lhs.Occurs v → ¬q.Occurs v) {bare extended}
+    (bc : CompleteSet (p.problem q) bare) (ec : CompleteSet ((p.extend f z).problem q) extended)
+    (ρ τ : Substitution s) (typed : HasSort (ρ.apply q) (s.acSort f))
+    (hit : DHProduct.Subbag f (τ.apply p.lhs) (ρ.apply q)) :
+    ∃ u, StepModulo R (ρ.apply q) u ∧
+      ((EquivB (ρ.apply q) (τ.apply p.lhs) ∧ EquivB u (τ.apply p.rhs) ∧
+        ∃ μ ∈ bare, Fits q ρ u μ (μ.apply p.rhs)) ∨
+       ∃ rest, EquivB (ρ.apply q) (.ac f (τ.apply p.lhs) rest) ∧ EquivB u (.ac f (τ.apply p.rhs) rest) ∧
+         ∃ μ ∈ extended, Fits q ρ u μ (μ.apply (p.extend f z).rhs)) :=
+  p.subbag_lift q f z sort fresh apart bc ec ρ τ typed hit
+
+open Rewriting Rewriting.RootNarrowing in
+theorem narrowingFrontier_complete {s : Signature} (rules : List (Equation s)) (t : Term s)
+    (states kept : List (VariantJoin.Row s (VariantJoin.LocalKey t) Unit)) (answers : List (Variant s))
+    (vars : Normalized (ruleRoot rules) Substitution.identity)
+    (certificate : Certificate rules t states kept answers) : CompleteVariants (ruleRoot rules) [t] answers :=
+  certificate.complete vars
+
 open Rewriting Rewriting.ConstructorVariants in
 theorem acPairUnifierExclusion_stable {s : Signature} (rules : List (Equation s))
     (apps : ∀ r ∈ rules, Application r.lhs) (f : s.ACSym) (a b : Term s)
