@@ -33,8 +33,8 @@ impl RuleTable {
     /// An exact DH inventory gives signed expressions a unique normal value.
     /// A power spine also has a unique value when its base stays normal and
     /// every exponent has a defined signed count under the same substitution.
-    /// Bilinear.PowerSpine.caller_power_map also covers a pairing of stable
-    /// operands under the exact joint DH and bilinear inventories.
+    /// Bilinear.PowerSpine.stage_viewed also covers pairings of nested scalar
+    /// actions on stable points under the exact joint inventories.
     pub(super) fn dh_unique_instances(&self, t: &LNTerm) -> Result<bool, Error> {
         if !self.builtin_dh {
             return Ok(false);
@@ -52,7 +52,7 @@ impl RuleTable {
                     && let [left, right] = points.as_ref()
                 {
                     return Ok(
-                        self.stably_normal_native(left)? && self.stably_normal_native(right)?
+                        self.bp_point_spine(left, true)? && self.bp_point_spine(right, true)?
                     );
                 }
                 return self.stably_normal_native(&args[0]);
@@ -85,6 +85,9 @@ impl RuleTable {
         for _ in 0..64 {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
             let Some(args) = power_args(&current) else {
+                if self.builtin_bp && matches!(&current, Term::App(FunSym::C(CSym::EMap), _)) {
+                    return self.scalar_action_normal(&current);
+                }
                 return self.dh_product_normal(&current);
             };
             if power_args(&args[0]).is_some() {
@@ -97,8 +100,9 @@ impl RuleTable {
             let base = if self.builtin_bp
                 && let Term::App(FunSym::C(CSym::EMap), points) = &args[0]
                 && let [left, right] = points.as_ref()
-                && self.join_normal(left)? == Some(true)
-                && self.join_normal(right)? == Some(true)
+                && self.bp_point_spine(left, false)?
+                && self.bp_point_spine(right, false)?
+                && self.signed_operand(&args[1], false)?
             {
                 self.scalar_action_normal(&args[0])?
             } else {
