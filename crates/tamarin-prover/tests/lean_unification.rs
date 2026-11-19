@@ -507,8 +507,7 @@ fn nslpk_xor_responder_preserves_sources_and_the_complete_reachability_proof() {
     if !common::maude_available() {
         return;
     }
-    // R_1 sends a public name XOR a fresh nonce. I_2 introduces independent
-    // Msg operands, which require additional variants outside this fragment.
+    // Isolate the responder reachability lemma and its ten source cases.
     let corpus = include_str!("../../../tamarin-prover/examples/features/xor/NSLPK3xor.spthy");
     let (prefix, _) = corpus.split_once("\nrule I_2:").unwrap();
     let theory = format!(
@@ -536,6 +535,32 @@ fn nslpk_xor_responder_preserves_sources_and_the_complete_reachability_proof() {
         }
     }
     std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn nslpk_xor_closes_all_rules_and_precomputes_sources_without_maude() {
+    let example = "features/xor/NSLPK3xor.spthy";
+    let (theory, log) = run_corpus(example, "native-only", &[]);
+    assert!(!log.contains("[maude>]"), "{log}");
+    let (_, initiator) = theory.split_once("rule (modulo AC) I_2:").unwrap();
+    let (initiator, rest) = initiator.split_once("*/").unwrap();
+    assert!(rest.contains("rule (modulo E) R_2:"));
+    let (_, variants) = initiator.split_once("variants (modulo AC)").unwrap();
+    let numbers: Vec<usize> = variants
+        .lines()
+        .filter_map(|line| line.trim_start().split_once(". ")?.0.parse().ok())
+        .collect();
+    assert_eq!(numbers, (1..=7).collect::<Vec<_>>());
+    let (sources, log) = run_corpus(example, "native-only", &["--precompute-only"]);
+    assert!(!log.contains("[maude>]"), "{log}");
+    assert!(
+        sources.contains("Refined sources: 11 cases, deconstructions complete"),
+        "{sources}"
+    );
+    if common::maude_available() {
+        let (reference, _) = run_corpus(example, "maude", &["--precompute-only"]);
+        assert_eq!(comparable_proof(&sources), comparable_proof(&reference));
+    }
 }
 
 #[test]

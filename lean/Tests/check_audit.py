@@ -638,6 +638,16 @@ EXPORT_MUTATIONS.extend([
     ("whole_always_defers", WHOLE_RUN, "  #[#[0]]", "theorem exportedWholeUnify_correct"),
 ])
 
+EXECUTABLE = ("import Tamarin.BinaryCancellationPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedBinaryCancellationRows_correct") + "end Tamarin\n")
+BINARY_ROWS = "  BinaryCancellationCandidate.rows"
+EXPORT_MUTATIONS.extend([
+    ("binary_cancellation_omits_overlap", BINARY_ROWS, BINARY_ROWS + ".extract 0 6",
+     "theorem exportedBinaryCancellationRows_correct"),
+    ("binary_cancellation_breaks_value_sharing", BINARY_ROWS,
+     BINARY_ROWS + ".map (fun row => row.set! 2 0)", "theorem exportedBinaryCancellationRows_correct"),
+])
+
 xor_matching_start = SOURCE.index("theorem exportedXorMatchings_correct")
 xor_matching_contract = SOURCE[xor_matching_start:SOURCE.index("\n\n", xor_matching_start) + 1]
 EXECUTABLE = ("import Tamarin.XorMatchings\n" + EXECUTABLE

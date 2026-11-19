@@ -122,7 +122,7 @@ impl RuleTable {
 
 /// The Rust term representation normally keeps AC operands sorted. Accept
 /// raw applications too, so identical leaves still occupy one run.
-fn odd_operands(args: &[LNTerm]) -> Result<Vec<&LNTerm>, Error> {
+pub(super) fn odd_operands(args: &[LNTerm]) -> Result<Vec<&LNTerm>, Error> {
     initialize()?;
     let mut ordered: Vec<_> = args.iter().collect();
     if !ordered.is_sorted() {

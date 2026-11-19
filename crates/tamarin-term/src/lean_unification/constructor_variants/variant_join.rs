@@ -4,7 +4,7 @@
 use super::{InputDomain, RuleTable};
 use crate::function_symbols::FunSym;
 use crate::lean_unification::{initialize, residual, Error, Outcome, WordSlice, LEAN_THREAD};
-use crate::lterm::{frees_list, HasFrees, LNTerm, LVar};
+use crate::lterm::{frees_list, HasFrees, LNTerm, LVar, Name};
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
 use crate::subst::{apply_vterm, Subst};
@@ -145,6 +145,39 @@ impl RuleTable {
         original: &FxHashSet<u64>,
         app: &LNTerm,
     ) -> Result<Option<Vec<Row>>, Error> {
+        let used: FxHashSet<_> = frees_list(app).into_iter().collect();
+        let local_keys: Vec<_> = keys.iter().copied().filter(|v| used.contains(v)).collect();
+        let open_row = |subst: &Subst<Name, LVar>, value| {
+            let mut row = Row {
+                images: local_keys
+                    .iter()
+                    .map(|&v| apply_vterm(subst, Term::Lit(Lit::Var(v))))
+                    .collect(),
+                values: vec![value],
+            };
+            if local_keys.len() != keys.len() {
+                // A leaf may have chosen a witness with the same name as an
+                // unrelated caller variable. Open its images AND value apart
+                // before adding those variables' independent identity images.
+                row = row.rename(original);
+                let padded = Subst::from_list(local_keys.iter().copied().zip(row.images));
+                row.images = keys
+                    .iter()
+                    .map(|&v| {
+                        padded
+                            .image_of(&v)
+                            .cloned()
+                            .unwrap_or(Term::Lit(Lit::Var(v)))
+                    })
+                    .collect();
+            }
+            row
+        };
+        if let Some(arms) = self.binary_cancellation_rows(app)? {
+            return Ok(Some(
+                arms.into_iter().map(|(s, v)| open_row(&s, v)).collect(),
+            ));
+        }
         let family = if self.dh_peer_factors(app)?.is_some() {
             self.dh_peer_rows(app, false)?
         } else if let family @ Outcome::Complete(_) = self.fresh_xor_variants(app)? {
@@ -166,39 +199,13 @@ impl RuleTable {
         let Outcome::Complete(arms) = family else {
             return Ok(None);
         };
-        let used: FxHashSet<_> = frees_list(app).into_iter().collect();
-        let local_keys: Vec<_> = keys.iter().copied().filter(|v| used.contains(v)).collect();
         let mut rows = Vec::with_capacity(arms.len());
         for arm in arms {
             let subst = Subst::from_list(arm);
-            let instance = apply_vterm(&subst, app.clone());
-            let Some(value) = self.reduce_native(&instance)? else {
+            let Some(value) = self.reduce_native(&apply_vterm(&subst, app.clone()))? else {
                 return Ok(None);
             };
-            let mut row = Row {
-                images: local_keys
-                    .iter()
-                    .map(|&v| apply_vterm(&subst, Term::Lit(Lit::Var(v))))
-                    .collect(),
-                values: vec![value],
-            };
-            if local_keys.len() != keys.len() {
-                // A leaf may have chosen a witness with the same name as an
-                // unrelated caller variable. Open its images AND value apart
-                // before adding those variables' independent identity images.
-                row = row.rename(original);
-                let padded = Subst::from_list(local_keys.iter().copied().zip(row.images));
-                row.images = keys
-                    .iter()
-                    .map(|&v| {
-                        padded
-                            .image_of(&v)
-                            .cloned()
-                            .unwrap_or(Term::Lit(Lit::Var(v)))
-                    })
-                    .collect();
-            }
-            rows.push(row);
+            rows.push(open_row(&subst, value));
         }
         Ok(Some(rows))
     }

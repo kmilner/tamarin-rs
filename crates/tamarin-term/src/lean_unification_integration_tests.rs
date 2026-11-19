@@ -5893,3 +5893,181 @@ fn native_oracle_binary_ac_reduction_agrees_with_maude_for_every_rule_and_alignm
     }
     assert_eq!(native.stats().norm_count, 0);
 }
+
+#[test]
+fn native_oracle_binary_msg_cancellation_recognizes_renamed_rules_and_checks_parity() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::hash;
+    use crate::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
+    use crate::maude_proc::MaudeError;
+    use crate::maude_sig::hash_maude_sig;
+    use crate::rewriting::RRule;
+    use crate::subterm_rule::rrule_to_ctxt_st_rule;
+    use crate::term::f_app_no_eq;
+
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let op = AcFctSym::new(
+        b"combine",
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    let e = NoEqSym::new(
+        b"neutral",
+        0,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let unit = f_app_no_eq(e, vec![]);
+    let combine = |args| f_app_ac(AcSym::AcFct(op), args);
+    let var = |name, id| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, id)));
+    let [u, v, w, z] = [
+        ("dup", 15),
+        ("withUnit", 9),
+        ("doubled", 4),
+        ("survivor", 1),
+    ]
+    .map(|(name, id)| var(name, id));
+    let rule = |lhs, rhs| rrule_to_ctxt_st_rule(&RRule::new(lhs, rhs)).unwrap();
+    let mut sig = hash_maude_sig();
+    sig.st_fun_syms.insert(e);
+    sig.st_ac_fun_syms.insert(op);
+    sig.st_rules
+        .insert(rule(combine(vec![u.clone(), u]), unit.clone()));
+    sig.st_rules
+        .insert(rule(combine(vec![unit.clone(), v.clone()]), v));
+    sig.st_rules
+        .insert(rule(combine(vec![w.clone(), z.clone(), w]), z));
+    let sig = sig.refresh();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle =
+        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
+
+    let open = combine(vec![var("left", 21), var("right", 22)]);
+    let variants = native.variants(&open).unwrap();
+    assert_eq!(variants.len(), 7);
+    assert_eq!(
+        canonical_small_ac_answers(variants),
+        canonical_small_ac_answers(oracle.variants(&open).unwrap())
+    );
+
+    // Vary two nonground/rigid factors independently; include two copies of
+    // the unit even when both real factors disappear.
+    let a = var("atom", 30);
+    let b = hash(pub_term("b"));
+    for i in 0..=3 {
+        for j in 0..=3 {
+            let mut factors = vec![unit.clone(); 2];
+            factors.extend(std::iter::repeat_n(a.clone(), i));
+            factors.extend(std::iter::repeat_n(b.clone(), j));
+            let subject = combine(factors);
+            let expected = match (i % 2, j % 2) {
+                (0, 0) => unit.clone(),
+                (1, 0) => a.clone(),
+                (0, 1) => b.clone(),
+                _ => combine(vec![a.clone(), b.clone()]),
+            };
+            assert_eq!(
+                native.reduce(&subject).unwrap(),
+                expected,
+                "multiplicities {i}, {j}"
+            );
+            assert_eq!(
+                oracle.reduce(&subject).unwrap(),
+                expected,
+                "multiplicities {i}, {j}"
+            );
+        }
+    }
+
+    // This fourth rule makes two distinct, nonunit factors disappear.
+    let h = var("h", 7);
+    let exceptional = combine(vec![h.clone(), hash(h)]);
+    let mut changed = sig;
+    changed.st_rules.insert(rule(exceptional, unit.clone()));
+    let changed = changed.refresh();
+    let changed_native = MaudeHandle::start_with_backend(
+        "/nonexistent",
+        changed.clone(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
+    assert!(matches!(
+        changed_native.variants(&open),
+        Err(MaudeError::UnsupportedOperation(_))
+    ));
+    let changed_oracle =
+        MaudeHandle::start_with_backend(&path, changed, AlgebraBackend::Maude).unwrap();
+    let ground = pub_term("example");
+    let exceptional = combine(vec![ground.clone(), hash(ground)]);
+    assert_eq!(native.reduce(&exceptional).unwrap(), exceptional);
+    assert_eq!(changed_oracle.reduce(&exceptional).unwrap(), unit);
+    assert_eq!(native.stats().var_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
+}
+
+#[test]
+fn native_oracle_binary_msg_cancellation_packed_seven_preserve_ambient_values() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{pair, xor};
+    use crate::lterm::frees_list;
+    use crate::maude_sig::{pair_maude_sig, xor_maude_sig};
+    use crate::subst::{apply_vterm, Subst};
+    use crate::term::f_app_list;
+
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = xor_maude_sig().merge(pair_maude_sig());
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    // x.6 is the first witness the isolated x.4 XOR x.5 family would allocate.
+    let [x, y, ambient] = [4, 5, 6].map(|i| Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, i))));
+    let op = xor(x.clone(), y.clone());
+    let slots = vec![
+        ambient.clone(),
+        op.clone(),
+        pair(ambient.clone(), x.clone()),
+        y.clone(),
+        op,
+    ];
+    let query = f_app_list(slots.clone());
+    let variants = native.variants(&query).unwrap();
+    assert_eq!(variants.len(), 7);
+    assert_eq!(
+        canonical_small_ac_answers(variants.clone()),
+        canonical_small_ac_answers(oracle.variants(&query).unwrap())
+    );
+    for arm in variants {
+        let subst = Subst::from_list(arm);
+        let instance = |t: &LNTerm| apply_vterm(&subst, t.clone());
+        let Term::Lit(Lit::Var(a)) = instance(&ambient) else {
+            panic!("ambient image must remain free")
+        };
+        for t in [&x, &y] {
+            assert!(!frees_list(&instance(t)).contains(&a));
+        }
+        for slot in &slots {
+            let applied = instance(slot);
+            assert_eq!(
+                native.reduce(&applied).unwrap(),
+                oracle.reduce(&applied).unwrap(),
+                "slot {slot:?}, instance {applied:?}"
+            );
+        }
+    }
+    assert_eq!(native.stats().var_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
+}

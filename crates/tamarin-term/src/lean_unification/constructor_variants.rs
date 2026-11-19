@@ -1,6 +1,7 @@
 //! Packed variant queries and root reductions against the active rewrite table.
 mod ac_root_exclusion;
 mod ac_root_reduce;
+mod binary_cancellation;
 mod dh_exponent;
 mod dh_peer;
 mod dh_power;
@@ -38,6 +39,7 @@ pub(crate) struct RuleTable {
     // Each AC row lists rigid operand heads required by one active left side.
     ac_patterns: FxHashMap<AcSym, Vec<Vec<u64>>>,
     ac_rules: FxHashMap<AcSym, Vec<crate::rewriting::RRule<LNTerm>>>,
+    cancellation_units: FxHashMap<AcSym, LNTerm>,
     free_rules: FxHashMap<NoEqSym, Vec<FreeRule>>,
     narrowing: FxHashMap<NoEqSym, NarrowingRule>,
     nat: bool,
@@ -147,7 +149,19 @@ impl RuleTable {
                 Some((*f, rule))
             })
             .collect();
+        let cancellation_units = ac_rules
+            .iter()
+            .filter_map(|(&head, bucket)| {
+                let unit = binary_cancellation::unit_for(head, bucket)?;
+                let Term::App(z, _) = unit else { return None };
+                (symbols.id(*z).is_some()
+                    && !by_head.contains_key(z)
+                    && !(sig.enable_nat && z == &FunSym::NoEq(nat_one_sym())))
+                    .then(|| (head, unit.clone()))
+            })
+            .collect();
         Some(Self {
+            cancellation_units,
             symbols,
             roots,
             patterns,
@@ -376,6 +390,9 @@ impl RuleTable {
     /// whether a later binding made a previously normal observation reducible.
     pub(crate) fn reduce_native(&self, term: &LNTerm) -> Result<Option<LNTerm>, Error> {
         if let Some(normal) = self.fresh_xor_reduce(term)? {
+            return Ok(Some(normal));
+        }
+        if let Some(normal) = self.cancellation_normal(term)? {
             return Ok(Some(normal));
         }
         if let Some(normal) = self.reduce(term)? {

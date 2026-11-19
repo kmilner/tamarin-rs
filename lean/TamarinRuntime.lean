@@ -1,4 +1,5 @@
 import TamarinRuntime.Candidate
+import TamarinRuntime.BinaryCancellation
 import TamarinRuntime.XorMatchings
 import TamarinRuntime.Whole
 import TamarinRuntime.FactorCheck
@@ -113,6 +114,10 @@ def sortClash (left right : Array UInt64) : Bool :=
 @[export tamarin_xor_branches]
 def xorBranches (same : Bool) : UInt8 :=
   RuntimeCandidate.xorBranches same
+
+@[export tamarin_binary_cancellation_rows]
+def binaryCancellationRows (_ : Unit) : Array (Array UInt64) :=
+  BinaryCancellationCandidate.rows
 
 @[export tamarin_xor_matchings]
 def xorMatchings (width : UInt64) : Option (Array (Array UInt64)) :=

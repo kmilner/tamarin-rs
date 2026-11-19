@@ -304,6 +304,12 @@ static void *selection_rows(lean_object *reply) {
     return lean_is_scalar(reply) ? NULL : wrap_rows(take_some(reply));
 }
 
+extern lean_object *tamarin_binary_cancellation_rows(lean_object *unit);
+
+void *tamarin_lean_binary_cancellation_rows(void) {
+    return wrap_rows(tamarin_binary_cancellation_rows(lean_box(0)));
+}
+
 extern lean_object *tamarin_xor_matchings(uint64_t width);
 
 void *tamarin_lean_xor_matchings(uint64_t width) {

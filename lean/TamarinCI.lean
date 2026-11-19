@@ -532,6 +532,17 @@ theorem exportedXorOdd_correct (count : UInt64) :
     Executable.xorOdd count = true ↔ count.toNat % 2 = 1 := by
   simp [Executable.xorOdd, RuntimeCandidate.xorOdd, ← UInt64.toNat_inj, UInt64.toNat_mod]
 
+/-- The same scalar kernel also decides parity for arbitrary normalized
+messages under a validated AC presentation with unit and cancellation. -/
+theorem exportedACParityReduction : Rewriting.BinaryXor.Reduction Executable.xorOdd :=
+  Rewriting.BinaryXor.reduction exportedXorOdd_correct
+
+open Rewriting in
+theorem binaryACParityClassification {sig : Signature} (T : BinaryXor.Table sig) {a b out : Term sig}
+    (ha : BinaryXor.Good T a) (hb : BinaryXor.Good T b) (nf : NormalForm T.R (.ac T.f a b) out) :
+    ∃ shape, BinaryXor.Instance T a b out shape :=
+  BinaryXor.classify T ha hb nf
+
 /-- The count of each operand in the original nonempty XOR is encoded without
 truncation. The selected operands can be emitted in any order. Their XOR is
 exactly the normal form under the entire active table, including when none
@@ -561,6 +572,56 @@ theorem exportedXorBranches_correct : Rewriting.FreshXor.BranchCorrect Executabl
 
 theorem exportedXorMatchings_correct : XorMatchings.Correct Executable.xorMatchings :=
   XorMatchings.correct
+
+theorem exportedBinaryCancellationRows_correct :
+    Rewriting.BinaryXor.RowsCorrect (Executable.binaryCancellationRows ()) :=
+  Rewriting.BinaryXor.candidate_rows
+
+open Rewriting Rewriting.BinaryXor in
+theorem exportedBinaryCancellationVariants_complete {sig : Signature} (q : Query sig) (arms : List (Variant sig))
+    (all : ∀ row ∈ Executable.binaryCancellationRows (), ∃ a ∈ arms, PacketArm q row a)
+    (only : ∀ a ∈ arms, ∃ row ∈ Executable.binaryCancellationRows (), PacketArm q row a) :
+    CompleteVariants q.table.R [q.term] arms ∧ ∀ a ∈ arms, a.Reconstructible q.table.R [q.term] :=
+  packetFamily_complete q _ exportedBinaryCancellationRows_correct arms all only
+
+open Rewriting Rewriting.BinaryXor in
+theorem exportedBinaryCancellationVariants_live {sig : Signature} (q : Query sig)
+    (rules : List (Equation sig)) (presentation : RulePresentation.Same q.table.rules rules)
+    (arms : List (Variant sig))
+    (all : ∀ row ∈ Executable.binaryCancellationRows (), ∃ a ∈ arms, PacketArm q row a)
+    (only : ∀ a ∈ arms, ∃ row ∈ Executable.binaryCancellationRows (), PacketArm q row a) :
+    CompleteVariants (ruleRoot rules) [q.term] arms ∧ ∀ a ∈ arms, a.Reconstructible (ruleRoot rules) [q.term] :=
+  (presentation.variants [q.term] arms).mp (exportedBinaryCancellationVariants_complete q arms all only)
+
+open Rewriting Rewriting.BinaryXor in
+theorem binaryXorVariants_complete {sig : Signature} (q : Query sig) (arms : List (Variant sig))
+    (all : ∀ sh, ∃ a ∈ arms, Decodes q sh a) (only : ∀ a ∈ arms, ∃ sh, Decodes q sh a) :
+    CompleteVariants q.table.R [q.term] arms ∧ ∀ a ∈ arms, a.Reconstructible q.table.R [q.term] :=
+  complete q arms all only
+
+open Rewriting Rewriting.BinaryXor Rewriting.VariantJoin in
+theorem binaryXorLeaf_exact {sig : Signature} (q : Query sig) (arms : List (Variant sig))
+    (all : ∀ sh, ∃ a ∈ arms, Decodes q sh a) (only : ∀ a ∈ arms, ∃ sh, Decodes q sh a)
+    {I : Type} (ids : I → Variable) (scope : ∀ v, q.term.Occurs v → ∃ i, ids i = v)
+    (rows : List (Row sig I Unit))
+    (opens : ∀ a ∈ arms, ∃ out ∈ rows, DecodesLeaf q.table.R q.term ids a out)
+    (comesFrom : ∀ out ∈ rows, ∃ a ∈ arms, DecodesLeaf q.table.R q.term ids a out) :
+    Exact q.table.R ids (fun _ => q.term) rows ∧ ∀ out ∈ rows,
+      (∀ i, HasSort (out.input i) (ids i).sort) ∧ out.IsNormal q.table.R :=
+  q.leaf arms all only ids scope rows opens comesFrom
+
+open Rewriting Rewriting.BinaryXor Rewriting.VariantJoin in
+theorem joinedBinaryXorVariants_packed {sig : Signature} {A : Type} {keys : List Variable}
+    (T : Table sig) (op : A → Term sig) (admit : ∀ a, ∃ l r, op a = .ac T.f l r ∧
+      ∀ ρ : Substitution sig, Normalized T.R ρ → Good T (ρ.apply l) ∧ Good T (ρ.apply r))
+    (rows : List (Row sig (Key keys) A)) (exactRows : Exact T.R Subtype.val op rows)
+    (typed : ∀ r ∈ rows, r.Sorted) (normal : ∀ r ∈ rows, r.IsNormal T.R)
+    (slots : List (Sum A (Term sig))) (used : ∀ a, .inl a ∈ slots)
+    (scope : ∀ v, Observed (slots.map (packedInput op)) v → v ∈ keys)
+    (n : Term sig → Term sig) (stable : ∀ t, .inr t ∈ slots → StableVariants.Representative T.R t (n t)) :
+    CompleteVariants T.R (slots.map (packedInput op)) (packRows rows typed slots n) ∧
+      ∀ a ∈ packRows rows typed slots n, a.Reconstructible T.R (slots.map (packedInput op)) :=
+  BinaryXor.packed T op admit rows exactRows typed normal slots used scope n stable
 
 open Rewriting Rewriting.FreshXor.Flat in
 theorem exportedFlatXorVariants_complete {sig : Signature} {width : UInt64} (q : Query sig width.toNat)
@@ -937,6 +998,7 @@ run_cmd do
     (``Tamarin.Executable.projectAnswers, `tamarin_project_answers),
     (``Tamarin.Executable.xorBranches, `tamarin_xor_branches),
     (``Tamarin.Executable.xorMatchings, `tamarin_xor_matchings),
+    (``Tamarin.Executable.binaryCancellationRows, `tamarin_binary_cancellation_rows),
     (``Tamarin.Executable.xorOdd, `tamarin_xor_odd),
     (``Tamarin.Executable.sortClash, `tamarin_sort_clash),
     (``Tamarin.Executable.residualRigid, `tamarin_residual_rigid),

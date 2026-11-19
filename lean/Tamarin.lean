@@ -48,6 +48,8 @@ import Tamarin.CommutativeCandidateProofs
 import Tamarin.SortClashCandidateProofs
 import Tamarin.CommutativeLinear
 import Tamarin.XorCandidateProofs
+import Tamarin.BinaryXorReduction
+import Tamarin.BinaryXorClassification
 import Tamarin.XorFlatScope
 import Tamarin.XorFlatPacked
 import Tamarin.AtomicACPair
@@ -87,6 +89,7 @@ import Tamarin.ACRootReduction
 import Tamarin.ACSubgroups
 import Tamarin.ACUnifierExclusion
 import Tamarin.NarrowingFrontier
+import Tamarin.BinaryXorJoined
 import Tamarin.DHBase
 import Tamarin.DHPeerPrograms
 import Tamarin.VariantJoinLeaf
@@ -94,3 +97,4 @@ import Tamarin.VariantJoinPacked
 import Tamarin.VariantJoinAmbient
 import Tamarin.VariantJoinSelect
 import Tamarin.VariantJoinSubsumption
+import Tamarin.BinaryCancellationPacket

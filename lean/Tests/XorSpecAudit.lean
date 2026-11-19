@@ -285,4 +285,25 @@ example :
       simpa [packedInput, op, FreshXor.Flat.Table.value, ACRepresentation.fold, Term.Occurs] using hv
   · intro t h; simp [slots] at h
 
+-- Two ground operands can have different syntax yet cancel. The shared
+-- factor is a commutative application from outside the active XOR rules.
+example :
+    let a : PTerm := .atom (1,.msg)
+    let b : PTerm := .atom (2,.msg)
+    let c : PTerm := .var x
+    let p : PTerm := .comm 7 a b
+    let ps : PTerm := .comm 7 b a
+    let input := table.value [p,ps,c]
+    NormalForm table.R input c ∧ ¬ Normal table.R input := by
+  intro a b c p ps input
+  have h : HasSort p .msg := .comm _ _ _ (.atom _) (.atom _)
+  have hc : HasSort c .msg := .var _
+  have nc : Normal table.R c := (ConstructorVariants.constructor_normal rules apps).1 x
+  have e : EquivB input (.ac table.f p (.ac table.f p c)) :=
+    .ac_congr _ (.refl _) (.ac_congr _ (EquivB.comm_swap (sig := signature) 7 b a) (.refl _))
+  have red := (Reduces.basis e).trans (BinaryXor.shape_reduces table .rightContains h h hc)
+  refine ⟨⟨red,nc,fun _ hs => .widen hc (Term.rootSort_le hs)⟩,?_⟩
+  intro normal
+  cases (normal_reduces_equiv red normal).head_eq
+
 end Tamarin.XorSpecAudit
