@@ -3948,6 +3948,63 @@ fn homogeneous_basis_answers_match_maude_up_to_branch_and_witness_renaming() {
 }
 
 #[test]
+fn native_oracle_compact_nonunit_plane_preserves_all_five_substitutions() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::lean_unification::Substitutions;
+    use crate::subst::{apply_vterm, Subst};
+    use crate::term::f_app_list;
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = mset_maude_sig();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let vars = ["x", "y", "z"].map(|n| Term::Lit(Lit::Var(LVar::new(n, LSort::Msg, 0))));
+    let valued = |arms: Substitutions| {
+        assert_eq!(arms.len(), 5);
+        canonical_small_ac_answers(
+            arms.into_iter()
+                .map(|arm| {
+                    let subst = Subst::from_list(arm);
+                    let images = vars
+                        .iter()
+                        .map(|t| apply_vterm(&subst, t.clone()))
+                        .collect();
+                    vec![(LVar::new("row", LSort::Msg, 0), f_app_list(images))]
+                })
+                .collect(),
+        )
+    };
+    // For coprime p,q, the primitive columns of pX+qY=(p+q)Z are
+    // (p+q,0,p), (1,1,1) and (0,p+q,q). Exactly five subsets cover all inputs.
+    for (p, q) in [(7, 8), (24, 25)] {
+        let lhs = f_app_ac(
+            AcSym::Union,
+            [vec![vars[0].clone(); p], vec![vars[1].clone(); q]].concat(),
+        );
+        let rhs = f_app_ac(AcSym::Union, vec![vars[2].clone(); p + q]);
+        for equation in [
+            Equal {
+                lhs: lhs.clone(),
+                rhs: rhs.clone(),
+            },
+            Equal { lhs: rhs, rhs: lhs },
+        ] {
+            let eqs = std::slice::from_ref(&equation);
+            assert_eq!(
+                valued(native.unify(eqs).unwrap()),
+                valued(oracle.unify_via_maude(eqs).unwrap())
+            );
+        }
+    }
+}
+
+#[test]
 fn abstract_operands_reconcile_complete_branches_against_maude() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{emap, hash, pair};
