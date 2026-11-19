@@ -1,6 +1,7 @@
 import Tamarin.VariantFrontier
 import Tamarin.GroundConjunction
 import Tamarin.ACRepresentation
+import Tamarin.MatchingFree
 
 namespace Tamarin.Rewriting.VariantOverlapAgreement
 open RootNarrowing VariantJoin
@@ -22,15 +23,31 @@ theorem Agrees.compatible {R : Root s} {p q : State s I}
   exact (l.values ()).trans ((agree σ τ (fun i => (l.inputs i).symm.trans (r.inputs i))).trans
     (r.values ()).symm)
 
-/-- Construct two instances of the same constructor context using paired
-observations as holes. A hole may select a whole compound input, and it
-may be used repeatedly. Each row may choose any representative modulo B. -/
+/-- Corresponding arguments of a free symbol form derived observations.
+This holds for arbitrary subterms and independent instantiations. -/
+theorem Agrees.freeArg {left right : I → Term s} (f : s.FreeSym) (xs ys : Fin (s.arity f) → Term s)
+    (i : Fin (s.arity f)) (h : Agrees left right (.free f xs) (.free f ys)) :
+    Agrees left right (xs i) (ys i) := fun σ τ overlap =>
+  (Matching.free_equiv_iff f _ _).mp (h σ τ overlap) i
+
+/-- An arbitrary family of derived observations may feed another proof.
+The independent substitutions stay fixed through the entire composition. -/
+theorem Agrees.of_observations {J : Type} {left right : I → Term s} {xs ys : J → Term s}
+    {a b : Term s} (observations : ∀ j, Agrees left right (xs j) (ys j)) (value : Agrees xs ys a b) :
+    Agrees left right a b := fun σ τ overlap => value σ τ (fun j => observations j σ τ overlap)
+
+/-- Build corresponding outputs using the input pairs, congruence of all
+symbols, injectivity of free symbols, and independent changes of
+representative modulo B. An observation may be projected or reused at any
+depth of the derivation. -/
 inductive FromInputs (left right : I → Term s) : Term s → Term s → Prop where
   | input (i : I) : FromInputs left right (left i) (right i)
   | atom (a : s.Atom) : FromInputs left right (.atom a) (.atom a)
   | free (f : s.FreeSym) (xs ys : Fin (s.arity f) → Term s)
       (children : ∀ i, FromInputs left right (xs i) (ys i)) :
       FromInputs left right (.free f xs) (.free f ys)
+  | freeArg (f : s.FreeSym) (xs ys : Fin (s.arity f) → Term s) (i : Fin (s.arity f))
+      (parent : FromInputs left right (.free f xs) (.free f ys)) : FromInputs left right (xs i) (ys i)
   | comm (f : s.CSym) {a b c d}
       (first : FromInputs left right a c) (second : FromInputs left right b d) :
       FromInputs left right (.comm f a b) (.comm f c d)
@@ -48,9 +65,23 @@ theorem FromInputs.agrees {a b} (h : FromInputs left right a b) : Agrees left ri
   | input i => exact same i
   | atom a => exact .refl _
   | free f _ _ _ ih => exact .free f _ _ ih
+  | freeArg f _ _ i _ ih => exact (Matching.free_equiv_iff f _ _).mp ih i
   | comm f _ _ h₁ h₂ => exact .comm_congr f h₁ h₂
   | ac f _ _ h₁ h₂ => exact .ac_congr f h₁ h₂
   | basis ha hb _ ih => exact (ha.subst σ.image).trans (ih.trans (hb.subst τ.image).symm)
+
+/-- Swapping two distinct children preserves a C or AC observation while
+changing its first child. Both implications fail even for identity
+substitutions, so an overlap proof cannot project from those heads by index. -/
+theorem swapped_projections (f : s.CSym) (g : s.ACSym) (a b : Term s) (different : ¬EquivB a b) :
+    (¬ Agrees (fun _ : Unit => .comm f a b) (fun _ => .comm f b a) a b) ∧
+    (¬ Agrees (fun _ : Unit => .ac g a b) (fun _ => .ac g b a) a b) := by
+  have refute (l r : Term s) (same : EquivB l r) :
+      ¬ Agrees (fun _ : Unit => l) (fun _ => r) a b := by
+    intro agrees
+    have output := agrees Substitution.identity Substitution.identity (fun _ => by simpa using same)
+    exact different (by simpa using output)
+  exact ⟨refute _ _ (.comm_swap f a b),refute _ _ (.ac_swap g a b)⟩
 
 /-- Rigid outputs may have different associations or orders on the two sides. -/
 theorem FromInputs.ground {a b : Term s} (closed : a.Ground) (equal : EquivB a b) :
