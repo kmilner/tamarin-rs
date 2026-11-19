@@ -3,6 +3,7 @@ import Tamarin.ACCompactPlane
 import Tamarin.ACPrimitiveRow
 import Tamarin.ACGridBudget
 import Tamarin.ACBalanceBound
+import Tamarin.ACWeightedBudget
 import Tamarin.ACUnitBalance
 import Tamarin.ACNeutralBasis
 import Tamarin.ACSparsePlane
@@ -65,12 +66,21 @@ private def SparseWithin {n} (p : Row n) : Prop :=
   GridBudget p (p.sparseLimits cap) 16384 ∧
     ((keptCoefficients p cap).filter (SparsePlane.keep p)).length ≤ 2048
 
+/-- Every nonzero entry in the cancelled row equals its greatest weight.
+The floor is stated directly on the coefficient table. -/
+def CommonWeight {n} (r : Row n) : Prop :=
+  let largest := (1 :: (List.ofFn r.pos ++ List.ofFn r.neg)).max (by simp)
+  ∀ i, (r.pos i = 0 ∨ r.pos i = largest) ∧ (r.neg i = 0 ∨ r.neg i = largest)
+
+private theorem commonWeight_iff {n} (r : Row n) : CommonWeight r ↔ r.equalMagnitude = true := by
+  simp [CommonWeight,Row.equalMagnitude,Row.cap]
+
 def Within {n} : List (Row n) → Prop
   | [] => True
   | r :: rs => Within rs ∧
     let gs := generate rs
     let p := r.pullback gs.get
-    gs.length ≤ 64 ∧ (((∀ i, p.pos i = 0) ∨ (∀ i, p.neg i = 0)) ∨ p.equalMagnitude = true ∨ DenseWithin p ∨ SparseWithin p)
+    gs.length ≤ 64 ∧ (((∀ i, p.pos i = 0) ∨ (∀ i, p.neg i = 0)) ∨ CommonWeight p ∨ WeightedComposition.Within p ∨ DenseWithin p ∨ SparseWithin p)
 
 /-- Mandatory output bounds use the reference covering subsets and occurrence
 counts. The first clause preserves the previous inexpensive admission check. -/
@@ -180,6 +190,40 @@ private theorem sparse_checks {n} (p : Row n) (area : DenseWithin p ∨ SparseWi
   · refine ⟨(SparsePlane.fits_iff ..).mpr grid,?_⟩
     rwa [SparsePlane.filtered,p.cappedGenerators_eq]
 
+private theorem unitIntersection_eq {n} (gs : List (Vec n)) (p : Row gs.length)
+    (uniform : p.equalMagnitude = true) (live : ∀ j, ∃ i, 0 < gs.get j i) :
+    unitIntersection gs p = minimize (lift gs.get p.generators) := by
+  let basis : Vector (Vec n) gs.length := ⟨gs.toArray, by simp⟩
+  have get : (fun i : Fin gs.length => basis[i]) = gs.get := by funext i; simp [basis]
+  change (if UnitBalance.separates basis then _ else _) = _
+  simp [List.map_map,Function.comp_def,stored_get]
+  by_cases apart : UnitBalance.separates basis = true
+  · rw [ite_eq_left apart,←UnitBalance.minimize_unitLift p basis apart,UnitBalance.unitLift_eq,get]
+    exact UnitBalance.minimize_lift p uniform _ live
+  · rw [ite_eq_right apart,UnitBalance.unitLift_eq,get]
+    exact UnitBalance.minimize_lift p uniform _ live
+
+private theorem mixed_spec {k n} (p : Row k) (g : Fin k → Vec n) (live : ∀ j, ∃ i, 0 < g j i) :
+    (∀ xs, mixedCoefficients p = some xs → minimize (lift g xs) = minimize (lift g p.generators)) ∧
+    ((WeightedComposition.Within p ∨ DenseWithin p ∨ SparseWithin p) → (mixedCoefficients p).isSome) := by
+  cases h : WeightedComposition.candidate p with
+  | some xs =>
+    refine ⟨?_,by simp [mixedCoefficients,h]⟩
+    intro ys hy
+    have eq : xs = ys := by simpa [mixedCoefficients,h] using hy
+    exact eq ▸ WeightedComposition.candidate_lift p h g live
+  | none =>
+    constructor
+    · intro xs hx
+      simp [mixedCoefficients,h,guard,Option.bind_eq_some_iff] at hx
+      rw [←hx.2.2]
+      exact (SparsePlane.minimize_lift p _ _ live).trans (minimize_compact _ g live)
+    · rintro (w|area)
+      · have fit := WeightedComposition.candidate_complete p w
+        simp [h] at fit
+      · have ⟨fit,count⟩ := sparse_checks p area
+        simp [mixedCoefficients,h,guard,fit,count]
+
 theorem bounded_spec {n} (rs : List (Row n)) :
     (∀ gs, boundedBasis rs = some gs → gs = generate rs) ∧
     (Within rs → boundedBasis rs = some (generate rs)) := by
@@ -201,13 +245,14 @@ theorem bounded_spec {n} (rs : List (Row n)) :
         simpa [p,prev,List.map_reverse,generate,intersect] using (neutral_basis_ordered rs p sided).symm
       · dsimp only [p,prev] at sided
         by_cases uniform : p.equalMagnitude = true
-        · have exactBasis := UnitBalance.minimize_lift p uniform prev.get live
+        · have exactBasis := unitIntersection_eq prev p uniform live
           dsimp only [p,prev] at uniform
-          simp [stored_get,guard,sided,uniform,List.map_map,Function.comp_def] at h
+          simp [stored_get,guard,sided,uniform] at h
           exact h.2.symm.trans exactBasis
         dsimp only [p,prev] at uniform
         simp [stored_get,guard,sided,uniform,List.map_map,Function.comp_def,Option.bind_eq_some_iff] at h
-        exact h.2.2.2.symm.trans ((SparsePlane.minimize_lift p _ _ live).trans (minimize_compact _ prev.get live))
+        obtain ⟨_,xs,pick,out⟩ := h
+        exact out.symm.trans ((mixed_spec p prev.get live).1 xs pick)
     · rintro ⟨tail,width,domain⟩
       let prev := generate rs
       let p := r.pullback prev.get
@@ -217,18 +262,16 @@ theorem bounded_spec {n} (rs : List (Row n)) :
         dsimp only [p,prev] at sided
         simpa [boundedBasis,ih.2 tail,stored_get,guard,width,sided,p,prev,generate,intersect] using ordered.symm
       by_cases uniform : p.equalMagnitude = true
-      · have exactBasis := UnitBalance.minimize_lift p uniform prev.get live
+      · have exactBasis := unitIntersection_eq prev p uniform live
         dsimp only [p,prev] at sided uniform
-        simpa [boundedBasis,ih.2 tail,stored_get,guard,width,sided,uniform,List.map_map,
-          Function.comp_def,generate,intersect] using exactBasis
-      have checks := sparse_checks p ((domain.resolve_left sided).resolve_left uniform)
-      have minimized := (SparsePlane.minimize_lift p _ _ live).trans (minimize_compact p prev.get live)
-      dsimp only [p,prev] at sided uniform
-      simp [boundedBasis,ih.2 tail,stored_get,guard,width,sided,uniform,
-        show (r.pullback (generate rs).get).sparseFits (r.pullback (generate rs).get).primitive.cap 16384 = true from checks.1,
-        show ((r.pullback (generate rs).get).sparseGenerators (r.pullback (generate rs).get).primitive.cap).length ≤ 2048 from checks.2,
-        List.map_map,Function.comp_def]
-      exact minimized
+        simpa [boundedBasis,ih.2 tail,stored_get,guard,width,sided,uniform,generate,intersect] using exactBasis
+      have spec := mixed_spec p prev.get live
+      obtain ⟨xs,pick⟩ := Option.isSome_iff_exists.mp (spec.2 ((domain.resolve_left sided).resolve_left (fun h => uniform ((commonWeight_iff p).mp h))))
+      have minimized := spec.1 xs pick
+      dsimp only [p,prev] at sided uniform pick
+      simpa [boundedBasis,ih.2 tail,stored_get,guard,width,sided,uniform,pick,List.map_map,
+        Function.comp_def,generate,intersect] using minimized
+
 
 theorem emit_correct {n} (f : sig.ACSym) (rows : List ACSystem.Row) (avoid : List Variable)
     (fr : Frame f rows n) (gs : List (Vec n)) (hc : BasisCorrect (rows.map (encode fr.names)) gs)

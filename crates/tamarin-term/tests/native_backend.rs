@@ -2528,6 +2528,47 @@ fn native_homogeneous_system_preserves_shared_and_repeated_witnesses() {
 }
 
 #[test]
+fn weighted_ac_unifiers_keep_every_primitive_distribution() {
+    use std::collections::{BTreeMap, BTreeSet};
+    use tamarin_term::lterm::HasFrees;
+    let h = native();
+    let [x, y, z] = ["x", "y", "z"].map(|s| LVar::new(s, LSort::Msg, 0));
+    let v = |key| Term::Lit(Lit::Var(key));
+    let lhs = f_app_ac(
+        AcSym::Union,
+        [x, y]
+            .into_iter()
+            .flat_map(|key| std::iter::repeat_n(v(key), 199))
+            .collect(),
+    );
+    let rhs = sum(v(z), v(z));
+    let rows = h.unify(&[Equal { lhs, rhs }]).unwrap();
+    // 199*(|X|+|Y|)=2*|Z|. A primitive generator spends two
+    // occurrences across X and Y and exactly 199 on Z.
+    let mut selections = BTreeSet::new();
+    for arm in rows {
+        let mut counts = BTreeMap::<_, [usize; 3]>::new();
+        for (key, image) in arm {
+            let i = [x, y, z].iter().position(|k| *k == key).unwrap();
+            image.for_each_free(&mut |w| {
+                assert!(![x, y, z].contains(w));
+                counts.entry(*w).or_default()[i] += 1;
+            });
+        }
+        let mut mask = 0;
+        for [a, b, c] in counts.into_values() {
+            assert_eq!(a + b, 2);
+            assert_eq!(c, 199);
+            assert_eq!(mask & (1 << a), 0);
+            mask |= 1 << a;
+        }
+        assert!(selections.insert(mask));
+    }
+    assert_eq!(selections, BTreeSet::from([2, 3, 5, 6, 7]));
+    assert_eq!(h.stats().unify_count, 0);
+}
+
+#[test]
 fn uniform_ac_multiplicities_keep_wide_principal_sums() {
     use std::collections::BTreeSet;
     let h = native();

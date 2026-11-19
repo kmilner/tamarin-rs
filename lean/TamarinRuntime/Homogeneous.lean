@@ -1,3 +1,4 @@
+import TamarinRuntime.ACWeightedComposition
 import TamarinRuntime.ACUnitBalance
 import TamarinRuntime.ACSparsePlane
 import TamarinRuntime.FlatMatch
@@ -20,6 +21,20 @@ def readRows (n : Nat) : List (Array UInt64) → Option (List (Row n))
 
 def coordinates {n} (v : Vector Nat n) : Vec n := fun i => v[i]
 
+def unitIntersection {n} (gs : List (Vec n)) (p : Row gs.length) : List (Vec n) :=
+  let basis : Vector (Vec n) gs.length := ⟨gs.toArray, by simp⟩
+  let candidates := (p.unitLift basis).map Vector.ofFn
+  let kept := candidates.map coordinates
+  if UnitBalance.separates basis then kept else minimize kept
+
+def mixedCoefficients {n} (p : Row n) : Option (List (Vec n)) :=
+  WeightedComposition.candidate p <|> do
+    let cap := p.primitive.cap
+    guard (p.sparseFits cap 16384)
+    let coeffs := p.sparseGenerators cap
+    guard (coeffs.length ≤ 2048)
+    return coeffs
+
 /-- Store each coefficient table in a vector before converting it to the
 coordinate function used by the basis algorithms. Minimization and later
 row intersections share these stored coordinates. -/
@@ -38,12 +53,8 @@ def boundedBasis {n} : List (Row n) → Option (List (Vec n))
         pulled.pos i == 0 && pulled.neg i == 0
       return neutral.map gs.get
     if pulled.equalMagnitude then
-      let candidates := (lift gs.get pulled.unitGenerators).map Vector.ofFn
-      return minimize (candidates.map coordinates)
-    let cap := pulled.primitive.cap
-    guard (pulled.sparseFits cap 16384)
-    let coeffs := pulled.sparseGenerators cap
-    guard (coeffs.length ≤ 2048)
+      return unitIntersection gs pulled
+    let coeffs ← mixedCoefficients pulled
     let candidates := (lift gs.get coeffs).map Vector.ofFn
     return minimize (candidates.map coordinates)
 
