@@ -120,27 +120,27 @@ private noncomputable def applyValue (c : Codec sig) (k i : UInt64) (xs : List (
   else none
 
 mutual
-  private noncomputable def value (c : Codec sig) : Tree → Option (Class sig)
-    | .leaf k i _ => if k = 0 then (c.vars.get i).map (fun v => classOf (.var v))
+  noncomputable def evalClass (c : Codec sig) (σ : Substitution sig) : Tree → Option (Class sig)
+    | .leaf k i _ => if k = 0 then (c.vars.get i).map (fun v => classOf (σ.image v))
                      else if k = 1 then (c.atoms.get i).map (fun a => classOf (.atom a))
                      else none
-    | .app k i xs => applyValue c k i (values c xs)
-  private noncomputable def values (c : Codec sig) : List Tree → List (Class sig)
+    | .app k i xs => applyValue c k i (evalClasses c σ xs)
+  noncomputable def evalClasses (c : Codec sig) (σ : Substitution sig) : List Tree → List (Class sig)
     | [] => []
-    | a :: as => (value c a).toList ++ values c as
+    | a :: as => (evalClass c σ a).toList ++ evalClasses c σ as
 end
 
-private theorem values_filter (c : Codec sig) (as : List Tree) :
-    values c as = as.filterMap (value c) := by
+private theorem values_filter (c : Codec sig) (σ : Substitution sig) (as : List Tree) :
+    evalClasses c σ as = as.filterMap (evalClass c σ) := by
   induction as with
   | nil => rfl
-  | cons a as ih => cases ha : value c a <;> simp [values, ha, ih]
+  | cons a as ih => cases ha : evalClass c σ a <;> simp [evalClasses, ha, ih]
 
-private theorem fold_parts (c : Codec sig) {id : UInt64} {f : sig.ACSym}
+theorem fold_parts_eval (c : Codec sig) (σ : Substitution sig) {id : UInt64} {f : sig.ACSym}
     (h : c.acs.get id = some f) (a : Tree) :
-    fold f ((parts id a).filterMap (value c)) = value c a := by
-  have single (x : Tree) : fold f ([x].filterMap (value c)) = value c x := by
-    cases hx : value c x <;> simp [hx, fold, combine]
+    fold f ((parts id a).filterMap (evalClass c σ)) = evalClass c σ a := by
+  have single (x : Tree) : fold f ([x].filterMap (evalClass c σ)) = evalClass c σ x := by
+    cases hx : evalClass c σ x <;> simp [hx, fold, combine]
   cases a with
   | leaf k i s => exact single _
   | app k i xs =>
@@ -148,7 +148,7 @@ private theorem fold_parts (c : Codec sig) {id : UInt64} {f : sig.ACSym}
     · subst k
       by_cases hi : id = i
       · subst i
-        simp [parts_ac, value, applyValue, h, values_filter]
+        simp [parts_ac, evalClass, applyValue, h, values_filter]
       · simpa [parts, hi] using single (.app 4 i xs)
     · simpa [parts, hk] using single (.app k i xs)
 
@@ -164,51 +164,74 @@ private theorem order_pair (a b : Tree) : order [a,b] = [a,b] ∨ order [a,b] = 
     · exact Or.inl (congrArg _ p.cons_inv.eq_singleton)
     · exact Or.inr (congrArg _ (p.trans (.swap ..)).cons_inv.eq_singleton)
 
-private theorem values_keys (c : Codec sig) {n : Nat} (a : Fin n → Term sig)
-    (h : ∀ i, value c (key c (a i)) = some (classOf (a i))) :
-    values c (List.ofFn (fun i => key c (a i))) = List.ofFn (fun i => classOf (a i)) := by
+private theorem values_keys (c : Codec sig) (σ : Substitution sig) {n : Nat} (a : Fin n → Term sig)
+    (h : ∀ i, evalClass c σ (key c (a i)) = some (classOf (σ.apply (a i)))) :
+    evalClasses c σ (List.ofFn (fun i => key c (a i))) = List.ofFn (fun i => classOf (σ.apply (a i))) := by
   rw [values_filter]
   let indices := List.ofFn (fun i : Fin n => i)
   have hk : indices.map (fun i => key c (a i)) = List.ofFn (fun i => key c (a i)) := by
     simp [indices, List.map_ofFn, Function.comp_def]
   rw [← hk, List.filterMap_map]
-  have eh : value c ∘ (fun i => key c (a i)) = some ∘ (fun i => classOf (a i)) := funext h
+  have eh : evalClass c σ ∘ (fun i => key c (a i)) = some ∘ (fun i => classOf (σ.apply (a i))) := funext h
   rw [eh, List.filterMap_eq_map, List.map_ofFn]
   rfl
 
-private theorem value_key (c : Codec sig) (t : Term sig) (ht : Live c t) :
-    value c (key c t) = some (classOf t) := by
+theorem evalClass_key (c : Codec sig) (σ : Substitution sig) (t : Term sig) (ht : Live c t) :
+    evalClass c σ (key c t) = some (classOf (σ.apply t)) := by
   induction t with
-  | var v => simp [key, encode, canonical, value, show c.vars.get (c.vars.put v) = some v from ht]
-  | atom a => simp [key, encode, canonical, value, show c.atoms.get (c.atoms.put a) = some a from ht]
+  | var v => simp [key, encode, canonical, evalClass, show c.vars.get (c.vars.put v) = some v from ht]; rfl
+  | atom a => simp [key, encode, canonical, evalClass, show c.atoms.get (c.atoms.put a) = some a from ht]; rfl
   | free f a ih =>
     obtain ⟨hf, ha⟩ := ht
-    have hv := values_keys c a (fun i => ih i (ha i))
+    have hv := values_keys c σ a (fun i => ih i (ha i))
     simp only [key, encode, canonical, canonicalArgs_map, List.map_ofFn, Function.comp_def,
-      make, show (2 : UInt64) ≠ 4 by decide, show (2 : UInt64) ≠ 3 by decide, ite_false, value,
+      make, show (2 : UInt64) ≠ 4 by decide, show (2 : UInt64) ≠ 3 by decide, ite_false, evalClass,
       applyValue, ite_true, hf, Option.bind_some]
     rw [hv, freeValue_ofFn]
+    rfl
   | comm f a b ia ib =>
     obtain ⟨hf, ha, hb⟩ := ht
     have va := ia ha
     have vb := ib hb
-    change value c (make 3 _ [key c a, key c b]) = _
+    change evalClass c σ (make 3 _ [key c a, key c b]) = _
     rw [make_comm]
     rcases order_pair (key c a) (key c b) with ho | ho <;>
-      simp [ho, value, applyValue, values, va, vb, hf, cmul_comm] <;> rfl
+      simp [ho, evalClass, applyValue, evalClasses, va, vb, hf, cmul_comm] <;> rfl
   | ac f a b ia ib =>
     obtain ⟨hf, ha, hb⟩ := ht
-    change value c (make 4 _ [key c a, key c b]) = _
+    change evalClass c σ (make 4 _ [key c a, key c b]) = _
     rw [make_ac]
-    simp only [value, applyValue, ite_true, hf, Option.bind_some, values_filter]
+    simp only [evalClass, applyValue, ite_true, hf, Option.bind_some, values_filter]
     rw [fold_perm _ (List.Perm.filterMap _ (order_perm _)), List.filterMap_append, fold_append,
-      fold_parts c hf, fold_parts c hf, ia ha, ib hb]
+      fold_parts_eval c σ hf, fold_parts_eval c σ hf, ia ha, ib hb]
     rfl
 
 theorem canonical_iff (c : Codec sig) {a b : Term sig} (ha : Live c a) (hb : Live c b) :
     canonical (encode c a) = canonical (encode c b) ↔ EquivB a b := by
   refine ⟨fun h => ?_, key_of_equiv c⟩
-  exact Quotient.exact (Option.some.inj
-    ((value_key c a ha).symm.trans ((congrArg (value c) h).trans (value_key c b hb))))
+  have eq := (evalClass_key c .identity a ha).symm.trans
+    ((congrArg (evalClass c .identity) h).trans (evalClass_key c .identity b hb))
+  have same : classOf a = classOf b := by simpa only [Substitution.apply_identity] using Option.some.inj eq
+  exact Quotient.exact same
+
+/- A rigid graph term has the same value in any two independent row substitutions. -/
+mutual
+  theorem evalClass_ground (c : Codec sig) (σ τ : Substitution sig) (t : Tree)
+      (rigid : ground t = true) : evalClass c σ t = evalClass c τ t := by
+    cases t with
+    | leaf k i sort =>
+      have one : k = 1 := beq_iff_eq.mp rigid
+      subst k
+      rfl
+    | app k id xs => exact congrArg (applyValue c k id) (evalClasses_ground c σ τ xs rigid)
+  theorem evalClasses_ground (c : Codec sig) (σ τ : Substitution sig) (ts : List Tree)
+      (rigid : groundArgs ts = true) : evalClasses c σ ts = evalClasses c τ ts := by
+    cases ts with
+    | nil => rfl
+    | cons t ts =>
+      simp only [groundArgs,Bool.and_eq_true] at rigid
+      obtain ⟨head,tail⟩ := rigid
+      simp only [evalClasses,evalClass_ground c σ τ t head,evalClasses_ground c σ τ ts tail]
+end
 
 end Tamarin.WholeProblem

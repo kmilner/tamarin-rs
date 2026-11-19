@@ -85,7 +85,7 @@ theorem withinGraph_iff (ns roots) : withinGraph ns roots = true ↔ GraphWithin
   · rintro ⟨sn,sr,sw,table,cs,hc,hr,total⟩
     exact ⟨⟨sn,sr,sw⟩,by simp [(table_correct ..).mpr hc,(reads ..).mpr hr,total]⟩
 
-theorem count_weight (ks xs : List UInt64) (f : UInt64 → Nat) (distinct : ks.Nodup) (live : xs ⊆ ks) :
+theorem count_weight {α : Type} [BEq α] [LawfulBEq α] (ks xs : List α) (f : α → Nat) (distinct : ks.Nodup) (live : xs ⊆ ks) :
     dot (fun i : Fin ks.length => xs.count (ks.get i)) (fun i => f (ks.get i)) = (xs.map f).sum := by
   induction xs with
   | nil => simp [dot,total,List.sum_eq_zero_iff_forall_eq_nat]
