@@ -119,6 +119,24 @@ private theorem mass_pos {x : Vec n} (tag : Fin n → Side) (s : Side) :
     exact ⟨i,h,hp⟩
   · rintro ⟨i,hi,hp⟩; exact ⟨_,⟨i,rfl⟩,by simpa [mask,hi] using hp⟩
 
+theorem meets_singleton_iff (tag : Fin n → Side) (v : Vec n) :
+    Meets tag singleton v ↔ ∃ i, tag i = .neutral ∧ v = spike i 1 := by
+  have spike_mass (i : Fin n) (t : Side) :
+      mass tag t (spike i 1) = if tag i = t then 1 else 0 := by
+    let weight : Vec n := fun j => if tag j = t then 1 else 0
+    have em : mass tag t (spike i 1) = dot weight (spike i 1) := by
+      unfold mass dot; congr 1; funext j
+      by_cases h : tag j = t <;> simp [mask,weight,h]
+    rw [em,dot_spike]; simp [weight]
+  constructor
+  · intro h
+    obtain ⟨i,hi,pos⟩ := (mass_pos tag .neutral).mp (show 0 < mass tag .neutral v by rw [h]; decide)
+    refine ⟨i,hi,Eq.symm (equal_of_below tag ?_ ?_)⟩
+    · intro j; by_cases e : j = i <;> simp [spike,e] <;> exact pos
+    · intro t; rw [h,spike_mass,hi]; cases t <;> rfl
+  · rintro ⟨i,hi,rfl⟩ t
+    rw [spike_mass,hi]; cases t <;> rfl
+
 private theorem quotas_pos {a b : Nat} (ha : 0 < a) (hb : 0 < b) :
     0 < active a b .pos ∧ 0 < active a b .neg := by
   exact ⟨Nat.div_pos (Nat.le_of_dvd hb (Nat.gcd_dvd_right ..)) (Nat.gcd_pos_of_pos_left _ ha),
