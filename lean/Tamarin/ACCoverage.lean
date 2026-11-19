@@ -58,7 +58,7 @@ private theorem enumerate_eq (xs : List α) (seen : BitVec n) :
       change ¬ seen ||| (mask x ||| (prepare mask xs).available) = _ at possible
       simp only [prepare, enumerate, possible, ite_false]
 
-private theorem support_bit (v : ACBasis.Vec n) (i : Fin n) :
+theorem support_bit (v : ACBasis.Vec n) (i : Fin n) :
     (support v).getLsbD i = decide (0 < v i) := by
   simp only [support, BitVec.getLsbD_cast, BitVec.getLsbD_ofBoolListLE,
     List.getD_eq_getElem?_getD, List.getElem?_ofFn, dite_eq_left i.isLt, Option.getD_some]
