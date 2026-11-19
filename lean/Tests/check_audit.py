@@ -453,7 +453,12 @@ selection_contract = SOURCE[selection_start:SOURCE.index("\n\n", selection_start
 EXECUTABLE = ("import Tamarin.OpenMatchSelect\n" + EXECUTABLE
               + "\nnamespace Tamarin\n" + selection_contract + "end Tamarin\n")
 SELECT = "  OpenMatchSelect.run rigid subject"
+EXECUTABLE = ("import Tamarin.CollectorMultiplicityMatching\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedCollectorPossible_correct") + "end Tamarin\n")
+COLLECTOR_TEST = " := CollectorMultiplicity.run occ residual"
 EXPORT_MUTATIONS.extend([
+    ("collector_discards_valid_matches", COLLECTOR_TEST, " := false", "theorem exportedCollectorPossible_correct"),
+    ("collector_misses_required_clashes", COLLECTOR_TEST, " := true", "theorem exportedCollectorPossible_correct"),
     ("open_match_reuses_an_occurrence", SELECT,
      "  (OpenMatchSelect.run rigid subject).map (fun out => out.map (fun row => row.map fun _ => 0))",
      "theorem exportedOpenMatchSelect_correct"),

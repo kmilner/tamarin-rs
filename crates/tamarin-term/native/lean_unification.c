@@ -168,6 +168,14 @@ uint8_t tamarin_lean_flat_ac_residual(const uint64_t *tail, size_t tail_length,
     return (uint8_t)status;
 }
 
+extern uint8_t tamarin_collector_possible(lean_object *occ, lean_object *residual);
+
+uint8_t tamarin_lean_collector_possible(const uint64_t *occ, size_t occurrence_count,
+                                        const uint64_t *residual, size_t residual_count) {
+    return tamarin_collector_possible(atom_array(occ, occurrence_count),
+                                      atom_array(residual, residual_count));
+}
+
 /* Nested numeric rows avoid textual serialization and variable-name parsing.
  * The Rust guard owns this opaque result until every requested row is copied. */
 extern lean_object *tamarin_flat_ac_match(uint64_t n, lean_object *occ,

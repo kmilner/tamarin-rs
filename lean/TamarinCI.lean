@@ -216,6 +216,9 @@ theorem exportedACSubgroups_correct : ACSubgroups.Correct Executable.acSubgroups
 theorem exportedOpenMatchSelect_correct : OpenMatchSelect.Correct Executable.openMatchSelect :=
   OpenMatchSelect.run_correct
 
+theorem exportedCollectorPossible_correct : CollectorMultiplicity.Admissible Executable.collectorPossible :=
+  CollectorMultiplicity.of_correct CollectorMultiplicity.run_correct
+
 theorem exportedOneOpenPivot_semantic : OneOpenPivot.Semantic Executable.openMatchSelect :=
   OneOpenPivot.semantic exportedOpenMatchSelect_correct
 
@@ -1019,6 +1022,7 @@ run_cmd do
     (``Tamarin.Executable.dhPeerImages, `tamarin_dh_peer_images),
     (``Tamarin.Executable.acSubgroups, `tamarin_ac_subgroups),
     (``Tamarin.Executable.openMatchSelect, `tamarin_open_match_select),
+    (``Tamarin.Executable.collectorPossible, `tamarin_collector_possible),
     (``Tamarin.Executable.sortedACMatch, `tamarin_sorted_ac_match),
     (``Tamarin.Executable.flatACMatch, `tamarin_flat_ac_match),
     (``Tamarin.Executable.homogeneousUnify, `tamarin_homogeneous_unify),

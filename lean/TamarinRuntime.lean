@@ -10,6 +10,7 @@ import TamarinRuntime.GraphUnification
 import TamarinRuntime.AnswerProjection
 import TamarinRuntime.SortedMatch
 import TamarinRuntime.OpenMatchSelect
+import TamarinRuntime.CollectorMultiplicity
 import TamarinRuntime.ACPivot
 import TamarinRuntime.VariantJoin
 import TamarinRuntime.DHPeer
@@ -68,6 +69,9 @@ def dhTowerImages (width : UInt64) : Option (Array (Array UInt64)) := DHTowerCan
 
 @[export tamarin_ac_subgroups]
 def acSubgroups (n : UInt64) : Option (Array (Array UInt64)) := ACSubgroups.run n
+
+@[export tamarin_collector_possible]
+def collectorPossible (occ residual : Array UInt64) : Bool := CollectorMultiplicity.run occ residual
 
 @[export tamarin_open_match_select]
 def openMatchSelect (rigid subject : UInt64) : Option (Array (Array UInt64)) :=

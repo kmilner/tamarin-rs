@@ -73,6 +73,29 @@ example : [[0, 1]] ∈ RuntimeCandidate.flatMatcher.run 1 [0, 0] [] [0, 1, 0, 1]
     [[1, 0]] ∈ RuntimeCandidate.flatMatcher.run 1 [0, 0] [] [0, 1, 0, 1] := by decide
 
 private def high : UInt64 := 18446744073709551615
+
+/-- Try a stricter guard under the unmodified public contract. Every occurrence
+needs a nonempty image, even when it is the only occurrence of its variable. -/
+private def lengthGuard (occ rhs : Array UInt64) : Bool :=
+  decide (occ.size ≤ rhs.size) && Executable.collectorPossible occ rhs
+
+example : CollectorMultiplicity.Admissible lengthGuard where
+  sound f keys d occ rhs ps ss pl sl atom reflects rejected σ sol := by
+    have enough := OpenMatchAdapter.long_enough f σ ps ss (by
+      intro t ht
+      obtain ⟨i,hi,rfl⟩ := List.mem_map.mp (sl.mem_iff.mp ht)
+      exact atom i hi) sol
+    rw [pl.length_eq,sl.length_eq] at enough
+    simp only [List.length_map,Array.length_toList] at enough
+    have h : Executable.collectorPossible occ rhs = false := by simpa [lengthGuard,enough] using rejected
+    exact exportedCollectorPossible_correct.sound f keys d occ rhs ps ss pl sl atom reflects h σ sol
+  rejects occ rhs bad := by simp [lengthGuard,exportedCollectorPossible_correct.rejects occ rhs bad]
+
+example : CollectorMultiplicity.Possible [0,1] [7] := by
+  unfold CollectorMultiplicity.Possible
+  decide
+example : lengthGuard #[0,1] #[7] = false := rfl
+
 private abbrev Bag := Nat × Nat
 
 private def words (alphabet : List UInt64) : Nat → List (List UInt64)
@@ -113,6 +136,8 @@ def run : IO Unit := do
               if k + t < 2 then continue
               for tail in words alphabet t do
                 let expected := valuations.filter fun vs => instantiate vs occ (bag tail) == target
+                if tail.isEmpty && !expected.isEmpty && !Executable.collectorPossible occ.toArray subject.toArray then
+                  throw (IO.userError s!"guard rejected a matching assignment: occurrences={occ} subject={subject}")
                 let out := Executable.flatACMatch (UInt64.ofNat n) occ.toArray tail.toArray subject.toArray
                 let rows := out.toList.map (fun arm => arm.toList.map Array.toList)
                 let actual := rows.map (List.map bag)

@@ -623,6 +623,98 @@ fn multi_variable_and_repeated_ac_patterns_enumerate_all_matches_without_maude()
 }
 
 #[test]
+fn repeated_ac_collectors_refute_wide_rigid_remainders() {
+    let handle = native();
+    let pattern = f_app_ac(
+        AcSym::Union,
+        vec![variable("x"), variable("x"), variable("y")],
+    );
+    for width in [9, 65] {
+        let subject = (0..width)
+            .map(|idx| Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, idx))))
+            .collect();
+        let equation = Equal {
+            lhs: f_app_ac(AcSym::Union, subject),
+            rhs: pattern.clone(),
+        };
+        assert!(!handle
+            .has_match_eqs(std::slice::from_ref(&equation))
+            .unwrap());
+        assert!(handle.match_eqs(&[equation]).unwrap().is_empty());
+    }
+    assert_eq!(handle.stats().match_count, 0);
+}
+
+#[test]
+fn a_live_repeated_collector_partition_still_obeys_the_selection_limit() {
+    let pattern = (0u64..65)
+        .map(|i| Term::Lit(Lit::Var(LVar::new("key", LSort::Msg, i.saturating_sub(1)))))
+        .collect();
+    // All 64 variables could bind the same rigid factor. The refutation must
+    // let the original admission limit decide whether to enumerate that answer.
+    let equation = Equal {
+        lhs: f_app_ac(AcSym::Union, vec![variable("rigid"); 65]),
+        rhs: f_app_ac(AcSym::Union, pattern),
+    };
+    assert!(matches!(
+        native().match_eqs(&[equation]),
+        Err(MaudeError::UnsupportedOperation("matching"))
+    ));
+}
+
+#[test]
+fn repeated_ac_collectors_count_whole_factors_after_structural_selection() {
+    use tamarin_term::builtin::hash;
+    use tamarin_term::maude_sig::hash_maude_sig;
+    let handle = MaudeHandle::start_with_backend(
+        MISSING,
+        mset_maude_sig().merge(hash_maude_sig()),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
+    let pattern = f_app_ac(
+        AcSym::Union,
+        vec![
+            hash(variable("z")),
+            variable("x"),
+            variable("x"),
+            variable("y"),
+        ],
+    );
+    let rigid = variable("r");
+    let factor = hash(rigid.clone());
+    // Picking either hash(r) for hash(z) removes the only duplicate.
+    let mut subject = vec![factor.clone(), factor.clone()];
+    subject.extend((0..8).map(|i| Term::Lit(Lit::Var(LVar::new("tail", LSort::Msg, i)))));
+    let equation = |xs| Equal {
+        lhs: f_app_ac(AcSym::Union, xs),
+        rhs: pattern.clone(),
+    };
+    assert!(handle.match_eqs(&[equation(subject)]).unwrap().is_empty());
+
+    // With a third copy, both remaining copies can form the shared image.
+    let tail = variable("tail");
+    let mut rows = handle
+        .match_eqs(&[equation(vec![
+            factor.clone(),
+            factor.clone(),
+            factor.clone(),
+            tail.clone(),
+        ])])
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    let mut expected = vec![
+        (LVar::new("x", LSort::Msg, 0), factor),
+        (LVar::new("y", LSort::Msg, 0), tail),
+        (LVar::new("z", LSort::Msg, 0), rigid),
+    ];
+    expected.sort();
+    rows[0].sort();
+    assert_eq!(rows[0], expected);
+    assert_eq!(handle.stats().match_count, 0);
+}
+
+#[test]
 fn repeated_narrow_variables_share_one_sorted_image_across_the_match() {
     use tamarin_term::lterm::fresh_term;
     let h = native();

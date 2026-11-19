@@ -149,7 +149,7 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | --- | --- | --- |
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
-| Directional matching | Under an AC head, free, binary C and AC constructors may nest. One sorted binding per variable applies across every level and equation, including supported source node bindings. Native-only also matches open subjects across whole conjunctions, preserving subject variables as rigid leaves and sharing pattern bindings across equations. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
+| Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | Pair projections, selected constructor rules, flat products of normal message factors under a validated AC unit and cancellation presentation, DH power towers and signed exponent products. For binary AC roots, native-only can match active equations and instantiate the RHS when every match yields the same normal value. | Extend positive rewriting to proper AC subproducts and multi-step results. |
 | Variants | Native-only joins positional destructors, flat XORs of Fresh variables and received-base DH powers on shared inputs. Under a validated AC unit and cancellation presentation it also handles two independent Msg variables, or two distinct Fresh variables and a Msg variable. Any declared AC operator can admit an identity variant when sorted substitution excludes all its active rules. | Extend certified narrowing to nested active AC terms and arbitrary active equations. Extend DH to unrestricted exponents. Establish ordering compatibility for joined answers in hybrid mode. |
 
@@ -180,9 +180,15 @@ immediately rules out `x+y = 9a, x = 10a`, where `na` denotes `n` copies of `a`.
 
 For distinct atoms, matching `H(x+y)+x` against `H(a+b+c)+a+b` forces
 `x=a+b, y=c`. At each AC head the matcher flattens occurrences of that symbol and cancels
-closed factors with multiplicity. Rust sends two occurrence counts to the linked selector,
-which admits up to 64 remaining subject occurrences and 4,096 selections. A forced match can
-skip selection. Exhausting the shared 100,000-unit open-search budget defers the entire query.
+closed factors with multiplicity. The linked selector admits up to 64 remaining subject
+occurrences and 4,096 selections. Before enumerating partitions for a repeated variable,
+Lean checks that some residual factor occurs at least as often as that variable. For example,
+`x+x+y` cannot match nine distinct rigid factors. If only variables remain, the same check
+can refute a match beyond the selector's width limit. CI permits a stronger guard if it
+proves every rejected residual has no match and still rejects the required multiplicity
+failures. [Guard contract](Tamarin/CollectorMultiplicityMatching.lean)
+
+Exhausting the shared 100,000-unit open-search budget defers the entire query.
 Lean relates completed selections, partitions and C alignments to the original matching
 equation. Rust prepares their inputs, traverses alternatives and reconstructs substitutions.
 [Recursive matching](Tamarin/RecursiveACMatch.lean) · [Canonical representatives](Tamarin/CanonicalTree.lean) · [Restriction proof fixture](../crates/tamarin-prover/tests/fixtures/native_nested_ac_guard.spthy)
@@ -318,9 +324,10 @@ and allows the executable to reorder or repeat rows. The Rust oracle tests exerc
 both built-in XOR and a user-declared operator. [Classification](Tamarin/MixedCancellationClassification.lean) ·
 [Packet contract](Tamarin/MixedCancellationPacket.lean) · [Joined observations](Tamarin/MixedCancellationJoined.lean)
 
-For this model, Maude and native-only produce identical precomputation output
-(seven raw and seven refined cases) and the same three lemma verdicts at 364, 11
-and 10 steps. Four proof leaves print a different local timepoint index.
+Both the built-in presentation and the user-declared `csf26-ac/fast/CRxor` run
+without Maude. For each, native-only matches Maude's precomputation output (seven
+raw and seven refined cases) and all three lemma verdicts at 364, 11 and 10
+steps. Four proof leaves print a different local timepoint index.
 `CH07` still defers during rule closure. Its first variant query includes a cancellation
 sum inside a hash, then uses that hash twice inside another sum.
 For other AC theories, the narrowing specification shows how complete ordinary
@@ -329,7 +336,10 @@ finite search to cover all reachable normal forms. An executable general search 
 open. [AC narrowing](Tamarin/RootNarrowing.lean) · [Completeness conditions](Tamarin/NarrowingFrontier.lean)
 
 Broader deployment still requires checking the Rust representation against its Lean model
-and carrying native-only failure handling through interactive proof publication.
+and carrying native-only failure handling through interactive proof publication. The live
+cancellation theorem assumes a well-formed active equation table. Rust checks the three
+equations at the cancellation head and checks the declared unit. Library callers that
+construct a signature by hand still supply well-formed equations at unrelated heads.
 [Corpus regressions](../crates/tamarin-prover/tests/lean_unification.rs) ·
 [Specification counterexamples](Tests/SpecAudit.lean)
 

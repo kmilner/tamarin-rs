@@ -79,6 +79,7 @@ import Tamarin.CompoundImages
 import Tamarin.OpenMatchCancellation
 import Tamarin.FreeTreeMatch
 import Tamarin.OpenMatchAdapter
+import Tamarin.CollectorMultiplicityMatching
 import Tamarin.MatchOrder
 import Tamarin.NestedTreeMatch
 import Tamarin.RigidSubject

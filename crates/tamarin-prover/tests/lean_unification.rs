@@ -504,7 +504,15 @@ fn fresh_xor_corpus_preserves_sources_and_complete_proof_trees() {
 
 #[test]
 fn crxor_preserves_sources_and_all_three_proofs_without_maude() {
-    let example = "features/xor/CRxor.spthy";
+    assert_crxor_parity("features/xor/CRxor.spthy", "case c_xor_case_1");
+}
+
+#[test]
+fn declared_ac_crxor_preserves_sources_and_all_three_proofs_without_maude() {
+    assert_crxor_parity("csf26-ac/fast/CRxor.spthy", "case c_xorr_case_1");
+}
+
+fn assert_crxor_parity(example: &str, first_case: &str) {
     let (sources, log) = run_corpus(example, "native-only", &["--precompute-only"]);
     assert!(!log.contains("[maude>]"), "{log}");
     for expected in [
@@ -526,7 +534,7 @@ fn crxor_preserves_sources_and_all_three_proofs_without_maude() {
         let (reference, _) = run_corpus(example, "maude", &["--precompute-only"]);
         assert_eq!(sources, reference);
         let (reference, _) = run_corpus(example, "maude", &["--prove"]);
-        // The terminal KU(~k) goals directly under c_xor_case_1 can print a
+        // The terminal KU(~k) goals directly under the first AC case can print a
         // different fresh timepoint index. Keep the solved term and indentation.
         let tree = |stdout: &str| {
             let mut first_xor_case = false;
@@ -534,7 +542,7 @@ fn crxor_preserves_sources_and_all_three_proofs_without_maude() {
                 .lines()
                 .map(|line| {
                     let under_case = first_xor_case;
-                    first_xor_case = line.trim() == "case c_xor_case_1";
+                    first_xor_case = line.trim() == first_case;
                     if under_case
                         && let Some((prefix, tail)) = line.split_once("by solve( !KU( ~k ) @ #vk.")
                         && prefix.trim().is_empty()

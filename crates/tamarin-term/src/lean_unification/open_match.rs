@@ -15,6 +15,12 @@ use std::{borrow::Cow, collections::BTreeSet, rc::Rc};
 
 unsafe extern "C" {
     fn tamarin_lean_open_match_select(rigid: u64, subject: u64) -> *mut c_void;
+    fn tamarin_lean_collector_possible(
+        occurrences: *const u64,
+        occurrences_len: usize,
+        factors: *const u64,
+        factors_len: usize,
+    ) -> u8;
 }
 
 type Arm = Vec<(LVar, LNTerm)>;
@@ -104,6 +110,33 @@ struct Collectors {
 impl Collectors {
     // Subject variables are rigid leaves. Equal canonical terms receive the same
     // numeric ID, so counts preserve multiplicity even for repeated variables.
+    fn encode_remainder<'a>(
+        rest: &[&'a LNTerm],
+    ) -> Result<(IdentityTable<&'a LNTerm>, Vec<u64>), Error> {
+        let mut factors = IdentityTable::default();
+        let rhs = rest
+            .iter()
+            .map(|&t| factors.intern(t).ok_or(Error::InvalidStatus(255)))
+            .collect::<Result<_, _>>()?;
+        Ok((factors, rhs))
+    }
+
+    fn refuted(&self, rhs: &[u64]) -> Result<bool, Error> {
+        // SAFETY: both ID slices live through the synchronous shim call.
+        match unsafe {
+            tamarin_lean_collector_possible(
+                self.occurrences.as_ptr(),
+                self.occurrences.len(),
+                rhs.as_ptr(),
+                rhs.len(),
+            )
+        } {
+            0 => Ok(true),
+            1 => Ok(false),
+            tag => Err(Error::InvalidStatus(tag)),
+        }
+    }
+
     fn extend<'a>(
         &self,
         rest: &[&LNTerm],
@@ -118,11 +151,10 @@ impl Collectors {
             }
             return Ok(true);
         }
-        let mut factors = IdentityTable::default();
-        let rhs = rest
-            .iter()
-            .map(|&t| factors.intern(t).ok_or(Error::InvalidStatus(255)))
-            .collect::<Result<Vec<_>, _>>()?;
+        let (factors, rhs) = Self::encode_remainder(rest)?;
+        if self.keys.len() < self.occurrences.len() && self.refuted(&rhs)? {
+            return Ok(true);
+        }
         let Some(left) = partition_work(self.occurrences.len(), self.keys.len(), &rhs)
             .and_then(|work| search.budget.checked_sub(work))
         else {
@@ -283,6 +315,13 @@ impl<'a> Search<'a, '_> {
         let raw =
             unsafe { tamarin_lean_open_match_select(rigid.len() as u64, subject.len() as u64) };
         if raw.is_null() {
+            // With no structural factors left, the subject is the exact
+            // remainder. A certified refutation can finish this branch even
+            // when the selector declines. Every live partition still defers.
+            if rigid.is_empty() && collectors.keys.len() < collectors.occurrences.len() {
+                let (_, rhs) = Collectors::encode_remainder(&subject)?;
+                return collectors.refuted(&rhs);
+            }
             return Ok(false);
         }
         let selections = MatchRows::new(raw)?;
