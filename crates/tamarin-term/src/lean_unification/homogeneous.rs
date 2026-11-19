@@ -24,6 +24,12 @@ impl ProjectedAnswers {
 }
 
 unsafe extern "C" {
+    fn tamarin_lean_masked_operand_unify(
+        width: u64,
+        mask: u64,
+        sides: *const WordSlice,
+        side_count: usize,
+    ) -> ProjectedAnswers;
     fn tamarin_lean_operand_unify(
         width: u64,
         sides: *const WordSlice,
@@ -51,7 +57,7 @@ impl<T> Allocation<T> {
 pub(super) struct MatrixCache {
     // These are exactly the kernel arguments. The packet contains column
     // tags and ordinal witnesses only; names and symbols belong to the caller.
-    packets: FxHashMap<(usize, Vec<Vec<u64>>), Option<MatchRows>>,
+    packets: FxHashMap<(usize, u64, Vec<Vec<u64>>), Option<MatchRows>>,
     stored_words: usize,
 }
 
@@ -62,10 +68,11 @@ impl MatrixCache {
         symbol: AcSym,
         reserved: &FxHashSet<u64>,
         width: usize,
+        mask: u64,
         sides: Vec<Vec<u64>>,
     ) -> Result<Allocation<Vec<Vec<LNTerm>>>, Error> {
         tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-        let key = (width, sides);
+        let key = (width, mask, sides);
         if let Some(cached) = self.packets.get(&key) {
             return match cached {
                 Some(packet) => decode_packet(symbol, reserved, width, packet)
@@ -77,12 +84,18 @@ impl MatrixCache {
             return Ok(Allocation::Exhausted);
         };
         *remaining_calls = left;
-        let rows: Vec<_> = key.1.iter().map(|side| WordSlice::new(side)).collect();
+        let rows: Vec<_> = key.2.iter().map(|side| WordSlice::new(side)).collect();
         let packet = LEAN_THREAD.with(|_| {
             // SAFETY: the borrowed descriptors and their words live through
             // this call. The shim transfers one owned reference to the packet.
-            unsafe { tamarin_lean_operand_unify(width as u64, rows.as_ptr(), rows.len()) }
-                .into_packet()
+            unsafe {
+                if mask == 0 {
+                    tamarin_lean_operand_unify(width as u64, rows.as_ptr(), rows.len())
+                } else {
+                    tamarin_lean_masked_operand_unify(width as u64, mask, rows.as_ptr(), rows.len())
+                }
+            }
+            .into_packet()
         })?;
         let (result, packet_words) = match &packet {
             Some(p) => {
@@ -93,7 +106,7 @@ impl MatrixCache {
         };
         // Bound retained input, arm and row storage even if a future checked
         // executable raises its own output limit. Oversize packets still run.
-        let key_words = 1 + key.1.len() + key.1.iter().map(Vec::len).sum::<usize>();
+        let key_words = 2 + key.2.len() + key.2.iter().map(Vec::len).sum::<usize>();
         let total = self
             .stored_words
             .saturating_add(key_words)
@@ -201,7 +214,7 @@ mod tests {
         ] {
             let avoid = reserved.into_iter().collect();
             let Allocation::Complete(images) = cache
-                .images(&mut calls, symbol, &avoid, 2, sides.clone())
+                .images(&mut calls, symbol, &avoid, 2, 0, sides.clone())
                 .unwrap()
             else {
                 panic!("the same numeric matrix should need just one kernel call");
@@ -213,7 +226,7 @@ mod tests {
         let avoid = FxHashSet::default();
         assert!(matches!(
             cache
-                .images(&mut calls, AcSym::Union, &avoid, 3, sides)
+                .images(&mut calls, AcSym::Union, &avoid, 3, 0, sides)
                 .unwrap(),
             Allocation::Exhausted
         ));
@@ -222,10 +235,54 @@ mod tests {
             let tautology = vec![vec![0, 1], vec![0, 1]];
             assert!(matches!(
                 cache
-                    .images(&mut calls, AcSym::Union, &avoid, 2, tautology)
+                    .images(&mut calls, AcSym::Union, &avoid, 2, 0, tautology)
                     .unwrap(),
                 Allocation::Unsupported
             ));
+        }
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn indivisible_columns_filter_before_projection_and_separate_cache_entries() {
+        super::super::initialize().unwrap();
+        let mut cache = MatrixCache::default();
+        let mut calls = 2;
+        let avoid = FxHashSet::default();
+        // Four singleton operands on each side must be paired by a bijection.
+        // The unrestricted edge-cover packet is too large to materialize.
+        let sides = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]];
+        for (bits, expected) in [(0, None), (255, Some(24)), (255, Some(24)), (0, None)] {
+            match cache
+                .images(&mut calls, AcSym::Union, &avoid, 8, bits, sides.clone())
+                .unwrap()
+            {
+                Allocation::Unsupported => assert_eq!(expected, None),
+                Allocation::Complete(arms) => {
+                    assert_eq!(Some(arms.len()), expected);
+                    let mut assignments = std::collections::BTreeSet::new();
+                    for arm in arms {
+                        let (left, right) = arm.split_at(4);
+                        assert!(left.iter().all(|x| matches!(x, Term::Lit(Lit::Var(_)))));
+                        let owners: Vec<_> = right
+                            .iter()
+                            .map(|r| left.iter().position(|l| l == r).unwrap())
+                            .collect();
+                        assert_eq!(
+                            owners
+                                .iter()
+                                .copied()
+                                .collect::<std::collections::BTreeSet<_>>()
+                                .len(),
+                            4
+                        );
+                        assert!(assignments.insert(owners));
+                    }
+                }
+                Allocation::Exhausted => {
+                    panic!("masked and unrestricted cache entries should both be reusable")
+                }
+            }
         }
         assert_eq!(calls, 0);
     }

@@ -496,6 +496,9 @@ theorem exportedCheckedGraphHomogeneous_correct :
   GraphUnification.checked_correct exportedCheckFactors_correct exportedGraphHomogeneous_correct
 
 /-- The payload consumed by Rust has explicit column IDs and dense witness IDs. -/
+theorem exportedMaskedOperand_correct : MaskedOperands.Correct Executable.maskedOperandUnify :=
+  MaskedOperands.run_correct
+
 theorem exportedOperandUnify_refines : OperandUnification.Refines
     Executable.operandUnify Executable.homogeneousUnify :=
   OperandUnification.run_refines OperandCounts.run_correct Executable.homogeneousUnify
@@ -1053,6 +1056,7 @@ run_cmd do
     (``Tamarin.Executable.graphHomogeneousUnify, `tamarin_graph_homogeneous_unify),
     (``Tamarin.Executable.graphACFeasible, `tamarin_graph_ac_feasible),
     (``Tamarin.Executable.operandRefine, `tamarin_operand_refine),
+    (``Tamarin.Executable.maskedOperandUnify, `tamarin_masked_operand_unify),
     (``Tamarin.Executable.operandUnify, `tamarin_operand_unify),
     (``Tamarin.Executable.projectAnswers, `tamarin_project_answers),
     (``Tamarin.Executable.xorBranches, `tamarin_xor_branches),

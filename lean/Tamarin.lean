@@ -72,6 +72,7 @@ import Tamarin.FactoredAC
 import Tamarin.FactorAdmission
 import Tamarin.GraphUnification
 import Tamarin.ACFeasibility
+import Tamarin.MaskedOperandContract
 import Tamarin.ProjectionCompletion
 import Tamarin.DenseOpening
 import Tamarin.GroundMatchBranch

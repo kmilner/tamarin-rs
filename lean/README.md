@@ -169,7 +169,7 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. The coefficient search divides out the row gcd and bounds each primitive coordinate by the largest remaining coefficient. Subtracting two rows can expose a rigid factor-count clash. For boolean queries the graph solver checks whether every variable can have a nonempty image, independently of how many substitutions that permits. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. A linked Lean check accepts the graph when all edges point to earlier states and there is one terminal. Dedicated paths handle positional destructors, cancellation, DH power towers and signed exponent products. | Verify the correspondence between the Rust successor rows and the live rewrite steps. |
-| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. Staged paths cover cancellation, positional destructors, signed DH products with shared stable operands, powers, scalar actions and pairing. | Extend finite narrowing for nested user equations with repeated AC variables. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
+| Variants | Native-only searches finite narrowing frontiers using the active equations at free, C and AC heads. It handles proper AC subproducts and keeps a common substitution across all caller images and observed values. Staged paths cover cancellation, positional destructors, signed DH products with shared stable operands, powers, scalar actions and pairing. | Handle overlapping user equations with shared AC variables. Nested repeated-variable projections now have 35- and 10-row Maude regressions. Check frontier construction and folding at the Rust boundary, and establish ordered hybrid compatibility. |
 
 Run the generated coverage test from the repository root.
 
@@ -216,8 +216,8 @@ the tower `(g^X)^Y` and the flat power `g^(X*Y)` each have 48. Observing
 the three rules at `pmult` and `emap`, with joint comparisons of bindings and
 normal values. Native-only completes the unrestricted two-variable families for
 both operations (47 and 48 Maude rows). All 47 bilinear variant queries are mandatory,
-including a pairing of two point actions with 336 variants. Across six presentations
-all 24,671 requests complete (16,403 mandatory and 8,268 exploratory). [Bilinear family proof](Tamarin/BilinearRows.lean)
+including a pairing of two point actions with 336 variants. The seventh presentation uses Nat-sorted variables and positive integer partitions across all four operations.
+All 24,744 requests complete (16,476 mandatory and 8,268 exploratory). [Bilinear family proof](Tamarin/BilinearRows.lean)
 The report prints the smallest deferred request per operation and compares it with Maude
 when `MAUDE_PATH` is set.
 The report counts syntactic requests in this bounded grammar. Protocol regressions
@@ -284,7 +284,9 @@ witnesses distinct. [Sparse plane proof](Tamarin/ACSparsePlane.lean)
 For an existence query the same checked term graph supplies the matrix. A maximal-support
 coefficient vector satisfies its final row and enables every previous generator that could
 participate in any solution. Tamarin can decide systems such as a four-by-four AC sum
-without materializing their substitutions. [Existence contract](Tamarin/ACFeasibility.lean) ·
+without materializing their substitutions. A rational cone projection also decides bounded
+conjunctions whose intermediate integer basis exceeds the search budget.
+[Rational cone proof](Tamarin/ACRationalProjection.lean) · [Existence contract](Tamarin/ACFeasibility.lean) ·
 [Positive witness](Tamarin/ACPositiveWitness.lean)
 
 A bit mask on each suffix records the coordinates its generators can still cover. The selector
@@ -319,8 +321,12 @@ The operand lifting proof covers arbitrary sorted terms. For example, in
 `x + f(y) = z + f(w)`, one arm equates `x` with `z` and `y` with `w`. The two exchange arms
 keep `y` and `w` independent. A single substitution must reconcile every column and every equation
 in an arm. For a nested call, Lean derives the matrix from the transmitted IDs and interprets
-each returned column tag as its corresponding term. The union of these branches has exactly
-the parent state’s solutions on all observed variables, including earlier bindings.
+each returned column tag as its corresponding term. Rust marks indivisible operands in a
+64-bit mask. Lean can discard an incompatible generator or overlap before constructing an
+arm. Four indivisible operands on each side yield precisely the 24 bijections. The union of
+the branches has exactly the parent state’s solutions on all observed variables, including
+earlier bindings. [Masked operand contract](Tamarin/MaskedOperandContract.lean) · [Selection proof](Tamarin/MaskedSelection.lean)
+
 When a matrix search defers, native-only can split on a supported ground-sided AC equation,
 including one exposed under a constructor. Each match becomes binding equations in the same
 branch as the earlier bindings and all pending constraints.

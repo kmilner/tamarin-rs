@@ -444,6 +444,16 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedGraphACFeasible_correct"),
 ])
 
+MASKED_RUN = "  MaskedOperands.run width mask sides"
+EXECUTABLE = ("import Tamarin.MaskedOperandContract\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedMaskedOperand_correct") + "end Tamarin\n")
+EXPORT_MUTATIONS.extend([
+    ("masked_ignores_columns", MASKED_RUN, "  MaskedOperands.run width 0 sides", "theorem exportedMaskedOperand_correct"),
+    ("masked_drops_branches", MASKED_RUN, MASKED_RUN + " |>.map (fun arms => arms.extract 0 1)",
+     "theorem exportedMaskedOperand_correct"),
+    ("masked_always_defers", MASKED_RUN, "  none", "theorem exportedMaskedOperand_correct"),
+])
+
 graph_start = SOURCE.index("theorem exportedGraphHomogeneous_correct")
 graph_obligation = SOURCE[graph_start:SOURCE.index("\n\n", graph_start) + 1]
 EXECUTABLE = ("import Tamarin.GraphUnification\n" + EXECUTABLE

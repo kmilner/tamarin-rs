@@ -405,6 +405,13 @@ projected_answers tamarin_lean_operand_unify(uint64_t width, const whole_word_sl
     return project_answers(width, tamarin_operand_unify(width, word_rows(sides, count)));
 }
 
+extern lean_object *tamarin_masked_operand_unify(uint64_t width, uint64_t mask, lean_object *sides);
+
+projected_answers tamarin_lean_masked_operand_unify(uint64_t width, uint64_t mask,
+                                                    const whole_word_slice *sides, size_t count) {
+    return project_answers(width, tamarin_masked_operand_unify(width, mask, word_rows(sides, count)));
+}
+
 extern lean_object *tamarin_graph_homogeneous_unify(uint64_t width, uint64_t symbol, uint64_t sort,
                                                      lean_object *decls, lean_object *nodes,
                                                      lean_object *equations);

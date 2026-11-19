@@ -21,6 +21,7 @@ import TamarinRuntime.DHTower
 import TamarinRuntime.ACSubgroups
 import TamarinRuntime.ReductionGraph
 import TamarinRuntime.OperandUnification
+import TamarinRuntime.MaskedOperands
 import TamarinRuntime.OperandRefinement
 
 /-!
@@ -195,6 +196,10 @@ def operandRefine (sides : Array UInt64) : Array UInt64 := OperandRefinementCand
 @[export tamarin_operand_unify]
 def operandUnify (width : UInt64) (sides : Array (Array UInt64)) : Option Homogeneous.Answers :=
   OperandUnification.runWith OperandCounts.run homogeneousUnify width sides
+
+@[export tamarin_masked_operand_unify]
+def maskedOperandUnify (width mask : UInt64) (sides : Array (Array UInt64)) : Option Homogeneous.Answers :=
+  MaskedOperands.run width mask sides
 
 @[export tamarin_project_answers]
 def projectAnswers (width : UInt64) (answers : Homogeneous.Answers) : Option Homogeneous.Answers :=

@@ -80,29 +80,26 @@ pub(super) fn allocate<'a>(
         }
     });
     let width = columns.len();
+    let mut mask = 0u64;
+    for (i, term) in columns.values().iter().enumerate() {
+        if indivisible(symbol, term) {
+            mask |= 1 << i;
+        }
+    }
     initialize()?;
-    let result = matrices.images(remaining_calls, symbol, reserved, width, rows)?;
+    let result = matrices.images(remaining_calls, symbol, reserved, width, mask, rows)?;
     Ok(result.map(|branches| {
-        branches.into_iter().filter_map(move |branch| {
-            // A product of two or more nonempty witnesses cannot instantiate
-            // a column that remains a single factor under every substitution.
-            if columns.values().iter().zip(&branch).any(|(t, image)| {
-                matches!(image, Term::App(f, _) if *f == outer) && indivisible(symbol, t)
-            }) {
-                return None;
-            }
-            Some(
-                columns
-                    .values()
-                    .iter()
-                    .zip(branch)
-                    .map(|(&t, image)| Equal {
-                        lhs: image,
-                        rhs: t.clone(),
-                    })
-                    .chain(pending.iter().map(|&eq| eq.clone()))
-                    .collect(),
-            )
+        branches.into_iter().map(move |branch| {
+            columns
+                .values()
+                .iter()
+                .zip(branch)
+                .map(|(&t, image)| Equal {
+                    lhs: image,
+                    rhs: t.clone(),
+                })
+                .chain(pending.iter().map(|&eq| eq.clone()))
+                .collect()
         })
     }))
 }

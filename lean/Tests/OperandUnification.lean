@@ -11,6 +11,11 @@ open Executable Homogeneous
 #guard operandUnify 2 #[#[0,0], #[1,1,1], #[0], #[1]] == some #[]
 
 
+private def fourByFour : Array (Array UInt64) := #[#[0,1,2,3], #[4,5,6,7]]
+#guard (maskedOperandUnify 8 255 fourByFour).map Array.size == some 24
+#guard maskedOperandUnify 8 256 fourByFour == none
+#guard maskedOperandUnify 2 1 #[#[0,0], #[1,1,1]] == some #[]
+
 -- Interpret the tagged residual equation for each operand in the positive
 -- integers under addition. All witnesses in a realizable arm have size at most
 -- the sum of the two operand sizes. Their names and answer order are arbitrary.

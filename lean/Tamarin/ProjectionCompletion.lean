@@ -5,7 +5,7 @@ import Tamarin.OperandUnification
 namespace Tamarin.ProjectionCompletion
 open Homogeneous
 
-private theorem shaped_emit {width : UInt64} (gs : List (ACBasis.Vec width.toNat))
+theorem shaped_emit {width : UInt64} (gs : List (ACBasis.Vec width.toNat))
     (a : Arm) (ha : a ∈ (emit gs).toList) :
     a.size = width.toNat ∧ ∀ row ∈ a.toList, row ≠ #[] := by
   simp only [emit, List.toList_toArray, List.mem_map, Coverage.coveringSelections_eq] at ha

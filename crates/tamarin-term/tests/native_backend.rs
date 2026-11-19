@@ -2619,6 +2619,48 @@ fn ac_output_budget_covers_every_two_by_six_allocation() {
 }
 
 #[test]
+fn indivisible_hash_operands_enumerate_every_bijection() {
+    use std::collections::BTreeSet;
+    use tamarin_term::builtin::hash;
+    use tamarin_term::maude_sig::hash_maude_sig;
+
+    let sig = mset_maude_sig().merge(hash_maude_sig());
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let vars = ["a", "b", "c", "d", "w", "x", "y", "z"].map(|s| LVar::new(s, LSort::Msg, 0));
+    let hashes = |keys: &[LVar]| {
+        f_app_ac(
+            AcSym::Union,
+            keys.iter().map(|v| hash(Term::Lit(Lit::Var(*v)))).collect(),
+        )
+    };
+    let answers = h
+        .unify(&[Equal {
+            lhs: hashes(&vars[..4]),
+            rhs: hashes(&vars[4..]),
+        }])
+        .unwrap();
+    let mut permutations = BTreeSet::new();
+    for arm in answers {
+        let image = |v| {
+            arm.iter()
+                .find(|(key, _)| *key == v)
+                .map_or(Term::Lit(Lit::Var(v)), |(_, t)| t.clone())
+        };
+        let right = vars[4..].iter().copied().map(image).collect::<Vec<_>>();
+        assert!(right.iter().all(|t| matches!(t, Term::Lit(Lit::Var(_)))));
+        assert_eq!(right.iter().collect::<BTreeSet<_>>().len(), 4);
+        let order: Vec<_> = vars[..4]
+            .iter()
+            .map(|v| right.iter().position(|t| *t == image(*v)).unwrap())
+            .collect();
+        assert_eq!(order.iter().collect::<BTreeSet<_>>().len(), 4);
+        assert!(permutations.insert(order));
+    }
+    assert_eq!(permutations.len(), 24);
+    assert_eq!(h.stats().unify_count, 0);
+}
+
+#[test]
 fn native_ac_operands_preserve_both_commutative_orientations() {
     use tamarin_term::builtin::emap;
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
