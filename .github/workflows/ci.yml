@@ -34,6 +34,7 @@ jobs:
           lake env lean Tests/FactoredUnification.lean
           lake env lean Tests/FactorReplay.lean
           lake env lean Tests/GraphUnification.lean
+          lake env lean Tests/ACColumnSupport.lean
           lake env lean Tests/AnswerProjection.lean
           lake env lean Tests/OperandRefinement.lean
           lake env lean Tests/OperandCounts.lean
