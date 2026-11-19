@@ -278,7 +278,7 @@ impl RuleTable {
             // These reducers establish uniqueness as well as reachability.
             let value = match self.cancellation_normal(t)? {
                 Some(n) => Some(n),
-                None => self.ac_root_reduce(t)?,
+                None => self.search_reduction(t)?,
             };
             if value.as_ref().is_some_and(crate::vterm::is_ground_vterm) {
                 return Ok(true);

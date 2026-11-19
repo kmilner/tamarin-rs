@@ -227,6 +227,9 @@ fn public_backend_meets_generated_coverage_floor() {
     let cancellation = xor_maude_sig().merge(hash_maude_sig());
     let mixed = cancellation.clone().merge(pair_maude_sig());
     let (markers, merge) = marker_presentation(&cases);
+    let marker_oracle = tamarin_test_support::configured_maude_path().map(|path| {
+        MaudeHandle::start_with_backend(&path, markers.clone(), AlgebraBackend::Maude).unwrap()
+    });
     let presentation = |name: &str| match name {
         "ac" => (&plain, AcSym::Union),
         "xor" => (&cancellation, AcSym::Xor),
@@ -244,6 +247,11 @@ fn public_backend_meets_generated_coverage_floor() {
         }
         let (sig, symbol) = presentation(theory);
         let ts: Vec<_> = fields.map(|e| term(e, symbol)).collect();
+        if (theory, op, expected) == ("markers", "reduce", "exact")
+            && let Some(oracle) = &marker_oracle
+        {
+            exercise(oracle, op, expected, &ts).expect(line);
+        }
         let h = MaudeHandle::start_with_backend(
             "/nonexistent",
             sig.clone(),
@@ -271,7 +279,7 @@ fn public_backend_meets_generated_coverage_floor() {
             Err(err) => panic!("{line}: {err}"),
         }
     }
-    assert_eq!(report.len(), 11);
+    assert_eq!(report.len(), 12);
     for ((theory, op), c) in report {
         assert!(c.required > 0, "missing guaranteed {theory} {op} cases");
         println!(

@@ -168,7 +168,7 @@ declared C/AC axioms. Reduction and variants also use the active rewrite equatio
 | Free and commutative unification | Free factoring, binary C orientations, identity modulo B and ground clashes. On the residual worklist, Lean compares rigid heads and child IDs, checks variable bindings, sorts and occurrences, and justifies free decomposition and C branching against the whole pending conjunction. | Verify operand interning and the driver’s complete traversal of every live branch. |
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Free, binary C and AC constructors may nest. Sorted bindings are shared across equations, including supported source node bindings. Native-only keeps open subject variables rigid and can refute repeated AC variables by counting remaining factors before partition search. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
-| Reduction | Pair projections, selected constructor rules, AC unit and cancellation, DH power towers and signed exponent products. Native-only lifts supported reductions through inert free symbols and binary AC contexts whose persistent operand heads exclude every active rule. For arbitrary admitted AC equations it explores rewrites on the whole product, proper subproducts, and inside operands under AC or inert free constructors. It returns a value when the completed search has one normal endpoint. | Extend this search to arbitrary active free and commutative heads. |
+| Reduction | A bounded search for admitted equations at free, C and AC heads explores whole-term rewrites, proper AC subproducts and changes inside arguments. It returns the unique normal value of the completed search. Dedicated paths handle positional destructors, cancellation, DH power towers and signed exponent products. | Extend the same rule inventory to variant narrowing, and verify that Rust builds the complete reduction graph described by Lean. |
 | Variants | Native-only joins positional destructors, flat XORs of Fresh variables and received-base DH powers on shared inputs. Positional destructors, inert constructors and declared unit/cancellation heads can nest in any order, including a destructor returning a whole AC product. Packed observations can include unique closed reductions and changing children under inert free constructors or guarded binary AC parents. | Extend narrowing to arbitrary active equations, DH to unrestricted exponents, and ordering compatibility to joined answers in hybrid mode. |
 
 Run the generated coverage test from the repository root.
@@ -197,7 +197,9 @@ presentation requires all 16 staged expressions to reduce and all 16 joint varia
 Two larger mixed variants have 71 and 72 rows. A separate user-defined AC presentation
 has 345 mandatory exact reductions, each also checked under a hash. The expected answer
 comes from the multiplicities of two declared constants, public names and rigid variables.
-Exploratory cases can gain coverage freely. The report
+Four open variant probes in this presentation still defer. The smallest observes
+`merge(m, a)` alongside `m`, where `a` is a declared marker and `merge(a,a) = a`.
+A normalized substitution for `m` can introduce another `a` into the product. The report
 prints the smallest generated deferral by syntax size for each theory and operation.
 Setting `MAUDE_PATH` also replays those witnesses against an independent Maude handle.
 The report counts syntactic requests in this bounded grammar. Protocol regressions
@@ -344,11 +346,12 @@ Native-only reproduces Maude’s rule closure and ten refined source cases throu
 factor under every sorted substitution, the backend tests all subbags of two or more
 operand positions against the active left-hand sides. It uses ordinary sorted unification,
 with separate variable scopes for the rule and caller. A live unifier or an unfinished
-search blocks the identity conclusion. For concrete binary reduction, directional matching
-binds only rule variables and checks both operand orders. Rules with embedded literal
+search blocks the identity conclusion. For concrete reduction, directional matching
+binds only rule variables. At a C head it admits both orientations, and at an AC head
+it also considers matches on proper subproducts. Rules with embedded literal
 names still have query-local wire identities. The generic rule matcher uses declared
 nullary symbols for constants shared with a query.
-[AC rule exclusion](Tamarin/ACUnifierExclusion.lean) · [Root reduction proof](Tamarin/ACRootReduction.lean) · [Native AC reducer](../crates/tamarin-term/src/lean_unification/constructor_variants/ac_root_reduce.rs)
+[AC rule exclusion](Tamarin/ACUnifierExclusion.lean) · [Contextual reduction proof](Tamarin/ContextualReduction.lean) · [Native reducer](../crates/tamarin-term/src/lean_unification/constructor_variants/reduction_search.rs)
 
 For `I_2`, both variables in `Msg XOR Msg` can introduce new factors. Lean generates
 the identity and nonidentity variants by splitting active rule factors across the two
@@ -386,16 +389,18 @@ Native-only reproduces Maude’s 11 raw and 11 refined source cases and all five
 Matching checks the entire conjunction for a rigid head clash or an impossible flattened
 factor count before enumerating partitions. This rules out incompatible assignments in the
 11-step counterexample for `recentalive_tag`.
-For arbitrary admitted AC equations, the native reducer explores both subproduct rewrites
+For admitted ordinary equations, the native reducer explores root, AC subproduct
 and child rewrites before selecting a normal value. For example, a parent may fire before
 a child and reach a different normal form. The reducer defers such a request, as well as a
 cycle or an unfinished search. Lean proves exact one-step coverage and unique normal output
-for a completed graph. Rust owns graph construction and traversal. [AC reduction refinement](Tamarin/ACSubproductReduction.lean)
+for a completed graph, including steps under free and commutative heads. Rust owns
+graph construction and traversal. [Whole-term reduction](Tamarin/ContextualReduction.lean) · [AC reduction refinement](Tamarin/ACSubproductReduction.lean)
 
 For variant generation in other AC theories, the narrowing specification shows how complete ordinary
 unifiers lift rewrites on proper subproducts and states sufficient conditions for a
-finite search to cover all reachable normal forms. An executable general search remains
-open. [AC narrowing](Tamarin/RootNarrowing.lean) · [Completeness conditions](Tamarin/NarrowingFrontier.lean)
+finite search to cover all reachable normal forms. The lifting proof preserves the images
+of variables in untouched siblings and other caller observations. Reserving their names suffices
+without adding those terms to the unifier input. An executable general variant search remains open. [AC narrowing](Tamarin/RootNarrowing.lean) · [Completeness conditions](Tamarin/NarrowingFrontier.lean)
 
 Broader deployment still requires checking the Rust representation against its Lean model
 and carrying native-only failure handling through interactive proof publication. The live

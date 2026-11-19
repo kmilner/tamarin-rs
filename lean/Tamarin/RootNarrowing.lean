@@ -1,4 +1,5 @@
 import Tamarin.ACUnifierExclusion
+import Tamarin.VariantJoinAmbient
 
 /-! Soundness and lifting for root narrowing with an ordinary sorted CSU.
 An AC extension introduces one independently bound operand for the entire
@@ -36,10 +37,12 @@ def Schema.extend (p : Schema R) (f : sig.ACSym) (z : Variable) : Schema R where
 
 /-- Branch images and result are instantiated by the *same* substitution.
 At a nonterminal narrowing step the resulting value may still be reducible. -/
-def Fits (q : Term sig) (ρ : Substitution sig) (u : Term sig) (μ : Substitution sig)
+def FitsOn (observable : Variable → Prop) (ρ : Substitution sig) (u : Term sig) (μ : Substitution sig)
     (value : Term sig) : Prop :=
-  ∃ δ : Substitution sig, (∀ v, q.Occurs v → EquivB (ρ.image v) (δ.apply (μ.image v))) ∧
+  ∃ δ : Substitution sig, (∀ v, observable v → EquivB (ρ.image v) (δ.apply (μ.image v))) ∧
     EquivB u (δ.apply value)
+
+abbrev Fits (q : Term sig) := FitsOn (sig := sig) q.Occurs
 
 def Schema.problem (p : Schema R) (query : Term sig) : Problem sig := [⟨p.lhs,query⟩]
 
@@ -51,6 +54,43 @@ theorem Schema.replay (p : Schema R) (q : Term sig) {answers} (csu : CompleteSet
   obtain ⟨a,b,pre,step,post⟩ := p.step μ
   exact ⟨a,b,matched.symm.trans pre,step,post⟩
 
+/-- A narrowed subterm may sit inside a larger query. Every input image and
+untouched sibling is factored through the same witness as the rewritten value,
+including variables that never occur in the unification problem itself. -/
+private theorem Schema.lift_on (p : Schema R) (q : Term sig) (observable : Variable → Prop)
+    (live : ∀ v, q.Occurs v → observable v) (apart : ∀ v, p.lhs.Occurs v → ¬observable v)
+    {answers} (sound : Sound (p.problem q) answers)
+    (coverage : ∀ ρ, (p.problem q).Solves ρ → ∃ μ ∈ answers,
+      Substitution.InstanceOn (fun v => (p.problem q).Occurs v ∨ observable v) ρ μ)
+    (ρ : Substitution sig) (u : Term sig) :
+    (∃ τ : Substitution sig, EquivB (ρ.apply q) (τ.apply p.lhs) ∧ EquivB u (τ.apply p.rhs)) ↔
+      ∃ μ ∈ answers, FitsOn observable ρ u μ (μ.apply p.rhs) := by
+  constructor
+  · rintro ⟨τ,matchEq,result⟩
+    let joint := VariantJoin.choose observable ρ τ
+    have left := (VariantJoin.choose_apply _ ρ τ p.lhs).2 apart
+    have right := (VariantJoin.choose_apply _ ρ τ p.rhs).2 (fun v hv => apart v (p.bound v hv))
+    have source := (VariantJoin.choose_apply observable ρ τ q).1 live
+    have sol : (p.problem q).Solves joint := by
+      intro e hm; obtain rfl := List.mem_singleton.mp hm
+      exact left ▸ source ▸ matchEq.symm
+    obtain ⟨μ,mem,δ,factor⟩ := coverage _ sol
+    refine ⟨μ,mem,δ,?_,?_⟩
+    · intro v hv
+      have h := factor v (.inr hv)
+      change EquivB (joint.image v) (δ.apply (μ.image v)) at h
+      simpa only [joint,VariantJoin.choose,ite_eq_left hv] using h
+    · have rhs := p.rhs.subst_equiv joint.image (δ.compose μ).image
+        (fun v hv => factor v (.inl ⟨_,List.mem_cons_self,.inl (p.bound v hv)⟩))
+      change EquivB (joint.apply p.rhs) ((δ.compose μ).apply p.rhs) at rhs
+      rw [right,Substitution.apply_compose] at rhs
+      exact result.trans rhs
+  · rintro ⟨μ,mem,δ,input,result⟩
+    have eq := q.subst_equiv ρ.image (δ.compose μ).image (fun v hv => input v (live v hv))
+    refine ⟨δ.compose μ,eq.trans ?_,?_⟩
+    · exact ((p.problem q).solves_compose (sound μ mem) δ _ List.mem_cons_self).symm
+    · simpa only [Substitution.apply_compose] using result
+
 /-- Exactly the independently matched root instances are represented,
 including agreement on every query variable and on the instantiated RHS.
 No normality hypothesis is imposed on these intermediate terms. -/
@@ -59,31 +99,27 @@ theorem Schema.lift_iff (p : Schema R) (q : Term sig)
     (ρ : Substitution sig) (u : Term sig) :
     (∃ τ : Substitution sig, EquivB (ρ.apply q) (τ.apply p.lhs) ∧ EquivB u (τ.apply p.rhs)) ↔
       ∃ μ ∈ answers, Fits q ρ u μ (μ.apply p.rhs) := by
-  constructor
-  · rintro ⟨τ,matchEq,result⟩
-    let joint := VariantJoin.choose q.Occurs ρ τ
-    have left := (VariantJoin.choose_apply _ ρ τ p.lhs).2 apart
-    have right := (VariantJoin.choose_apply _ ρ τ p.rhs).2 (fun v hv => apart v (p.bound v hv))
-    have source := (VariantJoin.choose_apply q.Occurs ρ τ q).1 (fun _ h => h)
-    have sol : (p.problem q).Solves joint := by
-      intro e hm; obtain rfl := List.mem_singleton.mp hm
-      exact left ▸ source ▸ matchEq.symm
-    obtain ⟨μ,mem,δ,factor⟩ := csu.covers _ sol
-    refine ⟨μ,mem,δ,?_,?_⟩
-    · intro v hv
-      have h := factor v ⟨_,List.mem_cons_self,.inr hv⟩
-      change EquivB (joint.image v) (δ.apply (μ.image v)) at h
-      simpa only [joint,VariantJoin.choose,ite_eq_left hv] using h
-    · have rhs := p.rhs.subst_equiv joint.image (δ.compose μ).image
-        (fun v hv => factor v ⟨_,List.mem_cons_self,.inl (p.bound v hv)⟩)
-      change EquivB (joint.apply p.rhs) ((δ.compose μ).apply p.rhs) at rhs
-      rw [right,Substitution.apply_compose] at rhs
-      exact result.trans rhs
-  · rintro ⟨μ,mem,δ,input,result⟩
-    have eq := q.subst_equiv ρ.image (δ.compose μ).image input
-    refine ⟨δ.compose μ,eq.trans ?_,?_⟩
-    · exact ((p.problem q).solves_compose (csu.sound μ mem) δ _ List.mem_cons_self).symm
-    · simpa only [Substitution.apply_compose] using result
+  apply p.lift_on q q.Occurs (fun _ h => h) apart csu.sound
+  intro σ sol
+  obtain ⟨μ,mem,δ,agree⟩ := csu.covers _ sol
+  exact ⟨μ,mem,δ,fun v h => agree v (h.elim id (fun hv => ⟨_,List.mem_cons_self,.inr hv⟩))⟩
+
+/-- Tracking terms outside the redex requires only reserving their extra
+variables. They need not be sent as equations or examined by the ordinary
+unifier. This applies verbatim to an AC schema extended by a remainder. -/
+theorem Schema.lift_in_context (p : Schema R) (q : Term sig) (context : List (Term sig))
+    (apart : ∀ v, p.lhs.Occurs v → ¬(q.Occurs v ∨ Observed context v))
+    {answers} (csu : CompleteSet (p.problem q) answers)
+    (reserved : ∀ μ ∈ answers, VariantJoin.Reserves (p.problem q) context μ)
+    (ρ : Substitution sig) (u : Term sig) :
+    (∃ τ : Substitution sig, EquivB (ρ.apply q) (τ.apply p.lhs) ∧ EquivB u (τ.apply p.rhs)) ↔
+      ∃ μ ∈ answers, FitsOn (fun v => q.Occurs v ∨ Observed context v) ρ u μ (μ.apply p.rhs) := by
+  apply p.lift_on q _ (fun _ h => .inl h) apart csu.sound
+  intro σ sol
+  obtain ⟨μ,mem,covered⟩ := csu.covers _ sol
+  obtain ⟨δ,agree⟩ := (reserved μ mem).factor covered
+  refine ⟨μ,mem,δ,fun v h => agree v ?_⟩
+  exact h.elim Or.inl (fun hv => hv.elim (fun hq => .inl ⟨_,List.mem_cons_self,.inr hq⟩) Or.inr)
 
 /-- A concrete AC remainder can be added to a rule assignment without
 changing any of the rule's existing bindings, even when it contains caller

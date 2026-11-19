@@ -1,11 +1,12 @@
-//! Search every interleaving of AC rule occurrences and changes inside their
-//! operands. A rule can consume any subbag of at least two occurrences.
+//! Explore every ordinary root rewrite and every change in a child modulo B.
+//! At an AC head a rule can consume any subbag of two or more occurrences.
 use super::{subgroups::ProperSubgroups, InputDomain, RuleTable};
 use crate::function_symbols::{AcSym, FunSym};
 use crate::lean_unification::{
     canonical_capture, open_match, residual::charge_expansion, subsort, Error, Outcome,
 };
 use crate::lterm::{frees, LNTerm, LSort, LVar};
+use crate::rewriting::RRule;
 use crate::subst::{apply_vterm, Subst};
 use crate::term::{f_app, f_app_ac, Term};
 use crate::vterm::Lit;
@@ -18,19 +19,16 @@ enum Visit {
 }
 
 impl RuleTable {
-    pub(super) fn ac_root_reduce(&self, term: &LNTerm) -> Result<Option<LNTerm>, Error> {
-        self.ac_reduction_search(term, 100_000)
+    pub(super) fn search_reduction(&self, term: &LNTerm) -> Result<Option<LNTerm>, Error> {
+        self.search_with_budget(term, 100_000)
     }
 
-    fn ac_reduction_search(
+    fn search_with_budget(
         &self,
         term: &LNTerm,
         mut budget: usize,
     ) -> Result<Option<LNTerm>, Error> {
-        let Term::App(FunSym::Ac(ac), _) = term else {
-            return Ok(None);
-        };
-        if !self.ac_rules.contains_key(ac) || !self.admits_sorted(std::iter::once(term)) {
+        if !self.admits_sorted(std::iter::once(term)) {
             return Ok(None);
         }
         let mut visits = vec![Visit::Enter(canonical_capture(term))];
@@ -83,17 +81,18 @@ impl RuleTable {
         let Term::App(head, children) = state else {
             return Ok(Some(next));
         };
-        let rules = match head {
-            FunSym::Ac(f) if self.ac_rules.contains_key(f) => Some((*f, &self.ac_rules[f])),
-            FunSym::Ac(f) if !self.ac_patterns.contains_key(f) => None,
-            FunSym::NoEq(f) if !self.patterns.contains_key(f) => None,
-            // Uncompiled active buckets (including equations with named
-            // literals) can close here only when the whole term is normal.
-            _ => return Ok(self.irreducible_native(state)?.then_some(next)),
+        let Some((id, _, sort)) = self.declaration(*head) else {
+            return Ok(None);
         };
+        let rules = self.ordinary_rules.get(head);
+        if rules.is_none() && self.roots.binary_search(&id).is_ok() {
+            // An uninterpretable active bucket can close only when the whole
+            // term has an independent proof of normality.
+            return Ok(self.irreducible_native(state)?.then_some(next));
+        }
         for (i, child) in children.iter().enumerate() {
             // Equal factors have the same untouched multiset when replaced.
-            if matches!(head, FunSym::Ac(_)) && i > 0 && children[i - 1] == *child {
+            if matches!(head, FunSym::Ac(_) | FunSym::C(_)) && i > 0 && children[i - 1] == *child {
                 continue;
             }
             let Some(changes) = self.successors(child, budget)? else {
@@ -108,38 +107,30 @@ impl RuleTable {
                 next.insert(f_app(*head, args));
             }
         }
-        let Some((head, rules)) = rules else {
+        let Some(rules) = rules else {
             return Ok(Some(next));
         };
-        let factors = children;
-        if self.excludes_ac_rules(head, factors, false)? {
+        if let FunSym::Ac(ac) = head
+            && self.excludes_ac_rules(*ac, children, false)?
+        {
             return Ok(Some(next));
         }
-        let mut patterns = Vec::with_capacity(rules.len());
-        for rule in rules {
-            if !self.admits_sorted([&rule.lhs, &rule.rhs].into_iter()) {
-                return Ok(None);
-            }
-            let inputs = frees(&rule.lhs);
-            if frees(&rule.rhs).iter().any(|v| !inputs.contains(v)) {
-                return Ok(None);
-            }
-            patterns.push((canonical_capture(&rule.lhs), canonical_capture(&rule.rhs)));
-        }
-        let mut search = SubbagMatches {
+        let mut search = RuleMatches {
             table: self,
-            head,
-            sort: super::super::ac_sort(head),
-            patterns: &patterns,
+            sort,
+            rules,
             next: &mut next,
             budget,
         };
-        if !search.extend(state, &[])? {
+        if !search.extend(state, None)? {
             return Ok(None);
         }
-        if factors.len() > 2 {
+        if let FunSym::Ac(head) = *head
+            && children.len() > 2
+        {
+            let factors = children;
             let Some(mut groups) = ProperSubgroups::new(factors.len())? else {
-                if !search.with_extension(state)? {
+                if !search.with_extension(head, state)? {
                     return Ok(None);
                 }
                 return Ok(Some(next));
@@ -163,7 +154,7 @@ impl RuleTable {
                 let piece = f_app_ac(head, taken);
                 // The complement in one fixed bag is determined by the
                 // selected multiplicities, including repeated equal factors.
-                if seen.insert(piece.clone()) && !search.extend(&piece, &rest)? {
+                if seen.insert(piece.clone()) && !search.extend(&piece, Some((head, &rest)))? {
                     return Ok(None);
                 }
             }
@@ -172,42 +163,41 @@ impl RuleTable {
     }
 }
 
-struct SubbagMatches<'a> {
+struct RuleMatches<'a> {
     table: &'a RuleTable,
-    head: AcSym,
     sort: LSort,
-    patterns: &'a [(LNTerm, LNTerm)],
+    rules: &'a [RRule<LNTerm>],
     next: &'a mut BTreeSet<LNTerm>,
     budget: &'a mut usize,
 }
 
-impl SubbagMatches<'_> {
-    fn with_extension(&mut self, state: &LNTerm) -> Result<bool, Error> {
+impl RuleMatches<'_> {
+    fn with_extension(&mut self, head: AcSym, state: &LNTerm) -> Result<bool, Error> {
         // Standardize the single remainder variable apart from all rule and
         // caller variables. It has the declared operand sort of this AC head.
         let mut reserved: FxHashSet<_> = frees(state).into_iter().map(|v| v.idx).collect();
-        for (pattern, _) in self.patterns {
-            reserved.extend(frees(pattern).into_iter().map(|v| v.idx));
+        for rule in self.rules {
+            reserved.extend(frees(&rule.lhs).into_iter().map(|v| v.idx));
         }
         let index = (0..=u64::MAX)
             .find(|idx| !reserved.contains(idx))
             .ok_or(Error::FreshVariableOverflow)?;
         let rest = Term::Lit(Lit::Var(LVar::new("rest", self.sort, index)));
-        for (pattern, rhs) in self.patterns {
+        for rule in self.rules {
             // A variable in ordinary AC matching consumes at least one factor.
             // The very same simultaneous binding restores it on the RHS.
-            let lhs = f_app_ac(self.head, vec![pattern.clone(), rest.clone()]);
-            let rhs = f_app_ac(self.head, vec![rhs.clone(), rest.clone()]);
-            if !self.rewrite(&lhs, &rhs, state, &[])? {
+            let lhs = f_app_ac(head, vec![rule.lhs.clone(), rest.clone()]);
+            let rhs = f_app_ac(head, vec![rule.rhs.clone(), rest.clone()]);
+            if !self.rewrite(&lhs, &rhs, state, None)? {
                 return Ok(false);
             }
         }
         Ok(true)
     }
 
-    fn extend(&mut self, piece: &LNTerm, rest: &[LNTerm]) -> Result<bool, Error> {
-        for (pattern, rhs) in self.patterns {
-            if !self.rewrite(pattern, rhs, piece, rest)? {
+    fn extend(&mut self, piece: &LNTerm, rest: Option<(AcSym, &[LNTerm])>) -> Result<bool, Error> {
+        for rule in self.rules {
+            if !self.rewrite(&rule.lhs, &rule.rhs, piece, rest)? {
                 return Ok(false);
             }
         }
@@ -219,7 +209,7 @@ impl SubbagMatches<'_> {
         pattern: &LNTerm,
         rhs: &LNTerm,
         piece: &LNTerm,
-        rest: &[LNTerm],
+        rest: Option<(AcSym, &[LNTerm])>,
     ) -> Result<bool, Error> {
         let Outcome::Complete(arms) = open_match::root(pattern, piece, self.budget)? else {
             return Ok(false);
@@ -242,12 +232,12 @@ impl SubbagMatches<'_> {
             {
                 return Ok(false);
             }
-            let state = if rest.is_empty() {
-                value
-            } else {
+            let state = if let Some((head, rest)) = rest {
                 let mut whole = rest.to_vec();
                 whole.push(value);
-                f_app_ac(self.head, whole)
+                f_app_ac(head, whole)
+            } else {
+                value
             };
             self.next.insert(state);
         }

@@ -95,19 +95,19 @@ fn rejects_divergent_or_incomplete_subproduct_search() {
     let table = |rules| RuleTable::new(&signature(rules)).unwrap();
     let normal = table(vec![(lhs.clone(), u.clone())]);
     assert_eq!(
-        normal.ac_reduction_search(&q, 100_000).unwrap(),
-        Some(bag([a, c]))
+        normal.search_with_budget(&q, 100_000).unwrap(),
+        Some(bag([a.clone(), c.clone()]))
     );
-    assert_eq!(normal.ac_reduction_search(&q, 1).unwrap(), None);
+    assert_eq!(normal.search_with_budget(&q, 1).unwrap(), None);
     // A second normal endpoint in the same complement prevents commitment.
     let divergent = table(vec![(lhs.clone(), u.clone()), (lhs.clone(), k.clone())]);
     assert_eq!(divergent.reduce_native(&q).unwrap(), None);
     // The cycle must be noticed even when a normal exit also exists.
     let cyclic = table(vec![(lhs.clone(), u.clone()), (lhs.clone(), lhs.clone())]);
-    assert_eq!(cyclic.ac_root_reduce(&q).unwrap(), None);
-    // A rule can introduce a reducible factor under the untouched context.
-    let unknown = table(vec![(lhs, fst(pair(u, k)))]);
-    assert_eq!(unknown.ac_root_reduce(&q).unwrap(), None);
+    assert_eq!(cyclic.search_reduction(&q).unwrap(), None);
+    // A free rewrite can finish inside the untouched AC context.
+    let mixed = table(vec![(lhs, fst(pair(u, k)))]);
+    assert_eq!(mixed.search_reduction(&q).unwrap(), Some(bag([a, c])));
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn native_oracle_matching_with_extension_preserves_the_whole_remainder() {
     assert_eq!(
         RuleTable::new(&sig)
             .unwrap()
-            .ac_root_reduce(&ambiguous)
+            .search_reduction(&ambiguous)
             .unwrap(),
         None
     );
@@ -236,7 +236,7 @@ fn wide_nat_subproduct_checks_the_sort_of_the_replacement() {
     assert_eq!(
         RuleTable::new(&invalid)
             .unwrap()
-            .ac_root_reduce(&term)
+            .search_reduction(&term)
             .unwrap(),
         None
     );
@@ -273,4 +273,164 @@ fn interleaves_rewrites_below_inert_constructors_with_root_steps() {
         let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
         assert_eq!(oracle.reduce(&input).unwrap(), expected);
     }
+}
+
+#[test]
+fn native_oracle_free_commutative_and_ac_rewrites_reach_one_endpoint() {
+    use crate::builtin::{emap, exp, mult, one_const, pmult};
+    use crate::maude_sig::bp_maude_sig;
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let u = var("u");
+    let k = var("k");
+    // Both free-root rules are applicable. The first needs a C-root rewrite
+    // to reach the second one's result; the enclosed user AC can change too.
+    let lhs = hash(pair(u.clone(), k.clone()));
+    let sig = signature([
+        (bag([u.clone(), u.clone()]), u.clone()),
+        (lhs.clone(), emap(pmult(u.clone(), k.clone()), k.clone())),
+        (lhs, exp(emap(k.clone(), k.clone()), u.clone())),
+    ])
+    .merge(bp_maude_sig());
+    let a = pub_term("a");
+    let b = pub_term("b");
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = tamarin_test_support::require_maude_path()
+        .map(|path| MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap());
+    for (input, normal) in [
+        (
+            hash(pair(bag([a.clone(), a.clone()]), b.clone())),
+            exp(emap(b.clone(), b.clone()), a.clone()),
+        ),
+        (
+            emap(pmult(u.clone(), a.clone()), pmult(k.clone(), b.clone())),
+            exp(emap(a.clone(), b.clone()), mult(u.clone(), k.clone())),
+        ),
+    ] {
+        assert_eq!(native.reduce(&input).unwrap(), normal, "{input}");
+        if let Some(oracle) = &oracle {
+            assert_eq!(oracle.reduce(&input).unwrap(), normal, "{input}");
+        }
+    }
+    // Point multiplication may peel on either side of the commutative
+    // map, and nested scalars may collapse before or after that step.
+    let towers = |point: &LNTerm| {
+        [
+            (point.clone(), vec![]),
+            (pmult(one_const(), point.clone()), vec![]),
+            (pmult(u.clone(), point.clone()), vec![u.clone()]),
+            (
+                pmult(k.clone(), pmult(u.clone(), point.clone())),
+                vec![k.clone(), u.clone()],
+            ),
+        ]
+    };
+    for (left, left_exponents) in towers(&a) {
+        for (right, mut exponents) in towers(&b) {
+            let input = emap(left.clone(), right);
+            exponents.extend(left_exponents.iter().cloned());
+            let base = emap(a.clone(), b.clone());
+            let normal = if exponents.is_empty() {
+                base
+            } else {
+                exp(base, f_app_ac(AcSym::Mult, exponents))
+            };
+            assert_eq!(native.reduce(&input).unwrap(), normal, "{input}");
+            if let Some(oracle) = &oracle {
+                assert_eq!(oracle.reduce(&input).unwrap(), normal, "{input}");
+            }
+        }
+    }
+    assert_eq!(native.stats().norm_count, 0);
+}
+
+#[test]
+fn distinguishes_ambiguity_of_a_child_from_ambiguity_of_the_whole() {
+    use crate::builtin::{emap, true_const, true_sym};
+    use crate::maude_sig::bp_maude_sig;
+    let u = var("u");
+    let k = var("k");
+    let pick = hash(pair(u.clone(), k.clone()));
+    let both = emap(hash(u.clone()), hash(k.clone()));
+    let mut sig = signature([
+        (pick.clone(), u.clone()),
+        (pick, k.clone()),
+        // A C match may select either operand for u.
+        (both, u.clone()),
+        // A rewriting parent can erase its child's ambiguity.
+        (hash(hash(u.clone())), true_const()),
+        (hash(u), true_const()),
+    ])
+    .merge(bp_maude_sig());
+    sig.st_fun_syms.insert(true_sym());
+    let sig = sig.refresh();
+    let table = RuleTable::new(&sig).unwrap();
+    let a = pub_term("a");
+    let b = pub_term("b");
+    assert_eq!(
+        table
+            .reduce_native(&emap(hash(a.clone()), hash(b.clone())))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        table
+            .reduce_native(&hash(pair(a.clone(), b.clone())))
+            .unwrap(),
+        None
+    );
+    // All child values become arguments to the outer hash rule.
+    assert_eq!(
+        table.reduce_native(&hash(hash(pair(a, b)))).unwrap(),
+        Some(true_const())
+    );
+}
+
+#[test]
+fn rejects_incomplete_buckets_for_free_and_commutative_heads() {
+    use crate::builtin::emap;
+    use crate::maude_sig::bp_maude_sig;
+    let u = var("u");
+    let k = var("k");
+    let a = pub_term("a");
+    let sig = signature([
+        (hash(u.clone()), u.clone()),
+        (hash(a.clone()), a.clone()),
+        (emap(u.clone(), u.clone()), u),
+        (emap(a.clone(), k.clone()), k),
+    ])
+    .merge(bp_maude_sig());
+    let table = RuleTable::new(&sig).unwrap();
+    // Literal name identities are local to Maude's rule and query encodings.
+    // One such rule makes the entire ordinary bucket uninterpretable.
+    for input in [hash(a.clone()), emap(a.clone(), a)] {
+        assert_eq!(table.search_reduction(&input).unwrap(), None);
+    }
+}
+
+#[test]
+fn commutative_rule_can_have_distinct_normal_images_on_its_two_orientations() {
+    use crate::builtin::emap;
+    use crate::maude_sig::bp_maude_sig;
+    let u = var("u");
+    let k = var("k");
+    let sig = signature([(emap(hash(u.clone()), hash(k)), u)]).merge(bp_maude_sig());
+    let table = RuleTable::new(&sig).unwrap();
+    let a = pub_term("a");
+    let b = pub_term("b");
+    assert_eq!(
+        table
+            .reduce_native(&emap(hash(a.clone()), hash(b)))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        table
+            .reduce_native(&emap(hash(a.clone()), hash(a.clone())))
+            .unwrap(),
+        Some(a)
+    );
 }

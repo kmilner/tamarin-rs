@@ -1,12 +1,12 @@
 //! Packed variant queries and root reductions against the active rewrite table.
 mod ac_root_exclusion;
-mod ac_root_reduce;
 mod binary_cancellation;
 mod dh_exponent;
 mod dh_peer;
 mod dh_power;
 mod dh_product;
 mod flat_xor;
+mod reduction_search;
 mod subgroups;
 mod uniform_reduction;
 mod variant_join;
@@ -14,7 +14,7 @@ use super::narrowing::NarrowingRule;
 use super::{initialize, subsort, tamarin_lean_constructor_variant, Error, Outcome, LEAN_THREAD};
 use crate::function_symbols::{nat_one_sym, AcSym, FunSym, NoEqSym};
 use crate::lean_identity::IdentityTable;
-use crate::lterm::{LNTerm, LSort, LVar};
+use crate::lterm::{frees, LNTerm, LSort, LVar};
 use crate::maude_sig::MaudeSig;
 use crate::maude_types::sort_of_name;
 use crate::term::Term;
@@ -38,7 +38,9 @@ pub(crate) struct RuleTable {
     patterns: FxHashMap<NoEqSym, Option<Vec<u64>>>,
     // Each AC row lists rigid operand heads required by one active left side.
     ac_patterns: FxHashMap<AcSym, Vec<Vec<u64>>>,
-    ac_rules: FxHashMap<AcSym, Vec<crate::rewriting::RRule<LNTerm>>>,
+    // Only whole, sorted, scoped buckets participate in ordinary rewriting.
+    // Active heads remain recorded in roots even if compilation fails.
+    ordinary_rules: FxHashMap<FunSym, Vec<crate::rewriting::RRule<LNTerm>>>,
     cancellation_units: FxHashMap<AcSym, LNTerm>,
     free_rules: FxHashMap<NoEqSym, Vec<FreeRule>>,
     narrowing: FxHashMap<NoEqSym, NarrowingRule>,
@@ -101,7 +103,7 @@ impl RuleTable {
                 .eq(crate::builtin::xor_rules().iter());
         let mut free_rules = FxHashMap::<NoEqSym, Vec<FreeRule>>::default();
         let mut patterns = FxHashMap::default();
-        let mut ac_rules = FxHashMap::<_, Vec<_>>::default();
+        let mut ordinary_rules = FxHashMap::<_, Vec<_>>::default();
         let mut ac_patterns = FxHashMap::<AcSym, Vec<Vec<u64>>>::default();
         for rule in rules {
             let Term::App(f, ref args) = rule.lhs else {
@@ -124,8 +126,8 @@ impl RuleTable {
                 let mut row = Vec::new();
                 required_factor_heads(&symbols, ac, args, &mut row);
                 ac_patterns.entry(ac).or_default().push(row);
-                ac_rules.entry(ac).or_default().push(rule.clone());
             }
+            ordinary_rules.entry(f).or_default().push(rule.clone());
             by_head
                 .entry(f)
                 .and_modify(|r| *r = None)
@@ -133,7 +135,7 @@ impl RuleTable {
         }
         // Maude numbers literal names independently in each equation and query.
         // A declared nullary function carries the same identity in both.
-        ac_rules.retain(|_, bucket| {
+        ordinary_rules.retain(|_, bucket| {
             bucket
                 .iter()
                 .all(|rule| !named_literals(&rule.lhs) && !named_literals(&rule.rhs))
@@ -153,9 +155,10 @@ impl RuleTable {
                 Some((*f, rule))
             })
             .collect();
-        let cancellation_units = ac_rules
+        let cancellation_units = ordinary_rules
             .iter()
             .filter_map(|(&head, bucket)| {
+                let FunSym::Ac(head) = head else { return None };
                 let unit = binary_cancellation::unit_for(head, bucket)?;
                 let Term::App(z, _) = unit else { return None };
                 (symbols.id(*z).is_some()
@@ -164,20 +167,41 @@ impl RuleTable {
                     .then(|| (head, unit.clone()))
             })
             .collect();
-        Some(Self {
+        let mut table = Self {
             cancellation_units,
             symbols,
             roots,
             patterns,
             ac_patterns,
-            ac_rules,
+            ordinary_rules: FxHashMap::default(),
             free_rules,
             narrowing,
             nat: sig.enable_nat,
             builtin_dh,
             builtin_xor: builtin_xor
                 && !by_head.contains_key(&FunSym::NoEq(crate::function_symbols::zero_sym())),
-        })
+        };
+        // Canonicalize and validate the module's ordinary match patterns once.
+        // A single unsupported rule disables the complete bucket at that head.
+        ordinary_rules.retain(|_, bucket| {
+            bucket.iter_mut().all(|rule| {
+                if !table.admits_sorted([&rule.lhs, &rule.rhs].into_iter()) {
+                    return false;
+                }
+                let inputs = frees(&rule.lhs);
+                if frees(&rule.rhs)
+                    .iter()
+                    .any(|v| inputs.binary_search(v).is_err())
+                {
+                    return false;
+                }
+                rule.lhs = super::canonical_capture(&rule.lhs);
+                rule.rhs = super::canonical_capture(&rule.rhs);
+                true
+            })
+        });
+        table.ordinary_rules = ordinary_rules;
+        Some(table)
     }
 
     pub(super) fn declares_sort(&self, sort: LSort) -> bool {
@@ -458,7 +482,7 @@ impl RuleTable {
         if self.normal_tree(term, false, &mut Some(super::residual::Budget::new()))? {
             return Ok(Some(term.clone()));
         }
-        self.ac_root_reduce(term)
+        self.search_reduction(term)
     }
 
     /// Normalize a canonical sorted term in the hereditary grammar of this

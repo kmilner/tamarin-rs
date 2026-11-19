@@ -212,6 +212,12 @@ def markerCoverage : IO Unit := do
   let inner := plus blue (plus x blue)
   emit .markers "reduce" "exact"
     [plus red (plus (hash inner) red), plus red (hash (plus x blue))]
+  -- Ordinary reduction treats x as rigid. Variant generation must also
+  -- explain substitutions that introduce new marker occurrences at this head.
+  for fixedSlot in [hash x,plus red red] do
+    emit .markers "variants" "identity" [fixedSlot,x]
+  for active in [plus x red, plus x x, plus x y, plus (plus red x) blue] do
+    emit .markers "variants" "probe" [active,x]
 
 def generate : IO Unit := do
   markerCoverage

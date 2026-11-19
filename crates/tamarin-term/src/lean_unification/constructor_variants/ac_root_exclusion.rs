@@ -22,7 +22,7 @@ impl RuleTable {
         if l == r || self.patterns.contains_key(l) || self.patterns.contains_key(r) {
             return false;
         }
-        let Some(rules) = self.ac_rules.get(&symbol) else {
+        let Some(rules) = self.ordinary_rules.get(&FunSym::Ac(symbol)) else {
             return !self.ac_patterns.contains_key(&symbol);
         };
         let compatible = |pattern: &LNTerm, head: &FunSym| match pattern {
@@ -56,7 +56,7 @@ impl RuleTable {
         if args.len() < 2 || !args.iter().all(|t| indivisible(symbol, t)) {
             return Ok(false);
         }
-        let Some(rules) = self.ac_rules.get(&symbol) else {
+        let Some(rules) = self.ordinary_rules.get(&FunSym::Ac(symbol)) else {
             return Ok(false);
         };
         let mut subject_ids = FxHashSet::default();
