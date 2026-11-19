@@ -1,4 +1,4 @@
-import Tamarin.BilinearScalars
+import Tamarin.BilinearPowerSpine
 
 /-! Reify the three equations from Rust's `bp_rules()` independently of the
 Lean BP schema. The point nesting rule uses the reverse variable order, the
@@ -155,13 +155,44 @@ private theorem cancels : NormalForm R (s.product.mul a (s.product.inv a)) one :
 
 -- The two map operands contain opposite scalars. Both extraction orders must
 -- produce the bare commutative map from their common folded product.
-example (out : Term') : NormalForm R (op.map (op.point a p) (op.point (s.product.inv a) q)) out ↔ EquivB out (op.map p q) := by
+private theorem cancelled_pair (out : Term') : NormalForm R (op.map (op.point a p) (op.point (s.product.inv a) q)) out ↔ EquivB out (op.map p q) := by
   apply Iff.trans (bp.map_lift powers (atomT 0) invT (atomT 1) (atomT 2) actionA actionInv unitN)
   constructor
   · rintro ⟨m,prod,⟨_,eq⟩|⟨nu,eq⟩⟩
     · exact eq
     · exact (nu (inventory.product_unique (atomT 0) invT (atomN 0) invN prod cancels).head_eq).elim
   · intro eq; exact ⟨_,cancels,.inl ⟨rfl,eq⟩⟩
+
+-- In the outer power, either the exponent cancels first or the left or
+-- right map extraction fires first. All three derivations end at the plain
+-- pairing. An outer tower may also appear before these cancellations finish.
+example (out : Term') :
+    NormalForm R (s.power (op.map (op.point a p) (op.point (s.product.inv a) q)) (s.product.mul a (s.product.inv a))) out ↔
+      EquivB out (op.map p q) := by
+  let e := s.product.mul a (s.product.inv a)
+  have et : HasSort e .msg := .ac _ _ _ (atomT 0) invT
+  have er : Staging.Signed s R e := Staging.signed_mul (fun k => Balance.defined s R k (atomN 0))
+    (fun k => Balance.defined s R k invN)
+  have base := (cancelled_pair (op.map p q)).mpr (.refl _)
+  have mt := op.map_sorted (atomT 1) (atomT 2)
+  have nm := (bp.map_normal_iff (atomT 1) (atomT 2)).mpr ⟨atomN 1,atomN 2,(by intro h; cases h),(by intro h; cases h)⟩
+  have oneT : HasSort one .msg := HasSort.free (sig := sig) F.one _ (fun i => Fin.elim0 i)
+  have fold : NormalForm R (s.power (op.map p q) one) (op.map p q) :=
+    ⟨T.fire .expOne (fun _ => op.map p q) (fun _ => mt),nm,fun _ h => .widen mt (Term.rootSort_le h)⟩
+  have applyStage := Rewriting.Bilinear.PowerSpine.stage bp powers inventory unitN
+    (op.point_sorted (atomT 0) (atomT 1)) (op.point_sorted invT (atomT 2)) actionA actionInv
+    [e] (by intro u h; cases List.mem_singleton.mp h; exact et)
+    (by intro u h; cases List.mem_singleton.mp h; exact er) (fun _ => one)
+    (by intro u h; cases List.mem_singleton.mp h; exact cancels) base out
+  apply Iff.trans applyStage
+  constructor
+  · intro nf
+    have unique := DHTower.Spine.unique powers inventory unitN (DHTower.powerSorted mt oneT)
+      (DHTower.Spine.defined_power (DHTower.Spine.defined_normal s _ nm) (fun k => Balance.defined s R k unitN)) nf fold
+    exact unique
+  · intro val
+    exact ⟨fold.1.trans (.basis val.symm),(normal_equiv _ val).mpr nm,fun k h =>
+      Term.checkSort_sound _ _ ((SortClash.check_equiv val k).symm ▸ Term.checkSort_complete (fold.2.2 _ h))⟩
 
 -- The unit and nesting rules overlap on the same sorted input.
 example (out : Term') : NormalForm R (op.point one (op.point a p)) out ↔ EquivB out (op.point a p) :=

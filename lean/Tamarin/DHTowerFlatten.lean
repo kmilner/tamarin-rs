@@ -44,6 +44,15 @@ private theorem other (s : Symbols sig) (R : Root sig) (k : Class sig) (t : Term
   | free f xs => simp [read,show f ≠ s.pow from fun eq => h (eq ▸ rfl)]
   | _ => rfl
 
+theorem read_plain (s : Symbols sig) (R : Root sig) (k : Class sig) {t : Term sig}
+    (plain : head t ≠ .free s.pow) (normal : Normal R t) :
+    read s R k t = some (classOf t,0) := by simp [other s R k t plain,leafRead,normal]
+
+theorem read_extend {R : Root sig} {k : Class sig} {b e : Term sig} {center : Class sig} {i j : Int}
+    (base : read s R k b = some (center,i)) (nonneutral : center ≠ classOf s.neutralTerm)
+    (exponent : Balance.read s R k e = some j) : read s R k (s.power b e) = some (center,i+j) := by
+  simp [read_pow,extend,base,nonneutral,exponent]
+
 private theorem opaque_equiv (R : Root sig) {a b : Term sig} (h : EquivB a b) :
     leafRead R a = leafRead R b := by simp only [leafRead,normal_equiv R h,show classOf a = classOf b from Quotient.sound h]
 
