@@ -98,3 +98,5 @@ import Tamarin.VariantJoinAmbient
 import Tamarin.VariantJoinSelect
 import Tamarin.VariantJoinSubsumption
 import Tamarin.BinaryCancellationPacket
+import Tamarin.MixedCancellationPacket
+import Tamarin.MixedCancellationJoined

@@ -641,7 +641,14 @@ EXPORT_MUTATIONS.extend([
 EXECUTABLE = ("import Tamarin.BinaryCancellationPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
               + obligation("exportedBinaryCancellationRows_correct") + "end Tamarin\n")
 BINARY_ROWS = "  BinaryCancellationCandidate.rows"
+EXECUTABLE = ("import Tamarin.MixedCancellationRows\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedMixedCancellationRows_correct") + "end Tamarin\n")
+MIXED_ROWS = "  BinaryCancellationCandidate.mixedRows"
 EXPORT_MUTATIONS.extend([
+    ("mixed_cancellation_omits_diagonal", MIXED_ROWS, MIXED_ROWS + ".extract 1 9",
+     "theorem exportedMixedCancellationRows_correct"),
+    ("mixed_cancellation_decouples_value", MIXED_ROWS,
+     MIXED_ROWS + ".map (fun row => row.set! 3 row[2]!)", "theorem exportedMixedCancellationRows_correct"),
     ("binary_cancellation_omits_overlap", BINARY_ROWS, BINARY_ROWS + ".extract 0 6",
      "theorem exportedBinaryCancellationRows_correct"),
     ("binary_cancellation_breaks_value_sharing", BINARY_ROWS,

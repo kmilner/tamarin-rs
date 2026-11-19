@@ -1,4 +1,4 @@
-//! Binary AC variants for the unit and exponent-two cancellation presentation.
+//! AC variants for the unit and exponent-two cancellation presentation.
 //! The active rule bucket determines both the operation and its unit.
 use super::{flat_xor, InputDomain, RuleTable};
 use crate::function_symbols::{AcSym, FunSym};
@@ -13,6 +13,7 @@ use crate::vterm::Lit;
 
 unsafe extern "C" {
     fn tamarin_lean_binary_cancellation_rows() -> *mut std::ffi::c_void;
+    fn tamarin_lean_mixed_cancellation_rows() -> *mut std::ffi::c_void;
 }
 
 fn msg_var(term: &LNTerm) -> Option<LVar> {
@@ -108,65 +109,104 @@ impl RuleTable {
         }))
     }
 
-    pub(super) fn binary_cancellation_rows(
-        &self,
-        term: &LNTerm,
-    ) -> Result<Option<Vec<ValuedArm>>, Error> {
+    pub(super) fn cancellation_rows(&self, term: &LNTerm) -> Result<Option<Vec<ValuedArm>>, Error> {
         let Term::App(FunSym::Ac(head), args) = term else {
             return Ok(None);
         };
         let Some(unit) = self.cancellation_units.get(head) else {
             return Ok(None);
         };
-        let [left, right] = args.as_ref() else {
-            return Ok(None);
-        };
-        let (Some(x), Some(y)) = (msg_var(left), msg_var(right)) else {
-            return Ok(None);
-        };
-        if x == y {
-            return Ok(None);
-        }
-        let mut ids = flat_xor::witness_indices(x.idx.max(y.idx), |i| i == x.idx || i == y.idx);
-        let mut witness = || {
+        // Each mask in a packet refers to the same three witnesses. In
+        // the mixed family the first two witnesses must retain sort Fresh.
+        let binary;
+        let mixed;
+        let (keys, sorts, export, max_mask): (&[LVar], _, unsafe extern "C" fn() -> _, _) =
+            match args.as_ref() {
+                [left, right] => {
+                    let (Some(x), Some(y)) = (msg_var(left), msg_var(right)) else {
+                        return Ok(None);
+                    };
+                    if x == y {
+                        return Ok(None);
+                    }
+                    binary = [x, y];
+                    (
+                        &binary[..],
+                        [LSort::Msg; 3],
+                        tamarin_lean_binary_cancellation_rows,
+                        6,
+                    )
+                }
+                [Term::Lit(Lit::Var(u)), Term::Lit(Lit::Var(v)), Term::Lit(Lit::Var(w))] => {
+                    mixed = match (u.sort, v.sort, w.sort) {
+                        (LSort::Fresh, LSort::Fresh, LSort::Msg) => [*u, *v, *w],
+                        (LSort::Fresh, LSort::Msg, LSort::Fresh) => [*u, *w, *v],
+                        (LSort::Msg, LSort::Fresh, LSort::Fresh) => [*v, *w, *u],
+                        _ => return Ok(None),
+                    };
+                    if mixed[0] == mixed[1] {
+                        return Ok(None);
+                    }
+                    (
+                        &mixed[..],
+                        [LSort::Fresh, LSort::Fresh, LSort::Msg],
+                        tamarin_lean_mixed_cancellation_rows,
+                        7,
+                    )
+                }
+                _ => return Ok(None),
+            };
+        let highest = keys
+            .iter()
+            .map(|v| v.idx)
+            .max()
+            .expect("nonempty cancellation query");
+        let mut ids = flat_xor::witness_indices(highest, |i| keys.iter().any(|v| v.idx == i));
+        let witness = |sort| {
             ids.next()
-                .map(|id| Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, id))))
+                .map(|id| Term::Lit(Lit::Var(LVar::new("x", sort, id))))
                 .ok_or(Error::FreshVariableOverflow)
         };
-        let vars = [witness()?, witness()?, witness()?];
-        let decode = |mask: u64| -> Result<LNTerm, Error> {
-            if mask > 6 {
-                return Err(Error::InvalidStatus(255));
-            }
-            if mask == 0 {
-                return Ok(unit.clone());
-            }
-            Ok(f_app_ac(
-                *head,
-                vars.iter()
-                    .enumerate()
-                    .filter(|(i, _)| mask & (1 << i) != 0)
-                    .map(|(_, v)| v.clone())
-                    .collect(),
-            ))
+        let [a, b, c] = sorts.map(witness);
+        let vars = [a?, b?, c?];
+        // All rows share their witness vocabulary. Build each possible AC
+        // product once, including the declared unit at index zero.
+        let mut images = vec![unit.clone()];
+        for mask in 1..=max_mask {
+            let factors = vars
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, v)| v.clone())
+                .collect();
+            images.push(f_app_ac(*head, factors));
+        }
+        let decode = |mask: u64| {
+            usize::try_from(mask)
+                .ok()
+                .and_then(|index| images.get(index))
+                .cloned()
+                .ok_or(Error::InvalidStatus(255))
         };
         initialize()?;
         LEAN_THREAD.with(|_| {
             // SAFETY: the shim returns an owned row array for MatchRows.
-            let rows = MatchRows::new(unsafe { tamarin_lean_binary_cancellation_rows() })?;
+            let rows = MatchRows::new(unsafe { export() })?;
             if rows.count() != 1 {
                 return Err(Error::InvalidStatus(255));
             }
             let mut answers = Vec::with_capacity(rows.rows(0));
             for r in 0..rows.rows(0) {
-                let mut masks = [0; 3];
-                if rows.copy_row(0, r, &mut masks)? != 3 {
+                let mut masks = [0; 4];
+                if rows.copy_row(0, r, &mut masks)? != keys.len() + 1 {
                     return Err(Error::InvalidStatus(255));
                 }
-                answers.push((
-                    Subst::from_list([(x, decode(masks[0])?), (y, decode(masks[1])?)]),
-                    decode(masks[2])?,
-                ));
+                let bindings = keys
+                    .iter()
+                    .zip(masks)
+                    .map(|(&v, m)| Ok((v, decode(m)?)))
+                    .collect::<Result<_, Error>>()?;
+                answers.push((Subst::from_map(bindings), decode(masks[keys.len()])?));
             }
             // The certificate constrains membership. Keep enumeration order and
             // repeated packets unobservable to the caller.

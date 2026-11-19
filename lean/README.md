@@ -151,7 +151,7 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | Simultaneous AC unification | Lean checks free factors, counts original variables or compound operand occurrences, and projects matrix answers. Nested residuals preserve sharing across C splits and AC operators. Ground matches constrain other equations. Subtracting two rows can expose a rigid factor-count clash. An indivisible occurrence can split a residual product even with several open variables on either side. | Verify Rust’s worklist transitions and operand interning against the term-level refinement. Extend branching to further open constraints. |
 | Directional matching | Under an AC head, free, binary C and AC constructors may nest. One sorted binding per variable applies across every level and equation, including supported source node bindings. Native-only also matches open subjects across whole conjunctions, preserving subject variables as rigid leaves and sharing pattern bindings across equations. | Admit more query roots and establish first-match compatibility for ambiguous source queries. |
 | Reduction | Pair projections, selected constructor rules, flat products of normal message factors under a validated AC unit and cancellation presentation, DH power towers and signed exponent products. For binary AC roots, native-only can match active equations and instantiate the RHS when every match yields the same normal value. | Extend positive rewriting to proper AC subproducts and multi-step results. |
-| Variants | Native-only joins supported positional destructors, flat XORs of Fresh variables, binary cancellation over two independent Msg variables and received-base DH powers on their shared inputs. For any declared AC operator it can also prove an identity variant by ruling out all active rules under sorted substitution. | Extend certified narrowing to arbitrary active AC equations. Extend nested narrowing and unrestricted DH exponents. Establish ordering compatibility for joined answers in hybrid mode. |
+| Variants | Native-only joins positional destructors, flat XORs of Fresh variables and received-base DH powers on shared inputs. Under a validated AC unit and cancellation presentation it also handles two independent Msg variables, or two distinct Fresh variables and a Msg variable. Any declared AC operator can admit an identity variant when sorted substitution excludes all its active rules. | Extend certified narrowing to nested active AC terms and arbitrary active equations. Extend DH to unrestricted exponents. Establish ordering compatibility for joined answers in hybrid mode. |
 
 For flat directional matching, a singleton image retains the literal’s sort and a product takes
 the AC operator’s result sort. Lean proves exact coverage after this sort check. In `x+x+y`
@@ -309,10 +309,21 @@ bindable. Rust keeps the original subject terms in the bindings. At a commutativ
 equality across the two sides can eliminate an alignment only for a ground common child.
 [Matching refinement](Tamarin/RigidSubject.lean) · [Protocol regression](../crates/tamarin-prover/tests/lean_unification.rs)
 
-The upstream `CRxor` model still defers on a variant query for
-`Fresh XOR Fresh XOR Msg`. Maude returns nine variants. Both the equality of the Fresh
-inputs and how the unrestricted message overlaps them can affect the normal value.
-For other AC theories, the narrowing specification now shows how complete ordinary
+The upstream `features/xor/CRxor` model now runs entirely in native-only mode. For
+its ternary query, coincident Fresh images cancel and leave the message unchanged.
+For distinct Fresh images, the message may contain either, both or neither, with or
+without other factors. These nine variants share witnesses across the input images
+and the normal value. CI checks all nine for any admitted cancellation presentation
+and allows the executable to reorder or repeat rows. The Rust oracle tests exercise
+both built-in XOR and a user-declared operator. [Classification](Tamarin/MixedCancellationClassification.lean) ·
+[Packet contract](Tamarin/MixedCancellationPacket.lean) · [Joined observations](Tamarin/MixedCancellationJoined.lean)
+
+For this model, Maude and native-only produce identical precomputation output
+(seven raw and seven refined cases) and the same three lemma verdicts at 364, 11
+and 10 steps. Four proof leaves print a different local timepoint index.
+`CH07` still defers during rule closure. Its first variant query includes a cancellation
+sum inside a hash, then uses that hash twice inside another sum.
+For other AC theories, the narrowing specification shows how complete ordinary
 unifiers lift rewrites on proper subproducts and states sufficient conditions for a
 finite search to cover all reachable normal forms. An executable general search remains
 open. [AC narrowing](Tamarin/RootNarrowing.lean) · [Completeness conditions](Tamarin/NarrowingFrontier.lean)

@@ -5894,23 +5894,13 @@ fn native_oracle_binary_ac_reduction_agrees_with_maude_for_every_rule_and_alignm
     assert_eq!(native.stats().norm_count, 0);
 }
 
-#[test]
-fn native_oracle_binary_msg_cancellation_recognizes_renamed_rules_and_checks_parity() {
-    use crate::algebra_backend::AlgebraBackend;
-    use crate::builtin::hash;
+fn renamed_cancellation_signature() -> (crate::maude_sig::MaudeSig, AcSym, LNTerm) {
     use crate::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
-    use crate::maude_proc::MaudeError;
     use crate::maude_sig::hash_maude_sig;
     use crate::rewriting::RRule;
     use crate::subterm_rule::rrule_to_ctxt_st_rule;
     use crate::term::f_app_no_eq;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
-    let Some(path) = require_maude_path() else {
-        return;
-    };
     let op = AcFctSym::new(
         b"combine",
         Privacy::Public,
@@ -5943,7 +5933,27 @@ fn native_oracle_binary_msg_cancellation_recognizes_renamed_rules_and_checks_par
         .insert(rule(combine(vec![unit.clone(), v.clone()]), v));
     sig.st_rules
         .insert(rule(combine(vec![w.clone(), z.clone(), w]), z));
-    let sig = sig.refresh();
+    (sig.refresh(), AcSym::AcFct(op), unit)
+}
+
+#[test]
+fn native_oracle_binary_msg_cancellation_recognizes_renamed_rules_and_checks_parity() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::hash;
+    use crate::maude_proc::MaudeError;
+    use crate::rewriting::RRule;
+    use crate::subterm_rule::rrule_to_ctxt_st_rule;
+
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let (sig, op, unit) = renamed_cancellation_signature();
+    let combine = |args| f_app_ac(op, args);
+    let var = |name, id| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, id)));
+    let rule = |lhs, rhs| rrule_to_ctxt_st_rule(&RRule::new(lhs, rhs)).unwrap();
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
             .unwrap();
@@ -6176,4 +6186,122 @@ fn native_oracle_open_subject_matching_preserves_joint_rigid_images() {
         }
     }
     assert_eq!(native.stats().match_count, 0);
+}
+
+#[test]
+fn native_oracle_mixed_cancellation_preserves_all_nine_xor_observations() {
+    check_mixed_cancellation_rows(
+        crate::maude_sig::xor_maude_sig(),
+        AcSym::Xor,
+        crate::builtin::zero_const(),
+    );
+}
+
+#[test]
+fn native_oracle_mixed_cancellation_preserves_all_nine_renamed_observations() {
+    let (signature, op, unit) = renamed_cancellation_signature();
+    check_mixed_cancellation_rows(signature, op, unit);
+}
+
+fn check_mixed_cancellation_rows(
+    signature: crate::maude_sig::MaudeSig,
+    symbol: AcSym,
+    zero: LNTerm,
+) {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::pair;
+    use crate::maude_sig::pair_maude_sig;
+    use crate::subst::{apply_vterm, Subst};
+    use crate::term::f_app_list;
+
+    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
+        return;
+    }
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let literal = |v| Term::Lit(Lit::Var(v));
+    let primary = [
+        LVar::new("left", LSort::Fresh, 4),
+        LVar::new("right", LSort::Fresh, 8),
+        LVar::new("payload", LSort::Msg, 6),
+    ];
+    let [left, right, payload] = primary.map(literal);
+    // The isolated leaf currently chooses x.11 as its third (Msg) witness.
+    // The packed observer with that identity must stay independent of the leaf.
+    let ambient = LVar::new("x", LSort::Msg, 11);
+    let inputs = [primary[0], primary[1], primary[2], ambient];
+    let signature = signature.merge(pair_maude_sig());
+    let native = MaudeHandle::start_with_backend(
+        "/nonexistent",
+        signature.clone(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, signature, AlgebraBackend::Maude).unwrap();
+    let product = |xs: &[&LNTerm]| f_app_ac(symbol, xs.iter().map(|t| (*t).clone()).collect());
+    let slots = |a: &LNTerm, b: &LNTerm, m: &LNTerm, sum: &LNTerm, other: &LNTerm| {
+        vec![
+            other.clone(),
+            sum.clone(),
+            pair(other.clone(), a.clone()),
+            b.clone(),
+            m.clone(),
+            a.clone(),
+            sum.clone(),
+        ]
+    };
+    let query_slots = slots(
+        &left,
+        &right,
+        &payload,
+        &product(&[&left, &right, &payload]),
+        &literal(ambient),
+    );
+    let query = f_app_list(query_slots.clone());
+    // The full observation vector goes into a single synthetic binding so
+    // canonical_small_ac_answers uses one witness renaming for every slot.
+    let row_key = LVar::new("row", LSort::Msg, 0);
+    let (a, b, u, other) = (
+        left.clone(),
+        right.clone(),
+        payload.clone(),
+        literal(ambient),
+    );
+    let expected = [
+        (&b, u.clone(), product(&[&a, &b, &u])),
+        (&b, zero.clone(), product(&[&a, &b])),
+        (&b, a.clone(), b.clone()),
+        (&b, b.clone(), a.clone()),
+        (&b, product(&[&a, &u]), product(&[&b, &u])),
+        (&b, product(&[&b, &u]), product(&[&a, &u])),
+        (&b, product(&[&a, &b]), zero),
+        (&b, product(&[&a, &b, &u]), u.clone()),
+        (&a, u.clone(), u.clone()),
+    ]
+    .into_iter()
+    .map(|(second, m, value)| vec![(row_key, f_app_list(slots(&a, second, &m, &value, &other)))])
+    .collect();
+    let expected = canonical_small_ac_answers(expected);
+    for backend in [&oracle, &native] {
+        let variants = backend.variants(&query).unwrap();
+        assert_eq!(variants.len(), 9, "{symbol:?}");
+        let mut rows = Vec::new();
+        for arm in variants {
+            assert!(arm.iter().all(|(key, _)| inputs.contains(key)));
+            let substitution = Subst::from_list(arm);
+            let values = query_slots
+                .iter()
+                .map(|t| {
+                    backend
+                        .reduce(&apply_vterm(&substitution, t.clone()))
+                        .unwrap()
+                })
+                .collect();
+            rows.push(vec![(row_key, f_app_list(values))]);
+        }
+        assert_eq!(canonical_small_ac_answers(rows), expected, "{symbol:?}");
+    }
+    assert_eq!(native.stats().var_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
 }

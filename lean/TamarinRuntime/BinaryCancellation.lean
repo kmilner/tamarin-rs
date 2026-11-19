@@ -49,4 +49,13 @@ def rows : Array (Array UInt64) :=
   let identity : Row := ([1],[2],[1,2])
   ((identity :: rules.flatMap narrow).filterMap packet).eraseDups.toArray
 
+/-- For distinct Fresh images the message can contain any subset of the two
+atomic factors and an independent remainder. Adding both Fresh inputs toggles
+their two bits. When the Fresh images coincide, they cancel for every message. -/
+def mixedRows : Array (Array UInt64) :=
+  let separate := (List.range 8).map fun n =>
+    let message := n.toUInt64
+    #[1, 2, message, message ^^^ 3]
+  (#[#[1, 1, 4, 4]] ++ separate.toArray)
+
 end Tamarin.BinaryCancellationCandidate

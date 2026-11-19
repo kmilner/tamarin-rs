@@ -582,6 +582,33 @@ theorem exportedBinaryCancellationRows_correct :
     Rewriting.BinaryXor.RowsCorrect (Executable.binaryCancellationRows ()) :=
   Rewriting.BinaryXor.candidate_rows
 
+theorem exportedMixedCancellationRows_correct :
+    Rewriting.MixedCancellation.RowsCorrect (Executable.mixedCancellationRows ()) :=
+  Rewriting.MixedCancellation.candidate_rows
+
+open Rewriting Rewriting.MixedCancellation in
+theorem exportedMixedCancellationVariants_live {sig : Signature} (q : Query sig)
+    (caller : Term sig) (layout : EquivB caller q.term)
+    (rules : List (Equation sig)) (presentation : RulePresentation.Same q.table.rules rules)
+    (arms : List (Variant sig))
+    (all : ∀ row ∈ Executable.mixedCancellationRows (), ∃ a ∈ arms, PacketArm q row a)
+    (only : ∀ a ∈ arms, ∃ row ∈ Executable.mixedCancellationRows (), PacketArm q row a) :
+    CompleteVariants (ruleRoot rules) [caller] arms ∧ ∀ a ∈ arms, a.Reconstructible (ruleRoot rules) [caller] :=
+  (presentation.variants [caller] arms).mp
+    (CompleteVariants.presented (packetFamily_complete q _ exportedMixedCancellationRows_correct arms all only) layout)
+
+open Rewriting Rewriting.MixedCancellation Rewriting.VariantJoin in
+theorem joinedCancellationVariants_packed {sig : Signature} {A : Type} {keys : List Variable}
+    (T : BinaryXor.Table sig) (op : A → Term sig) (admit : ∀ a, Observation T (op a))
+    (rows : List (Row sig (Key keys) A)) (exactRows : Exact T.R Subtype.val op rows)
+    (typed : ∀ r ∈ rows, r.Sorted) (normal : ∀ r ∈ rows, r.IsNormal T.R)
+    (slots : List (Sum A (Term sig))) (used : ∀ a, .inl a ∈ slots)
+    (scope : ∀ v, Observed (slots.map (packedInput op)) v → v ∈ keys)
+    (n : Term sig → Term sig) (stable : ∀ t, .inr t ∈ slots → StableVariants.Representative T.R t (n t)) :
+    CompleteVariants T.R (slots.map (packedInput op)) (packRows rows typed slots n) ∧
+      ∀ a ∈ packRows rows typed slots n, a.Reconstructible T.R (slots.map (packedInput op)) :=
+  MixedCancellation.packed T op admit rows exactRows typed normal slots used scope n stable
+
 open Rewriting Rewriting.BinaryXor in
 theorem exportedBinaryCancellationVariants_complete {sig : Signature} (q : Query sig) (arms : List (Variant sig))
     (all : ∀ row ∈ Executable.binaryCancellationRows (), ∃ a ∈ arms, PacketArm q row a)
@@ -1003,6 +1030,7 @@ run_cmd do
     (``Tamarin.Executable.projectAnswers, `tamarin_project_answers),
     (``Tamarin.Executable.xorBranches, `tamarin_xor_branches),
     (``Tamarin.Executable.xorMatchings, `tamarin_xor_matchings),
+    (``Tamarin.Executable.mixedCancellationRows, `tamarin_mixed_cancellation_rows),
     (``Tamarin.Executable.binaryCancellationRows, `tamarin_binary_cancellation_rows),
     (``Tamarin.Executable.xorOdd, `tamarin_xor_odd),
     (``Tamarin.Executable.sortClash, `tamarin_sort_clash),

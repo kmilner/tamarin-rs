@@ -173,7 +173,7 @@ impl RuleTable {
             }
             row
         };
-        if let Some(arms) = self.binary_cancellation_rows(app)? {
+        if let Some(arms) = self.cancellation_rows(app)? {
             return Ok(Some(
                 arms.into_iter().map(|(s, v)| open_row(&s, v)).collect(),
             ));

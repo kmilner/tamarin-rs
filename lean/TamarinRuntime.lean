@@ -119,6 +119,10 @@ def xorBranches (same : Bool) : UInt8 :=
 def binaryCancellationRows (_ : Unit) : Array (Array UInt64) :=
   BinaryCancellationCandidate.rows
 
+@[export tamarin_mixed_cancellation_rows]
+def mixedCancellationRows (_ : Unit) : Array (Array UInt64) :=
+  BinaryCancellationCandidate.mixedRows
+
 @[export tamarin_xor_matchings]
 def xorMatchings (width : UInt64) : Option (Array (Array UInt64)) :=
   XorMatchingCandidate.run width

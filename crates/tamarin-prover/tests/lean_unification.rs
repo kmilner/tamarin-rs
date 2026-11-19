@@ -503,6 +503,57 @@ fn fresh_xor_corpus_preserves_sources_and_complete_proof_trees() {
 }
 
 #[test]
+fn crxor_preserves_sources_and_all_three_proofs_without_maude() {
+    let example = "features/xor/CRxor.spthy";
+    let (sources, log) = run_corpus(example, "native-only", &["--precompute-only"]);
+    assert!(!log.contains("[maude>]"), "{log}");
+    for expected in [
+        "Raw sources: 7 cases, deconstructions complete",
+        "Refined sources: 7 cases, deconstructions complete",
+    ] {
+        assert!(sources.contains(expected), "{sources}");
+    }
+    let (proof, log) = run_corpus(example, "native-only", &["--prove"]);
+    assert!(!log.contains("[maude>]"), "{log}");
+    for verdict in [
+        "alive (all-traces): verified (364 steps)",
+        "recentalive_tag (all-traces): falsified - found trace (11 steps)",
+        "executable (exists-trace): verified (10 steps)",
+    ] {
+        assert!(proof.contains(verdict), "{proof}");
+    }
+    if common::maude_available() {
+        let (reference, _) = run_corpus(example, "maude", &["--precompute-only"]);
+        assert_eq!(sources, reference);
+        let (reference, _) = run_corpus(example, "maude", &["--prove"]);
+        // The terminal KU(~k) goals directly under c_xor_case_1 can print a
+        // different fresh timepoint index. Keep the solved term and indentation.
+        let tree = |stdout: &str| {
+            let mut first_xor_case = false;
+            comparable_proof(stdout)
+                .lines()
+                .map(|line| {
+                    let under_case = first_xor_case;
+                    first_xor_case = line.trim() == "case c_xor_case_1";
+                    if under_case
+                        && let Some((prefix, tail)) = line.split_once("by solve( !KU( ~k ) @ #vk.")
+                        && prefix.trim().is_empty()
+                        && tail
+                            .strip_suffix(" )")
+                            .is_some_and(|id| id.parse::<u64>().is_ok())
+                    {
+                        format!("{prefix}by solve( !KU( ~k ) @ #vk )")
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(tree(&proof), tree(&reference));
+    }
+}
+
+#[test]
 fn nslpk_xor_responder_preserves_sources_and_the_complete_reachability_proof() {
     if !common::maude_available() {
         return;

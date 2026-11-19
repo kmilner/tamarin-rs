@@ -121,14 +121,20 @@ theorem normal_eq {s t : Term sig} (gs : Good T s) (gt : Good T t)
   rw [e]
   split <;> first | exact .refl _ | exact perm
 
-theorem unique {a b u v : Term sig} (ha : Good T a) (hb : Good T b)
-    (nu : NormalForm T.R (.ac T.f a b) u) (nv : NormalForm T.R (.ac T.f a b) v) : EquivB u v := by
-  have sort : HasSort (.ac T.f a b) .msg := T.fSort ▸ HasSort.ac T.f _ _ (T.fSort ▸ ha.1) (T.fSort ▸ hb.1)
-  have pure := (T.pure_ac ..).mpr ⟨pure_good T ha,pure_good T hb⟩
+/-- Uniqueness only needs a typed input whose opaque nonunit factors
+have normal representatives. The input itself can still contain redexes. -/
+theorem unique_of_pure {t u v : Term sig} (sort : HasSort t .msg) (pure : T.PureFrom (fun _ => True) t)
+    (nu : NormalForm T.R t u) (nv : NormalForm T.R t v) : EquivB u v := by
   have pu := T.reduces_kept nu.1 pure
   have pv := T.reduces_kept nv.1 pure
   exact normal_eq T ⟨nu.2.2 _ sort,nu.2.1⟩ ⟨nv.2.2 _ sort,nv.2.1⟩ fun k ne =>
     (pu.2 k ne).symm.trans (pv.2 k ne)
+
+theorem unique {a b u v : Term sig} (ha : Good T a) (hb : Good T b)
+    (nu : NormalForm T.R (.ac T.f a b) u) (nv : NormalForm T.R (.ac T.f a b) v) : EquivB u v := by
+  have sort : HasSort (.ac T.f a b) .msg := T.fSort ▸ HasSort.ac T.f _ _ (T.fSort ▸ ha.1) (T.fSort ▸ hb.1)
+  have pure := (T.pure_ac ..).mpr ⟨pure_good T ha,pure_good T hb⟩
+  exact unique_of_pure T sort pure nu nv
 
 end
 end Tamarin.Rewriting.BinaryXor
