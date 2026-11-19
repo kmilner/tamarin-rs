@@ -1934,7 +1934,7 @@ impl MaudeHandle {
     /// Compute AC matchers for a batch of `(subject, pattern)` problems.
     ///
     /// **Convention — faithful to Haskell.** Each `Equal { lhs, rhs }`
-    /// has `lhs = subject` (term to be matched, treated ground) and
+    /// has `lhs = subject` (its variables are rigid) and
     /// `rhs = pattern` (vars bind). This mirrors HS exactly:
     /// `matchWith t p = DelayedMatches [(t, p)]` is `(subject, pattern)`
     /// (`Term/Rewriting/Definitions.hs`), and `matchViaMaude`
@@ -1947,7 +1947,7 @@ impl MaudeHandle {
     /// subject` on the RIGHT (subject slot) — `Maude/Process.hs`.
     ///
     /// Maude's `match A <=? B` binds vars in **A (PATTERN, left)** and
-    /// treats **B (SUBJECT, right)** as ground (empirically confirmed).
+    /// leaves variables in **B (SUBJECT, right)** unchanged.
     /// So pattern must go LEFT — which is why
     /// `pp_mterm_list(&pats)` (= `t2s` = each `eq.rhs`) is emitted first.
     ///
@@ -2116,7 +2116,7 @@ impl MaudeHandle {
         }
         // `match in MSG : list(pats) <=? list(subjs) .`
         // Mirrors HS `matchCmd` (`Maude/Process.hs`): PATTERN on the
-        // left (vars bind), SUBJECT on the right (ground).
+        // left (vars bind), SUBJECT on the right (its variables stay rigid).
         // `pp_mterm_list` emits `list( cons(t1, cons(t2, nil)) )` style,
         // formatting the borrowed slice directly without a `Vec`+`Arc`
         // round-trip.
@@ -2444,7 +2444,7 @@ fn build_conj_eqs_cmd(prefix: &[u8], eqs: &[Equal<LNTerm>], ctx: &mut ConvCtx) -
 }
 
 /// Build a `match in MSG : <pats> <=? <subjs> .\n` command.  Pattern list on the
-/// LEFT (vars bind), subject list on the RIGHT (ground) — the convention shared
+/// left (variables may bind), subject list on the right (variables stay rigid), as used
 /// by both matchers (see `match_eqs`' doc-comment).  `pp_mterm_list_into` is the
 /// shared list formatter.
 fn pp_match_cmd(pats: &[MTerm], subjs: &[MTerm]) -> Vec<u8> {

@@ -28,6 +28,7 @@ example (avoid : List Variable) :
     let answer : Rewriting.Variant sig := ⟨Substitution.identity, probe⟩
     Rewriting.CompleteVariants (Rewriting.ruleRoot []) probe [answer] ∧ answer.Safe probe avoid ∧
       answer.Reconstructible (Rewriting.ruleRoot []) probe := by
+  apply MaudeOperations.VariantReply.singleton_iff.mp
   apply exportedConstructorVariant_semantic [] probe #[] #[1] (fun _ => 1)
   · simp
   · simp [Rewriting.ConstructorVariants.ruleHeads]

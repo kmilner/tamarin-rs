@@ -127,6 +127,13 @@ theorem same_across (a b : Term s) : pattern s a = freeze s b ↔ a = b ∧ a.Gr
 def query (p : Problem s) : Problem (frozenSig s) :=
   p.map fun e => ⟨pattern s e.lhs, freeze s e.rhs⟩
 
+theorem query_wellFormed (p : Problem s) (hp : p.WellFormed) : (query s p).WellFormed := by
+  intro e he
+  obtain ⟨r, hr, rfl⟩ := List.mem_map.mp he
+  obtain ⟨⟨a, ha⟩, ⟨b, hb⟩⟩ := hp r hr
+  exact ⟨⟨a, leaves_sorted s _ _ HasSort.var (fun c => HasSort.atom (sig := frozenSig s) (.inl c)) ha⟩,
+    ⟨b, freeze_sorted s hb⟩⟩
+
 private theorem observed (p : Problem s) (v) : Observed (query s p) v ↔ Observed p v := by
   constructor
   · rintro ⟨_,mem,hv⟩

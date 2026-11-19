@@ -922,8 +922,8 @@ theorem exportedConstructorVariant_semantic {sig : Signature}
     (hu : ∀ t ∈ query, ∀ f ∈ Rewriting.ConstructorVariants.operators t, encode f ∈ used.toList)
     (ok : Executable.constructorVariant roots used = true) (avoid : List Variable) :
     let answer : Rewriting.Variant sig := ⟨Substitution.identity, query⟩
-    Rewriting.CompleteVariants (Rewriting.ruleRoot rules) query [answer] ∧ answer.Safe query avoid ∧
-      answer.Reconstructible (Rewriting.ruleRoot rules) query := by
+    MaudeOperations.VariantReply (Rewriting.ruleRoot rules) query avoid [answer] := by
+  apply MaudeOperations.VariantReply.singleton_iff.mpr
   obtain ⟨complete, safe⟩ := Rewriting.ConstructorVariants.encoded_identity
     exportedConstructorVariant_correct rules query roots used encode apps hr hu ok avoid
   exact ⟨complete, safe, Rewriting.VariantReconstruction.constructors rules query apps

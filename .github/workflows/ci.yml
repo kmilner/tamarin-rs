@@ -64,6 +64,7 @@ jobs:
           lake env lean Tests/WordEncoding.lean
           lake env lean Tests/Pairing.lean
           lake env lean Tests/CorrelatedVariantsAudit.lean
+          lake env lean Tests/MaudeOperations.lean
           lake env lean Tests/Rewriting.lean
           lake env lean Tests/StableDH.lean
           lake env lean Tests/DHProductUnique.lean
@@ -182,6 +183,8 @@ jobs:
           sudo mkdir -p /opt/maude
           sudo unzip -q /tmp/maude.zip -d /opt/maude
           sudo chmod +x /opt/maude/maude
+      - name: Check the algebra specification examples against Maude
+        run: python3 lean/Tests/check_maude_operations.py /opt/maude/maude
       # MAUDE_PATH: every crate's maude-gated tests honour this env override.
       # Pin the test harness to this installation. Missing Maude fails tests
       # unless TAM_ALLOW_NO_MAUDE=1 explicitly opts into skipping them.

@@ -117,9 +117,10 @@ def FreshFor {sig : Signature} (p : Problem sig) (avoid : List Variable)
 terminating Lean definition and proofs. No inhabitant is postulated here.
 The semantic signature is generic; an implementation may require additional
 decidable-equality/finite-signature data when constructing this structure.
-This is not a Rust ABI or a specification of Maude's enumeration order. -/
-structure VerifiedUnifier (sig : Signature) where
-  solve : (p : Problem sig) → p.WellFormed → List Variable → List (Substitution sig)
+The default domain is the sorted milestone. The whole-module contract also
+admits kind-level application trees. Enumeration order belongs to the adapter. -/
+structure VerifiedUnifier (sig : Signature) (inputs : Problem sig → Prop := Problem.WellFormed) where
+  solve : (p : Problem sig) → inputs p → List Variable → List (Substitution sig)
   correct : ∀ p hp avoid, CompleteSet p (solve p hp avoid)
   domain : ∀ p hp avoid σ, σ ∈ solve p hp avoid → DomainRestricted p σ
   fresh : ∀ p hp avoid σ, σ ∈ solve p hp avoid → FreshFor p avoid σ

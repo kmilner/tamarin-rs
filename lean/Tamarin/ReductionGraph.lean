@@ -1,3 +1,4 @@
+import Tamarin.MaudeOperations
 import Tamarin.ContextualReduction
 import TamarinRuntime.ReductionGraph
 
@@ -49,7 +50,7 @@ def Semantic (check : Graph → Bool) : Prop :=
     (∀ i : Fin g.size, next (read i) = g[i].toList.map (fun w => read w.toNat)) →
     (∀ i : Fin g.size, ∀ b, StepModulo R (read i) b ↔ ∃ v ∈ next (read i), EquivB v b) →
     (∀ k, HasSort (read start) k → HasSort (read 0) k) →
-    NormalForm R (read start) (read 0) ∧ ∀ u, NormalForm R (read start) u → EquivB u (read 0)
+    MaudeOperations.ReductionReply R (read start) (read 0)
 
 theorem completed {check : Graph → Bool} (ok : Correct check) : Semantic check := by
   intro g accepted s R read start next decode edges sorts
@@ -72,6 +73,8 @@ theorem completed {check : Graph → Bool} (ok : Correct check) : Semantic check
         apply ih w.toNat earlier (Nat.lt_trans earlier hi) (path.follow ?_)
         rw [decode ⟨i,hi⟩]
         exact List.mem_map_of_mem (by simpa using hw)
+  suffices h : NormalForm R (read start) (read 0) ∧ ∀ u, NormalForm R (read start) u → EquivB u (read 0) from
+    ⟨h.1, h.2⟩
   apply ACSubproductReduction.completed states next (read start) (read 0) (member start)
   · rintro _ mem b
     obtain ⟨i,_,rfl⟩ := List.mem_map.mp mem

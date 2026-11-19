@@ -34,8 +34,10 @@ def Result.Correct (p : Problem sig) (bindable : Variable → Prop) : Result sig
   | .complete answers => Complete p bindable answers
   | .stopped _ answers => ∀ σ ∈ answers, Matches p σ ∧ Scoped p bindable σ
 
-structure VerifiedMatcher (sig : Signature) where
-  run : (p : Problem sig) → p.WellFormed → (bindable : List Variable) →
+/-- The sorted reference is the default. The Maude command contract fixes
+the domain to all arity-correct conjunctions, including kind-level terms. -/
+structure VerifiedMatcher (sig : Signature) (inputs : Problem sig → Prop := Problem.WellFormed) where
+  run : (p : Problem sig) → inputs p → (bindable : List Variable) →
     List (Substitution sig)
   correct : ∀ p hp bindable, Complete p (fun v => v ∈ bindable) (run p hp bindable)
 

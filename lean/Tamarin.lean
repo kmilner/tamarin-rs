@@ -145,3 +145,6 @@ import Tamarin.DHStaging
 import Tamarin.BilinearRows
 import Tamarin.BilinearPowerSpine
 import Tamarin.BilinearMapStaging
+import Tamarin.MaudeOperationRefinements
+import Tamarin.MatchViaUnification
+import Tamarin.ReduceViaSteps
