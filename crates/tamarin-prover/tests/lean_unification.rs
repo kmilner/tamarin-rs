@@ -756,3 +756,61 @@ fn user_rule_narrowing_requires_the_same_key_in_both_arguments() {
         ],
     );
 }
+
+#[test]
+fn bilinear_pairings_preserve_sources_and_all_four_protocol_verdicts() {
+    for (model, first, second) in [
+        (
+            "ake/bilinear/Joux.spthy",
+            "session_key_establish (exists-trace): verified (28 steps)",
+            "Session_Key_Secrecy_PFS (all-traces): verified (22 steps)",
+        ),
+        (
+            "ake/bilinear/Scott.spthy",
+            "key_agreement_reachable (exists-trace): verified (10 steps)",
+            "key_secrecy (all-traces): verified (452 steps)",
+        ),
+    ] {
+        let (sources, log) = run_corpus(model, "native-only", &["--precompute-only"]);
+        assert!(!log.contains("[maude>]"), "{log}");
+        for kind in ["Raw", "Refined"] {
+            assert!(
+                sources.contains(&format!(
+                    "{kind} sources: 12 cases, deconstructions complete"
+                )),
+                "{sources}"
+            );
+        }
+        let (proof, log) = run_corpus(model, "native-only", &["--prove"]);
+        assert!(!log.contains("[maude>]"), "{log}");
+        assert!(proof.contains(first) && proof.contains(second), "{proof}");
+        if common::maude_available() {
+            let (oracle_sources, _) = run_corpus(model, "maude", &["--precompute-only"]);
+            assert_eq!(sources, oracle_sources);
+            let (oracle_proof, _) = run_corpus(model, "maude", &["--prove"]);
+            assert!(
+                oracle_proof.contains(first) && oracle_proof.contains(second),
+                "{oracle_proof}"
+            );
+            let steps = |proof: &str| {
+                // Case numbering can visit the same complete branches in a different order.
+                let mut lines: Vec<_> = proof
+                    .split_once("\nlemma ")
+                    .unwrap()
+                    .1
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| {
+                        line.starts_with("solve(")
+                            || line.starts_with("by ")
+                            || line.starts_with("case ")
+                    })
+                    .map(str::to_owned)
+                    .collect();
+                lines.sort();
+                lines
+            };
+            assert_eq!(steps(&proof), steps(&oracle_proof), "{model}");
+        }
+    }
+}
