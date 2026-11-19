@@ -8,6 +8,7 @@ mod dh_product;
 mod flat_xor;
 mod reduction_search;
 mod subgroups;
+mod total_free;
 mod uniform_reduction;
 mod variant_join;
 use super::narrowing::NarrowingRule;
@@ -532,6 +533,24 @@ impl RuleTable {
             }
             if values.len() == args.len() {
                 return Ok(Some(crate::term::f_app(*head, values)));
+            }
+        }
+        if let Some(contractum) = self.total_free_contract(term)? {
+            if self.irreducible_native(&contractum)? {
+                return Ok(Some(contractum));
+            }
+            // At equal principal sorts the two expressions have exactly the
+            // same typed normal forms. Recurse only on a strict original child;
+            // an arbitrary RHS can reintroduce the head or duplicate inputs.
+            if let Term::App(head, args) = term
+                && self.declaration(*head).is_some_and(|(_, _, sort)| {
+                    sort == crate::lterm::sort_of_lterm(&contractum, sort_of_name)
+                })
+            {
+                if args.contains(&contractum) {
+                    return self.reduce_native_sorted(&contractum);
+                }
+                return self.search_reduction(&contractum);
             }
         }
         self.search_reduction(term)

@@ -1,4 +1,5 @@
 mod inert_products;
+mod total_free;
 
 use super::*;
 use crate::algebra_backend::AlgebraBackend;
