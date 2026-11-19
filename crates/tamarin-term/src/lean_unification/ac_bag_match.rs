@@ -1,4 +1,4 @@
-//! Directional matching of AC patterns with ground factors and full-sort captures.
+//! Directional matching of AC patterns with ground factors and sorted captures.
 //! Each occurrence of a capture must receive the same nonempty bag of frozen
 //! subject factors in every equation. The numeric alphabet is request-local.
 use super::{
@@ -62,6 +62,7 @@ struct BagRows<'a> {
     symbol: AcSym,
     vars: IdentityTable<LVar>,
     occurrences: usize,
+    all_full_sort: bool,
     rows: Vec<Row<'a>>,
 }
 
@@ -108,6 +109,7 @@ impl RuleTable {
         }
         let mut vars = IdentityTable::default();
         let mut occurrences = 0;
+        let mut all_full_sort = true;
         let mut rows = Vec::with_capacity(eqs.len());
         for (pattern_term, subject_term) in eqs.iter().map(orient) {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
@@ -128,7 +130,8 @@ impl RuleTable {
             };
             for t in pattern {
                 match t {
-                    Term::Lit(Lit::Var(v)) if subsort(sort, v.sort) => {
+                    Term::Lit(Lit::Var(v)) => {
+                        all_full_sort &= subsort(sort, v.sort);
                         row.keys
                             .push(vars.intern(*v).ok_or(Error::InvalidStatus(255))?);
                     }
@@ -144,6 +147,7 @@ impl RuleTable {
             symbol: default_head,
             vars,
             occurrences,
+            all_full_sort,
             rows,
         }))
     }
@@ -153,6 +157,11 @@ impl RuleTable {
         let Some(data) = self.prepare_bag_rows(eqs, |e| (&e.rhs, &e.lhs))? else {
             return Ok(None);
         };
+        if !data.all_full_sort {
+            // A numeric witness can assign a capture an image outside its sort.
+            // Decide existence over the entire family of well-sorted arms.
+            return Ok(data.answers()?.map(|arms| !arms.is_empty()));
+        }
         // Each capture occurs exactly once. No rigid term identities need
         // to cross the ABI on rows without fixed factors.
         if data.occurrences == data.vars.len() && data.rows.iter().all(|r| !r.keys.is_empty()) {
@@ -186,7 +195,7 @@ impl RuleTable {
         let Some(data) = self.prepare_bag_rows(eqs, |e| (&e.lhs, &e.rhs))? else {
             return Ok(Outcome::Unsupported);
         };
-        Ok(match data.with_packet(Vec::new(), read_answers)? {
+        Ok(match data.answers()? {
             Some(arms) => Outcome::Complete(arms),
             None => Outcome::Unsupported,
         })
@@ -194,6 +203,10 @@ impl RuleTable {
 }
 
 impl BagRows<'_> {
+    fn answers(self) -> Result<Option<Substitutions>, Error> {
+        self.with_packet(Vec::new(), read_answers)
+    }
+
     /// Keep the canonical subject factors and their request-local identities
     /// alive through the entire call, including decoding any returned bags.
     fn with_packet<T>(
@@ -259,6 +272,7 @@ fn read_answers(
                 return Err(Error::InvalidStatus(255));
             }
             let mut arm = Vec::with_capacity(vars.len());
+            let mut well_sorted = true;
             for (k, &var) in vars.values().iter().enumerate() {
                 // Lean places keys in first-encounter order. This matches
                 // interning during pattern traversal, independently of Ord.
@@ -283,14 +297,14 @@ fn read_answers(
                     return Ok(None);
                 }
                 let image = f_app_ac(head, values);
-                if !subsort(sort_of_lterm(&image, sort_of_name), var.sort) {
-                    return Err(Error::InvalidStatus(255));
-                }
+                well_sorted &= subsort(sort_of_lterm(&image, sort_of_name), var.sort);
                 // Matching returns every observed key, including X -> X.
                 // Variables occurring in the image are frozen subject data.
                 arm.push((var, image));
             }
-            arms.push(arm);
+            if well_sorted {
+                arms.push(arm);
+            }
         }
         Ok(Some(arms))
     })

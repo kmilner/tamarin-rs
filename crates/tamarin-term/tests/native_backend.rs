@@ -3528,3 +3528,6 @@ fn ac_matching_keeps_one_image_per_repeated_capture_across_rows() {
     }
     assert_eq!(h.stats().match_count, 0);
 }
+
+#[path = "native_backend/sorted_bag_matches.rs"]
+mod sorted_bag_matches;
