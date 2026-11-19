@@ -51,6 +51,7 @@ jobs:
           lake env lean Tests/Rewriting.lean
           lake env lean Tests/StableDH.lean
           lake env lean Tests/DHProductUnique.lean
+          lake env lean Tests/Bilinear.lean
           lake env lean --run Tests/DHTower.lean
           lake env lean --run Tests/DHExponent.lean
           lake env lean Tests/VariantJoin.lean

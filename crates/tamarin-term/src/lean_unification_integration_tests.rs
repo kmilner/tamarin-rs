@@ -2824,7 +2824,6 @@ fn native_oracle_received_base_towers_cover_all_cancellation_subsets() {
         return;
     };
     let sig = dh_maude_sig().merge(hash_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
             .unwrap();
@@ -2874,11 +2873,12 @@ fn native_oracle_received_base_towers_cover_all_cancellation_subsets() {
         }
     }
     let deep = (0..8).fold(base.clone(), |t, _| exp(t, a.clone()));
-    assert_eq!(native.variants(&deep).unwrap().len(), 35);
-    assert_eq!(
-        table.joined_variants(&exp(deep, a.clone())).unwrap(),
-        Outcome::Unsupported
-    );
+    for (tower, count) in [(deep.clone(), 35), (exp(deep, a.clone()), 39)] {
+        let slots = [tower, base.clone(), a.clone()];
+        let expected = valued_variant_rows(&oracle, &slots);
+        assert_eq!(expected.len(), count);
+        assert_eq!(valued_variant_rows(&native, &slots), expected);
+    }
     for (exponent, count) in [
         (base.clone(), 12),
         (inv(a.clone()), 1),
