@@ -540,7 +540,8 @@ def coefficients {n} (names : Fin n → Variable) (xs : List Variable) : Vec n :
 def encode {n} (names : Fin n → Variable) (row : ACSystem.Row) : Row n :=
   Row.ofWeights (coefficients names row.lhs.vars) (coefficients names row.rhs.vars)
 
-private theorem weight_eq {n} (names : Fin n → Variable)
+/-- Dotting occurrence counts with image weights sums the weight of every occurrence. -/
+theorem weight_eq {n} (names : Fin n → Variable)
     (unique : ∀ i j, names i = names j → i = j)
     (xs : List Variable) (live : ∀ v ∈ xs, ∃ i, names i = v) (c : ACSystem.Column) :
     dot (coefficients names xs) (fun i => c (names i)) = (xs.map c).sum := by

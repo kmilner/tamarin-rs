@@ -434,6 +434,12 @@ arm. Four indivisible operands on each side yield precisely the 24 bijections. T
 the branches has exactly the parent state’s solutions on all observed variables, including
 earlier bindings. [Masked operand contract](Tamarin/MaskedOperandContract.lean) · [Selection proof](Tamarin/MaskedSelection.lean)
 
+For mixed equations, the node count of a substituted term is affine in the sizes of
+its variable images. Lean proves that a single signed certificate for inconsistent
+sizes rules out every unifier of the original conjunction, including terms with nested
+free, C and AC operators. The public solver still defers some such conjunctions.
+[Term-level proof](Tamarin/MixedSizeSystem.lean) · [Checked example](Tests/MixedSizeSystem.lean)
+
 When a matrix search defers, native-only can split on a supported ground-sided AC equation,
 including one exposed under a constructor. Each match becomes binding equations in the same
 branch as the earlier bindings and all pending constraints.

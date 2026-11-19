@@ -122,6 +122,7 @@ import Tamarin.VariantComposition
 import Tamarin.GuardedACContext
 import Tamarin.CancellationConvergence
 import Tamarin.UnifierSize
+import Tamarin.MixedSizeSystem
 import Tamarin.MatchPrefilter
 import Tamarin.MatchLeafCounts
 import Tamarin.MatchRigidFactors
