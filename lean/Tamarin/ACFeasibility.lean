@@ -1,5 +1,11 @@
 import TamarinRuntime.ACFeasibility
+import Tamarin.FactoredUnification
 import Tamarin.ACLowRank
+import Tamarin.ACCertificate
+import Tamarin.ACSmallSeparator
+import Tamarin.ACSingleCorrection
+import Tamarin.ACPairCorrection
+import Tamarin.ACThreeColumns
 import Tamarin.ACColumnQuotient
 import Tamarin.ACColumnSupport
 import Tamarin.ACAdjustmentCoverage
@@ -33,6 +39,10 @@ inductive BaseRequired {n} (rs : List (Row n)) : Prop where
   | triangular : Adjustment.Within rs → BaseRequired rs
   | twoRows : rs.length ≤ 2 → BaseRequired rs
   | lowRank : LowRank.Within rs → BaseRequired rs
+  | threeColumns : n = 3 → BaseRequired rs
+  | singleCorrection : SingleCorrection.Within rs → BaseRequired rs
+  | pairCorrection : PairCorrection.Within rs → BaseRequired rs
+  | separator : SmallSeparator.Within rs → BaseRequired rs
 
 /-- Each established domain also applies to the canonical quotient of an
 input containing repeated columns, independently of its original width. -/
@@ -51,6 +61,14 @@ theorem triangular (h : Adjustment.Within rs) : Required rs := .original (.trian
 theorem twoRows (few : rs.length ≤ 2) : Required rs := .original (.twoRows few)
 
 theorem lowRank (h : LowRank.Within rs) : Required rs := .original (.lowRank h)
+
+theorem fewColumns (h : n ≤ 3) : Required rs := by
+  by_cases eq : n = 3
+  · exact .original (.threeColumns eq)
+  · apply lowRank
+    intro p _ q _ r _ i j k
+    have repeated : i = j ∨ i = k ∨ j = k := by omega
+    rcases repeated with rfl | rfl | rfl <;> dsimp <;> grind
 
 end Required
 
@@ -169,12 +187,20 @@ private theorem fast_sound {n} (rs : List (Row n)) : Decides (fastRows rs) (Feas
     exact (rows_correct rs).1
   · simp [small,Decides]
 
+private theorem main_sound {n} (rs : List (Row n)) : Decides (mainRows rs) (Feasible rs) :=
+  fallback (fast_sound rs) (fallback (ThreeColumns.run_sound rs)
+    (fallback (SingleCorrection.run_sound rs) (fun _ h => certifiedSearch_sound rs h)))
+
+private theorem remaining_sound {n} (rs : List (Row n)) : Decides (remainingRows rs) (Feasible rs) :=
+  fallback (SmallSeparator.run_sound rs)
+    (fallback (PairCorrection.run_sound rs) (fun _ h => ColumnSupport.run_correct rs 4096 h))
+
 private theorem base_sound {n} (rs : List (Row n)) : Decides (baseRows rs) (Feasible rs) :=
-  fallback (fast_sound rs) (fun _ h => ColumnSupport.run_correct rs 4096 h)
+  fallback (main_sound rs) (remaining_sound rs)
 
 private theorem checkedRows {n} (rs : List (Row n)) : Decides (checkRows rs) (Feasible rs) :=
-  fallback (fast_sound rs) (fallback (fun _ h => ColumnQuotient.run_sound (@baseRows) base_sound rs h)
-    (fun _ h => ColumnSupport.run_correct rs 4096 h))
+  fallback (main_sound rs) (fallback (fun _ h => ColumnQuotient.run_sound (@baseRows) base_sound rs h)
+    (remaining_sound rs))
 
 private theorem reduced_complete {n} (rs : List (Row n)) (within : RowReduction.Within rs) :
     (reducedFeasible rs).isSome := by
@@ -186,14 +212,14 @@ private theorem base_complete {n} (rs : List (Row n)) (domain : BaseRequired rs)
   cases domain with
   | direct h =>
     obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (initial_direct rs h)
-    simp [baseRows,fastRows,got]
+    simp [baseRows,mainRows,fastRows,got]
   | basis small h =>
     obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp ((rows_correct rs).2 h)
-    cases d : initialRows rs <;> simp [baseRows,fastRows,d,small,got]
-  | triangular h => simp [baseRows,fastRows,Adjustment.completes rs h]
+    cases d : initialRows rs <;> simp [baseRows,mainRows,fastRows,d,small,got]
+  | triangular h => simp [baseRows,mainRows,fastRows,Adjustment.completes rs h]
   | twoRows few =>
     obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (initial_two rs few)
-    simp [baseRows,fastRows,got]
+    simp [baseRows,mainRows,fastRows,got]
   | lowRank h =>
     have decided : (initialRows rs).isSome := by
       unfold initialRows
@@ -202,10 +228,16 @@ private theorem base_complete {n} (rs : List (Row n)) (domain : BaseRequired rs)
       · obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (LowRank.run_complete rs h)
         simp [got]
     obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp decided
-    simp [baseRows,fastRows,got]
+    simp [baseRows,mainRows,fastRows,got]
   | reduced h =>
     obtain ⟨b,got⟩ := Option.isSome_iff_exists.mp (reduced_complete rs h)
-    simp [baseRows,fastRows,got]
+    simp [baseRows,mainRows,fastRows,got]
+  | threeColumns eq =>
+    subst n
+    simp [baseRows,mainRows,ThreeColumns.run]
+  | singleCorrection h => simp [baseRows,mainRows,SingleCorrection.run_complete rs h]
+  | pairCorrection h => simp [baseRows,remainingRows,PairCorrection.run_complete rs h]
+  | separator h => simp [baseRows,remainingRows,SmallSeparator.run_complete rs h]
 
 theorem run_correct : Correct run where
   valid := by
@@ -230,11 +262,31 @@ theorem run_correct : Correct run where
     cases domain with
     | original d =>
       obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp (base_complete rs d)
-      cases fast : fastRows rs <;> simp_all [baseRows,checkRows]
+      cases fast : mainRows rs <;> simp_all [baseRows,checkRows]
     | quotient d =>
       obtain ⟨b,h⟩ := Option.isSome_iff_exists.mp (ColumnQuotient.run_complete (@baseRows)
         (@BaseRequired) base_complete rs d)
       simp [checkRows,h]
+
+theorem term_feasible_iff {sig : Signature} (f : sig.ACSym) (rows : List ACSystem.Row) {n}
+    (fr : ACSystem.Frame f rows n) :
+    (ACSystem.problem f rows).Satisfiable ↔ Feasible (rows.map (encode fr.names)) := by
+  have live v : v ∈ ACSystem.variables rows ↔ ∃ i, fr.names i = v :=
+    ⟨fr.live v,fun ⟨i,e⟩ => e ▸ fr.used i⟩
+  have sorts v (hv : v ∈ ACSystem.variables rows) : Subsort (sig.acSort f) v.sort := by
+    obtain ⟨i,rfl⟩ := fr.live v hv
+    rw [fr.sorts]; exact .refl _
+  have basis := generate_correct (rows.map (encode fr.names))
+  exact (satisfiable_iff_basis_support f fr.names fr.injective rows live sorts _ basis).trans
+    (coversCoordinates_iff _ _ basis)
+
+/-- Even when a bounded search defers, a finite, checkable certificate exists
+for exactly the correct Boolean answer on the original homogeneous AC terms. -/
+theorem term_certificate_iff {sig : Signature} (f : sig.ACSym) (rows : List ACSystem.Row) {n}
+    (fr : ACSystem.Frame f rows n) (b : Bool) :
+    (∃ c, checkCertificate (rows.map (encode fr.names)) c = some b) ↔
+      (b = true ↔ (ACSystem.problem f rows).Satisfiable) := by
+  rw [certificate_iff,term_feasible_iff f rows fr]
 
 /-- For the original sorted term problem the verdict means that a unifier
 exists (or that no unifier exists), independent of the number of unifiers. -/
@@ -251,15 +303,25 @@ theorem Correct.term {kernel} (ok : Correct kernel) {sig : Signature}
     decoded layout ((GraphMatrix.buildUpTo_correct 4096 ..).mpr rep)
   rw [mat,read_matrixWords _ _ fr.live counts] at read
   obtain rfl := Option.some.inj read
-  have live v : v ∈ ACSystem.variables rows ↔ ∃ i, fr.names i = v :=
-    ⟨fr.live v,fun ⟨i,e⟩ => e ▸ fr.used i⟩
-  have sorts v (hv : v ∈ ACSystem.variables rows) : Subsort (sig.acSort f) v.sort := by
-    obtain ⟨i,rfl⟩ := fr.live v hv
-    rw [fr.sorts]; exact .refl _
-  have basis := generate_correct (rows.map (encode fr.names))
-  have eq := (satisfiable_iff_basis_support f fr.names fr.injective rows live sorts _ basis).trans
-    (coversCoordinates_iff _ _ basis)
-  rwa [Feasible,←eq] at verdict
+  rwa [←term_feasible_iff f rows fr] at verdict
+
+/-- A negative Boolean verdict completes the full unification request,
+including after a successful free factorization. No witnesses or fresh
+names are needed. The identity factorization covers an original request. -/
+theorem Correct.empty_unifiers {kernel} (ok : Correct kernel) {sig : Signature}
+    (c : WholeProblem.Codec sig) (f : sig.ACSym) (rows : List ACSystem.Row) (n : UInt64)
+    (fr : ACSystem.Frame f rows n.toNat) (columns : ∀ i, c.vars.put (fr.names i) = i.val.toUInt64)
+    {ds ns roots raw} (decoded : Whole.Wire.decodeProblem ds ns roots = some raw)
+    (layout : WholeProblem.RowLayout (WholeProblem.encodeRows c (ACSystem.problem f rows)) raw)
+    (reject : kernel n (c.acs.put f) (WholeProblem.sortWord (sig.acSort f)) ds ns roots = 1)
+    {p : Problem sig} {θ : Substitution sig} (factor : FactoredUnification.Factoring p (ACSystem.problem f rows) θ)
+    (avoid : List Variable) : (Outcome.complete []).CorrectIn p avoid := by
+  have verdict := ok.term c f rows n fr columns decoded layout (by rw [reject]; decide)
+  rw [reject] at verdict
+  have impossible : ¬(ACSystem.problem f rows).Satisfiable := by simpa [Verdict] using verdict
+  refine ⟨(complete_empty_iff p).mpr ?_,by simp [Outcome.answers],by simp [Outcome.answers]⟩
+  rintro ⟨σ,sol⟩
+  exact impossible ⟨σ,factor.residual σ sol⟩
 
 /-- An admitted term problem receives the right verdict at its graph entry
 point. The caller supplies column identity and graph layout; matrix

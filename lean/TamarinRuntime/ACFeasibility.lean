@@ -1,4 +1,9 @@
 import TamarinRuntime.ACLowRank
+import TamarinRuntime.ACCertificate
+import TamarinRuntime.ACSmallSeparator
+import TamarinRuntime.ACSingleCorrection
+import TamarinRuntime.ACPairCorrection
+import TamarinRuntime.ACThreeColumns
 import TamarinRuntime.ACColumnQuotient
 import TamarinRuntime.ACColumnSupport
 import TamarinRuntime.ACReducedFeasibility
@@ -39,11 +44,17 @@ def initialRows {n} (rs : List (Row n)) : Option Bool :=
 def fastRows {n} (rs : List (Row n)) : Option Bool :=
   initialRows rs <|> (if n ≤ 32 then feasibleRows rs else none) <|> reducedFeasible rs
 
+def mainRows {n} (rs : List (Row n)) : Option Bool :=
+  fastRows rs <|> ThreeColumns.run rs <|> SingleCorrection.run rs <|> certifiedSearch rs
+
+def remainingRows {n} (rs : List (Row n)) : Option Bool :=
+  SmallSeparator.run rs <|> PairCorrection.run rs <|> ColumnSupport.run rs 4096
+
 def baseRows {n} (rs : List (Row n)) : Option Bool :=
-  fastRows rs <|> ColumnSupport.run rs 4096
+  mainRows rs <|> remainingRows rs
 
 def checkRows {n} (rs : List (Row n)) : Option Bool :=
-  fastRows rs <|> ColumnQuotient.run (@baseRows) rs <|> ColumnSupport.run rs 4096
+  mainRows rs <|> ColumnQuotient.run (@baseRows) rs <|> remainingRows rs
 
 /-- Tags are deferred, unsatisfiable, and satisfiable respectively. -/
 def run (width symbol sort : UInt64) (decls : Array UInt64)
