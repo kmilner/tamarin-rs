@@ -82,7 +82,7 @@ theorem run_correct : Correct run where
   valid := by
     intro w bits sides raw result
     obtain ⟨input,rs,_,_,out⟩ := emitted result
-    refine ⟨input,⟨input.1.1,input.1.2.1,?_⟩,?_⟩ <;> intro a ha <;> rw [out] at ha
+    refine ⟨input,⟨input.1.1,UInt64.le_trans input.1.2.1 (by decide),?_⟩,?_⟩ <;> intro a ha <;> rw [out] at ha
     · simp at ha
       exact ProjectionCompletion.shaped_emit (generate rs) a (by simpa using ha.1)
     · simp at ha

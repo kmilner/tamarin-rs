@@ -22,6 +22,24 @@ private def run := graphHomogeneousUnify 2 7 2 ds nodes
 #guard feasible #[2,9] == 0
 #guard feasible #[2] == 0
 #guard graphACFeasible 2 7 2 ds #[#[0,0,0],#[0,1,2],#[4,7,0,0]] #[2,1] == 0
+-- All 64 equations constrain the same positive ray. The least common
+-- multiple of the alternating coefficients gives sizes 2,3,2,3,... .
+private def chainVars (n : Nat) : Array (Array UInt64) :=
+  (List.range n).toArray.map fun i => #[0,i.toUInt64,2]
+private def chainSides (n : Nat) : Array (Array UInt64) :=
+  (List.range n).toArray.map fun i =>
+    #[4,7] ++ Array.replicate (if i%2=0 then 3 else 2) i.toUInt64
+private def chainRoots (n : Nat) : Array UInt64 :=
+  ((List.range (n-1)).flatMap fun i => [(n+i).toUInt64,(n+i+1).toUInt64]).toArray
+private def principalChain (n : Nat) :=
+  graphHomogeneousUnify n.toUInt64 7 2 ds (chainVars n ++ chainSides n) (chainRoots n)
+private def expectedRay (n : Nat) : Homogeneous.Arm :=
+  (List.range n).toArray.map fun i => Array.replicate (if i%2=0 then 2 else 3) (0 : UInt64)
+#guard principalChain 65 == some #[expectedRay 65]
+#guard (principalChain 65 >>= projectAnswers 65) ==
+  some #[Array.ofFn (fun i : Fin 65 => #[i.val.toUInt64] ++ (expectedRay 65)[i.val]!)]
+#guard principalChain 66 == none
+
 -- An existence query needs one positive valuation for the whole packet.
 private def wideVars := (List.range 96).toArray.map fun i => #[0,i.toUInt64,2]
 private def wideLeft := #[4,7] ++ (List.range 31).toArray.map Nat.toUInt64

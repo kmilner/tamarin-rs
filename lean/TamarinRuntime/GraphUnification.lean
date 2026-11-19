@@ -1,5 +1,6 @@
 import TamarinRuntime.GraphMatrix
-import TamarinRuntime.Homogeneous
+import TamarinRuntime.ACRayPacket
+import TamarinRuntime.ACPrincipalRay
 
 namespace Tamarin.GraphUnification
 open Homogeneous
@@ -19,6 +20,8 @@ def runWith (build : UInt64 → UInt64 → UInt64 → Array UInt64 → Array (Ar
     guard (hasConstraint m.toList)
     solve width m
 
-def run : Kernel := runWith GraphMatrix.build Homogeneous.solve
+abbrev buildMatrix := GraphMatrix.buildUpTo RayPacket.maxWidth
+
+def run : Kernel := runWith buildMatrix (RayPacket.solve @ACBasis.PrincipalRay.run)
 
 end Tamarin.GraphUnification

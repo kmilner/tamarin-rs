@@ -12,7 +12,9 @@ private def last : UInt64 := 18446744073709551615
 #guard projectAnswers 2 #[#[#[7]]] == none
 #guard projectAnswers 2 #[#[#[7], #[]]] == none
 #guard projectAnswers 0 #[] == none
-#guard projectAnswers 33 #[] == none
+#guard projectAnswers 33 #[] == some #[]
+#guard projectAnswers 65 #[] == some #[]
+#guard projectAnswers 66 #[] == none
 
 -- An independent first-use dictionary checks every pair of two-column arms,
 -- including unequal multiplicities and sharing confined to the second arm.

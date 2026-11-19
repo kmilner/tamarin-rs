@@ -1,4 +1,6 @@
 import TamarinRuntime.GraphUnification
+import Tamarin.ACPrincipalRay
+import Tamarin.ACRayPacket
 import Tamarin.GraphMatrixRefinement
 import Tamarin.FactoredAC
 
@@ -17,13 +19,18 @@ theorem hasConstraint_iff : ∀ rows, hasConstraint rows = true ↔ Nontrivial r
     exact ⟨fun h => h.elim Nontrivial.here Nontrivial.later,
       fun h => by cases h with | here h => exact Or.inl h | later h => exact Or.inr h⟩
 
+def Required (width : UInt64) (m : Matrix) : Prop :=
+  Homogeneous.Admitted width m ∨ RayPacket.Admitted @ACBasis.PrincipalRay.Within width m
+
+abbrev RepresentsMatrix := GraphMatrix.RepresentsUpTo RayPacket.maxWidth
+
 /-- Independent wire admission rules out both accepting malformed graph requests and
 always deferring the matrix fragment. Within the fragment, answers may be reordered. -/
 structure WireCorrect (run : Kernel) : Prop where
   valid : ∀ n sym s ds ns es out, run n sym s ds ns es = some out →
-    ∃ m, GraphMatrix.Represents n sym s ds ns es m ∧ Nontrivial m.toList
-  completes : ∀ n sym s ds ns es m, GraphMatrix.Represents n sym s ds ns es m →
-    Nontrivial m.toList → Homogeneous.Admitted n m → (run n sym s ds ns es).isSome
+    ∃ m, RepresentsMatrix n sym s ds ns es m ∧ Nontrivial m.toList
+  completes : ∀ n sym s ds ns es m, RepresentsMatrix n sym s ds ns es m →
+    Nontrivial m.toList → Required n m → (run n sym s ds ns es).isSome
 
 private theorem ran_with {build solve n sym s ds ns es out}
     (h : runWith build solve n sym s ds ns es = some out) :
@@ -54,7 +61,9 @@ structure Correct (run : Kernel) : Prop where
     (∀ j ∈ slots out, w j ∉ ACSystem.variables rows ++ FactoredAnswer.liveKeys r.problem θ) →
     Result r θ fr w out
 
-theorem runWith_correct {build solve} (counts : GraphMatrix.Correct build) (solver : Homogeneous.Correct solve) :
+theorem runWith_correct {build solve} (counts : GraphMatrix.CorrectUpTo RayPacket.maxWidth build)
+    (solver : Homogeneous.Correct solve)
+    (principal : ∀ n m, RayPacket.Admitted @ACBasis.PrincipalRay.Within n m → (solve n m).isSome) :
     Correct (runWith build solve) where
   wire.valid := by
     intro n sym s ds ns es out h
@@ -62,8 +71,8 @@ theorem runWith_correct {build solve} (counts : GraphMatrix.Correct build) (solv
     exact ⟨m, (counts ..).mp hm, active⟩
   wire.completes := by
     intro n sym s ds ns es m rep active admitted
-    simpa [runWith, (counts ..).mpr rep, (hasConstraint_iff _).mpr active, guard] using
-      solver.completes n m admitted
+    have done := admitted.elim (solver.completes n m) (principal n m)
+    simpa [runWith, (counts ..).mpr rep, (hasConstraint_iff _).mpr active, guard] using done
   semantic := by
     intro sig r θ f rows n fr fact c ds ns roots raw decoded represented columns out ran w inj typed fresh
     obtain ⟨m, hm, _, solved⟩ := ran_with ran
@@ -71,7 +80,9 @@ theorem runWith_correct {build solve} (counts : GraphMatrix.Correct build) (solv
       decoded represented.layout hm
     exact of_factoring_slots solver r f rows n fr θ fact m matrix fits out solved w inj typed fresh
 
-theorem run_correct : Correct run := runWith_correct GraphMatrix.build_correct Homogeneous.solve_correct
+theorem run_correct : Correct run := runWith_correct (GraphMatrix.buildUpTo_correct _)
+  (RayPacket.correct ACBasis.PrincipalRay.run_sound)
+  (RayPacket.completes ACBasis.PrincipalRay.run_sound ACBasis.PrincipalRay.run_complete)
 
 /-- For an unfactored query the returned packet denotes precisely all sorted solutions.
 A single instantiation explains every variable of a solution on the chosen arm. -/
@@ -117,11 +128,14 @@ theorem Correct.completes_on {run} (h : Correct run) {sig : Signature}
     (declared : GraphMatrix.Declared ds (c.acs.put f) (WholeProblem.sortWord (sig.acSort f)))
     (roots : es.size ≤ 128) (small : GraphMatrixRefinement.Fits rows)
     (active : Nontrivial (matrixWords fr.names rows))
-    (admitted : Homogeneous.Admitted n (matrixWords fr.names rows).toArray) :
+    (admitted : Required n (matrixWords fr.names rows).toArray) :
     (run n (c.acs.put f) (WholeProblem.sortWord (sig.acSort f)) ds ns es).isSome := by
-  have hm := GraphMatrixRefinement.build_of_matrix GraphMatrix.build_correct c f rows n fr cols
-    decoded layout declared admitted.1 admitted.2.1 roots small
-  exact h.wire.completes _ _ _ _ _ _ _ ((GraphMatrix.build_correct ..).mp hm)
+  have bounds : 0 < n ∧ n ≤ RayPacket.maxWidth := admitted.elim
+    (fun h => ⟨h.1,UInt64.le_trans h.2.1 (by decide)⟩) (fun h => ⟨h.1,h.2.1⟩)
+  have counts := GraphMatrix.buildUpTo_correct RayPacket.maxWidth
+  have hm := GraphMatrixRefinement.build_of_matrix counts c f rows n fr cols
+    decoded layout declared bounds.1 bounds.2 roots small
+  exact h.wire.completes _ _ _ _ _ _ _ ((counts ..).mp hm)
     (by simpa only [List.toList_toArray] using active) admitted
 
 /-- The actual factor-checker verdict supplies the semantic factoring premise of the graph solver. -/

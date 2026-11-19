@@ -17,7 +17,7 @@ def tagArm (ordinal : UInt64 → UInt64) (arm : Arm) : Arm :=
   Array.ofFn fun i : Fin arm.size => #[i.val.toUInt64] ++ arm[i].map ordinal
 
 def Shape (width : UInt64) (raw : Answers) : Prop :=
-  0 < width ∧ width ≤ 32 ∧ ∀ a ∈ raw.toList,
+  0 < width ∧ width ≤ 65 ∧ ∀ a ∈ raw.toList,
     a.size = width.toNat ∧ ∀ row ∈ a.toList, row ≠ #[]
 
 def Admitted (width : UInt64) (raw : Answers) := Shape width raw ∧ (keys raw).length ≤ UInt64.size
@@ -132,7 +132,7 @@ theorem project_correct : Correct project := by
     simp only [← Array.all_toList, List.all_eq_true, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true',
       Array.isEmpty_eq_false_iff]
   have fits : (indexSlots raw).size ≤ UInt64.size := (index_tracks raw).1 ▸ keys_fit raw
-  by_cases w : 0 < width ∧ width ≤ 32
+  by_cases w : 0 < width ∧ width ≤ 65
   · by_cases ok : ∀ a ∈ raw.toList, a.size = width.toNat ∧ ∀ row ∈ a.toList, row ≠ #[]
     · have admit : Admitted width raw := ⟨⟨w.1, w.2, ok⟩, keys_fit _⟩
       rw [show project width raw = some (raw.map (tagArm (rank raw))) from ?_]

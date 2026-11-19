@@ -14,7 +14,7 @@ def indexSlots (answers : Answers) : Std.HashMap UInt64 Nat :=
   answers.foldl (fun seen arm => arm.foldl (fun seen row => row.foldl insertSlot seen) seen) ∅
 
 def project (width : UInt64) (answers : Answers) : Option Answers := do
-  guard (0 < width ∧ width ≤ 32)
+  guard (0 < width ∧ width ≤ 65)
   guard (answers.all fun arm => arm.size == width.toNat && arm.all (fun row => !row.isEmpty))
   let indices := indexSlots answers
   guard (indices.size ≤ UInt64.size)
