@@ -1,4 +1,5 @@
 import Tamarin.GraphUnification
+import Tamarin.ACRationalProjection
 import TamarinRuntime
 
 namespace Tamarin.GraphUnificationTests
@@ -72,5 +73,35 @@ private def powers (k : Nat) : Array (Array UInt64) :=
     ns.push #[4,7,prev,prev]) #[#[0,0,2]]
 #guard GraphMatrix.build 1 7 2 ds (powers 12) #[12,0] == some #[#[4096],#[1]]
 #guard GraphMatrix.build 1 7 2 ds (powers 13) #[13,0] == none
+
+-- 131X+Y=137Z has no affordable integer basis on the old sparse search.
+-- X=Y permits a positive solution. Requiring 131X+2Y=137Z forces Y=0.
+private def coneNodes : Array (Array UInt64) :=
+  let vars := #[#[0,0,2],#[0,1,2],#[0,2,2]]
+  let a := #[4,7] ++ Array.replicate 131 0
+  vars ++ #[a ++ #[1],#[4,7] ++ Array.replicate 137 2,a ++ #[1,1]]
+#guard graphACFeasible 3 7 2 ds coneNodes #[0,1,3,4] == 2
+#guard graphACFeasible 3 7 2 ds coneNodes #[5,4,3,4] == 1
+#guard graphACFeasible 3 7 2 ds coneNodes #[0,1,5,4,3,4] == 1
+#guard graphACFeasible 3 7 2 ds coneNodes #[3,4,0,1,3,4] == 2
+
+private def expensive : ACBasis.Row 3 := .ofWeights (fun i => #[131,1,0][i.val]!) (fun i => #[0,0,137][i.val]!)
+-- The new mandatory domain is certified independently of the execution.
+example : ACBasis.RationalProjection.Within [expensive, expensive] := by
+  simp only [ACBasis.RationalProjection.Within,ACBasis.RationalProjection.sizes]
+  decide
+#guard (Homogeneous.boundedBasis [expensive]).isNone
+#guard (ACBasis.RationalProjection.basis [expensive]).isSome
+-- 16 positive and 16 negative columns produce all 256 mixed pairs. A
+-- second cross product exceeds the limit and defers before allocation.
+private def partition (q : Fin 32 → Bool) : ACBasis.Row 32 :=
+  .ofWeights (fun i => if q i then 1 else 0) (fun i => if q i then 0 else 1)
+private def halves := partition (fun i => i.val < 16)
+private def parity := partition (fun i => i.val % 2 == 0)
+#guard ((ACBasis.RationalProjection.basis [halves]).map List.length) == some 256
+#guard (ACBasis.RationalProjection.basis [parity,halves]).isNone
+-- A coordinate beyond the bit budget cannot enter another stage.
+#guard (ACBasis.RationalProjection.basis [ACBasis.Row.ofWeights
+  (fun i : Fin 2 => if i.val = 0 then 2^128 else 0) (fun i => i.val)]).isNone
 
 end Tamarin.GraphUnificationTests

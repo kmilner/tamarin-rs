@@ -46,11 +46,11 @@ private theorem sum_pick (i : Fin n) (v : Vec n) :
 private theorem gen_zero (gs : List (Vec n)) : Generates gs (fun _ => 0) :=
   ⟨fun _ => 0, funext fun _ => by simp [mix,dot,sum_zero]⟩
 
-private theorem gen_member {gs : List (Vec n)} {x} (hx : x ∈ gs) : Generates gs x := by
+theorem gen_member {gs : List (Vec n)} {x} (hx : x ∈ gs) : Generates gs x := by
   obtain ⟨i,hi⟩ := List.get_of_mem hx
   exact ⟨spike i 1, funext fun t => by simp only [mix,dot_spike,Nat.mul_one,hi]⟩
 
-private theorem dot_scale (v : Vec n) (a : Nat) (c : Vec n) :
+theorem dot_scale (v : Vec n) (a : Nat) (c : Vec n) :
     dot v (scale a c) = a * dot v c := by
   simp only [dot,scale,← sum_mul]
   congr 1; funext i; ac_rfl
@@ -58,7 +58,7 @@ private theorem dot_scale (v : Vec n) (a : Nat) (c : Vec n) :
 private theorem mix_scale {g : Fin k → Vec n} (a : Nat) (c : Vec k) :
     mix g (scale a c) = scale a (mix g c) := funext fun _ => dot_scale _ a c
 
-private theorem gen_scale {gs : List (Vec n)} {x} (a : Nat) (hx : Generates gs x) :
+theorem gen_scale {gs : List (Vec n)} {x} (a : Nat) (hx : Generates gs x) :
     Generates gs (scale a x) := by
   obtain ⟨c,rfl⟩ := hx
   exact ⟨_,mix_scale a c⟩
@@ -68,7 +68,7 @@ private theorem gen_add {gs : List (Vec n)} {x y} (hx : Generates gs x) (hy : Ge
   obtain ⟨c,rfl⟩ := hx; obtain ⟨d,rfl⟩ := hy
   exact ⟨fun i => c i + d i, funext fun _ => by simp [mix,dot,Nat.mul_add,total_add]⟩
 
-private theorem gen_sum {gs : List (Vec n)} (v : Fin k → Vec n) (h : ∀ i, Generates gs (v i)) :
+theorem gen_sum {gs : List (Vec n)} (v : Fin k → Vec n) (h : ∀ i, Generates gs (v i)) :
     Generates gs (fun t => total (fun i => v i t)) := by
   induction k with
   | zero => exact gen_zero gs

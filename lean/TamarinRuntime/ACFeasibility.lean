@@ -1,4 +1,5 @@
 import TamarinRuntime.GraphMatrix
+import TamarinRuntime.ACRationalProjection
 
 namespace Tamarin.ACFeasibility
 open ACBasis Homogeneous
@@ -19,7 +20,7 @@ def rowFeasible {n} (r : Row n) (gs : List (Vec n)) : Bool :=
 def feasibleRows {n} : List (Row n) → Option Bool
   | [] => some true
   | r :: rs => do
-    let gs ← boundedBasis rs
+    let gs ← RationalProjection.basis rs <|> boundedBasis rs
     return rowFeasible r gs
 
 /-- Tags are deferred, unsatisfiable, and satisfiable respectively. -/

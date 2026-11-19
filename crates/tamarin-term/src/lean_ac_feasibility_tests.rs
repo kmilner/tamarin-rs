@@ -93,3 +93,25 @@ fn native_oracle_ac_feasibility_matches_small_maude_families() {
     }
     assert_eq!(hybrid.stats().lean_unify_count, 3);
 }
+
+#[test]
+fn rational_cone_decides_heavy_simultaneous_ac_rows_without_an_oracle() {
+    let table = crate::lean_unification::RuleTable::new(&mset_maude_sig()).unwrap();
+    let mut left = vec![0; 131];
+    left.push(1);
+    let right = vec![2; 137];
+    let base = equation(&left, &right);
+    left.push(1);
+    let conflict = equation(&left, &right);
+    let compatible = equation(&[0], &[1]);
+    // 131X+Y=137Z can coexist with X=Y. Adding one more Y to the
+    // same left side forces that input empty, which AC does not permit.
+    for (query, expected) in [
+        (vec![compatible.clone(), base.clone()], true),
+        (vec![conflict.clone(), base.clone()], false),
+        (vec![compatible.clone(), conflict, base.clone()], false),
+        (vec![base.clone(), compatible, base], true),
+    ] {
+        assert_eq!(table.ac_feasible(&query).unwrap(), Some(expected));
+    }
+}
