@@ -16,7 +16,7 @@ def Certificate (rows : List (Row n)) (weights : List Int) : Prop :=
   weights.length = rows.length ∧
   (∀ i, 0 ≤ combination (weights.zip rows) i) ∧ ∃ i, 0 < combination (weights.zip rows) i
 
-private theorem column_eq (pairs : List (Int × Row n)) (i : Fin n) : column pairs i = combination pairs i := by
+theorem column_eq (pairs : List (Int × Row n)) (i : Fin n) : column pairs i = combination pairs i := by
   have sum (acc : Int) : pairs.foldl (fun acc (w,r) => acc + w * ((r.pos i : Int) - r.neg i)) acc =
       acc + combination pairs i := by
     induction pairs generalizing acc with
