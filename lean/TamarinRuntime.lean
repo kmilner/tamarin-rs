@@ -15,6 +15,7 @@ import TamarinRuntime.ACPivot
 import TamarinRuntime.VariantJoin
 import TamarinRuntime.DHPeer
 import TamarinRuntime.DHExponent
+import TamarinRuntime.SignedGraph
 import TamarinRuntime.DHTower
 import TamarinRuntime.ACSubgroups
 import TamarinRuntime.ReductionGraph
@@ -67,6 +68,10 @@ def dhExponentImages (u : Unit) : Array (Array UInt64) := DHExponentCandidate.im
 
 @[export tamarin_dh_tower_images]
 def dhTowerImages (width : UInt64) : Option (Array (Array UInt64)) := DHTowerCandidate.images width
+
+@[export tamarin_signed_graph_variants]
+def signedGraphVariants (inputs : UInt64) (obs : Array (Array UInt64)) : Array UInt64 :=
+  SignedGraph.run inputs obs
 
 @[export tamarin_reduction_graph]
 def reductionGraph (rows : Array (Array UInt64)) : Bool := ReductionGraph.run rows

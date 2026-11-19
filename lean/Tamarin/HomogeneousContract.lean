@@ -99,7 +99,7 @@ private theorem stored_get {n} (f : Vec n) : coordinates (Vector.ofFn f) = f := 
   funext i
   simp [coordinates]
 
-private theorem bounded_spec {n} (rs : List (Row n)) :
+theorem bounded_spec {n} (rs : List (Row n)) :
     (∀ gs, boundedBasis rs = some gs → gs = generate rs) ∧
     (Within rs → boundedBasis rs = some (generate rs)) := by
   induction rs with

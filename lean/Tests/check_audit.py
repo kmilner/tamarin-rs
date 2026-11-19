@@ -732,6 +732,19 @@ EXPORT_MUTATIONS.extend([
 ])
 
 
+SIGNED_GRAPH_RUN = "  SignedGraph.run inputs obs"
+EXECUTABLE = ("import Tamarin.SignedGraphContract\n" + EXECUTABLE
+              + "\nnamespace Tamarin\n" + obligation("exportedSignedGraph_correct") + "end Tamarin\n")
+EXPORT_MUTATIONS.extend([
+    ("signed_graph_omits_observation", SIGNED_GRAPH_RUN, "  SignedGraph.run inputs (obs.extract 0 1)",
+     "theorem exportedSignedGraph_correct"),
+    ("signed_graph_zeroes_all_parameters", SIGNED_GRAPH_RUN, "  (SignedGraph.run inputs obs).map (fun _ => 0)",
+     "theorem exportedSignedGraph_correct"),
+    ("signed_graph_always_defers", SIGNED_GRAPH_RUN, "  #[0]",
+     "theorem exportedSignedGraph_correct"),
+])
+
+
 def main() -> None:
     assert SOURCE.count(MARKER) == 1, "root audit marker changed"
     with tempfile.TemporaryDirectory(prefix="tamarin-audit-") as directory:

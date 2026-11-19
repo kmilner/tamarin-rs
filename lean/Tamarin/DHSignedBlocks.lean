@@ -8,10 +8,6 @@ namespace Tamarin.Rewriting.DHPeer.SignedMatrix
 open ACBasis
 variable {n : Nat} {sig : Signature}
 
-def profiles : (n : Nat) → List (Fin n → Bool)
-  | 0 => [Fin.elim0]
-  | n+1 => [false,true].flatMap fun b => (profiles n).map fun tail => Fin.cases b tail
-
 theorem mem_profiles (d : Fin n → Bool) : d ∈ profiles n := by
   induction n with
   | zero => exact List.mem_singleton.mpr (funext fun i => i.elim0)
@@ -19,12 +15,6 @@ theorem mem_profiles (d : Fin n → Bool) : d ∈ profiles n := by
     apply List.mem_flatMap.mpr
     refine ⟨d 0,by cases d 0 <;> simp,List.mem_map.mpr ⟨fun i => d i.succ,ih _,?_⟩⟩
     exact funext fun i => Fin.cases rfl (fun _ => rfl) i
-
-abbrev Column (basis : (Fin n → Bool) → List (Vec n)) :=
-  (d : Fin n → Bool) × Fin (basis d).length
-
-def columns (basis : (Fin n → Bool) → List (Vec n)) : List (Column basis) :=
-  (profiles n).flatMap fun d => (List.finRange (basis d).length).map fun j => ⟨d,j⟩
 
 theorem mem_columns (basis : (Fin n → Bool) → List (Vec n)) (g : Column basis) :
     g ∈ columns basis :=
@@ -89,15 +79,6 @@ theorem blocks_iff {α : Type} [DecidableEq α] (basis : (Fin n → Bool) → Li
 
 local instance : DecidableEq (Fin n → Bool) := fun a b =>
   decidable_of_iff (∀ i, a i = b i) ⟨funext,congrFun⟩
-
-/-- One coordinate of a symbolic answer, split into its two signs.
-Repeated occurrences of a column refer to the same witness in every coordinate. -/
-def slots (basis : (Fin n → Bool) → List (Vec n)) (active : List (Column basis))
-    (i : Fin n) (negative : Bool) : List (Column basis) :=
-  (profiles n).flatMap fun d =>
-    if d i = negative then (List.finRange (basis d).length).flatMap fun j =>
-      if (⟨d,j⟩ : Column basis) ∈ active then List.replicate ((basis d).get j i) (⟨d,j⟩ : Column basis) else []
-    else []
 
 private theorem profiles_nodup (n : Nat) : (profiles n).Nodup := by
   induction n with
@@ -178,7 +159,7 @@ theorem slot_properties {basis : (Fin n → Bool) → List (Vec n)} {active : Li
   obtain ⟨_,rfl⟩ := List.mem_replicate.mp js
   constructor <;> assumption
 
-private def side (f : sig.ACSym) : List Variable → Option (Term sig)
+def side (f : sig.ACSym) : List Variable → Option (Term sig)
   | [] => none
   | a :: as => some ((ACSystem.Side.mk a as).term f)
 

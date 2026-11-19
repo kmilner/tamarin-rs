@@ -1,3 +1,4 @@
+import TamarinRuntime.SignedGraph
 import Tamarin.DHExponentCallerOps
 import Tamarin.ACBasis
 import Tamarin.StableVariants
@@ -9,12 +10,6 @@ signed multiplicity equations, with any number of correlated observations. -/
 namespace Tamarin.Rewriting.DHPeer.SignedMatrix
 open ACBasis Cancellation Balance
 variable {n : Nat} {sig : Signature}
-
-inductive Expr (n : Nat) where
-  | input (i : Fin n)
-  | unit
-  | mul (a b : Expr n)
-  | inv (a : Expr n)
 
 def Expr.term (s : Symbols sig) (env : Fin n → Term sig) : Expr n → Term sig
   | .input i => env i
@@ -101,15 +96,6 @@ theorem spine_pointwise_unique [DecidableEq sig.ACSym] {s : Symbols sig} {T : Ta
       rw [DHExponent.Caller.apply_pow]
       exact DHTower.Spine.defined_power start (e.defined s _ env stable ρ hn)
 
-def add (a b : Vec n) : Vec n := fun i => a i + b i
-
-def Expr.weights (negative : Fin n → Bool) : Expr n → Vec n × Vec n
-  | .input i => if negative i then (fun _ => 0,spike i 1) else (spike i 1,fun _ => 0)
-  | .unit => (fun _ => 0,fun _ => 0)
-  | .inv a => (a.weights negative).swap
-  | .mul a b => (add (a.weights negative).1 (b.weights negative).1,
-    add (a.weights negative).2 (b.weights negative).2)
-
 def signed (negative : Fin n → Bool) (x : Vec n) (i : Fin n) : Int :=
   if negative i then -(x i : Int) else (x i : Int)
 
@@ -165,13 +151,6 @@ theorem Expr.eval_weights (signs : Fin n → Bool) (x : Vec n) (e : Expr n) :
   | mul a b ha hb =>
     simp only [eval,weights,dot_add_left,Int.natCast_add,ha,hb]
     omega
-
-abbrev Constraint (n : Nat) := Expr n × Expr n
-
-def row (signs : Fin n → Bool) (eq : Constraint n) : ACBasis.Row n :=
-  let l := eq.1.weights signs
-  let r := eq.2.weights signs
-  .ofWeights (add l.1 r.2) (add r.1 l.2)
 
 theorem row_iff (signs : Fin n → Bool) (eq : Constraint n) (x : Vec n) :
     (row signs eq).Holds x ↔ eq.1.eval (signed signs x) = eq.2.eval (signed signs x) := by

@@ -257,4 +257,10 @@ private def kind : Term' → Nat
 #guard (((SignedMatrix.referenceFamily (n := 2) s [(.inv (.input 0),1)]).map
   (fun r => 10 * kind (r 0) + kind (r 1))).mergeSort) == [0,12,21,33]
 
+-- Truncated, overfull, and output-referencing programs must all defer.
+#guard [#[],#[1],#[3,2],#[3,3],#[4]].all fun p => SignedGraph.run 1 #[p] == #[0]
+#guard SignedGraph.run 0 #[#[0]] == #[1,1,0,0]
+#guard (SignedGraph.run 1 #[#[3,3,2,3,2]]).extract 0 2 == #[1,4]
+#guard (SignedGraph.run 1 #[#[3,3,2],#[3,1]]).extract 0 2 == #[1,4]
+
 end Tamarin.DHProductUniquenessTests

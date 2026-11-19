@@ -211,6 +211,10 @@ theorem exportedDHPeerImages_semantic : Rewriting.DHPeer.Programs.Semantic Execu
 theorem exportedDHPeerImages_factorSemantic : Rewriting.DHPeer.Programs.FactorSemantic Executable.dhPeerImages :=
   Rewriting.DHPeer.Programs.certifiedFactor exportedDHPeerImages_correct
 
+theorem exportedSignedGraph_correct : SignedGraph.Correct Executable.signedGraphVariants ∧
+    SignedGraph.Total Executable.signedGraphVariants :=
+  ⟨SignedGraph.run_correct, SignedGraph.run_total⟩
+
 theorem exportedReductionGraph_correct : ReductionGraph.Correct Executable.reductionGraph :=
   ReductionGraph.correct
 
@@ -1033,6 +1037,7 @@ run_cmd do
     (``Tamarin.Executable.dhExponentImages, `tamarin_dh_exponent_images),
     (``Tamarin.Executable.dhTowerImages, `tamarin_dh_tower_images),
     (``Tamarin.Executable.dhPeerImages, `tamarin_dh_peer_images),
+    (``Tamarin.Executable.signedGraphVariants, `tamarin_signed_graph_variants),
     (``Tamarin.Executable.reductionGraph, `tamarin_reduction_graph),
     (``Tamarin.Executable.acSubgroups, `tamarin_ac_subgroups),
     (``Tamarin.Executable.openMatchSelect, `tamarin_open_match_select),

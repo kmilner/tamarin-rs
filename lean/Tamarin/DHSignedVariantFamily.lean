@@ -90,16 +90,13 @@ theorem exact_graph [DecidableEq sig.ACSym] (inventory : Inventory E) (mul : Mul
     have red := (Reduces.basis source).trans ((SpecializedFresh.reduces_subst _ δ form.1).trans (.basis (fit p.2).symm))
     exact ⟨red,norm _,sort_result norm p.1 red (typed _)⟩
 
-private def graphBasis (graph : List (Expr n × Fin n)) (d : Fin n → Bool) : List (Vec n) :=
-  generate (graph.map fun p => row d (p.1,.input p.2))
-
 local instance : DecidableEq (Fin n → Bool) := fun a b =>
   decidable_of_iff (∀ i, a i = b i) ⟨funext,congrFun⟩
 
-private def param (basis : (Fin n → Bool) → List (Vec n)) (g : Column basis) : Variable :=
+def param (basis : (Fin n → Bool) → List (Vec n)) (g : Column basis) : Variable :=
   ⟨(columns basis).idxOf g,.msg⟩
 
-private theorem param_injective (basis : (Fin n → Bool) → List (Vec n)) : Function.Injective (param basis) := by
+theorem param_injective (basis : (Fin n → Bool) → List (Vec n)) : Function.Injective (param basis) := by
   have lookup (g : Column basis) : (columns basis)[(columns basis).idxOf g]? = some g := by
     simp [List.getElem?_eq_getElem (List.idxOf_lt_length_of_mem (mem_columns basis g)),List.getElem_idxOf]
   intro a b h
