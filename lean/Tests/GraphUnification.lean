@@ -20,6 +20,15 @@ private def run := graphHomogeneousUnify 2 7 2 ds nodes
 #guard feasible #[2,9] == 0
 #guard feasible #[2] == 0
 #guard graphACFeasible 2 7 2 ds #[#[0,0,0],#[0,1,2],#[4,7,0,0]] #[2,1] == 0
+-- An existence query needs one positive valuation for the whole packet.
+private def wideVars := (List.range 96).toArray.map fun i => #[0,i.toUInt64,2]
+private def wideLeft := #[4,7] ++ (List.range 31).toArray.map Nat.toUInt64
+private def wideRight := #[4,7] ++ ((List.range 65).toArray.map fun i => (31+i).toUInt64)
+private def wideNodes := wideVars ++ #[wideLeft,wideRight,wideLeft.push 0]
+#guard graphACFeasible 96 7 2 ds wideNodes #[96,97] == 2
+#guard graphACFeasible 96 7 2 ds wideNodes #[96,97,96,98] == 1
+#guard graphACFeasible 97 7 2 ds wideNodes #[96,97] == 0
+#guard graphACFeasible 4097 7 2 ds wideNodes #[96,97] == 0
 -- Swapped children are identical modulo AC. The whole-graph path supplies its identity answer.
 #guard run #[4,5] == none
 #guard run #[2] == none

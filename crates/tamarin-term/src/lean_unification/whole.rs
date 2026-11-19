@@ -238,7 +238,7 @@ impl RuleTable {
         let Some((symbol, width)) = packet.matrix_shape() else {
             return Ok(None);
         };
-        if !(1..=32).contains(&width) {
+        if !(1..=MAX_NODES).contains(&width) {
             return Ok(None);
         }
         let symbol_id = packet

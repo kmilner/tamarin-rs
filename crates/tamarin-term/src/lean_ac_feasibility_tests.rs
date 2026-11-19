@@ -117,3 +117,42 @@ fn rational_cone_decides_heavy_simultaneous_ac_rows_without_an_oracle() {
         assert_eq!(table.ac_feasible(&query).unwrap(), Some(expected));
     }
 }
+
+#[test]
+fn wide_ac_feasibility_checks_shared_positive_assignments() {
+    let sig = mset_maude_sig();
+    let table = crate::lean_unification::RuleTable::new(&sig).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+    let left = (0..73).collect::<Vec<_>>();
+    let right = (73..257).collect::<Vec<_>>();
+    let wide = equation(&left, &right);
+    // The first group's variables can all have size 184 and the second
+    // group's size 73. Both groups can use the same AC atom.
+    let equal_left = equation(&[0, 1], &[2, 3]);
+    let equal_right = equation(&[74, 75], &[76, 77]);
+    let all = (0..257).collect::<Vec<_>>();
+    let mut extra = all.clone();
+    extra.push(251);
+    let impossible = equation(&extra, &all);
+    for (query, expected) in [
+        (vec![wide.clone()], true),
+        (vec![equal_left, wide.clone(), equal_right], true),
+        (vec![wide.clone(), impossible], false),
+    ] {
+        assert_eq!(table.ac_feasible(&query).unwrap(), Some(expected));
+        assert_eq!(native.unifiable(&query).unwrap(), expected);
+    }
+    assert_eq!(native.stats().unify_count, 0);
+    // This conjunction has no common positive assignment. The second row
+    // would force the last variable empty after subtracting the first row.
+    // Each row in isolation admits a positive assignment.
+    let mut added = left;
+    added.push(72);
+    assert_ne!(
+        table
+            .ac_feasible(&[wide, equation(&added, &right)])
+            .unwrap(),
+        Some(true)
+    );
+}

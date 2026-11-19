@@ -1,3 +1,4 @@
+import TamarinRuntime.ACDirectFeasibility
 import TamarinRuntime.GraphMatrix
 import TamarinRuntime.ACRationalProjection
 
@@ -23,13 +24,20 @@ def feasibleRows {n} : List (Row n) → Option Bool
     let gs ← RationalProjection.basis rs <|> boundedBasis rs
     return rowFeasible r gs
 
+/-- The graph encoder already bounds the entire expanded request at 4096 nodes.
+Direct positive witnesses need only one coordinate per input variable. -/
+def graphWidth : UInt64 := 4096
+
+def checkRows {n} (rs : List (Row n)) : Option Bool :=
+  direct rs <|> (if n ≤ 32 then feasibleRows rs else none)
+
 /-- Tags are deferred, unsatisfiable, and satisfiable respectively. -/
 def run (width symbol sort : UInt64) (decls : Array UInt64)
     (nodes : Array (Array UInt64)) (roots : Array UInt64) : UInt8 :=
   let result := do
-    let m ← GraphMatrix.build width symbol sort decls nodes roots
+    let m ← GraphMatrix.buildUpTo graphWidth width symbol sort decls nodes roots
     let rows ← readRows width.toNat m.toList
-    feasibleRows rows
+    checkRows rows
   match result with
   | none => 0
   | some false => 1

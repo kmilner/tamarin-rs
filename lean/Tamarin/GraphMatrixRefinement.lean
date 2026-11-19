@@ -151,7 +151,7 @@ private theorem rows_iff (c : Codec sig) (f : sig.ACSym) {width : UInt64}
 
 /-- For every successful conversion, layout and column identity alone determine
 the entire matrix. The side budget implies that no UInt64 coefficient wrapped. -/
-theorem matrix_of_build {kernel : GraphMatrix.Kernel} (verified : GraphMatrix.Correct kernel)
+theorem matrix_of_build {limit : UInt64} {kernel : GraphMatrix.Kernel} (verified : GraphMatrix.CorrectUpTo limit kernel)
     (c : Codec sig) (f : sig.ACSym) (rows : List ACSystem.Row) (width : UInt64)
     (fr : Frame f rows width.toNat) (columns : ∀ i, c.vars.put (fr.names i) = i.val.toUInt64)
     {decls nodes roots wire m} (decoded : Wire.decodeProblem decls nodes roots = some wire)
@@ -192,13 +192,13 @@ private theorem uses_all {f : sig.ACSym} {rows : List ACSystem.Row} {width : UIn
 
 /-- Every faithfully laid out pure system within the declared bounds is
 converted, independently of whether the basis solver can finish the system. -/
-theorem build_of_matrix {kernel : GraphMatrix.Kernel} (verified : GraphMatrix.Correct kernel)
+theorem build_of_matrix {limit : UInt64} {kernel : GraphMatrix.Kernel} (verified : GraphMatrix.CorrectUpTo limit kernel)
     (c : Codec sig) (f : sig.ACSym) (rows : List ACSystem.Row) (width : UInt64)
     (fr : Frame f rows width.toNat) (columns : ∀ i, c.vars.put (fr.names i) = i.val.toUInt64)
     {decls nodes roots wire} (decoded : Wire.decodeProblem decls nodes roots = some wire)
     (layout : RowLayout (encodeRows c (problem f rows)) wire)
     (declared : GraphMatrix.Declared decls (c.acs.put f) (sortWord (sig.acSort f)))
-    (pos : 0 < width) (widthBound : width ≤ 32) (rootBound : roots.size ≤ 128) (small : Fits rows) :
+    (pos : 0 < width) (widthBound : width ≤ limit) (rootBound : roots.size ≤ 128) (small : Fits rows) :
     kernel width (c.acs.put f) (sortWord (sig.acSort f)) decls nodes roots =
       some (matrixWords fr.names rows).toArray := by
   apply (verified _ _ _ _ _ _ _).mpr

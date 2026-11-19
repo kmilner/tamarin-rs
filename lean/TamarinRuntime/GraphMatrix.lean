@@ -35,9 +35,9 @@ def buildRows (width symbol sort : UInt64) : List (Tree × Tree) → Option (Lis
     let rest ← buildRows width symbol sort tail
     return lhs :: rhs :: rest
 
-def readMatrix (width symbol sort : UInt64) (decls : Array UInt64) (nodes : Array (Array UInt64))
+def readMatrixUpTo (limit width symbol sort : UInt64) (decls : Array UInt64) (nodes : Array (Array UInt64))
     (roots : Array UInt64) : Option Homogeneous.Matrix := do
-  guard (0 < width ∧ width ≤ 32 ∧ roots.size ≤ 128)
+  guard (0 < width ∧ width ≤ limit ∧ roots.size ≤ 128)
   let ds ← declarations decls.toList
   guard (ds.any (fun d => d.kind == 4 && d.id == symbol && d.output == sort))
   let ts ← decodeNodes ds nodes
@@ -48,9 +48,11 @@ def allUsed (width : UInt64) (m : Homogeneous.Matrix) : Bool :=
   (List.finRange width.toNat).all fun i =>
     m.any fun a => a[i.val]?.any (· > 0)
 
-def build (width symbol sort : UInt64) (decls : Array UInt64) (nodes : Array (Array UInt64))
+def buildUpTo (limit width symbol sort : UInt64) (decls : Array UInt64) (nodes : Array (Array UInt64))
     (roots : Array UInt64) : Option Homogeneous.Matrix := do
-  let matrix ← readMatrix width symbol sort decls nodes roots
+  let matrix ← readMatrixUpTo limit width symbol sort decls nodes roots
   if allUsed width matrix then some matrix else none
+
+abbrev build := buildUpTo 32
 
 end Tamarin.GraphMatrix

@@ -37,17 +37,21 @@ introduce bindings for variables absent from the residual equations. -/
 def UsesAll (width : UInt64) (m : Homogeneous.Matrix) : Prop :=
   ∀ i : Fin width.toNat, ∃ a ∈ m.toList, ∃ v, a[i.val]? = some v ∧ 0 < v
 
-def Represents (width symbol sort : UInt64) (decls : Array UInt64) (nodes : Array (Array UInt64))
+def RepresentsUpTo (limit width symbol sort : UInt64) (decls : Array UInt64) (nodes : Array (Array UInt64))
     (roots : Array UInt64) (m : Homogeneous.Matrix) : Prop :=
-  0 < width ∧ width ≤ 32 ∧ roots.size ≤ 128 ∧ Declared decls symbol sort ∧
+  0 < width ∧ width ≤ limit ∧ roots.size ≤ 128 ∧ Declared decls symbol sort ∧
     (∃ p, Wire.decodeProblem decls nodes roots = some p ∧ Rows width symbol sort p m.toList) ∧ UsesAll width m
+
+abbrev Represents := RepresentsUpTo 32
 
 abbrev Kernel := UInt64 → UInt64 → UInt64 → Array UInt64 → Array (Array UInt64) →
   Array UInt64 → Option Homogeneous.Matrix
 
-def Correct (candidate : Kernel) : Prop :=
+def CorrectUpTo (limit : UInt64) (candidate : Kernel) : Prop :=
   ∀ width symbol sort decls nodes roots m, candidate width symbol sort decls nodes roots = some m ↔
-    Represents width symbol sort decls nodes roots m
+    RepresentsUpTo limit width symbol sort decls nodes roots m
+
+abbrev Correct := CorrectUpTo 32
 
 mutual
   private theorem gather_spec (sym s : UInt64) (t : Tree) (acc out : Array UInt64)
@@ -174,16 +178,16 @@ theorem buildRows_spec (w sym s : UInt64) (p : List (Tree × Tree)) (rs : List (
       cases h with
       | cons hl hr hrest => exact ⟨_,(row_spec ..).mpr hl,_,(row_spec ..).mpr hr,_,(ih _).mpr hrest,rfl⟩
 
-private theorem read_spec (w sym s : UInt64) (ds : Array UInt64) (ns : Array (Array UInt64))
+private theorem read_spec (limit w sym s : UInt64) (ds : Array UInt64) (ns : Array (Array UInt64))
     (roots : Array UInt64) (m : Homogeneous.Matrix) :
-    readMatrix w sym s ds ns roots = some m ↔
-      0 < w ∧ w ≤ 32 ∧ roots.size ≤ 128 ∧ Declared ds sym s ∧
+    readMatrixUpTo limit w sym s ds ns roots = some m ↔
+      0 < w ∧ w ≤ limit ∧ roots.size ≤ 128 ∧ Declared ds sym s ∧
         ∃ p, Wire.decodeProblem ds ns roots = some p ∧ Rows w sym s p m.toList := by
-  unfold readMatrix Declared Whole.Wire.decodeProblem
+  unfold readMatrixUpTo Declared Whole.Wire.decodeProblem
   cases hd : declarations ds.toList with
   | none => simp [guard]
   | some d =>
-    by_cases good : 0 < w ∧ w ≤ 32 ∧ roots.size ≤ 128
+    by_cases good : 0 < w ∧ w ≤ limit ∧ roots.size ≤ 128
     · by_cases declared : ∃ x ∈ d, x.kind = 4 ∧ x.id = sym ∧ x.output = s
       · simp [good.1, good.2.1, good.2.2, declared, guard,
           Option.bind_eq_some_iff, buildRows_spec, ← Array.toList_inj, and_assoc]
@@ -191,7 +195,7 @@ private theorem read_spec (w sym s : UInt64) (ds : Array UInt64) (ns : Array (Ar
         · rintro ⟨ts,ht,p,hp,h⟩; exact ⟨p,⟨ts,ht,hp⟩,h⟩
         · rintro ⟨p,⟨ts,ht,hp⟩,h⟩; exact ⟨ts,ht,p,hp,h⟩
       · simp [good.1, good.2.1, good.2.2, guard, failure, and_assoc, declared]
-    · have no : ¬ (0 < w ∧ w ≤ 32 ∧ roots.size ≤ 128 ∧ (∃ d' ∈ d, d'.kind = 4 ∧ d'.id = sym ∧ d'.output = s) ∧
+    · have no : ¬ (0 < w ∧ w ≤ limit ∧ roots.size ≤ 128 ∧ (∃ d' ∈ d, d'.kind = 4 ∧ d'.id = sym ∧ d'.output = s) ∧
           ∃ p, ((decodeNodes d ns).bind fun ts => readEquations ts roots.toList) = some p ∧ Rows w sym s p m.toList) :=
         fun h => good ⟨h.1,h.2.1,h.2.2.1⟩
       simpa [guard, good, failure] using no
@@ -206,18 +210,18 @@ private theorem used_spec (w : UInt64) (m : Homogeneous.Matrix) : allUsed w m �
     obtain ⟨_,⟨j,hj,rfl⟩,v,get,pos⟩ := h i
     exact ⟨j,hj,v,get,pos⟩
 
-theorem build_correct : Correct build := by
+theorem buildUpTo_correct (limit : UInt64) : CorrectUpTo limit (buildUpTo limit) := by
   intro w sym s ds ns roots m
-  cases result : readMatrix w sym s ds ns roots with
+  cases result : readMatrixUpTo limit w sym s ds ns roots with
   | none =>
-    have no := mt (read_spec w sym s ds ns roots m).mpr (by simp [result])
-    simp [build, result, Represents]
+    have no := mt (read_spec limit w sym s ds ns roots m).mpr (by simp [result])
+    simp [buildUpTo, result, RepresentsUpTo]
     grind
   | some a =>
     obtain ⟨hw,limit,maxRoots,decl,q,hq,rows⟩ := (read_spec ..).mp result
     constructor
     · intro h
-      simp only [build, result, Option.bind_eq_bind, Option.bind_some] at h
+      simp only [buildUpTo, result, Option.bind_eq_bind, Option.bind_some] at h
       split at h
       next use =>
         cases Option.some.inj h
@@ -226,6 +230,8 @@ theorem build_correct : Correct build := by
     · rintro ⟨_,_,_,_,layout,use⟩
       have eq := (read_spec ..).mpr ⟨hw,limit,maxRoots,decl,layout⟩
       cases Option.some.inj (result.symm.trans eq)
-      simp [build, result, (used_spec ..).mpr use]
+      simp [buildUpTo, result, (used_spec ..).mpr use]
+
+theorem build_correct : Correct build := buildUpTo_correct 32
 
 end Tamarin.GraphMatrix
