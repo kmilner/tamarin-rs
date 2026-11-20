@@ -32,6 +32,21 @@ theorem referenceMixed_singleDefinition {s : Signature}
     simp [MixedUnification.unify?,hr]
   exact ⟨_,run,MixedUnification.unify_correct run⟩
 
+/-- The full mixed entry point must finish every rigid orientation whose
+joint AC frontier is decided by constructor agreement or a head clash. The
+result is checked on the source equations with the caller's reserved names. -/
+theorem referenceMixed_components {s : Signature}
+    [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+    (p : Problem s) (avoid : List Variable)
+    (closed : ∀ c ∈ (MixedUnification.RigidBranches.refineProblem p).val,
+      MixedUnification.ComponentEncoding.ConstructorFrontier c) :
+    ∃ answers, MixedUnification.unify? p avoid = some answers ∧
+      (Outcome.complete answers).CorrectIn p avoid := by
+  obtain ⟨rows,hr⟩ := Option.isSome_iff_exists.mp (MixedUnification.completes_constructorFrontiers p closed)
+  have run : MixedUnification.unify? p avoid = some (UnifierSorts.solve p rows avoid) := by
+    simp [MixedUnification.unify?,hr]
+  exact ⟨_,run,MixedUnification.unify_correct run⟩
+
 theorem referenceOperandSplit_correct {s : Signature} [DecidableEq s.ACSym] [DecidableEq (Term s)]
     (f : s.ACSym) (selected pending : Problem s) (hs : OperandBatch.Reference.SortedAt f selected)
     (observe avoid : List Variable) (bindings ρ : Substitution s) :

@@ -169,8 +169,8 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 
 | Operation | Native coverage today | Remaining completeness work |
 | --- | --- | --- |
-| Free and C unification | Free factoring, binary C branching, identities and ground clashes. Residual steps check heads, operands, bindings, sorts and occurrences against the pending conjunction. | The mixed reference interns shared subterms and certifies completed reconstructions. Finish branching on competing definitions and connect it to Rust. |
-| Simultaneous AC unification | Shares operands across nested systems and combines independent groups with disjoint witnesses. Full enumeration supports bounded bases through 64 variables and some single-witness families through 65. Boolean decisions include rank at most two, width at most three, and larger systems with certificates or identical columns. | Combine the per-symbol homogeneous answers on shared slots. The reference already completes jointly reconstructible systems and refutes blocked constructor cycles. The sort-assignment proof then gives `VerifiedUnifier` for all arity-correct inputs. Connect the resulting solver to Rust. |
+| Free and C unification | Free factoring, binary C branching, identities and ground clashes. Residual steps check heads, operands, bindings, sorts and occurrences against the pending conjunction. | The mixed reference merges corresponding free arguments and branches on both C orientations when definitions compete. Connect the reference to Rust. |
+| Simultaneous AC unification | Shares operands across nested systems and combines independent groups with disjoint witnesses. Full enumeration supports bounded bases through 64 variables and some single-witness families through 65. Boolean decisions include rank at most two, width at most three, and larger systems with certificates or identical columns. | The reference combines whole per-symbol systems on shared slots and can reopen the input on a forced equality. Prove that every remaining residual can be closed or forces another equality. With that proof, sort assignment gives `VerifiedUnifier` for all arity-correct inputs. Connect the resulting solver to Rust. |
 | Directional matching | Matches nested free/C/AC terms, including repeated or shared captures. Boolean queries use factor counts and full queries can page through the answer family. | The total Lean matcher handles all arity-correct conjunctions independently of unification. Connect that reference to Rust and establish first-match behavior on ambiguous queries. [Reference matcher](Tamarin/ReferenceMatching.lean) · [Alternative via unification](Tamarin/MatchViaUnification.lean) |
 | Reduction | Bounded graphs cover root and argument rewrites and proper AC subproducts. Other paths cover projected or erased arguments, independent factors, positional destructors, cancellation and DH powers and products. | Lean enumerates every live rewrite at every position, including proper AC subproducts. The driver is total for convergent sort-preserving tables. Connect its equation table and results to Rust, or prove the existing graph traversal equivalent. [Reference steps](Tamarin/ReferenceReduction.lean) · [Reduction driver](Tamarin/ReduceViaSteps.lean) |
 | Variants | Finite narrowing frontiers cover free/C/AC heads and proper subproducts. Shared input images survive child joins and free-root contraction. Overlap checks cover free paths and signed AC consequences. Specialized paths include cancellation, destructors, signed DH products, powers, scalar actions and pairing. | The general Lean driver terminates under the finite variant property given sound, complete one-step narrowing. Implement that local narrower over the active tables, establish their presentation properties and connect the driver to Rust. Verify decoding and observable ordering at the adapter. [Folding search](Tamarin/FoldingNarrowing.lean) · [Frontier checker](Tamarin/ReferenceVariantFrontier.lean) |
@@ -180,20 +180,25 @@ at one AC head when every variable has the operator’s sort. For arbitrary sort
 the reference flattens and interns equal operands, then returns residual conjunctions whose
 union preserves the original solutions and pending bindings.
 
-The mixed reference assigns one slot per distinct subterm and merges equated roots. Every source
-solution extends to a valuation of those slots, and every model projects back. When each defined
-slot has one constructor description, the reference always returns a complete sorted answer.
-This includes constructor cycles, which have no finite solution. Multiple definitions can also
-complete if the reconstructed images satisfy all of them modulo B. For cases that still require
-branching, the reference collects each AC symbol’s constraints into one homogeneous system.
-Combining their answers must preserve the shared slots across all operators.
-[Mixed solver and proofs](Tamarin/MixedUnification.lean) · [Executable cases](Tests/MixedUnification.lean)
+The mixed reference interns subterms and merges equated roots. Competing free definitions
+identify corresponding arguments. Competing C definitions branch on the two alignments.
+For each AC operator, the homogeneous solver splits all its slot equations together. Each
+child retains the other operators’ constraints and the observed slot values. The internal
+one-sort signature also admits kind-level input terms. Projection restores source sorts and
+caller freshness. [Purification](Tamarin/MixedReconstruction.lean) · [AC frontier](Tamarin/MixedComponentSearch.lean) · [Sort transfer](Tamarin/MixedComponentEncoding.lean)
 
-Any complete raw component solver now gives a total order-sorted solver, including on kind-level inputs.
-The proved refinement assigns fresh sorts to shared parameters and checks the resulting
-image of every observed variable. Maude reopens earlier same-head bindings
-and delays expanding others to handle dependency cycles. The three-variable regression
-must recover the implied binding `Z = a + b`.
+For `X + a = Y + b`, the reference returns the exact swap and the family with a common
+nonempty remainder. A second AC operator can force two previously distinct sums to agree.
+The solver then reruns the original equations with that equality. Each retry consumes one pair
+of original subterms, so generated witnesses cannot trigger an unbounded chain of retries.
+The regression `Y = X + a, Y + b = X + Z` recovers `Z = a + b` with `X` free.
+
+CI requires a complete sorted family whenever every residual from the joint frontier has
+either a rigid head clash or definitions of each slot that agree under every valuation. The
+solver also completes cases by reopening. The remaining proof obligation is to exhaust the
+possible residual shapes. A residual that the reference can neither solve nor reopen causes
+the query to defer. [Mixed driver](Tamarin/MixedUnification.lean) · [Mandatory coverage theorem](TamarinCI.lean#L38) · [Executable cases](Tests/MixedUnification.lean)
+
 [Sort refinement](Tamarin/UnifierSorts.lean) · [Maude sort assignment](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/unificationProblem.cc#L306-L442) · [Homogeneous reference](Tamarin/ACReference.lean) · [Source-level AC step](Tamarin/ACReferenceBranch.lean) · [Maude dependency cycle](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L173-L210) · [Reopening same-head bindings](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L277-L343) · [Residual search contract](Tamarin/ResidualSearch.lean)
 
 The matcher enumerates binary partitions of the flattened operands, with both sides
