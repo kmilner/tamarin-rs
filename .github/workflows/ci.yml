@@ -126,6 +126,14 @@ jobs:
         run: cargo test --profile ci -p tamarin-term --features lean-unification --lib -- --test-threads=1
         env:
           MAUDE_PATH: /opt/maude/maude
+      - name: Cross-check hybrid unification with Maude
+        run: |
+          cargo test --profile ci -p tamarin-term --features lean-unification --lib -- --test-threads=1 \
+            lean_integration_tests::lean_ nested_constructor_matches_and_ground_side_unifiers \
+            whole_unification_compares_the_complete_conjunction_with_maude \
+            dh_intruder_product_unifiers_match_ordinary_maude lean_integration_tests::conjunction
+        env:
+          MAUDE_PATH: /opt/maude/maude
           TAM_RS_VERIFY_LEAN_UNIFY: "1"
       - uses: actions/setup-node@v4
         with:
