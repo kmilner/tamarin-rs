@@ -23,6 +23,106 @@ fn sum(atoms: &[usize]) -> LNTerm {
     )
 }
 
+// Submit the unfactored equations directly to Maude, including cases where both
+// normal dispatchers would otherwise return before sending a command.
+#[test]
+fn checked_factor_clashes_match_unfactored_maude_queries() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::hash;
+    use crate::function_symbols::{Constructability, NoEqSym, Privacy};
+    use crate::lean_unification::Outcome;
+    use crate::maude_sig::hash_maude_sig;
+    use crate::subst::Subst;
+    use crate::term::f_app_no_eq;
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let g = NoEqSym::new(b"g", 1, Privacy::Public, Constructability::Constructor);
+    let mut sig = hash_maude_sig();
+    sig.st_fun_syms.insert(g);
+    let sig = sig.refresh();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle =
+        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
+    let table = native.native_rules().unwrap();
+    let var = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
+    let eq = |lhs, rhs| Equal { lhs, rhs };
+    let x = var("x");
+    let y = var("y");
+    let h_y = hash(y.clone());
+    let g_y = f_app_no_eq(g, vec![y.clone()]);
+    let clash = vec![eq(x.clone(), h_y.clone()), eq(x.clone(), g_y.clone())];
+    let possible = vec![
+        eq(x.clone(), h_y.clone()),
+        eq(x.clone(), hash(pub_term("a"))),
+    ];
+    assert!(crate::unification::unify_lnterm_factored(clash.clone()).is_none());
+    assert!(matches!(
+        table.whole_unify(&clash).unwrap(),
+        Outcome::Unsupported
+    ));
+    assert!(table.refutes_factor_clash(&clash).unwrap());
+    assert!(!table.refutes_factor_clash(&possible).unwrap());
+    // An erroneous Rust failure must still return the verified positive family.
+    assert_eq!(
+        canonical_variants(native.resolve_factor_clash(&possible).unwrap()),
+        canonical_variants(
+            oracle
+                .unify_residuals_with_maude(&possible, &Subst::empty())
+                .unwrap()
+        )
+    );
+    assert!(native.unify(&clash).unwrap().is_empty());
+    assert!(!native.unifiable(&clash).unwrap());
+    assert!(oracle
+        .unify_residuals_with_maude(&clash, &Subst::empty())
+        .unwrap()
+        .is_empty());
+    assert_eq!(oracle.stats().unify_count, 2);
+    assert_eq!(native.stats().unify_count, 0);
+
+    let sig = sig.merge(mset_maude_sig());
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let ac = |terms| f_app_ac(AcSym::Union, terms);
+    let a = var("a");
+    let b = var("b");
+    // Together these rows force h(y) = g(y); the free factorer alone delays both.
+    let rows = [
+        eq(
+            ac(vec![h_y.clone(), a.clone()]),
+            ac(vec![g_y.clone(), b.clone()]),
+        ),
+        eq(ac(vec![h_y, a.clone(), a]), ac(vec![g_y, b.clone(), b])),
+    ];
+    assert_eq!(
+        crate::unification::unify_lnterm_factored(rows.to_vec())
+            .unwrap()
+            .1
+            .len(),
+        2
+    );
+    assert_eq!(
+        native
+            .native_rules()
+            .unwrap()
+            .unify_forced_operands(&rows)
+            .unwrap(),
+        Outcome::Complete(Vec::new())
+    );
+    assert!(native.unify(&rows).unwrap().is_empty());
+    assert!(oracle
+        .unify_residuals_with_maude(&rows, &Subst::empty())
+        .unwrap()
+        .is_empty());
+    assert_eq!(oracle.stats().unify_count, 1);
+}
+
 fn canonical_ground_answers(mut answers: Vec<Vec<(LVar, LNTerm)>>) -> Vec<Vec<(LVar, LNTerm)>> {
     for answer in &mut answers {
         answer.sort();
@@ -2225,7 +2325,9 @@ fn common_children_residuals_match_maude_in_sorted_conjunctions() {
             ] {
                 eqs.push(equal(variable("k", LSort::Msg), pair(z.clone(), w.clone())));
                 let (m, r) = crate::unification::unify_lnterm_factored(eqs.clone()).unwrap();
-                let Outcome::Complete(answers) = unify_structured(&r, &eqs, &m).unwrap() else {
+                let Outcome::Complete(answers) =
+                    unify_structured(oracle.native_rules().unwrap(), &r, &eqs, &m).unwrap()
+                else {
                     panic!("unsupported {eqs:?}")
                 };
                 assert_eq!(
@@ -2680,7 +2782,8 @@ fn commutative_branches_agree_with_maude_in_the_original_query_scope() {
                 let (bindings, pending) =
                     crate::unification::unify_lnterm_factored(eqs.clone()).unwrap();
                 let Outcome::Complete(answers) =
-                    unify_structured(&pending, &eqs, &bindings).unwrap()
+                    unify_structured(oracle.native_rules().unwrap(), &pending, &eqs, &bindings)
+                        .unwrap()
                 else {
                     panic!("unsupported {eqs:?}")
                 };
@@ -2745,7 +2848,9 @@ fn cancellation_exposing_commutative_roots_agrees_with_maude() {
             ] {
                 let (bindings, pending) =
                     crate::unification::unify_lnterm_factored(qs.clone()).unwrap();
-                let Outcome::Complete(arms) = unify_structured(&pending, &qs, &bindings).unwrap()
+                let Outcome::Complete(arms) =
+                    unify_structured(oracle.native_rules().unwrap(), &pending, &qs, &bindings)
+                        .unwrap()
                 else {
                     panic!("unsupported {qs:?}")
                 };
@@ -3698,7 +3803,9 @@ fn binary_ac_with_two_fresh_factors_uses_sorted_simultaneous_orientations() {
                 ];
                 let (bindings, pending) =
                     crate::unification::unify_lnterm_factored(eqs.to_vec()).unwrap();
-                let Outcome::Complete(arms) = unify_structured(&pending, &eqs, &bindings).unwrap()
+                let Outcome::Complete(arms) =
+                    unify_structured(oracle.native_rules().unwrap(), &pending, &eqs, &bindings)
+                        .unwrap()
                 else {
                     panic!("unsupported {eqs:?}")
                 };
@@ -5552,7 +5659,9 @@ fn two_indivisible_factors_constrain_the_remaining_shared_ac_equation() {
         },
     ];
     let expected = oracle.unify_via_maude(&eqs).unwrap();
-    let Outcome::Complete(arms) = unify_structured(&eqs, &eqs, &Subst::empty()).unwrap() else {
+    let Outcome::Complete(arms) =
+        unify_structured(oracle.native_rules().unwrap(), &eqs, &eqs, &Subst::empty()).unwrap()
+    else {
         panic!("deferred")
     };
     assert_eq!(expected.len(), 2);
@@ -7567,6 +7676,10 @@ fn bounded_unifiers_defer_exponential_families_without_publishing_a_prefix() {
     use crate::lean_unification::{unify_structured, Outcome};
     use crate::subst::Subst;
     let var = |i| Term::Lit(Lit::Var(LVar::new("v", LSort::Msg, i)));
+    let table = crate::lean_unification::RuleTable::new(
+        &mset_maude_sig().merge(crate::maude_sig::bp_maude_sig()),
+    )
+    .unwrap();
     let wide = f_app_ac(AcSym::Union, (0..33).map(var).collect());
     let rhs = f_app_ac(AcSym::Union, vec![var(33), var(34)]);
     let qs = [Equal {
@@ -7574,7 +7687,7 @@ fn bounded_unifiers_defer_exponential_families_without_publishing_a_prefix() {
         rhs: emap(var(36), rhs),
     }];
     assert_eq!(
-        unify_structured(&qs, &qs, &Subst::empty()).unwrap(),
+        unify_structured(&table, &qs, &qs, &Subst::empty()).unwrap(),
         Outcome::Unsupported
     );
 
@@ -7585,7 +7698,7 @@ fn bounded_unifiers_defer_exponential_families_without_publishing_a_prefix() {
         })
         .collect();
     assert_eq!(
-        unify_structured(&qs, &qs, &Subst::empty()).unwrap(),
+        unify_structured(&table, &qs, &qs, &Subst::empty()).unwrap(),
         Outcome::Unsupported
     );
 }

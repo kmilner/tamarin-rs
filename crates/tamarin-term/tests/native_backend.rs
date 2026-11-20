@@ -72,6 +72,24 @@ fn unsupported_unification_is_an_error_and_latches_across_clones() {
 }
 
 #[test]
+fn an_unencodable_factoring_failure_is_reported_as_unsupported() {
+    let x = variable("x");
+    // The local occurs check fails, but hash has no declaration in this module.
+    let query = [Equal {
+        lhs: x.clone(),
+        rhs: tamarin_term::builtin::hash(x),
+    }];
+    assert!(matches!(
+        native().unify(&query),
+        Err(MaudeError::UnsupportedOperation(_))
+    ));
+    assert!(matches!(
+        native().unifiable(&query),
+        Err(MaudeError::UnsupportedOperation(_))
+    ));
+}
+
+#[test]
 fn missing_operations_return_explicit_errors() {
     let h = native();
     assert!(matches!(

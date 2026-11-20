@@ -140,6 +140,7 @@ fn solve_leaf(
 }
 
 pub(crate) fn solve(
+    table: &super::RuleTable,
     equations: &[Equal<LNTerm>],
     original: &[Equal<LNTerm>],
     factored: &Subst<Name, LVar>,
@@ -153,7 +154,10 @@ pub(crate) fn solve(
         if visited > SEARCH_LIMIT {
             return Ok(Outcome::Unsupported);
         }
-        let reduction = common_children::simplify(&mut pending, &mut bindings)?;
+        let reduction = common_children::simplify(table, &mut pending, &mut bindings)?;
+        if matches!(reduction, common_children::Simplification::Unconfirmed) {
+            return Ok(Outcome::Unsupported);
+        }
         if matches!(reduction, common_children::Simplification::Contradiction) {
             continue;
         }
@@ -197,9 +201,11 @@ pub(crate) fn solve(
             // Factoring the whole conjunction propagates aliases and enforces
             // sorts and occurs checks across both operands and sibling goals.
             if let Some((extra, residual)) =
-                unify_lterm_factored(&crate::maude_types::sort_of_name, next)
+                unify_lterm_factored(&crate::maude_types::sort_of_name, next.clone())
             {
                 work.push((residual, extra.compose(&bindings)));
+            } else if !table.refutes_factor_clash(&next)? {
+                return Ok(Outcome::Unsupported);
             }
         }
     }

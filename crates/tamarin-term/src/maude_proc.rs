@@ -1208,12 +1208,8 @@ impl MaudeHandle {
     /// the subprocess round-trip.  Safe to cache because the result is a
     /// context-free boolean (no witness LVars leak across calls).
     ///
-    /// Fast path: when `is_ac_free()` accepts the signature (no AC/C
-    /// operators and no `st_rules`) we answer unifiability with the local
-    /// Robinson-style algorithm in `unification.rs`, completely
-    /// skipping Maude.  Hashing / asymmetric-encryption / pair-only
-    /// protocols hit this fast path almost exclusively, cutting the
-    /// per-step Maude call count by orders of magnitude.
+    /// AC-free queries use the local free unifier first. Native-only confirms
+    /// a proposed failure in Lean before returning a negative decision.
     pub fn unifiable(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
         self.check_backend_status()?;
         if eqs.is_empty() {
@@ -1230,7 +1226,12 @@ impl MaudeHandle {
         #[cfg(not(feature = "lean-unification"))]
         let needs_typed_solver = false;
         if self.is_ac_free() && !needs_typed_solver {
-            return Ok(crate::unification::unify_lnterm_no_ac(eqs.to_vec()).is_ok());
+            let local = crate::unification::unify_lnterm_no_ac(eqs.to_vec());
+            #[cfg(feature = "lean-unification")]
+            if local.is_err() && self.backend == AlgebraBackend::NativeOnly {
+                return Ok(!self.resolve_factor_clash(eqs)?.is_empty());
+            }
+            return Ok(local.is_ok());
         }
         let key: Vec<(LNTerm, LNTerm)> =
             eqs.iter().map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
@@ -1422,6 +1423,10 @@ impl MaudeHandle {
             &crate::maude_types::sort_of_name,
             eqs.to_vec(),
         ) else {
+            #[cfg(feature = "lean-unification")]
+            if self.backend == AlgebraBackend::NativeOnly {
+                return self.resolve_factor_clash(eqs);
+            }
             return Ok(Vec::new());
         };
         if residual_eqs.is_empty() {
@@ -1503,15 +1508,16 @@ impl MaudeHandle {
             None
         };
         #[cfg(feature = "lean-unification")]
-        let try_structured = use_lean
-            && (self.backend == AlgebraBackend::NativeOnly || !ordered)
-            && self
-                .native_rules()
-                .is_some_and(|table| table.admits_terms(eqs));
+        let structured_table =
+            if use_lean && (self.backend == AlgebraBackend::NativeOnly || !ordered) {
+                self.native_rules().filter(|table| table.admits_terms(eqs))
+            } else {
+                None
+            };
         #[cfg(feature = "lean-unification")]
-        if try_structured
+        if let Some(table) = structured_table
             && let crate::lean_unification::Outcome::Complete(answers) =
-                crate::lean_unification::unify_structured(&residual_eqs, eqs, &factored_m)
+                crate::lean_unification::unify_structured(table, &residual_eqs, eqs, &factored_m)
                     .map_err(lean_error)?
         {
             cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
@@ -1521,9 +1527,8 @@ impl MaudeHandle {
         // Free factoring can expose a simultaneous AC matrix under other constructors.
         // Validate the proposed bindings and residual against the original conjunction
         // before accepting this path, including a complete empty answer set.
-        if try_structured
+        if let Some(table) = structured_table
             && residual_eqs != eqs
-            && let Some(table) = self.native_rules()
             && let crate::lean_unification::Outcome::Complete(arms) = table
                 .factored_unify(eqs, &factored_m, &residual_eqs)
                 .map_err(lean_error)?
@@ -1532,9 +1537,8 @@ impl MaudeHandle {
             return Ok(compose_checked_factor(eqs, arms, &factored_m));
         }
         #[cfg(feature = "lean-unification")]
-        if try_structured
+        if let Some(table) = structured_table
             && self.backend == AlgebraBackend::NativeOnly
-            && let Some(table) = self.native_rules()
             && let crate::lean_unification::Outcome::Complete(answers) =
                 table.unify_forced_operands(eqs).map_err(lean_error)?
         {
@@ -1542,8 +1546,7 @@ impl MaudeHandle {
             return Ok(answers);
         }
         #[cfg(feature = "lean-unification")]
-        if try_structured
-            && let Some(table) = self.native_rules()
+        if let Some(table) = structured_table
             && let crate::lean_unification::Outcome::Complete(answers) =
                 table.unify_operands(eqs).map_err(lean_error)?
         {
@@ -1551,17 +1554,15 @@ impl MaudeHandle {
             return Ok(answers);
         }
         #[cfg(feature = "lean-unification")]
-        if try_structured
-            && let Some(table) = self.native_rules()
+        if let Some(table) = structured_table
             && table.refutes_ac_conjunct(eqs).map_err(lean_error)?
         {
             cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
             return Ok(Vec::new());
         }
         #[cfg(feature = "lean-unification")]
-        if try_structured
+        if let Some(table) = structured_table
             && self.backend == AlgebraBackend::NativeOnly
-            && let Some(table) = self.native_rules()
             && let crate::lean_unification::Outcome::Complete(answers) =
                 table.component_unify(eqs).map_err(lean_error)?
         {
@@ -1613,6 +1614,27 @@ impl MaudeHandle {
             )));
         }
         Ok(renamed)
+    }
+
+    #[cfg(feature = "lean-unification")]
+    fn resolve_factor_clash(
+        &self,
+        original: &[Equal<LNTerm>],
+    ) -> Result<crate::lean_unification::Substitutions, MaudeError> {
+        if !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY") {
+            if let Some(table) = self.native_rules()
+                && table
+                    .refutes_factor_clash(original)
+                    .map_err(|e| self.lean_error(e))?
+            {
+                cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+                return Ok(Vec::new());
+            }
+            if let Some(answers) = self.total_unify(original)? {
+                return Ok(answers);
+            }
+        }
+        self.unify_residuals_with_maude(original, &crate::subst::Subst::empty())
     }
 
     #[cfg(feature = "lean-unification")]

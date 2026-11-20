@@ -102,9 +102,11 @@ pub(super) enum Simplification {
     Unchanged,
     Reduced,
     Contradiction,
+    Unconfirmed,
 }
 
 pub(super) fn simplify(
+    table: &super::RuleTable,
     current: &mut Vec<Equal<LNTerm>>,
     bindings: &mut Subst<Name, LVar>,
 ) -> Result<Simplification, Error> {
@@ -141,10 +143,15 @@ pub(super) fn simplify(
         // With a fixed variable inventory each cancellation strictly shortens
         // the system. If factoring expands a term, it also eliminates one or
         // more variables. No step introduces a new search variable.
-        let Some((extra, pending)) =
-            crate::unification::unify_lterm_factored(&crate::maude_types::sort_of_name, reduced)
-        else {
-            return Ok(Simplification::Contradiction);
+        let Some((extra, pending)) = crate::unification::unify_lterm_factored(
+            &crate::maude_types::sort_of_name,
+            reduced.clone(),
+        ) else {
+            return Ok(if table.refutes_factor_clash(&reduced)? {
+                Simplification::Contradiction
+            } else {
+                Simplification::Unconfirmed
+            });
         };
         *bindings = extra.compose(bindings);
         *current = pending;

@@ -818,9 +818,10 @@ impl RuleTable {
         if !self.admits_terms(&eqs) {
             return Ok(false);
         }
-        let Some((free, pending)) = crate::unification::unify_lterm_factored(&sort_of_name, eqs)
+        let Some((free, pending)) =
+            crate::unification::unify_lterm_factored(&sort_of_name, eqs.clone())
         else {
-            return Ok(true);
+            return self.refutes_factor_clash(&eqs);
         };
         // Reserving variables from output values protects them through factor
         // composition even when they do not occur in the input equations.

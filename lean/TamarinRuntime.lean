@@ -1,6 +1,6 @@
 import Tamarin.CheckedVariantsWire
 import Tamarin.CheckedReductionWire
-import Tamarin.TotalUnifyWire
+import Tamarin.FactorRefutation
 import Tamarin.TotalMatchWire
 import TamarinRuntime.Candidate
 import TamarinRuntime.BinaryCancellation
@@ -188,6 +188,10 @@ def groundVariant (holes anchors deps : Array UInt64) (rigid : Bool) : UInt8 :=
 @[export tamarin_cancel_common]
 def cancelCommon (lhs rhs : Array UInt64) : Array (Array UInt64) :=
   RuntimeCandidate.cancelCommon lhs rhs
+
+@[export tamarin_factor_refutes]
+def factorRefutes (ds : Array UInt64) (ns : Array (Array UInt64)) (es : Array UInt64) : Bool :=
+  FactorRefutation.run ds ns es
 
 @[export tamarin_total_unify]
 def totalUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :

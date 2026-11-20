@@ -97,6 +97,11 @@ def input (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array U
   let ⟨d,ts⟩ ← graph decls nodes
   return ⟨d,← equations ts roots.toList⟩
 
+/-- Fixed contract for a one-sided refutation of a whole query. -/
+def RefutationCorrect (candidate : Array UInt64 → Array (Array UInt64) → Array UInt64 → Bool) : Prop :=
+  ∀ ds ns es, candidate ds ns es = true →
+    ∃ d p, input ds ns es = some ⟨d,p⟩ ∧ ¬ p.Satisfiable
+
 /-- Postorder triples. The third word is a sort for a leaf and a child
 count for an application. Only natural-number fields need checked packing. -/
 structure Token where

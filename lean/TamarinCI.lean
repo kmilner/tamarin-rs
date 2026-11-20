@@ -44,6 +44,30 @@ family on its declared signature. Malformed input has a separate status. -/
 theorem exportedTotalUnify_correct : TotalUnifyWire.Packet.Correct Executable.totalUnify :=
   TotalUnifyWire.Packet.correct
 
+theorem exportedFactorRefutes_correct : TotalUnifyWire.RefutationCorrect Executable.factorRefutes :=
+  FactorRefutation.correct
+
+/-- Extra constructors available to the caller cannot restore a solution. -/
+theorem exportedFactorRefutes_ambient {ds ns es} (hit : Executable.factorRefutes ds ns es = true) :
+    ∃ d p, TotalUnifyWire.input ds ns es = some ⟨d,p⟩ ∧
+      ∀ extra : Signature, ¬ (SignatureExtension.query extra p).Satisfiable := by
+  obtain ⟨d,p,dec,unsat⟩ := exportedFactorRefutes_correct ds ns es hit
+  have empty : (Outcome.complete []).CorrectIn p [] :=
+    ⟨(complete_empty_iff _).mpr unsat, by simp [Outcome.answers], by simp [Outcome.answers]⟩
+  exact ⟨d,p,dec,fun extra => (complete_empty_iff _).mp
+    (SignatureExtension.correctIn extra p [] empty).mathematical⟩
+
+/-- Forced operand equalities may expose a clash after free decomposition.
+The verdict rules out the caller's original conjunction before the additions. -/
+theorem exportedFactorRefutes_forced {ds ns es} {d : TotalUnifyWire.Dictionary}
+    {p added : Problem d.sig} (decoded : TotalUnifyWire.input ds ns es = some ⟨d,added ++ p⟩)
+    (forced : ACForcedEquations.Forced p added) (hit : Executable.factorRefutes ds ns es = true) :
+    ¬ p.Satisfiable := by
+  obtain ⟨_,_,dec,refuted⟩ := exportedFactorRefutes_correct ds ns es hit
+  rw [decoded] at dec
+  cases dec
+  exact fun ⟨σ,sol⟩ => refuted ⟨σ,(forced.prepend.solutions σ).mp sol⟩
+
 theorem exportedTotalMatch_correct : TotalMatchWire.Correct Executable.totalMatch :=
   TotalMatchWire.correct
 
@@ -1229,6 +1253,7 @@ run_cmd do
     (``Tamarin.Executable.sortedACMatch, `tamarin_sorted_ac_match),
     (``Tamarin.Executable.flatACMatch, `tamarin_flat_ac_match),
     (``Tamarin.Executable.checkedReduce, `tamarin_checked_reduce),
+    (``Tamarin.Executable.factorRefutes, `tamarin_factor_refutes),
     (``Tamarin.Executable.totalUnify, `tamarin_total_unify),
     (``Tamarin.Executable.totalMatch, `tamarin_total_match),
     (``Tamarin.Executable.checkedVariants, `tamarin_checked_variants),

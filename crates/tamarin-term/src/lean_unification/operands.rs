@@ -126,7 +126,11 @@ impl RuleTable {
         let Some((bindings, residual)) =
             crate::unification::unify_lterm_factored(&sort_of_name, expanded.clone())
         else {
-            return Ok(Outcome::Complete(Vec::new()));
+            return Ok(if self.refutes_factor_clash(&expanded)? {
+                Outcome::Complete(Vec::new())
+            } else {
+                Outcome::Unsupported
+            });
         };
         if bindings.is_empty() {
             return self.unify_operands(&expanded);

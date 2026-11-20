@@ -226,6 +226,12 @@ identity binding for reflexive kind-level sums. Independent unification componen
 own solver so a conjunction with few answers can finish without enumerating partitions across
 components. [Sort checks](Tamarin/NarrowingClash.lean) · [General packet regression](Tests/TotalUnifyPacket.lean) · [Public regressions](../crates/tamarin-term/tests/native_backend.rs)
 
+Native-only treats a Rust factoring failure as a proposed clash. Lean replays free
+decomposition, sort checks, variable elimination, and occurs checks on the equations
+before factoring. A confirmed clash rules out solutions in the caller's full signature.
+An inconclusive replay leaves the original query available to the general solver.
+[Refutation contract](Tamarin/TotalUnifyWire.lean) · [Checked replay](Tamarin/FactorRefutation.lean) · [Unfactored Maude comparison](../crates/tamarin-term/src/lean_unification_integration_tests.rs)
+
 The atom case of `X + a = Y + b` now takes its completeness and freshness proof from the
 general compound-offset theorem. The dependent allocation path for `X + Y = Z + A[X]` still
 preserves the Rust caller's witness allocation after factoring. [Atom specialization](Tamarin/SharedOffset.lean) · [Dependent allocation](Tamarin/DependentAllocation.lean)

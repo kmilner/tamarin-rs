@@ -93,7 +93,7 @@ rigid_start = SOURCE.index("theorem exportedRigidAllocation_correct")
 rigid_obligation = SOURCE[rigid_start:SOURCE.index("\n\n", rigid_start) + 1]
 EXECUTABLE = ("import Tamarin.RigidAllocationCandidateProofs\n" + EXECUTABLE
               + "\nnamespace Tamarin\n" + rigid_obligation + "end Tamarin\n")
-whole_obligation = obligation("exportedWholeUnify_correct") + obligation("exportedWholeUnify_mixedRequired")
+whole_obligation = obligation("exportedFactorRefutes_correct") + obligation("exportedWholeUnify_correct") + obligation("exportedWholeUnify_mixedRequired")
 EXECUTABLE = ("import Tamarin.MixedSizeWhole\n" + EXECUTABLE
               + "\nnamespace Tamarin\n" + whole_obligation + "end Tamarin\n")
 xor_start = SOURCE.index("theorem exportedXorBranches_correct")
@@ -192,6 +192,8 @@ end OtherNamespace
 ]
 
 EXPORT_MUTATIONS = [
+    ("factor_clash_without_evidence", "  FactorRefutation.run ds ns es", "  true",
+     "theorem exportedFactorRefutes_correct"),
     (
         "empty_products_treated_as_equal",
         "  RuntimeCandidate.backend.equal lhs rhs",

@@ -170,6 +170,12 @@ impl Packet {
 
 unsafe extern "C" {
     fn tamarin_lean_operand_refine(sides: *const u64, count: usize, indices: *mut u64) -> usize;
+    fn tamarin_lean_factor_refutes(
+        declarations: WordSlice,
+        rows: *const WordSlice,
+        count: usize,
+        equations: WordSlice,
+    ) -> u8;
     fn tamarin_lean_check_factors(
         declarations: WordSlice,
         rows: *const WordSlice,
@@ -390,6 +396,29 @@ impl RuleTable {
         let outcome = packet.solve(&packet.rows(), shape)?;
         let pending = (outcome == Outcome::Unsupported && shape.is_some()).then_some(packet);
         Ok((outcome, pending))
+    }
+
+    /// Replay the clash on the pre-factoring equations. A false verdict or a
+    /// graph outside the replay budget leaves the original query open.
+    pub(crate) fn refutes_factor_clash(&self, equations: &[Equal<LNTerm>]) -> Result<bool, Error> {
+        let Some(packet) = Packet::encode(self, equations)? else {
+            return Ok(false);
+        };
+        initialize()?;
+        let rows = packet.rows();
+        // SAFETY: the shim copies the graph and its roots from these live slices.
+        match LEAN_THREAD.with(|_| unsafe {
+            tamarin_lean_factor_refutes(
+                WordSlice::new(&packet.declarations),
+                rows.as_ptr(),
+                rows.len(),
+                WordSlice::new(&packet.equations),
+            )
+        }) {
+            0 => Ok(false),
+            1 => Ok(true),
+            status => Err(Error::InvalidStatus(status)),
+        }
     }
 
     pub(crate) fn factored_unify(
