@@ -1,3 +1,4 @@
+import Tamarin.TotalUnifyWire
 import TamarinRuntime.Candidate
 import TamarinRuntime.BinaryCancellation
 import TamarinRuntime.XorMatchings
@@ -193,6 +194,10 @@ def groundVariant (holes anchors deps : Array UInt64) (rigid : Bool) : UInt8 :=
 @[export tamarin_cancel_common]
 def cancelCommon (lhs rhs : Array UInt64) : Array (Array UInt64) :=
   RuntimeCandidate.cancelCommon lhs rhs
+
+@[export tamarin_total_unify]
+def totalUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
+    Array (Array UInt64) := TotalUnifyWire.run decls nodes roots
 
 @[export tamarin_whole_unify]
 def wholeUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (equations : Array UInt64) :

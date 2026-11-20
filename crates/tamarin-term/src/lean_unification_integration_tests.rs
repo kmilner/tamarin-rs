@@ -7559,3 +7559,34 @@ fn public_full_unifiers_keep_all_five_covering_distributions() {
     assert_eq!(actual, expected);
     assert_eq!(native.stats().unify_count, 0);
 }
+
+// Resource limits belong to individual fast paths. Running the unrestricted
+// reference on the 33-by-2 input would enumerate billions of branches.
+#[test]
+fn bounded_unifiers_defer_exponential_families_without_publishing_a_prefix() {
+    use crate::builtin::emap;
+    use crate::lean_unification::{unify_structured, Outcome};
+    use crate::subst::Subst;
+    let var = |i| Term::Lit(Lit::Var(LVar::new("v", LSort::Msg, i)));
+    let wide = f_app_ac(AcSym::Union, (0..33).map(var).collect());
+    let rhs = f_app_ac(AcSym::Union, vec![var(33), var(34)]);
+    let qs = [Equal {
+        lhs: emap(var(35), wide),
+        rhs: emap(var(36), rhs),
+    }];
+    assert_eq!(
+        unify_structured(&qs, &qs, &Subst::empty()).unwrap(),
+        Outcome::Unsupported
+    );
+
+    let qs: Vec<_> = (0..13)
+        .map(|i| Equal {
+            lhs: emap(var(2 * i), var(2 * i + 1)),
+            rhs: emap(pub_term("a"), pub_term("b")),
+        })
+        .collect();
+    assert_eq!(
+        unify_structured(&qs, &qs, &Subst::empty()).unwrap(),
+        Outcome::Unsupported
+    );
+}

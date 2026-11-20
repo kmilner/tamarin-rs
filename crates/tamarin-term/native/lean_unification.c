@@ -366,6 +366,14 @@ static void *wrap_rows(lean_object *rows) {
     return outer;
 }
 
+extern lean_object *tamarin_total_unify(lean_object *, lean_object *, lean_object *);
+
+void *tamarin_lean_total_unify(whole_word_slice decls, const whole_word_slice *rows,
+                               size_t count, whole_word_slice equations) {
+    return wrap_rows(tamarin_total_unify(atom_array(decls.data, decls.size), word_rows(rows, count),
+                                        atom_array(equations.data, equations.size)));
+}
+
 extern lean_object *tamarin_signed_graph_variants(uint64_t inputs, lean_object *observations);
 
 /* A flat reply is one row of one arm for the existing checked row reader. */

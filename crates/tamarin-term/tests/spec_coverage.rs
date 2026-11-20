@@ -434,7 +434,9 @@ fn public_backend_meets_generated_coverage_floor() {
         }
         let (sig, symbol) = presentation(theory);
         let ts: Vec<_> = fields.map(|e| term(e, symbol)).collect();
-        let exploratory = expected == "probe" || expected.starts_with("probe-");
+        // Every ordinary query in this grammar is a representable input to
+        // the total fallback, even when no particular answer count is specified.
+        let exploratory = op != "unify" && (expected == "probe" || expected.starts_with("probe-"));
         let check = expected.strip_prefix("probe-").unwrap_or(expected);
         let compare = matches!(theory, "bp" | "nat")
             || theory == "dh" && (op == "variants" || (op, check) == ("reduce", "exact"))

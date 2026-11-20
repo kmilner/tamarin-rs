@@ -1,28 +1,8 @@
 //! In-process interface to the experimental verified Lean backend.
 //!
-//! Unification covers flat ground AC equations, one-variable literal-tail
-//! equations (including narrower-sort variables), and a reflexive AC
-//! fragment. Directional matching enumerates multi-variable/repeated-variable
-//! flat patterns against ground subjects within explicit search-size limits.
-//! AC patterns can nest free, binary commutative, and AC operators with
-//! variables shared across inner and outer products and other equations.
-//! Native-only unification reuses the matcher after cancelling shared variables
-//! in flat AC equations. It joins compatible ground bindings and tests remaining
-//! constraints when the bindings ground all their variables. A single residual
-//! x+A=y+B with two distinct persistent heads and independent variables can
-//! return a branch-local witness shared by both images. A residual x+y=z+A
-//! with three distinct result-sort variables and a ground factor A has four
-//! answers. A free factor containing only x or only y admits two answers.
-//! Binary commutative unification keeps the two child equations from each
-//! orientation together with the pending conjunction.
-//! Common children of arbitrary shape can also cancel before joint factoring.
-//! A separate pairing/multiset recipe adapter supports constructor variants,
-//! single-variable projection variants, and root projections with constructor
-//! children. A finite rule table also supports constructor-only variants,
-//! narrowing open calls to a single defined free head, including fixed
-//! constructor arguments for a ground-result rule. Root reductions match
-//! complete constructor-normal terms at repeated parameter positions.
-//! The reflexive recipe returns the empty identity substitution.
+//! Native-only ordinary unification uses bounded kernels first and a total
+//! mixed free/C/AC fallback over the original equations. Matching, reduction
+//! and variants link kernels for the domains listed in the Lean roadmap.
 //! The Rust encoding and C/Lean runtime boundary remain trusted code.
 
 mod common_children;
@@ -30,6 +10,7 @@ mod commutative;
 mod components;
 mod whole;
 pub(crate) use commutative::solve as unify_structured;
+pub(crate) use whole::total_unify;
 mod constructor_variants;
 pub(crate) use constructor_variants::RuleTable;
 mod ac_bag_match;
@@ -48,7 +29,7 @@ use std::sync::OnceLock;
 
 use rustc_hash::FxHashMap;
 
-use crate::function_symbols::{AcSym, FunSym};
+use crate::function_symbols::{nat_one_sym, AcSym, FunSym};
 use crate::lterm::{sort_compare, LNTerm, LSort, LVar, Name};
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
@@ -380,6 +361,58 @@ fn ac_sort(symbol: AcSym) -> LSort {
     } else {
         LSort::Msg
     }
+}
+
+fn declaration(f: FunSym, nat: bool) -> Option<(usize, LSort)> {
+    match f {
+        FunSym::NoEq(f) => Some((
+            f.arity,
+            if nat && f == nat_one_sym() {
+                LSort::Nat
+            } else {
+                LSort::Msg
+            },
+        )),
+        FunSym::Ac(f) => Some((2, ac_sort(f))),
+        FunSym::C(_) => Some((2, LSort::Msg)),
+        FunSym::List => None,
+    }
+}
+
+/// The local factorer reads only root sorts. Use the typed solver if its
+/// reading differs from the module declaration or a child has no required sort.
+pub(crate) fn requires_typed_unification(t: &LNTerm, nat: bool) -> bool {
+    fn compatible_sort(t: &LNTerm, nat: bool) -> Option<LSort> {
+        let sort = match t {
+            Term::Lit(Lit::Con(n)) => sort_of_name(n),
+            Term::Lit(Lit::Var(v)) => v.sort,
+            // The Rust factorer handles packed lists position by position.
+            Term::App(FunSym::List, items) => {
+                return items
+                    .iter()
+                    .all(|t| compatible_sort(t, nat).is_some())
+                    .then_some(LSort::Msg);
+            }
+            Term::App(f, children) => {
+                let (arity, s) = declaration(*f, nat)?;
+                let valid = match f {
+                    FunSym::Ac(_) => children.len() >= arity,
+                    _ => children.len() == arity,
+                };
+                if !valid
+                    || !children
+                        .iter()
+                        .all(|t| compatible_sort(t, nat).is_some_and(|actual| subsort(actual, s)))
+                {
+                    return None;
+                }
+                s
+            }
+        };
+        let local = crate::lterm::sort_of_lterm(t, crate::lterm::sort_of_name);
+        (sort == local && (nat || sort != LSort::Nat)).then_some(sort)
+    }
+    compatible_sort(t, nat).is_none()
 }
 
 fn unify_equation(equation: &Equal<LNTerm>, atoms: &mut Atoms) -> Result<EquationOutcome, Error> {
@@ -780,11 +813,15 @@ impl MatchRows {
     }
 
     fn row_size(&self, arm: usize, index: usize) -> Result<usize, Error> {
-        // SAFETY: C checks both indices before accessing the owned arrays.
-        match unsafe { tamarin_lean_match_row_size(self.0, arm, index) } {
+        match self.raw_row_size(arm, index) {
             0 | usize::MAX => Err(Error::InvalidStatus(255)),
             len => Ok(len),
         }
+    }
+
+    fn raw_row_size(&self, arm: usize, index: usize) -> usize {
+        // SAFETY: C checks both indices and this guard owns the packet.
+        unsafe { tamarin_lean_match_row_size(self.0, arm, index) }
     }
 
     fn copy_row(&self, arm: usize, var: usize, buf: &mut [u64]) -> Result<usize, Error> {

@@ -763,6 +763,16 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedCheckFactors_chain"),
 ])
 
+EXECUTABLE = ("import Tamarin.TotalUnifyPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedTotalUnify_correct") + "end Tamarin\n")
+TOTAL_RUN = "TotalUnifyWire.run decls nodes roots"
+EXPORT_MUTATIONS.extend([
+    ("total_always_defers", TOTAL_RUN, "#[#[0]]", "theorem exportedTotalUnify_correct"),
+    ("total_discards_arms", TOTAL_RUN, "#[#[1]]", "theorem exportedTotalUnify_correct"),
+    ("total_ignores_equation_tail", TOTAL_RUN, "TotalUnifyWire.run decls nodes (roots.extract 0 2)",
+     "theorem exportedTotalUnify_correct"),
+])
+
 WHOLE_RUN = "  Whole.runRefining MixedSizeGraph.refutesDecoded decls nodes equations"
 EXPORT_MUTATIONS.extend([
     ("whole_ignores_mixed_clashes", WHOLE_RUN, "  Whole.run decls nodes equations",

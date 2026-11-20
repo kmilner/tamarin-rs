@@ -191,15 +191,10 @@ impl MaudeSig {
         self.st_rules.all_lhs_ac_c_free()
     }
 
-    /// HS `maudeSig` (Term/Maude/Signature.hs#maudeSig): recompute the
-    /// cached `fun_syms` / `irreducible_fun_syms` / `reducible_fun_syms` from
-    /// the source-of-truth flags.
-    pub fn refresh(mut self) -> Self {
-        if self.enable_bp {
-            self.enable_dh = true;
-        }
+    /// Algebraic operator declarations from the active flags and source symbols.
+    pub(crate) fn declared_fun_syms(&self) -> FunSig {
         let mut all_funs: FunSig = self.st_fun_syms.iter().map(|s| FunSym::NoEq(*s)).collect();
-        if self.enable_dh || self.enable_bp {
+        if self.enable_dh {
             all_funs.extend(dh_fun_sig());
         }
         if self.enable_bp {
@@ -219,6 +214,17 @@ impl MaudeSig {
                 .iter()
                 .map(|s| FunSym::Ac(AcSym::AcFct(*s))),
         );
+        all_funs
+    }
+
+    /// HS `maudeSig` (Term/Maude/Signature.hs#maudeSig): recompute the
+    /// cached `fun_syms` / `irreducible_fun_syms` / `reducible_fun_syms` from
+    /// the source-of-truth flags.
+    pub fn refresh(mut self) -> Self {
+        if self.enable_bp {
+            self.enable_dh = true;
+        }
+        let all_funs = self.declared_fun_syms();
 
         // Reducible roots: any function symbol at the root of an stRules LHS,
         // plus DH/BP/XOR reducible. AC Mult is intentionally absent.

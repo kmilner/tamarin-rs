@@ -1219,7 +1219,14 @@ impl MaudeHandle {
         if eqs.iter().all(|eq| eq.lhs == eq.rhs) {
             return Ok(true);
         }
-        if self.is_ac_free() {
+        #[cfg(feature = "lean-unification")]
+        let needs_typed_solver = self.backend != AlgebraBackend::Maude
+            && eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]).any(|t| {
+                crate::lean_unification::requires_typed_unification(t, self.sig.enable_nat)
+            });
+        #[cfg(not(feature = "lean-unification"))]
+        let needs_typed_solver = false;
+        if self.is_ac_free() && !needs_typed_solver {
             return Ok(crate::unification::unify_lnterm_no_ac(eqs.to_vec()).is_ok());
         }
         let key: Vec<(LNTerm, LNTerm)> =
@@ -1237,7 +1244,8 @@ impl MaudeHandle {
             }
         }
         #[cfg(feature = "lean-unification")]
-        let answer = if self.backend != AlgebraBackend::Maude
+        let answer = if !needs_typed_solver
+            && self.backend != AlgebraBackend::Maude
             && !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
             && crate::lean_unification::RuleTable::may_be_homogeneous(eqs)
             && let Some(table) = self.native_rules()
@@ -1377,26 +1385,32 @@ impl MaudeHandle {
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
+        #[cfg(feature = "lean-unification")]
+        if use_lean
+            && (self.backend == AlgebraBackend::NativeOnly || !ordered)
+            && eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]).any(|t| {
+                crate::lean_unification::requires_typed_unification(t, self.sig.enable_nat)
+            })
+        {
+            cancellation::check()?;
+            if self.sig.enable_nat
+                && let Some(table) = self.native_rules()
+                && let crate::lean_unification::Outcome::Complete(arms) =
+                    table.unify_kind_sum(eqs).map_err(lean_error)?
+            {
+                cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+                return Ok(arms);
+            }
+            if let Some(arms) = self.total_unify(eqs)? {
+                return Ok(arms);
+            }
+            return self.unify_residuals_with_maude(eqs, &crate::subst::Subst::empty());
+        }
         if self.sig.enable_nat
             && eqs
                 .iter()
-                .any(|eq| contains_kind_sum(&eq.lhs) || contains_kind_sum(&eq.rhs))
+                .any(|e| contains_kind_sum(&e.lhs) || contains_kind_sum(&e.rhs))
         {
-            #[cfg(feature = "lean-unification")]
-            if use_lean && self.backend == AlgebraBackend::NativeOnly {
-                cancellation::check()?;
-                let result = self
-                    .native_rules()
-                    .map(|table| table.unify_kind_sum(eqs))
-                    .transpose();
-                if let Some(crate::lean_unification::Outcome::Complete(arms)) =
-                    result.map_err(lean_error)?
-                {
-                    cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
-                    return Ok(arms);
-                }
-            }
-            // Factoring would allow binding a variable to an unsorted range.
             return self.unify_residuals_with_maude(eqs, &crate::subst::Subst::empty());
         }
         // HS unifyRaw delays AC- and C-headed pairs even when the two sides
@@ -1423,8 +1437,8 @@ impl MaudeHandle {
         //   2. Success with no AC residual → return `[emptyVFresh
         //      `composeVFresh` m]`, which is what `flattenUnif (m,
         //      [emptySubstVFresh])` (Unification.hs) evaluates to.
-        //   3. Success with AC residuals → Maude on the residuals only
-        //      (the `unify_lnterm_factored` path further down).
+        //   3. Success with AC residuals → dispatch to the selected backend.
+        //      The total native fallback takes the original conjunction.
         //   4. Failure → return empty, WITHOUT calling Maude.
         //
         // Step 2's `composeVFresh` is load-bearing, not a formality: it
@@ -1680,6 +1694,14 @@ impl MaudeHandle {
                 }
             }
         }
+        #[cfg(feature = "lean-unification")]
+        if use_lean
+            && (self.backend == AlgebraBackend::NativeOnly || !ordered)
+            && lean_expected.is_none()
+            && let Some(answers) = self.total_unify(eqs)?
+        {
+            return Ok(answers);
+        }
         let renamed = self.unify_residuals_with_maude(&residual_eqs, &factored_m)?;
         #[cfg(feature = "lean-unification")]
         if let Some(expected) = lean_expected
@@ -1691,6 +1713,22 @@ impl MaudeHandle {
             )));
         }
         Ok(renamed)
+    }
+
+    #[cfg(feature = "lean-unification")]
+    fn total_unify(
+        &self,
+        original: &[Equal<LNTerm>],
+    ) -> Result<Option<crate::lean_unification::Substitutions>, MaudeError> {
+        match crate::lean_unification::total_unify(&self.sig, original)
+            .map_err(|e| self.lean_error(e))?
+        {
+            crate::lean_unification::Outcome::Complete(answers) => {
+                cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+                Ok(Some(answers))
+            }
+            crate::lean_unification::Outcome::Unsupported => Ok(None),
+        }
     }
 
     fn unify_residuals_with_maude(

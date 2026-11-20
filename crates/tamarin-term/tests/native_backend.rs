@@ -56,12 +56,9 @@ fn unsupported_unification_is_an_error_and_latches_across_clones() {
     let h = native();
     let clone = h.with_fresh_counter_from(7);
     let eq = Equal {
-        // This input exceeds the matrix column budget and has no ground side.
-        lhs: f_app_ac(
-            AcSym::Union,
-            (0..33).map(|i| variable(&format!("v{i}"))).collect(),
-        ),
-        rhs: sum(variable("w"), variable("z")),
+        // A hash declaration is absent from the multiset-only signature.
+        lhs: sum(tamarin_term::builtin::hash(variable("x")), variable("w")),
+        rhs: sum(variable("v"), variable("z")),
     };
     assert!(matches!(
         h.unify(&[eq]),
@@ -1400,13 +1397,17 @@ fn common_compound_children_keep_contextual_witnesses_and_check_declarations() {
     assert_eq!(h.stats().unify_count, 0);
     assert_eq!(h.stats().lean_unify_count, 2);
     let bad = hash(var(LVar::new("i", LSort::Node, 0)));
-    assert!(matches!(
-        h.unify(&[Equal {
+    let rows = h
+        .unify(&[Equal {
             lhs: sum(bad.clone(), var(x)),
-            rhs: sum(bad, var(y))
-        }]),
-        Err(MaudeError::UnsupportedOperation("AC/C unification"))
-    ));
+            rhs: sum(bad, var(y)),
+        }])
+        .unwrap();
+    assert!(rows.iter().any(|row| {
+        let subst = LNSubstVFresh::from_list(row.clone());
+        matches!((subst.image_of(&x), subst.image_of(&y)),
+            (Some(Term::Lit(Lit::Var(a))), Some(Term::Lit(Lit::Var(b)))) if a == b && a.sort == LSort::Msg)
+    }));
 }
 
 #[test]
@@ -1730,10 +1731,8 @@ fn compound_offsets_reconcile_equalizable_heads_and_check_declarations() {
         one.clone(),
         hash(Term::Lit(Lit::Var(LVar::new("i", LSort::Node, 0)))),
     );
-    assert!(matches!(
-        h().unify(&[ill_sorted]),
-        Err(MaudeError::UnsupportedOperation("AC/C unification"))
-    ));
+    // X would have to contain hash(i:Node), which has no Msg sort.
+    assert!(h().unify(&[ill_sorted]).unwrap().is_empty());
     assert!(matches!(
         native().unify(&[query(one, hash(z))]),
         Err(MaudeError::UnsupportedOperation("AC/C unification"))
@@ -1791,7 +1790,7 @@ fn commutative_branch_witnesses_preserve_full_query_aliases_without_a_process() 
 }
 
 #[test]
-fn commutative_search_defers_when_a_live_sibling_or_input_is_unsupported() {
+fn commutative_search_keeps_live_siblings_and_checks_sorted_ranges() {
     use tamarin_term::builtin::emap;
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
     let sig = bp_maude_sig().merge(dh_maude_sig()).merge(mset_maude_sig());
@@ -1808,16 +1807,6 @@ fn commutative_search_defers_when_a_live_sibling_or_input_is_unsupported() {
     let supported = h();
     assert_eq!(supported.unify(&[covered]).unwrap().len(), 8);
     assert_eq!(supported.stats().unify_count, 0);
-    // The crossed orientation still succeeds, but the straight one now
-    // exceeds the matrix column limit. Its sibling must not be published.
-    let wide = f_app_ac(
-        AcSym::Union,
-        (0..33).map(|i| variable(&format!("v{i}"))).collect(),
-    );
-    let unknown = eq(
-        emap(variable("p"), wide),
-        emap(variable("q"), sum(variable("z"), variable("u"))),
-    );
     let bad = eq(
         emap(
             Term::Lit(Lit::Var(LVar::new("i", LSort::Node, 1))),
@@ -1825,15 +1814,8 @@ fn commutative_search_defers_when_a_live_sibling_or_input_is_unsupported() {
         ),
         emap(variable("y"), variable("z")),
     );
-    for q in [unknown, bad] {
-        let h = h();
-        assert!(matches!(
-            h.unify(&[q]),
-            Err(MaudeError::UnsupportedOperation("AC/C unification"))
-        ));
-        assert_eq!(h.stats().lean_unify_count, 0);
-        assert!(h.check_backend_status().is_err());
-    }
+    assert!(supported.unify(&[bad]).unwrap().is_empty());
+    supported.check_backend_status().unwrap();
     let undeclared = eq(
         emap(variable("p"), variable("q")),
         emap(variable("r"), variable("s")),
@@ -1852,7 +1834,7 @@ fn commutative_search_defers_when_a_live_sibling_or_input_is_unsupported() {
 }
 
 #[test]
-fn commutative_resource_limit_and_cancellation_discard_incomplete_searches() {
+fn commutative_cancellation_discards_incomplete_searches() {
     use tamarin_term::builtin::emap;
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
     use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
@@ -1875,11 +1857,9 @@ fn commutative_resource_limit_and_cancellation_discard_incomplete_searches() {
     }
     h.check_backend_status().unwrap();
     assert_eq!(h.unify(&qs[..2]).unwrap().len(), 4);
-    assert!(matches!(
-        h.unify(&qs),
-        Err(MaudeError::UnsupportedOperation("AC/C unification"))
-    ));
-    assert_eq!(h.stats().lean_unify_count, 1);
+    // The complete family doubles for each independent orientation.
+    assert_eq!(h.unify(&qs[..3]).unwrap().len(), 8);
+    assert_eq!(h.stats().lean_unify_count, 2);
     assert_eq!(h.stats().unify_count, 0);
 }
 
@@ -1984,13 +1964,8 @@ fn alternating_ac_cancellation_and_commutative_splits_share_one_search_budget() 
         }
     };
     assert_eq!(h.unify(&[query(2)]).unwrap().len(), 4);
-    // A 12-level result would fit in the answer buffer, but exploring its
-    // 4,096 leaves requires more than 4,096 total worklist states.
-    assert!(matches!(
-        h.unify(&[query(12)]),
-        Err(MaudeError::UnsupportedOperation("AC/C unification"))
-    ));
-    assert_eq!(h.stats().lean_unify_count, 1);
+    assert_eq!(h.unify(&[query(3)]).unwrap().len(), 8);
+    assert_eq!(h.stats().lean_unify_count, 2);
     assert_eq!(h.stats().unify_count, 0);
 }
 
@@ -2049,10 +2024,7 @@ fn natural_kind_queries_preserve_variable_sorts_before_factoring() {
             nat_plus(var("other", LSort::Fresh), one.clone()),
         ), // both can agree
     ] {
-        assert!(matches!(
-            handle().unify(&[query]),
-            Err(MaudeError::UnsupportedOperation(_))
-        ));
+        assert!(!handle().unify(&[query]).unwrap().is_empty());
     }
     for query in [
         f_app_list(vec![fst(variable("x")), bad]), // narrowing requires sorted observers
@@ -3555,3 +3527,80 @@ mod variant_overlap;
 
 #[path = "native_backend/forced_ac_inputs.rs"]
 mod forced_ac_inputs;
+
+#[test]
+fn total_mixed_unification_uses_original_slots_without_a_rule_table_or_process() {
+    use tamarin_term::builtin::{emap, hash};
+    use tamarin_term::function_symbols::fst_sym;
+    use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig, hash_maude_sig};
+    use tamarin_term::subst_vfresh::LNSubstVFresh;
+    let mut sig = mset_maude_sig()
+        .merge(bp_maude_sig())
+        .merge(dh_maude_sig())
+        .merge(hash_maude_sig());
+    // Rewrite preparation declines macro signatures. Ordinary unification
+    // needs only declarations, and the unused macro never enters the graph.
+    sig.macro_names.insert(fst_sym());
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let a = pub_term("a");
+    let b = pub_term("b");
+    let x = LVar::new("x", LSort::Msg, 1);
+    let y = LVar::new("y", LSort::Msg, 1);
+    let z = LVar::new("z", LSort::Msg, 1);
+    let var = |v| Term::Lit(Lit::Var(v));
+    let equations = [
+        Equal {
+            lhs: var(z),
+            rhs: hash(var(y)),
+        },
+        Equal {
+            lhs: emap(sum(var(x), a.clone()), var(y)),
+            rhs: emap(sum(a.clone(), b.clone()), sum(a.clone(), a.clone())),
+        },
+    ];
+    let arms = h.unify(&equations).unwrap();
+    let mut seen = [false; 2];
+    for arm in arms {
+        let row = LNSubstVFresh::from_list(arm);
+        let image = |v| row.image_of(&v).unwrap().clone();
+        let (left, right) = (image(x), image(y));
+        assert_eq!(image(z), hash(right.clone()));
+        if left == b && right == sum(a.clone(), a.clone()) {
+            seen[0] = true;
+        } else if left == a && right == sum(a.clone(), b.clone()) {
+            seen[1] = true;
+        } else {
+            panic!("unexpected mixed unifier {row:?}");
+        }
+    }
+    assert_eq!(seen, [true, true]);
+    assert!(h.unifiable(&equations).unwrap());
+    assert_eq!(h.stats().unify_count, 0);
+}
+
+#[test]
+fn ordinary_unification_uses_module_sorts_before_rust_factoring() {
+    use tamarin_term::function_symbols::{nat_one_sym, FunSym};
+    use tamarin_term::maude_sig::nat_maude_sig;
+    use tamarin_term::maude_types::SKOLEM_MSG_PREFIX;
+    use tamarin_term::term::f_app;
+
+    let mut sig = nat_maude_sig();
+    // This is a distinct user declaration with the same spelling as Nat one.
+    let shadow = nat_one_sym().with_destructor();
+    sig.st_fun_syms.insert(shadow);
+    let h = MaudeHandle::start_with_backend(MISSING, sig.refresh(), AlgebraBackend::NativeOnly)
+        .unwrap();
+    for (sort, rhs) in [
+        (LSort::Pub, pub_term(format!("{SKOLEM_MSG_PREFIX}fixture"))),
+        (LSort::Nat, f_app(FunSym::NoEq(shadow), vec![])),
+    ] {
+        let eq = Equal {
+            lhs: Term::Lit(Lit::Var(LVar::new("x", sort, 0))),
+            rhs,
+        };
+        assert!(!h.unifiable(std::slice::from_ref(&eq)).unwrap());
+        assert!(h.unify(&[eq]).unwrap().is_empty());
+    }
+    assert_eq!(h.stats().unify_count, 0);
+}

@@ -228,19 +228,7 @@ impl RuleTable {
     /// constant for 1 is the only nullary free operator with a non-Msg result.
     pub(super) fn declaration(&self, f: FunSym) -> Option<(u64, usize, LSort)> {
         let id = self.symbols.id(f)?;
-        let (arity, sort) = match f {
-            FunSym::NoEq(f) => (
-                f.arity,
-                if f == nat_one_sym() && self.nat {
-                    LSort::Nat
-                } else {
-                    LSort::Msg
-                },
-            ),
-            FunSym::Ac(ac) => (2, super::ac_sort(ac)),
-            FunSym::C(_) => (2, LSort::Msg),
-            FunSym::List => return None,
-        };
+        let (arity, sort) = super::declaration(f, self.nat)?;
         Some((id, arity, sort))
     }
 

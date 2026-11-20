@@ -1,6 +1,9 @@
 //! Submit equations as a shared graph. Lean counts operands for homogeneous AC
 //! systems and checks identity, closed clashes, and incompatible variable-image
 //! sizes on the original equation roots.
+mod total;
+pub(crate) use total::unify as total_unify;
+
 use super::homogeneous::ProjectedAnswers;
 use super::{ac_sort, initialize, sort_word, Error, Outcome, RuleTable, WordSlice, LEAN_THREAD};
 use crate::function_symbols::{AcSym, FunSym};
@@ -35,54 +38,88 @@ impl Packet {
         if let Some(&id) = self.nodes.get(row) {
             return id;
         }
-        let id = self.nodes.len() as u64; // <= MAX_NODES
+        let id = self.nodes.len() as u64;
         self.nodes.insert(row.into(), id);
         id
     }
 
-    fn term(&mut self, table: &RuleTable, term: &LNTerm, depth: usize) -> Option<u64> {
-        self.expanded += 1;
-        if self.expanded > MAX_NODES || depth > MAX_DEPTH {
-            return None;
+    fn term(&mut self, table: &RuleTable, term: &LNTerm) -> Option<u64> {
+        self.encode_term(
+            term,
+            true,
+            |sort| table.declares_sort(sort),
+            |f| table.declaration(f).map(|(_, arity, sort)| (arity, sort)),
+        )
+    }
+
+    // Children precede their parents in the graph. The bounded kernels charge
+    // expanded visits, while the total reference accepts the entire query.
+    fn encode_term(
+        &mut self,
+        term: &LNTerm,
+        bounded: bool,
+        declares: impl Fn(crate::lterm::LSort) -> bool,
+        declaration: impl Fn(FunSym) -> Option<(usize, crate::lterm::LSort)>,
+    ) -> Option<u64> {
+        enum Visit<'a> {
+            Term(&'a LNTerm, usize),
+            Finish(u64, u64, usize),
         }
-        let (f, children) = match term {
-            Term::Lit(lit) => {
-                let (kind, id, sort) = match lit {
-                    Lit::Var(v) => (0, self.variables.intern(*v)?, v.sort),
-                    Lit::Con(n) => (1, self.names.intern(*n)?, sort_of_name(n)),
-                };
-                return table
-                    .declares_sort(sort)
-                    .then(|| self.node(&[kind, id, sort_word(sort)]));
+        let mut work = vec![Visit::Term(term, 0)];
+        let mut values = Vec::new();
+        while let Some(visit) = work.pop() {
+            match visit {
+                Visit::Finish(kind, symbol, count) => {
+                    let start = values.len() - count;
+                    let mut node = Vec::with_capacity(count + 2);
+                    node.extend([kind, symbol]);
+                    node.extend(values.drain(start..));
+                    values.push(self.node(&node));
+                }
+                Visit::Term(term, depth) => {
+                    self.expanded += 1;
+                    if bounded && (self.expanded > MAX_NODES || depth > MAX_DEPTH) {
+                        return None;
+                    }
+                    match term {
+                        Term::Lit(lit) => {
+                            let (kind, id, sort) = match lit {
+                                Lit::Var(v) => (0, self.variables.intern(*v)?, v.sort),
+                                Lit::Con(n) => (1, self.names.intern(*n)?, sort_of_name(n)),
+                            };
+                            if !declares(sort) {
+                                return None;
+                            }
+                            values.push(self.node(&[kind, id, sort_word(sort)]));
+                        }
+                        Term::App(f, children) => {
+                            let (arity, output) = declaration(*f)?;
+                            let kind = match f {
+                                FunSym::NoEq(_) if children.len() == arity => 2,
+                                FunSym::C(_) if children.len() == 2 => 3,
+                                FunSym::Ac(_) if children.len() >= 2 => 4,
+                                _ => return None,
+                            };
+                            if bounded && children.len() > MAX_NODES - self.expanded {
+                                return None;
+                            }
+                            let id = if let Some(id) = self.symbols.id(*f) {
+                                id
+                            } else {
+                                let id = self.symbols.intern(*f)?;
+                                let sort = sort_word(output);
+                                self.declarations.extend([kind, id, arity as u64, sort]);
+                                self.declarations.extend(std::iter::repeat_n(sort, arity));
+                                id
+                            };
+                            work.push(Visit::Finish(kind, id, children.len()));
+                            work.extend(children.iter().rev().map(|t| Visit::Term(t, depth + 1)));
+                        }
+                    }
+                }
             }
-            Term::App(f, children) => (*f, children),
-        };
-        let (_, arity, output) = table.declaration(f)?;
-        let kind = match f {
-            FunSym::NoEq(_) if children.len() == arity => 2,
-            FunSym::C(_) if children.len() == 2 => 3,
-            FunSym::Ac(_) if children.len() >= 2 => 4,
-            _ => return None,
-        };
-        if children.len() > MAX_NODES - self.expanded {
-            return None;
         }
-        let id = if let Some(id) = self.symbols.id(f) {
-            id
-        } else {
-            let id = self.symbols.intern(f)?;
-            let sort = sort_word(output);
-            self.declarations.extend([kind, id, arity as u64, sort]);
-            self.declarations.extend(std::iter::repeat_n(sort, arity));
-            id
-        };
-        let mut row = Vec::with_capacity(children.len() + 2);
-        row.extend([kind, id]);
-        for child in children.iter() {
-            row.push(self.term(table, child, depth + 1)?);
-        }
-        let next = self.nodes.len() as u64;
-        Some(*self.nodes.entry(row.into_boxed_slice()).or_insert(next))
+        values.pop()
     }
 
     fn roots<'a>(
@@ -93,8 +130,7 @@ impl Packet {
         let mut roots = Vec::new();
         for (lhs, rhs) in equations {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-            let (Some(lhs), Some(rhs)) = (self.term(table, lhs, 0), self.term(table, rhs, 0))
-            else {
+            let (Some(lhs), Some(rhs)) = (self.term(table, lhs), self.term(table, rhs)) else {
                 return Ok(None);
             };
             roots.extend([lhs, rhs]);
@@ -367,8 +403,8 @@ impl RuleTable {
         for (&v, image) in factor.iter() {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
             let (Some(key), Some(value)) = (
-                packet.term(self, &Term::Lit(Lit::Var(v)), 0),
-                packet.term(self, image, 0),
+                packet.term(self, &Term::Lit(Lit::Var(v))),
+                packet.term(self, image),
             ) else {
                 return Ok(Outcome::Unsupported);
             };

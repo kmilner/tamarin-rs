@@ -38,25 +38,29 @@ fn check_native(columns: &[Column], expected: bool) {
         let h = native();
         assert_eq!(h.unifiable(&rows).unwrap(), expected);
         let full = native();
-        match full.unify(&rows) {
-            Ok(arms) => {
-                assert_eq!(!arms.is_empty(), expected);
-                let inputs: Vec<_> = (0..columns.len())
-                    .map(|i| LVar::new("v", LSort::Msg, i as u64))
-                    .collect();
-                for arm in arms {
-                    let subst = tamarin_term::subst_vfresh::LNSubstVFresh::from_list(arm)
-                        .fresh_to_free_avoiding_vars(&inputs);
-                    for eq in &rows {
-                        assert_eq!(
-                            tamarin_term::subst::apply_vterm(&subst, eq.lhs.clone()),
-                            tamarin_term::subst::apply_vterm(&subst, eq.rhs.clone())
-                        );
-                    }
-                }
+        if expected {
+            // Verify the concrete positive witness on the original conjunction.
+            // Asking for all unifiers of this 47-column matrix exhaustively
+            // enumerates its generator selections in the total reference.
+            let atom: LNTerm = pub_term("witness");
+            let bindings: Vec<_> = (0..columns.len())
+                .map(|i| {
+                    let v = LVar::new("v", LSort::Msg, i as u64);
+                    (
+                        v,
+                        f_app_ac(AcSym::Union, vec![atom.clone(); if i < 2 { 45 } else { 2 }]),
+                    )
+                })
+                .collect();
+            let subst = tamarin_term::subst::Subst::from_list(bindings);
+            for eq in &rows {
+                assert_eq!(
+                    tamarin_term::subst::apply_vterm(&subst, eq.lhs.clone()),
+                    tamarin_term::subst::apply_vterm(&subst, eq.rhs.clone())
+                );
             }
-            Err(MaudeError::UnsupportedOperation("AC/C unification")) if expected => {}
-            Err(err) => panic!("full AC unification failed: {err}"),
+        } else {
+            assert!(full.unify(&rows).unwrap().is_empty());
         }
         assert_eq!(full.stats().unify_count, 0);
         assert_eq!(h.stats().unify_count, 0);

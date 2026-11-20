@@ -9,10 +9,11 @@ Maude comparisons check compatibility and expose discrepancies. Where a concrete
 Maude missed a variant, native-only must retain that witness. A three-rule regression exercises
 both the reachable trace and the false universal lemma. [Theory](../crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy) · [Verdict test](../crates/tamarin-prover/tests/native_backend.rs)
 
-The Lean reference now computes a complete family for every ordinary free/C/AC unification query.
-All four reference operations are available together for signatures with an empty rewrite table.
-Complete one-step narrowing for active rewrite tables remains the main reference gap.
-Rust still uses partial native paths for all four commands.
+Native-only ordinary unification now calls the total Lean solver when the existing kernels
+defer. The Lean reference also supplies all four operations for a finite, range-restricted,
+canonical rewrite table with the finite variant property. Establishing these properties for
+Tamarin’s active tables and integrating the general matcher, reducer and variant search into
+Rust remain on the roadmap. [Active-table reference](Tamarin/CompleteNarrowing.lean)
 
 ## Run the experimental backend
 
@@ -101,6 +102,16 @@ child contributes its full multiplicity. For residual worklist equations, Rust s
 of each operand occurrence and retains the corresponding terms locally. Lean validates and counts
 the IDs. Rust reconciles every returned arm with the original operands and pending equations
 before reporting a complete result.
+If the bounded paths defer, native-only sends the original equation roots to the total export.
+Hybrid also uses it for existence queries. Ordered hybrid enumeration retains Maude as its
+fallback. The total export accepts arity-correct kind-level trees. It returns one numeric
+row per input variable per answer, with term constructors in postfix order. Rust checks
+the row structure, symbol identities, arities and image sorts and gives each answer its
+own fresh witnesses. Lean proves that the resulting family covers substitutions containing
+additional symbols from the caller’s signature and that removing Nat witnesses is sound for
+modules without Nat. The exhaustive search can be expensive for large answer families.
+[Packet contract](Tamarin/TotalUnifyPacket.lean) · [Signature extension](Tamarin/SignatureExtension.lean) · [Sort restriction](Tamarin/UnavailableSort.lean) · [Rust decoder](../crates/tamarin-term/src/lean_unification/whole/total.rs)
+
 For an operand query of 2–64 equations, Lean selects row indices using the original
 pairs of root IDs. It discards identities and keeps one occurrence of each remaining
 equation up to symmetry. A second pass compares equalities inside a shared free or AC context
@@ -171,11 +182,10 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 
 | Operation | Native coverage today | Remaining completeness work |
 | --- | --- | --- |
-| Free and C unification | Free factoring, binary C branching, identities and ground clashes. Residual steps check heads, operands, bindings, sorts and occurrences against the pending conjunction. | The mixed reference covers every free/C conjunction, including shared variables with AC operators. Connect its sorted answers to Rust. |
-| Simultaneous AC unification | Shares operands across nested systems and combines independent groups with disjoint witnesses. Full enumeration supports bounded bases through 64 variables and some single-witness families through 65. Boolean decisions include rank at most two, width at most three, and larger systems with certificates or identical columns. | The mixed reference implements `VerifiedUnifier` for all arity-correct conjunctions over any finite set of AC heads used in the query. Connect the total solver to Rust. |
+| Ordinary free/C/AC unification | Native-only has a complete fallback for declared arity-correct terms, including mixtures of several AC heads, free and commutative symbols, and kind-level inputs. Existing decision and enumeration kernels still run first. | Extend end-to-end checks of the Rust representation and answer ordering before general deployment. |
 | Directional matching | Matches nested free/C/AC terms, including repeated or shared captures. Boolean queries use factor counts and full queries can page through the answer family. | The total Lean matcher handles all arity-correct conjunctions independently of unification. Connect that reference to Rust and establish first-match behavior on ambiguous queries. [Reference matcher](Tamarin/ReferenceMatching.lean) · [Alternative via unification](Tamarin/MatchViaUnification.lean) |
 | Reduction | Bounded graphs cover root and argument rewrites and proper AC subproducts. Other paths cover projected or erased arguments, independent factors, positional destructors, cancellation and DH powers and products. | Lean enumerates every live rewrite at every position, including proper AC subproducts. The driver is total for convergent sort-preserving tables. Connect its equation table and results to Rust, or prove the existing graph traversal equivalent. [Reference steps](Tamarin/ReferenceReduction.lean) · [Reduction driver](Tamarin/ReduceViaSteps.lean) |
-| Variants | Finite narrowing frontiers cover free/C/AC heads and proper subproducts. Shared input images survive child joins and free-root contraction. Overlap checks cover free paths and signed AC consequences. Specialized paths include cancellation, destructors, signed DH products, powers, scalar actions and pairing. | The general Lean driver terminates under the finite variant property given sound, complete one-step narrowing. Implement that local narrower over the active tables, establish their presentation properties and connect the driver to Rust. Verify decoding and observable ordering at the adapter. [Folding search](Tamarin/FoldingNarrowing.lean) · [Frontier checker](Tamarin/ReferenceVariantFrontier.lean) |
+| Variants | Finite narrowing frontiers cover free/C/AC heads and proper subproducts. Shared input images survive child joins and free-root contraction. Overlap checks cover free paths and signed AC consequences. Specialized paths include cancellation, destructors, signed DH products, powers, scalar actions and pairing. | The general Lean narrower covers every position and proper AC subproduct. Establish the active tables’ presentation properties, connect the general driver to Rust and verify observable ordering. |
 
 **AC reference.** The homogeneous solver is total for any finite system of variable products
 at one AC head when every variable has the operator’s sort. For arbitrary sorted operands,
@@ -226,7 +236,7 @@ must preserve all untouched slots and input images. Rejection leaves the query u
 This certificate checks individual concrete steps. The total reference follows Maude’s
 separate strategy of normalizing the seed and newly narrowed tuples before comparing variants.
 [Tuple closure proof](Tamarin/TupleNarrowingFrontier.lean) · [Certified checker](Tamarin/ReferenceVariantFrontier.lean) · [Maude expansion and reduction](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantSearch.cc#L397-L490)
-[Reference instances](Tamarin/MaudeOperationRefinements.lean) · [Pairing table correspondence](Tamarin/PairingRewriting.lean#L37) · [CI export theorem](TamarinCI.lean#L1034)
+[Reference instances](Tamarin/MaudeOperationRefinements.lean) · [Pairing table correspondence](Tamarin/PairingRewriting.lean#L37) · [CI export theorem](TamarinCI.lean#L1063)
 
 **Termination of variant search.** A local narrower must prove that each branch replays one
 rewrite and that some branch covers every concrete step exposed by specializing a symbolic term.
@@ -236,11 +246,13 @@ that every actual normal result has a representative at a finite depth. Applying
 covering family proves that a breadth-first layer will eventually be covered by earlier or current
 rows. The reference tests subsumption at layer boundaries and permits redundant rows, as Tamarin’s
 plain command does. It needs no depth bound or supplied set of expected answers.
-A final renaming protects the caller’s scope across bindings and values. The local root search already uses the ordinary unifier, including standardizing each rule
-apart and retaining the other tuple slots. Adding AC remainder rules covers proper subproducts
-of well-sorted specialized products. Completing local narrowing still requires a certified
-traversal of all positions and coverage for remainders in kind-level products. The active table
-must also satisfy the presentation assumptions.
+A final renaming protects the caller’s scope across bindings and values. Root search
+standardizes each rule apart and uses the total ordinary unifier. Positional narrowing
+preserves untouched siblings, tuple values and input images under one shared substitution.
+For a proper AC subproduct, the narrower can retain whole unsorted factors in their source
+context and abstract the remaining sorted factors with a fresh variable. This covers kind-level
+inputs as well as well-sorted products. [Position proof](Tamarin/TablePositions.lean) ·
+[AC remainder proof](Tamarin/KindACNarrowing.lean) · [Four-command assembly](Tamarin/CompleteNarrowing.lean)
 [Local root search](Tamarin/TableNarrowing.lean) · [Local obligations and command implementation](Tamarin/FoldingNarrowing.lean) · [Finite variant property to finite search](Tamarin/VariantSaturation.lean) · [Breadth-first loop](Tamarin/VariantLayers.lean) · [Rewrite heights](Tamarin/ReductionHeight.lean) · [Freshening](Tamarin/VariantFreshening.lean)
 
 ### Specification-generated coverage
@@ -256,7 +268,7 @@ free hash and XOR with the same hash. The test exercises all four public operati
 including shared captures in conjunctions and packed variant observations. Lean marks
 mandatory cases from constructor normality, incompatible matching heads and ground AC
 multiset equality. CI fails if native-only defers one of those cases or returns an answer
-that contradicts the expectation. Every reduction in the bounded grammar must complete.
+that contradicts the expectation. Every reduction and ordinary unification in the bounded grammar must complete.
 The generated set has bounded term size and answer multiplicity. Separate regressions
 exercise larger families. Matching three distinct variables against eight distinct AC factors
 returns all 5,796 substitutions. With two variables and 64 distinct factors, existence
@@ -297,7 +309,7 @@ the three rules at `pmult` and `emap`, with joint comparisons of bindings and
 normal values. Native-only completes the unrestricted two-variable families for
 both operations (47 and 48 Maude rows). All 47 bilinear variant queries are mandatory,
 including a pairing of two point actions with 336 variants. The seventh presentation uses Nat-sorted variables and positive integer partitions across all four operations.
-All 24,744 requests complete (16,476 mandatory and 8,268 exploratory). [Bilinear family proof](Tamarin/BilinearRows.lean)
+All 24,744 requests complete (22,916 mandatory and 1,828 exploratory), including all 6,861 ordinary unifications. [Bilinear family proof](Tamarin/BilinearRows.lean)
 The report prints the smallest deferred request per operation and compares it with Maude
 when `MAUDE_PATH` is set.
 The report counts syntactic requests in this bounded grammar. Protocol regressions

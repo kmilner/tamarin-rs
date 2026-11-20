@@ -59,7 +59,7 @@ fn build_lean_backend() {
         println!("cargo:rerun-if-changed={}", lean_dir.join(source).display());
     }
 
-    // Local builds compile only the runtime candidate. The required CI job
+    // Local builds compile the runtime candidate and its imports. The required CI job
     // builds TamarinCI, which checks this exact candidate/export pair against
     // the fixed semantic contract and audits executable replacements.
     let archive_output = checked_output(
@@ -73,7 +73,52 @@ fn build_lean_backend() {
         archive.is_file(),
         "Lake did not return a native archive: {archive_text}"
     );
-    std::fs::copy(archive, out_dir.join("libtamarin_lean_runtime.a")).unwrap();
+    let runtime_archive = out_dir.join("libtamarin_lean_runtime.a");
+    std::fs::copy(archive, &runtime_archive).unwrap();
+
+    // Lake's library archive contains only modules owned by TamarinRuntime.
+    // Include precisely the imported reference modules and track their source
+    // files for Cargo. The proof-only CI target stays outside the runtime.
+    let imports = checked_output(
+        Command::new(&lake)
+            .current_dir(&lean_dir)
+            .args(["query", "+TamarinRuntime:transImports"]),
+    );
+    let imports = String::from_utf8(imports.stdout).expect("Lake module names are UTF-8");
+    let mut targets = Vec::new();
+    for module in imports.lines().filter(|m| m.starts_with("Tamarin.")) {
+        println!(
+            "cargo:rerun-if-changed={}.lean",
+            lean_dir.join(module.replace('.', "/")).display()
+        );
+        targets.push(format!("+{module}:o"));
+    }
+    if !targets.is_empty() {
+        let objects = checked_output(
+            Command::new(&lake)
+                .current_dir(&lean_dir)
+                .arg("query")
+                .args(&targets),
+        );
+        let objects = String::from_utf8(objects.stdout).expect("Lake object paths are UTF-8");
+        let paths: Vec<_> = objects.lines().collect();
+        assert_eq!(paths.len(), targets.len(), "missing Lean reference object");
+        // ar and rustc identify members by basename. For example both
+        // Tamarin.ACBasis and TamarinRuntime.ACBasis compile to ACBasis.c.o.
+        let mut ar = Command::new("ar");
+        ar.arg("qs").arg(&runtime_archive);
+        for (target, object) in targets.iter().zip(paths) {
+            let module = target
+                .strip_prefix('+')
+                .unwrap()
+                .strip_suffix(":o")
+                .unwrap();
+            let named = out_dir.join(format!("{module}.o"));
+            std::fs::copy(object, &named).unwrap();
+            ar.arg(named);
+        }
+        checked_output(&mut ar);
+    }
 
     let prefix_output = checked_output(Command::new(&lake).current_dir(&lean_dir).args([
         "env",

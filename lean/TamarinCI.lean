@@ -1,4 +1,7 @@
 import Tamarin
+import Tamarin.TotalUnifyPacket
+import Tamarin.SignatureExtension
+import Tamarin.UnavailableSort
 import Tamarin.ACMatchPacket
 import Tamarin.ACMatchAnswerPacket
 import Tamarin.ACPagePacket
@@ -28,6 +31,32 @@ theorem referenceMixed_total {s : Signature}
     ∃ answers, MixedUnification.unify? p avoid = some answers ∧
       (Outcome.complete answers).CorrectIn p avoid :=
   ⟨_,rfl,MixedUnification.unify_correct rfl⟩
+
+/-- Every representable, arity-correct query yields a fully decoded complete
+family on its declared signature. Malformed input has a separate status. -/
+theorem exportedTotalUnify_correct : TotalUnifyWire.Packet.Correct Executable.totalUnify :=
+  TotalUnifyWire.Packet.correct
+
+/-- The active-table reference supplies all four operations. Its hypotheses
+are properties of the presentation emitted by the caller. -/
+def referenceActiveTable {s : Signature}
+    [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+    (rules : List (Equation s)) (bound : ReferenceReduction.Bound rules)
+    (canonical : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot rules))
+    (finite : MaudeOperations.FiniteVariantProperty (Rewriting.ruleRoot rules)) :
+    MaudeOperations.Reference s rules := TableNarrowing.reference bound canonical finite
+
+/-- The packet dictionary may contain only the query's symbols. Every
+representable query still covers caller solutions involving other symbols. -/
+theorem exportedTotalUnify_ambient {ds ns es d p}
+    (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩)
+    (fits : TotalUnifyWire.Packet.Representable p ((MixedUnification.verified (s := d.sig)).solve p trivial [])) :
+    ∃ answers, TotalUnifyWire.Packet.Decodes p (Executable.totalUnify ds ns es) answers ∧
+      ∀ extra : Signature, (Outcome.complete (answers.map (SignatureExtension.liftSubst extra))).CorrectIn
+        (SignatureExtension.query extra p) [] := by
+  rcases exportedTotalUnify_correct.valid _ _ _ _ _ decoded with ⟨answers,hp,ok⟩ | ⟨_,bad⟩
+  · exact ⟨answers,hp,fun extra => SignatureExtension.correctIn extra p [] ok⟩
+  · exact (bad fits).elim
 
 theorem referenceOperandSplit_correct {s : Signature} [DecidableEq s.ACSym] [DecidableEq (Term s)]
     (f : s.ACSym) (selected pending : Problem s) (hs : OperandBatch.Reference.SortedAt f selected)
@@ -1144,6 +1173,7 @@ run_cmd do
     (``Tamarin.Executable.sortedACMatch, `tamarin_sorted_ac_match),
     (``Tamarin.Executable.flatACMatch, `tamarin_flat_ac_match),
     (``Tamarin.Executable.homogeneousUnify, `tamarin_homogeneous_unify),
+    (``Tamarin.Executable.totalUnify, `tamarin_total_unify),
     (``Tamarin.Executable.wholeUnify, `tamarin_whole_unify),
     (``Tamarin.Executable.variantOverlapAgrees, `tamarin_variant_overlap_agrees),
     (``Tamarin.Executable.checkFactors, `tamarin_check_factors),
