@@ -130,7 +130,7 @@ private theorem map_exists {α β : Type} (f : α → Option β) (xs : List α)
     obtain ⟨ys,hy⟩ := ih (fun a ha => ok a (List.mem_cons_of_mem _ ha))
     exact ⟨y::ys,by simp [h,hy]⟩
 
-private theorem fits_write (t : Term d.sig) (ok : FieldsFit t) : ∃ ts, write t = some ts := by
+theorem fits_write (t : Term d.sig) (ok : FieldsFit t) : ∃ ts, write t = some ts := by
   induction t with
   | var v => simp [write,WordEncoding.pack,show v.id < UInt64.size from ok]
   | atom a => exact ⟨_,rfl⟩

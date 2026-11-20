@@ -190,29 +190,48 @@ private theorem fromInputs (query : Fin n → Term s) (p : Point s n) (bound : R
     row.project_key (fun k => p.assignment.sorted k.val) ⟨v,key⟩
   exact ⟨⟨v,key⟩,same ▸ hw⟩
 
-/-- Supply the AC-subproduct search once. Every source position, including all
-sibling observations and variables introduced by earlier unification, is then
-covered for each admissible specialization of a tuple point. -/
-def positional [DecidableEq s.ACSym] (u : VerifiedUnifier s (fun _ => True))
-    (bound : ReferenceReduction.Bound rules) (groups : Groups rules) (query : Fin n → Term s) :
-    FoldingNarrowing.Narrower rules query := by
-  let keys := keysOf query
+/-- A symbolic value must derive every one of its variables from the
+observed input images. This can be checked directly on a raw narrowing
+frontier, including intermediate values which still have rewrites. -/
+def Tracked (keys : List Variable) (p : Point s n) : Prop :=
+  ∀ i w, (p.value i).Occurs w → ∃ k : Key keys, (p.assignment.image k.val).Occurs w
+
+structure TrackedSteps (rules : List (Equation s)) (keys : List Variable) (p : Point s n) where
+  branches : Fin n → List (Branch s)
+  genuine : ∀ i b, b ∈ branches i → StepModulo (ruleRoot rules) (b.subst.apply (p.value i)) b.value
+  covers : Tracked keys p → ∀ i,
+    RootNarrowing.Search (ruleRoot rules) (p.row keys).Uses
+      (fun δ => ∀ k : Key keys, Normal (ruleRoot rules) (δ.apply (p.assignment.image k.val)))
+      (p.value i) (· ∈ branches i)
+
+def atPoint [DecidableEq s.ACSym] (u : VerifiedUnifier s (fun _ => True))
+    (bound : ReferenceReduction.Bound rules) (groups : Groups rules) (keys : List Variable) (p : Point s n) :
+    TrackedSteps rules keys p := by
   -- The branch list is independent of admissibility and its proof. Construct
   -- it with specialization restricted to assignments normal on all anchors.
   let admiss (p : Point s n) (ρ : Substitution s) := ∀ w, Observed (anchors p keys) w →
     Normal (ruleRoot rules) (ρ.image w)
   let run (p : Point s n) (i : Fin n) := walk u bound groups (anchors p keys) (admiss p)
     (fun _ h => h) (p.value i) (fun w h => (anchors_iff p keys w).mpr (.inr ⟨i,h⟩))
-  refine ⟨fun p i => (run p i).branches,fun p _ i => (run p i).genuine,?_⟩
-  intro p hp i ρ ok v step
+  refine ⟨fun i => (run p i).branches,fun i => (run p i).genuine,?_⟩
+  intro tracks i ρ ok v step
   have norm : admiss p ρ := by
     intro w hw
     have live := (anchors_iff p keys w).mp hw
     rcases live with ⟨k,hm⟩|⟨j,hm⟩
     · exact RulePattern.image_normal (ok k) hm
-    · obtain ⟨k,hk⟩ := fromInputs query p bound hp j w hm
+    · obtain ⟨k,hk⟩ := tracks j w hm
       exact RulePattern.image_normal (ok k) hk
   obtain ⟨b,hb,η,agree,out⟩ := (run p i).covers ρ norm v step
   exact ⟨b,hb,η,fun w h => agree w ((anchors_iff p keys w).mpr h),out⟩
+
+/-- The verified folded search obtains tracking from the reachability proof
+of each normalized point. -/
+def positional [DecidableEq s.ACSym] (u : VerifiedUnifier s (fun _ => True))
+    (bound : ReferenceReduction.Bound rules) (groups : Groups rules) (query : Fin n → Term s) :
+    FoldingNarrowing.Narrower rules query where
+  branches p := (atPoint u bound groups (keysOf query) p).branches
+  genuine p _ := (atPoint u bound groups (keysOf query) p).genuine
+  lifts p hp := (atPoint u bound groups (keysOf query) p).covers (fromInputs query p bound hp)
 
 end Tamarin.TableNarrowing

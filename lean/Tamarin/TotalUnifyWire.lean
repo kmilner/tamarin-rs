@@ -17,7 +17,7 @@ def sortOf (n : UInt64) : SortId :=
 
 theorem sortOf_code (s : SortId) : sortOf (sortCode s) = s := by cases s <;> decide
 
-private def decl (ds : List Decl) (k id : UInt64) :=
+def decl (ds : List Decl) (k id : UInt64) :=
   ds.find? (fun d => d.kind == k && d.id == id)
 
 abbrev Symbol (ds : List Decl) (k : UInt64) := { id : UInt64 // (decl ds k id).isSome }
@@ -25,7 +25,7 @@ abbrev Symbol (ds : List Decl) (k : UInt64) := { id : UInt64 // (decl ds k id).i
 private def resolve (ds : List Decl) (k id : UInt64) : Option (Symbol ds k) :=
   if h : (decl ds k id).isSome then some ⟨id,h⟩ else none
 
-private def info {ds k} (f : Symbol ds k) := (decl ds k f.val).get f.property
+def info {ds k} (f : Symbol ds k) := (decl ds k f.val).get f.property
 
 structure Dictionary where
   decls : List Decl
@@ -69,7 +69,7 @@ def app (d : Dictionary) (k id : UInt64) (children : List (Term d.sig)) :
     return .ac f l (ACRepresentation.fold f r rs)
   else none
 
-private def node (d : Dictionary) (prior : Array (Term d.sig)) (row : Array UInt64) := do
+def node (d : Dictionary) (prior : Array (Term d.sig)) (row : Array UInt64) := do
   let k :: id :: tail := row.toList | none
   if k ≤ 1 then
     let [arg] := tail | none
@@ -77,19 +77,24 @@ private def node (d : Dictionary) (prior : Array (Term d.sig)) (row : Array UInt
   else
     app d k id (← tail.mapM (fun (i : UInt64) => prior[i.toNat]?))
 
-private def equations {s : Signature} (ts : Array (Term s)) : List UInt64 → Option (Problem s)
+def equations {s : Signature} (ts : Array (Term s)) : List UInt64 → Option (Problem s)
   | [] => some []
   | i :: j :: rest => do return ⟨← ts[i.toNat]?,← ts[j.toNat]?⟩ :: (← equations ts rest)
   | [_] => none
 
-def input (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
-    Option ((d : Dictionary) × Problem d.sig) := do
+def graph (decls : Array UInt64) (nodes : Array (Array UInt64)) :
+    Option ((d : Dictionary) × Array (Term d.sig)) := do
   let ds ← declarations decls.toList
   let atoms := nodes.toList.filterMap fun row => match row.toList with
     | [1,id,s] => some (id,sortOf s)
     | _ => none
   let d : Dictionary := ⟨ds,atoms.eraseDups⟩
   let ts ← nodes.foldlM (fun acc r => do return acc.push (← node d acc r)) #[]
+  return ⟨d,ts⟩
+
+def input (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
+    Option ((d : Dictionary) × Problem d.sig) := do
+  let ⟨d,ts⟩ ← graph decls nodes
   return ⟨d,← equations ts roots.toList⟩
 
 /-- Postorder triples. The third word is a sort for a leaf and a child

@@ -24,7 +24,7 @@ theorem instance_of_rows {run} (hc : RuleReduction.Correct run)
   obtain ⟨σ, agree⟩ := RuleReduction.consistent_substitution _ _ _ live typed consistent
   exact ⟨σ, left.instantiate σ agree, right.instantiate σ agree⟩
 
-private theorem occurs_apply (σ : Substitution sig) (t : Term sig) (v : Variable) :
+theorem occurs_apply (σ : Substitution sig) (t : Term sig) (v : Variable) :
     (σ.apply t).Occurs v ↔ ∃ w, t.Occurs w ∧ (σ.image w).Occurs v := by
   induction t with
   | var w => simp [Substitution.apply, Term.subst, Term.Occurs]

@@ -38,6 +38,27 @@ private theorem occurrence (t : Term s) {v : Variable} (occ : t.Occurs v) (σ : 
 def noNatWitness (p : Problem s) (σ : Substitution s) := p.variables.all fun v =>
   (σ.image v).variables.all (fun w => w.sort != .nat)
 
+/-- Substitution cannot erase an occurrence of a Nat variable modulo B.
+Any instance with Nat-free observed images therefore factors through a row
+with no Nat witness in any observed image. -/
+theorem clean_images (vs : List Variable) (ρ σ δ : Substitution s)
+    (clean : ∀ v ∈ vs, marked .nat (ρ.image v) = false)
+    (agree : ∀ v ∈ vs, EquivB (ρ.image v) (δ.apply (σ.image v))) :
+    vs.all (fun v => (σ.image v).variables.all (fun w => w.sort != .nat)) := by
+  refine List.all_eq_true.mpr (fun v hv => List.all_eq_true.mpr (fun w hw => ?_))
+  by_cases eq : w.sort = .nat
+  case neg => simpa using eq
+  exfalso
+  have sort := Term.rootSort_le (δ.sorted w)
+  rw [eq] at sort
+  have nat_only {k : SortId} (h : Subsort k .nat) : k = .nat := by cases h; rfl
+  have root := nat_only sort
+  have got := occurrence (σ.image v) ((Term.mem_variables ..).mp hw) δ .nat (root_marked _ _ root)
+  have same := (agree v hv).eval_eq (markers s .nat) (fun i => i.sort == .nat)
+  change marked .nat (ρ.image v) = marked .nat (δ.apply (σ.image v)) at same
+  rw [clean v hv,got] at same
+  contradiction
+
 /-- For any Nat-free caller solution the filtered family has exactly the same
 instance test. Dropping an arm with a Nat witness cannot hide a solution. -/
 theorem filterNat_iff (p : Problem s) {rows : List (Substitution s)} (hc : CompleteSet p rows)
@@ -47,20 +68,8 @@ theorem filterNat_iff (p : Problem s) {rows : List (Substitution s)} (hc : Compl
   constructor
   · rintro ⟨σ,hs,δ,agree⟩
     refine ⟨σ,List.mem_filter.mpr ⟨hs,?_⟩,δ,agree⟩
-    refine List.all_eq_true.mpr (fun v hv => List.all_eq_true.mpr (fun w hw => ?_))
-    have live := (p.mem_variables _).mp hv
-    by_cases eq : w.sort = .nat
-    case neg => simpa using eq
-    exfalso
-    have sort := Term.rootSort_le (δ.sorted w)
-    rw [eq] at sort
-    have nat_only {k : SortId} (h : Subsort k .nat) : k = .nat := by cases h; rfl
-    have root := nat_only sort
-    have got := occurrence (σ.image v) ((Term.mem_variables ..).mp hw) δ .nat (root_marked _ _ root)
-    have same := (agree v live).eval_eq (markers s .nat) (fun i => i.sort == .nat)
-    change marked .nat (ρ.image v) = marked .nat (δ.apply (σ.image v)) at same
-    rw [clean v live,got] at same
-    contradiction
+    exact clean_images p.variables ρ σ δ (fun v hv => clean v ((p.mem_variables _).mp hv))
+      (fun v hv => agree v ((p.mem_variables _).mp hv))
   · rintro ⟨σ,hm,agree⟩
     exact ⟨σ,(List.mem_filter.mp hm).1,agree⟩
 

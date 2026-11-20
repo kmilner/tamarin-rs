@@ -27,7 +27,7 @@ def embed (x : Signature) : Term s → Term (joined s x)
   | .comm f a b => .comm (.inl f) (embed x a) (embed x b)
   | .ac f a b => .ac (.inl f) (embed x a) (embed x b)
 
-private theorem embed_sort {t : Term s} {k} (h : HasSort t k) : HasSort (embed x t) k := by
+theorem embed_sort {t : Term s} {k} (h : HasSort t k) : HasSort (embed x t) k := by
   induction h with
   | var => exact .var _
   | atom => exact .atom _
@@ -36,7 +36,7 @@ private theorem embed_sort {t : Term s} {k} (h : HasSort t k) : HasSort (embed x
   | ac _ _ _ _ _ ih ik => exact .ac _ _ _ ih ik
   | widen _ h ih => exact .widen ih h
 
-private theorem embed_eq {a b : Term s} (h : EquivB a b) : EquivB (embed x a) (embed x b) := by
+theorem embed_eq {a b : Term s} (h : EquivB a b) : EquivB (embed x a) (embed x b) := by
   induction h with
   | refl => exact .refl _
   | symm _ ih => exact ih.symm
@@ -54,14 +54,14 @@ def liftSubst (x : Signature) (σ : Substitution s) : Substitution (joined s x) 
   outside v hv := by rw [σ.outside v hv]; rfl
   sorted v := embed_sort (σ.sorted v)
 
-private theorem embed_apply (t : Term s) (σ : Substitution s) :
+theorem embed_apply (t : Term s) (σ : Substitution s) :
     (liftSubst x σ).apply (embed x t) = embed x (σ.apply t) := by
   induction t with
   | var | atom => rfl
   | free f as ih => exact congrArg (Term.free (sig := joined s x) (.inl f)) (funext ih)
   | ac _ _ _ ih ik | comm _ _ _ ih ik => simp only [Substitution.apply,Term.subst,embed] at *; rw [ih,ik]
 
-private theorem embed_occurs (t : Term s) (v) : (embed x t).Occurs v ↔ t.Occurs v := by
+theorem embed_occurs (t : Term s) (v) : (embed x t).Occurs v ↔ t.Occurs v := by
   induction t with
   | var | atom => rfl
   | free _ _ ih => exact exists_congr (fun i => ih i)

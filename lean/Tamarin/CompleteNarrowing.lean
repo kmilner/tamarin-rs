@@ -31,17 +31,19 @@ theorem variablesNormal (canonical : CanonicalPresentation (ruleRoot rules)) :
 
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
 
+def groups (u : VerifiedUnifier s (fun _ => True)) (bound : ReferenceReduction.Bound rules)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) : Groups rules where
+  branches := KindACNarrowing.roots u bound
+  genuine := KindACNarrowing.roots_genuine u bound
+  covers := fun f a t ρ _ st => KindACNarrowing.roots_cover u bound vars f a t ρ st
+
 /-- Every specialized rewrite at an admissible tuple point has a genuine
 branch, with a single further substitution explaining all inputs and values. -/
 def narrower (bound : ReferenceReduction.Bound rules)
     (vars : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s) :
     FoldingNarrowing.Narrower rules query :=
   let u := NarrowingClash.unifier (MixedUnification.verified (s := s))
-  positional u bound {
-    branches := KindACNarrowing.roots u bound
-    genuine := KindACNarrowing.roots_genuine u bound
-    covers := fun f a t ρ _ st => KindACNarrowing.roots_cover u bound vars f a t ρ st
-  } query
+  positional u bound (groups u bound vars) query
 
 /-- All four commands over a range-restricted finite rewrite table.
 Canonicality and the finite variant property must hold on the admitted

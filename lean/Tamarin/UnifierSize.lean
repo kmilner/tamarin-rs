@@ -94,16 +94,20 @@ private theorem weighted_le (weight : Variable → Nat) (xs ys : List Variable)
     simp only [List.map_cons,List.sum_cons] at *
     omega
 
+/-- A strict size decrease stays strict after any sorted substitution when
+each variable occurs at most as often on the smaller side. -/
+theorem substituted_lt {a b : Term sig} (strict : nodes a < nodes b)
+    (counts : ∀ v, a.variables.count v ≤ b.variables.count v) (σ : Substitution sig) :
+    nodes (σ.apply a) < nodes (σ.apply b) := by
+  rw [substituted,substituted]
+  exact Nat.add_lt_add_of_lt_of_le strict (weighted_le _ _ _ counts)
+
 /-- Unequal initial sizes and componentwise variable multiplicities in the
 same direction give a contradiction for every substitution. In particular
 the inputs may share every variable and have no common top-level factors. -/
 theorem refutes {a b : Term sig} (strict : nodes a < nodes b)
     (counts : ∀ v, a.variables.count v ≤ b.variables.count v) (σ : Substitution sig) :
     ¬ EquivB (σ.apply a) (σ.apply b) := by
-  intro eq
-  have size := nodes_equiv eq
-  rw [substituted,substituted] at size
-  have := weighted_le (fun v => nodes (σ.image v) - 1) _ _ counts
-  omega
+  exact fun eq => (Nat.ne_of_lt (substituted_lt strict counts σ)) (nodes_equiv eq)
 
 end Tamarin.UnifierSize

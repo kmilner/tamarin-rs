@@ -105,15 +105,15 @@ private theorem inputs_iff {rules : List (Equation s)} (bound : ReferenceReducti
   simp only [inputsNormal,List.all_eq_true,normal_iff bound]
   exact ⟨fun h i => h i i.property,fun h v hv => h ⟨v,hv⟩⟩
 
-private def terminal (rules : List (Equation s)) (keys : List Variable) (p : Point s n) :=
+def terminal (rules : List (Equation s)) (keys : List Variable) (p : Point s n) :=
   inputsNormal rules keys p && (List.finRange n).all (fun i => normal rules (p.value i))
 
-private theorem terminal_iff {rules : List (Equation s)} (bound : ReferenceReduction.Bound rules)
+theorem terminal_iff {rules : List (Equation s)} (bound : ReferenceReduction.Bound rules)
     (keys : List Variable) (p : Point s n) :
     terminal rules keys p = true ↔ (p.row keys).IsNormal (ruleRoot rules) := by
   simp [terminal,inputs_iff bound,normal_iff bound,Row.IsNormal,Point.row]
 
-private def accounted (rules : List (Equation s)) (keys : List Variable) (states : List (Point s n))
+def accounted (rules : List (Equation s)) (keys : List Variable) (states : List (Point s n))
     (next : Point s n → List (Point s n)) :=
   states.all fun p => (next p).all fun r => !inputsNormal rules keys r ||
     states.any fun q => ReferenceVariantFolding.subsumes keys.attach (List.finRange n) (q.row keys) (r.row keys)
@@ -165,6 +165,53 @@ private theorem valid_answer {rules : List (Equation s)} (r : VerifiedReducer (r
     obtain ⟨i,rfl⟩ := List.mem_ofFn.mp hu
     exact ok.2 i w hw
 
+/-- Finite closure accounts for every normalized specialization of the
+whole tuple. Soundness and unique reconstruction of terminal rows can be
+checked separately, using only the reduction graphs of those rows. -/
+theorem covered {rules : List (Equation s)} (bound : ReferenceReduction.Bound rules)
+    (vars : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s)
+    (states : List (Point s n)) (seeded : seed query ∈ states) (next : Point s n → List (Point s n))
+    (steps : ∀ p ∈ states, Successors rules (p.row (keysOf query)) ((next p).map (Point.row · (keysOf query))))
+    (account : accounted rules (keysOf query) states next = true) :
+    let answers := (states.filter (terminal rules (keysOf query))).map (Point.answer · (keysOf query))
+    ∀ ρ, Normalized (ruleRoot rules) ρ → ∀ values,
+      Aligned (fun t u => NormalForm (ruleRoot rules) (ρ.apply t) u) (List.ofFn query) values →
+      ∃ a ∈ answers, ∃ η, Normalized (ruleRoot rules) η ∧
+        Substitution.AgreesOn (Observed (List.ofFn query)) ρ (η.compose a.subst) ∧
+        Aligned (fun u v => EquivB u (η.apply v)) values a.values := by
+  dsimp only
+  let keys := keysOf query
+  let rows := fun (ps : List (Point s n)) => ps.map (Point.row · keys)
+  let kept := states.filter (terminal rules keys)
+  have closed (q) (hq : q ∈ rows states) : Successors rules q (rows states) := by
+    intro δ hn j u st
+    obtain ⟨p,hp,rfl⟩ := List.mem_map.mp hq
+    obtain ⟨_,hm,η,fit⟩ := steps p hp δ hn j u st
+    obtain ⟨child,member,rfl⟩ := List.mem_map.mp hm
+    have test := List.all_eq_true.mp (List.all_eq_true.mp account p hp) child member
+    simp only [Bool.or_eq_true] at test
+    rcases test with bad|sub
+    · have ok := (inputs_iff bound keys child).mpr (fun i =>
+        normal_of_instance ((normal_equiv _ (fit.inputs i)).mp (hn i)))
+      change (!inputsNormal rules keys child) = true at bad
+      simp [ok] at bad
+    · obtain ⟨g,hg,sub⟩ := List.any_eq_true.mp sub
+      obtain ⟨σ,fits⟩ := (ReferenceVariantFolding.subsumes_iff (List.mem_attach keys) (List.mem_finRange) ..).mp sub
+      exact ⟨_,List.mem_map_of_mem hg,η.compose σ,fits.compose fit⟩
+  intro ρ nρ values forms
+  obtain ⟨out,rfl,nf⟩ := read_aligned query values forms
+  obtain ⟨_,hm,normalRow,η,nη,fit⟩ := TupleNarrowingFrontier.covers vars (rows states) closed
+    (fun i => ρ.image i.val) (fun i => nρ i.val) (fun i => ρ.apply (query i)) out nf
+    ⟨(seed query).row keys,List.mem_map_of_mem seeded,ρ,fun _ => .refl _,fun _ => .refl _⟩
+  obtain ⟨p,hp,rfl⟩ := List.mem_map.mp hm
+  have survives : p ∈ kept := List.mem_filter.mpr ⟨hp,(terminal_iff bound keys p).mpr normalRow⟩
+  refine ⟨_,List.mem_map_of_mem survives,η,nη,?_,alignedFn out p.value fit.values⟩
+  intro w live
+  have mem : w ∈ keys := (observed query w).mpr live
+  change EquivB _ (η.apply (((p.row keys).project (fun i => p.assignment.sorted i.val)).image w))
+  rw [(p.row keys).project_key (fun i => p.assignment.sorted i.val) ⟨w,mem⟩]
+  exact fit.inputs ⟨w,mem⟩
+
 /-- The oracle must cover individual rewrites exposed by every specialization
 of a proposed state. The checker establishes global coverage, soundness,
 freshness and reconstruction, including on kind-level observations. -/
@@ -177,7 +224,6 @@ private theorem correct {rules : List (Equation s)} (bound : ReferenceReduction.
     VariantReply (ruleRoot rules) (List.ofFn query) avoid answers := by
   let keys := keysOf query
   let states := seed query :: proposed
-  let rows := fun (ps : List (Point s n)) => ps.map (Point.row · keys)
   let kept := states.filter (terminal rules keys)
   change (if accounted rules keys states next && kept.all (valid r.reduce query avoid) then
     some (kept.map (Point.answer · keys)) else none) = some answers at accepted
@@ -185,20 +231,6 @@ private theorem correct {rules : List (Equation s)} (bound : ReferenceReduction.
   next passed =>
     obtain ⟨account,replayed⟩ := (by simpa only [Bool.and_eq_true] using passed : _ ∧ _)
     cases accepted
-    have closed (q) (hq : q ∈ rows states) : Successors rules q (rows states) := by
-      intro δ hn j u st
-      obtain ⟨p,hp,rfl⟩ := List.mem_map.mp hq
-      obtain ⟨_,hm,η,fit⟩ := steps p hp δ hn j u st
-      obtain ⟨child,member,rfl⟩ := List.mem_map.mp hm
-      have test := List.all_eq_true.mp (List.all_eq_true.mp account p hp) child member
-      simp only [Bool.or_eq_true] at test
-      rcases test with bad|sub
-      · have ok := (inputs_iff bound keys child).mpr (fun i =>
-          normal_of_instance ((normal_equiv _ (fit.inputs i)).mp (hn i)))
-        simp [ok] at bad
-      · obtain ⟨g,hg,sub⟩ := List.any_eq_true.mp sub
-        obtain ⟨σ,fits⟩ := (ReferenceVariantFolding.subsumes_iff (List.mem_attach keys) (List.mem_finRange) ..).mp sub
-        exact ⟨_,List.mem_map_of_mem hg,η.compose σ,fits.compose fit⟩
     have validRow (p) (hp : p ∈ kept) := valid_answer r vars query avoid p
       ((terminal_iff bound keys p).mp (List.mem_filter.mp hp).2) (List.all_eq_true.mp replayed p hp)
     apply VariantReply.ofCanonical r vars
@@ -206,19 +238,7 @@ private theorem correct {rules : List (Equation s)} (bound : ReferenceReduction.
       · rintro _ h
         obtain ⟨p,hp,rfl⟩ := List.mem_map.mp h
         exact (validRow p hp).1
-      · intro ρ nρ values forms
-        obtain ⟨out,rfl,nf⟩ := read_aligned query values forms
-        obtain ⟨_,hm,normalRow,η,nη,fit⟩ := TupleNarrowingFrontier.covers vars (rows states) closed
-          (fun i => ρ.image i.val) (fun i => nρ i.val) (fun i => ρ.apply (query i)) out nf
-          ⟨(seed query).row keys,List.mem_map_of_mem List.mem_cons_self,ρ,fun _ => .refl _,fun _ => .refl _⟩
-        obtain ⟨p,hp,rfl⟩ := List.mem_map.mp hm
-        have survives : p ∈ kept := List.mem_filter.mpr ⟨hp,(terminal_iff bound keys p).mpr normalRow⟩
-        refine ⟨_,List.mem_map_of_mem survives,η,nη,?_,alignedFn out p.value fit.values⟩
-        intro w live
-        have mem : w ∈ keys := (observed query w).mpr live
-        change EquivB _ (η.apply (((p.row keys).project (fun i => p.assignment.sorted i.val)).image w))
-        rw [(p.row keys).project_key (fun i => p.assignment.sorted i.val) ⟨w,mem⟩]
-        exact fit.inputs ⟨w,mem⟩
+      · exact covered bound vars query states List.mem_cons_self next steps account
     · rintro _ h
       obtain ⟨p,hp,rfl⟩ := List.mem_map.mp h
       exact (validRow p hp).2
