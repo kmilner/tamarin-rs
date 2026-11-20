@@ -4,6 +4,11 @@ This Lake package specifies the algebra operations that Tamarin currently asks M
 Rust links selected Lean kernels in-process with the `lean-unification` feature. The goal is to run
 the prover with no Maude binary and let developers replace the search algorithms under fixed
 correctness and completion contracts. Today, native-only mode completes some full protocol proofs.
+The acceptance criterion is mathematical soundness and completeness on the original query.
+Maude comparisons check compatibility and expose discrepancies. Where a concrete witness proves
+Maude missed a variant, native-only must retain that witness. A three-rule regression exercises
+both the reachable trace and the false universal lemma. [Theory](../crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy) · [Verdict test](../crates/tamarin-prover/tests/native_backend.rs)
+
 The main reference gaps are mixed free/C/AC unification and complete one-step narrowing.
 Rust still uses partial native paths for all four commands.
 
@@ -63,8 +68,7 @@ User tables receive no general coherence completion in the printer. With the bar
 `X = a` variant of `plus(f(c),b,X)`. Adding the explicit remainder to both sides recovers it.
 The Lean contract requires this solution. Lean proves that adding the remainder rule preserves
 every contextual rewrite and the full variant contract. It also exposes every such rewrite at
-the whole root of a well-sorted AC product. Matching the observed Maude answers requires a
-coherence argument for the actual emitted table.
+the whole root of a well-sorted AC product. Comparisons with Maude variant enumeration assume coherence of the actual emitted table.
 [Conservative equation extensions](Tamarin/ACEquationExtensions.lean) · [Maude’s explicit coherence requirement](https://maude.lcc.uma.es/maude31-manual-html/maude-manualch21.html) · [Pinned Maude probe](Tests/check_maude_operations.py) · [Active tables](../crates/tamarin-term/src/maude_sig.rs#L285) · [Equation emission](../crates/tamarin-term/src/maude_print.rs#L511)
 
 Tamarin uses plain `get variants`, which permits redundant answers. Tamarin requires convergent user theories with the
@@ -165,8 +169,8 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 
 | Operation | Native coverage today | Remaining completeness work |
 | --- | --- | --- |
-| Free and C unification | Free factoring, binary C branching, identities and ground clashes. Residual steps check heads, operands, bindings, sorts and occurrences against the pending conjunction. | Verify operand interning and traversal of every live branch. |
-| Simultaneous AC unification | Shares operands across nested systems and combines independent groups with disjoint witnesses. Full enumeration supports bounded bases through 64 variables and some single-witness families through 65. Boolean decisions include rank at most two, width at most three, and larger systems with certificates or identical columns. | Prove a terminating mixed free/C/AC component solver, including cyclic dependencies. The sort-assignment proof then gives `VerifiedUnifier` for all arity-correct inputs. Connect the resulting solver to Rust. |
+| Free and C unification | Free factoring, binary C branching, identities and ground clashes. Residual steps check heads, operands, bindings, sorts and occurrences against the pending conjunction. | The mixed reference interns shared subterms and certifies completed reconstructions. Finish branching on competing definitions and connect it to Rust. |
+| Simultaneous AC unification | Shares operands across nested systems and combines independent groups with disjoint witnesses. Full enumeration supports bounded bases through 64 variables and some single-witness families through 65. Boolean decisions include rank at most two, width at most three, and larger systems with certificates or identical columns. | Combine the per-symbol homogeneous answers on shared slots. The reference already completes jointly reconstructible systems and refutes blocked constructor cycles. The sort-assignment proof then gives `VerifiedUnifier` for all arity-correct inputs. Connect the resulting solver to Rust. |
 | Directional matching | Matches nested free/C/AC terms, including repeated or shared captures. Boolean queries use factor counts and full queries can page through the answer family. | The total Lean matcher handles all arity-correct conjunctions independently of unification. Connect that reference to Rust and establish first-match behavior on ambiguous queries. [Reference matcher](Tamarin/ReferenceMatching.lean) · [Alternative via unification](Tamarin/MatchViaUnification.lean) |
 | Reduction | Bounded graphs cover root and argument rewrites and proper AC subproducts. Other paths cover projected or erased arguments, independent factors, positional destructors, cancellation and DH powers and products. | Lean enumerates every live rewrite at every position, including proper AC subproducts. The driver is total for convergent sort-preserving tables. Connect its equation table and results to Rust, or prove the existing graph traversal equivalent. [Reference steps](Tamarin/ReferenceReduction.lean) · [Reduction driver](Tamarin/ReduceViaSteps.lean) |
 | Variants | Finite narrowing frontiers cover free/C/AC heads and proper subproducts. Shared input images survive child joins and free-root contraction. Overlap checks cover free paths and signed AC consequences. Specialized paths include cancellation, destructors, signed DH products, powers, scalar actions and pairing. | The general Lean driver terminates under the finite variant property given sound, complete one-step narrowing. Implement that local narrower over the active tables, establish their presentation properties and connect the driver to Rust. Verify decoding and observable ordering at the adapter. [Folding search](Tamarin/FoldingNarrowing.lean) · [Frontier checker](Tamarin/ReferenceVariantFrontier.lean) |
@@ -174,9 +178,18 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 **AC reference.** The homogeneous solver is total for any finite system of variable products
 at one AC head when every variable has the operator’s sort. For arbitrary sorted operands,
 the reference flattens and interns equal operands, then returns residual conjunctions whose
-union preserves the original solutions and pending bindings. The outstanding termination
-argument concerns interactions between operators. Any complete raw
-component solver now gives a total order-sorted solver, including on kind-level inputs.
+union preserves the original solutions and pending bindings.
+
+The mixed reference assigns one slot per distinct subterm and merges equated roots. Every source
+solution extends to a valuation of those slots, and every model projects back. When each defined
+slot has one constructor description, the reference always returns a complete sorted answer.
+This includes constructor cycles, which have no finite solution. Multiple definitions can also
+complete if the reconstructed images satisfy all of them modulo B. For cases that still require
+branching, the reference collects each AC symbol’s constraints into one homogeneous system.
+Combining their answers must preserve the shared slots across all operators.
+[Mixed solver and proofs](Tamarin/MixedUnification.lean) · [Executable cases](Tests/MixedUnification.lean)
+
+Any complete raw component solver now gives a total order-sorted solver, including on kind-level inputs.
 The proved refinement assigns fresh sorts to shared parameters and checks the resulting
 image of every observed variable. Maude reopens earlier same-head bindings
 and delays expanding others to handle dependency cycles. The three-variable regression

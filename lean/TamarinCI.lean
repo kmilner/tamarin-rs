@@ -20,6 +20,18 @@ theorem Tamarin.referenceHomogeneous_correct {s : Tamarin.Signature} (f : s.ACSy
   Tamarin.ACSystem.Reference.correct f rows sorted avoid
 
 namespace Tamarin
+/-- Full sorted answers are mandatory throughout the single-definition fragment.
+Both cyclic and acyclic inputs are in scope. -/
+theorem referenceMixed_singleDefinition {s : Signature}
+    [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+    (p : Problem s) (h : MixedUnification.SingleDefinition (MixedUnification.purify p).constraints)
+    (avoid : List Variable) : ∃ answers, MixedUnification.unify? p avoid = some answers ∧
+      (Outcome.complete answers).CorrectIn p avoid := by
+  obtain ⟨rows,hr⟩ := Option.isSome_iff_exists.mp (MixedUnification.completes_singleDefinition p h)
+  have run : MixedUnification.unify? p avoid = some (UnifierSorts.solve p rows avoid) := by
+    simp [MixedUnification.unify?,hr]
+  exact ⟨_,run,MixedUnification.unify_correct run⟩
+
 theorem referenceOperandSplit_correct {s : Signature} [DecidableEq s.ACSym] [DecidableEq (Term s)]
     (f : s.ACSym) (selected pending : Problem s) (hs : OperandBatch.Reference.SortedAt f selected)
     (observe avoid : List Variable) (bindings ρ : Substitution s) :
