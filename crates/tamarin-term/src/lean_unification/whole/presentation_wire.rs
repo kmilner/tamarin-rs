@@ -61,6 +61,19 @@ fn physical_xor_and_destructor_table_matches_the_lean_presentation() {
     );
 }
 
+#[test]
+fn physical_joint_group_table_matches_the_lean_presentation() {
+    let sig = minimal_maude_sig(false)
+        .merge(dh_maude_sig())
+        .merge(xor_maude_sig());
+    check_packet(
+        sig,
+        &dh_observations(),
+        "JointGroupWire",
+        include_str!("../../../../../lean/Tamarin/JointGroupWireData.lean"),
+    );
+}
+
 fn check_packet(sig: MaudeSig, observations: &[LNTerm], namespace: &str, fixture: &str) {
     let packet = Packet::full_table(&sig, observations).unwrap().unwrap();
     let mut rows = vec![&[][..]; packet.nodes.len()];

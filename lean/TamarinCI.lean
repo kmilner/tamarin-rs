@@ -7,6 +7,7 @@ import Tamarin.TablePresentation
 import Tamarin.DHWire
 import Tamarin.DHConstructorWire
 import Tamarin.XorConstructorWire
+import Tamarin.JointGroupWire
 import Tamarin.CertifiedReduction
 import Tamarin.DHMixedTermination
 import Tamarin.TableConfluence
@@ -105,12 +106,12 @@ theorem exportedCertifyTable_correct : CertifiedTableWire.Correct Executable.cer
 therefore admits the exact production XOR and destructor packet. -/
 theorem exportedPhysicalXorTable_admitted :
     Executable.certifyTable XorConstructorWire.declarations XorConstructorWire.nodes
-      XorConstructorWire.ruleRoots 0 = true := by
-  have baseline := XorConstructorWire.admitted
-  have provided := exportedCertifyTable_correct XorConstructorWire.declarations XorConstructorWire.nodes
-    XorConstructorWire.ruleRoots 0
-  unfold CertifiedTableWire.run at baseline
-  split at provided <;> simp_all
+      XorConstructorWire.ruleRoots 0 = true :=
+  exportedCertifyTable_correct.admits XorConstructorWire.admitted
+
+theorem exportedPhysicalJointGroupTable_admitted :
+    Executable.certifyTable JointGroupWire.declarations JointGroupWire.nodes JointGroupWire.ruleRoots 0 = true :=
+  exportedCertifyTable_correct.admits JointGroupWire.admitted
 
 theorem exportedCertifiedReduce_complete {ds ns es root d t rs budget}
     (decoded : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩)

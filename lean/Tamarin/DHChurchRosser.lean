@@ -23,13 +23,13 @@ abbrev UniqueRow := @NormalAlgebra.UniqueRow sig
 def DHHead (s : Symbols sig) (h : Head sig) : Prop :=
   h = .free s.pow ∨ h = .free s.inv ∨ h = .free s.one ∨ h = .ac s.mul
 
-private theorem signed_unique [DecidableEq sig.ACSym] (tab : Extension E) {t : Term sig}
+private theorem signed_unique [DecidableEq sig.ACSym] (tab : ProtectedTable E) {t : Term sig}
     (ht : HasSort t .msg) (h : Staging.Signed s (ruleRoot T.rules) t) : Unique (ruleRoot T.rules) t := by
   intro a b l r
-  exact Balance.normal_unique tab.toProtectedTable.inventory E.presentation (fun _ => Balance.plain_of_inverse E) h
+  exact Balance.normal_unique tab.inventory E.presentation (fun _ => Balance.plain_of_inverse E) h
     (l.2.2 _ ht) (r.2.2 _ ht) l.2.1 r.2.1 l.1 r.1
 
-private theorem schema_unique [DecidableEq sig.ACSym] (tab : Extension E) (r : Rule)
+private theorem schema_unique [DecidableEq sig.ACSym] (tab : ProtectedTable E) (neutral : Normal (ruleRoot T.rules) s.neutralTerm) (r : Rule)
     (a : Fin 3 → Term sig) (ty : ∀ i, HasSort (a i) .msg) (nf : ∀ i, Normal (ruleRoot T.rules) (a i)) :
     Unique (ruleRoot T.rules) (r.instantiate s a).lhs := by
   have typ := r.equation.1.sorted s a ty
@@ -38,22 +38,22 @@ private theorem schema_unique [DecidableEq sig.ACSym] (tab : Extension E) (r : R
   cases r
   case expOne =>
     intro u v
-    exact DHTower.Spine.unique tab.toProtectedTable.power tab.toProtectedTable.inventory tab.toProtectedTable.unit typ
+    exact DHTower.Spine.unique tab.power tab.inventory tab.unit typ
       (DHTower.Spine.defined_power (DHTower.Spine.defined_normal s _ (nf 0)) unit)
   case tower =>
     intro u v
-    exact DHTower.Spine.unique tab.toProtectedTable.power tab.toProtectedTable.inventory tab.toProtectedTable.unit typ
+    exact DHTower.Spine.unique tab.power tab.inventory tab.unit typ
       (DHTower.Spine.defined_power (DHTower.Spine.defined_power (DHTower.Spine.defined_normal s _ (nf 0))
         (signed 1)) (signed 2))
   case neutral =>
     intro u v
-    exact DHTower.Spine.unique tab.toProtectedTable.power tab.toProtectedTable.inventory tab.toProtectedTable.unit typ
-      (DHTower.Spine.defined_power (DHTower.Spine.defined_normal s _ tab.neutralNormal) (signed 0))
+    exact DHTower.Spine.unique tab.power tab.inventory tab.unit typ
+      (DHTower.Spine.defined_power (DHTower.Spine.defined_normal s _ neutral) (signed 0))
   all_goals
     apply signed_unique tab typ
     solve_by_elim (maxDepth := 12) only [Staging.signed_mul,Staging.signed_inv,signed,unit]
 
-private theorem extra_unique [DecidableEq sig.ACSym] (tab : Extension E) (r : ExtraRule)
+private theorem extra_unique [DecidableEq sig.ACSym] (tab : ProtectedTable E) (r : ExtraRule)
     (a : Fin 3 → Term sig) (ty : ∀ i, HasSort (a i) .msg) (nf : ∀ i, Normal (ruleRoot T.rules) (a i)) :
     Unique (ruleRoot T.rules) (r.instantiate s a).lhs := by
   have typ := r.equation.1.sorted s a ty
@@ -61,6 +61,17 @@ private theorem extra_unique [DecidableEq sig.ACSym] (tab : Extension E) (r : Ex
   have unit : Staging.Signed s (ruleRoot T.rules) s.product.one := fun k => ⟨0,Balance.read_one ..⟩
   cases r <;> apply signed_unique tab typ <;>
     solve_by_elim (maxDepth := 12) only [Staging.signed_mul,Staging.signed_inv,signed,unit]
+
+/-- Protected DH rows can share their ambient table with other AC theories. -/
+theorem protected_unique [DecidableEq sig.ACSym] (tab : ProtectedTable E)
+    (neutral : Normal (ruleRoot T.rules) s.neutralTerm)
+    (row : Equation sig) (mem : row ∈ T.rules) (hd : DHHead s (head row.lhs)) : UniqueRow T.rules row := by
+  intro τ norm
+  rcases tab.atHead row mem hd with ⟨r,rfl⟩ | ⟨r,rfl⟩
+  · simp only [Rule.instantiate,Expr.subst_eval]
+    exact schema_unique tab neutral r _ (fun i => T.actualSort r i ▸ τ.sorted _) (fun i => norm _)
+  · simp only [ExtraRule.instantiate,Expr.subst_eval]
+    exact extra_unique tab r _ (fun i => E.sorted r i ▸ τ.sorted _) (fun i => norm _)
 
 /-- Prove confluence of the combined table by validating each additional row
 on normalized substitution images. Every contextual instance, including one
@@ -73,12 +84,7 @@ theorem Extension.canonical_of_rows [DecidableEq sig.ACSym] (tab : Extension E)
   apply base.canonical (fun f => if h : f = s.mul then h ▸ p else NormalAlgebra.inertProduct base f (tab.otherAC f h))
   intro row mem
   by_cases hd : DHHead s (head row.lhs)
-  · intro τ norm
-    rcases tab.atHead row mem hd with ⟨r,rfl⟩ | ⟨r,rfl⟩
-    · simp only [Rule.instantiate,Expr.subst_eval]
-      exact schema_unique tab r _ (fun i => T.actualSort r i ▸ τ.sorted _) (fun i => norm _)
-    · simp only [ExtraRule.instantiate,Expr.subst_eval]
-      exact extra_unique tab r _ (fun i => E.sorted r i ▸ τ.sorted _) (fun i => norm _)
+  · exact protected_unique tab.toProtectedTable tab.neutralNormal row mem hd
   · exact rows row mem hd
 
 theorem canonical_of_product [DecidableEq sig.ACSym] (tab : ExactTable E)

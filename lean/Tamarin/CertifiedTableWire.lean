@@ -33,6 +33,14 @@ theorem correct : Correct run := by
     simpa only [run,h] using
       (show (_ → _) ∧ (_ → Certified rs) from ⟨id,CertifiedTable.admits_sound (fuel := fuel.toNat)⟩)
 
+/-- A kernel proof on a concrete baseline packet applies to every executable
+checker satisfying the replacement contract. -/
+theorem Correct.admits {check} (spec : Correct check) {ds ns es fuel}
+    (baseline : run ds ns es fuel = true) : check ds ns es fuel = true := by
+  have h := spec ds ns es fuel
+  unfold run at baseline
+  split at h <;> simp_all
+
 theorem sound {check} (spec : Correct check) {ds ns es roots d rs q fuel}
     (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩) (hit : check ds ns es fuel = true) :
     Certified rs := by

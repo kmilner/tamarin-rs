@@ -4,6 +4,7 @@ import Tamarin.DHWireSymbols
 import Tamarin.SubtermDecrease
 import Tamarin.XorPresentation
 import Tamarin.XorTableWire
+import Tamarin.JointGroupTable
 
 /-! Certify the decoded table in its full ambient signature. Symbol and variable
 IDs may vary with the query. Matching a characteristic rule only proposes an
@@ -66,9 +67,15 @@ private def ordinary (rs : Problem (TableAmbient.sig d)) (fuel : Nat) :=
   ConstructorRows.accepts (weight (fun _ => 1) rs) fuel rs
 
 private def dh (rs : Problem (TableAmbient.sig d)) (fuel : Nat)
-    (s : Symbols d.sig) (ks : Fin 3 → Variable) : Bool :=
+    (s : Symbols d.sig) (ks : Fin 3 → Variable) (x : Option (XorTable.Schema d.sig)) : Bool :=
+  let combined := fun (a : XorTable.Schema d.sig) =>
+    let z := XorTable.liftSchema a
+    let base : Head (TableAmbient.sig d) → Nat
+      | .ac f => if f == z.f then 2 else 1
+      | h => ExactTable.weight h
+    JointGroupTable.accepts (DHWire.liftSymbols s) ks z (weight base rs) fuel rs
   decide (∀ i, (ks i).sort = .msg) && decide (∀ i j, ks i = ks j → i = j) &&
-    ConstructorExtension.accepts (DHWire.liftSymbols s) ks (weight ExactTable.weight rs) fuel rs
+    (x.any combined || ConstructorExtension.accepts (DHWire.liftSymbols s) ks (weight ExactTable.weight rs) fuel rs)
 
 private def xor (rs : Problem (TableAmbient.sig d)) (fuel : Nat) (s : XorTable.Schema d.sig) : Bool :=
   XorTable.accepts (XorTable.liftSchema s) (weight (fun _ => 1) rs) fuel rs
@@ -76,8 +83,8 @@ private def xor (rs : Problem (TableAmbient.sig d)) (fuel : Nat) (s : XorTable.S
 def admits (rs : Problem d.sig) (fuel : Nat) : Bool :=
   let ambient := TableAmbient.liftRules rs
   if rs.any (fun r => match r.lhs with | .ac .. => true | _ => false) then
-    (detect rs).any (fun (s,ks) => dh ambient fuel s ks) ||
-      (XorTable.detect rs).any (xor ambient fuel)
+    let x := XorTable.detect rs
+    (detect rs).any (fun (s,ks) => dh ambient fuel s ks x) || x.any (xor ambient fuel)
   else ordinary ambient fuel
 
 theorem admits_sound {rs : Problem d.sig} {fuel} (ok : admits rs fuel) :
@@ -87,18 +94,14 @@ theorem admits_sound {rs : Problem d.sig} {fuel} (ok : admits rs fuel) :
   dsimp only at ok
   split at ok
   · rcases Bool.or_eq_true_iff.mp ok with dhOK | xorOK
-    · cases hit : detect rs with
-      | none => simp [hit] at dhOK
-      | some pair =>
-        obtain ⟨s,ks⟩ := pair
-        simp only [hit,Option.any_some,dh,Bool.and_eq_true,decide_eq_true_eq] at dhOK
-        obtain ⟨⟨typed,distinct⟩,accepted⟩ := dhOK
-        exact ConstructorExtension.accepts_sound _ _ typed distinct accepted
-    · cases hit : XorTable.detect rs with
-      | none => simp [hit] at xorOK
-      | some s =>
-        simp only [hit,Option.any_some,xor] at xorOK
-        exact XorTable.accepts_sound xorOK
+    · obtain ⟨⟨s,ks⟩,_,found⟩ := (Option.any_eq_true _ _).mp dhOK
+      simp only [dh,Bool.and_eq_true,Bool.or_eq_true,decide_eq_true_eq] at found
+      obtain ⟨⟨typed,distinct⟩,both | one⟩ := found
+      · obtain ⟨x,_,accepted⟩ := (Option.any_eq_true _ _).mp both
+        exact JointGroupTable.accepts_sound _ _ _ typed distinct accepted
+      · exact ConstructorExtension.accepts_sound _ _ typed distinct one
+    · obtain ⟨_,_,accepted⟩ := (Option.any_eq_true _ _).mp xorOK
+      exact XorTable.accepts_sound accepted
   · exact ConstructorRows.accepts_sound ok
 
 end Tamarin.CertifiedTable

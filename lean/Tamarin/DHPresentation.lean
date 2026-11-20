@@ -79,7 +79,7 @@ theorem product : MulBucket E := by
     | exact .inr ⟨.mulOne,.inl rfl,rfl⟩ | exact .inr ⟨.join,.inr (.inl rfl),rfl⟩ | exact .inr ⟨.joinRest,.inr (.inr rfl),rfl⟩
     | cases atHead
 
-private theorem noUnit : Head.free s.one ∉ ruleHeads T.rules := by
+theorem noUnit : Head.free s.one ∉ ruleHeads T.rules := by
   intro mem
   obtain ⟨eq,hm,hd⟩ := List.mem_map.mp mem
   have pi : Head.free s.pow ≠ .free s.one := neArity (by simp [s.powArity,s.oneArity])

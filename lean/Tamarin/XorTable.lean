@@ -66,19 +66,21 @@ private theorem active {more : Problem s} [DecidableEq s.FreeSym]
   · exact .inr (.inr e)
   · have bad := extra r hm; simp [h,extraHead] at bad
 
-theorem typedRow {more : Problem s} [DecidableEq s.FreeSym]
-    (extra : ∀ r ∈ more, a.extraHead (head r.lhs)) (r) (hr : r ∈ a.rows more)
-    (h : head r.lhs = .ac a.f) : HasSort r.lhs .msg := by
+theorem typedOfActive {r : Equation s} (active : r = a.duplicate ∨ r = a.unit ∨ r = a.cancel) :
+    HasSort r.lhs .msg := by
   have sum {x y : Term s} (l : HasSort x .msg) (k : HasSort y .msg) : HasSort (.ac a.f x y) .msg := by
     rw [← a.fSort] at l k ⊢; exact .ac _ _ _ l k
-  rcases a.active extra r hr h with rfl | rfl | rfl
+  rcases active with rfl | rfl | rfl
   · exact sum (a.doubleSort ▸ HasSort.var _) (a.doubleSort ▸ HasSort.var _)
   · exact sum (a.unitSort ▸ HasSort.var _) a.zero_sorted
   · exact sum (a.pairSort ▸ HasSort.var _) (sum (a.pairSort ▸ HasSort.var _) (a.restSort ▸ HasSort.var _))
 
-def table [DecidableEq s.FreeSym] (more : Problem s)
-    (extra : ∀ r ∈ more, a.extraHead (head r.lhs)) : FreshXor.Flat.Table s where
-  rules := a.rows more
+/-- The XOR operations depend only on the projection of the complete table to
+their active head and on irreducibility of the zero constant. -/
+def onTable (rs : Problem s) (dup : a.duplicate ∈ rs) (un : a.unit ∈ rs)
+    (active : ∀ r ∈ rs, head r.lhs = .ac a.f → r = a.duplicate ∨ r = a.unit ∨ r = a.cancel)
+    (apps : ∀ r ∈ rs, Application r.lhs) (inert : Head.free a.z ∉ ruleHeads rs) : FreshXor.Flat.Table s where
+  rules := rs
   f := a.f
   fSort := a.fSort
   zero := a.zero
@@ -89,34 +91,40 @@ def table [DecidableEq s.FreeSym] (more : Problem s)
     intro h hh used
     simp only [zero,operators,List.mem_cons,List.mem_flatten,List.mem_ofFn] at hh
     obtain rfl : h = .free a.z := hh.elim id (fun ⟨_,⟨i,_⟩,_⟩ => Fin.elim0 (a.zeroArity ▸ i))
-    obtain ⟨r,hr,e⟩ := List.mem_map.mp used
-    rcases a.row_heads extra hr with ac | ex
-    · rw [e] at ac; cases ac
-    · simp [e,extraHead] at ex
-  apps := by
-    intro r hr
-    rcases a.row_heads extra hr with ac | ex
-    · cases hs : r.lhs <;> simp_all [head,headModel,Model.eval,Application]
-    · cases hs : r.lhs <;> simp_all [head,headModel,Model.eval,Application,extraHead]
+    exact inert used
+  apps := apps
   param := a.doubleKey
   paramSort := a.doubleSort
-  duplicate := List.mem_cons_self
+  duplicate := dup
   bucket := by
     intro r hr h
-    rcases a.active extra r hr h with rfl | rfl | rfl
+    rcases active r hr h with rfl | rfl | rfl
     · exact .inl rfl
     · exact .inr (.inl ⟨_,rfl⟩)
     · exact .inr (.inr (.inl ⟨_,_,rfl⟩))
   freeSort := a.freeOutput
   commSort := a.commOutput
   acSort := a.acOutput
-  unitRule := ⟨a.unitKey,a.unitSort,List.mem_cons_of_mem _ List.mem_cons_self⟩
+  unitRule := ⟨a.unitKey,a.unitSort,un⟩
   inventory := by
     intro r hr h
-    rcases a.active extra r hr h with rfl | rfl | rfl
+    rcases active r hr h with rfl | rfl | rfl
     · exact .inl rfl
     · exact .inr (.inl ⟨_,rfl⟩)
     · exact .inr (.inr (.inl ⟨_,_,rfl⟩))
+
+def table [DecidableEq s.FreeSym] (more : Problem s)
+    (extra : ∀ r ∈ more, a.extraHead (head r.lhs)) : FreshXor.Flat.Table s :=
+  a.onTable (a.rows more) List.mem_cons_self (List.mem_cons_of_mem _ List.mem_cons_self) (a.active extra) (by
+    intro r hr
+    rcases a.row_heads extra hr with ac | ex
+    · cases hs : r.lhs <;> simp_all [head,headModel,Model.eval,Application]
+    · cases hs : r.lhs <;> simp_all [head,headModel,Model.eval,Application,extraHead]) (by
+    intro used
+    obtain ⟨r,hr,e⟩ := List.mem_map.mp used
+    rcases a.row_heads extra hr with ac | ex
+    · rw [e] at ac; cases ac
+    · simp [e,extraHead] at ex)
 
 end Schema
 
@@ -148,7 +156,7 @@ theorem accepts_evidence {a : Schema s} {w fuel rs} (ok : accepts a w fuel rs) :
   obtain ⟨⟨⟨agree,weight⟩,sorts⟩,good⟩ := by simpa only [accepts,Bool.and_eq_true] using ok
   have scope : ReferenceReduction.Bound T.rules := SymbolWeight.bound weight
   refine ⟨T,agree,⟨T.apps,SymbolWeight.terminating weight,TableDecrease.sortPreserving sorts⟩,scope,
-    a.typedRow extra,?_,?_⟩
+    (fun r hr h => a.typedOfActive (a.active extra r hr h)),?_,?_⟩
   · rintro f hf h; obtain ⟨r,hr,e⟩ := List.mem_map.mp h
     rcases a.row_heads extra hr with ac | ex
     · exact hf (Head.ac.inj (e.symm.trans ac))

@@ -3491,6 +3491,9 @@ mod checked_reduction;
 #[path = "native_backend/checked_variants.rs"]
 mod checked_variants;
 
+#[path = "native_backend/joint_groups.rs"]
+mod joint_groups;
+
 #[path = "native_backend/variant_overlap.rs"]
 mod variant_overlap;
 

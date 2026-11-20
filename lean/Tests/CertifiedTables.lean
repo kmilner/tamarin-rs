@@ -2,6 +2,7 @@ import Tamarin.CertifiedTable
 import Tamarin.DHWire
 import Tamarin.DHConstructorWire
 import Tamarin.XorConstructorWire
+import Tamarin.JointGroupWire
 
 namespace Tamarin.CertifiedTableTests
 set_option maxRecDepth 8192
@@ -48,5 +49,23 @@ private abbrev xorRules := xorPacket.2.1
 -- This extra row keeps every original equation, but makes m ⊕ m return m too.
 #guard !CertifiedTableWire.run XorConstructorWire.declarations XorConstructorWire.nodes
   (XorConstructorWire.ruleRoots ++ #[9,0]) 4
+
+private def jointPacket := (TableWire.input JointGroupWire.declarations JointGroupWire.nodes
+    JointGroupWire.ruleRoots #[]).get (by decide +kernel)
+private abbrev jointRules := jointPacket.2.1
+
+-- On this production packet only fst and snd (positions 3 and 7) are optional.
+-- Every one of the 16 group rows must have its original orientation.
+#guard jointRules.length == 18
+#guard CertifiedTable.admits ((jointRules.eraseIdx 7).eraseIdx 3).reverse 0
+#guard (List.range 18).all fun i => i == 3 || i == 7 ||
+  (!CertifiedTable.admits (jointRules.eraseIdx i) 0 &&
+   !CertifiedTable.admits (jointRules.modify i fun r => ⟨r.rhs,r.lhs⟩) 0)
+
+-- Relabeling every XOR application with the DH product's ID makes the two
+-- rule sets compete for the same redex, even though all rows are still present.
+#guard !CertifiedTableWire.run JointGroupWire.declarations
+  (JointGroupWire.nodes.map fun row => if row[0]! == 4 && row[1]! == 8 then row.set! 1 4 else row)
+  JointGroupWire.ruleRoots 4
 
 end Tamarin.CertifiedTableTests
