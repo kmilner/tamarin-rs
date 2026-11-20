@@ -1,0 +1,9 @@
+theory VariantReach begin
+functions: merge/2 [AC], red/0, blue/0
+equations: merge(red(),red()) = red()
+rule Initial: [] --> [Box(merge(red(),blue()))]
+rule Combine: [Box(x)] --> [Value(merge(red(),x))]
+rule Observe: [Value(merge(red(),blue()))] --[Seen()]-> []
+lemma possible: exists-trace "Ex #i. Seen() @ i"
+lemma impossible: "not (Ex #i. Seen() @ i)"
+end

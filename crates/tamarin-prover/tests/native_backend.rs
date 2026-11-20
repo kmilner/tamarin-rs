@@ -71,6 +71,25 @@ const SIMPLE: &str = include_str!("fixtures/native_pairing.spthy");
 
 #[cfg(feature = "lean-unification")]
 #[test]
+fn ac_marker_variant_preserves_the_reachable_trace() {
+    let fixture = Fixture::new(include_str!("fixtures/native_ac_marker_trace.spthy"));
+    let output = fixture.run(&["--prove"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stdout}\n{stderr}");
+    // Initial, Combine and Observe are a concrete witness under the bare equation.
+    assert!(
+        stdout.contains("possible (exists-trace): verified"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("impossible (all-traces): falsified - found trace"),
+        "{stdout}"
+    );
+}
+
+#[cfg(feature = "lean-unification")]
+#[test]
 fn native_parse_only_never_probes_or_starts_maude() {
     let fixture = Fixture::new(SIMPLE);
     let output = fixture.run(&["--parse-only"]);
