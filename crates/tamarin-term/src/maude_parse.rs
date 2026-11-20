@@ -181,14 +181,7 @@ fn parse_reduce_reply_from(c: &mut Cursor<'_>) -> Result<MTerm, ParseError> {
             String::from_utf8_lossy(&c.rest()[..c.rest().len().min(40)])
         )));
     }
-    // Sort: `TOP` or a named sort, either way discarded (HS
-    // `parseReduceReply` comments "we ignore the sort").
-    if !c.eat_str(b"TOP") {
-        parse_sort(c)?;
-    }
-    if !c.eat_str(b": ") {
-        return Err(ParseError("expected `: ` after result sort".into()));
-    }
+    skip_result_sort(c)?;
     let t = parse_term(c)?;
     let _ = c.skip_eol();
     Ok(t)
@@ -232,19 +225,7 @@ fn parse_variants_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseErr
         }
         let _ = c.read_decimal();
         let _ = c.skip_eol();
-        // Reprinted term (`Sort: term` or `[Kind]: term`). Maude brackets
-        // the kind when a variant's reprinted subject is ill-sorted, for
-        // example `[TOP]: list(...)`.
-        let kind = c.eat(b'[');
-        if !c.eat_str(b"TOP") {
-            parse_sort(c)?;
-        }
-        if kind && !c.eat(b']') {
-            return Err(ParseError("expected `]` after reprinted kind".into()));
-        }
-        if !c.eat_str(b": ") {
-            return Err(ParseError("expected `: ` in reprinted term".into()));
-        }
+        skip_result_sort(c)?;
         skip_term(c)?;
         let _ = c.skip_eol();
         // Then bindings: `xN:Sort --> term\n` until empty line.
@@ -368,6 +349,22 @@ fn parse_entry(c: &mut Cursor) -> Result<((LSort, u64), MTerm), ParseError> {
 // =============================================================================
 // Term parser
 // =============================================================================
+
+/// Maude labels a result with its sort, or with a bracketed kind for an
+/// ill-sorted term. Reduction and variant replies use the same syntax.
+fn skip_result_sort(c: &mut Cursor<'_>) -> Result<(), ParseError> {
+    let bracketed = c.eat(b'[');
+    if !c.eat_str(b"TOP") {
+        parse_sort(c)?;
+    }
+    if bracketed && !c.eat(b']') {
+        return Err(ParseError("expected `]` after result kind".into()));
+    }
+    if !c.eat_str(b": ") {
+        return Err(ParseError("expected `: ` after result sort".into()));
+    }
+    Ok(())
+}
 
 fn parse_sort(c: &mut Cursor) -> Result<LSort, ParseError> {
     if c.eat_str(b"Pub") {
