@@ -114,12 +114,6 @@ uint8_t tamarin_lean_constructor_variant(const uint64_t *roots, size_t root_coun
     return tamarin_constructor_variant(atom_array(roots, root_count), atom_array(used, used_count));
 }
 
-extern uint8_t tamarin_sort_clash(lean_object *left, lean_object *right);
-uint8_t tamarin_lean_sort_clash(const uint64_t *left, size_t left_count,
-                               const uint64_t *right, size_t right_count) {
-    return tamarin_sort_clash(atom_array(left, left_count), atom_array(right, right_count));
-}
-
 extern lean_object *tamarin_reduce_rule_slot(uint64_t slot, lean_object *keys, lean_object *subjects);
 uint8_t tamarin_lean_reduce_rule_slot(uint64_t slot, const uint64_t *keys,
                                      const uint64_t *subjects, size_t length, uint64_t *out) {

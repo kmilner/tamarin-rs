@@ -121,12 +121,6 @@ unsafe extern "C" {
         rhs: *const u64,
         rhs_length: usize,
     ) -> *mut std::ffi::c_void;
-    fn tamarin_lean_sort_clash(
-        left: *const u64,
-        left_count: usize,
-        right: *const u64,
-        right_count: usize,
-    ) -> u8;
     fn tamarin_lean_exclude_ac_factors(
         rows: *const WordSlice,
         count: usize,

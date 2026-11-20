@@ -1399,7 +1399,7 @@ impl MaudeHandle {
             if self.sig.enable_nat
                 && let Some(table) = self.native_rules()
                 && let crate::lean_unification::Outcome::Complete(arms) =
-                    table.unify_kind_sum(eqs).map_err(lean_error)?
+                    table.reflexive_kind_unifier(eqs).map_err(lean_error)?
             {
                 cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
                 return Ok(arms);
@@ -1416,121 +1416,18 @@ impl MaudeHandle {
         {
             return self.unify_residuals_with_maude(eqs, &crate::subst::Subst::empty());
         }
-        // HS unifyRaw delays AC- and C-headed pairs even when the two sides
-        // are syntactically equal. The empty substitution is mathematically
-        // complete for a reflexive equation. Maude can spell out that same
-        // identity using explicit fresh renamings for its input variables.
-        // Keep the existing hybrid dispatch except for the checked fragment
-        // of reflexive AC equations with rigid literals and strictly subsorted variables.
-        // In native-only mode, cancellation and C orientation dominance may
-        // also remove reflexive equations in a larger conjunction.
-        //
-        // Remaining queries use the local non-AC unifier first, mirroring
-        // HS's `unifyLTermFactored` (Unification.hs):
-        //
-        // ```haskell
-        // unifyLTermFactored sortOf eqs = reader $ \h ->
-        //     solve h $ execRWST unif sortOf M.empty
-        //   where
-        //     unif = sequence [ unifyRaw t p | Equal t p <- eqs ]
-        //     solve _ (Just (m, [])) = (substFromMap m, [emptySubstVFresh])
-        // ```
-        //
-        //   1. Run `unifyRaw` locally (no Maude).
-        //   2. Success with no AC residual → return `[emptyVFresh
-        //      `composeVFresh` m]`, which is what `flattenUnif (m,
-        //      [emptySubstVFresh])` (Unification.hs) evaluates to.
-        //   3. Success with AC residuals → dispatch to the selected backend.
-        //      The total native fallback takes the original conjunction.
-        //   4. Failure → return empty, WITHOUT calling Maude.
-        //
-        // Step 2's `composeVFresh` is load-bearing, not a formality: it
-        // extends the empty VFresh with renamings for `varsRange m`, so a
-        // `K → Var(V)` binding becomes the two entries
-        // `[K → Var(~Vw), V → Var(~Vw)]` Maude's own unify would produce.
-        // Skipping it leaves V in the range but not the domain, and
-        // `apply_eq_store`'s lifting then collides its witness with K's
-        // renamed target (a SubstVFresh same-target collision, observed as
-        // $R=$I on KAS_key_secrecy).
-        //
-        // This local-first path applies even when `is_ac_free()` is false:
-        // it follows HS's factoring and substitution-composition behavior
-        // for every signature. The presence of [variant] equations does
-        // not change ordinary `unify` semantics; Maude ignores those equations.
-        {
-            // The Maude wire reserves a Pub-tagged spelling for Msg-sorted
-            // skolem constants. Use its true sort for every elimination.
-            let result = crate::unification::unify_lterm_no_ac(
-                &crate::maude_types::sort_of_name,
-                eqs.to_vec(),
-            );
-            match result {
-                Ok(subst) => {
-                    // HS-faithful flattenUnif: success, return [vfresh ∘ subst].
-                    let empty_vfresh =
-                        crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::empty();
-                    let folded = crate::subst_vfresh::compose_vfresh(&empty_vfresh, &subst);
-                    return Ok(vec![folded.to_list()]);
-                }
-                Err(crate::unification::UnifyError::NoUnifier) => {
-                    // HS-faithful: unifyRaw failed. Return empty without
-                    // an unnecessary Maude call.
-                    return Ok(Vec::new());
-                }
-                Err(crate::unification::UnifyError::NeedsAC) => {
-                    // Fall through to the Maude call below.
-                    //
-                    // HS-faithful counter-neutrality: the global fresh
-                    // counter is NOT raised here.  HS's `unifyViaMaude`
-                    // (Term/Maude/Process.hs) numbers each reply's
-                    // witnesses in a PURE per-call scope via
-                    // `runBackConversion (...) bindings =
-                    //  evalBindT (...) bindings `evalFreshAvoiding` M.elems bindings`
-                    // (Term/Maude/Types.hs) — the fresh supply is
-                    // seeded from `avoid (M.elems bindings)` (the query's own
-                    // exported vars) and NO global state is read or written.
-                    // The reply conversion below therefore computes its
-                    // witness base locally (see `input_max`) and never
-                    // touches `self`'s counter.
-                }
-            }
-        }
-        // HS-faithful `unifyLTermFactored` (Unification.hs):
-        //
-        //   unif = sequence [ unifyRaw t p | Equal t p <- eqs ]
-        //   solve h (Just (m, leqs)) =
-        //       (subst, unifyViaMaude h sortOf $ map (applyVTerm subst <$>) leqs)
-        //     where subst = substFromMap m
-        //
-        // i.e. run the LOCAL non-AC unifier first to extract a non-AC
-        // substitution `m` and the residual AC equations `leqs`, then send
-        // ONLY the residuals (with `m` applied) to Maude.  Finally
-        // `flattenUnif (subst, substs) = map (`composeVFresh` subst) substs`
-        // (Unification.hs) composes each Maude arm with `subst = m`.
-        //
-        // We therefore factor out the non-AC substitution `m` and send only
-        // the AC residuals to Maude, so witness idxs are allocated against
-        // the residual's vars (matching HS); `m`'s bindings are composed
-        // back in below.
-        let (factored_m, residual_eqs): (
-            crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
-            Vec<Equal<LNTerm>>,
-        ) = match crate::unification::unify_lterm_factored(
+        // HS unifyLTermFactored retains the local bindings and delays AC/C
+        // equations in a single traversal. Skolem constants use their wire sort.
+        let Some((factored_m, residual_eqs)) = crate::unification::unify_lterm_factored(
             &crate::maude_types::sort_of_name,
             eqs.to_vec(),
-        ) {
-            Some((m, leqs)) => (m, leqs),
-            // unifyRaw failed during factoring → no unifier (HS `solve _
-            // Nothing = (emptySubst, [])` → flattenUnif maps over []).
-            None => return Ok(Vec::new()),
+        ) else {
+            return Ok(Vec::new());
         };
-        // If factoring already solved everything (no AC residual), HS returns
-        // `(substFromMap m, [emptySubstVFresh])`; flattenUnif then yields
-        // `[emptyVFresh `composeVFresh` m]`.  Mirror that without a Maude
-        // round-trip.
         if residual_eqs.is_empty() {
-            let empty_vfresh = crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::empty();
-            let composed = crate::subst_vfresh::compose_vfresh(&empty_vfresh, &factored_m);
+            // composeVFresh gives aliases shared fresh images, as expected by apply_eq_store.
+            let identity = crate::subst_vfresh::LNSubstVFresh::empty();
+            let composed = crate::subst_vfresh::compose_vfresh(&identity, &factored_m);
             return Ok(vec![composed.to_list()]);
         }
         // The feature is experimental and the Lean kernel explicitly reports

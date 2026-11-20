@@ -519,15 +519,6 @@ theorem exportedGroundRuleReduction_semantic {sig : Signature} (rules : List (Eq
   Rewriting.RuleReduction.groundNormalForm exportedRuleReduction_correct rules d p ys rhs slot w
     keys subjects key subject ok present apps ground resultSort absent shape live typed
 
-theorem exportedSortClash_correct : SortClash.Correct Executable.sortClash :=
-  SortClashCandidateProofs.correct
-
-theorem exportedSortClash_semantic {sig : Signature} (a b : SortClash.Side sig)
-    (p : Problem sig) (avoid : List Variable) (mem : ⟨a.term, b.term⟩ ∈ p)
-    (h : Executable.sortClash a.words b.words = true) :
-    (Outcome.complete []).CorrectIn p avoid :=
-  SortClash.refutes exportedSortClash_correct a b p avoid mem h
-
 theorem exportedCommOrientations_correct : Commutative.Correct Executable.commOrientations :=
   CommutativeCandidateProofs.correct
 
@@ -652,14 +643,11 @@ theorem exportedVariantOverlap_compatible {s : Signature} {I : Type} {R : Rewrit
     Rewriting.RootNarrowing.CompatibleValues R p q :=
   (exportedVariantOverlap_correct.semantic c ids _ _ _ _ ds ns es raw decoded represented hit).compatible
 
-theorem exportedHomogeneousUnify_correct : Homogeneous.Correct Executable.homogeneousUnify :=
-  Homogeneous.solve_correct
-
 /-- An accepted free-factor packet followed by a completed homogeneous matrix
 run certifies the answers to the original query, including caller materialization. -/
 theorem exportedFactoredAC_correct :
-    FactoredAC.Correct Executable.checkFactors Executable.homogeneousUnify :=
-  FactoredAC.correct exportedCheckFactors_correct exportedHomogeneousUnify_correct
+    FactoredAC.Correct Executable.checkFactors Homogeneous.solve :=
+  FactoredAC.correct exportedCheckFactors_correct Homogeneous.solve_correct
 
 theorem exportedFactoredGraph_correct :
     FactoredAC.GraphCorrect Executable.checkFactors Executable.wholeUnify :=
@@ -682,8 +670,8 @@ theorem exportedMaskedOperand_correct : MaskedOperands.Correct Executable.masked
   MaskedOperands.run_correct
 
 theorem exportedOperandUnify_refines : OperandUnification.Refines
-    Executable.operandUnify Executable.homogeneousUnify :=
-  OperandUnification.run_refines OperandCounts.run_correct Executable.homogeneousUnify
+    Executable.operandUnify Homogeneous.solve :=
+  OperandUnification.run_refines OperandCounts.run_correct Homogeneous.solve
 
 theorem exportedForcedOperandClasses_correct : ForcedOperandClasses.Correct Executable.forcedOperandClasses :=
   ForcedOperandClasses.run_correct
@@ -695,7 +683,7 @@ theorem exportedAnswerProjection_correct : AnswerProjection.Correct Executable.p
   AnswerProjection.project_correct
 
 theorem exportedMatrixAnswers_project : ProjectionCompletion.MatrixTotal
-    Executable.homogeneousUnify Executable.projectAnswers :=
+    Homogeneous.solve Executable.projectAnswers :=
   ProjectionCompletion.matrix_total exportedAnswerProjection_correct
 
 theorem exportedOperandAnswers_project : ProjectionCompletion.OperandTotal
@@ -711,11 +699,11 @@ theorem exportedProjectedBindings_correct : ProjectedBindings.Checked Executable
   ProjectedBindings.checked_correct exportedCheckedGraphHomogeneous_correct exportedAnswerProjection_correct
 
 /-- Optimizing the matrix kernel must preserve its interpretation on compound operands. -/
-theorem exportedOperandLifting_correct : OperandAbstraction.PacketLifting Executable.homogeneousUnify :=
-  OperandAbstraction.packet_complete exportedHomogeneousUnify_correct
+theorem exportedOperandLifting_correct : OperandAbstraction.PacketLifting Homogeneous.solve :=
+  OperandAbstraction.packet_complete Homogeneous.solve_correct
 
-theorem exportedNestedACLifting_correct : OperandAbstraction.NestedLifting Executable.homogeneousUnify :=
-  OperandAbstraction.nested_lifting exportedHomogeneousUnify_correct
+theorem exportedNestedACLifting_correct : OperandAbstraction.NestedLifting Homogeneous.solve :=
+  OperandAbstraction.nested_lifting Homogeneous.solve_correct
 
 theorem exportedProjectedOperands_correct : ProjectedOperands.Correct
     Executable.operandUnify Executable.projectAnswers :=
@@ -782,9 +770,6 @@ theorem exportedXorOdd_normalForms {sig : Signature} [DecidableEq (Term sig)]
   · rw [List.count_eq_zero.mpr mem]
     have := mt h.mpr mem
     omega
-
-theorem exportedResidualStep_correct : Residual.Correct Executable.residualStep :=
-  Residual.step_correct
 
 theorem exportedXorBranches_correct : Rewriting.FreshXor.BranchCorrect Executable.xorBranches :=
   Rewriting.FreshXor.candidate_correct
@@ -1243,7 +1228,6 @@ run_cmd do
     (``Tamarin.Executable.collectorPossible, `tamarin_collector_possible),
     (``Tamarin.Executable.sortedACMatch, `tamarin_sorted_ac_match),
     (``Tamarin.Executable.flatACMatch, `tamarin_flat_ac_match),
-    (``Tamarin.Executable.homogeneousUnify, `tamarin_homogeneous_unify),
     (``Tamarin.Executable.checkedReduce, `tamarin_checked_reduce),
     (``Tamarin.Executable.totalUnify, `tamarin_total_unify),
     (``Tamarin.Executable.totalMatch, `tamarin_total_match),
@@ -1263,10 +1247,8 @@ run_cmd do
     (``Tamarin.Executable.mixedCancellationRows, `tamarin_mixed_cancellation_rows),
     (``Tamarin.Executable.binaryCancellationRows, `tamarin_binary_cancellation_rows),
     (``Tamarin.Executable.xorOdd, `tamarin_xor_odd),
-    (``Tamarin.Executable.sortClash, `tamarin_sort_clash),
     (``Tamarin.Executable.residualRigid, `tamarin_residual_rigid),
     (``Tamarin.Executable.residualVariable, `tamarin_residual_variable),
-    (``Tamarin.Executable.residualStep, `tamarin_residual_step),
     (``Tamarin.Executable.commOrientations, `tamarin_comm_orientations),
     (``Tamarin.Executable.rigidAllocation, `tamarin_rigid_allocation),
     (``Tamarin.Executable.sharedOffset, `tamarin_shared_offset),

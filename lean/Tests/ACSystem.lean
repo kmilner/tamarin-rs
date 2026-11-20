@@ -1,4 +1,3 @@
-import TamarinRuntime
 import Tamarin.ACSystem
 import Tamarin.HomogeneousContract
 import Tamarin.GroundACEquality
@@ -95,7 +94,6 @@ example (k : Nat) : Generates (generate [thirds]) (v₂ (2*k) (3*k)) := by
 end Tamarin.ACBasis.Tests
 
 namespace Tamarin.Homogeneous.Tests
-open Tamarin.Executable
 
 -- Exercise the compiled traversal with duplicate supports, empty supports,
 -- uncovered coordinates, and prefixes that must keep several different arms.
@@ -112,20 +110,20 @@ private def testVector (bits : Nat) : ACBasis.Vec 3 :=
 
 -- A conjunction with no positive solution completes with zero arms. A malformed
 -- or over-budget conjunction defers, even if its suffix has valid answers.
-#guard homogeneousUnify 2 #[#[2,0],#[0,1],#[0,2],#[1,0]] == some #[]
+#guard Homogeneous.solve 2 #[#[2,0],#[0,1],#[0,2],#[1,0]] == some #[]
 -- A five-operand YubiKey matrix reaches four successive basis intersections.
 -- Each row forces the fourth operand to be empty, so no AC answer exists.
-#guard homogeneousUnify 5 #[
+#guard Homogeneous.solve 5 #[
   #[1,1,1,0,0], #[1,1,1,1,0],
   #[1,1,1,0,0], #[1,1,1,1,0],
   #[1,1,1,0,1], #[1,1,1,1,1],
   #[1,1,1,0,0], #[1,1,1,1,0]] == some #[]
-#guard homogeneousUnify 2 #[#[1,0]] == none
-#guard homogeneousUnify 2 #[#[1,0],#[0]] == none
-#guard homogeneousUnify 2 #[#[0,0],#[1,0]] == none
+#guard Homogeneous.solve 2 #[#[1,0]] == none
+#guard Homogeneous.solve 2 #[#[1,0],#[0]] == none
+#guard Homogeneous.solve 2 #[#[0,0],#[1,0]] == none
 -- After x = y the huge coefficient forces the only coordinate to zero.
 -- Without that second row the remaining free coordinate exceeds the budget.
-#guard homogeneousUnify 2 #[#[0xffffffffffffffff,0],#[0,1],#[1,0],#[0,1]] == some #[]
+#guard Homogeneous.solve 2 #[#[0xffffffffffffffff,0],#[0,1],#[1,0],#[0,1]] == some #[]
 #guard !(ACBasis.Row.ofWeights (n := 2) (Fin.cases (2^64-1) (fun _ => 0))
   (Fin.cases 0 (fun _ => 1))).fitsPlane 16384
 
@@ -165,7 +163,7 @@ private def checkUnitSide (pairs : List (ACBasis.Vec 3 × ACBasis.Vec 3)) : Bool
 -- An independent oracle for p*x = q*y. Every slot must balance its own
 -- multiplicities and at least one arm must realize the primitive ratio.
 private def ratioCorrect (p q : Nat) : Bool := Id.run do
-  let some arms := homogeneousUnify 2 #[#[p.toUInt64,0], #[0,q.toUInt64]] | return false
+  let some arms := Homogeneous.solve 2 #[#[p.toUInt64,0], #[0,q.toUInt64]] | return false
   let g := p.gcd q
   let mut principal := false
   for arm in arms do
@@ -217,8 +215,8 @@ example (run) (cert : Correct run) : (run 2 #[lhs,rhs]).isSome := by
 private def fourLeft : Array UInt64 := #[1,1,1,1,0,0,0,0]
 private def fourRight : Array UInt64 := #[0,0,0,0,1,1,1,1]
 private def oneRight : Array UInt64 := #[0,0,0,0,1,0,0,0]
-#guard homogeneousUnify 8 #[fourLeft,oneRight,fourLeft,fourRight] == some #[]
-#guard homogeneousUnify 8 #[oneRight,fourLeft,fourLeft,fourRight] == some #[]
+#guard Homogeneous.solve 8 #[fourLeft,oneRight,fourLeft,fourRight] == some #[]
+#guard Homogeneous.solve 8 #[oneRight,fourLeft,fourLeft,fourRight] == some #[]
 
 -- A redundant row keeps every prior generator in the reference order.
 #guard Id.run do

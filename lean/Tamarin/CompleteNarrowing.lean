@@ -1,7 +1,6 @@
 import Tamarin.TablePositions
 import Tamarin.KindACNarrowing
 import Tamarin.MixedUnification
-import Tamarin.NarrowingClash
 
 /-! Narrowing at all positions of any arity-correct input tuple. The unifier
 and the narrowing traversal are fixed executable references. The assumptions
@@ -42,7 +41,7 @@ branch, with a single further substitution explaining all inputs and values. -/
 def narrower (bound : ReferenceReduction.Bound rules)
     (vars : Normalized (ruleRoot rules) Substitution.identity) (query : Fin n → Term s) :
     FoldingNarrowing.Narrower rules query :=
-  let u := NarrowingClash.unifier (MixedUnification.verified (s := s))
+  let u := MixedUnification.verified (s := s)
   positional u bound (groups u bound vars) query
 
 /-- All four commands over a range-restricted finite rewrite table.

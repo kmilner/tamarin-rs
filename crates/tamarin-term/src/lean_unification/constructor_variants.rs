@@ -276,76 +276,23 @@ impl RuleTable {
         Some(sort)
     }
 
-    // A Fresh or Pub variable cannot acquire sort Nat. A Msg variable can.
-    // Rigid terms keep their root sort under substitution. The whole query
-    // has already passed declaration, kind and arity checks.
-    fn nat_factor_codes(&self, factors: &[LNTerm]) -> Option<Vec<u64>> {
-        let mut used = Vec::new();
-        factors
-            .iter()
-            .map(|t| {
-                used.clear();
-                let sort = self.collect(t, &mut used, InputDomain::Sorted)?;
-                Some(match (sort, t) {
-                    (LSort::Nat, _) => 1,
-                    (LSort::Msg, Term::Lit(Lit::Var(_))) => 0,
-                    _ => 2,
-                })
-            })
-            .collect()
-    }
-
-    fn sort_evidence(&self, t: &LNTerm) -> Option<Vec<u64>> {
-        if let Term::App(FunSym::Ac(AcSym::NatPlus), factors) = t {
-            self.nat_factor_codes(factors)
-        } else {
-            self.collect(t, &mut Vec::new(), InputDomain::Sorted)
-                .map(|_| vec![1])
-        }
-    }
-
-    pub(crate) fn unify_kind_sum(
+    // Preserve the empty identity used by native callers for reflexive kind-level sums.
+    pub(crate) fn reflexive_kind_unifier(
         &self,
         equations: &[crate::rewriting::Equal<LNTerm>],
     ) -> Result<Outcome, Error> {
         let mut used = Vec::new();
-        if !self.nat
-            || !equations.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]).all(|t| {
-                used.clear();
-                self.collect(t, &mut used, InputDomain::ConstructorKind)
+        if equations.iter().all(|eq| {
+            used.clear();
+            eq.lhs == eq.rhs
+                && self
+                    .collect(&eq.lhs, &mut used, InputDomain::ConstructorKind)
                     .is_some()
-            })
-        {
-            return Ok(Outcome::Unsupported);
+        }) {
+            super::reflexive_identity()
+        } else {
+            Ok(Outcome::Unsupported)
         }
-        if equations.iter().all(|eq| eq.lhs == eq.rhs) {
-            return super::reflexive_identity();
-        }
-        for eq in equations {
-            let (Some(left), Some(right)) =
-                (self.sort_evidence(&eq.lhs), self.sort_evidence(&eq.rhs))
-            else {
-                continue;
-            };
-            initialize()?;
-            let status = LEAN_THREAD.with(|_| {
-                // SAFETY: the shim copies both live slices before calling Lean.
-                unsafe {
-                    super::tamarin_lean_sort_clash(
-                        left.as_ptr(),
-                        left.len(),
-                        right.as_ptr(),
-                        right.len(),
-                    )
-                }
-            });
-            match status {
-                0 => {}
-                1 => return Ok(Outcome::Complete(vec![])),
-                other => return Err(Error::InvalidStatus(other)),
-            }
-        }
-        Ok(Outcome::Unsupported)
     }
 
     fn fresh_xor_pair(&self, t: &LNTerm) -> Option<[LVar; 2]> {

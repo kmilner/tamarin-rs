@@ -2803,6 +2803,8 @@ fn natural_kind_probes_agree_with_maude_before_free_elimination() {
     };
     let sig = nat_maude_sig();
     let table = RuleTable::new(&sig).unwrap();
+    let native =
+        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let var = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 0)));
     let one = f_app_no_eq(nat_one_sym(), vec![]);
@@ -2828,19 +2830,16 @@ fn natural_kind_probes_agree_with_maude_before_free_elimination() {
         for good in [natural.clone(), nat.clone(), var("m", LSort::Msg)] {
             for query in [eq(raw.clone(), good.clone()), eq(good, raw.clone())] {
                 let qs = [query];
-                assert_eq!(
-                    table.unify_kind_sum(&qs).unwrap(),
-                    Outcome::Complete(vec![])
-                );
+                assert!(native.unify(&qs).unwrap().is_empty());
                 assert!(oracle.unify(&qs).unwrap().is_empty());
             }
         }
         let qs = [eq(raw.clone(), nat_plus(var("other", sort), one.clone()))];
-        assert_eq!(table.unify_kind_sum(&qs).unwrap(), Outcome::Unsupported);
+        assert!(!native.unify(&qs).unwrap().is_empty());
         assert!(!oracle.unify(&qs).unwrap().is_empty());
     }
     let qs = [eq(nat_plus(var("m", LSort::Msg), one), natural)];
-    assert_eq!(table.unify_kind_sum(&qs).unwrap(), Outcome::Unsupported);
+    assert!(!native.unify(&qs).unwrap().is_empty());
     assert!(!oracle.unify(&qs).unwrap().is_empty());
     assert!(oracle.stats().unify_count > 0);
 }

@@ -93,11 +93,6 @@ def commOrientations (a b c d : UInt64) (priority : UInt8) : UInt8 :=
 
 def xorOdd (count : UInt64) : Bool := count % 2 == 1
 
-/-- Codes describe factor sorts under all sorted substitutions. -/
-def sortClash (left right : Array UInt64) : Bool :=
-  let sorted := fun (xs : Array UInt64) => xs.size != 0 && xs.all (· == 1)
-  (left.contains 2 && sorted right) || (right.contains 2 && sorted left)
-
 /-- The diagonal is always reachable; the irreducible open XOR also occurs
 when the input variables are distinct. -/
 def xorBranches (same : Bool) : UInt8 := if same then 2 else 3

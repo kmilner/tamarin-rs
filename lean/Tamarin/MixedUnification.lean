@@ -1,4 +1,5 @@
 import Tamarin.MixedTotal
+import Tamarin.NarrowingClash
 
 namespace Tamarin.MixedUnification
 variable {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
@@ -67,7 +68,8 @@ theorem complete (p : Problem s) : UnifierSorts.CompleteTemplates p (solve p) :=
     next => exact Total.correct p
 
 /-- The ordinary unification reference accepts every arity-correct input. -/
-def verified : VerifiedUnifier s (fun _ => True) := UnifierSorts.unifier solve complete
+def verified : VerifiedUnifier s (fun _ => True) :=
+  NarrowingClash.unifier (UnifierSorts.unifier solve complete)
 
 /-- Compatibility entry point for callers of the formerly partial reference. -/
 def solve? (p : Problem s) : Option (List (UnifierSorts.Template s)) := some (solve p)
@@ -84,11 +86,12 @@ theorem completes_constructorFrontiers (p : Problem s)
 
 /-- Refine a complete raw answer with all admissible sorts and fresh caller names. -/
 def unify? (p : Problem s) (avoid : List Variable) : Option (List (Substitution s)) :=
-  (solve? p).map (fun rows => UnifierSorts.solve p rows avoid)
+  some (verified.solve p trivial avoid)
 
 theorem unify_correct {p : Problem s} {avoid answers} (h : unify? p avoid = some answers) :
     (Outcome.complete answers).CorrectIn p avoid := by
-  obtain ⟨rows,hr,rfl⟩ := Option.map_eq_some_iff.mp h
-  exact UnifierSorts.correct p rows (solve_correct hr) avoid
+  cases Option.some.inj h
+  exact ⟨verified.correct p trivial avoid, verified.domain p trivial avoid,
+    verified.fresh p trivial avoid⟩
 
 end Tamarin.MixedUnification

@@ -1,4 +1,5 @@
 import Tamarin.CompoundOffset
+import Tamarin.SharedOffsetPacket
 
 namespace Tamarin
 namespace FreshAnswer

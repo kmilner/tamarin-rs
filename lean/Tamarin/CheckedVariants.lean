@@ -83,13 +83,13 @@ private theorem row_correct (bound : ReferenceReduction.Bound rs)
 
 private def next (bound : ReferenceReduction.Bound rs) (vars : Normalized (ruleRoot rs) Substitution.identity)
     (keys : List Variable) (p : Point s n) : List (Point s n) :=
-  let u := NarrowingClash.unifier (MixedUnification.verified (s := s))
+  let u := MixedUnification.verified (s := s)
   expand p (TableNarrowing.atPoint u bound (TableNarrowing.groups u bound vars) keys p).branches
 
 private theorem successors (bound : ReferenceReduction.Bound rs)
     (vars : Normalized (ruleRoot rs) Substitution.identity) (keys : List Variable) (p : Point s n)
     (hp : tracked keys p) : Successors rs (p.row keys) ((next bound vars keys p).map (Point.row · keys)) := by
-  let u := NarrowingClash.unifier (MixedUnification.verified (s := s))
+  let u := MixedUnification.verified (s := s)
   exact expand_covers keys p _ ((TableNarrowing.atPoint u bound (TableNarrowing.groups u bound vars)
     keys p).covers (tracks hp))
 

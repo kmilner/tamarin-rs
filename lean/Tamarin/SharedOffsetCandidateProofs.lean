@@ -1,4 +1,4 @@
-import Tamarin.SharedOffset
+import Tamarin.SharedOffsetPacket
 import TamarinRuntime.Candidate
 
 namespace Tamarin.SharedOffsetCandidateProofs

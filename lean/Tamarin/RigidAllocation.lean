@@ -1,4 +1,6 @@
-import Tamarin.SharedOffset
+import Tamarin.FlatACVariable
+import Tamarin.FreshSubstitution
+import Tamarin.SortCheck
 import Tamarin.RigidAllocationPacket
 
 /-! Allocate the single rigid factor in X + Y = Z + A. Either summand may

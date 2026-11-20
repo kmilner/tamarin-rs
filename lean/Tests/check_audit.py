@@ -100,10 +100,6 @@ xor_start = SOURCE.index("theorem exportedXorBranches_correct")
 xor_obligation = SOURCE[xor_start:SOURCE.index("\n\n", xor_start) + 1]
 EXECUTABLE = ("import Tamarin.XorCandidateProofs\n" + EXECUTABLE
               + "\nnamespace Tamarin\n" + xor_obligation + "end Tamarin\n")
-clash_start = SOURCE.index("theorem exportedSortClash_correct")
-clash_obligation = SOURCE[clash_start:SOURCE.index("\n\n", clash_start) + 1]
-EXECUTABLE = ("import Tamarin.SortClashCandidateProofs\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + clash_obligation + "end Tamarin\n")
 comm_obligation = obligation("exportedCommOrientations_correct") + obligation("exportedCommOrientations_bound")
 EXECUTABLE = ("import Tamarin.CommutativeCandidateProofs\n" + EXECUTABLE
               + "\nnamespace Tamarin\n" + comm_obligation + "end Tamarin\n")
@@ -367,26 +363,6 @@ EXPORT_MUTATIONS.extend([
 ])
 
 
-homogeneous_start = SOURCE.index("theorem exportedHomogeneousUnify_correct")
-homogeneous_obligation = SOURCE[homogeneous_start:SOURCE.index("\n\n", homogeneous_start) + 1]
-EXECUTABLE = ("import Tamarin.HomogeneousContract\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + homogeneous_obligation + "end Tamarin\n")
-residual_start = SOURCE.index("theorem exportedResidualStep_correct")
-residual_obligation = SOURCE[residual_start:SOURCE.index("\n\n", residual_start) + 1]
-EXECUTABLE = ("import Tamarin.Residual\n" + EXECUTABLE
-              + "\nnamespace Tamarin\n" + residual_obligation + "end Tamarin\n")
-RESIDUAL_STEP = "  Residual.step l r equal sameHead fitsL fitsR occurs"
-EXPORT_MUTATIONS.extend([
-    ("residual_binds_a_cycle", RESIDUAL_STEP,
-     "  Residual.step l r equal sameHead fitsL fitsR false", "theorem exportedResidualStep_correct"),
-    ("residual_comm_is_positional", RESIDUAL_STEP,
-     "  if l == 3 && r == 3 then 5 else Residual.step l r equal sameHead fitsL fitsR occurs",
-     "theorem exportedResidualStep_correct"),
-    ("residual_closes_unresolved_ac", RESIDUAL_STEP,
-     "  if l == 4 && r == 4 then 1 else Residual.step l r equal sameHead fitsL fitsR occurs",
-     "theorem exportedResidualStep_correct"),
-])
-
 rigid_obligation = obligation("exportedResidualRigid_correct") + obligation("exportedResidualRigid_rejectsMalformed")
 EXECUTABLE = ("import Tamarin.ResidualRigid\n" + EXECUTABLE
               + "\nnamespace Tamarin\n" + rigid_obligation + "end Tamarin\n")
@@ -398,6 +374,12 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedResidualRigid_correct"),
     ("rigid_collapses_ac_multiplicity", RIGID_STEP,
      "  ResidualRigid.run lk lh ls.toList.eraseDups.toArray rk rh rs.toList.eraseDups.toArray",
+     "theorem exportedResidualRigid_correct"),
+    ("rigid_comm_is_positional", RIGID_STEP,
+     "  if lk == 3 && rk == 3 then 5 else ResidualRigid.run lk lh ls rk rh rs",
+     "theorem exportedResidualRigid_correct"),
+    ("rigid_closes_unresolved_ac", RIGID_STEP,
+     "  if lk == 4 && rk == 4 then 1 else ResidualRigid.run lk lh ls rk rh rs",
      "theorem exportedResidualRigid_correct"),
     ("rigid_simulates_clash_on_bad_input", RIGID_STEP,
      "  let action := ResidualRigid.run lk lh ls rk rh rs\n  if action == 255 then 1 else action",
@@ -420,15 +402,6 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedResidualVariable_correct"),
     ("variable_ignores_required_sort", VARIABLE_STEP, VARIABLE_STEP.replace("key keySort", "key 2"),
      "theorem exportedResidualVariable_correct"),
-])
-
-HOMOGENEOUS_RUN = "  Homogeneous.solve width m"
-EXPORT_MUTATIONS.extend([
-    ("homogeneous_drops_sound_branches", HOMOGENEOUS_RUN,
-     "  (Homogeneous.solve width m).map (fun arms => arms.extract 0 1)",
-     "theorem exportedHomogeneousUnify_correct"),
-    ("homogeneous_always_defers", HOMOGENEOUS_RUN, "  none",
-     "theorem exportedHomogeneousUnify_correct"),
 ])
 
 BAG_DECISION = "  Matching.ACMatchPacket.runWith Matching.ACBagSearch.run packet"
@@ -716,13 +689,16 @@ operand_start = SOURCE.index("theorem exportedOperandUnify_refines")
 operand_obligation = SOURCE[operand_start:SOURCE.index("\n\n", operand_start) + 1]
 EXECUTABLE = ("import Tamarin.OperandUnification\n" + EXECUTABLE
               + "\nnamespace Tamarin\n" + operand_obligation + "end Tamarin\n")
-OPERAND = "  OperandUnification.runWith OperandCounts.run homogeneousUnify width sides"
+OPERAND = "  OperandUnification.runWith OperandCounts.run Homogeneous.solve width sides"
 EXPORT_MUTATIONS.extend([
     ("operand_counts_drop_repeats", OPERAND,
      OPERAND.replace("width sides", "width (sides.map fun row => row.toList.eraseDups.toArray)"),
      "theorem exportedOperandUnify_refines"),
     ("operand_drops_equation", OPERAND, OPERAND.replace("width sides", "width (sides.extract 0 2)"),
      "theorem exportedOperandUnify_refines"),
+    ("operand_drops_sound_branches", OPERAND,
+     "  (" + OPERAND.strip() + ").map (fun arms => arms.extract 0 1)", "theorem exportedOperandUnify_refines"),
+    ("operand_always_defers", OPERAND, "  none", "theorem exportedOperandUnify_refines"),
     ("operand_treats_deferral_as_clash", OPERAND, "  some #[]", "theorem exportedOperandUnify_refines"),
 ])
 
@@ -864,12 +840,6 @@ EXPORT_MUTATIONS.extend([
     ("xor_omits_diagonal", XOR_RUN, "  1", "theorem exportedXorBranches_correct"),
     ("xor_drops_open_case", XOR_RUN, "  2", "theorem exportedXorBranches_correct"),
     ("xor_identity_on_equal_inputs", XOR_RUN, "  3", "theorem exportedXorBranches_correct"),
-])
-
-CLASH_RUN = "  RuntimeCandidate.sortClash left right"
-EXPORT_MUTATIONS.extend([
-    ("sort_clash_false_unsat", CLASH_RUN, "  true", "theorem exportedSortClash_correct"),
-    ("sort_clash_ignores_disjoint_sort", CLASH_RUN, "  false", "theorem exportedSortClash_correct"),
 ])
 
 COMM_RUN = "  RuntimeCandidate.commOrientations a b c d priority"

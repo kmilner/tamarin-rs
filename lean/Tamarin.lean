@@ -37,6 +37,7 @@ import Tamarin.ConjunctRefutation
 import Tamarin.GroundSideUnification
 import Tamarin.FlatCancellation
 import Tamarin.RigidAllocationCandidateProofs
+import Tamarin.SharedOffset
 import Tamarin.SharedOffsetCandidateProofs
 import Tamarin.ConstructorVariantCandidateProofs
 import Tamarin.ObservedNarrowing
@@ -52,7 +53,6 @@ import Tamarin.RigidAllocationRefinement
 import Tamarin.CompoundOffsetRefinement
 import Tamarin.DependentAllocation
 import Tamarin.CommutativeCandidateProofs
-import Tamarin.SortClashCandidateProofs
 import Tamarin.CommutativeLinear
 import Tamarin.XorCandidateProofs
 import Tamarin.BinaryXorReduction

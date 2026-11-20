@@ -1,5 +1,4 @@
 import Tamarin.RigidAllocation
-import Tamarin.SharedOffset
 import Tamarin.GroundACEquality
 
 /-! Two-sided AC offset equations with persistent, different rigid factors.

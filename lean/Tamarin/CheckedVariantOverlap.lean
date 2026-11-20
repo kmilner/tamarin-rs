@@ -73,7 +73,7 @@ private def checkPair {I : Type} (rs : List (Equation s)) (fuel : Nat) (ks : Lis
   let r := opened ks p q
   let problem := VariantJoin.problem p r ks []
   let keep := [p.value (),r.value ()].flatMap Term.variables
-  let u := NarrowingClash.unifier (MixedUnification.verified (s := s))
+  let u := MixedUnification.verified (s := s)
   let fields := problem.variables.eraseDups.length
   (determined ks p q fuel).val ||
     (5 ^ min 12 fields ≤ 1024 * (fuel+1) &&
@@ -87,7 +87,7 @@ private theorem pair_correct {I : Type} (bound : ReferenceReduction.Bound rs)
   rcases Bool.or_eq_true_iff.mp ok with known | ok
   · exact ((determined ks p q fuel).property known).agrees.compatible
   let r := opened ks p q
-  let u := NarrowingClash.unifier (MixedUnification.verified (s := s))
+  let u := MixedUnification.verified (s := s)
   let problem := VariantJoin.problem p r ks []
   let keep := [p.value (),r.value ()].flatMap Term.variables
   let answers := u.solve problem trivial keep

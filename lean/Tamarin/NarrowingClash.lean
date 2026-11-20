@@ -1,14 +1,14 @@
 import Tamarin.GroundACEquality
 import Tamarin.SortClash
 
-/-! Reject impossible narrowing queries before searching their AC components.
+/-! Reject impossible unification queries before searching their AC components.
 Heads are fixed except at variables. A rigid subtree which cannot inhabit a
 required sort remains incompatible even if other variables narrow their sorts. -/
 namespace Tamarin.NarrowingClash
 variable {s : Signature}
 
 private def possible : Term s → SortId → Bool
-  | .var _, _ => true
+  | .var v, k => Subsort.check v.sort k || Subsort.check k v.sort
   | .atom a, k => Subsort.check (s.atomSort a) k
   | .free f xs, k => Subsort.check (s.outputSort f) k &&
       (List.finRange (s.arity f)).all fun i => possible (xs i) (s.inputSort f i)
@@ -18,7 +18,15 @@ private def possible : Term s → SortId → Bool
 private theorem possible_of_instance (t : Term s) (σ : Substitution s) (k)
     (h : (σ.apply t).checkSort k) : possible t k := by
   induction t generalizing k with
-  | var => rfl
+  | var v =>
+    have left := Term.rootSort_le (σ.sorted v)
+    have right := Term.rootSort_le (Term.checkSort_sound _ _ h)
+    change Subsort (σ.image v).rootSort k at right
+    have comparable {a b c : SortId} (ab : Subsort a b) (ac : Subsort a c) :
+        Subsort b c ∨ Subsort c b := by
+      cases ab <;> cases ac <;> first | exact .inl (by constructor) | exact .inr (by constructor)
+    exact Bool.or_eq_true_iff.mpr ((comparable left right).imp
+      (Subsort.check_iff ..).mpr (Subsort.check_iff ..).mpr)
   | atom => exact h
   | free f xs ih =>
     simp only [Substitution.apply,Term.subst,Term.checkSort,Bool.and_eq_true,List.all_eq_true] at h
@@ -55,10 +63,10 @@ private theorem heads_of_solution (a b : Term s) (σ : Substitution s)
   have root := eq.head_eq
   cases a <;> cases b <;> simp_all [heads,Substitution.apply,Term.subst,Model.eval,headModel]
 
-private def impossible (e : Equation s) :=
+def impossible (e : Equation s) :=
   !(heads e.lhs e.rhs) || sortClash e.lhs e.rhs || sortClash e.rhs e.lhs
 
-private theorem refutes {p : Problem s} (h : p.any impossible) : CompleteSet p [] := by
+theorem refutes {p : Problem s} (h : p.any impossible) : CompleteSet p [] := by
   apply (complete_empty_iff _).mpr
   rintro ⟨σ,sol⟩
   obtain ⟨e,he,bad⟩ := List.any_eq_true.mp h

@@ -21,4 +21,9 @@ private def kindTerms : Array (Array UInt64) := #[#[0,0,2],#[1,0,3],#[2,8,1]]
 #guard kernel decls kindTerms #[0,2] == #[#[1]]
 #guard kernel decls kindTerms #[2,2] == #[#[1],#[]]
 
+-- One disjoint factor rules out this kind-level equation before AC enumeration.
+private def natNodes : Array (Array UInt64) := #[#[0,0,1],#[1,1,4],#[0,2,4],
+  #[4,7,0] ++ Array.replicate 64 1, #[4,7,2] ++ Array.replicate 64 1]
+#guard kernel #[4,7,2,4,4,4] natNodes #[3,4] == #[#[1]]
+
 end Tamarin.TotalUnifyWireTests

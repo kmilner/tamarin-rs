@@ -9,7 +9,6 @@ import TamarinRuntime.Whole
 import TamarinRuntime.MixedSizeGraph
 import TamarinRuntime.ACSpanOverlap
 import TamarinRuntime.FactorCheck
-import TamarinRuntime.Residual
 import TamarinRuntime.ResidualVariable
 import TamarinRuntime.ResidualRigid
 import TamarinRuntime.GraphUnification
@@ -147,16 +146,8 @@ def residualVariable (right : Bool) (key keySort : UInt64) (kind : UInt8)
     (valueSort : UInt64) (ids : Array UInt64) : UInt8 :=
   ResidualVariable.run right key keySort kind valueSort ids
 
-@[export tamarin_residual_step]
-def residualStep (l r : UInt8) (equal sameHead fitsL fitsR occurs : Bool) : UInt8 :=
-  Residual.step l r equal sameHead fitsL fitsR occurs
-
 @[export tamarin_xor_odd]
 def xorOdd (count : UInt64) : Bool := RuntimeCandidate.xorOdd count
-
-@[export tamarin_sort_clash]
-def sortClash (left right : Array UInt64) : Bool :=
-  RuntimeCandidate.sortClash left right
 
 @[export tamarin_xor_branches]
 def xorBranches (same : Bool) : UInt8 :=
@@ -228,10 +219,6 @@ def checkFactors (decls : Array UInt64) (nodes : Array (Array UInt64))
     (original bindings residual : Array UInt64) : Bool :=
   FactorCheck.run decls nodes original bindings residual
 
-@[export tamarin_homogeneous_unify]
-def homogeneousUnify (width : UInt64) (m : Homogeneous.Matrix) : Option Homogeneous.Answers :=
-  Homogeneous.solve width m
-
 @[export tamarin_graph_homogeneous_unify]
 def graphHomogeneousUnify (width symbol sort : UInt64) (decls : Array UInt64)
     (nodes : Array (Array UInt64)) (roots : Array UInt64) : Option Homogeneous.Answers :=
@@ -251,7 +238,7 @@ def forcedOperandClasses (width : UInt64) (sides : Array (Array UInt64)) : Optio
 
 @[export tamarin_operand_unify]
 def operandUnify (width : UInt64) (sides : Array (Array UInt64)) : Option Homogeneous.Answers :=
-  OperandUnification.runWith OperandCounts.run homogeneousUnify width sides
+  OperandUnification.runWith OperandCounts.run Homogeneous.solve width sides
 
 @[export tamarin_masked_operand_unify]
 def maskedOperandUnify (width mask : UInt64) (sides : Array (Array UInt64)) : Option Homogeneous.Answers :=

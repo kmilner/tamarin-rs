@@ -1970,6 +1970,15 @@ fn natural_kind_queries_preserve_variable_sorts_before_factoring() {
         }
     }
     assert_eq!(h.stats().unify_count, 0);
+    // Reject the incompatible factor before enumerating partitions of the sum.
+    let wide = |first| {
+        let mut factors = vec![one.clone(); 64];
+        factors.push(first);
+        f_app_ac(AcSym::NatPlus, factors)
+    };
+    let clash = eq(wide(var("w", LSort::Fresh)), wide(natural.clone()));
+    assert!(h.unify(std::slice::from_ref(&clash)).unwrap().is_empty());
+    assert!(!h.unifiable(&[clash]).unwrap());
     let maybe = nat_plus(variable("m"), one.clone());
     for query in [
         eq(maybe, known), // m can later become a Nat
