@@ -39,6 +39,8 @@ jobs:
           lake env lean Tests/CheckedCommandPackets.lean
           lake env lean Tests/VariantCompositionLimit.lean
           lake env lean Tests/DHCanonical.lean
+          lake env lean Tests/MixedTermination.lean
+          lake env lean Tests/CertifiedTables.lean
           lake env lean Tests/TableAmbient.lean
           lake env lean Tests/ACRowElimination.lean
           lake env lean --run Tests/ACPivot.lean
@@ -119,7 +121,7 @@ jobs:
         run: |
           cargo test --profile ci -p tamarin-term --features lean-unification --lib native_oracle_
           cargo test --profile ci -p tamarin-term --features lean-unification --test native_match_components first_match_agrees_with_maude
-          cargo test --profile ci -p tamarin-term --features lean-unification --test native_backend mixed_dh_and_ground_result_equation_cover_open_and_specialized_inputs
+          cargo test --profile ci -p tamarin-term --features lean-unification --test native_backend -- mixed_dh_and_ground_result_equation_cover_open_and_specialized_inputs certified_ground_rule_beyond_frontier certified_mixed_table_retries_reduction_past_the_checked_depth
         env:
           MAUDE_PATH: /opt/maude/maude
       - name: Native Lean bridge and differential tests

@@ -218,7 +218,9 @@ private theorem first {a b : Term s} (path : Reduces (ruleRoot rs) a b) :
   · obtain ⟨v,hv,eq⟩ := (ReferenceReduction.exactSteps rs bound a u).mpr step
     exact .inr ⟨v,hv,(Reduces.basis eq).trans tail⟩
 
-private theorem checked (v : Term s) (n : Nat) (t u : Term s) (h : agrees rs v n t)
+/-- Every reachable normal endpoint agrees with the checked target, even if
+other terms of the active presentation have different normal forms. -/
+theorem agrees_sound (v : Term s) (n : Nat) (t u : Term s) (h : agrees rs v n t)
     (red : Reduces (ruleRoot rs) t u) (nf : Normal (ruleRoot rs) u) : EquivB u v := by
   induction n generalizing t with
   | zero => contradiction
@@ -244,7 +246,7 @@ theorem correct {t u : Term s} {n} (h : run rs n t = some u) :
       simp [run,hc,safe,others] at h
       subst u
       have ⟨path,nf⟩ := chosen bound n t v hc
-      exact ⟨⟨path,nf,(sorts_iff ..).mp safe⟩,fun u hu => checked bound _ _ _ _ others hu.1 hu.2.1⟩
+      exact ⟨⟨path,nf,(sorts_iff ..).mp safe⟩,fun u hu => agrees_sound bound _ _ _ _ others hu.1 hu.2.1⟩
     · simp only [run,hc] at h
       split at h <;> contradiction
 

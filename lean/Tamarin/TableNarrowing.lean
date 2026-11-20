@@ -35,12 +35,20 @@ def roots (u : VerifiedUnifier s (fun _ => True)) {rules : List (Equation s)} (b
     (anchors : List (Term s)) (t : Term s) : List (Branch s) :=
   rules.attach.flatMap fun r => atSchema u t anchors (schema bound t anchors r)
 
+theorem roots_atRoot (u : VerifiedUnifier s (fun _ => True)) {rules : List (Equation s)} (bound : ReferenceReduction.Bound rules)
+    (anchors : List (Term s)) (t : Term s) (b : Branch s) (hb : b ∈ roots u bound anchors t) :
+    AtRoot (ruleRoot rules) (b.subst.apply t) b.value := by
+  obtain ⟨r,_,hm⟩ := List.mem_flatMap.mp hb
+  obtain ⟨μ,hμ,rfl⟩ := List.mem_map.mp hm
+  have eq := (u.correct _ trivial _).sound μ hμ _ List.mem_cons_self
+  exact ⟨_,_,eq.symm,⟨r.val,r.property,μ.compose ((apart r.val t anchors).subst s),
+    (Substitution.apply_compose ..).symm,(Substitution.apply_compose ..).symm⟩,.refl _⟩
+
 theorem roots_genuine (u : VerifiedUnifier s (fun _ => True)) {rules : List (Equation s)} (bound : ReferenceReduction.Bound rules)
     (anchors : List (Term s)) (t : Term s) (b : Branch s) (hb : b ∈ roots u bound anchors t) :
     StepModulo (ruleRoot rules) (b.subst.apply t) b.value := by
-  obtain ⟨r,_,hm⟩ := List.mem_flatMap.mp hb
-  obtain ⟨μ,hμ,rfl⟩ := List.mem_map.mp hm
-  exact (schema bound t anchors r).replay t (u.correct _ trivial _) hμ
+  obtain ⟨a,v,l,st,h⟩ := roots_atRoot u bound anchors t b hb
+  exact ⟨a,v,l,.root st,h⟩
 
 theorem roots_cover (u : VerifiedUnifier s (fun _ => True)) {rules : List (Equation s)} (bound : ReferenceReduction.Bound rules)
     (anchors : List (Term s)) (t : Term s) (ρ : Substitution s) {v} (fire : AtRoot (ruleRoot rules) (ρ.apply t) v) :

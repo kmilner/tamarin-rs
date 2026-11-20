@@ -1,4 +1,7 @@
 import TamarinRuntime
+import Tamarin.ConstructorRowOverlaps
+import Tamarin.ConstructorPresentation
+import Tamarin.SubtermDecrease
 import Tamarin.SubtermVariants
 
 namespace Tamarin.CheckedCommandPacketTests
@@ -111,5 +114,97 @@ private def eligible (rows : Array UInt64) : Bool := Id.run do
 #guard !eligible (rules ++ #[13,12]) -- open RHS rebuilt under a different head
 #guard !eligible (rules ++ #[4,0]) -- AC-rooted rules require their own operator proof
 #guard (Executable.generalVariants ds ns rules #[13,0] 16)[0]? == some #[1]
+
+private def checkedGround (rows : Array UInt64) (fuel : Nat) (nodes := ns) : Bool := Id.run do
+  let some ⟨_,rs,_⟩ := TableWire.input ds nodes rows #[13] | return false
+  let some row := rs.head? | return false
+  return ConstructorRows.groundRow rs fuel row
+
+-- check(x,x) and check(y,x) return different syntax, fst(pair(ok,marker))
+-- and ok. Both alternatives reduce to ok on the whole table.
+private def jointGround : Array UInt64 := #[6,8,12,3,10,0]
+#guard checkedGround jointGround 2
+#guard !checkedGround jointGround 1
+#guard !checkedGround (jointGround ++ #[12,2]) 3
+-- An additional root that makes the fixed RHS itself ambiguous invalidates
+-- the certificate even if the other check row is removed.
+#guard !checkedGround #[6,8,10,0,10,1] 3
+-- Same check for a commutative root with a rigid ground argument.
+#guard checkedGround #[14,8,14,3,10,0] 2
+#guard !checkedGround #[14,8,14,2,10,0] 2
+
+-- Use the ordinary unifier to compare every root overlap, including
+-- independent instantiations of the same rule modulo C and AC.
+private def classified (rows : Array UInt64) : Option (Bool × Bool) := do
+  let ⟨_,rs,_⟩ ← TableWire.input ds ns rows #[]
+  let r ← rs.head?
+  return (ConstructorRows.projectionRow rs r, ConstructorRows.overlapRow rs r)
+
+-- fst(pair(x,y)) returns an ordered coordinate. peel(bag(x,marker)) also
+-- returns a unique x, although AC reassociation gives it no fixed position.
+#guard classified #[10,0,11,1] == some (true,true)
+#guard classified #[5,0] == some (false,true)
+#guard classified #[14,0] == some (false,true) -- a commutative rewrite head
+-- Competing fst projections, an active bag pattern, and the empty projection
+-- from peel(x) back to peel(x) each violate an admission condition.
+#guard classified #[10,0,10,1] == some (false,false)
+#guard classified #[5,0,4,0] == some (false,false)
+#guard classified #[13,13] == some (false,false)
+-- Repeating the same variable forces the two children to agree. With
+-- distinct variables both commutative orientations must agree on the returned image.
+private def commRows (same : Bool) : Bool := Id.run do
+  let extra := ns ++ #[#[3,8,0,if same then 0 else 1],#[2,1,15]]
+  let some ⟨_,[r],_⟩ := TableWire.input ds extra #[16,0] #[] | return false
+  return ConstructorRows.overlapRow [r] r
+#guard commRows true
+#guard !commRows false
+
+-- Renaming an AC pattern apart from itself doubles the independent captures.
+-- The automatic checker can defer this open overlap before enumerating it.
+#guard Id.run do
+  let extra := ns ++ #[#[4,0,0,1],#[2,1,15]]
+  let some ⟨_,[r],_⟩ := TableWire.input ds extra #[16,0] #[] | return false
+  return !FrontierWork.admitsRootPair r.lhs r.lhs && !ConstructorRows.overlapRow [r] r
+
+-- Projecting the other free argument agrees even when the first contains
+-- four independent AC captures. No self-unifier is needed.
+#guard Id.run do
+  let extra := ns ++ #[#[0,2,2],#[0,3,2],#[4,0,0,1],#[4,0,15,16],#[4,0,17,18],#[2,2,19,0]]
+  let some ⟨_,[r],_⟩ := TableWire.input ds extra #[20,0] #[] | return false
+  return !FrontierWork.admitsRootPair r.lhs r.lhs && ConstructorRows.overlapRow [r] r
+
+-- Two disjoint pair patterns under fst return different coordinates.
+-- The two fixed constants prevent a cross-rule overlap.
+#guard Id.run do
+  let extra := ns ++ #[#[2,3,2,0],#[2,4,15],#[2,3,3,1],#[2,4,17]]
+  let some ⟨_,rs,_⟩ := TableWire.input ds extra #[16,0,18,3] #[] | return false
+  return rs.all fun r => !ConstructorRows.projectionRow rs r && ConstructorRows.overlapRow rs r
+
+-- check(ok,ok) and check(marker,marker) may return different constants.
+-- In check(ok,x) = x the only overlap with check(x,x) specializes x to ok.
+private def extras := ns ++ #[#[2,2,3,3],#[2,2,2,2],#[2,2,3,0]]
+#guard checkedGround #[15,3,16,2] 1 extras
+#guard checkedGround #[6,3,17,0] 1 extras
+#guard !checkedGround #[6,2,17,0] 1 extras
+
+-- Even with zero search fuel, a common inert constant certifies the whole
+-- ground-output bucket. The standalone presentation needs no DH rules.
+#guard checkedGround #[6,3,12,3] 0
+private def standalone (rows : Array UInt64) := Id.run do
+  let some ⟨_,rs,_⟩ := TableWire.input ds ns rows #[] | return false
+  return ConstructorRows.accepts (SubtermDecrease.defaultWeight (fun _ => 1) rs) 3 rs
+#guard standalone rules
+#guard !standalone (rules ++ #[10,1])
+
+-- A dozen independent captures under one AC constructor would generate a
+-- wide unification problem. Identical ground outputs certify it at zero fuel.
+-- An ambiguous competing ground output must defer before enumerating overlaps.
+private def wideNodes := Id.run do
+  let n := ns.size
+  let vars := (Array.range 12).map fun i => #[0,UInt64.ofNat (i+30),2]
+  let bag := #[4,0] ++ (Array.range 12).map (fun i => UInt64.ofNat (n+i))
+  return ns ++ vars ++ #[bag,#[2,1,UInt64.ofNat (n+12)]]
+#guard checkedGround #[28,3,5,3] 0 wideNodes
+#guard !checkedGround #[28,3,5,2] 2 wideNodes
 
 end Tamarin.SubtermPacketTests

@@ -106,7 +106,7 @@ theorem accepts_iff (rules : Problem s) : accepts rules ↔ Presentation rules :
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
 /-- A subterm of a normal argument remains normal after the same substitution
 has been applied to both. This includes paths through C and AC nodes. -/
-private theorem subnormal {R : Root s} (σ : Substitution s) {t u : Term s}
+theorem subnormal {R : Root s} (σ : Substitution s) {t u : Term s}
     (sub : u ∈ subterms t) (nf : Normal R (σ.apply t)) : Normal R (σ.apply u) := by
   apply Classical.byContradiction
   intro bad

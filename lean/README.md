@@ -223,8 +223,8 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | --- | --- | --- |
 | Ordinary free/C/AC unification | The reference switch sends both enumeration and existence queries straight to the complete solver. Nested packed equations share one substitution. The solver accepts mixtures of free, commutative and AC heads, including kind-level inputs. | Check Rust representation and observable answer ordering across the protocol corpus. [Solver contract](Tamarin/TotalUnifyPacket.lean) |
 | Directional matching | The reference switch uses the complete matcher for enumeration, existence and first-match queries, including caller-designated rigid variables. For source refinement every backend selects the least restored binding map, including on ambiguous matches. | Full hybrid enumeration retains its existing order for callers that consume the whole sequence. [Matcher contract](Tamarin/TotalMatchPacket.lean) · [Selection theorem](Tamarin/MatchOrder.lean) |
-| Reduction | The general reducer certifies reachable, unique normal forms on the full table, including proper AC subproducts. A finite stage suffices for every term on a range-restricted canonical table. | The default native-only fallback retains its work budget. General decoding and numeric representation still constrain the Rust boundary. [Staged reducer](Tamarin/GeneralReductionWire.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
-| Variants | The general folding solver has a finite-family proof for all 13 DH rules on open and kind-level inputs. Lean proves termination, confluence modulo C/AC, and sort preservation for this table. The finite-family proof also covers canonical mixtures with free/C-headed subterm and ground-result equations. | For a user extension, establish convergence of the combined table. Extensions outside the proved classes also need a finite-variant argument. The numeric interface must represent the budget and bindings. [Pure DH](Tamarin/DHFiniteVariants.lean) · [Mixed tables](Tamarin/DHMixedVariants.lean) |
+| Reduction | The general reducer certifies reachable, unique normal forms on the full table, including proper AC subproducts. A finite stage suffices for every term on a range-restricted canonical table. Default native-only now retries deferred queries on certified tables. | Other tables can still reach the default work limit. [Staged reducer](Tamarin/GeneralReductionWire.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
+| Variants | The general folding solver has a finite-family proof for all 13 DH rules on open and kind-level inputs. Lean proves termination, confluence modulo C/AC, and sort preservation for this table. Lean also certifies constructor-pattern extensions with agreeing projections or ground results, with or without DH. Default native-only can promote these tables to the general folding solver. | Extend automatic admission to other active AC equations, including XOR, and to the bilinear rule table. The numeric interface must represent the budget and bindings. [Pure DH](Tamarin/DHFiniteVariants.lean) · [Mixed tables](Tamarin/DHMixedVariants.lean) |
 
 The general reduction contract states progress in terms of the rewrite relation. Once the
 stage covers every path from this input and all reachable normal endpoints preserve its
@@ -258,9 +258,12 @@ search reaches a complete family at a finite budget. Rust retries incomplete sta
 a larger budget and checks cancellation between calls. The numeric packet must represent
 the budget and bindings. The caller supplies the rules and query. An
 invalid presentation can diverge or have additional normal forms. The regular native-only
-operation retains the stronger guarantee of completeness and unique reconstruction on
-every successful reply. It checks the raw successors at intermediate points of normalized
-narrowing and can still defer when that certificate cannot be found within budget.
+operation requires completeness and unique reconstruction on every successful reply. After a
+bounded search defers, Rust asks Lean to certify the original numeric table. A positive
+certificate lets Rust retry the staged solver with cancellation checks between calls.
+The classifier proposes DH symbols and variables from the rules and checks all equations;
+Rust sends no extra symbol hints. A failed certificate leaves the query deferred.
+[Table classifier](Tamarin/CertifiedTable.lean) · [Promotion contract](Tamarin/CertifiedTableWire.lean)
 [Executable and theorems](Tamarin/GeneralVariants.lean) · [Rust acceptance test](../crates/tamarin-term/tests/native_backend/checked_variants.rs)
 
 For a canonical table, it suffices to give each operator a bound on **one** normalization
@@ -269,10 +272,16 @@ including shared variables. In DH, well-sorted factors can cancel in groups. Fac
 incompatible sort remain in the surrounding AC product. The mixed-table proof allows a
 free or commutative rule to return a subterm from inside any argument, including an AC
 product, or a ground expression that uses other active equations. All operator proofs refer
-to the combined table. A Rust regression compares the emitted DH packet word for word with
-the fixture Lean decodes. Other packets can establish the same result by checking their
-oriented rules against the schemas modulo C/AC. [DH packet proof](Tamarin/DHWire.lean) · [Rust encoder regression](../crates/tamarin-term/src/lean_unification/whole/dh_wire.rs) · [Short paths](Tamarin/OperatorVariantBounds.lean) ·
-[Kind-level DH products](Tamarin/DHKindProducts.lean) · [Subterm criterion](Tamarin/SubtermVariants.lean)
+to the combined table. For constructor-pattern extensions, the checker proves
+termination from operator weights and confluence from the possible reductions at each rule
+head. It compares competing rules pairwise. Equal projection paths or agreeing fixed
+ground results discharge a pair directly. For other pairs it checks all unifiers modulo C/AC
+and their instantiated outputs. The automatic classifier can defer an expensive overlap.
+The general overlap theorem covers every pair. Ground outputs may themselves reduce. The kernel verifies
+the actual 22-rule Rust table for DH, pairing, symmetric and asymmetric encryption, signing,
+reveal-signing and location reports. [Standalone criterion](Tamarin/ConstructorPresentation.lean) ·
+[Mixed criterion](Tamarin/DHConstructorExtension.lean) · [Rust packet proof](Tamarin/DHConstructorWire.lean) ·
+[Short paths](Tamarin/OperatorVariantBounds.lean)
 
 Arbitrary user extensions require a whole-table argument. For example, the two rules
 `f(s(x)) → g(x)` and `g(x) → f(x)` each take at most one root step above normal arguments

@@ -53,7 +53,7 @@ theorem apply_path (σ : Substitution s) {a b : Term s} {p}
     split at h <;> try contradiction
     next hi => simpa [Substitution.apply,Term.subst,atPath,hi] using ih h
 
-private theorem path_congr {a b x y : Term s} {p} (h : EquivB a b)
+theorem path_congr {a b x y : Term s} {p} (h : EquivB a b)
     (l : atPath a p = some x) (r : atPath b p = some y) : EquivB x y := by
   induction p generalizing a b with
   | nil => simp_all [atPath]

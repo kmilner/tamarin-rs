@@ -87,6 +87,45 @@ fn general_reduction_composes_a_user_equation_with_dh_exponent_cancellation() {
 }
 
 #[test]
+fn certified_mixed_table_retries_reduction_past_the_checked_depth() {
+    use tamarin_term::maude_sig::dh_maude_sig;
+
+    let symbol = |name: &'static [u8], arity| {
+        NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor)
+    };
+    let scan = symbol(b"scan", 1);
+    let frame = symbol(b"frame", 2);
+    let ok = symbol(b"ok", 0);
+    let mut sig = dh_maude_sig();
+    sig.st_fun_syms.extend([scan, frame, ok]);
+    let ok = f_app_no_eq(ok, vec![]);
+    let scan_once = |t| f_app_no_eq(scan, vec![t]);
+    sig.st_rules.insert(CtxtStRule::new(
+        scan_once(ok.clone()),
+        StRhs {
+            term: ok.clone(),
+            positions: vec![],
+        },
+    ));
+
+    // Only the innermost scan matches. The Node argument routes this query to
+    // the kind-level reducer, and the DH tower rule precludes the size budget.
+    let node = Term::Lit(Lit::Var(LVar::new("i", LSort::Node, 0)));
+    let wrap = |t| f_app_no_eq(frame, vec![node.clone(), t]);
+    let input = wrap((0..33).fold(ok.clone(), |t, _| scan_once(t)));
+    let expected = wrap(ok);
+    let sig = sig.refresh();
+    let h =
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+    assert_eq!(h.reduce(&input).unwrap(), expected);
+    assert_eq!(h.stats().norm_count, 0);
+    if let Some(path) = tamarin_test_support::require_maude_path() {
+        let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+        assert_eq!(oracle.reduce(&input).unwrap(), expected);
+    }
+}
+
+#[test]
 fn full_table_checks_macro_expansion_at_the_term_boundary() {
     use tamarin_term::builtin::{fst, pair};
     use tamarin_term::lean_unification::{

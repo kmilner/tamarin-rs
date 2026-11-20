@@ -6,7 +6,7 @@ persist as a multiset. The maximal Msg-sorted subbag is determined by its
 signed multiplicities and by whether a sorted factor was present at all.
 The latter distinction retains a unit adjacent to wholly ill-sorted factors. -/
 namespace Tamarin.Rewriting.DHPeer.ChurchRosser
-open KindProduct Balance Cancellation ShortVariantPaths
+open KindProduct Balance Cancellation ShortVariantPaths NormalAlgebra
 variable {sig : Signature} {s : Symbols sig} {R : Root sig} {T : Table s} {E : ExtraTable T}
 variable [DecidableEq sig.ACSym]
 

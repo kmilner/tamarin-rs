@@ -168,6 +168,34 @@ impl Packet {
         Ok(Some(packet))
     }
 
+    // The caller has initialized Lean and holds the current thread registration.
+    fn certifies_table(&self, rules: &[u64], fuel: u64) -> Result<bool, Error> {
+        unsafe extern "C" {
+            fn tamarin_lean_certify_table(
+                decls: WordSlice,
+                nodes: *const WordSlice,
+                count: usize,
+                rules: WordSlice,
+                fuel: u64,
+            ) -> u8;
+        }
+        let nodes = self.rows();
+        // SAFETY: the shim copies all words while the borrowed slices are live.
+        match unsafe {
+            tamarin_lean_certify_table(
+                WordSlice::new(&self.declarations),
+                nodes.as_ptr(),
+                nodes.len(),
+                WordSlice::new(rules),
+                fuel,
+            )
+        } {
+            0 => Ok(false),
+            1 => Ok(true),
+            status => Err(Error::InvalidStatus(status)),
+        }
+    }
+
     fn rows(&self) -> Vec<WordSlice> {
         let mut rows = vec![WordSlice::new(&[]); self.nodes.len()];
         for (row, &id) in &self.nodes {

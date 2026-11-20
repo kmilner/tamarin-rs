@@ -91,13 +91,41 @@ private theorem project_modulo (bound : ReferenceReduction.Bound rs) {a b : Term
   obtain ⟨inside,st⟩ := project_step bound fire ((local_equiv eq).mp loc)
   exact ⟨(local_equiv out).mp inside,_,_,restrict_eq eq,st,restrict_eq out⟩
 
+private theorem lift_path {a b : Term s} (p : Reduces (ruleRoot rs) a b) :
+    Reduces (ruleRoot (query x rs)) (embed x a) (embed x b) :=
+  RootNarrowing.reduction_invariant (fun t => Reduces (ruleRoot (query x rs)) (embed x a) (embed x t))
+    (fun h e => h.trans (.basis (embed_eq e))) (fun h st => h.trans (.step (lift_modulo st)))
+    p (.basis (.refl _))
+
+private theorem project_path (bound : ReferenceReduction.Bound rs) {a : Term s} {b : Term (joined s x)}
+    (p : Reduces (ruleRoot (query x rs)) (embed x a) b) :
+    Local b ∧ Reduces (ruleRoot rs) a (restrictTerm b) :=
+  RootNarrowing.reduction_invariant (fun z => Local z ∧ Reduces (ruleRoot rs) a (restrictTerm z))
+    (fun ⟨l,h⟩ e => ⟨(local_equiv e).mp l,h.trans (.basis (restrict_eq e))⟩)
+    (fun ⟨l,h⟩ st => let ⟨l',step⟩ := project_modulo bound st l; ⟨l',h.trans (.step step)⟩)
+    p ⟨embedding_local _,restrict_embed _ ▸ Reduces.basis (.refl _)⟩
+
+/-- A canonical range-restricted table stays canonical on the original terms
+when the extended signature is used to establish its certificate. In particular
+both sides of an ambient join from local inputs project to the same term. -/
+theorem reflect_canonical (x : Signature) (rs : Problem s) (scope : ReferenceReduction.Bound (query x rs))
+    (can : MaudeOperations.CanonicalPresentation (ruleRoot (query x rs))) :
+    ReferenceReduction.Bound rs ∧ MaudeOperations.CanonicalPresentation (ruleRoot rs) := by
+  have bound : ReferenceReduction.Bound rs := fun r hr v hv =>
+    (embed_occurs (x := x) r.lhs v).mp
+      (scope ⟨embed x r.lhs,embed x r.rhs⟩ (List.mem_map_of_mem (f := fun e =>
+        (⟨embed x e.lhs,embed x e.rhs⟩ : Equation (joined s x))) hr) v ((embed_occurs ..).mpr hv))
+  refine ⟨bound,⟨Subrelation.wf (fun st => lift_modulo st) (InvImage.wf (embed x) can.terminating),?_,?_⟩⟩
+  · intro _ _ _ left right
+    obtain ⟨w,a,b⟩ := can.confluent (lift_path left) (lift_path right)
+    exact ⟨restrictTerm w,(project_path bound a).2,(project_path bound b).2⟩
+  · intro _ _ st k ht
+    simpa only [restrict_embed] using restrict_sort (can.sortPreserving (lift_modulo st) k (embed_sort ht))
+
 theorem reduction (x : Signature) (rs : Problem s) (bound : ReferenceReduction.Bound rs) (a b : Term s)
     (reply : MaudeOperations.ReductionReply (ruleRoot rs) a b) :
     MaudeOperations.ReductionReply (ruleRoot (query x rs)) (embed x a) (embed x b) := by
-  have reach := RootNarrowing.reduction_invariant (fun t => Reduces (ruleRoot (query x rs)) (embed x a) (embed x t))
-    (fun h e => h.trans (.basis (embed_eq e))) (fun h st => h.trans (.step (lift_modulo st)))
-    reply.normalForm.1 (.basis (.refl _))
-  refine ⟨⟨reach,?_,?_⟩,?_⟩
+  refine ⟨⟨lift_path reply.normalForm.1,?_,?_⟩,?_⟩
   · intro u hu
     have st := (project_modulo bound hu (embedding_local _)).2
     rw [restrict_embed] at st
@@ -107,11 +135,7 @@ theorem reduction (x : Signature) (rs : Problem s) (bound : ReferenceReduction.B
     rw [restrict_embed] at sort
     exact embed_sort (reply.normalForm.2.2 k sort)
   · intro u other
-    have ⟨inside,path⟩ := RootNarrowing.reduction_invariant
-      (fun z => Local z ∧ Reduces (ruleRoot rs) a (restrictTerm z))
-      (fun ⟨l,h⟩ e => ⟨(local_equiv e).mp l,h.trans (.basis (restrict_eq e))⟩)
-      (fun ⟨l,h⟩ st => let ⟨l',step⟩ := project_modulo bound st l; ⟨l',h.trans (.step step)⟩)
-      other.1 ⟨embedding_local _,restrict_embed _ ▸ Reduces.basis (.refl _)⟩
+    have ⟨inside,path⟩ := project_path bound other.1
     have nf : Normal (ruleRoot rs) (restrictTerm u) := by
       intro t st
       have big := lift_modulo (x := x) st

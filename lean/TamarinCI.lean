@@ -5,6 +5,9 @@ import Tamarin.DHMixedVariants
 import Tamarin.DHFiniteVariants
 import Tamarin.TablePresentation
 import Tamarin.DHWire
+import Tamarin.DHConstructorWire
+import Tamarin.CertifiedReduction
+import Tamarin.DHMixedTermination
 import Tamarin.TableConfluence
 import Tamarin.CheckedVariantsPacket
 import Tamarin.TotalUnifyPacket
@@ -94,6 +97,16 @@ theorem exportedCheckedReduce_correct : CheckedReductionWire.Correct Executable.
 theorem exportedGeneralReduce_correct : GeneralReductionWire.Correct Executable.generalReduce :=
   GeneralReductionWire.correct
 
+theorem exportedCertifyTable_correct : CertifiedTableWire.Correct Executable.certifyTable :=
+  CertifiedTableWire.correct
+
+theorem exportedCertifiedReduce_complete {ds ns es root d t rs budget}
+    (decoded : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩)
+    (hit : Executable.certifyTable ds ns es budget = true) :
+    ∃ k : Nat, ∀ n : UInt64, k ≤ n.toNat →
+      GeneralReductionWire.Answer d rs t (Executable.generalReduce ds ns es root n) :=
+  exportedGeneralReduce_correct.completes_certified exportedCertifyTable_correct decoded hit
+
 theorem exportedCheckedVariants_correct : CheckedVariantsWire.Correct Executable.checkedVariants :=
   CheckedVariantsWire.correct
 
@@ -147,10 +160,7 @@ theorem exportedGeneralVariants_complete {ds ns es roots d rs q}
     (bound : ReferenceReduction.Bound (TableAmbient.liftRules rs))
     (canonical : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot (TableAmbient.liftRules rs)))
     (finite : MaudeOperations.FiniteVariantProperty (Rewriting.ruleRoot (TableAmbient.liftRules rs))) :
-    ∃ rows k, (∀ n ≥ k, GeneralVariants.run (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) n = some rows) ∧
-      ∀ (fuel : UInt64), k ≤ fuel.toNat → (TableAmbient.emit q rows).isSome → ∃ answers,
-        TableAmbient.Decodes q (Executable.generalVariants ds ns es roots fuel) answers ∧
-        MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) [] answers := by
+    GeneralVariantsWire.CompletesOn rs q (Executable.generalVariants ds ns es roots) := by
   obtain ⟨rows,k,found,_⟩ := GeneralVariants.completes _ _ bound canonical finite
   refine ⟨rows,k,found,fun fuel enough fits => ?_⟩
   rcases exportedGeneralVariants_progress fuel decoded bound canonical with done | ⟨_,retry⟩ | ⟨_,other,seen,failed⟩
@@ -160,6 +170,31 @@ theorem exportedGeneralVariants_complete {ds ns es roots d rs q}
     cases seen
     simp [failed] at fits
 
+/-- A positive table certificate licenses folding with the uniqueness
+guarantee required by a caller of the checked interface. -/
+theorem exportedCertifiedVariants_complete {ds ns es roots d rs q budget}
+    (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩)
+    (hit : Executable.certifyTable ds ns es budget = true) :
+    GeneralVariantsWire.CompletesOn rs q (Executable.generalVariants ds ns es roots) ∧
+    CheckedVariants.UniqueValues (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) := by
+  obtain ⟨scope,can,finite⟩ := CertifiedTableWire.sound exportedCertifyTable_correct decoded hit
+  refine ⟨exportedGeneralVariants_complete decoded scope can finite,?_⟩
+  let red := ReferenceReduction.reducer _ scope can
+  intro σ _ xs ys left right
+  generalize ht : q.map TableAmbient.liftTerm = terms at left right
+  clear ht
+  induction terms generalizing xs ys with
+  | nil => cases xs <;> cases ys <;> simp_all [Rewriting.Aligned]
+  | cons t ts ih =>
+    cases xs with
+    | nil => exact left.elim
+    | cons x xs =>
+      cases ys with
+      | nil => exact right.elim
+      | cons y ys =>
+        have uniq := (red.correct (σ.apply t)).unique
+        exact ⟨(uniq _ left.1).trans (uniq _ right.1).symm,ih _ _ left.2 right.2⟩
+
 /-- Any query whose decoded table matches the DH equations has a complete
 folding stage. Matching the table checks its orientation, its shared rule
 variables, and both sides of every equation modulo the declared C/AC laws. -/
@@ -168,10 +203,7 @@ theorem exportedDHVariants_complete {ds ns es roots d rs q}
     (s : Rewriting.DHPeer.Symbols (TableAmbient.sig d)) (keys : Fin 3 → Variable)
     (types : ∀ i, (keys i).sort = .msg) (unique : ∀ i j, keys i = keys j → i = j)
     (check : TablePresentation.Agrees (TableAmbient.liftRules rs) (Rewriting.DHPeer.Schemas.rules s keys)) :
-    ∃ rows k, (∀ n ≥ k, GeneralVariants.run (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) n = some rows) ∧
-      ∀ (fuel : UInt64), k ≤ fuel.toNat → (TableAmbient.emit q rows).isSome → ∃ answers,
-        TableAmbient.Decodes q (Executable.generalVariants ds ns es roots fuel) answers ∧
-        MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) [] answers := by
+    GeneralVariantsWire.CompletesOn rs q (Executable.generalVariants ds ns es roots) := by
   obtain ⟨canonical,finite⟩ := DHWire.complete_of_agrees s keys types unique check
   have schema := Rewriting.DHPeer.Schemas.exactTable s keys types unique
   exact exportedGeneralVariants_complete decoded
@@ -180,13 +212,8 @@ theorem exportedDHVariants_complete {ds ns es roots d rs q}
 /-- Folding the physical DH packet over the full ambient name universe completes
 at a finite stage. Returning its answers requires representable wire indices. -/
 theorem exportedPhysicalDHVariants_complete :
-    ∃ rows k, (∀ n ≥ k, GeneralVariants.run (TableAmbient.liftRules DHWire.rules)
-        (DHWire.observations.map TableAmbient.liftTerm) n = some rows) ∧
-      ∀ (fuel : UInt64), k ≤ fuel.toNat → (TableAmbient.emit DHWire.observations rows).isSome → ∃ answers,
-        TableAmbient.Decodes DHWire.observations
-          (Executable.generalVariants DHWire.declarations DHWire.nodes DHWire.ruleRoots DHWire.observationRoots fuel) answers ∧
-        MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules DHWire.rules))
-          (DHWire.observations.map TableAmbient.liftTerm) [] answers := by
+    GeneralVariantsWire.CompletesOn DHWire.rules DHWire.observations
+      (Executable.generalVariants DHWire.declarations DHWire.nodes DHWire.ruleRoots DHWire.observationRoots) := by
   obtain ⟨canonical,finite⟩ := DHWire.ambient_complete
   exact exportedGeneralVariants_complete DHWire.decoded DHWire.ambient_bound canonical finite
 
@@ -199,15 +226,28 @@ theorem exportedMixedDHVariants_complete {ds ns es roots d rs q}
     (others : Rewriting.DHPeer.OtherRows T)
     (agrees : TablePresentation.Agrees (TableAmbient.liftRules rs) T.rules)
     (can : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot (TableAmbient.liftRules rs))) :
-    ∃ rows k, (∀ n ≥ k, GeneralVariants.run (TableAmbient.liftRules rs)
-        (q.map TableAmbient.liftTerm) n = some rows) ∧
-      ∀ (fuel : UInt64), k ≤ fuel.toNat → (TableAmbient.emit q rows).isSome → ∃ answers,
-        TableAmbient.Decodes q (Executable.generalVariants ds ns es roots fuel) answers ∧
-        MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs))
-          (q.map TableAmbient.liftTerm) [] answers := by
+    GeneralVariantsWire.CompletesOn rs q (Executable.generalVariants ds ns es roots) := by
   have finite := Rewriting.DHPeer.mixedFiniteVariants ((TablePresentation.canonical_iff agrees).mp can) dh others
   exact exportedGeneralVariants_complete decoded (TablePresentation.bound_of_agrees agrees (others.scope dh))
     can ((TablePresentation.finite_iff agrees).mpr finite)
+
+/-- Checked constructor extensions discharge both convergence and the finite
+variant property on the decoded table before any query-dependent search. -/
+theorem exportedConstructorDHVariants_complete {ds ns es roots d rs q}
+    (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩)
+    (s : Rewriting.DHPeer.Symbols (TableAmbient.sig d)) (keys : Fin 3 → Variable)
+    (typed : ∀ i, (keys i).sort = .msg) (distinct : ∀ i j, keys i = keys j → i = j)
+    {w fuel} (ok : Rewriting.DHPeer.ConstructorExtension.accepts s keys w fuel (TableAmbient.liftRules rs)) :
+    GeneralVariantsWire.CompletesOn rs q (Executable.generalVariants ds ns es roots) := by
+  obtain ⟨scope,can,fvp⟩ := Rewriting.DHPeer.ConstructorExtension.accepts_sound s keys typed distinct ok
+  exact exportedGeneralVariants_complete decoded scope can fvp
+
+theorem exportedPhysicalConstructorDHVariants_complete :
+    GeneralVariantsWire.CompletesOn DHConstructorWire.rules DHConstructorWire.observations
+      (Executable.generalVariants DHConstructorWire.declarations DHConstructorWire.nodes
+        DHConstructorWire.ruleRoots DHConstructorWire.observationRoots) := by
+  obtain ⟨scope,can,fvp⟩ := DHConstructorWire.complete
+  exact exportedGeneralVariants_complete DHConstructorWire.decoded scope can fvp
 
 /-- A canonical mixed subterm/ground table needs no separate finite-variant
 hypothesis. The rows are checked on the decoded module, before extending it
@@ -1439,6 +1479,7 @@ run_cmd do
     (``Tamarin.Executable.totalUnify, `tamarin_total_unify),
     (``Tamarin.Executable.totalMatch, `tamarin_total_match),
     (``Tamarin.Executable.generalReduce, `tamarin_general_reduce),
+    (``Tamarin.Executable.certifyTable, `tamarin_certify_table),
     (``Tamarin.Executable.generalVariants, `tamarin_general_variants),
     (``Tamarin.Executable.checkedVariants, `tamarin_checked_variants),
     (``Tamarin.Executable.wholeUnify, `tamarin_whole_unify),

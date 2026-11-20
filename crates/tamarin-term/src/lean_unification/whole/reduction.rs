@@ -70,12 +70,14 @@ fn evaluate(
 ) -> Result<Option<LNTerm>, Error> {
     initialize()?;
     let rows = packet.rows();
+    let rules = &packet.equations[1..];
+    let mut general = reference;
     let mut fuel = if reference { 4 } else { 32 };
     LEAN_THREAD.with(|_| loop {
         cancellation::check().map_err(|_| Error::Cancelled)?;
         // SAFETY: all slices live through the call. MatchRows owns the returned array.
         let reply = MatchRows::new(unsafe {
-            let kernel = if reference {
+            let kernel = if general {
                 tamarin_lean_general_reduce
             } else {
                 tamarin_lean_checked_reduce
@@ -84,14 +86,20 @@ fn evaluate(
                 WordSlice::new(&packet.declarations),
                 rows.as_ptr(),
                 rows.len(),
-                WordSlice::new(&packet.equations[1..]),
+                WordSlice::new(rules),
                 packet.equations[0],
                 fuel,
             )
         })?;
         match (total::header(&reply)?, reply.rows(0)) {
-            (3, 1) if reference && fuel < u64::MAX => fuel = fuel.saturating_mul(2),
-            (3, 1) if reference => return Ok(None),
+            (3, 1) if general && fuel < u64::MAX => fuel = fuel.saturating_mul(2),
+            (3, 1) if general => return Ok(None),
+            (2, 1) if !general && packet.certifies_table(rules, 4)? => {
+                // A bounded rejection may only mean that the original input needs
+                // more work. A canonical table guarantees the staged retry terminates.
+                general = true;
+                fuel = 4;
+            }
             (2, 1) => return Ok(None),
             (1, 2) => {
                 let mut words = vec![0; reply.row_size(0, 1)?];

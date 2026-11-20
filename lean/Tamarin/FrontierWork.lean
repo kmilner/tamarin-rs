@@ -27,4 +27,11 @@ def admits (rules : Problem s) (q : List (Term s)) (depth : Nat) : Bool :=
     (positions r.lhs + positions r.rhs) * 2 ^ min 20 (acVariables r.lhs).eraseDups.length).sum
   (1 + table) * (q.map positions).sum ≤ 64 * depth
 
+/-- Automatic table admission can compare two rule patterns by unification.
+They are standardized apart, so even identical source variable IDs on the two
+sides count separately. Use the same per-stage allowance as frontier discovery. -/
+def admitsRootPair (p q : Term s) (depth : Nat := 4) : Bool :=
+  let captures := (acVariables p).eraseDups.length + (acVariables q).eraseDups.length
+  (positions p + 1) * (positions q + 1) * 2 ^ min 20 captures ≤ 64 * depth
+
 end Tamarin.FrontierWork

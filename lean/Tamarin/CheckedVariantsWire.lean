@@ -61,4 +61,14 @@ def run (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UIn
       | none => #[#[3]]
       | some rows => (TableAmbient.emit q rows).getD #[#[2]]
     else #[#[2]]
+
+/-- The search stabilizes at a finite stage. A funded call can return any
+complete family whenever the reference bindings fit the wire. -/
+def CompletesOn {d : Dictionary} (rs : Problem d.sig) (q : List (Term d.sig))
+    (reply : UInt64 → Array (Array UInt64)) : Prop :=
+  ∃ rows k, (∀ n ≥ k, GeneralVariants.run (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) n = some rows) ∧
+    ∀ (fuel : UInt64), k ≤ fuel.toNat → (TableAmbient.emit q rows).isSome → ∃ answers,
+      TableAmbient.Decodes q (reply fuel) answers ∧
+      MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) [] answers
+
 end Tamarin.GeneralVariantsWire

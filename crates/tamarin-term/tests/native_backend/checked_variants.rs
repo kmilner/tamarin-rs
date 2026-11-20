@@ -197,3 +197,61 @@ fn mixed_dh_and_ground_result_equation_cover_open_and_specialized_inputs() {
         assert!(open && specialized);
     }
 }
+
+#[test]
+fn certified_ground_rule_beyond_frontier_returns_open_and_specialized_variants() {
+    let public =
+        |name, arity| NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor);
+    let probe = public(b"probe".as_slice(), 1);
+    let marker = public(b"marker", 0);
+    let ok = public(b"ok", 0);
+    let mut sig = mset_maude_sig();
+    sig.st_fun_syms.extend([probe, marker, ok]);
+    let marker = f_app_no_eq(marker, vec![]);
+    let ok = f_app_no_eq(ok, vec![]);
+    let call = |x| f_app_no_eq(probe, vec![x]);
+    sig.st_rules.insert(CtxtStRule::new(
+        call(marker.clone()),
+        StRhs {
+            positions: vec![],
+            term: ok.clone(),
+        },
+    ));
+    let sig = sig.refresh();
+    let x = LVar::new("input", LSort::Msg, 5);
+    let var = Term::Lit(Lit::Var(x));
+    let node = Term::Lit(Lit::Con(Name::new(NameTag::Node, "node")));
+    // The six-factor AC observation exceeds the bounded frontier's work allowance.
+    // Its Node factor also exercises ordinary terms at the common kind.
+    let product = (0..5).fold(node, |acc, _| sum(acc, marker.clone()));
+    let query = f_app_list(vec![call(var.clone()), var.clone(), product]);
+    let native =
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+    let check = |backend: &MaudeHandle| {
+        let rows = backend.variants(&query).unwrap();
+        let (mut open, mut specialized) = (false, false);
+        for row in rows {
+            let image = row
+                .into_iter()
+                .find(|(key, _)| *key == x)
+                .map_or(var.clone(), |(_, t)| t);
+            if image == marker {
+                assert_eq!(backend.reduce(&call(image)).unwrap(), ok);
+                specialized = true;
+            } else {
+                assert!(matches!(image, Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg));
+                let t = call(image);
+                assert_eq!(backend.reduce(&t).unwrap(), t);
+                open = true;
+            }
+        }
+        assert!(open && specialized);
+    };
+    if let Some(path) = tamarin_test_support::require_maude_path() {
+        let maude = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+        check(&maude);
+        assert_eq!(maude.stats().var_count, 1);
+    }
+    check(&native);
+    assert_eq!(native.stats().var_count, 0);
+}

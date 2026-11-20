@@ -9,7 +9,7 @@ use crate::term::Term;
 use rustc_hash::FxHashSet;
 use tamarin_utils::cancellation;
 
-// Per-query frontier budget. Certified destructor tables can continue to completion.
+// Initial frontier budget. A certified table can continue with staged folding.
 const FRONTIER_DEPTH: u64 = 4;
 
 unsafe extern "C" {
@@ -81,7 +81,7 @@ fn evaluate(
     packet: &Packet,
     sig: &MaudeSig,
     observations: &[LNTerm],
-    search: Search,
+    mut search: Search,
 ) -> Result<Outcome, Error> {
     let width = observations
         .iter()
@@ -119,6 +119,15 @@ fn evaluate(
                 ),
             }
         })?;
+        // Staged folding preserves unique reconstruction on a certified table.
+        if matches!(search, Search::Checked)
+            && total::header(&reply)? == 2
+            && reply.rows(0) == 1
+            && packet.certifies_table(rules, fuel)?
+        {
+            search = Search::General;
+            continue;
+        }
         if matches!(search, Search::General) && total::header(&reply)? == 3 {
             if reply.rows(0) != 1 {
                 return Err(Error::InvalidStatus(255));

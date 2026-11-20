@@ -1,3 +1,4 @@
+import Tamarin.DHWireSymbols
 import Tamarin.DHFiniteVariants
 import Tamarin.DHWireData
 import Tamarin.TablePresentation
@@ -23,28 +24,10 @@ abbrev observations := parsed.2.2
 theorem decoded : TableWire.input declarations nodes ruleRoots observationRoots =
     some ⟨dict,rules,observations⟩ := Option.some_get _ |>.symm
 
-def symbols : Symbols dict.sig where
-  pow := ⟨0,by decide +kernel⟩
-  inv := ⟨1,by decide +kernel⟩
-  one := ⟨2,by decide +kernel⟩
-  neutral := ⟨3,by decide +kernel⟩
-  mul := ⟨4,by decide +kernel⟩
-  powArity := by decide +kernel
-  invArity := by decide +kernel
-  oneArity := by decide +kernel
-  neutralArity := by decide +kernel
-  powInput := by decide +kernel
-  invInput := by decide +kernel
-  powSort := by decide +kernel
-  invSort := by decide +kernel
-  oneSort := by decide +kernel
-  neutralSort := by decide +kernel
-  mulSort := by decide +kernel
-
-def ambient : Symbols (TableAmbient.sig dict) :=
-  ⟨.inl symbols.pow,.inl symbols.inv,.inl symbols.one,.inl symbols.neutral,.inl symbols.mul,
-   symbols.powArity,symbols.invArity,symbols.oneArity,symbols.neutralArity,
-   symbols.powInput,symbols.invInput,symbols.powSort,symbols.invSort,symbols.oneSort,symbols.neutralSort,symbols.mulSort⟩
+private def declared := readSymbols (d := dict) ⟨0,by decide +kernel⟩ ⟨1,by decide +kernel⟩
+  ⟨2,by decide +kernel⟩ ⟨3,by decide +kernel⟩ ⟨4,by decide +kernel⟩
+def symbols := declared.get (by decide +kernel)
+def ambient := liftSymbols symbols
 
 private def v (i : Fin 3) : Variable := ⟨i.val,.msg⟩
 private theorem typed (i : Fin 3) : (v i).sort = .msg := rfl

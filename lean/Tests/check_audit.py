@@ -331,6 +331,15 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedConstructorVariant_correct"),
 ])
 
+EXECUTABLE += "\nnamespace Tamarin\n" + obligation("exportedCertifyTable_correct") + "end Tamarin\n"
+EXPORT_MUTATIONS.extend([
+    ("certifies_conflicting_tables", "CertifiedTableWire.run ds ns rules fuel", "true",
+     "theorem exportedCertifyTable_correct"),
+    ("certifies_missing_rules", "CertifiedTableWire.run ds ns rules fuel", "CertifiedTableWire.run ds ns #[] fuel",
+     "theorem exportedCertifyTable_correct"),
+    ("refuses_all_certificates", "CertifiedTableWire.run ds ns rules fuel", "false",
+     "theorem exportedCertifyTable_correct"),
+])
 REDUCTION_RUN = "  RuntimeCandidate.reduceRuleSlot slot keys subjects"
 EXPORT_MUTATIONS.extend([
     ("reduction_ignores_repeated_slot", REDUCTION_RUN, "  subjects.extract 0 1",

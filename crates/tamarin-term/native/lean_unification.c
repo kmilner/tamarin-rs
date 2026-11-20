@@ -369,6 +369,14 @@ void *tamarin_lean_unpack_conjunction(const whole_word_slice *rows, size_t count
 
 extern lean_object *tamarin_total_unify(lean_object *, lean_object *, lean_object *);
 
+extern uint8_t tamarin_certify_table(lean_object *, lean_object *, lean_object *, uint64_t);
+
+uint8_t tamarin_lean_certify_table(whole_word_slice decls, const whole_word_slice *rows,
+                                   size_t count, whole_word_slice rules, uint64_t fuel) {
+    return tamarin_certify_table(atom_array(decls.data, decls.size), word_rows(rows, count),
+                                atom_array(rules.data, rules.size), fuel);
+}
+
 extern uint8_t tamarin_factor_refutes(lean_object *, lean_object *, lean_object *);
 
 uint8_t tamarin_lean_factor_refutes(whole_word_slice decls, const whole_word_slice *rows,

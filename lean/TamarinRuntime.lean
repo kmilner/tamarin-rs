@@ -1,3 +1,4 @@
+import Tamarin.CertifiedTableWire
 import Tamarin.CheckedVariantsWire
 import Tamarin.GeneralReductionWire
 import Tamarin.CheckedReductionWire
@@ -218,6 +219,10 @@ def generalReduce (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array
 @[export tamarin_checked_variants]
 def checkedVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
     Array (Array UInt64) := CheckedVariantsWire.run ds ns rules roots fuel
+
+@[export tamarin_certify_table]
+def certifyTable (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64) (fuel : UInt64) : Bool :=
+  CertifiedTableWire.run ds ns rules fuel
 
 @[export tamarin_general_variants]
 def generalVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
