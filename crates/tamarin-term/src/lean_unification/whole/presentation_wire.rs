@@ -1,16 +1,18 @@
-//! Keep the numeric input of the Lean DH presentation theorem tied to the
+//! Keep the numeric input of the Lean presentation theorems tied to the
 //! production encoder. Rows are read back in the same order as Packet::rows().
 use super::Packet;
-use crate::builtin::{dh_neutral, exp, inv, msg_var, mult, one_const};
+use crate::builtin::{dh_neutral, exp, inv, msg_var, mult, one_const, xor, zero_const};
+use crate::lterm::LNTerm;
 use crate::maude_sig::{
     asym_enc_maude_sig, dh_maude_sig, location_report_maude_sig, minimal_maude_sig,
-    reveal_signature_maude_sig, signature_maude_sig, sym_enc_maude_sig, MaudeSig,
+    reveal_signature_maude_sig, signature_maude_sig, sym_enc_maude_sig, xor_maude_sig, MaudeSig,
 };
 
 #[test]
 fn physical_dh_table_matches_the_lean_presentation() {
     check_packet(
         dh_maude_sig(),
+        &dh_observations(),
         "DHWire",
         include_str!("../../../../../lean/Tamarin/DHWireData.lean"),
     );
@@ -30,21 +32,37 @@ fn dh_with_destructors() -> MaudeSig {
 fn physical_dh_and_destructor_table_matches_the_lean_presentation() {
     check_packet(
         dh_with_destructors(),
+        &dh_observations(),
         "DHConstructorWire",
         include_str!("../../../../../lean/Tamarin/DHConstructorWireData.lean"),
     );
 }
 
-fn check_packet(sig: MaudeSig, namespace: &str, fixture: &str) {
+fn dh_observations() -> [LNTerm; 5] {
     let [x, y, z] = [1, 2, 3].map(|i| msg_var("x", i));
-    let observations = [
+    [
         exp(x.clone(), y.clone()),
         inv(z),
         one_const(),
         dh_neutral(),
         mult(x, y),
-    ];
-    let packet = Packet::full_table(&sig, &observations).unwrap().unwrap();
+    ]
+}
+
+#[test]
+fn physical_xor_and_destructor_table_matches_the_lean_presentation() {
+    check_packet(
+        minimal_maude_sig(false)
+            .merge(xor_maude_sig())
+            .merge(sym_enc_maude_sig()),
+        &[xor(msg_var("x", 1), msg_var("x", 2)), zero_const()],
+        "XorConstructorWire",
+        include_str!("../../../../../lean/Tamarin/XorConstructorWireData.lean"),
+    );
+}
+
+fn check_packet(sig: MaudeSig, observations: &[LNTerm], namespace: &str, fixture: &str) {
+    let packet = Packet::full_table(&sig, observations).unwrap().unwrap();
     let mut rows = vec![&[][..]; packet.nodes.len()];
     for (words, &id) in &packet.nodes {
         rows[id as usize] = words.as_ref();
@@ -69,7 +87,7 @@ fn check_packet(sig: MaudeSig, namespace: &str, fixture: &str) {
     assert_eq!(
         compact(fixture),
         compact(&arrays),
-        "DH packet changed:\n{arrays}"
+        "{namespace} packet changed:\n{arrays}"
     );
 }
 

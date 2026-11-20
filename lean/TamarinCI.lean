@@ -6,6 +6,7 @@ import Tamarin.DHFiniteVariants
 import Tamarin.TablePresentation
 import Tamarin.DHWire
 import Tamarin.DHConstructorWire
+import Tamarin.XorConstructorWire
 import Tamarin.CertifiedReduction
 import Tamarin.DHMixedTermination
 import Tamarin.TableConfluence
@@ -99,6 +100,17 @@ theorem exportedGeneralReduce_correct : GeneralReductionWire.Correct Executable.
 
 theorem exportedCertifyTable_correct : CertifiedTableWire.Correct Executable.certifyTable :=
   CertifiedTableWire.correct
+
+/-- The baseline classifier is a coverage floor. Every certified replacement
+therefore admits the exact production XOR and destructor packet. -/
+theorem exportedPhysicalXorTable_admitted :
+    Executable.certifyTable XorConstructorWire.declarations XorConstructorWire.nodes
+      XorConstructorWire.ruleRoots 0 = true := by
+  have baseline := XorConstructorWire.admitted
+  have provided := exportedCertifyTable_correct XorConstructorWire.declarations XorConstructorWire.nodes
+    XorConstructorWire.ruleRoots 0
+  unfold CertifiedTableWire.run at baseline
+  split at provided <;> simp_all
 
 theorem exportedCertifiedReduce_complete {ds ns es root d t rs budget}
     (decoded : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩)

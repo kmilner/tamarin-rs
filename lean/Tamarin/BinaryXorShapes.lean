@@ -1,29 +1,36 @@
 import Tamarin.BinaryXorNormal
+import Tamarin.OperatorVariantBounds
 
 namespace Tamarin.Rewriting.BinaryXor
-open Cancellation ACRepresentation
+open Cancellation ACRepresentation ShortVariantPaths
 variable {sig : Signature} (T : Table sig)
 
 private theorem cancel_tail {h t : Term sig} (hs : HasSort h .msg) (ts : HasSort t .msg) :
-    Reduces T.R (.ac T.f h (.ac T.f h t)) t := by
-  exact (Reduces.basis (.symm (.ac_assoc ..))).trans
-    ((Reduces.ac T.f (.step ⟨_,_,.refl _,.root (dup_msg T hs),.refl _⟩) (.basis (.refl t))).trans
-      (.step ⟨_,_,.ac_swap ..,.root (T.unit ts),.refl _⟩))
+    Path T.R 2 (.ac T.f h (.ac T.f h t)) t :=
+  .step ⟨_,_,.symm (.ac_assoc ..),.ac_left T.f t (.root (dup_msg T hs)),.refl _⟩
+    (.step ⟨_,_,.ac_swap ..,.root (T.unit ts),.refl _⟩ (.basis (.refl _)))
+
+/-- The entire shared subproduct cancels in one duplicate step, independently
+of its width. One unit step suffices to expose any remaining operands. -/
+theorem shape_path (sh : Shape) {h i j : Term sig}
+    (hs : HasSort h .msg) (is_ : HasSort i .msg) (js : HasSort j .msg) :
+    let (a,b,out) := sh.images T h i j
+    Path T.R 2 (.ac T.f a b) out := by
+  cases sh with
+  | disjoint => exact .basis (.refl _)
+  | unitLeft => exact .step ⟨_,_,.ac_swap ..,.root (T.unit js),.refl _⟩ (.basis (.refl _))
+  | unitRight => exact .step ⟨_,_,.refl _,.root (T.unit is_),.refl _⟩ (.basis (.refl _))
+  | same => exact .step ⟨_,_,.refl _,.root (dup_msg T hs),.refl _⟩ (.basis (.refl _))
+  | leftContains => exact (cancel_tail T hs is_).rebase (.ac_swap ..)
+  | rightContains => exact cancel_tail T hs js
+  | overlap =>
+    exact (cancel_tail T hs (T.fSort ▸ HasSort.ac _ _ _ (T.fSort ▸ is_) (T.fSort ▸ js))).rebase
+      ((EquivB.ac_assoc ..).trans (.ac_congr T.f (.refl h) (fold_swap T.f i h [j])))
 
 theorem shape_reduces (sh : Shape) {h i j : Term sig}
     (hs : HasSort h .msg) (is_ : HasSort i .msg) (js : HasSort j .msg) :
     let (a,b,out) := sh.images T h i j
-    Reduces T.R (.ac T.f a b) out := by
-  cases sh with
-  | disjoint => exact .basis (.refl _)
-  | unitLeft => exact .step ⟨_,_,.ac_swap ..,.root (T.unit js),.refl _⟩
-  | unitRight => exact .step ⟨_,_,.refl _,.root (T.unit is_),.refl _⟩
-  | same => exact .step ⟨_,_,.refl _,.root (dup_msg T hs),.refl _⟩
-  | leftContains => exact (Reduces.basis (.ac_swap ..)).trans (cancel_tail T hs is_)
-  | rightContains => exact cancel_tail T hs js
-  | overlap =>
-    exact (Reduces.basis ((EquivB.ac_assoc ..).trans (.ac_congr T.f (.refl h) (fold_swap T.f i h [j])))).trans
-      (cancel_tail T hs (T.fSort ▸ HasSort.ac _ _ _ (T.fSort ▸ is_) (T.fSort ▸ js)))
+    Reduces T.R (.ac T.f a b) out := (shape_path T sh hs is_ js).reduces
 
 private theorem var_good (v : Variable) (vs : v.sort = .msg) : Good T (.var v) :=
   ⟨vs ▸ HasSort.var v,(ConstructorVariants.constructor_normal T.rules T.apps).1 v⟩

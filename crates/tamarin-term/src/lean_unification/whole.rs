@@ -840,4 +840,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod dh_wire;
+mod presentation_wire;

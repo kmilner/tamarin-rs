@@ -255,3 +255,57 @@ fn certified_ground_rule_beyond_frontier_returns_open_and_specialized_variants()
     check(&native);
     assert_eq!(native.stats().var_count, 0);
 }
+
+#[test]
+fn certified_xor_decryption_variants_preserve_the_kind_level_residual() {
+    use tamarin_term::builtin::{sdec, senc, xor, zero_const};
+    use tamarin_term::maude_sig::{minimal_maude_sig, sym_enc_maude_sig, xor_maude_sig};
+
+    let sig = minimal_maude_sig(false)
+        .merge(sym_enc_maude_sig())
+        .merge(xor_maude_sig());
+    let message = pub_term("message");
+    let key = pub_term("key");
+    let x = LVar::new("key", LSort::Msg, 0);
+    let variable = Term::Lit(Lit::Var(x));
+    let node = Term::Lit(Lit::Con(Name::new(NameTag::Node, "event")));
+    let decrypt = |k| sdec(senc(message.clone(), key.clone()), k);
+    // Cancellation groups the two messages. The remaining unit cannot
+    // disappear against a Node since XOR's rule variables have sort Msg.
+    let product = xor(xor(node.clone(), message.clone()), message.clone());
+    let residual = xor(node.clone(), zero_const());
+    let query = f_app_list(vec![
+        decrypt(variable.clone()),
+        variable.clone(),
+        product.clone(),
+    ]);
+    let check = |h: &MaudeHandle| {
+        assert_eq!(h.reduce(&product).unwrap(), residual);
+        let rows = h.variants(&query).unwrap();
+        let (mut open, mut specialized) = (false, false);
+        for row in rows {
+            let image = row
+                .into_iter()
+                .find(|(v, _)| *v == x)
+                .map_or(variable.clone(), |(_, t)| t);
+            let t = decrypt(image.clone());
+            if image == key {
+                assert_eq!(h.reduce(&t).unwrap(), message);
+                specialized = true;
+            } else {
+                assert!(matches!(image, Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg));
+                assert_eq!(h.reduce(&t).unwrap(), t);
+                open = true;
+            }
+        }
+        assert!(open && specialized);
+    };
+    let native =
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+    check(&native);
+    assert_eq!(native.stats().var_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
+    if let Some(path) = tamarin_test_support::require_maude_path() {
+        check(&MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap());
+    }
+}

@@ -1,6 +1,7 @@
 import Tamarin.CertifiedTable
 import Tamarin.DHWire
 import Tamarin.DHConstructorWire
+import Tamarin.XorConstructorWire
 
 namespace Tamarin.CertifiedTableTests
 set_option maxRecDepth 8192
@@ -31,5 +32,21 @@ private def check (roots : Array UInt64) := Id.run do
 -- presentation. Reverse each oriented equation in turn.
 #guard (List.range DHWire.rules.length).all fun i =>
   !CertifiedTable.admits (DHWire.rules.modify i (fun r => ⟨r.rhs,r.lhs⟩)) 1
+
+-- The encoder puts the three XOR equations last in the mixed six-rule packet.
+-- A missing or reversed equation must never select the full XOR presentation.
+private def xorPacket := (TableWire.input XorConstructorWire.declarations XorConstructorWire.nodes
+    XorConstructorWire.ruleRoots #[]).get (by decide +kernel)
+private abbrev xorRules := xorPacket.2.1
+
+#guard xorRules.length == 6
+#guard CertifiedTable.admits xorRules.reverse 0
+#guard (List.range 3).all fun offset => !CertifiedTable.admits (xorRules.eraseIdx (offset + 3)) 4
+#guard (List.range 3).all fun offset =>
+  !CertifiedTable.admits (xorRules.modify (offset + 3) fun r => ⟨r.rhs,r.lhs⟩) 4
+
+-- This extra row keeps every original equation, but makes m ⊕ m return m too.
+#guard !CertifiedTableWire.run XorConstructorWire.declarations XorConstructorWire.nodes
+  (XorConstructorWire.ruleRoots ++ #[9,0]) 4
 
 end Tamarin.CertifiedTableTests

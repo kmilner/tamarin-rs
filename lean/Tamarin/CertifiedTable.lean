@@ -2,6 +2,8 @@ import Tamarin.ConstructorPresentation
 import Tamarin.DHConstructorExtension
 import Tamarin.DHWireSymbols
 import Tamarin.SubtermDecrease
+import Tamarin.XorPresentation
+import Tamarin.XorTableWire
 
 /-! Certify the decoded table in its full ambient signature. Symbol and variable
 IDs may vary with the query. Matching a characteristic rule only proposes an
@@ -68,10 +70,14 @@ private def dh (rs : Problem (TableAmbient.sig d)) (fuel : Nat)
   decide (∀ i, (ks i).sort = .msg) && decide (∀ i j, ks i = ks j → i = j) &&
     ConstructorExtension.accepts (DHWire.liftSymbols s) ks (weight ExactTable.weight rs) fuel rs
 
+private def xor (rs : Problem (TableAmbient.sig d)) (fuel : Nat) (s : XorTable.Schema d.sig) : Bool :=
+  XorTable.accepts (XorTable.liftSchema s) (weight (fun _ => 1) rs) fuel rs
+
 def admits (rs : Problem d.sig) (fuel : Nat) : Bool :=
   let ambient := TableAmbient.liftRules rs
   if rs.any (fun r => match r.lhs with | .ac .. => true | _ => false) then
-    (detect rs).any (fun (s,ks) => dh ambient fuel s ks)
+    (detect rs).any (fun (s,ks) => dh ambient fuel s ks) ||
+      (XorTable.detect rs).any (xor ambient fuel)
   else ordinary ambient fuel
 
 theorem admits_sound {rs : Problem d.sig} {fuel} (ok : admits rs fuel) :
@@ -80,13 +86,19 @@ theorem admits_sound {rs : Problem d.sig} {fuel} (ok : admits rs fuel) :
   unfold admits at ok
   dsimp only at ok
   split at ok
-  · cases hit : detect rs with
-    | none => simp [hit] at ok
-    | some pair =>
-      obtain ⟨s,ks⟩ := pair
-      simp only [hit,Option.any_some,dh,Bool.and_eq_true,decide_eq_true_eq] at ok
-      obtain ⟨⟨typed,distinct⟩,accepted⟩ := ok
-      exact ConstructorExtension.accepts_sound _ _ typed distinct accepted
+  · rcases Bool.or_eq_true_iff.mp ok with dhOK | xorOK
+    · cases hit : detect rs with
+      | none => simp [hit] at dhOK
+      | some pair =>
+        obtain ⟨s,ks⟩ := pair
+        simp only [hit,Option.any_some,dh,Bool.and_eq_true,decide_eq_true_eq] at dhOK
+        obtain ⟨⟨typed,distinct⟩,accepted⟩ := dhOK
+        exact ConstructorExtension.accepts_sound _ _ typed distinct accepted
+    · cases hit : XorTable.detect rs with
+      | none => simp [hit] at xorOK
+      | some s =>
+        simp only [hit,Option.any_some,xor] at xorOK
+        exact XorTable.accepts_sound xorOK
   · exact ConstructorRows.accepts_sound ok
 
 end Tamarin.CertifiedTable
