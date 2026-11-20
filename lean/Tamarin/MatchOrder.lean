@@ -65,6 +65,33 @@ theorem Complete.min_key_eq {α : Type} [Min α] [LE α] [Std.IsLinearOrder α]
   have same (v : α) := (hx.key_mem_iff key invariant v).trans (hy.key_mem_iff key invariant v).symm
   simp only [List.min?_eq_some_iff, same]
 
+/-- The caller fixes the same list of pattern variables for every row. Reading
+each image includes identity bindings and keeps subject variables rigid. -/
+def bindingImages {α : Type} (repr : Term sig → α) (vars : List Variable)
+    (σ : Substitution sig) : List α := vars.map (fun v => repr (σ.image v))
+
+theorem bindingImages_eq_iff {α : Type} (repr : Term sig → α) (vars : List Variable)
+    (σ τ : Substitution sig) (faithful : ∀ v ∈ vars,
+      repr (σ.image v) = repr (τ.image v) ↔ EquivB (σ.image v) (τ.image v)) :
+    bindingImages repr vars σ = bindingImages repr vars τ ↔
+      ∀ v ∈ vars, EquivB (σ.image v) (τ.image v) := by
+  simp only [bindingImages, List.map_inj_left]
+  exact ⟨fun eq v mem => (faithful v mem).mp (eq v mem),
+    fun eq v mem => (faithful v mem).mpr (eq v mem)⟩
+
+/-- Taking the least restored binding list agrees across complete search
+implementations for any shared total caller order on the lists.
+`bindingImages_eq_iff` identifies tied rows when their representations are faithful. -/
+theorem Complete.min_bindingImages_eq {α : Type} [Min (List α)] [LE (List α)]
+    [Std.IsLinearOrder (List α)] [Std.LawfulOrderMin (List α)]
+    (hx : Complete p bindable xs) (hy : Complete p bindable ys) (repr : Term sig → α)
+    (invariant : ∀ a b, EquivB a b → repr a = repr b)
+    (vars : List Variable) (observed : ∀ v ∈ vars, Observed p v) :
+    (xs.map (bindingImages repr vars)).min? = (ys.map (bindingImages repr vars)).min? := by
+  apply hx.min_key_eq hy
+  intro σ τ agree
+  exact List.map_congr_left (fun v mem => invariant _ _ (agree v (observed v mem)))
+
 /-- Directional matching substitutes the variable only on the left. The
 subject can itself contain that variable or another variable bound elsewhere. -/
 theorem variable_match (v : Variable) (t : Term sig) (ht : HasSort t v.sort) :

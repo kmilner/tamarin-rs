@@ -45,6 +45,13 @@ def main():
     check(f"match in MSG : X:Msg <=? {ill}", "No match.")
     check(f"unify in MSG : {ill} =? {swapped}", "empty substitution")
 
+    # TOP is the sort of the administrative wrapper. No input variable
+    # declared by Tamarin can capture it. Its free cons/nil spine fixes width.
+    for l, r in [("X:Msg", "list(nil)"), ("list(cons(X:Msg,nil))", "list(nil)"),
+                 ("list(cons(list(nil),nil))", "list(cons(X:Msg,nil))")]:
+        check(f"unify in MSG : {l} =? {r}", "No unifier.")
+        check(f"match in MSG : {l} <=? {r}", "No match.")
+
     # A repeated capture must agree across both AC operators.
     output = reply("match in MSG : list(cons(plus(X:Msg,Y:Msg),cons(times(X:Msg,a),nil)))"
                    " <=? list(cons(plus(b,a,c),cons(times(a,plus(c,a)),nil)))")
@@ -80,6 +87,22 @@ def main():
             assert value == f"list(cons(h({binding}), cons({binding}, nil)))", value
             observations.add("open")
     assert observations == {"open", "specialized"}, output
+
+    # Limit the request explicitly. The combined table has infinitely many
+    # incomparable variants, proved in Tests/VariantCompositionLimit.lean.
+    chain = """fmod CHAIN is
+      sort T .
+      ops f g s : T -> T .
+      eq f(s(X:T)) = g(X:T) [variant] .
+      eq g(X:T) = f(X:T) [variant] .
+    endfm
+    """
+    out = reply("get variants [6] in CHAIN : f(X:T)", chain)
+    bindings = re.findall(r"^X:T --> (.*)$", out, re.MULTILINE)
+    assert len(bindings) == 6, out
+    for depth, binding in enumerate(bindings):
+        witness = re.search(r"[#%]\d+:T", binding)
+        assert witness and binding == "s(" * depth + witness.group() + ")" * depth, out
 
 
 if __name__ == "__main__":

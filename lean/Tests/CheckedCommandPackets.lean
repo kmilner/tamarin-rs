@@ -1,4 +1,5 @@
 import TamarinRuntime
+import Tamarin.SubtermVariants
 
 namespace Tamarin.CheckedCommandPacketTests
 
@@ -80,3 +81,35 @@ private def rules : Array UInt64 := #[2,3,3,4,4,5,5,6,6,7,10,12,14,0,15,1]
 -- A competing normal endpoint for the same specialized input invalidates the family.
 #guard Executable.checkedVariants ds ns (rules ++ #[10,8]) #[2,0] 4 == #[#[2]]
 end Tamarin.GeneralVariantPacketTests
+
+-- [leaf 0, []] and [leaf 1, []] lower to one ordinary coordinate.
+-- Moving the inner empty wrapper changes the shape, even at the same outer width.
+private def spineNodes : Array (Array UInt64) :=
+  #[#[],#[0],#[1],#[0,0],#[1,3],#[2,3],#[0,5]]
+#guard Tamarin.Executable.unpackConjunction spineNodes 2 4 5 == #[#[1],#[0,1]]
+#guard Tamarin.Executable.unpackConjunction spineNodes 2 4 3 == #[#[2]]
+#guard Tamarin.Executable.unpackConjunction spineNodes 2 4 6 == #[#[2]]
+#guard Tamarin.Executable.unpackConjunction spineNodes 2 0 0 == #[#[1]]
+#guard Tamarin.Executable.unpackConjunction (spineNodes.push #[2,1]) 2 4 5 == #[#[0]]
+#guard Tamarin.Executable.unpackConjunction spineNodes 1 4 5 == #[#[0]]
+
+namespace Tamarin.SubtermPacketTests
+
+-- bag is AC, and peel, check, pair, fst and snd are free. The ground RHS of
+-- check(x,x) performs a projection from a different rule bucket.
+private def ds : Array UInt64 := #[4,0,2,2,2,2, 2,1,1,2,2, 2,2,2,2,2,2, 2,3,2,2,2,2,
+  2,4,1,2,2, 2,5,1,2,2, 2,6,0,2, 2,7,0,2, 3,8,2,2,2,2]
+private def ns : Array (Array UInt64) := #[#[0,0,2],#[0,1,2],#[2,6],#[2,7],#[4,0,0,2],
+  #[2,1,4],#[2,2,0,0],#[2,3,3,2],#[2,4,7],#[2,3,0,1],#[2,4,9],#[2,5,9],#[2,2,1,0],#[2,1,0],#[3,8,0,2]]
+private def rules : Array UInt64 := #[5,0,6,8,10,0,11,1]
+private def eligible (rows : Array UInt64) : Bool := Id.run do
+  let some ⟨_,rs,_⟩ := TableWire.input ds ns rows #[13] | return false
+  return SubtermVariants.accepts rs && SubtermVariants.accepts (TableAmbient.liftRules rs)
+
+#guard eligible rules
+#guard eligible (rules ++ #[14,0]) -- commutative head returning a child
+#guard !eligible (rules ++ #[13,12]) -- open RHS rebuilt under a different head
+#guard !eligible (rules ++ #[4,0]) -- AC-rooted rules require their own operator proof
+#guard (Executable.generalVariants ds ns rules #[13,0] 16)[0]? == some #[1]
+
+end Tamarin.SubtermPacketTests

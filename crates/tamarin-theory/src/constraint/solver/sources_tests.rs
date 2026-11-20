@@ -808,7 +808,7 @@ fn source_probe_rejects_incompatible_action_heads_early() {
 }
 
 #[test]
-fn natural_source_match_keeps_its_node_binding_and_first_alternative() {
+fn natural_source_match_picks_the_same_binding_map_across_backends() {
     use tamarin_term::algebra_backend::AlgebraBackend;
     use tamarin_term::builtin::nat_plus;
     use tamarin_term::function_symbols::nat_one_sym;
@@ -822,8 +822,12 @@ fn natural_source_match_keeps_its_node_binding_and_first_alternative() {
         let handle = MaudeHandle::start_with_backend(&path, nat_maude_sig(), backend).unwrap();
         crate::constraint::solver::context::ProofContext::new(handle, Vec::new())
     };
-    let ctx = context(AlgebraBackend::default());
-    let oracle = context(AlgebraBackend::Maude);
+    let mut backends = vec![AlgebraBackend::Maude];
+    if AlgebraBackend::default() == AlgebraBackend::Hybrid {
+        backends.extend([AlgebraBackend::Hybrid, AlgebraBackend::NativeOnly]);
+    }
+    let contexts: Vec<_> = backends.into_iter().map(|b| (b, context(b))).collect();
+    let oracle = &contexts[0].1;
     // The natural-number source installed by precompute_full_sources has
     // two Nat pattern variables and a separate Node variable.
     let v = |i| Term::Lit(Lit::Var(LVar::new("t", LSort::Nat, i)));
@@ -835,7 +839,7 @@ fn natural_source_match_keeps_its_node_binding_and_first_alternative() {
     let two = nat_plus(one.clone(), one.clone());
     for (subject, unique) in [(two.clone(), true), (nat_plus(one, two), false)] {
         let live = Goal::Action(nvar(7), crate::fact::ku_fact(subject.clone()));
-        let selected = prepare_source_match(&ctx, &source, &[], &live)
+        let selected = prepare_source_match(oracle, &source, &[], &live)
             .unwrap()
             .unwrap();
         let node = selected.renamed_abstract_node;
@@ -853,13 +857,18 @@ fn natural_source_match_keeps_its_node_binding_and_first_alternative() {
             ])
             .unwrap();
         assert_eq!(answers.len(), if unique { 1 } else { 2 });
-        assert!(selected
-            .match_pairs
-            .contains(&(selected.renamed_abstract_node, Term::Lit(Lit::Var(nvar(7))))));
-        assert_eq!(selected.match_pairs.len(), 3);
-        assert_eq!(selected.match_pairs, answers[0]);
-        if AlgebraBackend::default() == AlgebraBackend::Hybrid {
-            assert_eq!(ctx.maude.stats().match_count, u64::from(!unique));
+        for (backend, ctx) in &contexts {
+            let selected = prepare_source_match(ctx, &source, &[], &live)
+                .unwrap()
+                .unwrap();
+            assert!(selected
+                .match_pairs
+                .contains(&(node, Term::Lit(Lit::Var(nvar(7))))));
+            assert_eq!(selected.match_pairs.len(), 3);
+            assert_eq!(Some(&selected.match_pairs), answers.iter().min());
+            if *backend != AlgebraBackend::Maude {
+                assert_eq!(ctx.maude.stats().match_count, 0);
+            }
         }
     }
 }
@@ -872,7 +881,12 @@ fn source_probe_reports_ac_match_transport_failure() {
     let Some(path) = require_maude_path() else {
         return;
     };
-    let maude = start_maude(&path, tamarin_term::maude_sig::dh_maude_sig());
+    let maude = tamarin_term::maude_proc::MaudeHandle::start_with_backend(
+        &path,
+        tamarin_term::maude_sig::dh_maude_sig(),
+        tamarin_term::algebra_backend::AlgebraBackend::Maude,
+    )
+    .unwrap();
     let ctx = crate::constraint::solver::context::ProofContext::new(maude, Vec::new());
     let product = |a, b| f_app_ac(AcSym::Mult, vec![mterm(a), mterm(b)]);
     let source = Source::eager(

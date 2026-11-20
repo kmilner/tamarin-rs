@@ -245,6 +245,103 @@ fn packed_unification_uses_one_substitution_across_nested_coordinates() {
     assert_eq!(native.stats().unify_count, 0);
 }
 
+#[test]
+fn packed_shape_clashes_preserve_the_full_query_for_both_operations() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::lean_unification::{match_modulo_attributes, unify_modulo_attributes, Outcome};
+    use crate::maude_proc::MaudeError;
+    use crate::maude_sig::pair_maude_sig;
+    use crate::term::f_app_list as pack;
+
+    let sig = pair_maude_sig();
+    let native = |reference| {
+        let mut h = MaudeHandle::start_with_backend(
+            "/nonexistent",
+            sig.clone(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        h.reference_algebra = reference;
+        h
+    };
+    let x = LVar::new("x", LSort::Msg, 0);
+    let vx = Term::Lit(Lit::Var(x));
+    let a = pub_term("a");
+    let empty = pack(vec![]);
+    for eq in [
+        Equal::new(pack(vec![vx.clone(), a.clone()]), pack(vec![a.clone()])),
+        Equal::new(
+            pack(vec![empty.clone(), vx.clone()]),
+            pack(vec![a.clone(), empty.clone()]),
+        ),
+        Equal::new(empty.clone(), vx.clone()),
+        Equal::new(vx.clone(), empty.clone()),
+    ] {
+        let eqs = [eq];
+        assert_eq!(
+            unify_modulo_attributes(&sig, &eqs).unwrap(),
+            Outcome::Complete(vec![])
+        );
+        assert_eq!(
+            match_modulo_attributes(&sig, &eqs, |_| true).unwrap(),
+            Outcome::Complete(vec![])
+        );
+        for reference in [false, true] {
+            let h = native(reference);
+            assert!(h.unify(&eqs).unwrap().is_empty());
+            assert!(!h.unifiable(&eqs).unwrap());
+            assert!(h.match_eqs(&eqs).unwrap().is_empty());
+            assert!(!h.has_match_eqs(&eqs).unwrap());
+            assert!(h
+                .match_eqs_skolemize_both(&eqs, &[(x.name, x.idx)].into_iter().collect())
+                .unwrap()
+                .is_empty());
+            h.check_backend_status().unwrap();
+        }
+    }
+    let malformed = crate::builtin::hash(a.clone()); // Undeclared in the pairing module.
+    for rows in [
+        vec![Equal::new(empty.clone(), pack(vec![malformed.clone()]))],
+        vec![
+            Equal::new(empty, vx.clone()),
+            Equal::new(malformed.clone(), malformed),
+        ],
+    ] {
+        assert_eq!(
+            unify_modulo_attributes(&sig, &rows).unwrap(),
+            Outcome::Unsupported
+        );
+        assert_eq!(
+            match_modulo_attributes(&sig, &rows, |_| true).unwrap(),
+            Outcome::Unsupported
+        );
+        for reference in [false, true] {
+            let h = native(reference);
+            assert!(matches!(
+                h.unify(&rows),
+                Err(MaudeError::UnsupportedOperation(_))
+            ));
+            assert!(h.check_backend_status().is_err());
+            let h = native(reference);
+            assert!(matches!(
+                h.match_eqs(&rows),
+                Err(MaudeError::UnsupportedOperation(_))
+            ));
+            assert!(h.check_backend_status().is_err());
+        }
+    }
+    // Even when there are no algebraic coordinates, equal empty packs have an identity answer.
+    let empty_eq = [Equal::new(pack(vec![]), pack(vec![]))];
+    assert_eq!(
+        unify_modulo_attributes(&sig, &empty_eq).unwrap(),
+        Outcome::Complete(vec![vec![]])
+    );
+    assert_eq!(
+        match_modulo_attributes(&sig, &empty_eq, |_| true).unwrap(),
+        Outcome::Complete(vec![vec![]])
+    );
+}
+
 fn canonical_ground_answers(mut answers: Vec<Vec<(LVar, LNTerm)>>) -> Vec<Vec<(LVar, LNTerm)>> {
     for answer in &mut answers {
         answer.sort();
@@ -7850,7 +7947,8 @@ mod bounded_match {
                 rhs: e.lhs.clone(),
             })
             .collect::<Vec<_>>();
-        h.native_match(&oriented, true).unwrap()
+        h.native_match(&oriented, crate::maude_proc::MatchRequest::Enumerate)
+            .unwrap()
     }
     #[test]
     fn ac_match_collection_discards_earlier_pages_when_the_full_result_exceeds_storage() {

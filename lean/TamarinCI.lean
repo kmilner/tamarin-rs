@@ -1,6 +1,10 @@
 import Tamarin
 import Tamarin.ReductionSignatureExtension
 import Tamarin.CheckedReductionPacket
+import Tamarin.DHMixedVariants
+import Tamarin.DHFiniteVariants
+import Tamarin.TablePresentation
+import Tamarin.DHWire
 import Tamarin.TableConfluence
 import Tamarin.CheckedVariantsPacket
 import Tamarin.TotalUnifyPacket
@@ -43,6 +47,9 @@ theorem referenceMixed_total {s : Signature}
 family on its declared signature. Malformed input has a separate status. -/
 theorem exportedTotalUnify_correct : TotalUnifyWire.Packet.Correct Executable.totalUnify :=
   TotalUnifyWire.Packet.correct
+
+theorem exportedUnpackConjunction_correct : PackedConjunction.Correct Executable.unpackConjunction :=
+  PackedConjunction.correct
 
 theorem exportedFactorRefutes_correct : TotalUnifyWire.RefutationCorrect Executable.factorRefutes :=
   FactorRefutation.correct
@@ -152,6 +159,72 @@ theorem exportedGeneralVariants_complete {ds ns es roots d rs q}
   · rw [found fuel.toNat enough] at seen
     cases seen
     simp [failed] at fits
+
+/-- Any query whose decoded table matches the DH equations has a complete
+folding stage. Matching the table checks its orientation, its shared rule
+variables, and both sides of every equation modulo the declared C/AC laws. -/
+theorem exportedDHVariants_complete {ds ns es roots d rs q}
+    (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩)
+    (s : Rewriting.DHPeer.Symbols (TableAmbient.sig d)) (keys : Fin 3 → Variable)
+    (types : ∀ i, (keys i).sort = .msg) (unique : ∀ i j, keys i = keys j → i = j)
+    (check : TablePresentation.Agrees (TableAmbient.liftRules rs) (Rewriting.DHPeer.Schemas.rules s keys)) :
+    ∃ rows k, (∀ n ≥ k, GeneralVariants.run (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) n = some rows) ∧
+      ∀ (fuel : UInt64), k ≤ fuel.toNat → (TableAmbient.emit q rows).isSome → ∃ answers,
+        TableAmbient.Decodes q (Executable.generalVariants ds ns es roots fuel) answers ∧
+        MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) [] answers := by
+  obtain ⟨canonical,finite⟩ := DHWire.complete_of_agrees s keys types unique check
+  have schema := Rewriting.DHPeer.Schemas.exactTable s keys types unique
+  exact exportedGeneralVariants_complete decoded
+    (TablePresentation.bound_of_agrees check (SymbolWeight.bound schema.decreasing)) canonical finite
+
+/-- Folding the physical DH packet over the full ambient name universe completes
+at a finite stage. Returning its answers requires representable wire indices. -/
+theorem exportedPhysicalDHVariants_complete :
+    ∃ rows k, (∀ n ≥ k, GeneralVariants.run (TableAmbient.liftRules DHWire.rules)
+        (DHWire.observations.map TableAmbient.liftTerm) n = some rows) ∧
+      ∀ (fuel : UInt64), k ≤ fuel.toNat → (TableAmbient.emit DHWire.observations rows).isSome → ∃ answers,
+        TableAmbient.Decodes DHWire.observations
+          (Executable.generalVariants DHWire.declarations DHWire.nodes DHWire.ruleRoots DHWire.observationRoots fuel) answers ∧
+        MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules DHWire.rules))
+          (DHWire.observations.map TableAmbient.liftTerm) [] answers := by
+  obtain ⟨canonical,finite⟩ := DHWire.ambient_complete
+  exact exportedGeneralVariants_complete DHWire.decoded DHWire.ambient_bound canonical finite
+
+/-- For a decoded DH plus user table, check schema agreement modulo C/AC.
+Only convergence of the combination and numeric representability are external. -/
+theorem exportedMixedDHVariants_complete {ds ns es roots d rs q}
+    (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩)
+    {s : Rewriting.DHPeer.Symbols (TableAmbient.sig d)} {T : Rewriting.DHPeer.Table s}
+    {E : Rewriting.DHPeer.ExtraTable T} (dh : Rewriting.DHPeer.ProtectedTable E)
+    (others : Rewriting.DHPeer.OtherRows T)
+    (agrees : TablePresentation.Agrees (TableAmbient.liftRules rs) T.rules)
+    (can : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot (TableAmbient.liftRules rs))) :
+    ∃ rows k, (∀ n ≥ k, GeneralVariants.run (TableAmbient.liftRules rs)
+        (q.map TableAmbient.liftTerm) n = some rows) ∧
+      ∀ (fuel : UInt64), k ≤ fuel.toNat → (TableAmbient.emit q rows).isSome → ∃ answers,
+        TableAmbient.Decodes q (Executable.generalVariants ds ns es roots fuel) answers ∧
+        MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs))
+          (q.map TableAmbient.liftTerm) [] answers := by
+  have finite := Rewriting.DHPeer.mixedFiniteVariants ((TablePresentation.canonical_iff agrees).mp can) dh others
+  exact exportedGeneralVariants_complete decoded (TablePresentation.bound_of_agrees agrees (others.scope dh))
+    can ((TablePresentation.finite_iff agrees).mpr finite)
+
+/-- A canonical mixed subterm/ground table needs no separate finite-variant
+hypothesis. The rows are checked on the decoded module, before extending it
+with the caller's ambient name universe. -/
+theorem exportedSubtermVariants_complete {ds ns es roots d rs q}
+    (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩)
+    (cls : SubtermVariants.Presentation rs)
+    (can : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot (TableAmbient.liftRules rs))) :
+    ∃ k, ∀ (fuel : UInt64), k ≤ fuel.toNat →
+      (∀ rows, GeneralVariants.run (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) fuel.toNat = some rows →
+        (TableAmbient.emit q rows).isSome) → ∃ answers,
+      TableAmbient.Decodes q (Executable.generalVariants ds ns es roots fuel) answers ∧
+      MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) [] answers := by
+  have admitted := SubtermVariants.extend cls TableAmbient.atoms
+  obtain ⟨rows,k,done,complete⟩ := exportedGeneralVariants_complete decoded (SubtermVariants.bound admitted)
+    can (SubtermVariants.finiteVariants can admitted)
+  exact ⟨k,fun fuel enough fits => complete fuel enough (fits rows (done _ enough))⟩
 
 /-- Constructor definitions have a complete family for every valid tuple
 over the ambient name universe, independent of any frontier or output budget. -/
@@ -1362,6 +1435,7 @@ run_cmd do
     (``Tamarin.Executable.flatACMatch, `tamarin_flat_ac_match),
     (``Tamarin.Executable.checkedReduce, `tamarin_checked_reduce),
     (``Tamarin.Executable.factorRefutes, `tamarin_factor_refutes),
+    (``Tamarin.Executable.unpackConjunction, `tamarin_unpack_conjunction),
     (``Tamarin.Executable.totalUnify, `tamarin_total_unify),
     (``Tamarin.Executable.totalMatch, `tamarin_total_match),
     (``Tamarin.Executable.generalReduce, `tamarin_general_reduce),

@@ -11,8 +11,8 @@ mod commutative;
 mod components;
 mod whole;
 pub(crate) use commutative::solve as unify_structured;
-pub(crate) use whole::total_unify;
 pub use whole::{reduction_for_convergent_theory, variants_for_convergent_theory};
+pub(crate) use whole::{total_unify, unpack_conjunction, Conjunction};
 mod constructor_variants;
 pub(crate) use constructor_variants::RuleTable;
 mod ac_bag_match;
@@ -45,8 +45,7 @@ pub fn unify_modulo_attributes(
     sig: &crate::maude_sig::MaudeSig,
     equations: &[Equal<LNTerm>],
 ) -> Result<Outcome, Error> {
-    let rows = unpack_conjunction(equations).map_err(|_| Error::Cancelled)?;
-    whole::total_unify(sig, &rows)
+    unpack_conjunction(sig, equations)?.solve(|rows| whole::total_unify(sig, rows))
 }
 
 /// Match all patterns modulo the signature's declared commutative and AC attributes.
@@ -61,39 +60,8 @@ pub fn match_modulo_attributes(
     patterns_and_subjects: &[Equal<LNTerm>],
     bindable: impl Fn(&LVar) -> bool,
 ) -> Result<Outcome, Error> {
-    let rows = unpack_conjunction(patterns_and_subjects).map_err(|_| Error::Cancelled)?;
-    whole::total_match(sig, &rows, bindable)
-}
-
-/// Maude uses list(cons(..., nil)) at sort TOP. Each equal-width pair of
-/// wrappers introduces the corresponding operand equalities under one substitution.
-pub(crate) fn unpack_conjunction(
-    eqs: &[Equal<LNTerm>],
-) -> Result<std::borrow::Cow<'_, [Equal<LNTerm>]>, tamarin_utils::cancellation::Cancelled> {
-    use std::borrow::Cow;
-
-    fn children<'a>(l: &'a LNTerm, r: &'a LNTerm) -> Option<(&'a [LNTerm], &'a [LNTerm])> {
-        match (l, r) {
-            (Term::App(FunSym::List, xs), Term::App(FunSym::List, ys)) if xs.len() == ys.len() => {
-                Some((xs, ys))
-            }
-            _ => None,
-        }
-    }
-    if !eqs.iter().any(|e| children(&e.lhs, &e.rhs).is_some()) {
-        return Ok(Cow::Borrowed(eqs));
-    }
-    let mut pending: Vec<_> = eqs.iter().rev().map(|e| (&e.lhs, &e.rhs)).collect();
-    let mut rows = Vec::new();
-    while let Some((lhs, rhs)) = pending.pop() {
-        tamarin_utils::cancellation::check()?;
-        if let Some((xs, ys)) = children(lhs, rhs) {
-            pending.extend(xs.iter().zip(ys).rev());
-        } else {
-            rows.push(Equal::new(lhs.clone(), rhs.clone()));
-        }
-    }
-    Ok(Cow::Owned(rows))
+    unpack_conjunction(sig, patterns_and_subjects)?
+        .solve(|rows| whole::total_match(sig, rows, bindable))
 }
 
 /// Ordinary substitutions, before the caller converts them to `SubstVFresh`.

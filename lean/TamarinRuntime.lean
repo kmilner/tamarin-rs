@@ -3,6 +3,7 @@ import Tamarin.GeneralReductionWire
 import Tamarin.CheckedReductionWire
 import Tamarin.FactorRefutation
 import Tamarin.TotalMatchWire
+import Tamarin.PackedConjunction
 import TamarinRuntime.Candidate
 import TamarinRuntime.BinaryCancellation
 import TamarinRuntime.XorMatchings
@@ -193,6 +194,10 @@ def cancelCommon (lhs rhs : Array UInt64) : Array (Array UInt64) :=
 @[export tamarin_factor_refutes]
 def factorRefutes (ds : Array UInt64) (ns : Array (Array UInt64)) (es : Array UInt64) : Bool :=
   FactorRefutation.run ds ns es
+
+@[export tamarin_unpack_conjunction]
+def unpackConjunction (nodes : PackedConjunction.Rows) (limit lhs rhs : UInt64) : PackedConjunction.Rows :=
+  PackedConjunction.run nodes limit lhs rhs
 
 @[export tamarin_total_unify]
 def totalUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :

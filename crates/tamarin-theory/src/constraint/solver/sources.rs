@@ -2582,9 +2582,9 @@ struct ConjoinedArm {
 ///
 /// A.2 (`doMatch ... <> ...` in `matchToGoal`):
 ///     One-way Maude match: pattern (renamed abstract `cdGoal`) →
-///     subject (the live goal).  Returns a substitution binding renamed
-///     pattern vars to live values.  The no-AC path runs first; on
-///     `NeedsAc`, fall back to Maude.
+///     subject (the live goal). Returns a substitution binding renamed
+///     pattern vars to live values. On `NeedsAc`, all Rust backends choose
+///     the least restored binding map. Upstream takes Maude's first matcher.
 ///
 /// A.2.5 (`substNodePrem` in `matchToGoal`, Premise goals only):
 ///     Rewire the renamed case's edges from the source pattern's premise

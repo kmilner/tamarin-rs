@@ -37,6 +37,8 @@ jobs:
           lake env lean Tests/TotalUnifyPacket.lean
           lake env lean Tests/TotalMatchPacket.lean
           lake env lean Tests/CheckedCommandPackets.lean
+          lake env lean Tests/VariantCompositionLimit.lean
+          lake env lean Tests/DHCanonical.lean
           lake env lean Tests/TableAmbient.lean
           lake env lean Tests/ACRowElimination.lean
           lake env lean --run Tests/ACPivot.lean
@@ -114,7 +116,10 @@ jobs:
           sudo unzip -q /tmp/maude.zip -d /opt/maude
           sudo chmod +x /opt/maude/maude
       - name: Compare explicit native-only sessions with a separate Maude oracle
-        run: cargo test --profile ci -p tamarin-term --features lean-unification --lib native_oracle_
+        run: |
+          cargo test --profile ci -p tamarin-term --features lean-unification --lib native_oracle_
+          cargo test --profile ci -p tamarin-term --features lean-unification --test native_match_components first_match_agrees_with_maude
+          cargo test --profile ci -p tamarin-term --features lean-unification --test native_backend mixed_dh_and_ground_result_equation_cover_open_and_specialized_inputs
         env:
           MAUDE_PATH: /opt/maude/maude
       - name: Native Lean bridge and differential tests
@@ -127,7 +132,7 @@ jobs:
           node-version: '24'
       - name: Protocol proof with native Lean dispatch
         run: |
-          cargo test --profile ci -p tamarin-theory --features tamarin-term/lean-unification --lib natural_source_match_keeps_its_node_binding_and_first_alternative
+          cargo test --profile ci -p tamarin-theory --features tamarin-term/lean-unification --lib natural_source_match_picks_the_same_binding_map_across_backends
           cargo test --profile ci -p tamarin-theory --features tamarin-term/lean-unification --lib restriction_guard_nested_ac_keeps_rigid_system_variables_and_time
           cargo test --profile ci -p tamarin-prover --features lean-unification --lib --test lean_unification --test native_backend
         env:

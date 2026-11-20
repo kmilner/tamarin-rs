@@ -360,6 +360,13 @@ static void *wrap_rows(lean_object *rows) {
     return outer;
 }
 
+extern lean_object *tamarin_unpack_conjunction(lean_object *, uint64_t, uint64_t, uint64_t);
+
+void *tamarin_lean_unpack_conjunction(const whole_word_slice *rows, size_t count,
+                                      uint64_t limit, uint64_t lhs, uint64_t rhs) {
+    return wrap_rows(tamarin_unpack_conjunction(word_rows(rows, count), limit, lhs, rhs));
+}
+
 extern lean_object *tamarin_total_unify(lean_object *, lean_object *, lean_object *);
 
 extern uint8_t tamarin_factor_refutes(lean_object *, lean_object *, lean_object *);

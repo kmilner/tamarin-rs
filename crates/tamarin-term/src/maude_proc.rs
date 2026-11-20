@@ -789,6 +789,13 @@ impl std::fmt::Debug for MaudeHandle {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MatchRequest {
+    Exists,
+    Least,
+    Enumerate,
+}
+
 impl MaudeHandle {
     #[cfg(feature = "lean-unification")]
     fn native_rules(&self) -> Option<&crate::lean_unification::RuleTable> {
@@ -1261,17 +1268,23 @@ impl MaudeHandle {
         Ok(result)
     }
 
-    /// Maude packs coordinates as list(cons(..., nil)) at sort TOP. Equal-width
-    /// packs expose a conjunction under one substitution, including nested packs.
+    /// None denotes a certified clash between free TOP wrapper shapes.
     #[cfg(feature = "lean-unification")]
     fn unpack_unification<'a>(
         &self,
         eqs: &'a [Equal<LNTerm>],
-    ) -> Result<std::borrow::Cow<'a, [Equal<LNTerm>]>, MaudeError> {
-        if self.backend == AlgebraBackend::NativeOnly {
-            crate::lean_unification::unpack_conjunction(eqs).map_err(Into::into)
-        } else {
-            Ok(std::borrow::Cow::Borrowed(eqs))
+    ) -> Result<Option<std::borrow::Cow<'a, [Equal<LNTerm>]>>, MaudeError> {
+        use crate::lean_unification::{unpack_conjunction, Conjunction};
+        if self.backend != AlgebraBackend::NativeOnly {
+            return Ok(Some(std::borrow::Cow::Borrowed(eqs)));
+        }
+        match unpack_conjunction(&self.sig, eqs).map_err(|e| self.lean_error(e))? {
+            Conjunction::Rows(rows) => Ok(Some(rows)),
+            Conjunction::Clash => Ok(None),
+            Conjunction::Unsupported => Err(self
+                .inner
+                .lock()
+                .unsupported_native_operation("AC/C unification")),
         }
     }
 
@@ -1287,7 +1300,10 @@ impl MaudeHandle {
     pub fn unifiable(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
         self.check_backend_status()?;
         #[cfg(feature = "lean-unification")]
-        let eqs = &*self.unpack_unification(eqs)?;
+        let eqs: &[Equal<LNTerm>] = &match self.unpack_unification(eqs)? {
+            Some(rows) => rows,
+            None => return Ok(false),
+        };
         #[cfg(feature = "lean-unification")]
         if self.reference_algebra {
             return Ok(!self.solve_original(eqs)?.is_empty());
@@ -1451,7 +1467,10 @@ impl MaudeHandle {
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         self.check_backend_status()?;
         #[cfg(feature = "lean-unification")]
-        let eqs = &*self.unpack_unification(eqs)?;
+        let eqs: &[Equal<LNTerm>] = &match self.unpack_unification(eqs)? {
+            Some(rows) => rows,
+            None => return Ok(Vec::new()),
+        };
         #[cfg(feature = "lean-unification")]
         if self.reference_algebra && use_lean {
             return self.solve_original(eqs);
@@ -1874,9 +1893,9 @@ impl MaudeHandle {
     }
 
     #[cfg(feature = "lean-unification")]
-    fn allow_total_match(&self, ordered: bool) -> bool {
+    fn allow_total_match(&self, request: MatchRequest) -> bool {
         (self.backend == AlgebraBackend::NativeOnly
-            || (self.backend == AlgebraBackend::Hybrid && !ordered))
+            || (self.backend == AlgebraBackend::Hybrid && request != MatchRequest::Enumerate))
             && !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
     }
 
@@ -1918,7 +1937,7 @@ impl MaudeHandle {
     fn native_match(
         &self,
         equations: &[Equal<LNTerm>],
-        ordered: bool,
+        request: MatchRequest,
     ) -> Result<Option<Vec<Vec<(crate::lterm::LVar, LNTerm)>>>, MaudeError> {
         use crate::function_symbols::FunSym;
         use crate::term::Term;
@@ -1969,15 +1988,14 @@ impl MaudeHandle {
             if let Some(answers) = completed(result) {
                 return Ok(Some(answers));
             }
-            // Both enumeration APIs sort the complete NativeOnly family in
-            // caller space. Boolean matching has its own cheaper bag kernel.
-            if ordered
+            // Selecting the least answer also requires the complete family.
+            if request != MatchRequest::Exists
                 && let Some(answers) =
                     completed(table.ac_bag_answers(equations).map_err(match_error)?)
             {
                 return Ok(Some(answers));
             }
-            if ordered
+            if request != MatchRequest::Exists
                 && let Some(answers) =
                     completed(table.component_match(equations).map_err(match_error)?)
             {
@@ -2028,11 +2046,11 @@ impl MaudeHandle {
         .map_err(match_error)?;
         Ok(match result {
             crate::lean_unification::Outcome::Unsupported => None,
-            // These searches enumerate a set of alternatives. An ordered
-            // hybrid caller can observe Maude's first answer to the full query.
+            // Full hybrid enumeration exposes Maude's sequence. Selecting the
+            // least binding map is independent of this enumerator's sequence.
             crate::lean_unification::Outcome::Complete(answers)
                 if self.backend == AlgebraBackend::Hybrid
-                    && ordered
+                    && request == MatchRequest::Enumerate
                     && answers.len() > 1
                     && (!literal
                         || !fixed.is_empty()
@@ -2046,13 +2064,12 @@ impl MaudeHandle {
                 None
             }
             crate::lean_unification::Outcome::Complete(mut answers) => {
-                if !ordered {
-                    // Only has_match_eqs requests an unordered result.
+                if request == MatchRequest::Exists {
                     answers.truncate(1);
                 }
                 for answer in &mut answers {
                     answer.extend(fixed.iter().map(|(v, image)| (*v, image.clone())));
-                    if ordered {
+                    if request != MatchRequest::Exists {
                         order_match_bindings(answer);
                     }
                 }
@@ -2091,18 +2108,22 @@ impl MaudeHandle {
         &self,
         eqs: &[Equal<LNTerm>],
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        let mut answers = self.match_eqs_impl(eqs, true)?;
+        let mut answers = self.match_eqs_impl(eqs, MatchRequest::Enumerate)?;
         self.order_native_alternatives(&mut answers);
         Ok(answers)
     }
 
-    /// Source refinement consumes the first substitution, including identity
-    /// bindings. Use the same ordering as ordinary enumeration for this backend.
+    /// Source refinement chooses the lexicographically least complete binding
+    /// map in the caller's variable and term order, including identity bindings.
+    /// This choice is independent of the backend's enumeration order.
     pub fn first_match_eqs(
         &self,
         eqs: &[Equal<LNTerm>],
     ) -> Result<Option<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        Ok(self.match_eqs(eqs)?.into_iter().next())
+        Ok(self
+            .match_eqs_impl(eqs, MatchRequest::Least)?
+            .into_iter()
+            .min())
     }
 
     /// The experimental backend exposes the lexicographic order of complete
@@ -2142,7 +2163,7 @@ impl MaudeHandle {
                 }
             }
         }
-        self.match_eqs_impl(eqs, false)
+        self.match_eqs_impl(eqs, MatchRequest::Exists)
             .map(|answers| !answers.is_empty())
     }
 
@@ -2242,7 +2263,7 @@ impl MaudeHandle {
     fn match_eqs_impl(
         &self,
         eqs: &[Equal<LNTerm>],
-        _ordered: bool,
+        _request: MatchRequest,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         self.check_backend_status()?;
         #[cfg(feature = "lean-unification")]
@@ -2263,18 +2284,18 @@ impl MaudeHandle {
             return Ok(if matched { vec![Vec::new()] } else { vec![] });
         }
         #[cfg(feature = "lean-unification")]
-        if !rigid || self.allow_total_match(_ordered) {
+        if !rigid || self.allow_total_match(_request) {
             let oriented = orient();
             if !rigid
                 && !self.needs_typed_matching(eqs)
-                && let Some(answers) = self.native_match(&oriented, _ordered)?
+                && let Some(answers) = self.native_match(&oriented, _request)?
             {
                 return Ok(answers);
             }
             if !rigid && self.match_size_excluded(&oriented)? {
                 return Ok(Vec::new());
             }
-            if self.allow_total_match(_ordered)
+            if self.allow_total_match(_request)
                 && let Some(answers) = self.total_match(&oriented, |_| true)?
             {
                 return Ok(answers);
@@ -2372,7 +2393,9 @@ impl MaudeHandle {
         // The reference accepts a scope directly, including at kind-level
         // positions that the sorted fast paths cannot admit.
         #[cfg(feature = "lean-unification")]
-        if self.allow_total_match(true) && (rigid || self.needs_typed_matching(eqs)) {
+        if self.allow_total_match(MatchRequest::Enumerate)
+            && (rigid || self.needs_typed_matching(eqs))
+        {
             if let Some(mut answers) =
                 self.total_match(eqs, |v| pattern_vars.contains(&(v.name, v.idx)))?
             {
@@ -2404,7 +2427,7 @@ impl MaudeHandle {
         #[cfg(feature = "lean-unification")]
         if !rigid
             && !self.needs_typed_matching(eqs)
-            && let Some(answers) = self.native_match(&rewritten_eqs, true)?
+            && let Some(answers) = self.native_match(&rewritten_eqs, MatchRequest::Enumerate)?
         {
             let mut answers = answers
                 .into_iter()
@@ -2422,7 +2445,7 @@ impl MaudeHandle {
         }
 
         #[cfg(feature = "lean-unification")]
-        if self.allow_total_match(true)
+        if self.allow_total_match(MatchRequest::Enumerate)
             && let Some(mut answers) =
                 self.total_match(eqs, |v| pattern_vars.contains(&(v.name, v.idx)))?
         {

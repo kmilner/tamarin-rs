@@ -170,7 +170,7 @@ fn first_match_agrees_with_maude_on_shared_identities_and_ambiguous_orientations
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
     let hybrid = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Hybrid).unwrap();
     let native = native();
-    let [x, y, p, _] = keys();
+    let [x, y, p, q] = keys();
     let i = LVar::new("i", LSort::Node, 0);
     let orient = eq(emap(v(y), v(p)), emap(v(x), v(y)));
     let mut rows = vec![orient.clone(), eq(v(y), v(x)), eq(v(i), v(i))];
@@ -190,14 +190,33 @@ fn first_match_agrees_with_maude_on_shared_identities_and_ambiguous_orientations
     let ambiguous = [orient];
     let alternatives = oracle.match_eqs(&ambiguous).unwrap();
     assert_eq!(alternatives.len(), 2);
-    assert_eq!(
-        hybrid.first_match_eqs(&ambiguous).unwrap().as_ref(),
-        alternatives.first()
-    );
-    assert_eq!(
-        native.first_match_eqs(&ambiguous).unwrap().as_ref(),
-        alternatives.iter().min()
-    );
+    for h in [&oracle, &hybrid, &native] {
+        assert_eq!(
+            h.first_match_eqs(&ambiguous).unwrap().as_ref(),
+            alternatives.iter().min()
+        );
+    }
+
+    // The forced row changes which subject constant receives Maude ID zero.
+    // Moving it must preserve the selected orientation in caller space.
+    let a = pub_term("a");
+    let z = pub_term("z");
+    let mut rows = [
+        eq(z.clone(), v(q)),
+        eq(emap(a.clone(), z.clone()), emap(v(x), v(y))),
+    ];
+    let mut expected = vec![(q, z.clone()), (x, a), (y, z)];
+    expected.sort();
+    for _ in 0..2 {
+        let answers = oracle.match_eqs(&rows).unwrap();
+        assert_eq!(answers.len(), 2);
+        assert_eq!(answers.iter().min(), Some(&expected));
+        for h in [&oracle, &hybrid, &native] {
+            assert_eq!(h.first_match_eqs(&rows).unwrap().as_ref(), Some(&expected));
+        }
+        rows.reverse();
+    }
+    assert_eq!(hybrid.stats().match_count, 0);
 }
 
 #[test]

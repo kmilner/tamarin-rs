@@ -73,6 +73,32 @@ const SIMPLE: &str = include_str!("fixtures/native_pairing.spthy");
 
 #[cfg(feature = "lean-unification")]
 #[test]
+fn reference_proves_mixed_subterm_and_reducible_ground_equations_with_dh() {
+    let fixture = Fixture::new(include_str!("fixtures/native_mixed_subterms.spthy"));
+    let output = fixture
+        .command()
+        .env("TAM_RS_NATIVE_REFERENCE", "1")
+        .args(["--processors", "1"])
+        .arg("--prove")
+        .arg(fixture.dir.join("input.spthy"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("recovered (exists-trace): verified"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("wellformedness check failed"), "{stdout}");
+    assert!(!fixture.dir.join("called").exists());
+}
+
+#[cfg(feature = "lean-unification")]
+#[test]
 fn user_equation_chain_and_pairing_prove_both_traces_without_maude() {
     let fixture = Fixture::new(include_str!("fixtures/native_user_equations_pairing.spthy"));
     for (reference, variants) in [("0", "0"), ("0", "1"), ("1", "0")] {

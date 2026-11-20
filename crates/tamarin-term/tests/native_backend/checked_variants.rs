@@ -139,3 +139,61 @@ fn user_equations_followed_by_pairing_compute_both_open_variants() {
     );
     handle.check_backend_status().unwrap();
 }
+
+#[test]
+fn mixed_dh_and_ground_result_equation_cover_open_and_specialized_inputs() {
+    use tamarin_term::builtin::{exp, inv};
+    use tamarin_term::lean_unification::{
+        reduction_for_convergent_theory, variants_for_convergent_theory,
+    };
+    use tamarin_term::maude_sig::dh_maude_sig;
+
+    let sym =
+        |name, arity| NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor);
+    let [tag, result] = [b"tag".as_slice(), b"result"].map(|name| sym(name, 0));
+    let probe = sym(b"probe", 1);
+    let mut sig = dh_maude_sig();
+    sig.st_fun_syms.extend([tag, result, probe]);
+    let [tag, result] = [tag, result].map(|f| f_app_no_eq(f, vec![]));
+    let call = |x| f_app_no_eq(probe, vec![x]);
+    sig.st_rules.insert(CtxtStRule::new(
+        call(tag.clone()),
+        StRhs {
+            positions: vec![],
+            term: exp(exp(result.clone(), tag.clone()), inv(tag.clone())),
+        },
+    ));
+    let sig = sig.refresh();
+    let x = LVar::new("input", LSort::Msg, 5);
+    let var = Term::Lit(Lit::Var(x));
+    let query = f_app_list(vec![call(var.clone()), var.clone()]);
+    let mut families = vec![variants_for_convergent_theory(&sig, &query)
+        .unwrap()
+        .unwrap()];
+    if let Some(path) = tamarin_test_support::require_maude_path() {
+        let oracle =
+            MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
+        families.push(oracle.variants(&query).unwrap());
+        assert_eq!(oracle.stats().var_count, 1);
+    }
+    for rows in families {
+        let (mut open, mut specialized) = (false, false);
+        for row in rows {
+            let image = row
+                .into_iter()
+                .find(|(k, _)| *k == x)
+                .map_or(var.clone(), |(_, v)| v);
+            let t = call(image.clone());
+            let value = reduction_for_convergent_theory(&sig, &t).unwrap().unwrap();
+            if image == tag {
+                assert_eq!(value, result);
+                specialized = true;
+            } else {
+                assert!(matches!(image, Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg));
+                assert_eq!(value, t);
+                open = true;
+            }
+        }
+        assert!(open && specialized);
+    }
+}

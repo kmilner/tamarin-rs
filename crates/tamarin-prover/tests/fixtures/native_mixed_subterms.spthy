@@ -1,0 +1,16 @@
+theory NativeMixedSubterms
+begin
+
+builtins: diffie-hellman
+functions: bag/2 [AC], peel/1, check/2, marker/0, ok/0
+equations:
+  peel(bag(x,marker())) = x,
+  check(x,x) = fst(<ok(),marker()>)
+
+rule Observe:
+  [ In(x) ] --[ Seen(x,peel(x),(check(x,x)^marker())^inv(marker())) ]-> []
+
+lemma recovered: exists-trace
+  "Ex #i. Seen(bag(ok(),marker()),ok(),ok()) @ i"
+
+end

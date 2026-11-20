@@ -81,6 +81,23 @@ example : ([direct,crossed] ≠ []) ↔ ([crossed,crossed,direct] ≠ []) :=
 example : ([direct,crossed].map key).min? = ([crossed,crossed,direct].map key).min? :=
   both.min_key_eq reordered key key_invariant
 
+-- Compare the complete binding vector in the caller's chosen variable order.
+-- This representation distinguishes the two subject atoms in the example.
+private noncomputable def atomKey (t : Term signature) : Nat := by
+  classical exact if EquivB t a then 0 else 1
+
+local instance : Min (List Nat) := minOfLe
+
+example : ([direct,crossed].map (bindingImages atomKey [y,x])).min? =
+    ([crossed,crossed,direct].map (bindingImages atomKey [y,x])).min? := by
+  apply both.min_bindingImages_eq reordered
+  · intro s t eq
+    have h : EquivB s a ↔ EquivB t a := ⟨eq.symm.trans,eq.trans⟩
+    unfold atomKey
+    rw [propext h]
+  · intro v mem
+    simpa [observed, or_comm] using mem
+
 -- Reading the first arm distinguishes these two complete implementations,
 -- even when the observation respects equivalence modulo B.
 example : ([direct,crossed].head?.map key) ≠ ([crossed,crossed,direct].head?.map key) := by

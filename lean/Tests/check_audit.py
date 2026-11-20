@@ -767,6 +767,13 @@ EXPORT_MUTATIONS.extend([
 
 EXECUTABLE = ("import Tamarin.CheckedReductionPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
               + obligation("exportedCheckedReduce_correct") + obligation("exportedGeneralReduce_correct") + "end Tamarin\n")
+EXECUTABLE += "\nnamespace Tamarin\n" + obligation("exportedUnpackConjunction_correct") + "end Tamarin\n"
+EXPORT_MUTATIONS.extend([
+    ("packed_conjunction_drops_rhs", "PackedConjunction.run nodes limit lhs rhs",
+     "PackedConjunction.run nodes limit lhs lhs", "theorem exportedUnpackConjunction_correct"),
+    ("packed_conjunction_drops_leaves", "PackedConjunction.run nodes limit lhs rhs",
+     "#[#[1]]", "theorem exportedUnpackConjunction_correct"),
+])
 REDUCTION_RUN = "CheckedReductionWire.run decls nodes rules root fuel"
 EXPORT_MUTATIONS.extend([
     ("general_reduce_omits_table", "GeneralReductionWire.run ds ns rules root fuel",

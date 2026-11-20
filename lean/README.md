@@ -32,9 +32,9 @@ target/release/tamarin-rs --algebra-backend=native-only --prove crates/tamarin-p
 
 Set `TAM_RS_NATIVE_REFERENCE=1` with `--algebra-backend=native-only` to route ordinary
 unification, matching, reduction and variants directly to their references. This setting
-also applies to derived first-match and existence queries. The mixed user-equation
-acceptance theory exercises the in-process backend.
-[Theory](../crates/tamarin-prover/tests/fixtures/native_user_equations_pairing.spthy)
+also applies to derived first-match and existence queries. A protocol regression combines
+user-defined AC, subterm and ground-result equations, pairing and DH exponent cancellation.
+[Theory](../crates/tamarin-prover/tests/fixtures/native_mixed_subterms.spthy)
 
 Rust callers can also invoke the four references without a session through
 `unify_modulo_attributes`, `match_modulo_attributes`, `reduction_for_convergent_theory`
@@ -108,12 +108,16 @@ Changes to the semantic contract, wire format or acceptance harness need separat
 
 For native-only ordinary unification, Rust first submits the original conjunction.
 It sends declarations for the symbols used in the query, a shared graph of numeric term rows, and
-pairs of equation roots. An equality between two equal-length packed lists becomes one
-conjunction over corresponding elements, including nested packs and repeated variables.
-The wrapper has Maude sort TOP. The general unifier and matcher can still decline pairs of
-unequal-width packs and queries requiring a packed-list image for a variable. One AC row holds
-references to all its children, including repeated
-occurrences. Lean checks arities, child sorts and backward references. The graph export decides
+pairs of equation roots. A separate Lean kernel decodes Maude’s free TOP list wrappers for
+both unification and directional matching. Equal shapes produce one conjunction over the
+corresponding algebraic coordinates, including nested packs and repeated variables.
+Unequal widths or a wrapper opposite an algebraic leaf give an empty answer family.
+Tamarin’s variable sorts are all strictly below TOP, so a wrapper cannot be a variable
+image. Every algebraic leaf must still belong to the module. The packet supports wrappers
+at command coordinates; the general kernel can decline synthetic Rust terms with a wrapper
+beneath an algebraic operator. [Packed command contract](Tamarin/PackedConjunction.lean)
+
+One AC row holds references to all its children, including repeated occurrences. Lean checks arities, child sorts and backward references. The graph export decides
 identity and closed clashes. For homogeneous AC queries, Lean counts occurrences in those same
 equation roots and returns witness slots per variable per answer. Every reference to a shared
 child contributes its full multiplicity. For residual worklist equations, Rust sends the column ID
@@ -218,9 +222,9 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | Operation | Native coverage today | Remaining completeness work |
 | --- | --- | --- |
 | Ordinary free/C/AC unification | The reference switch sends both enumeration and existence queries straight to the complete solver. Nested packed equations share one substitution. The solver accepts mixtures of free, commutative and AC heads, including kind-level inputs. | Check Rust representation and observable answer ordering across the protocol corpus. [Solver contract](Tamarin/TotalUnifyPacket.lean) |
-| Directional matching | The reference switch uses the complete matcher for enumeration, existence and first-match queries, including caller-designated rigid variables. Native-only orders the restored binding maps before choosing a first answer. | Source refinement can observe which alternative comes first. Hybrid retains Maude's order where that choice is ambiguous. [Matcher contract](Tamarin/TotalMatchPacket.lean) |
+| Directional matching | The reference switch uses the complete matcher for enumeration, existence and first-match queries, including caller-designated rigid variables. For source refinement every backend selects the least restored binding map, including on ambiguous matches. | Full hybrid enumeration retains its existing order for callers that consume the whole sequence. [Matcher contract](Tamarin/TotalMatchPacket.lean) · [Selection theorem](Tamarin/MatchOrder.lean) |
 | Reduction | The general reducer certifies reachable, unique normal forms on the full table, including proper AC subproducts. A finite stage suffices for every term on a range-restricted canonical table. | The default native-only fallback retains its work budget. General decoding and numeric representation still constrain the Rust boundary. [Staged reducer](Tamarin/GeneralReductionWire.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
-| Variants | The general folding reference computes a complete family under the presentation assumptions. The default native-only path independently certifies individual frontiers and has table-wide guarantees for definitions and destructors. | Prove the finite variant property for mixed tables and DH. Variant packets require representable witness IDs and images. The default path can still defer. [Frontier checker](Tamarin/CheckedVariants.lean) · [Total reference](Tamarin/CompleteNarrowing.lean) |
+| Variants | The general folding solver has a finite-family proof for all 13 DH rules on open and kind-level inputs. Lean proves termination, confluence modulo C/AC, and sort preservation for this table. The finite-family proof also covers canonical mixtures with free/C-headed subterm and ground-result equations. | For a user extension, establish convergence of the combined table. Extensions outside the proved classes also need a finite-variant argument. The numeric interface must represent the budget and bindings. [Pure DH](Tamarin/DHFiniteVariants.lean) · [Mixed tables](Tamarin/DHMixedVariants.lean) |
 
 The general reduction contract states progress in terms of the rewrite relation. Once the
 stage covers every path from this input and all reachable normal endpoints preserve its
@@ -259,12 +263,24 @@ every successful reply. It checks the raw successors at intermediate points of n
 narrowing and can still defer when that certificate cannot be found within budget.
 [Executable and theorems](Tamarin/GeneralVariants.lean) · [Rust acceptance test](../crates/tamarin-term/tests/native_backend/checked_variants.rs)
 
-The reusable canonicality proof takes termination, sort preservation and a join for every one-step
-fork. For finite variants, a sufficient condition is a decreasing rank with a bound on every
-normalized substitution instance of each open term. The rank may depend on the term and the theory.
-For constant definitions it counts occurrences of defined symbols. A normalized substitution adds
-zero to that count, even when its images are large. This proves completion separately from the
-choice of executable. [Local confluence](Tamarin/TableConfluence.lean) · [Uniform bounds](Tamarin/BoundedVariants.lean) · [Definition certificate](Tamarin/DefinitionCertificate.lean)
+For a canonical table, it suffices to give each operator a bound on **one** normalization
+path when its arguments are already normal. These bounds compose for the whole query,
+including shared variables. In DH, well-sorted factors can cancel in groups. Factors of an
+incompatible sort remain in the surrounding AC product. The mixed-table proof allows a
+free or commutative rule to return a subterm from inside any argument, including an AC
+product, or a ground expression that uses other active equations. All operator proofs refer
+to the combined table. A Rust regression compares the emitted DH packet word for word with
+the fixture Lean decodes. Other packets can establish the same result by checking their
+oriented rules against the schemas modulo C/AC. [DH packet proof](Tamarin/DHWire.lean) · [Rust encoder regression](../crates/tamarin-term/src/lean_unification/whole/dh_wire.rs) · [Short paths](Tamarin/OperatorVariantBounds.lean) ·
+[Kind-level DH products](Tamarin/DHKindProducts.lean) · [Subterm criterion](Tamarin/SubtermVariants.lean)
+
+Arbitrary user extensions require a whole-table argument. For example, the two rules
+`f(s(x)) → g(x)` and `g(x) → f(x)` each take at most one root step above normal arguments
+in isolation. Together, reducing `f(sⁿ(a))` to `f(a)` consumes every occurrence of `s`.
+The uniform path bound implied by any finite family fails on the single query `f(x)`.
+Lean proves this failure, and the Maude probe requests only the first six variants.
+[Tamarin's theory assumptions](../tamarin-prover/manual/src/004_cryptographic-messages.md#L129-L143) ·
+[Counterexample](Tests/VariantCompositionLimit.lean) · [Bounded Maude probe](Tests/check_maude_operations.py)
 
 **Retiring older paths.** At `cd3d2f0`, the four general operations and their wire and semantic
 proofs imported 194 of the 419 modules under `lean/Tamarin`. Review the remaining 225 modules
@@ -420,9 +436,11 @@ separately exercise ordering and proof search.
 
 ### Native algorithms and protocol regressions
 
-- **First-match callers.** Source refinement consumes the first match. Native-only sorts completed
-  alternatives by their restored binding lists. Ordered hybrid calls can still use Maude for an
-  ambiguous match. Exercise source refinement when changing enumeration order.
+- **Source selection.** Upstream Haskell uses the first matcher Maude enumerates. Rust selects
+  the lexicographically least complete binding map across all backends. Bindings occur in
+  caller variable order, images use the caller's canonical C/AC term order, and identity
+  bindings are explicit. This can select a different valid substitution from upstream when
+  a source is ambiguous. Duplicating or reordering solutions preserves this choice.
   [Order contract](Tamarin/MatchOrder.lean) · [Source selection](../tamarin-prover/lib/theory/src/Theory/Constraint/Solver/Sources.hs#L279)
 - **Existence and enumeration.** Two captures against 64 distinct AC factors already give an
   exponential family. Boolean matching and unifiability have decision paths. In paged matching,

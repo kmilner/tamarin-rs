@@ -3,6 +3,8 @@
 //! sizes on the original equation roots.
 mod checked_variants;
 pub use checked_variants::variants_for_convergent_theory;
+mod packed;
+pub(crate) use packed::{unpack_conjunction, Conjunction};
 mod reduction;
 pub use reduction::reduction_for_convergent_theory;
 mod total;
@@ -808,3 +810,6 @@ mod tests {
         assert!(Packet::encode(&table, &query(width + 1)).unwrap().is_none());
     }
 }
+
+#[cfg(test)]
+mod dh_wire;
