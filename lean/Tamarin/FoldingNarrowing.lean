@@ -155,9 +155,8 @@ def generator (bound : ReferenceReduction.Bound rules) (canonical : CanonicalPre
       (by simpa only [List.ofFn_getElem] using finite q) avoid
   exact ⟨fun q avoid => (run q avoid).val,fun q avoid => by simpa only [List.ofFn_getElem] using (run q avoid).property⟩
 
-/-- Assemble the four semantic command implementations for one active table.
-The two remaining algorithmic inputs are the raw mixed unifier and local
-narrowing. Presentation properties are about the caller’s equation table. -/
+/-- Assemble the four commands from a raw mixed unifier, a local narrowing
+implementation and the properties of the active equation table. -/
 def reference (raw : Problem s → List (UnifierSorts.Template s))
     (complete : ∀ p, UnifierSorts.CompleteTemplates p (raw p))
     (bound : ReferenceReduction.Bound rules) (canonical : CanonicalPresentation (ruleRoot rules))

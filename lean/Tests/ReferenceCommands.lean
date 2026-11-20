@@ -1,4 +1,5 @@
 import Tamarin.ACEquationExtensions
+import Tamarin.CompleteNarrowing
 import Tamarin.FoldingNarrowing
 import Tamarin.MaudeOperationRefinements
 import Tamarin.Pairing
@@ -134,11 +135,8 @@ private theorem emptyCanonical (s : Signature) : MaudeOperations.CanonicalPresen
 
 private def generated {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym]
     [DecidableEq s.ACSym] [DecidableEq s.Atom] :=
-  FoldingNarrowing.generator (rules := []) (by simp [ReferenceReduction.Bound]) (emptyCanonical s)
-    (fun v => emptyNormal (.var v)) (MaudeOperations.emptyVariants s).finiteVariantProperty fun _ =>
-      { branches := fun _ _ => []
-        genuine := by simp
-        lifts := fun _ _ _ δ _ u step => (emptyNormal (δ.apply _) u step).elim }
+  (TableNarrowing.reference (rules := []) (by simp [ReferenceReduction.Bound])
+    (emptyCanonical s) (MaudeOperations.emptyVariants s).finiteVariantProperty).variants
 
 private def generatedRows := (generated (s := S)).variants [f (.var x),.var x,f (.var x)] [⟨25,.msg⟩]
 #guard generatedRows.length == 1 && generatedRows.all (fun a =>
@@ -146,6 +144,40 @@ private def generatedRows := (generated (s := S)).variants [f (.var x),.var x,f 
   | .var w, [u,v,z] => w.id > 25 && eqB u (f (.var w)) && eqB v (.var w) && eqB z u
   | _,_ => false)
 #guard ((generated (s := N)).variants [ill,ill] []).length == 1
+
+-- The selected subproduct crosses an AC boundary after substitution. A Node
+-- operand cannot be bound to a Msg remainder. The other operand of the C
+-- parent and the second tuple coordinate must retain the same image of x.
+private def groundRule : Equation S := ⟨plus a b,c⟩
+private theorem groundBound : ReferenceReduction.Bound [groundRule] := by
+  rintro r hr v hv
+  obtain rfl := List.mem_singleton.mp hr
+  exact False.elim hv
+private theorem groundApps : ∀ r ∈ [groundRule], ConstructorVariants.Application r.lhs := by
+  intro r hr
+  obtain rfl := List.mem_singleton.mp hr
+  trivial
+private def node : Term S := .atom (3,.node)
+private def extra : Term S := .atom (4,.msg)
+private def wrapped (t image : Term S) := h (.comm 0 (f image) t)
+private def request : Fin 2 → Term S := Fin.cases
+  (wrapped (plus (plus node a) (.var x)) (.var x)) (fun _ => f (.var x))
+private def steps := ReferenceVariantFrontier.expand (ReferenceVariantFrontier.seed request)
+  ((TableNarrowing.narrower groundBound (ConstructorVariants.constructor_normal _ groundApps).1 request).branches (ReferenceVariantFrontier.seed request))
+
+private def reaches (rows : List (ReferenceVariantFrontier.Point S 2)) (image target : Term S) :=
+  rows.any fun point =>
+    let p : Problem S := [⟨point.assignment.image x,image⟩,⟨point.value 0,target⟩,⟨point.value 1,f image⟩]
+    !(matchRows p p.variables).isEmpty
+
+#guard
+  let rows := steps
+  let image := plus b extra
+  let after := plus node (plus c extra)
+  reaches rows b (wrapped (plus node c) b) &&
+    reaches rows image (wrapped after image) &&
+    !(reaches rows b (wrapped c b)) &&
+    !(reaches rows image (wrapped after b))
 #guard ((generated (s := S)).variants [] []).length == 1
 
 end Tamarin.ReferenceCommands.Tests

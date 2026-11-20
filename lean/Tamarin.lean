@@ -150,3 +150,4 @@ import Tamarin.MaudeOperationRefinements
 import Tamarin.MatchViaUnification
 import Tamarin.ReduceViaSteps
 import Tamarin.TableNarrowing
+import Tamarin.CompleteNarrowing
