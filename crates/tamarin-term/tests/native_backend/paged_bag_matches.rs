@@ -78,7 +78,7 @@ fn sort_filtering_precedes_the_output_limit_across_pages() {
 }
 
 #[test]
-fn raw_product_beyond_one_machine_word_defers_atomically() {
+fn raw_product_beyond_one_machine_word_has_a_match_without_collecting() {
     let h = native();
     let query = [Equal {
         lhs: f_app_ac(
@@ -88,9 +88,5 @@ fn raw_product_beyond_one_machine_word_defers_atomically() {
         rhs: sum(variable("x"), variable("y")),
     }];
     assert!(h.has_match_eqs(&query).unwrap());
-    assert!(matches!(
-        h.match_eqs(&query),
-        Err(MaudeError::UnsupportedOperation("matching"))
-    ));
     assert_eq!(h.stats().match_count, 0);
 }

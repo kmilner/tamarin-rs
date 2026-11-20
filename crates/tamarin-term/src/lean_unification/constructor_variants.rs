@@ -220,6 +220,15 @@ impl RuleTable {
         Some(table)
     }
 
+    /// The reference receives all oriented equations emitted for this module.
+    /// Preparation removes an entire bucket when even one rule is inadmissible.
+    pub(super) fn complete_rules(
+        &self,
+    ) -> Option<impl Iterator<Item = &crate::rewriting::RRule<LNTerm>>> {
+        (self.ordinary_rules.len() == self.roots.len())
+            .then(|| self.ordinary_rules.values().flatten())
+    }
+
     pub(super) fn declares_sort(&self, sort: LSort) -> bool {
         self.nat || sort != LSort::Nat
     }

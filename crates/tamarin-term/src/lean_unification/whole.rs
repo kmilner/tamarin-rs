@@ -1,8 +1,10 @@
 //! Submit equations as a shared graph. Lean counts operands for homogeneous AC
 //! systems and checks identity, closed clashes, and incompatible variable-image
 //! sizes on the original equation roots.
+mod checked_variants;
+mod reduction;
 mod total;
-pub(crate) use total::unify as total_unify;
+pub(crate) use total::{matches as total_match, unify as total_unify};
 
 use super::homogeneous::ProjectedAnswers;
 use super::{ac_sort, initialize, sort_word, Error, Outcome, RuleTable, WordSlice, LEAN_THREAD};
@@ -50,6 +52,23 @@ impl Packet {
             |sort| table.declares_sort(sort),
             |f| table.declaration(f).map(|(_, arity, sort)| (arity, sort)),
         )
+    }
+
+    fn symbol(
+        &mut self,
+        f: FunSym,
+        kind: u64,
+        arity: usize,
+        output: crate::lterm::LSort,
+    ) -> Option<u64> {
+        if let Some(id) = self.symbols.id(f) {
+            return Some(id);
+        }
+        let id = self.symbols.intern(f)?;
+        let sort = sort_word(output);
+        self.declarations.extend([kind, id, arity as u64, sort]);
+        self.declarations.extend(std::iter::repeat_n(sort, arity));
+        Some(id)
     }
 
     // Children precede their parents in the graph. The bounded kernels charge
@@ -103,15 +122,7 @@ impl Packet {
                             if bounded && children.len() > MAX_NODES - self.expanded {
                                 return None;
                             }
-                            let id = if let Some(id) = self.symbols.id(*f) {
-                                id
-                            } else {
-                                let id = self.symbols.intern(*f)?;
-                                let sort = sort_word(output);
-                                self.declarations.extend([kind, id, arity as u64, sort]);
-                                self.declarations.extend(std::iter::repeat_n(sort, arity));
-                                id
-                            };
+                            let id = self.symbol(*f, kind, arity, output)?;
                             work.push(Visit::Finish(kind, id, children.len()));
                             work.extend(children.iter().rev().map(|t| Visit::Term(t, depth + 1)));
                         }

@@ -790,29 +790,6 @@ fn mixed_sort_matching_restores_rigid_subject_variables() {
 }
 
 #[test]
-fn ac_match_collection_discards_earlier_pages_when_the_full_result_exceeds_storage() {
-    let h = native();
-    let pattern = f_app_ac(
-        AcSym::Union,
-        vec![variable("x"), variable("y"), variable("z")],
-    );
-    let subject = f_app_ac(
-        AcSym::Union,
-        (0..10).map(|i| pub_term(format!("a{i}"))).collect(),
-    );
-    let query = [Equal {
-        lhs: subject,
-        rhs: pattern,
-    }];
-    assert!(h.has_match_eqs(&query).unwrap());
-    assert!(matches!(
-        h.match_eqs(&query),
-        Err(MaudeError::UnsupportedOperation("matching"))
-    ));
-    assert!(h.check_backend_status().is_err());
-}
-
-#[test]
 fn multi_branch_matching_conjunctions_join_every_compatible_assignment() {
     let h = native();
     let x = variable("x");
@@ -1605,29 +1582,6 @@ fn open_match_joins_whole_compound_images_across_equations() {
 }
 
 #[test]
-fn open_match_budget_exhaustion_discards_earlier_successes() {
-    use tamarin_term::builtin::hash;
-    use tamarin_term::maude_sig::hash_maude_sig;
-    let h = MaudeHandle::start_with_backend(
-        MISSING,
-        mset_maude_sig().merge(hash_maude_sig()),
-        AlgebraBackend::NativeOnly,
-    )
-    .unwrap();
-    let u = |xs| f_app_ac(AcSym::Union, xs);
-    // The first H(x) leaves eight factors for two variables (65,025 candidate
-    // pairs), which fits and yields matches. The next H(x) exhausts the query budget.
-    let eq = Equal {
-        lhs: u((0..9).map(|i| hash(pub_term(format!("v{i}")))).collect()),
-        rhs: u(vec![hash(variable("x")), variable("y"), variable("z")]),
-    };
-    assert!(matches!(
-        h.match_eqs(&[eq]),
-        Err(MaudeError::UnsupportedOperation("matching"))
-    ));
-    assert_eq!(h.stats().match_count, 0);
-}
-#[test]
 fn rigid_allocation_preserves_fresh_variables_after_common_child_cancellation() {
     use tamarin_term::builtin::{hash, pair};
     use tamarin_term::maude_sig::hash_maude_sig;
@@ -2026,15 +1980,35 @@ fn natural_kind_queries_preserve_variable_sorts_before_factoring() {
     ] {
         assert!(!handle().unify(&[query]).unwrap().is_empty());
     }
-    for query in [
-        f_app_list(vec![fst(variable("x")), bad]), // narrowing requires sorted observers
-        nat_plus(var("node", LSort::Node), one),   // outside the admitted message-kind fragment
-    ] {
-        assert!(matches!(
-            handle().variants(&query),
-            Err(MaudeError::UnsupportedOperation(_))
-        ));
+    let x = LVar::new("x", LSort::Msg, 0);
+    let projected = f_app_list(vec![fst(variable("x")), bad]);
+    let arms = handle().variants(&projected).unwrap();
+    let mut covered = [false; 2];
+    for arm in arms {
+        let image = arm
+            .iter()
+            .find(|(v, _)| *v == x)
+            .map(|(_, t)| t.clone())
+            .unwrap_or(variable("x"));
+        match &image {
+            Term::Lit(Lit::Var(_)) => covered[0] = true,
+            Term::App(tamarin_term::function_symbols::FunSym::NoEq(head), children)
+                if *head == tamarin_term::function_symbols::pair_sym() =>
+            {
+                assert_eq!(handle().reduce(&fst(image.clone())).unwrap(), children[0]);
+                covered[1] = true;
+            }
+            _ => panic!("unexpected projection image {image:?}"),
+        }
     }
+    assert_eq!(covered, [true, true]);
+    let node = LVar::new("node", LSort::Node, 0);
+    let kind = nat_plus(Term::Lit(Lit::Var(node)), one);
+    let arms = handle().variants(&kind).unwrap();
+    assert!(!arms.is_empty());
+    assert!(arms.iter().all(|arm| arm.iter().all(
+        |(key, t)| *key == node && matches!(t,Term::Lit(Lit::Var(v)) if v.sort == LSort::Node)
+    )));
 }
 
 #[test]
@@ -2935,36 +2909,6 @@ fn open_ac_match_counts_equivalent_ground_c_factors_in_both_orders() {
 }
 
 #[test]
-fn nested_c_match_discards_partial_answers_on_orientation_budget_exhaustion() {
-    use tamarin_term::builtin::{emap, pair};
-    use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
-    let sig = mset_maude_sig()
-        .merge(bp_maude_sig())
-        .merge(dh_maude_sig())
-        .merge(pair_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
-    let mut p = pub_term("end");
-    let mut t = p.clone();
-    // Twelve independent binary choices all succeed, but their combinations
-    // exceed this query's budget. No prefix of their answers is complete.
-    for i in 0..12 {
-        let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, i)));
-        let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, i)));
-        p = pair(emap(x, y), p);
-        t = pair(emap(pub_term("a"), pub_term("b")), t);
-    }
-    let query = Equal {
-        lhs: sum(t, pub_term("tag")),
-        rhs: sum(p, variable("tail")),
-    };
-    assert!(matches!(
-        h.match_eqs(&[query]),
-        Err(MaudeError::UnsupportedOperation("matching"))
-    ));
-    assert_eq!(h.stats().match_count, 0);
-}
-
-#[test]
 fn nested_ac_under_a_commutative_factor_returns_both_bindings() {
     use tamarin_term::builtin::emap;
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
@@ -3081,34 +3025,6 @@ fn nested_ac_cancels_closed_siblings_before_selecting() {
 }
 
 #[test]
-fn nested_ac_search_budget_is_shared_by_independent_subtrees() {
-    use tamarin_term::builtin::{hash, pair};
-    use tamarin_term::maude_sig::hash_maude_sig;
-    let sig = mset_maude_sig()
-        .merge(hash_maude_sig())
-        .merge(pair_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
-    let mut pattern = pub_term("end");
-    let mut subject = pattern.clone();
-    for i in 0..18 {
-        let v = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Msg, i)));
-        pattern = pair(hash(sum(v("x"), v("y"))), pattern);
-        subject = pair(hash(sum(pub_term("a"), pub_term("b"))), subject);
-    }
-    // Each individual inner match is easy. Together they have 2^18 distinct
-    // answers, so returning the first successful branches would lose matches.
-    let eq = Equal {
-        lhs: sum(subject, pub_term("tag")),
-        rhs: sum(pattern, variable("tail")),
-    };
-    assert!(matches!(
-        h.match_eqs(&[eq]),
-        Err(MaudeError::UnsupportedOperation("matching"))
-    ));
-    assert_eq!(h.stats().match_count, 0);
-}
-
-#[test]
 fn rigid_ground_match_checks_raw_c_and_ac_forms_in_both_public_apis() {
     use tamarin_term::function_symbols::{CSym, FunSym};
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
@@ -3153,7 +3069,7 @@ fn rigid_ground_match_checks_raw_c_and_ac_forms_in_both_public_apis() {
 }
 
 #[test]
-fn rigid_match_defers_undeclared_raw_operators_and_invalid_arities() {
+fn rigid_match_accepts_kind_level_raw_terms_and_defers_invalid_declarations() {
     use tamarin_term::function_symbols::{CSym, FunSym};
     let (a, b) = (pub_term("a"), pub_term("b"));
     let nat = MaudeHandle::start_with_backend(
@@ -3167,10 +3083,7 @@ fn rigid_match_defers_undeclared_raw_operators_and_invalid_arities() {
         lhs: raw_nat(vec![b.clone(), a.clone()]),
         rhs: raw_nat(vec![a.clone(), b.clone()]),
     };
-    assert!(matches!(
-        nat.match_eqs(&[ill_sorted]),
-        Err(MaudeError::UnsupportedOperation("matching"))
-    ));
+    assert_eq!(nat.match_eqs(&[ill_sorted]).unwrap(), vec![vec![]]);
     let eq = Equal {
         lhs: Term::App(FunSym::C(CSym::EMap), vec![b.clone(), a.clone()].into()),
         rhs: Term::App(FunSym::C(CSym::EMap), vec![a.clone(), b].into()),
@@ -3329,10 +3242,6 @@ fn boolean_linear_ac_matches_wide_frozen_subjects_without_enumerating() {
         assert!(!h.has_match_eqs(&[row(11, 2)]).unwrap());
         assert!(!h.has_match_eqs(&[row(64, 1)]).unwrap());
         assert_eq!(h.stats().match_count, 0);
-        assert!(matches!(
-            backend().match_eqs(&[row(64, 2)]),
-            Err(MaudeError::UnsupportedOperation("matching"))
-        ));
     }
 }
 
@@ -3522,6 +3431,12 @@ mod principal_ray;
 #[path = "native_backend/simplex_feasibility.rs"]
 mod simplex_feasibility;
 
+#[path = "native_backend/checked_reduction.rs"]
+mod checked_reduction;
+
+#[path = "native_backend/checked_variants.rs"]
+mod checked_variants;
+
 #[path = "native_backend/variant_overlap.rs"]
 mod variant_overlap;
 
@@ -3603,4 +3518,50 @@ fn ordinary_unification_uses_module_sorts_before_rust_factoring() {
         assert!(h.unify(&[eq]).unwrap().is_empty());
     }
     assert_eq!(h.stats().unify_count, 0);
+}
+
+#[test]
+fn total_match_preserves_rigid_subject_ids_and_scoped_pattern_variables() {
+    use tamarin_term::builtin::{emap, hash};
+    use tamarin_term::function_symbols::fst_sym;
+    use tamarin_term::maude_sig::{bp_maude_sig, hash_maude_sig};
+    let mut sig = mset_maude_sig()
+        .merge(bp_maude_sig())
+        .merge(hash_maude_sig());
+    sig.macro_names.insert(fst_sym());
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let key = |name| LVar::new(name, LSort::Msg, 7);
+    let v = |name| Term::Lit(Lit::Var(key(name)));
+    let node = Term::Lit(Lit::Var(LVar::new("n", LSort::Node, 7)));
+    let pat = sum(node.clone(), emap(v("x"), v("f")));
+    let subject = sum(node, emap(v("f"), hash(v("x"))));
+    let ordinary = Equal {
+        lhs: subject.clone(),
+        rhs: pat.clone(),
+    };
+    let mut expected = vec![
+        vec![(key("f"), v("f")), (key("x"), hash(v("x")))],
+        vec![(key("f"), hash(v("x"))), (key("x"), v("f"))],
+    ];
+    expected.sort();
+    assert!(h.has_match_eqs(std::slice::from_ref(&ordinary)).unwrap());
+    // The Node at pattern position is itself bindable in ordinary matching.
+    let mut ordinary_answers = expected.clone();
+    let n = LVar::new("n", LSort::Node, 7);
+    for arm in &mut ordinary_answers {
+        arm.push((n, Term::Lit(Lit::Var(n))));
+        arm.sort();
+    }
+    ordinary_answers.sort();
+    assert_eq!(h.match_eqs(&[ordinary]).unwrap(), ordinary_answers);
+    let scoped = Equal {
+        lhs: pat,
+        rhs: subject,
+    };
+    let allowed = [("x", 7)].into_iter().collect();
+    assert_eq!(
+        h.match_eqs_skolemize_both(&[scoped], &allowed).unwrap(),
+        vec![vec![(key("x"), hash(v("x")))]]
+    );
+    assert_eq!(h.stats().match_count, 0);
 }

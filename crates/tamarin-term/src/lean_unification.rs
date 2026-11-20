@@ -1,8 +1,9 @@
 //! In-process interface to the experimental verified Lean backend.
 //!
 //! Native-only ordinary unification uses bounded kernels first and a total
-//! mixed free/C/AC fallback over the original equations. Matching, reduction
-//! and variants link kernels for the domains listed in the Lean roadmap.
+//! mixed free/C/AC fallback over the original equations. Directional matching
+//! has a total scoped fallback. Reduction and variants can certify answers
+//! on the active rewrite table within explicit search budgets.
 //! The Rust encoding and C/Lean runtime boundary remain trusted code.
 
 mod common_children;
@@ -10,7 +11,7 @@ mod commutative;
 mod components;
 mod whole;
 pub(crate) use commutative::solve as unify_structured;
-pub(crate) use whole::total_unify;
+pub(crate) use whole::{total_match, total_unify};
 mod constructor_variants;
 pub(crate) use constructor_variants::RuleTable;
 mod ac_bag_match;

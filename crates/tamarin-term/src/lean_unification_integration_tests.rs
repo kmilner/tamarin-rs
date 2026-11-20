@@ -7590,3 +7590,125 @@ fn bounded_unifiers_defer_exponential_families_without_publishing_a_prefix() {
         Outcome::Unsupported
     );
 }
+
+#[cfg(test)]
+mod bounded_match {
+    use super::*;
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::maude_sig::pair_maude_sig;
+
+    const MISSING: &str = "/nonexistent";
+
+    fn variable(name: &str) -> LNTerm {
+        Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)))
+    }
+    fn sum(a: LNTerm, b: LNTerm) -> LNTerm {
+        f_app_ac(AcSym::Union, vec![a, b])
+    }
+    fn bounded(
+        h: &MaudeHandle,
+        eqs: &[Equal<LNTerm>],
+    ) -> Option<crate::lean_unification::Substitutions> {
+        let oriented = eqs
+            .iter()
+            .map(|e| Equal {
+                lhs: e.rhs.clone(),
+                rhs: e.lhs.clone(),
+            })
+            .collect::<Vec<_>>();
+        h.native_match(&oriented, true).unwrap()
+    }
+    #[test]
+    fn ac_match_collection_discards_earlier_pages_when_the_full_result_exceeds_storage() {
+        let h =
+            MaudeHandle::start_with_backend(MISSING, mset_maude_sig(), AlgebraBackend::NativeOnly)
+                .unwrap();
+        let pattern = f_app_ac(
+            AcSym::Union,
+            vec![variable("x"), variable("y"), variable("z")],
+        );
+        let subject = f_app_ac(
+            AcSym::Union,
+            (0..10).map(|i| pub_term(format!("a{i}"))).collect(),
+        );
+        let query = [Equal {
+            lhs: subject,
+            rhs: pattern,
+        }];
+        assert!(h.has_match_eqs(&query).unwrap());
+        assert!(bounded(&h, &query).is_none());
+    }
+
+    #[test]
+    fn open_match_budget_exhaustion_discards_earlier_successes() {
+        use crate::builtin::hash;
+        use crate::maude_sig::hash_maude_sig;
+        let h = MaudeHandle::start_with_backend(
+            MISSING,
+            mset_maude_sig().merge(hash_maude_sig()),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        let u = |xs| f_app_ac(AcSym::Union, xs);
+        // The first H(x) leaves eight factors for two variables (65,025 candidate
+        // pairs), which fits and yields matches. The next H(x) exhausts the query budget.
+        let eq = Equal {
+            lhs: u((0..9).map(|i| hash(pub_term(format!("v{i}")))).collect()),
+            rhs: u(vec![hash(variable("x")), variable("y"), variable("z")]),
+        };
+        assert!(bounded(&h, &[eq]).is_none());
+        assert_eq!(h.stats().match_count, 0);
+    }
+
+    #[test]
+    fn nested_c_match_discards_partial_answers_on_orientation_budget_exhaustion() {
+        use crate::builtin::{emap, pair};
+        use crate::maude_sig::{bp_maude_sig, dh_maude_sig};
+        let sig = mset_maude_sig()
+            .merge(bp_maude_sig())
+            .merge(dh_maude_sig())
+            .merge(pair_maude_sig());
+        let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+        let mut p = pub_term("end");
+        let mut t = p.clone();
+        // Twelve independent binary choices all succeed, but their combinations
+        // exceed this query's budget. No prefix of their answers is complete.
+        for i in 0..12 {
+            let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, i)));
+            let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, i)));
+            p = pair(emap(x, y), p);
+            t = pair(emap(pub_term("a"), pub_term("b")), t);
+        }
+        let query = Equal {
+            lhs: sum(t, pub_term("tag")),
+            rhs: sum(p, variable("tail")),
+        };
+        assert!(bounded(&h, &[query]).is_none());
+        assert_eq!(h.stats().match_count, 0);
+    }
+
+    #[test]
+    fn nested_ac_search_budget_is_shared_by_independent_subtrees() {
+        use crate::builtin::{hash, pair};
+        use crate::maude_sig::hash_maude_sig;
+        let sig = mset_maude_sig()
+            .merge(hash_maude_sig())
+            .merge(pair_maude_sig());
+        let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+        let mut pattern = pub_term("end");
+        let mut subject = pattern.clone();
+        for i in 0..18 {
+            let v = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Msg, i)));
+            pattern = pair(hash(sum(v("x"), v("y"))), pattern);
+            subject = pair(hash(sum(pub_term("a"), pub_term("b"))), subject);
+        }
+        // Each individual inner match is easy. Together they have 2^18 distinct
+        // answers, so returning the first successful branches would lose matches.
+        let eq = Equal {
+            lhs: sum(subject, pub_term("tag")),
+            rhs: sum(pattern, variable("tail")),
+        };
+        assert!(bounded(&h, &[eq]).is_none());
+        assert_eq!(h.stats().match_count, 0);
+    }
+}

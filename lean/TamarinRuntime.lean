@@ -1,4 +1,7 @@
+import Tamarin.CheckedVariantsWire
+import Tamarin.CheckedReductionWire
 import Tamarin.TotalUnifyWire
+import Tamarin.TotalMatchWire
 import TamarinRuntime.Candidate
 import TamarinRuntime.BinaryCancellation
 import TamarinRuntime.XorMatchings
@@ -198,6 +201,18 @@ def cancelCommon (lhs rhs : Array UInt64) : Array (Array UInt64) :=
 @[export tamarin_total_unify]
 def totalUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots : Array UInt64) :
     Array (Array UInt64) := TotalUnifyWire.run decls nodes roots
+
+@[export tamarin_total_match]
+def totalMatch (decls : Array UInt64) (nodes : Array (Array UInt64)) (roots ids : Array UInt64) :
+    Array (Array UInt64) := TotalMatchWire.run decls nodes roots ids
+
+@[export tamarin_checked_reduce]
+def checkedReduce (decls : Array UInt64) (nodes : Array (Array UInt64)) (rules : Array UInt64)
+    (root fuel : UInt64) : Array (Array UInt64) := CheckedReductionWire.run decls nodes rules root fuel
+
+@[export tamarin_checked_variants]
+def checkedVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
+    Array (Array UInt64) := CheckedVariantsWire.run ds ns rules roots fuel
 
 @[export tamarin_whole_unify]
 def wholeUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (equations : Array UInt64) :

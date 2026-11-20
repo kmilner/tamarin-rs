@@ -1,7 +1,12 @@
 import Tamarin
+import Tamarin.ReductionSignatureExtension
+import Tamarin.CheckedReductionPacket
 import Tamarin.TotalUnifyPacket
+import Tamarin.TotalMatchPacket
 import Tamarin.SignatureExtension
+import Tamarin.MatchingSignatureExtension
 import Tamarin.UnavailableSort
+import Tamarin.VariantSortRestriction
 import Tamarin.ACMatchPacket
 import Tamarin.ACMatchAnswerPacket
 import Tamarin.ACPagePacket
@@ -36,6 +41,48 @@ theorem referenceMixed_total {s : Signature}
 family on its declared signature. Malformed input has a separate status. -/
 theorem exportedTotalUnify_correct : TotalUnifyWire.Packet.Correct Executable.totalUnify :=
   TotalUnifyWire.Packet.correct
+
+theorem exportedTotalMatch_correct : TotalMatchWire.Correct Executable.totalMatch :=
+  TotalMatchWire.correct
+
+/-- Exact matching coverage in the caller's entire signature, even when
+only the declarations occurring in the terms crossed the wire. -/
+theorem exportedTotalMatch_ambient {ds ns es d p} (ids)
+    (decoded : TotalUnifyWire.input ds ns es = some ⟨d,p⟩) :
+    ∃ answers, TotalUnifyWire.Packet.Decodes p (Executable.totalMatch ds ns es ids) answers ∧
+      ∀ extra : Signature, Matching.Complete (SignatureExtension.query extra p) (TotalMatchWire.Bindable ids)
+        (answers.map (SignatureExtension.liftSubst extra)) := by
+  obtain ⟨answers,hp,ok⟩ := exportedTotalMatch_correct.valid _ _ _ _ _ _ decoded
+  exact ⟨answers,hp,fun extra => SignatureExtension.matching extra p ok⟩
+
+theorem exportedCheckedReduce_correct : CheckedReductionWire.Correct Executable.checkedReduce :=
+  CheckedReductionWire.correct
+
+theorem exportedCheckedVariants_correct : CheckedVariantsWire.Correct Executable.checkedVariants :=
+  CheckedVariantsWire.correct
+
+/-- Additional caller symbols cannot change the unique normal form of a
+concrete request under a range-restricted active table. -/
+theorem exportedCheckedReduce_ambient {ds ns es root n d t rs}
+    (h : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) (admitted : CheckedReductionWire.admitted rs t n)
+    (bound : ReferenceReduction.Bound rs)
+    (completes : CheckedReduction.run rs (CheckedReductionWire.fuel rs t n) t ≠ none) :
+    ∃ u, CheckedReductionWire.Decodes d (Executable.checkedReduce ds ns es root n) u ∧
+      ∀ extra : Signature, MaudeOperations.ReductionReply (Rewriting.ruleRoot (SignatureExtension.query extra rs))
+        (SignatureExtension.embed extra t) (SignatureExtension.embed extra u) := by
+  rcases exportedCheckedReduce_correct.valid _ _ _ _ _ _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,stop⟩
+  · exact ⟨u,packet,fun extra => SignatureExtension.reduction extra rs bound t u reply⟩
+  · exact (stop.elim (fun bad => by simp [bad] at admitted) completes).elim
+
+/-- Filtering witnesses of an unavailable sort preserves coverage on actual
+module substitutions, including all the values of a packed query. -/
+theorem checkedVariants_withoutNat {s : Signature} {R : Rewriting.Root s} {q rows}
+    (reply : CheckedVariants.Reply R q rows) (ρ : Substitution s)
+    (clean : ∀ v, Rewriting.Observed q v → UnavailableSort.marked .nat (ρ.image v) = false)
+    (normal : Rewriting.Normalized R ρ) (values : List (Term s))
+    (forms : Rewriting.Aligned (fun t u => Rewriting.NormalForm R (ρ.apply t) u) q values) :
+    ∃ a ∈ rows.filter (VariantSortRestriction.allowed q), a.Covers R q ρ values :=
+  VariantSortRestriction.complete_on_module reply.toVariantReply ρ clean normal values forms
 
 /-- The active-table reference supplies all four operations. Its hypotheses
 are properties of the presentation emitted by the caller. -/
@@ -1173,7 +1220,10 @@ run_cmd do
     (``Tamarin.Executable.sortedACMatch, `tamarin_sorted_ac_match),
     (``Tamarin.Executable.flatACMatch, `tamarin_flat_ac_match),
     (``Tamarin.Executable.homogeneousUnify, `tamarin_homogeneous_unify),
+    (``Tamarin.Executable.checkedReduce, `tamarin_checked_reduce),
     (``Tamarin.Executable.totalUnify, `tamarin_total_unify),
+    (``Tamarin.Executable.totalMatch, `tamarin_total_match),
+    (``Tamarin.Executable.checkedVariants, `tamarin_checked_variants),
     (``Tamarin.Executable.wholeUnify, `tamarin_whole_unify),
     (``Tamarin.Executable.variantOverlapAgrees, `tamarin_variant_overlap_agrees),
     (``Tamarin.Executable.checkFactors, `tamarin_check_factors),

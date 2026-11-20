@@ -773,6 +773,34 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedTotalUnify_correct"),
 ])
 
+EXECUTABLE = ("import Tamarin.TotalMatchPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedTotalMatch_correct") + "end Tamarin\n")
+MATCH_RUN = "TotalMatchWire.run decls nodes roots ids"
+EXPORT_MUTATIONS.extend([
+    ("match_ignores_scope", MATCH_RUN, "TotalMatchWire.run decls nodes roots #[]",
+     "theorem exportedTotalMatch_correct"),
+    ("match_discards_all_arms", MATCH_RUN, "#[#[1]]", "theorem exportedTotalMatch_correct"),
+    ("match_drops_equation_tail", MATCH_RUN, "TotalMatchWire.run decls nodes (roots.extract 0 2) ids",
+     "theorem exportedTotalMatch_correct"),
+])
+
+EXECUTABLE = ("import Tamarin.CheckedReductionPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+              + obligation("exportedCheckedReduce_correct") + "end Tamarin\n")
+REDUCTION_RUN = "CheckedReductionWire.run decls nodes rules root fuel"
+EXPORT_MUTATIONS.extend([
+    ("checked_reduce_ignores_rules", REDUCTION_RUN, "CheckedReductionWire.run decls nodes #[] root fuel",
+     "theorem exportedCheckedReduce_correct"),
+    ("checked_reduce_always_defers", REDUCTION_RUN, "#[#[2]]", "theorem exportedCheckedReduce_correct"),
+])
+
+EXECUTABLE += "\nnamespace Tamarin\n" + obligation("exportedCheckedVariants_correct") + "end Tamarin\n"
+VARIANTS_RUN = "CheckedVariantsWire.run ds ns rules roots fuel"
+EXPORT_MUTATIONS.extend([
+    ("variants_returns_incomplete_success", VARIANTS_RUN, "#[#[1]]", "theorem exportedCheckedVariants_correct"),
+    ("variants_ignores_active_rules", VARIANTS_RUN, "CheckedVariantsWire.run ds ns #[] roots fuel",
+     "theorem exportedCheckedVariants_correct"),
+])
+
 WHOLE_RUN = "  Whole.runRefining MixedSizeGraph.refutesDecoded decls nodes equations"
 EXPORT_MUTATIONS.extend([
     ("whole_ignores_mixed_clashes", WHOLE_RUN, "  Whole.run decls nodes equations",

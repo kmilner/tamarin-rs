@@ -1,0 +1,69 @@
+use super::*;
+use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+use tamarin_term::lterm::{Name, NameTag};
+use tamarin_term::subterm_rule::{CtxtStRule, StRhs};
+use tamarin_term::term::{f_app_list, f_app_no_eq};
+
+#[test]
+fn checked_variant_frontier_preserves_shared_inputs_under_a_kind_level_ac_rewrite() {
+    let symbol =
+        |name, arity| NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor);
+    let [a, b, c] = ["va", "vb", "vc"].map(|name| symbol(name.as_bytes(), 0));
+    let f = symbol(b"variant_probe", 1);
+    let mut sig = mset_maude_sig();
+    sig.st_fun_syms.extend([a, b, c, f]);
+    let [a, b, c] = [a, b, c].map(|head| f_app_no_eq(head, vec![]));
+    let call = |arg| f_app_no_eq(f, vec![arg]);
+    let rule = |lhs, term| {
+        CtxtStRule::new(
+            lhs,
+            StRhs {
+                term,
+                positions: vec![],
+            },
+        )
+    };
+    let redex = sum(a.clone(), b.clone());
+    sig.st_rules.insert(rule(redex.clone(), c.clone()));
+    sig.st_rules.insert(rule(call(a.clone()), b.clone()));
+
+    // Node is retained outside the redex. This product is legal at the Maude
+    // kind level and cannot be captured in a Msg-sorted rewrite variable.
+    let node = Term::Lit(Lit::Con(Name::new(NameTag::Node, "vnode")));
+    let context = sum(sum(node.clone(), b.clone()), a.clone());
+    let x = LVar::new("vx", LSort::Msg, 41);
+    let var = Term::Lit(Lit::Var(x));
+    let q = f_app_list(vec![context.clone(), call(var.clone()), var]);
+    let new =
+        |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = new(sig.clone().refresh());
+    let answers = h.variants(&q).unwrap();
+    let mut found = [false; 2];
+    for row in answers {
+        let image = row
+            .into_iter()
+            .find(|(key, _)| *key == x)
+            .map(|(_, value)| value)
+            .unwrap_or(Term::Lit(Lit::Var(x)));
+        if image == a {
+            assert_eq!(h.reduce(&call(image)).unwrap(), b);
+            found[0] = true;
+        } else {
+            assert!(matches!(image, Term::Lit(Lit::Var(w)) if w.sort == LSort::Msg));
+            let value = call(image);
+            assert_eq!(h.reduce(&value).unwrap(), value);
+            found[1] = true;
+        }
+    }
+    assert_eq!(found, [true; 2]);
+    assert_eq!(h.reduce(&context).unwrap(), sum(node, c));
+    assert_eq!((h.stats().var_count, h.stats().norm_count), (0, 0));
+
+    sig.st_rules.insert(rule(redex, a));
+    let ambiguous = new(sig.refresh());
+    assert!(matches!(
+        ambiguous.variants(&q),
+        Err(MaudeError::UnsupportedOperation("variant generation"))
+    ));
+    assert_eq!(ambiguous.stats().var_count, 0);
+}

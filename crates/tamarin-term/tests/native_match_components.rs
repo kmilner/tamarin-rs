@@ -4,7 +4,7 @@ use tamarin_term::algebra_backend::AlgebraBackend;
 use tamarin_term::builtin::{emap, pair};
 use tamarin_term::function_symbols::AcSym;
 use tamarin_term::lterm::{pub_term, LNTerm, LSort, LVar};
-use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
+use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::maude_sig::{bp_maude_sig, mset_maude_sig, nat_maude_sig, pair_maude_sig};
 use tamarin_term::rewriting::Equal;
 use tamarin_term::term::f_app_ac;
@@ -112,10 +112,6 @@ fn mixed_ac_heads_decide_without_materializing_the_cartesian_family() {
         add((0..3).map(n).collect()),
     ));
     assert!(native().has_match_eqs(&rows).unwrap());
-    assert!(matches!(
-        native().match_eqs(&rows),
-        Err(MaudeError::UnsupportedOperation("matching"))
-    ));
 }
 
 #[test]
@@ -162,8 +158,4 @@ fn component_witnesses_do_not_require_enumerating_the_product() {
     }
     // Sixteen independent commutative orientations have 65,536 full arms.
     assert!(native().has_match_eqs(&rows).unwrap());
-    assert!(matches!(
-        native().match_eqs(&rows),
-        Err(MaudeError::UnsupportedOperation("matching"))
-    ));
 }

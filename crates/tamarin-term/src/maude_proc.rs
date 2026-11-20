@@ -1152,7 +1152,10 @@ impl MaudeHandle {
                             && let Some(theory) = self.native_rules()
                         {
                             if self.backend == AlgebraBackend::NativeOnly {
-                                theory.reduce_native(t)
+                                match theory.reduce_native(t)? {
+                                    Some(value) => Ok(Some(value)),
+                                    None => theory.checked_reduction(&inner.sig, t),
+                                }
                             } else {
                                 theory.reduce(t)
                             }
@@ -1820,6 +1823,34 @@ impl MaudeHandle {
         Ok(compose_residual_arms(out, factored_m))
     }
 
+    #[cfg(feature = "lean-unification")]
+    fn allow_total_match(&self, ordered: bool) -> bool {
+        (self.backend == AlgebraBackend::NativeOnly
+            || (self.backend == AlgebraBackend::Hybrid && !ordered))
+            && !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
+    }
+
+    #[cfg(feature = "lean-unification")]
+    fn needs_typed_matching(&self, eqs: &[Equal<LNTerm>]) -> bool {
+        eqs.iter()
+            .flat_map(|e| [&e.lhs, &e.rhs])
+            .any(|t| crate::lean_unification::requires_typed_unification(t, self.sig.enable_nat))
+    }
+
+    #[cfg(feature = "lean-unification")]
+    fn total_match(
+        &self,
+        oriented: &[Equal<LNTerm>],
+        bindable: impl Fn(&crate::lterm::LVar) -> bool,
+    ) -> Result<Option<crate::lean_unification::Substitutions>, MaudeError> {
+        match crate::lean_unification::total_match(&self.sig, oriented, bindable)
+            .map_err(|e| self.lean_error(e))?
+        {
+            crate::lean_unification::Outcome::Complete(answers) => Ok(Some(answers)),
+            crate::lean_unification::Outcome::Unsupported => Ok(None),
+        }
+    }
+
     /// Match a sorted conjunction in-process. Callers supply explicit
     /// (pattern, subject) orientation; the two public matching APIs differ.
     #[cfg(feature = "lean-unification")]
@@ -2021,7 +2052,8 @@ impl MaudeHandle {
         {
             let may_be_bags = crate::lean_unification::RuleTable::may_be_ac_bag_match(eqs);
             self.check_backend_status()?;
-            if (may_be_bags || (2..=64).contains(&eqs.len()))
+            if !self.needs_typed_matching(eqs)
+                && (may_be_bags || (2..=64).contains(&eqs.len()))
                 && let Some(table) = self.native_rules()
             {
                 if may_be_bags
@@ -2126,7 +2158,7 @@ impl MaudeHandle {
             return Ok(if matched { vec![Vec::new()] } else { vec![] });
         }
         #[cfg(feature = "lean-unification")]
-        if !rigid {
+        if !rigid || self.allow_total_match(_ordered) {
             let oriented: Vec<_> = eqs
                 .iter()
                 .map(|eq| Equal {
@@ -2134,11 +2166,19 @@ impl MaudeHandle {
                     rhs: eq.lhs.clone(),
                 })
                 .collect();
-            if let Some(answers) = self.native_match(&oriented, _ordered)? {
+            if !rigid
+                && !self.needs_typed_matching(eqs)
+                && let Some(answers) = self.native_match(&oriented, _ordered)?
+            {
                 return Ok(answers);
             }
-            if self.match_size_excluded(&oriented)? {
+            if !rigid && self.match_size_excluded(&oriented)? {
                 return Ok(Vec::new());
+            }
+            if self.allow_total_match(_ordered)
+                && let Some(answers) = self.total_match(&oriented, |_| true)?
+            {
+                return Ok(answers);
             }
         }
         let mut inner = cancellation::lock(&self.inner)?;
@@ -2220,6 +2260,19 @@ impl MaudeHandle {
         if rigid && let Some(matched) = self.rigid_match_equal(eqs, "rigid-context matching")? {
             return Ok(if matched { vec![Vec::new()] } else { vec![] });
         }
+        // The reference accepts a scope directly, including at kind-level
+        // positions that the sorted fast paths cannot admit.
+        #[cfg(feature = "lean-unification")]
+        if self.allow_total_match(true) && (rigid || self.needs_typed_matching(eqs)) {
+            if let Some(mut answers) =
+                self.total_match(eqs, |v| pattern_vars.contains(&(v.name, v.idx)))?
+            {
+                self.order_native_alternatives(&mut answers);
+                return Ok(answers);
+            }
+            // Ordered total matching is enabled only in native-only mode.
+            self.inner.lock().require_maude("rigid-context matching")?;
+        }
         // Step 1: collect ALL non-pattern free vars from BOTH sides.
         // The same LVar appearing on both sides must skolemize to the
         // same Name so the two occurrences match each other.
@@ -2240,7 +2293,10 @@ impl MaudeHandle {
             .collect();
 
         #[cfg(feature = "lean-unification")]
-        if !rigid && let Some(answers) = self.native_match(&rewritten_eqs, true)? {
+        if !rigid
+            && !self.needs_typed_matching(eqs)
+            && let Some(answers) = self.native_match(&rewritten_eqs, true)?
+        {
             let mut answers = answers
                 .into_iter()
                 .map(|answer| unskolemize_subst(answer, &reverse))
@@ -2254,6 +2310,15 @@ impl MaudeHandle {
         #[cfg(feature = "lean-unification")]
         if !rigid && self.match_size_excluded(eqs)? {
             return Ok(Vec::new());
+        }
+
+        #[cfg(feature = "lean-unification")]
+        if self.allow_total_match(true)
+            && let Some(mut answers) =
+                self.total_match(eqs, |v| pattern_vars.contains(&(v.name, v.idx)))?
+        {
+            self.order_native_alternatives(&mut answers);
+            return Ok(answers);
         }
 
         let mut inner = cancellation::lock(&self.inner)?;
@@ -2315,7 +2380,12 @@ impl MaudeHandle {
                         if self.backend == AlgebraBackend::NativeOnly
                             && result == crate::lean_unification::Outcome::Unsupported
                         {
-                            theory.joined_variants(t)
+                            match theory.joined_variants(t)? {
+                                crate::lean_unification::Outcome::Unsupported => {
+                                    theory.checked_variants(&inner.sig, t)
+                                }
+                                complete => Ok(complete),
+                            }
                         } else {
                             Ok(result)
                         }
