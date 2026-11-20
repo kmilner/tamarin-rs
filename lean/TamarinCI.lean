@@ -8,6 +8,8 @@ import Tamarin.DHWire
 import Tamarin.DHConstructorWire
 import Tamarin.XorConstructorWire
 import Tamarin.JointGroupWire
+import Tamarin.JointGroupTable
+import Tamarin.BilinearWire
 import Tamarin.CertifiedReduction
 import Tamarin.DHMixedTermination
 import Tamarin.TableConfluence
@@ -112,6 +114,10 @@ theorem exportedPhysicalXorTable_admitted :
 theorem exportedPhysicalJointGroupTable_admitted :
     Executable.certifyTable JointGroupWire.declarations JointGroupWire.nodes JointGroupWire.ruleRoots 0 = true :=
   exportedCertifyTable_correct.admits JointGroupWire.admitted
+
+theorem exportedPhysicalBilinearTable_admitted :
+    Executable.certifyTable BilinearWire.declarations BilinearWire.nodes BilinearWire.ruleRoots 0 = true :=
+  exportedCertifyTable_correct.admits BilinearWire.admitted
 
 theorem exportedCertifiedReduce_complete {ds ns es root d t rs budget}
     (decoded : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩)

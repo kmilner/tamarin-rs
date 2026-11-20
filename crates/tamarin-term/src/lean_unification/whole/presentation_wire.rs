@@ -4,7 +4,7 @@ use super::Packet;
 use crate::builtin::{dh_neutral, exp, inv, msg_var, mult, one_const, xor, zero_const};
 use crate::lterm::LNTerm;
 use crate::maude_sig::{
-    asym_enc_maude_sig, dh_maude_sig, location_report_maude_sig, minimal_maude_sig,
+    asym_enc_maude_sig, bp_maude_sig, dh_maude_sig, location_report_maude_sig, minimal_maude_sig,
     reveal_signature_maude_sig, signature_maude_sig, sym_enc_maude_sig, xor_maude_sig, MaudeSig,
 };
 
@@ -71,6 +71,20 @@ fn physical_joint_group_table_matches_the_lean_presentation() {
         &dh_observations(),
         "JointGroupWire",
         include_str!("../../../../../lean/Tamarin/JointGroupWireData.lean"),
+    );
+}
+
+#[test]
+fn physical_bilinear_and_xor_table_matches_the_lean_presentation() {
+    let sig = minimal_maude_sig(false)
+        .merge(dh_maude_sig())
+        .merge(bp_maude_sig())
+        .merge(xor_maude_sig());
+    check_packet(
+        sig,
+        &dh_observations(),
+        "BilinearWire",
+        include_str!("../../../../../lean/Tamarin/BilinearWireData.lean"),
     );
 }
 
@@ -155,5 +169,68 @@ fn native_oracle_constructor_extension_reduces_and_generates_guarded_variants() 
         let maude = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
         assert_eq!(maude.reduce(&ground).unwrap(), true_const());
         check_rows(maude.variants(&query).unwrap());
+    }
+}
+
+#[test]
+fn native_oracle_declared_ac_group_composes_with_builtin_groups() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{emap, pmult};
+    use crate::function_symbols::{AcFctSym, AcSym, Constructability, NdcState, Privacy};
+    use crate::lterm::pub_term;
+    use crate::maude_proc::MaudeHandle;
+    use crate::subterm_rule::{CtxtStRule, StRhs};
+    use crate::term::f_app_ac;
+
+    let mut sig = dh_with_destructors()
+        .merge(bp_maude_sig())
+        .merge(xor_maude_sig());
+    let join = AcFctSym::new(
+        b"join",
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    sig.st_ac_fun_syms.insert(join);
+    let op = |a, b| f_app_ac(AcSym::AcFct(join), vec![a, b]);
+    let [x, y] = [17, 23].map(|i| msg_var("local", i));
+    for (lhs, term) in [
+        (op(x.clone(), x.clone()), zero_const()),
+        (op(x.clone(), zero_const()), x.clone()),
+        (op(x.clone(), op(y.clone(), x)), y),
+    ] {
+        sig.st_rules.insert(CtxtStRule::new(
+            lhs,
+            StRhs {
+                term,
+                positions: vec![],
+            },
+        ));
+    }
+    let sig = sig.refresh();
+    let a = pub_term("a");
+    let base = emap(a.clone(), a.clone());
+    let input = op(
+        emap(pmult(one_const(), a.clone()), a),
+        xor(base.clone(), zero_const()),
+    );
+    let packet = Packet::full_table(&sig, std::slice::from_ref(&input))
+        .unwrap()
+        .unwrap();
+    super::initialize().unwrap();
+    assert!(super::LEAN_THREAD
+        .with(|_| packet.certifies_table(&packet.equations[1..], 0))
+        .unwrap());
+    let h = MaudeHandle::start_with_backend(
+        "/nonexistent/maude",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
+    assert_eq!(h.reduce(&input).unwrap(), zero_const());
+    assert_eq!(h.stats().norm_count, 0);
+    if let Some(path) = tamarin_test_support::require_maude_path() {
+        let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+        assert_eq!(oracle.reduce(&input).unwrap(), zero_const());
     }
 }

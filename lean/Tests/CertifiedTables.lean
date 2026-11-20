@@ -3,6 +3,7 @@ import Tamarin.DHWire
 import Tamarin.DHConstructorWire
 import Tamarin.XorConstructorWire
 import Tamarin.JointGroupWire
+import Tamarin.BilinearWire
 
 namespace Tamarin.CertifiedTableTests
 set_option maxRecDepth 8192
@@ -67,5 +68,30 @@ private abbrev jointRules := jointPacket.2.1
 #guard !CertifiedTableWire.run JointGroupWire.declarations
   (JointGroupWire.nodes.map fun row => if row[0]! == 4 && row[1]! == 8 then row.set! 1 4 else row)
   JointGroupWire.ruleRoots 4
+
+private def bpPacket := (TableWire.input BilinearWire.declarations BilinearWire.nodes
+    BilinearWire.ruleRoots #[]).get (by decide +kernel)
+private abbrev bpRules := bpPacket.2.1
+
+-- These positions in the Rust packet are the nested action, unit action and
+-- extraction rows. All three are required even when both group inventories pass.
+#guard bpRules.length == 21
+#guard ([7,8,20] : List Nat).all fun i => !CertifiedTable.admits (bpRules.eraseIdx i) 0 &&
+  !CertifiedTable.admits (bpRules.modify i fun r => ⟨r.rhs,r.lhs⟩) 0
+-- A second extract result discards its scalar. Each component must see this
+-- competing row in the complete table.
+#guard !CertifiedTableWire.run BilinearWire.declarations BilinearWire.nodes
+  (BilinearWire.ruleRoots ++ #[42,43]) 0
+-- Keep the two bilinear heads and remove the three XOR rows; reordering the
+-- resulting DH, bilinear, and pairing table also preserves admission.
+#guard CertifiedTable.admits (((bpRules.eraseIdx 19).eraseIdx 18).eraseIdx 17).reverse 0
+
+-- A second commutative map shares the point action but has its own extraction
+-- equation. Recognition uses the equation shapes without a builtin symbol ID.
+private def twoMaps := BilinearWire.declarations ++ #[3,12,2,2,2,2]
+private def moreNodes := BilinearWire.nodes ++ #[#[3,12,0,41],#[3,12,0,3],#[2,0,46,1]]
+#guard CertifiedTableWire.run twoMaps moreNodes (BilinearWire.ruleRoots ++ #[45,47]) 0
+-- Returning a power of the first map changes the second map's law.
+#guard !CertifiedTableWire.run twoMaps moreNodes (BilinearWire.ruleRoots ++ #[45,44]) 0
 
 end Tamarin.CertifiedTableTests

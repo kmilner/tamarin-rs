@@ -1,30 +1,12 @@
 import Tamarin.XorTable
 import Tamarin.TableAmbient
+import Tamarin.RuleSchema
 
 /-! Infer the operator declarations and rule-local variables from an XOR
 presentation. All guesses are checked against the full table by `accepts`. -/
 namespace Tamarin.XorTable
 open TotalUnifyWire
 variable {d : Dictionary}
-
-private def duplicate? (r : Equation d.sig) : Option (d.sig.ACSym × d.sig.FreeSym × Variable) := do
-  let .ac f (.var v) (.var w) := r.lhs | none
-  let .free z _ := r.rhs | none
-  guard (v == w)
-  return (f,z,v)
-
-private def unit? (f : d.sig.ACSym) (r : Equation d.sig) : Option Variable := do
-  let .ac g _ _ := r.lhs | none
-  let .var v := r.rhs | none
-  guard (g == f && (ACRepresentation.flatten f r.lhs).length == 2)
-  return v
-
-private def cancellation? (f : d.sig.ACSym) (r : Equation d.sig) : Option (Variable × Variable) := do
-  let .ac g _ _ := r.lhs | none
-  let .var rest := r.rhs | none
-  guard (g == f && (ACRepresentation.flatten f r.lhs).length == 3)
-  let pair ← r.lhs.variables.find? (· != rest)
-  return (pair,rest)
 
 private theorem output_not_fresh {ds : List Whole.Decl} (h : ds.all (fun decl => sortOf decl.output != .fresh))
     {k} (f : Symbol ds k) : sortOf (info f).output ≠ .fresh := by
@@ -33,18 +15,24 @@ private theorem output_not_fresh {ds : List Whole.Decl} (h : ds.all (fun decl =>
 
 /-- An AC head is inferred from its duplicate rule. Each equation may use
 its own variable numbering. Sorting requirements are checked on declarations. -/
-def detect (rs : Problem d.sig) : Option (Schema d.sig) := do
-  let (f,z,v) ← rs.findSome? duplicate?
-  let u ← rs.findSome? (unit? f)
-  let (p,q) ← rs.findSome? (cancellation? f)
+def candidates (rs : Problem d.sig) : List (Schema d.sig) :=
   if clean : d.decls.all (fun decl => sortOf decl.output != .fresh) then
-    if h : d.sig.arity z = 0 ∧ d.sig.outputSort z = .msg ∧ d.sig.acSort f = .msg ∧
-        v.sort = .msg ∧ u.sort = .msg ∧ p.sort = .msg ∧ q.sort = .msg ∧ p ≠ q then
-      let ⟨arity,zs,fs,vs,us,ps,qs,ne⟩ := h
-      return ⟨f,z,arity,zs,fs,v,u,p,q,vs,us,ps,qs,ne,
-        output_not_fresh clean,output_not_fresh clean,output_not_fresh clean⟩
-    else none
-  else none
+    rs.filterMap fun r => do
+      let .ac f (.var v) (.var w) := r.lhs | none
+      let .free z _ := r.rhs | none
+      guard (v == w)
+      if h : d.sig.arity z = 0 ∧ d.sig.outputSort z = .msg ∧ d.sig.acSort f = .msg ∧ v.sort = .msg then
+        let unit ← rs.findSome? fun row => (RuleSchema.recover (n := 1) (fun _ => .msg)
+          (fun vs => unitEquation f r.rhs (vs 0)) row).map Subtype.val
+        let triple ← rs.findSome? fun row => (RuleSchema.recover (n := 2) (fun _ => .msg)
+          (fun vs => cancelEquation f (vs 0) (vs 1)) row).map Subtype.val
+        return ⟨f,z,h.1,h.2.1,h.2.2.1,v,unit.atSlot 0,triple.atSlot 0,triple.atSlot 1,h.2.2.2,
+          unit.typed _,triple.typed _,triple.typed _,fun e => (by decide : (0 : Fin 2) ≠ 1) (triple.distinct e),
+          output_not_fresh clean,output_not_fresh clean,output_not_fresh clean⟩
+      else none
+  else []
+
+def detect (rs : Problem d.sig) := (candidates rs).head?
 
 def liftSchema (a : Schema d.sig) : Schema (TableAmbient.sig d) where
   f := .inl a.f

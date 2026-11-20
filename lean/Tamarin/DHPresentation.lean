@@ -1,4 +1,5 @@
 import Tamarin.DHOperatorBounds
+import Tamarin.SortedRootNormal
 
 /-! The thirteen oriented equations emitted by Tamarin's Diffie–Hellman builtin.
 A table can use its own variable names and order, and its signature can contain
@@ -143,15 +144,6 @@ theorem MulBucket.redex_typed (mul : MulBucket E) {a b : Term sig} (headIs : hea
   · exact (DHPeer.Expr.sorted s _ (fun i => T.actualSort r i ▸ HasSort.var _) _).subst σ.image σ.sorted
   · exact (DHPeer.Expr.sorted s _ (fun i => E.sorted r i ▸ HasSort.var _) _).subst σ.image σ.sorted
 
-private theorem unsorted_free {f : sig.FreeSym} {xs : Fin (sig.arity f) → Term sig}
-    (typed : ∀ {ys : Fin (sig.arity f) → Term sig} {b}, ruleRoot T.rules (.free f ys) b → HasSort (.free f ys) .msg)
-    (normal : ∀ i, Normal (ruleRoot T.rules) (xs i)) (ill : ¬ HasSort (.free f xs) .msg) :
-    Normal (ruleRoot T.rules) (.free f xs) := by
-  apply normal_free_no_root normal
-  intro ys agree b step
-  exact ill (Term.checkSort_sound _ _ ((SortClash.check_equiv (EquivB.free f xs ys agree) .msg).symm ▸
-    Term.checkSort_complete (typed step)))
-
 theorem free_head_paths [DecidableEq sig.ACSym] (inventory : Inventory E) (mul : MulBucket E)
     (inv : InverseBucket E) (unit : Normal (ruleRoot T.rules) s.product.one) (pow : PowerBucket T)
     (f : sig.FreeSym) (active : f = s.pow ∨ f = s.inv) : ∃ k, ∀ xs, (∀ i, Normal (ruleRoot T.rules) (xs i)) →
@@ -160,17 +152,11 @@ theorem free_head_paths [DecidableEq sig.ACSym] (inventory : Inventory E) (mul :
   rcases active with p|h
   · subst f
     obtain ⟨k,run⟩ := power_paths inventory mul inv unit pow
-    refine ⟨k,fun xs norm => ?_⟩
-    by_cases typed : HasSort (.free s.pow xs) .msg
-    · obtain ⟨b,e,same⟩ := splitPower s (t := .free s.pow xs) rfl
-      obtain ⟨hb,he⟩ := DHTower.pow_types (same ▸ typed)
-      have nf : ∀ i : Fin (sig.arity s.pow), Normal (ruleRoot T.rules) (if i.val=0 then b else e) := by
-        have args := Term.free.inj same
-        cases args.2
-        exact norm
-      obtain ⟨y,_,path,ny⟩ := run b e hb he (nf ⟨0,by rw [s.powArity]; decide⟩) (nf ⟨1,by rw [s.powArity]; decide⟩)
-      exact ⟨y,same ▸ path,ny⟩
-    · exact ⟨_,.basis (.refl _),unsorted_free (fun step => free_redex_typed pow inv (.inl rfl) step) norm typed⟩
+    refine ⟨k,binary_free_paths s.powArity s.powInput
+      (fun step => free_redex_typed pow inv (.inl rfl) step) ?_⟩
+    intro a b ta tb na nb
+    obtain ⟨u,_,path,nu⟩ := run a b ta tb na nb
+    exact ⟨u,path,nu⟩
   · subst f
     obtain ⟨k,run⟩ := inverse_paths inventory mul inv unit
     refine ⟨k,fun xs norm => ?_⟩

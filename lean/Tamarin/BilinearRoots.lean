@@ -71,7 +71,7 @@ def Rule.equation (r : Rule) (s : Symbols sig) (β : Operators sig) (v : Fin 3 �
   | .nested => ⟨β.point (v 0) (β.point (v 1) (v 2)),β.point (s.product.mul (v 0) (v 1)) (v 2)⟩
   | .extract => ⟨β.map (v 0) (β.point (v 1) (v 2)),s.power (β.map (v 0) (v 2)) (v 1)⟩
 
-private theorem apply_rule (r : Rule) (s : Symbols sig) (β : Operators sig) (v : Fin 3 → Term sig)
+theorem Rule.instantiate_subst (r : Rule) (s : Symbols sig) (β : Operators sig) (v : Fin 3 → Term sig)
     (ρ : Substitution sig) : let w := r.equation s β (fun i => ρ.apply (v i))
     ρ.apply (r.equation s β v).lhs = w.lhs ∧ ρ.apply (r.equation s β v).rhs = w.rhs := by
   have one : ρ.apply s.product.one = s.product.one := by
@@ -114,7 +114,7 @@ theorem sorted_assignment {n : Nat} (keys : Fin n → Variable) (injective : Fun
 theorem Inventory.fire (I : Inventory s β rules) (r : Rule) (v : Fin 3 → Term sig) (hv : ∀ i, HasSort (v i) .msg) :
     ruleRoot rules (r.equation s β v).lhs (r.equation s β v).rhs := by
   obtain ⟨ρ,vals⟩ := sorted_assignment _ (I.distinct r) v (fun i => I.typed r i ▸ hv i)
-  have act := apply_rule r s β (fun i => .var (I.keys r i)) ρ
+  have act := Rule.instantiate_subst r s β (fun i => .var (I.keys r i)) ρ
   dsimp only at act
   rw [vals] at act
   exact ⟨_,I.present r,ρ,act.1.symm,act.2.symm⟩
@@ -137,8 +137,8 @@ theorem Inventory.point_root (I : Inventory s β rules) {a p t out : Term sig} (
   obtain ⟨r,tag,rfl⟩ := I.onlyPoint eq mem hd
   rcases tag with rfl|rfl
   all_goals
-    rw [(apply_rule ..).1] at align
-    rw [(apply_rule ..).2]
+    rw [(Rule.instantiate_subst ..).1] at align
+    rw [(Rule.instantiate_subst ..).2]
     obtain ⟨l,r⟩ := β.point_equiv align
   · exact .one l.head_eq r.symm
   · exact .nested r (β.point_congr (.ac_congr _ l.symm (.refl _)) (.refl _))
@@ -148,8 +148,8 @@ theorem Inventory.map_root (I : Inventory s β rules) {p q t out : Term sig} (al
   obtain ⟨eq,mem,ρ,rfl,rfl⟩ := root
   have hd := (instance_head eq (I.apps eq mem) ρ).symm.trans align.head_eq.symm
   obtain rfl := I.onlyMap eq mem hd
-  rw [(apply_rule ..).1] at align
-  rw [(apply_rule ..).2]
+  rw [(Rule.instantiate_subst ..).1] at align
+  rw [(Rule.instantiate_subst ..).2]
   rcases (Commutative.equiv_iff ..).mp align with ⟨l,r⟩|⟨l,r⟩
   · exact .right r (power_congr (.comm_congr _ l.symm (.refl _)) (.refl _))
   · exact .left l (power_congr ((EquivB.comm_swap ..).trans (.comm_congr _ (.refl _) r.symm)) (.refl _))

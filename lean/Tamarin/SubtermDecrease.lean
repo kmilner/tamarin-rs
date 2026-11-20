@@ -79,6 +79,51 @@ def inferLevel (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
 def defaultWeight (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
   weights base rs (inferLevel base rs)
 
+/-- Symbolic rank counts every nonvariable occurrence, including atoms.
+Cancel equal occurrences on the two sides before choosing a weight to raise. -/
+private def residual (r : Equation s) : List (Head s) × List (Head s) :=
+  let symbols (t : Term s) := (subterms t).filterMap fun
+    | .var _ => none
+    | u => some (head u)
+  let lhs := symbols r.lhs
+  let rhs := symbols r.rhs
+  (rhs.foldl List.erase lhs, lhs.foldl List.erase rhs)
+
+private def relax (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
+  let read (ws : List (Head s × Nat)) (h : Head s) := (ws.lookup h).getD (base h)
+  let constraints := rs.map residual
+  let update (ws : List (Head s × Nat)) (row : List (Head s) × List (Head s)) :=
+    match row.1 with
+    | [] => ws
+    | pivot :: _ =>
+      let left := (row.1.map (read ws)).sum
+      let right := (row.2.map (read ws)).sum
+      if right < left then ws
+      else (pivot, read ws pivot + (right + 1 - left)) :: ws.eraseP (fun e => e.1 == pivot)
+  let rec passes : Nat → List (Head s × Nat) → List (Head s × Nat)
+    | 0, ws => ws
+    | n+1, ws =>
+      let next := constraints.foldl update ws
+      if next == ws then ws else passes n next
+  read (passes constraints.length [])
+
+/-- Try the supplied weighting and the ground dependency tiers first. If
+neither suffices, relax the residual strict inequalities for at most one
+pass per rule. Cycles and inconsistent choices can leave an inequality
+unsatisfied; the caller checks the proposed weights against the full table. -/
+def proposeWeight (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
+  if decreasing base rs then base else
+    let ground := defaultWeight base rs
+    if decreasing ground rs then ground else relax base rs
+
+theorem preserves_decreasing (base : Head s → Nat) (rs : Problem s)
+    (prior : decreasing base rs ∨ decreasing (defaultWeight base rs) rs) :
+    decreasing (proposeWeight base rs) rs := by
+  by_cases baseOK : decreasing base rs
+  · simp [proposeWeight,baseOK]
+  · have groundOK := prior.resolve_left baseOK
+    simp [proposeWeight,baseOK,groundOK]
+
 end
 
 private def Children (P : Term s → Prop) : Term s → Prop

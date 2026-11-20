@@ -65,4 +65,20 @@ theorem complete : ReferenceReduction.Bound ambientRules ∧
     | _ => 0
   return !accepts ExactTable.weight tiers rs && !SymbolWeight.decreasing (defaultWeight ExactTable.weight rs) rs
 
+-- In this open chain the outer call w occurs on both sides. Only its inner
+-- operators affect the inequalities f > g > h; visiting f first needs a
+-- second pass after raising g.
+private def openDecls : Array UInt64 := #[2,0,1,2,2, 2,1,1,2,2, 2,2,1,2,2, 2,3,1,2,2]
+private def openNodes : Array (Array UInt64) := #[
+  #[0,0,2], #[2,1,0], #[2,2,0], #[2,3,0], #[2,0,1], #[2,0,2], #[2,0,3]]
+private def openDecrease (roots : Array UInt64) := Id.run do
+  let some ⟨_,rs,_⟩ := TableWire.input openDecls openNodes roots #[] | return false
+  let seed : Head _ → Nat := fun _ => 1
+  return !SymbolWeight.decreasing (defaultWeight seed rs) rs &&
+    SymbolWeight.decreasing (proposeWeight seed rs) rs
+
+#guard openDecrease #[4,5, 5,6]
+#guard openDecrease #[5,6, 4,5]
+#guard !openDecrease #[4,5, 5,6, 6,4]
+
 end Tamarin.MixedTerminationTests

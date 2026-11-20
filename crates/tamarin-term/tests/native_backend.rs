@@ -3491,6 +3491,9 @@ mod checked_reduction;
 #[path = "native_backend/checked_variants.rs"]
 mod checked_variants;
 
+#[path = "native_backend/bilinear_certificate.rs"]
+mod bilinear_certificate;
+
 #[path = "native_backend/joint_groups.rs"]
 mod joint_groups;
 

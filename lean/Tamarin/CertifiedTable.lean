@@ -4,7 +4,8 @@ import Tamarin.DHWireSymbols
 import Tamarin.SubtermDecrease
 import Tamarin.XorPresentation
 import Tamarin.XorTableWire
-import Tamarin.JointGroupTable
+import Tamarin.GroupTable
+import Tamarin.BilinearTableWire
 
 /-! Certify the decoded table in its full ambient signature. Symbol and variable
 IDs may vary with the query. Matching a characteristic rule only proposes an
@@ -59,32 +60,34 @@ private def detect (rs : Problem d.sig) : Option (Symbols d.sig × (Fin 3 → Va
   let decl ← DHWire.readSymbols t.pow i o n t.mul
   return (decl,fun k => match k with | 0 => t.x | 1 => t.y | 2 => t.z)
 
-private def weight {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym]
-    [DecidableEq s.Atom] (base : Head s → Nat) (rs : Problem s) : Head s → Nat :=
-  if SymbolWeight.decreasing base rs then base else SubtermDecrease.defaultWeight base rs
-
 private def ordinary (rs : Problem (TableAmbient.sig d)) (fuel : Nat) :=
-  ConstructorRows.accepts (weight (fun _ => 1) rs) fuel rs
+  ConstructorRows.accepts (SubtermDecrease.proposeWeight (fun _ => 1) rs) fuel rs
 
-private def dh (rs : Problem (TableAmbient.sig d)) (fuel : Nat)
-    (s : Symbols d.sig) (ks : Fin 3 → Variable) (x : Option (XorTable.Schema d.sig)) : Bool :=
-  let combined := fun (a : XorTable.Schema d.sig) =>
-    let z := XorTable.liftSchema a
-    let base : Head (TableAmbient.sig d) → Nat
-      | .ac f => if f == z.f then 2 else 1
-      | h => ExactTable.weight h
-    JointGroupTable.accepts (DHWire.liftSymbols s) ks z (weight base rs) fuel rs
+private def dh (rs : Problem d.sig) (fuel : Nat) (s : Symbols d.sig)
+    (ks : Fin 3 → Variable) (xs : List (XorTable.Schema d.sig)) : Bool :=
+  let ambient := TableAmbient.liftRules rs
+  let dh := DHWire.liftSymbols s
+  let extensions :=
+    xs.map (fun a => GroupTable.xor dh (XorTable.liftSchema a)) ++
+    (BilinearTable.detect s rs).map (fun b => GroupTable.bilinear dh (BilinearTable.liftSchema b))
+  let base : Head (TableAmbient.sig d) → Nat
+    | .ac (.inl f) => if xs.any (fun a => a.f == f) then 2 else 1
+    | h => ExactTable.weight h
+  let weights := fun (whole : Problem (TableAmbient.sig d)) =>
+    let inferred := SubtermDecrease.proposeWeight (fun _ => 1) whole
+    if SymbolWeight.decreasing inferred whole then inferred else SubtermDecrease.proposeWeight base whole
   decide (∀ i, (ks i).sort = .msg) && decide (∀ i j, ks i = ks j → i = j) &&
-    (x.any combined || ConstructorExtension.accepts (DHWire.liftSymbols s) ks (weight ExactTable.weight rs) fuel rs)
+    GroupTable.accepts dh ks extensions weights fuel ambient
 
-private def xor (rs : Problem (TableAmbient.sig d)) (fuel : Nat) (s : XorTable.Schema d.sig) : Bool :=
-  XorTable.accepts (XorTable.liftSchema s) (weight (fun _ => 1) rs) fuel rs
+private def xor (rs : Problem (TableAmbient.sig d)) (fuel : Nat) (xs : List (XorTable.Schema d.sig)) : Bool :=
+  let parts := xs.map fun x => GroupPresentationParts.xorPart (XorTable.liftSchema x)
+  PresentationComponents.accepts parts (SubtermDecrease.proposeWeight (fun _ => 1)) fuel rs
 
 def admits (rs : Problem d.sig) (fuel : Nat) : Bool :=
   let ambient := TableAmbient.liftRules rs
   if rs.any (fun r => match r.lhs with | .ac .. => true | _ => false) then
-    let x := XorTable.detect rs
-    (detect rs).any (fun (s,ks) => dh ambient fuel s ks x) || x.any (xor ambient fuel)
+    let xs := XorTable.candidates rs
+    (detect rs).any (fun (s,ks) => dh rs fuel s ks xs) || (!xs.isEmpty && xor ambient fuel xs)
   else ordinary ambient fuel
 
 theorem admits_sound {rs : Problem d.sig} {fuel} (ok : admits rs fuel) :
@@ -95,13 +98,14 @@ theorem admits_sound {rs : Problem d.sig} {fuel} (ok : admits rs fuel) :
   split at ok
   · rcases Bool.or_eq_true_iff.mp ok with dhOK | xorOK
     · obtain ⟨⟨s,ks⟩,_,found⟩ := (Option.any_eq_true _ _).mp dhOK
-      simp only [dh,Bool.and_eq_true,Bool.or_eq_true,decide_eq_true_eq] at found
-      obtain ⟨⟨typed,distinct⟩,both | one⟩ := found
-      · obtain ⟨x,_,accepted⟩ := (Option.any_eq_true _ _).mp both
-        exact JointGroupTable.accepts_sound _ _ _ typed distinct accepted
-      · exact ConstructorExtension.accepts_sound _ _ typed distinct one
-    · obtain ⟨_,_,accepted⟩ := (Option.any_eq_true _ _).mp xorOK
-      exact XorTable.accepts_sound accepted
+      simp only [dh,Bool.and_eq_true,decide_eq_true_eq] at found
+      obtain ⟨⟨typed,distinct⟩,accepted⟩ := found
+      exact GroupTable.accepts_sound typed distinct accepted
+    · have facts := PresentationComponents.evidence (Bool.and_eq_true_iff.mp xorOK).2
+      apply facts.complete
+      intro p hp
+      obtain ⟨x,hx,rfl⟩ := List.mem_map.mp hp
+      exact GroupPresentationParts.xorLocal _ (facts.inventory _ (List.mem_map_of_mem hx)) facts.pres.apps
   · exact ConstructorRows.accepts_sound ok
 
 end Tamarin.CertifiedTable

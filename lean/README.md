@@ -224,7 +224,7 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | Ordinary free/C/AC unification | The reference switch sends both enumeration and existence queries straight to the complete solver. Nested packed equations share one substitution. The solver accepts mixtures of free, commutative and AC heads, including kind-level inputs. | Check Rust representation and observable answer ordering across the protocol corpus. [Solver contract](Tamarin/TotalUnifyPacket.lean) |
 | Directional matching | The reference switch uses the complete matcher for enumeration, existence and first-match queries, including caller-designated rigid variables. For source refinement every backend selects the least restored binding map, including on ambiguous matches. | Full hybrid enumeration retains its existing order for callers that consume the whole sequence. [Matcher contract](Tamarin/TotalMatchPacket.lean) · [Selection theorem](Tamarin/MatchOrder.lean) |
 | Reduction | The general reducer certifies reachable, unique normal forms on the full table, including proper AC subproducts. A finite stage suffices for every term on a range-restricted canonical table. Default native-only now retries deferred queries on certified tables. | Other tables can still reach the default work limit. [Staged reducer](Tamarin/GeneralReductionWire.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
-| Variants | Default native-only can retry general folding on certified constructor tables, on DH or XOR, and on both groups together. The joint proof covers all 16 group equations and admits additional constructor-pattern rules with agreeing projections or ground results. Certificates cover open and kind-level inputs. | Extend automatic admission to the bilinear rules and to further user-defined active AC equations. The numeric interface must represent the budget and bindings. [Pure DH](Tamarin/DHFiniteVariants.lean) · [Mixed tables](Tamarin/DHMixedVariants.lean) |
+| Variants | Default native-only retries general folding for certified constructor tables and compositions of DH, XOR and bilinear pairing. Lean certifies the actual 21-rule table for all three builtins plus pairing projections, on open and kind-level inputs. | Extend automatic admission to user equations that build results around variables, and to active AC laws beyond the certified groups. The numeric interface must represent the budget and bindings. [Composition theorem](Tamarin/PresentationComponents.lean) · [Table checker](Tamarin/GroupTable.lean) |
 
 The general reduction contract states progress in terms of the rewrite relation. Once the
 stage covers every path from this input and all reachable normal endpoints preserve its
@@ -261,8 +261,7 @@ invalid presentation can diverge or have additional normal forms. The regular na
 operation requires completeness and unique reconstruction on every successful reply. After a
 bounded search defers, Rust asks Lean to certify the original numeric table. A positive
 certificate lets Rust retry the staged solver with cancellation checks between calls.
-The classifier infers the group operators and rule variables from the rules and checks all equations;
-Rust sends no extra symbol hints. A failed certificate leaves the query deferred.
+The classifier infers the operators and rule variables from the equations Rust already sends. A failed certificate leaves the query deferred.
 [Table classifier](Tamarin/CertifiedTable.lean) · [Promotion contract](Tamarin/CertifiedTableWire.lean)
 [Executable and theorems](Tamarin/GeneralVariants.lean) · [Rust acceptance test](../crates/tamarin-term/tests/native_backend/checked_variants.rs)
 
@@ -289,11 +288,14 @@ capture their entire product. DH and XOR share a proof that isolates the message
 factors. For example, `node ⊕ m ⊕ m` reduces to `node ⊕ zero` when `node` has sort
 Node and `m` has sort Msg. The XOR checker accepts Fresh names and variables and
 currently requires every declared operator to have an output sort other than Fresh.
-When a module enables both DH and XOR, Lean checks the two distinct AC heads and
-their rule inventories against one combined table. Each operator’s proof uses the same
-rewrite relation, including rewrites inside the other operator’s arguments.
-[XOR proof](Tamarin/XorPresentation.lean) · [Joint proof](Tamarin/MixedGroupPresentation.lean) ·
-[Physical joint packet](Tamarin/JointGroupWire.lean)
+Each component lists its equations and the heads it interprets. Lean checks all
+inventories against the full table, including the other components and user equations.
+For bilinear pairing, the point action uses the DH product bound and the commutative map
+uses the DH power bound. A single component proof works for multiple maps sharing a
+point action. The same rule matcher recognizes renamed equations for XOR and bilinear
+pairing, and termination weights can be inferred from the oriented equations.
+[Composition criterion](Tamarin/PresentationComponents.lean) · [Bilinear bounds](Tamarin/BilinearOperatorPaths.lean) ·
+[Production packet](Tamarin/BilinearWire.lean)
 
 Arbitrary user extensions require a whole-table argument. For example, the two rules
 `f(s(x)) → g(x)` and `g(x) → f(x)` each take at most one root step above normal arguments

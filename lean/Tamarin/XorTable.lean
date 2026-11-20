@@ -29,14 +29,20 @@ structure Schema (s : Signature) where
   commOutput : ∀ g, s.cSort g ≠ .fresh
   acOutput : ∀ g, s.acSort g ≠ .fresh
 
+def unitEquation (f : s.ACSym) (zero : Term s) (v : Variable) : Equation s :=
+  ⟨.ac f (.var v) zero,.var v⟩
+
+def cancelEquation (f : s.ACSym) (v w : Variable) : Equation s :=
+  ⟨.ac f (.var v) (.ac f (.var v) (.var w)),.var w⟩
+
 namespace Schema
 variable (a : Schema s)
 
 def zero : Term s := .free a.z fun i => Fin.elim0 (a.zeroArity ▸ i)
 
 def duplicate : Equation s := ⟨.ac a.f (.var a.doubleKey) (.var a.doubleKey), a.zero⟩
-def unit : Equation s := ⟨.ac a.f (.var a.unitKey) a.zero, .var a.unitKey⟩
-def cancel : Equation s := ⟨.ac a.f (.var a.pairKey) (.ac a.f (.var a.pairKey) (.var a.restKey)), .var a.restKey⟩
+def unit : Equation s := unitEquation a.f a.zero a.unitKey
+def cancel : Equation s := cancelEquation a.f a.pairKey a.restKey
 
 def rows (more : Problem s) := a.duplicate :: a.unit :: a.cancel :: more
 
