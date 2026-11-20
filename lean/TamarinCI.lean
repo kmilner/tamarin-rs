@@ -1,6 +1,8 @@
 import Tamarin
 import Tamarin.ReductionSignatureExtension
 import Tamarin.CheckedReductionPacket
+import Tamarin.TableConfluence
+import Tamarin.CheckedVariantsPacket
 import Tamarin.TotalUnifyPacket
 import Tamarin.TotalMatchPacket
 import Tamarin.SignatureExtension
@@ -61,6 +63,14 @@ theorem exportedCheckedReduce_correct : CheckedReductionWire.Correct Executable.
 theorem exportedCheckedVariants_correct : CheckedVariantsWire.Correct Executable.checkedVariants :=
   CheckedVariantsWire.correct
 
+/-- Constructor definitions have a complete family for every valid tuple
+over the ambient name universe, independent of any frontier or output budget. -/
+theorem exportedDefinitionVariants_complete {ds ns es roots n d rs q}
+    (h : TableWire.input ds ns es roots = some ⟨d,rs,q⟩)
+    (cls : ConstantDefinitions.Presentation rs) (sorts : ∀ r ∈ rs, HasSort r.rhs r.lhs.rootSort) :
+    CheckedVariantsWire.Decodes rs q (Executable.checkedVariants ds ns es roots n) :=
+  exportedCheckedVariants_correct.definitions_complete _ _ _ _ _ _ _ _ h cls sorts
+
 /-- Additional caller symbols cannot change the unique normal form of a
 concrete request under a range-restricted active table. -/
 theorem exportedCheckedReduce_ambient {ds ns es root n d t rs}
@@ -70,9 +80,23 @@ theorem exportedCheckedReduce_ambient {ds ns es root n d t rs}
     ∃ u, CheckedReductionWire.Decodes d (Executable.checkedReduce ds ns es root n) u ∧
       ∀ extra : Signature, MaudeOperations.ReductionReply (Rewriting.ruleRoot (SignatureExtension.query extra rs))
         (SignatureExtension.embed extra t) (SignatureExtension.embed extra u) := by
-  rcases exportedCheckedReduce_correct.valid _ _ _ _ _ _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,stop⟩
+  rcases exportedCheckedReduce_correct.valid _ _ _ _ _ _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,_,stop⟩
   · exact ⟨u,packet,fun extra => SignatureExtension.reduction extra rs bound t u reply⟩
   · exact (stop.elim (fun bad => by simp [bad] at admitted) completes).elim
+
+/-- A sorted table of constructor definitions must return a decodable unique
+normal form on every input, independently of the host's fuel and work limits. -/
+theorem exportedDefinitionReduce_ambient {ds ns es root n d t rs}
+    (h : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) (cls : ConstantDefinitions.Presentation rs)
+    (typed : ∀ r ∈ rs, HasSort r.rhs r.lhs.rootSort) :
+    ∃ u, CheckedReductionWire.Decodes d (Executable.checkedReduce ds ns es root n) u ∧
+      ∀ extra : Signature, MaudeOperations.ReductionReply (Rewriting.ruleRoot (SignatureExtension.query extra rs))
+        (SignatureExtension.embed extra t) (SignatureExtension.embed extra u) := by
+  have sorted := (DefinitionCertificate.sorted_iff cls).mpr typed
+  have ok := (ConstantDefinitions.accepts_iff rs).mpr cls
+  rcases exportedCheckedReduce_correct.valid _ _ _ _ _ _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,reject,_⟩
+  · exact ⟨u,packet,fun extra => SignatureExtension.reduction extra rs (ConstantDefinitions.bound ok) t u reply⟩
+  · simp [CheckedReductionWire.definitions,ok,sorted] at reject
 
 /-- Filtering witnesses of an unavailable sort preserves coverage on actual
 module substitutions, including all the values of a packed query. -/

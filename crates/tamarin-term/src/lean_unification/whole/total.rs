@@ -325,7 +325,9 @@ pub(super) fn decode_variants(
     if answers.is_empty() {
         // A certified variant packet contains at least one arm. If every arm
         // requires a sort absent from this module, leave the request unresolved.
-        if !nat && reply.rows(0) > 1 { return Ok(Outcome::Unsupported); }
+        if !nat && reply.rows(0) > 1 {
+            return Ok(Outcome::Unsupported);
+        }
         return Err(Error::InvalidStatus(255));
     }
     Ok(Outcome::Complete(answers))

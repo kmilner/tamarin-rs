@@ -31,6 +31,9 @@ jobs:
           lake env lean Tests/ACReference.lean
           lake env lean Tests/MixedUnification.lean
           lake env lean Tests/CheckedReduction.lean
+          lake env lean Tests/TableConfluence.lean
+          lake env lean Tests/BoundedVariants.lean
+          lake env lean Tests/ConstantDefinitions.lean
           lake env lean Tests/TotalUnifyPacket.lean
           lake env lean Tests/TotalMatchPacket.lean
           lake env lean Tests/CheckedCommandPackets.lean

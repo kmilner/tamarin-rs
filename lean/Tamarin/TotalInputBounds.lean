@@ -1,4 +1,5 @@
 import Tamarin.TotalUnifyPacket
+import Tamarin.TableWire
 
 /-! The shared graph contains only machine-word variable IDs and arities. -/
 namespace Tamarin.TotalUnifyWire
@@ -66,7 +67,7 @@ private theorem app_fits (d : Dictionary) (width : ∀ f, d.sig.arity f < UInt64
         exact ⟨bounded _ (by simp),fold_fits _ _ _ (bounded _ (by simp)) (fun a ha => bounded a (by simp [ha]))⟩
       · contradiction
 
-private theorem children_fits {α β : Type} (P : β → Prop) (f : α → Option β)
+theorem children_fits {α β : Type} (P : β → Prop) (f : α → Option β)
     (each : ∀ a b, f a = some b → P b) (xs : List α) (ys : List β) (h : xs.mapM f = some ys) :
     ∀ b ∈ ys, P b := by
   induction xs generalizing ys with
@@ -131,6 +132,15 @@ private theorem roots_fit {d : Dictionary} (terms : Array (Term d.sig)) (h : ∀
     · exact ⟨h _ (Array.mem_of_getElem? hl),h _ (Array.mem_of_getElem? hr)⟩
     · exact ih _ ht e he
 
+theorem Packet.var_fits {d : Dictionary} (t : Term d.sig) (v : Variable) (h : t.Occurs v) (bounded : FieldsFit t) :
+    v.id < UInt64.size := by
+  induction t with
+  | var w => exact h ▸ bounded
+  | atom => contradiction
+  | free _ _ ih => obtain ⟨i,hi⟩ := h; exact ih i hi (bounded.2 i)
+  | ac _ _ _ ih ik | comm _ _ _ ih ik =>
+    exact h.elim (fun hl => ih hl bounded.1) (fun hr => ik hr bounded.2)
+
 theorem graph_widths {ds ns d ts} (decoded : graph ds ns = some ⟨d,ts⟩) :
     ∀ f, d.sig.arity f < UInt64.size := by
   simp only [graph,Option.bind_eq_bind,Option.bind_eq_some_iff] at decoded
@@ -156,3 +166,18 @@ theorem input_fieldsFit {ds ns es d p} (decoded : input ds ns es = some ⟨d,p�
   exact roots_fit terms (graph_fieldsFit hd) _ _ hp
 
 end Tamarin.TotalUnifyWire
+
+namespace Tamarin.TableWire
+open TotalUnifyWire TotalUnifyWire.Packet
+
+/-- Every selected root comes from the graph's bounded dictionary and IDs. -/
+theorem input_fits {ds ns es roots d rs q}
+    (decoded : input ds ns es roots = some ⟨d,rs,q⟩) :
+    (∀ f, d.sig.arity f < UInt64.size) ∧ ∀ t ∈ q, FieldsFit t := by
+  simp only [input,Option.bind_eq_bind,Option.bind_eq_some_iff] at decoded
+  obtain ⟨⟨_,ts⟩,dg,_,_,_,ho,eq⟩ := decoded
+  cases eq
+  exact ⟨graph_widths dg,children_fits _ _ (fun _ _ h =>
+    graph_fieldsFit dg _ (Array.mem_of_getElem? h)) _ _ ho⟩
+
+end Tamarin.TableWire

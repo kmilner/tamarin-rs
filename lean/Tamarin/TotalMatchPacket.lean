@@ -17,15 +17,6 @@ private theorem fit_equiv {a b : Term d.sig} (h : EquivB a b) : FieldsFit a ↔ 
   | ac_swap | comm_swap => exact and_comm
   | ac_assoc => exact and_assoc
 
-private theorem var_fits (t : Term d.sig) (v : Variable) (h : t.Occurs v) (bounded : FieldsFit t) :
-    v.id < UInt64.size := by
-  induction t with
-  | var w => exact h ▸ bounded
-  | atom => contradiction
-  | free _ _ ih => obtain ⟨i,hi⟩ := h; exact ih i hi (bounded.2 i)
-  | ac _ _ _ ih ik | comm _ _ _ ih ik =>
-    exact h.elim (fun hl => ih hl bounded.1) (fun hr => ik hr bounded.2)
-
 private theorem image_fits (t : Term d.sig) (σ : Substitution d.sig) (v : Variable) (h : t.Occurs v)
     (bounded : FieldsFit (σ.apply t)) : FieldsFit (σ.image v) := by
   induction t with

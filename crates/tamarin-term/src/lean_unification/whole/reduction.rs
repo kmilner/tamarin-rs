@@ -71,7 +71,8 @@ impl RuleTable {
                     rows.len(),
                     WordSlice::new(&packet.equations[1..]),
                     packet.equations[0],
-                    // Decreasing presentations use the proved measure instead.
+                    // Certified definitions use structural expansion. Strictly decreasing
+                    // tables get a measured depth bound for the checked search.
                     32,
                 )
             })?;

@@ -11,8 +11,9 @@ both the reachable trace and the false universal lemma. [Theory](../crates/tamar
 
 Native-only has total ordinary unification and directional matching fallbacks for declared
 arity-correct free/C/AC terms. General reduction and variant search can also run in-process
-when Lean certifies the result on the active table. A query whose certificate search
-exhausts its budget can still defer. The total four-command reference applies to finite,
+when Lean certifies the result on the active table. Both commands have a completion guarantee
+for tables of ground constructor definitions of constants. Other tables can still defer if
+per-query certificate search exhausts its budget. The total four-command reference applies to finite,
 range-restricted, canonical presentations with the finite variant property.
 [Active-table reference](Tamarin/CompleteNarrowing.lean)
 
@@ -197,8 +198,27 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | --- | --- | --- |
 | Ordinary free/C/AC unification | Native-only has a complete fallback for declared arity-correct terms, including mixtures of several AC heads, free and commutative symbols, and kind-level inputs. Existing decision and enumeration kernels still run first. | Extend end-to-end checks of the Rust representation and answer ordering before general deployment. |
 | Directional matching | The total matcher receives the original equations and bindable variable IDs. Subject variables stay rigid, including variables also present in the pattern. Native-only sorts the completed binding maps. | Ordered hybrid enumeration can still require Maude's first match. [Matcher contract](Tamarin/TotalMatchPacket.lean) |
-| Reduction | The general fallback enumerates rewrites throughout each term, including proper AC subproducts. Lean checks that the returned normal form is reachable and that all normal endpoints agree. Strictly size-decreasing tables receive a proved depth bound. | Extend table admission and termination certificates. The host also caps the shared work allowance at 100,000 units, including on size-decreasing tables. Exhausting either budget or finding competing normal forms defers the query. [Checked reduction](Tamarin/CheckedReduction.lean) · [Table certificate](Tamarin/TableDecrease.lean) |
-| Variants | The general fallback searches for a closed finite narrowing frontier on the original tuple. Each accepted family covers all normal instances, preserves shared bindings, and gives a unique normal tuple even after further specialization. | The bounded search can defer. Establish canonicality and the finite variant property for more emitted tables so the total folding reference can run with a completion guarantee. [Frontier checker](Tamarin/CheckedVariants.lean) · [Total reference](Tamarin/CompleteNarrowing.lean) |
+| Reduction | On certified definition tables every input receives a unique normal form. Other tables use checked rewriting at all positions, including proper AC subproducts. Strictly size-decreasing tables receive a proved depth bound. | Certify whole presentations containing destructor patterns and algebraic rules. The per-query path can defer after 100,000 work units or on competing normal forms. [Checked reduction](Tamarin/CheckedReduction.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
+| Variants | Certified definition tables have a complete family for every tuple. The general fallback checks a finite narrowing frontier, shared bindings and uniqueness under further specialization. | Prove finite variants for more whole presentations, including pairing and DH. The per-query frontier search can still defer. [Frontier checker](Tamarin/CheckedVariants.lean) · [Total reference](Tamarin/CompleteNarrowing.lean) |
+
+A table-wide certificate applies to every arity-correct input, including kind-level contexts. The
+first admitted class defines nullary free symbols by ground terms built from constructors. Multiple
+definitions of one symbol must agree modulo C/AC, every right side must preserve the declared sort,
+and every active rule must qualify. Rust can encode declared nullary symbols in rules. It still
+defers tables containing query-local literal names in rule buckets. [Class and normalizer](Tamarin/ConstantDefinitions.lean) · [Public regression](../crates/tamarin-term/tests/native_backend/checked_reduction.rs)
+
+The reusable canonicality proof takes termination, sort preservation and a join for every one-step
+fork. For finite variants, a sufficient condition is a decreasing rank with a bound on every
+normalized substitution instance of each open term. The rank may depend on the term and the theory.
+For constant definitions it counts occurrences of defined symbols. A normalized substitution adds
+zero to that count, even when its images are large. This proves completion separately from the
+choice of executable. [Local confluence](Tamarin/TableConfluence.lean) · [Uniform bounds](Tamarin/BoundedVariants.lean) · [Definition certificate](Tamarin/DefinitionCertificate.lean)
+
+**Retiring older paths.** At `cd3d2f0`, the four general operations and their wire and semantic
+proofs imported 194 of the 419 modules under `lean/Tamarin`. Review the remaining 225 modules
+by Rust caller. For each candidate, run its public regressions with the specialized branch
+bypassed and check completion, first-answer behavior, and Boolean or paged queries that avoid
+materializing the full family. Preserve shared proof dependencies when retiring an entry point.
 
 **AC reference.** The homogeneous solver is total for any finite system of variable products
 at one AC head when every variable has the operator’s sort. For arbitrary sorted operands,

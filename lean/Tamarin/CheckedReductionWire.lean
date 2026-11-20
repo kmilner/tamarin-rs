@@ -1,4 +1,5 @@
 import Tamarin.CheckedReduction
+import Tamarin.ConstantDefinitions
 import Tamarin.TableDecrease
 import Tamarin.TableWire
 
@@ -19,16 +20,25 @@ def admitted {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [Decid
   CheckedReduction.rangeBound rs && TableDecrease.sorted rs &&
     CheckedReduction.affordable rs (fuel rs t fallback) 100000 t
 
+/-- This class has a structural normalizer for every term, including a term
+whose AC product is too wide for enumerating contextual rewrite successors. -/
+def definitions {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+    (rs : Problem s) : Bool := ConstantDefinitions.accepts rs && TableDecrease.sorted rs
+
+def emit {d : Dictionary} (u : Term d.sig) : Array (Array UInt64) :=
+  match write u with
+  | none => #[#[0]]
+  | some ts => #[#[1],(ts.flatMap Token.words).toArray]
+
 def run (ds : Array UInt64) (ns : Array (Array UInt64)) (pairs : Array UInt64) (root : UInt64) (fallback : UInt64) :
     Array (Array UInt64) :=
   match TableWire.input ds ns pairs #[root] with
   | some ⟨_,rs,[t]⟩ =>
+    if definitions rs then emit (ConstantDefinitions.expand rs t) else
     if !admitted rs t fallback then #[#[2]] else
     match CheckedReduction.run rs (fuel rs t fallback) t with
     | none => #[#[2]]
-    | some u => match write u with
-      | none => #[#[0]]
-      | some ts => #[#[1],(ts.flatMap Token.words).toArray]
+    | some u => emit u
   | _ => #[#[0]]
 
 end Tamarin.CheckedReductionWire

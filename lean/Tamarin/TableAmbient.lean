@@ -71,6 +71,13 @@ def emit (q : List (Term d.sig)) (rows : List (Variant (sig d))) : Option (Array
   if imagesKnown q rows then pack (observations q) (rows.map fun a => projectSubst a.subst)
   else none
 
+/-- Rust consumes only the bindings of a variant. An identity-substitution
+family therefore has the same wire representation for any certified values. -/
+theorem emit_identity (q : List (Term d.sig)) (values : List (Term (sig d))) :
+    emit q [⟨.identity,values⟩] = pack (observations q) [.identity] := by
+  simp [emit,imagesKnown,known,Substitution.identity]
+  rfl
+
 def Decodes (q : List (Term d.sig)) (wire : Array (Array UInt64)) (rows : List (Variant (sig d))) : Prop :=
   Packet.Decodes (observations q) wire (rows.map fun a => projectSubst a.subst) ∧
     ∀ a ∈ rows, ∀ v, Observed q v → liftTerm ((projectSubst a.subst).image v) = a.subst.image v
