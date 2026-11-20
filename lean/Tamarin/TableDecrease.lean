@@ -8,25 +8,28 @@ namespace Tamarin.TableDecrease
 open Rewriting FiniteOccurs
 variable {s : Signature} {rules : List (Equation s)}
 
-def decreases (r : Equation s) : Bool :=
-  nodes r.rhs < nodes r.lhs && r.rhs.variables.all fun v =>
-    r.rhs.variables.count v ≤ r.lhs.variables.count v
+def nonduplicating (r : Equation s) : Bool :=
+  r.rhs.variables.all fun v => r.rhs.variables.count v ≤ r.lhs.variables.count v
+
+def decreases (r : Equation s) : Bool := nodes r.rhs < nodes r.lhs && nonduplicating r
 
 def decreasing (rules : List (Equation s)) : Bool := rules.all decreases
 
-private theorem counts {r : Equation s} (ok : decreases r = true) (v : Variable) :
+theorem counts {r : Equation s} (ok : nonduplicating r) (v : Variable) :
     r.rhs.variables.count v ≤ r.lhs.variables.count v := by
   by_cases occurs : v ∈ r.rhs.variables
-  · exact of_decide_eq_true (List.all_eq_true.mp (Bool.and_eq_true_iff.mp ok).2 v occurs)
+  · exact of_decide_eq_true (List.all_eq_true.mp ok v occurs)
   · simp [List.count_eq_zero_of_not_mem occurs]
 
-theorem bound (ok : decreasing rules = true) : ReferenceReduction.Bound rules := by
+theorem bound_of_nonduplicating (ok : ∀ r ∈ rules, nonduplicating r) : ReferenceReduction.Bound rules := by
   intro r hr v hv
   have pos := List.count_pos_iff.mpr ((Term.mem_variables ..).mpr hv)
-  exact (Term.mem_variables ..).mp (List.count_pos_iff.mp
-    (Nat.lt_of_lt_of_le pos (counts (List.all_eq_true.mp ok r hr) v)))
+  exact (Term.mem_variables ..).mp (List.count_pos_iff.mp (Nat.lt_of_lt_of_le pos (counts (ok r hr) v)))
 
-private theorem sum_lt {n : Nat} (i : Fin n) (xs ys : Fin n → Nat)
+theorem bound (ok : decreasing rules = true) : ReferenceReduction.Bound rules :=
+  bound_of_nonduplicating fun r hr => (Bool.and_eq_true_iff.mp (List.all_eq_true.mp ok r hr)).2
+
+theorem sum_lt {n : Nat} (i : Fin n) (xs ys : Fin n → Nat)
     (lt : ys i < xs i) (rest : ∀ j, j ≠ i → ys j = xs j) :
     (List.ofFn ys).sum < (List.ofFn xs).sum := by
   induction n with
@@ -49,7 +52,7 @@ private theorem inside_lt (ok : decreasing rules = true) {a b : Term s}
   | root h =>
     obtain ⟨r,hr,σ,rfl,rfl⟩ := h
     have rule := List.all_eq_true.mp ok r hr
-    exact UnifierSize.substituted_lt (of_decide_eq_true (Bool.and_eq_true_iff.mp rule).1) (counts rule) σ
+    exact UnifierSize.substituted_lt (of_decide_eq_true (Bool.and_eq_true_iff.mp rule).1) (counts (Bool.and_eq_true_iff.mp rule).2) σ
   | @free f args i u h ih =>
     change (List.ofFn (fun j => nodes (if j = i then u else args j))).sum + 1 < (List.ofFn (fun j => nodes (args j))).sum + 1
     apply Nat.add_lt_add_right _ 1

@@ -63,7 +63,7 @@ private theorem replay_child (p : Point s n) (good : VariantSaturation.Sound rul
     exact (by simpa [replace] using red.trans (.step (m.genuine p good i b hb)))
   · simpa [replace,same] using red
 
-private theorem sum_mono {a b : Fin n → Nat} (le : ∀ i, a i ≤ b i) :
+theorem sum_mono {a b : Fin n → Nat} (le : ∀ i, a i ≤ b i) :
     (List.ofFn a).sum ≤ (List.ofFn b).sum := by
   induction n with
   | zero => simp

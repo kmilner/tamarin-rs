@@ -36,13 +36,13 @@ structure Expansion (rules : List (Equation s)) (query : Fin n → Term s) where
       (∀ i : Key (keysOf query), EquivB (δ.apply (p.assignment.image i.val)) (η.apply (c.assignment.image i.val))) ∧
       measure (fun i => η.apply (c.value i)) < measure (fun i => δ.apply (p.value i))
 
-private theorem sound_reached (g : Expansion rules query) {p} (reached : Reachable g.seed g.next p) :
+theorem sound_reached (g : Expansion rules query) {p} (reached : Reachable g.seed g.next p) :
     Sound rules query p := by
   induction reached with
   | seed => exact g.initial
   | child _ q h ih => exact g.preserves _ ih q h
 
-private theorem endpoint (canonical : CanonicalPresentation (ruleRoot rules)) (p : Point s n)
+theorem endpoint (canonical : CanonicalPresentation (ruleRoot rules)) (p : Point s n)
     (sound : Sound rules query p) (ρ δ : Substitution s) (out : Fin n → Term s)
     (forms : ∀ i, NormalForm (ruleRoot rules) (ρ.apply (query i)) (out i))
     (input : ∀ i : Key (keysOf query), EquivB (ρ.image i.val) (δ.apply (p.assignment.image i.val)))
@@ -92,6 +92,30 @@ private theorem covers (g : Expansion rules query) (canonical : CanonicalPresent
         rw [Substitution.apply_compose]
         exact (inputs i).trans ((same i).trans ((fit.inputs i).subst η.image))
   exact go _ g.seed initial ρ (fun i => by rw [g.identity _ i.property]; exact .refl _) rfl
+
+/-- Turn coverage of the complete observed tuple by sound points into the
+public answer contract, preserving a single normalized witness per row. -/
+theorem complete_of_points (vars : Normalized (ruleRoot rules) Substitution.identity)
+    (states : List (Point s n)) (sound : ∀ p ∈ states, Sound rules query p)
+    (hits : ∀ ρ : Substitution s, Normalized (ruleRoot rules) ρ → ∀ out : Fin n → Term s,
+      (∀ i, NormalForm (ruleRoot rules) (ρ.apply (query i)) (out i)) →
+      ∃ p ∈ states, ∃ δ, Fits (p.row (keysOf query)) (fun i => ρ.image i.val) out δ) :
+    CompleteVariants (ruleRoot rules) (List.ofFn query) (states.map (Point.answer · (keysOf query))) := by
+  let keys := keysOf query
+  constructor
+  · intro a ha
+    obtain ⟨p,hp,rfl⟩ := List.mem_map.mp ha
+    exact sound p hp
+  · intro ρ nρ vs forms
+    obtain ⟨out,rfl,nf⟩ := read_aligned query vs forms
+    obtain ⟨p,mem,δ,fit⟩ := hits ρ nρ out nf
+    obtain ⟨η,nη,hit⟩ := (normal_witness vars (fun i : Key keys => nρ i.val) (fun i => (nf i).2.1) fit).2
+    refine ⟨_,List.mem_map_of_mem mem,η,nη,?_,alignedFn out p.value hit.values⟩
+    intro v hv
+    let i : Key keys := ⟨v,(observed query v).mpr hv⟩
+    change EquivB _ (η.apply (((p.row keys).project (fun j => p.assignment.sorted j.val)).image v))
+    rw [(p.row keys).project_key (fun j => p.assignment.sorted j.val) i]
+    exact hit.inputs i
 
 section
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
@@ -149,24 +173,12 @@ def solve (g : Expansion rules query) (canonical : CanonicalPresentation (ruleRo
   let found := VariantLayers.search g.seed g.next (subsumes query)
     (fun p => (subsumes_iff ..).mpr (Row.Subsumes.refl (p.row keys))) (basis g canonical family)
   let rows := found.val.map (Point.answer · keys)
-  refine ⟨VariantFreshening.freshen keys avoid rows,VariantFreshening.reply r vars _ keys avoid (observed query) rows ⟨?_,?_⟩⟩
-  · intro a ha
-    obtain ⟨p,hp,rfl⟩ := List.mem_map.mp ha
-    exact sound_reached g (found.property.reachable p hp)
-  · intro ρ nρ vs forms
-    obtain ⟨out,rfl,nf⟩ := read_aligned query vs forms
-    obtain ⟨p,mem,δ,fit⟩ := covers g canonical (· ∈ found.val) found.property.seeded
-      (fun q h => sound_reached g (found.property.reachable q h))
-      (fun p hp c hc => by
-        obtain ⟨q,hq,sub⟩ := found.property.closed p hp c hc
-        exact ⟨q,hq,(subsumes_iff ..).mp sub⟩) ρ nρ out nf
-    obtain ⟨η,nη,hit⟩ := (normal_witness vars (fun i : Key keys => nρ i.val) (fun i => (nf i).2.1) fit).2
-    refine ⟨_,List.mem_map_of_mem mem,η,nη,?_,alignedFn out p.value hit.values⟩
-    intro v hv
-    let i : Key keys := ⟨v,(observed query v).mpr hv⟩
-    change EquivB _ (η.apply (((p.row keys).project (fun j => p.assignment.sorted j.val)).image v))
-    rw [(p.row keys).project_key (fun j => p.assignment.sorted j.val) i]
-    exact hit.inputs i
+  refine ⟨VariantFreshening.freshen keys avoid rows,VariantFreshening.reply r vars _ keys avoid (observed query) rows ?_⟩
+  apply complete_of_points vars found.val (fun p hp => sound_reached g (found.property.reachable p hp))
+  exact covers g canonical (· ∈ found.val) found.property.seeded
+    (fun q h => sound_reached g (found.property.reachable q h)) (fun p hp c hc => by
+      obtain ⟨q,hq,sub⟩ := found.property.closed p hp c hc
+      exact ⟨q,hq,(subsumes_iff ..).mp sub⟩)
 
 end
 end Tamarin.VariantSaturation

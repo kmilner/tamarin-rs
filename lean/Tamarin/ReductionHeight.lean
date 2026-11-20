@@ -43,6 +43,19 @@ private theorem child {a b : Term s} (h : b ∈ ReferenceReduction.successors ru
   rw [height.eq_1 bound wf a]
   exact below_max (f := fun u => height bound wf u.val + 1) (List.mem_attach _ ⟨b,h⟩)
 
+/-- Any natural-valued descent for individual rewrites bounds the maximum
+length of every branch, including in the presence of alternative rewrites. -/
+theorem le_rank (rank : Term s → Nat)
+    (decreases : ∀ {a b}, StepModulo (ruleRoot rules) a b → rank b < rank a) (t : Term s) :
+    height bound wf t ≤ rank t := by
+  induction t using wf.induction with
+  | h t smaller =>
+    rw [height.eq_1 bound wf t]
+    apply max_below
+    intro u _
+    have st := (ReferenceReduction.exactSteps rules bound t u.val).mp ⟨u.val,u.property,.refl _⟩
+    exact Nat.lt_of_le_of_lt (smaller u.val st) (decreases st)
+
 private theorem equiv_le (a : Term s) : ∀ b, EquivB a b → height bound wf a ≤ height bound wf b := by
   induction a using wf.induction with
   | h a ih =>

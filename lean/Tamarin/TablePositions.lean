@@ -157,7 +157,7 @@ private theorem stepUses (bound : ReferenceReduction.Bound rules) {a b : Term s}
   | comm_left _ _ _ ih | ac_left _ _ _ ih => exact Or.imp ih id
   | comm_right _ _ _ ih | ac_right _ _ _ ih => exact Or.imp id ih
 
-private theorem reducesUses (bound : ReferenceReduction.Bound rules) {a b : Term s}
+theorem reducesUses (bound : ReferenceReduction.Bound rules) {a b : Term s}
     (red : Reduces (ruleRoot rules) a b) (v : Variable) : b.Occurs v → a.Occurs v := by
   induction red with
   | basis h => exact (h.occurs_iff _).mpr

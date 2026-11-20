@@ -25,7 +25,7 @@ def after (seed : α) (next : α → List α) : Nat → Layers α
   | 0 => start seed
   | k+1 => extend next (after seed next k)
 
-private theorem persists {seed : α} {next : α → List α} {k m : Nat} (h : k ≤ m) {p}
+theorem persists {seed : α} {next : α → List α} {k m : Nat} (h : k ≤ m) {p}
     (hp : p ∈ (after seed next k).rows) : p ∈ (after seed next m).rows := by
   induction h with
   | refl => exact hp

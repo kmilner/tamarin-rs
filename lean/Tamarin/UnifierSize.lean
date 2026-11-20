@@ -25,7 +25,7 @@ theorem variables_fold (f : sig.ACSym) (a : Term sig) (xs : List (Term sig)) :
   | nil => simp [ACRepresentation.fold]
   | cons b bs ih => simp [ACRepresentation.fold,Term.variables,ih]
 
-private theorem sum_parts {n : Nat} (a b : Fin n → Nat) :
+theorem sum_parts {n : Nat} (a b : Fin n → Nat) :
     (List.ofFn fun i => a i + b i).sum = (List.ofFn a).sum + (List.ofFn b).sum := by
   induction n with
   | zero => simp
@@ -34,7 +34,7 @@ private theorem sum_parts {n : Nat} (a b : Fin n → Nat) :
     rw [ih (fun i => a i.succ) (fun i => b i.succ)]
     omega
 
-private theorem sum_flat (ls : List (List Nat)) : ls.flatten.sum = (ls.map List.sum).sum := by
+theorem sum_flat (ls : List (List Nat)) : ls.flatten.sum = (ls.map List.sum).sum := by
   induction ls with
   | nil => rfl
   | cons l ls ih => simp [List.sum_append,ih]
@@ -75,7 +75,7 @@ private theorem sum_perm {xs ys : List Nat} (p : xs.Perm ys) : xs.sum = ys.sum :
   | swap => simp [Nat.add_left_comm]
   | trans _ _ ih ik => exact ih.trans ik
 
-private theorem weighted_le (weight : Variable → Nat) (xs ys : List Variable)
+theorem weighted_le (weight : Variable → Nat) (xs ys : List Variable)
     (le : ∀ v, xs.count v ≤ ys.count v) : (xs.map weight).sum ≤ (ys.map weight).sum := by
   induction xs generalizing ys with
   | nil => simp

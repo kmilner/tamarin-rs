@@ -80,6 +80,19 @@ private theorem path_of_reduces {a b : Term sig} (h : Reduces R a b) : Path R a 
     exact (ih.context (fun x => .comm f x c) (fun e => .comm_congr f e (.refl _)) (Step.comm_left f c)).trans
       (ik.context (fun x => .comm f b x) (fun e => .comm_congr f (.refl _) e) (Step.comm_right f b))
 
+private theorem Path.reduces {a b : Term sig} (p : Path R a b) : Reduces R a b := by
+  induction p with
+  | basis eq => exact .basis eq
+  | next st _ ih => exact (Reduces.step st).trans ih
+
+/-- A reduction either stays in its B-class or starts with a genuine contextual
+rewrite. Zero-step paths can end at a different representative of the source. -/
+theorem firstStep {a b : Term sig} (red : Reduces R a b) :
+    EquivB a b ∨ ∃ u, StepModulo R a u ∧ Reduces R u b := by
+  cases path_of_reduces red with
+  | basis eq => exact .inl eq
+  | next st tail => exact .inr ⟨_,st,tail.reduces⟩
+
 /-- A property preserved by basis changes and every contextual one-step
 rewrite is preserved by all reference reductions, including congruence. -/
 theorem reduction_invariant (P : Term sig → Prop)

@@ -100,16 +100,10 @@ private theorem chosen (n : Nat) (t u : Term s) (h : choose rs n t = some u) :
 
 private theorem first {a b : Term s} (path : Reduces (ruleRoot rs) a b) :
     EquivB a b ∨ ∃ u ∈ next rs a, Reduces (ruleRoot rs) u b := by
-  apply RootNarrowing.reduction_invariant (fun b => EquivB a b ∨ ∃ u ∈ next rs a, Reduces (ruleRoot rs) u b) _ _ path (.inl (.refl _))
-  · rintro t t' (eq|⟨u,hu,path⟩) finish
-    · exact .inl (eq.trans finish)
-    · exact .inr ⟨u,hu,path.trans (.basis finish)⟩
-  · rintro t t' (eq|⟨u,hu,path⟩) st
-    · obtain ⟨l,r,start,one,finish⟩ := st
-      obtain ⟨v,hv,equiv⟩ := (ReferenceReduction.exactSteps rs bound a t').mpr
-        ⟨l,r,eq.trans start,one,finish⟩
-      exact .inr ⟨v,hv,.basis equiv⟩
-    · exact .inr ⟨u,hu,path.trans (.step st)⟩
+  rcases RootNarrowing.firstStep path with same | ⟨u,step,tail⟩
+  · exact .inl same
+  · obtain ⟨v,hv,eq⟩ := (ReferenceReduction.exactSteps rs bound a u).mpr step
+    exact .inr ⟨v,hv,(Reduces.basis eq).trans tail⟩
 
 private theorem checked (v : Term s) (n : Nat) (t u : Term s) (h : agrees rs v n t)
     (red : Reduces (ruleRoot rs) t u) (nf : Normal (ruleRoot rs) u) : EquivB u v := by
