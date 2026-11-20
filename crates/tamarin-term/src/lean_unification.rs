@@ -11,6 +11,7 @@ mod commutative;
 mod components;
 mod whole;
 pub(crate) use commutative::solve as unify_structured;
+pub use whole::variants_for_convergent_theory;
 pub(crate) use whole::{total_match, total_unify};
 mod constructor_variants;
 pub(crate) use constructor_variants::RuleTable;

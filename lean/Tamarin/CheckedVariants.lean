@@ -93,7 +93,7 @@ private theorem successors (bound : ReferenceReduction.Bound rs)
   exact expand_covers keys p _ ((TableNarrowing.atPoint u bound (TableNarrowing.groups u bound vars)
     keys p).covers (tracks hp))
 
-private def certify (bound : ReferenceReduction.Bound rs) (vars : Normalized (ruleRoot rs) Substitution.identity)
+def certify (bound : ReferenceReduction.Bound rs) (vars : Normalized (ruleRoot rs) Substitution.identity)
     (query : Fin n → Term s) (fuel : Nat) (states : List (Point s n)) (seeded : seed query ∈ states) :
     Option {answers // Reply (ruleRoot rs) (List.ofFn query) answers} := by
   let keys := keysOf query
@@ -159,12 +159,12 @@ private def search (bound : ReferenceReduction.Bound rs) (vars : Normalized (rul
       else none
     else search bound vars query fuel tableSize remaining (fresh ++ states) fresh (List.mem_append_right _ seeded) depth
 
-private def nonvar (t : Term s) := match t with
+def nonvar (t : Term s) := match t with
   | .var _ => false
   | _ => true
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
-private theorem varsNormal (rs : List (Equation s)) (h : rs.all (fun r => nonvar r.lhs)) :
+theorem varsNormal (rs : List (Equation s)) (h : rs.all (fun r => nonvar r.lhs)) :
     Normalized (ruleRoot rs) Substitution.identity := by
   intro v rhs ⟨l,r,pre,fire,_⟩
   change EquivB (.var v) l at pre

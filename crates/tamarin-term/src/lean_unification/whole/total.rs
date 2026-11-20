@@ -296,7 +296,7 @@ impl<'a> Arm<'a> {
     }
 }
 
-fn header(reply: &MatchRows) -> Result<u64, Error> {
+pub(super) fn header(reply: &MatchRows) -> Result<u64, Error> {
     if reply.count() != 1 || reply.row_size(0, 0)? != 1 {
         return Err(Error::InvalidStatus(255));
     }

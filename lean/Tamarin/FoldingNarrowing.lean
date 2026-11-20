@@ -84,7 +84,7 @@ private theorem sum_strict {a b : Fin n → Nat} (le : ∀ i, a i ≤ b i) (j : 
 section
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
 
-private def admissible (rules : List (Equation s)) (query : Fin n → Term s) (p : Point s n) :=
+def admissible (rules : List (Equation s)) (query : Fin n → Term s) (p : Point s n) :=
   (keysOf query).all (fun v => (ReferenceReduction.successors rules (p.assignment.image v)).isEmpty)
 
 private theorem admissible_iff (bound : ReferenceReduction.Bound rules) (p : Point s n) :

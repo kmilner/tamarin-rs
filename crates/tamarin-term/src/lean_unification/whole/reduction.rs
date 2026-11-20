@@ -25,31 +25,7 @@ impl RuleTable {
         let Some(rules) = self.complete_rules() else {
             return Ok(None);
         };
-        let Some(mut packet) = Packet::encode_total(
-            sig,
-            observations
-                .iter()
-                .chain(rules.flat_map(|r| [&r.lhs, &r.rhs])),
-        )?
-        else {
-            return Ok(None);
-        };
-        // Variants quantify over substitutions using any declared operator.
-        for f in sig.declared_fun_syms() {
-            use crate::function_symbols::FunSym;
-            let kind = match f {
-                FunSym::NoEq(_) => 2,
-                FunSym::C(_) => 3,
-                FunSym::Ac(_) => 4,
-                FunSym::List => continue,
-            };
-            let (arity, sort) = crate::lean_unification::declaration(f, sig.enable_nat)
-                .ok_or(Error::InvalidStatus(255))?;
-            packet
-                .symbol(f, kind, arity, sort)
-                .ok_or(Error::InvalidStatus(255))?;
-        }
-        Ok(Some(packet))
+        Packet::with_rules(sig, observations, rules)
     }
 
     pub(crate) fn checked_reduction(
@@ -102,5 +78,39 @@ impl RuleTable {
                 _ => Err(Error::InvalidStatus(255)),
             }
         })
+    }
+}
+
+impl Packet {
+    pub(super) fn with_rules<'a>(
+        sig: &MaudeSig,
+        observations: &[LNTerm],
+        rules: impl Iterator<Item = &'a crate::rewriting::RRule<LNTerm>>,
+    ) -> Result<Option<Self>, Error> {
+        let Some(mut packet) = Packet::encode_total(
+            sig,
+            observations
+                .iter()
+                .chain(rules.flat_map(|r| [&r.lhs, &r.rhs])),
+        )?
+        else {
+            return Ok(None);
+        };
+        // Variants quantify over substitutions using any declared operator.
+        for f in sig.declared_fun_syms() {
+            use crate::function_symbols::FunSym;
+            let kind = match f {
+                FunSym::NoEq(_) => 2,
+                FunSym::C(_) => 3,
+                FunSym::Ac(_) => 4,
+                FunSym::List => continue,
+            };
+            let (arity, sort) = crate::lean_unification::declaration(f, sig.enable_nat)
+                .ok_or(Error::InvalidStatus(255))?;
+            packet
+                .symbol(f, kind, arity, sort)
+                .ok_or(Error::InvalidStatus(255))?;
+        }
+        Ok(Some(packet))
     }
 }

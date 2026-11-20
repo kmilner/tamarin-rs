@@ -1,5 +1,5 @@
 import Tamarin.DestructorVariants
-import Tamarin.CheckedVariants
+import Tamarin.GeneralVariants
 import Tamarin.FrontierWork
 import Tamarin.TableWire
 import Tamarin.TableAmbient
@@ -11,8 +11,11 @@ namespace Tamarin.CheckedVariantsWire
 open TotalUnifyWire Rewriting MaudeOperations
 
 def search {d : Dictionary} (rs : Problem d.sig) (q : List (Term d.sig)) (fuel : UInt64) :=
+  let table := TableAmbient.liftRules rs
+  let query := q.map TableAmbient.liftTerm
   if TableDecrease.sorted rs && FrontierWork.admits rs q fuel.toNat then
-    CheckedVariants.solve (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) fuel.toNat fuel.toNat
+    (CheckedVariants.solve table query fuel.toNat fuel.toNat).orElse fun _ =>
+      if DestructorTable.accepts rs then none else GeneralVariants.checked table query fuel.toNat
   else none
 
 def certifiedSearch {d : Dictionary} (rs : Problem d.sig) (q : List (Term d.sig)) :=
@@ -42,3 +45,20 @@ def run (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UIn
     else ((encode q (search rs q fuel)).orElse fun _ => encode q (certifiedSearch rs q)).getD #[#[2]]
 
 end Tamarin.CheckedVariantsWire
+
+namespace Tamarin.GeneralVariantsWire
+open TotalUnifyWire
+/-- Full folding search under the caller's presentation assumptions, over all
+ambient names. A wire failure is distinct from an empty family. -/
+def run (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
+    Array (Array UInt64) :=
+  match TableWire.input ds ns rules roots with
+  | none => #[#[0]]
+  | some ⟨_,rs,q⟩ =>
+    let table := TableAmbient.liftRules rs
+    if CheckedReduction.rangeBound table && table.all (fun r => CheckedVariants.nonvar r.lhs) then
+      match GeneralVariants.run table (q.map TableAmbient.liftTerm) fuel.toNat with
+      | none => #[#[3]]
+      | some rows => (TableAmbient.emit q rows).getD #[#[2]]
+    else #[#[2]]
+end Tamarin.GeneralVariantsWire

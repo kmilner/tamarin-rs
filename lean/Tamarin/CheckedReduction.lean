@@ -53,11 +53,11 @@ def agrees (rs : List (Equation s)) (result : Term s) : Nat → Term s → Bool
     | [] => ReferenceMatching.equal t result
     | u :: us => (u :: us).all (agrees rs result n)
 
-private def sorts (a b : Term s) : Bool :=
+def sorts (a b : Term s) : Bool :=
   [SortId.pub,.fresh,.msg,.node,.nat].all fun k => !a.checkSort k || b.checkSort k
 
 omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
-private theorem sorts_iff (a b : Term s) : sorts a b ↔ ∀ k, HasSort a k → HasSort b k := by
+theorem sorts_iff (a b : Term s) : sorts a b ↔ ∀ k, HasSort a k → HasSort b k := by
   simp only [sorts,List.all_eq_true,Bool.or_eq_true,Bool.not_eq_true']
   constructor
   · intro h k ha
@@ -84,7 +84,7 @@ private theorem normal {t : Term s} (st : next rs t = []) : Normal (ruleRoot rs)
   rw [show ReferenceReduction.successors rs t = [] from st] at hv
   exact List.not_mem_nil hv
 
-private theorem chosen (n : Nat) (t u : Term s) (h : choose rs n t = some u) :
+theorem chosen (n : Nat) (t u : Term s) (h : choose rs n t = some u) :
     Reduces (ruleRoot rs) t u ∧ Normal (ruleRoot rs) u := by
   induction n generalizing t with
   | zero => contradiction
@@ -137,7 +137,7 @@ theorem correct {t u : Term s} {n} (h : run rs n t = some u) :
 
 
 omit bound [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
-private theorem common_budget {α : Type} (xs : List α) (P : α → Nat → Prop)
+theorem common_budget {α : Type} (xs : List α) (P : α → Nat → Prop)
     (h : ∀ a ∈ xs, ∃ k, ∀ j ≥ k, P a j) : ∃ k, ∀ j ≥ k, ∀ a ∈ xs, P a j := by
   induction xs with
   | nil => simp
@@ -182,7 +182,7 @@ theorem finite_budget (measure : Term s → Nat)
     have nonempty := List.length_pos_of_mem ha
     exact children _ ((Nat.le_div_iff_mul_le nonempty).mpr (by change k * (next rs t).length ≤ j - charge; omega)) a ha
 
-private theorem chosen_within (measure : Term s → Nat)
+theorem chosen_within (measure : Term s → Nat)
     (smaller : ∀ {a b}, StepModulo (ruleRoot rs) a b → measure b < measure a)
     (n : Nat) (t : Term s) (enough : measure t < n) : ∃ v, choose rs n t = some v := by
   induction n generalizing t with

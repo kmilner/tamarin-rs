@@ -81,10 +81,10 @@ theorem read_aligned {α β : Type} {rel : α → β → Prop} (f : Fin n → α
 section
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
 
-private def normal (rules : List (Equation s)) (t : Term s) :=
+def normal (rules : List (Equation s)) (t : Term s) :=
   (ReferenceReduction.successors rules t).isEmpty
 
-private theorem normal_iff {rules : List (Equation s)} (bound : ReferenceReduction.Bound rules) (t : Term s) :
+theorem normal_iff {rules : List (Equation s)} (bound : ReferenceReduction.Bound rules) (t : Term s) :
     normal rules t = true ↔ Normal (ruleRoot rules) t := by
   constructor
   · intro empty u step

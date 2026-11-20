@@ -41,3 +41,30 @@ private def rules : Array UInt64 := #[3,0,4,1]
 #guard Executable.checkedVariants ds ns #[3,0,3,1] #[6,5] 0 == #[#[2]]
 #guard Executable.checkedReduce ds ns #[3,0,3,1] 3 0 == #[#[2]]
 end Tamarin.DestructorPacketTests
+
+namespace Tamarin.GeneralVariantPacketTests
+-- Six unary stages, pair/fst/snd and two nullary constructors a,b.
+private def ds : Array UInt64 := (Array.range 6).flatMap (fun i => #[2,i.toUInt64,1,2,2]) ++
+  #[2,6,2,2,2,2, 2,7,1,2,2, 2,8,1,2,2, 2,9,0,2, 2,10,0,2]
+private def ns : Array (Array UInt64) := #[#[0,0,2],#[0,1,2]] ++
+  (Array.range 6).map (fun i => #[2,i.toUInt64,0]) ++
+  #[#[2,9],#[2,10],#[2,5,8],#[2,6,9,8],#[2,7,11],#[2,6,0,1],#[2,7,13],#[2,8,13]]
+private def rules : Array UInt64 := #[2,3,3,4,4,5,5,6,6,7,10,12,14,0,15,1]
+-- The open instance stays at stage5(x); x=a additionally returns b via fst.
+-- The previous bounded raw search cannot replay even the seed at depth four.
+#guard Id.run do
+  let some ⟨_,rs,q⟩ := TableWire.input ds ns rules #[2,0] | return false
+  let table := TableAmbient.liftRules rs
+  let query := q.map TableAmbient.liftTerm
+  return !DestructorTable.accepts rs && !ConstantDefinitions.accepts rs &&
+    (CheckedVariants.solve table query 4 4).isNone && (GeneralVariants.run table query 32).isSome
+#guard Id.run do
+  let wire := Executable.checkedVariants ds ns rules #[2,0] 4
+  return wire[0]? == some #[1] && wire.any (fun row => match row.toList with
+    | [0,2,0,_,2] => true | _ => false) && wire.contains #[0,2,2,9,0]
+-- The generic ABI distinguishes an unfinished stage from a completed family.
+#guard Executable.generalVariants ds ns rules #[2,0] 4 == #[#[3]]
+#guard (Executable.generalVariants ds ns rules #[2,0] 32)[0]? == some #[1]
+-- A competing normal endpoint for the same specialized input invalidates the family.
+#guard Executable.checkedVariants ds ns (rules ++ #[10,8]) #[2,0] 4 == #[#[2]]
+end Tamarin.GeneralVariantPacketTests

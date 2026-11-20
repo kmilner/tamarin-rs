@@ -779,10 +779,17 @@ EXPORT_MUTATIONS.extend([
 ])
 
 EXECUTABLE = ("import Tamarin.CheckedVariantsPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedCheckedVariants_correct") + "end Tamarin\n")
+              + obligation("exportedCheckedVariants_correct") + obligation("exportedGeneralVariants_sound")
+              + obligation("exportedGeneralVariants_progress") + obligation("exportedGeneralVariants_complete") + "end Tamarin\n")
 VARIANTS_RUN = "CheckedVariantsWire.run ds ns rules roots fuel"
 EXPORT_MUTATIONS.extend([
     ("variants_returns_incomplete_success", VARIANTS_RUN, "#[#[1]]", "theorem exportedCheckedVariants_correct"),
+    ("general_variants_always_defers", "GeneralVariantsWire.run ds ns rules roots fuel", "#[#[2]]",
+     "theorem exportedGeneralVariants_progress"),
+    ("general_variants_always_retries", "GeneralVariantsWire.run ds ns rules roots fuel", "#[#[3]]",
+     "theorem exportedGeneralVariants_progress"),
+    ("general_variants_ignores_rules", "GeneralVariantsWire.run ds ns rules roots fuel",
+     "GeneralVariantsWire.run ds ns #[] roots fuel", "theorem exportedGeneralVariants_sound"),
     ("variants_defers_zero_budget_definitions", VARIANTS_RUN,
      "if fuel == 0 then #[#[2]] else CheckedVariantsWire.run ds ns rules roots fuel",
      "theorem exportedCheckedVariants_correct"),

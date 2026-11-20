@@ -767,6 +767,9 @@ pub struct MaudeHandle {
     /// `maude_sig()` hands out a cheap refcount-bumped clone WITHOUT taking the
     /// IPC mutex or deep-cloning the `BTreeSet`s.
     sig: Arc<MaudeSig>,
+    /// Opt in to folding under the presentation assumptions for variant requests.
+    #[cfg(feature = "lean-unification")]
+    reference_variants: bool,
     /// Immutable signature data used by native workers without the IPC mutex.
     #[cfg(feature = "lean-unification")]
     native_rules: Arc<std::sync::OnceLock<Option<crate::lean_unification::RuleTable>>>,
@@ -919,6 +922,10 @@ impl MaudeHandle {
             sig,
             #[cfg(feature = "lean-unification")]
             native_rules: Default::default(),
+            #[cfg(feature = "lean-unification")]
+            reference_variants: backend == AlgebraBackend::NativeOnly
+                && std::env::var_os("TAM_RS_NATIVE_REFERENCE_VARIANTS").as_deref()
+                    == Some(std::ffi::OsStr::new("1")),
         })
     }
 
@@ -1016,6 +1023,8 @@ impl MaudeHandle {
             sig: Arc::clone(&self.sig),
             #[cfg(feature = "lean-unification")]
             native_rules: Arc::clone(&self.native_rules),
+            #[cfg(feature = "lean-unification")]
+            reference_variants: self.reference_variants,
         }
     }
 
@@ -1033,6 +1042,8 @@ impl MaudeHandle {
             sig: Arc::clone(&self.sig),
             #[cfg(feature = "lean-unification")]
             native_rules: Arc::clone(&self.native_rules),
+            #[cfg(feature = "lean-unification")]
+            reference_variants: self.reference_variants,
         }
     }
 
@@ -2369,8 +2380,15 @@ impl MaudeHandle {
         let mut inner = cancellation::lock(&self.inner)?;
         #[cfg(feature = "lean-unification")]
         if self.backend != AlgebraBackend::Maude {
-            let result = crate::lean_unification::pairing_variants(&inner.sig, t)
-                .and_then(|result| {
+            let result = if self.reference_variants {
+                crate::lean_unification::variants_for_convergent_theory(&inner.sig, t).map(|rows| {
+                    rows.map_or(
+                        crate::lean_unification::Outcome::Unsupported,
+                        crate::lean_unification::Outcome::Complete,
+                    )
+                })
+            } else {
+                crate::lean_unification::pairing_variants(&inner.sig, t).and_then(|result| {
                     if result == crate::lean_unification::Outcome::Unsupported
                         && let Some(theory) = self.native_rules()
                     {
@@ -2397,17 +2415,21 @@ impl MaudeHandle {
                         Ok(result)
                     }
                 })
-                .map_err(|error| {
-                    if self.backend == AlgebraBackend::NativeOnly {
-                        inner
-                            .caches
-                            .native_failure
-                            .get_or_init(|| NativeFailure::Runtime(error.to_string()))
-                            .error()
-                    } else {
-                        MaudeError::Other(error.to_string())
-                    }
-                })?;
+            }
+            .map_err(|error| {
+                if error == crate::lean_unification::Error::Cancelled {
+                    return MaudeError::Cancelled;
+                }
+                if self.backend == AlgebraBackend::NativeOnly {
+                    inner
+                        .caches
+                        .native_failure
+                        .get_or_init(|| NativeFailure::Runtime(error.to_string()))
+                        .error()
+                } else {
+                    MaudeError::Other(error.to_string())
+                }
+            })?;
             if let crate::lean_unification::Outcome::Complete(answers) = result {
                 return Ok(answers);
             }

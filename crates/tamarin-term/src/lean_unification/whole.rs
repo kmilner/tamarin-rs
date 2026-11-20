@@ -2,6 +2,7 @@
 //! systems and checks identity, closed clashes, and incompatible variable-image
 //! sizes on the original equation roots.
 mod checked_variants;
+pub use checked_variants::variants_for_convergent_theory;
 mod reduction;
 mod total;
 pub(crate) use total::{matches as total_match, unify as total_unify};

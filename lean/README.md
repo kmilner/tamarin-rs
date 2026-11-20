@@ -122,7 +122,7 @@ returns literal subject-variable IDs on the right side of a binding. For reducti
 variants, Rust sends the ordered observation roots and both roots of every active equation.
 The table packet declares the whole module's operators. The variant proof admits arbitrary
 additional caller names of each sort; each returned image must use names Rust can recover.
-The variant fallback attempts four narrowing layers, charging the rule table, positions,
+The default checked variant fallback attempts four narrowing layers, charging the rule table, positions,
 and AC choices before expansion. Both table fallbacks check preservation of declared sorts. It checks every pair of overlapping terminal rows,
 including a row paired with an independently renamed copy of itself. A stopped search
 returns status 2. A malformed packet has a separate failure status.
@@ -206,12 +206,12 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | Ordinary free/C/AC unification | Native-only has a complete fallback for declared arity-correct terms, including mixtures of several AC heads, free and commutative symbols, and kind-level inputs. Native-only validates Rust eliminations against the original equations before using them. | Extend end-to-end checks of the Rust representation and answer ordering before general deployment. |
 | Directional matching | The total matcher receives the original equations and bindable variable IDs. Subject variables stay rigid, including variables also present in the pattern. Native-only sorts the completed binding maps. | Ordered hybrid enumeration can still require Maude's first match. [Matcher contract](Tamarin/TotalMatchPacket.lean) |
 | Reduction | Certified constant definitions and constructor-pattern destructors give a unique normal form for every input. Other tables use checked rewriting at all positions, including proper AC subproducts. Strictly size-decreasing tables receive a proved depth bound. | Certify combinations of rule classes and algebraic tables such as DH. The per-query path can defer after 100,000 work units or on competing normal forms. [Checked reduction](Tamarin/CheckedReduction.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
-| Variants | Both certified classes have a finite complete family for every tuple. Destructor tables can use total folding narrowing when bounded search defers. | Prove finite variants for mixed tables and DH. Variant packets require representable witness IDs and images. Other tables can still defer. [Frontier checker](Tamarin/CheckedVariants.lean) · [Total reference](Tamarin/CompleteNarrowing.lean) |
+| Variants | The general folding reference computes a complete family under the presentation assumptions. The native-only command independently certifies individual frontiers and has table-wide guarantees for definitions and destructors. | Prove finite variants for mixed tables and DH. Variant packets require representable witness IDs and images. Other tables can still defer. [Frontier checker](Tamarin/CheckedVariants.lean) · [Total reference](Tamarin/CompleteNarrowing.lean) |
 
 A table-wide certificate applies to every arity-correct input, including kind-level contexts. The
 first admitted class defines nullary free symbols by ground terms built from constructors. Multiple
 definitions of one symbol must agree modulo C/AC, every right side must preserve the declared sort,
-and every active rule must qualify. Rust can encode declared nullary symbols in rules. It still
+and every active rule must qualify. The checked Rust path can encode declared nullary symbols in rules. It still
 defers tables containing query-local literal names in rule buckets. [Class and normalizer](Tamarin/ConstantDefinitions.lean) · [Public regression](../crates/tamarin-term/tests/native_backend/checked_reduction.rs)
 
 For destructor tables, every left side has a defined free head over constructor patterns.
@@ -222,6 +222,21 @@ the sorts of rule variables. The finite-variant proof counts free applications w
 subterm, so even large irreducible substitution images contribute zero. Generic narrowing can
 emit redundant instances. [Table admission and reduction](Tamarin/DestructorTable.lean) ·
 [Uniform bound and variants](Tamarin/DestructorVariants.lean)
+
+The general folding reference accepts an arbitrary range-restricted table, including user
+equations mixed with builtins. Set `TAM_RS_NATIVE_REFERENCE_VARIANTS=1` with
+`--algebra-backend=native-only` to select it for variant queries. Rust callers can use
+`variants_for_convergent_theory` directly.
+Lean checks each row against the original tuple. For a sort-preserving, terminating and
+confluent presentation with the finite variant property modulo C/AC, Lean proves that the
+search reaches a complete family at a finite budget. Rust retries incomplete stages with
+a larger budget and checks cancellation between calls. The numeric packet must represent
+the budget and bindings. The caller supplies the rules and query. An
+invalid presentation can diverge or have additional normal forms. The regular native-only
+operation retains the stronger guarantee of completeness and unique reconstruction on
+every successful reply. It checks the raw successors at intermediate points of normalized
+narrowing and can still defer when that certificate cannot be found within budget.
+[Executable and theorems](Tamarin/GeneralVariants.lean) · [Rust acceptance test](../crates/tamarin-term/tests/native_backend/checked_variants.rs)
 
 The reusable canonicality proof takes termination, sort preservation and a join for every one-step
 fork. For finite variants, a sufficient condition is a decreasing rank with a bound on every

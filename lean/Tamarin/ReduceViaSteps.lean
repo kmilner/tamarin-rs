@@ -34,4 +34,11 @@ def reducerOfSteps (theory : CanonicalPresentation R) (finder : StepFinder R) : 
     obtain ⟨_, left, right⟩ := theory.confluent other.1 nf.1
     exact (normal_reduces_equiv left other.2.1).trans (normal_reduces_equiv right nf.2.1).symm
 
+theorem reducerOfSteps_eq (theory : CanonicalPresentation R) (finder : StepFinder R) (t : Term s) :
+    (reducerOfSteps theory finder).reduce t = match finder.next t with
+      | none => t | some u => (reducerOfSteps theory finder).reduce u := by
+  change (normalize theory finder t).val = _
+  rw [normalize.eq_1]
+  split <;> rename_i h <;> simp only [h] <;> rfl
+
 end Tamarin.MaudeOperations

@@ -82,7 +82,7 @@ structure ClosedRows (seed : α) (next : α → List α) (covers : α → α →
   reachable : ∀ p ∈ rows, Reachable seed next p
   closed : ∀ p ∈ rows, ∀ c ∈ next p, ∃ q ∈ rows, covers q c = true
 
-private theorem stopped {seed : α} {next : α → List α} {covers : α → α → Bool}
+theorem stopped {seed : α} {next : α → List α} {covers : α → α → Bool}
     (refl : ∀ p, covers p p = true) (k : Nat) {l} (atLayer : l = after seed next k)
     (stop : closed covers next l = true) : ClosedRows seed next covers l.rows := by
   subst l
@@ -97,7 +97,7 @@ cover all reachable nodes. Its cardinality and discovery depths need not be know
 def FiniteBasis (seed : α) (next : α → List α) (covers : α → α → Bool) :=
   ∃ xs : List α, (∀ x ∈ xs, Reachable seed next x) ∧ ∀ p, Reachable seed next p → ∃ x ∈ xs, covers x p = true
 
-private theorem eventually_closed {seed : α} {next : α → List α} {covers : α → α → Bool}
+theorem eventually_closed {seed : α} {next : α → List α} {covers : α → α → Bool}
     (basis : FiniteBasis seed next covers) : ∃ k, closed covers next (after seed next k) = true := by
   obtain ⟨xs,reach,generates⟩ := basis
   obtain ⟨k,hk⟩ := together seed next xs reach

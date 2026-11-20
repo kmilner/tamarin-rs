@@ -40,6 +40,7 @@ impl Fixture {
             .arg("--processors=2")
             .arg("--maude-processes=4")
             .env("PATH", "")
+            .env_remove("TAM_RS_NATIVE_REFERENCE_VARIANTS")
             .env_remove("TAM_RS_NO_LEAN_UNIFY")
             .env_remove("TAM_RS_VERIFY_LEAN_UNIFY")
             .env_remove("TAM_RS_VERIFY_REDUCE_NF");
@@ -68,6 +69,35 @@ impl Drop for Fixture {
 }
 
 const SIMPLE: &str = include_str!("fixtures/native_pairing.spthy");
+
+#[cfg(feature = "lean-unification")]
+#[test]
+fn user_equation_chain_and_pairing_prove_both_traces_without_maude() {
+    let fixture = Fixture::new(include_str!("fixtures/native_user_equations_pairing.spthy"));
+    for mode in ["0", "1"] {
+        let output = fixture
+            .command()
+            .env("TAM_RS_NATIVE_REFERENCE_VARIANTS", mode)
+            .arg("--prove")
+            .arg(fixture.dir.join("input.spthy"))
+            .output()
+            .unwrap();
+        assert!(!fixture.dir.join("called").exists());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for lemma in ["specialized", "open_case"] {
+            assert!(
+                stdout.contains(&format!("{lemma} (exists-trace): verified")),
+                "{stdout}"
+            );
+        }
+        assert!(!stdout.contains("wellformedness check failed"), "{stdout}");
+    }
+}
 
 #[cfg(feature = "lean-unification")]
 #[test]

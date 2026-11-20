@@ -1,0 +1,13 @@
+theory UserEquationsAndPairing
+begin
+functions: g0/1, g1/1, g2/1, g3/1, g4/1, g5/1, a/0, b/0
+equations [convergent]:
+  g0(x) = g1(x), g1(x) = g2(x), g2(x) = g3(x),
+  g3(x) = g4(x), g4(x) = g5(x), g5(a) = fst(<b,a>)
+
+rule Observe:
+  [ In(x) ] --[ Seen(x,g0(x)) ]-> []
+
+lemma specialized: exists-trace "Ex #i. Seen(a,b) @ i"
+lemma open_case: exists-trace "Ex y #i. Seen(b,y) @ i & not (y = b)"
+end

@@ -37,25 +37,29 @@ fn checked_variant_frontier_preserves_shared_inputs_under_a_kind_level_ac_rewrit
     let new =
         |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
     let h = new(sig.clone().refresh());
-    let answers = h.variants(&q).unwrap();
-    let mut found = [false; 2];
-    for row in answers {
-        let image = row
-            .into_iter()
-            .find(|(key, _)| *key == x)
-            .map(|(_, value)| value)
-            .unwrap_or(Term::Lit(Lit::Var(x)));
-        if image == a {
-            assert_eq!(h.reduce(&call(image)).unwrap(), b);
-            found[0] = true;
-        } else {
-            assert!(matches!(image, Term::Lit(Lit::Var(w)) if w.sort == LSort::Msg));
-            let value = call(image);
-            assert_eq!(h.reduce(&value).unwrap(), value);
-            found[1] = true;
+    let reference = tamarin_term::lean_unification::variants_for_convergent_theory(&sig, &q)
+        .unwrap()
+        .unwrap();
+    for answers in [reference, h.variants(&q).unwrap()] {
+        let mut found = [false; 2];
+        for row in answers {
+            let image = row
+                .into_iter()
+                .find(|(key, _)| *key == x)
+                .map(|(_, value)| value)
+                .unwrap_or(Term::Lit(Lit::Var(x)));
+            if image == a {
+                assert_eq!(h.reduce(&call(image)).unwrap(), b);
+                found[0] = true;
+            } else {
+                assert!(matches!(image, Term::Lit(Lit::Var(w)) if w.sort == LSort::Msg));
+                let value = call(image);
+                assert_eq!(h.reduce(&value).unwrap(), value);
+                found[1] = true;
+            }
         }
+        assert_eq!(found, [true; 2]);
     }
-    assert_eq!(found, [true; 2]);
     assert_eq!(h.reduce(&context).unwrap(), sum(node, c));
     assert_eq!((h.stats().var_count, h.stats().norm_count), (0, 0));
 
@@ -66,4 +70,72 @@ fn checked_variant_frontier_preserves_shared_inputs_under_a_kind_level_ac_rewrit
         Err(MaudeError::UnsupportedOperation("variant generation"))
     ));
     assert_eq!(ambiguous.stats().var_count, 0);
+}
+
+#[test]
+fn user_equations_followed_by_pairing_compute_both_open_variants() {
+    use tamarin_term::builtin::{fst, pair};
+
+    let symbol =
+        |name, arity| NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor);
+    let stages = [b"g0", b"g1", b"g2", b"g3", b"g4", b"g5"].map(|s| symbol(s, 1));
+    let [a, b] = [b"ga", b"gb"].map(|s| symbol(s, 0));
+    let mut sig = pair_maude_sig();
+    sig.st_fun_syms.extend(stages);
+    sig.st_fun_syms.extend([a, b]);
+    let [a, b] = [a, b].map(|f| f_app_no_eq(f, vec![]));
+    let x = LVar::new("operand", LSort::Msg, 0);
+    let var = Term::Lit(Lit::Var(x));
+    let call = |head, arg| f_app_no_eq(head, vec![arg]);
+    let rule = |lhs, term| {
+        CtxtStRule::new(
+            lhs,
+            StRhs {
+                term,
+                positions: vec![],
+            },
+        )
+    };
+    for heads in stages.windows(2) {
+        sig.st_rules.insert(rule(
+            call(heads[0], var.clone()),
+            call(heads[1], var.clone()),
+        ));
+    }
+    sig.st_rules.insert(rule(
+        call(stages[5], a.clone()),
+        fst(pair(b.clone(), a.clone())),
+    ));
+    let q = f_app_list(vec![call(stages[0], var.clone()), var.clone()]);
+    let reference = tamarin_term::lean_unification::variants_for_convergent_theory(&sig, &q)
+        .unwrap()
+        .unwrap();
+    let handle =
+        MaudeHandle::start_with_backend(MISSING, sig.refresh(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    for rows in [reference, handle.variants(&q).unwrap()] {
+        let mut open = false;
+        let mut specialized = false;
+        for row in rows {
+            let image = row
+                .into_iter()
+                .find(|(key, _)| *key == x)
+                .map_or(var.clone(), |(_, t)| t);
+            let value = handle.reduce(&call(stages[0], image.clone())).unwrap();
+            if image == a {
+                assert_eq!(value, b);
+                specialized = true;
+            } else {
+                assert!(matches!(image, Term::Lit(Lit::Var(_))));
+                assert_eq!(value, call(stages[5], image));
+                open = true;
+            }
+        }
+        assert!(open && specialized);
+    }
+    assert_eq!(
+        (handle.stats().var_count, handle.stats().norm_count),
+        (0, 0)
+    );
+    handle.check_backend_status().unwrap();
 }

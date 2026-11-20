@@ -120,15 +120,15 @@ theorem complete_of_points (vars : Normalized (ruleRoot rules) Substitution.iden
 section
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
 
-private def subsumes (query : Fin n → Term s) (p c : Point s n) :=
+def subsumes (query : Fin n → Term s) (p c : Point s n) :=
   let keys := keysOf query
   ReferenceVariantFolding.subsumes keys.attach (List.finRange n) (p.row keys) (c.row keys)
 
-private theorem subsumes_iff (p c : Point s n) : subsumes query p c = true ↔
+theorem subsumes_iff (p c : Point s n) : subsumes query p c = true ↔
     (p.row (keysOf query)).Subsumes (c.row (keysOf query)) :=
   ReferenceVariantFolding.subsumes_iff (List.mem_attach _) List.mem_finRange ..
 
-private theorem basis (g : Expansion rules query) (canonical : CanonicalPresentation (ruleRoot rules))
+theorem basis (g : Expansion rules query) (canonical : CanonicalPresentation (ruleRoot rules))
     (family : ∃ answers, CompleteVariants (ruleRoot rules) (List.ofFn query) answers) :
     FiniteBasis g.seed g.next (subsumes query) := by
   classical
@@ -165,20 +165,27 @@ private theorem basis (g : Expansion rules query) (canonical : CanonicalPresenta
       rw [Substitution.apply_compose]
       exact (atFn _ _ tuple i).trans ((fit.values i).subst η.image)
 
+theorem reply_of_closed (g : Expansion rules query) (canonical : CanonicalPresentation (ruleRoot rules))
+    (vars : Normalized (ruleRoot rules) Substitution.identity) (r : VerifiedReducer (ruleRoot rules))
+    (states : List (Point s n)) (closed : ClosedRows g.seed g.next (subsumes query) states) (avoid : List Variable) :
+    VariantReply (ruleRoot rules) (List.ofFn query) avoid
+      (VariantFreshening.freshen (keysOf query) avoid (states.map (Point.answer · (keysOf query)))) := by
+  let keys := keysOf query
+  let rows := states.map (Point.answer · keys)
+  apply VariantFreshening.reply r vars _ keys avoid (observed query) rows
+  apply complete_of_points vars states (fun p hp => sound_reached g (closed.reachable p hp))
+  exact covers g canonical (· ∈ states) closed.seeded
+    (fun q h => sound_reached g (closed.reachable q h)) (fun p hp c hc => by
+      obtain ⟨q,hq,sub⟩ := closed.closed p hp c hc
+      exact ⟨q,hq,(subsumes_iff ..).mp sub⟩)
+
 def solve (g : Expansion rules query) (canonical : CanonicalPresentation (ruleRoot rules))
     (vars : Normalized (ruleRoot rules) Substitution.identity) (r : VerifiedReducer (ruleRoot rules))
     (family : ∃ answers, CompleteVariants (ruleRoot rules) (List.ofFn query) answers) (avoid : List Variable) :
     {answers // VariantReply (ruleRoot rules) (List.ofFn query) avoid answers} := by
-  let keys := keysOf query
   let found := VariantLayers.search g.seed g.next (subsumes query)
-    (fun p => (subsumes_iff ..).mpr (Row.Subsumes.refl (p.row keys))) (basis g canonical family)
-  let rows := found.val.map (Point.answer · keys)
-  refine ⟨VariantFreshening.freshen keys avoid rows,VariantFreshening.reply r vars _ keys avoid (observed query) rows ?_⟩
-  apply complete_of_points vars found.val (fun p hp => sound_reached g (found.property.reachable p hp))
-  exact covers g canonical (· ∈ found.val) found.property.seeded
-    (fun q h => sound_reached g (found.property.reachable q h)) (fun p hp c hc => by
-      obtain ⟨q,hq,sub⟩ := found.property.closed p hp c hc
-      exact ⟨q,hq,(subsumes_iff ..).mp sub⟩)
+    (fun p => (subsumes_iff ..).mpr (Row.Subsumes.refl (p.row (keysOf query)))) (basis g canonical family)
+  exact ⟨_,reply_of_closed g canonical vars r found.val found.property avoid⟩
 
 end
 end Tamarin.VariantSaturation

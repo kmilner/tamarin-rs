@@ -209,6 +209,10 @@ def checkedReduce (decls : Array UInt64) (nodes : Array (Array UInt64)) (rules :
 def checkedVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
     Array (Array UInt64) := CheckedVariantsWire.run ds ns rules roots fuel
 
+@[export tamarin_general_variants]
+def generalVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
+    Array (Array UInt64) := GeneralVariantsWire.run ds ns rules roots fuel
+
 @[export tamarin_whole_unify]
 def wholeUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (equations : Array UInt64) :
     Array (Array UInt64) :=
