@@ -104,7 +104,7 @@ theorem exportedCheckedReduce_ambient {ds ns es root n d t rs}
     ∃ u, CheckedReductionWire.Decodes d (Executable.checkedReduce ds ns es root n) u ∧
       ∀ extra : Signature, MaudeOperations.ReductionReply (Rewriting.ruleRoot (SignatureExtension.query extra rs))
         (SignatureExtension.embed extra t) (SignatureExtension.embed extra u) := by
-  rcases exportedCheckedReduce_correct.valid _ _ _ _ _ _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,_,stop⟩
+  rcases exportedCheckedReduce_correct.valid _ _ _ _ _ _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,_,_,stop⟩
   · exact ⟨u,packet,fun extra => SignatureExtension.reduction extra rs bound t u reply⟩
   · exact (stop.elim (fun bad => by simp [bad] at admitted) completes).elim
 
@@ -121,6 +121,19 @@ theorem exportedDefinitionReduce_ambient {ds ns es root n d t rs}
   rcases exportedCheckedReduce_correct.valid _ _ _ _ _ _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,reject,_⟩
   · exact ⟨u,packet,fun extra => SignatureExtension.reduction extra rs (ConstantDefinitions.bound ok) t u reply⟩
   · simp [CheckedReductionWire.definitions,ok,sorted] at reject
+
+/-- Constructor-pattern projections complete on every arity-correct observation,
+including kind-level contexts and arbitrary extensions of the caller signature. -/
+theorem exportedDestructorReduce_ambient {ds ns es root n d t rs}
+    (h : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩) (cls : DestructorTable.Presentation rs)
+    (typed : ∀ r ∈ rs, HasSort r.rhs r.lhs.rootSort) :
+    ∃ u, CheckedReductionWire.Decodes d (Executable.checkedReduce ds ns es root n) u ∧
+      ∀ extra : Signature, MaudeOperations.ReductionReply (Rewriting.ruleRoot (SignatureExtension.query extra rs))
+        (SignatureExtension.embed extra t) (SignatureExtension.embed extra u) := by
+  have sorted := cls.sorted_iff.mpr typed
+  rcases exportedCheckedReduce_correct.valid _ _ _ _ _ _ _ _ h with ⟨u,packet,reply⟩ | ⟨_,_,reject,_⟩
+  · exact ⟨u,packet,fun extra => SignatureExtension.reduction extra rs (TableDecrease.bound cls.decreasing) t u reply⟩
+  · simp [CheckedReductionWire.destructors,(DestructorTable.accepts_iff rs).mpr cls,sorted] at reject
 
 /-- Filtering witnesses of an unavailable sort preserves coverage on actual
 module substitutions, including all the values of a packed query. -/

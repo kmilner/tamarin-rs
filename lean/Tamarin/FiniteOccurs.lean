@@ -25,7 +25,7 @@ def nodes (t : Term sig) : Nat := (nodeModel sig).eval (fun _ => (1 : Nat)) t
 theorem nodes_equiv {a b : Term sig} (e : EquivB a b) : nodes a = nodes b :=
   e.eval_eq (nodeModel sig) (fun _ => (1 : Nat))
 
-private theorem le_sum (n : Nat) (ns : List Nat) (h : n ∈ ns) : n ≤ ns.sum := by
+theorem le_sum (n : Nat) (ns : List Nat) (h : n ∈ ns) : n ≤ ns.sum := by
   induction ns with
   | nil => cases h
   | cons m ms ih =>

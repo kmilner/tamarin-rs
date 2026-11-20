@@ -39,12 +39,12 @@ private theorem atRoot_step {R : Root s} {a b : Term s} :
 section
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
 
-private def roots (rules : List (Equation s)) (t : Term s) : List (Term s) :=
+def roots (rules : List (Equation s)) (t : Term s) : List (Term s) :=
   rules.flatMap fun r =>
     let p : Problem s := [⟨r.lhs,t⟩]
     ((ReferenceMatching.matcher s).run p trivial (patternVariables p)).map (fun σ => σ.apply r.rhs)
 
-private theorem roots_iff (rules : List (Equation s)) (bound : Bound rules) (a b : Term s) :
+theorem roots_iff (rules : List (Equation s)) (bound : Bound rules) (a b : Term s) :
     Represents (roots rules a) b ↔ AtRoot (ruleRoot rules) a b := by
   constructor
   · rintro ⟨_,member,out⟩

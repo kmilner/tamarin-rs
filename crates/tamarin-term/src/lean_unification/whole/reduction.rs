@@ -71,8 +71,7 @@ impl RuleTable {
                     rows.len(),
                     WordSlice::new(&packet.equations[1..]),
                     packet.equations[0],
-                    // Certified definitions use structural expansion. Strictly decreasing
-                    // tables get a measured depth bound for the checked search.
+                    // Certified definition and destructor tables ignore this fallback depth.
                     32,
                 )
             })?;

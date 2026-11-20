@@ -24,3 +24,20 @@ private def ids := ns.push #[0,lastId,3]
 #guard variants ds ids #[2,3,3,2] #[2] 0 == #[#[2]]
 
 end Tamarin.CheckedCommandPacketTests
+
+namespace Tamarin.DestructorPacketTests
+-- pair/2, fst/1 and snd/1, all Msg-sorted. x and y are distinct rule variables.
+private def ds : Array UInt64 := #[2,0,2,2,2,2, 2,1,1,2,2, 2,2,1,2,2]
+private def ns : Array (Array UInt64) := #[#[0,0,2],#[0,1,2],#[2,0,0,1],#[2,1,2],#[2,2,2],#[0,2,2],#[2,1,5]]
+private def rules : Array UInt64 := #[3,0,4,1]
+-- Zero frontier budget forces the total path. The rows for fst(z),z must
+-- include an unrestricted z and a pair of independent Msg witnesses.
+#guard Id.run do
+  let reply := Executable.checkedVariants ds ns rules #[6,5] 0
+  return reply[0]? == some #[1] &&
+    reply.any (fun row => match row.toList with | [2,2,0,_,2] => true | _ => false) &&
+    reply.any (fun row => match row.toList with | [2,2,0,x,2,0,y,2,2,0,2] => x != y | _ => false)
+-- Same root with conflicting result positions cannot certify the table.
+#guard Executable.checkedVariants ds ns #[3,0,3,1] #[6,5] 0 == #[#[2]]
+#guard Executable.checkedReduce ds ns #[3,0,3,1] 3 0 == #[#[2]]
+end Tamarin.DestructorPacketTests

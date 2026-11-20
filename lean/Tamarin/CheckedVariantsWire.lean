@@ -1,4 +1,4 @@
-import Tamarin.ConstantDefinitions
+import Tamarin.DestructorVariants
 import Tamarin.CheckedVariants
 import Tamarin.FrontierWork
 import Tamarin.TableWire
@@ -15,6 +15,19 @@ def search {d : Dictionary} (rs : Problem d.sig) (q : List (Term d.sig)) (fuel :
     CheckedVariants.solve (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) fuel.toNat fuel.toNat
   else none
 
+def certifiedSearch {d : Dictionary} (rs : Problem d.sig) (q : List (Term d.sig)) :=
+  let table := TableAmbient.liftRules rs
+  let query := q.map TableAmbient.liftTerm
+  if h : DestructorTable.accepts table && TableDecrease.sorted table then
+    have ok := Bool.and_eq_true_iff.mp h
+    have cls := (DestructorTable.accepts_iff table).mp ok.1
+    some (DestructorTable.variants cls cls.decreasing ok.2 query)
+  else none
+
+def encode {d : Dictionary} {rs : Problem d.sig} (q : List (Term d.sig))
+    (family : Option {rows // CheckedVariants.Reply (ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) rows}) :=
+  family.bind fun rows => TableAmbient.emit q rows.val
+
 /-- Check the table once on its finite dictionary. A certificate in the
 packet proof transfers admission to arbitrary additional caller names. -/
 def definitions {d : Dictionary} (rs : Problem d.sig) : Bool :=
@@ -26,8 +39,6 @@ def run (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UIn
   | none => #[#[0]]
   | some ⟨_,rs,q⟩ =>
     if definitions rs then (pack (TableAmbient.observations q) [.identity]).getD #[#[2]]
-    else match search rs q fuel with
-    | none => #[#[2]]
-    | some rows => (TableAmbient.emit q rows.val).getD #[#[2]]
+    else ((encode q (search rs q fuel)).orElse fun _ => encode q (certifiedSearch rs q)).getD #[#[2]]
 
 end Tamarin.CheckedVariantsWire

@@ -49,7 +49,7 @@ private theorem head_iff (t : Term s) (f : s.FreeSym) :
   rintro rfl
   exact ⟨_,HEq.rfl⟩
 
-private theorem undefined_iff (rs : Problem s) (f : s.FreeSym) :
+theorem undefined_iff (rs : Problem s) (f : s.FreeSym) :
     entry rs f = none ↔ ∀ r ∈ rs, ∀ xs, r.lhs ≠ .free f xs := by
   simp [entry,List.find?_eq_none,head_iff]
 

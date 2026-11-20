@@ -205,14 +205,23 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | --- | --- | --- |
 | Ordinary free/C/AC unification | Native-only has a complete fallback for declared arity-correct terms, including mixtures of several AC heads, free and commutative symbols, and kind-level inputs. Native-only validates Rust eliminations against the original equations before using them. | Extend end-to-end checks of the Rust representation and answer ordering before general deployment. |
 | Directional matching | The total matcher receives the original equations and bindable variable IDs. Subject variables stay rigid, including variables also present in the pattern. Native-only sorts the completed binding maps. | Ordered hybrid enumeration can still require Maude's first match. [Matcher contract](Tamarin/TotalMatchPacket.lean) |
-| Reduction | On certified definition tables every input receives a unique normal form. Other tables use checked rewriting at all positions, including proper AC subproducts. Strictly size-decreasing tables receive a proved depth bound. | Certify whole presentations containing destructor patterns and algebraic rules. The per-query path can defer after 100,000 work units or on competing normal forms. [Checked reduction](Tamarin/CheckedReduction.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
-| Variants | Certified definition tables have a complete family for every tuple. The general fallback checks a finite narrowing frontier, shared bindings and uniqueness under further specialization. | Prove finite variants for more whole presentations, including pairing and DH. The per-query frontier search can still defer. [Frontier checker](Tamarin/CheckedVariants.lean) · [Total reference](Tamarin/CompleteNarrowing.lean) |
+| Reduction | Certified constant definitions and constructor-pattern destructors give a unique normal form for every input. Other tables use checked rewriting at all positions, including proper AC subproducts. Strictly size-decreasing tables receive a proved depth bound. | Certify combinations of rule classes and algebraic tables such as DH. The per-query path can defer after 100,000 work units or on competing normal forms. [Checked reduction](Tamarin/CheckedReduction.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
+| Variants | Both certified classes have a finite complete family for every tuple. Destructor tables can use total folding narrowing when bounded search defers. | Prove finite variants for mixed tables and DH. Variant packets require representable witness IDs and images. Other tables can still defer. [Frontier checker](Tamarin/CheckedVariants.lean) · [Total reference](Tamarin/CompleteNarrowing.lean) |
 
 A table-wide certificate applies to every arity-correct input, including kind-level contexts. The
 first admitted class defines nullary free symbols by ground terms built from constructors. Multiple
 definitions of one symbol must agree modulo C/AC, every right side must preserve the declared sort,
 and every active rule must qualify. Rust can encode declared nullary symbols in rules. It still
 defers tables containing query-local literal names in rule buckets. [Class and normalizer](Tamarin/ConstantDefinitions.lean) · [Public regression](../crates/tamarin-term/tests/native_backend/checked_reduction.rs)
+
+For destructor tables, every left side has a defined free head over constructor patterns.
+All rules with the same head return a subterm at a common path through free constructors.
+Patterns can test repeated variables or contain C/AC constructors. This admits pairing projections
+and symmetric decryption. On an arity-correct but ill-sorted input the matcher still checks
+the sorts of rule variables. The finite-variant proof counts free applications with a reducible
+subterm, so even large irreducible substitution images contribute zero. Generic narrowing can
+emit redundant instances. [Table admission and reduction](Tamarin/DestructorTable.lean) ·
+[Uniform bound and variants](Tamarin/DestructorVariants.lean)
 
 The reusable canonicality proof takes termination, sort preservation and a join for every one-step
 fork. For finite variants, a sufficient condition is a decreasing rank with a bound on every

@@ -36,7 +36,7 @@ structure Correct (kernel : Kernel) : Prop where
   malformed : ∀ ds ns es root n, TableWire.input ds ns es #[root] = none → kernel ds ns es root n = #[#[0]]
   valid : ∀ ds ns es root n d t rs, TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩ →
     (∃ u, Decodes d (kernel ds ns es root n) u ∧ ReductionReply (ruleRoot rs) t u) ∨
-    (kernel ds ns es root n = #[#[2]] ∧ definitions rs = false ∧ (admitted rs t n = false ∨
+    (kernel ds ns es root n = #[#[2]] ∧ definitions rs = false ∧ destructors rs = false ∧ (admitted rs t n = false ∨
       CheckedReduction.run rs (fuel rs t n) t = none))
 
 theorem correct : Correct run where
@@ -49,17 +49,25 @@ theorem correct : Correct run where
       have reply := ConstantDefinitions.reductionReply cls sorts t
       exact .inl ⟨_,by simpa [run,h,cert] using decodes_emit h (ConstantDefinitions.bound cls) reply,reply⟩
     | false =>
-      cases hb : admitted rs t n with
-      | false => exact .inr ⟨by simp [run,h,cert,hb],rfl,.inl rfl⟩
+      cases proj : destructors rs with
       | true =>
-        have valid : (CheckedReduction.rangeBound rs ∧ TableDecrease.sorted rs) ∧ CheckedReduction.affordable rs (fuel rs t n) 100000 t := by
-          simpa only [admitted,Bool.and_eq_true] using hb
-        have bound := (CheckedReduction.rangeBound_iff _).mp valid.1.1
-        cases hc : CheckedReduction.run rs (fuel rs t n) t with
-        | none => exact .inr ⟨by simp [run,h,cert,hb,hc],rfl,.inr rfl⟩
-        | some u =>
-          have reply := CheckedReduction.correct bound hc
-          exact .inl ⟨u,by simpa [run,h,cert,hb,hc] using decodes_emit h bound reply,reply⟩
+        obtain ⟨ok,sorts⟩ := Bool.and_eq_true_iff.mp proj
+        have cls := (DestructorTable.accepts_iff rs).mp ok
+        have reply := DestructorTable.reductionReply cls cls.decreasing sorts t
+        exact .inl ⟨_,by simpa [run,h,cert,proj] using decodes_emit h (TableDecrease.bound cls.decreasing) reply,reply⟩
+      | false =>
+        cases hb : admitted rs t n with
+        | false => exact .inr ⟨by simp [run,h,cert,proj,hb],rfl,rfl,.inl rfl⟩
+        | true =>
+          have valid : (CheckedReduction.rangeBound rs ∧ TableDecrease.sorted rs) ∧ CheckedReduction.affordable rs (fuel rs t n) 100000 t := by
+            simpa only [admitted,Bool.and_eq_true] using hb
+          have bound := (CheckedReduction.rangeBound_iff _).mp valid.1.1
+          cases hc : CheckedReduction.run rs (fuel rs t n) t with
+          | none => exact .inr ⟨by simp [run,h,cert,proj,hb,hc],rfl,rfl,.inr rfl⟩
+          | some u =>
+            have reply := CheckedReduction.correct bound hc
+            exact .inl ⟨u,by simpa [run,h,cert,proj,hb,hc] using decodes_emit h bound reply,reply⟩
+
 
 /-- On node-decreasing canonical presentations the runtime fuel is already
 sufficient regardless of the fallback budget. -/

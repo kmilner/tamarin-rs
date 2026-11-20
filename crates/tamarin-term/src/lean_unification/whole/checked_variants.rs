@@ -8,7 +8,7 @@ use crate::maude_sig::MaudeSig;
 use crate::term::Term;
 use rustc_hash::FxHashSet;
 
-// The fallback checks closure at this depth before publishing any rows.
+// Per-query frontier budget. Certified destructor tables can continue to completion.
 const FRONTIER_DEPTH: u64 = 4;
 
 unsafe extern "C" {

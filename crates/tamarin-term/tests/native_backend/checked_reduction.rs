@@ -73,3 +73,42 @@ fn certified_constant_definition_expands_in_a_wide_kind_level_product() {
     assert_eq!((h.stats().norm_count, h.stats().var_count), (0, 0));
     h.check_backend_status().unwrap();
 }
+
+#[test]
+fn projection_tables_reduce_inside_wide_kind_level_contexts() {
+    use tamarin_term::builtin::{fst, pair, sdec, senc, snd};
+    use tamarin_term::maude_sig::sym_enc_maude_sig;
+
+    let sig = pair_maude_sig()
+        .merge(mset_maude_sig())
+        .merge(sym_enc_maude_sig());
+    let h =
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+    let node = Term::Lit(Lit::Var(LVar::new("outside", LSort::Node, 0)));
+    let a = pub_term("a");
+    let b = pub_term("b");
+    let encrypted = senc(fst(pair(a.clone(), b.clone())), b.clone());
+    let good = snd(pair(b.clone(), sdec(encrypted.clone(), b)));
+    // Each blocked redex has a matching head. One fails the sort check and
+    // the other fails the repeated-key constraint, even after its child reduces.
+    let stuck = fst(pair(a.clone(), node.clone()));
+    let wrong_key = pub_term("wrong_key");
+    let product = |item, rejected| {
+        let mut terms = vec![item; 32];
+        terms.extend([
+            stuck.clone(),
+            node.clone(),
+            sdec(rejected, wrong_key.clone()),
+        ]);
+        f_app_ac(AcSym::Union, terms)
+    };
+    let input = product(good, encrypted);
+    let expected = product(a.clone(), senc(a, pub_term("b")));
+    assert_eq!(h.reduce(&input).unwrap(), expected);
+    assert_eq!(h.stats().norm_count, 0);
+    if let Some(path) = tamarin_test_support::require_maude_path() {
+        let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+        assert_eq!(oracle.reduce(&input).unwrap(), expected);
+        assert_eq!(oracle.stats().norm_count, 1);
+    }
+}

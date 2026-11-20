@@ -1,5 +1,5 @@
 import Tamarin.CheckedReduction
-import Tamarin.ConstantDefinitions
+import Tamarin.DestructorTable
 import Tamarin.TableDecrease
 import Tamarin.TableWire
 
@@ -25,6 +25,9 @@ whose AC product is too wide for enumerating contextual rewrite successors. -/
 def definitions {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
     (rs : Problem s) : Bool := ConstantDefinitions.accepts rs && TableDecrease.sorted rs
 
+def destructors {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
+    (rs : Problem s) : Bool := DestructorTable.accepts rs && TableDecrease.sorted rs
+
 def emit {d : Dictionary} (u : Term d.sig) : Array (Array UInt64) :=
   match write u with
   | none => #[#[0]]
@@ -35,6 +38,7 @@ def run (ds : Array UInt64) (ns : Array (Array UInt64)) (pairs : Array UInt64) (
   match TableWire.input ds ns pairs #[root] with
   | some ⟨_,rs,[t]⟩ =>
     if definitions rs then emit (ConstantDefinitions.expand rs t) else
+    if destructors rs then emit (DestructorTable.fold rs t) else
     if !admitted rs t fallback then #[#[2]] else
     match CheckedReduction.run rs (fuel rs t fallback) t with
     | none => #[#[2]]

@@ -771,6 +771,10 @@ REDUCTION_RUN = "CheckedReductionWire.run decls nodes rules root fuel"
 EXPORT_MUTATIONS.extend([
     ("checked_reduce_ignores_rules", REDUCTION_RUN, "CheckedReductionWire.run decls nodes #[] root fuel",
      "theorem exportedCheckedReduce_correct"),
+    ("checked_reduce_defers_destructors", REDUCTION_RUN,
+     "(if (TableWire.input decls nodes rules #[root]).any (fun a => !a.2.1.isEmpty && CheckedReductionWire.destructors a.2.1) "
+     "then #[#[2]] else CheckedReductionWire.run decls nodes rules root fuel)",
+     "theorem exportedCheckedReduce_correct"),
     ("checked_reduce_always_defers", REDUCTION_RUN, "#[#[2]]", "theorem exportedCheckedReduce_correct"),
 ])
 
@@ -781,6 +785,10 @@ EXPORT_MUTATIONS.extend([
     ("variants_returns_incomplete_success", VARIANTS_RUN, "#[#[1]]", "theorem exportedCheckedVariants_correct"),
     ("variants_defers_zero_budget_definitions", VARIANTS_RUN,
      "if fuel == 0 then #[#[2]] else CheckedVariantsWire.run ds ns rules roots fuel",
+     "theorem exportedCheckedVariants_correct"),
+    ("variants_skips_certified_destructors", VARIANTS_RUN,
+     "(if (TableWire.input ds ns rules roots).any (fun a => !a.2.1.isEmpty && CheckedReductionWire.destructors a.2.1) "
+     "then #[#[2]] else CheckedVariantsWire.run ds ns rules roots fuel)",
      "theorem exportedCheckedVariants_correct"),
     ("variants_ignores_active_rules", VARIANTS_RUN, "CheckedVariantsWire.run ds ns #[] roots fuel",
      "theorem exportedCheckedVariants_correct"),

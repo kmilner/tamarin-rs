@@ -97,27 +97,56 @@ structure Correct (kernel : Kernel) : Prop where
     TableWire.input ds ns pairs roots = some ⟨d,rs,q⟩ →
       ConstantDefinitions.Presentation rs → (∀ r ∈ rs, HasSort r.rhs r.lhs.rootSort) →
       Decodes rs q (kernel ds ns pairs roots n)
+  destructors_complete : ∀ ds ns pairs roots n d rs q,
+    TableWire.input ds ns pairs roots = some ⟨d,rs,q⟩ →
+    ∀ (cls : DestructorTable.Presentation (TableAmbient.liftRules rs))
+      (sorted : TableDecrease.sorted (TableAmbient.liftRules rs)),
+      (TableAmbient.emit q (DestructorTable.variants cls cls.decreasing sorted (q.map TableAmbient.liftTerm)).val).isSome →
+      Decodes rs q (kernel ds ns pairs roots n)
   malformed : ∀ ds ns rs qs n, TableWire.input ds ns rs qs = none → kernel ds ns rs qs n = #[#[0]]
   valid : ∀ ds ns pairs roots n d rs q, TableWire.input ds ns pairs roots = some ⟨d,rs,q⟩ →
     Decodes rs q (kernel ds ns pairs roots n) ∨
       (kernel ds ns pairs roots n = #[#[2]] ∧ ¬ Required rs q n)
 
+private theorem encode_decodes {d : Dictionary} {rs : Problem d.sig} {q : List (Term d.sig)}
+    {family wire} (h : encode (rs := rs) q family = some wire) : Decodes rs q wire := by
+  cases family with
+  | none => contradiction
+  | some rows => exact ⟨_,TableAmbient.emit_correct h,rows.property⟩
+
+private theorem selected {ds ns pairs roots n d rs q} (h : TableWire.input ds ns pairs roots = some ⟨d,rs,q⟩)
+    (off : definitions rs = false) :
+    Decodes rs q (run ds ns pairs roots n) ∨
+      (run ds ns pairs roots n = #[#[2]] ∧ encode q (search rs q n) = none ∧ encode q (certifiedSearch rs q) = none) := by
+  simp only [run,h,off,Bool.false_eq_true,ite_false]
+  cases first : encode q (search rs q n) with
+  | some wire => exact .inl (encode_decodes first)
+  | none =>
+    cases second : encode q (certifiedSearch rs q) with
+    | some wire => exact .inl (by simpa [second] using encode_decodes second)
+    | none => exact .inr ⟨rfl,rfl,rfl⟩
+
 theorem correct : Correct run where
   definitions_complete := fun _ _ _ _ n _ rs _ h cls typed =>
     ⟨_,definitionAnswer n h (Bool.and_eq_true_iff.mpr
       ⟨(ConstantDefinitions.accepts_iff rs).mpr cls,(DefinitionCertificate.sorted_iff cls).mpr typed⟩)⟩
+  destructors_complete := by
+    intro ds ns es qs n d rs q h presentation sorted fits
+    have accepted := (DestructorTable.accepts_iff (TableAmbient.liftRules rs)).mpr presentation
+    cases cls : definitions rs with
+    | true => exact ⟨_,definitionAnswer n h cls⟩
+    | false =>
+      rcases selected (n := n) h cls with done | ⟨_,_,miss⟩
+      · exact done
+      · simp [encode,certifiedSearch,accepted,sorted] at miss
+        simp [miss] at fits
   malformed := by intros; simp_all [run]
   valid := by
     intro ds ns pairs roots n d rs q decoded
     by_cases cls : definitions rs
     · exact .inl ⟨_,definitionAnswer n decoded cls⟩
-    simp only [run,decoded,ite_eq_right cls]
-    cases h : search rs q n with
-    | none => exact .inr ⟨rfl,by simp [Required,h]⟩
-    | some rows =>
-      cases g : TableAmbient.emit q rows.val with
-      | some packet =>
-        exact .inl ⟨rows.val,by simpa [g] using TableAmbient.emit_correct g,rows.property⟩
-      | none => exact .inr ⟨by simp [g],by simp [Required,h,g]⟩
+    rcases selected (n := n) decoded (Bool.eq_false_iff.mpr cls) with done | ⟨stop,miss,_⟩
+    · exact .inl done
+    · exact .inr ⟨stop,fun ⟨rows,found,wire,encoded⟩ => by simp [encode,found,encoded] at miss⟩
 
 end Tamarin.CheckedVariantsWire
