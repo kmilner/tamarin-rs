@@ -33,7 +33,7 @@ private theorem le_sum (n : Nat) (ns : List Nat) (h : n ∈ ns) : n ≤ ns.sum :
     · simp
     · have := ih hm; simp only [List.sum_cons]; omega
 
-private theorem occurs_nodes (subst : Variable → Term sig) (v : Variable) (t : Term sig)
+theorem occurs_nodes (subst : Variable → Term sig) (v : Variable) (t : Term sig)
     (occurs : t.Occurs v) : nodes (subst v) ≤ nodes (t.subst subst) ∧
       (t ≠ .var v → nodes (subst v) < nodes (t.subst subst)) := by
   induction t with

@@ -9,7 +9,9 @@ Maude comparisons check compatibility and expose discrepancies. Where a concrete
 Maude missed a variant, native-only must retain that witness. A three-rule regression exercises
 both the reachable trace and the false universal lemma. [Theory](../crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy) · [Verdict test](../crates/tamarin-prover/tests/native_backend.rs)
 
-The main reference gaps are mixed free/C/AC unification and complete one-step narrowing.
+The Lean reference now computes a complete family for every ordinary free/C/AC unification query.
+All four reference operations are available together for signatures with an empty rewrite table.
+Complete one-step narrowing for active rewrite tables remains the main reference gap.
 Rust still uses partial native paths for all four commands.
 
 ## Run the experimental backend
@@ -169,8 +171,8 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 
 | Operation | Native coverage today | Remaining completeness work |
 | --- | --- | --- |
-| Free and C unification | Free factoring, binary C branching, identities and ground clashes. Residual steps check heads, operands, bindings, sorts and occurrences against the pending conjunction. | The mixed reference merges corresponding free arguments and branches on both C orientations when definitions compete. Connect the reference to Rust. |
-| Simultaneous AC unification | Shares operands across nested systems and combines independent groups with disjoint witnesses. Full enumeration supports bounded bases through 64 variables and some single-witness families through 65. Boolean decisions include rank at most two, width at most three, and larger systems with certificates or identical columns. | The reference combines whole per-symbol systems on shared slots and can reopen the input on a forced equality. Prove that every remaining residual can be closed or forces another equality. With that proof, sort assignment gives `VerifiedUnifier` for all arity-correct inputs. Connect the resulting solver to Rust. |
+| Free and C unification | Free factoring, binary C branching, identities and ground clashes. Residual steps check heads, operands, bindings, sorts and occurrences against the pending conjunction. | The mixed reference covers every free/C conjunction, including shared variables with AC operators. Connect its sorted answers to Rust. |
+| Simultaneous AC unification | Shares operands across nested systems and combines independent groups with disjoint witnesses. Full enumeration supports bounded bases through 64 variables and some single-witness families through 65. Boolean decisions include rank at most two, width at most three, and larger systems with certificates or identical columns. | The mixed reference implements `VerifiedUnifier` for all arity-correct conjunctions over any finite set of AC heads used in the query. Connect the total solver to Rust. |
 | Directional matching | Matches nested free/C/AC terms, including repeated or shared captures. Boolean queries use factor counts and full queries can page through the answer family. | The total Lean matcher handles all arity-correct conjunctions independently of unification. Connect that reference to Rust and establish first-match behavior on ambiguous queries. [Reference matcher](Tamarin/ReferenceMatching.lean) · [Alternative via unification](Tamarin/MatchViaUnification.lean) |
 | Reduction | Bounded graphs cover root and argument rewrites and proper AC subproducts. Other paths cover projected or erased arguments, independent factors, positional destructors, cancellation and DH powers and products. | Lean enumerates every live rewrite at every position, including proper AC subproducts. The driver is total for convergent sort-preserving tables. Connect its equation table and results to Rust, or prove the existing graph traversal equivalent. [Reference steps](Tamarin/ReferenceReduction.lean) · [Reduction driver](Tamarin/ReduceViaSteps.lean) |
 | Variants | Finite narrowing frontiers cover free/C/AC heads and proper subproducts. Shared input images survive child joins and free-root contraction. Overlap checks cover free paths and signed AC consequences. Specialized paths include cancellation, destructors, signed DH products, powers, scalar actions and pairing. | The general Lean driver terminates under the finite variant property given sound, complete one-step narrowing. Implement that local narrower over the active tables, establish their presentation properties and connect the driver to Rust. Verify decoding and observable ordering at the adapter. [Folding search](Tamarin/FoldingNarrowing.lean) · [Frontier checker](Tamarin/ReferenceVariantFrontier.lean) |
@@ -193,11 +195,16 @@ The solver then reruns the original equations with that equality. Each retry con
 of original subterms, so generated witnesses cannot trigger an unbounded chain of retries.
 The regression `Y = X + a, Y + b = X + Z` recovers `Z = a + b` with `X` free.
 
-CI requires a complete sorted family whenever every residual from the joint frontier has
-either a rigid head clash or definitions of each slot that agree under every valuation. The
-solver also completes cases by reopening. The remaining proof obligation is to exhaust the
-possible residual shapes. A residual that the reference can neither solve nor reopen causes
-the query to defer. [Mixed driver](Tamarin/MixedUnification.lean) · [Mandatory coverage theorem](TamarinCI.lean#L38) · [Executable cases](Tests/MixedUnification.lean)
+If that search leaves a residual open, a finite fallback enumerates partitions of the original
+slots. Every source solution induces one such partition by equality modulo B. Within it, each
+AC operator supplies one simultaneous solution. A singleton local witness reconnects to its
+original slot. Other witnesses stay private to their operator. The solver assembles the
+definitions and checks each candidate on the original equations. Partition counts can grow
+rapidly with the number of slots. [Partition proof](Tamarin/MixedSlotPartitions.lean) · [Combination proof](Tamarin/MixedCombination.lean)
+
+CI requires the public entry point to return a complete, sorted family with caller-fresh
+parameters for every input, including kind-level trees. An empty family proves that the
+conjunction has no sorted unifier. [Mixed driver](Tamarin/MixedUnification.lean) · [Mandatory coverage theorem](TamarinCI.lean#L25) · [Executable cases](Tests/MixedUnification.lean)
 
 [Sort refinement](Tamarin/UnifierSorts.lean) · [Maude sort assignment](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/unificationProblem.cc#L306-L442) · [Homogeneous reference](Tamarin/ACReference.lean) · [Source-level AC step](Tamarin/ACReferenceBranch.lean) · [Maude dependency cycle](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L173-L210) · [Reopening same-head bindings](https://github.com/maude-lang/Maude/blob/eee00f5b0bea3a7da2b9e9f5bf1e83ce3cd1fa9f/src/ACU_Theory/ACU_UnificationSubproblem2.cc#L277-L343) · [Residual search contract](Tamarin/ResidualSearch.lean)
 
@@ -219,7 +226,7 @@ must preserve all untouched slots and input images. Rejection leaves the query u
 This certificate checks individual concrete steps. The total reference follows Maude’s
 separate strategy of normalizing the seed and newly narrowed tuples before comparing variants.
 [Tuple closure proof](Tamarin/TupleNarrowingFrontier.lean) · [Certified checker](Tamarin/ReferenceVariantFrontier.lean) · [Maude expansion and reduction](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantSearch.cc#L397-L490)
-[Reference instances](Tamarin/MaudeOperationRefinements.lean) · [Pairing table correspondence](Tamarin/PairingRewriting.lean#L37) · [CI export theorem](TamarinCI.lean#L918)
+[Reference instances](Tamarin/MaudeOperationRefinements.lean) · [Pairing table correspondence](Tamarin/PairingRewriting.lean#L37) · [CI export theorem](TamarinCI.lean#L1034)
 
 **Termination of variant search.** A local narrower must prove that each branch replays one
 rewrite and that some branch covers every concrete step exposed by specializing a symbolic term.

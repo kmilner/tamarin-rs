@@ -1,4 +1,4 @@
-import Tamarin.MixedComponentEncoding
+import Tamarin.MixedTotal
 
 namespace Tamarin.MixedUnification
 variable {s : Signature} [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
@@ -47,48 +47,40 @@ private def drive (p : Problem s) (todo : List (SlotPair s)) : RigidBranches.Cer
 termination_by todo.length
 decreasing_by exact lt
 
-def solve? (p : Problem s) : Option (List (UnifierSorts.Template s)) :=
+/-- Reuse the directly reconstructible answers and the component search before
+enumerating source partitions. Every path returns a complete raw family. -/
+def solve (p : Problem s) : List (UnifierSorts.Template s) :=
   match reconstruct? p with
-  | some rows => some rows
-  | none => (drive p (pairs (inventory p))).val
+  | some rows => rows
+  | none =>
+    match (drive p (pairs (inventory p))).val with
+    | some rows => rows
+    | none => Total.solve p
+
+theorem complete (p : Problem s) : UnifierSorts.CompleteTemplates p (solve p) := by
+  unfold solve
+  split
+  next h => exact reconstruct_correct h
+  next =>
+    split
+    next h => exact (drive p _).property _ h
+    next => exact Total.correct p
+
+/-- The ordinary unification reference accepts every arity-correct input. -/
+def verified : VerifiedUnifier s (fun _ => True) := UnifierSorts.unifier solve complete
+
+/-- Compatibility entry point for callers of the formerly partial reference. -/
+def solve? (p : Problem s) : Option (List (UnifierSorts.Template s)) := some (solve p)
 
 theorem solve_correct {p : Problem s} {rows} (hr : solve? p = some rows) :
-    UnifierSorts.CompleteTemplates p rows := by
-  unfold solve? at hr
-  split at hr
-  next h => cases hr; exact reconstruct_correct h
-  next => exact (drive p _).property _ hr
+    UnifierSorts.CompleteTemplates p rows := Option.some.inj hr ▸ complete p
 
-theorem completes_singleDefinition (p : Problem s) (h : SingleDefinition (purify p).constraints) :
-    (solve? p).isSome := by
-  obtain ⟨rows,hr⟩ := Option.isSome_iff_exists.mp (reconstructs_singleDefinition p h)
-  simp [solve?,hr]
+theorem completes_singleDefinition (p : Problem s) (_h : SingleDefinition (purify p).constraints) :
+    (solve? p).isSome := rfl
 
-/-- Rigid branching followed by AC combination must return a family whenever
-each resulting component frontier closes by constructor agreement or clash. -/
 theorem completes_constructorFrontiers (p : Problem s)
-    (closed : ∀ c ∈ (RigidBranches.refineProblem p).val, ComponentEncoding.ConstructorFrontier c) :
-    (solve? p).isSome := by
-  unfold solve?
-  split
-  next => rfl
-  next =>
-    rw [drive]
-    apply RigidBranches.refineWith_completes
-    intro child hc
-    obtain ⟨stage,hr,empty⟩ := ComponentEncoding.branch_closed child (pairs (inventory p)) (closed child hc)
-    split
-    next h => rw [hr] at h; contradiction
-    next st eq =>
-      rw [hr] at eq; cases eq
-      dsimp only
-      split
-      next h =>
-        exfalso
-        apply Option.isSome_iff_ne_none.mp _ h
-        apply RigidBranches.collect_completes
-        simp [empty]
-      next => rfl
+    (_closed : ∀ c ∈ (RigidBranches.refineProblem p).val, ComponentEncoding.ConstructorFrontier c) :
+    (solve? p).isSome := rfl
 
 /-- Refine a complete raw answer with all admissible sorts and fresh caller names. -/
 def unify? (p : Problem s) (avoid : List Variable) : Option (List (Substitution s)) :=

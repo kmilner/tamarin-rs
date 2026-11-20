@@ -70,4 +70,20 @@ theorem range_fresh {f : sig.ACSym} {rows : List Row} {sorted avoid σ}
   obtain ⟨b,_,rfl⟩ := List.mem_map.mp returned
   exact b.range_fresh live occ
 
+/-- Images in a homogeneous answer are variables or products at the selected
+head. Other signatures can combine the answer using just this outer shape. -/
+theorem image_shape {f : sig.ACSym} {rows sorted avoid σ}
+    (returned : σ ∈ solve f rows sorted avoid) (v : Variable) :
+    (∃ w, σ.image v = .var w) ∨ ∃ a b, σ.image v = .ac f a b := by
+  obtain ⟨arm,_,rfl⟩ := List.mem_map.mp returned
+  change (∃ w, arm.image v = _) ∨ ∃ a b, arm.image v = _
+  unfold Branch.image
+  split
+  · split
+    · exact .inl ⟨_,rfl⟩
+    next w ws _ => cases ws with
+      | nil => exact .inl ⟨_,rfl⟩
+      | cons => exact .inr ⟨_,_,rfl⟩
+  · exact .inl ⟨_,rfl⟩
+
 end Tamarin.ACSystem.Reference

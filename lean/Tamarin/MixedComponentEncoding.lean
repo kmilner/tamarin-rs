@@ -14,23 +14,23 @@ abbrev uniform (s : Signature) : Signature := { s with
 private def number : SortId → Nat
   | .pub => 0 | .fresh => 1 | .msg => 2 | .node => 3 | .nat => 4
 
-private def original (v : Variable) : Variable :=
+def original (v : Variable) : Variable :=
   ⟨v.id / 5,match v.id % 5 with | 0 => .pub | 1 => .fresh | 2 => .msg | 3 => .node | _ => .nat⟩
 
-private def name (v : Variable) : Variable := ⟨v.id * 5 + number v.sort,.msg⟩
+def name (v : Variable) : Variable := ⟨v.id * 5 + number v.sort,.msg⟩
 
-private theorem original_name (v : Variable) : original (name v) = v := by
+theorem original_name (v : Variable) : original (name v) = v := by
   obtain ⟨i,k⟩ := v
   cases k <;> simp [original,name,number,Nat.add_mod] <;> omega
 
-private def encode : Term s → Term (uniform s)
+def encode : Term s → Term (uniform s)
   | .var v => .var (name v)
   | .atom a => .atom a
   | .free f args => .free f fun i => encode (args i)
   | .comm f a b => .comm f (encode a) (encode b)
   | .ac f a b => .ac f (encode a) (encode b)
 
-private theorem encode_sorted (t : Term s) : HasSort (encode t) .msg := by
+theorem encode_sorted (t : Term s) : HasSort (encode t) .msg := by
   induction t with
   | var => exact .var _
   | atom => exact .atom _
@@ -38,7 +38,7 @@ private theorem encode_sorted (t : Term s) : HasSort (encode t) .msg := by
   | comm f a b ha hb => exact .comm _ _ _ ha hb
   | ac f a b ha hb => exact .ac _ _ _ ha hb
 
-private theorem encode_equiv {a b : Term s} (h : EquivB a b) : EquivB (encode a) (encode b) := by
+theorem encode_equiv {a b : Term s} (h : EquivB a b) : EquivB (encode a) (encode b) := by
   induction h with
   | refl => exact .refl _
   | symm _ ih => exact ih.symm
@@ -50,14 +50,14 @@ private theorem encode_equiv {a b : Term s} (h : EquivB a b) : EquivB (encode a)
   | ac_swap => exact .ac_swap _ _ _
   | ac_assoc => exact .ac_assoc _ _ _ _
 
-private def read (vars : Variable → Term s) : Term (uniform s) → Term s
+def read (vars : Variable → Term s) : Term (uniform s) → Term s
   | .var v => vars v
   | .atom a => .atom a
   | .free f args => .free f fun i => read vars (args i)
   | .comm f a b => .comm f (read vars a) (read vars b)
   | .ac f a b => .ac f (read vars a) (read vars b)
 
-private theorem read_equiv (vars : Variable → Term s) {a b} (h : EquivB a b) :
+theorem read_equiv (vars : Variable → Term s) {a b} (h : EquivB a b) :
     EquivB (read vars a) (read vars b) := by
   induction h with
   | refl => exact .refl _
@@ -70,14 +70,14 @@ private theorem read_equiv (vars : Variable → Term s) {a b} (h : EquivB a b) :
   | ac_swap => exact .ac_swap _ _ _
   | ac_assoc => exact .ac_assoc _ _ _ _
 
-private theorem read_encode (t : Term s) : read (.var ∘ original) (encode t) = t := by
+theorem read_encode (t : Term s) : read (.var ∘ original) (encode t) = t := by
   induction t with
   | var v => simp [encode,read,original_name]
   | atom => rfl
   | free f xs ih => exact congrArg (Term.free f) (funext ih)
   | ac _ _ _ ih hj | comm _ _ _ ih hj => simp [encode,read,ih,hj]
 
-private theorem read_subst (vars : Variable → Term s) (δ : Substitution (uniform s)) (t) :
+theorem read_subst (vars : Variable → Term s) (δ : Substitution (uniform s)) (t) :
     read vars (δ.apply t) = (read Term.var t).subst (fun w => read vars (δ.image w)) := by
   induction t with
   | var | atom => rfl
@@ -93,7 +93,7 @@ private def equation (c : Constraint s) : Equation (uniform s) :=
     | .comm _ f i j => .comm f (.var (slot i)) (.var (slot j))
     | .ac _ f i j => .ac f (.var (slot i)) (.var (slot j))⟩
 
-private def reserve (obs : List Variable) (V : Nat → Term s) : Substitution (uniform s) where
+def reserve (obs : List Variable) (V : Nat → Term s) : Substitution (uniform s) where
   support := obs
   image v := if v ∈ obs ∧ v.sort = .msg then encode (V v.id) else .var v
   outside := by intro v hv; simp [hv]

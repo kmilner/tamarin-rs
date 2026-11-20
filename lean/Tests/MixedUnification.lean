@@ -122,11 +122,14 @@ private def orient : Problem sig := [⟨c (plus (x 0) a) (x 1),c (plus a b) (plu
 -- reservations survive the projection out of the internal one-sort search.
 private def nodeVar : T := .var ⟨99,.node⟩
 private def kindLevel : Problem sig := [⟨plus nodeVar (x 0),plus (x 1) nodeVar⟩]
-#guard (unify? kindLevel [v 100]).any fun answers => answers.any fun σ =>
+private def kindWitness (σ : Substitution sig) : Bool :=
   match σ.image (v 0), σ.image (v 1) with
   | .var u,.var w => u == w && u.sort == .msg && u != v 100 &&
     (match σ.image ⟨99,.node⟩ with | .var n => n.sort == .node | _ => false)
   | _,_ => false
+
+#guard (unify? kindLevel [v 100]).any (·.any kindWitness)
+#guard (UnifierSorts.solve kindLevel (Total.solve kindLevel) [v 100]).any kindWitness
 
 -- Y = X+a and Y+b = X+Z force Z = a+b for every value of X.
 private def sameHead : Problem sig :=
@@ -138,10 +141,10 @@ private def sameHead : Problem sig :=
 
 -- Compare direct evaluation of each ground assignment with membership in
 -- the returned sorted family. Joint matching shares each answer parameter.
-private def checkGround (p : Problem sig) :=
+private def checkGround (p : Problem sig) (rows : List (Substitution sig)) :=
   let bank := [a,b,.atom 4,plus a a,plus a b,plus b b,h a,times a b,
     plus a (h a),plus b (h a),plus a (times a b),plus b (times a b)]
-  (unify? p []).any fun rows => bank.all fun u => bank.all fun w =>
+  bank.all fun u => bank.all fun w =>
     let θ := fun i => if i = v 0 then u else if i = v 1 then w else Term.var i
     let solves := p.all fun e => ReferenceMatching.equal (e.lhs.subst θ) (e.rhs.subst θ)
     let covered := rows.any fun σ =>
@@ -149,7 +152,43 @@ private def checkGround (p : Problem sig) :=
       !(ReferenceMatching.solve test test.variables).isEmpty
     solves == covered
 
-#guard checkGround openAC
-#guard checkGround joint
+#guard (unify? openAC []).any (checkGround openAC)
+#guard (unify? joint []).any (checkGround joint)
+
+-- Exercise the partition solver directly so the earlier search cannot mask a
+-- missing identification, a spurious clash or loss of a shared witness.
+#guard (Total.solve openAC).any exactSwap && (Total.solve openAC).any sharesRemainder
+#guard checkGround openAC (UnifierSorts.solve openAC (Total.solve openAC) [])
+#guard checkGround joint (UnifierSorts.solve joint (Total.solve joint) [])
+#guard (Total.solve ([⟨x 0,h (x 0)⟩] : Problem sig)).isEmpty
+#guard (Total.solve ([⟨h (x 0),plus (x 1) a⟩] : Problem sig)).isEmpty
+#guard (Total.solve ([⟨c (x 0) (x 1),c a b⟩] : Problem sig)).any exactSwap &&
+  (Total.solve ([⟨c (x 0) (x 1),c a b⟩] : Problem sig)).any (fun θ =>
+    ReferenceMatching.equal (θ (v 0)) a && ReferenceMatching.equal (θ (v 1)) b)
+
+-- Each AC component needs its own free parameter even though the two local
+-- homogeneous solvers are free to start numbering their witnesses identically.
+private def independent : Problem sig := openAC ++ [⟨times (x 2) a,times (x 3) b⟩]
+private def remainderAt (op : T → T → T) (left right : T) (w : Variable) :=
+  ReferenceMatching.equal left (op b (.var w)) && ReferenceMatching.equal right (op a (.var w))
+
+private def twoRemainders (θ : UnifierSorts.Template sig) :=
+  (θ (v 0)).variables.any fun r => (θ (v 2)).variables.any fun u =>
+    r != u && remainderAt plus (θ (v 0)) (θ (v 1)) r && remainderAt times (θ (v 2)) (θ (v 3)) u
+
+-- The general family has distinct source slots. Exercise that partition
+-- directly so this check isolates the sharing of parameters across operators.
+#guard let system := purify independent
+  (Combination.candidates system.constraints).any fun valuation =>
+    twoRemainders (project system (valuation ∘ LocalAnswers.ref))
+
+-- Maude also enumerates all four combinations of exact and remainder arms.
+#guard let rows := solve independent
+  let exact2 := fun (θ : UnifierSorts.Template sig) =>
+    ReferenceMatching.equal (θ (v 2)) b && ReferenceMatching.equal (θ (v 3)) a
+  let shared2 := fun (θ : UnifierSorts.Template sig) =>
+    (θ (v 2)).variables.any (remainderAt times (θ (v 2)) (θ (v 3)))
+  rows.any twoRemainders && rows.any (fun θ => exactSwap θ && exact2 θ) &&
+    rows.any (fun θ => sharesRemainder θ && exact2 θ) && rows.any (fun θ => exactSwap θ && shared2 θ)
 
 end Tamarin.MixedUnificationTests

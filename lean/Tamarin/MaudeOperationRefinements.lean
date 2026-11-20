@@ -1,4 +1,5 @@
 import Tamarin.MaudeOperations
+import Tamarin.MixedUnification
 import Tamarin.VariantReconstruction
 import Tamarin.StableVariants
 import Tamarin.NarrowingFrontier
@@ -43,6 +44,16 @@ def emptyVariants (s : Signature) : VerifiedVariantGenerator (ruleRoot (sig := s
   correct q avoid := by
     simpa using stableTuple [] (by simp) q id
       (fun t _ => StableVariants.stableRepresentative (emptyStable t)) avoid
+
+/-- All four source operations for modules with free/C/AC declarations and
+an empty rewrite table. Ordinary unification has the same contract when a
+module also declares rewrite rules. -/
+def emptyReference (s : Signature) [DecidableEq s.FreeSym] [DecidableEq s.CSym]
+    [DecidableEq s.ACSym] [DecidableEq s.Atom] : Reference s [] where
+  unify := MixedUnification.verified
+  matchTerms := ReferenceMatching.matcher s
+  reduce := emptyReducer s
+  variants := emptyVariants s
 
 /-- The existing two-projection reference normalizer also meets the total
 reduction target for its abstract pairing relation. -/
