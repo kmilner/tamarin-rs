@@ -766,9 +766,15 @@ EXPORT_MUTATIONS.extend([
 ])
 
 EXECUTABLE = ("import Tamarin.CheckedReductionPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedCheckedReduce_correct") + "end Tamarin\n")
+              + obligation("exportedCheckedReduce_correct") + obligation("exportedGeneralReduce_correct") + "end Tamarin\n")
 REDUCTION_RUN = "CheckedReductionWire.run decls nodes rules root fuel"
 EXPORT_MUTATIONS.extend([
+    ("general_reduce_omits_table", "GeneralReductionWire.run ds ns rules root fuel",
+     "GeneralReductionWire.run ds ns #[] root fuel", "theorem exportedGeneralReduce_correct"),
+    ("general_reduce_always_retries", "GeneralReductionWire.run ds ns rules root fuel", "#[#[3]]",
+     "theorem exportedGeneralReduce_correct"),
+    ("general_reduce_always_declines", "GeneralReductionWire.run ds ns rules root fuel", "#[#[2]]",
+     "theorem exportedGeneralReduce_correct"),
     ("checked_reduce_ignores_rules", REDUCTION_RUN, "CheckedReductionWire.run decls nodes #[] root fuel",
      "theorem exportedCheckedReduce_correct"),
     ("checked_reduce_defers_destructors", REDUCTION_RUN,

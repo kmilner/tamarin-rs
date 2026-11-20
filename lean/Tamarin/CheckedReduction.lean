@@ -98,6 +98,119 @@ theorem chosen (n : Nat) (t u : Term s) (h : choose rs n t = some u) :
       have ⟨path,nf⟩ := ih a (by simpa [choose,hs] using h)
       exact ⟨.trans (.step (edge bound (by simp [hs] : a ∈ next rs t))) path,nf⟩
 
+/-- Two genuinely different, reachable normal forms of the original input. -/
+def Conflicting (rules : Problem s) (t : Term s) : Prop :=
+  ∃ a b, NormalForm (ruleRoot rules) t a ∧ NormalForm (ruleRoot rules) t b ∧ ¬ EquivB a b
+
+/-- Every rewrite path from this input has strictly fewer than the given
+number of genuine steps. This uses the semantic relation modulo C/AC. -/
+def Within (rules : Problem s) : Nat → Term s → Prop
+  | 0,_ => False
+  | n+1,t => ∀ u, StepModulo (ruleRoot rules) t u → Within rules n u
+
+/-- A finite stage must decide a bounded tree when every reachable irreducible
+endpoint preserves the sorts of its source. This condition is local to the query. -/
+def Settled (rules : Problem s) (depth : Nat) (t : Term s) : Prop :=
+  Within rules depth t ∧ ∀ u, Reduces (ruleRoot rules) t u → Normal (ruleRoot rules) u →
+    ∀ k, HasSort t k → HasSort u k
+
+private def differentLeaf (rules : Problem s) (source expected : Term s) : Nat → Term s → Bool
+  | 0,_ => false
+  | k+1,t => match next rules t with
+    | [] => sorts source t && !ReferenceMatching.equal expected t
+    | cs => cs.any (differentLeaf rules source expected k)
+
+/-- Only a second irreducible endpoint witnesses disagreement. Exhausting a
+branch, encountering a cycle, or rejecting a sort cannot establish it. -/
+def ambiguous (rules : Problem s) (fuel : Nat) (t : Term s) : Bool :=
+  match choose rules fuel t with
+  | none => false
+  | some v => sorts t v && differentLeaf rules t v fuel t
+
+private theorem differentLeaf_sound (source expected : Term s) (k : Nat) (t : Term s)
+    (hit : differentLeaf rs source expected k t) :
+    ∃ u, Reduces (ruleRoot rs) t u ∧ Normal (ruleRoot rs) u ∧
+      (∀ sort, HasSort source sort → HasSort u sort) ∧ ¬ EquivB expected u := by
+  induction k generalizing t with
+  | zero => contradiction
+  | succ k ih =>
+    cases children : next rs t with
+    | nil =>
+      obtain ⟨safe,diff⟩ := Bool.and_eq_true_iff.mp (by simpa [differentLeaf,children] using hit :
+        sorts source t && !ReferenceMatching.equal expected t)
+      exact ⟨t,.basis (.refl _),normal bound children,(sorts_iff ..).mp safe,
+        fun h => by simp [(ReferenceMatching.equal_iff ..).mpr h] at diff⟩
+    | cons a as =>
+      obtain ⟨c,mem,seen⟩ := List.any_eq_true.mp (by simpa only [differentLeaf,children] using hit :
+        (a :: as).any (differentLeaf rs source expected k))
+      obtain ⟨u,path,out⟩ := ih c seen
+      exact ⟨u,(Reduces.step (edge bound (children ▸ mem))).trans path,out⟩
+
+theorem ambiguous_sound (fuel : Nat) (t : Term s) (hit : ambiguous rs fuel t) : Conflicting rs t := by
+  cases branch : choose rs fuel t with
+  | none => simp [ambiguous,branch] at hit
+  | some v =>
+    obtain ⟨safe,diff⟩ := Bool.and_eq_true_iff.mp (by simpa only [ambiguous,branch] using hit :
+      sorts t v && differentLeaf rs t v fuel t)
+    obtain ⟨path,irreducible⟩ := chosen bound fuel t v branch
+    obtain ⟨u,reach,nf,sorts,ne⟩ := differentLeaf_sound bound t v fuel t diff
+    exact ⟨v,u,⟨path,irreducible,(sorts_iff ..).mp safe⟩,⟨reach,nf,sorts⟩,ne⟩
+
+private theorem chooses_of_within (n : Nat) (t : Term s) (tree : Within rs n t) :
+    ∃ u, choose rs n t = some u := by
+  induction n generalizing t with
+  | zero => contradiction
+  | succ n ih =>
+    cases children : next rs t with
+    | nil => exact ⟨t,by simp [choose,children]⟩
+    | cons a as =>
+      obtain ⟨u,h⟩ := ih a (tree a (edge bound (by simp [children] : a ∈ next rs t)))
+      exact ⟨u,by simp [choose,children,h]⟩
+
+private theorem compare_of_within (source expected : Term s)
+    (safe : ∀ u, Reduces (ruleRoot rs) source u → Normal (ruleRoot rs) u → ∀ k, HasSort source k → HasSort u k)
+    (n : Nat) (t : Term s) (tree : Within rs n t) (path : Reduces (ruleRoot rs) source t) :
+    agrees rs expected n t ∨ differentLeaf rs source expected n t := by
+  induction n generalizing t with
+  | zero => contradiction
+  | succ n ih =>
+    cases children : next rs t with
+    | nil =>
+      by_cases eq : EquivB t expected
+      · exact .inl (by simp [agrees,children,(ReferenceMatching.equal_iff ..).mpr eq])
+      · have diff : ReferenceMatching.equal expected t = false :=
+          Bool.eq_false_iff.mpr (fun h => eq (((ReferenceMatching.equal_iff ..).mp h).symm))
+        exact .inr (by simp [differentLeaf,children,(sorts_iff ..).mpr (safe t path (normal bound children)),diff])
+    | cons a as =>
+      by_cases all : (a :: as).all (agrees rs expected n)
+      · exact .inl (by simpa only [agrees,children] using all)
+      · obtain ⟨u,mem,bad⟩ := List.all_eq_false.mp (Bool.eq_false_iff.mpr all)
+        have st := edge bound (children ▸ mem)
+        have differs := (ih u (tree u st) (path.trans (.step st))).resolve_left bad
+        exact .inr (by simpa only [differentLeaf,children] using List.any_eq_true.mpr ⟨u,mem,differs⟩)
+
+theorem decides_settled {n : Nat} {t : Term s} (settled : Settled rs n t) :
+    (∃ u, run rs n t = some u) ∨ ambiguous rs n t := by
+  obtain ⟨tree,safe⟩ := settled
+  obtain ⟨v,h⟩ := chooses_of_within bound n t tree
+  obtain ⟨path,nf⟩ := chosen bound n t v h
+  have sorted := (sorts_iff ..).mpr (safe v path nf)
+  rcases compare_of_within bound t v safe n t tree (.basis (.refl _)) with same | diff
+  · exact .inl ⟨v,by simp [run,h,sorted,same]⟩
+  · exact .inr (by simp [ambiguous,h,sorted,diff])
+
+theorem settled_of_height (canonical : CanonicalPresentation (ruleRoot rs)) (n : Nat) (t : Term s)
+    (enough : ReductionHeight.height bound canonical.terminating t < n) : Settled rs n t := by
+  refine ⟨?_,fun _ path _ k ht => ?_⟩
+  · induction n generalizing t with
+    | zero => omega
+    | succ n ih =>
+      intro u st
+      exact ih u (by have := ReductionHeight.step bound canonical.terminating st; omega)
+  · exact RootNarrowing.reduction_invariant (fun u => HasSort u k)
+      (fun h e => Term.checkSort_sound _ _ ((SortClash.check_equiv e k) ▸ Term.checkSort_complete h))
+      (fun h st => canonical.sortPreserving st k h) path ht
+
 private theorem first {a b : Term s} (path : Reduces (ruleRoot rs) a b) :
     EquivB a b ∨ ∃ u ∈ next rs a, Reduces (ruleRoot rs) u b := by
   rcases RootNarrowing.firstStep path with same | ⟨u,step,tail⟩

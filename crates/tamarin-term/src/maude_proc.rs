@@ -429,13 +429,16 @@ fn maude_io_trace_config() -> &'static (bool, bool, String) {
 }
 
 impl MaudeProcessInner {
+    fn unsupported_native_operation(&self, operation: &'static str) -> MaudeError {
+        self.caches
+            .native_failure
+            .get_or_init(|| NativeFailure::Unsupported(operation))
+            .error()
+    }
+
     fn require_maude(&self, operation: &'static str) -> Result<(), MaudeError> {
         if self.backend == AlgebraBackend::NativeOnly {
-            let first = self
-                .caches
-                .native_failure
-                .get_or_init(|| NativeFailure::Unsupported(operation));
-            return Err(first.error());
+            return Err(self.unsupported_native_operation(operation));
         }
         Ok(())
     }
@@ -767,6 +770,11 @@ pub struct MaudeHandle {
     /// `maude_sig()` hands out a cheap refcount-bumped clone WITHOUT taking the
     /// IPC mutex or deep-cloning the `BTreeSet`s.
     sig: Arc<MaudeSig>,
+    /// Operators printed by this native-only session, derived from source declarations.
+    native_declarations: Option<Arc<crate::function_symbols::FunSig>>,
+    /// Run all four algebra operations through their general in-process references.
+    #[cfg(feature = "lean-unification")]
+    reference_algebra: bool,
     /// Opt in to folding under the presentation assumptions for variant requests.
     #[cfg(feature = "lean-unification")]
     reference_variants: bool,
@@ -919,9 +927,15 @@ impl MaudeHandle {
             // The global fresh counter starts at 0 (HS-faithful: HS's
             // `MonadFresh` global counter starts at 0).
             fresh_counter: Arc::new(AtomicU64::new(0)),
+            native_declarations: (backend == AlgebraBackend::NativeOnly)
+                .then(|| Arc::new(sig.declared_fun_syms())),
             sig,
             #[cfg(feature = "lean-unification")]
             native_rules: Default::default(),
+            #[cfg(feature = "lean-unification")]
+            reference_algebra: backend == AlgebraBackend::NativeOnly
+                && std::env::var_os("TAM_RS_NATIVE_REFERENCE").as_deref()
+                    == Some(std::ffi::OsStr::new("1")),
             #[cfg(feature = "lean-unification")]
             reference_variants: backend == AlgebraBackend::NativeOnly
                 && std::env::var_os("TAM_RS_NATIVE_REFERENCE_VARIANTS").as_deref()
@@ -1021,8 +1035,11 @@ impl MaudeHandle {
             child: self.child.clone(),
             fresh_counter: Arc::new(AtomicU64::new(avoid_max.saturating_add(1))),
             sig: Arc::clone(&self.sig),
+            native_declarations: self.native_declarations.clone(),
             #[cfg(feature = "lean-unification")]
             native_rules: Arc::clone(&self.native_rules),
+            #[cfg(feature = "lean-unification")]
+            reference_algebra: self.reference_algebra,
             #[cfg(feature = "lean-unification")]
             reference_variants: self.reference_variants,
         }
@@ -1040,8 +1057,11 @@ impl MaudeHandle {
             child: self.child.clone(),
             fresh_counter: Arc::new(AtomicU64::new(next)),
             sig: Arc::clone(&self.sig),
+            native_declarations: self.native_declarations.clone(),
             #[cfg(feature = "lean-unification")]
             native_rules: Arc::clone(&self.native_rules),
+            #[cfg(feature = "lean-unification")]
+            reference_algebra: self.reference_algebra,
             #[cfg(feature = "lean-unification")]
             reference_variants: self.reference_variants,
         }
@@ -1089,6 +1109,35 @@ impl MaudeHandle {
     /// `SharedMaudeCaches`).
     pub fn reduce(&self, t: &LNTerm) -> Result<LNTerm, MaudeError> {
         self.check_backend_status()?;
+        #[cfg(feature = "lean-unification")]
+        if self.reference_algebra {
+            return crate::lean_unification::reduction_for_convergent_theory(&self.sig, t)
+                .map_err(|error| self.lean_error(error))?
+                .ok_or_else(|| {
+                    self.inner
+                        .lock()
+                        .unsupported_native_operation("normalization")
+                });
+        }
+        // An identity fast path can only return a well-formed term in this module.
+        let canonical;
+        let t = if self.native_declarations.is_some() {
+            match self.command_term_is_canonical(t) {
+                Some(true) => t,
+                Some(false) => {
+                    canonical = crate::term::map_lits(t, &mut |lit| *lit);
+                    &canonical
+                }
+                None => {
+                    return Err(self
+                        .inner
+                        .lock()
+                        .unsupported_native_operation("normalization"))
+                }
+            }
+        } else {
+            t
+        };
         let mut ctx = ConvCtx::new();
         let reply = {
             let mut inner = cancellation::lock(&self.inner)?;
@@ -1219,35 +1268,11 @@ impl MaudeHandle {
         &self,
         eqs: &'a [Equal<LNTerm>],
     ) -> Result<std::borrow::Cow<'a, [Equal<LNTerm>]>, MaudeError> {
-        use crate::function_symbols::FunSym;
-        use crate::term::Term;
-        use std::borrow::Cow;
-        fn children<'a>(l: &'a LNTerm, r: &'a LNTerm) -> Option<(&'a [LNTerm], &'a [LNTerm])> {
-            match (l, r) {
-                (Term::App(FunSym::List, xs), Term::App(FunSym::List, ys))
-                    if xs.len() == ys.len() =>
-                {
-                    Some((xs, ys))
-                }
-                _ => None,
-            }
+        if self.backend == AlgebraBackend::NativeOnly {
+            crate::lean_unification::unpack_conjunction(eqs).map_err(Into::into)
+        } else {
+            Ok(std::borrow::Cow::Borrowed(eqs))
         }
-        if self.backend != AlgebraBackend::NativeOnly
-            || !eqs.iter().any(|e| children(&e.lhs, &e.rhs).is_some())
-        {
-            return Ok(Cow::Borrowed(eqs));
-        }
-        let mut pending: Vec<_> = eqs.iter().rev().map(|e| (&e.lhs, &e.rhs)).collect();
-        let mut rows = Vec::new();
-        while let Some((lhs, rhs)) = pending.pop() {
-            cancellation::check()?;
-            if let Some((xs, ys)) = children(lhs, rhs) {
-                pending.extend(xs.iter().zip(ys).rev());
-            } else {
-                rows.push(Equal::new(lhs.clone(), rhs.clone()));
-            }
-        }
-        Ok(Cow::Owned(rows))
     }
 
     /// Whether *any* unifier of `eqs` exists modulo the signature's AC/C
@@ -1263,10 +1288,16 @@ impl MaudeHandle {
         self.check_backend_status()?;
         #[cfg(feature = "lean-unification")]
         let eqs = &*self.unpack_unification(eqs)?;
+        #[cfg(feature = "lean-unification")]
+        if self.reference_algebra {
+            return Ok(!self.solve_original(eqs)?.is_empty());
+        }
         if eqs.is_empty() {
             return Ok(true);
         }
-        if eqs.iter().all(|eq| eq.lhs == eq.rhs) {
+        // Native-only must validate the declaration of every original root,
+        // including a reflexive term whose symbol is absent from this module.
+        if self.backend != AlgebraBackend::NativeOnly && eqs.iter().all(|eq| eq.lhs == eq.rhs) {
             return Ok(true);
         }
         #[cfg(feature = "lean-unification")]
@@ -1421,6 +1452,10 @@ impl MaudeHandle {
         self.check_backend_status()?;
         #[cfg(feature = "lean-unification")]
         let eqs = &*self.unpack_unification(eqs)?;
+        #[cfg(feature = "lean-unification")]
+        if self.reference_algebra && use_lean {
+            return self.solve_original(eqs);
+        }
         #[cfg(not(feature = "lean-unification"))]
         let _ = (use_lean, ordered);
         #[cfg(feature = "lean-unification")]
@@ -1858,12 +1893,23 @@ impl MaudeHandle {
         oriented: &[Equal<LNTerm>],
         bindable: impl Fn(&crate::lterm::LVar) -> bool,
     ) -> Result<Option<crate::lean_unification::Substitutions>, MaudeError> {
-        match crate::lean_unification::total_match(&self.sig, oriented, bindable)
+        match crate::lean_unification::match_modulo_attributes(&self.sig, oriented, bindable)
             .map_err(|e| self.lean_error(e))?
         {
             crate::lean_unification::Outcome::Complete(answers) => Ok(Some(answers)),
             crate::lean_unification::Outcome::Unsupported => Ok(None),
         }
+    }
+
+    #[cfg(feature = "lean-unification")]
+    fn reference_match(
+        &self,
+        oriented: &[Equal<LNTerm>],
+        bindable: impl Fn(&crate::lterm::LVar) -> bool,
+        operation: &'static str,
+    ) -> Result<crate::lean_unification::Substitutions, MaudeError> {
+        self.total_match(oriented, bindable)?
+            .ok_or_else(|| self.inner.lock().unsupported_native_operation(operation))
     }
 
     /// Match a sorted conjunction in-process. Callers supply explicit
@@ -2050,6 +2096,15 @@ impl MaudeHandle {
         Ok(answers)
     }
 
+    /// Source refinement consumes the first substitution, including identity
+    /// bindings. Use the same ordering as ordinary enumeration for this backend.
+    pub fn first_match_eqs(
+        &self,
+        eqs: &[Equal<LNTerm>],
+    ) -> Result<Option<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        Ok(self.match_eqs(eqs)?.into_iter().next())
+    }
+
     /// The experimental backend exposes the lexicographic order of complete
     /// binding maps in the caller's scope. This also removes repeat answers.
     fn order_native_alternatives(&self, answers: &mut Vec<Vec<(crate::lterm::LVar, LNTerm)>>) {
@@ -2063,6 +2118,7 @@ impl MaudeHandle {
     pub fn has_match_eqs(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
         #[cfg(feature = "lean-unification")]
         if self.backend == AlgebraBackend::NativeOnly
+            && !self.reference_algebra
             && !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
         {
             let may_be_bags = crate::lean_unification::RuleTable::may_be_ac_bag_match(eqs);
@@ -2102,6 +2158,47 @@ impl MaudeHandle {
         Ok(false)
     }
 
+    /// Validate arity and native module membership while checking C/AC child order.
+    fn command_term_is_canonical(&self, t: &LNTerm) -> Option<bool> {
+        use crate::function_symbols::FunSym;
+        use crate::{lterm::LSort, term::Term, vterm::Lit};
+        let (f, args) = match t {
+            Term::Lit(_) if self.native_declarations.is_none() || self.sig.enable_nat => {
+                return Some(true)
+            }
+            Term::Lit(lit) => {
+                let sort = match lit {
+                    Lit::Var(v) => v.sort,
+                    Lit::Con(n) => crate::maude_types::sort_of_name(n),
+                };
+                return (sort != LSort::Nat).then_some(true);
+            }
+            Term::App(f, args) => (f, args),
+        };
+        // Every module declares the administrative list/cons/nil operators at TOP.
+        if *f != FunSym::List
+            && self
+                .native_declarations
+                .as_ref()
+                .is_some_and(|symbols| !symbols.contains(f))
+        {
+            return None;
+        }
+        let mut sorted = match f {
+            FunSym::Ac(_) if args.len() >= 2 => {
+                args.is_sorted() && !args.iter().any(|a| matches!(a, Term::App(g, _) if g == f))
+            }
+            FunSym::C(_) if args.len() == 2 => args[0] <= args[1],
+            FunSym::NoEq(head) if args.len() == head.arity => true,
+            FunSym::List => true,
+            _ => return None,
+        };
+        for arg in args.iter() {
+            sorted &= self.command_term_is_canonical(arg)?;
+        }
+        Some(sorted)
+    }
+
     // With no bindable variables, matching reduces to equality modulo C and AC.
     // Smart constructors already produce the canonical representation. A library
     // caller can also supply valid raw trees with unsorted or nested AC children.
@@ -2110,29 +2207,12 @@ impl MaudeHandle {
         eqs: &[Equal<LNTerm>],
         operation: &'static str,
     ) -> Result<Option<bool>, MaudeError> {
-        fn canonical(t: &LNTerm) -> Option<bool> {
-            use crate::{function_symbols::FunSym, term::Term};
-            let Term::App(f, args) = t else {
-                return Some(true);
-            };
-            let mut sorted = match f {
-                FunSym::Ac(_) if args.len() >= 2 => {
-                    args.is_sorted() && !args.iter().any(|a| matches!(a, Term::App(g, _) if g == f))
-                }
-                FunSym::C(_) if args.len() == 2 => args[0] <= args[1],
-                FunSym::NoEq(head) if args.len() == head.arity => true,
-                FunSym::List => true,
-                _ => return None,
-            };
-            for arg in args.iter() {
-                sorted &= canonical(arg)?;
-            }
-            Some(sorted)
-        }
-
         let mut raw = false;
         for term in eqs.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]) {
-            let Some(already_sorted) = canonical(term) else {
+            let Some(already_sorted) = self.command_term_is_canonical(term) else {
+                if self.backend == AlgebraBackend::NativeOnly {
+                    return Ok(None);
+                }
                 // The wire encoder itself rebuilds through smart constructors.
                 // Empty or singleton AC nodes have no valid application to send.
                 self.inner.lock().require_maude(operation)?;
@@ -2165,6 +2245,16 @@ impl MaudeHandle {
         _ordered: bool,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         self.check_backend_status()?;
+        #[cfg(feature = "lean-unification")]
+        let orient = || {
+            eqs.iter()
+                .map(|eq| Equal::new(eq.rhs.clone(), eq.lhs.clone()))
+                .collect::<Vec<_>>()
+        };
+        #[cfg(feature = "lean-unification")]
+        if self.reference_algebra {
+            return self.reference_match(&orient(), |_| true, "matching");
+        }
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
@@ -2174,13 +2264,7 @@ impl MaudeHandle {
         }
         #[cfg(feature = "lean-unification")]
         if !rigid || self.allow_total_match(_ordered) {
-            let oriented: Vec<_> = eqs
-                .iter()
-                .map(|eq| Equal {
-                    lhs: eq.rhs.clone(),
-                    rhs: eq.lhs.clone(),
-                })
-                .collect();
+            let oriented = orient();
             if !rigid
                 && !self.needs_typed_matching(eqs)
                 && let Some(answers) = self.native_match(&oriented, _ordered)?
@@ -2253,6 +2337,16 @@ impl MaudeHandle {
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         self.check_backend_status()?;
         use crate::lterm::LVar;
+        #[cfg(feature = "lean-unification")]
+        if self.reference_algebra {
+            let mut answers = self.reference_match(
+                eqs,
+                |v| pattern_vars.contains(&(v.name, v.idx)),
+                "rigid-context matching",
+            )?;
+            self.order_native_alternatives(&mut answers);
+            return Ok(answers);
+        }
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
@@ -2380,7 +2474,7 @@ impl MaudeHandle {
         let mut inner = cancellation::lock(&self.inner)?;
         #[cfg(feature = "lean-unification")]
         if self.backend != AlgebraBackend::Maude {
-            let result = if self.reference_variants {
+            let result = if self.reference_algebra || self.reference_variants {
                 crate::lean_unification::variants_for_convergent_theory(&inner.sig, t).map(|rows| {
                     rows.map_or(
                         crate::lean_unification::Outcome::Unsupported,

@@ -2476,13 +2476,13 @@ fn prepare_source_match(
                     .into_iter()
                     .map(|(lhs, rhs)| tamarin_term::rewriting::Equal { lhs, rhs })
                     .collect::<Vec<_>>();
-                let mut matches = ctx.maude.match_eqs(&eqs).map_err(|error| {
+                let Some(first) = ctx.maude.first_match_eqs(&eqs).map_err(|error| {
                     crate::prove::ProveError::Maude(format!("source matching failed: {error}"))
-                })?;
-                if matches.is_empty() {
+                })?
+                else {
                     return Ok(None);
-                }
-                matches.swap_remove(0)
+                };
+                first
             }
         };
 

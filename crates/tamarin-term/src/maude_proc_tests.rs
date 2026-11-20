@@ -8,6 +8,49 @@ use crate::vterm::Lit;
 
 use tamarin_test_support::require_maude_path;
 
+#[cfg(feature = "lean-unification")]
+#[test]
+fn native_matching_and_reduction_check_declarations_before_returning_an_identity() {
+    let native = |reference| {
+        let mut h = MaudeHandle::start_with_backend(
+            "/nonexistent/maude",
+            pair_maude_sig(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        h.reference_algebra = reference;
+        h
+    };
+    let a = crate::lterm::pub_term("a");
+    let undeclared = crate::builtin::emap(a.clone(), a.clone());
+    let nat = crate::term::Term::Lit(Lit::Con(crate::lterm::Name::new(
+        crate::lterm::NameTag::Nat,
+        "n",
+    )));
+    // Each request starts a fresh session because unsupported errors are sticky.
+    for reference in [false, true] {
+        for term in [&undeclared, &nat] {
+            let query = [Equal::new(term.clone(), term.clone())];
+            for result in [
+                native(reference).reduce(term).map(|_| ()),
+                native(reference).match_eqs(&query).map(|_| ()),
+                native(reference).first_match_eqs(&query).map(|_| ()),
+                native(reference).has_match_eqs(&query).map(|_| ()),
+                native(reference)
+                    .match_eqs_skolemize_both(&query, &Default::default())
+                    .map(|_| ()),
+            ] {
+                assert!(matches!(result, Err(MaudeError::UnsupportedOperation(_))));
+            }
+        }
+    }
+
+    // Lists are declared at TOP, including pairs of different widths.
+    let packed = crate::term::f_app_list;
+    let query = [Equal::new(packed(vec![a]), packed(vec![]))];
+    assert!(!native(false).has_match_eqs(&query).unwrap());
+}
+
 #[test]
 fn maude_reply_witnesses_avoid_full_width_caller_indices() {
     use crate::maude_types::MaudeLit::{FreshVar, MaudeVar};

@@ -26,16 +26,99 @@ fn complete_table_reduction_certifies_the_whole_kind_level_context() {
     let new =
         |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
     let h = new(sig.clone().refresh());
-    assert_eq!(h.reduce(&input).unwrap(), sum(node, c));
+    let normal = sum(node, c);
+    assert_eq!(
+        tamarin_term::lean_unification::reduction_for_convergent_theory(&sig, &input).unwrap(),
+        Some(normal.clone())
+    );
+    assert_eq!(h.reduce(&input).unwrap(), normal);
     assert_eq!(h.stats().norm_count, 0);
 
     sig.st_rules.insert(rule(a));
+    assert_eq!(
+        tamarin_term::lean_unification::reduction_for_convergent_theory(&sig, &input).unwrap(),
+        None
+    );
     let ambiguous = new(sig.refresh());
     assert!(matches!(
         ambiguous.reduce(&input),
         Err(MaudeError::UnsupportedOperation("normalization"))
     ));
     assert_eq!(ambiguous.stats().norm_count, 0);
+}
+
+#[test]
+fn general_reduction_composes_a_user_equation_with_dh_exponent_cancellation() {
+    use tamarin_term::builtin::{exp, fresh_var, inv, msg_var};
+    use tamarin_term::lean_unification::reduction_for_convergent_theory;
+    use tamarin_term::maude_sig::dh_maude_sig;
+
+    let round_trip = NoEqSym::new(
+        b"roundtrip",
+        2,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let mut sig = dh_maude_sig();
+    sig.st_fun_syms.insert(round_trip);
+    let x = msg_var("x", 0);
+    let k = msg_var("k", 1);
+    sig.st_rules.insert(CtxtStRule::new(
+        f_app_no_eq(round_trip, vec![x.clone(), k.clone()]),
+        StRhs {
+            term: exp(exp(x, k.clone()), inv(k)),
+            positions: vec![],
+        },
+    ));
+    let sig = sig.refresh();
+    let original = fresh_var("shared", 41);
+    // The user rule, exponent tower, inverse cancellation and unit power
+    // take four rewrites. Certifying the endpoint requires a second stage.
+    let input = f_app_no_eq(round_trip, vec![original.clone(), pub_term("key")]);
+    assert_eq!(
+        reduction_for_convergent_theory(&sig, &input).unwrap(),
+        Some(original.clone())
+    );
+    if let Some(path) = tamarin_test_support::require_maude_path() {
+        let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+        assert_eq!(oracle.reduce(&input).unwrap(), original);
+        assert_eq!(oracle.stats().norm_count, 1);
+    }
+}
+
+#[test]
+fn full_table_checks_macro_expansion_at_the_term_boundary() {
+    use tamarin_term::builtin::{fst, pair};
+    use tamarin_term::lean_unification::{
+        reduction_for_convergent_theory, variants_for_convergent_theory,
+    };
+
+    let alias = NoEqSym::new(
+        b"project_after_expansion",
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let sig = pair_maude_sig().add_macro_sym(alias);
+    let value = pub_term("projected");
+    let expanded = fst(pair(value.clone(), pub_term("discarded")));
+    assert_eq!(
+        reduction_for_convergent_theory(&sig, &expanded).unwrap(),
+        Some(value)
+    );
+    assert_eq!(
+        variants_for_convergent_theory(&sig, &expanded).unwrap(),
+        Some(vec![vec![]])
+    );
+    let unexpanded = f_app_no_eq(alias, vec![pub_term("input")]);
+    assert_eq!(
+        reduction_for_convergent_theory(&sig, &unexpanded).unwrap(),
+        None
+    );
+    assert_eq!(
+        variants_for_convergent_theory(&sig, &unexpanded).unwrap(),
+        None
+    );
 }
 
 #[test]

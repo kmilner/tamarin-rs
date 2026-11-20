@@ -84,6 +84,9 @@ theorem exportedTotalMatch_ambient {ds ns es d p} (ids)
 theorem exportedCheckedReduce_correct : CheckedReductionWire.Correct Executable.checkedReduce :=
   CheckedReductionWire.correct
 
+theorem exportedGeneralReduce_correct : GeneralReductionWire.Correct Executable.generalReduce :=
+  GeneralReductionWire.correct
+
 theorem exportedCheckedVariants_correct : CheckedVariantsWire.Correct Executable.checkedVariants :=
   CheckedVariantsWire.correct
 
@@ -1361,6 +1364,7 @@ run_cmd do
     (``Tamarin.Executable.factorRefutes, `tamarin_factor_refutes),
     (``Tamarin.Executable.totalUnify, `tamarin_total_unify),
     (``Tamarin.Executable.totalMatch, `tamarin_total_match),
+    (``Tamarin.Executable.generalReduce, `tamarin_general_reduce),
     (``Tamarin.Executable.generalVariants, `tamarin_general_variants),
     (``Tamarin.Executable.checkedVariants, `tamarin_checked_variants),
     (``Tamarin.Executable.wholeUnify, `tamarin_whole_unify),

@@ -15,6 +15,18 @@ private def ns : Array (Array UInt64) := #[#[0,0,2],#[2,0,0],#[2,1],#[2,2]]
 #guard variants ds ns #[] #[9] 4 == #[#[0]]
 #guard variants ds ns #[] #[] 4 == #[#[1],#[]]
 
+-- The general reducer can distinguish an unfinished search, a witnessed fork
+-- with inequivalent normal forms, and branches that join one step later.
+private abbrev reduce := Executable.generalReduce
+#guard reduce ds ns #[1,2,1,3] 1 1 == #[#[3]]
+#guard reduce ds ns #[1,2,1,3] 1 2 == #[#[2]]
+#guard reduce ds ns #[1,2,1,3,3,2] 1 2 == #[#[3]]
+#guard reduce ds ns #[1,2,1,3,3,2] 1 3 == #[#[1],#[2,1,0]]
+#guard reduce ds ns #[1,2,1,3] 3 1 == #[#[1],#[2,2,0]]
+#guard reduce ds ns #[2,0] 2 4 == #[#[2]]
+#guard reduce ds ns #[2] 2 4 == #[#[0]]
+#guard reduce ds ns #[2,3,3,2] 2 10 == #[#[3]]
+
 -- b := c is admitted over all caller names. With zero search budget the
 -- original variable still has its full word-sized ID in the single answer.
 private def lastId := UInt64.ofNat (UInt64.size - 1)

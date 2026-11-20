@@ -384,6 +384,14 @@ void *tamarin_lean_checked_reduce(whole_word_slice decls, const whole_word_slice
                                            atom_array(rules.data, rules.size), root, fuel));
 }
 
+extern lean_object *tamarin_general_reduce(lean_object *, lean_object *, lean_object *, uint64_t, uint64_t);
+
+void *tamarin_lean_general_reduce(whole_word_slice decls, const whole_word_slice *rows,
+                                  size_t count, whole_word_slice rules, uint64_t root, uint64_t fuel) {
+    return wrap_rows(tamarin_general_reduce(atom_array(decls.data, decls.size), word_rows(rows, count),
+                        atom_array(rules.data, rules.size), root, fuel));
+}
+
 extern lean_object *tamarin_total_match(lean_object *, lean_object *, lean_object *, lean_object *);
 
 void *tamarin_lean_total_match(whole_word_slice decls, const whole_word_slice *rows,

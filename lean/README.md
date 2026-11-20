@@ -9,13 +9,13 @@ Maude comparisons check compatibility and expose discrepancies. Where a concrete
 Maude missed a variant, native-only must retain that witness. A three-rule regression exercises
 both the reachable trace and the false universal lemma. [Theory](../crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy) · [Verdict test](../crates/tamarin-prover/tests/native_backend.rs)
 
-Native-only has total ordinary unification and directional matching fallbacks for declared
-arity-correct free/C/AC terms. General reduction and variant search can also run in-process
-when Lean certifies the result on the active table. Both commands have a completion guarantee
-for tables of ground constructor definitions of constants. Other tables can still defer if
-per-query certificate search exhausts its budget. The total four-command reference applies to finite,
-range-restricted, canonical presentations with the finite variant property.
-[Active-table reference](Tamarin/CompleteNarrowing.lean)
+Native-only can select general Lean implementations for all four Maude commands.
+Unification and directional matching operate modulo the declared free/C/AC symbols.
+Reduction and variants operate on the combined user and builtin equation table. On
+a range-restricted canonical presentation, reduction reaches the unique normal form.
+Variant generation additionally requires the finite variant property. Both reference
+drivers retry unfinished stages while the budget and result fit the numeric interface.
+[Active-table reference](Tamarin/CompleteNarrowing.lean) · [Export contracts](TamarinCI.lean)
 
 ## Run the experimental backend
 
@@ -29,6 +29,18 @@ images.
 cargo build --release --features lean-unification
 target/release/tamarin-rs --algebra-backend=native-only --prove crates/tamarin-prover/tests/fixtures/native_shared_offset.spthy
 ```
+
+Set `TAM_RS_NATIVE_REFERENCE=1` with `--algebra-backend=native-only` to route ordinary
+unification, matching, reduction and variants directly to their references. This setting
+also applies to derived first-match and existence queries. The mixed user-equation
+acceptance theory exercises the in-process backend.
+[Theory](../crates/tamarin-prover/tests/fixtures/native_user_equations_pairing.spthy)
+
+Rust callers can also invoke the four references without a session through
+`unify_modulo_attributes`, `match_modulo_attributes`, `reduction_for_convergent_theory`
+and `variants_for_convergent_theory`. The matcher takes the pattern on the left,
+the subject on the right and an explicit predicate selecting bindable pattern variables.
+[Rust API](../crates/tamarin-term/src/lean_unification.rs)
 
 | Backend | Behavior |
 | --- | --- |
@@ -94,12 +106,13 @@ Changes to the semantic contract, wire format or acceptance harness need separat
 
 ## What crosses the Rust–Lean boundary
 
-For native-only ordinary unification, Rust first submits the original conjunction before factoring.
+For native-only ordinary unification, Rust first submits the original conjunction.
 It sends declarations for the symbols used in the query, a shared graph of numeric term rows, and
 pairs of equation roots. An equality between two equal-length packed lists becomes one
 conjunction over corresponding elements, including nested packs and repeated variables.
-The wrapper has Maude sort TOP. A packed-list image for an ordinary variable remains outside
-the native term format. One AC row holds references to all its children, including repeated
+The wrapper has Maude sort TOP. The general unifier and matcher can still decline pairs of
+unequal-width packs and queries requiring a packed-list image for a variable. One AC row holds
+references to all its children, including repeated
 occurrences. Lean checks arities, child sorts and backward references. The graph export decides
 identity and closed clashes. For homogeneous AC queries, Lean counts occurrences in those same
 equation roots and returns witness slots per variable per answer. Every reference to a shared
@@ -107,7 +120,8 @@ child contributes its full multiplicity. For residual worklist equations, Rust s
 of each operand occurrence and retains the corresponding terms locally. Lean validates and counts
 the IDs. Rust reconciles every returned arm with the original operands and pending equations
 before reporting a complete result.
-If the bounded paths defer, native-only sends the original equation roots to the total export.
+The reference switch sends these roots directly to the total export. The default native-only
+path tries the bounded solvers first and sends the original roots when they defer.
 Hybrid also uses it for existence queries. Ordered hybrid enumeration retains Maude as its
 fallback. The total export accepts arity-correct kind-level trees. It returns one numeric
 row per input variable per answer, with term constructors in postfix order. Rust checks
@@ -203,10 +217,17 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 
 | Operation | Native coverage today | Remaining completeness work |
 | --- | --- | --- |
-| Ordinary free/C/AC unification | Native-only has a complete fallback for declared arity-correct terms, including mixtures of several AC heads, free and commutative symbols, and kind-level inputs. Native-only validates Rust eliminations against the original equations before using them. | Extend end-to-end checks of the Rust representation and answer ordering before general deployment. |
-| Directional matching | The total matcher receives the original equations and bindable variable IDs. Subject variables stay rigid, including variables also present in the pattern. Native-only sorts the completed binding maps. | Ordered hybrid enumeration can still require Maude's first match. [Matcher contract](Tamarin/TotalMatchPacket.lean) |
-| Reduction | Certified constant definitions and constructor-pattern destructors give a unique normal form for every input. Other tables use checked rewriting at all positions, including proper AC subproducts. Strictly size-decreasing tables receive a proved depth bound. | Certify combinations of rule classes and algebraic tables such as DH. The per-query path can defer after 100,000 work units or on competing normal forms. [Checked reduction](Tamarin/CheckedReduction.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
-| Variants | The general folding reference computes a complete family under the presentation assumptions. The native-only command independently certifies individual frontiers and has table-wide guarantees for definitions and destructors. | Prove finite variants for mixed tables and DH. Variant packets require representable witness IDs and images. Other tables can still defer. [Frontier checker](Tamarin/CheckedVariants.lean) · [Total reference](Tamarin/CompleteNarrowing.lean) |
+| Ordinary free/C/AC unification | The reference switch sends both enumeration and existence queries straight to the complete solver. Nested packed equations share one substitution. The solver accepts mixtures of free, commutative and AC heads, including kind-level inputs. | Check Rust representation and observable answer ordering across the protocol corpus. [Solver contract](Tamarin/TotalUnifyPacket.lean) |
+| Directional matching | The reference switch uses the complete matcher for enumeration, existence and first-match queries, including caller-designated rigid variables. Native-only orders the restored binding maps before choosing a first answer. | Source refinement can observe which alternative comes first. Hybrid retains Maude's order where that choice is ambiguous. [Matcher contract](Tamarin/TotalMatchPacket.lean) |
+| Reduction | The general reducer certifies reachable, unique normal forms on the full table, including proper AC subproducts. A finite stage suffices for every term on a range-restricted canonical table. | The default native-only fallback retains its work budget. General decoding and numeric representation still constrain the Rust boundary. [Staged reducer](Tamarin/GeneralReductionWire.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
+| Variants | The general folding reference computes a complete family under the presentation assumptions. The default native-only path independently certifies individual frontiers and has table-wide guarantees for definitions and destructors. | Prove the finite variant property for mixed tables and DH. Variant packets require representable witness IDs and images. The default path can still defer. [Frontier checker](Tamarin/CheckedVariants.lean) · [Total reference](Tamarin/CompleteNarrowing.lean) |
+
+The general reduction contract states progress in terms of the rewrite relation. Once the
+stage covers every path from this input and all reachable normal endpoints preserve its
+sorts, it must return the unique normal form or report a conflict between inequivalent
+normal forms. This obligation applies even when other terms in the module have divergent
+rewrites. A replacement reducer may establish either outcome earlier.
+[Progress contract](Tamarin/CheckedReductionPacket.lean) · [Semantic depth bound](Tamarin/CheckedReduction.lean)
 
 A table-wide certificate applies to every arity-correct input, including kind-level contexts. The
 first admitted class defines nullary free symbols by ground terms built from constructors. Multiple
@@ -257,7 +278,7 @@ identity binding for reflexive kind-level sums. Independent unification componen
 own solver so a conjunction with few answers can finish without enumerating partitions across
 components. [Sort checks](Tamarin/NarrowingClash.lean) · [General packet regression](Tests/TotalUnifyPacket.lean) · [Public regressions](../crates/tamarin-term/tests/native_backend.rs)
 
-Native-only treats a Rust factoring failure as a proposed clash. Lean replays free
+The default native-only path treats a Rust factoring failure as a proposed clash. Lean replays free
 decomposition, sort checks, variable elimination, and occurs checks on the equations
 before factoring. A confirmed clash rules out solutions in the caller's full signature.
 An inconclusive replay leaves the original query available to the general solver.

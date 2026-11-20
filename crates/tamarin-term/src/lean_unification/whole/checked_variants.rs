@@ -62,12 +62,8 @@ pub fn variants_for_convergent_theory(
     sig: &MaudeSig,
     query: &LNTerm,
 ) -> Result<Option<Substitutions>, Error> {
-    if sig.enable_diff || !sig.macro_names.is_empty() || (sig.enable_bp && !sig.enable_dh) {
-        return Ok(None);
-    }
     let observations = observations(query);
-    let rules = sig.rrules();
-    let Some(packet) = Packet::with_rules(sig, observations, rules.iter())? else {
+    let Some(packet) = Packet::full_table(sig, observations)? else {
         return Ok(None);
     };
     match evaluate(&packet, sig, observations, Search::General)? {

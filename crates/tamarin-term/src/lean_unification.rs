@@ -11,8 +11,8 @@ mod commutative;
 mod components;
 mod whole;
 pub(crate) use commutative::solve as unify_structured;
-pub use whole::variants_for_convergent_theory;
-pub(crate) use whole::{total_match, total_unify};
+pub(crate) use whole::total_unify;
+pub use whole::{reduction_for_convergent_theory, variants_for_convergent_theory};
 mod constructor_variants;
 pub(crate) use constructor_variants::RuleTable;
 mod ac_bag_match;
@@ -37,6 +37,64 @@ use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
 use crate::term::{f_app_ac, Term};
 use crate::vterm::Lit;
+
+/// Run ordinary order-sorted unification modulo declared commutative and AC
+/// attributes on the original conjunction. Rewrite equations are ignored.
+/// All returned bindings in one arm share its fresh-variable scope.
+pub fn unify_modulo_attributes(
+    sig: &crate::maude_sig::MaudeSig,
+    equations: &[Equal<LNTerm>],
+) -> Result<Outcome, Error> {
+    let rows = unpack_conjunction(equations).map_err(|_| Error::Cancelled)?;
+    whole::total_unify(sig, &rows)
+}
+
+/// Match all patterns modulo the signature's declared commutative and AC attributes.
+/// Each row has its pattern on the left and its subject on the right. Only pattern
+/// variables selected by `bindable` may be assigned. Subject variables keep their
+/// original identities, including when they also occur in the pattern.
+///
+/// An answer contains a binding for every selected pattern variable, including
+/// identity bindings. The family can contain duplicates and its order is unspecified.
+pub fn match_modulo_attributes(
+    sig: &crate::maude_sig::MaudeSig,
+    patterns_and_subjects: &[Equal<LNTerm>],
+    bindable: impl Fn(&LVar) -> bool,
+) -> Result<Outcome, Error> {
+    let rows = unpack_conjunction(patterns_and_subjects).map_err(|_| Error::Cancelled)?;
+    whole::total_match(sig, &rows, bindable)
+}
+
+/// Maude uses list(cons(..., nil)) at sort TOP. Each equal-width pair of
+/// wrappers introduces the corresponding operand equalities under one substitution.
+pub(crate) fn unpack_conjunction(
+    eqs: &[Equal<LNTerm>],
+) -> Result<std::borrow::Cow<'_, [Equal<LNTerm>]>, tamarin_utils::cancellation::Cancelled> {
+    use std::borrow::Cow;
+
+    fn children<'a>(l: &'a LNTerm, r: &'a LNTerm) -> Option<(&'a [LNTerm], &'a [LNTerm])> {
+        match (l, r) {
+            (Term::App(FunSym::List, xs), Term::App(FunSym::List, ys)) if xs.len() == ys.len() => {
+                Some((xs, ys))
+            }
+            _ => None,
+        }
+    }
+    if !eqs.iter().any(|e| children(&e.lhs, &e.rhs).is_some()) {
+        return Ok(Cow::Borrowed(eqs));
+    }
+    let mut pending: Vec<_> = eqs.iter().rev().map(|e| (&e.lhs, &e.rhs)).collect();
+    let mut rows = Vec::new();
+    while let Some((lhs, rhs)) = pending.pop() {
+        tamarin_utils::cancellation::check()?;
+        if let Some((xs, ys)) = children(lhs, rhs) {
+            pending.extend(xs.iter().zip(ys).rev());
+        } else {
+            rows.push(Equal::new(lhs.clone(), rhs.clone()));
+        }
+    }
+    Ok(Cow::Owned(rows))
+}
 
 /// Ordinary substitutions, before the caller converts them to `SubstVFresh`.
 pub type Substitutions = Vec<Vec<(LVar, LNTerm)>>;

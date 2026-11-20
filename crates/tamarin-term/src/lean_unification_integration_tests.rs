@@ -7946,3 +7946,97 @@ mod bounded_match {
         assert_eq!(h.stats().match_count, 0);
     }
 }
+
+#[test]
+fn reference_unification_preserves_joint_orientations_and_aliases() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::{emap, fst, pair};
+    use crate::lean_unification::{unify_modulo_attributes, Outcome};
+    use crate::maude_sig::{bp_maude_sig, pair_maude_sig};
+    use crate::subst_vfresh::LNSubstVFresh;
+    use crate::term::f_app_list;
+
+    let sig = bp_maude_sig()
+        .merge(mset_maude_sig())
+        .merge(pair_maude_sig());
+    let mut handle =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    handle.reference_algebra = true;
+    let [x, y, z, w] = ["x", "y", "z", "w"].map(|s| LVar::new(s, LSort::Msg, 0));
+    let v = |var| Term::Lit(Lit::Var(var));
+    let ac = |l, r| f_app_ac(AcSym::Union, vec![l, r]);
+    let (a, b) = (pub_term("a"), pub_term("b"));
+    let packed = |map, sum, nested| f_app_list(vec![map, f_app_list(vec![sum, nested])]);
+    let lhs = packed(emap(v(x), v(y)), ac(v(x), v(y)), pair(v(z), v(w)));
+    let rhs = packed(
+        emap(a.clone(), b.clone()),
+        ac(b.clone(), a.clone()),
+        pair(v(w), v(z)),
+    );
+    let mut eqs = vec![Equal::new(lhs, rhs)];
+    let Outcome::Complete(reference) = unify_modulo_attributes(&sig, &eqs).unwrap() else {
+        panic!("declared mixed conjunction was rejected")
+    };
+    assert_eq!(handle.unify(&eqs).unwrap(), reference);
+    assert!(handle.unifiable(&eqs).unwrap());
+    let mut general = [false; 2];
+    for arm in reference {
+        let subst = LNSubstVFresh::from_list(arm);
+        let (left, right) = (subst.image_of(&x).unwrap(), subst.image_of(&y).unwrap());
+        let orientation = if (left, right) == (&a, &b) {
+            0
+        } else {
+            assert_eq!((left, right), (&b, &a));
+            1
+        };
+        let image = subst.image_of(&z).unwrap();
+        assert_eq!(Some(image), subst.image_of(&w));
+        let Term::Lit(Lit::Var(witness)) = image else {
+            panic!("alias was grounded")
+        };
+        assert_ne!(witness.idx, x.idx);
+        general[orientation] |= witness.sort == LSort::Msg;
+    }
+    assert_eq!(general, [true, true]);
+    // Ordinary unification uses only C/AC attributes even though this signature
+    // contains the active reduction fst(pair(a,b)) -> a.
+    eqs.push(Equal::new(fst(pair(a.clone(), b)), a));
+    assert!(handle.unify(&eqs).unwrap().is_empty());
+    assert!(!handle.unifiable(&eqs).unwrap());
+    assert_eq!(handle.stats().unify_count, 0);
+    assert_eq!(handle.stats().lean_unify_count, 4);
+    handle.check_backend_status().unwrap();
+}
+
+#[test]
+fn reference_unifiability_validates_even_reflexive_roots() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::hash;
+    use crate::lean_unification::{unify_modulo_attributes, Outcome};
+    use crate::maude_proc::MaudeError;
+    use crate::maude_sig::MaudeSig;
+
+    let sig = MaudeSig::default();
+    let term = hash(pub_term("a"));
+    let eqs = [Equal::new(term.clone(), term)];
+    assert_eq!(
+        unify_modulo_attributes(&sig, &eqs).unwrap(),
+        Outcome::Unsupported
+    );
+    for reference in [false, true] {
+        let mut handle = MaudeHandle::start_with_backend(
+            "/nonexistent",
+            sig.clone(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        handle.reference_algebra = reference;
+        assert!(matches!(
+            handle.unifiable(&eqs),
+            Err(MaudeError::UnsupportedOperation(_))
+        ));
+        assert!(handle.check_backend_status().is_err());
+        assert_eq!(handle.stats().unify_count, 0);
+    }
+}

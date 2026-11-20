@@ -40,6 +40,7 @@ impl Fixture {
             .arg("--processors=2")
             .arg("--maude-processes=4")
             .env("PATH", "")
+            .env_remove("TAM_RS_NATIVE_REFERENCE")
             .env_remove("TAM_RS_NATIVE_REFERENCE_VARIANTS")
             .env_remove("TAM_RS_NO_LEAN_UNIFY")
             .env_remove("TAM_RS_VERIFY_LEAN_UNIFY")
@@ -74,10 +75,11 @@ const SIMPLE: &str = include_str!("fixtures/native_pairing.spthy");
 #[test]
 fn user_equation_chain_and_pairing_prove_both_traces_without_maude() {
     let fixture = Fixture::new(include_str!("fixtures/native_user_equations_pairing.spthy"));
-    for mode in ["0", "1"] {
+    for (reference, variants) in [("0", "0"), ("0", "1"), ("1", "0")] {
         let output = fixture
             .command()
-            .env("TAM_RS_NATIVE_REFERENCE_VARIANTS", mode)
+            .env("TAM_RS_NATIVE_REFERENCE", reference)
+            .env("TAM_RS_NATIVE_REFERENCE_VARIANTS", variants)
             .arg("--prove")
             .arg(fixture.dir.join("input.spthy"))
             .output()

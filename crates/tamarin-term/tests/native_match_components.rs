@@ -159,3 +159,79 @@ fn component_witnesses_do_not_require_enumerating_the_product() {
     // Sixteen independent commutative orientations have 65,536 full arms.
     assert!(native().has_match_eqs(&rows).unwrap());
 }
+
+#[test]
+fn first_match_agrees_with_maude_on_shared_identities_and_ambiguous_orientations() {
+    let Some(path) = tamarin_test_support::require_maude_path() else {
+        return;
+    };
+    let sig = bp_maude_sig();
+    let oracle =
+        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
+    let hybrid = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Hybrid).unwrap();
+    let native = native();
+    let [x, y, p, _] = keys();
+    let i = LVar::new("i", LSort::Node, 0);
+    let orient = eq(emap(v(y), v(p)), emap(v(x), v(y)));
+    let mut rows = vec![orient.clone(), eq(v(y), v(x)), eq(v(i), v(i))];
+    let mut expected = vec![(x, v(y)), (y, v(p)), (i, v(i))];
+    expected.sort();
+    assert_eq!(oracle.match_eqs(&rows).unwrap(), vec![expected.clone()]);
+    assert_eq!(
+        hybrid.first_match_eqs(&rows).unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(native.first_match_eqs(&rows).unwrap(), Some(expected));
+    rows.push(eq(v(p), v(x)));
+    assert!(oracle.match_eqs(&rows).unwrap().is_empty());
+    assert_eq!(hybrid.first_match_eqs(&rows).unwrap(), None);
+    assert_eq!(native.first_match_eqs(&rows).unwrap(), None);
+
+    let ambiguous = [orient];
+    let alternatives = oracle.match_eqs(&ambiguous).unwrap();
+    assert_eq!(alternatives.len(), 2);
+    assert_eq!(
+        hybrid.first_match_eqs(&ambiguous).unwrap().as_ref(),
+        alternatives.first()
+    );
+    assert_eq!(
+        native.first_match_eqs(&ambiguous).unwrap().as_ref(),
+        alternatives.iter().min()
+    );
+}
+
+#[test]
+fn nested_conjunctions_share_captures_and_preserve_the_scoped_rigid_variable() {
+    use tamarin_term::lean_unification::{match_modulo_attributes, Outcome};
+    use tamarin_term::term::f_app_list;
+    let [x, y, p, _] = keys();
+    let subject = f_app_list(vec![f_app_list(vec![v(y), v(p)]), v(y)]);
+    let pattern = f_app_list(vec![f_app_list(vec![v(x), v(p)]), v(x)]);
+    let native = native();
+    let empty = f_app_list(vec![]);
+    assert_eq!(
+        native.first_match_eqs(&[eq(empty.clone(), empty)]).unwrap(),
+        Some(vec![])
+    );
+    let rows = [eq(subject.clone(), pattern.clone())];
+    assert!(native.has_match_eqs(&rows).unwrap());
+    let mut expected = vec![(x, v(y)), (p, v(p))];
+    expected.sort();
+    assert_eq!(native.match_eqs(&rows).unwrap(), vec![expected]);
+    let scope = [(x.name, x.idx)].into_iter().collect();
+    let scoped = [eq(pattern.clone(), subject.clone())];
+    let expected = vec![vec![(x, v(y))]];
+    assert_eq!(
+        match_modulo_attributes(&native.maude_sig(), &scoped, |key| *key == x).unwrap(),
+        Outcome::Complete(expected.clone())
+    );
+    assert_eq!(
+        native.match_eqs_skolemize_both(&scoped, &scope).unwrap(),
+        expected
+    );
+    let conflict = [eq(
+        f_app_list(vec![f_app_list(vec![v(y), v(p)]), v(p)]),
+        pattern,
+    )];
+    assert!(!native.has_match_eqs(&conflict).unwrap());
+}

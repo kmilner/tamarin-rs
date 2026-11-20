@@ -81,7 +81,6 @@ fn size_refutation_requires_every_conjunct_to_be_declared_and_sorted() {
     for malformed in [
         Term::App(FunSym::Ac(AcSym::Union), vec![].into()),
         Term::App(FunSym::Ac(AcSym::NatPlus), vec![atom.clone(); 2].into()),
-        pair(var_term(LVar::new("n", LSort::Node, 7)), atom.clone()),
     ] {
         let eqs = [
             forward(large_guard(leaf.clone(), 16_385), atom.clone()),
@@ -96,6 +95,19 @@ fn size_refutation_requires_every_conjunct_to_be_declared_and_sorted() {
             Err(MaudeError::UnsupportedOperation(_))
         ));
     }
+    // A Node inside a declared Msg constructor gives a kind-level term.
+    // The total matcher still decides the original conjunction even when
+    // the sorted size shortcut declines it.
+    let kind = pair(var_term(LVar::new("n", LSort::Node, 7)), atom.clone());
+    let eqs = [
+        forward(large_guard(leaf, 16_385), atom),
+        forward(var_term(x), kind),
+    ];
+    assert!(handle().match_eqs(&ordinary(&eqs)).unwrap().is_empty());
+    assert!(handle()
+        .match_eqs_skolemize_both(&eqs, &vars)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]

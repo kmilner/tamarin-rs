@@ -4,6 +4,7 @@
 mod checked_variants;
 pub use checked_variants::variants_for_convergent_theory;
 mod reduction;
+pub use reduction::reduction_for_convergent_theory;
 mod total;
 pub(crate) use total::{matches as total_match, unify as total_unify};
 
