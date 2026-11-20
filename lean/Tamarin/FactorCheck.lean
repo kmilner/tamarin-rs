@@ -88,6 +88,30 @@ private theorem map_eq_zip {xs ys : List Tree} (h : xs.length = ys.length) :
       simp only [List.length_cons, Nat.succ.injEq] at h
       simp [Solves, ih h]
 
+/-- Maude transports a tuple as a list wrapper around a right-nested
+cons spine. Injectivity of its free heads suffices for equal-length tuples,
+regardless of the sorts or operators occurring in the coordinates. -/
+def packedSpine (consId nilId : UInt64) : List Tree → Tree
+  | [] => .app 2 nilId []
+  | x :: xs => .app 2 consId [x, packedSpine consId nilId xs]
+
+theorem packed_iff (listId consId nilId : UInt64) {xs ys : List Tree}
+    (width : xs.length = ys.length) :
+    m.eval (.app 2 listId [packedSpine consId nilId xs]) =
+      m.eval (.app 2 listId [packedSpine consId nilId ys]) ↔ m.Solves (xs.zip ys) := by
+  have spine : m.eval (packedSpine consId nilId xs) = m.eval (packedSpine consId nilId ys) ↔
+      xs.map m.eval = ys.map m.eval := by
+    induction xs generalizing ys with
+    | nil => cases ys <;> simp_all
+    | cons x xs ih =>
+      cases ys with
+      | nil => simp at width
+      | cons y ys =>
+        simp only [List.length_cons, Nat.succ.injEq] at width
+        simp [packedSpine,eval,evalArgs,(m.free_inj consId).eq_iff,ih width]
+  simpa only [eval,evalArgs,(m.free_inj listId).eq_iff,List.cons.injEq,and_true] using
+    spine.trans (m.map_eq_zip width)
+
 theorem expose_iff (fuel : Nat) (a b : Tree) :
     m.Solves (expose fuel a b) ↔ m.eval a = m.eval b := by
   induction fuel generalizing a b with

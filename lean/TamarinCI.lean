@@ -646,6 +646,35 @@ theorem exportedCheckFactors_chain : FactorAdmission.ChainRequired Executable.ch
 theorem exportedCheckFactors_required : FactorAdmission.Required Executable.checkFactors :=
   FactorAdmission.run_required
 
+/-- A checked factor followed by any complete residual solver covers every
+solution of the original equations, provided residual witnesses avoid the
+variables still visible through the factor. -/
+theorem exportedCheckFactors_lift {s : Signature} (g : FactoredAC.Input s)
+    {p q : Problem s} {θ : Substitution s} {arms : List (Substitution s)} {reserved : List Variable}
+    (layout : g.Represents p θ q)
+    (hit : Executable.checkFactors g.decls g.nodes g.original g.bindings g.residual = true)
+    (answers : (Outcome.complete arms).CorrectIn q reserved)
+    (kept : FactoredUnification.Protected p q θ reserved) :
+    CompleteSet p (arms.map fun σ => σ.compose θ) := by
+  obtain ⟨_, _, _, fact⟩ := g.checked_factor exportedCheckFactors_correct layout hit
+  exact FactoredUnification.lift_complete fact answers kept
+
+/-- With no residual equations, the proposed substitution alone is a complete
+family. Every original solution instantiates it on all query variables. -/
+theorem exportedCheckFactors_solved {s : Signature} (g : FactoredAC.Input s)
+    {p : Problem s} {θ : Substitution s} (layout : g.Represents p θ [])
+    (hit : Executable.checkFactors g.decls g.nodes g.original g.bindings g.residual = true) :
+    CompleteSet p [θ] := by
+  obtain ⟨_, _, _, fact⟩ := g.checked_factor exportedCheckFactors_correct layout hit
+  constructor
+  · intro σ hσ
+    obtain rfl := List.mem_singleton.mp hσ
+    intro e he
+    simpa only [Substitution.apply_compose, Substitution.apply_identity] using
+      fact.forward .identity (by simp [Problem.Solves]) e he
+  · intro ρ sol
+    exact ⟨θ, List.mem_singleton_self _, ρ, fact.stable ρ sol⟩
+
 /-- Certify the actual request-wide export for every caller freshness scope. -/
 theorem exportedWholeUnify_correct : WholeProblem.Correct Executable.wholeUnify :=
   MixedSizeWhole.correct

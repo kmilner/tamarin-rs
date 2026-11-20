@@ -732,6 +732,9 @@ EXECUTABLE = ("import Tamarin.FactorAdmission\n" + EXECUTABLE
 FACTOR_RUN = "  FactorCheck.run decls nodes original bindings residual"
 EXPORT_MUTATIONS.extend([
     ("factor_accepts_unchecked_original", FACTOR_RUN, "  true", "theorem exportedCheckFactors_correct"),
+    ("factor_uses_proposal_as_original", FACTOR_RUN,
+     "  FactorCheck.run decls nodes (bindings ++ residual) bindings residual",
+     "theorem exportedCheckFactors_correct"),
     ("factor_drops_residual_tail", FACTOR_RUN,
      "  FactorCheck.run decls nodes original bindings (residual.extract 0 2)",
      "theorem exportedCheckFactors_correct"),

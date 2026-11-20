@@ -203,6 +203,9 @@ pub(crate) fn solve(
             if let Some((extra, residual)) =
                 unify_lterm_factored(&crate::maude_types::sort_of_name, next.clone())
             {
+                if !table.accepts_factor(&next, &extra, &residual)? {
+                    return Ok(Outcome::Unsupported);
+                }
                 work.push((residual, extra.compose(&bindings)));
             } else if !table.refutes_factor_clash(&next)? {
                 return Ok(Outcome::Unsupported);

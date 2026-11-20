@@ -35,6 +35,11 @@ pub(crate) struct Packet {
     expanded: usize,
 }
 
+struct CheckedFactor {
+    packet: Packet,
+    matrix: Option<(AcSym, usize)>,
+}
+
 impl Packet {
     fn node(&mut self, row: &[u64]) -> u64 {
         if let Some(&id) = self.nodes.get(row) {
@@ -421,24 +426,49 @@ impl RuleTable {
         }
     }
 
-    pub(crate) fn factored_unify(
+    /// The identity factor on the very same conjunction is valid by construction.
+    pub(crate) fn accepts_factor(
         &self,
         original: &[Equal<LNTerm>],
         factor: &Subst<Name, LVar>,
         residual: &[Equal<LNTerm>],
-    ) -> Result<Outcome, Error> {
+    ) -> Result<bool, Error> {
+        if factor.is_empty() && original == residual {
+            return Ok(true);
+        }
+        Ok(self.checked_factor(original, factor, residual)?.is_some())
+    }
+
+    fn checked_factor(
+        &self,
+        original: &[Equal<LNTerm>],
+        factor: &Subst<Name, LVar>,
+        residual: &[Equal<LNTerm>],
+    ) -> Result<Option<CheckedFactor>, Error> {
         // The residual variables form a dense prefix for the matrix solver.
         // Extending this packet reserves every variable observed in the factor
         // or the original request without renumbering any matrix column.
         let Some(mut packet) = Packet::encode(self, residual)? else {
-            return Ok(Outcome::Unsupported);
+            return Ok(None);
         };
         let matrix = packet.matrix_shape();
         let Some(original_roots) =
             packet.roots(self, original.iter().map(|eq| (&eq.lhs, &eq.rhs)))?
         else {
-            return Ok(Outcome::Unsupported);
+            return Ok(None);
         };
+        // A proposal may only refer to variables from the original request.
+        // Even a reflexive residual on an unrelated variable could leak a new
+        // key through the caller's substitution adapter.
+        let mut original_vars = rustc_hash::FxHashSet::default();
+        for e in original {
+            use crate::lterm::HasFrees;
+            for t in [&e.lhs, &e.rhs] {
+                t.for_each_free(&mut |v| {
+                    original_vars.insert(*v);
+                });
+            }
+        }
         let mut bindings = Vec::new();
         for (&v, image) in factor.iter() {
             tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
@@ -446,9 +476,12 @@ impl RuleTable {
                 packet.term(self, &Term::Lit(Lit::Var(v))),
                 packet.term(self, image),
             ) else {
-                return Ok(Outcome::Unsupported);
+                return Ok(None);
             };
             bindings.extend([key, value]);
+        }
+        if packet.variables.len() != original_vars.len() {
+            return Ok(None);
         }
         initialize()?;
         let rows = packet.rows();
@@ -464,16 +497,29 @@ impl RuleTable {
             )
         });
         match accepted {
-            0 => Ok(Outcome::Unsupported),
-            1 => match packet.solve(&rows, matrix)? {
-                Outcome::Unsupported => {
-                    // Residual search can introduce witnesses even if the original
-                    // factor eliminated every occurrence of a caller variable.
-                    self.unify_operands_avoiding(residual, packet.variables.values())
-                }
-                complete => Ok(complete),
-            },
+            0 => Ok(None),
+            1 => Ok(Some(CheckedFactor { packet, matrix })),
             status => Err(Error::InvalidStatus(status)),
+        }
+    }
+
+    pub(crate) fn factored_unify(
+        &self,
+        original: &[Equal<LNTerm>],
+        factor: &Subst<Name, LVar>,
+        residual: &[Equal<LNTerm>],
+    ) -> Result<Outcome, Error> {
+        let Some(CheckedFactor { packet, matrix }) =
+            self.checked_factor(original, factor, residual)?
+        else {
+            return Ok(Outcome::Unsupported);
+        };
+        match packet.solve(&packet.rows(), matrix)? {
+            Outcome::Unsupported => {
+                // Residual witnesses must avoid variables eliminated by the factor.
+                self.unify_operands_avoiding(residual, packet.variables.values())
+            }
+            complete => Ok(complete),
         }
     }
 }

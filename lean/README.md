@@ -96,7 +96,10 @@ Changes to the semantic contract, wire format or acceptance harness need separat
 
 For native-only ordinary unification, Rust first submits the original conjunction before factoring.
 It sends declarations for the symbols used in the query, a shared graph of numeric term rows, and
-pairs of equation roots. One AC row holds references to all its children, including repeated
+pairs of equation roots. An equality between two equal-length packed lists becomes one
+conjunction over corresponding elements, including nested packs and repeated variables.
+The wrapper has Maude sort TOP. A packed-list image for an ordinary variable remains outside
+the native term format. One AC row holds references to all its children, including repeated
 occurrences. Lean checks arities, child sorts and backward references. The graph export decides
 identity and closed clashes. For homogeneous AC queries, Lean counts occurrences in those same
 equation roots and returns witness slots per variable per answer. Every reference to a shared
@@ -160,15 +163,17 @@ caller’s scope when necessary. The whole-problem export takes no freshness arg
 [Caller freshening theorem](Tamarin/CallerFreshening.lean) ·
 [Rust allocator](../crates/tamarin-term/src/subst_vfresh.rs)
 
-On the factored matrix path, Rust proposes a substitution θ and residual equations. Composing θ
+In native-only ordinary unification, Rust proposes a substitution θ and residual equations. Composing θ
 with any residual solution must solve the original equations. Every original solution ρ must
 also solve the residual and agree with ρ ∘ θ on every original variable. Lean proves these
-properties by checking three root lists in one graph. The residual variable
-IDs also index the matrix columns. Slot allocation reserves variables from all three lists.
+properties by checking three root lists in one graph. An empty residual certifies that θ alone
+covers every solution. With a residual AC matrix, its variables index the columns and slot
+allocation reserves variables from all three lists.
 If the original equations do not directly justify the proposed bindings, the checker replays
 single bindings, exposes matching free heads and compares the result modulo C/AC. Exhausting
-the replay budget defers the proposal. CI requires acceptance for the direct sorted-binding
-fragment and a chain whose second elimination specializes the first binding.
+the replay budget on the top-level factor sends the original query to the total solver. CI requires
+acceptance for the direct sorted-binding fragment and a chain whose second elimination specializes
+the first binding.
 [Factoring laws](Tamarin/FactoredUnification.lean) · [Checker](TamarinRuntime/FactorCheck.lean) · [Guaranteed fragment](Tamarin/FactorAdmission.lean)
 
 For completed homogeneous answers, Lean tags each row with its column and renumbers witness slots
@@ -182,8 +187,10 @@ the original equations for any valid caller allocation. The proof allows AC fact
 [Caller opening theorem](Tamarin/DenseOpening.lean)
 
 Rust still supplies the graph and column-to-variable mapping and implements the modeled binding
-operations. Other paths can still trust Rust free factoring, including early failures. The residual
-worklist, caches, C bridge and Lean toolchain also remain trusted.
+operations. Native-only validates successful free factoring before returning a family, deciding
+AC-free unifiability or solving a changed residual. Branch-local checks also cover C orientations,
+AC cancellation and variant joins. Hybrid and Maude retain their existing factoring paths.
+The residual worklist, caches, C bridge and Lean toolchain also remain trusted.
 [Graph-to-matrix refinement](Tamarin/GraphMatrixRefinement.lean) · [Joint contract](Tamarin/GraphUnification.lean)
 
 CI compares proof runs against Maude because branch order and redundant instances can affect
@@ -196,7 +203,7 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 
 | Operation | Native coverage today | Remaining completeness work |
 | --- | --- | --- |
-| Ordinary free/C/AC unification | Native-only has a complete fallback for declared arity-correct terms, including mixtures of several AC heads, free and commutative symbols, and kind-level inputs. Existing decision and enumeration kernels still run first. | Extend end-to-end checks of the Rust representation and answer ordering before general deployment. |
+| Ordinary free/C/AC unification | Native-only has a complete fallback for declared arity-correct terms, including mixtures of several AC heads, free and commutative symbols, and kind-level inputs. Native-only validates Rust eliminations against the original equations before using them. | Extend end-to-end checks of the Rust representation and answer ordering before general deployment. |
 | Directional matching | The total matcher receives the original equations and bindable variable IDs. Subject variables stay rigid, including variables also present in the pattern. Native-only sorts the completed binding maps. | Ordered hybrid enumeration can still require Maude's first match. [Matcher contract](Tamarin/TotalMatchPacket.lean) |
 | Reduction | On certified definition tables every input receives a unique normal form. Other tables use checked rewriting at all positions, including proper AC subproducts. Strictly size-decreasing tables receive a proved depth bound. | Certify whole presentations containing destructor patterns and algebraic rules. The per-query path can defer after 100,000 work units or on competing normal forms. [Checked reduction](Tamarin/CheckedReduction.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
 | Variants | Certified definition tables have a complete family for every tuple. The general fallback checks a finite narrowing frontier, shared bindings and uniqueness under further specialization. | Prove finite variants for more whole presentations, including pairing and DH. The per-query frontier search can still defer. [Frontier checker](Tamarin/CheckedVariants.lean) · [Total reference](Tamarin/CompleteNarrowing.lean) |

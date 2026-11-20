@@ -823,6 +823,9 @@ impl RuleTable {
         else {
             return self.refutes_factor_clash(&eqs);
         };
+        if !self.accepts_factor(&eqs, &free, &pending)? {
+            return Ok(false);
+        }
         // Reserving variables from output values protects them through factor
         // composition even when they do not occur in the input equations.
         // VariantJoin.join_csu proves this is equivalent to reflexive anchors.

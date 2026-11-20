@@ -123,6 +123,128 @@ fn checked_factor_clashes_match_unfactored_maude_queries() {
     assert_eq!(oracle.stats().unify_count, 1);
 }
 
+#[test]
+fn successful_factor_preserves_the_original_family() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::hash;
+    use crate::maude_sig::hash_maude_sig;
+    use crate::subst::Subst;
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = hash_maude_sig().merge(mset_maude_sig());
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let table = native.native_rules().unwrap();
+    let var = |name| LVar::new(name, LSort::Msg, 0);
+    let term = |v| Term::Lit(Lit::Var(v));
+    let (x, y, z) = (var("x"), var("y"), var("z"));
+    let alias = Equal::new(hash(term(x)), hash(term(y)));
+    let original = [alias.clone()];
+    let a = pub_term("a");
+    let b = pub_term("b");
+    let alias_factor = Subst::from_list(vec![(x, term(y))]);
+    assert!(table.accepts_factor(&original, &alias_factor, &[]).unwrap());
+    // Both sides become h(a). This is a unifier but it cannot represent x=y=b.
+    let specific = Subst::from_list(vec![(x, a.clone()), (y, a.clone())]);
+    assert!(!table.accepts_factor(&original, &specific, &[]).unwrap());
+    let compare = |eqs: &[Equal<LNTerm>], factor: &Subst<_, _>, residual: &[Equal<LNTerm>]| {
+        [
+            native
+                .recover_unchecked_factor(eqs, factor, residual)
+                .unwrap()
+                .expect("proposal must defer"),
+            native.unify(eqs).unwrap(),
+            oracle
+                .unify_residuals_with_maude(eqs, &Subst::empty())
+                .unwrap(),
+        ]
+    };
+    // A complete family can also contain narrower, redundant solutions.
+    // Every arm must identify x and y, and one shared Msg witness covers all.
+    for family in compare(&original, &specific, &[]) {
+        let mut general = false;
+        for arm in family {
+            let bindings = crate::subst_vfresh::LNSubstVFresh::from_list(arm);
+            let image = bindings.image_of(&x).expect("shared alias");
+            assert_eq!(bindings.image_of(&y), Some(image));
+            general |= matches!(image, Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg);
+        }
+        assert!(
+            general,
+            "family fixed or narrowed the shared image of x and y"
+        );
+    }
+    let unrelated = [Equal::new(term(z), term(z))];
+    assert!(!table
+        .accepts_factor(&original, &alias_factor, &unrelated)
+        .unwrap());
+
+    // The factor x=y is justified, but a residual fixing y=a loses the second partition.
+    let ac = |l, r| f_app_ac(AcSym::Union, vec![l, r]);
+    let rows = [
+        alias,
+        Equal::new(ac(term(x), term(z)), ac(a.clone(), b.clone())),
+    ];
+    let valid = [Equal::new(ac(term(y), term(z)), ac(a.clone(), b.clone()))];
+    assert!(table.accepts_factor(&rows, &alias_factor, &valid).unwrap());
+    let partial = [
+        Equal::new(term(y), a.clone()),
+        Equal::new(term(z), b.clone()),
+    ];
+    let expected = canonical_ground_answers(vec![
+        vec![(x, a.clone()), (y, a.clone()), (z, b.clone())],
+        vec![(x, b.clone()), (y, b), (z, a)],
+    ]);
+    for family in compare(&rows, &alias_factor, &partial) {
+        assert_eq!(canonical_ground_answers(family), expected);
+    }
+    assert_eq!(oracle.stats().unify_count, 2);
+    assert_eq!(native.stats().unify_count, 0);
+}
+
+#[test]
+fn packed_unification_uses_one_substitution_across_nested_coordinates() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::maude_sig::MaudeSig;
+    use crate::subst::Subst;
+    use crate::term::f_app_list;
+
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = MaudeSig::default();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let x = LVar::new("x", LSort::Msg, 0);
+    let i = LVar::new("i", LSort::Node, 0);
+    let v = |var| Term::Lit(Lit::Var(var));
+    let packed = |t| f_app_list(vec![f_app_list(vec![]), t, v(i)]);
+    let lhs = f_app_list(vec![v(x), packed(v(x))]);
+    for (second, possible) in [(pub_term("a"), true), (pub_term("b"), false)] {
+        let rhs = f_app_list(vec![pub_term("a"), packed(second)]);
+        let eqs = [Equal::new(lhs.clone(), rhs)];
+        let raw = oracle
+            .unify_residuals_with_maude(&eqs, &Subst::empty())
+            .unwrap();
+        let expected = if possible {
+            vec![vec![(x, pub_term("a"))]]
+        } else {
+            vec![]
+        };
+        assert_eq!(canonical_variants(raw), expected);
+        assert_eq!(canonical_variants(native.unify(&eqs).unwrap()), expected);
+        assert_eq!(native.unifiable(&eqs).unwrap(), possible);
+    }
+    assert_eq!(oracle.stats().unify_count, 2);
+    assert_eq!(native.stats().unify_count, 0);
+}
+
 fn canonical_ground_answers(mut answers: Vec<Vec<(LVar, LNTerm)>>) -> Vec<Vec<(LVar, LNTerm)>> {
     for answer in &mut answers {
         answer.sort();

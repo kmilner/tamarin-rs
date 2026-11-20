@@ -90,6 +90,27 @@ fn an_unencodable_factoring_failure_is_reported_as_unsupported() {
 }
 
 #[test]
+fn an_unencodable_successful_factor_cannot_answer_an_ac_free_query() {
+    let handle = || {
+        MaudeHandle::start_with_backend(MISSING, Default::default(), AlgebraBackend::NativeOnly)
+            .unwrap()
+    };
+    // Rust can eliminate x immediately; the proposed image has no declaration.
+    let query = [Equal::new(
+        variable("x"),
+        tamarin_term::builtin::hash(variable("y")),
+    )];
+    assert!(matches!(
+        handle().unify(&query),
+        Err(MaudeError::UnsupportedOperation(_))
+    ));
+    assert!(matches!(
+        handle().unifiable(&query),
+        Err(MaudeError::UnsupportedOperation(_))
+    ));
+}
+
+#[test]
 fn missing_operations_return_explicit_errors() {
     let h = native();
     assert!(matches!(
@@ -1124,7 +1145,13 @@ fn partially_grounded_constraint_is_solved_by_propagating_each_ground_match() {
 fn offset_witness_is_shared_after_factoring_and_scoped_to_the_answer() {
     use tamarin_term::builtin::pair;
     use tamarin_term::subst_vfresh::LNSubstVFresh;
-    let h = native().with_fresh_counter_next(2000);
+    let h = MaudeHandle::start_with_backend(
+        MISSING,
+        mset_maude_sig().merge(pair_maude_sig()),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap()
+    .with_fresh_counter_next(2000);
     // One name/index collision and one same-sort name different from x.
     let x = LVar::new("x", LSort::Msg, 17);
     let y = LVar::new("y", LSort::Msg, 17);

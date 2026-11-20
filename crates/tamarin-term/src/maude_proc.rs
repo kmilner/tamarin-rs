@@ -1201,6 +1201,44 @@ impl MaudeHandle {
         Ok(result)
     }
 
+    /// Maude packs coordinates as list(cons(..., nil)) at sort TOP. Equal-width
+    /// packs expose a conjunction under one substitution, including nested packs.
+    #[cfg(feature = "lean-unification")]
+    fn unpack_unification<'a>(
+        &self,
+        eqs: &'a [Equal<LNTerm>],
+    ) -> Result<std::borrow::Cow<'a, [Equal<LNTerm>]>, MaudeError> {
+        use crate::function_symbols::FunSym;
+        use crate::term::Term;
+        use std::borrow::Cow;
+        fn children<'a>(l: &'a LNTerm, r: &'a LNTerm) -> Option<(&'a [LNTerm], &'a [LNTerm])> {
+            match (l, r) {
+                (Term::App(FunSym::List, xs), Term::App(FunSym::List, ys))
+                    if xs.len() == ys.len() =>
+                {
+                    Some((xs, ys))
+                }
+                _ => None,
+            }
+        }
+        if self.backend != AlgebraBackend::NativeOnly
+            || !eqs.iter().any(|e| children(&e.lhs, &e.rhs).is_some())
+        {
+            return Ok(Cow::Borrowed(eqs));
+        }
+        let mut pending: Vec<_> = eqs.iter().rev().map(|e| (&e.lhs, &e.rhs)).collect();
+        let mut rows = Vec::new();
+        while let Some((lhs, rhs)) = pending.pop() {
+            cancellation::check()?;
+            if let Some((xs, ys)) = children(lhs, rhs) {
+                pending.extend(xs.iter().zip(ys).rev());
+            } else {
+                rows.push(Equal::new(lhs.clone(), rhs.clone()));
+            }
+        }
+        Ok(Cow::Owned(rows))
+    }
+
     /// Whether *any* unifier of `eqs` exists modulo the signature's AC/C
     /// attributes. Ordinary `unify` ignores the signature's rewrite equations.
     ///
@@ -1209,9 +1247,11 @@ impl MaudeHandle {
     /// context-free boolean (no witness LVars leak across calls).
     ///
     /// AC-free queries use the local free unifier first. Native-only confirms
-    /// a proposed failure in Lean before returning a negative decision.
+    /// both successful eliminations and proposed clashes against the original query.
     pub fn unifiable(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
         self.check_backend_status()?;
+        #[cfg(feature = "lean-unification")]
+        let eqs = &*self.unpack_unification(eqs)?;
         if eqs.is_empty() {
             return Ok(true);
         }
@@ -1228,8 +1268,13 @@ impl MaudeHandle {
         if self.is_ac_free() && !needs_typed_solver {
             let local = crate::unification::unify_lnterm_no_ac(eqs.to_vec());
             #[cfg(feature = "lean-unification")]
-            if local.is_err() && self.backend == AlgebraBackend::NativeOnly {
-                return Ok(!self.resolve_factor_clash(eqs)?.is_empty());
+            if self.backend == AlgebraBackend::NativeOnly {
+                return match local {
+                    Ok(factor) => Ok(self
+                        .recover_unchecked_factor(eqs, &factor, &[])?
+                        .is_none_or(|answers| !answers.is_empty())),
+                    Err(_) => Ok(!self.resolve_factor_clash(eqs)?.is_empty()),
+                };
             }
             return Ok(local.is_ok());
         }
@@ -1363,6 +1408,8 @@ impl MaudeHandle {
         ordered: bool,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         self.check_backend_status()?;
+        #[cfg(feature = "lean-unification")]
+        let eqs = &*self.unpack_unification(eqs)?;
         #[cfg(not(feature = "lean-unification"))]
         let _ = (use_lean, ordered);
         #[cfg(feature = "lean-unification")]
@@ -1429,6 +1476,12 @@ impl MaudeHandle {
             }
             return Ok(Vec::new());
         };
+        #[cfg(feature = "lean-unification")]
+        if self.backend == AlgebraBackend::NativeOnly
+            && let Some(answers) = self.recover_unchecked_factor(eqs, &factored_m, &residual_eqs)?
+        {
+            return Ok(answers);
+        }
         if residual_eqs.is_empty() {
             // composeVFresh gives aliases shared fresh images, as expected by apply_eq_store.
             let identity = crate::subst_vfresh::LNSubstVFresh::empty();
@@ -1616,23 +1669,55 @@ impl MaudeHandle {
         Ok(renamed)
     }
 
+    /// Every downstream shortcut consumes the proposed factor. If its replay
+    /// defers, solve the original conjunction before any answer can escape.
+    #[cfg(feature = "lean-unification")]
+    fn recover_unchecked_factor(
+        &self,
+        original: &[Equal<LNTerm>],
+        factor: &crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
+        residual: &[Equal<LNTerm>],
+    ) -> Result<Option<crate::lean_unification::Substitutions>, MaudeError> {
+        if !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
+            && let Some(table) = self.native_rules()
+            && table
+                .accepts_factor(original, factor, residual)
+                .map_err(|e| self.lean_error(e))?
+        {
+            if residual.is_empty() && !original.is_empty() {
+                cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+            }
+            return Ok(None);
+        }
+        self.solve_original(original).map(Some)
+    }
+
     #[cfg(feature = "lean-unification")]
     fn resolve_factor_clash(
         &self,
         original: &[Equal<LNTerm>],
     ) -> Result<crate::lean_unification::Substitutions, MaudeError> {
-        if !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY") {
-            if let Some(table) = self.native_rules()
-                && table
-                    .refutes_factor_clash(original)
-                    .map_err(|e| self.lean_error(e))?
-            {
-                cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
-                return Ok(Vec::new());
-            }
-            if let Some(answers) = self.total_unify(original)? {
-                return Ok(answers);
-            }
+        if !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
+            && let Some(table) = self.native_rules()
+            && table
+                .refutes_factor_clash(original)
+                .map_err(|e| self.lean_error(e))?
+        {
+            cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+            return Ok(Vec::new());
+        }
+        self.solve_original(original)
+    }
+
+    #[cfg(feature = "lean-unification")]
+    fn solve_original(
+        &self,
+        original: &[Equal<LNTerm>],
+    ) -> Result<crate::lean_unification::Substitutions, MaudeError> {
+        if !tamarin_utils::env_gate!("TAM_RS_NO_LEAN_UNIFY")
+            && let Some(answers) = self.total_unify(original)?
+        {
+            return Ok(answers);
         }
         self.unify_residuals_with_maude(original, &crate::subst::Subst::empty())
     }

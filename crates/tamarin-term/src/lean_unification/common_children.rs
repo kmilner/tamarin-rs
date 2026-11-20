@@ -153,6 +153,9 @@ pub(super) fn simplify(
                 Simplification::Unconfirmed
             });
         };
+        if !table.accepts_factor(&reduced, &extra, &pending)? {
+            return Ok(Simplification::Unconfirmed);
+        }
         *bindings = extra.compose(bindings);
         *current = pending;
         status = Simplification::Reduced;
