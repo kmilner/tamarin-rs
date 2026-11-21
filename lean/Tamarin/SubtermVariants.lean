@@ -25,6 +25,12 @@ def ResultRow (rs : Problem s) (r : Equation s) : Prop :=
   Row r ∨ ((match r.lhs with | .free .. | .comm .. => True | _ => False) ∧
     ∀ h ∈ operators r.rhs, h ∉ ruleHeads rs)
 
+/-- One budget covers the normal forms of all normalized instances of this
+source. A finite checked variant family for the source gives this certificate. -/
+def RowPaths (rs : Problem s) (r : Equation s) : Prop :=
+  ∃ k, ∀ σ : Substitution s, Normalized (ruleRoot rs) σ → ∀ u,
+    NormalForm (ruleRoot rs) (σ.apply r.lhs) u → Path (ruleRoot rs) k (σ.apply r.lhs) u
+
 theorem ResultRow.application {rs : Problem s} {r : Equation s} (row : ResultRow rs r) :
     Application r.lhs := by
   cases src : r.lhs <;> simp_all [ResultRow,Row,Application]
@@ -151,6 +157,28 @@ private theorem constructor_result_normal (apps : ∀ r ∈ rs, Application r.lh
 
 include scope can
 
+/-- Choose one budget for the finitely many rows with instance bounds. A
+match need only be normal on the variables that actually occur in its source. -/
+private theorem instance_budget (apps : ∀ r ∈ rs, Application r.lhs) :
+    ∃ k, ∀ r ∈ rs, RowPaths rs r → ∀ σ : Substitution s,
+      (∀ v, r.lhs.Occurs v → Normal (ruleRoot rs) (σ.image v)) →
+      ∃ u, Path (ruleRoot rs) k (σ.apply r.lhs) u ∧ Normal (ruleRoot rs) u := by
+  classical
+  let budget (r : Equation s) := if h : RowPaths rs r then h.choose else 0
+  refine ⟨(rs.map budget).sum,fun r hr covered σ used => ?_⟩
+  let τ := VariantJoin.choose r.lhs.Occurs σ Substitution.identity
+  have same : τ.apply r.lhs = σ.apply r.lhs := (VariantJoin.choose_apply ..).1 (fun _ => id)
+  have normal : Normalized (ruleRoot rs) τ := by
+    intro v
+    by_cases occ : r.lhs.Occurs v
+    · simpa [τ,VariantJoin.choose,occ] using used v occ
+    · simpa [τ,VariantJoin.choose,occ] using (constructor_normal rs apps).1 v
+  let red := ReferenceReduction.reducer rs scope can
+  have nf := (red.correct (τ.apply r.lhs)).normalForm
+  rw [← same]
+  refine ⟨_,(covered.choose_spec τ normal _ nf).weaken ?_,nf.2.1⟩
+  simpa [budget,covered] using (FiniteOccurs.le_sum _ _ (List.mem_map_of_mem (f := budget) hr))
+
 /-- A fixed finite table has a common finite normalization budget for all its
 ground results, even if one of them uses equations owned by another operator. -/
 private theorem ground_budget : ∃ k, ∀ r ∈ rs, r.rhs.Ground → ∀ σ : Substitution s,
@@ -164,12 +192,13 @@ private theorem ground_budget : ∃ k, ∀ r ∈ rs, r.rhs.Ground → ∀ σ : S
 
 /-- The bound at a free head uses only the shapes of rules for that head.
 All hypotheses about normalization refer to the *whole* mixed table. -/
-theorem free_result_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.FreeSym)
-    (rows : ∀ r ∈ rs, head r.lhs = .free f → ResultRow rs r) :
+theorem free_paths_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.FreeSym)
+    (rows : ∀ r ∈ rs, head r.lhs = .free f → ResultRow rs r ∨ RowPaths rs r) :
     ∃ k, ∀ xs, (∀ i, Normal (ruleRoot rs) (xs i)) → ∃ u,
       Path (ruleRoot rs) k (.free f xs) u ∧ Normal (ruleRoot rs) u := by
   obtain ⟨k,ground⟩ := ground_budget scope can
-  refine ⟨k+1,fun xs normals => ?_⟩
+  obtain ⟨m,instanceBound⟩ := instance_budget scope can apps
+  refine ⟨(k+m)+1,fun xs normals => ?_⟩
   by_cases normal : Normal (ruleRoot rs) (.free f xs)
   · exact ⟨_,.basis (.refl _),normal⟩
   obtain ⟨u,st⟩ := Classical.not_forall.mp normal
@@ -187,20 +216,26 @@ theorem free_result_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.FreeSy
       ⟨_,_,.free f _ _ eq,.root ⟨r,hr,σ,h ▸ src,rfl⟩,.refl _⟩
     have normalArg i : Normal (ruleRoot rs) (σ.apply (as i)) := by
       simpa only [kids] using (normal_equiv _ (eq i)).mp (normals i)
-    rcases shape with (clean | ⟨i,sub⟩) | inert
-    · obtain ⟨u,p,nf⟩ := ground r hr clean σ; exact ⟨u,.step step p,nf⟩
+    have used (v) (hv : r.lhs.Occurs v) : Normal (ruleRoot rs) (σ.image v) := by
+      obtain ⟨i,occ⟩ : ∃ i, (as i).Occurs v := by simpa only [h,Term.Occurs] using hv
+      exact RulePattern.image_normal (normalArg i) occ
+    rcases shape with ((clean | ⟨i,sub⟩) | inert) | paths
+    · obtain ⟨u,p,nf⟩ := ground r hr clean σ; exact ⟨u,.step step (p.weaken (by omega)),nf⟩
     · exact ⟨_,.step step (.basis (.refl _)),subnormal σ sub (normalArg i)⟩
     · refine ⟨_,.step step (.basis (.refl _)),constructor_result_normal apps _ inert σ ?_⟩
-      intro v hv
-      obtain ⟨i,occ⟩ : ∃ i, (as i).Occurs v := by simpa only [h,Term.Occurs] using scope r hr v hv
-      exact RulePattern.image_normal (normalArg i) occ
+      exact fun v hv => used v (scope r hr v hv)
+    · obtain ⟨u,path,nf⟩ := instanceBound r hr paths σ used
+      have source : EquivB (.free f xs) (σ.apply r.lhs) := by
+        rw [h,← src]; exact .free _ _ _ eq
+      exact ⟨u,(path.rebase source).weaken (by omega),nf⟩
 
-theorem comm_result_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.CSym)
-    (rows : ∀ r ∈ rs, head r.lhs = .comm f → ResultRow rs r) :
+theorem comm_paths_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.CSym)
+    (rows : ∀ r ∈ rs, head r.lhs = .comm f → ResultRow rs r ∨ RowPaths rs r) :
     ∃ k, ∀ a b, Normal (ruleRoot rs) a → Normal (ruleRoot rs) b → ∃ u,
       Path (ruleRoot rs) k (.comm f a b) u ∧ Normal (ruleRoot rs) u := by
   obtain ⟨k,ground⟩ := ground_budget scope can
-  refine ⟨k+1,fun a b na nb => ?_⟩
+  obtain ⟨m,instanceBound⟩ := instance_budget scope can apps
+  refine ⟨(k+m)+1,fun a b na nb => ?_⟩
   by_cases normal : Normal (ruleRoot rs) (.comm f a b)
   · exact ⟨_,.basis (.refl _),normal⟩
   obtain ⟨u,st⟩ := Classical.not_forall.mp normal
@@ -220,16 +255,31 @@ theorem comm_result_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.CSym)
         rcases (Commutative.equiv_iff ..).mp eq with ⟨l,r⟩ | ⟨l,r⟩
         · exact ⟨(normal_equiv _ l).mp na,(normal_equiv _ r).mp nb⟩
         · exact ⟨(normal_equiv _ r).mp nb,(normal_equiv _ l).mp na⟩
-      rcases shape with (clean | sub | sub) | inert
-      · obtain ⟨u,p,nf⟩ := ground r hr clean σ; exact ⟨u,.step step p,nf⟩
+      have used (v) (hv : r.lhs.Occurs v) : Normal (ruleRoot rs) (σ.image v) := by
+        have occ : x.Occurs v ∨ y.Occurs v := by simpa only [h,Term.Occurs] using hv
+        exact occ.elim (RulePattern.image_normal kids.1) (RulePattern.image_normal kids.2)
+      rcases shape with ((clean | sub | sub) | inert) | paths
+      · obtain ⟨u,p,nf⟩ := ground r hr clean σ; exact ⟨u,.step step (p.weaken (by omega)),nf⟩
       · exact ⟨_,.step step (.basis (.refl _)),subnormal σ sub kids.1⟩
       · exact ⟨_,.step step (.basis (.refl _)),subnormal σ sub kids.2⟩
       · refine ⟨_,.step step (.basis (.refl _)),constructor_result_normal apps _ inert σ ?_⟩
-        intro v hv
-        have occ : x.Occurs v ∨ y.Occurs v := by simpa only [h,Term.Occurs] using scope r hr v hv
-        exact occ.elim (RulePattern.image_normal kids.1) (RulePattern.image_normal kids.2)
+        exact fun v hv => used v (scope r hr v hv)
+      · obtain ⟨u,path,nf⟩ := instanceBound r hr paths σ used
+        exact ⟨u,(path.rebase (h ▸ eq)).weaken (by omega),nf⟩
   · exact (na _ step).elim
   · exact (nb _ step).elim
+
+theorem free_result_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.FreeSym)
+    (rows : ∀ r ∈ rs, head r.lhs = .free f → ResultRow rs r) :
+    ∃ k, ∀ xs, (∀ i, Normal (ruleRoot rs) (xs i)) → ∃ u,
+      Path (ruleRoot rs) k (.free f xs) u ∧ Normal (ruleRoot rs) u :=
+  free_paths_bound scope can apps f (fun r hr hd => .inl (rows r hr hd))
+
+theorem comm_result_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.CSym)
+    (rows : ∀ r ∈ rs, head r.lhs = .comm f → ResultRow rs r) :
+    ∃ k, ∀ a b, Normal (ruleRoot rs) a → Normal (ruleRoot rs) b → ∃ u,
+      Path (ruleRoot rs) k (.comm f a b) u ∧ Normal (ruleRoot rs) u :=
+  comm_paths_bound scope can apps f (fun r hr hd => .inl (rows r hr hd))
 
 theorem free_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.FreeSym)
     (rows : ∀ r ∈ rs, head r.lhs = .free f → Row r) :

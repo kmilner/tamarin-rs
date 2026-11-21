@@ -43,6 +43,9 @@ jobs:
           lake env lean Tests/CertifiedTables.lean
           lake env lean Tests/XorTable.lean
           lake env lean Tests/BilinearTable.lean
+          lake env lean Tests/DefinedResults.lean
+          lake env lean Tests/DefinedPatterns.lean
+          lake env lean Tests/UserAC.lean
           lake env lean Tests/TableAmbient.lean
           lake env lean Tests/ACRowElimination.lean
           lake env lean --run Tests/ACPivot.lean

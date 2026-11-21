@@ -236,6 +236,73 @@ fn native_oracle_declared_ac_group_composes_with_builtin_groups() {
 }
 
 #[test]
+fn native_oracle_ac_unit_reduces_only_with_a_message_partner() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::function_symbols::{AcFctSym, AcSym, Constructability, NdcState, NoEqSym, Privacy};
+    use crate::lterm::{pub_term, Name, NameTag};
+    use crate::maude_proc::MaudeHandle;
+    use crate::rewriting::RRule;
+    use crate::subterm_rule::rrule_to_ctxt_st_rule;
+    use crate::term::{f_app_ac, f_app_no_eq, Term};
+    use crate::vterm::Lit;
+
+    let join = AcFctSym::new(
+        b"join",
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    let empty = NoEqSym::new(b"empty", 0, Privacy::Public, Constructability::Constructor);
+    let unit = f_app_no_eq(empty, vec![]);
+    let op = |a, b| f_app_ac(AcSym::AcFct(join), vec![a, b]);
+    let x = msg_var("x", 7);
+    let mut theory = minimal_maude_sig(false);
+    theory.st_fun_syms.insert(empty);
+    theory.st_ac_fun_syms.insert(join);
+    theory
+        .st_rules
+        .insert(rrule_to_ctxt_st_rule(&RRule::new(op(unit.clone(), x.clone()), x)).unwrap());
+    let node = Term::Lit(Lit::Con(Name::new(NameTag::Node, "event")));
+    let msg = pub_term("data");
+    let blocked = op(unit.clone(), node.clone());
+    let queries = [
+        (op(unit.clone(), msg.clone()), msg.clone()),
+        (blocked.clone(), blocked.clone()),
+        (op(blocked, msg.clone()), op(node, msg)),
+    ];
+    for sig in [
+        theory.clone().refresh(),
+        theory
+            .merge(dh_maude_sig())
+            .merge(bp_maude_sig())
+            .merge(xor_maude_sig())
+            .refresh(),
+    ] {
+        let packet = Packet::full_table(&sig, &[]).unwrap().unwrap();
+        super::initialize().unwrap();
+        assert!(super::LEAN_THREAD
+            .with(|_| packet.certifies_table(&packet.equations, 0))
+            .unwrap());
+        let native = MaudeHandle::start_with_backend(
+            "/nonexistent/maude",
+            sig.clone(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        let oracle = tamarin_test_support::require_maude_path().map(|path| {
+            MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap()
+        });
+        for (input, expected) in &queries {
+            assert_eq!(native.reduce(input).unwrap(), *expected);
+            if let Some(maude) = &oracle {
+                assert_eq!(maude.reduce(input).unwrap(), *expected);
+            }
+        }
+        assert_eq!(native.stats().norm_count, 0);
+    }
+}
+
+#[test]
 fn native_oracle_constructor_results_rebuild_the_open_capture() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::union;
@@ -341,4 +408,132 @@ fn native_oracle_constructor_results_rebuild_the_open_capture() {
         ));
         assert!(!admitted(&sig.refresh()));
     }
+}
+
+#[test]
+fn native_oracle_defined_patterns_and_results_join_on_specialization() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::union;
+    use crate::function_symbols::{AcFctSym, AcSym, Constructability, NdcState, NoEqSym, Privacy};
+    use crate::lterm::{pub_term, LSort, LVar, Name, NameTag};
+    use crate::maude_proc::MaudeHandle;
+    use crate::maude_sig::mset_maude_sig;
+    use crate::rewriting::RRule;
+    use crate::subst::apply_vterm;
+    use crate::subst_vfresh::LNSubstVFresh;
+    use crate::subterm_rule::rrule_to_ctxt_st_rule;
+    use crate::term::{f_app_ac, f_app_list, f_app_no_eq, Term};
+    use crate::vterm::{var_term, Lit};
+
+    let symbol = |name: &[u8], arity| {
+        NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor)
+    };
+    let [decode, boxed, inspect, check] =
+        [b"decode".as_slice(), b"box", b"inspect", b"check"].map(|name| symbol(name, 1));
+    let [a, b] = [b"a", b"b"].map(|name| symbol(name, 0));
+    let mut sig = mset_maude_sig();
+    sig.st_fun_syms
+        .extend([decode, boxed, inspect, check, a, b]);
+    let [a, b] = [a, b].map(|f| f_app_no_eq(f, vec![]));
+    let call = |f, t| f_app_no_eq(f, vec![t]);
+    let rule = |lhs, rhs| rrule_to_ctxt_st_rule(&RRule::new(lhs, rhs)).unwrap();
+    let x = msg_var("x", 17);
+    let outer = |x| call(inspect, call(check, x));
+    let decoder = |x| call(decode, call(boxed, x));
+    for equation in [
+        rule(decoder(x.clone()), call(check, x.clone())),
+        rule(call(check, a.clone()), b.clone()),
+        rule(outer(x.clone()), x),
+    ] {
+        sig.st_rules.insert(equation);
+    }
+    let joins = rule(call(inspect, b.clone()), a.clone());
+    sig.st_rules.insert(joins.clone());
+    let mut sig = sig.refresh();
+
+    // The kind-level multiset pushes this open query beyond bounded folding.
+    let node = Term::Lit(Lit::Con(Name::new(NameTag::Node, "event")));
+    let mask = (1..6).fold(node, |t, _| union(t, pub_term("marker")));
+    let key = LVar::new("input", LSort::Msg, 42);
+    let input = var_term(key);
+    let query = f_app_list(vec![
+        decoder(input.clone()),
+        outer(input.clone()),
+        input.clone(),
+        mask,
+    ]);
+    let check_rows = |h: &MaudeHandle| {
+        let (mut open, mut hit) = (false, false);
+        for row in h.variants(&query).unwrap() {
+            assert!(row.iter().all(|(v, _)| *v == key));
+            let restored = LNSubstVFresh::from_list(row).fresh_to_free_avoiding_vars(&[key]);
+            let image = apply_vterm(&restored, input.clone());
+            open |= matches!(&image, Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg);
+            hit |= image == a;
+            let expected = if image == a {
+                b.clone()
+            } else {
+                call(check, image.clone())
+            };
+            assert_eq!(h.reduce(&image).unwrap(), image);
+            assert_eq!(h.reduce(&decoder(image.clone())).unwrap(), expected);
+            assert_eq!(h.reduce(&outer(image.clone())).unwrap(), image);
+        }
+        assert!(open && hit);
+    };
+    if let Some(path) = tamarin_test_support::require_maude_path() {
+        check_rows(
+            &MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap(),
+        );
+    }
+    let h = MaudeHandle::start_with_backend(
+        "/nonexistent/maude",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
+    check_rows(&h);
+    assert_eq!((h.stats().var_count, h.stats().norm_count), (0, 0));
+
+    let admitted = |sig: &MaudeSig| {
+        let packet = Packet::full_table(sig, &[]).unwrap().unwrap();
+        super::initialize().unwrap();
+        super::LEAN_THREAD
+            .with(|_| packet.certifies_table(&packet.equations, 4))
+            .unwrap()
+    };
+    assert!(admitted(&sig));
+
+    // Add a user-declared AC unit to the same table. Its unit is the
+    // constant that exposes the nested overlap and the active RHS call.
+    let join = AcFctSym::new(
+        b"join",
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    let join_a = |t| f_app_ac(AcSym::AcFct(join), vec![t, a.clone()]);
+    let local = msg_var("item", 19);
+    sig.st_ac_fun_syms.insert(join);
+    sig.st_rules.insert(rule(join_a(local.clone()), local));
+    sig = sig.refresh();
+    assert!(admitted(&sig));
+    let mixed = join_a(decoder(outer(a.clone())));
+    let mixed_handle = MaudeHandle::start_with_backend(
+        "/nonexistent/maude",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
+    assert_eq!(mixed_handle.reduce(&mixed).unwrap(), b);
+    assert_eq!(mixed_handle.stats().norm_count, 0);
+    if let Some(path) = tamarin_test_support::require_maude_path() {
+        let maude =
+            MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
+        assert_eq!(maude.reduce(&mixed).unwrap(), b);
+    }
+
+    // inspect(check(a)) now has distinct normal forms reached at its root and inside its argument.
+    sig.st_rules.remove(&joins);
+    assert!(!admitted(&sig.refresh()));
 }

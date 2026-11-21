@@ -15,6 +15,10 @@ structure Extension (s : Symbols sig) extends Part sig where
   localProof : ∀ {T : Table s} {E : ExtraTable T}, ProtectedTable E →
     Inventory toPart T.rules → ∀ h ∈ ruleHeads T.rules, owns h → Local T.rules h
 
+def independent (s : Symbols sig) (c : Independent sig) : Extension s where
+  toPart := c.toPart
+  localProof dh inv := c.localProof inv dh.apps
+
 def xor (s : Symbols sig) (x : XorTable.Schema sig) : Extension s where
   toPart := xorPart x
   localProof dh inc := xorLocal x inc dh.apps

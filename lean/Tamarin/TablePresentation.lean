@@ -13,6 +13,12 @@ private def includes (a b : Problem s) : Bool :=
 
 def Agrees (a b : Problem s) : Bool := includes a b && includes b a
 
+theorem agrees_self (rs : Problem s) : Agrees rs rs := by
+  have inc : includes rs rs := List.all_eq_true.mpr fun r hr => List.any_eq_true.mpr
+    ⟨r,hr,Bool.and_eq_true_iff.mpr ⟨(ReferenceMatching.equal_iff ..).mpr (.refl _),
+      (ReferenceMatching.equal_iff ..).mpr (.refl _)⟩⟩
+  exact Bool.and_eq_true_iff.mpr ⟨inc,inc⟩
+
 /-- Reordering or reassociating a row preserves the variables on each side. -/
 theorem bound_of_agrees {a b : Problem s} (h : Agrees a b) (scope : ReferenceReduction.Bound b) :
     ReferenceReduction.Bound a := by

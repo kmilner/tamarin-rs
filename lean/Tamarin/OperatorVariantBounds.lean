@@ -95,10 +95,11 @@ theorem exists_path {a b : Term s} (red : Reduces R a b) : ∃ k, Path R k a b :
 /-- Every finite covering family gives one uniform path bound for the
 normalized instances of the query. Specializing a symbolic derivation replays
 its genuine steps and accounts for the value without a final normalization. -/
-theorem bounded_paths_of_finite_variants (finite : FiniteVariantProperty (ruleRoot rs)) (t : Term s) :
+theorem bounded_paths_of_complete_variants {t : Term s} {rows}
+    (family : CompleteVariants (ruleRoot rs) [t] rows) :
     ∃ k, ∀ σ : Substitution s, Normalized (ruleRoot rs) σ → ∀ u,
       NormalForm (ruleRoot rs) (σ.apply t) u → Path (ruleRoot rs) k (σ.apply t) u := by
-  obtain ⟨rows,sound,complete⟩ := finite [t]
+  obtain ⟨sound,complete⟩ := family
   have row_path (r : {r // r ∈ rows}) : ∃ u k, r.val.values = [u] ∧
       Path (ruleRoot rs) k (r.val.subst.apply t) u := by
     have vals := (sound r.val r.property).2
@@ -123,6 +124,12 @@ theorem bounded_paths_of_finite_variants (finite : FiniteVariantProperty (ruleRo
     exact t.subst_equiv _ _ (fun v hv => fit v ⟨t,List.mem_singleton_self _,hv⟩)
   exact (((path.subst δ).rebase same).post values.1.symm).weaken
     (FiniteOccurs.le_sum _ _ (List.mem_map_of_mem (f := budget) (List.mem_attach rows a)))
+
+theorem bounded_paths_of_finite_variants (finite : FiniteVariantProperty (ruleRoot rs)) (t : Term s) :
+    ∃ k, ∀ σ : Substitution s, Normalized (ruleRoot rs) σ → ∀ u,
+      NormalForm (ruleRoot rs) (σ.apply t) u → Path (ruleRoot rs) k (σ.apply t) u := by
+  obtain ⟨rows,family⟩ := finite [t]
+  exact bounded_paths_of_complete_variants family
 
 /-- A bound for one root with arbitrary already-normal operands. This
 quantifies over the term kind, including children lacking the declared sort. -/

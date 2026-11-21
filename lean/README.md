@@ -224,7 +224,7 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | Ordinary free/C/AC unification | The reference switch sends both enumeration and existence queries straight to the complete solver. Nested packed equations share one substitution. The solver accepts mixtures of free, commutative and AC heads, including kind-level inputs. | Check Rust representation and observable answer ordering across the protocol corpus. [Solver contract](Tamarin/TotalUnifyPacket.lean) |
 | Directional matching | The reference switch uses the complete matcher for enumeration, existence and first-match queries, including caller-designated rigid variables. For source refinement every backend selects the least restored binding map, including on ambiguous matches. | Full hybrid enumeration retains its existing order for callers that consume the whole sequence. [Matcher contract](Tamarin/TotalMatchPacket.lean) · [Selection theorem](Tamarin/MatchOrder.lean) |
 | Reduction | The general reducer certifies reachable, unique normal forms on the full table, including proper AC subproducts. A finite stage suffices for every term on a range-restricted canonical table. Default native-only now retries deferred queries on certified tables. | Other tables can still reach the default work limit. [Staged reducer](Tamarin/GeneralReductionWire.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
-| Variants | Default native-only retries general folding for certified constructor tables and compositions of DH, XOR and bilinear pairing. Constructor results can wrap matched variables. Lean certifies the 21-rule builtin table on open and kind-level inputs. | Extend automatic admission to variable-carrying results that call other defined operators, and to active AC laws beyond the certified groups. The numeric interface must represent the budget and bindings. [Composition theorem](Tamarin/PresentationComponents.lean) · [Table checker](Tamarin/GroupTable.lean) |
+| Variants | Default native-only retries general folding for certified tables. Free and commutative rules can call defined operators on either side. User-declared AC unit laws compose with DH, XOR and bilinear pairing. | Bounded rule checks can still defer. Further active AC laws need a proof for rewriting subproducts. The numeric interface must represent the budget and bindings. [Composition theorem](Tamarin/PresentationComponents.lean) · [Table checker](Tamarin/GroupTable.lean) |
 
 The general reduction contract states progress in terms of the rewrite relation. Once the
 stage covers every path from this input and all reachable normal endpoints preserve its
@@ -273,17 +273,21 @@ free or commutative rule to return a subterm, a ground expression that uses othe
 or a constructor expression built from matched variables. For `decode(box(x)) → ok(x)`,
 normal arguments give a normal image for `x`, and `ok` has no defining equation in the
 combined table. The same proof covers nested free, commutative and AC result constructors.
-The open variant query for this example can also return redundant specializations with
-`Pub` or `Fresh` captures. The Rust regression reconstructs every answer and compares its
-normal form with Maude. For constructor-pattern extensions, the checker proves termination
-from operator weights and confluence from the possible reductions at each rule head. It compares competing rules pairwise. Equal projection paths or agreeing fixed
-ground results discharge a pair directly. For other pairs it checks all unifiers modulo C/AC
-and their instantiated outputs. The automatic classifier can defer an expensive overlap.
-The general overlap theorem covers every pair. Ground outputs may themselves reduce. The kernel verifies
-the actual 22-rule Rust table for DH, pairing, symmetric and asymmetric encryption, signing,
-reveal-signing and location reports. [Standalone criterion](Tamarin/ConstructorPresentation.lean) ·
-[Mixed criterion](Tamarin/DHConstructorExtension.lean) · [Rust packet proof](Tamarin/DHConstructorWire.lean) ·
-[Short paths](Tamarin/OperatorVariantBounds.lean)
+Ground outputs may themselves reduce. The structural checker compares competing rules by
+projection paths, normal ground outputs, or unification of the two patterns modulo C/AC.
+When this criterion is inconclusive, Lean can compute a finite covering family of variants
+for a single rule's left side in the entire table. Agreement on every overlap gives a unique
+normal form for each normalized instance. The finite family also bounds the path to that
+form. This works for defined calls in a result, such as `decode(box(x)) → check(x)`, and
+for calls nested in a pattern, such as `inspect(check(x)) → x`. Search can defer if it
+cannot certify the family within its budget. [Rule check](Tamarin/DefinedPatterns.lean) ·
+[Uniform bound](Tamarin/OperatorVariantBounds.lean) · [Whole-table proof](Tamarin/PresentationComponents.lean)
+
+For a user-declared AC symbol with the single law `join(x,e) → x`, Lean checks that `e`
+is an irreducible message constant. Two normal message operands take at most one rewrite.
+In a flattened product containing a Node, a unit can still cancel against a message
+elsewhere in the product. With only the Node and the unit, neither factor can reduce.
+[AC unit proof](Tamarin/UserAC.lean) · [Sort and subproduct tests](Tests/UserAC.lean)
 
 For XOR, two normal operands need at most two rewrites at the XOR head. This bound
 applies even when each contains many common factors, since the repeated variable can

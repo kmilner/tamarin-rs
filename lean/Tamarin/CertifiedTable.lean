@@ -6,6 +6,7 @@ import Tamarin.XorPresentation
 import Tamarin.XorTableWire
 import Tamarin.GroupTable
 import Tamarin.BilinearTableWire
+import Tamarin.UserAC
 
 /-! Certify the decoded table in its full ambient signature. Symbol and variable
 IDs may vary with the query. Matching a characteristic rule only proposes an
@@ -60,15 +61,21 @@ private def detect (rs : Problem d.sig) : Option (Symbols d.sig × (Fin 3 → Va
   let decl ← DHWire.readSymbols t.pow i o n t.mul
   return (decl,fun k => match k with | 0 => t.x | 1 => t.y | 2 => t.z)
 
-private def ordinary (rs : Problem (TableAmbient.sig d)) (fuel : Nat) :=
-  ConstructorRows.accepts (SubtermDecrease.proposeWeight (fun _ => 1) rs) fuel rs
+private def components (xs : List (XorTable.Schema d.sig)) (units : List (UserAC.Schema d.sig)) :
+    List (PresentationComponents.Independent (TableAmbient.sig d)) :=
+  (xs.map fun x =>
+    let a := XorTable.liftSchema x
+    ⟨GroupPresentationParts.xorPart a,fun inv apps => GroupPresentationParts.xorLocal a inv apps⟩) ++
+  units.map fun u =>
+    let a := UserAC.liftSchema u
+    ⟨a.part,a.localProof⟩
 
 private def dh (rs : Problem d.sig) (fuel : Nat) (s : Symbols d.sig)
-    (ks : Fin 3 → Variable) (xs : List (XorTable.Schema d.sig)) : Bool :=
+    (ks : Fin 3 → Variable) (xs : List (XorTable.Schema d.sig))
+    (parts : List (PresentationComponents.Independent (TableAmbient.sig d))) : Bool :=
   let ambient := TableAmbient.liftRules rs
   let dh := DHWire.liftSymbols s
-  let extensions :=
-    xs.map (fun a => GroupTable.xor dh (XorTable.liftSchema a)) ++
+  let extensions := parts.map (GroupTable.independent dh) ++
     (BilinearTable.detect s rs).map (fun b => GroupTable.bilinear dh (BilinearTable.liftSchema b))
   let base : Head (TableAmbient.sig d) → Nat
     | .ac (.inl f) => if xs.any (fun a => a.f == f) then 2 else 1
@@ -79,16 +86,18 @@ private def dh (rs : Problem d.sig) (fuel : Nat) (s : Symbols d.sig)
   decide (∀ i, (ks i).sort = .msg) && decide (∀ i j, ks i = ks j → i = j) &&
     GroupTable.accepts dh ks extensions weights fuel ambient
 
-private def xor (rs : Problem (TableAmbient.sig d)) (fuel : Nat) (xs : List (XorTable.Schema d.sig)) : Bool :=
-  let parts := xs.map fun x => GroupPresentationParts.xorPart (XorTable.liftSchema x)
-  PresentationComponents.accepts parts (SubtermDecrease.proposeWeight (fun _ => 1)) fuel rs
+private def withoutDH (rs : Problem (TableAmbient.sig d)) (fuel : Nat)
+    (parts : List (PresentationComponents.Independent (TableAmbient.sig d))) : Bool :=
+  PresentationComponents.accepts (parts.map PresentationComponents.Independent.toPart)
+    (SubtermDecrease.proposeWeight (fun _ => 1)) fuel rs
 
 def admits (rs : Problem d.sig) (fuel : Nat) : Bool :=
   let ambient := TableAmbient.liftRules rs
   if rs.any (fun r => match r.lhs with | .ac .. => true | _ => false) then
     let xs := XorTable.candidates rs
-    (detect rs).any (fun (s,ks) => dh rs fuel s ks xs) || (!xs.isEmpty && xor ambient fuel xs)
-  else ordinary ambient fuel
+    let parts := components xs (UserAC.candidates rs)
+    (detect rs).any (fun (s,ks) => dh rs fuel s ks xs parts) || withoutDH ambient fuel parts
+  else withoutDH ambient fuel []
 
 theorem admits_sound {rs : Problem d.sig} {fuel} (ok : admits rs fuel) :
     ReferenceReduction.Bound (TableAmbient.liftRules rs) ∧ CanonicalPresentation (ruleRoot (TableAmbient.liftRules rs)) ∧
@@ -96,16 +105,12 @@ theorem admits_sound {rs : Problem d.sig} {fuel} (ok : admits rs fuel) :
   unfold admits at ok
   dsimp only at ok
   split at ok
-  · rcases Bool.or_eq_true_iff.mp ok with dhOK | xorOK
+  · rcases Bool.or_eq_true_iff.mp ok with dhOK | otherOK
     · obtain ⟨⟨s,ks⟩,_,found⟩ := (Option.any_eq_true _ _).mp dhOK
       simp only [dh,Bool.and_eq_true,decide_eq_true_eq] at found
       obtain ⟨⟨typed,distinct⟩,accepted⟩ := found
       exact GroupTable.accepts_sound typed distinct accepted
-    · have facts := PresentationComponents.evidence (Bool.and_eq_true_iff.mp xorOK).2
-      apply facts.complete
-      intro p hp
-      obtain ⟨x,hx,rfl⟩ := List.mem_map.mp hp
-      exact GroupPresentationParts.xorLocal _ (facts.inventory _ (List.mem_map_of_mem hx)) facts.pres.apps
-  · exact ConstructorRows.accepts_sound ok
+    · exact PresentationComponents.independent_complete otherOK
+  · exact PresentationComponents.independent_complete ok
 
 end Tamarin.CertifiedTable
