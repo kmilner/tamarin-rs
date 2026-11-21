@@ -774,7 +774,7 @@ EXPORT_MUTATIONS.extend([
      "theorem exportedTotalMatch_correct"),
 ])
 
-EXECUTABLE = ("import Tamarin.CheckedReductionPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
+EXECUTABLE = ("import Tamarin.Candidates.TableProofs\n" + EXECUTABLE + "\nnamespace Tamarin\n"
               + obligation("exportedCheckedReduce_correct") + obligation("exportedGeneralReduce_correct") + "end Tamarin\n")
 EXECUTABLE += "\nnamespace Tamarin\n" + obligation("exportedUnpackConjunction_correct") + "end Tamarin\n"
 EXPORT_MUTATIONS.extend([
@@ -785,11 +785,11 @@ EXPORT_MUTATIONS.extend([
 ])
 REDUCTION_RUN = "CheckedReductionWire.run decls nodes rules root fuel"
 EXPORT_MUTATIONS.extend([
-    ("general_reduce_omits_table", "GeneralReductionWire.run ds ns rules root fuel",
-     "GeneralReductionWire.run ds ns #[] root fuel", "theorem exportedGeneralReduce_correct"),
-    ("general_reduce_always_retries", "GeneralReductionWire.run ds ns rules root fuel", "#[#[3]]",
+    ("general_reduce_omits_table", "TableCandidate.reduce ds ns rules root fuel",
+     "TableCandidate.reduce ds ns #[] root fuel", "theorem exportedGeneralReduce_correct"),
+    ("general_reduce_always_retries", "TableCandidate.reduce ds ns rules root fuel", "#[#[3]]",
      "theorem exportedGeneralReduce_correct"),
-    ("general_reduce_always_declines", "GeneralReductionWire.run ds ns rules root fuel", "#[#[2]]",
+    ("general_reduce_always_declines", "TableCandidate.reduce ds ns rules root fuel", "#[#[2]]",
      "theorem exportedGeneralReduce_correct"),
     ("checked_reduce_ignores_rules", REDUCTION_RUN, "CheckedReductionWire.run decls nodes #[] root fuel",
      "theorem exportedCheckedReduce_correct"),
@@ -801,17 +801,21 @@ EXPORT_MUTATIONS.extend([
 ])
 
 EXECUTABLE = ("import Tamarin.CheckedVariantsPacket\n" + EXECUTABLE + "\nnamespace Tamarin\n"
-              + obligation("exportedCheckedVariants_correct") + obligation("exportedGeneralVariants_sound")
+              + obligation("exportedCheckedVariants_correct") + obligation("exportedGeneralVariants_malformed")
+              + obligation("exportedGeneralVariants_sound")
               + obligation("exportedGeneralVariants_progress") + obligation("exportedGeneralVariants_complete") + "end Tamarin\n")
 VARIANTS_RUN = "CheckedVariantsWire.run ds ns rules roots fuel"
 EXPORT_MUTATIONS.extend([
     ("variants_returns_incomplete_success", VARIANTS_RUN, "#[#[1]]", "theorem exportedCheckedVariants_correct"),
-    ("general_variants_always_defers", "GeneralVariantsWire.run ds ns rules roots fuel", "#[#[2]]",
+    ("general_variants_accepts_malformed", "TableCandidate.variants ds ns rules roots fuel",
+     "if (TableWire.input ds ns rules roots).isNone then #[#[1]] else TableCandidate.variants ds ns rules roots fuel",
+     "theorem exportedGeneralVariants_malformed"),
+    ("general_variants_always_defers", "TableCandidate.variants ds ns rules roots fuel", "#[#[2]]",
      "theorem exportedGeneralVariants_progress"),
-    ("general_variants_always_retries", "GeneralVariantsWire.run ds ns rules roots fuel", "#[#[3]]",
+    ("general_variants_always_retries", "TableCandidate.variants ds ns rules roots fuel", "#[#[3]]",
      "theorem exportedGeneralVariants_progress"),
-    ("general_variants_ignores_rules", "GeneralVariantsWire.run ds ns rules roots fuel",
-     "GeneralVariantsWire.run ds ns #[] roots fuel", "theorem exportedGeneralVariants_sound"),
+    ("general_variants_ignores_rules", "TableCandidate.variants ds ns rules roots fuel",
+     "TableCandidate.variants ds ns #[] roots fuel", "theorem exportedGeneralVariants_sound"),
     ("variants_defers_zero_budget_definitions", VARIANTS_RUN,
      "if fuel == 0 then #[#[2]] else CheckedVariantsWire.run ds ns rules roots fuel",
      "theorem exportedCheckedVariants_correct"),

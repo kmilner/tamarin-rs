@@ -129,9 +129,6 @@ impl Packet {
         // The algebra consumes expanded terms. encode_total checks every rule and
         // observation against the actual module declarations, including in theories
         // that also carry parser-only macro names.
-        if sig.enable_diff || (sig.enable_bp && !sig.enable_dh) {
-            return Ok(None);
-        }
         Self::with_rules(sig, observations, sig.rrules().iter())
     }
 

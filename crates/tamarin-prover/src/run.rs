@@ -482,7 +482,13 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     // is discarded (`_ <- ensureMaude as`).
     let _ = ensure_maude(args, &maude_path);
     let start_maude = |sig| {
-        MaudeHandle::start_with_backend(&maude_path, sig, args.algebra_backend).map_err(|e| {
+        MaudeHandle::start_for_tamarin_theory(
+            &maude_path,
+            sig,
+            args.algebra_backend,
+            Default::default(),
+        )
+        .map_err(|e| {
             RunError::Regular(format!(
                 "failed to start maude at {:?}: {:?}",
                 maude_path, e
@@ -1605,7 +1611,7 @@ impl TheoryPipeline<'_> {
         // (`--parse-only` never reaches here — it `continue`d before any
         // Maude is needed, Batch.hs.)
         let session_maude_caches = std::sync::Arc::new(SharedMaudeCaches::default());
-        let started = MaudeHandle::start_with_backend_and_caches(
+        let started = MaudeHandle::start_for_tamarin_theory(
             self.maude_path,
             self.maude_sig.clone(),
             self.args.algebra_backend,

@@ -2,8 +2,8 @@
 //!
 //! Native-only ordinary unification uses bounded kernels first and a total
 //! mixed free/C/AC fallback over the original equations. Directional matching
-//! has a total scoped fallback. Reduction and variants can certify answers
-//! on the active rewrite table within explicit search budgets.
+//! has a total scoped fallback. Protocol sessions retry reduction and variants on
+//! the full table under Tamarin's canonical, finite-variant presentation assumptions.
 //! The Rust encoding and C/Lean runtime boundary remain trusted code.
 
 mod common_children;

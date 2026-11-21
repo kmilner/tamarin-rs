@@ -1,0 +1,16 @@
+# The base branch owns the contract, the code that calls it and its merge gate.
+/.github/                     @kmilner
+/.cargo/                      @kmilner
+Cargo.toml                    @kmilner
+Cargo.lock                    @kmilner
+build.rs                      @kmilner
+/rust-toolchain*              @kmilner
+/crates/tamarin-build/        @kmilner
+/crates/tamarin-term/         @kmilner
+/crates/tamarin-prover/src/run.rs @kmilner
+/lean/                        @kmilner
+
+# Only candidate bodies and proof witnesses are delegated. The exported ABI,
+# theorem statements, audit, toolchain and regression fixtures stay owned.
+/lean/TamarinRuntime/Candidates/*.lean
+/lean/Tamarin/Candidates/*.lean

@@ -238,6 +238,72 @@ theorem completes (rs : Problem s) (q : List (Term s))
   have all := List.all_eq_true.mpr (check n (Nat.le_trans (Nat.le_max_right ..) hn))
   simp only [run,found n (Nat.le_trans (Nat.le_max_left ..) hn),Option.bind_some,all,ite_true]
 
+/-- Rust retains just the substitutions. Check every instantiated observation
+against all of its reductions before allowing the host to discard the values. -/
+inductive Replay where
+  | ready | retry | conflict
+  deriving DecidableEq
+
+def replay (rs : Problem s) (q : List (Term s)) (fuel : Nat) (rows : List (Variant s)) : Replay :=
+  let inputs := rows.flatMap fun a => q.map a.subst.apply
+  if inputs.all (fun t => (CheckedReduction.run rs fuel t).isSome) then .ready
+  else if inputs.any (CheckedReduction.ambiguous rs fuel) then .conflict else .retry
+
+theorem replay_reconstructs {rs : Problem s} {q fuel rows} (bound : ReferenceReduction.Bound rs)
+    (sound : ∀ a ∈ rows, Variant.Sound (ruleRoot rs) q a)
+    (ok : replay rs q fuel rows = .ready) :
+    ∀ a ∈ rows, Variant.Reconstructible (ruleRoot rs) q a := by
+  unfold replay at ok
+  dsimp only at ok
+  split at ok
+  · next all =>
+      intro a ha
+      apply Variant.reconstructible_of_unique (sound a ha)
+      intro t ht u v hu hv
+      have hit := List.all_eq_true.mp all (a.subst.apply t)
+        (List.mem_flatMap.mpr ⟨a,ha,List.mem_map.mpr ⟨t,ht,rfl⟩⟩)
+      obtain ⟨w,hw⟩ := Option.isSome_iff_exists.mp hit
+      have reply := CheckedReduction.correct bound hw
+      exact (reply.unique u hu).trans (reply.unique v hv).symm
+  · split at ok <;> contradiction
+
+private theorem unambiguous {rs : Problem s} (bound : ReferenceReduction.Bound rs)
+    (can : CanonicalPresentation (ruleRoot rs)) (fuel t) : CheckedReduction.ambiguous rs fuel t = false := by
+  apply Bool.eq_false_iff.mpr
+  intro bad
+  obtain ⟨a,b,na,nb,ne⟩ := CheckedReduction.ambiguous_sound bound fuel t bad
+  have unique := ((ReferenceReduction.reducer rs bound can).correct t).unique
+  exact ne ((unique a na).trans (unique b nb).symm)
+
+/-- An unsuccessful folding stage can still refute the presentation on a rule's
+own left side, even when no family survives the normal-form replay. -/
+def conflictingRules (rs : Problem s) (fuel : Nat) :=
+  rs.any fun r => CheckedReduction.ambiguous rs fuel r.lhs
+
+theorem no_conflicting_rules {rs : Problem s} (bound : ReferenceReduction.Bound rs)
+    (can : CanonicalPresentation (ruleRoot rs)) (fuel) : conflictingRules rs fuel = false := by
+  simp [conflictingRules,unambiguous bound can]
+
+theorem replay_no_conflict {rs : Problem s} (bound : ReferenceReduction.Bound rs)
+    (can : CanonicalPresentation (ruleRoot rs)) (q fuel rows) :
+    replay rs q fuel rows ≠ .conflict := by
+  simp [replay,unambiguous bound can]
+  split <;> decide
+
+theorem replay_eventually_ready {rs : Problem s} (bound : ReferenceReduction.Bound rs)
+    (can : CanonicalPresentation (ruleRoot rs)) (q rows) :
+    ∃ k, ∀ n ≥ k, replay rs q n rows = .ready := by
+  let inputs := rows.flatMap fun (a : Variant s) => q.map a.subst.apply
+  obtain ⟨k,all⟩ := CheckedReduction.common_budget inputs
+    (fun t n => (CheckedReduction.run rs n t).isSome = true) (by
+      intro t _
+      let height := ReductionHeight.height bound can.terminating
+      refine ⟨height t + 1,fun n hn => Option.isSome_iff_exists.mpr ?_⟩
+      exact CheckedReduction.completes bound can height (ReductionHeight.step bound can.terminating) t n hn)
+  refine ⟨k,fun n hn => ?_⟩
+  unfold replay
+  exact ite_eq_left (List.all_eq_true.mpr (all n hn))
+
 /-- Follow ordinary reductions on the entire tuple, retaining each intermediate
 point. The public checker can then test alternative symbolic rewrites there.
 The credit is shared by all coordinates in this trace. -/

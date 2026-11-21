@@ -149,6 +149,41 @@ fn full_table_checks_macro_expansion_at_the_term_boundary() {
         variants_for_convergent_theory(&sig, &expanded).unwrap(),
         Some(vec![vec![]])
     );
+    // Parser macros disable RuleTable preparation. A protocol session still
+    // reaches both complete kernels using the expanded terms and source rules.
+    let handle = MaudeHandle::start_for_tamarin_theory(
+        MISSING,
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap()
+    .with_fresh_counter_next(10);
+    assert_eq!(handle.reduce(&expanded).unwrap(), pub_term("projected"));
+    let x = variable("argument");
+    let rows = handle.variants(&fst(x.clone())).unwrap();
+    let a = pub_term("left");
+    let b = pub_term("right");
+    for (input, expected) in [(a.clone(), fst(a.clone())), (pair(a.clone(), b), a)] {
+        // Match the input and reconstructed observation together. The identity
+        // arm alone can match a pair input, but cannot project its first child.
+        assert!(rows.iter().any(|row| {
+            use tamarin_term::lean_unification::{match_modulo_attributes, Outcome};
+            use tamarin_term::subst::{apply_vterm, Subst};
+            let image = apply_vterm(&Subst::from_list(row.clone()), x.clone());
+            let value = handle.reduce(&fst(image.clone())).unwrap();
+            let goal = [
+                Equal::new(image, input.clone()),
+                Equal::new(value, expected.clone()),
+            ];
+            matches!(match_modulo_attributes(&sig, &goal, |_| true).unwrap(),
+                Outcome::Complete(matches) if !matches.is_empty())
+        }));
+    }
+    assert_eq!(
+        (handle.stats().var_count, handle.stats().norm_count),
+        (0, 0)
+    );
     let unexpanded = f_app_no_eq(alias, vec![pub_term("input")]);
     assert_eq!(
         reduction_for_convergent_theory(&sig, &unexpanded).unwrap(),

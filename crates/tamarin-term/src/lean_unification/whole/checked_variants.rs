@@ -53,7 +53,7 @@ fn observations(query: &LNTerm) -> &[LNTerm] {
 }
 
 /// Run the unrestricted folding reference on the full user and builtin rule table.
-/// Each returned binding row has a reachable normal variant. Termination and
+/// Every successful binding row reconstructs a unique normal variant. Termination and
 /// complete coverage require a range-restricted, sort-preserving, convergent
 /// finite-variant presentation modulo the declared C/AC axioms. An invalid
 /// presentation may diverge. A missing result denotes an unrepresentable or

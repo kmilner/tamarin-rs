@@ -387,6 +387,9 @@ impl NativeFailure {
 }
 
 struct MaudeProcessInner {
+    /// The caller supplied Tamarin's canonical, finite-variant theory premises.
+    #[cfg(feature = "lean-unification")]
+    theory_fallback: bool,
     backend: AlgebraBackend,
     maude_path: String,
     child: Arc<Mutex<MaudeChildReaper>>,
@@ -870,8 +873,27 @@ impl MaudeHandle {
         )
     }
 
+    /// Open a protocol theory under Tamarin's equational-theory contract.
+    /// The full active presentation must be range-restricted, sort-preserving,
+    /// terminating and confluent modulo C/AC, with the finite variant property.
+    /// These semantic conditions are supplied by the theory author. Raw sessions
+    /// can use `start_with_backend` for certificate-only fallback.
+    pub fn start_for_tamarin_theory(
+        maude_path: &str,
+        sig: MaudeSig,
+        backend: AlgebraBackend,
+        caches: Arc<SharedMaudeCaches>,
+    ) -> Result<Self, MaudeError> {
+        let session = Self::start_with_backend_and_caches(maude_path, sig, backend, caches)?;
+        #[cfg(feature = "lean-unification")]
+        {
+            session.inner.lock().theory_fallback = backend == AlgebraBackend::NativeOnly;
+        }
+        Ok(session)
+    }
+
     /// Start a backend session. Native-only creates no subprocess or pipes.
-    /// All handles sharing caches must use the same signature and backend.
+    /// All handles sharing caches must use the same signature, backend and theory assumptions.
     pub fn start_with_backend_and_caches(
         maude_path: &str,
         sig: MaudeSig,
@@ -911,6 +933,8 @@ impl MaudeHandle {
         }));
         let indexed = reduction_heads_indexed(&sig);
         let mut inner = MaudeProcessInner {
+            #[cfg(feature = "lean-unification")]
+            theory_fallback: false,
             backend,
             maude_path: maude_path.to_owned(),
             child: reaper.clone(),
@@ -1230,7 +1254,16 @@ impl MaudeHandle {
                             Ok(result)
                         }
                     })
+                    .and_then(|value| match value {
+                        None if inner.theory_fallback => {
+                            crate::lean_unification::reduction_for_convergent_theory(&inner.sig, t)
+                        }
+                        value => Ok(value),
+                    })
                     .map_err(|error| {
+                        if error == crate::lean_unification::Error::Cancelled {
+                            return MaudeError::Cancelled;
+                        }
                         if self.backend == AlgebraBackend::NativeOnly {
                             inner
                                 .caches
@@ -2485,6 +2518,36 @@ impl MaudeHandle {
         Ok(out)
     }
 
+    #[cfg(feature = "lean-unification")]
+    fn bounded_variants(
+        &self,
+        sig: &MaudeSig,
+        query: &LNTerm,
+    ) -> Result<crate::lean_unification::Outcome, crate::lean_unification::Error> {
+        use crate::lean_unification::{pairing_variants, Outcome};
+        let pairing = pairing_variants(sig, query)?;
+        if let Outcome::Complete(_) = pairing {
+            return Ok(pairing);
+        }
+        let Some(theory) = self.native_rules() else {
+            return Ok(Outcome::Unsupported);
+        };
+        if self.backend == AlgebraBackend::NativeOnly
+            && let complete @ Outcome::Complete(_) = theory.fresh_xor_variants(query)?
+        {
+            return Ok(complete);
+        }
+        match theory.variants(query)? {
+            Outcome::Unsupported if self.backend == AlgebraBackend::NativeOnly => {
+                match theory.joined_variants(query)? {
+                    Outcome::Unsupported => theory.checked_variants(sig, query),
+                    complete => Ok(complete),
+                }
+            }
+            other => Ok(other),
+        }
+    }
+
     /// Get one fresh substitution per variant. The native constructor path
     /// returns the identity as an empty substitution. Maude may spell it out
     /// with independent same-sort fresh variables. Each Maude answer has its
@@ -2497,41 +2560,19 @@ impl MaudeHandle {
         let mut inner = cancellation::lock(&self.inner)?;
         #[cfg(feature = "lean-unification")]
         if self.backend != AlgebraBackend::Maude {
+            use crate::lean_unification::Outcome;
+            let reference = || {
+                crate::lean_unification::variants_for_convergent_theory(&inner.sig, t)
+                    .map(|rows| rows.map_or(Outcome::Unsupported, Outcome::Complete))
+            };
             let result = if self.reference_algebra || self.reference_variants {
-                crate::lean_unification::variants_for_convergent_theory(&inner.sig, t).map(|rows| {
-                    rows.map_or(
-                        crate::lean_unification::Outcome::Unsupported,
-                        crate::lean_unification::Outcome::Complete,
-                    )
-                })
+                reference()
             } else {
-                crate::lean_unification::pairing_variants(&inner.sig, t).and_then(|result| {
-                    if result == crate::lean_unification::Outcome::Unsupported
-                        && let Some(theory) = self.native_rules()
-                    {
-                        if self.backend == AlgebraBackend::NativeOnly
-                            && let complete @ crate::lean_unification::Outcome::Complete(_) =
-                                theory.fresh_xor_variants(t)?
-                        {
-                            return Ok(complete);
-                        }
-                        let result = theory.variants(t)?;
-                        if self.backend == AlgebraBackend::NativeOnly
-                            && result == crate::lean_unification::Outcome::Unsupported
-                        {
-                            match theory.joined_variants(t)? {
-                                crate::lean_unification::Outcome::Unsupported => {
-                                    theory.checked_variants(&inner.sig, t)
-                                }
-                                complete => Ok(complete),
-                            }
-                        } else {
-                            Ok(result)
-                        }
-                    } else {
-                        Ok(result)
-                    }
-                })
+                self.bounded_variants(&inner.sig, t)
+                    .and_then(|result| match result {
+                        Outcome::Unsupported if inner.theory_fallback => reference(),
+                        other => Ok(other),
+                    })
             }
             .map_err(|error| {
                 if error == crate::lean_unification::Error::Cancelled {

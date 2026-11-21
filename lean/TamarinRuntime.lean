@@ -1,6 +1,5 @@
 import Tamarin.CertifiedTableWire
-import Tamarin.CheckedVariantsWire
-import Tamarin.GeneralReductionWire
+import TamarinRuntime.Candidates.Table
 import Tamarin.CheckedReductionWire
 import Tamarin.FactorRefutation
 import Tamarin.TotalMatchWire
@@ -214,7 +213,7 @@ def checkedReduce (decls : Array UInt64) (nodes : Array (Array UInt64)) (rules :
 
 @[export tamarin_general_reduce]
 def generalReduce (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array UInt64)
-    (root fuel : UInt64) : Array (Array UInt64) := GeneralReductionWire.run ds ns rules root fuel
+    (root fuel : UInt64) : Array (Array UInt64) := TableCandidate.reduce ds ns rules root fuel
 
 @[export tamarin_checked_variants]
 def checkedVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
@@ -226,7 +225,7 @@ def certifyTable (ds : Array UInt64) (ns : Array (Array UInt64)) (rules : Array 
 
 @[export tamarin_general_variants]
 def generalVariants (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UInt64) (fuel : UInt64) :
-    Array (Array UInt64) := GeneralVariantsWire.run ds ns rules roots fuel
+    Array (Array UInt64) := TableCandidate.variants ds ns rules roots fuel
 
 @[export tamarin_whole_unify]
 def wholeUnify (decls : Array UInt64) (nodes : Array (Array UInt64)) (equations : Array UInt64) :

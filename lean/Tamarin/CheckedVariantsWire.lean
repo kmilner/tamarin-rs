@@ -58,8 +58,12 @@ def run (ds : Array UInt64) (ns : Array (Array UInt64)) (rules roots : Array UIn
     let table := TableAmbient.liftRules rs
     if CheckedReduction.rangeBound table && table.all (fun r => CheckedVariants.nonvar r.lhs) then
       match GeneralVariants.run table (q.map TableAmbient.liftTerm) fuel.toNat with
-      | none => #[#[3]]
-      | some rows => (TableAmbient.emit q rows).getD #[#[2]]
+      | none => if GeneralVariants.conflictingRules table fuel.toNat then #[#[2]] else #[#[3]]
+      | some rows =>
+        match GeneralVariants.replay table (q.map TableAmbient.liftTerm) fuel.toNat rows with
+        | .ready => (TableAmbient.emit q rows).getD #[#[3]]
+        | .conflict => #[#[2]]
+        | .retry => #[#[3]]
     else #[#[2]]
 
 /-- The search stabilizes at a finite stage. A funded call can return any

@@ -4,12 +4,12 @@ This Lake package specifies the algebra operations that Tamarin currently asks M
 Rust links selected Lean kernels in-process with the `lean-unification` feature. The goal is to run
 the prover with no Maude binary and let developers replace the search algorithms under fixed
 correctness and completion contracts. Today, native-only mode completes some full protocol proofs.
-The acceptance criterion is mathematical soundness and completeness on the original query.
+The acceptance criterion is mathematical soundness and completeness on the original query under Tamarin’s theory assumptions.
 Maude comparisons check compatibility and expose discrepancies. Where a concrete witness proves
 Maude missed a variant, native-only must retain that witness. A three-rule regression exercises
 both the reachable trace and the false universal lemma. [Theory](../crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy) · [Verdict test](../crates/tamarin-prover/tests/native_backend.rs)
 
-Native-only can select general Lean implementations for all four Maude commands.
+Native-only batch proofs and the `variants` command fall back to general Lean implementations for all four Maude commands.
 Unification and directional matching operate modulo the declared free/C/AC symbols.
 Reduction and variants operate on the combined user and builtin equation table. On
 a range-restricted canonical presentation, reduction reaches the unique normal form.
@@ -94,15 +94,18 @@ completion on its full domain. A bounded export must establish completion on its
 and distinguish exhaustion, interruption and unsupported input from a complete answer.
 [Maude narrowing equation selection](https://github.com/maude-lang/Maude/blob/7269fc720072a2cd8b7222736721ba26dd3752b2/src/Higher/variantNarrowingSearchState.cc#L150-L175) · [Equation printer](../crates/tamarin-term/src/maude_print.rs#L511-L523) · [Tamarin's theory assumptions](../tamarin-prover/manual/src/004_cryptographic-messages.md#L129-L143)
 
-**For an optimization**, change the candidate and its proof. CI checks the actual exported functions
-against their contracts, audits dependencies and export names, rejects unchecked overrides, and
-rechecks the compiled Lean environment. Local builds compile the runtime and allow unproved
-experiments. Require the `lean-spec` check in branch protection to enforce this before merge.
-The graph completion contract reads packets through the fixed `TamarinWire.lean` definition.
-An optimizer can replace the executable decoder without changing which packets require answers.
-Changes to the semantic contract, wire format or acceptance harness need separate review.
-[Runtime candidates](TamarinRuntime/) · [Exports](TamarinRuntime.lean) ·
-[Proof obligations and audit](TamarinCI.lean) · [Mutation tests](Tests/check_audit.py)
+**For a table solver optimization**, change the two candidate files. The runtime imports the
+implementation and CI imports its proof witnesses. The fixed CI root checks the actual exports,
+rechecks the compiled Lean environment and rejects unchecked executable replacements.
+Local builds support unproved experiments. [Implementation](TamarinRuntime/Candidates/Table.lean) ·
+[Proofs](Tamarin/Candidates/TableProofs.lean) · [Export obligations](TamarinCI.lean)
+
+The repository includes a GitHub ruleset for the default branch. Importing it in Settings →
+Rules → Rulesets requires the GitHub Actions `lean-spec` check and code-owner approval for
+changes to the contract, ABI, acceptance harness and their build configuration. The two candidate
+directories can be changed under the fixed gate. GitHub reads CODEOWNERS from the base branch.
+Install the workflow and ownership file when activating the ruleset. [Ruleset](../.github/rulesets/lean-spec.json) ·
+[Ownership](../.github/CODEOWNERS) · [Mutation tests](Tests/check_audit.py)
 
 ## What crosses the Rust–Lean boundary
 
@@ -223,8 +226,8 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | --- | --- | --- |
 | Ordinary free/C/AC unification | The reference switch sends both enumeration and existence queries straight to the complete solver. Nested packed equations share one substitution. The solver accepts mixtures of free, commutative and AC heads, including kind-level inputs. | Check Rust representation and observable answer ordering across the protocol corpus. [Solver contract](Tamarin/TotalUnifyPacket.lean) |
 | Directional matching | The reference switch uses the complete matcher for enumeration, existence and first-match queries, including caller-designated rigid variables. For source refinement every backend selects the least restored binding map, including on ambiguous matches. | Full hybrid enumeration retains its existing order for callers that consume the whole sequence. [Matcher contract](Tamarin/TotalMatchPacket.lean) · [Selection theorem](Tamarin/MatchOrder.lean) |
-| Reduction | The general reducer certifies reachable, unique normal forms on the full table, including proper AC subproducts. A finite stage suffices for every term on a range-restricted canonical table. Default native-only now retries deferred queries on certified tables. | Other tables can still reach the default work limit. [Staged reducer](Tamarin/GeneralReductionWire.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
-| Variants | Default native-only retries general folding for certified tables. Free and commutative rules can call defined operators on either side. User-declared AC unit laws compose with DH, XOR and bilinear pairing. | Bounded rule checks can still defer. Further active AC laws need a proof for rewriting subproducts. The numeric interface must represent the budget and bindings. [Composition theorem](Tamarin/PresentationComponents.lean) · [Table checker](Tamarin/GroupTable.lean) |
+| Reduction | Protocol sessions retry the original term against the entire emitted equation table after a bounded decline. A finite stage suffices on every range-restricted, sort-preserving canonical table, including proper AC subproducts. | The packet must decode and the final numeric budget must cover the rewrite height. [Export and driver proofs](TamarinCI.lean) |
+| Variants | Protocol sessions retry general folding for the original observation tuple under the same assumptions and FVP. Each accepted substitution reconstructs unique values even without assuming confluence. | The stages and bindings must fit the interface. Raw library sessions still offer certificate-only admission. [Export and driver proofs](TamarinCI.lean) · [Replay](Tamarin/GeneralVariants.lean) |
 
 The general reduction contract states progress in terms of the rewrite relation. Once the
 stage covers every path from this input and all reachable normal endpoints preserve its
@@ -256,12 +259,15 @@ Lean checks each row against the original tuple. For a sort-preserving, terminat
 confluent presentation with the finite variant property modulo C/AC, Lean proves that the
 search reaches a complete family at a finite budget. Rust retries incomplete stages with
 a larger budget and checks cancellation between calls. The numeric packet must represent
-the budget and bindings. The caller supplies the rules and query. An
-invalid presentation can diverge or have additional normal forms. The regular native-only
-operation requires completeness and unique reconstruction on every successful reply. After a
-bounded search defers, Rust asks Lean to certify the original numeric table. A positive
-certificate lets Rust retry the staged solver with cancellation checks between calls.
-The classifier infers the operators and rule variables from the equations Rust already sends. A failed certificate leaves the query deferred.
+the budget and bindings. Batch proofs, intruder variants and library callers using
+`MaudeHandle::start_for_tamarin_theory` take this route on a bounded decline, including when
+the specialized rule table could not be prepared. The source of the full rule set is the
+same `MaudeSig::rrules()` used by the Maude printer. The theorem covers any sequence of retry
+budgets with a sufficiently funded last stage. Rust constructs and decodes the packets.
+Tamarin’s theory assumptions come from the author. An invalid presentation can diverge or
+lose completeness. Lean rejects witnessed ambiguity and verifies unique reconstruction of
+each accepted reference row. Raw library handles opened with `start_with_backend` retain the
+certificate-only default for untrusted equations.
 [Table classifier](Tamarin/CertifiedTable.lean) · [Promotion contract](Tamarin/CertifiedTableWire.lean)
 [Executable and theorems](Tamarin/GeneralVariants.lean) · [Rust acceptance test](../crates/tamarin-term/tests/native_backend/checked_variants.rs)
 

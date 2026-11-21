@@ -150,3 +150,36 @@ theorem correct : Correct run where
     · exact .inr ⟨stop,fun ⟨rows,found,wire,encoded⟩ => by simp [encode,found,encoded] at miss⟩
 
 end Tamarin.CheckedVariantsWire
+
+namespace Tamarin.GeneralVariantsWire
+
+def Malformed (kernel : CheckedVariantsWire.Kernel) : Prop :=
+  ∀ ds ns es roots fuel, TableWire.input ds ns es roots = none → kernel ds ns es roots fuel = #[#[0]]
+
+/-- Every decoded successful row must survive substitution-only reconstruction. -/
+def Sound (kernel : CheckedVariantsWire.Kernel) : Prop :=
+  ∀ {ds ns es roots d rs q} (fuel : UInt64),
+    TableWire.input ds ns es roots = some ⟨d,rs,q⟩ →
+    let wire := kernel ds ns es roots fuel
+    wire = #[#[2]] ∨ wire = #[#[3]] ∨ ∃ rows, TableAmbient.Decodes q wire rows ∧
+      (∀ a ∈ rows, a.Sound (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm)) ∧
+      (∀ a ∈ rows, a.Reconstructible (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm)) ∧
+      (MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot (TableAmbient.liftRules rs)) →
+       MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) [] rows)
+
+/-- A candidate can finish early. At any budget where the reference has a
+replayable, encodable family, success is mandatory. -/
+def Progress (kernel : CheckedVariantsWire.Kernel) : Prop :=
+  ∀ {ds ns es roots d rs q} (fuel : UInt64),
+    TableWire.input ds ns es roots = some ⟨d,rs,q⟩ →
+    ReferenceReduction.Bound (TableAmbient.liftRules rs) →
+    MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot (TableAmbient.liftRules rs)) →
+    let ref := GeneralVariants.run (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) fuel.toNat
+    let wire := kernel ds ns es roots fuel
+    (∃ rows, TableAmbient.Decodes q wire rows ∧
+      MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) [] rows) ∨
+      (wire = #[#[3]] ∧ (ref = none ∨ ∃ rows, ref = some rows ∧
+        (GeneralVariants.replay (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) fuel.toNat rows = .retry ∨
+         TableAmbient.emit q rows = none)))
+
+end Tamarin.GeneralVariantsWire

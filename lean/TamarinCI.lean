@@ -11,6 +11,8 @@ import Tamarin.JointGroupWire
 import Tamarin.JointGroupTable
 import Tamarin.BilinearWire
 import Tamarin.CertifiedReduction
+import Tamarin.Candidates.TableProofs
+import Tamarin.TableStages
 import Tamarin.DHMixedTermination
 import Tamarin.TableConfluence
 import Tamarin.CheckedVariantsPacket
@@ -99,7 +101,7 @@ theorem exportedCheckedReduce_correct : CheckedReductionWire.Correct Executable.
   CheckedReductionWire.correct
 
 theorem exportedGeneralReduce_correct : GeneralReductionWire.Correct Executable.generalReduce :=
-  GeneralReductionWire.correct
+  TableCandidateProofs.reduction
 
 theorem exportedCertifyTable_correct : CertifiedTableWire.Correct Executable.certifyTable :=
   CertifiedTableWire.correct
@@ -129,48 +131,17 @@ theorem exportedCertifiedReduce_complete {ds ns es root d t rs budget}
 theorem exportedCheckedVariants_correct : CheckedVariantsWire.Correct Executable.checkedVariants :=
   CheckedVariantsWire.correct
 
+theorem exportedGeneralVariants_malformed : GeneralVariantsWire.Malformed Executable.generalVariants :=
+  TableCandidateProofs.malformed
+
 /-- Every binding row represents a genuine variant of the decoded original tuple,
 including when the caller supplied a noncanonical table. -/
-theorem exportedGeneralVariants_sound {ds ns es roots d rs q} (fuel : UInt64)
-    (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩) :
-    let wire := Executable.generalVariants ds ns es roots fuel
-    wire = #[#[2]] ∨ wire = #[#[3]] ∨ ∃ rows, TableAmbient.Decodes q wire rows ∧
-      (∀ a ∈ rows, a.Sound (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm)) ∧
-      (MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot (TableAmbient.liftRules rs)) →
-       MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) [] rows) := by
-  simp only [Executable.generalVariants,GeneralVariantsWire.run,decoded]
-  split
-  · next accepted =>
-      cases found : GeneralVariants.run (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) fuel.toNat with
-      | none => exact .inr (.inl rfl)
-      | some rows =>
-        cases packet : TableAmbient.emit q rows with
-        | none => exact .inl (by simp [packet])
-        | some out => exact .inr (.inr ⟨rows,by simpa [packet] using TableAmbient.emit_correct packet,GeneralVariants.sound_on_success found,
-            fun can => GeneralVariants.correct ((CheckedReduction.rangeBound_iff _).mp
-              (Bool.and_eq_true_iff.mp accepted).1) can found⟩)
-  · exact .inl rfl
+theorem exportedGeneralVariants_sound : GeneralVariantsWire.Sound Executable.generalVariants :=
+  TableCandidateProofs.sound
 
-/-- A valid table may require another stage. The host may permanently defer
-only for an unrepresentable family, and may stop retrying early with a complete reply. -/
-theorem exportedGeneralVariants_progress {ds ns es roots d rs q} (fuel : UInt64)
-    (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩)
-    (bound : ReferenceReduction.Bound (TableAmbient.liftRules rs))
-    (can : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot (TableAmbient.liftRules rs))) :
-    let ref := GeneralVariants.run (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) fuel.toNat
-    let wire := Executable.generalVariants ds ns es roots fuel
-    (∃ rows, TableAmbient.Decodes q wire rows ∧
-      MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) [] rows) ∨
-      (wire = #[#[3]] ∧ ref = none) ∨
-      (wire = #[#[2]] ∧ ∃ rows, ref = some rows ∧ TableAmbient.emit q rows = none) := by
-  simp only [Executable.generalVariants,GeneralVariantsWire.run,decoded,(CheckedReduction.rangeBound_iff _).mpr bound,
-    GeneralVariants.nonvariable can,Bool.and_self,ite_true]
-  cases found : GeneralVariants.run (TableAmbient.liftRules rs) (q.map TableAmbient.liftTerm) fuel.toNat with
-  | none => exact .inr (.inl ⟨rfl,rfl⟩)
-  | some rows =>
-    cases packet : TableAmbient.emit q rows with
-    | none => exact .inr (.inr ⟨by simp [packet],rows,rfl,packet⟩)
-    | some out => exact .inl ⟨rows,by simpa [packet] using TableAmbient.emit_correct packet,GeneralVariants.correct bound can found⟩
+/-- A canonical table yields a complete reply or a retry at every budget. -/
+theorem exportedGeneralVariants_progress : GeneralVariantsWire.Progress Executable.generalVariants :=
+  TableCandidateProofs.progress
 
 /-- On an FVP table, sufficiently funded calls with encodable reference
 bindings must succeed. The implementation can choose any complete family. -/
@@ -181,13 +152,49 @@ theorem exportedGeneralVariants_complete {ds ns es roots d rs q}
     (finite : MaudeOperations.FiniteVariantProperty (Rewriting.ruleRoot (TableAmbient.liftRules rs))) :
     GeneralVariantsWire.CompletesOn rs q (Executable.generalVariants ds ns es roots) := by
   obtain ⟨rows,k,found,_⟩ := GeneralVariants.completes _ _ bound canonical finite
-  refine ⟨rows,k,found,fun fuel enough fits => ?_⟩
-  rcases exportedGeneralVariants_progress fuel decoded bound canonical with done | ⟨_,retry⟩ | ⟨_,other,seen,failed⟩
-  · exact done
-  · simp [found fuel.toNat enough] at retry
-  · rw [found fuel.toNat enough] at seen
-    cases seen
-    simp [failed] at fits
+  obtain ⟨m,replay⟩ := GeneralVariants.replay_eventually_ready bound canonical (q.map TableAmbient.liftTerm) rows
+  refine ⟨rows,max k m,fun n hn => found n (Nat.le_trans (Nat.le_max_left ..) hn),fun fuel enough fits => ?_⟩
+  have done := found fuel.toNat (Nat.le_trans (Nat.le_max_left ..) enough)
+  have ready := replay fuel.toNat (Nat.le_trans (Nat.le_max_right ..) enough)
+  rcases exportedGeneralVariants_progress fuel decoded bound canonical with answer | ⟨_,retry⟩
+  · exact answer
+  · simp [done,ready,Option.isSome_iff_ne_none.mp fits] at retry
+
+/-- Every prefix of the host retry schedule is safe on a canonical table. Once
+the final word covers the rewrite height, the driver must return the answer. -/
+theorem exportedReduction_fallback {ds ns es root d t rs}
+    (decoded : TableWire.input ds ns es #[root] = some ⟨d,rs,[t]⟩)
+    (bound : ReferenceReduction.Bound rs) (can : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot rs))
+    (earlier : List UInt64) (last : UInt64) (fits : ReductionHeight.height bound can.terminating t < last.toNat) :
+    GeneralReductionWire.Answer d rs t (TableStages.firstTerminal (Executable.generalReduce ds ns es root) last earlier) := by
+  apply TableStages.completes (exportedGeneralReduce_correct.completes decoded bound can last fits)
+  intro n _
+  rcases exportedGeneralReduce_correct.valid _ _ _ _ n _ _ _ decoded with ok | ⟨_,out | clash⟩ | ⟨retry,_⟩
+  · exact .inl ok
+  · exact (out bound).elim
+  · obtain ⟨a,b,na,nb,ne⟩ := clash
+    have unique := ((ReferenceReduction.reducer rs bound can).correct t).unique
+    exact (ne ((unique a na).trans (unique b nb).symm)).elim
+  · exact .inr retry
+
+/-- On a canonical FVP table, the host inherits the single-stage completion
+contract for every choice of earlier budgets. Only the final budget and stable
+bindings need to fit the wire. There is no whole-table classifier premise. -/
+theorem exportedVariants_fallback {ds ns es roots d rs q}
+    (decoded : TableWire.input ds ns es roots = some ⟨d,rs,q⟩)
+    (bound : ReferenceReduction.Bound (TableAmbient.liftRules rs))
+    (can : MaudeOperations.CanonicalPresentation (Rewriting.ruleRoot (TableAmbient.liftRules rs)))
+    (finite : MaudeOperations.FiniteVariantProperty (Rewriting.ruleRoot (TableAmbient.liftRules rs)))
+    (earlier : UInt64 → List UInt64) :
+    GeneralVariantsWire.CompletesOn rs q (fun last =>
+      TableStages.firstTerminal (Executable.generalVariants ds ns es roots) last (earlier last)) := by
+  obtain ⟨rows,k,found,complete⟩ := exportedGeneralVariants_complete decoded bound can finite
+  refine ⟨rows,k,found,fun last enough fits => ?_⟩
+  apply TableStages.completes (good := fun w => ∃ answers, TableAmbient.Decodes q w answers ∧
+    MaudeOperations.VariantReply (Rewriting.ruleRoot (TableAmbient.liftRules rs)) (q.map TableAmbient.liftTerm) [] answers)
+    (complete last enough fits)
+  intro n _
+  exact (exportedGeneralVariants_progress n decoded bound can).imp_right And.left
 
 /-- A positive table certificate licenses folding with the uniqueness
 guarantee required by a caller of the checked interface. -/
