@@ -47,7 +47,7 @@ theorem protectedHeads (base : ExactTable E) (outside : ∀ r ∈ rows, extraHea
       rcases atDH with e|e|e|e <;> simp [e,extraHead] at ok
 
 theorem otherRows (base : ExactTable E) (outside : ∀ r ∈ rows, extraHead s (head r.lhs))
-    (subterms : SubtermVariants.Presentation rows) : OtherRows (T.append rows) := by
+    (eligible : Equation sig → Prop) (checked : ∀ r ∈ rows, eligible r) : OtherRows (T.append rows) eligible := by
   constructor
   · intro f hp hi r hr h
     rcases List.mem_append.mp hr with hb | he
@@ -55,11 +55,11 @@ theorem otherRows (base : ExactTable E) (outside : ∀ r ∈ rows, extraHead s (
       · cases dh
       · exact (hi (Head.free.inj dh)).elim
       · exact (hp (Head.free.inj dh)).elim
-    · exact subterms r he
+    · exact checked r he
   · intro f r hr h
     rcases List.mem_append.mp hr with hb | he
     · rcases base.heads hb with dh|dh|dh <;> rw [h] at dh <;> cases dh
-    · exact subterms r he
+    · exact checked r he
   · intro f hm member
     obtain ⟨r,hr,h⟩ := List.mem_map.mp member
     rcases List.mem_append.mp hr with hb | he
@@ -134,9 +134,9 @@ theorem accepts_sound (s : Symbols sig) (keys : Fin 3 → Variable)
   have good (r) (mem : r ∈ more) := ConstructorRows.checkedRow_sound (List.mem_append_right _ mem) scope dh.apps
     (List.all_eq_true.mp rowsOK r mem)
   have can := canonical base outside weight weightOK sorts (fun r h => (good r h).2)
-  have others := otherRows base outside (fun r h => (good r h).1)
+  have others := otherRows base outside _ (fun r h => (good r h).1)
   exact ⟨TablePresentation.bound_of_agrees agrees scope,(TablePresentation.canonical_iff agrees).mpr can,
-    (TablePresentation.finite_iff agrees).mpr (mixedFiniteVariants can dh others)⟩
+    (TablePresentation.finite_iff agrees).mpr (mixedResultVariants scope can dh others)⟩
 
 end ConstructorExtension
 end Tamarin.Rewriting.DHPeer

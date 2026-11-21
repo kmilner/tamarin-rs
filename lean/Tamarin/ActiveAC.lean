@@ -45,19 +45,18 @@ theorem complete_of_bounds (pres : NormalAlgebra.Presentation rs) (scope : Refer
         constructor_node_normal _ pres.apps (.ac f a b) h ⟨na,nb⟩⟩⟩
 
 /-- Every active AC head supplies an algebra and a bound for products of two
-normal operands. Free and commutative rules can use the existing subterm and
-ground-result criterion. Unused AC symbols remain ordinary constructors. -/
+normal operands. Free and commutative rules can use the constructor-result criterion. Unused AC symbols remain ordinary constructors. -/
 theorem complete (pres : NormalAlgebra.Presentation rs) (scope : ReferenceReduction.Bound rs)
     (active : ∀ f, Head.ac f ∈ ruleHeads rs → Operator rs f)
     (constructor : ∀ r ∈ rs, (∀ f, head r.lhs ≠ .ac f) →
-      SubtermVariants.Row r ∧ NormalAlgebra.UniqueRow rs r) :
+      SubtermVariants.ResultRow rs r ∧ NormalAlgebra.UniqueRow rs r) :
     CanonicalPresentation (ruleRoot rs) ∧ FiniteVariantProperty (ruleRoot rs) := by
   apply complete_of_bounds pres scope active (fun r hr h => (constructor r hr h).2)
   · intro can f
-    exact SubtermVariants.free_bound scope can pres.apps f fun r hr h =>
+    exact SubtermVariants.free_result_bound scope can pres.apps f fun r hr h =>
       (constructor r hr (by intro g eq; rw [h] at eq; cases eq)).1
   · intro can f
-    exact SubtermVariants.comm_bound scope can pres.apps f fun r hr h =>
+    exact SubtermVariants.comm_result_bound scope can pres.apps f fun r hr h =>
       (constructor r hr (by intro g eq; rw [h] at eq; cases eq)).1
 
 end Tamarin.ActiveAC

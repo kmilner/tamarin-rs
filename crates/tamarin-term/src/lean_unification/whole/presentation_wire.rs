@@ -234,3 +234,111 @@ fn native_oracle_declared_ac_group_composes_with_builtin_groups() {
         assert_eq!(oracle.reduce(&input).unwrap(), zero_const());
     }
 }
+
+#[test]
+fn native_oracle_constructor_results_rebuild_the_open_capture() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::union;
+    use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+    use crate::lterm::{pub_term, LSort, LVar, Name, NameTag};
+    use crate::maude_proc::MaudeHandle;
+    use crate::maude_sig::mset_maude_sig;
+    use crate::rewriting::RRule;
+    use crate::subst::apply_vterm;
+    use crate::subst_vfresh::LNSubstVFresh;
+    use crate::subterm_rule::rrule_to_ctxt_st_rule;
+    use crate::term::{f_app_list, f_app_no_eq, Term};
+    use crate::vterm::{var_term, Lit};
+
+    let [decode, boxed, ok, bad] = [b"decode".as_slice(), b"box", b"ok", b"bad"]
+        .map(|name| NoEqSym::new(name, 1, Privacy::Public, Constructability::Constructor));
+    let call = |head, t| f_app_no_eq(head, vec![t]);
+    let x = msg_var("x", 17);
+    let rule = |lhs, rhs| rrule_to_ctxt_st_rule(&RRule::new(lhs, rhs)).unwrap();
+    let mut theory = mset_maude_sig();
+    theory.st_fun_syms.extend([decode, boxed, ok, bad]);
+    let lhs = call(decode, call(boxed, x.clone()));
+    theory.st_rules.insert(rule(lhs, call(ok, x.clone())));
+
+    // The Node makes the product a kind-level observation, and its six
+    // factors exceed the bounded frontier's work allowance.
+    let marker = pub_term("marker");
+    let node = Term::Lit(Lit::Con(Name::new(NameTag::Node, "event")));
+    let product = (1..6).fold(node, |t, _| union(t, marker.clone()));
+    let key = LVar::new("input", LSort::Msg, 42);
+    let input = var_term(key);
+    let query = f_app_list(vec![
+        call(decode, input.clone()),
+        input.clone(),
+        product.clone(),
+    ]);
+    let open_msg = |t: &LNTerm| matches!(t, Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg);
+    let check_rows = |h: &MaudeHandle, oracle: Option<&MaudeHandle>| {
+        let mut open = false;
+        let mut specialized = false;
+        assert_eq!(h.reduce(&product).unwrap(), product);
+        for row in h.variants(&query).unwrap() {
+            assert!(row.iter().all(|(v, _)| *v == key));
+            let subst = LNSubstVFresh::from_list(row).fresh_to_free_avoiding_vars(&[key]);
+            let image = apply_vterm(&subst, input.clone());
+            let application = call(decode, image.clone());
+            let result = match &image {
+                Term::App(FunSym::NoEq(f), args) if *f == boxed => {
+                    let [capture] = args.as_ref() else {
+                        panic!("expected one box argument")
+                    };
+                    specialized |= open_msg(capture);
+                    call(ok, capture.clone())
+                }
+                _ => {
+                    open |= open_msg(&image);
+                    application.clone()
+                }
+            };
+            // Unfiltered folding can include redundant specializations. Each
+            // image must be normal, and rebuilding must preserve its capture.
+            assert_eq!(h.reduce(&image).unwrap(), image);
+            assert_eq!(h.reduce(&application).unwrap(), result);
+            if let Some(maude) = oracle {
+                assert_eq!(maude.reduce(&image).unwrap(), image);
+                assert_eq!(maude.reduce(&application).unwrap(), result);
+            }
+        }
+        assert!(open && specialized);
+    };
+    let admitted = |sig: &MaudeSig| {
+        let packet = Packet::full_table(sig, &[]).unwrap().unwrap();
+        super::initialize().unwrap();
+        super::LEAN_THREAD
+            .with(|_| packet.certifies_table(&packet.equations, 0))
+            .unwrap()
+    };
+    for mut sig in [
+        theory.clone().refresh(),
+        theory.merge(xor_maude_sig()).refresh(),
+    ] {
+        let oracle = tamarin_test_support::require_maude_path().map(|path| {
+            MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap()
+        });
+        if let Some(maude) = &oracle {
+            check_rows(maude, None);
+        }
+        let h = MaudeHandle::start_with_backend(
+            "/nonexistent/maude",
+            sig.clone(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        check_rows(&h, oracle.as_ref());
+        assert_eq!((h.stats().var_count, h.stats().norm_count), (0, 0));
+        assert!(admitted(&sig));
+
+        // Only the specialization x := box(y) overlaps. The two normal
+        // results on this input, ok(box(y)) and bad(y), are distinguishable.
+        sig.st_rules.insert(rule(
+            call(decode, call(boxed, call(boxed, x.clone()))),
+            call(bad, x.clone()),
+        ));
+        assert!(!admitted(&sig.refresh()));
+    }
+}

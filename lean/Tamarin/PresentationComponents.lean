@@ -55,7 +55,7 @@ structure Evidence (ps : List (Part s)) (rs : Problem s) : Prop where
   scope : ReferenceReduction.Bound (table ps rs)
   inventory : ∀ p ∈ ps, Inventory p (table ps rs)
   other : ∀ r ∈ table ps rs, claimed ps (head r.lhs) = false →
-    SubtermVariants.Row r ∧ NormalAlgebra.UniqueRow (table ps rs) r
+    SubtermVariants.ResultRow (table ps rs) r ∧ NormalAlgebra.UniqueRow (table ps rs) r
 
 theorem evidence {ps : List (Part s)} {rs w fuel} (ok : accepts ps w fuel rs) : Evidence ps rs := by
   obtain ⟨⟨⟨⟨⟨apps,agree⟩,parts⟩,sorts⟩,dec⟩,rows⟩ := by simpa only [accepts,Bool.and_eq_true] using ok
@@ -94,8 +94,7 @@ theorem Evidence.complete {ps : List (Part s)} {rs} (e : Evidence ps rs)
     | false =>
       exfalso
       obtain ⟨r,hr,hd⟩ := List.mem_map.mp active
-      have bad := (ctor hr hd yes).1
-      cases lhs : r.lhs <;> simp [SubtermVariants.Row,lhs,head,headModel,Model.eval] at bad hd) (by
+      exact (ctor hr hd yes).1.not_ac f hd) (by
     intro r hr notAC
     cases yes : claimed ps (head r.lhs) with
     | false => exact (e.other r hr yes).2
@@ -108,12 +107,12 @@ theorem Evidence.complete {ps : List (Part s)} {rs} (e : Evidence ps rs)
     intro can f
     by_cases h : Head.free f ∈ ruleHeads whole ∧ claimed ps (.free f)
     · exact (supplied h.1 h.2).2
-    · exact SubtermVariants.free_bound e.scope can e.pres.apps f (fun r hr hd =>
+    · exact SubtermVariants.free_result_bound e.scope can e.pres.apps f (fun r hr hd =>
         (ctor hr hd (Bool.eq_false_iff.mpr (fun yes => h ⟨hd ▸ atRow r hr,yes⟩))).1)) (by
     intro can f
     by_cases h : Head.comm f ∈ ruleHeads whole ∧ claimed ps (.comm f)
     · exact (supplied h.1 h.2).2
-    · exact SubtermVariants.comm_bound e.scope can e.pres.apps f (fun r hr hd =>
+    · exact SubtermVariants.comm_result_bound e.scope can e.pres.apps f (fun r hr hd =>
         (ctor hr hd (Bool.eq_false_iff.mpr (fun yes => h ⟨hd ▸ atRow r hr,yes⟩))).1))
   exact ⟨TablePresentation.bound_of_agrees e.agrees e.scope,
     (TablePresentation.canonical_iff e.agrees).mpr can,(TablePresentation.finite_iff e.agrees).mpr fvp⟩

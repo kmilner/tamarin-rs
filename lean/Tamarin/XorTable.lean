@@ -144,7 +144,7 @@ structure Evidence (rs : Problem s) (T : FreshXor.Flat.Table s)
   typed : ∀ r ∈ T.rules, head r.lhs = .ac T.f → HasSort r.lhs .msg
   inactive : ∀ f ≠ T.f, Head.ac f ∉ ruleHeads T.rules
   other : ∀ r ∈ T.rules, head r.lhs ≠ .ac T.f →
-    SubtermVariants.Row r ∧ NormalAlgebra.UniqueRow T.rules r
+    SubtermVariants.ResultRow T.rules r ∧ NormalAlgebra.UniqueRow T.rules r
 
 variable [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom]
 

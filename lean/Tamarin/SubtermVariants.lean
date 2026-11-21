@@ -2,11 +2,12 @@ import Tamarin.OperatorVariantBounds
 import Tamarin.ContextualReduction
 import Tamarin.MixedReconstruction
 import Tamarin.SignatureExtension
+import Tamarin.VariantJoin
 
-/-! Finite variants for mixed subterm and ground-result equations modulo C/AC.
+/-! Finite variants for subterm, ground and constructor results modulo C/AC.
 The rule head can be free or commutative. A proper subterm may lie below any
 operators, including AC. A ground result may itself need further rewriting.
-Convergence concerns the combined table. -/
+A constructor result rebuilds normal captures using operators inert in the combined table. -/
 namespace Tamarin.SubtermVariants
 open Rewriting MaudeOperations MixedUnification ShortVariantPaths ConstructorVariants
 variable {s : Signature}
@@ -16,6 +17,21 @@ def Row (r : Equation s) : Prop := match r.lhs with
   | .free _ xs => r.rhs.Ground ∨ ∃ i, r.rhs ∈ subterms (xs i)
   | .comm _ a b => r.rhs.Ground ∨ r.rhs ∈ subterms a ∨ r.rhs ∈ subterms b
   | _ => False
+
+/-- A constructor result may rebuild any number of captured variables. Every
+operator in that result must be inert in the complete table. Range restriction
+is supplied independently when deriving a bound. -/
+def ResultRow (rs : Problem s) (r : Equation s) : Prop :=
+  Row r ∨ ((match r.lhs with | .free .. | .comm .. => True | _ => False) ∧
+    ∀ h ∈ operators r.rhs, h ∉ ruleHeads rs)
+
+theorem ResultRow.application {rs : Problem s} {r : Equation s} (row : ResultRow rs r) :
+    Application r.lhs := by
+  cases src : r.lhs <;> simp_all [ResultRow,Row,Application]
+
+theorem ResultRow.not_ac {rs : Problem s} {r : Equation s} (row : ResultRow rs r) (f : s.ACSym) :
+    head r.lhs ≠ .ac f := by
+  cases src : r.lhs <;> simp_all [ResultRow,Row,head,headModel,Model.eval]
 
 def Presentation (rs : Problem s) := ∀ r ∈ rs, Row r
 
@@ -117,6 +133,22 @@ theorem subnormal {R : Root s} (σ : Substitution s) {t u : Term s}
   · exact fun f a b no yes => no.elim (fun h => h (normal_ac_children f yes).1)
       (fun h => h (normal_ac_children f yes).2)
 
+omit [DecidableEq s.FreeSym] [DecidableEq s.CSym] [DecidableEq s.ACSym] [DecidableEq s.Atom] in
+/-- A rule substitution can have reducible images away from the pattern.
+It suffices that the variables used by the result have normal images. -/
+private theorem constructor_result_normal (apps : ∀ r ∈ rs, Application r.lhs) (t : Term s)
+    (inert : ∀ h ∈ operators t, h ∉ ruleHeads rs) (σ : Substitution s)
+    (used : ∀ v, t.Occurs v → Normal (ruleRoot rs) (σ.image v)) : Normal (ruleRoot rs) (σ.apply t) := by
+  classical
+  let τ := VariantJoin.choose t.Occurs σ Substitution.identity
+  have eq : τ.apply t = σ.apply t := (VariantJoin.choose_apply ..).1 (fun _ => id)
+  rw [← eq]
+  apply (constructor_normal rs apps).2 t inert τ
+  intro v
+  by_cases occ : t.Occurs v
+  · simpa [τ,VariantJoin.choose,occ] using used v occ
+  · simpa [τ,VariantJoin.choose,occ] using (constructor_normal rs apps).1 v
+
 include scope can
 
 /-- A fixed finite table has a common finite normalization budget for all its
@@ -132,8 +164,8 @@ private theorem ground_budget : ∃ k, ∀ r ∈ rs, r.rhs.Ground → ∀ σ : S
 
 /-- The bound at a free head uses only the shapes of rules for that head.
 All hypotheses about normalization refer to the *whole* mixed table. -/
-theorem free_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.FreeSym)
-    (rows : ∀ r ∈ rs, head r.lhs = .free f → Row r) :
+theorem free_result_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.FreeSym)
+    (rows : ∀ r ∈ rs, head r.lhs = .free f → ResultRow rs r) :
     ∃ k, ∀ xs, (∀ i, Normal (ruleRoot rs) (xs i)) → ∃ u,
       Path (ruleRoot rs) k (.free f xs) u ∧ Normal (ruleRoot rs) u := by
   obtain ⟨k,ground⟩ := ground_budget scope can
@@ -148,19 +180,23 @@ theorem free_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.FreeSym)
   cases h : r.lhs <;> simp only [h,head] at atRoot <;> try contradiction
   case free g as =>
     cases atRoot
-    simp only [Row,h] at shape
+    simp only [ResultRow,Row,h,true_and] at shape
     rw [h] at src
     have kids : ys = (fun i => σ.apply (as i)) := Term.free.inj src |>.2 |> eq_of_heq
     have step : StepModulo (ruleRoot rs) (.free f xs) (σ.apply r.rhs) :=
       ⟨_,_,.free f _ _ eq,.root ⟨r,hr,σ,h ▸ src,rfl⟩,.refl _⟩
-    rcases shape with clean | ⟨i,sub⟩
+    have normalArg i : Normal (ruleRoot rs) (σ.apply (as i)) := by
+      simpa only [kids] using (normal_equiv _ (eq i)).mp (normals i)
+    rcases shape with (clean | ⟨i,sub⟩) | inert
     · obtain ⟨u,p,nf⟩ := ground r hr clean σ; exact ⟨u,.step step p,nf⟩
-    · have nf := (normal_equiv _ (eq i)).mp (normals i)
-      rw [kids] at nf
-      exact ⟨_,.step step (.basis (.refl _)),subnormal σ sub nf⟩
+    · exact ⟨_,.step step (.basis (.refl _)),subnormal σ sub (normalArg i)⟩
+    · refine ⟨_,.step step (.basis (.refl _)),constructor_result_normal apps _ inert σ ?_⟩
+      intro v hv
+      obtain ⟨i,occ⟩ : ∃ i, (as i).Occurs v := by simpa only [h,Term.Occurs] using scope r hr v hv
+      exact RulePattern.image_normal (normalArg i) occ
 
-theorem comm_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.CSym)
-    (rows : ∀ r ∈ rs, head r.lhs = .comm f → Row r) :
+theorem comm_result_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.CSym)
+    (rows : ∀ r ∈ rs, head r.lhs = .comm f → ResultRow rs r) :
     ∃ k, ∀ a b, Normal (ruleRoot rs) a → Normal (ruleRoot rs) b → ∃ u,
       Path (ruleRoot rs) k (.comm f a b) u ∧ Normal (ruleRoot rs) u := by
   obtain ⟨k,ground⟩ := ground_budget scope can
@@ -178,39 +214,54 @@ theorem comm_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.CSym)
     cases h : r.lhs <;> simp only [h,head] at atRoot <;> try contradiction
     case comm g x y =>
       cases atRoot
-      simp only [Row,h] at shape
+      simp only [ResultRow,Row,h,true_and] at shape
       rw [h] at eq
       have kids : Normal (ruleRoot rs) (σ.apply x) ∧ Normal (ruleRoot rs) (σ.apply y) := by
         rcases (Commutative.equiv_iff ..).mp eq with ⟨l,r⟩ | ⟨l,r⟩
         · exact ⟨(normal_equiv _ l).mp na,(normal_equiv _ r).mp nb⟩
         · exact ⟨(normal_equiv _ r).mp nb,(normal_equiv _ l).mp na⟩
-      rcases shape with clean | sub | sub
+      rcases shape with (clean | sub | sub) | inert
       · obtain ⟨u,p,nf⟩ := ground r hr clean σ; exact ⟨u,.step step p,nf⟩
       · exact ⟨_,.step step (.basis (.refl _)),subnormal σ sub kids.1⟩
       · exact ⟨_,.step step (.basis (.refl _)),subnormal σ sub kids.2⟩
+      · refine ⟨_,.step step (.basis (.refl _)),constructor_result_normal apps _ inert σ ?_⟩
+        intro v hv
+        have occ : x.Occurs v ∨ y.Occurs v := by simpa only [h,Term.Occurs] using scope r hr v hv
+        exact occ.elim (RulePattern.image_normal kids.1) (RulePattern.image_normal kids.2)
   · exact (na _ step).elim
   · exact (nb _ step).elim
 
-omit scope can
+theorem free_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.FreeSym)
+    (rows : ∀ r ∈ rs, head r.lhs = .free f → Row r) :
+    ∃ k, ∀ xs, (∀ i, Normal (ruleRoot rs) (xs i)) → ∃ u,
+      Path (ruleRoot rs) k (.free f xs) u ∧ Normal (ruleRoot rs) u :=
+  free_result_bound scope can apps f (fun r hr hd => .inl (rows r hr hd))
 
-/-- Every canonical mixed table of the indicated shape has finite variants
-on all tuples, including nonground instances and kind-level contexts. -/
-theorem finiteVariants (can : CanonicalPresentation (ruleRoot rs)) (cls : Presentation rs) :
+theorem comm_bound (apps : ∀ r ∈ rs, Application r.lhs) (f : s.CSym)
+    (rows : ∀ r ∈ rs, head r.lhs = .comm f → Row r) :
+    ∃ k, ∀ a b, Normal (ruleRoot rs) a → Normal (ruleRoot rs) b → ∃ u,
+      Path (ruleRoot rs) k (.comm f a b) u ∧ Normal (ruleRoot rs) u :=
+  comm_result_bound scope can apps f (fun r hr hd => .inl (rows r hr hd))
+
+/-- A canonical table of free/C rules with subterm, ground or constructor
+results has finite variants on all tuples, including open kind-level inputs. -/
+theorem finiteResultVariants (cls : ∀ r ∈ rs, ResultRow rs r) :
     FiniteVariantProperty (ruleRoot rs) := by
-  have apps (r : Equation s) (hr : r ∈ rs) : Application r.lhs := by
-    have shape := cls r hr
-    cases h : r.lhs <;> simp_all [Row,Application]
-  apply finiteVariantProperty_of_operators (bound cls) can
-  refine ⟨fun f => free_bound (bound cls) can apps f (fun r hr _ => cls r hr),
-    fun f => comm_bound (bound cls) can apps f (fun r hr _ => cls r hr),?_⟩
+  have apps := fun r hr => (cls r hr).application
+  apply finiteVariantProperty_of_operators scope can
+  refine ⟨fun f => free_result_bound scope can apps f (fun r hr _ => cls r hr),
+    fun f => comm_result_bound scope can apps f (fun r hr _ => cls r hr),?_⟩
   intro f
   have inert : Head.ac f ∉ ruleHeads rs := by
-    intro member
-    obtain ⟨r,hr,h⟩ := List.mem_map.mp member
-    have row := cls r hr
-    change head r.lhs = .ac f at h
-    cases src : r.lhs <;> simp only [Row,src] at row <;> try contradiction
-    all_goals rw [src] at h; contradiction
+    rintro member
+    obtain ⟨r,hr,hd⟩ := List.mem_map.mp member
+    exact (cls r hr).not_ac f hd
   exact ⟨0,fun a b na nb => ⟨_,.basis (.refl _),constructor_node_normal rs apps (.ac f a b) inert ⟨na,nb⟩⟩⟩
+
+omit scope can
+
+theorem finiteVariants (can : CanonicalPresentation (ruleRoot rs)) (cls : Presentation rs) :
+    FiniteVariantProperty (ruleRoot rs) :=
+  finiteResultVariants (bound cls) can (fun r hr => .inl (cls r hr))
 
 end Tamarin.SubtermVariants

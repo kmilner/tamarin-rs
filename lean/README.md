@@ -224,7 +224,7 @@ Tamarin’s proof search even when two answer sets cover the same solutions.
 | Ordinary free/C/AC unification | The reference switch sends both enumeration and existence queries straight to the complete solver. Nested packed equations share one substitution. The solver accepts mixtures of free, commutative and AC heads, including kind-level inputs. | Check Rust representation and observable answer ordering across the protocol corpus. [Solver contract](Tamarin/TotalUnifyPacket.lean) |
 | Directional matching | The reference switch uses the complete matcher for enumeration, existence and first-match queries, including caller-designated rigid variables. For source refinement every backend selects the least restored binding map, including on ambiguous matches. | Full hybrid enumeration retains its existing order for callers that consume the whole sequence. [Matcher contract](Tamarin/TotalMatchPacket.lean) · [Selection theorem](Tamarin/MatchOrder.lean) |
 | Reduction | The general reducer certifies reachable, unique normal forms on the full table, including proper AC subproducts. A finite stage suffices for every term on a range-restricted canonical table. Default native-only now retries deferred queries on certified tables. | Other tables can still reach the default work limit. [Staged reducer](Tamarin/GeneralReductionWire.lean) · [Export contract](Tamarin/CheckedReductionPacket.lean) |
-| Variants | Default native-only retries general folding for certified constructor tables and compositions of DH, XOR and bilinear pairing. Lean certifies the actual 21-rule table for all three builtins plus pairing projections, on open and kind-level inputs. | Extend automatic admission to user equations that build results around variables, and to active AC laws beyond the certified groups. The numeric interface must represent the budget and bindings. [Composition theorem](Tamarin/PresentationComponents.lean) · [Table checker](Tamarin/GroupTable.lean) |
+| Variants | Default native-only retries general folding for certified constructor tables and compositions of DH, XOR and bilinear pairing. Constructor results can wrap matched variables. Lean certifies the 21-rule builtin table on open and kind-level inputs. | Extend automatic admission to variable-carrying results that call other defined operators, and to active AC laws beyond the certified groups. The numeric interface must represent the budget and bindings. [Composition theorem](Tamarin/PresentationComponents.lean) · [Table checker](Tamarin/GroupTable.lean) |
 
 The general reduction contract states progress in terms of the rewrite relation. Once the
 stage covers every path from this input and all reachable normal endpoints preserve its
@@ -269,11 +269,14 @@ For a canonical table, it suffices to give each operator a bound on **one** norm
 path when its arguments are already normal. These bounds compose for the whole query,
 including shared variables. In DH, well-sorted factors can cancel in groups. Factors of an
 incompatible sort remain in the surrounding AC product. The mixed-table proof allows a
-free or commutative rule to return a subterm from inside any argument, including an AC
-product, or a ground expression that uses other active equations. All operator proofs refer
-to the combined table. For constructor-pattern extensions, the checker proves
-termination from operator weights and confluence from the possible reductions at each rule
-head. It compares competing rules pairwise. Equal projection paths or agreeing fixed
+free or commutative rule to return a subterm, a ground expression that uses other equations,
+or a constructor expression built from matched variables. For `decode(box(x)) → ok(x)`,
+normal arguments give a normal image for `x`, and `ok` has no defining equation in the
+combined table. The same proof covers nested free, commutative and AC result constructors.
+The open variant query for this example can also return redundant specializations with
+`Pub` or `Fresh` captures. The Rust regression reconstructs every answer and compares its
+normal form with Maude. For constructor-pattern extensions, the checker proves termination
+from operator weights and confluence from the possible reductions at each rule head. It compares competing rules pairwise. Equal projection paths or agreeing fixed
 ground results discharge a pair directly. For other pairs it checks all unifiers modulo C/AC
 and their instantiated outputs. The automatic classifier can defer an expensive overlap.
 The general overlap theorem covers every pair. Ground outputs may themselves reduce. The kernel verifies

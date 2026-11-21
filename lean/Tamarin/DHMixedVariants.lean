@@ -12,9 +12,9 @@ variable [DecidableEq sig.FreeSym] [DecidableEq sig.CSym] [DecidableEq sig.ACSym
 
 /-- The DH equations are present in T and E. These restrictions apply to the
 remaining heads, leaving constructor symbols and rule order unrestricted. -/
-structure OtherRows (T : Table s) : Prop where
-  free : ∀ f, f ≠ s.pow → f ≠ s.inv → ∀ r ∈ T.rules, head r.lhs = .free f → SubtermVariants.Row r
-  comm : ∀ f, ∀ r ∈ T.rules, head r.lhs = .comm f → SubtermVariants.Row r
+structure OtherRows (T : Table s) (eligible : Equation sig → Prop := SubtermVariants.Row) : Prop where
+  free : ∀ f, f ≠ s.pow → f ≠ s.inv → ∀ r ∈ T.rules, head r.lhs = .free f → eligible r
+  comm : ∀ f, ∀ r ∈ T.rules, head r.lhs = .comm f → eligible r
   ac : ∀ f, f ≠ s.mul → Head.ac f ∉ ruleHeads T.rules
 
 omit [DecidableEq sig.CSym] [DecidableEq sig.Atom] in
@@ -45,21 +45,27 @@ theorem OtherRows.scope (others : OtherRows T) (dh : ProtectedTable E) :
     · exact schema (.inr (.inr (.inr (by subst f; rfl))))
     exact (others.ac f hm (List.mem_map.mpr ⟨r,hr,by rw [ht]; rfl⟩)).elim
 
-theorem mixedFiniteVariants (can : CanonicalPresentation (ruleRoot T.rules)) (dh : ProtectedTable E)
-    (others : OtherRows T) : FiniteVariantProperty (ruleRoot T.rules) := by
-  have scope := others.scope dh
+theorem mixedResultVariants (scope : ReferenceReduction.Bound T.rules)
+    (can : CanonicalPresentation (ruleRoot T.rules)) (dh : ProtectedTable E)
+    (others : OtherRows T (SubtermVariants.ResultRow T.rules)) : FiniteVariantProperty (ruleRoot T.rules) := by
   apply finiteVariantProperty_of_operators scope can
   constructor
   · intro f
     by_cases active : f = s.pow ∨ f = s.inv
     · exact free_head_paths dh.inventory dh.product dh.inverse dh.unit dh.power f active
-    · exact SubtermVariants.free_bound scope can dh.apps f
+    · exact SubtermVariants.free_result_bound scope can dh.apps f
         (others.free f (fun h => active (.inl h)) (fun h => active (.inr h)))
-  · exact fun f => SubtermVariants.comm_bound scope can dh.apps f (others.comm f)
+  · exact fun f => SubtermVariants.comm_result_bound scope can dh.apps f (others.comm f)
   · intro f
     by_cases product : f = s.mul
     · subst f; exact kind_product_paths dh.inventory dh.product dh.inverse dh.unit
     · exact ⟨0,fun a b na nb => ⟨_,.basis (.refl _),
         constructor_node_normal _ dh.apps (.ac f a b) (others.ac f product) ⟨na,nb⟩⟩⟩
+
+theorem mixedFiniteVariants (can : CanonicalPresentation (ruleRoot T.rules)) (dh : ProtectedTable E)
+    (others : OtherRows T) : FiniteVariantProperty (ruleRoot T.rules) :=
+  mixedResultVariants (others.scope dh) can dh
+    ⟨fun f hp hi r hr h => .inl (others.free f hp hi r hr h),
+     fun f r hr h => .inl (others.comm f r hr h),others.ac⟩
 
 end Tamarin.Rewriting.DHPeer

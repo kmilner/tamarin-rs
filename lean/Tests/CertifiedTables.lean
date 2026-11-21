@@ -94,4 +94,26 @@ private def moreNodes := BilinearWire.nodes ++ #[#[3,12,0,41],#[3,12,0,3],#[2,0,
 -- Returning a power of the first map changes the second map's law.
 #guard !CertifiedTableWire.run twoMaps moreNodes (BilinearWire.ruleRoots ++ #[45,44]) 0
 
+-- decode/1, box/1, ok/1, select/2 [C], pair/2, unordered/2 [C], bag/2 [AC].
+private def constructorDecls : Array UInt64 := #[
+  2,0,1,2,2, 2,1,1,2,2, 2,2,1,2,2, 3,3,2,2,2,2, 2,4,2,2,2,2, 3,5,2,2,2,2, 4,6,2,2,2,2]
+private def constructorNodes : Array (Array UInt64) := #[
+  #[0,0,2], #[0,1,2], #[2,1,0], #[2,0,2], #[2,2,0], #[3,3,0,1], #[2,4,0,1],
+  #[3,5,0,1], #[4,6,0,1], #[3,3,0,0], #[2,2,1], #[2,4,1,0], #[2,1,7], #[2,1,6]]
+private def admitsResult (roots : Array UInt64) := CertifiedTableWire.run constructorDecls constructorNodes roots 0
+
+-- Every conforming replacement must handle decode(box(x)) -> ok(x).
+example {check} (contract : CertifiedTableWire.Correct check) :
+    check constructorDecls constructorNodes #[3,4] 0 = true :=
+  contract.admits (by decide +kernel)
+
+-- select(x,y) admits exactly the displayed results invariant under x/y exchange.
+-- Nested free constructors can wrap either a commutative result or an ordered one.
+#guard ([0,1,4,6,10,11,13] : List UInt64).all fun rhs => !admitsResult #[5,rhs]
+#guard ([7,8,12] : List UInt64).all fun rhs => admitsResult #[5,rhs]
+-- A repeated variable removes the orientation ambiguity. A fresh, unbound output
+-- variable would still invalidate the packet's range restriction.
+#guard admitsResult #[9,4]
+#guard !admitsResult #[9,10]
+
 end Tamarin.CertifiedTableTests
