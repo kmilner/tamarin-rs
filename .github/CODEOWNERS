@@ -1,4 +1,4 @@
-# The base branch owns the contract, the code that calls it and its merge gate.
+# Review the solver pin, Rust adapter and downstream CI here.
 /.github/                     @kmilner
 /.cargo/                      @kmilner
 Cargo.toml                    @kmilner
@@ -8,5 +8,3 @@ build.rs                      @kmilner
 /crates/tamarin-build/        @kmilner
 /crates/tamarin-term/         @kmilner
 /crates/tamarin-prover/src/run.rs @kmilner
-# Guard the migration snapshot until the consumer pin is available on GitHub.
-/lean/                        @kmilner
