@@ -14,7 +14,10 @@ fn physical_dh_table_matches_the_lean_presentation() {
         dh_maude_sig(),
         &dh_observations(),
         "DHWire",
-        include_str!("../../../../../lean/Tamarin/DHWireData.lean"),
+        include_str!(concat!(
+            env!("TAMARIN_ALGEBRA_LEAN_DIR"),
+            "/Tamarin/DHWireData.lean"
+        )),
     );
 }
 
@@ -34,7 +37,10 @@ fn physical_dh_and_destructor_table_matches_the_lean_presentation() {
         dh_with_destructors(),
         &dh_observations(),
         "DHConstructorWire",
-        include_str!("../../../../../lean/Tamarin/DHConstructorWireData.lean"),
+        include_str!(concat!(
+            env!("TAMARIN_ALGEBRA_LEAN_DIR"),
+            "/Tamarin/DHConstructorWireData.lean"
+        )),
     );
 }
 
@@ -57,7 +63,10 @@ fn physical_xor_and_destructor_table_matches_the_lean_presentation() {
             .merge(sym_enc_maude_sig()),
         &[xor(msg_var("x", 1), msg_var("x", 2)), zero_const()],
         "XorConstructorWire",
-        include_str!("../../../../../lean/Tamarin/XorConstructorWireData.lean"),
+        include_str!(concat!(
+            env!("TAMARIN_ALGEBRA_LEAN_DIR"),
+            "/Tamarin/XorConstructorWireData.lean"
+        )),
     );
 }
 
@@ -70,7 +79,10 @@ fn physical_joint_group_table_matches_the_lean_presentation() {
         sig,
         &dh_observations(),
         "JointGroupWire",
-        include_str!("../../../../../lean/Tamarin/JointGroupWireData.lean"),
+        include_str!(concat!(
+            env!("TAMARIN_ALGEBRA_LEAN_DIR"),
+            "/Tamarin/JointGroupWireData.lean"
+        )),
     );
 }
 
@@ -84,7 +96,10 @@ fn physical_bilinear_and_xor_table_matches_the_lean_presentation() {
         sig,
         &dh_observations(),
         "BilinearWire",
-        include_str!("../../../../../lean/Tamarin/BilinearWireData.lean"),
+        include_str!(concat!(
+            env!("TAMARIN_ALGEBRA_LEAN_DIR"),
+            "/Tamarin/BilinearWireData.lean"
+        )),
     );
 }
 

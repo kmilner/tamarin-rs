@@ -1414,6 +1414,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "tamarin-algebra-sys"
+version = "0.1.0"
+source = "git+https://github.com/kmilner/tamarin-algebra.git?rev=ef88e27d00d02a2c1490bd4f3fa7b6248ea52b17#ef88e27d00d02a2c1490bd4f3fa7b6248ea52b17"
+
+[[package]]
 name = "tamarin-build"
 version = "1.13.0"
 
@@ -1490,6 +1495,7 @@ version = "1.13.0"
 dependencies = [
  "parking_lot",
  "rustc-hash",
+ "tamarin-algebra-sys",
  "tamarin-build",
  "tamarin-test-support",
  "tamarin-utils",

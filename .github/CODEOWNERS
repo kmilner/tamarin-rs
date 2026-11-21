@@ -8,9 +8,5 @@ build.rs                      @kmilner
 /crates/tamarin-build/        @kmilner
 /crates/tamarin-term/         @kmilner
 /crates/tamarin-prover/src/run.rs @kmilner
+# Guard the migration snapshot until the consumer pin is available on GitHub.
 /lean/                        @kmilner
-
-# Only candidate bodies and proof witnesses are delegated. The exported ABI,
-# theorem statements, audit, toolchain and regression fixtures stay owned.
-/lean/TamarinRuntime/Candidates/*.lean
-/lean/Tamarin/Candidates/*.lean

@@ -28,6 +28,10 @@ pub(crate) use shared_offset::solve as unify_with_witnesses;
 
 use std::fmt;
 use std::sync::OnceLock;
+use tamarin_algebra_sys::{
+    tamarin_lean_flat_ac_equal, tamarin_lean_initialize, tamarin_lean_thread_finalize,
+    tamarin_lean_thread_initialize,
+};
 
 use rustc_hash::FxHashMap;
 
@@ -204,15 +208,6 @@ unsafe extern "C" {
     fn tamarin_reflexive_unify(recognized: u8) -> u8;
     fn tamarin_pairing_variants(has_projection: u8) -> u8;
     fn tamarin_pairing_project(first: u8) -> u8;
-    fn tamarin_lean_initialize() -> u8;
-    fn tamarin_lean_thread_initialize();
-    fn tamarin_lean_thread_finalize();
-    fn tamarin_lean_flat_ac_equal(
-        lhs: *const u64,
-        lhs_length: usize,
-        rhs: *const u64,
-        rhs_length: usize,
-    ) -> u8;
     fn tamarin_lean_flat_ac_residual(
         tail: *const u64,
         tail_length: usize,

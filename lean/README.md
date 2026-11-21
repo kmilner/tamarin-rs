@@ -1,5 +1,10 @@
 # Verified algebra for Tamarin
 
+The active solver, proof CI and Cargo package have moved to
+[tamarin-algebra](https://github.com/kmilner/tamarin-algebra). This directory
+is retained during the migration. Cargo builds and integration tests use the
+solver revision selected in `crates/tamarin-term/Cargo.toml`.
+
 This Lake package specifies the algebra operations that Tamarin currently asks Maude to perform.
 Rust links selected Lean kernels in-process with the `lean-unification` feature. The goal is to run
 the prover with no Maude binary and let developers replace the search algorithms under fixed

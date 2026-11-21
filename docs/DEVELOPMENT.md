@@ -130,25 +130,23 @@ tamarin-prover/         the binary: CLI parser + run dispatch
 
 ## Testing
 
-The [Lean unification specification](../lean/README.md) is an independent Lake
-package under `lean/`. Run `lake build TamarinCI` and
-`lake env leanchecker TamarinCI` from that directory to check the selected
-implementation against its semantic contract and audit. Ordinary `lake build`
-and Cargo builds compile the runtime only; the `lean-spec` CI job performs
-verification before merge. On native x86_64 GNU Linux,
-`cargo build --release --features lean-unification` links its
-verified flat AC, projection/constructor variant, and narrow reflexive fragments
-directly into the prover. Select
-`--algebra-backend=maude|hybrid|native-only`; hybrid is the feature-enabled
-default. Native-only never probes or starts Maude and explicitly fails on
-unsupported operations. The multiset fixtures include a proof that requires
-the same fresh variable in two substitution images. These fixtures, pairing,
-hashing/user-constructor proofs, and the upstream NSLPK3, NSPK3 and TLS_Handshake proofs
-run without Maude. The narrowing fragment covers constructor patterns with
-shared variables and signature-verification rules returning a ground constructor. General variants and
-interactive native-only are still open. Run the no-process API checks with `cargo test --profile ci -p tamarin-term --features
-lean-unification --test native_backend`. See the package guide for the exact
-supported fragment, verification switches, and benchmark command.
+The optional `lean-unification` feature links the native solver through the
+`tamarin-algebra-sys` Git dependency. Cargo fetches the revision pinned in
+`crates/tamarin-term/Cargo.toml`. On x86_64 GNU/Linux, install elan/Lake and GNU
+binutils and run `cargo build --locked --release --features lean-unification`.
+Select `--algebra-backend=maude|hybrid|native-only` at runtime. Run the
+no-process API checks with `cargo test -p tamarin-term --features lean-unification
+--test native_backend`. [Solver and proof gate](https://github.com/kmilner/tamarin-algebra)
+
+For local solver changes with a sibling checkout, run this from the workspace root:
+
+```sh
+cargo --config 'patch."https://github.com/kmilner/tamarin-algebra.git".tamarin-algebra-sys.path="../tamarin-algebra"' test -p tamarin-term --features lean-unification --test native_backend
+```
+
+Cargo records a local patch in `Cargo.lock`. Keep that change local. For a shared
+update, push the solver commit, update the Git revision in `tamarin-term`, and
+commit the lockfile resolved with the patch removed.
 
 `make check` runs formatting and workspace Clippy. `make test` runs the Rust
 suites, including the server's asset and graph route tests. CI also runs a

@@ -9,13 +9,14 @@ description = "Term language for the Tamarin prover (Rust port)."
 
 [features]
 # Build and statically link the experimental, proof-checked Lean backend.
-lean-unification = []
+lean-unification = ["dep:tamarin-algebra-sys"]
 
 [[example]]
 name = "lean_unification_bench"
 required-features = ["lean-unification"]
 
 [dependencies]
+tamarin-algebra-sys = { git = "https://github.com/kmilner/tamarin-algebra.git", rev = "ef88e27d00d02a2c1490bd4f3fa7b6248ea52b17", optional = true }
 tamarin-utils = { workspace = true }
 parking_lot = "0.13"
 rustc-hash = { workspace = true }

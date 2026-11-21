@@ -18,7 +18,7 @@ tamarin-prover.
 
 Build prerequisites: Rust, Node.js (22.12+ or 24+), npm, Git, Bash, and Make.
 The default build uses Maude. The experimental native-only backend can run supported theories
-without a Maude executable. See the [backend coverage table](lean/README.md#coverage-and-remaining-work).
+without a Maude executable. See the [backend coverage table](https://github.com/kmilner/tamarin-algebra/blob/main/lean/README.md#coverage-and-remaining-work).
 Server-rendered graphs require Graphviz. See the [Tamarin installation instructions](https://tamarin-prover.com/manual/master/book/002_installation.html).
 
 

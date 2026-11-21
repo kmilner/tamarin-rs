@@ -27,11 +27,11 @@ use tamarin_term::term::{f_app_ac, f_app_list, f_app_no_eq, Term};
 use tamarin_term::vterm::Lit;
 
 fn generated_requests() -> String {
-    let lean = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lean");
+    let lean = Path::new(env!("TAMARIN_ALGEBRA_LEAN_DIR"));
     let lake = std::env::var_os("TAMARIN_LAKE").unwrap_or_else(|| "lake".into());
     let run = |args: &[&str]| {
         let out = Command::new(&lake)
-            .current_dir(&lean)
+            .current_dir(lean)
             .args(args)
             .output()
             .unwrap();
