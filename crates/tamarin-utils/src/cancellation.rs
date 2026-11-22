@@ -20,6 +20,7 @@ impl std::error::Error for Cancelled {}
 
 #[derive(Default)]
 struct State {
+    parent: Option<CancellationToken>,
     cancelled: AtomicBool,
     callbacks: Mutex<BTreeMap<u64, Box<dyn Fn() + Send>>>,
     next_id: std::sync::atomic::AtomicU64,
@@ -31,7 +32,8 @@ pub struct CancellationToken(Arc<State>);
 
 impl CancellationToken {
     /// Mark cancellation without running potentially blocking cleanup.
-    /// Call `cancel` on a blocking worker to complete callback cleanup.
+    /// Work that polls `check` stops, but anything blocked on a subprocess
+    /// or a parallel wait is only woken by callbacks: follow up with `cancel`.
     pub fn request_cancel(&self) {
         self.0.cancelled.store(true, Ordering::Relaxed);
     }
@@ -49,8 +51,24 @@ impl CancellationToken {
         }
     }
 
+    pub(crate) fn descends_from(&self, ancestor: &Self) -> bool {
+        std::iter::successors(Some(self), |token| token.0.parent.as_ref())
+            .any(|token| Arc::ptr_eq(&token.0, &ancestor.0))
+    }
+
     pub fn is_cancelled(&self) -> bool {
-        self.0.cancelled.load(Ordering::Relaxed)
+        // Read ancestors directly: request_cancel() must reach descendants
+        // before potentially blocking cleanup callbacks are dispatched.
+        let mut state = &*self.0;
+        loop {
+            if state.cancelled.load(Ordering::Relaxed) {
+                return true;
+            }
+            match &state.parent {
+                Some(parent) => state = &parent.0,
+                None => return false,
+            }
+        }
     }
     pub fn check(&self) -> Result<(), Cancelled> {
         if self.is_cancelled() {
@@ -71,6 +89,41 @@ impl CancellationToken {
             token: self.clone(),
             id,
         }
+    }
+}
+
+/// A local cancellation token linked to an optional enclosing request.
+/// Keep the scope alive until its workers have joined so parent cancellation
+/// can interrupt their blocking I/O as well as their cooperative checkpoints.
+pub struct CancellationScope {
+    token: CancellationToken,
+    _parent_callback: Option<Registration>,
+}
+
+impl CancellationScope {
+    pub fn new(parent: Option<CancellationToken>) -> Self {
+        let token = CancellationToken(Arc::new(State {
+            parent: parent.clone(),
+            ..State::default()
+        }));
+        // The child keeps its ancestry alive for checks, but the parent's
+        // callback must not form a reference cycle back to the child.
+        let child = Arc::downgrade(&token.0);
+        let parent_callback = parent.map(|parent| {
+            parent.on_cancel(move || {
+                if let Some(child) = child.upgrade() {
+                    CancellationToken(child).cancel();
+                }
+            })
+        });
+        Self {
+            token,
+            _parent_callback: parent_callback,
+        }
+    }
+
+    pub fn token(&self) -> CancellationToken {
+        self.token.clone()
     }
 }
 
@@ -231,6 +284,32 @@ impl<T: Clone, E: Clone + From<Cancelled>> CancellableOnce<T, E> {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn child_checkpoints_see_parent_request_before_cleanup() {
+        let parent = CancellationToken::default();
+        let child = CancellationScope::new(Some(parent.clone()));
+        let grandchild = CancellationScope::new(Some(child.token()));
+        let (fired, wait) = mpsc::channel();
+        let _registration = grandchild
+            .token()
+            .on_cancel(move || fired.send(()).unwrap());
+        parent.request_cancel();
+        assert_eq!(grandchild.token().check(), Err(Cancelled));
+        assert!(matches!(wait.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        parent.cancel();
+        wait.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn child_cancellation_does_not_cancel_parent_or_peer() {
+        let parent = CancellationToken::default();
+        let child = CancellationScope::new(Some(parent.clone()));
+        let peer = CancellationScope::new(Some(parent.clone()));
+        child.token().cancel();
+        assert!(!parent.is_cancelled());
+        assert!(!peer.token().is_cancelled());
+    }
 
     #[test]
     fn cancelled_initializer_is_not_cached_and_waiter_retries() {

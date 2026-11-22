@@ -10,6 +10,7 @@ description = "Utility library for the Tamarin prover (Rust port)."
 [dependencies]
 rustc-hash = { workspace = true }
 parking_lot = "0.13"
+rayon = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"

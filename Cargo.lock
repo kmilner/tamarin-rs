@@ -1523,6 +1523,7 @@ version = "1.13.0"
 dependencies = [
  "libc",
  "parking_lot",
+ "rayon",
  "rustc-hash",
  "rustix",
  "windows-sys",
