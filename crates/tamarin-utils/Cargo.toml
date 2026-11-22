@@ -10,9 +10,14 @@ description = "Utility library for the Tamarin prover (Rust port)."
 [dependencies]
 rustc-hash = { workspace = true }
 parking_lot = "0.13"
+rayon = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
+rustix = { version = "1.1", features = ["event", "fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Pipes"] }
 
 [lints]
 workspace = true

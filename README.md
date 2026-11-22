@@ -69,9 +69,9 @@ Some theories need a patched Haskell build for proof replay; see
 - **Compatibility:** byte-identical batch output on a 432-file parity corpus,
   with stored-proof replay checked in both directions. See
   [coverage and remaining differences](docs/STATUS.md).
-- **Performance:** 3.4–100× faster than Tamarin 1.12.0 (median 25×) across the
-  eight-theory benchmark on Apple silicon at 1, 4, and 16 cores. On one core,
-  Rust used 66–97% less peak memory, with a median reduction of 94%. See
+- **Performance:** The eight-theory x86_64 Linux benchmark measured a
+  6.1–141× speedup over Tamarin 1.12.0 (median 35×) at 1, 4, and 16 cores. On one core,
+  Rust used 58–96% less peak memory, with a median reduction of 93%. See
   [results and methodology](docs/PERFORMANCE.md).
 - **Development:** `make check` runs formatting and Clippy; `make test` runs
   the Rust tests. See [TESTING.md](TESTING.md) for parity and browser tests,

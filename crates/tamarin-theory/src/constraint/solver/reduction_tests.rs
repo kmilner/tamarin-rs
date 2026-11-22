@@ -22,6 +22,41 @@ fn ctx() -> Option<ProofContext> {
 }
 
 #[test]
+fn solved_atoms_preserve_distinct_free_variable_instances() {
+    use crate::atom::ProtoAtom;
+    use tamarin_term::lterm::{BVar, LSort, LVar};
+    use tamarin_term::vterm::var_term;
+
+    let Some(ctx) = ctx() else { return };
+    let atom = |index| {
+        let term = var_term(BVar::Free(LVar::new("x", LSort::Fresh, index)));
+        Guarded::Atom(ProtoAtom::EqE(term.clone(), term))
+    };
+    let mut red = Reduction::new(&ctx, System::empty());
+    for index in [21, 31] {
+        red.changed = ChangeIndicator::Unchanged;
+        assert!(matches!(
+            red.insert_formula(atom(index)).unwrap(),
+            SystemOutcome::Linear
+        ));
+        assert_eq!(red.changed, ChangeIndicator::Changed);
+    }
+    assert_eq!(red.sys.solved_formulas.len(), 2);
+    for index in [21, 31] {
+        assert!(crate::guarded::stores_contains(
+            &red.sys.solved_formulas,
+            &atom(index)
+        ));
+        red.changed = ChangeIndicator::Unchanged;
+        assert!(matches!(
+            red.insert_formula(atom(index)).unwrap(),
+            SystemOutcome::Linear
+        ));
+        assert_eq!(red.changed, ChangeIndicator::Unchanged);
+    }
+}
+
+#[test]
 fn maude_failure_is_not_a_closed_action_or_formula_branch() {
     use crate::atom::ProtoAtom;
     use crate::constraint::solver::proof_method::{exec_proof_method, ProofMethod};

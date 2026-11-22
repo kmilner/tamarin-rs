@@ -11,6 +11,7 @@ pub mod dot;
 /// `#[macro_export]`; this (private) module just holds its definition.
 mod env_gate;
 pub mod fresh;
+pub mod parallel;
 pub mod prelude_ext;
 pub mod pretty_hpj;
 pub mod pretty_html;

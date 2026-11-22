@@ -11,6 +11,7 @@
 //! Maude's response ends with the prompt `Maude> `.
 
 use std::io::{Read, Write};
+use std::ops::Deref;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -109,12 +110,12 @@ pub struct MaudeStats {
 /// no `--prove` output path.
 #[derive(Default)]
 struct MaudeCacheStats {
-    reduce_hits: u64,
-    reduce_misses: u64,
-    unifiable_hits: u64,
-    unifiable_misses: u64,
-    reply_hits: u64,
-    reply_misses: u64,
+    reduce_hits: AtomicU64,
+    reduce_misses: AtomicU64,
+    unifiable_hits: AtomicU64,
+    unifiable_misses: AtomicU64,
+    reply_hits: AtomicU64,
+    reply_misses: AtomicU64,
 }
 
 /// The three memo caches for one theory session, shared (`Arc`) by the
@@ -138,10 +139,10 @@ struct MaudeCacheStats {
 /// — sharing changes only which process performed the first computation,
 /// exactly the member-interchangeability the pool already guarantees.
 ///
-/// LOCK ORDER: a subprocess's inner IPC mutex is always acquired FIRST;
-/// each cache mutex here is acquired strictly INSIDE it, held only for
-/// the `get` or the `insert` (released before any Maude IPC wait), and
-/// acquires nothing itself.  No cycle is possible.
+/// LOCK ORDER: each cache mutex here is held only for one `get` or one
+/// `insert`, never across a Maude IPC wait, and acquires nothing itself.
+/// No cycle is possible.  A hit needs no subprocess, so it does not wait
+/// for one that another job is using.
 ///
 /// CONCURRENT MISSES: two members that miss the same key simultaneously
 /// both perform the IPC and both insert — last write wins with an
@@ -194,11 +195,33 @@ pub struct SharedMaudeCaches {
     /// DUPLICATION of those few), so peak residency stays bounded even
     /// though — like `reduce` — no per-entry eviction is performed.
     reply: Mutex<tamarin_utils::FastMap<Vec<u8>, Vec<u8>>>,
+    stats: MaudeCacheStats,
+}
+
+impl Drop for SharedMaudeCaches {
+    /// When `TAM_MAUDE_CACHE_STATS` is set, emit one summary line for the
+    /// session to STDERR. Nothing reaches stdout.
+    fn drop(&mut self) {
+        if tamarin_utils::env_gate!("TAM_MAUDE_CACHE_STATS") {
+            let count = |n: &AtomicU64| n.load(Ordering::Relaxed);
+            let s = &self.stats;
+            eprintln!(
+                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{}",
+                count(&s.reduce_hits),
+                count(&s.reduce_misses),
+                count(&s.unifiable_hits),
+                count(&s.unifiable_misses),
+                count(&s.reply_hits),
+                count(&s.reply_misses),
+            );
+        }
+    }
 }
 
 struct MaudeProcessInner {
     maude_path: String,
     child: Arc<Mutex<MaudeChildReaper>>,
+    turn: Arc<Turn>,
     initialized: bool,
     /// All x0 .. x{ordered_variables - 1} have been read in a consistent
     /// order. This belongs to the subprocess, not the shared reply cache.
@@ -206,22 +229,10 @@ struct MaudeProcessInner {
     stdin: ChildStdin,
     stdout: ChildStdout,
     stats: MaudeStats,
-    /// Memo cache hit/miss tallies — see `MaudeCacheStats`.
-    cache_stats: MaudeCacheStats,
     /// The theory signature — immutable after `start()`.  Shared (`Arc`) with
     /// the owning `MaudeHandle` so reads via `MaudeHandle::maude_sig()` are a
     /// refcount bump rather than a deep clone taken under this IPC mutex.
     sig: Arc<MaudeSig>,
-    /// The session's memo caches — see `SharedMaudeCaches` for the
-    /// byte-parity argument and the lock-order invariant (this inner's
-    /// IPC mutex is always the outer lock; the cache mutexes are only
-    /// ever taken strictly inside it).
-    caches: Arc<SharedMaudeCaches>,
-    /// True iff every `sig.st_rules` LHS is Ac/C-free (`term_ac_c_free`),
-    /// i.e. `nf_via_haskell`'s no-AC st-rule matcher is complete for this
-    /// signature.  Gates `reduce`'s native normal-form fast path; computed
-    /// once at `start_with_caches` (the signature is immutable afterwards).
-    st_lhs_ac_free: bool,
 }
 
 /// Cached `TAM_DBG_MAUDE_IO` / `TAM_DBG_MAUDE_IO_FILTER` configuration.
@@ -250,9 +261,7 @@ impl MaudeProcessInner {
         let child = self.child.clone();
         let _registration = cancellation::current().map(|token| {
             token.on_cancel(move || {
-                let mut child = child.lock().unwrap();
-                child.kill_and_wait();
-                child.restart = true;
+                child.lock().unwrap().invalidate();
             })
         });
         // The timed I/O mutex does not poison on panic. Fail closed if an
@@ -261,11 +270,7 @@ impl MaudeProcessInner {
             Ok(result) => result,
             Err(panic) => {
                 self.initialized = false;
-                {
-                    let mut child = self.child.lock().unwrap();
-                    child.kill_and_wait();
-                    child.restart = true;
-                }
+                self.child.lock().unwrap().invalidate();
                 std::panic::resume_unwind(panic);
             }
         };
@@ -273,14 +278,7 @@ impl MaudeProcessInner {
         // Keep complete memo entries, but discard its pipes before reuse.
         if result.is_err() {
             self.initialized = false;
-            let mut child = self.child.lock().unwrap();
-            // A cancellation checkpoint can win the race with deferred
-            // callback cleanup. Its registration will be removed on return,
-            // so recovery must not depend on that callback being invoked.
-            if matches!(&result, Err(MaudeError::Cancelled)) {
-                child.restart = true;
-            }
-            child.kill_and_wait();
+            self.child.lock().unwrap().invalidate();
         }
         cancellation::check()?;
         result
@@ -304,6 +302,7 @@ impl MaudeProcessInner {
         }
         if !self.initialized {
             self.ordered_variables = 0;
+            let started = std::time::Instant::now();
             self.read_until_prompt()?;
             for cmd in [
                 "set show command off .\n",
@@ -337,9 +336,36 @@ impl MaudeProcessInner {
             let reply = self.execute_raw(cmd.as_bytes())?;
             check_name_registration(&reply)?;
             self.ordered_variables = 1;
+            #[cfg(test)]
+            {
+                let preamble = self.turn.preamble.lock().unwrap().clone();
+                if !preamble.is_empty() {
+                    self.execute_raw(&preamble)?;
+                }
+            }
             self.initialized = true;
+            self.turn
+                .startup_micros
+                .store(started.elapsed().as_micros() as u64, Ordering::Relaxed);
         }
         Ok(())
+    }
+
+    /// Complete an optional worker's admission while it owns the transport.
+    fn prepare_worker(&mut self) -> Result<(), MaudeError> {
+        let running = self.child.lock().unwrap().is_running();
+        let replace = match running {
+            Ok(running) => !running,
+            // Some kernels cannot observe exit without reaping. A real
+            // round trip checks the existing connection under the startup
+            // cancellation scope. initialize() checks an uninitialized one.
+            Err(_) if self.initialized => self.execute_raw(b"set show timing off .\n").is_err(),
+            Err(_) => false,
+        };
+        if replace {
+            self.child.lock().unwrap().invalidate();
+        }
+        self.initialize()
     }
 
     fn execute(&mut self, cmd: &[u8], variable_bound: u64) -> Result<Vec<u8>, MaudeError> {
@@ -455,58 +481,223 @@ impl MaudeProcessInner {
         }
         result
     }
+}
 
-    /// `execute` with a raw-reply memo keyed by the exact command bytes.
-    /// On a hit the cached reply is returned and the subprocess round-trip is
-    /// skipped; on a miss the command is issued, `bump` records the per-command
-    /// stat, and the reply is cached.  See `SharedMaudeCaches::reply` for why
-    /// a cmd-keyed byte cache is transparent to witness numbering.  The stat
-    /// bump (like `reduce` skipping `norm_count` on a hit) only fires on a real
-    /// round-trip; `MaudeStats` reaches no `--prove` output path, so this does
-    /// not affect stdout either way.  Each cache lock is scoped to a single
-    /// statement (the `get` / the `insert`) and thus never held across the
-    /// `execute` IPC wait, per the `SharedMaudeCaches` lock-order invariant.
-    fn execute_memo(
-        &mut self,
-        cmd: &[u8],
-        variable_bound: u64,
-        bump: impl FnOnce(&mut MaudeStats),
-    ) -> Result<Vec<u8>, MaudeError> {
-        let hit = self.caches.reply.lock().unwrap().get(cmd).cloned();
-        if let Some(cached) = hit {
-            self.cache_stats.reply_hits += 1;
-            return Ok(cached);
-        }
-        let reply = self.execute(cmd, variable_bound)?;
-        bump(&mut self.stats);
-        self.cache_stats.reply_misses += 1;
-        self.caches
-            .reply
-            .lock()
-            .unwrap()
-            .insert(cmd.to_vec(), reply.clone());
-        Ok(reply)
+/// The least time an exchange may keep a job that a sequential run would
+/// visit earlier waiting before that job interrupts it.
+const INTERRUPT_FLOOR: std::time::Duration = std::time::Duration::from_millis(250);
+/// An interrupt costs a new process. Only pay that for an exchange that has
+/// already run this many times as long as a process takes to start.
+const INTERRUPT_STARTUPS: u32 = 4;
+/// The longest an interrupted job stays away before it tries again, unless
+/// an exchange may run for longer than this before it is interrupted.
+const BACKOFF_CEILING: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// The exchange in flight on a process, visible to jobs waiting for it.
+///
+/// Jobs of one parallel map share a process when they have none of their
+/// own. Some of them are speculative: a sequential run might never reach
+/// them. A speculative exchange must not hold up a job that run would reach
+/// first, so such a job may kill the process under it. The interrupted job
+/// gives the process up, stays away for a while, and then repeats its
+/// command on a new process.
+#[derive(Default)]
+struct Turn {
+    state: parking_lot::Mutex<TurnState>,
+    changed: parking_lot::Condvar,
+    /// The waiter the process is held for after an interruption, or 0.
+    /// Only that waiter may lock the process.
+    reserved: AtomicU64,
+    /// How long the last process took to start and load the theory.
+    startup_micros: AtomicU64,
+    /// Interrupted jobs staying away, and how often the process was locked
+    /// or unlocked while any of them was.
+    away: AtomicU64,
+    uses: AtomicU64,
+    /// Commands a test has every new process run after loading the theory.
+    #[cfg(test)]
+    preamble: Mutex<Vec<u8>>,
+}
+
+#[derive(Default)]
+struct TurnState {
+    exchange: Option<Exchange>,
+    waiters: u64,
+}
+
+struct Exchange {
+    rank: Option<tamarin_utils::parallel::Rank>,
+    since: std::time::Instant,
+    interrupted: bool,
+}
+
+/// Marks an exchange as in flight until it is finished or dropped.
+struct InFlight<'a>(&'a Turn);
+
+impl InFlight<'_> {
+    /// End the exchange and report whether a waiter interrupted it.
+    fn finish(self) -> bool {
+        let exchange = self.0.state.lock().exchange.take();
+        std::mem::forget(self);
+        exchange.is_some_and(|exchange| exchange.interrupted)
     }
 }
 
-impl Drop for MaudeProcessInner {
-    /// When `TAM_MAUDE_CACHE_STATS` is set, emit one summary line per Maude
-    /// process to STDERR as this inner is torn down (the shared
-    /// `Arc<Mutex<MaudeProcessInner>>` is one per subprocess, so this fires
-    /// exactly once per process at session end).  Nothing reaches stdout;
-    /// stdout is byte-compared against the Haskell oracle.
+impl Drop for InFlight<'_> {
     fn drop(&mut self) {
-        if tamarin_utils::env_gate!("TAM_MAUDE_CACHE_STATS") {
-            let s = &self.cache_stats;
-            eprintln!(
-                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{}",
-                s.reduce_hits,
-                s.reduce_misses,
-                s.unifiable_hits,
-                s.unifiable_misses,
-                s.reply_hits,
-                s.reply_misses,
-            );
+        self.0.state.lock().exchange = None;
+    }
+}
+
+impl Turn {
+    fn begin(&self) -> InFlight<'_> {
+        let rank = tamarin_utils::parallel::Rank::current();
+        self.state.lock().exchange = Some(Exchange {
+            rank,
+            since: std::time::Instant::now(),
+            interrupted: false,
+        });
+        InFlight(self)
+    }
+
+    /// How long an exchange may run before an earlier job may interrupt it.
+    fn interrupt_after(&self) -> std::time::Duration {
+        let startup = std::time::Duration::from_micros(self.startup_micros.load(Ordering::Relaxed));
+        INTERRUPT_FLOOR.max(startup * INTERRUPT_STARTUPS)
+    }
+
+    /// How long until a job of this rank may interrupt the exchange in
+    /// flight. `None` if it may not: there is none, it was interrupted
+    /// already, or a sequential run would not reach the job first.
+    fn patience(
+        &self,
+        state: &TurnState,
+        rank: Option<&tamarin_utils::parallel::Rank>,
+    ) -> Option<std::time::Duration> {
+        let exchange = state.exchange.as_ref()?;
+        let holder = exchange.rank.as_ref()?;
+        (!exchange.interrupted && rank?.precedes(holder)).then(|| {
+            self.interrupt_after()
+                .saturating_sub(exchange.since.elapsed())
+        })
+    }
+
+    fn release(&self, waiter: u64) {
+        if waiter != 0
+            && self
+                .reserved
+                .compare_exchange(waiter, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            let _state = self.state.lock();
+            self.changed.notify_all();
+        }
+    }
+
+    /// Wait until the process is no longer held for `other`.
+    fn wait_for_release(&self, other: u64) {
+        let mut state = self.state.lock();
+        if self.reserved.load(Ordering::Acquire) == other {
+            self.changed
+                .wait_for(&mut state, std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// Tell jobs that are staying away that the process is in use.
+    #[inline]
+    fn note_use(&self) {
+        if self.away.load(Ordering::Relaxed) != 0 {
+            self.uses.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Stay away after an interruption: for `backoff`, or until nobody has
+    /// used the process for as long as an exchange may run undisturbed.
+    fn stay_away(&self, backoff: std::time::Duration) {
+        const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+        self.away.fetch_add(1, Ordering::Relaxed);
+        let away = std::time::Instant::now();
+        let mut quiet = away;
+        let mut uses = self.uses.load(Ordering::Relaxed);
+        while cancellation::check().is_ok() {
+            let other = self.reserved.load(Ordering::Acquire);
+            if other != 0 {
+                self.wait_for_release(other);
+                quiet = std::time::Instant::now();
+                continue;
+            }
+            let seen = self.uses.load(Ordering::Relaxed);
+            if seen != uses {
+                uses = seen;
+                quiet = std::time::Instant::now();
+            }
+            if away.elapsed() >= backoff || quiet.elapsed() >= self.interrupt_after() {
+                break;
+            }
+            std::thread::sleep(POLL);
+        }
+        self.away.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// The reservation a waiter holds after interrupting an exchange.
+struct Waiter<'a> {
+    turn: &'a Turn,
+    id: u64,
+}
+
+impl Drop for Waiter<'_> {
+    fn drop(&mut self) {
+        self.turn.release(self.id);
+    }
+}
+
+/// Exclusive use of a process's transport and counters. The lock is given
+/// up only while an interrupted command waits to be repeated.
+struct InnerGuard<'a> {
+    guard: Option<parking_lot::MutexGuard<'a, MaudeProcessInner>>,
+    handle: &'a MaudeHandle,
+}
+
+impl Deref for InnerGuard<'_> {
+    type Target = MaudeProcessInner;
+    fn deref(&self) -> &MaudeProcessInner {
+        self.guard.as_ref().expect("the process is locked")
+    }
+}
+
+impl std::ops::DerefMut for InnerGuard<'_> {
+    fn deref_mut(&mut self) -> &mut MaudeProcessInner {
+        self.guard.as_mut().expect("the process is locked")
+    }
+}
+
+impl Drop for InnerGuard<'_> {
+    fn drop(&mut self) {
+        self.guard = None;
+        self.handle.turn.note_use();
+    }
+}
+
+impl InnerGuard<'_> {
+    /// Run one command. If a job that needs the process sooner interrupts
+    /// it, give the process up and run the command again later.
+    fn execute(&mut self, cmd: &[u8], variable_bound: u64) -> Result<Vec<u8>, MaudeError> {
+        let turn = &self.handle.turn;
+        let mut backoff = turn.interrupt_after();
+        loop {
+            let exchange = turn.begin();
+            let result = MaudeProcessInner::execute(self, cmd, variable_bound);
+            if !exchange.finish() || result.is_ok() {
+                return result;
+            }
+            // A job that interrupts once will usually be back. Stay away
+            // for longer each time, so that repeating this command does not
+            // keep holding it up.
+            self.guard = None;
+            turn.stay_away(backoff);
+            self.guard = Some(self.handle.lock_process()?);
+            backoff = (backoff * 2).min(BACKOFF_CEILING.max(turn.interrupt_after()));
         }
     }
 }
@@ -540,12 +731,25 @@ fn spawn_maude(maude_path: &str) -> Result<(ChildStdin, ChildStdout, Child), Mau
 /// inside `read_until_prompt` while holding the I/O lock.
 struct MaudeChildReaper {
     child: Option<Child>,
-    // Request cancellation and panicking exchanges ask for transparent recovery.
-    // Explicit watchdog kills and unrelated I/O errors retain their error semantics.
+    // Failed exchanges permit a fresh process on the next request. An explicit
+    // watchdog kill keeps this handle offline until returned to the pool.
     restart: bool,
 }
 
 impl MaudeChildReaper {
+    fn is_running(&mut self) -> std::io::Result<bool> {
+        self.child
+            .as_mut()
+            .map_or(Ok(false), tamarin_utils::process::child_is_running)
+    }
+
+    fn invalidate(&mut self) {
+        if self.child.is_some() {
+            self.restart = true;
+            self.kill_and_wait();
+        }
+    }
+
     fn kill_and_wait(&mut self) {
         if let Some(mut c) = self.child.take() {
             tamarin_utils::process::kill_process_group(&mut c);
@@ -619,6 +823,8 @@ fn check_name_registration(reply: &[u8]) -> Result<(), MaudeError> {
 pub struct MaudeHandle {
     inner: Arc<parking_lot::Mutex<MaudeProcessInner>>,
     child: Arc<Mutex<MaudeChildReaper>>,
+    turn: Arc<Turn>,
+    caches: Arc<SharedMaudeCaches>,
     /// Monotonically-increasing counter for fresh-variable allocation.
     ///
     /// Mirrors Haskell's `MonadFresh` (`FreshT m` in lib/utils): a SINGLE
@@ -646,6 +852,11 @@ pub struct MaudeHandle {
     /// `with_fresh_counter_from` clone.  Immutable after `start()`, so
     /// `maude_sig()` hands out a cheap refcount-bumped clone WITHOUT taking the
     /// IPC mutex or deep-cloning the `BTreeSet`s.
+    /// True iff every `sig.st_rules` LHS is Ac/C-free (`term_ac_c_free`),
+    /// i.e. `nf_via_haskell`'s no-AC st-rule matcher is complete for this
+    /// signature.  Gates `reduce`'s native normal-form fast path; computed
+    /// once at `start_with_caches` (the signature is immutable afterwards).
+    st_lhs_ac_free: bool,
     sig: Arc<MaudeSig>,
 }
 
@@ -700,26 +911,28 @@ impl MaudeHandle {
             child: Some(child),
             restart: false,
         }));
+        let turn = Arc::<Turn>::default();
         let mut inner = MaudeProcessInner {
             maude_path: maude_path.to_owned(),
             child: reaper.clone(),
+            turn: turn.clone(),
             initialized: false,
             ordered_variables: 0,
             stdin,
             stdout,
             stats: MaudeStats::default(),
-            cache_stats: MaudeCacheStats::default(),
-            st_lhs_ac_free: sig.st_lhs_all_ac_c_free(),
             sig: Arc::clone(&sig),
-            caches,
         };
         inner.with_cancellation(MaudeProcessInner::initialize)?;
         Ok(MaudeHandle {
             inner: Arc::new(parking_lot::Mutex::new(inner)),
             child: reaper,
+            turn,
+            caches,
             // The global fresh counter starts at 0 (HS-faithful: HS's
             // `MonadFresh` global counter starts at 0).
             fresh_counter: Arc::new(AtomicU64::new(0)),
+            st_lhs_ac_free: sig.st_lhs_all_ac_c_free(),
             sig,
         })
     }
@@ -797,7 +1010,10 @@ impl MaudeHandle {
         MaudeHandle {
             inner: self.inner.clone(),
             child: self.child.clone(),
+            turn: self.turn.clone(),
+            caches: self.caches.clone(),
             fresh_counter: Arc::new(AtomicU64::new(avoid_max.saturating_add(1))),
+            st_lhs_ac_free: self.st_lhs_ac_free,
             sig: Arc::clone(&self.sig),
         }
     }
@@ -811,7 +1027,10 @@ impl MaudeHandle {
         MaudeHandle {
             inner: self.inner.clone(),
             child: self.child.clone(),
+            turn: self.turn.clone(),
+            caches: self.caches.clone(),
             fresh_counter: Arc::new(AtomicU64::new(next)),
+            st_lhs_ac_free: self.st_lhs_ac_free,
             sig: Arc::clone(&self.sig),
         }
     }
@@ -839,8 +1058,147 @@ impl MaudeHandle {
     /// watchdog deadlocks with the very thread it's trying to unblock.
     pub fn kill_subprocess(&self) {
         if let Ok(mut reaper) = self.child.lock() {
+            reaper.restart = false;
             reaper.kill_and_wait();
         }
+    }
+
+    /// Lock the process for this job. A cancelled waiter leaves without it.
+    #[inline]
+    fn lock_inner(&self) -> Result<InnerGuard<'_>, cancellation::Cancelled> {
+        Ok(InnerGuard {
+            guard: Some(self.lock_process()?),
+            handle: self,
+        })
+    }
+
+    #[inline]
+    fn lock_process(
+        &self,
+    ) -> Result<parking_lot::MutexGuard<'_, MaudeProcessInner>, cancellation::Cancelled> {
+        // Cached operations frequently take an uncontended lock.
+        if self.turn.reserved.load(Ordering::Relaxed) == 0
+            && let Some(guard) = self.inner.try_lock()
+            // An interrupting job may have reserved the process meanwhile.
+            && self.turn.reserved.load(Ordering::Acquire) == 0
+        {
+            self.turn.note_use();
+            cancellation::check()?;
+            return Ok(guard);
+        }
+        self.lock_process_contended()
+    }
+
+    #[cold]
+    fn lock_process_contended(
+        &self,
+    ) -> Result<parking_lot::MutexGuard<'_, MaudeProcessInner>, cancellation::Cancelled> {
+        const POLL: std::time::Duration = std::time::Duration::from_secs(1);
+        let turn = &*self.turn;
+        let mut waiter = Waiter { turn, id: 0 };
+        loop {
+            cancellation::check()?;
+            // A job waiting for a value this one is building can lend it an
+            // earlier rank at any time.
+            let rank = tamarin_utils::parallel::Rank::current();
+            let reserved = turn.reserved.load(Ordering::Acquire);
+            if reserved != 0 && reserved != waiter.id {
+                turn.wait_for_release(reserved);
+                continue;
+            }
+            // Wake on unlock, like an ordinary mutex. The timeout bounds
+            // cancellation latency and the wait behind a speculative exchange.
+            let wait = turn
+                .patience(&turn.state.lock(), rank.as_ref())
+                .map_or(POLL, |wait| {
+                    wait.clamp(std::time::Duration::from_millis(1), POLL)
+                });
+            if let Some(guard) = self.inner.try_lock_for(wait) {
+                let reserved = turn.reserved.load(Ordering::Acquire);
+                if reserved != 0 && reserved != waiter.id {
+                    continue;
+                }
+                turn.note_use();
+                cancellation::check()?;
+                return Ok(guard);
+            }
+            waiter.id = self.interrupt_exchange(rank.as_ref(), waiter.id);
+        }
+    }
+
+    /// Kill the exchange in flight if a sequential run would reach `rank`
+    /// first and the exchange has had its time, and hold the process for
+    /// this waiter. Returns the waiter's reservation: `held`, or a new one.
+    fn interrupt_exchange(&self, rank: Option<&tamarin_utils::parallel::Rank>, held: u64) -> u64 {
+        let turn = &*self.turn;
+        let mut state = turn.state.lock();
+        if turn.reserved.load(Ordering::Acquire) != held
+            || !turn
+                .patience(&state, rank)
+                .is_some_and(|left| left.is_zero())
+        {
+            return held;
+        }
+        let exchange = state.exchange.as_mut().expect("an exchange is in flight");
+        if tamarin_utils::env_gate!("TAM_DBG_MAUDE_INTERRUPT") {
+            eprintln!("[maude-interrupt] after {:?}", exchange.since.elapsed());
+        }
+        exchange.interrupted = true;
+        let id = if held == 0 {
+            state.waiters += 1;
+            turn.reserved.store(state.waiters, Ordering::Release);
+            state.waiters
+        } else {
+            held
+        };
+        self.child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .invalidate();
+        id
+    }
+
+    /// Run a command whose reply depends on the command alone, or return
+    /// the reply an identical command got earlier in the session.  The
+    /// per-call back-conversion still runs on every hit, so a hit is
+    /// consumed exactly like a round-trip.  `bump` records the per-command
+    /// stat on a real round-trip only; `MaudeStats` reaches no `--prove`
+    /// output.
+    fn execute_memo(
+        &self,
+        cmd: &[u8],
+        variable_bound: u64,
+        bump: impl FnOnce(&mut MaudeStats),
+    ) -> Result<Vec<u8>, MaudeError> {
+        cancellation::check()?;
+        let cached = || self.caches.reply.lock().unwrap().get(cmd).cloned();
+        let hit = match cached() {
+            Some(reply) => Some(reply),
+            None => {
+                let mut inner = self.lock_inner()?;
+                // Another job may have run the same command meanwhile.
+                match cached() {
+                    Some(reply) => Some(reply),
+                    None => {
+                        let reply = inner.execute(cmd, variable_bound)?;
+                        bump(&mut inner.stats);
+                        drop(inner);
+                        self.caches
+                            .stats
+                            .reply_misses
+                            .fetch_add(1, Ordering::Relaxed);
+                        self.caches
+                            .reply
+                            .lock()
+                            .unwrap()
+                            .insert(cmd.to_vec(), reply.clone());
+                        return Ok(reply);
+                    }
+                }
+            }
+        };
+        self.caches.stats.reply_hits.fetch_add(1, Ordering::Relaxed);
+        Ok(hit.expect("a cached reply"))
     }
 
     /// Snapshot of the per-operation Maude call counters for this handle.
@@ -853,26 +1211,28 @@ impl MaudeHandle {
     /// input modulo the fixed-per-session Maude signature, and
     /// `has_non_normal_terms` (called on every search step) calls it
     /// repeatedly for the same subterms.  Cache locks are scoped to the
-    /// single `get` / `insert` statement, strictly inside the inner IPC
-    /// mutex and never across the IPC wait (lock-order invariant on
-    /// `SharedMaudeCaches`).
+    /// single `get` / `insert` statement and never held across the IPC
+    /// wait (lock-order invariant on `SharedMaudeCaches`).
     pub fn reduce(&self, t: &LNTerm) -> Result<LNTerm, MaudeError> {
+        cancellation::check()?;
         let mut ctx = ConvCtx::new();
+        let hit = self.caches.reduce.lock().unwrap().get(t).cloned();
+        if let Some(cached) = hit {
+            self.caches
+                .stats
+                .reduce_hits
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(cached);
+        }
         let reply = {
-            let mut inner = cancellation::lock(&self.inner)?;
-            let hit = inner.caches.reduce.lock().unwrap().get(t).cloned();
-            if let Some(cached) = hit {
-                inner.cache_stats.reduce_hits += 1;
-                return Ok(cached);
-            }
             // Fast path: if the term contains NO reducible function
             // symbols anywhere (and the signature has no AC theories
             // that could rewrite via narrowing), `reduce` is the
             // identity.  Avoids the ~0.7ms Maude IPC round-trip on the
             // overwhelming majority of fact-term normalisations we
             // perform during subst_system.
-            if inner.sig.has_no_ac_operators()
-                && !term_has_reducible_sym(t, &inner.sig.reducible_fun_syms)
+            if self.sig.has_no_ac_operators()
+                && !term_has_reducible_sym(t, &self.sig.reducible_fun_syms)
             {
                 return Ok(t.clone());
             }
@@ -899,7 +1259,7 @@ impl MaudeHandle {
             // reach the result.  Mirrors the cheap fast path's
             // conventions: no reduce-cache insert, no `norm_count` /
             // cache-stat bump.
-            if inner.st_lhs_ac_free && crate::norm::nf_via_haskell(&inner.sig, t) {
+            if self.st_lhs_ac_free && crate::norm::nf_via_haskell(&self.sig, t) {
                 // `TAM_RS_VERIFY_REDUCE_NF` oracle: ALSO run the real
                 // Maude round-trip this fast path elides and panic if
                 // Maude's answer differs from `t`.  Dead-cheap when
@@ -909,8 +1269,8 @@ impl MaudeHandle {
                     let mut cmd = b"reduce ".to_vec();
                     pp_mterm_into(&mt, &mut cmd);
                     cmd.extend_from_slice(b" .\n");
-                    let reply = inner.execute(&cmd, ctx.variable_bound())?;
-                    let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &inner.sig)?;
+                    let reply = self.lock_inner()?.execute(&cmd, ctx.variable_bound())?;
+                    let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &self.sig)?;
                     let mut next = 0;
                     let maude_result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
                     if maude_result != *t {
@@ -928,6 +1288,7 @@ impl MaudeHandle {
             let mut cmd = b"reduce ".to_vec();
             pp_mterm_into(&mt, &mut cmd);
             cmd.extend_from_slice(b" .\n");
+            let mut inner = self.lock_inner()?;
             let reply = inner.execute(&cmd, ctx.variable_bound())?;
             inner.stats.norm_count += 1;
             reply
@@ -935,10 +1296,11 @@ impl MaudeHandle {
         let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &self.sig)?;
         let mut next = 0;
         let result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
-        let mut inner = cancellation::lock(&self.inner)?;
-        inner.cache_stats.reduce_misses += 1;
-        inner
-            .caches
+        self.caches
+            .stats
+            .reduce_misses
+            .fetch_add(1, Ordering::Relaxed);
+        self.caches
             .reduce
             .lock()
             .unwrap()
@@ -971,22 +1333,24 @@ impl MaudeHandle {
         let key: Vec<(LNTerm, LNTerm)> =
             eqs.iter().map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
         // Cache locks below are scoped to the single `get` / `insert`
-        // statement, strictly inside the inner IPC mutex and released
-        // before any Maude IPC (lock-order invariant on
-        // `SharedMaudeCaches`).
-        {
-            let mut inner = cancellation::lock(&self.inner)?;
-            let hit = inner.caches.unifiable.lock().unwrap().get(&key).copied();
-            if let Some(hit) = hit {
-                inner.cache_stats.unifiable_hits += 1;
-                return Ok(hit);
-            }
+        // statement and released before any Maude IPC (lock-order
+        // invariant on `SharedMaudeCaches`).
+        cancellation::check()?;
+        let hit = self.caches.unifiable.lock().unwrap().get(&key).copied();
+        if let Some(hit) = hit {
+            self.caches
+                .stats
+                .unifiable_hits
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(hit);
         }
         let res = self.unify(eqs)?;
         let answer = !res.is_empty();
-        let mut inner = cancellation::lock(&self.inner)?;
-        inner.cache_stats.unifiable_misses += 1;
-        inner.caches.unifiable.lock().unwrap().insert(key, answer);
+        self.caches
+            .stats
+            .unifiable_misses
+            .fetch_add(1, Ordering::Relaxed);
+        self.caches.unifiable.lock().unwrap().insert(key, answer);
         Ok(answer)
     }
 
@@ -1159,14 +1523,12 @@ impl MaudeHandle {
         }
         // The equations actually sent to Maude are the AC residuals.
         let maude_eqs: &[Equal<LNTerm>] = &residual_eqs;
-        let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         let cmd = build_conj_eqs_cmd(b"unify in MSG : ", maude_eqs, &mut ctx);
         // Raw-reply memo (see `SharedMaudeCaches::reply`): identical `unify in MSG` command
         // bytes yield an identical reply, and the per-arm back-conversion below
         // still runs on every call, so a hit is bit-for-bit a real round-trip.
-        let reply = inner.execute_memo(&cmd, ctx.variable_bound(), |s| s.unify_count += 1)?;
-        drop(inner);
+        let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.unify_count += 1)?;
         let msubsts = maude_parse::parse_unify_reply_with_sig(&reply, &self.sig)?;
         // HS `avoid (M.elems bindings)` (`runBackConversion`,
         // Term/Maude/Types.hs, via
@@ -1321,7 +1683,6 @@ impl MaudeHandle {
             let matched = eqs.iter().all(|eq| eq.lhs == eq.rhs);
             return Ok(if matched { vec![Vec::new()] } else { vec![] });
         }
-        let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         // `subjs` ← each `eq.lhs` (HS `t1s = a = subject`);
         // `pats`  ← each `eq.rhs` (HS `t2s = b = pattern`).
@@ -1338,8 +1699,7 @@ impl MaudeHandle {
         // formatting the borrowed slice directly without a `Vec`+`Arc`
         // round-trip.
         let cmd = pp_match_cmd(&pats, &subjs);
-        let reply = inner.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
-        drop(inner);
+        let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
         let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
         for ms in &msubsts {
@@ -1428,7 +1788,6 @@ impl MaudeHandle {
             })
             .collect();
 
-        let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         let mut pats: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
         let mut subjs: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
@@ -1447,8 +1806,7 @@ impl MaudeHandle {
         // flipped fields.  So both matchers emit pattern-on-the-left,
         // which is what Maude requires (vars bind in the left operand).
         let cmd = pp_match_cmd(&pats, &subjs);
-        let reply = inner.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
-        drop(inner);
+        let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
         let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
         for ms in &msubsts {
@@ -1467,7 +1825,6 @@ impl MaudeHandle {
         &self,
         t: &LNTerm,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         let mt = lterm_to_mterm_global(t, &mut ctx);
         let mut cmd = b"get variants in MSG : ".to_vec();
@@ -1479,8 +1836,7 @@ impl MaudeHandle {
         // like a fresh one.  This is the biggest single lever on variant-heavy
         // theories (Joux re-issues the same expensive `get variants` twice —
         // once in the derivcheck phase, once at main close).
-        let reply = inner.execute_memo(&cmd, ctx.variable_bound(), |s| s.var_count += 1)?;
-        drop(inner);
+        let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.var_count += 1)?;
         let msubsts = maude_parse::parse_variants_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
         // HS-faithful: each variant's back-conversion uses a fresh ctx
@@ -1845,9 +2201,41 @@ struct PoolState {
     spawned: usize,
 }
 
+impl PoolState {
+    /// Pop the most recently returned member. One that exited while idle, or
+    /// whose last borrower lost it, restarts on its next exchange.
+    fn pop(&mut self) -> Option<MaudeHandle> {
+        let handle = self.free.pop()?;
+        {
+            let mut child = handle
+                .child
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if matches!(child.is_running(), Ok(false)) {
+                child.invalidate();
+                child.restart = true;
+            }
+        }
+        Some(handle)
+    }
+
+    fn idle_running(&self) -> Option<usize> {
+        // A recycled lease may be waiting for its next exchange to restart
+        // Maude. Leave it available for callers that can wait for startup.
+        self.free.iter().rposition(|handle| {
+            handle
+                .child
+                .try_lock()
+                .is_ok_and(|mut child| matches!(child.is_running(), Ok(true)))
+        })
+    }
+}
+
 /// Pool of up to `size` independent Maude subprocesses, all initialised
-/// with the same `MaudeSig`.  Workers borrow a handle via `acquire()`; the
-/// returned `PooledMaude` releases back to the pool on drop.
+/// with the same `MaudeSig`.  A lease returns its process to the pool on
+/// drop.  Proof search only takes leases that never wait for a release
+/// (`try_take_idle_owned`, `try_acquire_ready`) and falls back to the
+/// caller's own process; `acquire` blocks and is for work outside it.
 ///
 /// Members spawn LAZILY: `new` starts exactly one eagerly (so a failure to
 /// launch Maude surfaces as an `Err` from `new`), and the rest are spawned
@@ -1926,9 +2314,9 @@ impl MaudePool {
     /// keeps serving the members already spawned (≥ 1 always exists), so
     /// this is a soft degradation, not a fatal error.
     fn warn_spawn_failed(&self, e: &MaudeError) {
-        if !self.spawn_warned.swap(true, Ordering::Relaxed) {
+        if !matches!(e, MaudeError::Cancelled) && !self.spawn_warned.swap(true, Ordering::Relaxed) {
             eprintln!(
-                "[warn] MaudePool: lazy Maude spawn failed ({}); \
+                "[warn] MaudePool: starting a Maude process failed ({}); \
                 continuing with the members already started",
                 e
             );
@@ -1950,8 +2338,7 @@ impl MaudePool {
         let mut try_spawn = true;
         let mut state = self.state.lock().unwrap();
         loop {
-            let idle = state.free.pop();
-            if let Some(h) = idle {
+            if let Some(h) = state.pop() {
                 return PooledMaude {
                     pool: self,
                     inner: Some(h),
@@ -1962,27 +2349,19 @@ impl MaudePool {
                 // other acquirers aren't blocked for the ~30ms startup.
                 state.spawned += 1;
                 drop(state);
-                match MaudeHandle::start_with_caches(
-                    &self.path,
-                    self.sig.clone(),
-                    Arc::clone(&self.caches),
-                ) {
+                match self.spawn_reserved() {
                     Ok(h) => {
                         return PooledMaude {
                             pool: self,
                             inner: Some(h),
                         };
                     }
-                    Err(e) => {
+                    Err(_) => {
                         try_spawn = false;
-                        state = self.state.lock().unwrap();
-                        state.spawned -= 1;
-                        self.warn_spawn_failed(&e);
                         // A member may have been released while the lock was
-                        // dropped for the spawn attempt — its notify_one had
-                        // no waiter and was lost.  Re-check `free` under this
-                        // relock before waiting, or the release is missed and
-                        // this acquire could sleep forever.
+                        // dropped for the spawn attempt. Re-check `free`
+                        // under this relock before waiting.
+                        state = self.state.lock().unwrap();
                         continue;
                     }
                 }
@@ -1994,44 +2373,100 @@ impl MaudePool {
         }
     }
 
+    /// Start the member whose slot the caller just reserved in `spawned`.
+    /// If startup fails or panics, the slot is released and a blocked
+    /// `acquire` is woken so it can use it.
+    fn spawn_reserved(&self) -> Result<MaudeHandle, MaudeError> {
+        struct Reserved<'a>(&'a MaudePool);
+        impl Drop for Reserved<'_> {
+            fn drop(&mut self) {
+                let mut state = self
+                    .0
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.spawned -= 1;
+                self.0.notify.notify_one();
+            }
+        }
+        let reserved = Reserved(self);
+        match MaudeHandle::start_with_caches(&self.path, self.sig.clone(), Arc::clone(&self.caches))
+        {
+            Ok(handle) => {
+                std::mem::forget(reserved);
+                Ok(handle)
+            }
+            Err(error) => {
+                drop(reserved);
+                self.warn_spawn_failed(&error);
+                Err(error)
+            }
+        }
+    }
+
     /// Non-blocking acquire: pop an idle member, else spawn a new one on
-    /// demand (up to `size`), else return `None`.  Used by the within-lemma
-    /// fan-out so that nested (lemma-level B1 + within-lemma) parallelism
-    /// can't deadlock waiting on a pool that the outer lemma tasks have
-    /// fully drained: this NEVER waits on the condvar.  It may block ~30ms
-    /// while a lazy member spawns — acceptable, as it still cannot wait on a
-    /// drained pool.
+    /// demand (up to `size`), else return `None`.  This NEVER waits on the
+    /// condvar, so nested parallel work cannot deadlock on a drained pool.
+    /// It may block ~30ms while a lazy member spawns.
     pub fn try_acquire(&self) -> Option<PooledMaude<'_>> {
+        self.try_borrow().ok().flatten()
+    }
+
+    fn try_borrow(&self) -> Result<Option<PooledMaude<'_>>, MaudeError> {
         let mut state = self.state.lock().unwrap();
-        if let Some(h) = state.free.pop() {
-            return Some(PooledMaude {
+        if let Some(h) = state.pop() {
+            return Ok(Some(PooledMaude {
                 pool: self,
                 inner: Some(h),
-            });
+            }));
         }
         if state.spawned < self.size {
             state.spawned += 1;
             drop(state);
-            match MaudeHandle::start_with_caches(
-                &self.path,
-                self.sig.clone(),
-                Arc::clone(&self.caches),
-            ) {
-                Ok(h) => {
-                    return Some(PooledMaude {
-                        pool: self,
-                        inner: Some(h),
-                    });
-                }
-                Err(e) => {
-                    let mut relock = self.state.lock().unwrap();
-                    relock.spawned -= 1;
-                    self.warn_spawn_failed(&e);
-                    return None;
-                }
-            }
+            return self.spawn_reserved().map(|h| {
+                Some(PooledMaude {
+                    pool: self,
+                    inner: Some(h),
+                })
+            });
         }
-        None
+        Ok(None)
+    }
+
+    /// Take an already-running member, or `None`. Never spawns and never
+    /// waits for subprocess I/O, so the caller stays interruptible even if a
+    /// new Maude would never print its startup prompt.
+    pub fn try_take_idle_owned(self: &Arc<Self>) -> Option<OwnedPooledMaude> {
+        let mut state = self.state.lock().unwrap();
+        let idle = state.idle_running()?;
+        let handle = state.free.remove(idle);
+        Some(MaudeLease {
+            pool: self.clone(),
+            inner: Some(handle),
+        })
+    }
+
+    /// Take a running member, or start one (up to `size`) and finish its
+    /// startup under the caller's cancellation scope. Returns `None` when the
+    /// pool is fully leased or startup fails or is cancelled; never waits for
+    /// a release. The lease can move between threads with its job.
+    pub fn try_acquire_ready(self: &Arc<Self>) -> Option<OwnedPooledMaude> {
+        if let Some(lease) = self.try_take_idle_owned() {
+            return Some(lease);
+        }
+        let mut borrowed = self.try_borrow().ok()??;
+        let lease = MaudeLease {
+            pool: self.clone(),
+            inner: borrowed.inner.take(),
+        };
+        let ready = cancellation::lock(&lease.handle().inner)
+            .map_err(MaudeError::from)
+            .and_then(|mut inner| inner.with_cancellation(MaudeProcessInner::prepare_worker));
+        if let Err(error) = ready {
+            self.warn_spawn_failed(&error);
+            return None;
+        }
+        Some(lease)
     }
 
     /// Target subprocess count this pool was constructed with — the ceiling
@@ -2047,41 +2482,40 @@ impl MaudePool {
     }
 }
 
-/// A borrowed Maude handle from a `MaudePool`.  `Deref`s to
-/// `MaudeHandle`; releases back to the pool on `Drop`.
-#[must_use = "dropping this guard immediately ends the scope it protects"]
-pub struct PooledMaude<'a> {
-    pool: &'a MaudePool,
+/// A lease borrowing its pool.
+pub type PooledMaude<'a> = MaudeLease<&'a MaudePool>;
+/// A lease that keeps its pool alive until the worker returns the process.
+pub type OwnedPooledMaude = MaudeLease<Arc<MaudePool>>;
+
+/// Exclusive use of a subprocess until the lease is dropped.
+#[must_use = "dropping the lease returns the process to the pool"]
+pub struct MaudeLease<P: Deref<Target = MaudePool>> {
+    pool: P,
     inner: Option<MaudeHandle>,
 }
 
-impl<'a> PooledMaude<'a> {
-    /// Borrow the underlying `MaudeHandle` for the lifetime of this guard.
-    /// Does NOT consume the guard or transfer ownership: the returned
-    /// reference is valid only while the `PooledMaude` lives, and the
-    /// handle is released back to the pool in `PooledMaude::drop`.  This
-    /// is the same accessor as the `Deref` impl; callers that need an
-    /// owned handle (e.g. to clone into a per-task `ProofContext`) should
-    /// `.clone()` the returned `&MaudeHandle`.
+impl<P: Deref<Target = MaudePool>> MaudeLease<P> {
+    /// The leased handle, as `Deref` also returns. A clone of it must not
+    /// outlive the lease: the process goes back to the pool on drop.
     pub fn handle(&self) -> &MaudeHandle {
         self.inner
             .as_ref()
-            .expect("PooledMaude inner not yet taken")
+            .expect("lease holds its handle until drop")
     }
 }
 
-impl<'a> std::ops::Deref for PooledMaude<'a> {
+impl<P: Deref<Target = MaudePool>> Deref for MaudeLease<P> {
     type Target = MaudeHandle;
     fn deref(&self) -> &MaudeHandle {
-        self.inner
-            .as_ref()
-            .expect("PooledMaude inner not yet taken")
+        self.handle()
     }
 }
 
-impl<'a> Drop for PooledMaude<'a> {
+impl<P: Deref<Target = MaudePool>> Drop for MaudeLease<P> {
     fn drop(&mut self) {
         if let Some(h) = self.inner.take() {
+            // An IPC error belongs to the borrower that saw it. The slot stays
+            // in the pool and `PoolState::pop` restarts it for the next one.
             let mut state = self.pool.state.lock().unwrap();
             // LIFO reuse: the most recently released (warmest) member is the
             // next one popped, keeping queries concentrated on warm members.

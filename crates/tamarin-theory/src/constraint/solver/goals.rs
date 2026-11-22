@@ -1452,48 +1452,36 @@ fn collect_one_case_syms(
     use crate::fact::FactTag;
     use tamarin_term::function_symbols::FunSym;
     use tamarin_term::term::Term;
-    let mut out = std::collections::BTreeSet::new();
-    for src in ctx.full_sources.iter() {
-        // HS-faithful order — `smartRanking.getMsgOneCase`
-        // (ProofMethod.hs) pattern-matches on `cdGoal` BEFORE
-        // touching `cdCases`:
-        //
-        //   getMsgOneCase cd = case msgPremise (L.get cdGoal cd) of
-        //     Just (viewTerm -> FApp o _)
-        //       | length (getDisj (L.get cdCases cd)) == 1 -> Just o
-        //     _                                            -> Nothing
-        //
-        // So Var-headed sources (e.g. `KU(t:Fresh)`) never force
-        // `cdCases`.  Do NOT check `src.cases.len() != 1` first: that
-        // forces the lazy thunk on every source and emits spurious
-        // precompute `[EXEC] solveGoal ...` lines for sources HS would
-        // never compute.
-        //
-        // Only KU-headed source goals.
-        let term: &tamarin_term::lterm::LNTerm = match &src.goal {
-            G::Action(_, fa) | G::Premise(_, fa) if matches!(fa.tag, FactTag::Ku) => {
-                match fa.terms.first() {
-                    Some(t) => t,
-                    None => continue,
-                }
-            }
-            _ => continue,
+    fn ku_symbol(source: &super::sources::Source) -> Option<&'static [u8]> {
+        let (G::Action(_, fact) | G::Premise(_, fact)) = &source.goal else {
+            return None;
         };
-        let Term::App(FunSym::NoEq(s), _) = term else {
-            continue;
-        };
-        // Now we know the goal is `KU(FApp o _)` — HS-faithful: force
-        // cases at this point to check the disjunct count.  We only need
-        // the disjunct COUNT here, so force once (idempotent) and read
-        // the cell length in O(1) instead of deep-cloning every case
-        // `System`.
-        ctx.ensure_saturated()?;
-        if src.cases_len() != 1 {
-            continue;
+        if fact.tag != FactTag::Ku {
+            return None;
         }
-        out.insert(s.name);
+        match fact.terms.first()? {
+            Term::App(FunSym::NoEq(symbol), _) => Some(symbol.name),
+            _ => None,
+        }
     }
-    Ok(out)
+
+    // Haskell's getMsgOneCase checks the KU head before forcing its cases.
+    // A layout containing only variable-headed KU goals stays lazy.
+    if !ctx
+        .full_sources
+        .iter()
+        .any(|source| ku_symbol(source).is_some())
+    {
+        return Ok(Default::default());
+    }
+    Ok(ctx
+        .ensure_saturated()?
+        .iter()
+        .filter_map(|source| {
+            let symbol = ku_symbol(source)?;
+            (source.cases_len() == 1).then_some(symbol)
+        })
+        .collect())
 }
 
 /// HS-faithful lazy `oneCaseOnly` shared by all three rankings.
@@ -2670,19 +2658,12 @@ pub(crate) fn dispatch_solve_goal(
         let source_result = match g {
             Goal::Action(i, fa) => {
                 crate::constraint::solver::sources::solve_with_source_cases_action(
-                    red.ctx,
-                    &red.ctx.full_sources,
-                    &red.sys,
-                    i,
-                    fa,
-                    &red.maude,
-                    None,
+                    red.ctx, None, &red.sys, i, fa, &red.maude, None,
                 )
             }
             Goal::Premise(p, fa) => {
                 crate::constraint::solver::sources::solve_with_source_cases_ctx(
                     red.ctx,
-                    &red.ctx.full_sources,
                     &red.sys,
                     &p.0,
                     p.1,
