@@ -1524,6 +1524,8 @@ dependencies = [
  "libc",
  "parking_lot",
  "rustc-hash",
+ "rustix",
+ "windows-sys",
 ]
 
 [[package]]
