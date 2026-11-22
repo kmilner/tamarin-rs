@@ -448,19 +448,10 @@ fn singleton_system_case_is_adopted_as_a_linear_continuation() {
 
 #[test]
 fn fatal_source_error_discards_completed_sibling_arms() {
-    use crate::constraint::solver::context::SourceProvider;
-
-    #[derive(Debug)]
-    struct FailingProvider;
-
-    impl SourceProvider for FailingProvider {
-        fn materialize(&self, _ctx: &ProofContext) -> Result<(), crate::prove::ProveError> {
-            Err(crate::prove::ProveError::Guarded("bad source".into()))
-        }
-    }
+    use crate::constraint::solver::context::FailingSourceProvider;
 
     let Some(mut ctx) = ctx() else { return };
-    ctx.set_source_provider(std::sync::Arc::new(FailingProvider));
+    ctx.set_source_provider(std::sync::Arc::new(FailingSourceProvider));
     let mut red = Reduction::new(&ctx, System::empty());
     let passes = [
         Pass::Fallible(split_into_success_then_failure),

@@ -146,57 +146,82 @@ pub fn check_message_derivation(
     ndc_cache: Option<IntrRuleCache>,
     parameters: crate::constraint::solver::sources::IntegerParameters,
 ) -> Result<Vec<WfError>, crate::prove::ProveError> {
+    check_message_derivation_with_pool(thy, maude, None, timeout, ndc_cache, parameters)
+}
+
+/// Run independent rule probes, each on a Maude process of its own: the
+/// caller's, or an idle pooled one. Each probe is timed, so probes never
+/// queue for a shared process. Warnings and errors are collected in rule
+/// order. A rule's variables share one context.
+pub fn check_message_derivation_with_pool(
+    thy: &Theory,
+    maude: &MaudeHandle,
+    pool: Option<&std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
+    timeout: DerivCheckTimeout,
+    ndc_cache: Option<IntrRuleCache>,
+    parameters: crate::constraint::solver::sources::IntegerParameters,
+) -> Result<Vec<WfError>, crate::prove::ProveError> {
     if !timeout.is_enabled() {
         return Ok(Vec::new());
     }
     let timeout = timeout.per_probe();
-    let mut per_rule: Vec<(String, Vec<String>)> = Vec::new();
-    // HS `originalRules = map (applyMacroInProtoRule (theoryMacros thy)) $
-    // theoryRules thy` (MessageDerivationChecks.hs): the
-    // rules with the theory's `macros:` applied, which is the form
-    // `elaborate` stores (`apply_macro_in_rule`).
-    for (idx, opr) in thy.rules().enumerate() {
-        let rule = &opr.rule;
-        // HS filters on `ignoreDerivChecks` when it builds the report
-        // (`reportVars`, MessageDerivationChecks.hs); skipping the
-        // probe is the same verdict and keeps `idx`, which HS assigns with
-        // `zipWith3 ... [0..]` over ALL rules
-        // (MessageDerivationChecks.hs).
-        if rule.info.attributes.ignore_deriv_checks {
-            continue;
+    // Each probe emits its own ordered source and intruder-rule dumps.
+    let pool = pool.filter(|_| {
+        !tamarin_utils::env_gate!("TAM_RS_DBG_SOURCES_DUMP")
+            && !tamarin_utils::env_gate!("TAM_RS_DBG_INTR_DUMP")
+    });
+    let rules = thy.rules().enumerate().filter_map(|(idx, opr)| {
+        if opr.rule.info.attributes.ignore_deriv_checks {
+            return None;
         }
-        let free_vars = rule_free_vars(rule);
-        if free_vars.is_empty() {
-            continue;
-        }
-        let rule_name = opr.name();
-
-        // Build the probe ONCE per rule (it holds all the per-variable
-        // lemmas): one rule and N formulas over the parent theory's terms.
-        let probe = synthesise_probe(rule, idx, &free_vars);
-
-        // Try each variable's lemma.  HS's "TraceFound" status maps
-        // to RS's `NodeStatus::Solved` for exists-trace lemmas.
-        //
-        // HS-faithful structure: `closeTheoryWithMaude` is called ONCE
-        // per probe theory (HS `MessageDerivationChecks.hs`
-        // calls `closeTheoryWithMaude` once per modified theory; then
-        // `proveTheory` walks the N lemmas reusing the closed theory's
-        // sources/cache — `CloseRule.hs`).  `prove_probe` mirrors
-        // this: build the `ProofContext` + run `ensure_saturated()` ONCE
-        // per probe, then iterate the per-variable lemmas reusing it.
-        let undecidable = prove_probe(
+        let vars = rule_free_vars(&opr.rule);
+        (!vars.is_empty()).then_some((idx, opr, vars))
+    });
+    let run = move |idx, name: String, rule: &ProtoRuleE, vars: Vec<LVar>, handle: MaudeHandle| {
+        tamarin_utils::cancellation::check()?;
+        let probe = synthesise_probe(rule, idx, &vars);
+        let warnings = prove_probe(
             &probe,
-            maude.clone(),
-            &free_vars,
+            handle,
+            &vars,
             timeout,
             ndc_cache.as_ref(),
             parameters,
         )?;
-        if !undecidable.is_empty() {
-            per_rule.push((rule_name.to_string(), undecidable));
-        }
-    }
+        Ok::<_, crate::prove::ProveError>((name, warnings))
+    };
+    let results = if let Some(pool) = pool.filter(|_| rayon::current_num_threads() > 1) {
+        let items = rules
+            .map(|(idx, opr, vars)| (idx, opr.name().to_owned(), opr.rule.clone(), vars))
+            .collect();
+        let primary = maude.clone();
+        let pool = pool.clone();
+        // Every rule is checked. The ordered map is used only so that the
+        // error reported is the first failing rule's, as in the serial arm.
+        tamarin_utils::parallel::try_map_until_with_helpers(
+            items,
+            move || {
+                pool.try_take_idle_owned()
+                    .map(tamarin_utils::parallel::Helper::Own)
+            },
+            move |lease, (idx, name, rule, vars)| {
+                let maude = lease
+                    .as_deref()
+                    .unwrap_or(&primary)
+                    .with_fresh_counter_from(0);
+                run(idx, name, &rule, vars, maude)
+            },
+            |_| false,
+        )?
+    } else {
+        rules
+            .map(|(idx, opr, vars)| run(idx, opr.name().to_owned(), &opr.rule, vars, maude.clone()))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let per_rule = results
+        .into_iter()
+        .filter(|(_, warnings)| !warnings.is_empty())
+        .collect::<Vec<_>>();
     Ok(format_deriv_report(&per_rule))
 }
 
@@ -494,8 +519,10 @@ fn prove_probe(
             TraceQuantifier::ExistsTrace,
             &g,
         );
-        let result = run_proof_search(&ctx, sys, 1000)?;
-        let ok = matches!(result.status, NodeStatus::Solved);
+        let ok = probe_with_timeout(timeout, || {
+            run_proof_search(&ctx, sys, 1000)
+                .map(|proof| matches!(proof.status, NodeStatus::Solved))
+        })?;
         if !ok {
             // HS reports `show LVar` for the undecidable variable
             // (MessageDerivationChecks.hs); `Display
@@ -505,6 +532,43 @@ fn prove_probe(
     }
 
     Ok(undecidable)
+}
+
+/// Interrupt blocking Maude I/O as well as the search itself when a variable's
+/// time is up. Only this variable becomes undecidable on local expiry.
+fn probe_with_timeout(
+    timeout: Option<Duration>,
+    search: impl FnOnce() -> Result<bool, crate::prove::ProveError>,
+) -> Result<bool, crate::prove::ProveError> {
+    use std::sync::mpsc;
+    use tamarin_utils::cancellation::{self, CancellationGuard, CancellationScope};
+    let Some(duration) = timeout else {
+        return search();
+    };
+
+    let scope = CancellationScope::new(cancellation::current());
+    let token = scope.token();
+    let start = std::time::Instant::now();
+    let result = std::thread::scope(|threads| {
+        let (finished, wait) = mpsc::channel::<()>();
+        let timer_token = &token;
+        threads.spawn(move || {
+            let remaining = duration.saturating_sub(start.elapsed());
+            if wait.recv_timeout(remaining) == Err(mpsc::RecvTimeoutError::Timeout) {
+                timer_token.cancel();
+            }
+        });
+        let _guard = CancellationGuard::new(Some(token.clone()));
+        let result = search();
+        drop(finished);
+        result
+    });
+    cancellation::check()?;
+    if token.is_cancelled() {
+        Ok(false)
+    } else {
+        result
+    }
 }
 
 fn format_deriv_report(per_rule: &[(String, Vec<String>)]) -> Vec<WfError> {
@@ -600,23 +664,72 @@ mod tests {
     }
 
     #[test]
-    fn deriv_check_flags_unbound_var() {
-        let Some(m) = maude() else { return };
-        let src = r#"
+    fn deriv_check_reports_unbound_vars_in_declaration_order() {
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let thy = theory(
+            r#"
             theory T begin
-              rule R: [] --[Use(unbound)]-> [Out(unbound)]
+              rule Z: [] --[Use(z)]-> [Out(z)]
+              rule A: [] --[Use(a)]-> [Out(a)]
               lemma trivial: "T"
             end
-        "#;
-        let report = check_message_derivation(&theory(src), &m, secs(5), None, Default::default())
-            .expect("solver operation");
-        // Free `unbound` has no premise → not derivable.
-        assert_eq!(report.len(), 1);
-        assert!(
-            report[0].message.contains("unbound"),
-            "expected 'unbound' in report, got {:?}",
-            report
+        "#,
         );
+        let sig = thy.signature.clone();
+        let primary = start_maude(&path, sig.clone());
+        let helpers = std::sync::Arc::new(
+            tamarin_term::maude_proc::MaudePool::new(&path, sig, 1, Default::default()).unwrap(),
+        );
+        let workers = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        for pool in [None, Some(&helpers)] {
+            let reports = workers
+                .install(|| {
+                    check_message_derivation_with_pool(
+                        &thy,
+                        &primary,
+                        pool,
+                        secs(5),
+                        None,
+                        Default::default(),
+                    )
+                })
+                .unwrap();
+            assert_eq!(reports.len(), 1);
+            assert!(reports[0].message.ends_with(
+                "Rule Z: \nFailed to derive Variable(s): z\n\nRule A: \nFailed to derive Variable(s): a"
+            ), "{reports:?}");
+        }
+    }
+
+    #[test]
+    fn probe_timeout_interrupts_blocked_work_and_preserves_request_cancellation() {
+        use tamarin_utils::cancellation::{self, CancellationGuard, CancellationToken};
+        let parent = CancellationToken::default();
+        let _parent = CancellationGuard::new(Some(parent.clone()));
+        let blocked = || {
+            let (wake, wait) = std::sync::mpsc::channel();
+            let _registration = cancellation::current().unwrap().on_cancel(move || {
+                wake.send(()).unwrap();
+            });
+            wait.recv_timeout(Duration::from_secs(5))
+                .expect("probe did not interrupt blocked work");
+            cancellation::check()?;
+            Ok(true)
+        };
+        assert!(!probe_with_timeout(Some(Duration::from_millis(20)), blocked).unwrap());
+        assert!(probe_with_timeout(Some(Duration::from_secs(5)), || Ok(true)).unwrap());
+        assert!(matches!(
+            probe_with_timeout(Some(Duration::from_secs(5)), || {
+                parent.cancel();
+                blocked()
+            }),
+            Err(crate::prove::ProveError::Cancelled)
+        ));
     }
 
     #[test]

@@ -35,6 +35,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
+use tamarin_theory::constraint::solver::search::ProofNode;
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::elaborate::elaborate_with_in_file;
 use tamarin_theory::module::ModuleType;
@@ -1359,12 +1360,8 @@ impl TheoryPipeline<'_> {
         }
     }
 
-    /// Build this file's shared prover session — the `closeTheory` analog,
-    /// which does the file-level setup (intruder rules, Maude variants,
-    /// `precompute_full_sources`) ONCE, as HS does at theory-close time.
-    /// Both close-time consumers go through here:
-    /// [`Self::close_translated_theory`]'s prove loop and
-    /// `--precompute-only`'s stats.
+    /// Prepare the rule variants and source patterns shared by the batch proof
+    /// loop and `--precompute-only` statistics.
     fn build_prover_session(
         &self,
         maude: MaudeHandle,
@@ -1579,11 +1576,11 @@ impl TheoryPipeline<'_> {
         )
         .ok();
 
-        // Spawn an auxiliary MaudePool of `effective_maude_processes()`
-        // EXTRA subprocesses for use at the rayon parallel sites
-        // (rule-variant closure, saturate refinement).  Workers
-        // `acquire()` one for the duration of one parallel task so they
-        // don't serialise on `file_maude`'s IPC mutex.
+        // Spawn an auxiliary MaudePool of up to `effective_maude_processes()`
+        // subprocesses IN ADDITION to `file_maude`, started on demand.
+        // Parallel work (rule variants, source saturation, lemmas, DFS
+        // branches) leases one per task so it doesn't serialise on
+        // `file_maude`'s IPC mutex.
         //
         // - `--processors=1` ⇒ `effective_maude_processes=1`; we skip
         //   the auxiliary pool entirely (sequential path uses
@@ -1591,12 +1588,8 @@ impl TheoryPipeline<'_> {
         // - `M >= 2` ⇒ spawn M independent Maudes.  Each costs
         //   ~30-100 MB; `--maude-processes=N` lets the user override.
         //
-        // The pool is kept SEPARATE from `file_maude`: sequential paths
-        // (main `prove_lemma` loop, derivation checks) keep using
-        // `file_maude` (counter state stays coherent across lemmas); the
-        // pool is consumed only inside `par_iter` map closures.  Both
-        // consult `session_maude_caches`, so a memo result computed on
-        // any of the session's subprocesses is visible to all of them.
+        // Independent jobs can lease their own process. All processes share
+        // the session's memoized Maude results.
         let pool_size = self.args.effective_maude_processes();
         self.file_maude_pool = if pool_size >= 2 {
             match MaudePool::new(
@@ -1695,9 +1688,10 @@ impl TheoryPipeline<'_> {
             // check (TheoryLoader.hs).
             self.marker("Derivation checks started");
             if let Some(m) = self.file_maude.as_ref() {
-                let extra = tamarin_theory::deriv_check::check_message_derivation(
+                let extra = tamarin_theory::deriv_check::check_message_derivation_with_pool(
                     &self.elaborated,
                     m,
+                    self.file_maude_pool.as_ref(),
                     deriv_timeout,
                     self.ndc_cache.clone(),
                     self.opts.parameters,
@@ -1921,64 +1915,19 @@ impl TheoryPipeline<'_> {
             // stderr order.
             self.closed_marker(&pe_trace);
 
-            let elaborated = &self.elaborated;
-            let theory_name = self.elaborated.name.as_str();
-            let run_lemma = |l: &tamarin_theory::theory::Lemma| -> Result<
-                (
-                    tamarin_theory::pretty_theory::ProvedLemma,
-                    LemmaResult,
-                    Vec<(String, System)>,
-                ),
-                RunError,
-            > {
+            let theory_name = self.elaborated.name.clone();
+            let render = move |l: &tamarin_theory::theory::Lemma, root: ProofNode| {
                 let lemma_name = l.name.clone();
                 let exists_trace = matches!(
                     l.trace_quantifier,
                     tamarin_theory::theory::TraceQuantifier::ExistsTrace,
                 );
-                // HS faithfulness: `closeTheory` runs
-                // `checkAndExtendProver` (CloseRule.hs) over ALL
-                // lemmas, re-attaching the constraint system to each
-                // stored skeleton step.  `--prove=X` then runs the
-                // auto-prover ONLY on lemmas matching the selector
-                // (`proveTheory`, CloseRule.hs); the
-                // rest keep their close-time
-                // replayed proof, reprinted verbatim with the stored
-                // status.  We mirror that: the target lemma(s) run the
-                // full skeleton-replay+auto-prove; non-target lemmas run
-                // check-and-extend (replay only, no auto-proving open
-                // leaves) — which also keeps us from launching a heavy
-                // search on lemmas the user didn't ask to prove.
-                // Without --prove this loop is HS's close-time
-                // `checkAndExtendProver` pass: EVERY lemma is non-target,
-                // so stored skeletons replay (check_and_extend) but no
-                // open leaf is auto-proved.
-                let is_target = prove_anything && lemma_matches(lemma_filter, &lemma_name);
-                // HS does NOT print a per-lemma "proving lemma X ..."
-                // marker; the only progress lines are the `[Theory X]
-                // ...` set above.  Stay quiet here for HS-faithful stderr.
-                let outcome = if is_target {
-                    tamarin_theory::prove::prove_lemma_in_session(
-                        &session,
-                        &lemma_name,
-                        target_bound,
-                    )
-                } else {
-                    tamarin_theory::prove::check_and_extend_lemma_in_session(
-                        &session,
-                        &lemma_name,
-                        usize::MAX,
-                    )
-                };
                 // HS `systemsWithMetadata` (Batch.hs) reads the proof
                 // tree of every lemma, so the collection has to happen here —
                 // the tree is consumed for its solved `System`s once verdict
-                // and proof body are rendered.  Both arms above feed it: a
-                // stored `SOLVED` proof surfaces through
-                // `check_and_extend_lemma_in_session`, which is why
-                // `_analyzed` theories carry traces without `--prove`.
+                // and proof body are rendered. Replayed stored proofs can
+                // also carry traces without `--prove`.
                 let mut lemma_traces: Vec<(String, System)> = Vec::new();
-                let root = outcome.map_err(RunError::from)?;
                 let (verdict, proof_steps, proof_body) = {
                     let steps = count_proof_steps(&root);
                     // HS lemma verdict = `getProofStatus` (Proof.hs)
@@ -2001,7 +1950,7 @@ impl TheoryPipeline<'_> {
                             tamarin_theory::constraint::solver::search::into_solved_systems(root)
                         {
                             lemma_traces
-                                .push((trace_output_label(theory_name, &lemma_name, &path), sys));
+                                .push((trace_output_label(&theory_name, &lemma_name, &path), sys));
                         }
                     }
                     (v, steps, Some(body))
@@ -2016,34 +1965,17 @@ impl TheoryPipeline<'_> {
                     proof_steps,
                     exists_trace,
                 };
-                Ok((pl, lr, lemma_traces))
+                (pl, lr, lemma_traces)
             };
 
-            // Fallible theories stay ordered so an oracle/guarded error cannot
-            // be trapped behind other unbounded work. Fully internal,
-            // guardable theories retain the indexed parallel fast path; Rayon
-            // preserves declaration order when collecting this iterator.
-            let lemmas: Vec<_> = elaborated.lemmas().collect();
-            let ordered = session.guarded_lemmas_may_fail()
-                || lemmas.iter().any(|lemma| {
-                    prove_anything
-                        && lemma_matches(lemma_filter, &lemma.name)
-                        && session.lemma_ranking_may_fail(&lemma.name)
-                });
-            let lemma_results: Vec<_> = if ordered {
-                lemmas
-                    .into_iter()
-                    .map(run_lemma)
-                    .collect::<Result<Vec<_>, RunError>>()?
-            } else {
-                // Source saturation uses its own pool, so workers can wait on
-                // the shared lazy cache without starving its nested work.
-                use rayon::prelude::*;
-                lemmas
-                    .par_iter()
-                    .map(|lemma| run_lemma(lemma))
-                    .collect::<Result<Vec<_>, RunError>>()?
-            };
+            // The session joins active proofs and returns results in declaration order.
+            let lemma_results = session.map_lemma_proofs(
+                |lemma| {
+                    (prove_anything && lemma_matches(lemma_filter, &lemma.name))
+                        .then_some(target_bound)
+                },
+                render,
+            )?;
             for (pl, lr, tr) in lemma_results {
                 proved_lemmas.push(pl);
                 results.push(lr);

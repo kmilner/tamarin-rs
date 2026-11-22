@@ -6,8 +6,8 @@
 //! Sources represent the big-step proofs computing the possible
 //! sources of a fact in a constraint system. This module implements:
 //!
-//! - Precomputing source distinctions for every protocol rule's
-//!   premises (`precompute_full_sources`, mirroring `precomputeSources`).
+//! - Building ordered source patterns for protocol facts and intruder knowledge,
+//!   then enumerating the initial cases for each pattern.
 //! - Saturating sources with respect to each other
 //!   (`saturate_sources_with_simp*`, mirroring `saturateSources`).
 //! - Refining sources with source-assumption lemmas
@@ -28,12 +28,8 @@ use tamarin_term::lterm::frees;
 // Precompute-mode marker
 // =============================================================================
 //
-// `solve_premise_goal` reads this flag to decide between full
-// `exploit_prems` (precompute) and `exploit_prems_supplier_only`
-// (runtime).  Set from `precompute_full_sources` for the duration of
-// the precomputation; cleared on exit.  Mirrors how Haskell's
-// `precomputeSources` runs the reducer in a fixed mode that records
-// every dangling premise, then `saturateSources` resolves them.
+// Source refinement records dangling premises for subsequent saturation passes.
+// The guard scopes that mode to the current worker's branch solve.
 
 thread_local! {
     static IN_PRECOMPUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -138,209 +134,100 @@ pub fn unsolved_chain_constraints(sys: &System) -> usize {
     sys.unsolved_chains().count()
 }
 
-/// `Source` — one precomputed case distinction. The Haskell version
-/// is `Source { _cdGoal :: Goal, _cdCases :: Disj (M.Map CaseName System) }`.
-/// `cdCases` is a lazy thunk in HS; matched here by `cases_cell`, which is
-/// filled on the first `cases(ctx)` call. Trivial
-/// protocols never force `KU(t:Fresh)`-style sources (HS's
-/// `smartRanking.getMsgOneCase` pattern-matches on `FApp o _` before
-/// touching `cdCases`, so Var-headed sources never trigger the thunk);
-/// Rust matches by deferring `solve_action_goal` / `solve_premise_goal`
-/// out of `precompute_full_sources` until the owning context forces them.
+/// Case names retain their components until the proof label is rendered.
 pub type SourceCase = (Vec<String>, System);
-pub(crate) type SourceCases = std::sync::Arc<std::sync::Mutex<Vec<SourceCase>>>;
 
+/// One ordered source goal and its cases. A builder initialises each cell
+/// once. Cloning a source shares its systems until refinement takes ownership.
+#[derive(Clone)]
 pub(crate) struct Source {
     pub goal: crate::constraint::constraints::Goal,
-    /// Lazy cases — wrapped in `Mutex<Option<…>>` for interior
-    /// mutability. The inner shared backing lets session cache hits and
-    /// proof-context worker snapshots reuse the heavy systems; taking a list
-    /// for a mutating saturation pass unwraps it when unique and clones
-    /// otherwise. The inner mutex is also what makes non-`Sync` `System`
-    /// caches safe to carry in a context shared by rayon workers.
-    /// Internally stores case names as `Vec<String>` — HS's
-    /// `caseNames :: [String]` (the `caseNames` parameter of `solve` at
-    /// Sources.hs; `[String]` type at Sources.hs).  The list
-    /// representation is critical for `combine`'s truncation rule
-    /// `combine (n:_) _ = [n]` (Sources.hs): without per-element
-    /// boundaries, multi-step accumulated names can't be truncated
-    /// to a single element across refineSource iterations. Names are joined
-    /// only by presentation and proof-case-label code.
-    pub(crate) cases_cell: std::sync::Mutex<Option<SourceCases>>,
+    cases: std::sync::OnceLock<std::sync::Arc<SourceCases>>,
+}
+
+struct SourceCases {
+    systems: std::sync::Mutex<Vec<SourceCase>>,
+    var_bounds: std::sync::OnceLock<Option<(u64, u64)>>,
 }
 
 impl std::fmt::Debug for Source {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut out = f.debug_struct("Source");
         out.field("goal", &self.goal);
-        match self.cases_cell.lock() {
-            Err(_) => out.field("cases", &"<poisoned>"),
-            Ok(cases) => match cases.as_ref() {
-                None => out.field("cases", &"<lazy>"),
-                Some(cases) => match cases.lock() {
-                    Ok(cases) => out.field("cases", &*cases),
-                    Err(_) => out.field("cases", &"<poisoned>"),
-                },
-            },
-        };
-        out.finish()
-    }
-}
-
-impl Clone for Source {
-    fn clone(&self) -> Self {
-        let v = self.cases_cell.lock().unwrap().clone();
-        Source {
-            goal: self.goal.clone(),
-            cases_cell: std::sync::Mutex::new(v),
+        match self.cases.get().map(|cases| cases.systems.lock()) {
+            Some(Ok(cases)) => out.field("cases", &*cases),
+            Some(Err(_)) => out.field("cases", &"<poisoned>"),
+            None => out.field("cases", &"<lazy>"),
         }
+        .finish()
     }
 }
 
 impl Source {
-    /// Build a Source whose cases will be computed lazily via
-    /// `initial_source_cases(goal, ctx)` when the owning context is first
-    /// forced. Matches HS's `initialSource` (Sources.hs) thunk.
     pub(crate) fn lazy(goal: crate::constraint::constraints::Goal) -> Self {
-        Source {
+        Self {
             goal,
-            cases_cell: std::sync::Mutex::new(None),
+            cases: Default::default(),
         }
     }
 
-    /// Build a Source with cases already computed. Case-name component
-    /// boundaries are retained until the rendering boundary.
     pub(crate) fn eager(
         goal: crate::constraint::constraints::Goal,
         cases: Vec<SourceCase>,
     ) -> Self {
-        Source {
-            goal,
-            cases_cell: std::sync::Mutex::new(Some(std::sync::Arc::new(std::sync::Mutex::new(
-                cases,
-            )))),
-        }
+        let source = Self::lazy(goal);
+        source.set_cases(cases);
+        source
     }
 
-    /// Materialise + return the cases. Session-backed contexts resolve their
-    /// shared raw/refined slot here; standalone contexts perform their own
-    /// saturation. The state machine makes repeated calls inexpensive.
-    ///
-    /// Returns an owned working copy. The stored list itself remains shared
-    /// across context clones and cache hits; solver consumers generally mutate
-    /// their returned systems while grafting them into a branch.
-    pub(crate) fn cases(
-        &self,
-        ctx: &crate::constraint::solver::context::ProofContext,
-    ) -> Result<Vec<SourceCase>, crate::prove::ProveError> {
-        ctx.ensure_saturated()?;
-
-        Ok(self
-            .cases_cell
-            .lock()
-            .unwrap()
-            .as_ref()
-            .expect("saturated source must have a materialised case list")
-            .lock()
-            .unwrap()
-            .clone())
+    pub(crate) fn cases(&self) -> Option<impl std::ops::Deref<Target = Vec<SourceCase>> + '_> {
+        self.cases.get().map(|cases| cases.systems.lock().unwrap())
     }
 
-    /// Cases used by `applySource`. Runtime application forces the context's
-    /// lazy saturated sources; saturation itself consumes the materialised
-    /// snapshot for its current iteration. The latter may run on a Rayon
-    /// worker, which must not wait on the saturation gate owned by its caller.
-    fn cases_for_apply(
-        &self,
-        ctx: &crate::constraint::solver::context::ProofContext,
-    ) -> Result<Vec<SourceCase>, crate::prove::ProveError> {
-        if in_precompute_mode() {
-            Ok(self.cases_or_empty())
-        } else {
-            self.cases(ctx)
-        }
-    }
-
-    /// Shared read-only cases, or an empty list when still lazy.
     pub(crate) fn cases_or_empty(&self) -> Vec<SourceCase> {
-        self.cases_cell
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|cases| cases.lock().unwrap().clone())
-            .unwrap_or_default()
+        self.cases().map(|cases| cases.clone()).unwrap_or_default()
     }
 
-    /// Shared backing storage for source-cache snapshots and restoration.
-    pub(crate) fn cases_shared_or_empty(&self) -> SourceCases {
-        self.cases_cell
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap_or_else(|| std::sync::Arc::new(std::sync::Mutex::new(Vec::new())))
-    }
-
-    /// Number of materialised cases — equal to `cases_or_empty().len()`
-    /// but WITHOUT deep-cloning every case `System` to count them.
-    /// Returns 0 when the cell hasn't been forced yet.  O(1).
     pub(crate) fn cases_len(&self) -> usize {
-        self.cases_cell
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map_or(0, |cases| cases.lock().unwrap().len())
+        self.cases().map_or(0, |cases| cases.len())
     }
 
-    /// The `n`-th materialised case's system — `cases_or_empty()[n].1`
-    /// WITHOUT deep-cloning the cases either side of it.  Returns `None`
-    /// when the cell hasn't been forced yet or `n` is past the end.
     pub(crate) fn case_system_at(&self, n: usize) -> Option<System> {
-        let g = self.cases_cell.lock().unwrap();
-        let cases = g.as_ref()?.lock().unwrap();
-        let (_, sys) = cases.get(n)?;
-        Some(sys.clone())
+        self.cases()?.get(n).map(|(_, sys)| sys.clone())
     }
 
-    /// Drain the materialised cases out of the cell, leaving it lazy again.
-    pub(crate) fn cases_take(&self) -> Vec<SourceCase> {
-        self.cases_cell
-            .lock()
-            .unwrap()
+    fn cases_take(&mut self) -> Vec<SourceCase> {
+        self.cases
             .take()
             .map(|cases| match std::sync::Arc::try_unwrap(cases) {
-                Ok(cases) => cases.into_inner().unwrap(),
-                Err(cases) => cases.lock().unwrap().clone(),
+                Ok(cases) => cases.systems.into_inner().unwrap(),
+                Err(cases) => cases.systems.lock().unwrap().clone(),
             })
             .unwrap_or_default()
     }
 
-    /// Replace the cases cell with a new value.  Used by saturate to
-    /// install a refined case set, AND by `ensure_saturated`'s post-
-    /// saturate writeback.  Takes `&self` (not `&mut`) so it works
-    /// through immutable `ctx.full_sources` borrows.
-    pub(crate) fn cases_set(&self, cases: Vec<SourceCase>) {
-        self.cases_set_shared(std::sync::Arc::new(std::sync::Mutex::new(cases)));
-    }
-
-    /// Install a case list shared with the session cache.
-    pub(crate) fn cases_set_shared(&self, cases: SourceCases) {
-        *self.cases_cell.lock().unwrap() = Some(cases);
+    pub(crate) fn set_cases(&self, cases: Vec<SourceCase>) {
+        assert!(
+            self.cases
+                .set(std::sync::Arc::new(SourceCases {
+                    systems: std::sync::Mutex::new(cases),
+                    var_bounds: Default::default(),
+                }))
+                .is_ok(),
+            "source cases already initialised"
+        );
     }
 }
 
-/// HS-faithful port of `initialSource ctxt restrictions goal`
-/// (Sources.hs).  Builds a fresh empty system with restrictions
-/// injected, inserts `goal`, marks-as-solved (HS `solveGoal`-style),
-/// then dispatches to the goal-specific solver.  The resulting cases
-/// are normalised: subst applied, simplify run, contradictory cases
-/// dropped, eq-store restricted to stable (= `frees (cdGoal th)`) vars.
-/// `ProofContext::ensure_saturated` uses this to pre-populate each source's
-/// cases before running saturation.
+/// Enumerate the raw cases for one source goal under the safety restrictions.
+/// Normalize the surviving cases with their full substitutions. Refinement
+/// later restricts each substitution to the free variables of the source goal.
 pub(crate) fn initial_source_cases(
     goal: &crate::constraint::constraints::Goal,
     ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Result<Vec<SourceCase>, crate::prove::ProveError> {
     use crate::constraint::constraints::Goal;
+    use crate::constraint::solver::context::ProofContext;
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
 
     let mut sys = System::empty();
@@ -369,7 +256,7 @@ pub(crate) fn initial_source_cases(
 
     // Every solver branch descends from `red.sys`, so it already carries the
     // safety restrictions installed above.
-    let normalize_and_keep = |sys: System, counter: u64| {
+    let normalize_and_keep = |ctx: &ProofContext, sys: System, counter: u64| {
         Ok::<_, crate::prove::ProveError>(
             crate::constraint::solver::simplify::simplify_system_with_fanout_seeded_with_counters(
                 ctx, sys, counter,
@@ -404,7 +291,7 @@ pub(crate) fn initial_source_cases(
     };
     let linear_counter = red.maude.fresh_counter_peek();
     Ok(match outcome {
-        GoalCases::Linear => normalize_and_keep(red.sys, linear_counter)?
+        GoalCases::Linear => normalize_and_keep(ctx, red.sys, linear_counter)?
             .into_iter()
             .map(|s| (vec!["only".into()], s))
             .collect(),
@@ -413,46 +300,57 @@ pub(crate) fn initial_source_cases(
                 .then_some(name)
                 .into_iter()
                 .collect::<Vec<_>>();
-            normalize_and_keep(red.sys, linear_counter)?
+            normalize_and_keep(ctx, red.sys, linear_counter)?
                 .into_iter()
                 .map(|s| (names.clone(), s))
                 .collect()
         }
         GoalCases::Cases(systems) => {
-            let mut cases = Vec::new();
-            for branch in systems {
+            // Keep initial sources themselves ordered: their simplification
+            // can consult already populated source cells. Cases of ONE source
+            // share that same read-only view and can normalize independently.
+            // Publish only after every case has finished, in the original order.
+            let precompute = in_precompute_mode();
+            let refine_floor = crate::constraint::solver::reduction::refine_floor();
+            let ctx = ctx.clone();
+            let cases = tamarin_utils::parallel::try_map(systems, move |branch| {
+                let _mode =
+                    PrecomputeModeGuard(IN_PRECOMPUTE.with(|cell| cell.replace(precompute)));
+                let _floor = RefineFsScope::floor(refine_floor);
+                #[cfg(test)]
+                super::cancellation_tests::checkpoint(
+                    &ctx,
+                    super::cancellation_tests::Work::InitialSources,
+                );
+                // This case is already required. Only borrow a warm process here.
+                let pooled = ctx
+                    .maude_pool
+                    .as_ref()
+                    .and_then(|pool| pool.try_take_idle_owned());
+                let maude = pooled.as_ref().map_or(&ctx.maude, |p| p.handle());
+                let worker_ctx =
+                    ctx.with_swapped_maude(maude.with_fresh_counter_next(branch.counter));
                 let names = (!branch.name.is_empty())
                     .then_some(branch.name)
                     .into_iter()
                     .collect::<Vec<_>>();
-                cases.extend(
-                    normalize_and_keep(branch.sys, branch.counter)?
+                Ok::<_, crate::prove::ProveError>(
+                    normalize_and_keep(&worker_ctx, branch.sys, branch.counter)?
                         .into_iter()
-                        .map(|s| (names.clone(), s)),
-                );
-            }
-            cases
+                        .map(|s| (names.clone(), s))
+                        .collect::<Vec<_>>(),
+                )
+            })?;
+            cases.into_iter().flatten().collect()
         }
         GoalCases::Contradictory => Vec::new(),
     })
 }
 
-/// `precomputeSources` (full).  Direct port of Haskell's
-/// `Theory.Constraint.Solver.Sources.precomputeSources`, restricted
-/// to *initial* sources (no saturation pass — we run one level of
-/// case enumeration and rely on subsequent runtime expansion to
-/// resolve any dangling subgoals).
-///
-/// For each non-special protocol-fact tag, build an abstract premise
-/// goal `PremiseG (i, 0) (Fact tag (t1..tk))`, run `solve_premise_goal`
-/// once on a fresh empty system, and collect the resulting cases.
-/// The result is one `Source` per tag, with the goal as key and the
-/// per-rule cases as the disjunction.
-///
-/// At runtime, `solve_premise_goal` consults this cache before
-/// enumerating rules: the precomputed cases let the search graft a
-/// pre-instantiated subsystem rather than re-deriving it every time.
-pub(crate) fn precompute_full_sources(
+/// Build the ordered protocol-fact and intruder-knowledge (KU) goal patterns.
+/// [`ProofContext::build_sources`](super::context::ProofContext::build_sources)
+/// enumerates their cases and saturates them in this order.
+pub(crate) fn source_patterns(
     ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Vec<Source> {
     use crate::constraint::constraints::Goal;
@@ -469,20 +367,6 @@ pub(crate) fn precompute_full_sources(
         }
     }
 
-    // Lazy precompute (matches HS): emit Source structs whose `goal`
-    // is set but whose `cases` are uncomputed.  When a consumer asks
-    // for `src.cases(ctx)`, `initial_source_cases` runs at THAT
-    // point — same as HS forcing a `cdCases` thunk.  For trivial
-    // protocols where no consumer asks (e.g. `KU(t:Fresh)` source on
-    // an existence lemma that hits the Recv→isend direct-enumeration
-    // path), zero `[EXEC] solveGoal kind=Action fact=KUFact(...)`
-    // lines fire — matching HS's output line-for-line.
-    //
-    // Saturation (`saturate_sources_with_simp`) is a separate
-    // concern: it iterates `cases` and would defeat the laziness if
-    // run here.  This precompute function does not run it; `context.rs`
-    // invokes `saturate_sources_with_simp` separately.
-    //
     let mut out: Vec<Source> = Vec::new();
     // -----------------------------------------------------------------
     // protoGoals — PremiseG for each proto-fact tag seen in the rules.
@@ -504,11 +388,6 @@ pub(crate) fn precompute_full_sources(
             .collect();
         let abstract_fact = Fact::new(tag, terms);
         let goal = Goal::Premise((goal_node, PremIdx(0)), abstract_fact.clone());
-        // HS-faithful: defer `initialSource`'s `solve_premise_goal`
-        // call to `Source::cases(ctx)`'s first invocation.  No work
-        // done here, no `[EXEC] solveGoal kind=Premise ...` line
-        // emitted.  The trace fires when (and only when) a consumer
-        // forces `cases(ctx)`.
         out.push(Source::lazy(goal));
     }
 
@@ -656,8 +535,6 @@ pub(crate) fn precompute_full_sources(
     for pat in ku_patterns {
         let ku_fact = crate::fact::ku_fact(pat.clone());
         let goal = Goal::Action(goal_node, ku_fact.clone());
-        // HS-faithful lazy: defer `solve_action_goal` + normalisation
-        // to `Source::cases(ctx)`.  No work done here.
         out.push(Source::lazy(goal));
     }
 
@@ -670,7 +547,7 @@ pub(crate) fn precompute_full_sources(
 /// step where we have the live fa (not the source).  Equivalent to
 /// Haskell's full-`Source` equality (Sources.hs,
 /// `filterCases usedCase cds = filter (\x -> usedCase /= x) cds`)
-/// under the precompute invariant: `precompute_full_sources` emits
+/// under the precompute invariant: `source_patterns` emits
 /// at most one Source per distinct KU root symbol (mirroring
 /// Haskell's `sortednub absMsgFacts`), and `refineSource` preserves
 /// `cdGoal` through saturation — so label-equality identifies the
@@ -713,22 +590,24 @@ fn ku_source_label_for_fa(fa: &crate::fact::LNFact) -> Option<String> {
 ///   `cdGoal` is the LIVE goal by then, so the pattern's frees don't
 ///   count; the caller maxes this (post-shift) with the live goal's
 ///   own max.
-///
-/// The two ends come from `src.goal` and the caller's case list rather than
-/// from a `HasFrees` impl on `Source`, because a source's cases sit behind a
-/// `Mutex` that only a `ProofContext` fills: `cases` must be the source's
-/// materialised case list (`src.cases(ctx)`).
-fn source_bounds(src: &Source, cases: &[SourceCase]) -> (Option<u64>, Option<u64>) {
+fn source_bounds(src: &Source) -> (Option<u64>, Option<u64>) {
     use tamarin_term::lterm::bounds_var_idx;
-    let mut min: Option<u64> = bounds_var_idx(&src.goal).map(|(lo, _)| lo);
-    let mut cases_max: Option<u64> = None;
-    for (_, cs) in cases {
-        if let Some((lo, hi)) = bounds_var_idx(cs) {
-            min = Some(min.map_or(lo, |c| c.min(lo)));
-            cases_max = Some(cases_max.map_or(hi, |c| c.max(hi)));
-        }
+    let goal_min = bounds_var_idx(&src.goal).map(|(min, _)| min);
+    let case_bounds = src.cases.get().and_then(|cases| {
+        *cases.var_bounds.get_or_init(|| {
+            cases
+                .systems
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|(_, sys)| bounds_var_idx(sys))
+                .reduce(|(lo, hi), (a, b)| (lo.min(a), hi.max(b)))
+        })
+    });
+    match case_bounds {
+        Some((lo, hi)) => (Some(goal_min.map_or(lo, |g| g.min(lo))), Some(hi)),
+        None => (goal_min, None),
     }
-    (min, cases_max)
 }
 
 /// Haskell `avoid th` for source saturation: the maximum free index in the
@@ -746,15 +625,9 @@ fn source_avoid(src: &Source, cases: &[SourceCase]) -> u64 {
         .unwrap_or(0)
 }
 
-/// RAII scope for the runtime `refineSource` fresh-counter seed
-/// (`fs = avoid th`, Sources.hs): sets [`reduction::set_refine_floor`]
-/// on construction and restores the previous floor on drop — early
-/// `return`s and `continue`s included.  [`RefineFsScope::set`] pushes
-/// `fs - 1` (so `Reduction::new` seeds the next draw at
-/// `max(avoid sys, fs)`, mirroring HS's `runReduction proofStep ctxt se
-/// fs`); [`RefineFsScope::floor`] pushes a raw floor and is used by the
-/// disj-loop in `run_solve_all_safe_goals_disj_with_progress` (floor
-/// `source_avoid`).
+/// Restore the previous fresh-variable floor when a refinement scope ends.
+/// [`Self::set`] takes the next variable index. [`Self::floor`] takes the
+/// highest index already in use by the source.
 #[must_use = "dropping this guard immediately ends the scope it protects"]
 struct RefineFsScope(u64);
 impl RefineFsScope {
@@ -806,7 +679,7 @@ pub(crate) fn refine_with_source_asms(
         // to be added and no second saturation can change the cases.
         return Ok(sources
             .into_iter()
-            .map(|src| {
+            .map(|mut src| {
                 let cases = src
                     .cases_take()
                     .into_iter()
@@ -821,20 +694,10 @@ pub(crate) fn refine_with_source_asms(
             .collect());
     }
 
-    // Step 1: match Haskell's `updateSystem` (Sources.hs):
-    //
-    //   updateSystem se =
-    //     modify sFormulas (S.union (S.fromList assumptions)) $
-    //     set sSourceKind RefinedSource                       $ se
-    //
-    // Just inject assumptions into formulas — no simplify, no drop.
-    // Haskell's `saturateSources` then handles drops via
-    // `solveAllSafeGoals` Disj-monad (our `run_solve_all_safe_goals_disj`
-    // mzero-equivalent).  Dropping in Step 1 with single-pass simplify
-    // is non-Haskell-faithful — it misses cases where the typing
-    // violation only surfaces after exhaustive Disj exploration.
+    // Add the assumptions to every raw case. Saturation explores their branches
+    // and discards those that contradict the assumptions.
     let mut intermediate: Vec<Source> = Vec::new();
-    for src in sources {
+    for mut src in sources {
         let mut new_cases: Vec<SourceCase> = Vec::new();
         for (name, mut sys) in src.cases_take() {
             for a in assumptions {
@@ -844,15 +707,7 @@ pub(crate) fn refine_with_source_asms(
             sys.source_kind = Some(crate::constraint::system::SourceKind::RefinedSources);
             new_cases.push((name, sys));
         }
-        // HS `refineWithSourceAsms` maps over the source LIST (fmap per
-        // source) — a zero-case source stays in the list as an entry with
-        // an empty case set (same invariant as `saturateSources`, see the
-        // "Sources are NEVER dropped" note in the saturate loop).  Dropping
-        // it here made the web "Refined sources" pane show 25 entries where
-        // HS shows 29 on OIDC_Implicit (the four empties: AdversaryAction,
-        // KU(e1/e2/e3)), and starves `solve_with_source_cases_*`'s
-        // `Some([])` zero-case match (goal closes) into a `None`
-        // fall-through (runtime rule enumeration).
+        // An empty case list closes a matching goal. Keep its source entry.
         intermediate.push(Source::eager(src.goal, new_cases));
     }
 
@@ -872,7 +727,7 @@ pub(crate) fn refine_with_source_asms(
     // formulas after saturation, and drop disjunction goals derived
     // from the assumptions.
     let mut out: Vec<Source> = Vec::new();
-    for src in saturated {
+    for mut src in saturated {
         let mut new_cases: Vec<SourceCase> = Vec::new();
         for (name, mut sys) in src.cases_take().into_iter() {
             sys.clear_formula_stores();
@@ -887,30 +742,14 @@ pub(crate) fn refine_with_source_asms(
     Ok(out)
 }
 
-/// Per-source body of `saturate_sources_with_simp`'s inner loop —
-/// extracted so it can run in parallel via rayon (mirroring HS's
-/// `changes \`using\` parList rdeepseq` at Sources.hs).
-///
-/// Returns:
-///   - `new_cases` (the source's refined case list, post-restrict+dedup);
-///   - `changed` (HS's `not (null names)` change signal — i.e. did any
-///     case in this source advance via solveAllSafeGoals or get
-///     dropped via contradiction?);
-///   - `new_case_count` (count of surviving cases, == new_cases.len()).
-///
-/// Pure with respect to the caller's mutable state — does not touch
-/// `next`, `changed`, or `current` from the outer loop.  Reads `ctx`
-/// (shared, immutable), `ths_snapshot` (shared, immutable), and other
-/// scalar params.  Maude IPC inside is serialised via the handle's
-/// Mutex; `PrecomputeModeGuard` toggles the `thread_local!` `IN_PRECOMPUTE`
-/// cell, so the per-worker flag toggle is independent.
+/// Refine one source and keep its goal even when all its cases disappear.
+/// The change bit is HS's `not (null names)` for the surviving branches.
 fn refine_one_source(
     ctx: &crate::constraint::solver::context::ProofContext,
-    src: Source,
+    mut src: Source,
     ths_snapshot: &[Source],
-    branch_cap: usize,
-) -> Result<(Vec<(Vec<String>, System)>, bool, usize), crate::prove::ProveError> {
-    let mut new_cases: Vec<(Vec<String>, System)> = Vec::new();
+    previously_deduplicated: bool,
+) -> Result<(Source, bool), crate::prove::ProveError> {
     let mut changed = false;
     // HS-faithful `refineSource` (Sources.hs): the Reduction
     // monad flattens all `getDisj cdCases th` into a single Disj of
@@ -936,50 +775,21 @@ fn refine_one_source(
     // cases), NOT the per-case `avoid se`.  Compute it once here and thread
     // it as the seed floor into each case's Reduction.
     let source_avoid = source_avoid(&src, &all_cases);
+    const LARGE_SOURCE: usize = 8;
+    let sig = ctx.maude.maude_sig();
+    let needs_dedup = sig.enable_bp || sig.enable_mset;
+    // An ordered subset of a deduplicated source is still distinct if every
+    // surviving system equals its input after substitution restriction.
+    let mut still_distinct =
+        previously_deduplicated && needs_dedup && all_cases.len() >= LARGE_SOURCE;
     for (name_list, sys) in all_cases {
-        // === Multi-branch refineSource (Haskell-faithful) ===
-        // Precompute mode is scoped to the branch solve only; the block's guard
-        // drops at the block's end — restoring the saved value before the
-        // restrict/dedup below runs, and on unwind as well.
-        let branches = {
+        let original = still_distinct.then(|| sys.clone());
+        let (branches, took_step) = {
             let _precompute_guard = PrecomputeModeGuard::enter();
-            // HS-faithful: NO per-branch step cap.  HS `solveAllSafeGoals`
-            // (Sources.hs) recurses until no safe goal and no
-            // source-pick remains; the ONLY exploration bounds are the
-            // open-chains limit (`chainsLeft`, paramOpenChainsLimit,
-            // Sources.hs) and the outer saturation limit
-            // (paramSaturationLimit, Sources.hs).  A finite default
-            // here PARKED branches mid-flight as emitted cases — states
-            // with open chain/KD goals HS would have solved or
-            // contradicted — ballooning Chen_Kudla's KU(exp) source from
-            // HS's 29 cases to 276 and flipping the no_WPFS verdict.  HS has
-            // no such cap (only chainsLeft + paramSaturationLimit), so this
-            // is unconditionally unbounded.
-            let outer_cap: i64 = i64::MAX;
-            let (branches, branch_took_step) = run_solve_all_safe_goals_disj_with_progress(
-                ctx,
-                sys,
-                ths_snapshot,
-                // HS `solveAllSafeGoals (filter goodTh ths) (get
-                // paramOpenChainsLimit parameters)` (Sources.hs):
-                // the `-c/--open-chains` limit, default 10.
-                ctx.parameters.open_chains_limit(),
-                outer_cap,
-                branch_cap,
-                name_list,
-                source_avoid,
-            )?;
-            if branch_took_step {
-                // HS-faithful `not (null names)` change signal —
-                // solveAllSafeGoals took at least one step (safe-goal
-                // solve or source-pick) on this case.  Drives outer
-                // saturate re-iteration even when case count doesn't
-                // grow, so multi-iter convergence patterns like
-                // chaum's KU(~x:Fresh)→1-case work.
-                changed = true;
-            }
-            branches
+            solve_all_safe_goals(ctx, sys, ths_snapshot, name_list, source_avoid)?
         };
+        changed |= took_step;
+        still_distinct &= branches.len() <= 1;
         // HS-faithful `refineSource` (Sources.hs):
         //   map (second (modify sSubst (restrict stableVars)))
         // restricts each branch's eq-store subst to the STABLE vars
@@ -1001,6 +811,9 @@ fn refine_one_source(
             branch_sys.invalidate_max_var_idx_cache();
             branch_sys.eq_store_mut().subst =
                 tamarin_term::subst::Subst::from_list(restricted_pairs);
+            if still_distinct {
+                still_distinct = original.as_ref() == Some(&branch_sys);
+            }
             deferred_filtered.push((branch_name_list, branch_sys));
         }
     }
@@ -1008,18 +821,28 @@ fn refine_one_source(
     // ONCE to the flat list of post-refine branches across all input
     // cases.  Gated on BP/MSet per HS short-circuit (`removeRedundantCases`
     // in Sources.hs returns the input unchanged outside BP/MSet).
-    let msig = ctx.maude.maude_sig();
-    // `stable_vars` was computed once before the branch loop above; reuse it.
-    let deduped = remove_redundant_cases(
-        msig.enable_bp,
-        msig.enable_mset,
-        &stable_vars,
-        |c| &c.1,
-        deferred_filtered,
-    );
-    new_cases.extend(deduped);
-    let count = new_cases.len();
-    Ok((new_cases, changed, count))
+    // Compute independent comparison keys across workers for larger sources.
+    // Deduplication consumes those keys in the original case order.
+    let deduped = if still_distinct {
+        deferred_filtered
+    } else if needs_dedup
+        && deferred_filtered.len() >= LARGE_SOURCE
+        && rayon::current_num_threads() > 1
+    {
+        let keyed = tamarin_utils::parallel::map_independent(deferred_filtered, move |case| {
+            (norm_sys_for_compare(&case.1, &stable_vars), case)
+        })?;
+        deduplicate_normalized_cases(keyed)
+    } else {
+        remove_redundant_cases(
+            sig.enable_bp,
+            sig.enable_mset,
+            &stable_vars,
+            |c| &c.1,
+            deferred_filtered,
+        )
+    };
+    Ok((Source::eager(src.goal, deduped), changed))
 }
 
 /// HS `showSaturationSteps` (Sources.hs): when set, `saturateSources`
@@ -1042,32 +865,9 @@ pub(crate) fn saturate_sources_with_simp(
     limit: usize,
     ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Result<Vec<Source>, crate::prove::ProveError> {
-    use rayon::prelude::*;
-    let show_steps = ctx.show_saturation_steps;
     let mut current = sources;
-    // HS-faithful: ONE pass per saturate iter via `refineSource solver`
-    // where `solver = solveAllSafeGoals` (`Sources.hs`).  The
-    // `run_solve_all_safe_goals_disj_with_progress` port is the single
-    // saturation mechanism, matching HS architecturally — there is no
-    // separate chain-fold pre-step (which would materialise branched
-    // cases HS only explores lazily inside the Disj monad).
-    //
-    // ITERATION COUNT — HS applies `refineSource` up to `limit + 1` times
-    // when changes persist (Sources.hs).  HS's `go ths n` computes
-    // `ths' = refineSource ths` in its `where` at EVERY call, then:
-    //   - guard1 `any changes && n <= limit` → recurse `go ths' (n+1)`;
-    //   - guard2 `n > limit`                 → return `ths'` (the final
-    //     refinement computed at the n = limit+1 call).
-    // So with the default limit=5 and never-converging sources, the
-    // recursion runs n=1..5 (5 refinements) THEN makes one more `go` call
-    // at n=6 whose `where` computes a 6th `refineSource` and returns it via
-    // guard2.  Net: 6 = limit+1 refinements.  Our loop must therefore run
-    // `limit + 1` iterations (the early `break` on `!changed` below already
-    // mirrors HS's `otherwise` branch returning `ths'` on convergence, so
-    // the extra pass only fires when changes never stop — exactly HS's
-    // behaviour).  Looping only `limit` times left chaum_offline_anonymity's
-    // Ku(sign) source one refinement short (29 vs HS's 33 cases), dropping
-    // the deepest nested-blind C_2 source cases.
+    // saturateSources performs one refinement even at limit zero, then repeats
+    // up to `limit` times while a surviving case makes progress.
     for iter_n in 0..=limit {
         super::search::check_cancelled()?;
         // Haskell-faithful `goodTh` filter (Sources.hs):
@@ -1097,168 +897,44 @@ pub(crate) fn saturate_sources_with_simp(
         // most of these because `insert_implied_formulas_pass` relies on
         // term-shape match against system actions, which only get
         // grafted by goal-solving.
-        let mut next: Vec<Source> = Vec::new();
-        let mut changed = false;
-        // Haskell-faithful multi-branch refineSource:
-        // run the saturate as a Disj of branches per input case,
-        // emit each surviving branch as its own output case.  This
-        // is what `refineSource` (Sources.hs) does via
-        // `runReduction proofStep ctxt se fs`.
-        //
-        // HS-faithful: NO branch cap.  HS `refineSource` collects
-        // every Disj-monad branch `runReduction proofStep` yields
-        // (Sources.hs) — there is no bound on the number of
-        // output cases.  A finite branch cap would park branches as
-        // half-refined cases once the cap is reached, which is a non-HS
-        // mechanism.  Unconditionally unbounded to match HS.
-        let branch_cap: usize = usize::MAX;
-        // Haskell-faithful: multi-branch refineSource.
-        // Sources.hs's `saturateSources` runs `solveAllSafeGoals`
-        // through the `Reduction` monad which is `Disj`-shaped — every
-        // branch survives or dies independently via `mzero`.  The
-        // surviving branches become separate output cases.
-        //
-        // Combined with the `goodTh` filter (Sources.hs),
-        // case-set growth is bounded so attack-class lemmas (NSPK3)
-        // remain findable via runtime case enumeration.
-        // HS-parallel: `lib/theory/src/Theory/Constraint/Solver/Sources.hs`
-        //   `any or (changes \`using\` parList rdeepseq)`
-        // HS evaluates each source's `refineSource` in parallel and
-        // unzips the result into `(changes, ths')`.  We mirror via
-        // rayon `par_iter().map(...).collect()` on the per-source body
-        // — index-preserved by `collect`, so subsequent code sees the
-        // same source ordering as the sequential version.
-        //
-        // Determinism: the per-source body has no shared mutable state.
-        // `PrecomputeModeGuard` toggles the `thread_local!` `IN_PRECOMPUTE`
-        // cell, so each worker's flag is independent.  `ctx`, `ths_snapshot`,
-        // `branch_cap`,
-        // The task inputs are read-only.
-        // `run_solve_all_safe_goals_disj_with_progress` builds its own
-        // Reduction over an owned System, no aliasing.  Maude IPC
-        // serialises via `MaudeHandle::inner` (Arc<Mutex>) — workers
-        // queue but don't race.
-        // Snapshot the per-source metadata that the post-par-iter loop
-        // reads (goal / incomplete / prior case-count) BEFORE moving the
-        // sources into the workers.  `collect` preserves index order, so
-        // `src_meta[i]` lines up with `per_source[i]`.  This lets us move
-        // `current`'s Systems into `refine_one_source` (which consumes
-        // them) instead of deep-cloning every source first.
-        let src_goals: Vec<crate::constraint::constraints::Goal> =
-            current.iter().map(|s| s.goal.clone()).collect();
-        let saturated_indexed: Vec<(usize, Source)> = std::mem::take(&mut current)
-            .into_iter()
-            .enumerate()
-            .collect();
-        // Per-worker MaudePool acquire: if a pool is set on the ctx, each
-        // par_iter task borrows its own Maude subprocess for the
-        // duration of `refine_one_source`, so workers don't serialise
-        // on the single shared `ctx.maude`'s IPC mutex.  Without a
-        // pool, every worker shares `ctx.maude` (the pre-pool
-        // behaviour; correct but contended).
-        //
-        // We build a per-task context with the pooled handle swapped
-        // in via `ctx.with_swapped_maude(...)`.  The PooledMaude guard
-        // releases back to the pool on drop at end of the closure.
-        let cancellation = tamarin_utils::cancellation::current();
-        let per_source: Result<
-            Vec<(Vec<(Vec<String>, System)>, bool, usize)>,
-            crate::prove::ProveError,
-        > = saturated_indexed
-            .into_par_iter()
-            .map(|(_i, src)| {
-                let _guard =
-                    tamarin_utils::cancellation::CancellationGuard::new(cancellation.clone());
-                #[cfg(test)]
-                super::cancellation_tests::checkpoint(
-                    ctx,
-                    super::cancellation_tests::Work::Sources,
-                );
-                super::search::check_cancelled()?;
-                let pooled = ctx.maude_pool.as_ref().and_then(|pool| pool.try_acquire());
-                let task_maude = if let Some(pooled) = &pooled {
-                    // Give the worker a FRESH counter (not the pooled handle's
-                    // accumulating one) so `refine_one_source`'s internal
-                    // `ensure_above(avoid_max)` reseeds it to the source's OWN
-                    // structural `avoid_max` — producing CANONICAL, source-
-                    // local case var idxs (HS `evalFresh (avoid goalTerm)`,
-                    // Sources.hs).  Without this the case idxs depend on
-                    // the pooled handle's reuse history, so the refined-source
-                    // cache content (shared across lemmas) becomes
-                    // order-dependent and breaks under parallel lemma proving.
-                    pooled.handle().with_fresh_counter_from(0)
-                } else {
-                    // Source materialisation can be forced by a search worker
-                    // which already owns a pool entry. Blocking here could
-                    // deadlock when every entry is held by such a worker.
-                    ctx.maude.clone()
-                };
-                // All refinement tasks need a saturation-only snapshot, even
-                // when they share the owner's Maude process. Nested proof
-                // search must see the previous source iteration rather than
-                // wait for the saturation run that is waiting for this task.
-                let task_ctx = ctx.with_swapped_maude(task_maude);
-                let result = refine_one_source(&task_ctx, src, &ths_snapshot, branch_cap);
-                drop(pooled);
-                result
-            })
-            .collect();
-        let per_source = per_source?;
-        assert_eq!(per_source.len(), src_goals.len());
-        for ((new_cases, per_changed, _), src_goal) in per_source.into_iter().zip(src_goals) {
-            // HS `saturateSources` (Sources.hs) derives its
-            // per-source change bit SOLELY from the solver's result:
-            //   solver = do names <- solveAllSafeGoals …
-            //               return (not $ null names, names)
-            // `per_changed` is that `not (null names)` — whether
-            // `solveAllSafeGoals` took at least one step on any of the
-            // source's cases.  Nothing else feeds `changes`: neither an
-            // emptied case list (every branch `mzero`'d) nor a grown one
-            // re-arms the loop on its own, because both can only arise
-            // from a step the solver already reported.
-            if per_changed {
-                changed = true;
-            }
-            // HS-faithful `refineSource` (Sources.hs):
-            //   refineSource ctxt proofStep th = (..., set cdCases newCases th)
-            // and `saturateSources` (Sources.hs):
-            //   (changes, ths') = unzip $ map (refineSource ctxt solver) ths
-            // ALWAYS returns one source per input — `set cdCases newCases th`
-            // REPLACES the case list, even when it is EMPTY (every branch
-            // mzero'd).  Sources are NEVER dropped; the count is constant
-            // (`[SAT-FINAL] sources=N` stays fixed) and only `cdCases` shrinks.
-            //
-            // A source whose refine produces 0 cases must still be pushed
-            // (with an empty case list) so its cell is overwritten to empty,
-            // matching HS: HS solves the unsolvable KD-premise during
-            // saturation, contradicts the branch, and ends with `cdCases = []`.
-            // Dropping it would leave the STALE *initial* cases in the cell
-            // (e.g. a builtin `check_rep`/`get_rep` coerce case), inflating the
-            // locations-report SAPiC proofs.
-            next.push(Source::eager(src_goal, new_cases));
-        }
-        // HS trace guards (Sources.hs), with n = iter_n + 1 (HS's
-        // `go thsInit 1` is 1-based):
-        //   guard1 `changes && n <= limit` → "Step n (Max limit)", recurse;
-        //   guard2 `n > limit`             → "Saturation aborted, …" — fires
-        //     at the n = limit+1 pass REGARDLESS of convergence (guard order:
-        //     guard1 already failed on `n <= limit`);
-        //   otherwise (no changes, n ≤ limit) → "Done".
-        // The aborted text's "can be change" typo is HS's, kept verbatim.
-        if show_steps {
-            let n = iter_n + 1;
-            if changed && n <= limit {
-                eprintln!("[Saturating Sources] Step {n} (Max {limit})");
-            } else if n > limit {
+        // HS refines each source against the same snapshot. The ordered map
+        // keeps each goal with its own cases, including an empty case list.
+        let worker_ctx = ctx.clone();
+        let refined = tamarin_utils::parallel::try_map(current, move |src| {
+            let ctx = &worker_ctx;
+            #[cfg(test)]
+            super::cancellation_tests::checkpoint(ctx, super::cancellation_tests::Work::Sources);
+            super::search::check_cancelled()?;
+            // This source is already assigned. Use the caller's process if no
+            // helper is ready so its refinement can start immediately.
+            let pooled = ctx
+                .maude_pool
+                .as_ref()
+                .and_then(|pool| pool.try_take_idle_owned());
+            let task_maude = pooled.as_ref().map_or_else(
+                || ctx.maude.clone(),
+                |p| p.handle().with_fresh_counter_from(0),
+            );
+            let task_ctx = ctx.with_swapped_maude(task_maude);
+            refine_one_source(&task_ctx, src, &ths_snapshot, iter_n > 0)
+        })?;
+        let changed = refined.iter().any(|(_, changed)| *changed);
+        current = refined.into_iter().map(|(source, _)| source).collect();
+        let n = iter_n + 1;
+        if ctx.show_saturation_steps {
+            // HS checks the iteration limit before convergence, even on the
+            // final pass. The aborted message retains its upstream wording.
+            if n > limit {
                 eprintln!(
                     "[Saturating Sources] Saturation aborted, more than {limit} \
                      iterations. (Limit can be change with -s=)"
                 );
+            } else if changed {
+                eprintln!("[Saturating Sources] Step {n} (Max {limit})");
             } else {
                 eprintln!("[Saturating Sources] Done");
             }
         }
-        current = next;
         if !changed {
             break;
         }
@@ -1281,7 +957,7 @@ pub(crate) fn saturate_sources_with_simp(
                 *name_list = truncated;
             }
         }
-        src.cases_set(cases);
+        src.set_cases(cases);
     }
     Ok(current)
 }
@@ -1289,7 +965,7 @@ pub(crate) fn saturate_sources_with_simp(
 /// Read the K(U|D) conclusion term of `c` from `sys` — mirrors HS
 /// `kConcTerm` (Sources.hs): returns Some only when the
 /// node's conclusion fact at `c.1` is a KU or KD fact.  Module-level
-/// helper used by `run_solve_all_safe_goals_disj_with_progress`'s
+/// helper used by `solve_all_safe_goals`'s
 /// `lastChainTerm` filter.
 fn k_conc_term_for_chain(
     sys: &crate::constraint::system::System,
@@ -1367,51 +1043,13 @@ fn eq_modulo_freshness_no_ac(
     go(a, b, &mut ma, &mut mb, &mut next)
 }
 
-/// Multi-branch port of `solveAllSafeGoals` matching Haskell's
-/// Disj-monad semantics.  Returns ALL surviving branches as separate
-/// `(System, name)` pairs.  This is the multi-output that
-/// `refineSource` (Sources.hs) relies on via:
-///
-/// ```haskell
-/// refinement = do
-///     (names, se)        <- get cdCases th
-///     ((x, names'), se') <- fst <$> runReduction proofStep ctxt se fs
-///     return (x, (combine names names', se'))
-/// ```
-///
-/// `runReduction proofStep ctxt se fs` returns the full Disj of
-/// branches from one saturate invocation; each becomes its own output
-/// case.  Our port enumerates these branches via a worklist:
-///
-/// - One worklist entry per alive branch.
-/// - At each branching point (`GoalCases::Cases` from Disj/Split/
-///   Subterm/rule-instantiation, or source-pick over multiple unused
-///   candidates), the entry is replaced by N successor entries.
-/// - Branches hitting a contradiction are DROPPED (Haskell mzero).
-/// - Branches with no safe-goal AND no viable source-pick candidate
-///   are pushed to finished (Haskell `nextStep = Nothing → return
-///   caseNames`).
-///
-/// Termination:
-/// - `outer_cap` bounds the per-branch saturate iterations.
-/// - `branch_cap` caps total output branches.  When exceeded, alive
-///   branches are pushed to finished with their accumulated state.
-///
-/// This variant also returns a flag indicating whether ANY branch took
-/// at least one solve step (safe-goal solve or source-pick).  This is
-/// HS-faithful `not (null names)` from `solveAllSafeGoals`'s `caseNames`
-/// accumulator — the signal that drives `saturateSources`'s outer-iter
-/// "changes" detection.  Without this signal Rust's saturate exits too
-/// early on cases like chaum's St_S_1 where a single source-pick on a
-/// later iter is needed to converge KU(~x:Fresh-Var) source-cache to
-/// 1 case (HS-faithful) rather than 2.
-fn run_solve_all_safe_goals_disj_with_progress(
+/// Refine one case until its surviving branches have no safe goal or eligible
+/// source left to apply. Each branch inherits the remaining open-chain limit.
+/// The flag requests another saturation pass if any surviving branch took a step.
+fn solve_all_safe_goals(
     ctx: &crate::constraint::solver::context::ProofContext,
     initial_sys: System,
     ths: &[Source],
-    chains_limit: i64,
-    outer_cap: i64,
-    branch_cap: usize,
     initial_name: Vec<String>,
     source_avoid: u64,
 ) -> Result<(Vec<(System, Vec<String>)>, bool), crate::prove::ProveError> {
@@ -1422,47 +1060,15 @@ fn run_solve_all_safe_goals_disj_with_progress(
     use crate::constraint::solver::simplify::simplify_system_with_fanout_seeded_with_counters;
     use crate::fact::FactTag;
 
-    // HS-faithful: track step names as a Vec<String> — HS's
-    // `caseNames` (the `solve` parameter at Sources.hs) is `[String]`
-    // (type at Sources.hs).  At finish we
-    // apply HS's `combine` (Sources.hs) to merge with the
-    // existing case-name list from `initial_name`:
-    //
-    //   refineSource ctxt proofStep th =
-    //     refinement = do
-    //       (names, se)        <- get cdCases th
-    //       ((x, names'), se') <- fst <$> runReduction proofStep ctxt se fs
-    //       return (x, (combine names names', se'))
-    //
-    // The `Vec<String>` representation lets `combine` truncate to the
-    // first non-coerce element exactly as HS does — preserving the
-    // list boundary `(n:_)` pattern instead of losing it via
-    // concatenation.  Without this, `combine` can't tell where one
-    // step name ends and the next begins, so Rust accumulated
-    // multi-step names ("Step1sencSetup_Key") that HS truncated to
-    // single element ("Step1") at the refineSource boundary.
-    // `last_chain_term`: tracks the most recently solved Chain's
-    // conclusion term.  Mirrors HS `solveAllSafeGoals.solve`'s
-    // `lastChainTerm :: Maybe LNTerm` parameter (Sources.hs).
-    // Used to filter out chain goals whose conclusion is equal modulo
-    // freshness to the last solved one — loop-breaker that prevents
-    // user-equation destructor explosions.  Lead A from agent #35.
-    // The trailing `bool` is the per-branch `took_step` flag: True iff
-    // this branch (or an ancestor) dispatched a solve-step.  Mirrors
-    // HS's per-Disj-branch `names` accumulator — a branch's step-taken
-    // flag is only observed if the branch SURVIVES to a leaf, since
-    // HS's `changes = map fst (getDisj refinement)` collects `x = not
-    // (null names)` ONLY from surviving Disj branches (Sources.hs-
-    // 133).  A branch that takes a step then mzero's contributes
-    // nothing.
     struct Entry {
         sys: System,
-        /// step_names accumulator
+        /// Keep step names separate so `combine` can select the first non-coercion step.
         name: Vec<String>,
         used: std::collections::BTreeSet<String>,
         chains_left: i64,
-        iters_left: i64,
+        /// Skip chain conclusions equal modulo freshness to the last one solved.
         last_chain_term: Option<tamarin_term::lterm::LNTerm>,
+        /// Contributes to saturation progress when this branch survives.
         took_step: bool,
         fresh_counter: u64,
     }
@@ -1473,57 +1079,30 @@ fn run_solve_all_safe_goals_disj_with_progress(
     // on drop.  Without it, that sub-reduction reseeds at the per-case
     // `avoid se`, undershooting HS for any case below the source-wide max.
     let _refine_floor_guard = RefineFsScope::floor(source_avoid);
+    let chains_limit = ctx.parameters.open_chains_limit();
     let mut worklist: Vec<Entry> = vec![Entry {
         sys: initial_sys,
         name: Vec::new(), /* fresh accumulator for steps */
         used: std::collections::BTreeSet::new(),
         chains_left: chains_limit,
-        iters_left: outer_cap,
         last_chain_term: None,
         took_step: false,
         fresh_counter: source_avoid.saturating_add(1),
     }];
-    // `finished` holds (System, accumulated_step_names_list).
-    // `combine` runs with `initial_name` after the loop terminates.
     let mut finished: Vec<(System, Vec<String>)> = Vec::new();
-    // HS-faithful `not (null names)` progress flag: True iff some
-    // SURVIVING branch dispatched a solve-step.  Accumulated only at
-    // `finished.push` (a branch reaching a leaf) — see the per-branch
-    // `took_step` field on `Entry`.  This drives the outer saturate's
-    // "changes" detection (Sources.hs; `not (null names)` from
-    // `solveAllSafeGoals` returning `caseNames`).
-    let mut any_step_taken: bool = false;
-    // The sole caller passes outer_cap / branch_cap = MAX (the HS-faithful
-    // unbounded default), so on the current path the two guards below never
-    // fire — the real bounds are chains_left (HS chainsLeft=10) and the outer
-    // saturation limit (paramSaturationLimit=5).  The caps stay as parameters
-    // so a bounded caller can still cap exploration.
-    let mut total_steps: usize = 0;
-    let total_step_cap: usize = branch_cap.saturating_mul(50).max(2000);
+    // Only steps on branches that reach a leaf count towards saturation progress.
+    let mut any_step_taken = false;
 
     while let Some(Entry {
         sys,
         name,
         used,
         chains_left,
-        iters_left,
         last_chain_term,
         took_step,
         fresh_counter,
     }) = worklist.pop()
     {
-        total_steps += 1;
-        if total_steps > total_step_cap {
-            any_step_taken |= took_step;
-            finished.push((sys, name));
-            continue;
-        }
-        if finished.len() + 1 > branch_cap || iters_left <= 0 {
-            any_step_taken |= took_step;
-            finished.push((sys, name));
-            continue;
-        }
-
         // HS-faithful `simplifySystem` in DisjT (Sources.hs):
         //   simplifySystem
         //   ctxt <- ask
@@ -1544,7 +1123,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
         // `exec_proof_method`), else N HS-siblings collapse into 1 RS branch.
         //
         // Strategy: split into N sibling systems, push the tail back
-        // onto worklist with same (name, used, chains_left, iters_left,
+        // onto worklist with same (name, used, chains_left,
         // last_chain_term), and process the head.  Empty result drops
         // the branch (HS mzero-equivalent).
         // HS-faithful: propagate the DisjT fan-out from simplifySystem
@@ -1574,7 +1153,6 @@ fn run_solve_all_safe_goals_disj_with_progress(
                         name: name.clone(),
                         used: used.clone(),
                         chains_left,
-                        iters_left,
                         last_chain_term: last_chain_term.clone(),
                         took_step,
                         fresh_counter: sibling_counter,
@@ -1767,7 +1345,6 @@ fn run_solve_all_safe_goals_disj_with_progress(
                         name,
                         used,
                         chains_left: new_chains_left,
-                        iters_left: iters_left - 1,
                         last_chain_term: new_last_chain_term.clone(),
                         took_step: true,
                         fresh_counter: red.maude.fresh_counter_peek(),
@@ -1791,7 +1368,6 @@ fn run_solve_all_safe_goals_disj_with_progress(
                         name: new_name,
                         used,
                         chains_left: new_chains_left,
-                        iters_left: iters_left - 1,
                         last_chain_term: new_last_chain_term.clone(),
                         took_step: true,
                         fresh_counter: red.maude.fresh_counter_peek(),
@@ -1823,7 +1399,6 @@ fn run_solve_all_safe_goals_disj_with_progress(
                             name: new_name,
                             used: used.clone(),
                             chains_left: new_chains_left,
-                            iters_left: iters_left - 1,
                             last_chain_term: new_last_chain_term.clone(),
                             took_step: true,
                             fresh_counter: branch.counter,
@@ -1841,31 +1416,13 @@ fn run_solve_all_safe_goals_disj_with_progress(
             finished.push((red.sys, name));
             continue;
         }
-        // Haskell-faithful: iterates over ALL useful KU goals, returning
-        // the FIRST goal whose source-pick has a matching source — not
-        // just the first KU action goal — so later goals still get a
-        // chance to source-pick when an earlier one has no match.
-        // HS-faithful `usefulGoal` filter (Goals.hs + Sources.hs):
-        // HS only source-picks KU goals tagged `Useful`.  KU goals tagged
-        // `CurrentlyDeducible` / `ProbablyConstructible` / `LoopBreaker`
-        // are NOT in `usefulGoals` → source-pick skips them, leaving
-        // them as open goals.  Bare-Msg-var KU goals (e.g. `KU(x.13)`
-        // from a destructor's KU(x) premise) get `ProbablyConstructible`,
-        // NOT `Useful`, so HS does NOT source-pick on them.  Without this
-        // filter, RS recursively source-picks on these abstract vars,
-        // fanning Chen_Kudla's KU(pmult) into 21+ over-saturated cases
-        // (vs HS's 9).  See agent #31 diagnosis.
-        //
-        // Haskell-faithful `filterCases` (Sources.hs):
-        // skip useful_kus whose source LABEL is already in `used` —
-        // picking a case from Source S consumes S entirely, not just
-        // the picked case-name.  See `ku_source_label_for_fa`.
+        // Pick the first Useful KU goal with a matching source. A branch can
+        // use each source label once, across all cases with that label.
         use crate::constraint::solver::annotated_goals::Usefulness;
         let useful_kus: Vec<(crate::constraint::constraints::NodeId, crate::fact::LNFact)> = goals
             .iter()
             .filter_map(|(g, looping)| match g {
                 Goal::Action(i, fa) if matches!(fa.tag, FactTag::Ku) => {
-                    // HS-faithful: only `Useful`-tagged KU goals.
                     if crate::constraint::solver::goals::goal_usefulness(g, *looping, &red.sys)
                         != Usefulness::Useful
                     {
@@ -1897,7 +1454,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
         for (i_cand, fa_cand) in useful_kus {
             match solve_with_source_cases_action(
                 ctx,
-                ths,
+                Some(ths),
                 &red.sys,
                 &i_cand,
                 &fa_cand,
@@ -1953,7 +1510,6 @@ fn run_solve_all_safe_goals_disj_with_progress(
                 name: new_name,
                 used: new_used,
                 chains_left,
-                iters_left: iters_left - 1,
                 last_chain_term: new_last_chain_term.clone(),
                 took_step: true,
                 fresh_counter: branch_counter,
@@ -1985,7 +1541,7 @@ fn run_solve_all_safe_goals_disj_with_progress(
 /// semantics cannot drift apart.
 fn apply_prepared_source_cases(
     ctx: &crate::constraint::solver::context::ProofContext,
-    cases: &[SourceCase],
+    cases: Vec<SourceCase>,
     prepared: &PreparedSourceMatch,
     sys: &System,
     live_goal: &crate::constraint::constraints::Goal,
@@ -1999,7 +1555,7 @@ fn apply_prepared_source_cases(
     // continuation.
     let mut refine_arms = Vec::new();
     for (name, case_sys) in cases {
-        let case_label = case_name_list_to_string(name);
+        let case_label = case_name_list_to_string(&name);
         refine_arms.extend(
             refine_source_case(ctx, prepared, case_sys)?
                 .into_iter()
@@ -2032,7 +1588,6 @@ fn apply_prepared_source_cases(
 /// remains matched even when all of its cases disappear during refinement.
 pub(crate) fn solve_with_source_cases_ctx(
     ctx: &crate::constraint::solver::context::ProofContext,
-    sources: &[Source],
     sys: &System,
     goal_node: &crate::constraint::constraints::NodeId,
     goal_prem_idx: crate::rule::PremIdx,
@@ -2054,14 +1609,6 @@ pub(crate) fn solve_with_source_cases_ctx(
     // the grafted case onto existing nodes.  Filtering already-used cases
     // here would instead create unmerged Step/Start/Fresh nodes.
 
-    // HS-faithful: `solveWithSource` (ProofMethod.hs) accesses
-    // `cdCases` via `(names, sysTh0) <- disjunctionOfList $ getDisj $
-    // get cdCases th` — forcing the lazy thunk.  We must force via
-    // `src.cases(ctx)` to trigger `ensure_saturated` here at the
-    // FIRST source-case dispatch; using `cases_or_empty()` would see
-    // empty cells and silently fall through to direct rule enumeration,
-    // emitting an extra `[EXEC] solveGoal kind=Premise ...` trace
-    // line that HS skips because its `solveWithSource` succeeded.
     // HS `matchToGoal` (Sources.hs; `maybeMatcher`) decides Just/Nothing for the
     // WHOLE source based ONLY on `maybeMatcher` (tag match, already
     // guaranteed by the `find` above) AND `doMatch (faTerm matchFact
@@ -2085,7 +1632,7 @@ pub(crate) fn solve_with_source_cases_ctx(
     // every St_C source-case is `refineSubst`-contradictory at runtime,
     // but HS emits `by`).
     let live_goal = Goal::Premise((*goal_node, goal_prem_idx), fa_prem.clone());
-    let Some((cases, prepared)) = find_prepared_source(ctx, sources, &live_goal)? else {
+    let Some((cases, prepared)) = find_prepared_source(ctx, None, &live_goal)? else {
         return Ok(SourceMatch::NoMatch);
     };
     // HS FreshT-threading (`_applySource`, Sources.hs): the
@@ -2101,7 +1648,7 @@ pub(crate) fn solve_with_source_cases_ctx(
     // would have matched — return `Some(empty)` so the dispatcher emits
     // `by` (no children) rather than falling through to runtime.
     Ok(SourceMatch::Matched(apply_prepared_source_cases(
-        ctx, &cases, &prepared, sys, &live_goal, red_maude, fork_base,
+        ctx, cases, &prepared, sys, &live_goal, red_maude, fork_base,
     )?))
 }
 
@@ -2110,7 +1657,7 @@ pub(crate) fn solve_with_source_cases_ctx(
 #[track_caller]
 pub(crate) fn solve_with_source_cases_action(
     ctx: &crate::constraint::solver::context::ProofContext,
-    sources: &[Source],
+    iteration: Option<&[Source]>,
     sys: &System,
     goal_node: &crate::constraint::constraints::NodeId,
     fa_live: &crate::fact::LNFact,
@@ -2127,7 +1674,7 @@ pub(crate) fn solve_with_source_cases_action(
         return Ok(SourceMatch::NoMatch);
     }
     let live_goal = Goal::Action(*goal_node, fa_live.clone());
-    let Some((cases_iter, prepared)) = find_prepared_source(ctx, sources, &live_goal)? else {
+    let Some((cases_iter, prepared)) = find_prepared_source(ctx, iteration, &live_goal)? else {
         return Ok(SourceMatch::NoMatch);
     };
     // HS-faithful `applySource`/`solveWithSource` (Sources.hs):
@@ -2152,13 +1699,7 @@ pub(crate) fn solve_with_source_cases_action(
     }
     let fork_base = precompute_fork_base.unwrap_or_else(|| red_maude.fresh_counter_peek());
     Ok(SourceMatch::Matched(apply_prepared_source_cases(
-        ctx,
-        &cases_iter,
-        &prepared,
-        sys,
-        &live_goal,
-        red_maude,
-        fork_base,
+        ctx, cases_iter, &prepared, sys, &live_goal, red_maude, fork_base,
     )?))
 }
 
@@ -2282,14 +1823,13 @@ fn restrict_eq_store_to_stable_vars(sys: &mut System, stable_vars: &[tamarin_ter
 /// A globally-unique shift is what keeps two `applySource` calls against the
 /// same live system at the same step from landing on identical indices and
 /// creating spurious cycles in the joined system.
-fn rename_system_by(sys: &System, shift_amount: i128) -> System {
+fn rename_system_by(sys: System, shift_amount: i128) -> System {
     use tamarin_term::lterm::HasFrees;
-    sys.clone()
-        .map_free_monotone(&mut |v: tamarin_term::lterm::LVar| {
-            let mut w = v;
-            w.idx = (v.idx as i128 + shift_amount).clamp(0, u64::MAX as i128) as u64;
-            w
-        })
+    sys.map_free_monotone(&mut |v: tamarin_term::lterm::LVar| {
+        let mut w = v;
+        w.idx = (v.idx as i128 + shift_amount).clamp(0, u64::MAX as i128) as u64;
+        w
+    })
 }
 
 /// `evalBindT (someInst sysTh0) keepVarBindings` (Sources.hs): the
@@ -2346,7 +1886,7 @@ pub(crate) enum SourceMatch<T> {
 /// Cheap half of Haskell's `maybeMatcher`.  In particular, reject action
 /// sources with incompatible application heads before forcing their lazy
 /// saturated cases or asking Maude for an AC match.
-fn source_goal_may_match(
+pub(super) fn source_goal_may_match(
     source: &crate::constraint::constraints::Goal,
     live: &crate::constraint::constraints::Goal,
 ) -> bool {
@@ -2395,16 +1935,24 @@ struct PreparedSourceMatch {
 
 fn find_prepared_source(
     ctx: &crate::constraint::solver::context::ProofContext,
-    sources: &[Source],
+    iteration: Option<&[Source]>,
     live_goal: &crate::constraint::constraints::Goal,
 ) -> Result<Option<(Vec<SourceCase>, PreparedSourceMatch)>, crate::prove::ProveError> {
-    for source in sources {
-        if !source_goal_may_match(&source.goal, live_goal) {
-            continue;
+    // Goal matching uses the layout alone. Force the proof's sources only
+    // after finding a candidate. Saturation supplies its iteration directly.
+    let matches = |source: &Source| source_goal_may_match(&source.goal, live_goal);
+    let materialized;
+    let sources = match iteration {
+        Some(sources) => sources,
+        None if !ctx.full_sources.iter().any(matches) => return Ok(None),
+        None => {
+            materialized = ctx.ensure_saturated()?;
+            &materialized
         }
-        let cases = source.cases_for_apply(ctx)?;
-        if let Some(prepared) = prepare_source_match(ctx, source, &cases, live_goal)? {
-            return Ok(Some((cases, prepared)));
+    };
+    for source in sources.iter().filter(|source| matches(source)) {
+        if let Some(prepared) = prepare_source_match(ctx, source, live_goal)? {
+            return Ok(Some((source.cases_or_empty(), prepared)));
         }
     }
     Ok(None)
@@ -2413,7 +1961,6 @@ fn find_prepared_source(
 fn prepare_source_match(
     ctx: &crate::constraint::solver::context::ProofContext,
     src: &Source,
-    cases: &[SourceCase],
     live_goal: &crate::constraint::constraints::Goal,
 ) -> Result<Option<PreparedSourceMatch>, crate::prove::ProveError> {
     use crate::constraint::constraints::Goal;
@@ -2434,7 +1981,7 @@ fn prepare_source_match(
     let mut goal_max = 0;
     live_node.for_each_free(&mut |v| goal_max = goal_max.max(v.idx));
     live_fact.for_each_free(&mut |v| goal_max = goal_max.max(v.idx));
-    let (src_min, src_cases_max) = source_bounds(src, cases);
+    let (src_min, src_cases_max) = source_bounds(src);
     let rename_shift = src_min
         .map(|min| i128::from(goal_max.saturating_add(1)) - i128::from(min))
         .unwrap_or(0);
@@ -2627,7 +2174,7 @@ struct ConjoinedArm {
 fn refine_source_case(
     ctx: &crate::constraint::solver::context::ProofContext,
     prepared: &PreparedSourceMatch,
-    case_sys: &System,
+    case_sys: System,
 ) -> Result<Vec<RefinedArm>, crate::prove::ProveError> {
     use crate::constraint::solver::reduction::{Reduction, SolveOutcome, SplitStrategy};
     let PreparedSourceMatch {
@@ -3060,20 +2607,8 @@ fn close_trivial_chains_in_graft(
 //      walks free vars in HS-determined order (varOccurences-ordered
 //      first, then foldFrees), assigning each a fresh idx with empty
 //      name.
-//   3. Run a verbatim port of HS `sortednubBy` (`sortednub_by`) over the
-//      index-decorated list, comparing with
-//      `compare_systems_up_to_new_vars`, then
-//      `sortOn fst` to restore original-index order (matches `sortOn fst`
-//      in HS).  NOTE: `sortednubBy` does NOT keep the first element of an
-//      EQ-group — its run-detection phase (`sequences`) does
-//      `EQ -> sequences xs`, dropping the earlier element and keeping the
-//      LATER one; the `merge` phase drops the right-list element on EQ.
-//      Since the members of an EQ-group compare equal and `sortOn fst`
-//      washes out cross-group order, the observable effect is "keep the
-//      highest-original-index member of each group".  (A
-//      first-wins dedup — e.g. via `BTreeSet` — would be unfaithful: it
-//      flips the surviving representative on symmetric AC peers, e.g.
-//      Joux/Scott `Session_Key_Secrecy_PFS`'s B↔C mirror.)
+//   3. Deduplicate the indexed cases with Haskell's `sortednubBy` survivor
+//      rules, then sort the survivors by their original indices.
 
 /// One segment of an occurrence path (HS's `[String]` context under
 /// `foldFreesOcc`).  A path is materialised once per variable occurrence, so a
@@ -3116,59 +2651,39 @@ impl PartialOrd for Seg {
 
 impl Ord for Seg {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.as_str().cmp(other.as_str())
+        let a = self.as_str().as_bytes();
+        let b = other.as_str().as_bytes();
+        if std::ptr::eq(a, b) {
+            return std::cmp::Ordering::Equal;
+        }
+        match (a.first(), b.first()) {
+            (Some(x), Some(y)) if x != y => x.cmp(y),
+            _ if a.len().min(b.len()) <= 1 => a.len().cmp(&b.len()),
+            _ => a.cmp(b),
+        }
     }
 }
 
-/// Walk the free LVars of `sys.nodes` in HS `foldFreesOcc` order
-/// (`HS instance HasFrees System`: only field `a` is walked; commented
-/// out for `b..m`).  Produces a list of `(LVar, BTreeSet<Vec<Seg>>)`
-/// where the inner set is the set of occurrence-context paths each
-/// var appears in.  Mirrors `varOccurences`
-/// (`lib/term/src/Term/LTerm.hs`).
-///
-/// HS context format (per HasFrees-instance tree under `foldFreesOcc`):
-///   - Map (NodeId, RuleACInst):  context = same `p` for both k and v
-///     (`foldFreesOcc f p = M.foldrWithKey combine` calling
-///     `foldFreesOcc f p (k, v)`).
-///   - Tuple `(k, v)`:  k gets "0":p, v gets "1":p.
-///   - Rule i ps cs as _nvs:  the three fact lists run under
-///     `((show i):c)` as a (ps, cs, as) triple — each gets
-///     "0"/"1"/"2":((show i):c).
-///   - [a] (Vec):  each element runs under (show i):c.
-///   - Fact:  `f for_each_free` runs each term arg; we walk arg list
-///     positionally as well.
-///   - Term: a Var leaf returns the LVar with the current context.
-///
-/// We emit `(v, ctx)` pairs and bucket by var. The outer `_sNodes` map
-/// walks its (k,v) entries in BTreeMap key order — i.e. NodeId Ord. RS's
-/// `sys.nodes` is `Vec<(NodeId, RuleACInst)>`; we sort by NodeId before
-/// walking to match HS.
+/// Collect the distinct occurrence paths of non-node variables in rule nodes.
+/// Path segments follow Haskell's `foldFreesOcc`. A node-sorted variable gets
+/// its canonical index later in the whole-system free-variable traversal.
 fn var_occurrences_nodes(
     sys: &crate::constraint::system::System,
 ) -> Vec<(
     tamarin_term::lterm::LVar,
     std::collections::BTreeSet<Vec<Seg>>,
 )> {
-    use std::collections::BTreeMap;
-    use std::collections::BTreeSet;
-    use tamarin_term::lterm::LVar;
+    use std::collections::{BTreeMap, BTreeSet};
+    use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    // ctx is HS's [String] occurrence path; head is innermost.
-    // We push for each tree-descend, then mutate-and-pop is impractical;
-    // we just clone (HS uses persistent list = sharing tail).
-    // HS `foldFreesOcc` context string for a function symbol head
-    // (`instance HasFrees (Term l)`, LTerm.hs):
-    //   FApp (NoEq o) as  ->  push `BC.unpack . fst $ o`  (the bare op name)
-    //   FApp o        as  ->  push `show o`               (the FunSym, for AC/C/List)
-    // The SAME context is pushed once for the whole arg list — HS does NOT
-    // descend per-argument with an index, so every argument of an `FApp`
-    // shares the symbol-name context.
     fn funsym_occ_ctx(sym: &tamarin_term::function_symbols::FunSym) -> Seg {
         use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
         match sym {
-            FunSym::NoEq(s) => Seg::shared(&String::from_utf8_lossy(s.name)),
+            FunSym::NoEq(s) => match String::from_utf8_lossy(s.name) {
+                std::borrow::Cow::Borrowed(s) => Seg::Static(s),
+                std::borrow::Cow::Owned(s) => Seg::shared(&s),
+            },
             FunSym::Ac(ac) => match ac {
                 AcSym::Union => Seg::Static("AC Union"),
                 AcSym::Mult => Seg::Static("AC Mult"),
@@ -3251,10 +2766,10 @@ fn var_occurrences_nodes(
         out: &mut BTreeMap<LVar, BTreeSet<Vec<Seg>>>,
     ) {
         match t {
-            Term::Lit(Lit::Var(v)) => {
+            Term::Lit(Lit::Var(v)) if v.sort != LSort::Node => {
                 out.entry(*v).or_default().insert(ctx.materialize());
             }
-            Term::Lit(Lit::Con(_)) => {}
+            Term::Lit(_) => {}
             Term::App(sym, args) => {
                 // HS `instance HasFrees (Term l)` `foldFreesOcc`
                 // (LTerm.hs):
@@ -3361,17 +2876,13 @@ fn var_occurrences_nodes(
         };
         visit_facts(&r.actions, &as_ctx, out);
     }
-    // M.Map's foldFreesOcc passes the same `p` to each (k, v) tuple, then
-    // the tuple instance splits "0":p and "1":p.  We walk in BTreeMap-key
-    // order (Ord LVar on NodeId) — HS's M.foldrWithKey iterates ASC.
-    let mut nodes_sorted: Vec<&(tamarin_term::lterm::LVar, crate::rule::RuleACInst)> =
-        sys.nodes.iter().collect();
-    nodes_sorted.sort_by_key(|a| a.0);
     let mut out: BTreeMap<LVar, BTreeSet<Vec<Seg>>> = BTreeMap::new();
-    for (nid, rule) in &nodes_sorted {
-        // For (k, v) tuple: "0":p for k (NodeId is just an LVar), "1":p for v.
-        // base_ctx is empty, so k = ["0"] and the rule root chain = ["1"].
-        out.entry(*nid).or_default().insert(vec![Seg::Static("0")]);
+    // Map keys and values have distinct tuple paths. The sets collect each
+    // path independently of the order in which the nodes are visited.
+    for (nid, rule) in sys.nodes.iter() {
+        if nid.sort != LSort::Node {
+            out.entry(*nid).or_default().insert(vec![Seg::Static("0")]);
+        }
         let v_ctx = Ctx {
             seg: Seg::Static("1"),
             parent: None,
@@ -3398,7 +2909,7 @@ fn compute_rename_map(
     sys: &crate::constraint::system::System,
     stable_vars: &std::collections::BTreeSet<tamarin_term::lterm::LVar>,
 ) -> Bindings {
-    use tamarin_term::lterm::{HasFrees, LSort};
+    use tamarin_term::lterm::HasFrees;
     let mut rename = Bindings::new();
     for v in stable_vars {
         rename.insert(*v, *v);
@@ -3410,9 +2921,6 @@ fn compute_rename_map(
     let mut occs = var_occurrences_nodes(sys);
     occs.sort_by(|a, b| a.1.cmp(&b.1));
     for (v, _occs) in &occs {
-        if v.sort == LSort::Node {
-            continue;
-        }
         rename.import_drop_namehint(v, &mut fresh_state);
     }
     sys.for_each_free(&mut |v| {
@@ -3531,103 +3039,48 @@ fn compare_systems_up_to_new_vars(
         .then_with(|| a.side.is_some().cmp(&b.side.is_some()))
 }
 
-/// Direct port of HS `sortednubBy` (`lib/utils/src/Extension/Prelude.hs`,
-/// GHC's `Data.List.sortBy` adapted to drop duplicates).  Sorts by `cmp`
-/// AND removes elements for which an earlier-in-the-merge element compares
-/// `EQ`.  The survivor of an `EQ`-group is NOT simply the first input
-/// element: the run-detection phase (`sequences`) does `EQ -> sequences xs`
-/// which drops the *earlier* element and keeps the *later* one, while the
-/// `merge` phase drops the right-list element on `EQ`.  We replicate the
-/// algorithm verbatim so survivor selection matches HS exactly.
+/// Sort and deduplicate with the survivor rules of Haskell's `sortednubBy`
+/// (`lib/utils/src/Extension/Prelude.hs`). Equal elements at the start of a
+/// run keep the later element. Equal elements across runs keep the one from
+/// the left run.
 fn sortednub_by<T, C>(cmp: &C, xs: Vec<T>) -> Vec<T>
 where
     C: Fn(&T, &T) -> std::cmp::Ordering,
 {
     use std::cmp::Ordering::*;
-    // sequences: build maximal ascending/descending runs, dropping EQ.
-    fn sequences<T, C>(cmp: &C, mut xs: Vec<T>) -> Vec<Vec<T>>
-    where
-        C: Fn(&T, &T) -> std::cmp::Ordering,
-    {
-        // Iteratively consume `xs`; mirrors the recursive HS `sequences`.
-        let mut runs: Vec<Vec<T>> = Vec::new();
-        loop {
-            if xs.len() < 2 {
-                runs.push(xs);
-                return runs;
-            }
-            // pop first two (a, b) preserving the rest order.
-            let mut it = xs.into_iter();
-            let a = it.next().unwrap();
-            let b = it.next().unwrap();
-            let rest: Vec<T> = it.collect();
-            match cmp(&a, &b) {
-                Greater => {
-                    // descending b [a] rest'
-                    let (run, remaining) = descending(cmp, b, vec![a], rest);
-                    runs.push(run);
-                    xs = remaining;
-                }
-                Equal => {
-                    // a `cmp` b == EQ -> sequences xs (drop a, keep from b)
-                    let mut next = Vec::with_capacity(rest.len() + 1);
-                    next.push(b);
-                    next.extend(rest);
-                    xs = next;
-                }
-                Less => {
-                    // ascending b (a:) rest
-                    let (run, remaining) = ascending(cmp, b, vec![a], rest);
-                    runs.push(run);
-                    xs = remaining;
-                }
-            }
-        }
-    }
 
-    // descending a as (b:bs) | a `cmp` b == GT = descending b (a:as) bs
-    // descending a as bs = (a:as) : sequences bs   -- (a:as) already reversed -> ascending
-    fn descending<T, C>(cmp: &C, mut a: T, mut acc: Vec<T>, mut bs: Vec<T>) -> (Vec<T>, Vec<T>)
+    fn sequences<T, C>(cmp: &C, xs: Vec<T>) -> Vec<Vec<T>>
     where
         C: Fn(&T, &T) -> std::cmp::Ordering,
     {
-        loop {
-            if let Some(b_ref) = bs.first()
-                && cmp(&a, b_ref) == Greater
-            {
-                let mut it = bs.into_iter();
-                let b = it.next().unwrap();
-                bs = it.collect();
-                acc.insert(0, a); // a:as  (acc holds run in ascending order)
-                a = b;
-                continue;
-            }
-            // (a:as) : run is acc with a prepended; acc already ascending, so result ascending
-            acc.insert(0, a);
-            return (acc, bs);
-        }
-    }
+        let mut input = xs.into_iter().peekable();
+        let mut runs = Vec::new();
+        while let Some(mut first) = input.next() {
+            loop {
+                let Some(mut last) = input.next() else {
+                    runs.push(vec![first]);
+                    return runs;
+                };
+                let direction = cmp(&first, &last);
+                if direction == Equal {
+                    first = last;
+                    continue;
+                }
 
-    // ascending a as (b:bs) | a `cmp` b == LT = ascending b (\ys -> as (a:ys)) bs
-    // ascending a as bs = as [a] : sequences bs
-    fn ascending<T, C>(cmp: &C, mut a: T, mut acc: Vec<T>, mut bs: Vec<T>) -> (Vec<T>, Vec<T>)
-    where
-        C: Fn(&T, &T) -> std::cmp::Ordering,
-    {
-        loop {
-            if let Some(b_ref) = bs.first()
-                && cmp(&a, b_ref) == Less
-            {
-                let mut it = bs.into_iter();
-                let b = it.next().unwrap();
-                bs = it.collect();
-                acc.push(a); // as ++ [a]
-                a = b;
-                continue;
+                let mut run = vec![first];
+                while let Some(next) = input.next_if(|next| cmp(&last, next) == direction) {
+                    run.push(last);
+                    last = next;
+                }
+                run.push(last);
+                if direction == Greater {
+                    run.reverse();
+                }
+                runs.push(run);
+                break;
             }
-            acc.push(a); // as [a]
-            return (acc, bs);
         }
+        runs
     }
 
     // merge two sorted-deduped runs, dropping EQ (right element).
@@ -3695,17 +3148,8 @@ where
     merge_all(cmp, sequences(cmp, xs))
 }
 
-/// Gated on BP/MSet per HS short-circuit.  Faithful port of HS
-/// `removeRedundantCases` (`Sources.hs`): decorate each case with
-/// its original index, run `sortednubBy compareSystemsUpToNewVars` over the
-/// decorated list, then `sortOn fst` to restore original-index order.  The
-/// survivor of an alpha-equivalent group is the one `sortednubBy` keeps —
-/// which is the LAST element of an `EQ`-run, not the first
-/// (cf. Joux/Scott `Session_Key_Secrecy_PFS` B↔C mirror).  We port `sortednubBy` verbatim
-/// rather than approximate it: for the common case (an `EQ`-group of pure
-/// alpha-duplicates) this keeps the LAST member and, after `sortOn fst`,
-/// emits survivors in original-index order — the exact flip the Joux/Scott
-/// mirror needed.
+/// For bilinear pairings or multisets, deduplicate cases by their normalized
+/// systems using `sortednub_by`, then restore the survivors' input order.
 pub(crate) fn remove_redundant_cases<T, F>(
     enable_bp: bool,
     enable_mset: bool,
@@ -3726,25 +3170,23 @@ where
     if cases.len() < 2 {
         return cases;
     }
-    let pre = cases.len();
-    // Decorate with (original index, normed system).  HS:
-    //   decoratedCases = map (second addNormSys) $ zip [0..] cases0
-    let mut decorated: Vec<(usize, crate::constraint::system::System, T)> = Vec::with_capacity(pre);
-    for (idx, c) in cases.into_iter().enumerate() {
-        let normed = norm_sys_for_compare(get_sys(&c), stable_vars);
-        decorated.push((idx, normed, c));
-    }
+    deduplicate_normalized_cases(
+        cases
+            .into_iter()
+            .map(|case| (norm_sys_for_compare(get_sys(&case), stable_vars), case)),
+    )
+}
+
+fn deduplicate_normalized_cases<T>(cases: impl IntoIterator<Item = (System, T)>) -> Vec<T> {
+    let decorated = cases.into_iter().enumerate().collect();
     // sortednubBy (\(_,(_,x)) (_,(_,y)) -> compareSystemsUpToNewVars x y)
     let mut deduped = sortednub_by(
-        &|a: &(usize, crate::constraint::system::System, T),
-          b: &(usize, crate::constraint::system::System, T)| {
-            compare_systems_up_to_new_vars(&a.1, &b.1)
-        },
+        &|(_, (a, _)), (_, (b, _))| compare_systems_up_to_new_vars(a, b),
         decorated,
     );
     // sortOn fst : restore original-index order.
     deduped.sort_by_key(|a| a.0);
-    deduped.into_iter().map(|(_, _, c)| c).collect()
+    deduped.into_iter().map(|(_, (_, c))| c).collect()
 }
 
 // SplitG is not a "safe" goal at saturate time while chains are open

@@ -1445,6 +1445,7 @@ dependencies = [
  "tamarin-test-support",
  "tamarin-theory",
  "tamarin-utils",
+ "tempfile",
  "tokio",
 ]
 
@@ -1506,6 +1507,7 @@ version = "1.13.0"
 dependencies = [
  "criterion",
  "fancy-regex",
+ "parking_lot",
  "rayon",
  "rustfs-mimalloc",
  "serde_json",

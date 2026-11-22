@@ -156,7 +156,7 @@ thread_local! {
     /// below HS's value.  This thread-local carries `source_avoid` into
     /// those sub-reductions so they seed at `avoid th`, matching HS's single
     /// monotonic counter.  Set for the duration of one source-case
-    /// refinement (`run_solve_all_safe_goals_disj_with_progress`); 0 (the
+    /// refinement (`solve_all_safe_goals`); 0 (the
     /// default, general proving path) means "no floor".
     static REFINE_FLOOR: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
