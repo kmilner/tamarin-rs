@@ -130,10 +130,10 @@ struct MaudeCacheStats {
 /// initialised with the IDENTICAL signature module (`MaudePool` clones
 /// one `MaudeSig` per spawn; run.rs passes the same value to
 /// `file_maude`), the module is immutable after `start_with_caches()`
-/// (every post-load command is a pure `reduce` / `unify` / `match` /
-/// `get variants` query — nothing mutates Maude state that later replies
-/// depend on), and Maude's reply is a deterministic, command-local
-/// function of that module.  So the value any member computes is
+/// and variable sorts and names are registered in a consistent order (see
+/// `initialize` and `ensure_variable_names`). Maude's name interning
+/// is history-dependent even for pure queries, so the identical module
+/// alone would NOT suffice. With both invariants the value any member computes is
 /// byte-identical to what the querying member would have computed itself
 /// — sharing changes only which process performed the first computation,
 /// exactly the member-interchangeability the pool already guarantees.
@@ -167,14 +167,13 @@ pub struct SharedMaudeCaches {
     /// Memo for the RAW REPLY BYTES of the witness-producing Maude commands
     /// (`unify in MSG`, `get variants in MSG`, and the
     /// two `match in MSG` matchers), keyed by the *exact command
-    /// byte-string*.  Maude's reply to one of these
-    /// commands is a deterministic, command-local function of the theory
-    /// module — which is fixed for the life of the session (`sig` is
+    /// byte-string*. The theory module is fixed for the life of the session (`sig` is
     /// immutable after `start_with_caches()`, every sharer loads the
     /// identical module, and `with_swapped_maude` hands out a different
-    /// pool handle rather than mutating any module) — so identical
-    /// command bytes imply an identical reply, exactly the invariant
-    /// `reduce` already relies on.
+    /// pool handle rather than mutating any module). `initialize` establishes
+    /// variable-sort order; `ensure_variable_names` establishes input-name order.
+    /// These must also be independent of the worker's previous queries for
+    /// identical command bytes to imply identical replies.
     ///
     /// This caches ONLY the raw bytes: the per-call back-conversion (per-arm
     /// `ConvCtx` clone, `input_max` seeded from the caller's own bindings) still
@@ -201,6 +200,9 @@ struct MaudeProcessInner {
     maude_path: String,
     child: Arc<Mutex<MaudeChildReaper>>,
     initialized: bool,
+    /// All x0 .. x{ordered_variables - 1} have been read in a consistent
+    /// order. This belongs to the subprocess, not the shared reply cache.
+    ordered_variables: u64,
     stdin: ChildStdin,
     stdout: ChildStdout,
     stats: MaudeStats,
@@ -301,6 +303,7 @@ impl MaudeProcessInner {
             }
         }
         if !self.initialized {
+            self.ordered_variables = 0;
             self.read_until_prompt()?;
             for cmd in [
                 "set show command off .\n",
@@ -310,16 +313,67 @@ impl MaudeProcessInner {
                 self.execute_raw(cmd.as_bytes())?;
             }
             self.execute_raw(pp_theory(&self.sig).as_bytes())?;
+            // VariableSymbol's order also depends on when the sort is first
+            // used. Register every wire sort, plus the kind used for internal
+            // unification variables, before queries can choose that order.
+            // Reuse one name: this initializes the theory's finite sort set,
+            // not an arbitrary bound on the number of input variables.
+            let sorts = ["Msg", "Fresh", "Pub", "Node", "TOP", "[TOP]"];
+            let mut cmd = String::from("parse in MSG : ");
+            for sort in sorts
+                .into_iter()
+                .chain(self.sig.enable_nat.then_some("TamNat"))
+            {
+                cmd.push_str("cons(x0:");
+                cmd.push_str(sort);
+                cmd.push(',');
+            }
+            cmd.push_str("nil");
+            cmd.extend(std::iter::repeat_n(
+                ')',
+                sorts.len() + usize::from(self.sig.enable_nat),
+            ));
+            cmd.push_str(" .\n");
+            let reply = self.execute_raw(cmd.as_bytes())?;
+            check_name_registration(&reply)?;
+            self.ordered_variables = 1;
             self.initialized = true;
         }
         Ok(())
     }
 
-    fn execute(&mut self, cmd: &[u8]) -> Result<Vec<u8>, MaudeError> {
+    fn execute(&mut self, cmd: &[u8], variable_bound: u64) -> Result<Vec<u8>, MaudeError> {
         self.with_cancellation(|inner| {
             inner.initialize()?;
+            inner.ensure_variable_names(variable_bound)?;
             inner.execute_raw(cmd)
         })
+    }
+
+    /// Maude compares variable names by their process-local intern ids. The
+    /// identical theory establishes the same initial order in every worker;
+    /// introduce all remaining input names in increasing numeric order before
+    /// a query can introduce them in term traversal order. Grow geometrically
+    /// so there are only O(log N) extra exchanges over a process's lifetime,
+    /// with no fixed bound on the size of a query.
+    ///
+    /// Maude's own #/% names are separate families: unification's intermediate
+    /// fresh variables have kind sorts, and completed substitutions / variants
+    /// rename their variables into one fresh family. The generators used by
+    /// these commands allocate each family from index zero in increasing order.
+    /// Equation variable names are already interned by module loading, before
+    /// any fresh names. Positions relative to subsequently introduced input
+    /// names need not be fixed; the order within each family does.
+    fn ensure_variable_names(&mut self, required: u64) -> Result<(), MaudeError> {
+        if required <= self.ordered_variables {
+            return Ok(());
+        }
+        let end = required.checked_next_power_of_two().unwrap_or(required);
+        let cmd = name_order_command(self.ordered_variables, end);
+        let reply = self.execute_raw(cmd.as_bytes())?;
+        check_name_registration(&reply)?;
+        self.ordered_variables = end;
+        Ok(())
     }
 
     fn write_line(&mut self, line: &[u8]) -> Result<(), MaudeError> {
@@ -415,6 +469,7 @@ impl MaudeProcessInner {
     fn execute_memo(
         &mut self,
         cmd: &[u8],
+        variable_bound: u64,
         bump: impl FnOnce(&mut MaudeStats),
     ) -> Result<Vec<u8>, MaudeError> {
         let hit = self.caches.reply.lock().unwrap().get(cmd).cloned();
@@ -422,7 +477,7 @@ impl MaudeProcessInner {
             self.cache_stats.reply_hits += 1;
             return Ok(cached);
         }
-        let reply = self.execute(cmd)?;
+        let reply = self.execute(cmd, variable_bound)?;
         bump(&mut self.stats);
         self.cache_stats.reply_misses += 1;
         self.caches
@@ -513,6 +568,45 @@ fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         return None;
     }
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// A balanced term keeps Maude's parser stack logarithmic in the number of
+/// names being registered. Every MSG module declares cons : TOP TOP -> TOP.
+fn name_order_command(start: u64, end: u64) -> String {
+    use std::fmt::Write;
+    fn tree(start: u64, end: u64, out: &mut String) {
+        if end - start == 1 {
+            write!(out, "x{start}:Msg").unwrap();
+        } else {
+            let mid = start + (end - start) / 2;
+            out.push_str("cons(");
+            tree(start, mid, out);
+            out.push(',');
+            tree(mid, end, out);
+            out.push(')');
+        }
+    }
+    debug_assert!(start < end);
+    let mut cmd = String::from("parse in MSG : ");
+    tree(start, end, &mut cmd);
+    cmd.push_str(" .\n");
+    cmd
+}
+
+fn check_name_registration(reply: &[u8]) -> Result<(), MaudeError> {
+    // Maude reports rejected commands without failing the pipe exchange.
+    // Never publish a watermark unless it actually parsed the term.
+    if reply.starts_with(b"TOP: cons(")
+        || reply.starts_with(b"[TOP]: cons(")
+        || reply.starts_with(b"Msg: x")
+    {
+        Ok(())
+    } else {
+        Err(MaudeError::Other(format!(
+            "Maude rejected variable name registration: {}",
+            String::from_utf8_lossy(reply)
+        )))
+    }
 }
 
 /// Handle to a running Maude subprocess. Cloneable; uses an `Arc<Mutex<...>>`
@@ -610,6 +704,7 @@ impl MaudeHandle {
             maude_path: maude_path.to_owned(),
             child: reaper.clone(),
             initialized: false,
+            ordered_variables: 0,
             stdin,
             stdout,
             stats: MaudeStats::default(),
@@ -695,10 +790,9 @@ impl MaudeHandle {
     /// don't collide), but the next Reduction starts fresh.
     ///
     /// The Maude PROCESS state (the `inner`/`child` Arcs) is shared —
-    /// only the counter is per-handle.  This is safe because Maude itself
-    /// is stateless between queries; variable idxs are just Rust-side
-    /// labels used when constructing Maude terms, not anything Maude
-    /// tracks across calls.
+    /// only the counter is per-handle. Logical variable indices are scoped by
+    /// each call's conversion context; the shared process serializes queries
+    /// and registers wire names in a consistent order before executing them.
     pub fn with_fresh_counter_from(&self, avoid_max: u64) -> MaudeHandle {
         MaudeHandle {
             inner: self.inner.clone(),
@@ -815,7 +909,7 @@ impl MaudeHandle {
                     let mut cmd = b"reduce ".to_vec();
                     pp_mterm_into(&mt, &mut cmd);
                     cmd.extend_from_slice(b" .\n");
-                    let reply = inner.execute(&cmd)?;
+                    let reply = inner.execute(&cmd, ctx.variable_bound())?;
                     let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &inner.sig)?;
                     let mut next = 0;
                     let maude_result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
@@ -834,7 +928,7 @@ impl MaudeHandle {
             let mut cmd = b"reduce ".to_vec();
             pp_mterm_into(&mt, &mut cmd);
             cmd.extend_from_slice(b" .\n");
-            let reply = inner.execute(&cmd)?;
+            let reply = inner.execute(&cmd, ctx.variable_bound())?;
             inner.stats.norm_count += 1;
             reply
         };
@@ -1071,7 +1165,7 @@ impl MaudeHandle {
         // Raw-reply memo (see `SharedMaudeCaches::reply`): identical `unify in MSG` command
         // bytes yield an identical reply, and the per-arm back-conversion below
         // still runs on every call, so a hit is bit-for-bit a real round-trip.
-        let reply = inner.execute_memo(&cmd, |s| s.unify_count += 1)?;
+        let reply = inner.execute_memo(&cmd, ctx.variable_bound(), |s| s.unify_count += 1)?;
         drop(inner);
         let msubsts = maude_parse::parse_unify_reply_with_sig(&reply, &self.sig)?;
         // HS `avoid (M.elems bindings)` (`runBackConversion`,
@@ -1244,7 +1338,7 @@ impl MaudeHandle {
         // formatting the borrowed slice directly without a `Vec`+`Arc`
         // round-trip.
         let cmd = pp_match_cmd(&pats, &subjs);
-        let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
+        let reply = inner.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
         drop(inner);
         let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
@@ -1353,7 +1447,7 @@ impl MaudeHandle {
         // flipped fields.  So both matchers emit pattern-on-the-left,
         // which is what Maude requires (vars bind in the left operand).
         let cmd = pp_match_cmd(&pats, &subjs);
-        let reply = inner.execute_memo(&cmd, |s| s.match_count += 1)?;
+        let reply = inner.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
         drop(inner);
         let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
@@ -1385,7 +1479,7 @@ impl MaudeHandle {
         // like a fresh one.  This is the biggest single lever on variant-heavy
         // theories (Joux re-issues the same expensive `get variants` twice —
         // once in the derivcheck phase, once at main close).
-        let reply = inner.execute_memo(&cmd, |s| s.var_count += 1)?;
+        let reply = inner.execute_memo(&cmd, ctx.variable_bound(), |s| s.var_count += 1)?;
         drop(inner);
         let msubsts = maude_parse::parse_variants_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
