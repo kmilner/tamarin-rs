@@ -1,9 +1,7 @@
 //! Stream proper AC subbags by occurrence, including repeated operands.
 use crate::lean_unification::{initialize, Error, MatchRows, LEAN_THREAD};
 
-unsafe extern "C" {
-    fn tamarin_lean_ac_subgroups(size: u64) -> *mut std::ffi::c_void;
-}
+use tamarin_algebra_sys::tamarin_lean_ac_subgroups;
 
 pub(super) struct ProperSubgroups {
     rows: MatchRows,

@@ -2464,27 +2464,34 @@ fn prepare_source_match(
     ));
 
     use tamarin_term::unification::MatchOutcome;
-    let match_pairs =
-        match tamarin_term::unification::solve_match_lterm::<tamarin_term::lterm::Name, _>(
-            &tamarin_term::lterm::sort_of_name,
-            tamarin_term::rewriting::Match::DelayedMatches(pairs.clone()),
-        ) {
-            MatchOutcome::Matched(subst) => subst.to_list(),
-            MatchOutcome::NoMatcher => return Ok(None),
-            MatchOutcome::NeedsAc => {
-                let eqs = pairs
-                    .into_iter()
-                    .map(|(lhs, rhs)| tamarin_term::rewriting::Equal { lhs, rhs })
-                    .collect::<Vec<_>>();
-                let Some(first) = ctx.maude.first_match_eqs(&eqs).map_err(|error| {
-                    crate::prove::ProveError::Maude(format!("source matching failed: {error}"))
-                })?
-                else {
-                    return Ok(None);
-                };
-                first
-            }
-        };
+    let match_pairs = match tamarin_term::unification::solve_match_lterm::<
+        tamarin_term::lterm::Name,
+        _,
+    >(
+        &tamarin_term::lterm::sort_of_name,
+        tamarin_term::rewriting::Match::DelayedMatches(pairs.clone()),
+    ) {
+        MatchOutcome::Matched(subst) => subst.to_list(),
+        MatchOutcome::NoMatcher => return Ok(None),
+        MatchOutcome::NeedsAc => {
+            let eqs = pairs
+                .into_iter()
+                .map(|(lhs, rhs)| tamarin_term::rewriting::Equal { lhs, rhs })
+                .collect::<Vec<_>>();
+            let Some(first) = ctx.maude.first_match_eqs(&eqs).map_err(|error| {
+                match crate::prove::ProveError::from(error) {
+                    crate::prove::ProveError::Maude(message) => crate::prove::ProveError::Maude(
+                        format!("source matching failed: {message}"),
+                    ),
+                    cancelled => cancelled,
+                }
+            })?
+            else {
+                return Ok(None);
+            };
+            first
+        }
+    };
 
     Ok(Some(PreparedSourceMatch {
         renamed_abstract_node,

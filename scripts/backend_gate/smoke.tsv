@@ -1,0 +1,50 @@
+# The smoke list of scripts/backend_gate.py: what CI proves on both algebra
+# backends on every build with the Lean library. Each theory takes Maude a
+# few seconds at most; together they cover every built-in theory, user
+# equations, the repository's own regression fixtures and the theories of
+# pending.tsv.
+#
+# Format: <path relative to tamarin-prover/examples>[<TAB><extra prover flags>]
+
+# Diffie-Hellman
+csf12/SignedDH_PFS.spthy
+ake/dh/UM_one_pass_attack.spthy
+experiments/MTI_C0.spthy
+ake/dh/NAXOS_eCK_PFS.spthy
+regression/trace/issue777.spthy
+# XOR
+features/xor/CRxor.spthy
+features/xor/NSLPK3xor.spthy
+features/xor/basicfunctionality/xor5.spthy
+features/xor/xorplusdh.spthy
+csf18-xor/KCL07.spthy
+# Bilinear pairing
+sp14/Chen_Kudla.spthy
+ake/bilinear/RYY.spthy
+sp14/Joux.spthy
+# Multisets
+features/multiset/counter.spthy
+sp14/STR_signed.spthy
+related_work/YubiSecure_KS_STM12/Yubikey_and_YubiHSM_multiset.spthy
+regression/trace/issue519.spthy
+# Natural numbers
+../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy
+features/multiset/NumberSubtermTests.spthy
+# User equations
+post17/foo_eligibility.spthy
+sapic/fast/GJM-contract/contract.spthy
+sapic/fast/feature-predicates/decwrap-destr-manual.spthy
+features/auto-sources/spore/SpliceAS.spthy	--auto-sources
+esorics23-bluetooth/models/ble.spthy
+# SAPIC translation
+sapic/fast/feature-locations/AC.spthy
+sapic/fast/regression-tests/issueX-translation-crash.spthy
+# Native-backend regression fixtures
+../../crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy
+../../crates/tamarin-prover/tests/fixtures/native_user_equations_pairing.spthy
+../../crates/tamarin-prover/tests/fixtures/native_mixed_subterms.spthy
+../../crates/tamarin-prover/tests/fixtures/native_dh_agreement.spthy
+# Pending (see pending.tsv): variants over In variables that do not terminate
+../../scripts/backend_gate/theories/dh_power_under_sdec.spthy
+../../scripts/backend_gate/theories/dh_power_under_fst.spthy
+../../scripts/backend_gate/theories/xor_under_inv.spthy

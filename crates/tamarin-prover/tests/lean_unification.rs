@@ -5,23 +5,23 @@ mod common;
 
 use std::process::Command;
 
-fn run(disable_lean: bool) -> (String, String) {
+fn run(backend: &str) -> (String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
     command
-        .arg(common::maude_arg().expect("Maude oracle"))
+        .arg(if backend == "native-only" {
+            "--with-maude=/nonexistent".to_owned()
+        } else {
+            common::maude_arg().expect("Maude oracle")
+        })
+        .arg(format!("--algebra-backend={backend}"))
         .arg("--prove")
         .arg(common::fixture("lean_unification.spthy"))
-        .env("TAM_MAUDE_CACHE_STATS", "1")
-        .env("TAM_RS_VERIFY_LEAN_UNIFY", "1");
-    command
-        .arg(if disable_lean {
-            "--algebra-backend=maude"
-        } else {
-            "--algebra-backend=hybrid"
-        })
         .arg("--processors=2")
         .arg("--maude-processes=2")
-        .env_remove("TAM_RS_NO_LEAN_UNIFY");
+        .env("TAM_MAUDE_CACHE_STATS", "1")
+        .env_remove("TAM_RS_NATIVE_REFERENCE")
+        .env_remove("TAM_RS_VARIANT_CHECK_WORK")
+        .env_remove("TAM_RS_VERIFY_REDUCE_NF");
     let output = command.output().expect("run prover");
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
@@ -37,26 +37,59 @@ fn lean_calls(stderr: &str) -> u64 {
         .sum()
 }
 
+/// The answers of `command` that `[ALGEBRA_PROVENANCE]` attributes to
+/// `origin`, fresh and cached, over every session of the run.
+fn provenance(stderr: &str, command: &str, origin: &str) -> u64 {
+    let prefix = format!("[ALGEBRA_PROVENANCE] {command} fresh: ");
+    let key = format!("{origin}=");
+    stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(prefix.as_str()))
+        .flat_map(|row| row.split_whitespace())
+        .filter_map(|cell| cell.strip_prefix(key.as_str()))
+        .map(|count| count.parse::<u64>().expect("provenance count"))
+        .sum()
+}
+
 #[test]
-fn protocol_proof_uses_lean_and_matches_maude() {
+fn native_only_proof_rests_on_the_proved_exports_and_matches_maude() {
     if !common::maude_available() {
         return;
     }
-    let (lean_stdout, lean_stderr) = run(false);
-    let (maude_stdout, maude_stderr) = run(true);
-    assert!(lean_stdout.contains("verified"), "{lean_stdout}");
+    let (native_stdout, native_stderr) = run("native-only");
+    let (maude_stdout, maude_stderr) = run("maude");
     assert!(
-        lean_stdout
+        native_stdout
             .lines()
             .any(|line| line.contains("conjunction_reachable") && line.contains("verified")),
-        "{lean_stdout}"
+        "{native_stdout}"
     );
     assert_eq!(
-        common::normalize_stdout(&lean_stdout),
-        common::normalize_stdout(&maude_stdout)
+        comparable_proof(&native_stdout),
+        comparable_proof(&maude_stdout)
     );
-    assert!(lean_calls(&lean_stderr) > 0, "{lean_stderr}");
+    assert!(lean_calls(&native_stderr) > 0, "{native_stderr}");
     assert_eq!(lean_calls(&maude_stderr), 0, "{maude_stderr}");
+    // Every unification and every match of the native run is the answer of
+    // one proved export, or of the tuple unpacker composed with one.
+    assert!(
+        provenance(&native_stderr, "unify", "proved") > 0,
+        "{native_stderr}"
+    );
+    for command in ["unify", "match"] {
+        for origin in ["assumed", "shared_rust", "maude"] {
+            assert_eq!(
+                provenance(&native_stderr, command, origin),
+                0,
+                "{command} {origin}: {native_stderr}"
+            );
+        }
+    }
+    for command in ["unify", "match", "reduce", "variants"] {
+        assert_eq!(provenance(&native_stderr, command, "maude"), 0);
+        assert_eq!(provenance(&maude_stderr, command, "proved"), 0);
+    }
+    assert!(provenance(&maude_stderr, "unify", "maude") > 0);
 }
 
 fn comparable_proof(stdout: &str) -> String {
@@ -67,12 +100,50 @@ fn comparable_proof(stdout: &str) -> String {
         .collect()
 }
 
+/// How much of the native-only output a test compares with Maude's. The
+/// native backend spells the witnesses of a unifier and lists a family of
+/// variants as the Maude backend does, so the whole output is the same
+/// wherever no unification is left to the AC engine. Where it is, the proved
+/// unifier may list its complete family in another order than Maude and
+/// number the engine's witnesses differently, which renames variables and
+/// renumbers cases. The verdicts cannot differ.
+#[derive(Clone, Copy)]
+enum Parity {
+    /// The whole output.
+    Output,
+    /// Each lemma's verdict and step count.
+    Summary,
+}
+
+fn assert_parity(parity: Parity, actual: &str, reference: &str, context: &str) {
+    let summary = |stdout: &str| {
+        stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.contains(" (all-traces): ") || line.contains(" (exists-trace): "))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    match parity {
+        Parity::Output => assert_eq!(
+            comparable_proof(actual),
+            comparable_proof(reference),
+            "{context}"
+        ),
+        Parity::Summary => assert_eq!(summary(actual), summary(reference), "{context}"),
+    }
+}
+
 fn assert_native_parity(fixture: &str, expected: &[&str]) {
+    assert_fixture_parity(fixture, expected, Parity::Output);
+}
+
+fn assert_fixture_parity(fixture: &str, expected: &[&str], parity: Parity) {
     if !common::maude_available() {
         return;
     }
     let mut outputs = Vec::new();
-    for backend in ["native-only", "hybrid", "maude"] {
+    for backend in ["native-only", "maude"] {
         let output = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
             .arg(format!("--algebra-backend={backend}"))
             .arg(if backend == "native-only" {
@@ -84,8 +155,6 @@ fn assert_native_parity(fixture: &str, expected: &[&str]) {
             .arg("--processors=2")
             .arg("--maude-processes=2")
             .arg(common::fixture(fixture))
-            .env_remove("TAM_RS_NO_LEAN_UNIFY")
-            .env_remove("TAM_RS_VERIFY_LEAN_UNIFY")
             .env_remove("TAM_RS_VERIFY_REDUCE_NF")
             .output()
             .unwrap();
@@ -95,14 +164,29 @@ fn assert_native_parity(fixture: &str, expected: &[&str]) {
         for verdict in expected {
             assert!(stdout.contains(verdict), "{stdout}");
         }
-        outputs.push(comparable_proof(&stdout));
+        outputs.push(stdout);
     }
-    assert_eq!(outputs[0], outputs[1]);
-    assert_eq!(outputs[0], outputs[2]);
+    assert_parity(parity, &outputs[0], &outputs[1], fixture);
+}
+
+/// A unifier witness once reused the name of the lemma variable `x`, which is
+/// in the constraint system but not in the XOR query, and native-only then
+/// reported the false lemma verified and the true one falsified.
+#[test]
+fn witnesses_stay_distinct_from_system_variables_outside_the_query() {
+    // The XOR engine's witnesses are numbered differently in the trace.
+    assert_fixture_parity(
+        "native_witness_scope.spthy",
+        &[
+            "flip (all-traces): falsified - found trace (4 steps)",
+            "sanity (exists-trace): verified (4 steps)",
+        ],
+        Parity::Summary,
+    );
 }
 
 #[test]
-fn native_pairing_proof_matches_maude_and_hybrid() {
+fn native_pairing_proof_matches_maude() {
     assert_native_parity(
         "native_pairing.spthy",
         &["reachable (exists-trace): verified (2 steps)"],
@@ -110,7 +194,7 @@ fn native_pairing_proof_matches_maude_and_hybrid() {
 }
 
 #[test]
-fn joint_projection_variants_and_proof_match_maude_and_hybrid() {
+fn joint_projection_variants_and_proof_match_maude() {
     assert_native_parity(
         "native_joint_projections.spthy",
         &["projected (exists-trace): verified (2 steps)"],
@@ -153,7 +237,7 @@ fn bilinear_derivation_check_and_proof_match_maude() {
 }
 
 #[test]
-fn native_multiset_proof_matches_maude_and_hybrid() {
+fn native_multiset_proof_matches_maude() {
     assert_native_parity(
         "lean_unification.spthy",
         &[
@@ -175,7 +259,7 @@ fn nested_ac_restriction_preserves_both_trace_verdicts() {
 }
 
 #[test]
-fn native_declared_constructors_match_maude_and_hybrid() {
+fn native_declared_constructors_match_maude() {
     assert_native_parity(
         "native_constructors.spthy",
         &["reachable (exists-trace): verified"],
@@ -183,7 +267,7 @@ fn native_declared_constructors_match_maude_and_hybrid() {
 }
 
 #[test]
-fn native_cancellation_proof_matches_maude_and_hybrid() {
+fn native_cancellation_proof_matches_maude() {
     assert_native_parity(
         "native_cancellation.spthy",
         &[
@@ -194,7 +278,7 @@ fn native_cancellation_proof_matches_maude_and_hybrid() {
 }
 
 #[test]
-fn shared_offset_proof_matches_maude_and_hybrid() {
+fn shared_offset_proof_matches_maude() {
     assert_native_parity(
         "native_shared_offset.spthy",
         &[
@@ -206,7 +290,7 @@ fn shared_offset_proof_matches_maude_and_hybrid() {
 }
 
 fn assert_corpus_proof(example: &str, verdicts: &[&str]) {
-    assert_corpus_parity(example, verdicts, true);
+    assert_corpus_parity(example, verdicts, Parity::Output);
 }
 
 fn run_corpus(example: &str, backend: &str, args: &[&str]) -> (String, String) {
@@ -218,6 +302,7 @@ fn run_corpus(example: &str, backend: &str, args: &[&str]) -> (String, String) {
 
 fn run_model(example: &std::path::Path, backend: &str, args: &[&str]) -> (String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+        .env_remove("TAM_RS_VARIANT_CHECK_WORK")
         .arg(format!("--algebra-backend={backend}"))
         .arg(if backend == "native-only" {
             "--with-maude=/nonexistent".to_string()
@@ -229,8 +314,6 @@ fn run_model(example: &std::path::Path, backend: &str, args: &[&str]) -> (String
         .arg(example)
         .env("TAM_DBG_MAUDE_IO", "1")
         .env_remove("TAM_DBG_MAUDE_IO_FILTER")
-        .env_remove("TAM_RS_NO_LEAN_UNIFY")
-        .env_remove("TAM_RS_VERIFY_LEAN_UNIFY")
         .env_remove("TAM_RS_VERIFY_REDUCE_NF")
         .output()
         .unwrap();
@@ -257,36 +340,41 @@ fn received_dh_powers_preserve_sources_and_full_proofs_without_maude() {
             "Accept_Secret_Counter (all-traces): falsified - found trace (7 steps)",
         ],
     );
-    assert_corpus_proof(
+    assert_corpus_parity(
         "csf12/SignedDH_PFS.spthy",
         &["Perfect_Forward_Secrecy (all-traces): verified (39 steps)"],
+        Parity::Output,
     );
-    assert_corpus_proof(
+    assert_corpus_parity(
         "csf12/STS_MAC.spthy",
         &[
             "KI_Perfect_Forward_Secrecy_I (all-traces): falsified - found trace (12 steps)",
             "KI_Perfect_Forward_Secrecy_R (all-traces): falsified - found trace (13 steps)",
         ],
+        Parity::Output,
     );
 }
 
 #[test]
 fn naxos_joint_variants_preserve_sources_and_the_full_proof_without_maude() {
-    for (example, verdict) in [
+    for (example, verdict, parity) in [
         (
             "csf12/NAXOS_eCK.spthy",
             "eCK_key_secrecy (all-traces): verified (134 steps)",
+            Parity::Output,
         ),
         (
             "ake/dh/NAXOS_eCK.spthy",
             "eCK_key_secrecy (all-traces): verified (136 steps)",
+            Parity::Output,
         ),
         (
             "ake/dh/NAXOS_eCK_PFS.spthy",
             "eCK_PFS_key_secrecy (all-traces): falsified - found trace (15 steps)",
+            Parity::Output,
         ),
     ] {
-        assert_corpus_parity(example, &[verdict], false);
+        assert_corpus_parity(example, &[verdict], parity);
     }
 }
 
@@ -299,7 +387,8 @@ fn received_base_towers_preserve_group_dh_rule_variants_without_maude() {
     let (reference, _) = run_corpus(example, "maude", &[]);
     let (actual, _) = run_corpus(example, "native-only", &[]);
     assert!(reference.contains("variants (modulo AC)"));
-    assert_eq!(comparable_proof(&actual), comparable_proof(&reference));
+    assert!(actual.contains("variants (modulo AC)"));
+    assert_parity(Parity::Output, &actual, &reference, example);
 }
 
 #[test]
@@ -308,18 +397,23 @@ fn shared_exponents_preserve_group_dh_rules_and_sources_without_maude() {
         return;
     }
     let example = "sp14/GDH.spthy";
-    for (args, expected) in [
-        (&[][..], "rule (modulo E) RecvOthers"),
-        (&["--precompute-only"][..], "Refined sources: 11 cases"),
+    for (args, expected, parity) in [
+        (&[][..], "rule (modulo E) RecvOthers", Parity::Output),
+        (
+            &["--precompute-only"][..],
+            "Refined sources: 11 cases",
+            Parity::Output,
+        ),
         (
             &["-D=executable2", "--prove=key_reachable_2", "--bound=12"][..],
             "key_reachable_2 (exists-trace): analysis incomplete (87 steps)",
+            Parity::Output,
         ),
     ] {
         let (reference, _) = run_corpus(example, "maude", args);
         let (native, _) = run_corpus(example, "native-only", args);
         assert!(reference.contains(expected), "{reference}");
-        assert_eq!(comparable_proof(&native), comparable_proof(&reference));
+        assert_parity(parity, &native, &reference, example);
     }
 }
 
@@ -337,25 +431,7 @@ fn group_dh_two_party_reachability_finds_the_reference_trace_without_maude() {
         assert!(output.contains("key_reachable_2 (exists-trace): verified (20 steps)"));
         assert!(output.contains("SOLVED // trace found"));
     }
-    // A local case number is an index into that backend's unifier list.
-    // Compare the chosen goals, rule instances and trace through the whole proof.
-    let trace = |output: &str| {
-        comparable_proof(output)
-            .lines()
-            .map(|line| {
-                if let Some((indent, n)) = line.split_once("case split_case_")
-                    && indent.trim().is_empty()
-                    && !n.is_empty()
-                    && n.bytes().all(|b| b.is_ascii_digit())
-                {
-                    format!("{indent}case split_case")
-                } else {
-                    line.to_owned()
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(trace(&native), trace(&reference));
+    assert_parity(Parity::Output, &native, &reference, example);
 }
 
 #[test]
@@ -371,12 +447,13 @@ fn shared_exponent_can_become_the_unit_before_or_after_multiplication() {
 
 #[test]
 fn flattening_a_received_tower_preserves_the_proof() {
-    assert_native_parity(
+    assert_fixture_parity(
         "native_positive_tower.spthy",
         &[
             "reachable (exists-trace): verified (3 steps)",
             "tower (all-traces): verified (2 steps)",
         ],
+        Parity::Output,
     );
 }
 
@@ -389,7 +466,7 @@ fn uniform_power_towers_and_received_powers_preserve_um_three_pass_proofs() {
             "CK_secure_UM3 (all-traces): verified (482 steps)",
             "CK_secure (all-traces): verified (142 steps)",
         ],
-        false,
+        Parity::Output,
     );
 }
 
@@ -401,7 +478,7 @@ fn rigid_context_matches_preserve_um_one_pass_proofs() {
             "key_agreement_reachable (exists-trace): verified (10 steps)",
             "CK_secure (all-traces): verified (174 steps)",
         ],
-        false,
+        Parity::Output,
     );
 }
 
@@ -417,11 +494,13 @@ fn yubikey_multiset_preserves_sources_and_all_six_proofs_without_maude() {
             "injective_correspondance (all-traces): verified (11 steps)",
             "Login_invalidates_smaller_counters (all-traces): verified (1 steps)",
         ],
-        true,
+        Parity::Output,
     );
 }
 
-fn assert_corpus_parity(example: &str, verdicts: &[&str], check_hybrid_offload: bool) {
+/// Sources agree with Maude exactly and the proofs up to `parity`, and
+/// native-only sends no command to Maude.
+fn assert_corpus_parity(example: &str, verdicts: &[&str], parity: Parity) {
     if !common::maude_available() {
         return;
     }
@@ -429,23 +508,13 @@ fn assert_corpus_parity(example: &str, verdicts: &[&str], check_hybrid_offload: 
         let (stdout, stderr) = run_corpus(example, backend, &[action]);
         let commands = stderr
             .lines()
-            .filter(|line| {
-                line.starts_with("[maude>] get variants") || line.starts_with("[maude>] reduce ")
-            })
+            .filter(|line| line.starts_with("[maude>]"))
             .count();
         (stdout, commands)
     };
     let (reference, baseline) = run("maude", "--precompute-only");
-    let (actual, calls) = run("hybrid", "--precompute-only");
     assert!(reference.contains("Refined sources:"), "{reference}");
-    assert_eq!(actual, reference);
     assert!(baseline > 0);
-    if check_hybrid_offload {
-        assert_eq!(
-            calls, 0,
-            "hybrid precomputation sent a variant or reduction query"
-        );
-    }
     let (native, calls) = run("native-only", "--precompute-only");
     assert_eq!(native, reference);
     assert_eq!(calls, 0);
@@ -453,16 +522,9 @@ fn assert_corpus_parity(example: &str, verdicts: &[&str], check_hybrid_offload: 
     for &verdict in verdicts {
         assert!(reference.contains(verdict), "{reference}");
     }
-    for backend in ["hybrid", "native-only"] {
-        let (actual, calls) = run(backend, "--prove");
-        if backend == "native-only" || check_hybrid_offload {
-            assert_eq!(
-                calls, 0,
-                "{backend} proof sent a variant or reduction query"
-            );
-        }
-        assert_eq!(comparable_proof(&actual), comparable_proof(&reference));
-    }
+    let (actual, calls) = run("native-only", "--prove");
+    assert_eq!(calls, 0, "native-only proof sent a command to Maude");
+    assert_parity(parity, &actual, &reference, example);
 }
 
 #[test]
@@ -505,7 +567,7 @@ fn fresh_xor_corpus_preserves_sources_and_complete_proof_trees() {
             "secrecybroken (all-traces): falsified - found trace (16 steps)",
         ),
     ] {
-        assert_corpus_parity(example, &[verdict], false);
+        assert_corpus_parity(example, &[verdict], Parity::Output);
     }
     assert_corpus_parity(
         "features/xor/basicfunctionality/testConstructor.spthy",
@@ -514,18 +576,18 @@ fn fresh_xor_corpus_preserves_sources_and_complete_proof_trees() {
             "secret2 (all-traces): falsified - found trace (10 steps)",
             "secret3 (all-traces): falsified - found trace (11 steps)",
         ],
-        false,
+        Parity::Output,
     );
 }
 
 #[test]
 fn crxor_preserves_sources_and_all_three_proofs_without_maude() {
-    assert_crxor_parity("features/xor/CRxor.spthy", "case c_xor_case_1");
+    assert_crxor_parity("features/xor/CRxor.spthy");
 }
 
 #[test]
 fn declared_ac_crxor_preserves_sources_and_all_three_proofs_without_maude() {
-    assert_crxor_parity("csf26-ac/fast/CRxor.spthy", "case c_xorr_case_1");
+    assert_crxor_parity("csf26-ac/fast/CRxor.spthy");
 }
 
 #[test]
@@ -549,7 +611,7 @@ fn ch07_preserves_sources_and_all_five_proof_trees_without_maude() {
     assert!(!log.contains("[maude>]"), "{log}");
     if common::maude_available() {
         let (reference, _) = run_corpus(example, "maude", &["--prove"]);
-        assert_eq!(comparable_proof(&proof), comparable_proof(&reference));
+        assert_parity(Parity::Output, &proof, &reference, example);
     }
     for verdict in [
         "recentalive_tag (all-traces): falsified - found trace (11 steps)",
@@ -562,7 +624,31 @@ fn ch07_preserves_sources_and_all_five_proof_trees_without_maude() {
     }
 }
 
-fn assert_crxor_parity(example: &str, first_case: &str) {
+/// `line` without the index of each variable: `x.2` and `#vk.6` become `x`
+/// and `#vk`. Only a `.` between a name and digits is an index.
+fn without_variable_indices(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find('.') {
+        let (head, tail) = rest.split_at(at);
+        out.push_str(head);
+        let digits = tail[1..].bytes().take_while(u8::is_ascii_digit).count();
+        let named = head
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if named && digits != 0 {
+            rest = &tail[1 + digits..];
+        } else {
+            out.push('.');
+            rest = &tail[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn assert_crxor_parity(example: &str) {
     let (sources, log) = run_corpus(example, "native-only", &["--precompute-only"]);
     assert!(!log.contains("[maude>]"), "{log}");
     for expected in [
@@ -584,27 +670,14 @@ fn assert_crxor_parity(example: &str, first_case: &str) {
         let (reference, _) = run_corpus(example, "maude", &["--precompute-only"]);
         assert_eq!(sources, reference);
         let (reference, _) = run_corpus(example, "maude", &["--prove"]);
-        // The terminal KU(~k) goals directly under the first AC case can print a
-        // different fresh timepoint index. Keep the solved term and indentation.
+        // The xor unifications of this theory are left to the AC engine. The
+        // proved unifier numbers that engine's witnesses in another order
+        // than Maude, so the proofs agree as trees, case for case and goal
+        // for goal, up to the indices of their variables.
         let tree = |stdout: &str| {
-            let mut first_xor_case = false;
             comparable_proof(stdout)
                 .lines()
-                .map(|line| {
-                    let under_case = first_xor_case;
-                    first_xor_case = line.trim() == first_case;
-                    if under_case
-                        && let Some((prefix, tail)) = line.split_once("by solve( !KU( ~k ) @ #vk.")
-                        && prefix.trim().is_empty()
-                        && tail
-                            .strip_suffix(" )")
-                            .is_some_and(|id| id.parse::<u64>().is_ok())
-                    {
-                        format!("{prefix}by solve( !KU( ~k ) @ #vk )")
-                    } else {
-                        line.to_owned()
-                    }
-                })
+                .map(without_variable_indices)
                 .collect::<Vec<_>>()
         };
         assert_eq!(tree(&proof), tree(&reference));
@@ -635,13 +708,9 @@ fn nslpk_xor_responder_preserves_sources_and_the_complete_reachability_proof() {
     ] {
         let (reference, _) = run_model(&path, "maude", args);
         assert!(reference.contains(expected), "{reference}");
-        for backend in ["native-only", "hybrid"] {
-            let (actual, log) = run_model(&path, backend, args);
-            if backend == "native-only" {
-                assert!(!log.contains("[maude>]"), "{log}");
-            }
-            assert_eq!(comparable_proof(&actual), comparable_proof(&reference));
-        }
+        let (actual, log) = run_model(&path, "native-only", args);
+        assert!(!log.contains("[maude>]"), "{log}");
+        assert_eq!(comparable_proof(&actual), comparable_proof(&reference));
     }
     std::fs::remove_file(path).unwrap();
 }
@@ -697,9 +766,10 @@ fn nslpk_preserves_sources_and_proof_without_maude_variant_calls() {
 
 #[test]
 fn tls_handshake_preserves_the_complete_sources_and_all_three_proofs() {
-    assert_corpus_proof(
+    assert_corpus_parity(
         "classic/TLS_Handshake.spthy",
         &["session_key_secrecy (all-traces): verified"],
+        Parity::Output,
     );
 }
 
@@ -792,25 +862,107 @@ fn bilinear_pairings_preserve_sources_and_all_four_protocol_verdicts() {
                 oracle_proof.contains(first) && oracle_proof.contains(second),
                 "{oracle_proof}"
             );
-            let steps = |proof: &str| {
-                // Case numbering can visit the same complete branches in a different order.
-                let mut lines: Vec<_> = proof
-                    .split_once("\nlemma ")
-                    .unwrap()
-                    .1
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| {
-                        line.starts_with("solve(")
-                            || line.starts_with("by ")
-                            || line.starts_with("case ")
-                    })
-                    .map(str::to_owned)
-                    .collect();
-                lines.sort();
-                lines
-            };
-            assert_eq!(steps(&proof), steps(&oracle_proof), "{model}");
+            // The same cases, numbered in the order of the proved unifier's arms.
+            assert_parity(Parity::Summary, &proof, &oracle_proof, model);
         }
     }
+}
+
+/// Prove `fixture` on `backend` with one worker and return stdout and stderr.
+fn prove_fixture(backend: &str, fixture: &str, extra: &[&str]) -> (String, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
+    command
+        .arg(if backend == "native-only" {
+            "--with-maude=/nonexistent".to_owned()
+        } else {
+            common::maude_arg().expect("Maude oracle")
+        })
+        .arg(format!("--algebra-backend={backend}"))
+        .args(extra)
+        .arg("--processors=1")
+        .arg("--prove")
+        .arg(common::fixture(fixture))
+        .env_remove("TAM_MAUDE_CACHE_STATS")
+        .env_remove("TAM_RS_NATIVE_REFERENCE")
+        .env_remove("TAM_RS_NATIVE_REFERENCE_VARIANTS")
+        .env_remove("TAM_RS_VARIANT_CHECK_WORK")
+        .env_remove("TAM_RS_VERIFY_REDUCE_NF");
+    let output = command.output().expect("run prover");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stdout}\n{stderr}");
+    (stdout, stderr)
+}
+
+/// The line a native-only run prints when the Lean certifier did not accept
+/// the theory's rewrite table. The wording is stable; scripts match on it.
+const ASSUMED_CONVERGENT: &str = "note: the equational theory's convergence was not certified \
+     by the proved checker; results assume the user-specified equations are convergent, \
+     as Maude-based Tamarin also assumes";
+
+fn assumed_convergent_lines(stderr: &str) -> Vec<&str> {
+    stderr
+        .lines()
+        .filter(|line| line.contains("convergence was not certified"))
+        .collect()
+}
+
+/// A native-only run whose rewrite table the certifier did not accept says
+/// so once per theory, on stderr, before the first lemma is attempted, and
+/// leaves stdout alone. `--quiet` drops the line like every Rust-side
+/// diagnostic.
+#[test]
+fn uncertified_user_equations_are_reported_as_assumed_convergent_once() {
+    let fixture = "native_user_equations_pairing.spthy";
+    let (stdout, stderr) = prove_fixture("native-only", fixture, &[]);
+    assert_eq!(
+        assumed_convergent_lines(&stderr),
+        [format!(
+            "[Theory UserEquationsAndPairing] {ASSUMED_CONVERGENT}"
+        )],
+        "{stderr}"
+    );
+    let noted = stderr.find(ASSUMED_CONVERGENT).unwrap();
+    let closed = stderr.find("Theory closed").expect("closed marker");
+    assert!(noted < closed, "{stderr}");
+    assert!(!stdout.contains("not certified"), "{stdout}");
+
+    let (quiet_stdout, quiet_stderr) = prove_fixture("native-only", fixture, &["--quiet"]);
+    assert!(assumed_convergent_lines(&quiet_stderr).is_empty());
+    assert_eq!(
+        common::normalize_stdout(&stdout),
+        common::normalize_stdout(&quiet_stdout)
+    );
+}
+
+/// The built-in tables are certified outright, so a theory without user
+/// equations never prints the line.
+#[test]
+fn certified_builtin_table_prints_no_assumed_convergent_line() {
+    for fixture in ["native_dh_agreement.spthy", "lean_unification.spthy"] {
+        let (_, stderr) = prove_fixture("native-only", fixture, &[]);
+        assert!(assumed_convergent_lines(&stderr).is_empty(), "{stderr}");
+    }
+}
+
+/// Maude has no certifier and assumes convergence for every theory; it never
+/// prints the line, and its stdout verdicts are those of the native run.
+#[test]
+fn maude_backend_never_prints_the_assumed_convergent_line() {
+    if !common::maude_available() {
+        return;
+    }
+    let fixture = "native_user_equations_pairing.spthy";
+    let (maude_stdout, stderr) = prove_fixture("maude", fixture, &[]);
+    assert!(assumed_convergent_lines(&stderr).is_empty(), "{stderr}");
+    let (native_stdout, _) = prove_fixture("native-only", fixture, &[]);
+    let verdicts = |stdout: &str| -> Vec<String> {
+        stdout
+            .lines()
+            .filter(|line| line.contains("(exists-trace):") || line.contains("(all-traces):"))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert!(!verdicts(&maude_stdout).is_empty(), "{maude_stdout}");
+    assert_eq!(verdicts(&maude_stdout), verdicts(&native_stdout));
 }

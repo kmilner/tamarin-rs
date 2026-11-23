@@ -336,9 +336,9 @@ struct LoadOpts {
 /// loader flags (Maude-backed modes probe maude; interactive also renders graphs).
 #[derive(Debug, Clone, ClapArgs)]
 struct ToolOpts {
-    /// Algebra backend (default: hybrid with lean-unification, otherwise maude)
+    /// Algebra backend (default: maude; native-only needs lean-unification)
     #[arg(long = "algebra-backend", global = true, value_name = "BACKEND",
-          value_parser = ["maude", "hybrid", "native-only"])]
+          value_parser = ["maude", "native-only"])]
     algebra_backend: Option<String>,
 
     /// Path to the maude binary (default: `maude` on $PATH)

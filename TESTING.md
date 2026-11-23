@@ -879,6 +879,136 @@ command:
 python3 scripts/test_web_harness.py
 ```
 
+## Algebra backends
+
+The binary has two algebra backends. `--algebra-backend=maude`, the default,
+is the oracle-compatible one every gate above measures.
+`--algebra-backend=native-only` exists in a build with
+`--features lean-unification` and answers from the Lean library in-process;
+it starts no Maude. Build and test it with the feature on:
+
+```bash
+cargo build --profile ci -p tamarin-prover --features lean-unification
+MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace \
+    --features tamarin-term/lean-unification,tamarin-prover/lean-unification
+```
+
+The CI job `lean-spec` runs the native suites; without the feature the
+native tests compile to nothing or check only that the backend is refused.
+
+### The "assumed convergent" line
+
+On native-only a proved certifier examines the session's rewrite table. The
+three built-in tables are certified; a table with user equations may not be,
+and then normalization and variant answers are counted under the origin
+`assumed` (`TAM_MAUDE_CACHE_STATS=1` prints the counts as
+`[ALGEBRA_PROVENANCE]`, and the certifier's verdict as
+`[ALGEBRA_PROVENANCE] rewrite table: certified|uncertified`). Such a run
+prints, once per theory, on stderr:
+
+```
+[Theory <name>] note: the equational theory's convergence was not certified by the proved checker; results assume the user-specified equations are convergent, as Maude-based Tamarin also assumes
+```
+
+- The wording is stable (`tamarin_term::algebra_backend::ASSUMED_CONVERGENT_NOTICE`);
+  match on `convergence was not certified`.
+- It is printed as soon as the session's table has been built and the
+  certifier has declined it, which is while the rule variants are computed:
+  after `Theory translated` and before any lemma is attempted. A theory that
+  leaves the pipeline early on an error still gets the line if its table was
+  uncertified. Interactive mode prints it at each theory load.
+- It never reaches stdout, so the byte comparisons of stdout are unaffected.
+  It is a Rust-side diagnostic, so `--quiet` drops it. The Maude backend
+  never prints it: Maude has no certifier and assumes convergence always.
+
+`crates/tamarin-prover/tests/lean_unification.rs` pins all of this: an
+uncertified user-equation theory prints the line exactly once, a theory of
+built-ins prints none, and the Maude backend prints none.
+
+### Interactive mode on native-only
+
+`tamarin-rs interactive --algebra-backend=native-only <theories>` serves the
+web UI from native sessions. `crates/tamarin-server/tests/routes_native_backend.rs`
+drives a session over HTTP on both backends (theory page, open a lemma, one
+manual proof step, autoprove from the state it reached, the finished proof,
+and requests that arrive together) and compares the responses: byte for byte
+on a Diffie-Hellman theory, and up to the numbering of variables on an XOR
+theory, where the proved unifier may number the witnesses of an AC
+unification differently from Maude (batch output differs in the same way).
+
+```bash
+MAUDE_PATH="$(command -v maude)" cargo test --profile ci -p tamarin-server \
+    --features tamarin-term/lean-unification --test routes_native_backend
+```
+
+`scripts/interactive_backend_check.sh` does the same against the real binary
+with `curl`: it starts one server per backend on a free localhost port,
+saves every response under `scripts/results/interactive_backend/<backend>/`, stops
+the server by PID and ends in `INTERACTIVE_BACKEND_CHECK verdict=OK|FAIL`.
+
+### Backend gate
+
+That native-only answers correctly is proved. That it answers at all, and in
+reasonable time, is not, so `scripts/backend_gate.py` measures both against
+the Maude backend of the same binary. It proves each theory of a list on
+both backends (`--processors=1 --derivcheck-timeout=30`), every prover
+process under its own memory cap and timeout, and fails when
+
+| Status | Meaning |
+|---|---|
+| `VERDICT_DIFF` | a lemma's verdict, or the number of wellformedness warnings, differs from Maude's and the pair is not listed in `scripts/backend_gate/verdict_exceptions.tsv` |
+| `NATIVE_FAIL` | the theory finishes on Maude but not on native-only (nonzero exit, memory cap or timeout) and is not listed in `scripts/backend_gate/pending.tsv` |
+| `SLOW` | Maude takes more than `--min-ref-seconds` (1 s) and native-only more than `--max-ratio` (2) times Maude, by the minimum over `--runs` runs of each backend, and the theory is not pending |
+| `REF_FAIL` | Maude itself does not finish (`--allow-ref-failures` reports it as `REF_FAIL_OK` instead) |
+| `XPASS` | a pending theory now finishes within the limits: remove its line |
+| `STALE_EXCEPTION` | a listed verdict exception no longer differs: remove its line |
+
+`XFAIL` (a pending theory that still fails) and `EXCEPTION` (a listed
+verdict difference, with exactly the listed verdicts) are reported and do not
+fail the gate. A pending entry never excuses a verdict difference. The last
+line is `DONE_BACKEND_GATE verdict=OK|FAIL ...`; the exit status is 0, 1 for
+a failed gate and 2 when the gate could not run.
+
+```bash
+cargo build --profile ci -p tamarin-prover --features lean-unification
+scripts/backend_gate.py --smoke      # 33 theories, about two minutes; what CI runs
+scripts/backend_gate.py --full       # the 454-theory corpus; manual or nightly
+scripts/backend_gate.py --list my.tsv --timeout 300 --runs 3
+```
+
+- **`--smoke`** reads `scripts/backend_gate/smoke.tsv`: fast theories over
+  Diffie-Hellman, XOR, bilinear pairing, multisets, natural numbers, user
+  equations and SAPIC, the native regression fixtures, and the pending
+  theories. Three runs per backend where the timing rule applies, 60 s per
+  process. The `lean-spec` CI job runs it after `scripts/test_backend_gate.py`,
+  which tests the gate itself against a stand-in prover.
+- **`--full`** reads `scripts/backend_gate/corpus.tsv`: the parity corpus,
+  the remaining provable examples and the fixtures, with their per-file
+  flags. One run, 300 s per process, Maude failures reported only. Add
+  `--jobs N` on a machine with memory to spare and `--resume` to continue an
+  interrupted run from the records in `--out`.
+- A **list** holds one theory per line, relative to `tamarin-prover/examples`,
+  optionally followed by a tab and extra prover flags. The pending and
+  exceptions files name theories by the same path.
+- **Caps.** `--mem` (6G) and `--timeout` apply to each prover process.
+  `--mem-cap=auto` puts each process in a transient systemd scope with
+  `MemoryMax` when `systemd-run --user --scope` works, which bounds resident
+  memory and lets a timeout kill the whole scope; otherwise it sets
+  `RLIMIT_AS`, as `ulimit -v` does. `--jobs` (2) bounds how many run at once.
+  A pending theory's native run gets the shorter `--pending-timeout` (20 s).
+- **Results** go to `scripts/results/backend_gate/<mode>/` (`--out`): stdout and
+  stderr of every run, one JSON record per run (exit status, seconds, peak
+  RSS, command), and `summary.tsv` with one row per theory. `--verbose`
+  prints every row and `--steps` lists step-count differences, which are
+  reported as `OK_STEPS` and do not fail the gate.
+
+`pending.tsv` currently lists three theories under
+`scripts/backend_gate/theories/` whose rule actions hold `sdec(x, y^z)`,
+`fst(x^z)` and `inv(x XOR z)` over `In` variables: native-only does not
+terminate on their variants. `verdict_exceptions.tsv` lists the two lemmas of
+the fixture `native_ac_marker_trace`, where native-only finds a trace that
+the Maude run does not and is right.
+
 ## Debugging a divergence
 
 Work top-down: which lemma → which proof step → which solver call.
@@ -922,6 +1052,12 @@ reference path whose output is byte-identical):
 | `TAM_RS_SIMP_NOOP_STATS=1` | Simplify no-op shortcut hit/miss counters to stderr |
 | `TAM_RS_CANON_TABLE_STATS=1` | canon-table cache hit/rebuild counters to stderr |
 | `TAM_MAUDE_CACHE_STATS=1` | one Maude reduce/unify/reply cache hit-rate line per subprocess at teardown |
+| `TAM_DBG_VARIANTS=1` | every variant family as handed to the caller, one member per line, and the native solver that proposed it; compare the two backends' dumps to find a family listed differently |
+| `TAM_DBG_UNIFY=1` | every unification request with its answers as handed to the caller, on either backend |
+| `TAM_DBG_VARIANT_CHECK=1` | native-only: every family submitted to the Lean variant certificate checker with its member count, its charge against the work bound, the verdict and the time |
+| `TAM_RS_VARIANT_CHECK_WORK=<n>` | native-only: work bound of the variant certificate checker (default 65536, `0` for none); see "Variant check budget" |
+| `TAM_RS_ALGEBRA_SEARCH_WORK=<n>` | native-only: work bound of one interruptible Lean search, in questions asked (default 16777216, `0` for none); see "Search budget" |
+| `TAM_RS_ALGEBRA_SEARCH_REPORT=<n>` | native-only: print to stderr every interruptible Lean call that asked at least `n` questions |
 | `TAM_SATURATION_LIMIT=<n>` | source-saturation step cap; outranks the CLI `-s=` |
 | `TAM_PROVE_DEADLINE_MS=<n>` | per-search wall-clock cap (co-operative) |
 
@@ -937,6 +1073,109 @@ escape hatches are separate:
 `TAM_ALLOW_NO_MAUDE=1`, `TAM_ALLOW_NO_CORPUS=1`, and
 `TAM_ALLOW_NO_DOT=1` explicitly permit the corresponding tests to skip when
 that external dependency is unavailable. They should not be set for a gate.
+
+### Variant check budget
+
+On the native-only backend a family of variants that a Rust solver or the
+folding export proposes is used only after the Lean certificate checker
+accepted it. There is no switch that skips the check. Only a family of the
+checked variants export, a contract export, is used without it. A rejected family, and one the checker does not
+decide, fail the session with "variants not certified".
+
+The checker cannot be interrupted, so it runs under a work bound: the number
+of positions that are not variables at which it looks for narrowing steps,
+added up over the members of the family in their listed order (the family's
+*charge*, which `TAM_DBG_VARIANT_CHECK=1` prints). The members within the
+bound are checked; unless that is the whole family, the reply is "variants
+not certified: out of budget". The default bound is 65536. The largest charge
+among the 9593 checks of the 449 corpus theories that finish is 4204 (320
+members, `idbased/BP_IBS_3`, 6.3 s), so the default leaves a factor of
+fifteen; at the corpus's rate of about 1.5 ms per position a family that
+exceeds it has cost on the order of 100 s by then. The completeness theorem
+of the checker is stated without a bound, so `TAM_RS_VARIANT_CHECK_WORK=0`
+is the setting that can accept every correct family.
+
+The bound limits the size of a family, not the cost of one member inside the
+unifier. The 247-member family of `LIST(x*x.1, x*inv(x.1))` has a charge of
+only 1958 and still does not finish (see the ignored test
+`signed_graph_joint_product_and_quotient_share_all_valued_witnesses`); no
+bound that admits the corpus stops it.
+
+Nor does the bound limit the closure test on a kind-level AC product, one
+that holds a variable whose sort is not a sort of messages. No well-sorted
+theory produces one, and the corpus has none. On `k` factors the test takes
+time and memory proportional to 2^k (the ignored test
+`kind_level_product_check_is_not_exponential` has the measurements), with a
+charge of only `k`. For that reason kind-level queries are answered by the
+checked variants export and its family is not submitted to the checker.
+
+A sorted query that no specialised Rust solver covers (`fst(x^z)`,
+`sdec(x, y^z)`, `inv(x XOR z)`, a product that is not in normal form) gets its
+family from the Lean proposer `tamarin_fold_variants`: folding variant
+narrowing in the order of Maude's search, which lists Maude's family on these
+queries. It is a proposal like any other and goes through the checker
+(`TAM_DBG_VARIANTS=1` prints `solver fold` and the time of each call). The
+search ends only on a table with the finite variant property, so it runs only
+on a table the certifier accepted (all builtin tables and the constructor and
+destructor classes); on any other table such a query keeps the checked
+variants export and the folding reference, neither of which is bounded. The search runs under a bound on its narrowing sites that starts at 8192 and grows
+fourfold while a call reports it exhausted; cancellation is checked between
+the calls, since a call cannot be interrupted. Beyond 524288 sites the session
+fails with "variants not found: out of budget" instead of entering the
+checked variants export, which has no bound and cannot be cancelled. The
+families of the regression queries (up to 96 members) need fewer than 4000
+sites. Regressions: `folding_proposes_the_variants_no_specialised_solver_covers`
+(`tamarin-term`) and `folded_rule_variants_prove_the_traces_without_maude`
+(`tamarin-prover`).
+
+### Search budget
+
+On the native-only backend ordinary unification, its existence decision and
+the single-path reducers are Lean exports whose searches can take time, and
+for unification memory, exponential in the width of an AC product. One such
+call used to be uninterruptible. Each of these exports now asks its caller
+before every step of a search whether to go on (`lean/Tamarin/Interrupt.lean`
+in tamarin-algebra), and the C bridge answers "stop" from then on as soon as
+
+- the request's cancellation token is set (a timeout, a cancelled sibling of
+  a parallel search), or
+- the call has asked more questions than its work bound.
+
+A stopped call returns no reply. Cancellation surfaces as the ordinary
+"request cancelled" and leaves the session usable. The work bound fails the
+session with "out of budget: one Lean unification was stopped after N search
+steps" (or "reduction", "unifiability decision"); it is never an answer, and
+never a shorter family. The number of questions a call asks is a function of
+its request, so the bound is deterministic.
+
+The default bound is 16777216 questions (`TAM_RS_ALGEBRA_SEARCH_WORK`, `0` for
+none). Over the 449 corpus theories that finish, the largest call asks 11967
+questions (a unifiability decision of `sp14/group_joux`); the largest
+unification asks 6331 (`TAK1`) and the largest reduction 1906 (`wireguard`),
+so the default leaves a factor of 1400. `TAM_RS_ALGEBRA_SEARCH_REPORT=<n>`
+prints every call that asks at least `n`. What the bound buys on the runaway
+calls of the fuzzing campaign (one call each, optimized build; the
+fuzzer's watchdog resolves 0.1 s, the tests measure the two exact figures):
+
+| request | before | cancelled | at the default bound |
+| --- | --- | --- | --- |
+| unify `i+i+i+i+j+j+j+n = l+l+l+m+m+m+k+k` over naturals | no reply; 7.6 GB after 8 s | returns 54 ms after a cancellation at 0.3 s (136 MB), 0.4 s after one at 2 s (0.8 GB, the time to release it) | "out of budget" after 1.2 s at 0.4 GB |
+| unify `merge(v,v,w,w,w,w) = merge(z,y,x)`, user AC symbol | no reply; 4.7 GB after 30 s | within 0.1 s of a cancellation at 0.3 s, 0.6 s after one at 5 s (1.3 GB to release) | "out of budget" after 1.2 s at 0.4 GB |
+| unifiable `'a'+u+u+u+y+y+y+y = x+x+x+z+z+z+w` | answers after 1.9 s, deaf to a cancellation at 1 s | returns within 0.1 s of the cancellation | answers (144513 questions) |
+| reduce `select(pair(f0+…+f63, hash(x)), other)`, rule with a product of three variables | no reply in 45 s at 15 MB, when the run was killed | returns 0.2 ms after the cancellation | "out of budget" after 15 s at 15 MB |
+
+A question costs the first-match search of the reducers about fifteen times
+as much time as it costs the enumeration of the unifier, which is why the
+same bound is spent in 15 s there and in 1.2 s here.
+
+The questions sit where the measured runaway calls spend their time (the
+first-match search of the bag matcher, the selection of basis solutions and
+the answers built from them, the frontier of the component search and the
+partition fallback). Nothing proves that every long loop asks: a call that
+is slow somewhere else still returns only when it is done. Matching
+(`total_match`, `total_match_exists`), the all-paths reducer, table
+certification, the variant checker and the proposers are not interruptible.
+The tests are `interruption::*` in `crates/tamarin-term/tests/native_backend`.
 
 ## Script index
 
@@ -964,6 +1203,8 @@ exits 2 rather than running with a private fallback.
 | `web_parity.sh` (+ `web_crawl.py`, `web_normalize.py`, `web_diff.py`) | interactive-mode gate |
 | `pane_byte_check.sh` | byte-exact pane HTML vs the web cache; file list required |
 | `rs_vs_rs_diff.sh` / `triage_diff_vs_hs.sh` | refactor-inertness sweep + 3-way triage |
+| `backend_gate.py` (+ `test_backend_gate.py`) | native-only against Maude: verdicts, liveness and time, under per-process caps |
+| `interactive_backend_check.sh` | one interactive session over HTTP on both algebra backends |
 
 **Data files**
 
@@ -978,6 +1219,10 @@ exits 2 rather than running with a private fallback.
 | `pe_family.txt` / `module_family.txt` / `json_family.txt` | `FAMILY=1` subsets |
 | `websweep_residual.txt` | the web milestone crawl list (residue itself is ledgered below) |
 | `websweep_ledger.tsv` | the web gate's residue ledger (applied mechanically) |
+| `backend_gate/smoke.tsv` / `backend_gate/corpus.tsv` | the backend gate's CI list and its full list, with per-file flags |
+| `backend_gate/pending.tsv` | theories native-only is known not to finish yet (expected failures the gate honours and reports) |
+| `backend_gate/verdict_exceptions.tsv` | documented verdict differences between the backends |
+| `backend_gate/theories/` | regression theories that live only in the backend gate |
 | `crates/tamarin-prover/tests/fixtures/cli_refs/cases.tsv` | the argv table both `capture_cli_refs.sh` and `cli_e2e.rs` read |
 
 **Triage**

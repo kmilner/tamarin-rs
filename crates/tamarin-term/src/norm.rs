@@ -411,7 +411,8 @@ fn strule_rewrites(t: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
 /// 3-way structural matcher first. On `NeedsAc`, ask the algebra backend
 /// whether any match exists, except for the distinct roots handled below.
 /// Either arm suffices when multiple substitutions make the rule applicable.
-/// This boolean normal-form check treats a backend error as an inapplicable rule.
+/// A backend error reads as an inapplicable rule here, and is latched on the
+/// handle so that no result is published from it.
 fn rule_applies_ac(
     maude: &MaudeHandle,
     t: &LNTerm,
@@ -448,12 +449,16 @@ fn rule_applies_ac(
             {
                 false
             }
-            _ => maude
-                .has_match_eqs(&[crate::rewriting::Equal {
+            // `nf'` has no error channel. A failed match is not "no match":
+            // the handle latches the error, so no verdict can rest on the
+            // placeholder (a cancelled request is discarded at its boundary).
+            _ => maude.absorb(
+                maude.has_match_eqs(&[crate::rewriting::Equal {
                     lhs: t.clone(),
                     rhs: lhs.clone(),
-                }])
-                .unwrap_or(false),
+                }]),
+                || false,
+            ),
         },
     };
     matched && strule_rewrites(t, rhs)

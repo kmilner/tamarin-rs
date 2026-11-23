@@ -1,0 +1,11 @@
+/*
+ * Backend gate regression: a projection applied to an exponentiation of two
+ * received terms, in a rule action. The native-only backend must list the
+ * variants of fst(x^z) and finish.
+ */
+theory DhPowerUnderFst
+begin
+builtins: diffie-hellman
+rule R: [ In(x), In(z) ] --[ A(fst(x^z)) ]-> [ ]
+lemma l: exists-trace "Ex m #i. A(m)@i"
+end

@@ -228,10 +228,10 @@ pub(crate) struct FileResult {
 pub fn run(args: &Args) -> Result<i32, RunError> {
     args.algebra_backend.validate().map_err(RunError::Regular)?;
     if args.algebra_backend == AlgebraBackend::NativeOnly
-        && matches!(args.subcommand, Subcommand::Interactive | Subcommand::Test)
+        && matches!(args.subcommand, Subcommand::Test)
     {
         return Err(RunError::Regular(
-            "native-only currently supports batch and variants modes; interactive and installation self-tests are not yet supported".into(),
+            "native-only supports batch, interactive and variants modes; the installation self-test is not yet supported".into(),
         ));
     }
 
@@ -517,9 +517,11 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     //     (which production proving still parses via
     //     `mk_bp_intruder_variants`); HS's `variants` command likewise
     //     generates BP at runtime, so the two stay byte-identical.
-    let dh_rules = tamarin_theory::intruder_rules::dh_intruder_rules(false, &maude);
+    let dh_rules = tamarin_theory::intruder_rules::dh_intruder_rules(false, &maude)
+        .map_err(|e| RunError::Regular(e.to_string()))?;
     let bp_maude = start_maude(tamarin_term::maude_sig::bp_maude_sig())?;
-    let bp_rules = tamarin_theory::intruder_rules::bp_intruder_rules(false, &bp_maude);
+    let bp_rules = tamarin_theory::intruder_rules::bp_intruder_rules(false, &bp_maude)
+        .map_err(|e| RunError::Regular(e.to_string()))?;
     // HS `putStrLn (dhS ++ bpS)` where each block is `renderDoc .
     // prettyIntruderVariants` (Theory/Model/Rule.hs):
     // blank-line-separated `rule (modulo AC) NAME:` rules with HughesPJ body
@@ -1348,9 +1350,53 @@ struct TheoryPipeline<'a> {
     /// `translateAndCheckTheory` binds `(postReport, _, _)` and discards it
     /// (TheoryLoader.hs).
     ndc_funs: Vec<tamarin_term::function_symbols::FunSym>,
+    /// Whether [`Self::note_assumed_convergence`] has printed its line for
+    /// this theory.
+    assumed_convergence_noted: std::sync::atomic::AtomicBool,
+}
+
+/// The catch-all for [`TheoryPipeline::note_assumed_convergence`]: a theory
+/// that left the pipeline early, on an error or otherwise, still gets its
+/// line if the session came to rest on an uncertified table.
+impl Drop for TheoryPipeline<'_> {
+    fn drop(&mut self) {
+        self.note_assumed_convergence();
+    }
 }
 
 impl TheoryPipeline<'_> {
+    /// Tell the user, once per theory and on stderr only, that a native-only
+    /// run rests on the premise that the theory's equations are convergent:
+    /// the Lean certifier did not accept the session's rewrite table (see
+    /// `MaudeHandle::convergence_assumed`). The three built-in tables are
+    /// certified, so only theories with user equations can print it, and
+    /// Maude never does: it has no certifier, and makes the assumption for
+    /// every theory.
+    ///
+    /// The line is a Rust-side diagnostic with no oracle counterpart, so
+    /// `--quiet` drops it (see `Args::quiet`). Nothing reaches stdout.
+    ///
+    /// Called after each stage of [`Self::check_translated_theory`], so the
+    /// line appears as soon as the table has been built and before any
+    /// lemma is attempted, and once more when the pipeline is dropped.
+    fn note_assumed_convergence(&self) {
+        use std::sync::atomic::Ordering;
+        if self.args.quiet || self.assumed_convergence_noted.load(Ordering::Relaxed) {
+            return;
+        }
+        if self
+            .file_maude
+            .as_ref()
+            .is_some_and(MaudeHandle::convergence_assumed)
+            && !self.assumed_convergence_noted.swap(true, Ordering::Relaxed)
+        {
+            self.marker(&format!(
+                "note: {}",
+                tamarin_term::algebra_backend::ASSUMED_CONVERGENT_NOTICE
+            ));
+        }
+    }
+
     /// `[Theory X] MSG` stderr marker for this file's theory.
     fn marker(&self, msg: &str) {
         theory_marker(&self.elaborated.name, msg);
@@ -1681,6 +1727,7 @@ impl TheoryPipeline<'_> {
                     self.file_maude_pool.as_deref(),
                     !translate_mode,
                 )?);
+            self.note_assumed_convergence();
         } else {
             self.wf_report
                 .extend(tamarin_theory::wellformedness::check_wellformedness(
@@ -1727,6 +1774,7 @@ impl TheoryPipeline<'_> {
             self.ndc_funs = checked.ndc_funs;
             self.ndc_cache = Some(checked.cache.into());
         }
+        self.note_assumed_convergence();
 
         // Dynamic Message Derivation Checks (mirrors HS
         // `checkVariableDeducability`, gated by `--derivcheck-timeout`,
@@ -1751,6 +1799,7 @@ impl TheoryPipeline<'_> {
             }
             self.marker("Derivation checks ended");
         }
+        self.note_assumed_convergence();
         Ok(())
     }
 
@@ -2371,6 +2420,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             file_maude_pool: None,
             ndc_cache: None,
             ndc_funs: Vec::new(),
+            assumed_convergence_noted: std::sync::atomic::AtomicBool::new(false),
         };
 
         if let Err(code) = st.translate_theory() {

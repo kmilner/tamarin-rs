@@ -65,9 +65,6 @@ fn native_oracle_inert_product_matches_all_32_symbolic_projection_rows() {
 
 #[test]
 fn native_oracle_inert_product_variants_keep_joint_images_and_multiplicities() {
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let sig = mset_maude_sig().merge(pair_maude_sig());
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
@@ -90,9 +87,6 @@ fn native_oracle_user_ac_product_keeps_the_other_observations() {
     use crate::subterm_rule::rrule_to_ctxt_st_rule;
     use crate::term::f_app_no_eq;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let ctor = |name: &'static [u8], arity| {
         NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor)
     };

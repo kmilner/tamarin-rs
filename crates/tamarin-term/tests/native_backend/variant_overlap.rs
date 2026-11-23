@@ -30,6 +30,23 @@ fn boxed(input: LNTerm) -> LNTerm {
 }
 
 fn handle(rules: Vec<(LNTerm, LNTerm)>) -> MaudeHandle {
+    MaudeHandle::start_with_backend(MISSING, signature(rules), AlgebraBackend::NativeOnly).unwrap()
+}
+
+/// A session whose theory author asserts convergence. Its `reduce` relies on
+/// that premise for a table the certifier does not accept, where a raw
+/// session reports the table.
+fn theory(rules: Vec<(LNTerm, LNTerm)>) -> MaudeHandle {
+    MaudeHandle::start_for_tamarin_theory(
+        MISSING,
+        signature(rules),
+        AlgebraBackend::NativeOnly,
+        Arc::new(SharedMaudeCaches::default()),
+    )
+    .unwrap()
+}
+
+fn signature(rules: Vec<(LNTerm, LNTerm)>) -> tamarin_term::maude_sig::MaudeSig {
     let mut sig = mset_maude_sig();
     sig.st_fun_syms.extend([
         symbol(b"select", 2),
@@ -41,7 +58,7 @@ fn handle(rules: Vec<(LNTerm, LNTerm)>) -> MaudeHandle {
         sig.st_rules
             .insert(rrule_to_ctxt_st_rule(&RRule::new(lhs, rhs)).unwrap());
     }
-    MaudeHandle::start_with_backend(MISSING, sig.refresh(), AlgebraBackend::NativeOnly).unwrap()
+    sig.refresh()
 }
 
 fn pattern(width: usize) -> LNTerm {

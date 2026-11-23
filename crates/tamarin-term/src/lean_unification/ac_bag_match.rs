@@ -3,7 +3,7 @@
 //! subject factors in every equation. The numeric alphabet is request-local.
 use super::{
     ac_sort, canonical_capture, common_children, initialize, match_size, operands, residual,
-    subsort, Error, Outcome, RuleTable, Substitutions, WordSlice, LEAN_THREAD,
+    subsort, Error, RuleTable, WordSlice, LEAN_THREAD,
 };
 use crate::function_symbols::{AcSym, FunSym};
 use crate::lean_identity::IdentityTable;
@@ -13,17 +13,7 @@ use crate::rewriting::Equal;
 use crate::term::Term;
 use crate::vterm::{is_ground_vterm, Lit};
 
-mod paged;
-
-unsafe extern "C" {
-    fn tamarin_lean_ac_bag_match(rows: *const WordSlice, count: usize) -> u8;
-    fn tamarin_lean_ac_bag_typed_match(
-        rows: *const WordSlice,
-        count: usize,
-        restrictions: *const WordSlice,
-        restricted: usize,
-    ) -> u8;
-}
+use tamarin_algebra_sys::{tamarin_lean_ac_bag_match, tamarin_lean_ac_bag_typed_match};
 
 struct Row<'a> {
     symbol: AcSym,
@@ -179,20 +169,6 @@ impl RuleTable {
         }
         data.with_packet(false, decide)
     }
-
-    /// The internal tree matcher puts patterns on the left in both public APIs.
-    pub(crate) fn ac_bag_answers(&self, eqs: &[Equal<LNTerm>]) -> Result<Outcome, Error> {
-        if !eqs.iter().any(|e| may_apply(&e.lhs, &e.rhs)) {
-            return Ok(Outcome::Unsupported);
-        }
-        let Some(data) = self.prepare_bag_rows(eqs, |e| (&e.lhs, &e.rhs))? else {
-            return Ok(Outcome::Unsupported);
-        };
-        Ok(match data.answers()? {
-            Some(arms) => Outcome::Complete(arms),
-            None => Outcome::Unsupported,
-        })
-    }
 }
 
 fn decide(
@@ -249,10 +225,6 @@ fn decide(
 }
 
 impl BagRows<'_> {
-    fn answers(self) -> Result<Option<Substitutions>, Error> {
-        self.with_packet(Vec::new(), paged::read_answers)
-    }
-
     /// Keep the canonical subject factors and their request-local identities
     /// alive through the entire call, including decoding any returned bags.
     fn with_packet<T>(
@@ -322,56 +294,6 @@ mod tests {
         assert_eq!(
             table.ac_bag_has_match(&[missing, unsupported]).unwrap(),
             None
-        );
-    }
-
-    #[test]
-    fn answer_rows_restore_full_captures_including_identity_and_shared_frozen_ids() {
-        let table = RuleTable::new(&mset_maude_sig()).unwrap();
-        // First encounter order (z, a) differs from variable sort order.
-        let z = LVar::new("z", crate::lterm::LSort::Msg, 7);
-        let a = LVar::new("a", crate::lterm::LSort::Msg, 7);
-        let var = |v| Term::Lit(Lit::Var(v));
-        let sum = |ts| f_app_ac(AcSym::Union, ts);
-        let fixed = pub_term("marker");
-        let plain = pub_term("frozen");
-        // Raw reversed input verifies encounter order for shared captures.
-        let pattern = Term::App(
-            FunSym::Ac(AcSym::Union),
-            vec![var(z), var(a), fixed.clone()].into(),
-        );
-        let subjects = [var(z), var(a), plain];
-        let mut all = subjects.to_vec();
-        all.push(fixed);
-        let row = Equal {
-            lhs: pattern,
-            rhs: sum(all),
-        };
-        let Outcome::Complete(mut arms) = table.ac_bag_answers(std::slice::from_ref(&row)).unwrap()
-        else {
-            panic!("small bag enumeration deferred");
-        };
-        let mut expected = Vec::new();
-        for mask in 1..7 {
-            let (lhs, rhs): (Vec<_>, Vec<_>) = subjects
-                .iter()
-                .enumerate()
-                .partition(|(i, _)| mask & (1 << i) != 0);
-            let bag =
-                |xs: Vec<(usize, &LNTerm)>| sum(xs.into_iter().map(|(_, t)| t.clone()).collect());
-            expected.push(vec![(z, bag(lhs)), (a, bag(rhs))]);
-        }
-        expected.sort();
-        arms.sort();
-        assert_eq!(arms, expected);
-
-        let row = Equal {
-            lhs: sum(vec![var(z), var(z), var(a)]),
-            rhs: sum(subjects.to_vec()),
-        };
-        assert_eq!(
-            table.ac_bag_answers(&[row]).unwrap(),
-            Outcome::Complete(vec![])
         );
     }
 }

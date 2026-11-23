@@ -637,6 +637,37 @@ fn compose_vfresh_general<C>(
 where
     C: Ord + Clone,
 {
+    compose_vfresh_renaming(s1_0, s2).0
+}
+
+/// [`compose_vfresh`], together with the name it gave each range variable of
+/// `s1_0`. The composition renames those variables by index alone, so the
+/// second component is an injective map.
+pub fn compose_vfresh_traced<C>(
+    s1_0: &LSubstVFresh<C>,
+    s2: &crate::subst::Subst<C, LVar>,
+) -> (LSubstVFresh<C>, BTreeMap<LVar, LVar>)
+where
+    C: Ord + Clone,
+{
+    if s1_0.is_empty() {
+        return (compose_vfresh(s1_0, s2), BTreeMap::new());
+    }
+    let (composed, indices) = compose_vfresh_renaming(s1_0, s2);
+    let renamed = distinct_range_vars(s1_0.range())
+        .into_iter()
+        .map(|v| (v, indices.rename(v)))
+        .collect();
+    (composed, renamed)
+}
+
+fn compose_vfresh_renaming<C>(
+    s1_0: &LSubstVFresh<C>,
+    s2: &crate::subst::Subst<C, LVar>,
+) -> (LSubstVFresh<C>, IndexRenaming)
+where
+    C: Ord + Clone,
+{
     // varsRange s2: vars in s2's range
     let vs_in_range_s2: Vec<LVar> = distinct_range_vars(s2.range());
     let extended = s1_0.extend_with_renaming(&vs_in_range_s2);
@@ -660,7 +691,7 @@ where
     let indices = IndexRenaming::avoiding(&vars, occupied().max(), || occupied().collect());
     let s1 = extended.rename_range(&indices);
     let composed = s1.compose(s2);
-    free_to_fresh_raw(composed)
+    (free_to_fresh_raw(composed), indices)
 }
 
 #[cfg(test)]

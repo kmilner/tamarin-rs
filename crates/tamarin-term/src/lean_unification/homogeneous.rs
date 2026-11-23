@@ -5,37 +5,19 @@ use crate::lterm::{LNTerm, LVar};
 use crate::term::{f_app_ac, Term};
 use crate::vterm::Lit;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::ffi::c_void;
 
-#[repr(C)]
-pub(super) struct ProjectedAnswers {
-    status: u8,
-    arms: *mut c_void,
-}
-
-impl ProjectedAnswers {
-    pub(super) fn into_packet(self) -> Result<Option<MatchRows>, Error> {
-        match self.status {
-            0 => Ok(None),
-            1 => MatchRows::new(self.arms).map(Some),
-            status => Err(Error::InvalidStatus(status)),
-        }
+/// Status 0 is a deferral and status 1 transfers one array of arms.
+fn into_packet(answers: ProjectedAnswers) -> Result<Option<MatchRows>, Error> {
+    match answers.status {
+        0 => Ok(None),
+        1 => MatchRows::new(answers.arms).map(Some),
+        status => Err(Error::InvalidStatus(status)),
     }
 }
 
-unsafe extern "C" {
-    fn tamarin_lean_masked_operand_unify(
-        width: u64,
-        mask: u64,
-        sides: *const WordSlice,
-        side_count: usize,
-    ) -> ProjectedAnswers;
-    fn tamarin_lean_operand_unify(
-        width: u64,
-        sides: *const WordSlice,
-        side_count: usize,
-    ) -> ProjectedAnswers;
-}
+use tamarin_algebra_sys::{
+    tamarin_lean_masked_operand_unify, tamarin_lean_operand_unify, ProjectedAnswers,
+};
 
 pub(super) enum Allocation<T> {
     Complete(T),
@@ -88,14 +70,13 @@ impl MatrixCache {
         let packet = LEAN_THREAD.with(|_| {
             // SAFETY: the borrowed descriptors and their words live through
             // this call. The shim transfers one owned reference to the packet.
-            unsafe {
+            into_packet(unsafe {
                 if mask == 0 {
                     tamarin_lean_operand_unify(width as u64, rows.as_ptr(), rows.len())
                 } else {
                     tamarin_lean_masked_operand_unify(width as u64, mask, rows.as_ptr(), rows.len())
                 }
-            }
-            .into_packet()
+            })
         })?;
         let (result, packet_words) = match &packet {
             Some(p) => {
@@ -117,17 +98,6 @@ impl MatrixCache {
         }
         Ok(result)
     }
-}
-
-// Lean tags each output row with its column and numbers witnesses densely in
-// order of first use. Only the choice of unused caller names happens here.
-pub(super) fn decode(
-    symbol: AcSym,
-    reserved: &FxHashSet<u64>,
-    width: usize,
-    packet: MatchRows,
-) -> Result<Vec<Vec<LNTerm>>, Error> {
-    decode_packet(symbol, reserved, width, &packet).map(|(images, _)| images)
 }
 
 fn decode_packet(
@@ -345,13 +315,13 @@ mod tests {
             status,
             arms: std::ptr::null_mut(),
         };
-        assert!(matches!(result(0).into_packet(), Ok(None)));
+        assert!(matches!(into_packet(result(0)), Ok(None)));
         assert!(matches!(
-            result(255).into_packet(),
+            into_packet(result(255)),
             Err(Error::InvalidStatus(255))
         ));
         assert!(matches!(
-            result(1).into_packet(),
+            into_packet(result(1)),
             Err(Error::InvalidStatus(255))
         ));
     }

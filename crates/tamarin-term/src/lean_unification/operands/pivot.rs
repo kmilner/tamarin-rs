@@ -8,10 +8,7 @@ use crate::term::{f_app_ac, Term};
 use crate::vterm::Lit;
 use rustc_hash::FxHashSet;
 
-unsafe extern "C" {
-    fn tamarin_lean_open_match_select(rigid: u64, subject: u64) -> *mut std::ffi::c_void;
-    fn tamarin_lean_ac_pivot(size: u64) -> *mut std::ffi::c_void;
-}
+use tamarin_algebra_sys::{tamarin_lean_ac_pivot, tamarin_lean_open_match_select};
 
 // Find the sole variable capable of absorbing several factors. All other
 // occurrences must stay indivisible under every sorted substitution.

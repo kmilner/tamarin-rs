@@ -42,8 +42,20 @@ impl From<tamarin_utils::cancellation::Cancelled> for ProveError {
 
 impl From<crate::tools::equation_store::AddEqsError> for ProveError {
     fn from(error: crate::tools::equation_store::AddEqsError) -> Self {
-        let crate::tools::equation_store::AddEqsError::Maude(message) = error;
-        Self::Maude(message)
+        match error {
+            crate::tools::equation_store::AddEqsError::Cancelled => Self::Cancelled,
+            crate::tools::equation_store::AddEqsError::Maude(message) => Self::Maude(message),
+        }
+    }
+}
+
+/// A cancelled algebra query is a cancelled proof, never a backend failure.
+impl From<tamarin_term::maude_proc::MaudeError> for ProveError {
+    fn from(error: tamarin_term::maude_proc::MaudeError) -> Self {
+        match error {
+            tamarin_term::maude_proc::MaudeError::Cancelled => Self::Cancelled,
+            other => Self::Maude(other.to_string()),
+        }
     }
 }
 
@@ -55,8 +67,10 @@ impl From<RankingError> for ProveError {
 
 impl From<crate::tools::rule_variants::VariantsError> for ProveError {
     fn from(error: crate::tools::rule_variants::VariantsError) -> Self {
-        let crate::tools::rule_variants::VariantsError::Maude(message) = error;
-        Self::Maude(message)
+        match error {
+            crate::tools::rule_variants::VariantsError::Cancelled => Self::Cancelled,
+            crate::tools::rule_variants::VariantsError::Maude(message) => Self::Maude(message),
+        }
     }
 }
 
@@ -1401,6 +1415,22 @@ fn restore_sources(ctx: &ProofContext, cached: &CachedSources) {
 /// reuse formulas, `formula_to_system`, fresh ProofContext derivation plus
 /// per-lemma-field setup, `ensure_saturated` (typing-asm refinement),
 /// and proof-tree search.
+/// Release a proof tree only while the algebra backend is intact.
+///
+/// Some solver passes have no error channel and continue past a failed
+/// algebra query with a placeholder; the backend latches that failure
+/// (`MaudeHandle::record_failure`). Every proving entry point passes its
+/// result through here, so each frontend reports the failure instead of a
+/// tree built on the placeholder.
+fn publish_proof(
+    ctx: &ProofContext,
+    result: Result<ProofNode, ProveError>,
+) -> Result<ProofNode, ProveError> {
+    let root = result?;
+    ctx.maude.check_backend_status()?;
+    Ok(root)
+}
+
 pub fn prove_lemma_in_session(
     session: &ProverSession,
     lemma_name: &str,
@@ -1488,7 +1518,9 @@ pub fn prove_system_in_session_with_options(
             }
         }
     }
-    run_proof_search_at_depth(&ctx, sys, options.proof_bound, options.ranking_depth_offset)
+    let result =
+        run_proof_search_at_depth(&ctx, sys, options.proof_bound, options.ranking_depth_offset);
+    publish_proof(&ctx, result)
 }
 
 fn prove_lemma_in_session_mode(
@@ -1502,11 +1534,13 @@ fn prove_lemma_in_session_mode(
     // Replay the stored skeleton before proving open leaves.
     if let Some(tree) = &lemma.proof {
         if auto_prove {
-            return crate::replay::replace_sorry_prove(&ctx, sys, tree, proof_bound);
+            let result = crate::replay::replace_sorry_prove(&ctx, sys, tree, proof_bound);
+            return publish_proof(&ctx, result);
         } else {
             // Non-target lemma: HS close-time check-and-extend
             // replay, no auto-proving of open leaves.
-            return crate::replay::check_and_extend(&ctx, sys, tree, proof_bound);
+            let result = crate::replay::check_and_extend(&ctx, sys, tree, proof_bound);
+            return publish_proof(&ctx, result);
         }
     }
     if !auto_prove {
@@ -1518,7 +1552,8 @@ fn prove_lemma_in_session_mode(
         // the start system, so it renders as plain `by sorry`).
         return Ok(crate::replay::annotated_sorry_root(sys));
     }
-    run_proof_search_at_depth(&ctx, sys, proof_bound, 0)
+    let result = run_proof_search_at_depth(&ctx, sys, proof_bound, 0);
+    publish_proof(&ctx, result)
 }
 
 /// Replay an interactive proof skeleton against a freshly constructed lemma
@@ -1531,7 +1566,8 @@ pub fn check_and_extend_proof_in_session(
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
     let (_, ctx, sys) = lemma_context_and_system(session, lemma_name)?;
-    crate::replay::check_and_extend(&ctx, sys, proof, proof_bound)
+    let result = crate::replay::check_and_extend(&ctx, sys, proof, proof_bound);
+    publish_proof(&ctx, result)
 }
 
 fn lemma_context_and_system<'a>(

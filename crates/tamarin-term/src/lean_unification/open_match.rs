@@ -10,18 +10,9 @@ use crate::lterm::{sort_of_lterm, LNTerm, LVar};
 use crate::maude_types::sort_of_name;
 use crate::term::{f_app_ac, map_lits, Term};
 use crate::vterm::Lit;
-use std::ffi::c_void;
 use std::{borrow::Cow, collections::BTreeSet, rc::Rc};
 
-unsafe extern "C" {
-    fn tamarin_lean_open_match_select(rigid: u64, subject: u64) -> *mut c_void;
-    fn tamarin_lean_collector_possible(
-        occurrences: *const u64,
-        occurrences_len: usize,
-        factors: *const u64,
-        factors_len: usize,
-    ) -> u8;
-}
+use tamarin_algebra_sys::{tamarin_lean_collector_possible, tamarin_lean_open_match_select};
 
 type Arm = Vec<(LVar, LNTerm)>;
 

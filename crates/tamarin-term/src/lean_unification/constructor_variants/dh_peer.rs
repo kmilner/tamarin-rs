@@ -10,11 +10,9 @@ use crate::term::Term;
 use crate::vterm::Lit;
 use std::collections::{BTreeMap, BTreeSet};
 
-unsafe extern "C" {
-    fn tamarin_lean_dh_exponent_images() -> *mut std::ffi::c_void;
-    fn tamarin_lean_dh_tower_images(width: u64) -> *mut std::ffi::c_void;
-    fn tamarin_lean_dh_peer_images() -> *mut std::ffi::c_void;
-}
+use tamarin_algebra_sys::{
+    tamarin_lean_dh_exponent_images, tamarin_lean_dh_peer_images, tamarin_lean_dh_tower_images,
+};
 
 fn read_image(
     ops: &[u64],

@@ -18,7 +18,8 @@ tamarin-prover.
 
 Build prerequisites: Rust, Node.js (22.12+ or 24+), npm, Git, Bash, and Make.
 The default build uses Maude. The experimental native-only backend can run supported theories
-without a Maude executable. See the [backend coverage table](https://github.com/kmilner/tamarin-algebra/blob/main/lean/README.md#coverage-and-remaining-work).
+without a Maude executable. See the [backend coverage table](https://github.com/kmilner/tamarin-algebra/blob/main/lean/README.md#coverage-and-remaining-work)
+and [Algebra backends](#algebra-backends) below.
 Server-rendered graphs require Graphviz. See the [Tamarin installation instructions](https://tamarin-prover.com/manual/master/book/002_installation.html).
 
 
@@ -52,6 +53,38 @@ RSS on Linux, physical footprint on macOS. For example, `--memory-limit=4GiB`.
 The job stops when sampled usage
 exceeds the threshold. Usage can overshoot between samples; unfinished
 proofs are lost. See [memory-limit behavior and limitations](docs/PERFORMANCE.md#memory-limits).
+
+## Algebra backends
+
+`--algebra-backend=maude` (the default) answers unification, matching,
+normalization and variant queries with a Maude subprocess.
+`--algebra-backend=native-only`, in a build with
+`--features lean-unification`, answers them in-process from a Lean library
+whose exports are proved correct, and starts no Maude. It works in batch mode,
+in `interactive` mode and in `variants` mode:
+
+```bash
+cargo build --release --features lean-unification
+tamarin-rs --algebra-backend=native-only --prove theory.spthy
+tamarin-rs interactive --algebra-backend=native-only /path/to/theories
+```
+
+Tamarin requires a theory's equations to be convergent and has always taken
+the author's word for it. The native backend checks instead: a proved
+certifier examines the theory's rewrite table. It accepts the tables of the
+built-in theories; a table with user equations it may or may not accept.
+Results over an accepted table rest on no assumption about the equations.
+When it does not accept the table, the run goes ahead on the author's word,
+as every Maude run does, and says so once per theory on stderr:
+
+```
+[Theory T] note: the equational theory's convergence was not certified by the proved checker; results assume the user-specified equations are convergent, as Maude-based Tamarin also assumes
+```
+
+The line never appears on the Maude backend, which has no certifier, and
+`--quiet` drops it. Standard output is the same with and without it.
+[TESTING.md](TESTING.md#algebra-backends) describes the tests and the
+regression gate that compares the two backends.
 
 ## Checking proofs
 

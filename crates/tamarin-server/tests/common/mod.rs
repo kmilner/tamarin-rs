@@ -90,6 +90,7 @@ pub fn fixture_path(name: &str) -> PathBuf {
 /// Spawn the server with one theory eagerly loaded.  The server lives
 /// until the returned [`TestServer`] is dropped (`oneshot` cancels the
 /// listener, then the task exits).
+#[allow(dead_code)]
 pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
     start_server_with_theory_and(fixture_name, |_| {}).await
 }

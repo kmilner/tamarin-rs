@@ -363,16 +363,30 @@ impl<'a> SaturationRun<'a> {
         }
     }
 
-    fn finish(mut self, result: Result<(), crate::prove::ProveError>) {
+    /// Publish the run's result to every context sharing these sources.
+    ///
+    /// A run that ends under a cancelled request publishes nothing: passes
+    /// without an error channel may have continued past a cancelled algebra
+    /// query with a placeholder, so even an `Ok` is not a result. Dropping
+    /// `self` returns the gate to `Pending` and the next request recomputes.
+    fn finish(
+        mut self,
+        result: Result<(), crate::prove::ProveError>,
+    ) -> Result<(), crate::prove::ProveError> {
+        if tamarin_utils::cancellation::check().is_err() {
+            return Err(crate::prove::ProveError::Cancelled);
+        }
         self.ctx.maude.reset_counter_to(self.counter_before);
         *self
             .ctx
             .saturate_gate
             .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Done(result);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            SaturateState::Done(result.clone());
         self.completed = true;
         self.ctx.saturate_gate.ready.notify_all();
+        result
     }
 }
 
@@ -555,8 +569,7 @@ impl ProofContext {
         let run = SaturationRun::new(self, saturate_cnt_before);
         if let Some(provider) = &self.source_provider {
             let result = provider.materialize(self);
-            run.finish(result.clone());
-            return result;
+            return run.finish(result);
         }
         // HS-FAITHFUL PURITY: source refinement (`precomputeSources` /
         // `saturateSources` / `refineWithSourceAsms`, Sources.hs) is a PURE
@@ -652,8 +665,7 @@ impl ProofContext {
             self.dump_sources();
             Ok(())
         })();
-        run.finish(result.clone());
-        result
+        run.finish(result)
     }
 
     /// Mark this context's sources as already saturated, bypassing the
@@ -715,9 +727,9 @@ impl ProofContext {
         sig: &tamarin_term::maude_sig::MaudeSig,
         maude: &MaudeHandle,
         initial: &[IntrRuleAC],
-    ) -> Vec<IntrRuleAC> {
+    ) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
         let mut intruder_rules =
-            crate::intruder_rules::subterm_constructor_rules(false, maude, sig);
+            crate::intruder_rules::subterm_constructor_rules(false, maude, sig)?;
         intruder_rules.extend(crate::intruder_rules::special_intruder_rules(false));
         // For multiset: adds `_union` destructor (`KD(x++y) → KD(x)`,
         // subterm=True, budget=0) and `_union` constructor.  Without these,
@@ -756,12 +768,12 @@ impl ProofContext {
             false,
             maude,
             &sig.ac_user_fun_syms(),
-        ));
+        )?);
         intruder_rules.extend(crate::intruder_rules::destruction_rules_no_eq(
             false,
             maude,
             &sig.no_eq_fun_syms(),
-        ));
+        )?);
         // DH / BP intruder variants — port of HS
         // `Main.TheoryLoader.addMessageDeductionRuleVariants`
         // (src/Main/TheoryLoader.hs):
@@ -811,7 +823,7 @@ impl ProofContext {
                 assembled.push(rule);
             }
         }
-        assembled
+        Ok(assembled)
     }
 
     /// Debug dump of the context's final intruder-rule cache, gated by
@@ -981,7 +993,7 @@ impl ProofContext {
         let intruder_rules: IntrRuleCache = match intr_override {
             Some(cache) => cache,
             None => IntrRuleCache::from(Self::ndc_check_cache_order(
-                Self::assemble_intruder_rules(&sig, &maude, &[]),
+                Self::assemble_intruder_rules(&sig, &maude, &[])?,
             )),
         };
         Self::dump_intruder_rules(&intruder_rules);
@@ -1322,8 +1334,10 @@ pub(crate) fn annotate_loop_breakers(
                         prem_insts.iter().any(|prem| {
                             let mut fresh = tamarin_term::lterm::avoid(prem);
                             let conc_fresh = tamarin_term::lterm::rename(conc.clone(), &mut fresh);
-                            crate::rule::unifiable_ln_facts(maude, &conc_fresh, prem)
-                                .unwrap_or(false)
+                            maude.absorb(
+                                crate::rule::unifiable_ln_facts(maude, &conc_fresh, prem),
+                                || false,
+                            )
                         })
                     })
                 });
@@ -1526,6 +1540,47 @@ mod tests {
         assert_eq!(
             *ctx.saturate_gate.state.lock().unwrap(),
             SaturateState::Pending
+        );
+    }
+
+    /// A saturation that finishes under a cancelled request may rest on
+    /// placeholders for cancelled algebra queries. Not even its `Ok` may be
+    /// shared: the gate stays retryable and the request sees a cancellation.
+    #[test]
+    fn saturation_finished_under_cancellation_is_not_published() {
+        use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+        let Some(path) = require_maude_path() else {
+            return;
+        };
+        let ctx = ProofContext::new(
+            tamarin_term::maude_proc::MaudeHandle::start(
+                &path,
+                tamarin_term::maude_sig::pair_maude_sig(),
+            )
+            .unwrap(),
+            Vec::new(),
+        );
+        let before = ctx.maude.fresh_counter_peek();
+        *ctx.saturate_gate.state.lock().unwrap() =
+            SaturateState::InProgress(std::thread::current().id());
+        {
+            let token = CancellationToken::default();
+            let _guard = CancellationGuard::new(Some(token.clone()));
+            let run = SaturationRun::new(&ctx, before);
+            token.request_cancel();
+            assert_eq!(run.finish(Ok(())), Err(crate::prove::ProveError::Cancelled));
+        }
+        assert_eq!(
+            *ctx.saturate_gate.state.lock().unwrap(),
+            SaturateState::Pending
+        );
+
+        *ctx.saturate_gate.state.lock().unwrap() =
+            SaturateState::InProgress(std::thread::current().id());
+        assert_eq!(SaturationRun::new(&ctx, before).finish(Ok(())), Ok(()));
+        assert_eq!(
+            *ctx.saturate_gate.state.lock().unwrap(),
+            SaturateState::Done(Ok(()))
         );
     }
 }

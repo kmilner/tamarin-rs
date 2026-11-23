@@ -614,7 +614,8 @@ fn ndc_checks_preserve_backend_errors_and_fresh_counter() {
         &sig,
         &healthy,
         &[],
-    );
+    )
+    .unwrap();
     let failed = MaudeHandle::start(&mp, sig).unwrap();
     failed.kill_subprocess();
     let counter = failed.fresh_counter_peek();

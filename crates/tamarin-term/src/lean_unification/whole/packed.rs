@@ -10,15 +10,7 @@ use crate::term::Term;
 use std::borrow::Cow;
 use tamarin_utils::cancellation;
 
-unsafe extern "C" {
-    fn tamarin_lean_unpack_conjunction(
-        rows: *const WordSlice,
-        count: usize,
-        limit: u64,
-        lhs: u64,
-        rhs: u64,
-    ) -> *mut std::ffi::c_void;
-}
+use tamarin_algebra_sys::tamarin_lean_unpack_conjunction;
 
 pub(crate) enum Conjunction<'a> {
     Rows(Cow<'a, [Equal<LNTerm>]>),

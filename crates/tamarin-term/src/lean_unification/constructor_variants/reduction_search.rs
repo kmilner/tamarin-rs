@@ -16,9 +16,7 @@ use crate::vterm::Lit;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeSet;
 
-unsafe extern "C" {
-    fn tamarin_lean_reduction_graph(rows: *const WordSlice, count: usize) -> u8;
-}
+use tamarin_algebra_sys::tamarin_lean_reduction_graph;
 
 fn certified_graph(rows: &[Vec<u64>]) -> Result<bool, Error> {
     initialize()?;

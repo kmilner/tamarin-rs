@@ -618,9 +618,7 @@ impl EquationStore {
         // witnesses are α-scoped per subst, so a system-wide floor is
         // neither passed nor needed.  (The single-unifier arm below still
         // re-bases its own witnesses via `freshen_witness_range`.)
-        let unifiers = maude
-            .unify(&ac_residuals)
-            .map_err(|e| AddEqsError::Maude(format!("{}", e)))?;
+        let unifiers = maude.unify(&ac_residuals).map_err(AddEqsError::from)?;
 
         if unifiers.is_empty() {
             // No unifiers → contradiction.
@@ -761,17 +759,29 @@ impl EquationStore {
 
 #[derive(Debug, Clone)]
 pub enum AddEqsError {
+    /// The request was cancelled. Not a backend failure.
+    Cancelled,
     Maude(String),
 }
 
 impl std::fmt::Display for AddEqsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            AddEqsError::Cancelled => f.write_str("request cancelled"),
             AddEqsError::Maude(s) => write!(f, "Maude error: {}", s),
         }
     }
 }
 impl std::error::Error for AddEqsError {}
+
+impl From<tamarin_term::maude_proc::MaudeError> for AddEqsError {
+    fn from(error: tamarin_term::maude_proc::MaudeError) -> Self {
+        match error {
+            tamarin_term::maude_proc::MaudeError::Cancelled => Self::Cancelled,
+            other => Self::Maude(other.to_string()),
+        }
+    }
+}
 
 fn subst_domain_range_overlap(asubst: &LNSubst) -> bool {
     let mut dom_range_overlap = false;
@@ -2011,10 +2021,7 @@ impl EquationStore {
                 // system-var lift (`reserve_idxs`), which mints
                 // differently-named witnesses that cannot collide by
                 // (name,sort,idx) with the "x"-named reply witnesses.
-                let unifiers = match aes_maude.unify(&eqs) {
-                    Ok(u) => u,
-                    Err(e) => return Err(AddEqsError::Maude(format!("{}", e))),
-                };
+                let unifiers = aes_maude.unify(&eqs)?;
                 if dbg_in.is_some() {
                     eprintln!("  {} unifiers from Maude", unifiers.len());
                 }
@@ -2042,6 +2049,22 @@ impl EquationStore {
                 // rule's premise (Client_auth Ltk vs In ltkS desync).
                 let orig_dom: tamarin_utils::FastSet<LVar> =
                     bindings.iter().map(|&(k, _)| *k).collect();
+                // A system variable can reach a unifier's range only through
+                // an equation's left side: every right side was shifted above
+                // the avoid set, and anything else in the range is a witness.
+                // The lift below is restricted to these variables so that a
+                // witness sharing a name with a system variable outside this
+                // query is never mistaken for it.
+                let lhs_vars: tamarin_utils::FastSet<LVar> = {
+                    use tamarin_term::lterm::HasFrees;
+                    let mut vars = tamarin_utils::FastSet::default();
+                    for e in &eqs {
+                        e.lhs.for_each_free(&mut |v: &LVar| {
+                            vars.insert(*v);
+                        });
+                    }
+                    vars
+                };
                 for raw in unifiers {
                     // EXTRACT-SYSTEM-VARS-TO-DOMAIN: the AC-free local
                     // unifier path (maude_proc.rs, the AC-free fast path
@@ -2103,8 +2126,8 @@ impl EquationStore {
                     let mut seen: tamarin_utils::FastSet<LVar> = Default::default();
                     for (_, t) in &raw {
                         t.for_each_free(&mut |v: &LVar| {
-                            let is_system =
-                                new_subst_range_vars.contains(v) || orig_dom.contains(v);
+                            let is_system = lhs_vars.contains(v)
+                                && (new_subst_range_vars.contains(v) || orig_dom.contains(v));
                             if is_system && !current_dom.contains(v) && seen.insert(*v) {
                                 to_lift.push(*v);
                             }
@@ -2477,7 +2500,12 @@ fn equal_subst_up_to_renaming(
         .collect();
     maude
         .has_match_eqs(&eqs)
-        .map_err(|e| AddEqsError::Maude(format!("remove_permutations: {}", e)))
+        .map_err(|e| match AddEqsError::from(e) {
+            AddEqsError::Maude(message) => {
+                AddEqsError::Maude(format!("remove_permutations: {message}"))
+            }
+            cancelled => cancelled,
+        })
 }
 
 #[cfg(test)]

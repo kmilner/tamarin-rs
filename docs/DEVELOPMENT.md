@@ -134,7 +134,7 @@ The optional `lean-unification` feature links the native solver through the
 `tamarin-algebra-sys` Git dependency. Cargo fetches the revision pinned in
 `crates/tamarin-term/Cargo.toml`. On x86_64 GNU/Linux, install elan/Lake and GNU
 binutils and run `cargo build --locked --release --features lean-unification`.
-Select `--algebra-backend=maude|hybrid|native-only` at runtime. Run the
+Select `--algebra-backend=maude|native-only` at runtime. Run the
 no-process API checks with `cargo test -p tamarin-term --features lean-unification
 --test native_backend`. [Solver and proof gate](https://github.com/kmilner/tamarin-algebra)
 

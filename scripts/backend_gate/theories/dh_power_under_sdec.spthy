@@ -1,0 +1,11 @@
+/*
+ * Backend gate regression: an exponentiation of two received terms as the
+ * key of a decryption, in a rule action. The native-only backend must list
+ * the variants of sdec(x, y^z) and finish.
+ */
+theory DhPowerUnderSdec
+begin
+builtins: diffie-hellman, symmetric-encryption
+rule R: [ In(x), In(y), In(z) ] --[ A(sdec(x, y^z)) ]-> [ Out(sdec(x, y^z)) ]
+lemma l: exists-trace "Ex m #i. A(m)@i"
+end

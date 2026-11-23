@@ -19,6 +19,20 @@ fn var(name: &str) -> LNTerm {
     Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)))
 }
 
+/// A native-only session whose theory author asserts convergence. Reduction
+/// no longer consults the specialised Rust reducer: a table the certifier
+/// does not accept is normalized by the all-paths export under that premise,
+/// and a raw session reports the table instead.
+fn theory_session(sig: &MaudeSig) -> MaudeHandle {
+    MaudeHandle::start_for_tamarin_theory(
+        "/nonexistent",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap()
+}
+
 fn signature(rules: impl IntoIterator<Item = (LNTerm, LNTerm)>) -> MaudeSig {
     let mut sig = mset_maude_sig()
         .merge(hash_maude_sig())
@@ -37,9 +51,6 @@ fn signature(rules: impl IntoIterator<Item = (LNTerm, LNTerm)>) -> MaudeSig {
 
 #[test]
 fn native_oracle_proper_subproducts_and_converging_branches() {
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let u = var("u");
     let k = var("k");
     let sig = signature([
@@ -116,9 +127,6 @@ fn rejects_divergent_or_incomplete_subproduct_search() {
 
 #[test]
 fn native_oracle_idempotence_on_all_small_bags() {
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let x = var("x");
     let sig = signature([(bag([x.clone(), x.clone()]), x.clone())]);
     let native =
@@ -161,9 +169,6 @@ fn native_oracle_idempotence_on_all_small_bags() {
 
 #[test]
 fn native_oracle_matching_with_extension_preserves_the_whole_remainder() {
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let u = var("rest");
     let k = var("k");
     let caller = Term::Lit(Lit::Var(LVar::new("rest", LSort::Msg, 1)));
@@ -171,9 +176,7 @@ fn native_oracle_matching_with_extension_preserves_the_whole_remainder() {
         bag([pair(u.clone(), k.clone()), hash(k.clone())]),
         u.clone(),
     )]);
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = theory_session(&sig);
     let oracle = tamarin_test_support::require_maude_path().map(|path| {
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap()
     });
@@ -209,9 +212,6 @@ fn wide_nat_subproduct_checks_the_sort_of_the_replacement() {
     use crate::maude_sig::nat_maude_sig;
     use crate::term::f_app_no_eq;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let one = f_app_no_eq(nat_one_sym(), vec![]);
     let sum = |ts| f_app_ac(AcSym::NatPlus, ts);
     let lhs = sum(vec![one.clone(), one.clone()]);
@@ -221,9 +221,7 @@ fn wide_nat_subproduct_checks_the_sort_of_the_replacement() {
             .refresh()
     };
     let valid = table(one.clone());
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", valid.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = theory_session(&valid);
     let mut operands: Vec<_> = (0..10)
         .map(|i| Term::Lit(Lit::Var(LVar::new("rest", LSort::Nat, i))))
         .collect();
@@ -283,9 +281,6 @@ fn interleaves_rewrites_below_inert_constructors_with_root_steps() {
 fn native_oracle_free_commutative_and_ac_rewrites_reach_one_endpoint() {
     use crate::builtin::{emap, exp, mult, one_const, pmult};
     use crate::maude_sig::bp_maude_sig;
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let u = var("u");
     let k = var("k");
     // Both free-root rules are applicable. The first needs a C-root rewrite
@@ -299,9 +294,7 @@ fn native_oracle_free_commutative_and_ac_rewrites_reach_one_endpoint() {
     .merge(bp_maude_sig());
     let a = pub_term("a");
     let b = pub_term("b");
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = theory_session(&sig);
     let oracle = tamarin_test_support::require_maude_path()
         .map(|path| MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap());
     for (input, normal) in [

@@ -18,7 +18,7 @@ fn native_matching_and_reduction_check_declarations_before_returning_an_identity
             AlgebraBackend::NativeOnly,
         )
         .unwrap();
-        h.reference_algebra = reference;
+        h.set_reference(reference);
         h
     };
     let a = crate::lterm::pub_term("a");
@@ -36,6 +36,8 @@ fn native_matching_and_reduction_check_declarations_before_returning_an_identity
                 native(reference).match_eqs(&query).map(|_| ()),
                 native(reference).first_match_eqs(&query).map(|_| ()),
                 native(reference).has_match_eqs(&query).map(|_| ()),
+                native(reference).unify(&query).map(|_| ()),
+                native(reference).unifiable(&query).map(|_| ()),
                 native(reference)
                     .match_eqs_skolemize_both(&query, &Default::default())
                     .map(|_| ()),
@@ -1021,4 +1023,325 @@ fn panicking_exchange_cannot_leave_a_reply_for_the_next_request() {
     );
     let new_pid = handle.child.lock().unwrap().child.as_ref().unwrap().id();
     assert_ne!(old_pid, new_pid, "the interrupted process was replaced");
+}
+
+/// Callers without an error channel absorb a backend error and continue
+/// with a placeholder. The session latch must then fail every handle, while
+/// a cancellation (or an error seen by an already cancelled request) is not
+/// a backend failure.
+#[test]
+fn absorbed_backend_errors_latch_and_cancellation_does_not() {
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let handle =
+        MaudeHandle::start_with_backend(&path, pair_maude_sig(), AlgebraBackend::Maude).unwrap();
+    let clone = handle.clone();
+    handle.check_backend_status().unwrap();
+
+    assert_eq!(handle.absorb(Ok(1), || 2), 1);
+    assert_eq!(handle.absorb(Err(MaudeError::Cancelled), || 2), 2);
+    {
+        let token = CancellationToken::default();
+        token.request_cancel();
+        let _guard = CancellationGuard::new(Some(token));
+        handle.record_failure(&MaudeError::Other("collateral".into()));
+    }
+    clone.check_backend_status().unwrap();
+
+    assert_eq!(
+        handle.absorb(Err(MaudeError::Other("boom".into())), || 2),
+        2
+    );
+    let latched = clone.check_backend_status().unwrap_err().to_string();
+    assert!(latched.contains("boom"), "{latched}");
+    // The first failure is the one reported.
+    handle.record_failure(&MaudeError::Other("later".into()));
+    let latched = handle.check_backend_status().unwrap_err().to_string();
+    assert!(latched.contains("boom"), "{latched}");
+}
+
+/// The normal-form predicate has no error channel: with the backend gone its
+/// AC match cannot be answered, and the placeholder must not go unnoticed.
+#[test]
+fn a_failed_normal_form_match_latches_the_session() {
+    use crate::function_symbols::{AcSym, FunSym};
+    use crate::term::Term;
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = crate::maude_sig::xor_maude_sig();
+    let handle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let var = |name: &'static str| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
+    let xor = |args: Vec<LNTerm>| Term::App(FunSym::Ac(AcSym::Xor), args.into());
+    let lhs = xor(vec![var("x"), var("y")]);
+    let subject = xor(vec![var("a"), var("b")]);
+    handle.kill_subprocess();
+    let answer = handle.absorb(
+        handle.has_match_eqs(&[Equal {
+            lhs: subject,
+            rhs: lhs,
+        }]),
+        || false,
+    );
+    assert!(!answer);
+    assert!(handle.check_backend_status().is_err());
+}
+
+/// Native-only uses a family of a Rust variant solver only after the Lean
+/// certificate checker accepted it.
+#[cfg(feature = "lean-unification")]
+mod variant_check {
+    use super::*;
+    use crate::algebra_provenance::{Command, Origin};
+    use crate::builtin::{fst, pair};
+    use crate::lean_unification::Substitutions;
+    use crate::term::{f_app_list, Term};
+
+    fn var(name: &'static str, idx: u64) -> LNTerm {
+        Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, idx)))
+    }
+
+    fn native(sig: MaudeSig) -> MaudeHandle {
+        MaudeHandle::start_with_backend("/nonexistent/maude", sig, AlgebraBackend::NativeOnly)
+            .unwrap()
+    }
+
+    fn tampered(sig: MaudeSig, tamper: fn(&mut Substitutions)) -> MaudeHandle {
+        let mut h = native(sig);
+        h.set_variant_check(0, Some(tamper));
+        h
+    }
+
+    fn refusal(result: Result<Substitutions, MaudeError>) -> String {
+        match result {
+            Err(MaudeError::NativeFailure(reason)) => reason,
+            other => panic!("expected a refused family, got {other:?}"),
+        }
+    }
+
+    /// fst(x) and x: the identity and x := pair(y, z).
+    fn projection() -> LNTerm {
+        f_app_list(vec![fst(var("x", 0)), var("x", 0)])
+    }
+
+    #[test]
+    fn an_accepted_family_counts_as_proved_and_is_checked_once() {
+        let query = projection();
+        let h = native(pair_maude_sig());
+        let proposed = h.variants(&query).unwrap();
+        assert_eq!(proposed.len(), 2, "{proposed:?}");
+        let seen = h.provenance();
+        assert_eq!(seen.fresh(Command::Variants, Origin::Proved), 1);
+        assert_eq!(seen.total(Command::Variants), 1);
+        // The verdict on the same query and family comes from the memo, also
+        // through another handle of the session.
+        assert_eq!(h.variants(&query).unwrap(), proposed);
+        assert_eq!(
+            h.with_fresh_counter_from(40).variants(&query).unwrap(),
+            proposed
+        );
+        let seen = h.provenance();
+        assert_eq!(seen.fresh(Command::Variants, Origin::Proved), 1);
+        assert_eq!(seen.cached(Command::Variants, Origin::Proved), 2);
+        assert_eq!(seen.total(Command::Variants), 3);
+        assert_eq!(h.caches.variant_checks.lock().unwrap().len(), 1);
+        h.check_backend_status().unwrap();
+    }
+
+    #[test]
+    fn a_range_variable_spelled_like_a_query_variable_is_still_fresh() {
+        // y := pair(x, z) for the query (fst(y), x): the x of the image is a
+        // fresh variable, not the x of the query, which keeps itself.
+        fn respell(family: &mut Substitutions) {
+            use crate::lterm::HasFrees;
+            let x = LVar::new("x", LSort::Msg, 0);
+            for member in family.iter_mut() {
+                member.retain(|(key, _)| *key != x);
+                for (_, image) in member.iter_mut() {
+                    if let Term::App(_, children) = &*image
+                        && let Term::Lit(Lit::Var(first)) = children[0]
+                    {
+                        *image = image
+                            .clone()
+                            .map_free(&mut |v| if v == first { x } else { v });
+                    }
+                }
+            }
+        }
+        let query = f_app_list(vec![fst(var("y", 1)), var("x", 0)]);
+        let h = tampered(pair_maude_sig(), respell);
+        let family = h.variants(&query).unwrap();
+        let x = LVar::new("x", LSort::Msg, 0);
+        assert!(
+            family.iter().flatten().any(|(key, image)| {
+                *key != x
+                    && !matches!(image, Term::Lit(_))
+                    && crate::lterm::frees(image).contains(&x)
+            }),
+            "{family:?}"
+        );
+        assert_eq!(
+            h.provenance().fresh(Command::Variants, Origin::Proved),
+            1,
+            "{family:?}"
+        );
+    }
+
+    #[test]
+    fn a_corrupted_family_is_rejected_with_its_reason_and_fails_the_session() {
+        let query = projection();
+        // Without the instance x := pair(y, z) a narrowing successor of the
+        // identity is uncovered; without the identity nothing covers the query.
+        fn keep_identity(family: &mut Substitutions) {
+            family.retain(|member| {
+                member
+                    .iter()
+                    .all(|(_, image)| matches!(image, Term::Lit(_)))
+            });
+            assert_eq!(family.len(), 1);
+        }
+        fn drop_identity(family: &mut Substitutions) {
+            family.retain(|member| {
+                member
+                    .iter()
+                    .any(|(_, image)| !matches!(image, Term::Lit(_)))
+            });
+            assert_eq!(family.len(), 1);
+        }
+        // A reducible image is not a variant at all.
+        fn reducible(family: &mut Substitutions) {
+            let last = family.len() - 1;
+            let x = LVar::new("x", LSort::Msg, 0);
+            let w = |i| Term::Lit(Lit::Var(LVar::new("w", LSort::Msg, i)));
+            family[last] = vec![(x, fst(pair(w(7), w(8))))];
+        }
+        for (tamper, expected) in [
+            (
+                keep_identity as fn(&mut Substitutions),
+                "member 0 is not covered (reason 3)",
+            ),
+            (drop_identity, "no member subsumes the query (reason 2"),
+            (reducible, "member 1 is not normal (reason 1)"),
+        ] {
+            let h = tampered(pair_maude_sig(), tamper);
+            let reason = refusal(h.variants(&query));
+            assert!(reason.contains("rejected"), "{reason}");
+            assert!(reason.contains(expected), "{reason}");
+            // The rejected family is not counted as an answer and not stored,
+            // and the session cannot publish a result any more.
+            assert_eq!(h.provenance().total(Command::Variants), 0);
+            assert!(h.caches.variant_checks.lock().unwrap().is_empty());
+            assert!(h.check_backend_status().is_err());
+            assert!(h.variants(&query).is_err());
+        }
+    }
+
+    /// `f(g(x)) -> x` with `g(a) -> b` is not confluent, so the certifier
+    /// does not accept the table. The checker still accepts the family of
+    /// the projection, and that it is complete rests on the theory premise.
+    #[test]
+    fn an_accepted_family_on_an_uncertified_table_counts_as_assumed() {
+        use crate::function_symbols::{Constructability, NoEqSym, Privacy};
+        use crate::rewriting::RRule;
+        use crate::subterm_rule::rrule_to_ctxt_st_rule;
+        use crate::term::f_app_no_eq;
+        let sym = |name: &[u8], arity| {
+            NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor)
+        };
+        let (f, g, a, b) = (sym(b"f", 1), sym(b"g", 1), sym(b"a", 0), sym(b"b", 0));
+        let x = var("x", 0);
+        let mut sig = pair_maude_sig();
+        sig.st_fun_syms.extend([f, g, a, b]);
+        for rule in [
+            RRule::new(f_app_no_eq(f, vec![f_app_no_eq(g, vec![x.clone()])]), x),
+            RRule::new(
+                f_app_no_eq(g, vec![f_app_no_eq(a, vec![])]),
+                f_app_no_eq(b, vec![]),
+            ),
+        ] {
+            sig.st_rules.insert(rrule_to_ctxt_st_rule(&rule).unwrap());
+        }
+        let sig = sig.refresh();
+        let query = projection();
+        let h = MaudeHandle::start_for_tamarin_theory(
+            "/nonexistent/maude",
+            sig.clone(),
+            AlgebraBackend::NativeOnly,
+            Arc::new(SharedMaudeCaches::default()),
+        )
+        .unwrap();
+        let proposed = h.variants(&query).unwrap();
+        assert_eq!(proposed.len(), 2, "{proposed:?}");
+        assert_eq!(h.variants(&query).unwrap(), proposed);
+        let seen = h.provenance();
+        assert_eq!(seen.fresh(Command::Variants, Origin::Assumed), 1);
+        assert_eq!(seen.cached(Command::Variants, Origin::Assumed), 1);
+        assert_eq!(seen.fresh(Command::Variants, Origin::Proved), 0);
+        assert_eq!(seen.total(Command::Variants), 2);
+        assert!(!h
+            .caches
+            .reduction_table
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .certified());
+        h.check_backend_status().unwrap();
+    }
+
+    /// fst(fst(x)): the identity, x := pair(y, z) and x := pair(pair(y, z), w).
+    fn nested_projection() -> LNTerm {
+        fst(fst(var("x", 0)))
+    }
+
+    /// The charge of a family, as the checker's work bound counts it.
+    fn charge(h: &MaudeHandle, query: &LNTerm, family: &Substitutions) -> u64 {
+        let inner = h.inner.lock();
+        let table = h.reduction_table(&inner).unwrap().unwrap();
+        table
+            .variant_check_charge(&inner.sig, query, family)
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn an_undecided_check_fails_the_session_instead_of_using_the_rust_family() {
+        // The work bound counts the positions that are not variables in the
+        // normalized observations of each member, in the order of the
+        // family: here fst(fst(x)) for the identity, fst(y) for the next
+        // member and none for the last, so three in all.
+        let query = nested_projection();
+        let unbounded = {
+            let mut h = native(pair_maude_sig());
+            h.set_variant_check(0, None);
+            h
+        };
+        let family = unbounded.variants(&query).unwrap();
+        assert_eq!(family.len(), 3, "{family:?}");
+        assert_eq!(charge(&unbounded, &query, &family), 3);
+        // A bound that the family does not fit in stops the check out of
+        // budget, on the first member or after it.
+        for work in [1, 2] {
+            let mut h = native(pair_maude_sig());
+            h.set_variant_check(work, None);
+            let reason = refusal(h.variants(&query));
+            assert!(reason.contains("variants not certified"), "{reason}");
+            assert!(reason.contains("out of budget"), "{reason}");
+            assert!(reason.contains(&format!("work bound {work} ")), "{reason}");
+            assert_eq!(h.provenance().total(Command::Variants), 0);
+            assert!(h.caches.variant_checks.lock().unwrap().is_empty());
+            assert!(h.check_backend_status().is_err());
+            assert!(h.variants(&query).is_err());
+        }
+        // The bound that the family just fits in changes nothing.
+        let mut h = native(pair_maude_sig());
+        h.set_variant_check(3, None);
+        assert_eq!(h.variants(&query).unwrap(), family);
+        assert_eq!(h.provenance().fresh(Command::Variants, Origin::Proved), 1);
+        h.check_backend_status().unwrap();
+    }
 }

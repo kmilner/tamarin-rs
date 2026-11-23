@@ -24,6 +24,47 @@ fn variable(name: &str) -> LNTerm {
     Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)))
 }
 
+/// Whether `arm` unifies every equation: both sides become the same term.
+fn solves(eqs: &[Equal<LNTerm>], arm: &[(LVar, LNTerm)]) -> bool {
+    use tamarin_term::subst::{apply_vterm, Subst};
+    let subst = Subst::from_list(arm.iter().cloned());
+    eqs.iter()
+        .all(|eq| apply_vterm(&subst, eq.lhs.clone()) == apply_vterm(&subst, eq.rhs.clone()))
+}
+
+/// The family without the bindings that only rename one variable, in a
+/// fixed order. The proved export binds every query variable, so an
+/// unconstrained one appears with a fresh name of its own.
+fn plain(mut answers: Vec<Vec<(LVar, LNTerm)>>) -> Vec<Vec<(LVar, LNTerm)>> {
+    use tamarin_term::vterm::vars_vterm;
+    for arm in &mut answers {
+        let alone = |v: &LVar| {
+            arm.iter()
+                .filter(|(_, image)| vars_vterm(image).contains(v))
+                .count()
+                == 1
+        };
+        let renamed: Vec<bool> = arm
+            .iter()
+            .map(|(_, image)| matches!(image, Term::Lit(Lit::Var(v)) if alone(v)))
+            .collect();
+        let mut renamed = renamed.into_iter();
+        arm.retain(|_| !renamed.next().unwrap());
+        arm.sort();
+    }
+    answers.sort();
+    answers
+}
+
+/// Whether `arm` only renames variables: distinct keys get distinct
+/// variables of their own sort.
+fn renames(arm: &[(LVar, LNTerm)]) -> bool {
+    let mut images = std::collections::BTreeSet::new();
+    arm.iter().all(|(key, image)| {
+        matches!(image, Term::Lit(Lit::Var(v)) if v.sort == key.sort && images.insert(*v))
+    })
+}
+
 #[test]
 fn native_only_solves_supported_ac_without_any_binary() {
     let h = native();
@@ -35,7 +76,7 @@ fn native_only_solves_supported_ac_without_any_binary() {
     };
     let answers = h.unify(std::slice::from_ref(&eq)).unwrap();
     assert_eq!(answers, vec![vec![(x, sum(pub_term("b"), pub_term("b")))]]);
-    assert_eq!(h.unify(&[eq]).unwrap(), answers); // cached, still native
+    assert_eq!(h.unify(&[eq]).unwrap(), answers); // from the session memo
     let unequal = Equal {
         lhs: sum(pub_term("a"), pub_term("a")),
         rhs: sum(pub_term("a"), pub_term("b")),
@@ -46,7 +87,12 @@ fn native_only_solves_supported_ac_without_any_binary() {
     assert_eq!(stats.norm_count, 0);
     assert_eq!(stats.match_count, 0);
     assert_eq!(stats.var_count, 0);
-    assert_eq!(stats.lean_unify_count, 3);
+    assert_eq!(stats.lean_unify_count, 2);
+    use tamarin_term::algebra_provenance::{Command, Origin};
+    let tally = h.provenance();
+    assert_eq!(tally.fresh(Command::Unify, Origin::Proved), 2);
+    assert_eq!(tally.cached(Command::Unify, Origin::Proved), 1);
+    assert_eq!(tally.total(Command::Unify), 3);
     h.check_backend_status().unwrap();
     h.kill_subprocess(); // safe without a child
 }
@@ -124,11 +170,6 @@ fn missing_operations_return_explicit_errors() {
             rhs: variable("x")
         }]),
         Err(MaudeError::UnsupportedOperation("matching"))
-    ));
-    let h = native();
-    assert!(matches!(
-        h.unify_via_maude(&[]),
-        Err(MaudeError::UnsupportedOperation("Maude unification oracle"))
     ));
 }
 
@@ -346,6 +387,54 @@ fn pairing_adapter_rejects_queries_outside_the_proven_fragment() {
     assert!(h.check_backend_status().is_err());
 }
 
+/// A native runtime failure ends the session for every handle that shares
+/// its caches. A cancelled call does not.
+#[test]
+fn native_runtime_failures_latch_across_handles_and_cancellation_does_not() {
+    use tamarin_term::builtin::fst;
+    let caches = Arc::new(SharedMaudeCaches::default());
+    let start = || {
+        MaudeHandle::start_with_backend_and_caches(
+            MISSING,
+            pair_maude_sig(),
+            AlgebraBackend::NativeOnly,
+            caches.clone(),
+        )
+        .unwrap()
+    };
+    let h = start();
+    let peer = start();
+    let query = fst(variable("x"));
+    let expected = h.variants(&query).unwrap();
+    h.check_backend_status().unwrap();
+
+    // A cancelled native call is a clean cancellation, not a failure.
+    {
+        use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+        let token = CancellationToken::default();
+        token.request_cancel();
+        let _guard = CancellationGuard::new(Some(token));
+        assert!(matches!(h.variants(&query), Err(MaudeError::Cancelled)));
+    }
+    peer.check_backend_status().unwrap();
+    assert_eq!(peer.variants(&query).unwrap(), expected);
+
+    let too_large = fst(Term::Lit(Lit::Var(LVar::new(
+        "x",
+        LSort::Msg,
+        u64::MAX - 1,
+    ))));
+    assert!(matches!(
+        h.variants(&too_large),
+        Err(MaudeError::NativeFailure(_))
+    ));
+    let reason = peer.check_backend_status().unwrap_err().to_string();
+    assert!(reason.contains("native algebra backend failed"), "{reason}");
+    // Later queries on any handle of the session cannot proceed.
+    assert!(peer.variants(&query).is_err());
+    assert!(h.variants(&query).is_err());
+}
+
 #[test]
 fn pairing_multiset_variants_cover_constructor_queries_without_maude() {
     use tamarin_term::builtin::{fst, pair};
@@ -400,62 +489,55 @@ fn union_variant_gate_rejects_undeclared_or_malformed_operators() {
     );
 }
 
+/// A reflexive conjunction has the identity as its only unifier, whether or
+/// not an operand's sort lets it split into a product.
 #[test]
-fn hybrid_reflexive_recipe_admits_unsplittable_ac_operands() {
-    use tamarin_term::lean_unification::{unify, Outcome};
+fn reflexive_ac_conjunctions_have_only_the_identity_and_repeat_from_the_memo() {
+    use tamarin_term::algebra_provenance::{Command, Origin};
     let h = native();
     let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Fresh, 7)));
-    let terms = [sum(x.clone(), pub_term("a")), sum(x.clone(), pub_term("b"))];
-    let eqs: Vec<_> = terms
-        .iter()
-        .map(|t| Equal {
-            lhs: t.clone(),
-            rhs: t.clone(),
-        })
-        .collect();
-    assert_eq!(h.unify(&eqs).unwrap(), vec![vec![]]);
-    assert_eq!(h.unify(&eqs).unwrap(), vec![vec![]]); // cached identity remains scoped correctly
+    let reflexive = |terms: &[LNTerm]| -> Vec<_> {
+        terms
+            .iter()
+            .map(|t| Equal {
+                lhs: t.clone(),
+                rhs: t.clone(),
+            })
+            .collect()
+    };
+    let eqs = reflexive(&[sum(x.clone(), pub_term("a")), sum(x.clone(), pub_term("b"))]);
+    let answers = h.unify(&eqs).unwrap();
+    assert!(matches!(answers.as_slice(), [arm] if renames(arm)));
+    assert_eq!(h.unify(&eqs).unwrap(), answers);
     assert_eq!(h.stats().unify_count, 0);
-    assert_eq!(h.stats().lean_unify_count, 2);
-    let split = sum(variable("msg"), pub_term("a"));
-    assert_eq!(
-        unify(&[Equal {
-            lhs: split.clone(),
-            rhs: split
-        }])
-        .unwrap(),
-        Outcome::Unsupported
-    );
+    assert_eq!(h.stats().lean_unify_count, 1);
+    let tally = h.provenance();
+    assert_eq!(tally.fresh(Command::Unify, Origin::Proved), 1);
+    assert_eq!(tally.cached(Command::Unify, Origin::Proved), 1);
     for term in [
+        sum(variable("msg"), pub_term("a")),
         sum(x.clone(), x.clone()),
         sum(x.clone(), tamarin_term::lterm::fresh_term("a")),
-        f_app_ac(AcSym::Mult, vec![x.clone(), pub_term("a")]),
     ] {
-        assert_eq!(
-            unify(&[Equal {
-                lhs: term.clone(),
-                rhs: term
-            }])
-            .unwrap(),
-            Outcome::Complete(vec![vec![]])
-        );
+        let answers = h.unify(&reflexive(&[term])).unwrap();
+        assert!(matches!(answers.as_slice(), [arm] if renames(arm)));
     }
-    let same_index_different_name = Equal {
+    // The same index under another name is another variable.
+    let same_index_different_name = [Equal {
         lhs: sum(x.clone(), pub_term("a")),
         rhs: sum(
             Term::Lit(Lit::Var(LVar::new("y", LSort::Fresh, 7))),
             pub_term("a"),
         ),
-    };
-    assert_eq!(
-        unify(&[same_index_different_name]).unwrap(),
-        Outcome::Unsupported
-    );
+    }];
+    let answers = h.unify(&same_index_different_name).unwrap();
+    assert!(matches!(answers.as_slice(), [arm] if arm.len() == 2 && arm[0].1 == arm[1].1));
+    assert!(solves(&same_index_different_name, &answers[0]));
     let different = Equal {
         lhs: sum(x.clone(), pub_term("a")),
         rhs: sum(x, pub_term("b")),
     };
-    assert_eq!(unify(&[different]).unwrap(), Outcome::Unsupported);
+    assert!(h.unify(&[different]).unwrap().is_empty());
     h.check_backend_status().unwrap();
 }
 
@@ -465,7 +547,7 @@ fn declared_free_and_ac_extensions_use_the_generic_constructor_contract() {
     use tamarin_term::function_symbols::{
         AcFctSym, Constructability, FunSym, NdcState, NoEqSym, Privacy,
     };
-    use tamarin_term::lean_unification::{pairing_reduce, pairing_variants, Outcome};
+    use tamarin_term::lean_unification::{pairing_variants, Outcome};
     use tamarin_term::maude_sig::{hash_maude_sig, sym_enc_maude_sig};
     use tamarin_term::term::f_app_list;
     let wrap = NoEqSym::new(b"wrap", 1, Privacy::Private, Constructability::Constructor);
@@ -486,10 +568,10 @@ fn declared_free_and_ac_extensions_use_the_generic_constructor_contract() {
         pairing_variants(&sig, &query).unwrap(),
         Outcome::Complete(vec![vec![]])
     );
-    assert_eq!(
-        pairing_reduce(&sig, &fst(pair(term.clone(), child))).unwrap(),
-        Some(term.clone())
-    );
+    let h =
+        MaudeHandle::start_with_backend(MISSING, sig.clone().refresh(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    assert_eq!(h.reduce(&fst(pair(term.clone(), child))).unwrap(), term);
     for bad in [
         Term::App(FunSym::NoEq(wrap), vec![].into()),
         Term::App(
@@ -937,7 +1019,10 @@ fn exact_fit_matches_larger_than_the_submultiset_search_limit() {
     ];
     expected.sort();
     assert_eq!(h.match_eqs(std::slice::from_ref(&eq)).unwrap(), expected);
-    assert_eq!(h.unify(&[eq]).unwrap(), expected);
+    // The unifier's family is a set: its order is the export's to choose.
+    let mut unifiers = h.unify(&[eq]).unwrap();
+    unifiers.sort();
+    assert_eq!(unifiers, expected);
     for impossible in [
         Equal {
             lhs: subject,
@@ -1020,7 +1105,10 @@ fn cancellation_preserves_free_variables_and_joins_remaining_constraints() {
         vec![(vx, b.clone()), (vy, a.clone())],
     ];
     expected.sort();
-    assert_eq!(h.unify(std::slice::from_ref(&split)).unwrap(), expected);
+    assert_eq!(
+        plain(h.unify(std::slice::from_ref(&split)).unwrap()),
+        expected
+    );
     // x+x = x+a forces x=a even though one occurrence of x cancels.
     let force = Equal {
         lhs: sum(x.clone(), a.clone()),
@@ -1033,7 +1121,7 @@ fn cancellation_preserves_free_variables_and_joins_remaining_constraints() {
     };
     let eqs = [split, force, bind_z];
     assert_eq!(
-        h.unify(&eqs).unwrap(),
+        plain(h.unify(&eqs).unwrap()),
         vec![vec![(vx, a), (vy, b.clone()), (vz, b)]]
     );
     assert_eq!(h.stats().unify_count, 0);
@@ -1046,11 +1134,13 @@ fn cancelled_empty_inventories_have_no_implicit_unit() {
     let x = variable("x");
     let shared = sum(x.clone(), x);
     assert_eq!(
-        h.unify(&[Equal {
-            lhs: shared.clone(),
-            rhs: shared.clone()
-        }])
-        .unwrap(),
+        plain(
+            h.unify(&[Equal {
+                lhs: shared.clone(),
+                rhs: shared.clone()
+            }])
+            .unwrap()
+        ),
         vec![vec![]]
     );
     for extra in [variable("y"), pub_term("a")] {
@@ -1217,7 +1307,7 @@ fn offset_witness_is_shared_after_factoring_and_scoped_to_the_answer() {
 }
 
 #[test]
-fn offset_fresh_indices_are_checked_at_the_word_limit() {
+fn offset_witnesses_use_the_last_index_or_an_unused_lower_one() {
     let query = |idx| Equal {
         lhs: sum(
             Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, idx))),
@@ -1226,14 +1316,24 @@ fn offset_fresh_indices_are_checked_at_the_word_limit() {
         rhs: sum(variable("y"), pub_term("b")),
     };
     let h = native();
+    // One index is left above the query, and the witness takes it.
     let arms = h.unify(&[query(u64::MAX - 1)]).unwrap();
     assert!(arms
         .iter()
         .flatten()
         .flat_map(|(_, t)| tamarin_term::vterm::vars_vterm(t))
         .any(|v| v.idx == u64::MAX));
-    assert!(h.unify(&[query(u64::MAX)]).is_err());
-    assert!(h.check_backend_status().is_err());
+    // No index is left above the query. The witness keeps an unused lower
+    // one, which no query variable has.
+    let top = [query(u64::MAX)];
+    let arms = h.unify(&top).unwrap();
+    assert!(!arms.is_empty() && arms.iter().all(|arm| solves(&top, arm)));
+    assert!(arms
+        .iter()
+        .flatten()
+        .flat_map(|(_, t)| tamarin_term::vterm::vars_vterm(t))
+        .all(|v| v.idx != u64::MAX && v.idx != 0));
+    h.check_backend_status().unwrap();
 }
 
 #[test]
@@ -1417,7 +1517,7 @@ fn common_compound_children_keep_contextual_witnesses_and_check_declarations() {
     assert_eq!(h.unify(&eqs).unwrap(), answers);
     assert_eq!(h.fresh_counter_peek(), before);
     assert_eq!(h.stats().unify_count, 0);
-    assert_eq!(h.stats().lean_unify_count, 2);
+    assert_eq!(h.stats().lean_unify_count, 1); // the repeat came from the memo
     let bad = hash(var(LVar::new("i", LSort::Node, 0)));
     let rows = h
         .unify(&[Equal {
@@ -1686,9 +1786,15 @@ fn narrow_allocation_and_space_for_both_rigid_allocation_witnesses() {
     };
     assert_eq!(native().unify(&[eq(LSort::Pub, 0)]).unwrap().len(), 3);
     let h = native();
-    assert_eq!(h.unify(&[eq(LSort::Msg, u64::MAX - 2)]).unwrap().len(), 4);
-    assert!(h.unify(&[eq(LSort::Msg, u64::MAX - 1)]).is_err());
-    assert!(h.check_backend_status().is_err());
+    // Near the top of the index space the witnesses keep unused lower
+    // indices, so the family is the same at every position.
+    for idx in [u64::MAX - 2, u64::MAX - 1, u64::MAX] {
+        let query = [eq(LSort::Msg, idx)];
+        let answers = h.unify(&query).unwrap();
+        assert_eq!(answers.len(), 4);
+        assert!(answers.iter().all(|arm| solves(&query, arm)));
+    }
+    h.check_backend_status().unwrap();
 }
 
 #[test]
@@ -1784,7 +1890,7 @@ fn commutative_branch_witnesses_preserve_full_query_aliases_without_a_process() 
     assert_eq!(straight, [false, true]);
     assert_eq!(h.unify(&eqs).unwrap(), answers);
     assert_eq!(h.fresh_counter_peek(), 1000);
-    assert_eq!(h.stats().lean_unify_count, 2);
+    assert_eq!(h.stats().lean_unify_count, 1); // the repeat came from the memo
     assert_eq!(h.stats().unify_count, 0);
 }
 
@@ -1827,9 +1933,15 @@ fn commutative_search_keeps_live_siblings_and_checks_sorted_ranges() {
         ),
         emap(variable("r"), variable("s")),
     );
+    // A variable at the top of the index space leaves no room above the
+    // query. The witnesses then keep unused lower indices.
     let h = h();
-    assert!(h.unify(&[overflow]).is_err());
-    assert!(h.check_backend_status().is_err());
+    let answers = h.unify(std::slice::from_ref(&overflow)).unwrap();
+    assert_eq!(answers.len(), 2);
+    assert!(answers
+        .iter()
+        .all(|arm| solves(std::slice::from_ref(&overflow), arm)));
+    h.check_backend_status().unwrap();
 }
 
 #[test]
@@ -1994,7 +2106,7 @@ fn natural_kind_queries_preserve_variable_sorts_before_factoring() {
     let packed = f_app_list(vec![fresh.clone(), bad.clone(), bad.clone()]);
     assert_eq!(h.variants(&packed).unwrap(), vec![vec![]]);
     assert_eq!(
-        h.unify(&[eq(bad.clone(), bad.clone())]).unwrap(),
+        plain(h.unify(&[eq(bad.clone(), bad.clone())]).unwrap()),
         vec![vec![]]
     );
     for factor in [
@@ -2172,9 +2284,16 @@ fn fresh_xor_variants_share_a_fresh_witness_and_require_the_exact_live_rules() {
             },
         )
     };
-    for change in [
-        extra(xor(variable("a"), variable("b")), pub_term("new")),
-        extra(zero_const(), pub_term("new")),
+    // Neither changed table is certified. With `a XOR b -> new`, `x XOR x`
+    // reaches both `zero` and `new`, so the all-paths check cannot settle it.
+    // With `zero -> new`, every path of `x XOR x` ends in `new`, which that
+    // check proves for any table.
+    for (change, settled) in [
+        (
+            extra(xor(variable("a"), variable("b")), pub_term("new")),
+            None,
+        ),
+        (extra(zero_const(), pub_term("new")), Some(pub_term("new"))),
     ] {
         let mut changed = sig.clone();
         changed.st_rules.insert(change);
@@ -2182,10 +2301,19 @@ fn fresh_xor_variants_share_a_fresh_witness_and_require_the_exact_live_rules() {
             new(changed.clone()).variants(&term),
             Err(MaudeError::UnsupportedOperation("variant generation"))
         ));
-        assert!(matches!(
-            new(changed).reduce(&xor(var(x), var(x))),
-            Err(MaudeError::UnsupportedOperation("normalization"))
-        ));
+        let reduced = new(changed).reduce(&xor(var(x), var(x)));
+        match settled {
+            Some(normal) => assert_eq!(reduced.unwrap(), normal),
+            None => assert!(
+                matches!(
+                    reduced,
+                    Err(MaudeError::UnsupportedOperation(
+                        tamarin_term::maude_proc::UNCERTIFIED_TABLE
+                    ))
+                ),
+                "{reduced:?}"
+            ),
+        }
     }
     for q in [
         f_app_list(vec![variable("ambient"), term.clone()]),
@@ -2453,8 +2581,11 @@ fn whole_unification_on_original_equations_can_complete_or_defer_without_maude()
         lhs: hash(x.clone()),
         rhs: hash(x.clone()),
     };
-    assert_eq!(h.unify(std::slice::from_ref(&free)).unwrap(), vec![vec![]]);
-    // Previously the local free factorer completed this before any Lean call.
+    assert_eq!(
+        plain(h.unify(std::slice::from_ref(&free)).unwrap()),
+        vec![vec![]]
+    );
+    // No local free factorer answers before the proved export.
     assert_eq!(h.stats().lean_unify_count, 1);
     let ac = |terms: Vec<LNTerm>| Term::App(FunSym::Ac(AcSym::Union), terms.into());
     let mixed = Equal {
@@ -2465,7 +2596,7 @@ fn whole_unification_on_original_equations_can_complete_or_defer_without_maude()
         rhs: pair(ac(vec![y.clone(), x.clone(), pub_term("a")]), x.clone()),
     };
     assert_eq!(
-        h.unify(&[free.clone(), mixed.clone()]).unwrap(),
+        plain(h.unify(&[free.clone(), mixed.clone()]).unwrap()),
         vec![vec![]]
     );
     // The same prefix remains compatible with non-identity solutions.
@@ -3234,11 +3365,15 @@ fn independent_ac_components_preserve_all_witnesses_and_branches() {
                 _ => panic!("one optional common tail"),
             });
         }
-        let Term::Lit(Lit::Var(w)) = row[&id] else {
-            panic!("expected free Fresh input image")
-        };
-        assert_eq!(w.sort, id.sort);
-        assert!(distinct.insert(w));
+        // An unconstrained input is left out, as the Maude backend leaves
+        // it out, or bound to a witness of its own.
+        if let Some(image) = row.get(&id) {
+            let Term::Lit(Lit::Var(w)) = image else {
+                panic!("expected free Fresh input image")
+            };
+            assert_eq!(w.sort, id.sort);
+            assert!(distinct.insert(*w));
+        }
         assert!(distinct.iter().all(|v| v.idx != 0));
         assert!(patterns.insert(choices));
     }
@@ -3491,6 +3626,9 @@ mod checked_reduction;
 #[path = "native_backend/checked_variants.rs"]
 mod checked_variants;
 
+#[path = "native_backend/folded_variants.rs"]
+mod folded_variants;
+
 #[path = "native_backend/bilinear_certificate.rs"]
 mod bilinear_certificate;
 
@@ -3502,6 +3640,9 @@ mod variant_overlap;
 
 #[path = "native_backend/forced_ac_inputs.rs"]
 mod forced_ac_inputs;
+
+#[path = "native_backend/interruption.rs"]
+mod interruption;
 
 #[test]
 fn total_mixed_unification_uses_original_slots_without_a_rule_table_or_process() {
@@ -3624,4 +3765,189 @@ fn total_match_preserves_rigid_subject_ids_and_scoped_pattern_variables() {
         vec![vec![(key("x"), hash(v("x")))]]
     );
     assert_eq!(h.stats().match_count, 0);
+}
+
+/// The unification behind the step at which `ake/dh/UM_one_pass_attack` stopped
+/// terminating. The variables `x.0` and `~x.1` are in the caller's equation
+/// store but not in this query, and the solver once named its witnesses after
+/// them because those were the lowest indices the query left unused.
+#[test]
+fn native_witnesses_are_numbered_above_every_query_variable() {
+    use tamarin_term::builtin::{exp, inv, mult};
+    use tamarin_term::lterm::HasFrees;
+    use tamarin_term::maude_sig::dh_maude_sig;
+    let h = MaudeHandle::start_with_backend(MISSING, dh_maude_sig(), AlgebraBackend::NativeOnly)
+        .unwrap();
+    let v = |v| Term::Lit(Lit::Var(v));
+    let side = |a: LVar, b: LVar, c: LVar| {
+        [
+            mult(v(a), inv(mult(v(b), v(c)))),
+            exp(pub_term("g"), mult(v(a), inv(v(c)))),
+            v(b),
+        ]
+    };
+    let left = [
+        LVar::new("x", LSort::Msg, 12),
+        LVar::new("x", LSort::Fresh, 11),
+        LVar::new("x", LSort::Msg, 13),
+    ];
+    let right = [
+        LVar::new("x", LSort::Msg, 224),
+        LVar::new("x", LSort::Fresh, 14),
+        LVar::new("x", LSort::Msg, 225),
+    ];
+    let equations: Vec<_> = side(left[0], left[1], left[2])
+        .into_iter()
+        .zip(side(right[0], right[1], right[2]))
+        .map(|(lhs, rhs)| Equal { lhs, rhs })
+        .collect();
+    let answers = h.unify(&equations).unwrap();
+    let [arm] = answers.as_slice() else {
+        panic!("expected the renaming unifier alone, got {answers:?}")
+    };
+    let image = |key: LVar| &arm.iter().find(|(k, _)| *k == key).unwrap().1;
+    let mut witnesses = Vec::new();
+    for (l, r) in left.into_iter().zip(right) {
+        assert_eq!(image(l), image(r), "{arm:?}");
+        let Term::Lit(Lit::Var(w)) = image(l) else {
+            panic!("{l:?} must be renamed, not instantiated: {arm:?}")
+        };
+        assert_eq!(w.sort, l.sort, "{arm:?}");
+        assert!(!witnesses.contains(w), "{arm:?}");
+        witnesses.push(*w);
+    }
+    for (_, t) in arm {
+        t.for_each_free(&mut |w| {
+            assert!(
+                left.contains(w) || right.contains(w) || w.idx > 225,
+                "witness {w:?} is not above the query: {arm:?}"
+            )
+        });
+    }
+    assert_eq!(h.stats().unify_count, 0);
+    h.check_backend_status().unwrap();
+}
+
+#[test]
+fn native_reduce_answers_through_the_certified_export_only() {
+    use tamarin_term::algebra_provenance::{Command, Origin};
+    use tamarin_term::builtin::{exp, fst, inv, mult, pair};
+    let sig = tamarin_term::maude_sig::dh_maude_sig().merge(pair_maude_sig());
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let (g, a, b) = (pub_term("g"), variable("a"), variable("b"));
+    // ((g^a)^b)^inv(a) = g^b, below a projection.
+    let tower = exp(exp(exp(g.clone(), a.clone()), b.clone()), inv(a.clone()));
+    let input = fst(pair(tower, mult(a, b.clone())));
+    let expected = exp(g, b);
+    assert_eq!(h.reduce(&input).unwrap(), expected);
+    assert_eq!(h.reduce(&input).unwrap(), expected);
+    let seen = h.provenance();
+    assert_eq!(seen.fresh(Command::Reduce, Origin::Proved), 1);
+    assert_eq!(seen.cached(Command::Reduce, Origin::Proved), 1);
+    assert_eq!(seen.fresh(Command::Reduce, Origin::NativeRust), 0);
+    assert_eq!(seen.fresh(Command::Reduce, Origin::Assumed), 0);
+    assert_eq!(h.stats().norm_count, 0);
+    h.check_backend_status().unwrap();
+}
+
+/// `f(g(x)) -> x` with `g(a) -> b` is not confluent: `f(g(a))` reaches both
+/// `a` and `f(b)`. The certifier rejects the table and the all-paths check
+/// sees two normal forms, so a raw session reports the table and a session
+/// that supplies the theory premise records the answer as assumed.
+#[test]
+fn an_uncertified_table_is_reported_or_marked_assumed_never_silently_trusted() {
+    use tamarin_term::algebra_provenance::{Command, Origin};
+    use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
+    use tamarin_term::rewriting::RRule;
+    use tamarin_term::subterm_rule::rrule_to_ctxt_st_rule;
+    use tamarin_term::term::f_app_no_eq;
+    let sym = |name: &[u8], arity| {
+        NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor)
+    };
+    let (f, g, a, b) = (sym(b"f", 1), sym(b"g", 1), sym(b"a", 0), sym(b"b", 0));
+    let app = |s, args| f_app_no_eq(s, args);
+    let x = variable("x");
+    let mut sig = pair_maude_sig();
+    sig.st_fun_syms.extend([f, g, a, b]);
+    for rule in [
+        RRule::new(app(f, vec![app(g, vec![x.clone()])]), x),
+        RRule::new(app(g, vec![app(a, vec![])]), app(b, vec![])),
+    ] {
+        sig.st_rules.insert(rrule_to_ctxt_st_rule(&rule).unwrap());
+    }
+    let sig = sig.refresh();
+    let ambiguous = app(f, vec![app(g, vec![app(a, vec![])])]);
+    let decided = app(g, vec![app(a, vec![])]);
+
+    let raw =
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+    // Every path of g(a) ends in b, which the all-paths export proves for any table.
+    assert_eq!(raw.reduce(&decided).unwrap(), app(b, vec![]));
+    assert_eq!(raw.provenance().fresh(Command::Reduce, Origin::Proved), 1);
+    assert!(matches!(
+        raw.reduce(&ambiguous),
+        Err(MaudeError::UnsupportedOperation(operation)) if operation.contains("certifier")
+    ));
+    assert!(raw.check_backend_status().is_err());
+
+    let theory = MaudeHandle::start_for_tamarin_theory(
+        MISSING,
+        sig,
+        AlgebraBackend::NativeOnly,
+        Arc::new(SharedMaudeCaches::default()),
+    )
+    .unwrap();
+    assert_eq!(theory.reduce(&decided).unwrap(), app(b, vec![]));
+    let seen = theory.provenance();
+    assert_eq!(seen.fresh(Command::Reduce, Origin::Proved), 1);
+    assert_eq!(seen.fresh(Command::Reduce, Origin::Assumed), 0);
+    // The single-path export proves that its answer is an irreducible reduct
+    // of f(g(a)). Which of the two it is rests on the convergence premise.
+    let reduct = theory.reduce(&ambiguous).unwrap();
+    assert!(
+        reduct == app(a, vec![]) || reduct == app(f, vec![app(b, vec![])]),
+        "{reduct:?}"
+    );
+    assert_eq!(theory.reduce(&ambiguous).unwrap(), reduct);
+    let seen = theory.provenance();
+    assert_eq!(seen.fresh(Command::Reduce, Origin::Proved), 1);
+    assert_eq!(seen.fresh(Command::Reduce, Origin::Assumed), 1);
+    assert_eq!(seen.cached(Command::Reduce, Origin::Assumed), 1);
+    theory.check_backend_status().unwrap();
+}
+
+#[test]
+fn native_matching_uses_the_total_exports_and_keeps_one_copy_of_each_answer() {
+    use tamarin_term::algebra_provenance::{Command, Origin};
+    let h = native();
+    let [a, b] = ["a", "b"].map(pub_term);
+    let subject = sum(a.clone(), sum(a.clone(), b.clone()));
+    // match_eqs takes (subject, pattern).
+    let split = Equal {
+        lhs: subject.clone(),
+        rhs: sum(variable("x"), variable("y")),
+    };
+    let answers = h.match_eqs(std::slice::from_ref(&split)).unwrap();
+    let mut distinct = answers.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(answers, distinct);
+    // {a | a+b}, {b | a+a}, {a+a | b}, {a+b | a}: the two copies of `a` are interchangeable.
+    assert_eq!(answers.len(), 4);
+    assert!(h.has_match_eqs(std::slice::from_ref(&split)).unwrap());
+    let none = Equal {
+        lhs: subject,
+        rhs: sum(pub_term("c"), variable("x")),
+    };
+    assert!(!h.has_match_eqs(std::slice::from_ref(&none)).unwrap());
+    assert!(!h.has_match_eqs(std::slice::from_ref(&none)).unwrap());
+    assert!(h.match_eqs(&[none]).unwrap().is_empty());
+    let seen = h.provenance();
+    // One listing, one existence decision answered from that listing, one
+    // fresh decision, its repeat, and one more listing.
+    assert_eq!(seen.fresh(Command::Match, Origin::Proved), 3);
+    assert_eq!(seen.cached(Command::Match, Origin::Proved), 2);
+    assert_eq!(seen.fresh(Command::Match, Origin::NativeRust), 0);
+    assert_eq!(h.stats().match_count, 0);
+    h.check_backend_status().unwrap();
 }

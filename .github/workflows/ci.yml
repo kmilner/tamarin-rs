@@ -51,15 +51,6 @@ jobs:
         run: cargo test --profile ci -p tamarin-term --features lean-unification --lib -- --test-threads=1
         env:
           MAUDE_PATH: /opt/maude/maude
-      - name: Cross-check hybrid unification with Maude
-        run: |
-          cargo test --profile ci -p tamarin-term --features lean-unification --lib -- --test-threads=1 \
-            lean_integration_tests::lean_ nested_constructor_matches_and_ground_side_unifiers \
-            whole_unification_compares_the_complete_conjunction_with_maude \
-            dh_intruder_product_unifiers_match_ordinary_maude lean_integration_tests::conjunction
-        env:
-          MAUDE_PATH: /opt/maude/maude
-          TAM_RS_VERIFY_LEAN_UNIFY: "1"
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -70,6 +61,32 @@ jobs:
           cargo test --profile ci -p tamarin-prover --features lean-unification --lib --test lean_unification --test native_backend
         env:
           MAUDE_PATH: /opt/maude/maude
+      - name: Interactive mode on the native backend
+        run: cargo test --profile ci -p tamarin-server --features tamarin-term/lean-unification --test routes_native_backend
+        env:
+          MAUDE_PATH: /opt/maude/maude
+      # The native backend's answers are proved; that it answers at all and
+      # how fast is not. The gate proves the smoke list on both backends of
+      # the binary the step above built, each prover process under a memory
+      # cap and a timeout, and fails on a verdict that differs from Maude's,
+      # on a theory only Maude finishes, and on one that takes native-only
+      # more than twice Maude's time. scripts/backend_gate/pending.tsv holds
+      # the expected failures; see TESTING.md, "Backend gate".
+      - name: Backend gate self-test
+        run: python3 scripts/test_backend_gate.py
+      - name: Backend gate (native-only against Maude, smoke list)
+        run: |
+          cargo build --profile ci -p tamarin-prover --features lean-unification --bin tamarin-rs
+          python3 scripts/backend_gate.py --smoke --bin target/ci/tamarin-rs
+        env:
+          MAUDE_PATH: /opt/maude/maude
+      - name: Keep the backend gate's records of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-gate
+          path: scripts/results/backend_gate
+          if-no-files-found: ignore
 
   checks:
     runs-on: ubuntu-latest

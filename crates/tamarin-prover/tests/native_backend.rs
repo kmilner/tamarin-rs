@@ -42,8 +42,7 @@ impl Fixture {
             .env("PATH", "")
             .env_remove("TAM_RS_NATIVE_REFERENCE")
             .env_remove("TAM_RS_NATIVE_REFERENCE_VARIANTS")
-            .env_remove("TAM_RS_NO_LEAN_UNIFY")
-            .env_remove("TAM_RS_VERIFY_LEAN_UNIFY")
+            .env_remove("TAM_RS_VARIANT_CHECK_WORK")
             .env_remove("TAM_RS_VERIFY_REDUCE_NF");
         cmd
     }
@@ -127,6 +126,99 @@ fn user_equation_chain_and_pairing_prove_both_traces_without_maude() {
     }
 }
 
+/// Native-only uses the families of the Rust variant solvers only after the
+/// Lean certificate checker accepted them: they count as proved on a table
+/// the certifier accepts and as assumed on any other table, and never as
+/// native Rust. A family that does not fit in the checker's work bound fails
+/// the run instead of being used, and the bound changes no result otherwise.
+#[cfg(feature = "lean-unification")]
+#[test]
+fn rust_variants_are_checked_and_count_as_proved_or_assumed() {
+    for (theory, origin) in [
+        (include_str!("fixtures/native_dh_agreement.spthy"), "proved"),
+        (
+            include_str!("fixtures/native_user_equations_pairing.spthy"),
+            "assumed",
+        ),
+    ] {
+        let fixture = Fixture::new(theory);
+        let run = |work: Option<&str>| {
+            let mut command = fixture.command();
+            if let Some(work) = work {
+                command.env("TAM_RS_VARIANT_CHECK_WORK", work);
+            }
+            let output = command
+                .env("TAM_MAUDE_CACHE_STATS", "1")
+                .args(["--processors", "1"])
+                .arg("--prove")
+                .arg(fixture.dir.join("input.spthy"))
+                .output()
+                .unwrap();
+            assert!(!fixture.dir.join("called").exists());
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            let results: Vec<String> = stdout
+                .lines()
+                .filter(|line| line.contains("(exists-trace)") || line.contains("(all-traces)"))
+                .map(str::to_owned)
+                .collect();
+            // Fresh and cached answers by origin, and the families a Rust
+            // solver proposed, summed over the sessions of the run.
+            let mut seen = std::collections::BTreeMap::new();
+            let mut proposed = 0;
+            for line in stderr.lines() {
+                if let Some(row) = line.strip_prefix("[ALGEBRA_PROVENANCE] variants fresh: ") {
+                    for cell in row.split(' ') {
+                        if let Some((name, count)) = cell.split_once('=') {
+                            *seen.entry(name.to_owned()).or_insert(0u64) +=
+                                count.parse::<u64>().unwrap();
+                        }
+                    }
+                } else if let Some(row) = line.strip_prefix("[VARIANT_ROUTES] proposer=") {
+                    proposed += row.split(' ').next().unwrap().parse::<u64>().unwrap();
+                }
+            }
+            (output.status.success(), results, seen, proposed, stderr)
+        };
+        let (ok, results, seen, proposed, stderr) = run(None);
+        assert!(ok, "{stderr}");
+        assert!(!results.is_empty(), "{stderr}");
+        assert!(proposed > 0, "{stderr}");
+        assert!(seen[origin] > 0, "{seen:?}");
+        assert_eq!(seen["native_rust"], 0, "{seen:?}");
+
+        // Without a bound the checker accepts the same families.
+        let (ok, unbounded, seen, _, stderr) = run(Some("0"));
+        assert!(ok, "{stderr}");
+        assert_eq!(unbounded, results);
+        assert_eq!(seen["native_rust"], 0, "{seen:?}");
+
+        // A bound of one position admits no family of these theories.
+        let (ok, refused, _, _, stderr) = run(Some("1"));
+        assert!(!ok, "{stderr}");
+        assert!(refused.is_empty(), "{refused:?}");
+        assert!(
+            stderr.contains("variants not certified: out of budget"),
+            "{stderr}"
+        );
+    }
+
+    let fixture = Fixture::new(SIMPLE);
+    let output = fixture
+        .command()
+        .env("TAM_RS_VARIANT_CHECK_WORK", "some")
+        .arg("--prove")
+        .arg(fixture.dir.join("input.spthy"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("TAM_RS_VARIANT_CHECK_WORK"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[cfg(feature = "lean-unification")]
 #[test]
 fn ac_marker_variant_preserves_the_reachable_trace() {
@@ -144,6 +236,56 @@ fn ac_marker_variant_preserves_the_reachable_trace() {
         stdout.contains("impossible (all-traces): falsified - found trace"),
         "{stdout}"
     );
+}
+
+/// Rules whose variants no specialised solver covers: a destructor or an
+/// inverse above an exponentiation or an exclusive-or of two received
+/// messages. Native-only used to hand these to a Lean search that did not
+/// return. Folding variant narrowing proposes the families, the certificate
+/// checker accepts them, and the proofs are those of the Maude backend.
+#[cfg(feature = "lean-unification")]
+#[test]
+fn folded_rule_variants_prove_the_traces_without_maude() {
+    for theory in [
+        include_str!("fixtures/native_folded_decryption.spthy"),
+        include_str!("fixtures/native_folded_projection.spthy"),
+        include_str!("fixtures/native_folded_inverse.spthy"),
+    ] {
+        let fixture = Fixture::new(theory);
+        let output = fixture
+            .command()
+            .env("TAM_MAUDE_CACHE_STATS", "1")
+            .env("TAM_DBG_VARIANTS", "1")
+            .arg("--prove")
+            .arg(fixture.dir.join("input.spthy"))
+            .output()
+            .unwrap();
+        assert!(!fixture.dir.join("called").exists());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        assert!(
+            stdout.contains("reachable (exists-trace): verified (4 steps)"),
+            "{stdout}"
+        );
+        // The family of the rule came from the folding proposer and no
+        // family from an export that is used without the checker.
+        assert!(stderr.contains("[variants] solver fold"), "{stderr}");
+        assert!(!stderr.contains("solver checked_export"), "{stderr}");
+        let mut unchecked = 0;
+        for line in stderr.lines() {
+            if let Some(row) = line.strip_prefix("[VARIANT_ROUTES] ") {
+                for cell in row.split(' ') {
+                    if let Some(count) = cell.strip_prefix("checked_export=") {
+                        unchecked += count.parse::<u64>().unwrap();
+                    }
+                }
+            } else if let Some(row) = line.strip_prefix("[ALGEBRA_PROVENANCE] variants fresh: ") {
+                assert!(row.contains("assumed=0 native_rust=0"), "{line}");
+            }
+        }
+        assert_eq!(unchecked, 0, "{stderr}");
+    }
 }
 
 #[cfg(feature = "lean-unification")]
@@ -224,24 +366,29 @@ fn conflicting_oracle_switch_fails_before_any_tool_probe() {
     let fixture = Fixture::new(SIMPLE);
     let output = fixture
         .command()
-        .env("TAM_RS_VERIFY_LEAN_UNIFY", "1")
+        .env("TAM_RS_VERIFY_REDUCE_NF", "1")
         .arg(fixture.dir.join("input.spthy"))
         .output()
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("incompatible with TAM_RS_VERIFY_LEAN_UNIFY"));
+        .contains("incompatible with TAM_RS_VERIFY_REDUCE_NF"));
     assert!(!fixture.dir.join("called").exists());
 }
 
+/// The installation self-test compares against a Maude installation, so
+/// native-only refuses it before probing anything. Interactive mode is
+/// supported: `crates/tamarin-server/tests/routes_native_backend.rs` and
+/// `scripts/interactive_backend_check.sh` drive it.
 #[cfg(feature = "lean-unification")]
 #[test]
-fn interactive_native_mode_is_explicitly_rejected_without_probing() {
+fn native_installation_self_test_is_explicitly_rejected_without_probing() {
     let fixture = Fixture::new(SIMPLE);
-    let output = fixture.run(&["interactive"]);
+    let output = fixture.command().arg("test").output().unwrap();
+    assert!(!fixture.dir.join("called").exists());
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("interactive and installation self-tests are not yet supported"));
+        .contains("the installation self-test is not yet supported"));
 }
 
 #[cfg(not(feature = "lean-unification"))]
@@ -251,7 +398,7 @@ fn native_mode_requires_the_lean_feature_before_probing() {
     let output = fixture.run(&["--prove"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("require a build with --features lean-unification"));
+        .contains("requires a build with --features lean-unification"));
 }
 
 #[cfg(feature = "lean-unification")]

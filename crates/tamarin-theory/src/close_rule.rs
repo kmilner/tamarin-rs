@@ -102,7 +102,7 @@ pub fn check_close_intr_rule(
         &maude.maude_sig(),
         maude,
         initial,
-    );
+    )?;
     if !deduction_chain_check {
         return Ok(NdcCheckedCache {
             cache: assembled,
@@ -739,7 +739,7 @@ fn ndc_check_prepare<'a>(
             rhs: kd_prem1,
         }],
     )
-    .map_err(|error| crate::prove::ProveError::Maude(error.to_string()))?;
+    .map_err(crate::prove::ProveError::from)?;
     if unifs.is_empty() {
         return Ok(None);
     }

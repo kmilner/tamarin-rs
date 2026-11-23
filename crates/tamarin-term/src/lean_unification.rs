@@ -1,39 +1,41 @@
-//! In-process interface to the experimental verified Lean backend.
+//! In-process interface to the verified Lean algebra library.
 //!
-//! Native-only ordinary unification uses bounded kernels first and a total
-//! mixed free/C/AC fallback over the original equations. Directional matching
-//! has a total scoped fallback. Protocol sessions retry reduction and variants on
-//! the full table under Tamarin's canonical, finite-variant presentation assumptions.
+//! Native-only unifies, matches and normalizes through whole-command exports
+//! alone: one total unifier for mixed free/C/AC conjunctions, one total scoped
+//! matcher with its existence decision, and the checked reducers. The Rust
+//! solvers that remain here only propose families of variants, which
+//! native-only uses after the Lean certificate checker accepted them. Protocol
+//! sessions fall back to the full table under Tamarin's canonical,
+//! finite-variant presentation assumptions for reduction and variants.
 //! The Rust encoding and C/Lean runtime boundary remain trusted code.
 
 mod common_children;
 mod commutative;
 mod components;
 mod whole;
-pub(crate) use commutative::solve as unify_structured;
 pub use whole::{reduction_for_convergent_theory, variants_for_convergent_theory};
-pub(crate) use whole::{total_unify, unpack_conjunction, Conjunction};
+pub(crate) use whole::{
+    kind_level,
+    total_unify, total_unify_exists, unpack_conjunction, Conjunction, FamilyCheck, Reduced,
+    ReductionTable, UnifyReplies,
+};
 mod constructor_variants;
 pub(crate) use constructor_variants::RuleTable;
 mod ac_bag_match;
-mod component_match;
 mod homogeneous;
 mod match_size;
 mod narrowing;
 mod open_match;
 mod operands;
 mod residual;
-mod shared_offset;
-pub(crate) use shared_offset::solve as unify_with_witnesses;
 
 use std::fmt;
 use std::sync::OnceLock;
 use tamarin_algebra_sys::{
     tamarin_lean_flat_ac_equal, tamarin_lean_initialize, tamarin_lean_thread_finalize,
-    tamarin_lean_thread_initialize,
+    tamarin_lean_thread_initialize, InterruptWatch,
 };
-
-use rustc_hash::FxHashMap;
+use tamarin_utils::cancellation::{self, CancellationToken};
 
 use crate::function_symbols::{nat_one_sym, AcSym, FunSym};
 use crate::lterm::{sort_compare, LNTerm, LSort, LVar, Name};
@@ -49,7 +51,8 @@ pub fn unify_modulo_attributes(
     sig: &crate::maude_sig::MaudeSig,
     equations: &[Equal<LNTerm>],
 ) -> Result<Outcome, Error> {
-    unpack_conjunction(sig, equations)?.solve(|rows| whole::total_unify(sig, rows))
+    unpack_conjunction(sig, equations)?
+        .solve(|rows| whole::total_unify(sig, rows, None, 0).map(|(outcome, _)| outcome))
 }
 
 /// Match all patterns modulo the signature's declared commutative and AC attributes.
@@ -66,6 +69,30 @@ pub fn match_modulo_attributes(
 ) -> Result<Outcome, Error> {
     unpack_conjunction(sig, patterns_and_subjects)?
         .solve(|rows| whole::total_match(sig, rows, bindable))
+}
+
+/// Decide whether [`match_modulo_attributes`] would return an answer, without
+/// listing the answers. `None` when the request is outside the module.
+pub fn has_match_modulo_attributes(
+    sig: &crate::maude_sig::MaudeSig,
+    patterns_and_subjects: &[Equal<LNTerm>],
+    bindable: impl Fn(&LVar) -> bool,
+) -> Result<Option<bool>, Error> {
+    match unpack_conjunction(sig, patterns_and_subjects)? {
+        Conjunction::Rows(rows) => whole::total_has_match(sig, &rows, bindable),
+        Conjunction::Clash => Ok(Some(false)),
+        Conjunction::Unsupported => Ok(None),
+    }
+}
+
+/// A request without tuple wrappers reaches its whole-command export directly.
+/// Otherwise Rust first unpacks the tuples through a separate checked kernel.
+pub(crate) fn is_single_export(equations: &[Equal<LNTerm>]) -> bool {
+    !equations.iter().any(|e| {
+        [&e.lhs, &e.rhs]
+            .into_iter()
+            .any(|t| matches!(t, Term::App(crate::function_symbols::FunSym::List, _)))
+    })
 }
 
 /// Ordinary substitutions, before the caller converts them to `SubstVFresh`.
@@ -86,6 +113,110 @@ pub enum Error {
     InvalidVariable(u64),
     InvalidSubject(u64),
     FreshVariableOverflow,
+    /// The certificate checker refused a proposed family of variants:
+    /// `reason` is 1 when member `member` is not normal, 2 when no member
+    /// subsumes the query, and 3 when a narrowing successor of member
+    /// `member` is not covered.
+    RejectedVariants {
+        reason: u8,
+        member: u64,
+    },
+    /// The certificate checker could not decode a proposed family of
+    /// variants, for instance because an image lacks the sort of its variable.
+    MalformedVariants,
+    /// The certificate checker did not decide a proposed family of variants:
+    /// the request is outside its domain.
+    UncertifiedVariants,
+    /// The certificate checker ran out of budget on a proposed family of
+    /// variants: a rewrite path longer than `depth`, or more positions to
+    /// narrow than `work` (zero for no bound).
+    VariantCheckBudget {
+        depth: u64,
+        work: u64,
+    },
+    /// One call of an interruptible export asked more questions than its
+    /// work bound allows and was stopped. Nothing was decided.
+    SearchBudget {
+        operation: &'static str,
+        work: u64,
+    },
+    /// No specialised solver covers the query and folding variant narrowing
+    /// did not list a family within `work` narrowing sites.
+    VariantSearchBudget {
+        work: u64,
+    },
+}
+
+/// One interruptible call of a Lean export.
+///
+/// The unifier, its existence decision and the single-path reducers ask
+/// their caller before every step of a search whether to go on (Lean's
+/// `Tamarin.Interrupt`). The bridge answers from this record: stop once the
+/// current request is cancelled, or once the call has asked more than `work`
+/// questions (zero for no bound). A stopped call returns no reply at all, so
+/// [`Self::finish`] is the only way to learn its outcome, and a reply that is
+/// read was computed without interruption. The number of questions a call
+/// asks is a function of its request, so the bound is deterministic.
+pub(crate) struct Watch {
+    raw: InterruptWatch,
+    operation: &'static str,
+    /// Keeps the flag behind `raw.cancel` alive.
+    _token: Option<CancellationToken>,
+}
+
+/// `TAM_RS_ALGEBRA_SEARCH_REPORT=<n>` prints to stderr every interruptible
+/// call that asked at least `n` questions, to choose a work bound.
+fn report_threshold() -> u64 {
+    static THRESHOLD: OnceLock<u64> = OnceLock::new();
+    *THRESHOLD.get_or_init(|| {
+        std::env::var("TAM_RS_ALGEBRA_SEARCH_REPORT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(u64::MAX)
+    })
+}
+
+impl Watch {
+    pub(crate) fn new(operation: &'static str, work: u64) -> Self {
+        let token = cancellation::current();
+        let cancel = token
+            .as_ref()
+            .map_or(std::ptr::null(), CancellationToken::flag_ptr);
+        Self {
+            raw: InterruptWatch {
+                cancel,
+                budget: work,
+                asked: 0,
+                stopped: 0,
+            },
+            operation,
+            _token: token,
+        }
+    }
+
+    /// The record the bridge reads and writes during the call.
+    pub(crate) fn raw(&mut self) -> *mut InterruptWatch {
+        &mut self.raw
+    }
+
+    /// The outcome of the call that just returned. On an error the call
+    /// produced no reply.
+    pub(crate) fn finish(&self) -> Result<(), Error> {
+        if self.raw.asked >= report_threshold() {
+            eprintln!(
+                "algebra search: {} asked {} questions (stopped: {})",
+                self.operation, self.raw.asked, self.raw.stopped
+            );
+        }
+        match self.raw.stopped {
+            0 => Ok(()),
+            1 => Err(Error::Cancelled),
+            _ => Err(Error::SearchBudget {
+                operation: self.operation,
+                work: self.raw.budget,
+            }),
+        }
+    }
 }
 
 impl fmt::Display for Error {
@@ -102,122 +233,68 @@ impl fmt::Display for Error {
             }
             Self::InvalidSubject(id) => write!(f, "Lean returned an unknown subject ID {id}"),
             Self::InvalidAtom(atom) => write!(f, "Lean unification returned unknown atom {atom}"),
+            Self::RejectedVariants { reason, member } => {
+                f.write_str("the Lean variant checker rejected the proposed family of variants: ")?;
+                match reason {
+                    1 => write!(f, "member {member} is not normal (reason 1)"),
+                    2 => write!(f, "no member subsumes the query (reason 2, index {member})"),
+                    3 => write!(
+                        f,
+                        "a narrowing successor of member {member} is not covered (reason 3)"
+                    ),
+                    _ => write!(f, "reason {reason}, index {member}"),
+                }
+            }
+            Self::MalformedVariants => f.write_str(
+                "the Lean variant checker could not decode the proposed family of variants",
+            ),
+            Self::UncertifiedVariants => f.write_str(
+                "variants not certified: the Lean variant checker did not decide the proposed \
+                 family (outside its domain)",
+            ),
+            Self::VariantCheckBudget { depth, work } => {
+                write!(
+                    f,
+                    "variants not certified: out of budget, the Lean variant checker did not \
+                     decide the proposed family within rewrite depth {depth} and "
+                )?;
+                match work {
+                    0 => f.write_str("without a work bound"),
+                    _ => write!(
+                        f,
+                        "work bound {work} (TAM_RS_VARIANT_CHECK_WORK sets the bound, 0 removes it)"
+                    ),
+                }
+            }
+            Self::SearchBudget { operation, work } => write!(
+                f,
+                "out of budget: one Lean {operation} was stopped after {work} search steps and                  decided nothing (TAM_RS_ALGEBRA_SEARCH_WORK sets the bound, 0 removes it)"
+            ),
+            Self::VariantSearchBudget { work } => write!(
+                f,
+                "variants not found: out of budget, folding variant narrowing did not finish \
+                 within {work} narrowing sites"
+            ),
         }
     }
 }
 
 impl std::error::Error for Error {}
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct WordSlice {
-    data: *const u64,
-    size: usize,
-}
+// Every declaration of the C bridge is generated from its definition by the
+// build of `tamarin-algebra-sys`. None is written by hand in this crate (the
+// test `bridge_declarations_are_generated` checks that), so a call that
+// disagrees with the bridge does not compile.
+use tamarin_algebra_sys::WholeWordSlice as WordSlice;
 
-impl WordSlice {
-    fn new(words: &[u64]) -> Self {
-        Self {
-            data: words.as_ptr(),
-            size: words.len(),
-        }
-    }
-}
-
-unsafe extern "C" {
-    fn tamarin_lean_cancel_common(
-        left: *const u64,
-        left_size: usize,
-        right: *const u64,
-        right_size: usize,
-        left_out: *mut u64,
-        left_len: *mut usize,
-        right_out: *mut u64,
-        right_len: *mut usize,
-    ) -> u8;
-    fn tamarin_lean_sorted_ac_match(
-        ac_sort: u64,
-        variable_sorts: WordSlice,
-        atom_sorts: WordSlice,
-        occurrences: WordSlice,
-        tail: WordSlice,
-        rhs: WordSlice,
-    ) -> *mut std::ffi::c_void;
-    fn tamarin_lean_flat_ac_match(
-        n: u64,
-        occ: *const u64,
-        occ_length: usize,
-        tail: *const u64,
-        tail_length: usize,
-        rhs: *const u64,
-        rhs_length: usize,
-    ) -> *mut std::ffi::c_void;
-    fn tamarin_lean_exclude_ac_factors(
-        rows: *const WordSlice,
-        count: usize,
-        heads: WordSlice,
-    ) -> u8;
-    fn tamarin_lean_exclude_root(
-        rows: *const u64,
-        row_count: usize,
-        args: *const u64,
-        arity: usize,
-    ) -> u8;
-    fn tamarin_lean_constructor_variant(
-        roots: *const u64,
-        root_count: usize,
-        used: *const u64,
-        used_count: usize,
-    ) -> u8;
-    fn tamarin_lean_ground_variant(
-        holes: *const u64,
-        hole_count: usize,
-        anchors: *const u64,
-        anchor_count: usize,
-        deps: *const u64,
-        dep_count: usize,
-        rigid: u8,
-    ) -> u8;
-    fn tamarin_lean_reduce_rule_slot(
-        slot: u64,
-        keys: *const u64,
-        subjects: *const u64,
-        length: usize,
-        out: *mut u64,
-    ) -> u8;
-    fn tamarin_xor_branches(same: u8) -> u8;
-    fn tamarin_comm_orientations(a: u64, b: u64, c: u64, d: u64, priority: u8) -> u8;
-    fn tamarin_rigid_allocation(reversed: u8) -> *mut std::ffi::c_void;
-    fn tamarin_shared_offset(a: u64, b: u64) -> *mut std::ffi::c_void;
-    fn tamarin_lean_match_count(result: *const std::ffi::c_void) -> usize;
-    fn tamarin_lean_match_rows(result: *const std::ffi::c_void, answer: usize) -> usize;
-    fn tamarin_lean_match_row_size(
-        result: *const std::ffi::c_void,
-        arm: usize,
-        index: usize,
-    ) -> usize;
-    fn tamarin_lean_match_row(
-        result: *const std::ffi::c_void,
-        answer: usize,
-        variable: usize,
-        out: *mut u64,
-        capacity: usize,
-        length: *mut usize,
-    ) -> u8;
-    fn tamarin_lean_match_release(result: *mut std::ffi::c_void);
-    fn tamarin_reflexive_unify(recognized: u8) -> u8;
-    fn tamarin_pairing_variants(has_projection: u8) -> u8;
-    fn tamarin_pairing_project(first: u8) -> u8;
-    fn tamarin_lean_flat_ac_residual(
-        tail: *const u64,
-        tail_length: usize,
-        rhs: *const u64,
-        rhs_length: usize,
-        residual: *mut u64,
-        capacity: usize,
-        residual_length: *mut usize,
-    ) -> u8;
-}
+use tamarin_algebra_sys::{
+    tamarin_comm_orientations, tamarin_lean_cancel_common, tamarin_lean_constructor_variant,
+    tamarin_lean_exclude_ac_factors, tamarin_lean_exclude_root, tamarin_lean_flat_ac_match,
+    tamarin_lean_flat_ac_residual, tamarin_lean_ground_variant, tamarin_lean_match_count,
+    tamarin_lean_match_release, tamarin_lean_match_row, tamarin_lean_match_row_size,
+    tamarin_lean_match_rows, tamarin_lean_reduce_rule_slot, tamarin_lean_sorted_ac_match,
+    tamarin_pairing_variants, tamarin_xor_branches,
+};
 
 struct LeanThread;
 
@@ -396,49 +473,6 @@ fn declaration(f: FunSym, nat: bool) -> Option<(usize, LSort)> {
     }
 }
 
-/// The local factorer reads only root sorts. Use the typed solver if its
-/// reading differs from the module declaration or a child has no required sort.
-pub(crate) fn requires_typed_unification(t: &LNTerm, nat: bool) -> bool {
-    fn compatible_sort(t: &LNTerm, nat: bool) -> Option<LSort> {
-        let sort = match t {
-            Term::Lit(Lit::Con(n)) => sort_of_name(n),
-            Term::Lit(Lit::Var(v)) => v.sort,
-            // The Rust factorer handles packed lists position by position.
-            Term::App(FunSym::List, items) => {
-                return items
-                    .iter()
-                    .all(|t| compatible_sort(t, nat).is_some())
-                    .then_some(LSort::Msg);
-            }
-            Term::App(f, children) => {
-                let (arity, s) = declaration(*f, nat)?;
-                let valid = match f {
-                    FunSym::Ac(_) => children.len() >= arity,
-                    _ => children.len() == arity,
-                };
-                if !valid
-                    || !children
-                        .iter()
-                        .all(|t| compatible_sort(t, nat).is_some_and(|actual| subsort(actual, s)))
-                {
-                    return None;
-                }
-                s
-            }
-        };
-        let local = crate::lterm::sort_of_lterm(t, crate::lterm::sort_of_name);
-        (sort == local && (nat || sort != LSort::Nat)).then_some(sort)
-    }
-    compatible_sort(t, nat).is_none()
-}
-
-fn unify_equation(equation: &Equal<LNTerm>, atoms: &mut Atoms) -> Result<EquationOutcome, Error> {
-    let Some((symbol, lhs, rhs)) = ac_children(equation) else {
-        return Ok(EquationOutcome::Unsupported);
-    };
-    unify_flat_sides(symbol, lhs, rhs, atoms)
-}
-
 // Both slices are nonempty. A singleton after cancellation denotes its child.
 fn unify_flat_sides(
     symbol: AcSym,
@@ -498,74 +532,6 @@ fn unify_flat_sides(
     }
 }
 
-/// Attempt the supported fragment. `Complete([])` is proven unsatisfiable;
-/// `Complete([[]])` is the identity solution. Unsupported queries must be
-/// dispatched to a backend supporting their theory, rather than closed.
-///
-/// Conjunction assembly follows `GroundConjunction.complete`: each component
-/// determines ground images for all its variables, and the merged answer
-/// agrees with every component. Equal shared bindings are coalesced. Distinct
-/// bindings defer to Maude rather than assuming syntactic inequality proves
-/// inequivalence modulo B (especially across different AC symbols).
-/// Reflexive conjunctions instead use `Reflexive.identity_complete`, which
-/// covers all variables without assigning any of them. The Rust representation,
-/// recognition, and agreement checks remain trusted.
-pub fn unify(equations: &[Equal<LNTerm>]) -> Result<Outcome, Error> {
-    if !equations.is_empty() && equations.iter().all(reflexive_rigid_sort_ac) {
-        return reflexive_identity();
-    }
-    let mut atoms = Atoms::default();
-    let mut bindings = Vec::new();
-    let mut positions: FxHashMap<LVar, usize> = FxHashMap::default();
-    let mut unsatisfiable = false;
-    for equation in equations {
-        match unify_equation(equation, &mut atoms)? {
-            EquationOutcome::Unsupported => return Ok(Outcome::Unsupported),
-            // Still inspect later equations: malformed/unsupported inputs
-            // retain the fallback's behavior even after a local failure.
-            EquationOutcome::Unsatisfiable => unsatisfiable = true,
-            EquationOutcome::Solved(None) => {}
-            EquationOutcome::Solved(Some((variable, term))) => {
-                if equations.len() == 1 {
-                    return Ok(Outcome::Complete(vec![vec![(variable, term)]]));
-                }
-                if let Some(&index) = positions.get(&variable) {
-                    if bindings[index] != (variable, term) {
-                        return Ok(Outcome::Unsupported);
-                    }
-                } else {
-                    positions.insert(variable, bindings.len());
-                    bindings.push((variable, term));
-                }
-            }
-        }
-    }
-    if unsatisfiable {
-        Ok(Outcome::Complete(vec![]))
-    } else {
-        Ok(Outcome::Complete(vec![bindings]))
-    }
-}
-
-/// Directional matching: each equation is (pattern, subject). Ground
-/// subjects are mandatory here; reversing a nonground equation would silently
-/// bind subject variables. The accepted unifier answers have ground observed
-/// images. The residual fast path uses Matching.of_ground_unification; general
-/// flat rows use FlatMatching.complete and MatchingConjunction.join_complete.
-pub fn match_ground(equations: &[Equal<LNTerm>]) -> Result<Outcome, Error> {
-    if !equations
-        .iter()
-        .all(|eq| crate::vterm::is_ground_vterm(&eq.rhs))
-    {
-        return Ok(Outcome::Unsupported);
-    }
-    let quick = unify(equations)?;
-    if quick != Outcome::Unsupported {
-        return Ok(quick);
-    }
-    unify_by_cancellation(equations)
-}
-
 /// Match AC leaves over canonical ground free/C/AC factors and join their bindings.
 /// Cancel closed factors first so they consume no constructor-selection budget.
 pub(crate) fn match_compound_ground(equations: &[Equal<LNTerm>]) -> Result<Outcome, Error> {
@@ -603,100 +569,6 @@ pub(crate) fn match_compound_ground(equations: &[Equal<LNTerm>]) -> Result<Outco
     join_components(components)
 }
 
-/// Solve ground-sided components in either direction after variable cancellation,
-/// then test constraints grounded by the resulting shared bindings.
-pub(crate) fn unify_by_cancellation(equations: &[Equal<LNTerm>]) -> Result<Outcome, Error> {
-    let mut components = Vec::with_capacity(equations.len());
-    let mut pending = Vec::new();
-    for eq in equations {
-        let Some((symbol, lhs, rhs)) = ac_children(eq) else {
-            return Ok(Outcome::Unsupported);
-        };
-        let outcome = if crate::vterm::is_ground_vterm(&eq.rhs) {
-            ground_component(symbol, lhs, rhs)?
-        } else if crate::vterm::is_ground_vterm(&eq.lhs) {
-            ground_component(symbol, rhs, lhs)?
-        } else {
-            match cancel_variables(symbol, lhs, rhs)? {
-                Reduction::GroundSide { pattern, subject } => {
-                    ground_component(symbol, &pattern, &subject)?
-                }
-                Reduction::Incomparable => {
-                    pending.push(eq);
-                    continue;
-                }
-                Reduction::Unsupported => return Ok(Outcome::Unsupported),
-            }
-        };
-        let Outcome::Complete(answers) = outcome else {
-            return Ok(Outcome::Unsupported);
-        };
-        components.push(answers);
-    }
-    let joined = join_components(components)?;
-    if pending.is_empty() {
-        return Ok(joined);
-    }
-    let Outcome::Complete(answers) = joined else {
-        return Ok(Outcome::Unsupported);
-    };
-    filter_ground_constraints(answers, &pending)
-}
-
-enum Reduction {
-    GroundSide {
-        pattern: Vec<LNTerm>,
-        subject: Vec<LNTerm>,
-    },
-    Incomparable,
-    Unsupported,
-}
-
-fn cancel_variables(symbol: AcSym, lhs: &[LNTerm], rhs: &[LNTerm]) -> Result<Reduction, Error> {
-    let sort = ac_sort(symbol);
-    let mut variables = crate::lean_identity::IdentityTable::default();
-    let mut split = |children: &[LNTerm]| {
-        let mut ids = Vec::new();
-        let mut literals = Vec::new();
-        for t in children {
-            match t {
-                Term::Lit(Lit::Var(v)) if subsort(v.sort, sort) => ids.push(variables.intern(*v)?),
-                Term::Lit(Lit::Con(a)) if subsort(sort_of_name(a), sort) => {
-                    literals.push(t.clone())
-                }
-                _ => return None,
-            }
-        }
-        Some((ids, literals))
-    };
-    let (Some((left, left_atoms)), Some((right, right_atoms))) = (split(lhs), split(rhs)) else {
-        return Ok(Reduction::Unsupported);
-    };
-    // Both variable inventories are nonempty. Only the longer one can have
-    // excess occurrences after complete removal of the shorter inventory.
-    let (big, mut pattern, small, subject) = if left.len() >= right.len() {
-        (left, left_atoms, right, right_atoms)
-    } else {
-        (right, right_atoms, left, left_atoms)
-    };
-    if big.len() == small.len() {
-        if flat_ac_equal(&big, &small)? != 2 {
-            return Ok(Reduction::Incomparable);
-        }
-    } else {
-        let (status, excess) = flat_ac_residual(&small, &big)?;
-        // Incomparable inventories may still unify through a shared witness.
-        if status != 2 {
-            return Ok(Reduction::Incomparable);
-        }
-        for id in excess {
-            let v = variables.get(id).ok_or(Error::InvalidVariable(id))?;
-            pattern.push(Term::Lit(Lit::Var(v)));
-        }
-    }
-    Ok(Reduction::GroundSide { pattern, subject })
-}
-
 fn ground_component(
     symbol: AcSym,
     pattern: &[LNTerm],
@@ -719,44 +591,6 @@ fn ground_component(
         EquationOutcome::Unsatisfiable => Ok(Outcome::Complete(vec![])),
         EquationOutcome::Unsupported => match_flat(symbol, pattern, subject),
     }
-}
-
-/// Other equations may have fixed all variables of a deferred constraint.
-/// FlatCancellation.filter_ground_constraints proves that testing each such
-/// ground instance preserves completeness of the entire conjunction.
-fn filter_ground_constraints(
-    answers: Substitutions,
-    constraints: &[&Equal<LNTerm>],
-) -> Result<Outcome, Error> {
-    use crate::subst::{apply_vterm, Subst};
-    if answers
-        .len()
-        .checked_mul(constraints.len())
-        .is_none_or(|n| n > 100_000)
-    {
-        return Ok(Outcome::Unsupported);
-    }
-    let mut retained = Vec::new();
-    for arm in answers {
-        tamarin_utils::cancellation::check().map_err(|_| Error::Cancelled)?;
-        let substitution = Subst::from_list(arm.iter().cloned());
-        let mut keep = true;
-        for eq in constraints {
-            let lhs = apply_vterm(&substitution, eq.lhs.clone());
-            let rhs = apply_vterm(&substitution, eq.rhs.clone());
-            if !crate::vterm::is_ground_vterm(&lhs) || !crate::vterm::is_ground_vterm(&rhs) {
-                return Ok(Outcome::Unsupported);
-            }
-            let Some(equal) = equal_ground_images(&lhs, &rhs) else {
-                return Ok(Outcome::Unsupported);
-            };
-            keep &= equal;
-        }
-        if keep {
-            retained.push(arm);
-        }
-    }
-    Ok(Outcome::Complete(retained))
 }
 
 fn join_components(components: Vec<Substitutions>) -> Result<Outcome, Error> {
@@ -860,21 +694,6 @@ impl Drop for MatchRows {
     }
 }
 
-/// A single variable occurrence uses the forced residual matcher, which already
-/// supports subsorts. Several occurrences exercise the sort-indexed partition search.
-pub(super) fn uses_sorted_partition(eq: &Equal<LNTerm>) -> bool {
-    let Some((symbol, pattern, _)) = ac_children(eq) else {
-        return false;
-    };
-    let sorts = || {
-        pattern.iter().filter_map(|t| match t {
-            Term::Lit(Lit::Var(v)) => Some(v.sort),
-            _ => None,
-        })
-    };
-    sorts().take(2).count() == 2 && sorts().any(|s| s != ac_sort(symbol))
-}
-
 const PARTITION_BUDGET: usize = 100_000;
 
 fn partition_work(pattern: usize, variables: usize, rhs: &[u64], budget: usize) -> Option<usize> {
@@ -909,28 +728,6 @@ fn partition_work(pattern: usize, variables: usize, rhs: &[u64], budget: usize) 
         }
     };
     (work <= budget).then_some(work)
-}
-
-/// Hybrid's ordered callers can observe Maude's first arm. Keep their former
-/// dispatch boundary when the larger distinct-image search finds several arms.
-pub(super) fn needs_wider_partition(eq: &Equal<LNTerm>) -> bool {
-    let Some((_, pattern, subject)) = ac_children(eq) else {
-        return false;
-    };
-    if pattern.len() >= subject.len() {
-        return false;
-    }
-    let variables: rustc_hash::FxHashSet<_> = pattern
-        .iter()
-        .filter_map(|term| match term {
-            Term::Lit(Lit::Var(v)) => Some(v),
-            _ => None,
-        })
-        .collect();
-    1usize
-        .checked_shl(subject.len().try_into().unwrap_or(u32::MAX))
-        .and_then(|n| (n - 1).checked_pow(variables.len().try_into().unwrap_or(u32::MAX)))
-        .is_none_or(|n| n > PARTITION_BUDGET)
 }
 
 fn flat_rows(variables: usize, occ: &[u64], tail: &[u64], rhs: &[u64]) -> *mut std::ffi::c_void {
@@ -1039,40 +836,6 @@ fn match_flat(symbol: AcSym, pattern: &[LNTerm], subject: &[LNTerm]) -> Result<O
         answers.dedup();
         Ok(Outcome::Complete(answers))
     })
-}
-
-fn reflexive_identity() -> Result<Outcome, Error> {
-    initialize()?;
-    LEAN_THREAD.with(|_| {
-        // SAFETY: initialized runtime, scalar Bool in the pinned ABI.
-        match unsafe { tamarin_reflexive_unify(1) } {
-            2 => Ok(Outcome::Complete(vec![vec![]])),
-            code => Err(Error::InvalidStatus(code)),
-        }
-    })
-}
-
-/// A variable strictly below the AC result sort cannot split into a product.
-/// Each operand is then a singleton even under further sorted specialization.
-fn reflexive_rigid_sort_ac(equation: &Equal<LNTerm>) -> bool {
-    if equation.lhs != equation.rhs {
-        return false;
-    }
-    let Term::App(FunSym::Ac(symbol), children) = &equation.lhs else {
-        return false;
-    };
-    let sort = ac_sort(*symbol);
-    let mut variable = false;
-    children.len() >= 2
-        && children.iter().all(|t| match t {
-            Term::Lit(Lit::Var(v)) => {
-                variable = true;
-                v.sort != sort && subsort(v.sort, sort)
-            }
-            Term::Lit(Lit::Con(c)) => subsort(crate::maude_types::sort_of_name(c), sort),
-            _ => false,
-        })
-        && variable
 }
 
 /// Admit the two projection equations with arbitrary declared uninterpreted
@@ -1211,58 +974,9 @@ fn canonical_capture(term: &LNTerm) -> LNTerm {
     }
 }
 
-/// Root projection reduction with constructor children. The contract proves
-/// the selected result is a normal form reachable by the pairing equations.
-/// Nested projections remain explicitly unsupported by this first adapter.
-pub fn pairing_reduce(
-    sig: &crate::maude_sig::MaudeSig,
-    term: &LNTerm,
-) -> Result<Option<LNTerm>, Error> {
-    if !pairing_signature(sig) {
-        return Ok(None);
-    }
-    let Term::App(FunSym::NoEq(f), outer) = term else {
-        return Ok(None);
-    };
-    let first = if *f == crate::function_symbols::fst_sym() {
-        true
-    } else if *f == crate::function_symbols::snd_sym() {
-        false
-    } else {
-        return Ok(None);
-    };
-    let [Term::App(FunSym::NoEq(p), children)] = outer.as_ref() else {
-        return Ok(None);
-    };
-    if *p != crate::function_symbols::pair_sym()
-        || children.len() != 2
-        || !children.iter().all(|t| pairing_constructor(t, sig))
-    {
-        return Ok(None);
-    }
-    initialize()?;
-    LEAN_THREAD.with(|_| {
-        // SAFETY: initialized runtime and a scalar Bool argument, as above.
-        match unsafe { tamarin_pairing_project(u8::from(first)) } {
-            1 => Ok(Some(canonical_capture(&children[0]))),
-            2 => Ok(Some(canonical_capture(&children[1]))),
-            code => Err(Error::InvalidStatus(code)),
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lterm::{pub_term, NameTag};
-    use crate::term::f_app_ac;
-
-    fn equation(lhs: Vec<LNTerm>, rhs: Vec<LNTerm>) -> Equal<LNTerm> {
-        Equal {
-            lhs: f_app_ac(AcSym::Union, lhs),
-            rhs: f_app_ac(AcSym::Union, rhs),
-        }
-    }
 
     #[test]
     fn partition_budget_counts_ordered_images_and_every_suffix() {
@@ -1292,6 +1006,39 @@ mod tests {
         assert_eq!(partition_work(2, 1, &[0; 1024], PARTITION_BUDGET), None);
     }
 
+    /// The declarations of the C bridge come from `tamarin-algebra-sys`,
+    /// whose build generates them from the C definitions. One written in
+    /// this crate would be compared with nothing.
+    #[test]
+    fn bridge_declarations_are_generated() {
+        fn scan(dir: &std::path::Path, found: &mut Vec<String>) {
+            // A block of declarations, not the type of a function pointer.
+            let marker = concat!("extern ", "\"C\" {");
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    scan(&path, found);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    for (number, line) in text.lines().enumerate() {
+                        if line.contains(marker) {
+                            found.push(format!("{}:{}", path.display(), number + 1));
+                        }
+                    }
+                }
+            }
+        }
+        let mut found = Vec::new();
+        scan(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut found,
+        );
+        assert!(
+            found.is_empty(),
+            "foreign declarations written by hand, import them from tamarin_algebra_sys: {found:?}"
+        );
+    }
+
     #[test]
     fn ffi_compares_multisets_and_preserves_multiplicity() {
         assert_eq!(flat_ac_equal(&[1, 2, 1], &[2, 1, 1]), Ok(2));
@@ -1314,174 +1061,5 @@ mod tests {
         for thread in threads {
             thread.join().unwrap();
         }
-    }
-
-    #[test]
-    fn rust_encoding_preserves_full_name_identity() {
-        let public = pub_term("same-spelling");
-        let fresh = Term::Lit(Lit::Con(Name::new(NameTag::Fresh, "same-spelling")));
-        let anchor = pub_term("anchor");
-        assert_eq!(
-            unify(&[equation(vec![public, anchor.clone()], vec![fresh, anchor])]),
-            Ok(Outcome::Complete(vec![]))
-        );
-    }
-
-    #[test]
-    fn unsupported_inputs_do_not_become_contradictions() {
-        let a = pub_term("a");
-        let variable = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
-        assert_eq!(
-            unify(&[equation(
-                vec![variable.clone(), variable],
-                vec![a.clone(), a.clone()]
-            )]),
-            Ok(Outcome::Unsupported)
-        );
-        let node = Term::Lit(Lit::Con(Name::new(NameTag::Node, "n")));
-        assert_eq!(
-            unify(&[equation(vec![node, a.clone()], vec![a.clone(), a.clone()])]),
-            Ok(Outcome::Unsupported)
-        );
-        let malformed = Term::App(FunSym::Ac(AcSym::Union), Vec::new().into());
-        assert_eq!(
-            unify(&[Equal {
-                lhs: malformed.clone(),
-                rhs: malformed
-            }]),
-            Ok(Outcome::Unsupported)
-        );
-    }
-
-    #[test]
-    fn variable_remainder_is_ground_and_unwraps_singletons() {
-        let x = LVar::new("x", LSort::Msg, 19);
-        let v = Term::Lit(Lit::Var(x));
-        let a = pub_term("a");
-        let b = pub_term("b");
-        assert_eq!(
-            unify(&[equation(
-                vec![v.clone(), a.clone()],
-                vec![b.clone(), a.clone()]
-            )]),
-            Ok(Outcome::Complete(vec![vec![(x, b.clone())]]))
-        );
-        let product = f_app_ac(AcSym::Union, vec![a.clone(), b.clone()]);
-        // Opposite equation orientation, and a residual with multiplicity.
-        assert_eq!(
-            unify(&[equation(vec![a.clone(), a.clone(), b], vec![a, v],)]),
-            Ok(Outcome::Complete(vec![vec![(x, product)]]))
-        );
-    }
-
-    #[test]
-    fn variable_remainder_cannot_be_empty_or_use_missing_atoms() {
-        let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
-        let a = pub_term("a");
-        let b = pub_term("b");
-        assert_eq!(
-            unify(&[equation(
-                vec![x.clone(), a.clone(), b.clone()],
-                vec![a.clone(), b]
-            )]),
-            Ok(Outcome::Complete(vec![]))
-        );
-        assert_eq!(
-            unify(&[equation(vec![x, pub_term("missing")], vec![a.clone(), a])]),
-            Ok(Outcome::Complete(vec![]))
-        );
-    }
-
-    #[test]
-    fn conjunction_and_empty_problem_have_distinct_empty_conventions() {
-        let a = pub_term("a");
-        let b = pub_term("b");
-        assert_eq!(unify(&[]), Ok(Outcome::Complete(vec![vec![]])));
-        assert_eq!(
-            unify(&[
-                equation(vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]),
-                equation(vec![a.clone(), a.clone()], vec![a, b]),
-            ]),
-            Ok(Outcome::Complete(vec![]))
-        );
-    }
-
-    #[test]
-    fn conjunction_merges_ground_bindings_by_full_variable_identity() {
-        let x = LVar::new("x", LSort::Msg, 7);
-        let y = LVar::new("same-index", LSort::Msg, 7);
-        let a = pub_term("a");
-        let b = pub_term("b");
-        let c = pub_term("c");
-        let bind = |v, tail: LNTerm, values: Vec<LNTerm>| {
-            equation(vec![Term::Lit(Lit::Var(v)), tail], values)
-        };
-        let equations = [
-            bind(x, a.clone(), vec![a.clone(), b.clone(), c.clone()]),
-            bind(y, c.clone(), vec![a.clone(), c.clone()]),
-            // Same x, a different tail, and reversed equation orientation.
-            Equal {
-                lhs: f_app_ac(AcSym::Union, vec![c.clone(), b.clone(), b.clone()]),
-                rhs: f_app_ac(AcSym::Union, vec![Term::Lit(Lit::Var(x)), b.clone()]),
-            },
-            equation(vec![a.clone(), b.clone()], vec![b.clone(), a.clone()]),
-        ];
-        assert_eq!(
-            unify(&equations),
-            Ok(Outcome::Complete(vec![vec![
-                (x, f_app_ac(AcSym::Union, vec![b, c])),
-                (y, a),
-            ]]))
-        );
-    }
-
-    #[test]
-    fn conjunction_defers_conflicting_bindings_and_preserves_unsupported_inputs() {
-        let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 7)));
-        let a = pub_term("a");
-        let b = pub_term("b");
-        let first = equation(vec![x.clone(), a.clone()], vec![a.clone(), b.clone()]);
-        let conflict = equation(vec![x.clone(), a.clone()], vec![a.clone(), a.clone()]);
-        assert_eq!(unify(&[first.clone(), conflict]), Ok(Outcome::Unsupported));
-        let impossible = equation(vec![a.clone(), a.clone()], vec![a.clone(), b]);
-        assert_eq!(
-            unify(&[first, impossible.clone()]),
-            Ok(Outcome::Complete(vec![]))
-        );
-        let unsupported = equation(vec![x.clone(), x], vec![a.clone(), a]);
-        for equations in [
-            [impossible.clone(), unsupported.clone()],
-            [unsupported, impossible],
-        ] {
-            assert_eq!(unify(&equations), Ok(Outcome::Unsupported));
-        }
-    }
-
-    #[test]
-    fn shared_bindings_across_symbols_compare_decoded_terms() {
-        let x = LVar::new("x", LSort::Msg, 7);
-        let query = |symbol, rest: Vec<LNTerm>| {
-            let mut ground = vec![pub_term("tail")];
-            ground.extend(rest);
-            Equal {
-                lhs: f_app_ac(symbol, vec![Term::Lit(Lit::Var(x)), pub_term("tail")]),
-                rhs: f_app_ac(symbol, ground),
-            }
-        };
-        assert_eq!(
-            unify(&[
-                query(AcSym::Union, vec![pub_term("a")]),
-                query(AcSym::Xor, vec![pub_term("a")]),
-            ]),
-            Ok(Outcome::Complete(vec![vec![(x, pub_term("a"))]]))
-        );
-        // Equal atom-ID arrays do not mean equal products across symbols.
-        assert_eq!(
-            unify(&[
-                query(AcSym::Union, vec![pub_term("a"), pub_term("b")]),
-                query(AcSym::Xor, vec![pub_term("a"), pub_term("b")]),
-            ]),
-            Ok(Outcome::Unsupported)
-        );
     }
 }

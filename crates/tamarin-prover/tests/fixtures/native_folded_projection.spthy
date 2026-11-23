@@ -1,0 +1,12 @@
+theory NativeFoldedProjection
+begin
+builtins: diffie-hellman
+
+rule Receive:
+  [ In(x), In(z) ] --[ Seen(fst(x^z)) ]-> [ ]
+
+lemma reachable:
+  exists-trace
+  "Ex m #i. Seen(m) @ i"
+
+end

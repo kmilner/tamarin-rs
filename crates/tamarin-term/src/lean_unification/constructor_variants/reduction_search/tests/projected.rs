@@ -59,16 +59,23 @@ fn projected_existence_keeps_connected_patterns_and_rhs_choices() {
         table.successors(&miss, &mut 100_000).unwrap(),
         Some(BTreeSet::new())
     );
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
-    assert_eq!(native.reduce(&miss).unwrap(), miss);
-    // Both choices for the observed commutative operand must reach the graph.
-    assert!(matches!(
-        native.reduce(&positive),
-        Err(crate::maude_proc::MaudeError::UnsupportedOperation(
-            "normalization"
-        ))
-    ));
+    // The certifier does not accept this table, and the all-paths check does
+    // not settle a term this wide, so a raw session reports the table for
+    // the irreducible query and for the ambiguous one alike.
+    for query in [&miss, &positive] {
+        let native = MaudeHandle::start_with_backend(
+            "/nonexistent",
+            sig.clone(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        assert!(matches!(
+            native.reduce(query),
+            Err(crate::maude_proc::MaudeError::UnsupportedOperation(
+                crate::maude_proc::UNCERTIFIED_TABLE
+            ))
+        ));
+    }
 }
 
 #[test]
@@ -92,9 +99,7 @@ fn native_oracle_projected_ground_rhs_preserves_the_ac_subproduct_complement() {
         table.successors(&input, &mut 100_000).unwrap(),
         Some([result.clone()].into_iter().collect())
     );
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none()
-        && let Some(path) = tamarin_test_support::require_maude_path()
-    {
+    if let Some(path) = tamarin_test_support::require_maude_path() {
         let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
         assert_eq!(oracle.reduce(&input).unwrap(), result);
     }

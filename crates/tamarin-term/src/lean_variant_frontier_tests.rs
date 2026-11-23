@@ -22,9 +22,6 @@ fn add_rule(sig: &mut MaudeSig, lhs: LNTerm, rhs: LNTerm) {
 }
 
 fn handles(sig: MaudeSig) -> Option<(MaudeHandle, MaudeHandle)> {
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return None;
-    }
     let path = require_maude_path()?;
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
@@ -160,9 +157,6 @@ fn check_ground_coverage(
 
 #[test]
 fn native_oracle_finite_ac_variants_include_proper_subproducts() {
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let merge = AcFctSym::new(
         b"merge",
         Privacy::Public,
@@ -394,9 +388,6 @@ fn native_oracle_frontier_compares_normal_results_on_overlapping_specializations
     let table = RuleTable::new(&sig).unwrap();
     let query = f_app_list(vec![choose(x.clone(), y.clone()), x, y]);
     assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
     assert!(matches!(
@@ -416,15 +407,10 @@ fn native_oracle_stale_free_rule_head_cannot_certify_a_false_normal_form() {
     // matcher are eligible. Their old indexes still classify hash as inert.
     let mut sig = hash_maude_sig();
     add_rule(&mut sig, t.clone(), x.clone());
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none() {
-        let native = MaudeHandle::start_with_backend(
-            "/nonexistent",
-            sig.clone(),
-            AlgebraBackend::NativeOnly,
-        )
-        .unwrap();
-        assert_eq!(native.reduce(&t).unwrap(), x);
-    }
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
+    assert_eq!(native.reduce(&t).unwrap(), x);
     if let Some(path) = tamarin_test_support::maude_path() {
         let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
         assert_eq!(oracle.reduce(&t).unwrap(), x);

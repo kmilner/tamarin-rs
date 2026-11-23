@@ -1018,7 +1018,6 @@ fn algebra_backend_selection_is_explicit_and_global() {
     );
     for (name, expected) in [
         ("maude", AlgebraBackend::Maude),
-        ("hybrid", AlgebraBackend::Hybrid),
         ("native-only", AlgebraBackend::NativeOnly),
     ] {
         assert_eq!(
@@ -1030,8 +1029,11 @@ fn algebra_backend_selection_is_explicit_and_global() {
             expected
         );
     }
-    assert_eq!(
-        parse_err(&["--algebra-backend=unknown", "x.spthy"]).kind(),
-        clap::error::ErrorKind::InvalidValue
-    );
+    // The removed hybrid backend is no longer a value.
+    for removed in ["unknown", "hybrid"] {
+        assert_eq!(
+            parse_err(&[&format!("--algebra-backend={removed}"), "x.spthy"]).kind(),
+            clap::error::ErrorKind::InvalidValue
+        );
+    }
 }

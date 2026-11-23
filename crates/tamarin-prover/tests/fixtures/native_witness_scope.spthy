@@ -1,0 +1,20 @@
+theory NativeWitnessScope
+begin
+
+/* The lemma variable `x` is in the constraint system but not in the XOR
+   unification query for `Act`. A unifier witness that reuses its name must
+   stay distinct from it; identifying the two made `flip` verifiable. */
+
+builtins: xor
+
+rule Init: [ Fr(~a), Fr(~b) ] --> [ St(~a, ~b) ]
+rule R: [ St(x, y) ] --[ Act(x XOR y), Other(x, y) ]-> [ ]
+rule M: [ In(m) ] --[ Mark(m) ]-> [ ]
+
+lemma flip:
+  "All c e x #i #j. Other(c, e) @ i & Mark(x) @ j ==> x = c"
+
+lemma sanity: exists-trace
+  "Ex c e x #i #j. Other(c, e) @ i & Mark(x) @ j & not(x = c)"
+
+end

@@ -1,0 +1,10 @@
+# Theories of the gate's lists that the native-only backend is known not to
+# finish within the limits yet. scripts/backend_gate.py runs them anyway, on
+# native-only with the short --pending-timeout, and reports each as XFAIL.
+#
+# An entry excuses a native-only run that does not finish or is too slow. It
+# never excuses a verdict that differs from Maude's. An entry whose theory
+# finishes within the limits fails the gate as XPASS until the line is
+# removed, so this file cannot outlive the defect it records.
+#
+# Format: <theory, as in the list><TAB><reason>

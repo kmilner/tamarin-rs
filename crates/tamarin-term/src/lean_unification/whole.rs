@@ -2,17 +2,22 @@
 //! systems and checks identity, closed clashes, and incompatible variable-image
 //! sizes on the original equation roots.
 mod checked_variants;
+pub(crate) use checked_variants::kind_level;
 pub use checked_variants::variants_for_convergent_theory;
 mod packed;
 pub(crate) use packed::{unpack_conjunction, Conjunction};
 mod reduction;
 pub use reduction::reduction_for_convergent_theory;
+pub(crate) use reduction::{FamilyCheck, Reduced, ReductionTable};
 mod total;
-pub(crate) use total::{matches as total_match, unify as total_unify};
+pub use total::UnifyReplies;
+pub(crate) use total::{
+    has_match as total_has_match, matches as total_match, unify as total_unify,
+    unify_exists as total_unify_exists,
+};
 
-use super::homogeneous::ProjectedAnswers;
-use super::{ac_sort, initialize, sort_word, Error, Outcome, RuleTable, WordSlice, LEAN_THREAD};
-use crate::function_symbols::{AcSym, FunSym};
+use super::{initialize, sort_word, Error, RuleTable, WordSlice, LEAN_THREAD};
+use crate::function_symbols::FunSym;
 use crate::lean_identity::IdentityTable;
 use crate::lterm::{LNTerm, LVar, Name};
 use crate::maude_types::sort_of_name;
@@ -21,14 +26,13 @@ use crate::subst::Subst;
 use crate::term::Term;
 use crate::vterm::Lit;
 use rustc_hash::FxHashMap;
-use std::borrow::Cow;
 
 // Canonicalization expands each equation's two roots, even when their numeric
 // rows are shared. Charge the fully expanded size across the whole request.
 const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 128;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct Packet {
     variables: IdentityTable<LVar>,
     names: IdentityTable<Name>,
@@ -37,11 +41,6 @@ pub(crate) struct Packet {
     nodes: FxHashMap<Box<[u64]>, u64>,
     equations: Vec<u64>,
     expanded: usize,
-}
-
-struct CheckedFactor {
-    packet: Packet,
-    matrix: Option<(AcSym, usize)>,
 }
 
 impl Packet {
@@ -170,15 +169,7 @@ impl Packet {
 
     // The caller has initialized Lean and holds the current thread registration.
     fn certifies_table(&self, rules: &[u64], fuel: u64) -> Result<bool, Error> {
-        unsafe extern "C" {
-            fn tamarin_lean_certify_table(
-                decls: WordSlice,
-                nodes: *const WordSlice,
-                count: usize,
-                rules: WordSlice,
-                fuel: u64,
-            ) -> u8;
-        }
+        use tamarin_algebra_sys::tamarin_lean_certify_table;
         let nodes = self.rows();
         // SAFETY: the shim copies all words while the borrowed slices are live.
         match unsafe {
@@ -196,6 +187,31 @@ impl Packet {
         }
     }
 
+    /// Everything the total exports read of a request, as one key: the
+    /// declarations, the node rows in order and the equation roots, each
+    /// behind its length.
+    fn request_words(&self) -> Box<[u64]> {
+        let mut rows = vec![&[][..]; self.nodes.len()];
+        for (row, &id) in &self.nodes {
+            rows[id as usize] = row;
+        }
+        let mut words = Vec::with_capacity(
+            3 + self.declarations.len()
+                + rows.iter().map(|r| r.len() + 1).sum::<usize>()
+                + self.equations.len(),
+        );
+        words.push(self.declarations.len() as u64);
+        words.extend(&self.declarations);
+        words.push(rows.len() as u64);
+        for row in rows {
+            words.push(row.len() as u64);
+            words.extend(row);
+        }
+        words.push(self.equations.len() as u64);
+        words.extend(&self.equations);
+        words.into_boxed_slice()
+    }
+
     fn rows(&self) -> Vec<WordSlice> {
         let mut rows = vec![WordSlice::new(&[]); self.nodes.len()];
         for (row, &id) in &self.nodes {
@@ -205,53 +221,10 @@ impl Packet {
     }
 }
 
-unsafe extern "C" {
-    fn tamarin_lean_operand_refine(sides: *const u64, count: usize, indices: *mut u64) -> usize;
-    fn tamarin_lean_factor_refutes(
-        declarations: WordSlice,
-        rows: *const WordSlice,
-        count: usize,
-        equations: WordSlice,
-    ) -> u8;
-    fn tamarin_lean_check_factors(
-        declarations: WordSlice,
-        rows: *const WordSlice,
-        count: usize,
-        original: WordSlice,
-        bindings: WordSlice,
-        residual: WordSlice,
-    ) -> u8;
-    fn tamarin_lean_graph_homogeneous_unify(
-        width: u64,
-        symbol: u64,
-        sort: u64,
-        declarations: WordSlice,
-        rows: *const WordSlice,
-        count: usize,
-        roots: WordSlice,
-    ) -> ProjectedAnswers;
-    fn tamarin_lean_graph_ac_feasible(
-        width: u64,
-        symbol: u64,
-        sort: u64,
-        declarations: WordSlice,
-        rows: *const WordSlice,
-        count: usize,
-        roots: WordSlice,
-    ) -> u8;
-    fn tamarin_lean_variant_overlap_agrees(
-        declarations: WordSlice,
-        rows: *const WordSlice,
-        count: usize,
-        roots: WordSlice,
-    ) -> u8;
-    fn tamarin_lean_whole_unify(
-        declarations: WordSlice,
-        rows: *const WordSlice,
-        count: usize,
-        equations: WordSlice,
-    ) -> u8;
-}
+use tamarin_algebra_sys::{
+    tamarin_lean_check_factors, tamarin_lean_factor_refutes, tamarin_lean_operand_refine,
+    tamarin_lean_variant_overlap_agrees,
+};
 
 // The selector observes only root identity. A local table suffices even when
 // substitution or decomposition has manufactured new residual roots.
@@ -339,102 +312,6 @@ impl RuleTable {
         }
     }
 
-    /// Skip rule-table initialization and graph construction for ordinary mixed
-    /// terms. Nested occurrences of the same AC symbol are valid raw input.
-    pub(crate) fn may_be_homogeneous(eqs: &[Equal<LNTerm>]) -> bool {
-        if eqs.len() > 64 {
-            return false;
-        }
-        let roots = || eqs.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]);
-        let Some(symbol) = roots().find_map(|t| match t {
-            Term::App(FunSym::Ac(symbol), _) => Some(*symbol),
-            _ => None,
-        }) else {
-            return false;
-        };
-        let sort = ac_sort(symbol);
-        let applicable = |t: &LNTerm| match t {
-            Term::Lit(Lit::Var(v)) => v.sort == sort,
-            Term::App(FunSym::Ac(f), _) => *f == symbol,
-            _ => false,
-        };
-        roots().all(|root| {
-            applicable(root)
-                && match root {
-                    Term::App(_, args) => args.len() <= MAX_NODES && args.iter().all(applicable),
-                    Term::Lit(_) => true,
-                }
-        })
-    }
-
-    pub(crate) fn graph_feasible(&self, eqs: &[Equal<LNTerm>]) -> Result<Option<bool>, Error> {
-        let Some(packet) = Packet::encode(self, eqs)? else {
-            return Ok(None);
-        };
-        packet.graph_feasible()
-    }
-
-    /// Collect the scope before removing reflexive and repeated equations.
-    /// Their variables remain reserved and visible in every projected answer.
-    pub(super) fn ac_operand_query<'a>(
-        &self,
-        eqs: &'a [Equal<LNTerm>],
-    ) -> Result<Option<(IdentityTable<LVar>, Cow<'a, [Equal<LNTerm>]>)>, Error> {
-        let Some(packet) = Packet::encode(self, eqs)? else {
-            return Ok(None);
-        };
-        let has_ac = packet
-            .symbols
-            .values()
-            .iter()
-            .any(|f| matches!(f, FunSym::Ac(_)));
-        if !has_ac || !self.admits_terms(eqs) {
-            return Ok(None);
-        }
-        // Up to 64 equations fit one AC matrix. The selector's candidate
-        // compares unordered pairs linearly in its set of earlier rows.
-        if !(2..=64).contains(&eqs.len()) {
-            return Ok(Some((packet.variables, Cow::Borrowed(eqs))));
-        }
-        let mut selected =
-            select_rows(eqs, &packet.equations)?.map_or(Cow::Borrowed(eqs), Cow::Owned);
-        if selected.len() > 1 {
-            let mut inner = Vec::with_capacity(selected.len());
-            let mut changed = false;
-            for eq in selected.iter() {
-                let pair = super::residual::inner_equality(&eq.lhs, &eq.rhs)?;
-                changed |= !std::ptr::eq(pair.0, &eq.lhs);
-                inner.push(pair);
-            }
-            // Select using equivalent inner equalities but retain original
-            // terms. The remaining matrix observes exactly the caller's operands.
-            if changed && let Some(kept) = select_rows(&selected, &root_ids(inner.into_iter())?)? {
-                selected = Cow::Owned(kept);
-            }
-        }
-        Ok(Some((packet.variables, selected)))
-    }
-
-    pub(crate) fn whole_unify(&self, equations: &[Equal<LNTerm>]) -> Result<Outcome, Error> {
-        self.try_whole_unify(equations).map(|(outcome, _)| outcome)
-    }
-
-    /// Retain a homogeneous graph after inconclusive whole-family search so a
-    /// caller can try a definitive negative once other complete solvers defer.
-    pub(crate) fn try_whole_unify(
-        &self,
-        equations: &[Equal<LNTerm>],
-    ) -> Result<(Outcome, Option<Packet>), Error> {
-        let Some(packet) = Packet::encode(self, equations)? else {
-            return Ok((Outcome::Unsupported, None));
-        };
-        initialize()?;
-        let shape = packet.matrix_shape();
-        let outcome = packet.solve(&packet.rows(), shape)?;
-        let pending = (outcome == Outcome::Unsupported && shape.is_some()).then_some(packet);
-        Ok((outcome, pending))
-    }
-
     /// Replay the clash on the pre-factoring equations. A false verdict or a
     /// graph outside the replay budget leaves the original query open.
     pub(crate) fn refutes_factor_clash(&self, equations: &[Equal<LNTerm>]) -> Result<bool, Error> {
@@ -468,26 +345,15 @@ impl RuleTable {
         if factor.is_empty() && original == residual {
             return Ok(true);
         }
-        Ok(self.checked_factor(original, factor, residual)?.is_some())
-    }
-
-    fn checked_factor(
-        &self,
-        original: &[Equal<LNTerm>],
-        factor: &Subst<Name, LVar>,
-        residual: &[Equal<LNTerm>],
-    ) -> Result<Option<CheckedFactor>, Error> {
-        // The residual variables form a dense prefix for the matrix solver.
-        // Extending this packet reserves every variable observed in the factor
-        // or the original request without renumbering any matrix column.
+        // One packet holds the residual, the original request and the factor,
+        // so the three sets of roots share a node table.
         let Some(mut packet) = Packet::encode(self, residual)? else {
-            return Ok(None);
+            return Ok(false);
         };
-        let matrix = packet.matrix_shape();
         let Some(original_roots) =
             packet.roots(self, original.iter().map(|eq| (&eq.lhs, &eq.rhs)))?
         else {
-            return Ok(None);
+            return Ok(false);
         };
         // A proposal may only refer to variables from the original request.
         // Even a reflexive residual on an unrelated variable could leak a new
@@ -508,12 +374,12 @@ impl RuleTable {
                 packet.term(self, &Term::Lit(Lit::Var(v))),
                 packet.term(self, image),
             ) else {
-                return Ok(None);
+                return Ok(false);
             };
             bindings.extend([key, value]);
         }
         if packet.variables.len() != original_vars.len() {
-            return Ok(None);
+            return Ok(false);
         }
         initialize()?;
         let rows = packet.rows();
@@ -529,129 +395,8 @@ impl RuleTable {
             )
         });
         match accepted {
-            0 => Ok(None),
-            1 => Ok(Some(CheckedFactor { packet, matrix })),
-            status => Err(Error::InvalidStatus(status)),
-        }
-    }
-
-    pub(crate) fn factored_unify(
-        &self,
-        original: &[Equal<LNTerm>],
-        factor: &Subst<Name, LVar>,
-        residual: &[Equal<LNTerm>],
-    ) -> Result<Outcome, Error> {
-        let Some(CheckedFactor { packet, matrix }) =
-            self.checked_factor(original, factor, residual)?
-        else {
-            return Ok(Outcome::Unsupported);
-        };
-        match packet.solve(&packet.rows(), matrix)? {
-            Outcome::Unsupported => {
-                // Residual witnesses must avoid variables eliminated by the factor.
-                self.unify_operands_avoiding(residual, packet.variables.values())
-            }
-            complete => Ok(complete),
-        }
-    }
-}
-
-impl Packet {
-    /// Read feasibility from these exact equation roots. A positive verdict
-    /// certifies existence and carries no substitution family.
-    pub(crate) fn graph_feasible(&self) -> Result<Option<bool>, Error> {
-        initialize()?;
-        let rows = self.rows();
-        let Some((symbol, width)) = self.matrix_shape() else {
-            return self.whole_verdict(&rows);
-        };
-        if !(1..=MAX_NODES).contains(&width) {
-            return Ok(None);
-        }
-        let symbol_id = self
-            .symbols
-            .id(FunSym::Ac(symbol))
-            .ok_or(Error::InvalidStatus(255))?;
-        // SAFETY: the shim copies all borrowed rows and roots before returning its tag.
-        let status = LEAN_THREAD.with(|_| unsafe {
-            tamarin_lean_graph_ac_feasible(
-                width as u64,
-                symbol_id,
-                sort_word(ac_sort(symbol)),
-                WordSlice::new(&self.declarations),
-                rows.as_ptr(),
-                rows.len(),
-                WordSlice::new(&self.equations),
-            )
-        });
-        match status {
-            0 => Ok(None),
-            1 => Ok(Some(false)),
-            2 => Ok(Some(true)),
-            status => Err(Error::InvalidStatus(status)),
-        }
-    }
-
-    fn matrix_shape(&self) -> Option<(AcSym, usize)> {
-        match self.symbols.values() {
-            [FunSym::Ac(symbol)] if self.names.len() == 0 => Some((*symbol, self.variables.len())),
-            _ => None,
-        }
-    }
-
-    fn solve(&self, rows: &[WordSlice], matrix: Option<(AcSym, usize)>) -> Result<Outcome, Error> {
-        if let Some((symbol, width)) = matrix {
-            let symbol_id = self
-                .symbols
-                .id(FunSym::Ac(symbol))
-                .expect("interned AC symbol");
-            // SAFETY: the graph and roots remain live while C copies them into Lean arrays.
-            let raw = LEAN_THREAD.with(|_| unsafe {
-                tamarin_lean_graph_homogeneous_unify(
-                    width as u64,
-                    symbol_id,
-                    sort_word(ac_sort(symbol)),
-                    WordSlice::new(&self.declarations),
-                    rows.as_ptr(),
-                    rows.len(),
-                    WordSlice::new(&self.equations),
-                )
-            });
-            if let Some(packet) = raw.into_packet()? {
-                let reserved = self.variables.values().iter().map(|v| v.idx).collect();
-                let images = super::homogeneous::decode(symbol, &reserved, width, packet)?;
-                let columns = &self.variables.values()[..width];
-                return Ok(Outcome::Complete(
-                    images
-                        .into_iter()
-                        .map(|arm| columns.iter().copied().zip(arm).collect())
-                        .collect(),
-                ));
-            }
-        }
-
-        Ok(match self.whole_verdict(rows)? {
-            None => Outcome::Unsupported,
-            Some(false) => Outcome::Complete(vec![]),
-            Some(true) => Outcome::Complete(vec![vec![]]),
-        })
-    }
-
-    /// The only positive whole-query packet denotes the identity substitution.
-    fn whole_verdict(&self, rows: &[WordSlice]) -> Result<Option<bool>, Error> {
-        // SAFETY: all borrowed rows and roots remain live while the shim copies them.
-        let status = LEAN_THREAD.with(|_| unsafe {
-            tamarin_lean_whole_unify(
-                WordSlice::new(&self.declarations),
-                rows.as_ptr(),
-                rows.len(),
-                WordSlice::new(&self.equations),
-            )
-        });
-        match status {
-            0 => Ok(None),
-            1 => Ok(Some(false)),
-            2 => Ok(Some(true)),
+            0 => Ok(false),
+            1 => Ok(true),
             status => Err(Error::InvalidStatus(status)),
         }
     }
@@ -660,87 +405,12 @@ impl Packet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        lterm::{pub_term, LSort},
-        maude_sig::mset_maude_sig,
-    };
+    use crate::function_symbols::AcSym;
+    use crate::lterm::{pub_term, LSort};
+    use crate::maude_sig::mset_maude_sig;
 
     #[test]
-    fn context_selection_keeps_the_original_equations_and_observed_siblings() {
-        use crate::builtin::pair;
-        use crate::maude_sig::pair_maude_sig;
-        use crate::term::f_app_ac;
-
-        let table = RuleTable::new(&mset_maude_sig().merge(pair_maude_sig())).unwrap();
-        let var = |i| Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, i)));
-        let eq = |lhs, rhs| Equal { lhs, rhs };
-        let sum = |xs| f_app_ac(AcSym::Union, xs);
-        let context = |t| sum(vec![var(2), var(2), pair(var(3), t)]);
-        let inner = eq(var(0), var(1));
-        let wrapped = eq(context(var(1)), context(var(0)));
-        // Neither the second differing pair argument nor a surplus AC
-        // occurrence can be dropped as if it were an equal sibling.
-        let differs_twice = eq(pair(var(0), var(2)), pair(var(1), var(3)));
-        let surplus = eq(sum(vec![var(0), var(2), var(2)]), sum(vec![var(1), var(2)]));
-        let rows = [inner, wrapped, differs_twice, surplus];
-        let (vars, kept) = table.ac_operand_query(&rows).unwrap().unwrap();
-        assert_eq!(vars.len(), 4);
-        assert_eq!(kept.len(), 3);
-        assert!(kept.contains(&rows[2]) && kept.contains(&rows[3]));
-        assert!(kept.contains(&rows[0]) || kept.contains(&rows[1]));
-        let reversed = [rows[1].clone(), rows[0].clone()];
-        let (vars, kept) = table.ac_operand_query(&reversed).unwrap().unwrap();
-        assert_eq!(vars.len(), 4);
-        assert_eq!(kept.len(), 1);
-        assert!(reversed.contains(&kept[0]));
-    }
-
-    #[test]
-    fn graph_matrix_preserves_repeated_edges_and_column_order_across_equations() {
-        let table = RuleTable::new(&mset_maude_sig()).unwrap();
-        let [z, a, x] = ["z", "a", "x"].map(|name| LVar::new(name, LSort::Msg, 17));
-        let v = |key| Term::Lit(Lit::Var(key));
-        let sym = FunSym::Ac(AcSym::Union);
-        let plus = |left, right| Term::App(sym, vec![left, right].into());
-        let twice_z = plus(v(z), v(z));
-        // 2z = 3a and a + x = 2z have the single primitive ratio (3, 2, 4).
-        // Both equations reference the same 2z node. The three a edges are
-        // nested and all three columns have the same source variable index.
-        let original = [
-            Equal {
-                lhs: twice_z.clone(),
-                rhs: plus(v(a), plus(v(a), v(a))),
-            },
-            Equal {
-                lhs: plus(v(a), v(x)),
-                rhs: twice_z,
-            },
-        ];
-        let Outcome::Complete(arms) = table.whole_unify(&original).unwrap() else {
-            panic!("expected the primitive ratio")
-        };
-        let [arm] = arms.as_slice() else {
-            panic!("expected one arm")
-        };
-        assert_eq!(
-            arm.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
-            [z, a, x]
-        );
-        let Term::App(_, zs) = &arm[0].1 else {
-            panic!("expected a compound image")
-        };
-        let Term::Lit(Lit::Var(w)) = zs[0] else {
-            panic!("expected a shared witness")
-        };
-        assert_ne!(w.idx, z.idx);
-        for ((_, image), count) in arm.iter().zip([3, 2, 4]) {
-            assert_eq!(image, &Term::App(sym, vec![v(w); count].into()));
-        }
-    }
-
-    #[test]
-    fn factor_certificate_preserves_every_equation_and_reserves_eliminated_names() {
-        use crate::lterm::HasFrees;
+    fn factor_certificate_preserves_every_equation_and_rejects_forged_proposals() {
         use crate::term::f_app_ac;
 
         let table = RuleTable::new(&mset_maude_sig()).unwrap();
@@ -758,27 +428,12 @@ mod tests {
         let factor = Subst::from_list([(x, term(y))]);
         let original = [alias, ratio.clone()];
         let residual = std::slice::from_ref(&ratio);
-        let Outcome::Complete(arms) = table.factored_unify(&original, &factor, residual).unwrap()
-        else {
-            panic!("a direct alias and independent AC equation must be admitted")
-        };
-        let [arm] = arms.as_slice() else {
-            panic!("expected one primitive ratio")
-        };
-        assert_eq!(arm.len(), 2);
-        for (_, image) in arm {
-            image.for_each_free(&mut |w| assert!(![x.idx, y.idx, a.idx, b.idx].contains(&w.idx)));
-        }
+        // A direct alias beside an independent AC equation is admitted.
+        assert!(table.accepts_factor(&original, &factor, residual).unwrap());
         // Using disjoint identity tables here could make either forged proposal appear valid.
         let forged = Subst::from_list([(x, term(a))]);
-        assert_eq!(
-            table.factored_unify(&original, &forged, residual).unwrap(),
-            Outcome::Unsupported
-        );
-        assert_eq!(
-            table.factored_unify(&original, &factor, &[]).unwrap(),
-            Outcome::Unsupported
-        );
+        assert!(!table.accepts_factor(&original, &forged, residual).unwrap());
+        assert!(!table.accepts_factor(&original, &factor, &[]).unwrap());
         let extra = [
             ratio,
             Equal {
@@ -786,32 +441,7 @@ mod tests {
                 rhs: term(b),
             },
         ];
-        assert_eq!(
-            table.factored_unify(&original, &factor, &extra).unwrap(),
-            Outcome::Unsupported
-        );
-    }
-
-    #[test]
-    fn checked_factor_lifts_both_graph_replies() {
-        let table = RuleTable::new(&mset_maude_sig()).unwrap();
-        let x = LVar::new("bound", LSort::Msg, 0);
-        let alias = Equal {
-            lhs: Term::Lit(Lit::Var(x)),
-            rhs: pub_term("a"),
-        };
-        let factor = Subst::from_list([(x, alias.rhs.clone())]);
-        for (rhs, expected) in [("a", vec![vec![]]), ("b", vec![])] {
-            let residual = [Equal {
-                lhs: pub_term("a"),
-                rhs: pub_term(rhs),
-            }];
-            let original = [alias.clone(), residual[0].clone()];
-            assert_eq!(
-                table.factored_unify(&original, &factor, &residual).unwrap(),
-                Outcome::Complete(expected)
-            );
-        }
+        assert!(!table.accepts_factor(&original, &factor, &extra).unwrap());
     }
 
     #[test]
@@ -833,8 +463,6 @@ mod tests {
         assert_eq!(row.len(), width + 2);
         assert!(row[2..].iter().all(|child| *child == 0));
         assert_eq!(packet.equations, [1, 1]);
-        assert!(matches!(table.whole_unify(&equations).unwrap(),
-            Outcome::Complete(answers) if answers == vec![vec![]]));
         assert!(Packet::encode(&table, &query(width + 1)).unwrap().is_none());
     }
 }

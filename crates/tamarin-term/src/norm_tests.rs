@@ -198,14 +198,19 @@ fn normal_form_check_uses_existence_for_ambiguous_compound_rule() {
     sig.st_rules
         .insert(crate::subterm_rule::rrule_to_ctxt_st_rule(&rule).unwrap());
     let sig = sig.refresh();
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let subject = mix(hash(pub_term("a")), hash(pub_term("b")));
     assert!(!nf_via_haskell_maude(&oracle, &subject));
-    assert!(!nf_via_haskell_maude(&hybrid, &subject));
+    assert!(!nf_via_haskell_maude(&native, &subject));
     assert!(oracle.stats().match_count > 0);
-    assert_eq!(hybrid.stats().match_count, 0);
+    // Native-only decides the same match through the proved existence export.
+    use crate::algebra_provenance::{Command, Origin};
+    let tally = native.provenance();
+    assert_eq!(tally.total(Command::Match), 1);
+    assert_eq!(tally.fresh(Command::Match, Origin::Proved), 1);
 }
 
 // A term rooted at one user-`[AC]` symbol is never reducible by an st

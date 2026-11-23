@@ -16,27 +16,7 @@ use crate::term::{f_app_ac, Term};
 use crate::vterm::Lit;
 use rustc_hash::FxHashSet;
 
-unsafe extern "C" {
-    fn tamarin_lean_residual_variable(
-        right: u8,
-        key: u64,
-        key_sort: u64,
-        kind: u8,
-        value_sort: u64,
-        ids: *const u64,
-        count: usize,
-    ) -> u8;
-    fn tamarin_lean_residual_rigid(
-        left_kind: u8,
-        left_head: u64,
-        left_children: *const u64,
-        left_count: usize,
-        right_kind: u8,
-        right_head: u64,
-        right_children: *const u64,
-        right_count: usize,
-    ) -> u8;
-}
+use tamarin_algebra_sys::{tamarin_lean_residual_rigid, tamarin_lean_residual_variable};
 
 fn kind(t: &LNTerm) -> Result<u8, Error> {
     Ok(match t {
@@ -132,41 +112,6 @@ fn action(a: &LNTerm, b: &LNTerm, inventory: &mut OperandInventory) -> Result<u8
         // SAFETY: the rows live for this call and the shim copies their words.
         tamarin_lean_residual_rigid(lk, lh, ls.as_ptr(), ls.len(), rk, rh, rs.as_ptr(), rs.len())
     }))
-}
-
-/// Peel injective one-hole contexts to compare the equality inside them.
-/// Each step descends to strict children of the original roots. A pair that
-/// does not admit another step is still a valid key for the row selector.
-pub(super) fn inner_equality<'a>(
-    mut lhs: &'a LNTerm,
-    mut rhs: &'a LNTerm,
-) -> Result<(&'a LNTerm, &'a LNTerm), Error> {
-    let mut inventory = OperandInventory::default();
-    while let (Term::App(f, left), Term::App(g, right)) = (lhs, rhs) {
-        if f != g || left.len() != right.len() || lhs == rhs {
-            break;
-        }
-        let children = match f {
-            FunSym::NoEq(_) => {
-                let mut changed = left.iter().zip(right.iter()).filter(|(a, b)| a != b);
-                let Some(pair) = changed.next() else { break };
-                if changed.next().is_some() || action(lhs, rhs, &mut inventory)? != FREE_CHILDREN {
-                    break;
-                }
-                pair
-            }
-            FunSym::Ac(_) if left.len() >= 2 => {
-                let (a, b) = common_children::residual_refs(left.iter(), right.iter())?;
-                let ([a], [b]) = (a.as_slice(), b.as_slice()) else {
-                    break;
-                };
-                (*a, *b)
-            }
-            _ => break,
-        };
-        (lhs, rhs) = children;
-    }
-    Ok((lhs, rhs))
 }
 
 type Bindings = Subst<Name, LVar>;
@@ -527,93 +472,6 @@ impl super::RuleTable {
             return Ok(super::Outcome::Complete(Vec::new()));
         }
         super::open_match::with_captures(&canonical, Vec::new())
-    }
-
-    /// Bare captures are forced by the ground subjects. Seed the remaining
-    /// structural matches with those images, including when a variable also
-    /// occurs below a constructor or in several AC partitions.
-    pub(crate) fn match_ground_captures(
-        &self,
-        equations: &[Equal<LNTerm>],
-    ) -> Result<super::Outcome, Error> {
-        use super::Outcome;
-        use crate::vterm::is_ground_vterm;
-        if !equations
-            .iter()
-            .any(|e| matches!(e.lhs, Term::Lit(Lit::Var(_))))
-        {
-            return Ok(Outcome::Unsupported);
-        }
-        let mut budget = Budget::new();
-        if !budget.charge(sides(equations), None)? {
-            return Ok(Outcome::Unsupported);
-        }
-        let mut keys = FxHashSet::default();
-        for eq in equations {
-            if !is_ground_vterm(&eq.rhs) {
-                return Ok(Outcome::Unsupported);
-            }
-            if let Term::Lit(Lit::Var(v)) = eq.lhs {
-                keys.insert(v);
-            }
-        }
-        if !self.admits_terms(equations) {
-            return Ok(Outcome::Unsupported);
-        }
-        let mut captures = Vec::new();
-        let mut patterns = Vec::new();
-        for eq in equations {
-            let rhs = super::canonical_capture(&eq.rhs);
-            if let Term::Lit(Lit::Var(_)) = eq.lhs {
-                captures.push(Equal {
-                    lhs: eq.lhs.clone(),
-                    rhs,
-                });
-            } else if !is_ground_vterm(&eq.lhs) {
-                patterns.push(Equal {
-                    lhs: super::canonical_capture(&eq.lhs),
-                    rhs,
-                });
-            } else if super::canonical_capture(&eq.lhs) != rhs {
-                // Substitution fixes ground terms. An unequal closed guard
-                // refutes the entire conjunction before expanding any image.
-                return Ok(Outcome::Complete(vec![]));
-            }
-        }
-        let reserved = keys.iter().map(|v| v.idx).collect();
-        let Some(arms) = solve(captures, &reserved, &mut budget)? else {
-            return Ok(Outcome::Unsupported);
-        };
-        if arms.len() > 1 {
-            return Ok(Outcome::Unsupported);
-        }
-        let mut answers = Vec::new();
-        for arm in arms {
-            let bindings = arm.to_list();
-            if bindings.len() != keys.len()
-                || !bindings
-                    .iter()
-                    .all(|(v, t)| keys.contains(v) && is_ground_vterm(t))
-            {
-                return Ok(Outcome::Unsupported);
-            }
-            if !patterns.is_empty() {
-                // A forced image is ground, so apply it simultaneously only
-                // to the pattern. Each occurrence consumes the full image's
-                // expansion budget before rebuilding and flattening any AC node.
-                if !budget.charge(patterns.iter().map(|eq| &eq.lhs), Some(&arm))? {
-                    return Ok(Outcome::Unsupported);
-                }
-                for eq in &mut patterns {
-                    if let Some(specialized) = crate::subst::apply_vterm_changed(&arm, &eq.lhs) {
-                        eq.lhs = specialized;
-                    }
-                }
-                return super::open_match::with_captures(&patterns, bindings);
-            }
-            answers.push(bindings);
-        }
-        Ok(Outcome::Complete(answers))
     }
 }
 

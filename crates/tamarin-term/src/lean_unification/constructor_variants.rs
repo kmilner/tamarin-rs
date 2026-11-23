@@ -6,6 +6,7 @@ mod dh_peer;
 mod dh_power;
 mod dh_product;
 mod flat_xor;
+mod maude_listing;
 mod reduction_search;
 mod subgroups;
 mod total_free;
@@ -77,7 +78,10 @@ impl RuleTable {
     }
 
     pub(crate) fn new(sig: &MaudeSig) -> Option<Self> {
-        if sig.enable_diff || !sig.macro_names.is_empty() || (sig.enable_bp && !sig.enable_dh) {
+        // Macro names are parser-only: the algebra receives expanded terms, and a
+        // symbol the module does not declare has no entry below, so a term that
+        // still carried one would be declined rather than encoded.
+        if sig.enable_diff || (sig.enable_bp && !sig.enable_dh) {
             return None;
         }
         let mut symbols = IdentityTable::default();
@@ -274,25 +278,6 @@ impl RuleTable {
             }
         }
         Some(sort)
-    }
-
-    // Preserve the empty identity used by native callers for reflexive kind-level sums.
-    pub(crate) fn reflexive_kind_unifier(
-        &self,
-        equations: &[crate::rewriting::Equal<LNTerm>],
-    ) -> Result<Outcome, Error> {
-        let mut used = Vec::new();
-        if equations.iter().all(|eq| {
-            used.clear();
-            eq.lhs == eq.rhs
-                && self
-                    .collect(&eq.lhs, &mut used, InputDomain::ConstructorKind)
-                    .is_some()
-        }) {
-            super::reflexive_identity()
-        } else {
-            Ok(Outcome::Unsupported)
-        }
     }
 
     fn fresh_xor_pair(&self, t: &LNTerm) -> Option<[LVar; 2]> {
@@ -533,6 +518,9 @@ impl RuleTable {
         Ok(self.irreducible_native(t)?.then(|| t.clone()))
     }
 
+    /// Test entry to the reducer of the variant proposers, behind their
+    /// admission gate for sorted inputs.
+    #[cfg(test)]
     pub(crate) fn reduce(&self, term: &LNTerm) -> Result<Option<LNTerm>, Error> {
         if self
             .collect(term, &mut Vec::new(), InputDomain::Sorted)

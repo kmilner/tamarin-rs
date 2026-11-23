@@ -51,9 +51,7 @@ fn native_oracle_total_contraction_handles_duplicated_and_reordered_inputs() {
     );
     let normal = pair(x.clone(), pair(frozen, x));
     assert_eq!(native.reduce(&input).unwrap(), normal);
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none()
-        && let Some(path) = tamarin_test_support::require_maude_path()
-    {
+    if let Some(path) = tamarin_test_support::require_maude_path() {
         let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
         assert_eq!(oracle.reduce(&input).unwrap(), normal);
     }
@@ -100,7 +98,9 @@ fn unsorted_or_constrained_rules_cannot_claim_a_total_root() {
             .unwrap();
     assert!(matches!(
         native.reduce(&at(pair(pub_term("one"), pub_term("two")), x)),
-        Err(MaudeError::UnsupportedOperation("normalization"))
+        Err(MaudeError::UnsupportedOperation(
+            crate::maude_proc::UNCERTIFIED_TABLE
+        ))
     ));
 }
 

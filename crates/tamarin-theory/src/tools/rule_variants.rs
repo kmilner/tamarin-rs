@@ -39,12 +39,15 @@ type LNSubst = Subst<Name, LVar>;
 
 #[derive(Debug, Clone)]
 pub enum VariantsError {
+    /// The request was cancelled. Not a backend failure.
+    Cancelled,
     Maude(String),
 }
 
 impl std::fmt::Display for VariantsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            VariantsError::Cancelled => f.write_str("request cancelled"),
             VariantsError::Maude(s) => write!(f, "Maude error: {}", s),
         }
     }
@@ -52,14 +55,19 @@ impl std::fmt::Display for VariantsError {
 impl std::error::Error for VariantsError {}
 impl From<crate::tools::equation_store::AddEqsError> for VariantsError {
     fn from(error: crate::tools::equation_store::AddEqsError) -> Self {
-        let crate::tools::equation_store::AddEqsError::Maude(message) = error;
-        Self::Maude(message)
+        match error {
+            crate::tools::equation_store::AddEqsError::Cancelled => Self::Cancelled,
+            crate::tools::equation_store::AddEqsError::Maude(message) => Self::Maude(message),
+        }
     }
 }
 
 impl From<MaudeError> for VariantsError {
     fn from(e: MaudeError) -> Self {
-        VariantsError::Maude(format!("{}", e))
+        match e {
+            MaudeError::Cancelled => Self::Cancelled,
+            other => Self::Maude(other.to_string()),
+        }
     }
 }
 
@@ -779,43 +787,36 @@ pub fn abstract_rule_and_variants(
             // stays untouched by this filter.
             let frees_max: u64 = frees.iter().map(|v| v.idx).max().unwrap_or(0);
             let filter_base: u64 = frees_max.saturating_add(1);
-            raw_substs
-                .into_iter()
-                .filter(|pairs| {
-                    let s_fresh = LNSubstVFresh::from_list(pairs.clone());
-                    let mut counter = filter_base;
-                    let subst = s_fresh.fresh_to_free_avoiding(|n| {
-                        let b = counter;
-                        counter += n;
-                        b
-                    });
-                    let premises: Vec<LNTerm> = premise_terms_for_filter
-                        .iter()
-                        .map(|t| {
-                            let applied = apply_vterm(&subst, t.clone());
-                            maude.reduce(&applied).unwrap_or(applied)
-                        })
-                        .collect();
-                    let fresh_terms: Vec<LNTerm> = freshly_introduced
-                        .iter()
-                        .map(|t| apply_vterm(&subst, t.clone()))
-                        .collect();
-                    for ft in &fresh_terms {
-                        for p in &premises {
-                            if contains_subterm(ft, p) {
-                                return false;
-                            }
-                        }
-                    }
-                    true
-                })
-                .collect()
+            // The filter compares NORMAL forms; a failed reduction cannot
+            // stand in for one, so a backend error aborts the computation.
+            let mut retained = Vec::with_capacity(raw_substs.len());
+            for pairs in raw_substs {
+                let s_fresh = LNSubstVFresh::from_list(pairs.clone());
+                let mut counter = filter_base;
+                let subst = s_fresh.fresh_to_free_avoiding(|n| {
+                    let b = counter;
+                    counter += n;
+                    b
+                });
+                let premises = premise_terms_for_filter
+                    .iter()
+                    .map(|t| maude.reduce(&apply_vterm(&subst, t.clone())))
+                    .collect::<Result<Vec<LNTerm>, MaudeError>>()?;
+                let redundant = freshly_introduced.iter().any(|t| {
+                    let ft = apply_vterm(&subst, t.clone());
+                    premises.iter().any(|p| contains_subterm(&ft, p))
+                });
+                if !redundant {
+                    retained.push(pairs);
+                }
+            }
+            retained
         }
     };
 
     let composed_substs: Vec<LNSubstVFresh> = raw_substs
         .into_iter()
-        .map(|pairs| {
+        .map(|pairs| -> Result<LNSubstVFresh, MaudeError> {
             // `pairs` are already removeRenamings'd (applied once up front,
             // mirroring HS's `msubstToLSubstVFresh`, Maude/Types.hs).  HS's
             // identity variant therefore arrives EMPTY here, so composeVFresh
@@ -828,19 +829,16 @@ pub fn abstract_rule_and_variants(
             // composeVFresh vsubst abstractionSubst
             let composed = tamarin_term::subst_vfresh::compose_vfresh(&vsubst, &abstraction_subst);
             // normSubstVFresh' — normalise each range term via Maude.
-            let normalised_pairs: Vec<(LVar, LNTerm)> = composed
+            let normalised_pairs = composed
                 .to_list()
                 .into_iter()
-                .map(|(k, t)| {
-                    let n = maude.reduce(&t).unwrap_or(t);
-                    (k, n)
-                })
-                .collect();
+                .map(|(k, t)| Ok((k, maude.reduce(&t)?)))
+                .collect::<Result<Vec<(LVar, LNTerm)>, MaudeError>>()?;
             let normalised = LNSubstVFresh::from_list(normalised_pairs);
             // removeRenamings (post-compose, HS RuleVariants.hs)
             let cleaned = normalised.remove_renamings();
             // restrictVFresh (frees abstrPsCsAs)
-            cleaned.restrict(&abstr_frees)
+            Ok(cleaned.restrict(&abstr_frees))
         })
         // HS-faithful: `variantsProtoRule` (RuleVariants.hs) builds the
         // composed `substs` list with NO post-composition renaming filter — the
@@ -852,7 +850,7 @@ pub fn abstract_rule_and_variants(
         // here: it drops composed substs that restrict-down to a pure renaming,
         // which are EXACTLY HS's narrowing variants (breaks foo_eligibility `C_2`,
         // soundness bug — the `exec` exists-trace lemma can no longer narrow).
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     if composed_substs.is_empty() {
         return Ok(None);
@@ -1185,7 +1183,17 @@ pub fn rule_has_no_variants_for_wf_with(
     if let Some(no_variants) = reducible_has_no_variants {
         return no_variants;
     }
-    matches!(abstract_rule_and_variants(maude, rule), Ok(None))
+    match abstract_rule_and_variants(maude, rule) {
+        Ok(variants) => variants.is_none(),
+        Err(error) => {
+            // This predicate has no error channel. "Has variants" keeps the
+            // rule; the latch stops any result built on that placeholder.
+            if let VariantsError::Maude(reason) = error {
+                maude.record_failure(&MaudeError::Other(reason));
+            }
+            false
+        }
+    }
 }
 
 /// [`rule_has_no_variants_for_wf_with`] for a theory rule that

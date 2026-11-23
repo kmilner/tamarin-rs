@@ -58,11 +58,6 @@ pub(crate) fn load_from_source(
     origin: TheoryOrigin,
     cfg: &crate::ServerConfig,
 ) -> Result<TheoryEntry, LoadError> {
-    if cfg.algebra_backend == tamarin_term::algebra_backend::AlgebraBackend::NativeOnly {
-        return Err(LoadError::Elaborate(
-            "native-only interactive mode is not yet supported".into(),
-        ));
-    }
     cfg.algebra_backend
         .validate()
         .map_err(LoadError::Elaborate)?;
@@ -181,11 +176,24 @@ pub(crate) fn load_from_source(
     // from, taken before the NDC join below — see
     // `TheoryEntry::prover_maude_sig` for why the join must not reach it.
     let prover_maude_sig = typed.signature.clone();
-    let started_maude = MaudeHandle::start_with_backend(
+    // A protocol theory, so the session runs under Tamarin's contract for
+    // the equations, as the batch pipeline's does. On Maude this is the plain
+    // session; on native-only it lets a table the certifier did not accept
+    // answer under the author's convergence premise instead of failing.
+    let started_maude = MaudeHandle::start_for_tamarin_theory(
         &cfg.maude_path,
         prover_maude_sig.clone(),
         cfg.algebra_backend,
+        Default::default(),
     );
+    // Best-effort loading is for a Maude that cannot be started. Native-only
+    // has no process to miss, so its start failure is an error, never a
+    // theory silently loaded without its variants.
+    if !cfg.algebra_backend.uses_maude() {
+        started_maude
+            .as_ref()
+            .map_err(|error| LoadError::Elaborate(error.to_string()))?;
+    }
     if auto_sources {
         started_maude.as_ref().map_err(|error| {
             LoadError::Elaborate(format!("auto-sources requires Maude: {error}"))
@@ -252,6 +260,15 @@ pub(crate) fn load_from_source(
         wf_report.extend(extra);
         if cfg.derivcheck_timeout.is_enabled() {
             eprintln!("[Theory {}] Derivation checks ended", typed.name);
+        }
+        // Once per load, as the batch pipeline does once per theory: the
+        // rule variants above have built the session's rewrite table.
+        if maude.convergence_assumed() {
+            eprintln!(
+                "[Theory {}] note: {}",
+                typed.name,
+                tamarin_term::algebra_backend::ASSUMED_CONVERGENT_NOTICE
+            );
         }
         if auto_sources {
             tamarin_theory::auto_sources::apply_auto_sources(
@@ -358,20 +375,32 @@ mod tests {
         cfg
     }
 
+    /// A native-only web load never takes the best-effort path that a
+    /// missing Maude opens: a build without the Lean library refuses the
+    /// backend, and a build with it closes the theory without any Maude.
     #[test]
     fn native_only_web_load_does_not_silently_use_best_effort_fallback() {
+        use tamarin_term::algebra_backend::AlgebraBackend;
         let mut cfg = test_config("/nonexistent/maude-for-test");
-        cfg.algebra_backend = tamarin_term::algebra_backend::AlgebraBackend::NativeOnly;
-        let error = load_from_source(
-            "theory T begin end",
+        cfg.algebra_backend = AlgebraBackend::NativeOnly;
+        let loaded = load_from_source(
+            "theory T begin builtins: diffie-hellman rule R: [ In(x), Fr(~k) ] --> [ Out(x^~k) ] end",
             TheoryOrigin::Upload("t.spthy".into()),
             &cfg,
-        )
-        .err()
-        .expect("native-only web load must fail");
-        assert!(error
-            .to_string()
-            .contains("native-only interactive mode is not yet supported"));
+        );
+        match AlgebraBackend::NativeOnly.validate() {
+            Err(reason) => {
+                let error = loaded.err().expect("native-only web load must fail");
+                assert!(error.to_string().contains(&reason), "{error}");
+            }
+            Ok(()) => {
+                let entry =
+                    loaded.unwrap_or_else(|error| panic!("native-only web load failed: {error}"));
+                // The variants block is what the best-effort path leaves out.
+                let rule = entry.typed_theory.rules().next().unwrap();
+                assert!(!rule.variant_substs.is_empty());
+            }
+        }
     }
 
     /// The interactive `TheoryLoadOptions` plumbing added for HS parity:

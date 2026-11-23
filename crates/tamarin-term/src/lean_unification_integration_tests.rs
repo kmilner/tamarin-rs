@@ -1,16 +1,26 @@
-//! Differential coverage for the Lean dispatch, including factoring and fallback.
+//! Differential coverage of the proved native-only dispatch against a Maude oracle.
 
+use crate::algebra_backend::AlgebraBackend;
+use crate::algebra_provenance::{Command, Origin};
 use crate::function_symbols::{AcSym, FunSym};
 use crate::lterm::{pub_term, LNTerm, LSort, LVar};
 use crate::maude_proc::MaudeHandle;
-use crate::maude_sig::mset_maude_sig;
+use crate::maude_sig::{mset_maude_sig, MaudeSig};
 use crate::rewriting::Equal;
 use crate::term::{f_app_ac, Term};
 use crate::vterm::Lit;
 use tamarin_test_support::require_maude_path;
 
-fn handle() -> Option<MaudeHandle> {
-    require_maude_path().map(|path| MaudeHandle::start(&path, mset_maude_sig()).unwrap())
+fn native_session(sig: MaudeSig) -> MaudeHandle {
+    MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap()
+}
+
+// The native-only multiset session under test and its Maude oracle.
+fn handles() -> Option<(MaudeHandle, MaudeHandle)> {
+    let path = require_maude_path()?;
+    let oracle =
+        MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
+    Some((native_session(mset_maude_sig()), oracle))
 }
 
 fn sum(atoms: &[usize]) -> LNTerm {
@@ -30,7 +40,6 @@ fn checked_factor_clashes_match_unfactored_maude_queries() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::hash;
     use crate::function_symbols::{Constructability, NoEqSym, Privacy};
-    use crate::lean_unification::Outcome;
     use crate::maude_sig::hash_maude_sig;
     use crate::subst::Subst;
     use crate::term::f_app_no_eq;
@@ -60,15 +69,10 @@ fn checked_factor_clashes_match_unfactored_maude_queries() {
         eq(x.clone(), hash(pub_term("a"))),
     ];
     assert!(crate::unification::unify_lnterm_factored(clash.clone()).is_none());
-    assert!(matches!(
-        table.whole_unify(&clash).unwrap(),
-        Outcome::Unsupported
-    ));
     assert!(table.refutes_factor_clash(&clash).unwrap());
     assert!(!table.refutes_factor_clash(&possible).unwrap());
-    // An erroneous Rust failure must still return the verified positive family.
     assert_eq!(
-        canonical_variants(native.resolve_factor_clash(&possible).unwrap()),
+        canonical_variants(native.unify(&possible).unwrap()),
         canonical_variants(
             oracle
                 .unify_residuals_with_maude(&possible, &Subst::empty())
@@ -107,15 +111,8 @@ fn checked_factor_clashes_match_unfactored_maude_queries() {
             .len(),
         2
     );
-    assert_eq!(
-        native
-            .native_rules()
-            .unwrap()
-            .unify_forced_operands(&rows)
-            .unwrap(),
-        Outcome::Complete(Vec::new())
-    );
     assert!(native.unify(&rows).unwrap().is_empty());
+    assert!(!native.unifiable(&rows).unwrap());
     assert!(oracle
         .unify_residuals_with_maude(&rows, &Subst::empty())
         .unwrap()
@@ -151,12 +148,8 @@ fn successful_factor_preserves_the_original_family() {
     // Both sides become h(a). This is a unifier but it cannot represent x=y=b.
     let specific = Subst::from_list(vec![(x, a.clone()), (y, a.clone())]);
     assert!(!table.accepts_factor(&original, &specific, &[]).unwrap());
-    let compare = |eqs: &[Equal<LNTerm>], factor: &Subst<_, _>, residual: &[Equal<LNTerm>]| {
+    let compare = |eqs: &[Equal<LNTerm>]| {
         [
-            native
-                .recover_unchecked_factor(eqs, factor, residual)
-                .unwrap()
-                .expect("proposal must defer"),
             native.unify(eqs).unwrap(),
             oracle
                 .unify_residuals_with_maude(eqs, &Subst::empty())
@@ -165,7 +158,7 @@ fn successful_factor_preserves_the_original_family() {
     };
     // A complete family can also contain narrower, redundant solutions.
     // Every arm must identify x and y, and one shared Msg witness covers all.
-    for family in compare(&original, &specific, &[]) {
+    for family in compare(&original) {
         let mut general = false;
         for arm in family {
             let bindings = crate::subst_vfresh::LNSubstVFresh::from_list(arm);
@@ -199,7 +192,10 @@ fn successful_factor_preserves_the_original_family() {
         vec![(x, a.clone()), (y, a.clone()), (z, b.clone())],
         vec![(x, b.clone()), (y, b), (z, a)],
     ]);
-    for family in compare(&rows, &alias_factor, &partial) {
+    assert!(!table
+        .accepts_factor(&rows, &alias_factor, &partial)
+        .unwrap());
+    for family in compare(&rows) {
         assert_eq!(canonical_ground_answers(family), expected);
     }
     assert_eq!(oracle.stats().unify_count, 2);
@@ -261,7 +257,7 @@ fn packed_shape_clashes_preserve_the_full_query_for_both_operations() {
             AlgebraBackend::NativeOnly,
         )
         .unwrap();
-        h.reference_algebra = reference;
+        h.set_reference(reference);
         h
     };
     let x = LVar::new("x", LSort::Msg, 0);
@@ -452,6 +448,105 @@ fn canonical_small_ac_answers(
     answers
 }
 
+// Each arm as the images of all query variables in one term, after checking
+// that it unifies the equations. The proved export may leave a query variable
+// in its range where Maude prints a witness; both give the same row.
+fn unifier_rows(
+    eqs: &[Equal<LNTerm>],
+    arms: crate::lean_unification::Substitutions,
+) -> crate::lean_unification::Substitutions {
+    use crate::subst::{apply_vterm, Subst};
+    let mut vars = Vec::new();
+    for eq in eqs {
+        vars.extend(crate::lterm::frees_list(&eq.lhs));
+        vars.extend(crate::lterm::frees_list(&eq.rhs));
+    }
+    vars.sort();
+    vars.dedup();
+    let inputs =
+        crate::term::f_app_list(vars.into_iter().map(|v| Term::Lit(Lit::Var(v))).collect());
+    let rows = arms
+        .into_iter()
+        .map(|arm| {
+            let subst = Subst::from_list(arm);
+            for eq in eqs {
+                assert_eq!(
+                    apply_vterm(&subst, eq.lhs.clone()),
+                    apply_vterm(&subst, eq.rhs.clone()),
+                    "{subst:?} does not unify {eq:?}"
+                );
+            }
+            vec![(
+                LVar::new("row", LSort::Msg, 0),
+                apply_vterm(&subst, inputs.clone()),
+            )]
+        })
+        .collect();
+    canonical_small_ac_answers(rows)
+}
+
+// A complete family need not be minimal: the proved export can keep an arm
+// that is a free instance of another one where Maude lists only the general
+// arm, and the other way round. Drops such arms.
+fn minimal_rows(
+    rows: crate::lean_unification::Substitutions,
+) -> crate::lean_unification::Substitutions {
+    let instance = |arm: &LNTerm, general: &LNTerm| {
+        let (Term::App(_, arm), Term::App(_, general)) = (arm, general) else {
+            panic!("a row is a tuple")
+        };
+        let pairs = arm.iter().cloned().zip(general.iter().cloned()).collect();
+        crate::unification::solve_match_lterm_no_ac(
+            &crate::maude_types::sort_of_name,
+            crate::rewriting::Match::DelayedMatches(pairs),
+        )
+        .is_some()
+    };
+    let mut kept = Vec::new();
+    'rows: for (i, row) in rows.iter().enumerate() {
+        for (j, other) in rows.iter().enumerate() {
+            // Of two rows that are instances of each other the first stays.
+            if i != j
+                && instance(&row[0].1, &other[0].1)
+                && (j < i || !instance(&other[0].1, &row[0].1))
+            {
+                continue 'rows;
+            }
+        }
+        kept.push(row.clone());
+    }
+    kept
+}
+
+// Native-only and Maude return the same unifiers once the instances of other
+// arms are dropped. Returns the number of the remaining ones.
+fn assert_same_minimal_unifiers(
+    native: &MaudeHandle,
+    oracle: &MaudeHandle,
+    eqs: &[Equal<LNTerm>],
+) -> usize {
+    let actual = minimal_rows(unifier_rows(eqs, native.unify(eqs).unwrap()));
+    let expected = minimal_rows(unifier_rows(eqs, oracle.unify(eqs).unwrap()));
+    assert_eq!(actual, expected, "{eqs:?}");
+    actual.len()
+}
+
+// Native-only and Maude return the same unifiers up to witness names and arm
+// order. Returns their number.
+fn assert_same_unifiers(
+    native: &MaudeHandle,
+    oracle: &MaudeHandle,
+    eqs: &[Equal<LNTerm>],
+) -> usize {
+    let actual = unifier_rows(eqs, native.unify(eqs).unwrap());
+    assert_eq!(
+        actual,
+        unifier_rows(eqs, oracle.unify(eqs).unwrap()),
+        "{eqs:?}"
+    );
+    actual.len()
+}
+
 fn multisets(length: usize, minimum: usize) -> Vec<Vec<usize>> {
     if length == 0 {
         return vec![vec![]];
@@ -470,8 +565,9 @@ fn multisets(length: usize, minimum: usize) -> Vec<Vec<usize>> {
 
 #[test]
 fn lean_one_variable_matches_maude_for_small_multisets_in_both_orientations() {
-    let Some(lean) = handle() else { return };
-    let Some(oracle) = handle() else { return };
+    let Some((lean, oracle)) = handles() else {
+        return;
+    };
     let x = LVar::new("x", LSort::Msg, 7);
     let tails: Vec<_> = (1..=2).flat_map(|length| multisets(length, 0)).collect();
     let right_sides: Vec<_> = (2..=4).flat_map(|length| multisets(length, 0)).collect();
@@ -488,24 +584,31 @@ fn lean_one_variable_matches_maude_for_small_multisets_in_both_orientations() {
             ] {
                 let eqs = [Equal { lhs, rhs }];
                 assert_eq!(
-                    lean.unify(&eqs).unwrap(),
-                    oracle.unify_via_maude(&eqs).unwrap(),
+                    canonical_ground_answers(lean.unify(&eqs).unwrap()),
+                    canonical_ground_answers(oracle.unify(&eqs).unwrap()),
                     "tail {tail:?}, ground {ground:?}"
                 );
                 queries += 1;
             }
         }
     }
-    assert_eq!(lean.stats().lean_unify_count, queries);
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none() {
-        assert_eq!(lean.stats().unify_count, 0);
-    }
+    // Requests that differ only in the names of their atoms are one request
+    // to the export, whose reply is kept and decoded again.
+    let provenance = lean.provenance();
+    assert_eq!(
+        provenance.fresh(Command::Unify, Origin::Proved)
+            + provenance.cached(Command::Unify, Origin::Proved),
+        queries
+    );
+    assert!(provenance.fresh(Command::Unify, Origin::Proved) > 0);
+    assert_eq!(lean.stats().unify_count, 0);
 }
 
 #[test]
 fn lean_ground_dispatch_matches_maude_exhaustively_for_small_multisets() {
-    let Some(lean) = handle() else { return };
-    let Some(oracle) = handle() else { return };
+    let Some((lean, oracle)) = handles() else {
+        return;
+    };
     let multisets: Vec<_> = (0..3)
         .flat_map(|a| (a..3).flat_map(move |b| (b..3).map(move |c| [a, b, c])))
         .collect();
@@ -516,24 +619,28 @@ fn lean_ground_dispatch_matches_maude_exhaustively_for_small_multisets() {
                 lhs: sum(lhs),
                 rhs: sum(rhs),
             }];
-            assert_eq!(
-                lean.unify(&eqs).unwrap(),
-                oracle.unify_via_maude(&eqs).unwrap()
-            );
+            assert_eq!(lean.unify(&eqs).unwrap(), oracle.unify(&eqs).unwrap());
             queries += 1;
         }
     }
-    assert_eq!(lean.stats().lean_unify_count, queries);
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none() {
-        assert_eq!(lean.stats().unify_count, 0);
-    }
+    // Requests that differ only in the names of their atoms are one request
+    // to the export, whose reply is kept and decoded again.
+    let provenance = lean.provenance();
+    assert_eq!(
+        provenance.fresh(Command::Unify, Origin::Proved)
+            + provenance.cached(Command::Unify, Origin::Proved),
+        queries
+    );
+    assert!(provenance.fresh(Command::Unify, Origin::Proved) > 0);
+    assert_eq!(lean.stats().unify_count, 0);
     assert!(oracle.stats().unify_count > 0);
 }
 
 #[test]
-fn lean_identity_arm_composes_with_the_factored_free_substitution() {
-    let Some(lean) = handle() else { return };
-    let Some(oracle) = handle() else { return };
+fn ground_identity_row_keeps_the_binding_of_the_free_row() {
+    let Some((lean, oracle)) = handles() else {
+        return;
+    };
     let x = LVar::new("free", LSort::Msg, 4);
     let eqs = [
         Equal {
@@ -546,26 +653,9 @@ fn lean_identity_arm_composes_with_the_factored_free_substitution() {
         },
     ];
     let actual = lean.unify(&eqs).unwrap();
-    assert_eq!(actual, oracle.unify_via_maude(&eqs).unwrap());
+    assert_eq!(actual, oracle.unify(&eqs).unwrap());
     assert_eq!(actual, vec![vec![(x, pub_term("bound"))]]);
-    assert_eq!(lean.stats().lean_unify_count, 1);
-}
-
-#[test]
-fn unsupported_nonground_equations_still_use_maude() {
-    let Some(lean) = handle() else { return };
-    let Some(oracle) = handle() else { return };
-    let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
-    let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 1)));
-    let lhs = f_app_ac(AcSym::Union, vec![x, pub_term("a")]);
-    let rhs = f_app_ac(AcSym::Union, vec![y, pub_term("b")]);
-    let eqs = [Equal { lhs, rhs }];
-    assert_eq!(
-        lean.unify(&eqs).unwrap(),
-        oracle.unify_via_maude(&eqs).unwrap()
-    );
-    assert_eq!(lean.stats().lean_unify_count, 0);
-    assert_eq!(lean.stats().unify_count, 1);
+    assert_eq!(lean.provenance().fresh(Command::Unify, Origin::Proved), 1);
 }
 
 #[test]
@@ -573,8 +663,13 @@ fn ground_equality_does_not_apply_xor_cancellation_equations() {
     let Some(path) = require_maude_path() else {
         return;
     };
-    let lean = MaudeHandle::start(&path, crate::maude_sig::xor_maude_sig()).unwrap();
-    let oracle = MaudeHandle::start(&path, crate::maude_sig::xor_maude_sig()).unwrap();
+    let lean = native_session(crate::maude_sig::xor_maude_sig());
+    let oracle = MaudeHandle::start_with_backend(
+        &path,
+        crate::maude_sig::xor_maude_sig(),
+        AlgebraBackend::Maude,
+    )
+    .unwrap();
     let a = pub_term("a");
     let b = pub_term("b");
     let eqs = [Equal {
@@ -582,45 +677,52 @@ fn ground_equality_does_not_apply_xor_cancellation_equations() {
         rhs: f_app_ac(AcSym::Xor, vec![b.clone(), b]),
     }];
     assert_eq!(lean.unify(&eqs).unwrap(), Vec::<Vec<_>>::new());
-    assert_eq!(
-        lean.unify(&eqs).unwrap(),
-        oracle.unify_via_maude(&eqs).unwrap()
-    );
-    assert_eq!(lean.stats().lean_unify_count, 2);
+    assert_eq!(lean.unify(&eqs).unwrap(), oracle.unify(&eqs).unwrap());
+    // The repeat is a hit in the session memo.
+    let provenance = lean.provenance();
+    assert_eq!(provenance.fresh(Command::Unify, Origin::Proved), 1);
+    assert_eq!(provenance.cached(Command::Unify, Origin::Proved), 1);
     assert!(matches!(eqs[0].lhs, Term::App(FunSym::Ac(AcSym::Xor), _)));
 }
 
 #[test]
-fn undeclared_symbols_and_natural_literals_retain_maude_errors() {
+fn undeclared_symbols_and_natural_literals_are_errors_on_both_backends() {
+    use crate::maude_proc::MaudeError;
     let Some(path) = require_maude_path() else {
         return;
     };
-    let pair = MaudeHandle::start(&path, crate::maude_sig::pair_maude_sig()).unwrap();
-    let undeclared = [Equal {
-        lhs: sum(&[0, 1]),
-        rhs: sum(&[0, 1]),
-    }];
-    assert!(pair.unify(&undeclared).is_err());
-    assert_eq!(pair.stats().lean_unify_count, 0);
-
-    let mset = MaudeHandle::start(&path, mset_maude_sig()).unwrap();
     let n = Term::Lit(Lit::Con(crate::lterm::Name::new(
         crate::lterm::NameTag::Nat,
         "n",
     )));
     let term = f_app_ac(AcSym::Union, vec![n, pub_term("a")]);
-    let undeclared_nat = [Equal {
-        lhs: term.clone(),
-        rhs: term,
-    }];
-    assert!(mset.unify(&undeclared_nat).is_err());
-    assert_eq!(mset.stats().lean_unify_count, 0);
+    for (sig, term) in [
+        (crate::maude_sig::pair_maude_sig(), sum(&[0, 1])),
+        (mset_maude_sig(), term),
+    ] {
+        let undeclared = [Equal {
+            lhs: term.clone(),
+            rhs: term,
+        }];
+        let oracle =
+            MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
+        assert!(oracle.unify(&undeclared).is_err());
+        // The unsupported request latches the native session.
+        let native = native_session(sig);
+        assert!(matches!(
+            native.unify(&undeclared),
+            Err(MaudeError::UnsupportedOperation(_))
+        ));
+        assert!(native.check_backend_status().is_err());
+        assert_eq!(native.provenance().total(Command::Unify), 0);
+    }
 }
 
 #[test]
-fn cached_ground_bindings_keep_full_variable_identity_and_compose_again() {
-    let Some(lean) = handle() else { return };
-    let Some(oracle) = handle() else { return };
+fn cached_ground_bindings_keep_full_variable_identity() {
+    let Some((lean, oracle)) = handles() else {
+        return;
+    };
     let x = LVar::new("x", LSort::Msg, 7);
     let y = LVar::new("other-name", LSort::Msg, 7);
     let free = LVar::new("free", LSort::Msg, 2);
@@ -640,18 +742,28 @@ fn cached_ground_bindings_keep_full_variable_identity_and_compose_again() {
                 },
             ];
             let result = lean.unify(&eqs).unwrap();
-            assert_eq!(result, oracle.unify_via_maude(&eqs).unwrap());
+            assert_eq!(
+                canonical_ground_answers(result.clone()),
+                canonical_ground_answers(oracle.unify(&eqs).unwrap())
+            );
             assert!(result[0].contains(&(free, pub_term(value))));
             assert!(result[0].contains(&(variable, sum(&[1, 1]))));
         }
     }
-    assert_eq!(lean.stats().lean_unify_count, 6);
+    // The second pass over x repeats two requests of the first, and requests
+    // that differ only in the name of the constant share one stored reply.
+    let provenance = lean.provenance();
+    let fresh = provenance.fresh(Command::Unify, Origin::Proved);
+    let cached = provenance.cached(Command::Unify, Origin::Proved);
+    assert_eq!(fresh + cached, 6);
+    assert!((1..=4).contains(&fresh), "{fresh}");
 }
 
 #[test]
 fn conjunctions_of_single_variable_equations_match_maude() {
-    let Some(lean) = handle() else { return };
-    let Some(oracle) = handle() else { return };
+    let Some((lean, oracle)) = handles() else {
+        return;
+    };
     let x = LVar::new("x", LSort::Msg, 7);
     // Numeric indices alone must not collapse distinct input variables.
     let y = LVar::new("y", LSort::Msg, 7);
@@ -679,23 +791,25 @@ fn conjunctions_of_single_variable_equations_match_maude() {
                 },
             ];
             assert_eq!(
-                lean.unify(&eqs).unwrap(),
-                oracle.unify_via_maude(&eqs).unwrap()
+                canonical_ground_answers(lean.unify(&eqs).unwrap()),
+                canonical_ground_answers(oracle.unify(&eqs).unwrap())
             );
             queries += 1;
         }
     }
     assert_eq!(queries, 256);
-    assert_eq!(lean.stats().lean_unify_count, queries);
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none() {
-        assert_eq!(lean.stats().unify_count, 0);
-    }
+    assert_eq!(
+        lean.provenance().fresh(Command::Unify, Origin::Proved),
+        queries
+    );
+    assert_eq!(lean.stats().unify_count, 0);
 }
 
 #[test]
-fn conjunction_shared_bindings_match_maude_and_conflicts_fall_back() {
-    let Some(lean) = handle() else { return };
-    let Some(oracle) = handle() else { return };
+fn conjunction_shared_bindings_match_maude_and_conflicts_have_no_unifier() {
+    let Some((lean, oracle)) = handles() else {
+        return;
+    };
     let x = LVar::new("x", LSort::Msg, 7);
     let equation = |tail, rest: &[usize]| {
         let mut ground = vec![tail];
@@ -711,19 +825,17 @@ fn conjunction_shared_bindings_match_maude_and_conflicts_fall_back() {
     for rest in (1..=3).flat_map(|n| multisets(n, 0)) {
         let eqs = [equation(0, &rest), equation(1, &rest), equation(2, &rest)];
         assert_eq!(
-            lean.unify(&eqs).unwrap(),
-            oracle.unify_via_maude(&eqs).unwrap()
+            canonical_ground_answers(lean.unify(&eqs).unwrap()),
+            canonical_ground_answers(oracle.unify(&eqs).unwrap())
         );
     }
-    assert_eq!(lean.stats().lean_unify_count, 19);
     let conflict = [equation(0, &[1]), equation(1, &[2])];
-    assert_eq!(
-        lean.unify(&conflict).unwrap(),
-        oracle.unify_via_maude(&conflict).unwrap()
-    );
     assert!(lean.unify(&conflict).unwrap().is_empty());
-    assert_eq!(lean.stats().lean_unify_count, 19);
-    assert!(lean.stats().unify_count > 0);
+    assert!(!lean.unifiable(&conflict).unwrap());
+    assert!(oracle.unify(&conflict).unwrap().is_empty());
+    let provenance = lean.provenance();
+    assert_eq!(provenance.fresh(Command::Unify, Origin::Proved), 20);
+    assert_eq!(provenance.cached(Command::Unify, Origin::Proved), 1);
 }
 
 #[test]
@@ -735,8 +847,12 @@ fn pairing_recipes_match_maude_modulo_fresh_witness_names() {
     let Some(path) = require_maude_path() else {
         return;
     };
-    let native =
-        MaudeHandle::start_with_backend(&path, pair_maude_sig(), AlgebraBackend::Hybrid).unwrap();
+    let native = MaudeHandle::start_with_backend(
+        "/nonexistent",
+        pair_maude_sig(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, pair_maude_sig(), AlgebraBackend::Maude).unwrap();
     for idx in [0, 7, 65535] {
@@ -782,13 +898,17 @@ fn pairing_recipes_match_maude_modulo_fresh_witness_names() {
 }
 
 #[test]
-fn reflexive_fresh_union_matches_maude_with_shared_variables_and_factoring() {
+fn reflexive_fresh_union_matches_maude_with_shared_variables_and_free_rows() {
     use crate::algebra_backend::AlgebraBackend;
     let Some(path) = require_maude_path() else {
         return;
     };
-    let native =
-        MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Hybrid).unwrap();
+    let native = MaudeHandle::start_with_backend(
+        "/nonexistent",
+        mset_maude_sig(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
     let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Fresh, 3)));
@@ -814,17 +934,11 @@ fn reflexive_fresh_union_matches_maude_with_shared_variables_and_factoring() {
                 mk(x.clone()),
             ],
         ] {
-            assert_eq!(
-                native.unify(&query).unwrap(),
-                oracle.unify(&query).unwrap(),
-                "{query:?}"
-            );
+            assert_eq!(assert_same_unifiers(&native, &oracle, &query), 1);
         }
     }
-    assert!(native.stats().lean_unify_count > 0);
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none() {
-        assert_eq!(native.stats().unify_count, 0);
-    }
+    assert!(native.provenance().fresh(Command::Unify, Origin::Proved) > 0);
+    assert_eq!(native.stats().unify_count, 0);
 }
 
 #[test]
@@ -851,7 +965,8 @@ fn combined_pairing_multiset_variants_and_reductions_match_maude() {
     sig.st_ac_fun_syms.insert(combine);
     let sig = sig.refresh();
     let native =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 7)));
     let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 7)));
@@ -911,8 +1026,12 @@ fn directional_ac_matching_matches_maude_with_shared_variables_and_rigid_context
     let Some(path) = require_maude_path() else {
         return;
     };
-    let native =
-        MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Hybrid).unwrap();
+    let native = MaudeHandle::start_with_backend(
+        "/nonexistent",
+        mset_maude_sig(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
     let x = LVar::new("x", LSort::Msg, 0);
@@ -958,19 +1077,13 @@ fn directional_ac_matching_matches_maude_with_shared_variables_and_rigid_context
 
 #[test]
 fn native_oracle_rigid_ground_comparisons_and_bare_captures_match_without_rewriting() {
-    // CI runs this comparison separately from hybrid verification.
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{exp, fst, pair};
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::{dh_maude_sig, pair_maude_sig};
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = dh_maude_sig().merge(pair_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
             .unwrap();
@@ -1005,21 +1118,6 @@ fn native_oracle_rigid_ground_comparisons_and_bare_captures_match_without_rewrit
             );
         }
     }
-    // A bindable variable in a subject does not become a unification unknown.
-    assert_eq!(
-        table
-            .match_ground_captures(&[eq(vx.clone(), vx.clone())])
-            .unwrap(),
-        Outcome::Unsupported
-    );
-    // A large closed guard must defer before building any candidate answers.
-    let wide = f_app_ac(AcSym::Mult, vec![a.clone(); 65_536]);
-    assert_eq!(
-        table
-            .match_ground_captures(&[eq(wide, a.clone()), eq(vx, a)])
-            .unwrap(),
-        Outcome::Unsupported
-    );
 }
 
 #[test]
@@ -1027,9 +1125,6 @@ fn native_oracle_shared_captures_constrain_ground_structural_matches() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::pair;
     use crate::maude_sig::pair_maude_sig;
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let sig = mset_maude_sig().merge(pair_maude_sig());
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
@@ -1105,9 +1200,6 @@ fn native_oracle_shared_captures_constrain_ground_structural_matches() {
 #[test]
 fn native_oracle_ground_captures_specialize_repeated_ac_occurrences_before_partitioning() {
     use crate::algebra_backend::AlgebraBackend;
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let sig = mset_maude_sig();
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
@@ -1153,7 +1245,7 @@ fn native_oracle_ground_captures_specialize_repeated_ac_occurrences_before_parti
 }
 
 #[test]
-fn mixed_sort_matches_use_lean_in_hybrid_and_agree_with_maude() {
+fn mixed_sort_matches_agree_with_maude() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::lterm::{fresh_term, Name, NameTag};
     use crate::maude_sig::nat_maude_sig;
@@ -1161,8 +1253,9 @@ fn mixed_sort_matches_use_lean_in_hybrid_and_agree_with_maude() {
         return;
     };
     let sig = mset_maude_sig().merge(nat_maude_sig());
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let atoms = [
         pub_term("n"),
@@ -1190,9 +1283,9 @@ fn mixed_sort_matches_use_lean_in_hybrid_and_agree_with_maude() {
                         }];
                         let expected = oracle.match_eqs(&eqs).unwrap();
                         assert!(expected.len() <= 1);
-                        assert_eq!(hybrid.has_match_eqs(&eqs).unwrap(), !expected.is_empty());
+                        assert_eq!(native.has_match_eqs(&eqs).unwrap(), !expected.is_empty());
                         assert_eq!(
-                            canonical_ground_answers(hybrid.match_eqs(&eqs).unwrap()),
+                            canonical_ground_answers(native.match_eqs(&eqs).unwrap()),
                             canonical_ground_answers(expected),
                             "{eqs:?}"
                         );
@@ -1201,7 +1294,7 @@ fn mixed_sort_matches_use_lean_in_hybrid_and_agree_with_maude() {
             }
         }
     }
-    assert_eq!(hybrid.stats().match_count, 0);
+    assert_eq!(native.stats().match_count, 0);
     assert!(oracle.stats().match_count > 0);
 }
 
@@ -1218,7 +1311,8 @@ fn open_compound_matches_agree_with_maude_for_shared_and_repeated_occurrences() 
     let sig = mset_maude_sig().merge(hash_maude_sig());
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
-    let hybrid = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
     let x = LVar::new("x", LSort::Msg, 7);
     let y = LVar::new("y", LSort::Msg, 7);
     let narrow = LVar::new("p", LSort::Pub, 7);
@@ -1254,30 +1348,24 @@ fn open_compound_matches_agree_with_maude_for_shared_and_repeated_occurrences() 
                     lhs: subject,
                     rhs: pat.clone(),
                 }];
-                let maude = oracle.match_eqs(&query).unwrap();
-                if lean.len() <= 1 {
-                    assert_eq!(
-                        lean.len(),
-                        maude.len(),
-                        "ordered hybrid multiplicity: {query:?}"
-                    );
-                }
+                let maude = canonical_ground_answers(oracle.match_eqs(&query).unwrap());
+                assert_eq!(canonical_ground_answers(lean), maude, "{query:?}");
                 assert_eq!(
-                    canonical_ground_answers(lean),
-                    canonical_ground_answers(maude.clone()),
+                    canonical_ground_answers(native.match_eqs(&query).unwrap()),
+                    maude,
                     "{query:?}"
                 );
-                assert_eq!(hybrid.has_match_eqs(&query).unwrap(), !maude.is_empty());
+                assert_eq!(native.has_match_eqs(&query).unwrap(), !maude.is_empty());
                 checked += 1;
             }
         }
     }
     assert_eq!(checked, 468);
-    assert_eq!(hybrid.stats().match_count, 0);
+    assert_eq!(native.stats().match_count, 0);
 }
 
 #[test]
-fn ordered_hybrid_open_matching_retains_maudes_first_arm() {
+fn open_matching_agrees_with_maude_in_both_entry_points() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::hash;
     use crate::maude_sig::hash_maude_sig;
@@ -1285,8 +1373,9 @@ fn ordered_hybrid_open_matching_retains_maudes_first_arm() {
         return;
     };
     let sig = mset_maude_sig().merge(hash_maude_sig());
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let v = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Msg, 7)));
     let u = |a, b| f_app_ac(AcSym::Union, vec![a, b]);
@@ -1297,10 +1386,9 @@ fn ordered_hybrid_open_matching_retains_maudes_first_arm() {
         rhs: u(hash(v("x")), v("x")),
     }];
     assert_eq!(
-        hybrid.match_eqs(&one_binding).unwrap(),
+        native.match_eqs(&one_binding).unwrap(),
         oracle.match_eqs(&one_binding).unwrap()
     );
-    assert_eq!(hybrid.stats().match_count, 0);
     let unique = [Equal {
         lhs: u(hash(a.clone()), a.clone()),
         rhs: pattern.clone(),
@@ -1312,7 +1400,7 @@ fn ordered_hybrid_open_matching_retains_maudes_first_arm() {
         (LVar::new("y", LSort::Msg, 7), a.clone()),
     ]];
     assert_eq!(oracle.match_eqs(&unique).unwrap(), expected);
-    assert_eq!(hybrid.match_eqs(&unique).unwrap(), expected);
+    assert_eq!(native.match_eqs(&unique).unwrap(), expected);
     let bindable = [("x", 7), ("y", 7)].into_iter().collect();
     let rigid = [Equal {
         lhs: unique[0].rhs.clone(),
@@ -1323,19 +1411,24 @@ fn ordered_hybrid_open_matching_retains_maudes_first_arm() {
         expected
     );
     assert_eq!(
-        hybrid.match_eqs_skolemize_both(&rigid, &bindable).unwrap(),
+        native.match_eqs_skolemize_both(&rigid, &bindable).unwrap(),
         expected
     );
+    // Native-only lists the two arms in the order of their binding maps,
+    // Maude in its own. The first match is the least one on both.
     let ambiguous = [Equal {
         lhs: u(hash(a), hash(pub_term("b"))),
         rhs: pattern,
     }];
-    assert!(hybrid.has_match_eqs(&ambiguous).unwrap());
-    assert_eq!(hybrid.stats().match_count, 0);
-    let answers = oracle.match_eqs(&ambiguous).unwrap();
+    assert!(native.has_match_eqs(&ambiguous).unwrap());
+    let answers = canonical_ground_answers(oracle.match_eqs(&ambiguous).unwrap());
     assert_eq!(answers.len(), 2);
-    assert_eq!(hybrid.match_eqs(&ambiguous).unwrap(), answers);
-    assert_eq!(hybrid.stats().match_count, 1);
+    assert_eq!(native.match_eqs(&ambiguous).unwrap(), answers);
+    assert_eq!(
+        native.first_match_eqs(&ambiguous).unwrap(),
+        oracle.first_match_eqs(&ambiguous).unwrap()
+    );
+    assert_eq!(native.stats().match_count, 0);
 }
 
 #[test]
@@ -1344,10 +1437,9 @@ fn independent_side_binding_keeps_its_subject_rigid() {
     let Some(path) = require_maude_path() else {
         return;
     };
-    let handle =
-        |backend| MaudeHandle::start_with_backend(&path, mset_maude_sig(), backend).unwrap();
-    let hybrid = handle(AlgebraBackend::Hybrid);
-    let oracle = handle(AlgebraBackend::Maude);
+    let native = native_session(mset_maude_sig());
+    let oracle =
+        MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
     let x = LVar::new("x", LSort::Msg, 0);
     let z = LVar::new("z", LSort::Msg, 1);
     let var = |v| Term::Lit(Lit::Var(v));
@@ -1368,9 +1460,8 @@ fn independent_side_binding_keeps_its_subject_rigid() {
     ] {
         let expected = vec![vec![(x, a.clone()), (z, var(x))]];
         assert_eq!(oracle.match_eqs(&eqs).unwrap(), expected);
-        assert_eq!(hybrid.match_eqs(&eqs).unwrap(), expected);
+        assert_eq!(native.match_eqs(&eqs).unwrap(), expected);
     }
-    assert_eq!(hybrid.stats().match_count, 0);
     // Reusing a residual pattern variable as the side domain prevents
     // independent extension. An incompatible pair must yield no answer.
     let shared = [
@@ -1381,18 +1472,23 @@ fn independent_side_binding_keeps_its_subject_rigid() {
         },
     ];
     assert!(oracle.match_eqs(&shared).unwrap().is_empty());
-    assert!(hybrid.match_eqs(&shared).unwrap().is_empty());
-    assert_eq!(hybrid.stats().match_count, 1);
+    assert!(native.match_eqs(&shared).unwrap().is_empty());
+    assert!(!native.has_match_eqs(&shared).unwrap());
+    assert_eq!(native.stats().match_count, 0);
 }
 
 #[test]
-fn hybrid_preserves_maude_arm_order_for_new_ambiguous_sorted_matches() {
+fn ambiguous_sorted_matches_agree_with_maude_as_sets() {
     use crate::algebra_backend::AlgebraBackend;
     let Some(path) = require_maude_path() else {
         return;
     };
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Hybrid).unwrap();
+    let native = MaudeHandle::start_with_backend(
+        "/nonexistent",
+        mset_maude_sig(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
     let u = |terms| f_app_ac(AcSym::Union, terms);
@@ -1411,29 +1507,32 @@ fn hybrid_preserves_maude_arm_order_for_new_ambiguous_sorted_matches() {
             rhs: u(vec![v(x), v(y)]),
         },
     ];
-    assert!(hybrid.has_match_eqs(&query).unwrap());
-    assert_eq!(hybrid.stats().match_count, 0);
-    let answers = oracle.match_eqs(&query).unwrap();
+    assert!(native.has_match_eqs(&query).unwrap());
+    let answers = canonical_ground_answers(oracle.match_eqs(&query).unwrap());
     assert_eq!(answers.len(), 2);
-    assert_eq!(hybrid.match_eqs(&query).unwrap(), answers);
-    assert_eq!(hybrid.stats().match_count, 1);
+    assert_eq!(native.match_eqs(&query).unwrap(), answers);
+    assert_eq!(
+        native.first_match_eqs(&query).unwrap(),
+        oracle.first_match_eqs(&query).unwrap()
+    );
 
     let bindable = [(x.name, x.idx), (y.name, y.idx)].into_iter().collect();
     let rigid = [Equal {
         lhs: u(vec![v(x), v(y), b.clone()]),
         rhs: u(vec![a, b.clone(), b]),
     }];
-    let answers = oracle.match_eqs_skolemize_both(&rigid, &bindable).unwrap();
+    let answers =
+        canonical_ground_answers(oracle.match_eqs_skolemize_both(&rigid, &bindable).unwrap());
     assert_eq!(answers.len(), 2);
     assert_eq!(
-        hybrid.match_eqs_skolemize_both(&rigid, &bindable).unwrap(),
+        canonical_ground_answers(native.match_eqs_skolemize_both(&rigid, &bindable).unwrap()),
         answers
     );
-    assert_eq!(hybrid.stats().match_count, 2);
+    assert_eq!(native.stats().match_count, 0);
 }
 
 #[test]
-fn mixed_literal_and_compound_leaves_under_free_heads_use_lean_in_hybrid() {
+fn mixed_literal_and_compound_leaves_under_free_heads_agree_with_maude() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{hash, pair};
     use crate::lterm::fresh_term;
@@ -1444,8 +1543,9 @@ fn mixed_literal_and_compound_leaves_under_free_heads_use_lean_in_hybrid() {
     let sig = mset_maude_sig()
         .merge(hash_maude_sig())
         .merge(pair_maude_sig());
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = LVar::new("x", LSort::Fresh, 0);
     let y = LVar::new("y", LSort::Msg, 0);
@@ -1464,7 +1564,7 @@ fn mixed_literal_and_compound_leaves_under_free_heads_use_lean_in_hybrid() {
             lhs: subject.clone(),
             rhs: pattern.clone(),
         }];
-        let answer = hybrid.match_eqs(&eqs).unwrap();
+        let answer = native.match_eqs(&eqs).unwrap();
         assert_eq!(answer.len(), expected);
         assert_eq!(answer, oracle.match_eqs(&eqs).unwrap());
         let oriented = [Equal {
@@ -1473,7 +1573,7 @@ fn mixed_literal_and_compound_leaves_under_free_heads_use_lean_in_hybrid() {
         }];
         let bindable = [(x.name, x.idx), (y.name, y.idx)].into_iter().collect();
         assert_eq!(
-            hybrid
+            native
                 .match_eqs_skolemize_both(&oriented, &bindable)
                 .unwrap(),
             oracle
@@ -1481,7 +1581,7 @@ fn mixed_literal_and_compound_leaves_under_free_heads_use_lean_in_hybrid() {
                 .unwrap()
         );
     }
-    assert_eq!(hybrid.stats().match_count, 0);
+    assert_eq!(native.stats().match_count, 0);
     assert!(oracle.stats().match_count > 0);
 }
 
@@ -1492,15 +1592,10 @@ fn native_oracle_repeated_subjects_match_at_their_distinct_image_cost() {
     use crate::maude_sig::nat_maude_sig;
     use crate::term::f_app_no_eq;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = nat_maude_sig().merge(mset_maude_sig());
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
             .unwrap();
@@ -1578,13 +1673,14 @@ fn native_oracle_repeated_subjects_match_at_their_distinct_image_cost() {
             ],
         ),
     }];
-    assert!(hybrid.has_match_eqs(&ambiguous).unwrap());
-    assert_eq!(hybrid.stats().match_count, 0);
+    assert!(native.has_match_eqs(&ambiguous).unwrap());
+    let answers = native.match_eqs(&ambiguous).unwrap();
+    assert_eq!(answers.len(), 8);
     assert_eq!(
-        hybrid.match_eqs(&ambiguous).unwrap(),
-        oracle.match_eqs(&ambiguous).unwrap()
+        answers,
+        canonical_ground_answers(oracle.match_eqs(&ambiguous).unwrap())
     );
-    assert_eq!(hybrid.stats().match_count, 1);
+    assert_eq!(native.stats().match_count, 0);
 }
 
 #[test]
@@ -1593,8 +1689,12 @@ fn multi_variable_flat_matching_matches_maude_exhaustively() {
     let Some(path) = require_maude_path() else {
         return;
     };
-    let native =
-        MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Hybrid).unwrap();
+    let native = MaudeHandle::start_with_backend(
+        "/nonexistent",
+        mset_maude_sig(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
     let x = LVar::new("x", LSort::Msg, 7);
@@ -1660,7 +1760,6 @@ fn multi_variable_flat_matching_matches_maude_exhaustively() {
 fn nested_constructor_matches_and_ground_side_unifiers_agree_with_maude() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::pair;
-    use crate::lean_unification::{unify_by_cancellation, Outcome};
     use crate::maude_sig::pair_maude_sig;
 
     let Some(path) = require_maude_path() else {
@@ -1668,7 +1767,8 @@ fn nested_constructor_matches_and_ground_side_unifiers_agree_with_maude() {
     };
     let sig = pair_maude_sig().merge(mset_maude_sig());
     let native =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 7)));
     let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 7)));
@@ -1700,12 +1800,9 @@ fn nested_constructor_matches_and_ground_side_unifiers_agree_with_maude() {
                         rhs: sum(&b),
                     },
                 ];
-                let Outcome::Complete(answers) = unify_by_cancellation(&eqs).unwrap() else {
-                    panic!("expected complete unification for {eqs:?}")
-                };
                 assert_eq!(
-                    canonical_ground_answers(answers),
-                    canonical_ground_answers(oracle.unify_via_maude(&eqs).unwrap()),
+                    canonical_ground_answers(native.unify(&eqs).unwrap()),
+                    canonical_ground_answers(oracle.unify(&eqs).unwrap()),
                     "{eqs:?}"
                 );
             }
@@ -1726,8 +1823,9 @@ fn sorted_residuals_agree_with_independent_assignments_and_maude() {
         return;
     };
     let sig = mset_maude_sig().merge(nat_maude_sig());
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
     let maude = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
 
     // Deliberately give all three rigid atoms the same spelling. Only the tag
@@ -1780,31 +1878,31 @@ fn sorted_residuals_agree_with_independent_assignments_and_maude() {
                         "sort={sort:?}, literal tail={tail:?}, subject={subject:?}"
                     )
                 };
-                check(hybrid.match_eqs(std::slice::from_ref(&eq)).unwrap());
+                check(native.match_eqs(std::slice::from_ref(&eq)).unwrap());
                 check(maude.match_eqs(std::slice::from_ref(&eq)).unwrap());
                 if queries % 2 == 0 {
                     std::mem::swap(&mut eq.lhs, &mut eq.rhs);
                 }
-                check(hybrid.unify(std::slice::from_ref(&eq)).unwrap());
+                check(native.unify(std::slice::from_ref(&eq)).unwrap());
                 check(maude.unify(std::slice::from_ref(&eq)).unwrap());
                 queries += 1;
             }
         }
     }
     assert_eq!(queries, 1116);
-    assert_eq!(hybrid.stats().match_count, 0);
-    assert!(hybrid.stats().lean_unify_count > 0);
+    assert_eq!(native.stats().match_count, 0);
+    assert!(native.provenance().fresh(Command::Unify, Origin::Proved) > 0);
     assert!(maude.stats().match_count > 0 && maude.stats().unify_count > 0);
 }
 
 #[test]
 fn cancellation_agrees_with_maude_under_ground_instances_of_the_free_variable() {
     use crate::algebra_backend::AlgebraBackend;
-    use crate::lean_unification::{unify_by_cancellation, Outcome};
 
     let Some(path) = require_maude_path() else {
         return;
     };
+    let native = native_session(mset_maude_sig());
     let oracle =
         MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
     let x = LVar::new("x", LSort::Msg, 7);
@@ -1833,14 +1931,7 @@ fn cancellation_agrees_with_maude_under_ground_instances_of_the_free_variable() 
                         lhs: product(lhs),
                         rhs: product(rhs),
                     };
-                    let Outcome::Complete(arms) =
-                        unify_by_cancellation(std::slice::from_ref(&query)).unwrap()
-                    else {
-                        panic!("unsupported cancellation {query:?}")
-                    };
-                    if !extra.contains(&c) {
-                        assert!(arms.iter().flatten().all(|(var, _)| *var != c));
-                    }
+                    assert_same_unifiers(&native, &oracle, std::slice::from_ref(&query));
                     for image in [pub_term("a0"), sum(&[0, 1])] {
                         let anchored = [
                             query.clone(),
@@ -1849,34 +1940,11 @@ fn cancellation_agrees_with_maude_under_ground_instances_of_the_free_variable() 
                                 rhs: product(vec![image.clone(), image.clone()]),
                             },
                         ];
-                        let expected =
-                            canonical_ground_answers(oracle.unify_via_maude(&anchored).unwrap());
-                        // Instantiate the free c in each returned general arm,
-                        // rejecting conflicts if a residual occurrence bound c.
-                        let instances = arms
-                            .iter()
-                            .filter_map(|arm| {
-                                let mut arm = arm.clone();
-                                if let Some((_, value)) = arm.iter().find(|(var, _)| *var == c) {
-                                    if *value != image {
-                                        return None;
-                                    }
-                                } else {
-                                    arm.push((c, image.clone()));
-                                }
-                                Some(arm)
-                            })
-                            .collect();
                         assert_eq!(
-                            canonical_ground_answers(instances),
-                            expected,
+                            canonical_ground_answers(native.unify(&anchored).unwrap()),
+                            canonical_ground_answers(oracle.unify(&anchored).unwrap()),
                             "{anchored:?}"
                         );
-                        let Outcome::Complete(joined) = unify_by_cancellation(&anchored).unwrap()
-                        else {
-                            panic!("unsupported join {anchored:?}")
-                        };
-                        assert_eq!(canonical_ground_answers(joined), expected, "{anchored:?}");
                     }
                     checked += 1;
                 }
@@ -1890,10 +1958,10 @@ fn cancellation_agrees_with_maude_under_ground_instances_of_the_free_variable() 
 #[test]
 fn ground_branch_filter_matches_maude_for_both_sided_equations() {
     use crate::algebra_backend::AlgebraBackend;
-    use crate::lean_unification::{unify_by_cancellation, Outcome};
     let Some(path) = require_maude_path() else {
         return;
     };
+    let native = native_session(mset_maude_sig());
     let oracle =
         MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
     let v = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 9)));
@@ -1917,13 +1985,11 @@ fn ground_branch_filter_matches_maude_for_both_sided_equations() {
                     if checked % 2 == 0 {
                         eqs.reverse();
                     }
-                    let Outcome::Complete(arms) = unify_by_cancellation(&eqs).unwrap() else {
-                        panic!("unsupported constrained branch {eqs:?}")
-                    };
+                    let arms = native.unify(&eqs).unwrap();
                     nonempty += usize::from(!arms.is_empty());
                     assert_eq!(
                         canonical_ground_answers(arms),
-                        canonical_ground_answers(oracle.unify_via_maude(&eqs).unwrap()),
+                        canonical_ground_answers(oracle.unify(&eqs).unwrap()),
                         "{eqs:?}"
                     );
                     checked += 1;
@@ -1940,22 +2006,13 @@ fn ground_branch_filter_matches_maude_for_both_sided_equations() {
 fn shared_offset_agrees_with_maude_modulo_per_answer_witness_names() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::pair;
-    use crate::lean_unification::{unify_with_witnesses, Outcome};
     use crate::lterm::fresh_term;
-    use crate::subst_vfresh::LNSubstVFresh;
     let Some(path) = require_maude_path() else {
         return;
     };
-    let oracle =
-        MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
-    let canonical = |arms: Vec<Vec<(LVar, LNTerm)>>| {
-        let mut arms: Vec<_> = arms
-            .into_iter()
-            .map(|a| LNSubstVFresh::from_list(a).drop_name_hints().to_list())
-            .collect();
-        arms.sort();
-        arms
-    };
+    let sig = mset_maude_sig().merge(crate::maude_sig::pair_maude_sig());
+    let native = native_session(sig.clone());
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let atoms = [
         pub_term("a"),
         pub_term("b"),
@@ -1989,19 +2046,7 @@ fn shared_offset_agrees_with_maude_modulo_per_answer_witness_names() {
                             single,
                         ],
                     ] {
-                        let (m, residual) =
-                            crate::unification::unify_lnterm_factored(eqs.clone()).unwrap();
-                        let Outcome::Complete(answers) =
-                            unify_with_witnesses(&residual, &eqs, &m).unwrap()
-                        else {
-                            panic!("unrecognized {eqs:?}")
-                        };
-                        assert_eq!(answers.len(), 2);
-                        assert_eq!(
-                            canonical(answers),
-                            canonical(oracle.unify_via_maude(&eqs).unwrap()),
-                            "{eqs:?}"
-                        );
+                        assert_eq!(assert_same_unifiers(&native, &oracle, &eqs), 2);
                         count += 1;
                     }
                 }
@@ -2035,7 +2080,8 @@ fn constructor_variants_follow_the_active_rule_table_and_agree_with_maude() {
         .merge(xor_maude_sig());
     let theory = RuleTable::new(&sig).unwrap();
     let maude = MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
-    let hybrid = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
     let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 8)));
     let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 8)));
     let k = pub_term("key");
@@ -2062,7 +2108,7 @@ fn constructor_variants_follow_the_active_rule_table_and_agree_with_maude() {
                     theory.variants(&packed).unwrap(),
                     Outcome::Complete(expected.clone())
                 );
-                assert_eq!(hybrid.variants(&packed).unwrap(), expected);
+                assert_eq!(native.variants(&packed).unwrap(), expected);
                 // The Maude decoder spells out the identity with fresh range
                 // variables. Every observed variable must retain its own sort
                 // and remain independent of every other observed variable.
@@ -2076,7 +2122,7 @@ fn constructor_variants_follow_the_active_rule_table_and_agree_with_maude() {
         }
     }
     assert_eq!(count, 84);
-    assert_eq!(hybrid.stats().var_count, 0);
+    assert_eq!(native.stats().var_count, 0);
     assert!(maude.stats().var_count > 0);
     for defined in [
         sdec(x.clone(), y.clone()),
@@ -2087,13 +2133,12 @@ fn constructor_variants_follow_the_active_rule_table_and_agree_with_maude() {
         let packed = f_app_list(vec![k.clone(), hash(defined)]);
         assert_eq!(theory.variants(&packed).unwrap(), Outcome::Unsupported);
     }
-    // A nested defined head still needs a broader narrowing search.
+    // A nested defined head needs a broader narrowing search.
     let nested = hash(sdec(x, y));
     assert_eq!(
-        hybrid.variants(&nested).unwrap(),
-        maude.variants(&nested).unwrap()
+        canonical_variants(native.variants(&nested).unwrap()),
+        canonical_variants(maude.variants(&nested).unwrap())
     );
-    assert!(hybrid.stats().var_count > 0);
 }
 
 #[test]
@@ -2131,7 +2176,8 @@ fn single_rule_narrowing_matches_maude_and_preserves_shared_parameters() {
     let sig = sig.refresh();
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
-    let native = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
     for idx in [0, 49, 65535] {
         let x = variable("x", idx);
         let y = variable("y", idx);
@@ -2281,9 +2327,6 @@ fn native_oracle_joint_destructors_preserve_normal_values_and_ambient_names() {
     use crate::term::f_app_list;
     use std::collections::BTreeMap;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -2334,6 +2377,21 @@ fn native_oracle_joint_destructors_preserve_normal_values_and_ambient_names() {
         let reference = observe(&oracle);
         assert_eq!(reference.len(), expected, "{query:?}");
         assert_eq!(observe(&native), reference, "{query:?}");
+        // The family is also listed as Maude lists it: the members in the
+        // order of Maude's narrowing, and their witnesses under its names.
+        let listing = |session: &MaudeHandle| -> Vec<_> {
+            session
+                .variants(&query)
+                .unwrap()
+                .into_iter()
+                .map(|arm| {
+                    crate::subst_vfresh::LSubstVFresh::from_list(arm)
+                        .remove_renamings()
+                        .to_list()
+                })
+                .collect()
+        };
+        assert_eq!(listing(&native), listing(&oracle), "{query:?}");
     }
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);
@@ -2355,7 +2413,8 @@ fn fixed_message_variants_preserve_tls_observers_and_nested_captures() {
     let table = RuleTable::new(&sig).unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
-    let native = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
     let var = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 5)));
     let signature = var("sig", LSort::Msg);
     let public_key = var("pk", LSort::Msg);
@@ -2481,7 +2540,6 @@ fn ground_result_narrowing_checks_all_anchor_occurrences_and_the_declared_rhs() 
 fn common_children_residuals_match_maude_in_sorted_conjunctions() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{hash, pair};
-    use crate::lean_unification::{unify_structured, Outcome};
     use crate::maude_sig::{hash_maude_sig, pair_maude_sig};
     let Some(path) = require_maude_path() else {
         return;
@@ -2489,6 +2547,7 @@ fn common_children_residuals_match_maude_in_sorted_conjunctions() {
     let sig = mset_maude_sig()
         .merge(pair_maude_sig())
         .merge(hash_maude_sig());
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let variable = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 5)));
     let (u, v, w) = (
@@ -2543,58 +2602,12 @@ fn common_children_residuals_match_maude_in_sorted_conjunctions() {
                     .collect(),
             ] {
                 eqs.push(equal(variable("k", LSort::Msg), pair(z.clone(), w.clone())));
-                let (m, r) = crate::unification::unify_lnterm_factored(eqs.clone()).unwrap();
-                let Outcome::Complete(answers) =
-                    unify_structured(oracle.native_rules().unwrap(), &r, &eqs, &m).unwrap()
-                else {
-                    panic!("unsupported {eqs:?}")
-                };
-                assert_eq!(
-                    canonical_variants(answers),
-                    canonical_variants(oracle.unify_via_maude(&eqs).unwrap()),
-                    "{eqs:?}"
-                );
+                assert_same_unifiers(&native, &oracle, &eqs);
                 checked += 1;
             }
         }
     }
     assert_eq!(checked, 100);
-}
-
-// In a long arm z contains two unordered witnesses. Visiting x and y
-// first assigns each its semantic role, regardless of Maude's choice of
-// numeric names or the sort order of the original variables.
-fn ordered_witness_answers(
-    arms: crate::lean_unification::Substitutions,
-    first: &[&LNTerm],
-) -> crate::lean_unification::Substitutions {
-    use crate::lterm::HasFrees;
-    use std::collections::BTreeMap;
-    let mut result = Vec::new();
-    for arm in arms {
-        let arm = crate::subst_vfresh::LNSubstVFresh::from_list(arm);
-        let mut names = BTreeMap::new();
-        let mut rename = |v: LVar| {
-            let id = names.len() as u64;
-            *names.entry(v).or_insert_with(|| LVar::new("", v.sort, id))
-        };
-        for term in first {
-            let Term::Lit(Lit::Var(v)) = term else {
-                panic!()
-            };
-            arm.image_of(v).unwrap().for_each_free(&mut |w| {
-                rename(*w);
-            });
-        }
-        result.push(
-            arm.to_list()
-                .into_iter()
-                .map(|(k, t)| (k, t.map_free(&mut rename)))
-                .collect(),
-        );
-    }
-    result.sort();
-    result
 }
 
 #[test]
@@ -2604,9 +2617,6 @@ fn native_oracle_repeated_product_unifies_shared_alien_factors() {
     use crate::maude_sig::hash_maude_sig;
     use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let sig = mset_maude_sig().merge(hash_maude_sig());
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
@@ -2656,21 +2666,18 @@ fn native_oracle_repeated_product_unifies_shared_alien_factors() {
 fn rigid_allocation_agrees_with_maude_after_factoring_and_reversing_the_query() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{hash, pair};
-    use crate::lean_unification::{unify_with_witnesses, Outcome};
     use crate::lterm::{fresh_term, Name, NameTag};
     use crate::maude_sig::nat_maude_sig;
 
     let Some(path) = require_maude_path() else {
         return;
     };
-    let oracle = MaudeHandle::start_with_backend(
-        &path,
-        mset_maude_sig()
-            .merge(nat_maude_sig())
-            .merge(crate::maude_sig::hash_maude_sig()),
-        AlgebraBackend::Maude,
-    )
-    .unwrap();
+    let sig = mset_maude_sig()
+        .merge(nat_maude_sig())
+        .merge(crate::maude_sig::hash_maude_sig())
+        .merge(crate::maude_sig::pair_maude_sig());
+    let native = native_session(sig.clone());
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let mut count = 0;
     for (symbol, sort, atom) in [
         (AcSym::Union, LSort::Msg, pub_term("a")),
@@ -2700,20 +2707,7 @@ fn rigid_allocation_agrees_with_maude_after_factoring_and_reversing_the_query() 
                     rhs: pair(x.clone(), pair(z.clone(), v("ambient", 550))),
                 };
                 for eqs in [vec![eq.clone()], vec![eq, alias]] {
-                    let (m, residual) =
-                        crate::unification::unify_lnterm_factored(eqs.clone()).unwrap();
-                    let Outcome::Complete(arms) =
-                        unify_with_witnesses(&residual, &eqs, &m).unwrap()
-                    else {
-                        panic!("unsupported {eqs:?}")
-                    };
-                    let reference = oracle.unify_via_maude(&eqs).unwrap();
-                    assert_eq!(arms.len(), 4, "{eqs:?}");
-                    assert_eq!(
-                        ordered_witness_answers(arms, &[&x, &y]),
-                        ordered_witness_answers(reference, &[&x, &y]),
-                        "{eqs:?}"
-                    );
+                    assert_eq!(assert_same_unifiers(&native, &oracle, &eqs), 4);
                     count += 1;
                 }
             }
@@ -2734,8 +2728,7 @@ fn compound_ground_factors_match_maude_in_both_matching_entry_points() {
     };
     let sig = mset_maude_sig().merge(hash_maude_sig());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
-    // These entry points also run in the CI differential job with verification
-    // enabled. The direct matcher bypasses that job's native-only policy guard.
+    // The direct matcher is compared with both of Maude's entry points.
     let a = pub_term("a");
     let b = pub_term("b");
     let terms = [a.clone(), hash(a.clone()), hash(b)];
@@ -2786,19 +2779,15 @@ fn compound_ground_factors_match_maude_in_both_matching_entry_points() {
 fn persistent_offsets_agree_with_maude_and_keep_ambient_variables_shared() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{hash, pair};
-    use crate::lean_unification::{unify_with_witnesses, Outcome};
     use crate::maude_sig::{hash_maude_sig, pair_maude_sig};
     let Some(path) = require_maude_path() else {
         return;
     };
-    let oracle = MaudeHandle::start_with_backend(
-        &path,
-        mset_maude_sig()
-            .merge(hash_maude_sig())
-            .merge(pair_maude_sig()),
-        AlgebraBackend::Maude,
-    )
-    .unwrap();
+    let sig = mset_maude_sig()
+        .merge(hash_maude_sig())
+        .merge(pair_maude_sig());
+    let native = native_session(sig.clone());
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let v = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 5)));
     let sum = |x, y| f_app_ac(AcSym::Union, vec![x, y]);
     let (x, y, p, q) = (v("x"), v("y"), v("p"), v("q"));
@@ -2824,17 +2813,7 @@ fn persistent_offsets_agree_with_maude_and_keep_ambient_variables_shared() {
                 rhs: rhs.clone(),
             };
             for eqs in [vec![single.clone()], vec![alias.clone(), single]] {
-                let (m, residual) = crate::unification::unify_lnterm_factored(eqs.clone()).unwrap();
-                let Outcome::Complete(arms) = unify_with_witnesses(&residual, &eqs, &m).unwrap()
-                else {
-                    panic!("unsupported {eqs:?}")
-                };
-                assert_eq!(arms.len(), 2);
-                assert_eq!(
-                    canonical_variants(arms),
-                    canonical_variants(oracle.unify_via_maude(&eqs).unwrap()),
-                    "{eqs:?}"
-                );
+                assert_eq!(assert_same_unifiers(&native, &oracle, &eqs), 2);
                 count += 1;
             }
         }
@@ -2846,21 +2825,16 @@ fn persistent_offsets_agree_with_maude_and_keep_ambient_variables_shared() {
 fn dependent_allocation_keeps_the_same_witness_inside_every_rigid_factor() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{hash, pair};
-    use crate::lean_unification::{unify_with_witnesses, Outcome};
     use crate::maude_sig::{hash_maude_sig, pair_maude_sig};
-    use crate::subst::Subst;
 
     let Some(path) = require_maude_path() else {
         return;
     };
-    let oracle = MaudeHandle::start_with_backend(
-        &path,
-        mset_maude_sig()
-            .merge(hash_maude_sig())
-            .merge(pair_maude_sig()),
-        AlgebraBackend::Maude,
-    )
-    .unwrap();
+    let sig = mset_maude_sig()
+        .merge(hash_maude_sig())
+        .merge(pair_maude_sig());
+    let native = native_session(sig.clone());
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let var = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 5)));
     let (x, y, z, alias) = (var("x"), var("y"), var("z"), var("alias"));
     let plus = |a, b| f_app_ac(AcSym::Union, vec![a, b]);
@@ -2884,24 +2858,9 @@ fn dependent_allocation_keeps_the_same_witness_inside_every_rigid_factor() {
                         rhs: pair(dependent.clone(), z.clone()),
                     },
                 ];
-                let (m, r) = crate::unification::unify_lnterm_factored(eqs.clone()).unwrap();
-                let Outcome::Complete(answers) = unify_with_witnesses(&r, &eqs, &m).unwrap() else {
-                    panic!("{eqs:?}")
-                };
-                assert_eq!(answers.len(), 2);
-                for arm in &answers {
-                    let instance = Subst::from_list(arm.clone());
-                    for eq in &eqs {
-                        assert_eq!(
-                            crate::subst::apply_vterm(&instance, eq.lhs.clone()),
-                            crate::subst::apply_vterm(&instance, eq.rhs.clone())
-                        );
-                    }
-                }
-                assert_eq!(
-                    canonical_variants(answers),
-                    canonical_variants(oracle.unify_via_maude(&eqs).unwrap())
-                );
+                // Each arm is applied to the query, so a factor that lost the
+                // shared witness would no longer unify it.
+                assert_eq!(assert_same_unifiers(&native, &oracle, &eqs), 2);
                 checked += 1;
             }
         }
@@ -2913,7 +2872,6 @@ fn dependent_allocation_keeps_the_same_witness_inside_every_rigid_factor() {
 fn commutative_branches_agree_with_maude_in_the_original_query_scope() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{emap, hash, pair};
-    use crate::lean_unification::{unify_structured, Outcome};
     use crate::lterm::fresh_term;
     use crate::maude_sig::{bp_maude_sig, dh_maude_sig, hash_maude_sig, pair_maude_sig};
     let Some(path) = require_maude_path() else {
@@ -2924,6 +2882,7 @@ fn commutative_branches_agree_with_maude_in_the_original_query_scope() {
         .merge(mset_maude_sig())
         .merge(hash_maude_sig())
         .merge(pair_maude_sig());
+    let native = native_session(signature.clone());
     let oracle = MaudeHandle::start_with_backend(&path, signature, AlgebraBackend::Maude).unwrap();
     let var = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 17)));
     let (x, y, z, u) = (
@@ -2998,19 +2957,9 @@ fn commutative_branches_agree_with_maude_in_the_original_query_scope() {
                         pair(x.clone(), var("ambient", LSort::Msg)),
                     ));
                 }
-                let (bindings, pending) =
-                    crate::unification::unify_lnterm_factored(eqs.clone()).unwrap();
-                let Outcome::Complete(answers) =
-                    unify_structured(oracle.native_rules().unwrap(), &pending, &eqs, &bindings)
-                        .unwrap()
-                else {
-                    panic!("unsupported {eqs:?}")
-                };
-                assert_eq!(
-                    canonical_variants(answers),
-                    canonical_variants(oracle.unify_via_maude(&eqs).unwrap()),
-                    "{eqs:?}"
-                );
+                // An orientation that only repeats an instance of the other
+                // one is listed by the proved export and dropped by Maude.
+                assert_same_minimal_unifiers(&native, &oracle, &eqs);
                 tested += 1;
             }
         }
@@ -3023,7 +2972,6 @@ fn commutative_branches_agree_with_maude_in_the_original_query_scope() {
 fn cancellation_exposing_commutative_roots_agrees_with_maude() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{emap, hash, pair};
-    use crate::lean_unification::{unify_structured, Outcome};
     use crate::maude_sig::{bp_maude_sig, dh_maude_sig, hash_maude_sig, pair_maude_sig};
     let Some(path) = require_maude_path() else {
         return;
@@ -3033,6 +2981,7 @@ fn cancellation_exposing_commutative_roots_agrees_with_maude() {
         .merge(dh_maude_sig())
         .merge(pair_maude_sig())
         .merge(hash_maude_sig());
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let v = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 17)));
     let sum = |a, b| f_app_ac(AcSym::Union, vec![a, b]);
@@ -3065,47 +3014,14 @@ fn cancellation_exposing_commutative_roots_agrees_with_maude() {
                 vec![alias.clone(), single.clone()],
                 vec![single, alias.clone()],
             ] {
-                let (bindings, pending) =
-                    crate::unification::unify_lnterm_factored(qs.clone()).unwrap();
-                let Outcome::Complete(arms) =
-                    unify_structured(oracle.native_rules().unwrap(), &pending, &qs, &bindings)
-                        .unwrap()
-                else {
-                    panic!("unsupported {qs:?}")
-                };
-                let native = canonical_variants(arms);
-                let maude = canonical_variants(oracle.unify_via_maude(&qs).unwrap());
-                if overlap {
-                    // x=s is already known when C(x,y)=C(s,t) becomes visible.
-                    // Maude may additionally report the diagonal x=y=s=t. One
-                    // substitution must specialize *all* the general images,
-                    // including any factored alias, to that extra answer.
-                    assert_eq!(native.len(), 1);
-                    assert!(maude.contains(&native[0]), "{qs:?}");
-                    for arm in &maude {
-                        let general = &native[0];
-                        assert!(arm
-                            .iter()
-                            .map(|(k, _)| k)
-                            .eq(general.iter().map(|(k, _)| k)));
-                        let pairs = arm
-                            .iter()
-                            .zip(general)
-                            .map(|((_, t), (_, p))| (t.clone(), p.clone()))
-                            .collect();
-                        assert!(
-                            crate::unification::solve_match_lterm_no_ac(
-                                &crate::maude_types::sort_of_name,
-                                crate::rewriting::Match::DelayedMatches(pairs)
-                            )
-                            .is_some(),
-                            "{qs:?}"
-                        );
-                    }
-                } else {
-                    assert_eq!(native.len(), 2);
-                    assert_eq!(native, maude, "{qs:?}");
-                }
+                let actual = unifier_rows(&qs, native.unify(&qs).unwrap());
+                let maude = unifier_rows(&qs, oracle.unify(&qs).unwrap());
+                assert_eq!(actual.len(), 2);
+                assert_eq!(actual, maude, "{qs:?}");
+                // x=s is already known when C(x,y)=C(s,t) becomes visible. The
+                // second arm is then the diagonal x=y=s=t, an instance of the
+                // general arm in *all* its images, including the alias.
+                assert_eq!(minimal_rows(actual).len(), if overlap { 1 } else { 2 });
                 tested += 1;
             }
         }
@@ -3241,9 +3157,6 @@ fn native_oracle_received_base_towers_cover_all_cancellation_subsets() {
     use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -3325,9 +3238,6 @@ fn native_oracle_free_exponent_preserves_joint_gdh_observations() {
     use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -3455,10 +3365,6 @@ fn native_oracle_free_exponent_preserves_joint_gdh_observations() {
 
 #[test]
 fn native_oracle_mixed_uniform_reductions_and_dh_powers_preserve_all_query_bindings() {
-    // CI runs this comparison separately from hybrid verification.
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{exp, fst, pair};
     use crate::lean_unification::{Outcome, RuleTable};
@@ -3548,8 +3454,9 @@ fn dh_public_values_and_fresh_products_agree_with_maude_as_one_variant_tuple() {
         return;
     };
     let sig = dh_maude_sig().merge(hash_maude_sig());
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let fresh = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Fresh, 0)));
     let mut count = 0;
@@ -3566,17 +3473,17 @@ fn dh_public_values_and_fresh_products_agree_with_maude_as_one_variant_tuple() {
                     tower.clone(),
                 ]);
                 assert_eq!(oracle.reduce(&tower).unwrap(), value);
-                assert_eq!(hybrid.reduce(&tower).unwrap(), value);
+                assert_eq!(native.reduce(&tower).unwrap(), value);
                 let reference = canonical_variants(oracle.variants(&tuple).unwrap());
                 assert_eq!(reference, vec![vec![]]);
-                assert_eq!(hybrid.variants(&tuple).unwrap(), reference);
+                assert_eq!(native.variants(&tuple).unwrap(), reference);
                 count += 1;
             }
         }
     }
     assert_eq!(count, 12);
-    assert_eq!(hybrid.stats().norm_count, 0);
-    assert_eq!(hybrid.stats().var_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
+    assert_eq!(native.stats().var_count, 0);
 
     // The same exponent with an arbitrary message as base admits neutral,
     // exponentiation and inverse-cancellation instances. Returning only the
@@ -3587,13 +3494,13 @@ fn dh_public_values_and_fresh_products_agree_with_maude_as_one_variant_tuple() {
     let expected = canonical_variants(oracle.variants(&open).unwrap());
     assert!(expected.len() > 1);
     assert_eq!(
-        canonical_variants(hybrid.variants(&open).unwrap()),
+        canonical_variants(native.variants(&open).unwrap()),
         expected
     );
     let g = pub_term("g");
     let cancel = exp(exp(g.clone(), inv(r.clone())), r);
     assert_eq!(oracle.reduce(&cancel).unwrap(), g);
-    assert_eq!(hybrid.reduce(&cancel).unwrap(), g);
+    assert_eq!(native.reduce(&cancel).unwrap(), g);
 }
 
 #[test]
@@ -3829,9 +3736,6 @@ fn native_oracle_joint_fresh_xors_cover_shared_inputs_and_triangle() {
     use crate::term::f_app_list;
     use std::collections::BTreeMap;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let sig = xor_maude_sig();
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
@@ -3937,9 +3841,6 @@ fn native_oracle_joint_fresh_xor_and_dh_variants_preserve_the_shared_exponent() 
     use crate::maude_sig::{dh_maude_sig, xor_maude_sig};
     use crate::term::f_app_list;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let sig = dh_maude_sig().merge(xor_maude_sig());
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
@@ -3976,7 +3877,6 @@ fn native_oracle_joint_fresh_xor_and_dh_variants_preserve_the_shared_exponent() 
 fn binary_ac_with_two_fresh_factors_uses_sorted_simultaneous_orientations() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{hash, pair};
-    use crate::lean_unification::{unify_structured, Outcome};
     use crate::lterm::fresh_term;
     use crate::maude_sig::{dh_maude_sig, hash_maude_sig, pair_maude_sig, xor_maude_sig};
     let Some(path) = require_maude_path() else {
@@ -3987,6 +3887,7 @@ fn binary_ac_with_two_fresh_factors_uses_sorted_simultaneous_orientations() {
         .merge(dh_maude_sig())
         .merge(pair_maude_sig())
         .merge(hash_maude_sig());
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let v = |n, s| Term::Lit(Lit::Var(LVar::new(n, s, 0)));
     let (f, g, x, y) = (
@@ -4020,19 +3921,7 @@ fn binary_ac_with_two_fresh_factors_uses_sorted_simultaneous_orientations() {
                         rhs: pair(f.clone(), x.clone()),
                     },
                 ];
-                let (bindings, pending) =
-                    crate::unification::unify_lnterm_factored(eqs.to_vec()).unwrap();
-                let Outcome::Complete(arms) =
-                    unify_structured(oracle.native_rules().unwrap(), &pending, &eqs, &bindings)
-                        .unwrap()
-                else {
-                    panic!("unsupported {eqs:?}")
-                };
-                assert_eq!(
-                    canonical_variants(arms),
-                    canonical_variants(oracle.unify_via_maude(&eqs).unwrap()),
-                    "{eqs:?}"
-                );
+                assert_same_unifiers(&native, &oracle, &eqs);
                 checked += 1;
             }
         }
@@ -4041,10 +3930,9 @@ fn binary_ac_with_two_fresh_factors_uses_sorted_simultaneous_orientations() {
 }
 
 #[test]
-fn whole_unification_compares_the_complete_conjunction_with_maude() {
+fn reflexive_conjunctions_and_one_differing_row_agree_with_maude() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{emap, hash, pair};
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::lterm::fresh_term;
     use crate::maude_sig::{bp_maude_sig, dh_maude_sig, hash_maude_sig, pair_maude_sig};
     let Some(path) = require_maude_path() else {
@@ -4055,7 +3943,7 @@ fn whole_unification_compares_the_complete_conjunction_with_maude() {
         .merge(dh_maude_sig())
         .merge(pair_maude_sig())
         .merge(hash_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let v = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 42)));
     let ac = |terms: Vec<LNTerm>| Term::App(FunSym::Ac(AcSym::Union), terms.into());
@@ -4084,11 +3972,12 @@ fn whole_unification_compares_the_complete_conjunction_with_maude() {
         base.to_vec(),
         base.iter().cloned().rev().collect(),
     ] {
-        let Outcome::Complete(native) = table.whole_unify(&p).unwrap() else {
-            panic!("unsupported {p:?}")
-        };
-        assert_eq!(native, vec![vec![]]);
-        let maude = canonical_variants(oracle.unify_via_maude(&p).unwrap());
+        assert_eq!(
+            canonical_variants(native.unify(&p).unwrap()),
+            vec![vec![]],
+            "{p:?}"
+        );
+        let maude = canonical_variants(oracle.unify(&p).unwrap());
         assert!(maude.contains(&vec![]), "{p:?}");
     }
     for different in [
@@ -4105,19 +3994,20 @@ fn whole_unification_compares_the_complete_conjunction_with_maude() {
     ] {
         let mut qs = base.to_vec();
         qs.push(different);
-        let reference = canonical_variants(oracle.unify_via_maude(&qs).unwrap());
+        let reference = canonical_variants(oracle.unify(&qs).unwrap());
         assert!(!reference.contains(&vec![]));
-        if let Outcome::Complete(answers) = table.whole_unify(&qs).unwrap() {
-            assert_eq!(canonical_variants(answers), reference);
-        }
+        assert_eq!(
+            canonical_variants(native.unify(&qs).unwrap()),
+            reference,
+            "{qs:?}"
+        );
     }
 }
 
 #[test]
-fn whole_ground_contradiction_decides_a_conjunction_with_unresolved_open_equations() {
+fn ground_contradiction_decides_a_conjunction_with_open_equations() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{emap, hash, pair};
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::{bp_maude_sig, dh_maude_sig, hash_maude_sig, pair_maude_sig};
     let Some(path) = require_maude_path() else {
         return;
@@ -4127,7 +4017,7 @@ fn whole_ground_contradiction_decides_a_conjunction_with_unresolved_open_equatio
         .merge(dh_maude_sig())
         .merge(hash_maude_sig())
         .merge(pair_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let v = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
     let sum = |x, y| f_app_ac(AcSym::Union, vec![x, y]);
@@ -4151,21 +4041,20 @@ fn whole_ground_contradiction_decides_a_conjunction_with_unresolved_open_equatio
             vec![open.clone(), closed.clone()],
             vec![closed, open.clone()],
         ] {
-            assert_eq!(table.whole_unify(&qs).unwrap(), Outcome::Complete(vec![]));
-            assert!(oracle.unify_via_maude(&qs).unwrap().is_empty());
+            assert!(native.unify(&qs).unwrap().is_empty());
+            assert!(!native.unifiable(&qs).unwrap());
+            assert!(oracle.unify(&qs).unwrap().is_empty());
         }
     }
 }
 
 #[test]
-fn whole_orbit_identity_preserves_correlations_in_a_nonempty_caller_substitution() {
+fn orbit_identity_preserves_correlations_with_a_free_alias_row() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::pair;
     use crate::function_symbols::CSym;
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::{bp_maude_sig, dh_maude_sig, pair_maude_sig};
-    use crate::subst::Subst;
-    use crate::subst_vfresh::{compose_vfresh, LNSubstVFresh};
+    use crate::subst::{apply_vterm, Subst};
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -4173,7 +4062,7 @@ fn whole_orbit_identity_preserves_correlations_in_a_nonempty_caller_substitution
         .merge(bp_maude_sig())
         .merge(dh_maude_sig())
         .merge(pair_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = LVar::new("n", LSort::Msg, 5);
     let y = LVar::new("n", LSort::Fresh, 5);
@@ -4195,114 +4084,86 @@ fn whole_orbit_identity_preserves_correlations_in_a_nonempty_caller_substitution
             ),
         ],
     );
-    let q = [Equal { lhs, rhs }];
-    let Outcome::Complete(native) = table.whole_unify(&q).unwrap() else {
-        panic!()
-    };
-    let alias = pair(v(x), pair(v(y), v(z)));
+    // The first row is an identity modulo AC and C in its raw spelling.
     let full = [
-        q[0].clone(),
+        Equal { lhs, rhs },
         Equal {
             lhs: v(k),
-            rhs: alias.clone(),
+            rhs: pair(v(x), pair(v(y), v(z))),
         },
     ];
-    let reference = oracle.unify_via_maude(&full).unwrap();
+    let reference = oracle.unify(&full).unwrap();
     assert!(reference.iter().all(|arm| !arm.is_empty()));
-    let caller = Subst::from_list(vec![(k, alias)]);
-    let compose = |arm| compose_vfresh(&LNSubstVFresh::from_list(arm), &caller);
-    assert_eq!(native.len(), 1);
-    let arm = compose(native[0].clone());
-    let image = |var| arm.image_of(&var).unwrap().clone();
+    let arms = native.unify(&full).unwrap();
+    assert_eq!(arms.len(), 1);
+    let subst = Subst::from_list(arms[0].clone());
+    let image = |var| apply_vterm(&subst, v(var));
     assert_eq!(image(k), pair(image(x), pair(image(y), image(z))));
     assert_ne!(image(x), image(z));
     assert_ne!(image(x), image(y));
-    let expected = canonical_variants(vec![arm.to_list()]);
-    let maude = canonical_variants(reference);
-    assert!(maude.contains(&expected[0]));
+    let expected = unifier_rows(&full, arms);
+    assert!(unifier_rows(&full, reference).contains(&expected[0]));
 }
 
 #[test]
-fn whole_unification_defers_on_undeclared_or_malformed_input_and_bounded_expansion() {
+fn undeclared_or_malformed_reflexive_rows_are_unsupported_on_native() {
     use crate::builtin::{hash, pair};
-    use crate::lean_unification::{Outcome, RuleTable};
+    use crate::maude_proc::MaudeError;
     use crate::maude_sig::pair_maude_sig;
-    let table = RuleTable::new(&pair_maude_sig()).unwrap();
+    // The reflexive roots do not excuse the terms from validation.
     let atom = pub_term("a");
     let mut shared = atom.clone();
     for _ in 0..12 {
         shared = pair(shared.clone(), shared);
     }
     let node = Term::Lit(Lit::Var(LVar::new("i", LSort::Node, 0)));
-    for term in [
-        hash(atom.clone()),
-        shared,
-        Term::Lit(Lit::Var(LVar::new("n", LSort::Nat, 0))),
-        pair(node, atom.clone()),
-        Term::App(
-            FunSym::NoEq(crate::function_symbols::pair_sym()),
-            vec![atom].into(),
-        ),
-    ] {
-        let q = [Equal {
+    let reflexive = |term: LNTerm| {
+        [Equal {
             lhs: term.clone(),
             rhs: term,
-        }];
-        assert_eq!(table.whole_unify(&q).unwrap(), Outcome::Unsupported);
-    }
-}
-
-#[test]
-fn whole_unification_workers_compute_while_the_ipc_mutex_is_held() {
-    use crate::algebra_backend::AlgebraBackend;
-    use crate::lean_unification::Outcome;
-    use std::sync::{mpsc, Arc, Barrier};
-    use std::time::Duration;
-    let Some(path) = require_maude_path() else {
-        return;
+        }]
     };
-    let handle =
-        MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
-    let ipc = handle.inner.lock();
-    std::thread::scope(|scope| {
-        let ready = Arc::new(Barrier::new(3));
-        let (tx, rx) = mpsc::channel();
-        for h in [handle.clone(), handle.with_fresh_counter_next(7)] {
-            assert!(Arc::ptr_eq(&h.native_rules, &handle.native_rules));
-            let tx = tx.clone();
-            let ready = Arc::clone(&ready);
-            scope.spawn(move || {
-                ready.wait();
-                let q = [Equal {
-                    lhs: sum(&[0, 1, 0]),
-                    rhs: sum(&[1, 0, 0]),
-                }];
-                let answer = h.native_rules().unwrap().whole_unify(&q).unwrap();
-                tx.send(answer).unwrap();
-            });
-        }
-        ready.wait();
-        let first = rx.recv_timeout(Duration::from_secs(5));
-        let second = rx.recv_timeout(Duration::from_secs(5));
-        drop(ipc);
-        assert_eq!(first.unwrap(), Outcome::Complete(vec![vec![]]));
-        assert_eq!(second.unwrap(), Outcome::Complete(vec![vec![]]));
-    });
-    assert_eq!(handle.stats().unify_count, 0);
+    for term in [
+        hash(atom.clone()),
+        Term::Lit(Lit::Var(LVar::new("n", LSort::Nat, 0))),
+        Term::App(
+            FunSym::NoEq(crate::function_symbols::pair_sym()),
+            vec![atom.clone()].into(),
+        ),
+    ] {
+        let native = native_session(pair_maude_sig());
+        assert!(
+            matches!(
+                native.unify(&reflexive(term.clone())),
+                Err(MaudeError::UnsupportedOperation(_))
+            ),
+            "{term:?}"
+        );
+        assert!(native.check_backend_status().is_err());
+    }
+    // Sharing is no obstacle: this declared term has 4096 leaves. A node
+    // variable below a free symbol is a term of the wire module as well.
+    let native = native_session(pair_maude_sig());
+    for term in [shared, pair(node, atom)] {
+        assert_eq!(
+            canonical_variants(native.unify(&reflexive(term)).unwrap()),
+            vec![vec![]]
+        );
+    }
 }
 
 #[test]
 fn homogeneous_basis_answers_match_maude_up_to_branch_and_witness_renaming() {
     use crate::algebra_backend::AlgebraBackend;
-    use crate::lean_unification::{Outcome, RuleTable, Substitutions};
+    use crate::lean_unification::Substitutions;
     use crate::lterm::HasFrees;
-    use crate::subst_vfresh::LNSubstVFresh;
+    use crate::subst::{apply_vterm, Subst};
     use std::collections::BTreeMap;
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = mset_maude_sig();
-    let table = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let vars = ["x", "y", "z", "w"].map(|n| LVar::new(n, LSort::Msg, 0));
     let side = |xs: &[usize]| {
@@ -4320,10 +4181,10 @@ fn homogeneous_basis_answers_match_maude_up_to_branch_and_witness_renaming() {
     let columns = |arms: Substitutions, live: &[LVar]| {
         let mut result = Vec::new();
         for arm in arms {
-            let arm = LNSubstVFresh::from_list(arm).extend_with_renaming(live);
+            let arm = Subst::from_list(arm);
             let mut cols = BTreeMap::<LVar, Vec<usize>>::new();
             for (i, v) in live.iter().enumerate() {
-                arm.image_of(v).unwrap().for_each_free(&mut |w| {
+                apply_vterm(&arm, Term::Lit(Lit::Var(*v))).for_each_free(&mut |w| {
                     cols.entry(*w).or_insert_with(|| vec![0; live.len()])[i] += 1
                 });
             }
@@ -4335,12 +4196,9 @@ fn homogeneous_basis_answers_match_maude_up_to_branch_and_witness_renaming() {
         result
     };
     let compare = |q: Vec<Equal<LNTerm>>, live: &[LVar]| {
-        let Outcome::Complete(arms) = table.whole_unify(&q).unwrap() else {
-            panic!("unexpected deferral: {q:?}")
-        };
         assert_eq!(
-            columns(arms, live),
-            columns(oracle.unify_via_maude(&q).unwrap(), live),
+            columns(native.unify(&q).unwrap(), live),
+            columns(oracle.unify(&q).unwrap(), live),
             "{q:?}"
         );
     };
@@ -4380,9 +4238,6 @@ fn native_oracle_compact_nonunit_plane_preserves_all_five_substitutions() {
     use crate::lean_unification::Substitutions;
     use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -4426,7 +4281,7 @@ fn native_oracle_compact_nonunit_plane_preserves_all_five_substitutions() {
             let eqs = std::slice::from_ref(&equation);
             assert_eq!(
                 valued(native.unify(eqs).unwrap()),
-                valued(oracle.unify_via_maude(eqs).unwrap()),
+                valued(oracle.unify(eqs).unwrap()),
                 "coefficient pair ({p}, {q})"
             );
         }
@@ -4438,8 +4293,6 @@ fn abstract_operands_reconcile_complete_branches_against_maude() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{emap, hash, pair};
     use crate::function_symbols::{AcFctSym, Constructability, NdcState, Privacy};
-    use crate::lean_unification::{Outcome, RuleTable};
-    use crate::lterm::HasFrees;
     use crate::maude_sig::{bp_maude_sig, dh_maude_sig, hash_maude_sig, pair_maude_sig};
     let Some(path) = require_maude_path() else {
         return;
@@ -4457,7 +4310,7 @@ fn abstract_operands_reconcile_complete_branches_against_maude() {
         .merge(dh_maude_sig());
     sig.st_ac_fun_syms.insert(other);
     let sig = sig.refresh();
-    let table = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let v = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
     let node = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Node, u64::MAX)));
@@ -4543,32 +4396,9 @@ fn abstract_operands_reconcile_complete_branches_against_maude() {
             (vec![offset(v("x"), pub_term("a"), hash(v("x")))], 0),
             (vec![offset(narrow(), pub_term("a"), pub_term("b"))], 1),
         ] {
-            let Outcome::Complete(arms) = table.unify_operands(&query).unwrap() else {
-                panic!("unexpected deferral for {query:?}");
-            };
-            let mut inputs = std::collections::BTreeSet::new();
-            for side in query.iter().flat_map(|e| [&e.lhs, &e.rhs]) {
-                side.for_each_free(&mut |v| {
-                    inputs.insert(*v);
-                });
-            }
-            for arm in &arms {
-                assert_eq!(
-                    arm.iter()
-                        .map(|(v, _)| *v)
-                        .collect::<std::collections::BTreeSet<_>>(),
-                    inputs
-                );
-                for (_, image) in arm {
-                    image.for_each_free(&mut |v| {
-                        assert!(!inputs.contains(v), "captured {v:?} in {query:?}")
-                    });
-                }
-            }
-            assert_eq!(arms.len(), count, "{query:?}");
             assert_eq!(
-                canonical_variants(arms),
-                canonical_variants(oracle.unify_via_maude(&query).unwrap()),
+                assert_same_unifiers(&native, &oracle, &query),
+                count,
                 "{query:?}"
             );
         }
@@ -4619,13 +4449,9 @@ fn abstract_operands_reconcile_complete_branches_against_maude() {
                 (vec![correlated, eq(v("x"), v("z"))], 7),
                 (vec![eq(nested("a", "a"), nested("c", "c"))], 1),
             ] {
-                let Outcome::Complete(arms) = table.unify_operands(&query).unwrap() else {
-                    panic!("unexpected nested deferral for {query:?}");
-                };
-                assert_eq!(arms.len(), count, "{query:?}");
                 assert_eq!(
-                    canonical_small_ac_answers(arms),
-                    canonical_small_ac_answers(oracle.unify_via_maude(&query).unwrap()),
+                    assert_same_unifiers(&native, &oracle, &query),
+                    count,
                     "{query:?}"
                 );
             }
@@ -4645,9 +4471,6 @@ fn native_oracle_disjoint_atomic_sorts_exclude_declared_ac_rules() {
     use crate::subterm_rule::rrule_to_ctxt_st_rule;
     use crate::term::{f_app_list, f_app_no_eq};
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -4938,24 +4761,22 @@ fn root_exclusion_checks_every_equation_and_every_child() {
     }
 
     if let Some(path) = require_maude_path() {
-        let hybrid =
-            MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+        let native = native_session(sig.clone());
         let maude =
             MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
-        assert_eq!(
-            hybrid.reduce(&nested).unwrap(),
-            maude.reduce(&nested).unwrap()
-        );
-        assert_eq!(
-            hybrid.reduce(&matched).unwrap(),
-            maude.reduce(&matched).unwrap()
-        );
-        assert_eq!(hybrid.stats().norm_count, 0);
-        assert_eq!(
-            hybrid.reduce(&possible).unwrap(),
-            maude.reduce(&possible).unwrap()
-        );
-        assert_eq!(hybrid.stats().norm_count, 1);
+        for term in [&nested, &matched] {
+            assert_eq!(native.reduce(term).unwrap(), maude.reduce(term).unwrap());
+        }
+        assert_eq!(native.stats().norm_count, 0);
+        // The AC rule returns either summand here, and Maude picks one. The
+        // certifier does not accept such a table, and a raw native-only
+        // session reports that instead of choosing.
+        assert_ne!(maude.reduce(&possible).unwrap(), possible);
+        assert!(matches!(
+            native.reduce(&possible),
+            Err(crate::maude_proc::MaudeError::UnsupportedOperation(_))
+        ));
+        assert!(native.check_backend_status().is_err());
     }
 
     let mut wildcard = sig;
@@ -5085,10 +4906,10 @@ fn projection_of_raw_nested_ac_captures_matches_maudes_structural_result() {
     let expected = pair(a.clone(), f_app_ac(AcSym::Union, vec![a, b.clone(), b]));
     let pairing = pair_maude_sig().merge(mset_maude_sig());
     for sig in [pairing.clone(), pairing.merge(sym_enc_maude_sig())] {
-        for backend in [AlgebraBackend::Maude, AlgebraBackend::Hybrid] {
+        for backend in [AlgebraBackend::Maude, AlgebraBackend::NativeOnly] {
             let handle = MaudeHandle::start_with_backend(&path, sig.clone(), backend).unwrap();
             assert_eq!(handle.reduce(&input).unwrap(), expected);
-            if backend == AlgebraBackend::Hybrid {
+            if backend == AlgebraBackend::NativeOnly {
                 assert_eq!(handle.stats().norm_count, 0);
             }
         }
@@ -5096,61 +4917,43 @@ fn projection_of_raw_nested_ac_captures_matches_maudes_structural_result() {
 }
 
 #[test]
-fn checked_factored_matrix_matches_maude_on_the_full_request() {
+fn free_row_beside_a_matrix_matches_maude_on_the_full_request() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::pair;
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::pair_maude_sig;
-    use crate::subst::Subst;
+    use crate::subst::{apply_vterm, Subst};
 
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = mset_maude_sig().merge(pair_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let [key, outsider, x, y] = ["key", "x", "u", "v"].map(|name| LVar::new(name, LSort::Msg, 0));
     let term = |v| Term::Lit(Lit::Var(v));
-    let residual = [Equal {
-        lhs: f_app_ac(AcSym::Union, vec![term(x); 2]),
-        rhs: f_app_ac(AcSym::Union, vec![term(y); 3]),
-    }];
-    // One child observes the shared residual witness. The other must stay independent,
-    // even though its full identity is the allocator's first candidate name.
-    let image = pair(term(x), term(outsider));
-    let factor = Subst::from_list([(key, image.clone())]);
+    // One child of the free row observes the shared matrix witness. The other
+    // must stay independent of it.
     let original = [
         Equal {
             lhs: term(key),
-            rhs: image,
+            rhs: pair(term(x), term(outsider)),
         },
-        residual[0].clone(),
+        Equal {
+            lhs: f_app_ac(AcSym::Union, vec![term(x); 2]),
+            rhs: f_app_ac(AcSym::Union, vec![term(y); 3]),
+        },
     ];
-    let Outcome::Complete(raw) = table.factored_unify(&original, &factor, &residual).unwrap()
-    else {
-        panic!("expected a checked matrix answer");
-    };
-    let actual = super::compose_checked_factor(&original, raw, &factor);
+    let actual = native.unify(&original).unwrap();
     assert_eq!(actual.len(), 1);
-    assert!(actual[0].contains(&(outsider, term(outsider))));
-    let scope = [key, outsider, x, y, LVar::new("x", LSort::Msg, u64::MAX)];
-    let opened = crate::subst_vfresh::LNSubstVFresh::from_list(actual[0].clone())
-        .fresh_to_free_avoiding_vars(&scope);
-    let shared = opened.image_of(&outsider).unwrap();
-    let other = opened.image_of(&x).unwrap();
-    assert_eq!(
-        opened.image_of(&key),
-        Some(&pair(other.clone(), shared.clone()))
-    );
-    let Term::Lit(Lit::Var(fresh)) = shared else {
-        panic!("expected an independent fresh variable");
+    let subst = Subst::from_list(actual[0].clone());
+    let image = |v| apply_vterm(&subst, term(v));
+    assert_eq!(image(key), pair(image(x), image(outsider)));
+    let Term::Lit(Lit::Var(independent)) = image(outsider) else {
+        panic!("expected an independent variable");
     };
-    assert!(!scope.contains(fresh));
-    assert!(!crate::lterm::frees(other).contains(fresh));
-    assert_eq!(
-        canonical_small_ac_answers(actual),
-        canonical_small_ac_answers(oracle.unify_via_maude(&original).unwrap())
-    );
+    assert!(!crate::lterm::frees(&image(x)).contains(&independent));
+    assert!(!crate::lterm::frees(&image(y)).contains(&independent));
+    assert_eq!(assert_same_unifiers(&native, &oracle, &original), 1);
 }
 
 #[test]
@@ -5160,7 +4963,7 @@ fn ground_ac_split_agrees_with_maude_on_partially_grounded_conjunctions() {
     let Some(path) = require_maude_path() else {
         return;
     };
-    let table = crate::lean_unification::RuleTable::new(&mset_maude_sig()).unwrap();
+    let native = native_session(mset_maude_sig());
     let oracle =
         MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
     let v = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Msg, 0)));
@@ -5181,16 +4984,11 @@ fn ground_ac_split_agrees_with_maude_on_partially_grounded_conjunctions() {
         for pivot in [split.clone(), reverse(&split)] {
             for other in [check.clone(), reverse(&check)] {
                 for request in [[pivot.clone(), other.clone()], [other, pivot.clone()]] {
-                    let crate::lean_unification::Outcome::Complete(arms) =
-                        table.unify_operands(&request).unwrap()
-                    else {
-                        panic!("operand search deferred {request:?}");
-                    };
-                    let actual = canonical_ground_answers(arms);
+                    let actual = canonical_ground_answers(native.unify(&request).unwrap());
                     assert_eq!(actual.len(), count);
                     assert_eq!(
                         actual,
-                        canonical_ground_answers(oracle.unify_via_maude(&request).unwrap())
+                        canonical_ground_answers(oracle.unify(&request).unwrap())
                     );
                 }
             }
@@ -5202,14 +5000,13 @@ fn ground_ac_split_agrees_with_maude_on_partially_grounded_conjunctions() {
 fn ground_unification_propagates_open_constructor_matches_in_either_orientation() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::hash;
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::hash_maude_sig;
 
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = mset_maude_sig().merge(hash_maude_sig());
-    let native = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let v = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Msg, 0)));
     let u = |a, b| f_app_ac(AcSym::Union, vec![a, b]);
@@ -5223,12 +5020,12 @@ fn ground_unification_propagates_open_constructor_matches_in_either_orientation(
     };
     for (lhs, rhs) in [(pattern.clone(), subject.clone()), (subject, pattern)] {
         let eqs = [pending.clone(), Equal { lhs, rhs }];
-        let expected = canonical_ground_answers(oracle.unify_via_maude(&eqs).unwrap());
+        let expected = canonical_ground_answers(oracle.unify(&eqs).unwrap());
         assert_eq!(expected.len(), 1);
-        let Outcome::Complete(answers) = native.unify_operands(&eqs).unwrap() else {
-            panic!("open constructor ground branch deferred")
-        };
-        assert_eq!(canonical_ground_answers(answers), expected);
+        assert_eq!(
+            canonical_ground_answers(native.unify(&eqs).unwrap()),
+            expected
+        );
     }
 
     // The partition below H fixes x to a product. Reusing x outside H
@@ -5243,12 +5040,12 @@ fn ground_unification_propagates_open_constructor_matches_in_either_orientation(
     };
     for (lhs, rhs) in [(pattern.clone(), subject.clone()), (subject, pattern)] {
         let eqs = [Equal { lhs, rhs }, pending.clone()];
-        let expected = canonical_ground_answers(oracle.unify_via_maude(&eqs).unwrap());
+        let expected = canonical_ground_answers(oracle.unify(&eqs).unwrap());
         assert_eq!(expected.len(), 1);
-        let Outcome::Complete(answers) = native.unify_operands(&eqs).unwrap() else {
-            panic!("nested AC ground branch deferred");
-        };
-        assert_eq!(canonical_ground_answers(answers), expected);
+        assert_eq!(
+            canonical_ground_answers(native.unify(&eqs).unwrap()),
+            expected
+        );
     }
 }
 
@@ -5256,14 +5053,13 @@ fn ground_unification_propagates_open_constructor_matches_in_either_orientation(
 fn partially_grounded_conjunction_with_closed_compounds_agrees_with_maude() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::hash;
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::hash_maude_sig;
 
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = mset_maude_sig().merge(hash_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let var = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Msg, 0)));
     let compound = |s| hash(pub_term(s));
@@ -5278,13 +5074,11 @@ fn partially_grounded_conjunction_with_closed_compounds_agrees_with_maude() {
             rhs: plus(vec![var("z"), compound("b")]),
         },
     ];
-    let Outcome::Complete(actual) = table.unify_operands(&query).unwrap() else {
-        panic!("compound factors deferred")
-    };
+    let actual = native.unify(&query).unwrap();
     assert_eq!(actual.len(), 1);
     assert_eq!(
         canonical_ground_answers(actual),
-        canonical_ground_answers(oracle.unify_via_maude(&query).unwrap())
+        canonical_ground_answers(oracle.unify(&query).unwrap())
     );
 }
 
@@ -5292,14 +5086,13 @@ fn partially_grounded_conjunction_with_closed_compounds_agrees_with_maude() {
 fn nested_ground_split_keeps_bindings_from_before_constructor_decomposition() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::pair;
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::pair_maude_sig;
 
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = mset_maude_sig().merge(pair_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let var = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Msg, 0)));
     let sum = |a, b| f_app_ac(AcSym::Union, vec![a, b]);
@@ -5316,9 +5109,7 @@ fn nested_ground_split_keeps_bindings_from_before_constructor_decomposition() {
             ),
         },
     ];
-    let Outcome::Complete(arms) = table.unify_operands(&request).unwrap() else {
-        panic!("nested partial ground solve deferred")
-    };
+    let arms = native.unify(&request).unwrap();
     assert_eq!(arms.len(), 1);
     assert!(arms[0].contains(&(
         LVar::new("u", LSort::Msg, 0),
@@ -5326,7 +5117,7 @@ fn nested_ground_split_keeps_bindings_from_before_constructor_decomposition() {
     )));
     assert_eq!(
         canonical_ground_answers(arms),
-        canonical_ground_answers(oracle.unify_via_maude(&request).unwrap())
+        canonical_ground_answers(oracle.unify(&request).unwrap())
     );
 }
 
@@ -5345,7 +5136,8 @@ fn nested_commutative_ac_matching_agrees_with_maude() {
         .merge(dh_maude_sig());
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
-    let hybrid = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
     let v = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
     let narrow = Term::Lit(Lit::Var(LVar::new("p", LSort::Pub, 0)));
     let (a, b) = (pub_term("a"), pub_term("b"));
@@ -5394,7 +5186,12 @@ fn nested_commutative_ac_matching_agrees_with_maude() {
                     let expected = canonical_ground_answers(oracle.match_eqs(&query).unwrap());
                     assert_eq!(canonical_ground_answers(actual), expected, "{query:?}");
                     assert_eq!(
-                        hybrid.has_match_eqs(&query).unwrap(),
+                        canonical_ground_answers(native.match_eqs(&query).unwrap()),
+                        expected,
+                        "{query:?}"
+                    );
+                    assert_eq!(
+                        native.has_match_eqs(&query).unwrap(),
                         !expected.is_empty(),
                         "{query:?}"
                     );
@@ -5406,7 +5203,7 @@ fn nested_commutative_ac_matching_agrees_with_maude() {
     }
     assert_eq!(checked, 616);
     assert!(ambiguous > 0);
-    assert_eq!(hybrid.stats().match_count, 0);
+    assert_eq!(native.stats().match_count, 0);
 }
 
 #[test]
@@ -5430,8 +5227,9 @@ fn recursive_ac_matching_agrees_with_maude_on_multisets() {
     let mut sig = mset_maude_sig().merge(hash_maude_sig());
     sig.st_ac_fun_syms.insert(combine);
     let sig = sig.refresh();
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let (a, b) = (pub_term("a"), pub_term("b"));
     let pool = [a.clone(), b.clone(), hash(a.clone())];
@@ -5495,7 +5293,12 @@ fn recursive_ac_matching_agrees_with_maude_on_multisets() {
                         }];
                         let expected = canonical_ground_answers(oracle.match_eqs(&query).unwrap());
                         assert_eq!(canonical_ground_answers(answers), expected, "{query:?}");
-                        assert_eq!(hybrid.has_match_eqs(&query).unwrap(), !expected.is_empty());
+                        assert_eq!(
+                            canonical_ground_answers(native.match_eqs(&query).unwrap()),
+                            expected,
+                            "{query:?}"
+                        );
+                        assert_eq!(native.has_match_eqs(&query).unwrap(), !expected.is_empty());
                         successes += usize::from(!expected.is_empty());
                         clashes += usize::from(expected.is_empty());
                         checked += 1;
@@ -5510,20 +5313,7 @@ fn recursive_ac_matching_agrees_with_maude_on_multisets() {
         }
     }
     assert_eq!(checked, 1488);
-    assert_eq!(hybrid.stats().match_count, 0);
-
-    let subject = outer(hash(outer(a.clone(), b)), a.clone());
-    let inner = hash(outer(v("x"), v("y")));
-    for (tail, count, calls) in [(v("x"), 1, 0), (v("z"), 2, 1)] {
-        let query = [Equal {
-            lhs: subject.clone(),
-            rhs: outer(inner.clone(), tail),
-        }];
-        let expected = oracle.match_eqs(&query).unwrap();
-        assert_eq!(expected.len(), count);
-        assert_eq!(hybrid.match_eqs(&query).unwrap(), expected);
-        assert_eq!(hybrid.stats().match_count, calls);
-    }
+    assert_eq!(native.stats().match_count, 0);
 }
 
 #[test]
@@ -5534,8 +5324,7 @@ fn rigid_raw_ground_match_compares_with_the_maude_wire() {
     };
     let oracle =
         MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Maude).unwrap();
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, mset_maude_sig(), AlgebraBackend::Hybrid).unwrap();
+    let native = native_session(mset_maude_sig());
     let (a, b, c) = (pub_term("a"), pub_term("b"), pub_term("c"));
     let raw = |args: Vec<LNTerm>| Term::App(FunSym::Ac(AcSym::Union), args.into());
     let nested = |tail| raw(vec![c.clone(), raw(vec![tail, a.clone()])]);
@@ -5546,7 +5335,7 @@ fn rigid_raw_ground_match_compares_with_the_maude_wire() {
         }];
         let answers = oracle.match_eqs(&q).unwrap();
         assert_eq!(!answers.is_empty(), expected);
-        assert_eq!(hybrid.match_eqs(&q).unwrap(), answers);
+        assert_eq!(native.match_eqs(&q).unwrap(), answers);
         assert_eq!(
             oracle
                 .match_eqs_skolemize_both(&q, &Default::default())
@@ -5554,13 +5343,13 @@ fn rigid_raw_ground_match_compares_with_the_maude_wire() {
             answers
         );
         assert_eq!(
-            hybrid
+            native
                 .match_eqs_skolemize_both(&q, &Default::default())
                 .unwrap(),
             answers
         );
     }
-    assert_eq!(hybrid.stats().match_count, 0);
+    assert_eq!(native.stats().match_count, 0);
     assert!(oracle.stats().match_count > 0);
 }
 
@@ -5568,17 +5357,14 @@ fn rigid_raw_ground_match_compares_with_the_maude_wire() {
 fn dh_intruder_product_unifiers_match_ordinary_maude_including_mixed_sorts() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{inv, mult};
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::dh_maude_sig;
 
     let Some(path) = require_maude_path() else {
         return;
     };
-    let hybrid =
-        MaudeHandle::start_with_backend(&path, dh_maude_sig(), AlgebraBackend::Hybrid).unwrap();
+    let native = native_session(dh_maude_sig());
     let oracle =
         MaudeHandle::start_with_backend(&path, dh_maude_sig(), AlgebraBackend::Maude).unwrap();
-    let table = RuleTable::new(&dh_maude_sig()).unwrap();
     let var = |i, s| Term::Lit(Lit::Var(LVar::new("x", s, i)));
     let f = |i| var(i, LSort::Fresh);
     let m = |i| var(i, LSort::Msg);
@@ -5592,25 +5378,10 @@ fn dh_intruder_product_unifiers_match_ordinary_maude_including_mixed_sorts() {
         (mult(f(0), inv(f(0))), crate::builtin::one_const(), 0),
     ] {
         let eq = [Equal { lhs, rhs }];
-        let expected = oracle.unify_via_maude(&eq).unwrap();
-        assert_eq!(expected.len(), n, "{eq:?}");
-        assert_eq!(hybrid.unifiable(&eq).unwrap(), n != 0, "{eq:?}");
-        let outcome = match table.whole_unify(&eq).unwrap() {
-            Outcome::Unsupported => table.unify_operands(&eq).unwrap(),
-            complete => complete,
-        };
-        let Outcome::Complete(actual) = outcome else {
-            panic!("deferred {eq:?}")
-        };
-        assert_eq!(
-            canonical_small_ac_answers(actual),
-            canonical_small_ac_answers(expected),
-            "{eq:?}"
-        );
+        assert_eq!(native.unifiable(&eq).unwrap(), n != 0, "{eq:?}");
+        assert_eq!(assert_same_unifiers(&native, &oracle, &eq), n, "{eq:?}");
     }
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none() {
-        assert_eq!(hybrid.stats().unify_count, 0);
-    }
+    assert_eq!(native.stats().unify_count, 0);
 }
 
 #[test]
@@ -5624,7 +5395,8 @@ fn reflexive_products_of_strict_subsort_operands_preserve_maude_identity_arm() {
         .merge(mset_maude_sig())
         .merge(xor_maude_sig());
     let native =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Hybrid).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let alphabet = [
         Term::Lit(Lit::Var(LVar::new("r", LSort::Fresh, 0))),
@@ -5643,19 +5415,13 @@ fn reflexive_products_of_strict_subsort_operands_preserve_maude_identity_arm() {
                         lhs: term.clone(),
                         rhs: term,
                     }];
-                    assert_eq!(
-                        native.unify(&eq).unwrap(),
-                        oracle.unify_via_maude(&eq).unwrap(),
-                        "{eq:?}"
-                    );
+                    assert_same_unifiers(&native, &oracle, &eq);
                 }
             }
         }
     }
-    assert!(native.stats().lean_unify_count > 0);
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none() {
-        assert_eq!(native.stats().unify_count, 0);
-    }
+    assert!(native.provenance().fresh(Command::Unify, Origin::Proved) > 0);
+    assert_eq!(native.stats().unify_count, 0);
 }
 
 #[test]
@@ -5815,7 +5581,6 @@ fn joins_received_power_variants_on_naxos_shared_peers_and_exponents() {
 fn rejects_inverse_factor_against_an_unsplittable_nonce_and_free_constructor() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{exp, hash, inv, mult, pair};
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::{dh_maude_sig, hash_maude_sig, pair_maude_sig};
     let Some(path) = require_maude_path() else {
         return;
@@ -5823,7 +5588,7 @@ fn rejects_inverse_factor_against_an_unsplittable_nonce_and_free_constructor() {
     let sig = dh_maude_sig()
         .merge(hash_maude_sig())
         .merge(pair_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let fresh = |i| Term::Lit(Lit::Var(LVar::new("x", LSort::Fresh, i)));
     let msg = |i| Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, i)));
@@ -5831,11 +5596,8 @@ fn rejects_inverse_factor_against_an_unsplittable_nonce_and_free_constructor() {
         lhs: mult(fresh(0), hash(pair(fresh(1), fresh(2)))),
         rhs: mult(msg(3), inv(msg(4))),
     }];
-    assert!(oracle.unify_via_maude(&eq).unwrap().is_empty());
-    assert_eq!(
-        table.unify_operands(&eq).unwrap(),
-        Outcome::Complete(vec![])
-    );
+    assert!(oracle.unify(&eq).unwrap().is_empty());
+    assert!(native.unify(&eq).unwrap().is_empty());
 
     let original = [
         Equal {
@@ -5847,23 +5609,23 @@ fn rejects_inverse_factor_against_an_unsplittable_nonce_and_free_constructor() {
             rhs: exp(msg(6), eq[0].rhs.clone()),
         },
     ];
-    assert!(table.refutes_ac_conjunct(&original).unwrap());
-    assert!(oracle.unify_via_maude(&original).unwrap().is_empty());
+    assert!(!native.unifiable(&original).unwrap());
+    assert!(native.unify(&original).unwrap().is_empty());
+    assert!(oracle.unify(&original).unwrap().is_empty());
 }
 
 #[test]
 fn two_indivisible_factors_constrain_the_remaining_shared_ac_equation() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{hash, mult, pair};
-    use crate::lean_unification::{unify_structured, Outcome};
     use crate::maude_sig::{dh_maude_sig, hash_maude_sig, pair_maude_sig};
-    use crate::subst::Subst;
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = dh_maude_sig()
         .merge(hash_maude_sig())
         .merge(pair_maude_sig());
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let fresh = |i| Term::Lit(Lit::Var(LVar::new("f", LSort::Fresh, i)));
     let msg = |i| Term::Lit(Lit::Var(LVar::new("m", LSort::Msg, i)));
@@ -5877,17 +5639,7 @@ fn two_indivisible_factors_constrain_the_remaining_shared_ac_equation() {
             rhs: mult(msg(4), hash(pair(fresh(7), fresh(3)))),
         },
     ];
-    let expected = oracle.unify_via_maude(&eqs).unwrap();
-    let Outcome::Complete(arms) =
-        unify_structured(oracle.native_rules().unwrap(), &eqs, &eqs, &Subst::empty()).unwrap()
-    else {
-        panic!("deferred")
-    };
-    assert_eq!(expected.len(), 2);
-    assert_eq!(
-        canonical_small_ac_answers(arms),
-        canonical_small_ac_answers(expected)
-    );
+    assert_eq!(assert_same_unifiers(&native, &oracle, &eqs), 2);
 }
 
 #[test]
@@ -5944,13 +5696,12 @@ fn joined_power_rows_preserve_sharing_when_exponents_can_unify_or_contain_anothe
 fn wide_ac_pivot_preserves_each_rigid_occurrence_and_the_shared_remainder() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::hash;
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::hash_maude_sig;
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = mset_maude_sig().merge(hash_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let var = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
     let product = |a| f_app_ac(AcSym::Union, a);
@@ -5967,15 +5718,7 @@ fn wide_ac_pivot_preserves_each_rigid_occurrence_and_the_shared_remainder() {
     let rhs = product(terms);
     for (lhs, rhs) in [(lhs.clone(), rhs.clone()), (rhs, lhs)] {
         let eqs = [Equal { lhs, rhs }];
-        let Outcome::Complete(actual) = table.unify_operands(&eqs).unwrap() else {
-            panic!("wide AC pivot deferred")
-        };
-        let expected = oracle.unify_via_maude(&eqs).unwrap();
-        assert_eq!(expected.len(), 4);
-        assert_eq!(
-            canonical_small_ac_answers(actual),
-            canonical_small_ac_answers(expected)
-        );
+        assert_eq!(assert_same_unifiers(&native, &oracle, &eqs), 4);
     }
 }
 
@@ -5983,17 +5726,13 @@ fn wide_ac_pivot_preserves_each_rigid_occurrence_and_the_shared_remainder() {
 fn native_oracle_gdh_unification_selects_product_rows_and_keeps_the_original_scope() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{inv, mult};
-    use crate::lean_unification::{Outcome, RuleTable};
     use crate::maude_sig::{dh_maude_sig, mset_maude_sig};
+    use crate::subst::{apply_vterm, Subst};
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = dh_maude_sig().merge(mset_maude_sig());
-    let table = RuleTable::new(&sig).unwrap();
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
             .unwrap();
@@ -6022,25 +5761,23 @@ fn native_oracle_gdh_unification_selects_product_rows_and_keeps_the_original_sco
         if with_extra_scope {
             rows.push(eq(right.clone(), left.clone()));
             rows.push(refl(f_app_ac(AcSym::Union, vec![x(0), pub_term("1")])));
-            let Outcome::Complete(arms) = table.unify_operands(&rows).unwrap() else {
-                panic!("expected a complete operand family");
-            };
-            for arm in arms {
-                let scoped = LVar::new("x", LSort::Msg, 0);
-                assert!(arm.iter().any(|(key, t)| *key == scoped
-                    && matches!(t, Term::Lit(Lit::Var(v)) if v.sort == scoped.sort && v.idx > 6)));
-                assert!(arm
-                    .iter()
-                    .all(|(_, t)| crate::lterm::frees_list(t).iter().all(|v| v.idx > 6)));
+            // The variable that occurs only in the reflexive row stays a
+            // variable of its sort, apart from the image of every other one.
+            for arm in native.unify(&rows).unwrap() {
+                let subst = Subst::from_list(arm);
+                let Term::Lit(Lit::Var(scoped)) = apply_vterm(&subst, x(0)) else {
+                    panic!("the scoped variable was specialized");
+                };
+                assert_eq!(scoped.sort, LSort::Msg);
+                for i in 1..=6 {
+                    for sort in [LSort::Msg, LSort::Fresh] {
+                        let image = apply_vterm(&subst, var(i, sort));
+                        assert!(!crate::lterm::frees_list(&image).contains(&scoped));
+                    }
+                }
             }
         }
-        let actual = native.unify(&rows).unwrap();
-        let reference = oracle.unify_via_maude(&rows).unwrap();
-        assert_eq!(actual.len(), 20);
-        assert_eq!(
-            canonical_small_ac_answers(actual),
-            canonical_small_ac_answers(reference)
-        );
+        assert_eq!(assert_same_unifiers(&native, &oracle, &rows), 20);
     }
     assert_eq!(native.stats().unify_count, 0);
 }
@@ -6053,9 +5790,6 @@ fn native_oracle_coupled_gdh_products_preserve_all_84_unifiers() {
     use crate::subst::{apply_vterm, Subst};
     use std::collections::BTreeMap;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let sig = dh_maude_sig().merge(mset_maude_sig());
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
@@ -6195,16 +5929,12 @@ fn native_oracle_coupled_gdh_products_preserve_all_84_unifiers() {
     assert_eq!(native.stats().unify_count, 0);
     if let Some(path) = require_maude_path() {
         let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
-        assert_eq!(signatures(oracle.unify_via_maude(&rows).unwrap()), expected);
+        assert_eq!(signatures(oracle.unify(&rows).unwrap()), expected);
     }
 }
 
 #[test]
 fn native_oracle_public_unify_keeps_a_correlated_equation_across_a_wide_pivot() {
-    // CI runs this comparison separately from hybrid verification.
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::hash;
     use crate::maude_sig::hash_maude_sig;
@@ -6256,7 +5986,7 @@ fn native_oracle_public_unify_keeps_a_correlated_equation_across_a_wide_pivot() 
         let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
         assert_eq!(
             canonical_small_ac_answers(actual),
-            canonical_small_ac_answers(oracle.unify_via_maude(&eqs).unwrap())
+            canonical_small_ac_answers(oracle.unify(&eqs).unwrap())
         );
     }
 }
@@ -6266,9 +5996,6 @@ fn native_oracle_indivisible_ac_pivot_preserves_occurrences_and_shared_tail() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::hash;
     use crate::maude_sig::{dh_maude_sig, hash_maude_sig};
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let sig = dh_maude_sig().merge(hash_maude_sig());
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
@@ -6311,7 +6038,7 @@ fn native_oracle_indivisible_ac_pivot_preserves_occurrences_and_shared_tail() {
             if let Some(oracle) = &oracle {
                 assert_eq!(
                     canonical_small_ac_answers(actual),
-                    canonical_small_ac_answers(oracle.unify_via_maude(&eqs).unwrap()),
+                    canonical_small_ac_answers(oracle.unify(&eqs).unwrap()),
                     "{eqs:?}"
                 );
             }
@@ -6365,9 +6092,6 @@ fn native_oracle_specializes_variant_families_to_caller_operands() {
     use crate::maude_sig::{hash_maude_sig, sym_enc_maude_sig, xor_maude_sig};
     use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -6441,9 +6165,6 @@ fn native_oracle_free_variant_contexts_preserve_every_observation() {
     use crate::subst::{apply_vterm, Subst};
     use crate::term::{f_app_list, f_app_no_eq};
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -6523,11 +6244,7 @@ fn native_oracle_packed_variants_keep_shared_variables_beside_unique_ground_obse
     use crate::subterm_rule::rrule_to_ctxt_st_rule;
     use crate::term::f_app_list;
 
-    // The native-oracle CI job exercises both separate sessions. Hybrid
-    // verification intentionally rejects creating a native-only handle.
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
+    // The native-oracle CI job exercises both separate sessions.
     let union = |a, b| f_app_ac(AcSym::Union, vec![a, b]);
     let var = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 0)));
     let u = var("u", LSort::Msg);
@@ -6600,9 +6317,6 @@ fn native_oracle_binary_ac_reduction_agrees_with_maude_for_every_rule_and_alignm
     use crate::maude_sig::{pair_maude_sig, xor_maude_sig};
     use crate::subterm_rule::{CtxtStRule, StRhs};
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let x = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 0)));
     let u = x("u", LSort::Msg);
     let v = x("v", LSort::Msg);
@@ -6782,9 +6496,6 @@ fn native_oracle_binary_msg_cancellation_recognizes_renamed_rules_and_checks_par
     use crate::rewriting::RRule;
     use crate::subterm_rule::rrule_to_ctxt_st_rule;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -6881,9 +6592,6 @@ fn native_oracle_binary_msg_cancellation_packed_seven_preserve_ambient_values() 
     use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -6936,9 +6644,6 @@ fn native_oracle_open_subject_matching_preserves_joint_rigid_images() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{emap, pair};
     use crate::maude_sig::{bp_maude_sig, dh_maude_sig, pair_maude_sig};
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -7063,9 +6768,6 @@ fn check_mixed_cancellation_rows(
     use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -7163,9 +6865,6 @@ fn native_oracle_staged_cancellation_and_guarded_ac_contexts() {
     use crate::subst::{apply_vterm, Subst};
     use crate::term::f_app_list;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -7175,12 +6874,7 @@ fn native_oracle_staged_cancellation_and_guarded_ac_contexts() {
         (renamed, custom),
     ] {
         let signature = signature.merge(pair_maude_sig());
-        let native = MaudeHandle::start_with_backend(
-            "/nonexistent",
-            signature.clone(),
-            AlgebraBackend::NativeOnly,
-        )
-        .unwrap();
+        let native = native_session(signature.clone());
         let oracle =
             MaudeHandle::start_with_backend(&path, signature, AlgebraBackend::Maude).unwrap();
         let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 2)));
@@ -7285,9 +6979,6 @@ fn native_oracle_nested_cancellation_shares_normal_values_and_images() {
     use crate::maude_sig::{hash_maude_sig, xor_maude_sig};
     use crate::term::f_app_list;
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -7296,12 +6987,7 @@ fn native_oracle_nested_cancellation_shares_normal_values_and_images() {
         (xor_maude_sig().merge(hash_maude_sig()), AcSym::Xor),
         (custom_signature, custom),
     ] {
-        let native = MaudeHandle::start_with_backend(
-            "/nonexistent",
-            signature.clone(),
-            AlgebraBackend::NativeOnly,
-        )
-        .unwrap();
+        let native = native_session(signature.clone());
         let reference =
             MaudeHandle::start_with_backend(&path, signature, AlgebraBackend::Maude).unwrap();
         let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 7)));
@@ -7392,9 +7078,6 @@ fn native_oracle_positional_parents_stage_normal_values_and_repeated_keys() {
         hash_maude_sig, pair_maude_sig, signature_maude_sig, sym_enc_maude_sig, xor_maude_sig,
     };
 
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -7467,9 +7150,6 @@ fn native_oracle_wide_nested_cancellation_with_fresh_variables() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{fresh_var, hash, msg_var, pair};
     use crate::maude_sig::{hash_maude_sig, pair_maude_sig, xor_maude_sig};
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -7506,9 +7186,6 @@ fn native_oracle_signed_graph_compares_all_caller_and_observation_coordinates() 
     use crate::lean_unification::RuleTable;
     use crate::maude_sig::dh_maude_sig;
     use crate::term::f_app_list;
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -7570,9 +7247,6 @@ fn native_oracle_narrowing_preserves_signed_dh_products_and_powers() {
     use crate::algebra_backend::AlgebraBackend;
     use crate::builtin::{exp, fresh_var, inv, msg_var, mult};
     use crate::maude_sig::dh_maude_sig;
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
@@ -7716,17 +7390,12 @@ fn native_oracle_signed_stable_leaves_share_subterms_and_sorted_variables() {
     use crate::lean_unification::RuleTable;
     use crate::maude_sig::{dh_maude_sig, hash_maude_sig};
     use crate::term::f_app_list;
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let Some(path) = require_maude_path() else {
         return;
     };
     let sig = dh_maude_sig().merge(hash_maude_sig());
     let table = RuleTable::new(&sig).unwrap();
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = native_session(sig.clone());
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = msg_var("shared", 0);
     let r = fresh_var("shared", 0);
@@ -7887,48 +7556,50 @@ fn public_full_unifiers_keep_all_five_covering_distributions() {
     assert_eq!(native.stats().unify_count, 0);
 }
 
-// Resource limits belong to individual fast paths. Running the unrestricted
-// reference on the 33-by-2 input would enumerate billions of branches.
+// The proved export lists the whole family. That of the 33-by-2 system has
+// billions of members, so only its existence is asked.
 #[test]
-fn bounded_unifiers_defer_exponential_families_without_publishing_a_prefix() {
+fn wide_homogeneous_system_under_a_commutative_root_is_unifiable() {
     use crate::builtin::emap;
-    use crate::lean_unification::{unify_structured, Outcome};
-    use crate::subst::Subst;
     let var = |i| Term::Lit(Lit::Var(LVar::new("v", LSort::Msg, i)));
-    let table = crate::lean_unification::RuleTable::new(
-        &mset_maude_sig().merge(crate::maude_sig::bp_maude_sig()),
-    )
-    .unwrap();
+    let native = native_session(mset_maude_sig().merge(crate::maude_sig::bp_maude_sig()));
     let wide = f_app_ac(AcSym::Union, (0..33).map(var).collect());
     let rhs = f_app_ac(AcSym::Union, vec![var(33), var(34)]);
     let qs = [Equal {
         lhs: emap(var(35), wide),
         rhs: emap(var(36), rhs),
     }];
-    assert_eq!(
-        unify_structured(&table, &qs, &qs, &Subst::empty()).unwrap(),
-        Outcome::Unsupported
-    );
+    assert!(native.unifiable(&qs).unwrap());
+}
 
+// Thirteen independent orientations: no prefix of the 8192 arms is complete.
+#[test]
+fn independent_commutative_rows_list_every_combination_of_orientations() {
+    use crate::algebra_backend::AlgebraBackend;
+    use crate::builtin::emap;
+    let var = |i| Term::Lit(Lit::Var(LVar::new("v", LSort::Msg, i)));
+    let sig = mset_maude_sig().merge(crate::maude_sig::bp_maude_sig());
+    let native = native_session(sig.clone());
     let qs: Vec<_> = (0..13)
         .map(|i| Equal {
             lhs: emap(var(2 * i), var(2 * i + 1)),
             rhs: emap(pub_term("a"), pub_term("b")),
         })
         .collect();
-    assert_eq!(
-        unify_structured(&table, &qs, &qs, &Subst::empty()).unwrap(),
-        Outcome::Unsupported
-    );
+    let arms = canonical_ground_answers(native.unify(&qs).unwrap());
+    assert_eq!(arms.len(), 1 << 13);
+    if let Some(path) = require_maude_path() {
+        let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+        assert_eq!(arms, canonical_ground_answers(oracle.unify(&qs).unwrap()));
+    }
 }
 
+// Native-only lists every match. Each family below is too large for a prefix
+// of it to stand for the whole.
 #[cfg(test)]
-mod bounded_match {
+mod large_match {
     use super::*;
-    use crate::algebra_backend::AlgebraBackend;
     use crate::maude_sig::pair_maude_sig;
-
-    const MISSING: &str = "/nonexistent";
 
     fn variable(name: &str) -> LNTerm {
         Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)))
@@ -7936,25 +7607,18 @@ mod bounded_match {
     fn sum(a: LNTerm, b: LNTerm) -> LNTerm {
         f_app_ac(AcSym::Union, vec![a, b])
     }
-    fn bounded(
-        h: &MaudeHandle,
-        eqs: &[Equal<LNTerm>],
-    ) -> Option<crate::lean_unification::Substitutions> {
-        let oriented = eqs
-            .iter()
-            .map(|e| Equal {
-                lhs: e.rhs.clone(),
-                rhs: e.lhs.clone(),
-            })
-            .collect::<Vec<_>>();
-        h.native_match(&oriented, crate::maude_proc::MatchRequest::Enumerate)
-            .unwrap()
+    // The number of distinct answers; native-only returns them without repeats.
+    fn matches(h: &MaudeHandle, eq: Equal<LNTerm>) -> usize {
+        let query = [eq];
+        assert!(h.has_match_eqs(&query).unwrap());
+        let count = h.match_eqs(&query).unwrap().len();
+        assert_eq!(h.stats().match_count, 0);
+        count
     }
+
     #[test]
-    fn ac_match_collection_discards_earlier_pages_when_the_full_result_exceeds_storage() {
-        let h =
-            MaudeHandle::start_with_backend(MISSING, mset_maude_sig(), AlgebraBackend::NativeOnly)
-                .unwrap();
+    fn ac_match_lists_every_split_of_ten_atoms_over_three_variables() {
+        let h = native_session(mset_maude_sig());
         let pattern = f_app_ac(
             AcSym::Union,
             vec![variable("x"), variable("y"), variable("z")],
@@ -7963,48 +7627,40 @@ mod bounded_match {
             AcSym::Union,
             (0..10).map(|i| pub_term(format!("a{i}"))).collect(),
         );
-        let query = [Equal {
+        let query = Equal {
             lhs: subject,
             rhs: pattern,
-        }];
-        assert!(h.has_match_eqs(&query).unwrap());
-        assert!(bounded(&h, &query).is_none());
+        };
+        // Surjections of ten distinct atoms onto three variables.
+        assert_eq!(matches(&h, query), 3usize.pow(10) - 3 * (1 << 10) + 3);
     }
 
     #[test]
-    fn open_match_budget_exhaustion_discards_earlier_successes() {
+    fn open_match_lists_every_choice_of_the_compound_factor() {
         use crate::builtin::hash;
         use crate::maude_sig::hash_maude_sig;
-        let h = MaudeHandle::start_with_backend(
-            MISSING,
-            mset_maude_sig().merge(hash_maude_sig()),
-            AlgebraBackend::NativeOnly,
-        )
-        .unwrap();
+        let h = native_session(mset_maude_sig().merge(hash_maude_sig()));
         let u = |xs| f_app_ac(AcSym::Union, xs);
-        // The first H(x) leaves eight factors for two variables (65,025 candidate
-        // pairs), which fits and yields matches. The next H(x) exhausts the query budget.
+        // Each of the nine choices of H(x) leaves eight factors for two variables.
         let eq = Equal {
             lhs: u((0..9).map(|i| hash(pub_term(format!("v{i}")))).collect()),
             rhs: u(vec![hash(variable("x")), variable("y"), variable("z")]),
         };
-        assert!(bounded(&h, &[eq]).is_none());
-        assert_eq!(h.stats().match_count, 0);
+        assert_eq!(matches(&h, eq), 9 * ((1 << 8) - 2));
     }
 
     #[test]
-    fn nested_c_match_discards_partial_answers_on_orientation_budget_exhaustion() {
+    fn nested_c_match_lists_every_combination_of_orientations() {
         use crate::builtin::{emap, pair};
         use crate::maude_sig::{bp_maude_sig, dh_maude_sig};
         let sig = mset_maude_sig()
             .merge(bp_maude_sig())
             .merge(dh_maude_sig())
             .merge(pair_maude_sig());
-        let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+        let h = native_session(sig);
         let mut p = pub_term("end");
         let mut t = p.clone();
-        // Twelve independent binary choices all succeed, but their combinations
-        // exceed this query's budget. No prefix of their answers is complete.
+        // Twelve independent binary choices all succeed.
         for i in 0..12 {
             let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, i)));
             let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, i)));
@@ -8015,18 +7671,17 @@ mod bounded_match {
             lhs: sum(t, pub_term("tag")),
             rhs: sum(p, variable("tail")),
         };
-        assert!(bounded(&h, &[query]).is_none());
-        assert_eq!(h.stats().match_count, 0);
+        assert_eq!(matches(&h, query), 1 << 12);
     }
 
     #[test]
-    fn nested_ac_search_budget_is_shared_by_independent_subtrees() {
+    fn nested_ac_match_lists_the_product_of_independent_subtrees() {
         use crate::builtin::{hash, pair};
         use crate::maude_sig::hash_maude_sig;
         let sig = mset_maude_sig()
             .merge(hash_maude_sig())
             .merge(pair_maude_sig());
-        let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+        let h = native_session(sig);
         let mut pattern = pub_term("end");
         let mut subject = pattern.clone();
         for i in 0..18 {
@@ -8040,8 +7695,7 @@ mod bounded_match {
             lhs: sum(subject, pub_term("tag")),
             rhs: sum(pattern, variable("tail")),
         };
-        assert!(bounded(&h, &[eq]).is_none());
-        assert_eq!(h.stats().match_count, 0);
+        assert_eq!(matches(&h, eq), 1 << 18);
     }
 }
 
@@ -8060,7 +7714,7 @@ fn reference_unification_preserves_joint_orientations_and_aliases() {
     let mut handle =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
             .unwrap();
-    handle.reference_algebra = true;
+    handle.set_reference(true);
     let [x, y, z, w] = ["x", "y", "z", "w"].map(|s| LVar::new(s, LSort::Msg, 0));
     let v = |var| Term::Lit(Lit::Var(var));
     let ac = |l, r| f_app_ac(AcSym::Union, vec![l, r]);
@@ -8076,7 +7730,20 @@ fn reference_unification_preserves_joint_orientations_and_aliases() {
     let Outcome::Complete(reference) = unify_modulo_attributes(&sig, &eqs).unwrap() else {
         panic!("declared mixed conjunction was rejected")
     };
-    assert_eq!(handle.unify(&eqs).unwrap(), reference);
+    // The handle spells the export's witnesses as the Maude backend does.
+    let unnamed = |arms: &crate::lean_unification::Substitutions| {
+        let mut arms: Vec<_> = arms
+            .iter()
+            .map(|arm| {
+                LNSubstVFresh::from_list(arm.clone())
+                    .remove_renamings()
+                    .drop_name_hints()
+            })
+            .collect();
+        arms.sort();
+        arms
+    };
+    assert_eq!(unnamed(&handle.unify(&eqs).unwrap()), unnamed(&reference));
     assert!(handle.unifiable(&eqs).unwrap());
     let mut general = [false; 2];
     for arm in reference {
@@ -8103,7 +7770,12 @@ fn reference_unification_preserves_joint_orientations_and_aliases() {
     assert!(handle.unify(&eqs).unwrap().is_empty());
     assert!(!handle.unifiable(&eqs).unwrap());
     assert_eq!(handle.stats().unify_count, 0);
-    assert_eq!(handle.stats().lean_unify_count, 4);
+    // Rust composes the unpacking of the tuples with the total export, and
+    // each existence question repeats an enumeration.
+    let provenance = handle.provenance();
+    assert_eq!(provenance.fresh(Command::Unify, Origin::NativeRust), 2);
+    assert_eq!(provenance.cached(Command::Unify, Origin::NativeRust), 2);
+    assert_eq!(provenance.total(Command::Unify), 4);
     handle.check_backend_status().unwrap();
 }
 
@@ -8129,7 +7801,7 @@ fn reference_unifiability_validates_even_reflexive_roots() {
             AlgebraBackend::NativeOnly,
         )
         .unwrap();
-        handle.reference_algebra = reference;
+        handle.set_reference(reference);
         assert!(matches!(
             handle.unifiable(&eqs),
             Err(MaudeError::UnsupportedOperation(_))

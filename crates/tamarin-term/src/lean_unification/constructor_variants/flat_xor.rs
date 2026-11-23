@@ -9,10 +9,7 @@ use crate::maude_types::sort_of_name;
 use crate::term::{f_app_ac, Term};
 use crate::vterm::Lit;
 
-unsafe extern "C" {
-    fn tamarin_xor_odd(count: u64) -> u8;
-    fn tamarin_lean_xor_matchings(width: u64) -> *mut std::ffi::c_void;
-}
+use tamarin_algebra_sys::{tamarin_lean_xor_matchings, tamarin_xor_odd};
 
 /// Preserve the usual increasing names and reuse low IDs after wraparound.
 pub(super) fn witness_indices(

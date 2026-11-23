@@ -23,13 +23,7 @@ use crate::vterm::Lit;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::BTreeSet;
 
-unsafe extern "C" {
-    fn tamarin_lean_select_joined_variants(
-        rows: *const WordSlice,
-        count: usize,
-        mask: *mut u8,
-    ) -> u8;
-}
+use tamarin_algebra_sys::tamarin_lean_select_joined_variants;
 
 fn select_normal_rows(checks: &[Vec<u64>]) -> Result<Option<Vec<u8>>, Error> {
     initialize()?;

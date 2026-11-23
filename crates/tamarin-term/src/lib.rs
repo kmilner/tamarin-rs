@@ -40,6 +40,7 @@
 //!   (variant computation as a standalone module)
 
 pub mod algebra_backend;
+pub mod algebra_provenance;
 pub mod apply;
 pub mod bind;
 pub mod builtin;
@@ -65,6 +66,8 @@ pub mod subterm_rule;
 pub mod tags;
 pub mod term;
 pub mod unification;
+#[cfg(feature = "lean-unification")]
+mod unifier_presentation;
 pub mod vterm;
 
 #[cfg(feature = "lean-unification")]

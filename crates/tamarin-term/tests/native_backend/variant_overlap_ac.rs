@@ -43,7 +43,9 @@ fn ac_coordinates_jointly_determine_variant_outputs() {
         let w = msg_var("w", 10);
         let summands: Vec<_> = (0..4).map(|i| msg_var("s", i)).collect();
         let [left, right] = obs.images(&w, &summands);
-        let h = handle(vec![(select(left, right), wrap(w))]);
+        let rules = vec![(select(left, right), wrap(w))];
+        let normalizer = theory(rules.clone());
+        let h = handle(rules);
         let keys = [
             LVar::new("x", LSort::Msg, 40),
             LVar::new("y", LSort::Msg, 41),
@@ -56,7 +58,7 @@ fn ac_coordinates_jointly_determine_variant_outputs() {
             let subst = LNSubstVFresh::from_list(arm).fresh_to_free_avoiding_vars(&keys);
             let images = [&x, &y].map(|t| apply_vterm(&subst, t.clone()));
             let term = select(images[0].clone(), images[1].clone());
-            let output = h.reduce(&term).unwrap();
+            let output = normalizer.reduce(&term).unwrap();
             if matches!(images[0], Term::Lit(_)) {
                 independent_variables(&images);
                 assert_eq!(output, term);

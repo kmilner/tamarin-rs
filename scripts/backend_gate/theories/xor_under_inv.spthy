@@ -1,0 +1,11 @@
+/*
+ * Backend gate regression: a group inverse applied to an XOR of two received
+ * terms, in a rule action. The native-only backend must list the variants of
+ * inv(x XOR z) and finish.
+ */
+theory XorUnderInv
+begin
+builtins: diffie-hellman, xor
+rule R: [ In(x), In(z) ] --[ A(inv(x XOR z)) ]-> [ ]
+lemma l: exists-trace "Ex m #i. A(m)@i"
+end

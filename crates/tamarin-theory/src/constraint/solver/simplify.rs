@@ -316,7 +316,12 @@ fn non_injective_fact_instances_pairs(
         match crate::rule::unifiable_rule_ac_insts(&ctxt.maude, ri, rj) {
             Ok(true) => false,
             Ok(false) => true,
-            Err(_) => false,
+            // No error channel here: derive nothing, and latch the failure
+            // so the incomplete system never yields a verdict.
+            Err(error) => {
+                ctxt.maude.record_failure(&error);
+                false
+            }
         }
     };
     // Haskell-faithful: iterate edges and nodes in Ord order
@@ -649,7 +654,12 @@ fn partial_atom_valuation_with(
                 match crate::rule::unifiable_rule_ac_insts(maude, a, b) {
                     Ok(true) => false,
                     Ok(false) => true,
-                    Err(_) => false, // be conservative on Maude errors
+                    // Derive nothing, and latch the failure: the valuation
+                    // stays unknown and no verdict may rest on it.
+                    Err(error) => {
+                        maude.record_failure(&error);
+                        false
+                    }
                 }
             }
             _ => false,
@@ -750,7 +760,11 @@ fn partial_atom_valuation_with(
                 rhs: y.clone(),
             }]) {
                 Ok(false) => Some(false),
-                _ => None,
+                Ok(true) => None,
+                Err(error) => {
+                    maude.record_failure(&error);
+                    None
+                }
             }
         }
         ProtoAtom::Action(t, lnfa) => {
@@ -799,7 +813,8 @@ fn partial_atom_valuation_with(
                         break;
                     }
                     Ok(false) => {}
-                    Err(_) => {
+                    Err(error) => {
+                        maude.record_failure(&error);
                         all_non_unif = false;
                         break;
                     }
@@ -1563,9 +1578,7 @@ fn try_match_all_guards(
                                 .into_iter()
                                 .map(|m| m.into_iter().collect())
                                 .collect(),
-                            Err(error) => {
-                                return Err(crate::prove::ProveError::Maude(error.to_string()))
-                            }
+                            Err(error) => return Err(crate::prove::ProveError::from(error)),
                         }
                     }
                 };
@@ -1969,7 +1982,7 @@ fn match_atom_via_maude(
             // doing so could omit a restriction and admit an impossible trace.
             let matches = maude
                 .match_eqs_skolemize_both(&eqs, pattern_vars)
-                .map_err(|error| crate::prove::ProveError::Maude(error.to_string()))?;
+                .map_err(crate::prove::ProveError::from)?;
             if matches.is_empty() {
                 return Ok(Vec::new());
             }
@@ -2967,7 +2980,10 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
             match crate::rule::unifiable_rule_ac_insts(&maude, sup_rule, other_rule) {
                 Ok(true) => continue,
                 Ok(false) => {}
-                Err(_) => continue,
+                Err(error) => {
+                    maude.record_failure(&error);
+                    continue;
+                }
             }
             // HS-faithful insertLess (Reduction.hs `modM sLessAtoms . S.insert`).
             // `add_less_indexed` is the indexed twin of the set-add dedup
@@ -3032,10 +3048,14 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
                 Some((_, r)) => r,
                 None => return true,
             };
-            !matches!(
-                crate::rule::unifiable_rule_ac_insts(&maude, t_rule, j_rule),
-                Ok(true)
-            )
+            match crate::rule::unifiable_rule_ac_insts(&maude, t_rule, j_rule) {
+                Ok(unifiable) => !unifiable,
+                // "Unifiable" derives no ordering; the latch reports the failure.
+                Err(error) => {
+                    maude.record_failure(&error);
+                    false
+                }
+            }
         });
         if !all_non_unifiable {
             continue;

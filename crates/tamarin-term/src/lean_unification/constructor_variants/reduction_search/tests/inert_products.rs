@@ -41,9 +41,6 @@ fn native_only_independent_reductions_under_an_inert_user_ac() {
 
 #[test]
 fn native_oracle_inert_product_preserves_open_factors_and_multiplicities() {
-    if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_some() {
-        return;
-    }
     let x = var("x");
     let y = var("y");
     let input = bag([
@@ -88,7 +85,7 @@ fn active_product_and_ambiguous_operand_still_defer() {
         assert!(matches!(
             handle.reduce(&input),
             Err(crate::maude_proc::MaudeError::UnsupportedOperation(
-                "normalization"
+                crate::maude_proc::UNCERTIFIED_TABLE
             ))
         ));
         assert_eq!(handle.stats().norm_count, 0);
@@ -119,7 +116,7 @@ fn wider_product_slot_preserves_the_sort_of_a_changing_nat_operand() {
             assert!(matches!(
                 answer,
                 Err(crate::maude_proc::MaudeError::UnsupportedOperation(
-                    "normalization"
+                    crate::maude_proc::UNCERTIFIED_TABLE
                 ))
             ));
         }

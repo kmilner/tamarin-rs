@@ -166,9 +166,7 @@ fn first_match_agrees_with_maude_on_shared_identities_and_ambiguous_orientations
         return;
     };
     let sig = bp_maude_sig();
-    let oracle =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
-    let hybrid = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Hybrid).unwrap();
+    let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let native = native();
     let [x, y, p, q] = keys();
     let i = LVar::new("i", LSort::Node, 0);
@@ -178,19 +176,19 @@ fn first_match_agrees_with_maude_on_shared_identities_and_ambiguous_orientations
     expected.sort();
     assert_eq!(oracle.match_eqs(&rows).unwrap(), vec![expected.clone()]);
     assert_eq!(
-        hybrid.first_match_eqs(&rows).unwrap(),
+        oracle.first_match_eqs(&rows).unwrap(),
         Some(expected.clone())
     );
     assert_eq!(native.first_match_eqs(&rows).unwrap(), Some(expected));
     rows.push(eq(v(p), v(x)));
     assert!(oracle.match_eqs(&rows).unwrap().is_empty());
-    assert_eq!(hybrid.first_match_eqs(&rows).unwrap(), None);
+    assert_eq!(oracle.first_match_eqs(&rows).unwrap(), None);
     assert_eq!(native.first_match_eqs(&rows).unwrap(), None);
 
     let ambiguous = [orient];
     let alternatives = oracle.match_eqs(&ambiguous).unwrap();
     assert_eq!(alternatives.len(), 2);
-    for h in [&oracle, &hybrid, &native] {
+    for h in [&oracle, &native] {
         assert_eq!(
             h.first_match_eqs(&ambiguous).unwrap().as_ref(),
             alternatives.iter().min()
@@ -211,12 +209,20 @@ fn first_match_agrees_with_maude_on_shared_identities_and_ambiguous_orientations
         let answers = oracle.match_eqs(&rows).unwrap();
         assert_eq!(answers.len(), 2);
         assert_eq!(answers.iter().min(), Some(&expected));
-        for h in [&oracle, &hybrid, &native] {
+        for h in [&oracle, &native] {
             assert_eq!(h.first_match_eqs(&rows).unwrap().as_ref(), Some(&expected));
         }
         rows.reverse();
     }
-    assert_eq!(hybrid.stats().match_count, 0);
+    // Native-only answered every request through the proved matcher.
+    use tamarin_term::algebra_provenance::{Command, Origin};
+    let tally = native.provenance();
+    assert_eq!(
+        tally.total(Command::Match),
+        tally.fresh(Command::Match, Origin::Proved) + tally.cached(Command::Match, Origin::Proved)
+    );
+    assert!(tally.fresh(Command::Match, Origin::Proved) >= 5);
+    assert_eq!(native.stats().match_count, 0);
 }
 
 #[test]

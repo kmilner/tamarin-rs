@@ -823,8 +823,8 @@ fn natural_source_match_picks_the_same_binding_map_across_backends() {
         crate::constraint::solver::context::ProofContext::new(handle, Vec::new())
     };
     let mut backends = vec![AlgebraBackend::Maude];
-    if AlgebraBackend::default() == AlgebraBackend::Hybrid {
-        backends.extend([AlgebraBackend::Hybrid, AlgebraBackend::NativeOnly]);
+    if AlgebraBackend::NativeOnly.validate().is_ok() {
+        backends.push(AlgebraBackend::NativeOnly);
     }
     let contexts: Vec<_> = backends.into_iter().map(|b| (b, context(b))).collect();
     let oracle = &contexts[0].1;

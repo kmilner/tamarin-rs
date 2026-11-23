@@ -94,17 +94,15 @@ mod tests {
             rhs: sum(vec![hash(x(0)), pub_term("a")]),
         };
         assert!(!refutes(&flexible));
-        if std::env::var_os("TAM_RS_VERIFY_LEAN_UNIFY").is_none() {
-            let sig = mset_maude_sig().merge(hash_maude_sig());
-            let native =
-                MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly)
-                    .unwrap();
-            assert!(native.unify(std::slice::from_ref(&eq)).unwrap().is_empty());
-            assert!(!native
-                .unify(std::slice::from_ref(&flexible))
-                .unwrap()
-                .is_empty());
-        }
+        let sig = mset_maude_sig().merge(hash_maude_sig());
+        let native =
+            MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly)
+                .unwrap();
+        assert!(native.unify(std::slice::from_ref(&eq)).unwrap().is_empty());
+        assert!(!native
+            .unify(std::slice::from_ref(&flexible))
+            .unwrap()
+            .is_empty());
         if let Some(path) = tamarin_test_support::require_maude_path() {
             let oracle = MaudeHandle::start_with_backend(
                 &path,
@@ -118,9 +116,9 @@ mod tests {
                     lhs: sum(vs.clone()),
                     rhs: sum(vs.into_iter().map(hash).collect()),
                 };
-                assert!(oracle.unify_via_maude(&[cyclic]).unwrap().is_empty());
+                assert!(oracle.unify(&[cyclic]).unwrap().is_empty());
             }
-            assert!(!oracle.unify_via_maude(&[flexible]).unwrap().is_empty());
+            assert!(!oracle.unify(&[flexible]).unwrap().is_empty());
         }
         // Raw binary bracketing and a flattened ternary have equal model size.
         let three = [x(0), x(1), x(2)];

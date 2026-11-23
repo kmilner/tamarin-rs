@@ -703,6 +703,9 @@ pub(crate) fn run_proof_search_at_depth(
     {
         extract_solved_path(&mut root);
     }
+    // Simplifier passes without an error channel latch a failed algebra
+    // query and continue. Such a tree is not a result.
+    ctx.maude.check_backend_status()?;
     Ok(root)
 }
 

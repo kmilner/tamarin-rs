@@ -1,0 +1,12 @@
+theory NativeFoldedInverse
+begin
+builtins: diffie-hellman, xor
+
+rule Receive:
+  [ In(x), In(z) ] --[ Seen(inv(x XOR z)) ]-> [ ]
+
+lemma reachable:
+  exists-trace
+  "Ex m #i. Seen(m) @ i"
+
+end

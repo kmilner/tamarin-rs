@@ -324,6 +324,32 @@ walks the RS test harness's ladder because its captures must use the maude
   UNDOCUMENTED timeout is unchanged: plain ERROR, counted into `DIFF/ERROR=n`,
   and the sweep fails.
 
+## Algebra-backend checks — native-only against Maude
+
+These compare the two algebra backends of one binary built with
+`--features lean-unification`; neither uses the Haskell oracle. Usage, the
+status vocabulary and the CI wiring are in
+[`../TESTING.md`](../TESTING.md#algebra-backends).
+
+- **`backend_gate.py`** — proves a theory list on `--algebra-backend=maude`
+  and `=native-only`, each prover process under a memory cap (a systemd
+  scope when available, `RLIMIT_AS` otherwise) and a timeout, and fails on a
+  verdict that differs from Maude's, on a theory Maude finishes and
+  native-only does not, and on a theory that takes Maude over 1 s and
+  native-only over twice as long (minimum of `--runs` runs). `--smoke` is the
+  CI list, `--full` the whole corpus, `--list` anything else; thresholds,
+  caps and parallelism are parameters. Binary: `--bin`, `$RS_PATH`,
+  `target/ci/tamarin-rs`, then `target/release/tamarin-rs`. Maude: `--maude`,
+  `$MAUDE_PATH`, then `PATH`. Ends in `DONE_BACKEND_GATE verdict=OK|FAIL`.
+- **`test_backend_gate.py`** — the gate's own regression tests, against a
+  stand-in prover; needs neither Maude nor the Lean library.
+- **`interactive_backend_check.sh`** — starts `tamarin-rs interactive` once
+  per backend on a free localhost port, replays one session with `curl`
+  (theory page, open a lemma, one manual step, autoprove, the finished
+  proof) on a Diffie-Hellman and an XOR theory, stops the server by PID and
+  compares the saved responses. Ends in
+  `INTERACTIVE_BACKEND_CHECK verdict=OK|FAIL`.
+
 ## Web-gate internals (invoked by the gates, rarely by hand)
 
 - **`web_cache.sh`** — shared complete-producer profile selection, canonical
@@ -605,6 +631,21 @@ a licence notice. See [the licensing notes](../docs/LICENSING.md).
   `SKIP_UNSUPPORTED_FLAGS`. Files whose special recipe is batch-only are opened
   bare in the web gate by explicit contract, rather than by filtering a batch
   command line.
+- **`backend_gate/smoke.tsv`**, **`backend_gate/corpus.tsv`** — the theory
+  lists of `backend_gate.py --smoke` and `--full`: one path per line relative
+  to the examples directory, then optionally a tab and the theory's extra
+  prover flags, so the lists do not depend on `file_flags.tsv`. The full list
+  leaves out the `--diff` theories.
+- **`backend_gate/pending.tsv`** — theories the native-only backend is known
+  not to finish yet, each with its reason. The gate runs them, reports
+  `XFAIL`, and fails with `XPASS` once one finishes, so a fixed entry has to
+  be removed.
+- **`backend_gate/verdict_exceptions.tsv`** — lemmas whose native-only
+  verdict is known to differ from Maude's, with both verdicts and the reason.
+  Only the listed pair is accepted; an entry that stops differing fails the
+  gate as `STALE_EXCEPTION`.
+- **`backend_gate/theories/`** — regression theories that exist only for the
+  backend gate.
 - **`parity_corpus.txt`** — the canonical 432-file gate corpus: the
   submodule's examples plus one repo-local fixture
   (`../../crates/tamarin-theory/tests/fixtures/nat_sort_regression.spthy`,

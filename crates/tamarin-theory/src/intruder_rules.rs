@@ -310,7 +310,7 @@ pub fn subterm_constructor_rules(
     diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,
     sig: &tamarin_term::maude_sig::MaudeSig,
-) -> Vec<IntrRuleAC> {
+) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
     let mut out = construction_rules(&sig.user_defined_st_fun_syms());
     out.extend(private_constructor_rules(&sig.st_rules));
     minimize_intruder_rules(diff, maude, out)
@@ -673,7 +673,7 @@ fn minimize_intruder_rules(
     diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,
     rules: Vec<IntrRuleAC>,
-) -> Vec<IntrRuleAC> {
+) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
     debug_assert!(
         diff || rules.iter().all(|r| !r.conclusions.is_empty()),
         "minimize_intruder_rules: trace mode requires every rule to have a \
@@ -696,31 +696,38 @@ fn minimize_intruder_rules(
     let mut kept: Vec<bool> = vec![false; n];
     for i in 0..n {
         let r_i = &rules[i];
-        let dropped = (0..n).any(|j| {
+        // Same left-to-right short-circuit as `any`; a backend error aborts
+        // the pass instead of reading as "no peer matched".
+        let mut dropped = false;
+        for j in 0..n {
             if j == i {
-                return false;
+                continue;
             }
             // Peer eligibility: either already-kept earlier (j < i and j in kept)
             // or still in `unchecked` (j > i).  Haskell's `checked++unchecked`
             // semantics.
             if j < i && !kept[j] {
-                return false;
+                continue;
             }
             let r_j = &rules[j];
-            (fps[i].may_be_duplicate(&fps[j])
-                && equal_duplicate_rule_up_to_renaming(maude, r_i, r_j))
+            if (fps[i].may_be_duplicate(&fps[j])
+                && equal_duplicate_rule_up_to_renaming(maude, r_i, r_j)?)
                 || (!diff
                     && fps[i].may_be_subset(&fps[j])
-                    && equal_subset_rule_up_to_renaming(maude, r_i, r_j))
-        });
+                    && equal_subset_rule_up_to_renaming(maude, r_i, r_j)?)
+            {
+                dropped = true;
+                break;
+            }
+        }
         kept[i] = !dropped;
     }
-    rules
+    Ok(rules
         .into_iter()
         .zip(kept)
         .filter(|(r, keep)| *keep && !is_double_premise_rule(r))
         .map(|(r, _)| r)
-        .collect()
+        .collect())
 }
 
 /// `isDoublePremiseRule` (IntruderRules.hs).
@@ -1089,7 +1096,7 @@ pub fn destruction_rules_ac(
     diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,
     f_sig: &tamarin_term::function_symbols::AcFctFunSig,
-) -> Vec<IntrRuleAC> {
+) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::function_symbols::{AcSym, Privacy};
     use tamarin_term::term::f_app_ac;
 
@@ -1117,7 +1124,7 @@ pub fn destruction_rules_ac(
             vec![concfact.clone()],
             vec![concfact],
         );
-        let variants = variants_intruder(maude, true, diff, &base);
+        let variants = variants_intruder(maude, true, diff, &base)?;
         generated.extend(decompose_not_subterm(diff, fun, &variants));
     }
     minimize_intruder_rules(diff, maude, generated)
@@ -1207,7 +1214,7 @@ pub fn destruction_rules_no_eq(
     diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,
     f_sig: &tamarin_term::function_symbols::NoEqFunSig,
-) -> Vec<IntrRuleAC> {
+) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::function_symbols::Privacy;
     use tamarin_term::term::f_app_no_eq;
 
@@ -1243,33 +1250,23 @@ pub fn destruction_rules_no_eq(
         // The generic rule has variable premises and one conclusion, copied
         // into its action. Decomposition observes only those premises and the
         // conclusion. Carry the selected result alongside the argument images.
-        let variants = match maude.observed_application_variants(&base.conclusions[0].terms[0]) {
-            Ok(Some(arms)) => {
-                let candidates = arms.into_iter().map(|arm| {
-                    let bindings = tamarin_term::subst::Subst::from_list(arm.bindings);
-                    let prems = base
-                        .premises
-                        .iter()
-                        .map(|p| {
-                            p.clone()
-                                .map(|t| tamarin_term::subst::apply_vterm(&bindings, t))
-                        })
-                        .collect();
-                    let conclusion = kd_fact(arm.value);
-                    Rule::new(
-                        base.info.clone(),
-                        prems,
-                        vec![conclusion.clone()],
-                        vec![conclusion],
-                    )
-                });
-                filter_intruder_variants(maude, true, diff, &base, candidates)
+        // A backend error is not "unsupported": only `None` selects the
+        // ordinary narrowing path.
+        // The bindings are a complete family of variants of the generic
+        // rule's terms, listed and numbered as `get variants` lists them, so
+        // they go through the ordinary pipeline in place of that query: the
+        // rules get the variable names the Maude backend gives them, which
+        // the subsumption test of `minimize_intruder_rules` depends on.
+        let variants = match maude.observed_application_variants(&base.conclusions[0].terms[0])? {
+            Some(arms) => {
+                let family = arms.into_iter().map(|arm| arm.bindings).collect();
+                variants_intruder_with(maude, &|s| s, true, diff, &base, Some(family))?
             }
-            _ => variants_intruder(maude, true, diff, &base),
+            None => variants_intruder(maude, true, diff, &base)?,
         };
         generated.extend(decompose_not_subterm(diff, FunSym::NoEq(*f), &variants));
     }
-    minimize_intruder_rules(diff, maude, generated)
+    minimize_intruder_rules(diff, maude, generated)?
         .into_iter()
         .map(|r| max_applications(maude, r))
         .collect()
@@ -1299,7 +1296,7 @@ pub fn destruction_rules_no_eq(
 fn max_applications(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     mut ir: IntrRuleAC,
-) -> IntrRuleAC {
+) -> Result<IntrRuleAC, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::lterm::contains_only_no_eq;
     use tamarin_term::positions::positions;
     use tamarin_term::rewriting::Equal;
@@ -1325,13 +1322,10 @@ fn max_applications(
         if let (Some(t), Some(rhs)) = (kd_prem_t, kd_conc_rhs) {
             let budget: i64 = if contains_only_no_eq(rhs)
                 && contains_only_no_eq(t)
-                && maude
-                    .unifiable(&[Equal {
-                        lhs: rhs.clone(),
-                        rhs: t.clone(),
-                    }])
-                    .unwrap_or(false)
-            {
+                && maude.unifiable(&[Equal {
+                    lhs: rhs.clone(),
+                    rhs: t.clone(),
+                }])? {
                 // We do not need to count t itself, hence - 1.
                 // If t is a private function symbol we need to permit one
                 // more rule application as there is no associated
@@ -1347,7 +1341,7 @@ fn max_applications(
             {
                 *remaining_applications = budget;
             }
-            return ir;
+            return Ok(ir);
         }
     }
     if let IntrRuleACInfo::DestrRule {
@@ -1358,7 +1352,7 @@ fn max_applications(
     {
         // Clause 2: built-in deconstruction rules pass through untouched.
         if crate::rule::has_builtin_suffix(name, &crate::rule::built_in_destr_rule_incl_pair()) {
-            return ir;
+            return Ok(ir);
         }
         // Clause 3: non-subterm destructors must have been budgeted above.
         if !*rhs_is_proper_subterm {
@@ -1368,7 +1362,7 @@ fn max_applications(
         }
     }
     // Clause 4: pass through.
-    ir
+    Ok(ir)
 }
 
 /// `variantsIntruder` — port of
@@ -1421,10 +1415,10 @@ pub fn variants_intruder(
     apply_filters: bool,
     diff: bool,
     ru: &IntrRuleAC,
-) -> Vec<IntrRuleAC> {
+) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
     // HS hardcodes `minimizeVariants = id` for every call except the BP
     // `em` destructor (`variantsIntruder hnd id True diff ...`).
-    variants_intruder_with(maude, &|s| s, apply_filters, diff, ru)
+    variants_intruder_with(maude, &|s| s, apply_filters, diff, ru, None)
 }
 
 /// Core of `variantsIntruder` parameterised by the `minimizeVariants`
@@ -1454,7 +1448,10 @@ fn variants_intruder_with(
     apply_filters: bool,
     diff: bool,
     ru: &IntrRuleAC,
-) -> Vec<IntrRuleAC> {
+    // A complete family of variants of the rule's terms that the caller
+    // already holds, in place of the `get variants` query.
+    family: Option<Vec<Vec<(LVar, LNTerm)>>>,
+) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::lterm::frees;
     use tamarin_term::subst::{apply_vterm, Subst};
     use tamarin_term::subst_vfresh::LNSubstVFresh;
@@ -1491,11 +1488,11 @@ fn variants_intruder_with(
         s
     };
 
-    let packed = f_app_list(rule_terms);
-
-    let raw_substs = match maude.variants(&packed) {
-        Ok(v) => v,
-        Err(_) => return vec![ru.clone()],
+    // A failed or cancelled variant query has no answer. Keeping the base
+    // rule alone here would silently drop every other destructor variant.
+    let raw_substs = match family {
+        Some(family) => family,
+        None => maude.variants(&f_app_list(rule_terms))?,
     };
 
     // Clean each raw variant subst exactly as HS's `computeVariants`
@@ -1538,7 +1535,8 @@ fn variants_intruder_with(
     let minimized = minimize_variants(cleaned);
 
     // Build one candidate variant rule per (minimized) variant subst.
-    let candidates = minimized.into_iter().map(|s_fresh| {
+    let mut candidates = Vec::with_capacity(minimized.len());
+    for s_fresh in minimized {
         // `freshToFreeAvoiding ruleTerms` — convert VFresh → free Subst,
         // allocating fresh idxs that avoid every var in `ruleTerms`.
         let sigma: Subst<tamarin_term::lterm::Name, LVar> = {
@@ -1556,34 +1554,41 @@ fn variants_intruder_with(
         };
 
         // Build the variant rule by applying sigma + normalising every term.
-        // On Maude-reduce failure fall back to the (un-normalised) applied
-        // term — the same lenient fallback `map_facts` uses below — rather
-        // than fabricating a bogus `err` var into the rule's new_vars.
-        let norm_t = |t: LNTerm| -> LNTerm {
-            let applied = apply_vterm(&sigma, t);
-            maude.reduce(&applied).unwrap_or(applied)
+        // An un-normalised term is not a variant: a failed reduction aborts.
+        let norm_t = |t: LNTerm| -> Result<LNTerm, tamarin_term::maude_proc::MaudeError> {
+            maude.reduce(&apply_vterm(&sigma, t))
         };
-        let map_facts = |fs: &[LNFact]| -> Vec<LNFact> {
-            fs.iter()
-                .map(|f| {
-                    // norm/subst rebuild — frees can change; recompute the bloom.
-                    let terms: Vec<LNTerm> = f.terms.iter().map(|t| norm_t(t.clone())).collect();
-                    LNFact::fresh_annotated(f.tag, f.annotations.clone(), terms)
-                })
-                .collect()
-        };
-        let new_prems = map_facts(&ru.premises);
-        let new_concs = map_facts(&ru.conclusions);
-        let new_acts = map_facts(&ru.actions);
-        let new_nvs: Vec<LNTerm> = ru.new_vars.iter().cloned().map(norm_t).collect();
-        Rule {
+        let map_facts =
+            |fs: &[LNFact]| -> Result<Vec<LNFact>, tamarin_term::maude_proc::MaudeError> {
+                fs.iter()
+                    .map(|f| {
+                        // norm/subst rebuild — frees can change; recompute the bloom.
+                        let terms = f.terms.iter().map(|t| norm_t(t.clone())).collect::<Result<
+                            Vec<LNTerm>,
+                            _,
+                        >>(
+                        )?;
+                        Ok(LNFact::fresh_annotated(f.tag, f.annotations.clone(), terms))
+                    })
+                    .collect()
+            };
+        let new_prems = map_facts(&ru.premises)?;
+        let new_concs = map_facts(&ru.conclusions)?;
+        let new_acts = map_facts(&ru.actions)?;
+        let new_nvs = ru
+            .new_vars
+            .iter()
+            .cloned()
+            .map(norm_t)
+            .collect::<Result<Vec<LNTerm>, _>>()?;
+        candidates.push(Rule {
             info: ru.info.clone(),
             premises: new_prems,
             conclusions: new_concs,
             actions: new_acts,
             new_vars: new_nvs,
-        }
-    });
+        });
+    }
     filter_intruder_variants(maude, apply_filters, diff, ru, candidates)
 }
 
@@ -1593,7 +1598,7 @@ fn filter_intruder_variants(
     diff: bool,
     ru: &IntrRuleAC,
     candidates: impl IntoIterator<Item = IntrRuleAC>,
-) -> Vec<IntrRuleAC> {
+) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::function_symbols::AcSym;
     use tamarin_term::lterm::frees;
     use tamarin_term::term::Term;
@@ -1679,17 +1684,19 @@ fn filter_intruder_variants(
     for p in 0..rev.len() {
         let r = &rev[p];
         // peers = {kept so far} ∪ {rev[p+1..]}
-        let dup = kept_idx
-            .iter()
-            .map(|&k| &rev[k])
-            .chain(rev[p + 1..].iter())
-            .any(|peer| equal_rule_up_to_renaming(maude, r, peer));
+        let mut dup = false;
+        for peer in kept_idx.iter().map(|&k| &rev[k]).chain(rev[p + 1..].iter()) {
+            if equal_rule_up_to_renaming(maude, r, peer)? {
+                dup = true;
+                break;
+            }
+        }
         if !dup {
             kept_idx.push(p);
         }
     }
     // HS `checked' = r:checked` prepend ⇒ reverse the encounter order.
-    kept_idx.into_iter().rev().map(|k| rev[k].clone()).collect()
+    Ok(kept_idx.into_iter().rev().map(|k| rev[k].clone()).collect())
 }
 
 // =============================================================================
@@ -1807,7 +1814,7 @@ fn intr_mk_empty(_: LNFact) -> Vec<LNFact> {
 pub fn dh_intruder_rules(
     diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,
-) -> Vec<IntrRuleAC> {
+) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::builtin::{dh_neutral, exp, inv, mult, one_const};
     use tamarin_term::function_symbols::{
         dh_neutral_sym, exp_sym, inv_sym, one_sym, AcSym, DH_NEUTRAL_SYM_STRING, EXP_SYM_STRING,
@@ -1930,8 +1937,8 @@ pub fn dh_intruder_rules(
     );
 
     let mut destr_variants: Vec<IntrRuleAC> = Vec::new();
-    destr_variants.extend(variants_intruder(maude, true, diff, &exp_destr));
-    destr_variants.extend(variants_intruder(maude, true, diff, &inv_destr));
+    destr_variants.extend(variants_intruder(maude, true, diff, &exp_destr)?);
+    destr_variants.extend(variants_intruder(maude, true, diff, &inv_destr)?);
 
     // `minimizeIntruderRules diff hnd $ constrs ++ destr_variants`.
     let mut all = constrs;
@@ -1995,7 +2002,7 @@ pub fn dh_intruder_rules(
 pub fn bp_intruder_rules(
     diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,
-) -> Vec<IntrRuleAC> {
+) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::builtin::{emap, pmult};
     use tamarin_term::function_symbols::{pmult_sym, CSym, EMAP_SYM_STRING, PMULT_SYM_STRING};
 
@@ -2055,7 +2062,7 @@ pub fn bp_intruder_rules(
         intr_mk_empty,
     );
     let mut all = constrs;
-    all.extend(variants_intruder(maude, true, diff, &pmult_destr));
+    all.extend(variants_intruder(maude, true, diff, &pmult_destr)?);
 
     // em destructor variants — `bpVariantsIntruder diff hnd`
     // (canonicalised + KD→KU post-process).
@@ -2064,7 +2071,7 @@ pub fn bp_intruder_rules(
         kd_fact,
         intr_mk_empty,
     );
-    all.extend(bp_variants_intruder(diff, maude, &emap_destr));
+    all.extend(bp_variants_intruder(diff, maude, &emap_destr)?);
 
     // `minimizeIntruderRules diff hnd $ ...`.
     minimize_intruder_rules(diff, maude, all)
@@ -2101,7 +2108,7 @@ fn bp_variants_intruder(
     diff: bool,
     maude: &tamarin_term::maude_proc::MaudeHandle,
     ru: &IntrRuleAC,
-) -> Vec<IntrRuleAC> {
+) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::subst_vfresh::LNSubstVFresh;
     use tamarin_term::subsumption::canonize_subst;
     use tamarin_term::term::Term;
@@ -2131,7 +2138,7 @@ fn bp_variants_intruder(
         out
     };
 
-    let variants = variants_intruder_with(maude, &minimize_variants, true, diff, ru);
+    let variants = variants_intruder_with(maude, &minimize_variants, true, diff, ru, None)?;
 
     // KD→KU post-process (IntruderRules.hs): if the first premise
     // is a KD-fact whose single arg is a bare Var, rewrite that premise's
@@ -2140,7 +2147,7 @@ fn bp_variants_intruder(
     let is_bare_var_kd = |f: &LNFact| -> bool {
         f.tag == FactTag::Kd && f.terms.len() == 1 && matches!(f.terms[0], Term::Lit(Lit::Var(_)))
     };
-    variants
+    Ok(variants
         .into_iter()
         .map(|mut rv| {
             if rv.premises.len() == 2 {
@@ -2152,7 +2159,7 @@ fn bp_variants_intruder(
             }
             rv
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]

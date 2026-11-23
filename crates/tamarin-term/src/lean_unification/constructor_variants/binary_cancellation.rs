@@ -11,10 +11,9 @@ use crate::subst::Subst;
 use crate::term::{f_app_ac, Term};
 use crate::vterm::Lit;
 
-unsafe extern "C" {
-    fn tamarin_lean_binary_cancellation_rows() -> *mut std::ffi::c_void;
-    fn tamarin_lean_mixed_cancellation_rows() -> *mut std::ffi::c_void;
-}
+use tamarin_algebra_sys::{
+    tamarin_lean_binary_cancellation_rows, tamarin_lean_mixed_cancellation_rows,
+};
 
 fn msg_var(term: &LNTerm) -> Option<LVar> {
     match term {

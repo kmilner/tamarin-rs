@@ -287,7 +287,7 @@ pub(crate) fn add_auto_sources_lemma(
     maude: &MaudeHandle,
     rules: &[OpenProtoRule],
     chains: &[((NodeConc, NodePrem), System)],
-) -> AutoSourcesResult {
+) -> Result<AutoSourcesResult, tamarin_term::maude_proc::MaudeError> {
     // allOutConcs: (rule idx, protected output subterm).
     let mut all_out_concs: Vec<(usize, LNTerm)> = Vec::new();
     // allOutConcsNotProt: (rule idx, non-Out conclusion fact).
@@ -429,13 +429,10 @@ pub(crate) fn add_auto_sources_lemma(
                             continue;
                         }
                         let fout = rename_avoiding(tout.clone(), protterm);
-                        if maude
-                            .unifiable(&[Equal {
-                                lhs: protterm.clone(),
-                                rhs: fout,
-                            }])
-                            .unwrap_or(false)
-                        {
+                        if maude.unifiable(&[Equal {
+                            lhs: protterm.clone(),
+                            rhs: fout,
+                        }])? {
                             outs.push((*rout_i, tout.clone()));
                         }
                     }
@@ -466,7 +463,7 @@ pub(crate) fn add_auto_sources_lemma(
                             continue;
                         }
                         let unifout = rename_avoiding(fout.clone(), fact);
-                        if crate::rule::unifiable_ln_facts(maude, fact, &unifout).unwrap_or(false) {
+                        if crate::rule::unifiable_ln_facts(maude, fact, &unifout)? {
                             outs.push((*rout_i, fout.clone()));
                         }
                     }
@@ -549,10 +546,10 @@ pub(crate) fn add_auto_sources_lemma(
         annotation_groups.push(grp);
     }
 
-    AutoSourcesResult {
+    Ok(AutoSourcesResult {
         annotation_groups,
         formula,
-    }
+    })
 }
 
 /// Build the AUTO source lemma item (HS `unprovenLemma lemmaName [SourceLemma]
@@ -904,7 +901,7 @@ pub fn apply_auto_sources(
         (rules, raw_chains)
     };
 
-    let result = add_auto_sources_lemma(&maude, &rules, &gen_chains);
+    let result = add_auto_sources_lemma(&maude, &rules, &gen_chains)?;
 
     // addLabels: add the AUTO actions to the matching rules. HS folds the
     // per-rule act list right-to-left over `addActionClosedProtoRule`

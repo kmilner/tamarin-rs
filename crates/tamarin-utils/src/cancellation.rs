@@ -52,6 +52,12 @@ impl CancellationToken {
     pub fn is_cancelled(&self) -> bool {
         self.0.cancelled.load(Ordering::Relaxed)
     }
+    /// The address of the flag for foreign code that polls it: the byte is
+    /// zero until the token is cancelled and nonzero from then on. The
+    /// address stays valid while this token or a clone of it is alive.
+    pub fn flag_ptr(&self) -> *const u8 {
+        self.0.cancelled.as_ptr().cast_const().cast()
+    }
     pub fn check(&self) -> Result<(), Cancelled> {
         if self.is_cancelled() {
             Err(Cancelled)

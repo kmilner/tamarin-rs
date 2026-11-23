@@ -39,9 +39,6 @@ fn large_guard(factor: LNTerm, width: usize) -> LNTerm {
 
 #[test]
 fn checked_rigid_size_refutes_shared_and_open_conjunctions() {
-    if tamarin_utils::env_gate!("TAM_RS_VERIFY_LEAN_UNIFY") {
-        return;
-    }
     let h = handle();
     let x = LVar::new("x", LSort::Msg, 3);
     let y = LVar::new("y", LSort::Msg, 9);
@@ -71,9 +68,6 @@ fn checked_rigid_size_refutes_shared_and_open_conjunctions() {
 
 #[test]
 fn size_refutation_requires_every_conjunct_to_be_declared_and_sorted() {
-    if tamarin_utils::env_gate!("TAM_RS_VERIFY_LEAN_UNIFY") {
-        return;
-    }
     let x = LVar::new("x", LSort::Msg, 3);
     let vars = [(x.name, x.idx)].into_iter().collect();
     let atom = pub_term("c");
@@ -112,9 +106,6 @@ fn size_refutation_requires_every_conjunct_to_be_declared_and_sorted() {
 
 #[test]
 fn raw_reassociation_and_shared_subject_variables_preserve_a_match() {
-    if tamarin_utils::env_gate!("TAM_RS_VERIFY_LEAN_UNIFY") {
-        return;
-    }
     let h = handle();
     let x = LVar::new("x", LSort::Msg, 1);
     let y = LVar::new("y", LSort::Msg, 2);

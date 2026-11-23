@@ -42,7 +42,9 @@ fn complete_table_reduction_certifies_the_whole_kind_level_context() {
     let ambiguous = new(sig.refresh());
     assert!(matches!(
         ambiguous.reduce(&input),
-        Err(MaudeError::UnsupportedOperation("normalization"))
+        Err(MaudeError::UnsupportedOperation(
+            tamarin_term::maude_proc::UNCERTIFIED_TABLE
+        ))
     ));
     assert_eq!(ambiguous.stats().norm_count, 0);
 }

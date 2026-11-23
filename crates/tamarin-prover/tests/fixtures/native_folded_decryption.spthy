@@ -1,0 +1,15 @@
+theory NativeFoldedDecryption
+begin
+builtins: diffie-hellman, symmetric-encryption
+
+// Every variable arrives from the network, so the exponentiation has all of
+// its variants under the decryption: no specialised variant solver covers the
+// rule, and the family comes from folding variant narrowing.
+rule Receive:
+  [ In(x), In(y), In(z) ] --[ Seen(sdec(x, y^z)) ]-> [ Out(sdec(x, y^z)) ]
+
+lemma reachable:
+  exists-trace
+  "Ex m #i. Seen(m) @ i"
+
+end

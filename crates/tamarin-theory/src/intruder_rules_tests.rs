@@ -99,7 +99,7 @@ fn minimize_drops_set_subsumed_rule() {
         vec![kd_fact(x.clone())],
         vec![],
     );
-    let out = minimize_intruder_rules(false, &maude, vec![r_j.clone(), r_i.clone()]);
+    let out = minimize_intruder_rules(false, &maude, vec![r_j.clone(), r_i.clone()]).unwrap();
     // Set-subset: r_i is dropped; only r_j survives.  (Multiset bookkeeping
     // would have kept both, since r_j has two KU(y) but r_i only one.)
     assert_eq!(out.len(), 1);
@@ -138,20 +138,17 @@ fn equal_duplicate_early_reject_agrees_with_unfiltered_check() {
             &maude,
             r1,
             &tamarin_term::lterm::rename_avoiding(r2.clone(), r1),
-        );
+        )
+        .unwrap();
         assert_eq!(
-            equal_duplicate_rule_up_to_renaming(&maude, r1, r2),
+            equal_duplicate_rule_up_to_renaming(&maude, r1, r2).unwrap(),
             unfiltered
         );
     }
     // Sanity on the pair choices: the filter-tripping pairs are negatives,
     // the filter-passing self-pair is a positive.
-    assert!(!equal_duplicate_rule_up_to_renaming(
-        &maude, &constr, &destr
-    ));
-    assert!(equal_duplicate_rule_up_to_renaming(
-        &maude, &constr, &constr
-    ));
+    assert!(!equal_duplicate_rule_up_to_renaming(&maude, &constr, &destr).unwrap());
+    assert!(equal_duplicate_rule_up_to_renaming(&maude, &constr, &constr).unwrap());
 }
 
 // The early rejects in `equal_subset_rule_up_to_renaming` only fire on
@@ -185,12 +182,12 @@ fn equal_subset_early_rejects_are_necessary() {
     // (a) conclusion KD(x) vs KU(x): tags differ.
     let r1 = mk(vec![ku_fact(y.clone())], kd_fact(x.clone()));
     let r2 = mk(vec![ku_fact(y.clone())], ku_fact(x.clone()));
-    assert!(!equal_subset_rule_up_to_renaming(&maude, &r1, &r2));
+    assert!(!equal_subset_rule_up_to_renaming(&maude, &r1, &r2).unwrap());
     // (b) r2's KD(y) premise has no KD premise in r1 to map onto, even
     // though the KD(x) conclusions unify by a renaming.
     let r1 = mk(vec![ku_fact(y.clone())], kd_fact(x.clone()));
     let r2 = mk(vec![kd_fact(y.clone())], kd_fact(x.clone()));
-    assert!(!equal_subset_rule_up_to_renaming(&maude, &r1, &r2));
+    assert!(!equal_subset_rule_up_to_renaming(&maude, &r1, &r2).unwrap());
 }
 
 /// A `[ KU(v) ] --[ KU(t) ]-> [ KU(t) ]` rule over the single variable
@@ -297,7 +294,7 @@ fn minimize_keeps_order_across_differing_and_colliding_fingerprints() {
     // HS `go` drops a rule as soon as a peer in `checked ++ unchecked`
     // matches, so of the two duplicates the EARLIER one goes: `dup_a`
     // sees `dup_b` in `unchecked`, while `dup_b` sees no kept duplicate.
-    let out = minimize_intruder_rules(false, &maude, rules.clone());
+    let out = minimize_intruder_rules(false, &maude, rules.clone()).unwrap();
     assert_eq!(out, vec![fst_rule, collide_rule, dup_b]);
 
     // Soundness of every reject: a fingerprint may only reject a pair
@@ -310,8 +307,8 @@ fn minimize_keeps_order_across_differing_and_colliding_fingerprints() {
             if i == j {
                 continue;
             }
-            let dup = equal_duplicate_rule_up_to_renaming(&maude, &rules[i], &rules[j]);
-            let sub = equal_subset_rule_up_to_renaming(&maude, &rules[i], &rules[j]);
+            let dup = equal_duplicate_rule_up_to_renaming(&maude, &rules[i], &rules[j]).unwrap();
+            let sub = equal_subset_rule_up_to_renaming(&maude, &rules[i], &rules[j]).unwrap();
             if !fp_i.may_be_duplicate(fp_j) {
                 assert!(!dup);
                 rejected += 1;
@@ -489,7 +486,7 @@ fn subterm_constructor_rules_emits_only_constructors() {
     let Some(maude) = maude_handle_for(sig.clone()) else {
         return;
     };
-    let rules = subterm_constructor_rules(false, &maude, &sig);
+    let rules = subterm_constructor_rules(false, &maude, &sig).unwrap();
     assert!(
         rules
             .iter()
@@ -689,7 +686,7 @@ fn equal_rule_up_to_renaming_alpha_equivalent_pair_rules() {
     let r1 = ku_pair_rule_with_var("x", 0);
     let r2 = ku_pair_rule_with_var("y", 7);
     assert!(
-        equal_rule_up_to_renaming(&maude, &r1, &r2),
+        equal_rule_up_to_renaming(&maude, &r1, &r2).unwrap(),
         "two rules differing only in their bound var's name+idx \
              must be equal-up-to-renaming.  HS: `unifyLNTerm` yields a \
              renaming `[x.0 ~> y.7]`, isRenaming on each rule's restricted \
@@ -697,12 +694,12 @@ fn equal_rule_up_to_renaming_alpha_equivalent_pair_rules() {
     );
     // Symmetric: r2 vs r1.
     assert!(
-        equal_rule_up_to_renaming(&maude, &r2, &r1),
+        equal_rule_up_to_renaming(&maude, &r2, &r1).unwrap(),
         "equal_rule_up_to_renaming must be symmetric"
     );
     // Reflexive: r1 vs r1.
     assert!(
-        equal_rule_up_to_renaming(&maude, &r1, &r1),
+        equal_rule_up_to_renaming(&maude, &r1, &r1).unwrap(),
         "equal_rule_up_to_renaming must be reflexive"
     );
 }
@@ -730,7 +727,7 @@ fn equal_rule_up_to_renaming_structurally_different_rules_diverge() {
         vec![ku_fact(a)],
     );
     assert!(
-        !equal_rule_up_to_renaming(&maude, &r1, &r2),
+        !equal_rule_up_to_renaming(&maude, &r1, &r2).unwrap(),
         "rules with structurally distinct conclusions (KU(pair(x,x)) \
              vs KU(x)) cannot be equal-up-to-renaming — no unifier \
              matches `pair(x,x) =? x`.  HS: matchFacts builds the eqs, \
@@ -747,7 +744,7 @@ fn equal_rule_up_to_renaming_structurally_different_rules_diverge() {
         r1.actions.clone(),
     );
     assert!(
-        !equal_rule_up_to_renaming(&maude, &r1, &r3),
+        !equal_rule_up_to_renaming(&maude, &r1, &r3).unwrap(),
         "differing info field (rule names) must short-circuit to False \
              — HS: `if r1.info /= r2.info then False else ...`"
     );
@@ -784,7 +781,7 @@ fn variants_intruder_emits_at_least_the_identity_variant() {
             _ => false,
         })
         .expect("expected pair constructor rule");
-    let variants = variants_intruder(&maude, false, false, pair_rule);
+    let variants = variants_intruder(&maude, false, false, pair_rule).unwrap();
     assert!(
         !variants.is_empty(),
         "variants_intruder must emit at least one rule (the identity \
@@ -832,7 +829,7 @@ fn variants_intruder_without_filters_keeps_a_premise_covered_conclusion() {
     );
 
     assert_eq!(
-        variants_intruder(&maude, false, false, &ru),
+        variants_intruder(&maude, false, false, &ru).unwrap(),
         vec![ru.clone()],
         "apply_filters = false must let the identity variant through: the \
              guard is `not applyFilters`, so neither `ruvariant /= ru` nor \
@@ -844,7 +841,9 @@ fn variants_intruder_without_filters_keeps_a_premise_covered_conclusion() {
     // error fallback returns `vec![ru]` BEFORE the filters, so a broken
     // Maude round trip would show up here as a non-empty result.
     assert!(
-        variants_intruder(&maude, true, false, &ru).is_empty(),
+        variants_intruder(&maude, true, false, &ru)
+            .unwrap()
+            .is_empty(),
         "apply_filters = true must drop the identity variant of a rule \
              whose conclusion is also a premise"
     );
@@ -952,7 +951,7 @@ fn bp_intruder_rules_yields_74() {
     let Some(maude) = bp_maude_handle() else {
         return;
     };
-    let rules = bp_intruder_rules(false, &maude);
+    let rules = bp_intruder_rules(false, &maude).unwrap();
     assert_eq!(
         rules.len(),
         74,
@@ -996,7 +995,7 @@ fn dh_intruder_rules_emits_five_constructors_and_some_destructors() {
     let Some(maude) = dh_maude_handle() else {
         return;
     };
-    let rules = dh_intruder_rules(false, &maude);
+    let rules = dh_intruder_rules(false, &maude).unwrap();
 
     // 5 ConstrRules with the known names.
     let names: Vec<&[u8]> = rules
@@ -1122,7 +1121,7 @@ fn dh_intruder_rules_constructors_have_expected_shape() {
     let Some(maude) = dh_maude_handle() else {
         return;
     };
-    let rules = dh_intruder_rules(false, &maude);
+    let rules = dh_intruder_rules(false, &maude).unwrap();
     let find = |name: &[u8]| -> &IntrRuleAC {
         rules
             .iter()
@@ -1209,8 +1208,8 @@ fn dh_intruder_rules_diff_mode_is_at_least_as_large() {
     let Some(maude) = dh_maude_handle() else {
         return;
     };
-    let rules_no_diff = dh_intruder_rules(false, &maude);
-    let rules_diff = dh_intruder_rules(true, &maude);
+    let rules_no_diff = dh_intruder_rules(false, &maude).unwrap();
+    let rules_diff = dh_intruder_rules(true, &maude).unwrap();
     assert!(
         rules_diff.len() >= rules_no_diff.len(),
         "diff=true skips the subsumption filter (HS IntruderRules.hs) \
@@ -1244,7 +1243,7 @@ fn dh_intruder_rules_destructors_have_kd_shape() {
     let Some(maude) = dh_maude_handle() else {
         return;
     };
-    let rules = dh_intruder_rules(false, &maude);
+    let rules = dh_intruder_rules(false, &maude).unwrap();
     let destrs: Vec<&IntrRuleAC> = rules
         .iter()
         .filter(|r| matches!(r.info, IntrRuleACInfo::DestrRule { .. }))
@@ -1279,4 +1278,40 @@ fn dh_intruder_rules_destructors_have_kd_shape() {
         );
         assert!(d.new_vars.is_empty(), "destructor new_vars must be empty");
     }
+}
+
+/// A dead backend has no variants to report.  The generators used to answer
+/// with the base rule alone (`variants` failing), un-normalised terms
+/// (`reduce` failing) or "not a duplicate" (`unify` failing) — each a
+/// well-formed but wrong rule set.  They now return the error.
+#[test]
+fn intruder_rule_generation_propagates_backend_failure() {
+    let Some(maude) = dh_maude_handle() else {
+        return;
+    };
+    // With the subprocess gone every query fails; none is cached yet.
+    maude.kill_subprocess();
+    assert!(dh_intruder_rules(false, &maude).is_err());
+
+    let r = ku_rule_over_var("x", |t| t);
+    let x = var_term(LVar::new("x", LSort::Msg, 0));
+    let y = var_term(LVar::new("y", LSort::Msg, 0));
+    let mult = |a: LNTerm, b: LNTerm| {
+        tamarin_term::term::f_app_ac(tamarin_term::function_symbols::AcSym::Mult, vec![a, b])
+    };
+    let r1 = Rule::new(
+        r.info.clone(),
+        vec![ku_fact(mult(x.clone(), y.clone()))],
+        vec![ku_fact(x.clone())],
+        vec![],
+    );
+    let r2 = Rule::new(
+        r.info.clone(),
+        vec![ku_fact(mult(y.clone(), x.clone()))],
+        vec![ku_fact(y)],
+        vec![],
+    );
+    // An AC-headed pair needs the backend, so the comparison cannot answer.
+    assert!(equal_rule_up_to_renaming_ignoring_names(&maude, &r1, &r2).is_err());
+    assert!(minimize_intruder_rules(true, &maude, vec![r1, r2]).is_err());
 }
