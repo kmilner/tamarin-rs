@@ -11,10 +11,8 @@ the topics a fixture emits. A fixture can therefore emit more topics
 than its line lists. The `reports/` directory holds the bytes of the
 whole block for every fixture.
 
-This corpus exists because the upstream `tamarin-prover/examples/` tree
-contains hand-written, *passing* protocols — it does not exercise the
-negative paths in `Theory.Tools.Wellformedness`. Two harnesses consume
-it:
+This corpus provides focused topic and byte-level coverage of
+`Theory.Tools.Wellformedness`. Two harnesses consume it:
 
 1. `cargo run -p tamarin-theory --example wellformedness_fixtures
    [-- <fixtures-dir>]` — the differential runner: every fixture must
@@ -57,7 +55,7 @@ The runner's topic comparison has two rules:
 
 This directory holds one `<fixture>.report` file per pinned fixture.
 Each file starts with `#` provenance lines, and the expected block
-follows them. The files use two provenance keys. Every file carries a
+follows them. Every file carries a
 `# source:` line naming the oracle and capture flags. Captures disable
 `Message Derivation Checks` with `--derivcheck-timeout=0`, matching the static
 wellformedness pipeline tested here. Production callers run that dynamic check

@@ -1347,17 +1347,8 @@ pub fn gnot(g: &Guarded) -> Guarded {
         Guarded::Atom(a) => gnot_atom(a),
         Guarded::Disj(xs) => gconj(xs.iter().map(gnot).collect()),
         Guarded::Conj(xs) => gdisj(xs.iter().map(gnot).collect()),
-        // Use the smart constructors `gex`/`gall` (NOT direct
-        // GGuarded build) so that empty-quantifier collapses fire:
-        // - `gnot(GGuarded(All, [], [Less i j], gfalse))` (== ¬(i<j))
-        //   goes through `gex [] [Less i j] gtrue` → `gconj([Less i j, gtrue])`
-        //   → `Less i j` (the atom), not a stale `GGuarded(Ex, [], [Less i j], gtrue)`.
-        // Without this collapse, `to_induction_hypothesis` sees the body
-        // as nested GGuarded and produces extra `¬(Less)` disjuncts in
-        // the IH instead of collapsing them down — leading to a much
-        // larger Disj at goal-split time. Mirrors Haskell:
-        //   go (GGuarded All ss as gf) = gex  ss as (go gf)
-        //   go (GGuarded Ex  ss as gf) = gall ss as (go gf)
+        // `gnot` (Guarded.hs) uses `gex` / `gall` so empty binders collapse
+        // through the smart constructors while exchanging quantifiers.
         Guarded::GGuarded {
             qua: Quantifier::All,
             vars,

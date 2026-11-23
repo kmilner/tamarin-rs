@@ -1955,8 +1955,7 @@ fn pp_proof<T: ProofBody>(node: &T, out: &mut String, depth: usize) {
             // out BESIDE `by `.  For a `SolveGoal` step the goal can wrap, and
             // HughesPJ counts the `by ` (3 cols) toward the ribbon when
             // deciding the `fsep`/`sep` break — so we must render `by ` as
-            // line CONTENT, not as part of the indent (cf. the live string path;
-            // the NAXOS/KAS2 `Match( a,` / `<…>` divergence).  The `by `
+            // line content, not as part of the indent. The `by `
             // prefix is laid out by `step_line_with_unann` BESIDE the WHOLE
             // `sep [method, comment]` (HS `prettyCase ps (kwBy<>" ") <>
             // prettyStep ps`), so a dropped `/* unannotated */` aligns at

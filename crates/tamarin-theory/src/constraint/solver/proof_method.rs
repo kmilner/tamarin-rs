@@ -487,24 +487,10 @@ pub fn exec_proof_method(
             // here, or the proof tree loses siblings whose contradiction
             // reason Haskell renders.
             let keep = |sys: &System| -> bool { !sys.eq_store().is_false() };
-            // HS-faithful: `process` (ProofMethod.hs) treats
-            // EVERY `solveGoal` result UNIFORMLY — the solve yields ONE
-            // `CaseName`, then `runReduction (m <* simplifySystem)` fans the
-            // DisjT continuation out into N branches that ALL carry that same
-            // name, after which `removeRedundantCases` + `uniqueListBy ...
-            // distinguish` dedups and suffixes same-named survivors
-            // (`_case_1`/`_case_2`/...).  A `Linear`/`LinearNamed` outcome is
-            // therefore NOT special: it is simply a single-element case list
-            // whose post-`simplify` fan-out must run through the very same
-            // dedup+distinguish pipeline as `Cases`.  Normalise all three
-            // outcomes to a `Vec<(name, System)>` and share the
-            // dedup+distinguish pipeline.  Pushing each fanned-out system
-            // with a bare, un-`distinguish`ed name would drop the `_case_N`
-            // suffixes when a lone source-case fans out at simplify time —
-            // e.g. Yubikey's `eventInitStuff...` premise, where 4
-            // identically-named siblings would let the exists-trace DFS
-            // commit to `otc=('one'++'zero')` (14 steps) instead of HS's
-            // `_case_2` (`otc='zero'`, 10 steps).
+            // `process` (ProofMethod.hs) simplifies every goal-solve outcome,
+            // then deduplicates cases and distinguishes repeated names with
+            // `_case_N`. A linear outcome may split during simplification, so
+            // all outcomes share this pipeline.
             let cases: Vec<(String, System, u64)> = match outcome {
                 GoalCases::Linear => vec![("".to_string(), r.sys, adopted_counter)],
                 GoalCases::LinearNamed(name) => vec![(name, r.sys, adopted_counter)],

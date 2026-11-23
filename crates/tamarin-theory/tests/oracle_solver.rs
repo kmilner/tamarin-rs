@@ -39,11 +39,8 @@ fn fixtures_dir() -> PathBuf {
 /// The pinned oracle, discovered the way every parity script discovers it:
 /// `HS_PATH` when set, else the `tamarin-prover-testing` stack-work build.
 ///
-/// A bare `tamarin-prover` on `PATH` is deliberately NOT accepted.  It is
-/// whatever the machine happens to have installed — on this box a packaged
-/// release 1.12.0, a different upstream release from the submodule pin — and
-/// a differential test that compares against the wrong release is comparing
-/// against the wrong specification.
+/// An arbitrary `tamarin-prover` on `PATH` may use a different upstream
+/// revision, so it is not accepted as the parity oracle.
 fn oracle_binary() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("HS_PATH") {
         let p = PathBuf::from(p);
@@ -101,17 +98,13 @@ fn oracle_command_within(secs: u32) -> Option<Command> {
 /// across the mirror — one copy's divergence resolving would be masked by
 /// the other's persisting.
 ///
-/// Counts proved untrustworthy here: the eligible set breathes with the
-/// per-file oracle timeout under machine load — a quiet run admits marginal
-/// files that carry disproportionate mismatches — so a count floor flakes in
-/// both directions while the mismatch *identities* stay put.
+/// Per-file oracle timeouts make the eligible set depend on machine load.
+/// Exact mismatch identities keep that variation separate from parity changes.
 type ProbeLedger = Option<&'static [&'static str]>;
 
 /// Expected structural mismatches for `corpus_proof_skeleton_match_probe`.
 ///
-/// Re-enumerated 2026-08-28 on `internal-repr` (60s oracle timeout, CI
-/// profile): 825/833 matched, leaving the eight identities below. Corpus
-/// mirror copies are listed individually.
+/// Corpus mirror copies are listed individually.
 const STRUCTURAL_MISMATCH_LEDGER: ProbeLedger = Some(&[
     "asiaccs20-POIDC/OIDC_Implicit.spthy::Intent_Consent_and_Correct_Browser",
     "asiaccs20-POIDC/proofs/PROOF_OIDC_Implicit.spthy::executable",
@@ -1134,7 +1127,6 @@ fn corpus_proof_skeleton_match_probe() {
             // cached `mk_dh`/`mk_bp_intruder_variants`, `xor_maude_sig`/
             // `bp_maude_sig`), so theories using them are deliberately NOT
             // filtered out here — this catches XOR/BP proof-shape regressions
-            // (e.g. NSLPK3xor: RS 36/38 vs HS 11/13 steps).
 
             let theory = tamarin_parser::parse_theory(&src, &[]).ok()?;
             let out_path = format!("/tmp/proof_skel_corpus_{}_{}.spthy", pid, idx);
@@ -1645,17 +1637,10 @@ end
     let _ = std::fs::remove_file(&tmp);
 }
 
-/// Regression: `insert_implied_formulas_pass` must derive a `[reuse]`
-/// lemma's implied consequence even when the triggering action's
-/// argument is a Nat-sorted `App` term (e.g. `tone()`, the internal
-/// form of `%1`) rather than a `Lit`. A prior bug in `structural_match`
-/// classified every `App` as sort `Msg`, so a Nat-sorted pattern
-/// variable never matched — silently dropping the reuse lemma's
-/// `HonestSignatureKey` consequence whenever no sibling action offered
-/// a free-variable fallback. The verdict alone doesn't catch this: the
-/// buggy port still finds `Solved` via a shorter path that skips
-/// `HonestSignatureKey` entirely. So this checks the proof tree
-/// explicitly contains a `HonestSignatureKey` step.
+/// A reuse lemma must derive its consequence when an action argument is a
+/// Nat-sorted application, such as `%1`, as well as when it is a literal.
+/// Check that the proof contains the implied `HonestSignatureKey` step:
+/// a solved verdict alone does not establish that the reuse lemma fired.
 #[test]
 fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
     use tamarin_theory::constraint::constraints::Goal;

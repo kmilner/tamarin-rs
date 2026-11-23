@@ -355,7 +355,7 @@ mod tests {
         cfg
     }
 
-    /// The interactive `TheoryLoadOptions` plumbing added for HS parity:
+    /// Interactive `TheoryLoadOptions` carries parser flags and include paths:
     /// `-D` defines reach `#ifdef` evaluation through the load configuration
     /// (HS `toParserFlags`, TheoryLoader.hs), and a local file's
     /// `#include` resolves against ITS OWN directory

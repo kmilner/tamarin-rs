@@ -666,11 +666,9 @@ impl ProofState {
     fn replay_interactive_root(&self, lemma: &str) -> Result<Option<ProofNode>, String> {
         self.replay_root(lemma).map(|replayed| {
             replayed.map(|(mut root, has_stored_proof)| {
-                // The interactive tree historically treats a lemma with no
-                // parsed skeleton as an open root (so its action links are
-                // enabled). Batch replay labels the equivalent bare leaf
-                // `Sorry`; retain the web status while leaving genuine
-                // stored-proof replay untouched.
+                // A lemma without a stored skeleton has an open web root
+                // with enabled action links. Stored proofs use their replayed
+                // status; batch replay labels a bare leaf `Sorry`.
                 prepare_interactive_root(&mut root, has_stored_proof);
                 root
             })

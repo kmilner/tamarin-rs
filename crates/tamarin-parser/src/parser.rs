@@ -3031,13 +3031,11 @@ impl<'a> Parser<'a> {
     /// are fine); anything else is `Nothing` and `parseColor` raises
     /// `fail ("Color code " ++ show hc ++ " could not be parsed to RGB")`.
     /// The accepted code is stored verbatim (quotes/`#` stripped); rendering
-    /// lowercases it, matching `rgbToHex` of the parsed `RGB` value
-    /// (Data/Color.hs round-trips every 6-digit code byte-for-byte).
+    /// lowercases it, matching `rgbToHex` of the parsed `RGB` value.
     ///
-    /// Kept from the previous lexer-side implementation: no whitespace is
-    /// skipped after the opening quote or the `#`, so `' #FF'` / `'# FF'` are
-    /// rejected here though HS's `symbol`-based parser accepts them — real
-    /// colour attributes are always tight (e.g. `'#111111'`).
+    /// Rust requires adjacent `#` and hexadecimal digits (e.g. `'#111111'`).
+    /// Known parser difference: Haskell's `symbol "#"` consumes whitespace,
+    /// so it also accepts `'# ff0000'` and unquoted `# ff0000`.
     fn color_attr_value(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
         let quoted = self.lx.eat_str("'");
@@ -4911,7 +4909,7 @@ impl<'a> Parser<'a> {
     /// (Theory/Text/Parser/Term.hs): an identifier that is an
     /// arity-0 symbol of `funSyms maudeSig ∪ macroNames maudeSig` is the
     /// application `fApp fs []`, whatever a same-named binder is in scope.
-    /// Current upstream reads a complete identifier before resolving a
+    /// The parser reads a complete identifier before resolving a
     /// nullary symbol, so a symbol named `c` cannot accidentally claim the
     /// prefix of `cx`. Dot indices and type/sort suffixes are not identifier
     /// characters, however: a declared `c/0` claims the `c` in `c.1` or

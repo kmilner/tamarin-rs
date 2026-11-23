@@ -3,8 +3,8 @@
 
 //! The `System` sequent — the solver's working state.
 //!
-//! Port of `Theory.Constraint.System.System` (from the 1939-line
-//! `Theory/Constraint/System.hs`). The fields are live solver state:
+//! Port of `Theory.Constraint.System.System` (Theory/Constraint/System.hs).
+//! The fields are live solver state:
 //! the equation/subterm stores, source-kind/side annotations, the
 //! already-grafted source list and the goal/node/edge/formula
 //! collections are all read and mutated by the solver during proof search.
@@ -1721,9 +1721,7 @@ impl System {
     ///   `rawEdgeRel = sEdges ++ unsolvedChains` (`System.hs`).
     /// **Unsolved chain goals contribute (c.0, p.0) to the less-relation
     /// too** — HS treats an open chain as an implicit edge for purposes
-    /// of cycle detection and ordering inference. Without this, RS's
-    /// `cyclic` and `has_forbidden_chain` miss contradictions HS catches
-    /// (root cause of the StatVerif KU(pcs) over-saturation).
+    /// of cycle detection and ordering inference.
     ///
     /// Hoist this build out of loops via [`always_before_with`] so the
     /// relation is built once per pass and queried many times. The

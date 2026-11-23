@@ -20,32 +20,21 @@ use crate::restriction::Restriction;
 use crate::rule::ProtoRuleE;
 use crate::sapic::PlainProcess;
 
-/// A protocol rule modulo E with its variant machinery.  Mirrors the
-/// `ProtoRuleE` half of HS's `OpenProtoRule = (ProtoRuleE, [ProtoRuleAC])`;
-/// the port never materialises the `[ProtoRuleAC]` half — variants are
-/// enumerated lazily through `variant_substs` + `abstracted_rule` (the
-/// SplitG route).
+/// A protocol rule family with its original E rule, explicit AC members,
+/// and the executable body and variant machinery prepared during closing.
+/// [`closed_rules_ac`] exposes the family's compiled members.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenProtoRule {
+    /// Working body: it may be macro-expanded, unfolded, or auto-source annotated.
     pub rule: ProtoRuleE,
-    /// Variant substitutions as a disjunction (`RuleACConstrs` in
-    /// Haskell — `Disj LNSubstVFresh`).  The canonical rule (`rule`)
-    /// represents the un-narrowed E-rule; when this disjunction is
-    /// non-empty, `solve_rule_constraints` adds it as a SplitG goal
-    /// in the eq-store so the variant choice is enumerated lazily
-    /// per Haskell's `solveRuleConstraints` (Reduction.hs).
-    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh`
-    /// (Theory/Model/Rule.hs).
+    /// Variant disjunction for the executable body (`RuleACConstrs`, Rule.hs).
+    /// `solve_rule_constraints` adds a nonempty disjunction to the equation
+    /// store as a SplitG goal, deferring the variant choice to proof search.
     pub variant_substs: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
-    /// The abstracted form of `rule` for the SplitG path (Haskell
-    /// `variantsProtoRule` returns this in the `ProtoRuleAC`'s
-    /// prems/concs/acts/nvs).  Every reducible-headed sub-term in
-    /// the rule's terms is replaced by a fresh `LVar`; the
-    /// `variant_substs` disjunction is keyed by those fresh vars,
-    /// so applying any picked variant subst yields a fully-narrowed
-    /// rule.  `None` when no reducible-headed sub-terms exist
-    /// (canonical rule equals raw rule). Populated while closing the theory,
-    /// or by a standalone `ProofContext` on demand.
+    /// Optional canonical executable body paired with `variant_substs`.
+    /// Closing prepares it through reducible-term abstraction and precise
+    /// variable renaming (`variantsProtoRule`, RuleVariants.hs); standalone
+    /// proof contexts prepare it on demand. `None` uses `rule` as the body.
     pub abstracted_rule: Option<ProtoRuleE>,
     /// Premise indices marked as loop breakers by the dataflow
     /// analysis (`useAutoLoopBreakersAC`).  In Haskell these live on
@@ -55,20 +44,12 @@ pub struct OpenProtoRule {
     /// populated while closing the theory, or by a standalone
     /// `ProofContext` on demand.
     pub loop_breakers: Vec<crate::rule::PremIdx>,
-    /// HS's `cprRuleE` half (`ClosedProtoRule`, Items/RuleItem.hs),
-    /// stored only where it differs from `rule`: **`None` iff `rule` IS that
-    /// half**.  Three steps drive them apart.  `elaborate_items` applies the
-    /// theory's macros to `rule` alone, because `closeProtoRule` narrows
-    /// `applyMacroInRule macros ruE` and keeps the unexpanded `ruE`
-    /// (lib/theory/src/Rule.hs).  `addActionClosedProtoRule` adds AUTO
-    /// actions to `cprRuleAC` only (lib/theory/src/Rule.hs).
-    /// `unfoldRuleVariants` carries the ORIGINAL rule as every variant's
-    /// `cprRuleE` (lib/theory/src/Rule.hs).  Consumers of
-    /// HS's `getProtoRuleEs` (`S.toList . S.fromList . map oprRuleE`,
-    /// ClosedTheory.hs) — partial evaluation — must read this half
-    /// through [`OpenProtoRule::rule_e`]: it is macro-unexpanded, carries no
-    /// AUTO actions, and the Set round-trip collapses the per-variant
-    /// duplicates.
+    /// Saved original E rule (`cprRuleE`, Items/RuleItem.hs). `None` makes
+    /// [`OpenProtoRule::rule_e`] fall back to `rule`; a saved copy may equal it.
+    /// Macro expansion, auto-source annotation and unfolding preserve this
+    /// half for original-family consumers such as partial evaluation and
+    /// injectivity analysis. Closing leaves this saved body unchanged;
+    /// generated AUTO annotations belong to the executable bodies.
     pub rule_e: Option<Box<ProtoRuleE>>,
     /// Explicit `variants (modulo AC)` members (`_oprRuleAC`, Items/RuleItem.hs).
     /// Open theories preserve source macros. Closing expands the members while

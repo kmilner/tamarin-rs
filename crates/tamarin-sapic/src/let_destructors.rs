@@ -256,11 +256,9 @@ fn make_let_subst(svar: &SapicLVar, t2: &SapicTerm) -> Subst<Name, SapicLVar> {
     Subst::from_list(pairs)
 }
 
-/// Apply a SAPIC substitution to every term in a process subtree. HS `applyM`
-/// also applies ordinary term substitution to parsed location annotations
-/// (fixed upstream in #922). Case B only substitutes a `let`-bound variable
-/// that, by typing, does not occur as an inner binder of `pl` — so a plain
-/// substitution is faithful for the in-scope cases.
+/// Apply a SAPIC substitution to process terms, formulas and parsed locations
+/// (`applyM`, Sapic/Process.hs). Typing keeps the eliminated let's variable
+/// distinct from inner binders.
 fn apply_subst_process(
     subst: &Subst<Name, SapicLVar>,
     p: AnnotatedProcess<LVar>,
@@ -291,57 +289,21 @@ fn subst_action(
     ac: &tamarin_theory::sapic::SapicAction<SapicLVar>,
 ) -> tamarin_theory::sapic::SapicAction<SapicLVar> {
     use tamarin_theory::sapic::SapicAction as A;
-    match ac {
-        A::ChIn {
-            chan,
-            msg,
-            match_vars,
-        } => {
-            return A::ChIn {
-                chan: chan.as_ref().map(|t| subst_term(subst, t)),
-                msg: subst_term(subst, msg),
-                // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
-                // SapicLVar)` (Sapic/Process.hs) to reach this rewrite: a
-                // `let`-bound match var `=t` (where `t = <a,'test'>`) becomes the
-                // match-var set `{a}`.
-                match_vars: apply_match_vars(subst, match_vars),
-            };
-        }
-        A::Msr { match_vars, .. } => {
-            // Pinned HS reaches `Set.map (apply subst)` here and aborts if a
-            // match variable maps to a compound term.  Keep the robust
-            // `ChIn`/`Let` policy instead: collect the image's free variables
-            // so a compound match pattern remains usable.
-            let mut mapped = map_terms_action(
-                |t| subst_term(subst, t),
-                |f| apply_subst(subst, f.clone()),
-                |v| v.clone(),
-                ac,
-            );
-            let A::Msr {
-                match_vars: mapped_match_vars,
-                ..
-            } = &mut mapped
-            else {
-                unreachable!("mapping an MSR action preserves its constructor")
-            };
-            *mapped_match_vars = apply_match_vars(subst, match_vars);
-            return mapped;
-        }
-        _ => {}
-    }
-    map_terms_action(
+    let mut mapped = map_terms_action(
         |t| subst_term(subst, t),
-        // A `let`-bound value that an embedded `_restrict` mentions is
-        // rewritten there as it is in the fact rows.  A quantifier binder is a
-        // `Bound` De Bruijn index, outside the substitution's domain, so it
-        // cannot capture a variable of the image.
+        // Formula binders are De Bruijn indices outside the substitution domain.
         |f| apply_subst(subst, f.clone()),
-        // The `let` pass substitutes values, not binders, so a variable the
-        // action binds on its own stands for itself.
+        // Preserve action binders; match-variable sets are handled below.
         |v| v.clone(),
         ac,
-    )
+    );
+    if let A::ChIn { match_vars, .. } | A::Msr { match_vars, .. } = &mut mapped {
+        // A compound match image contributes all its free variables.
+        // Haskell's MSR path uses `Set.map (apply subst)` (Sapic/Process.hs),
+        // which rejects compound images; Rust accepts them as for `ChIn`.
+        *match_vars = apply_match_vars(subst, match_vars);
+    }
+    mapped
 }
 
 /// `apply subst` for a `ProcessCombinator SapicLVar` (Sapic/Process.hs).
@@ -351,23 +313,13 @@ fn subst_comb(
 ) -> ProcessCombinator<SapicLVar> {
     let mut mapped = map_terms_comb(
         |t| subst_term(subst, t),
-        // A Case-B `let`-elimination (`let z = t in P`) rewrites the free
-        // variable `z` inside a downstream conditional's formula too: `z` is a
-        // value bound by the `let`, not a process binder, so the `Cond`
-        // payload's `z` references the same value.
+        // The eliminated let's value also occurs in conditional formulas.
         |f| apply_subst(subst, f.clone()),
         |v| v.clone(),
         c,
     );
-    if let ProcessCombinator::Let { match_vars, .. } = c {
-        let ProcessCombinator::Let {
-            match_vars: mapped_match_vars,
-            ..
-        } = &mut mapped
-        else {
-            unreachable!("mapping a Let combinator preserves its constructor")
-        };
-        *mapped_match_vars = apply_match_vars(subst, match_vars);
+    if let ProcessCombinator::Let { match_vars, .. } = &mut mapped {
+        *match_vars = apply_match_vars(subst, match_vars);
     }
     mapped
 }
@@ -492,7 +444,7 @@ mod tests {
     }
 
     #[test]
-    fn case_b_eliminates_var_rhs_let() {
+    fn eliminates_unmatched_variable_let() {
         // `let h = 't' in out(h)` (h not a match-var) → `out('t')`, Let gone.
         let h = svar("h");
         let body = Process::Action(
@@ -526,8 +478,7 @@ mod tests {
 
     #[test]
     fn let_elimination_substitutes_compound_location() {
-        // Upstream #922: annotations use ordinary term substitution, so an
-        // eliminated let may replace its location variable with a pair.
+        // Location annotations accept the compound value of an eliminated let.
         let h = svar("h");
         let location = tamarin_term::builtin::pair(pub_name("site"), pub_name("device"));
         let mut body_ann = ann();
@@ -555,10 +506,8 @@ mod tests {
         assert_eq!(out.annotation().parsing_ann.location, Some(location));
     }
 
-    /// HS `mapTermsAction .. (fmap ff rest) ..` (Sapic/Process.hs) under
-    /// `apply subst` (Sapic/Process.hs): a Case-B `let`-elimination
-    /// rewrites the `let`-bound variable inside an embedded MSR's
-    /// `_restrict` formula, not only inside its fact rows.
+    /// `apply subst` (Sapic/Process.hs) rewrites an eliminated let's variable
+    /// in embedded MSR restrictions as well as fact rows.
     #[test]
     fn let_elimination_substitutes_into_an_msr_restriction() {
         use tamarin_theory::atom::ProtoAtom;
@@ -589,7 +538,7 @@ mod tests {
             ann(),
             Box::new(Process::Null(ann())),
         );
-        // `let h = 't' in <msr>` — Case B drops the Let and substitutes `'t'`.
+        // `let h = 't' in <msr>` substitutes `'t'` throughout the embedded rule.
         let lett = Process::Comb(
             ProcessCombinator::Let {
                 left: var_term(h),
@@ -621,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn let_substitution_rewrites_nested_let_and_msr_match_vars() {
+    fn let_substitution_rewrites_nested_let_and_action_match_vars() {
         let x = svar("x");
         let a = svar("a");
         let image = tamarin_term::builtin::pair(var_term(a.clone()), pub_name("tag"));
@@ -635,6 +584,23 @@ mod tests {
         let ProcessCombinator::Let { match_vars, .. } = subst_comb(&subst, &comb) else {
             panic!("expected Let")
         };
+        assert_eq!(match_vars, BTreeSet::from([a.clone()]));
+
+        let input = SapicAction::ChIn {
+            chan: Some(var_term(x.clone())),
+            msg: var_term(x.clone()),
+            match_vars: BTreeSet::from([x.clone()]),
+        };
+        let SapicAction::ChIn {
+            chan,
+            msg,
+            match_vars,
+        } = subst_action(&subst, &input)
+        else {
+            panic!("expected input")
+        };
+        assert_eq!(chan, Some(image.clone()));
+        assert_eq!(msg, image);
         assert_eq!(match_vars, BTreeSet::from([a.clone()]));
 
         let action = SapicAction::Msr {
@@ -651,9 +617,9 @@ mod tests {
     }
 
     #[test]
-    fn case_c_keeps_nonvar_lhs_let_and_sets_else_branch() {
+    fn pattern_let_keeps_its_plan_and_omits_null_else_branch() {
         // `let <a,b> = m in P else 0`: LHS is a pair (not a plain var), so the
-        // Let is KEPT (Case C); else_branch is False (right child is Null).
+        // let retains a matching stage and omits its null failure branch.
         let a = svar("a");
         let b = svar("b");
         let pair = tamarin_term::builtin::pair(var_term(a), var_term(b));

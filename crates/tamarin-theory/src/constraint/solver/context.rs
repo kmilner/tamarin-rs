@@ -545,25 +545,13 @@ impl ProofContext {
         let mut intruder_rules =
             crate::intruder_rules::subterm_constructor_rules(false, maude, sig);
         intruder_rules.extend(crate::intruder_rules::special_intruder_rules(false));
-        // For multiset: adds `_union` destructor (`KD(x++y) → KD(x)`,
-        // subterm=True, budget=0) and `_union` constructor.  Without these,
-        // the precomputed `KU(t)` source-cases miss the chain-extension
-        // path through union-decomposition, causing `hasImpossibleChain`
-        // to fire on legitimate chains from `KD(t1++t2)` to `KD(t1)`.
-        // Root cause of the `minimal_multiset::Reachable`/`issue519` cluster.
+        // Union construction and decomposition supply multiset KU sources
+        // and KD chain extensions (`multisetIntruderRules`, IntruderRules.hs).
         if sig.enable_mset {
             intruder_rules.extend(crate::intruder_rules::multiset_intruder_rules());
         }
-        // XOR intruder rules — port of HS `xorIntruderRules`
-        // (IntruderRules.hs) wired in `addMessageDeduction
-        // RuleVariants` (TheoryLoader.hs).  Two destructor rules
-        // for XOR cancellation (KD(x⊕y) ∧ KU(y⊕z) → KD(x⊕z) and
-        // KD(x⊕y) ∧ KU(y) → KD(x)), one constructor (KU(x⊕y) from
-        // KU(x), KU(y)), plus the `zero` constructor.  Without
-        // these every XOR-using theory is unsound: the canonical
-        // adversary attack `(x⊕y) ⊕ y = x` is unreachable, so
-        // `xor.spthy::Secret` and all `recentalive_tag`-style lemmas
-        // wrongly verify.  Mirrors HS's enableXor branch.
+        // `xorIntruderRules` (IntruderRules.hs) supplies two cancellation
+        // destructors, the XOR constructor and the zero constructor.
         if sig.enable_xor {
             intruder_rules.extend(crate::intruder_rules::xor_intruder_rules());
         }
@@ -959,29 +947,10 @@ pub(crate) fn annotate_loop_breakers(
         keys.push(k);
     }
 
-    // HS `premSolvingRelAC` builds the dataflow relation over `instances`:
-    //   `instances ru fa = [ apply (subst `freshToFreeAvoiding` fa) fa
-    //                       | subst <- eVariants ru ]`   (LoopBreakers.hs)
-    // where `eVariants ru` is the rule's AC-VARIANT disjunction
-    // (`variantsProtoRule`).  For a rule whose conclusion carries a
-    // reducible/DH-laden term (e.g. GDH RecvOthers concludes
-    // `!AO(.., 'g'^y^~esk)`), a variant substitution expands that term to a
-    // syntactic-AC form (`z.1 = 'g'^(~esk*y)`) that Maude's plain `unify`
-    // can solve against another rule's premise (`!AO(.., 'g'^y)`).  Unifying
-    // the RAW E-rule facts instead — as RS did — sends the local `unifyRaw`
-    // (and Maude) `exp(exp('g',y),esk) =? exp('g',y')`, a NESTED-exp
-    // narrowing problem the AC unifier rejects, so the dataflow edge (and
-    // hence the loop-breaker cycle) is never found.
-    //
-    // `populate_rule_variants` (run.rs) already computed and stored each
-    // rule's variant disjunction (keyed by the *abstracted* rule's fresh
-    // z-vars) on every `OpenProtoRule` BEFORE `annotate_loop_breakers`
-    // runs, so reuse `o.variant_substs`/`o.abstracted_rule` rather than
-    // recomputing via the narrowing-only `variant_substs_for_rule` (which
-    // misses DH `exp`/`mult` variant expansion).  When variants are empty
-    // (no reducible sub-terms, or this is the precompute call before
-    // population) `instances` yields the bare fact, preserving prior
-    // behaviour.
+    // `premSolvingRelAC` (LoopBreakers.hs) unifies AC-variant instances of
+    // facts. The cached abstracted bodies and variant substitutions include
+    // reducible-term normalization, including flattened DH exponents. An empty
+    // variant list yields the bare fact.
     let variant_substs: Vec<&Vec<tamarin_term::subst_vfresh::LNSubstVFresh>> =
         rules.iter().map(|o| &o.variant_substs).collect();
 

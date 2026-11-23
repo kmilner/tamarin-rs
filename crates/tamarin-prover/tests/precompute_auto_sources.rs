@@ -16,12 +16,8 @@
 //! variant (`unfoldRuleVariants`, lib/theory/src/Rule.hs) rather than one
 //! for the whole rule.
 //!
-//! No corpus file passes both flags, so neither the prove gate nor the pretty
-//! gate reaches this count.  Both expectations below are verbatim oracle bytes
-//! from the pinned v1.13.0 binary (Git revision ef3f0468) on [`THEORY`]; the
-//! pair is the anti-vacuity statement that `--auto-sources` moves the count on
-//! this theory, so a count that parks the unfolded variants under one entry
-//! reads 4 twice and fails the second test alone.
+//! These tests pin the oracle counts on [`THEORY`]: four closed protocol
+//! rules without auto-sources and five with its unfolded variants.
 //!
 //! `--derivcheck-timeout=300` is on both runs because a derivation check that
 //! times out adds a wellformedness entry, and `ppWf` (Batch.hs) puts

@@ -719,7 +719,7 @@ fn help_html(entry: &TheoryEntry) -> String {
     // template returned directly as `Html` (NOT through `renderHtmlDoc`), so it
     // emits a single line with no `<br/>`.  The env line carries the theory
     // name + load time/origin + wellformedness banner; the rest is a fixed
-    // static block reproduced byte-for-byte from the patched oracle.
+    // static block reproduced byte-for-byte from the pinned oracle.
     let env_line = format!(
         "<p>Theory: {name} (Loaded at {time} from {origin})</p> {errors}",
         name = html_escape(&entry.typed_theory.name),

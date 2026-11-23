@@ -220,8 +220,7 @@ fn ac_union_chain_wraps_in_guarded_formula() {
 /// `fcat` break points.  HS `prettyTerm` (Term/Term.hs) renders exp as
 /// `ppTerm t1 <> "^" <> ppTerm t2`, so the exponent `t2 = (~a*~b)` stays a
 /// breakable `fcat`: `hmac('g'^(~a*~b), ...)` must wrap the `*`-operands
-/// like HS rather than run past LINE_LENGTH=110.  Mirrors the spdm
-/// `hmac('g'^(~newPrivKey*~respPrivKey), ...)` proof-line divergence.
+/// within LINE_LENGTH=110.
 #[test]
 fn exp_with_ac_exponent_wraps_inside_fun() {
     use tamarin_term::function_symbols::{exp_sym, AcSym};

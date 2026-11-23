@@ -142,16 +142,12 @@ pub fn contradictions(
     if has_forbidden_constr_chain(sys, &node_rules) {
         out.push(Contradiction::ForbiddenACConstrChain);
     }
-    // 9. IncompatibleEqs — HS-faithful: `eqsIsFalse sEqStore`
-    //    (Contradictions.hs `contradictions`). The two preceding probes are RS-only
-    //    soundness backstops, NOT a port of the eqsIsFalse check: each fires
-    //    where HS's Maude unifier / `solveFactEqs` would have already pruned
-    //    this branch at construction time. The real fix is upstream — make
-    //    RS's edge insertion / fact-eq solving reject these systems at
-    //    construction (as HS does), after which both become dead code.
-    //    - has_incompatible_edge_facts / has_fresh_fact_sort_violation: lower
-    //      risk — mirror real HS invariants (edges connect equal fact tags;
-    //      Fr requires Fresh sort) that the unifier/solveFactEqs enforce.
+    // 9. IncompatibleEqs: enforce equal fact tags across edges and Fresh
+    // arguments for Fr facts, then check `eqsIsFalse sEqStore`
+    // (Contradictions.hs). The first two probes are Rust soundness checks:
+    // edge insertion/fact-equation solving does not yet reject every invalid
+    // tag or Fresh sort at construction, as Haskell does. Keep these checks
+    // until construction enforces those invariants.
     if has_incompatible_edge_facts(sys, &node_rules) {
         out.push(Contradiction::IncompatibleEqs);
     }
@@ -640,16 +636,11 @@ fn possible_root_syms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<RootSym>> {
 /// the regular `System`, NOT the LHS/RHS `Side`, which in HS lives
 /// only on `DiffSystem`).
 ///
-/// LATENT DIVERGENCE: RS has no `sDiffSystem` field, so this guard
-/// proxies it via `sys.side`. `formula_to_system` always sets `side`
-/// to `None` (diff is not yet handled), so the guard never fires for a
-/// diff system. Harmless today (no diff support in the corpus); when
-/// diff support lands, add a real `diff_system: bool` to `System` and
-/// guard on it instead of `side`.
+/// Current limitation: `sys.side` is not Haskell's `sDiffSystem` flag.
+/// Trace systems have no side and run this check; implementing diff mode
+/// requires a separate system-mode flag.
 fn has_forbidden_kd(sys: &System) -> bool {
     use crate::fact::FactTag;
-    // Diff-system guard — see LATENT DIVERGENCE note above; `side` is a
-    // stand-in for the missing `sDiffSystem` boolean.
     if sys.side.is_some() {
         return false;
     }
@@ -1003,13 +994,6 @@ fn has_forbidden_chain<'a>(
 ///   (2) conc has shape `KD(g)` (not an exp) AND
 ///       - `g` is simple
 ///       - all `MsgVar` args of `g` are KU-known earlier than `i`
-///
-/// Without this, RS lets through every variant d_exp chain extend
-/// regardless of whether the resulting destruction is constructible
-/// from the original KU premise — at the saturate step for
-/// `KU(exp(t.1,t.2))`, RS produces 16 cases vs HS's 3, because each
-/// of the 4 surviving d_exp chain-extend variants would be dropped
-/// by ForbiddenExp in HS.
 fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltAdj) -> bool {
     use crate::fact::FactTag;
     use crate::rule::{IntrRuleACInfo, RuleInfo};
@@ -1192,13 +1176,6 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
 ///      (Contradictions.hs `isForbiddenDEMapOrder`).
 ///
 /// First found case suffices to flag the system contradictory.
-///
-/// Triggering example: Chen_Kudla::key_agreement_reachable.  RS's
-/// variant fan-out (vs HS's deferred SplitG) produced extra KGC_Setup
-/// and Init_1 source cases at runtime that HS dropped via
-/// `hasForbiddenBP` (the d_pmult case applied to a KGC_Setup chain
-/// is overcomplicated under HS's normal-form).  Without this port,
-/// RS kept 5 cases where HS keeps 2 — diverging the proof shape.
 fn has_forbidden_bp(sys: &System) -> bool {
     if sys.nodes.iter().any(|(_, ru)| is_forbidden_d_pmult(ru)) {
         return true;
@@ -1682,8 +1659,7 @@ fn injective_interference_candidates_with_graph<'a>(
     // `adj` is invariant across this function, so memoize each node's
     // reachable set: `reachable(i)` is taken once per edge and `reachable(j)`
     // once per reachable `j`, with the same `j` recurring across edges.
-    // The cache stores the exact value the un-memoized closure returned
-    // (the set with `from` removed), so this is a pure speedup.
+    // Cached reachable sets exclude the starting node.
     fn reachable(
         cache: &mut BTreeMap<NodeId, Rc<BTreeSet<NodeId>>>,
         adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
@@ -1960,12 +1936,8 @@ pub fn maybe_non_normal_terms_nodes(
 /// thunk).  The fsubst application is recomputed only when
 /// the free-subst VALUE changes (at most once per `simp1` iteration:
 /// `simp_with_fresh_avoiding` snapshots `self.subst` per iteration and
-/// probes every candidate against that same snapshot).  Without this
-/// sharing, `simp_minimize` probes each disj subst and every probe
-/// re-walks every node of the system — a 20+ minute spin on
-/// post-autoprove eCK-class web proof pages (TAK1) that HS serves in
-/// under a minute.  Pure predicate — no fresh-counter movement, no
-/// output impact.
+/// probes every candidate against that same snapshot). The predicate does
+/// not advance the fresh counter.
 pub struct SubstNfChecker {
     maude: tamarin_term::maude_proc::MaudeHandle,
     /// O(1) `Arc` snapshot of `sys.nodes`, pinned at construction.
@@ -2098,9 +2070,8 @@ impl SubstNfChecker {
             // `nfApply subst0 t = t == t' || nf' t' \`runReader\` hnd`
             // where `nf' = nfViaHaskell` (Norm.hs) — run with the
             // handle, as HS does: the st-rule arm needs Maude AC matching
-            // for rules whose LHS contains an Ac-/C-headed subterm (user
-            // `[AC]` cancellation equations; csf26-ac CRxor `splitEqs(2)`
-            // keeps 6 cases instead of HS's 2 without it).  This is still
+            // for rules whose LHS contains an Ac-/C-headed subterm, including
+            // user `[AC]` cancellation equations. This is
             // the STRUCTURAL check, NOT `maude.reduce(t) == t`.  The
             // distinction matters because Maude canonicalises AC operator
             // arguments (multiset / mult / xor / nat-plus), so

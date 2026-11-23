@@ -155,23 +155,10 @@ impl ChangeIndicator {
 }
 
 thread_local! {
-    /// Source-precompute fresh-counter floor for `avoid th` faithfulness.
-    ///
-    /// HS's `refineSource` (Sources.hs) seeds ONE monotonic FreshT
-    /// counter at `fs = avoid th` — the max var idx over the WHOLE source
-    /// `th` (all its cases) — and threads it through EVERY reduction in the
-    /// refinement of each case, `simplifySystem` included.  RS breaks a
-    /// refineSource into a floored main-loop reduction plus floor-0
-    /// `simplify_system_with_fanout` sub-reductions; the latter reset the
-    /// counter to the per-case `avoid se`, which is BELOW `avoid th` for any
-    /// case whose max var is smaller than the source-wide max (e.g. NSPK3's
-    /// `!KU(~t.1)` R_1 case, avoid 27 vs source-wide 29).  A first NEW draw
-    /// there (the `[sources]`-lemma `Ex #j. OUT_I_1(m1)@#j` node) then lands
-    /// below HS's value.  This thread-local carries `source_avoid` into
-    /// those sub-reductions so they seed at `avoid th`, matching HS's single
-    /// monotonic counter.  Set for the duration of one source-case
-    /// refinement (`solve_all_safe_goals`); 0 (the
-    /// default, general proving path) means "no floor".
+    /// Source-wide `avoid th` floor for nested refinement reductions
+    /// (`refineSource`, Sources.hs). It covers all source cases, including
+    /// variables absent from the case currently being simplified. A scoped
+    /// guard restores it after refinement; zero means no additional floor.
     static REFINE_FLOOR: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -704,27 +691,10 @@ impl<'ctx> Reduction<'ctx> {
         } else {
             crate::tools::equation_store::LNSubst::empty()
         };
-        // Disj goal rewriting: Disjs carry a `Guarded` body, the same form
-        // `formulas`/`lemmas` hold, and they get the chain-chased
-        // `formula_subst` so saturate-time Disj goals are re-narrowed when
-        // runtime unification populates the eq_store — mirrors Haskell's
-        // `substSystem` applying the substitution to ALL goal bodies including
-        // Disjs.  Without it, a Disj goal added at saturate time retains the
-        // saturate-time vars even after runtime narrowing populates
-        // `eq_store`; downstream `is_open_in_sys` then auto-solves the stale
-        // Msg-var KU arm.  Net +3 lemmas in corpus
-        // (NSLPK3_untagged::session_key_setup_possible + Destroy_charn +
-        // Loop_charn).
-        //
-        // Each alternative is re-substituted to a fixpoint because eq-store
-        // entries can form chains (e.g. `x:1 → x:13`, `x:13 → ~n:28`) and one
-        // application only reduces by one step; the bound defends against a
-        // degenerate cycle.  The list is then normalised in lockstep with the
-        // GDisj formula twin (HS 150f5eba substGoals DisjG arm: `DisjG
-        // (normaliseDisjList (apply subst disj))`) — a subst that identifies
-        // two variables can make two alts equal, and the twin's list is
-        // deduplicated by `normalise_stored_formula_cow`, so the goal key must
-        // be too or the twin stores desynchronise (gcm livelock class).
+        // `substGoals` (Reduction.hs) substitutes DisjG bodies and normalizes
+        // their alternatives alongside the formula-store GDisj. Chase chained
+        // bindings to a fixpoint, then deduplicate alternatives so both stores
+        // use the same goal key when substitution identifies variables.
         let disj = |alts: &[Guarded]| -> Option<Vec<Guarded>> {
             if formula_subst.is_empty() {
                 return None;
@@ -821,40 +791,12 @@ impl<'ctx> Reduction<'ctx> {
             };
             self.sys.content_mut_untracked().last_atom = Some(new_last);
         }
-        // 4. Less atoms.
-        //
-        // HS-faithful: HS's `substLessAtoms = substPart sLessAtoms`
-        // (Reduction.hs) applies the eq-store subst to
-        // `sLessAtoms :: Set LessAtom` via the `Apply s (S.Set a)`
-        // instance (`SubstVFree.hs`): `S.map (apply subst)`.
-        // `S.map` rebuilds the set from the post-subst image, which
-        // INHERENTLY DEDUPES — two distinct pre-subst atoms whose
-        // images collapse to the same `(smaller, larger, reason)`
-        // tuple become one Set element.
-        //
-        // RS's `less_atoms: Vec<LessAtom>` doesn't auto-dedupe, so
-        // post-subst duplicates survive.  Mirror HS by deduping after
-        // the in-place rewrite.  Without this, the case-dedup comparison
-        // (`removeRedundantCases`) sees duplicate `s<l` entries and keeps
-        // systems that HS considers redundant apart.
-        //
-        // Triggering case: Scott::key_secrecy.  Two source-cases'
-        // saturated systems that HS dedupes (75→73 in
-        // `removeRedundantCases` at ProofMethod.hs) survived
-        // in RS, leaving 18 Reveal_ltk arms where HS shows 16.
-        //
-        // Source: HS `Theory.Constraint.Solver.Reduction.substLessAtoms`
-        //         + `Term/Substitution/SubstVFree.hs`, whose
-        //         `apply subst = S.map (apply subst)` is what dedupes.
+        // 4. Substitute and deduplicate less atoms, matching `substLessAtoms`
+        // and `S.map (apply subst)` (Reduction.hs, SubstVFree.hs).
         let mut new_less: Vec<crate::constraint::constraints::LessAtom> =
             Vec::with_capacity(self.sys.less_atoms.len());
-        // Dedup by `(smaller, larger)`: `LessAtom`'s `Eq` ignores `reason`
-        // (`impl PartialEq for LessAtom`, constraints.rs), so a `FastSet` of
-        // seen pairs gives exactly what a `new_less.iter().any(|x| x == &la)`
-        // rescan would — first occurrence wins, insertion order preserved,
-        // bit-identical Vec — at O(1) per atom instead of O(n²) over the
-        // growing list (that rescan costs ~half of `subst_system_once`
-        // self-time on Less-heavy systems).
+        // `LessAtom::Eq` ignores the reason. Keep the first occurrence of
+        // each endpoint pair, preserving insertion order.
         let mut seen_less: tamarin_utils::FastSet<(
             crate::constraint::constraints::NodeId,
             crate::constraint::constraints::NodeId,
@@ -879,9 +821,8 @@ impl<'ctx> Reduction<'ctx> {
             self.sys.invalidate_max_var_idx_cache();
         }
         self.sys.content_mut_untracked().less_atoms = new_less;
-        // 5. Goals: rewrite the Goal's free vars. Goals are deduped
-        //    structurally; collapsed goals merge by keeping the first
-        //    occurrence.
+        // 5. Rewrite goal free variables. Equal goals retain their first
+        // position and combine solved/looping flags and the minimum age.
         // A changed KU action can allocate while only part of the goal map
         // is installed. Reserve against the complete system before that rebuild.
         let needs_reinsert = |goal: &Goal| {
@@ -902,19 +843,9 @@ impl<'ctx> Reduction<'ctx> {
         let mut goals = std::sync::Arc::unwrap_or_clone(std::mem::take(
             &mut self.sys.content_mut_untracked().goals,
         ));
-        // HS-faithful (Reduction.hs): `substGoals` iterates
-        // `M.toList sGoals` which is Goal-Ord order (NodeId-first for
-        // ActionG / PremiseG / ChainG).  The order matters because
-        // `insertAction` for re-inserted KU msg-var goals assigns a
-        // NEW gsNr from `sNextGoalNr` (which monotonically increases),
-        // so the iteration order determines which goal gets the lower
-        // post-subst nr.  Iterating in insertion order (Vec push order)
-        // instead diverges from HS.
-        //
-        // Closes CH07::executable and CRxor::executable XOR diffs
-        // (8 lines each) where HS picked `KU(~nb)` first (lower
-        // post-subst nr because its NodeId was smaller) while RS
-        // picked `KU(~na)` first.
+        // `substGoals` (Reduction.hs) traverses Goal-Ord order. Reinserted
+        // KU message-variable goals receive fresh goal numbers, so this
+        // traversal order determines their relative ages.
         goals.sort_by(|(g1, _), (g2, _)| g1.cmp(g2));
         // Mirror node-fact handling above: apply the eq-store
         // substitution to each goal term with no Maude normalization.
@@ -1812,15 +1743,8 @@ impl<'ctx> Reduction<'ctx> {
                 }
             }
             Guarded::GGuarded { .. } => {
-                // Universal quantification: store in `sFormulas` so
-                // `insert_implied_formulas_pass` can iterate and
-                // instantiate it against system actions.  Mirrors
-                // Haskell's `insertFormula` for `All`-quantified
-                // guarded formulas — those go into `sFormulas`, not
-                // `sSolvedFormulas`. Without this, lemmas reduce
-                // their universals into a dead store and the body
-                // never fires (Start_before_Loop &c. mistakenly
-                // reach Solved).
+                // `insertFormula` (Reduction.hs) stores universals in the open
+                // formula set for implication matching against system actions.
                 self.sys.push_open_formula_normalized_absent(g);
                 self.changed = ChangeIndicator::Changed;
                 SystemOutcome::Linear
@@ -2130,9 +2054,7 @@ impl<'ctx> Reduction<'ctx> {
         // get folded into `subst` via `simp_singleton`.  Haskell's `simp`
         // (EquationStore.hs) calls `simpSingleton` as part of the
         // main loop, so by the time the search sees the goal list, a
-        // singleton variant subst is already in `subst`.  Without this,
-        // we leave a stale SplitG goal in `sys.goals` and the search
-        // emits an extra `solve` step for it (e.g. issue193::debug).
+        // singleton variant subst is already in `subst`.
         let maude_alloc = maude.clone();
         // Closure-style helper: simp one EquationStore with the same
         // non-normal-terms predicate.  Reused for both
@@ -2181,23 +2103,10 @@ impl<'ctx> Reduction<'ctx> {
                     ))
                 })?;
                 let mut live_arms: Vec<SolveBranch> = Vec::new();
-                // HS-faithful per-arm counter fork.  HS `solveTermEqs`
-                // (Reduction.hs) runs
-                //   `disjunctionOfList (performSplit eqs2 splitId)` and THEN
-                //   `simp` per arm — the `disjunctionOfList` sits in the
-                // DisjT layer BELOW FreshT (`Reduction = StateT System
-                // (FreshT (DisjT ...))`, Reduction.hs), so each arm's
-                // `simp` (whose `simpSingleton` fold draws fresh idxs via
-                // `freshToFree`) starts from an independent COPY of the
-                // counter at the fan-out point.  RS's `do_simp` allocs via
-                // the ONE shared `maude_alloc` counter, so consecutive arms
-                // threaded each other's fold draws: on RYY_PFS's
-                // `KU(em(t.1,t.2))` source the two C-unifier arms folded at
-                // t.7/t.8 and t.9/t.10 where HS has t.7/t.8 in BOTH
-                // (hs_ryy.err SAT-STEP: case2 = same t.7/t.8, premises
-                // swapped).  Rewind to the pre-fork base before each arm and
-                // restore the high-water mark after the loop, exactly as
-                // `solve_action_goal` does around its candidate fork.
+                // `solveTermEqs` (Reduction.hs) forks DisjT below FreshT:
+                // every arm's simplification starts from the same counter.
+                // Record each continuation and restore the shared handle to
+                // the highest counter reached when the loop finishes.
                 let arm_fork_base = maude_alloc.fresh_counter_peek();
                 let mut arm_high_water = arm_fork_base;
                 for arm in arms {
@@ -2685,8 +2594,6 @@ fn canonical_rule_inst(o: &crate::theory::OpenProtoRule) -> RuleACInst {
 /// eq-store as a SplitG via `solve_rule_constraints` after labeling the
 /// node. Intruder rules are added with `None` constraints (they have no
 /// variants).
-///
-/// This is the Haskell-faithful path — there is no legacy fallback.
 fn rule_insts_with_constrs<F: Fn(&RuleACInst) -> bool>(
     open: &[crate::theory::OpenProtoRule],
     keep: F,
@@ -3087,8 +2994,7 @@ fn premise_solving_rule_insts_with_constrs(
 // compiler inlines the recursion and folds the per-node "is this idx
 // larger?" check into a register op, avoiding the `&mut dyn FnMut(&LVar)`
 // vtable dispatch a generic `HasFrees::for_each_free` walk pays on every
-// node (~8.5% of CPU on the wireguard `--prove` profile; `bounds_max` is
-// hot — called many times per proof-step).
+// node in this frequently called bound calculation.
 #[inline(always)]
 fn bm_term(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
     use tamarin_term::term::Term;
@@ -3803,21 +3709,9 @@ fn ku_decomp_subterms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<tamarin_ter
         Term::App(FunSym::NoEq(s), args) if s.name == INV_SYM_STRING && args.len() == 1 => {
             Some(args.to_vec())
         }
-        // For AC operators (Mult, Union) HS reads the decomposition
-        // sub-terms via `viewTerm2 -> FMult ms` / `FUnion ms`, where `ms`
-        // is the operator's multiset normal form — ALWAYS sorted by the
-        // term `Ord` (idx-first), because every AC term is built through
-        // `fAppAC` which does `sort (...)` (Term/Term/Raw.hs).
-        // HS's `insertAction` (Reduction.hs) then allocates one fresh `vk` node per
-        // sub-term in that SORTED order (`mapM_ requiresKU ms`,
-        // Reduction.hs).  A substituted/Maude-derived AC term can
-        // reach this point in RS with its args in Maude's (unsorted)
-        // order; reading `args.to_vec()` verbatim would allocate the
-        // `vk` nodes in a different order than HS, shifting the surviving
-        // KU-node index by the position delta (e.g. Scott key_secrecy's
-        // `inv(~ex*x)` case: RS stored `[x, ~ex]` (Maude order) vs HS's
-        // sorted `[~ex, x]`, so RS's surviving `KU(~ex)` landed at
-        // `#vk.N+1`).  Sort to recover HS's `viewTerm2` multiset order.
+        // `insertAction` (Reduction.hs) allocates fresh KU nodes in the
+        // term-Ord order exposed by `viewTerm2`. Sort AC decomposition
+        // terms to preserve that allocation order after substitution.
         Term::App(FunSym::Ac(AcSym::Mult | AcSym::Union), args) => {
             let mut v = args.to_vec();
             v.sort();
@@ -4545,13 +4439,6 @@ impl<'ctx> Reduction<'ctx> {
                         // arms, the DisjT layer fans the entire enclosing
                         // `solveAction` call into one branch per arm.  Each
                         // branch's eq_store gets that arm's unifier installed.
-                        //
-                        // Without this fan-out RS picks the FIRST arm's
-                        // eq_store and silently drops the rest, collapsing
-                        // HS's N sibling simplify-cases to 1.  This is what
-                        // makes TAK1::session_key_establish show only `case
-                        // Proto2` after simplify where HS shows `case 17`
-                        // (the 17th surviving AC-unifier arm).
                         let arm_eq_stores: Vec<(crate::tools::equation_store::EquationStore, u64)> =
                             match res {
                                 Err(error) => return Err(error),
@@ -4603,7 +4490,7 @@ impl<'ctx> Reduction<'ctx> {
         })
     }
 
-    /// `solvePremise` (non-KD branch only).
+    /// `solvePremise` (Goals.hs).
     ///
     /// For a goal `Premise(p, faPrem)` where `p = (i, PremIdx j)`, fork
     /// once per (rule, conclusion-index) pair whose conclusion is
@@ -4613,8 +4500,8 @@ impl<'ctx> Reduction<'ctx> {
     ///   - add the node and the edge
     ///   - unify the conclusion fact with `faPrem`
     ///
-    /// The KD-fact branch (which inserts an `IRecv` learning step and
-    /// a chain constraint) is deferred until `insert_chain` lands.
+    /// The KD-fact branch inserts an `IRecv` learning step and a chain
+    /// constraint targeting the premise.
     pub(crate) fn solve_premise_goal(
         &mut self,
         p: &crate::constraint::constraints::NodePrem,
@@ -5534,25 +5421,9 @@ impl<'ctx> Reduction<'ctx> {
             return Ok(GoalCases::Linear);
         }
         let mut out = Vec::with_capacity(cases.len());
-        // HS FreshT-threading (`solveSplit`, Goals.hs):
-        // `disjunctionOfList split` forks the DisjT layer, which sits
-        // BELOW FreshT in `Reduction = StateT System (FreshT (DisjT ...))`
-        // (Reduction.hs) — so each arm's subsequent `simp` (whose
-        // `simpSingleton` fold draws fresh idxs via `freshToFree`) starts
-        // from an independent COPY of the counter at the fan-out point.
-        // RS's `simplify_picked` allocs via the ONE shared `self.maude`
-        // counter, so consecutive cases threaded each other's fold draws:
-        // on csf18-xor/CH07's `splitEqs(0)` (9 xor-unifier variants) the
-        // per-case folds drew 6→8, 8→12, 12→16, 16→19, ... where HS draws
-        // 6.. in EVERY case.  The
-        // folded range vars persist in each case's system, so every case
-        // after the first carried a cumulative +offset in its whole var
-        // numbering — the growing ∃-witness index drift on CH07 /
-        // sapic feature-xor CH07 web proof pages.  Rewind to the fork
-        // base before each case and record the per-case continuation
-        // counter (fork + that case's OWN draws) in each `GoalBranch`, so
-        // the post-solve `simplifySystem` continues each branch at
-        // HS's counter position, exactly like the other Cases producers.
+        // `solveSplit` (Goals.hs) forks DisjT below FreshT. Each arm starts
+        // from the same counter and records its own continuation after
+        // simplification, including any `simpSingleton` fresh-variable draws.
         let fork_base = self.maude.fresh_counter_peek();
         for store in cases.into_iter() {
             self.maude.reset_counter_to(fork_base);

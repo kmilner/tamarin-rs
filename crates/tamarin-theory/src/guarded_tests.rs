@@ -1170,7 +1170,7 @@ fn gnot_distributes_over_disj() {
 /// Term/Term/Raw.hs).  Every guarded term is built through it, so the
 /// two spellings of one pairing are ONE value and a substituted
 /// solved-formula compares equal to a freshly-derived implied-formula over
-/// the same pairing (the idbased/BP_IBS bilinear divergence).
+/// the same pairing.
 #[test]
 fn guarded_ac_arguments_are_sorted_by_construction() {
     // em(x, 'P') — the derived `Ord (Lit c v)` puts `Con` before `Var`
