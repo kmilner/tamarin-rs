@@ -16,7 +16,7 @@ name = "lean_unification_bench"
 required-features = ["lean-unification"]
 
 [dependencies]
-tamarin-algebra-sys = { git = "https://github.com/kmilner/tamarin-algebra.git", rev = "9ed3530850441ba21e971df8d7a83cb4a414e3d5", optional = true }
+tamarin-algebra-sys = { git = "https://github.com/kmilner/tamarin-algebra.git", rev = "3aabc7c427535f4a3dd35f6ca7666b7e07c40679", optional = true }
 tamarin-utils = { workspace = true }
 parking_lot = "0.13"
 rustc-hash = { workspace = true }

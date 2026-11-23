@@ -379,7 +379,7 @@ impl UnifyMemo {
 }
 
 /// The operation a raw native-only session reports when the certifier did not
-/// accept its rewrite table and the all-paths check left a term undecided.
+/// accept its rewrite table.
 pub const UNCERTIFIED_TABLE: &str =
     "normalization over a rewrite table the certifier did not accept";
 
@@ -402,6 +402,9 @@ struct Reference {
     /// The work bound of the variant certificate checker. See
     /// [`VARIANT_CHECK_WORK`].
     variant_check_work: u64,
+    /// The search steps one call of the variant certificate checker may
+    /// take. See [`VARIANT_CHECK_SEARCH`].
+    variant_check_search: u64,
     /// The work bound of one interruptible search. See [`SEARCH_WORK`].
     search_work: u64,
     /// Replaces the family a solver proposed before it is checked.
@@ -416,6 +419,7 @@ impl Default for Reference {
             reduce: false,
             variants: false,
             variant_check_work: VARIANT_CHECK_WORK_DEFAULT,
+            variant_check_search: VARIANT_CHECK_SEARCH_DEFAULT,
             search_work: SEARCH_WORK_DEFAULT,
             #[cfg(test)]
             tamper_variants: None,
@@ -446,6 +450,24 @@ pub const VARIANT_CHECK_WORK: &str = "TAM_RS_VARIANT_CHECK_WORK";
 /// "Variant check budget", for the measurements behind the value.
 #[cfg(feature = "lean-unification")]
 const VARIANT_CHECK_WORK_DEFAULT: u64 = 1 << 16;
+
+/// `TAM_RS_VARIANT_CHECK_SEARCH=<n>` sets the number of search steps one call
+/// of the variant certificate checker may take; `0` removes the bound.
+///
+/// The checker asks before every member, before every narrowing successor
+/// and inside every unification, matching and reduction it runs whether to go
+/// on. One call is stopped when it has asked more than this number of times,
+/// or as soon as its request is cancelled, and then decides nothing: the
+/// session fails with "out of budget", never with an answer. The count is a
+/// function of the request alone, so the bound is deterministic. This is the
+/// bound that stops a family whose cost is inside the unifier, which the
+/// position count of [`VARIANT_CHECK_WORK`] does not see.
+pub const VARIANT_CHECK_SEARCH: &str = "TAM_RS_VARIANT_CHECK_SEARCH";
+
+/// The bound without [`VARIANT_CHECK_SEARCH`]. See TESTING.md, "Variant
+/// check budget", for the measurements behind the value.
+#[cfg(feature = "lean-unification")]
+const VARIANT_CHECK_SEARCH_DEFAULT: u64 = 1 << 26;
 
 /// `TAM_RS_ALGEBRA_SEARCH_WORK=<n>` sets the work bound of one call of an
 /// interruptible Lean export; `0` removes the bound.
@@ -504,6 +526,14 @@ impl Reference {
             selected.variant_check_work = value.parse().map_err(|_| {
                 MaudeError::Other(format!(
                     "{VARIANT_CHECK_WORK}: expected a number of positions, got {value:?}"
+                ))
+            })?;
+        }
+        if let Some(value) = std::env::var_os(VARIANT_CHECK_SEARCH) {
+            let value = value.to_string_lossy();
+            selected.variant_check_search = value.parse().map_err(|_| {
+                MaudeError::Other(format!(
+                    "{VARIANT_CHECK_SEARCH}: expected a number of search steps, got {value:?}"
                 ))
             })?;
         }
@@ -1261,6 +1291,14 @@ impl MaudeHandle {
         self.reference.search_work = work;
     }
 
+    /// Stop one call of the variant certificate checker after `work` search
+    /// steps (zero for no bound), as [`VARIANT_CHECK_SEARCH`] does for a
+    /// whole process.
+    #[cfg(feature = "lean-unification")]
+    pub fn set_variant_check_search(&mut self, work: u64) {
+        self.reference.variant_check_search = work;
+    }
+
     /// Which component has answered each command of this session so far.
     pub fn provenance(&self) -> crate::algebra_provenance::ProvenanceSnapshot {
         self.caches.provenance.snapshot()
@@ -1650,14 +1688,13 @@ impl MaudeHandle {
     ///
     /// A table the certifier accepted is terminating and confluent, so the
     /// single rewrite path of the certified export ends in the unique normal
-    /// form. For any other table the all-paths export answers only when every
-    /// path it explored agrees. When that check is undecided, a session
-    /// started for a Tamarin theory follows one rewrite path: the export
-    /// proves that its answer is an irreducible reduct of the term with the
-    /// sorts of the term, and that this reduct is the normal form is the
-    /// author's premise that the equations are convergent, as it is for
-    /// Maude. Such an answer is recorded as assumed; a raw session reports
-    /// the uncertified table instead.
+    /// form. For any other table a session started for a Tamarin theory
+    /// follows one rewrite path: the export proves that its answer is an
+    /// irreducible reduct of the term with the sorts of the term, and that
+    /// this reduct is the normal form is the author's premise that the
+    /// equations are convergent, as it is for Maude. Such an answer is
+    /// recorded as assumed; a raw session reports the uncertified table
+    /// instead.
     #[cfg(feature = "lean-unification")]
     fn proved_reduce(
         &self,
@@ -1673,7 +1710,7 @@ impl MaudeHandle {
             .reduce(&inner.sig, t, follow_path, self.reference.search_work)
             .map_err(|error| native_runtime_error(&inner.caches, error))?
         {
-            Reduced::Certified(result) | Reduced::Checked(result) => Ok((result, Origin::Proved)),
+            Reduced::Certified(result) => Ok((result, Origin::Proved)),
             Reduced::Path(result) => Ok((result, Origin::Assumed)),
             Reduced::Unsupported => Err(inner.unsupported_native_operation("normalization")),
             Reduced::Undecided => Err(inner.unsupported_native_operation(UNCERTIFIED_TABLE)),
@@ -1723,7 +1760,14 @@ impl MaudeHandle {
         }
         let start = std::time::Instant::now();
         let verdict = table
-            .check_variants(&inner.sig, query, family, VARIANT_CHECK_DEPTH, work)
+            .check_variants(
+                &inner.sig,
+                query,
+                family,
+                VARIANT_CHECK_DEPTH,
+                work,
+                self.reference.variant_check_search,
+            )
             .map_err(|error| native_runtime_error(&inner.caches, error))?;
         if trace {
             eprintln!(
@@ -1887,22 +1931,26 @@ impl MaudeHandle {
     /// separate kernel into such a conjunction, or into a clash of shapes.
     /// Rust composes those two steps, so that answer counts as native Rust.
     ///
-    /// The answer is the export's family with its witnesses renamed: spelled
-    /// as the Maude backend spells its unifiers ([`spell_as_maude`]), or,
-    /// for a family that is not the composition that backend builds, lifted
-    /// above the query. Either way an arm says what the export's arm says.
+    /// The answer is the unifier's reply read through the tables of the
+    /// naming export of the algebra library. That export names every
+    /// witness, and nothing here renames one: by default a witness is called
+    /// `x` and numbered above the query, and for a family that is the
+    /// composition the Maude backend builds the export is asked for that
+    /// backend's names ([`spelling_as_maude`]), which it takes only where
+    /// they rename each arm injectively and away from the query.
     ///
-    /// There are two memos. The export's replies are kept by the words of
-    /// the request, which are the same for requests that differ only in the
-    /// names of their variables, and a repeat decodes the stored reply
-    /// against its own names. The spelled answers are kept under the
-    /// equations as sent, for the exact repeats that make up most requests.
+    /// There are two memos. The replies of the exports are kept by the words
+    /// of their requests, as the words they returned: a request of the
+    /// unifier has the same words as one that differs only in the names of
+    /// its variables, and a repeat reads the stored reply through tables for
+    /// its own names. The answers are kept under the equations as sent, for
+    /// the exact repeats that make up most requests.
     #[cfg(feature = "lean-unification")]
     fn proved_unify(
         &self,
         eqs: &[Equal<LNTerm>],
     ) -> Result<crate::lean_unification::Substitutions, MaudeError> {
-        use crate::lean_unification::{unpack_conjunction, Conjunction, Outcome};
+        use crate::lean_unification::{unpack_conjunction, Conjunction};
         self.check_backend_status()?;
         cancellation::check()?;
         let key: Vec<(LNTerm, LNTerm)> =
@@ -1935,7 +1983,7 @@ impl MaudeHandle {
             Conjunction::Clash => Vec::new(),
             Conjunction::Unsupported => return Err(unsupported()),
             Conjunction::Rows(rows) => {
-                let (outcome, reused) = crate::lean_unification::total_unify(
+                let (family, reused) = crate::lean_unification::total_unify(
                     &self.sig,
                     &rows,
                     Some(&self.caches.unify_replies),
@@ -1943,18 +1991,42 @@ impl MaudeHandle {
                 )
                 .map_err(|e| self.lean_error(e))?;
                 stored = reused;
-                match outcome {
-                    Outcome::Complete(mut answers) => {
-                        match spell_as_maude(&self.sig, eqs, &answers) {
-                            Some(spelled) => spelled,
-                            None => {
-                                lift_witnesses_above_query(eqs, &mut answers);
-                                cancellation::lock(&self.inner)?.stats.lean_unify_unspelled += 1;
-                                answers
-                            }
+                let family = family.ok_or_else(unsupported)?;
+                // The names the Maude backend would use are only proposed.
+                // The answer is the reply read through the tables of the
+                // naming export, and it keeps those names only if it is the
+                // answer that backend would give.
+                let spelled = match spelling_as_maude(&self.sig, eqs, &family)
+                    .map_err(|e| self.lean_error(e))?
+                {
+                    Some(spelling) if !spelling.is_empty() => {
+                        let targets: Vec<_> =
+                            spelling.iter().map(|arm| arm.targets.clone()).collect();
+                        let mut spelled = family
+                            .named(Some(&targets), Some(&self.caches.unify_replies))
+                            .map_err(|e| self.lean_error(e))?;
+                        // The Maude backend lists a unifier in the order of
+                        // its variables.
+                        for arm in &mut spelled {
+                            arm.sort_unstable_by_key(|(v, _)| *v);
                         }
+                        spelled
+                            .iter()
+                            .eq(spelling.iter().map(|arm| &arm.expected))
+                            .then_some(spelled)
                     }
-                    Outcome::Unsupported => return Err(unsupported()),
+                    // No unifier: nothing to name.
+                    Some(_) => Some(Vec::new()),
+                    None => None,
+                };
+                match spelled {
+                    Some(spelled) => spelled,
+                    None => {
+                        cancellation::lock(&self.inner)?.stats.lean_unify_unspelled += 1;
+                        family
+                            .named(None, Some(&self.caches.unify_replies))
+                            .map_err(|e| self.lean_error(e))?
+                    }
                 }
             }
         };
@@ -2629,24 +2701,19 @@ impl MaudeHandle {
         }
         match theory.variants(query)? {
             Outcome::Unsupported => match theory.joined_variants(query)? {
-                // The checked export is a contract export: a family it
-                // returns is complete with unique values on any table
-                // (`exportedCheckedVariants_sound`). It is the only solver
-                // for kind-level input, where the checker's closure test is
-                // exponential in the width of an AC product.
                 Outcome::Unsupported => {
                     // No specialised solver covers the query. Folding
                     // variant narrowing proposes a family for any sorted
                     // query; like every proposal it is used only if the
                     // checker accepts it. The search ends only when the
-                    // table has the finite variant property, and a call of
-                    // it cannot be interrupted, so it runs only where the
-                    // certifier proved that property. Kind-level products
-                    // stay with the checked export below, and so does every
+                    // table has the finite variant property, so it runs only
+                    // where the certifier proved that property. Kind-level products
+                    // go to the bounded search below, and so does every
                     // query on a table the certifier did not accept.
                     if !crate::lean_unification::kind_level(query)
                         && finite_variants()
-                        && let Outcome::Complete(family) = theory.fold_variants(sig, query)?
+                        && let Outcome::Complete(family) =
+                            theory.fold_variants(sig, query, self.reference.variant_check_search)?
                     {
                         // The search lists the layers in Maude's order. The
                         // witnesses get Maude's numbering, and a family
@@ -2656,6 +2723,9 @@ impl MaudeHandle {
                             "fold",
                         );
                     }
+                    // The bounded narrowing search of the Lean library is a
+                    // proposer like the others: its family is used only if
+                    // the checker accepts it.
                     if trace {
                         eprintln!("[variants] solver checked_export");
                     }
@@ -2729,29 +2799,10 @@ impl MaudeHandle {
                     answers
                 };
                 inner.caches.provenance.record_route(route);
-                // The checked export carries its own theorem. Every other
-                // family, the folding export's included, is used only as a
-                // certificate that the checker accepted: a refusal returns
-                // here, before the family.
-                let (origin, cached) = match route {
-                    VariantRoute::Proposer | VariantRoute::GeneralExport => {
-                        self.checked_family(&inner, t, &answers)?
-                    }
-                    // The theorem needs no certificate. The label stays
-                    // conservative all the same: proved only on a table the
-                    // certifier accepted.
-                    VariantRoute::CheckedExport => {
-                        let certified = self
-                            .reduction_table(&inner)?
-                            .is_some_and(|table| table.certified());
-                        let origin = if certified {
-                            Origin::Proved
-                        } else {
-                            Origin::Assumed
-                        };
-                        (origin, false)
-                    }
-                };
+                // Every family, whichever solver or Lean search listed it,
+                // is used only as a certificate that the checker accepted: a
+                // refusal returns here, before the family.
+                let (origin, cached) = self.checked_family(&inner, t, &answers)?;
                 if cached {
                     inner
                         .caches
@@ -3156,91 +3207,38 @@ fn match_origin(oriented: &[Equal<LNTerm>]) -> Origin {
     }
 }
 
-/// The unifiers of the proved export under the witness names the Maude
-/// backend gives its own, or `None` when they are not the composition that
-/// backend builds. See [`crate::unifier_presentation`].
+/// The witness names the Maude backend gives the unifiers of the proved
+/// export, or `None` when they cannot be the composition that backend
+/// builds. See [`crate::unifier_presentation`].
 #[cfg(feature = "lean-unification")]
-fn spell_as_maude(
+fn spelling_as_maude(
     sig: &MaudeSig,
     eqs: &[Equal<LNTerm>],
-    answers: &[Vec<(crate::lterm::LVar, LNTerm)>],
-) -> Option<crate::lean_unification::Substitutions> {
-    // No unifier: nothing to spell.
-    if answers.is_empty() {
-        return Some(Vec::new());
-    }
-    let (factored, residual) = factor_unification(sig, eqs)?;
-    crate::unifier_presentation::present(&factored, &residual, answers)
-}
-
-/// Number every native witness above the query, as Maude does. This is the
-/// spelling of a family that [`spell_as_maude`] declines.
-///
-/// A unifier's range mentions query variables and fresh witnesses. Maude
-/// numbers the witnesses above every variable it was sent, and callers such
-/// as `apply_eq_store` keep unrelated system variables below that bound, so
-/// a witness never shares a name with a variable outside the query. The
-/// decoder of the proved export instead reuses the lowest index the query
-/// leaves unused, which can coincide with such a system variable and
-/// identify the two.
-/// Each arm is shifted uniformly, so the relative order of its witnesses is
-/// unchanged; arms that already satisfy the bound are left alone.
-#[cfg(feature = "lean-unification")]
-fn lift_witnesses_above_query(
-    eqs: &[Equal<LNTerm>],
-    answers: &mut [Vec<(crate::lterm::LVar, LNTerm)>],
-) {
-    use crate::lterm::HasFrees;
-    let mut query: tamarin_utils::FastSet<crate::lterm::LVar> = Default::default();
-    for eq in eqs {
+    family: &crate::lean_unification::Unifiers,
+) -> Result<Option<Vec<crate::unifier_presentation::Spelling>>, crate::lean_unification::Error> {
+    let Some((factored, residual)) = factor_unification(sig, eqs) else {
+        // No unifier of the free part: no composition, unless the family is
+        // empty too.
+        let none = family.views(|_| false)?.is_empty();
+        return Ok(none.then(Vec::new));
+    };
+    // Only the engine's part of an answer is looked at as terms: the images
+    // of the variables of the delayed equations.
+    let mut engine: tamarin_utils::FastSet<crate::lterm::LVar> = Default::default();
+    for eq in &residual {
+        use crate::lterm::HasFrees;
         eq.lhs.for_each_free(&mut |v| {
-            query.insert(*v);
+            engine.insert(*v);
         });
         eq.rhs.for_each_free(&mut |v| {
-            query.insert(*v);
+            engine.insert(*v);
         });
     }
-    let Some(highest) = query.iter().map(|v| v.idx).max() else {
-        return;
-    };
-    for arm in answers {
-        let mut lowest = None;
-        let mut top = 0;
-        for (_, image) in arm.iter() {
-            image.for_each_free(&mut |v| {
-                if !query.contains(v) {
-                    lowest = Some(lowest.map_or(v.idx, |l: u64| l.min(v.idx)));
-                    top = top.max(v.idx);
-                }
-            });
-        }
-        let Some(lowest) = lowest.filter(|l| *l <= highest) else {
-            continue;
-        };
-        let shift = highest - lowest + 1;
-        // A query that already uses the top of the index space leaves no room
-        // above it. The solver's own names are still distinct from every
-        // query variable, so such an arm is returned as it is.
-        if top.checked_add(shift).is_none() {
-            continue;
-        }
-        *arm = std::mem::take(arm)
-            .into_iter()
-            .map(|(key, image)| {
-                let image = image.map_free(&mut |v| {
-                    if query.contains(&v) {
-                        v
-                    } else {
-                        crate::lterm::LVar {
-                            idx: v.idx + shift,
-                            ..v
-                        }
-                    }
-                });
-                (key, image)
-            })
-            .collect();
+    let views = family.views(|v| engine.contains(v))?;
+    if views.is_empty() {
+        return Ok(Some(Vec::new()));
     }
+    Ok(crate::unifier_presentation::present(&factored, &residual, &views))
 }
 
 /// Convert one Maude reply substitution to `[(LVar, LNTerm)]`, minting

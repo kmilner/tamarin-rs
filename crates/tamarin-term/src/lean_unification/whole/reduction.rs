@@ -12,8 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tamarin_utils::cancellation;
 
 use tamarin_algebra_sys::{
-    tamarin_lean_checked_reduce, tamarin_lean_path_reduce, tamarin_lean_session_reduce,
-    tamarin_lean_session_variant_check,
+    tamarin_lean_path_reduce, tamarin_lean_session_reduce, tamarin_lean_session_variant_check,
 };
 
 impl RuleTable {
@@ -35,16 +34,11 @@ impl RuleTable {
 pub(crate) enum Reduced {
     /// The single-path export on a table the certifier accepted.
     Certified(LNTerm),
-    /// The all-paths export found one normal form on every path. This holds
-    /// for any table.
-    Checked(LNTerm),
-    /// The single-path export on a table the certifier did not accept, after
-    /// the all-paths check left the term undecided: an irreducible reduct of
-    /// the input that keeps its sorts. It is the normal form only under the
-    /// premise that the table is convergent.
+    /// The single-path export on a table the certifier did not accept: an
+    /// irreducible reduct of the input that keeps its sorts. It is the
+    /// normal form only under the premise that the table is convergent.
     Path(LNTerm),
-    /// The table is not certified and the all-paths check did not settle
-    /// the term within its depth.
+    /// The table is not certified and the caller did not ask for a path.
     Undecided,
     /// The term or a rule is outside the module's declarations.
     Unsupported,
@@ -68,9 +62,8 @@ pub(crate) struct ReductionTable {
     certified: bool,
 }
 
-/// Rewrite depth requested from the certifier and from the all-paths check.
+/// Rewrite depth requested from the certifier.
 const CERTIFIER_DEPTH: u64 = 4;
-const CHECKED_DEPTH: u64 = 32;
 /// Initial rewrite depth of the single-path exports, doubled on request.
 const PATH_DEPTH: u64 = 1 << 16;
 
@@ -78,7 +71,6 @@ const PATH_DEPTH: u64 = 1 << 16;
 #[derive(Clone, Copy)]
 enum Kernel {
     Certified,
-    Checked,
     Path,
 }
 
@@ -122,16 +114,16 @@ impl ReductionTable {
         self.certified
     }
 
-    /// Normalize `input`. With `follow_path`, a term the all-paths check
-    /// leaves undecided on an uncertified table is answered by the
-    /// single-path export instead of [`Reduced::Undecided`].
+    /// Normalize `input`. On a table the certifier did not accept the
+    /// single-path export answers when `follow_path` is set, and the reply is
+    /// [`Reduced::Undecided`] otherwise: nothing proves that a table without
+    /// a certificate has one normal form per term.
     ///
     /// The single-path exports look for the first match of a rule, which can
     /// take time exponential in the width of an AC product. Each of their
     /// calls stops, with [`Error::Cancelled`] or [`Error::SearchBudget`], when
     /// the request is cancelled or the call takes more than `work` search
-    /// steps (zero for no bound). The all-paths export has its own work limit
-    /// and declines instead.
+    /// steps (zero for no bound).
     pub(crate) fn reduce(
         &self,
         sig: &MaudeSig,
@@ -153,11 +145,14 @@ impl ReductionTable {
         // saw; the rows of the term follow them.
         let table = self.packet.nodes.len();
         let rules = &self.packet.equations;
-        let (mut kernel, mut fuel) = if self.certified {
-            (Kernel::Certified, PATH_DEPTH)
+        let kernel = if self.certified {
+            Kernel::Certified
+        } else if follow_path {
+            Kernel::Path
         } else {
-            (Kernel::Checked, CHECKED_DEPTH)
+            return Ok(Reduced::Undecided);
         };
+        let mut fuel = PATH_DEPTH;
         LEAN_THREAD.with(|_| loop {
             cancellation::check().map_err(|_| Error::Cancelled)?;
             let mut watch = Watch::new("reduction", work);
@@ -179,14 +174,6 @@ impl ReductionTable {
                         fuel,
                         watch.raw(),
                     ),
-                    Kernel::Checked => tamarin_lean_checked_reduce(
-                        declarations,
-                        rows.as_ptr(),
-                        rows.len(),
-                        rules,
-                        root,
-                        fuel,
-                    ),
                     Kernel::Path => tamarin_lean_path_reduce(
                         declarations,
                         rows.as_ptr(),
@@ -198,28 +185,22 @@ impl ReductionTable {
                     ),
                 }
             };
-            // A stopped call returned no reply. The all-paths export never
-            // touches the watch.
+            // A stopped call returned no reply.
             watch.finish()?;
             let reply = MatchRows::new(raw)?;
             match (total::header(&reply)?, reply.rows(0), kernel) {
                 // More depth always settles a certified table; the reply is
                 // never read as an answer before it does. A path on any other
                 // table ends whenever the table terminates.
-                (3, 1, Kernel::Certified | Kernel::Path) if fuel < u64::MAX => {
+                (3, 1, _) if fuel < u64::MAX => {
                     fuel = fuel.saturating_mul(2);
                 }
-                (2, 1, Kernel::Checked) if follow_path => {
-                    (kernel, fuel) = (Kernel::Path, PATH_DEPTH);
-                }
-                (2, 1, Kernel::Checked) => return Ok(Reduced::Undecided),
                 // The table is not range restricted, or the reduct lost a sort.
                 (2, 1, Kernel::Path) => return Ok(Reduced::Unsupported),
                 (1, 2, _) => {
                     let result = read_normal_form(&packet, &reply, sig, input)?;
                     return Ok(match kernel {
                         Kernel::Certified => Reduced::Certified(result),
-                        Kernel::Checked => Reduced::Checked(result),
                         Kernel::Path => Reduced::Path(result),
                     });
                 }
@@ -235,7 +216,10 @@ impl ReductionTable {
     /// ([`Self::variant_check_charge`]): the members whose running total
     /// stays within it are tested, and the reply is then out of budget
     /// unless that was every member. Neither bounds the time spent inside
-    /// the unifier on one member, which cannot be interrupted.
+    /// the unifier on one member. The call is interruptible instead: it
+    /// stops, with [`Error::Cancelled`] or [`Error::SearchBudget`], when the
+    /// request is cancelled or the call takes more than `search` search steps
+    /// (zero for no bound), and then decides nothing.
     ///
     /// A substitution of a family has a fresh range: a variable of an image
     /// is distinct from every variable of the query, whatever it is called.
@@ -256,13 +240,14 @@ impl ReductionTable {
         family: &[Vec<(LVar, LNTerm)>],
         fuel: u64,
         work: u64,
+        search: u64,
     ) -> Result<FamilyCheck, Error> {
         let Some(request) = self.variant_request(sig, query, family)? else {
             return Ok(FamilyCheck::Undecided);
         };
         initialize()?;
         cancellation::check().map_err(|_| Error::Cancelled)?;
-        match request.check(&self.packet.equations, fuel, work)?[..] {
+        match request.check(&self.packet.equations, fuel, work, search)?[..] {
             [1] => Ok(FamilyCheck::Accepted),
             [2, reason @ 1..=3, member] => Ok(FamilyCheck::Rejected {
                 reason: reason as u8,
@@ -317,7 +302,7 @@ impl ReductionTable {
                 // The charge is an estimate: its reductions stop on
                 // cancellation only.
                 match self.reduce(sig, &instance, true, 0)? {
-                    Reduced::Certified(value) | Reduced::Checked(value) | Reduced::Path(value) => {
+                    Reduced::Certified(value) | Reduced::Path(value) => {
                         charge += sites(&value);
                     }
                     Reduced::Unsupported | Reduced::Undecided => return Ok(None),
@@ -409,13 +394,15 @@ struct VariantRequest {
 
 impl VariantRequest {
     /// The single status row of the checker's reply.
-    fn check(&self, rules: &[u64], fuel: u64, work: u64) -> Result<Vec<u64>, Error> {
+    fn check(&self, rules: &[u64], fuel: u64, work: u64, search: u64) -> Result<Vec<u64>, Error> {
         let rows = self.packet.rows();
         let members: Vec<WordSlice> = self.members.iter().map(|row| WordSlice::new(row)).collect();
         LEAN_THREAD.with(|_| {
-            // SAFETY: all slices live through the call. MatchRows owns the
-            // returned array. `table` is at most the number of rows.
-            let reply = MatchRows::new(unsafe {
+            let mut watch = Watch::new("variant check", search);
+            // SAFETY: all slices and the watch live through the call.
+            // MatchRows owns the returned array. `table` is at most the
+            // number of rows.
+            let raw = unsafe {
                 tamarin_lean_session_variant_check(
                     WordSlice::new(&self.packet.declarations),
                     rows.as_ptr(),
@@ -428,8 +415,12 @@ impl VariantRequest {
                     members.len(),
                     fuel,
                     work,
+                    watch.raw(),
                 )
-            })?;
+            };
+            // A stopped call returned no reply.
+            watch.finish()?;
+            let reply = MatchRows::new(raw)?;
             if reply.count() != 1 || reply.rows(0) != 1 {
                 return Err(Error::InvalidStatus(255));
             }
@@ -463,12 +454,13 @@ fn read_normal_form(
     Ok(result)
 }
 
-/// Normalize the submitted term against the full active table without the
-/// premise that the table is convergent: the certified single-path export on
-/// a table the certifier accepts, and the all-paths check otherwise. `None`
-/// when that check does not settle the term (two paths end in different
-/// normal forms, or the rewrite graph is beyond its work limit) or the
-/// request is outside the module's declarations.
+/// Normalize the submitted term against the full active table of a theory
+/// that the caller takes to be convergent, as the name says. On a table the
+/// certifier accepts the reply is the unique normal form, and that is proved.
+/// On any other table it is an irreducible reduct along one rewrite path
+/// that keeps the sorts of the term, which is the normal form under the
+/// caller's premise. `None` when the table is not range restricted, a reduct
+/// lost a sort or the request is outside the module's declarations.
 pub fn reduction_for_convergent_theory(
     sig: &MaudeSig,
     input: &LNTerm,
@@ -476,10 +468,8 @@ pub fn reduction_for_convergent_theory(
     let Some(table) = ReductionTable::new(sig)? else {
         return Ok(None);
     };
-    Ok(match table.reduce(sig, input, false, 0)? {
-        Reduced::Certified(result) | Reduced::Checked(result) | Reduced::Path(result) => {
-            Some(result)
-        }
+    Ok(match table.reduce(sig, input, true, 0)? {
+        Reduced::Certified(result) | Reduced::Path(result) => Some(result),
         Reduced::Undecided | Reduced::Unsupported => None,
     })
 }
@@ -548,23 +538,37 @@ mod tests {
         let query = f_app_ac(AcSym::Union, terms);
         let start = Instant::now();
         let verdict = table
-            .check_variants(&sig, &query, &[Vec::new()], 1 << 16, 0)
+            .check_variants(&sig, &query, &[Vec::new()], 1 << 16, 0, 0)
             .unwrap();
         (verdict, start.elapsed())
     }
 
-    /// Acceptance test for a checker whose closure test is not exponential
-    /// in the width of a kind-level AC product. Until then such a query is
-    /// answered by the checked variants export alone.
+    /// The class the certifier is proved to accept
+    /// (`exportedCertifyTable_subterm`): constructor-pattern rules whose
+    /// results are subterms or constants. The builtin tables without an AC
+    /// operator are of that shape, `verify` returning `true` included.
     #[test]
-    #[ignore = "session variant check, identity family on p0++..++p(k-1)++#outside:Node over the \
-                pairing and multiset table: time and memory grow as 2^k. Measured under a 6 GB \
-                cap: 16 factors 0.28 s and 90 MB, 20 factors 5.4 s and 1.43 GB peak; 129 factors \
-                are killed at 6 GB after 3 s and at 12 GB. The work bound does not see it (the \
-                charge is k)"]
+    fn constructor_pattern_tables_are_certified() {
+        use crate::maude_sig::{
+            asym_enc_maude_sig, hash_maude_sig, signature_maude_sig, sym_enc_maude_sig,
+        };
+        let sig = pair_maude_sig()
+            .merge(sym_enc_maude_sig())
+            .merge(asym_enc_maude_sig())
+            .merge(signature_maude_sig())
+            .merge(hash_maude_sig());
+        assert!(!sig.rrules().is_empty());
+        assert!(ReductionTable::new(&sig).unwrap().unwrap().certified());
+    }
+
+    /// The closure test is not exponential in the width of a kind-level AC
+    /// product: only the factors outside the sort of the operator are ever
+    /// set aside. With the splits of the whole product it took 5.4 s and
+    /// 1.43 GB on 20 factors and did not finish 129 under a 12 GB cap.
+    #[test]
     fn kind_level_product_check_is_not_exponential() {
         let mut slow = Vec::new();
-        for factors in [16, 20] {
+        for factors in [16, 20, 129] {
             let (verdict, elapsed) = kind_level_identity(factors);
             assert_eq!(verdict, FamilyCheck::Accepted, "{factors} factors");
             if elapsed > Duration::from_millis(100) {

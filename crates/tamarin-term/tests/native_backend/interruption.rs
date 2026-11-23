@@ -202,6 +202,80 @@ fn a_runaway_reduction_stops_at_its_work_bound() {
     assert!(h.check_backend_status().is_err());
 }
 
+/// `LIST(x*y, x*inv(y))` over Diffie-Hellman exponents. The join solver
+/// proposes 247 variants, and the certificate checker does not finish them:
+/// the cost is inside the unifications of its narrowing layers (stopped
+/// after 900 s at 7.7 GB when nothing interrupted it).
+fn joint_product_and_quotient() -> LNTerm {
+    use tamarin_term::builtin::{inv, mult};
+    use tamarin_term::term::f_app_list;
+    let [x, y] = ["x", "y"].map(variable);
+    f_app_list(vec![mult(x.clone(), y.clone()), mult(x, inv(y))])
+}
+
+fn exponents() -> MaudeHandle {
+    MaudeHandle::start_with_backend(
+        MISSING,
+        tamarin_term::maude_sig::dh_maude_sig(),
+        AlgebraBackend::NativeOnly,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_runaway_variant_check_stops_when_its_request_is_cancelled() {
+    let h = exponents();
+    let query = joint_product_and_quotient();
+    let (result, latency) = cancelled(|| h.variants(&query));
+    assert!(matches!(result, Err(MaudeError::Cancelled)), "{result:?}");
+    assert!(latency < PROMPT, "returned {latency:?} after the request");
+    eprintln!("variant check: returned {latency:?} after cancellation");
+    // Cancellation is not a failure of the session.
+    h.check_backend_status().unwrap();
+    let small = tamarin_term::builtin::mult(variable("x"), variable("y"));
+    assert!(!h.variants(&small).unwrap().is_empty());
+}
+
+#[test]
+fn a_runaway_variant_check_stops_at_its_search_bound() {
+    let mut h = exponents();
+    h.set_variant_check_search(1 << 20);
+    let started = Instant::now();
+    let error = h.variants(&joint_product_and_quotient()).unwrap_err();
+    let elapsed = started.elapsed();
+    let message = error.to_string();
+    assert!(
+        message.contains("out of budget")
+            && message.contains("variant check")
+            && message.contains("TAM_RS_VARIANT_CHECK_SEARCH"),
+        "{message}"
+    );
+    assert!(elapsed < 4 * PROMPT, "stopped after {elapsed:?}");
+    eprintln!("variant check: stopped by the search bound after {elapsed:?}");
+    // The family was not certified, so the session cannot publish a result.
+    assert!(h.check_backend_status().is_err());
+}
+
+/// `mult('c',w,w,y)` over Diffie-Hellman exponents has no specialised solver,
+/// so the folding proposer searches for its variants, and one call of it
+/// does not return within minutes: the cost is inside the unifications of a
+/// product with a repeated variable. A fuzzing run found it deaf to its
+/// cancellation.
+#[test]
+fn a_runaway_variant_search_stops_when_its_request_is_cancelled() {
+    use tamarin_term::builtin::mult;
+    let h = exponents();
+    let [w, y] = ["w", "y"].map(variable);
+    let query = f_app_ac(AcSym::Mult, vec![pub_term("c"), w.clone(), w, y]);
+    let (result, latency) = cancelled(|| h.variants(&query));
+    assert!(matches!(result, Err(MaudeError::Cancelled)), "{result:?}");
+    assert!(latency < PROMPT, "returned {latency:?} after the request");
+    eprintln!("variant search: returned {latency:?} after cancellation");
+    h.check_backend_status().unwrap();
+    let small = mult(variable("x"), variable("y"));
+    assert!(!h.variants(&small).unwrap().is_empty());
+}
+
 /// Not a regression test: without a request to stop, the wide reduction
 /// runs until the harness kills it. Run it under a timeout to see the
 /// behavior the other tests exclude.

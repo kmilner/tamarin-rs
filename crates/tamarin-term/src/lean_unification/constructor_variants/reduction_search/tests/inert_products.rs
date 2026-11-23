@@ -106,20 +106,33 @@ fn wider_product_slot_preserves_the_sort_of_a_changing_nat_operand() {
         let sig = signature([(two.clone(), rhs)])
             .merge(nat_maude_sig())
             .refresh();
-        let native =
-            MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly)
-                .unwrap();
-        let answer = native.reduce(&input);
-        if valid {
-            assert_eq!(answer.unwrap(), bag([one.clone(), flag.clone()]));
+        // The certifier accepts neither table, and a raw session reports
+        // that. The session of a theory follows one rewrite path. The second
+        // rule does not keep the sort of its left side, but the reduct keeps
+        // the sort of this input, a multiset, which is all the path export
+        // promises: that it is the normal form rests on the author's premise.
+        let raw = MaudeHandle::start_with_backend(
+            "/nonexistent",
+            sig.clone(),
+            AlgebraBackend::NativeOnly,
+        )
+        .unwrap();
+        assert!(matches!(
+            raw.reduce(&input),
+            Err(crate::maude_proc::MaudeError::UnsupportedOperation(
+                crate::maude_proc::UNCERTIFIED_TABLE
+            ))
+        ));
+        let native = theory_session(&sig);
+        let expected = if valid {
+            one.clone()
         } else {
-            assert!(matches!(
-                answer,
-                Err(crate::maude_proc::MaudeError::UnsupportedOperation(
-                    crate::maude_proc::UNCERTIFIED_TABLE
-                ))
-            ));
-        }
+            hash(one.clone())
+        };
+        assert_eq!(
+            native.reduce(&input).unwrap(),
+            bag([expected, flag.clone()])
+        );
         assert_eq!(native.stats().norm_count, 0);
     }
 }

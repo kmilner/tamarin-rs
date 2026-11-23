@@ -13,12 +13,12 @@ mod common_children;
 mod commutative;
 mod components;
 mod whole;
-pub use whole::{reduction_for_convergent_theory, variants_for_convergent_theory};
 pub(crate) use whole::{
     kind_level,
     total_unify, total_unify_exists, unpack_conjunction, Conjunction, FamilyCheck, Reduced,
-    ReductionTable, UnifyReplies,
+    ReductionTable, Unifiers, UnifyReplies,
 };
+pub use whole::{reduction_for_convergent_theory, variants_for_convergent_theory};
 mod constructor_variants;
 pub(crate) use constructor_variants::RuleTable;
 mod ac_bag_match;
@@ -52,7 +52,12 @@ pub fn unify_modulo_attributes(
     equations: &[Equal<LNTerm>],
 ) -> Result<Outcome, Error> {
     unpack_conjunction(sig, equations)?
-        .solve(|rows| whole::total_unify(sig, rows, None, 0).map(|(outcome, _)| outcome))
+        .solve(|rows| {
+            match whole::total_unify(sig, rows, None, 0)?.0 {
+                Some(family) => family.named(None, None).map(Outcome::Complete),
+                None => Ok(Outcome::Unsupported),
+            }
+        })
 }
 
 /// Match all patterns modulo the signature's declared commutative and AC attributes.
@@ -149,7 +154,8 @@ pub enum Error {
 
 /// One interruptible call of a Lean export.
 ///
-/// The unifier, its existence decision and the single-path reducers ask
+/// The unifier, its existence decision, the single-path reducers and the
+/// variant certificate checker ask
 /// their caller before every step of a search whether to go on (Lean's
 /// `Tamarin.Interrupt`). The bridge answers from this record: stop once the
 /// current request is cancelled, or once the call has asked more than `work`
@@ -266,10 +272,18 @@ impl fmt::Display for Error {
                     ),
                 }
             }
-            Self::SearchBudget { operation, work } => write!(
-                f,
-                "out of budget: one Lean {operation} was stopped after {work} search steps and                  decided nothing (TAM_RS_ALGEBRA_SEARCH_WORK sets the bound, 0 removes it)"
-            ),
+            Self::SearchBudget { operation, work } => {
+                let variable = if matches!(*operation, "variant check" | "variant search") {
+                    "TAM_RS_VARIANT_CHECK_SEARCH"
+                } else {
+                    "TAM_RS_ALGEBRA_SEARCH_WORK"
+                };
+                write!(
+                    f,
+                    "out of budget: one Lean {operation} was stopped after {work} search steps \
+                     and decided nothing ({variable} sets the bound, 0 removes it)"
+                )
+            }
             Self::VariantSearchBudget { work } => write!(
                 f,
                 "variants not found: out of budget, folding variant narrowing did not finish \

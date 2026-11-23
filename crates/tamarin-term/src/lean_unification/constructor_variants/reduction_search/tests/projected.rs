@@ -59,9 +59,8 @@ fn projected_existence_keeps_connected_patterns_and_rhs_choices() {
         table.successors(&miss, &mut 100_000).unwrap(),
         Some(BTreeSet::new())
     );
-    // The certifier does not accept this table, and the all-paths check does
-    // not settle a term this wide, so a raw session reports the table for
-    // the irreducible query and for the ambiguous one alike.
+    // The certifier does not accept this table, so a raw session reports
+    // the table for the irreducible query and for the ambiguous one alike.
     for query in [&miss, &positive] {
         let native = MaudeHandle::start_with_backend(
             "/nonexistent",
@@ -86,9 +85,13 @@ fn native_oracle_projected_ground_rhs_preserves_the_ac_subproduct_complement() {
     let mut sig = with_rules([(bag([x.clone(), x]), mark.clone())]);
     sig.st_fun_syms.insert(marker);
     let sig = sig.refresh();
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = MaudeHandle::start_for_tamarin_theory(
+        "/nonexistent",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     let (a, b) = (pub_term("a"), pub_term("b"));
     let input = bag([a.clone(), a, b.clone()]);
     let result = bag([mark, b]);

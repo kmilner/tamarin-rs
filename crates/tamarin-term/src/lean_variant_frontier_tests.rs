@@ -177,9 +177,13 @@ fn native_oracle_finite_ac_variants_include_proper_subproducts() {
         value
     });
     let sig = sig.refresh();
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = MaudeHandle::start_for_tamarin_theory(
+        "/nonexistent",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     let oracles = tamarin_test_support::maude_path().map(|path| {
         let raw =
             MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
@@ -249,9 +253,19 @@ fn native_oracle_finite_commutative_frontier_keeps_both_orientations() {
     let y = msg_var("y", 1);
     let observe = |a, b| emap(hash(a), hash(b));
     add_rule(&mut sig, observe(red.clone(), x.clone()), result.clone());
-    let Some((native, maude)) = handles(sig.refresh()) else {
+    let sig = sig.refresh();
+    let Some((_, maude)) = handles(sig.clone()) else {
         return;
     };
+    // The certifier does not accept a rule at a commutative root, so the
+    // values are read through the session of a theory.
+    let native = MaudeHandle::start_for_tamarin_theory(
+        "/nonexistent",
+        sig,
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     // The rigid hash heads exclude point multiplication. Either observed
     // message can specialize to red, and the overlapping cases agree.
     for (other, count) in [(y.clone(), 3), (x.clone(), 2)] {

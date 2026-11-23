@@ -39,9 +39,13 @@ fn native_oracle_total_contraction_handles_duplicated_and_reordered_inputs() {
     )]);
     sig.st_fun_syms.insert(pack);
     let sig = sig.refresh();
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = MaudeHandle::start_for_tamarin_theory(
+        "/nonexistent",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     let dirty = |key| fst(pair(key, pub_term("erased")));
     let frozen = var("z");
     let input = apply(

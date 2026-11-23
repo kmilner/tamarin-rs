@@ -42,8 +42,9 @@ pub enum VariantRoute {
     /// A specialised Rust solver proposed the family and the certificate
     /// checker accepted it.
     Proposer,
-    /// The checked variants export, a contract export, computed the family.
-    /// It is used without the checker.
+    /// The bounded narrowing search of the Lean library
+    /// (`tamarin_checked_variants`) proposed the family and the certificate
+    /// checker accepted it.
     CheckedExport,
     /// The folding export proposed the family and the certificate checker
     /// accepted it.

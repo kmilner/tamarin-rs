@@ -4504,9 +4504,13 @@ fn native_oracle_disjoint_atomic_sorts_exclude_declared_ac_rules() {
     ));
     let sig = sig.refresh();
     let table = RuleTable::new(&sig).unwrap();
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = MaudeHandle::start_for_tamarin_theory(
+        "/nonexistent",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
     // Neither disjoint operand can expand into a hidden AC product. A
@@ -4568,10 +4572,11 @@ fn native_oracle_disjoint_atomic_sorts_exclude_declared_ac_rules() {
     // Checking its whole root alone would miss the diagonal in a proper
     // subbag when two public factors become equal.
     let binary = RuleTable::new(&binary_rules).unwrap();
-    let native_binary = MaudeHandle::start_with_backend(
+    let native_binary = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         binary_rules.clone(),
         AlgebraBackend::NativeOnly,
+        Default::default(),
     )
     .unwrap();
     let binary_oracle =
@@ -4762,12 +4767,21 @@ fn root_exclusion_checks_every_equation_and_every_child() {
 
     if let Some(path) = require_maude_path() {
         let native = native_session(sig.clone());
+        // The certifier does not accept this table: only the session of a
+        // theory, whose author asserts convergence, reduces on it.
+        let theory = MaudeHandle::start_for_tamarin_theory(
+            "/nonexistent",
+            sig.clone(),
+            AlgebraBackend::NativeOnly,
+            Default::default(),
+        )
+        .unwrap();
         let maude =
             MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
         for term in [&nested, &matched] {
-            assert_eq!(native.reduce(term).unwrap(), maude.reduce(term).unwrap());
+            assert_eq!(theory.reduce(term).unwrap(), maude.reduce(term).unwrap());
         }
-        assert_eq!(native.stats().norm_count, 0);
+        assert_eq!(theory.stats().norm_count, 0);
         // The AC rule returns either summand here, and Maude picks one. The
         // certifier does not accept such a table, and a raw native-only
         // session reports that instead of choosing.
@@ -6264,8 +6278,15 @@ fn native_oracle_packed_variants_keep_shared_variables_beside_unique_ground_obse
         .unwrap(),
     );
     let sig = sig.refresh();
-    let native =
-        |s| MaudeHandle::start_with_backend("/nonexistent", s, AlgebraBackend::NativeOnly).unwrap();
+    let native = |s| {
+        MaudeHandle::start_for_tamarin_theory(
+            "/nonexistent",
+            s,
+            AlgebraBackend::NativeOnly,
+            Default::default(),
+        )
+        .unwrap()
+    };
     let h = native(sig.clone());
     let x = var("x", LSort::Fresh);
     let erased = var("erased", LSort::Msg);
@@ -6338,9 +6359,13 @@ fn native_oracle_binary_ac_reduction_agrees_with_maude_for_every_rule_and_alignm
         u.clone(),
     ));
     let sig = sig.refresh();
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = MaudeHandle::start_for_tamarin_theory(
+        "/nonexistent",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     let path = require_maude_path();
     let oracle = path
         .as_ref()
@@ -6424,9 +6449,13 @@ fn native_oracle_binary_ac_reduction_agrees_with_maude_for_every_rule_and_alignm
     // The same rules also handle existing equational theories. Neither
     // Pub nor Msg variables are admitted by the Fresh-XOR specialization.
     let sig = xor_maude_sig();
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = MaudeHandle::start_for_tamarin_theory(
+        "/nonexistent",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     let oracle =
         path.map(|p| MaudeHandle::start_with_backend(&p, sig, AlgebraBackend::Maude).unwrap());
     for sort in [LSort::Pub, LSort::Msg] {
@@ -7376,8 +7405,13 @@ fn native_point_reduction_uses_changed_rules_even_without_refresh() {
         let mut sig = bp_maude_sig();
         sig.st_rules
             .insert(rrule_to_ctxt_st_rule(&RRule::new(lhs, x.clone())).unwrap());
-        let h = MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly)
-            .unwrap();
+        let h = MaudeHandle::start_for_tamarin_theory(
+            "/nonexistent",
+            sig,
+            AlgebraBackend::NativeOnly,
+            Default::default(),
+        )
+        .unwrap();
         assert_eq!(h.reduce(&query).unwrap(), a, "{query}");
         assert_eq!(h.stats().norm_count, 0);
     }

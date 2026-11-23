@@ -82,7 +82,7 @@ fn check_variants(width: usize, result: fn(LNTerm) -> LNTerm, second_argument: S
         SecondArgument::Variable => w,
         _ => boxed(w),
     };
-    let h = handle(vec![(select(pattern(width), pattern_arg), rhs)]);
+    let h = theory(vec![(select(pattern(width), pattern_arg), rhs)]);
     let keys = [
         LVar::new("x", LSort::Msg, 10),
         LVar::new("y", LSort::Msg, 11),

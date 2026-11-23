@@ -21,7 +21,7 @@ fn var(name: &str) -> LNTerm {
 
 /// A native-only session whose theory author asserts convergence. Reduction
 /// no longer consults the specialised Rust reducer: a table the certifier
-/// does not accept is normalized by the all-paths export under that premise,
+/// does not accept is normalized along one rewrite path under that premise,
 /// and a raw session reports the table instead.
 fn theory_session(sig: &MaudeSig) -> MaudeHandle {
     MaudeHandle::start_for_tamarin_theory(
@@ -61,9 +61,13 @@ fn native_oracle_proper_subproducts_and_converging_branches() {
             bag([hash(u.clone()), u.clone()]),
         ),
     ]);
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = MaudeHandle::start_for_tamarin_theory(
+        "/nonexistent",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     let oracle = tamarin_test_support::require_maude_path()
         .map(|path| MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap());
     let a = pub_term("a");
@@ -129,9 +133,13 @@ fn rejects_divergent_or_incomplete_subproduct_search() {
 fn native_oracle_idempotence_on_all_small_bags() {
     let x = var("x");
     let sig = signature([(bag([x.clone(), x.clone()]), x.clone())]);
-    let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let native = MaudeHandle::start_for_tamarin_theory(
+        "/nonexistent",
+        sig.clone(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     let oracle = tamarin_test_support::require_maude_path()
         .map(|path| MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap());
     let a = pub_term("a");

@@ -459,11 +459,20 @@ fn public_backend_meets_generated_coverage_floor() {
         } else {
             None
         };
-        let h = MaudeHandle::start_with_backend(
-            "/nonexistent",
-            sig.clone(),
-            AlgebraBackend::NativeOnly,
-        )
+        // The marker presentation is a user table with rules at an AC root,
+        // which the certifier does not accept. Only the session of a theory,
+        // whose author asserts convergence, normalizes on such a table; a
+        // raw session reports the table.
+        let h = if theory == "markers" {
+            MaudeHandle::start_for_tamarin_theory(
+                "/nonexistent",
+                sig.clone(),
+                AlgebraBackend::NativeOnly,
+                Default::default(),
+            )
+        } else {
+            MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        }
         .unwrap();
         let coverage = report.entry((theory, op)).or_insert_with(Coverage::default);
         match exercise(&h, op, check, &ts) {

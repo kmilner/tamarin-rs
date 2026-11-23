@@ -1076,53 +1076,82 @@ that external dependency is unavailable. They should not be set for a gate.
 
 ### Variant check budget
 
-On the native-only backend a family of variants that a Rust solver or the
-folding export proposes is used only after the Lean certificate checker
-accepted it. There is no switch that skips the check. Only a family of the
-checked variants export, a contract export, is used without it. A rejected family, and one the checker does not
-decide, fail the session with "variants not certified".
+On the native-only backend a family of variants is used only after the Lean
+certificate checker accepted it, whoever proposed it: a specialised Rust
+solver, the folding export, or the bounded narrowing search of the Lean
+library (`tamarin_checked_variants`, which answers kind-level queries and
+queries on a table the certifier did not accept). There is no switch that
+skips the check and no family that bypasses it. A rejected family, and one
+the checker does not decide, fail the session with "variants not certified".
 
-The checker cannot be interrupted, so it runs under a work bound: the number
-of positions that are not variables at which it looks for narrowing steps,
-added up over the members of the family in their listed order (the family's
-*charge*, which `TAM_DBG_VARIANT_CHECK=1` prints). The members within the
-bound are checked; unless that is the whole family, the reply is "variants
-not certified: out of budget". The default bound is 65536. The largest charge
-among the 9593 checks of the 449 corpus theories that finish is 4204 (320
-members, `idbased/BP_IBS_3`, 6.3 s), so the default leaves a factor of
-fifteen; at the corpus's rate of about 1.5 ms per position a family that
-exceeds it has cost on the order of 100 s by then. The completeness theorem
-of the checker is stated without a bound, so `TAM_RS_VARIANT_CHECK_WORK=0`
-is the setting that can accept every correct family.
+The checker runs under two bounds, and it can be cancelled.
 
-The bound limits the size of a family, not the cost of one member inside the
-unifier. The 247-member family of `LIST(x*x.1, x*inv(x.1))` has a charge of
-only 1958 and still does not finish (see the ignored test
-`signed_graph_joint_product_and_quotient_share_all_valued_witnesses`); no
-bound that admits the corpus stops it.
+- **Work bound** (`TAM_RS_VARIANT_CHECK_WORK`, default 65536, `0` for none):
+  the number of positions that are not variables at which it looks for
+  narrowing steps, added up over the members of the family in their listed
+  order (the family's *charge*, which `TAM_DBG_VARIANT_CHECK=1` prints). The
+  members within the bound are checked; unless that is the whole family, the
+  reply is "variants not certified: out of budget". The largest charge among
+  the 9593 checks of the 449 corpus theories that finish is 4204 (320
+  members, `idbased/BP_IBS_3`, 6.3 s), so the default leaves a factor of
+  fifteen. The contract limits this reply exactly: status 3 with a nonzero
+  work bound implies that the bound is below the charge or that a term the
+  check has to normalize has a rewrite path as long as the depth
+  (`exportedSessionVariantCheck_decides`, clause `exhausts`).
+- **Search bound** (`TAM_RS_VARIANT_CHECK_SEARCH`, default 67108864 = 2^26,
+  `0` for none): the checker asks before every member, before every
+  narrowing successor and inside every unification, matching and reduction
+  it runs whether to go on (`lean/Tamarin/Interrupt.lean` in
+  tamarin-algebra). A call that has asked more often is stopped and fails the
+  session with "out of budget: one Lean variant check was stopped after N
+  search steps"; it is never an answer. The count is a function of the
+  request, so the bound is deterministic. The largest check of the corpus
+  sample asks 1,456,150 questions (`idbased/BP_IBS_3`), so the default leaves
+  a factor of 46; `TAM_RS_ALGEBRA_SEARCH_REPORT=<n>` prints every call that
+  asks at least `n`.
+- **Cancellation.** The same questions are answered "stop" as soon as the
+  request's cancellation token is set. The call returns no reply, the error
+  is the ordinary "request cancelled", and the session stays usable.
 
-Nor does the bound limit the closure test on a kind-level AC product, one
-that holds a variable whose sort is not a sort of messages. No well-sorted
-theory produces one, and the corpus has none. On `k` factors the test takes
-time and memory proportional to 2^k (the ignored test
-`kind_level_product_check_is_not_exponential` has the measurements), with a
-charge of only `k`. For that reason kind-level queries are answered by the
-checked variants export and its family is not submitted to the checker.
+The search bound is what stops a family whose cost is inside the unifier,
+which the charge does not see. The 247-member family of
+`LIST(x*x.1, x*inv(x.1))` has a charge of only 1958 and was not checked in
+900 s (7.7 GB). It now returns within 0.1 s of a cancellation (39 ms and
+71 ms measured) and is stopped after about 3 s by a search bound of 2^20
+(`interruption::a_runaway_variant_check_stops_when_its_request_is_cancelled`,
+`..._stops_at_its_search_bound`). The folding search on `mult('c',w,w,y)`,
+which a fuzzing run found deaf to its cancellation, returns 4 ms after it
+(`a_runaway_variant_search_stops_when_its_request_is_cancelled`). The check itself is no faster:
+`mult('c',x,x,x)` over Diffie-Hellman exponents still takes about 5 s for 8
+variants where Maude takes 0.3 s, and the ignored test
+`signed_graph_joint_product_and_quotient_share_all_valued_witnesses` remains
+the acceptance test for a checker that finishes the 247-member family.
+
+A kind-level AC product, one that holds a factor outside the sort of its
+operator (no well-sorted theory produces one, and the corpus has none), used
+to cost the closure test time and memory proportional to 2^k in its width
+`k`. The narrowing layer now sets aside only sub-products of the factors
+outside the sort, so the cost is independent of the width: 129 public names
+and one Node variable check in milliseconds
+(`kind_level_product_check_is_not_exponential`). It is still exponential in
+the number of factors outside the sort; the search bound stops such a call.
 
 A sorted query that no specialised Rust solver covers (`fst(x^z)`,
 `sdec(x, y^z)`, `inv(x XOR z)`, a product that is not in normal form) gets its
 family from the Lean proposer `tamarin_fold_variants`: folding variant
 narrowing in the order of Maude's search, which lists Maude's family on these
-queries. It is a proposal like any other and goes through the checker
-(`TAM_DBG_VARIANTS=1` prints `solver fold` and the time of each call). The
-search ends only on a table with the finite variant property, so it runs only
-on a table the certifier accepted (all builtin tables and the constructor and
-destructor classes); on any other table such a query keeps the checked
-variants export and the folding reference, neither of which is bounded. The search runs under a bound on its narrowing sites that starts at 8192 and grows
-fourfold while a call reports it exhausted; cancellation is checked between
-the calls, since a call cannot be interrupted. Beyond 524288 sites the session
-fails with "variants not found: out of budget" instead of entering the
-checked variants export, which has no bound and cannot be cancelled. The
+queries (`TAM_DBG_VARIANTS=1` prints `solver fold` and the time of each call).
+The search ends only on a table with the finite variant property, so it runs only
+on a table the certifier accepted (all builtin tables, and every table of
+constructor-pattern rules whose results are subterms or constants, which the
+certifier is proved to accept); on any other table, and on a kind-level
+query, the proposal comes from the bounded narrowing search
+(`solver checked_export`). The folding search runs under a bound on its narrowing sites that starts at 8192 and grows
+fourfold while a call reports it exhausted. A call is interruptible like the
+checker: it stops on cancellation and at the search bound above
+(`TAM_RS_VARIANT_CHECK_SEARCH`, "out of budget: one Lean variant search was
+stopped after N search steps"). Beyond 524288 sites the session
+fails with "variants not found: out of budget". The
 families of the regression queries (up to 96 members) need fewer than 4000
 sites. Regressions: `folding_proposes_the_variants_no_specialised_solver_covers`
 (`tamarin-term`) and `folded_rule_variants_prove_the_traces_without_maude`
@@ -1173,9 +1202,65 @@ first-match search of the bag matcher, the selection of basis solutions and
 the answers built from them, the frontier of the component search and the
 partition fallback). Nothing proves that every long loop asks: a call that
 is slow somewhere else still returns only when it is done. Matching
-(`total_match`, `total_match_exists`), the all-paths reducer, table
-certification, the variant checker and the proposers are not interruptible.
+(`total_match`, `total_match_exists`), table certification and the proposers
+other than the folding search are not interruptible. The variant checker and
+the folding search are: see "Variant check budget".
 The tests are `interruption::*` in `crates/tamarin-term/tests/native_backend`.
+
+### What Rust does with a unifier
+
+On the native-only backend the answer to a unification request is computed and
+named in Lean. Rust walks trees in both directions and decides nothing:
+
+- **The request** (`Packet::encode_total`) lists the rows of the term graph,
+  with variables, constants and operators numbered by first occurrence.
+- **The reply** of `tamarin_lean_total_unify` is not read on its own. Its
+  words go to no decision except "does the family have a member"
+  (`family_has_member`, the one place that reads a stored family for the
+  existence question).
+- **The names** of the variables in the range of an answer come from
+  `tamarin_lean_name_unifiers`. Rust sends it the name hint and index of every
+  request variable and receives a table for each answer, and
+  `read_named` reads the reply through the tables as the Lean library
+  specifies (`UnifierNames.apply`): a variable token is the variable its
+  entry names, a binding to a variable that stands for its own request
+  variable is left out, and anything the tables do not cover is an error.
+  The contract theorem is about what this reading returns.
+- **Maude's names** are proposed, not applied. `unifier_presentation` computes
+  the names the Maude backend composes and sends them as a proposal. The
+  export takes them when they rename each answer injectively and apart from
+  the request, and the answer keeps them when it is then read back as the
+  composition; otherwise every range variable is called `x` and numbered
+  above the request (`unspelled=` in `TAM_MAUDE_CACHE_STATS=1` counts those
+  families).
+
+`crates/tamarin-term/src/lean_unification/whole/wire_tests.rs` holds the
+tests, on the queries of `examples/audit_fuzz.rs` for every signature that
+fuzzer knows (the file is included as a module, so the two cannot drift):
+
+| test | what it holds the code to |
+| --- | --- |
+| `a_request_reads_back_as_the_terms_it_was_built_from` | the rows of a request, read with its own tables, are the terms that were encoded |
+| `a_term_sent_through_the_matcher_comes_back_as_itself` | request encoder, Lean reader and writer, and Rust reader compose to the identity on a term |
+| `requests_that_differ_have_different_words`, `a_changed_variable_changes_the_words_and_a_renaming_does_not` | two requests have the same words only if they differ in the choice of names: constants, sorts, free against AC operators, argument order, one variable against two |
+| `the_reader_of_a_named_family_agrees_with_the_library` | `read_named` returns what Lean's own `apply` returns for the same reply and tables, also for tables that were damaged, and fails where it has no reading |
+| `a_family_has_a_member_exactly_when_a_row_follows_its_status_row` | the empty family, a family of answers without bindings, and words that are no family |
+| `a_reply_is_read_only_through_tables_that_name_all_of_it` | default names, a proposed name, a request variable's own name, proposals that are not taken, and the memo of tables |
+
+```bash
+MAUDE_PATH="$(command -v maude)" cargo test --profile ci -p tamarin-term \
+    --features lean-unification --lib wire_tests -- --test-threads=4
+```
+
+The naming export costs one Lean call for each unification the session has
+not answered before, unless the same names were asked for the same shape of
+family before (the tables are memoized by the words of the request,
+`UnifyReplies`). A call takes 9 to 15 µs, and reading the reply through the
+tables as long as the decoder it replaces. Theories that ask thousands of
+new unifications a second pay a few percent of CPU time for it
+(`csf12/KEA_plus_AdvKey` 8%, `ake/dh/NAXOS_eCK` 3 to 7%, `wireguard` 5%,
+`csf26-ac/fast/Joux` 4%, `csf18-xor/CH07` 2%); over the whole corpus it is
+0.3%.
 
 ## Script index
 

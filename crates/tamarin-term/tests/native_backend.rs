@@ -2284,16 +2284,17 @@ fn fresh_xor_variants_share_a_fresh_witness_and_require_the_exact_live_rules() {
             },
         )
     };
-    // Neither changed table is certified. With `a XOR b -> new`, `x XOR x`
-    // reaches both `zero` and `new`, so the all-paths check cannot settle it.
-    // With `zero -> new`, every path of `x XOR x` ends in `new`, which that
-    // check proves for any table.
+    // Neither changed table is certified, so a raw session reports the
+    // table: with `a XOR b -> new`, where `x XOR x` reaches both `zero` and
+    // `new`, and with `zero -> new`, where every path of `x XOR x` ends in
+    // `new`. Nothing proves that a table without a certificate has one
+    // normal form per term.
     for (change, settled) in [
         (
             extra(xor(variable("a"), variable("b")), pub_term("new")),
-            None,
+            None::<LNTerm>,
         ),
-        (extra(zero_const(), pub_term("new")), Some(pub_term("new"))),
+        (extra(zero_const(), pub_term("new")), None),
     ] {
         let mut changed = sig.clone();
         changed.st_rules.insert(change);
@@ -2407,8 +2408,15 @@ fn received_dh_variants_share_the_exponent_and_defer_uncertified_tuples() {
     use tamarin_term::subterm_rule::{CtxtStRule, StRhs};
     use tamarin_term::term::f_app_list;
     let sig = dh_maude_sig();
-    let native =
-        |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let native = |sig| {
+        MaudeHandle::start_for_tamarin_theory(
+            MISSING,
+            sig,
+            AlgebraBackend::NativeOnly,
+            Default::default(),
+        )
+        .unwrap()
+    };
     let peer = LVar::new("x", LSort::Msg, 7);
     let r = LVar::new("x", LSort::Fresh, 7);
     let var = |v| Term::Lit(Lit::Var(v));
@@ -3851,9 +3859,9 @@ fn native_reduce_answers_through_the_certified_export_only() {
 }
 
 /// `f(g(x)) -> x` with `g(a) -> b` is not confluent: `f(g(a))` reaches both
-/// `a` and `f(b)`. The certifier rejects the table and the all-paths check
-/// sees two normal forms, so a raw session reports the table and a session
-/// that supplies the theory premise records the answer as assumed.
+/// `a` and `f(b)`. The certifier rejects the table, so a raw session reports
+/// the table for every term and a session that supplies the theory premise
+/// records every answer as assumed.
 #[test]
 fn an_uncertified_table_is_reported_or_marked_assumed_never_silently_trusted() {
     use tamarin_term::algebra_provenance::{Command, Origin};
@@ -3881,13 +3889,15 @@ fn an_uncertified_table_is_reported_or_marked_assumed_never_silently_trusted() {
 
     let raw =
         MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
-    // Every path of g(a) ends in b, which the all-paths export proves for any table.
-    assert_eq!(raw.reduce(&decided).unwrap(), app(b, vec![]));
-    assert_eq!(raw.provenance().fresh(Command::Reduce, Origin::Proved), 1);
-    assert!(matches!(
-        raw.reduce(&ambiguous),
-        Err(MaudeError::UnsupportedOperation(operation)) if operation.contains("certifier")
-    ));
+    // Every path of g(a) ends in b, but no export proves that for a table
+    // without a certificate: the raw session reports the table for both.
+    for term in [&decided, &ambiguous] {
+        assert!(matches!(
+            raw.reduce(term),
+            Err(MaudeError::UnsupportedOperation(operation)) if operation.contains("certifier")
+        ));
+    }
+    assert_eq!(raw.provenance().fresh(Command::Reduce, Origin::Proved), 0);
     assert!(raw.check_backend_status().is_err());
 
     let theory = MaudeHandle::start_for_tamarin_theory(
@@ -3899,8 +3909,8 @@ fn an_uncertified_table_is_reported_or_marked_assumed_never_silently_trusted() {
     .unwrap();
     assert_eq!(theory.reduce(&decided).unwrap(), app(b, vec![]));
     let seen = theory.provenance();
-    assert_eq!(seen.fresh(Command::Reduce, Origin::Proved), 1);
-    assert_eq!(seen.fresh(Command::Reduce, Origin::Assumed), 0);
+    assert_eq!(seen.fresh(Command::Reduce, Origin::Proved), 0);
+    assert_eq!(seen.fresh(Command::Reduce, Origin::Assumed), 1);
     // The single-path export proves that its answer is an irreducible reduct
     // of f(g(a)). Which of the two it is rests on the convergence premise.
     let reduct = theory.reduce(&ambiguous).unwrap();
@@ -3910,8 +3920,8 @@ fn an_uncertified_table_is_reported_or_marked_assumed_never_silently_trusted() {
     );
     assert_eq!(theory.reduce(&ambiguous).unwrap(), reduct);
     let seen = theory.provenance();
-    assert_eq!(seen.fresh(Command::Reduce, Origin::Proved), 1);
-    assert_eq!(seen.fresh(Command::Reduce, Origin::Assumed), 1);
+    assert_eq!(seen.fresh(Command::Reduce, Origin::Proved), 0);
+    assert_eq!(seen.fresh(Command::Reduce, Origin::Assumed), 2);
     assert_eq!(seen.cached(Command::Reduce, Origin::Assumed), 1);
     theory.check_backend_status().unwrap();
 }

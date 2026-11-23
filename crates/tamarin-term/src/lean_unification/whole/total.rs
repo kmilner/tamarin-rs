@@ -3,6 +3,7 @@
 //! a fresh namespace within each returned substitution.
 use super::Packet;
 use crate::function_symbols::FunSym;
+use crate::lean_identity::IdentityTable;
 use crate::lean_unification::{
     declaration, initialize, sort_word, subsort, Error, MatchRows, Outcome, Substitutions, Watch,
     WordSlice, LEAN_THREAD,
@@ -12,30 +13,38 @@ use crate::maude_sig::MaudeSig;
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
 use crate::term::{f_app, Term};
+use crate::unifier_presentation::ArmView;
 use crate::vterm::Lit;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tamarin_utils::cancellation;
 
 use tamarin_algebra_sys::{
-    tamarin_lean_total_match, tamarin_lean_total_match_exists, tamarin_lean_total_unify,
-    tamarin_lean_total_unify_exists,
+    tamarin_lean_name_unifiers, tamarin_lean_total_match, tamarin_lean_total_match_exists,
+    tamarin_lean_total_unify, tamarin_lean_total_unify_exists,
 };
 
-/// The replies of the total unifier and of its existence export, keyed by
-/// the words of the request.
+/// The replies of the total unifier, of its existence export and of the
+/// naming export, keyed by the words of the request.
 ///
 /// A request packet names variables, constants and operators by the order of
 /// their first occurrence, so two requests that differ only in those names
 /// are the same words, and each export, a function of the words alone, gives
 /// them the same reply. A stored reply is therefore the reply the export
-/// would give again; each request decodes a stored family against its own
-/// tables. An existence reply says nothing about the members of the family
-/// and is only ever read back as an existence reply.
+/// would give again, and it is stored as the words the export returned: each
+/// request reads a stored family through its own tables. An existence reply
+/// says nothing about the members of the family and is only ever read back
+/// as an existence reply.
 #[derive(Default)]
 pub struct UnifyReplies {
     families: std::sync::Mutex<FxHashMap<Box<[u64]>, std::sync::Arc<[u64]>>>,
     exists: std::sync::Mutex<FxHashMap<Box<[u64]>, bool>>,
+    names: std::sync::Mutex<FxHashMap<Box<[u64]>, std::sync::Arc<[u64]>>>,
 }
+
+/// The requests of the naming export [`UnifyReplies`] keeps the tables of.
+/// They are small, and a search that renames its variables apart asks a new
+/// one each time.
+const NAMING_MEMO: usize = 1 << 16;
 
 impl UnifyReplies {
     /// The stored families, and the words they and their requests occupy.
@@ -51,53 +60,513 @@ impl UnifyReplies {
     }
 }
 
+/// Whether the family a reply of the total unifier lists has a member, or
+/// `None` for words that are no such reply.
+///
+/// The reply is the status row `[1]` and then, for each member, an empty row
+/// and the rows of its bindings. A member therefore shows as a row after the
+/// status row, and the empty family as the status row alone.
+fn family_has_member(reply: &[u64]) -> Option<bool> {
+    let mut rows = rows_of(reply);
+    if rows.next()?? != [1] {
+        return None;
+    }
+    match rows.next() {
+        None => Some(false),
+        Some(row) => row?.is_empty().then_some(true),
+    }
+}
+
+/// The caller's names of the variables of a request, for the naming export.
+///
+/// A request names a variable by the number of its row. `words` holds, for
+/// each row in order, the identifier of the variable's name hint and its
+/// index. The hint `x`, which the export gives to the variables it numbers
+/// itself, has the identifier 0.
+struct Labels {
+    hints: IdentityTable<&'static str>,
+    words: Vec<u64>,
+}
+
+impl Labels {
+    fn of(packet: &Packet) -> Result<Self, Error> {
+        let mut hints = IdentityTable::default();
+        let mut hint = |name: &'static str| hints.intern(name).ok_or(Error::InvalidStatus(255));
+        hint(LVar::new("x", LSort::Msg, 0).name)?;
+        let mut words = Vec::with_capacity(2 * packet.variables.len());
+        for v in packet.variables.values() {
+            words.push(hint(v.name)?);
+            words.push(v.idx);
+        }
+        Ok(Self { hints, words })
+    }
+}
+
+/// What the naming export is told of a reply of the unifier: the identifier
+/// and sort words of the query variables, as the rows of the first arm list
+/// them, and for each arm the identifier and sort words of the variables of
+/// its range in the order of first occurrence.
+///
+/// Nothing depends on this being right. The export only chooses names with
+/// it, and a reply is read through the export's tables by [`read_named`],
+/// which fails on a variable the tables do not name.
+fn shape(reply: &[u64]) -> Option<(Vec<u64>, Vec<Vec<u64>>)> {
+    let mut rows = rows_of(reply);
+    if rows.next()?? != [1] {
+        return None;
+    }
+    let mut heads = Vec::new();
+    let mut ranges: Vec<Vec<u64>> = Vec::new();
+    let mut seen = FxHashSet::default();
+    for row in rows {
+        let row = row?;
+        let [key, sort, tokens @ ..] = row else {
+            if !row.is_empty() {
+                return None;
+            }
+            ranges.push(Vec::new());
+            seen.clear();
+            continue;
+        };
+        if ranges.len() == 1 {
+            heads.extend([*key, *sort]);
+        }
+        let range = ranges.last_mut()?;
+        for &[kind, id, sort] in tokens.as_chunks::<3>().0 {
+            if kind == 0 && seen.insert((id, sort)) {
+                range.extend([id, sort]);
+            }
+        }
+    }
+    Some((heads, ranges))
+}
+
+/// What a table of the naming export makes of a range variable.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Target {
+    /// The variable with this name hint and index, and its own sort.
+    Name(u64, u64),
+    /// The query variable in this row of the arm, whose binding is left out.
+    Row(u64),
+}
+
+/// The tables of the naming export: the words of the query variables, and
+/// for each arm it keeps the arm's position and the target of each of its
+/// range variables by identifier and sort word.
+type Tables<'a> = (&'a [u64], Vec<(u64, FxHashMap<(u64, u64), Target>)>);
+
+fn tables(words: &[u64]) -> Result<Tables<'_>, Error> {
+    let mut rows = rows_of(words);
+    match rows.next() {
+        Some(Some([1])) => {}
+        // The export declined to name the family.
+        Some(Some([0])) => return Err(Error::FreshVariableOverflow),
+        _ => return Err(Error::InvalidStatus(255)),
+    }
+    let heads = rows.next().flatten().ok_or(Error::InvalidStatus(255))?;
+    let mut arms = Vec::new();
+    for row in rows {
+        let [arm, entries @ ..] = row.ok_or(Error::InvalidStatus(255))? else {
+            return Err(Error::InvalidStatus(255));
+        };
+        let (entries, rest) = entries.as_chunks::<5>();
+        if !rest.is_empty() {
+            return Err(Error::InvalidStatus(255));
+        }
+        let mut table = FxHashMap::default();
+        for &[id, sort, kind, a, b] in entries {
+            let target = match kind {
+                0 => Target::Name(a, b),
+                1 => Target::Row(a),
+                _ => return Err(Error::InvalidStatus(255)),
+            };
+            // One target for a variable.
+            if sort > 4 || table.insert((id, sort), target).is_some() {
+                return Err(Error::InvalidStatus(255));
+            }
+        }
+        arms.push((*arm, table));
+    }
+    Ok((heads, arms))
+}
+
+/// A reply of the unifier read through the tables of the naming export, as
+/// the export's library specifies the reading (`UnifierNames.apply`).
+///
+/// An arm with a table lists the query variables as the tables do. A row
+/// whose image is one range variable with the row itself as target is left
+/// out. In every other row a variable token is the variable its target
+/// names, and a token without a name is an error. An arm without a table
+/// must hold a variable of the sort of natural numbers, in a module that has
+/// no such sort.
+fn read_named(
+    packet: &Packet,
+    labels: &Labels,
+    reply: &[u64],
+    tables: &[u64],
+    nat: bool,
+) -> Result<Substitutions, Error> {
+    let malformed = Error::InvalidStatus(255);
+    let (heads, tables) = self::tables(tables)?;
+    let mut tables = tables.iter().peekable();
+    let mut rows = rows_of(reply).peekable();
+    if rows.next() != Some(Some(&[1])) {
+        return Err(malformed);
+    }
+    let mut answers: Substitutions = Vec::new();
+    let mut arm = 0u64;
+    while let Some(separator) = rows.next() {
+        cancellation::check().map_err(|_| Error::Cancelled)?;
+        if !separator.ok_or(malformed)?.is_empty() {
+            return Err(malformed);
+        }
+        let table = tables.next_if(|(listed, _)| *listed == arm);
+        let mut member = Vec::new();
+        let mut has_nat = false;
+        let mut row = 0u64;
+        while let Some(binding) = rows.next_if(|r| r.is_some_and(|r| !r.is_empty())) {
+            let [key, declared, tokens @ ..] = binding.ok_or(malformed)? else {
+                return Err(malformed);
+            };
+            // Every arm lists the query variables as the tables do, in
+            // whole tokens, also an arm that is not read.
+            let (whole, rest) = tokens.as_chunks::<3>();
+            let head = usize::try_from(2 * row).ok().and_then(|at| heads.get(at..at + 2));
+            if head != Some(&[*key, *declared]) || !rest.is_empty() {
+                return Err(malformed);
+            }
+            has_nat |= whole.iter().any(|&[kind, _, sort]| kind == 0 && sort == 4);
+            if let Some((_, table)) = table {
+                let stands = matches!(tokens, [0, id, sort]
+                    if table.get(&(*id, *sort)) == Some(&Target::Row(row)));
+                if !stands {
+                    let var = packet.variables.get(*key).ok_or(Error::InvalidVariable(*key))?;
+                    let (image, actual) = packet.read_image(tokens, nat, |kind, id, aux| {
+                        let Some(Target::Name(hint, idx)) = table.get(&(id, aux)).copied() else {
+                            return Err(Error::InvalidVariable(id));
+                        };
+                        let name = labels.hints.get(hint).ok_or(Error::InvalidVariable(id))?;
+                        if kind != 0 {
+                            return Err(Error::InvalidVariable(id));
+                        }
+                        Ok(LVar {
+                            name,
+                            sort: sort(aux)?,
+                            idx,
+                        })
+                    })?;
+                    if sort_word(var.sort) != *declared
+                        || !actual.is_some_and(|s| subsort(s, var.sort))
+                    {
+                        return Err(malformed);
+                    }
+                    member.push((var, image));
+                }
+            }
+            row += 1;
+        }
+        if 2 * row != heads.len() as u64 {
+            return Err(malformed);
+        }
+        match table {
+            Some(_) => answers.push(member),
+            None if !nat && has_nat => {}
+            None => return Err(malformed),
+        }
+        arm += 1;
+    }
+    // Every table is the table of an arm.
+    if tables.next().is_some() {
+        return Err(malformed);
+    }
+    Ok(answers)
+}
+
+/// The reply of the total unifier for one request, which lists a complete
+/// family of unifiers without names for the variables of its range. The
+/// naming export gives it the tables it is read through.
+pub(crate) struct Unifiers {
+    packet: Packet,
+    reply: std::sync::Arc<[u64]>,
+    nat: bool,
+}
+
+impl Unifiers {
+    /// The family, read through the tables of the naming export.
+    ///
+    /// Without `targets` every range variable is called `x` and numbered
+    /// above the indices of the request, and each member binds every
+    /// variable of the request, in the order of their first occurrence.
+    ///
+    /// `targets[k]` proposes a name for each range variable of member `k`
+    /// that the caller keeps, in the order of their first occurrence in the
+    /// reply, which is the order of [`ArmView::witnesses`]. The export takes the
+    /// names only if no two variables of a member get one name at one sort.
+    /// The name of a request variable is not a name: the range variable
+    /// then stands for that request variable, which is read only where it
+    /// is the whole image of that variable, and the member has no binding
+    /// for it. A proposal the export does not take is ignored, for the
+    /// whole family.
+    pub(crate) fn named(
+        &self,
+        targets: Option<&[Vec<LVar>]>,
+        replies: Option<&UnifyReplies>,
+    ) -> Result<Substitutions, Error> {
+        let malformed = Error::InvalidStatus(255);
+        // The empty family has nothing to name.
+        if !family_has_member(&self.reply).ok_or(malformed)? {
+            return Ok(Vec::new());
+        }
+        let mut labels = Labels::of(&self.packet)?;
+        let (heads, ranges) = shape(&self.reply).ok_or(malformed)?;
+        let mut proposal = Vec::new();
+        for member in targets.unwrap_or_default() {
+            let mut row = Vec::with_capacity(2 * member.len());
+            for target in member {
+                row.push(labels.hints.intern(target.name).ok_or(malformed)?);
+                row.push(target.idx);
+            }
+            proposal.push(row);
+        }
+        let read = |proposal: &[Vec<u64>], low: bool| {
+            let tables = name(&labels, &heads, &ranges, proposal, self.nat, low, replies)?;
+            read_named(&self.packet, &labels, &self.reply, &tables, self.nat)
+        };
+        let mut family = read(&proposal, false);
+        // The export tests a proposal without the reply. A proposal it takes
+        // can still leave the reply without a reading, by the name of a
+        // request variable for a variable that is more than the whole image
+        // of that request variable. It is ignored like one the export does
+        // not take.
+        if !proposal.is_empty() && !matches!(family, Ok(_) | Err(Error::Cancelled)) {
+            family = read(&[], false);
+        }
+        // A request at the top of the index space leaves no index above it.
+        // The export then declines, and is asked for indices the request
+        // does not use: the names are still no variable of the request.
+        if family == Err(Error::FreshVariableOverflow) {
+            family = read(&[], true);
+        }
+        family
+    }
+
+    /// What a proposer of names looks at in the members the caller keeps,
+    /// under names of this function's own choosing for the range variables.
+    /// Nothing may be answered from it: those names can coincide with
+    /// variables the caller holds. `images` selects the request variables
+    /// whose images are read as terms too.
+    pub(crate) fn views(&self, images: impl Fn(&LVar) -> bool) -> Result<Vec<ArmView>, Error> {
+        let malformed = Error::InvalidStatus(255);
+        let mut rows = rows_of(&self.reply);
+        if rows.next() != Some(Some(&[1])) {
+            return Err(malformed);
+        }
+        let reserved: FxHashSet<u64> = self.packet.variables.values().iter().map(|v| v.idx).collect();
+        let hint = LVar::new("x", LSort::Msg, 0).name;
+        let mut views: Vec<ArmView> = Vec::new();
+        let mut names: FxHashMap<(u64, u64), usize> = FxHashMap::default();
+        let free = |i: &u64| !reserved.contains(i);
+        let mut unused = (0..=u64::MAX).filter(free);
+        let mut has_nat = false;
+        let close = |views: &mut Vec<ArmView>, has_nat: &mut bool| {
+            // A member the caller does not keep.
+            if !self.nat && std::mem::take(has_nat) {
+                views.pop();
+            }
+        };
+        for row in rows {
+            cancellation::check().map_err(|_| Error::Cancelled)?;
+            let [key, _, tokens @ ..] = row.ok_or(malformed)? else {
+                close(&mut views, &mut has_nat);
+                names.clear();
+                unused = (0..=u64::MAX).filter(free);
+                views.push(ArmView {
+                    bindings: Vec::new(),
+                    witnesses: Vec::new(),
+                    images: Vec::new(),
+                });
+                continue;
+            };
+            let view = views.last_mut().ok_or(malformed)?;
+            let var = self.packet.variables.get(*key).ok_or(Error::InvalidVariable(*key))?;
+            let mut witness = |id: u64, aux: u64| -> Result<LVar, Error> {
+                let at = match names.get(&(id, aux)) {
+                    Some(at) => *at,
+                    None => {
+                        let idx = unused.next().ok_or(Error::FreshVariableOverflow)?;
+                        let sort = sort(aux)?;
+                        names.insert((id, aux), view.witnesses.len());
+                        view.witnesses.push((LVar { name: hint, sort, idx }, 0));
+                        view.witnesses.len() - 1
+                    }
+                };
+                view.witnesses[at].1 += 1;
+                Ok(view.witnesses[at].0)
+            };
+            let mut single = None;
+            for &[kind, id, sort] in tokens.as_chunks::<3>().0 {
+                if kind == 0 {
+                    has_nat |= sort == 4;
+                    single = Some(witness(id, sort)?);
+                }
+            }
+            if tokens.len() != 3 {
+                single = None;
+            }
+            view.bindings.push((var, single));
+            if images(&var) {
+                let (image, _) = self.packet.read_image(tokens, self.nat, |kind, id, aux| {
+                    names
+                        .get(&(id, aux))
+                        .filter(|_| kind == 0)
+                        .map(|at| view.witnesses[*at].0)
+                        .ok_or(Error::InvalidVariable(id))
+                })?;
+                view.images.push((var, image));
+            }
+        }
+        close(&mut views, &mut has_nat);
+        Ok(views)
+    }
+}
+
+/// The tables of the naming export for a reply of the total unifier. Without
+/// a proposal the export numbers the range above the request, or with `low`,
+/// where no index is left there, by indices the request does not use.
+///
+/// The export is a function of the words it is sent, so `replies` answers a
+/// request it has seen with the words the export returned then.
+fn name(
+    labels: &Labels,
+    heads: &[u64],
+    ranges: &[Vec<u64>],
+    proposal: &[Vec<u64>],
+    nat: bool,
+    low: bool,
+    replies: Option<&UnifyReplies>,
+) -> Result<std::sync::Arc<[u64]>, Error> {
+    // Everything the export reads, each part behind its length.
+    let request = replies.map(|memo| {
+        let rows = ranges.iter().chain(proposal);
+        let mut words = Vec::with_capacity(
+            6 + labels.words.len() + heads.len() + rows.clone().map(|r| r.len() + 1).sum::<usize>(),
+        );
+        words.extend([u64::from(nat), u64::from(low), labels.words.len() as u64]);
+        words.extend(&labels.words);
+        words.push(heads.len() as u64);
+        words.extend(heads);
+        for rows in [ranges, proposal] {
+            words.push(rows.len() as u64);
+            for row in rows {
+                words.push(row.len() as u64);
+                words.extend(row);
+            }
+        }
+        (memo, words.into_boxed_slice())
+    });
+    if let Some((memo, words)) = &request
+        && let Some(tables) = memo.names.lock().unwrap().get(words)
+    {
+        return Ok(tables.clone());
+    }
+    initialize()?;
+    let ranges: Vec<_> = ranges.iter().map(|row| WordSlice::new(row)).collect();
+    let proposal: Vec<_> = proposal.iter().map(|row| WordSlice::new(row)).collect();
+    let tables: std::sync::Arc<[u64]> = LEAN_THREAD
+        .with(|_| {
+            // SAFETY: the shim takes owned copies of all slices and transfers its
+            // output to MatchRows.
+            let tables = MatchRows::new(unsafe {
+                tamarin_lean_name_unifiers(
+                    WordSlice::new(&labels.words),
+                    WordSlice::new(heads),
+                    ranges.as_ptr(),
+                    ranges.len(),
+                    proposal.as_ptr(),
+                    proposal.len(),
+                    u8::from(nat),
+                    u8::from(low),
+                )
+            })?;
+            reply_words(&tables)
+        })?
+        .into();
+    if let Some((memo, words)) = request {
+        let mut stored = memo.names.lock().unwrap();
+        if stored.len() >= NAMING_MEMO {
+            stored.clear();
+        }
+        stored.insert(words, tables.clone());
+    }
+    Ok(tables)
+}
+
 /// The complete family of unifiers of `eqs`, and whether its reply came from
-/// `replies` instead of the export. The export stops, with
-/// [`Error::Cancelled`] or [`Error::SearchBudget`], when the request is
-/// cancelled or its search takes more than `work` steps (zero for no bound).
+/// `replies` instead of the export, or `None` when the request is outside the
+/// module's declarations. The export stops, with [`Error::Cancelled`] or
+/// [`Error::SearchBudget`], when the request is cancelled or its search takes
+/// more than `work` steps (zero for no bound).
+///
+/// The reply of the unifier is not read here. It goes, as it is, to the
+/// naming export ([`Unifiers::named`]), whose reply holds the family with
+/// every range variable named.
 pub(crate) fn unify(
     sig: &MaudeSig,
     eqs: &[Equal<LNTerm>],
     replies: Option<&UnifyReplies>,
     work: u64,
-) -> Result<(Outcome, bool), Error> {
+) -> Result<(Option<Unifiers>, bool), Error> {
     let Some(packet) = Packet::encode_total(sig, eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]))? else {
-        return Ok((Outcome::Unsupported, false));
+        return Ok((None, false));
     };
     let request = replies.map(|memo| (memo, packet.request_words()));
     if let Some((memo, words)) = &request {
         let stored = memo.families.lock().unwrap().get(words).cloned();
         if let Some(reply) = stored {
-            let answers = decode(&packet, &reply, sig.enable_nat, DecodeMode::Unify)?;
-            return Ok((Outcome::Complete(answers), true));
+            let family = Unifiers {
+                packet,
+                reply,
+                nat: sig.enable_nat,
+            };
+            return Ok((Some(family), true));
         }
     }
     initialize()?;
     let rows = packet.rows();
     let mut watch = Watch::new("unification", work);
-    let reply = LEAN_THREAD.with(|_| {
-        // SAFETY: the shim consumes its own copies of all slices and writes
-        // the watch, which outlives the call. MatchRows owns the single
-        // output reference and releases it on every exit.
-        let raw = unsafe {
-            tamarin_lean_total_unify(
-                WordSlice::new(&packet.declarations),
-                rows.as_ptr(),
-                rows.len(),
-                WordSlice::new(&packet.equations),
-                watch.raw(),
-            )
-        };
-        // A stopped call returned no reply.
-        watch.finish()?;
-        reply_words(&MatchRows::new(raw)?)
-    })?;
-    let answers = decode(&packet, &reply, sig.enable_nat, DecodeMode::Unify)?;
-    // Only a reply that decoded is kept.
-    if let Some((memo, words)) = request {
-        memo.families.lock().unwrap().insert(words, reply.into());
+    let reply: std::sync::Arc<[u64]> = LEAN_THREAD
+        .with(|_| {
+            // SAFETY: the shim consumes its own copies of all slices and writes
+            // the watch, which outlives the call. MatchRows owns the single
+            // output reference and releases it on every exit.
+            let raw = unsafe {
+                tamarin_lean_total_unify(
+                    WordSlice::new(&packet.declarations),
+                    rows.as_ptr(),
+                    rows.len(),
+                    WordSlice::new(&packet.equations),
+                    watch.raw(),
+                )
+            };
+            // A stopped call returned no reply.
+            watch.finish()?;
+            reply_words(&MatchRows::new(raw)?)
+        })?
+        .into();
+    drop(rows);
+    // Only the reply of a call that finished is kept, with its status row.
+    if family_has_member(&reply).is_none() {
+        return Err(Error::InvalidStatus(255));
     }
-    Ok((Outcome::Complete(answers), false))
+    if let Some((memo, words)) = request {
+        memo.families.lock().unwrap().insert(words, reply.clone());
+    }
+    let family = Unifiers {
+        packet,
+        reply,
+        nat: sig.enable_nat,
+    };
+    Ok((Some(family), false))
 }
 
 /// Decide whether [`unify`] would return a unifier, without listing the
@@ -120,13 +589,11 @@ pub(crate) fn unify_exists(
     };
     let request = replies.map(|memo| (memo, packet.request_words()));
     if let Some((memo, words)) = &request {
-        let listed = memo
-            .families
-            .lock()
-            .unwrap()
-            .get(words)
-            // The first row is the status header; a member starts a row after it.
-            .map(|reply| rows_of(reply).nth(1).is_some());
+        let listed = memo.families.lock().unwrap().get(words).cloned();
+        let listed = match listed {
+            Some(reply) => Some(family_has_member(&reply).ok_or(Error::InvalidStatus(255))?),
+            None => None,
+        };
         let stored = listed.or_else(|| memo.exists.lock().unwrap().get(words).copied());
         if let Some(found) = stored {
             return Ok((Some(found), true));
@@ -316,11 +783,14 @@ impl Packet {
         )
     }
 
+    /// The term of a row of postfix tokens `[kind, id, aux]` and its sort.
+    /// `variable` reads a variable token: kind 0 names a variable by `id`
+    /// with the sort `aux`, and the naming export writes kinds 5 to 9.
     fn read_image(
         &self,
         tokens: &[u64],
         nat: bool,
-        mut variable: impl FnMut(u64, LSort) -> Result<LNTerm, Error>,
+        mut variable: impl FnMut(u64, u64, u64) -> Result<LVar, Error>,
     ) -> Result<(LNTerm, Option<LSort>), Error> {
         let (tokens, rest) = tokens.as_chunks::<3>();
         if !rest.is_empty() {
@@ -329,9 +799,9 @@ impl Packet {
         let mut stack: Vec<(LNTerm, Option<LSort>)> = Vec::new();
         for &[k, id, aux] in tokens {
             let value = match k {
-                0 => {
-                    let s = sort(aux)?;
-                    (variable(id, s)?, Some(s))
+                0 | 5..=9 => {
+                    let v = variable(k, id, aux)?;
+                    (Term::Lit(Lit::Var(v)), Some(v.sort))
                 }
                 1 => {
                     let name = self.names.get(id).ok_or(Error::InvalidAtom(id))?;
@@ -375,16 +845,17 @@ impl Packet {
         stack.pop().ok_or(Error::InvalidStatus(255))
     }
 
-    fn input_variable(&self, id: u64, sort: LSort) -> Result<LNTerm, Error> {
+    /// The variable of the request that a token of kind 0 names.
+    fn input_variable(&self, kind: u64, id: u64, aux: u64) -> Result<LVar, Error> {
+        let sort = sort(aux)?;
         self.variables
             .get(id)
-            .filter(|v| v.sort == sort)
-            .map(|v| Term::Lit(Lit::Var(v)))
+            .filter(|v| kind == 0 && v.sort == sort)
             .ok_or(Error::InvalidVariable(id))
     }
 
     pub(super) fn read_term(&self, words: &[u64], nat: bool) -> Result<LNTerm, Error> {
-        self.read_image(words, nat, |id, s| self.input_variable(id, s))
+        self.read_image(words, nat, |kind, id, aux| self.input_variable(kind, id, aux))
             .map(|(t, _)| t)
     }
 }
@@ -402,7 +873,6 @@ fn sort(word: u64) -> Result<LSort, Error> {
 
 #[derive(Clone, Copy)]
 enum DecodeMode<'a> {
-    Unify,
     Match(&'a FxHashSet<LVar>),
     Variants(usize),
 }
@@ -427,10 +897,10 @@ impl<'a> Arm<'a> {
         }
     }
 
-    fn variable(&mut self, id: u64, s: LSort) -> Result<LNTerm, Error> {
+    fn variable(&mut self, id: u64, s: LSort) -> Result<LVar, Error> {
         self.has_nat_witness |= s == LSort::Nat;
         if let Some(v) = self.witnesses.get(&(id, s)) {
-            return Ok(Term::Lit(Lit::Var(*v)));
+            return Ok(*v);
         }
         let idx = self
             .next
@@ -438,7 +908,7 @@ impl<'a> Arm<'a> {
             .ok_or(Error::FreshVariableOverflow)?;
         let v = LVar::new("x", s, idx);
         self.witnesses.insert((id, s), v);
-        Ok(Term::Lit(Lit::Var(v)))
+        Ok(v)
     }
 
     fn binding(&mut self, packet: &Packet, words: &[u64], nat: bool) -> Result<(), Error> {
@@ -452,9 +922,10 @@ impl<'a> Arm<'a> {
         if sort_word(var.sort) != *expected {
             return Err(Error::InvalidStatus(255));
         }
-        let (term, actual) = packet.read_image(tokens, nat, |id, s| match self.mode {
-            DecodeMode::Unify | DecodeMode::Variants(_) => self.variable(id, s),
-            DecodeMode::Match(_) => packet.input_variable(id, s),
+        let (term, actual) = packet.read_image(tokens, nat, |kind, id, aux| match self.mode {
+            DecodeMode::Variants(_) if kind == 0 => self.variable(id, sort(aux)?),
+            DecodeMode::Variants(_) => Err(Error::InvalidVariable(id)),
+            DecodeMode::Match(_) => packet.input_variable(kind, id, aux),
         })?;
         let slot = self
             .bindings
@@ -474,13 +945,12 @@ impl<'a> Arm<'a> {
             .ok_or(Error::InvalidStatus(255))?;
         let pairs = packet.variables.values().iter().copied().zip(images);
         match self.mode {
-            DecodeMode::Unify if nat || !self.has_nat_witness => answers.push(pairs.collect()),
             DecodeMode::Variants(_) if nat || !self.has_nat_witness => {
                 let mut bindings: Vec<_> = pairs.collect();
                 bindings.sort_unstable_by_key(|(v, _)| *v);
                 answers.push(bindings);
             }
-            DecodeMode::Unify | DecodeMode::Variants(_) => {}
+            DecodeMode::Variants(_) => {}
             DecodeMode::Match(keys) => {
                 let mut bindings = Vec::with_capacity(keys.len());
                 for (var, image) in pairs {
@@ -581,6 +1051,10 @@ fn decode(
 }
 
 #[cfg(test)]
+#[path = "wire_tests.rs"]
+mod wire_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -596,7 +1070,7 @@ mod tests {
             .intern(FunSym::Ac(crate::function_symbols::AcSym::Union))
             .unwrap();
         let reserved = [0].into_iter().collect();
-        let mut arm = Arm::new(2, &reserved, DecodeMode::Unify);
+        let mut arm = Arm::new(2, &reserved, DecodeMode::Variants(2));
         for malformed in [
             vec![0, 2, 1, 9, 0],          // unknown atom
             vec![0, 2, 4, 0, 2],          // missing children
@@ -621,7 +1095,7 @@ mod tests {
                 vec![w.clone(), w]
             )
         );
-        let mut incomplete = Arm::new(2, &reserved, DecodeMode::Unify);
+        let mut incomplete = Arm::new(2, &reserved, DecodeMode::Variants(2));
         incomplete
             .binding(&packet, &[0, 2, 0, 8, 4], false)
             .unwrap();

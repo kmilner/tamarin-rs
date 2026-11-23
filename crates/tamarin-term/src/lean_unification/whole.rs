@@ -11,6 +11,7 @@ pub use reduction::reduction_for_convergent_theory;
 pub(crate) use reduction::{FamilyCheck, Reduced, ReductionTable};
 mod total;
 pub use total::UnifyReplies;
+pub(crate) use total::Unifiers;
 pub(crate) use total::{
     has_match as total_has_match, matches as total_match, unify as total_unify,
     unify_exists as total_unify_exists,

@@ -46,6 +46,10 @@ pub mod bind;
 pub mod builtin;
 pub mod function_symbols;
 pub mod intern;
+// The wire tests include the differential fuzzer of `examples/`, which names
+// this crate as its users do.
+#[cfg(all(test, feature = "lean-unification"))]
+extern crate self as tamarin_term;
 #[cfg(feature = "lean-unification")]
 pub mod lean_unification;
 pub mod lterm;

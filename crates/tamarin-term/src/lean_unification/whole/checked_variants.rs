@@ -2,6 +2,7 @@
 //! variables are local to narrowing and never become substitution keys.
 use super::{total, Error, Packet, RuleTable, WordSlice, LEAN_THREAD};
 use crate::function_symbols::FunSym;
+use crate::lean_unification::Watch;
 use crate::lean_unification::{initialize, MatchRows, Outcome, Substitutions};
 use crate::lterm::{frees, LNTerm};
 use crate::maude_sig::MaudeSig;
@@ -15,9 +16,10 @@ const FRONTIER_DEPTH: u64 = 4;
 // Narrowing sites of the first call of the folding proposer, and the bound
 // from which no further call is made. Every call starts over, so the budget
 // grows fourfold: the calls before the one that finishes cost a third of it.
-// A call cannot be interrupted; cancellation is checked between calls. The
-// families of the queries that reach this proposer in the tests need fewer
-// than 4,000 sites for up to 96 variants, at roughly 0.1 ms per site.
+// The sites do not bound the unifications at a site, so a call is also
+// interruptible: it stops on cancellation and after `search` search steps.
+// The families of the queries that reach this proposer in the tests need
+// fewer than 4,000 sites for up to 96 variants, at roughly 0.1 ms per site.
 const FOLD_WORK: u64 = 1 << 13;
 const FOLD_WORK_LIMIT: u64 = 1 << 19;
 // Rewrite steps along one normalization path.
@@ -37,27 +39,34 @@ impl RuleTable {
         let Some(packet) = self.table_packet(sig, observations)? else {
             return Ok(Outcome::Unsupported);
         };
-        evaluate(&packet, sig, observations, Search::Checked)
+        evaluate(&packet, sig, observations, Search::Checked, 0)
     }
 
     /// Folding variant narrowing in Maude's order, as a proposal: the family
     /// carries no theorem and is for the certificate checker to accept. The
     /// request is unsupported when the table or a variant is outside the
     /// search or its wire format, and an error beyond `FOLD_WORK_LIMIT`
-    /// narrowing sites.
-    pub(crate) fn fold_variants(&self, sig: &MaudeSig, query: &LNTerm) -> Result<Outcome, Error> {
+    /// narrowing sites. One call stops, with [`Error::Cancelled`] or
+    /// [`Error::SearchBudget`], when the request is cancelled or the call
+    /// takes more than `search` search steps (zero for no bound).
+    pub(crate) fn fold_variants(
+        &self,
+        sig: &MaudeSig,
+        query: &LNTerm,
+        search: u64,
+    ) -> Result<Outcome, Error> {
         let observations = observations(query);
         let Some(packet) = self.table_packet(sig, observations)? else {
             return Ok(Outcome::Unsupported);
         };
-        evaluate(&packet, sig, observations, Search::Fold)
+        evaluate(&packet, sig, observations, Search::Fold, search)
     }
 }
 
 /// Whether an AC product of the query holds a factor outside the sort of its
 /// operator. Maude accepts such a product at the kind level and no
-/// well-sorted theory produces one. The closure test of the certificate
-/// checker is exponential in the width of such a product.
+/// well-sorted theory produces one. The folding proposer is for sorted
+/// queries, so such a query gets its proposal from the bounded search.
 pub(crate) fn kind_level(query: &LNTerm) -> bool {
     use crate::lean_unification::{ac_sort, subsort};
     use crate::lterm::sort_of_lnterm;
@@ -96,7 +105,7 @@ pub fn variants_for_convergent_theory(
     let Some(packet) = Packet::full_table(sig, observations)? else {
         return Ok(None);
     };
-    match evaluate(&packet, sig, observations, Search::General)? {
+    match evaluate(&packet, sig, observations, Search::General, 0)? {
         Outcome::Unsupported => Ok(None),
         Outcome::Complete(rows) => Ok(Some(rows)),
     }
@@ -113,6 +122,7 @@ fn evaluate(
     sig: &MaudeSig,
     observations: &[LNTerm],
     mut search: Search,
+    steps: u64,
 ) -> Result<Outcome, Error> {
     let width = observations
         .iter()
@@ -127,9 +137,10 @@ fn evaluate(
     LEAN_THREAD.with(|_| loop {
         cancellation::check().map_err(|_| Error::Cancelled)?;
         let started = std::time::Instant::now();
-        // SAFETY: all slices remain live until the shim copies them, and
+        let mut watch = Watch::new("variant search", steps);
+        // SAFETY: all slices and the watch remain live through the call, and
         // the unique result reference is released by MatchRows.
-        let reply = MatchRows::new(unsafe {
+        let raw = unsafe {
             let decls = WordSlice::new(&packet.declarations);
             let rules = WordSlice::new(rules);
             let roots = WordSlice::new(roots);
@@ -158,9 +169,14 @@ fn evaluate(
                     roots,
                     FOLD_DEPTH,
                     work,
+                    watch.raw(),
                 ),
             }
-        })?;
+        };
+        // A stopped call returned no reply. Only the folding proposer
+        // touches the watch.
+        watch.finish()?;
+        let reply = MatchRows::new(raw)?;
         if matches!(search, Search::Fold) {
             if tamarin_utils::env_gate!("TAM_DBG_VARIANTS") {
                 eprintln!(

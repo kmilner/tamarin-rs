@@ -23,30 +23,48 @@ fn complete_table_reduction_certifies_the_whole_kind_level_context() {
     sig.st_rules.insert(rule(c.clone()));
     let node = Term::Lit(Lit::Var(LVar::new("caller", LSort::Node, 99)));
     let input = sum(sum(node.clone(), b), a.clone());
-    let new =
+    // The certifier does not accept a table with a rule at an AC root. A
+    // session of a theory, whose author asserts convergence, follows one
+    // rewrite path and keeps the Node outside the redex; a raw session
+    // reports the table.
+    let theory = |sig| {
+        MaudeHandle::start_for_tamarin_theory(
+            MISSING,
+            sig,
+            AlgebraBackend::NativeOnly,
+            Default::default(),
+        )
+        .unwrap()
+    };
+    let raw =
         |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
-    let h = new(sig.clone().refresh());
-    let normal = sum(node, c);
+    let uncertified = |h: &MaudeHandle| {
+        assert!(matches!(
+            h.reduce(&input),
+            Err(MaudeError::UnsupportedOperation(
+                tamarin_term::maude_proc::UNCERTIFIED_TABLE
+            ))
+        ));
+        assert_eq!(h.stats().norm_count, 0);
+    };
+    let h = theory(sig.clone().refresh());
+    let normal = sum(node.clone(), c);
     assert_eq!(
         tamarin_term::lean_unification::reduction_for_convergent_theory(&sig, &input).unwrap(),
         Some(normal.clone())
     );
     assert_eq!(h.reduce(&input).unwrap(), normal);
     assert_eq!(h.stats().norm_count, 0);
+    uncertified(&raw(sig.clone().refresh()));
 
-    sig.st_rules.insert(rule(a));
-    assert_eq!(
-        tamarin_term::lean_unification::reduction_for_convergent_theory(&sig, &input).unwrap(),
-        None
-    );
-    let ambiguous = new(sig.refresh());
-    assert!(matches!(
-        ambiguous.reduce(&input),
-        Err(MaudeError::UnsupportedOperation(
-            tamarin_term::maude_proc::UNCERTIFIED_TABLE
-        ))
-    ));
-    assert_eq!(ambiguous.stats().norm_count, 0);
+    // With a second result for the same redex the table is not confluent.
+    // Under the premise that it is, the reply is one of the two reducts.
+    sig.st_rules.insert(rule(a.clone()));
+    let reduct = tamarin_term::lean_unification::reduction_for_convergent_theory(&sig, &input)
+        .unwrap()
+        .unwrap();
+    assert!(reduct == normal || reduct == sum(node, a), "{reduct:?}");
+    uncertified(&raw(sig.refresh()));
 }
 
 #[test]

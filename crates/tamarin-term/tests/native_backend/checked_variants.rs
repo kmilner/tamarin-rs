@@ -34,9 +34,17 @@ fn checked_variant_frontier_preserves_shared_inputs_under_a_kind_level_ac_rewrit
     let x = LVar::new("vx", LSort::Msg, 41);
     let var = Term::Lit(Lit::Var(x));
     let q = f_app_list(vec![context.clone(), call(var.clone()), var]);
+    // The table has a rule at an AC root, which the certifier does not
+    // accept: the session of a theory reduces along one path.
     let new =
         |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
-    let h = new(sig.clone().refresh());
+    let h = MaudeHandle::start_for_tamarin_theory(
+        MISSING,
+        sig.clone().refresh(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     let reference = tamarin_term::lean_unification::variants_for_convergent_theory(&sig, &q)
         .unwrap()
         .unwrap();
@@ -110,9 +118,13 @@ fn user_equations_followed_by_pairing_compute_both_open_variants() {
     let reference = tamarin_term::lean_unification::variants_for_convergent_theory(&sig, &q)
         .unwrap()
         .unwrap();
-    let handle =
-        MaudeHandle::start_with_backend(MISSING, sig.refresh(), AlgebraBackend::NativeOnly)
-            .unwrap();
+    let handle = MaudeHandle::start_for_tamarin_theory(
+        MISSING,
+        sig.refresh(),
+        AlgebraBackend::NativeOnly,
+        Default::default(),
+    )
+    .unwrap();
     for rows in [reference, handle.variants(&q).unwrap()] {
         let mut open = false;
         let mut specialized = false;

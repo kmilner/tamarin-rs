@@ -51,7 +51,7 @@ fn main() {
 }
 
 #[cfg(feature = "lean-unification")]
-mod imp {
+pub(crate) mod imp {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fmt::Write as _;
     use std::io::Write as _;
@@ -1112,6 +1112,27 @@ mod imp {
                 }
             }))
         })
+    }
+
+    /// Unification queries of every signature this fuzzer knows, by the name of the
+    /// signature, for the wire tests of `tamarin-term` (`lean_unification/whole/wire_tests.rs`),
+    /// which include this file as a module.
+    pub(crate) fn wire_samples(seed: u64, per_sig: usize) -> Vec<(&'static str, MaudeSig, Vec<Eqs>)> {
+        let mut out = Vec::new();
+        for (at, si) in sigs().into_iter().enumerate() {
+            let mut rng = Rng::new(seed.wrapping_add(at as u64));
+            let mut queries = Vec::new();
+            while queries.len() < per_sig {
+                // Three in ten from the AC shape templates.
+                let q = gen_query(&mut rng, &si, &[1, 0, 0, 0, 0], false, 30);
+                let q = if rng.pct(50) { spread_indices(&q, &mut rng) } else { q };
+                if let Q::Unify(eqs, _) = q {
+                    queries.push(eqs);
+                }
+            }
+            out.push((si.name, si.sig.clone(), queries));
+        }
+        out
     }
 
     fn gen_query(
