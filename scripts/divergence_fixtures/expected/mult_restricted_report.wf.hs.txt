@@ -30,4 +30,10 @@ Multiplication restriction of rules
        [ In( <x.1, x.2> ) ] --[ Seen( 'c' ) ]-> [ Out( <z, w> ) ]
   
     Variables that occur only in rhs:  w, z
+
+Unsupported multiplication outside exponents
+============================================
+
+  Rule ConclusionProduct has products outside exponents: (~a*~c),
+                                                         (~a*~c*~c), (~a*~b), (~a*~a*~b)
 */

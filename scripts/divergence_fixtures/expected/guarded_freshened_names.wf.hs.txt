@@ -1,7 +1,7 @@
 WARNING: the following wellformedness checks failed!
 
- Formula guardedness
-====================
+Formula guardedness
+===================
 
   Lemma `Shadow' cannot be converted to a guarded formula:
     unguarded variable(s) 'x.1', 'z' in the subformula

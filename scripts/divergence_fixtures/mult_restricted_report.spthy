@@ -1,4 +1,7 @@
 // BOTH triggers of the multiplication-restriction check, one rule each.
+// Use MSR export to inspect the reports: proof/load mode now rejects products
+// outside exponents before closing. Rejection is covered by cli_e2e's
+// unsupported_products_report_on_stdout_and_abort_on_stderr test.
 //
 // HS `multRestrictedReport'` (Theory/Tools/Wellformedness.hs) reports
 // a rule when `restrictedFailures ru` is not `([],[])`, and its two halves fire

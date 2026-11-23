@@ -8,6 +8,8 @@
 //
 // Compared slices: the wf report block AND the `theory … end` echo (see
 // check.sh) — the echo carries the same terms through the rule printer.
+// Use MSR export to inspect these deliberately unsupported premise products;
+// ordinary loading rejects them before printing the theory.
 
 theory MixedAcWf
 begin

@@ -15,7 +15,7 @@
 // (Theory/Sapic/Process.hs#varsProc) over the derived `Foldable`
 // reaches the condition's free variables, and `-m=spthytyped` prints them
 // with `map show`
-// (TheoryObject.hs#prettyTranslationElement), where
+// (TheoryObject.hs#prettyProcessDef), where
 // `show (SapicLVar v (Just t)) = show v ++ ":" ++ t`
 // (Theory/Sapic/Term.hs).  Four of the five `let` lines below carry a
 // tag, so this row is what pins the tag all the way to the printed bytes.
