@@ -252,7 +252,9 @@ pub struct SharedMaudeCaches {
     /// Latch failures across workers: legacy callers sometimes recover from errors.
     /// Every consumer must check this before publishing any result. It holds the
     /// first native-only runtime failure and the first backend error that a
-    /// caller without an error channel had to absorb.
+    /// caller without an error channel had to absorb, among those of work
+    /// whose result is used: a parallel job holds its own failure until
+    /// then (see [`SharedMaudeCaches::fail`]).
     native_failure: std::sync::OnceLock<NativeFailure>,
     /// Memo for the complete answers of the proved unifier, keyed by the
     /// equations as the caller sent them, with the origin each answer counts
@@ -342,18 +344,78 @@ pub struct SharedMaudeCaches {
 }
 
 impl SharedMaudeCaches {
-    /// Latch `failure` as the session's, unless one is latched already, and
-    /// return the session's failure.
+    /// Record `failure` against the work that ran into it, and return the
+    /// failure that work now holds, which is its first.
     ///
-    /// A job whose request is already cancelled latches nothing and gets a
-    /// cancellation: its result is discarded at the job boundary, and what a
-    /// cancelled job ran into, possibly on a branch a sequential search
-    /// would never visit, must not fail the jobs that are still wanted.
-    fn fail(&self, failure: impl FnOnce() -> NativeFailure) -> MaudeError {
+    /// Inside a parallel job whose result the caller may still discard
+    /// (`CancellationScope::job`) the failure belongs to that job: every
+    /// later backend call of the job fails with it, the job can publish
+    /// nothing ([`MaudeHandle::check_backend_status`]), and the failure
+    /// reaches the session only when a result of the job is used
+    /// (`CancellationToken::inherit`). So a branch that a sequential search
+    /// never visits cannot fail the run. Anywhere else the failure is
+    /// latched for the session at once.
+    ///
+    /// A job whose request is already cancelled records nothing and gets a
+    /// cancellation: its result is discarded at the job boundary.
+    fn fail(self: &Arc<Self>, failure: impl FnOnce() -> NativeFailure) -> MaudeError {
         if cancellation::check().is_err() {
             return MaudeError::Cancelled;
         }
-        self.native_failure.get_or_init(failure).error()
+        if let Some(latched) = self.native_failure.get() {
+            return latched.error();
+        }
+        let mut failure = Some(failure);
+        let held = cancellation::fail_job(|| {
+            let failure = failure.take().expect("one failure to record")();
+            Arc::new(JobFailure {
+                session: Arc::downgrade(self),
+                failure,
+            })
+        });
+        match (held, failure) {
+            (Some(held), _) => job_failure_error(&held),
+            (None, Some(failure)) => self.native_failure.get_or_init(failure).error(),
+            (None, None) => unreachable!("a failure is only taken for a job that holds it"),
+        }
+    }
+}
+
+/// A backend failure held by the parallel job that ran into it.
+struct JobFailure {
+    session: std::sync::Weak<SharedMaudeCaches>,
+    failure: NativeFailure,
+}
+
+impl cancellation::JobFailure for JobFailure {
+    /// A result of the failed job reached a caller outside every job: the
+    /// failure is the session's.
+    fn escalate(&self) {
+        if let Some(session) = self.session.upgrade() {
+            session.native_failure.get_or_init(|| self.failure.clone());
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+fn job_failure_error(failure: &cancellation::Failure) -> MaudeError {
+    match failure.as_any().downcast_ref::<JobFailure>() {
+        Some(held) => held.failure.error(),
+        None => MaudeError::Other("a parallel job failed".into()),
+    }
+}
+
+/// Fails when the parallel job running on this thread, or a job around it,
+/// has run into a backend failure. Such a job may have continued with a
+/// placeholder, so its result is the failure and nothing else. A job ends
+/// with this check where it cannot reach [`MaudeHandle::check_backend_status`].
+pub fn job_status() -> Result<(), MaudeError> {
+    match cancellation::job_failure() {
+        Some(failure) => Err(job_failure_error(&failure)),
+        None => Ok(()),
     }
 }
 
@@ -619,7 +681,7 @@ impl Reference {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum NativeFailure {
     Unsupported(&'static str),
     #[cfg(feature = "lean-unification")]
@@ -634,7 +696,7 @@ enum NativeFailure {
 /// [`MaudeHandle::check_backend_status`]. Only native-only reaches Lean.
 #[cfg(feature = "lean-unification")]
 fn native_runtime_error(
-    caches: &SharedMaudeCaches,
+    caches: &Arc<SharedMaudeCaches>,
     error: crate::lean_unification::Error,
 ) -> MaudeError {
     if error == crate::lean_unification::Error::Cancelled {
@@ -1640,34 +1702,49 @@ impl MaudeHandle {
     }
 
     /// Must succeed before any consumer publishes a result, even if a helper
-    /// recovered from a backend error. Applies to every backend: the latch
-    /// holds native runtime failures and errors recorded by
+    /// recovered from a backend error. Applies to every backend: it fails
+    /// for a failure latched for the session, and for a failure of the
+    /// parallel job this thread is running or of a job around it. Both hold
+    /// native runtime failures and errors recorded by
     /// [`Self::record_failure`].
     pub fn check_backend_status(&self) -> Result<(), MaudeError> {
         match self.caches.native_failure.get() {
             Some(failure) => Err(failure.error()),
-            None => Ok(()),
+            None => job_status(),
         }
     }
 
-    /// Latch a backend error that the caller cannot return.
+    /// Whether this work may write to a store other jobs read. A failed job
+    /// keeps what it computes to itself.
+    fn intact(&self) -> bool {
+        self.check_backend_status().is_ok()
+    }
+
+    /// The session's store of unifier replies, for work that may write to it.
+    #[cfg(feature = "lean-unification")]
+    fn shared_replies(&self) -> Option<&crate::lean_unification::UnifyReplies> {
+        self.intact().then_some(&self.caches.unify_replies)
+    }
+
+    /// Record a backend error that the caller cannot return.
     ///
     /// Some algebra queries sit behind interfaces without an error channel
     /// (normal-form predicates, simplifier closures). Such a caller continues
-    /// with a placeholder, and this latch guarantees the placeholder never
-    /// becomes a verdict: [`Self::check_backend_status`] fails for every
-    /// handle of the session from now on.
+    /// with a placeholder, and the record guarantees the placeholder never
+    /// becomes a verdict: [`Self::check_backend_status`] fails from now on
+    /// for the work that ran into the error. That is the parallel job
+    /// running here and whatever uses its result, or, outside such a job,
+    /// every handle of the session.
     ///
-    /// Cancellation is not a failure and is not latched. The cancelled
+    /// Cancellation is not a failure and is not recorded. The cancelled
     /// request's token stays cancelled, so the job boundary discards whatever
     /// was computed from the placeholder.
     pub fn record_failure(&self, error: &MaudeError) {
-        if matches!(error, MaudeError::Cancelled) || cancellation::check().is_err() {
+        if matches!(error, MaudeError::Cancelled) {
             return;
         }
         self.caches
-            .native_failure
-            .get_or_init(|| NativeFailure::Absorbed(error.to_string()));
+            .fail(|| NativeFailure::Absorbed(error.to_string()));
     }
 
     /// The value of `result`, or `placeholder` after latching its error with
@@ -1982,11 +2059,13 @@ impl MaudeHandle {
                         } else {
                             self.caches.provenance.record(asked, Origin::Maude);
                         }
-                        self.caches
-                            .reply
-                            .lock()
-                            .unwrap()
-                            .insert(cmd.to_vec(), reply.clone());
+                        if self.intact() {
+                            self.caches
+                                .reply
+                                .lock()
+                                .unwrap()
+                                .insert(cmd.to_vec(), reply.clone());
+                        }
                         return Ok(reply);
                     }
                 }
@@ -2123,11 +2202,13 @@ impl MaudeHandle {
                     .stats
                     .reduce_misses
                     .fetch_add(1, Ordering::Relaxed);
-                self.caches
-                    .reduce
-                    .lock()
-                    .unwrap()
-                    .insert(t.clone(), (result.clone(), origin));
+                if self.intact() {
+                    self.caches
+                        .reduce
+                        .lock()
+                        .unwrap()
+                        .insert(t.clone(), (result.clone(), origin));
+                }
                 self.caches.provenance.record(Asked::Reduce, origin);
                 return Ok(result);
             }
@@ -2148,11 +2229,13 @@ impl MaudeHandle {
             .stats
             .reduce_misses
             .fetch_add(1, Ordering::Relaxed);
-        self.caches
-            .reduce
-            .lock()
-            .unwrap()
-            .insert(t.clone(), (result.clone(), Origin::Maude));
+        if self.intact() {
+            self.caches
+                .reduce
+                .lock()
+                .unwrap()
+                .insert(t.clone(), (result.clone(), Origin::Maude));
+        }
         self.caches.provenance.record(Asked::Reduce, Origin::Maude);
         Ok(result)
     }
@@ -2171,7 +2254,9 @@ impl MaudeHandle {
                 let built = crate::lean_unification::ReductionTable::new(&self.sig)
                     .map_err(|error| self.lean_error(error))?
                     .map(Arc::new);
-                *slot = Some(built.clone());
+                if self.intact() {
+                    *slot = Some(built.clone());
+                }
                 Ok(built)
             }
         }
@@ -2270,11 +2355,13 @@ impl MaudeHandle {
                 } else {
                     Origin::Assumed
                 };
-                self.caches
-                    .variant_checks
-                    .lock()
-                    .unwrap()
-                    .insert(key, origin);
+                if self.intact() {
+                    self.caches
+                        .variant_checks
+                        .lock()
+                        .unwrap()
+                        .insert(key, origin);
+                }
                 return Ok((origin, false));
             }
             FamilyCheck::Rejected { reason, member } => Error::RejectedVariants { reason, member },
@@ -2340,11 +2427,13 @@ impl MaudeHandle {
             .stats
             .unifiable_misses
             .fetch_add(1, Ordering::Relaxed);
-        self.caches
-            .unifiable
-            .lock()
-            .unwrap()
-            .insert(key, (answer, origin));
+        if self.intact() {
+            self.caches
+                .unifiable
+                .lock()
+                .unwrap()
+                .insert(key, (answer, origin));
+        }
         Ok(answer)
     }
 
@@ -2466,7 +2555,7 @@ impl MaudeHandle {
                 let (family, reused) = crate::lean_unification::total_unify(
                     &self.sig,
                     &rows,
-                    Some(&self.caches.unify_replies),
+                    self.shared_replies(),
                     self.reference.search_work,
                 )
                 .map_err(|e| self.lean_error(e))?;
@@ -2483,7 +2572,7 @@ impl MaudeHandle {
                         let targets: Vec<_> =
                             spelling.iter().map(|arm| arm.targets.clone()).collect();
                         let mut spelled = family
-                            .named(Some(&targets), Some(&self.caches.unify_replies))
+                            .named(Some(&targets), self.shared_replies())
                             .map_err(|e| self.lean_error(e))?;
                         // The Maude backend lists a unifier in the order of
                         // its variables.
@@ -2506,7 +2595,7 @@ impl MaudeHandle {
                         let unspelled = &self.caches.stats.lean_unify_unspelled;
                         unspelled.fetch_add(1, Ordering::Relaxed);
                         family
-                            .named(None, Some(&self.caches.unify_replies))
+                            .named(None, self.shared_replies())
                             .map_err(|e| self.lean_error(e))?
                     }
                 }
@@ -2519,11 +2608,13 @@ impl MaudeHandle {
             self.caches.stats.lean_unify.fetch_add(1, Ordering::Relaxed);
             provenance.record(Asked::Unify, origin);
         }
-        self.caches
-            .proved_unify
-            .lock()
-            .unwrap()
-            .insert(key, &answers, origin);
+        if self.intact() {
+            self.caches
+                .proved_unify
+                .lock()
+                .unwrap()
+                .insert(key, &answers, origin);
+        }
         Ok(answers)
     }
 
@@ -2574,7 +2665,7 @@ impl MaudeHandle {
                     let (found, reused) = crate::lean_unification::total_unify_exists(
                         &self.sig,
                         &rows,
-                        Some(&self.caches.unify_replies),
+                        self.shared_replies(),
                         self.reference.search_work,
                     )
                     .map_err(|e| self.lean_error(e))?;
@@ -2589,11 +2680,13 @@ impl MaudeHandle {
             exists.fetch_add(1, Ordering::Relaxed);
             provenance.record(Asked::Unify, origin);
         }
-        self.caches
-            .unifiable
-            .lock()
-            .unwrap()
-            .insert(key, (found, origin));
+        if self.intact() {
+            self.caches
+                .unifiable
+                .lock()
+                .unwrap()
+                .insert(key, (found, origin));
+        }
         Ok(found)
     }
 
@@ -2756,11 +2849,13 @@ impl MaudeHandle {
                 // each in a fixed order.
                 answers.sort_unstable();
                 answers.dedup();
-                self.caches
-                    .total_match
-                    .lock()
-                    .unwrap()
-                    .insert(key, answers.clone());
+                if self.intact() {
+                    self.caches
+                        .total_match
+                        .lock()
+                        .unwrap()
+                        .insert(key, answers.clone());
+                }
                 self.caches.provenance.record(Asked::Match, origin);
                 Ok(Some(answers))
             }
@@ -2817,7 +2912,9 @@ impl MaudeHandle {
             crate::lean_unification::has_match_modulo_attributes(&self.sig, oriented, bindable)
                 .map_err(|e| self.lean_error(e))?
                 .ok_or_else(|| self.unsupported_native_operation(operation))?;
-        self.caches.has_match.lock().unwrap().insert(key, found);
+        if self.intact() {
+            self.caches.has_match.lock().unwrap().insert(key, found);
+        }
         self.caches.provenance.record(Asked::Match, origin);
         Ok(found)
     }

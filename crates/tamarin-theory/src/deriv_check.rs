@@ -188,6 +188,8 @@ pub fn check_message_derivation_with_pool(
             ndc_cache.as_ref(),
             parameters,
         )?;
+        // The result of a failed job is its failure.
+        tamarin_term::maude_proc::job_status()?;
         Ok::<_, crate::prove::ProveError>((name, warnings))
     };
     let results = if let Some(pool) = pool.filter(|_| rayon::current_num_threads() > 1) {

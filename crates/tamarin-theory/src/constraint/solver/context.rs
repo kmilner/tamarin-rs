@@ -413,7 +413,14 @@ impl ProofContext {
                 let slot = local.get_or_init(Arc::default);
                 slot.get_or_build(|| {
                     let ctx = self.clone();
-                    move || ctx.build_sources()
+                    move || {
+                        let maude = ctx.maude.clone();
+                        let built = ctx.build_sources()?;
+                        // Copies of this context read the set. One built
+                        // past a failed algebra query is not stored.
+                        maude.check_backend_status()?;
+                        Ok(built)
+                    }
                 })
             }
         }
@@ -1174,6 +1181,66 @@ mod tests {
             })
             .unwrap();
         assert!(Arc::ptr_eq(&results[0], &results[1]));
+    }
+
+    /// A saturation that finishes under a failed job may rest on the
+    /// placeholders of its failed algebra queries. The slot stays empty
+    /// whether the job failed before the build or in it, and whether the
+    /// build reports the failure, as the session's builds do, or comes back
+    /// with a value. The failure stays with the job, and the next request
+    /// builds again.
+    #[test]
+    fn saturation_finished_under_a_failed_job_is_not_published() {
+        use tamarin_utils::cancellation::{self, CancellationGuard, CancellationScope, JobFailure};
+        struct Failed;
+        impl JobFailure for Failed {
+            fn escalate(&self) {
+                panic!("the job's result is not used");
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let slot = Arc::new(SourceSlot::default());
+        let attempt = slot.clone();
+        pool.install(move || {
+            let job = CancellationScope::job(None);
+            let _guard = CancellationGuard::new(Some(job.token()));
+            let silent = attempt.get_or_build(|| {
+                move || {
+                    cancellation::fail_job(|| Arc::new(Failed)).unwrap();
+                    Ok(Arc::new(Vec::new()))
+                }
+            });
+            assert_eq!(silent.err(), Some(ProveError::Cancelled));
+            assert!(attempt.ready.get().is_none());
+            assert!(job.token().own_failure().is_some());
+
+            // The job has failed already.
+            let late = attempt.get_or_build(|| || Ok(Arc::new(Vec::new())));
+            assert_eq!(late.err(), Some(ProveError::Cancelled));
+            let reported = attempt.get_or_build(|| {
+                || match tamarin_term::maude_proc::job_status() {
+                    Ok(()) => panic!("the job has failed"),
+                    Err(error) => Err(error.into()),
+                }
+            });
+            assert!(
+                matches!(reported, Err(ProveError::Maude(_))),
+                "{reported:?}"
+            );
+            assert!(attempt.ready.get().is_none());
+        });
+
+        let retry = slot.clone();
+        let built = pool
+            .install(move || retry.get_or_build(|| || Ok(Arc::new(Vec::new()))))
+            .unwrap();
+        assert!(Arc::ptr_eq(&built, slot.ready.get().unwrap()));
     }
 
     /// A saturation that finishes under a cancelled request may rest on

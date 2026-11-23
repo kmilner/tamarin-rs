@@ -132,13 +132,17 @@ Diagnostics on standard error can differ:
   it writes to standard error, and any other side effect, then shows up only
   with several workers. Its answers for those cases are discarded.
 
-Three cases fall outside that guarantee. An internal error (a panic) in a case
-that a serial run never reaches still aborts the run. So does a failure of
-the algebra backend in such a case, if the case had not been cancelled yet:
-the failure is recorded for the whole session, which then publishes no result
-(on Maude an exchange that fails for good in a simplifier pass without an
-error channel; on `--algebra-backend=native-only` a request the backend does
-not support or one that exhausts its search budget). With
+A failure of the algebra backend follows the same rule (on Maude an exchange
+that fails for good in a simplifier pass without an error channel; on
+`--algebra-backend=native-only` a request the backend does not support or one
+that exhausts its search budget). The failure belongs to the case that ran
+into it. That case publishes nothing from then on and ends in the failure,
+which fails the run only if a serial run would have used the case's result.
+The failure of a case that is discarded is discarded with it, whether or not
+the case had been cancelled when it failed.
+
+Two cases fall outside that guarantee. An internal error (a panic) in a case
+that a serial run never reaches still aborts the run. With
 `TAM_PROVE_DEADLINE_MS` set, a case that several workers started before the
 deadline can finish after it, so the result can go further than with one
 worker.

@@ -1,0 +1,30 @@
+theory native_budget_speculative
+begin
+
+/*
+ * The lemma has two cases, visited in the order of their names. `Easy` is
+ * solved by a small unification and ends the search. `Hard` needs a
+ * unification of wide sums, which a reduced TAM_RS_ALGEBRA_SEARCH_WORK
+ * stops. A search on one worker never reaches `Hard`; on several workers
+ * it is started beside `Easy` and then discarded, with its failure.
+ */
+
+builtins: natural-numbers
+
+rule GenP:
+  [ ] --> [ P(%l %+ %l %+ %m %+ %k) ]
+
+rule GenSt:
+  [ ] --> [ St(%l %+ %l %+ %l %+ %m %+ %m %+ %m %+ %k %+ %k) ]
+
+rule Easy:
+  [ P(%i %+ %i %+ %j %+ %n) ] --[ Goal() ]-> [ ]
+
+rule Hard:
+  [ St(%i %+ %i %+ %i %+ %i %+ %j %+ %j %+ %j %+ %n) ] --[ Goal() ]-> [ ]
+
+lemma reach:
+  exists-trace
+  "Ex #t. Goal() @ t"
+
+end

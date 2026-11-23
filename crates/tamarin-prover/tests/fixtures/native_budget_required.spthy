@@ -1,0 +1,29 @@
+theory native_budget_required
+begin
+
+/*
+ * native_budget_speculative.spthy with the hard case named so that it is
+ * visited first. The unification of wide sums, which a reduced
+ * TAM_RS_ALGEBRA_SEARCH_WORK stops, is then on the path of a search on one
+ * worker, and the run fails for every number of workers.
+ */
+
+builtins: natural-numbers
+
+rule GenP:
+  [ ] --> [ P(%l %+ %l %+ %m %+ %k) ]
+
+rule GenSt:
+  [ ] --> [ St(%l %+ %l %+ %l %+ %m %+ %m %+ %m %+ %k %+ %k) ]
+
+rule Easy:
+  [ P(%i %+ %i %+ %j %+ %n) ] --[ Goal() ]-> [ ]
+
+rule Ahead:
+  [ St(%i %+ %i %+ %i %+ %i %+ %j %+ %j %+ %j %+ %n) ] --[ Goal() ]-> [ ]
+
+lemma reach:
+  exists-trace
+  "Ex #t. Goal() @ t"
+
+end

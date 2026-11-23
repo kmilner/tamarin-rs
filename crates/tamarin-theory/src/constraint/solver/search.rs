@@ -303,6 +303,8 @@ fn forks(ctx: &ProofContext, cases: usize) -> bool {
 }
 
 /// Visit cases in order on several workers, up to the first solved one.
+/// A case is a job of its own: a failed algebra query in a case that turns
+/// out not to be needed fails nothing else.
 /// A worker other than the caller looks for a pooled process of its own
 /// before each case. The cases of workers without one share the caller's,
 /// where a case that a sequential search would reach first can take it from
@@ -357,6 +359,10 @@ fn visit_forked(
                 super::cancellation_tests::Work::Search,
             );
             visit(&worker_ctx, &mut child, depth + 1)?;
+            // A case that went on past a failed algebra query holds a
+            // subtree built on a placeholder. Its result is the failure, so
+            // that the cases are cut where a returned error cuts them.
+            worker_ctx.maude.check_backend_status()?;
             let local_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
             Ok((name, child, local_hit))
         };
@@ -710,7 +716,7 @@ pub(crate) fn run_proof_search_at_depth(
     {
         extract_solved_path(&mut root);
     }
-    // Simplifier passes without an error channel latch a failed algebra
+    // Simplifier passes without an error channel record a failed algebra
     // query and continue. Such a tree is not a result.
     ctx.maude.check_backend_status()?;
     Ok(root)

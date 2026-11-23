@@ -18,9 +18,36 @@ impl std::fmt::Display for Cancelled {
 }
 impl std::error::Error for Cancelled {}
 
+/// A failure that a parallel job ran into and could not return, held by
+/// the scope of that job. See [`CancellationScope::job`].
+pub trait JobFailure: std::any::Any + Send + Sync {
+    /// The failure has left the outermost job: its work is part of the
+    /// result of a caller that no job encloses, and there is no scope left
+    /// to hold it. The implementation records it where that caller looks.
+    fn escalate(&self);
+
+    /// For the owner of the failure to read it back.
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+/// A shared [`JobFailure`].
+pub type Failure = Arc<dyn JobFailure>;
+
+/// Written once and only read afterwards, so a panic cannot leave it half
+/// updated: a token stays usable across `catch_unwind` whatever the failure
+/// type holds.
+#[derive(Default)]
+struct FailureSlot(std::sync::OnceLock<Failure>);
+impl std::panic::UnwindSafe for FailureSlot {}
+impl std::panic::RefUnwindSafe for FailureSlot {}
+
 #[derive(Default)]
 struct State {
     parent: Option<CancellationToken>,
+    /// Whether this scope is one parallel job, which holds its own failures.
+    job: bool,
+    /// The first failure of this job. Only a job scope holds one.
+    failure: FailureSlot,
     cancelled: AtomicBool,
     callbacks: Mutex<BTreeMap<u64, Box<dyn Fn() + Send>>>,
     next_id: std::sync::atomic::AtomicU64,
@@ -80,6 +107,47 @@ impl CancellationToken {
     pub(crate) fn descends_from(&self, ancestor: &Self) -> bool {
         std::iter::successors(Some(self), |token| token.0.parent.as_ref())
             .any(|token| Arc::ptr_eq(&token.0, &ancestor.0))
+    }
+
+    fn scopes(&self) -> impl Iterator<Item = &Self> {
+        std::iter::successors(Some(self), |token| token.0.parent.as_ref())
+    }
+
+    /// Record a failure of the work running under this token, on the
+    /// innermost enclosing job, and return the failure that job now holds:
+    /// its first. `None` when no job encloses this token. Such work is not
+    /// speculative, and the caller records the failure for the whole run.
+    ///
+    /// A job is discarded together with its scope, and its failure with it.
+    /// A job whose result is used hands the failure to the job around it
+    /// ([`Self::inherit`]).
+    pub fn fail(&self, failure: impl FnOnce() -> Failure) -> Option<Failure> {
+        let job = self.scopes().find(|token| token.0.job)?;
+        Some(job.0.failure.0.get_or_init(failure).clone())
+    }
+
+    /// The failure of the innermost failed job around this token, if any.
+    /// Work under a failed job may rest on a placeholder: it must not
+    /// publish anything outside the job.
+    pub fn failure(&self) -> Option<Failure> {
+        self.scopes()
+            .find_map(|token| token.0.failure.0.get().cloned())
+    }
+
+    /// The failure this very scope holds, if it is a failed job.
+    pub fn own_failure(&self) -> Option<Failure> {
+        self.0.failure.0.get().cloned()
+    }
+
+    /// Take over the failure of a job whose result is used by the work
+    /// under this token: the innermost enclosing job holds it from now on,
+    /// unless it has failed already. Without an enclosing job the failure
+    /// is escalated.
+    pub fn inherit(&self, failure: Failure) {
+        let escalated = failure.clone();
+        if self.fail(move || failure).is_none() {
+            escalated.escalate();
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -150,8 +218,24 @@ impl Drop for CancellationScope {
 
 impl CancellationScope {
     pub fn new(parent: Option<CancellationToken>) -> Self {
+        Self::build(parent, false)
+    }
+
+    /// The scope of one parallel job whose result its caller may discard.
+    ///
+    /// A failure that the job cannot return ([`CancellationToken::fail`]) is
+    /// held by this scope instead of by the whole run. The caller that uses
+    /// the job's result must hand the failure on with
+    /// [`CancellationToken::inherit`]; a caller that discards the result
+    /// drops the failure with the scope.
+    pub fn job(parent: Option<CancellationToken>) -> Self {
+        Self::build(parent, true)
+    }
+
+    fn build(parent: Option<CancellationToken>, job: bool) -> Self {
         let token = CancellationToken(Arc::new(State {
             parent: parent.clone(),
+            job,
             ..State::default()
         }));
         // The child keeps its ancestry alive for checks, but the parent's
@@ -217,6 +301,28 @@ pub fn check() -> Result<(), Cancelled> {
     })
 }
 
+/// Record a failure of the work on this thread on its innermost enclosing
+/// job. See [`CancellationToken::fail`].
+pub fn fail_job(failure: impl FnOnce() -> Failure) -> Option<Failure> {
+    CURRENT.with(|cell| cell.borrow().as_ref()?.fail(failure))
+}
+
+/// The failure of the innermost failed job around the work on this thread.
+/// See [`CancellationToken::failure`].
+#[inline]
+pub fn job_failure() -> Option<Failure> {
+    CURRENT.with(|cell| cell.borrow().as_ref()?.failure())
+}
+
+/// Hand `failure` to the job around the work on this thread, or escalate it
+/// when there is none. See [`CancellationToken::inherit`].
+pub fn inherit_failure(failure: Failure) {
+    match current() {
+        Some(token) => token.inherit(failure),
+        None => failure.escalate(),
+    }
+}
+
 /// Must be installed explicitly on each Rayon/scoped worker, including when
 /// the inherited token is None, and dropped on the thread that installed it.
 #[must_use]
@@ -276,7 +382,9 @@ enum CellState<T, E> {
 
 /// Single-flight initialization. Cancellation/panics leave the slot empty;
 /// other waiters retry using their own request rather than inheriting its error.
-/// Completed values and ordinary errors retain the original OnceLock policy.
+/// Completed values and ordinary errors retain the original OnceLock policy,
+/// except under a failed job ([`job_failure`]): what it built is returned to
+/// it and not kept.
 pub struct CancellableOnce<T, E> {
     state: Mutex<CellState<T, E>>,
     ready: Condvar,
@@ -339,7 +447,11 @@ impl<T: Clone, E: Clone + From<Cancelled>> CancellableOnce<T, E> {
         let _reset = Reset(self);
         let value = build();
         check()?;
-        *self.state.lock().unwrap() = CellState::Ready(value.clone());
+        // A failed job may have built the value on a placeholder: it keeps
+        // the value to itself, and the next caller builds its own.
+        if job_failure().is_none() {
+            *self.state.lock().unwrap() = CellState::Ready(value.clone());
+        }
         value
     }
 }
@@ -457,6 +569,139 @@ mod tests {
         release_tx.send(()).unwrap();
         waiter.join().unwrap();
         assert_eq!(owner.join().unwrap(), Ok(42));
+        assert_eq!(cell.get(), Some(Ok(42)));
+    }
+
+    /// A failure that counts how often it was escalated.
+    struct Probe(std::sync::atomic::AtomicUsize);
+
+    impl Probe {
+        fn new() -> Arc<Self> {
+            Arc::new(Self(Default::default()))
+        }
+        fn escalations(&self) -> usize {
+            self.0.load(Ordering::Relaxed)
+        }
+    }
+
+    impl JobFailure for Probe {
+        fn escalate(&self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    fn same(held: &Failure, probe: &Arc<Probe>) -> bool {
+        std::ptr::addr_eq(Arc::as_ptr(held), Arc::as_ptr(probe))
+    }
+
+    #[test]
+    fn a_job_holds_its_first_failure_and_its_peers_do_not_see_it() {
+        let request = CancellationToken::default();
+        let job = CancellationScope::job(Some(request.clone()));
+        let peer = CancellationScope::job(Some(request.clone()));
+        // Scopes that are not jobs pass a failure on to the job around them.
+        let inner = CancellationScope::new(Some(job.token()));
+        let nested = CancellationScope::job(Some(inner.token()));
+        let (first, second) = (Probe::new(), Probe::new());
+
+        assert!(job.token().failure().is_none());
+        let held = inner.token().fail(|| first.clone()).unwrap();
+        assert!(same(&held, &first));
+        // The first failure stays, and the later one is not even built.
+        let held = job
+            .token()
+            .fail(|| -> Failure { panic!("already failed") })
+            .unwrap();
+        assert!(same(&held, &first));
+
+        assert!(same(&job.token().own_failure().unwrap(), &first));
+        assert!(inner.token().own_failure().is_none());
+        // Work started by the failed job is failed as well.
+        assert!(same(&nested.token().failure().unwrap(), &first));
+        assert!(nested.token().own_failure().is_none());
+        // A job below records its own failure and still reports it first.
+        let held = nested.token().fail(|| second.clone()).unwrap();
+        assert!(same(&held, &second));
+        assert!(same(&nested.token().failure().unwrap(), &second));
+        assert!(same(&job.token().failure().unwrap(), &first));
+
+        assert!(peer.token().failure().is_none());
+        assert!(request.failure().is_none());
+        assert_eq!(first.escalations() + second.escalations(), 0);
+    }
+
+    #[test]
+    fn work_outside_every_job_has_no_scope_for_a_failure() {
+        let request = CancellationToken::default();
+        let scope = CancellationScope::new(Some(request.clone()));
+        assert!(scope
+            .token()
+            .fail(|| -> Failure { panic!("no job to hold it") })
+            .is_none());
+        assert!(scope.token().failure().is_none());
+        assert!(fail_job(|| -> Failure { panic!("no token") }).is_none());
+        assert!(job_failure().is_none());
+    }
+
+    #[test]
+    fn a_used_job_hands_its_failure_on_and_the_last_one_escalates_it() {
+        let request = CancellationToken::default();
+        let outer = CancellationScope::job(Some(request.clone()));
+        let map = CancellationScope::new(Some(outer.token()));
+        let used = CancellationScope::job(Some(map.token()));
+        let dropped = CancellationScope::job(Some(map.token()));
+        let (kept, lost) = (Probe::new(), Probe::new());
+        used.token().fail(|| kept.clone()).unwrap();
+        dropped.token().fail(|| lost.clone()).unwrap();
+        assert!(outer.token().failure().is_none());
+
+        // The caller of the map uses one job and discards the other.
+        map.token().inherit(used.token().own_failure().unwrap());
+        drop(dropped);
+        assert!(same(&outer.token().own_failure().unwrap(), &kept));
+        assert_eq!(kept.escalations(), 0);
+
+        // Nothing encloses the outer job's caller.
+        request.inherit(outer.token().own_failure().unwrap());
+        assert_eq!(kept.escalations(), 1);
+        assert_eq!(lost.escalations(), 0);
+
+        // The thread's own token decides where a failure goes.
+        let other = Probe::new();
+        inherit_failure(other.clone());
+        assert_eq!(other.escalations(), 1);
+        let job = CancellationScope::job(None);
+        let _guard = CancellationGuard::new(Some(job.token()));
+        let third = Probe::new();
+        inherit_failure(third.clone());
+        assert_eq!(third.escalations(), 0);
+        assert!(same(&job_failure().unwrap(), &third));
+        assert!(same(&fail_job(|| other.clone()).unwrap(), &third));
+    }
+
+    #[test]
+    fn a_failed_job_does_not_fill_a_shared_cell() {
+        let cell = CancellableOnce::<usize, Cancelled>::default();
+        {
+            let job = CancellationScope::job(None);
+            let _guard = CancellationGuard::new(Some(job.token()));
+            // Failed before the build or during it: either way the value
+            // may rest on a placeholder.
+            assert_eq!(
+                cell.get_or_init(|| {
+                    fail_job(|| Probe::new()).unwrap();
+                    Ok(13)
+                }),
+                Ok(13)
+            );
+            assert_eq!(cell.get(), None);
+            assert_eq!(cell.get_or_init(|| Ok(14)), Ok(14));
+            assert_eq!(cell.get(), None);
+        }
+        assert_eq!(cell.get_or_init(|| Ok(42)), Ok(42));
         assert_eq!(cell.get(), Some(Ok(42)));
     }
 

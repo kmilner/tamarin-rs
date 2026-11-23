@@ -1321,7 +1321,7 @@ fn a_native_only_pool_leases_ready_members_without_a_process() {
 #[test]
 fn a_cancelled_job_latches_no_failure() {
     use tamarin_utils::cancellation::{CancellationGuard, CancellationScope, CancellationToken};
-    let caches = SharedMaudeCaches::default();
+    let caches = Arc::new(SharedMaudeCaches::default());
     let request = CancellationToken::default();
     let job = CancellationScope::new(Some(request.clone()));
     {
@@ -1342,6 +1342,212 @@ fn a_cancelled_job_latches_no_failure() {
         error,
         MaudeError::UnsupportedOperation("matching")
     ));
+}
+
+/// A parallel job that its caller may still discard holds its own failure.
+/// The job fails from then on, its peers and the session do not, and the
+/// session takes the failure over when the job's result is used.
+#[test]
+fn a_job_holds_its_failure_until_its_result_is_used() {
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationScope, CancellationToken};
+    let caches = Arc::new(SharedMaudeCaches::default());
+    let request = CancellationToken::default();
+    let map = CancellationScope::new(Some(request.clone()));
+    let used = CancellationScope::job(Some(map.token()));
+    let discarded = CancellationScope::job(Some(map.token()));
+    let peer = CancellationScope::job(Some(map.token()));
+    {
+        let _guard = CancellationGuard::new(Some(discarded.token()));
+        let error = caches.fail(|| NativeFailure::Unsupported("matching"));
+        assert!(matches!(
+            error,
+            MaudeError::UnsupportedOperation("matching")
+        ));
+        assert!(matches!(
+            job_status(),
+            Err(MaudeError::UnsupportedOperation("matching"))
+        ));
+    }
+    {
+        let _guard = CancellationGuard::new(Some(used.token()));
+        job_status().unwrap();
+        let error = caches.fail(|| NativeFailure::Absorbed("boom".into()));
+        assert!(error.to_string().contains("boom"), "{error}");
+        // The first failure stays the job's, and its nested work fails too.
+        let error = caches.fail(|| NativeFailure::Absorbed("later".into()));
+        assert!(error.to_string().contains("boom"), "{error}");
+        let nested = CancellationScope::new(Some(used.token()));
+        let _nested = CancellationGuard::new(Some(nested.token()));
+        let error = job_status().unwrap_err().to_string();
+        assert!(error.contains("boom"), "{error}");
+    }
+    {
+        let _guard = CancellationGuard::new(Some(peer.token()));
+        job_status().unwrap();
+    }
+    {
+        let _guard = CancellationGuard::new(Some(request.clone()));
+        job_status().unwrap();
+    }
+    job_status().unwrap();
+    assert!(caches.native_failure.get().is_none());
+
+    // The map hands on the failures of the jobs whose results it returns.
+    drop(discarded);
+    map.token().inherit(used.token().own_failure().unwrap());
+    let latched = caches.native_failure.get().unwrap().error().to_string();
+    assert!(latched.contains("boom"), "{latched}");
+    // From then on a job gets the session's failure.
+    let _guard = CancellationGuard::new(Some(peer.token()));
+    let error = caches.fail(|| NativeFailure::Unsupported("matching"));
+    assert!(error.to_string().contains("boom"), "{error}");
+    assert!(peer.token().own_failure().is_none());
+}
+
+/// A failed job may have gone on with a placeholder, so nothing it computes
+/// afterwards may reach the memos that other jobs read. Its backend calls
+/// fail on entry. The exchange below the entry points, which has no such
+/// check, still answers, and stores nothing.
+#[test]
+fn a_failed_job_writes_to_no_memo_of_a_maude_session() {
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationScope};
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let sig = crate::maude_sig::xor_maude_sig();
+    let handle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    let peer = handle.clone();
+    let var = |name: &'static str| crate::term::Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
+    let xor = |l: LNTerm, r: LNTerm| {
+        crate::term::f_app_ac(crate::function_symbols::AcSym::Xor, vec![l, r])
+    };
+    let eqs = [Equal {
+        lhs: xor(var("x"), var("a")),
+        rhs: xor(var("b"), var("y")),
+    }];
+    // x + x + a reduces to a.
+    let term = xor(xor(var("x"), var("x")), var("a"));
+    let command = || {
+        let mut ctx = ConvCtx::new();
+        let mt = lterm_to_mterm_global(&term, &mut ctx);
+        let mut cmd = b"reduce ".to_vec();
+        pp_mterm_into(&mt, &mut cmd);
+        cmd.extend_from_slice(b" .\n");
+        (cmd, ctx.variable_bound())
+    };
+    let stored = |handle: &MaudeHandle| {
+        let caches = &handle.caches;
+        (
+            caches.reduce.lock().unwrap().len(),
+            caches.unifiable.lock().unwrap().len(),
+            caches.reply.lock().unwrap().len(),
+        )
+    };
+
+    let job = CancellationScope::job(None);
+    {
+        let _guard = CancellationGuard::new(Some(job.token()));
+        assert!(handle.absorb(Err(MaudeError::Other("boom".into())), || true));
+        for error in [
+            handle.reduce(&term).unwrap_err(),
+            handle.unifiable(&eqs).unwrap_err(),
+            handle.unify(&eqs).unwrap_err(),
+            handle.has_match_eqs(&eqs).unwrap_err(),
+            handle.check_backend_status().unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("boom"), "{error}");
+        }
+        let (cmd, bound) = command();
+        handle
+            .execute_memo(&cmd, bound, Asked::Reduce, |_| {})
+            .unwrap();
+        assert_eq!(stored(&handle), (0, 0, 0));
+    }
+    // The session is intact, and intact work fills the memos.
+    peer.check_backend_status().unwrap();
+    handle.check_backend_status().unwrap();
+    assert_eq!(peer.reduce(&term).unwrap(), var("a"));
+    assert!(peer.unifiable(&eqs).unwrap());
+    let (cmd, bound) = command();
+    peer.execute_memo(&cmd, bound, Asked::Reduce, |_| {})
+        .unwrap();
+    let (reduced, unifiable, replies) = stored(&peer);
+    assert_eq!((reduced, unifiable), (1, 1));
+    assert!(replies >= 2, "{replies}");
+
+    // The job's result is used after all.
+    tamarin_utils::cancellation::inherit_failure(job.token().own_failure().unwrap());
+    let latched = peer.check_backend_status().unwrap_err().to_string();
+    assert!(latched.contains("boom"), "{latched}");
+}
+
+/// The same for the memos of a native-only session: the helpers below the
+/// entry points answer a failed job and keep the answer out of the session.
+#[cfg(feature = "lean-unification")]
+#[test]
+fn a_failed_job_writes_to_no_memo_of_a_native_session() {
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationScope};
+    let sig = crate::maude_sig::xor_maude_sig();
+    let handle =
+        MaudeHandle::start_with_backend("/nonexistent/maude", sig, AlgebraBackend::NativeOnly)
+            .unwrap();
+    let peer = handle.clone();
+    let var = |name: &'static str| crate::term::Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
+    let xor = |l: LNTerm, r: LNTerm| {
+        crate::term::f_app_ac(crate::function_symbols::AcSym::Xor, vec![l, r])
+    };
+    let eqs = [Equal {
+        lhs: xor(var("x"), var("a")),
+        rhs: xor(var("b"), var("y")),
+    }];
+    let term = xor(xor(var("x"), var("x")), var("a"));
+    let stored = |handle: &MaudeHandle| {
+        let caches = &handle.caches;
+        [
+            caches.reduce.lock().unwrap().len(),
+            caches.unifiable.lock().unwrap().len(),
+            caches.proved_unify.lock().unwrap().answers.len(),
+            caches.total_match.lock().unwrap().len(),
+            caches.has_match.lock().unwrap().len(),
+            caches.variant_checks.lock().unwrap().len(),
+            caches.unify_replies.size().0,
+            caches.unify_replies.existence_replies(),
+            usize::from(caches.reduction_table.lock().unwrap().is_some()),
+        ]
+    };
+    let below_the_entry_points = |handle: &MaudeHandle| {
+        // Each decision comes before the family that would answer it.
+        assert!(handle.proved_unifiable(&eqs).unwrap());
+        assert!(handle.proved_has_match(&eqs, |_| true, "matching").unwrap());
+        assert!(handle.total_match(&eqs, |_| true).unwrap().is_some());
+        assert!(handle.reduction_table().unwrap().is_some());
+        assert_eq!(handle.proved_reduce(&term).unwrap().0, var("a"));
+    };
+
+    let job = CancellationScope::job(None);
+    {
+        let _guard = CancellationGuard::new(Some(job.token()));
+        assert!(handle.absorb(Err(MaudeError::Other("boom".into())), || true));
+        for error in [
+            handle.reduce(&term).unwrap_err(),
+            handle.unifiable(&eqs).unwrap_err(),
+            handle.unify(&eqs).unwrap_err(),
+            handle.has_match_eqs(&eqs).unwrap_err(),
+            handle.variants(&term).unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("boom"), "{error}");
+        }
+        below_the_entry_points(&handle);
+        assert_eq!(stored(&handle), [0; 9]);
+    }
+    peer.check_backend_status().unwrap();
+    below_the_entry_points(&peer);
+    assert_eq!(peer.reduce(&term).unwrap(), var("a"));
+    assert!(!peer.unify(&eqs).unwrap().is_empty());
+    assert!(!peer.variants(&term).unwrap().is_empty());
+    let filled = stored(&peer);
+    assert!(filled.iter().all(|entries| *entries > 0), "{filled:?}");
+    peer.check_backend_status().unwrap();
 }
 
 /// Callers without an error channel absorb a backend error and continue

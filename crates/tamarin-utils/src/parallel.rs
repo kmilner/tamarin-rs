@@ -353,6 +353,13 @@ impl Drop for GroupGuard {
 /// gets cut is restarted by a branch that still needs the value.
 /// A cancelled waiter that is running a borrowed job leaves only once that
 /// job returns.
+///
+/// Nor is a value cached that was built under a failed job
+/// ([`CancellationToken::failure`]), by this initializer or before it: such
+/// a value may rest on a placeholder and must not reach other jobs. An
+/// initializer should return that failure itself. For one that returns a
+/// value all the same, the caller gets `Cancelled`, and the failure stays
+/// with its job.
 pub struct SharedOnce<T> {
     value: std::sync::OnceLock<T>,
     owner: parking_lot::Mutex<Option<Arc<Group>>>,
@@ -434,6 +441,11 @@ impl<T> SharedOnce<T> {
             };
             cancellation::check()?;
             let value = value?;
+            // The value of a failed job may rest on a placeholder. It is
+            // not shared, and the next caller builds its own.
+            if attempt.token().failure().is_some() {
+                return Err(Cancelled.into());
+            }
             return Ok(self.value.get_or_init(|| value));
         }
     }
@@ -653,7 +665,11 @@ where
 }
 
 /// Evaluate an ordered prefix, stopping at the first error or value satisfying
-/// `stop`, just as a sequential traversal would. Later speculative results may
+/// `stop`, just as a sequential traversal would. Each item runs as a job of
+/// its own ([`CancellationScope::job`]): a failure it could not return counts
+/// like a returned error, in that it ends the traversal at that item, and
+/// it is handed to the caller's job only if the item is part of the prefix
+/// that is returned. Later speculative results may
 /// finish first, but must never cancel an earlier task or change its outcome.
 /// A terminal result cancels only its suffix; all started work is joined before
 /// returning. Thus a required error cannot be trapped behind unbounded *later*
@@ -882,24 +898,35 @@ where
     cancellation::check()?;
     let scope = CancellationScope::new(cancellation::current());
     let token = scope.token();
-    let children: Vec<_> = (0..items.len())
-        .map(|_| CancellationScope::new(Some(token.clone())))
-        .collect();
+    // Each item is a job of its own: a later one is speculative until the
+    // earlier ones have finished without stopping the traversal.
+    let children: Arc<Vec<_>> = Arc::new(
+        (0..items.len())
+            .map(|_| CancellationScope::job(Some(token.clone())))
+            .collect(),
+    );
     let end = Arc::new(AtomicUsize::new(children.len()));
     let admission = CancellationScope::new(Some(token.clone()));
     let stop_admission = admission.token();
     let worker_end = end.clone();
+    let jobs = children.clone();
     let visit = move |worker: Option<W>, index: usize, item| {
         let end = &worker_end;
+        let children = &jobs;
         let _guard = CancellationGuard::new(Some(children[index].token()));
         if index > end.load(Ordering::Relaxed) || cancellation::check().is_err() {
             return None;
         }
         let result = work(worker, item);
-        if match &result {
-            Ok(value) => stop(value),
-            Err(_) => true,
-        } {
+        // A job that failed without returning the failure ends the traversal
+        // where it stands, as a returned error does: its value may rest on a
+        // placeholder, so nothing after it is wanted.
+        if children[index].token().own_failure().is_some()
+            || match &result {
+                Ok(value) => stop(value),
+                Err(_) => true,
+            }
+        {
             let previous = end.fetch_min(index, Ordering::Relaxed);
             if index < previous {
                 stop_admission.cancel();
@@ -915,11 +942,22 @@ where
         }
         Some(result)
     };
-    let results = lane_map(items, token, admission, acquire, visit)?;
+    let results = lane_map(items, token.clone(), admission, acquire, visit)?;
     cancellation::check()?;
+    let used = end.load(Ordering::Relaxed).saturating_add(1);
+    // The caller gets the results of this prefix, so their jobs' failures
+    // are the caller's from here on. The failures of the discarded suffix
+    // go with it.
+    for failure in children
+        .iter()
+        .take(used)
+        .filter_map(|job| job.token().own_failure())
+    {
+        token.inherit(failure);
+    }
     results
         .into_iter()
-        .take(end.load(Ordering::Relaxed).saturating_add(1))
+        .take(used)
         .map(|result| result.expect("required prefix was not cancelled"))
         .collect()
 }
@@ -955,6 +993,251 @@ mod tests {
             .num_threads(2)
             .build()
             .unwrap()
+    }
+
+    /// A job failure that counts how often it left the outermost job.
+    struct Failed(&'static str, AtomicUsize);
+
+    impl Failed {
+        fn new(name: &'static str) -> Arc<Self> {
+            Arc::new(Self(name, AtomicUsize::new(0)))
+        }
+        fn escalations(&self) -> usize {
+            self.1.load(Ordering::Relaxed)
+        }
+    }
+
+    impl cancellation::JobFailure for Failed {
+        fn escalate(&self) {
+            self.1.fetch_add(1, Ordering::Relaxed);
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    fn name(failure: Option<cancellation::Failure>) -> Option<&'static str> {
+        failure.map(|failure| failure.as_any().downcast_ref::<Failed>().unwrap().0)
+    }
+
+    /// The speculative item of an ordered map fails while it is still
+    /// wanted, and only then does the earlier item stop the traversal. The
+    /// failure is discarded with the item, for one worker and for several.
+    #[test]
+    fn ordered_map_discards_the_failure_of_a_discarded_job() {
+        let failed = Failed::new("speculative");
+        let pool = pool();
+        let outcome = pool.install(|| {
+            let job = CancellationScope::job(None);
+            let _guard = CancellationGuard::new(Some(job.token()));
+            let (recorded, wait) = mpsc::channel();
+            let wait = Mutex::new(wait);
+            let failure = failed.clone();
+            let results = try_map_until(
+                vec![0, 1],
+                move |item| {
+                    if item == 0 {
+                        // Stop only once the later item has failed.
+                        wait.lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(10))
+                            .unwrap();
+                    } else {
+                        assert!(cancellation::check().is_ok());
+                        let failure = failure.clone();
+                        cancellation::fail_job(move || failure).unwrap();
+                        recorded.send(()).unwrap();
+                    }
+                    Ok::<_, Error>(item)
+                },
+                |item| *item == 0,
+            );
+            (results, name(job.token().own_failure()))
+        });
+        assert_eq!(outcome, (Ok(vec![0]), None));
+        assert_eq!(failed.escalations(), 0);
+    }
+
+    /// A job of the returned prefix that failed without returning an error
+    /// ends the traversal like one that returned it, and its failure
+    /// becomes the caller's: the job around the map holds it, or it is
+    /// escalated when there is none. One worker and two behave alike.
+    #[test]
+    fn ordered_map_hands_on_the_failure_of_a_used_job() {
+        for threads in [1, 2] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            let run = |failed: Arc<Failed>| {
+                try_map_until(
+                    vec![0, 1, 2, 3],
+                    move |item| {
+                        if item == 1 {
+                            let failure = failed.clone();
+                            cancellation::fail_job(move || failure).unwrap();
+                            // The rest of the job sees its own failure.
+                            assert_eq!(name(cancellation::job_failure()), Some("used"));
+                        } else if item > 1 {
+                            // Later jobs are speculative. They never see a
+                            // failure of the job before them, and are cut.
+                            assert_eq!(name(cancellation::job_failure()), None);
+                            std::thread::sleep(Duration::from_millis(20));
+                            cancellation::check()?;
+                        }
+                        Ok::<_, Error>(item)
+                    },
+                    |_| false,
+                )
+            };
+            let failed = Failed::new("used");
+            let inner = failed.clone();
+            let outcome = pool.install(move || {
+                let job = CancellationScope::job(None);
+                let _guard = CancellationGuard::new(Some(job.token()));
+                (run(inner), name(job.token().own_failure()))
+            });
+            assert_eq!(outcome, (Ok(vec![0, 1]), Some("used")), "{threads}");
+            assert_eq!(failed.escalations(), 0);
+
+            // No job around the map.
+            let failed = Failed::new("used");
+            let inner = failed.clone();
+            assert_eq!(pool.install(move || run(inner)), Ok(vec![0, 1]));
+            assert_eq!(failed.escalations(), 1, "{threads}");
+            // Nor one around its caller's request.
+            let failed = Failed::new("used");
+            let inner = failed.clone();
+            let request = CancellationToken::default();
+            let outcome = pool.install(move || {
+                let _guard = CancellationGuard::new(Some(request.clone()));
+                (run(inner), name(request.failure()))
+            });
+            assert_eq!(outcome, (Ok(vec![0, 1]), None));
+            assert_eq!(failed.escalations(), 1, "{threads}");
+        }
+    }
+
+    /// The earliest failed job of the prefix is the one that counts, also
+    /// when a later job failed first in time, and an error an earlier job
+    /// returns supersedes both.
+    #[test]
+    fn ordered_map_reports_failures_in_traversal_order() {
+        let pool = pool();
+        let run = |error_first: bool| {
+            let (early, late) = (Failed::new("early"), Failed::new("late"));
+            let failures = (early.clone(), late.clone());
+            let outcome = pool.install(move || {
+                let job = CancellationScope::job(None);
+                let _guard = CancellationGuard::new(Some(job.token()));
+                let (recorded, wait) = mpsc::channel();
+                let wait = Mutex::new(wait);
+                let results = try_map_until(
+                    vec![0, 1],
+                    move |item| {
+                        if item == 1 {
+                            let failure = failures.1.clone();
+                            cancellation::fail_job(move || failure).unwrap();
+                            recorded.send(()).unwrap();
+                            return Ok(item);
+                        }
+                        wait.lock()
+                            .unwrap()
+                            .recv_timeout(Duration::from_secs(10))
+                            .unwrap();
+                        if error_first {
+                            return Err(Error::Failed);
+                        }
+                        let failure = failures.0.clone();
+                        cancellation::fail_job(move || failure).unwrap();
+                        Ok(item)
+                    },
+                    |_| false,
+                );
+                (results, name(job.token().own_failure()))
+            });
+            assert_eq!(early.escalations() + late.escalations(), 0);
+            outcome
+        };
+        assert_eq!(run(false), (Ok(vec![0]), Some("early")));
+        assert_eq!(run(true), (Err(Error::Failed), None));
+    }
+
+    /// Every item of a fail-fast map is wanted, so its jobs have no scope
+    /// of their own: a failure goes straight to the job around the map.
+    #[test]
+    fn fail_fast_map_records_failures_on_the_job_around_it() {
+        let pool = pool();
+        let failed = Failed::new("item");
+        let inner = failed.clone();
+        let outcome = pool.install(move || {
+            let job = CancellationScope::job(None);
+            let _guard = CancellationGuard::new(Some(job.token()));
+            let results = try_map(vec![0, 1], move |item| {
+                if item == 1 {
+                    let failure = inner.clone();
+                    cancellation::fail_job(move || failure).unwrap();
+                }
+                Ok::<_, Error>(item)
+            });
+            (results, name(job.token().own_failure()))
+        });
+        assert_eq!(outcome, (Ok(vec![0, 1]), Some("item")));
+        assert_eq!(failed.escalations(), 0);
+        // Without a job around the map there is nothing to hold it, and the
+        // caller records it for the whole run.
+        let held = pool.install(|| {
+            try_map(vec![0, 1], |_| {
+                Ok::<_, Error>(
+                    cancellation::fail_job(|| -> cancellation::Failure {
+                        panic!("no job to hold a failure")
+                    })
+                    .is_some(),
+                )
+            })
+        });
+        assert_eq!(held, Ok(vec![false, false]));
+    }
+
+    /// A value built under a failed job is not shared: the job that built
+    /// it keeps the failure, and the next caller builds its own.
+    #[test]
+    fn shared_once_keeps_no_value_of_a_failed_job() {
+        let cell = SharedOnce::<usize>::default();
+        let failed = Failed::new("build");
+        {
+            let job = CancellationScope::job(None);
+            let _guard = CancellationGuard::new(Some(job.token()));
+            let failure = failed.clone();
+            assert_eq!(
+                cell.get_or_try_init(move || {
+                    cancellation::fail_job(move || failure).unwrap();
+                    Ok::<_, Error>(1)
+                }),
+                Err(Error::Cancelled)
+            );
+            assert_eq!(cell.get(), None);
+            assert_eq!(name(job.token().own_failure()), Some("build"));
+            // Nor one built after the job failed.
+            assert_eq!(
+                cell.get_or_try_init(|| Ok::<_, Error>(2)),
+                Err(Error::Cancelled)
+            );
+            assert_eq!(cell.get(), None);
+            // A value that is there already is still read.
+            let ready = SharedOnce::<usize>::default();
+            {
+                let _outside = CancellationGuard::new(None);
+                assert_eq!(ready.get_or_try_init(|| Ok::<_, Error>(3)), Ok(&3));
+            }
+            assert_eq!(
+                ready.get_or_try_init(|| -> Result<usize, Error> { panic!("built already") }),
+                Ok(&3)
+            );
+        }
+        assert_eq!(cell.get_or_try_init(|| Ok::<_, Error>(7)), Ok(&7));
+        assert_eq!(cell.get(), Some(&7));
+        assert_eq!(failed.escalations(), 0);
     }
 
     // A cancellable operation which cannot finish until its sibling fails.

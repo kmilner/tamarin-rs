@@ -1286,18 +1286,22 @@ impl ProverSession {
             let session = self.clone();
             move || {
                 let mut ctx = session.fresh_context(&maude);
-                if kind == SourceKind::RawSources {
-                    return ctx.build_sources();
-                }
-                let assumptions = session.source_assumptions.as_ref().clone()?;
-                let raw = session.sources(SourceKind::RawSources, &ctx.maude)?;
-                ctx.use_materialized_sources(raw);
-                crate::constraint::solver::sources::refine_with_source_asms(
-                    ctx.full_sources.to_vec(),
-                    &assumptions,
-                    &ctx,
-                )
-                .map(Arc::new)
+                let built = if kind == SourceKind::RawSources {
+                    ctx.build_sources()?
+                } else {
+                    let assumptions = session.source_assumptions.as_ref().clone()?;
+                    let raw = session.sources(SourceKind::RawSources, &ctx.maude)?;
+                    ctx.use_materialized_sources(raw);
+                    Arc::new(crate::constraint::solver::sources::refine_with_source_asms(
+                        ctx.full_sources.to_vec(),
+                        &assumptions,
+                        &ctx,
+                    )?)
+                };
+                // Every proof of the session reads this set. One built past
+                // a failed algebra query is not stored.
+                maude.check_backend_status()?;
+                Ok(built)
             }
         })
     }
@@ -1306,11 +1310,13 @@ impl ProverSession {
 /// Release a proof tree only while the algebra backend is intact.
 ///
 /// Some solver passes have no error channel and continue past a failed
-/// algebra query with a placeholder; the backend latches that failure
+/// algebra query with a placeholder; the backend records that failure
 /// (`MaudeHandle::record_failure`). Every proving entry point passes its
 /// result through here, so each frontend reports the failure instead of a
-/// tree built on the placeholder. The latch belongs to the session, so a
-/// failure in any of its parallel jobs withholds every tree.
+/// tree built on the placeholder. The record belongs to the work that ran
+/// into the failure: a parallel job of the search holds its own until its
+/// result is used, and from then on the session does, which withholds
+/// every tree.
 fn publish_proof(
     ctx: &ProofContext,
     result: Result<ProofNode, ProveError>,

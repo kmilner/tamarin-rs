@@ -502,3 +502,81 @@ fn stdout_is_the_same_for_one_worker_and_for_many() {
         }
     }
 }
+
+/// What a run printed and how it ended, without the line that times it.
+#[cfg(feature = "lean-unification")]
+fn outcome(output: &Output) -> (Option<i32>, String, String) {
+    let stdout = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.contains("processing time"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let error = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .filter(|line| line.starts_with("error:"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    (output.status.code(), stdout, error)
+}
+
+/// A failed algebra query belongs to the search job that ran into it. The
+/// case `Hard` runs out of budget, and a search on one worker never visits
+/// it: `Easy` comes first and is solved. On eight workers `Hard` is started
+/// beside `Easy`, fails while it is still wanted, and is discarded once
+/// `Easy` is solved. Its failure must go with it, so that the run ends as
+/// it does on one worker.
+#[cfg(feature = "lean-unification")]
+#[test]
+fn a_discarded_search_job_takes_its_failure_with_it() {
+    let fixture = Fixture::new(include_str!("fixtures/native_budget_speculative.spthy"));
+    for budget in ["4000000", "100000"] {
+        let prove = |workers: &str| {
+            let output = fixture
+                .command()
+                .env("TAM_RS_ALGEBRA_SEARCH_WORK", budget)
+                .args(["--processors", workers, "--prove"])
+                .arg(fixture.dir.join("input.spthy"))
+                .output()
+                .unwrap();
+            outcome(&output)
+        };
+        let serial = prove("1");
+        assert_eq!(serial.0, Some(0), "{serial:?}");
+        assert!(
+            serial.1.contains("reach (exists-trace): verified"),
+            "{serial:?}"
+        );
+        for _ in 0..5 {
+            assert_eq!(prove("8"), serial, "budget {budget}");
+        }
+    }
+}
+
+/// The counterpart: the case that runs out of budget is the first one, so a
+/// search on one worker visits it and fails. Eight workers must fail with
+/// the same error and print the same, however the job that failed and the
+/// jobs beside it are scheduled.
+#[cfg(feature = "lean-unification")]
+#[test]
+fn a_failure_on_the_path_of_the_search_fails_every_number_of_workers() {
+    let fixture = Fixture::new(include_str!("fixtures/native_budget_required.spthy"));
+    for budget in ["4000000", "100000"] {
+        let prove = |workers: &str| {
+            let output = fixture
+                .command()
+                .env("TAM_RS_ALGEBRA_SEARCH_WORK", budget)
+                .args(["--processors", workers, "--prove"])
+                .arg(fixture.dir.join("input.spthy"))
+                .output()
+                .unwrap();
+            outcome(&output)
+        };
+        let serial = prove("1");
+        assert_eq!(serial.0, Some(1), "{serial:?}");
+        assert!(serial.2.contains("out of budget"), "{serial:?}");
+        assert!(!serial.1.contains("verified"), "{serial:?}");
+        for _ in 0..5 {
+            assert_eq!(prove("8"), serial, "budget {budget}");
+        }
+    }
+}

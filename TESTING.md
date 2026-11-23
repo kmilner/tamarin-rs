@@ -906,19 +906,44 @@ do not take turns on it: each answer is computed on the calling Rayon worker
 64 MiB stacks), no lock is held across a call into the Lean library, and the
 session memos sit behind their own short locks. An answer is a function of
 the request alone, so a job gets the same answer whether it computes it or
-reads what another job stored, and stdout is the same for every
-`--processors` (a latched failure, below, is the exception).
+reads what another job stored, and stdout and the exit status are the same
+for every `--processors`, also when the backend fails (below).
 
 A search under a cancelled scope stops inside its Lean call: the call polls
 the flag of the scope its job runs under, and a request on any enclosing
 token raises that flag at once. A stopped call returns no reply, so nothing
 is stored, and it is a cancellation, never a failure of the session. A job
-that runs into a failure after its request was cancelled latches nothing
-either. A failure that a live job runs into is latched for the whole
-session, as on one worker; that includes a speculative job, on a branch that
-a one-worker search would not have reached, whose scope has not been
-cancelled yet. Such a run ends in the error where `--processors=1` would
-have finished: never in a different verdict.
+that runs into a failure after its request was cancelled records nothing
+either.
+
+A failure that a live job runs into (an unsupported request, an exhausted
+search budget, an error absorbed where there is no error channel) is held by
+that job, not by the session. The jobs in question are the cases of a forked
+search node and the rules of the derivation checks, which run as an ordered
+map (`tamarin_utils::parallel::try_map_until`) whose later items are
+speculative; each item has a scope of its own
+(`CancellationScope::job`) that holds its first failure.
+
+- Inside the failed job every further backend call fails with that failure,
+  and `MaudeHandle::check_backend_status` fails. Nothing the job computes
+  afterwards leaves it: the session memos take no entry from a failed job,
+  a source set built under one is not stored
+  (`SharedOnce`, `SourceSlot`), and the job's result is the failure
+  (`visit_forked` checks the status before it returns a case).
+- A failed job ends the traversal of its map where a returned error would.
+  If the map returns the job's result, the failure moves to the job around
+  the map, and from the outermost job to the session latch, which fails the
+  run with the message a one-worker run prints. If an earlier case stops
+  the traversal first, the job is discarded and its failure with it.
+- Work outside such a job (the main thread, a lemma of a batch, a source
+  build that a lemma starts) is always wanted, and its failures go to the
+  job around it or straight to the session latch, as on one worker.
+
+So a run fails for every `--processors` exactly when it fails for one, with
+the same message. `a_discarded_search_job_takes_its_failure_with_it` and
+`a_failure_on_the_path_of_the_search_fails_every_number_of_workers`
+(`crates/tamarin-prover/tests/native_backend.rs`) run both directions on
+one and eight workers under a reduced `TAM_RS_ALGEBRA_SEARCH_WORK`.
 
 The provenance tally (`[ALGEBRA_PROVENANCE]`, stderr) counts what the jobs
 asked, so its split between fresh and cached answers, and the requests of
