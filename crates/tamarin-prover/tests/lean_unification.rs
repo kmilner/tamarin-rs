@@ -85,6 +85,8 @@ fn native_only_proof_rests_on_the_proved_exports_and_matches_maude() {
             );
         }
     }
+    // No reduction of the native run is a Rust shortcut.
+    assert_eq!(provenance(&native_stderr, "reduce", "shared_rust"), 0);
     for command in ["unify", "match", "reduce", "variants"] {
         assert_eq!(provenance(&native_stderr, command, "maude"), 0);
         assert_eq!(provenance(&maude_stderr, command, "proved"), 0);

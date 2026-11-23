@@ -1615,8 +1615,15 @@ impl MaudeHandle {
             fresh_counter: Arc::new(AtomicU64::new(0)),
             native_declarations: (backend == AlgebraBackend::NativeOnly)
                 .then(|| Arc::new(sig.declared_fun_syms())),
-            reduce_by_symbol: indexed && sig.has_no_ac_operators(),
-            reduce_by_structure: indexed && sig.st_lhs_all_ac_c_free(),
+            // The two normal-form shortcuts of `reduce` save a round trip to
+            // Maude. Native-only has none to save: every reduction is the
+            // proved export's, at no measurable cost.
+            reduce_by_symbol: backend != AlgebraBackend::NativeOnly
+                && indexed
+                && sig.has_no_ac_operators(),
+            reduce_by_structure: backend != AlgebraBackend::NativeOnly
+                && indexed
+                && sig.st_lhs_all_ac_c_free(),
             sig,
             #[cfg(feature = "lean-unification")]
             native_rules: Default::default(),
@@ -2190,9 +2197,8 @@ impl MaudeHandle {
                     .record(Asked::Reduce, Origin::SharedRust);
                 return Ok(t.clone());
             }
-            // Native-only normalizes through the proved exports alone. The two
-            // checks above are Tamarin's own normal-form shortcuts, which the
-            // Maude backend runs identically before its round trip.
+            // Native-only normalizes through the proved exports alone: the two
+            // shortcuts above are off for it.
             #[cfg(feature = "lean-unification")]
             if self.backend == AlgebraBackend::NativeOnly {
                 // No lock is held across the search: a failed or cancelled
