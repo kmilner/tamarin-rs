@@ -1,7 +1,7 @@
 //! Request-local identity interning. Keys are full Rust values; hashes are
 //! lookup accelerators, never semantic IDs. The reference transition and its
 //! injectivity/stable-ID proofs live in the solver's
-//! [IdentityTable module](https://github.com/kmilner/tamarin-algebra/blob/3aabc7c427535f4a3dd35f6ca7666b7e07c40679/lean/Tamarin/IdentityTable.lean).
+//! [IdentityTable module](https://github.com/kmilner/tamarin-algebra/blob/5b194ad1e70426a3f8e9e5884593d9bf8fff2772/lean/Tamarin/IdentityTable.lean).
 //! Rust/C correspondence is still part of the trusted boundary.
 
 use rustc_hash::FxHashMap;
