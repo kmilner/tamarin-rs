@@ -231,7 +231,9 @@ fn read_named(
             // Every arm lists the query variables as the tables do, in
             // whole tokens, also an arm that is not read.
             let (whole, rest) = tokens.as_chunks::<3>();
-            let head = usize::try_from(2 * row).ok().and_then(|at| heads.get(at..at + 2));
+            let head = usize::try_from(2 * row)
+                .ok()
+                .and_then(|at| heads.get(at..at + 2));
             if head != Some(&[*key, *declared]) || !rest.is_empty() {
                 return Err(malformed);
             }
@@ -240,7 +242,10 @@ fn read_named(
                 let stands = matches!(tokens, [0, id, sort]
                     if table.get(&(*id, *sort)) == Some(&Target::Row(row)));
                 if !stands {
-                    let var = packet.variables.get(*key).ok_or(Error::InvalidVariable(*key))?;
+                    let var = packet
+                        .variables
+                        .get(*key)
+                        .ok_or(Error::InvalidVariable(*key))?;
                     let (image, actual) = packet.read_image(tokens, nat, |kind, id, aux| {
                         let Some(Target::Name(hint, idx)) = table.get(&(id, aux)).copied() else {
                             return Err(Error::InvalidVariable(id));
@@ -361,7 +366,13 @@ impl Unifiers {
         if rows.next() != Some(Some(&[1])) {
             return Err(malformed);
         }
-        let reserved: FxHashSet<u64> = self.packet.variables.values().iter().map(|v| v.idx).collect();
+        let reserved: FxHashSet<u64> = self
+            .packet
+            .variables
+            .values()
+            .iter()
+            .map(|v| v.idx)
+            .collect();
         let hint = LVar::new("x", LSort::Msg, 0).name;
         let mut views: Vec<ArmView> = Vec::new();
         let mut names: FxHashMap<(u64, u64), usize> = FxHashMap::default();
@@ -388,7 +399,11 @@ impl Unifiers {
                 continue;
             };
             let view = views.last_mut().ok_or(malformed)?;
-            let var = self.packet.variables.get(*key).ok_or(Error::InvalidVariable(*key))?;
+            let var = self
+                .packet
+                .variables
+                .get(*key)
+                .ok_or(Error::InvalidVariable(*key))?;
             let mut witness = |id: u64, aux: u64| -> Result<LVar, Error> {
                 let at = match names.get(&(id, aux)) {
                     Some(at) => *at,
@@ -396,7 +411,14 @@ impl Unifiers {
                         let idx = unused.next().ok_or(Error::FreshVariableOverflow)?;
                         let sort = sort(aux)?;
                         names.insert((id, aux), view.witnesses.len());
-                        view.witnesses.push((LVar { name: hint, sort, idx }, 0));
+                        view.witnesses.push((
+                            LVar {
+                                name: hint,
+                                sort,
+                                idx,
+                            },
+                            0,
+                        ));
                         view.witnesses.len() - 1
                     }
                 };
@@ -855,8 +877,10 @@ impl Packet {
     }
 
     pub(super) fn read_term(&self, words: &[u64], nat: bool) -> Result<LNTerm, Error> {
-        self.read_image(words, nat, |kind, id, aux| self.input_variable(kind, id, aux))
-            .map(|(t, _)| t)
+        self.read_image(words, nat, |kind, id, aux| {
+            self.input_variable(kind, id, aux)
+        })
+        .map(|(t, _)| t)
     }
 }
 

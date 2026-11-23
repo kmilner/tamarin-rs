@@ -359,10 +359,9 @@ pub(crate) mod imp {
         );
         rule(
             &mut s,
-            Pre.build(vec![Senc.build(vec![
-                Pair.build(vec![x.clone(), y]),
-                z.clone(),
-            ])]),
+            Pre.build(vec![
+                Senc.build(vec![Pair.build(vec![x.clone(), y]), z.clone()])
+            ]),
             Senc.build(vec![x.clone(), z]),
         );
         rule(&mut s, C0.build(vec![x.clone()]), C1.build(vec![x.clone()]));
@@ -1117,7 +1116,10 @@ pub(crate) mod imp {
     /// Unification queries of every signature this fuzzer knows, by the name of the
     /// signature, for the wire tests of `tamarin-term` (`lean_unification/whole/wire_tests.rs`),
     /// which include this file as a module.
-    pub(crate) fn wire_samples(seed: u64, per_sig: usize) -> Vec<(&'static str, MaudeSig, Vec<Eqs>)> {
+    pub(crate) fn wire_samples(
+        seed: u64,
+        per_sig: usize,
+    ) -> Vec<(&'static str, MaudeSig, Vec<Eqs>)> {
         let mut out = Vec::new();
         for (at, si) in sigs().into_iter().enumerate() {
             let mut rng = Rng::new(seed.wrapping_add(at as u64));
@@ -1125,7 +1127,11 @@ pub(crate) mod imp {
             while queries.len() < per_sig {
                 // Three in ten from the AC shape templates.
                 let q = gen_query(&mut rng, &si, &[1, 0, 0, 0, 0], false, 30);
-                let q = if rng.pct(50) { spread_indices(&q, &mut rng) } else { q };
+                let q = if rng.pct(50) {
+                    spread_indices(&q, &mut rng)
+                } else {
+                    q
+                };
                 if let Q::Unify(eqs, _) = q {
                     queries.push(eqs);
                 }
@@ -1493,7 +1499,11 @@ pub(crate) mod imp {
                         me.bag(items)
                     };
                     let deep = self.rng.pct(30);
-                    let free = if !self.nat && self.rng.pct(20) { F } else { Pair };
+                    let free = if !self.nat && self.rng.pct(20) {
+                        F
+                    } else {
+                        Pair
+                    };
                     let side = |me: &mut Self| {
                         let (a, b) = (small(me), small(me));
                         if deep {

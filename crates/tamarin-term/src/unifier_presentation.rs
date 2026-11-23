@@ -422,7 +422,8 @@ mod tests {
         // one witness are looked at. It is not read back as the composition,
         // which is what the caller tests.
         let deeper = vec![(a, f(vec![f(vec![v(w)])])), (b, v(w))];
-        let presented = present(&factored, &residual, &views(std::slice::from_ref(&deeper))).unwrap();
+        let presented =
+            present(&factored, &residual, &views(std::slice::from_ref(&deeper))).unwrap();
         assert_ne!(read_back(&deeper, &presented[0]), presented[0].expected);
     }
 
@@ -498,7 +499,10 @@ mod tests {
         for arm in &mut partial {
             arm.images.retain(|(key, _)| [a, b, c, d].contains(key));
         }
-        assert_eq!(present(&factored, &residual, &partial).as_ref(), Some(&presented));
+        assert_eq!(
+            present(&factored, &residual, &partial).as_ref(),
+            Some(&presented)
+        );
         for arm in &mut partial {
             arm.images.clear();
         }

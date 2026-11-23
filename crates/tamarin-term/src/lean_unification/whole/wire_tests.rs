@@ -43,7 +43,10 @@ fn request_term(packet: &Packet, rows: &[&[u64]], node: u64) -> LNTerm {
     let row = rows[node as usize];
     match row {
         [0, id, sort] => {
-            let v = packet.variables.get(*id).expect("a variable row names a variable");
+            let v = packet
+                .variables
+                .get(*id)
+                .expect("a variable row names a variable");
             assert_eq!(sort_word(v.sort), *sort);
             Term::Lit(Lit::Var(v))
         }
@@ -53,7 +56,10 @@ fn request_term(packet: &Packet, rows: &[&[u64]], node: u64) -> LNTerm {
             Term::Lit(Lit::Con(name))
         }
         [kind, id, children @ ..] => {
-            let f = packet.symbols.get(*id).expect("an application row names an operator");
+            let f = packet
+                .symbols
+                .get(*id)
+                .expect("an application row names an operator");
             assert!(matches!(
                 (kind, f),
                 (2, FunSym::NoEq(_)) | (3, FunSym::C(_)) | (4, FunSym::Ac(_))
@@ -107,14 +113,15 @@ fn a_term_sent_through_the_matcher_comes_back_as_itself() {
     for (name, sig, queries) in samples() {
         for term in queries.iter().flatten().flat_map(|e| [&e.lhs, &e.rhs]) {
             let query = [Equal::new(Term::Lit(Lit::Var(probe)), term.clone())];
-            let answers = match crate::lean_unification::match_modulo_attributes(&sig, &query, |v| {
-                *v == probe
-            })
-            .unwrap()
-            {
-                Outcome::Complete(answers) => answers,
-                Outcome::Unsupported => panic!("{name}: a term outside the module"),
-            };
+            let answers =
+                match crate::lean_unification::match_modulo_attributes(&sig, &query, |v| {
+                    *v == probe
+                })
+                .unwrap()
+                {
+                    Outcome::Complete(answers) => answers,
+                    Outcome::Unsupported => panic!("{name}: a term outside the module"),
+                };
             // A term without a sort is no image of the probe.
             if answers.is_empty() {
                 unsorted += 1;
@@ -151,12 +158,14 @@ fn requests_that_differ_have_different_words() {
     };
     let mut sig = sig;
     for name in ["wf", "wg"] {
-        sig = sig.add_fun_sym(crate::function_symbols::UserDefinedSym::NoEqUser(NoEqSym::new(
-            name,
-            1,
-            crate::function_symbols::Privacy::Public,
-            crate::function_symbols::Constructability::Constructor,
-        )));
+        sig = sig.add_fun_sym(crate::function_symbols::UserDefinedSym::NoEqUser(
+            NoEqSym::new(
+                name,
+                1,
+                crate::function_symbols::Privacy::Public,
+                crate::function_symbols::Constructability::Constructor,
+            ),
+        ));
     }
     let (a, b) = (pub_term("a"), pub_term("b"));
     let (x, y) = (var("x", LSort::Msg, 0), var("y", LSort::Msg, 0));
@@ -186,9 +195,15 @@ fn requests_that_differ_have_different_words() {
         // A free and an associative-commutative operator.
         vec![eq(pair(&x, &y), a.clone()), eq(mult(&x, &y), a.clone())],
         // One associative-commutative operator twice, or two of them.
-        vec![eq(mult(&x, &y), mult(&a, &b)), eq(mult(&x, &y), xor(&a, &b))],
+        vec![
+            eq(mult(&x, &y), mult(&a, &b)),
+            eq(mult(&x, &y), xor(&a, &b)),
+        ],
         // The order of the arguments of a free operator.
-        vec![eq(pair(&a, &x), pair(&x, &y)), eq(pair(&x, &a), pair(&x, &y))],
+        vec![
+            eq(pair(&a, &x), pair(&x, &y)),
+            eq(pair(&x, &a), pair(&x, &y)),
+        ],
         // One operator twice, or two operators of one arity.
         vec![
             eq(unary("wf", x.clone()), unary("wf", a.clone())),
@@ -196,9 +211,18 @@ fn requests_that_differ_have_different_words() {
         ],
         // The sides of the equations.
         vec![
-            vec![Equal::new(x.clone(), a.clone()), Equal::new(y.clone(), b.clone())],
-            vec![Equal::new(x.clone(), a.clone()), Equal::new(y.clone(), a.clone())],
-            vec![Equal::new(x.clone(), y.clone()), Equal::new(a.clone(), b.clone())],
+            vec![
+                Equal::new(x.clone(), a.clone()),
+                Equal::new(y.clone(), b.clone()),
+            ],
+            vec![
+                Equal::new(x.clone(), a.clone()),
+                Equal::new(y.clone(), a.clone()),
+            ],
+            vec![
+                Equal::new(x.clone(), y.clone()),
+                Equal::new(a.clone(), b.clone()),
+            ],
         ],
         // The number of operands of an associative-commutative operator.
         vec![
@@ -225,7 +249,9 @@ fn requests_that_differ_have_different_words() {
             pair(&var("k", LSort::Msg, 3), &var("k", LSort::Msg, 7)),
         ),
     ];
-    assert!(same.iter().all(|eqs| words(&sig, eqs) == words(&sig, &same[0])));
+    assert!(same
+        .iter()
+        .all(|eqs| words(&sig, eqs) == words(&sig, &same[0])));
     assert_eq!(
         words(&sig, &eq(unary("wf", x.clone()), unary("wf", a.clone()))),
         words(&sig, &eq(unary("wg", x.clone()), unary("wg", a.clone())))
@@ -235,8 +261,20 @@ fn requests_that_differ_have_different_words() {
         words(&sig, &eq(xor(&x, &y), a.clone()))
     );
     assert_eq!(
-        words(&sig, &[Equal::new(x.clone(), a.clone()), Equal::new(y.clone(), b.clone())]),
-        words(&sig, &[Equal::new(x.clone(), b.clone()), Equal::new(y.clone(), a.clone())])
+        words(
+            &sig,
+            &[
+                Equal::new(x.clone(), a.clone()),
+                Equal::new(y.clone(), b.clone())
+            ]
+        ),
+        words(
+            &sig,
+            &[
+                Equal::new(x.clone(), b.clone()),
+                Equal::new(y.clone(), a.clone())
+            ]
+        )
     );
 }
 
@@ -280,7 +318,10 @@ fn a_changed_variable_changes_the_words_and_a_renaming_does_not() {
                 .iter()
                 .map(|e| {
                     let mut far = |v: LVar| LVar::new(format!("{}w", v.name), v.sort, v.idx + 1000);
-                    Equal::new(e.lhs.clone().map_free(&mut far), e.rhs.clone().map_free(&mut far))
+                    Equal::new(
+                        e.lhs.clone().map_free(&mut far),
+                        e.rhs.clone().map_free(&mut far),
+                    )
                 })
                 .collect();
             // A renaming can reorder the operands of an AC operator, and with
@@ -288,8 +329,10 @@ fn a_changed_variable_changes_the_words_and_a_renaming_does_not() {
             let order = |eqs: &[Equal<LNTerm>]| {
                 let mut out = Vec::new();
                 for e in eqs {
-                    e.lhs.for_each_free(&mut |v| out.push((v.sort, v.idx % 1000)));
-                    e.rhs.for_each_free(&mut |v| out.push((v.sort, v.idx % 1000)));
+                    e.lhs
+                        .for_each_free(&mut |v| out.push((v.sort, v.idx % 1000)));
+                    e.rhs
+                        .for_each_free(&mut |v| out.push((v.sort, v.idx % 1000)));
                 }
                 out
             };
@@ -330,7 +373,11 @@ fn a_changed_variable_changes_the_words_and_a_renaming_does_not() {
             if let Some(packet) =
                 Packet::encode_total(&sig, resorted.iter().flat_map(|e| [&e.lhs, &e.rhs])).unwrap()
             {
-                assert_ne!(before, packet.request_words(), "{name}: {eqs:?} sort of {old:?}");
+                assert_ne!(
+                    before,
+                    packet.request_words(),
+                    "{name}: {eqs:?} sort of {old:?}"
+                );
                 changed += 1;
             }
         }
@@ -367,7 +414,12 @@ fn library_reading(tables: &[u64], nat: bool, reply: &[u64]) -> Vec<u64> {
 /// `[key, sort, tokens]` binds the variable in row `key` of the request, and a
 /// token of kind `5 + sort` is the variable with that sort, the index in its
 /// second word and the name hint its third word identifies.
-fn named_members(packet: &Packet, labels: &Labels, read: &[u64], nat: bool) -> Option<Substitutions> {
+fn named_members(
+    packet: &Packet,
+    labels: &Labels,
+    read: &[u64],
+    nat: bool,
+) -> Option<Substitutions> {
     let mut rows = rows_of(read);
     if rows.next()?? != [1] {
         return None;
@@ -383,7 +435,11 @@ fn named_members(packet: &Packet, labels: &Labels, read: &[u64], nat: bool) -> O
             .read_image(tokens, nat, |kind, id, hint| {
                 let name = labels.hints.get(hint).ok_or(Error::InvalidVariable(id))?;
                 let sort = sort(kind.checked_sub(5).ok_or(Error::InvalidVariable(id))?)?;
-                Ok(LVar { name, sort, idx: id })
+                Ok(LVar {
+                    name,
+                    sort,
+                    idx: id,
+                })
             })
             .ok()?;
         assert_eq!(sort_word(var.sort), *expected);
@@ -399,7 +455,12 @@ fn readings_agree(family: &Unifiers, labels: &Labels, tables: &[u64]) -> Option<
     let ours = read_named(&family.packet, labels, &family.reply, tables, family.nat);
     let theirs = library_reading(tables, family.nat, &family.reply);
     let theirs = named_members(&family.packet, labels, &theirs, family.nat);
-    assert_eq!(ours.as_ref().ok(), theirs.as_ref(), "{tables:?} {:?}", family.reply);
+    assert_eq!(
+        ours.as_ref().ok(),
+        theirs.as_ref(),
+        "{tables:?} {:?}",
+        family.reply
+    );
     theirs
 }
 
@@ -431,7 +492,10 @@ fn the_reader_of_a_named_family_agrees_with_the_library() {
                 assert_eq!(member.len(), family.packet.variables.len());
                 for (_, image) in member {
                     image.for_each_free(&mut |w| {
-                        assert!(w.name == "x" && top.is_none_or(|top| w.idx > top), "{theory}: {w:?}");
+                        assert!(
+                            w.name == "x" && top.is_none_or(|top| w.idx > top),
+                            "{theory}: {w:?}"
+                        );
                     });
                 }
             }
@@ -441,7 +505,9 @@ fn the_reader_of_a_named_family_agrees_with_the_library() {
             for _ in 0..6 {
                 let kept: Vec<_> = ranges
                     .iter()
-                    .filter(|range| family.nat || !range.as_chunks::<2>().0.iter().any(|v| v[1] == 4))
+                    .filter(|range| {
+                        family.nat || !range.as_chunks::<2>().0.iter().any(|v| v[1] == 4)
+                    })
                     .collect();
                 dropped += ranges.len() - kept.len();
                 let mode = rng.below(4);
@@ -465,7 +531,8 @@ fn the_reader_of_a_named_family_agrees_with_the_library() {
                             .collect()
                     })
                     .collect();
-                let tables = name(&labels, &heads, &ranges, &proposal, family.nat, false, None).unwrap();
+                let tables =
+                    name(&labels, &heads, &ranges, &proposal, family.nat, false, None).unwrap();
                 match readings_agree(&family, &labels, &tables) {
                     Some(members) => {
                         standing += members
@@ -497,7 +564,8 @@ fn the_reader_of_a_named_family_agrees_with_the_library() {
                 let at = rng.below(other.len());
                 other[at] ^= 1 + rng.below(3) as u64;
                 if rows_of(&other).all(|row| row.is_some())
-                    && let Ok(ours) = read_named(&family.packet, &labels, &other, &tables, family.nat)
+                    && let Ok(ours) =
+                        read_named(&family.packet, &labels, &other, &tables, family.nat)
                 {
                     let theirs = library_reading(&tables, family.nat, &other);
                     assert_eq!(
@@ -547,7 +615,10 @@ fn a_family_has_a_member_exactly_when_a_row_follows_its_status_row() {
         // A stored family answers the existence question the same way.
         let memo = UnifyReplies::default();
         unify(&sig, &eqs, Some(&memo), 0).unwrap();
-        assert_eq!(unify_exists(&sig, &eqs, Some(&memo), 0).unwrap(), (Some(member), true));
+        assert_eq!(
+            unify_exists(&sig, &eqs, Some(&memo), 0).unwrap(),
+            (Some(member), true)
+        );
     }
 }
 
@@ -575,26 +646,39 @@ fn a_reply_is_read_only_through_tables_that_name_all_of_it() {
     let w = |idx| term(LVar::new("x", LSort::Msg, idx));
     assert_eq!(
         members,
-        vec![vec![(x, crate::builtin::pair(w(5), w(5))), (y, w(5)), (z, w(6))]]
+        vec![vec![
+            (x, crate::builtin::pair(w(5), w(5))),
+            (y, w(5)),
+            (z, w(6))
+        ]]
     );
     // The name of z for the variable z is bound to: the binding is left out.
     let fresh = LVar::new("y", LSort::Msg, 9);
     let members = family.named(Some(&[vec![fresh, z]]), None).unwrap();
     assert_eq!(
         members,
-        vec![vec![(x, crate::builtin::pair(term(fresh), term(fresh))), (y, term(fresh))]]
+        vec![vec![
+            (x, crate::builtin::pair(term(fresh), term(fresh))),
+            (y, term(fresh))
+        ]]
     );
     // The name of y for the variable y is bound to has no reading, because x
     // mentions that variable too, and one name for both variables is not taken:
     // either way the family keeps its default names.
     for proposal in [vec![y, z], vec![fresh, fresh]] {
-        assert_eq!(family.named(Some(&[proposal]), None).unwrap(), family.named(None, None).unwrap());
+        assert_eq!(
+            family.named(Some(&[proposal]), None).unwrap(),
+            family.named(None, None).unwrap()
+        );
     }
     // Stored tables are the words the export returned: a request it has seen
     // is read the same way, and another request is another entry.
     let memo = UnifyReplies::default();
     for _ in 0..2 {
-        assert_eq!(family.named(None, Some(&memo)).unwrap(), family.named(None, None).unwrap());
+        assert_eq!(
+            family.named(None, Some(&memo)).unwrap(),
+            family.named(None, None).unwrap()
+        );
         assert_eq!(
             family.named(Some(&[vec![fresh, z]]), Some(&memo)).unwrap(),
             family.named(Some(&[vec![fresh, z]]), None).unwrap()
@@ -611,10 +695,16 @@ fn a_reply_is_read_only_through_tables_that_name_all_of_it() {
     for bad in [
         short,
         [&tables[..], &[1, 0][..]].concat(),
-        tables.iter().map(|w| if *w == 2 { 1 } else { *w }).collect(),
+        tables
+            .iter()
+            .map(|w| if *w == 2 { 1 } else { *w })
+            .collect(),
         vec![1, 1, heads.len() as u64, 0, 2, 1, 2, 2, 2],
         vec![1, 0],
     ] {
-        assert!(read_named(&family.packet, &labels, &family.reply, &bad, false).is_err(), "{bad:?}");
+        assert!(
+            read_named(&family.packet, &labels, &family.reply, &bad, false).is_err(),
+            "{bad:?}"
+        );
     }
 }

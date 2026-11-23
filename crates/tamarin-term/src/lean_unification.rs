@@ -14,9 +14,8 @@ mod commutative;
 mod components;
 mod whole;
 pub(crate) use whole::{
-    kind_level,
-    total_unify, total_unify_exists, unpack_conjunction, Conjunction, FamilyCheck, Reduced,
-    ReductionTable, Unifiers, UnifyReplies,
+    kind_level, total_unify, total_unify_exists, unpack_conjunction, Conjunction, FamilyCheck,
+    Reduced, ReductionTable, Unifiers, UnifyReplies,
 };
 pub use whole::{reduction_for_convergent_theory, variants_for_convergent_theory};
 mod constructor_variants;
@@ -51,13 +50,12 @@ pub fn unify_modulo_attributes(
     sig: &crate::maude_sig::MaudeSig,
     equations: &[Equal<LNTerm>],
 ) -> Result<Outcome, Error> {
-    unpack_conjunction(sig, equations)?
-        .solve(|rows| {
-            match whole::total_unify(sig, rows, None, 0)?.0 {
-                Some(family) => family.named(None, None).map(Outcome::Complete),
-                None => Ok(Outcome::Unsupported),
-            }
-        })
+    unpack_conjunction(sig, equations)?.solve(|rows| {
+        match whole::total_unify(sig, rows, None, 0)?.0 {
+            Some(family) => family.named(None, None).map(Outcome::Complete),
+            None => Ok(Outcome::Unsupported),
+        }
+    })
 }
 
 /// Match all patterns modulo the signature's declared commutative and AC attributes.

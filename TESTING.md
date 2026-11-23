@@ -1030,10 +1030,7 @@ scripts/backend_gate.py --list my.tsv --timeout 300 --runs 3
   prints every row and `--steps` lists step-count differences, which are
   reported as `OK_STEPS` and do not fail the gate.
 
-`pending.tsv` currently lists three theories under
-`scripts/backend_gate/theories/` whose rule actions hold `sdec(x, y^z)`,
-`fst(x^z)` and `inv(x XOR z)` over `In` variables: native-only does not
-terminate on their variants. `verdict_exceptions.tsv` lists the two lemmas of
+`pending.tsv` is currently empty. `verdict_exceptions.tsv` lists the two lemmas of
 the fixture `native_ac_marker_trace`, where native-only finds a trace that
 the Maude run does not and is right.
 
