@@ -64,7 +64,7 @@ fn state_identifier(p: &AnnotatedProc) -> Option<&SapicTerm> {
 
 /// HS `getAllStates`: returns `(boundStates, freeStates)`
 /// — the set of state terms whose identifier is (resp. is not) fully bound
-/// by names.  `Insert`/`Lock`/`Unlock`/`Lookup` contribute their term to one
+/// by names. `Insert`/`Lock`/`Unlock`/`Lookup`/`Delete` contribute their term to one
 /// of the two sets; `New v` adds `v` to the bound-name scope.
 fn get_all_states(
     p: &AnnotatedProc,

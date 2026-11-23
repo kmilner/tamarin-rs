@@ -28,8 +28,8 @@ fn term_variables(t: &SapicTerm) -> BTreeSet<LVar> {
 }
 
 /// Walk the process collecting always-secret channel variables: every
-/// fresh `New` adds the variable as a candidate, and every `ChOut` /
-/// `Insert` whose RHS uses a candidate disqualifies it.
+/// fresh `New` adds a candidate. Output payloads, inserted values, embedded
+/// rule conclusions and let RHS terms disqualify the candidates they contain.
 fn get_secret_channels(p: &AnnotatedProc, candidates: BTreeSet<LVar>) -> BTreeSet<LVar> {
     match p {
         Process::Action(SapicAction::New(v), _, body) => {
@@ -174,13 +174,8 @@ mod tests {
         assert!(!out.contains(&c.var));
     }
 
-    /// The join takes the intersection of the candidates that survive in the
-    /// two branches, and it descends into each branch.  The test asserts the
-    /// exact surviving set, and not just that the set is empty.  That exact
-    /// set tells the intersection apart from three other behaviours.  Those
-    /// are a union, either branch alone, and a join that ignores its children
-    /// and returns the incoming candidates unchanged.  The equality below
-    /// rejects the set that each of those three returns.
+    /// A join intersects candidates surviving both branches; bindings introduced
+    /// inside one branch do not escape it.
     #[test]
     fn parallel_intersects_candidates() {
         let c = slv("c", LSort::Fresh);

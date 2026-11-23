@@ -40,7 +40,7 @@ ALLOWLIST=/tmp/my-theories.txt scripts/test.sh proof # paths relative to example
 For `all`, corpus-specific overrides (`ALLOWLIST`, `CACHE`, `RESULTS_TSV`,
 `DIFFDIR`) are rejected: use individual commands instead. The entry point
 never rebuilds binaries. `scripts/test.sh --help` describes its interface;
-underlying gates still accept their existing environment settings.
+underlying gates accept the environment settings documented in [REFERENCE.md](REFERENCE.md).
 
 ## Results and caches
 
@@ -75,18 +75,17 @@ branch adds cases for pending PRs. Required default-case flags are in
 negative-input, equivalence-mode and export-only scenarios are not covered
 merely by adding their theory to this proof gate. See
 [regression coverage](../TESTING.md#upstream-regression-coverage).
-The fast CI proof set includes all 71 newly added trace-proof fixtures from the
-submodule bump (435 theories total). GDH now belongs to the
-CLI rejection tests and full proof gate, not the successful-proof fast set.
-For that committed-hash
+The 435-theory fast CI proof set includes the merged upstream trace-proof
+regressions. GDH is covered by CLI rejection tests and the full proof gate;
+the fast reference contains only successful prover invocations. For the hash
 check, `./setup.sh testing-sources` prepares the fixtures without building
 Haskell; `scripts/rs_ref_check.sh check` then needs only Rust and Maude.
 
 CI also runs `scripts/test.sh regressions`: all 111 supported upstream command
 scenarios, including negative cases, extra configurations, exports and proof
 round trips. It discovers sidecars automatically and reuses upstream's assertion
-code and proof baselines. Only the two diff-mode and seven unported-exporter
-scenarios are excluded, with a reason printed for each. All supported scenarios
+code and proof baselines. Only eight diff-mode scenarios and one ProVerif export
+scenario are excluded, with a reason printed for each. All supported scenarios
 run in CI; none are omitted as slow. This command prepares oracle sources
 without building Haskell and leaves both oracle caches alone. It needs a built
 Rust binary and Maude; `RS_PATH`, `JOBS` (default two) and `RESULTS_ROOT` apply.
@@ -131,5 +130,5 @@ You do not need to run every script to generate the two caches.
 
 For specialist settings and maintenance tools, see [REFERENCE.md](REFERENCE.md).
 For certification, CI, and debugging policy, see [TESTING.md](../TESTING.md).
-`corpus_file_diff.sh` and `web_parity.sh` remain the underlying engines so cache
-logic has one implementation and existing automation keeps working.
+`corpus_file_diff.sh` and `web_parity.sh` implement the proof and web gates,
+including their shared cache and comparison policies.

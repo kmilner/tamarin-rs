@@ -13,9 +13,8 @@
 //! needs the reducible/irreducible classification and the `x.<n>` fresh
 //! variables `abstractRule` mints.
 //!
-//! The original restriction strings are oracle bytes from ef3f0468. Product
-//! diagnostics and the supported-exponent control were rechecked against the
-//! patched da8787d5 oracle with `-m=msr --derivcheck-timeout=0`.
+//! Expected warning blocks cover both restriction and unsupported-product
+//! diagnostics, including the supported-exponent control.
 
 use tamarin_parser::parse_theory;
 use tamarin_theory::pretty_theory::format_wf_block;
@@ -153,8 +152,8 @@ fn a_multiplication_restricted_dh_rule_stays_silent() {
     assert_eq!(block(src), None);
 }
 
-/// The legacy conclusion-only check stays silent, but the unsupported-
-/// product check also inspects actions and must reject this old control.
+/// An action-only product triggers the unsupported-product check while the
+/// conclusion-based multiplication-restriction check stays silent.
 #[test]
 fn a_product_only_in_an_action_is_rejected() {
     let src = "theory MrAction begin\n\

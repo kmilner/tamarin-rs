@@ -700,15 +700,9 @@ pub(crate) fn run_proof_search_at_depth(
             }
         }
     }
-    // HS-faithful: `cutOnSolvedDFS` / `cutOnSolvedSingleThreadDFS`
-    // (Theory/Proof.hs) call `extractSolved path prf0` once a
-    // Solved leaf is found, pruning the proof tree to JUST the
-    // solved-witness path.  All Contradictory siblings are removed.
-    // Without this, Rust's proof_steps count includes failed branches HS
-    // prunes — e.g. NSPK3 session_key_setup_possible reports 30 steps vs
-    // HS 5.  The other extractors keep their trees: `CutNothing` = `id`,
-    // `CutBFS` returns its level-cut tree, `CutAfterSorry` its
-    // sorry-stubbed tree.
+    // `cutOnSolvedDFS` / `cutOnSolvedSingleThreadDFS` (Theory/Proof.hs)
+    // retain only the solved-witness path. Other cut strategies retain the
+    // tree produced by their own pruning policy.
     if matches!(ctx.cut, CutStrategy::Dfs | CutStrategy::SeqDfs)
         && matches!(root.status, NodeStatus::Solved)
     {
@@ -950,18 +944,8 @@ fn expand(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Result<(), 
     expand_inner(ctx, node, depth)?;
     // Boolean terminal checks can suppress a cancelled Maude query.
     check_cancelled()?;
-    // After expansion, `sys` is no longer read EXCEPT on
-    // `Sorry: depth limit` leaves, which `re_expand_depth_limited`
-    // (defined below in this file) re-runs `expand` on during the next
-    // ID-DFS iteration — those need their sys — and on `Finished(Solved)`
-    // leaves when batch trace output asked for them via
-    // `SysRetention::KeepSolved`.  Everything else (other resolved leaves,
-    // interior nodes, terminal Sorrys) can drop.  See
-    // `drop_sys_after_expand`.
-    // Profile: csf17::injectivity 1010-step proof tree holds ~200 MB
-    // peak; this drain reduces peak RSS to ~14 MB (~ same as small
-    // lemmas — most of HS's residue is the closed branches we can
-    // now free).
+    // Retain systems needed by depth-limited re-expansion or the caller's
+    // retention policy; release other completed systems.
     if drop_sys_after_expand(node, ctx.sys_retention) {
         node.sys = crate::constraint::system::System::default();
     }

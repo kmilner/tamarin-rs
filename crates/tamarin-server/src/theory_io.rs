@@ -252,9 +252,8 @@ pub(crate) fn load_from_source(
             .map_err(|error| LoadError::Elaborate(error.to_string()))?;
         }
     } else {
-        // Static checks remain available without Maude, but explicit families
-        // require validation now: a recovered proof session must never inherit
-        // unchecked variants from this load.
+        // Static checks run without Maude. Explicit families require Maude
+        // validation before the theory can supply a proof session.
         wf_report.extend(
             tamarin_theory::wellformedness::check_wellformedness(&typed, None)
                 .map_err(|error| LoadError::Elaborate(error.to_string()))?,
@@ -356,7 +355,7 @@ mod tests {
         cfg
     }
 
-    /// The interactive `TheoryLoadOptions` plumbing added for HS parity:
+    /// Interactive `TheoryLoadOptions` carries parser flags and include paths:
     /// `-D` defines reach `#ifdef` evaluation through the load configuration
     /// (HS `toParserFlags`, TheoryLoader.hs), and a local file's
     /// `#include` resolves against ITS OWN directory

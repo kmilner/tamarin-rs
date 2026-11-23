@@ -15,9 +15,8 @@ mod common;
 
 use common::*;
 
-/// The pinned Haskell web corpus gives KU(a) age 8 and Disj(false) age 7.
-/// Deferring subterm-derived equalities used to swap their relative ages
-/// (7 and 9), even though the proof still closed by contradiction.
+/// Immediate subterm deductions give KU(a) age 8 and Disj(false) age 7,
+/// matching the pinned Haskell proof pane.
 #[tokio::test]
 async fn subterm_deduction_goal_ages_match_haskell() {
     let theory = workspace_root().join("tamarin-prover/examples/csf23-subterms/ParserTests.spthy");

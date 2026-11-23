@@ -2,13 +2,12 @@
 """Run upstream command sidecars against Rust using upstream's assertions.
 
 Public entry point: scripts/test.sh regressions. No Haskell executable or
-oracle cache is used: expected diagnostics and verdicts come from the patched
+oracle cache is used: expected diagnostics and verdicts come from the prepared
 upstream sources. Every discovered scenario is run or reported as out of scope.
 """
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import copy
 import importlib.util
 import json
 import os
@@ -54,7 +53,7 @@ def exclusion(args):
 
 
 def rust_case(relative, case):
-    case = copy.deepcopy(case)
+    case = case.copy()
     # Clap requires '=' for optional short values. Preserve all configurations.
     case["args"] = [re.sub(r"^-D(?!=)(.+)$", r"-D=\1", arg)
                     for arg in case.get("args", [])]

@@ -121,8 +121,6 @@ fn formula_terms_group_prints_its_header_once() {
 /// offending rules therefore land in ONE group whose header appears once and
 /// whose bodies are joined by the two-space blank line. The unsupported-
 /// product findings follow in their own group, also with just one header.
-/// Rechecked against the patched da8787d5 oracle with
-/// `-m=msr --derivcheck-timeout=0`.
 #[test]
 fn multiplication_restriction_topic_prints_its_underlined_header() {
     let src = "theory MultProbe begin\n\

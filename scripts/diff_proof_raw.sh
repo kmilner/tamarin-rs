@@ -69,13 +69,8 @@ EXTRA_FLAGS="$(flags_for "$file_rel")"
 DERIVCHECK_TIMEOUT="${DERIVCHECK_TIMEOUT:-30}"
 HS_CANON_CACHE="${HS_CANON_CACHE:-$(shared_cache_dir "$repo_root" raw "$script_dir/.hs_canon_cache")}" || exit 2
 NO_HS_CACHE="${NO_HS_CACHE:-}"
-# HS RTS flags. Upstream commit 00a282da ("Canonicalise maude's returned
-# substitution entries", Maude/Types.hs) made HS proofs schedule-
-# INDEPENDENT — `+RTS -Nk` for any k now yields byte-identical proofs
-# (verified on UM3: all -N share md5 cd93570e…). So we no longer force
-# single-thread; HS_RTS defaults to `-N` (all cores) to speed up cache
-# regeneration. Override `HS_RTS=-N1` to reproduce the pre-canonicalisation
-# single-thread reference if ever needed.
+# Use all cores for the oracle by default. Override HS_RTS=-N1 to limit it
+# to one capability.
 HS_RTS="${HS_RTS:--N}"
 [ -n "$NO_HS_CACHE" ] || mkdir -p "$HS_CANON_CACHE" 2>/dev/null || true
 

@@ -620,49 +620,37 @@ fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
 ///
 /// Returns `true` iff any rule was unfolded.
 fn unfold_rule_variants(elaborated: &mut crate::theory::Theory) -> bool {
-    // Decision pass over the rules in item order: one entry per rule item
-    // (`None` = trivial, keep).
-    let mut elab_repl: Vec<Option<Vec<OpenProtoRule>>> = Vec::new();
-    for item in &elaborated.items {
-        let TheoryItem::Rule(o) = item else { continue };
+    let items = std::mem::take(&mut elaborated.items);
+    let mut new_items = Vec::with_capacity(items.len());
+    let mut changed = false;
+    for item in items {
+        let TheoryItem::Rule(o) = item else {
+            new_items.push(item);
+            continue;
+        };
         // HS `isTrivialProtoVariantAC ruAC ruE` over the closed rules the item
         // closes into (lib/theory/src/Rule.hs): a rule declaring its own
         // `variants (modulo AC)` blocks yields one closed rule per block, and
         // each member must be represented separately even if it is trivial.
-        let closed = crate::theory::closed_rules_ac(o);
+        let closed = crate::theory::closed_rules_ac(&o);
         if o.rule_ac.is_empty()
             && closed
                 .iter()
                 .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, o.rule_e()))
         {
-            elab_repl.push(None);
+            new_items.push(TheoryItem::Rule(o));
             continue;
         }
-        let unfolded = closed
-            .iter()
-            .flat_map(|ac| unfold_closed_rule(o, ac))
-            .collect();
-        elab_repl.push(Some(unfolded));
-    }
-    if elab_repl.iter().all(|r| r.is_none()) {
-        return false;
-    }
-
-    // Each rule item takes its replacement run.
-    let items = std::mem::take(&mut elaborated.items);
-    let mut decisions = elab_repl.into_iter();
-    let mut new_items = Vec::with_capacity(items.len());
-    for item in items {
-        match item {
-            TheoryItem::Rule(o) => match decisions.next().expect("one decision per rule item") {
-                Some(vs) => new_items.extend(vs.into_iter().map(TheoryItem::Rule)),
-                None => new_items.push(TheoryItem::Rule(o)),
-            },
-            other => new_items.push(other),
-        }
+        changed = true;
+        new_items.extend(
+            closed
+                .iter()
+                .flat_map(|ac| unfold_closed_rule(&o, ac))
+                .map(TheoryItem::Rule),
+        );
     }
     elaborated.items = new_items;
-    true
+    changed
 }
 
 /// Apply `--auto-sources` (HS `closeTheoryWithMaude`'s autosources branch,

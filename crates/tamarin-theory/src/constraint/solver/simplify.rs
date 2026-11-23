@@ -618,29 +618,9 @@ fn apply_formula_atom_changes(
         red.sys.invalidate_max_var_idx_cache();
         red.sys.formulas_mut().retain(|f| **f != *fm);
         red.sys.insert_solved_formula(fm.clone());
-        // HS-faithful: `evalFormulaAtoms` (Simplify.hs) ALWAYS
-        // calls `insertFormula fm'` regardless of whether `fm'` is gtrue,
-        // gfalse, or any other shape.  Critical for the empty-Conj
-        // (gtrue) case: `insertFormula gtrue` at mark=True enters the
-        // GConj branch (Reduction.hs) which `markAsSolved`s the
-        // empty Conj — adding `GConj (Conj [])` to `sSolvedFormulas`.
-        //
-        // Without this, when a wellformedness check like
-        // `All [] [EqE em(hp $A, hp $B) DH_neutral] gfalse` (= "x ≠ y")
-        // gets simplified — because partialAtomValuation tells us
-        // `EqE x y` evaluates to `Just False` for non-unifiable terms,
-        // making the All-with-False-atom simplify to gtrue — HS adds
-        // the empty Conj to solved while RS silently drops it.  The
-        // missing solved formula propagates downstream (e.g. Scott
-        // key_secrecy's c_kdf split: HS reaches 6/6 at split_case_1,
-        // RS reaches 6/5, and bindings diverge from there).
-        //
-        // Do NOT suppress the gtrue branch as a "no-op": that is only true
-        // at the SEMANTIC level (gtrue can never falsify a model); HS's
-        // bookkeeping still tracks it explicitly so the next simp-loop
-        // iteration sees the empty Conj as already-solved and
-        // short-circuits the dedup check.  Without parity here we get +1
-        // step counts at every checkpoint inside the affected proof subtree.
+        // `evalFormulaAtoms` (Simplify.hs) inserts every evaluated result.
+        // This includes gtrue: `insertFormula` records the empty conjunction
+        // as solved, so later passes recognize the completed formula.
         red.changed = ChangeIndicator::Changed;
         match red.insert_formula(simp.clone())? {
             SystemOutcome::Linear => changes = rest,
@@ -968,10 +948,8 @@ fn partial_atom_valuation_with(
             // after the structural checks come the store-membership ones —
             //   isInside  && !isNegatedInside → Just True
             //   isNegatedInside && !isInside  → Just False
-            // (The `cyclic || natCyclic → Just False` arm — insert-and-
-            // check hasSubtermCycle / natSubtermEqualities — is not yet
-            // ported here; those cycle checks run in
-            // propagate_subterm_obvious / the contradiction pass instead.)
+            // Cycle checks run in `propagate_subterm_obvious` and the
+            // contradiction pass, outside this partial valuation.
             let is_inside = sys
                 .subterm_store
                 .subterms
@@ -1048,33 +1026,11 @@ fn insert_implied_formulas_pass(
     // for the same existential obligation. Match upstream's stable-pass gate.
     let stable = red.changed == ChangeIndicator::Unchanged;
 
-    // Mirror Haskell `impliedFormulas` (System.hs): `openGuarded gf`
-    // returns `Just (All, vs, antecedent, succedent)` for ANY `GGuarded All`
-    // formula — including those with empty `vs`.  Such empty-var universals
-    // can arise as residuals (e.g. `gall [] otherAtoms succedent` from a
-    // previous `impliedFormulas` round, or from a multi-guard formula whose
-    // bound vars have all been substituted away).
-    // Mirror Haskell's `openGuarded` (Guarded.hs:openGuarded): allocate
-    // FRESH LVar idxs for each bound var BEFORE matching, then
-    // substitute the antecedent + body.  Without this freshening, the
-    // lemma's bound vars stay at their parser-AST idxs (typically 0),
-    // and can spuriously match SYSTEM LVars that coincidentally share
-    // the same (name, idx) — producing the NSLPK3 line-105 / 19x
-    // IMPL-FIRE over-fire by treating system `ni:Fresh:0` as a binding
-    // target for the lemma's bound `ni:0`.
-    //
-    // HS: openGuarded freshens via `mapM (\(n,s) -> freshLVar n s)`,
-    // returning unique fresh LVars per match — system vars CANNOT
-    // collide with them because the MonadFresh counter strictly
-    // advances past every previously-seen idx.
-    //
-    // Rust: take baseline as max system var idx + 1; allocate
-    // sequential idxs per bound var.  Then `open_guarded` applies the
-    // rename throughout antecedent + body.
-    // HS's ambient `MonadFresh`; `FastFreshState::seeded` is its non-precise
-    // form (`freshIdent _name = freshIdents 1`,
-    // Control/Monad/Fresh/Class.hs), so every opened binder across the
-    // whole pass takes the next index of one counter.
+    // `impliedFormulas` (System.hs) opens every universal, including
+    // residual formulas with no binders. `openGuarded` (Guarded.hs) freshens
+    // bound variables throughout the guards and body before matching.
+    // All binders in this pass share one FreshT-style counter seeded beyond
+    // the live system and ambient fresh-variable supply.
     let mut fresh =
         tamarin_utils::fresh::FastFreshState::seeded(red.fresh_var_baseline().saturating_add(1));
     // HS-faithful: iterate formulas + lemmas in `S.toList` order
@@ -1971,10 +1927,7 @@ fn match_atom_via_maude(
     //       it is the SAME node.  Require `g_t == i`: once the first
     //       guard binds the shared time var to a concrete node, later
     //       guards sharing it must match that same node (HS: constant-
-    //       vs-constant after skolemization).  Not requiring it leaves
-    //       multi-guard negated-conclusion universals unfired —
-    //       regression witness: alethea Universal_VerProofV/Y_v1..v8
-    //       falsify under RS where HS verifies.
+    //       vs-constant after skolemization).
     let LTerm::Lit(LLit::Var(g_t)) = g_time else {
         return Ok(Vec::new());
     };
@@ -2512,31 +2465,10 @@ fn execute_captured_actions(
     mut remaining: &[(crate::constraint::constraints::NodeId, crate::fact::LNFact)],
 ) -> Result<SystemOutcome, crate::prove::ProveError> {
     while let Some(((i, fa), suffix)) = remaining.split_first() {
-        // HS-faithful (`solveUniqueActions`, Simplify.hs): the
-        // captured `actionAtoms` list is processed by `mapM trySolve`,
-        // and `trySolve (i, fa) = solveGoal (ActionG i fa)` runs
-        // UNCONDITIONALLY on every captured `isUnique` atom — there is NO
-        // "is this goal still open with this exact fact?" guard.
-        // `solveGoal` first calls `markGoalAsSolved` (which, via
-        // `updateStatus`, silently no-ops on a missing/changed key —
-        // Reduction.hs) and then `solveAction (i, fa)`
-        // unconditionally (Goals.hs).  `solveAction` branches on
-        // whether NODE `i` already exists in `sNodes`, NOT on the goal
-        // status (Goals.hs): if the node is absent it labels a
-        // fresh rule instance (creating the node + its premise goals); if
-        // present it merely unifies `fa` against the node's actions.
-        //
-        // Do NOT skip a captured atom whose EXACT (i, fa) is no longer an
-        // unsolved goal: solving an earlier candidate substitutes the live
-        // goals' facts via the eq-store, so a captured atom no longer
-        // matches the (now-substituted) live goal by exact equality, and
-        // skipping it suppresses node creation at the captured position —
-        // shifting `gsNr` and flipping witness-trace picks (alethea
-        // functional_env1/env2).  Calling `solve_action_goal`
-        // on every captured atom restores HS's node-existence-driven
-        // semantics; an already-solved atom whose node exists with `fa`
-        // among its actions is a harmless no-op (the `Some(ru)` /
-        // `ru.actions.contains(fa)` arm in `solve_action_goal`).
+        // `solveUniqueActions` (Simplify.hs) processes every captured atom,
+        // even if an earlier solve substituted its live goal key. The goal
+        // solver labels a missing node or unifies an existing node's actions;
+        // filtering against the updated goal map would skip required work.
         let outcome = red.solve_action_goal(i, fa)?;
         match outcome {
             GoalCases::Contradictory => return Ok(SystemOutcome::Contradictory),
@@ -2944,15 +2876,6 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
     // under a reducible function symbol (e.g. `exp` in DH) does NOT count as
     // "contained", because the equational theory could rewrite the enclosing
     // term and eliminate ~x.
-    //
-    // Without this filter, Rust adds spurious `vr.X < vf.Y` Fresh less-atoms
-    // when the fresh appears under `exp` (the DH-protocol case), creating cycles
-    // HS doesn't detect.  Root cause of the
-    // STS_MAC_fix1::KI_Perfect_Forward_Secrecy_R divergence at the `case Resp_1`
-    // step where two Resp_1 instances' freshs are each consumed by the other's
-    // input ⇒ HS sees no cycle (freshs are under `exp`), Rust sees a 4-edge
-    // cycle ⇒ premature `by contradiction /* cyclic */`.
-    //
     let reducible = &maude.maude_sig().reducible_fun_syms_fast;
     let raw_subterms: Vec<_> = red
         .sys
@@ -2981,8 +2904,8 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
             });
         }
     }
-    // Preserve the former O(1) direct-fresh probe.  Only a supplier whose
-    // flood-fill reached additional terms pays for the general term checks.
+    // Index direct fresh-variable occurrences for O(1) probes. Only a supplier
+    // whose flood-fill reaches additional terms needs the general term checks.
     let node_fresh_vars: Vec<tamarin_utils::FastSet<LVar>> = nodes_snapshot
         .iter()
         .map(|(_, rule)| {
@@ -4073,9 +3996,8 @@ fn propagate_subterm_obvious(
     // as Haskell `simpSplitPosSt` (SubtermStore.hs) does with
     // `splitSubterm reducible True` (noRecurse).  `subterm_step` runs
     // `isTrueFalse` first, so the trivial cases surface as:
-    //   Some([TrueD])  — trivially true  → toRemoveAsTrue;
-    //                    pair leaves the live set (RS keeps a
-    //                    `propagated` copy in solved_subterms).
+    //   Some([TrueD])  — trivially true → toRemoveAsTrue;
+    //                    pair leaves the live set.
     //   Some([])       — trivially false (incl. small == big) →
     //                    isContradictory ||= [] ∈ splits.  The
     //                    pair REMAINS in posSubterms — HS removes ONLY
@@ -4102,12 +4024,8 @@ fn propagate_subterm_obvious(
             Some(ref entries)
                 if entries.len() == 1 && matches!(entries[0], SubtermSplit::TrueD) =>
             {
-                // toRemoveAsTrue: the pair is DELETED from
-                // posSubterms and goes NOWHERE — HS's solvedSubterms is
-                // populated only by `solveSubtermGoal` (a solved proof
-                // goal), never by the trivially-true simp path.  Moving
-                // it to solved_subterms here rendered a spurious
-                // `Solved Subterms: 1. …` section HS doesn't show.
+                // `toRemoveAsTrue` removes the pair from the live store.
+                // Only `solveSubtermGoal` populates `solved_subterms`.
             }
             Some(ref entries) if entries.is_empty() => {
                 contradictory = true;

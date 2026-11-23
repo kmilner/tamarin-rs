@@ -29,9 +29,8 @@
 //! the rule.  `HasFrees for Rule<I>` (rule.rs) skips `info`, so the shift and
 //! the canonicalisation pass the frees as a separate list and leave the
 //! formulas alone: every refinement of one rule carries the same formulas, so
-//! they cannot tell two refinements apart. The trace-theory caller now clears
-//! these local formulas from compiled members; generic evaluator tests still
-//! cover the info-aware traversal contract.
+//! they cannot tell two refinements apart. Trace-theory partial evaluation
+//! clears these local formulas from compiled members before refinement.
 //!
 //! Divergences from HS, all deliberate:
 //! * **Trace emission**: HS traces via `Debug.Trace` thunks that fire when

@@ -1,8 +1,7 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Whole-proof solution extraction for checked saved proofs (Theory/Proof.hs,
-//! including the patched oracle's upstream #955 changes).
+//! Whole-proof solution extraction for checked saved proofs (Theory/Proof.hs).
 //! Unfinished replacements share the outer extractor's depth frontier. Their
 //! own proof bounds and heuristic depths still start at zero, independently.
 

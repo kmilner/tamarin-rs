@@ -88,35 +88,21 @@ actually measured:
 target/release/tamarin-rs <any-theory> | grep '^Git revision:'
 ```
 
-**`maude`, and `dot` for the web gate's graph pages.** These reach the two
-sides differently, and getting it wrong is a silent vacuous pass rather than
-an error:
+**`maude`, and `dot` for the web gate's graph pages.** The shell gates and
+Rust tests each resolve their dependencies explicitly:
 
-- *Shell scripts* resolve maude for themselves, through the one resolver in
-  `scripts/gate_common.sh`: `$MAUDE_PATH` when set → `maude` on your `PATH` →
-  `/home/linuxbrew/.linuxbrew/bin/maude` → hard fail naming all three steps. A
-  `MAUDE_PATH` that is set but is not an executable file is a hard fail too,
-  never a silent fall-through to something else. The gates
-  (`corpus_file_diff.sh`, `wf_gate.sh`, `pretty_gate.sh`), the three flag
-  sweeps, `rs_ref_check.sh`, `rs_vs_rs_diff.sh`, `web_parity.sh` and
-  `pane_byte_check.sh` all take that route, so an explicit `MAUDE_PATH`, or a
-  `maude` on your own `PATH`, wins over the linuxbrew install instead of being
-  overridden by it. `capture_cli_refs.sh` is the deliberate exception: it walks
-  the Rust test harness's own ladder because its captures must use the maude
-  `cli_e2e.rs` will.
+- *Shell scripts* share the resolver in `scripts/gate_common.sh`:
+  `$MAUDE_PATH` when set → `maude` on `PATH` →
+  `/home/linuxbrew/.linuxbrew/bin/maude`. An unusable explicit override or a
+  failed search is an error. Corpus, load, reference, web and proof-triage
+  commands pass the resolved path through `--with-maude`; its directory is
+  also prepended to `PATH` for subprocesses.
 
-  The resolved binary's own directory is prepended to `PATH`, which is how the
-  children pick it up: the flag sweeps pass `--with-maude` outright, and
-  everything else lets each engine resolve by name — the oracle straight off
-  `PATH`, the port only after trying `/usr/local/bin/maude` and
-  `/usr/bin/maude`, so a host carrying either of those hands the port that one
-  whatever the script resolved (this box has neither).
+  `capture_cli_refs.sh` uses the Rust test harness's resolution order so its
+  captures and `cli_e2e.rs` use the same Maude installation.
 
-  Two things are plain `PATH` lookups: `dot`, which the web servers
-  invoke by name, and the per-lemma triage tools (`diff_proof_raw.sh`,
-  `corpus_raw_diff.sh`, `triage_diff_vs_hs.sh`),
-  which run the provers on whatever they inherit. On hosts where these come
-  from linuxbrew and it is *not* on `PATH` by default:
+  Web servers resolve `dot` through `PATH`. If Graphviz is installed through
+  linuxbrew and that directory is absent from `PATH`, add it before running:
 
   ```bash
   export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
@@ -171,7 +157,7 @@ but none of them proves.
 
 Rust's user-facing parser diagnostics intentionally do not reproduce Haskell's
 parsec/GHC exception text. Errors retain semantic failure classifications and
-source spans; legacy Parsec state and GHC call-site metadata have been removed.
+source spans. They carry no Parsec state or GHC call-site metadata.
 `Display` uses the plain-text diagnostic renderer. Batch and web surfaces render
 these classifications (for example unknown applications, wrong arity, reserved
 names, malformed attributes and include errors) with compact byte spans. They borrow
@@ -179,10 +165,9 @@ the root source rather than copying the whole input into each error value. An
 error inside an included file retains that file's path and contents, because
 the root source cannot render its labels correctly.
 
-Unknown names in a `builtins:` block are rejected. This intentionally follows
-the upstream builtin table rather than the port's former accept-and-ignore
-fallback, so a Tamarin submodule update that adds a builtin must update the
-Rust table and its parser tests in the same change.
+Unknown names in a `builtins:` block are rejected according to the upstream
+builtin table. A submodule update that adds a builtin must update the Rust
+table and its parser tests in the same change.
 
 The focused regression suites are:
 
@@ -289,11 +274,10 @@ What each verdict folds in differs, so do not generalise:
 | `capture_cli_refs.sh` | any row not captured, empty, or failing its `relation` column |
 
 All three corpus gates count their file list up front and fail on
-`ROW-COUNT=rows/N`, so a child killed mid-run no longer leaves its file
-uncompared without a trace, and each hard-exits 2 when the list resolves to
-zero entries. `corpus_file_diff.sh` additionally prints `RC_UNKNOWN=n` — cache
-entries filled before the `.rc` channel existed, which is *not* a failure;
-they backfill on the next fill.
+`ROW-COUNT=rows/N` when any selected file lacks a result, and each hard-exits 2
+when the list resolves to zero entries. `corpus_file_diff.sh` additionally prints `RC_UNKNOWN=n` — cache
+entries without cached exit status, which is *not* a failure; missing status
+is backfilled on the next fill.
 
 The three flag sweeps carry two non-fatal fields beside the verdict:
 `== DONE <sweep> <ts> verdict=OK UNCOMPARED=<n> files=<n> ==`. See
@@ -360,10 +344,9 @@ single-flight parse/elaboration cache, so concurrent audits elaborate each
 theory once without serialising unrelated theories. Add another whole-corpus
 audit to this target rather than creating a separate integration-test binary.
 
-The oracle-backed cases in `oracle_solver` still skip silently when no HS
-binary is reachable — the HS skip is deliberate, only the maude one was
-closed. A green `oracle_solver` is evidence only on a box with both maude and
-the oracle.
+The oracle-backed cases in `oracle_solver` skip when no Haskell binary is
+reachable. Their results establish parity only when both Maude and the oracle
+are available.
 
 `crates/tamarin-server`'s suite additionally pins its committed HTTP captures
 to the submodule: `haskell_captures_match_the_submodule_pin` compares
@@ -405,14 +388,14 @@ is not the correctness criterion. That criterion is byte-identical `--prove`
 stdout, and the corpus gate below checks it. That gate is stricter than this
 probe on the files it covers, because a proof is part of the stdout it
 compares. Its explicit 503-theory list is narrower than the whole upstream
-corpus (and includes patched fixtures), so this probe reaches files the gate
+corpus (and includes a repository-local fixture), so this probe reaches files the gate
 never opens.
 
 **The probe asserts.** It prints its match rate and its list of divergences.
 It then calls `enforce_probe_ledger`. That function fails the test in four
 ways. The first way is coverage below `STRUCTURAL_MIN_COMPARED`, which is 540
-comparisons. The second way is a `STRUCTURAL_MISMATCH_LEDGER` that is still
-`None`. The panic message then prints the paste-ready
+comparisons. The second way is an unset (`None`) `STRUCTURAL_MISMATCH_LEDGER`.
+The panic message then prints the paste-ready
 `const … = Some(&[…]);` for you to commit. The third way is a mismatch that
 the list does not name, which is a regression. The fourth way is a listed
 identity that the run compared and found clean. That entry is stale, and you
@@ -489,12 +472,12 @@ exits nonzero. There is nothing to tally by hand: the script prints its own
 modes a histogram cannot show you — files whose bytes were never compared,
 files that produced no row at all, and files whose bytes matched under a
 different exit status (`RC_DIFF`; the oracle's rc is cached as `<key>.rc`
-beside its stdout). The summary's `RC_UNKNOWN=n` counts entries filled before
-that channel existed and is deliberately not a failure.
+beside its stdout). The summary's `RC_UNKNOWN=n` counts entries without a
+cached exit status and is not a failure.
 
 Whole-file `--prove` diff over the canonical 503-file corpus
 (`scripts/parity_corpus.txt` — submodule examples, a repo-local Nat+reuse
-fixture and patched-checkout regressions). Two strictly sequential phases: Haskell
+fixture and upstream trace regressions). Two strictly sequential phases: Haskell
 output is computed once per file-content hash and cached under
 `scripts/.gate_cache/proof/`; the Rust binary is then diffed against the cache
 — so re-runs after Rust-only changes skip the Haskell side entirely.
@@ -545,7 +528,7 @@ its fingerprint is part of the address — and exit 2 without one,
 fixed location under `.stack-work/`: the submodule pin, the ordered
 patch-series SHA-256 and the binary SHA-256. `oracle_rev_check` verifies all
 three, and therefore accepts a byte-identical `HS_PATH` copy without trusting
-an arbitrary unstamped binary. This distinguishes the intended patched oracle
+an arbitrary unstamped binary. This distinguishes the configured oracle
 from a dirty-worktree build whose `Git revision:` happens to have the same base
 commit. When the generated source tree and attested binary are already current,
 setup skips the timestamp-changing relink entirely.
@@ -556,11 +539,11 @@ derivation-check timeout. Format-4 web profiles additionally cover Graphviz,
 the crawler's explicit `PLAN_VERSION`, its URL-key helper's source hash, and
 the loaded shell protocol that stages and invokes a crawl.
 
-Unlike format 3, format 4 does not use the crawler's entire source hash to
-select persistent entries. Bump `PLAN_VERSION` when routes, decoding,
+Format-4 profiles select persistent entries using the explicit crawl-plan
+version and producer identity. Bump `PLAN_VERSION` when routes, decoding,
 redirect/error handling or stateful request ordering change; timing and
 scheduling changes to independent reads do not require a bump. The full
-crawler source hash still detects edits during an active run. Older profiles
+crawler source hash detects edits during an active run. Older profiles
 remain on disk for older checkouts and are not promoted automatically; any
 manual migration must establish that the completed captures remain compatible.
 
@@ -619,9 +602,8 @@ They share one reference cache, `.gate_cache/load/`, and both can fill it:
 
 - `<key>.load.gz` is the oracle's whole stripped load-time stdout. Either
   gate's PHASE 0 writes it — one cheap no-prove oracle load per missing entry,
-  `JOBS`-limited — so a bump no longer costs a 30–60 min batch refill before
-  `wf_gate.sh` can compare anything. `.gate_cache/proof/` is the `--prove` gate's
-  alone.
+  limited by `JOBS`. These entries are separate from the `--prove` output in
+  `.gate_cache/proof/`.
 - `wf_gate.sh` slices the wf block out of `.load.gz`; `pretty_gate.sh` derives
   `<key>.theory.gz` from it and skips a key only when *both* artifacts exist.
   A cache `wf_gate.sh` filled first costs `pretty_gate.sh` no oracle run at
@@ -812,8 +794,8 @@ fact arities and lemma verdicts are all checked. Newly added sidecars are picked
 up automatically, including cases marked slow. Missing theories or baselines,
 invalid sidecars, empty selections and failed assertions fail the run.
 
-The remaining nine scenarios are explicitly reported as out of scope: two use
-`--diff`, and seven use the unported ProVerif/DeepSec exporters. Exclusion is per
+The remaining nine scenarios are explicitly reported as out of scope: eight
+use `--diff`, and one uses the unported ProVerif exporter. Exclusion is per
 command, so a theory's trace cases still run when it also has diff cases.
 Rust's optional short-flag spelling is adapted (`-DNAME` to `-D=NAME`). Three
 parser-error cases check the corresponding codespan diagnostic instead of
@@ -824,14 +806,13 @@ logs and exported theories are saved under `scripts/results/regressions.*`;
 selects an already-built Rust binary and `RESULTS_ROOT` changes the output parent.
 The command does not read, write or invalidate Haskell caches.
 
-The 435-theory fast CI corpus includes all 71 newly added trace-proof fixtures
-from this submodule bump. This also
-covers the new trace-proof fixtures without command sidecars. Its certified
-hashes are maintained separately; CI materializes the patched sources with
+The 435-theory fast CI corpus includes the merged upstream trace-proof
+regressions, including fixtures without command sidecars. Its certified hashes
+are maintained separately; CI materializes the oracle sources with
 `./setup.sh testing-sources` without compiling Haskell. Negative-input and non-proof scenarios remain in
 their focused suites rather than this successful-proof-output reference.
-In particular, `sp14/GDH.spthy` is now rejected for unsupported products;
-`cli_e2e` checks its failure and diagnostic, and the full proof gate still
+In particular, `sp14/GDH.spthy` is rejected for unsupported products;
+`cli_e2e` checks its failure and diagnostic, and the full proof gate
 compares its output and exit status against Haskell.
 
 Adding entries without changing existing theory inputs or per-file flags

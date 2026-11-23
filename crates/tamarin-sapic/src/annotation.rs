@@ -130,9 +130,8 @@ impl<V> ProcessAnnotation<V> {
     /// `state_channel`) are combined via `Maybe`'s `<>`, whose inner `AnVar`
     /// `<>` is right-biased (`(<>) _ b = b`, sapic/src/Sapic/Annotation.hs),
     /// so when both are `Some` the *right* value wins (`other.X.or(self.X)`).
-    /// `let_plan`/`is_state_channel` use Haskell's left-biased merge
-    /// (left-biased on `Just`/`Just`), so they keep the *left* value
-    /// (`self.X.or(other.X)`). `pure_state` is OR'ed; `else_branch` is taken
+    /// `let_plan` keeps the first nonempty plan; `is_state_channel` keeps
+    /// the first `Some` value. `pure_state` is OR'ed; `else_branch` is taken
     /// from the right operand.
     pub(crate) fn append(self, other: Self) -> Self {
         ProcessAnnotation {

@@ -119,8 +119,8 @@ fn upstream_gdh_rejects_unsupported_products_before_proving() {
     if !maude_available() {
         return;
     }
-    // Keep CI coverage when this previously accepted theory leaves the
-    // successful-proof fast reference. The full oracle gate also retains it.
+    // Rejected inputs have focused CLI coverage and full-gate coverage;
+    // the fast reference contains only successful prover invocations.
     let theory =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tamarin-prover/examples/sp14/GDH.spthy");
     let (code, stdout, stderr) = run_binary(&["--prove"], &[&theory]);

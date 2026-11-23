@@ -909,11 +909,9 @@ pub async fn autoprove_all(
     };
     let new_idx = state.store.insert(detached);
 
-    // HS `getProverAllR` (`src/Web/Handler.hs`) advances the target
-    // via `nextSmartThyPath thy (TheoryProof (last names) [])` over the
-    // NEW theory — the same smart traversal as `autoprove`, seeded at
-    // the LAST lemma's root.  Now that the fork holds the freshly
-    // proved trees, we can run it faithfully.
+    // HS `getProverAllR` (`src/Web/Handler.hs`) selects the target by smart
+    // traversal from the last lemma's root in the proved theory. Redirect
+    // to that target in the stored fork.
     let redir = match target {
         path_parse::TheoryPath::Proof { lemma, sub } => overview_proof_url(new_idx, &lemma, &sub),
         _ => format!("/thy/trace/{}/overview/help", new_idx),
@@ -1892,7 +1890,7 @@ fn json_graph_response(body: String) -> Response {
 /// (`/interactive-graph-def`).  This `error` is upstream's DELIBERATE answer
 /// to a theory path the route does not draw, so the port reproduces its page
 /// byte-for-byte. Captured HTTP fixtures verify these coordinates against
-/// the pinned, patched oracle.
+/// the pinned oracle.
 #[derive(Clone, Copy)]
 struct GraphCallSites {
     unhandled: &'static str,
@@ -2237,10 +2235,9 @@ pub async fn delete_step(
 /// modified lemma's plaintext to the source `.spthy` on disk.
 /// Mirrors Haskell `postAppendNewLemmasR` (`src/Web/Handler.hs`).
 ///
-/// We don't yet track per-lemma "modified" state in the Rust port
-/// (lemma-editing is still stubbed), so every lemma is treated as
-/// unmodified.  That puts us on Haskell's "nothing-to-append" arm:
-/// the file is left alone and the response is
+/// Every lemma is treated as unmodified because the Rust port does not
+/// track per-lemma editing state. This follows Haskell's "nothing-to-append"
+/// arm: the file is left alone and the response is
 /// `{alert: "Appended lemmas to <path>"}` (the alert is informational
 /// regardless of whether anything was appended — see Haskell's
 /// `allptxts /= "" && isJust maybePath` guard, which short-circuits

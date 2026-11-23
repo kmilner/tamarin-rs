@@ -1,9 +1,8 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Regression coverage for `finishedSubterms` in
-//! Theory/Constraint/Solver/ProofMethod.hs, including the patched oracle's
-//! residual-subterm witness checks.
+//! Residual-subterm witness coverage for `finishedSubterms`
+//! (Theory/Constraint/Solver/ProofMethod.hs).
 
 use super::*;
 use crate::constraint::constraints::Goal;

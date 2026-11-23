@@ -5,10 +5,9 @@
 //! (`lib/sapic/src/Sapic.hs`) and `gen` (sapic/src/Sapic.hs).
 //!
 //! For a single top-level process, [`translate`]:
-//!   1. annotates it — `toAnProcess`, `propagateNames`,
-//!      `annotateSecretChannels`, then the `_stateChannelOpt`-gated
-//!      `annotatePureStates` and `_transReport`-gated `translateTermsReport`,
-//!      then `translateLetDestr` and `annotateLocks`;
+//!   1. annotates it — `toAnProcess`, `propagateNames`, the `_transReport`-gated
+//!      `translateTermsReport`, `translateLetDestr`, `annotateSecretChannels`,
+//!      the `_stateChannelOpt`-gated `annotatePureStates`, then `annotateLocks`;
 //!   2. chains the initial rules `baseInit` → `progressInit` →
 //!      `reliableChannelInit` → `reportInit`, each gated on its option;
 //!   3. walks the process with `gen`, whose per-node translation is
@@ -30,9 +29,7 @@ use tamarin_term::lterm::LVar;
 use tamarin_theory::formula::{LNFormula, SyntacticLNFormula};
 use tamarin_theory::restriction::Restriction;
 use tamarin_theory::rule::ProtoRuleE;
-use tamarin_theory::sapic::{
-    process_at, GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar,
-};
+use tamarin_theory::sapic::{GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar};
 use tamarin_utils::prelude_ext::nub_on;
 
 use tamarin_theory::sapic::ProcessCombinator;
@@ -129,29 +126,27 @@ fn map_to_annotated_rule(
         .collect()
 }
 
-/// `gen` (sapic/src/Sapic.hs).  Handles `Null`, `Action` (incl. the `Rep`
-/// replication action), and the `Comb` combinators in scope — `Parallel`,
-/// `NDC` (with the `substStatePos` shared-position rewrite), and `CondEq`.
-/// `Cond`-with-a-formula / `Lookup` / `Let` are rejected in `base_trans_comb`.
+/// `gen` (sapic/src/Sapic.hs): emit each node's rules before its continuations,
+/// carrying absolute positions and the variables available on each branch.
+/// NDC children share their parent's state position through `substStatePos`.
 fn generate_rules(
     ctx: &TransCtx,
-    an_proc: &Process<ProcessAnnotation<LVar>, SapicLVar>,
+    proc: &Process<ProcessAnnotation<LVar>, SapicLVar>,
     p: &ProcessPosition,
     tildex: &BTreeSet<LVar>,
 ) -> Result<Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, String> {
-    let proc = process_at(an_proc, p).ok_or_else(|| format!("gen: invalid position {p:?}"))?;
     match proc {
         Process::Null(_) => {
             // `trans_null` is the identity wrapper for progress/reliable.
             let bodies = base_trans_null(p, tildex);
             Ok(map_to_annotated_rule(proc, p, bodies))
         }
-        Process::Action(ac, ann, _) => {
+        Process::Action(ac, ann, body) => {
             let (bodies, tildex2) = trans_action(ctx, ac, ann, p, tildex)?;
             let mut here = map_to_annotated_rule(proc, p, bodies);
             let mut child_pos = p.clone();
             child_pos.push(1);
-            let rest = generate_rules(ctx, an_proc, &child_pos, &tildex2)?;
+            let rest = generate_rules(ctx, body, &child_pos, &tildex2)?;
             here.extend(rest);
             Ok(here)
         }
@@ -161,13 +156,13 @@ fn generate_rules(
         // correct position suffix), then rewrite the State premise of EVERY
         // generated rule from the child position back to the parent `p`
         // (`substStatePos`).
-        Process::Comb(ProcessCombinator::Ndc, _, _, _) => {
+        Process::Comb(ProcessCombinator::Ndc, _, left, right) => {
             let mut pl = p.clone();
             pl.push(1);
             let mut pr = p.clone();
             pr.push(2);
-            let l = generate_rules(ctx, an_proc, &pl, tildex)?;
-            let r = generate_rules(ctx, an_proc, &pr, tildex)?;
+            let l = generate_rules(ctx, left, &pl, tildex)?;
+            let r = generate_rules(ctx, right, &pr, tildex)?;
             let mut out = subst_state_pos_rules(l, &pl, p);
             out.extend(subst_state_pos_rules(r, &pr, p));
             Ok(out)
@@ -175,17 +170,17 @@ fn generate_rules(
         // General combinator (sapic/src/Sapic.hs): emit this node's own rules,
         // then recurse into the left child with `tildex'1` and (if present) the
         // right child with `tildex'2`.
-        Process::Comb(c, ann, _, _) => {
+        Process::Comb(c, ann, left, right) => {
             let (bodies, tildex_l, tildex_r) = trans_comb(ctx, c, ann, p, tildex)?;
             let mut here = map_to_annotated_rule(proc, p, bodies);
             let mut pl = p.clone();
             pl.push(1);
-            let msrs_l = generate_rules(ctx, an_proc, &pl, &tildex_l)?;
+            let msrs_l = generate_rules(ctx, left, &pl, &tildex_l)?;
             here.extend(msrs_l);
             if let Some(tx_r) = tildex_r {
                 let mut pr = p.clone();
                 pr.push(2);
-                let msrs_r = generate_rules(ctx, an_proc, &pr, &tx_r)?;
+                let msrs_r = generate_rules(ctx, right, &pr, &tx_r)?;
                 here.extend(msrs_r);
             }
             Ok(here)
@@ -766,8 +761,7 @@ mod tests {
 
     #[test]
     fn propagate_names_preserves_location() {
-        // The first patch of upstream #922: setting propagated process names
-        // updates only that field of the parsed annotation.
+        // Propagated process names leave the other annotation fields intact.
         let location = tamarin_term::lterm::pub_term("site");
         let ann = ProcessParsedAnnotation {
             process_names: vec!["P".into()],

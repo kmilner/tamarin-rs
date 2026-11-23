@@ -5,7 +5,7 @@ Internal gates, cache contracts and specialist tools. Start with
 [`../TESTING.md`](../TESTING.md) for verification policy and prerequisites.
 
 The main gates compare the Rust port (`target/release/tamarin-rs`) against the
-patched Haskell oracle (`tamarin-prover-testing/` at the repository root,
+configured Haskell oracle (`tamarin-prover-testing/` at the repository root,
 built by `./setup.sh testing`). The public `test.sh` entry point saves results
 under `scripts/results/` (gitignored); direct engine defaults differ.
 Most scripts take `ALLOWLIST=` (file of corpus-relative paths) to run a
@@ -157,8 +157,7 @@ walks the RS test harness's ladder because its captures must use the maude
   Run on every build. Its reference is `.gate_cache/load/`'s `<key>.load.gz`
   (the whole stripped load-time stdout), which its own PHASE 0 fills where
   missing — one cheap no-prove oracle load per file, shared with
-  `pretty_gate.sh`, so a bump no longer costs a 30–60 min batch refill before
-  this gate can compare anything.
+  `pretty_gate.sh`. The load gates fill only the missing load-time entries.
 - **`pretty_gate.sh`** — fast theory pretty-print gate (same ~45 s): diffs the
   load-time `theory … end` echo against the oracle. Run when touching parsing
   or printing. Its PHASE 0 fills the same `.load.gz` artifact and derives its
@@ -215,9 +214,7 @@ walks the RS test harness's ladder because its captures must use the maude
   Run on server changes. `ALLOWLIST=` is REQUIRED (one
   corpus-relative path per line; `ALLOWLIST=seed` is the built-in 2-file smoke
   list; `scripts/websweep_residual.txt` selects the 78-theory milestone
-  sweep) — it used to fall back
-  to the seed list whenever it was unset or misspelt, which turned a
-  certification run into a 2-file one without saying anything. The verdict
+  sweep). An unset or unreadable allowlist fails before crawling. The verdict
   fails on DIVERGENCE and VACUITY both: DIFF/MISSING rows are matched
   mechanically against the machine-checked residue ledger
   `websweep_ledger.tsv` (documented rows rewrite to `LEDGERED` with their
@@ -249,7 +246,7 @@ walks the RS test harness's ladder because its captures must use the maude
   `.hs.fp` sidecar is absent or names another oracle binary), and on any
   shortfall against the expected two-rows-per-file count.
 - **`test.sh regressions`** — CI coverage of every supported upstream command
-  sidecar in the current patched sources. Prepares sources without building
+  sidecar in the prepared oracle sources. Prepares sources without building
   Haskell, then `upstream_regressions.py` reuses upstream's command assertions
   and proof baselines against Rust. Includes negative inputs, configurations,
   exports, replay and round trips; reports each diff-mode or unported-exporter
@@ -264,7 +261,7 @@ walks the RS test harness's ladder because its captures must use the maude
   change, a submodule bump, or a Maude version change (the pinned version is
   recorded in the reference header and enforced — both the `generate` header
   line and the `check` handshake probe the RESOLVED maude, so the version
-  compared is the one this run's provers actually use), and it now REQUIRES
+  compared is the one this run's provers actually use). It requires
   `--certified-by <gate-results>`: a saved oracle-gate log whose last
   `verdict=` line is `DONE_CORPUS_FILE_DIFF verdict=OK` and carries the exact
   relpath/input-key scope and normalized proof-output aggregate being baselined.
@@ -318,10 +315,8 @@ walks the RS test harness's ladder because its captures must use the maude
   `== DONE <sweep> <ts> verdict=<...> UNCOMPARED=<n> files=<n> ==`, always
   present, `UNCOMPARED=0` on a run with none (`files=` is the distinct
   compared-file count `rs_ref_check.sh generate` reads to reject scoped
-  logs). It is deliberately NOT fatal — `verdict=` keeps its old meaning, so
-  `grep -oE 'verdict=[^ ]+'` still works on these logs — and it puts "the
-  files it compared agree" on the DONE line rather than leaving it to be
-  inferred from the ledger. Today's ledger yields 23 such
+  logs). `UNCOMPARED` is non-fatal and separate from `verdict=`, which reports
+  agreement only for files whose outputs were compared. Today's ledger yields 23 such
   rows (pe 19, module 3, json 1). The three module rows are one input tested
   in `spthy`, `spthytyped`, and `msr` output modes.
   On the 15 `pe oracle-timeout` ones the port
@@ -351,8 +346,8 @@ walks the RS test harness's ladder because its captures must use the maude
 - **`diff_proof_raw.sh`** — one file, per-lemma raw `--prove` diff; the first
   stop for isolating which lemma diverges.
 - **`corpus_raw_diff.sh`** — per-lemma raw diff across the whole corpus.
-  Superseded as a gate by `corpus_file_diff.sh`; still useful when you want
-  lemma-level granularity in a sweep.
+  Use it for lemma-level granularity; `scripts/test.sh proof` compares
+  complete prover output and supplies the full-corpus verdict.
 
   Both auto-build with `cargo build --release -p tamarin-prover` (the package;
   the binary it produces is `tamarin-rs`). `TAM_RS_NO_AUTO_BUILD=1` skips that
@@ -581,7 +576,9 @@ symbols, for example `Theory/Model/Rule.hs#getRuleName`. Use enough of the path
 to identify the file unambiguously in the pinned `tamarin-prover/` submodule.
 Keep explanations of the relevant behaviour alongside the reference. Use
 file paths and symbol names without line numbers or ranges.
-For an exact historical implementation, use a commit-pinned permalink.
+Use commit-pinned permalinks when a reference needs a precise revision.
+Comments describe current behavior and invariants. Keep change history in
+commit messages and review reports.
 
 GPL notices are explicit and maintained independently of these references.
 Adding, changing, or removing a reference must not automatically add or remove
@@ -592,17 +589,13 @@ a licence notice. See [the licensing notes](../docs/LICENSING.md).
 - **`file_flags.tsv`** — canonical per-file extra prover flags, applied
   identically to both engines and folded into the
   cache key as a hash so two flag sets on one theory are distinct entries.
-  Its whole vocabulary today is `--auto-sources` (22 files),
-  `--stop-on-trace=seqdfs` (8), `--diff` (5) and `-D` (4). 32 corpus
-  theories contain `#ifdef`; the four `-D` rows put the DEFINED branch of
-  `testParser/define.spthy` and three `thesis-LaraSchmid-evoting` theories in
-  front of every gate that reads this file — and take their bare branch out of
-  reach in exchange. Web gates use the separate `web_flags.tsv` contract, so
-  `--auto-sources` reaches both interactive loaders, while batch-only
-  `--diff` recipes cannot leak into one server while the other runs bare. The other 28 still prove one
-  branch only. The value must
-  be ATTACHED (`-D=A`, never `-D A`): `-D` is a cmdargs `flagOpt` in the
-  Haskell binary, which reads a detached value as a positional input file,
+  Recipes include auto-sources, partial evaluation, search stopping/bounds,
+  warning policy, diff mode and preprocessor definitions. Each row selects one
+  configuration for that theory; the upstream command-regression runner covers
+  additional configurations declared in its sidecar. Web gates use the separate
+  `web_flags.tsv` contract and apply its recipe to both interactive loaders.
+  A preprocessor definition must be attached (`-D=A`, never `-D A`): `-D` is a
+  cmdargs `flagOpt` in the Haskell binary, which reads a detached value as a positional input file,
   and the Rust port's clap front end deliberately mirrors that (a detached
   token stays positional there too).
 - **`web_flags.tsv`** — the much smaller canonical interactive recipe map. It

@@ -20,7 +20,7 @@ Usage: scripts/test.sh {proof|web|all|regressions|harness}
 Prepare first: ./setup.sh testing && cargo build --release -p tamarin-prover
 There is no separate cache-generation step: cold runs fill, warm runs reuse.
 This entry point never rebuilds binaries or deletes caches.
-For regressions, only Rust and Maude are needed; patched sources are prepared
+For regressions, only Rust and Maude are needed; oracle sources are prepared
 automatically, without building Haskell. RS_PATH and JOBS (default 2) apply.
 
 Each corpus invocation saves run.log, results.tsv and exit-code under a fresh
