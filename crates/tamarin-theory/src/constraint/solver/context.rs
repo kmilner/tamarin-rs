@@ -322,7 +322,8 @@ impl ProofContext {
         source: usize,
         case: usize,
     ) -> Result<crate::constraint::system::System, SourceCaseError> {
-        self.ensure_saturated().map_err(SourceCaseError::Proof)?
+        self.ensure_saturated()
+            .map_err(SourceCaseError::Proof)?
             .get(source)
             .ok_or(SourceCaseError::SourceIndex)?
             .case_system_at(case)
@@ -1041,22 +1042,26 @@ pub(crate) fn annotate_loop_breakers(
         .iter()
         .map(|o| o.abstracted_rule.as_ref().unwrap_or(&o.rule))
         .collect();
-    // `instances` is a pure function of `(rule_idx, fact)`, so each rule's
-    // premise and conclusion instance lists are built once here rather than
-    // once per `(ru_from, ru_to, premise)` triple of the loop below.
-    let prem_insts_by_rule: Vec<Vec<Vec<crate::fact::LNFact>>> = ac_rules
+    // Memoize variant instances only after a compatible fact tag is found.
+    // Upstream #978 rejects incompatible tags before instantiation; retaining
+    // the memoized lists also avoids repeating substitutions for later edges.
+    let prem_insts_by_rule: Vec<Vec<std::cell::OnceCell<Vec<crate::fact::LNFact>>>> = ac_rules
         .iter()
-        .enumerate()
-        .map(|(i, ru)| {
-            ru.enumerate_premises()
-                .map(|(_, fa)| instances(i, fa))
+        .map(|ru| {
+            ru.premises
+                .iter()
+                .map(|_| std::cell::OnceCell::new())
                 .collect()
         })
         .collect();
-    let conc_insts_by_rule: Vec<Vec<Vec<crate::fact::LNFact>>> = ac_rules
+    let conc_insts_by_rule: Vec<Vec<std::cell::OnceCell<Vec<crate::fact::LNFact>>>> = ac_rules
         .iter()
-        .enumerate()
-        .map(|(i, ru)| ru.conclusions.iter().map(|fa| instances(i, fa)).collect())
+        .map(|ru| {
+            ru.conclusions
+                .iter()
+                .map(|_| std::cell::OnceCell::new())
+                .collect()
+        })
         .collect();
 
     let mut relation: Vec<((usize, PremIdx), (usize, PremIdx))> = Vec::new();
@@ -1090,19 +1095,24 @@ pub(crate) fn annotate_loop_breakers(
                 //
                 // HS `dataflowRelAC` (LoopBreakers.hs):
                 //   guard $ or $ do
+                //     concFa0 <- snd <$> eConcs ruFrom
+                //     guard (factTag concFa0 == factTag premFa0)
                 //     premFa <- instances ruTo premFa0
-                //     concFa <- instances ruFrom =<< (snd <$> eConcs ruFrom)
+                //     concFa <- instances ruFrom concFa0
                 //     let concFaFresh = rename concFa `evalFresh` avoid premFa
                 //     return $ unifiableLNFacts concFaFresh premFa
                 // i.e. iterate the VARIANT INSTANCES of both the premise and
                 // each conclusion, rename the conclusion away from the
                 // premise's frees, and check Maude AC-unifiability.
-                let prem_insts = &prem_insts_by_rule[i_to][to_prem_idx.0];
                 let conc_unifies = ru_from_ac.conclusions.iter().enumerate().any(|(ci, c0)| {
                     if c0.tag != prem_fa.tag {
                         return false;
                     }
-                    conc_insts_by_rule[i_from][ci].iter().any(|conc| {
+                    let prem_insts = prem_insts_by_rule[i_to][to_prem_idx.0]
+                        .get_or_init(|| instances(i_to, prem_fa));
+                    let conc_insts =
+                        conc_insts_by_rule[i_from][ci].get_or_init(|| instances(i_from, c0));
+                    conc_insts.iter().any(|conc| {
                         prem_insts.iter().any(|prem| {
                             let mut fresh = tamarin_term::lterm::avoid(prem);
                             let conc_fresh = tamarin_term::lterm::rename(conc.clone(), &mut fresh);
