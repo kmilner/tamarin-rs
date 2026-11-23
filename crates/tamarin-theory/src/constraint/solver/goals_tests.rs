@@ -507,7 +507,7 @@ fn runtime_fallibility_scans_the_whole_round_robin_heuristic() {
 
 #[test]
 fn smart_oracle_stops_before_launch_when_source_materialisation_fails() {
-    use crate::constraint::solver::context::{ProofContext, SourceProvider};
+    use crate::constraint::solver::context::{FailingSourceProvider, ProofContext};
     use crate::constraint::solver::sources::Source;
     use crate::fact::ku_fact;
     use std::sync::Arc;
@@ -515,14 +515,6 @@ fn smart_oracle_stops_before_launch_when_source_materialisation_fails() {
     use tamarin_term::lterm::{pub_term, LSort, LVar};
     use tamarin_term::maude_sig::pair_maude_sig;
     use tamarin_term::term::Term;
-
-    #[derive(Debug)]
-    struct FailingProvider;
-    impl SourceProvider for FailingProvider {
-        fn materialize(&self, _ctx: &ProofContext) -> Result<(), crate::prove::ProveError> {
-            Err(crate::prove::ProveError::Guarded("bad source".into()))
-        }
-    }
 
     let Some(path) = require_maude_path() else {
         return;
@@ -538,8 +530,7 @@ fn smart_oracle_stops_before_launch_when_source_materialisation_fails() {
     let term = Term::App(f, vec![pub_term("x")].into());
     let goal = Goal::Action(LVar::new("i", LSort::Node, 0), ku_fact(term));
     ctx.full_sources = Arc::new(vec![Source::lazy(goal.clone())]);
-    ctx.set_source_provider(Arc::new(FailingProvider));
-    assert!(ctx.proving_may_fail());
+    ctx.set_source_provider(Arc::new(FailingSourceProvider));
     ctx.heuristic = Some(vec![GoalRanking::OracleSmart {
         quit_on_empty: false,
         oracle_path: "/definitely/missing/oracle".into(),

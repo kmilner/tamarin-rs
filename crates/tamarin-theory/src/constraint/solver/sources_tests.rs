@@ -86,13 +86,10 @@ fn start_maude(
     })
 }
 
-/// `precompute_full_sources` pushes one lazy `Source` for each protocol-fact
-/// tag.  Each `Source` holds an uncomputed `cases_cell`.  The first
-/// `cases(ctx)` call computes that cell.  This is HS's `initialSource` thunk.
-/// The test pins both halves.  The per-tag entry exists, and a forced cell
-/// gives the cases of the producing rules.
+/// Each protocol-fact goal is present before forcing. Materialising the set
+/// supplies the cases for each producing rule.
 #[test]
-fn precompute_full_sources_emits_per_tag_entries() {
+fn source_patterns_emits_per_tag_entries() {
     use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
     use tamarin_term::builtin::msg_var;
@@ -138,25 +135,14 @@ fn precompute_full_sources_emits_per_tag_entries() {
         "expected a precomputed source for tag A; got: {:?}",
         ctx.full_sources.iter().map(|s| &s.goal).collect::<Vec<_>>()
     );
-    let a_src = a_src.unwrap();
-    // The cell is empty while nothing forces it.  That is what makes the
-    // precompute lazy.
-    assert!(a_src.cases_or_empty().is_empty());
-    {
-        let _guard = PrecomputeModeGuard::enter();
-        assert!(a_src
-            .cases_for_apply(&ctx)
-            .expect("infallible test context")
-            .is_empty());
-    }
-    assert!(
-        a_src.cases_cell.lock().unwrap().is_none(),
-        "saturation workers consume their iteration snapshot without forcing the context"
-    );
-    // A forced cell lists the two rules that conclude `A(x)`.
-    let names: Vec<String> = a_src
-        .cases(&ctx)
-        .expect("infallible test context")
+    let pattern = a_src.unwrap();
+    assert!(pattern.cases().is_none());
+    let cases = ctx.source_cases().unwrap();
+    let (_, cases) = cases
+        .iter()
+        .find(|(goal, _)| goal == &pattern.goal)
+        .unwrap();
+    let names: Vec<String> = cases
         .iter()
         .map(|(n, _)| case_name_list_to_string(n))
         .collect();
@@ -172,7 +158,7 @@ fn precompute_full_sources_emits_per_tag_entries() {
 /// would give every non-BP theory one extra KU source that does not belong
 /// there.
 #[test]
-fn precompute_full_sources_emits_em_only_when_bp_enabled() {
+fn source_patterns_emits_em_only_when_bp_enabled() {
     use crate::constraint::constraints::Goal;
     use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
@@ -183,7 +169,7 @@ fn precompute_full_sources_emits_em_only_when_bp_enabled() {
     };
 
     // Minimal protocol so there's at least one proto rule (so
-    // `precompute_full_sources` actually runs).
+    // `source_patterns` actually runs).
     let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
     let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
     let em_sources = |sig| {
@@ -513,12 +499,11 @@ fn system_with_a_variable_per_field(t: LNTerm) -> System {
 #[test]
 fn rename_system_by_shifts_every_field_including_neg_subterms() {
     let sys = system_with_a_variable_per_field(mterm(11));
-    let out = rename_system_by(&sys, 1000);
-
     let expected: Vec<LVar> = frees_list(&sys)
         .into_iter()
         .map(|v| LVar::new(v.name, v.sort, v.idx + 1000))
         .collect();
+    let out = rename_system_by(sys, 1000);
     assert_eq!(frees_list(&out), expected);
 
     assert_eq!(
@@ -551,7 +536,7 @@ fn shift_keeps_ac_arg_order() {
     let product = tamarin_term::term::f_app_ac(AcSym::Mult, vec![low, high]);
     let sys = system_with_a_variable_per_field(product);
 
-    let out = rename_system_by(&sys, 1000);
+    let out = rename_system_by(sys.clone(), 1000);
     let args = match &out.nodes[0].1.premises[0].terms[0] {
         Term::App(_, args) => args.to_vec(),
         _ => unreachable!("the fixture stores an AC application"),
@@ -734,10 +719,15 @@ fn source_bounds_takes_the_max_over_cases_only() {
     case_sys.content_mut().last_atom = Some(nvar(20));
     case_sys.subterm_store_mut().neg_subterms =
         SortedPairSet::rebuild_from(vec![(mterm(60), mterm(61))]);
-    let src = Source::eager(goal, vec![(vec!["case".to_string()], case_sys.clone())]);
-
-    let cases = vec![(vec!["case".to_string()], case_sys)];
-    assert_eq!(source_bounds(&src, &cases), (Some(5), Some(61)));
+    let mut src = Source::lazy(goal);
+    assert_eq!(source_bounds(&src), (Some(5), None));
+    src.set_cases(vec![(vec!["case".to_string()], case_sys)]);
+    assert_eq!(source_bounds(&src), (Some(5), Some(61)));
+    let published = src.clone();
+    src.cases_take();
+    src.set_cases(Vec::new());
+    assert_eq!(source_bounds(&src), (Some(5), None));
+    assert_eq!(source_bounds(&published), (Some(5), Some(61)));
 }
 
 #[test]
@@ -767,7 +757,7 @@ fn source_probe_distinguishes_no_match_from_matched_empty() {
     let probe = |sources: &[Source]| {
         solve_with_source_cases_action(
             &ctx,
-            sources,
+            Some(sources),
             &System::empty(),
             &node,
             &live,
@@ -839,7 +829,7 @@ fn natural_source_match_picks_the_same_binding_map_across_backends() {
     let two = nat_plus(one.clone(), one.clone());
     for (subject, unique) in [(two.clone(), true), (nat_plus(one, two), false)] {
         let live = Goal::Action(nvar(7), crate::fact::ku_fact(subject.clone()));
-        let selected = prepare_source_match(oracle, &source, &[], &live)
+        let selected = prepare_source_match(oracle, &source, &live)
             .unwrap()
             .unwrap();
         let node = selected.renamed_abstract_node;
@@ -858,9 +848,7 @@ fn natural_source_match_picks_the_same_binding_map_across_backends() {
             .unwrap();
         assert_eq!(answers.len(), if unique { 1 } else { 2 });
         for (backend, ctx) in &contexts {
-            let selected = prepare_source_match(ctx, &source, &[], &live)
-                .unwrap()
-                .unwrap();
+            let selected = prepare_source_match(ctx, &source, &live).unwrap().unwrap();
             assert!(selected
                 .match_pairs
                 .contains(&(node, Term::Lit(Lit::Var(nvar(7))))));
@@ -897,7 +885,7 @@ fn source_probe_reports_ac_match_transport_failure() {
 
     ctx.maude.kill_subprocess();
     assert!(matches!(
-        prepare_source_match(&ctx, &source, &[], &live),
+        prepare_source_match(&ctx, &source, &live),
         Err(crate::prove::ProveError::Maude(message))
             if message.starts_with("source matching failed:")
     ));
@@ -1004,10 +992,10 @@ fn source_clone_shares_cases_but_owns_its_lazy_cell() {
         Goal::Action(nvar(0), LNFact::new(FactTag::Out, vec![mterm(0)])),
         vec![(vec!["case".to_string()], System::empty())],
     );
-    let cloned = source.clone();
+    let mut cloned = source.clone();
     assert!(std::sync::Arc::ptr_eq(
-        &source.cases_shared_or_empty(),
-        &cloned.cases_shared_or_empty()
+        source.cases.get().unwrap(),
+        cloned.cases.get().unwrap()
     ));
 
     assert_eq!(cloned.cases_take().len(), 1);
@@ -1158,21 +1146,37 @@ fn comparison_uses_only_haskells_diff_system_bit() {
     );
 }
 
-/// `Seg`'s manual `Eq`/`Ord` read the segment text, never the variant tag:
-/// an occurrence path mirrors HS's `[String]`, where a static context string
-/// and a rendered one carrying the same bytes are the same element.  A user
-/// function named `List` shares its context text with the built-in `List`
-/// segment, so a derived (variant-first) comparison would split occurrence
-/// sets HS keeps together.
+#[test]
+fn sortednub_keeps_the_haskell_representative_at_run_boundaries() {
+    let cases = [
+        (3, 'a'),
+        (3, 'b'),
+        (1, 'c'),
+        (1, 'd'),
+        (2, 'e'),
+        (2, 'f'),
+        (0, 'g'),
+    ];
+    let survivors = sortednub_by(&|a: &(u8, char), b| a.0.cmp(&b.0), cases.to_vec());
+    assert_eq!(survivors, [(0, 'g'), (1, 'c'), (2, 'e'), (3, 'b')]);
+}
+
 #[test]
 fn seg_eq_and_ord_read_the_text_across_variants() {
-    use std::cmp::Ordering;
-    let stat = Seg::Static("List");
-    let shared = Seg::shared("List");
-    assert!(stat == shared);
-    assert_eq!(stat.cmp(&shared), Ordering::Equal);
-    let mult = Seg::Static("AC Mult");
-    let xor = Seg::shared("AC Xor");
-    assert_eq!(mult.cmp(&xor), "AC Mult".cmp("AC Xor"));
-    assert_eq!(xor.cmp(&mult), "AC Xor".cmp("AC Mult"));
+    let name = "List";
+    let segments = [
+        Seg::Static(""),
+        Seg::Static(&name[..1]),
+        Seg::Static(name),
+        Seg::shared(name),
+        Seg::Static("AC Mult"),
+        Seg::shared("AC Xor"),
+        Seg::shared("λ"),
+    ];
+    for a in &segments {
+        for b in &segments {
+            assert_eq!(a == b, a.as_str() == b.as_str());
+            assert_eq!(a.cmp(b), a.as_str().cmp(b.as_str()));
+        }
+    }
 }

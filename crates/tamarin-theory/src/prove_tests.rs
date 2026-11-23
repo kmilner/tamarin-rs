@@ -240,9 +240,14 @@ fn gather_reusable_lemmas_matches_hs_guards() {
         })
         .collect();
     let gathered = |name: &str| {
-        gather_reusable_lemmas(&thy, &prepared, name, SourceKind::RefinedSources)
-            .expect("gather")
-            .len()
+        gather_reusable_lemmas(
+            &thy,
+            &prepared,
+            thy.lookup_lemma(name).unwrap(),
+            SourceKind::RefinedSources,
+        )
+        .expect("gather")
+        .len()
     };
     // All three of `reusable`, `existential` and `unflagged` precede `plain`.
     // Only `reusable` passes every guard.  A result of 1, rather than 3,
@@ -361,10 +366,7 @@ end",
         session.template_context().use_induction,
         crate::constraint::solver::context::UseInduction::AvoidInduction
     );
-    assert!(!session.guarded_lemmas_may_fail());
-    assert!(!session.lemma_ranking_may_fail("inductive"));
     let ctx = session.context_for_lemma("inductive").expect("context");
-    assert!(!ctx.proving_may_fail());
     assert!(std::sync::Arc::ptr_eq(
         &session.template_context().shared,
         &ctx.shared
@@ -385,7 +387,7 @@ end",
 }
 
 #[test]
-fn ranking_fallibility_stays_local_to_its_lemma() {
+fn only_an_oracle_ranking_may_fail() {
     let Some(session) = session_from(
         "theory T begin\n\
          lemma safe: \"T\"\n\
@@ -398,14 +400,146 @@ fn ranking_fallibility_stays_local_to_its_lemma() {
     assert!(!session.guarded_lemmas_may_fail());
     assert!(!session.lemma_ranking_may_fail("safe"));
     assert!(session.lemma_ranking_may_fail("external"));
-    assert!(!session
-        .context_for_lemma("safe")
-        .expect("safe context")
-        .proving_may_fail());
-    assert!(session
-        .context_for_lemma("external")
-        .expect("oracle context")
-        .proving_may_fail());
+}
+
+#[test]
+fn ordinary_dfs_in_a_mixed_batch_can_fork_under_a_deadline() {
+    use crate::constraint::solver::cancellation_tests::{Work, WorkerGate};
+    use crate::constraint::solver::search::ProofDeadlineGuard;
+    let Some(mut session) = session_from(
+        r#"theory T begin
+        rule GenL: [ Fr(~x) ] --> [ L(~x) ]
+        rule GenR: [ Fr(~x) ] --> [ R(~x) ]
+        rule Left: [ L(x) ] --[ End(x) ]-> []
+        rule Right: [ R(x) ] --[ End(x) ]-> []
+        lemma builtin: "All x #i. End(x) @ i ==> F"
+        lemma external [heuristic=o "unused-oracle"]: "T"
+        end"#,
+    ) else {
+        return;
+    };
+    let ctx = Arc::get_mut(&mut session.template_ctx).unwrap();
+    ctx.maude_pool = Some(Arc::new(
+        tamarin_term::maude_proc::MaudePool::new(
+            &require_maude_path().unwrap(),
+            pair_maude_sig(),
+            1,
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    let (gate, entered) = WorkerGate::new(Work::Search, 2);
+    *ctx.worker_gate.lock().unwrap() = Some(gate.clone());
+    let workers = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    std::thread::scope(|scope| {
+        let proof = scope.spawn(|| {
+            workers.install(|| {
+                let _deadline = ProofDeadlineGuard::set_ms(30_000);
+                session.map_lemma_proofs(|_| Some(12), |_, _| ())
+            })
+        });
+        let next = || entered.recv_timeout(std::time::Duration::from_secs(5));
+        let first = next();
+        let second = next();
+        gate.release();
+        proof.join().unwrap().unwrap();
+        assert_ne!(first.unwrap(), second.unwrap());
+    });
+}
+
+#[test]
+fn ordinary_lemmas_use_the_session_process_when_only_cold_slots_remain() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let pool = std::sync::Arc::new(
+        tamarin_term::maude_proc::MaudePool::new(&path, pair_maude_sig(), 4, Default::default())
+            .unwrap(),
+    );
+    let theory = tamarin_parser::parse_theory(
+        "theory T begin\nlemma a: \"T\" by sorry\nlemma b: \"T\"\nend",
+        &[],
+    )
+    .unwrap();
+    let session = ProverSession::build(
+        std::sync::Arc::new(elaborated(&theory)),
+        MaudeHandle::start(&path, pair_maude_sig()).unwrap(),
+        ProverSessionOptions {
+            maude_pool: Some(pool.clone()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let held = pool.try_take_idle_owned().unwrap();
+    let names = session
+        .map_lemma_proofs(
+            |lemma| (lemma.name == "b").then_some(1),
+            |lemma, _| lemma.name.clone(),
+        )
+        .unwrap();
+    assert_eq!(names, ["a", "b"]);
+    assert_eq!(
+        pool.spawned(),
+        1,
+        "proof admission started a cold Maude process"
+    );
+    drop(held);
+}
+
+#[test]
+fn batched_lemmas_keep_the_callers_deadline_on_workers() {
+    use crate::constraint::solver::search::{proof_status, ProofDeadlineGuard, ProofStatus};
+    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+    let Some(session) = session_from(
+        r#"theory T begin
+        rule Send: [ Fr(~k) ] --[ S(~k) ]-> [ Out(~k) ]
+        lemma a: exists-trace "Ex k #i. S(k) @ i"
+        lemma b: exists-trace "Ex k #i. S(k) @ i"
+        end"#,
+    ) else {
+        return;
+    };
+    for cancellable in [false, true] {
+        let _request = CancellationGuard::new(cancellable.then(CancellationToken::default));
+        for expected in [ProofStatus::Incomplete, ProofStatus::TraceFound] {
+            let _deadline = if expected == ProofStatus::Incomplete {
+                ProofDeadlineGuard::set_ms(0)
+            } else {
+                ProofDeadlineGuard::unbounded()
+            };
+            let results = session
+                .map_lemma_proofs(|_| Some(10), |_, p| proof_status(&p))
+                .unwrap();
+            assert_eq!(results, [expected; 2]);
+        }
+    }
+}
+
+#[test]
+fn malformed_batch_reports_the_first_error_in_declaration_order() {
+    let Some(session) = session_from(
+        r#"theory T begin
+           rule R: [] --[ A() ]-> []
+           lemma selected [heuristic=o "missing-test-oracle"]: exists-trace "Ex #i. A() @ i"
+           lemma invalid: "All x #i. A() @ i ==> x = x"
+           end"#,
+    ) else {
+        return;
+    };
+    let proof = session.map_lemma_proofs(
+        |lemma| (lemma.name == "selected").then_some(usize::MAX),
+        |_, _| (),
+    );
+    assert!(
+        matches!(&proof, Err(ProveError::Ranking(err)) if err.0.contains("missing-test-oracle")),
+        "{proof:?}"
+    );
+    // With replay alone, the first lemma succeeds and the second reports
+    // its guard error even though it was never selected for auto-proving.
+    assert_guarded_error(session.map_lemma_proofs(|_| None, |_, _| ()));
 }
 
 const RAW_AND_REFINED_LEMMAS: &str = "theory T begin\n\
@@ -426,13 +560,113 @@ fn source_cache_is_lazy() {
     assert!(session.source_cache.is_empty());
 
     let (lemma, prepared) = session.lemma_and_prepared("goal").expect("goal lemma");
-    let ctx = session.setup_per_lemma_ctx(lemma, prepared);
-    let second_ctx = session.setup_per_lemma_ctx(lemma, prepared);
-    assert!(!std::sync::Arc::ptr_eq(
+    let ctx = session.setup_per_lemma_ctx(lemma, prepared, &session.template_ctx.maude);
+    let second_ctx = session.setup_per_lemma_ctx(lemma, prepared, &session.template_ctx.maude);
+    assert!(std::sync::Arc::ptr_eq(
         &ctx.full_sources,
         &second_ctx.full_sources
     ));
     assert!(session.source_cache.is_empty());
+}
+
+#[test]
+fn batch_source_phase_follows_worker_count_and_lemma_selection() {
+    let Some(session) = session_from(
+        r#"theory T begin
+           lemma a [sources]: "T"
+           lemma b [sources]: "T"
+           lemma c: "T"
+           end"#,
+    ) else {
+        return;
+    };
+    // These proofs need no source cases. Any populated slot must come from
+    // the batch phase, and every renderer must see it already populated.
+    for (workers, selected, slots) in [(1, "abc", 0), (2, "c", 0), (2, "ab", 1), (2, "abc", 2)] {
+        let cache = session.source_cache.clone();
+        let expected = if source_cache_disabled() { 0 } else { slots };
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                session.map_lemma_proofs(
+                    |lemma| selected.contains(lemma.name.as_str()).then_some(1),
+                    move |_, _| assert_eq!(cache.len(), expected),
+                )
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn only_shared_batch_sources_are_validated_before_running_lemmas() {
+    let Some(mut session) = session_from(
+        r#"theory T begin
+           rule R: [] --[ A() ]-> []
+           lemma a: "T"
+           lemma b: "T"
+           lemma invalid [sources]: "All x #i. A() @ #i ==> x = x"
+           end"#,
+    ) else {
+        return;
+    };
+    let workers = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    for bypass in [false, true] {
+        session.source_cache_disabled = bypass;
+        let rendered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = rendered.clone();
+        let result = workers.install(|| {
+            session.map_lemma_proofs(
+                |lemma| (lemma.name != "invalid").then_some(1),
+                move |_, _| {
+                    count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                },
+            )
+        });
+        assert_guarded_error(result);
+        // With no shared prepass, both trivial proofs finish before replay
+        // encounters the invalid lemma in declaration order.
+        assert_eq!(
+            rendered.load(std::sync::atomic::Ordering::Relaxed),
+            if bypass { 2 } else { 0 }
+        );
+    }
+}
+
+#[test]
+fn standalone_workers_can_choose_assumptions_before_forcing_sources() {
+    let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
+        return;
+    };
+    let raw = session.template_context();
+    let mut refined = raw.with_swapped_maude(raw.maude.clone());
+    refined.typing_assumptions = session
+        .source_assumptions
+        .as_ref()
+        .as_ref()
+        .unwrap()
+        .clone();
+    for (ctx, expected) in [
+        (&refined, SourceKind::RefinedSources),
+        (raw, SourceKind::RawSources),
+    ] {
+        let cases = ctx.source_cases().unwrap();
+        let kinds: Vec<_> = cases
+            .iter()
+            .flat_map(|(_, cases)| cases.iter().map(|(_, sys)| sys.source_kind))
+            .collect();
+        assert!(!kinds.is_empty());
+        assert!(kinds.iter().all(|kind| *kind == Some(expected)));
+        let worker = ctx.with_swapped_maude(ctx.maude.clone());
+        assert!(Arc::ptr_eq(
+            &ctx.ensure_saturated().unwrap(),
+            &worker.ensure_saturated().unwrap()
+        ));
+    }
 }
 
 #[test]
@@ -473,6 +707,18 @@ fn source_materialization_preserves_maude_failures() {
     let stats = session.source_stats();
     assert!(matches!(stats.raw, Err(ProveError::Maude(_))));
     assert!(matches!(stats.refined, Err(ProveError::Maude(_))));
+    // A lemma assigned a different process must be able to force sources even
+    // with the template's process offline and the same empty cache.
+    assert!(session.source_cache.is_empty());
+    let assigned = maude_with(theory.signature.clone()).unwrap();
+    let (ctx, _) = lemma_context_and_system(
+        &session,
+        session.lemma_and_prepared("goal").unwrap(),
+        &assigned,
+    )
+    .unwrap();
+    ctx.ensure_saturated()
+        .expect("assigned lemma process must also serve lazy source queries");
 }
 
 #[test]
@@ -500,8 +746,8 @@ fn interactive_source_views_use_the_session_provider() {
         .context_for_sources(SourceKind::RawSources)
         .expect("raw source view");
     if !source_cache_disabled() {
-        assert!(session.source_cache.raw.get().is_some());
-        assert!(session.source_cache.refined.get().is_none());
+        assert!(session.source_cache.raw.ready.get().is_some());
+        assert!(session.source_cache.refined.ready.get().is_none());
     }
 
     session
@@ -529,9 +775,7 @@ fn lazy_source_consumers_report_deferred_source_errors() {
         return;
     };
     let (lemma, prepared) = session.lemma_and_prepared("goal").expect("goal lemma");
-    let mut ctx = session.setup_per_lemma_ctx(lemma, prepared);
-    assert!(session.guarded_lemmas_may_fail());
-    assert!(ctx.proving_may_fail());
+    let mut ctx = session.setup_per_lemma_ctx(lemma, prepared, &session.template_ctx.maude);
     ctx.heuristic = Some(
         crate::constraint::solver::goals::parse_heuristic_str_with_tactics(
             "{missing}",
@@ -565,28 +809,25 @@ fn refined_slot_derives_from_the_single_raw_slot() {
         return;
     };
     let (lemma, prepared) = session.lemma_and_prepared("goal").expect("goal lemma");
-    let ctx = session.setup_per_lemma_ctx(lemma, prepared);
+    let ctx = session.setup_per_lemma_ctx(lemma, prepared, &session.template_ctx.maude);
     ctx.ensure_saturated().expect("valid source assumptions");
 
     if source_cache_disabled() {
         assert!(session.source_cache.is_empty());
         return;
     }
-    assert!(session.source_cache.raw.get().is_some());
-    assert!(session.source_cache.refined.get().is_some());
+    assert!(session.source_cache.raw.ready.get().is_some());
+    assert!(session.source_cache.refined.ready.get().is_some());
     assert_eq!(session.source_cache.len(), 2);
 
-    let cached = session
-        .source_cache
-        .refined
-        .get()
-        .and_then(Result::ok)
-        .and_then(|sources| sources.first().cloned())
-        .expect("cached refined source");
-    let restored = ctx.full_sources.iter().next().expect("restored source");
-    assert!(std::sync::Arc::ptr_eq(
-        &cached,
-        &restored.cases_shared_or_empty()
+    let resolved = ctx.ensure_saturated().unwrap();
+    assert!(Arc::ptr_eq(
+        session.source_cache.refined.ready.get().unwrap(),
+        &resolved
+    ));
+    assert!(Arc::ptr_eq(
+        &ctx.clone().ensure_saturated().unwrap(),
+        &resolved
     ));
 }
 
@@ -604,13 +845,8 @@ fn empty_refinement_still_labels_source_systems_refined() {
         .context_for_sources(SourceKind::RefinedSources)
         .expect("refined sources");
     let mut systems = 0;
-    for source in refined.full_sources.iter() {
-        let cases = source.cases_shared_or_empty();
-        for (_, system) in cases
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-        {
+    for source in refined.ensure_saturated().unwrap().iter() {
+        for (_, system) in source.cases().unwrap().iter() {
             systems += 1;
             assert_eq!(system.source_kind, Some(SourceKind::RefinedSources));
         }
@@ -638,13 +874,7 @@ fn concurrent_raw_and_refined_consumers_share_each_materialisation() {
             scope.spawn(move || {
                 barrier.wait();
                 let ctx = session.context_for_sources(kind).expect("source context");
-                let cases = ctx
-                    .full_sources
-                    .iter()
-                    .next()
-                    .expect("source")
-                    .cases_shared_or_empty();
-                (kind, cases)
+                (kind, ctx.ensure_saturated().unwrap())
             })
         })
         .collect();
@@ -671,53 +901,6 @@ fn concurrent_raw_and_refined_consumers_share_each_materialisation() {
     );
 }
 
-#[test]
-fn source_pool_work_returns_to_a_lemma_pool_worker() {
-    use rayon::prelude::*;
-
-    assert!((1..=4).contains(&source_pool().current_num_threads()));
-    let lemma_pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(2)
-        .build()
-        .expect("lemma pool");
-    let sums = lemma_pool.install(|| {
-        (0..2)
-            .into_par_iter()
-            .map(|_| in_source_pool(|| Ok((0..8).into_par_iter().sum::<usize>())).unwrap())
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(sums, vec![28, 28]);
-}
-
-#[test]
-fn restoring_cached_sources_does_not_publish_completion() {
-    #[derive(Debug)]
-    struct CountingProvider(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-
-    impl crate::constraint::solver::context::SourceProvider for CountingProvider {
-        fn materialize(&self, _ctx: &ProofContext) -> Result<(), ProveError> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(())
-        }
-    }
-
-    let Some(h) = maude() else { return };
-    let mut ctx = ProofContext::new(h, Vec::new());
-    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    ctx.set_source_provider(std::sync::Arc::new(CountingProvider(
-        std::sync::Arc::clone(&calls),
-    )));
-    let cached = ctx
-        .full_sources
-        .iter()
-        .map(|_| std::sync::Arc::new(std::sync::Mutex::new(Vec::new())))
-        .collect();
-
-    restore_sources(&ctx, &cached);
-    ctx.ensure_saturated().expect("valid source assumptions");
-    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
-}
-
 const STORED_TERMINAL_LEMMAS: &str = "theory T begin\n\
 rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
 lemma open: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\" by sorry\n\
@@ -742,6 +925,15 @@ fn parallel_replay_of_terminal_roots_leaves_sources_lazy() {
     })
     .expect("parallel replay");
 
+    for selected in [None, Some("terminal")] {
+        pool.install(|| {
+            session.map_lemma_proofs(
+                |lemma| (Some(lemma.name.as_str()) == selected).then_some(1),
+                |_, _| (),
+            )
+        })
+        .unwrap();
+    }
     assert!(session.source_cache.is_empty());
 }
 
@@ -1116,51 +1308,183 @@ fn scratch_proof_checks_return_backend_errors() {
 }
 
 #[test]
-fn cancel_active_parallel_sources_then_retry_the_same_session() {
+fn initial_source_cases_overlap_and_preserve_sequential_results() {
+    use crate::constraint::solver::cancellation_tests::{Work, WorkerGate};
+    use std::time::Duration;
+    let Some(session) = session_from(
+        "theory T begin
+         rule Left: [] --> [ F('left') ]
+         rule Right: [] --> [ F('right') ]
+         rule Use: [ F(x) ] --[ A(x) ]-> []
+         lemma goal: \"All x #i. A(x) @ i ==> F\"
+         end",
+    ) else {
+        return;
+    };
+    let mut ctx = session.fresh_context(&session.template_ctx.maude);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    // Hold the eager worker so only a cold slot is available during the build.
+    let maude_pool = std::sync::Arc::new(
+        tamarin_term::maude_proc::MaudePool::new(
+            &require_maude_path().unwrap(),
+            pair_maude_sig(),
+            2,
+            Default::default(),
+        )
+        .unwrap(),
+    );
+    let _held = maude_pool.try_take_idle_owned().unwrap();
+    ctx.maude_pool = Some(maude_pool.clone());
+    let (gate, entered) = WorkerGate::new(Work::InitialSources, 2);
+    *ctx.worker_gate.lock().unwrap() = Some(gate.clone());
+    let ctx = std::sync::Arc::new(ctx);
+    std::thread::scope(|scope| {
+        let worker_ctx = ctx.clone();
+        let worker = scope.spawn(|| {
+            pool.install(move || {
+                tamarin_utils::parallel::try_map(vec![Some(worker_ctx), None], |active| {
+                    if let Some(ctx) = active {
+                        ctx.ensure_saturated()?;
+                    }
+                    Ok::<_, ProveError>(())
+                })
+            })
+        });
+        let first = entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        let second = entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        gate.release();
+        assert_ne!(first, second, "initial cases must use distinct workers");
+        worker.join().unwrap().unwrap();
+    });
+    *ctx.worker_gate.lock().unwrap() = None;
+    assert_eq!(
+        maude_pool.spawned(),
+        1,
+        "a source task started a cold Maude"
+    );
+    let parallel = ctx.source_cases().unwrap();
+    let serial_ctx = session.fresh_context(&session.template_ctx.maude);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap()
+        .install(|| serial_ctx.ensure_saturated())
+        .unwrap();
+    let serial = serial_ctx.source_cases().unwrap();
+    assert_eq!(parallel.len(), serial.len());
+    for (parallel, serial) in parallel.iter().zip(&serial) {
+        // System equality excludes process-local cache stamps and compares
+        // the actual constraints, fresh variable identities and case order.
+        assert_eq!(parallel, serial);
+    }
+}
+
+#[test]
+fn cold_sources_get_both_workers_when_dfs_siblings_need_them() {
+    use crate::constraint::solver::cancellation_tests::{Work, WorkerGate};
+    use std::time::Duration;
+
+    let Some(session) = session_from(
+        r#"theory T begin
+        rule Left: [] --> [ F('left') ]
+        rule Right: [] --> [ F('right') ]
+        rule UseA: [ F(x) ] --[ Seen(x), A(x) ]-> []
+        rule UseB: [ F(x) ] --[ Seen(x), B(x) ]-> []
+        lemma goal: "not (Ex x #i. Seen(x) @ i)"
+        end"#,
+    ) else {
+        return;
+    };
+    let (gate, entered) = WorkerGate::new(Work::InitialSources, 2);
+    *session.template_ctx.worker_gate.lock().unwrap() = Some(gate.clone());
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    std::thread::scope(|scope| {
+        let proof = scope.spawn(|| pool.install(|| prove_lemma_in_session(&session, "goal", 24)));
+        let first = entered.recv_timeout(Duration::from_secs(5));
+        let second = entered.recv_timeout(Duration::from_secs(5));
+        gate.release();
+        assert_eq!(proof.join().unwrap().unwrap().status, NodeStatus::Solved);
+        assert_ne!(first.unwrap(), second.unwrap());
+    });
+}
+
+#[test]
+fn cancel_active_parallel_sources_then_retry_the_same_context() {
     use crate::constraint::solver::cancellation_tests::{Work, WorkerGate};
     use std::time::Duration;
     use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
     let Some(session) = session_from(RAW_AND_REFINED_LEMMAS) else {
         return;
     };
-    let participants = source_pool().current_num_threads().min(2);
-    let (gate, entered) = WorkerGate::new(Work::Sources, participants);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    let (gate, entered) = WorkerGate::new(Work::Sources, 2);
     *session.template_ctx.worker_gate.lock().unwrap() = Some(gate.clone());
     let token = CancellationToken::default();
+    let ctx = session.context_for_lemma("goal").unwrap();
+    let next = ctx.maude.fresh_counter_peek() + 43;
     std::thread::scope(|scope| {
         let worker_token = token.clone();
         let worker = scope.spawn(|| {
-            let _guard = CancellationGuard::new(Some(worker_token));
-            raw_sources(
-                &session.template_ctx,
-                session.setup_counter_before,
-                &session.source_cache,
-            )
+            pool.install(|| {
+                let _guard = CancellationGuard::new(Some(worker_token));
+                ctx.ensure_saturated()
+            })
         });
         let first = entered.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_ne!(first, std::thread::current().id());
-        if participants == 2 {
-            let second = entered.recv_timeout(Duration::from_secs(5)).unwrap();
-            assert_ne!(first, second, "source fan-out must reach distinct workers");
-        }
+        let second = entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_ne!(first, second, "source fan-out must reach distinct workers");
+        // A second request can snapshot the same in-progress view. Its own
+        // cancellation must return while the original builder is still parked.
+        let waiter_token = CancellationToken::default();
+        let (started, waiting) = std::sync::mpsc::channel();
+        let (done, result) = std::sync::mpsc::channel();
+        let wait_token = waiter_token.clone();
+        let ctx_ref = &ctx;
+        scope.spawn(move || {
+            let _guard = CancellationGuard::new(Some(wait_token));
+            let worker = ctx_ref.with_swapped_maude(ctx_ref.maude.clone());
+            started.send(()).unwrap();
+            done.send(worker.source_cases()).unwrap();
+        });
+        waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(result.recv_timeout(Duration::from_millis(30)).is_err());
+        ctx.maude.reset_counter_to(next);
+        waiter_token.cancel();
+        assert!(matches!(
+            result.recv_timeout(Duration::from_secs(3)),
+            Ok(Err(ProveError::Cancelled))
+        ));
         token.cancel();
         gate.release();
         assert!(matches!(worker.join().unwrap(), Err(ProveError::Cancelled)));
     });
     *session.template_ctx.worker_gate.lock().unwrap() = None;
     assert!(
-        session.source_cache.raw.get().is_none(),
+        session.source_cache.raw.ready.get().is_none(),
         "no partial sources may be published"
     );
-    assert!(source_pool()
+    assert!(pool
         .broadcast(|_| tamarin_utils::cancellation::current().is_none())
         .into_iter()
         .all(|clear| clear));
-    session
-        .context_for_lemma("goal")
-        .unwrap()
-        .ensure_saturated()
-        .unwrap();
+    assert_eq!(ctx.maude.fresh_counter_peek(), next);
+    let cases = ctx.source_cases().unwrap();
+    assert_eq!(ctx.maude.fresh_counter_peek(), next);
+    assert!(!cases.is_empty());
+    {
+        let _guard = CancellationGuard::new(Some(token));
+        assert!(matches!(ctx.source_cases(), Err(ProveError::Cancelled)));
+    }
     let retry = prove_lemma_in_session(&session, "goal", 12).unwrap();
     let Some(clean) = session_from(RAW_AND_REFINED_LEMMAS) else {
         return;
@@ -1174,128 +1498,4 @@ fn cancel_active_parallel_sources_then_retry_the_same_session() {
     assert_eq!(format!("{retry:?}"), format!("{baseline:?}"));
     assert_eq!(session.source_stats().raw, clean.source_stats().raw);
     assert_eq!(session.source_stats().refined, clean.source_stats().refined);
-}
-
-#[test]
-fn queued_source_initializer_can_be_cancelled_and_retried() {
-    use std::sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
-    };
-    use std::time::Duration;
-    use tamarin_utils::cancellation::{CancellableOnce, CancellationGuard, CancellationToken};
-    let pool = Arc::new(
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap(),
-    );
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    pool.spawn(move || {
-        entered_tx.send(()).unwrap();
-        let _ = release_rx.recv();
-    });
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    let cache = Arc::new(CancellableOnce::<usize, ProveError>::default());
-    let token = CancellationToken::default();
-    let ran = Arc::new(AtomicBool::new(false));
-    let worker_pool = pool.clone();
-    let worker_cache = cache.clone();
-    let worker_token = token.clone();
-    let job_ran = ran.clone();
-    let (submitted_tx, submitted_rx) = mpsc::channel();
-    let (done_tx, done_rx) = mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        let _guard = CancellationGuard::new(Some(worker_token));
-        let result = worker_cache.get_or_init(|| {
-            submitted_tx.send(()).unwrap();
-            in_source_pool_on(&worker_pool, move || {
-                job_ran.store(true, Ordering::Relaxed);
-                Ok(13)
-            })
-        });
-        done_tx.send(result).unwrap();
-    });
-    submitted_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
-    token.cancel();
-    assert_eq!(
-        done_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-        Err(ProveError::Cancelled)
-    );
-    worker.join().unwrap();
-    assert!(cache.get().is_none());
-    // The unrelated initializer is still occupying the pool. Release it
-    // only after cancellation has finished, then retry the same cache slot.
-    release_tx.send(()).unwrap();
-    assert_eq!(
-        cache.get_or_init(|| in_source_pool_on(&pool, || Ok(42))),
-        Ok(42)
-    );
-    assert!(!ran.load(Ordering::Relaxed));
-    assert_eq!(cache.get(), Some(Ok(42)));
-}
-
-#[test]
-fn running_source_work_is_cleaned_up_before_cancellation_returns() {
-    use std::sync::{mpsc, Arc};
-    use std::time::Duration;
-    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
-    let pool = Arc::new(
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap(),
-    );
-    let worker_pool = pool.clone();
-    let token = CancellationToken::default();
-    let worker_token = token.clone();
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    let (done_tx, done_rx) = mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        let _guard = CancellationGuard::new(Some(worker_token));
-        let result = in_source_pool_on(&worker_pool, move || {
-            entered_tx.send(()).unwrap();
-            let _ = release_rx.recv();
-            Ok(13)
-        });
-        done_tx.send(result).unwrap();
-    });
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    token.cancel();
-    assert!(done_rx.recv_timeout(Duration::from_millis(30)).is_err());
-    release_tx.send(()).unwrap();
-    assert_eq!(
-        done_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
-        Err(ProveError::Cancelled)
-    );
-    worker.join().unwrap();
-    assert_eq!(in_source_pool_on(&pool, || Ok(42)), Ok(42));
-    assert!(pool
-        .broadcast(|_| tamarin_utils::cancellation::current().is_none())
-        .into_iter()
-        .all(|clear| clear));
-}
-
-#[test]
-fn source_job_panics_return_to_the_caller_and_restore_worker_state() {
-    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(1)
-        .build()
-        .unwrap();
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = CancellationGuard::new(Some(CancellationToken::default()));
-        in_source_pool_on(&pool, || -> Result<(), ProveError> {
-            panic!("source job failed")
-        })
-    }));
-    assert!(panic.is_err());
-    assert_eq!(in_source_pool_on(&pool, || Ok(42)), Ok(42));
-    assert!(pool
-        .broadcast(|_| tamarin_utils::cancellation::current().is_none())
-        .into_iter()
-        .all(|clear| clear));
 }

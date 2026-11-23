@@ -806,8 +806,9 @@ pub fn apply_auto_sources(
         ctx: &ProofContext,
     ) -> Result<Vec<((NodeConc, NodePrem), System)>, crate::prove::ProveError> {
         let mut chains = Vec::new();
-        for src in ctx.full_sources.iter() {
-            for (_name, sys) in src.cases(ctx)?.iter() {
+        for src in ctx.ensure_saturated()?.iter() {
+            let cases = src.cases().expect("saturated source has cases");
+            for (_, sys) in cases.iter() {
                 for ch in sys.unsolved_chains() {
                     chains.push((ch, sys.clone()));
                 }

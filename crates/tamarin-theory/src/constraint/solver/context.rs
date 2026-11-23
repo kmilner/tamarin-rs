@@ -19,7 +19,11 @@
 //! ([`ProofContextShared`]) held behind an `Arc` so a context with a swapped
 //! Maude handle is a refcount bump rather than a deep copy.
 
-use tamarin_term::maude_proc::{MaudeHandle, MaudePool};
+use super::sources::Source;
+use crate::prove::ProveError;
+use std::sync::{Arc, OnceLock};
+use tamarin_term::maude_proc::{MaudeHandle, MaudePool, OwnedPooledMaude};
+use tamarin_utils::cancellation;
 
 use crate::rule::IntrRuleAC;
 use crate::theory::OpenProtoRule;
@@ -126,21 +130,17 @@ pub struct ProofContextShared {
 }
 
 /// Minimum-viable context for the solver loop.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ProofContext {
     pub maude: MaudeHandle,
-    /// Optional pool of additional Maude subprocesses used at rayon
-    /// parallel sites (rule-variant closure, saturate refinement) to
-    /// avoid serialising every worker on the single `maude`'s internal
-    /// IPC mutex.  `None` means "use the single `maude` only" (the
-    /// original behaviour; byte-identical to `--processors=1`).
+    /// Optional pool of additional Maude subprocesses. Parallel work leases
+    /// one per task instead of serialising on `maude`'s IPC mutex, and falls
+    /// back to `maude` when none is free. `None` means only `maude` exists
+    /// and every task shares it.
     ///
-    /// HS uses a single Maude per ClosedTheory; this pool is a
-    /// Rust-specific implementation improvement that doesn't change
-    /// semantics — workers acquire a pool member at task start and
-    /// reads/writes its own subprocess for the task's duration.  Each
-    /// pool member's `with_fresh_counter_from(avoid_max)` still gives
-    /// HS-faithful per-call witness allocation.
+    /// HS uses a single Maude per ClosedTheory. The pool does not change
+    /// semantics: every lease site seeds its own fresh counter, so which
+    /// process serves a task does not affect the result.
     pub maude_pool: Option<std::sync::Arc<MaudePool>>,
     /// Which expanded proof nodes retain their constraint systems.
     pub(crate) sys_retention: crate::constraint::solver::search::SysRetention,
@@ -151,13 +151,6 @@ pub struct ProofContext {
     /// (`force_induction`), so owned rather than shared.
     pub use_induction: UseInduction,
     /// Set when the current proof is for an exists-trace lemma.
-    /// Used by `is_finished` to decide whether the Fresh-conflation
-    /// case-drop should convert Contradictory→Unfinishable: for
-    /// exists-trace lemmas the dropped case might have been the
-    /// witness path (sound only via Unfinishable); for all-traces
-    /// lemmas the drop is harmless (no witness to lose).  Defaults
-    /// to false; set by `prove_lemma` based on the lemma's
-    /// trace-quantifier attribute (per-lemma, so owned).
     pub is_exists_trace: bool,
     /// The solved-leaf extraction strategy for this lemma's auto-prover,
     /// mirroring HS `apCut` (Theory/Proof.hs) threaded from
@@ -165,14 +158,8 @@ pub struct ProofContext {
     /// (`fromMaybe CutDFS`); consumed once per lemma by `run_proof_search`
     /// (search.rs).  Per-lemma / theory-global, so owned.
     pub cut: CutStrategy,
-    /// Pending typing assumptions (from `[sources]`-tagged lemmas)
-    /// applied during `ensure_saturated`'s refinement step.  Set by
-    /// `prove_lemma` before any source-case access; refinement is
-    /// deferred to keep `ensure_saturated`'s trace emissions
-    /// interleaved with the lemma proof's first source-case access
-    /// (HS-faithful: `refineWithSourceAsms` operates on lazy `Source`
-    /// thunks; its work only fires when a downstream consumer forces
-    /// a `cdCases` thunk).  Per-lemma, so owned.
+    /// Assumptions used when a standalone context builds refined sources.
+    /// Session proofs obtain their theory-wide refinement from the source provider.
     pub typing_assumptions: Vec<std::sync::Arc<crate::guarded::Guarded>>,
     /// The goal ranking list for this lemma, mirroring HS's
     /// `Heuristic ProofContext = Heuristic [GoalRanking ProofContext]`
@@ -184,9 +171,6 @@ pub struct ProofContext {
     /// Round-robin scheduling: depth d → `rankings[d % n]`
     /// (ProofMethod.hs).  Per-lemma, so owned.
     pub heuristic: Option<Vec<crate::constraint::solver::goals::GoalRanking>>,
-    /// Whether lazily refining this context's sources can fail. Fallible
-    /// searches stay serial so an error cannot be hidden behind an unbounded
-    /// sibling running in parallel.
     /// The name of the lemma being proved.  Passed as `argv[1]` to
     /// the oracle script (HS `L.get pcLemmaName ctxt`, ProofMethod.hs).
     /// Per-lemma, so owned.
@@ -196,15 +180,9 @@ pub struct ProofContext {
     /// (HS Theory/Text/Parser.hs, System.hs).  Stored as the absolute
     /// path passed to `--prove`.  Per-lemma, so owned.
     pub theory_file: String,
-    /// Source-cell layout for this context. Session-backed contexts own these
-    /// lightweight cells while sharing their materialised case vectors.
-    pub(crate) full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
-    /// Optional session-level source materialiser. Batch/web contexts install
-    /// this so the first actual `pcSources` access can populate the shared
-    /// raw/refined cache; standalone contexts saturate themselves directly.
-    pub(crate) source_provider: Option<std::sync::Arc<dyn SourceProvider>>,
-    /// Per-context lazy saturation gate.
-    pub(crate) saturate_gate: SaturateGate,
+    /// Ordered source patterns, or source cases for a materialized context.
+    pub(crate) full_sources: SharedSources,
+    sources: ContextSources,
     /// Read-only theory data (`intruder_rules`, `restrictions`, …), shared
     /// behind an `Arc`. Field reads are
     /// transparent through the [`std::ops::Deref`] implementation below.
@@ -227,14 +205,75 @@ pub struct ProofContextOptions {
     pub loop_breakers_prepared: bool,
 }
 
+pub(crate) type SharedSources = Arc<Vec<Source>>;
+
+#[derive(Debug, Default)]
+pub(crate) struct SourceSlot {
+    pub(crate) ready: tamarin_utils::parallel::SharedOnce<SharedSources>,
+}
+
+impl SourceSlot {
+    pub(crate) fn get_or_build<F>(
+        self: &Arc<Self>,
+        prepare: impl FnOnce() -> F,
+    ) -> Result<SharedSources, ProveError>
+    where
+        F: FnOnce() -> Result<SharedSources, ProveError> + Send + 'static,
+    {
+        cancellation::check()?;
+        if let Some(ready) = self.ready.get() {
+            return Ok(ready.clone());
+        }
+        let build = prepare();
+        // Claim the slot on a worker that can build it. Claiming before
+        // admission could leave every worker waiting for the queued owner.
+        let slot = self.clone();
+        tamarin_utils::parallel::in_pool(move || slot.ready.get_or_try_init(build).cloned())
+    }
+}
+
+#[derive(Debug)]
+enum ContextSources {
+    /// Standalone callers may set their own typing assumptions before forcing.
+    Local(OnceLock<Arc<SourceSlot>>),
+    Session(Arc<dyn SourceProvider>),
+    /// Saturation reads its private working set directly.
+    Materialized,
+}
+
+impl Clone for ContextSources {
+    fn clone(&self) -> Self {
+        match self {
+            // A standalone copy can select its own assumptions until a
+            // successful computation fixes its view. Session copies always
+            // use their theory's selected raw or refined slot.
+            Self::Local(slot) if slot.get().is_some_and(|s| s.ready.get().is_some()) => {
+                Self::Local(slot.clone())
+            }
+            Self::Local(_) => Self::Local(OnceLock::new()),
+            Self::Session(provider) => Self::Session(provider.clone()),
+            Self::Materialized => Self::Materialized,
+        }
+    }
+}
+
 pub(crate) trait SourceProvider: std::fmt::Debug + Send + Sync {
-    /// Whether materialisation can fail for this provider. Unknown
-    /// implementations are conservatively fallible.
     fn may_fail(&self) -> bool {
         true
     }
 
-    fn materialize(&self, ctx: &ProofContext) -> Result<(), crate::prove::ProveError>;
+    fn materialize(&self, maude: &MaudeHandle) -> Result<SharedSources, ProveError>;
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct FailingSourceProvider;
+
+#[cfg(test)]
+impl SourceProvider for FailingSourceProvider {
+    fn materialize(&self, _: &MaudeHandle) -> Result<SharedSources, ProveError> {
+        Err(ProveError::Guarded("bad source".into()))
+    }
 }
 
 /// Transparent read access to immutable theory data.
@@ -245,39 +284,7 @@ impl std::ops::Deref for ProofContext {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SaturateState {
-    Pending,
-    InProgress(std::thread::ThreadId),
-    Done(Result<(), crate::prove::ProveError>),
-}
-
-#[derive(Debug)]
-pub(crate) struct SaturateGate {
-    state: std::sync::Mutex<SaturateState>,
-    ready: std::sync::Condvar,
-}
-
-impl SaturateGate {
-    fn new(state: SaturateState) -> Self {
-        Self {
-            state: std::sync::Mutex::new(state),
-            ready: std::sync::Condvar::new(),
-        }
-    }
-}
-
 impl ProofContext {
-    pub(crate) fn proving_may_fail(&self) -> bool {
-        self.source_provider
-            .as_ref()
-            .is_some_and(|provider| provider.may_fail())
-            || self
-                .heuristic
-                .as_deref()
-                .is_some_and(crate::constraint::solver::goals::rankings_may_fail)
-    }
-
     /// Materialise this context's sources and return independent working
     /// copies. Source forcing belongs here so a caller cannot accidentally
     /// pair a lazy source cell with a different context.
@@ -290,9 +297,8 @@ impl ProofContext {
         )>,
         crate::prove::ProveError,
     > {
-        self.ensure_saturated()?;
         Ok(self
-            .full_sources
+            .ensure_saturated()?
             .iter()
             .map(|source| (source.goal.clone(), source.cases_or_empty()))
             .collect())
@@ -304,105 +310,10 @@ impl ProofContext {
         source: usize,
         case: usize,
     ) -> Result<Option<crate::constraint::system::System>, crate::prove::ProveError> {
-        self.ensure_saturated()?;
         Ok(self
-            .full_sources
+            .ensure_saturated()?
             .get(source)
             .and_then(|source| source.case_system_at(case)))
-    }
-
-    fn copy_with_sources(
-        &self,
-        full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
-        saturate_state: SaturateState,
-    ) -> Self {
-        Self {
-            maude: self.maude.clone(),
-            maude_pool: self.maude_pool.clone(),
-            sys_retention: self.sys_retention,
-            show_saturation_steps: self.show_saturation_steps,
-            use_induction: self.use_induction,
-            is_exists_trace: self.is_exists_trace,
-            cut: self.cut,
-            typing_assumptions: self.typing_assumptions.clone(),
-            heuristic: self.heuristic.clone(),
-            lemma_name: self.lemma_name.clone(),
-            theory_file: self.theory_file.clone(),
-            full_sources,
-            source_provider: self.source_provider.clone(),
-            saturate_gate: SaturateGate::new(saturate_state),
-            shared: std::sync::Arc::clone(&self.shared),
-        }
-    }
-
-    /// Build an independent context around a fresh set of lazy source cells.
-    /// Materialised cases may still be shared by a session source provider.
-    pub(crate) fn fresh_with_sources(
-        &self,
-        full_sources: std::sync::Arc<Vec<crate::constraint::solver::sources::Source>>,
-    ) -> Self {
-        self.copy_with_sources(full_sources, SaturateState::Pending)
-    }
-}
-
-/// Restores saturation's logically local fresh counter and wakes waiters on
-/// both normal completion and unwinding. A failed pass becomes retryable
-/// instead of leaving the context permanently in progress.
-struct SaturationRun<'a> {
-    ctx: &'a ProofContext,
-    counter_before: u64,
-    completed: bool,
-}
-
-impl<'a> SaturationRun<'a> {
-    fn new(ctx: &'a ProofContext, counter_before: u64) -> Self {
-        Self {
-            ctx,
-            counter_before,
-            completed: false,
-        }
-    }
-
-    /// Publish the run's result to every context sharing these sources.
-    ///
-    /// A run that ends under a cancelled request publishes nothing: passes
-    /// without an error channel may have continued past a cancelled algebra
-    /// query with a placeholder, so even an `Ok` is not a result. Dropping
-    /// `self` returns the gate to `Pending` and the next request recomputes.
-    fn finish(
-        mut self,
-        result: Result<(), crate::prove::ProveError>,
-    ) -> Result<(), crate::prove::ProveError> {
-        if tamarin_utils::cancellation::check().is_err() {
-            return Err(crate::prove::ProveError::Cancelled);
-        }
-        self.ctx.maude.reset_counter_to(self.counter_before);
-        *self
-            .ctx
-            .saturate_gate
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            SaturateState::Done(result.clone());
-        self.completed = true;
-        self.ctx.saturate_gate.ready.notify_all();
-        result
-    }
-}
-
-impl Drop for SaturationRun<'_> {
-    fn drop(&mut self) {
-        if self.completed {
-            return;
-        }
-        self.ctx.maude.reset_counter_to(self.counter_before);
-        *self
-            .ctx
-            .saturate_gate
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Pending;
-        self.ctx.saturate_gate.ready.notify_all();
     }
 }
 
@@ -464,227 +375,88 @@ impl ProofContext {
         Self::with_options(maude, rules, ProofContextOptions::default())
     }
 
-    /// Cheap clone with `maude` replaced.  Used at the rayon parallel
-    /// sites where each worker wants its own subprocess (acquired from
-    /// `maude_pool`) for the duration of one task, so workers don't
-    /// serialise on a single Maude's IPC mutex.
-    ///
-    /// Immutable theory data remains shared through `Arc`. Completed source
-    /// snapshots are shared with workers; an ordinary worker waits for an
-    /// active saturation pass, while a defensive call before saturation gets
-    /// independent source cells.
-    ///
-    /// The new context drops `maude_pool` (set to None): the worker
-    /// already owns a per-task subprocess for the task's duration, and
-    /// dropping the pool here keeps the nested fan-out (`search.rs`) on
-    /// its non-blocking `try_acquire` + `ctx.maude` fallback, which is
-    /// what prevents deadlock when the pool is smaller than the rayon
-    /// worker count.
+    /// Whether a search with a deadline visits its cases in order: a witness
+    /// search, or one whose ranking or source provider can fail. A later
+    /// case of such a search could end or fail it after the deadline has cut
+    /// the cases before it.
+    pub(crate) fn serial_under_a_deadline(&self) -> bool {
+        self.is_exists_trace
+            || matches!(&self.sources, ContextSources::Session(provider) if provider.may_fail())
+            || self
+                .heuristic
+                .as_deref()
+                .is_some_and(super::goals::rankings_may_fail)
+    }
+
+    /// Use the assigned Maude process for this task and its nested reductions.
     pub fn with_swapped_maude(&self, maude: MaudeHandle) -> Self {
-        let parent_state = {
-            let mut state = self
-                .saturate_gate
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            while matches!(*state, SaturateState::InProgress(_)) {
-                state = self
-                    .saturate_gate
-                    .ready
-                    .wait(state)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-            }
-            state.clone()
-        };
-        let (full_sources, worker_state) = match parent_state {
-            SaturateState::Pending => (
-                std::sync::Arc::new(self.full_sources.iter().cloned().collect()),
-                SaturateState::Pending,
-            ),
-            SaturateState::InProgress(_) => unreachable!("in-progress saturation was awaited"),
-            SaturateState::Done(result) => (
-                std::sync::Arc::clone(&self.full_sources),
-                SaturateState::Done(result),
-            ),
-        };
-        // Saturation workers read the previous iteration's source cells;
-        // proof-search workers inherit an already-complete set. Both are O(1)
-        // refcount bumps. A defensive pre-saturation call instead receives
-        // independent lazy cells and remains Pending.
-        let mut worker = self.copy_with_sources(full_sources, worker_state);
+        let mut worker = self.clone();
         worker.maude = maude;
         worker.maude_pool = None;
         worker
     }
 
-    /// HS-faithful lazy `saturateSources` (Sources.hs).  Runs at
-    /// most once per `ProofContext`: forces `initial_source_cases`
-    /// for each source in `full_sources`, then drives
-    /// `saturate_sources_with_simp` to convergence.  Subsequent
-    /// calls no-op via the `saturate_state` flag.
-    ///
-    /// Triggered by `Source::cases(ctx)` on first force.  Trivial
-    /// protocols whose lemma proofs never pattern-match on source
-    /// cases (e.g. Var-headed `KU(t:Fresh)` source on an existence
-    /// lemma) never call this, so zero saturate-time `[EXEC]` lines
-    /// fire — matching HS's lazy-thunk behaviour.
-    pub(crate) fn ensure_saturated(&self) -> Result<(), crate::prove::ProveError> {
-        {
-            let current_thread = std::thread::current().id();
-            let mut state = self
-                .saturate_gate
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            loop {
-                match &*state {
-                    SaturateState::Done(result) => return result.clone(),
-                    SaturateState::InProgress(owner) if *owner == current_thread => {
-                        // Re-entrant call from inside saturate's own
-                        // source-case grafting.  Return without re-running
-                        // — the caller sees the partially-populated cells,
-                        // matching HS's lazy fix-point semantics where
-                        // iteration N forces iteration N-1's cached value.
-                        return Ok(());
-                    }
-                    SaturateState::InProgress(_) => {
-                        state = self
-                            .saturate_gate
-                            .ready
-                            .wait(state)
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    }
-                    SaturateState::Pending => {
-                        *state = SaturateState::InProgress(current_thread);
-                        break;
-                    }
-                }
-            }
-        }
-        // Snapshot only after this thread owns the saturation run. A waiter
-        // may observe the shared Maude counter while the owner is using it;
-        // taking the snapshot before the gate would then restore that
-        // transient value instead of the caller's counter.
-        let saturate_cnt_before = self.maude.fresh_counter_peek();
-        let run = SaturationRun::new(self, saturate_cnt_before);
-        if let Some(provider) = &self.source_provider {
-            let result = provider.materialize(self);
-            return run.finish(result);
-        }
-        // HS-FAITHFUL PURITY: source refinement (`precomputeSources` /
-        // `saturateSources` / `refineWithSourceAsms`, Sources.hs) is a PURE
-        // `[Source] -> [Source]` computation with LOCAL `evalFresh (avoid
-        // goalTerm)` scopes — it does NOT thread the per-proof `MonadFresh`
-        // counter.  Each proof step independently resets fresh to `avoid sys`
-        // (ProofMethod.hs `runReduction (m <* simplifySystem) ctxt sys
-        // (avoid sys)`), and source cases are re-freshened on apply.  RS's
-        // saturation, by contrast, advances the shared `maude` counter while
-        // computing cases; that advance is HS-invisible and its magnitude is
-        // parallelism- and source-structure-dependent (large for SAPiC state
-        // facts), which leaks into the proof when the cache skips/replays it.
-        // Snapshot the counter and restore it after saturation so the refine
-        // is counter-neutral exactly as in HS — making the post-saturation
-        // counter (hence cache reuse vs recompute) byte-identical regardless.
-        // Pre-populate every source's cell with `Some(vec![])` BEFORE
-        // running `initial_source_cases` on any of them.  This breaks
-        // the recursion: when `initial_source_cases` for source A
-        // calls `solve_with_source_cases_action` against source B
-        // (forcing B.cases() recursively), B's cell is already
-        // `Some(empty)`, so the recursive call returns empty rather
-        // than re-entering `initial_source_cases` for B.  After this
-        // pass we run the second pass that fills each cell with the
-        // actual unsaturated `initialSource` cases — HS's `mapM`
-        // over the lazy list under the iterative fix-point.
-        for src in self.full_sources.iter() {
-            if src.cases_cell.lock().unwrap().is_none() {
-                src.cases_set(Vec::new());
-            }
-        }
-        // Saturation's own solver calls must see the previous iteration's
-        // partially populated source cells without recursively entering (or
-        // waiting on) this gate. Giving the whole pass one completed view
-        // makes that invariant structural; ordinary contexts still wait for
-        // the real result in `with_swapped_maude`.
-        let saturation_ctx = self.copy_with_sources(
-            std::sync::Arc::clone(&self.full_sources),
-            SaturateState::Done(Ok(())),
-        );
-        let result = (|| {
-            for src in self.full_sources.iter() {
-                let init = crate::constraint::solver::sources::initial_source_cases(
-                    &src.goal,
-                    &saturation_ctx,
-                )?;
-                src.cases_set(init);
-            }
-            // HS-faithful `saturate_sources_with_simp` (mirrors HS's
-            // `saturateSources` driven by `solveAllSafeGoals` as the
-            // proofStep): each iteration performs HS's per-step
-            // `insertEdges`/`solveTermEqs`/`exploitPrems` work, so the
-            // emitted trace matches HS's saturation rather than collapsing
-            // it into a single graft operation.
-            let raw: Vec<crate::constraint::solver::sources::Source> = self.full_sources.to_vec();
-            let saturated = crate::constraint::solver::sources::saturate_sources_with_simp(
-                raw,
-                self.parameters.saturation_limit(),
-                &saturation_ctx,
-            )?;
-            // HS-faithful: apply `refineWithSourceAsms` AFTER saturate.
-            // HS does this lazily — `refineWithSourceAsms` produces
-            // updated `Source` thunks that only fire their inner saturate
-            // when forced.  We approximate by running both inside
-            // `ensure_saturated` (which itself is lazy at the first
-            // `cases(ctx)` call), so the refinement traces still
-            // interleave with the lemma proof's first source-case access
-            // rather than firing during `prove_lemma` setup.
-            let refined = if self.typing_assumptions.is_empty() {
-                saturated
-            } else {
-                crate::constraint::solver::sources::refine_with_source_asms(
-                    saturated,
-                    &self.typing_assumptions,
-                    &saturation_ctx,
-                )?
-            };
-            // Saturation and refinement preserve one source per input, even
-            // when its case list becomes empty. Check that contract before
-            // publishing any of the refined cells.
-            assert_eq!(self.full_sources.len(), refined.len());
-            assert!(self
-                .full_sources
-                .iter()
-                .zip(&refined)
-                .all(|(original, refined)| original.goal == refined.goal));
-            for (original, refined) in self.full_sources.iter().zip(&refined) {
-                original.cases_set_shared(refined.cases_shared_or_empty());
-            }
-            // Restore the fresh counter to its pre-saturation value (see the
-            // HS-FAITHFUL PURITY note above): the refine consumed idxs only for
-            // the stored cases, which are re-freshened from `avoid(live_sys)` on
-            // every apply, so the global counter must not retain the advance.
-            self.dump_sources();
-            Ok(())
-        })();
-        run.finish(result)
+    pub(crate) fn for_dfs_case(&self, lease: Option<&OwnedPooledMaude>, next_counter: u64) -> Self {
+        let mut worker = self.clone();
+        let maude = lease.map_or(&self.maude, |lease| lease.handle());
+        worker.maude = maude.with_fresh_counter_next(next_counter);
+        worker
     }
 
-    /// Mark this context's sources as already saturated, bypassing the
-    /// `ensure_saturated` pass. Used by the session-level refined-source
-    /// cache: when raw cases are restored into its internal refinement
-    /// context, set the state to `Done` so later
-    /// `cases(ctx)` calls read the restored cells directly instead of
-    /// re-running the (expensive) `saturate_sources_with_simp` pass.
-    pub(crate) fn mark_saturated_done(&self) {
-        *self
-            .saturate_gate
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = SaturateState::Done(Ok(()));
-        self.saturate_gate.ready.notify_all();
+    /// Resolve the ordered source set on first case access. Builders have a
+    /// private iteration view so their recursive reads never enter the cache.
+    pub(crate) fn ensure_saturated(&self) -> Result<SharedSources, ProveError> {
+        match &self.sources {
+            ContextSources::Session(provider) => provider.materialize(&self.maude),
+            ContextSources::Materialized => Ok(self.full_sources.clone()),
+            ContextSources::Local(local) => {
+                let slot = local.get_or_init(Arc::default);
+                slot.get_or_build(|| {
+                    let ctx = self.clone();
+                    move || ctx.build_sources()
+                })
+            }
+        }
+    }
+
+    pub(crate) fn build_sources(mut self) -> Result<SharedSources, ProveError> {
+        self.sources = ContextSources::Materialized;
+        // Source refinement uses local fresh variables. A cancelled build can
+        // drop its entire working set without touching a proof's counter or cases.
+        self.maude = self
+            .maude
+            .with_fresh_counter_next(self.maude.fresh_counter_peek());
+        self.full_sources = Arc::new(
+            self.full_sources
+                .iter()
+                .map(|s| Source::lazy(s.goal.clone()))
+                .collect(),
+        );
+        for src in self.full_sources.iter() {
+            src.set_cases(super::sources::initial_source_cases(&src.goal, &self)?);
+        }
+        let saturated = super::sources::saturate_sources_with_simp(
+            self.full_sources.to_vec(),
+            self.parameters.saturation_limit(),
+            &self,
+        )?;
+        let refined = if self.typing_assumptions.is_empty() {
+            saturated
+        } else {
+            super::sources::refine_with_source_asms(saturated, &self.typing_assumptions, &self)?
+        };
+        self.full_sources = Arc::new(refined);
+        self.dump_sources();
+        Ok(self.full_sources)
+    }
+
+    pub(crate) fn use_materialized_sources(&mut self, sources: SharedSources) {
+        self.full_sources = sources;
+        self.sources = ContextSources::Materialized;
     }
 
     pub(crate) fn set_source_provider(&mut self, provider: std::sync::Arc<dyn SourceProvider>) {
-        self.source_provider = Some(provider);
+        self.sources = ContextSources::Session(provider);
     }
 
     /// HS-faithful assembly of the intruder-rule cache
@@ -886,17 +658,8 @@ impl ProofContext {
                 _ => "other".to_string(),
             };
             let names: Vec<String> = src
-                .cases_cell
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|cs| {
-                    cs.lock()
-                        .unwrap()
-                        .iter()
-                        .map(|(ns, _)| ns.join("_"))
-                        .collect()
-                })
+                .cases()
+                .map(|cases| cases.iter().map(|(ns, _)| ns.join("_")).collect())
                 .unwrap_or_default();
             eprintln!(
                 "[SRCDUMP] {} goal=<{}> ncases={} names={:?}",
@@ -1065,8 +828,7 @@ impl ProofContext {
             lemma_name: String::new(),
             theory_file: String::new(),
             full_sources: std::sync::Arc::new(Vec::new()),
-            source_provider: None,
-            saturate_gate: SaturateGate::new(SaturateState::Pending),
+            sources: ContextSources::Local(OnceLock::new()),
             shared: std::sync::Arc::new(ProofContextShared {
                 #[cfg(test)]
                 worker_gate: std::sync::Mutex::new(None),
@@ -1080,50 +842,7 @@ impl ProofContext {
                 parameters,
             }),
         };
-        // Precompute full source-case enumerations.  Runs *after*
-        // rule construction and with an empty `full_sources` itself so there's
-        // no recursive lookup during precomputation. Saturates the cases via
-        // `saturate_sources` so recursive Loop-style chains fold into a finite
-        // enumeration of self-contained sub-systems.
-        // Install rule variants BEFORE precompute, so
-        // `precompute_full_sources` sees the variant-expanded (abstracted)
-        // rule set, matching HS (whose
-        // precompute runs over `cprRuleAC`; Items/RuleItem.hs).
-        //
-        let raw_sources = crate::constraint::solver::sources::precompute_full_sources(&ctx);
-        // HS-faithful lazy precompute: `saturateSources` (Sources.hs)
-        // is *lazy in cdCases* — its `refineSource ctxt solver`
-        // applications produce `Source`s whose updated `cdCases` is
-        // itself a thunk that forces only when a consumer pattern-
-        // matches on `(name, sys) <- get cdCases th` in a Disj-monad
-        // bind.  For protocols where the lemma proof never forces a
-        // particular source's `cdCases` (e.g. `Heard`-style existence
-        // lemmas on a Var-headed `KU(t:Fresh)` source — HS's
-        // `getMsgOneCase` short-circuits on the goal-shape pattern
-        // before touching `cdCases`), the thunk never runs and zero
-        // saturate-time `[EXEC] solveGoal / exploitPrems / ...` lines
-        // are emitted.
-        //
-        // To preserve this laziness we defer saturation to the first
-        // `Source::cases(ctx)` call via `ProofContext::ensure_saturated`
-        // (which drives `saturate_sources_with_simp`).  `ctx.full_sources`
-        // holds the unsaturated raw sources from `precompute_full_sources`
-        // (each with `cases_cell = None`); no `[EXEC] solveGoal /
-        // exploitPrems / ...` lines fire here — they only fire when a
-        // lemma proof forces a source's cases via pattern-matching on its
-        // `cdCases` (HS-faithful).
-        ctx.full_sources = std::sync::Arc::new(raw_sources);
-        // No saturation here — `ctx.full_sources` holds unsaturated
-        // raw sources.  `prove_lemma` calls `ctx.ensure_saturated()`
-        // AFTER assigning `ctx.typing_assumptions` so that
-        // `refine_with_source_asms` runs with the lemma's [sources]
-        // assumptions in hand.  Matches HS's `refineWithSourceAsms`
-        // timing where `[Saturating Sources] Done` fires after
-        // assumptions are applied.
-        // No post-saturate drop pass — Haskell doesn't have one.
-        // Haskell relies on saturate-time `contradictoryIf` inside
-        // `solveAllSafeGoals` (Sources.hs) + runtime
-        // contradiction detection during proof search.
+        ctx.full_sources = Arc::new(super::sources::source_patterns(&ctx));
         Ok(ctx)
     }
 }
@@ -1393,9 +1112,8 @@ pub fn annotate_theory_loop_breakers(
 
 #[cfg(test)]
 mod tests {
-    use super::{IntrRuleCache, ProofContext, SaturateState, SaturationRun};
+    use super::{Arc, IntrRuleCache, ProveError, SourceSlot};
     use crate::rule::IntrRuleAC;
-    use tamarin_test_support::require_maude_path;
 
     /// A small Maude-free rule list: the special intruder rules
     /// (`coerce`, `pub`, `fresh`, `isend`, `irecv`).
@@ -1420,167 +1138,76 @@ mod tests {
         assert_eq!(cache.len(), n);
         assert_eq!(shared.len(), n);
     }
-
     #[test]
-    fn worker_snapshot_shares_sources() {
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        let ctx = ProofContext::new(
-            tamarin_term::maude_proc::MaudeHandle::start(
-                &path,
-                tamarin_term::maude_sig::pair_maude_sig(),
-            )
-            .unwrap(),
-            Vec::new(),
-        );
-        ctx.mark_saturated_done();
-        let worker = ctx.with_swapped_maude(ctx.maude.clone());
-        assert!(std::sync::Arc::ptr_eq(
-            &ctx.full_sources,
-            &worker.full_sources
-        ));
-        assert_eq!(
-            *worker.saturate_gate.state.lock().unwrap(),
-            SaturateState::Done(Ok(()))
-        );
-    }
-
-    #[test]
-    fn ordinary_worker_waits_for_saturation_and_inherits_its_error() {
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        let ctx = ProofContext::new(
-            tamarin_term::maude_proc::MaudeHandle::start(
-                &path,
-                tamarin_term::maude_sig::pair_maude_sig(),
-            )
-            .unwrap(),
-            Vec::new(),
-        );
-        *ctx.saturate_gate.state.lock().unwrap() =
-            SaturateState::InProgress(std::thread::current().id());
-
-        std::thread::scope(|scope| {
-            let (started_tx, started_rx) = std::sync::mpsc::channel();
-            let (done_tx, done_rx) = std::sync::mpsc::channel();
-            let ctx_ref = &ctx;
-            scope.spawn(move || {
-                started_tx.send(()).unwrap();
-                let worker = ctx_ref.with_swapped_maude(ctx_ref.maude.clone());
-                done_tx
-                    .send(worker.saturate_gate.state.lock().unwrap().clone())
-                    .unwrap();
-            });
-            started_rx.recv().unwrap();
-            assert!(matches!(
-                done_rx.recv_timeout(std::time::Duration::from_millis(25)),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-            ));
-
-            *ctx.saturate_gate.state.lock().unwrap() = SaturateState::Done(Err(
-                crate::prove::ProveError::Guarded("conversion failed".into()),
-            ));
-            ctx.saturate_gate.ready.notify_all();
-            assert_eq!(
-                done_rx.recv().unwrap(),
-                SaturateState::Done(Err(crate::prove::ProveError::Guarded(
-                    "conversion failed".into()
-                )))
-            );
-        });
-    }
-
-    #[test]
-    fn fresh_session_layout_resets_saturation_result() {
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        let ctx = ProofContext::new(
-            tamarin_term::maude_proc::MaudeHandle::start(
-                &path,
-                tamarin_term::maude_sig::pair_maude_sig(),
-            )
-            .unwrap(),
-            Vec::new(),
-        );
-        *ctx.saturate_gate.state.lock().unwrap() =
-            SaturateState::Done(Err(crate::prove::ProveError::Guarded("old".into())));
-
-        let fresh = ctx.fresh_with_sources(std::sync::Arc::clone(&ctx.full_sources));
-        assert_eq!(
-            *fresh.saturate_gate.state.lock().unwrap(),
-            SaturateState::Pending
-        );
-    }
-
-    #[test]
-    fn aborted_saturation_is_retryable_and_counter_neutral() {
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        let ctx = ProofContext::new(
-            tamarin_term::maude_proc::MaudeHandle::start(
-                &path,
-                tamarin_term::maude_sig::pair_maude_sig(),
-            )
-            .unwrap(),
-            Vec::new(),
-        );
-        let before = ctx.maude.fresh_counter_peek();
-        *ctx.saturate_gate.state.lock().unwrap() =
-            SaturateState::InProgress(std::thread::current().id());
-        {
-            let _run = SaturationRun::new(&ctx, before);
-            ctx.maude.ensure_above(before.saturating_add(50));
-        }
-
-        assert_eq!(ctx.maude.fresh_counter_peek(), before);
-        assert_eq!(
-            *ctx.saturate_gate.state.lock().unwrap(),
-            SaturateState::Pending
-        );
+    fn source_consumers_share_the_build_and_run_its_jobs() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let slot = Arc::new(SourceSlot::default());
+        let start = std::sync::Barrier::new(2);
+        let results = pool
+            .install(|| {
+                tamarin_utils::parallel::try_map(vec![(), ()], move |()| {
+                    start.wait();
+                    slot.get_or_build(|| {
+                        move || {
+                            let (ready, waiting) = std::sync::mpsc::channel();
+                            let waiting = std::sync::Mutex::new(waiting);
+                            let threads = tamarin_utils::parallel::try_map(vec![0, 1], move |i| {
+                                if i == 0 {
+                                    waiting
+                                        .lock()
+                                        .unwrap()
+                                        .recv_timeout(std::time::Duration::from_secs(5))
+                                        .unwrap();
+                                } else {
+                                    ready.send(()).unwrap();
+                                }
+                                Ok::<_, ProveError>(std::thread::current().id())
+                            })?;
+                            assert_ne!(threads[0], threads[1]);
+                            Ok(Arc::new(Vec::new()))
+                        }
+                    })
+                })
+            })
+            .unwrap();
+        assert!(Arc::ptr_eq(&results[0], &results[1]));
     }
 
     /// A saturation that finishes under a cancelled request may rest on
     /// placeholders for cancelled algebra queries. Not even its `Ok` may be
-    /// shared: the gate stays retryable and the request sees a cancellation.
+    /// shared: the slot stays empty, the request sees a cancellation, and
+    /// the next request builds again.
     #[test]
     fn saturation_finished_under_cancellation_is_not_published() {
         use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        let ctx = ProofContext::new(
-            tamarin_term::maude_proc::MaudeHandle::start(
-                &path,
-                tamarin_term::maude_sig::pair_maude_sig(),
-            )
-            .unwrap(),
-            Vec::new(),
-        );
-        let before = ctx.maude.fresh_counter_peek();
-        *ctx.saturate_gate.state.lock().unwrap() =
-            SaturateState::InProgress(std::thread::current().id());
-        {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        let slot = Arc::new(SourceSlot::default());
+        let attempt = slot.clone();
+        let cancelled = pool.install(move || {
             let token = CancellationToken::default();
             let _guard = CancellationGuard::new(Some(token.clone()));
-            let run = SaturationRun::new(&ctx, before);
-            token.request_cancel();
-            assert_eq!(run.finish(Ok(())), Err(crate::prove::ProveError::Cancelled));
-        }
-        assert_eq!(
-            *ctx.saturate_gate.state.lock().unwrap(),
-            SaturateState::Pending
-        );
+            attempt.get_or_build(|| {
+                move || {
+                    // The request is cancelled while its build is running,
+                    // and the build still comes back with a value.
+                    token.request_cancel();
+                    Ok(Arc::new(Vec::new()))
+                }
+            })
+        });
+        assert_eq!(cancelled.err(), Some(ProveError::Cancelled));
+        assert!(slot.ready.get().is_none());
 
-        *ctx.saturate_gate.state.lock().unwrap() =
-            SaturateState::InProgress(std::thread::current().id());
-        assert_eq!(SaturationRun::new(&ctx, before).finish(Ok(())), Ok(()));
-        assert_eq!(
-            *ctx.saturate_gate.state.lock().unwrap(),
-            SaturateState::Done(Ok(()))
-        );
+        let retry = slot.clone();
+        let built = pool
+            .install(move || retry.get_or_build(|| || Ok(Arc::new(Vec::new()))))
+            .unwrap();
+        assert!(Arc::ptr_eq(&built, slot.ready.get().unwrap()));
     }
 }

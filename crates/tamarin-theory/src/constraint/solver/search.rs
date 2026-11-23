@@ -34,11 +34,12 @@
 //! as a Rust-only loop-termination guard so a genuinely
 //! non-terminating proof strategy aborts rather than overflows.  No
 //! realistic Tamarin proof approaches this cap, so it never flips a
-//! verdict.  The per-lemma wall-clock deadline is a Rust-only
+//! verdict.  The per-search wall-clock deadline is a Rust-only
 //! addition, OFF by default (opt in via `TAM_PROVE_DEADLINE_MS`); see
-//! `proof_deadline`.
+//! `ProofTimeLimit`.
 
 use std::collections::BTreeMap;
+use tamarin_term::maude_proc::OwnedPooledMaude;
 use tamarin_utils::cancellation;
 pub use tamarin_utils::cancellation::CancellationGuard as ProofCancellationGuard;
 
@@ -66,19 +67,34 @@ pub struct ProofNode {
     pub annotated: bool,
 }
 
-/// What's the proof-tree node currently saying?
+impl ProofNode {
+    fn open(sys: System) -> Self {
+        Self {
+            method: ProofMethod::Sorry(None),
+            sys,
+            children: BTreeMap::new(),
+            status: NodeStatus::Open,
+            annotated: true,
+        }
+    }
+
+    fn needs_revisit(&self) -> bool {
+        self.status == NodeStatus::Sorry && (!self.children.is_empty() || is_depth_limited(self))
+    }
+}
+
+/// Search outcome for a node and its descendants. See [`rollup_status`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeStatus {
     /// Not yet finished — has open children to explore.
     Open,
-    /// All branches reached `Solved`.
+    /// The node or one of its descendants yields a trace.
     Solved,
     /// At least one branch reached `Contradictory(_)`.
     Contradictory,
     /// At least one branch reached `Unfinishable`.
     Unfinishable,
-    /// Gave up on at least one branch (`sorry`): depth limit, deadline,
-    /// `--bound` cut, or no applicable method.
+    /// A branch is incomplete because it hit a search limit or has no applicable method.
     Sorry,
 }
 
@@ -266,70 +282,147 @@ fn disable_parallel_expand() -> bool {
     tamarin_utils::env_gate!("TAM_RS_DISABLE_PARALLEL_EXPAND")
 }
 
-#[inline]
-fn should_parallel_expand(
-    ctx: &ProofContext,
-    n_cases: usize,
-    depth: usize,
-    serial_only: bool,
-) -> bool {
-    !serial_only
-        && !ctx.is_exists_trace
-        && !ctx.proving_may_fail()
-        && matches!(ctx.cut, CutStrategy::Dfs)
-        && n_cases >= 2
-        && depth <= 16
+/// Bound the number of enclosing forks with outstanding siblings. A single
+/// worker walks its branches in order.
+fn split_levels(workers: usize) -> u32 {
+    if workers == 1 {
+        0
+    } else {
+        workers.ilog2() + 2
+    }
 }
 
-/// Per-lemma wall-clock cap on `run_proof_search`. This is a Rust-only,
-/// opt-in cap (`TAM_PROVE_DEADLINE_MS`) with NO Haskell counterpart — HS
-/// has no `--prove-timeout`-style flag. It exists so that when the search
-/// tree branches faster than CR-rules can prune (e.g. with a richer
-/// signature) a corpus sweep can mark the lemma `Sorry` rather than spin
-/// forever. It defaults to an effectively-infinite deadline so the default
-/// behaviour is HS-faithful (no cutoff).
-///
-/// HS-faithful: HS has NO per-lemma wall-clock deadline — its iterative
-/// deepening runs to completion.  So by DEFAULT we apply NO cutoff either
-/// (a far-future deadline that never fires); under the default `Dfs`
-/// strategy termination is still guaranteed by the ID-DFS depth cap
-/// (`MAX_DEPTH`), while `seqdfs` has no depth cut at all (like its
-/// HS counterpart — see `run_proof_search`).  A cutoff is
-/// applied ONLY when the caller explicitly opts in via the
-/// `TAM_PROVE_DEADLINE_MS` env var (e.g. corpus sweeps that want to bound
-/// per-lemma wall time) or, for one thread only, via
-/// [`ProofDeadlineGuard`].
-fn proof_deadline() -> std::time::Instant {
-    let now = std::time::Instant::now();
-    // No override, or one too far out to represent → run unbounded
-    // (faithful to HS).  ~10 years is effectively infinite and safe
-    // against `Instant` overflow.
-    let unbounded = || now + std::time::Duration::from_secs(10 * 365 * 24 * 3600);
-    match deadline_cap_ms() {
-        Some(ms) => now
-            .checked_add(std::time::Duration::from_millis(ms))
-            .unwrap_or_else(unbounded),
-        None => unbounded(),
+/// Whether the cases of a node are visited by several workers.
+fn forks(ctx: &ProofContext, cases: usize) -> bool {
+    cases >= 2
+        && ctx.cut == CutStrategy::Dfs
+        && !disable_parallel_expand()
+        && rayon::current_num_threads() > 1
+        // Ordinary all-traces forks inherit the same absolute deadline.
+        && !(ctx.serial_under_a_deadline() && DEADLINE.with(|cell| cell.get().is_some()))
+}
+
+/// Visit cases in order on several workers, up to the first solved one.
+/// A worker other than the caller looks for a pooled process of its own
+/// before each case. The cases of workers without one share the caller's,
+/// where a case that a sequential search would reach first can take it from
+/// a later one.
+fn visit_forked(
+    ctx: &ProofContext,
+    children: &mut BTreeMap<String, ProofNode>,
+    cases: Vec<(String, ProofNode)>,
+    depth: usize,
+    visit: fn(&ProofContext, &mut ProofNode, usize) -> Result<(), ProveError>,
+) -> Result<(), ProveError> {
+    let mut cases = cases.into_iter();
+    // Finishing a serial case can free an enclosing fork's depth budget.
+    let limit = split_levels(rayon::current_num_threads()) as usize;
+    while cases.len() < 2 || tamarin_utils::parallel::active_split_depth() >= limit {
+        let Some((name, mut child)) = cases.next() else {
+            return Ok(());
+        };
+        let solved = visit_child(ctx, &name, &mut child, depth, visit)?;
+        children.insert(name, child);
+        if solved {
+            return Ok(());
+        }
+    }
+    let cases = cases.collect();
+    let child_search = SearchTlsState::for_child();
+    // Snapshot the proof-tree case_path so each worker can seed its
+    // own thread-local stack and produce coherent trace output.
+    let path_snapshot = crate::constraint::solver::trace::case_path_snapshot();
+    // A rayon closure may run on this same thread. Its guards restore the
+    // parent's TLS and case path; retain only the worker results that must
+    // be aggregated into the parent search.
+    let parent_depth_limit_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
+    check_cancelled()?;
+    let ctx = ctx.clone();
+    let results = {
+        let pool = ctx.maude_pool.clone();
+        let visit_case = move |lease: Option<OwnedPooledMaude>,
+                               (name, mut child): (String, ProofNode)|
+              -> Result<_, ProveError> {
+            let _tls = SearchTlsGuard::install(child_search);
+            let _path = crate::constraint::solver::trace::CasePathGuard::set_child(
+                path_snapshot.clone(),
+                &name,
+            );
+            // HS seeds a fresh counter from the free variables of each case.
+            let avoid_next = crate::constraint::solver::reduction::avoid_fresh_state(&child.sys);
+            let worker_ctx = ctx.for_dfs_case(lease.as_ref(), avoid_next);
+            #[cfg(test)]
+            super::cancellation_tests::checkpoint(
+                &worker_ctx,
+                super::cancellation_tests::Work::Search,
+            );
+            visit(&worker_ctx, &mut child, depth + 1)?;
+            let local_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
+            Ok((name, child, local_hit))
+        };
+        let solved = |(_, child, _): &(_, ProofNode, _)| matches!(child.status, NodeStatus::Solved);
+        tamarin_utils::parallel::try_map_until_with_helpers(
+            cases,
+            move || {
+                let own = pool.as_ref().and_then(|pool| pool.try_acquire_ready());
+                Some(own.map_or(
+                    tamarin_utils::parallel::Helper::Shared,
+                    tamarin_utils::parallel::Helper::Own,
+                ))
+            },
+            visit_case,
+            solved,
+        )
+    }?;
+    // Iterative deepening needs another pass if the parent or any retained
+    // child reached the depth limit, including children run on this thread.
+    let any_hit = results.iter().any(|(_, _, hit)| *hit);
+    DEPTH_LIMIT_HIT.with(|f| f.set(parent_depth_limit_hit || any_hit));
+    for (name, child, _hit) in results {
+        children.insert(name, child);
+    }
+    Ok(())
+}
+
+/// A relative limit captured at proof admission. Each search starts its own
+/// clock, including searches of open leaves during replay.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ProofTimeLimit {
+    Unlimited,
+    Milliseconds(u64),
+}
+
+impl ProofTimeLimit {
+    pub(crate) fn current() -> Self {
+        TIME_LIMIT_OVERRIDE
+            .with(|cell| cell.get())
+            .unwrap_or_else(|| {
+                std::env::var("TAM_PROVE_DEADLINE_MS")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .map_or(Self::Unlimited, Self::Milliseconds)
+            })
+    }
+
+    fn deadline(self) -> Option<std::time::Instant> {
+        match self {
+            Self::Unlimited => None,
+            Self::Milliseconds(ms) => {
+                std::time::Instant::now().checked_add(std::time::Duration::from_millis(ms))
+            }
+        }
+    }
+
+    pub(crate) fn install(self) -> ProofDeadlineGuard {
+        ProofDeadlineGuard {
+            previous: TIME_LIMIT_OVERRIDE.with(|cell| cell.replace(Some(self))),
+            _not_send: std::marker::PhantomData,
+        }
     }
 }
 
 thread_local! {
-    /// Thread-scoped wall-clock cap for the searches this thread starts,
-    /// installed by [`ProofDeadlineGuard`].  Takes precedence over the
-    /// `TAM_PROVE_DEADLINE_MS` env var; `None` (the default) falls back
-    /// to it.
-    static DEADLINE_CAP_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
-}
-
-/// The wall-clock cap in force for a search started on THIS thread: the
-/// [`ProofDeadlineGuard`] override if one is installed, else the
-/// `TAM_PROVE_DEADLINE_MS` env var, else `None` (unbounded).
-fn deadline_cap_ms() -> Option<u64> {
-    DEADLINE_CAP_MS.with(|c| c.get()).or_else(|| {
-        std::env::var("TAM_PROVE_DEADLINE_MS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-    })
+    static TIME_LIMIT_OVERRIDE: std::cell::Cell<Option<ProofTimeLimit>> = const { std::cell::Cell::new(None) };
 }
 
 /// RAII guard installing a wall-clock cap on the searches started by the
@@ -342,28 +435,25 @@ fn deadline_cap_ms() -> Option<u64> {
 /// that another thread happens to start inside the probe's window —
 /// silently turning a would-be-`TraceFound` search into a no-trace one.
 pub struct ProofDeadlineGuard {
-    previous: Option<u64>,
+    previous: Option<ProofTimeLimit>,
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 impl ProofDeadlineGuard {
     /// Cap searches started on this thread at `ms` milliseconds.
     pub fn set_ms(ms: u64) -> Self {
-        let previous = DEADLINE_CAP_MS.with(|c| c.replace(Some(ms)));
-        ProofDeadlineGuard { previous }
+        ProofTimeLimit::Milliseconds(ms).install()
     }
 
-    /// Lift any cap for searches started on this thread — including an
-    /// outer guard's and the `TAM_PROVE_DEADLINE_MS` env var's, which a
-    /// cleared (`None`) override would fall back to.  `u64::MAX` ms
-    /// overflows `Instant`, so [`proof_deadline`] reads it as no cutoff.
+    /// Lift both the enclosing guard and the process-wide time limit.
     pub fn unbounded() -> Self {
-        Self::set_ms(u64::MAX)
+        ProofTimeLimit::Unlimited.install()
     }
 }
 
 impl Drop for ProofDeadlineGuard {
     fn drop(&mut self) {
-        DEADLINE_CAP_MS.with(|c| c.set(self.previous));
+        TIME_LIMIT_OVERRIDE.with(|c| c.set(self.previous));
     }
 }
 
@@ -421,12 +511,25 @@ pub fn deadline_reached() -> bool {
     })
 }
 
+#[derive(Clone, Copy)]
 struct SearchTlsState {
     deadline: Option<std::time::Instant>,
     max_depth: usize,
     depth_limit_hit: bool,
     proof_bound: usize,
     ranking_depth_offset: usize,
+}
+
+impl SearchTlsState {
+    fn for_child() -> Self {
+        Self {
+            deadline: DEADLINE.with(|cell| cell.get()),
+            max_depth: MAX_DEPTH.with(|cell| cell.get()),
+            proof_bound: PROOF_BOUND.with(|cell| cell.get()),
+            ranking_depth_offset: RANKING_DEPTH_OFFSET.with(|cell| cell.get()),
+            depth_limit_hit: false,
+        }
+    }
 }
 
 fn replace_search_tls(state: SearchTlsState) -> SearchTlsState {
@@ -441,70 +544,30 @@ fn replace_search_tls(state: SearchTlsState) -> SearchTlsState {
 }
 
 struct SearchTlsGuard {
-    previous: Option<SearchTlsState>,
+    previous: SearchTlsState,
 }
 
 impl SearchTlsGuard {
     fn install(state: SearchTlsState) -> Self {
         Self {
-            previous: Some(replace_search_tls(state)),
+            previous: replace_search_tls(state),
         }
     }
 }
 
 impl Drop for SearchTlsGuard {
     fn drop(&mut self) {
-        replace_search_tls(self.previous.take().expect("search TLS guard dropped once"));
+        replace_search_tls(self.previous);
     }
 }
 
-/// Run an iterative-deepening search.  Heuristic: try `Simplify`
-/// once, then pick the first ranked open goal each round.
+/// Search from `initial` using the context's [`CutStrategy`]. The default
+/// [`CutStrategy::Dfs`] retains the first solved path in case order within the
+/// first depth round that finds a solution. One solved child suffices.
 ///
-/// `proof_bound` is `--bound=N`'s proof-depth bound (HS `apBound`,
-/// applied as `boundProofDepth` — see [`PROOF_BOUND`]); pass
-/// `usize::MAX` for unbounded (HS `Nothing`, the default).  It is NOT a
-/// step budget: HS's `cutOnSolvedDFS` bounds the search purely by
-/// the ID-DFS depth `dMax` (`MAX_DEPTH`, described below), the
-/// per-lemma wall-clock timeout (`deadline`), and this proof-depth
-/// bound.  See the `budget = usize::MAX` note in each strategy arm.
-///
-/// Returns the root proof node. The final status is the OR of children
-/// (Solved if all children solved, Contradictory if any contradictory,
-/// etc.) — matching Haskell's notion of "complete" proofs.
-///
-/// The search strategy is dispatched on `ctx.cut` (HS `apCut`):
-/// `CutStrategy::SeqDfs` (HS `cutOnSolvedSingleThreadDFS`) runs a single
-/// unbounded-depth serial pass; `CutStrategy::Dfs` (HS `cutOnSolvedDFS`,
-/// the default) runs the iterative-deepening DFS described below.
-///
-/// **Iterative-deepening DFS** — port of Haskell's `cutOnSolvedDFS`
-/// (Theory/Proof.hs).  Starts at `max_depth=4` and doubles up with
-/// only the far-out `usize::MAX/4` loop-termination guard (no fixed
-/// numeric cap).  At each iteration:
-///   1. Expand the tree at the current `MAX_DEPTH`.  On the first
-///      iteration this builds the tree from scratch; on subsequent
-///      iterations only `depth limit` Sorry leaves are re-expanded
-///      (mirroring Haskell's lazy-thunk memoization in
-///      `cutOnSolvedDFS`).
-///   2. If status is Solved → return immediately (matches Haskell's
-///      `Solution path` short-circuit via `<>`).
-///   3. If `DEPTH_LIMIT_HIT` was set and depth < cap → double and retry.
-///   4. Else (no Solved found, no depth limit hit) → return.
-///
-/// **Memoization**: Haskell's iter-deep gets free
-/// memoization because the proof tree is built lazily — each `prove sys'`
-/// thunk fires once when forced, and re-forcing a thunk returns the
-/// cached value.  Rust has no laziness, so without memoization each
-/// iter-deep iteration rebuilds the entire tree from scratch — visiting
-/// 2.3x more nodes than Haskell on NSLPK3.  We mirror Haskell by keeping
-/// the tree across iterations and only re-expanding `Sorry: depth limit`
-/// leaves (the analog of unforced thunks).
-///
-/// This makes shorter Solved paths win over longer Solved paths even
-/// when the longer path is alphabetically earlier — critical for
-/// NSPK3/roles `injective_agree` where Haskell renders `case c_aenc`
-/// (shorter) over `case I_2` (alphabetically earlier but deeper).
+/// `proof_bound` is the maximum proof depth (`--bound=N`). Pass `usize::MAX`
+/// for unbounded depth. Each search invocation gets its own deadline when a
+/// time limit is configured.
 pub fn run_proof_search(
     ctx: &ProofContext,
     initial: System,
@@ -519,9 +582,8 @@ pub(crate) fn run_proof_search_at_depth(
     proof_bound: usize,
     ranking_depth_offset: usize,
 ) -> Result<ProofNode, ProveError> {
-    let deadline = proof_deadline();
     let _tls = SearchTlsGuard::install(SearchTlsState {
-        deadline: Some(deadline),
+        deadline: ProofTimeLimit::current().deadline(),
         max_depth: usize::MAX,
         depth_limit_hit: false,
         proof_bound,
@@ -535,49 +597,11 @@ pub(crate) fn run_proof_search_at_depth(
         annotated: true,
     };
     match ctx.cut {
-        CutStrategy::SeqDfs => {
-            // HS `cutOnSolvedSingleThreadDFS` (Theory/Proof.hs):
-            // single-thread DFS with NO iterative deepening and NO depth
-            // bound.  One unbounded-depth `expand` pass descends the leftmost
-            // branch (CaseName order) to completion, short-circuiting on the
-            // first solved leaf — the serial branch's `any_solved` early-break
-            // (gated below on `CutStrategy::SeqDfs`) mirrors `findSolved`'s
-            // `foldMap` over the children map.  `extract_solved_path` below
-            // then prunes to that leaf, HS's `extractSolved path prf0`.
-            // `MAX_DEPTH = usize::MAX` disables the depth cut entirely, so no
-            // branch becomes a `depth limit` Sorry, `DEPTH_LIMIT_HIT` never
-            // fires, and no re-expansion is needed.  Like HS (the FIXME at
-            // Theory/Proof.hs) this can fail to terminate on an infinite
-            // leftmost branch; the wall-clock `deadline` is the only backstop.
-            MAX_DEPTH.with(|m| m.set(usize::MAX));
-            DEPTH_LIMIT_HIT.with(|f| f.set(false));
-            let mut budget = usize::MAX;
-            expand(ctx, &mut root, &mut budget, &deadline, 0)?;
-        }
-        CutStrategy::Nothing => {
-            // HS `CutNothing` → `id` (Theory/Proof.hs): the full DFS proof
-            // tree with NO cut and NO stop-on-solved.  Like SeqDfs this is
-            // one unbounded-depth serial pass (the serial sibling loop's
-            // abort policy below never fires for `Nothing`), and like HS
-            // it may not terminate when a branch recurses forever; the
-            // wall-clock `deadline` is the only backstop.
-            MAX_DEPTH.with(|m| m.set(usize::MAX));
-            DEPTH_LIMIT_HIT.with(|f| f.set(false));
-            let mut budget = usize::MAX;
-            expand(ctx, &mut root, &mut budget, &deadline, 0)?;
-        }
-        CutStrategy::AfterSorry => {
-            // HS `CutAfterSorry` → `cutAfterFirstSorry` (Theory/Proof.hs).
-            // HS's `M.mapAccum go` never forces a lazy subtree past the
-            // abort point; the eager mirror is the serial sibling loop's
-            // AfterSorry policy (below): the first Solved-or-Sorry child in
-            // preorder aborts, and the remaining sibling cases are inserted
-            // as bare-`sorry` leaves instead of being expanded — exactly
-            // the nodes HS's `go True` rewrites to `Sorry Nothing`.
-            MAX_DEPTH.with(|m| m.set(usize::MAX));
-            DEPTH_LIMIT_HIT.with(|f| f.set(false));
-            let mut budget = usize::MAX;
-            expand(ctx, &mut root, &mut budget, &deadline, 0)?;
+        CutStrategy::SeqDfs | CutStrategy::Nothing | CutStrategy::AfterSorry => {
+            // Each takes one depth-first pass. The serial sibling loop applies
+            // the cut, visiting all children for Nothing, stopping at the first
+            // solved child for SeqDfs, or stubbing the suffix for AfterSorry.
+            expand(ctx, &mut root, 0)?;
         }
         CutStrategy::Bfs => {
             // HS `cutOnSolvedBFS` (Theory/Proof.hs): force the tree one
@@ -597,11 +621,10 @@ pub(crate) fn run_proof_search_at_depth(
             loop {
                 MAX_DEPTH.with(|m| m.set(level + 1));
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
-                let mut budget = usize::MAX;
                 if level == 1 {
-                    expand(ctx, &mut root, &mut budget, &deadline, 0)?;
+                    expand(ctx, &mut root, 0)?;
                 } else {
-                    re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0)?;
+                    re_expand_depth_limited(ctx, &mut root, 0)?;
                 }
                 // HS's poor-man's logging (Theory/Proof.hs) — `trace` to
                 // stderr, unconditional.
@@ -623,7 +646,7 @@ pub(crate) fn run_proof_search_at_depth(
                 if !incomplete {
                     break;
                 }
-                if std::time::Instant::now() >= deadline {
+                if deadline_reached() {
                     break;
                 }
                 if level >= cap {
@@ -644,36 +667,20 @@ pub(crate) fn run_proof_search_at_depth(
             loop {
                 MAX_DEPTH.with(|m| m.set(current_max_depth));
                 DEPTH_LIMIT_HIT.with(|f| f.set(false));
-                // HS-faithful: `cutOnSolvedDFS` (Theory/Proof.hs) bounds the
-                // search by the ID-DFS depth `dMax` (our `MAX_DEPTH`) and the
-                // per-lemma wall-clock timeout ONLY — it has NO step/node
-                // budget.  A finite step budget would cut off exploration of
-                // *wide* (but correct) trees prematurely — e.g. csf17
-                // keylessssl-modified::exists_detect_no_C_compromise, whose
-                // witness is reachable but sits beneath a broad fan-out of
-                // contradiction branches — turning a Solved exists-trace into
-                // Sorry (the loop-breaker count is HS-faithful, so source
-                // cases are wide).  So we run unbudgeted as HS does
-                // (`proof_bound` cuts by DEPTH, in `expand_inner`, not by
-                // step count): `MAX_DEPTH` doubles
-                // unbounded (mirroring HS's `dMax`), with only the far-out
-                // `cap` (`usize::MAX / 4`) as a loop-termination guard, and
-                // `deadline` catching wall-clock runaway.
-                let mut budget = usize::MAX;
                 if first_iter {
-                    expand(ctx, &mut root, &mut budget, &deadline, 0)?;
+                    expand(ctx, &mut root, 0)?;
                     first_iter = false;
                 } else {
                     // Re-expand only `Sorry: depth limit` leaves
                     // (Haskell-faithful memoization — the cached tree IS the
                     // proof tree, only the unforced "depth limit" thunks need
                     // (re-)expansion).
-                    re_expand_depth_limited(ctx, &mut root, &mut budget, &deadline, 0)?;
+                    re_expand_depth_limited(ctx, &mut root, 0)?;
                 }
                 if matches!(root.status, NodeStatus::Solved | NodeStatus::Contradictory) {
                     break;
                 }
-                if std::time::Instant::now() >= deadline {
+                if deadline_reached() {
                     break;
                 }
                 let hit_depth = DEPTH_LIMIT_HIT.with(|f| f.get());
@@ -829,7 +836,7 @@ fn prune_to_path(node: &mut ProofNode, path: &[String]) {
 /// - Solved/Contradictory/Unfinishable nodes: already resolved, skip.
 /// - Sorry with `"depth limit"` reason: re-expand from scratch at this
 ///   depth using the (now larger) `MAX_DEPTH`.
-/// - Sorry with other reasons (budget, deadline, no method): preserve.
+/// - Preserve other Sorry leaves, including expired deadlines.
 /// - Other nodes: recurse into children, then re-roll up the status.
 ///
 /// Early-break-on-Solved: matches `expand`'s short-circuit semantics —
@@ -838,8 +845,6 @@ fn prune_to_path(node: &mut ProofNode, path: &[String]) {
 fn re_expand_depth_limited(
     ctx: &ProofContext,
     node: &mut ProofNode,
-    budget: &mut usize,
-    deadline: &std::time::Instant,
     depth: usize,
 ) -> Result<(), ProveError> {
     check_cancelled()?;
@@ -850,18 +855,34 @@ fn re_expand_depth_limited(
         node.method = ProofMethod::Sorry(None);
         node.children = BTreeMap::new();
         node.status = NodeStatus::Open;
-        return expand(ctx, node, budget, deadline, depth);
+        return expand(ctx, node, depth);
     }
-    // Already resolved — return cached subtree.
-    if matches!(
-        node.status,
-        NodeStatus::Solved | NodeStatus::Contradictory | NodeStatus::Unfinishable
-    ) {
+    if !node.needs_revisit() {
         return Ok(());
     }
-    // Sorry with non-depth-limit reason and no descendants: preserve.
-    // (Budget exhausted, deadline, or no-method Sorrys are terminal.)
-    if matches!(node.status, NodeStatus::Sorry) && node.children.is_empty() {
+    // Keep deadline-limited revisits lazy so untouched siblings retain their
+    // cached proof when the deadline expires between children.
+    if DEADLINE.with(|d| d.get().is_none())
+        && forks(ctx, node.children.len())
+        && node
+            .children
+            .values()
+            .filter(|child| child.needs_revisit())
+            .nth(1)
+            .is_some()
+    {
+        let pending: Vec<_> = node
+            .children
+            .extract_if(.., |_, child| child.needs_revisit())
+            .collect();
+        visit_forked(
+            ctx,
+            &mut node.children,
+            pending,
+            depth,
+            re_expand_depth_limited,
+        )?;
+        node.status = rollup_status(&node.children);
         return Ok(());
     }
     // Recurse into children.  Any depth-limited descendant gets
@@ -874,19 +895,10 @@ fn re_expand_depth_limited(
         if early_break && found_solved {
             break;
         }
-        if *budget == 0 {
+        if deadline_reached() {
             break;
         }
-        if std::time::Instant::now() >= *deadline {
-            break;
-        }
-        // Preserve the full proof-tree path during iterative-deepening
-        // re-expansion and restore it even if solver work unwinds.
-        let _path = crate::constraint::solver::trace::CasePathGuard::push(name);
-        re_expand_depth_limited(ctx, child, budget, deadline, depth + 1)?;
-        if matches!(child.status, NodeStatus::Solved) {
-            found_solved = true;
-        }
+        found_solved |= visit_child(ctx, name, child, depth, re_expand_depth_limited)?;
     }
     // Re-roll up the parent's status from current children — mirrors
     // `expand_inner`'s `node.status = if any_solved ...` rollup
@@ -930,14 +942,8 @@ pub fn rollup_status(children: &BTreeMap<String, ProofNode>) -> NodeStatus {
     }
 }
 
-fn expand(
-    ctx: &ProofContext,
-    node: &mut ProofNode,
-    budget: &mut usize,
-    deadline: &std::time::Instant,
-    depth: usize,
-) -> Result<(), ProveError> {
-    expand_inner(ctx, node, budget, deadline, depth)?;
+fn expand(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Result<(), ProveError> {
+    expand_inner(ctx, node, depth)?;
     // Boolean terminal checks can suppress a cancelled Maude query.
     check_cancelled()?;
     // After expansion, `sys` is no longer read EXCEPT on
@@ -979,13 +985,21 @@ fn drop_sys_after_expand(node: &ProofNode, retention: SysRetention) -> bool {
     }
 }
 
-fn expand_inner(
+/// Visit a child on this worker and report whether it is solved. The guard
+/// keeps the proof-tree path correct even if solver work unwinds.
+fn visit_child(
     ctx: &ProofContext,
-    node: &mut ProofNode,
-    budget: &mut usize,
-    deadline: &std::time::Instant,
+    name: &str,
+    child: &mut ProofNode,
     depth: usize,
-) -> Result<(), ProveError> {
+    visit: fn(&ProofContext, &mut ProofNode, usize) -> Result<(), ProveError>,
+) -> Result<bool, ProveError> {
+    let _path = crate::constraint::solver::trace::CasePathGuard::push(name);
+    visit(ctx, child, depth + 1)?;
+    Ok(child.status == NodeStatus::Solved)
+}
+
+fn expand_inner(ctx: &ProofContext, node: &mut ProofNode, depth: usize) -> Result<(), ProveError> {
     check_cancelled()?;
     // `--bound=N` (HS `boundProofDepth`, Theory/Proof.hs): `go n`'s
     // `0 < n` guard fires before the node is even inspected, so ANY node at
@@ -1042,17 +1056,11 @@ fn expand_inner(
         node.method = ProofMethod::Finished(r);
         return Ok(());
     }
-    if std::time::Instant::now() >= *deadline {
+    if deadline_reached() {
         node.method = ProofMethod::Sorry(Some("deadline reached".into()));
         node.status = NodeStatus::Sorry;
         return Ok(());
     }
-    if *budget == 0 {
-        node.method = ProofMethod::Sorry(Some("budget exhausted".into()));
-        node.status = NodeStatus::Sorry;
-        return Ok(());
-    }
-    *budget -= 1;
     // Mirror Haskell's `rankProofMethods` → `execMethods` flow:
     // build a priority-ordered list of candidate methods, try each
     // until one's `exec_proof_method` returns `Some(cases)`.  Haskell
@@ -1115,190 +1123,21 @@ fn expand_inner(
     // `foldMap`, `M.map`).  Our `Vec` preserves creation order
     // (source-file rule order), so sort by name to match Haskell.
     cases.sort_by(|a, b| a.0.cmp(&b.0));
-    // Haskell-faithful: no per-branch budget split.  Haskell's lazy
-    // Disj-monad explores each branch using as many steps as needed —
-    // there is no step-count cap on individual branches.  The ID-DFS
-    // depth limit (above) prevents infinite recursion; deadline catches
-    // runaway Maude calls.  Each child sees the same shared `budget`
-    // counter, decremented as it explores.
-    //
-    // Per-child parallelism (env-opt: `TAM_RS_DISABLE_PARALLEL_EXPAND=1`
-    // disables; default ON).  Mirrors HS's `parTraversable nfProofMethod`
-    // at `Theory/Proof.hs` (the `nfProofMethod` helper)
-    // inside `cutOnSolvedDFS`: HS evaluates each child's
-    // proof-method/info/children in parallel via the Eval monad strategy.
-    // We do the equivalent by running each child's `expand` on a rayon
-    // worker.  Faithful: case sort order, per-child sys cloning, rollup
-    // semantics are unchanged.  Trade-off: parallel mode drops the
-    // `any_solved` early-break short-circuit, so it may explore siblings
-    // HS's lazy `foldMap` would prune.  This is output-neutral wasted
-    // work: `run_proof_search` finishes by calling `extract_solved_path`,
-    // which walks `node.children` (a key-sorted BTreeMap) and prunes to
-    // the first Solved leaf in key order — re-imposing exactly HS's
-    // `foldMap` + `extractSolved` first-in-map selection.  The extra
-    // exploration only costs CPU; the pruned output is identical.  Gated
-    // off for exists-trace lemmas (see below) so we never pay that cost
-    // where the early-break matters for speed.
-    // Bounded by rayon's global pool sized via `--processors=N`.
-    //
-    // Thread-locals propagated to workers: MAX_DEPTH and PROOF_BOUND
-    // (read-only), DEPTH_LIMIT_HIT (each worker sets its local, aggregated
-    // OR after the parallel pass), and the user-fun sets (snapshot
-    // installed per worker — see `disable_parallel_expand`).  case_path is
-    // best-effort under parallel: each worker seeds its stack from the
-    // parent's snapshot at entry.
-    let n_cases = cases.len();
-    let serial_only = disable_parallel_expand();
-    // Gate parallel mode on all-traces lemmas only.  Exists-trace
-    // lemmas rely on the `any_solved` early-break (HS's lazy `foldMap`
-    // short-circuit on `TraceFound`) — once a single witness branch
-    // is found, sibling branches are pruned.  Parallel exploration of
-    // siblings would invalidate that pruning and explore branches HS
-    // would skip — observable as an 8× user-CPU blow-up on wireguard
-    // exists_two_sessions when parallel was enabled unconditionally.
-    // All-traces lemmas never short-circuit on Solved (Solved means a
-    // counter-example was found; valid lemmas never see this), so for
-    // those parallel exploration of every sibling matches HS exactly.
-    // Fallible rankings and guarded conversions also stay serial: Rayon
-    // waits for every in-flight sibling before returning an error, so an
-    // unbounded sibling could otherwise hide a prompt failure indefinitely.
-    // Only `Dfs` uses HS's parallel extractor; the other cuts depend on the
-    // serial branch's abort policy. Limit fan-out to shallow levels because
-    // deeper splits cost more than they save under work stealing.
-    let parallel = should_parallel_expand(ctx, n_cases, depth, serial_only);
-    if parallel {
-        use rayon::prelude::*;
-        // Snapshot data needed by each worker.  MAX_DEPTH is a per-
-        // search ID-DFS limit — read once here, restored at each worker.
-        // PROOF_BOUND likewise: a stolen worker thread's own cell is
-        // usize::MAX (or stale), and a child expanded there without the
-        // re-seed would sail past the `--bound` cut.
-        let mp_snapshot = MAX_DEPTH.with(|m| m.get());
-        let bound_snapshot = PROOF_BOUND.with(|b| b.get());
-        let ranking_offset_snapshot = RANKING_DEPTH_OFFSET.with(|d| d.get());
-        // Snapshot the proof-tree case_path so each worker can seed its
-        // own thread-local stack and produce coherent trace output.
-        let path_snapshot = crate::constraint::solver::trace::case_path_snapshot();
-        let deadline_snapshot = *deadline;
-        let cancellation = cancellation::current();
-        // A rayon closure may run on this same thread. Its guards restore the
-        // parent's TLS and case path; retain only the worker results that must
-        // be aggregated into the parent search.
-        let parent_depth_limit_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
-        let budget_snapshot = *budget;
-        let queued_entry = cancellation.is_some() && rayon::current_thread_index().is_none();
-        let expand_cases =
-            move |ctx: &ProofContext| -> Result<Vec<(String, ProofNode, bool)>, ProveError> {
-                cases
-                    .into_par_iter()
-                    .map(|(name, sys)| {
-                        // Each rayon worker has its own thread-locals.  Initialise
-                        // them from the parent's captured state so downstream code
-                        // (depth-limit check, DEPTH_LIMIT_HIT bookkeeping, trace
-                        // case path) sees the correct values regardless of which
-                        // worker thread we land on.
-                        let _cancellation = ProofCancellationGuard::new(cancellation.clone());
-                        let _tls = SearchTlsGuard::install(SearchTlsState {
-                            deadline: Some(deadline_snapshot),
-                            max_depth: mp_snapshot,
-                            depth_limit_hit: false,
-                            proof_bound: bound_snapshot,
-                            ranking_depth_offset: ranking_offset_snapshot,
-                        });
-                        let _path = crate::constraint::solver::trace::CasePathGuard::set_child(
-                            path_snapshot.clone(),
-                            &name,
-                        );
-                        // Per-worker MaudeHandle: siblings must not share `ctx.maude`'s
-                        // `fresh_counter` -- concurrent mutation would make LVar.idx
-                        // allocation (and proof-tree shape) depend on worker interleaving,
-                        // breaking deterministic output.
-                        //
-                        // HS-faithful: HS seeds a fresh FreshT counter per child case from
-                        // `avoid sys` (ProofMethod.hs).  Mirror by cloning `ctx.maude`
-                        // with its own `fresh_counter` per worker (bounds_max(sys) + 1).
-                        //
-                        // If a `maude_pool` is configured, also borrow a per-worker
-                        // Maude subprocess so workers don't serialise on the
-                        // single shared IPC mutex.  Without a pool we share the
-                        // single Maude process; the IPC mutex serialises queries,
-                        // which is correctness-safe (just slower).
-                        // HS `avoid sys` next-draw seed (0 for a frees-less system —
-                        // see `avoid_fresh_state`), matching `Reduction::new`.
-                        let avoid_next =
-                            crate::constraint::solver::reduction::avoid_fresh_state(&sys);
-                        // Non-blocking: with B1 lemma-level parallelism the pool may be
-                        // fully drained by sibling lemma tasks.  A blocking `acquire`
-                        // here could deadlock the nested fan-out; fall back to the shared
-                        // `ctx.maude` (output-identical — both branches seed via
-                        // `with_fresh_counter_next(avoid_next)`).
-                        let pool_guard =
-                            ctx.maude_pool.as_ref().and_then(|pool| pool.try_acquire());
-                        let worker_maude = match &pool_guard {
-                            Some(pooled) => pooled.handle().with_fresh_counter_next(avoid_next),
-                            None => ctx.maude.with_fresh_counter_next(avoid_next),
-                        };
-                        let worker_ctx = ctx.with_swapped_maude(worker_maude);
-                        let mut child = ProofNode {
-                            method: ProofMethod::Sorry(None),
-                            sys,
-                            children: BTreeMap::new(),
-                            status: NodeStatus::Open,
-                            annotated: true,
-                        };
-                        // Each worker gets its own budget cell — siblings do not
-                        // share a single counter, but with the default usize::MAX
-                        // (no terminal cutoff) that's faithful: HS's lazy Disj
-                        // exploration also doesn't share a counter.
-                        #[cfg(test)]
-                        super::cancellation_tests::checkpoint(
-                            &worker_ctx,
-                            super::cancellation_tests::Work::Search,
-                        );
-                        let mut local_budget = budget_snapshot;
-                        expand(
-                            &worker_ctx,
-                            &mut child,
-                            &mut local_budget,
-                            &deadline_snapshot,
-                            depth + 1,
-                        )?;
-                        // Drop the pooled Maude back to the pool only after expand
-                        // returns — any Maude IPC inside expand uses the pooled
-                        // handle via `worker_ctx.maude`.
-                        drop(pool_guard);
-                        let local_hit = DEPTH_LIMIT_HIT.with(|f| f.get());
-                        Ok((name, child, local_hit))
-                    })
-                    .collect()
-            };
-        let results = if queued_entry {
-            // A non-Rayon caller otherwise waits uninterruptibly for a free
-            // worker. Share source admission's cancellation protocol, keeping
-            // the existing parallel iterator and its nested work stealing.
-            check_cancelled()?;
-            let mut owned_ctx = ctx.with_swapped_maude(ctx.maude.clone());
-            owned_ctx.maude_pool = ctx.maude_pool.clone();
-            crate::prove::run_cancellable_job(rayon::spawn, move || expand_cases(&owned_ctx))?
-        } else {
-            expand_cases(ctx)?
-        };
-        // Aggregate worker DEPTH_LIMIT_HIT into the parent thread —
-        // run_proof_search's ID-DFS loop reads this to decide whether
-        // to grow MAX_DEPTH for the next iteration.  Fold the workers'
-        // hits with the parent's PRE-fan-out flag (snapshotted above) so a
-        // non-hitting closure that ran on this same thread (B1) cannot lower
-        // a previously-raised flag — matching the serial branch, which never
-        // lowers `DEPTH_LIMIT_HIT`.
-        let any_hit = results.iter().any(|(_, _, hit)| *hit);
-        DEPTH_LIMIT_HIT.with(|f| f.set(parent_depth_limit_hit || any_hit));
-        for (name, child, _hit) in results {
-            node.children.insert(name, child);
-        }
+    // Speculative DFS siblings run on Rayon's bounded pool. Retain the
+    // sequential prefix through the first Solved child or error: a later
+    // oracle failure must not override an earlier counterexample. Terminal
+    // results cancel only their suffix, including blocking subprocesses.
+    // `TAM_RS_DISABLE_PARALLEL_EXPAND=1` selects the serial traversal.
+    if forks(ctx, cases.len()) {
+        let cases = cases
+            .into_iter()
+            .map(|(name, sys)| (name, ProofNode::open(sys)))
+            .collect();
+        visit_forked(ctx, &mut node.children, cases, depth, expand)?;
     } else {
         // Serial branch: the local `abort` flag mirrors each extractor's
         // lazy sibling cut; the final node status is rolled up from
-        // `node.children` by `rollup_from_children` below.
+        // `node.children` by `rollup_status` below.
         //
         //   Dfs / SeqDfs:  stop on the first TraceFound — HS `findSolved`'s
         //                  `foldMap`-with-`Solution` short-circuit.
@@ -1344,17 +1183,8 @@ fn expand_inner(
                     _ => break,
                 }
             }
-            let mut child = ProofNode {
-                method: ProofMethod::Sorry(None),
-                sys,
-                children: BTreeMap::new(),
-                status: NodeStatus::Open,
-                annotated: true,
-            };
-            // Track proof-tree paths and restore them if recursive solver
-            // work unwinds. Empty Simplify cases are transparent.
-            let _path = crate::constraint::solver::trace::CasePathGuard::push(&name);
-            expand(ctx, &mut child, budget, deadline, depth + 1)?;
+            let mut child = ProofNode::open(sys);
+            visit_child(ctx, &name, &mut child, depth, expand)?;
             abort = match ctx.cut {
                 CutStrategy::Dfs | CutStrategy::SeqDfs => {
                     matches!(child.status, NodeStatus::Solved)
@@ -1615,7 +1445,230 @@ mod tests {
         Some(ProofContext::new(h, Vec::new()))
     }
 
-    /// The per-child fan-out (`expand_children`) converts terms on rayon
+    fn search_pool(
+        ctx: &ProofContext,
+        size: usize,
+    ) -> std::sync::Arc<tamarin_term::maude_proc::MaudePool> {
+        std::sync::Arc::new(
+            tamarin_term::maude_proc::MaudePool::new(
+                &require_maude_path().unwrap(),
+                (*ctx.maude.maude_sig()).clone(),
+                size,
+                Default::default(),
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn split_levels_scale_with_workers() {
+        assert_eq!(split_levels(1), 0);
+        assert_eq!(split_levels(3), 3);
+        assert_eq!(split_levels(8), 5);
+    }
+
+    #[test]
+    fn deep_forks_preserve_the_first_trace() {
+        use super::super::cancellation_tests::{Work, WorkerGate};
+        use crate::prove::{prove_lemma_in_session, ProverSession, ProverSessionOptions};
+        use std::fmt::Write;
+
+        let Some(ctx) = ctx() else { return };
+        // A long linear prefix puts the first fork several depth rounds into
+        // the proof. no_precomp keeps source construction from collapsing it.
+        let mut src = String::from(
+            "theory DeepFork begin\n\
+             rule A_Quick: [] --[ Choice('a'), Seed(), Quick() ]-> [ Gate('x') ]\n\
+             rule Z_Alternative: [ Work3('x')[no_precomp] ] --> [ Gate('x') ]\n\
+             rule WorkBase: [] --[ Seed() ]-> [ Work0('x') ]\n",
+        );
+        for i in 1..=3 {
+            for side in ["left", "right"] {
+                writeln!(src, "rule Work{i}_{side}: [ Work{}('x')[no_precomp] ] --[ Choice('{side}') ]-> [ Work{i}('x') ]", i - 1).unwrap();
+            }
+        }
+        let mut previous = String::from("Gate");
+        for i in 1..=36 {
+            writeln!(
+                src,
+                "rule Step{i}: [ {previous}('x')[no_precomp] ] --> [ Prefix{i}('x') ]"
+            )
+            .unwrap();
+            previous = format!("Prefix{i}");
+        }
+        src.push_str(
+            "rule Finish: [ Prefix36('x')[no_precomp] ] --[ Attack() ]-> []\n\
+             rule OuterA: [ Gate('x')[no_precomp] ] --[ Nested() ]-> []\n\
+             rule OuterB: [] --[ Nested() ]-> []\n\
+             lemma nested: exists-trace \"Ex #i. Nested()@i\"\n\
+             lemma seeded: \"All #i. Attack()@i ==> (Ex #j. Seed()@j)\"\n\
+             lemma no_attack: \"not (Ex #i. Attack()@i)\"\n\
+             lemma later: exists-trace \"Ex #i. Attack()@i & not (Ex #j. Quick()@j)\"\n\
+             lemma attack: exists-trace \"Ex #i. Attack()@i\"\nend",
+        );
+        let parsed = tamarin_parser::parse_theory(&src, &[]).unwrap();
+        let theory = std::sync::Arc::new(crate::elaborate::elaborate(&parsed).unwrap());
+        let session = ProverSession::build(
+            theory,
+            ctx.maude.clone(),
+            ProverSessionOptions {
+                maude_pool: Some(search_pool(&ctx, 3)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (gate, entered) = WorkerGate::new(Work::Search, usize::MAX);
+        // Observe the parallel-child checkpoints without blocking workers.
+        gate.release();
+        *session.template_context().worker_gate.lock().unwrap() = Some(gate);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        // Keep the second worker occupied so the fork checkpoints have a fixed order.
+        let (ready, started) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        pool.spawn(move || {
+            ready.send(()).unwrap();
+            let _ = wait.recv();
+        });
+        started.recv().unwrap();
+        let parallel = pool
+            .install(|| prove_lemma_in_session(&session, "no_attack", usize::MAX))
+            .unwrap();
+        // The first child supplies a counterexample, so its sibling never starts.
+        assert_eq!(entered.try_iter().count(), 1);
+        // Proving seeded requires both sides and exercises the full fork budget.
+        let exhaustive = pool
+            .install(|| prove_lemma_in_session(&session, "seeded", usize::MAX))
+            .unwrap();
+        assert_eq!(proof_status(&exhaustive), ProofStatus::Complete);
+        // Finishing the earlier siblings frees budget for all eight Work1 cases.
+        assert_eq!(entered.try_iter().count(), 2 + 2 + 4 + 8);
+        let nested = pool
+            .install(|| prove_lemma_in_session(&session, "nested", usize::MAX))
+            .unwrap();
+        assert_eq!(proof_status(&nested), ProofStatus::TraceFound);
+        // Both OuterA and its first Gate case fork on the primary worker.
+        assert_eq!(entered.try_iter().count(), 2);
+        let later = pool
+            .install(|| prove_lemma_in_session(&session, "later", usize::MAX))
+            .unwrap();
+        assert_eq!(proof_status(&later), ProofStatus::TraceFound);
+        assert!(
+            entered.try_iter().count() > 2,
+            "the later witness case can fork"
+        );
+        drop(release);
+        assert_eq!(proof_status(&parallel), ProofStatus::TraceFound);
+        let body = crate::pretty_theory::pretty_proof_body(&parallel);
+        assert!(body.contains("case A_Quick"));
+        assert!(!body.contains("case Z_Alternative"));
+        // With every lease held, the cases share the caller's process.
+        let maudes = session.template_context().maude_pool.as_ref().unwrap();
+        let held: Vec<_> = (0..maudes.size())
+            .map(|_| maudes.try_acquire().unwrap())
+            .collect();
+        let drained = pool
+            .install(|| prove_lemma_in_session(&session, "later", usize::MAX))
+            .unwrap();
+        assert!(
+            entered.try_iter().count() > 2,
+            "witness search still forks with a drained pool"
+        );
+        assert_eq!(
+            crate::pretty_theory::pretty_proof_body(&later),
+            crate::pretty_theory::pretty_proof_body(&drained)
+        );
+        let shared = pool
+            .install(|| prove_lemma_in_session(&session, "seeded", usize::MAX))
+            .unwrap();
+        assert!(
+            entered.try_iter().count() >= 2,
+            "built-in all-traces DFS still forks with a drained pool"
+        );
+        assert_eq!(
+            crate::pretty_theory::pretty_proof_body(&exhaustive),
+            crate::pretty_theory::pretty_proof_body(&shared)
+        );
+        drop(held);
+        // A lone worker can stop at A_Quick without exploring Z_Alternative.
+        let single = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        for (lemma, expected) in [
+            ("later", crate::pretty_theory::pretty_proof_body(&later)),
+            ("attack", body.clone()),
+        ] {
+            let serial = single
+                .install(|| prove_lemma_in_session(&session, lemma, usize::MAX))
+                .unwrap();
+            assert_eq!(expected, crate::pretty_theory::pretty_proof_body(&serial));
+        }
+        let backed_off = single
+            .install(|| prove_lemma_in_session(&session, "no_attack", usize::MAX))
+            .unwrap();
+        assert_eq!(entered.try_iter().count(), 0, "a lone worker stays serial");
+        assert_eq!(body, crate::pretty_theory::pretty_proof_body(&backed_off));
+    }
+
+    #[test]
+    fn a_late_witness_survives_a_fork_wider_than_the_maude_pool() {
+        use crate::prove::{prove_lemma_in_session, ProverSession, ProverSessionOptions};
+        let Some(ctx) = ctx() else { return };
+        let parsed = tamarin_parser::parse_theory(
+            "theory Wide begin
+             rule A: [ Missing('a')[no_precomp] ] --[ End() ]-> []
+             rule B: [ Missing('b')[no_precomp] ] --[ End() ]-> []
+             rule C: [] --[ End() ]-> []
+             rule D: [ Missing('d')[no_precomp] ] --[ End() ]-> []
+             lemma witness: exists-trace \"Ex #i. End() @ i\"
+             end",
+            &[],
+        )
+        .unwrap();
+        let session = ProverSession::build(
+            std::sync::Arc::new(crate::elaborate::elaborate(&parsed).unwrap()),
+            ctx.maude.clone(),
+            ProverSessionOptions {
+                maude_pool: Some(search_pool(&ctx, 2)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let run = |threads| {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            let proof = pool
+                .install(|| prove_lemma_in_session(&session, "witness", usize::MAX))
+                .unwrap();
+            assert_eq!(proof_status(&proof), ProofStatus::TraceFound);
+            crate::pretty_theory::pretty_proof_body(&proof)
+        };
+        let serial = run(1);
+        assert!(serial.contains("case C"), "{serial}");
+        use super::super::cancellation_tests::{Work, WorkerGate};
+        // Hold the warm process. Only one more can start for the four cases.
+        let maudes = session.template_context().maude_pool.as_ref().unwrap();
+        let _held = maudes.acquire();
+        assert_eq!(maudes.spawned(), 1);
+        let (gate, entered) = WorkerGate::new(Work::Search, 2);
+        *session.template_context().worker_gate.lock().unwrap() = Some(gate.clone());
+        std::thread::scope(|scope| {
+            let proof = scope.spawn(|| run(4));
+            let wait = std::time::Duration::from_secs(5);
+            let first = entered.recv_timeout(wait);
+            let second = entered.recv_timeout(wait);
+            gate.release();
+            assert_ne!(first.unwrap(), second.unwrap());
+            assert_eq!(proof.join().unwrap(), serial);
+        });
+    }
+
+    /// The per-child fan-out (`visit_forked`) converts terms on rayon
     /// worker threads.  The converter answers from the signature it is
     /// handed, which the workers share with the caller, so a declared 0-arity
     /// symbol is the same application on every thread.
@@ -1686,6 +1739,7 @@ mod tests {
 
     fn branching_search() -> Option<(ProofContext, System)> {
         let mut ctx = ctx()?;
+        ctx.maude_pool = Some(search_pool(&ctx, 1));
         ctx.cut = CutStrategy::Dfs;
         ctx.is_exists_trace = false;
         let mut sys = System::empty();
@@ -1779,6 +1833,17 @@ mod tests {
             return;
         };
         let baseline = run_proof_search(&ctx, sys.clone(), 10).unwrap();
+        let theory = tamarin_parser::parse_theory(
+            "theory T begin\nlemma a: \"T\"\nlemma b: \"T\"\nend",
+            &[],
+        )
+        .unwrap();
+        let session = crate::prove::ProverSession::build(
+            std::sync::Arc::new(crate::elaborate::elaborate(&theory).unwrap()),
+            ctx.maude.clone(),
+            Default::default(),
+        )
+        .unwrap();
         let (entered_tx, entered_rx) = mpsc::channel();
         let mut releases = Vec::new();
         for _ in 0..2 {
@@ -1793,8 +1858,38 @@ mod tests {
         for _ in 0..2 {
             entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         }
+        // A cold source request queues for the same workers as proof search.
         let token = CancellationToken::default();
+        let source_token = token.clone();
+        let interactive = session.clone();
+        let (source_done, source_result) = mpsc::channel();
+        let source = std::thread::spawn(move || {
+            let _guard = ProofCancellationGuard::new(Some(source_token));
+            let result = interactive
+                .context_for_sources(crate::constraint::system::SourceKind::RefinedSources);
+            source_done.send(result.map(drop)).unwrap();
+        });
+        assert!(source_result
+            .recv_timeout(Duration::from_millis(50))
+            .is_err());
         let worker_token = token.clone();
+        let batch_token = token.clone();
+        let (selected, selected_rx) = mpsc::channel();
+        let (finished, batch_result) = mpsc::channel();
+        let batch = std::thread::spawn(move || {
+            let _guard = ProofCancellationGuard::new(Some(batch_token));
+            let result = session.map_lemma_proofs(
+                |_| {
+                    selected.send(()).unwrap();
+                    Some(10)
+                },
+                |_, _| panic!("a retracted batch must never run"),
+            );
+            finished.send(result).unwrap();
+        });
+        for _ in 0..2 {
+            selected_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
         let queued_sys = sys.clone();
         let (done_tx, done_rx) = mpsc::channel();
         let worker = std::thread::spawn(move || {
@@ -1808,6 +1903,16 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("cancellation must finish while unrelated workers remain blocked");
         assert!(matches!(result, Err(ProveError::Cancelled)));
+        assert!(matches!(
+            batch_result.recv_timeout(Duration::from_secs(2)),
+            Ok(Err(ProveError::Cancelled))
+        ));
+        assert!(matches!(
+            source_result.recv_timeout(Duration::from_secs(2)),
+            Ok(Err(ProveError::Cancelled))
+        ));
+        source.join().unwrap();
+        batch.join().unwrap();
         worker.join().unwrap();
         drop(releases);
 
@@ -1840,29 +1945,30 @@ mod tests {
     }
 
     #[test]
-    fn fallible_searches_do_not_fan_out_siblings() {
-        #[derive(Debug)]
-        struct FallibleProvider;
-
-        impl crate::constraint::solver::context::SourceProvider for FallibleProvider {
-            fn may_fail(&self) -> bool {
-                true
-            }
-
-            fn materialize(&self, _ctx: &ProofContext) -> Result<(), crate::prove::ProveError> {
-                Ok(())
-            }
-        }
+    fn oracle_and_fallible_source_searches_are_serial_under_a_deadline() {
+        use crate::constraint::solver::context::FailingSourceProvider;
 
         let Some(mut parallel_ctx) = ctx() else {
             return;
         };
         parallel_ctx.cut = CutStrategy::Dfs;
         parallel_ctx.is_exists_trace = false;
-        assert!(should_parallel_expand(&parallel_ctx, 2, 0, false));
+        assert!(!parallel_ctx.serial_under_a_deadline());
 
-        parallel_ctx.set_source_provider(std::sync::Arc::new(FallibleProvider));
-        assert!(!should_parallel_expand(&parallel_ctx, 2, 0, false));
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap()
+            .install(|| {
+                let _tls = SearchTlsGuard::install(SearchTlsState {
+                    deadline: Some(std::time::Instant::now() + std::time::Duration::from_secs(60)),
+                    ..SearchTlsState::for_child()
+                });
+                assert!(forks(&parallel_ctx, 2));
+            });
+
+        parallel_ctx.set_source_provider(std::sync::Arc::new(FailingSourceProvider));
+        assert!(parallel_ctx.serial_under_a_deadline());
 
         let Some(mut ctx) = ctx() else { return };
         ctx.cut = CutStrategy::Dfs;
@@ -1874,7 +1980,7 @@ mod tests {
                 oracle_path: "oracle".into(),
             },
         ]);
-        assert!(!should_parallel_expand(&ctx, 2, 0, false));
+        assert!(ctx.serial_under_a_deadline());
     }
 
     #[test]
@@ -2028,7 +2134,7 @@ mod tests {
     /// ID-DFS loop keeps doubling `MAX_DEPTH` against a frontier that can
     /// never move.
     #[test]
-    fn search_runs_out_of_budget_returns_sorry() {
+    fn search_at_proof_depth_bound_returns_sorry() {
         let ctx = match ctx() {
             Some(c) => c,
             None => return,
@@ -2299,7 +2405,7 @@ mod tests {
         assert!(!drop_sys_after_expand(&stub, SysRetention::DropAll));
         // A terminal (non-frontier) sorry is still dropped.
         let terminal = node(
-            ProofMethod::Sorry(Some("budget exhausted".into())),
+            ProofMethod::Sorry(Some("bound 1 hit".into())),
             1,
             Vec::new(),
             true,

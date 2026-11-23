@@ -1450,6 +1450,7 @@ dependencies = [
  "tamarin-test-support",
  "tamarin-theory",
  "tamarin-utils",
+ "tempfile",
  "tokio",
 ]
 
@@ -1494,6 +1495,7 @@ name = "tamarin-term"
 version = "1.13.0"
 dependencies = [
  "parking_lot",
+ "rayon",
  "rustc-hash",
  "tamarin-algebra-sys",
  "tamarin-build",
@@ -1512,6 +1514,7 @@ version = "1.13.0"
 dependencies = [
  "criterion",
  "fancy-regex",
+ "parking_lot",
  "rayon",
  "rustfs-mimalloc",
  "serde_json",
@@ -1530,7 +1533,10 @@ version = "1.13.0"
 dependencies = [
  "libc",
  "parking_lot",
+ "rayon",
  "rustc-hash",
+ "rustix",
+ "windows-sys",
 ]
 
 [[package]]

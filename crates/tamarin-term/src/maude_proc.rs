@@ -13,6 +13,7 @@
 //! Maude's response ends with the prompt `Maude> `.
 
 use std::io::{Read, Write};
+use std::ops::Deref;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -163,7 +164,7 @@ fn reduction_heads_indexed(sig: &MaudeSig) -> bool {
 
 /// True if `t` contains NO Ac- or C-headed application anywhere.  Backs
 /// the per-rule LHS flags `maude_sig::StRules` carries — behind
-/// `MaudeProcessInner::reduce_by_structure` and `norm::go_nf`'s per-rule
+/// `MaudeHandle::reduce_by_structure` and `norm::go_nf`'s per-rule
 /// dispatch: `nf_via_haskell`'s pure st-rule arm matches with the no-AC
 /// matcher (`solve_match_lterm_no_ac`), whose `match_raw` raises
 /// `NeedsAC` only at Ac-vs-Ac / C-vs-C positions — so the matcher is
@@ -194,22 +195,26 @@ pub struct MaudeStats {
     pub var_count: u64,
 }
 
-/// Hit/miss tallies, per Maude subprocess, against the session's shared
+/// Hit/miss tallies, per session, against the session's shared
 /// memo caches (`SharedMaudeCaches`: `reduce`, `unifiable`, `reply`).  A
-/// hit is counted when the cache `get` succeeds; a miss when this process
-/// computed the value and inserted it.  The `u64` bumps are always
-/// maintained (negligible cost); only the one-line-per-process summary is
-/// gated, printed to STDERR (never stdout) from `MaudeProcessInner`'s
+/// hit is counted when the cache `get` succeeds; a miss when a job
+/// computed the value and inserted it.  The bumps are always
+/// maintained (negligible cost); only the one-line-per-session summary is
+/// gated, printed to STDERR (never stdout) from `SharedMaudeCaches`'s
 /// `Drop` when `TAM_MAUDE_CACHE_STATS` is set.  Diagnostic only — reaches
 /// no `--prove` output path.
 #[derive(Default)]
 struct MaudeCacheStats {
-    reduce_hits: u64,
-    reduce_misses: u64,
-    unifiable_hits: u64,
-    unifiable_misses: u64,
-    reply_hits: u64,
-    reply_misses: u64,
+    reduce_hits: AtomicU64,
+    reduce_misses: AtomicU64,
+    unifiable_hits: AtomicU64,
+    unifiable_misses: AtomicU64,
+    reply_hits: AtomicU64,
+    reply_misses: AtomicU64,
+    /// The session's totals of the `lean_*` counters of [`MaudeStats`].
+    lean_unify: AtomicU64,
+    lean_unify_unspelled: AtomicU64,
+    lean_unify_exists: AtomicU64,
 }
 
 /// The memo caches for one theory session, shared (`Arc`) by the
@@ -225,18 +230,18 @@ struct MaudeCacheStats {
 /// initialised with the IDENTICAL signature module (`MaudePool` clones
 /// one `MaudeSig` per spawn; run.rs passes the same value to
 /// `file_maude`), the module is immutable after `start_with_caches()`
-/// (every post-load command is a pure `reduce` / `unify` / `match` /
-/// `get variants` query — nothing mutates Maude state that later replies
-/// depend on), and Maude's reply is a deterministic, command-local
-/// function of that module.  So the value any member computes is
+/// and variable sorts and names are registered in a consistent order (see
+/// `initialize` and `ensure_variable_names`). Maude's name interning
+/// is history-dependent even for pure queries, so the identical module
+/// alone would NOT suffice. With both invariants the value any member computes is
 /// byte-identical to what the querying member would have computed itself
 /// — sharing changes only which process performed the first computation,
 /// exactly the member-interchangeability the pool already guarantees.
 ///
-/// LOCK ORDER: a subprocess's inner IPC mutex is always acquired FIRST;
-/// each cache mutex here is acquired strictly INSIDE it, held only for
-/// the `get` or the `insert` (released before any Maude IPC wait), and
-/// acquires nothing itself.  No cycle is possible.
+/// LOCK ORDER: each cache mutex here is held only for one `get` or one
+/// `insert`, never across a Maude IPC wait, and acquires nothing itself.
+/// No cycle is possible.  A hit needs no subprocess, so it does not wait
+/// for one that another job is using.
 ///
 /// CONCURRENT MISSES: two members that miss the same key simultaneously
 /// both perform the IPC and both insert — last write wins with an
@@ -306,14 +311,13 @@ pub struct SharedMaudeCaches {
     /// Memo for the RAW REPLY BYTES of the witness-producing Maude commands
     /// (`unify in MSG`, `get variants in MSG`, and the
     /// two `match in MSG` matchers), keyed by the *exact command
-    /// byte-string*.  Maude's reply to one of these
-    /// commands is a deterministic, command-local function of the theory
-    /// module — which is fixed for the life of the session (`sig` is
+    /// byte-string*. The theory module is fixed for the life of the session (`sig` is
     /// immutable after `start_with_caches()`, every sharer loads the
     /// identical module, and `with_swapped_maude` hands out a different
-    /// pool handle rather than mutating any module) — so identical
-    /// command bytes imply an identical reply, exactly the invariant
-    /// `reduce` already relies on.
+    /// pool handle rather than mutating any module). `initialize` establishes
+    /// variable-sort order; `ensure_variable_names` establishes input-name order.
+    /// These must also be independent of the worker's previous queries for
+    /// identical command bytes to imply identical replies.
     ///
     /// This caches ONLY the raw bytes: the per-call back-conversion (per-arm
     /// `ConvCtx` clone, `input_max` seeded from the caller's own bindings) still
@@ -334,6 +338,72 @@ pub struct SharedMaudeCaches {
     /// DUPLICATION of those few), so peak residency stays bounded even
     /// though — like `reduce` — no per-entry eviction is performed.
     reply: Mutex<tamarin_utils::FastMap<Vec<u8>, Vec<u8>>>,
+    stats: MaudeCacheStats,
+}
+
+impl SharedMaudeCaches {
+    /// Latch `failure` as the session's, unless one is latched already, and
+    /// return the session's failure.
+    ///
+    /// A job whose request is already cancelled latches nothing and gets a
+    /// cancellation: its result is discarded at the job boundary, and what a
+    /// cancelled job ran into, possibly on a branch a sequential search
+    /// would never visit, must not fail the jobs that are still wanted.
+    fn fail(&self, failure: impl FnOnce() -> NativeFailure) -> MaudeError {
+        if cancellation::check().is_err() {
+            return MaudeError::Cancelled;
+        }
+        self.native_failure.get_or_init(failure).error()
+    }
+}
+
+impl Drop for SharedMaudeCaches {
+    /// When `TAM_MAUDE_CACHE_STATS` is set, emit one summary line for the
+    /// session to STDERR, and which component answered each command.
+    /// Nothing reaches stdout.
+    fn drop(&mut self) {
+        if tamarin_utils::env_gate!("TAM_MAUDE_CACHE_STATS") {
+            let count = |n: &AtomicU64| n.load(Ordering::Relaxed);
+            let s = &self.stats;
+            eprintln!(
+                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} unspelled={} lean_exists={} lean_unify={}",
+                count(&s.reduce_hits),
+                count(&s.reduce_misses),
+                count(&s.unifiable_hits),
+                count(&s.unifiable_misses),
+                count(&s.reply_hits),
+                count(&s.reply_misses),
+                count(&s.lean_unify_unspelled),
+                count(&s.lean_unify_exists),
+                count(&s.lean_unify),
+            );
+            for line in self.provenance.report() {
+                eprintln!("{line}");
+            }
+            #[cfg(feature = "lean-unification")]
+            if let Some(table) = self.reduction_table.lock().unwrap().as_ref() {
+                let verdict = match table {
+                    Some(table) if table.certified() => "certified",
+                    Some(_) => "uncertified",
+                    None => "unencodable",
+                };
+                eprintln!("[ALGEBRA_PROVENANCE] rewrite table: {verdict}");
+            }
+            #[cfg(feature = "lean-unification")]
+            {
+                let memo = self.proved_unify.lock().unwrap();
+                let (replies, words) = self.unify_replies.size();
+                let exists = self.unify_replies.existence_replies();
+                if replies != 0 || exists != 0 {
+                    eprintln!(
+                        "[UNIFY_MEMO] answers={} nodes={} replies={replies} words={words} exists={exists}",
+                        memo.answers.len(),
+                        memo.nodes,
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// The spelled answers of the proved unifier by the equations as sent.
@@ -570,10 +640,7 @@ fn native_runtime_error(
     if error == crate::lean_unification::Error::Cancelled {
         MaudeError::Cancelled
     } else {
-        caches
-            .native_failure
-            .get_or_init(|| NativeFailure::Runtime(error.to_string()))
-            .error()
+        caches.fail(|| NativeFailure::Runtime(error.to_string()))
     }
 }
 
@@ -591,31 +658,24 @@ impl NativeFailure {
 }
 
 struct MaudeProcessInner {
-    /// The caller supplied Tamarin's canonical, finite-variant theory premises.
-    #[cfg(feature = "lean-unification")]
-    theory_fallback: bool,
     backend: AlgebraBackend,
     maude_path: String,
     child: Arc<Mutex<MaudeChildReaper>>,
+    turn: Arc<Turn>,
     initialized: bool,
+    /// All x0 .. x{ordered_variables - 1} have been read in a consistent
+    /// order. This belongs to the subprocess, not the shared reply cache.
+    ordered_variables: u64,
     stdin: Option<ChildStdin>,
     stdout: Option<ChildStdout>,
     stats: MaudeStats,
-    /// Memo cache hit/miss tallies — see `MaudeCacheStats`.
-    cache_stats: MaudeCacheStats,
     /// The theory signature — immutable after `start()`.  Shared (`Arc`) with
     /// the owning `MaudeHandle` so reads via `MaudeHandle::maude_sig()` are a
     /// refcount bump rather than a deep clone taken under this IPC mutex.
     sig: Arc<MaudeSig>,
-    /// The session's memo caches — see `SharedMaudeCaches` for the
-    /// byte-parity argument and the lock-order invariant (this inner's
-    /// IPC mutex is always the outer lock; the cache mutexes are only
-    /// ever taken strictly inside it).
+    /// The session's caches, for the failure latch alone: a native-only
+    /// session asked for a Maude exchange records that here.
     caches: Arc<SharedMaudeCaches>,
-    /// The live rule heads permit the symbol-only or structural normal-form
-    /// shortcut, respectively. The latter also requires AC/C-free patterns.
-    reduce_by_symbol: bool,
-    reduce_by_structure: bool,
 }
 
 /// Cached `TAM_DBG_MAUDE_IO` / `TAM_DBG_MAUDE_IO_FILTER` configuration.
@@ -637,10 +697,7 @@ fn maude_io_trace_config() -> &'static (bool, bool, String) {
 
 impl MaudeProcessInner {
     fn unsupported_native_operation(&self, operation: &'static str) -> MaudeError {
-        self.caches
-            .native_failure
-            .get_or_init(|| NativeFailure::Unsupported(operation))
-            .error()
+        self.caches.fail(|| NativeFailure::Unsupported(operation))
     }
 
     fn require_maude(&self, operation: &'static str) -> Result<(), MaudeError> {
@@ -658,9 +715,7 @@ impl MaudeProcessInner {
         let child = self.child.clone();
         let _registration = cancellation::current().map(|token| {
             token.on_cancel(move || {
-                let mut child = child.lock().unwrap();
-                child.kill_and_wait();
-                child.restart = true;
+                child.lock().unwrap().invalidate();
             })
         });
         // The timed I/O mutex does not poison on panic. Fail closed if an
@@ -669,11 +724,7 @@ impl MaudeProcessInner {
             Ok(result) => result,
             Err(panic) => {
                 self.initialized = false;
-                {
-                    let mut child = self.child.lock().unwrap();
-                    child.kill_and_wait();
-                    child.restart = true;
-                }
+                self.child.lock().unwrap().invalidate();
                 std::panic::resume_unwind(panic);
             }
         };
@@ -681,14 +732,7 @@ impl MaudeProcessInner {
         // Keep complete memo entries, but discard its pipes before reuse.
         if result.is_err() {
             self.initialized = false;
-            let mut child = self.child.lock().unwrap();
-            // A cancellation checkpoint can win the race with deferred
-            // callback cleanup. Its registration will be removed on return,
-            // so recovery must not depend on that callback being invoked.
-            if matches!(&result, Err(MaudeError::Cancelled)) {
-                child.restart = true;
-            }
-            child.kill_and_wait();
+            self.child.lock().unwrap().invalidate();
         }
         cancellation::check()?;
         result
@@ -712,6 +756,8 @@ impl MaudeProcessInner {
             }
         }
         if !self.initialized {
+            self.ordered_variables = 0;
+            let started = std::time::Instant::now();
             self.read_until_prompt()?;
             for cmd in [
                 "set show command off .\n",
@@ -721,17 +767,95 @@ impl MaudeProcessInner {
                 self.execute_raw(cmd.as_bytes())?;
             }
             self.execute_raw(pp_theory(&self.sig).as_bytes())?;
+            // VariableSymbol's order also depends on when the sort is first
+            // used. Register every wire sort, plus the kind used for internal
+            // unification variables, before queries can choose that order.
+            // Reuse one name: this initializes the theory's finite sort set,
+            // not an arbitrary bound on the number of input variables.
+            let sorts = ["Msg", "Fresh", "Pub", "Node", "TOP", "[TOP]"];
+            let mut cmd = String::from("parse in MSG : ");
+            for sort in sorts
+                .into_iter()
+                .chain(self.sig.enable_nat.then_some("TamNat"))
+            {
+                cmd.push_str("cons(x0:");
+                cmd.push_str(sort);
+                cmd.push(',');
+            }
+            cmd.push_str("nil");
+            cmd.extend(std::iter::repeat_n(
+                ')',
+                sorts.len() + usize::from(self.sig.enable_nat),
+            ));
+            cmd.push_str(" .\n");
+            let reply = self.execute_raw(cmd.as_bytes())?;
+            check_name_registration(&reply)?;
+            self.ordered_variables = 1;
+            #[cfg(test)]
+            {
+                let preamble = self.turn.preamble.lock().unwrap().clone();
+                if !preamble.is_empty() {
+                    self.execute_raw(&preamble)?;
+                }
+            }
             self.initialized = true;
+            self.turn
+                .startup_micros
+                .store(started.elapsed().as_micros() as u64, Ordering::Relaxed);
         }
         Ok(())
     }
 
-    fn execute(&mut self, cmd: &[u8]) -> Result<Vec<u8>, MaudeError> {
+    /// Complete an optional worker's admission while it owns the transport.
+    fn prepare_worker(&mut self) -> Result<(), MaudeError> {
+        let running = self.child.lock().unwrap().is_running();
+        let replace = match running {
+            Ok(running) => !running,
+            // Some kernels cannot observe exit without reaping. A real
+            // round trip checks the existing connection under the startup
+            // cancellation scope. initialize() checks an uninitialized one.
+            Err(_) if self.initialized => self.execute_raw(b"set show timing off .\n").is_err(),
+            Err(_) => false,
+        };
+        if replace {
+            self.child.lock().unwrap().invalidate();
+        }
+        self.initialize()
+    }
+
+    fn execute(&mut self, cmd: &[u8], variable_bound: u64) -> Result<Vec<u8>, MaudeError> {
         self.require_maude("Maude execution")?;
         self.with_cancellation(|inner| {
             inner.initialize()?;
+            inner.ensure_variable_names(variable_bound)?;
             inner.execute_raw(cmd)
         })
+    }
+
+    /// Maude compares variable names by their process-local intern ids. The
+    /// identical theory establishes the same initial order in every worker;
+    /// introduce all remaining input names in increasing numeric order before
+    /// a query can introduce them in term traversal order. Grow geometrically
+    /// so there are only O(log N) extra exchanges over a process's lifetime,
+    /// with no fixed bound on the size of a query.
+    ///
+    /// Maude's own #/% names are separate families: unification's intermediate
+    /// fresh variables have kind sorts, and completed substitutions / variants
+    /// rename their variables into one fresh family. The generators used by
+    /// these commands allocate each family from index zero in increasing order.
+    /// Equation variable names are already interned by module loading, before
+    /// any fresh names. Positions relative to subsequently introduced input
+    /// names need not be fixed; the order within each family does.
+    fn ensure_variable_names(&mut self, required: u64) -> Result<(), MaudeError> {
+        if required <= self.ordered_variables {
+            return Ok(());
+        }
+        let end = required.checked_next_power_of_two().unwrap_or(required);
+        let cmd = name_order_command(self.ordered_variables, end);
+        let reply = self.execute_raw(cmd.as_bytes())?;
+        check_name_registration(&reply)?;
+        self.ordered_variables = end;
+        Ok(())
     }
 
     fn write_line(&mut self, line: &[u8]) -> Result<(), MaudeError> {
@@ -821,109 +945,223 @@ impl MaudeProcessInner {
         }
         result
     }
+}
 
-    /// `execute` with a raw-reply memo keyed by the exact command bytes.
-    /// On a hit the cached reply is returned and the subprocess round-trip is
-    /// skipped; on a miss the command is issued, `bump` records the per-command
-    /// stat, and the reply is cached.  See `SharedMaudeCaches::reply` for why
-    /// a cmd-keyed byte cache is transparent to witness numbering.  The stat
-    /// bump (like `reduce` skipping `norm_count` on a hit) only fires on a real
-    /// round-trip; `MaudeStats` reaches no `--prove` output path, so this does
-    /// not affect stdout either way.  Each cache lock is scoped to a single
-    /// statement (the `get` / the `insert`) and thus never held across the
-    /// `execute` IPC wait, per the `SharedMaudeCaches` lock-order invariant.
-    fn execute_memo(
-        &mut self,
-        cmd: &[u8],
-        asked: Asked,
-        bump: impl FnOnce(&mut MaudeStats),
-    ) -> Result<Vec<u8>, MaudeError> {
-        self.require_maude("Maude execution")?;
-        let hit = self.caches.reply.lock().unwrap().get(cmd).cloned();
-        // A unification is tallied once by its entry point, which answers
-        // without Maude when the free unifier settles it; the other commands
-        // end here.
-        if let Some(cached) = hit {
-            self.cache_stats.reply_hits += 1;
-            if asked == Asked::Unify {
-                trace_unify(TRACE_MAUDE_CACHED);
-            } else {
-                self.caches.provenance.record_cached(asked, Origin::Maude);
-            }
-            return Ok(cached);
-        }
-        let reply = self.execute(cmd)?;
-        bump(&mut self.stats);
-        self.cache_stats.reply_misses += 1;
-        if asked == Asked::Unify {
-            trace_unify(TRACE_MAUDE);
-        } else {
-            self.caches.provenance.record(asked, Origin::Maude);
-        }
-        self.caches
-            .reply
-            .lock()
-            .unwrap()
-            .insert(cmd.to_vec(), reply.clone());
-        Ok(reply)
+/// The least time an exchange may keep a job that a sequential run would
+/// visit earlier waiting before that job interrupts it.
+const INTERRUPT_FLOOR: std::time::Duration = std::time::Duration::from_millis(250);
+/// An interrupt costs a new process. Only pay that for an exchange that has
+/// already run this many times as long as a process takes to start.
+const INTERRUPT_STARTUPS: u32 = 4;
+/// The longest an interrupted job stays away before it tries again, unless
+/// an exchange may run for longer than this before it is interrupted.
+const BACKOFF_CEILING: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// The exchange in flight on a process, visible to jobs waiting for it.
+///
+/// Jobs of one parallel map share a process when they have none of their
+/// own. Some of them are speculative: a sequential run might never reach
+/// them. A speculative exchange must not hold up a job that run would reach
+/// first, so such a job may kill the process under it. The interrupted job
+/// gives the process up, stays away for a while, and then repeats its
+/// command on a new process.
+#[derive(Default)]
+struct Turn {
+    state: parking_lot::Mutex<TurnState>,
+    changed: parking_lot::Condvar,
+    /// The waiter the process is held for after an interruption, or 0.
+    /// Only that waiter may lock the process.
+    reserved: AtomicU64,
+    /// How long the last process took to start and load the theory.
+    startup_micros: AtomicU64,
+    /// Interrupted jobs staying away, and how often the process was locked
+    /// or unlocked while any of them was.
+    away: AtomicU64,
+    uses: AtomicU64,
+    /// Commands a test has every new process run after loading the theory.
+    #[cfg(test)]
+    preamble: Mutex<Vec<u8>>,
+}
+
+#[derive(Default)]
+struct TurnState {
+    exchange: Option<Exchange>,
+    waiters: u64,
+}
+
+struct Exchange {
+    rank: Option<tamarin_utils::parallel::Rank>,
+    since: std::time::Instant,
+    interrupted: bool,
+}
+
+/// Marks an exchange as in flight until it is finished or dropped.
+struct InFlight<'a>(&'a Turn);
+
+impl InFlight<'_> {
+    /// End the exchange and report whether a waiter interrupted it.
+    fn finish(self) -> bool {
+        let exchange = self.0.state.lock().exchange.take();
+        std::mem::forget(self);
+        exchange.is_some_and(|exchange| exchange.interrupted)
     }
 }
 
-impl Drop for MaudeProcessInner {
-    /// When `TAM_MAUDE_CACHE_STATS` is set, emit one summary line per Maude
-    /// process to STDERR as this inner is torn down (the shared
-    /// `Arc<Mutex<MaudeProcessInner>>` is one per subprocess, so this fires
-    /// exactly once per process at session end).  Nothing reaches stdout;
-    /// stdout is byte-compared against the Haskell oracle.
+impl Drop for InFlight<'_> {
     fn drop(&mut self) {
-        if tamarin_utils::env_gate!("TAM_MAUDE_CACHE_STATS") {
-            let s = &self.cache_stats;
-            eprintln!(
-                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} unspelled={} lean_exists={} lean_unify={}",
-                s.reduce_hits,
-                s.reduce_misses,
-                s.unifiable_hits,
-                s.unifiable_misses,
-                s.reply_hits,
-                s.reply_misses,
-                self.stats.lean_unify_unspelled,
-                self.stats.lean_unify_exists_count,
-                self.stats.lean_unify_count,
-            );
-        }
+        self.0.state.lock().exchange = None;
     }
 }
 
-impl Drop for SharedMaudeCaches {
-    /// With `TAM_MAUDE_CACHE_STATS`, report once per session which component
-    /// answered each command. STDERR only, like the per-process line above.
+impl Turn {
+    fn begin(&self) -> InFlight<'_> {
+        let rank = tamarin_utils::parallel::Rank::current();
+        self.state.lock().exchange = Some(Exchange {
+            rank,
+            since: std::time::Instant::now(),
+            interrupted: false,
+        });
+        InFlight(self)
+    }
+
+    /// How long an exchange may run before an earlier job may interrupt it.
+    fn interrupt_after(&self) -> std::time::Duration {
+        let startup = std::time::Duration::from_micros(self.startup_micros.load(Ordering::Relaxed));
+        INTERRUPT_FLOOR.max(startup * INTERRUPT_STARTUPS)
+    }
+
+    /// How long until a job of this rank may interrupt the exchange in
+    /// flight. `None` if it may not: there is none, it was interrupted
+    /// already, or a sequential run would not reach the job first.
+    fn patience(
+        &self,
+        state: &TurnState,
+        rank: Option<&tamarin_utils::parallel::Rank>,
+    ) -> Option<std::time::Duration> {
+        let exchange = state.exchange.as_ref()?;
+        let holder = exchange.rank.as_ref()?;
+        (!exchange.interrupted && rank?.precedes(holder)).then(|| {
+            self.interrupt_after()
+                .saturating_sub(exchange.since.elapsed())
+        })
+    }
+
+    fn release(&self, waiter: u64) {
+        if waiter != 0
+            && self
+                .reserved
+                .compare_exchange(waiter, 0, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            let _state = self.state.lock();
+            self.changed.notify_all();
+        }
+    }
+
+    /// Wait until the process is no longer held for `other`.
+    fn wait_for_release(&self, other: u64) {
+        let mut state = self.state.lock();
+        if self.reserved.load(Ordering::Acquire) == other {
+            self.changed
+                .wait_for(&mut state, std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// Tell jobs that are staying away that the process is in use.
+    #[inline]
+    fn note_use(&self) {
+        if self.away.load(Ordering::Relaxed) != 0 {
+            self.uses.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Stay away after an interruption: for `backoff`, or until nobody has
+    /// used the process for as long as an exchange may run undisturbed.
+    fn stay_away(&self, backoff: std::time::Duration) {
+        const POLL: std::time::Duration = std::time::Duration::from_millis(20);
+        self.away.fetch_add(1, Ordering::Relaxed);
+        let away = std::time::Instant::now();
+        let mut quiet = away;
+        let mut uses = self.uses.load(Ordering::Relaxed);
+        while cancellation::check().is_ok() {
+            let other = self.reserved.load(Ordering::Acquire);
+            if other != 0 {
+                self.wait_for_release(other);
+                quiet = std::time::Instant::now();
+                continue;
+            }
+            let seen = self.uses.load(Ordering::Relaxed);
+            if seen != uses {
+                uses = seen;
+                quiet = std::time::Instant::now();
+            }
+            if away.elapsed() >= backoff || quiet.elapsed() >= self.interrupt_after() {
+                break;
+            }
+            std::thread::sleep(POLL);
+        }
+        self.away.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// The reservation a waiter holds after interrupting an exchange.
+struct Waiter<'a> {
+    turn: &'a Turn,
+    id: u64,
+}
+
+impl Drop for Waiter<'_> {
     fn drop(&mut self) {
-        if tamarin_utils::env_gate!("TAM_MAUDE_CACHE_STATS") {
-            for line in self.provenance.report() {
-                eprintln!("{line}");
+        self.turn.release(self.id);
+    }
+}
+
+/// Exclusive use of a process's transport and counters. The lock is given
+/// up only while an interrupted command waits to be repeated.
+struct InnerGuard<'a> {
+    guard: Option<parking_lot::MutexGuard<'a, MaudeProcessInner>>,
+    handle: &'a MaudeHandle,
+}
+
+impl Deref for InnerGuard<'_> {
+    type Target = MaudeProcessInner;
+    fn deref(&self) -> &MaudeProcessInner {
+        self.guard.as_ref().expect("the process is locked")
+    }
+}
+
+impl std::ops::DerefMut for InnerGuard<'_> {
+    fn deref_mut(&mut self) -> &mut MaudeProcessInner {
+        self.guard.as_mut().expect("the process is locked")
+    }
+}
+
+impl Drop for InnerGuard<'_> {
+    fn drop(&mut self) {
+        self.guard = None;
+        self.handle.turn.note_use();
+    }
+}
+
+impl InnerGuard<'_> {
+    /// Run one command. If a job that needs the process sooner interrupts
+    /// it, give the process up and run the command again later.
+    fn execute(&mut self, cmd: &[u8], variable_bound: u64) -> Result<Vec<u8>, MaudeError> {
+        let turn = &self.handle.turn;
+        let mut backoff = turn.interrupt_after();
+        loop {
+            let exchange = turn.begin();
+            let result = MaudeProcessInner::execute(self, cmd, variable_bound);
+            if !exchange.finish() || result.is_ok() {
+                return result;
             }
-            #[cfg(feature = "lean-unification")]
-            if let Some(table) = self.reduction_table.lock().unwrap().as_ref() {
-                let verdict = match table {
-                    Some(table) if table.certified() => "certified",
-                    Some(_) => "uncertified",
-                    None => "unencodable",
-                };
-                eprintln!("[ALGEBRA_PROVENANCE] rewrite table: {verdict}");
-            }
-            #[cfg(feature = "lean-unification")]
-            {
-                let memo = self.proved_unify.lock().unwrap();
-                let (replies, words) = self.unify_replies.size();
-                let exists = self.unify_replies.existence_replies();
-                if replies != 0 || exists != 0 {
-                    eprintln!(
-                        "[UNIFY_MEMO] answers={} nodes={} replies={replies} words={words} exists={exists}",
-                        memo.answers.len(),
-                        memo.nodes,
-                    );
-                }
-            }
+            // A job that interrupts once will usually be back. Stay away
+            // for longer each time, so that repeating this command does not
+            // keep holding it up.
+            self.guard = None;
+            turn.stay_away(backoff);
+            self.guard = Some(self.handle.lock_process()?);
+            backoff = (backoff * 2).min(BACKOFF_CEILING.max(turn.interrupt_after()));
         }
     }
 }
@@ -957,12 +1195,25 @@ fn spawn_maude(maude_path: &str) -> Result<(ChildStdin, ChildStdout, Child), Mau
 /// inside `read_until_prompt` while holding the I/O lock.
 struct MaudeChildReaper {
     child: Option<Child>,
-    // Request cancellation and panicking exchanges ask for transparent recovery.
-    // Explicit watchdog kills and unrelated I/O errors retain their error semantics.
+    // Failed exchanges permit a fresh process on the next request. An explicit
+    // watchdog kill keeps this handle offline until returned to the pool.
     restart: bool,
 }
 
 impl MaudeChildReaper {
+    fn is_running(&mut self) -> std::io::Result<bool> {
+        self.child
+            .as_mut()
+            .map_or(Ok(false), tamarin_utils::process::child_is_running)
+    }
+
+    fn invalidate(&mut self) {
+        if self.child.is_some() {
+            self.restart = true;
+            self.kill_and_wait();
+        }
+    }
+
     fn kill_and_wait(&mut self) {
         if let Some(mut c) = self.child.take() {
             tamarin_utils::process::kill_process_group(&mut c);
@@ -987,9 +1238,57 @@ fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
+/// A balanced term keeps Maude's parser stack logarithmic in the number of
+/// names being registered. Every MSG module declares cons : TOP TOP -> TOP.
+fn name_order_command(start: u64, end: u64) -> String {
+    use std::fmt::Write;
+    fn tree(start: u64, end: u64, out: &mut String) {
+        if end - start == 1 {
+            write!(out, "x{start}:Msg").unwrap();
+        } else {
+            let mid = start + (end - start) / 2;
+            out.push_str("cons(");
+            tree(start, mid, out);
+            out.push(',');
+            tree(mid, end, out);
+            out.push(')');
+        }
+    }
+    debug_assert!(start < end);
+    let mut cmd = String::from("parse in MSG : ");
+    tree(start, end, &mut cmd);
+    cmd.push_str(" .\n");
+    cmd
+}
+
+fn check_name_registration(reply: &[u8]) -> Result<(), MaudeError> {
+    // Maude reports rejected commands without failing the pipe exchange.
+    // Never publish a watermark unless it actually parsed the term.
+    if reply.starts_with(b"TOP: cons(")
+        || reply.starts_with(b"[TOP]: cons(")
+        || reply.starts_with(b"Msg: x")
+    {
+        Ok(())
+    } else {
+        Err(MaudeError::Other(format!(
+            "Maude rejected variable name registration: {}",
+            String::from_utf8_lossy(reply)
+        )))
+    }
+}
+
 /// Handle to an algebra session (no subprocess in native-only mode).
 /// Cloneable; uses an `Arc<Mutex<...>>`
 /// internally to serialize exchanges with the Maude subprocess.
+///
+/// Parallel jobs may share one handle. On the Maude backend they take turns
+/// on the process (see [`Turn`]). A native-only session has no transport to
+/// take turns on: every answer is computed on the calling thread from the
+/// request and the immutable signature, the session memos and the failure
+/// latch are behind their own short locks, and `inner` is locked only to
+/// bump a counter. No call into the Lean library is made with a lock held,
+/// so jobs that share a native-only handle run their searches concurrently
+/// and one that is cancelled inside a search holds nothing up.
 /// The `Child` reaper sits in its OWN mutex so a watchdog can
 /// `kill_subprocess()` even while a reader thread is blocked on Maude
 /// IPC inside `inner` — without this split, the watchdog deadlocks
@@ -997,11 +1296,15 @@ fn find_subseq(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 #[derive(Clone)]
 pub struct MaudeHandle {
     backend: AlgebraBackend,
-    /// The session caches also held by `inner`. Kept here so the failure
-    /// latch is readable without the I/O mutex.
-    caches: Arc<SharedMaudeCaches>,
+    /// The caller supplied Tamarin's canonical, finite-variant theory premises.
+    #[cfg(feature = "lean-unification")]
+    theory_fallback: bool,
     inner: Arc<parking_lot::Mutex<MaudeProcessInner>>,
     child: Arc<Mutex<MaudeChildReaper>>,
+    turn: Arc<Turn>,
+    /// The session's memo caches, provenance tally and failure latch, read
+    /// without the I/O mutex.
+    caches: Arc<SharedMaudeCaches>,
     /// Monotonically-increasing counter for fresh-variable allocation.
     ///
     /// Mirrors Haskell's `MonadFresh` (`FreshT m` in lib/utils): a SINGLE
@@ -1030,6 +1333,13 @@ pub struct MaudeHandle {
     /// `maude_sig()` hands out a cheap refcount-bumped clone WITHOUT taking the
     /// IPC mutex or deep-cloning the `BTreeSet`s.
     sig: Arc<MaudeSig>,
+    /// The live rule heads permit the symbol-only or structural normal-form
+    /// shortcut, respectively. The latter also requires every `sig.st_rules`
+    /// LHS to be Ac/C-free (`term_ac_c_free`), so that `nf_via_haskell`'s
+    /// no-AC st-rule matcher is complete for this signature. Computed once
+    /// at `start_with_caches` (the signature is immutable afterwards).
+    reduce_by_symbol: bool,
+    reduce_by_structure: bool,
     /// Operators printed by this native-only session, derived from source declarations.
     native_declarations: Option<Arc<crate::function_symbols::FunSig>>,
     /// Where native-only normalizes or lists variants through the
@@ -1089,14 +1399,13 @@ impl MaudeHandle {
         mut arms: Vec<ApplicationVariant>,
     ) -> Result<Vec<ApplicationVariant>, MaudeError> {
         let certified = {
-            let inner = cancellation::lock(&self.inner)?;
             let family: Vec<_> = arms.iter().map(|arm| arm.bindings.clone()).collect();
-            let (origin, cached) = self.checked_family(&inner, application, &family)?;
+            let (origin, cached) = self.checked_family(application, &family)?;
             if cached {
-                let tally = &inner.caches.provenance;
+                let tally = &self.caches.provenance;
                 tally.record_cached(Asked::Variants, origin);
             } else {
-                inner.caches.provenance.record(Asked::Variants, origin);
+                self.caches.provenance.record(Asked::Variants, origin);
             }
             origin == Origin::Proved
         };
@@ -1106,17 +1415,13 @@ impl MaudeHandle {
             // A certified table has one normal form, so the proposal must
             // have named it. On any other table the reducer's reduct is used.
             if certified && value != arm.value {
-                return Err(self
-                    .caches
-                    .native_failure
-                    .get_or_init(|| {
-                        NativeFailure::Runtime(format!(
-                            "variants not certified: the proposed value {} of {application} \
-                             is not its normal form {value}",
-                            arm.value
-                        ))
-                    })
-                    .error());
+                return Err(self.caches.fail(|| {
+                    NativeFailure::Runtime(format!(
+                        "variants not certified: the proposed value {} of {application} \
+                         is not its normal form {value}",
+                        arm.value
+                    ))
+                }));
             }
             arm.value = value;
         }
@@ -1169,10 +1474,11 @@ impl MaudeHandle {
         backend: AlgebraBackend,
         caches: Arc<SharedMaudeCaches>,
     ) -> Result<Self, MaudeError> {
-        let session = Self::start_with_backend_and_caches(maude_path, sig, backend, caches)?;
+        #[cfg_attr(not(feature = "lean-unification"), allow(unused_mut))]
+        let mut session = Self::start_with_backend_and_caches(maude_path, sig, backend, caches)?;
         #[cfg(feature = "lean-unification")]
         {
-            session.inner.lock().theory_fallback = backend == AlgebraBackend::NativeOnly;
+            session.theory_fallback = backend == AlgebraBackend::NativeOnly;
         }
         Ok(session)
     }
@@ -1217,19 +1523,17 @@ impl MaudeHandle {
             restart: false,
         }));
         let indexed = reduction_heads_indexed(&sig);
+        let turn = Arc::<Turn>::default();
         let mut inner = MaudeProcessInner {
-            #[cfg(feature = "lean-unification")]
-            theory_fallback: false,
             backend,
             maude_path: maude_path.to_owned(),
             child: reaper.clone(),
+            turn: turn.clone(),
             initialized: false,
+            ordered_variables: 0,
             stdin,
             stdout,
             stats: MaudeStats::default(),
-            cache_stats: MaudeCacheStats::default(),
-            reduce_by_symbol: indexed && sig.has_no_ac_operators(),
-            reduce_by_structure: indexed && sig.st_lhs_all_ac_c_free(),
             sig: Arc::clone(&sig),
             caches: Arc::clone(&caches),
         };
@@ -1238,14 +1542,19 @@ impl MaudeHandle {
         }
         Ok(MaudeHandle {
             backend,
-            caches,
+            #[cfg(feature = "lean-unification")]
+            theory_fallback: false,
             inner: Arc::new(parking_lot::Mutex::new(inner)),
             child: reaper,
+            turn,
+            caches,
             // The global fresh counter starts at 0 (HS-faithful: HS's
             // `MonadFresh` global counter starts at 0).
             fresh_counter: Arc::new(AtomicU64::new(0)),
             native_declarations: (backend == AlgebraBackend::NativeOnly)
                 .then(|| Arc::new(sig.declared_fun_syms())),
+            reduce_by_symbol: indexed && sig.has_no_ac_operators(),
+            reduce_by_structure: indexed && sig.st_lhs_all_ac_c_free(),
             sig,
             #[cfg(feature = "lean-unification")]
             native_rules: Default::default(),
@@ -1439,17 +1748,21 @@ impl MaudeHandle {
     /// don't collide), but the next Reduction starts fresh.
     ///
     /// The Maude PROCESS state (the `inner`/`child` Arcs) is shared —
-    /// only the counter is per-handle.  This is safe because Maude itself
-    /// is stateless between queries; variable idxs are just Rust-side
-    /// labels used when constructing Maude terms, not anything Maude
-    /// tracks across calls.
+    /// only the counter is per-handle. Logical variable indices are scoped by
+    /// each call's conversion context; the shared process serializes queries
+    /// and registers wire names in a consistent order before executing them.
     pub fn with_fresh_counter_from(&self, avoid_max: u64) -> MaudeHandle {
         MaudeHandle {
             backend: self.backend,
-            caches: Arc::clone(&self.caches),
+            #[cfg(feature = "lean-unification")]
+            theory_fallback: self.theory_fallback,
             inner: self.inner.clone(),
             child: self.child.clone(),
+            turn: self.turn.clone(),
+            caches: self.caches.clone(),
             fresh_counter: Arc::new(AtomicU64::new(avoid_max.saturating_add(1))),
+            reduce_by_symbol: self.reduce_by_symbol,
+            reduce_by_structure: self.reduce_by_structure,
             sig: Arc::clone(&self.sig),
             native_declarations: self.native_declarations.clone(),
             #[cfg(feature = "lean-unification")]
@@ -1467,10 +1780,15 @@ impl MaudeHandle {
     pub fn with_fresh_counter_next(&self, next: u64) -> MaudeHandle {
         MaudeHandle {
             backend: self.backend,
-            caches: Arc::clone(&self.caches),
+            #[cfg(feature = "lean-unification")]
+            theory_fallback: self.theory_fallback,
             inner: self.inner.clone(),
             child: self.child.clone(),
+            turn: self.turn.clone(),
+            caches: self.caches.clone(),
             fresh_counter: Arc::new(AtomicU64::new(next)),
+            reduce_by_symbol: self.reduce_by_symbol,
+            reduce_by_structure: self.reduce_by_structure,
             sig: Arc::clone(&self.sig),
             native_declarations: self.native_declarations.clone(),
             #[cfg(feature = "lean-unification")]
@@ -1503,8 +1821,184 @@ impl MaudeHandle {
     /// watchdog deadlocks with the very thread it's trying to unblock.
     pub fn kill_subprocess(&self) {
         if let Ok(mut reaper) = self.child.lock() {
+            reaper.restart = false;
             reaper.kill_and_wait();
         }
+    }
+
+    /// Latch that this native-only session was asked for something it
+    /// cannot answer, and return the session's failure.
+    fn unsupported_native_operation(&self, operation: &'static str) -> MaudeError {
+        self.caches.fail(|| NativeFailure::Unsupported(operation))
+    }
+
+    /// Fail a native-only session that reaches a Maude exchange.
+    fn require_maude(&self, operation: &'static str) -> Result<(), MaudeError> {
+        if self.backend == AlgebraBackend::NativeOnly {
+            return Err(self.unsupported_native_operation(operation));
+        }
+        Ok(())
+    }
+
+    /// Bump a per-handle counter of a native-only answer. Nothing holds the
+    /// lock of a native-only session for longer than such a bump.
+    #[cfg(feature = "lean-unification")]
+    fn bump_stats(&self, bump: impl FnOnce(&mut MaudeStats)) {
+        bump(&mut self.inner.lock().stats);
+    }
+
+    /// Lock the process for this job. A cancelled waiter leaves without it.
+    #[inline]
+    fn lock_inner(&self) -> Result<InnerGuard<'_>, cancellation::Cancelled> {
+        Ok(InnerGuard {
+            guard: Some(self.lock_process()?),
+            handle: self,
+        })
+    }
+
+    #[inline]
+    fn lock_process(
+        &self,
+    ) -> Result<parking_lot::MutexGuard<'_, MaudeProcessInner>, cancellation::Cancelled> {
+        // Cached operations frequently take an uncontended lock.
+        if self.turn.reserved.load(Ordering::Relaxed) == 0
+            && let Some(guard) = self.inner.try_lock()
+            // An interrupting job may have reserved the process meanwhile.
+            && self.turn.reserved.load(Ordering::Acquire) == 0
+        {
+            self.turn.note_use();
+            cancellation::check()?;
+            return Ok(guard);
+        }
+        self.lock_process_contended()
+    }
+
+    #[cold]
+    fn lock_process_contended(
+        &self,
+    ) -> Result<parking_lot::MutexGuard<'_, MaudeProcessInner>, cancellation::Cancelled> {
+        const POLL: std::time::Duration = std::time::Duration::from_secs(1);
+        let turn = &*self.turn;
+        let mut waiter = Waiter { turn, id: 0 };
+        loop {
+            cancellation::check()?;
+            // A job waiting for a value this one is building can lend it an
+            // earlier rank at any time.
+            let rank = tamarin_utils::parallel::Rank::current();
+            let reserved = turn.reserved.load(Ordering::Acquire);
+            if reserved != 0 && reserved != waiter.id {
+                turn.wait_for_release(reserved);
+                continue;
+            }
+            // Wake on unlock, like an ordinary mutex. The timeout bounds
+            // cancellation latency and the wait behind a speculative exchange.
+            let wait = turn
+                .patience(&turn.state.lock(), rank.as_ref())
+                .map_or(POLL, |wait| {
+                    wait.clamp(std::time::Duration::from_millis(1), POLL)
+                });
+            if let Some(guard) = self.inner.try_lock_for(wait) {
+                let reserved = turn.reserved.load(Ordering::Acquire);
+                if reserved != 0 && reserved != waiter.id {
+                    continue;
+                }
+                turn.note_use();
+                cancellation::check()?;
+                return Ok(guard);
+            }
+            waiter.id = self.interrupt_exchange(rank.as_ref(), waiter.id);
+        }
+    }
+
+    /// Kill the exchange in flight if a sequential run would reach `rank`
+    /// first and the exchange has had its time, and hold the process for
+    /// this waiter. Returns the waiter's reservation: `held`, or a new one.
+    fn interrupt_exchange(&self, rank: Option<&tamarin_utils::parallel::Rank>, held: u64) -> u64 {
+        let turn = &*self.turn;
+        let mut state = turn.state.lock();
+        if turn.reserved.load(Ordering::Acquire) != held
+            || !turn
+                .patience(&state, rank)
+                .is_some_and(|left| left.is_zero())
+        {
+            return held;
+        }
+        let exchange = state.exchange.as_mut().expect("an exchange is in flight");
+        if tamarin_utils::env_gate!("TAM_DBG_MAUDE_INTERRUPT") {
+            eprintln!("[maude-interrupt] after {:?}", exchange.since.elapsed());
+        }
+        exchange.interrupted = true;
+        let id = if held == 0 {
+            state.waiters += 1;
+            turn.reserved.store(state.waiters, Ordering::Release);
+            state.waiters
+        } else {
+            held
+        };
+        self.child
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .invalidate();
+        id
+    }
+
+    /// Run a command whose reply depends on the command alone, or return
+    /// the reply an identical command got earlier in the session.  The
+    /// per-call back-conversion still runs on every hit, so a hit is
+    /// consumed exactly like a round-trip.  `bump` records the per-command
+    /// stat on a real round-trip only; `MaudeStats` reaches no `--prove`
+    /// output.
+    ///
+    /// The answer is tallied as Maude's, afresh or from the memo. A
+    /// unification is tallied once by its entry point, which answers without
+    /// Maude when the free unifier settles it; the other commands end here.
+    fn execute_memo(
+        &self,
+        cmd: &[u8],
+        variable_bound: u64,
+        asked: Asked,
+        bump: impl FnOnce(&mut MaudeStats),
+    ) -> Result<Vec<u8>, MaudeError> {
+        self.require_maude("Maude execution")?;
+        cancellation::check()?;
+        let cached = || self.caches.reply.lock().unwrap().get(cmd).cloned();
+        let hit = match cached() {
+            Some(reply) => Some(reply),
+            None => {
+                let mut inner = self.lock_inner()?;
+                // Another job may have run the same command meanwhile.
+                match cached() {
+                    Some(reply) => Some(reply),
+                    None => {
+                        let reply = inner.execute(cmd, variable_bound)?;
+                        bump(&mut inner.stats);
+                        drop(inner);
+                        self.caches
+                            .stats
+                            .reply_misses
+                            .fetch_add(1, Ordering::Relaxed);
+                        if asked == Asked::Unify {
+                            trace_unify(TRACE_MAUDE);
+                        } else {
+                            self.caches.provenance.record(asked, Origin::Maude);
+                        }
+                        self.caches
+                            .reply
+                            .lock()
+                            .unwrap()
+                            .insert(cmd.to_vec(), reply.clone());
+                        return Ok(reply);
+                    }
+                }
+            }
+        };
+        self.caches.stats.reply_hits.fetch_add(1, Ordering::Relaxed);
+        if asked == Asked::Unify {
+            trace_unify(TRACE_MAUDE_CACHED);
+        } else {
+            self.caches.provenance.record_cached(asked, Origin::Maude);
+        }
+        Ok(hit.expect("a cached reply"))
     }
 
     /// Snapshot of the per-operation Maude call counters for this handle.
@@ -1517,16 +2011,15 @@ impl MaudeHandle {
     /// input modulo the fixed-per-session Maude signature, and
     /// `has_non_normal_terms` (called on every search step) calls it
     /// repeatedly for the same subterms.  Cache locks are scoped to the
-    /// single `get` / `insert` statement, strictly inside the inner IPC
-    /// mutex and never across the IPC wait (lock-order invariant on
-    /// `SharedMaudeCaches`).
+    /// single `get` / `insert` statement and never held across the IPC
+    /// wait (lock-order invariant on `SharedMaudeCaches`).
     pub fn reduce(&self, t: &LNTerm) -> Result<LNTerm, MaudeError> {
         self.check_backend_status()?;
+        cancellation::check()?;
         #[cfg(feature = "lean-unification")]
         if self.reference.reduce {
-            let inner = cancellation::lock(&self.inner)?;
-            let (result, origin) = self.proved_reduce(&inner, t)?;
-            inner.caches.provenance.record(Asked::Reduce, origin);
+            let (result, origin) = self.proved_reduce(t)?;
+            self.caches.provenance.record(Asked::Reduce, origin);
             return Ok(result);
         }
         // An identity fast path can only return a well-formed term in this module.
@@ -1538,25 +2031,22 @@ impl MaudeHandle {
                     canonical = crate::term::map_lits(t, &mut |lit| *lit);
                     &canonical
                 }
-                None => {
-                    return Err(self
-                        .inner
-                        .lock()
-                        .unsupported_native_operation("normalization"))
-                }
+                None => return Err(self.unsupported_native_operation("normalization")),
             }
         } else {
             t
         };
         let mut ctx = ConvCtx::new();
+        let hit = self.caches.reduce.lock().unwrap().get(t).cloned();
+        if let Some((cached, origin)) = hit {
+            self.caches
+                .stats
+                .reduce_hits
+                .fetch_add(1, Ordering::Relaxed);
+            self.caches.provenance.record_cached(Asked::Reduce, origin);
+            return Ok(cached);
+        }
         let reply = {
-            let mut inner = cancellation::lock(&self.inner)?;
-            let hit = inner.caches.reduce.lock().unwrap().get(t).cloned();
-            if let Some((cached, origin)) = hit {
-                inner.cache_stats.reduce_hits += 1;
-                inner.caches.provenance.record_cached(Asked::Reduce, origin);
-                return Ok(cached);
-            }
             // Fast path: if the term contains NO reducible function
             // symbols anywhere, and the signature passes this path's
             // no-AC/C gate, `reduce` is the identity. Reduction applies
@@ -1564,9 +2054,8 @@ impl MaudeHandle {
             // variables. Avoids the ~0.7ms Maude IPC round-trip on the
             // overwhelming majority of fact-term normalisations we
             // perform during subst_system.
-            if inner.reduce_by_symbol && !term_has_reducible_sym(t, &inner.sig.reducible_fun_syms) {
-                inner
-                    .caches
+            if self.reduce_by_symbol && !term_has_reducible_sym(t, &self.sig.reducible_fun_syms) {
+                self.caches
                     .provenance
                     .record(Asked::Reduce, Origin::SharedRust);
                 return Ok(t.clone());
@@ -1594,7 +2083,7 @@ impl MaudeHandle {
             // reach the result.  Mirrors the cheap fast path's
             // conventions: no reduce-cache insert, no `norm_count` /
             // cache-stat bump.
-            if inner.reduce_by_structure && crate::norm::nf_via_haskell(&inner.sig, t) {
+            if self.reduce_by_structure && crate::norm::nf_via_haskell(&self.sig, t) {
                 // `TAM_RS_VERIFY_REDUCE_NF` oracle: ALSO run the real
                 // Maude round-trip this fast path elides and panic if
                 // Maude's answer differs from `t`.  Dead-cheap when
@@ -1604,8 +2093,8 @@ impl MaudeHandle {
                     let mut cmd = b"reduce ".to_vec();
                     pp_mterm_into(&mt, &mut cmd);
                     cmd.extend_from_slice(b" .\n");
-                    let reply = inner.execute(&cmd)?;
-                    let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &inner.sig)?;
+                    let reply = self.lock_inner()?.execute(&cmd, ctx.variable_bound())?;
+                    let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &self.sig)?;
                     let mut next = 0;
                     let maude_result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
                     if maude_result != *t {
@@ -1617,8 +2106,7 @@ impl MaudeHandle {
                         );
                     }
                 }
-                inner
-                    .caches
+                self.caches
                     .provenance
                     .record(Asked::Reduce, Origin::SharedRust);
                 return Ok(t.clone());
@@ -1628,38 +2116,44 @@ impl MaudeHandle {
             // Maude backend runs identically before its round trip.
             #[cfg(feature = "lean-unification")]
             if self.backend == AlgebraBackend::NativeOnly {
-                let (result, origin) = self.proved_reduce(&inner, t)?;
-                inner.cache_stats.reduce_misses += 1;
-                inner
-                    .caches
+                // No lock is held across the search: a failed or cancelled
+                // one returns here, before the memo.
+                let (result, origin) = self.proved_reduce(t)?;
+                self.caches
+                    .stats
+                    .reduce_misses
+                    .fetch_add(1, Ordering::Relaxed);
+                self.caches
                     .reduce
                     .lock()
                     .unwrap()
                     .insert(t.clone(), (result.clone(), origin));
-                inner.caches.provenance.record(Asked::Reduce, origin);
+                self.caches.provenance.record(Asked::Reduce, origin);
                 return Ok(result);
             }
-            inner.require_maude("normalization")?;
+            self.require_maude("normalization")?;
             let mt = lterm_to_mterm_global(t, &mut ctx);
             let mut cmd = b"reduce ".to_vec();
             pp_mterm_into(&mt, &mut cmd);
             cmd.extend_from_slice(b" .\n");
-            let reply = inner.execute(&cmd)?;
+            let mut inner = self.lock_inner()?;
+            let reply = inner.execute(&cmd, ctx.variable_bound())?;
             inner.stats.norm_count += 1;
             reply
         };
         let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &self.sig)?;
         let mut next = 0;
         let result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
-        let mut inner = cancellation::lock(&self.inner)?;
-        inner.cache_stats.reduce_misses += 1;
-        inner
-            .caches
+        self.caches
+            .stats
+            .reduce_misses
+            .fetch_add(1, Ordering::Relaxed);
+        self.caches
             .reduce
             .lock()
             .unwrap()
             .insert(t.clone(), (result.clone(), Origin::Maude));
-        inner.caches.provenance.record(Asked::Reduce, Origin::Maude);
+        self.caches.provenance.record(Asked::Reduce, Origin::Maude);
         Ok(result)
     }
 
@@ -1668,15 +2162,14 @@ impl MaudeHandle {
     #[cfg(feature = "lean-unification")]
     fn reduction_table(
         &self,
-        inner: &MaudeProcessInner,
     ) -> Result<Option<Arc<crate::lean_unification::ReductionTable>>, MaudeError> {
-        let mut slot = inner.caches.reduction_table.lock().unwrap();
+        let mut slot = self.caches.reduction_table.lock().unwrap();
         match &*slot {
             Some(table) => Ok(table.clone()),
             None => {
                 // A cancelled or failed build is not stored.
-                let built = crate::lean_unification::ReductionTable::new(&inner.sig)
-                    .map_err(|error| native_runtime_error(&inner.caches, error))?
+                let built = crate::lean_unification::ReductionTable::new(&self.sig)
+                    .map_err(|error| self.lean_error(error))?
                     .map(Arc::new);
                 *slot = Some(built.clone());
                 Ok(built)
@@ -1696,24 +2189,20 @@ impl MaudeHandle {
     /// recorded as assumed; a raw session reports the uncertified table
     /// instead.
     #[cfg(feature = "lean-unification")]
-    fn proved_reduce(
-        &self,
-        inner: &MaudeProcessInner,
-        t: &LNTerm,
-    ) -> Result<(LNTerm, Origin), MaudeError> {
+    fn proved_reduce(&self, t: &LNTerm) -> Result<(LNTerm, Origin), MaudeError> {
         use crate::lean_unification::Reduced;
-        let Some(table) = self.reduction_table(inner)? else {
-            return Err(inner.unsupported_native_operation("normalization"));
+        let Some(table) = self.reduction_table()? else {
+            return Err(self.unsupported_native_operation("normalization"));
         };
-        let follow_path = inner.theory_fallback || self.reference.reduce;
+        let follow_path = self.theory_fallback || self.reference.reduce;
         match table
-            .reduce(&inner.sig, t, follow_path, self.reference.search_work)
-            .map_err(|error| native_runtime_error(&inner.caches, error))?
+            .reduce(&self.sig, t, follow_path, self.reference.search_work)
+            .map_err(|error| self.lean_error(error))?
         {
             Reduced::Certified(result) => Ok((result, Origin::Proved)),
             Reduced::Path(result) => Ok((result, Origin::Assumed)),
-            Reduced::Unsupported => Err(inner.unsupported_native_operation("normalization")),
-            Reduced::Undecided => Err(inner.unsupported_native_operation(UNCERTIFIED_TABLE)),
+            Reduced::Unsupported => Err(self.unsupported_native_operation("normalization")),
+            Reduced::Undecided => Err(self.unsupported_native_operation(UNCERTIFIED_TABLE)),
         }
     }
 
@@ -1733,25 +2222,24 @@ impl MaudeHandle {
     #[cfg(feature = "lean-unification")]
     fn checked_family(
         &self,
-        inner: &MaudeProcessInner,
         query: &LNTerm,
         family: &[Vec<(crate::lterm::LVar, LNTerm)>],
     ) -> Result<(Origin, bool), MaudeError> {
         use crate::lean_unification::{Error, FamilyCheck};
         let work = self.reference.variant_check_work;
         let key = (query.clone(), family.to_vec());
-        if let Some(origin) = inner.caches.variant_checks.lock().unwrap().get(&key) {
+        if let Some(origin) = self.caches.variant_checks.lock().unwrap().get(&key) {
             return Ok((*origin, true));
         }
-        let Some(table) = self.reduction_table(inner)? else {
-            return Err(inner.unsupported_native_operation("variant generation"));
+        let Some(table) = self.reduction_table()? else {
+            return Err(self.unsupported_native_operation("variant generation"));
         };
         let trace = tamarin_utils::env_gate!("TAM_DBG_VARIANT_CHECK");
         if trace {
             // What the check would spend without a bound.
             let charge = table
-                .variant_check_charge(&inner.sig, query, family)
-                .map_err(|error| native_runtime_error(&inner.caches, error))?;
+                .variant_check_charge(&self.sig, query, family)
+                .map_err(|error| self.lean_error(error))?;
             eprintln!(
                 "[variant check] {} members, charge {}, work bound {work}, query {query}",
                 family.len(),
@@ -1761,14 +2249,14 @@ impl MaudeHandle {
         let start = std::time::Instant::now();
         let verdict = table
             .check_variants(
-                &inner.sig,
+                &self.sig,
                 query,
                 family,
                 VARIANT_CHECK_DEPTH,
                 work,
                 self.reference.variant_check_search,
             )
-            .map_err(|error| native_runtime_error(&inner.caches, error))?;
+            .map_err(|error| self.lean_error(error))?;
         if trace {
             eprintln!(
                 "[variant check] {verdict:?} after {} ms",
@@ -1782,8 +2270,7 @@ impl MaudeHandle {
                 } else {
                     Origin::Assumed
                 };
-                inner
-                    .caches
+                self.caches
                     .variant_checks
                     .lock()
                     .unwrap()
@@ -1797,16 +2284,12 @@ impl MaudeHandle {
             },
             FamilyCheck::Undecided => Error::UncertifiedVariants,
         };
-        Err(inner
-            .caches
-            .native_failure
-            .get_or_init(|| {
-                NativeFailure::Runtime(format!(
-                    "{refused}; query {query}, family of {} members",
-                    family.len()
-                ))
-            })
-            .error())
+        Err(self.caches.fail(|| {
+            NativeFailure::Runtime(format!(
+                "{refused}; query {query}, family of {} members",
+                family.len()
+            ))
+        }))
     }
 
     /// Whether *any* unifier of `eqs` exists modulo the signature's AC/C
@@ -1838,25 +2321,26 @@ impl MaudeHandle {
         let key: Vec<(LNTerm, LNTerm)> =
             eqs.iter().map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
         // Cache locks below are scoped to the single `get` / `insert`
-        // statement, strictly inside the inner IPC mutex and released
-        // before any Maude IPC (lock-order invariant on
-        // `SharedMaudeCaches`).
-        {
-            let mut inner = cancellation::lock(&self.inner)?;
-            let hit = inner.caches.unifiable.lock().unwrap().get(&key).copied();
-            if let Some((hit, origin)) = hit {
-                inner.cache_stats.unifiable_hits += 1;
-                inner.caches.provenance.record_cached(Asked::Unify, origin);
-                return Ok(hit);
-            }
+        // statement and released before any Maude IPC (lock-order
+        // invariant on `SharedMaudeCaches`).
+        cancellation::check()?;
+        let hit = self.caches.unifiable.lock().unwrap().get(&key).copied();
+        if let Some((hit, origin)) = hit {
+            self.caches
+                .stats
+                .unifiable_hits
+                .fetch_add(1, Ordering::Relaxed);
+            self.caches.provenance.record_cached(Asked::Unify, origin);
+            return Ok(hit);
         }
         // `unify` tallies its own answer.
         let answer = !self.unify(eqs)?.is_empty();
         let origin = last_unify_origin();
-        let mut inner = cancellation::lock(&self.inner)?;
-        inner.cache_stats.unifiable_misses += 1;
-        inner
-            .caches
+        self.caches
+            .stats
+            .unifiable_misses
+            .fetch_add(1, Ordering::Relaxed);
+        self.caches
             .unifiable
             .lock()
             .unwrap()
@@ -1973,11 +2457,7 @@ impl MaudeHandle {
         } else {
             Origin::NativeRust
         };
-        let unsupported = || {
-            self.inner
-                .lock()
-                .unsupported_native_operation("AC/C unification")
-        };
+        let unsupported = || self.unsupported_native_operation("AC/C unification");
         let mut stored = false;
         let answers = match unpack_conjunction(&self.sig, eqs).map_err(|e| self.lean_error(e))? {
             Conjunction::Clash => Vec::new(),
@@ -2022,7 +2502,9 @@ impl MaudeHandle {
                 match spelled {
                     Some(spelled) => spelled,
                     None => {
-                        cancellation::lock(&self.inner)?.stats.lean_unify_unspelled += 1;
+                        self.bump_stats(|stats| stats.lean_unify_unspelled += 1);
+                        let unspelled = &self.caches.stats.lean_unify_unspelled;
+                        unspelled.fetch_add(1, Ordering::Relaxed);
                         family
                             .named(None, Some(&self.caches.unify_replies))
                             .map_err(|e| self.lean_error(e))?
@@ -2033,7 +2515,8 @@ impl MaudeHandle {
         if stored {
             provenance.record_cached(Asked::Unify, origin);
         } else {
-            cancellation::lock(&self.inner)?.stats.lean_unify_count += 1;
+            self.bump_stats(|stats| stats.lean_unify_count += 1);
+            self.caches.stats.lean_unify.fetch_add(1, Ordering::Relaxed);
             provenance.record(Asked::Unify, origin);
         }
         self.caches
@@ -2082,11 +2565,7 @@ impl MaudeHandle {
             provenance.record_cached(Asked::Unify, origin);
             return Ok(found);
         }
-        let unsupported = || {
-            self.inner
-                .lock()
-                .unsupported_native_operation("AC/C unification")
-        };
+        let unsupported = || self.unsupported_native_operation("AC/C unification");
         let (found, reused) =
             match unpack_conjunction(&self.sig, eqs).map_err(|e| self.lean_error(e))? {
                 Conjunction::Clash => (false, false),
@@ -2105,9 +2584,9 @@ impl MaudeHandle {
         if reused {
             provenance.record_cached(Asked::Unify, origin);
         } else {
-            cancellation::lock(&self.inner)?
-                .stats
-                .lean_unify_exists_count += 1;
+            self.bump_stats(|stats| stats.lean_unify_exists_count += 1);
+            let exists = &self.caches.stats.lean_unify_exists;
+            exists.fetch_add(1, Ordering::Relaxed);
             provenance.record(Asked::Unify, origin);
         }
         self.caches
@@ -2150,15 +2629,15 @@ impl MaudeHandle {
         maude_eqs: &[Equal<LNTerm>],
         factored_m: &crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        self.inner.lock().require_maude("AC/C unification")?;
-        let mut inner = cancellation::lock(&self.inner)?;
+        self.require_maude("AC/C unification")?;
         let mut ctx = ConvCtx::new();
         let cmd = build_conj_eqs_cmd(b"unify in MSG : ", maude_eqs, &mut ctx);
         // Raw-reply memo (see `SharedMaudeCaches::reply`): identical `unify in MSG` command
         // bytes yield an identical reply, and the per-arm back-conversion below
         // still runs on every call, so a hit is bit-for-bit a real round-trip.
-        let reply = inner.execute_memo(&cmd, Asked::Unify, |s| s.unify_count += 1)?;
-        drop(inner);
+        let reply = self.execute_memo(&cmd, ctx.variable_bound(), Asked::Unify, |s| {
+            s.unify_count += 1
+        })?;
         let msubsts = maude_parse::parse_unify_reply_with_sig(&reply, &self.sig)?;
         // HS `avoid (M.elems bindings)` (`runBackConversion`,
         // Term/Maude/Types.hs, via
@@ -2261,10 +2740,8 @@ impl MaudeHandle {
             variables,
         );
         let origin = match_origin(oriented);
-        let cached = {
-            let inner = cancellation::lock(&self.inner)?;
-            inner.caches.total_match.lock().unwrap().get(&key).cloned()
-        };
+        cancellation::check()?;
+        let cached = self.caches.total_match.lock().unwrap().get(&key).cloned();
         if let Some(answers) = cached {
             self.caches.provenance.record_cached(Asked::Match, origin);
             return Ok(Some(answers));
@@ -2279,8 +2756,7 @@ impl MaudeHandle {
                 // each in a fixed order.
                 answers.sort_unstable();
                 answers.dedup();
-                cancellation::lock(&self.inner)?
-                    .caches
+                self.caches
                     .total_match
                     .lock()
                     .unwrap()
@@ -2322,16 +2798,16 @@ impl MaudeHandle {
             variables,
         );
         let origin = match_origin(oriented);
+        cancellation::check()?;
         let cached = {
-            let inner = cancellation::lock(&self.inner)?;
-            let listed = inner
+            let listed = self
                 .caches
                 .total_match
                 .lock()
                 .unwrap()
                 .get(&key)
                 .map(|answers| !answers.is_empty());
-            listed.or_else(|| inner.caches.has_match.lock().unwrap().get(&key).copied())
+            listed.or_else(|| self.caches.has_match.lock().unwrap().get(&key).copied())
         };
         if let Some(found) = cached {
             self.caches.provenance.record_cached(Asked::Match, origin);
@@ -2340,13 +2816,8 @@ impl MaudeHandle {
         let found =
             crate::lean_unification::has_match_modulo_attributes(&self.sig, oriented, bindable)
                 .map_err(|e| self.lean_error(e))?
-                .ok_or_else(|| self.inner.lock().unsupported_native_operation(operation))?;
-        cancellation::lock(&self.inner)?
-            .caches
-            .has_match
-            .lock()
-            .unwrap()
-            .insert(key, found);
+                .ok_or_else(|| self.unsupported_native_operation(operation))?;
+        self.caches.has_match.lock().unwrap().insert(key, found);
         self.caches.provenance.record(Asked::Match, origin);
         Ok(found)
     }
@@ -2359,7 +2830,7 @@ impl MaudeHandle {
         operation: &'static str,
     ) -> Result<crate::lean_unification::Substitutions, MaudeError> {
         self.total_match(oriented, bindable)?
-            .ok_or_else(|| self.inner.lock().unsupported_native_operation(operation))
+            .ok_or_else(|| self.unsupported_native_operation(operation))
     }
 
     /// Compute AC matchers for a batch of `(subject, pattern)` problems.
@@ -2485,7 +2956,7 @@ impl MaudeHandle {
             let Some(already_sorted) = self.command_term_is_canonical(term) else {
                 // The wire encoder itself rebuilds through smart constructors.
                 // Empty or singleton AC nodes have no valid application to send.
-                self.inner.lock().require_maude(operation)?;
+                self.require_maude(operation)?;
                 return Err(MaudeError::Other(
                     "invalid operator arity in matching query".into(),
                 ));
@@ -2523,11 +2994,10 @@ impl MaudeHandle {
                 .record(Asked::Match, Origin::SharedRust);
             return Ok(if matched { vec![Vec::new()] } else { vec![] });
         }
-        let mut inner = cancellation::lock(&self.inner)?;
         let mut ctx = ConvCtx::new();
         // `subjs` ← each `eq.lhs` (HS `t1s = a = subject`);
         // `pats`  ← each `eq.rhs` (HS `t2s = b = pattern`).
-        inner.require_maude("matching")?;
+        self.require_maude("matching")?;
         let mut subjs: Vec<MTerm> = Vec::with_capacity(eqs.len());
         let mut pats: Vec<MTerm> = Vec::with_capacity(eqs.len());
         for eq in eqs {
@@ -2541,8 +3011,9 @@ impl MaudeHandle {
         // formatting the borrowed slice directly without a `Vec`+`Arc`
         // round-trip.
         let cmd = pp_match_cmd(&pats, &subjs);
-        let reply = inner.execute_memo(&cmd, Asked::Match, |s| s.match_count += 1)?;
-        drop(inner);
+        let reply = self.execute_memo(&cmd, ctx.variable_bound(), Asked::Match, |s| {
+            s.match_count += 1
+        })?;
         let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
         for ms in &msubsts {
@@ -2639,8 +3110,7 @@ impl MaudeHandle {
             })
             .collect();
 
-        let mut inner = cancellation::lock(&self.inner)?;
-        inner.require_maude("rigid-context matching")?;
+        self.require_maude("rigid-context matching")?;
         let mut ctx = ConvCtx::new();
         let mut pats: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
         let mut subjs: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
@@ -2659,8 +3129,9 @@ impl MaudeHandle {
         // flipped fields.  So both matchers emit pattern-on-the-left,
         // which is what Maude requires (vars bind in the left operand).
         let cmd = pp_match_cmd(&pats, &subjs);
-        let reply = inner.execute_memo(&cmd, Asked::Match, |s| s.match_count += 1)?;
-        drop(inner);
+        let reply = self.execute_memo(&cmd, ctx.variable_bound(), Asked::Match, |s| {
+            s.match_count += 1
+        })?;
         let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
         for ms in &msubsts {
@@ -2753,14 +3224,14 @@ impl MaudeHandle {
         t: &LNTerm,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         self.check_backend_status()?;
-        let mut inner = cancellation::lock(&self.inner)?;
+        cancellation::check()?;
         #[cfg(feature = "lean-unification")]
         if self.backend == AlgebraBackend::NativeOnly {
             use crate::lean_unification::Outcome;
             // Folding lists a family for any table. It is a proposal that
             // the checker has yet to accept.
             let reference = || {
-                crate::lean_unification::variants_for_convergent_theory(&inner.sig, t).map(|rows| {
+                crate::lean_unification::variants_for_convergent_theory(&self.sig, t).map(|rows| {
                     (
                         rows.map_or(Outcome::Unsupported, Outcome::Complete),
                         VariantRoute::GeneralExport,
@@ -2774,17 +3245,17 @@ impl MaudeHandle {
                 // finite variant property.
                 let finite_variants = || {
                     matches!(
-                        self.reduction_table(&inner),
+                        self.reduction_table(),
                         Ok(Some(table)) if table.certified()
                     )
                 };
-                self.bounded_variants(&inner.sig, t, finite_variants)
+                self.bounded_variants(&self.sig, t, finite_variants)
                     .and_then(|result| match result {
-                        (Outcome::Unsupported, _) if inner.theory_fallback => reference(),
+                        (Outcome::Unsupported, _) if self.theory_fallback => reference(),
                         other => Ok(other),
                     })
             }
-            .map_err(|error| native_runtime_error(&inner.caches, error))?;
+            .map_err(|error| self.lean_error(error))?;
             if route == VariantRoute::GeneralExport && tamarin_utils::env_gate!("TAM_DBG_VARIANTS")
             {
                 eprintln!("[variants] solver general_export");
@@ -2798,24 +3269,23 @@ impl MaudeHandle {
                     }
                     answers
                 };
-                inner.caches.provenance.record_route(route);
+                self.caches.provenance.record_route(route);
                 // Every family, whichever solver or Lean search listed it,
                 // is used only as a certificate that the checker accepted: a
                 // refusal returns here, before the family.
-                let (origin, cached) = self.checked_family(&inner, t, &answers)?;
+                let (origin, cached) = self.checked_family(t, &answers)?;
                 if cached {
-                    inner
-                        .caches
+                    self.caches
                         .provenance
                         .record_cached(Asked::Variants, origin);
                 } else {
-                    inner.caches.provenance.record(Asked::Variants, origin);
+                    self.caches.provenance.record(Asked::Variants, origin);
                 }
                 trace_variant_family(t, &answers);
                 return Ok(answers);
             }
         }
-        inner.require_maude("variant generation")?;
+        self.require_maude("variant generation")?;
         let mut ctx = ConvCtx::new();
         let mt = lterm_to_mterm_global(t, &mut ctx);
         let mut cmd = b"get variants in MSG : ".to_vec();
@@ -2827,8 +3297,9 @@ impl MaudeHandle {
         // like a fresh one.  This is the biggest single lever on variant-heavy
         // theories (Joux re-issues the same expensive `get variants` twice —
         // once in the derivcheck phase, once at main close).
-        let reply = inner.execute_memo(&cmd, Asked::Variants, |s| s.var_count += 1)?;
-        drop(inner);
+        let reply = self.execute_memo(&cmd, ctx.variable_bound(), Asked::Variants, |s| {
+            s.var_count += 1
+        })?;
         let msubsts = maude_parse::parse_variants_reply_with_sig(&reply, &self.sig)?;
         let mut out = Vec::with_capacity(msubsts.len());
         // HS-faithful: each variant's back-conversion uses a fresh ctx
@@ -3238,7 +3709,9 @@ fn spelling_as_maude(
     if views.is_empty() {
         return Ok(Some(Vec::new()));
     }
-    Ok(crate::unifier_presentation::present(&factored, &residual, &views))
+    Ok(crate::unifier_presentation::present(
+        &factored, &residual, &views,
+    ))
 }
 
 /// Convert one Maude reply substitution to `[(LVar, LNTerm)]`, minting
@@ -3327,9 +3800,43 @@ struct PoolState {
     spawned: usize,
 }
 
+impl PoolState {
+    /// Pop the most recently returned member. One that exited while idle, or
+    /// whose last borrower lost it, restarts on its next exchange.
+    /// A native-only member has no process and is always ready.
+    fn pop(&mut self) -> Option<MaudeHandle> {
+        let handle = self.free.pop()?;
+        if handle.backend.uses_maude() {
+            let mut child = handle
+                .child
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if matches!(child.is_running(), Ok(false)) {
+                child.invalidate();
+                child.restart = true;
+            }
+        }
+        Some(handle)
+    }
+
+    fn idle_running(&self) -> Option<usize> {
+        // A recycled lease may be waiting for its next exchange to restart
+        // Maude. Leave it available for callers that can wait for startup.
+        self.free.iter().rposition(|handle| {
+            !handle.backend.uses_maude()
+                || handle
+                    .child
+                    .try_lock()
+                    .is_ok_and(|mut child| matches!(child.is_running(), Ok(true)))
+        })
+    }
+}
+
 /// Pool of up to `size` independent Maude subprocesses, all initialised
-/// with the same `MaudeSig`.  Workers borrow a handle via `acquire()`; the
-/// returned `PooledMaude` releases back to the pool on drop.
+/// with the same `MaudeSig`.  A lease returns its process to the pool on
+/// drop.  Proof search only takes leases that never wait for a release
+/// (`try_take_idle_owned`, `try_acquire_ready`) and falls back to the
+/// caller's own process; `acquire` blocks and is for work outside it.
 ///
 /// Members spawn LAZILY: `new` starts exactly one eagerly (so a failure to
 /// launch Maude surfaces as an `Err` from `new`), and the rest are spawned
@@ -3425,9 +3932,9 @@ impl MaudePool {
     /// keeps serving the members already spawned (≥ 1 always exists), so
     /// this is a soft degradation, not a fatal error.
     fn warn_spawn_failed(&self, e: &MaudeError) {
-        if !self.spawn_warned.swap(true, Ordering::Relaxed) {
+        if !matches!(e, MaudeError::Cancelled) && !self.spawn_warned.swap(true, Ordering::Relaxed) {
             eprintln!(
-                "[warn] MaudePool: lazy Maude spawn failed ({}); \
+                "[warn] MaudePool: starting a Maude process failed ({}); \
                 continuing with the members already started",
                 e
             );
@@ -3449,8 +3956,7 @@ impl MaudePool {
         let mut try_spawn = true;
         let mut state = self.state.lock().unwrap();
         loop {
-            let idle = state.free.pop();
-            if let Some(h) = idle {
+            if let Some(h) = state.pop() {
                 return PooledMaude {
                     pool: self,
                     inner: Some(h),
@@ -3461,28 +3967,19 @@ impl MaudePool {
                 // other acquirers aren't blocked for the ~30ms startup.
                 state.spawned += 1;
                 drop(state);
-                match MaudeHandle::start_with_backend_and_caches(
-                    &self.path,
-                    self.sig.clone(),
-                    self.backend,
-                    Arc::clone(&self.caches),
-                ) {
+                match self.spawn_reserved() {
                     Ok(h) => {
                         return PooledMaude {
                             pool: self,
                             inner: Some(h),
                         };
                     }
-                    Err(e) => {
+                    Err(_) => {
                         try_spawn = false;
-                        state = self.state.lock().unwrap();
-                        state.spawned -= 1;
-                        self.warn_spawn_failed(&e);
                         // A member may have been released while the lock was
-                        // dropped for the spawn attempt — its notify_one had
-                        // no waiter and was lost.  Re-check `free` under this
-                        // relock before waiting, or the release is missed and
-                        // this acquire could sleep forever.
+                        // dropped for the spawn attempt. Re-check `free`
+                        // under this relock before waiting.
+                        state = self.state.lock().unwrap();
                         continue;
                     }
                 }
@@ -3494,45 +3991,108 @@ impl MaudePool {
         }
     }
 
+    /// Start the member whose slot the caller just reserved in `spawned`.
+    /// If startup fails or panics, the slot is released and a blocked
+    /// `acquire` is woken so it can use it.
+    fn spawn_reserved(&self) -> Result<MaudeHandle, MaudeError> {
+        struct Reserved<'a>(&'a MaudePool);
+        impl Drop for Reserved<'_> {
+            fn drop(&mut self) {
+                let mut state = self
+                    .0
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.spawned -= 1;
+                self.0.notify.notify_one();
+            }
+        }
+        let reserved = Reserved(self);
+        match MaudeHandle::start_with_backend_and_caches(
+            &self.path,
+            self.sig.clone(),
+            self.backend,
+            Arc::clone(&self.caches),
+        ) {
+            Ok(handle) => {
+                std::mem::forget(reserved);
+                Ok(handle)
+            }
+            Err(error) => {
+                drop(reserved);
+                self.warn_spawn_failed(&error);
+                Err(error)
+            }
+        }
+    }
+
     /// Non-blocking acquire: pop an idle member, else spawn a new one on
-    /// demand (up to `size`), else return `None`.  Used by the within-lemma
-    /// fan-out so that nested (lemma-level B1 + within-lemma) parallelism
-    /// can't deadlock waiting on a pool that the outer lemma tasks have
-    /// fully drained: this NEVER waits on the condvar.  It may block ~30ms
-    /// while a lazy member spawns — acceptable, as it still cannot wait on a
-    /// drained pool.
+    /// demand (up to `size`), else return `None`.  This NEVER waits on the
+    /// condvar, so nested parallel work cannot deadlock on a drained pool.
+    /// It may block ~30ms while a lazy member spawns.
     pub fn try_acquire(&self) -> Option<PooledMaude<'_>> {
+        self.try_borrow().ok().flatten()
+    }
+
+    fn try_borrow(&self) -> Result<Option<PooledMaude<'_>>, MaudeError> {
         let mut state = self.state.lock().unwrap();
-        if let Some(h) = state.free.pop() {
-            return Some(PooledMaude {
+        if let Some(h) = state.pop() {
+            return Ok(Some(PooledMaude {
                 pool: self,
                 inner: Some(h),
-            });
+            }));
         }
         if state.spawned < self.size {
             state.spawned += 1;
             drop(state);
-            match MaudeHandle::start_with_backend_and_caches(
-                &self.path,
-                self.sig.clone(),
-                self.backend,
-                Arc::clone(&self.caches),
-            ) {
-                Ok(h) => {
-                    return Some(PooledMaude {
-                        pool: self,
-                        inner: Some(h),
-                    });
-                }
-                Err(e) => {
-                    let mut relock = self.state.lock().unwrap();
-                    relock.spawned -= 1;
-                    self.warn_spawn_failed(&e);
-                    return None;
-                }
-            }
+            return self.spawn_reserved().map(|h| {
+                Some(PooledMaude {
+                    pool: self,
+                    inner: Some(h),
+                })
+            });
         }
-        None
+        Ok(None)
+    }
+
+    /// Take an already-running member, or `None`. Never spawns and never
+    /// waits for subprocess I/O, so the caller stays interruptible even if a
+    /// new Maude would never print its startup prompt.
+    pub fn try_take_idle_owned(self: &Arc<Self>) -> Option<OwnedPooledMaude> {
+        let mut state = self.state.lock().unwrap();
+        let idle = state.idle_running()?;
+        let handle = state.free.remove(idle);
+        Some(MaudeLease {
+            pool: self.clone(),
+            inner: Some(handle),
+        })
+    }
+
+    /// Take a running member, or start one (up to `size`) and finish its
+    /// startup under the caller's cancellation scope. Returns `None` when the
+    /// pool is fully leased or startup fails or is cancelled; never waits for
+    /// a release. The lease can move between threads with its job.
+    pub fn try_acquire_ready(self: &Arc<Self>) -> Option<OwnedPooledMaude> {
+        if let Some(lease) = self.try_take_idle_owned() {
+            return Some(lease);
+        }
+        let mut borrowed = self.try_borrow().ok()??;
+        let lease = MaudeLease {
+            pool: self.clone(),
+            inner: borrowed.inner.take(),
+        };
+        // A native-only member has no process to start.
+        if !self.backend.uses_maude() {
+            return Some(lease);
+        }
+        let ready = cancellation::lock(&lease.handle().inner)
+            .map_err(MaudeError::from)
+            .and_then(|mut inner| inner.with_cancellation(MaudeProcessInner::prepare_worker));
+        if let Err(error) = ready {
+            self.warn_spawn_failed(&error);
+            return None;
+        }
+        Some(lease)
     }
 
     /// Target subprocess count this pool was constructed with — the ceiling
@@ -3549,41 +4109,40 @@ impl MaudePool {
     }
 }
 
-/// A borrowed Maude handle from a `MaudePool`.  `Deref`s to
-/// `MaudeHandle`; releases back to the pool on `Drop`.
-#[must_use = "dropping this guard immediately ends the scope it protects"]
-pub struct PooledMaude<'a> {
-    pool: &'a MaudePool,
+/// A lease borrowing its pool.
+pub type PooledMaude<'a> = MaudeLease<&'a MaudePool>;
+/// A lease that keeps its pool alive until the worker returns the process.
+pub type OwnedPooledMaude = MaudeLease<Arc<MaudePool>>;
+
+/// Exclusive use of a subprocess until the lease is dropped.
+#[must_use = "dropping the lease returns the process to the pool"]
+pub struct MaudeLease<P: Deref<Target = MaudePool>> {
+    pool: P,
     inner: Option<MaudeHandle>,
 }
 
-impl<'a> PooledMaude<'a> {
-    /// Borrow the underlying `MaudeHandle` for the lifetime of this guard.
-    /// Does NOT consume the guard or transfer ownership: the returned
-    /// reference is valid only while the `PooledMaude` lives, and the
-    /// handle is released back to the pool in `PooledMaude::drop`.  This
-    /// is the same accessor as the `Deref` impl; callers that need an
-    /// owned handle (e.g. to clone into a per-task `ProofContext`) should
-    /// `.clone()` the returned `&MaudeHandle`.
+impl<P: Deref<Target = MaudePool>> MaudeLease<P> {
+    /// The leased handle, as `Deref` also returns. A clone of it must not
+    /// outlive the lease: the process goes back to the pool on drop.
     pub fn handle(&self) -> &MaudeHandle {
         self.inner
             .as_ref()
-            .expect("PooledMaude inner not yet taken")
+            .expect("lease holds its handle until drop")
     }
 }
 
-impl<'a> std::ops::Deref for PooledMaude<'a> {
+impl<P: Deref<Target = MaudePool>> Deref for MaudeLease<P> {
     type Target = MaudeHandle;
     fn deref(&self) -> &MaudeHandle {
-        self.inner
-            .as_ref()
-            .expect("PooledMaude inner not yet taken")
+        self.handle()
     }
 }
 
-impl<'a> Drop for PooledMaude<'a> {
+impl<P: Deref<Target = MaudePool>> Drop for MaudeLease<P> {
     fn drop(&mut self) {
         if let Some(h) = self.inner.take() {
+            // An IPC error belongs to the borrower that saw it. The slot stays
+            // in the pool and `PoolState::pop` restarts it for the next one.
             let mut state = self.pool.state.lock().unwrap();
             // LIFO reuse: the most recently released (warmest) member is the
             // next one popped, keeping queries concentrated on warm members.

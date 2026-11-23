@@ -20,10 +20,33 @@ impl std::error::Error for Cancelled {}
 
 #[derive(Default)]
 struct State {
+    parent: Option<CancellationToken>,
     cancelled: AtomicBool,
     callbacks: Mutex<BTreeMap<u64, Box<dyn Fn() + Send>>>,
     next_id: std::sync::atomic::AtomicU64,
     callbacks_fired: AtomicBool,
+    /// The scopes directly below this token, for `request_cancel` to raise
+    /// their own flags. Ancestry alone answers `is_cancelled`, but foreign
+    /// code polls one flag byte (`flag_ptr`) and cannot walk it.
+    children: Mutex<BTreeMap<u64, std::sync::Weak<State>>>,
+}
+
+impl State {
+    /// Raise this flag and the flags of all scopes below.
+    fn raise(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        // A scope registered after this snapshot reads the flag just set.
+        let children: Vec<_> = self
+            .children
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .filter_map(std::sync::Weak::upgrade)
+            .collect();
+        for child in children {
+            child.raise();
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -31,9 +54,14 @@ pub struct CancellationToken(Arc<State>);
 
 impl CancellationToken {
     /// Mark cancellation without running potentially blocking cleanup.
-    /// Call `cancel` on a blocking worker to complete callback cleanup.
+    /// Work that polls `check` stops, but anything blocked on a subprocess
+    /// or a parallel wait is only woken by callbacks: follow up with `cancel`.
+    ///
+    /// The flag of every scope below this token is raised too, so foreign
+    /// code that polls a descendant's `flag_ptr` stops without waiting for
+    /// `cancel`. This takes only the short locks of the scope lists.
     pub fn request_cancel(&self) {
-        self.0.cancelled.store(true, Ordering::Relaxed);
+        self.0.raise();
     }
 
     pub fn cancel(&self) {
@@ -49,11 +77,28 @@ impl CancellationToken {
         }
     }
 
+    pub(crate) fn descends_from(&self, ancestor: &Self) -> bool {
+        std::iter::successors(Some(self), |token| token.0.parent.as_ref())
+            .any(|token| Arc::ptr_eq(&token.0, &ancestor.0))
+    }
+
     pub fn is_cancelled(&self) -> bool {
-        self.0.cancelled.load(Ordering::Relaxed)
+        // Read ancestors directly: request_cancel() must reach descendants
+        // before potentially blocking cleanup callbacks are dispatched.
+        let mut state = &*self.0;
+        loop {
+            if state.cancelled.load(Ordering::Relaxed) {
+                return true;
+            }
+            match &state.parent {
+                Some(parent) => state = &parent.0,
+                None => return false,
+            }
+        }
     }
     /// The address of the flag for foreign code that polls it: the byte is
-    /// zero until the token is cancelled and nonzero from then on. The
+    /// zero until the token is cancelled and nonzero from then on, whether
+    /// this token was cancelled itself or through an enclosing one. The
     /// address stays valid while this token or a clone of it is alive.
     pub fn flag_ptr(&self) -> *const u8 {
         self.0.cancelled.as_ptr().cast_const().cast()
@@ -77,6 +122,72 @@ impl CancellationToken {
             token: self.clone(),
             id,
         }
+    }
+}
+
+/// A local cancellation token linked to an optional enclosing request.
+/// Keep the scope alive until its workers have joined so parent cancellation
+/// can interrupt their blocking I/O as well as their cooperative checkpoints.
+pub struct CancellationScope {
+    token: CancellationToken,
+    _parent_callback: Option<Registration>,
+    /// This scope's entry in its parent's list of scopes.
+    listed: Option<u64>,
+}
+
+impl Drop for CancellationScope {
+    fn drop(&mut self) {
+        if let (Some(id), Some(parent)) = (self.listed, &self.token.0.parent) {
+            parent
+                .0
+                .children
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&id);
+        }
+    }
+}
+
+impl CancellationScope {
+    pub fn new(parent: Option<CancellationToken>) -> Self {
+        let token = CancellationToken(Arc::new(State {
+            parent: parent.clone(),
+            ..State::default()
+        }));
+        // The child keeps its ancestry alive for checks, but the parent's
+        // callback must not form a reference cycle back to the child.
+        let child = Arc::downgrade(&token.0);
+        // List the scope before reading the parent's state: a request that
+        // misses the entry has already set a flag this read sees.
+        let listed = parent.as_ref().map(|parent| {
+            let id = parent.0.next_id.fetch_add(1, Ordering::Relaxed);
+            parent
+                .0
+                .children
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(id, child.clone());
+            if parent.is_cancelled() {
+                token.0.cancelled.store(true, Ordering::Relaxed);
+            }
+            id
+        });
+        let parent_callback = parent.map(|parent| {
+            parent.on_cancel(move || {
+                if let Some(child) = child.upgrade() {
+                    CancellationToken(child).cancel();
+                }
+            })
+        });
+        Self {
+            token,
+            _parent_callback: parent_callback,
+            listed,
+        }
+    }
+
+    pub fn token(&self) -> CancellationToken {
+        self.token.clone()
     }
 }
 
@@ -237,6 +348,55 @@ impl<T: Clone, E: Clone + From<Cancelled>> CancellableOnce<T, E> {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn child_checkpoints_see_parent_request_before_cleanup() {
+        let parent = CancellationToken::default();
+        let child = CancellationScope::new(Some(parent.clone()));
+        let grandchild = CancellationScope::new(Some(child.token()));
+        let (fired, wait) = mpsc::channel();
+        let _registration = grandchild
+            .token()
+            .on_cancel(move || fired.send(()).unwrap());
+        parent.request_cancel();
+        assert_eq!(grandchild.token().check(), Err(Cancelled));
+        assert!(matches!(wait.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        parent.cancel();
+        wait.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    /// Foreign code polls one byte. A request on an enclosing token must
+    /// raise it at once, for scopes made before and after the request, and
+    /// a dropped scope leaves nothing behind in its parent.
+    #[test]
+    fn request_raises_the_flag_bytes_of_scopes_below() {
+        let read = |token: &CancellationToken| unsafe { *token.flag_ptr() };
+        let parent = CancellationToken::default();
+        let child = CancellationScope::new(Some(parent.clone()));
+        let grandchild = CancellationScope::new(Some(child.token()));
+        let peer = CancellationToken::default();
+        drop(CancellationScope::new(Some(parent.clone())));
+        assert_eq!(parent.0.children.lock().unwrap().len(), 1);
+        assert_eq!(read(&grandchild.token()), 0);
+        parent.request_cancel();
+        assert_ne!(read(&child.token()), 0);
+        assert_ne!(read(&grandchild.token()), 0);
+        assert_eq!(read(&peer), 0);
+        let late = CancellationScope::new(Some(child.token()));
+        assert_ne!(read(&late.token()), 0);
+        // Callbacks still wait for `cancel`.
+        assert!(!grandchild.token().0.callbacks_fired.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn child_cancellation_does_not_cancel_parent_or_peer() {
+        let parent = CancellationToken::default();
+        let child = CancellationScope::new(Some(parent.clone()));
+        let peer = CancellationScope::new(Some(parent.clone()));
+        child.token().cancel();
+        assert!(!parent.is_cancelled());
+        assert!(!peer.token().is_cancelled());
+    }
 
     #[test]
     fn cancelled_initializer_is_not_cached_and_waiter_retries() {

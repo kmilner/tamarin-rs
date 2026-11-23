@@ -469,3 +469,36 @@ fn protocol_can_select_the_shared_witness_branch_without_maude() {
         "{stdout}"
     );
 }
+
+/// Parallel search shares the native session among its jobs. What it prints
+/// must not depend on how many workers there are, or on which job computed
+/// an answer first: one worker and eight give the same proofs.
+#[cfg(feature = "lean-unification")]
+#[test]
+fn stdout_is_the_same_for_one_worker_and_for_many() {
+    for theory in [
+        include_str!("fixtures/native_dh_agreement.spthy"),
+        include_str!("fixtures/native_ac_marker_trace.spthy"),
+        include_str!("fixtures/native_shared_exponent.spthy"),
+        include_str!("fixtures/native_user_equations_pairing.spthy"),
+        include_str!("fixtures/lean_unification.spthy"),
+    ] {
+        let fixture = Fixture::new(theory);
+        let prove = |workers: &str| {
+            let output = fixture.run(&["--processors", workers, "--prove"]);
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stdout}\n{stderr}");
+            assert!(stdout.contains("summary of summaries"), "{stdout}");
+            stdout
+                .lines()
+                .filter(|line| !line.contains("processing time"))
+                .map(|line| format!("{line}\n"))
+                .collect::<String>()
+        };
+        let serial = prove("1");
+        for _ in 0..3 {
+            assert_eq!(prove("8"), serial);
+        }
+    }
+}

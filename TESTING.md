@@ -896,6 +896,34 @@ MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace \
 The CI job `lean-spec` runs the native suites; without the feature the
 native tests compile to nothing or check only that the backend is refused.
 
+### Parallel search on native-only
+
+Parallel proof search (`--processors=N`) runs on both backends. A
+native-only session has no process to lease, so the batch pipeline builds no
+pool for it and every job of a search shares the session's one handle. Jobs
+do not take turns on it: each answer is computed on the calling Rayon worker
+(Lean's per-thread state is set up on a worker's first call; the workers have
+64 MiB stacks), no lock is held across a call into the Lean library, and the
+session memos sit behind their own short locks. An answer is a function of
+the request alone, so a job gets the same answer whether it computes it or
+reads what another job stored, and stdout is the same for every
+`--processors` (a latched failure, below, is the exception).
+
+A search under a cancelled scope stops inside its Lean call: the call polls
+the flag of the scope its job runs under, and a request on any enclosing
+token raises that flag at once. A stopped call returns no reply, so nothing
+is stored, and it is a cancellation, never a failure of the session. A job
+that runs into a failure after its request was cancelled latches nothing
+either. A failure that a live job runs into is latched for the whole
+session, as on one worker; that includes a speculative job, on a branch that
+a one-worker search would not have reached, whose scope has not been
+cancelled yet. Such a run ends in the error where `--processors=1` would
+have finished: never in a different verdict.
+
+The provenance tally (`[ALGEBRA_PROVENANCE]`, stderr) counts what the jobs
+asked, so its split between fresh and cached answers, and the requests of
+speculative jobs, vary with the number of workers and between runs.
+
 ### The "assumed convergent" line
 
 On native-only a proved certifier examines the session's rewrite table. The
@@ -1051,7 +1079,7 @@ reference path whose output is byte-identical):
 | `TAM_RS_FP_STATS=1` | fact-descent bloom-skip counters to stderr |
 | `TAM_RS_SIMP_NOOP_STATS=1` | Simplify no-op shortcut hit/miss counters to stderr |
 | `TAM_RS_CANON_TABLE_STATS=1` | canon-table cache hit/rebuild counters to stderr |
-| `TAM_MAUDE_CACHE_STATS=1` | one Maude reduce/unify/reply cache hit-rate line per subprocess at teardown |
+| `TAM_MAUDE_CACHE_STATS=1` | one reduce/unify/reply cache hit-rate line per theory session at teardown, with the session's `[ALGEBRA_PROVENANCE]` tally |
 | `TAM_DBG_VARIANTS=1` | every variant family as handed to the caller, one member per line, and the native solver that proposed it; compare the two backends' dumps to find a family listed differently |
 | `TAM_DBG_UNIFY=1` | every unification request with its answers as handed to the caller, on either backend |
 | `TAM_DBG_VARIANT_CHECK=1` | native-only: every family submitted to the Lean variant certificate checker with its member count, its charge against the work bound, the verdict and the time |

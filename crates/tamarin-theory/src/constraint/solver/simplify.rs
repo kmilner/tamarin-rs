@@ -1407,12 +1407,13 @@ fn try_match_all_guards(
             //   gall _ _    gf | gf == gtrue = gtrue
             //   gall ss atos gf             = GGuarded All ss atos gf
             let implied = crate::guarded::gall(Vec::new(), surviving_gatoms, body_subst);
-            // Compare each instance in the same stored form used for prior
-            // formulas. Distinct bindings of free variables can yield distinct
-            // implications. Membership checks retain the first occurrence of
-            // each instance, so new formulas follow match traversal order.
+            // Compare in the same stored normal form as the formula tables.
+            // AC permutations compare equal. Free variables retain their indices,
+            // even if the equation store maps two variables to the same term.
+            // Membership checks retain the first occurrence of each instance, so
+            // new formulas follow match traversal order.
             let canon = implied_apply_canon_cow(&implied);
-            // The hash only filters candidates for the structural comparison.
+            // Hashes filter candidates. Equality decides membership on a hash match.
             let canon_hash = tamarin_utils::fx_hash_one(canon.as_ref());
             let already = dedup_tables
                 .formulas_canon()

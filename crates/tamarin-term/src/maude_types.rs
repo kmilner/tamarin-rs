@@ -62,6 +62,9 @@ pub struct ConvCtx {
     /// (e.g. the UM_three_pass `CK_secure_UM3` `R_Complete_case_1↔case_2`
     /// arm swap).
     counter: u64,
+    /// Exclusive upper bound on exported variable ids (constants share the
+    /// counter, but do not themselves require Maude variable names).
+    variable_bound: u64,
 }
 
 impl ConvCtx {
@@ -81,6 +84,10 @@ impl ConvCtx {
 
     pub fn bindings(&self) -> &BTreeMap<MaudeLit, Lit<Name, LVar>> {
         &self.inverse
+    }
+
+    pub(crate) fn variable_bound(&self) -> u64 {
+        self.variable_bound
     }
 }
 
@@ -145,6 +152,7 @@ fn import_lit(l: &Lit<Name, LVar>, ctx: &mut ConvCtx) -> MaudeLit {
     let m = match l {
         Lit::Var(lv) => {
             let id = ctx.fresh_id();
+            ctx.variable_bound = id + 1;
             MaudeLit::MaudeVar(id, lv.sort)
         }
         Lit::Con(n) => {
@@ -351,6 +359,23 @@ mod tests {
         let back = mterm_to_lnterm(&mt, &mut ctx, "z", &mut next);
         assert_eq!(t, back);
         assert_eq!(next, 0, "the binding was reused, not re-minted");
+    }
+
+    #[test]
+    fn variable_bound_tracks_sparse_ids_and_ignores_trailing_constants() {
+        let mut ctx = ConvCtx::new();
+        let constant = |name| Term::Lit(Lit::Con(Name::new(NameTag::Pub, name)));
+        let var = Term::Lit(Lit::Var(LVar::new("v", LSort::Msg, 0)));
+        lterm_to_mterm_global(&constant("a"), &mut ctx);
+        assert_eq!(ctx.variable_bound(), 0);
+        assert_eq!(
+            lterm_to_mterm_global(&var, &mut ctx),
+            Term::Lit(MaudeLit::MaudeVar(1, LSort::Msg))
+        );
+        assert_eq!(ctx.variable_bound(), 2);
+        lterm_to_mterm_global(&constant("b"), &mut ctx);
+        lterm_to_mterm_global(&var, &mut ctx);
+        assert_eq!(ctx.variable_bound(), 2);
     }
 
     /// Pins the load-bearing sort-tolerant DOMAIN fallback in

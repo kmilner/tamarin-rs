@@ -163,7 +163,7 @@ fn selecting() -> MaudeHandle {
 fn unselected(width: usize) -> LNTerm {
     let product = f_app_ac(
         AcSym::Union,
-        (0..width).map(|i| pub_term(&format!("f{i}"))).collect(),
+        (0..width).map(|i| pub_term(format!("f{i}"))).collect(),
     );
     select(pair(product, hash(variable("x"))), pub_term("other"))
 }
@@ -287,4 +287,191 @@ fn the_wide_reduction_does_not_end_by_itself() {
     let started = Instant::now();
     let result = h.reduce(&unselected(64));
     panic!("returned {result:?} after {:?}", started.elapsed());
+}
+
+fn small_sums() -> Equal<LNTerm> {
+    Equal {
+        lhs: nat_plus(nat("i"), nat("j")),
+        rhs: nat_plus(nat("l"), nat("m")),
+    }
+}
+
+/// Workers with the stack of the prover's own: a Lean search recurses.
+fn workers(threads: usize) -> rayon::ThreadPool {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .stack_size(64 * 1024 * 1024)
+        .build()
+        .unwrap()
+}
+
+/// A parallel job runs under a scope of its request. The Lean call polls one
+/// flag byte, the scope's, so a request made on the enclosing token has to
+/// reach that byte at once and not only when the cleanup callbacks run.
+#[test]
+fn a_search_under_a_scope_stops_when_the_enclosing_request_is_cancelled() {
+    use tamarin_utils::cancellation::CancellationScope;
+    // Without a work bound, only the flag can stop the search.
+    let mut h = naturals();
+    h.set_search_work(0);
+    let request = CancellationToken::default();
+    let job = CancellationScope::new(Some(request.clone()));
+    let nested = CancellationScope::new(Some(job.token()));
+    let result = {
+        let _guard = CancellationGuard::new(Some(nested.token()));
+        let canceller = std::thread::spawn(move || {
+            std::thread::sleep(HEAD_START);
+            request.request_cancel();
+            Instant::now()
+        });
+        let result = h.unify(&[wide_sums()]);
+        let returned = Instant::now();
+        let latency = returned.saturating_duration_since(canceller.join().unwrap());
+        assert!(latency < PROMPT, "returned {latency:?} after the request");
+        result
+    };
+    assert!(matches!(result, Err(MaudeError::Cancelled)), "{result:?}");
+    h.check_backend_status().unwrap();
+    assert_eq!(h.unify(&[small_sums()]).unwrap().len(), 7);
+}
+
+/// Two cases of one ordered search share a native-only handle. The first is
+/// solved while the second, which a sequential search would never start, is
+/// inside a runaway unification. The search returns the first case alone and
+/// promptly; the cancelled call is neither stored nor a failure of the
+/// session, and the handle answers on.
+#[test]
+fn a_solved_case_stops_a_later_case_inside_a_search_on_the_shared_handle() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let h = naturals();
+    let shared = h.clone();
+    let entered = Arc::new(AtomicBool::new(false));
+    let seen = entered.clone();
+    let started = Instant::now();
+    let results = workers(2)
+        .install(move || {
+            tamarin_utils::parallel::try_map_until(
+                vec![0, 1],
+                move |case| -> Result<usize, MaudeError> {
+                    if case == 1 {
+                        entered.store(true, Ordering::Release);
+                        return Ok(shared.unify(&[wide_sums()])?.len());
+                    }
+                    // Solve only once the later case is inside its search.
+                    let waiting = Instant::now();
+                    while !entered.load(Ordering::Acquire) {
+                        assert!(waiting.elapsed() < 4 * PROMPT, "no second worker");
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    std::thread::sleep(HEAD_START);
+                    Ok(shared.unify(&[small_sums()])?.len())
+                },
+                |unifiers| *unifiers == 7,
+            )
+        })
+        .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(results, [7]);
+    assert!(seen.load(Ordering::Acquire));
+    assert!(
+        elapsed < HEAD_START + 2 * PROMPT,
+        "returned after {elapsed:?}"
+    );
+    eprintln!("ordered search: returned {elapsed:?} after its start");
+    h.check_backend_status().unwrap();
+    // Only the solved case's unification was answered and counted.
+    assert_eq!(h.stats().lean_unify_count, 1);
+    assert_eq!(h.unify(&[small_sums()]).unwrap().len(), 7);
+    assert_eq!(h.stats().lean_unify_count, 1);
+}
+
+/// What a job runs into after its request was cancelled is not the
+/// session's failure: nothing is latched, and the job sees a cancellation.
+#[test]
+fn a_cancelled_job_does_not_fail_the_session() {
+    let mut h = naturals();
+    h.set_search_work(1 << 10);
+    let token = CancellationToken::default();
+    token.request_cancel();
+    {
+        let _guard = CancellationGuard::new(Some(token));
+        let result = h.unify(&[wide_sums()]);
+        assert!(matches!(result, Err(MaudeError::Cancelled)), "{result:?}");
+        // An error the same job could only absorb.
+        let lost: Result<bool, _> = Err(MaudeError::Other("lost".into()));
+        assert!(!h.absorb(lost, || false));
+    }
+    h.check_backend_status().unwrap();
+    // The same request from a live job is a failure of the session.
+    assert!(h.unify(&[wide_sums()]).is_err());
+    assert!(h.check_backend_status().is_err());
+}
+
+/// Jobs that share one native-only handle get the answers a sequential run
+/// gets from a session of its own, whoever asks first and whichever of them
+/// finds the memo filled.
+#[test]
+fn jobs_sharing_a_handle_get_the_answers_of_a_sequential_session() {
+    let [x, y, z, w] = ["x", "y", "z", "w"].map(variable);
+    let [a, b] = ["a", "b"].map(pub_term);
+    let bag = |terms: &[&LNTerm]| {
+        f_app_ac(
+            AcSym::Union,
+            terms.iter().map(|term| (*term).clone()).collect(),
+        )
+    };
+    let queries: Vec<Equal<LNTerm>> = vec![
+        Equal::new(bag(&[&x, &y]), bag(&[&z, &w])),
+        Equal::new(bag(&[&x, &y]), bag(&[&a, &b])),
+        Equal::new(bag(&[&x, &x, &y]), bag(&[&z, &a, &a])),
+        Equal::new(bag(&[&x, &a]), bag(&[&y, &b])),
+        Equal::new(bag(&[&x, &y, &z]), bag(&[&w, &a])),
+        Equal::new(bag(&[&a, &b]), bag(&[&b, &a])),
+        Equal::new(bag(&[&a, &x]), bag(&[&b, &b])),
+    ];
+    type Answer = (
+        Vec<Vec<(LVar, LNTerm)>>,
+        bool,
+        Vec<Vec<(LVar, LNTerm)>>,
+        LNTerm,
+    );
+    let ask = |h: &MaudeHandle, eq: &Equal<LNTerm>| -> Result<Answer, MaudeError> {
+        let eqs = std::slice::from_ref(eq);
+        Ok((
+            h.unify(eqs)?,
+            h.unifiable(eqs)?,
+            h.match_eqs(eqs)?,
+            h.reduce(&eq.lhs)?,
+        ))
+    };
+    let sequential: Vec<Answer> = {
+        let h = native();
+        queries.iter().map(|eq| ask(&h, eq).unwrap()).collect()
+    };
+    let h = native();
+    let shared = h.clone();
+    // Every query from several jobs at once, in an order that differs
+    // between the jobs.
+    let jobs: Vec<(usize, Equal<LNTerm>)> = (0..8)
+        .flat_map(|round| {
+            let n = queries.len();
+            let queries = queries.clone();
+            (0..n).map(move |i| {
+                let index = (i * (round + 1) + round) % n;
+                (index, queries[index].clone())
+            })
+        })
+        .collect();
+    let parallel = workers(4)
+        .install(move || {
+            tamarin_utils::parallel::try_map(jobs, move |(index, eq)| {
+                Ok::<_, MaudeError>((index, ask(&shared, &eq)?))
+            })
+        })
+        .unwrap();
+    assert_eq!(parallel.len(), 8 * queries.len());
+    for (index, answer) in parallel {
+        assert_eq!(answer, sequential[index], "query {index}");
+    }
+    h.check_backend_status().unwrap();
 }

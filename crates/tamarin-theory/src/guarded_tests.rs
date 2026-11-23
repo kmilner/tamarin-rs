@@ -1340,34 +1340,6 @@ fn subst_blnterm_cow_reports_a_domain_hit() {
     assert_eq!(subst_blnterm_cow(&var_term(BVar::Bound(0)), &s), None);
 }
 
-/// The witness map keys on the whole `LVar`, so two `x`-named leaves that
-/// share an index but differ in sort each keep their own sort under the
-/// `idx == 0` canonicalisation.
-#[test]
-fn witness_subst_keys_distinguish_sorts() {
-    let msg_x = LVar::new("x", LSort::Msg, 3);
-    let fresh_x = LVar::new("x", LSort::Fresh, 3);
-    let g = Guarded::Atom(ProtoAtom::Action(
-        var_term(BVar::Free(LVar::new("i", LSort::Node, 0))),
-        bfact(
-            false,
-            "A",
-            vec![var_term(BVar::Free(msg_x)), var_term(BVar::Free(fresh_x))],
-        ),
-    ));
-    let normalised = normalize_witness_lvars_cow(&g).expect("both witnesses move to idx 0");
-    let Guarded::Atom(ProtoAtom::Action(_, fa)) = &normalised else {
-        panic!("expected Atom(Action), got {normalised:?}");
-    };
-    assert_eq!(
-        fa.terms.as_ref(),
-        [
-            var_term(BVar::Free(LVar::new("x", LSort::Msg, 0))),
-            var_term(BVar::Free(LVar::new("x", LSort::Fresh, 0))),
-        ]
-    );
-}
-
 // =============================================================================
 // Opened binders
 // =============================================================================
