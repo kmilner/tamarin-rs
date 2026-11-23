@@ -58,12 +58,10 @@ The runner's topic comparison has two rules:
 This directory holds one `<fixture>.report` file per pinned fixture.
 Each file starts with `#` provenance lines, and the expected block
 follows them. The files use two provenance keys. Every file carries a
-`# source:` line, and that line must name the oracle. Four files also
-carry an `# omits:` line. Those four files need it because the
-oracle's block ends with a `Message Derivation Checks` section.
-Harness 2's pipeline does not produce that section. The production callers splice
-that section in afterwards. It is a dynamic check, and it needs Maude.
-`expected.txt` records the same difference for the differential runner.
+`# source:` line naming the oracle and capture flags. Captures disable
+`Message Derivation Checks` with `--derivcheck-timeout=0`, matching the static
+wellformedness pipeline tested here. Production callers run that dynamic check
+separately with Maude.
 
 Every fixture carries a `.report` file, so harness 2 pins the whole
 block of every one of them.
@@ -81,9 +79,12 @@ with an oracle-captured `.report` block.
 
 To re-capture a report after a submodule bump, follow these steps.
 Load the fixture through the pinned `tamarin-prover` build. You do not
-need `--prove`, because the wellformedness checks print at load. Copy
-the `/* WARNING … */` block. Drop any trailing
-`Message Derivation Checks` section. Keep the `#` header.
+need `--prove`, because the wellformedness checks print at load. Use `--derivcheck-timeout=0`, copy the `/* WARNING … */` block, and record
+the oracle revision and flags in the `# source:` header.
+For fatal findings such as unsupported products, use `-m=msr` to print
+the report without attempting to prove the invalid theory. The multiplication
+fixture also uses `--derivcheck-timeout=0`, so its capture needs no dynamic
+section removed.
 
 ## Check categories
 
@@ -92,8 +93,8 @@ The definitive topic strings live in the submodule at
 `underlineTopic`, plus the LHS-usage `topic` literal). Note the source
 carries quirks verbatim — the diff-theory checks spell two of them
 `Inexistant lemma actions` and `Restriction actions` where the
-plain-theory ones say `Inexistent …`, and the non-diff guardedness
-topic has a leading space, `" Formula guardedness"`. Categories no
+plain-theory ones say `Inexistent …`. The guardedness topic is
+`"Formula guardedness"`. Categories no
 fixture pins yet are marked *(unpinned)*:
 
 - Check presence of the --prove/--lemma arguments in theory *(unpinned)*
@@ -113,6 +114,7 @@ fixture pins yet are marked *(unpinned)*:
   `Formula terms`)*
 - Unbound variables
 - Multiplication restriction of rules
+- Unsupported multiplication outside exponents
 - Variants / Rule has no variants *(unpinned)*
 - Lemma annotations
 - Inexistent lemma actions *(unpinned)*
