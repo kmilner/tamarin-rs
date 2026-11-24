@@ -933,7 +933,6 @@ fn premise_source_conjoin_preserves_ac_fanout() {
     live.add_goal(goal.clone());
     let mut case = System::empty();
     case.eq_store_mut().subst = Subst::from_list(vec![(shared, product(3, 4))]);
-    let _precompute = PrecomputeModeGuard::enter();
     let outputs =
         conjoin_source_case(&ctx, &live, &goal, &case, &ctx.maude).expect("solver operation");
     assert!(outputs.len() > 1, "premise conjoin collapsed AC arms");
@@ -962,7 +961,6 @@ fn source_application_uses_complete_conjoin_state() {
         substs: vec![SubstVFresh::from_list(vec![(mvar(25), mterm(26))])],
     });
     let expected_substs = case.eq_store().conj[0].substs.clone();
-    let _precompute = PrecomputeModeGuard::enter();
     let output =
         conjoin_source_case(&ctx, &live, &goal, &case, &ctx.maude).expect("solver operation");
     assert_eq!(output.len(), 1);

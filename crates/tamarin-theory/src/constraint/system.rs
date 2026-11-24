@@ -1148,20 +1148,6 @@ impl System {
         }
     }
 
-    /// Bump the node-component cache after a UNIFORM `idx += shift`
-    /// applied to every node var (monotone graft/freshen).  Since every
-    /// node var's idx rises by exactly `shift`, the max over them rises
-    /// by exactly `shift` too — PROVIDED at least one node var exists.
-    /// The caller MUST guard on non-empty nodes (an empty node map has
-    /// component 0 both before and after, so bumping it would be wrong).
-    /// No-op if invalidated.
-    #[inline]
-    pub fn bump_node_max_by_shift(&self, shift: u64) {
-        if let Some(cur) = self.node_max_cache.get() {
-            self.node_max_cache.set(Some(cur.saturating_add(shift)));
-        }
-    }
-
     /// Shared body of the `bump_cache_*` helpers: bump `content_stamp`, then
     /// raise the cached max-var idx to whatever `walk` leaves in its
     /// argument.  No-op on the cache if it is invalidated.
@@ -1199,12 +1185,6 @@ impl System {
         self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_term(t, m));
     }
 
-    /// Bump the cache by walking a fact's terms.
-    #[inline]
-    pub fn bump_cache_fact(&self, fa: &crate::fact::LNFact) {
-        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_fact(fa, m));
-    }
-
     /// Bump the cache by walking a rule's free vars.
     #[inline]
     pub fn bump_cache_rule(&self, r: &crate::rule::RuleACInst) {
@@ -1231,6 +1211,7 @@ impl System {
     /// Add an open goal.  An equal goal already in the store is merged into
     /// (its `looping` flag ORed, its `nr` kept) rather than duplicated — but
     /// the insertion still advances `next_goal_nr`, as HS's does.
+    #[cfg(test)]
     pub fn add_goal(&mut self, g: Goal) {
         // HS has a single goal entry point: `insertGoal goal False`
         // (Reduction.hs). `add_goal` is exactly that — defer to
@@ -1255,17 +1236,24 @@ impl System {
     /// positions is structurally identical to the stored one and merges into
     /// it instead of accumulating a second, `solved=false` copy.
     pub fn add_goal_with_loop_flag(&mut self, g: Goal, looping: bool) {
-        // HS `insertGoalStatus` (Reduction.hs) reads
-        // `sNextGoalNr` then `succ`s it on EVERY call, including when
-        // the goal key already exists (where `insertWith
-        // combineGoalStatus` keeps the existing — smaller — nr).
-        let age = self.next_goal_nr;
-        self.next_goal_nr = self.next_goal_nr.wrapping_add(1);
+        self.insert_goal_status(
+            g,
+            GoalStatus {
+                looping,
+                ..Default::default()
+            },
+        );
+    }
+
+    /// HS `insertGoalStatus goal status` (Reduction.hs): give `status` the
+    /// next goal number and insert it, combining with an existing entry by
+    /// `combineGoalStatus`. The number advances even when the goal exists.
+    pub fn insert_goal_status(&mut self, g: Goal, status: GoalStatus) {
         let st = GoalStatus {
-            looping,
-            nr: age,
-            ..Default::default()
+            nr: self.next_goal_nr,
+            ..status
         };
+        self.next_goal_nr = self.next_goal_nr.wrapping_add(1);
         let slot_idx = self.goals.iter().position(|(existing, _)| *existing == g);
         if let Some(idx) = slot_idx {
             self.goals_mut()[idx].1.merge_from(&st);
@@ -1333,12 +1321,24 @@ impl System {
         // rewrites only `smaller`/`larger` and carries the reason through
         // (reduction.rs), so a reason-only change cannot turn a proven-no-op
         // skip into an observable one.
-        if let Some(existing) = self.content.less_atoms.iter_mut().find(|x| **x == l) {
-            *existing = l;
-        } else {
-            self.bump_cache_lvar(&l.smaller);
-            self.bump_cache_lvar(&l.larger);
-            self.content.less_atoms.push(l);
+        let pos = self.less_atoms.iter().position(|x| *x == l);
+        self.put_less(l, pos);
+    }
+
+    /// Store `l` at `pos`, the index of the atom equal to it, or append it.
+    /// Returns `true` iff it was appended.
+    fn put_less(&mut self, l: LessAtom, pos: Option<usize>) -> bool {
+        match pos {
+            Some(pos) => {
+                self.content.less_atoms[pos] = l;
+                false
+            }
+            None => {
+                self.bump_cache_lvar(&l.smaller);
+                self.bump_cache_lvar(&l.larger);
+                self.content.less_atoms.push(l);
+                true
+            }
         }
     }
 
@@ -1374,17 +1374,12 @@ impl System {
     /// mutators are these calls — Maude unifiability queries are read-only).
     pub fn add_less_indexed(&mut self, l: LessAtom, idx: &mut LessIndex) -> bool {
         let key = (l.smaller, l.larger);
-        if let Some(&pos) = idx.get(&key) {
-            self.content.less_atoms[pos] = l;
-            false
-        } else {
-            self.bump_cache_lvar(&l.smaller);
-            self.bump_cache_lvar(&l.larger);
-            let pos = self.less_atoms.len();
-            self.content.less_atoms.push(l);
-            idx.insert(key, pos);
-            true
+        let len = self.less_atoms.len();
+        let appended = self.put_less(l, idx.get(&key).copied());
+        if appended {
+            idx.insert(key, len);
         }
+        appended
     }
 
     /// Build the `alwaysBefore` adjacency map (`rawLessRel`) underpinning

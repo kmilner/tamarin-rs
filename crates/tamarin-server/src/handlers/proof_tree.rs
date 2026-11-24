@@ -941,7 +941,7 @@ fn write_applicable_methods(
     // The ranking used at this proof depth (HS `subProofSnippet`:
     // `ranking = useHeuristic heuristic (length proofPath)`,
     // `Web/Theory.hs`).
-    let ranking = ranking_at_depth(Some(ctx), depth);
+    let ranking = ranking_at_depth(ctx, depth);
     let methods = applicable_methods(ctx, sys, depth)?;
     if methods.is_empty() {
         use tamarin_theory::constraint::solver::proof_method::Result as Terminal;

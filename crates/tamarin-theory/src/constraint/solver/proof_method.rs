@@ -7,7 +7,7 @@
 
 use crate::constraint::constraints::Goal;
 use crate::constraint::solver::context::ProofContext;
-use crate::constraint::solver::contradictions::{contradictions, Contradiction};
+use crate::constraint::solver::contradictions::{first_contradiction, Contradiction};
 use crate::constraint::system::System;
 
 /// Each case in a proof tree gets a unique name.
@@ -46,13 +46,11 @@ pub fn is_finished(
     }
     #[cfg(test)]
     super::cancellation_tests::checkpoint(ctx, super::cancellation_tests::Work::Terminal);
-    let cs = contradictions(ctx, sys)?;
-    if let Some(c) = cs.into_iter().next() {
+    if let Some(c) = first_contradiction(ctx, sys)? {
         return Ok(Some(Result::Contradictory(Some(c))));
     }
     // HS `isFinished` (ProofMethod.hs) tests the filtered `openGoals`.
-    use crate::constraint::solver::goals::open_goals;
-    if !open_goals(sys).is_empty() {
+    if crate::constraint::solver::goals::has_open_goals(sys) {
         return Ok(None);
     }
     // Haskell only forces the witness check once no open goals remain.
@@ -74,7 +72,7 @@ pub fn is_finished_or_stuck(
     if let Some(result) = is_finished(ctx, sys)? {
         return Ok(Some(result));
     }
-    if !crate::constraint::solver::goals::open_goals(sys).is_empty()
+    if crate::constraint::solver::goals::has_open_goals(sys)
         || exec_proof_method(ctx, &ProofMethod::Simplify, sys)?.is_some()
         || (sys.is_initial() && exec_proof_method(ctx, &ProofMethod::Induction, sys)?.is_some())
     {

@@ -443,55 +443,31 @@ fn minimize_intruder_rules(
 ///
 /// Drops destructor rules whose first premise is `KD(t)` where `t` is a
 /// msg-var, conclusions are ground, no private function symbols appear
-/// in premise/conclusion terms, and `KU(t)` also appears among the
+/// in premise terms, and `KU(t)` also appears among the remaining
 /// premises.  These rules are redundant — the intruder can always supply
 /// the term directly via the KU premise, so the KD-derivation pathway
 /// is never useful.
 fn is_double_premise_rule(r: &IntrRuleAC) -> bool {
-    use crate::fact::FactTag;
-    use tamarin_term::lterm::is_msg_var;
-    let (kd_fact_term, rest_prems): (&tamarin_term::lterm::LNTerm, &[crate::fact::LNFact]) =
-        match r.premises.split_first() {
-            Some((first, rest)) => {
-                if first.tag != FactTag::Kd {
-                    return false;
-                }
-                let t = match first.terms.first() {
-                    Some(t) => t,
-                    None => return false,
-                };
-                (t, rest)
-            }
-            None => return false,
-        };
-    // Conclusions must be ground.
-    let frees_concs = r
-        .conclusions
-        .iter()
-        .flat_map(|f| f.terms.iter())
-        .any(|t| !tamarin_term::lterm::frees(t).is_empty());
-    if frees_concs {
+    use tamarin_term::lterm::{contains_private, frees, is_msg_var};
+    // HS assumes the KD fact comes first, as `destructionRules` builds it.
+    let [first, prems @ ..] = &r.premises[..] else {
         return false;
-    }
-    // Reject if any term (KD-premise or any prems-term) contains a private
-    // symbol (shared `tamarin_term::lterm::contains_private`).
-    if tamarin_term::lterm::contains_private(kd_fact_term) {
+    };
+    let [t] = &first.terms[..] else {
         return false;
-    }
-    for f in r.premises.iter() {
-        for t in f.terms.iter() {
-            if tamarin_term::lterm::contains_private(t) {
-                return false;
-            }
-        }
-    }
-    // KD-premise term must be a msg-var.
-    if !is_msg_var(kd_fact_term) {
-        return false;
-    }
-    // KU(kd_fact_term) must appear among the remaining premises.
-    let ku_t = crate::fact::ku_fact(kd_fact_term.clone());
-    rest_prems.iter().any(|f| f == &ku_t)
+    };
+    first.tag == crate::fact::FactTag::Kd
+        && r.conclusions
+            .iter()
+            .flat_map(|f| f.terms.iter())
+            .all(|c| frees(c).is_empty())
+        && !contains_private(t)
+        && !prems
+            .iter()
+            .flat_map(|f| f.terms.iter())
+            .any(contains_private)
+        && is_msg_var(t)
+        && prems.contains(&crate::fact::ku_fact(t.clone()))
 }
 
 /// `multisetIntruderRules` — port of Haskell's
@@ -577,7 +553,7 @@ pub fn multiset_intruder_rules() -> Vec<IntrRuleAC> {
 /// `x⊕z` is not a syntactic subterm of `x⊕y`; only `mkDXorRuleSubterm`
 /// (the `[x,y] [y] → x` rule) is a true subterm destructor.
 ///
-/// Wired in `ProofContext::with_options` when
+/// Wired in `ProofContext::assemble_intruder_rules` when
 /// `sig.enable_xor`, after `special_intruder_rules` and before the
 /// DH/BP intruder variants — mirroring HS `addMessageDeductionRule
 /// Variants` (TheoryLoader.hs).
@@ -1129,68 +1105,48 @@ fn variants_intruder_with(
     use tamarin_term::subst_vfresh::LNSubstVFresh;
     use tamarin_term::term::{f_app_list, Term};
 
-    // `ruleTerms = concatMap factTerms (prems ++ concs ++ acts)`.
-    // Note: HS does NOT include `nvs` here (only prems/concs/acts), even
-    // though the rest of the pipeline includes nvs.
-    let mut rule_terms: Vec<LNTerm> = Vec::new();
-    for f in ru
+    // `ruleTerms = concatMap factTerms (prems ++ concs ++ acts)`; HS leaves
+    // out `nvs` here.
+    let rule_terms: Vec<LNTerm> = ru
         .premises
         .iter()
-        .chain(ru.conclusions.iter())
-        .chain(ru.actions.iter())
-    {
-        for t in f.terms.iter() {
-            rule_terms.push(t.clone());
-        }
-    }
-    // The free vars of the packed rule-terms list.  Note
-    // `frees(packed) == frees(rule_terms)` (packing only wraps the terms in
-    // an `fAppList`, introducing no new vars), so this single set serves
-    // BOTH roles below: the `restrictVFresh (frees packed)` key-set AND the
-    // `freshToFreeAvoiding ruleTerms` avoiding-set.  Computed from
-    // `&rule_terms` first so `rule_terms` can then be moved into `f_app_list`
-    // without a clone.
-    let packed_frees: std::collections::BTreeSet<LVar> = {
-        let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        for t in &rule_terms {
-            for v in frees(t) {
-                s.insert(v);
-            }
-        }
-        s
-    };
-
+        .chain(&ru.conclusions)
+        .chain(&ru.actions)
+        .flat_map(|f| f.terms.iter().cloned())
+        .collect();
     let packed = f_app_list(rule_terms);
+    // `frees packed` is the `restrictVFresh` key set and, as the free vars of
+    // `ruleTerms`, the set `freshToFreeAvoiding ruleTerms` avoids.
+    let packed_frees = frees(&packed);
 
     let raw_substs = match maude.variants(&packed) {
         Ok(v) => v,
         Err(_) => return vec![ru.clone()],
     };
 
-    // `restrictVFresh (frees packed)`: the key-set is loop-invariant, so
-    // materialise it once.
-    let packed_frees_vec: Vec<LVar> = packed_frees.iter().copied().collect();
     let cleaned: Vec<LNSubstVFresh> = raw_substs
         .into_iter()
-        .map(|pairs| LNSubstVFresh::from_list(pairs).restrict(&packed_frees_vec))
+        .map(|pairs| LNSubstVFresh::from_list(pairs).restrict(&packed_frees))
         .collect();
 
     // `fsigma <- minimizeVariants $ computeVariants ...` — apply the
     // minimize hook to the WHOLE cleaned list before building rules.
     let minimized = minimize_variants(cleaned);
 
+    // `freshToFreeAvoiding ruleTerms` allocates fresh idxs above every var
+    // in `ruleTerms`.
+    let first_fresh_idx = packed_frees
+        .iter()
+        .map(|v| v.idx)
+        .max()
+        .map_or(0, |m| m + 1);
+
     // Build one candidate variant rule per (minimized) variant subst.
     let mut produced: Vec<IntrRuleAC> = Vec::new();
     for s_fresh in minimized {
-        // `freshToFreeAvoiding ruleTerms` — convert VFresh → free Subst,
-        // allocating fresh idxs that avoid every var in `ruleTerms`.
+        // `freshToFreeAvoiding ruleTerms` — convert VFresh → free Subst.
         let sigma: Subst<tamarin_term::lterm::Name, LVar> = {
-            let mut counter = packed_frees
-                .iter()
-                .map(|v| v.idx)
-                .max()
-                .map(|m| m + 1)
-                .unwrap_or(0);
+            let mut counter = first_fresh_idx;
             s_fresh.fresh_to_free_avoiding(|n| {
                 let b = counter;
                 counter += n;

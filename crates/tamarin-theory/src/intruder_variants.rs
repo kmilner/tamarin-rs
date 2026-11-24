@@ -195,7 +195,7 @@ fn constr_name_func(name: &str) -> Result<Vec<&str>, String> {
 /// `True False` are HS hard-codes — see the FIXME in
 /// Theory/Text/Parser/Rule.hs ("Currently we (wrongly) always assume
 /// that we have a subterm rule").  Subterm=True / constant=False.
-fn ast_rule_to_intr_rule_ac(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
+pub(crate) fn ast_rule_to_intr_rule_ac(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
     // HS `intrInfo` rejects non-c/d-prefixed names.  Mirror that here.
     let bytes = r.name.as_bytes();
     if bytes.is_empty() {
@@ -272,30 +272,18 @@ fn ast_rule_to_intr_rule_ac(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, 
     // Convert facts via the existing AST→LNFact path.  `fact_to_lnfact`
     // already handles the `KU`/`KD`/etc. tag mapping
     // (`elaborate::fact_to_lnfact`).
-    let prems: Vec<LNFact> = r
-        .premises
-        .iter()
-        .map(|f| {
-            elaborate::fact_to_lnfact(f, msig)
-                .map_err(|e| format!("intruder rule {}: premise: {}", r.name, e.message))
-        })
-        .collect::<Result<_, _>>()?;
-    let acts: Vec<LNFact> = r
-        .actions
-        .iter()
-        .map(|f| {
-            elaborate::fact_to_lnfact(f, msig)
-                .map_err(|e| format!("intruder rule {}: action: {}", r.name, e.message))
-        })
-        .collect::<Result<_, _>>()?;
-    let concs: Vec<LNFact> = r
-        .conclusions
-        .iter()
-        .map(|f| {
-            elaborate::fact_to_lnfact(f, msig)
-                .map_err(|e| format!("intruder rule {}: conclusion: {}", r.name, e.message))
-        })
-        .collect::<Result<_, _>>()?;
+    let convert = |facts: &[p::Fact], position: &str| -> Result<Vec<LNFact>, String> {
+        facts
+            .iter()
+            .map(|f| {
+                elaborate::fact_to_lnfact(f, msig)
+                    .map_err(|e| format!("intruder rule {}: {position}: {}", r.name, e.message))
+            })
+            .collect()
+    };
+    let prems = convert(&r.premises, "premise")?;
+    let acts = convert(&r.actions, "action")?;
+    let concs = convert(&r.conclusions, "conclusion")?;
 
     // HS `newVariables ps cs` — variables that appear in conclusions
     // but not premises.  The intruder-rule `.spthy` files don't have
@@ -305,11 +293,6 @@ fn ast_rule_to_intr_rule_ac(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, 
     let new_vars = crate::fact::new_variables(&prems, &concs);
 
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))
-}
-
-/// Elaborate one top-level `rule (modulo AC)` parsed in an ordinary theory.
-pub(crate) fn intr_rule_from_ast(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
-    ast_rule_to_intr_rule_ac(msig, r)
 }
 
 // =============================================================================

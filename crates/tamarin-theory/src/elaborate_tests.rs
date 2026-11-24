@@ -1362,21 +1362,13 @@ fn internal_process_probes(thy: &Theory) -> Vec<ProcessProbe> {
 #[test]
 fn corpus_process_items_match_the_converted_parsed_items() {
     use crate::test_corpus::{
-        beyond_budget, corpus_root, elaborate_file, parse_file, rel, spthy_files,
+        beyond_budget, corpus_root_or_skip, elaborate_file, parse_file, rel, spthy_files,
     };
     use rayon::prelude::*;
 
-    let root = corpus_root();
-    if !root.is_dir() {
-        if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
-            eprintln!("corpus: root {} missing, skipped", root.display());
-            return;
-        }
-        panic!(
-            "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
-            root.display()
-        );
-    }
+    let Some(root) = corpus_root_or_skip("corpus") else {
+        return;
+    };
     let files = spthy_files(&root);
     let pool = rayon::ThreadPoolBuilder::new()
         .stack_size(64 * 1024 * 1024)

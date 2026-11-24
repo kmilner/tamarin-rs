@@ -11,7 +11,6 @@
 //! [`TypingEnvironment`] across processes, driven by
 //! `crate::type_theory::type_theory`).
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_term::function_symbols::{NoEqSym, UserDefinedSym};
@@ -19,12 +18,12 @@ use tamarin_term::lterm::{LSort, LVar, Name};
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 use tamarin_utils::fresh::PreciseFreshState;
 
-use tamarin_theory::formula::formula_frees;
+use tamarin_theory::formula::for_each_free_var;
 use tamarin_theory::sapic::PlainProcess;
 use tamarin_theory::sapic::{
-    apply_action, apply_comb, apply_process, for_each_process, map_terms_action, map_terms_comb,
-    traverse_terms_action, traverse_terms_comb, Process, ProcessCombinator, SapicAction,
-    SapicFormula, SapicLVar, SapicTerm, SapicType,
+    apply_action, apply_comb, apply_process, for_each_process, traverse_terms_action,
+    traverse_terms_comb, Process, ProcessCombinator, SapicAction, SapicFormula, SapicLVar,
+    SapicTerm, SapicType,
 };
 
 use crate::bindings::{bindings_act, bindings_comb};
@@ -229,9 +228,8 @@ fn type_with(
                     let mintype1 = sqcap_term(t, &outtype1, tt)?;
                     insert_fun(env, &key, (intypes1.clone(), mintype1))?;
                     // Type args (discard results, just to learn input types).
-                    let ts: Vec<SapicTerm> = args.to_vec();
-                    let mut ptypes: Vec<SapicType> = Vec::with_capacity(ts.len());
-                    for (a, want) in ts.iter().zip(intypes1.iter()) {
+                    let mut ptypes: Vec<SapicType> = Vec::with_capacity(args.len());
+                    for (a, want) in args.iter().zip(intypes1.iter()) {
                         let (_, ty) = type_with(env, a, want)?;
                         ptypes.push(ty);
                     }
@@ -240,9 +238,9 @@ fn type_with(
                     let mintype2 = sqcap_term(t, &outtype2, tt)?;
                     insert_fun(env, &key, (ptypes, mintype2))?;
                     // Type args for real.
-                    let mut ts_new: Vec<SapicTerm> = Vec::with_capacity(ts.len());
-                    let mut ptypes2: Vec<SapicType> = Vec::with_capacity(ts.len());
-                    for (a, want) in ts.iter().zip(intypes2.iter()) {
+                    let mut ts_new: Vec<SapicTerm> = Vec::with_capacity(args.len());
+                    let mut ptypes2: Vec<SapicType> = Vec::with_capacity(args.len());
+                    for (a, want) in args.iter().zip(intypes2.iter()) {
                         let (a_new, ty) = type_with(env, a, want)?;
                         ts_new.push(a_new);
                         ptypes2.push(ty);
@@ -536,29 +534,92 @@ pub(crate) fn type_and_rename_process_in(
 /// `_restrict` formulas too.  Two occurrences of the same `LVar` under
 /// different `stype` tags are distinct elements, exactly as in HS.
 pub(crate) fn vars_proc<A>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
-    let vars = RefCell::new(BTreeSet::new());
-    let mut ft = |t: &SapicTerm| {
-        vars.borrow_mut().extend(tamarin_term::vterm::vars_vterm(t));
-        t.clone()
-    };
-    let mut ff = |f: &SapicFormula| {
-        vars.borrow_mut().extend(formula_frees(f));
-        f.clone()
-    };
-    let mut fv = |v: &SapicLVar| {
-        vars.borrow_mut().insert(v.clone());
-        v.clone()
-    };
+    type Vars = BTreeSet<SapicLVar>;
+    fn var(v: &SapicLVar, out: &mut Vars) {
+        if !out.contains(v) {
+            out.insert(v.clone());
+        }
+    }
+    fn term(t: &SapicTerm, out: &mut Vars) {
+        match t {
+            VTerm::Lit(Lit::Var(v)) => var(v, out),
+            VTerm::Lit(Lit::Con(_)) => {}
+            VTerm::App(_, args) => args.iter().for_each(|a| term(a, out)),
+        }
+    }
+    fn formula(f: &SapicFormula, out: &mut Vars) {
+        for_each_free_var(f, &mut |v| var(v, out));
+    }
+    fn facts(fas: &[tamarin_theory::sapic::SapicLNFact], out: &mut Vars) {
+        fas.iter()
+            .flat_map(|fa| fa.terms.iter())
+            .for_each(|t| term(t, out));
+    }
+    // The terms, formulas and variables `map_terms_action`/`map_terms_comb`
+    // visit; process annotations are not part of HS's `Foldable` here.
+    let mut vars = Vars::new();
     for_each_process(p, &mut |node| match node {
         Process::Null(_) => {}
-        Process::Action(a, _, _) => {
-            map_terms_action(&mut ft, &mut ff, &mut fv, a);
-        }
-        Process::Comb(c, _, _, _) => {
-            map_terms_comb(&mut ft, &mut ff, &mut fv, c);
-        }
+        Process::Action(a, _, _) => match a {
+            SapicAction::New(v) => var(v, &mut vars),
+            SapicAction::ChIn {
+                chan,
+                msg,
+                match_vars,
+            } => {
+                chan.iter().chain([msg]).for_each(|t| term(t, &mut vars));
+                match_vars.iter().for_each(|v| var(v, &mut vars));
+            }
+            SapicAction::ChOut { chan, msg } => {
+                chan.iter().chain([msg]).for_each(|t| term(t, &mut vars));
+            }
+            SapicAction::Insert(t1, t2) => {
+                term(t1, &mut vars);
+                term(t2, &mut vars);
+            }
+            SapicAction::Delete(t) | SapicAction::Lock(t) | SapicAction::Unlock(t) => {
+                term(t, &mut vars)
+            }
+            SapicAction::Event(fa) => facts(std::slice::from_ref(fa), &mut vars),
+            SapicAction::Msr {
+                prems,
+                acts,
+                concs,
+                rest,
+                match_vars,
+            } => {
+                facts(prems, &mut vars);
+                facts(acts, &mut vars);
+                facts(concs, &mut vars);
+                rest.iter().for_each(|f| formula(f, &mut vars));
+                match_vars.iter().for_each(|v| var(v, &mut vars));
+            }
+            SapicAction::Rep => {}
+            SapicAction::ProcessCall(_, ts) => ts.iter().for_each(|t| term(t, &mut vars)),
+        },
+        Process::Comb(c, _, _, _) => match c {
+            ProcessCombinator::Cond(f) => formula(f, &mut vars),
+            ProcessCombinator::CondEq(t1, t2) => {
+                term(t1, &mut vars);
+                term(t2, &mut vars);
+            }
+            ProcessCombinator::Let {
+                left,
+                right,
+                match_vars,
+            } => {
+                term(left, &mut vars);
+                term(right, &mut vars);
+                match_vars.iter().for_each(|v| var(v, &mut vars));
+            }
+            ProcessCombinator::Lookup(t, v) => {
+                term(t, &mut vars);
+                var(v, &mut vars);
+            }
+            ProcessCombinator::Parallel | ProcessCombinator::Ndc => {}
+        },
     });
-    vars.into_inner().into_iter().collect()
+    vars.into_iter().collect()
 }
 
 /// The theory's `FunctionTypingInfo` items (HS `theoryFunctionTypingInfos`,
@@ -677,7 +738,7 @@ mod tests {
         );
         // ...and so did the embedded restriction.
         assert_eq!(
-            formula_frees(&rest[0]),
+            tamarin_theory::formula::formula_frees(&rest[0]),
             vec![slv("k", 1, None)],
             "the restriction's only free variable must be k.1"
         );

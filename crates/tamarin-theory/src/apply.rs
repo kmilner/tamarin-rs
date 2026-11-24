@@ -6,7 +6,7 @@
 //! a constraint system.
 //!
 //! Haskell threads a bare `LNSubst` through those instances.  The port's pass
-//! carries three more things with it — the hashed leaf view it probes, the
+//! carries three more things with it — the hashed leaf map it probes, the
 //! domain bloom the cached fact fingerprints are tested against, and the
 //! rewrite it performs on a disjunction's alternatives — so
 //! [`SystemSubst`] is what the constraint-system instances take.  The
@@ -16,7 +16,6 @@
 
 use tamarin_term::apply::LeafSubst;
 use tamarin_term::lterm::{LVar, Name};
-use tamarin_term::subst::SubstView;
 use tamarin_term::vterm::VTerm;
 
 use crate::fact::LNFact;
@@ -30,9 +29,12 @@ use crate::tools::equation_store::LNSubst;
 /// (`constraint::solver::rename_precise`) applies the variable-to-variable
 /// renaming it has just allocated.  Both fix their substitution for the whole
 /// pass and touch every node, goal, edge and stored term with it, which is
-/// what the hashed [`SubstView`] and the domain bloom are for.
+/// what the hashed leaf map and the domain bloom are for.
 pub struct SystemSubst<'a> {
-    view: SubstView<'a, Name, LVar>,
+    /// The substitution's entries, borrowed into a hash map so each leaf costs
+    /// one hash probe instead of a `BTreeMap` descent.  Only probed by key,
+    /// never iterated, so the hash order cannot reach output.
+    images: tamarin_utils::FastMap<&'a LVar, &'a VTerm<Name, LVar>>,
     /// OR of [`crate::fact::var_bit`] over the domain variables — the same
     /// bit assignment the cached fact bloom carries.
     dom_bloom: u64,
@@ -53,7 +55,7 @@ impl<'a> SystemSubst<'a> {
         disj: &'a dyn Fn(&[Guarded]) -> Option<Vec<Guarded>>,
     ) -> Self {
         SystemSubst {
-            view: SubstView::new(subst),
+            images: subst.iter().collect(),
             dom_bloom: subst.dom().fold(0u64, |b, v| b | crate::fact::var_bit(v)),
             fact_skip,
             disj,
@@ -79,10 +81,10 @@ impl LeafSubst for SystemSubst<'_> {
     type Var = LVar;
 
     fn image_of(&self, v: &LVar) -> Option<&VTerm<Name, LVar>> {
-        self.view.image_of(v)
+        self.images.get(v).copied()
     }
 
     fn is_empty(&self) -> bool {
-        self.view.is_empty()
+        self.images.is_empty()
     }
 }

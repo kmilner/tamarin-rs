@@ -348,20 +348,17 @@ impl MaudeSig {
         self
     }
 
-    /// The `functions:` list of HS `prettyMaudeSigExcept`
-    /// (Term/Maude/Signature.hs): the subterm signature's free symbols rendered
-    /// as `name/arity[attrs]`, followed by the user-defined AC symbols as
-    /// `name/2[attrs]`, both skipping the entries listed in `excl`.
+    /// The `functions:` list of HS `prettyMaudeSig = prettyMaudeSigExcept sig
+    /// S.empty` (Term/Maude/Signature.hs): the subterm signature's free
+    /// symbols rendered as `name/arity[attrs]`, followed by the user-defined
+    /// AC symbols as `name/2[attrs]`.
     ///
     /// The two attribute lists differ: a PRIVATE CONSTRUCTOR free symbol
     /// prints `[private,constructor]` while its AC counterpart prints just
     /// `[private]` (the `AC` attribute already implies constructability).
-    pub fn pretty_fun_syms_except(&self, excl: &UserDefinedSig) -> Vec<String> {
+    pub fn pretty_fun_syms(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for sym in &self.st_fun_syms {
-            if excl.contains(&UserDefinedSym::NoEqUser(*sym)) {
-                continue;
-            }
             let mut attrs: Vec<&str> = match (sym.privacy, sym.constructability) {
                 (Privacy::Public, Constructability::Destructor) => vec!["destructor"],
                 (Privacy::Private, Constructability::Destructor) => vec!["private", "destructor"],
@@ -377,9 +374,6 @@ impl MaudeSig {
             ));
         }
         for sym in &self.st_ac_fun_syms {
-            if excl.contains(&UserDefinedSym::AcFctUser(*sym)) {
-                continue;
-            }
             let mut attrs: Vec<&str> = match (sym.privacy, sym.constructability) {
                 (Privacy::Public, Constructability::Destructor) => vec!["destructor"],
                 (Privacy::Private, Constructability::Destructor) => vec!["private", "destructor"],
@@ -459,14 +453,10 @@ impl MaudeSig {
                 .union(&other.macro_names)
                 .copied()
                 .collect(),
+            // HS `<>` builds on `mempty`, whose `eqConvergent` is False, so a
+            // merge resets it; the derived fields are rebuilt by `refresh`.
             eq_convergent: false,
-            fun_syms: BTreeSet::new(),
-            irreducible_fun_syms: BTreeSet::new(),
-            reducible_fun_syms: BTreeSet::new(),
-            irreducible_fun_syms_fast: tamarin_utils::FastSet::default(),
-            reducible_fun_syms_fast: tamarin_utils::FastSet::default(),
-            fun_syms_by_name: tamarin_utils::FastMap::default(),
-            fun_syms_by_wire: tamarin_utils::FastMap::default(),
+            ..MaudeSig::default()
         };
         merged.refresh()
     }

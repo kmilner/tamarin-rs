@@ -731,67 +731,36 @@ fn find_loop(
     Some(())
 }
 
-/// `natSubtermEqualities` — UTVPI-based cycle detection and equality
-/// derivation on the nat-subterm fragment of the constraint graph.
-///
-/// HS source: `Theory.Tools.SubtermStore.natSubtermEqualities`
-/// (SubtermStore.hs) — the algorithm itself.
-///
-/// HS caller: `simpNatCycles` (SubtermStore.hs) inside
-/// `simpSubtermStore` (SubtermStore.hs).
-///
-/// Returns:
-///   - `None` ⇒ the UTVPI system is unsatisfiable (= the posSubterm
-///     graph has a negative cycle), so the subterm store is
-///     contradictory.
-///   - `Some(eqs)` ⇒ list of `(l, r)` LNTerm pairs to emit as
-///     positive equalities (`EqE l r`).  `eqs` may be empty (no
-///     equalities implied) without indicating contradiction.
-///
-/// Algorithm (mirrors HS line-by-line):
-///   1. Vertex encoding: `(Bool, LVar)` — `True` = positive sign,
-///      `False` = negative sign.  Vertices come from the set of
-///      variables that appear in nat-subterm edges.
-///   2. `formatEdge`: each nat-subterm `s ⊏ t` (with `isNatSubterm`)
-///      becomes either:
-///      Edge weight `d = 2 * (countOnes(r) - countOnes(l) - 1)`, and:
-///        - 1 var total → 1 edge.
-///        - 2 vars total → 2 edges (symmetric).
-///   3. `oneEdges`: self-loop `(False, x) → (True, x)` with weight
-///      `-2` for every `(True, x)` vertex.
-///   4. `rawEdges = realEdges ++ oneEdges`.
-///   5. Floyd-Warshall closure on `rawEdges`.
-///   6. `tightenedEdges`: for `(True, x)` vertex `v`, if
-///      `distFW(v, ~v)` is reachable and odd, add edge
-///      `(v, ~v, distFW(v, ~v) - 1)`.  (Reachable+even ⇒ skip.)
-///   7. `edges = rawEdges ++ tightenedEdges`.
-///   8. Bellman-Ford on `edges` from a 0-init solution.  Unsat iff
-///      after `|V|` relax rounds, some edge `(u, v, w)` satisfies
-///      `w + dist(u) < dist(v)` — i.e. a relaxable edge remains.
-///   9. `slackEdges`: edges where `w + dist(u) == dist(v)` (tight).
-///  10. SCCs of `slackEdges` (Kosaraju on the directed slack graph).
-///  11. For each SCC, pick the vertex with smallest `dist`; emit
-///      `x = y + n` equalities for all OTHER `True`-tagged vertices
-///      in the SCC (HS filters `filter fst sccs` then `delete x`).
-///  12. For variables that appear in BOTH `True` and `False` in the
-///      same SCC, emit absolute `x = N` equalities, where
-///      `N = (dist(False, v) - dist(True, v)) / 2`.
-pub(crate) fn nat_subterm_equalities(
-    relation: &[(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)],
-) -> Option<Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)>> {
-    use tamarin_term::function_symbols::{nat_one_sym, AcSym};
-    use tamarin_term::lterm::{flattened_ac_terms, get_var, LNTerm, LSort, LVar};
-    use tamarin_term::term::{f_app_ac, f_app_no_eq, Term};
+// `fAppNatOne = fAppNoEq natOneSym []` — the surface form of `%1`.
+fn nat_one_term() -> LNTerm {
+    tamarin_term::term::f_app_no_eq(tamarin_term::function_symbols::nat_one_sym(), vec![])
+}
 
-    // ---- helpers ----------------------------------------------------------
+// Vertex = (Bool sign, LVar var).  We use `(bool, LVar)` directly.
+type Vertex = (bool, LVar);
 
-    // `fAppNatOne = fAppNoEq natOneSym []` — the surface form of `%1`.
-    fn nat_one_term() -> LNTerm {
-        f_app_no_eq(nat_one_sym(), vec![])
-    }
+/// `inf = maxBound `div` 2` — large sentinel, avoid overflow in `ik + kj`.
+const NAT_INF: i64 = i64::MAX / 4;
 
-    // Vertex = (Bool sign, LVar var).  We use `(bool, LVar)` directly.
-    type Vertex = (bool, LVar);
+/// Steps 1–8 of [`nat_subterm_equalities`]: a satisfying solution of the
+/// nat-subterm UTVPI system, with the graph it solves.
+struct NatSolution {
+    vertices: Vec<Vertex>,
+    vertex_to_int: std::collections::BTreeMap<Vertex, usize>,
+    edges: Vec<((Vertex, Vertex), i64)>,
+    sol: Vec<i64>,
+}
+
+/// Whether the nat-subterm `relation` is satisfiable, i.e.
+/// [`nat_subterm_equalities`] returns `Some`, without deriving equalities.
+pub(crate) fn nat_subterms_consistent(relation: &[(LNTerm, LNTerm)]) -> bool {
+    nat_solution(relation).is_some()
+}
+
+/// Solve steps 1–8 of [`nat_subterm_equalities`]; `None` when unsatisfiable.
+fn nat_solution(relation: &[(LNTerm, LNTerm)]) -> Option<NatSolution> {
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::{flattened_ac_terms, get_var, LSort};
 
     // `formatEdge` (SubtermStore.hs).
     // For each `(small, big)`:
@@ -880,9 +849,6 @@ pub(crate) fn nat_subterm_equalities(
     }
     let vertices: Vec<Vertex> = vertex_set.into_iter().collect();
     let n = vertices.len();
-    if n == 0 {
-        return Some(Vec::new());
-    }
 
     // `vertexToInt v = lookup v $ zip vertices [0..]` (SubtermStore.hs)
     let vertex_to_int: std::collections::BTreeMap<Vertex, usize> =
@@ -904,8 +870,7 @@ pub(crate) fn nat_subterm_equalities(
     raw_edges.extend(real_edges.iter().copied());
     raw_edges.extend(one_edges.iter().copied());
 
-    // `inf = maxBound `div` 2` — large sentinel, avoid overflow in `ik + kj`.
-    let inf: i64 = i64::MAX / 4;
+    let inf = NAT_INF;
 
     // ---- Floyd-Warshall (SubtermStore.hs) -----------------------
     // 2-D matrix flattened to a Vec<i64> of length n*n.
@@ -985,6 +950,78 @@ pub(crate) fn nat_subterm_equalities(
         return None;
     }
 
+    Some(NatSolution {
+        vertices,
+        vertex_to_int,
+        edges,
+        sol,
+    })
+}
+
+/// `natSubtermEqualities` — UTVPI-based cycle detection and equality
+/// derivation on the nat-subterm fragment of the constraint graph.
+///
+/// HS source: `Theory.Tools.SubtermStore.natSubtermEqualities`
+/// (SubtermStore.hs) — the algorithm itself.
+///
+/// HS caller: `simpNatCycles` (SubtermStore.hs) inside
+/// `simpSubtermStore` (SubtermStore.hs).
+///
+/// Returns:
+///   - `None` ⇒ the UTVPI system is unsatisfiable (= the posSubterm
+///     graph has a negative cycle), so the subterm store is
+///     contradictory.
+///   - `Some(eqs)` ⇒ list of `(l, r)` LNTerm pairs to emit as
+///     positive equalities (`EqE l r`).  `eqs` may be empty (no
+///     equalities implied) without indicating contradiction.
+///
+/// Algorithm (mirrors HS line-by-line):
+///   1. Vertex encoding: `(Bool, LVar)` — `True` = positive sign,
+///      `False` = negative sign.  Vertices come from the set of
+///      variables that appear in nat-subterm edges.
+///   2. `formatEdge`: each nat-subterm `s ⊏ t` (with `isNatSubterm`)
+///      becomes either:
+///      Edge weight `d = 2 * (countOnes(r) - countOnes(l) - 1)`, and:
+///        - 1 var total → 1 edge.
+///        - 2 vars total → 2 edges (symmetric).
+///   3. `oneEdges`: self-loop `(False, x) → (True, x)` with weight
+///      `-2` for every `(True, x)` vertex.
+///   4. `rawEdges = realEdges ++ oneEdges`.
+///   5. Floyd-Warshall closure on `rawEdges`.
+///   6. `tightenedEdges`: for `(True, x)` vertex `v`, if
+///      `distFW(v, ~v)` is reachable and odd, add edge
+///      `(v, ~v, distFW(v, ~v) - 1)`.  (Reachable+even ⇒ skip.)
+///   7. `edges = rawEdges ++ tightenedEdges`.
+///   8. Bellman-Ford on `edges` from a 0-init solution.  Unsat iff
+///      after `|V|` relax rounds, some edge `(u, v, w)` satisfies
+///      `w + dist(u) < dist(v)` — i.e. a relaxable edge remains.
+///   9. `slackEdges`: edges where `w + dist(u) == dist(v)` (tight).
+///  10. SCCs of `slackEdges` (Kosaraju on the directed slack graph).
+///  11. For each SCC, pick the vertex with smallest `dist`; emit
+///      `x = y + n` equalities for all OTHER `True`-tagged vertices
+///      in the SCC (HS filters `filter fst sccs` then `delete x`).
+///  12. For variables that appear in BOTH `True` and `False` in the
+///      same SCC, emit absolute `x = N` equalities, where
+///      `N = (dist(False, v) - dist(True, v)) / 2`.
+pub(crate) fn nat_subterm_equalities(
+    relation: &[(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)],
+) -> Option<Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)>> {
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::term::f_app_ac;
+
+    let NatSolution {
+        vertices,
+        vertex_to_int,
+        edges,
+        sol,
+    } = nat_solution(relation)?;
+    let n = vertices.len();
+    if n == 0 {
+        return Some(Vec::new());
+    }
+    let vti = |v: &Vertex| -> usize { vertex_to_int[v] };
+    let inf = NAT_INF;
+
     // ---- slackEdges (SubtermStore.hs) ---------------------------
     let slack_edges: Vec<(Vertex, Vertex)> = edges
         .iter()
@@ -1000,14 +1037,11 @@ pub(crate) fn nat_subterm_equalities(
         .collect();
 
     // ---- SCC of slackEdges (SubtermStore.hs) -------------------
-    // Kosaraju: build successor map (from → [to]) over `vertices`.
-    // Use BTreeMap so iteration order matches HS Set order.
-    let mut succ: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
-    for v in &vertices {
-        succ.insert(vti(v), Vec::new());
-    }
+    // Successor lists indexed by the dense vertex numbers `0..n`, each in
+    // slack-edge order.
+    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
     for (from, to) in &slack_edges {
-        succ.get_mut(&vti(from)).unwrap().push(vti(to));
+        succ[vti(from)].push(vti(to));
     }
     // Tarjan's SCC algorithm (deterministic, single-pass).
     let mut index_counter: usize = 0;
@@ -1020,7 +1054,7 @@ pub(crate) fn nat_subterm_equalities(
     // Iterative Tarjan to avoid deep recursion stacks.
     fn strongconnect(
         v: usize,
-        succ: &std::collections::BTreeMap<usize, Vec<usize>>,
+        succ: &[Vec<usize>],
         index_counter: &mut usize,
         stack: &mut Vec<usize>,
         on_stack: &mut Vec<bool>,
@@ -1040,7 +1074,7 @@ pub(crate) fn nat_subterm_equalities(
             }
             // Borrowed, not cloned: `succ` outlives the whole walk and the
             // only mutation below is to `work`/`lowlinks`/`stack`.
-            let neighbours: &[usize] = succ.get(&node).map(Vec::as_slice).unwrap_or(&[]);
+            let neighbours: &[usize] = &succ[node];
             if pi < neighbours.len() {
                 let w = neighbours[pi];
                 work.last_mut().unwrap().1 += 1;
@@ -1274,13 +1308,13 @@ impl<'a> StoreValuation<'a> {
             && sort_of_lnterm(big) == LSort::Nat;
         let nat_inconsistent = *self
             .active_nat_inconsistent
-            .get_or_init(|| nat_subterm_equalities(active).is_none())
+            .get_or_init(|| !nat_subterms_consistent(active))
             || natural && {
                 let mut relation = active.clone();
                 if !relation.iter().any(|(s, t)| s == small && t == big) {
                     relation.push((small.clone(), big.clone()));
                 }
-                nat_subterm_equalities(&relation).is_none()
+                !nat_subterms_consistent(&relation)
             };
         nat_inconsistent.then_some(false)
     }

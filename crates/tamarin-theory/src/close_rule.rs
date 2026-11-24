@@ -55,7 +55,7 @@ use tamarin_term::vterm::var_term;
 use crate::atom::ProtoAtom;
 use crate::constraint::solver::context::IntrRuleCache;
 use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
-use crate::formula::{exists_var, for_all_var, lift_free, BLNTerm, LNFormula, ProtoFormula};
+use crate::formula::{lift_free, quantify_vars, BLNTerm, LNFormula, ProtoFormula, Quantifier};
 use crate::guarded::Guarded;
 use crate::rule::{
     get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
@@ -345,35 +345,18 @@ fn time_eq(a: &LVar, b: &LVar) -> LNFormula {
     ProtoFormula::Atom(ProtoAtom::EqE(free_time(a), free_time(b)))
 }
 
-/// `foldr (hinted forAll) f vs` (Theory/Text/Parser/Formula.hs, over
-/// `forAll` Theory/Model/Formula.hs and `hinted`): close
-/// the binders from the last to the first, so the first variable of `vs`
-/// carries the outermost quantifier.  The hint is
-/// `hint (LVar n s _) = (n, s)` (Theory/Model/Formula.hs).
-fn close_all(vs: &[LVar], body: LNFormula) -> LNFormula {
-    vs.iter().rev().fold(body, |acc, v| {
-        for_all_var((v.name.to_string(), v.sort), v, acc)
-    })
-}
-
-/// [`close_all`] at `exists` (Theory/Model/Formula.hs).
-fn close_ex(vs: &[LVar], body: LNFormula) -> LNFormula {
-    vs.iter().rev().fold(body, |acc, v| {
-        exists_var((v.name.to_string(), v.sort), v, acc)
-    })
-}
-
 /// HS `newRestriction0` (CloseRule.hs):
 /// `All #ndci #ndcj. OnlyOnce() @ #ndci & OnlyOnce() @ #ndcj ==> #ndci = #ndcj`.
 /// HS names the binders `i`/`j` and closes them with `forAllFormula`, a
 /// `foldl` over ascending `frees` that makes the LAST variable the outermost
-/// binder (Theory/Model/Formula.hs), where [`close_all`] keeps the
+/// binder (Theory/Model/Formula.hs), where [`quantify_vars`] keeps the
 /// written order.  Names and prefix order are hints only, invisible outside
 /// the synthetic proof search.
 fn only_once_restriction() -> LNFormula {
     let i = ndc_node_var("ndci");
     let j = ndc_node_var("ndcj");
-    close_all(
+    quantify_vars(
+        Quantifier::All,
         &[i, j],
         nullary_action_at("OnlyOnce", &i)
             .and(nullary_action_at("OnlyOnce", &j))
@@ -390,7 +373,8 @@ fn only_once_d_restriction() -> LNFormula {
     let i = ndc_node_var("ndci");
     let j = ndc_node_var("ndcj");
     let k = ndc_node_var("ndck");
-    close_all(
+    quantify_vars(
+        Quantifier::All,
         &[i, j, k],
         nullary_action_at("OnlyOnceD", &i)
             .and(nullary_action_at("OnlyOnceD", &j))
@@ -464,7 +448,7 @@ fn deduction_lemma_guarded(s: &[LNFact], fact_term: &LNTerm) -> Guarded {
     ));
     binders.push(t0);
     binders.push(t1);
-    let fm = close_ex(&binders, gen_at.and(k_at)).not();
+    let fm = quantify_vars(Quantifier::Ex, &binders, gen_at.and(k_at)).not();
     // Every binder occurs in one of the two Action guard atoms by
     // construction, so the conversion cannot fail on guardedness.
     crate::guarded::formula_to_guarded(&fm).unwrap_or_else(|e| {

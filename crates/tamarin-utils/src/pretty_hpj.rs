@@ -529,6 +529,11 @@ pub fn parens(d: Doc) -> Doc {
     Doc::char('(').beside(d).beside(Doc::char(')'))
 }
 
+/// HS `doubleQuotes p = char '"' <> p <> char '"'` (`Text/PrettyPrint/Class.hs`).
+pub fn double_quotes(d: Doc) -> Doc {
+    Doc::text("\"").beside(d).beside(Doc::text("\""))
+}
+
 // -- Postprocessing (HS Html.hs) --------------------------------------
 
 /// HS `postprocessHtmlDoc = unlines . map (addBreak . indent) . lines`

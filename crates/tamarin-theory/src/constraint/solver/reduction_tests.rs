@@ -933,7 +933,7 @@ fn equality_formula_split_inherits_solved_bookkeeping() {
     let false_formula = crate::guarded::gfalse();
     let mut red = Reduction::new(&ctx, System::empty());
     let SystemOutcome::Cases(arms) = red
-        .insert_formulas(&[formula, false_formula.clone()])
+        .insert_formulas(vec![formula, false_formula.clone()])
         .expect("solver operation")
     else {
         panic!("formula sequence must preserve the XOR split");

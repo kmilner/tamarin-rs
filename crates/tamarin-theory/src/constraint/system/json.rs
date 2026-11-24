@@ -37,7 +37,8 @@ use tamarin_term::vterm::Lit;
 
 use crate::constraint::constraints::{NodeId, Reason};
 use crate::fact::{
-    fact_tag_multiplicity, is_proto_fact, show_fact_tag, FactTag, LNFact, Multiplicity,
+    fact_tag_multiplicity, is_proto_fact, show_fact_tag, show_fact_tag_derived, LNFact,
+    Multiplicity,
 };
 use crate::pretty_hpj::{fsep, punctuate, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 use crate::rule::{
@@ -52,7 +53,7 @@ use crate::constraint::system::graph::color::{
 use crate::constraint::system::graph::options::GraphOptions;
 use crate::constraint::system::graph::repr::{Cluster, GEdge, GNode, MissingHint, NodeType};
 use crate::constraint::system::graph::{
-    resolve_node_conc_fact, resolve_node_prem_fact, system_to_graph, Graph,
+    edge_fact_check, resolve_node_conc_fact, resolve_node_prem_fact, system_to_graph, Graph,
 };
 use crate::constraint::system::{NodeRuleMap, System};
 
@@ -165,13 +166,6 @@ fn get_rule_type(ru: &RuleACInst) -> &'static str {
     }
 }
 
-/// HS `check p`, shared by `getRelationType` (JSON.hs) and `colorEdge`'s
-/// `SystemEdge` arm (JSON.hs): the TARGET premise's fact is tested
-/// first, then the SOURCE conclusion's.
-fn edge_fact_check(prem: Option<&LNFact>, conc: Option<&LNFact>, p: fn(&LNFact) -> bool) -> bool {
-    prem.is_some_and(p) || conc.is_some_and(p)
-}
-
 /// The single classification `graphEdgeToJSONGraphEdge` (JSON.hs) needs
 /// per edge.
 ///
@@ -279,18 +273,12 @@ fn json_term(t: &LNTerm, outermost: bool) -> Value {
 
 /// Port of `itemToJSONGraphNodeFact` (JSON.hs) at `pretty = True`.
 fn json_fact(id: String, f: &LNFact) -> Value {
-    // `show (factTag f)` is the DERIVED Show of `FactTag`
-    // (Theory/Model/Fact.hs); the `ProtoFact` constructor never reaches it
-    // because `isProtoFact` short-circuits to the literal "ProtoFact".
-    let tag = match f.tag {
-        FactTag::Proto(_, _, _) => "ProtoFact",
-        FactTag::Fresh => "FreshFact",
-        FactTag::Out => "OutFact",
-        FactTag::In => "InFact",
-        FactTag::Ku => "KUFact",
-        FactTag::Kd => "KDFact",
-        FactTag::Ded => "DedFact",
-        FactTag::Term => "TermFact",
+    // `jgnFactTag = if isProtoFact f then "ProtoFact" else show (factTag f)`,
+    // the derived `Show FactTag` (Theory/Model/Fact.hs).
+    let tag = if is_proto_fact(f) {
+        "ProtoFact".to_string()
+    } else {
+        show_fact_tag_derived(&f.tag)
     };
     let mult = match fact_tag_multiplicity(&f.tag) {
         Multiplicity::Linear => "",
@@ -301,7 +289,7 @@ fn json_fact(id: String, f: &LNFact) -> Value {
         ("jgnFactMult", Value::String(mult.to_string())),
         ("jgnFactName", Value::String(show_fact_tag(&f.tag))),
         ("jgnFactShow", Value::String(pps(fact_doc_of(f)))),
-        ("jgnFactTag", Value::String(tag.to_string())),
+        ("jgnFactTag", Value::String(tag)),
         (
             "jgnFactTerms",
             Value::Array(f.terms.iter().map(|t| json_term(t, true)).collect()),
@@ -761,7 +749,7 @@ fn remove_pseudo_unicode(mut s: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fact::Fact;
+    use crate::fact::{Fact, FactTag};
     use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, NameTag};
     use tamarin_term::term::{f_app_no_eq, lit};

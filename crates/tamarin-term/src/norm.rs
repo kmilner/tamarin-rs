@@ -1,27 +1,16 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of `Term.Rewriting.Norm`: `norm` asks Maude to `reduce`, and
-//! `nf_via_haskell*` is HS `nfViaHaskell`, the structural normal-form
-//! check.  The `_maude` entry points can also match st-rule LHSes that need
-//! AC matching; the pure one counts those as not matching.
+//! Port of `Term.Rewriting.Norm`: `nf_via_haskell*` is HS `nfViaHaskell`,
+//! the structural normal-form check.  The `_maude` entry point can also
+//! match st-rule LHSes that need AC matching; the pure one counts those as
+//! not matching.
 
 use crate::function_symbols::{AcSym, FunSym};
 use crate::lterm::LNTerm;
-use crate::maude_proc::{MaudeError, MaudeHandle};
+use crate::maude_proc::MaudeHandle;
 use crate::maude_sig::MaudeSig;
 use crate::term::Term;
-
-/// `norm` — normalise a term modulo the configured theory by passing
-/// it to Maude's `reduce` operator.
-pub fn norm(maude: &MaudeHandle, t: &LNTerm) -> Result<LNTerm, MaudeError> {
-    // Variable / constant literals are already normal — skip the
-    // Maude round-trip for them.
-    if matches!(t, Term::Lit(_)) {
-        return Ok(t.clone());
-    }
-    maude.reduce(t)
-}
 
 /// HS `nfViaHaskell` (Norm.hs) without a Maude handle.  It is structural:
 /// `mult(tid, x)` and `mult(x, tid)` are both normal, whereas comparing with
@@ -34,15 +23,10 @@ pub fn nf_via_haskell(msig: &MaudeSig, t: &LNTerm) -> bool {
 /// HS `nfViaHaskell` (Norm.hs), whose `struleApplicable` matches through
 /// Maude when an st-rule LHS needs AC matching (e.g. `xorr(x, x) = zeroo`).
 /// The HS callers all run in `WithMaude`, so solver callers use this one;
-/// the pure variant misses such reductions (csf26-ac CRxor).
-pub fn nf_via_haskell_maude(maude: &MaudeHandle, t: &LNTerm) -> bool {
-    let sig = maude.maude_sig();
-    nf_via_haskell_maude_with_sig(&sig, maude, t)
-}
-
-/// As [`nf_via_haskell_maude`], for callers that already hold the handle's
-/// [`MaudeSig`] — skips the per-call `Arc` clone.
-pub fn nf_via_haskell_maude_with_sig(msig: &MaudeSig, maude: &MaudeHandle, t: &LNTerm) -> bool {
+/// the pure variant misses such reductions (csf26-ac CRxor).  `msig` is the
+/// handle's [`MaudeSig`], passed in so callers holding it skip the `Arc`
+/// clone.
+pub fn nf_via_haskell_maude(msig: &MaudeSig, maude: &MaudeHandle, t: &LNTerm) -> bool {
     go_nf(t, msig, Some(maude))
 }
 
@@ -302,8 +286,11 @@ fn strule_applicable(
     use crate::unification::MatchOutcome;
     let lhs = &rule.lhs;
     let problem = Match::match_with(t.clone(), lhs.clone());
-    let matched = match crate::unification::solve_match_lterm(&crate::lterm::sort_of_name, problem)
-    {
+    let matched = match crate::unification::solve_match_lterm(
+        &crate::lterm::sort_of_name,
+        &|_| true,
+        problem,
+    ) {
         MatchOutcome::NoMatcher => false,
         MatchOutcome::Matched(_) => true,
         MatchOutcome::NeedsAc => match (maude, t, lhs) {

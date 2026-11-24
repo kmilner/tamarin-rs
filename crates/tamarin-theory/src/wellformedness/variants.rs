@@ -15,9 +15,9 @@ use tamarin_term::term::Term;
 #[cfg(test)]
 use tamarin_term::{lterm::LVar, subst::Subst, vterm::var_term};
 
-use super::{WfError, WfReport};
+use super::{pretty_lnterm_list, WfError, WfReport};
 use crate::fact::LNFact;
-use crate::pretty_hpj::{above_blank, fsep, numbered_prime, punctuate, Doc};
+use crate::pretty_hpj::{above_blank, numbered_prime, Doc};
 use crate::rule::ProtoRuleE;
 use crate::theory::{closed_rules_ac, OpenProtoRule, RuleVariants, Theory};
 use crate::tools::rule_variants::{open_rule_has_no_variants, variants_proto_rule, VariantsError};
@@ -186,13 +186,7 @@ fn added_action_report(maude: &MaudeHandle, member: &ProtoRuleE, inherited: &[LN
     if uncovered.is_empty() {
         return vec![];
     }
-    let terms = fsep(punctuate(
-        Doc::text(","),
-        uncovered
-            .iter()
-            .map(tamarin_term::pretty::pretty_nterm)
-            .collect(),
-    ));
+    let terms = pretty_lnterm_list(&uncovered);
     vec![WfError::underlined_block("Unsupported actions added to variants",
         Doc::text(format!("Rule {} adds actions whose instances can leave normal form:", crate::rule::pretty_proto_rule_name(&member.info.name).render()))
             .above_g(terms.nest(2))

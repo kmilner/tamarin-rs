@@ -5,12 +5,6 @@
 //! `lib/term/src/Term/Rewriting/Definitions.hs`.
 //!
 //! Equalities, matching problems, and rewriting rules.
-//!
-//! Some methods here mirror the Haskell API one-to-one for parity even where
-//! the port does not yet exercise them: `Match::only_if`/`no_match`/`empty`,
-//! the `Match` `append` (the Haskell `Monoid` instance) and `Default`, and
-//! `Equal::eval` have no current production caller. They are intentionally
-//! retained as a faithful port surface.
 
 // -- Equality -----------------------------------------------------------------
 
@@ -26,12 +20,6 @@ impl<A> Equal<A> {
     }
 }
 
-impl<A: PartialEq> Equal<A> {
-    pub fn eval(&self) -> bool {
-        self.lhs == self.rhs
-    }
-}
-
 // -- Matching problem ---------------------------------------------------------
 
 #[derive(Debug, Clone)]
@@ -42,20 +30,7 @@ pub enum Match<A> {
     DelayedMatches(Vec<(A, A)>),
 }
 
-/// HS `instance Monoid (Match a)` sets `mempty = DelayedMatches []`
-/// (Definitions.hs).  `#[derive(Default)]` would need a `#[default]`
-/// variant and would pick `NoMatch`, the absorbing element.
-impl<A> Default for Match<A> {
-    fn default() -> Self {
-        Match::DelayedMatches(Vec::new())
-    }
-}
-
 impl<A> Match<A> {
-    pub fn empty() -> Self {
-        Match::DelayedMatches(Vec::new())
-    }
-
     /// `matchWith t p`: a single-pair match problem.
     pub fn match_with(term: A, pattern: A) -> Self {
         Match::DelayedMatches(vec![(term, pattern)])
@@ -66,18 +41,6 @@ impl<A> Match<A> {
         match self {
             Match::NoMatch => None,
             Match::DelayedMatches(v) => Some(v),
-        }
-    }
-
-    /// Append: short-circuits on `NoMatch`, mirroring the Haskell `Monoid`
-    /// instance.
-    pub fn append(self, other: Self) -> Self {
-        match (self, other) {
-            (Match::NoMatch, _) | (_, Match::NoMatch) => Match::NoMatch,
-            (Match::DelayedMatches(mut a), Match::DelayedMatches(b)) => {
-                a.extend(b);
-                Match::DelayedMatches(a)
-            }
         }
     }
 }
@@ -104,41 +67,11 @@ impl<A> RRule<A> {
 mod tests {
     use super::*;
 
-    /// `Match::default` is HS's `mempty`, the EMPTY delayed match — not the
-    /// `NoMatch` a derive would select.
-    #[test]
-    fn match_default_is_the_empty_delayed_match() {
-        assert_eq!(Match::<i32>::default().flatten(), Some(Vec::new()));
-    }
-
     /// The derived `Ord` compares `lhs` before `rhs`, the field order of HS's
     /// `RRule a a`.
     #[test]
     fn rrule_ord_compares_the_lhs_first() {
         assert!(RRule::new(1, 9) < RRule::new(2, 0));
         assert!(RRule::new(1, 0) < RRule::new(1, 1));
-    }
-
-    #[test]
-    fn equal_eval() {
-        assert!(Equal::new(1, 1).eval());
-        assert!(!Equal::new(1, 2).eval());
-    }
-
-    #[test]
-    fn match_short_circuits_on_no_match() {
-        // The Haskell `Monoid` instance short-circuits on either side.  A
-        // guard that checks only one side therefore fails this test.
-        let a: Match<i32> = Match::match_with(1, 2);
-        assert!(matches!(a.clone().append(Match::NoMatch), Match::NoMatch));
-        assert!(matches!(Match::NoMatch.append(a), Match::NoMatch));
-    }
-
-    #[test]
-    fn match_appends_pairs() {
-        let a = Match::match_with(1, 2);
-        let b = Match::match_with(3, 4);
-        let r = a.append(b).flatten().unwrap();
-        assert_eq!(r, vec![(1, 2), (3, 4)]);
     }
 }

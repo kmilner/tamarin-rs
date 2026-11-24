@@ -51,7 +51,9 @@ fn match_pattern_variable_against_constant_term() {
     let t: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
     let p: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
     let problem = Match::match_with(t, p);
-    let MatchOutcome::Matched(s) = solve_match_lterm(&crate::lterm::sort_of_name, problem) else {
+    let MatchOutcome::Matched(s) =
+        solve_match_lterm(&crate::lterm::sort_of_name, &|_| true, problem)
+    else {
         panic!("expected a native matcher");
     };
     // Each pattern variable is the key.  Each key maps to the subject term at
@@ -72,7 +74,7 @@ fn match_fails_on_different_arity() {
     let p: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
     let problem = Match::match_with(t, p);
     assert!(matches!(
-        solve_match_lterm(&crate::lterm::sort_of_name, problem),
+        solve_match_lterm(&crate::lterm::sort_of_name, &|_| true, problem),
         MatchOutcome::NoMatcher
     ));
 }
@@ -142,7 +144,7 @@ fn match_ac_subterm_under_var_pattern_is_matched_no_maude() {
     // `matchRaw` checks `(_, Lit (Var vp))` FIRST → binds, no AC.
     let t: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
     let p: LNTerm = msg_var("x", 0);
-    match solve_match_lterm(&sn, Match::match_with(t, p)) {
+    match solve_match_lterm(&sn, &|_| true, Match::match_with(t, p)) {
         MatchOutcome::Matched(s) => assert_eq!(s.len(), 1),
         o => panic!(
             "expected Matched, got {:?}",
@@ -163,7 +165,7 @@ fn match_ac_pattern_vs_var_subject_is_no_matcher_not_needs_ac() {
     // pattern facing a var subject is NoMatcher, never a Maude fallback.
     let t: LNTerm = msg_var("x", 0);
     let p: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    match solve_match_lterm(&sn, Match::match_with(t, p)) {
+    match solve_match_lterm(&sn, &|_| true, Match::match_with(t, p)) {
         MatchOutcome::NoMatcher => {}
         MatchOutcome::Matched(_) => panic!("expected NoMatcher, got Matched"),
         MatchOutcome::NeedsAc => panic!("expected NoMatcher, got NeedsAc"),
@@ -175,7 +177,7 @@ fn match_same_ac_symbol_both_sides_is_needs_ac() {
     // mult(a,b) vs mult(c,d): genuine AC-vs-AC → HS `ACProblem`.
     let t: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
     let p: LNTerm = mult(msg_var("c", 0), msg_var("d", 0));
-    match solve_match_lterm(&sn, Match::match_with(t, p)) {
+    match solve_match_lterm(&sn, &|_| true, Match::match_with(t, p)) {
         MatchOutcome::NeedsAc => {}
         MatchOutcome::Matched(_) => panic!("expected NeedsAc, got Matched"),
         MatchOutcome::NoMatcher => panic!("expected NeedsAc, got NoMatcher"),
@@ -189,7 +191,7 @@ fn match_ac_subterm_under_noeq_with_clash_is_no_matcher() {
     // the subject doesn't force a fallback when the pattern is a var.
     let t: LNTerm = pk(mult(msg_var("a", 0), msg_var("b", 0)));
     let p: LNTerm = pk(msg_var("x", 0));
-    match solve_match_lterm(&sn, Match::match_with(t, p)) {
+    match solve_match_lterm(&sn, &|_| true, Match::match_with(t, p)) {
         MatchOutcome::Matched(s) => assert_eq!(s.len(), 1),
         _ => panic!("expected Matched"),
     }
@@ -197,7 +199,30 @@ fn match_ac_subterm_under_noeq_with_clash_is_no_matcher() {
     let t2: LNTerm = pk(msg_var("x", 0));
     let p2: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
     assert!(matches!(
-        solve_match_lterm(&sn, Match::match_with(t2, p2)),
+        solve_match_lterm(&sn, &|_| true, Match::match_with(t2, p2)),
+        MatchOutcome::NoMatcher
+    ));
+}
+
+#[test]
+fn match_non_bindable_pattern_var_is_a_skolem_constant() {
+    // pair(x, y) against pair(a, x) with only `y` bindable: `x` is a skolem
+    // constant (HS `skolemizeTerm`), so it matches only itself.
+    let bindable = |v: &LVar| v.name == "y";
+    let p: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
+    let ok: LNTerm = pair(msg_var("x", 0), msg_var("a", 0));
+    let MatchOutcome::Matched(s) =
+        solve_match_lterm(&sn, &bindable, Match::match_with(ok, p.clone()))
+    else {
+        panic!("expected a native matcher");
+    };
+    assert_eq!(
+        s.to_list(),
+        vec![(LVar::new("y", LSort::Msg, 0), msg_var("a", 0))]
+    );
+    let clash: LNTerm = pair(msg_var("a", 0), msg_var("x", 0));
+    assert!(matches!(
+        solve_match_lterm(&sn, &bindable, Match::match_with(clash, p)),
         MatchOutcome::NoMatcher
     ));
 }

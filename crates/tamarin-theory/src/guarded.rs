@@ -137,7 +137,9 @@ pub fn reducible_formula(fm: &Guarded) -> bool {
 }
 
 /// HS `gconj` (Guarded.hs): flatten nested conjunctions at every level,
-/// `nub`, then a singleton is itself and any `gfalse` absorbs.
+/// `nub`, then a singleton is itself and any `gfalse` absorbs. A `gfalse`
+/// gives `gfalse` either way, so it is checked before the quadratic `nub`,
+/// which HS's lazy `any` also never finishes in that case.
 pub fn gconj(items: Vec<Guarded>) -> Guarded {
     fn flatten(gf: Guarded, out: &mut Vec<Guarded>) {
         match gf {
@@ -147,11 +149,12 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
     }
     let mut flat = Vec::new();
     items.into_iter().for_each(|gf| flatten(gf, &mut flat));
+    if flat.contains(&gfalse()) {
+        return gfalse();
+    }
     let mut gfs = nub(flat);
     if gfs.len() == 1 {
         gfs.pop().unwrap()
-    } else if gfs.contains(&gfalse()) {
-        gfalse()
     } else {
         Guarded::Conj(gfs.into())
     }
@@ -670,7 +673,7 @@ pub fn close_guarded(
         .map(|a| subst_free_atom(&s, &lift_free_atom(a)))
         .collect();
     let new_body = subst_free(&s, &body);
-    let vs: Vec<(String, LSort)> = xs.iter().map(|v| (v.name.to_string(), v.sort)).collect();
+    let vs: Vec<(String, LSort)> = xs.iter().map(crate::formula::lvar_hint).collect();
     match qua {
         Quantifier::Ex => gex(vs, new_guards, new_body),
         Quantifier::All => gall(vs, new_guards, new_body),

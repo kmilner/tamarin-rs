@@ -12,40 +12,21 @@ use crate::constraint::solver::reduction::{
 use crate::tools::equation_store::LNSubst;
 use crate::tools::subterm_store::nat_subterm_equalities;
 
-type SimplifyPass = fn(&mut Reduction<'_>);
-type FalliblePass = fn(&mut Reduction<'_>) -> Result<SystemOutcome, crate::prove::ProveError>;
-
-#[derive(Clone, Copy)]
-enum Pass {
-    Linear(SimplifyPass),
-    Fallible(FalliblePass),
-}
-
-impl Pass {
-    fn run(self, red: &mut Reduction<'_>) -> Result<SystemOutcome, crate::prove::ProveError> {
-        Ok(match self {
-            Pass::Linear(pass) => {
-                pass(red);
-                SystemOutcome::Linear
-            }
-            Pass::Fallible(pass) => return pass(red),
-        })
-    }
-}
+type Pass = fn(&mut Reduction<'_>) -> Result<SystemOutcome, crate::prove::ProveError>;
 
 const SIMPLIFY_PASSES: &[Pass] = &[
-    Pass::Fallible(enforce_fresh_node_uniqueness_pass),
-    Pass::Fallible(enforce_kd_fact_uniqueness_pass),
-    Pass::Fallible(enforce_ku_action_uniqueness_pass),
-    Pass::Fallible(enforce_edge_uniqueness_pass),
-    Pass::Fallible(solve_unique_actions_pass_fan_out),
-    Pass::Fallible(reduce_formulas_pass),
-    Pass::Fallible(eval_formula_atoms_pass),
-    Pass::Linear(enforce_fresh_ordering_pass),
-    Pass::Fallible(propagate_subterm_obvious),
-    Pass::Fallible(simp_injective_fact_eq_mon_pass),
-    Pass::Fallible(merge_last_injective_fact_nodes),
-    Pass::Fallible(insert_implied_formulas_pass),
+    enforce_fresh_node_uniqueness_pass,
+    enforce_kd_fact_uniqueness_pass,
+    enforce_ku_action_uniqueness_pass,
+    enforce_edge_uniqueness_pass,
+    solve_unique_actions_pass_fan_out,
+    reduce_formulas_pass,
+    eval_formula_atoms_pass,
+    enforce_fresh_ordering_pass,
+    propagate_subterm_obvious,
+    simp_injective_fact_eq_mon_pass,
+    merge_last_injective_fact_nodes,
+    insert_implied_formulas_pass,
 ];
 
 /// Upstream aec550a2: interfering nodes at the end of an injective fact's
@@ -125,7 +106,7 @@ pub(crate) fn simplify_system_with_fanout_seeded_with_counters(
     // sub-reduction inherits the source precompute's `avoid th` seed (HS
     // Sources.hs); 0 (general proving path) is a no-op.
     let mut red = Reduction::new_inheriting(ctx, sys, seed);
-    simplify_system_fan_out_inner(&mut red)
+    simplify_system_fan_out_inner_with_passes(&mut red, SIMPLIFY_PASSES)
 }
 
 /// Inner driver — mirrors the body of `simplify_system` but propagates
@@ -136,12 +117,6 @@ pub(crate) fn simplify_system_with_fanout_seeded_with_counters(
 ///
 /// Each branch continues with its own system and inherited FreshT counter,
 /// including allocations that are no longer visible in the system.
-fn simplify_system_fan_out_inner(
-    red: &mut Reduction,
-) -> Result<Vec<SystemBranch>, crate::prove::ProveError> {
-    simplify_system_fan_out_inner_with_passes(red, SIMPLIFY_PASSES)
-}
-
 fn simplify_system_fan_out_inner_with_passes(
     red: &mut Reduction,
     passes: &[Pass],
@@ -181,7 +156,7 @@ fn continue_simplify_iteration(
 ) -> Result<Option<Vec<SystemBranch>>, crate::prove::ProveError> {
     while let Some(pass) = passes.get(next_pass) {
         super::search::check_cancelled()?;
-        let outcome = pass.run(red)?;
+        let outcome = pass(red)?;
         next_pass += 1;
         let arms = match outcome {
             SystemOutcome::Linear => continue,
@@ -650,8 +625,9 @@ fn insert_implied_formulas_pass(
     // bound variables throughout the guards and body before matching.
     // All binders in this pass share one FreshT-style counter seeded beyond
     // the live system and ambient fresh-variable supply.
-    let mut fresh =
-        tamarin_utils::fresh::FastFreshState::seeded(red.fresh_var_baseline().saturating_add(1));
+    let mut fresh = tamarin_utils::fresh::FastFreshState::seeded(
+        crate::constraint::solver::reduction::bounds_max(&red.sys).saturating_add(1),
+    );
     // `Stored.toList sFormulas ++ Stored.toList sLemmas`.
     use crate::constraint::system::formulas_in_set_order;
     let universals: Vec<(Vec<LVar>, Vec<AAtom<LNTerm>>, Guarded)> =
@@ -745,7 +721,7 @@ fn insert_implied_formulas_pass(
         return Ok(SystemOutcome::Linear);
     }
     red.changed = ChangeIndicator::Changed;
-    red.insert_formulas(&new_formulas)
+    red.insert_formulas(new_formulas)
 }
 
 /// Try every assignment of system actions to the universal's action
@@ -866,89 +842,16 @@ fn try_match_all_guards(
                 let t_subst = tamarin_term::subst::apply_vterm(acc, t.clone());
                 let s_has_pat = atom_has_unbound_pattern_var(&s_subst, vars);
                 let t_has_pat = atom_has_unbound_pattern_var(&t_subst, vars);
-                let (pat_term, subj_term) = match (s_has_pat, t_has_pat) {
-                    // Both sides ground after skolemisation: match iff equal.
-                    (false, false) => {
-                        if s_subst == t_subst {
-                            rec(
-                                maude,
-                                vars,
-                                pattern_vars,
-                                guards,
-                                guard_idx + 1,
-                                sys_actions,
-                                actions_by_name,
-                                acc,
-                                body,
-                                sys,
-                                other_guards,
-                                out,
-                            )?;
-                        }
-                        return Ok(());
-                    }
-                    // s has pattern vars → s is the pattern.
-                    (true, false) => (s_subst, t_subst),
-                    // t has pattern vars → t is the pattern.
-                    (false, true) => (t_subst, s_subst),
-                    // Both have pattern vars — Haskell errors on
-                    // this case.  We bail out: drop this assignment
-                    // rather than trying to match unbound-vs-unbound,
-                    // which can't soundly produce a unique sigma.
+                let (subj_term, pat_term) = match (s_has_pat, t_has_pat) {
+                    (false, _) => (s_subst, t_subst),
+                    (true, false) => (t_subst, s_subst),
+                    // Haskell errors here (`formulaToGuarded` rules it out);
+                    // drop the assignment.
                     (true, true) => return Ok(()),
                 };
-                // Run the structural match, with the recursion-invariant
-                // `pattern_vars` set hoisted to `try_match_all_guards` (it
-                // depends only on `vars`).
-                let (pat_lnt, subj_lnt) = (pat_term, subj_term);
-                let mut struct_subst = std::collections::BTreeMap::new();
-                let struct_outcome =
-                    structural_match(&pat_lnt, &subj_lnt, pattern_vars, &mut struct_subst);
-                // Use native matching unless the terms require AC matching.
-                // Skolemize free system variables on both sides with the same
-                // map; only universal-bound variables may receive bindings.
-                // Each AC matcher produces a separate continuation.
-                let candidates: Vec<
-                    std::collections::BTreeMap<
-                        tamarin_term::lterm::LVar,
-                        tamarin_term::lterm::LNTerm,
-                    >,
-                > = match struct_outcome {
-                    StructMatch::Matched => vec![struct_subst],
-                    StructMatch::NoMatcher => return Ok(()),
-                    StructMatch::NeedsAc => {
-                        let eqs = vec![tamarin_term::rewriting::Equal {
-                            lhs: pat_lnt,
-                            rhs: subj_lnt,
-                        }];
-                        match maude.match_eqs_skolemize_both(&eqs, pattern_vars) {
-                            Ok(matches) => matches
-                                .into_iter()
-                                .map(|m| m.into_iter().collect())
-                                .collect(),
-                            Err(error) => {
-                                return Err(crate::prove::ProveError::Maude(error.to_string()))
-                            }
-                        }
-                    }
-                };
-                if candidates.is_empty() {
-                    return Ok(());
-                }
-                for struct_subst in candidates {
-                    // Keep the LVar → LNTerm bindings of the universal's own
-                    // variables.
-                    let mut subst_here: std::collections::BTreeMap<
-                        tamarin_term::lterm::LVar,
-                        tamarin_term::lterm::LNTerm,
-                    > = std::collections::BTreeMap::new();
-                    for (lv, lt) in struct_subst {
-                        if !vars.iter().any(|v| v.name == lv.name && v.idx == lv.idx) {
-                            continue;
-                        }
-                        subst_here.insert(lv, lt);
-                    }
-                    let subst_here = LNSubst::from_map(subst_here);
+                // `matchTerm term pat` (Guarded.hs).
+                for m in match_skolemized(maude, pattern_vars, vec![(subj_term, pat_term)])? {
+                    let subst_here = LNSubst::from_list(m);
                     let Some(combined) = combine_substs(acc, &subst_here) else {
                         continue;
                     };
@@ -1025,180 +928,6 @@ fn atom_has_unbound_pattern_var(
     }
 }
 
-/// Outcome of `structural_match`, mirroring HS `matchRaw`'s three
-/// possible results (`Term/Unification.hs`):
-///
-/// * `Matched`   — `Right ()`: the native matcher succeeded; the
-///   accumulated `subst` is the (unique) matcher.  HS returns
-///   `[substFromMap mappings]`, NO Maude call.
-/// * `NoMatcher` — `Left NoMatcher`: a structural clash (constant vs
-///   constant, head/arity mismatch, sort mismatch, a non-pattern var
-///   facing a non-identical subject, OR a pattern var already bound to
-///   a different subject).  HS returns `[]` natively, NO Maude call.
-/// * `NeedsAc`   — `Left ACProblem`: an AC-/C-headed pair appeared on
-///   BOTH sides during the recursion (`(FApp (AC _) _, FApp (AC _) _)`
-///   / `(FApp (C _) _, FApp (C _) _)`, `Unification.hs`).  Only
-///   here does HS call `matchViaMaude` on the *whole* problem.
-///
-/// CRITICAL HS-faithfulness point: an AC-/C-headed subterm under a
-/// PATTERN VARIABLE never triggers `NeedsAc` — HS checks the pattern-var
-/// arm `(_, Lit (Var vp))` FIRST (`Unification.hs`) and binds the
-/// var to the whole subject without inspecting its AC shape.  Likewise a
-/// function-app PATTERN facing a plain-variable SUBJECT is a `NoMatcher`
-/// (HS falls to the `_ -> throwError NoMatcher` arm), NOT an AC problem —
-/// because the AC arm requires BOTH sides AC-headed.  A coarse "any AC
-/// symbol appears anywhere" proxy over-triggers Maude on
-/// structurally-failing matches that merely mention an AC operator
-/// (LAK06: 28,879 Maude matches where HS issues 0; Scott: 10,748 vs 598)
-/// — which is why only `NeedsAc` (both sides AC-/C-headed) reaches Maude
-/// while `NoMatcher` fails natively.
-#[derive(Debug, PartialEq, Eq)]
-enum StructMatch {
-    Matched,
-    NoMatcher,
-    NeedsAc,
-}
-
-/// Structural pattern matcher for `LNTerm`s.  Faithful port of the
-/// pure portion of Haskell's `Term.Unification.matchRaw`
-/// (`lib/term/src/Term/Unification.hs`), returning the 3-way
-/// `StructMatch` outcome so the caller can mirror `solveMatchLTerm`'s
-/// `case runState (runExceptT match)` dispatch (`Unification.hs`)
-/// exactly — only `NeedsAc` warrants a Maude AC fallback.
-///
-///   - If `pat` is an LVar whose (name, idx) is in `pattern_vars`
-///     (a bindable universal var = HS's post-`openGuarded` `Var`),
-///     bind it to `subj` (or check consistency with an existing
-///     binding) — but only if the subject's sort is a subsort of
-///     the pattern var's sort.  (HS `sortGeqLTerm`, `Unification.hs`.)
-///   - If `pat` is a non-pattern LVar (= HS `Con (SkConst _)` after
-///     `skolemizeGuarded`), it matches only the *same* literal LVar.
-///   - Constant vs constant: match iff equal.
-///   - `NoEq`/`List` app vs same: equal head + arity ⇒ recurse pairwise
-///     (left-to-right, first failure wins, like HS `sequence_ . zipWith`).
-///   - `AC`-vs-`AC` or `C`-vs-`C`: `NeedsAc` (HS `throwError ACProblem`).
-///   - Otherwise (head/arity/shape mismatch): `NoMatcher`.
-///
-/// Left-to-right short-circuit on the FIRST failure matches HS `forM_` /
-/// `sequence_` ordering, so the first failing pair's classification
-/// (NoMatcher vs ACProblem) is the one that propagates.
-fn structural_match(
-    pat: &tamarin_term::lterm::LNTerm,
-    subj: &tamarin_term::lterm::LNTerm,
-    pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
-    subst: &mut std::collections::BTreeMap<tamarin_term::lterm::LVar, tamarin_term::lterm::LNTerm>,
-) -> StructMatch {
-    use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::lterm::LSort;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    fn sort_compatible(pat_sort: LSort, subj_sort: LSort) -> bool {
-        // Subject's sort must be the pattern sort or a subsort.
-        // Subsort lattice: Pub < Msg, Fresh < Msg, Nat < Msg,
-        // Node has its own line, Msg < TOP.
-        if pat_sort == subj_sort {
-            return true;
-        }
-        matches!(
-            (pat_sort, subj_sort),
-            (LSort::Msg, LSort::Pub | LSort::Fresh | LSort::Nat)
-        )
-    }
-    // Pairwise left-to-right recursion shared by the `NoEq` and `List`
-    // arms (HS `sequence_ . zipWith match`): equal arity required, first
-    // non-`Matched` outcome wins.
-    fn match_args(
-        p_args: &[tamarin_term::lterm::LNTerm],
-        s_args: &[tamarin_term::lterm::LNTerm],
-        pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
-        subst: &mut std::collections::BTreeMap<
-            tamarin_term::lterm::LVar,
-            tamarin_term::lterm::LNTerm,
-        >,
-    ) -> StructMatch {
-        if p_args.len() != s_args.len() {
-            return StructMatch::NoMatcher;
-        }
-        for (pa, sa) in p_args.iter().zip(s_args.iter()) {
-            match structural_match(pa, sa, pattern_vars, subst) {
-                StructMatch::Matched => {}
-                other => return other,
-            }
-        }
-        StructMatch::Matched
-    }
-    match (pat, subj) {
-        // Pattern-bound var: bindable Maude var.  Mirrors HS
-        // `(_, Lit (Var vp))` (`Unification.hs`) — checked
-        // FIRST, so an AC-headed subject under a pattern var is bound
-        // natively (never `NeedsAc`).  After `skolemizeGuarded`
-        // (System.hs + Guarded.hs) the universal's bound
-        // vars remain `Var`; free system vars become `SkConst`.
-        (Term::Lit(Lit::Var(pv)), _) if pattern_vars.contains(&(pv.name, pv.idx)) => {
-            let subj_sort = tamarin_term::lterm::sort_of_lnterm(subj);
-            if !sort_compatible(pv.sort, subj_sort) {
-                return StructMatch::NoMatcher;
-            }
-            if let Some(existing) = subst.get(pv) {
-                // HS `Just tp | t == tp -> () | otherwise -> NoMatcher`
-                // (Unification.hs).
-                return if existing == subj {
-                    StructMatch::Matched
-                } else {
-                    StructMatch::NoMatcher
-                };
-            }
-            if matches!(subj, Term::Lit(Lit::Var(sv)) if sv == pv) {
-                return StructMatch::Matched;
-            }
-            subst.insert(*pv, subj.clone());
-            StructMatch::Matched
-        }
-        // Non-pattern LVar = SkConst-equivalent: matches only the same
-        // literal LVar on the subject side.  HS `skolemizeAtom` turns
-        // free LVars into `Con (SkConst v)`, so on the pattern side this
-        // is a constant — it falls into HS's `(Lit (Con _), Lit (Con _))`
-        // arm (Unification.hs) which matches iff equal.
-        (Term::Lit(Lit::Var(pv)), Term::Lit(Lit::Var(sv))) => {
-            if pv == sv {
-                StructMatch::Matched
-            } else {
-                StructMatch::NoMatcher
-            }
-        }
-        (Term::Lit(Lit::Con(pn)), Term::Lit(Lit::Con(sn))) => {
-            if pn == sn {
-                StructMatch::Matched
-            } else {
-                StructMatch::NoMatcher
-            }
-        }
-        // HS `(FApp (NoEq tfsym) targs, FApp (NoEq pfsym) pargs)`
-        // (Unification.hs) and the `List` arm:
-        // equal head + arity ⇒ recurse pairwise.  Note: `subj` is HS's
-        // `t` (term/subject), `pat` is HS's `p` (pattern); the head/arity
-        // guard is symmetric so the order here doesn't matter.
-        (Term::App(FunSym::NoEq(pf), p_args), Term::App(FunSym::NoEq(sf), s_args)) => {
-            if pf != sf {
-                return StructMatch::NoMatcher;
-            }
-            match_args(p_args, s_args, pattern_vars, subst)
-        }
-        (Term::App(FunSym::List, p_args), Term::App(FunSym::List, s_args)) => {
-            match_args(p_args, s_args, pattern_vars, subst)
-        }
-        // HS `(FApp (AC _) _, FApp (AC _) _) -> throwError ACProblem`
-        // and `(FApp (C _) _, FApp (C _) _) -> throwError ACProblem`
-        // (Unification.hs): ONLY when BOTH sides are AC-/C-headed.
-        (Term::App(FunSym::Ac(_), _), Term::App(FunSym::Ac(_), _))
-        | (Term::App(FunSym::C(_), _), Term::App(FunSym::C(_), _)) => StructMatch::NeedsAc,
-        // HS `_ -> throwError NoMatcher` (Unification.hs): every
-        // other constructor pairing (incl. AC-vs-NoEq, app-vs-literal,
-        // mismatched AC vs C heads).
-        _ => StructMatch::NoMatcher,
-    }
-}
-
 /// HS `matchAction` (Guarded.hs) for one guard against one system action:
 /// the matchers binding the universal's variables (`pattern_vars`).
 fn match_atom_via_maude(
@@ -1237,61 +966,58 @@ fn match_atom_via_maude(
         return Ok(Vec::new());
     }
 
-    let mut eqs = Vec::new();
-    for (g_arg, sys_term) in g_fact.terms.iter().zip(sys_args.iter()) {
-        eqs.push(tamarin_term::rewriting::Equal {
-            lhs: g_arg.clone(),
-            rhs: sys_term.clone(),
-        });
-    }
-    if eqs.is_empty() {
-        return Ok(vec![LNSubst::from_map(base_subst)]);
-    }
+    // HS `matchFact` (Guarded.hs): one problem over all argument pairs.
+    let pairs = sys_args
+        .iter()
+        .cloned()
+        .zip(g_fact.terms.iter().cloned())
+        .collect();
+    Ok(match_skolemized(maude, pattern_vars, pairs)?
+        .into_iter()
+        .map(|m| {
+            let mut subst = base_subst.clone();
+            subst.extend(m);
+            LNSubst::from_map(subst)
+        })
+        .collect())
+}
 
-    // HS `matchTerms` (Unification.hs): one shared mapping across all pairs,
-    // stopping at the first failure; only an `ACProblem` goes to Maude.
-    let mut struct_subst: std::collections::BTreeMap<
-        tamarin_term::lterm::LVar,
-        tamarin_term::lterm::LNTerm,
-    > = std::collections::BTreeMap::new();
-    let mut outcome = StructMatch::Matched;
-    for eq in &eqs {
-        match structural_match(&eq.lhs, &eq.rhs, pattern_vars, &mut struct_subst) {
-            StructMatch::Matched => {}
-            other => {
-                outcome = other;
-                break;
-            }
-        }
-    }
-    let ms: Vec<Vec<(tamarin_term::lterm::LVar, tamarin_term::lterm::LNTerm)>> = match outcome {
-        StructMatch::Matched => vec![struct_subst.into_iter().collect()],
-        StructMatch::NoMatcher => return Ok(Vec::new()),
-        StructMatch::NeedsAc => {
+/// HS `solveMatchLTerm` on skolemised `(subject, pattern)` pairs
+/// (`matchAction` / `matchTerm`, Guarded.hs): only the universal's variables
+/// (`pattern_vars`) bind, and only an AC problem goes to Maude. Returns each
+/// matcher's bindings of those variables.
+fn match_skolemized(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
+    pairs: Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)>,
+) -> Result<
+    Vec<Vec<(tamarin_term::lterm::LVar, tamarin_term::lterm::LNTerm)>>,
+    crate::prove::ProveError,
+> {
+    use tamarin_term::unification::{solve_match_lterm, MatchOutcome};
+    let bindable = |v: &tamarin_term::lterm::LVar| pattern_vars.contains(&(v.name, v.idx));
+    let problem = tamarin_term::rewriting::Match::DelayedMatches(pairs.clone());
+    match solve_match_lterm(&tamarin_term::lterm::sort_of_name, &bindable, problem) {
+        MatchOutcome::Matched(s) => Ok(vec![s.iter().map(|(v, t)| (*v, t.clone())).collect()]),
+        MatchOutcome::NoMatcher => Ok(Vec::new()),
+        MatchOutcome::NeedsAc => {
+            let eqs: Vec<_> = pairs
+                .into_iter()
+                .map(|(subject, pattern)| tamarin_term::rewriting::Equal {
+                    lhs: pattern,
+                    rhs: subject,
+                })
+                .collect();
             // A Maude failure is an error, never an absent match.
             let matches = maude
                 .match_eqs_skolemize_both(&eqs, pattern_vars)
                 .map_err(|error| crate::prove::ProveError::Maude(error.to_string()))?;
-            if matches.is_empty() {
-                return Ok(Vec::new());
-            }
-            matches
+            Ok(matches
+                .into_iter()
+                .map(|m| m.into_iter().filter(|(v, _)| bindable(v)).collect())
+                .collect())
         }
-    };
-
-    // Keep only the universal's bindings; system variables are skolemised.
-    let mut out: Vec<LNSubst> = Vec::with_capacity(ms.len());
-    for m in ms {
-        let mut subst = base_subst.clone();
-        for (lv, lt) in m {
-            if !pattern_vars.contains(&(lv.name, lv.idx)) {
-                continue;
-            }
-            subst.insert(lv, lt);
-        }
-        out.push(LNSubst::from_map(subst));
     }
-    Ok(out)
 }
 
 /// HS `merge solver candidates` (Simplify.hs) over `(key, payload, node)`
@@ -1342,7 +1068,6 @@ where
                 });
             }
         }
-        node_eqs.retain(|e| e.lhs != e.rhs);
         if !node_eqs.is_empty() || !payload_eqs.is_empty() {
             groups.push((payload_eqs, node_eqs));
         }
@@ -1375,7 +1100,9 @@ where
             SystemOutcome::Linear => groups = rest,
             SystemOutcome::Contradictory => return Ok(SystemOutcome::Contradictory),
             SystemOutcome::Cases(arms) => {
-                return continue_merge_groups(red, arms, rest, solve_payload_eqs);
+                return red.continue_in_arms(arms, |branch| {
+                    merge_candidate_groups(branch, rest, solve_payload_eqs)
+                });
             }
         }
     }
@@ -1403,7 +1130,9 @@ where
         SystemOutcome::Linear => merge_candidate_node_eqs(red, node_eqs)?,
         SystemOutcome::Contradictory => SystemOutcome::Contradictory,
         SystemOutcome::Cases(arms) if node_eqs.is_empty() => SystemOutcome::Cases(arms),
-        SystemOutcome::Cases(arms) => continue_merge_nodes(red, arms, node_eqs)?,
+        SystemOutcome::Cases(arms) => {
+            red.continue_in_arms(arms, |branch| merge_candidate_node_eqs(branch, node_eqs))?
+        }
     })
 }
 
@@ -1416,32 +1145,6 @@ fn merge_candidate_node_eqs(
     }
     let res = red.solve_node_id_eqs(node_eqs);
     complete_solve(red, res)
-}
-
-fn continue_merge_nodes(
-    red: &mut Reduction,
-    arms: Vec<SystemBranch>,
-    node_eqs: &[tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>],
-) -> Result<SystemOutcome, crate::prove::ProveError> {
-    red.continue_in_arms(arms, |branch| merge_candidate_node_eqs(branch, node_eqs))
-}
-
-fn continue_merge_groups<P, F>(
-    red: &mut Reduction,
-    arms: Vec<SystemBranch>,
-    groups: &[MergeGroup<P>],
-    solve_payload_eqs: &F,
-) -> Result<SystemOutcome, crate::prove::ProveError>
-where
-    P: Clone,
-    F: Fn(
-        &mut Reduction,
-        &[tamarin_term::rewriting::Equal<P>],
-    ) -> std::result::Result<SystemOutcome, crate::prove::ProveError>,
-{
-    red.continue_in_arms(arms, |branch| {
-        merge_candidate_groups(branch, groups, solve_payload_eqs)
-    })
 }
 
 /// CR-rule *DG4* (HS `enforceNodeUniqueness`, Simplify.hs): identical Fresh
@@ -1762,7 +1465,9 @@ fn terms_containing_fresh(
 /// premise `Fr(~x)` precedes every non-unifiable node whose premises or
 /// actions contain `~x` (directly or through positive subterms) outside a
 /// reducible symbol, and so does the end of its linear route.
-fn enforce_fresh_ordering_pass(red: &mut Reduction) {
+fn enforce_fresh_ordering_pass(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::constraint::constraints::{LessAtom, Reason};
     use crate::fact::FactTag;
     use tamarin_term::lterm::LVar;
@@ -1784,7 +1489,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
         }
     }
     if suppliers.is_empty() {
-        return;
+        return Ok(SystemOutcome::Linear);
     }
 
     // `newLesses`. The node snapshot is an `Arc` handle, so `insert_less`
@@ -1950,6 +1655,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
             red.changed = ChangeIndicator::Changed;
         }
     }
+    Ok(SystemOutcome::Linear)
 }
 
 /// CR-rules *DG2_1* and *DG3*, HS `enforceEdgeUniqueness` (Simplify.hs): a
@@ -2279,7 +1985,7 @@ fn simp_injective_fact_eq_mon_pass(
             ));
         }
     };
-    match red.insert_formulas(&new_formulas)? {
+    match red.insert_formulas(new_formulas)? {
         SystemOutcome::Linear => insert_lesses(red),
         SystemOutcome::Contradictory => return Ok(SystemOutcome::Contradictory),
         SystemOutcome::Cases(arms) => {
@@ -2317,7 +2023,7 @@ fn reduce_formulas_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::pro
     red.sys.invalidate_max_var_idx_cache();
     red.sys.formulas_mut().retain(|f| !to_decompose.contains(f));
     red.changed = ChangeIndicator::Changed;
-    red.insert_formulas(&to_decompose)
+    red.insert_formulas(to_decompose)
 }
 
 /// HS `simpSubterms` (Simplify.hs) running `simpSubtermStore`
@@ -2387,7 +2093,7 @@ fn propagate_subterm_obvious(
     };
     // `freshLVar "newVar"` for the `ACNewVarD` splits.
     let mut mk_fresh = {
-        let avoid_max = red.fresh_var_baseline();
+        let avoid_max = crate::constraint::solver::reduction::bounds_max(&red.sys);
         red.maude.ensure_above(avoid_max);
         let maude = red.maude.clone();
         move |sort: tamarin_term::lterm::LSort| -> tamarin_term::lterm::LVar {
@@ -2664,7 +2370,7 @@ fn propagate_subterm_obvious(
         red.changed = ChangeIndicator::Changed;
     }
     // `forM_ formulas insertFormula`, in derivation order.
-    red.insert_formulas(&new_formulas)
+    red.insert_formulas(new_formulas)
 }
 
 #[cfg(test)]

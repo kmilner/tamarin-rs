@@ -332,16 +332,6 @@ impl<C: Ord + Clone> LSubstVFresh<C> {
         Subst::from_list(pairs)
     }
 
-    /// HS `freshToFree` (Term/Substitution.hs), drawing indices from
-    /// `alloc_idxs`; the same algorithm as [`Self::fresh_to_free_avoiding`].
-    pub fn fresh_to_free<F: FnMut(u64) -> u64>(
-        &self,
-        alloc_idxs: F,
-    ) -> crate::subst::Subst<C, LVar> {
-        // Every range var is treated as a witness and gets renamed.
-        self.fresh_to_free_avoiding(alloc_idxs)
-    }
-
     /// HS `freshToFreeAvoiding s t = freshToFree s `evalFreshAvoiding` t`
     /// (Term/Substitution.hs): rename every range variable, in order of
     /// image size, with `alloc_idxs` seeded above `t`.

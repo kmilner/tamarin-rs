@@ -23,7 +23,7 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{BVar, LNTerm, LVar, Name};
+use tamarin_term::lterm::{lift_free, BVar, LNTerm, LVar, Name};
 use tamarin_term::subst::Subst;
 use tamarin_term::term::{f_app, map_lits};
 use tamarin_term::vterm::{Lit, VTerm};
@@ -570,30 +570,15 @@ pub fn process_contains<Ann, V, F: FnMut(&Process<Ann, V>) -> bool>(
     p: &Process<Ann, V>,
     mut f: F,
 ) -> bool {
-    let mut found = false;
-    fn walk<Ann, V, F: FnMut(&Process<Ann, V>) -> bool>(
-        p: &Process<Ann, V>,
-        f: &mut F,
-        found: &mut bool,
-    ) {
-        if *found {
-            return;
-        }
-        if f(p) {
-            *found = true;
-            return;
-        }
-        match p {
-            Process::Null(_) => {}
-            Process::Action(_, _, body) => walk(body, f, found),
-            Process::Comb(_, _, l, r) => {
-                walk(l, f, found);
-                walk(r, f, found);
-            }
+    // Pre-order; `||` stops at the first hit.
+    fn walk<Ann, V, F: FnMut(&Process<Ann, V>) -> bool>(p: &Process<Ann, V>, f: &mut F) -> bool {
+        f(p) || match p {
+            Process::Null(_) => false,
+            Process::Action(_, _, body) => walk(body, f),
+            Process::Comb(_, _, l, r) => walk(l, f) || walk(r, f),
         }
     }
-    walk(p, &mut f, &mut found);
-    found
+    walk(p, &mut f)
 }
 
 /// `processAt p pos`: subprocess at position `pos`. Returns `None` if the
@@ -617,9 +602,10 @@ pub fn process_at<'a, Ann, V>(p: &'a Process<Ann, V>, pos: &[i64]) -> Option<&'a
 ///
 /// Order and duplicates are load-bearing: `bindingsAct`/`bindingsComb`
 /// (Sapic/Bindings.hs) apply `nub` (first-occurrence dedup) to this
-/// list, and that ordered list flows into the not-yet-ported
-/// `Typing.mkSubst`, where `mapM freshLVar bvars` (Sapic/Typing.hs)
-/// assigns fresh indices in binding-list order. Do not sort/dedup here.
+/// list, and that ordered list flows into `Typing.mkSubst` (`mk_subst` in
+/// `tamarin-sapic`'s `typing.rs`), where `mapM freshLVar bvars`
+/// (Sapic/Typing.hs) assigns fresh indices in binding-list order. Do not
+/// sort/dedup here.
 pub fn frees_sapic_term(t: &SapicTerm) -> Vec<SapicLVar> {
     tamarin_term::vterm::vars_vterm_in_order(t)
 }
@@ -678,10 +664,7 @@ fn apply_bound_term(
 ) -> VTerm<Name, BVar<SapicLVar>> {
     match t {
         VTerm::Lit(Lit::Var(BVar::Free(v))) => match image(v) {
-            Some(i) => map_lits(&i, &mut |l| match l {
-                Lit::Con(c) => Lit::Con(*c),
-                Lit::Var(w) => Lit::Var(BVar::Free(w.clone())),
-            }),
+            Some(i) => lift_free(&i),
             None => t.clone(),
         },
         VTerm::Lit(_) => t.clone(),

@@ -20,7 +20,7 @@ use tamarin_term::vterm::var_term;
 
 use tamarin_theory::atom::ProtoAtom;
 use tamarin_theory::formula::{
-    for_all_var, formula_frees, lift_free, ProtoFormula, SyntacticLNFormula,
+    formula_frees, lift_free, quantify_vars, ProtoFormula, Quantifier, SyntacticLNFormula,
 };
 use tamarin_theory::sapic::{
     to_lformula, to_ln_fact, to_ln_term, ProcessPosition, SapicAction, SapicLVar, SapicTerm,
@@ -83,6 +83,14 @@ pub(crate) fn base_trans_action(
     // `def_state = State LState p tildex`, `def_state' tx = State LState (p++[1]) tx`
     let mut p1 = p.clone();
     p1.push(1);
+    // `channelIn t = [ChannelIn t | needsAssImmediate]`.
+    let channel_in = |t: &LNTerm| -> Vec<TransAction> {
+        if needs_ass_immediate {
+            vec![TransAction::ChannelIn(t.clone())]
+        } else {
+            vec![]
+        }
+    };
 
     match ac {
         // (Rep): replication (Basetranslation.hs).  Two rules:
@@ -163,14 +171,6 @@ pub(crate) fn base_trans_action(
             let (rules, tx_prime, _) = base_trans_comb(&let_comb, &an_let, p, tildex)?;
             // `t = toLNTerm t'`.
             let t = to_ln_term(msg);
-            // `channelIn ts = [ChannelIn ts | needsAssImmediate]`.
-            let channel_in = |ts: &LNTerm| -> Vec<TransAction> {
-                if needs_ass_immediate {
-                    vec![TransAction::ChannelIn(ts.clone())]
-                } else {
-                    vec![]
-                }
-            };
             match chan {
                 None => {
                     if needs_ass_immediate {
@@ -223,87 +223,51 @@ pub(crate) fn base_trans_action(
                 }
             }
         }
-        // (ChOut (Just tc') t') | secretChannel = Just (AnVar _)
-        // (Basetranslation.hs): the private secret-channel output.
-        SapicAction::ChOut {
-            chan: Some(tc_term),
-            msg,
-        } if an.secret_channel.is_some() => {
-            let tc = to_ln_term(tc_term);
-            let t = to_ln_term(msg);
-            if async_channels {
-                // `[([def_state], [], [Message tc t, def_state' tildex], [])]`.
-                let body: RuleBody = (
-                    vec![lstate(p, &[], tildex)],
-                    vec![],
-                    vec![TransFact::Message(tc, t), lstate(p, &[1], tildex)],
-                    vec![],
-                );
-                Ok((vec![body], tildex.clone()))
-            } else {
-                // `semistate = State LSemiState (p++[1]) tildex`.
-                let semistate = TransFact::State(StateKind::LSemiState, p1.clone(), tildex.clone());
-                let body1: RuleBody = (
-                    vec![lstate(p, &[], tildex)],
-                    vec![],
-                    vec![TransFact::Message(tc.clone(), t.clone()), semistate.clone()],
-                    vec![],
-                );
-                let body2: RuleBody = (
-                    vec![semistate, TransFact::Ack(tc, t)],
-                    vec![],
-                    vec![lstate(p, &[1], tildex)],
-                    vec![],
-                );
-                Ok((vec![body1, body2], tildex.clone()))
-            }
-        }
-        // (ChOut (Just tc') t') | secretChannel = Nothing
-        // (Basetranslation.hs): the public-channel output.
+        // (ChOut (Just tc') t') (Basetranslation.hs): the two guards differ
+        // only in the adversary-injected output rule `([def_state, In tc],
+        // channelIn tc, [Out t, def_state' tildex], [])`, which comes first
+        // and is emitted only when `secretChannel = Nothing`.  Then the
+        // `Message` rule, plus the semistate/`Ack` rule for sync channels.
         SapicAction::ChOut {
             chan: Some(tc_term),
             msg,
         } => {
             let tc = to_ln_term(tc_term);
             let t = to_ln_term(msg);
-            // The adversary-injected output rule: `([def_state, In tc],
-            // channelIn tc, [Out t, def_state' tildex], [])`, with
-            // `channelIn tc = [ChannelIn tc | needsAssImmediate]`.
-            let in_acts: Vec<TransAction> = if needs_ass_immediate {
-                vec![TransAction::ChannelIn(tc.clone())]
-            } else {
-                vec![]
-            };
-            let in_rule: RuleBody = (
-                vec![lstate(p, &[], tildex), TransFact::In(tc.clone())],
-                in_acts,
-                vec![TransFact::Out(t.clone()), lstate(p, &[1], tildex)],
-                vec![],
-            );
+            let mut rules: Vec<RuleBody> = Vec::new();
+            if an.secret_channel.is_none() {
+                rules.push((
+                    vec![lstate(p, &[], tildex), TransFact::In(tc.clone())],
+                    channel_in(&tc),
+                    vec![TransFact::Out(t.clone()), lstate(p, &[1], tildex)],
+                    vec![],
+                ));
+            }
             if async_channels {
-                let msg_rule: RuleBody = (
+                // `([def_state], [], [Message tc t, def_state' tildex], [])`.
+                rules.push((
                     vec![lstate(p, &[], tildex)],
                     vec![],
                     vec![TransFact::Message(tc, t), lstate(p, &[1], tildex)],
                     vec![],
-                );
-                Ok((vec![in_rule, msg_rule], tildex.clone()))
+                ));
             } else {
+                // `semistate = State LSemiState (p++[1]) tildex`.
                 let semistate = TransFact::State(StateKind::LSemiState, p1.clone(), tildex.clone());
-                let msg_rule: RuleBody = (
+                rules.push((
                     vec![lstate(p, &[], tildex)],
                     vec![],
                     vec![TransFact::Message(tc.clone(), t.clone()), semistate.clone()],
                     vec![],
-                );
-                let ack_rule: RuleBody = (
+                ));
+                rules.push((
                     vec![semistate, TransFact::Ack(tc, t)],
                     vec![],
                     vec![lstate(p, &[1], tildex)],
                     vec![],
-                );
-                Ok((vec![in_rule, msg_rule, ack_rule], tildex.clone()))
+                ));
             }
+            Ok((rules, tildex.clone()))
         }
         // (ChOut Nothing t): `[([def_state], [], [def_state' tildex, Out t], [])]`
         SapicAction::ChOut { chan: None, msg } => {
@@ -806,9 +770,8 @@ pub(crate) fn ln_term_vars(t: &LNTerm) -> BTreeSet<LVar> {
 fn let_else_restriction(t1: &LNTerm, t2: &LNTerm, freevars: &BTreeSet<LVar>) -> SyntacticLNFormula {
     let eq = ProtoFormula::Atom(ProtoAtom::EqE(lift_free(t1), lift_free(t2)));
     let fa = eq.implies(ProtoFormula::lfalse());
-    freevars.iter().rev().fold(fa, |body, v| {
-        for_all_var((v.name.to_string(), v.sort), v, body)
-    })
+    let vs: Vec<LVar> = freevars.iter().copied().collect();
+    quantify_vars(Quantifier::All, &vs, fa)
 }
 
 /// `toLNFact (protoFact Linear "Eq" [t1, t2])` (Basetranslation.hs): build

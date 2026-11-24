@@ -21,8 +21,8 @@ use tamarin_utils::fresh::{FastFreshState, MonadFresh};
 use crate::atom::{map_atom, ProtoAtom};
 use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
 use crate::formula::{
-    apply_macro_in_formula, for_all_var, formula_frees, formula_frees_list, traverse_formula_atom,
-    BLNTerm, LNFormula, ProtoFormula,
+    apply_macro_in_formula, formula_frees, formula_frees_list, quantify_vars,
+    traverse_formula_atom, BLNTerm, LNFormula, ProtoFormula, Quantifier,
 };
 
 /// `ProtoRestriction f` from the Haskell version. We keep it generic to
@@ -200,9 +200,7 @@ pub fn from_rule_restriction(rname: &str, f: &LNFormula) -> (Restriction, LNFact
     );
     let body = ProtoFormula::Atom(ProtoAtom::Action(var_term(BVar::Free(var_now())), fact))
         .implies(rewritten);
-    let formula = formula_frees(&body).iter().rev().fold(body, |acc, v| {
-        for_all_var((v.name.to_string(), v.sort), v, acc)
-    });
+    let formula = quantify_vars(Quantifier::All, &formula_frees(&body), body);
     let restriction = Restriction {
         name: format!("{RESTR_PREFIX}{rname}"),
         formula,

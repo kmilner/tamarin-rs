@@ -177,7 +177,7 @@ pub fn proof_status(node: &ProofNode) -> ProofStatus {
 ///
 /// The systems only survive a `--prove` run when its proof context uses at
 /// least [`KeepSolved`](SysRetention::KeepSolved); on the stored-proof
-/// replay path (`replay::check_and_extend_lemma_in_session`) they are
+/// replay path (`prove::check_and_extend_lemma_in_session`) they are
 /// always live.
 ///
 /// The tree is taken BY VALUE: the only caller reaches here once the proof
@@ -206,10 +206,6 @@ fn collect_solved_systems_owned(
     }
 }
 
-// --- Cached kill-switch / debug env flags -------------------------------
-// `expand`/`expand_inner` run once per proof-tree node (thousands of
-// times per lemma); these env vars are constant for the process, so cache
-// each behind a `OnceLock<bool>` (mirroring `trace::flag()`).
 /// How much of a proof tree keeps its per-node constraint `System` once
 /// [`expand`] has returned. Each proof context owns the policy because the
 /// three front ends want three different answers:
@@ -1181,8 +1177,7 @@ fn rank_proof_methods(
     if check_finished && let Some(r) = is_finished(ctx, sys)? {
         return Ok(vec![(ProofMethod::Finished(r), None)]);
     }
-    let Some(goals) = crate::constraint::solver::goals::rank_goals_with(sys, Some(ctx), depth)?
-    else {
+    let Some(goals) = crate::constraint::solver::goals::rank_goals_with(sys, ctx, depth)? else {
         return Ok(vec![(
             ProofMethod::Sorry(Some("Oracle ranked no proof methods".into())),
             None,
@@ -1213,24 +1208,12 @@ fn rank_proof_methods(
 }
 
 /// The candidate proof methods at this node, in [`rank_proof_methods`]
-/// order. The web display and apply paths call this directly; an
-/// accountability `⊤` VC lemma's root, for example, has `contradiction` as
-/// its only method.
-pub fn candidate_methods(
-    sys: &System,
-    ctx: &ProofContext,
-    depth: usize,
-) -> Result<Vec<ProofMethod>, ProveError> {
-    Ok(rank_proof_methods(sys, ctx, depth, true)?
-        .into_iter()
-        .map(|(method, _)| method)
-        .collect())
-}
-
-/// [`candidate_methods`] with the explanation HS's `rankProofMethods`
-/// attaches to each method, rendered by `subProofSnippet`'s `prettyPM` as a
-/// `// <expl>` comment: `""` except for a `SolveGoal`, which gets
-/// `"nr. " ++ show nr ++ sourceRule ++ usefulnessSuffix`.
+/// order, each with the explanation HS's `rankProofMethods` attaches,
+/// rendered by `subProofSnippet`'s `prettyPM` as a `// <expl>` comment:
+/// `""` except for a `SolveGoal`, which gets
+/// `"nr. " ++ show nr ++ sourceRule ++ usefulnessSuffix`. The web display
+/// and apply paths call this directly; an accountability `⊤` VC lemma's
+/// root, for example, has `contradiction` as its only method.
 pub fn candidate_methods_with_expl(
     sys: &System,
     ctx: &ProofContext,

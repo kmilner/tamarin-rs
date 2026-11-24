@@ -33,8 +33,8 @@
 use tamarin_term::pretty::{pretty_lnterm, pretty_nterm};
 
 use crate::constraint::constraints::Goal;
-use crate::constraint::system::{SourceKind, System};
-use crate::fact::{fact_tag_name, LNFact};
+use crate::constraint::system::{formulas_in_set_order, SourceKind, System};
+use crate::fact::{show_fact_annotation, show_fact_tag, LNFact};
 use crate::guarded::Guarded;
 use crate::pretty_formula::guarded_doc;
 use crate::pretty_hpj::{fsep, numbered_prime, punctuate, vcat, vsep, Doc};
@@ -112,8 +112,7 @@ fn pretty_formula_set(items: &[std::sync::Arc<Guarded>]) -> Doc {
     if items.is_empty() {
         return Doc::Empty;
     }
-    let mut sorted: Vec<&Guarded> = items.iter().map(|f| f.as_ref()).collect();
-    sorted.sort();
+    let mut sorted = formulas_in_set_order(items);
     sorted.dedup();
     vsep(sorted.into_iter().map(guarded_doc).collect())
 }
@@ -415,31 +414,17 @@ fn pretty_source_kind(sk: Option<SourceKind>) -> &'static str {
 /// The flat form here is for the env-gated debug dumps in
 /// `constraint::solver::context`, where one fact per line is the point.
 pub fn pretty_fact(fa: &LNFact) -> String {
-    use crate::fact::{fact_tag_multiplicity, FactAnnotation, Multiplicity};
-    // Matches Haskell `showFactTag` (Theory/Model/Fact.hs): the `!` prefix is
-    // applied to any tag whose `factTagMultiplicity` is `Persistent`,
-    // which includes KU/KD as well as persistent proto facts.
-    let prefix = if fact_tag_multiplicity(&fa.tag) == Multiplicity::Persistent {
-        "!"
-    } else {
-        ""
-    };
-    let name = fact_tag_name(&fa.tag);
     let args: Vec<String> = fa.terms.iter().map(pretty_lnterm).collect();
-    let base = format!("{}{}({})", prefix, name, args.join(", "));
-    // Matches Haskell `ppAnn` (Theory/Model/Fact.hs): when annotations are
-    // present, append `[a1, a2]` using `showFactAnnotation` for each.
+    let base = format!("{}({})", show_fact_tag(&fa.tag), args.join(", "));
+    // Haskell `ppAnn` (Theory/Model/Fact.hs): when annotations are present,
+    // append `[a1, a2]` using `showFactAnnotation` for each.
     if fa.annotations.is_empty() {
         base
     } else {
         let anns: Vec<&str> = fa
             .annotations
             .iter()
-            .map(|a| match a {
-                FactAnnotation::SolveFirst => "+",
-                FactAnnotation::SolveLast => "-",
-                FactAnnotation::NoSources => "no_precomp",
-            })
+            .map(|a| show_fact_annotation(*a))
             .collect();
         format!("{}[{}]", base, anns.join(", "))
     }

@@ -518,7 +518,7 @@ impl<'a> TheoryPipeline<'a> {
         if timeout.is_enabled() {
             self.marker("Derivation checks started");
             if let Some(maude) = self.maude.as_ref() {
-                let report = tamarin_theory::deriv_check::check_message_derivation_with_pool(
+                let report = tamarin_theory::deriv_check::check_message_derivation(
                     &self.theory,
                     maude,
                     self.maude_pool.as_ref(),

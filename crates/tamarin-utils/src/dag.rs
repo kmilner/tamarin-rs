@@ -48,10 +48,22 @@ pub fn cyclic<T: Ord + Clone>(rel: &Relation<T>) -> bool {
     for (a, b) in rel {
         adj.entry(a.clone()).or_default().push(b.clone());
     }
+    cyclic_from(adj.keys(), &|n| adj.get(n).map_or(&[][..], Vec::as_slice))
+}
 
-    fn visit<T: Ord + Clone>(
+/// [`cyclic`] over a relation already held as successor lists.
+pub fn cyclic_adj<T: Ord + Clone + std::hash::Hash>(adj: &crate::FastMap<T, Vec<T>>) -> bool {
+    cyclic_from(adj.keys(), &|n| adj.get(n).map_or(&[][..], Vec::as_slice))
+}
+
+/// Depth-first cycle search from every root, following `succs`.
+fn cyclic_from<'a, T: Ord + Clone + 'a>(
+    roots: impl Iterator<Item = &'a T>,
+    succs: &dyn Fn(&T) -> &'a [T],
+) -> bool {
+    fn visit<'a, T: Ord + Clone>(
         node: &T,
-        adj: &BTreeMap<T, Vec<T>>,
+        succs: &dyn Fn(&T) -> &'a [T],
         color: &mut BTreeMap<T, u8>,
     ) -> bool {
         match color.get(node).copied().unwrap_or(0) {
@@ -60,11 +72,9 @@ pub fn cyclic<T: Ord + Clone>(rel: &Relation<T>) -> bool {
             _ => {}
         }
         color.insert(node.clone(), 1);
-        if let Some(succs) = adj.get(node) {
-            for succ in succs {
-                if visit(succ, adj, color) {
-                    return true;
-                }
+        for succ in succs(node) {
+            if visit(succ, succs, color) {
+                return true;
             }
         }
         color.insert(node.clone(), 2);
@@ -72,8 +82,8 @@ pub fn cyclic<T: Ord + Clone>(rel: &Relation<T>) -> bool {
     }
 
     let mut color = BTreeMap::new();
-    for node in adj.keys() {
-        if color.get(node).copied().unwrap_or(0) == 0 && visit(node, &adj, &mut color) {
+    for node in roots {
+        if color.get(node).copied().unwrap_or(0) == 0 && visit(node, succs, &mut color) {
             return true;
         }
     }

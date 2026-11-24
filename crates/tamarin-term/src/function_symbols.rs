@@ -493,10 +493,10 @@ pub const LIST_SYM_STRING: &[u8] = b"List";
 
 // -- Predefined NoEq symbols --------------------------------------------------
 
-fn pub_ctor(name: &[u8], arity: usize) -> NoEqSym {
+pub(crate) fn pub_ctor(name: &[u8], arity: usize) -> NoEqSym {
     NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor)
 }
-fn priv_ctor(name: &[u8], arity: usize) -> NoEqSym {
+pub(crate) fn priv_ctor(name: &[u8], arity: usize) -> NoEqSym {
     NoEqSym::new(name, arity, Privacy::Private, Constructability::Constructor)
 }
 

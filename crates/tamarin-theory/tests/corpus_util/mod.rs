@@ -11,24 +11,14 @@ use tamarin_parser::ast as p;
 use tamarin_theory::theory::Theory;
 
 pub use common::{
-    beyond_budget, corpus_root, parse_file, rel, spthy_files, EXPECTED_LOAD_SKIPS, SKIP_ELAB,
-    SKIP_LISTED, SKIP_PARSE,
+    beyond_budget, parse_file, rel, spthy_files, EXPECTED_LOAD_SKIPS, SKIP_ELAB, SKIP_LISTED,
+    SKIP_PARSE,
 };
 
 /// The corpus root and its `.spthy` files, with an explicit opt-out when the
 /// examples submodule is unavailable.
 pub fn corpus_files(label: &str) -> Option<(PathBuf, Vec<PathBuf>)> {
-    let root = corpus_root();
-    if !root.is_dir() {
-        if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
-            eprintln!("{label}: root {} missing, skipped", root.display());
-            return None;
-        }
-        panic!(
-            "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
-            root.display()
-        );
-    }
+    let root = common::corpus_root_or_skip(label)?;
     let files = spthy_files(&root);
     Some((root, files))
 }

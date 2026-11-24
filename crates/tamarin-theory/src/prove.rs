@@ -545,14 +545,6 @@ struct PreparedLemma {
     heuristic: Option<Vec<crate::constraint::solver::goals::GoalRanking>>,
 }
 
-impl PreparedLemma {
-    fn ranking_may_fail(&self) -> bool {
-        self.heuristic
-            .as_deref()
-            .is_some_and(crate::constraint::solver::goals::rankings_may_fail)
-    }
-}
-
 /// Frontend policy for one shared prover session.
 pub struct ProverSessionOptions {
     pub maude_pool: Option<std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
@@ -912,12 +904,6 @@ impl ProverSession {
             .ok_or_else(|| ProveError::LemmaNotFound(lemma_name.to_string()))
     }
 
-    /// Whether this lemma's selected ranking can fail when auto-proved.
-    pub fn lemma_ranking_may_fail(&self, lemma_name: &str) -> bool {
-        self.lemma_and_prepared(lemma_name)
-            .is_ok_and(|(_, prepared)| prepared.ranking_may_fail())
-    }
-
     /// Build the structural per-lemma context used by batch and web replay.
     /// Constructing the context does not force its sources.
     pub fn context_for_lemma(&self, lemma_name: &str) -> Result<ProofContext, ProveError> {
@@ -1196,28 +1182,6 @@ pub fn check_and_extend_lemma_in_session(
     )
 }
 
-/// Run interactive autoproof from the system at the selected proof node.
-/// The lemma supplies the heuristic, induction setting, and source kind, as in
-/// [`prove_lemma_in_session`]. Search starts from `sys` with a fresh proof tree.
-pub fn prove_system_in_session(
-    session: &ProverSession,
-    lemma_name: &str,
-    sys: crate::constraint::system::System,
-    proof_bound: usize,
-) -> Result<ProofNode, ProveError> {
-    prove_system_in_session_with_options(
-        session,
-        lemma_name,
-        sys,
-        SearchOptions {
-            proof_bound,
-            ranking_depth_offset: 0,
-            cut: session.cut,
-            oracle_only: false,
-        },
-    )
-}
-
 /// Prove a focused system with request-local search policy.
 pub fn prove_system_in_session_with_options(
     session: &ProverSession,
@@ -1262,7 +1226,7 @@ fn prove_lemma_in_session_mode(
         // ProofSkeleton.hs) — an
         // annotated Sorry at the lemma's start system (the node carries
         // the start system, so it renders as plain `by sorry`).
-        return Ok(crate::replay::annotated_sorry_root(sys));
+        return Ok(crate::replay::sorry_node(None, sys, []));
     }
     run_proof_search_at_depth(&ctx, sys, proof_bound, 0)
 }

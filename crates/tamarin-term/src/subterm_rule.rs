@@ -96,19 +96,10 @@ pub fn find_all_subterms(l: &LNTerm, r: &LNTerm) -> Option<Vec<Position>> {
 fn subterms(args: &[LNTerm]) -> Vec<Position> {
     let mut out = Vec::new();
     for (k, t) in args.iter().enumerate() {
-        // Remaining siblings first, at their true indices k+1, k+2, …
-        for (off, y) in args[k + 1..].iter().enumerate() {
-            let x = (k + 1 + off) as i64;
-            for mut p in find_subterm(y, t) {
-                let mut full = Vec::with_capacity(1 + p.len());
-                full.push(x);
-                full.append(&mut p);
-                out.push(full);
-            }
-        }
-        // Then the already-processed siblings, at indices 0 .. k-1.
-        for (x, y) in args[..k].iter().enumerate() {
-            for mut p in find_subterm(y, t) {
+        // Remaining siblings first, at their true indices k+1, k+2, …, then
+        // the already-processed siblings, at indices 0 .. k-1.
+        for x in (k + 1..args.len()).chain(0..k) {
+            for mut p in find_subterm(&args[x], t) {
                 let mut full = Vec::with_capacity(1 + p.len());
                 full.push(x as i64);
                 full.append(&mut p);

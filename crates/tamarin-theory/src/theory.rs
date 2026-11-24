@@ -289,7 +289,7 @@ pub struct ProofTree {
 
 /// A lemma's stored proof.  `None` is a lemma written without one, which HS
 /// gives the one-node `unproven ()` skeleton
-/// (Theory/ProofSkeleton.hs); `prove::replace_sorry_prove` (HS
+/// (Theory/ProofSkeleton.hs); `replay::replace_sorry_prove` (HS
 /// `replaceSorryProver`, Theory/Proof.hs) walks the tree at
 /// proof-replay time and invokes the auto-prover only at `sorry` leaves.
 pub type ProofSkeleton = Option<ProofTree>;
@@ -724,29 +724,6 @@ pub fn contains_manual_rule_variants(items: &[TheoryItem<MergedProtoRule>]) -> b
     items
         .iter()
         .any(|i| matches!(i, TheoryItem::Rule(r) if !r.rule_ac.is_empty()))
-}
-
-/// [`contains_manual_rule_variants`] of [`merge_open_proto_rules`]`(items)`,
-/// without building the merged items: a merged item's AC rules are the union
-/// of those its rules open with ([`open_proto_rule`]), so it carries one
-/// exactly when one of its rules opens with one.  It compares what
-/// [`closed_rules_ac`] would build, without building it: each written member
-/// under its own name, else the AC body under the rule's name.
-pub fn merged_contain_manual_rule_variants(items: &[TheoryItem<OpenProtoRule>]) -> bool {
-    use crate::rule::same_fact_tags;
-    items.iter().any(|i| {
-        let TheoryItem::Rule(r) = i else {
-            return false;
-        };
-        let e = r.rule_e();
-        if r.rule_ac.is_empty() {
-            r.rule.info.name != e.info.name || !same_fact_tags(r.ac_body(), e)
-        } else {
-            r.rule_ac
-                .iter()
-                .any(|ac| ac.info.name != e.info.name || !same_fact_tags(ac, e))
-        }
-    })
 }
 
 #[cfg(test)]

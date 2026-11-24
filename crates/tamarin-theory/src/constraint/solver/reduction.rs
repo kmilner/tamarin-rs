@@ -741,18 +741,6 @@ impl<'ctx> Reduction<'ctx> {
         }
     }
 
-    /// Compute a fresh-var baseline — the max var idx across all vars in
-    /// nodes' rules, stored & solved formulas, lemmas, edges, less-atoms,
-    /// subterm store, goals and the eq-store substitution (everything
-    /// folded by `bounds_max`/`bounds_max_uncached`, which already includes
-    /// `formulas.chain(solved_formulas).chain(lemmas)` via `max_var_idx`).
-    ///
-    /// Returns the plain max — no extra headroom is added. Used by `Ex`
-    /// decomposition to pick fresh var indices.
-    pub fn fresh_var_baseline(&self) -> u64 {
-        bounds_max(&self.sys)
-    }
-
     /// HS `insertAtom` (Reduction.hs):
     ///
     /// - `EqE(x, y)`     → `solveTermEqs SplitNow`
@@ -861,11 +849,10 @@ impl<'ctx> Reduction<'ctx> {
     /// over every equality branch.
     pub(crate) fn insert_formulas(
         &mut self,
-        formulas: &[Guarded],
+        formulas: Vec<Guarded>,
     ) -> Result<SystemOutcome, crate::prove::ProveError> {
         let formulas = formulas
-            .iter()
-            .cloned()
+            .into_iter()
             .map(crate::guarded::normalise_stored_formula_owned)
             .collect::<Vec<_>>();
         self.insert_formula_sequence(&formulas, true)
@@ -1382,23 +1369,16 @@ impl<'ctx> Reduction<'ctx> {
                     ))
                 }
             }
-            (Some(id), SplitStrategy::SplitLater) => {
-                // No split fanout — simp once on the combined store.
+            (split, _) => {
+                // No split fanout: simp once on the combined store, and
+                // record a deferred split as a goal.
                 self.sys.invalidate_max_var_idx_cache();
                 self.sys.set_eq_store(std::sync::Arc::new(do_simp(store)?));
                 if self.sys.eq_store().is_false() {
                     return Ok(SystemOutcome::Contradictory);
                 }
-                self.insert_goal(crate::constraint::constraints::Goal::Split(id));
-                self.changed = ChangeIndicator::Changed;
-                Ok(SystemOutcome::Linear)
-            }
-            (None, _) => {
-                // No split — simp once.
-                self.sys.invalidate_max_var_idx_cache();
-                self.sys.set_eq_store(std::sync::Arc::new(do_simp(store)?));
-                if self.sys.eq_store().is_false() {
-                    return Ok(SystemOutcome::Contradictory);
+                if let Some(id) = split {
+                    self.insert_goal(crate::constraint::constraints::Goal::Split(id));
                 }
                 self.changed = ChangeIndicator::Changed;
                 Ok(SystemOutcome::Linear)
@@ -1488,19 +1468,16 @@ impl<'ctx> Reduction<'ctx> {
         //  ++ map (fmap (get rActs)) eqs`, i.e. ALL conclusions across every
         // eq, THEN all premises, THEN all actions (a batch transpose, not a
         // per-eq conc/prem/act interleave).
-        let mut conc_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
-        let mut prem_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
-        let mut act_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
+        let mut fact_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> = Vec::new();
         for e in eqs {
-            flatten_list_eq(&e.lhs.conclusions, &e.rhs.conclusions, &mut conc_eqs);
-            flatten_list_eq(&e.lhs.premises, &e.rhs.premises, &mut prem_eqs);
-            flatten_list_eq(&e.lhs.actions, &e.rhs.actions, &mut act_eqs);
+            flatten_list_eq(&e.lhs.conclusions, &e.rhs.conclusions, &mut fact_eqs);
         }
-        let mut fact_eqs: Vec<tamarin_term::rewriting::Equal<crate::fact::LNFact>> =
-            Vec::with_capacity(conc_eqs.len() + prem_eqs.len() + act_eqs.len());
-        fact_eqs.append(&mut conc_eqs);
-        fact_eqs.append(&mut prem_eqs);
-        fact_eqs.append(&mut act_eqs);
+        for e in eqs {
+            flatten_list_eq(&e.lhs.premises, &e.rhs.premises, &mut fact_eqs);
+        }
+        for e in eqs {
+            flatten_list_eq(&e.lhs.actions, &e.rhs.actions, &mut fact_eqs);
+        }
         self.solve_fact_eqs(strategy, &fact_eqs)
     }
 
@@ -1575,21 +1552,7 @@ impl<'ctx> Reduction<'ctx> {
             if matches!(g, crate::constraint::constraints::Goal::Split(_)) {
                 continue;
             }
-            // HS `insertGoalStatus` runs `succ sNextGoalNr` on EVERY
-            // non-split goal — even when the goal key already exists,
-            // where `insertWith combineGoalStatus` keeps the smaller nr.
-            // Route both the new and the already-present case through
-            // `add_goal_with_loop_flag` so the counter advances
-            // unconditionally, keeping RS's `next_goal_nr` (and the
-            // goalNrRanking tie-break) aligned with HS on every conjoin
-            // that hits a shared goal.
-            // Then OR-in `solved` (combineGoalStatus) on the matching slot.
-            self.sys.add_goal_with_loop_flag(g.clone(), st.looping);
-            if st.solved
-                && let Some((_, slot)) = self.sys.goals_mut().iter_mut().find(|(eg, _)| eg == g)
-            {
-                slot.solved = true;
-            }
+            self.sys.insert_goal_status(g.clone(), st.clone());
         }
         // 7. insertFormula, decomposing each formula by the CR-rules.
         let formulas = sys
@@ -1597,7 +1560,7 @@ impl<'ctx> Reduction<'ctx> {
             .iter()
             .map(|formula| formula.as_ref().clone())
             .collect::<Vec<_>>();
-        match self.insert_formulas(&formulas)? {
+        match self.insert_formulas(formulas)? {
             SystemOutcome::Linear => self.conjoin_system_tail(sys),
             SystemOutcome::Contradictory => Ok(SystemOutcome::Contradictory),
             SystemOutcome::Cases(inputs) => {
@@ -2000,7 +1963,7 @@ pub fn avoid_fresh_state(sys: &System) -> u64 {
 /// This is the dominant cost of `bounds_max`, cached separately in
 /// `System::node_max_cache` so the ~82 non-node mutation sites (which
 /// clear only the full cache) don't force a re-walk of the node map.
-pub fn bounds_max_nodes(sys: &System) -> u64 {
+fn bounds_max_nodes(sys: &System) -> u64 {
     let mut max = 0u64;
     for (id, rule) in sys.nodes.iter() {
         bm_lvar(id, &mut max);
@@ -2009,11 +1972,10 @@ pub fn bounds_max_nodes(sys: &System) -> u64 {
     max
 }
 
-/// Full-walk implementation of `bounds_max` — bypass for the cache.
-/// Kept as the exact `max(nodes, rest)` full walk so the verify path
-/// (`TAM_RS_VERIFY_BOUNDS_CACHE`) and the cache-disabled path stay
-/// byte-faithful.
-pub fn bounds_max_uncached(sys: &System) -> u64 {
+/// Full-walk `bounds_max` that bypasses the caches; tests compare the
+/// cached value against it.
+#[cfg(test)]
+pub(crate) fn bounds_max_uncached(sys: &System) -> u64 {
     bounds_max_nodes(sys).max(bounds_max_rest(sys))
 }
 
@@ -2022,7 +1984,7 @@ pub fn bounds_max_uncached(sys: &System) -> u64 {
 /// `bounds_max` miss (these fields are cheap relative to nodes and are
 /// mutated by the majority of call sites, so caching them separately
 /// would not pay off).
-pub fn bounds_max_rest(sys: &System) -> u64 {
+fn bounds_max_rest(sys: &System) -> u64 {
     let mut max = 0u64;
     for e in &sys.edges {
         bm_lvar(&e.src.0, &mut max);
@@ -2220,26 +2182,37 @@ fn is_product_or_union(t: &tamarin_term::lterm::LNTerm) -> bool {
     )
 }
 
-fn ku_decomp_subterms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<tamarin_term::lterm::LNTerm>> {
+/// The terms a `KU` action on `t` decomposes into (HS `insertAction`):
+/// the components of a pair, inverse, product or multiset union.
+pub(crate) fn ku_decomp_args(
+    t: &tamarin_term::lterm::LNTerm,
+) -> Option<&[tamarin_term::lterm::LNTerm]> {
     use tamarin_term::function_symbols::{AcSym, FunSym, INV_SYM_STRING};
     use tamarin_term::term::Term;
     match t {
-        Term::App(FunSym::NoEq(s), args) if s.name == b"pair" && args.len() == 2 => {
-            Some(args.to_vec())
+        Term::App(FunSym::NoEq(s), args)
+            if (s.name == b"pair" && args.len() == 2)
+                || (s.name == INV_SYM_STRING && args.len() == 1) =>
+        {
+            Some(args)
         }
-        Term::App(FunSym::NoEq(s), args) if s.name == INV_SYM_STRING && args.len() == 1 => {
-            Some(args.to_vec())
-        }
-        // `insertAction` (Reduction.hs) allocates fresh KU nodes in the
-        // term-Ord order exposed by `viewTerm2`. Sort AC decomposition
-        // terms to preserve that allocation order after substitution.
-        Term::App(FunSym::Ac(AcSym::Mult | AcSym::Union), args) => {
-            let mut v = args.to_vec();
-            v.sort();
-            Some(v)
-        }
+        Term::App(FunSym::Ac(AcSym::Mult | AcSym::Union), args) => Some(args),
         _ => None,
     }
+}
+
+/// [`ku_decomp_args`] in allocation order: `insertAction` (Reduction.hs)
+/// allocates the fresh KU nodes in the term-Ord order exposed by
+/// `viewTerm2`, so AC components are sorted.
+fn ku_decomp_subterms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<tamarin_term::lterm::LNTerm>> {
+    let mut args = ku_decomp_args(t)?.to_vec();
+    if matches!(
+        t,
+        tamarin_term::term::Term::App(tamarin_term::function_symbols::FunSym::Ac(_), _)
+    ) {
+        args.sort();
+    }
+    Some(args)
 }
 
 /// Default case-name fallback when callers don't provide a specific

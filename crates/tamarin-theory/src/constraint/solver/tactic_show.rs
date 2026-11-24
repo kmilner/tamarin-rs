@@ -25,45 +25,13 @@
 //! `show (Term (Lit Name (BVar LVar)))` (the `VTerm Name (BVar LVar)` used by
 //! `checkFormula`) therefore renders Var leaves as `Bound i` / `Free <lvar>`.
 
-use tamarin_term::lterm::{LNTerm, LVar};
+use tamarin_term::lterm::LVar;
 use tamarin_term::term::show_term;
 
 use crate::atom::ProtoAtom;
-use crate::fact::{Fact, FactTag, Multiplicity};
+use crate::fact::Fact;
 use crate::formula::BLNTerm;
 use crate::guarded::Guarded;
-
-// =============================================================================
-// `show FactTag` (derived Show, Theory/Model/Fact.hs) — used by isFactName
-// =============================================================================
-
-/// HS derived `show FactTag`.  For `ProtoFact m n a` this is
-/// `ProtoFact <show m> "<n>" <a>`, the multiplicity constructor name and the
-/// name through the `Show String` instance
-/// ([`tamarin_parser::parser::show_lit_string`]).
-pub fn show_fact_tag(t: &FactTag) -> String {
-    match t {
-        FactTag::Proto(m, n, a) => {
-            let mult = match m {
-                Multiplicity::Persistent => "Persistent",
-                Multiplicity::Linear => "Linear",
-            };
-            format!(
-                "ProtoFact {} {} {}",
-                mult,
-                tamarin_parser::parser::show_lit_string(n),
-                a
-            )
-        }
-        FactTag::Fresh => "FreshFact".into(),
-        FactTag::Out => "OutFact".into(),
-        FactTag::In => "InFact".into(),
-        FactTag::Ku => "KUFact".into(),
-        FactTag::Kd => "KDFact".into(),
-        FactTag::Ded => "DedFact".into(),
-        FactTag::Term => "TermFact".into(),
-    }
-}
 
 // =============================================================================
 // checkFormula — the shared engine (Tactics.hs)
@@ -173,55 +141,6 @@ fn show_term_list(args: &[BLNTerm]) -> String {
     out
 }
 
-/// HS `getFactTerms_ goal` for `reasonableNoncesNoise` (Tactics.hs):
-/// the fact terms of an `ActionG _ (Fact { factTerms = ft })`, else `[]`.
-pub(crate) fn action_goal_fact_terms(goal: &crate::constraint::constraints::Goal) -> Vec<LNTerm> {
-    if let crate::constraint::constraints::Goal::Action(_, fa) = goal {
-        fa.terms.to_vec()
-    } else {
-        Vec::new()
-    }
-}
-
-/// Accessor for the single-term action fact used by `isInFactTerms`
-/// (Tactics.hs): `ActionG _ (Fact { factTerms = [test] })`.
-pub(crate) fn action_goal_single_term(
-    goal: &crate::constraint::constraints::Goal,
-) -> Option<&LNTerm> {
-    if let crate::constraint::constraints::Goal::Action(_, fa) = goal
-        && fa.terms.len() == 1
-    {
-        return Some(&fa.terms[0]);
-    }
-    None
-}
-
-/// Accessor pair for `isFactName` (Tactics.hs).  Returns either the
-/// linear ProtoFact NAME (premise case) or the `show FactTag` (action case).
-pub enum FactNameProbe {
-    /// `PremiseG _ Fact{factTag = ProtoFact Linear name _}` => compare `name == s`.
-    PremiseLinearName(String),
-    /// `ActionG _ (Fact{factTag = tag})` => compare `show tag == s`.
-    ActionShowTag(String),
-    /// Neither pattern matches.
-    None,
-}
-
-pub fn fact_name_probe(goal: &crate::constraint::constraints::Goal) -> FactNameProbe {
-    use crate::constraint::constraints::Goal;
-    match goal {
-        Goal::Premise(_, fa) => {
-            if let FactTag::Proto(Multiplicity::Linear, name, _) = &fa.tag {
-                FactNameProbe::PremiseLinearName(name.to_string())
-            } else {
-                FactNameProbe::None
-            }
-        }
-        Goal::Action(_, fa) => FactNameProbe::ActionShowTag(show_fact_tag(&fa.tag)),
-        _ => FactNameProbe::None,
-    }
-}
-
 /// The set of `show`n LVars from `concat (map (checkFormula o) sFormulas)`.
 pub fn sys_reveal_shown(oracle_type: &str, formulas: &[std::sync::Arc<Guarded>]) -> Vec<String> {
     let mut out = Vec::new();
@@ -237,7 +156,7 @@ pub fn sys_reveal_shown(oracle_type: &str, formulas: &[std::sync::Arc<Guarded>])
 mod tests {
     use super::*;
     use tamarin_term::function_symbols::{exp_sym, nat_one_sym, AcSym};
-    use tamarin_term::lterm::{BVar, LSort, Name, NameTag};
+    use tamarin_term::lterm::{BVar, LNTerm, LSort, Name, NameTag};
     use tamarin_term::term::{f_app_ac, f_app_no_eq};
     use tamarin_term::vterm::{const_term, var_term};
 
@@ -247,15 +166,6 @@ mod tests {
 
     fn pub_name(name: &str) -> BLNTerm {
         const_term(Name::new(NameTag::Pub, name))
-    }
-
-    /// The derived `Show FactTag` puts the protocol fact's name through the
-    /// `Show String` instance, so a control character in the name comes out
-    /// as its GHC escape.
-    #[test]
-    fn show_fact_tag_escapes_the_protocol_fact_name() {
-        let tag = FactTag::Proto(Multiplicity::Linear, "a\u{0B}b", 2);
-        assert_eq!(show_fact_tag(&tag), "ProtoFact Linear \"a\\vb\" 2");
     }
 
     /// `show LVar` is `sortPrefix s ++ body`.  Each sort has one prefix; Msg
@@ -305,29 +215,6 @@ mod tests {
             "[exp('g',Free ~s),tone]"
         );
         assert_eq!(show_term_list(&[]), "[]");
-    }
-
-    /// Every arm of the derived `Show FactTag`.  `isFactName` compares
-    /// against this string, and `jgnFactName` writes it out.  A constructor
-    /// with a wrong spelling therefore breaks both the tactic matching and
-    /// `--output-json`, and nothing reports an error.
-    #[test]
-    fn show_fact_tag_covers_every_derived_show_arm() {
-        assert_eq!(
-            show_fact_tag(&FactTag::Proto(Multiplicity::Linear, "Foo", 2)),
-            "ProtoFact Linear \"Foo\" 2"
-        );
-        assert_eq!(
-            show_fact_tag(&FactTag::Proto(Multiplicity::Persistent, "Foo", 0)),
-            "ProtoFact Persistent \"Foo\" 0"
-        );
-        assert_eq!(show_fact_tag(&FactTag::Fresh), "FreshFact");
-        assert_eq!(show_fact_tag(&FactTag::Out), "OutFact");
-        assert_eq!(show_fact_tag(&FactTag::In), "InFact");
-        assert_eq!(show_fact_tag(&FactTag::Ku), "KUFact");
-        assert_eq!(show_fact_tag(&FactTag::Kd), "KDFact");
-        assert_eq!(show_fact_tag(&FactTag::Ded), "DedFact");
-        assert_eq!(show_fact_tag(&FactTag::Term), "TermFact");
     }
 
     /// Every applied-symbol arm of `Show (Term a)` (Term/Raw.hs):

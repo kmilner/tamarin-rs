@@ -25,7 +25,9 @@ use tamarin_theory::pretty_hpj::{self as hpj, Doc};
 use tamarin_theory::wellformedness::WfError;
 
 use tamarin_theory::fact::{fact_tag_arity, fact_tag_name, Fact, LNFact};
-use tamarin_theory::formula::{formula_frees, to_lnformula, BLNTerm, SyntacticLNFormula};
+use tamarin_theory::formula::{
+    formula_facts, formula_frees, to_lnformula, BLNTerm, SyntacticLNFormula,
+};
 use tamarin_theory::predicate::Predicate;
 use tamarin_theory::rule::ProtoRuleE;
 use tamarin_theory::theory::{
@@ -510,10 +512,10 @@ fn case_tests_instantiated_by_pub_vars(thy: &Theory, rules: &[&ProtoRuleE]) -> b
 }
 
 /// HS `caseTestsFacts thy` (Generation.hs): the action facts of every
-/// case test's formula.
-fn case_tests_facts(thy: &Theory) -> Vec<Fact<BLNTerm>> {
+/// case test's formula.  HS `formulaActionFacts` is [`formula_facts`].
+fn case_tests_facts(thy: &Theory) -> Vec<&Fact<BLNTerm>> {
     theory_case_tests(thy)
-        .flat_map(|c| formula::formula_action_facts(&c.formula))
+        .flat_map(|c| formula_facts(&c.formula))
         .collect()
 }
 

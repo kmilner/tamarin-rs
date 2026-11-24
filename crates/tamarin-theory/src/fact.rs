@@ -595,7 +595,7 @@ pub fn lvar_to_lnterm(v: &LVar) -> LNTerm {
 // =============================================================================
 
 /// HS `showFactAnnotation` (Theory/Model/Fact.hs).
-fn show_fact_annotation(a: FactAnnotation) -> &'static str {
+pub(crate) fn show_fact_annotation(a: FactAnnotation) -> &'static str {
     match a {
         FactAnnotation::SolveFirst => "+",
         FactAnnotation::SolveLast => "-",
@@ -606,8 +606,10 @@ fn show_fact_annotation(a: FactAnnotation) -> &'static str {
 /// HS's DERIVED `Show FactTag` (Theory/Model/Fact.hs) — the
 /// constructor spelling [`pretty_fact`] puts after `MALFORMED-`
 /// (Theory/Model/Fact.hs), which is a different string from
-/// [`show_fact_tag`].  A `Proto` name is an identifier, so Haskell's `show`
-/// for its `String` field is the name in double quotes.
+/// [`show_fact_tag`].  For `ProtoFact m n a` this is
+/// `ProtoFact <show m> <show n> <a>`, the name through the `Show String`
+/// instance ([`tamarin_parser::parser::show_lit_string`]).  Also the string
+/// the `isFactName` tactic compares an action goal's tag against.
 pub(crate) fn show_fact_tag_derived(t: &FactTag) -> String {
     match t {
         FactTag::Proto(m, n, arity) => {
@@ -615,7 +617,10 @@ pub(crate) fn show_fact_tag_derived(t: &FactTag) -> String {
                 Multiplicity::Persistent => "Persistent",
                 Multiplicity::Linear => "Linear",
             };
-            format!("ProtoFact {mult} \"{n}\" {arity}")
+            format!(
+                "ProtoFact {mult} {} {arity}",
+                tamarin_parser::parser::show_lit_string(n)
+            )
         }
         FactTag::Fresh => "FreshFact".to_string(),
         FactTag::Out => "OutFact".to_string(),

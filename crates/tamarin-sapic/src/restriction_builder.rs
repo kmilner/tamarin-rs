@@ -9,7 +9,7 @@ use tamarin_term::lterm::{BVar, LSort, LVar};
 use tamarin_term::vterm::var_term;
 use tamarin_theory::atom::ProtoAtom;
 use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
-use tamarin_theory::formula::{exists_var, for_all_var, BLNTerm, LNFormula, ProtoFormula};
+use tamarin_theory::formula::{quantify_vars, BLNTerm, LNFormula, ProtoFormula, Quantifier};
 use tamarin_theory::restriction::Restriction;
 
 pub(crate) fn msg(name: &str) -> LVar {
@@ -45,18 +45,12 @@ pub(crate) fn less(left: LVar, right: LVar) -> LNFormula {
     ProtoFormula::Atom(ProtoAtom::Less(term(left), term(right)))
 }
 
-pub(crate) fn all(vars: &[LVar], mut body: LNFormula) -> LNFormula {
-    for var in vars.iter().rev() {
-        body = for_all_var((var.name.to_string(), var.sort), var, body);
-    }
-    body
+pub(crate) fn all(vars: &[LVar], body: LNFormula) -> LNFormula {
+    quantify_vars(Quantifier::All, vars, body)
 }
 
-pub(crate) fn exists(vars: &[LVar], mut body: LNFormula) -> LNFormula {
-    for var in vars.iter().rev() {
-        body = exists_var((var.name.to_string(), var.sort), var, body);
-    }
-    body
+pub(crate) fn exists(vars: &[LVar], body: LNFormula) -> LNFormula {
+    quantify_vars(Quantifier::Ex, vars, body)
 }
 
 pub(crate) fn restriction(name: impl Into<String>, formula: LNFormula) -> Restriction {

@@ -265,10 +265,19 @@ pub enum MatchOutcome<C> {
 
 /// HS `solveMatchLTerm` (Unification.hs) without the Maude fallback: run
 /// `matchRaw` over all pairs and report the 3-way outcome.
-pub fn solve_match_lterm<C, F>(sort_of_const: &F, problem: Match<LTerm<C>>) -> MatchOutcome<C>
+///
+/// `bindable` stands in for HS skolemisation (`skolemizeTerm`, Guarded.hs):
+/// a pattern variable it rejects is a skolem constant and matches only
+/// itself. Pass `&|_| true` when every pattern variable is bindable.
+pub fn solve_match_lterm<C, F, B>(
+    sort_of_const: &F,
+    bindable: &B,
+    problem: Match<LTerm<C>>,
+) -> MatchOutcome<C>
 where
     C: Ord + Clone,
     F: Fn(&C) -> LSort,
+    B: Fn(&LVar) -> bool,
 {
     // HS `flattenMatch matchProblem` ⇒ `Nothing` means a non-flattenable
     // problem (`MatchFailure`), treated as `[]` — i.e. NoMatcher.
@@ -278,7 +287,7 @@ where
     };
     let mut mapping: BTreeMap<LVar, LTerm<C>> = BTreeMap::new();
     for (term, pattern) in pairs {
-        match match_raw(sort_of_const, &mut mapping, term, pattern) {
+        match match_raw(sort_of_const, bindable, &mut mapping, term, pattern) {
             Ok(()) => {}
             Err(UnifyError::NeedsAC) => return MatchOutcome::NeedsAc,
             Err(UnifyError::NoUnifier) => return MatchOutcome::NoMatcher,
@@ -287,8 +296,9 @@ where
     MatchOutcome::Matched(Subst::from_map(mapping))
 }
 
-fn match_raw<C, F>(
+fn match_raw<C, F, B>(
     sort_of_const: &F,
+    bindable: &B,
     mapping: &mut BTreeMap<LVar, LTerm<C>>,
     t: LTerm<C>,
     p: LTerm<C>,
@@ -296,8 +306,14 @@ fn match_raw<C, F>(
 where
     C: Ord + Clone,
     F: Fn(&C) -> LSort,
+    B: Fn(&LVar) -> bool,
 {
     match p {
+        // A skolemised variable is a constant: HS `(Lit (Con ct), Lit (Con cp))`.
+        Term::Lit(Lit::Var(vp)) if !bindable(&vp) => match t {
+            Term::Lit(Lit::Var(vt)) if vt == vp => Ok(()),
+            _ => Err(UnifyError::NoUnifier),
+        },
         Term::Lit(Lit::Var(vp)) => {
             if let Some(existing) = mapping.get(&vp) {
                 if existing == &t {
@@ -318,7 +334,7 @@ where
         Term::App(FunSym::NoEq(pf), pargs) => match t {
             Term::App(FunSym::NoEq(tf), targs) if tf == pf && targs.len() == pargs.len() => {
                 for (a, b) in targs.iter().cloned().zip(pargs.iter().cloned()) {
-                    match_raw(sort_of_const, mapping, a, b)?;
+                    match_raw(sort_of_const, bindable, mapping, a, b)?;
                 }
                 Ok(())
             }
@@ -327,7 +343,7 @@ where
         Term::App(FunSym::List, pargs) => match t {
             Term::App(FunSym::List, targs) if targs.len() == pargs.len() => {
                 for (a, b) in targs.iter().cloned().zip(pargs.iter().cloned()) {
-                    match_raw(sort_of_const, mapping, a, b)?;
+                    match_raw(sort_of_const, bindable, mapping, a, b)?;
                 }
                 Ok(())
             }

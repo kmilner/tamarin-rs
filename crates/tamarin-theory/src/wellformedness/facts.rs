@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use tamarin_term::lterm::{is_fresh_var, is_msg_var};
 
 use super::{
-    numbered_index_width, quote, show_rule_case_name, thy_proto_rules, underline_topic, WfError,
-    WfReport, WF_LINE_LENGTH, WF_RIBBON,
+    numbered_index_width, quote, show_rule_case_name, thy_proto_rules, underline_topic,
+    wrapped_text, WfError, WfReport,
 };
 use crate::fact::{
     fact_tag_arity, fact_tag_multiplicity, fact_tag_name, is_k_log_fact, is_proto_fact,
@@ -149,12 +149,6 @@ fn theory_facts(thy: &Theory) -> Vec<(String, Vec<FactCell>)> {
     out
 }
 
-/// HS `wrappedText = fsep . map text . words`
-/// (Wellformedness.hs).
-fn wrapped_text(s: &str) -> Doc {
-    hpj::fsep(s.split_whitespace().map(Doc::text).collect())
-}
-
 // =============================================================================
 // Reserved fact names
 // =============================================================================
@@ -217,7 +211,8 @@ fn reserved_report(facts: &[(String, Vec<FactCell>)]) -> WfReport {
         }
         out.push(WfError::new(
             "Reserved names",
-            body.nest(2).render_with(WF_LINE_LENGTH, WF_RIBBON),
+            body.nest(2)
+                .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON),
         ));
     }
     out
@@ -350,7 +345,7 @@ fn fresh_fact_arguments(thy: &Theory) -> WfReport {
             //  <-> prettyLNFact fa` (Wellformedness.hs).
             let body = Doc::text(format!("rule {} fact:", quote(&show_rule_case_name(ru))))
                 .beside_sp(pretty_lnfact(fa))
-                .render_with(WF_LINE_LENGTH, WF_RIBBON);
+                .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
             out.push(WfError::new(
                 "Fr facts must only use a fresh- or a msg-variable",
                 body,
@@ -478,7 +473,7 @@ fn fact_clash_block(
     msg.push_str(
         &hpj::vcat(groups)
             .nest(2)
-            .render_with(WF_LINE_LENGTH, WF_RIBBON),
+            .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON),
     );
     msg.push('\n');
     WfError::new(title, msg)

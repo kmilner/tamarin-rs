@@ -1221,20 +1221,9 @@ impl MaudeHandle {
         // empty matcher or none) is structural equality.  This skips most
         // `match` queries on multiset/natural-number theories.
         if eqs.iter().all(|eq| crate::vterm::is_ground_vterm(&eq.rhs)) {
-            let matched = eqs.iter().all(|eq| eq.lhs == eq.rhs);
-            return Ok(if matched { vec![Vec::new()] } else { vec![] });
+            return Ok(structural_match(eqs));
         }
-        let mut ctx = ConvCtx::new();
-        let mut subjs: Vec<MTerm> = Vec::with_capacity(eqs.len());
-        let mut pats: Vec<MTerm> = Vec::with_capacity(eqs.len());
-        for eq in eqs {
-            subjs.push(lterm_to_mterm_global(&eq.lhs, &mut ctx));
-            pats.push(lterm_to_mterm_global(&eq.rhs, &mut ctx));
-        }
-        let cmd = pp_match_cmd(&pats, &subjs);
-        let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
-        let msubsts = maude_parse::parse_match_reply(&reply, &self.sig)?;
-        convert_reply(&msubsts, &ctx, BackConv::VFree)
+        self.match_query(eqs, false)
     }
 
     /// HS `matchTerm` (Guarded.hs) as `impliedFormulas` (System.hs) uses
@@ -1267,8 +1256,7 @@ impl MaudeHandle {
             }
         }
         if eqs.iter().all(|eq| !has_pattern_var(&eq.lhs, pattern_vars)) {
-            let matched = eqs.iter().all(|eq| eq.lhs == eq.rhs);
-            return Ok(if matched { vec![Vec::new()] } else { vec![] });
+            return Ok(structural_match(eqs));
         }
         // One skolem constant per free variable, shared by both sides.
         let mut free_vars: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
@@ -1284,21 +1272,40 @@ impl MaudeHandle {
                 rhs: rewrite_skolem(&eq.rhs, &skolem_map),
             })
             .collect();
+        Ok(self
+            .match_query(&rewritten_eqs, true)?
+            .into_iter()
+            .map(|sub| unskolemize_subst(sub, &reverse))
+            .collect())
+    }
 
+    /// HS `matchCmd` round trip: `match PATTERN <=? SUBJECT` over `eqs`,
+    /// with `pattern_is_lhs` naming the side of each `Equal` that is the
+    /// pattern.  Each equation converts `lhs` then `rhs`, so the variable
+    /// numbering (and the memoized command) does not depend on that choice.
+    fn match_query(
+        &self,
+        eqs: &[Equal<LNTerm>],
+        pattern_is_lhs: bool,
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         let mut ctx = ConvCtx::new();
-        let mut pats: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
-        let mut subjs: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
-        for eq in &rewritten_eqs {
-            pats.push(lterm_to_mterm_global(&eq.lhs, &mut ctx));
-            subjs.push(lterm_to_mterm_global(&eq.rhs, &mut ctx));
+        let mut pats: Vec<MTerm> = Vec::with_capacity(eqs.len());
+        let mut subjs: Vec<MTerm> = Vec::with_capacity(eqs.len());
+        for eq in eqs {
+            let lhs = lterm_to_mterm_global(&eq.lhs, &mut ctx);
+            let rhs = lterm_to_mterm_global(&eq.rhs, &mut ctx);
+            if pattern_is_lhs {
+                pats.push(lhs);
+                subjs.push(rhs);
+            } else {
+                pats.push(rhs);
+                subjs.push(lhs);
+            }
         }
         let cmd = pp_match_cmd(&pats, &subjs);
         let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
         let msubsts = maude_parse::parse_match_reply(&reply, &self.sig)?;
-        Ok(convert_reply(&msubsts, &ctx, BackConv::VFree)?
-            .into_iter()
-            .map(|sub| unskolemize_subst(sub, &reverse))
-            .collect())
+        convert_reply(&msubsts, &ctx, BackConv::VFree)
     }
 
     /// Get the variants of a term, one substitution per Maude `[variant]`
@@ -1381,6 +1388,16 @@ fn pp_match_cmd(pats: &[MTerm], subjs: &[MTerm]) -> Vec<u8> {
     pp_mterm_list_into(subjs, &mut cmd);
     cmd.extend_from_slice(b" .\n");
     cmd
+}
+
+/// The matcher set when no pattern variable can bind: one empty matcher if
+/// every equation's sides are structurally equal, none otherwise.
+fn structural_match(eqs: &[Equal<LNTerm>]) -> Vec<Vec<(crate::lterm::LVar, LNTerm)>> {
+    if eqs.iter().all(|eq| eq.lhs == eq.rhs) {
+        vec![Vec::new()]
+    } else {
+        vec![]
+    }
 }
 
 /// Build the forward (LVar→skolem `Name`) and reverse (`Name`→LVar) skolem maps

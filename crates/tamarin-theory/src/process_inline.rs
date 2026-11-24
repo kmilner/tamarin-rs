@@ -87,13 +87,13 @@ fn inline_call(
         .collect::<Result<_, _>>()?;
 
     // Convert the formal parameters (HS `fromMaybe [] (get pVars p)`).
-    let params: Vec<SapicLVar> = def.vars.clone().unwrap_or_default();
+    let params: &[SapicLVar] = def.vars.as_deref().unwrap_or_default();
 
     // The body was converted when its definition was read. Any calls it
     // contains were therefore resolved against precisely the earlier
-    // definitions visible there; clone that resolved body rather than
-    // re-reading it against the caller's newer environment.
-    let body = def.body.clone();
+    // definitions visible there; substitute into that resolved body rather
+    // than re-reading it against the caller's newer environment.
+    let body = &def.body;
 
     // Build the parameter substitution with HS's `extend_sup` type-erasure
     // doubling (Theory/Text/Parser/Sapic.hs): a typed formal
@@ -110,7 +110,7 @@ fn inline_call(
     let subst = SapicSubst::from_list(pairs);
 
     // `applyM (substFromList extend_sup) p` — capture-checking substitution.
-    let substituted = apply_m_process(&subst, &body).map_err(|captured| {
+    let substituted = apply_m_process(&subst, body).map_err(|captured| {
         let (v, binder) = match captured {
             Captured::In(v) => (v, "in"),
             Captured::Lookup(v) => (v, "lookup"),

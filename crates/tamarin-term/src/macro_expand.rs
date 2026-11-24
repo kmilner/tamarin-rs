@@ -7,10 +7,10 @@
 //! recursively expands every occurrence of any macro symbol in a term.
 
 use crate::function_symbols::{Constructability, FunSym, NdcState, NoEqSym, Privacy};
-use crate::lterm::{BVar, LNTerm, LVar, Name};
+use crate::lterm::{lift_free, BVar, LVar, Name};
 use crate::subst::{apply_vterm, Subst};
-use crate::term::{f_app, map_lits, Term};
-use crate::vterm::{Lit, VTerm};
+use crate::term::{f_app, Term};
+use crate::vterm::VTerm;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Macro<C, V> {
@@ -51,7 +51,7 @@ pub type BNMacro = Macro<Name, BVar<LVar>>;
 /// variable of the body becomes a `Free` `BVar`, so the macro applies to the
 /// terms of a formula's atoms.  `freeTerm` is a plain functor map
 /// (Term/LTerm.hs) and all of the body's variables land on the same
-/// side of `BVar`'s ordering, so the `f_app` rebuild inside [`map_lits`]
+/// side of `BVar`'s ordering, so the `f_app` rebuild inside [`crate::term::map_lits`]
 /// keeps the AC argument order.
 pub fn ln_macros_to_bn_macros(macros: &[LNMacro]) -> Vec<BNMacro> {
     macros.iter().map(ln_macro_to_bn_macro).collect()
@@ -61,17 +61,8 @@ fn ln_macro_to_bn_macro(m: &LNMacro) -> BNMacro {
     Macro {
         name: m.name.clone(),
         params: m.params.iter().copied().map(BVar::Free).collect(),
-        body: free_term(&m.body),
+        body: lift_free(&m.body),
     }
-}
-
-/// HS `freeTerm` (Term/LTerm.hs): every variable of an `LNTerm` as a
-/// free `BVar`.
-fn free_term(t: &LNTerm) -> VTerm<Name, BVar<LVar>> {
-    map_lits(t, &mut |l| match l {
-        Lit::Con(c) => Lit::Con(*c),
-        Lit::Var(v) => Lit::Var(BVar::Free(*v)),
-    })
 }
 
 /// `macroToFunSym`: synthesise a private destructor `NoEqSym` for a macro

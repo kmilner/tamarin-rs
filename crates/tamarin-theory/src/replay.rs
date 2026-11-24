@@ -60,30 +60,19 @@ pub fn check_and_extend(
     replay_node(ctx, initial, skeleton, proof_bound, false)
 }
 
-/// An annotated `Sorry` leaf: HS `checkProof` annotates the node itself, so
-/// it renders as plain `by sorry`.
-fn annotated_sorry(reason: Option<String>, sys: System) -> ProofNode {
-    ProofNode {
-        method: ProofMethod::Sorry(reason),
-        sys,
-        children: BTreeMap::new(),
-        status: NodeStatus::Sorry,
-        annotated: true,
-    }
-}
-
-/// HS `sorryNode reason cs`: keep the `Sorry` node annotated while mapping
-/// every stored child through `noSystemPrf`.
-fn annotated_sorry_with_children(
+/// HS `sorryNode reason cs` (Theory/Proof.hs): an annotated `Sorry` node,
+/// with every stored child mapped through `noSystemPrf`.  Without children it
+/// renders as plain `by sorry`.
+pub(crate) fn sorry_node<'a>(
     reason: Option<String>,
     sys: System,
-    children: &[(String, ProofTree)],
+    children: impl IntoIterator<Item = (String, &'a ProofTree)>,
 ) -> ProofNode {
     ProofNode {
         method: ProofMethod::Sorry(reason),
         children: children
-            .iter()
-            .map(|(name, child)| (name.clone(), parsed_to_unannotated(child, sys.clone())))
+            .into_iter()
+            .map(|(name, child)| (name, parsed_to_unannotated(child, sys.clone())))
             .collect(),
         sys,
         status: NodeStatus::Sorry,
@@ -92,19 +81,13 @@ fn annotated_sorry_with_children(
 }
 
 /// HS `checkProof` on a step it cannot replay:
-/// `sorryNode (Just "invalid proof step encountered") (M.singleton "" prf)`
-/// over the stored subtree mapped through `noSystemPrf`.
+/// `sorryNode (Just "invalid proof step encountered") (M.singleton "" prf)`.
 fn invalid_step_node(node: &ProofTree, sys: System) -> ProofNode {
-    let child = parsed_to_unannotated(node, sys.clone());
-    let mut children = BTreeMap::new();
-    children.insert("".to_string(), child);
-    ProofNode {
-        method: ProofMethod::Sorry(Some("invalid proof step encountered".into())),
+    sorry_node(
+        Some("invalid proof step encountered".into()),
         sys,
-        children,
-        status: NodeStatus::Sorry,
-        annotated: true,
-    }
+        [(String::new(), node)],
+    )
 }
 
 /// HS `noSystemPrf` (Theory/Proof.hs): the stored subtree with no system
@@ -129,12 +112,6 @@ fn parsed_to_unannotated(node: &ProofTree, sys: System) -> ProofNode {
         status,
         annotated: false,
     }
-}
-
-/// The annotated `sorry` HS keeps for a lemma with no stored proof
-/// (`unproven`, ProofSkeleton.hs).
-pub fn annotated_sorry_root(sys: System) -> ProofNode {
-    annotated_sorry(None, sys)
 }
 
 /// Replay a terminal leaf (`by contradiction`, `SOLVED`, `UNFINISHABLE`).
@@ -191,10 +168,10 @@ fn replay_node_inner(
     // sorry, or keep it with its stored children (`sorryNode reason cs`).
     if let ProofMethod::Sorry(reason) = &node.method {
         if !auto_prove {
-            return Ok(annotated_sorry_with_children(
+            return Ok(sorry_node(
                 reason.clone(),
                 sys,
-                &node.cases,
+                node.cases.iter().map(|(name, child)| (name.clone(), child)),
             ));
         }
         return run_proof_search_at_depth(ctx, sys, proof_bound, 0);
@@ -278,7 +255,7 @@ fn replay_node_inner(
         let auto = if auto_prove {
             run_proof_search_at_depth(ctx, rt_sys, proof_bound, 0)?
         } else {
-            annotated_sorry(None, rt_sys)
+            sorry_node(None, rt_sys, [])
         };
         statuses.push(auto.status);
         children.insert(rt_name, auto);

@@ -61,6 +61,7 @@ use crate::lterm::LVar;
 use crate::subst_vfresh::LNSubstVFresh;
 use crate::term::Term;
 use crate::vterm::{var_term, Lit};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
@@ -69,31 +70,24 @@ use std::collections::BTreeSet;
 /// descend — head is the innermost context label).
 type Occurence = Vec<String>;
 
-/// HS `show` of a non-`NoEq` `FunSym` used as a context label
-/// (`foldFreesOcc f (show o:c) as` for AC/C symbols, LTerm.hs).
-/// Mirrors the derived `Show` for `FunSym`/`ACSym`/`CSym`.
-fn show_funsym_ac_c(sym: &FunSym) -> String {
+/// The context label HS `foldFreesOcc` (LTerm.hs) pushes for a function
+/// symbol: `unpack (fst o)` for a `NoEq` symbol, otherwise the derived `show`
+/// of the `FunSym`.  `List` never reaches `foldFreesOcc` but renders as its
+/// `show` too.
+pub fn occ_label(sym: &FunSym) -> Cow<'static, str> {
     match sym {
+        FunSym::NoEq(o) => String::from_utf8_lossy(o.name),
         FunSym::Ac(a) => match a {
-            AcSym::Union => "AC Union".to_string(),
-            AcSym::Mult => "AC Mult".to_string(),
-            AcSym::Xor => "AC Xor".to_string(),
-            AcSym::NatPlus => "AC NatPlus".to_string(),
+            AcSym::Union => Cow::Borrowed("AC Union"),
+            AcSym::Mult => Cow::Borrowed("AC Mult"),
+            AcSym::Xor => Cow::Borrowed("AC Xor"),
+            AcSym::NatPlus => Cow::Borrowed("AC NatPlus"),
             // Derived `Show` parenthesises the nested constructor
             // application; `show` of the `ACfctSym` tuple follows.
-            AcSym::AcFct(s) => format!("AC (ACfct {})", show_acfct_sym(s)),
+            AcSym::AcFct(s) => Cow::Owned(format!("AC (ACfct {})", show_acfct_sym(s))),
         },
-        FunSym::C(c) => {
-            let name = match c {
-                CSym::EMap => "EMap",
-            };
-            format!("C {}", name)
-        }
-        // `List` and `NoEq` never reach this branch in `foldFreesOcc`
-        // (NoEq has its own arm; `List` does not appear in BP ranges),
-        // but render defensively to match `show`.
-        FunSym::List => "List".to_string(),
-        FunSym::NoEq(o) => String::from_utf8_lossy(o.name).into_owned(),
+        FunSym::C(CSym::EMap) => Cow::Borrowed("C EMap"),
+        FunSym::List => Cow::Borrowed("List"),
     }
 }
 
@@ -121,11 +115,11 @@ fn fold_frees_occ_term(t: &LNTerm, ctx: &Occurence, out: &mut Vec<(LVar, Occuren
     match t {
         Term::Lit(Lit::Var(v)) => out.push((*v, ctx.clone())),
         Term::Lit(_) => {}
-        Term::App(FunSym::NoEq(o), args) => {
+        Term::App(sym @ FunSym::NoEq(_), args) => {
             // `FApp (NoEq o) as -> foldFreesOcc f ((unpack (fst o)):c) as`,
             // then the `[a]` instance prepends each child's `show argIdx`.
             let mut node_ctx = ctx.clone();
-            node_ctx.insert(0, String::from_utf8_lossy(o.name).into_owned());
+            node_ctx.insert(0, occ_label(sym).into_owned());
             for (i, a) in args.iter().enumerate() {
                 let mut arg_ctx = node_ctx.clone();
                 arg_ctx.insert(0, i.to_string());
@@ -136,7 +130,7 @@ fn fold_frees_occ_term(t: &LNTerm, ctx: &Occurence, out: &mut Vec<(LVar, Occuren
             // `FApp o as -> mconcat $ map (foldFreesOcc f (show o:c)) as` —
             // direct map: prepend `show o` ONCE, NO per-child arg index.
             let mut node_ctx = ctx.clone();
-            node_ctx.insert(0, show_funsym_ac_c(sym));
+            node_ctx.insert(0, occ_label(sym).into_owned());
             for a in args.iter() {
                 fold_frees_occ_term(a, &node_ctx, out);
             }

@@ -257,8 +257,13 @@ fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
         crate::fact::k_log_fact(var_term(v)).map_ref(lift_free),
     ));
     let binders = [v, t0, t1];
-    let ours = close_ex(&binders, gen_at.clone().and(k_at.clone())).not();
-    let hs_shaped = close_ex(&binders, ProtoFormula::ltrue().and(gen_at).and(k_at)).not();
+    let ours = quantify_vars(Quantifier::Ex, &binders, gen_at.clone().and(k_at.clone())).not();
+    let hs_shaped = quantify_vars(
+        Quantifier::Ex,
+        &binders,
+        ProtoFormula::ltrue().and(gen_at).and(k_at),
+    )
+    .not();
     assert_eq!(
         crate::guarded::formula_to_guarded(&ours).expect("ours converts"),
         crate::guarded::formula_to_guarded(&hs_shaped).expect("HS shape converts"),

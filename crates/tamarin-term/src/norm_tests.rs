@@ -45,19 +45,6 @@ fn invalid_xor_handles_canonical_and_unsafe_argument_order() {
 }
 
 #[test]
-fn norm_var_skips_maude() {
-    let path = match require_maude_path() {
-        Some(p) => p,
-        None => return,
-    };
-    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let v = LVar::new("x", LSort::Msg, 0);
-    let t: LNTerm = Term::Lit(Lit::Var(v));
-    let n = norm(&h, &t).unwrap();
-    assert_eq!(t, n);
-}
-
-#[test]
 #[allow(non_snake_case)]
 fn nf_via_haskell_detects_inverse_cancellation() {
     let path = match require_maude_path() {
@@ -149,7 +136,7 @@ fn nf_via_haskell_maude_matches_user_ac_strule() {
     // xorr(~k, ~k): matches xorr(x, x) → non-NF (Maude AC match).
     let dup = crate::term::f_app_acfct(xorr, vec![k.clone(), k.clone()]);
     assert!(
-        !nf_via_haskell_maude(&h, &dup),
+        !nf_via_haskell_maude(&h.maude_sig(), &h, &dup),
         "xorr(~k, ~k) must be non-NF via the AC st-rule match"
     );
     // The pure entry point cannot see the Ac-headed rule — documents
@@ -162,13 +149,13 @@ fn nf_via_haskell_maude_matches_user_ac_strule() {
     // (the flattened second rule) → non-NF.
     let dup3 = crate::term::f_app_acfct(xorr, vec![k.clone(), k.clone(), w]);
     assert!(
-        !nf_via_haskell_maude(&h, &dup3),
+        !nf_via_haskell_maude(&h.maude_sig(), &h, &dup3),
         "xorr(~k, ~k, w) must be non-NF via the flattened cancellation rule"
     );
     // xorr(~k, ~na): no duplicate — stays NF.
     let ok = crate::term::f_app_acfct(xorr, vec![k, na]);
     assert!(
-        nf_via_haskell_maude(&h, &ok),
+        nf_via_haskell_maude(&h.maude_sig(), &h, &ok),
         "xorr(~k, ~na) must remain NF"
     );
 }
@@ -228,14 +215,14 @@ fn cross_ac_symbol_strule_never_applies() {
     let k = crate::builtin::fresh_var("k", 0);
     let dup = crate::term::f_app_acfct(yorr, vec![k.clone(), k.clone()]);
     assert!(
-        nf_via_haskell_maude(&h, &dup),
+        nf_via_haskell_maude(&h.maude_sig(), &h, &dup),
         "yorr(~k, ~k) must stay NF — the xorr rule cannot reach it"
     );
     // The yorr rule itself still fires, so the term above is NF because
     // of the AC symbols, not because the st-rule loop went quiet.
     let cancels = crate::term::f_app_acfct(yorr, vec![k, zeroo]);
     assert!(
-        !nf_via_haskell_maude(&h, &cancels),
+        !nf_via_haskell_maude(&h.maude_sig(), &h, &cancels),
         "yorr(~k, zeroo) must be non-NF via its own rule"
     );
     // The pattern is non-ground, so this is a real Maude round-trip and
@@ -330,12 +317,12 @@ fn bare_variable_strule_lhs_never_reduces_builtin_ac_or_c_terms() {
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     for s in &subjects {
         assert!(
-            nf_via_haskell_maude_with_sig(&sig, &h, s),
+            nf_via_haskell_maude(&sig, &h, s),
             "the Maude-backed arm applies the same kind gate: {s:?}"
         );
     }
     assert!(
-        !nf_via_haskell_maude_with_sig(&sig, &h, &fst_k),
+        !nf_via_haskell_maude(&sig, &h, &fst_k),
         "a NoEq-headed term must still reach the st-rule loop"
     );
 }

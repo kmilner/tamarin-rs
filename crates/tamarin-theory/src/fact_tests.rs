@@ -178,7 +178,7 @@ fn ku_and_kd_are_mutually_exclusive() {
 
 use tamarin_term::builtin::{fresh_var, msg_var as mv, pair, pub_var};
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
-use tamarin_term::subst::{apply_vterm_changed, Subst};
+use tamarin_term::subst::Subst;
 
 /// Tiny deterministic PRNG (no external quickcheck dep) for the property
 /// tests below.
@@ -275,7 +275,7 @@ fn bloom_miss_implies_no_change() {
             fired += 1;
             for t in fa.terms.iter() {
                 assert!(
-                    apply_vterm_changed(&subst, t).is_none(),
+                    t.apply_changed(&subst).is_none(),
                     "skip fired but subst changed a term — UNSOUND: fact={fa:?}"
                 );
             }
@@ -640,4 +640,37 @@ fn new_variables_is_the_sorted_conc_minus_prem_difference() {
     )];
     assert_eq!(new_variables(&prems, &concs), vec![y, z]);
     assert_eq!(new_variables(&concs, &prems), Vec::<LNTerm>::new());
+}
+
+/// Every arm of the derived `Show FactTag`.  The `isFactName` tactic
+/// compares an action goal's tag against this string, and `jgnFactTag`
+/// writes it for every non-protocol fact (`jgnFactName` is `showFactTag`,
+/// JSON.hs).  A constructor with a wrong spelling therefore breaks the
+/// tactic matching and the graph JSON, and nothing reports an error.
+#[test]
+fn show_fact_tag_derived_covers_every_arm() {
+    assert_eq!(
+        show_fact_tag_derived(&FactTag::Proto(Multiplicity::Linear, "Foo", 2)),
+        "ProtoFact Linear \"Foo\" 2"
+    );
+    assert_eq!(
+        show_fact_tag_derived(&FactTag::Proto(Multiplicity::Persistent, "Foo", 0)),
+        "ProtoFact Persistent \"Foo\" 0"
+    );
+    assert_eq!(show_fact_tag_derived(&FactTag::Fresh), "FreshFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::Out), "OutFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::In), "InFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::Ku), "KUFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::Kd), "KDFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::Ded), "DedFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::Term), "TermFact");
+}
+
+/// The derived `Show FactTag` puts the protocol fact's name through the
+/// `Show String` instance, so a control character in the name comes out
+/// as its GHC escape.
+#[test]
+fn show_fact_tag_derived_escapes_the_protocol_fact_name() {
+    let tag = FactTag::Proto(Multiplicity::Linear, "a\u{0B}b", 2);
+    assert_eq!(show_fact_tag_derived(&tag), "ProtoFact Linear \"a\\vb\" 2");
 }

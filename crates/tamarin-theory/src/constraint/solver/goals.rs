@@ -168,12 +168,32 @@ fn loop_status(b: bool) -> String {
     format!(" (loop breakers {})", if b { "allowed" } else { "delayed" })
 }
 
+/// Compute the default oracle name for a theory file.
+///
+/// Mirrors HS `defaultOracleNames` (System.hs): derive the candidate
+/// from `takeBaseName`, probe it beside the theory, and retain only its
+/// relative name in the ranking.
+fn oracle_name_for_theory(in_file: &str) -> String {
+    let path = std::path::Path::new(in_file);
+    let candidate = path.file_stem().map(|stem| {
+        let mut name = stem.to_os_string();
+        name.push(".oracle");
+        path.with_file_name(name)
+    });
+    candidate
+        .as_deref()
+        .filter(|candidate| candidate.is_file())
+        .and_then(std::path::Path::file_name)
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("oracle")
+        .to_string()
+}
+
 /// Parse a full heuristic string into a list of `GoalRanking`s,
 /// mirroring HS's `Heuristic` list (ProofMethod.hs).
 ///
 /// `theory_file` is the path to the `.spthy` file; used to compute
-/// the default oracle name via `oracle_name_for_theory`
-/// (pretty_theory.rs, HS `defaultOracleNames` System.hs).
+/// the default oracle name via `oracle_name_for_theory`.
 ///
 /// Grammar (mirrors HS `goalRanking` Text/Parser/Signature.hs):
 ///   heuristic   ::= ranking+
@@ -306,9 +326,7 @@ pub fn parse_heuristic_str_with_tactics(
                 let ranking = chars[i];
                 let oracle = if matches!(ranking, 'o' | 'O') {
                     default_oracle
-                        .get_or_insert_with(|| {
-                            crate::pretty_theory::oracle_name_for_theory(theory_file)
-                        })
+                        .get_or_insert_with(|| oracle_name_for_theory(theory_file))
                         .as_str()
                 } else {
                     "oracle"
@@ -379,6 +397,14 @@ pub fn open_goals(sys: &System) -> Vec<AnnotatedGoal> {
     out
 }
 
+/// Whether [`open_goals`] is non-empty, without ranking the goals.
+pub fn has_open_goals(sys: &System) -> bool {
+    let ab_adj = sys.build_always_before_adj();
+    sys.goals
+        .iter()
+        .any(|(goal, status)| !status.solved && is_open_in_sys(goal, sys, &ab_adj))
+}
+
 /// Error type for oracle execution failures.
 ///
 /// When oracle exec fails, HS throws an uncaught IO exception → the
@@ -410,11 +436,10 @@ impl std::error::Error for RankingError {}
 /// forced source could not be evaluated.
 pub(crate) fn rank_goals_with(
     sys: &System,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
+    ctx: &crate::constraint::solver::context::ProofContext,
     depth: usize,
 ) -> Result<Option<Vec<AnnotatedGoal>>, crate::prove::ProveError> {
-    let ranking = ranking_at_depth(ctx, depth);
-    let ranked = match ranking {
+    match ranking_at_depth(ctx, depth) {
         GoalRanking::Inj(use_loop_breakers) => Ok(Some(inj_ranking(sys, ctx, use_loop_breakers)?)),
         GoalRanking::Smart(use_loop_breakers) => {
             Ok(Some(smart_ranking(sys, ctx, use_loop_breakers)?))
@@ -467,7 +492,7 @@ pub(crate) fn rank_goals_with(
             // HS `oracleRanking (const goalNrRanking) oracle quitOnEmpty ctxt sys ags`
             // (ProofMethod.hs): preSort = goalNrRanking (open_goals is already nr-sorted)
             let ags = open_goals(sys);
-            oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
+            oracle_ranking(ags, &oracle_path, quit_on_empty, ctx)
                 .map_err(crate::prove::ProveError::from)
         }
         GoalRanking::OracleSmart {
@@ -478,11 +503,10 @@ pub(crate) fn rank_goals_with(
             // HS `oracleRanking (smartRanking ctxt False) oracle quitOnEmpty ctxt sys ags`
             // (ProofMethod.hs): preSort = smartRanking ctxt False
             let ags = smart_ranking(sys, ctx, false)?;
-            oracle_ranking(ags, &oracle_path, quit_on_empty, ctx, sys)
+            oracle_ranking(ags, &oracle_path, quit_on_empty, ctx)
                 .map_err(crate::prove::ProveError::from)
         }
-    }?;
-    Ok(ranked)
+    }
 }
 
 /// `goalNrRanking = sortOn (fst . snd)` (ProofMethod.hs): stable
@@ -506,14 +530,15 @@ fn sort_useful_goal_nr(ags: &mut [AnnotatedGoal]) {
 
 /// The ranking that governs proof `depth`: HS `useHeuristic (Heuristic
 /// rankings) i = rankings !! (i `mod` n)` (ProofMethod.hs),
-/// round-robin over the lemma's ranking list.  A context with no heuristic,
-/// or none at all, gives `SmartRanking False` — HS's `defaultHeuristic False
-/// = Heuristic [SmartRanking False]` (System.hs).
+/// round-robin over the lemma's ranking list.  A context without a
+/// heuristic, or with an empty one, gives `SmartRanking False` — HS's
+/// `defaultHeuristic False = Heuristic [SmartRanking False]` (System.hs).
 pub fn ranking_at_depth(
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
+    ctx: &crate::constraint::solver::context::ProofContext,
     depth: usize,
 ) -> GoalRanking {
-    ctx.and_then(|c| c.heuristic.as_ref())
+    ctx.heuristic
+        .as_ref()
         .and_then(|h| {
             let n = h.len();
             if n == 0 {
@@ -545,12 +570,11 @@ fn oracle_ranking(
     ags: Vec<AnnotatedGoal>,
     oracle_path: &str,
     quit_on_empty: bool,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
-    _sys: &System,
+    ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
     use std::process::Command;
 
-    let lemma_name = ctx.map(|c| c.lemma_name.as_str()).unwrap_or("");
+    let lemma_name = ctx.lemma_name.as_str();
 
     // Step 2: build stdin — `show i ++": "++ concat . lines . render $ prettyGoal g`
     // HS `concat . lines . render` collapses multi-line renders to one line
@@ -646,7 +670,7 @@ fn apply_presort(
     presort: &GoalRanking,
     ags: Vec<AnnotatedGoal>,
     sys: &System,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
+    ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Result<Vec<AnnotatedGoal>, crate::prove::ProveError> {
     Ok(match presort {
         GoalRanking::GoalNr => {
@@ -687,13 +711,13 @@ fn apply_presort(
 fn internal_tactic_ranking(
     tactic: &crate::tactic::Tactic,
     quit_on_empty: bool,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
+    ctx: &crate::constraint::solver::context::ProofContext,
     sys: &System,
 ) -> Result<Option<Vec<AnnotatedGoal>>, crate::prove::ProveError> {
     let presort = presort_ranking(tactic.presort);
     let ags0 = open_goals(sys);
     let ags = apply_presort(&presort, ags0, sys, ctx)?;
-    it_ranking(tactic, ags, quit_on_empty, ctx, sys).map_err(Into::into)
+    it_ranking(tactic, ags, quit_on_empty, sys).map_err(Into::into)
 }
 
 /// Port of HS `itRanking` (ProofMethod.hs) — the core tactic
@@ -714,11 +738,10 @@ fn it_ranking(
     tactic: &crate::tactic::Tactic,
     ags: Vec<AnnotatedGoal>,
     quit_on_empty: bool,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
     sys: &System,
 ) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
-    let ranked_prio = rank_by_blocks(&tactic.prios, &ags, ctx, sys);
-    let ranked_deprio = rank_by_blocks(&tactic.deprios, &ags, ctx, sys);
+    let ranked_prio = rank_by_blocks(&tactic.prios, &ags, sys);
+    let ranked_deprio = rank_by_blocks(&tactic.deprios, &ags, sys);
 
     // nonRanked = filter (`notElem` rankedPrio ++ rankedDeprio) ags
     // (preserves presort order).  Compare by goal identity (seq + goal).
@@ -757,7 +780,6 @@ fn it_ranking(
 fn rank_by_blocks(
     blocks: &[crate::tactic::PrioBlock],
     ags: &[AnnotatedGoal],
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
     sys: &System,
 ) -> Vec<AnnotatedGoal> {
     if blocks.is_empty() {
@@ -774,7 +796,7 @@ fn rank_by_blocks(
     // order — `None` (unmatched) goals are never emitted, i.e. dropped.
     let first_match: Vec<Option<usize>> = ags
         .iter()
-        .map(|g| blocks.iter().position(|b| block_matches(b, g, ctx, sys)))
+        .map(|g| blocks.iter().position(|b| block_matches(b, g, sys)))
         .collect();
 
     // Single-pass bucketing by the already-computed first-match index.
@@ -827,30 +849,20 @@ fn apply_ranking_fn(name: &str, group: Vec<AnnotatedGoal>) -> Vec<AnnotatedGoal>
 /// Does block `b` recognise goal `g`? HS `isPrio = or . sequenceA
 /// functionsPrio` (ProofMethod.hs): True iff ANY of the block's
 /// disjunct selector-expressions evaluates True.
-fn block_matches(
-    b: &crate::tactic::PrioBlock,
-    g: &AnnotatedGoal,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
-    sys: &System,
-) -> bool {
-    b.selectors.iter().any(|e| eval_selector(e, g, ctx, sys))
+fn block_matches(b: &crate::tactic::PrioBlock, g: &AnnotatedGoal, sys: &System) -> bool {
+    b.selectors.iter().any(|e| eval_selector(e, g, sys))
 }
 
 /// Evaluate a `SelectorExpr` against a goal.  Mirrors HS's
 /// `functionNot`/`functionAnd`/`functionOr` combinators
 /// (Tactics.hs) bottoming out at `nameToFunction`.
-fn eval_selector(
-    e: &crate::tactic::SelectorExpr,
-    g: &AnnotatedGoal,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
-    sys: &System,
-) -> bool {
+fn eval_selector(e: &crate::tactic::SelectorExpr, g: &AnnotatedGoal, sys: &System) -> bool {
     use crate::tactic::SelectorExpr;
     match e {
-        SelectorExpr::Leaf(leaf) => eval_leaf(leaf, g, ctx, sys),
-        SelectorExpr::Not(inner) => !eval_selector(inner, g, ctx, sys),
-        SelectorExpr::And(a, b) => eval_selector(a, g, ctx, sys) && eval_selector(b, g, ctx, sys),
-        SelectorExpr::Or(a, b) => eval_selector(a, g, ctx, sys) || eval_selector(b, g, ctx, sys),
+        SelectorExpr::Leaf(leaf) => eval_leaf(leaf, g, sys),
+        SelectorExpr::Not(inner) => !eval_selector(inner, g, sys),
+        SelectorExpr::And(a, b) => eval_selector(a, g, sys) && eval_selector(b, g, sys),
+        SelectorExpr::Or(a, b) => eval_selector(a, g, sys) || eval_selector(b, g, sys),
     }
 }
 
@@ -863,13 +875,10 @@ fn tactic_pg(g: &AnnotatedGoal) -> String {
 
 /// Evaluate one selector leaf (`regex "..."`, `dhreNoise "..."`, …).
 /// Mirrors HS `tacticFunctions` (Tactics.hs).
-fn eval_leaf(
-    leaf: &crate::tactic::SelectorLeaf,
-    g: &AnnotatedGoal,
-    _ctx: Option<&crate::constraint::solver::context::ProofContext>,
-    sys: &System,
-) -> bool {
+fn eval_leaf(leaf: &crate::tactic::SelectorLeaf, g: &AnnotatedGoal, sys: &System) -> bool {
     use crate::constraint::solver::tactic_show as ts;
+    use crate::fact::{FactTag, Multiplicity};
+    use tamarin_term::lterm::LNTerm;
     let params = &leaf.params;
     let head = |i: usize| params.get(i).map(String::as_str).unwrap_or("");
     match leaf.name.as_str() {
@@ -930,13 +939,16 @@ fn eval_leaf(
         // and sysPattern = "~n" : shown reveal-vars.
         "reasonableNoncesNoise" => {
             let oracle_type = head(0);
-            let nonces: Vec<String> = ts::action_goal_fact_terms(&g.goal)
-                .iter()
-                .map(tamarin_term::term::show_term)
-                .collect();
+            let fact_terms: &[LNTerm] = match &g.goal {
+                Goal::Action(_, fa) => &fa.terms,
+                _ => &[],
+            };
             let mut sys_pattern = vec!["~n".to_string()];
             sys_pattern.extend(ts::sys_reveal_shown(oracle_type, &sys.formulas));
-            nonces.iter().any(|n| sys_pattern.iter().any(|s| s == n))
+            fact_terms
+                .iter()
+                .map(tamarin_term::term::show_term)
+                .any(|n| sys_pattern.contains(&n))
         }
 
         // nonAbsurdConstraint (Tactics.hs): hasSafeNonces && isSubset.
@@ -968,10 +980,12 @@ fn eval_leaf(
         // isFactName (Tactics.hs).
         "isFactName" => {
             let s = head(0);
-            match ts::fact_name_probe(&g.goal) {
-                ts::FactNameProbe::PremiseLinearName(name) => name == s,
-                ts::FactNameProbe::ActionShowTag(shown) => shown == s,
-                ts::FactNameProbe::None => false,
+            match &g.goal {
+                Goal::Premise(_, fa) => {
+                    matches!(&fa.tag, FactTag::Proto(Multiplicity::Linear, name, _) if *name == s)
+                }
+                Goal::Action(_, fa) => crate::fact::show_fact_tag_derived(&fa.tag) == s,
+                _ => false,
             }
         }
 
@@ -979,9 +993,11 @@ fn eval_leaf(
         // `show` matches the regex.
         "isInFactTerms" => {
             let s = head(0);
-            match ts::action_goal_single_term(&g.goal) {
-                Some(t) => regex_is_match(s, &tamarin_term::term::show_term(t)),
-                None => false,
+            match &g.goal {
+                Goal::Action(_, fa) if fa.terms.len() == 1 => {
+                    regex_is_match(s, &tamarin_term::term::show_term(&fa.terms[0]))
+                }
+                _ => false,
             }
         }
 
@@ -1104,7 +1120,7 @@ fn compile_regex(pattern: &str) -> Option<std::sync::Arc<fancy_regex::Regex>> {
 /// ```
 fn smart_ranking(
     sys: &System,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
+    ctx: &crate::constraint::solver::context::ProofContext,
     allow_premise_g_loop_breakers: bool,
 ) -> Result<Vec<AnnotatedGoal>, crate::prove::ProveError> {
     let mut goals = open_goals(sys);
@@ -1195,7 +1211,7 @@ fn smart_ranking(
 /// there is no `moveNatToEnd`.
 fn sapic_ranking(
     sys: &System,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
+    ctx: &crate::constraint::solver::context::ProofContext,
     pkcs11: bool,
 ) -> Result<Vec<AnnotatedGoal>, crate::prove::ProveError> {
     let mut goals = open_goals(sys);
@@ -1306,7 +1322,7 @@ fn sort_decision_tree_last_dyn(
 /// (`isMedPriorityGoal`), so they keep goal-number order.
 fn inj_ranking(
     sys: &System,
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
+    ctx: &crate::constraint::solver::context::ProofContext,
     allow_loop_breakers: bool,
 ) -> Result<Vec<AnnotatedGoal>, crate::prove::ProveError> {
     let mut goals = open_goals(sys);
@@ -1453,7 +1469,7 @@ fn collect_one_case_syms(
 /// `is_msg_one_case_goal` returns False unconditionally.
 fn lazy_one_case_syms(
     goals: &[AnnotatedGoal],
-    ctx: Option<&crate::constraint::solver::context::ProofContext>,
+    ctx: &crate::constraint::solver::context::ProofContext,
 ) -> Result<std::collections::BTreeSet<&'static [u8]>, crate::prove::ProveError> {
     use crate::constraint::constraints::Goal;
     use crate::fact::FactTag;
@@ -1461,10 +1477,7 @@ fn lazy_one_case_syms(
         .iter()
         .any(|a| matches!(&a.goal, Goal::Action(_, fa) if matches!(fa.tag, FactTag::Ku)));
     if any_ku_action_goal {
-        match ctx {
-            Some(c) => collect_one_case_syms(c),
-            None => Ok(Default::default()),
-        }
+        collect_one_case_syms(ctx)
     } else {
         Ok(Default::default())
     }
@@ -1931,19 +1944,6 @@ fn msg_premise(g: &Goal) -> Option<&tamarin_term::lterm::LNTerm> {
 
 /// Saturate-time openGoals view.  Haskell uses a single `openGoals`
 /// function for both `isFinished` and `solveAllSafeGoals`, so this is
-/// `is_open_in_sys` under a name that makes the intent explicit at the
-/// saturate call sites.  The prebuilt always-before adjacency is passed in
-/// rather than rebuilt per call: the relation depends only on `sys` (not on
-/// `g`), so a caller scanning many goals against an unmutated system builds
-/// it once and threads it in.
-pub fn is_open_for_saturate_with(
-    g: &Goal,
-    sys: &System,
-    ab_adj: &crate::constraint::system::PrebuiltAdj,
-) -> bool {
-    is_open_in_sys(g, sys, ab_adj)
-}
-
 /// `chain_kd_conc_term`: the KD-fact term at the chain's source-
 /// conclusion, or None if the source-conclusion isn't a KD fact.
 fn chain_kd_conc_term(
@@ -2012,7 +2012,11 @@ fn chain_to_equality(
 /// variables are all known earlier is closed, one from a message variable
 /// is open iff `chainToEquality`; other goals are open unless solved. The
 /// diff-system branch is not ported (no diff mode).
-fn is_open_in_sys(g: &Goal, sys: &System, ab_adj: &crate::constraint::system::PrebuiltAdj) -> bool {
+pub(crate) fn is_open_in_sys(
+    g: &Goal,
+    sys: &System,
+    ab_adj: &crate::constraint::system::PrebuiltAdj,
+) -> bool {
     use crate::constraint::constraints::Disj;
     use crate::fact::FactTag;
     match g {
@@ -2029,7 +2033,7 @@ fn is_open_in_sys(g: &Goal, sys: &System, ab_adj: &crate::constraint::system::Pr
             if tamarin_term::lterm::is_trivial_ac_fun_sym_term(m) {
                 return false;
             }
-            if has_top_pair_inv_prod(m) {
+            if crate::constraint::solver::reduction::ku_decomp_args(m).is_some() {
                 return false;
             }
             if is_nullary_public_function(m) {
@@ -2094,7 +2098,7 @@ fn union_args(t: &tamarin_term::lterm::LNTerm) -> Option<&[tamarin_term::lterm::
     match t {
         // Multiset union is an AC symbol (`Ac(Union)`), never a `NoEq`
         // — matching the representation used everywhere else in this
-        // file (e.g. `has_top_pair_inv_prod`).  Borrow the existing
+        // file (e.g. `ku_decomp_args`).  Borrow the existing
         // Arc-backed child slice; the only caller just iterates it.
         Term::App(FunSym::Ac(AcSym::Union), args) => Some(args),
         _ => None,
@@ -2150,34 +2154,6 @@ fn is_pub_or_nat_term(t: &tamarin_term::lterm::LNTerm) -> bool {
     matches!(sort_of_lnterm(t), LSort::Pub | LSort::Nat)
 }
 
-/// True if the term's top symbol is a pair, inverse, product, or
-/// AC union — those decompositions are handled inline by
-/// `insertAction` in Haskell, so KU goals on them are auto-solved.
-fn has_top_pair_inv_prod(t: &tamarin_term::lterm::LNTerm) -> bool {
-    use tamarin_term::function_symbols::{AcSym, FunSym, INV_SYM_STRING};
-    use tamarin_term::term::Term;
-    match t {
-        Term::App(FunSym::NoEq(s), args) => {
-            s.name == b"pair" && args.len() == 2 || s.name == INV_SYM_STRING && args.len() == 1
-        }
-        Term::App(FunSym::Ac(AcSym::Mult), _) => true, // product
-        Term::App(FunSym::Ac(AcSym::Union), _) => true, // multiset union
-        _ => false,
-    }
-}
-
-/// The `useful` annotation of HS `openGoals` (Goals.hs): a loop breaker,
-/// else for a `KU` goal `Useful` under KU guards, then `currentlyDeducible`,
-/// then `probablyConstructible`; everything else is `Useful`.
-pub fn goal_usefulness(g: &Goal, looping: bool, sys: &System) -> Usefulness {
-    // Standalone callers build the shared `rawLessRel` adjacency on the
-    // spot.  `open_goals` builds it once and uses
-    // `goal_usefulness_with_adj` to share it across all goals (mirroring
-    // HS's `existingDeps = rawLessRel sys` shared in `openGoals`).
-    let adj = sys.build_always_before_adj();
-    goal_usefulness_with_adj(g, looping, sys, adj.map(), has_ku_guards(sys))
-}
-
 /// HS `prettyGoals`'s `useful` annotation STRING (System.hs) for
 /// the interactive sequent's per-goal comment.  UNLIKE the ranking
 /// [`Usefulness`] enum (which collapses both KU-guard and default goals
@@ -2200,30 +2176,23 @@ pub(crate) fn goal_useful_annotation(
     adj: &RawLessAdj,
     has_ku_guards: bool,
 ) -> &'static str {
-    if gs_loop_breaker {
-        return " (loop breaker)";
+    match goal_usefulness_with_adj(g, gs_loop_breaker, sys, adj, has_ku_guards) {
+        Usefulness::LoopBreaker => " (loop breaker)",
+        Usefulness::CurrentlyDeducible => " (currently deducible)",
+        Usefulness::ProbablyConstructible => " (probably constructible)",
+        Usefulness::Useful => match g {
+            Goal::Action(_, fa) if fa.is_ku() && has_ku_guards => " (useful1)",
+            _ => " (useful2)",
+        },
     }
-    if let Goal::Action(i, fa) = g
-        && fa.is_ku()
-    {
-        if has_ku_guards {
-            return " (useful1)";
-        }
-        if let Some(m) = fa.terms.first() {
-            if currently_deducible(sys, adj, i, m) {
-                return " (currently deducible)";
-            }
-            if probably_constructible(m) {
-                return " (probably constructible)";
-            }
-        }
-    }
-    " (useful2)"
 }
 
-/// Like [`goal_usefulness`] but reuses a prebuilt `rawLessRel`
-/// adjacency (`existingDeps`, Goals.hs) instead of rebuilding it.
-fn goal_usefulness_with_adj(
+/// The `useful` annotation of HS `openGoals` (Goals.hs): a loop breaker,
+/// else for a `KU` goal `Useful` under KU guards, then `currentlyDeducible`,
+/// then `probablyConstructible`; everything else is `Useful`. `adj` is the
+/// prebuilt `rawLessRel` adjacency (`existingDeps`, Goals.hs), shared by
+/// callers across all goals of one system.
+pub(crate) fn goal_usefulness_with_adj(
     g: &Goal,
     looping: bool,
     sys: &System,
@@ -2253,7 +2222,7 @@ fn goal_usefulness_with_adj(
             if currently_deducible(sys, adj, i, m) {
                 return Usefulness::CurrentlyDeducible;
             }
-            if probably_constructible(m) {
+            if is_simple_term(m) {
                 return Usefulness::ProbablyConstructible;
             }
         }
@@ -2463,26 +2432,12 @@ fn check_term_lits<F: Fn(tamarin_term::lterm::LSort) -> bool>(
     walk(t, &p)
 }
 
-/// `probablyConstructible` (Haskell):
-///   no fresh-name literals AND no private function symbols.
-fn probably_constructible(t: &tamarin_term::lterm::LNTerm) -> bool {
+/// HS `isSimpleTerm` (Term/LTerm.hs), which Goals.hs spells
+/// `probablyConstructible`: no fresh-sorted literal and no private function
+/// symbol.
+pub(crate) fn is_simple_term(t: &tamarin_term::lterm::LNTerm) -> bool {
     use tamarin_term::lterm::LSort;
-    !lit_sort_contains(t, LSort::Fresh) && !contains_private(t)
-}
-
-/// True iff any literal in `t` has the given sort. The Haskell source
-/// folds `sortOfLit` over every leaf; we mirror that with a recursive
-/// walk over `Term`, comparing `target` against `Var.sort` for variables
-/// and `sort_of_name` for constants.
-fn lit_sort_contains(t: &tamarin_term::lterm::LNTerm, target: tamarin_term::lterm::LSort) -> bool {
-    use tamarin_term::lterm::sort_of_name;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    match t {
-        Term::Lit(Lit::Var(v)) => v.sort == target,
-        Term::Lit(Lit::Con(c)) => sort_of_name(c) == target,
-        Term::App(_, args) => args.iter().any(|a| lit_sort_contains(a, target)),
-    }
+    check_term_lits(t, |s| s != LSort::Fresh) && !contains_private(t)
 }
 
 /// HS `solveGoal` (Goals.hs): mark the goal solved, then solve it.
@@ -2511,9 +2466,8 @@ pub(crate) fn dispatch_solve_goal(
     red: &mut crate::constraint::solver::reduction::Reduction<'_>,
     g: &Goal,
 ) -> Result<crate::constraint::solver::reduction::GoalCases, crate::prove::ProveError> {
-    if !crate::constraint::solver::sources::in_precompute_mode()
-        && let Some(branches) =
-            crate::constraint::solver::sources::solve_with_source(red.ctx, &red.sys, g, &red.maude)?
+    if let Some(branches) =
+        crate::constraint::solver::sources::solve_with_source(red.ctx, &red.sys, g, &red.maude)?
     {
         return Ok(red.finish_goal_cases(branches));
     }

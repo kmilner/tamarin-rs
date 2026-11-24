@@ -24,7 +24,7 @@ use crate::atom::{map_atom, to_atom, ProtoAtom, SyntacticSugar};
 use crate::elaborate::{copy_fact_annotations, fact_tag_of, varspec_to_lvar, ElabError};
 use crate::fact::{fact_tag_arity, show_fact_tag, Fact, FactTag, Multiplicity};
 use crate::formula::{
-    exists_var, map_atoms, traverse_formula_atom, BLNTerm, LNFormula, ProtoFormula,
+    exists_var, lvar_hint, map_atoms, traverse_formula_atom, BLNTerm, LNFormula, ProtoFormula,
     SyntacticLNFormula,
 };
 use tamarin_parser::ast as p;
@@ -142,6 +142,16 @@ pub fn smaller_fact<T>(t1: T, t2: T) -> Fact<T> {
 /// `exists_var` abstracts `z` to `Bound 0` and the union's `f_app` rebuild
 /// re-sorts, so the stored body reads `y = (Bound 0 ++ Free x)`.
 pub fn builtin_predicates() -> Vec<Predicate> {
+    builtins().to_vec()
+}
+
+/// The shared, immutable [`builtin_predicates`] list.
+fn builtins() -> &'static [Predicate] {
+    static BUILTINS: std::sync::OnceLock<Vec<Predicate>> = std::sync::OnceLock::new();
+    BUILTINS.get_or_init(build_builtin_predicates)
+}
+
+fn build_builtin_predicates() -> Vec<Predicate> {
     let x = LVar::new("x", LSort::Msg, 0);
     let y = LVar::new("y", LSort::Msg, 0);
     let z = LVar::new("z", LSort::Msg, 0);
@@ -152,7 +162,7 @@ pub fn builtin_predicates() -> Vec<Predicate> {
     ));
     vec![Predicate {
         fact: smaller_fact(x, y),
-        formula: exists_var((z.name.to_string(), z.sort), &z, body),
+        formula: exists_var(lvar_hint(&z), &z, body),
     }]
 }
 
@@ -161,12 +171,10 @@ pub fn builtin_predicates() -> Vec<Predicate> {
 /// predicate whose fact tag equals `fa`'s, searching the declared ones before
 /// the built-in list.  `FactTag` carries multiplicity, name and arity, so all
 /// three must agree.
-pub fn lookup_predicate<T>(fa: &Fact<T>, preds: &[Predicate]) -> Option<Predicate> {
-    if let Some(pr) = preds.iter().find(|p| p.fact.tag == fa.tag) {
-        return Some(pr.clone());
-    }
-    builtin_predicates()
-        .into_iter()
+pub fn lookup_predicate<'a, T>(fa: &Fact<T>, preds: &'a [Predicate]) -> Option<&'a Predicate> {
+    preds
+        .iter()
+        .chain(builtins())
         .find(|p| p.fact.tag == fa.tag)
 }
 
@@ -186,7 +194,7 @@ pub fn expand_formula(
 ) -> Result<LNFormula, ExpandError> {
     traverse_formula_atom(fm, &mut |a| match a {
         ProtoAtom::Syntactic(SyntacticSugar::Pred(fa)) => match lookup_predicate(fa, preds) {
-            Some(pr) => Ok(apply_at_use_site(&pr, fa)),
+            Some(pr) => Ok(apply_at_use_site(pr, fa)),
             None => Err(ExpandError { tag: fa.tag }),
         },
         other => Ok(ProtoFormula::Atom(to_atom(other.clone()))),
@@ -340,11 +348,11 @@ mod tests {
         let probe: Fact<LVar> = Fact::new(declared.fact.tag, vec![]);
         assert_eq!(
             lookup_predicate(&probe, std::slice::from_ref(&declared)).unwrap(),
-            declared
+            &declared
         );
         assert_eq!(
             lookup_predicate(&probe, &[]).unwrap(),
-            builtin_predicates()[0],
+            &builtin_predicates()[0],
             "with nothing declared the built-in answers the same tag"
         );
     }

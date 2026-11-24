@@ -40,8 +40,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_term::function_symbols::{AcSym, FunSym};
-use tamarin_term::lterm::{sort_of_lnterm, HasFrees, LNTerm, LSort, LVar};
-use tamarin_term::pretty::pretty_nterm;
+use tamarin_term::lterm::{frees, sort_of_lnterm, LNTerm, LSort, LVar};
 use tamarin_term::term::{f_app, Term};
 use tamarin_term::vterm::Lit;
 
@@ -50,7 +49,7 @@ use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{pretty_proto_rule_e, ProtoRuleE};
 use crate::theory::Theory;
 
-use super::{WfError, WF_LINE_LENGTH, WF_RIBBON};
+use super::{pretty_lnterm_list, pretty_var_list, WfError};
 
 /// HS `underlineTopic "Multiplication restriction of rules"`
 /// (Wellformedness.hs) — stored bare here because
@@ -94,7 +93,8 @@ pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
         }
         out.push(WfError::new(
             TOPIC,
-            entry_doc(ru, &abstracted, &mults, &unbounds).render_with(WF_LINE_LENGTH, WF_RIBBON),
+            entry_doc(ru, &abstracted, &mults, &unbounds)
+                .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON),
         ));
     }
     out.extend(unsupported_products_report(
@@ -112,10 +112,7 @@ pub(crate) fn unsupported_products_report<'a>(
     for rule in rules {
         let mults = crate::rule::rule_products_outside_exponents(rule);
         if !mults.is_empty() {
-            let list = hpj::fsep(hpj::punctuate(
-                Doc::text(","),
-                mults.iter().map(pretty_nterm).collect(),
-            ));
+            let list = pretty_lnterm_list(&mults);
             out.push(WfError::underlined_block(
                 "Unsupported multiplication outside exponents",
                 Doc::text(format!(
@@ -154,25 +151,11 @@ fn mult_terms(t: &LNTerm) -> Vec<LNTerm> {
 /// `sortednub . freesList` (Term/LTerm.hs), which a `BTreeSet` ordered by
 /// `Ord LVar` reproduces exactly.
 fn unbound(ru: &ProtoRuleE) -> BTreeSet<LVar> {
-    let concs = fact_frees(&ru.conclusions);
-    let prems = fact_frees(&ru.premises);
-    concs
-        .difference(&prems)
-        .copied()
-        .filter(|v| v.sort != LSort::Pub)
+    let prems: BTreeSet<LVar> = frees(&ru.premises).into_iter().collect();
+    frees(&ru.conclusions)
+        .into_iter()
+        .filter(|v| !prems.contains(v) && v.sort != LSort::Pub)
         .collect()
-}
-
-fn fact_frees(facts: &[LNFact]) -> BTreeSet<LVar> {
-    let mut out = BTreeSet::new();
-    for f in facts {
-        for t in f.terms.iter() {
-            t.for_each_free(&mut |v| {
-                out.insert(*v);
-            });
-        }
-    }
-    out
 }
 
 // =============================================================================
@@ -333,30 +316,18 @@ fn entry_doc(ru: &ProtoRuleE, abstracted: &ProtoRuleE, mults: &[LNTerm], unbound
         .above_g(pretty_proto_rule_e(abstracted).nest(2))
         .above_g(Doc::text_hs(""));
     if !mults.is_empty() {
-        // HS `prettyLNTermList = fsep . punctuate comma . map prettyLNTerm`
-        // (Wellformedness.hs).  `<->` is one space, and the text
-        // already ends in one — hence the doubled space before the list.
-        let list = hpj::fsep(hpj::punctuate(
-            Doc::text(","),
-            mults.iter().map(pretty_nterm).collect(),
-        ));
+        // `<->` is one space, and the text already ends in one — hence the
+        // doubled space before the list.
         d = d.above_g(
             Doc::text("Terms with multiplication: ")
-                .beside_sp(list)
+                .beside_sp(pretty_lnterm_list(mults))
                 .nest(2),
         );
     }
     if !unbounds.is_empty() {
-        // HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
-        // (TheoryObject.hs), and `prettyLVar = text . show`
-        // (LTerm.hs).
-        let list = hpj::fsep(hpj::punctuate(
-            Doc::text(","),
-            unbounds.iter().map(|v| Doc::text(v.to_string())).collect(),
-        ));
         d = d.above_g(
             Doc::text("Variables that occur only in rhs: ")
-                .beside_sp(list)
+                .beside_sp(pretty_var_list(unbounds))
                 .nest(2),
         );
     }

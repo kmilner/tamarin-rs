@@ -39,27 +39,6 @@ pub struct ProvedLemma {
 // Heuristic / GoalRanking rendering
 // =============================================================================
 
-/// Compute the default oracle name for a theory file.
-///
-/// Mirrors HS `defaultOracleNames` (System.hs): derive the candidate
-/// from `takeBaseName`, probe it beside the theory, and retain only its
-/// relative name in the ranking.
-pub(crate) fn oracle_name_for_theory(in_file: &str) -> String {
-    let path = std::path::Path::new(in_file);
-    let candidate = path.file_stem().map(|stem| {
-        let mut name = stem.to_os_string();
-        name.push(".oracle");
-        path.with_file_name(name)
-    });
-    candidate
-        .as_deref()
-        .filter(|candidate| candidate.is_file())
-        .and_then(std::path::Path::file_name)
-        .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or("oracle")
-        .to_string()
-}
-
 /// Render one `GoalRanking` as the heuristic token that names it, mirroring
 /// HS `prettyGoalRanking` (System.hs): an oracle ranking as its
 /// letter plus the quoted relative oracle path, a tactic ranking as its
@@ -128,7 +107,7 @@ pub fn pretty_closed_theory(
     // HS `prettyClosedTheory` (ClosedTheory.hs) renders the merged
     // rule items through `prettyOpenProtoRuleAsClosedRule` when some of them
     // carries an AC rule of its own, and the closed items through
-    // `prettyClosedProtoRule` otherwise.  Only the list printed is built.
+    // `prettyClosedProtoRule` otherwise.
     let proof_bodies: tamarin_utils::FastMap<&str, &str> = proved
         .iter()
         .filter_map(|p| Some((p.name.as_str(), p.proof_body.as_deref()?)))
@@ -140,9 +119,10 @@ pub fn pretty_closed_theory(
     // HS `emptyString` (lib/theory/src/Pretty.hs) as `ppSap`
     // (ClosedTheory.hs).
     let translation = |_: &TranslationElement| String::new();
-    let blocks = if crate::theory::merged_contain_manual_rule_variants(&thy.items) {
+    let merged = crate::theory::merge_open_proto_rules(&thy.items);
+    let blocks = if crate::theory::contains_manual_rule_variants(&merged) {
         pretty_theory_items(
-            &crate::theory::merge_open_proto_rules(&thy.items),
+            &merged,
             &ItemPrinters {
                 rule: &|r| crate::rule::pretty_open_proto_rule_as_closed_rule(r).render(),
                 proof: &proof,
@@ -525,21 +505,13 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
         // The `Pred` sugar survives: `liftedAddAccLemma` adds the lemma
         // verbatim (Theory/Text/Parser.hs).
         TranslationElement::AccLemma(al) => {
-            let kw = Doc::text("lemma");
-            let name_doc = Doc::text(al.name.clone());
-            let header = if al.attributes.is_empty() {
-                kw.beside_sp(name_doc).beside(Doc::text(":"))
-            } else {
-                let attr_docs = lemma_attr_docs(
+            let header = lemma_title_doc(
+                &al.name,
+                lemma_attr_docs(
                     &al.attributes,
                     al.heuristic_in_file.as_deref().unwrap_or(in_file),
-                );
-                let attrs_fsep = hpj::fsep(hpj::punctuate(Doc::text(","), attr_docs));
-                let brackets = Doc::text("[").beside(attrs_fsep).beside(Doc::text("]"));
-                kw.beside_sp(name_doc)
-                    .beside_sp(brackets)
-                    .beside(Doc::text(":"))
-            };
+                ),
+            );
             let mut out = header.render();
             out.push_str("\n  ");
             out.push_str(&al.case_test_idents.join(", "));
@@ -587,11 +559,7 @@ pub fn web_signature_block(sig: &tamarin_term::maude_sig::MaudeSig) -> String {
 /// `nest 2` indents wrapped continuation lines.  Rendered as ONE Doc so a long
 /// source goal wraps exactly as HS `renderHtmlDoc` (the per-case `<p>` prem).
 fn web_source_prem_doc(g: &crate::constraint::constraints::Goal) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::Doc;
-    Doc::text("\"")
-        .beside(solve_goal_to_doc(g))
-        .beside(Doc::text("\""))
-        .nest(2)
+    crate::pretty_hpj::double_quotes(solve_goal_to_doc(g)).nest(2)
 }
 
 /// HS per-case `withTag "p" [] ppPrem` premise (Web/Theory.hs): the whole
@@ -672,7 +640,7 @@ pub fn web_macros(thy: &Theory) -> Option<String> {
 ///
 /// Emits the empty string when no fact tags are injective.  Computes
 /// the set on demand from the elaborated rules + reducible function
-/// symbols — the same call `ProofContext::new` makes through `new_impl`
+/// symbols — the same call `ProofContext::try_with_options` makes
 /// (`constraint/solver/context.rs`).
 fn render_injective_fact_insts(elab: &Theory) -> String {
     use crate::fact::{FactTag, Multiplicity};
@@ -756,7 +724,7 @@ pub(crate) fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> Strin
     }
 
     // functions: ...
-    let funs = render_fun_syms(sig);
+    let funs = sig.pretty_fun_syms();
     if !funs.is_empty() {
         out.push_str(&wrap_with_lead("functions:", &funs));
         out.push('\n');
@@ -778,14 +746,6 @@ pub(crate) fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> Strin
     }
 
     out
-}
-
-/// Render the function symbol list: HS `prettyMaudeSigExcept` with an empty
-/// exclusion set, i.e. the NoEq symbols in `S.toList` (BTreeSet) order
-/// followed by the user-defined AC symbols, each with its space-prefixed
-/// attribute list (`h/1 [destructor]`) and NDC attributes.
-fn render_fun_syms(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<String> {
-    sig.pretty_fun_syms_except(&std::collections::BTreeSet::new())
 }
 
 /// HS `prettyTranslationElement` for `FunctionTypingInfo`: explicit SAPIC
@@ -1359,13 +1319,23 @@ fn pretty_lemma_formulas(
     proof: &str,
     in_file: &str,
 ) -> String {
-    let mut out = lemma_head(
-        &lem.name,
-        lemma_attr_docs(&lem.attributes, in_file),
+    let mut out = lemma_title_doc(&lem.name, lemma_attr_docs(&lem.attributes, in_file)).render();
+    out.push('\n');
+
+    // Lemma body shape from HS `prettyLemma` (lib/theory/src/Lemma.hs):
+    //   `nest 2 $ sep [ prettyTraceQuantifier, doubleQuotes (prettyLNFormula f) ]`
+    // Routed through the HS-faithful Doc engine so the quant-vs-formula
+    // `sep` wrap, the formula's internal `sep`/`nest` wrapping, and the
+    // continuation indents are byte-identical to HS.  The `nest 2` indent
+    // is included in the rendered output (HS renders it at theory col 0).
+    out.push_str(&pf::lemma_header_line_doc(
         trace_quantifier_keyword(lem.trace_quantifier),
         pf::lnformula_doc(displayed),
-        &render_guarded_block(lem.trace_quantifier, guarded),
-    );
+    ));
+    out.push('\n');
+
+    // /* guarded formula characterizing ... */
+    out.push_str(&guarded_block_comment(lem.trace_quantifier, guarded));
     out.push('\n');
     out.push_str(proof);
     out
@@ -1397,37 +1367,6 @@ pub fn lemma_title_doc(
             .beside_sp(brackets)
             .beside(Doc::text(":"))
     }
-}
-
-/// Everything of HS `prettyLemma` (lib/theory/src/Lemma.hs) BEFORE the
-/// proof body: the `lemma <name> [attrs]:` header, the `<quant> "<formula>"`
-/// line, and the `/* guarded formula ... */` comment block.  `formula_doc` is
-/// the quoted formula of the quantifier line and `guarded_block` the comment,
-/// both built by [`pretty_lemma`] from the lemma it holds.
-fn lemma_head(
-    name: &str,
-    attr_docs: Vec<crate::pretty_hpj::Doc>,
-    quant: &str,
-    formula_doc: crate::pretty_hpj::Doc,
-    guarded_block: &str,
-) -> String {
-    let mut out = String::new();
-    let header_doc = lemma_title_doc(name, attr_docs);
-    out.push_str(&header_doc.render());
-    out.push('\n');
-
-    // Lemma body shape from HS `prettyLemma` (lib/theory/src/Lemma.hs):
-    //   `nest 2 $ sep [ prettyTraceQuantifier, doubleQuotes (prettyLNFormula f) ]`
-    // Routed through the HS-faithful Doc engine so the quant-vs-formula
-    // `sep` wrap, the formula's internal `sep`/`nest` wrapping, and the
-    // continuation indents are byte-identical to HS.  The `nest 2` indent
-    // is included in the rendered output (HS renders it at theory col 0).
-    out.push_str(&pf::lemma_header_line_doc(quant, formula_doc));
-    out.push('\n');
-
-    // /* guarded formula characterizing ... */
-    out.push_str(guarded_block);
-    out
 }
 
 /// HS `prettyLemmaAttribute` (lib/theory/src/Lemma.hs) over the
@@ -1466,37 +1405,23 @@ fn trace_quantifier_keyword(q: crate::theory::TraceQuantifier) -> &'static str {
     }
 }
 
-/// HS `ppLNFormulaGuarded` (lib/theory/src/Lemma.hs) over the
-/// ELABORATED lemma's `_lFormula`.
-fn render_guarded_block(
+/// The `/* guarded formula characterizing ... */` comment of HS
+/// `ppLNFormulaGuarded` (lib/theory/src/Lemma.hs) over the ELABORATED
+/// lemma's `_lFormula`.
+fn guarded_block_comment(
     trace_quantifier: crate::theory::TraceQuantifier,
     formula: &crate::formula::LNFormula,
 ) -> String {
-    guarded_block_comment(
-        matches!(
-            trace_quantifier,
-            crate::theory::TraceQuantifier::ExistsTrace
-        ),
-        crate::guarded::formula_to_guarded(formula),
-        || crate::pretty_formula::lnformula_doc(formula),
-    )
-}
-
-/// The `/* guarded formula characterizing ... */` comment of HS
-/// `ppLNFormulaGuarded` (lib/theory/src/Lemma.hs) around an already
-/// converted formula.  `full_doc` builds the quoted whole formula of the
-/// failure branch, which the success branch never needs.
-fn guarded_block_comment(
-    exists_trace: bool,
-    gf: Result<crate::guarded::Guarded, crate::guarded::GuardError>,
-    full_doc: impl FnOnce() -> crate::pretty_hpj::Doc,
-) -> String {
+    let exists_trace = matches!(
+        trace_quantifier,
+        crate::theory::TraceQuantifier::ExistsTrace
+    );
     let header = if exists_trace {
         "guarded formula characterizing all satisfying traces:"
     } else {
         "guarded formula characterizing all counter-examples:"
     };
-    let gf = match gf {
+    let gf = match crate::guarded::formula_to_guarded(formula) {
         Ok(g) => g,
         Err(e) => {
             // HS lib/theory/src/Lemma.hs: `multiComment (text "conversion to
@@ -1514,7 +1439,7 @@ fn guarded_block_comment(
             // prettyLNFormula` (Guarded.hs) inside `nest 2 err`
             // (lib/theory/src/Lemma.hs), so each is a `Doc` laid out
             // at nesting 4 and wraps at the page width.
-            let full = full_doc();
+            let full = pf::lnformula_doc(formula);
             let sub = e
                 .subject_formula
                 .as_ref()
@@ -2454,10 +2379,7 @@ mod manual_rule_variants_tests {
     use super::*;
     use crate::fact::{proto_fact, Multiplicity};
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
-    use crate::theory::{
-        contains_manual_rule_variants, merge_open_proto_rules, merged_contain_manual_rule_variants,
-        OpenProtoRule,
-    };
+    use crate::theory::{contains_manual_rule_variants, merge_open_proto_rules, OpenProtoRule};
 
     type Item = TheoryItem<OpenProtoRule>;
 
@@ -2478,9 +2400,7 @@ mod manual_rule_variants_tests {
     }
 
     fn gate(items: &[Item]) -> bool {
-        let merged = contains_manual_rule_variants(&merge_open_proto_rules(items));
-        assert_eq!(merged, merged_contain_manual_rule_variants(items));
-        merged
+        contains_manual_rule_variants(&merge_open_proto_rules(items))
     }
 
     /// `containsManualRuleVariants` (OpenTheory.hs) is the OR over the
@@ -2865,34 +2785,6 @@ end\n";
 #[cfg(test)]
 mod heuristic_header_tests {
     use super::*;
-
-    #[test]
-    fn default_oracle_name_matches_haskell_path_splitting() {
-        assert_eq!(oracle_name_for_theory("missing.spthy"), "oracle");
-
-        let fixture = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tamarin-prover/examples/regression/trace/defaultoracle.spthy"
-        );
-        assert_eq!(oracle_name_for_theory(fixture), "defaultoracle.oracle");
-
-        let dir =
-            std::env::temp_dir().join(format!("tamarin_rs_oracle_basename_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for (theory, oracle) in [
-            (".foo", ".foo.oracle"),
-            ("..foo", "..oracle"),
-            ("...foo", "...oracle"),
-        ] {
-            std::fs::write(dir.join(oracle), "").unwrap();
-            assert_eq!(
-                oracle_name_for_theory(dir.join(theory).to_str().unwrap()),
-                oracle
-            );
-        }
-        std::fs::remove_dir_all(dir).unwrap();
-    }
 
     /// The `heuristic:` header prints the theory's stored rankings (HS `text
     /// "heuristic: " <> text (prettyGoalRankings thyH)`,

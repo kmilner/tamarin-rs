@@ -541,7 +541,7 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             // HS routes these into `_thyCache`, outside the printable item
             // stream; the close pass appends generated deduction rules later.
             p::TheoryItem::IntrRule(r) => {
-                let rule = crate::intruder_variants::intr_rule_from_ast(&out.signature, r)
+                let rule = crate::intruder_variants::ast_rule_to_intr_rule_ac(&out.signature, r)
                     .map_err(|message| ElabError { message })?;
                 if !out.intruder_rules.contains(&rule) {
                     out.intruder_rules.push(rule);
@@ -1428,7 +1428,7 @@ where
             // (Theory/Text/Parser/Term.hs) selects EMap only when the
             // bilinear-pairing symbol is present in the signature.
             // Classifying `em` as NoEq instead would declare the Maude
-            // operator as `op tamem : Msg Msg -> Msg [comm]` (`op_c` in
+            // operator as `op tamem : Msg Msg -> Msg [comm]` (`pp_theory` in
             // maude_print.rs) while rule terms carry the NoEq prefix
             // `tamXCem` (`pp_maude_no_eq_sym_into`); Maude then rejects the
             // unknown operator and `get variants` returns an empty

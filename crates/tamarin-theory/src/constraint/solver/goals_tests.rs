@@ -215,7 +215,7 @@ fn it_ranking_prio_nonranked_deprio_order() {
     };
 
     let sys = System::empty();
-    let out = it_ranking(&tactic, ags, false, None, &sys)
+    let out = it_ranking(&tactic, ags, false, &sys)
         .unwrap()
         .expect("ordinary ranking");
     let seqs: Vec<u64> = out.iter().map(|a| a.seq).collect();
@@ -263,7 +263,7 @@ fn it_ranking_nonranked_preserved() {
         deprios: vec![],
     };
     let sys = System::empty();
-    let out = it_ranking(&tactic, vec![g_b, g_c, g_a], false, None, &sys)
+    let out = it_ranking(&tactic, vec![g_b, g_c, g_a], false, &sys)
         .unwrap()
         .expect("ordinary ranking");
     let seqs: Vec<u64> = out.iter().map(|a| a.seq).collect();
@@ -281,7 +281,7 @@ fn an_empty_quitting_tactic_is_a_normal_stop() {
         deprios: vec![],
     };
     assert_eq!(
-        it_ranking(&tactic, vec![], true, None, &System::empty()).unwrap(),
+        it_ranking(&tactic, vec![], true, &System::empty()).unwrap(),
         None
     );
 }
@@ -466,7 +466,7 @@ fn an_unknown_tactic_fails_when_its_ranking_is_selected() {
     let handle = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let mut ctx = ProofContext::new(handle, Vec::new());
     ctx.heuristic = Some(ranking);
-    let err = rank_goals_with(&System::empty(), Some(&ctx), 0).unwrap_err();
+    let err = rank_goals_with(&System::empty(), &ctx, 0).unwrap_err();
     assert_eq!(
         err.to_string(),
         "goal ranking: No tactic has been written in the theory file"
@@ -539,7 +539,7 @@ fn smart_oracle_stops_before_launch_when_source_materialisation_fails() {
     sys.add_goal(goal);
 
     assert!(matches!(
-        rank_goals_with(&sys, Some(&ctx), 0),
+        rank_goals_with(&sys, &ctx, 0),
         Err(crate::prove::ProveError::Guarded(message)) if message == "bad source"
     ));
 }
@@ -564,4 +564,32 @@ fn compact_and_standalone_default_oracles_parse_identically() {
     let compact = parse_heuristic_str_with_tactics(r#"o so O "y" sO"#, "t.spthy", &[]);
     let spaced = parse_heuristic_str_with_tactics(r#"o s o O "y" s O"#, "t.spthy", &[]);
     assert_eq!(compact, spaced);
+}
+
+#[test]
+fn default_oracle_name_matches_haskell_path_splitting() {
+    assert_eq!(oracle_name_for_theory("missing.spthy"), "oracle");
+
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tamarin-prover/examples/regression/trace/defaultoracle.spthy"
+    );
+    assert_eq!(oracle_name_for_theory(fixture), "defaultoracle.oracle");
+
+    let dir =
+        std::env::temp_dir().join(format!("tamarin_rs_oracle_basename_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for (theory, oracle) in [
+        (".foo", ".foo.oracle"),
+        ("..foo", "..oracle"),
+        ("...foo", "...oracle"),
+    ] {
+        std::fs::write(dir.join(oracle), "").unwrap();
+        assert_eq!(
+            oracle_name_for_theory(dir.join(theory).to_str().unwrap()),
+            oracle
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }

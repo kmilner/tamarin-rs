@@ -79,7 +79,7 @@ impl std::fmt::Display for MonotonicBehaviour {
 /// Combine two `MonotonicBehaviour`s — direct port of Haskell's
 /// `combine` in `simpleInjectiveFactInstances`.  Used to merge the
 /// per-rule shapes into a single behaviour vector for the tag.
-pub fn combine_behaviour(x: MonotonicBehaviour, y: MonotonicBehaviour) -> MonotonicBehaviour {
+fn combine_behaviour(x: MonotonicBehaviour, y: MonotonicBehaviour) -> MonotonicBehaviour {
     use MonotonicBehaviour::*;
     if x == y {
         return x;
@@ -100,14 +100,15 @@ pub fn combine_behaviour(x: MonotonicBehaviour, y: MonotonicBehaviour) -> Monoto
     }
 }
 
-/// HS `getPairTerms` (InjectiveFactInstances.hs): flatten ONLY the
-/// right-hand side of a tuple.
+/// Unfold the tuple `t` to the right at most `n - 1` times, stopping early at
+/// a non-pair, so the result has at most `n` leaves.  With `n = usize::MAX`
+/// this is HS `getPairTerms` (InjectiveFactInstances.hs):
 ///   getPairTerms <t1, t2> = t1 : getPairTerms t2
 ///   getPairTerms t        = [t]
-fn get_pair_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<&tamarin_term::lterm::LNTerm> {
+fn unfold_pairs(t: &tamarin_term::lterm::LNTerm, n: usize) -> Vec<&tamarin_term::lterm::LNTerm> {
     let mut out = Vec::new();
     let mut cur = t;
-    loop {
+    while out.len() + 1 < n {
         match cur {
             tamarin_term::term::Term::App(
                 tamarin_term::function_symbols::FunSym::NoEq(s),
@@ -116,12 +117,10 @@ fn get_pair_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<&tamarin_term::lterm::
                 out.push(&args[0]);
                 cur = &args[1];
             }
-            _ => {
-                out.push(cur);
-                break;
-            }
+            _ => break,
         }
     }
+    out.push(cur);
     out
 }
 
@@ -131,29 +130,8 @@ fn get_pair_terms(t: &tamarin_term::lterm::LNTerm) -> Vec<&tamarin_term::lterm::
 /// pairs; that only arises across rules with mismatched shapes, which
 /// `combineShapes` already trims to the shorter shape, so we fall back to
 /// treating the remainder as a single leaf rather than panicking.
-pub fn shape_term(t: &tamarin_term::lterm::LNTerm, n: usize) -> Vec<tamarin_term::lterm::LNTerm> {
-    let mut out = Vec::new();
-    let mut cur = t.clone();
-    let mut x = n;
-    while x > 1 {
-        match &cur {
-            tamarin_term::term::Term::App(
-                tamarin_term::function_symbols::FunSym::NoEq(s),
-                args,
-            ) if *s == tamarin_term::function_symbols::pair_sym() && args.len() == 2 => {
-                out.push(args[0].clone());
-                let rest = args[1].clone();
-                cur = rest;
-                x -= 1;
-            }
-            _ => {
-                out.push(cur);
-                return out;
-            }
-        }
-    }
-    out.push(cur);
-    out
+fn shape_term(t: &tamarin_term::lterm::LNTerm, n: usize) -> Vec<tamarin_term::lterm::LNTerm> {
+    unfold_pairs(t, n).into_iter().cloned().collect()
 }
 
 /// HS `trimmedPairTerms` (Simplify.hs): given an injective fact
@@ -256,7 +234,7 @@ pub fn simple_injective_fact_instances(
         fact.terms
             .iter()
             .skip(1)
-            .map(|t| vec![Unspecified; get_pair_terms(t).len()])
+            .map(|t| vec![Unspecified; unfold_pairs(t, usize::MAX).len()])
             .collect()
     }
 

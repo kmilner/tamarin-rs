@@ -75,6 +75,23 @@ pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
 
 pub use tamarin_test_support::corpus_root;
 
+/// The corpus root, or `None` when it is missing and `TAM_ALLOW_NO_CORPUS=1`
+/// allows the skip. A missing root otherwise fails the test.
+pub fn corpus_root_or_skip(label: &str) -> Option<PathBuf> {
+    let root = corpus_root();
+    if root.is_dir() {
+        return Some(root);
+    }
+    if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
+        eprintln!("{label}: root {} missing, skipped", root.display());
+        return None;
+    }
+    panic!(
+        "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
+        root.display()
+    );
+}
+
 /// `path` relative to the corpus root, as reports name it.
 pub fn rel<'a>(path: &'a Path, root: &Path) -> &'a Path {
     path.strip_prefix(root).unwrap_or(path)
@@ -183,14 +200,18 @@ pub fn parse_file(path: &Path) -> Option<Arc<p::Theory>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{manifest_requests_diff, parse_file, parse_source, uses_diff_operator};
+    use super::{
+        corpus_root_or_skip, manifest_requests_diff, parse_file, parse_source, uses_diff_operator,
+    };
 
     #[test]
     fn corpus_parser_takes_diff_mode_from_the_test_manifest() {
+        let Some(root) = corpus_root_or_skip("manifest diff mode") else {
+            return;
+        };
         // Diff syntax without a diff(...) term: the trace parser rejects it,
         // as HS does, and the manifest's `--diff` selects the diff parser.
-        let path = tamarin_test_support::corpus_root()
-            .join("regression/negative/diff-side-products.spthy");
+        let path = root.join("regression/negative/diff-side-products.spthy");
         let src = std::fs::read_to_string(&path).unwrap();
         assert!(!uses_diff_operator(&src));
         assert!(parse_source(&src, path.parent().map(Into::into), false).is_none());
@@ -198,8 +219,7 @@ mod tests {
         assert!(parse_file(&path).expect("diff mode parses it").is_diff);
 
         // A manifest that also runs the file in trace mode keeps it there.
-        let path = tamarin_test_support::corpus_root()
-            .join("regression/trace/dh-products-in-exponents.spthy");
+        let path = root.join("regression/trace/dh-products-in-exponents.spthy");
         assert!(!manifest_requests_diff(&path));
         assert!(!parse_file(&path).expect("trace mode parses it").is_diff);
     }

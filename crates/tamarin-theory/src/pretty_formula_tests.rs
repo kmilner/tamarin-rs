@@ -4,6 +4,7 @@
 use super::*;
 use crate::atom::Unit2;
 use crate::formula::BLNTerm;
+use crate::pretty_hpj::{LINE_LENGTH, RIBBON};
 use tamarin_parser::ast as p;
 use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
 use tamarin_term::lterm::{Name, NameTag};

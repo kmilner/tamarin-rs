@@ -440,34 +440,6 @@ pub fn all_prot_subterms<A: Clone>(t: &Term<A>) -> Vec<Term<A>> {
 }
 
 // =============================================================================
-// Replacement helpers (top-down)
-// =============================================================================
-
-pub fn replace_subterm<A: Clone, F: FnMut(Term<A>) -> Term<A>>(f: &mut F, t: Term<A>) -> Term<A> {
-    let new = f(t);
-    match new {
-        Term::Lit(_) => new,
-        Term::App(s, ts) => {
-            let new_ts: Vec<Term<A>> = ts.iter().cloned().map(|c| replace_subterm(f, c)).collect();
-            Term::App(s, new_ts.into())
-        }
-    }
-}
-
-pub fn replace_proper_subterm<A: Clone, F: FnMut(Term<A>) -> Term<A>>(
-    f: &mut F,
-    t: Term<A>,
-) -> Term<A> {
-    match t {
-        Term::App(s, ts) => {
-            let new_ts: Vec<Term<A>> = ts.iter().cloned().map(|c| replace_subterm(f, c)).collect();
-            Term::App(s, new_ts.into())
-        }
-        Term::Lit(_) => t,
-    }
-}
-
-// =============================================================================
 // TermSize: structural size including AC arg count.
 // =============================================================================
 
@@ -489,30 +461,7 @@ impl<A: TermSize> TermSize for Term<A> {
 }
 
 // Port of `instance Sized (Lit c v) where size _ = 1` (VTerm.hs).
-// This is what makes `TermSize` reachable for real `VTerm`/`LNTerm`.
 impl<C, V> TermSize for crate::vterm::Lit<C, V> {
-    fn size(&self) -> usize {
-        1
-    }
-}
-
-// Sensible default impls for the literal types we'll actually use.
-impl TermSize for u64 {
-    fn size(&self) -> usize {
-        1
-    }
-}
-impl TermSize for i64 {
-    fn size(&self) -> usize {
-        1
-    }
-}
-impl TermSize for String {
-    fn size(&self) -> usize {
-        1
-    }
-}
-impl TermSize for &str {
     fn size(&self) -> usize {
         1
     }

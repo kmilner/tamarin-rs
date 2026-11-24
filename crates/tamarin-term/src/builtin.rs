@@ -15,7 +15,8 @@ use std::collections::BTreeSet;
 
 use crate::function_symbols::{
     dh_neutral_sym, exp_sym, fst_dest_sym, fst_sym, inv_sym, one_sym, pair_sym, pmult_sym,
-    snd_dest_sym, snd_sym, zero_sym, AcSym, CSym, Constructability, NoEqFunSig, NoEqSym, Privacy,
+    priv_ctor, pub_ctor, snd_dest_sym, snd_sym, zero_sym, AcSym, CSym, Constructability,
+    NoEqFunSig, NoEqSym, Privacy,
 };
 use crate::lterm::{LNTerm, LSort, LVar};
 use crate::positions::Position;
@@ -28,12 +29,6 @@ use crate::vterm::var_term;
 // Builtin NoEq symbols
 // =============================================================================
 
-fn pub_ctor(name: &[u8], arity: usize) -> NoEqSym {
-    NoEqSym::new(name, arity, Privacy::Public, Constructability::Constructor)
-}
-fn priv_ctor(name: &[u8], arity: usize) -> NoEqSym {
-    NoEqSym::new(name, arity, Privacy::Private, Constructability::Constructor)
-}
 fn pub_dest(name: &[u8], arity: usize) -> NoEqSym {
     NoEqSym::new(name, arity, Privacy::Public, Constructability::Destructor)
 }

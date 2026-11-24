@@ -30,7 +30,7 @@ use crate::constraint::solver::context::IntrRuleCache;
 use crate::fact::{
     fresh_fact, ku_fact, nat_to_fresh_var, out_fact, proto_fact, LNFact, Multiplicity,
 };
-use crate::formula::{exists_var, lift_free, LNFormula};
+use crate::formula::{lift_free, quantify_vars, LNFormula, Quantifier};
 use crate::rule::{ProtoRuleE, ProtoRuleEInfo};
 use crate::theory::{Theory, TraceQuantifier};
 
@@ -95,25 +95,16 @@ impl std::str::FromStr for DerivCheckTimeout {
 /// Run HS's per-variable derivability check on every rule, each probe
 /// proof bounded by `timeout`.
 ///
+/// Independent rule probes each run on a Maude process of their own: the
+/// caller's, or an idle one from `pool`. Each probe is timed, so probes never
+/// queue for a shared process. Warnings and errors are collected in rule
+/// order. A rule's variables share one context.
+///
 /// `ndc_cache` is the parent theory's NDC-checked intruder cache, which HS's
 /// probe theories inherit verbatim (`deleteRulesAndLemmasAndRestrictionsFromTheory`
 /// keeps `_thyCache`, MessageDerivationChecks.hs); `None` assembles the cache
 /// from the signature.
 pub fn check_message_derivation(
-    thy: &Theory,
-    maude: &MaudeHandle,
-    timeout: DerivCheckTimeout,
-    ndc_cache: Option<IntrRuleCache>,
-    parameters: crate::constraint::solver::sources::IntegerParameters,
-) -> Result<Vec<WfError>, crate::prove::ProveError> {
-    check_message_derivation_with_pool(thy, maude, None, timeout, ndc_cache, parameters)
-}
-
-/// Run independent rule probes, each on a Maude process of its own: the
-/// caller's, or an idle pooled one. Each probe is timed, so probes never
-/// queue for a shared process. Warnings and errors are collected in rule
-/// order. A rule's variables share one context.
-pub fn check_message_derivation_with_pool(
     thy: &Theory,
     maude: &MaudeHandle,
     pool: Option<&std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
@@ -382,12 +373,7 @@ fn synthesise_probe(rule: &ProtoRuleE, idx: usize, free_vars: &[LVar]) -> Probe 
                 ku_fact(var_term(*v)).map_ref(lift_free),
             ));
             // `Ex dvar0 … dvarN-1 #t0 #t1. …`, the last binder innermost.
-            binders
-                .iter()
-                .rev()
-                .fold(gen_at.clone().and(ku_at), |acc, b| {
-                    exists_var((b.name.to_string(), b.sort), b, acc)
-                })
+            quantify_vars(Quantifier::Ex, &binders, gen_at.clone().and(ku_at))
         })
         .collect();
 
@@ -604,8 +590,9 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, secs(5), None, Default::default())
-            .expect("solver operation");
+        let report =
+            check_message_derivation(&theory(src), &m, None, secs(5), None, Default::default())
+                .expect("solver operation");
         // `x` appears in `In(x)` which is intruder-known → derivable.
         assert!(report.is_empty(), "expected no warnings, got {:?}", report);
     }
@@ -636,7 +623,7 @@ mod tests {
         for pool in [None, Some(&helpers)] {
             let reports = workers
                 .install(|| {
-                    check_message_derivation_with_pool(
+                    check_message_derivation(
                         &thy,
                         &primary,
                         pool,
@@ -691,6 +678,7 @@ mod tests {
         let report = check_message_derivation(
             &theory(src),
             &m,
+            None,
             DerivCheckTimeout::Disabled,
             None,
             Default::default(),
@@ -713,6 +701,7 @@ mod tests {
         let report = check_message_derivation(
             &theory(src),
             &m,
+            None,
             DerivCheckTimeout::Unbounded,
             None,
             Default::default(),
@@ -743,6 +732,7 @@ mod tests {
         let report = check_message_derivation(
             &theory(src),
             &m,
+            None,
             DerivCheckTimeout::Unbounded,
             None,
             Default::default(),
@@ -778,8 +768,9 @@ mod tests {
               lemma trivial: "T"
             end
         "#;
-        let report = check_message_derivation(&theory(src), &m, secs(5), None, Default::default())
-            .expect("solver operation");
+        let report =
+            check_message_derivation(&theory(src), &m, None, secs(5), None, Default::default())
+                .expect("solver operation");
         assert!(
             report.is_empty(),
             "a no_derivcheck rule is not reported, got {:?}",
@@ -872,7 +863,7 @@ mod tests {
         let Some((thy, m)) = theory_and_maude(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, secs(10), None, Default::default())
+        let report = check_message_derivation(&thy, &m, None, secs(10), None, Default::default())
             .expect("solver operation");
         assert_eq!(report.len(), 1, "expected one report, got {:?}", report);
         assert!(
@@ -903,7 +894,7 @@ mod tests {
         let Some((thy, m)) = theory_and_maude(src) else {
             return;
         };
-        let report = check_message_derivation(&thy, &m, secs(10), None, Default::default())
+        let report = check_message_derivation(&thy, &m, None, secs(10), None, Default::default())
             .expect("solver operation");
         assert!(
             report.is_empty(),

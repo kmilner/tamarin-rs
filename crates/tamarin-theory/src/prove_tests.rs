@@ -516,9 +516,16 @@ fn only_an_oracle_ranking_may_fail() {
         return;
     };
 
+    let ranking_may_fail = |name| {
+        let (_, prepared) = session.lemma_and_prepared(name).unwrap();
+        prepared
+            .heuristic
+            .as_deref()
+            .is_some_and(crate::constraint::solver::goals::rankings_may_fail)
+    };
     assert!(!session.guarded_lemmas_may_fail());
-    assert!(!session.lemma_ranking_may_fail("safe"));
-    assert!(session.lemma_ranking_may_fail("external"));
+    assert!(!ranking_may_fail("safe"));
+    assert!(ranking_may_fail("external"));
 }
 
 #[test]
@@ -846,8 +853,18 @@ fn terminal_system_does_not_force_sources() {
         .formulas_mut()
         .push(std::sync::Arc::new(crate::guarded::gfalse()));
 
-    prove_system_in_session(&session, "goal", terminal, usize::MAX)
-        .expect("terminal system bypasses sources");
+    prove_system_in_session_with_options(
+        &session,
+        "goal",
+        terminal,
+        SearchOptions {
+            proof_bound: usize::MAX,
+            ranking_depth_offset: 0,
+            cut: session.cut,
+            oracle_only: false,
+        },
+    )
+    .expect("terminal system bypasses sources");
     assert!(session.source_cache.is_empty());
 }
 
@@ -1381,6 +1398,7 @@ fn scratch_proof_checks_return_backend_errors() {
                 crate::deriv_check::check_message_derivation(
                     &theory,
                     &h,
+                    None,
                     crate::deriv_check::DerivCheckTimeout::Secs(
                         std::num::NonZeroU32::new(1).expect("nonzero"),
                     ),

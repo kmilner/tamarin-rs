@@ -408,14 +408,18 @@ fn insert_continuation_marker(red: &mut Reduction<'_>, name: &'static str, idx: 
     }
 }
 
-fn insert_pre_marker_after_split(red: &mut Reduction<'_>) {
+fn insert_pre_marker_after_split(
+    red: &mut Reduction<'_>,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     if red.sys.last_atom.is_some() {
         insert_continuation_marker(red, "pre", 10);
     }
+    Ok(SystemOutcome::Linear)
 }
 
-fn insert_post_marker(red: &mut Reduction<'_>) {
+fn insert_post_marker(red: &mut Reduction<'_>) -> Result<SystemOutcome, crate::prove::ProveError> {
     insert_continuation_marker(red, "post", 20);
+    Ok(SystemOutcome::Linear)
 }
 
 fn mark_split_arm(sys: System) -> System {
@@ -497,13 +501,16 @@ fn split_with_distinct_counters(
     ]))
 }
 
-fn allocate_counter_marker_once(red: &mut Reduction<'_>) {
+fn allocate_counter_marker_once(
+    red: &mut Reduction<'_>,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     let already_allocated = red.sys.goals.iter().any(|(goal, _)| {
         matches!(goal, crate::constraint::constraints::Goal::Action(node, _) if node.name == "fresh")
     });
     if !already_allocated {
         insert_continuation_marker(red, "fresh", red.maude.fresh_idx());
     }
+    Ok(SystemOutcome::Linear)
 }
 
 fn adopt_singleton_once(
@@ -542,10 +549,10 @@ fn assert_continuation_order(systems: Vec<SystemBranch>) {
 fn branching_pass_resumes_at_its_lexical_continuation() {
     let Some(ctx) = ctx() else { return };
     let mut red = Reduction::new(&ctx, System::empty());
-    let passes = [
-        Pass::Linear(insert_pre_marker_after_split),
-        Pass::Fallible(split_once),
-        Pass::Linear(insert_post_marker),
+    let passes: [Pass; _] = [
+        insert_pre_marker_after_split,
+        split_once,
+        insert_post_marker,
     ];
     assert_continuation_order(
         simplify_system_fan_out_inner_with_passes(&mut red, &passes)
@@ -557,10 +564,7 @@ fn branching_pass_resumes_at_its_lexical_continuation() {
 fn split_arms_resume_with_their_own_fresh_counters() {
     let Some(ctx) = ctx() else { return };
     let mut red = Reduction::new(&ctx, System::empty());
-    let passes = [
-        Pass::Fallible(split_with_distinct_counters),
-        Pass::Linear(allocate_counter_marker_once),
-    ];
+    let passes: [Pass; _] = [split_with_distinct_counters, allocate_counter_marker_once];
 
     let systems = simplify_system_fan_out_inner_with_passes(&mut red, &passes)
         .expect("infallible test passes");
@@ -616,10 +620,7 @@ fn contradictory_unique_action_discards_the_continuation() {
     sys.add_goal(Goal::Action(node, action("impossible")));
     let mut red = Reduction::new(&ctx, sys);
 
-    let passes = [
-        Pass::Fallible(solve_unique_actions_pass_fan_out),
-        Pass::Linear(insert_post_marker),
-    ];
+    let passes: [Pass; _] = [solve_unique_actions_pass_fan_out, insert_post_marker];
     assert!(
         simplify_system_fan_out_inner_with_passes(&mut red, &passes)
             .expect("infallible test passes")
@@ -715,10 +716,10 @@ fn later_unique_action_contradiction_discards_every_fanned_arm() {
 fn singleton_system_case_is_adopted_as_a_linear_continuation() {
     let Some(ctx) = ctx() else { return };
     let mut red = Reduction::new(&ctx, System::empty());
-    let passes = [
-        Pass::Linear(insert_pre_marker_after_split),
-        Pass::Fallible(adopt_singleton_once),
-        Pass::Linear(insert_post_marker),
+    let passes: [Pass; _] = [
+        insert_pre_marker_after_split,
+        adopt_singleton_once,
+        insert_post_marker,
     ];
     let mut systems = simplify_system_fan_out_inner_with_passes(&mut red, &passes)
         .expect("infallible test passes");
@@ -744,10 +745,7 @@ fn fatal_source_error_discards_completed_sibling_arms() {
     let Some(mut ctx) = ctx() else { return };
     ctx.set_source_provider(std::sync::Arc::new(FailingSourceProvider));
     let mut red = Reduction::new(&ctx, System::empty());
-    let passes = [
-        Pass::Fallible(split_into_success_then_failure),
-        Pass::Fallible(fail_sources_in_second_arm),
-    ];
+    let passes: [Pass; _] = [split_into_success_then_failure, fail_sources_in_second_arm];
 
     assert!(matches!(
         simplify_system_fan_out_inner_with_passes(&mut red, &passes),
@@ -915,7 +913,10 @@ fn failed_unification_cannot_strengthen_fresh_ordering() {
         crate::rule::unifiable_rule_ac_insts(&ctx.maude, &successor_rule, &consumer_rule).is_err()
     );
     let mut reduction = Reduction::new(&ctx, sys);
-    enforce_fresh_ordering_pass(&mut reduction);
+    assert!(matches!(
+        enforce_fresh_ordering_pass(&mut reduction).unwrap(),
+        SystemOutcome::Linear
+    ));
     assert!(reduction
         .sys
         .less_atoms
@@ -989,7 +990,10 @@ fn fresh_ordering_follows_transitive_positive_subterms() {
     ];
 
     let mut reduction = Reduction::new(&ctx, sys);
-    enforce_fresh_ordering_pass(&mut reduction);
+    assert!(matches!(
+        enforce_fresh_ordering_pass(&mut reduction).unwrap(),
+        SystemOutcome::Linear
+    ));
     assert_eq!(reduction.changed, ChangeIndicator::Changed);
     assert!(reduction
         .sys

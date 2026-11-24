@@ -30,7 +30,9 @@
 
 use std::collections::BTreeSet;
 
+use tamarin_term::lterm::{LNTerm, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
+use tamarin_term::pretty::pretty_nterm;
 
 use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{pretty_proto_rule_name, ProtoRuleE};
@@ -61,7 +63,9 @@ pub struct WfError {
     /// Fully-formatted HS-style block for this entry.  When multiple
     /// `WfError`s share a topic the `format_wf_block` formatter
     /// concatenates the messages, separated by blank lines, beneath
-    /// the topic header (which is part of `message`).
+    /// the topic header (which is part of `message`).  Rendered at
+    /// HughesPJ's default style, the plain `render` that `addComment`
+    /// (TheoryObject.hs) applies.
     pub message: String,
     /// Fatal batch errors render the same document with Console.renderDoc's
     /// wider style. Keep its rendered text because Doc contains non-Send Rc
@@ -86,7 +90,7 @@ impl WfError {
         let topic = topic.into();
         let message = Doc::text(&topic)
             .above_g(body.nest(2))
-            .render_with(WF_LINE_LENGTH, WF_RIBBON);
+            .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
         WfError {
             topic,
             message,
@@ -100,7 +104,9 @@ impl WfError {
     pub fn underlined_block(topic: impl Into<String>, body: Doc) -> Self {
         let topic = topic.into();
         let block = Doc::text(underline_topic(&topic)).above_g(body.nest(2));
-        let message = block.clone().render_with(WF_LINE_LENGTH, WF_RIBBON);
+        let message = block
+            .clone()
+            .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
         let console_message = Some(block.render_with(hpj::LINE_LENGTH, hpj::RIBBON));
         WfError {
             topic,
@@ -144,7 +150,7 @@ impl WfError {
         let message = Doc::text(info.into())
             .above_g(list.nest(2))
             .nest(2)
-            .render_with(WF_LINE_LENGTH, WF_RIBBON);
+            .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
         WfError {
             topic: topic.into(),
             message,
@@ -152,12 +158,6 @@ impl WfError {
         }
     }
 }
-
-/// `lineLength` of the style HughesPJ's `render` uses, reached from HS through
-/// `addComment`'s `render` (TheoryObject.hs).
-const WF_LINE_LENGTH: usize = 100;
-/// `ribbonLen = round (100 / 1.5) = 67` for [`WF_LINE_LENGTH`].
-const WF_RIBBON: usize = 67;
 
 pub type WfReport = Vec<WfError>;
 
@@ -240,6 +240,30 @@ fn show_rule_case_name(ru: &ProtoRuleE) -> String {
 /// HS `quote cs = '`' : cs ++ "'"` (Wellformedness.hs).
 fn quote(s: &str) -> String {
     format!("`{}'", s)
+}
+
+/// HS `wrappedText = fsep . map text . words` (Wellformedness.hs).
+fn wrapped_text(s: &str) -> Doc {
+    hpj::fsep(s.split_whitespace().map(Doc::text).collect())
+}
+
+/// HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
+/// (TheoryObject.hs), whose `prettyLVar = text . show` (LTerm.hs) makes
+/// each cell a leaf.
+fn pretty_var_list(vars: &[LVar]) -> Doc {
+    hpj::fsep(hpj::punctuate(
+        Doc::char(','),
+        vars.iter().map(|v| Doc::text(v.to_string())).collect(),
+    ))
+}
+
+/// HS `prettyLNTermList = fsep . punctuate comma . map prettyLNTerm`
+/// (Wellformedness.hs).
+fn pretty_lnterm_list(ts: &[LNTerm]) -> Doc {
+    hpj::fsep(hpj::punctuate(
+        Doc::char(','),
+        ts.iter().map(pretty_nterm).collect(),
+    ))
 }
 
 /// Build an HS `underlineTopic` block: `"<title>\n<====>\n"` where the

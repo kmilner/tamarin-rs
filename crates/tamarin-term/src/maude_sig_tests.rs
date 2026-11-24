@@ -181,7 +181,7 @@ fn pretty_fun_syms_renders_attributes() {
     }
     .refresh();
     assert_eq!(
-        sig.pretty_fun_syms_except(&UserDefinedSig::new()),
+        sig.pretty_fun_syms(),
         vec![
             "h/1".to_string(),
             "p/2 [private,constructor,NDC,NDC-diff]".to_string(),

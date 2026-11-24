@@ -11,7 +11,7 @@
 //!   - pretty:     `prettyTactic` (lib/theory/src/TheoryObject.hs)
 //!
 //! Tactics are parsed directly into [`Tactic`] by `tamarin-parser`; this
-//! module evaluates and renders that shared representation.
+//! module renders that shared representation.
 
 pub use tamarin_parser::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
 

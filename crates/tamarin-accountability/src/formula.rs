@@ -17,13 +17,12 @@ use tamarin_term::vterm::var_term;
 use tamarin_theory::atom::{ProtoAtom, SyntacticSugar};
 use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
 use tamarin_theory::formula::{
-    apply_rename, exists_var, for_all_var, for_each_formula_atom, formula_facts, formula_frees,
-    BLNTerm, ProtoFormula, SyntacticLNFormula,
+    apply_rename, for_each_formula_atom, formula_frees, BLNTerm, ProtoFormula, SyntacticLNFormula,
 };
 
 // The connective/quantifier enums (HS Theory/Model/Formula.hs) are
 // shared with the ProtoFormula data-type port in `tamarin_theory::formula`.
-pub(crate) use tamarin_theory::formula::{Connective as Conn, Quantifier as Quant};
+pub(crate) use tamarin_theory::formula::{quantify_vars, Connective as Conn, Quantifier as Quant};
 
 // =============================================================================
 // Term / atom builders (Generation.hs)
@@ -163,27 +162,6 @@ pub(crate) fn fold_conn(op: Conn, fms: Vec<SyntacticLNFormula>) -> SyntacticLNFo
 // Quantifier introduction (Generation.hs)
 // =============================================================================
 
-/// HS `hinted quan v = quan (hint v) v` (Theory/Model/Formula.hs):
-/// the hint is the variable's name and sort (Theory/Model/Formula.hs).
-fn qua_var(quant: Quant, x: &LVar, fm: SyntacticLNFormula) -> SyntacticLNFormula {
-    let hint = (x.name.to_string(), x.sort);
-    match quant {
-        Quant::All => for_all_var(hint, x, fm),
-        Quant::Ex => exists_var(hint, x, fm),
-    }
-}
-
-/// HS `quantifyVars quan vars fm = foldr (hinted quan) fm vars`
-/// (Generation.hs): `vars[0]` is the OUTERMOST binder, `vars[last]` the
-/// innermost.
-pub(crate) fn quantify_vars(
-    quant: Quant,
-    vars: &[LVar],
-    fm: SyntacticLNFormula,
-) -> SyntacticLNFormula {
-    vars.iter().rev().fold(fm, |acc, v| qua_var(quant, v, acc))
-}
-
 /// HS `quantifyFrees quan fm = quantifyVars quan (frees fm) fm`
 /// (Generation.hs).
 pub(crate) fn quantify_frees(quant: Quant, fm: SyntacticLNFormula) -> SyntacticLNFormula {
@@ -217,12 +195,6 @@ pub(crate) fn rename(fm: &SyntacticLNFormula, counter: &mut u64) -> SyntacticLNF
 // =============================================================================
 // Atom queries (Generation.hs)
 // =============================================================================
-
-/// HS `formulaActionFacts` (Generation.hs): the `Fact`s appearing in
-/// `Action` atoms of a formula.
-pub(crate) fn formula_action_facts(fm: &SyntacticLNFormula) -> Vec<Fact<BLNTerm>> {
-    formula_facts(fm).into_iter().cloned().collect()
-}
 
 /// The `Fact`s appearing in the predicate-sugar atoms of a formula — the
 /// atoms HS `expandFormula` resolves against the theory's predicates

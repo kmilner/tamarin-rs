@@ -61,21 +61,15 @@ pub(crate) fn propagate_names<A: GoodAnnotation>(
         prefix: Vec<String>,
         p: Process<A, SapicLVar>,
     ) -> Process<A, SapicLVar> {
+        let mut names = prefix;
+        names.extend(p.annotation().parsed().process_names.iter().cloned());
         match p {
-            Process::Null(ann) => {
-                let mut names = prefix;
-                names.extend(ann.parsed().process_names.clone());
-                Process::Null(set_names(ann, names))
-            }
+            Process::Null(ann) => Process::Null(set_names(ann, names)),
             Process::Action(a, ann, body) => {
-                let mut names = prefix;
-                names.extend(ann.parsed().process_names.clone());
                 let ann2 = set_names(ann, names.clone());
                 Process::Action(a, ann2, Box::new(go(names, *body)))
             }
             Process::Comb(c, ann, l, r) => {
-                let mut names = prefix;
-                names.extend(ann.parsed().process_names.clone());
                 let ann2 = set_names(ann, names.clone());
                 Process::Comb(
                     c,
@@ -398,14 +392,11 @@ pub(crate) fn translate(
         (init_rules, init_tx) = progress.init(init_rules, init_tx);
     }
     if opts.trans_reliable {
-        let (r, t) = crate::reliable_channel::reliable_channel_init(&an_proc, init_rules, init_tx);
-        init_rules = r;
-        init_tx = t;
+        (init_rules, init_tx) =
+            crate::reliable_channel::reliable_channel_init(&an_proc, init_rules, init_tx);
     }
     if opts.trans_report {
-        let (r, t) = crate::report::report_init(&an_proc, init_rules, init_tx);
-        init_rules = r;
-        init_tx = t;
+        (init_rules, init_tx) = crate::report::report_init(&an_proc, init_rules, init_tx);
     }
 
     let ctx = TransCtx {

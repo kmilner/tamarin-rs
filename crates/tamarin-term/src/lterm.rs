@@ -12,9 +12,10 @@
 //!
 //! Pretty-printing (`Show LVar` / `Display LNTerm`) is ported in `pretty.rs`.
 //!
-//! (`varOccurences`, `eqModuloFreshnessNoAC`, `someInst`/`renamePrecise`,
-//! and `freshToFreeAvoiding` are ported elsewhere — see `subsumption.rs`,
-//! `sources.rs`, `constraint::solver::rename_precise`, and `subst_vfresh.rs`.)
+//! `varOccurences` is ported in `subsumption.rs`, `someInst`/`renamePrecise`
+//! in `bind.rs`, `freshToFreeAvoiding` in `subst_vfresh.rs`, and
+//! `eqModuloFreshnessNoAC` in `tamarin-theory`'s
+//! `tools/abstract_interpretation.rs`.
 
 use std::cmp::Ordering;
 
@@ -388,6 +389,17 @@ pub fn blterm_node_id<C>(t: &crate::term::Term<crate::vterm::Lit<C, BVar<LVar>>>
         }
         _ => None,
     }
+}
+
+/// HS `freeTerm = fmap (fmap freeLNTerm)` (LTerm.hs), i.e. `fmapTerm (fmap
+/// Free)`: every variable of the term as a free `BVar`.  The literal order is
+/// unchanged, so the `f_app` rebuild inside [`crate::term::map_lits`] keeps
+/// the AC argument order.
+pub fn lift_free<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>) -> VTerm<C, BVar<V>> {
+    crate::term::map_lits(t, &mut |l| match l {
+        Lit::Con(c) => Lit::Con(c.clone()),
+        Lit::Var(v) => Lit::Var(BVar::Free(v.clone())),
+    })
 }
 
 impl<V> BVar<V> {

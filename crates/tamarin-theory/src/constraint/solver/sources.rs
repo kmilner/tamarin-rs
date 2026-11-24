@@ -24,39 +24,6 @@ use crate::constraint::system::System;
 use tamarin_term::bind::Bindings;
 use tamarin_term::lterm::frees;
 
-// =============================================================================
-// Precompute-mode marker
-// =============================================================================
-//
-// Source refinement records dangling premises for subsequent saturation passes.
-// The guard scopes that mode to the current worker's branch solve.
-
-thread_local! {
-    static IN_PRECOMPUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-pub(crate) fn in_precompute_mode() -> bool {
-    IN_PRECOMPUTE.with(|c| c.get())
-}
-
-/// RAII guard: saves `IN_PRECOMPUTE` on entry, sets it true, and restores the
-/// saved value on drop — early `return`s, `?`, and unwind alike.  `IN_PRECOMPUTE`
-/// has no free setter, so flipping it requires holding this guard; a caught
-/// panic above (`catch_unwind` in the oracle/deriv-check solvers) therefore
-/// cannot leave the flag stuck true on a reused rayon worker.
-#[must_use = "dropping this guard immediately ends the scope it protects"]
-struct PrecomputeModeGuard(bool);
-impl PrecomputeModeGuard {
-    fn enter() -> Self {
-        PrecomputeModeGuard(IN_PRECOMPUTE.with(|c| c.replace(true)))
-    }
-}
-impl Drop for PrecomputeModeGuard {
-    fn drop(&mut self) {
-        IN_PRECOMPUTE.with(|c| c.set(self.0));
-    }
-}
-
 /// Solver-tuning parameters mirroring Haskell's `IntegerParameters`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IntegerParameters {
@@ -243,6 +210,19 @@ pub(crate) fn source_patterns(
     use crate::constraint::constraints::Goal;
     use crate::fact::{fact_tag_arity, Fact, FactTag};
     use crate::rule::PremIdx;
+    use tamarin_term::lterm::{LNTerm, LSort, LVar};
+
+    /// HS `nMsgVars n = [varTerm (LVar "t" LSortMsg i) | i <- [1..n]]`
+    /// (Sources.hs), for any sort.
+    fn n_vars(sort: LSort, n: usize) -> Vec<LNTerm> {
+        (1..=n as u64)
+            .map(|i| {
+                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(LVar::new(
+                    "t", sort, i,
+                )))
+            })
+            .collect()
+    }
 
     use std::collections::BTreeSet;
     let mut tags: BTreeSet<FactTag> = BTreeSet::new();
@@ -260,38 +240,22 @@ pub(crate) fn source_patterns(
     // Mirrors Haskell's protoGoals branch of `precomputeSources`.
     // -----------------------------------------------------------------
     for tag in tags {
-        let arity = fact_tag_arity(&tag);
-        let goal_node = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
-        let terms: Vec<tamarin_term::lterm::LNTerm> = (0..arity)
-            .map(|i| {
-                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(
-                    tamarin_term::lterm::LVar::new(
-                        "t",
-                        tamarin_term::lterm::LSort::Msg,
-                        (i + 1) as u64,
-                    ),
-                ))
-            })
-            .collect();
-        let abstract_fact = Fact::new(tag, terms);
-        let goal = Goal::Premise((goal_node, PremIdx(0)), abstract_fact.clone());
+        let goal_node = LVar::new("i", LSort::Node, 0);
+        let abstract_fact = Fact::new(tag, n_vars(LSort::Msg, fact_tag_arity(&tag)));
+        let goal = Goal::Premise((goal_node, PremIdx(0)), abstract_fact);
         out.push(Source::lazy(goal));
     }
 
     // HS `msgGoals = someKUGoal <$> absMsgFacts`: KU goals for a fresh
     // variable and for each function symbol head.
-    let goal_node = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
-    let mut ku_patterns: Vec<tamarin_term::lterm::LNTerm> = Vec::new();
+    let goal_node = LVar::new("i", LSort::Node, 0);
+    let mut ku_patterns: Vec<LNTerm> = Vec::new();
     // `absMsgFacts` is `sortednub`ed, and runtime lookup takes the first
     // matching source, so order matters: the fresh variable sorts first,
     // then NoEq applications by name (`fun_syms` order), then AC (natural
     // numbers) and C (bilinear pairing) heads (`FunSym` Ord NoEq < Ac < C).
     ku_patterns.push(tamarin_term::term::Term::Lit(
-        tamarin_term::vterm::Lit::Var(tamarin_term::lterm::LVar::new(
-            "t",
-            tamarin_term::lterm::LSort::Fresh,
-            1,
-        )),
+        tamarin_term::vterm::Lit::Var(LVar::new("t", LSort::Fresh, 1)),
     ));
     let msig = ctx.maude.maude_sig();
     // `[fAppNoEq o (nMsgVars k) | o <- noEqFunSyms msig, NoEq o `notMember`
@@ -315,20 +279,9 @@ pub(crate) fn source_patterns(
             if noeq.arity == 0 && !private {
                 continue;
             }
-            let args: Vec<tamarin_term::lterm::LNTerm> = (0..noeq.arity)
-                .map(|i| {
-                    tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(
-                        tamarin_term::lterm::LVar::new(
-                            "t",
-                            tamarin_term::lterm::LSort::Msg,
-                            (i + 1) as u64,
-                        ),
-                    ))
-                })
-                .collect();
             ku_patterns.push(tamarin_term::term::Term::App(
                 tamarin_term::function_symbols::FunSym::NoEq(*noeq),
-                args.into(),
+                n_vars(LSort::Msg, noeq.arity).into(),
             ));
         }
     }
@@ -343,37 +296,22 @@ pub(crate) fn source_patterns(
             tamarin_term::function_symbols::nat_one_sym(),
             vec![],
         ));
-        let nat_args: Vec<tamarin_term::lterm::LNTerm> = (1..=2u64)
-            .map(|i| {
-                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(
-                    tamarin_term::lterm::LVar::new("t", tamarin_term::lterm::LSort::Nat, i),
-                ))
-            })
-            .collect();
         ku_patterns.push(tamarin_term::term::f_app_ac(
             tamarin_term::function_symbols::AcSym::NatPlus,
-            nat_args,
+            n_vars(LSort::Nat, 2),
         ));
     }
     // Bilinear pairing branch.  Mirrors HS Sources.hs:
     //     if enableBP msig then return $ fAppC EMap $ nMsgVars (2::Int) else []
     // C-headed; sortednub puts this LAST (after every NoEq + Ac term).
     if msig.enable_bp {
-        let args: Vec<tamarin_term::lterm::LNTerm> = (1..=2u64)
-            .map(|i| {
-                tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(
-                    tamarin_term::lterm::LVar::new("t", tamarin_term::lterm::LSort::Msg, i),
-                ))
-            })
-            .collect();
         ku_patterns.push(tamarin_term::term::f_app_c(
             tamarin_term::function_symbols::CSym::EMap,
-            args,
+            n_vars(LSort::Msg, 2),
         ));
     }
     for pat in ku_patterns {
-        let ku_fact = crate::fact::ku_fact(pat.clone());
-        let goal = Goal::Action(goal_node, ku_fact.clone());
+        let goal = Goal::Action(goal_node, crate::fact::ku_fact(pat));
         out.push(Source::lazy(goal));
     }
 
@@ -560,10 +498,8 @@ fn refine_one_source(
         previously_deduplicated && needs_dedup && all_cases.len() >= LARGE_SOURCE;
     for (name_list, sys) in all_cases {
         let original = still_distinct.then(|| sys.clone());
-        let (branches, took_step) = {
-            let _precompute_guard = PrecomputeModeGuard::enter();
-            solve_all_safe_goals(ctx, sys, ths_snapshot, name_list, source_avoid)?
-        };
+        let (branches, took_step) =
+            solve_all_safe_goals(ctx, sys, ths_snapshot, name_list, source_avoid)?;
         changed |= took_step;
         still_distinct &= branches.len() <= 1;
         // `refineSource` restricts each branch's substitution to the
@@ -697,8 +633,8 @@ fn solve_all_safe_goals(
     source_avoid: u64,
 ) -> Result<(Vec<(System, Vec<String>)>, bool), crate::prove::ProveError> {
     use crate::constraint::constraints::Goal;
-    use crate::constraint::solver::contradictions::contradictions;
-    use crate::constraint::solver::goals::dispatch_solve_goal;
+    use crate::constraint::solver::contradictions::first_contradiction;
+    use crate::constraint::solver::goals::solve_goal;
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
     use crate::constraint::solver::simplify::simplify_system_with_fanout_seeded_with_counters;
     use crate::fact::FactTag;
@@ -779,8 +715,7 @@ fn solve_all_safe_goals(
             }
         };
         let mut red = Reduction::new_inheriting(ctx, sys, fresh_counter);
-        let contras = contradictions(red.ctx, &red.sys)?;
-        if !contras.is_empty() {
+        if first_contradiction(red.ctx, &red.sys)?.is_some() {
             // Haskell mzero — drop branch (don't push to finished).
             continue;
         }
@@ -793,7 +728,7 @@ fn solve_all_safe_goals(
             .iter()
             .filter(|(_, st)| !st.solved)
             .filter(|(g, _)| {
-                crate::constraint::solver::goals::is_open_for_saturate_with(g, &red.sys, &sat_adj)
+                crate::constraint::solver::goals::is_open_in_sys(g, &red.sys, &sat_adj)
             })
             .map(|(g, st)| (g.clone(), st.looping))
             .collect();
@@ -896,7 +831,7 @@ fn solve_all_safe_goals(
             } else {
                 chains_left
             };
-            let inner_outcome = dispatch_solve_goal(&mut red, &goal)?;
+            let inner_outcome = solve_goal(&mut red, &goal)?;
             match inner_outcome {
                 GoalCases::Contradictory => {
                     continue;
@@ -946,15 +881,22 @@ fn solve_all_safe_goals(
         // among the sources this branch has not applied yet. Sources match
         // only premises and KU actions; a premise that is not a loop breaker
         // is Useful, as is a KU action unless it is deducible or probably
-        // constructible.
+        // constructible. `sat_adj` still describes `red.sys` here, since no
+        // goal was solved above.
         use crate::constraint::solver::annotated_goals::Usefulness;
+        let has_ku_guards = crate::constraint::solver::goals::has_ku_guards(&red.sys);
         let useful: Vec<Goal> = goals
             .iter()
             .filter(|(g, looping)| match g {
                 Goal::Premise(_, _) => !looping,
                 Goal::Action(_, fa) if matches!(fa.tag, FactTag::Ku) => {
-                    crate::constraint::solver::goals::goal_usefulness(g, *looping, &red.sys)
-                        == Usefulness::Useful
+                    crate::constraint::solver::goals::goal_usefulness_with_adj(
+                        g,
+                        *looping,
+                        &red.sys,
+                        sat_adj.map(),
+                        has_ku_guards,
+                    ) == Usefulness::Useful
                 }
                 _ => false,
             })
@@ -1325,8 +1267,9 @@ fn prepare_source_match(
 
     use tamarin_term::unification::MatchOutcome;
     let match_pairs =
-        match tamarin_term::unification::solve_match_lterm::<tamarin_term::lterm::Name, _>(
+        match tamarin_term::unification::solve_match_lterm::<tamarin_term::lterm::Name, _, _>(
             &tamarin_term::lterm::sort_of_name,
+            &|_| true,
             tamarin_term::rewriting::Match::DelayedMatches(pairs.clone()),
         ) {
             MatchOutcome::Matched(subst) => subst.to_list(),
@@ -1503,19 +1446,10 @@ fn conjoin_source_case(
     r.mark_goal_as_solved(live_goal);
     Ok(match r.conjoin_system(case)? {
         SystemOutcome::Contradictory => Vec::new(),
-        SystemOutcome::Linear => vec![SystemBranch {
-            counter: r.maude.fresh_counter_peek(),
-            sys: r.sys,
-        }],
+        SystemOutcome::Linear => vec![r.into_branch()],
         SystemOutcome::Cases(arms) => arms
             .into_iter()
-            .map(|arm| {
-                let r = Reduction::new_inheriting(ctx, arm.sys, arm.counter);
-                SystemBranch {
-                    counter: r.maude.fresh_counter_peek(),
-                    sys: r.sys,
-                }
-            })
+            .map(|arm| Reduction::new_inheriting(ctx, arm.sys, arm.counter).into_branch())
             .collect(),
     })
 }
@@ -1588,27 +1522,9 @@ fn var_occurrences_nodes(
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
     fn funsym_occ_ctx(sym: &tamarin_term::function_symbols::FunSym) -> Seg {
-        use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
-        match sym {
-            FunSym::NoEq(s) => match String::from_utf8_lossy(s.name) {
-                std::borrow::Cow::Borrowed(s) => Seg::Static(s),
-                std::borrow::Cow::Owned(s) => Seg::shared(&s),
-            },
-            FunSym::Ac(ac) => match ac {
-                AcSym::Union => Seg::Static("AC Union"),
-                AcSym::Mult => Seg::Static("AC Mult"),
-                AcSym::Xor => Seg::Static("AC Xor"),
-                AcSym::NatPlus => Seg::Static("AC NatPlus"),
-                // Derived HS `Show` of a user-defined AC symbol.
-                AcSym::AcFct(s) => Seg::shared(&format!(
-                    "AC (ACfct {})",
-                    tamarin_term::function_symbols::show_acfct_sym(s)
-                )),
-            },
-            FunSym::C(c) => match c {
-                CSym::EMap => Seg::Static("C EMap"),
-            },
-            FunSym::List => Seg::Static("List"),
+        match tamarin_term::subsumption::occ_label(sym) {
+            std::borrow::Cow::Borrowed(s) => Seg::Static(s),
+            std::borrow::Cow::Owned(s) => Seg::shared(&s),
         }
     }
     // ctx is a stack-allocated parent-linked chain (HS's persistent
@@ -1708,9 +1624,7 @@ fn var_occurrences_nodes(
         out: &mut BTreeMap<LVar, BTreeSet<Vec<Seg>>>,
     ) {
         let tag_ctx = Ctx {
-            seg: Seg::shared(&crate::constraint::solver::tactic_show::show_fact_tag(
-                &f.tag,
-            )),
+            seg: Seg::shared(&crate::fact::show_fact_tag_derived(&f.tag)),
             parent: Some(ctx),
         };
         for (i, t) in f.terms.iter().enumerate() {

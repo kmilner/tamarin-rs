@@ -187,7 +187,7 @@ fn shared_node_rule_map_stays_lazy_on_early_outs() {
 }
 
 /// The [`NfMemo`] must never change a verdict: every candidate answered
-/// from the memo agrees with a fresh `nf_via_haskell_maude_with_sig`
+/// from the memo agrees with a fresh `nf_via_haskell_maude`
 /// call, including for builtin-AC-headed and user-`[AC]`-headed terms
 /// (whose st-rule LHSes are matched over Maude).  The second pass
 /// rebuilds every term from scratch, so the hits go through `Term`'s
@@ -273,7 +273,7 @@ fn nf_memo_agrees_with_unmemoized_verdicts() {
     let mut verdicts = Vec::new();
     for pass in 0..2 {
         for t in candidates() {
-            let expected = tamarin_term::norm::nf_via_haskell_maude_with_sig(&sig, &maude, &t);
+            let expected = tamarin_term::norm::nf_via_haskell_maude(&sig, &maude, &t);
             assert_eq!(
                 nf_memoized(&sig, &maude, &mut memo, &t),
                 expected,

@@ -495,7 +495,9 @@ fn public_names_report_wraps_long_clash_groups() {
         .skip_while(|line| !line.starts_with("  1."))
         .collect::<Vec<_>>();
     assert!(item.len() > 1, "the clash stayed on one line: {rendered}");
-    assert!(item.iter().all(|line| line.len() <= WF_LINE_LENGTH));
+    assert!(item
+        .iter()
+        .all(|line| line.len() <= hpj::DEFAULT_LINE_LENGTH));
 }
 
 /// The name walk descends into the source subprocess a SAPIC-generated rule

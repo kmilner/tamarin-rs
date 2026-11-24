@@ -44,6 +44,8 @@ use tamarin_term::term::{map_lits, Term};
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 use tamarin_utils::fresh::PreciseFreshState;
 
+pub use tamarin_term::lterm::lift_free;
+
 /// Logical connectives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Connective {
@@ -175,8 +177,11 @@ where
     out
 }
 
-fn for_each_free_var<S, C, V>(fm: &ProtoFormula<S, (String, LSort), C, V>, f: &mut dyn FnMut(&V))
-where
+/// Visit the free variables of `fm` in [`formula_frees_list`] order.
+pub fn for_each_free_var<S, C, V>(
+    fm: &ProtoFormula<S, (String, LSort), C, V>,
+    f: &mut dyn FnMut(&V),
+) where
     S: SugarTerms<VTerm<C, BVar<V>>>,
 {
     for_each_formula_term(fm, &mut |t| for_each_free_term_var(t, &mut *f));
@@ -395,6 +400,26 @@ where
     ProtoFormula::for_all(hint, quantify(x, fm))
 }
 
+/// HS `hint (LVar n s _) = (n, s)` (Theory/Model/Formula.hs): the name and
+/// sort a binder records for display.
+pub fn lvar_hint(v: &LVar) -> (String, LSort) {
+    (v.name.to_string(), v.sort)
+}
+
+/// HS `foldr (hinted q) fm vs` over `forAll`/`exists`
+/// (Theory/Model/Formula.hs): close the binders from the last to the first,
+/// each hinted with [`lvar_hint`], so `vs[0]` is the outermost binder and the
+/// last variable carries De Bruijn index 0.
+pub fn quantify_vars<S>(q: Quantifier, vs: &[LVar], fm: LNProtoFormula<S>) -> LNProtoFormula<S>
+where
+    S: MapSugar<BLNTerm, BLNTerm, Mapped = S>,
+{
+    vs.iter().rev().fold(fm, |acc, v| match q {
+        Quantifier::All => for_all_var(lvar_hint(v), v, acc),
+        Quantifier::Ex => exists_var(lvar_hint(v), v, acc),
+    })
+}
+
 /// HS's overlapping `Apply (Subst c v) (VTerm c (BVar v))`
 /// (Term/Substitution/SubstVFree.hs) under `mapAtoms (const $ apply
 /// subst)`, the `Apply s (ProtoFormula syn h c v)` instance
@@ -459,23 +484,15 @@ where
     })
 }
 
-/// HS `toLNFormula` (Theory/Model/Formula.hs): strip the sugar with
-/// `toAtom` (Atom.hs); `None` if any atom carries sugar.
+/// HS `toLNFormula = traverseFormulaAtom (liftA Ato . toAtom)`
+/// (Theory/Model/Formula.hs): strip the sugar with `toAtom` (Atom.hs);
+/// `None` if any atom carries sugar.
 pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
-    match fm {
-        ProtoFormula::Atom(ProtoAtom::Syntactic(_)) => None,
-        ProtoFormula::Atom(a) => Some(ProtoFormula::Atom(to_atom(a.clone()))),
-        ProtoFormula::Tf(b) => Some(ProtoFormula::Tf(*b)),
-        ProtoFormula::Not(p) => Some(ProtoFormula::Not(Box::new(to_lnformula(p)?))),
-        ProtoFormula::Conn(c, p, q) => Some(ProtoFormula::Conn(
-            *c,
-            Box::new(to_lnformula(p)?),
-            Box::new(to_lnformula(q)?),
-        )),
-        ProtoFormula::Qua(q, h, p) => {
-            Some(ProtoFormula::Qua(*q, h.clone(), Box::new(to_lnformula(p)?)))
-        }
-    }
+    traverse_formula_atom(fm, &mut |a| match a {
+        ProtoAtom::Syntactic(_) => Err(()),
+        other => Ok(ProtoFormula::Atom(to_atom(other.clone()))),
+    })
+    .ok()
 }
 
 // =============================================================================
@@ -532,7 +549,7 @@ impl FormulaVars for MsgVars {
     }
 
     fn hint(v: &LVar) -> (String, LSort) {
-        (v.name.to_string(), v.sort)
+        lvar_hint(v)
     }
 
     fn term(t: &p::Term, sig: &MaudeSig) -> Option<LNTerm> {
@@ -687,16 +704,6 @@ fn atom_from_parser<F: FormulaVars>(
             free_term::<F>(l, sig)?,
             free_term::<F>(r, sig)?,
         ))),
-    })
-}
-
-/// `fmapTerm (fmap Free)` (Theory/Text/Parser/Formula.hs): every variable
-/// of the term as a free `BVar`.  The literal order is unchanged, so the
-/// `f_app` rebuild inside [`map_lits`] keeps the AC argument order.
-pub fn lift_free<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>) -> VTerm<C, BVar<V>> {
-    map_lits(t, &mut |l| match l {
-        Lit::Con(c) => Lit::Con(c.clone()),
-        Lit::Var(v) => Lit::Var(BVar::Free(v.clone())),
     })
 }
 

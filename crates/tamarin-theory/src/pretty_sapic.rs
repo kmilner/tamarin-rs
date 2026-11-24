@@ -14,7 +14,8 @@
 //! inner `render` is `Text.PrettyPrint.Class.render = P.render`
 //! (`lib/utils/src/Text/PrettyPrint/Class.hs`), i.e. the HughesPJ
 //! DEFAULT `style = Style { lineLength = 100, ribbonsPerLine = 1.5 }`, giving
-//! ribbon `round(100 / 1.5) = 67`.  This is DIFFERENT from the theory display
+//! ribbon `round(100 / 1.5) = 67` (`pretty_hpj::{DEFAULT_LINE_LENGTH,DEFAULT_RIBBON}`).
+//! This is DIFFERENT from the theory display
 //! width (110 / 73) used everywhere else (`pretty_hpj::{LINE_LENGTH,RIBBON}`).
 //! A long term such as `<aenc(shared_key.1, pk(skV.1)),
 //! report(aenc(shared_key.1, pk(skV.1)))>` (70 cols > 67) therefore wraps
@@ -56,22 +57,13 @@ use crate::sapic::{
     SapicLVar, SapicTerm,
 };
 
-/// HughesPJ DEFAULT `lineLength` (`Text.PrettyPrint.HughesPJ.style`,
-/// pretty-1.1.3.6 HughesPJ.hs).  The inner `render` calls in
-/// `prettySapicAction'` use the bare `P.render` (Text/PrettyPrint/Class.hs), so they
-/// render at this width, NOT the tamarin theory width (110).
-const SAPIC_LINE_LENGTH: usize = 100;
-/// HughesPJ DEFAULT ribbon = `round(lineLength / ribbonsPerLine)` =
-/// `round(100 / 1.5) = 67`.
-const SAPIC_RIBBON: usize = 67;
-
 /// Render a SAPIC sub-Doc the way HS's inner `render` does: standalone,
 /// starting at column 0, at the HughesPJ default width 100 / ribbon 67.
 /// Continuation lines carry the `nest`-driven indent verbatim — matching
 /// HS, which then string-concatenates the result with the surrounding action
 /// literals.
 pub fn render_sapic(d: Doc) -> String {
-    d.render_with(SAPIC_LINE_LENGTH, SAPIC_RIBBON)
+    d.render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON)
 }
 
 /// `render (prettySapicTerm t)` over a `SapicTerm` — HS `prettyTerm (text .

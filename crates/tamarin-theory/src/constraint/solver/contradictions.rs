@@ -47,20 +47,38 @@ pub enum Contradiction {
 
 /// Collect every contradiction currently witnessed by the system.
 pub fn contradictions(
-    _ctxt: &ProofContext,
+    ctxt: &ProofContext,
     sys: &System,
 ) -> Result<Vec<Contradiction>, crate::prove::ProveError> {
+    collect_contradictions(ctxt, sys, false)
+}
+
+/// The head of [`contradictions`], or `None` when the system has none.
+///
+/// HS consumes its lazy `contradictions` list with `null`/`head`, so checks
+/// after the first contradiction are never evaluated; this stops there too.
+pub fn first_contradiction(
+    ctxt: &ProofContext,
+    sys: &System,
+) -> Result<Option<Contradiction>, crate::prove::ProveError> {
+    Ok(collect_contradictions(ctxt, sys, true)?.into_iter().next())
+}
+
+/// [`contradictions`] in HS order; with `first_only` it returns as soon as
+/// one contradiction is found.
+fn collect_contradictions(
+    ctxt: &ProofContext,
+    sys: &System,
+    first_only: bool,
+) -> Result<Vec<Contradiction>, crate::prove::ProveError> {
     let mut out = Vec::new();
-    // Build Haskell's `rawLessRel = sLessAtoms ++ sEdges ++ unsolvedChains`
-    // once for cycle detection and every ordering-dependent check below.
-    let ab_adj = sys.build_always_before_adj();
-    let all_less = ab_adj
-        .map()
-        .iter()
-        .flat_map(|(from, tos)| tos.iter().map(|to| (*from, *to)))
-        .collect();
-    if tamarin_utils::dag::cyclic(&all_less) {
-        out.push(Contradiction::Cyclic);
+    macro_rules! found {
+        ($c:expr) => {{
+            out.push($c);
+            if first_only {
+                return Ok(out);
+            }
+        }};
     }
     // HS-faithful enumeration ORDER (`contradictions`, Contradictions.hs):
     // the returned list's HEAD is the recorded reason, so the push
@@ -69,65 +87,71 @@ pub fn contradictions(
     //   ForbiddenExp, ForbiddenBP, ForbiddenChain, IncompatibleEqs,
     //   FormulasFalse, then NonInjectiveFactInstance, then NodeAfterLast.
 
+    // Build Haskell's `rawLessRel = sLessAtoms ++ sEdges ++ unsolvedChains`
+    // once for cycle detection and every ordering-dependent check below.
+    let ab_adj = sys.build_always_before_adj();
+    // 1. Cyclic.
+    if tamarin_utils::dag::cyclic_adj(ab_adj.map()) {
+        found!(Contradiction::Cyclic);
+    }
+
     // Node-id → rule index shared by the checks below, built on first use.
     let node_rules: std::cell::OnceCell<NodeRuleMap<'_>> = std::cell::OnceCell::new();
 
     // 2. SubtermCyclic — `isContradictory subtermStore`.
     if sys.subterm_store.is_false() {
-        out.push(Contradiction::SubtermCyclic);
+        found!(Contradiction::SubtermCyclic);
     }
     // 3. NonNormalTerms.
-    if has_non_normal_terms(_ctxt, sys) {
-        out.push(Contradiction::NonNormalTerms);
+    if has_non_normal_terms(ctxt, sys) {
+        found!(Contradiction::NonNormalTerms);
     }
     // 4. ForbiddenKD.
     if has_forbidden_kd(sys) {
-        out.push(Contradiction::ForbiddenKD);
+        found!(Contradiction::ForbiddenKD);
     }
     // 5. ImpossibleChain.
-    if has_impossible_chain(_ctxt, sys, &node_rules) {
-        out.push(Contradiction::ImpossibleChain);
+    if has_impossible_chain(ctxt, sys, &node_rules) {
+        found!(Contradiction::ImpossibleChain);
     }
     // 6. ForbiddenExp (Contradictions.hs `hasForbiddenExp`).  Drops Exp-down rule
     //    instances whose g is simple, whose MsgVar args are KU-known earlier,
     //    and whose exponent factors are already in the up-premise.  enableDH.
-    if _ctxt.maude.maude_sig().enable_dh && has_forbidden_exp(sys, &ab_adj) {
-        out.push(Contradiction::ForbiddenExp);
+    if ctxt.maude.maude_sig().enable_dh && has_forbidden_exp(sys, &ab_adj) {
+        found!(Contradiction::ForbiddenExp);
     }
     // 7. ForbiddenBP (Contradictions.hs `hasForbiddenBP`).  Drops Pmult-down /
     //    Emap-down rule instances violating BP normal-form (redundant scalars,
     //    simplifiable em-then-exp compositions, Emap tag-order violations).
     //    enableBP.  (Chen_Kudla::key_agreement_reachable relies on this.)
-    if _ctxt.maude.maude_sig().enable_bp && has_forbidden_bp(sys) {
-        out.push(Contradiction::ForbiddenBP);
+    if ctxt.maude.maude_sig().enable_bp && has_forbidden_bp(sys) {
+        found!(Contradiction::ForbiddenBP);
     }
     // 8. ForbiddenChain.
     if has_forbidden_chain(sys, &ab_adj, &node_rules) {
-        out.push(Contradiction::ForbiddenChain);
+        found!(Contradiction::ForbiddenChain);
     }
     // 8b. ForbiddenACConstrChain — AC-constructor chain check
     //     (Contradictions.hs `hasForbiddenConstrChain`).
     if has_forbidden_constr_chain(sys, &node_rules) {
-        out.push(Contradiction::ForbiddenACConstrChain);
+        found!(Contradiction::ForbiddenACConstrChain);
     }
     // 9. IncompatibleEqs: `eqsIsFalse sEqStore` (Contradictions.hs).
     if sys.eq_store().is_false() {
-        out.push(Contradiction::IncompatibleEqs);
+        found!(Contradiction::IncompatibleEqs);
     }
     // 10. FormulasFalse — `gfalse ∈ sFormulas` (our `Disj([])`).
     if has_false_formula(sys) {
-        out.push(Contradiction::FormulasFalse);
+        found!(Contradiction::FormulasFalse);
     }
     // 11. NonInjectiveFactInstance (×n) — BEFORE NodeAfterLast, matching HS's
     //     list concatenation order in `contradictions` (Contradictions.hs).
-    out.extend(non_injective_fact_instances(
-        _ctxt,
-        sys,
-        ab_adj.map(),
-        &node_rules,
-    )?);
+    non_injective_fact_instances(ctxt, sys, ab_adj.map(), &node_rules, first_only, &mut out)?;
+    if first_only && !out.is_empty() {
+        return Ok(out);
+    }
     // 12. NodeAfterLast (×n).
-    out.extend(node_after_last(sys, ab_adj.map()));
+    node_after_last(sys, ab_adj.map(), first_only, &mut out);
     Ok(out)
 }
 
@@ -194,7 +218,7 @@ fn nf_memoized(
     if let Some(&hit) = memo.get(t) {
         return hit;
     }
-    let is_nf = tamarin_term::norm::nf_via_haskell_maude_with_sig(msig, maude, t);
+    let is_nf = tamarin_term::norm::nf_via_haskell_maude(msig, maude, t);
     memo.insert(t.clone(), is_nf);
     is_nf
 }
@@ -207,7 +231,7 @@ fn nf_memoized(
 /// `maybeNotNfSubterms` (Norm.hs) over `nf'` (Norm.hs), but without
 /// building the `BTreeSet` of every candidate: the OR needs no ordered
 /// candidate list, and [`NfMemo`] carries the dedup.  The check runs
-/// through `nf_via_haskell_maude_with_sig` — HS's `nf'` runs in the
+/// through `nf_via_haskell_maude` — HS's `nf'` runs in the
 /// `WithMaude` reader, and the handle is what lets `struleApplicable`
 /// AC-match the user-`[AC]` cancellation equations (`xorr(x, x) = zeroo`).
 fn any_non_nf(
@@ -267,6 +291,32 @@ fn maybe_not_nf_subterms(
     }
 }
 
+/// The `KD` chain view shared by `has_impossible_chain` and
+/// `has_forbidden_chain`: HS `(DnK, t_start) <- kFactView $ nodeConcFact c
+/// sys` and `(DnK, t_end) <- kFactView $ nodePremFact p sys`. Gives the
+/// premise node's rule with both terms, or `None` when a node or fact is
+/// missing or either fact is not a `KD` fact. Each lookup takes the FIRST
+/// rule stored for a node id.
+fn kd_chain_view<'a>(
+    node_rule_map: &NodeRuleMap<'a>,
+    c: &crate::constraint::constraints::NodeConc,
+    p: &crate::constraint::constraints::NodePrem,
+) -> Option<(
+    &'a crate::rule::RuleACInst,
+    &'a tamarin_term::lterm::LNTerm,
+    &'a tamarin_term::lterm::LNTerm,
+)> {
+    let c_rule = node_rule_map.get(&c.0).copied()?;
+    let p_rule = node_rule_map.get(&p.0).copied()?;
+    let (KDir::Dn, t_start) = k_fact_view(c_rule.conclusions.get(c.1 .0)?)? else {
+        return None;
+    };
+    let (KDir::Dn, t_end) = k_fact_view(p_rule.premises.get(p.1 .0)?)? else {
+        return None;
+    };
+    Some((p_rule, t_start, t_end))
+}
+
 /// `hasImpossibleChain` — port of Haskell's
 /// `Theory.Constraint.Solver.Contradictions.hasImpossibleChain`
 /// (`Contradictions.hs`).
@@ -289,40 +339,11 @@ fn has_impossible_chain<'a>(
     sys: &'a System,
     node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
 ) -> bool {
-    use crate::fact::FactTag;
-
     for (c, p) in sys.unsolved_chains() {
-        // First unsolved chain goal forces the shared map; both lookups
-        // take the FIRST rule stored for an id, exactly as the
-        // `nodes.iter().find` scans they replace did.
+        // The first unsolved chain goal forces the shared map.
         let node_rule_map = node_rules.get_or_init(|| sys.node_rule_map());
-        let (Some(c_rule), Some(p_rule)) = (
-            node_rule_map.get(&c.0).copied(),
-            node_rule_map.get(&p.0).copied(),
-        ) else {
+        let Some((_, t_start, t_end)) = kd_chain_view(node_rule_map, &c, &p) else {
             continue;
-        };
-        let conc_fact = match c_rule.conclusions.get(c.1 .0) {
-            Some(f) => f,
-            None => continue,
-        };
-        let prem_fact = match p_rule.premises.get(p.1 .0) {
-            Some(f) => f,
-            None => continue,
-        };
-        if !matches!(conc_fact.tag, FactTag::Kd) {
-            continue;
-        }
-        if !matches!(prem_fact.tag, FactTag::Kd) {
-            continue;
-        }
-        let t_start = match conc_fact.terms.first() {
-            Some(t) => t,
-            None => continue,
-        };
-        let t_end = match prem_fact.terms.first() {
-            Some(t) => t,
-            None => continue,
         };
         let poss_opt = possible_root_syms(t_start);
         let Some(poss) = poss_opt else { continue };
@@ -746,41 +767,15 @@ fn has_forbidden_chain<'a>(
     ab_adj: &crate::constraint::system::PrebuiltAdj,
     node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
 ) -> bool {
-    use crate::fact::FactTag;
     use tamarin_term::lterm::is_msg_var;
 
     // The `alwaysBefore` adjacency (`ab_adj`) is built once by the caller
     // (`contradictions`) and shared across all ordering checks; queried here
     // via `always_before_with` in the chain/node/goal loops below.
     for (c, p) in sys.unsolved_chains() {
-        // Look up the chain-conc and chain-prem rules.  The shared map
-        // keeps the FIRST rule stored for an id, exactly as the
-        // `nodes.iter().find` scans it replaces did.
         let node_rule_map = node_rules.get_or_init(|| sys.node_rule_map());
-        let (Some(c_rule), Some(p_rule)) = (
-            node_rule_map.get(&c.0).copied(),
-            node_rule_map.get(&p.0).copied(),
-        ) else {
+        let Some((p_rule, t_start, _)) = kd_chain_view(node_rule_map, &c, &p) else {
             continue;
-        };
-        let conc_fact = match c_rule.conclusions.get(c.1 .0) {
-            Some(f) => f,
-            None => continue,
-        };
-        let prem_fact = match p_rule.premises.get(p.1 .0) {
-            Some(f) => f,
-            None => continue,
-        };
-        // Chain ends and starts must both be KD facts.
-        if !matches!(conc_fact.tag, FactTag::Kd) {
-            continue;
-        }
-        if !matches!(prem_fact.tag, FactTag::Kd) {
-            continue;
-        }
-        let t_start = match conc_fact.terms.first() {
-            Some(t) => t,
-            None => continue,
         };
         // (1) Chain starts at a message variable.
         if !is_msg_var(t_start) {
@@ -825,42 +820,15 @@ fn has_forbidden_chain<'a>(
 ///       - `g` is simple
 ///       - all `MsgVar` args of `g` are KU-known earlier than `i`
 fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltAdj) -> bool {
+    use crate::constraint::solver::goals::is_simple_term;
     use crate::rule::{IntrRuleACInfo, RuleInfo};
     use tamarin_term::function_symbols::{FunSym, EXP_SYM_STRING};
-    use tamarin_term::lterm::{contains_private, frees, is_msg_var, sort_of_name, LNTerm, LSort};
+    use tamarin_term::lterm::{frees, is_msg_var, LNTerm};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
 
     // `niFactors` / multiset-subset are shared at module scope
     // (`ni_factors` / `ni_factors_subset`).
-
-    // `isSimpleTerm`: HS Term/LTerm.hs.
-    // `not (containsPrivate t) && all (LSortFresh /=) (lits t)`.
-    fn is_simple_term(t: &LNTerm) -> bool {
-        if contains_private(t) {
-            return false;
-        }
-        let mut ok = true;
-        let mut visit = |term: &LNTerm| match term {
-            Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh => {
-                ok = false;
-            }
-            Term::Lit(Lit::Con(c)) if sort_of_name(c) == LSort::Fresh => {
-                ok = false;
-            }
-            _ => {}
-        };
-        fn walk(t: &LNTerm, f: &mut dyn FnMut(&LNTerm)) {
-            f(t);
-            if let Term::App(_, args) = t {
-                for a in args.iter() {
-                    walk(a, f);
-                }
-            }
-        }
-        walk(t, &mut visit);
-        ok
-    }
 
     // `kFactView` is shared at module scope (returns `KDir`/term).
     fn view_exp(t: &LNTerm) -> Option<(&LNTerm, &LNTerm)> {
@@ -1307,7 +1275,8 @@ fn is_forbidden_d_emap_order(
 
 /// `kFactView`: returns (KDir, term) for KU / KD facts.
 /// `KDir::Up` = KU (constructible), `KDir::Dn` = KD (destruction).
-/// Shared by `has_forbidden_exp` and the BP contradiction checks.
+/// Shared by `has_forbidden_exp`, the BP contradiction checks and
+/// `kd_chain_view`.
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum KDir {
     Up,
@@ -1403,8 +1372,9 @@ fn non_injective_fact_instances<'a>(
     sys: &'a System,
     adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
     node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
-) -> Result<Vec<Contradiction>, crate::prove::ProveError> {
-    let mut out = Vec::new();
+    first_only: bool,
+    out: &mut Vec<Contradiction>,
+) -> Result<(), crate::prove::ProveError> {
     let candidates =
         injective_interference_candidates_with_graph(ctxt, sys, adj, node_rules, |_| true);
     let mut reach = BTreeMap::new();
@@ -1424,9 +1394,12 @@ fn non_injective_fact_instances<'a>(
         };
         if ordered || incompatible_last {
             out.push(Contradiction::NonInjectiveFactInstance(i, j, k));
+            if first_only {
+                break;
+            }
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 /// Upstream aec550a2: identify interference independently of the final-node
@@ -1548,18 +1521,23 @@ fn has_false_formula(sys: &System) -> bool {
 fn node_after_last(
     sys: &System,
     adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
-) -> Vec<Contradiction> {
-    let last = match &sys.last_atom {
-        Some(l) => *l,
-        None => return Vec::new(),
+    first_only: bool,
+    out: &mut Vec<Contradiction>,
+) {
+    let Some(last) = sys.last_atom else {
+        return;
     };
     // `adj` is `rawLessRel`; `j /= i` drops the seed.
     let visited = crate::constraint::solver::goals::reachable_set_adj(adj, &last, false);
-    visited
+    let after = visited
         .into_iter()
         .filter(|n| sys.is_in_trace(n))
-        .map(|after| Contradiction::NodeAfterLast(last, after))
-        .collect()
+        .map(|after| Contradiction::NodeAfterLast(last, after));
+    if first_only {
+        out.extend(after.take(1));
+    } else {
+        out.extend(after);
+    }
 }
 
 /// `maybeNonNormalTerms`: walk all node facts + new_vars, returning every
@@ -1766,8 +1744,7 @@ impl SubstNfChecker {
             // arguments (multiset / mult / xor / nat-plus), so
             // `mult(tid, x)` and `mult(x, tid)` are different `Eq`
             // representations but both in NF.
-            let is_nf =
-                tamarin_term::norm::nf_via_haskell_maude_with_sig(&sig, &self.maude, &t_prime);
+            let is_nf = tamarin_term::norm::nf_via_haskell_maude(&sig, &self.maude, &t_prime);
             if !is_nf {
                 return true;
             }

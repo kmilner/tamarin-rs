@@ -454,15 +454,7 @@ impl ProofContext {
     /// Number of protocol-class rules, including non-constructor/non-destructor
     /// intruder rules, after compiled-member deduplication.
     pub fn protocol_rule_count(&self) -> usize {
-        self.rules.len()
-            + self
-                .intruder_rules
-                .iter()
-                .filter(|rule| {
-                    !crate::rule::is_constr_rule(&rule.info)
-                        && !crate::rule::is_destr_rule(&rule.info)
-                })
-                .count()
+        self.classified_rules.protocol.len()
     }
 
     /// Whether a search with a deadline visits its cases in order: a witness
@@ -1034,7 +1026,7 @@ pub(crate) fn annotate_loop_breakers(
                     }
                 });
                 let mut next = avoid_max;
-                let free = s.fresh_to_free(|_| {
+                let free = s.fresh_to_free_avoiding(|_| {
                     let i = next;
                     next += 1;
                     i

@@ -301,28 +301,16 @@ pub fn rename_precise_system(sys: &mut System) {
     // HS-faithful: `_sSubtermStore` summands are `S.Set` (SubtermStore.hs
     // `Set SubtermD` for both pos and neg).  `mapFrees (S.Set a) =
     // fmap S.fromList . mapFrees f . S.toList` — sort + dedup post-rename.
-    for c in sys.subterm_store_mut().subterms.iter_mut() {
-        if let Some(nc) = c.apply_changed(&pass) {
-            *c = nc;
+    let st = sys.subterm_store_mut();
+    for cs in [&mut st.subterms, &mut st.solved_subterms] {
+        for c in cs.iter_mut() {
+            if let Some(nc) = c.apply_changed(&pass) {
+                *c = nc;
+            }
         }
+        cs.sort_by(|a, b| a.hs_pair().cmp(&b.hs_pair()));
+        cs.dedup_by(|a, b| a.hs_pair() == b.hs_pair());
     }
-    sys.subterm_store_mut()
-        .subterms
-        .sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
-    sys.subterm_store_mut()
-        .subterms
-        .dedup_by(|a, b| (&a.small, &a.big) == (&b.small, &b.big));
-    for c in sys.subterm_store_mut().solved_subterms.iter_mut() {
-        if let Some(nc) = c.apply_changed(&pass) {
-            *c = nc;
-        }
-    }
-    sys.subterm_store_mut()
-        .solved_subterms
-        .sort_by(|a, b| (&a.small, &a.big).cmp(&(&b.small, &b.big)));
-    sys.subterm_store_mut()
-        .solved_subterms
-        .dedup_by(|a, b| (&a.small, &a.big) == (&b.small, &b.big));
     // negSubterms are mapped too; oldNegSubterms are NOT (HS mapFrees
     // keeps `oldNegSt` with `pure` — SubtermStore.hs).  Take the set
     // out, map each pair, then `rebuild_from` re-establishes the sorted-unique

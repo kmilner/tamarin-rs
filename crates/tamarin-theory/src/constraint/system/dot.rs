@@ -13,7 +13,7 @@
 //! always render compact, the HS default.
 
 use crate::constraint::system::{NodeRuleMap, System};
-use crate::fact::{FactTag, LNFact};
+use crate::fact::{is_proto_fact, FactTag, LNFact};
 use crate::pretty_hpj::{self, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 use crate::rule::{
     prefix_if_reserved, rule_name_string, ProtoRuleName, Rule, RuleACInst, RuleInfo,
@@ -31,7 +31,7 @@ use crate::constraint::system::graph::repr::{
     extract_base_name, extract_role, GEdge, GNode, MissingHint, NodeType,
 };
 use crate::constraint::system::graph::{
-    resolve_node_conc_fact, resolve_node_prem_fact, system_to_graph, Graph,
+    edge_fact_check, resolve_node_conc_fact, resolve_node_prem_fact, system_to_graph, Graph,
 };
 
 // ---------------------------------------------------------------------
@@ -159,7 +159,7 @@ fn scale_indent(s: String) -> String {
 /// `Fact (ProtoFact Linear ("Diff" ++ getRuleNameDiff ru) 0) S.empty []`
 /// is dropped before rendering. `getRuleNameDiff` (Theory/Model/Rule.hs) prefixes
 /// the rule's `getRuleName` with `"Intr"`/`"Proto"` depending on the rule
-/// kind. Returns `true` when the fact should be KEPT.
+/// kind.
 fn diff_annotation_name(ru: &RuleACInst) -> String {
     match &ru.info {
         RuleInfo::Intr(_) => format!("DiffIntr{}", rule_name_string(ru)),
@@ -167,6 +167,7 @@ fn diff_annotation_name(ru: &RuleACInst) -> String {
     }
 }
 
+/// `true` when the fact should be kept.
 fn is_not_diff_annotation(diff_fact_name: &str, fa: &LNFact) -> bool {
     let is_diff = matches!(&fa.tag,
         FactTag::Proto(crate::fact::Multiplicity::Linear, n, 0)
@@ -342,29 +343,14 @@ fn classify_edge(
     src: &crate::constraint::constraints::NodeConc,
     tgt: &crate::constraint::constraints::NodePrem,
 ) -> EdgeKind {
-    // Look up tag of the source-conclusion or target-premise.
-    let conc_tag = resolve_node_conc_fact(src, orig_node_map).map(|fa| fa.tag);
-    let prem_tag = resolve_node_prem_fact(tgt, orig_node_map).map(|fa| fa.tag);
-    let is_proto = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Proto(_, _, _))) };
-    // HS `isPersistentFact` (Theory/Model/Fact.hs) reads the tag's
-    // multiplicity, and HS `factTagMultiplicity` (Theory/Model/Fact.hs)
-    // makes `KUFact`/`KDFact`
-    // persistent alongside `ProtoFact Persistent _ _`.  Only the proto arm can
-    // fire below: the branch is gated on `check isProtoFact`, and both endpoints
-    // of an `Edge` carry the same tag because HS `insertEdges`
-    // (Reduction.hs) unifies the two facts through `solveFactEqs`, whose
-    // first act is `contradictoryIf` on unequal tags (Reduction.hs).
-    let is_persistent = |t: Option<&FactTag>| -> bool {
-        t.is_some_and(|tag| {
-            crate::fact::fact_tag_multiplicity(tag) == crate::fact::Multiplicity::Persistent
-        })
-    };
-    let is_k = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Ku) | Some(FactTag::Kd)) };
-    if is_proto(conc_tag.as_ref()) || is_proto(prem_tag.as_ref()) {
+    let prem = resolve_node_prem_fact(tgt, orig_node_map);
+    let conc = resolve_node_conc_fact(src, orig_node_map);
+    let check = |p: fn(&LNFact) -> bool| edge_fact_check(prem, conc, p);
+    if check(is_proto_fact) {
         EdgeKind::Proto {
-            persistent: is_persistent(conc_tag.as_ref()) || is_persistent(prem_tag.as_ref()),
+            persistent: check(LNFact::is_persistent),
         }
-    } else if is_k(conc_tag.as_ref()) || is_k(prem_tag.as_ref()) {
+    } else if check(LNFact::is_k_fact) {
         EdgeKind::K
     } else {
         EdgeKind::Other
