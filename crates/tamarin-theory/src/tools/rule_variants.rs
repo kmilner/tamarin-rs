@@ -221,11 +221,7 @@ pub fn variants_proto_rule(
     // `simpDisjunction` (RuleVariants.hs) includes `simpSingleton`, folding a
     // singleton variant into the shared substitution applied to the rule body.
     let (common_subst, residual) =
-        crate::tools::equation_store::EquationStore::simp_disjunction_with_maude(
-            substs,
-            |_, _| false,
-            maude,
-        )?;
+        crate::tools::equation_store::EquationStore::simp_disjunction(maude, |_, _| false, substs)?;
     // HS `trueDisj = [emptySubstVFresh]` (RuleVariants.hs).
     let fresh_substs = residual.unwrap_or_else(|| vec![LNSubstVFresh::empty()]);
     Ok(Some(make_proto_rule_ac(rule, &common_subst, fresh_substs)))
@@ -941,12 +937,11 @@ pub fn abstract_rule_and_variants(
     // part to the rule body. The Maude-backed pipeline includes
     // `simpSingleton`, which folds a singleton disjunction into that shared
     // substitution (EquationStore.hs).
-    let (common_subst, residual) =
-        crate::tools::equation_store::EquationStore::simp_disjunction_with_maude(
-            composed_substs,
-            |_, _| false,
-            maude,
-        )?;
+    let (common_subst, residual) = crate::tools::equation_store::EquationStore::simp_disjunction(
+        maude,
+        |_, _| false,
+        composed_substs,
+    )?;
 
     // Apply common_subst to the abstracted rule's terms.
     let abstracted_rule = if common_subst.is_empty() {

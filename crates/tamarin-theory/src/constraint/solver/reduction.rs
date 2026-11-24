@@ -1121,11 +1121,7 @@ impl<'ctx> Reduction<'ctx> {
             let store = std::sync::Arc::unwrap_or_clone(self.sys.take_eq_store());
             self.sys.invalidate_max_var_idx_cache();
             self.sys
-                .set_eq_store(std::sync::Arc::new(store.simp_with_fresh_avoiding(
-                    |_, _| false,
-                    |n| maude.reserve_idxs(n),
-                    Some(&maude),
-                )?));
+                .set_eq_store(std::sync::Arc::new(store.simp(&maude, |_, _| false)?));
             // eq_store simp can rewrite/drop subst entries → max may lower.
             self.sys.invalidate_max_var_idx_cache();
             // HS leaves the orphaned SplitG goal in `sGoals` until the
@@ -2016,20 +2012,11 @@ impl<'ctx> Reduction<'ctx> {
         // Take eq_store out of self, mutate it, put it back, then
         // borrow Maude — this avoids overlapping borrows of self.
         let maude = self.maude.clone();
-        // Pass the system-wide max idx so Maude witnesses get renamed
-        // above ANY existing variable in the system (not just in the
-        // eq-store).  Without this, witnesses collide with rule vars,
-        // goal vars, formula vars, etc., conflating distinct semantic
-        // variables.
-        let avoid = bounds_max(&self.sys);
         // Set op label so apply_eq_store's [rs-aes-tick] trace
         // attributes calls to solveTermEqs (matches HS's
         // `addEqsLabeled "solveTermEqs"` site naming).
         let _op_guard = crate::constraint::solver::trace::OpLabelGuard::new("solveTermEqs");
-        let split = self
-            .sys
-            .eq_store_mut()
-            .add_eqs_with_avoid(&maude, &pending, avoid)?;
+        let split = self.sys.eq_store_mut().add_eqs(&maude, &pending)?;
         // Run simp with substCreatesNonNormalTerms as the is_contr
         // predicate.  Without it, SplitG variants that would
         // introduce non-normal terms (e.g. verify=sign(...)) aren't
@@ -2050,7 +2037,7 @@ impl<'ctx> Reduction<'ctx> {
             crate::constraint::solver::contradictions::SubstNfChecker::new(&maude, &self.sys)
         });
         let store = std::sync::Arc::unwrap_or_clone(self.sys.take_eq_store());
-        // Use `simp_with_fresh_avoiding` so singleton SplitG disjunctions
+        // Use `EquationStore::simp` so singleton SplitG disjunctions
         // get folded into `subst` via `simp_singleton`.  Haskell's `simp`
         // (EquationStore.hs) calls `simpSingleton` as part of the
         // main loop, so by the time the search sees the goal list, a
@@ -3615,7 +3602,7 @@ fn fanout_arm_systems(
     }
 }
 
-/// simp one `EquationStore` with `simp_with_fresh_avoiding`, drawing fresh
+/// simp one `EquationStore` with `EquationStore::simp`, drawing fresh
 /// indices from the same `reserve_idxs` counter.  `Some(checker)` wires the
 /// `substCreatesNonNormalTerms` predicate; `None` disables it
 /// (`|_,_| false`), mirroring the `has_reducible` gate at the call sites.
@@ -3627,14 +3614,8 @@ fn simp_store(
     maude: &tamarin_term::maude_proc::MaudeHandle,
 ) -> Result<crate::tools::equation_store::EquationStore, crate::prove::ProveError> {
     Ok(match checker {
-        Some(checker) => store.simp_with_fresh_avoiding(
-            |fs, vfs| checker.check(fs, vfs),
-            |n| maude.reserve_idxs(n),
-            Some(maude),
-        )?,
-        None => {
-            store.simp_with_fresh_avoiding(|_, _| false, |n| maude.reserve_idxs(n), Some(maude))?
-        }
+        Some(checker) => store.simp(maude, |fs, vfs| checker.check(fs, vfs))?,
+        None => store.simp(maude, |_, _| false)?,
     })
 }
 

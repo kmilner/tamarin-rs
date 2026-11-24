@@ -66,9 +66,7 @@ fn singleton_and_factor_simplification_propagate_transport_failure() {
         LNSubstVFresh::from_list(vec![(x, union("e", "f"))]),
     ]);
     let mut healthy = store.clone();
-    assert!(healthy
-        .simp_singleton_avoiding(&mut |n| maude.reserve_idxs(n), Some(&maude))
-        .unwrap());
+    assert!(healthy.foreach_disj(&maude, simp_singleton).unwrap());
     let maude = tamarin_term::maude_proc::MaudeHandle::start(
         &path,
         tamarin_term::maude_sig::mset_maude_sig(),
@@ -76,13 +74,11 @@ fn singleton_and_factor_simplification_propagate_transport_failure() {
     .unwrap();
     maude.kill_subprocess();
     assert!(matches!(
-        store
-            .clone()
-            .simp_singleton_avoiding(&mut |n| maude.reserve_idxs(n), Some(&maude)),
+        store.clone().foreach_disj(&maude, simp_singleton),
         Err(AddEqsError::Maude(_))
     ));
     assert!(matches!(
-        store.apply_factor_or_compose(&LNSubst::empty(), Some(&maude)),
+        store.apply_factor_or_compose(&LNSubst::empty(), &maude),
         Err(AddEqsError::Maude(_))
     ));
 }
@@ -265,12 +261,31 @@ fn simp_empty_disj_makes_store_false() {
 /// treat a satisfiable singleton as a contradiction.
 #[test]
 fn simp_is_idempotent_on_a_consistent_store() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let maude = tamarin_term::maude_proc::MaudeHandle::start(
+        &path,
+        tamarin_term::maude_sig::pair_maude_sig(),
+    )
+    .unwrap();
+    use tamarin_term::lterm::{Name, NameTag};
+    let con = |n: &str| -> LNTerm {
+        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Con(Name::new(
+            NameTag::Pub,
+            n.to_string(),
+        )))
+    };
+    let x = LVar::new("x", LSort::Msg, 0);
     let mut store = EquationStore::empty();
-    let id = store.add_disj(vec![fresh_subst()]);
-    let once = store.simp(|_, _| false);
+    let id = store.add_disj(vec![
+        LNSubstVFresh::from_list(vec![(x, con("a"))]),
+        LNSubstVFresh::from_list(vec![(x, con("b"))]),
+    ]);
+    let once = store.simp(&maude, |_, _| false).unwrap();
     assert!(!once.is_false());
-    assert_eq!(once.split_size(id), Some(1), "the disjunction survives");
-    let twice = once.clone().simp(|_, _| false);
+    assert_eq!(once.split_size(id), Some(2), "the disjunction survives");
+    let twice = once.clone().simp(&maude, |_, _| false).unwrap();
     assert_eq!(twice, once, "simp must already be at its fixpoint");
 }
 
@@ -281,6 +296,14 @@ fn simp_abstract_name_factors_common_constant() {
     // the common `x` mapping into the free substitution and leave `y` alone.
     // The cases must differ, or `add_disj`'s dedup would collapse them to
     // one and the "common to every subst" condition would be vacuous.
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let maude = tamarin_term::maude_proc::MaudeHandle::start(
+        &path,
+        tamarin_term::maude_sig::pair_maude_sig(),
+    )
+    .unwrap();
     use tamarin_term::lterm::{Name, NameTag};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
@@ -293,7 +316,7 @@ fn simp_abstract_name_factors_common_constant() {
     let mut store = EquationStore::empty();
     let id = store.add_disj(vec![s1, s2]);
     assert_eq!(store.split_size(id), Some(2), "both cases must survive");
-    assert!(store.simp_abstract_name());
+    assert!(store.foreach_disj(&maude, simp_abstract_name).unwrap());
     // Free subst should now contain x → foo.
     let dom: Vec<&LVar> = store.subst.dom().collect();
     assert_eq!(dom, vec![&v]);

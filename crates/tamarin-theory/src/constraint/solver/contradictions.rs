@@ -1930,7 +1930,7 @@ pub fn maybe_non_normal_terms_nodes(
 /// first `check()` that reaches a probe (mirroring HS's unforced
 /// thunk).  The fsubst application is recomputed only when
 /// the free-subst VALUE changes (at most once per `simp1` iteration:
-/// `simp_with_fresh_avoiding` snapshots `self.subst` per iteration and
+/// `EquationStore::simp` snapshots `self.subst` per iteration and
 /// probes every candidate against that same snapshot). The predicate does
 /// not advance the fresh counter.
 pub struct SubstNfChecker {
