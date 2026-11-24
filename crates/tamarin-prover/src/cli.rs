@@ -66,7 +66,7 @@
 //!
 //! The run pipeline consumes the flat [`Args`] struct; [`parse_args`] builds
 //! it from the clap tree.  `--quiet`, `--verbose`, `--proverif-no-*`,
-//! `--replication-bound`, `--image-format`, `--debug`, `--no-logging`,
+//! `--replication-bound`, `--debug`, `--no-logging`,
 //! and `--no-compress` are accepted but have no effect on output, and
 //! `--diff` errors at run time (see each field's doc).
 
@@ -107,8 +107,8 @@ pub enum Subcommand {
     InputManifest,
 }
 
-/// Image format used for graph rendering in interactive mode.  Accepted for
-/// compatibility; rendering currently always produces SVG.
+/// `--image-format`: the interactive graph image format (HS
+/// `readImageFormat`, Interactive.hs; matched case-insensitively).
 #[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
 pub enum ImageFormat {
     Png,
@@ -194,6 +194,7 @@ pub struct Args {
     /// `-p/--port` (default 3001 when absent or bare).
     pub port: Option<u16>,
     pub interface: Option<String>,
+    pub image_format: Option<ImageFormat>,
     pub data_dir: Option<String>,
 }
 
@@ -422,7 +423,7 @@ struct InteractiveOpts {
     #[arg(short = 'i', long, require_equals = true, value_name = "INTERFACE")]
     interface: Option<String>,
 
-    /// Graph image format (accepted; rendering currently always uses SVG)
+    /// Graph image format (default: svg)
     #[arg(
         long = "image-format",
         value_enum,
@@ -430,7 +431,6 @@ struct InteractiveOpts {
         require_equals = true,
         value_name = "FORMAT"
     )]
-    #[allow(dead_code)] // accepted, never read
     image_format: Option<ImageFormat>,
 
     /// Accepted for compatibility (HS web debug output has no port)
@@ -738,6 +738,7 @@ pub fn parse_args(raw: &[String]) -> Result<Args, clap::Error> {
             args.in_files = workdir;
             args.port = web.port;
             args.interface = web.interface;
+            args.image_format = web.image_format;
             args.data_dir = web.data_dir;
         }
         Some(Cmd::Variants { output_dir }) => {

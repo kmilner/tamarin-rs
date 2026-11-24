@@ -1201,13 +1201,7 @@ mod tests {
         .unwrap();
         assert_eq!(proto_rule_count(&entry), 1);
         entry.proof_state = Some(Arc::new(
-            crate::handlers::proof_tree::ProofState::new(
-                &entry.typed_theory,
-                (*entry.prover_maude_sig).clone(),
-                entry.ndc_cache.as_ref(),
-                &config,
-            )
-            .unwrap(),
+            crate::handlers::proof_tree::ProofState::new(&entry, &config).unwrap(),
         ));
         assert_eq!(proto_rule_count(&entry), 3);
     }
@@ -1287,13 +1281,8 @@ end
         .expect("load");
         entry.idx = 1;
         let state = Arc::new(
-            crate::handlers::proof_tree::ProofState::new(
-                &entry.typed_theory,
-                (*entry.prover_maude_sig).clone(),
-                entry.ndc_cache.as_ref(),
-                &test_config(&maude),
-            )
-            .expect("proof state"),
+            crate::handlers::proof_tree::ProofState::new(&entry, &test_config(&maude))
+                .expect("proof state"),
         );
         entry.proof_state = Some(state.clone());
 

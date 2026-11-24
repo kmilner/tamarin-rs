@@ -45,6 +45,9 @@ pub struct TheoryEntry {
     /// rules and the theory's terms keep their untagged symbols, so a module
     /// built from the joined signature declares operators nothing else names.
     pub prover_maude_sig: Arc<tamarin_term::maude_sig::MaudeSig>,
+    /// The prover session's cut strategy, resolved once by the loader
+    /// (`TheoryPipeline::cut`).
+    pub cut: tamarin_theory::constraint::solver::context::CutStrategy,
     /// Where the theory came from.
     pub origin: TheoryOrigin,
     /// Load time for the UI.
@@ -379,12 +382,7 @@ impl TheoryStore {
             // will retry from a fresh snapshot. The post-build check below
             // still closes the race with replacement during the build.
             self.validate_generation(idx, &generation)?;
-            let built = ProofState::new(
-                &snapshot.entry.typed_theory,
-                (*snapshot.entry.prover_maude_sig).clone(),
-                snapshot.entry.ndc_cache.as_ref(),
-                cfg,
-            );
+            let built = ProofState::new(&snapshot.entry, cfg);
 
             // Publish only into the exact generation that elected this
             // builder.  Removal, reload, and index reuse all replace the Arc.
@@ -437,6 +435,7 @@ mod tests {
             idx: 0,
             typed_theory: Arc::new(typed_theory),
             prover_maude_sig: Arc::new(prover_maude_sig),
+            cut: tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
             origin: TheoryOrigin::Interactive,
             loaded_at: Local::now(),
             primary: true,

@@ -1412,7 +1412,7 @@ fn read_simplification_level(s: &str) -> Option<SimplificationLevel> {
 }
 
 /// `GET /thy/trace/<idx>/graph/*path` — HS `getTheoryGraphR`: the system's
-/// graph as an SVG image (`imgThyPath`, Web/Theory.hs).
+/// graph as an `--image-format` image (`imgThyPath`, Web/Theory.hs).
 pub async fn graph(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
@@ -1426,6 +1426,7 @@ pub async fn graph(
     // placeholder SVG.  The label `imgThyPath` carries is for its `OutJSON`
     // branch, taken below only when `--with-json` was given.
     let opts = graph_options_from_map(&query);
+    let mime = state.cfg.image_format.mime();
     // `--with-json` switches this route to HS's `OutJSON` render branch
     // (`imgThyPath` picks `toJSON jsonLabel system`, Web/Theory.hs,
     // and `renderGraphCode` runs `jsonToImg`, Web/Theory.hs): the
@@ -1459,10 +1460,7 @@ pub async fn graph(
     match result {
         Ok(Some(image)) => {
             let mut headers = HeaderMap::new();
-            headers.insert(
-                header::CONTENT_TYPE,
-                header::HeaderValue::from_static("image/svg+xml"),
-            );
+            headers.insert(header::CONTENT_TYPE, header::HeaderValue::from_static(mime));
             (StatusCode::OK, headers, image).into_response()
         }
         Ok(None) => not_found(),
@@ -1836,6 +1834,7 @@ pub async fn delete_step(
                             .rebase_onto(
                                 &detached.typed_theory,
                                 detached.ndc_cache.as_ref(),
+                                detached.cut,
                                 &delete_state.cfg,
                                 &invalidated,
                             )

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tamarin_theory::wellformedness::WfError;
 
 use crate::state::{TheoryEntry, TheoryOrigin};
-use crate::theory_loader::{load_theory, read_config_block, TheoryPipeline};
+use crate::theory_loader::{load_theory, TheoryPipeline};
 
 #[derive(Debug)]
 pub enum LoadError {
@@ -57,9 +57,8 @@ pub(crate) fn load_from_source(
     };
     let parsed = load_theory(&cfg.load, src, base_dir)
         .map_err(|e| LoadError::Parse(e.render_plain_with_source(&source_name, src)))?;
-    let config = read_config_block(&parsed, None).map_err(LoadError::Close)?;
-    let mut pipeline = TheoryPipeline::new(&cfg.load, parsed, &source_name, None, config)
-        .map_err(LoadError::Close)?;
+    let mut pipeline =
+        TheoryPipeline::new(&cfg.load, parsed, &source_name, None).map_err(LoadError::Close)?;
     pipeline.translate_theory().map_err(LoadError::Close)?;
     pipeline
         .check_translated_theory()
@@ -74,6 +73,7 @@ pub(crate) fn load_from_source(
         idx: 0,
         typed_theory: pipeline.theory,
         prover_maude_sig: Arc::new(pipeline.maude_sig),
+        cut: pipeline.cut,
         origin,
         loaded_at: Local::now(),
         primary: true,

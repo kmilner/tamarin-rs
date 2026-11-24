@@ -21,7 +21,6 @@ use tamarin_theory::constraint::solver::search::{
 };
 use tamarin_theory::constraint::system::System;
 use tamarin_theory::pretty_system::pretty_non_graph_system;
-use tamarin_theory::theory::TheoryItem;
 
 use crate::handlers::path_parse::{theory_url, TheoryPath};
 
@@ -160,52 +159,36 @@ pub struct ProofState {
 }
 
 impl ProofState {
-    /// Build the per-theory prover session. Per-lemma roots and contexts stay
-    /// lazy until an interactive route asks for them.
+    /// Build the per-theory prover session from a loaded entry. Per-lemma
+    /// roots and contexts stay lazy until an interactive route asks for them.
     ///
-    /// `maude_sig`: the signature this theory's Maude process loads its
-    /// module from (`TheoryEntry::prover_maude_sig`) — `typed`'s signature
-    /// from before the load's NDC join.
-    ///
-    /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
-    /// (`theory_io` ran `check_close_intr_rule` at load), injected into
-    /// the session so it does not re-run the check. The borrowed handle is
-    /// the same allocation the `TheoryEntry` holds.
+    /// The Maude process loads the entry's `prover_maude_sig`, and the
+    /// session reuses its load-time NDC-checked intruder cache.
     pub(crate) fn new(
-        typed: &std::sync::Arc<tamarin_theory::theory::Theory>,
-        maude_sig: tamarin_term::maude_sig::MaudeSig,
-        ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
+        entry: &crate::state::TheoryEntry,
         cfg: &crate::ServerConfig,
     ) -> Result<Self, String> {
-        let maude = tamarin_term::maude_proc::MaudeHandle::start(&cfg.load.maude_path, maude_sig)
-            .map_err(|e| format!("maude start: {:?}", e))?;
-        Self::new_with_maude(typed, maude, ndc_cache, cfg)
+        let maude = tamarin_term::maude_proc::MaudeHandle::start(
+            &cfg.load.maude_path,
+            (*entry.prover_maude_sig).clone(),
+        )
+        .map_err(|e| format!("maude start: {:?}", e))?;
+        Self::new_with_maude(
+            &entry.typed_theory,
+            maude,
+            entry.ndc_cache.as_ref(),
+            entry.cut,
+            cfg,
+        )
     }
 
     fn new_with_maude(
         typed: &std::sync::Arc<tamarin_theory::theory::Theory>,
         maude: tamarin_term::maude_proc::MaudeHandle,
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
+        cut: tamarin_theory::constraint::solver::context::CutStrategy,
         cfg: &crate::ServerConfig,
     ) -> Result<Self, String> {
-        // Effective cut strategy — HS `closeTheory` precedence
-        // (TheoryLoader.hs): the CLI `--stop-on-trace` wins;
-        // the theory's `configuration:` block is consulted only when
-        // the flag is absent.  Steers the session's autoprove
-        // (`runAutoProver`'s `apCut`) and interactive contexts.
-        let config_block = typed.items.iter().find_map(|i| match i {
-            TheoryItem::ConfigBlock(c) => Some(c),
-            _ => None,
-        });
-        let cut = match cfg.load.stop_on_trace {
-            Some(c) => c,
-            None => match config_block {
-                Some(cfg) => tamarin_theory::prove::config_block_options(cfg)?
-                    .0
-                    .unwrap_or(tamarin_theory::constraint::solver::context::CutStrategy::Dfs),
-                None => tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
-            },
-        };
         let session = tamarin_theory::prove::ProverSession::build(
             typed.clone(),
             maude,
@@ -414,6 +397,7 @@ impl ProofState {
         &self,
         typed: &Arc<tamarin_theory::theory::Theory>,
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
+        cut: tamarin_theory::constraint::solver::context::CutStrategy,
         cfg: &crate::ServerConfig,
         invalidated: &std::collections::BTreeSet<String>,
     ) -> Result<Self, String> {
@@ -427,6 +411,7 @@ impl ProofState {
                 .maude
                 .with_fresh_counter_next(0),
             ndc_cache,
+            cut,
             cfg,
         )?;
         for lemma in typed.lemmas() {
@@ -1161,13 +1146,7 @@ mod tests {
             &test_config(mp),
         )
         .expect("load");
-        ProofState::new(
-            &entry.typed_theory,
-            (*entry.prover_maude_sig).clone(),
-            entry.ndc_cache.as_ref(),
-            &test_config(mp),
-        )
-        .expect("build state")
+        ProofState::new(&entry, &test_config(mp)).expect("build state")
     }
 
     fn test_config(maude: &str) -> crate::ServerConfig {
@@ -1524,6 +1503,7 @@ end
             .rebase_onto(
                 &typed,
                 None,
+                tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
                 &test_config(&mp),
                 &std::collections::BTreeSet::new(),
             )
@@ -1568,6 +1548,7 @@ end"#,
             .rebase_onto(
                 &typed,
                 None,
+                tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
                 &test_config(&mp),
                 &std::collections::BTreeSet::from(["consumer".to_string()]),
             )
@@ -1611,6 +1592,7 @@ end"#,
             .rebase_onto(
                 &Arc::new(typed),
                 None,
+                tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
                 &test_config(&mp),
                 &std::collections::BTreeSet::from(["consumer".to_string()]),
             )

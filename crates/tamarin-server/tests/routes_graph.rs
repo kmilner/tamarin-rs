@@ -460,3 +460,47 @@ async fn graph_renders_via_json_cmd_when_with_json_is_set() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `--image-format=png` reaches `dotToImg` as `-Tpng`, names the image
+/// `<graph>.png` and serves it as `image/png` (`renderGraphCode`,
+/// Web/Theory.hs; `imageFormatMIME`, Web/Types.hs). A stub `dot` writes its
+/// format, layout and output path into the image.
+#[tokio::test]
+async fn graph_honours_image_format() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("tam-dot-stub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir stub dir");
+    let stub = dir.join("dot.sh");
+    {
+        let mut f = std::fs::File::create(&stub).expect("create stub");
+        // $1 = -T<format>, $2 = -K<mode>, $3 = -o, $4 = img, $5 = graph.
+        writeln!(
+            f,
+            "#!/bin/sh\nprintf '%s %s %s' \"$1\" \"$2\" \"$4\" > \"$4\""
+        )
+        .unwrap();
+    }
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let stub = stub.to_string_lossy().to_string();
+    let s = start_server_with_theory_and("issue193.spthy", |cfg| {
+        cfg.dot_path = stub;
+        cfg.image_format = tamarin_server::ImageFormat::Png;
+    })
+    .await;
+    let res = s.get("/thy/trace/1/graph/proof/debug").await;
+    assert_eq!(res.status(), 200);
+    assert_eq!(
+        res.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("image/png")
+    );
+    let body = res.text().await.expect("text");
+    assert!(body.starts_with("-Tpng -Kdot "), "{body}");
+    assert!(body.ends_with(".dot.png"), "{body}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

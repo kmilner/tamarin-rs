@@ -26,8 +26,7 @@ use tamarin_theory::elaborate::elaborate_with_in_file;
 use tamarin_theory::module::ModuleType;
 
 use tamarin_server::theory_loader::{
-    lemma_matches, load_theory, read_config_block, LoadError, TheoryLoadOptions, TheoryPipeline,
-    TranslateModule,
+    lemma_matches, load_theory, LoadError, TheoryLoadOptions, TheoryPipeline, TranslateModule,
 };
 
 use crate::cli::{Args, Subcommand};
@@ -105,15 +104,15 @@ pub fn print_unsupported_input(in_file: &str, report: &tamarin_theory::wellforme
     eprintln!("Unsupported rule semantics - aborting before proof search.");
 }
 
+/// Classified as the loader classifies it; no proof error becomes a report.
 impl From<tamarin_theory::prove::ProveError> for RunError {
     fn from(error: tamarin_theory::prove::ProveError) -> Self {
-        match error {
-            tamarin_theory::prove::ProveError::Guarded(message) => Self::GhcException(message),
-            tamarin_theory::prove::ProveError::Ranking(error) => {
-                Self::GhcException(error.to_string())
+        match LoadError::from(error) {
+            LoadError::Exception(message) => Self::GhcException(message),
+            LoadError::Other(message) => Self::Regular(message),
+            LoadError::UnsupportedInput(_) | LoadError::Warning(_) => {
+                unreachable!("a proof error is never a wellformedness report")
             }
-            tamarin_theory::prove::ProveError::InvalidHeuristic(message) => Self::Regular(message),
-            other => Self::Regular(other.to_string()),
         }
     }
 }
@@ -550,6 +549,10 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
     // when both are given, exactly as `readOutputCommand` prefers it.
     cfg.dot_path = args.dot_path.clone().unwrap_or_else(|| "dot".to_string());
     cfg.json_path = args.json_path.clone();
+    cfg.image_format = match args.image_format {
+        Some(crate::cli::ImageFormat::Png) => tamarin_server::ImageFormat::Png,
+        Some(crate::cli::ImageFormat::Svg) | None => tamarin_server::ImageFormat::Svg,
+    };
 
     // Positional args are theory files (Haskell uses a working
     // directory, but we accept either: a single dir arg, or one-or-more
@@ -643,29 +646,6 @@ fn collect_theory_paths(in_files: &[String]) -> Result<Vec<std::path::PathBuf>, 
     }
     out.sort();
     Ok(out)
-}
-
-/// The effective per-theory cut strategy: the CLI `--stop-on-trace` wins;
-/// with the flag absent the theory's `configuration:` block is consulted
-/// (HS `configStopOnTrace` precedence, TheoryLoader.hs).  An
-/// unreadable block value is an error — reported immediately and plainly,
-/// not with HS's deferred `error` choreography.
-fn effective_cut(
-    opts: &TheoryLoadOptions,
-    block: &tamarin_theory::prove::ConfigBlock,
-) -> Result<tamarin_theory::constraint::solver::context::CutStrategy, RunError> {
-    use tamarin_theory::constraint::solver::context::CutStrategy;
-    if !opts.prove_mode {
-        return Ok(CutStrategy::Dfs);
-    }
-    match opts.stop_on_trace {
-        Some(cut) => Ok(cut),
-        None => match block.stop_on_trace.as_deref() {
-            Some(raw) => tamarin_theory::prove::parse_stop_on_trace(raw)
-                .map_err(|e| RunError::Regular(format!("configuration block: {}", e))),
-            None => Ok(CutStrategy::Dfs),
-        },
-    }
 }
 
 /// Map a CLI `--stop-on-trace` value to its `CutStrategy`.
@@ -1028,7 +1008,6 @@ fn cli_heuristic(opts: &TheoryLoadOptions) -> tamarin_theory::prove::CliHeuristi
 fn build_prover_session(
     args: &Args,
     st: &TheoryPipeline,
-    cut: tamarin_theory::constraint::solver::context::CutStrategy,
     cli_heuristic: tamarin_theory::prove::CliHeuristic,
 ) -> Result<tamarin_theory::prove::ProverSession, RunError> {
     let in_file = &st.theory.in_file;
@@ -1039,7 +1018,7 @@ fn build_prover_session(
         tamarin_theory::prove::ProverSessionOptions {
             maude_pool: st.maude_pool.clone(),
             cli_heuristic,
-            cut,
+            cut: st.cut,
             ndc_cache: st.ndc_cache.clone(),
             parameters: st.opts.parameters,
             sys_retention: if wants_trace_output(args) {
@@ -1061,7 +1040,6 @@ fn build_prover_session(
 fn prove_theory(
     args: &Args,
     st: &TheoryPipeline,
-    cut: tamarin_theory::constraint::solver::context::CutStrategy,
     pe_trace: &str,
 ) -> Result<ClosedOutcome, RunError> {
     let opts = st.opts;
@@ -1071,7 +1049,7 @@ fn prove_theory(
     // A plain load still validates embedded proofs; proofless files skip the
     // solver, whose output would be the same 1-step sorry per lemma.
     let any_stored_proof = st.theory.lemmas().any(|l| l.proof.is_some());
-    if opts.precompute_only_mode || (!prove_anything && !any_stored_proof) {
+    if !prove_anything && !any_stored_proof {
         st.closed_marker(pe_trace);
         return Ok(ClosedOutcome {
             results: skipped_results(&st.theory),
@@ -1094,7 +1072,7 @@ fn prove_theory(
     } else {
         tamarin_theory::prove::CliHeuristic::default()
     };
-    let session = build_prover_session(args, st, cut, heuristic)?;
+    let session = build_prover_session(args, st, heuristic)?;
     st.closed_marker(pe_trace);
 
     let theory_name = st.theory.name.clone();
@@ -1162,8 +1140,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // TheoryLoader.hs) and, when the CLI flag is absent, HS
     // additionally consults the theory's in-file `configuration:` block
     // (`configStopOnTrace`, TheoryLoader.hs) — a PER-THEORY value,
-    // so the effective strategy is resolved inside the file loop by
-    // `effective_cut` once the theory is parsed.
+    // so each theory's pipeline resolves it (`theory_loader::effective_cut`).
 
     if args.in_files.is_empty() {
         return Err(RunError::Regular("no input files given".to_string()));
@@ -1179,12 +1156,13 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     // `--precompute-only` per-file state (HS Batch.hs): like
     // `--parse-only`, HS prints every file's doc to stdout AFTER the file
     // loop (`mapM_ (putStrLn . renderDoc)`), ignoring `-o`/`-O` and
-    // skipping the summary block.  The doc's stats force the saturation
-    // lazily at that renderDoc, so each file's `[Saturating Sources]`
-    // stderr trace fires in the PRINT phase (after every file's markers),
-    // not during its loop iteration — stash the session and the wf-failure
-    // count here and defer the stats computation to match.
-    let mut precompute_pending: Vec<(tamarin_theory::prove::ProverSession, usize)> = Vec::new();
+    // skipping the summary block.  The doc's stats force the closed
+    // theory lazily at that renderDoc, so each file's `[Saturating Sources]`
+    // stderr trace, and any failure to guard its formulas, fires in the
+    // PRINT phase (after every file has loaded, and after the earlier files'
+    // docs), not during its loop iteration — stash the closed pipeline here
+    // and build its prover session there.
+    let mut precompute_pending: Vec<TheoryPipeline> = Vec::new();
 
     // The maude binary this run invokes is argv-constant, and resolving the
     // default probes the filesystem — resolve it ONCE here and lend it to the
@@ -1295,13 +1273,11 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             continue;
         }
 
-        // The cut follows `configStopOnTrace` precedence. An unreadable
-        // block value is reported whenever `--prove` was given, eagerer than
-        // HS, which exits 0 when no selected lemma forces it.
-        let config =
-            read_config_block(&parsed, translate_module).map_err(|e| RunError::load(e, in_file))?;
-        let cut = effective_cut(&opts, &config)?;
-        let mut st = TheoryPipeline::new(&opts, parsed, in_file, translate_module, config)
+        // The pipeline reads the configuration block and resolves the cut
+        // (`effective_cut`). An unreadable block value is reported whenever
+        // `--prove` was given, eagerer than HS, which exits 0 when no selected
+        // lemma forces it.
+        let mut st = TheoryPipeline::new(&opts, parsed, in_file, translate_module)
             .map_err(|e| RunError::load(e, in_file))?;
         st.translate_theory()
             .map_err(|e| RunError::load(e, in_file))?;
@@ -1312,18 +1288,18 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // skipped rows too, though its output phase never prints a summary.
         let results: Vec<LemmaResult> = match translate_module {
             Some(module) => {
+                // `finalizeTheory`'s `--quit-on-warning` raise
+                // (`prettyOpenTheoryByModule`): no `Theory closed` marker.
+                if opts.quit_on_warning && !st.wf_report.is_empty() {
+                    return Err(RunError::Warning(std::mem::take(&mut st.wf_report)));
+                }
+
                 // HS `translateAndCheckTheory` never closes, never proves
                 // and never replays stored skeletons — it skips
                 // `closeTranslatedTheory`'s `proveTheory` entirely
                 // (TheoryLoader.hs) — so every lemma is a skipped
                 // summary row.
                 let results = skipped_results(&st.theory);
-
-                // `finalizeTheory`'s `--quit-on-warning` raise
-                // (`prettyOpenTheoryByModule`): no `Theory closed` marker.
-                if opts.quit_on_warning && !st.wf_report.is_empty() {
-                    return Err(RunError::Warning(st.wf_report.clone()));
-                }
 
                 // Translate-only render (`prettyOpenTheoryByModule`,
                 // TheoryLoader.hs#prettyOpenTheoryByModule, followed by `withVersionAndReport`'s
@@ -1358,61 +1334,52 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 let pe_trace = st
                     .close_translated_theory()
                     .map_err(|e| RunError::load(e, in_file))?;
-                let closed = prove_theory(args, &st, cut, &pe_trace)?;
-
                 if opts.precompute_only_mode {
                     // HS `--precompute-only` (Batch.hs): the file's
                     // doc is `ppWf report $--$ prettyPrecomputation thy''` — the
                     // wellformedness WARNING line and a compact 3-line stats
                     // overview — NOT the full closed theory.  The stats need the
-                    // closed theory's saturated sources, so build the prover
-                    // session (the `closeTheory` analog) here — in-loop, like HS's
-                    // eager close — but defer forcing the sources to the print
-                    // phase below, where HS's lazy renderDoc forces them.
-                    let session = build_prover_session(
-                        args,
-                        &st,
-                        cut,
-                        tamarin_theory::prove::CliHeuristic::default(),
-                    )?;
-                    let wf_len = st.wf_report.len();
-                    precompute_pending.push((session, wf_len));
-                } else {
-                    // HS `outputTraces` runs only in this close-and-prove
-                    // branch, before the theory is rendered.
-                    if wants_trace_output(args)
-                        && let Err(io) = write_output_traces(args, closed.trace_systems)
-                    {
-                        return Err(RunError::GhcException(io));
-                    }
-                    // Build the HS-faithful theory pretty-print body.  This replaces
-                    // the verbatim source dump with HS's `prettyClosedTheory`
-                    // output shape — re-rendered signature, rules with `(modulo E)`
-                    // prefix and AC-variant comments, lemmas with inline guarded
-                    // formula and proof body, wellformedness block, and
-                    // Generated-from footer.
-                    let wf_block = tamarin_theory::pretty_theory::format_wf_block(&st.wf_report);
-                    let body = tamarin_theory::pretty_theory::pretty_closed_theory(
-                        &st.theory,
-                        &closed.proved_lemmas,
-                        &wf_block,
-                        &build_info,
-                    );
-                    // HS normal mode: `writeOutput` is true whenever `-o`/`-O` was
-                    // given (Batch.hs), and a `mkOutPath` miss — `-o=` with no
-                    // `-O` — `die`s with this exact line (Batch.hs) instead
-                    // of falling back to stdout: markers printed, stdout empty, rc 1.
-                    // (HS processes every file before dying; with several input
-                    // files this port dies after the first, an accepted divergence —
-                    // the condition is argv-constant, so no file output differs.)
-                    if (args.output_file.is_some() || args.output_dir.is_some())
-                        && out_path_for(args, in_file).is_none()
-                    {
-                        return Ok(missing_output_path());
-                    }
-                    if let Err(io) = emit_output(args, in_file, &body) {
-                        return Err(RunError::GhcException(io));
-                    }
+                    // closed theory's guarded formulas and saturated sources,
+                    // which HS's lazy renderDoc forces in the print phase below.
+                    st.closed_marker(&pe_trace);
+                    precompute_pending.push(st);
+                    continue;
+                }
+                let closed = prove_theory(args, &st, &pe_trace)?;
+                // HS `outputTraces` runs only in this close-and-prove
+                // branch, before the theory is rendered.
+                if wants_trace_output(args)
+                    && let Err(io) = write_output_traces(args, closed.trace_systems)
+                {
+                    return Err(RunError::GhcException(io));
+                }
+                // Build the HS-faithful theory pretty-print body.  This replaces
+                // the verbatim source dump with HS's `prettyClosedTheory`
+                // output shape — re-rendered signature, rules with `(modulo E)`
+                // prefix and AC-variant comments, lemmas with inline guarded
+                // formula and proof body, wellformedness block, and
+                // Generated-from footer.
+                let wf_block = tamarin_theory::pretty_theory::format_wf_block(&st.wf_report);
+                let body = tamarin_theory::pretty_theory::pretty_closed_theory(
+                    &st.theory,
+                    &closed.proved_lemmas,
+                    &wf_block,
+                    &build_info,
+                );
+                // HS normal mode: `writeOutput` is true whenever `-o`/`-O` was
+                // given (Batch.hs), and a `mkOutPath` miss — `-o=` with no
+                // `-O` — `die`s with this exact line (Batch.hs) instead
+                // of falling back to stdout: markers printed, stdout empty, rc 1.
+                // (HS processes every file before dying; with several input
+                // files this port dies after the first, an accepted divergence —
+                // the condition is argv-constant, so no file output differs.)
+                if (args.output_file.is_some() || args.output_dir.is_some())
+                    && out_path_for(args, in_file).is_none()
+                {
+                    return Ok(missing_output_path());
+                }
+                if let Err(io) = emit_output(args, in_file, &body) {
+                    return Err(RunError::GhcException(io));
                 }
                 closed.results
             }
@@ -1444,11 +1411,14 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         // docs to stdout after the file loop, no summary block.  Forcing
         // each file's stats here (traces, then its doc) reproduces HS's
         // renderDoc-time stderr order — see `precompute_pending`.
-        for (session, wf_len) in &precompute_pending {
+        for st in &precompute_pending {
             // The trace is already armed: each file's `close_translated_theory`
             // left it on, matching HS, where this forcing happens inside the
             // same `showSaturation = True` close.
+            let session =
+                build_prover_session(args, st, tamarin_theory::prove::CliHeuristic::default())?;
             let stats = session.precomputation_stats().map_err(RunError::from)?;
+            let wf_len = st.wf_report.len();
             let mut doc = String::new();
             // `ppWf` (Batch.hs) joined by `$--$`: exactly one blank
             // line between the WARNING and the stats, nothing when the
@@ -1456,7 +1426,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // 9-space-indented "might be wrong!" second line —
             // `proveMode` and `precomputeOnlyMode` are set independently
             // (TheoryLoader.hs), so the combination is reachable.
-            if *wf_len > 0 {
+            if wf_len > 0 {
                 doc.push_str(&format!(
                     "WARNING: {} wellformedness check failed!\n",
                     wf_len

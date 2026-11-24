@@ -93,6 +93,8 @@ pub struct ServerConfig {
     /// (`imgThyPath` → `renderGraphCode`, Web/Theory.hs).
     /// `None` = flag absent, the `dot` pipeline above.
     pub json_path: Option<String>,
+    /// CLI `--image-format` (HS `WebUI.imageFormat`, SVG by default).
+    pub image_format: ImageFormat,
     /// Optional allocator cleanup after Stop's callbacks and proof workers finish.
     /// Runs once on a separate thread before Stop responds; must not panic.
     pub cancel_cleanup: Option<fn()>,
@@ -111,7 +113,33 @@ impl ServerConfig {
             load: theory_loader::TheoryLoadOptions::new(maude_path),
             dot_path: "dot".to_string(),
             json_path: None,
+            image_format: ImageFormat::Svg,
             cancel_cleanup: None,
+        }
+    }
+}
+
+/// HS `ImageFormat` (Web/Types.hs): the format graph images are rendered in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFormat {
+    Png,
+    Svg,
+}
+
+impl ImageFormat {
+    /// HS `show`: the `-T` format and the image file's extension.
+    pub fn name(self) -> &'static str {
+        match self {
+            ImageFormat::Png => "png",
+            ImageFormat::Svg => "svg",
+        }
+    }
+
+    /// HS `imageFormatMIME`.
+    pub fn mime(self) -> &'static str {
+        match self {
+            ImageFormat::Png => "image/png",
+            ImageFormat::Svg => "image/svg+xml",
         }
     }
 }

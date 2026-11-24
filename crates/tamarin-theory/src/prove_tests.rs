@@ -1178,20 +1178,6 @@ fn config_block_matches_cmdargs_semantics() {
         parse_stop_on_trace("XYZ"),
         Err("unknown stop-on-trace method: xyz".to_string())
     );
-
-    // The server's eager wrapper surfaces both kinds of error.
-    assert_eq!(
-        config_block_options("--nonsense"),
-        Err("Unknown flag: --nonsense".to_string())
-    );
-    assert_eq!(
-        config_block_options("--stop-on-trace=XYZ"),
-        Err("unknown stop-on-trace method: xyz".to_string())
-    );
-    assert_eq!(
-        config_block_options("--stop-on-trace=seqdfs --auto-sources"),
-        Ok((Some(CutStrategy::SeqDfs), true))
-    );
 }
 
 /// `validate_cli_heuristic` — the ACCEPTANCE SET is what matches HS

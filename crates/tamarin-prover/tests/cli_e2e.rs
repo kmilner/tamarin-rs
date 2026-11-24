@@ -305,6 +305,41 @@ fn precompute_guarded_failures_use_the_ghc_exception_boundary() {
     }
 }
 
+/// HS loads every file before it renders any `--precompute-only` doc, and
+/// renders them in order, so a file that fails to close stops the output
+/// after the earlier files' docs, and after every file's load markers.
+#[test]
+fn precompute_renders_each_file_before_a_later_file_fails() {
+    if !maude_available() {
+        eprintln!("skipping: maude not on path");
+        return;
+    }
+
+    let valid = fixture("single_recv.spthy");
+    let failing = fixture("guarded_restriction.spthy");
+    for (inputs, docs) in [
+        ([valid.as_path(), failing.as_path()], 1),
+        ([failing.as_path(), valid.as_path()], 0),
+    ] {
+        let (code, stdout, stderr) = run_binary(&["--precompute-only"], &inputs);
+        assert_eq!(code, 1, "{inputs:?}");
+        assert_eq!(
+            stdout.matches("Multiset rewriting rules:").count(),
+            docs,
+            "{inputs:?}:\n{stdout}"
+        );
+        let failure = stderr
+            .find("unguarded variable")
+            .expect("the guard failure");
+        for theory in ["SingleRecv", "GuardedRestriction"] {
+            let closed = stderr
+                .find(&format!("[Theory {theory}] Theory closed"))
+                .unwrap_or_else(|| panic!("{theory} was not loaded:\n{stderr}"));
+            assert!(closed < failure, "{inputs:?}:\n{stderr}");
+        }
+    }
+}
+
 #[test]
 fn auto_sources_does_not_use_existential_source_lemmas_as_assumptions() {
     if !maude_available() {

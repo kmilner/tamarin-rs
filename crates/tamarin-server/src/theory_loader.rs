@@ -224,11 +224,10 @@ pub struct TheoryPipeline<'a> {
     /// theory loads (HS `toSignatureWithMaude` before `closeTheory`). The NDC
     /// join never reaches it.
     pub maude_sig: tamarin_term::maude_sig::MaudeSig,
-    /// The theory's `configuration:` block (empty in translate mode, which
-    /// never reads it).
-    pub config: ConfigBlock,
     /// HS `configAutoSources`: the CLI flag OR the configuration block.
     pub auto_sources: bool,
+    /// The autoprover's cut strategy (`effective_cut`).
+    pub cut: CutStrategy,
     pub maude: Option<MaudeHandle>,
     pub maude_pool: Option<Arc<MaudePool>>,
     /// The NDC-checked intruder rules (`checkCloseIntrRule`), shared by every
@@ -243,7 +242,7 @@ pub struct TheoryPipeline<'a> {
 /// HS `closeTheory`'s configuration-block read: the theory's
 /// `configuration:` arguments, empty in translate mode (`translateAndCheckTheory`
 /// never reads them, so a block that would kill a close run is inert there).
-pub fn read_config_block(
+fn read_config_block(
     parsed: &tamarin_parser::Theory,
     translate_module: Option<TranslateModule>,
 ) -> Result<ConfigBlock, LoadError> {
@@ -257,16 +256,32 @@ pub fn read_config_block(
     }
 }
 
+/// The cut strategy HS's autoprover runs with: `constructAutoProver`'s
+/// `fromMaybe CutDFS` over `configStopOnTrace` (TheoryLoader.hs). The CLI
+/// `--stop-on-trace` wins. Otherwise the configuration block's value is read,
+/// but only in prove mode, the one place HS forces it; the web's prover is
+/// built from the CLI options alone (Interactive.hs). An unreadable value is
+/// reported at once, not with HS's deferred `error`.
+fn effective_cut(opts: &TheoryLoadOptions, config: &ConfigBlock) -> Result<CutStrategy, LoadError> {
+    match (opts.stop_on_trace, config.stop_on_trace.as_deref()) {
+        (Some(cut), _) => Ok(cut),
+        (None, Some(raw)) if opts.prove_mode => tamarin_theory::prove::parse_stop_on_trace(raw)
+            .map_err(|e| LoadError::Other(format!("configuration block: {e}"))),
+        _ => Ok(CutStrategy::Dfs),
+    }
+}
+
 impl<'a> TheoryPipeline<'a> {
-    /// Elaborate and apply HS `addParamsOptions`. `config` is
-    /// [`read_config_block`]'s result.
+    /// Read the configuration block ([`read_config_block`]), elaborate and
+    /// apply HS `addParamsOptions`.
     pub fn new(
         opts: &'a TheoryLoadOptions,
         parsed: tamarin_parser::Theory,
         in_file: &str,
         translate_module: Option<TranslateModule>,
-        config: ConfigBlock,
     ) -> Result<Self, LoadError> {
+        let config = read_config_block(&parsed, translate_module)?;
+        let cut = effective_cut(opts, &config)?;
         let auto_sources = opts.auto_sources || config.auto_sources;
 
         let theory_name = parsed.name.clone();
@@ -297,8 +312,8 @@ impl<'a> TheoryPipeline<'a> {
             theory: Arc::new(theory),
             wf_report: Vec::new(),
             maude_sig,
-            config,
             auto_sources,
+            cut,
             maude: None,
             maude_pool: None,
             ndc_cache: None,
@@ -487,10 +502,11 @@ impl<'a> TheoryPipeline<'a> {
     /// (`closeTheoryWithMaude`) and `--partial-evaluation`
     /// (`applyPartialEvaluation`, which re-closes with auto-sources).
     /// Returns the partial evaluation's trace for [`Self::closed_marker`].
+    /// The warning error takes the report, leaving `wf_report` empty.
     pub fn close_translated_theory(&mut self) -> Result<String, LoadError> {
         if self.opts.quit_on_warning && !self.wf_report.is_empty() {
             self.marker("Theory closed");
-            return Err(LoadError::Warning(self.wf_report.clone()));
+            return Err(LoadError::Warning(std::mem::take(&mut self.wf_report)));
         }
 
         for f in std::mem::take(&mut self.ndc_funs) {
@@ -557,4 +573,39 @@ pub fn lemma_matches(filter: &[String], lemma_name: &str) -> bool {
         Some(prefix) => lemma_name.starts_with(prefix),
         None => pat == lemma_name,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `configStopOnTrace` precedence: the CLI value wins, and the block's
+    /// value is read, and so validated, only in prove mode.
+    #[test]
+    fn effective_cut_follows_config_stop_on_trace() {
+        let block = |raw: &str| ConfigBlock {
+            stop_on_trace: Some(raw.to_string()),
+            ..ConfigBlock::default()
+        };
+        let mut opts = TheoryLoadOptions::new(String::new());
+        let cut = |opts: &TheoryLoadOptions, config: &ConfigBlock| {
+            effective_cut(opts, config).map_err(|e| match e {
+                LoadError::Other(message) => message,
+                _ => unreachable!(),
+            })
+        };
+        assert_eq!(cut(&opts, &block("bfs")), Ok(CutStrategy::Dfs));
+        assert_eq!(cut(&opts, &block("xyz")), Ok(CutStrategy::Dfs));
+        opts.prove_mode = true;
+        assert_eq!(cut(&opts, &ConfigBlock::default()), Ok(CutStrategy::Dfs));
+        assert_eq!(cut(&opts, &block("BFS")), Ok(CutStrategy::Bfs));
+        assert_eq!(
+            cut(&opts, &block("xyz")),
+            Err("configuration block: unknown stop-on-trace method: xyz".to_string())
+        );
+        opts.stop_on_trace = Some(CutStrategy::SeqDfs);
+        assert_eq!(cut(&opts, &block("xyz")), Ok(CutStrategy::SeqDfs));
+        opts.prove_mode = false;
+        assert_eq!(cut(&opts, &block("bfs")), Ok(CutStrategy::SeqDfs));
+    }
 }

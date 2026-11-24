@@ -6,8 +6,7 @@
 //!
 //! HS names the files by a hash of the code under its cache directory and
 //! reuses an image another request rendered; the port renders each request
-//! in a private temporary directory of its own. Images are always SVG
-//! (HS's default `--image-format`).
+//! in a private temporary directory of its own.
 
 use std::ffi::OsStr;
 use std::path::Path;
@@ -43,14 +42,16 @@ pub(crate) fn render_graph_code(
         GraphCode::Json(text) => ("json", text),
     };
     let graph_path = dir.path().join(format!("graph.{ext}"));
-    let img_path = dir.path().join(format!("graph.{ext}.svg"));
+    let img_path = dir
+        .path()
+        .join(format!("graph.{ext}.{}", cfg.image_format.name()));
     let result = std::fs::write(&graph_path, text)
         .map_err(|e| format!("could not write {}: {e}", graph_path.display()))
         .and_then(|()| {
             let rendered = match &code {
                 GraphCode::Dot(_) => {
-                    dot_to_img(&cfg.dot_path, "dot", &graph_path, &img_path)?
-                        || dot_to_img(&cfg.dot_path, "fdp", &graph_path, &img_path)?
+                    dot_to_img(cfg, "dot", &graph_path, &img_path)?
+                        || dot_to_img(cfg, "fdp", &graph_path, &img_path)?
                 }
                 GraphCode::Json(_) => {
                     let cmd = cfg.json_path.as_deref().unwrap_or("json");
@@ -70,17 +71,23 @@ pub(crate) fn render_graph_code(
     result
 }
 
-/// HS `dotToImg`: `<dot> -Tsvg -K<mode> -o <img> <graph>`.
-fn dot_to_img(cmd: &str, mode: &str, graph: &Path, img: &Path) -> Result<bool, String> {
+/// HS `dotToImg`: `<dot> -T<format> -K<mode> -o <img> <graph>`.
+fn dot_to_img(
+    cfg: &crate::ServerConfig,
+    mode: &str,
+    graph: &Path,
+    img: &Path,
+) -> Result<bool, String> {
+    let format = format!("-T{}", cfg.image_format.name());
     let layout = format!("-K{mode}");
     let args: [&OsStr; 5] = [
-        "-Tsvg".as_ref(),
+        format.as_ref(),
         layout.as_ref(),
         "-o".as_ref(),
         img.as_os_str(),
         graph.as_os_str(),
     ];
-    run_converter("dotToImg", cmd, &args, graph)
+    run_converter("dotToImg", &cfg.dot_path, &args, graph)
 }
 
 /// HS `readProcessWithExitCode cmd args ""` in `dotToImg` / `jsonToImg`: run

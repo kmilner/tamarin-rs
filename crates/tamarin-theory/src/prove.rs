@@ -193,10 +193,8 @@ fn hs_normalise_path(p: &str) -> String {
 ///
 /// Rejections are RECORDED here, not raised.  (In HS the block is
 /// processed lazily and its errors surface at scattered forcing points;
-/// the port's callers validate the record eagerly instead — the batch
-/// loader checks `flag_error` in its close pipeline and reads the value
-/// through `effective_cut`, and [`config_block_options`] wraps the same
-/// checks for the server's per-theory load.)
+/// the shared theory loader validates the record eagerly instead: it checks
+/// `flag_error` and reads the value through its `effective_cut`.)
 #[derive(Debug, Clone, Default)]
 pub struct ConfigBlock {
     /// The first cmdargs-level rejection, message exactly as HS emits it:
@@ -285,33 +283,6 @@ pub fn parse_stop_on_trace(
         "none" => Ok(CutStrategy::Nothing),
         other => Err(format!("unknown stop-on-trace method: {}", other)),
     }
-}
-
-/// [`parse_config_block`] + eager validation of both recorded errors —
-/// used by the web server's per-theory load (the batch loader performs
-/// the same eager checks inline in run.rs).  Returns
-/// `(stop_on_trace, auto_sources)`; callers merge with the CLI per HS
-/// precedence — CLI `--stop-on-trace` wins when given
-/// (`configStopOnTrace`), `--auto-sources` is OR-combined
-/// (`configAutoSources`).
-pub fn config_block_options(
-    cfg: &str,
-) -> Result<
-    (
-        Option<crate::constraint::solver::context::CutStrategy>,
-        bool,
-    ),
-    String,
-> {
-    let block = parse_config_block(cfg);
-    if let Some(e) = block.flag_error {
-        return Err(e);
-    }
-    let cut = match block.stop_on_trace.as_deref() {
-        Some(raw) => Some(parse_stop_on_trace(raw)?),
-        None => None,
-    };
-    Ok((cut, block.auto_sources))
 }
 
 /// The CLI-supplied heuristic / oracle flags, carried verbatim from the

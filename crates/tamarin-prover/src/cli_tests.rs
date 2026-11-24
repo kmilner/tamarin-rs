@@ -647,6 +647,7 @@ fn interface_and_web_flags() {
         ".",
     ]);
     assert_eq!(a.interface.as_deref(), Some("*4"));
+    assert_eq!(a.image_format, Some(ImageFormat::Png));
     assert_eq!(a.data_dir.as_deref(), Some("/srv/data"));
     // A detached `-i` value is rejected loudly, never eaten.
     assert!(parse_args(&["interactive".into(), "-i".into(), "*4".into(), ".".into()]).is_err());
